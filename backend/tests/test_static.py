@@ -1,15 +1,10 @@
 """静态本体：迁移往返、seed 条数与 mock 一致、只读接口形状和样例记录与 mock 一致、?ver= 规则。"""
 
-import asyncio
 import json
-import uuid
 
-import asyncpg
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select
-from sqlalchemy.engine import make_url
 
 from app.core.config import get_settings
 from app.modules.static import history
@@ -31,7 +26,6 @@ from app.modules.static.models import (
     QaPathStep,
 )
 from app.seeds.loader import run_seeds
-from tests.conftest import BASE_URL
 
 P = "/api/ontology/v1"
 JSON = get_settings().seeds_json_dir / "static"
@@ -120,47 +114,10 @@ def static_parent() -> str:
 
 
 async def test_migration_round_trip():
-    """全新库：upgrade head → downgrade base → upgrade head；static_0001 只建 / 删静态自己的表。
+    """static_0001 往返：用骨架 assert_module_round_trip（不写死父迁移 / head）。"""
+    from tests.helpers.migrations import assert_module_round_trip
 
-    不管 static_0001 前后还有哪些模块的迁移：在它的上一个迁移和它自己之间来回，比较表集合。
-    """
-    db = f"rengu_mig_{uuid.uuid4().hex[:8]}"
-    admin_dsn = make_url(BASE_URL).set(drivername="postgresql").render_as_string(hide_password=False)
-    admin = await asyncpg.connect(admin_dsn)
-    await admin.execute(f'CREATE DATABASE "{db}"')
-    url = make_url(BASE_URL).set(database=db).render_as_string(hide_password=False)
-    plain = make_url(url).set(drivername="postgresql").render_as_string(hide_password=False)
-
-    async def tables() -> set[str]:
-        c = await asyncpg.connect(plain)
-        try:
-            rows = await c.fetch("SELECT tablename FROM pg_tables WHERE schemaname='public'")
-            return {r[0] for r in rows}
-        finally:
-            await c.close()
-
-    parent = static_parent()
-    try:
-        cfg = Config("alembic.ini")
-        cfg.attributes["database_url"] = url
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        head = await tables()
-        assert head >= STATIC_TABLES
-        await asyncio.to_thread(command.downgrade, cfg, parent)
-        before = await tables()
-        assert not before & STATIC_TABLES
-        await asyncio.to_thread(command.upgrade, cfg, "static_0001")
-        assert await tables() - before == STATIC_TABLES  # 只建静态自己的表
-        await asyncio.to_thread(command.downgrade, cfg, parent)
-        assert await tables() == before  # 只删静态自己的表
-        await asyncio.to_thread(command.downgrade, cfg, "base")
-        assert await tables() <= {"alembic_version"}
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        assert await tables() == head
-    finally:
-        await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)
-        await admin.execute(f'DROP DATABASE IF EXISTS "{db}"')
-        await admin.close()
+    await assert_module_round_trip("static", STATIC_TABLES)
 
 
 def test_migration_conventions():
@@ -289,14 +246,38 @@ async def test_qa_paths_section_from_tables(static_seeded):
     from app.seeds import SeedContext
 
     built = await QaPathsSection().build_section(static_seeded, None, [])
+    expect = {f"{g['from']}→{g['to']}": g for g in PATH_GROUPS}
     assert built == QaPathsSection().seed_section("v2026.10.3", SeedContext(JSON, root=JSON.parent))
-    assert built == {f"{g['from']}→{g['to']}": g for g in PATH_GROUPS}
+    assert built == expect
+    assert list(built) == list(expect)  # 组键顺序 = PATH_GROUPS / repo id 首次出现顺序，不是 object_id
     assert built == (await VersioningService().get_snapshot(static_seeded, None))["qaPaths"]
     ex = built["order→store"]["examples"][1]
     assert ex["path"] == -1  # 先追问：path_id 为空
     assert await static_seeded.scalar(select(func.count()).where(QaPath.is_default)) == len(PATH_GROUPS)
     base = {"k": 1}
     assert await QaPathsSection().build_section(static_seeded, base, []) == base
+
+
+async def test_qa_paths_examples_without_paths(static_seeded):
+    """组只有 examples、没有 paths 时组装成空 paths，不 KeyError。"""
+    from app.modules.static.models import ObjectType, QaPathExample
+    from app.modules.static.sections import QaPathsSection
+
+    objs = {o.code: o for o in (await static_seeded.scalars(select(ObjectType))).all()}
+    static_seeded.add(
+        QaPathExample(
+            from_object_id=objs["order"].id,
+            to_object_id=objs["member"].id,
+            seq=0,
+            question="只有试问",
+            path_id=None,
+            how="先追问",
+        )
+    )
+    await static_seeded.flush()
+    built = await QaPathsSection().build_section(static_seeded, None, [])
+    g = built["order→member"]
+    assert g["paths"] == [] and g["examples"] == [{"q": "只有试问", "path": -1, "how": "先追问"}]
 
 
 # ---------------------------------------------------------------- 对象类型
