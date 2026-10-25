@@ -9,7 +9,9 @@ import pytest
 from sqlalchemy import func, select
 
 from app.modules.integration.models import CallKind, WritebackCall
+from app.modules.versioning.sections import load_sections
 from app.seeds.loader import run_seeds
+from app.seeds.registry import SEED_MODULES
 
 DATA = "/api/data/v1"
 ADMIN = {"X-Demo-As": "U010001"}
@@ -23,10 +25,13 @@ def _clean(c: dict) -> dict:
 
 
 @pytest.fixture
-async def wb(users):
-    await run_seeds(users, ["integration", "action", "event", "dynamic", "integration_runs"])
-    await users.commit()
-    return users
+async def wb(session, _isolated_sections):
+    # 灌到 integration_runs 为止（含依赖）：动态段合进来后 dynamic 种子要 ontology_release 等前置阶段；
+    # 版本种子要真实 section 才能写快照（同 tests/dynamic_support.py 的 dyn）
+    load_sections()
+    await run_seeds(session, SEED_MODULES[: SEED_MODULES.index("integration_runs") + 1])
+    await session.commit()
+    return session
 
 
 async def test_seed_rows(wb):
