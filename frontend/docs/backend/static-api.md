@@ -19,7 +19,7 @@
 | knowledge、knowledge_apply、synonym（同义词主表） | 静态 | 业务知识页；见 §1.3 同义词 |
 | change_request、cr_target、cr_item、cr_check、cr_impact、cr_trial、cr_event | 静态 | 变更单；动作、事件、规则也用这套（§5 #12 已定） |
 | release_check | 静态 | 发布前合并校验结果 |
-| ontology_release | 版本层 versioning（本体小白） | 只追加；由唯一入口 `create_version(change_order_ids, rollback_of=None)` 写入；快照各节由负责模块登记的组装函数提供（§2.8）。不加前缀（PDE 已定，骨架 `1aeb5d1` 已是 `ontology_release`） |
+| ontology_release | 版本层 versioning（本体小白） | 只追加；由唯一入口 `create_version(change_order_ids, rollback_of=None)` 写入；快照各节由负责模块登记的组装函数提供（§2.8）。不加前缀（PDE 已定，骨架 `6e3b38c` 已是 `ontology_release`） |
 | CR 号序列 `CR-NNNN` | 静态 | 全局一个序列、不重置；静态、动态规则、动作、事件共用（它们共用变更单）；种子后从 mock 最大号（CR-0016）之后继续 |
 | object_view | 静态 | 对象类型「视图」页签（`mock/objectViews.ts`）。与问数的 `qa_object_type_view`（问数工作台的对象视图）不是一张表 |
 | `create_version`、版本号 `vYYYY.MM.N`、发布锁 | 版本层 versioning | 版本号由 `create_version` 生成，静态不拼版本号 |
@@ -428,10 +428,10 @@ erDiagram
 | mock (objType, prop) | 静态 property | 说明 |
 |---|---|---|
 | 门店.大区 | `store.big_region`（所属大区，存「华东」这类值） | 骨架 `governance.py:56`；维度值「华东大区」的同义词是「华东」（`dimensions.ts:93/207`） |
-| 订单.门店 | `biz_order` 经 `order_belongs_to_store` 一跳到 `store.name`（`EXISTS`） | 谓词 `store.name = ANY($n)`，values 原样是门店名，不换 code。**[推断]** mock 的范围值（`roles.ts:26`「上海徐汇店」等 6 个）在 `ALL_STORES` 里一个都对不上（种子里是「上海徐汇漕河泾店」这类全称），照原样入库时这类范围匹配 0 行，效果等于拒绝；受影响的不只是下拉候选值：角色 R-06 门店店长（`roles.ts:69`，`defaultDeny`）配的就是 `订单.门店 = 上海徐汇店`，照这个写法它问数、查订单都是 0 行。要不要加别名表由用户定（列入待定清单），一期不做 |
+| 订单.门店 | `biz_order` 经 `order_belongs_to_store` 一跳到 `store.name`（`EXISTS`） | 谓词 `store.name = ANY($n)`，values 原样是门店名，不换 code。mock 的范围值（`roles.ts:26`「上海徐汇店」等 6 个）在 `ALL_STORES` 里一个都对不上（种子里是「上海徐汇漕河泾店」这类全称），照原样入库时这类范围匹配 0 行，效果等于拒绝；受影响的不只是下拉候选值：角色 R-06 门店店长（`roles.ts:69`，`defaultDeny`）配的就是 `订单.门店 = 上海徐汇店`，照这个写法它问数、查订单都是 0 行。**已定：用户（不加简称对照表，R-06 看到 0 行是预期）** |
 | 商品.品类 | `product.category`（类目路径，取第一段 `split_part(category, '/', 1)`） | 范围值按别名换成一级类目再比，谓词 `split_part(product.category, '/', 1) = ANY($n)`：乳品烘焙→乳品，休闲零食→休闲食品，日化清洁→日化家清；生鲜、粮油调味、酒水饮料同名直接比。别名表放在 `app/contracts/static.py`（`CATEGORY_SCOPE_ALIAS`）**[推断]**，前端没给对应关系，按名称最接近的一级类目定 |
 | 库存快照.仓库 | `inventory.warehouse_id` | values 是仓库名 |
-| 订单.大区 | 无直接属性，`biz_order` 经 `order_belongs_to_store` 一跳到 `store.big_region`（骨架 `governance.py:63`） | 已定：一期 `to_sql` 支持沿白名单里声明的关系路径走**一跳**（`EXISTS` 子查询）；`order_line` 经 `biz_order` 继承（两跳，骨架 `72204b0`）；其余两跳以上或未声明的路径返回 `BAD_ROW_FILTER` |
+| 订单.大区 | 无直接属性，`biz_order` 经 `order_belongs_to_store` 一跳到 `store.big_region`（骨架 `governance.py:63`） | 已定：一期 `to_sql` 支持沿白名单里声明的关系路径走**一跳**（`EXISTS` 子查询）；`order_line` 经 `biz_order` 继承（两跳，骨架 `0c35c1d`）；其余两跳以上或未声明的路径返回 `BAD_ROW_FILTER` |
 | 会员.常去门店所属大区 | 无此属性（会员只有 `reg_store_id` 注册门店） | **[推断]** 先按「注册门店所属大区」（`member.reg_store_id → store.big_region`，一跳）处理，请用户确认；骨架一期不建 `member` 表，这类范围网关先按拒绝处理 |
 
 ## 2. 核心链路：变更单 → 校验 → 整版发布
@@ -520,7 +520,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 ### 2.5 发布事务
 
 1. 合并校验（§2.4），有阻断拒绝发布。
-2. 调用版本层 `create_version(change_order_ids, publishedBy, note)`。`publishedBy` 在接口上传/返回 `sys_user.code`（前端 userId，如 `U010001`），库里存外键 `sys_user.id`；code 查不到返回 422 `USER_NOT_FOUND`（骨架错误码，`ba89483`）。版本层加全局锁 `ontology.publish`，**按登记顺序调用各节的组装函数**（`register_section` 登记的 `SnapshotSectionBuilder.build_section(base, change_order_ids)`），拼成整版快照，生成版本号 `vYYYY.MM.N`。
+2. 调用版本层 `create_version(change_order_ids, publishedBy, note)`。发布请求里的 `publishedBy` 传 `sys_user.code`（前端 userId，如 `U010001`），库里存外键 `sys_user.id`；code 查不到返回 422 `USER_NOT_FOUND`（骨架错误码，`ad75767`）。发布记录返回时 `by` = 发布人姓名（前端 `VersionPicker.vue:26`、`OntologyOverview.vue:243` 直接显示），`byId` = `sys_user.code`（CONVENTIONS §7，骨架 `7817996`）。版本层加全局锁 `ontology.publish`，**按登记顺序调用各节的组装函数**（`register_section` 登记的 `SnapshotSectionBuilder.build_section(base, change_order_ids)`），拼成整版快照，生成版本号 `vYYYY.MM.N`。
    - 静态只登记自己的节（§2.8）：内部按 `apply(上一版本节, 各单 cr_item)` 算出新节，同时在同一事务里同步展开到定义表。
    - `actionTypes`、`eventTypes` 由 Palantir 登记（结构见 `action-event-api.md` §4.2 @ `b7ffba4`），`rules`、`lifecycles` 由动态登记；没登记的节原样沿用上一版。**已定。**
 3. 同一事务里静态再：CR 置为已发布并写 `release_id`（vNext 那一行的 `id`）、回填本次 release_check 的 `release_id`、写 cr_event。（发布前 `release_id` 为空，`UNIQUE(release_id, code)` 拦不住重复；靠本事务的回填兜住。）`release.published` outbox 事件由**版本层在 `create_version` 里**（发布和回滚都发）同事务写入，静态不另发。展开在事务内同步完成（不用异步 `release.expand`）。
@@ -689,7 +689,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
 | 用途 | 接口 | 规则 | 权限 | 密钥 | 历史 | 预览 | 行级 |
 |---|---|---|---|---|---|---|---|
-| 给本体小白的自动建本体集成读本体词表 | 进程内契约函数 `semantic_map(session, ver=None)`，放在 `app/contracts/static.py`（骨架 `ba89483` 还没有这个文件，写静态模块代码时加上）（对应语义 `semantic-map?ver=`，**不开 HTTP**） | **后台内部**，前端没有入口。只读；带 `ver` 读该版快照，不带读当前生效版。返回 `[{kind, id, api, parent, name, synonyms[]}]`，`kind ∈ object\|property\|link\|metric\|dimension\|dimValue\|term`；`id` = 前端 id（快照节里的键，如 `order`、`gross_margin`、`K-018`）；`api` = `api_name`（对象 `SalesOrder`、指标 `gross_margin_rate`；dimValue 没有 api_name，取它的 `code`；term 取 `code`）；`parent` 也取 `api_name`：property 为所属对象的 api_name、dimValue 为所属维度的 api_name，其余为 `null`。由快照的 `objectTypes`、`properties`、`links`、`metrics`、`dimensions`（含 `values`）、`terms` 节拼出；`synonyms` 取指标 `synonyms`、维度 `mappings`、知识 `synonyms`，其余为 `[]`。不分页 | 进程内调用，不经 HTTP、无服务间凭证；不对页面用户开放（以后真要走 HTTP，用 API 密钥绑定服务账号） | — | ✓ | — | 否 |
+| 给本体小白的自动建本体集成读本体词表 | 进程内契约函数 `semantic_map(session, ver=None)`，放在 `app/contracts/static.py`（骨架 `ad75767` 还没有这个文件，写静态模块代码时加上）（对应语义 `semantic-map?ver=`，**不开 HTTP**） | **后台内部**，前端没有入口。只读；带 `ver` 读该版快照，不带读当前生效版。返回 `[{kind, id, api, parent, name, synonyms[]}]`，`kind ∈ object\|property\|link\|metric\|dimension\|dimValue\|term`；`id` = 前端 id（快照节里的键，如 `order`、`gross_margin`、`K-018`）；`api` = `api_name`（对象 `SalesOrder`、指标 `gross_margin_rate`；dimValue 没有 api_name，取它的 `code`；term 取 `code`）；`parent` 也取 `api_name`：property 为所属对象的 api_name、dimValue 为所属维度的 api_name，其余为 `null`。由快照的 `objectTypes`、`properties`、`links`、`metrics`、`dimensions`（含 `values`）、`terms` 节拼出；`synonyms` 取指标 `synonyms`、维度 `mappings`、知识 `synonyms`，其余为 `[]`。不分页 | 进程内调用，不经 HTTP、无服务间凭证；不对页面用户开放（以后真要走 HTTP，用 API 密钥绑定服务账号） | — | ✓ | — | 否 |
 
 ### 3.8 函数（`/build/ontology/functions`，归静态，PDE 已定）
 
@@ -737,9 +737,9 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
   一次返回数组的：指标允许维度、关系历史/质量、知识历史/适用范围/同义词、维度层级、CR 详情里的 checks/impact/trial/events、对象关系 Tab。
   主列表都支持 `focusId`：返回含该条的那一页（深链 `?cr=` / `?link=` / `?dim=` / `?k=`）。
-- **身份**：只取骨架 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；演示身份请求头 `X-Demo-As` 按骨架处理：值为 `sys_user.code`（前端 userId，如 `U010001` 王敏；HTTP 头只能是 ASCII），骨架 `ba89483` 按 code 查用户；只在 dev/test 生效（默认 `RENGU_DEV_USER`，同样传 code），prod 忽略（`app/common/auth.py`，CONVENTIONS）。变更单、发布和函数的人员字段（变更单的 `owner`/`reviewer`、`publishedBy`、函数的 `owner`/`author`）一律传/返回 `sys_user.code`，库里存 `sys_user.id` 外键，未知 code 返回 422 `USER_NOT_FOUND`。定义上的人员字段（对象属性、指标、维度、知识、对象视图的 `owner`，`cr_event.actor`）照前端 mock 存人名，是软引用，不做外键（mock 里有「周晓峰」「吴佳」等不在 `sys_user` 里的人），接口原样传/返回人名。
+- **身份**：只取骨架 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；演示身份请求头 `X-Demo-As` 按骨架处理：值为 `sys_user.code`（前端 userId，如 `U010001` 王敏；HTTP 头只能是 ASCII），骨架 `ad75767` 按 code 查用户；只在 dev/test 生效（默认 `RENGU_DEV_USER`，同样传 code），prod 忽略（`app/common/auth.py`，CONVENTIONS）。变更单、发布和函数的人员字段（变更单的 `owner`/`reviewer`、发布请求的 `publishedBy`、函数的 `owner`/`author`）一律传/返回 `sys_user.code`，库里存 `sys_user.id` 外键，未知 code 返回 422 `USER_NOT_FOUND`。发布记录例外：返回 `by` = 发布人姓名、`byId` = `sys_user.code`（CONVENTIONS §7，骨架 `7817996`）。定义上的人员字段（对象属性、指标、维度、知识、对象视图的 `owner`，`cr_event.actor`）照前端 mock 存人名，是软引用，不做外键（mock 里有「周晓峰」「吴佳」等不在 `sys_user` 里的人），接口原样传/返回人名。
 - **历史版本与预览**：用查询参数，与前端 URL 一致。`?ver=v2026.10.2` 按该版快照读（§2.7）；`?previewAs=<userId>` 按被预览用户的权限和行级范围读。带任一参数的写接口返回 403 `READONLY`，`details.mode = history | preview`；不落库计算接口要放行的列入骨架只读白名单 `@allow_in_readonly`。
-- **错误码**（`READONLY`、`VALIDATION_FAILED`、`EMPTY_INPUT`、`DUPLICATE_KEY`（409）、`VERSION_CONFLICT`、`NO_PERMISSION` 是骨架公共错误码，已确认）：`READONLY`、`NOT_IN_DRAFT`、`CR_LOCKED`、`STATE_INVALID`（409，通用）、`NOT_OWNER`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`、`DUPLICATE_KEY`、`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`VALIDATION_FAILED`、`USER_NOT_FOUND`（422，骨架 `ba89483`，人员 code 查不到）、`BAD_ROW_FILTER`（底层）、`NO_PERMISSION`。错误体 `{code, message, details, requestId}`，`message` 可直接给前端用。字段校验不通过统一返回 `VALIDATION_FAILED`，`details.fields = [{field, message}]`（`field` 用接口字段名，如 `title`、`target.id`）。
+- **错误码**（`READONLY`、`VALIDATION_FAILED`、`EMPTY_INPUT`、`DUPLICATE_KEY`（409）、`VERSION_CONFLICT`、`NO_PERMISSION` 是骨架公共错误码，已确认）：`READONLY`、`NOT_IN_DRAFT`、`CR_LOCKED`、`STATE_INVALID`（409，通用）、`NOT_OWNER`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`、`DUPLICATE_KEY`、`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`VALIDATION_FAILED`、`USER_NOT_FOUND`（422，骨架 `ad75767`，人员 code 查不到）、`BAD_ROW_FILTER`（底层）、`NO_PERMISSION`。错误体 `{code, message, details, requestId}`，`message` 可直接给前端用。字段校验不通过统一返回 `VALIDATION_FAILED`，`details.fields = [{field, message}]`（`field` 用接口字段名，如 `title`、`target.id`）。
 - **乐观锁**：可改的表带 `lock_version`，不匹配返回 `VERSION_CONFLICT`。
 - **审计**：CR 状态变更、保存草稿、校验、发布、回滚、敏感属性变更写 `cr_event` 和全局审计日志。
 
@@ -828,4 +828,4 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
     - 函数「测试运行」一期返回示例输出；是否接真实沙箱执行。
     - 新建函数后草稿 v1 如何发布（前端没有发布入口）。
 19. ~~骨架 `SECTION_OWNERS` 加 `qaPaths`~~ 已登记（static），见 §2.8。
-20. 已定（本体小白复审 C′ @ 骨架 `1aeb5d1`）：`release.published` outbox 事件由版本层在 `create_version` 里写（§2.5）；`X-Demo-As` 按骨架（传 `sys_user.code`、dev/test 生效、prod 忽略，§4）；整版回滚 `rollback_of`=当前最新版、内容=上一版、定义表经 `restore_section` 同事务恢复（§2.2-6）；种子 versioning 先于 static（§2.7）。
+20. 已定（本体小白复审 C′ @ 骨架 `6e3b38c`）：`release.published` outbox 事件由版本层在 `create_version` 里写（§2.5）；`X-Demo-As` 按骨架（传 `sys_user.code`、dev/test 生效、prod 忽略，§4）；整版回滚 `rollback_of`=当前最新版、内容=上一版、定义表经 `restore_section` 同事务恢复（§2.2-6）；种子 versioning 先于 static（§2.7）。
