@@ -368,14 +368,14 @@ stateDiagram-v2
 
 整版发布时，**完整快照 = 静态各段 + `actionTypes` + `eventTypes` + `rules` + `lifecycles`**，**各段由所属模块组装**。版本由本体小白的版本基础层 `create_version(session, change_order_ids, *, rollback_of=None, published_by, note)` 生成（骨架 `1aeb5d1` `app/modules/versioning/service.py` L57–66）：各模块启动时用 `register_section` 按段名登记组装函数（`sections.py` L20），发布时基础层逐段调用。**整版回滚** = 同一入口传 `rollback_of=<当前最新版本号>`（不是最新返回 409 `ROLLBACK_NOT_LATEST`）：生成一个**新版本**，**不调用**组装函数，快照原样复制**被回滚版本的上一版**（`target = latest.parent`，`change_summary.restoredFrom` 记上一版版本号），旧版本不改（`service.py` L84–95；契约 `app/contracts/versioning.py` 第 4 条 L9–16）[已定：本体小白、PDE]。动态登记 **`rules`、`lifecycles` 两个组装函数**；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`、`order`）。动态负责组装 `rules` 和 `lifecycles` 两段。
 
-**`release.published` 事件**：outbox 里的 `release.published` 由版本层在 `create_version` 里（同一事务）发，发布和回滚都发；动态不发，只在需要时订阅 [待定：本体小白 提议、动态同意，待本体小白确认]。
+**`release.published` 事件** [已定：全员]：由版本层在 `create_version` 里、同一事务写 outbox，载荷 `{ver, parentVer, kind, rollbackOf, changeOrderIds}`，发布和回滚都发；动态不发这个事件，目前也不订阅。
 
 **`rules` 段**：
 
 | 项 | 约定 |
 |---|---|
 | 形状 | **对象，键 = 规则前端 id**：`{"R-007": {...}, "R-012": {...}}`；值 = 该规则在本次发布后生效的那个版本的完整定义；草稿、已替代版本不放 |
-| 每项字段 | `id`、`version`，加定义字段（与 `rule_version` / `RULE_DEFS` 相同，接口名照 mock）：`name, desc, owner, status, core, objKind, level, output, conds[{metric, metricVer, field, op, value}], logic, expr, dedupe, cooldown, trigger{kind, cron, text, eventId, filter}, actionTypeId, autoStage{enabled, actionTypeId, confirmer, mapping[{param, from}]}` |
+| 每项字段 | `id`、`version`（**必带**：该规则生效的版本号，`restore_section` 回滚时用它把 `rule.version` 指针改回去），加定义字段（与 `rule_version` / `RULE_DEFS` 相同，接口名照 mock）：`name, desc, owner, status, core, objKind, level, output, conds[{metric, metricVer, field, op, value}], logic, expr, dedupe, cooldown, trigger{kind, cron, text, eventId, filter}, actionTypeId, autoStage{enabled, actionTypeId, confirmer, mapping[{param, from}]}` |
 | 不放 | `weekly`（近 7 天命中数，统计值）；`published_by/published_at/change_note/release_id` 由版本本身记录 |
 | 组装时机 | 发布事务里：本次 CR 里的规则先生成新的 `rule_version` 行，再由登记的 `rules` 组装函数按每条规则的当前生效版本组装整段 |
 | 历史 | `rule_version` 照旧单独保存每条规则的全部历史版本；快照只是发布那一刻的全量生效版本 |
@@ -388,7 +388,7 @@ stateDiagram-v2
 | 项 | 约定 |
 |---|---|
 | 键 | 对象类型的**前端 id**（如 `order`、`store`），与静态 `objectTypes` 段的键一致；静态的 `objectTypes` 段**不含**生命周期 |
-| 形状 | **对象，键 = 对象类型前端 id**：`{"order": {...}, "store": {...}}`；值 = 本次发布后生效版本的完整定义：`objectId, version, field, owner, ruleId, desc, states[{key, name, kind, desc, sla, x, y}], transitions[{id, from, to, trigger, by, eventId, actionId, guard, effect}]` |
+| 形状 | **对象，键 = 对象类型前端 id**：`{"order": {...}, "store": {...}}`；值 = 本次发布后生效版本的完整定义：`objectId, version, field, owner, ruleId, desc, states[{key, name, kind, desc, sla, x, y}], transitions[{id, from, to, trigger, by, eventId, actionId, guard, effect}]`；其中 `version` **必带**（该对象类型生效的生命周期版本号，`restore_section` 回滚时用它把 `lifecycle.version` 指针改回去） |
 | 不放 | `count`、`weekly`（统计值）；`versions[]`、`updatedAt`、`undo`（版本记录，存 `lifecycle_version`） |
 | 组装时机 | 与 `rules` 段相同：发布事务里，本次 CR 里的生命周期先生成新的 `lifecycle_version` 行，再由登记的 `lifecycles` 组装函数按每个对象类型的当前生效版本组装整段 |
 | 历史 | `lifecycle_version` 照旧单独保存全部历史版本（含 `snapshot` = `lifecycleAsOf`） |
@@ -579,7 +579,7 @@ stateDiagram-v2
 种子约束：
 1. 时间：mock 时间是北京时间字符串，入库转 `timestamptz +08:00`。种子环境的「现在」固定为 **2026-10-25 15:42（北京时间）**，由骨架 `now()` 提供 [已定：PDE]；种子保留原时间，不要按入库时间平移，否则「今天」「近 7 天」（`SINCE_7D = 2026-10-19`）对不上。
 2. 编号序列：入库后把 AL / SCN / CR 各序列设为现有最大号 + 1；ACT、AL 编号带日期、**按天计数**，序列按天取当天最大号 + 1 [已定：本体小白]。
-3. 运行时状态 [已定]：种子环境适配器统一走 mock（见 2.7）。mock 里没有 `next_query_at` 字段；结果未知共 **74 条 = ACTIONS 20 + RUNS 54**（`action/derived/runsOf.json` 实跑计数）。ACTIONS 20 条的日志已是「自动查询 3 次 … 转人工对账」；RUNS 54 条的时间线最后一行是「系统按幂等键自动查询，查不到再人工对账」，最晚一条 14:40:05 距种子「现在」15:42 已超过 3×15 分钟。所以 74 条都写 `reconcile_task(tries=3, round=1, manual=true, state=manual, next_at=null)`（等人工对账）[已定：Palantir专家]。**写入顺序**：骨架 seed 顺序是 integration 在 dynamic 之前（`app/seeds/registry.py` `SEED_MODULES`），而这 74 行要 FK 到 `action_run`，所以由**动态的种子在写完 `action_run` 之后**写入（按 `action_run.code` 查 id），表仍归 integration [待定：Palantir专家 确认；或由 integration 在 dynamic 之后单独补一步]；与页面一致；不保留、也不推算 `next_query_at` [已定：本体小白 更正]。开发 / 测试环境的 mock 适配器按种子状态原样返回，对账任务虽在跑，入库后页面不变。人工选「仍无法确认」后由 `reopen_reconcile` 再开一轮（`round+1`、`tries=0`，最多 3 次）。
+3. 运行时状态 [已定]：种子环境适配器统一走 mock（见 2.7）。mock 里没有 `next_query_at` 字段；结果未知共 **74 条 = ACTIONS 20 + RUNS 54**（`action/derived/runsOf.json` 实跑计数）。ACTIONS 20 条的日志已是「自动查询 3 次 … 转人工对账」；RUNS 54 条的时间线最后一行是「系统按幂等键自动查询，查不到再人工对账」，最晚一条 14:40:05 距种子「现在」15:42 已超过 3×15 分钟。所以 74 条都写 `reconcile_task(tries=3, round=1, manual=true, state=manual, next_at=null)`（等人工对账）[已定：Palantir专家]。这是给 integration 的**数据约定**。**写入方和顺序** [已定：Palantir专家、动态]：`reconcile_task` 的 74 行由 integration 在 dynamic 之后的种子段 `integration_runs` 里写（连同 `writeback_call`），按 `action_run.code` 查 id；**动态的种子不碰这张表**。种子顺序：integration（`ext_system`）在 action 之前，`integration_runs` 在 dynamic 之后、qa 之前（`SEED_MODULES` 里的占位由本体小白加）；与页面一致；不保留、也不推算 `next_query_at` [已定：本体小白 更正]。开发 / 测试环境的 mock 适配器按种子状态原样返回，对账任务虽在跑，入库后页面不变。人工选「仍无法确认」后由 `reopen_reconcile` 再开一轮（`round+1`、`tries=0`，最多 3 次）。
 4. 校验：入库后用同一套前端页面对比 4 个列表的页签计数与首屏数据，一致才算通过。
 5. 执行记录合并（`ACTIONS` 141 + `RUNS` 1,849）[已定：PDE、本体小白]。**不改任何 mock 值**：
    - 动作名：mock 的 `action` 是中文名，按 `ACTION_TYPES.name` 映射成 `action_type_id`；RUNS 直接用 `typeId`。
