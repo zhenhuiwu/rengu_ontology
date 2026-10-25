@@ -119,6 +119,9 @@ const stageType = computed(() => (stageEdit.value.actionTypeId ? actionTypeById(
 const actOptions = computed(() => ACTION_TYPES.filter((a) => a.targetKind === rule.value.objKind && a.status !== '草稿').map((a) => ({ value: a.id, label: `${a.name} · ${a.version}` })));
 const params = computed(() => (stageType.value ? paramsOf(stageType.value) : []));
 const mappingRows = computed(() => params.value.map((p) => ({ param: p.name, required: p.required, from: stageEdit.value.mapping.find((m) => m.param === p.name)?.from ?? '' })));
+/** 自动暂存开启时，必填参数（*）都要有取值来源才能保存 */
+const missingReq = computed(() => (isDraft.value && stageEdit.value.enabled ? mappingRows.value.filter((r) => r.required && !r.from).map((r) => r.param) : []));
+const saveTip = computed(() => (missingReq.value.length ? `自动暂存动作缺少必填参数的取值来源：${missingReq.value.join('、')}` : ''));
 function setMapping(param: string, from: string) {
   const m = ensureEdits().autoStage.mapping; const row = m.find((x) => x.param === param);
   if (row) row.from = from; else m.push({ param, from });
@@ -224,11 +227,12 @@ const verCols = [
           @change="(v: any) => setView(v)" />
         <span class="ru-sp" />
         <span v-if="readonly" class="t-12 c-3">{{ reason }}</span>
-        <a-tooltip :title="reason">
+        <a-tooltip :title="readonly ? reason : isDraft ? saveTip : ''">
           <a-button v-if="!draftCR || readonly" type="primary" :disabled="readonly" @click="openChange(`${base.name}（${base.id}）`)">发起变更</a-button>
           <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
-          <a-button v-else type="primary" @click="saveDraft">保存到草稿</a-button>
+          <a-button v-else type="primary" :disabled="missingReq.length > 0" @click="saveDraft">保存到草稿</a-button>
         </a-tooltip>
+        <span v-if="!readonly && missingReq.length" class="t-12 c-warning">缺少必填参数：{{ missingReq.join('、') }}</span>
       </div>
       <a-tabs v-model:activeKey="tab" class="ru-tabs">
         <a-tab-pane key="cond" tab="条件" />
@@ -335,8 +339,8 @@ const verCols = [
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'param'">{{ record.param }}<span v-if="record.required" class="c-error"> *</span></template>
               <template v-else-if="column.key === 'from'">
-                <a-select v-if="isDraft && stageEdit.enabled" size="small" :value="record.from || undefined" placeholder="选择取值来源" class="ru-mapsel"
-                  :options="[...new Set([record.from, ...MAPPING_SOURCES].filter(Boolean))].map((m) => ({ value: m, label: m }))" @change="(v: any) => setMapping(record.param, v)" />
+                <a-select v-if="isDraft && stageEdit.enabled" size="small" :value="record.from || undefined" placeholder="选择取值来源" class="ru-mapsel" allow-clear
+                  :options="[...new Set([record.from, ...MAPPING_SOURCES].filter(Boolean))].map((m) => ({ value: m, label: m }))" @change="(v: any) => setMapping(record.param, v ?? '')" />
                 <span v-else :class="record.from ? 'c-1' : 'c-3'">{{ record.from || '未映射' }}</span>
               </template>
             </template>

@@ -37,7 +37,7 @@ export const RULE_DEFS: RuleDef[] = [
     conds: [{ metric: 'gross_margin', metricVer: 2, field: '毛利率', op: '<', value: '18.00%' }, { metric: 'gross_margin', metricVer: 2, field: '上次计算的毛利率', op: '≥', value: '18.00%' }],
     logic: '且', expr: 'gross_margin@v2(sku, store, day) < 0.18 AND prev(gross_margin@v2) >= 0.18', dedupe: '规则 + 商品 + 门店 + 日期', cooldown: '7 天',
     trigger: { kind: '定时', cron: '0 8 * * *', text: '每天 08:00（数据截至前一日 23:00）' }, actionTypeId: 'start_price_approval',
-    autoStage: AS('start_price_approval', [['商品', '告警.对象'], ['门店', '告警.门店'], ['建议调价', '规则.建议值（毛利率回到 18%）'], ['关联告警', '告警.ID']], '品类经理 王敏') },
+    autoStage: AS('start_price_approval', [['商品', '告警.对象'], ['原因', '规则.命中说明'], ['备注', '规则.建议值（毛利率回到 18%）'], ['关联告警', '告警.ID']], '品类经理 王敏') },
   { id: 'R-012', name: RULES['R-012'].name, version: 2, status: '已发布', owner: '周晓峰', core: true, objKind: 'product', level: '高', output: '告警', weekly: 386,
     desc: '收到库存变动事件后，可用库存低于门店安全库存时产生告警。',
     conds: [{ field: '可用库存', op: '<', value: '安全库存' }, { field: '商品状态', op: '=', value: '在售' }],
@@ -49,7 +49,7 @@ export const RULE_DEFS: RuleDef[] = [
     conds: [{ field: '订单状态', op: '=', value: '已出库' }, { field: '出库时长', op: '>', value: '48 小时' }],
     logic: '且', expr: 'order.status = "已出库" AND hours_since(order.shippedAt) > 48', dedupe: '规则 + 订单', cooldown: '不重复',
     trigger: { kind: '定时', cron: '10 * * * *', text: '每小时第 10 分' }, actionTypeId: 'urge_logistics',
-    autoStage: AS('urge_logistics', [['订单', '告警.对象'], ['运单号', '订单.运单号'], ['关联告警', '告警.ID']], '订单运营组 陈立军') },
+    autoStage: AS('urge_logistics', [['订单', '告警.对象'], ['原因', '规则.命中说明'], ['关联告警', '告警.ID']], '订单运营组 陈立军') },
   { id: 'R-021', name: RULES['R-021'].name, version: 2, status: '已发布', owner: '陈立军', core: true, objKind: 'store', level: '中', output: '告警', weekly: 9,
     desc: '每周一按销售额（不含税）周环比计算，下降超过 15% 的门店产生告警。',
     conds: [{ metric: 'gmv', metricVer: 3, field: '销售额（不含税）周环比', op: '<', value: '−15.0%' }],
@@ -214,4 +214,4 @@ export function ruleVersions(rule: RuleDef, draftVer?: number): RuleVersion[] {
 }
 
 export const CONFIRMERS = ['品类经理 王敏', '门店店长', '订单运营组 陈立军', '订单运营组 孙浩然', '客服主管 何静', '供应链计划员 周晓峰', '定价委员会'];
-export const MAPPING_SOURCES = ['告警.对象', '告警.门店', '告警.ID', '事件.SKU', '事件.门店', '事件.订单号', '命中.对象', '规则.建议值（毛利率回到 18%）', '安全库存 × 1.5 − 可用库存', '固定值', '—'];
+export const MAPPING_SOURCES = ['告警.对象', '规则.命中说明', '告警.门店', '告警.ID', '事件.SKU', '事件.门店', '事件.订单号', '命中.对象', '规则.建议值（毛利率回到 18%）', '安全库存 × 1.5 − 可用库存', '固定值', '—'];
