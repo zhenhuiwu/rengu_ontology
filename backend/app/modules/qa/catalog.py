@@ -71,3 +71,11 @@ def plan_text(plan: dict[str, Any] | None) -> str:
         plan.get("sort"),
     ]
     return " · ".join(p for p in parts if p)
+
+
+# [推断] 前端 EvalTab.vue 里写死的回放提示（未导出到 mock），T10 待运行回放用。
+REPLAY_HINT = {
+    "CR-0010": "按 退款率 v3（退款完成时间）重新比对",
+    "CR-0008": "同义词“发货及时率”生效后应召回 出库及时率 v1",
+    "CR-0015": "同义词“成交单量”生效后应召回 有效订单数 v1",
+}
