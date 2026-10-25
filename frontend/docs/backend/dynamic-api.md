@@ -26,6 +26,7 @@
 | 推演结果 scenario_result | `simulate()`（`ScResult`） | 周序列、KPI、SKU×门店影响；每次运行覆盖 |
 | 生命周期 lifecycle / lifecycle_state / lifecycle_transition | `mock/lifecycle.ts` `LIFECYCLES` | 对象类型的状态字段、状态（初始/中间/终态、SLA）、迁移（触发、来源、条件、结果）、版本 |
 | 状态变化 lifecycle_change | `changesOf()`（`LcChange`） | 数据同步收到的逐条状态变化；`trId=null` 即非法迁移 |
+| 转派候选人（用户 sys_user） | `mock/dynamic.ts` `PEOPLE`（7 人） | **`sys_user` 归 admin 模块（PDE）**，动态不建表、只读；这 7 人带 `alert_assignable` 标记，见 4、5 [已定：群决定] |
 | 变更单 change_request 等 | `mock/changes.ts`、`useDraftView` | **复用静态文档 `static-api.md` 第 1、2 节**；动态侧 target_kind = `rule`、`object`（生命周期）、`action`、`event` |
 
 关系要点：
@@ -62,6 +63,7 @@
 | lifecycle_state | 只追加（随版本） | `id` bigint | `(lifecycle_version_id, key)` |
 | lifecycle_transition | 只追加（随版本） | `id` bigint | `(lifecycle_version_id, code)`（code = T1…） |
 | lifecycle_change | 只追加 | `id` bigint | — |
+| sys_user | **归 admin（PDE）**，动态不写定义 | 按 admin 约定 | 按 admin 约定；动态只用 `alert_assignable` 列 |
 
 回放试跑（`replay()`）只算不存，没有表。
 
@@ -350,6 +352,21 @@ stateDiagram-v2
 
 **种子环境的「现在」** [已定：PDE]：固定为 **2026-10-25 15:42（北京时间）**，由骨架的 `now()` 提供；所有「今天」「近 7 天」「N 分钟前」都按它算，不用系统时钟。
 
+### 2.8 本体版本快照的 `rules` 段 [已定：群决定]
+
+整版发布时，本体版本快照分 `actionTypes`、`eventTypes`、`rules` 几段，**各段由所属模块组装**，交给静态的 `create_version` 写入版本；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`）。动态负责组装 `rules` 段：
+
+| 项 | 约定 |
+|---|---|
+| 内容 | 数组，**每条规则一项 = 该规则在本次发布后生效的那个版本的完整定义**；草稿、已替代版本不放 |
+| 每项字段 | `id`、`version`，加定义字段（与 `rule_version` / `RULE_DEFS` 相同，接口名照 mock）：`name, desc, owner, status, core, objKind, level, output, conds[{metric, metricVer, field, op, value}], logic, expr, dedupe, cooldown, trigger{kind, cron, text, eventId, filter}, actionTypeId, autoStage{enabled, actionTypeId, confirmer, mapping[{param, from}]}` |
+| 不放 | `weekly`（近 7 天命中数，统计值）；`published_by/published_at/change_note/release` 由版本本身记录 |
+| 组装时机 | 发布事务里：本次 CR 里的规则先生成新的 `rule_version` 行，再按每条规则的当前生效版本组装整段交给 `create_version` |
+| 历史 | `rule_version` 照旧单独保存每条规则的全部历史版本；快照只是发布那一刻的全量生效版本 |
+| 运行数据 | 告警、动作执行、规则命中、生命周期状态变化都是运行数据，**不进快照**；它们产生时记下当时的 `rule_version` / `type_version` 即可追溯 |
+
+**生命周期**：本文把生命周期当作对象类型上的本体定义（1.1 关系要点、2.3：草稿 → CR → 整版发布，`lifecycle_version.release` 记随哪次发布生效），所以它也应进快照：内容 = 每个对象类型当前生效版本的完整定义（`objectId, version, field, owner, ruleId, desc, states[{key, name, kind, desc, sla, x, y}], transitions[{id, from, to, trigger, by, eventId, actionId, guard, effect}]`，不含 `count`、`weekly` 统计值），由动态组装。**待提出**：群决定只列了 `actionTypes / eventTypes / rules` 三段，生命周期是单独加 `lifecycles` 段，还是并进静态的对象类型段，需要跟 PDE / 静态确认。
+
 ## 3. 权限与只读
 
 | 场景 | 规则 |
@@ -372,7 +389,7 @@ stateDiagram-v2
 | 告警详情 | `GET /alerts/{id}` | 含规则摘要、指标、去重说明、近 7 天次数、关联动作、log |
 | 认领 / 批量认领 | `POST /alerts/{id}:claim`、`POST /alerts:batch-claim {ids}` | |
 | 转派 | `POST /alerts/{id}:transfer {to}` | 在途锁；`to` ≠ 当前处理人（前端下拉已排除，`Alerts.vue` L278） |
-| 转派选人 | `GET /people` | 返回 `string[]`，种子 = `mock/dynamic.ts` `PEOPLE`（原在 `Alerts.vue`，已移入 mock）；以后改用 admin 模块 `GET /api/admin/v1/users?kw` |
+| 转派选人 | `GET /people` | 返回 `string[]`（用户姓名），**只返回 `sys_user` 中带 `alert_assignable` 标记的用户，按 mock `PEOPLE` 原顺序**，转派下拉与现在完全一样。`sys_user` 归 admin 模块（PDE），动态只读，不读种子 JSON、不建自己的表 [已定：群决定]；种子见 5 |
 | 关闭 / 批量关闭 | `POST /alerts/{id}:close {as, reason}`、`POST /alerts:batch-close {ids, as, reason}` | `as` ∈ 已解决/已忽略；仅本人处理中；批量返回 `{closed}`（`skipped[]` 见 `[推断 P3]`） |
 | 告警发起动作 | `POST /alerts/{id}:start-action` | 生成 action_run（审批中），幂等键 `act-<告警号>` 由动态生成并返回（不需要请求头 `Idempotency-Key`） |
 | 动作列表 | `GET /action-runs?tab&status&action&actionType&sysId&objKind&objId&alertId&ruleId&kw&page&size`（参数见下方「唯一执行记录接口」） | 一屏 16；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页「执行记录」「最近异常」也用这个接口（`action_type` + `status` 多选，每页 14），同一张表 |
@@ -438,7 +455,13 @@ stateDiagram-v2
 | `dynamic/derived/lifecycleAsOf.json` | lifecycle_version.snapshot | |
 | `dynamic/derived/changesOf.json` | lifecycle_change | 246 条 |
 | `dynamic/derived/illegalOf.json`、`dynamic/derived/storeOfKey.json` | — | 只作核对 |
-| `dynamic/PEOPLE.json` | —（`GET /people` 直接返回，过渡用） | **只用 `mock/dynamic.ts` 的 `PEOPLE`**；`actions.ts` L95 有一份相同的私有副本（不导出），不用管 |
+| `dynamic/PEOPLE.json` + `system/ADMIN_USERS.json` | `sys_user`（**归 admin / PDE**），只设 `alert_assignable` | 见下方「转派候选人」 |
+
+**转派候选人（PEOPLE → sys_user）** [已定：群决定]：
+- `PEOPLE` 不单独入库、不由后台读 JSON 返回；人放在 admin 模块的 `sys_user`（归 PDE / admin，表结构和用户种子由 admin 负责）。
+- 只用 `mock/dynamic.ts` 的 `PEOPLE`（7 人：王敏、陈立军、刘婷、孙浩然、何静、赵蕾、吴佳）；`actions.ts` L95 有一份相同的私有副本（不导出），不用管。
+- 动态的 seed 在 admin 用户种子（`system/ADMIN_USERS.json`）之后跑：7 个名字按**姓名**匹配已有 `sys_user` 行；匹配不到的插入新行，`is_seed = true`。按当前 mock 实跑，`ADMIN_USERS` 120 人里这 7 个名字**一个都没有**，所以 7 人都会新插。重名时取 id 最小的一行 [推断]。
+- 这 7 人设 `alert_assignable` 标记。为了保留下拉顺序，建议该列用 `smallint null`：null = 不可转派，1–7 = `PEOPLE` 里的顺序 [推断：需 admin 确认列型]。`GET /people` 按它升序返回姓名。
 
 | mock 文件 / 导出 | 写入表 | 当前条数（master `5fb26ab` 实跑） | 注意 |
 |---|---|---|---|
