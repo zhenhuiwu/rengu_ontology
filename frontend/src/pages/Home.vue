@@ -107,7 +107,7 @@ const rankCols = [
           <span v-if="k.unit" class="t-14 c-2">{{ k.unit }}</span>
         </div>
         <div class="t-12 c-3">
-          10 月 1 日—24 日 · 较上月同期 <span class="num" :class="k.delta >= 0 ? 'c-success' : 'c-error'">{{ k.deltaText }}</span>
+          10 月 1 日—24 日 · 较上月同期 <span class="num" :class="k.delta >= 0 ? 'c-2' : 'c-error'">{{ k.deltaText }}</span>
         </div>
       </div>
     </div>

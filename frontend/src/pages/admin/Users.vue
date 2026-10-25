@@ -21,7 +21,7 @@ const rows = computed(() => users.value.filter((u) =>
   (status.value === '全部' || u.status === status.value) &&
   (!kw.value || u.name.includes(kw.value) || u.account.includes(kw.value) || u.id.includes(kw.value))));
 const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
-const badge = (s: AdminUser['status']) => (s === '启用' ? 'success' : s === '停用' ? 'default' : 'warning');
+const badge = (s: AdminUser['status']) => (s === '启用' ? 'default' : s === '停用' ? 'default' : 'warning');
 // 每列都给宽度（账号按邮箱长度），剩余宽度按比例分摊，不在某一列后面留大空白
 const columns = [
   { title: '用户 ID', dataIndex: 'id', key: 'id', width: 100 },

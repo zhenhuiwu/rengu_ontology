@@ -37,7 +37,7 @@ if (import.meta.env.DEV) {
 }
 
 const onClose = () => (props.level === 2 ? back() : close());
-const toneClass = (k: ObjKpi) => (k.tone === 'down' ? 'c-error' : k.tone === 'up' ? 'c-success' : 'c-3');
+const toneClass = (k: ObjKpi) => (k.tone === 'down' ? 'c-error' : k.tone === 'up' ? 'c-2' : 'c-3');
 
 // 订单动作“补发出库单”：只在订单抽屉里提供（首页等列表只看不改），仅已出库订单可用
 const resendOrder = computed(() => {
