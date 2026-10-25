@@ -170,7 +170,7 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
   - `app.modules.versioning.sections.load_sections()` 按子包名排序扫描 `app.modules.*.sections`（pkgutil）并登记；`create_app()` 和 `python -m app.cli seed` 开头都会调。返回前把整个注册表**按包名排序**（同一模块内按 `BUILDERS` 顺序），所以不管之前谁先 import 过模块（`create_app` 里 `include_routers` 在 `load_sections` 之前），app 和 seed CLI 的登记顺序（= build / restore 调用顺序）一致。幂等：同一实例重复登记放行，同一 section 换了另一个实例照旧报 `ValueError`。
   - 直接调 `run_seeds(...)`（测试里）不会自动发现，测试自己登记要用的 builder。
   - 测试替身的 section 名一律用 `_test_` 前缀（如 `tests/fixtures/section_mods` 的 `_test_alpha` / `_test_beta`），**不要借用真实 section 名**（terms、eventTypes…）：和 `app.modules` 一起扫时会和真实模块冲突（「已经登记过」）。
-  - **迁移**：静态现在在 `static/__init__.py` 里 `register_all()`、`sections.py` 已有 `BUILDERS` → 删掉 `__init__` 里的调用即可（留着也不冲突，同一实例）。Palantir `action/sections.py`、`event/sections.py` 已有幂等 `register()` → 不用改；也可以改成导出 `BUILDERS`。
+  - **迁移**：静态现在在 `static/__init__.py` 里 `register_all()`、`sections.py` 已有 `BUILDERS` → 删掉 `__init__` 里的调用即可（留着也不冲突，同一实例）。Palantir `action/sections.py`、`event/sections.py` → 必须删掉模块底部的 `register()` 调用，只定义 `BUILDERS` 或 `register()`，由 `load_sections()` 调用。
   - **验收**：全新空库 `alembic upgrade head` + `python -m app.cli seed`（默认参数）后，每个 `ontology_release.snapshot` 都含你的 section（`tests/test_seed_fresh_db.py::test_full_seed_on_fresh_db` 会对本分支实际发现的 section 断言这一点）。
 - **只追加，不改不删**：见 §6 的只追加触发器。
 - `GET /releases` 不分页、登录即可调：`{items, current}`（前端版本选择器要全量）。
