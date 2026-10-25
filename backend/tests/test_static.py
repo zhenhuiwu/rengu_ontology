@@ -368,6 +368,44 @@ async def test_link_types(client, static_seeded):
     assert paths == [pg]
 
 
+def mock_paginate(rows: list, page: int, size: int) -> dict:
+    """前端 src/mock/paginate.ts:10-14 原样：page = min(max(1, page), max(1, ceil(total / size)))。"""
+    pages = max(1, -(-len(rows) // size))
+    pg = min(max(1, page), pages)
+    return {"items": rows[(pg - 1) * size : pg * size], "total": len(rows), "page": pg, "size": size}
+
+
+def test_paginate_clamps_like_frontend():
+    """service.paginate：先 clamp(total) 再 Page.of；focusId 先定页，再收拢。"""
+    from app.common.pagination import PageParams
+    from app.modules.static.service import paginate
+
+    rows = [{"id": f"r{i}"} for i in range(25)]
+    for page in (1, 2, 3, 99, 0, -3):
+        p = PageParams(page=page, size=10)
+        assert paginate(rows, p) == mock_paginate(rows, page, 10), page
+    assert paginate(rows, PageParams(page=99, size=10))["page"] == 3  # 越界 → 最后一页，page 为收拢后的值
+    assert paginate([], PageParams(page=5, size=10)) == {"items": [], "total": 0, "page": 1, "size": 10}
+    assert paginate(rows, PageParams(page=1, size=10), "r24")["page"] == 3  # focusId 所在页
+    assert paginate(rows, PageParams(page=99, size=10), "nope")["page"] == 3  # 找不到 focusId → 按 page 收拢
+
+
+async def test_list_pagination_clamps(client, static_seeded):
+    """page=0 / page=-3 → 第 1 页（不报 422）；越界 → 最后一页且 page 为收拢后的值；total=0 → page 1、空。"""
+    last = -(-len(LINKS) // 18)
+    for page, want in ((0, 1), (-3, 1), (999, last), (last + 1, last)):
+        body = await get(client, f"/link-types?page={page}")
+        assert body == mock_paginate(LINKS, page, 18), page
+        assert body["page"] == want
+    assert (await get(client, "/link-types?page=999&size=5"))["page"] == -(-len(LINKS) // 5)
+    empty = await get(client, "/link-types?q=__no_such_link__&page=7")
+    assert empty == {"items": [], "total": 0, "page": 1, "size": 18}
+    usage = await get(client, f"/link-types/{LINKS[0]['id']}/usage?page=-1")
+    assert usage["page"] == 1
+    for bad in ("size=0", "size=201", "page=x"):
+        await get(client, f"/link-types?{bad}", 422)  # size 照旧校验
+
+
 # ---------------------------------------------------------------- 指标
 
 

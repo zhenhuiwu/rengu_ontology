@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.context import ViewContext
-from app.common.pagination import Page
+from app.common.pagination import Page, PageParams
 from app.core.errors import AppError, NotFound
 from app.modules.static import history, shapes
 from app.modules.static.repo import StaticRepo
@@ -63,15 +63,19 @@ def in_order(sec: Obj, cur: list[Obj]) -> list[tuple[str, Obj]]:
 KIND_MSG = "kind 只支持 metric、view（变更单历史随变更单模块提供）"
 
 
-def paginate(items: list[Obj], page: int, size: int, focus_id: str | None = None, key: str = "id") -> Obj:
-    """前端 slice 分页（形状 = 骨架 app.common.pagination.Page）；
-    focusId 在筛选结果里时直接返回它所在的页（api-index §1 focusId）。"""
+def paginate(items: list[Obj], p: PageParams, focus_id: str | None = None, key: str = "id") -> Obj:
+    """前端 slice 分页（骨架 PageParams.clamp + Page.of，同 src/mock/paginate.ts:13）。
+
+    focusId 在筛选结果里时先把页码换成它所在的页（api-index §1 focusId），再按 total 收拢：
+    page ≤ 0 已由 PageParams 收成 1；超过最后一页 → 最后一页，响应 page 为收拢后的值；
+    total=0 → 第 1 页、空列表。
+    """
     if focus_id:
         i = next((n for n, x in enumerate(items) if x.get(key) == focus_id), -1)
         if i >= 0:
-            page = i // size + 1
-    start = (page - 1) * size
-    return Page[Obj](items=items[start : start + size], total=len(items), page=page, size=size).model_dump()
+            p = PageParams(page=i // p.size + 1, size=p.size)
+    c = p.clamp(len(items))
+    return Page[Obj].of(items[c.offset : c.offset + c.size], len(items), c).model_dump()
 
 
 def hits_for(p: str) -> int:
@@ -133,13 +137,13 @@ class StaticService:
 
     # ================================================================ 对象类型
 
-    async def object_list(self, kw: str, page: int, size: int) -> Obj:
+    async def object_list(self, kw: str, p: PageParams) -> Obj:
         await self._check_ver()
         counts = await self.repo.prop_counts()
         items = [shapes.object_list_item(o, counts.get(o.id, 0)) for o in await self.repo.object_types()]
         if kw:
             items = [x for x in items if kw in x["name"] or kw.lower() in x["api"].lower()]
-        return paginate(items, page, size)
+        return paginate(items, p)
 
     async def object_brief(self) -> list[Obj]:
         return [shapes.object_brief(o) for o in await self.repo.object_types()]
@@ -157,13 +161,13 @@ class StaticService:
         )
         return d
 
-    async def object_properties(self, oid: str, kw: str, page: int, size: int) -> Obj:
+    async def object_properties(self, oid: str, kw: str, p: PageParams) -> Obj:
         await self._check_ver()
         o = await self.repo.object_type(oid)
         items = [shapes.prop(p) for p in o.properties]
         if kw:
             items = [p for p in items if kw in p["name"] or kw in p["api"]]
-        out = paginate(items, page, size)
+        out = paginate(items, p)
         out["diff"] = []  # 草稿差异来自变更单（不在本次范围）[推断]
         return out
 
@@ -173,12 +177,12 @@ class StaticService:
         links = await self._links()
         return [x for x in links if x["from"] == oid and x["status"] == "已发布"]
 
-    async def object_mappings(self, oid: str, page: int, size: int) -> Obj:
+    async def object_mappings(self, oid: str, p: PageParams) -> Obj:
         await self._check_ver()
         o = await self.repo.object_type(oid)
-        return paginate([shapes.mapping(p) for p in o.properties], page, size)
+        return paginate([shapes.mapping(p) for p in o.properties], p)
 
-    async def object_usage(self, oid: str, kind: str, q: str, flt: str, page: int, size: int) -> Obj:
+    async def object_usage(self, oid: str, kind: str, q: str, flt: str, p: PageParams) -> Obj:
         await self._check_ver()
         o = await self.repo.object_type(oid)
         if kind == "view":
@@ -189,7 +193,7 @@ class StaticService:
                 if (not flt or flt == "全部" or v["kind"] == flt)
                 and (not q or q in v["name"] or q in v["owner"])
             ]
-            return paginate(items, page, size)
+            return paginate(items, p)
         if kind == "metric":
             items = []
             for m in await self.repo.stat_metrics():
@@ -202,7 +206,7 @@ class StaticService:
                 items = [u for u in items if oid in u["base"]]
             elif flt == "dim":
                 items = [u for u in items if u["via"] and oid not in u["base"]]
-            return paginate(items, page, size)
+            return paginate(items, p)
         # 统一参数校验错误（core/errors.py:6）：422 VALIDATION_FAILED，details.fields = [{field, message}]。
         # TODO(变更单模块)：kind=cr 等变更单模块接入后返回该对象的变更单历史（static-api.md）。
         raise AppError(
@@ -225,7 +229,7 @@ class StaticService:
         runtime = {x["id"]: {k: x[k] for k in history.LINK_RUNTIME if k in x} for x in cur}
         return [{**d, **runtime.get(i, {})} for i, d in in_order(sec, cur)]
 
-    async def link_list(self, q: str, src: str, st: str, page: int, size: int, focus_id: str | None) -> Obj:
+    async def link_list(self, q: str, src: str, st: str, p: PageParams, focus_id: str | None) -> Obj:
         objs = {o.code: o.display_name for o in await self.repo.object_types()}
         name = lambda i: objs.get(i, i)  # noqa: E731  mock objName：不在 LINK_OBJECTS 的原样显示 id
         items = [
@@ -241,7 +245,7 @@ class StaticService:
                 or q in name(x["to"])
             )
         ]
-        return paginate(items, page, size, focus_id)
+        return paginate(items, p, focus_id)
 
     async def _link(self, lid: str) -> Obj:
         for x in await self._links():
@@ -258,8 +262,8 @@ class StaticService:
             raise NotFound("该关系没有数据质量检查结果", details={"id": lid})
         return q
 
-    async def link_usage(self, lid: str, page: int, size: int) -> Obj:
-        return paginate((await self._link(lid))["usage"], page, size)
+    async def link_usage(self, lid: str, p: PageParams) -> Obj:
+        return paginate((await self._link(lid))["usage"], p)
 
     async def link_paths(self, frm: str | None, to: str | None) -> list[Obj]:
         """PATH_GROUPS：取该版本（默认当前版本）快照的 qaPaths 节；
@@ -280,7 +284,7 @@ class StaticService:
 
     # ================================================================ 指标
 
-    async def metric_list(self, kw: str, group: str, page: int, size: int) -> Obj:
+    async def metric_list(self, kw: str, group: str, p: PageParams) -> Obj:
         await self._check_ver()
         items = [shapes.metric_list_item(m) for m in await self.repo.metrics()]
         items = [
@@ -289,19 +293,19 @@ class StaticService:
             if (not group or group == "全部" or m["group"] == group)
             and (not kw or kw in m["name"] or kw in m["api"])
         ]
-        return paginate(items, page, size)
+        return paginate(items, p)
 
     async def metric_detail(self, mid: str) -> Obj:
         await self._check_ver()
         return shapes.metric_detail(await self.repo.metric(mid))
 
-    async def metric_versions(self, mid: str, page: int, size: int) -> Obj:
+    async def metric_versions(self, mid: str, p: PageParams) -> Obj:
         await self._check_ver()
-        return paginate(list((await self.repo.metric(mid)).version_rows), page, size, key="v")
+        return paginate(list((await self.repo.metric(mid)).version_rows), p, key="v")
 
-    async def metric_refs(self, mid: str, page: int, size: int) -> Obj:
+    async def metric_refs(self, mid: str, p: PageParams) -> Obj:
         await self._check_ver()
-        return paginate(list((await self.repo.metric(mid)).ref_rows), page, size, key="name")
+        return paginate(list((await self.repo.metric(mid)).ref_rows), p, key="name")
 
     # ================================================================ 维度与码表
 
@@ -339,9 +343,7 @@ class StaticService:
             if history.live(v, ver) and not v.get("draft") and (not ver or not v.get("diff"))
         ]
 
-    async def dim_list(
-        self, q: str, kind: str, group: str, page: int, size: int, focus_id: str | None
-    ) -> Obj:
+    async def dim_list(self, q: str, kind: str, group: str, p: PageParams, focus_id: str | None) -> Obj:
         items = [
             d
             for d in await self._dims()
@@ -355,7 +357,7 @@ class StaticService:
                 or any(q in v["name"] or q in v["synonyms"] for v in d["values"])
             )
         ]
-        out = paginate(items, page, size, focus_id)
+        out = paginate(items, p, focus_id)
         out["items"] = [self._dim_summary(d) for d in out["items"]]
         out["groups"] = list(dict.fromkeys(d["group"] for d in await self._dims()))
         return out
@@ -375,7 +377,7 @@ class StaticService:
         d, _ = await self._dim(did)
         return self._dim_head(d)
 
-    async def dim_values(self, did: str, level: str, q: str, status: str, page: int, size: int) -> Obj:
+    async def dim_values(self, did: str, level: str, q: str, status: str, p: PageParams) -> Obj:
         d, _ = await self._dim(did)
         rows = self._value_rows(d)
         off = len([v for v in rows if v["status"] == "停用"])
@@ -389,15 +391,15 @@ class StaticService:
             and (not status or v["status"] == status)
             and (not q or q in v["name"] or q in v["code"] or any(q in s for s in v["synonyms"]))
         ]
-        out = paginate(rows, page, size, key="key")
+        out = paginate(rows, p, key="key")
         out["summary"] = out_summary  # [推断] 取值页签上方的统计与层级选项
         out["levels"] = levels
         return out
 
-    async def dim_mappings(self, did: str, conflict: bool, page: int, size: int) -> Obj:
+    async def dim_mappings(self, did: str, conflict: bool, p: PageParams) -> Obj:
         d, dims = await self._dim(did)
         rows = self._map_rows(d, dims)
-        out = paginate([r for r in rows if r["conflictText"]] if conflict else rows, page, size, key="key")
+        out = paginate([r for r in rows if r["conflictText"]] if conflict else rows, p, key="key")
         out["conflictCount"] = len([r for r in rows if r["conflictText"]])
         return out
 
@@ -468,7 +470,7 @@ class StaticService:
             out.append(r)
         return out
 
-    async def dim_usage(self, did: str, page: int, size: int) -> Obj:
+    async def dim_usage(self, did: str, p: PageParams) -> Obj:
         """Dimensions.vue usageRows = metricUsage(d)（METRICS 里有共同维度的指标）+ d.usage。"""
         d, _ = await self._dim(did)
         rows = []
@@ -487,14 +489,14 @@ class StaticService:
             rows.append(
                 {"type": "指标", "name": m["name"], "hover": {"kind": "metric", "id": m["id"]}, "note": note}
             )
-        return paginate(rows + list(d["usage"]), page, size, key="name")
+        return paginate(rows + list(d["usage"]), p, key="name")
 
-    async def dim_history(self, did: str, page: int, size: int) -> Obj:
+    async def dim_history(self, did: str, p: PageParams) -> Obj:
         d, _ = await self._dim(did)
         rows = d["history"]
         if self.ver:
             rows = [h for h in rows if h["ver"] != "—" and h["ver"] <= self.ver]
-        return paginate(rows, page, size, key="ver")
+        return paginate(rows, p, key="ver")
 
     # ================================================================ 业务知识
 
@@ -524,9 +526,7 @@ class StaticService:
             return "草稿中" if s == "草稿" else "已发布"
         return "草稿中"
 
-    async def knowledge_list(
-        self, q: str, ktype: str, st: str, page: int, size: int, focus_id: str | None
-    ) -> Obj:
+    async def knowledge_list(self, q: str, ktype: str, st: str, p: PageParams, focus_id: str | None) -> Obj:
         items = []
         for e in await self._terms():
             shown = self._shown(e)
@@ -536,7 +536,7 @@ class StaticService:
                 and (not q or q in e["name"] or q in e["id"] or any(q in s for s in e["synonyms"]))
             ):
                 items.append({**e, "shownStatus": shown})
-        out = paginate(items, page, size, focus_id)
+        out = paginate(items, p, focus_id)
         out["items"] = [{k: v for k, v in x.items() if k != "refs"} for x in out["items"]]
         return out
 
@@ -550,8 +550,8 @@ class StaticService:
         e = await self._term(kid)
         return {**{k: v for k, v in e.items() if k != "refs"}, "shownStatus": self._shown(e)}
 
-    async def knowledge_refs(self, kid: str, page: int, size: int) -> Obj:
-        return paginate((await self._term(kid))["refs"], page, size, key="name")
+    async def knowledge_refs(self, kid: str, p: PageParams) -> Obj:
+        return paginate((await self._term(kid))["refs"], p, key="name")
 
     async def synonym_conflicts(self) -> Obj:
         return {"conflicts": synonym_conflicts(await self._terms()), "rule": CONFLICT_RULE}
