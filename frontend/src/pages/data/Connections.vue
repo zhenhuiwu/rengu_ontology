@@ -165,7 +165,7 @@ function save() {
   message.success(`已创建：${form.name}`);
 }
 const onSelect = (id: string) => guard(() => select(id));
-const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ? 'tl-attention' : 'tl-failed');
+const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ? 'c-1' : 'tl-failed');
 </script>
 
 <template>
@@ -229,6 +229,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         <span v-else>尚未测试连接</span>
         <span>映射对象类型 {{ selected.objectTypes.length ? selected.objectTypes.join('、') : EMPTY }}</span>
       </div>
+      <div v-if="selected.note" class="cn-note t-12 c-2">{{ selected.note }}</div>
       <a-tabs v-model:activeKey="tab" class="cn-tabs">
         <a-tab-pane key="params" tab="连接参数" />
         <a-tab-pane key="tables" :tab="`库表（${dsTables(selected).length}）`" />
@@ -266,7 +267,9 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
               <span v-if="column.key === 'name'" class="num c-1">{{ record.name }}</span>
               <span v-else-if="column.key === 'rows'" class="num">{{ fmtInt(record.rows) }}</span>
               <span v-else-if="column.key === 'objectType'">
-                <a-tag v-if="record.objectType">{{ record.objectType }}</a-tag><span v-else class="c-3">未映射</span>
+                <a-tag v-if="record.objectType">{{ record.objectType }}</a-tag>
+                <a-tooltip v-else-if="record.ref" :title="`只作参考，未映射；以 ${record.ref} 为准`"><span class="c-2">参考 · 未映射</span></a-tooltip>
+                <span v-else class="c-3">未映射</span>
               </span>
               <span v-else-if="column.key === 'updatedAt'" class="num">{{ record.updatedAt }}</span>
             </template>
@@ -345,7 +348,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
       <div class="cn-foot">
         <a-button :loading="formTesting" @click="formTest">测试连接</a-button>
         <a-space>
-          <span v-if="formDirty" class="t-12 tl-attention">有未保存的修改</span>
+          <span v-if="formDirty" class="t-12 c-2">有未保存的修改</span>
           <a-button @click="closeForm">取消</a-button>
           <a-button type="primary" :disabled="readonly" @click="save">保存</a-button>
         </a-space>
@@ -375,6 +378,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
 .cn-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px 6px; }
 .cn-title { display: flex; align-items: center; gap: 10px; }
 .cn-meta { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 0 20px; }
+.cn-note { margin: 8px 20px 0; padding: 6px 12px; background: var(--g2); border-radius: var(--radius); }
 .cn-tabs { padding: 0 20px; flex: none; }
 .cn-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
 .cn-body { flex: 1; min-height: 0; padding: 16px 20px; }

@@ -12,8 +12,12 @@ export interface Datasource {
   compatMode?: string; databaseMode?: string; erpSystem?: string; appId?: string;
   ssl: boolean; status: DsStatus; lastTest: DsTest | null; owner: string; objectTypes: string[];
   sync: DsSync; runs: DsRun[]; tableCount: number; createdAt: string;
+  /** 详情顶部的说明（如：只是数据源、不是外部系统） */
+  note?: string;
+  /** 这些对象类型的同名表只作参考（对账用），不映射；对象以 refSource 为准 */
+  refOnly?: { objects: string[]; source: string };
 }
-export interface DsTable { schema: string; name: string; comment: string; rows: number; cols: number; objectType: string | null; updatedAt: string }
+export interface DsTable { schema: string; name: string; comment: string; rows: number; cols: number; objectType: string | null; updatedAt: string; /** 参考表：说明以哪张表为准 */ ref?: string }
 
 export const DS_TYPES: DsType[] = ['PostgreSQL', '达梦 DM8', '人大金仓 KingbaseES', 'MySQL', 'ERP'];
 export const DS_DEFAULT_PORT: Record<DsType, number> = { PostgreSQL: 5432, '达梦 DM8': 5236, '人大金仓 KingbaseES': 54321, MySQL: 3306, ERP: 443 };
@@ -23,8 +27,8 @@ export const ERP_SYSTEMS = ['用友 NC Cloud', '金蝶云·星空', 'SAP S/4HANA
 
 type Seed = [string, DsType, string, number, string, string, string, string[], DsSync['mode'], string, string, Partial<Datasource>?];
 const SEEDS: Seed[] = [
-  ['POS 交易库（华东）', 'PostgreSQL', '10.12.8.21', 5432, 'pos_prod', 'sync_ro', '陈立军', ['订单', '订单行', '退款', '退款行'], '定时增量', '*/15 * * * *', '每 15 分钟'],
-  ['财务总账', '达梦 DM8', '10.12.20.5', 5236, 'FIN_GL', 'BI_READER', '何静', ['门店', '大区'], '定时增量', '0 2 * * *', '每天 02:00', { compatMode: 'Oracle' }],
+  ['POS 交易库（华东）', 'PostgreSQL', '10.12.8.21', 5432, 'pos_prod', 'sync_ro', '陈立军', ['订单', '订单行', '退款', '退款行'], '定时增量', '*/15 * * * *', '每 15 分钟', { note: '只读数据源，不是外部系统：订单数据从这里同步；写回订单走 外部系统 → 订单 OMS' }],
+  ['财务总账', '达梦 DM8', '10.12.20.5', 5236, 'FIN_GL', 'BI_READER', '何静', [], '定时增量', '0 2 * * *', '每天 02:00', { compatMode: 'Oracle', refOnly: { objects: ['门店', '大区'], source: '门店主数据（ORG.T_STORE / ORG.T_REGION）' }, note: '门店、大区表只作财务对账参考，未映射；门店、大区以 门店主数据（ORG.T_STORE / ORG.T_REGION）为准' }],
   ['供应链 WMS 库', '人大金仓 KingbaseES', '10.12.31.40', 54321, 'wms', 'wms_ro', '孙浩然', ['仓库', '库存', '出库单'], '定时增量', '*/30 * * * *', '每 30 分钟', { databaseMode: 'oracle' }],
   ['会员中心', 'MySQL', '10.12.9.77', 3306, 'member_center', 'bi_sync', '刘婷', ['会员', '会员等级'], '实时（CDC）', '-', '持续同步'],
   ['用友 NC 采购', 'ERP', 'nc.xianlin.local', 443, 'NCC-PUR', 'api_bi', '孙浩然', ['采购单', '供应商'], '定时增量', '0 */2 * * *', '每 2 小时', { erpSystem: '用友 NC Cloud', appId: 'ncc-bi-0192' }],
@@ -91,9 +95,13 @@ export function dsTables(ds: Datasource): DsTable[] {
     const base = TBL[k % TBL.length];
     const name = k < TBL.length ? base : `${base}_h${Math.floor(k / TBL.length)}`;
     const mapped = k < TBL.length && TBL_CN[base] && ds.objectTypes.includes(TBL_CN[base][1] ?? '') ? TBL_CN[base][1] : null;
+    const ref = k < TBL.length && ds.refOnly?.objects.includes(TBL_CN[base]?.[1] ?? '') ? ds.refOnly.source : undefined;
     const upper = ds.type === '达梦 DM8' || (ds.type === '人大金仓 KingbaseES' && ds.databaseMode === 'oracle');
+    // 门店主数据：门店 / 大区落在 ORG schema（对象类型 门店 → ORG.T_STORE，大区 → ORG.T_REGION）
+    const org = ds.name === '门店主数据' && mapped && (base === 'store' || base === 'region');
     return {
-      schema: schemas[k % schemas.length], name: upper ? name.toUpperCase() : name,
+      ref,
+      schema: org ? 'ORG' : schemas[k % schemas.length], name: org ? `T_${base.toUpperCase()}` : upper ? name.toUpperCase() : name,
       comment: (TBL_CN[base]?.[0] ?? base) + (k < TBL.length ? '' : '（历史）'),
       rows: Math.round(r() * (base.includes('line') ? 9e6 : 4e5)), cols: 6 + Math.round(r() * 40),
       objectType: mapped, updatedAt: at(Math.round(r() * 600)),
