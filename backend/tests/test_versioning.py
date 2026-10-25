@@ -74,6 +74,68 @@ async def test_detail_and_snapshot(client, seeded):
     assert (await client.get("/api/ontology/v1/releases/v2026.09.3/snapshot")).json() == snap
 
 
+# ---- 前端联调口径（src/api/releases.ts + src/api/http.ts） ----
+FRONT_KEYS = {"ver", "publishedAt", "by", "note"}  # toRelease() 只取这四个（src/api/releases.ts:26）
+
+
+@pytest.mark.parametrize("demo_as", ["U010001", "U010006"])  # 两个演示身份（src/api/index.ts:17）
+@pytest.mark.parametrize(
+    "readonly_q",
+    [{}, {"ver": "v2026.10.2"}, {"previewAs": "U010231"}, {"ver": "v2026.10.1", "previewAs": "U010231"}],
+)
+async def test_switcher_list_same_for_all_users_and_readonly_params(client, seeded, demo_as, readonly_q):
+    """VersionPicker 对所有人显示；http.ts 在历史版本 / 预览下给每个请求都带 ?ver= / ?previewAs=
+    （buildUrl :69-73）。
+    版本列表和当前版本不受这两个参数影响：始终是全量、current 始终是最新一版。"""
+    h = {"X-Demo-As": demo_as}
+    body = (await client.get("/api/ontology/v1/releases", params=readonly_q, headers=h)).json()
+    assert [{k: it[k] for k in FRONT_KEYS} for it in body["items"]] == MOCK
+    assert body["current"] == body["items"][0]["ver"] == "v2026.10.3"
+    cur = (await client.get("/api/ontology/v1/releases/current", params=readonly_q, headers=h)).json()
+    assert (cur["current"], cur["next"]) == ("v2026.10.3", "v2026.10.4")
+    # loadReleases() 的 'ok' 判定（releases.ts:43-44）：current 在 items 里能找到
+    assert any(it["ver"] == cur["current"] for it in body["items"])
+
+
+async def test_release_items_are_superset_of_frontend_release(client, seeded):
+    body = (await client.get("/api/ontology/v1/releases")).json()
+    for it in body["items"]:
+        assert set(it) >= FRONT_KEYS
+        assert isinstance(it["publishedAt"], str) and len(it["publishedAt"]) == len("2026-10-24 21:17")
+
+
+@pytest.mark.parametrize("suffix", ["", "/snapshot"])
+async def test_unknown_ver_is_404_envelope(client, seeded, suffix):
+    r = await client.get(f"/api/ontology/v1/releases/v2099.01.1{suffix}", headers={"X-Demo-As": "U010006"})
+    assert r.status_code == 404
+    body = r.json()
+    assert body["code"] == "NOT_FOUND" and body["details"] == {"ver": "v2099.01.1"} and "requestId" in body
+
+
+async def test_unknown_demo_user_is_401(client, seeded):
+    r = await client.get("/api/ontology/v1/releases", headers={"X-Demo-As": "U999999"})
+    assert r.status_code == 401 and r.json()["code"] == "UNAUTHORIZED"
+
+
+async def test_rollback_release_shows_in_switcher(client, seeded):
+    """回滚生成的新版本出现在列表第一条，成为当前版本（Releases.vue:187「回滚会生成一个新版本」）。"""
+    svc = VersioningService()
+    ver = await svc.create_version(
+        seeded, ["CR-9001"], rollback_of="v2026.10.3", published_by="U010001", note="回滚 v2026.10.3"
+    )
+    await seeded.flush()
+    body = (await client.get("/api/ontology/v1/releases")).json()
+    head = body["items"][0]
+    assert body["current"] == ver == head["ver"] == "v2026.10.4"
+    assert (head["kind"], head["rollbackOf"], head["parentVer"]) == ("回滚", "v2026.10.3", "v2026.10.3")
+    assert head["by"] == "王敏" and head["note"] == "回滚 v2026.10.3"
+    cur = (await client.get("/api/ontology/v1/releases/current")).json()
+    assert (cur["current"], cur["next"]) == ("v2026.10.4", "v2026.10.5")
+    snap_new = (await client.get(f"/api/ontology/v1/releases/{ver}/snapshot")).json()
+    snap_prev = (await client.get("/api/ontology/v1/releases/v2026.10.2/snapshot")).json()
+    assert snap_new == snap_prev
+
+
 # ---- create_version 契约 ----
 class FakeStaticProvider:
     async def build_snapshot(self, session, base_ver, change_order_ids):
