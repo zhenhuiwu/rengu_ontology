@@ -553,7 +553,7 @@ stateDiagram-v2
 - `PEOPLE` 不单独入库、不由后台读 JSON 返回；人放在 admin 模块的 `sys_user`（归 PDE / admin，表结构和用户种子由 admin 负责）。
 - 只用 `mock/dynamic.ts` 的 `PEOPLE`（7 人：王敏、陈立军、刘婷、孙浩然、何静、赵蕾、吴佳）；`actions.ts` L95 有一份相同的私有副本（不导出），不用管。
 - 人由 admin 的种子（骨架 `SYS_USERS.json`，归本体小白）收进 `sys_user`，带 `code`（前端 userId）：王敏 U010001、陈立军 U010002、何静 U010003、刘婷 U010004、孙浩然 U010005、赵蕾 U010007、吴佳 U010008（后三个前端没有 id，编号由 PDE 定，标 [推断]）[已定：群决定，PDE、本体小白]。**动态的种子不插人**，只在 admin 种子之后按**姓名**找到这 7 行设 `alert_assignable`；找不到就报错。`sys_user.name` 由 admin 种子保证不重名。
-- 这 7 人设 `alert_assignable` 标记。为了保留下拉顺序，建议该列用 `smallint null`：null = 不可转派，1–7 = `PEOPLE` 里的顺序 [推断：需 admin 确认列型]。`GET /people` 按它升序返回姓名。
+- 这 7 人设 `alert_assignable` 标记。为了保留下拉顺序，建议该列用 `smallint null`：null = 不可转派，1–7 = `PEOPLE` 里的顺序 [已定：本体小白，列加在骨架 admin 的 `sys_user`，admin 种子不填值，由动态的种子按姓名设]。`GET /people` 按它升序返回姓名。
 - **人员字段**：告警的 `assignee`、动作的 `confirmer`/发起人、日志里的操作人照 mock 存姓名，是软引用，不做外键（跟静态定义上的 `owner` 同一写法）。当前用户由 `X-Demo-As`/`RENGU_DEV_USER` 传 `sys_user.code` 解析成 `CurrentUser`，判断「本人」（认领、关闭、确认提交、撤回、方案 owner）时用 `CurrentUser` 的姓名比。
 
 | mock 文件 / 导出 | 写入表 | 当前条数（master `5fb26ab` 实跑） | 注意 |
