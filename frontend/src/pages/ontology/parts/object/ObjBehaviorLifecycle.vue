@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import InfoTip from '@/components/InfoTip.vue';
 /**
  * 对象类型 · 行为 · 生命周期：状态机（X6）+ 迁移定义 / 近期状态变化 + 右侧详情。
  * props：objectId（对象类型 id，如 'order'）、readonly（只有草稿视图里为 false）。
@@ -20,7 +21,6 @@ import { BRAND, GRAY, STATUS } from '@/theme';
 import { useDraftView } from '../useDraftView';
 import { useConfirmStore } from '@/stores/confirm';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
-import { InfoCircleOutlined } from '@ant-design/icons-vue';
 import {
   LC_DRAFT_EDITS, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
@@ -415,7 +415,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
             <div class="lc-side-head">
               <span class="t-16 fw-600 c-1">{{ trName(selTr) }}</span>
               <span class="t-12 c-3 num">迁移 {{ selTr.id }}<template v-if="selTr.mark"> · {{ selTr.mark }}</template></span>
-              <a-tooltip v-if="selTr.actionId" title="经动作执行的迁移：动作在动作中心确认、外部系统返回成功后才改状态；结果未知时状态不变，待对账。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+              <InfoTip v-if="selTr.actionId" text="经动作执行的迁移：动作在动作中心确认、外部系统返回成功后才改状态；结果未知时状态不变，待对账。" />
               <span class="lc-sp" /><a class="t-14" @click="setSel('')">返回概要</a>
             </div>
             <a-descriptions :column="1" size="small" bordered class="lc-desc">
@@ -437,7 +437,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
             <div class="lc-side-head">
               <span class="t-16 fw-600 tl-attention">{{ selIll.from }} → {{ selIll.to }}</span>
               <span class="t-12 c-3">非法迁移</span>
-              <a-tooltip title="不在迁移定义里的状态变化。规则产生告警，并在动作中心暂存“订单状态修正”待确认；若确属合法业务，请在草稿里补这条迁移。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+              <InfoTip text="不在迁移定义里的状态变化。规则产生告警，并在动作中心暂存“订单状态修正”待确认；若确属合法业务，请在草稿里补这条迁移。" />
               <span class="lc-sp" /><a class="t-14" @click="setSel('')">返回概要</a>
             </div>
             <a-descriptions :column="1" size="small" bordered class="lc-desc">
@@ -470,7 +470,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
 
             <template v-if="base.ruleId && !histAt">
               <div class="t-14 fw-600 c-1">近 7 天非法迁移 <span class="num tl-attention">{{ illegalTotal }}</span> 次
-                <a-tooltip :title="`由规则 ${base.ruleId} 按本表检测；统计含冷却期内被去重的命中。`"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip>
+                <InfoTip :text="`由规则 ${base.ruleId} 按本表检测；统计含冷却期内被去重的命中。`" />
                 <RouterLink class="t-12 fw-400 lc-rl" :to="{ path: '/build/ontology/rules', query: { rule: base.ruleId } }">{{ base.ruleId }}</RouterLink></div>
               <ul class="lc-ul">
                 <li v-for="x in illegal" :key="`${x.from}→${x.to}`">

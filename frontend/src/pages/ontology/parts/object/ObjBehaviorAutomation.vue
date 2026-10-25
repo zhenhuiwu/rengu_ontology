@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import InfoTip from '@/components/InfoTip.vue';
 /**
  * 对象类型 · 行为 · 自动化：作用在该对象上的规则（rules.ts，按 objKind）与该对象的事件类型，
  * 下方是这些规则近 7 天的命中（与 规则与自动化 页的命中记录同源）。
@@ -16,7 +17,6 @@ import { RULE_DEFS, hitsOf, stagedOf, type Hit, type RuleDef } from '@/mock/rule
 import { OBJ_TYPE_KIND, OBJ_TYPE_NAME, SINCE_7D } from '@/mock/lifecycle';
 import { useDraftView, draftOf } from '../useDraftView';
 import { CHANGE_REQUESTS } from '@/mock/changes';
-import { InfoCircleOutlined } from '@ant-design/icons-vue';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const route = useRoute();
@@ -88,7 +88,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
     <template v-if="rules.length || events.length">
       <div class="bu-bar">
         <span class="t-14 fw-600 c-1">作用在{{ objName }}上的规则 {{ rules.length }} · 事件类型 {{ events.length }}</span>
-        <a-tooltip :title="`规则在“规则与自动化”页维护、走自己的变更单，这里只读汇总${histRo ? `（${reason}）` : ''}`"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+        <InfoTip :text="`规则在“规则与自动化”页维护、走自己的变更单，这里只读汇总${histRo ? `（${reason}）` : ''}`" />
         <span class="t-12 c-2">近 7 天命中 <span class="num">{{ fmt(totals.hits) }}</span> 次，产生告警 <span class="num">{{ fmt(totals.alerts) }}</span> 条，暂存动作待确认
           <span class="num" :class="totals.pending ? 'tl-attention' : ''">{{ totals.pending }}</span></span>
         <span class="bu-sp" />
@@ -137,7 +137,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
 
       <div class="bu-bar">
         <span class="t-14 fw-600 c-1">近 7 天命中</span>
-        <a-tooltip title="与“规则与自动化”页的命中记录同源；被去重的命中不产生告警"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+        <InfoTip text="与“规则与自动化”页的命中记录同源；被去重的命中不产生告警" />
         <span class="bu-sp" />
         <a-select v-model:value="ruleFilter" size="small" class="bu-sel" :options="[{ value: '全部', label: '全部规则' }, ...rules.map((r) => ({ value: r.id, label: `${r.id} ${r.name}` }))]" />
       </div>

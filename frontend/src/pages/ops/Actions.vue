@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import InfoTip from '@/components/InfoTip.vue';
 /**
  * 动作中心（动态本体）：左侧动作列表（full 分页），右侧 480px 当前动作详情：参数、来源、幂等键、外部单号、执行记录。
  * 页签写进 ?tab=（pending 待确认 / records 执行记录 / unknown 结果未知与对账），当前选中写进 ?act=，页码 ?page=&size=。
@@ -8,7 +9,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { QuestionCircleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
+import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import StatusTimeline from '@/components/StatusTimeline.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -310,7 +311,7 @@ const terminalText = computed(() => {
             <a-popover trigger="click" placement="topRight">
               <template #content>
                 <div class="ac-pop">
-                  <div class="t-14 fw-600">{{ current.system }} 返回失败 <a-tooltip title="修正原因后重新提交，会生成新动作和新幂等键。"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip></div>
+                  <div class="t-14 fw-600">{{ current.system }} 返回失败 <InfoTip text="修正原因后重新提交，会生成新动作和新幂等键。" /></div>
                   <div class="t-14 c-error">{{ current.failReason }}</div>
                   <div class="t-12"><span class="c-2">外部单号</span> <span class="c-1 num">{{ current.extRef ?? '--' }}</span><span class="c-2 ac-pop-gap">幂等键</span> <span class="c-1 num">{{ current.idemKey }}</span></div>
                 </div>

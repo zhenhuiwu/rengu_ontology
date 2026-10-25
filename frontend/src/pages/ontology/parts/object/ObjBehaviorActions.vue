@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import InfoTip from '@/components/InfoTip.vue';
 /**
  * 对象类型 · 行为 · 动作：作用在该对象上的动作类型（来自动作类型目录，按 ACTION_OBJ_KIND 归到对象），
  * 下方是动作中心里该对象的动作（待确认 / 执行记录），点编号去动作中心处理。
@@ -7,7 +8,7 @@
  */
 import { computed, ref } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
-import { QuestionCircleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
+import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
@@ -81,7 +82,7 @@ const recCols = [
     <template v-if="types.length">
       <div class="ba-bar">
         <span class="t-14 fw-600 c-1">作用在{{ objName }}上的动作类型 {{ types.length }}</span>
-        <a-tooltip :title="`来自动作类型目录；参数、提交条件、写回在“动作类型”页维护，这里只读汇总${histRo ? `（${reason}）` : props.readonly ? '' : '，草稿不改动作类型'}`"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+        <InfoTip :text="`来自动作类型目录；参数、提交条件、写回在“动作类型”页维护，这里只读汇总${histRo ? `（${reason}）` : props.readonly ? '' : '，草稿不改动作类型'}`" />
         <span class="ba-sp" />
         <RouterLink class="t-14" to="/build/ontology/action-types">去动作类型</RouterLink>
       </div>

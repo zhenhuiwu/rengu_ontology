@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import InfoTip from '@/components/InfoTip.vue';
 /**
  * 情景推演：左侧方案列表（分页 ?page=，选中 ?sc=），右侧方案配置（范围 + 驱动）与推演结果。
  * 对比模式 ?mode=cmp：勾选最多 3 个已完成方案（?cmp=a,b,c），并排看 KPI 与周销售；?pick= 为选定方案。
@@ -8,7 +9,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
+import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { CURRENT_USER } from '@/mock/changes';
 import EChart from '@/components/EChart.vue';
@@ -292,7 +293,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           <span v-if="cfgDirty && current.result" class="t-12 tl-attention"><ExclamationCircleOutlined /> 配置已改动，结果对应上一次运行</span>
           <span v-else-if="nameDirty" class="t-12 c-3">名称未保存</span>
           <span v-if="notMine" class="t-12 c-3">{{ current.owner }} 的方案 · 只读</span>
-          <a-tooltip :title="`${current.id} · ${current.owner} · 创建于 ${current.createdAt.slice(0, 16)}；基于本体 ${current.baseVer} · 价格弹性 −1.6（示意模型）`"><InfoCircleOutlined class="c-3" /></a-tooltip>
+          <InfoTip :text="`${current.id} · ${current.owner} · 创建于 ${current.createdAt.slice(0, 16)}；基于本体 ${current.baseVer} · 价格弹性 −1.6（示意模型）`" />
         </div>
         <div class="sc-btns">
           <a-tooltip :title="roReason"><a-button :type="primary === 'copy' ? 'primary' : 'default'" :disabled="readonly" data-act="copy" @click="create(current)"><CopyOutlined />复制为新方案</a-button></a-tooltip>
@@ -349,7 +350,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           </template>
           <template v-else-if="current.status === '失败'">
             <div class="sc-empty">
-              <div class="tl-failed fw-600">推演失败 <a-tooltip title="数据补齐后可“重新运行”；失败不会自动重试。"><InfoCircleOutlined class="c-3" /></a-tooltip></div>
+              <div class="tl-failed fw-600">推演失败 <InfoTip text="数据补齐后可“重新运行”；失败不会自动重试。" /></div>
               <div class="c-2 sc-fail">{{ current.failReason }}</div>
             </div>
           </template>
@@ -395,7 +396,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
         <div class="sc-title">
           <span class="t-16 fw-600">方案对比</span>
           <span class="t-12 c-2 num">已选 {{ cmpIds.length }} / 3</span>
-          <a-tooltip title="在左侧勾选最多 3 个已完成方案对比"><InfoCircleOutlined class="c-3" /></a-tooltip>
+          <InfoTip text="在左侧勾选最多 3 个已完成方案对比" />
           <span v-if="scopeDiff" class="t-12 c-2">方案范围不同（区域 / 品类 / 周数），基线不同，仅供参考</span>
         </div>
         <div class="sc-btns">
@@ -444,7 +445,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
     <!-- 转为暂存动作：预览 -->
     <a-modal v-model:open="planOpen" :width="920" ok-text="下一步" cancel-text="取消" @ok="doStage">
       <template #title>转为暂存动作 <span class="t-12 c-2 fw-400">· 方案 <span class="num">{{ target?.id }}</span>「{{ target?.name }}」</span>
-        <a-tooltip title="按方案的驱动生成以下动作，勾选要暂存的条目。暂存后在动作中心“待确认”，不会自动提交或执行。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip></template>
+        <InfoTip text="按方案的驱动生成以下动作，勾选要暂存的条目。暂存后在动作中心“待确认”，不会自动提交或执行。" /></template>
       <a-table :columns="planCols" :data-source="plan" row-key="key" size="small" :pagination="false"
         :row-selection="{ selectedRowKeys: planKeys, onChange: (k: any[]) => (planKeys = k as string[]) }" class="sc-plan">
         <template #bodyCell="{ column, record }">

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import InfoTip from '@/components/InfoTip.vue';
 /**
  * 规则与自动化：左侧规则列表，右侧详情。页签：条件 / 触发方式 / 动作 / 命中历史 / 回放试跑 / 版本历史。
  * URL：?rule= 选中项，?tab= 页签，?view=draft 草稿，?ver= 历史版本只读；
@@ -8,7 +9,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { QuestionCircleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
+import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
@@ -273,7 +274,7 @@ const verCols = [
         <div class="ru-sec t-14 fw-600">{{ rule.desc }}</div>
         <div class="ru-tool">
           <span class="t-12 c-2">以下条件同时满足（{{ rule.logic }}）时命中</span>
-          <a-tooltip title="指标引用的是本体里发布的口径，口径升版不会自动跟随"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+          <InfoTip text="指标引用的是本体里发布的口径，口径升版不会自动跟随" />
           <span class="ru-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!isDraft">添加条件</a-button></a-tooltip>
         </div>
@@ -329,7 +330,7 @@ const verCols = [
         <div class="ru-tool">
           <a-segmented :value="rule.trigger.kind" :options="['定时', '事件']" size="small" :disabled="!isDraft" />
           <span class="t-12 c-2">{{ rule.trigger.kind === '定时' ? '按计划时间批量计算' : '收到事件后逐条计算，延迟秒级' }}</span>
-          <a-tooltip title="规则版本发布后才按新的触发方式运行；草稿里的修改只在回放试跑中生效。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+          <InfoTip text="规则版本发布后才按新的触发方式运行；草稿里的修改只在回放试跑中生效。" />
           <span class="ru-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!isDraft">修改触发方式</a-button></a-tooltip>
         </div>
@@ -362,7 +363,7 @@ const verCols = [
             <a-descriptions-item label="幂等键"><span class="num">{{ actType?.idemKey ?? '--' }}</span></a-descriptions-item>
           </a-descriptions>
           <div class="ru-sec t-14 fw-600 ru-sec-row">
-            <span>自动暂存动作 <a-tooltip title="命中后按下面的映射生成动作，放进动作中心“待确认”，由确认人逐条确认后才提交外部系统；规则不会直接执行动作。"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip></span>
+            <span>自动暂存动作 <InfoTip text="命中后按下面的映射生成动作，放进动作中心“待确认”，由确认人逐条确认后才提交外部系统；规则不会直接执行动作。" /></span>
             <a-tooltip :title="editTip">
               <a-switch :checked="stageEdit.enabled" :disabled="!isDraft" size="small" @change="(v: any) => (ensureEdits().autoStage.enabled = !!v)" />
             </a-tooltip>
@@ -387,7 +388,7 @@ const verCols = [
           </a-table>
         </div>
         <div class="ru-act-right">
-          <div class="ru-sec t-14 fw-600 ru-sec-row"><span>已暂存的动作 <a-tooltip title="在左侧导航“运行 · 动作中心”的“待确认”里确认或撤回。"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip></span><span class="t-12 c-2 fw-400">待确认 {{ stagedPending }} 条 · 共 {{ staged.length }} 条</span></div>
+          <div class="ru-sec t-14 fw-600 ru-sec-row"><span>已暂存的动作 <InfoTip text="在左侧导航“运行 · 动作中心”的“待确认”里确认或撤回。" /></span><span class="t-12 c-2 fw-400">待确认 {{ stagedPending }} 条 · 共 {{ staged.length }} 条</span></div>
           <div v-for="a in staged.slice(0, 9)" :key="a.id" class="ru-st">
             <span class="t-12 num c-2">{{ a.id }}</span>
             <span class="t-12 c-1 ru-st-o" :title="a.objLabel">{{ a.objLabel }}</span>
@@ -438,7 +439,7 @@ const verCols = [
             <div><span class="t-12 c-2">试跑会命中（{{ rver === 'draft' ? `草稿 v${draftDef?.version}` : `当前 v${base.version}` }}）</span><span class="t-16 fw-600 c-1 num">{{ result.would }}</span></div>
             <div><span class="t-12 c-2">新增命中</span><span class="t-16 fw-600 num c-1">{{ result.added }}</span></div>
             <div><span class="t-12 c-2">不再命中</span><span class="t-16 fw-600 num c-1">{{ result.removed }}</span></div>
-            <div><span class="t-12 c-2">被去重 <a-tooltip :title="`命中数只算会生成告警 / 通知的命中；去重键相同、在冷却期（${base.cooldown}）内的样本列为“被去重”，不计入`"><InfoCircleOutlined class="c-3" /></a-tooltip></span><span class="t-16 fw-600 num c-1">{{ result.deduped }}</span></div>
+            <div><span class="t-12 c-2">被去重 <InfoTip :text="`命中数只算会生成告警 / 通知的命中；去重键相同、在冷却期（${base.cooldown}）内的样本列为“被去重”，不计入`" /></span><span class="t-16 fw-600 num c-1">{{ result.deduped }}</span></div>
           </div>
           <div class="paged-scroll">
             <a-table :columns="sampleCols" :data-source="samples.items" :pagination="false" size="middle" row-key="key" :locale="{ emptyText: '该时间范围内没有命中样本' }">
@@ -458,7 +459,7 @@ const verCols = [
       <div v-else class="ru-body">
         <div class="ru-tool">
           <span class="t-12 c-2">共 {{ versions.length }} 个版本</span>
-          <a-tooltip title="规则版本随本体整版发布；回滚会生成一张新的变更单，审核通过后生效。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+          <InfoTip text="规则版本随本体整版发布；回滚会生成一张新的变更单，审核通过后生效。" />
         </div>
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
           <template #bodyCell="{ column, record }">
