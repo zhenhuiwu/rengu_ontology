@@ -378,7 +378,7 @@ stateDiagram-v2
 |---|---|---|---|
 | `dynamic.ts` `RULES` | rule（与 rules.ts 合并） | 5 条核心规则 | 版本 `v3` 字符串转整数 |
 | `dynamic.ts` `ALERTS`（含 `fillHistory` 补的历史告警、`storeOfKey` 补的门店） | alert | 154（待处理 4、处理中 4、已解决 115、已忽略 31） | 随机数有固定种子，结果稳定 |
-| `dynamic.ts` `alertTimeline()` + `Alerts.vue` 关联动作行 | alert_log | 每条告警 1–3 行 | 关联动作那行来自 ACTIONS |
+| `dynamic.ts` `alertTimeline()` + `Alerts.vue` 关联动作行 | alert_log | **455 行** = 派生 `alertTimeline`（450）+ `alertActionLink`（5 行：未关闭且有关联动作的告警）| 两份合并后按每条告警内时间升序排（与 `Alerts.vue` L27 `log.sort` 一致）再入库 |
 | `rules.ts` `RULE_DEFS` | rule（当前版本） | 16 | |
 | `rules.ts` `ruleVersions()` | rule（历史版本行，只有元数据） | 每条规则 version 行 | 历史版本的条件内容 mock 没有 [待定] |
 | `rules.ts` `RULE_DRAFTS` + `useDraftView` TARGETS | cr_item / cr_target（R-007 在 CR-0011） | 1 | 与静态共用 CR 表 |
@@ -423,7 +423,11 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | `changesOf(objectId)` | `mock/lifecycle.ts` | `LIFECYCLES` 每个对象类型（order/store/product/member/promotion/refund） | `changesOf.json` | 共 **246** 条（order 68、store 10、其余 4 类各 42） |
 | `illegalOf(objectId)` | `mock/lifecycle.ts` | 同上 | `illegalOf.json` | 只作核对，不入表 |
 | `lifecycleAsOf(objectId, at)` | `mock/lifecycle.ts` | 每个对象类型 × `versions[]` 每个发布时间 | `lifecycleAsOf.json` | 历史版本快照 |
-| 告警页拼装：关联动作 + 补一行日志 | `pages/ops/Alerts.vue` L23–28 | `ALERTS` 每条告警，在 `ACTIONS` 里找 `source.alertId` 相同的**第一条** | `alert_action_links.json`（`{alert_id, action_run_id, idem_key, status, log_line}`） | 组件代码无法导出，需要在导出脚本里照抄这段逻辑：未关闭的告警追加「发起动作「X」（键），现为状态」 |
+| 告警页拼装：关联动作 + 补一行日志 | `pages/ops/Alerts.vue` L23–28 | `ALERTS` 每条告警，在 `ACTIONS` 里找 `source.alertId` 相同的**第一条** | `alertActionLink.json`（`{alert_id, action_run_id, idem_key, status, log_line}`，log_line 共 5 行） | 组件代码无法导出，需要在导出脚本里照抄这段逻辑：未关闭的告警追加「发起动作「X」（键），现为状态」 |
+
+- **alert_log 种子** = `alertTimeline.json`（450 行）+ `alertActionLink.json` 的 5 行日志（未关闭、且有关联动作的告警），按告警分组、组内按时间升序合并 = **455 行**（与 `Alerts.vue` L27 排序一致）。
+- **`storeOfKey.json` 多余**：商品类告警的门店直接取 `ALERTS[].storeId`，命中记录的门店取 `hitsOf.json`；若导出了，只作核对，不入表。
+- **规则回放 / 试跑**：后台生成新命中时须**移植前端的门店哈希** `storeOfKey`（`mock/dynamic.ts` L99：按 key 字符 `h = (h*31 + charCode) % 100003`，初值 7，再 `% STORES.length`；`rules.ts` L186 用命中 id、L239 用 `${rule.id}-NEW-${i}` 作 key），保证新命中的门店与前端一致。
 
 以上清单需与 PDE 对齐后再定稿。
 
