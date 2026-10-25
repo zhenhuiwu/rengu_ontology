@@ -22,7 +22,7 @@ const action = ref('全部');
 const result = ref('全部');
 const field = ref<'actor' | 'target'>('actor');
 const kw = ref('');
-const cq = useCursorQuery({ size: 21, filters: [range, action, result, field, kw] });
+const cq = useCursorQuery({ size: 20, filters: [range, action, result, field, kw] });
 const rows = computed(() => {
   const [from, to] = range.value.map((d) => d.format('YYYY-MM-DD HH:mm:ss'));
   const k = kw.value.trim();
