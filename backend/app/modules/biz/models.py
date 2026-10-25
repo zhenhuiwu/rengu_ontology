@@ -21,7 +21,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, query_expression, relationship
 
 from app.core.enums import LabelEnum
 from app.db.base import Base, CodeMixin, IdMixin, MutableTableMixin, unique_except_seed
@@ -130,6 +130,9 @@ class BizOrder(IdMixin, MutableTableMixin, Base):
     lines: Mapped[list["OrderLine"]] = relationship(
         back_populates="order", order_by="OrderLine.line_no", lazy="selectin"
     )
+    # 接口 lineCount（首页“商品数”= lines.length，Home.vue:54/144）。不是库列：由 OrderRepo 用
+    # with_expression 填一个关联子查询 count(order_line)，列表一条 SQL 取出，不加载 lines。
+    line_count: Mapped[int | None] = query_expression()
 
 
 class OrderLine(IdMixin, MutableTableMixin, Base):

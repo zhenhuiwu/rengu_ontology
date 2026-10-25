@@ -107,6 +107,7 @@ async def test_create_version_in_callers_transaction(seeded):
         assert snap["base"] == "v2026.10.3" and snap["applied"] == ["CR-0011"]
         info = await svc.get_release(seeded, ver)
         assert info.parent_ver == "v2026.10.3" and info.snapshot_sha256 == snapshot_digest(snap)
+        assert (info.published_by, info.published_by_code) == ("王敏", "U010001")
         await sp.rollback()  # 调用方后续步骤失败 → 整体回滚，版本号不被占用
     assert await svc.current_version(seeded) == "v2026.10.3"
 
@@ -366,3 +367,15 @@ async def test_restore_section_skipped_when_content_none(seeded):
     finally:
         for name in ("qaPaths", "eventTypes", "lifecycles"):
             unregister_section(name)
+
+
+async def test_release_by_is_name_and_by_id_is_user_code(client, seeded):
+    """by = 姓名（前端 Release.by 直接显示）；byId = 同一外键的 sys_user.code（团队约定人员外键传 code）。"""
+    code_of = {u.name: u.code for u in (await seeded.scalars(select(SysUser))).all()}
+    body = (await client.get("/api/ontology/v1/releases")).json()
+    assert body["items"] and all(it["byId"] == code_of[it["by"]] for it in body["items"])
+    assert body["items"][0]["by"] == "王敏" and body["items"][0]["byId"] == "U010001"
+    cur = (await client.get("/api/ontology/v1/releases/current")).json()["release"]
+    assert (cur["by"], cur["byId"]) == ("王敏", "U010001")
+    detail = (await client.get("/api/ontology/v1/releases/v2026.09.3")).json()
+    assert detail["by"] == "孙浩然" and detail["byId"] == code_of["孙浩然"]

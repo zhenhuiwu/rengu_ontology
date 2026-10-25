@@ -80,3 +80,156 @@ async def test_viewer_is_denied_by_row_filter_stub(client, biz):
     r = await client.get("/api/biz/v1/orders", headers=h)
     assert r.status_code == 200 and r.json()["total"] == 0
     assert (await client.get("/api/biz/v1/orders/SO202610240889017", headers=h)).status_code == 404
+
+
+# ---- M7 lineCount / M9 kw、cutoff、dataAsOf（首页 Home.vue:32-46、:54、:103） ----
+
+STORE_NAME = {s["id"]: s["name"] for s in STORES}
+LINES_OF: dict[str, int] = {}
+for _o in ORDERS:  # 重复订单号：接口详情取 id 最小（seed 顺序第一条）
+    LINES_OF.setdefault(_o["id"], len(_o["lines"]))
+
+
+async def _all(client, **params):
+    r = await client.get("/api/biz/v1/orders", params={"size": 200, **params})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    items = list(body["items"])
+    for p in range(2, -(-body["total"] // 200) + 1):
+        items += (await client.get("/api/biz/v1/orders", params={"size": 200, "page": p, **params})).json()[
+            "items"
+        ]
+    return body, items
+
+
+async def test_list_line_count_matches_mock_and_detail(client, biz):
+    _, items = await _all(client)
+    assert len(items) == 1286 and all("lines" not in i for i in items)
+    want = Counter((o["id"], len(o["lines"])) for o in ORDERS)
+    assert Counter((i["id"], i["lineCount"]) for i in items) == want
+    d = (await client.get("/api/biz/v1/orders/SO202610240889017")).json()
+    assert d["lineCount"] == len(d["lines"]) == LINES_OF["SO202610240889017"]
+
+
+async def test_list_line_count_is_one_query(client, biz, engine):
+    """列表不按单加载订单行：一页 = count + 一条带子查询的 select，与页大小无关。"""
+    from sqlalchemy import event
+
+    seen: list[str] = []
+
+    def _on(conn, cursor, statement, *a):
+        seen.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _on)
+    try:
+        await client.get("/api/biz/v1/orders", params={"size": 50})
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _on)
+    order_sql = [s for s in seen if "order_line" in s or "biz_order" in s]
+    assert len(order_sql) == 2, order_sql  # selectin 加载 lines 会多一条 “order_line.order_id IN (…)”
+
+
+async def test_line_count_respects_row_filter(client, biz, monkeypatch):
+    import app.common.auth as auth
+
+    async def _rf(user, object_type):
+        return {"field": "channel", "op": "=", "value": "美团闪购"}
+
+    monkeypatch.setattr(auth, "row_filter", _rf)
+    body, items = await _all(client)
+    meituan = [o for o in ORDERS if o["channel"] == "美团闪购"]
+    assert body["total"] == len(meituan) > 0 and {i["channel"] for i in items} == {"美团闪购"}
+    assert sum(i["lineCount"] for i in items) == sum(len(o["lines"]) for o in meituan)
+    # 筛选参数和行级过滤叠加：渠道 = 饿了么 → 0
+    assert (await client.get("/api/biz/v1/orders", params={"channel": "饿了么"})).json()["total"] == 0
+
+
+async def test_kw_matches_code_or_store_name_case_insensitive(client, biz):
+    code = ORDERS[0]["id"]
+    body, items = await _all(client, kw=code.lower())  # so2026… 不区分大小写
+    assert body["total"] == sum(o["id"] == code for o in ORDERS) >= 1 and {i["id"] for i in items} == {code}
+    body, items = await _all(client, kw="张江")
+    want = [o for o in ORDERS if "张江" in o["id"] or "张江" in STORE_NAME[o["storeId"]]]
+    assert body["total"] == len(want) > 0 and all("张江" in i["storeName"] for i in items)
+    # 子串：订单号片段
+    frag = code[2:10]
+    want = [o for o in ORDERS if frag in o["id"] or frag in STORE_NAME[o["storeId"]]]
+    assert (await client.get("/api/biz/v1/orders", params={"kw": frag})).json()["total"] == len(want)
+
+
+async def test_kw_escapes_like_wildcards(client, biz):
+    for kw in ("%", "_", "SO%", "S_2026", "\\"):
+        assert (await client.get("/api/biz/v1/orders", params={"kw": kw})).json()["total"] == 0, kw
+    s = await biz.scalar(select(Store).where(Store.code == "SH0031"))
+    s.name = "Ab_C%店"
+    await biz.flush()
+    n = sum(o["storeId"] == "SH0031" for o in ORDERS)
+    assert (await client.get("/api/biz/v1/orders", params={"kw": "b_c%"})).json()["total"] == n > 0
+    assert (await client.get("/api/biz/v1/orders", params={"kw": "bxc"})).json()["total"] == 0
+
+
+async def test_cutoff_inclusive_both_formats(client, biz):
+    # mock 里正好有一单 2026-10-24 23:00:58：分钟格式含整分钟（前端 CUTOFF='2026-10-24 23:00:59'）
+    def n(t):
+        return sum(o["createdAt"] <= t for o in ORDERS)
+
+    async def total(cutoff):
+        return (await client.get("/api/biz/v1/orders", params={"cutoff": cutoff, "size": 1})).json()["total"]
+
+    assert await total("2026-10-24 23:00") == n("2026-10-24 23:00:59") == 1043
+    assert await total("2026-10-24 23:00:59") == 1043
+    assert await total("2026-10-24 23:00:58") == 1043  # 等于也算（<=）
+    assert await total("2026-10-24 23:00:57") == n("2026-10-24 23:00:57") == 1042
+    assert await total("2026-10-24 22:59") == n("2026-10-24 22:59:59") == 1042
+    # 与其它筛选叠加：首页 = cutoff + status/channel/kw
+    r = await client.get(
+        "/api/biz/v1/orders", params={"cutoff": "2026-10-24 23:00", "status": "已出库", "kw": "张江"}
+    )
+    want = [
+        o
+        for o in ORDERS
+        if o["createdAt"] <= "2026-10-24 23:00:59"
+        and o["status"] == "已出库"
+        and ("张江" in o["id"] or "张江" in STORE_NAME[o["storeId"]])
+    ]
+    assert r.json()["total"] == len(want)
+
+
+async def test_cutoff_is_beijing_time(client, biz):
+    # naive 值按北京时间（若按 UTC 解读，15:00 会多出 8 小时的订单）
+    r = await client.get("/api/biz/v1/orders", params={"cutoff": "2026-10-24 15:00", "size": 1})
+    assert r.json()["total"] == sum(o["createdAt"] <= "2026-10-24 15:00:59" for o in ORDERS)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2026-10-24",
+        "2026-10-24T23:00",
+        "2026-10-24 23:00+08:00",
+        "2026-13-01 00:00",
+        "2026-10-24 24:00",
+        "x",
+        "",
+    ],
+)
+async def test_cutoff_bad_format_is_422(client, biz, bad):
+    r = await client.get("/api/biz/v1/orders", params={"cutoff": bad})
+    body = r.json()
+    assert r.status_code == 422 and body["code"] == "VALIDATION_FAILED", body
+    assert [f["field"] for f in body["details"]["fields"]] == ["cutoff"]
+
+
+async def test_data_as_of(client, biz):
+    # 测试时钟 RENGU_FIXED_NOW = 2026-10-25 15:42（北京时间）
+    body = (await client.get("/api/biz/v1/orders", params={"size": 1})).json()
+    assert body["dataAsOf"] == "2026-10-25 15:42"
+    body = (await client.get("/api/biz/v1/orders", params={"size": 1, "cutoff": "2026-10-24 23:00"})).json()
+    assert body["dataAsOf"] == "2026-10-24 23:00"  # = 页头“数据截至 2026-10-24 23:00”（Home.vue:103）
+    body = (
+        await client.get("/api/biz/v1/orders", params={"size": 1, "cutoff": "2026-10-24 23:00:59"})
+    ).json()
+    assert body["dataAsOf"] == "2026-10-24 23:00"
+    body = (await client.get("/api/biz/v1/orders", params={"size": 1, "cutoff": "2027-01-01 00:00"})).json()
+    assert body["dataAsOf"] == "2026-10-25 15:42"  # 截止时间在未来：取当前时间
+    assert set(body) == {"items", "total", "page", "size", "dataAsOf"}

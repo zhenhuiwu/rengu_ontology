@@ -46,6 +46,7 @@ def _info(r: OntologyRelease) -> ReleaseInfo:
         change_order_ids=tuple(r.change_order_ids or ()),
         snapshot_sha256=r.snapshot_sha256,
         rollback_of=r.rollback_of,
+        published_by_code=r.published_by_code,
     )
 
 

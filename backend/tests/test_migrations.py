@@ -108,12 +108,16 @@ async def test_upgrade_downgrade_base_upgrade_on_temp_db():
         assert await state() == (tables, head)
         assert await custom_types() == types
 
-        # 查询本身的自检：能看见 enum / 复合类型 / domain，不把表行类型、数组类型算进去
+        # 查询本身的自检：能看见 enum / 复合类型 / domain / range（PG14+ 连带 multirange），
+        # 不把表行类型、数组类型算进去
         conn = await asyncpg.connect(plain)
         try:
+            pg14 = int(await conn.fetchval("SHOW server_version_num")) >= 140000
             await conn.execute(
                 "CREATE TYPE _probe_enum AS ENUM ('a'); CREATE TYPE _probe_comp AS (x int);"
-                " CREATE DOMAIN _probe_dom AS text CHECK (VALUE <> ''); CREATE TABLE _probe_tbl (x int)"
+                " CREATE DOMAIN _probe_dom AS text CHECK (VALUE <> ''); CREATE TABLE _probe_tbl (x int);"
+                " CREATE TYPE _probe_range AS RANGE (subtype = int4"
+                + (", multirange_type_name = _probe_multirange)" if pg14 else ")")
             )
         finally:
             await conn.close()
@@ -121,6 +125,8 @@ async def test_upgrade_downgrade_base_upgrade_on_temp_db():
             ("_probe_enum", "e"),
             ("_probe_comp", "c"),
             ("_probe_dom", "d"),
+            ("_probe_range", "r"),
+            *([("_probe_multirange", "m")] if pg14 else []),
         }
     finally:
         await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)

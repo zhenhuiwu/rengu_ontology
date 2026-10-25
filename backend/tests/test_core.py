@@ -185,3 +185,24 @@ async def test_openapi_has_module_prefixes(client):
     paths = (await client.get("/openapi.json")).json()["paths"]
     assert "/api/ontology/v1/releases" in paths
     assert (await client.get("/docs")).status_code == 200
+
+
+async def test_integration_mounted_only_under_data(monkeypatch):
+    """Palantir 定：integration 只在 /api/data/v1 下开路由，不挂 /api/ontology/v1。
+
+    依据 action-event-api.md:140、:168。
+    """
+    from app import api
+    from app.main import create_app
+    from app.modules.integration import router as integration
+
+    assert [g for g, r in api.MOUNTS if r is integration.router] == ["data"]
+    monkeypatch.setattr(integration.router, "routes", list(integration.router.routes))
+
+    async def _p() -> dict:
+        return {"ok": True}
+
+    integration.router.add_api_route("/ext-systems/__probe", _p, methods=["GET"])
+    paths = create_app().openapi()["paths"]
+    assert "/api/data/v1/ext-systems/__probe" in paths
+    assert not [p for p in paths if p.endswith("/ext-systems/__probe") and not p.startswith("/api/data/v1/")]
