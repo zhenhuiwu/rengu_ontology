@@ -8,6 +8,7 @@
  * URL：?sys=EXT-WMS&result=失败&call=WMS-00012&edit=EXT-WMS
  * 真接口（开关 integration，src/api/integration.ts）：系统列表、关联动作、新建 / 编辑、测试调用、
  * 最近调用（筛选 / 分页 / 详情）、人工核对都走后台（writeback_call 表，见 action-event-api.md §3.1）。
+ * 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次，之后的读取不再发请求；写操作照旧调接口、照旧报错。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -22,6 +23,7 @@ import { EXT_SYSTEMS, extCalls, type CallResult, type ExtCall, type ExtOp, type 
 import { ACTION_TYPES, runsOf, type ActionType, type ActionRun } from '@/mock/actionEvent';
 import { ACTIONS, RULE_CONFIRMER, OBJ_KIND_LABEL, type ActionRecord } from '@/mock/actions';
 import { isApiError } from '@/api/http';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import { integrationApi, listExtSystems, getExtSystem, createExtSystem, updateExtSystem, testExtSystem, listExtCalls, getWritebackCall, markWritebackChecked, type ExtCallPage, type ExtSystemDto, type LinkedActionTypeDto } from '@/api/integration';
 
 const route = useRoute();
@@ -35,8 +37,12 @@ const { readonly, reason } = useReadonly();
 const real = integrationApi.isReal();
 const systems = real ? reactive<(ExtSystem & Pick<ExtSystemDto, 'actionCount'>)[]>([]) : reactive(EXT_SYSTEMS);
 const apiFail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+/** 后台没起来：页面按 mock 渲染（读取不再发请求） */
+const live = computed(() => real && !backend.down);
+const useMockSystems = () => { systems.splice(0, systems.length, ...EXT_SYSTEMS); };
 async function loadSystems() {
-  try { const rows = await listExtSystems(); systems.splice(0, systems.length, ...rows); } catch (e) { apiFail(e); }
+  if (backend.down) { useMockSystems(); return; }
+  try { const rows = await listExtSystems(); systems.splice(0, systems.length, ...rows); } catch (e) { if (fallBackIfDown(e)) useMockSystems(); else apiFail(e); }
 }
 if (real) void loadSystems();
 const LOADING: ExtSystem = { id: '', name: '加载中…', vendor: '', category: '', endpoint: '', auth: '', authDetail: '', idempotent: false, idemKey: '-', timeoutMs: 0, maxRetry: 0, retry: '', rateLimit: '', owner: '', status: '正常', env: '' };
@@ -44,12 +50,12 @@ const selected = computed<ExtSystem>(() => systems.find((s) => s.id === q('sys')
 /** 真接口：选中系统的详情（关联动作类型由后台按 action_type.sys_id 查） */
 const realLinked = ref<{ sysId: string; items: LinkedActionTypeDto[] } | null>(null);
 async function loadLinked(id: string) {
-  if (!id) return;
-  try { const d = await getExtSystem(id); if (d.id === selected.value.id) realLinked.value = { sysId: d.id, items: d.actionTypes }; } catch (e) { apiFail(e); }
+  if (!id || backend.down) return;
+  try { const d = await getExtSystem(id); if (d.id === selected.value.id) realLinked.value = { sysId: d.id, items: d.actionTypes }; } catch (e) { if (!fallBackIfDown(e)) apiFail(e); }
 }
 if (real) watch(() => selected.value.id, loadLinked, { immediate: true });
 /** 关联动作：动作类型里 sysId 指向该系统的（名称与动作类型页完全一致） */
-const linked = computed<{ id: string; name: string }[]>(() => (real
+const linked = computed<{ id: string; name: string }[]>(() => (live.value
   ? (realLinked.value?.sysId === selected.value.id ? realLinked.value.items : [])
   : ACTION_TYPES.filter((a) => a.sysId === selected.value.id)));
 const opsOf = (sys: ExtSystem): ExtOp[] => {
@@ -80,7 +86,7 @@ function samplesOf(a: ActionType): ExtSample[] {
   if (center.length) return center.map(fromCenter);
   return runsOf(a.id).filter((x) => DONE.includes(x.status)).map((x) => fromRun(a, x));
 }
-const actionCount = (sys: ExtSystem & Pick<ExtSystemDto, 'actionCount'>) => (real ? sys.actionCount ?? 0 : ACTION_TYPES.filter((a) => a.sysId === sys.id).length);
+const actionCount = (sys: ExtSystem & Pick<ExtSystemDto, 'actionCount'>) => (live.value ? sys.actionCount ?? 0 : ACTION_TYPES.filter((a) => a.sysId === sys.id).length);
 // 状态点：正常 / 停用 灰，降级 红（有失败调用）；橙色只留给 待确认 / 结果未知，不用绿、蓝
 const statusBadge = (s: ExtSystem['status']) => ('default' as const);
 const resultText = (r: CallResult) => (r === '结果未知' ? '结果未知 · 待对账' : r);
@@ -91,7 +97,7 @@ const overrides = ref<Record<string, Partial<ExtCall>>>({});
 const tests = ref<ExtCall[]>([]);
 const calls = computed(() => [...tests.value.filter((c) => c.sysId === selected.value.id), ...extCalls(selected.value, opsOf(selected.value))].map((c) => ({ ...c, ...overrides.value[c.id] })));
 const counts = computed(() => {
-  if (real) return realPage.value?.sysId === selected.value.id ? realPage.value.counts : { 全部: 0, 成功: 0, 失败: 0, 结果未知: 0 };
+  if (live.value) return realPage.value?.sysId === selected.value.id ? realPage.value.counts : { 全部: 0, 成功: 0, 失败: 0, 结果未知: 0 };
   const m: Record<string, number> = { 全部: calls.value.length, 成功: 0, 失败: 0, 结果未知: 0 };
   calls.value.forEach((c) => { m[c.result] += 1; });
   return m;
@@ -101,20 +107,20 @@ const filtered = computed(() => calls.value.filter((c) => result.value === '全�
 const SIZE = 10;
 const page = ref(1);
 watch([() => selected.value.id, result], () => { page.value = 1; });
-const paged = computed(() => (real ? { items: realPage.value?.items ?? [] } : paginate(filtered.value, { page: page.value, size: SIZE })));
-const callTotal = computed(() => (real ? realPage.value?.total ?? 0 : filtered.value.length));
+const paged = computed(() => (live.value ? { items: realPage.value?.items ?? [] } : paginate(filtered.value, { page: page.value, size: SIZE })));
+const callTotal = computed(() => (live.value ? realPage.value?.total ?? 0 : filtered.value.length));
 /** 真接口：当前系统 × 结果 × 页 的一页调用（counts 也取后台）；seq 防止切换快时旧响应覆盖新的 */
 const realPage = ref<(ExtCallPage & { sysId: string }) | null>(null);
 const callsTick = ref(0);
 let callsSeq = 0;
 async function loadCalls() {
   const sysId = selected.value.id;
-  if (!sysId) return;
+  if (!sysId || backend.down) return;
   const seq = ++callsSeq;
   try {
     const r = await listExtCalls(sysId, { result: result.value, page: page.value, size: SIZE });
     if (seq === callsSeq) realPage.value = { ...r, sysId };
-  } catch (e) { apiFail(e); }
+  } catch (e) { if (!fallBackIfDown(e)) apiFail(e); }
 }
 if (real) watch([() => selected.value.id, result, page, callsTick], loadCalls, { immediate: true });
 const tl = (r: CallResult) => (r === '成功' ? 'tl-normal' : r === '结果未知' ? 'tl-attention' : 'tl-failed');
@@ -136,11 +142,11 @@ const cols = [
 const realCall = ref<ExtCall | null>(null);
 async function loadCall(id: string) {
   realCall.value = null;
-  if (!id) return;
-  try { const c = await getWritebackCall(id); if (q('call') === id) realCall.value = c; } catch (e) { apiFail(e); }
+  if (!id || backend.down) return;
+  try { const c = await getWritebackCall(id); if (q('call') === id) realCall.value = c; } catch (e) { if (!fallBackIfDown(e)) apiFail(e); }
 }
 if (real) watch(() => q('call'), loadCall, { immediate: true });
-const call = computed(() => (real
+const call = computed(() => (live.value
   ? (realCall.value && realCall.value.id === q('call') && realCall.value.sysId === selected.value.id ? realCall.value : null)
   : calls.value.find((c) => c.id === q('call')) ?? null));
 const openCall = (id: string) => setQuery({ call: id });
@@ -246,7 +252,7 @@ const formErrors = computed(() => {
 });
 const usedBy = computed<{ name: string }[]>(() => {
   if (!editing.value) return [];
-  if (real) return realLinked.value?.sysId === editing.value.id ? realLinked.value.items : [];
+  if (live.value) return realLinked.value?.sysId === editing.value.id ? realLinked.value.items : [];
   return ACTION_TYPES.filter((a) => a.sysId === editing.value!.id);
 });
 const openEdit = (id: string) => setQuery({ edit: id, call: undefined });
