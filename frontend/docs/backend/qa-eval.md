@@ -1,31 +1,44 @@
-# 问数评测题库 EV-Q（SQL 级）v0.3 草稿
+# 问数评测题库 EV-Q（SQL 级）v0.4 草稿
 
 > 题目文件：`backend/seeds/extra/qa/eval/questions.json`（PDE 定的目录，v0.1 在 `qa_eval/`，已 git mv），共 100 题，编号 EV-Q-001 至 EV-Q-100。
 > v0.2 改动：按静态本体负责人对指标口径的裁定（来源是前端 mock）重写了 gmv、含税销售额、出库及时率的 gold；同义词改为以语义映射为准；按 PDE 和本体小白的裁定改了越权拒答、会员题、表名列名、文件目录，每题加了 `kind`。
 > v0.3 改动（静态本体负责人裁定，以前端为准）：凡读 `biz_order` 的 gold 和备选 SQL 都加 `not o.is_test`（测试单默认过滤）；有效订单数和出库及时率改按出库时间；GMV 确认是 gmv 的同义词，EV-Q-067 由反问改为作答。
-> 状态：biz 表还没建，**gold SQL 只在临时库上跑过**。临时库是本机 PG 17，按第 0 节的结构建表，灌入 `npm run export-mock` 导出的 ALL_STORES、PRODUCTS、ORDERS（`biz_order.is_test`、`store.is_test` 全部为否）；100 题的 gold 和备选 SQL 全部跑通。每题的 `scratchPreview` 是临时库上的行数和前 3 行，**只作参考**，biz 建好表后要用真种子重跑并覆盖。
+> v0.4 改动（对齐本体小白骨架 `72204b0` 的 `app/modules/biz/models.py`）：`area_sqm` → `area`；下单时间 `created_at` → `created_at_biz`（`created_at` 是行审计时间，种子里全是同一时刻）；订单、门店状态改用库里的英文码（`'已出库'` → `'shipped'` 等）；`inferredCols` 只剩骨架自己标 [推断] 的 `store.big_region`、`store.is_test`；改了 58 条 gold、4 条备选。
+> 状态：**gold SQL 已在骨架真实结构 + 真种子上跑过**。库是本机临时 PG 17（会话时区 Asia/Shanghai），用骨架自己的 `alembic upgrade head`（0001–0003）建表，`python -m app.cli seed -m admin`、`-m biz` 灌种子（门店 95、商品 12、订单 1286、订单行 3905、用户 128）；100 题的 80 条 gold 和备选 SQL 全部跑通，`scratchPreview` 已用这次结果覆盖。另外 80 条 SQL 全部过了骨架 `sql_guard.inject_row_filters`（不限制 / 华东一区范围 / 全拒三种身份都能执行；不限制时结果跟原 SQL 完全一致；EV-Q-025 注入华东一区后跟 gold 一致）。
 
 ## 0. 业务表结构
 
-表名、主键、编码列已由本体小白（biz 负责人）确认；标 [推断] 的仍待确认。
+列名、类型以骨架 `72204b0` `app/modules/biz/models.py` 为准；骨架自己标 [推断] 的只剩 `store.big_region`、`store.is_test`。四张表另外都有 `MutableTableMixin` 的 `created_at`、`updated_at`、`created_by`、`is_seed`、`lock_version`（审计列，题库不用）。
 
-| 表 | 已确认 | 其余列 [推断] | 说明 |
+| 表 | 列（已确认） | [推断] | 说明 |
 |---|---|---|---|
-| `store` | `id bigint` PK；`code`（门店编码 SH0031，UQ）；`store_no`（SH-PD-0031）；`region` 存区域**名称**（华东一区…五区） | `big_region`（华东等，由区域派生）[推断]；`is_test boolean`（测试店）[推断]，种子里全部为否；`name`, `city`, `format`, `manager`, `area_sqm`, `opened_at date`, `status` | 来自 `ALL_STORES`（95 家）。大区题用 `s.big_region = '华东'` |
-| `product` | `id bigint` PK；`code` = sku（UQ） | `barcode`, `name`, `spec`, `category`（“一级/二级”路径串）, `brand`, `price`（含税单价）, `unit` | 来自 `PRODUCTS`（12 个）。一级品类用 `split_part(category,'/',1)` 取；称重生鲜的 brand 是 `--` |
-| `biz_order` | `id bigint` PK；`code`（SO…）；`member_phone`（脱敏，null 为散客）；重复订单号：`code` 上建部分唯一索引 `WHERE NOT is_seed`，详情页取 id 最小的那条；`is_test boolean`（是否测试单，`objectProps.ts:45`“默认过滤掉”，种子全部为否） | `is_seed boolean`（列名 [推断]）；`store_id → store.id`（下单门店）, `channel`, `status`, `created_at timestamptz`, `shipped_at timestamptz null`, `amount`（实付，含税）, `discount`（订单级优惠）, `warehouse`, `waybill` | 来自 `ORDERS`（1286 单）。mock 有 2 个订单号重复（SO202610240889017、SO202610220914198），都是种子行 |
-| `order_line` | `id bigint` PK | `order_id → biz_order.id`, `line_no`, `product_id → product.id`, `qty numeric`, `price`（含税单价） | 来自 `ORDERS[].lines`（3905 行）。mock 没有行级不含税金额、行优惠、行出库时间，见第 4 节 |
+| `store` | `id bigint` PK；`code`（门店编码 SH0031，UQ）；`store_no`（SH-PD-0031）；`name`；`city`；`region` 存区域**名称**（华东一区…五区）；`format`；`manager`（店长姓名原文）；`area numeric(10,1)`（㎡，6 店为空）；`opened_at date`；`status`（**英文码**：`open` 营业中 / `renovating` 装修中 / `closed` 已闭店） | `big_region`（由区域派生，华东一区 → 华东，种子只有 `华东`）；`is_test boolean`（测试店，种子全部为否） | 来自 `ALL_STORES`（95 家）。大区题用 `s.big_region = '华东'` |
+| `product` | `id bigint` PK；`code` = sku（UQ）；`barcode`；`name`；`spec`；`category`（“一级/二级”路径串）；`brand`；`price numeric(12,2)`（含税单价）；`unit` | — | 来自 `PRODUCTS`（12 个）。一级品类用 `split_part(category,'/',1)` 取；称重生鲜的 brand 是 `--`。没有 `is_test` |
+| `biz_order` | `id bigint` PK；`code`（SO…，`WHERE NOT is_seed` 部分唯一，另有 `(code, created_at_biz)` 唯一；详情页取 id 最小的那条）；`store_id → store.id`（下单门店）；`channel`；`status`（**英文码**：`pending_payment` 待支付 / `picking` 拣货中 / `pending_shipment` 待出库 / `shipped` 已出库 / `delivered` 已签收 / `cancelled` 已取消）；**`created_at_biz timestamptz`（下单时间）**；`shipped_at timestamptz null`（出库时间）；`amount`（实付，含税）；`discount`（订单级优惠）；`warehouse`；`waybill`；`member_phone`（脱敏，null 为散客）；`is_test boolean`（测试单，`objectProps.ts:45`“默认过滤掉”，种子全部为否） | — | 来自 `ORDERS`（1286 单）。mock 有 2 个订单号重复（SO202610240889017、SO202610220914198），都是种子行。**`created_at` 是行审计时间，不是下单时间** |
+| `order_line` | `id bigint` PK；`order_id → biz_order.id`；`line_no`；`product_id → product.id`；`qty numeric(12,3)`；`price numeric(12,2)`（含税单价） | — | 来自 `ORDERS[].lines`（3905 行）。mock 没有行级不含税金额、行优惠、行出库时间，见第 4 节。没有 `is_test` |
+
+**跟 v0.3 第 0 节（和已提交的 gold）对不上的列**，v0.4 已全部改掉：
+
+| v0.3 写法 | 骨架 `72204b0` | 不改的后果 |
+|---|---|---|
+| `store.area_sqm` | `store.area` | EV-Q-009、EV-Q-020 直接报错 |
+| `biz_order.created_at` 当下单时间 | 下单时间是 `created_at_biz`；`created_at` 是审计列，种子里全部 = 2026-10-25 15:42+08 | 按下单时间的题静默算错（时间窗全中或全不中），不报错 |
+| `status` 存中文（`'已出库'`、`'已取消'`、`'营业中'`） | `enum_column` 存英文码（见上表） | 状态过滤静默匹配 0 行，不报错 |
+| `biz_order.is_seed` 列名 [推断] | `MutableTableMixin` 的 `is_seed`，已确认 | — |
+| 其余非主键列 [推断] | 除 `store.big_region`、`store.is_test` 外全部已确认 | — |
+| “表名前缀 bz_”注释冲突 | `72204b0` 的文档字符串已没有这句 | — |
+
+旧 gold 在骨架库上：2 题报错、45 题结果跟临时库不同；改完后 80 条全部跑通，结果跟 v0.3 临时库除状态显示成英文码外完全一致（EV-Q-093–095 只是无序分组的行顺序不同）。
 
 - **没有会员表**（本体小白确认）。订单上只有脱敏的 `member_phone`，会员类问题一律拒答（`NO_DATA`）。
 - **`store_sales` 不建表，题库也不用。** 来源：`src/mock/objects-qa.ts:60` 的 `storeSales()`（注释写“门店 9 月销售额（不含税，万元）与环比”），在 `objects-qa.ts:92` 作为门店对象的一列。数值要么取自 `src/mock/qa.ts:121` 的 `QA_EC_STORES = buildStores()`（`qa.ts:108-119`，`seeded(9038)` 随机生成），要么按门店 id 哈希随机生成。它是 9 月数据，订单只覆盖 10 月，数值也不是从订单汇总来的，所以**做不成订单上的 VIEW**。题库里没有任何 gold 依赖它。
 - 种子里没有、题库因此跳过或拒答的：会员表和会员等级、退款单、成本、履约门店、发货单 shipment、门店直营/加盟、商品上下架、订单履约方式。
-- 骨架 `biz/models.py` 的文档字符串写着“表名前缀 bz_”，跟已确认的表名冲突，需要改掉那条注释。
 
 ## 1. 目的
 
 - 已有的 EQ-NNN 题库（`qa_eval_question`，6 个分组）比对的是**语义计划**。本题库比对的是**最终结果集**，同时检查系统的行为：该反问时反问，该拒答时拒答，解释要跟 SQL 一致。
 - 试跑时两个模型都是 31/34。漏掉的 3 题（#13 日期格式、#16 解释和 SQL 不一致、#23 按名字分组），加上 7 道行为题全部没处理好，正是本题库重点覆盖的地方。
-- 网关硬规则照 PDE：只允许单条 SELECT（sqlglot 校验），只读账号，身份取自会话，行过滤由网关注入（沿声明路径一跳），同义词来自静态本体的语义映射 semantic-map（静态 §3.7）。
+- 网关硬规则照 PDE：只允许单条 SELECT（sqlglot 校验），只读账号，身份取自会话，行过滤由网关 `sql_guard.inject_row_filters` 注入（订单一跳到门店，订单行经订单继承），同义词来自静态本体的语义映射 semantic-map（静态 §3.7）。
 
 ## 2. 分类与数量（共 100）
 
@@ -74,7 +87,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
   ```sql
   select round(sum(l.qty * l.price) / 1.13, 2)
   from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id
-  where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= … and o.shipped_at < …
+  where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= … and o.shipped_at < …
   ```
 
   - 只算状态为“已出库”的订单，**已签收不算**（v0.1 把已签收算进去了，已改）。
@@ -88,7 +101,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 - **出库及时率 ship_ontime v1**：30 分钟内变为“已出库”的订单数 / 应出库订单数（`metrics.ts:24`）。mock 没定义“应出库”，本题库的假设 [推断]：
   - 时间字段是**出库时间**（认证问法 `objectProps.ts:297` 写“time: 出库时间”，静态本体负责人裁定，不再是推断）；剔除测试单；
   - 分母（应出库订单）：统计期内出库、状态不是“待支付”也不是“已取消”的订单（实际就是已出库、已签收）；
-  - 分子：分母中 `shipped_at ≤ created_at + 30 分钟` 的订单。种子没有状态变更记录，用 `shipped_at` 代替“变为已出库的时刻”；
+  - 分子：分母中 `shipped_at ≤ created_at_biz + 30 分钟` 的订单。种子没有状态变更记录，用 `shipped_at` 代替“变为已出库的时刻”；
   - 结果是保留 4 位小数的比例。涉及题：EV-Q-049。
 - **客单价 atv**：gmv / 有效订单数。atv 还是草稿，可以回答，但必须提示“草稿口径”。
 - 毛利率、退款率：种子里没有对应数据，期望拒答，`refuseCode=NO_DATA`。
@@ -104,6 +117,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 
 1. **answer / result**：比对结果集，不比 SQL 文本。规则照试跑的 `compare.py`：
    - 数字统一保留 2 位；时间如果是 00:00:00，按日期处理；
+   - **状态枚举**：库里存英文码，gold 结果里也是码（`shipped`、`open`…）。系统回答里显示中文（已出库、营业中）也算对，比对前按第 0 节的码 ↔ 中文对照表把中文换成码；
    - 列名、列顺序、行顺序都不看。只有题目问前 N 名、排名第一时，才看排在前面的是谁；
    - 每列转成多重集合，再看能不能找到一种列的对应方式；
    - 系统多给的列（比如名称、编码）不扣分，前提是 gold 的列都能找到对应；
@@ -147,8 +161,8 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | `clarifyAbout` | clarify 必有 | 应该反问的点，取值 `metric`、`time`、`dim`、`caliber`、`path`、`entity`、`compare` |
 | `source` | 是 | `ao_trial#N` 或 `new` |
 | `tags` | 否 | 这题依赖的 [推断] 点和数据缺口（如“种子无退款”），口径确认后按 tag 批量改 |
-| `inferredCols` | 否 | gold 用到、第 0 节里还没确认的列 |
-| `scratchPreview` | 否 | 在临时库上跑出的 `{rows, sample}`，真种子跑过之后覆盖 |
+| `inferredCols` | 否 | gold 用到、骨架里仍标 [推断] 的列（现在只有 `store.big_region`、`store.is_test`，30 题） |
+| `scratchPreview` | 否 | 在骨架真实结构 + 真种子上跑出的 `{rows, sample}`（v0.4 已覆盖，种子变了要重跑） |
 
 目录：`backend/seeds/extra/qa/eval/`（PDE 定，跟 `seeds/extra/README.md` 按导出分组的约定一致）。
 
@@ -200,7 +214,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
   - EV-Q 题的 `group_name` 填 `问数SQL`，`expect` 存 `{expectedType, goldSql, goldSqlAlt, checks, asScope, refuseCode, clarifyAbout}`；
   - T11 的 group 参数加一个 `sql` 选项。
 
-  qa-api.md 由另一条线在改，这次不动。
+  qa-api.md 同一提交里已对齐骨架 `72204b0`。
 
 ## 9. 模型
 
@@ -217,11 +231,13 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | 3 | 退款种子没有，gmv 和 gmv_tax 的退款项按 0 | 29 题；退款率 EV-Q-051 拒答 | 本体小白 |
 | 4 | 含税销售额的时间字段（出库时间）和默认过滤（同 gmv） | EV-Q-043、EV-Q-052、EV-Q-087 | 指标负责人 |
 | 5 | 出库及时率的“应出库订单”定义（暂按状态∉{待支付, 已取消}），以及用 `shipped_at` 代替状态变更时刻。时间字段已定为出库时间 | EV-Q-049 | 周晓峰（ship_ontime owner） |
-| 6 | `store.big_region` 列名和取值；其他非主键、非编码列的列名和类型；`biz_order.is_seed` 列名 | 见各题 `inferredCols` | 本体小白 |
+| 6 | `store.big_region` 列名和取值（骨架仍标 [推断]，种子只有 `华东`；静态裁定维度值「华东大区」、同义词「华东」）。其他列已按骨架确认 | 见各题 `inferredCols`（30 题） | 本体小白 |
 | 7 | 外卖指哪些渠道；单量、几单、卖了多少钱、卖得最好这些口语说法 | EV-Q-058、EV-Q-059、EV-Q-061、EV-Q-063、EV-Q-060 | 静态本体（semantic-map） |
 | 8 | 履约门店数据什么时候接入 | EV-Q-026、EV-Q-068 | 本体小白 |
-| 9 | 骨架 `biz/models.py` 里“表名前缀 bz_”的注释要改 | — | 本体小白 |
+| 9 | ~~“表名前缀 bz_”注释~~ 已结清（`72204b0` 已删） | — | — |
 | 10 | 优惠金额没有指标定义，暂按剔除已取消、下单时间 | EV-Q-053 | 指标负责人 |
 | 11 | 散客 = `member_phone` 为空 | EV-Q-015 | 本体小白 |
+
+v0.4 已结清：列名和类型按骨架确认（`area`、`created_at_biz`、状态英文码、`is_seed`），bz_ 注释。
 
 v0.3 已结清：有效订单数和出库及时率的时间字段（出库时间）、`biz_order.is_test`（已确认）、GMV 同义词（已确认）。

@@ -43,7 +43,7 @@
     "category": "agg",
     "question": "What is the average order amount of shipped orders?",
     "expectedType": "answer",
-    "goldSql": "select round(avg(o.amount), 2) from biz_order o where o.status = '已出库' and not o.is_test",
+    "goldSql": "select round(avg(o.amount), 2) from biz_order o where o.status = 'shipped' and not o.is_test",
     "expected": "订单实付（含税）均值，不是指标；“已完成”迁为状态=已出库",
     "source": "ao_trial#5",
     "scratchPreview": {
@@ -51,11 +51,7 @@
       "sample": [
         "303.96"
       ]
-    },
-    "inferredCols": [
-      "biz_order.amount",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-004",
@@ -73,10 +69,7 @@
         "饿了么 | 207",
         "美团闪购 | 218"
       ]
-    },
-    "inferredCols": [
-      "biz_order.channel"
-    ]
+    }
   },
   {
     "code": "EV-Q-005",
@@ -90,14 +83,11 @@
     "scratchPreview": {
       "rows": 6,
       "sample": [
-        "已取消 | 136",
-        "已签收 | 243",
-        "待支付 | 140"
+        "pending_payment | 140",
+        "picking | 132",
+        "cancelled | 136"
       ]
-    },
-    "inferredCols": [
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-006",
@@ -116,10 +106,7 @@
       "sample": [
         "乳品 | 3"
       ]
-    },
-    "inferredCols": [
-      "product.category"
-    ]
+    }
   },
   {
     "code": "EV-Q-007",
@@ -154,10 +141,7 @@
       "sample": [
         "1229.70"
       ]
-    },
-    "inferredCols": [
-      "biz_order.amount"
-    ]
+    }
   },
   {
     "code": "EV-Q-009",
@@ -165,7 +149,7 @@
     "category": "agg",
     "question": "门店的平均营业面积是多少平方米？",
     "expectedType": "answer",
-    "goldSql": "select round(avg(s.area_sqm), 1) from store s",
+    "goldSql": "select round(avg(s.area), 1) from store s",
     "expected": "6 家门店面积为空，avg 忽略",
     "source": "new",
     "scratchPreview": {
@@ -173,10 +157,7 @@
       "sample": [
         "422.9"
       ]
-    },
-    "inferredCols": [
-      "store.area_sqm"
-    ]
+    }
   },
   {
     "code": "EV-Q-010",
@@ -190,14 +171,11 @@
     "scratchPreview": {
       "rows": 3,
       "sample": [
-        "已闭店 | 2",
-        "装修中 | 4",
-        "营业中 | 89"
+        "closed | 2",
+        "open | 89",
+        "renovating | 4"
       ]
-    },
-    "inferredCols": [
-      "store.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-011",
@@ -213,10 +191,7 @@
       "sample": [
         "10"
       ]
-    },
-    "inferredCols": [
-      "product.brand"
-    ]
+    }
   },
   {
     "code": "EV-Q-012",
@@ -232,10 +207,7 @@
       "sample": [
         "14742.05"
       ]
-    },
-    "inferredCols": [
-      "biz_order.discount"
-    ]
+    }
   },
   {
     "code": "EV-Q-013",
@@ -243,7 +215,7 @@
     "category": "path",
     "question": "今年以来每个区域的销售额",
     "expectedType": "answer",
-    "goldSql": "select s.region, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-01-01' and o.shipped_at < '2026-10-25 15:42:00' group by s.region",
+    "goldSql": "select s.region, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-01-01' and o.shipped_at < '2026-10-25 15:42:00' group by s.region",
     "expected": "原题“大区”迁为“区域”；销售额=gmv",
     "source": "ao_trial#14",
     "tags": [
@@ -260,12 +232,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -275,7 +241,7 @@
     "category": "path",
     "question": "按门店业态看销售额",
     "expectedType": "answer",
-    "goldSql": "select s.format, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test group by s.format",
+    "goldSql": "select s.format, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test group by s.format",
     "expected": "原题直营/加盟种子没有，迁为业态",
     "source": "ao_trial#15",
     "tags": [
@@ -292,12 +258,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
-      "store.format",
       "store.is_test"
     ]
   },
@@ -326,7 +286,7 @@
     "category": "path",
     "question": "每个品类的销售额",
     "expectedType": "answer",
-    "goldSql": "select split_part(p.category, '/', 1), round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id join product p on p.id = l.product_id where o.status = '已出库' and not o.is_test and not s.is_test group by 1",
+    "goldSql": "select split_part(p.category, '/', 1), round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id join product p on p.id = l.product_id where o.status = 'shipped' and not o.is_test and not s.is_test group by 1",
     "expected": "原题按明细算含税金额；gmv 基础对象就是订单行，改为 gmv 按一级品类",
     "source": "ao_trial#19",
     "tags": [
@@ -337,19 +297,12 @@
     "scratchPreview": {
       "rows": 6,
       "sample": [
-        "休闲食品 | 27284.07",
         "日化家清 | 26123.72",
+        "休闲食品 | 27284.07",
         "乳品 | 27863.36"
       ]
     },
     "inferredCols": [
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.product_id",
-      "order_line.qty",
-      "product.category",
       "store.is_test"
     ]
   },
@@ -359,7 +312,7 @@
     "category": "path",
     "question": "Which brand sold the most units across shipped orders?",
     "expectedType": "answer",
-    "goldSql": "select p.brand, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = '已出库' and not o.is_test and p.brand <> '--' group by p.brand order by 2 desc limit 1",
+    "goldSql": "select p.brand, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = 'shipped' and not o.is_test and p.brand <> '--' group by p.brand order by 2 desc limit 1",
     "expected": "排除无品牌（--）的称重生鲜，它们按千克计",
     "source": "ao_trial#20",
     "scratchPreview": {
@@ -367,14 +320,7 @@
       "sample": [
         "娃哈哈 | 327.000"
       ]
-    },
-    "inferredCols": [
-      "biz_order.status",
-      "order_line.order_id",
-      "order_line.product_id",
-      "order_line.qty",
-      "product.brand"
-    ]
+    }
   },
   {
     "code": "EV-Q-018",
@@ -390,11 +336,7 @@
       "sample": [
         "上海 | 375"
       ]
-    },
-    "inferredCols": [
-      "biz_order.store_id",
-      "store.city"
-    ]
+    }
   },
   {
     "code": "EV-Q-019",
@@ -420,7 +362,7 @@
     "category": "path",
     "question": "面积超过300平米的门店有哪些？",
     "expectedType": "answer",
-    "goldSql": "select s.code, s.name from store s where s.area_sqm > 300",
+    "goldSql": "select s.code, s.name from store s where s.area > 300",
     "expected": "只比对门店集合",
     "source": "ao_trial#31",
     "scratchPreview": {
@@ -430,11 +372,7 @@
         "SH0102 | 上海闵行七宝万科广场B1店",
         "HZ0012 | 杭州西湖文三路店"
       ]
-    },
-    "inferredCols": [
-      "store.area_sqm",
-      "store.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-021",
@@ -452,11 +390,7 @@
         "上海嘉定常温仓 | 51",
         "上海青浦冷链仓 | 57"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.warehouse"
-    ]
+    }
   },
   {
     "code": "EV-Q-022",
@@ -464,7 +398,7 @@
     "category": "path",
     "question": "上海浦东张江高科店昨天卖了哪些商品，各多少件？",
     "expectedType": "answer",
-    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id join store s on s.id = o.store_id where s.name = '上海浦东张江高科店' and o.status = '已出库' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name",
+    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id join store s on s.id = o.store_id where s.name = '上海浦东张江高科店' and o.status = 'shipped' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name",
     "expected": "按 sku 区分",
     "source": "new",
     "scratchPreview": {
@@ -474,17 +408,7 @@
         "1004512 | 金龙鱼黄金比例食用调和油 | 5.000",
         "1011846 | 伊利纯牛奶 | 5.000"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.product_id",
-      "order_line.qty",
-      "product.name",
-      "store.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-023",
@@ -502,11 +426,7 @@
         "NJ0076 | 南京江宁百家湖店",
         "NJ0045 | 南京建邺河西店"
       ]
-    },
-    "inferredCols": [
-      "store.city",
-      "store.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-024",
@@ -514,7 +434,7 @@
     "category": "path",
     "question": "华东三区社区店昨天的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.region = '华东三区' and s.format = '社区店' and o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.region = '华东三区' and s.format = '社区店' and o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "source": "new",
     "scratchPreview": {
@@ -522,13 +442,7 @@
       "sample": [
         "74"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "store.format"
-    ]
+    }
   },
   {
     "code": "EV-Q-025",
@@ -536,7 +450,7 @@
     "category": "path",
     "question": "各区域昨天的销售额",
     "expectedType": "answer",
-    "goldSql": "select s.region, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where s.region = '华东一区' and o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.region",
+    "goldSql": "select s.region, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where s.region = '华东一区' and o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.region",
     "expected": "以“华东一区”身份提问：网关行过滤后只剩华东一区一行，须说明已按权限过滤。这是行过滤正常收窄，不是越权",
     "checks": [
       "result",
@@ -556,12 +470,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -585,7 +493,7 @@
     "category": "time",
     "question": "上个月的订单总数是多少？",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at >= '2026-09-01' and o.created_at < '2026-10-01'",
+    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at_biz >= '2026-09-01' and o.created_at_biz < '2026-10-01'",
     "expected": "上月=09-01 至 10-01；种子为 0，另做时间窗检查",
     "checks": [
       "result",
@@ -597,10 +505,7 @@
       "sample": [
         "0"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at"
-    ]
+    }
   },
   {
     "code": "EV-Q-028",
@@ -608,9 +513,9 @@
     "category": "time",
     "question": "近7天的销售额是多少？",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00'",
     "goldSqlAlt": [
-      "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= timestamptz '2026-10-25 15:42:00' - interval '7 days' and o.shipped_at < '2026-10-25 15:42:00'"
+      "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= timestamptz '2026-10-25 15:42:00' - interval '7 days' and o.shipped_at < '2026-10-25 15:42:00'"
     ],
     "expected": "近N天=含今天 N 个自然日；滚动 168 小时也接受",
     "checks": [
@@ -630,12 +535,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -645,7 +544,7 @@
     "category": "time",
     "question": "2026年第一季度的销售额是多少？",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-01-01' and o.shipped_at < '2026-04-01'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-01-01' and o.shipped_at < '2026-04-01'",
     "expected": "结果为空（NULL/0 都接受）；做时间窗检查",
     "checks": [
       "result",
@@ -662,12 +561,6 @@
       "sample": []
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -677,7 +570,7 @@
     "category": "time",
     "question": "What were total sales in October 2026?",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00'",
     "expected": "原题 8 月种子为空，改问 10 月（上界 now）",
     "checks": [
       "result",
@@ -696,12 +589,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -722,7 +609,7 @@
     "category": "time",
     "question": "上海的门店昨天的销售额合计",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' and s.city = '上海'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' and s.city = '上海'",
     "expected": "原题“上个月”种子为空，改为昨天",
     "checks": [
       "result",
@@ -741,13 +628,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
-      "store.city",
       "store.is_test"
     ]
   },
@@ -757,7 +637,7 @@
     "category": "time",
     "question": "今天的销售额是多少？",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-25 00:00:00' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-25 00:00:00' and o.shipped_at < '2026-10-25 15:42:00'",
     "expected": "今天=10-25 00:00 至 15:42，按出库时间",
     "checks": [
       "result",
@@ -776,12 +656,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -791,7 +665,7 @@
     "category": "time",
     "question": "前天的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o where o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-23' and o.shipped_at < '2026-10-24'",
+    "goldSql": "select count(*) from biz_order o where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-23' and o.shipped_at < '2026-10-24'",
     "expected": "有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
       "result",
@@ -803,11 +677,7 @@
       "sample": [
         "203"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-035",
@@ -815,7 +685,7 @@
     "category": "time",
     "question": "本周的销售额",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00'",
     "expected": "本周从周一 10-19 起",
     "checks": [
       "result",
@@ -834,12 +704,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -849,7 +713,7 @@
     "category": "time",
     "question": "上周的订单数",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at >= '2026-10-12' and o.created_at < '2026-10-19'",
+    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at_biz >= '2026-10-12' and o.created_at_biz < '2026-10-19'",
     "expected": "结果 0；做时间窗检查",
     "checks": [
       "result",
@@ -861,10 +725,7 @@
       "sample": [
         "0"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at"
-    ]
+    }
   },
   {
     "code": "EV-Q-037",
@@ -872,7 +733,7 @@
     "category": "time",
     "question": "近24小时有多少笔订单？",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at >= timestamptz '2026-10-25 15:42:00' - interval '24 hours' and o.created_at < '2026-10-25 15:42:00'",
+    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at_biz >= timestamptz '2026-10-25 15:42:00' - interval '24 hours' and o.created_at_biz < '2026-10-25 15:42:00'",
     "expected": "滚动 24 小时",
     "checks": [
       "result",
@@ -884,10 +745,7 @@
       "sample": [
         "353"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at"
-    ]
+    }
   },
   {
     "code": "EV-Q-038",
@@ -895,9 +753,9 @@
     "category": "time",
     "question": "近30天的销售额",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-09-26' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-09-26' and o.shipped_at < '2026-10-25 15:42:00'",
     "goldSqlAlt": [
-      "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= timestamptz '2026-10-25 15:42:00' - interval '30 days' and o.shipped_at < '2026-10-25 15:42:00'"
+      "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= timestamptz '2026-10-25 15:42:00' - interval '30 days' and o.shipped_at < '2026-10-25 15:42:00'"
     ],
     "expected": "含今天 30 个自然日；滚动 30×24 小时也接受",
     "checks": [
@@ -917,12 +775,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -932,7 +784,7 @@
     "category": "time",
     "question": "Top 3 products by quantity sold yesterday (shipped orders)",
     "expectedType": "answer",
-    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = '已出库' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name order by 3 desc limit 3",
+    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = 'shipped' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name order by 3 desc limit 3",
     "expected": "原题“上个月”为空，改为昨天",
     "checks": [
       "result",
@@ -946,15 +798,7 @@
         "1020075 | 娃哈哈AD钙奶 | 82.000",
         "1024418 | 五常大米 稻花香2号 | 72.000"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "order_line.order_id",
-      "order_line.product_id",
-      "order_line.qty",
-      "product.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-040",
@@ -962,7 +806,7 @@
     "category": "time",
     "question": "10月23日下午（12点到18点）下了多少单？",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at >= '2026-10-23 12:00' and o.created_at < '2026-10-23 18:00'",
+    "goldSql": "select count(*) from biz_order o where not o.is_test and o.created_at_biz >= '2026-10-23 12:00' and o.created_at_biz < '2026-10-23 18:00'",
     "expected": "",
     "source": "new",
     "scratchPreview": {
@@ -970,10 +814,7 @@
       "sample": [
         "97"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at"
-    ]
+    }
   },
   {
     "code": "EV-Q-041",
@@ -981,7 +822,7 @@
     "category": "time",
     "question": "本月截至目前各区域的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select s.region, count(*) from biz_order o join store s on s.id = o.store_id where o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00' group by s.region",
+    "goldSql": "select s.region, count(*) from biz_order o join store s on s.id = o.store_id where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00' group by s.region",
     "expected": "有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
       "result",
@@ -995,12 +836,7 @@
         "华东一区 | 203",
         "华东四区 | 67"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id"
-    ]
+    }
   },
   {
     "code": "EV-Q-042",
@@ -1008,7 +844,7 @@
     "category": "caliber",
     "question": "已出库订单的总销售额是多少？",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test",
     "expected": "同名默认 gmv v3：订单行不含税金额求和，状态=已出库，剔除测试店；答成含税或把已签收算进去判错",
     "source": "ao_trial#4",
     "tags": [
@@ -1023,11 +859,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1037,7 +868,7 @@
     "category": "caliber",
     "question": "昨天的含税销售额",
     "expectedType": "answer",
-    "goldSql": "select sum(o.amount) from biz_order o join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select sum(o.amount) from biz_order o join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "gmv_tax v2 = SUM(订单.实付) − 退款",
     "source": "new",
     "tags": [
@@ -1052,10 +883,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.amount",
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
       "store.is_test"
     ]
   },
@@ -1065,7 +892,7 @@
     "category": "caliber",
     "question": "昨天的不含税销售额",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "",
     "source": "new",
     "tags": [
@@ -1080,12 +907,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1095,7 +916,7 @@
     "category": "caliber",
     "question": "昨天的销售额",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "不说含税/不含税时按同名默认（不含税），不应反问；回答须写明“不含税”",
     "checks": [
       "result",
@@ -1114,12 +935,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1129,7 +944,7 @@
     "category": "caliber",
     "question": "昨天下单的订单，销售额是多少？",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.created_at >= '2026-10-24' and o.created_at < '2026-10-25'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.created_at_biz >= '2026-10-24' and o.created_at_biz < '2026-10-25'",
     "expected": "用户明确按下单时间，覆盖默认时间字段；与“昨天的销售额”成对",
     "source": "new",
     "tags": [
@@ -1144,12 +959,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.created_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1159,7 +968,7 @@
     "category": "caliber",
     "question": "昨天的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o where o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select count(*) from biz_order o where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "order_cnt v1：状态≠已取消（待支付也算）；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "source": "new",
     "scratchPreview": {
@@ -1167,11 +976,7 @@
       "sample": [
         "205"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-048",
@@ -1179,7 +984,7 @@
     "category": "caliber",
     "question": "昨天的客单价是多少？",
     "expectedType": "answer",
-    "goldSql": "select round((select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25') / nullif((select count(*) from biz_order o where o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'), 0), 2)",
+    "goldSql": "select round((select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25') / nullif((select count(*) from biz_order o where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'), 0), 2)",
     "expected": "atv=gmv/有效订单数，草稿口径：可以答，必须提示“草稿口径”；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
       "result",
@@ -1198,12 +1003,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1213,7 +1012,7 @@
     "category": "caliber",
     "question": "昨天的出库及时率",
     "expectedType": "answer",
-    "goldSql": "select round(count(*) filter (where o.shipped_at is not null and o.shipped_at <= o.created_at + interval '30 minutes')::numeric / nullif(count(*), 0), 4) from biz_order o where o.status not in ('待支付', '已取消') and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select round(count(*) filter (where o.shipped_at is not null and o.shipped_at <= o.created_at_biz + interval '30 minutes')::numeric / nullif(count(*), 0), 4) from biz_order o where o.status not in ('pending_payment', 'cancelled') and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "ship_ontime v1，按出库时间统计（认证问法 objectProps.ts:297，静态本体裁定）。应出库订单 = 昨天出库、状态不是待支付/已取消的订单（剔除测试单）；分子是其中下单后 30 分钟内出库的（种子只有出库时间，没有状态变更记录）；按下单时间圈分母判错",
     "source": "new",
     "tags": [
@@ -1225,12 +1024,7 @@
       "sample": [
         "0.2634"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at",
-      "biz_order.shipped_at",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-050",
@@ -1260,7 +1054,7 @@
     "category": "caliber",
     "question": "昨天销售额（含税）和（不含税）分别是多少？",
     "expectedType": "answer",
-    "goldSql": "select (select sum(o.amount) from biz_order o join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25') as gross, (select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25') as net",
+    "goldSql": "select (select sum(o.amount) from biz_order o join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25') as gross, (select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25') as net",
     "expected": "两列；两个口径基础对象不同（订单 vs 订单行），差额不等于税额",
     "source": "new",
     "tags": [
@@ -1276,13 +1070,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.amount",
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1292,9 +1079,9 @@
     "category": "caliber",
     "question": "昨天订单的优惠金额合计",
     "expectedType": "answer",
-    "goldSql": "select sum(o.discount) from biz_order o where o.status <> '已取消' and not o.is_test and o.created_at >= '2026-10-24' and o.created_at < '2026-10-25'",
+    "goldSql": "select sum(o.discount) from biz_order o where o.status <> 'cancelled' and not o.is_test and o.created_at_biz >= '2026-10-24' and o.created_at_biz < '2026-10-25'",
     "goldSqlAlt": [
-      "select sum(o.discount) from biz_order o where not o.is_test and o.created_at >= '2026-10-24' and o.created_at < '2026-10-25'"
+      "select sum(o.discount) from biz_order o where not o.is_test and o.created_at_biz >= '2026-10-24' and o.created_at_biz < '2026-10-25'"
     ],
     "expected": "剔除已取消、按下单时间；不剔除已取消也接受；测试单一律剔除",
     "source": "new",
@@ -1306,12 +1093,7 @@
       "sample": [
         "3204.64"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at",
-      "biz_order.discount",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-054",
@@ -1319,7 +1101,7 @@
     "category": "synonym",
     "question": "昨天营业额多少？",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "营业额 → gmv（指标同义词）",
     "source": "new",
     "tags": [
@@ -1334,12 +1116,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1349,7 +1125,7 @@
     "category": "synonym",
     "question": "本周流水",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00'",
     "expected": "流水 → gmv",
     "source": "new",
     "tags": [
@@ -1364,12 +1140,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1379,7 +1149,7 @@
     "category": "synonym",
     "question": "各区域本月的销售收入",
     "expectedType": "answer",
-    "goldSql": "select s.region, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00' group by s.region",
+    "goldSql": "select s.region, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00' group by s.region",
     "expected": "销售收入 → gmv",
     "source": "new",
     "tags": [
@@ -1396,12 +1166,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1411,7 +1175,7 @@
     "category": "synonym",
     "question": "今天净销售额",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-25 00:00:00' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-25 00:00:00' and o.shipped_at < '2026-10-25 15:42:00'",
     "expected": "净销售额 → gmv",
     "source": "new",
     "tags": [
@@ -1426,12 +1190,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1457,7 +1215,7 @@
     "category": "synonym",
     "question": "小程序昨天的单量",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o where o.channel = '小程序到家' and o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select count(*) from biz_order o where o.channel = '小程序到家' and o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "“小程序”是渠道维度值「小程序到家」的同义词（渠道过滤，dimensions.ts:310），不是指标同义词；“单量”→有效订单数；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "source": "new",
     "tags": [
@@ -1468,12 +1226,7 @@
       "sample": [
         "26"
       ]
-    },
-    "inferredCols": [
-      "biz_order.channel",
-      "biz_order.shipped_at",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-060",
@@ -1481,7 +1234,7 @@
     "category": "synonym",
     "question": "昨天卖得最好的商品是哪个？",
     "expectedType": "answer",
-    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = '已出库' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name order by 3 desc limit 1",
+    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = 'shipped' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name order by 3 desc limit 1",
     "expected": "“卖得最好”按销量；系统先反问也判通过",
     "checks": [
       "result",
@@ -1496,15 +1249,7 @@
       "sample": [
         "1002387 | 农夫山泉饮用天然水 | 86.000"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "order_line.order_id",
-      "order_line.product_id",
-      "order_line.qty",
-      "product.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-061",
@@ -1512,7 +1257,7 @@
     "category": "synonym",
     "question": "张江店昨天几单？",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.name like '%张江%' and o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.name like '%张江%' and o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "门店简称模糊匹配到唯一一家；“几单”按有效订单数；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "source": "new",
     "tags": [
@@ -1523,13 +1268,7 @@
       "sample": [
         "13"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "store.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-062",
@@ -1545,10 +1284,7 @@
       "sample": [
         "13"
       ]
-    },
-    "inferredCols": [
-      "store.city"
-    ]
+    }
   },
   {
     "code": "EV-Q-063",
@@ -1556,7 +1292,7 @@
     "category": "synonym",
     "question": "美团昨天卖了多少钱",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' and o.channel = '美团闪购'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' and o.channel = '美团闪购'",
     "expected": "“美团”是渠道值「美团闪购」的同义词（渠道过滤，dimensions.ts:312），不是指标同义词；“卖了多少钱”按同名默认 gmv",
     "source": "new",
     "tags": [
@@ -1572,13 +1308,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.channel",
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1630,7 +1359,7 @@
     "category": "synonym",
     "question": "GMV 是多少？",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test",
     "expected": "GMV → gmv（不含税，静态本体裁定：K-011 同义词含 GMV，knowledge.ts:173-175；Glossary.vue:230；qa-tuning.ts:249）。v0.2 为反问题，v0.3 改为作答，分类改为 synonym；口径同 gmv v3（已出库、剔除测试店和测试单、按出库时间）；未给时间按全量。答成含税判错",
     "source": "new",
     "tags": [
@@ -1645,11 +1374,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -1863,7 +1587,7 @@
     "category": "explain",
     "question": "华东一区昨天的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.region = '华东一区' and o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.region = '华东一区' and o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "原题 #16 迁移：检查 SQL 里的区域、状态、时间条件和解释逐条一致；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
       "result",
@@ -1875,12 +1599,7 @@
       "sample": [
         "56"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id"
-    ]
+    }
   },
   {
     "code": "EV-Q-086",
@@ -1888,7 +1607,7 @@
     "category": "explain",
     "question": "上海门店本周的不含税销售额",
     "expectedType": "answer",
-    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00' and s.city = '上海'",
+    "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-19' and o.shipped_at < '2026-10-25 15:42:00' and s.city = '上海'",
     "expected": "解释须写明：城市=上海、已出库、剔除测试店、按出库时间、本周 10-19 起、不含税",
     "checks": [
       "result",
@@ -1907,13 +1626,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
-      "store.city",
       "store.is_test"
     ]
   },
@@ -1923,7 +1635,7 @@
     "category": "explain",
     "question": "小程序到家渠道今天的含税销售额",
     "expectedType": "answer",
-    "goldSql": "select sum(o.amount) from biz_order o join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-25 00:00:00' and o.shipped_at < '2026-10-25 15:42:00' and o.channel = '小程序到家'",
+    "goldSql": "select sum(o.amount) from biz_order o join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-25 00:00:00' and o.shipped_at < '2026-10-25 15:42:00' and o.channel = '小程序到家'",
     "expected": "",
     "checks": [
       "result",
@@ -1942,11 +1654,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.amount",
-      "biz_order.channel",
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
       "store.is_test"
     ]
   },
@@ -1956,7 +1663,7 @@
     "category": "explain",
     "question": "杭州社区店近3天的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.city = '杭州' and s.format = '社区店' and o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-23' and o.shipped_at < '2026-10-25 15:42:00'",
+    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where s.city = '杭州' and s.format = '社区店' and o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-23' and o.shipped_at < '2026-10-25 15:42:00'",
     "expected": "近3天=10-23 起；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
       "result",
@@ -1969,14 +1676,7 @@
       "sample": [
         "46"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "store.city",
-      "store.format"
-    ]
+    }
   },
   {
     "code": "EV-Q-089",
@@ -1984,7 +1684,7 @@
     "category": "explain",
     "question": "酒水饮料类商品昨天卖了多少件？",
     "expectedType": "answer",
-    "goldSql": "select sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where p.category like '酒水饮料/%' and o.status = '已出库' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
+    "goldSql": "select sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where p.category like '酒水饮料/%' and o.status = 'shipped' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25'",
     "expected": "一级品类匹配",
     "checks": [
       "result",
@@ -1996,15 +1696,7 @@
       "sample": [
         "86.000"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "order_line.order_id",
-      "order_line.product_id",
-      "order_line.qty",
-      "product.category"
-    ]
+    }
   },
   {
     "code": "EV-Q-090",
@@ -2012,7 +1704,7 @@
     "category": "explain",
     "question": "南京江宁百家湖店10月23日的订单数",
     "expectedType": "answer",
-    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where not o.is_test and s.name = '南京江宁百家湖店' and o.created_at >= '2026-10-23' and o.created_at < '2026-10-24'",
+    "goldSql": "select count(*) from biz_order o join store s on s.id = o.store_id where not o.is_test and s.name = '南京江宁百家湖店' and o.created_at_biz >= '2026-10-23' and o.created_at_biz < '2026-10-24'",
     "expected": "全部订单不限状态；解释说“有效订单”而 SQL 没剔除已取消，判不一致",
     "checks": [
       "result",
@@ -2024,12 +1716,7 @@
       "sample": [
         "28"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at",
-      "biz_order.store_id",
-      "store.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-091",
@@ -2037,7 +1724,7 @@
     "category": "groupkey",
     "question": "销售额最高的前5家门店是哪些？",
     "expectedType": "answer",
-    "goldSql": "select s.code, s.name, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test group by s.id, s.code, s.name order by 3 desc limit 5",
+    "goldSql": "select s.code, s.name, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test group by s.id, s.code, s.name order by 3 desc limit 5",
     "expected": "GROUP BY 须含 store.id 或 code",
     "checks": [
       "result",
@@ -2058,13 +1745,7 @@
       ]
     },
     "inferredCols": [
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
-      "store.is_test",
-      "store.name"
+      "store.is_test"
     ]
   },
   {
@@ -2084,9 +1765,9 @@
     "category": "groupkey",
     "question": "每个门店昨天的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select s.code, s.name, count(*) from biz_order o join store s on s.id = o.store_id where o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.id, s.code, s.name",
+    "goldSql": "select s.code, s.name, count(*) from biz_order o join store s on s.id = o.store_id where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.id, s.code, s.name",
     "goldSqlAlt": [
-      "select s.code, s.name, count(o.id) from store s left join biz_order o on o.store_id = s.id and o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.id, s.code, s.name"
+      "select s.code, s.name, count(o.id) from store s left join biz_order o on o.store_id = s.id and o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.id, s.code, s.name"
     ],
     "expected": "只列有订单的门店；列全部门店（无单为 0）也接受；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
@@ -2097,17 +1778,11 @@
     "scratchPreview": {
       "rows": 12,
       "sample": [
-        "HZ0012 | 杭州西湖文三路店 | 17",
+        "SH0031 | 上海浦东张江高科店 | 13",
         "HF0004 | 合肥政务区天鹅湖店 | 12",
-        "NJ0021 | 南京鼓楼湖南路店 | 26"
+        "SH0133 | 上海静安大悦城店 | 13"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "store.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-094",
@@ -2115,7 +1790,7 @@
     "category": "groupkey",
     "question": "每个商品昨天的销量",
     "expectedType": "answer",
-    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = '已出库' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name",
+    "goldSql": "select p.code, p.name, sum(l.qty) from order_line l join biz_order o on o.id = l.order_id join product p on p.id = l.product_id where o.status = 'shipped' and not o.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by p.id, p.code, p.name",
     "expected": "按 sku 分组",
     "checks": [
       "result",
@@ -2125,19 +1800,11 @@
     "scratchPreview": {
       "rows": 12,
       "sample": [
-        "1020075 | 娃哈哈AD钙奶 | 82.000",
-        "1013309 | 蒙牛特仑苏有机纯牛奶 | 52.000",
-        "1046637 | 海天金标生抽 | 65.000"
+        "1004512 | 金龙鱼黄金比例食用调和油 | 68.000",
+        "1046637 | 海天金标生抽 | 65.000",
+        "1002387 | 农夫山泉饮用天然水 | 86.000"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "order_line.order_id",
-      "order_line.product_id",
-      "order_line.qty",
-      "product.name"
-    ]
+    }
   },
   {
     "code": "EV-Q-095",
@@ -2145,7 +1812,7 @@
     "category": "groupkey",
     "question": "各店长负责门店昨天的销售额",
     "expectedType": "answer",
-    "goldSql": "select s.code, s.manager, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.id, s.code, s.manager",
+    "goldSql": "select s.code, s.manager, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-24' and o.shipped_at < '2026-10-25' group by s.id, s.code, s.manager",
     "expected": "全量门店里店长重名，按店长名分组会合并门店；应按门店分组带店长列",
     "checks": [
       "result",
@@ -2160,20 +1827,13 @@
     "scratchPreview": {
       "rows": 12,
       "sample": [
-        "HZ0012 | 周晓峰 | 2536.20",
+        "SH0031 | 王敏 | 2772.83",
         "HF0004 | 马晨 | 1435.91",
-        "NJ0021 | 孙浩然 | 5016.23"
+        "SH0133 | 林子豪 | 1537.74"
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
-      "store.is_test",
-      "store.manager"
+      "store.is_test"
     ]
   },
   {
@@ -2182,7 +1842,7 @@
     "category": "datefmt",
     "question": "2026年每个月的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select date_trunc('month', o.shipped_at)::date, count(*) from biz_order o where o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-01-01' and o.shipped_at < '2026-10-25 15:42:00' group by 1 order by 1",
+    "goldSql": "select date_trunc('month', o.shipped_at)::date, count(*) from biz_order o where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-01-01' and o.shipped_at < '2026-10-25 15:42:00' group by 1 order by 1",
     "expected": "按出库月份；月份须是 2026-10-01 或 2026-10，不能是 10 / 10.00；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
       "result",
@@ -2194,11 +1854,7 @@
       "sample": [
         "2026-10-01 | 726"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-097",
@@ -2206,7 +1862,7 @@
     "category": "datefmt",
     "question": "2026年10月每天的有效订单数",
     "expectedType": "answer",
-    "goldSql": "select o.shipped_at::date, count(*) from biz_order o where o.status <> '已取消' and not o.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00' group by 1 order by 1",
+    "goldSql": "select o.shipped_at::date, count(*) from biz_order o where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-10-25 15:42:00' group by 1 order by 1",
     "expected": "按出库日期；10 月出库时间晚于 now 的 8 单不计（窗口卡在 now）；日期 YYYY-MM-DD；有效订单数按出库时间统计（认证问法 objectProps.ts:296），剔除测试单；按下单时间统计判错",
     "checks": [
       "result",
@@ -2220,11 +1876,7 @@
         "2026-10-23 | 203",
         "2026-10-24 | 205"
       ]
-    },
-    "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status"
-    ]
+    }
   },
   {
     "code": "EV-Q-098",
@@ -2232,7 +1884,7 @@
     "category": "datefmt",
     "question": "近3天每天的销售额",
     "expectedType": "answer",
-    "goldSql": "select o.shipped_at::date, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = '已出库' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-23' and o.shipped_at < '2026-10-25 15:42:00' group by 1 order by 1",
+    "goldSql": "select o.shipped_at::date, round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-10-23' and o.shipped_at < '2026-10-25 15:42:00' group by 1 order by 1",
     "expected": "按出库日期",
     "checks": [
       "result",
@@ -2253,12 +1905,6 @@
       ]
     },
     "inferredCols": [
-      "biz_order.shipped_at",
-      "biz_order.status",
-      "biz_order.store_id",
-      "order_line.order_id",
-      "order_line.price",
-      "order_line.qty",
       "store.is_test"
     ]
   },
@@ -2268,7 +1914,7 @@
     "category": "datefmt",
     "question": "今天每小时的订单数",
     "expectedType": "answer",
-    "goldSql": "select date_trunc('hour', o.created_at), count(*) from biz_order o where not o.is_test and o.created_at >= '2026-10-25 00:00:00' and o.created_at < '2026-10-25 15:42:00' group by 1 order by 1",
+    "goldSql": "select date_trunc('hour', o.created_at_biz), count(*) from biz_order o where not o.is_test and o.created_at_biz >= '2026-10-25 00:00:00' and o.created_at_biz < '2026-10-25 15:42:00' group by 1 order by 1",
     "expected": "小时须带日期",
     "checks": [
       "result",
@@ -2282,10 +1928,7 @@
         "2026-10-25 01:00:00+08 | 16",
         "2026-10-25 02:00:00+08 | 16"
       ]
-    },
-    "inferredCols": [
-      "biz_order.created_at"
-    ]
+    }
   },
   {
     "code": "EV-Q-100",
@@ -2293,7 +1936,7 @@
     "category": "datefmt",
     "question": "本周每天各渠道的订单数",
     "expectedType": "answer",
-    "goldSql": "select o.created_at::date, o.channel, count(*) from biz_order o where not o.is_test and o.created_at >= '2026-10-19' and o.created_at < '2026-10-25 15:42:00' group by 1, 2 order by 1, 2",
+    "goldSql": "select o.created_at_biz::date, o.channel, count(*) from biz_order o where not o.is_test and o.created_at_biz >= '2026-10-19' and o.created_at_biz < '2026-10-25 15:42:00' group by 1, 2 order by 1, 2",
     "expected": "",
     "checks": [
       "result",
@@ -2307,10 +1950,6 @@
         "2026-10-22 | 小程序到家 | 64",
         "2026-10-22 | 社群团购 | 57"
       ]
-    },
-    "inferredCols": [
-      "biz_order.channel",
-      "biz_order.created_at"
-    ]
+    }
   }
 ]
