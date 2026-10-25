@@ -12,7 +12,7 @@ LIKE_ESCAPE = "\\"
 
 
 def like_contains(kw: str) -> str:
-    """kw → ILIKE 的“包含”模式：转义 \\、%、_（用户输入按字面匹配），值走绑定参数。"""
+    """kw → LIKE 的“包含”模式：转义 \\、%、_（用户输入按字面匹配），值走绑定参数。"""
     esc = (
         kw.replace(LIKE_ESCAPE, LIKE_ESCAPE * 2)
         .replace("%", LIKE_ESCAPE + "%")
@@ -50,7 +50,7 @@ class OrderRepo(BaseRepository[BizOrder]):
     ) -> Select[tuple[BizOrder]]:
         """列表：不加载 lines（raiseload，误访问直接报错），lineCount 用子查询。
 
-        - kw：订单号或门店名包含（不区分大小写，ILIKE + 转义）；
+        - kw：订单号或门店名包含（区分大小写，LIKE + 转义；以前端 `includes` 为准）；
         - created_until：createdAt <= 该时刻；created_before：createdAt < 该时刻（分钟精度的截止时间用）。
         """
         stmt = (
@@ -70,8 +70,8 @@ class OrderRepo(BaseRepository[BizOrder]):
             pat = like_contains(kw)
             stmt = stmt.where(
                 or_(
-                    BizOrder.code.ilike(pat, escape=LIKE_ESCAPE),
-                    BizOrder.store_id.in_(select(Store.id).where(Store.name.ilike(pat, escape=LIKE_ESCAPE))),
+                    BizOrder.code.like(pat, escape=LIKE_ESCAPE),
+                    BizOrder.store_id.in_(select(Store.id).where(Store.name.like(pat, escape=LIKE_ESCAPE))),
                 )
             )
         if created_until is not None:

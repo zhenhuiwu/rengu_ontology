@@ -95,9 +95,8 @@ class VersioningService:
                 )
             target = latest.parent
             snapshot = dict(target.snapshot)
-            await restore_sections(session, snapshot)  # 各模块定义表回到被恢复的那一版（可选钩子）
             summary = {"changeOrders": len(cr_ids), "rollbackOf": rollback_of, "restoredFrom": target.ver}
-        return await self._append(
+        release = await self._append(
             session,
             base_ver,
             snapshot,
@@ -109,6 +108,11 @@ class VersioningService:
             latest=latest,
             rollback=rollback_of is not None,
         )
+        if rollback_of is not None:
+            # 先写新版本行，再让各模块把定义表恢复成被恢复的那一版：钩子拿到这次回滚版本的 id
+            # （Palantir 把快照里没有的类型的 retired_release_id 写成它，action-event-api.md:325）。同一事务。
+            await restore_sections(session, snapshot, release.id)
+        return release.ver
 
     async def _append(
         self,
@@ -123,7 +127,7 @@ class VersioningService:
         now: datetime | None,
         latest: OntologyRelease | None,
         rollback: bool = False,
-    ) -> str:
+    ) -> OntologyRelease:
         now = now or clock.now()
         ver = next_ver(base_ver, now)
         publisher = await session.scalar(select(SysUser).where(SysUser.code == published_by))
@@ -159,7 +163,7 @@ class VersioningService:
             },
             event_id=f"ontology_release:{release.ver}:{RELEASE_PUBLISHED}",
         )
-        return ver
+        return release
 
     async def current_version(self, session: AsyncSession) -> str | None:
         latest = await ReleaseRepo(session).latest()

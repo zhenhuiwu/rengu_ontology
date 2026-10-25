@@ -11,8 +11,11 @@
    change_order_ids = 那张回滚变更单：生成一个**新版本**，**不调用** build_section，快照原样复制被回滚
    版本的上一版（change_summary.restoredFrom），记录 rollback_of。仍然只追加，绝不移动指针、不改旧版本。
    定义表（静态的对象 / 指标…、动态 rule 当前版本 / lifecycle.version、Palantir 动作类型…）也要回到那一版：
-   版本层在同一事务里对每个登记的 builder 调可选钩子 `restore_section(session, content)`（content =
-   被恢复版本这一节的快照内容）；没实现钩子的 section 只回快照、不动定义表。
+   版本层**先写入回滚产生的新版本行**，再在同一事务里按登记顺序对每个 builder 调可选钩子
+   `restore_section(session, content, *, release_id)`（RestorableSection；
+   content = 被恢复版本这一节的快照内容，
+   release_id = 这次回滚新版本的 ontology_release.id，例如 Palantir 写 retired_release_id，
+   action-event-api.md:325）；没实现钩子的 section 只回快照、不动定义表。
    被恢复版本没有这一节（content 为 None）时版本层**不调用**钩子、定义表不动 [推断]；空内容 {} 照样调用。
    和前端 Releases 页一致：「回滚会生成一个新版本，内容等于上一版本；只能回滚最近一次发布」。
 5. 快照 = {section 名: section 内容}。每个 section 由**负责它的模块**组装（SECTION_OWNERS）：
@@ -91,9 +94,25 @@ class SnapshotSectionBuilder(Protocol):
 
     def seed_section(self, ver: str, ctx: Any) -> Any: ...
 
-    # 可选：整版回滚时把本模块的定义表恢复成 content（被恢复版本这一节的快照）。不实现 = 只回快照。
-    # content 不会是 None（被恢复版本没有这一节时版本层不调用钩子）。
-    # async def restore_section(self, session: AsyncSession, content: Any) -> None: ...
+    # 可选：整版回滚钩子见 RestorableSection（同一个 builder 类上实现 restore_section 即可）。
+
+
+@runtime_checkable
+class RestorableSection(Protocol):
+    """可选：整版回滚时把本模块的定义表恢复成 content。不实现 = 只回快照、不动定义表。
+
+    - 调用时机：create_version(rollback_of=…) 已经写入这次回滚的新版本行（已 flush，有 id）之后，
+      同一事务、按 section 登记顺序；钩子抛错 → 整个回滚（含新版本行、outbox）一起回滚。
+    - content：被恢复版本（rollback_of 的上一版）快照里这一节，原样 JSON；不会是 None
+      （那一版没有这一节时不调用）；{} / [] 照样调用。
+    - release_id（keyword-only）：这次回滚新版本的 ontology_release.id（不是版本号）。
+      用途如 action_type.retired_release_id
+      = release_id（快照里没有的类型下线，action-event-api.md:325）；需要版本号可按 id 查 ontology_release。
+    """
+
+    section: str
+
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None: ...
 
 
 @runtime_checkable

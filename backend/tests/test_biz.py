@@ -111,6 +111,34 @@ async def test_list_line_count_matches_mock_and_detail(client, biz):
     assert d["lineCount"] == len(d["lines"]) == LINES_OF["SO202610240889017"]
 
 
+async def test_page_beyond_last_is_clamped_like_frontend(client, biz):
+    """前端 paginate.ts:13：page = min(max(1, page), max(1, ceil(total/size)))。
+
+    越界返回最后一页，page 也收拢。"""
+    total, size = len(ORDERS), 200
+    last = -(-total // size)
+    want = (await client.get("/api/biz/v1/orders", params={"size": size, "page": last})).json()
+    assert want["page"] == last and len(want["items"]) == total - (last - 1) * size > 0
+    for p in (last + 1, 9999):
+        body = (await client.get("/api/biz/v1/orders", params={"size": size, "page": p})).json()
+        assert body["page"] == last and body["total"] == total, p
+        assert [i["id"] for i in body["items"]] == [i["id"] for i in want["items"]]
+    # 没有数据：page=1、items=[]
+    body = (await client.get("/api/biz/v1/orders", params={"kw": "不存在的门店", "page": 5})).json()
+    assert body == {**body, "items": [], "total": 0, "page": 1, "size": 20}
+    # page ≤ 0 按第 1 页（前端 Math.max(1, q.page)），不报 422
+    first = (await client.get("/api/biz/v1/orders", params={"size": 20, "page": 1})).json()
+    for p in (0, -3):
+        body = (await client.get("/api/biz/v1/orders", params={"size": 20, "page": p})).json()
+        assert body["page"] == 1 and body["total"] == total, p
+        assert [i["id"] for i in body["items"]] == [i["id"] for i in first["items"]]
+        empty = (await client.get("/api/biz/v1/orders", params={"kw": "不存在的门店", "page": p})).json()
+        assert empty == {**empty, "items": [], "total": 0, "page": 1, "size": 20}, p
+    # size 照旧校验
+    for sz in (0, 201):
+        assert (await client.get("/api/biz/v1/orders", params={"size": sz})).status_code == 422
+
+
 async def test_list_line_count_is_one_query(client, biz, engine):
     """列表不按单加载订单行：一页 = count + 一条带子查询的 select，与页大小无关。"""
     from sqlalchemy import event
@@ -123,10 +151,13 @@ async def test_list_line_count_is_one_query(client, biz, engine):
     event.listen(engine.sync_engine, "before_cursor_execute", _on)
     try:
         await client.get("/api/biz/v1/orders", params={"size": 50})
+        await client.get("/api/biz/v1/orders", params={"size": 50, "page": 9999})  # 越界收拢也不多查
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", _on)
     order_sql = [s for s in seen if "order_line" in s or "biz_order" in s]
-    assert len(order_sql) == 2, order_sql  # selectin 加载 lines 会多一条 “order_line.order_id IN (…)”
+    assert len(order_sql) == 4, (
+        order_sql
+    )  # 每次 count + select 两条；selectin 加载 lines 会多一条 “order_line.order_id IN (…)”
 
 
 async def test_line_count_respects_row_filter(client, biz, monkeypatch):
@@ -144,10 +175,18 @@ async def test_line_count_respects_row_filter(client, biz, monkeypatch):
     assert (await client.get("/api/biz/v1/orders", params={"channel": "饿了么"})).json()["total"] == 0
 
 
-async def test_kw_matches_code_or_store_name_case_insensitive(client, biz):
+def _includes(kw: str) -> list[dict]:
+    """前端 Home.vue 的筛选：o.id.includes(kw) || storeName.includes(kw)（区分大小写）。"""
+    return [o for o in ORDERS if kw in o["id"] or kw in STORE_NAME[o["storeId"]]]
+
+
+async def test_kw_matches_code_or_store_name_case_sensitive(client, biz):
     code = ORDERS[0]["id"]
-    body, items = await _all(client, kw=code.lower())  # so2026… 不区分大小写
+    body, items = await _all(client, kw=code)
     assert body["total"] == sum(o["id"] == code for o in ORDERS) >= 1 and {i["id"] for i in items} == {code}
+    # 区分大小写（前端 includes 为准）：小写订单号不再命中
+    assert code.lower() != code and _includes(code.lower()) == []
+    assert (await client.get("/api/biz/v1/orders", params={"kw": code.lower()})).json()["total"] == 0
     body, items = await _all(client, kw="张江")
     want = [o for o in ORDERS if "张江" in o["id"] or "张江" in STORE_NAME[o["storeId"]]]
     assert body["total"] == len(want) > 0 and all("张江" in i["storeName"] for i in items)
@@ -164,7 +203,8 @@ async def test_kw_escapes_like_wildcards(client, biz):
     s.name = "Ab_C%店"
     await biz.flush()
     n = sum(o["storeId"] == "SH0031" for o in ORDERS)
-    assert (await client.get("/api/biz/v1/orders", params={"kw": "b_c%"})).json()["total"] == n > 0
+    assert (await client.get("/api/biz/v1/orders", params={"kw": "b_C%"})).json()["total"] == n > 0
+    assert (await client.get("/api/biz/v1/orders", params={"kw": "b_c%"})).json()["total"] == 0  # 大小写
     assert (await client.get("/api/biz/v1/orders", params={"kw": "bxc"})).json()["total"] == 0
 
 

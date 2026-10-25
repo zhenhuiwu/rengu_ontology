@@ -4,7 +4,8 @@
 
 GET /orders 的筛选对齐首页 Home.vue:32-46：
 - status / channel：前端选「全部」时客户端**不传**该参数（后台不认“全部”这个值）；
-- kw：订单号或门店名包含（前端 `o.id.includes(kw) || storeName.includes(kw)`；后台不区分大小写）；
+- kw：订单号或门店名包含（前端 `o.id.includes(kw) || storeName.includes(kw)`；
+  区分大小写，和前端一致，前端为准；`%`、`_`、`\\` 按字面）；
 - cutoff：createdAt <= cutoff（前端 CUTOFF='2026-10-24 23:00:59'，Home.vue:37-39）。收 'YYYY-MM-DD HH:mm'
   或 'YYYY-MM-DD HH:mm:ss'，不带时区按北京时间；只到分钟时含这一整分钟（23:00 ≡ 23:00:59）。
   格式不对 → 422 VALIDATION_FAILED，details.fields=[{field: "cutoff", ...}]。
@@ -62,7 +63,9 @@ async def list_orders(
     store_id: Annotated[str | None, Query(alias="storeId", description="门店编号 SH0031")] = None,
     status: Annotated[OrderStatus | None, Query(description="订单状态（中文）；「全部」时不传")] = None,
     channel: Annotated[str | None, Query(description="渠道；「全部」时不传")] = None,
-    kw: Annotated[str | None, Query(description="订单号或门店名包含（不区分大小写）")] = None,
+    kw: Annotated[
+        str | None, Query(description="订单号或门店名包含（区分大小写，同前端 includes；%、_ 按字面）")
+    ] = None,
     cutoff: Cutoff = None,
 ) -> OrdersPage:
     until = before = None
@@ -80,12 +83,9 @@ async def list_orders(
     )
     stmt = await apply_row_filter(stmt, user, "order", ORDER_COLUMNS, ORDER_LINKS)
     rows, total = await repo.list_page(stmt, page)
-    return OrdersPage(
-        items=[OrderOut.model_validate(r) for r in rows],
-        total=total,
-        page=page.page,
-        size=page.size,
-        data_as_of=_to_minute(as_of),
+    # 页码越界 → 最后一页，page 字段也收拢（前端 paginate.ts:13）
+    return OrdersPage.of(
+        [OrderOut.model_validate(r) for r in rows], total, page, data_as_of=_to_minute(as_of)
     )
 
 

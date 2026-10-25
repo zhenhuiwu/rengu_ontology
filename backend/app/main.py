@@ -9,6 +9,7 @@ from app.core.errors import install_error_handlers
 from app.core.logging import setup_logging
 from app.core.request_id import RequestIdMiddleware
 from app.db.session import dispose_engine, get_sessionmaker
+from app.modules.versioning.sections import load_sections
 
 
 @asynccontextmanager
@@ -24,6 +25,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIdMiddleware)
     install_error_handlers(app)
     include_routers(app)
+    load_sections()  # 唯一登记点：app/modules/<模块>/sections.py（幂等）
 
     @app.get("/healthz", tags=["系统"], summary="存活检查（不查库）")
     async def healthz() -> dict:

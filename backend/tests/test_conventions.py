@@ -69,6 +69,58 @@ async def repo(session, conn):
     return WidgetRepo(session)
 
 
+def test_page_clamp_matches_frontend_paginate():
+    from app.common.pagination import Page, page_count
+
+    def front(page: int, size: int, total: int) -> int:  # src/mock/paginate.ts:12-13
+        return min(max(1, page), max(1, -(-total // size)))
+
+    for total in (0, 1, 19, 20, 21, 100):
+        for page in (1, 2, 3, 6, 99):
+            for size in (1, 20, 50):
+                p = PageParams(page=page, size=size).clamp(total)
+                assert (p.page, p.size) == (front(page, size, total), size), (page, size, total)
+                assert p.offset == (p.page - 1) * size
+    assert page_count(0, 20) == 1 and page_count(41, 20) == 3
+    body = Page[int].of([], 0, PageParams(page=3, size=20))
+    assert (body.page, body.total, body.items) == (1, 0, [])
+    assert Page[int].of([1], 41, PageParams(page=9, size=20)).page == 3
+
+
+def test_page_zero_and_negative_are_page_one():
+    """前端 paginate.ts:13 `Math.max(1, q.page)`：0 和负数都当第 1 页，total=0 也是第 1 页。"""
+    from pydantic import ValidationError
+
+    from app.common.pagination import Page
+
+    for page in (0, -3):
+        p = PageParams(page=page, size=20)
+        assert p.page == 1 and p.offset == 0
+        for total in (0, 45):
+            c = p.clamp(total)
+            assert (c.page, c.offset) == (1, 0), (page, total)
+        assert Page[int].of([1, 2], 45, PageParams(page=page, size=20)).page == 1
+        body = Page[int].of([], 0, PageParams(page=page, size=20))
+        assert (body.page, body.total, body.items) == (1, 0, [])
+    for size in (0, 201):
+        with pytest.raises(ValidationError):
+            PageParams(size=size)
+
+
+async def test_list_page_zero_and_negative(repo):
+    for code in ("W-1", "W-2", "W-3"):
+        await repo.create(Widget(code=code, name=code), actor="王敏")
+    for page in (0, -3):
+        rows, total = await repo.list_page(
+            repo.base_query().order_by(Widget.id), PageParams(page=page, size=2)
+        )
+        assert total == 3 and [r.code for r in rows] == ["W-1", "W-2"], page
+        rows, total = await repo.list_page(
+            repo.base_query().where(Widget.code == "无"), PageParams(page=page, size=2)
+        )
+        assert (rows, total) == ([], 0), page
+
+
 async def test_crud_soft_delete(repo, session):
     w = await repo.create(Widget(code="W-1", name="甲"), actor="王敏")
     assert w.created_by == "王敏" and w.lock_version == 1
@@ -79,6 +131,9 @@ async def test_crud_soft_delete(repo, session):
     assert await repo.get_by_code("W-1") is None and await repo.get(w.id) is None
     _, total = await repo.list_page(repo.base_query(), PageParams())
     assert total == 1
+    # 页码越界收拢到最后一页（前端 paginate.ts:13）
+    rows, total = await repo.list_page(repo.base_query(), PageParams(page=7, size=1))
+    assert total == 1 and [r.code for r in rows] == ["W-2"]
     with pytest.raises(AppError) as e:
         await repo.get_by_code_or_404("W-1")
     assert e.value.code == "NOT_FOUND"
