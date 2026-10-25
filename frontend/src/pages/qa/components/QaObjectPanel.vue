@@ -2,6 +2,7 @@
 /** 右栏：当前对象（华东大区）摘要、状态时间线、可执行动作（含执行状态） */
 import { useReadonly } from '@/composables/useReadonly';
 import { ref } from 'vue';
+import InfoTip from '../InfoTip.vue';
 import { QuestionCircleOutlined, ClockCircleOutlined, SyncOutlined } from '@ant-design/icons-vue';
 import { REGION_EC, QA_TIMELINE, QA_UNKNOWN_LABEL, type QaTimelineLevel } from '@/mock';
 
@@ -19,10 +20,10 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
     <div class="qa-obj-sec">
       <div class="qa-obj-title">
         <span class="t-16 fw-600">{{ REGION_EC.name }}</span>
-        <a-tag color="warning">{{ REGION_EC.status }}</a-tag>
+        <a-tag>{{ REGION_EC.status }}</a-tag>
+        <InfoTip :title="`大区 · ${REGION_EC.id} · 本轮回答引用`" />
         <a class="qa-obj-link" @click="emit('detail')">打开对象详情</a>
       </div>
-      <div class="t-12 c-3">大区 · {{ REGION_EC.id }} · 本轮回答引用</div>
       <a-tabs v-model:activeKey="tab" size="small" class="qa-obj-tabs">
         <a-tab-pane key="summary" tab="摘要" />
         <a-tab-pane key="metrics" tab="指标" />
@@ -42,8 +43,13 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
       <a-timeline class="qa-obj-tl">
         <a-timeline-item v-for="t in QA_TIMELINE" :key="t.time" :color="dot[t.level]">
           <template v-if="t.level === 'unknown'" #dot><QuestionCircleOutlined class="tl-attention" /></template>
-          <div class="qa-obj-tl-row"><span :class="{ 'tl-attention': t.level === 'unknown' }">{{ t.title }}</span><span class="t-12 c-3 num">{{ t.time.slice(5) }}</span></div>
-          <div class="c-3 qa-obj-ell"><span v-if="t.level === 'unknown'" class="tl-attention">{{ QA_UNKNOWN_LABEL }} · </span>{{ t.desc }}</div>
+          <a-tooltip :title="t.desc" placement="left">
+            <div class="qa-obj-tl-row">
+              <span class="qa-obj-ell" :class="{ 'tl-attention': t.level === 'unknown' }">{{ t.title }}</span>
+              <a-tag v-if="t.level === 'unknown'" color="warning" class="qa-obj-tl-tag">{{ QA_UNKNOWN_LABEL }}</a-tag>
+              <span class="t-12 c-3 num qa-obj-tl-time">{{ t.time.slice(5) }}</span>
+            </div>
+          </a-tooltip>
         </a-timeline-item>
       </a-timeline>
     </div>
@@ -51,29 +57,24 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
     <div class="qa-obj-sec qa-obj-last">
       <div class="qa-obj-h"><span class="t-16 fw-600">可执行动作</span></div>
       <div class="qa-act" :class="{ hl: highlight }">
-        <div class="qa-act-main">
-          <div>发放复购召回优惠券</div>
-          <div v-if="submitted" class="c-3 qa-obj-ell">王敏 10-25 15:36 提交 · 待 赵磊 审批</div>
-          <div v-else-if="pending" class="c-3 qa-obj-ell">王敏 10-25 15:36 发起 · 赵磊 审批</div>
-          <div v-else class="c-3 qa-obj-ell">条件满足 · 影响 3,812 位客户</div>
-        </div>
+        <a-tooltip :title="submitted ? '王敏 10-25 15:36 提交 · 待 赵磊 审批' : pending ? '王敏 10-25 15:36 发起 · 赵磊 审批' : '条件满足 · 影响 3,812 位客户'" placement="left">
+          <span class="qa-act-main qa-obj-ell">发放复购召回优惠券</span>
+        </a-tooltip>
         <span v-if="submitted" class="qa-act-status"><ClockCircleOutlined />待审批</span>
         <span v-else-if="pending" class="qa-act-status"><ClockCircleOutlined />待确认</span>
         <a-tooltip v-else :title="reason"><a-button size="small" :disabled="readonly" @click="emit('run')"><span>发起</span></a-button></a-tooltip>
       </div>
       <div class="qa-act">
-        <div class="qa-act-main">
-          <div>指派大区经理跟进</div>
-          <div class="c-3 qa-obj-ell">王敏 10-25 15:20 发起 · 指派 陈杰</div>
-        </div>
+        <a-tooltip title="王敏 10-25 15:20 发起 · 指派 陈杰" placement="left">
+          <span class="qa-act-main qa-obj-ell">指派大区经理跟进</span>
+        </a-tooltip>
         <span class="qa-act-status"><SyncOutlined />执行中</span>
       </div>
       <div class="qa-act">
-        <div class="qa-act-main">
-          <div class="c-3">调整大区预算</div>
-          <div class="c-3 qa-obj-ell">条件不满足 · 需财务审批权限</div>
-        </div>
-        <a-tooltip :title="reason || '条件不满足'"><a-button size="small" disabled><span>发起</span></a-button></a-tooltip>
+        <a-tooltip title="条件不满足 · 需财务审批权限" placement="left">
+          <span class="qa-act-main qa-obj-ell c-3">调整大区预算</span>
+        </a-tooltip>
+        <a-tooltip :title="reason || '条件不满足 · 需财务审批权限'"><a-button size="small" disabled><span>发起</span></a-button></a-tooltip>
       </div>
     </div>
   </aside>
@@ -92,7 +93,9 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
 .qa-obj-tl :deep(.ant-timeline-item) { padding-bottom: 6px; }
 .qa-obj-tl :deep(.ant-timeline-item-last) { padding-bottom: 0; }
 .qa-obj-tl :deep(.ant-timeline-item-last > .ant-timeline-item-content) { min-height: 0; }
-.qa-obj-tl-row { display: flex; justify-content: space-between; }
+.qa-obj-tl-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.qa-obj-tl-tag { margin-inline-end: 0; flex: none; }
+.qa-obj-tl-time { margin-left: auto; flex: none; }
 .qa-obj-ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qa-act { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: var(--border); }
 .qa-act:first-of-type { border-top: 0; padding-top: 0; }

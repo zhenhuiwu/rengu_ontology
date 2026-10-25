@@ -17,6 +17,7 @@ import { paginate } from '@/mock/paginate';
 import { fmtInt, fmtMoney } from '@/mock/format';
 import { OBJ_TYPES, OBJ_SCOPE, objType, inScope, previewDenied, KIND_LABEL, type AskScope } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
+import InfoTip from '../qa/InfoTip.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -63,6 +64,12 @@ watch(() => [route.query.drawer, route.query.drawer2, pv.active.value], () => {
 const pvScope = computed(() => pv.scopeOf(type.value.label));
 const scopedRows = computed(() => type.value.rows().filter((r) => inScope(type.value.kind, r, pvScope.value)));
 const pvNoAccess = computed(() => pvScope.value === '无权限');
+/** 可见范围说明放在“筛选”旁的 ⓘ 里，不在标题下另起一行 */
+const scopeText = computed(() => (pv.active.value && pvNoAccess.value
+  ? `${pv.userName.value} ${pv.scopeLabel(type.value.label)}，结果和计数都为空。`
+  : pv.active.value
+    ? `${pv.userName.value} 的${pv.scopeLabel(type.value.label)}。范围外的${type.value.label}结果和计数都不含。`
+    : `可见范围：${OBJ_SCOPE.visible}。${OBJ_SCOPE.hidden}无权限，结果和计数都不含。`));
 
 const byKw = computed(() => scopedRows.value.filter((r) => !kw.value || type.value.kw(r).toLowerCase().includes(kw.value)));
 const match = (r: any, skip?: string) => type.value.facets.every((f) => f.key === skip || !selected.value[f.key].length || selected.value[f.key].includes(f.get(r)));
@@ -141,14 +148,9 @@ function openDetail(r: any) {
 <template>
   <div class="os">
     <div class="panel os-side">
-      <div class="panel-head"><span class="t-16 fw-600">筛选</span>
+      <div class="panel-head"><span class="os-side-title"><span class="t-16 fw-600">筛选</span><LockOutlined class="c-3" /><InfoTip :title="scopeText" /></span>
         <a v-if="conds.length" class="t-12" @click="clearAll">清除全部</a></div>
       <div class="os-side-body">
-        <div class="os-scope t-12 c-3">
-          <template v-if="pv.active.value && pvNoAccess"><LockOutlined /> {{ pv.userName.value }} {{ pv.scopeLabel(type.label) }}，结果和计数都为空。</template>
-          <template v-else-if="pv.active.value"><LockOutlined /> {{ pv.userName.value }} 的{{ pv.scopeLabel(type.label) }}。范围外的{{ type.label }}结果和计数都不含。</template>
-          <template v-else><LockOutlined /> 可见范围：{{ OBJ_SCOPE.visible }}。{{ OBJ_SCOPE.hidden }}无权限，结果和计数都不含。</template>
-        </div>
         <div v-for="f in facetValues" :key="f.key" class="os-facet">
           <div class="os-facet-head"><span class="fw-600">{{ f.label }}</span>
             <a v-if="selected[f.key].length" class="t-12" @click="patch({ [f.key]: null, page: null })">清除</a></div>
@@ -206,7 +208,7 @@ function openDetail(r: any) {
 .os { display: flex; gap: var(--gap); height: 100%; min-height: 0; }
 .os-side { width: 248px; flex: none; }
 .os-side-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-.os-scope { padding: 8px; background: var(--g2); border-radius: var(--radius); }
+.os-side-title { display: inline-flex; align-items: center; gap: 6px; }
 .os-facet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
 .os-opt { display: flex; justify-content: space-between; align-items: center; height: 28px; cursor: pointer; }
 .os-opt.off { cursor: default; }

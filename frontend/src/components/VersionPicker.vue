@@ -18,14 +18,14 @@ function pick(v: string) { visible.value = false; view(v); }
       <div class="vp">
         <div class="vp-head fw-600">发布记录</div>
         <ul class="vp-list">
-          <li v-for="r in RELEASES" :key="r.ver" class="vp-item" :class="{ on: r.ver === shown() }" @click="pick(r.ver)">
+          <li v-for="r in RELEASES" :key="r.ver" class="vp-item" :class="{ on: r.ver === shown() }" :title="r.note" @click="pick(r.ver)">
             <div class="vp-row">
               <span class="num fw-600">{{ r.ver }}</span>
-              <a-tag v-if="r.ver === app.ontologyVersion" color="blue" class="vp-tag">当前</a-tag>
+              <a-tag v-if="r.ver === app.ontologyVersion" class="vp-tag">当前</a-tag>
               <span class="vp-sp" />
-              <span class="t-12 c-3 num">{{ r.publishedAt }}</span>
+              <span class="vp-by">{{ r.by }}</span>
+              <span class="num vp-at">{{ r.publishedAt }}</span>
             </div>
-            <div class="t-12 c-3">{{ r.by }} · {{ r.note }}</div>
           </li>
         </ul>
       </div>
@@ -46,5 +46,7 @@ function pick(v: string) { visible.value = false; view(v); }
 .vp-row { display: flex; align-items: center; gap: 8px; }
 .vp-tag { margin: 0; }
 .vp-sp { flex: 1; }
+.vp-by { flex: none; white-space: nowrap; }
+.vp-at { flex: none; white-space: nowrap; }
 .vp-caret { color: var(--g8); }
 </style>

@@ -17,6 +17,7 @@ import { CUR_VERSION, EVAL_QS, NEXT_VERSION, T_METRICS, crById, metricLabel, pla
 import { CHANGE_REQUESTS, CR_DETAILS, changeRow, registerChange } from '@/mock/changes';
 import { tuning, addCert, ME } from './state';
 import CrTag from './CrTag.vue';
+import InfoTip from '../../qa/InfoTip.vue';
 import StartChangeModal from '../parts/StartChangeModal.vue';
 import { useDraftView, allDrafts } from '../parts/useDraftView';
 
@@ -41,7 +42,8 @@ const pending = computed(() => tuning.feedbacks.filter((f) => f.status === '待�
 const cols = [
   { title: '编号', key: 'id', width: 76 },
   { title: '时间', key: 'time', width: 110 },
-  { title: '用户', key: 'user', width: 150 },
+  { title: '用户', key: 'user', width: 72 },
+  { title: '部门', key: 'dept', width: 110, ellipsis: true },
   { title: '问题', key: 'question', width: 200, ellipsis: true },
   { title: '回答', key: 'answer', ellipsis: true },
   { title: '用户说明', key: 'reason', width: 190, ellipsis: true },
@@ -153,7 +155,8 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
       <template #bodyCell="{ column, record }">
         <span v-if="column.key === 'id'" class="num c-3">{{ record.id }}</span>
         <span v-else-if="column.key === 'time'" class="num c-2">{{ record.time.slice(5) }}</span>
-        <span v-else-if="column.key === 'user'" class="c-1">{{ record.user }} <span class="c-3 t-12">{{ record.dept }}</span></span>
+        <span v-else-if="column.key === 'user'" class="c-1">{{ record.user }}</span>
+        <span v-else-if="column.key === 'dept'" class="c-1" :title="record.dept">{{ record.dept }}</span>
         <span v-else-if="column.key === 'question'" class="c-1" :title="record.question">{{ record.question }}</span>
         <span v-else-if="column.key === 'answer'" class="c-2" :title="record.answer">{{ record.answer }}</span>
         <span v-else-if="column.key === 'reason'" class="c-2" :title="record.reason">{{ record.reason }}</span>
@@ -189,10 +192,9 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
       <div class="qd-meta">
         <span class="t-12 c-3">用户</span><span class="t-14 c-1">{{ cur.user }} · {{ cur.dept }}</span>
         <span class="t-12 c-3">时间</span><span class="t-14 c-1 num">{{ cur.time }}</span>
-        <span class="t-12 c-3">状态</span><span class="t-14" :class="stCls(cur.status)">{{ cur.status }}<span v-if="cur.handler" class="c-3"> · {{ cur.handler }}</span></span>
+        <span class="t-12 c-3">状态</span><span class="t-14 qd-head" :class="stCls(cur.status)">{{ cur.status }}<span v-if="cur.handler" class="c-3"> · {{ cur.handler }}</span><InfoTip v-if="cur.status === '待发布生效' && cur.resolvedBy" :title="`${cur.resolvedBy} 已为${cur.fix.target}补充同义词“${cur.fix.text}”，变更单已通过，随 ${NEXT_VERSION} 发布后生效；生效前问数仍按当前版本 ${CUR_VERSION} 回答，发布前自动回放 ${relEvals} 道相关评测题。`" /></span>
         <span class="t-12 c-3">关联</span><span class="t-14"><CrTag v-if="isCr(cur.resolvedBy)" :id="cur.resolvedBy!" /><span v-else class="c-2 num">{{ cur.resolvedBy ?? '--' }}</span></span>
       </div>
-      <div v-if="cur.status === '待发布生效' && cur.resolvedBy" class="t-12 c-2">{{ cur.resolvedBy }} 已为{{ cur.fix.target }}补充同义词“{{ cur.fix.text }}”，变更单已通过，随 {{ NEXT_VERSION }} 发布后生效；生效前问数仍按当前版本 {{ CUR_VERSION }} 回答，发布前自动回放 {{ relEvals }} 道相关评测题。</div>
       <div class="qd-sec">
         <div class="t-14 fw-600 c-1">问题与回答</div>
         <div class="qd-row"><span class="t-12 c-3 qd-k">问题</span><span class="t-14 c-1">{{ cur.question }}</span></div>
@@ -200,11 +202,10 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
         <div class="qd-row"><span class="t-12 c-3 qd-k">说明</span><span class="t-14 c-2">{{ cur.reason }}</span></div>
       </div>
       <div class="qd-sec">
-        <div class="t-14 fw-600 c-1">建议修正 · {{ cur.fix.kind }}</div>
-        <div class="t-14 c-1">{{ cur.fix.text }} → {{ cur.fix.target }}</div>
-        <div v-if="cur.fix.kind === '认证问答' && planFor(cur)" class="t-12 c-2">语义计划：{{ planText(planFor(cur)!) }}</div>
-        <div v-if="certBlock(cur)" class="t-12 c-3">转认证问答：{{ certBlock(cur) }}</div>
-        <div v-if="existing(cur)" class="t-12 c-3">已有认证问答 {{ existing(cur)!.id }}，转为认证问答时会把用户原话加为同问法</div>
+        <div class="qd-head"><span class="t-14 fw-600 c-1">建议修正 · {{ cur.fix.kind }}</span>
+          <InfoTip v-if="certBlock(cur) || existing(cur)" :title="[certBlock(cur) ? `转认证问答：${certBlock(cur)}` : '', existing(cur) ? `已有认证问答 ${existing(cur)!.id}，转为认证问答时会把用户原话加为同问法` : ''].filter(Boolean).join('；')" /></div>
+        <div class="qd-row"><span class="t-12 c-3 qd-k">修正</span><span class="t-14 c-1">{{ cur.fix.text }} → {{ cur.fix.target }}</span></div>
+        <div v-if="cur.fix.kind === '认证问答' && planFor(cur)" class="qd-row"><span class="t-12 c-3 qd-k">计划</span><span class="t-14 c-1 qd-ell" :title="planText(planFor(cur)!)">{{ planText(planFor(cur)!) }}</span></div>
       </div>
     </div>
   </a-drawer>

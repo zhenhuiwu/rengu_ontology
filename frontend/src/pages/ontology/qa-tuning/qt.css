@@ -26,3 +26,11 @@
 .qd-f { display: flex; align-items: center; gap: 8px; }
 .qd-l { width: 56px; flex: none; }
 .qd-c { flex: 1; min-width: 0; }
+/* 抽屉内列表：每行一行字，次要信息进列或悬停 */
+.qd-line { display: flex; align-items: center; gap: 12px; height: 36px; border-bottom: 1px solid var(--border); min-width: 0; }
+.qd-line-h { height: 32px; background: var(--g2); padding: 0 0; }
+.qd-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.qd-id { width: 64px; flex: none; padding-left: 4px; }
+.qd-q { width: 180px; flex: none; }
+.qd-kind { width: 80px; flex: none; }
+.qd-half { flex: 1; }

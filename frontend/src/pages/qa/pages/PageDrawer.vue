@@ -15,6 +15,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { useConfirmStore } from '@/stores/confirm';
 import CardPreview from './CardPreview.vue';
+import InfoTip from '../InfoTip.vue';
 import { PEOPLE, PAGE_SCOPES, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
 
 const props = defineProps<{ page?: QaPageFull; tab: string; readonly: boolean; reason: string }>();
@@ -169,14 +170,13 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
     </template>
     <div v-if="page" class="pd">
       <div class="pd-meta">
-        <div><span class="c-3">数据截至</span> <span class="num c-1">{{ page.dataAsOf }}</span><span v-if="page.status === '刷新失败'" class="tl-failed"> · 刷新失败</span></div>
+        <div><span class="c-3">数据截至</span> <span class="num c-1">{{ page.dataAsOf }}</span><span v-if="page.status === '刷新失败'" class="tl-failed"> · 刷新失败</span> <InfoTip v-if="page.statusNote" :title="page.statusNote" /></div>
         <div><span class="c-3">范围</span> <span class="c-1">{{ page.scope }}</span></div>
         <div><span class="c-3">刷新</span> <span class="c-1">{{ freqLabel(page.refresh) }}</span><span class="c-3"> · 最近 {{ page.lastRefresh.slice(5) }}</span></div>
-        <div class="pd-ell"><span class="c-3">来源</span> <span class="c-1">{{ page.source }}</span></div>
+        <div class="pd-ell" :title="page.source"><span class="c-3">来源</span> <span class="c-1">{{ page.source }}</span></div>
         <div><span class="c-3">共享</span> <span class="c-1">{{ page.share.mode === '仅自己' ? '仅自己' : page.share.mode === '所在部门' ? '所在部门' : `${page.share.members.length} 位成员` }}</span></div>
         <div><span class="c-3">订阅</span> <span class="c-1">{{ page.sub.on ? `${page.sub.channel} · ${page.sub.receivers.length} 人` : '未开启' }}</span></div>
       </div>
-      <div v-if="page.statusNote" class="t-12" :class="page.status === '刷新失败' ? 'tl-failed' : 'c-2'">{{ page.statusNote }}</div>
 
       <a-tabs v-model:active-key="tabV" size="small">
         <a-tab-pane key="preview" :tab="`预览（${page.cards.length}）`" />
@@ -199,12 +199,12 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
           <CardPreview v-for="(c, i) in pagedCards" :key="c.key" :card="c" :index="(cpage - 1) * CSIZE + i + 1" />
         </div>
         <div v-else class="pd-edit">
-          <div class="t-12 c-3">拖动左侧手柄调整顺序；移除的卡片保存后从页面删除，可在问数工作台重新固定。</div>
+          <div class="t-12 c-3 pd-ell" title="拖动左侧手柄调整顺序；移除的卡片保存后从页面删除，可在问数工作台重新固定。">拖动左侧手柄调整顺序；移除的卡片保存后从页面删除，可在问数工作台重新固定。</div>
           <div v-for="(c, i) in pagedCards" :key="c.key" class="pd-erow" draggable="true"
             @dragstart="dragFrom = (cpage - 1) * CSIZE + i" @dragover.prevent @drop="onDrop((cpage - 1) * CSIZE + i)">
             <HolderOutlined class="c-3 pd-handle" />
             <span class="num c-3 t-12">{{ (cpage - 1) * CSIZE + i + 1 }}</span>
-            <span class="pd-ell c-1">{{ c.title }}</span>
+            <span class="pd-ell c-1" :title="c.title">{{ c.title }}</span>
             <span class="t-12 c-3">{{ c.viz }} · {{ c.metric }} {{ c.version }}</span>
             <a-button size="small" type="text" @click="removeCard((cpage - 1) * CSIZE + i)"><DeleteOutlined />移除</a-button>
           </div>
@@ -267,7 +267,7 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
             </div>
             <div class="pd-members">
               <div v-for="m in pagedMembers" :key="m.name" class="pd-mrow">
-                <span class="c-1 pd-mname">{{ m.name }}</span><span class="t-12 c-3 pd-ell">{{ m.dept }}</span>
+                <span class="c-1 pd-mname">{{ m.name }}</span><span class="c-1 pd-ell" :title="m.dept">{{ m.dept }}</span>
                 <a-select v-model:value="m.perm" size="small" :disabled="readonly" class="pd-s" :options="[{ value: '可查看', label: '可查看' }, { value: '可编辑', label: '可编辑' }]" />
                 <a-button size="small" type="text" :disabled="readonly" @click="share.members = share.members.filter((x) => x.name !== m.name)">移除</a-button>
               </div>

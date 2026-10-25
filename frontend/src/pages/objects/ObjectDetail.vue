@@ -23,6 +23,7 @@ import {
   type AskScope, type ObjAction,
 } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
+import InfoTip from '../qa/InfoTip.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -193,10 +194,8 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
               <div class="t-16 fw-600 od-sec-title">关键指标</div>
               <div class="od-kpis">
                 <div v-for="k in kpis" :key="k.label" class="od-kpi">
-                  <div class="c-3">{{ k.label }}</div>
-                  <div><span class="t-20 fw-600 num">{{ k.value }}</span> <span class="c-3">{{ k.unit }}</span></div>
-                  <div class="t-12" :class="k.tone === 'down' ? 'c-2' : 'c-3'">{{ k.compare || ' ' }}</div>
-                  <div class="t-12 c-3">口径：{{ k.caliber || '未登记口径' }}</div>
+                  <div class="od-kpi-label"><span class="c-3 od-ell" :title="k.label">{{ k.label }}</span><InfoTip :title="`口径：${k.caliber || '未登记口径'}`" /></div>
+                  <div class="od-ell" :title="k.compare"><span class="t-20 fw-600 num">{{ k.value }}</span> <span class="c-3">{{ k.unit }}</span> <span v-if="k.compare" class="t-12 num" :class="k.tone === 'down' ? 'c-2' : 'c-3'">{{ k.compare }}</span></div>
                 </div>
               </div>
             </div>
@@ -218,7 +217,7 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
                 <div v-for="it in relItems(g.key, g.items)" :key="it.kind + it.id" class="od-rel-row">
                   <span v-if="relDenied(it)" class="c-3">无权查看</span>
                   <ObjRef v-else :kind="it.kind" :id="it.id">{{ it.label }}</ObjRef>
-                  <span v-if="!relDenied(it)" class="c-3 od-ell">{{ it.note }}</span>
+                  <span v-if="!relDenied(it)" class="c-1 od-ell" :title="it.note">{{ it.note }}</span>
                 </div>
               </template>
             </div>
@@ -252,10 +251,9 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
           <div class="panel-head"><span class="t-16 fw-600">可执行动作</span></div>
           <div class="od-acts">
             <div v-for="a in actions" :key="a.key" class="od-act" :class="{ hl: pending === a.key }">
-              <div class="od-act-main">
-                <div>{{ a.name }}</div>
-                <div class="t-12 c-3 od-ell">{{ a.blocked || a.desc }}</div>
-              </div>
+              <a-tooltip :title="a.blocked || a.desc" placement="left">
+                <span class="od-act-main od-ell" :class="{ 'c-3': !!a.blocked }">{{ a.name }}</span>
+              </a-tooltip>
               <span v-if="stateOf(a)" class="c-3 od-act-state">{{ stateOf(a) }}</span>
               <a-tooltip v-else :title="readonly ? reason : a.blocked">
                 <a-button size="small" :disabled="readonly || !!a.blocked" @click="run(a)">发起</a-button>
@@ -300,6 +298,8 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 .od-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: var(--border); border-radius: var(--radius); }
 .od-kpi { padding: 12px 16px; display: flex; flex-direction: column; gap: 2px; }
 .od-kpi + .od-kpi { border-left: var(--border); }
+.od-kpi-label { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.od-kpi-label .od-ell { flex: 0 1 auto; }
 .od-rels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
 .od-rel { border: var(--border); border-radius: var(--radius); padding: 4px 12px 8px; }
 .od-rel-head { display: flex; justify-content: space-between; align-items: center; height: 36px; border-bottom: var(--border); }
@@ -311,7 +311,7 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 .od-acts { padding: 4px 0; }
 .od-act { display: flex; align-items: center; gap: 12px; padding: 8px 16px; }
 .od-act.hl { background: var(--brand-bg); }
-.od-act-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.od-act-main { flex: 1; min-width: 0; }
 .od-act-state { flex: none; }
 .od-nowrap { white-space: nowrap; }
 .od-asks { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; }

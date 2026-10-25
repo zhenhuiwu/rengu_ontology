@@ -16,6 +16,7 @@ import { tuning, NOW, ME } from './state';
 import CrTag from './CrTag.vue';
 import MetricRef from './MetricRef.vue';
 import PlanView from './PlanView.vue';
+import InfoTip from '../../qa/InfoTip.vue';
 
 defineProps<{ readonly: boolean; reason?: string }>();
 const route = useRoute();
@@ -137,12 +138,11 @@ const removeVariant = (c: CertQa, v: string) => { c.variants = c.variants.filter
       </div>
       <div v-if="cur.cr || cur.note" class="qd-note">
         <CrTag v-if="cur.cr" :id="cur.cr" />
-        <span class="t-12 c-warning">{{ cur.note }}</span>
+        <span class="t-12 c-warning qd-ell qd-grow" :title="cur.note">{{ cur.note }}</span>
       </div>
       <div class="qd-sec">
-        <div class="t-14 fw-600 c-1">语义计划</div>
+        <div class="qd-head"><span class="t-14 fw-600 c-1">语义计划</span><InfoTip title="本体查询模块按此计划生成达梦 DM8、金仓 KES 的查询；问数不写 SQL。" /></div>
         <PlanView :plan="cur.plan" />
-        <div class="t-12 c-3">本体查询模块按此计划生成达梦 DM8、金仓 KES 的查询；问数不写 SQL。</div>
       </div>
       <div class="qd-sec">
         <div class="t-14 fw-600 c-1">同问法（{{ cur.variants.length }}）</div>

@@ -3,6 +3,7 @@
 import { computed, ref, watch } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
 import CardPreview from './CardPreview.vue';
+import InfoTip from '../InfoTip.vue';
 import UseTemplatePop from './UseTemplatePop.vue';
 import type { QaTemplate, TplCreate } from '@/mock/qa-pages';
 
@@ -15,12 +16,14 @@ const calibers = computed(() => [...new Set((props.tpl?.cards ?? []).map((c) => 
 </script>
 
 <template>
-  <a-drawer :open="!!tpl" :width="760" :title="tpl ? `模板预览 · ${tpl.name}` : ''" @close="emit('close')">
+  <a-drawer :open="!!tpl" :width="760" @close="emit('close')">
+    <template #title>
+      <span v-if="tpl" class="td-title">模板预览 · {{ tpl.name }} <InfoTip :title="`${tpl.desc}。模板只含卡片结构和口径，不含数据；新建后按所选范围取数，示例数值仅供预览。`" /></span>
+    </template>
     <template #extra>
       <UseTemplatePop v-if="tpl" :tpl="tpl" size="middle" primary :disabled="readonly" :reason="reason" @create="(e) => emit('create', e)" />
     </template>
     <div v-if="tpl" class="td">
-      <div class="c-2">{{ tpl.desc }}</div>
       <div class="td-meta">
         <span><span class="c-3">场景</span> {{ tpl.scene }}</span>
         <span><span class="c-3">提供方</span> {{ tpl.provider }}</span>
@@ -30,7 +33,6 @@ const calibers = computed(() => [...new Set((props.tpl?.cards ?? []).map((c) => 
       <div class="td-row"><span class="c-3 t-12">口径版本</span><a-tag v-for="c in calibers" :key="c">{{ c }}</a-tag></div>
       <div class="td-grid"><CardPreview v-for="(c, i) in cards" :key="c.key" :card="c" :index="(page - 1) * SIZE + i + 1" /></div>
       <AppPagination v-model:page="page" variant="simple" :total="tpl.cards.length" :size="SIZE" unit="张卡片" />
-      <div class="t-12 c-3">模板只含卡片结构和口径，不含数据；新建后按所选范围取数，示例数值仅供预览。</div>
     </div>
   </a-drawer>
 </template>
@@ -38,6 +40,7 @@ const calibers = computed(() => [...new Set((props.tpl?.cards ?? []).map((c) => 
 <style scoped>
 .td { display: flex; flex-direction: column; gap: 10px; }
 .td-meta { display: flex; gap: 24px; }
+.td-title { display: inline-flex; align-items: center; gap: 8px; }
 .td-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 </style>

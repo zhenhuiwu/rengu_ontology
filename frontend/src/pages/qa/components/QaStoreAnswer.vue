@@ -8,6 +8,7 @@ import { computed } from 'vue';
 import { ApartmentOutlined, DownloadOutlined } from '@ant-design/icons-vue';
 import { QA_EC_STORES, fmtMoney, fmtInt } from '@/mock';
 import { useQueryPage } from '../useQueryParam';
+import AppPagination from '@/components/AppPagination.vue';
 
 const PAGE_SIZE = 10;
 const rows = QA_EC_STORES;
@@ -27,9 +28,8 @@ const columns = [
   { title: '环比', dataIndex: 'mom', key: 'mom', align: 'right' as const },
   { title: '订单数', dataIndex: 'orders', key: 'orders', align: 'right' as const },
 ];
-const pagination = computed(() => (paged
-  ? { current: current.value, pageSize: PAGE_SIZE, size: 'small' as const, showSizeChanger: false, onChange: (p: number) => { page.value = p; } }
-  : false));
+const pageRows = computed(() => (paged ? rows.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE) : rows));
+const pageModel = computed({ get: () => current.value, set: (p: number) => { page.value = p; } });
 </script>
 
 <template>
@@ -42,10 +42,10 @@ const pagination = computed(() => (paged
     <p class="qa-sa-text">2026 年 9 月，华东 {{ rows.length }} 家重点门店销售额（含税）合计 <span class="fw-600 num">{{ f1(total) }} 万元</span>，按销售额从高到低排列。</p>
     <div class="qa-sa-box">
       <div class="qa-sa-box-head">
-        <span>按门店拆分<span class="c-3 qa-sa-count">共 {{ rows.length }} 行</span></span>
+        <span>按门店拆分</span>
         <a-button size="small"><template #icon><DownloadOutlined /></template>导出</a-button>
       </div>
-      <a-table size="small" :columns="columns" :data-source="rows" row-key="key" :pagination="pagination" class="qa-sa-tbl">
+      <a-table size="small" :columns="columns" :data-source="pageRows" row-key="key" :pagination="false" class="qa-sa-tbl">
         <template #bodyCell="{ column, record, index }">
           <span v-if="column.key === 'rank'" class="c-3 num">{{ (current - 1) * PAGE_SIZE + index + 1 }}</span>
           <span v-else-if="column.key === 'sales'" class="num">{{ f1(record.sales) }}</span>
@@ -63,6 +63,7 @@ const pagination = computed(() => (paged
           </a-table-summary>
         </template>
       </a-table>
+      <AppPagination v-if="paged" v-model:page="pageModel" variant="simple" :total="rows.length" :size="PAGE_SIZE" unit="行" :empty="false" class="qa-sa-pager" />
     </div>
   </div>
 </template>
@@ -74,10 +75,9 @@ const pagination = computed(() => (paged
 .qa-sa-text { margin: 0 0 8px; }
 .qa-sa-box { border: var(--border); border-radius: var(--radius); padding: 8px 12px; }
 .qa-sa-box-head { display: flex; justify-content: space-between; align-items: center; height: 24px; margin-bottom: 4px; }
-.qa-sa-count { margin-left: 8px; }
 .qa-sa-tbl :deep(.ant-table-small .ant-table-thead > tr > th),
 .qa-sa-tbl :deep(.ant-table-small .ant-table-tbody > tr > td),
 .qa-sa-tbl :deep(.ant-table-small .ant-table-summary td) { padding-top: 6px; padding-bottom: 6px; }
 .qa-sa-sum :deep(td) { background: var(--g2); }
-.qa-sa-tbl :deep(.ant-table-pagination.ant-pagination) { margin: 8px 0 0; }
+.qa-sa-pager { margin-top: 8px; }
 </style>

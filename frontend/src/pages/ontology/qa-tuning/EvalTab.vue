@@ -12,6 +12,7 @@ import { paginate } from '@/mock';
 import { EVAL_QS, EVAL_GROUPS, planText, passRate, type EvalRun, type EvalQ, type FailKind } from '@/mock/qa-tuning';
 import { tuning } from './state';
 import CrTag from './CrTag.vue';
+import InfoTip from '../../qa/InfoTip.vue';
 
 defineProps<{ readonly: boolean; reason?: string }>();
 const route = useRoute();
@@ -63,7 +64,7 @@ const groupCount = (g: string) => EVAL_QS.filter((x) => x.group === g).length;
 /* 抽屉 */
 const cur = computed(() => tuning.runs.find((r) => r.id === q('run')));
 const rowProps = (r: EvalRun) => ({ class: r.id === q('run') ? 'qt-row-on' : '', onClick: () => setQuery({ run: r.id }) });
-const FSIZE = 6;
+const FSIZE = 12;
 const fpage = ref(1);
 watch(() => cur.value?.id, () => { fpage.value = 1; });
 const fpaged = computed(() => paginate(cur.value?.fails ?? [], { page: fpage.value, size: FSIZE }));
@@ -152,15 +153,16 @@ const trigText = (r: EvalRun) => crsOf(r).reduce((t, id) => t.replace(id + ' ', 
         <span class="t-12 c-3">通过率</span><span class="t-14 c-1 num">{{ cur.status === '已完成' ? `${pct(passRate(cur))}（${cur.passed}/${cur.total}）` : cur.status }}</span>
         <span class="t-12 c-3">失败</span><span class="t-14 num" :class="cur.fails.length ? 'tl-failed' : 'c-1'">{{ cur.status === '已完成' ? `${cur.fails.length} 题` : '--' }}</span>
       </div>
-      <div v-if="crsOf(cur).length || cur.note" class="qd-note"><CrTag v-for="id in crsOf(cur)" :key="id" :id="id" /><span class="t-12 c-2">{{ cur.note }}</span></div>
+      <div v-if="crsOf(cur).length || cur.note" class="qd-note"><CrTag v-for="id in crsOf(cur)" :key="id" :id="id" /><span class="t-12 c-2 qd-ell qd-grow" :title="cur.note">{{ cur.note }}</span></div>
 
       <div v-if="replayQs.length" class="qd-sec">
         <div class="t-14 fw-600 c-1">将回放的题目（{{ replayQs.length }}）</div>
         <div class="qd-list">
-          <div v-for="x in replayQs" :key="x.id" class="qd-item">
-            <div class="qd-head"><span class="num c-3 t-12">{{ x.id }}</span><span class="t-14 c-1">{{ x.question }}</span></div>
-            <div class="t-12 c-2">当前期望：{{ planText(x.expect) }}</div>
-            <div class="t-12 c-3">{{ x.last === '失败' ? '当前版本未通过；' : '' }}{{ REPLAY_HINT[x.cr!] }}</div>
+          <div v-for="x in replayQs" :key="x.id" class="qd-line">
+            <span class="num c-3 qd-id">{{ x.id }}</span>
+            <span class="c-1 qd-q qd-ell" :title="x.question">{{ x.question }}</span>
+            <span class="c-1 qd-grow qd-ell" :title="`当前期望：${planText(x.expect)}`">{{ planText(x.expect) }}</span>
+            <InfoTip :title="`${x.last === '失败' ? '当前版本未通过；' : ''}${REPLAY_HINT[x.cr!]}`" />
           </div>
         </div>
       </div>
@@ -172,10 +174,15 @@ const trigText = (r: EvalRun) => crsOf(r).reduce((t, id) => t.replace(id + ' ', 
         </div>
         <div v-if="!cur.fails.length" class="t-14 c-3">本次全部通过</div>
         <div class="qd-list">
-          <div v-for="f in fpaged.items" :key="f.qid" class="qd-item">
-            <div class="qd-head"><span class="num c-3 t-12">{{ f.qid }}</span><span class="t-14 c-1 qd-grow">{{ f.question }}</span><span class="t-12 tl-failed">{{ f.kind }}</span></div>
-            <div class="qd-row"><span class="t-12 c-3 qd-k">期望</span><span class="t-12 c-2">{{ f.expect }}</span></div>
-            <div class="qd-row"><span class="t-12 c-3 qd-k">实际</span><span class="t-12 c-1">{{ f.actual }}</span></div>
+          <div class="qd-line qd-line-h c-3">
+            <span class="qd-id">编号</span><span class="qd-q">题目</span><span class="qd-kind">原因</span><span class="qd-half">期望</span><span class="qd-half">实际</span>
+          </div>
+          <div v-for="f in fpaged.items" :key="f.qid" class="qd-line">
+            <span class="num c-3 qd-id">{{ f.qid }}</span>
+            <span class="c-1 qd-q qd-ell" :title="f.question">{{ f.question }}</span>
+            <span class="tl-failed qd-kind qd-ell" :title="f.kind">{{ f.kind }}</span>
+            <span class="c-1 qd-half qd-ell" :title="f.expect">{{ f.expect }}</span>
+            <span class="c-1 qd-half qd-ell" :title="f.actual">{{ f.actual }}</span>
           </div>
         </div>
         <AppPagination v-if="cur.fails.length > FSIZE" v-model:page="fpage" variant="simple" :total="cur.fails.length" :size="FSIZE" unit="个失败用例" />

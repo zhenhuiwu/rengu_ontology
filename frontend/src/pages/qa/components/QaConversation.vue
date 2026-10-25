@@ -34,7 +34,7 @@ watch(() => props.tips.length, async () => { await nextTick(); if (conv.value) c
       <LockOutlined class="c-warning" />
       <span class="qa-b-txt"><span class="fw-600">你问的华南大区不在你的权限范围内</span>（当前可查：大区 = 华东）。</span>
       <span v-if="applied" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
-      <template v-else><a-tag color="warning">权限拦截</a-tag><a-button size="small" @click="emit('apply')">申请权限</a-button></template>
+      <template v-else><a-tag>权限拦截</a-tag><a-button size="small" @click="emit('apply')">申请权限</a-button></template>
     </div>
     <div class="qa-u"><span class="qa-bubble">上个月嘉兴南湖店的销售额？</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
     <div class="qa-b">

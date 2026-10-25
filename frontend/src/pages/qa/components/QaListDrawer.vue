@@ -18,8 +18,8 @@ const title = computed(() => (isFav.value ? '常用问题' : '我的页面'));
 const rows = computed(() => {
   const k = kw.value.trim();
   return isFav.value
-    ? favs.value.filter((f) => !k || f.question.includes(k)).map((f) => ({ id: f.id, name: f.question, meta: `用过 ${f.uses} 次 · 最近 ${f.lastUsed}` }))
-    : QA_PAGE_LIST.filter((p) => !k || p.name.includes(k)).map((p) => ({ id: p.id, name: p.name, meta: `${p.cards} 张卡片 · ${p.updatedAt} 更新${p.shared ? ' · 已共享' : ''}` }));
+    ? favs.value.filter((f) => !k || f.question.includes(k)).map((f) => ({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }))
+    : QA_PAGE_LIST.filter((p) => !k || p.name.includes(k)).map((p) => ({ id: p.id, name: p.name, c1: `${p.cards} 张卡片`, c2: `${p.updatedAt} 更新`, tag: p.shared ? '已共享' : '' }));
 });
 const paged = computed(() => paginate(rows.value, { page: page.value, size: SIZE }));
 watch(() => props.panel, () => { page.value = 1; kw.value = ''; });
@@ -35,10 +35,10 @@ function remove(id: string) { favs.value = favs.value.filter((f) => f.id !== id)
       </a-input>
       <div class="qa-ld-list">
         <div v-for="r in paged.items" :key="r.id" class="qa-ld-item">
-          <div class="qa-ld-main">
-            <div class="qa-ld-name">{{ r.name }}</div>
-            <div class="t-12 c-3">{{ r.meta }}</div>
-          </div>
+          <span class="qa-ld-name" :title="r.name">{{ r.name }}</span>
+          <a-tag v-if="'tag' in r && r.tag" class="qa-ld-tag">{{ r.tag }}</a-tag>
+          <span class="qa-ld-c1 num">{{ r.c1 }}</span>
+          <span class="qa-ld-c2 num">{{ r.c2 }}</span>
           <a-space v-if="isFav" :size="12">
             <a @click="emit('ask', r.name)">提问</a>
             <a-popconfirm title="移出常用问题？" ok-text="移出" cancel-text="取消" @confirm="remove(r.id)"><a class="c-3">移出</a></a-popconfirm>
@@ -55,6 +55,8 @@ function remove(id: string) { favs.value = favs.value.filter((f) => f.id !== id)
 .qa-ld { display: flex; flex-direction: column; gap: 8px; height: 100%; }
 .qa-ld-list { flex: 1; min-height: 0; }
 .qa-ld-item { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: var(--border); }
-.qa-ld-main { flex: 1; min-width: 0; }
-.qa-ld-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qa-ld-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qa-ld-tag { margin-inline-end: 0; flex: none; }
+.qa-ld-c1 { width: 72px; flex: none; white-space: nowrap; }
+.qa-ld-c2 { width: 84px; flex: none; white-space: nowrap; }
 </style>

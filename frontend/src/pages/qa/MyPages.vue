@@ -198,7 +198,7 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
                   </div>
                 </template>
                 <span class="c-1">{{ record.name }}</span>
-                <span v-if="pv.active.value && record.owner !== pv.userName.value" class="t-12 c-3"> · {{ record.owner }} 共享</span>
+                <a-tag v-if="pv.active.value && record.owner !== pv.userName.value" class="mp-tag">{{ record.owner }} 共享</a-tag>
               </a-popover>
             </template>
             <span v-else-if="column.key === 'cards'" class="num">{{ record.cards.length }}</span>
@@ -232,7 +232,7 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
           <template #bodyCell="{ column, record }">
             <span v-if="column.key === 'name'" class="c-1">{{ record.name }}</span>
             <span v-else-if="column.key === 'cards'" class="num">{{ record.cards.length }}</span>
-            <span v-else-if="column.key === 'caliber'" class="c-2">{{ [...new Set(record.cards.map((c: any) => `${c.metric} ${c.version}`))].join('、') }}</span>
+            <span v-else-if="column.key === 'caliber'" class="c-2" :title="[...new Set(record.cards.map((c: any) => `${c.metric} ${c.version}`))].join('、')">{{ [...new Set(record.cards.map((c: any) => `${c.metric} ${c.version}`))].join('、') }}</span>
             <span v-else-if="column.key === 'provider'" class="c-2">{{ record.provider }}</span>
             <span v-else-if="column.key === 'uses'" class="num">{{ record.uses }}</span>
             <span v-else-if="column.key === 'updatedAt'" class="num c-2">{{ record.updatedAt }}</span>
@@ -259,6 +259,7 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
 .mp-kw { width: 240px; }
 .mp-sel { width: 130px; }
 .mp-hint { margin-left: auto; }
+.mp-tag { margin-inline-start: 8px; margin-inline-end: 0; }
 .mp-table { flex: 1; min-height: 0; padding: 0 16px; }
 .mp-table :deep(.ant-table-row) { cursor: pointer; }
 .mp-table :deep(.mp-row-on > td) { background: var(--brand-bg) !important; }
