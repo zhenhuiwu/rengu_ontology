@@ -15,8 +15,7 @@
 |---|---|
 | `/api/ontology/v1` | versioning（版本/发布）、static（静态本体）、dynamic（动态规则）、action、event |
 | `/api/qa/v1` | qa（问数，代理 auto-ontology） |
-| `/api/data/v1` | data（数据连接）、integration 的外部系统接口 `/ext-systems`（Palantir专家） |
-| `/api/ontology/v1` | integration 的动作执行、事件、对账接口（同一模块的另一个路由，Palantir专家） |
+| `/api/data/v1` | data（数据连接）、integration 的 `/ext-systems*`、`/writeback-calls*`（Palantir专家；integration **只**挂这里，不在 `/api/ontology/v1` 下开路由，action-event-api.md:140、:168） |
 | `/api/admin/v1` | admin（用户 sys_user、角色、API Key、配置、审计） |
 | `/api/biz/v1` | biz（演示业务数据：门店、商品、订单等，首页看板和问数对象搜索用；PDE 定） |
 
@@ -141,7 +140,8 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
 - **唯一入口** `create_version(session, change_order_ids, *, rollback_of=None, published_by, note)`：
   - 和调用方的业务写入在**同一事务**里执行；先加全局锁 `ontology.publish`，再追加一行 `ontology_release`。
-  - `published_by` 传 **sys_user.code**（如 `U010001`，取自 `CurrentUser.id`）；存 `published_by_id` 外键 → `sys_user.id`，接口 `by` 仍返回姓名。编号不存在 → 422 `USER_NOT_FOUND`。
+  - `published_by` 传 **sys_user.code**（如 `U010001`，取自 `CurrentUser.id`）；存 `published_by_id` 外键 → `sys_user.id`。编号不存在 → 422 `USER_NOT_FOUND`。
+  - 接口 `Release` 两个人员字段：`by` = 发布人**姓名**（前端 `Release.by`，VersionPicker.vue:26、OntologyOverview.vue:243 直接显示）；`byId` = 发布人 **sys_user.code**（同一外键，团队约定“人员外键在接口上传/返回 sys_user.code”，api-index.md:134、static-api.md:523）。`byId` 是新增字段，前端不读；`ReleaseInfo.published_by_code` 同值。
   - **outbox**：同一事务里写一条 `outbox_event`（topic `release.published`，`event_id = ontology_release:<ver>:release.published`），发布和回滚都写；payload `{ver, parentVer, kind: "release"|"rollback", rollbackOf, changeOrderIds}`。发布回滚，事件一起回滚。
   - 版本号格式 `vYYYY.MM.N`，月份按北京时间算；`parent_id` 指向上一版的 id。
   - 快照 = 各 section 由负责模块组装（`SECTION_OWNERS`：静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths，动态 rules/lifecycles，Palantir actionTypes/eventTypes），段内按前端 id 作键。模块实现 `SnapshotSectionBuilder`（`build_section` + `seed_section`），在 `app/modules/versioning/sections.py` 按段登记；未登记的段沿用上一版。seed 不写空快照：还没有任何模块登记 section 时，versioning seed 经 `SeedSpec.skip_if` **跳过并记一行日志**（不报错，`ontology_release` 为空），全量 `python -m app.cli seed` 在新库上能跑完（`tests/test_seed_fresh_db.py`）；直接调 `seed_snapshot` 仍拒绝空快照。
@@ -312,6 +312,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 | 外部调用 | 表名沿用 `writeback_call`、`ext_system`，归 integration 模块（Palantir专家）；不建 `ext_call` | `app/modules/integration/` |
 | 函数版本 | 函数（Functions）单独存 `fn_version` 表，各函数分别递增版本号；**不走** `create_version`、不写 `ontology_release`（编辑保存 / 回滚直接生成新函数版本） | `app/modules/static/`（PDE 定）、contracts/versioning 规则 11 |
 | 业务数据 | 演示门店、商品、订单归 biz 模块；所有查询由基础层注入行级过滤（§10） | `app/modules/biz/` |
+| 订单列表 | `GET /api/biz/v1/orders`（首页 Home.vue:32-46）：前端下拉选「全部」时客户端**不传** `status` / `channel`（后台不认“全部”）；`kw` = 订单号或门店名包含（不区分大小写，`%`、`_` 按字面）；`cutoff` = `createdAt <= cutoff`，收 `YYYY-MM-DD HH:mm` / `HH:mm:ss`，不带时区按北京时间，只到分钟时含整分钟（与前端 `CUTOFF='2026-10-24 23:00:59'` 一致 **[推断]**），格式错 422 `VALIDATION_FAILED`（`details.fields[].field = "cutoff"`）。响应 = 分页 + `dataAsOf`（`min(cutoff, 当前时间)` 截到分钟，对应页头“数据截至”）；列表项带 `lineCount`（关联子查询，不加载 `lines`），详情带完整 `lines` | `app/modules/biz/router.py` |
 
 ### 后台任务（procrastinate，`app/jobs/__init__.py` + `app/jobs/worker.py`）
 

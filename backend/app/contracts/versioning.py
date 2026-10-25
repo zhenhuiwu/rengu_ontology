@@ -69,6 +69,7 @@ class ReleaseInfo:
     change_order_ids: tuple[str, ...]
     snapshot_sha256: str
     rollback_of: str | None = None
+    published_by_code: str | None = None  # 发布人 sys_user.code（接口 byId）
 
 
 @runtime_checkable

@@ -2,7 +2,8 @@
 { ver, publishedAt: 'YYYY-MM-DD HH:mm', by, note }；额外字段（parentVer、kind、rollbackOf、changeOrderIds）
 不影响前端。字段名由 ApiModel 自动转 camelCase（published_at → publishedAt）；
 by 是“接口名和库列名不同”的示范：库里是 published_by_id 外键 → sys_user，
-模型属性 published_by 取 publisher.name。
+模型属性 published_by 取 publisher.name（前端显示姓名，VersionPicker.vue:26、OntologyOverview.vue:243）；
+byId 是同一外键的 sys_user.code（如 U010001，模型属性 published_by_code），给要按人关联的调用方用。
 """
 
 from pydantic import Field
@@ -14,7 +15,8 @@ from app.modules.versioning.models import ReleaseKind
 class ReleaseOut(ApiModel):
     ver: str
     published_at: DateTimeMin
-    by: str = Field(validation_alias="published_by")
+    by: str = Field(validation_alias="published_by")  # 发布人姓名（前端 Release.by）
+    by_id: str = Field(validation_alias="published_by_code")  # 发布人 sys_user.code（新增，前端不读）
     note: str
     parent_ver: str | None = None
     kind: ReleaseKind = ReleaseKind.publish  # 库里 publish/rollback，接口 发布/回滚

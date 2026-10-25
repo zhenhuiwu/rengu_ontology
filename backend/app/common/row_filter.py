@@ -252,7 +252,7 @@ def valid_row_scope(scope: Any) -> bool:
     )
 
 
-def from_row_scope(scope: dict[str, Any], field_of_prop: dict[str, str] | None = None) -> dict:
+def from_row_scope(scope: Any, field_of_prop: dict[str, str] | None = None) -> dict:
     """前端 RowScope {prop, op, values} → 表达式 jsonb。prop 是显示名时用 field_of_prop 映射到字段名。
 
     前端 RowScope.op 只有正向的 '=' 和 '∈'（roles.ts L12/L49；'in' 视同 '∈'）。

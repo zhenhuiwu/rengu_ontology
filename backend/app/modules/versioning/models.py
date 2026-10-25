@@ -78,6 +78,11 @@ class OntologyRelease(IdMixin, AppendOnlyTableMixin, Base):
         return self.publisher.name
 
     @property
+    def published_by_code(self) -> str:
+        """接口 byId = 发布人 sys_user.code（如 U010001）；库里存 published_by_id 外键。"""
+        return self.publisher.code
+
+    @property
     def parent_ver(self) -> str | None:
         return self.parent.ver if self.parent is not None else None
 

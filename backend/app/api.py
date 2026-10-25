@@ -6,7 +6,7 @@
 | dynamic/action/event | /api/ontology/v1 | 动态 / Palantir   |
 | qa                | /api/qa/v1          | 问数调研员        |
 | data              | /api/data/v1        | 待定（数据连接）  |
-| integration       | /api/data/v1（/ext-systems）+ /api/ontology/v1（动作执行、事件、对账） | Palantir专家 |
+| integration       | /api/data/v1（/ext-systems、/writeback-calls；不在 ontology 下开路由） | Palantir专家 |
 | biz               | /api/biz/v1         | 待定（演示业务数据：门店/商品/订单） |
 
 每个分组路由都挂全局只读守卫（app.common.context.readonly_guard）：带 ?ver / ?previewAs 的写请求 403。
@@ -23,7 +23,6 @@ from app.modules.biz.router import router as biz_router
 from app.modules.data.router import router as data_router
 from app.modules.dynamic.router import router as dynamic_router
 from app.modules.event.router import router as event_router
-from app.modules.integration.router import ext_router as integration_ext_router
 from app.modules.integration.router import router as integration_router
 from app.modules.qa.router import router as qa_router
 from app.modules.static.router import router as static_router
@@ -36,9 +35,8 @@ MOUNTS: list[tuple[str, APIRouter]] = [
     ("ontology", action_router),
     ("ontology", event_router),
     ("qa", qa_router),
-    ("ontology", integration_router),
     ("data", data_router),
-    ("data", integration_ext_router),
+    ("data", integration_router),  # integration 只挂 data（action-event-api.md:140、:168）
     ("biz", biz_router),
     ("admin", admin_router),
 ]
