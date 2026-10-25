@@ -93,7 +93,7 @@ const columns = [
   { title: '来源', key: 'source', width: 180, ellipsis: true },
   { title: '外部系统', dataIndex: 'system', key: 'system', width: 84 },
   { title: '状态', key: 'status', width: 150 },
-  { title: '发起人', dataIndex: 'initiator', key: 'initiator', width: 80 },
+  { title: '发起人', dataIndex: 'initiator', key: 'initiator', width: 124, ellipsis: { showTitle: false } },
   { title: '提交时间', key: 'submittedAt', width: 168 },
 ];
 
@@ -234,6 +234,7 @@ const terminalText = computed(() => {
               <ObjRef v-if="hasObjRef(record.objKind)" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
             </template>
             <template v-else-if="column.key === 'source'"><span :class="record.source.type === '手动' ? 'c-2' : 'num'">{{ sourceText(record) }}</span></template>
+            <template v-else-if="column.key === 'initiator'"><a-tooltip :title="record.initiator" placement="topLeft"><span class="ac-nowrap">{{ record.initiator }}</span></a-tooltip></template>
             <template v-else-if="column.key === 'status'"><span v-if="record.status === '结果未知'" class="tl-attention ac-unk"><QuestionCircleOutlined /> 结果未知 · 待对账</span><a-badge v-else :status="badge(record.status)" :text="record.status" /></template>
             <template v-else-if="column.key === 'submittedAt'"><span class="num">{{ record.submittedAt }}</span></template>
           </template>
@@ -263,12 +264,12 @@ const terminalText = computed(() => {
             <template v-else-if="current.source.type === '规则'"><span class="num">规则 {{ current.source.ruleId }} {{ current.source.ruleVersion }}</span><span v-if="current.source.alertId" class="c-3 num"> · 告警 {{ current.source.alertId }}</span><span class="c-3"> · 命中后自动暂存</span></template>
             <template v-else>{{ sourceText(current) }}</template>
           </a-descriptions-item>
-          <a-descriptions-item label="发起人">{{ current.initiator }}</a-descriptions-item>
+          <a-descriptions-item label="发起人"><span class="ac-nowrap">{{ current.initiator }}</span></a-descriptions-item>
           <a-descriptions-item label="确认人">{{ confirmerOf(current) }}</a-descriptions-item>
           <a-descriptions-item label="审批人" :span="2">{{ current.approver }}</a-descriptions-item>
           <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
-          <a-descriptions-item label="外部系统">{{ current.system }}</a-descriptions-item>
-          <a-descriptions-item label="外部单号"><span class="num">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
+          <a-descriptions-item label="外部系统"><span class="ac-nowrap">{{ current.system }}</span></a-descriptions-item>
+          <a-descriptions-item label="外部单号"><span class="num ac-nowrap">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
         </a-descriptions>
 
         <div class="t-14 fw-600 ac-sub">执行记录</div>
@@ -339,7 +340,7 @@ const terminalText = computed(() => {
       <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px' }">
         <a-descriptions-item label="动作编号"><span class="num">{{ current.id }}</span></a-descriptions-item>
         <a-descriptions-item label="外部系统"><span class="num">{{ current.system }} · {{ ACTION_META[current.action].call }}</span></a-descriptions-item>
-        <a-descriptions-item label="外部单号"><span class="num">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
+        <a-descriptions-item label="外部单号"><span class="num ac-nowrap">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
         <a-descriptions-item label="幂等键"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
       </a-descriptions>
       <div class="ca-impact t-14 c-2">系统已每 15 分钟按幂等键自动查询 {{ current.system }}，仍无法确认。请人工核对后选择结论；对账不会重试写入外部系统。</div>
@@ -378,6 +379,7 @@ const terminalText = computed(() => {
 .ac-pop { width: 300px; display: flex; flex-direction: column; gap: 8px; }
 .ac-radios { display: flex; flex-direction: column; gap: 4px; }
 .ac-unk { white-space: nowrap; }
+.ac-nowrap { white-space: nowrap; }
 .ca-tag { margin-inline-start: 8px; vertical-align: 2px; }
 .ca-target { margin: 8px 0 12px; }
 .ca-impact { margin: 12px 0; padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); }

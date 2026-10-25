@@ -1,18 +1,19 @@
 /**
  * 规则与自动化（本体 · 构建）示例数据。页面：pages/ontology/Rules.vue。
  * 5 条核心规则（R-007 / R-012 / R-015 / R-021 / SM-ORD）来自 dynamic.ts 的 RULES，命中历史取 ALERTS；
- * 另补 10 条规则让列表超过一页，它们的命中只发通知、不生成告警，命中记录在本文件里生成。
+ * 另补 11 条规则让列表超过一页（含大区级 R-027），它们的命中只发通知、不生成告警，命中记录在本文件里生成。
  * 规则版本、指标口径版本都是整数。
  */
 import { seeded } from './format';
 import { RULES, ALERTS, storeOfKey, type Alert } from './dynamic';
+import { REGION_EC } from './qa';
 import { PRODUCTS } from './products';
 import { STORES } from './stores';
 import { ORDERS } from './orders';
 import { ACTIONS } from './actions';
 
 export type RuleStatus = '已发布' | '变更中' | '已停用';
-export type ObjKind = 'store' | 'product' | 'order';
+export type ObjKind = 'store' | 'product' | 'order' | 'region';
 export interface RuleCond { metric?: string; metricVer?: number; field: string; op: string; value: string }
 export interface RuleTrigger { kind: '定时' | '事件'; cron?: string; text: string; eventId?: string; filter?: string }
 export interface AutoStage { enabled: boolean; actionTypeId: string; mapping: { param: string; from: string }[]; confirmer: string }
@@ -23,7 +24,7 @@ export interface RuleDef {
   trigger: RuleTrigger; actionTypeId?: string; autoStage: AutoStage; weekly: number; core: boolean;
 }
 
-const OBJ_LABEL: Record<ObjKind, string> = { store: '门店', product: '商品', order: '订单' };
+const OBJ_LABEL: Record<ObjKind, string> = { store: '门店', product: '商品', order: '订单', region: '大区' };
 export const objKindLabel = (k: ObjKind) => OBJ_LABEL[k];
 
 const AS = (actionTypeId: string, mapping: [string, string][], confirmer: string, enabled = true): AutoStage =>
@@ -53,7 +54,7 @@ export const RULE_DEFS: RuleDef[] = [
     desc: '每周一按销售额（不含税）周环比计算，下降超过 15% 的门店产生告警。',
     conds: [{ metric: 'gmv', metricVer: 3, field: '销售额（不含税）周环比', op: '<', value: '−15.0%' }],
     logic: '且', expr: 'wow(gmv@v3(store, week)) < -0.15', dedupe: '规则 + 门店 + 周', cooldown: '7 天',
-    trigger: { kind: '定时', cron: '0 9 * * 1', text: '每周一 09:00' }, actionTypeId: 'assign_region_manager', autoStage: NO_STAGE('assign_region_manager') },
+    trigger: { kind: '定时', cron: '0 9 * * 1', text: '每周一 09:00' }, autoStage: NO_STAGE() },  // 评审约定：R-021 只产生告警，不绑定、不暂存动作（大区复购召回由 R-027 负责）
   { id: 'SM-ORD', name: RULES['SM-ORD'].name, version: 4, status: '已发布', owner: '孙浩然', core: true, objKind: 'order', level: '高', output: '告警', weekly: 31,
     desc: '订单状态变更不在生命周期 v4 允许的迁移里时产生告警。',
     conds: [{ field: '状态迁移（原 → 新）', op: '∉', value: '生命周期 v4 合法迁移' }],
@@ -97,6 +98,12 @@ export const RULE_DEFS: RuleDef[] = [
     logic: '且', expr: 'order.status = "待支付" AND minutes_since(order.createdAt) > 30', dedupe: '规则 + 订单', cooldown: '不重复',
     trigger: { kind: '定时', cron: '*/15 * * * *', text: '每 15 分钟' }, actionTypeId: 'correct_order_status',
     autoStage: AS('correct_order_status', [['订单', '命中.对象'], ['目标状态', '固定值：已取消'], ['修正原因', '固定值：系统同步乱序']], '订单运营组 孙浩然') },
+  { id: 'R-027', name: '大区复购客户销售额周环比下降', version: 1, status: '已发布', owner: '吴佳', core: false, objKind: 'region', level: '中', output: '通知', weekly: 1,
+    desc: '每周六晚按大区汇总复购客户销售额（不含税），周环比下降超过 8% 时通知营销经理，并把复购召回券暂存到动作中心待确认。',
+    conds: [{ metric: 'gmv', metricVer: 3, field: '复购客户销售额（不含税）周环比', op: '<', value: '−8.0%' }],
+    logic: '且', expr: 'wow(gmv@v3(region, week | customer.isRepeat)) < -0.08', dedupe: '规则 + 大区 + 周', cooldown: '7 天',
+    trigger: { kind: '定时', cron: '0 22 * * 6', text: '每周六 22:00（本周日至周六数据）' }, actionTypeId: 'issue_recall_coupon',
+    autoStage: AS('issue_recall_coupon', [['大区', '命中.对象'], ['召回会员', '大区内 60 天未复购会员'], ['召回活动', '固定值：复购召回'], ['券模板', '固定值：满 99 减 15'], ['面额（元）', '固定值：15.00'], ['使用门槛（元）', '固定值：99.00'], ['有效天数', '固定值：14'], ['发放渠道', '固定值：小程序'], ['预算科目', '固定值：会员召回'], ['召回原因', '固定值：60 天未复购']], '营销经理 吴佳') },
   { id: 'R-025', name: '门店销售额连续 3 天低于目标', version: 1, status: '已停用', owner: '陈立军', core: false, objKind: 'store', level: '中', output: '通知', weekly: 0,
     desc: '已停用：与 R-021 重复，保留历史命中记录。', conds: [{ metric: 'gmv', metricVer: 3, field: '销售额（不含税）/ 日目标', op: '<', value: '90.0%（连续 3 天）' }],
     logic: '且', expr: 'consecutive_days(gmv@v3(store, day) / target(store, day) < 0.9) >= 3', dedupe: '规则 + 门店', cooldown: '7 天',
@@ -141,9 +148,26 @@ const SAMPLE_VALUE: Record<string, (r: () => number) => string> = {
   'R-019': (r) => `${(12 + r() * 5.9).toFixed(2)}%`,
   'R-023': (r) => `待支付 ${31 + Math.floor(r() * 90)} 分钟`,
   'R-026': (r) => `缺货 ${3 + Math.floor(r() * 4)} 次`,
+  'R-027': (r) => `−${(8 + r() * 6).toFixed(1)}%`,
 };
 const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+/** 大区规则：只有华东大区，按周六收盘计算；往前看 26 周，每次命中都暂存过召回券 */
+function regionHits(rule: RuleDef): Hit[] {
+  const r = seeded(20260829);
+  const out: Hit[] = [];
+  const sat = new Date(2026, 9, 24);
+  for (let w = 0; w < 26; w++) {
+    const d = new Date(sat.getFullYear(), sat.getMonth(), sat.getDate() - w * 7);
+    const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const v = SAMPLE_VALUE[rule.id](r);
+    if (day !== '2026-08-29' && r() < 0.35) continue;
+    out.push({ id: `HIT-${rule.id.replace('-', '')}-${day.slice(5).replace('-', '')}00`, ruleId: rule.id, at: `${day} 22:00:${pad(5 + Math.floor(r() * 40))}`,
+      objKind: 'region', objId: REGION_EC.id, objLabel: REGION_EC.name, value: v, threshold: '< −8.0%', alertId: null, result: '已通知' });
+  }
+  return out;
+}
 function synthHits(rule: RuleDef): Hit[] {
+  if (rule.objKind === 'region') return regionHits(rule);
   const r = seeded(rule.id.split('').reduce((h, c) => h * 31 + c.charCodeAt(0), 7) % 100000);
   const out: Hit[] = [];
   const perDay = Math.max(0, Math.round(rule.weekly / 7));
@@ -185,6 +209,12 @@ export function hitsOf(ruleId: string): Hit[] {
 export const stagedOf = (ruleId: string) => ACTIONS.filter((a) => a.source.ruleId === ruleId);
 
 /* ───────── 回放试跑（示例计算） ───────── */
+/** 被去重的原因：按规则去重键与冷却期推出来，如“同一商品门店 7 天内已命中” */
+export function dedupeReason(rule: RuleDef) {
+  if (/事件|单号/.test(rule.dedupe)) return `同一${rule.dedupe.replace(' ID', '')}已命中过`;
+  const dims = rule.dedupe.split('+').map((x) => x.trim()).filter((x) => !['规则', '日期', '周', '小时', '生效日期', '批次'].includes(x)).join('');
+  return rule.cooldown === '不重复' ? `同一${dims}已命中过` : `同一${dims} ${rule.cooldown}内已命中`;
+}
 export type ReplayDiff = '一致' | '新增命中' | '不再命中' | '被去重';
 export interface ReplaySample { key: string; at: string; objKind: ObjKind; objId: string; objLabel: string; storeId?: string; storeLabel?: string; value: string; diff: ReplayDiff }
 /**

@@ -35,7 +35,7 @@ export const SEGMENTS = [
   { id: 'SEG-0026', name: '生鲜高频会员' }, { id: 'SEG-0031', name: '双 11 预约会员' }, { id: 'SEG-0035', name: '新客首单 30 天内' },
 ];
 /** 规则自动暂存动作的确认人（每条规则固定，与 规则与自动化 页的“确认人”一致） */
-export const RULE_CONFIRMER: Record<string, string> = { 'R-007': '王敏', 'R-012': '周晓峰', 'R-015': '陈立军', 'SM-ORD': '孙浩然', 'R-021': '陈立军' };
+export const RULE_CONFIRMER: Record<string, string> = { 'R-007': '王敏', 'R-012': '周晓峰', 'R-015': '陈立军', 'SM-ORD': '孙浩然', 'R-027': '吴佳' };
 /** 问数会话（问数工作台的会话编号） */
 export const QA_SESSIONS = [
   { id: 'S0001', title: '华东大区复购客户销售额' }, { id: 'S0002', title: '本周门店客流 Top 10' }, { id: 'S0003', title: '华东各重点门店销售额' },
@@ -138,8 +138,11 @@ export function buildLog(x: ActionRecord): ActionLog[] {
   if (x.status === '成功') log.push({ time: addMin(t, 23), text: `${x.system} 返回成功，外部单号 ${x.extRef}`, desc: '系统' });
   if (x.status === '失败') log.push({ time: addMin(t, 23), text: `${x.system} 明确返回失败${retries(x) ? `，已自动重试 ${retries(x)} 次仍失败` : ''}`, desc: x.failReason, status: 'error' });
   if (x.status === '结果未知' || x.status === '已对账') {
-    log.push({ time: addMin(t, 52), text: `${x.system} 30 分钟未返回结果，标记为结果未知（不自动重试写入）`, desc: x.unknownReason ? `系统 · ${x.unknownReason}` : '系统', status: 'warn' });
-    log.push({ time: addMin(t, 97), text: AUTO_QUERY_TEXT, desc: `系统 · 幂等键 ${x.idemKey}`, status: 'unknown' });
+    // 超时时长取外部系统登记的 timeoutMs（会员 CRM 5 秒、用友 ERP 10 秒……），超时不重试
+    const sec = (extSystemById(m.sysId)?.timeoutMs ?? 5000) / 1000;
+    log.push({ time: addMin(t, 22), text: `${x.system} ${sec} 秒未返回结果，标记为结果未知（不重试写入）`, desc: x.unknownReason ? `系统 · ${x.unknownReason}` : '系统', status: 'warn' });
+    log.push({ time: addMin(t, 67), text: AUTO_QUERY_TEXT, desc: `系统 · 幂等键 ${x.idemKey}`, status: 'unknown' });
+    if (x.status === '结果未知') log.push({ time: addMin(t, 67), text: '转人工对账', desc: `对账人 ${owner} · 在 ${x.system} 按幂等键核对后确认结果`, status: 'warn' });
   }
   if (x.status === '已对账') log.push({ time: addMin(t, 140), text: `对账：${x.reconcile}`, desc: `${owner} · 已在 ${x.system} 核对外部单号 ${x.extRef}` });
   return log;
@@ -209,15 +212,17 @@ function build(): ActionRecord[] {
     const source: ActionSource = qs ? { type: '问数', session: qs.id, sessionTitle: qs.title } : { type: '手动' };
     mk({ action, source, objKind: kind, objId, objLabel, initiator: who, status, submittedAt: time });
   }
-  // —— 大区级：问数建议调整预算（审批中），历史上规则暂存的召回券（CRM 超时，结果未知）——
+  // —— R-012 库存低于安全线暂存的补货申请：确认人是周晓峰，别人（如王敏）只能看 ——
+  fromAlert(al('AL-20261025-0139'), '待确认', '2026-10-25 14:23:05').id = 'ACT-20261025-0552';
+  // —— 大区级：问数建议调整预算（审批中）；R-027 大区复购下降暂存的召回券（CRM 超时，结果未知，不重试）——
   mk({ action: '调整大区预算', source: { type: '问数', session: 'S0001', sessionTitle: QA_SESSIONS[0].title }, objKind: 'region', objId: 'REG-EC', objLabel: '华东大区',
     initiator: '王敏', status: '审批中', submittedAt: '2026-10-25 15:36:00' }).id = 'ACT-20261025-0551';
-  mk({ action: '发放复购召回优惠券', source: { type: '规则', ruleId: 'R-021', ruleVersion: 'v1', confirmer: RULE_CONFIRMER['R-021'] }, objKind: 'region', objId: 'REG-EC', objLabel: '华东大区',
-    initiator: '规则 R-021', status: '结果未知', submittedAt: '2026-08-29 22:10:00', unknownReason: '会员 CRM 发券接口 5 秒超时，无响应' }).id = 'ACT-20260829-0412';
+  mk({ action: '发放复购召回优惠券', source: { type: '规则', ruleId: 'R-027', ruleVersion: 'v1', confirmer: RULE_CONFIRMER['R-027'] }, objKind: 'region', objId: 'REG-EC', objLabel: '华东大区',
+    initiator: '规则 R-027', status: '结果未知', submittedAt: '2026-08-29 22:10:00', unknownReason: 'POST /coupon/grant 无响应' }).id = 'ACT-20260829-0412';
 
   list.sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
   // 编号按提交时间倒序连续编排；告警来源的幂等键与告警处理页一致：act-<告警编号>
-  // 上面两条大区级动作是后补的，编号固定（0551 / 0412），不挤占原有编号
+  // 上面三条是后补的，编号固定（0552 / 0551 / 0412），不挤占原有编号
   let seq = 412 + list.filter((x) => !x.id).length;
   for (const x of list) {
     if (!x.id) x.id = `ACT-${x.submittedAt.slice(0, 10).replace(/-/g, '')}-${pad(seq--, 4)}`;

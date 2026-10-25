@@ -22,7 +22,7 @@ import { metricById } from '@/mock/metrics';
 import { ACTIONS } from '@/mock/actions';
 import { ACTION_TYPES, actionTypeById, eventTypeById, paramsOf } from '@/mock/actionEvent';
 import {
-  RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel,
+  RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel, dedupeReason,
   type RuleDef, type AutoStage, type Hit,
 } from '@/mock/rules';
 import DraftBanner from './parts/DraftBanner.vue';
@@ -168,12 +168,13 @@ function runReplay() { running.value = true; setTimeout(() => { running.value = 
 const result = computed(() => (ran.value ? replay(base.value, rrange.value as '7d' | '30d', rver.value === 'draft') : null));
 const rq = usePagedQuery({ defaultSize: 9, prefix: 'r' });
 const samples = computed(() => paginate(result.value?.samples ?? [], { page: rq.page.value, size: rq.size.value }));
+const dedupeText = computed(() => dedupeReason(base.value));
 const sampleCols = computed(() => [
   { title: '时间', dataIndex: 'at', width: 172 },
   { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
   ...(base.value.objKind === 'product' ? [STORE_COL] : []),
   { title: '命中值', dataIndex: 'value', width: 220, ellipsis: { showTitle: true } },
-  { title: '与实际命中对比', key: 'diff', width: 160 },
+  { title: '与实际命中对比', key: 'diff', width: 300, ellipsis: true },
 ]);
 
 /* 版本历史 */
@@ -324,7 +325,7 @@ const verCols = [
         <div class="ru-act-left">
           <div class="ru-sec t-14 fw-600">命中后可执行的动作</div>
           <a-descriptions :column="2" bordered size="small">
-            <a-descriptions-item label="动作类型">{{ actType ? `${actType.name} · ${actType.version}` : '无（只通知）' }}</a-descriptions-item>
+            <a-descriptions-item label="动作类型">{{ actType ? `${actType.name} · ${actType.version}` : rule.output === '告警' ? '无（只产生告警）' : '无（只通知）' }}</a-descriptions-item>
             <a-descriptions-item label="外部系统">{{ actSystem }}</a-descriptions-item>
             <a-descriptions-item label="审批">{{ actType?.approval ?? '--' }}</a-descriptions-item>
             <a-descriptions-item label="幂等键"><span class="num">{{ actType?.idemKey ?? '--' }}</span></a-descriptions-item>
@@ -415,7 +416,7 @@ const verCols = [
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'obj'"><ObjRef :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef></template>
                 <template v-else-if="column.key === 'store'"><ObjRef v-if="record.storeId" kind="store" :id="record.storeId">{{ record.storeLabel }}</ObjRef><span v-else class="c-3">--</span></template>
-                <template v-else-if="column.key === 'diff'"><a-badge status="default" :text="record.diff" /></template>
+                <template v-else-if="column.key === 'diff'"><a-badge status="default" :text="record.diff === '被去重' ? `被去重 · ${dedupeText}` : record.diff" /></template>
               </template>
             </a-table>
           </div>
@@ -497,7 +498,7 @@ const verCols = [
 .ru-th { width: 200px; }
 .ru-gap { margin-left: 8px; }
 .ru-act { flex-direction: row; gap: 16px; }
-.ru-act-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.ru-act-left { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .ru-act-right { width: 420px; flex: none; display: flex; flex-direction: column; gap: 6px; padding-left: 16px; border-left: var(--border); }
 .ru-form { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 8px; align-items: center; }
 .ru-mapsel { width: 100%; }
