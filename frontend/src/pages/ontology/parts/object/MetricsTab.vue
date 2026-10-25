@@ -57,7 +57,7 @@ const cols = [
           <span class="t-12 c-3 num mt-api">{{ record.m.id }}</span>
         </template>
         <template v-else-if="column.key === 'via'">{{ via(record) }}</template>
-        <template v-else-if="column.key === 'formula'"><span class="num">{{ record.m.formula }}</span></template>
+        <template v-else-if="column.key === 'formula'"><span class="num" :title="record.m.formula">{{ record.m.formula }}</span></template>
         <template v-else-if="column.key === 'version'"><span class="num">{{ record.m.version }}</span></template>
         <template v-else-if="column.key === 'status'">
           <a-tag :color="shown(record).text === '审核中' ? 'warning' : 'default'">{{ shown(record).text }}</a-tag>

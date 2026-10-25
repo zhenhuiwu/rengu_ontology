@@ -152,7 +152,7 @@ async function toggleSens(p: ObjProp) {
             <div class="t-12 c-3 num">{{ record.api }}</div>
           </template>
           <template v-else-if="column.key === 'sens'">
-            <a-tag v-if="isSens(record)" color="warning" class="pm-tag0">敏感</a-tag>
+            <a-tag v-if="isSens(record)" class="pm-tag0">敏感</a-tag>
             <span v-else class="c-3">--</span>
           </template>
           <template v-else-if="column.key === 'op'">

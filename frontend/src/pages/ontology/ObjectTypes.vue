@@ -22,6 +22,7 @@ import MetricsTab from './parts/object/MetricsTab.vue';
 import ViewsTab from './parts/object/ViewsTab.vue';
 import PermissionsTab from './parts/object/PermissionsTab.vue';
 import HistoryTab from './parts/object/HistoryTab.vue';
+import AppPagination from '@/components/AppPagination.vue';
 import { crsOf, metricsOf } from './parts/object/objectGov';
 
 /**
@@ -220,8 +221,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
         </li>
       </ul>
       <div class="ot-foot">
-        <span class="t-12 c-3">共 {{ filtered.length }} 条</span>
-        <a-pagination v-model:current="lpage" simple size="small" :total="filtered.length" :page-size="LPAGE" />
+        <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" unit="条" />
       </div>
     </div>
 
@@ -238,7 +238,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
         <span class="ot-sp" />
         <span class="t-12 c-3">数据截至 {{ qo?.cutoff ?? '--' }}</span>
         <a-button>预览数据</a-button>
-        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${current.name}（${current.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
@@ -315,7 +315,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
           <span v-if="isDraft && draft" class="t-12 c-3">草稿 {{ draft.id }}：属性改动 {{ Object.keys(DIFF).length }} 处<template v-if="draftDiff.other">，其余 {{ draftDiff.other }} 处（对象类型、关系、映射、指标等）见<router-link :to="`/build/ontology/releases?cr=${draft.id}`">变更单</router-link></template></span>
           <span class="ot-sp" />
           <a-tooltip :title="editTip"><a-button :disabled="!canEdit">批量编辑</a-button></a-tooltip>
-          <a-tooltip :title="editTip"><a-button type="primary" :disabled="!canEdit">新增属性</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button :type="canEdit ? 'primary' : 'default'" :disabled="!canEdit">新增属性</a-button></a-tooltip>
         </div>
         <a-table :columns="propCols" :data-source="prows" :pagination="false" size="small" row-key="api">
           <template #bodyCell="{ column, record }">
@@ -341,8 +341,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
           </template>
         </a-table>
         <div class="ot-pager">
-          <span class="t-12 c-3">共 {{ pfiltered.length }} 条</span>
-          <a-pagination v-model:current="ppage" simple size="small" :total="pfiltered.length" :page-size="PPAGE" />
+          <AppPagination v-model:page="ppage" variant="simple" :total="pfiltered.length" :size="PPAGE" unit="条" />
         </div>
       </div>
 
@@ -386,8 +385,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
         </div>
         <a-table :columns="MAP_COLS" :data-source="mrows" size="small" row-key="prop" :pagination="false" />
         <div class="ot-pager">
-          <span class="t-12 c-3">共 {{ MAP_ALL.length }} 条</span>
-          <a-pagination v-model:current="mpage" simple size="small" :total="MAP_ALL.length" :page-size="MPAGE" />
+          <AppPagination v-model:page="mpage" variant="simple" :total="MAP_ALL.length" :size="MPAGE" unit="条" />
         </div>
       </div>
 
