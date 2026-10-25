@@ -90,9 +90,9 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-button><template #icon><ShareAltOutlined /></template>分享</a-button>
+    <a-tooltip :title="pv.active.value ? pv.reason.value : undefined"><a-button :disabled="pv.active.value"><template #icon><ShareAltOutlined /></template>分享</a-button></a-tooltip>
     <a-tooltip :title="reason"><a-button :disabled="readonly"><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button></a-tooltip>
-    <a-button><template #icon><EllipsisOutlined /></template></a-button>
+    <a-tooltip :title="pv.active.value ? pv.reason.value : undefined"><a-button :disabled="pv.active.value"><template #icon><EllipsisOutlined /></template></a-button></a-tooltip>
   </Teleport>
   <div class="qa-wb">
     <QaSessionPanel @panel="(v) => (panel = v)" />
