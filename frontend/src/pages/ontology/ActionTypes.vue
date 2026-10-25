@@ -8,7 +8,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { QuestionCircleOutlined } from '@ant-design/icons-vue';
+import { InfoCircleOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import EChart from '@/components/EChart.vue';
@@ -41,7 +41,7 @@ const group = ref('全部');
 const kw = ref('');
 const filtered = computed(() => ACTION_TYPES.filter((a) => (group.value === '全部' || a.group === group.value)
   && (!kw.value || a.name.includes(kw.value))));
-const LPAGE = 14;
+const LPAGE = 22;
 const lpage = ref(1);
 watch([group, kw], () => { lpage.value = 1; });
 const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
@@ -145,7 +145,7 @@ const usedBy = computed(() => cur.value.usedBy.map((id) => {
 const usedCols = [
   { title: '规则', key: 'rule', width: 220 },
   { title: '触发', dataIndex: 'trigger', width: 96 },
-  { title: '使用方式', dataIndex: 'mode' },
+  { title: '使用方式', dataIndex: 'mode', ellipsis: { showTitle: true } },
   { title: '近期告警', key: 'alerts', width: 120, align: 'right' as const },
 ];
 const daily = computed(() => runDaily(cur.value.id));
@@ -181,8 +181,8 @@ const liveConds = computed(() => conds.value.filter((c) => c._mark !== '删除')
 const condCols = computed(() => editCol([
   { title: '模板', dataIndex: 'kind', width: 110 },
   { title: '条件', dataIndex: 'name', width: 140 },
-  { title: '表达式', key: 'expr' },
-  { title: '不满足时提示', dataIndex: 'fail', width: 300 },
+  { title: '表达式', key: 'expr', ellipsis: true },
+  { title: '不满足时提示', dataIndex: 'fail', width: 300, ellipsis: { showTitle: true } },
 ]));
 
 /* 写回与副作用 */
@@ -210,13 +210,13 @@ const flow = computed(() => {
 const editCols = computed(() => editCol([
   { title: '操作', dataIndex: 'op', width: 72 },
   { title: '对象', dataIndex: 'obj', width: 180 },
-  { title: '字段', dataIndex: 'field' },
+  { title: '字段', dataIndex: 'field', ellipsis: { showTitle: true } },
 ]));
 const effectCols = computed(() => editCol([
   { title: '类型', dataIndex: 'kind', width: 88 },
-  { title: '目标', dataIndex: 'target', width: 260 },
-  { title: '时机', dataIndex: 'when', width: 150 },
-  { title: '说明', dataIndex: 'note' },
+  { title: '目标', dataIndex: 'target', width: 260, ellipsis: { showTitle: true } },
+  { title: '时机', dataIndex: 'when', width: 200, ellipsis: { showTitle: true } },
+  { title: '说明', dataIndex: 'note', ellipsis: { showTitle: true } },
 ]));
 
 /* 执行记录 */
@@ -247,7 +247,7 @@ const verCols = [
   { title: '版本', dataIndex: 'ver', width: 80 },
   { title: '本体发布', dataIndex: 'release', width: 120 },
   { title: '状态', key: 'status', width: 96 },
-  { title: '变更说明', dataIndex: 'change' },
+  { title: '变更说明', dataIndex: 'change', ellipsis: { showTitle: true } },
   { title: '发布人', dataIndex: 'by', width: 96 },
   { title: '发布时间', dataIndex: 'at', width: 160 },
   { title: '操作', key: 'op', width: 110 },
@@ -266,16 +266,14 @@ const verCols = [
         <a-select v-model:value="group" :options="ACTION_GROUPS.map((g) => ({ value: g, label: g === '全部' ? '全部分组' : g }))" class="at-sel" />
       </div>
       <ul class="at-items">
-        <li v-for="a in list" :key="a.id" :class="{ active: a.id === cur.id }" @click="pick(a.id)">
-          <div class="at-row">
-            <span class="t-14 at-name">{{ a.name }}</span>
-            <span class="t-12 num" :class="a.status === '变更中' ? 'c-warning' : 'c-3'">{{ a.status === '已发布' ? '' : a.status + ' · ' }}{{ a.version }}</span>
-          </div>
-          <div class="at-row">
-            <span class="t-12 c-3 num">{{ a.api }} → {{ a.target }}</span>
-            <span class="t-12 c-3">{{ a.group }}</span>
-          </div>
-        </li>
+        <a-tooltip v-for="a in list" :key="a.id" placement="right" :mouse-enter-delay="0.4" :title="`${a.api} → ${a.target} · ${a.group}`">
+          <li :class="{ active: a.id === cur.id }" @click="pick(a.id)">
+            <div class="at-row">
+              <span class="t-14 at-name">{{ a.name }}</span>
+              <span class="t-12 num" :class="a.status === '变更中' ? 'c-warning' : 'c-3'">{{ a.status === '已发布' ? '' : a.status + ' · ' }}{{ a.version }}</span>
+            </div>
+          </li>
+        </a-tooltip>
       </ul>
       <div class="at-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" unit="个动作" class="at-pager" empty-text="没有匹配的动作类型" />
@@ -316,17 +314,17 @@ const verCols = [
           <a-descriptions :column="2" bordered size="small" class="at-desc">
             <a-descriptions-item label="目标对象">{{ cur.target }}（{{ cur.targetApi }}）</a-descriptions-item>
             <a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item>
-            <a-descriptions-item label="说明" :span="2">{{ cur.desc }}</a-descriptions-item>
+            <a-descriptions-item label="说明" :span="2"><span class="at-ell" :title="cur.desc">{{ cur.desc }}</span></a-descriptions-item>
             <a-descriptions-item label="谁可以执行">{{ cur.runners }}</a-descriptions-item>
             <a-descriptions-item label="审批">{{ cur.approval }}</a-descriptions-item>
-            <a-descriptions-item label="写回系统">{{ eff.system }}<span v-if="eff.sysId" class="t-12 c-3 num"> · {{ eff.sysId }}</span></a-descriptions-item>
+            <a-descriptions-item label="写回系统">{{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span></a-descriptions-item>
             <a-descriptions-item label="写回接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
             <a-descriptions-item label="幂等键规则" :span="2"><span class="num">{{ eff.idemKey }}</span></a-descriptions-item>
             <a-descriptions-item label="超时">{{ eff.timeout }}</a-descriptions-item>
             <a-descriptions-item label="重试">{{ eff.retry }}</a-descriptions-item>
           </a-descriptions>
           <div class="at-sec t-14 fw-600 at-sec-row">
-            <span>使用该动作的规则与告警</span><span class="t-12 c-3 fw-400">点规则编号在当前页查看规则</span>
+            <span>使用该动作的规则与告警<a-tooltip title="点规则编号在当前页查看规则"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip></span>
           </div>
           <a-table :columns="usedCols" :data-source="usedBy" :pagination="false" size="small" row-key="id"
             :locale="{ emptyText: '暂无规则使用，只能在对象详情里手动执行' }">
@@ -338,27 +336,27 @@ const verCols = [
             </template>
           </a-table>
           <div class="at-sec t-14 fw-600 at-sec-row">
-            <span>提交条件 {{ liveConds.length }} 项</span><span class="t-12 c-3 fw-400">表达式见“提交条件”页签</span>
+            <span>提交条件 {{ liveConds.length }} 项<a-tooltip title="表达式见“提交条件”页签"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip></span>
           </div>
           <div v-for="c in liveConds.slice(0, 5)" :key="c._key" class="at-cond">
-            <span class="t-12 c-3">{{ c.kind }}</span><span class="t-14 c-1">{{ c.name }}</span><span class="t-12 c-3 at-cond-f">{{ c.fail }}</span>
+            <span class="t-12 c-3">{{ c.kind }}</span><span class="t-14 c-1">{{ c.name }}</span><span class="t-12 c-3 at-cond-f" :title="c.fail">{{ c.fail }}</span>
           </div>
         </div>
         <div class="at-ov-right">
-          <div class="at-sec t-14 fw-600 at-sec-row"><span>近 30 天执行</span><span class="t-12 c-3 fw-400">截至 2026-10-25 15:42</span></div>
+          <div class="at-sec t-14 fw-600"><span>近 30 天执行</span><span class="fw-400 c-2"> · 截至 2026-10-25 15:42</span></div>
           <div class="at-stats">
-            <div><div class="t-12 c-3">执行次数</div><div class="t-20 fw-600 c-1 num">{{ fmtInt(stats.total) }}</div></div>
-            <div><div class="t-12 c-3">成功率</div><div class="t-20 fw-600 c-1 num">{{ stats.total ? fmtPct(stats.rate, 1) : '--' }}</div></div>
-            <div><div class="t-12 c-3">失败</div><div class="t-20 fw-600 num" :class="stats.failed ? 'c-error' : 'c-1'">{{ stats.failed }}</div></div>
-            <div><div class="t-12 c-3">结果未知 · 待对账</div><div class="t-20 fw-600 num" :class="stats.unknown ? 'c-warning' : 'c-1'">{{ stats.unknown }}</div></div>
+            <div><span class="t-12 c-3">执行次数</span><span class="t-16 fw-600 c-1 num">{{ fmtInt(stats.total) }}</span></div>
+            <div><span class="t-12 c-3">成功率</span><span class="t-16 fw-600 c-1 num">{{ stats.total ? fmtPct(stats.rate, 1) : '--' }}</span></div>
+            <div><span class="t-12 c-3">失败</span><span class="t-16 fw-600 num" :class="stats.failed ? 'c-error' : 'c-1'">{{ stats.failed }}</span></div>
+            <div><span class="t-12 c-3">结果未知 · 待对账</span><span class="t-16 fw-600 num" :class="stats.unknown ? 'c-warning' : 'c-1'">{{ stats.unknown }}</span></div>
           </div>
           <template v-if="stats.total">
             <div class="at-chart"><EChart :option="chartOption" /></div>
             <div class="at-sec t-14 fw-600">最近异常</div>
-            <div v-for="r in recentAbnormal" :key="r.id" class="at-abn">
+            <div v-for="r in recentAbnormal" :key="r.id" class="at-abn" :title="`${r.id} · ${r.at} · ${r.status === '结果未知' ? '结果未知 · 待对账' : r.code}`">
               <a class="t-14 num" @click="drawer.open('action', r.id)">{{ r.id }}</a>
-              <span class="t-12 c-3 num">{{ r.at }}</span>
-              <span class="t-12 at-abn-st" :class="r.status === '失败' ? 'c-error' : 'c-warning'">
+              <span class="t-12 c-2 num">{{ r.at }}</span>
+              <span class="t-12 at-abn-st" :class="r.status === '失败' ? 'c-error' : 'c-warning'" :title="r.status === '结果未知' ? '结果未知 · 待对账' : r.code">
                 <QuestionCircleOutlined v-if="r.status === '结果未知'" />{{ r.status === '结果未知' ? '结果未知 · 待对账' : r.code }}
               </span>
             </div>
@@ -370,7 +368,7 @@ const verCols = [
       <!-- 参数 -->
       <div v-else-if="tab === 'params'" class="at-body">
         <div class="at-tool">
-          <span class="t-12 c-3">提交时按顺序校验；对象引用类参数在执行面板里用对象选择器填写</span>
+          <span class="t-14 c-1">参数 {{ params.total }} 个</span><a-tooltip title="提交时按顺序校验；对象引用类参数在执行面板里用对象选择器填写"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip>
           <span class="at-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
@@ -397,7 +395,7 @@ const verCols = [
       <!-- 提交条件 -->
       <div v-else-if="tab === 'conds'" class="at-body">
         <div class="at-tool">
-          <span class="t-12 c-3">全部满足才允许提交；条件模板分三类：当前用户、参数、上下文对象</span>
+          <span class="t-14 c-1">提交条件 {{ liveConds.length }} 项</span><a-tooltip title="全部满足才允许提交；条件模板分三类：当前用户、参数、上下文对象"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip>
           <span class="at-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
@@ -408,7 +406,7 @@ const verCols = [
         </div>
         <a-table :columns="condCols" :data-source="conds" :pagination="false" size="middle" row-key="_key" :row-class-name="delRow">
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'expr'"><span class="at-code t-12">{{ record.expr }}</span></template>
+            <template v-if="column.key === 'expr'"><span class="at-code t-12" :title="record.expr">{{ record.expr }}</span></template>
             <template v-else-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
               <template v-else-if="column.key === '_op'">
                 <a-space v-if="record._mark === '删除'"><a :class="{ 'at-dis': !canEdit }" @click="restoreItem('conds', record._key)">恢复</a></a-space>
@@ -432,18 +430,17 @@ const verCols = [
               <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openEdit('config', 'cfg')">编辑写回</a-button></a-tooltip>
             </span>
           </div>
-          <a-descriptions :column="2" bordered size="small">
+          <a-descriptions :column="2" bordered size="small" class="at-desc">
             <a-descriptions-item label="外部系统">
-              {{ eff.system }}<span v-if="eff.sysId" class="t-12 c-3 num"> · {{ eff.sysId }}</span>
-              <span v-if="cfgMark && cfgBase && cfgBase.sysId !== eff.sysId" class="t-12 c-3 at-was">原 {{ withSystem({ ...cur, ...cfgBase }).system }}</span>
+              {{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span><span v-if="cfgMark && cfgBase && cfgBase.sysId !== eff.sysId"> · 原 {{ withSystem({ ...cur, ...cfgBase }).system }}</span>
             </a-descriptions-item>
             <a-descriptions-item label="接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
-            <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ eff.idemKey }}</span><span v-if="sys" class="t-12 c-3"> · 请求头 {{ sys.idemKey }}</span></a-descriptions-item>
+            <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ eff.idemKey }}</span><span v-if="sys"> · 请求头 {{ sys.idemKey }}</span></a-descriptions-item>
             <a-descriptions-item label="超时">{{ eff.timeout }}</a-descriptions-item>
             <a-descriptions-item label="重试">{{ eff.retry }}</a-descriptions-item>
             <a-descriptions-item label="超时处理" :span="2">
               <span v-if="internal" class="c-2">本体内部编辑，不存在结果未知</span>
-              <span v-else class="c-warning"><QuestionCircleOutlined /> 结果未知 · 待对账：不重试，{{ UNKNOWN_FOLLOWUP }}</span>
+              <span v-else class="c-warning at-ell" :title="`结果未知 · 待对账：不重试，${UNKNOWN_FOLLOWUP}`"><QuestionCircleOutlined /> 结果未知 · 待对账：不重试，{{ UNKNOWN_FOLLOWUP }}</span>
             </a-descriptions-item>
           </a-descriptions>
           <div class="at-sec t-14 fw-600 at-sec-row">
@@ -483,8 +480,7 @@ const verCols = [
       <div v-else-if="tab === 'runs'" class="at-body">
         <div class="at-tool">
           <a-segmented v-model:value="runFilter" :options="RUN_FILTERS" size="small" />
-          <span class="at-sp" />
-          <span class="t-12 c-3">规则生成的动作先待确认，确认人确认后才提交；点编号查看过程</span>
+          <a-tooltip title="规则生成的动作先待确认，确认人确认后才提交；点编号查看过程"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip>
         </div>
         <div class="paged-scroll">
           <a-table :columns="runCols" :data-source="runs.items" :pagination="false" size="middle" row-key="id"
@@ -492,15 +488,15 @@ const verCols = [
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'id'"><a class="num" @click="drawer.open('action', record.id)">{{ record.id }}</a></template>
               <template v-else-if="column.key === 'obj'">
-                <ObjRef v-if="record.objKind" :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef>
-                <span v-else class="num">{{ record.objLabel }}</span>
+                <span :title="record.objLabel"><ObjRef v-if="record.objKind" :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef>
+                <span v-else class="num">{{ record.objLabel }}</span></span>
               </template>
               <template v-else-if="column.key === 'initiator'">
                 <ObjRef v-if="record.ruleId" kind="rule" :id="record.ruleId">规则 {{ record.ruleId }}</ObjRef>
                 <span v-else>{{ record.initiator }}</span>
               </template>
               <template v-else-if="column.key === 'status'">
-                <span v-if="record.status === '结果未知'" class="c-warning"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
+                <span v-if="record.status === '结果未知'" class="c-warning at-nw"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
                 <a-badge v-else :status="runBadge(record.status)" :text="record.status" />
               </template>
               <template v-else-if="column.key === 'ms'"><span class="num">{{ (record.ms / 1000).toFixed(2) }} 秒</span></template>
@@ -513,14 +509,14 @@ const verCols = [
       <!-- 版本历史 -->
       <div v-else class="at-body">
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
+          <template #headerCell="{ column }"><template v-if="column.key === 'status'">状态<a-tooltip title="动作类型版本只随本体整版发布生效；进行中的执行按提交时的版本完成，不受新版本影响"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip></template></template>
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'"><a-badge :status="'default'" :text="record.status" /></template>
             <template v-else-if="column.key === 'op'">
-              <a-space><a>对比</a><a-tooltip v-if="record.status !== '生效中'" :title="reason"><a :class="{ 'at-dis': readonly }">回滚</a></a-tooltip></a-space>
+              <a-space><a-tooltip title="版本对比暂未开放"><a class="at-dis">对比</a></a-tooltip><a-tooltip v-if="record.status !== '生效中'" :title="readonly ? reason : '回滚暂未开放'"><a class="at-dis">回滚</a></a-tooltip></a-space>
             </template>
           </template>
         </a-table>
-        <div class="t-12 c-3">动作类型版本只随本体整版发布生效；进行中的执行按提交时的版本完成，不受新版本影响。</div>
       </div>
     </div>
   </div>
@@ -549,6 +545,8 @@ const verCols = [
 .at-items li:hover { background: var(--g3); }
 .at-items li.active { background: var(--brand-bg); }
 .at-items li.active .at-name { color: var(--brand); }
+.at-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-tip { margin-left: 4px; color: var(--g8); cursor: help; }
 .at-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .at-pager { flex: 1; min-height: 0; }
 .at-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; }
@@ -565,10 +563,15 @@ const verCols = [
 .at-sec { margin-top: 4px; }
 .at-sec-row { display: flex; justify-content: space-between; align-items: center; }
 .at-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.at-stats > div { padding: 8px 12px; border: var(--border); border-radius: var(--radius); }
+.at-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 12px; border: var(--border); border-radius: var(--radius); white-space: nowrap; }
+.at-desc.at-desc :deep(.ant-descriptions-view > table) { table-layout: fixed; width: 100%; }
+.at-desc :deep(.ant-descriptions-item-label) { width: 96px; white-space: nowrap; }
+.at-desc :deep(.ant-descriptions-item-content) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.at-ell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-nw { white-space: nowrap; }
 .at-chart { height: 180px; }
-.at-abn { display: grid; grid-template-columns: 170px 1fr; column-gap: 8px; padding: 6px 0; border-bottom: var(--border); }
-.at-abn-st { grid-column: 1 / 3; display: inline-flex; gap: 4px; align-items: center; }
+.at-abn { display: grid; grid-template-columns: auto auto 1fr; column-gap: 12px; align-items: center; padding: 6px 0; border-bottom: var(--border); white-space: nowrap; }
+.at-abn-st { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .at-empty { margin-top: 32px; }
 .at-tool { display: flex; align-items: center; gap: 8px; flex: none; }
 .at-code { font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; color: var(--g9); }
@@ -577,7 +580,6 @@ const verCols = [
 .at-cond-f { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .at-dis { color: var(--g7); cursor: not-allowed; }
 .at-mark { margin-left: 8px; }
-.at-was { margin-left: 8px; }
 .at-form :deep(.ant-form-item) { margin-bottom: 12px; }
 :deep(.at-del td) { text-decoration: line-through; color: var(--g7); }
 </style>
