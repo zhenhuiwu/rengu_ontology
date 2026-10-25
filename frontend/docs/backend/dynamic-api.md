@@ -352,9 +352,11 @@ stateDiagram-v2
 
 **种子环境的「现在」** [已定：PDE]：固定为 **2026-10-25 15:42（北京时间）**，由骨架的 `now()` 提供；所有「今天」「近 7 天」「N 分钟前」都按它算，不用系统时钟。
 
-### 2.8 本体版本快照的 `rules` 段 [已定：群决定]
+### 2.8 本体版本快照的 `rules`、`lifecycles` 段 [已定：群决定]
 
-整版发布时，本体版本快照分 `actionTypes`、`eventTypes`、`rules` 几段，**各段由所属模块组装**，交给静态的 `create_version` 写入版本；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`）。动态负责组装 `rules` 段：
+整版发布时，**完整快照 = 静态各段 + `actionTypes` + `eventTypes` + `rules` + `lifecycles`**，**各段由所属模块组装**，交给静态的 `create_version` 写入版本；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`、`order`）。动态负责组装 `rules` 和 `lifecycles` 两段。
+
+**`rules` 段**：
 
 | 项 | 约定 |
 |---|---|
@@ -365,7 +367,15 @@ stateDiagram-v2
 | 历史 | `rule_version` 照旧单独保存每条规则的全部历史版本；快照只是发布那一刻的全量生效版本 |
 | 运行数据 | 告警、动作执行、规则命中、生命周期状态变化都是运行数据，**不进快照**；它们产生时记下当时的 `rule_version` / `type_version` 即可追溯 |
 
-**生命周期**：本文把生命周期当作对象类型上的本体定义（1.1 关系要点、2.3：草稿 → CR → 整版发布，`lifecycle_version.release` 记随哪次发布生效），所以它也应进快照：内容 = 每个对象类型当前生效版本的完整定义（`objectId, version, field, owner, ruleId, desc, states[{key, name, kind, desc, sla, x, y}], transitions[{id, from, to, trigger, by, eventId, actionId, guard, effect}]`，不含 `count`、`weekly` 统计值），由动态组装。**待提出**：群决定只列了 `actionTypes / eventTypes / rules` 三段，生命周期是单独加 `lifecycles` 段，还是并进静态的对象类型段，需要跟 PDE / 静态确认。
+**`lifecycles` 段**：
+
+| 项 | 约定 |
+|---|---|
+| 键 | 对象类型的**前端 id**（如 `order`、`store`），与静态 `objectTypes` 段的键一致；静态的 `objectTypes` 段**不含**生命周期 |
+| 内容 | 每个有生命周期的对象类型一项 = 本次发布后生效版本的完整定义：`objectId, version, field, owner, ruleId, desc, states[{key, name, kind, desc, sla, x, y}], transitions[{id, from, to, trigger, by, eventId, actionId, guard, effect}]` |
+| 不放 | `count`、`weekly`（统计值）；`versions[]`、`updatedAt`、`undo`（版本记录，存 `lifecycle_version`） |
+| 组装时机 | 与 `rules` 段相同：发布事务里，本次 CR 里的生命周期先生成新的 `lifecycle_version` 行，再按每个对象类型的当前生效版本组装整段 |
+| 历史 | `lifecycle_version` 照旧单独保存全部历史版本（含 `snapshot` = `lifecycleAsOf`） |
 
 ## 3. 权限与只读
 
