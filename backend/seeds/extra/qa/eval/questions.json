@@ -545,7 +545,7 @@
     "question": "2026年第一季度的销售额是多少？",
     "expectedType": "answer",
     "goldSql": "select round(sum(l.qty * l.price) / 1.13, 2) from order_line l join biz_order o on o.id = l.order_id join store s on s.id = o.store_id where o.status = 'shipped' and not o.is_test and not s.is_test and o.shipped_at >= '2026-01-01' and o.shipped_at < '2026-04-01'",
-    "expected": "结果为空（NULL/0 都接受）；做时间窗检查",
+    "expected": "1 行 NULL（种子无一季度出库订单，sum 无匹配行；返回 0 也接受）；做时间窗检查",
     "checks": [
       "result",
       "timeWindow"
@@ -557,8 +557,10 @@
       "种子无退款：退款按0计"
     ],
     "scratchPreview": {
-      "rows": 0,
-      "sample": []
+      "rows": 1,
+      "sample": [
+        "NULL"
+      ]
     },
     "inferredCols": [
       "store.is_test"

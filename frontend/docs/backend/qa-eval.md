@@ -74,7 +74,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | 本月 / 上月 | 10-01 至 now / 09-01 至 10-01 |
 | 今年以来 | 2026-01-01 至 now |
 
-种子订单只覆盖 2026-10-22 03:10 到 10-25 15:38，所以“上月”“上周”“第一季度”的结果是 0 或空，近7天、近30天、本周、本月的结果完全一样。光看结果集区分不了时间算没算对，这几题另加 `timeWindow` 检查（见第 5 节）。另外有 8 单的出库时间晚于 now（mock 生成的），按出库时间算的窗口一律卡在 now。
+种子订单只覆盖 2026-10-22 03:10 到 10-25 15:38，所以“上月”“上周”的计数结果是 1 行 0，“第一季度”的销售额是 1 行 NULL（`sum` 没有匹配行，EV-Q-029），近7天、近30天、本周、本月的结果完全一样。光看结果集区分不了时间算没算对，这几题另加 `timeWindow` 检查（见第 5 节）。另外有 8 单的出库时间晚于 now（mock 生成的），按出库时间算的窗口一律卡在 now。
 
 ## 4. 口径约定（gold 的写法）
 
@@ -162,7 +162,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | `source` | 是 | `ao_trial#N` 或 `new` |
 | `tags` | 否 | 这题依赖的 [推断] 点和数据缺口（如“种子无退款”），口径确认后按 tag 批量改 |
 | `inferredCols` | 否 | gold 用到、骨架里仍标 [推断] 的列（现在只有 `store.big_region`、`store.is_test`，30 题） |
-| `scratchPreview` | 否 | 在骨架真实结构 + 真种子上跑出的 `{rows, sample}`（v0.4 已覆盖，种子变了要重跑） |
+| `scratchPreview` | 否 | 在骨架真实结构 + 真种子上跑出的 `{rows, sample}`（v0.4 已覆盖，种子变了要重跑）。`rows` 是结果行数（含全 NULL 的行），`sample` 里 SQL NULL 写成 `NULL`；行数已按 `select count(*) from (<goldSql>) t` 逐题复核，只有 EV-Q-029 由 0 行改成 1 行 NULL（生成脚本把 psql 输出的空行丢了） |
 
 目录：`backend/seeds/extra/qa/eval/`（PDE 定，跟 `seeds/extra/README.md` 按导出分组的约定一致）。
 
