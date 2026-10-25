@@ -677,6 +677,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 |---|---|---|---|---|---|---|---|
 | 新增/编辑/停用取值、说法映射 | CR items，`section=values` / `mappings` | 停用的取值不参与匹配；多值映射必须写 `resolve` | dimensions:manage | — | ✗ | ✗ | 否 |
 | 列表 | `GET /dimensions?page&size&focusId` | 每页 18（`Dimensions.vue:56`、`:390`）；`focusId`（深链 `?dim=`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
+| 整条维度（前端整表载入） | `GET /dimensions/{id}?full=true` | **[推断]** 返回完整 DimItem（含 `values` / `mappings` / `usage` / `history`，草稿行原样、不按 `ver` 裁剪）；`Dimensions.vue` 拿 `DIM_ITEMS` 自己算取值 / 映射 / 使用情况 / 历史视图，联调第一版整表载入用。不带 `full` 时同原来（摘要） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 取值 | `GET /dimensions/{id}/values?page&size` | 每页 10（`Dimensions.vue:132`、`:522`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 说法映射 / 只看冲突 | `GET /dimensions/{id}/mappings?conflict&page&size` | 每页 8（`Dimensions.vue:573`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 使用情况 | `GET /dimensions/{id}/usage?page&size` | 每页 10（`Dimensions.vue:588`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |

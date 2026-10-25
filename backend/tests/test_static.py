@@ -424,6 +424,7 @@ async def test_dimensions(client, static_seeded):
         assert await get(client, f"/dimensions/{d['id']}") == without(
             d, "values", "mappings", "usage", "history"
         )
+        assert await get(client, f"/dimensions/{d['id']}?full=true") == d  # 整条 DimItem（前端整表载入）
         hist = await get_all(client, f"/dimensions/{d['id']}/history")
         assert hist == d["history"]
         usage = await get_all(client, f"/dimensions/{d['id']}/usage")

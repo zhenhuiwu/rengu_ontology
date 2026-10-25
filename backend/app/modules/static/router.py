@@ -186,8 +186,10 @@ async def list_dimensions(
 
 
 @get("/dimensions/{id}", "dimensions", response_model=Rec)
-async def get_dimension(id: str, svc: Svc) -> Any:
-    return await svc.dim_detail(id)
+async def get_dimension(id: str, svc: Svc, full: bool = False) -> Any:
+    """full=1：完整 DimItem（含 values / mappings / usage / history，草稿行原样），
+    给前端整表载入用（Dimensions.vue 按 DIM_ITEMS 自己算取值 / 映射 / 使用情况视图）[推断]。"""
+    return await svc.dim_detail(id, full)
 
 
 @get("/dimensions/{id}/values", "dimensions", response_model=RecPage)

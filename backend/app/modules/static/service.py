@@ -373,9 +373,9 @@ class StaticService:
         """历史版本的层级 / 说明已在 _dims 里按 levelsBefore 换好（history.dimension_at 或快照）。"""
         return {k: v for k, v in d.items() if k not in ("values", "mappings", "usage", "history")}
 
-    async def dim_detail(self, did: str) -> Obj:
+    async def dim_detail(self, did: str, full: bool = False) -> Obj:
         d, _ = await self._dim(did)
-        return self._dim_head(d)
+        return dict(d) if full else self._dim_head(d)
 
     async def dim_values(self, did: str, level: str, q: str, status: str, p: PageParams) -> Obj:
         d, _ = await self._dim(did)
