@@ -4,7 +4,13 @@
 - GET  /audit-logs          游标分页 CursorResult<AuditRow>，from/to 必填，keyset (time desc, id desc)
 - GET  /audit-logs/actions  动作下拉（去重，string[]，不含「全部」）
 - POST /audit-logs/export   导出桩，返回 {jobId}，并写一条「导出」审计
-用户、角色等页面留到下一阶段。只读（?ver= / ?previewAs=）由全局 ReadonlyGuardDep 拦截写请求。
+用户页（src/pages/admin/Users.vue，api-index §4.1）：
+- GET  /users                    页码分页 PageResult<AdminUser & {pendingApprovals}>，顺序 = mock ADMIN_USERS
+- GET  /depts                    部门下拉（mock ADMIN_DEPTS 原顺序）
+- POST /users、PUT /users/{id}   新建 / 编辑
+- POST /users:import-preview     解析 + 校验，不写库；POST /users:import 导入
+- POST /users/{id}:enable、POST /users/{id}:disable {transferTo?}
+角色页留到下一阶段。只读（?ver= / ?previewAs=）由全局 ReadonlyGuardDep 拦截写请求。
 """
 
 from typing import Annotated
@@ -12,18 +18,37 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.common.auth import CurrentUser, require_func
-from app.common.pagination import MAX_PAGE_SIZE
+from app.common.pagination import MAX_PAGE_SIZE, PageParamsDep
 from app.core.schema import DateTimeSec
 from app.db.session import SessionDep
+from app.modules.admin.models import SysUser
 from app.modules.admin.schemas import (
+    AdminUserOut,
+    AdminUserPage,
     AuditCursorOut,
     AuditExportIn,
     AuditExportOut,
     AuditRowOut,
+    DisableIn,
+    ImportIn,
+    ImportOut,
+    ImportPreviewIn,
+    ImportPreviewOut,
     ResultFilter,
     SearchField,
+    StatusFilter,
+    UserCreateIn,
+    UserUpdateIn,
 )
-from app.modules.admin.service import AuditLogService, make_filter
+from app.modules.admin.service import (
+    ADMIN_DEPTS,
+    AuditLogService,
+    UserService,
+    make_filter,
+    make_user_filter,
+    parse_import_csv,
+    pending_approvals,
+)
 
 router = APIRouter(tags=["admin"])
 
@@ -80,3 +105,75 @@ async def export_audit_logs(
     f = make_filter(body.from_, body.to, body.action, body.result, body.field, body.kw)
     job_id = await AuditLogService(session).export(f, user, client_ip(request))
     return AuditExportOut(job_id=job_id)
+
+
+# ---- 用户 ----
+
+_users_view = require_func("users", "view")
+_users_manage = require_func("users", "manage")
+UsersManage = Annotated[CurrentUser, Depends(_users_manage)]
+
+
+def user_out(u: SysUser) -> AdminUserOut:
+    return AdminUserOut.model_validate(u).model_copy(update={"pending_approvals": pending_approvals(u)})
+
+
+@router.get(
+    "/users",
+    response_model=AdminUserPage,
+    summary="用户列表（页码分页，含待办审批数）",
+    dependencies=[Depends(_users_view)],
+)
+async def list_users(
+    session: SessionDep,
+    page: PageParamsDep,
+    dept: Annotated[str | None, Query(description="部门全称；不传 / 全部 = 不限")] = None,
+    status: Annotated[StatusFilter | None, Query(description="启用 / 停用 / 待激活；全部 = 不限")] = None,
+    kw: Annotated[str | None, Query(description="姓名、账号或用户 ID 包含（区分大小写，不 trim）")] = None,
+) -> AdminUserPage:
+    rows, total = await UserService(session).page(make_user_filter(dept, status, kw), page)
+    return AdminUserPage.of([user_out(u) for u in rows], total, page)
+
+
+@router.get("/depts", response_model=list[str], summary="部门下拉", dependencies=[Depends(_users_view)])
+async def list_depts() -> list[str]:
+    return list(ADMIN_DEPTS)
+
+
+@router.post("/users", response_model=AdminUserOut, summary="新建用户（账号唯一）")
+async def create_user(body: UserCreateIn, session: SessionDep, user: UsersManage) -> AdminUserOut:
+    return user_out(await UserService(session).create(body, user))
+
+
+@router.put("/users/{user_id}", response_model=AdminUserOut, summary="编辑用户（账号不能改）")
+async def update_user(
+    user_id: str, body: UserUpdateIn, session: SessionDep, user: UsersManage
+) -> AdminUserOut:
+    return user_out(await UserService(session).update(user_id, body, user))
+
+
+@router.post("/users:import-preview", response_model=ImportPreviewOut, summary="导入预览（只校验，不写库）")
+async def import_preview(body: ImportPreviewIn, session: SessionDep, _user: UsersManage) -> ImportPreviewOut:
+    rows = body.rows if body.rows is not None else parse_import_csv(body.csv or "")
+    return ImportPreviewOut(rows=await UserService(session).preview(rows))
+
+
+@router.post("/users:import", response_model=ImportOut, summary="导入用户（新建为待激活，有错的行跳过）")
+async def import_users(body: ImportIn, session: SessionDep, user: UsersManage) -> ImportOut:
+    return ImportOut(imported=await UserService(session).import_rows(body.rows, user))
+
+
+@router.post("/users/{user_id}:enable", response_model=AdminUserOut, summary="启用用户")
+async def enable_user(user_id: str, session: SessionDep, user: UsersManage) -> AdminUserOut:
+    return user_out(await UserService(session).enable(user_id, user))
+
+
+@router.post(
+    "/users/{user_id}:disable",
+    response_model=AdminUserOut,
+    summary="停用用户（有待办审批时 transferTo 必填）",
+)
+async def disable_user(
+    user_id: str, session: SessionDep, user: UsersManage, body: DisableIn | None = None
+) -> AdminUserOut:
+    return user_out(await UserService(session).disable(user_id, body.transfer_to if body else None, user))

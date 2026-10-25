@@ -11,12 +11,13 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import BigInteger as BigIntegerType
+from sqlalchemy import Select, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.repository import BaseRepository
 from app.core.clock import now
-from app.modules.admin.models import AuditLog, AuditResult
+from app.modules.admin.models import AuditLog, AuditResult, SysUser, UserStatus
 
 
 def _new_code(at: datetime) -> str:
@@ -134,3 +135,57 @@ class AuditLogRepository(BaseRepository[AuditLog]):
             .order_by(func.max(AuditLog.time).desc(), func.max(AuditLog.id).desc())
         )
         return list((await self.session.scalars(stmt)).all())
+
+
+# ---- 用户（Users.vue，api-index §4.1）----
+
+
+@dataclass(frozen=True)
+class UserFilter:
+    dept: str | None = None
+    status: UserStatus | None = None
+    kw: str | None = None
+
+
+class SysUserRepository(BaseRepository[SysUser]):
+    model = SysUser
+    not_found_message = "用户不存在"
+
+    def listed(self) -> Select[tuple[SysUser]]:
+        """用户列表里的人：有 role 的（ADMIN_USERS + 新建 / 导入）；SYS_USERS 占位人 role 为 null，不列出。"""
+        return self.base_query().where(SysUser.role.is_not(None))
+
+    def list_stmt(self, f: UserFilter) -> Select[tuple[SysUser]]:
+        """顺序 = mock ADMIN_USERS 的数组顺序 = code 升序（U010231、U010238…），新用户编号更大排在后面。"""
+        stmt = self.listed()
+        if f.dept:
+            stmt = stmt.where(SysUser.dept == f.dept)
+        if f.status:
+            stmt = stmt.where(SysUser.status == f.status)
+        if f.kw:
+            stmt = stmt.where(
+                or_(
+                    func.strpos(SysUser.name, f.kw) > 0,
+                    func.strpos(func.coalesce(SysUser.account, ""), f.kw) > 0,
+                    func.strpos(SysUser.code, f.kw) > 0,
+                )
+            )
+        return stmt.order_by(SysUser.code)
+
+    async def get_listed(self, code: str) -> SysUser | None:
+        return await self.session.scalar(self.listed().where(SysUser.code == code))
+
+    async def existing_accounts(self, accounts: list[str]) -> set[str]:
+        if not accounts:
+            return set()
+        rows = await self.session.scalars(select(SysUser.account).where(SysUser.account.in_(accounts)))
+        return {a for a in rows if a}
+
+    async def next_code(self) -> int:
+        """下一个用户编号的数字部分：现有 U+数字 编号的最大值 + 1。"""
+        mx = await self.session.scalar(
+            select(func.max(func.substring(SysUser.code, 2).cast(BigIntegerType))).where(
+                SysUser.code.op("~")(r"^U[0-9]+$")
+            )
+        )
+        return int(mx or 0) + 1

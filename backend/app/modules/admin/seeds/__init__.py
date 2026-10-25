@@ -1,6 +1,7 @@
 """admin 模块 seed（JSON 组 system）。
 
-- json/system/ADMIN_USERS.json → sys_user：120 个用户，code = id（U010231…），状态中文 → 英文 code。
+- json/system/ADMIN_USERS.json → sys_user：120 个用户，code = id（U010231…），状态中文 → 英文 code，
+  role、createdAt → role、joined_on（admin_0002）。
 - extra/system/SYS_USERS.json → sys_user：mock 里出现、但不在 ADMIN_USERS 的人
   （演示身份王敏 admin / 李娜 viewer、版本发布人）。
   - 编号能在 mock 审计日志里找到的照抄：王敏 U010001、陈立军 U010002、何静 U010003、刘婷 U010004；
@@ -16,6 +17,7 @@
 """
 
 import json
+from datetime import date
 from functools import lru_cache
 
 from app.core.config import get_settings
@@ -34,6 +36,8 @@ def _user(r: Row, _ctx: SeedContext) -> Row:
         "dept": r.get("dept"),
         "status": UserStatus(r.get("status", "启用")).name,
         "last_login_at": parse_display_dt(r["lastLogin"]) if r.get("lastLogin") else None,
+        "role": r.get("role"),
+        "joined_on": date.fromisoformat(r["createdAt"]) if r.get("createdAt") else None,
     }
 
 
