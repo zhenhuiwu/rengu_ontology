@@ -1,7 +1,7 @@
 # 动态本体（告警 / 动作中心）后台实现说明
 
 > 依据：`ui-vue/docs/backend/dynamic-api.md`（未改动）。代码：`app/modules/dynamic/`，迁移 `migrations/versions/dynamic_0001_alert_action_run.py`。
-> 基线：共享仓库 `ui-vue` 的 `master` = `429ac70`（04152a0 + qa-r2；fa07b57 + 骨架分页 / 往返 helper / client SAVEPOINT；骨架 + qa + static + Palantir action / event / integration，单 head `event_0001`；骨架在 `backend/`）。本分支先在 `c705c25` 上搬入，再 rebase 到 `fa07b57`、`04152a0`。最初在独立仓库基于骨架 `72204b0` 开发，搬入后对应关系：`72204b0`→`0c35c1d`、`b1fc30a`→`c646bd5`、`56a6dd2`→`4c22942`；本文和提交信息里引用的 `5b8fc21` 是 ui-vue 前端 mock 的导出版本，搬迁前后不变。
+> 基线：共享仓库 `ui-vue` 的 `master` = `fd3e119`（429ac70 + static-r2；fa07b57 + 骨架分页 / 往返 helper / client SAVEPOINT；骨架 + qa + static + Palantir action / event / integration，单 head `event_0001`；骨架在 `backend/`）。本分支先在 `c705c25` 上搬入，再 rebase 到 `fa07b57`、`04152a0`。最初在独立仓库基于骨架 `72204b0` 开发，搬入后对应关系：`72204b0`→`0c35c1d`、`b1fc30a`→`c646bd5`、`56a6dd2`→`4c22942`；本文和提交信息里引用的 `5b8fc21` 是 ui-vue 前端 mock 的导出版本，搬迁前后不变。
 > 本文只记**规格没写死、实现时自行判断**的点（[推断]）、桩、软引用和已知差异。
 
 ## 1. 范围
