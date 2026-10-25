@@ -149,7 +149,7 @@ export const LINKS: LinkType[] = [
     usage: [{ type: '指标', name: '新增会员数', note: '按门店拆分的默认路径' }, { type: '认证问答', name: '各门店本月新增会员数', note: '已认证' }],
     history: [BASE('吴佳')] },
   { id: 'member_holds_cards', name: '持有', from: 'member', to: 'stored_card', card: '1 : N', key: 'member_id = stored_card.member_id', fromProp: 'member_id', toProp: 'member_id',
-    join: 'T_MEMBER.member_id = T_SVC_CARD.member_id', reverse: '持卡会员', nullable: false, status: '草稿', cr: 'CR-0012', owner: '王敏',
+    join: 'T_MEMBER.member_id = T_SVC_CARD.member_id', reverse: '持卡会员', nullable: true, status: '草稿', cr: 'CR-0012', owner: '王敏',
     desc: '会员名下的储值卡，一个会员可持有多张。储值余额改由储值卡汇总。',
     quality: Q(99.88, 412, 0, { checkedAt: '2026-10-25 15:02', note: '测试环境抽检：412 张卡的会员已注销（迁移方式待补，见 CR-0012 V15 警告）' }),
     usage: [{ type: '指标', name: '储值卡余额', note: '新增 v1（同一变更单）' }, { type: '指标', name: '会员储值余额', note: '改为经本关系汇总' }],

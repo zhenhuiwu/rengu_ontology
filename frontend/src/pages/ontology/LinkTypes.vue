@@ -169,7 +169,7 @@ const DEF_ITEMS = computed(() => {
   const l = cur.value;
   return [
     { k: '基数', v: `${l.card}（${CARD_API[l.card]}）` },
-    { k: '允许为空', v: l.nullable ? '是：源端外键可以为空，为空的记录不参与关联' : '否：源端每条记录都必须关联到目标' },
+    { k: '允许为空', v: l.nullable ? '是：源端记录可以没有关联的目标，没有的不参与关联' : '否：源端每条记录都必须关联到目标' },
     { k: '反向名称', v: l.reverse ? `${l.reverse}（从${objName(l.to)}看${objName(l.from)}）` : '' },
     { k: '中间对象', v: l.via ?? '--' },
     { k: '负责人', v: l.owner },
