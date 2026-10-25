@@ -415,7 +415,7 @@ erDiagram
 | datasource_ref | `id` PK、`datasource_id` FK（指向 data 模块 `datasource.id`）、`db_schema`、`table_name`（`(datasource_id, db_schema, table_name)` UK）、`comment`、`rows`、`cols`、`updated_at`、`ref_note` | `DsTable{schema,name,comment,rows,cols,objectType,updatedAt,ref?}`；`dsTables(ds)` 已由 system 模块导出，静态只建引用、不重复导 |
 | object_mapping | `id` PK、`object_type_id` FK + UK（一个对象一条映射）、`datasource_ref_id` FK、`source_table`（如 `ERP.T_SALE_ORDER`）、`pk_mapping`、`sync_mode`（每小时增量…，全量时增量字段为空）、`incr_column`（`update_time`）、`last_sync_at`、`data_cutoff` | `ObjectTypes.vue:372-380` 映射头；`LINK_OBJECTS.table`；`Q_OBJECT_TYPES.source/cutoff`；`objectMeta().sync` |
 | property_mapping | `id` PK、`object_mapping_id` FK、`property_id` FK（`(object_mapping_id, property_id)` UK）、`source_column`、`source_type`（VARCHAR2(32)…）、`transform`（字典映射、时区、脱敏、表达式） | `mock/objectProps.ts` `ORDER_MAP_ROWS`（订单 7 行覆盖，`ObjectTypes.vue:175-182` 引用）+ `SRC_TYPE`（按属性类型推源类型）+ `ObjProp.source` |
-| onto_qa_path | `id` PK、`group_key`（`from→to`，快照键，`(group_key, seq)` UK）[推断]、`from_object_id` FK、`to_object_id` FK、`seq`（`(from_object_id, to_object_id, seq)` UK，即前端 paths 下标）、`is_default`、`hint`、`check_note`（组级 `check`，只存默认路径行）[推断]；`(from_object_id, to_object_id)` 下 `is_default` 恰好 1 条（V13，部分唯一索引 `uq_onto_qa_path_default` 保证至多 1 条） | `PathGroup{from,to,paths,examples,check}`、`QaPath{links[],isDefault,hint?}` |
+| onto_qa_path | `id` PK、`group_key`（`from→to`，快照键，`(group_key, seq)` UK）[推断]、`from_object_id` FK、`to_object_id` FK、`seq`（`(from_object_id, to_object_id, seq)` UK，即前端 paths 下标）、`is_default`、`hint`、`check_note`（组级 `check`，只存默认路径行）[推断]；`(from_object_id, to_object_id)` 下 `is_default` 恰好 1 条（V13，部分唯一索引 `uq_onto_qa_path_default` 保证至多 1 条；至少 1 条由测试/写接口校验） | `PathGroup{from,to,paths,examples,check}`、`QaPath{links[],isDefault,hint?}` |
 | onto_qa_path_step | `id` PK、`path_id` FK、`step_no`（`(path_id, step_no)` UK）、`link_type_id` FK | `QaPath.links[]` |
 | onto_qa_path_example | `id` PK、`from_object_id` FK、`to_object_id` FK、`seq`（`(from_object_id, to_object_id, seq)` UK）、`question`、`path_id` FK（可空：前端 `path=-1` 先追问）[推断]、`how` | `PathGroup.examples` |
 | object_view | `id` PK、`code` UK（V-ORD0002）、`object_type_id` FK、`name`、`kind`（我的页面/对象列表/工作台视图）、`owner`（人名软引用，非外键）、`visibility`（仅自己/指定人员/角色/全员）、`visible_to`、`filter_text`、`props` jsonb、`last_used_at`、`uses_30d` | `ObjectView`；`viewsOf(objectId, objName)` |
@@ -573,7 +573,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
   "objectTypes": { "order": { "name": "订单", "api": "SalesOrder", "domain": "零售交易", "pk": "order_id", "title": "...", "conflict": "...", "lifecycle": "正式", "sync": "...", "desc": "...", "sampleQuestions": [], "mapping": { "datasourceRef": "...", "sourceTable": "ERP.T_SALE_ORDER", "incrColumn": "update_time" } } },
   "properties":  { "order": { "order_id": { "name": "订单号", "type": "string", "group": "...", "pk": true, "sensitive": false, "enumName": null, "source": "order_id", "transform": "", "desc": "..." } } },
   "links":       { "order_belongs_to_store": { "from": "order", "to": "store", "card": "N : 1", "via": null, "join": "...", "since": "v2026.03.2" } },
-  "qaPaths":     { "order→store": { "paths": [ { "links": ["order_belongs_to_store"], "isDefault": true } ], "examples": [] } },
+  "qaPaths":     { "order→store": { "from": "order", "to": "store", "check": null, "paths": [ { "links": ["order_belongs_to_store"], "isDefault": true } ], "examples": [] } },
   "metrics":     { "gross_margin": { "version": "v2", "api": "gross_margin_rate", "formula": "...", "unit": "%", "synonyms": [], "dims": [], "disallowed": [] } },
   "dimensions":  { "org": { "kind": "维度", "levels": [], "qa": {}, "values": [ { "code": "...", "since": null, "until": null } ], "mappings": [] } },
   "terms":       { "K-018": { "type": "术语", "status": "已发布", "since": "v2026.08.2", "stoppedIn": null, "synonyms": [], "applies": [], "filters": [], "periods": [] } }
@@ -731,7 +731,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
   | `DAILY_GMV[].date`、`DAILY_GMV_EX[].date` | `M-DD` | `9-26` |
 
   已扫过 `seeds/json/static/` 全部 JSON 和 derived，带秒的只有 `METRICS.updatedAt`。
-- **分页**：只有前端真的分页的列表才用服务端分页，`page`（从 1）、`size`，返回 `{items,total,page,size}`；其余一次返回数组（CONVENTIONS §3）。
+- **分页**：只有前端真的分页的列表才用服务端分页，`page`（从 1）、`size`，返回 `{items,total,page,size}`；其余一次返回数组（CONVENTIONS §3）。页码收拢与骨架 `PageParams.clamp` / 前端 `src/mock/paginate.ts:13` 一致：`page ≤ 0`（含 0、负数）当第 1 页、不报 422；超过最后一页 → 返回最后一页数据，响应 `page` 为收拢后的值；`total = 0` → `page = 1`、`items = []`。`size` 仍校验 `1..200`。静态列表先 `focusId` 定页（若有），再 `clamp(total)`，用 `Page.of` 组装。
 
   | 页面 | 分页的列表（每页条数，文件:行） |
   |---|---|
