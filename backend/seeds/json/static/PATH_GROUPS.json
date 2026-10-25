@@ -1,0 +1,123 @@
+[
+  {
+    "from": "order",
+    "to": "store",
+    "check": "V13 通过：3 条路径，默认“下单门店”",
+    "paths": [
+      {
+        "links": [
+          "order_belongs_to_store"
+        ],
+        "isDefault": true
+      },
+      {
+        "links": [
+          "order_fulfilled_by_store"
+        ],
+        "isDefault": false,
+        "hint": "履约门店、发货门店"
+      },
+      {
+        "links": [
+          "order_placed_by_member",
+          "member_registered_at_store"
+        ],
+        "isDefault": false,
+        "hint": "会员注册门店、开卡门店"
+      }
+    ],
+    "examples": [
+      {
+        "q": "上个月各门店的有效订单数是多少？",
+        "path": 0,
+        "how": "没有指明路径，按默认路径“下单门店”"
+      },
+      {
+        "q": "上个月各门店下单和履约的订单数对比",
+        "path": -1,
+        "how": "同时出现“下单”和“履约”，先追问用户按哪条路径统计，不静默走默认路径"
+      },
+      {
+        "q": "9 月各履约门店的出库及时率",
+        "path": 1,
+        "how": "命中“履约门店”，走需指明的路径"
+      },
+      {
+        "q": "哪个门店发货的订单最多？",
+        "path": 1,
+        "how": "“发货门店”是“履约门店”的同义词"
+      },
+      {
+        "q": "按会员开卡门店统计本月订单数",
+        "path": 2,
+        "how": "命中“开卡门店”，经下单会员 → 注册门店；散客订单不计入"
+      }
+    ]
+  },
+  {
+    "from": "store",
+    "to": "region",
+    "check": "V13 通过：2 条路径，默认“所属大区”（CR-0005）",
+    "paths": [
+      {
+        "links": [
+          "store_in_region"
+        ],
+        "isDefault": true
+      },
+      {
+        "links": [
+          "store_in_province",
+          "province_in_region"
+        ],
+        "isDefault": false,
+        "hint": "按省份归属、行政大区"
+      }
+    ],
+    "examples": [
+      {
+        "q": "上月各大区销售额",
+        "path": 0,
+        "how": "默认按门店的考核大区，不经过省份"
+      },
+      {
+        "q": "按省份归属统计各大区门店数",
+        "path": 1,
+        "how": "命中“按省份归属”，经所在省份 → 省份所属大区"
+      }
+    ]
+  },
+  {
+    "from": "order",
+    "to": "warehouse",
+    "check": "V13 通过：2 条路径，默认“发货仓”",
+    "paths": [
+      {
+        "links": [
+          "order_ships_from_warehouse"
+        ],
+        "isDefault": true
+      },
+      {
+        "links": [
+          "order_has_shipments",
+          "shipment_from_warehouse"
+        ],
+        "isDefault": false,
+        "hint": "实际出库仓"
+      }
+    ],
+    "examples": [
+      {
+        "q": "各仓本周订单数",
+        "path": 0,
+        "how": "默认按下单时分配的发货仓"
+      },
+      {
+        "q": "各仓实际出库的订单数",
+        "path": 1,
+        "how": "命中“实际出库”，经出库单 → 出库仓；拆单的订单按出库单去重"
+      }
+    ]
+  }
+]

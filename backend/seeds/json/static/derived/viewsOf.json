@@ -1,0 +1,4195 @@
+[
+  {
+    "args": [
+      "order",
+      "订单"
+    ],
+    "result": [
+      {
+        "id": "V-ORD0002",
+        "objectId": "order",
+        "name": "大额订单（≥ 2,000 元）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-10-22 19:44",
+        "uses30d": 313,
+        "filter": "应付金额（不含税）≥ 2,000",
+        "props": [
+          "应付金额（不含税）",
+          "会员"
+        ]
+      },
+      {
+        "id": "V-ORD0108",
+        "objectId": "order",
+        "name": "跨店履约订单（副本）",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-21 11:28",
+        "uses30d": 33,
+        "filter": "门店 ≠ 履约门店",
+        "props": [
+          "门店",
+          "履约门店"
+        ]
+      },
+      {
+        "id": "V-ORD0101",
+        "objectId": "order",
+        "name": "小程序渠道近 7 天订单（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-10-20 19:08",
+        "uses30d": 24,
+        "filter": "渠道 = 小程序；出库时间 = 近 7 天",
+        "props": [
+          "渠道",
+          "出库时间"
+        ]
+      },
+      {
+        "id": "V-ORD0109",
+        "objectId": "order",
+        "name": "门店日销看板（卡片）",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-20 13:01",
+        "uses30d": 43,
+        "filter": "出库时间 = 昨天；按门店分组",
+        "props": [
+          "门店",
+          "出库时间",
+          "实付金额"
+        ]
+      },
+      {
+        "id": "V-ORD0011",
+        "objectId": "order",
+        "name": "支付方式分布",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-20 04:42",
+        "uses30d": 255,
+        "filter": "按支付方式分组",
+        "props": [
+          "支付方式"
+        ]
+      },
+      {
+        "id": "V-ORD0000",
+        "objectId": "order",
+        "name": "今日待出库订单",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-10-16 11:31",
+        "uses30d": 271,
+        "filter": "订单状态 = 待出库；下单时间 = 今天",
+        "props": [
+          "订单状态",
+          "下单时间",
+          "门店"
+        ]
+      },
+      {
+        "id": "V-ORD0003",
+        "objectId": "order",
+        "name": "外卖平台取消单",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-16 07:58",
+        "uses30d": 218,
+        "filter": "渠道 = 外卖平台；订单状态 = 已取消",
+        "props": [
+          "渠道",
+          "订单状态",
+          "取消时间"
+        ]
+      },
+      {
+        "id": "V-ORD0107",
+        "objectId": "order",
+        "name": "优惠券核销订单（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-10-14 01:03",
+        "uses30d": 4,
+        "filter": "优惠券码 非空",
+        "props": [
+          "优惠券码",
+          "优惠金额"
+        ]
+      },
+      {
+        "id": "V-ORD0008",
+        "objectId": "order",
+        "name": "跨店履约订单",
+        "kind": "工作台视图",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-07 03:36",
+        "uses30d": 22,
+        "filter": "门店 ≠ 履约门店",
+        "props": [
+          "门店",
+          "履约门店"
+        ]
+      },
+      {
+        "id": "V-ORD0007",
+        "objectId": "order",
+        "name": "优惠券核销订单",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-10-04 21:46",
+        "uses30d": 13,
+        "filter": "优惠券码 非空",
+        "props": [
+          "优惠券码",
+          "优惠金额"
+        ]
+      },
+      {
+        "id": "V-ORD0001",
+        "objectId": "order",
+        "name": "小程序渠道近 7 天订单",
+        "kind": "我的页面",
+        "owner": "何静",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-10-04 00:35",
+        "uses30d": 348,
+        "filter": "渠道 = 小程序；出库时间 = 近 7 天",
+        "props": [
+          "渠道",
+          "出库时间"
+        ]
+      },
+      {
+        "id": "V-ORD0005",
+        "objectId": "order",
+        "name": "社区团购履约跟踪",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-10-02 04:35",
+        "uses30d": 182,
+        "filter": "渠道 = 社区团购；配送方式 = 自提",
+        "props": [
+          "渠道",
+          "配送方式",
+          "履约门店"
+        ]
+      },
+      {
+        "id": "V-ORD0010",
+        "objectId": "order",
+        "name": "退款高发订单",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-09-30 18:59",
+        "uses30d": 198,
+        "filter": "关联退款单 ≥ 1",
+        "props": [
+          "订单号"
+        ]
+      },
+      {
+        "id": "V-ORD0004",
+        "objectId": "order",
+        "name": "华东大区出库及时率看板",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-09-30 16:39",
+        "uses30d": 363,
+        "filter": "大区 = 华东；按门店分组",
+        "props": [
+          "门店",
+          "出库时间",
+          "订单状态"
+        ]
+      },
+      {
+        "id": "V-ORD0104",
+        "objectId": "order",
+        "name": "华东大区出库及时率看板（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-30 09:10",
+        "uses30d": 16,
+        "filter": "大区 = 华东；按门店分组",
+        "props": [
+          "门店",
+          "出库时间",
+          "订单状态"
+        ]
+      },
+      {
+        "id": "V-ORD0006",
+        "objectId": "order",
+        "name": "测试单巡检",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-23 12:25",
+        "uses30d": 56,
+        "filter": "是否测试单 = 是",
+        "props": [
+          "是否测试单"
+        ]
+      },
+      {
+        "id": "V-ORD0102",
+        "objectId": "order",
+        "name": "大额订单（≥ 2,000 元）（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-09-22 21:08",
+        "uses30d": 49,
+        "filter": "应付金额（不含税）≥ 2,000",
+        "props": [
+          "应付金额（不含税）",
+          "会员"
+        ]
+      },
+      {
+        "id": "V-ORD0106",
+        "objectId": "order",
+        "name": "测试单巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-21 01:24",
+        "uses30d": 36,
+        "filter": "是否测试单 = 是",
+        "props": [
+          "是否测试单"
+        ]
+      },
+      {
+        "id": "V-ORD0009",
+        "objectId": "order",
+        "name": "门店日销看板",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-09-16 02:46",
+        "uses30d": 211,
+        "filter": "出库时间 = 昨天；按门店分组",
+        "props": [
+          "门店",
+          "出库时间",
+          "实付金额"
+        ]
+      },
+      {
+        "id": "V-ORD0111",
+        "objectId": "order",
+        "name": "支付方式分布（副本）",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-10 09:27",
+        "uses30d": 49,
+        "filter": "按支付方式分组",
+        "props": [
+          "支付方式"
+        ]
+      },
+      {
+        "id": "V-ORD0105",
+        "objectId": "order",
+        "name": "社区团购履约跟踪（副本）",
+        "kind": "对象列表",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-08-22 19:33",
+        "uses30d": 33,
+        "filter": "渠道 = 社区团购；配送方式 = 自提",
+        "props": [
+          "渠道",
+          "配送方式",
+          "履约门店"
+        ]
+      },
+      {
+        "id": "V-ORD0103",
+        "objectId": "order",
+        "name": "外卖平台取消单（卡片）",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-08-21 02:22",
+        "uses30d": 14,
+        "filter": "渠道 = 外卖平台；订单状态 = 已取消",
+        "props": [
+          "渠道",
+          "订单状态",
+          "取消时间"
+        ]
+      },
+      {
+        "id": "V-ORD0100",
+        "objectId": "order",
+        "name": "今日待出库订单（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-08-19 21:37",
+        "uses30d": 42,
+        "filter": "订单状态 = 待出库；下单时间 = 今天",
+        "props": [
+          "订单状态",
+          "下单时间",
+          "门店"
+        ]
+      },
+      {
+        "id": "V-ORD0110",
+        "objectId": "order",
+        "name": "退款高发订单（副本）",
+        "kind": "工作台视图",
+        "owner": "吴佳",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-16 12:57",
+        "uses30d": 9,
+        "filter": "关联退款单 ≥ 1",
+        "props": [
+          "订单号"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "order_line",
+      "订单行"
+    ],
+    "result": [
+      {
+        "id": "V-ORD0001",
+        "objectId": "order_line",
+        "name": "订单行 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-21 17:54",
+        "uses30d": 286,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-ORD0002",
+        "objectId": "order_line",
+        "name": "订单行 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-10-13 19:15",
+        "uses30d": 277,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-ORD0204",
+        "objectId": "order_line",
+        "name": "订单行 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-10-01 17:50",
+        "uses30d": 3,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-ORD0202",
+        "objectId": "order_line",
+        "name": "订单行 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "何静",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-09-27 00:05",
+        "uses30d": 32,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-ORD0000",
+        "objectId": "order_line",
+        "name": "订单行全部记录",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-25 05:03",
+        "uses30d": 92,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-ORD0004",
+        "objectId": "order_line",
+        "name": "订单行 · 我关注的",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-17 17:07",
+        "uses30d": 174,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-ORD0003",
+        "objectId": "order_line",
+        "name": "订单行 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-15 12:34",
+        "uses30d": 267,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-ORD0102",
+        "objectId": "order_line",
+        "name": "订单行 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-09-08 22:47",
+        "uses30d": 38,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-ORD0101",
+        "objectId": "order_line",
+        "name": "订单行 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-09-05 21:39",
+        "uses30d": 59,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-ORD0104",
+        "objectId": "order_line",
+        "name": "订单行 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-09-02 00:36",
+        "uses30d": 14,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-ORD0200",
+        "objectId": "order_line",
+        "name": "订单行全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "何静",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-08-29 08:37",
+        "uses30d": 18,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-ORD0203",
+        "objectId": "order_line",
+        "name": "订单行 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-08-28 21:18",
+        "uses30d": 35,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-ORD0103",
+        "objectId": "order_line",
+        "name": "订单行 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-08-26 16:36",
+        "uses30d": 40,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-ORD0100",
+        "objectId": "order_line",
+        "name": "订单行全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-14 04:55",
+        "uses30d": 16,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-ORD0201",
+        "objectId": "order_line",
+        "name": "订单行 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-07-06 05:34",
+        "uses30d": 56,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "refund",
+      "退款单"
+    ],
+    "result": [
+      {
+        "id": "V-REF0001",
+        "objectId": "refund",
+        "name": "退款单 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-24 09:23",
+        "uses30d": 260,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REF0100",
+        "objectId": "refund",
+        "name": "退款单全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-16 11:45",
+        "uses30d": 45,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REF0002",
+        "objectId": "refund",
+        "name": "退款单 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-10-13 23:19",
+        "uses30d": 336,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REF0201",
+        "objectId": "refund",
+        "name": "退款单 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "陈立军",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-10-13 09:50",
+        "uses30d": 34,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REF0003",
+        "objectId": "refund",
+        "name": "退款单 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-08 19:05",
+        "uses30d": 399,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0000",
+        "objectId": "refund",
+        "name": "退款单全部记录",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-25 19:13",
+        "uses30d": 111,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REF0102",
+        "objectId": "refund",
+        "name": "退款单 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-09-21 12:50",
+        "uses30d": 11,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REF0004",
+        "objectId": "refund",
+        "name": "退款单 · 我关注的",
+        "kind": "我的页面",
+        "owner": "何静",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-17 15:08",
+        "uses30d": 388,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0204",
+        "objectId": "refund",
+        "name": "退款单 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-09-12 10:10",
+        "uses30d": 3,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0101",
+        "objectId": "refund",
+        "name": "退款单 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-09 19:49",
+        "uses30d": 10,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REF0104",
+        "objectId": "refund",
+        "name": "退款单 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-07 10:56",
+        "uses30d": 15,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0200",
+        "objectId": "refund",
+        "name": "退款单全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-08-13 13:06",
+        "uses30d": 4,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REF0103",
+        "objectId": "refund",
+        "name": "退款单 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-09 03:02",
+        "uses30d": 39,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0202",
+        "objectId": "refund",
+        "name": "退款单 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-07-08 06:26",
+        "uses30d": 49,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REF0203",
+        "objectId": "refund",
+        "name": "退款单 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-06-30 16:25",
+        "uses30d": 2,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      }
+    ]
+  },
+  {
+    "args": [
+      "refund_line",
+      "退款行"
+    ],
+    "result": [
+      {
+        "id": "V-REF0004",
+        "objectId": "refund_line",
+        "name": "退款行 · 我关注的",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-23 02:49",
+        "uses30d": 283,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0100",
+        "objectId": "refund_line",
+        "name": "退款行全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-18 19:41",
+        "uses30d": 24,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REF0000",
+        "objectId": "refund_line",
+        "name": "退款行全部记录",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-10-15 05:07",
+        "uses30d": 163,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REF0002",
+        "objectId": "refund_line",
+        "name": "退款行 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-11 21:00",
+        "uses30d": 340,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REF0101",
+        "objectId": "refund_line",
+        "name": "退款行 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-07 11:15",
+        "uses30d": 30,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REF0001",
+        "objectId": "refund_line",
+        "name": "退款行 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-10-02 03:55",
+        "uses30d": 52,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REF0003",
+        "objectId": "refund_line",
+        "name": "退款行 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-28 00:10",
+        "uses30d": 205,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0103",
+        "objectId": "refund_line",
+        "name": "退款行 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-17 16:39",
+        "uses30d": 46,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0102",
+        "objectId": "refund_line",
+        "name": "退款行 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "何静",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-08 08:28",
+        "uses30d": 43,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REF0204",
+        "objectId": "refund_line",
+        "name": "退款行 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "何静",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-08-24 20:24",
+        "uses30d": 38,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0203",
+        "objectId": "refund_line",
+        "name": "退款行 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-08-24 13:38",
+        "uses30d": 26,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0104",
+        "objectId": "refund_line",
+        "name": "退款行 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-08-19 06:55",
+        "uses30d": 58,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REF0201",
+        "objectId": "refund_line",
+        "name": "退款行 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-07-25 02:49",
+        "uses30d": 58,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REF0200",
+        "objectId": "refund_line",
+        "name": "退款行全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "吴佳",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-07-22 07:09",
+        "uses30d": 50,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REF0202",
+        "objectId": "refund_line",
+        "name": "退款行 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "何静",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-07-15 01:49",
+        "uses30d": 41,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "member",
+      "会员"
+    ],
+    "result": [
+      {
+        "id": "V-MEM0101",
+        "objectId": "member",
+        "name": "金卡及以上会员（副本）",
+        "kind": "工作台视图",
+        "owner": "周晓峰",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-23 15:34",
+        "uses30d": 43,
+        "filter": "会员等级 ∈ 金卡、钻石、至尊",
+        "props": [
+          "会员等级"
+        ]
+      },
+      {
+        "id": "V-MEM0006",
+        "objectId": "member",
+        "name": "生日券候选",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-10-21 00:17",
+        "uses30d": 110,
+        "filter": "生日 = 下月",
+        "props": [
+          "生日"
+        ]
+      },
+      {
+        "id": "V-MEM0107",
+        "objectId": "member",
+        "name": "积分即将清零（副本）",
+        "kind": "工作台视图",
+        "owner": "周晓峰",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-17 15:27",
+        "uses30d": 37,
+        "filter": "积分余额 ≥ 500",
+        "props": [
+          "积分余额"
+        ]
+      },
+      {
+        "id": "V-MEM0001",
+        "objectId": "member",
+        "name": "金卡及以上会员",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-15 13:03",
+        "uses30d": 114,
+        "filter": "会员等级 ∈ 金卡、钻石、至尊",
+        "props": [
+          "会员等级"
+        ]
+      },
+      {
+        "id": "V-MEM0002",
+        "objectId": "member",
+        "name": "本月新注册会员",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-08 06:57",
+        "uses30d": 139,
+        "filter": "注册时间 = 本月",
+        "props": [
+          "注册时间",
+          "注册渠道"
+        ]
+      },
+      {
+        "id": "V-MEM0007",
+        "objectId": "member",
+        "name": "积分即将清零",
+        "kind": "我的页面",
+        "owner": "何静",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-02 17:19",
+        "uses30d": 139,
+        "filter": "积分余额 ≥ 500",
+        "props": [
+          "积分余额"
+        ]
+      },
+      {
+        "id": "V-MEM0005",
+        "objectId": "member",
+        "name": "门店注册会员",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-02 17:12",
+        "uses30d": 341,
+        "filter": "注册门店 非空；按门店分组",
+        "props": [
+          "注册门店"
+        ]
+      },
+      {
+        "id": "V-MEM0103",
+        "objectId": "member",
+        "name": "储值余额 TOP 500（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-01 13:27",
+        "uses30d": 2,
+        "filter": "储值余额 降序",
+        "props": [
+          "储值余额"
+        ]
+      },
+      {
+        "id": "V-MEM0000",
+        "objectId": "member",
+        "name": "沉睡会员（90 天未下单）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-09-30 20:04",
+        "uses30d": 353,
+        "filter": "最近下单时间 ≤ 今天 − 90 天",
+        "props": [
+          "最近下单时间"
+        ]
+      },
+      {
+        "id": "V-MEM0003",
+        "objectId": "member",
+        "name": "储值余额 TOP 500",
+        "kind": "对象列表",
+        "owner": "陈立军",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-09-26 22:44",
+        "uses30d": 39,
+        "filter": "储值余额 降序",
+        "props": [
+          "储值余额"
+        ]
+      },
+      {
+        "id": "V-MEM0100",
+        "objectId": "member",
+        "name": "沉睡会员（90 天未下单）（卡片）",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-26 06:29",
+        "uses30d": 44,
+        "filter": "最近下单时间 ≤ 今天 − 90 天",
+        "props": [
+          "最近下单时间"
+        ]
+      },
+      {
+        "id": "V-MEM0102",
+        "objectId": "member",
+        "name": "本月新注册会员（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-23 01:51",
+        "uses30d": 35,
+        "filter": "注册时间 = 本月",
+        "props": [
+          "注册时间",
+          "注册渠道"
+        ]
+      },
+      {
+        "id": "V-MEM0004",
+        "objectId": "member",
+        "name": "冻结会员复核",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-17 13:54",
+        "uses30d": 231,
+        "filter": "会员状态 = 冻结",
+        "props": [
+          "会员状态"
+        ]
+      },
+      {
+        "id": "V-MEM0106",
+        "objectId": "member",
+        "name": "生日券候选（卡片）",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-09-04 07:21",
+        "uses30d": 59,
+        "filter": "生日 = 下月",
+        "props": [
+          "生日"
+        ]
+      },
+      {
+        "id": "V-MEM0104",
+        "objectId": "member",
+        "name": "冻结会员复核（副本）",
+        "kind": "工作台视图",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-08-17 11:38",
+        "uses30d": 5,
+        "filter": "会员状态 = 冻结",
+        "props": [
+          "会员状态"
+        ]
+      },
+      {
+        "id": "V-MEM0105",
+        "objectId": "member",
+        "name": "门店注册会员（副本）",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-15 15:59",
+        "uses30d": 21,
+        "filter": "注册门店 非空；按门店分组",
+        "props": [
+          "注册门店"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "member_level",
+      "会员等级"
+    ],
+    "result": [
+      {
+        "id": "V-MEM0200",
+        "objectId": "member_level",
+        "name": "会员等级全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-20 03:01",
+        "uses30d": 30,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-MEM0001",
+        "objectId": "member_level",
+        "name": "会员等级 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-18 16:13",
+        "uses30d": 353,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-MEM0002",
+        "objectId": "member_level",
+        "name": "会员等级 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-11 11:44",
+        "uses30d": 197,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-MEM0004",
+        "objectId": "member_level",
+        "name": "会员等级 · 我关注的",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-08 13:08",
+        "uses30d": 164,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-MEM0104",
+        "objectId": "member_level",
+        "name": "会员等级 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-10-03 21:26",
+        "uses30d": 11,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-MEM0000",
+        "objectId": "member_level",
+        "name": "会员等级全部记录",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-01 00:29",
+        "uses30d": 149,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-MEM0203",
+        "objectId": "member_level",
+        "name": "会员等级 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-09-30 15:04",
+        "uses30d": 25,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-MEM0100",
+        "objectId": "member_level",
+        "name": "会员等级全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-09-28 11:52",
+        "uses30d": 28,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-MEM0204",
+        "objectId": "member_level",
+        "name": "会员等级 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-28 01:14",
+        "uses30d": 13,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-MEM0003",
+        "objectId": "member_level",
+        "name": "会员等级 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-09-18 01:15",
+        "uses30d": 176,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-MEM0102",
+        "objectId": "member_level",
+        "name": "会员等级 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-12 18:14",
+        "uses30d": 1,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-MEM0101",
+        "objectId": "member_level",
+        "name": "会员等级 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-04 16:03",
+        "uses30d": 54,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-MEM0103",
+        "objectId": "member_level",
+        "name": "会员等级 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-08-24 16:37",
+        "uses30d": 37,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-MEM0201",
+        "objectId": "member_level",
+        "name": "会员等级 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-07-21 22:50",
+        "uses30d": 40,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-MEM0202",
+        "objectId": "member_level",
+        "name": "会员等级 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-07-11 12:44",
+        "uses30d": 41,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "store",
+      "门店"
+    ],
+    "result": [
+      {
+        "id": "V-STO0006",
+        "objectId": "store",
+        "name": "停业待复核门店",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-23 15:58",
+        "uses30d": 316,
+        "filter": "门店状态 = 停业",
+        "props": [
+          "门店状态"
+        ]
+      },
+      {
+        "id": "V-STO0007",
+        "objectId": "store",
+        "name": "加盟店名录",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-21 20:55",
+        "uses30d": 201,
+        "filter": "业态 = 加盟店",
+        "props": [
+          "业态",
+          "门店电话"
+        ]
+      },
+      {
+        "id": "V-STO0101",
+        "objectId": "store",
+        "name": "筹备中门店（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-19 12:49",
+        "uses30d": 12,
+        "filter": "门店状态 = 筹备",
+        "props": [
+          "门店状态",
+          "开业日期"
+        ]
+      },
+      {
+        "id": "V-STO0005",
+        "objectId": "store",
+        "name": "补货仓分布",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-18 20:21",
+        "uses30d": 67,
+        "filter": "按补货仓分组",
+        "props": [
+          "补货仓"
+        ]
+      },
+      {
+        "id": "V-STO0002",
+        "objectId": "store",
+        "name": "社区店经营看板",
+        "kind": "工作台视图",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-17 11:02",
+        "uses30d": 102,
+        "filter": "业态 = 社区店",
+        "props": [
+          "业态",
+          "营业面积"
+        ]
+      },
+      {
+        "id": "V-STO0102",
+        "objectId": "store",
+        "name": "社区店经营看板（副本）",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-10-14 12:23",
+        "uses30d": 43,
+        "filter": "业态 = 社区店",
+        "props": [
+          "业态",
+          "营业面积"
+        ]
+      },
+      {
+        "id": "V-STO0103",
+        "objectId": "store",
+        "name": "同店口径门店清单（卡片）",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-11 06:58",
+        "uses30d": 58,
+        "filter": "开业日期 ≤ 今天 − 12 个月",
+        "props": [
+          "开业日期"
+        ]
+      },
+      {
+        "id": "V-STO0004",
+        "objectId": "store",
+        "name": "按业态门店数",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-10-08 04:42",
+        "uses30d": 176,
+        "filter": "按业态分组",
+        "props": [
+          "业态"
+        ]
+      },
+      {
+        "id": "V-STO0000",
+        "objectId": "store",
+        "name": "华东营业门店",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-06 12:18",
+        "uses30d": 218,
+        "filter": "大区 = 华东；门店状态 = 营业",
+        "props": [
+          "所属大区",
+          "门店状态"
+        ]
+      },
+      {
+        "id": "V-STO0001",
+        "objectId": "store",
+        "name": "筹备中门店",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-05 23:33",
+        "uses30d": 124,
+        "filter": "门店状态 = 筹备",
+        "props": [
+          "门店状态",
+          "开业日期"
+        ]
+      },
+      {
+        "id": "V-STO0003",
+        "objectId": "store",
+        "name": "同店口径门店清单",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-03 14:20",
+        "uses30d": 185,
+        "filter": "开业日期 ≤ 今天 − 12 个月",
+        "props": [
+          "开业日期"
+        ]
+      },
+      {
+        "id": "V-STO0105",
+        "objectId": "store",
+        "name": "补货仓分布（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-02 17:33",
+        "uses30d": 31,
+        "filter": "按补货仓分组",
+        "props": [
+          "补货仓"
+        ]
+      },
+      {
+        "id": "V-STO0008",
+        "objectId": "store",
+        "name": "大区门店地图",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-25 19:12",
+        "uses30d": 197,
+        "filter": "按所属大区；经纬度",
+        "props": [
+          "所属大区",
+          "经度",
+          "纬度"
+        ]
+      },
+      {
+        "id": "V-STO0106",
+        "objectId": "store",
+        "name": "停业待复核门店（卡片）",
+        "kind": "我的页面",
+        "owner": "吴佳",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-25 12:22",
+        "uses30d": 48,
+        "filter": "门店状态 = 停业",
+        "props": [
+          "门店状态"
+        ]
+      },
+      {
+        "id": "V-STO0100",
+        "objectId": "store",
+        "name": "华东营业门店（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-19 02:18",
+        "uses30d": 4,
+        "filter": "大区 = 华东；门店状态 = 营业",
+        "props": [
+          "所属大区",
+          "门店状态"
+        ]
+      },
+      {
+        "id": "V-STO0009",
+        "objectId": "store",
+        "name": "mini 店坪效",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-09-16 11:25",
+        "uses30d": 356,
+        "filter": "业态 = mini 店",
+        "props": [
+          "业态",
+          "营业面积"
+        ]
+      },
+      {
+        "id": "V-STO0109",
+        "objectId": "store",
+        "name": "mini 店坪效（卡片）",
+        "kind": "我的页面",
+        "owner": "吴佳",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-09-03 16:17",
+        "uses30d": 52,
+        "filter": "业态 = mini 店",
+        "props": [
+          "业态",
+          "营业面积"
+        ]
+      },
+      {
+        "id": "V-STO0104",
+        "objectId": "store",
+        "name": "按业态门店数（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-01 11:38",
+        "uses30d": 20,
+        "filter": "按业态分组",
+        "props": [
+          "业态"
+        ]
+      },
+      {
+        "id": "V-STO0107",
+        "objectId": "store",
+        "name": "加盟店名录（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-31 10:29",
+        "uses30d": 55,
+        "filter": "业态 = 加盟店",
+        "props": [
+          "业态",
+          "门店电话"
+        ]
+      },
+      {
+        "id": "V-STO0108",
+        "objectId": "store",
+        "name": "大区门店地图（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-23 06:26",
+        "uses30d": 24,
+        "filter": "按所属大区；经纬度",
+        "props": [
+          "所属大区",
+          "经度",
+          "纬度"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "region",
+      "大区"
+    ],
+    "result": [
+      {
+        "id": "V-REG0001",
+        "objectId": "region",
+        "name": "大区 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-25 06:48",
+        "uses30d": 54,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REG0203",
+        "objectId": "region",
+        "name": "大区 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-16 19:59",
+        "uses30d": 47,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REG0002",
+        "objectId": "region",
+        "name": "大区 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-06 20:14",
+        "uses30d": 260,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REG0201",
+        "objectId": "region",
+        "name": "大区 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "何静",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-10-05 23:44",
+        "uses30d": 52,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REG0003",
+        "objectId": "region",
+        "name": "大区 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-03 14:18",
+        "uses30d": 196,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REG0102",
+        "objectId": "region",
+        "name": "大区 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-09-22 23:37",
+        "uses30d": 29,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REG0004",
+        "objectId": "region",
+        "name": "大区 · 我关注的",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-20 08:33",
+        "uses30d": 195,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REG0000",
+        "objectId": "region",
+        "name": "大区全部记录",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-09-19 08:18",
+        "uses30d": 244,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REG0100",
+        "objectId": "region",
+        "name": "大区全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-08-31 03:27",
+        "uses30d": 27,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REG0202",
+        "objectId": "region",
+        "name": "大区 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "吴佳",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-08-30 04:56",
+        "uses30d": 39,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-REG0103",
+        "objectId": "region",
+        "name": "大区 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-08-18 00:08",
+        "uses30d": 1,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-REG0104",
+        "objectId": "region",
+        "name": "大区 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-17 14:10",
+        "uses30d": 36,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-REG0101",
+        "objectId": "region",
+        "name": "大区 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-08-15 23:42",
+        "uses30d": 19,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-REG0200",
+        "objectId": "region",
+        "name": "大区全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-08-07 08:48",
+        "uses30d": 25,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-REG0204",
+        "objectId": "region",
+        "name": "大区 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-07-07 22:29",
+        "uses30d": 41,
+        "filter": "收藏的记录",
+        "props": []
+      }
+    ]
+  },
+  {
+    "args": [
+      "province",
+      "省份"
+    ],
+    "result": [
+      {
+        "id": "V-PRO0003",
+        "objectId": "province",
+        "name": "省份 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "陈立军",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-23 19:33",
+        "uses30d": 275,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0001",
+        "objectId": "province",
+        "name": "省份 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "何静",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-23 02:54",
+        "uses30d": 398,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0000",
+        "objectId": "province",
+        "name": "省份全部记录",
+        "kind": "对象列表",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-10-15 12:18",
+        "uses30d": 115,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0103",
+        "objectId": "province",
+        "name": "省份 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-06 10:39",
+        "uses30d": 57,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0002",
+        "objectId": "province",
+        "name": "省份 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "吴佳",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-10-02 05:37",
+        "uses30d": 8,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0101",
+        "objectId": "province",
+        "name": "省份 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-09-30 06:08",
+        "uses30d": 6,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0004",
+        "objectId": "province",
+        "name": "省份 · 我关注的",
+        "kind": "我的页面",
+        "owner": "何静",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-25 03:02",
+        "uses30d": 152,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0204",
+        "objectId": "province",
+        "name": "省份 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-09-21 08:57",
+        "uses30d": 41,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0104",
+        "objectId": "province",
+        "name": "省份 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-08-27 00:56",
+        "uses30d": 33,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0102",
+        "objectId": "province",
+        "name": "省份 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-08-16 23:21",
+        "uses30d": 53,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0100",
+        "objectId": "province",
+        "name": "省份全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "陈立军",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-09 02:35",
+        "uses30d": 51,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0203",
+        "objectId": "province",
+        "name": "省份 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "何静",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-01 02:54",
+        "uses30d": 3,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0202",
+        "objectId": "province",
+        "name": "省份 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-07-30 15:17",
+        "uses30d": 9,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0200",
+        "objectId": "province",
+        "name": "省份全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "何静",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-07-22 08:05",
+        "uses30d": 38,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0201",
+        "objectId": "province",
+        "name": "省份 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-07-17 09:21",
+        "uses30d": 36,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "product",
+      "商品"
+    ],
+    "result": [
+      {
+        "id": "V-PRO0001",
+        "objectId": "product",
+        "name": "商品 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-10-22 12:17",
+        "uses30d": 309,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0102",
+        "objectId": "product",
+        "name": "商品 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-13 23:26",
+        "uses30d": 27,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0203",
+        "objectId": "product",
+        "name": "商品 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-12 05:38",
+        "uses30d": 28,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0004",
+        "objectId": "product",
+        "name": "商品 · 我关注的",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-08 01:43",
+        "uses30d": 82,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0100",
+        "objectId": "product",
+        "name": "商品全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-05 03:38",
+        "uses30d": 2,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0003",
+        "objectId": "product",
+        "name": "商品 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-10-02 15:29",
+        "uses30d": 44,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0101",
+        "objectId": "product",
+        "name": "商品 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-30 19:45",
+        "uses30d": 16,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0103",
+        "objectId": "product",
+        "name": "商品 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-28 04:47",
+        "uses30d": 41,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0002",
+        "objectId": "product",
+        "name": "商品 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-09-20 07:31",
+        "uses30d": 65,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0000",
+        "objectId": "product",
+        "name": "商品全部记录",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-09-19 14:07",
+        "uses30d": 68,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0201",
+        "objectId": "product",
+        "name": "商品 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-30 23:40",
+        "uses30d": 20,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0104",
+        "objectId": "product",
+        "name": "商品 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-19 00:25",
+        "uses30d": 49,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0204",
+        "objectId": "product",
+        "name": "商品 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "陈立军",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-11 07:30",
+        "uses30d": 59,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0202",
+        "objectId": "product",
+        "name": "商品 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-08-06 22:29",
+        "uses30d": 20,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0200",
+        "objectId": "product",
+        "name": "商品全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-07-10 02:14",
+        "uses30d": 9,
+        "filter": "无筛选",
+        "props": []
+      }
+    ]
+  },
+  {
+    "args": [
+      "category",
+      "品类"
+    ],
+    "result": [
+      {
+        "id": "V-CAT0102",
+        "objectId": "category",
+        "name": "品类 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-25 01:14",
+        "uses30d": 7,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-CAT0101",
+        "objectId": "category",
+        "name": "品类 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "钱雨",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-24 20:23",
+        "uses30d": 6,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-CAT0003",
+        "objectId": "category",
+        "name": "品类 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "陈立军",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-20 15:26",
+        "uses30d": 77,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-CAT0103",
+        "objectId": "category",
+        "name": "品类 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-12 03:41",
+        "uses30d": 16,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-CAT0000",
+        "objectId": "category",
+        "name": "品类全部记录",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-10-11 10:53",
+        "uses30d": 88,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-CAT0001",
+        "objectId": "category",
+        "name": "品类 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-10-11 02:24",
+        "uses30d": 354,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-CAT0204",
+        "objectId": "category",
+        "name": "品类 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-07 00:18",
+        "uses30d": 29,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-CAT0002",
+        "objectId": "category",
+        "name": "品类 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "钱雨",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-10-04 13:58",
+        "uses30d": 307,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-CAT0201",
+        "objectId": "category",
+        "name": "品类 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-03 15:38",
+        "uses30d": 5,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-CAT0004",
+        "objectId": "category",
+        "name": "品类 · 我关注的",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-21 11:50",
+        "uses30d": 0,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-CAT0104",
+        "objectId": "category",
+        "name": "品类 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "吴佳",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-08-25 22:29",
+        "uses30d": 13,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-CAT0200",
+        "objectId": "category",
+        "name": "品类全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-08-21 13:14",
+        "uses30d": 9,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-CAT0100",
+        "objectId": "category",
+        "name": "品类全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "陈立军",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-14 00:58",
+        "uses30d": 7,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-CAT0203",
+        "objectId": "category",
+        "name": "品类 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-07-07 06:33",
+        "uses30d": 22,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-CAT0202",
+        "objectId": "category",
+        "name": "品类 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-06-27 10:12",
+        "uses30d": 51,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "promotion",
+      "促销活动"
+    ],
+    "result": [
+      {
+        "id": "V-PRO0100",
+        "objectId": "promotion",
+        "name": "促销活动全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-22 16:14",
+        "uses30d": 27,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0204",
+        "objectId": "promotion",
+        "name": "促销活动 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "何静",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-20 08:56",
+        "uses30d": 37,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0104",
+        "objectId": "promotion",
+        "name": "促销活动 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-16 12:07",
+        "uses30d": 5,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0001",
+        "objectId": "promotion",
+        "name": "促销活动 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-15 23:16",
+        "uses30d": 198,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0201",
+        "objectId": "promotion",
+        "name": "促销活动 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "吴佳",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-10-15 15:55",
+        "uses30d": 24,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0103",
+        "objectId": "promotion",
+        "name": "促销活动 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-07 17:40",
+        "uses30d": 54,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0003",
+        "objectId": "promotion",
+        "name": "促销活动 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-30 14:37",
+        "uses30d": 167,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0000",
+        "objectId": "promotion",
+        "name": "促销活动全部记录",
+        "kind": "对象列表",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-09-27 17:08",
+        "uses30d": 284,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0002",
+        "objectId": "promotion",
+        "name": "促销活动 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "赵磊",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-23 16:04",
+        "uses30d": 157,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0004",
+        "objectId": "promotion",
+        "name": "促销活动 · 我关注的",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-09-20 00:31",
+        "uses30d": 50,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PRO0102",
+        "objectId": "promotion",
+        "name": "促销活动 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-09-04 20:48",
+        "uses30d": 49,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0101",
+        "objectId": "promotion",
+        "name": "促销活动 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-08-28 11:59",
+        "uses30d": 26,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PRO0202",
+        "objectId": "promotion",
+        "name": "促销活动 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-09 04:33",
+        "uses30d": 35,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PRO0200",
+        "objectId": "promotion",
+        "name": "促销活动全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-08-08 19:34",
+        "uses30d": 58,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PRO0203",
+        "objectId": "promotion",
+        "name": "促销活动 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-08-05 17:49",
+        "uses30d": 5,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      }
+    ]
+  },
+  {
+    "args": [
+      "warehouse",
+      "仓库"
+    ],
+    "result": [
+      {
+        "id": "V-WAR0200",
+        "objectId": "warehouse",
+        "name": "仓库全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "钱雨",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-21 14:36",
+        "uses30d": 19,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-WAR0002",
+        "objectId": "warehouse",
+        "name": "仓库 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-20 22:23",
+        "uses30d": 383,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-WAR0003",
+        "objectId": "warehouse",
+        "name": "仓库 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-16 22:21",
+        "uses30d": 124,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-WAR0004",
+        "objectId": "warehouse",
+        "name": "仓库 · 我关注的",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-10-16 20:54",
+        "uses30d": 153,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-WAR0001",
+        "objectId": "warehouse",
+        "name": "仓库 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-14 18:08",
+        "uses30d": 210,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-WAR0000",
+        "objectId": "warehouse",
+        "name": "仓库全部记录",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-10 23:22",
+        "uses30d": 29,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-WAR0104",
+        "objectId": "warehouse",
+        "name": "仓库 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "何静",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-09-30 11:11",
+        "uses30d": 37,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-WAR0103",
+        "objectId": "warehouse",
+        "name": "仓库 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-23 21:17",
+        "uses30d": 39,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-WAR0202",
+        "objectId": "warehouse",
+        "name": "仓库 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-07 20:17",
+        "uses30d": 9,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-WAR0100",
+        "objectId": "warehouse",
+        "name": "仓库全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-09-03 11:46",
+        "uses30d": 54,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-WAR0102",
+        "objectId": "warehouse",
+        "name": "仓库 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-03 07:29",
+        "uses30d": 25,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-WAR0203",
+        "objectId": "warehouse",
+        "name": "仓库 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "吴佳",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-08-25 14:24",
+        "uses30d": 12,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-WAR0101",
+        "objectId": "warehouse",
+        "name": "仓库 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-08-21 19:20",
+        "uses30d": 9,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-WAR0201",
+        "objectId": "warehouse",
+        "name": "仓库 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-01 10:28",
+        "uses30d": 47,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-WAR0204",
+        "objectId": "warehouse",
+        "name": "仓库 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-07-18 12:08",
+        "uses30d": 2,
+        "filter": "收藏的记录",
+        "props": []
+      }
+    ]
+  },
+  {
+    "args": [
+      "inventory",
+      "库存快照"
+    ],
+    "result": [
+      {
+        "id": "V-INV0101",
+        "objectId": "inventory",
+        "name": "库存快照 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-23 14:50",
+        "uses30d": 44,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-INV0103",
+        "objectId": "inventory",
+        "name": "库存快照 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-16 05:19",
+        "uses30d": 39,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-INV0003",
+        "objectId": "inventory",
+        "name": "库存快照 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-03 23:14",
+        "uses30d": 319,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-INV0000",
+        "objectId": "inventory",
+        "name": "库存快照全部记录",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-27 02:53",
+        "uses30d": 19,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-INV0002",
+        "objectId": "inventory",
+        "name": "库存快照 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "何静",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-24 17:50",
+        "uses30d": 45,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-INV0001",
+        "objectId": "inventory",
+        "name": "库存快照 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "吴佳",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-22 08:26",
+        "uses30d": 129,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-INV0004",
+        "objectId": "inventory",
+        "name": "库存快照 · 我关注的",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-09-18 02:51",
+        "uses30d": 334,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-INV0200",
+        "objectId": "inventory",
+        "name": "库存快照全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-11 02:59",
+        "uses30d": 6,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-INV0202",
+        "objectId": "inventory",
+        "name": "库存快照 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-09-10 10:57",
+        "uses30d": 48,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-INV0100",
+        "objectId": "inventory",
+        "name": "库存快照全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-08-29 09:52",
+        "uses30d": 12,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-INV0104",
+        "objectId": "inventory",
+        "name": "库存快照 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-26 16:20",
+        "uses30d": 14,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-INV0102",
+        "objectId": "inventory",
+        "name": "库存快照 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-24 00:47",
+        "uses30d": 48,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-INV0201",
+        "objectId": "inventory",
+        "name": "库存快照 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-08-18 11:59",
+        "uses30d": 45,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-INV0203",
+        "objectId": "inventory",
+        "name": "库存快照 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-10 06:35",
+        "uses30d": 55,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-INV0204",
+        "objectId": "inventory",
+        "name": "库存快照 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-07-14 10:33",
+        "uses30d": 56,
+        "filter": "收藏的记录",
+        "props": []
+      }
+    ]
+  },
+  {
+    "args": [
+      "supplier",
+      "供应商"
+    ],
+    "result": [
+      {
+        "id": "V-SUP0002",
+        "objectId": "supplier",
+        "name": "供应商 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-20 14:19",
+        "uses30d": 397,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-SUP0004",
+        "objectId": "supplier",
+        "name": "供应商 · 我关注的",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-20 05:36",
+        "uses30d": 317,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-SUP0103",
+        "objectId": "supplier",
+        "name": "供应商 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "华东运营组 6 人",
+        "lastUsed": "2026-10-18 06:54",
+        "uses30d": 4,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-SUP0104",
+        "objectId": "supplier",
+        "name": "供应商 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-10-13 20:59",
+        "uses30d": 20,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-SUP0201",
+        "objectId": "supplier",
+        "name": "供应商 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-10 09:17",
+        "uses30d": 47,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-SUP0101",
+        "objectId": "supplier",
+        "name": "供应商 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-10-04 07:27",
+        "uses30d": 44,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-SUP0000",
+        "objectId": "supplier",
+        "name": "供应商全部记录",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-10-03 20:47",
+        "uses30d": 242,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-SUP0204",
+        "objectId": "supplier",
+        "name": "供应商 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-23 18:07",
+        "uses30d": 18,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-SUP0003",
+        "objectId": "supplier",
+        "name": "供应商 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-21 23:51",
+        "uses30d": 389,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-SUP0001",
+        "objectId": "supplier",
+        "name": "供应商 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-20 00:26",
+        "uses30d": 69,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-SUP0102",
+        "objectId": "supplier",
+        "name": "供应商 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "赵磊",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-09-11 21:40",
+        "uses30d": 39,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-SUP0100",
+        "objectId": "supplier",
+        "name": "供应商全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-09-08 18:56",
+        "uses30d": 21,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-SUP0203",
+        "objectId": "supplier",
+        "name": "供应商 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-31 06:05",
+        "uses30d": 23,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-SUP0200",
+        "objectId": "supplier",
+        "name": "供应商全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-08-29 10:31",
+        "uses30d": 1,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-SUP0202",
+        "objectId": "supplier",
+        "name": "供应商 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-07-12 00:30",
+        "uses30d": 25,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "purchase",
+      "采购单"
+    ],
+    "result": [
+      {
+        "id": "V-PUR0103",
+        "objectId": "purchase",
+        "name": "采购单 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-22 06:48",
+        "uses30d": 39,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PUR0200",
+        "objectId": "purchase",
+        "name": "采购单全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-13 16:30",
+        "uses30d": 10,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PUR0001",
+        "objectId": "purchase",
+        "name": "采购单 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "吴佳",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-10 06:46",
+        "uses30d": 350,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PUR0104",
+        "objectId": "purchase",
+        "name": "采购单 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "陈立军",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-04 11:57",
+        "uses30d": 37,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PUR0002",
+        "objectId": "purchase",
+        "name": "采购单 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "赵磊",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-10-03 11:08",
+        "uses30d": 373,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PUR0000",
+        "objectId": "purchase",
+        "name": "采购单全部记录",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-09-29 03:45",
+        "uses30d": 147,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PUR0003",
+        "objectId": "purchase",
+        "name": "采购单 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-25 01:11",
+        "uses30d": 369,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-PUR0004",
+        "objectId": "purchase",
+        "name": "采购单 · 我关注的",
+        "kind": "我的页面",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-21 22:21",
+        "uses30d": 63,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PUR0102",
+        "objectId": "purchase",
+        "name": "采购单 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-09-08 13:21",
+        "uses30d": 10,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PUR0100",
+        "objectId": "purchase",
+        "name": "采购单全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-19 23:33",
+        "uses30d": 38,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-PUR0101",
+        "objectId": "purchase",
+        "name": "采购单 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-08-17 19:33",
+        "uses30d": 23,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PUR0202",
+        "objectId": "purchase",
+        "name": "采购单 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "钱雨",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-08-15 05:58",
+        "uses30d": 26,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-PUR0201",
+        "objectId": "purchase",
+        "name": "采购单 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-07-27 18:04",
+        "uses30d": 44,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-PUR0204",
+        "objectId": "purchase",
+        "name": "采购单 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-07-25 11:56",
+        "uses30d": 51,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-PUR0203",
+        "objectId": "purchase",
+        "name": "采购单 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "何静",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-07-21 02:25",
+        "uses30d": 22,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      }
+    ]
+  },
+  {
+    "args": [
+      "shipment",
+      "出库单"
+    ],
+    "result": [
+      {
+        "id": "V-SHI0000",
+        "objectId": "shipment",
+        "name": "出库单全部记录",
+        "kind": "对象列表",
+        "owner": "林可",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-17 04:09",
+        "uses30d": 321,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-SHI0004",
+        "objectId": "shipment",
+        "name": "出库单 · 我关注的",
+        "kind": "我的页面",
+        "owner": "陈立军",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-16 03:45",
+        "uses30d": 372,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-SHI0003",
+        "objectId": "shipment",
+        "name": "出库单 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "王敏",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-10-12 22:53",
+        "uses30d": 21,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-SHI0204",
+        "objectId": "shipment",
+        "name": "出库单 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "钱雨",
+        "visibility": "指定人员",
+        "visibleTo": "刘婷、周晓峰",
+        "lastUsed": "2026-10-12 02:59",
+        "uses30d": 39,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-SHI0103",
+        "objectId": "shipment",
+        "name": "出库单 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-09-29 10:21",
+        "uses30d": 43,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-SHI0002",
+        "objectId": "shipment",
+        "name": "出库单 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-09-27 09:22",
+        "uses30d": 223,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-SHI0200",
+        "objectId": "shipment",
+        "name": "出库单全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-25 02:00",
+        "uses30d": 36,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-SHI0100",
+        "objectId": "shipment",
+        "name": "出库单全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "陈立军",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-24 05:02",
+        "uses30d": 44,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-SHI0202",
+        "objectId": "shipment",
+        "name": "出库单 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "陈立军",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-09-23 00:43",
+        "uses30d": 40,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-SHI0001",
+        "objectId": "shipment",
+        "name": "出库单 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-09-22 21:32",
+        "uses30d": 333,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-SHI0102",
+        "objectId": "shipment",
+        "name": "出库单 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "陈立军",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-09-08 15:52",
+        "uses30d": 45,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-SHI0104",
+        "objectId": "shipment",
+        "name": "出库单 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-08-16 00:11",
+        "uses30d": 22,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-SHI0101",
+        "objectId": "shipment",
+        "name": "出库单 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "指定人员",
+        "visibleTo": "财务 BP 3 人",
+        "lastUsed": "2026-08-15 06:16",
+        "uses30d": 30,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-SHI0203",
+        "objectId": "shipment",
+        "name": "出库单 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "吴佳",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-08-13 03:33",
+        "uses30d": 7,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-SHI0201",
+        "objectId": "shipment",
+        "name": "出库单 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-07-13 01:20",
+        "uses30d": 59,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      }
+    ]
+  },
+  {
+    "args": [
+      "employee",
+      "员工"
+    ],
+    "result": [
+      {
+        "id": "V-EMP0203",
+        "objectId": "employee",
+        "name": "员工 · 异常记录巡检（副本）",
+        "kind": "工作台视图",
+        "owner": "孙浩然",
+        "visibility": "角色",
+        "visibleTo": "大区经理（华东）",
+        "lastUsed": "2026-10-24 13:25",
+        "uses30d": 59,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-EMP0100",
+        "objectId": "employee",
+        "name": "员工全部记录（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "角色",
+        "visibleTo": "会员运营",
+        "lastUsed": "2026-10-23 07:35",
+        "uses30d": 51,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-EMP0102",
+        "objectId": "employee",
+        "name": "员工 · 按状态分组（副本）",
+        "kind": "对象列表",
+        "owner": "王敏",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-10-15 21:08",
+        "uses30d": 5,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-EMP0002",
+        "objectId": "employee",
+        "name": "员工 · 按状态分组",
+        "kind": "工作台视图",
+        "owner": "何静",
+        "visibility": "角色",
+        "visibleTo": "业务查看",
+        "lastUsed": "2026-10-13 23:46",
+        "uses30d": 220,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-EMP0202",
+        "objectId": "employee",
+        "name": "员工 · 按状态分组（卡片）",
+        "kind": "我的页面",
+        "owner": "赵磊",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-10-13 18:36",
+        "uses30d": 4,
+        "filter": "按状态分组",
+        "props": [
+          "状态"
+        ]
+      },
+      {
+        "id": "V-EMP0001",
+        "objectId": "employee",
+        "name": "员工 · 最近 7 天更新",
+        "kind": "我的页面",
+        "owner": "孙浩然",
+        "visibility": "指定人员",
+        "visibleTo": "商品部 9 人",
+        "lastUsed": "2026-10-12 10:54",
+        "uses30d": 236,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-EMP0000",
+        "objectId": "employee",
+        "name": "员工全部记录",
+        "kind": "对象列表",
+        "owner": "刘婷",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-10-07 03:37",
+        "uses30d": 199,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-EMP0003",
+        "objectId": "employee",
+        "name": "员工 · 异常记录巡检",
+        "kind": "对象列表",
+        "owner": "吴佳",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-27 13:03",
+        "uses30d": 296,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-EMP0004",
+        "objectId": "employee",
+        "name": "员工 · 我关注的",
+        "kind": "我的页面",
+        "owner": "周晓峰",
+        "visibility": "指定人员",
+        "visibleTo": "陈立军、何静、吴佳",
+        "lastUsed": "2026-09-25 00:39",
+        "uses30d": 180,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-EMP0200",
+        "objectId": "employee",
+        "name": "员工全部记录（副本）",
+        "kind": "工作台视图",
+        "owner": "林可",
+        "visibility": "角色",
+        "visibleTo": "数据分析师",
+        "lastUsed": "2026-09-16 02:03",
+        "uses30d": 24,
+        "filter": "无筛选",
+        "props": []
+      },
+      {
+        "id": "V-EMP0104",
+        "objectId": "employee",
+        "name": "员工 · 我关注的（副本）",
+        "kind": "工作台视图",
+        "owner": "刘婷",
+        "visibility": "仅自己",
+        "visibleTo": "--",
+        "lastUsed": "2026-09-12 08:20",
+        "uses30d": 10,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-EMP0101",
+        "objectId": "employee",
+        "name": "员工 · 最近 7 天更新（副本）",
+        "kind": "工作台视图",
+        "owner": "王敏",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-25 17:42",
+        "uses30d": 29,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      },
+      {
+        "id": "V-EMP0103",
+        "objectId": "employee",
+        "name": "员工 · 异常记录巡检（卡片）",
+        "kind": "我的页面",
+        "owner": "刘婷",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-08-21 18:26",
+        "uses30d": 19,
+        "filter": "数据质量检查未通过的记录",
+        "props": []
+      },
+      {
+        "id": "V-EMP0204",
+        "objectId": "employee",
+        "name": "员工 · 我关注的（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "角色",
+        "visibleTo": "门店店长",
+        "lastUsed": "2026-07-26 22:31",
+        "uses30d": 15,
+        "filter": "收藏的记录",
+        "props": []
+      },
+      {
+        "id": "V-EMP0201",
+        "objectId": "employee",
+        "name": "员工 · 最近 7 天更新（副本）",
+        "kind": "对象列表",
+        "owner": "周晓峰",
+        "visibility": "全员",
+        "visibleTo": "全部用户",
+        "lastUsed": "2026-07-15 19:35",
+        "uses30d": 10,
+        "filter": "源数据更新时间 = 近 7 天",
+        "props": [
+          "源数据更新时间"
+        ]
+      }
+    ]
+  }
+]

@@ -136,6 +136,9 @@ async def run_seeds(
     extra_root: Path | None = None,
 ) -> list[SeedReport]:
     """在给定会话里执行（不 commit，由调用方提交；dry_run 时调用方回滚）。"""
+    # 先导入全部模型包：各模块在包导入时登记快照 section，versioning 的 skip_if 要看到它们
+    import app.db.models  # noqa: F401
+
     reports: list[SeedReport] = []
     adapter = get_adapter(session)
     for module in modules or SEED_MODULES:

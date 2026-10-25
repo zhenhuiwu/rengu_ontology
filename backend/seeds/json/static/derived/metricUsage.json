@@ -1,0 +1,441 @@
+[
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "time"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        },
+        "note": "按下单时间"
+      },
+      {
+        "type": "指标",
+        "name": "销售额（含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv_tax"
+        },
+        "note": "允许按“日期”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        },
+        "note": "允许按“日期”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "有效订单数",
+        "hover": {
+          "kind": "metric",
+          "id": "order_cnt"
+        },
+        "note": "允许按“日期”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "退款率",
+        "hover": {
+          "kind": "metric",
+          "id": "refund_rate"
+        },
+        "note": "允许按“日期”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        },
+        "note": "按应出库时间"
+      },
+      {
+        "type": "指标",
+        "name": "客单价（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "atv"
+        },
+        "note": "按下单时间"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "org"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        },
+        "note": "组织维度默认路径：下单门店 → 所属大区"
+      },
+      {
+        "type": "指标",
+        "name": "销售额（含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv_tax"
+        },
+        "note": "允许按“门店”“大区”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        },
+        "note": "允许按“门店”“大区”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "有效订单数",
+        "hover": {
+          "kind": "metric",
+          "id": "order_cnt"
+        },
+        "note": "按门店、大区拆分（下单门店）"
+      },
+      {
+        "type": "指标",
+        "name": "退款率",
+        "hover": {
+          "kind": "metric",
+          "id": "refund_rate"
+        },
+        "note": "允许按“门店”“大区”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        },
+        "note": "按门店拆分；履约门店需指明"
+      },
+      {
+        "type": "指标",
+        "name": "客单价（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "atv"
+        },
+        "note": "允许按“门店”拆分（指标草稿）"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "geo"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        },
+        "note": "省份维度（经所在省份）"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "area"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        },
+        "note": "允许按“区域”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "销售额（含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv_tax"
+        },
+        "note": "允许按“区域”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        },
+        "note": "允许按“区域”拆分"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "category"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        },
+        "note": "商品维度：大类 › 中类 › 小类"
+      },
+      {
+        "type": "指标",
+        "name": "销售额（含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv_tax"
+        },
+        "note": "允许按“品类”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        },
+        "note": "商品、品类维度"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "channel"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        },
+        "note": "允许按“渠道”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "销售额（含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv_tax"
+        },
+        "note": "允许按“渠道”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "有效订单数",
+        "hover": {
+          "kind": "metric",
+          "id": "order_cnt"
+        },
+        "note": "允许按“渠道”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "退款率",
+        "hover": {
+          "kind": "metric",
+          "id": "refund_rate"
+        },
+        "note": "允许按“渠道”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        },
+        "note": "允许按“渠道”拆分"
+      },
+      {
+        "type": "指标",
+        "name": "客单价（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "atv"
+        },
+        "note": "允许按“渠道”拆分（指标草稿）"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "member_level"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        },
+        "note": "会员等级维度"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "format"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "warehouse"
+      }
+    ],
+    "result": [
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        },
+        "note": "按仓库拆分的默认路径"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "order_status"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "refund_reason"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "store_status"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "pay_method"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "delivery_type"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "shipment_status"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "product_status"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "static/DIM_ITEMS",
+        "key": "id",
+        "id": "alert_level"
+      }
+    ],
+    "result": []
+  }
+]

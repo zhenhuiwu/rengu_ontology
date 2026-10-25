@@ -1,0 +1,61 @@
+[
+  {
+    "type": "指标",
+    "name": "客单价",
+    "note": "分子",
+    "to": {
+      "path": "/build/ontology/metrics",
+      "query": {
+        "metric": "atv"
+      }
+    }
+  },
+  {
+    "type": "指标",
+    "name": "毛利率",
+    "note": "分母",
+    "to": {
+      "path": "/build/ontology/metrics",
+      "query": {
+        "metric": "gross_margin"
+      }
+    }
+  },
+  {
+    "type": "指标",
+    "name": "复购客户销售额",
+    "note": "基础口径，加会员过滤",
+    "to": {
+      "path": "/build/ontology/metrics",
+      "query": {
+        "metric": "repeat_sales"
+      }
+    }
+  },
+  {
+    "type": "规则",
+    "name": "R-021 门店销售额环比下降",
+    "note": "条件：销售额（不含税）周环比 < −15.0%；口径升版后需回放试跑",
+    "to": {
+      "path": "/build/ontology/rules",
+      "query": {
+        "rule": "R-021"
+      }
+    }
+  },
+  {
+    "type": "看板",
+    "name": "华东大区经营日报",
+    "note": "4 个卡片"
+  },
+  {
+    "type": "看板",
+    "name": "门店经营月报",
+    "note": "2 个卡片"
+  },
+  {
+    "type": "认证问答",
+    "name": "上月各大区销售额",
+    "note": "已认证"
+  }
+]

@@ -1,0 +1,129 @@
+[
+  {
+    "id": "order",
+    "name": "订单",
+    "api": "SalesOrder",
+    "group": "交易",
+    "table": "ERP.T_SALE_ORDER"
+  },
+  {
+    "id": "order_line",
+    "name": "订单行",
+    "api": "SalesOrderLine",
+    "group": "交易",
+    "table": "ERP.T_SALE_ORDER_LINE"
+  },
+  {
+    "id": "refund",
+    "name": "退款单",
+    "api": "Refund",
+    "group": "交易",
+    "table": "ERP.T_REFUND"
+  },
+  {
+    "id": "refund_line",
+    "name": "退款行",
+    "api": "RefundLine",
+    "group": "交易",
+    "table": "ERP.T_REFUND_LINE"
+  },
+  {
+    "id": "member",
+    "name": "会员",
+    "api": "Member",
+    "group": "客户",
+    "table": "CRM.T_MEMBER"
+  },
+  {
+    "id": "member_level",
+    "name": "会员等级",
+    "api": "MemberLevel",
+    "group": "客户",
+    "table": "CRM.T_MEMBER_LEVEL"
+  },
+  {
+    "id": "stored_card",
+    "name": "储值卡",
+    "api": "StoredValueCard",
+    "group": "客户",
+    "table": "CRM.T_SVC_CARD",
+    "draft": true
+  },
+  {
+    "id": "store",
+    "name": "门店",
+    "api": "Store",
+    "group": "组织",
+    "table": "ORG.T_STORE"
+  },
+  {
+    "id": "region",
+    "name": "大区",
+    "api": "Region",
+    "group": "组织",
+    "table": "ORG.T_REGION"
+  },
+  {
+    "id": "province",
+    "name": "省份",
+    "api": "Province",
+    "group": "组织",
+    "table": "ORG.T_PROVINCE"
+  },
+  {
+    "id": "employee",
+    "name": "员工",
+    "api": "Employee",
+    "group": "组织",
+    "table": "HR_CORE.T_EMPLOYEE"
+  },
+  {
+    "id": "product",
+    "name": "商品",
+    "api": "Product",
+    "group": "商品",
+    "table": "MDM.T_SKU"
+  },
+  {
+    "id": "category",
+    "name": "品类",
+    "api": "Category",
+    "group": "商品",
+    "table": "MDM.T_CATEGORY"
+  },
+  {
+    "id": "promotion",
+    "name": "促销活动",
+    "api": "Promotion",
+    "group": "商品",
+    "table": "PROMO.T_ACTIVITY"
+  },
+  {
+    "id": "warehouse",
+    "name": "仓库",
+    "api": "Warehouse",
+    "group": "供应链",
+    "table": "WMS.T_WAREHOUSE"
+  },
+  {
+    "id": "inventory",
+    "name": "库存快照",
+    "api": "InventorySnapshot",
+    "group": "供应链",
+    "table": "WMS.T_STOCK_SNAPSHOT"
+  },
+  {
+    "id": "supplier",
+    "name": "供应商",
+    "api": "Supplier",
+    "group": "供应链",
+    "table": "NC.T_SUPPLIER"
+  },
+  {
+    "id": "shipment",
+    "name": "出库单",
+    "api": "Shipment",
+    "group": "供应链",
+    "table": "TMS.T_SHIPMENT"
+  }
+]
