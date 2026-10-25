@@ -11,7 +11,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
-import { EVAL_QS, NEXT_VERSION, T_METRICS, crById, metricLabel, planText, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
+import { CUR_VERSION, EVAL_QS, NEXT_VERSION, T_METRICS, crById, metricLabel, planText, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
 import { tuning, addCert, nextDraftCr, ME } from './state';
 import CrTag from './CrTag.vue';
 
@@ -22,7 +22,7 @@ const confirm = useConfirmStore();
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 
-const STATUSES: FbStatus[] = ['待处理', '已转同义词', '已转认证问答', '已解决', '已忽略'];
+const STATUSES: FbStatus[] = ['待处理', '已转同义词', '已转认证问答', '待发布生效', '已忽略'];
 const kw = computed({ get: () => q('fkw'), set: (v: string) => setQuery({ fkw: v || undefined }) });
 const stF = computed({ get: () => q('fst') || undefined, set: (v?: string) => setQuery({ fst: v || undefined }) });
 const kF = computed({ get: () => q('fk') || undefined, set: (v?: string) => setQuery({ fk: v || undefined }) });
@@ -40,22 +40,25 @@ const cols = [
   { title: '问题', key: 'question', width: 200, ellipsis: true },
   { title: '回答', key: 'answer', ellipsis: true },
   { title: '用户说明', key: 'reason', width: 190, ellipsis: true },
-  { title: '建议修正', key: 'fix', width: 300, ellipsis: true },
-  { title: '状态', key: 'status', width: 150 },
+  { title: '建议修正', key: 'fix', width: 260, ellipsis: true },
+  { title: '状态', key: 'status', width: 190 },
   { title: '操作', key: 'op', width: 150 },
 ];
-const stCls = (s: FbStatus) => (s === '待处理' ? 'tl-attention' : s === '已忽略' ? 'c-3' : 'c-2');
+const stCls = (s: FbStatus) => (s === '待处理' ? 'tl-attention' : s === '已忽略' || s === '待发布生效' ? 'c-3' : 'c-2');
+/** 修正已在“已通过、待整版发布”的变更单里 */
+const awaitingRelease = (cr?: string) => !!cr && crById(cr)?.status === '已通过';
 
 /** 转认证问答需要语义计划：按建议的问题在评测题库 / 高频问题里找到已确认的理解 */
 const planFor = (f: Feedback): SemPlan | undefined =>
   tuning.freq.find((x) => x.question === f.fix.text)?.plan ?? EVAL_QS.find((x) => x.question === f.fix.text)?.expect ?? tuning.certs.find((c) => c.question === f.fix.text)?.plan;
 const existing = (f: Feedback) => tuning.certs.find((c) => c.question === f.fix.text);
 const certBlock = (f: Feedback) => (existing(f) || planFor(f) ? '' : f.fix.target?.includes('新建') ? '本体里还没有对应指标，需先在指标口径中新建' : '还没有可用的语义计划，请先在评测题库里补一道题');
+const relEvals = computed(() => (cur.value?.resolvedBy ? EVAL_QS.filter((x) => x.cr === cur.value!.resolvedBy).length : 0));
 const synCovered = (f: Feedback) => tuning.synonyms.find((s) => s.word === f.fix.text);
 
 async function toSynonym(f: Feedback) {
   const covered = synCovered(f);
-  if (covered) { f.status = '已转同义词'; f.resolvedBy = covered.cr; f.handler = ME; message.success(`「${f.fix.text}」已在 ${covered.cr} 中，已关联`); return; }
+  if (covered) { f.status = awaitingRelease(covered.cr) ? '待发布生效' : '已转同义词'; f.resolvedBy = covered.cr; f.handler = ME; message.success(`「${f.fix.text}」已在 ${covered.cr} 中，已关联`); return; }
   const cr = nextDraftCr();
   const ok = await confirm.ask({
     title: '转为同义词', target: `${f.id} ${f.question}`,
@@ -120,7 +123,7 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
         <span v-else-if="column.key === 'reason'" class="c-2" :title="record.reason">{{ record.reason }}</span>
         <span v-else-if="column.key === 'fix'" class="c-2" :title="`${record.fix.text} → ${record.fix.target}`"><span class="c-3">{{ record.fix.kind }}</span> {{ record.fix.text }} → {{ record.fix.target }}</span>
         <span v-else-if="column.key === 'status'" class="fb-st">
-          <span :class="stCls(record.status)">{{ record.status }}</span>
+          <span :class="stCls(record.status)" style="white-space: nowrap">{{ record.status }}</span>
           <CrTag v-if="isCr(record.resolvedBy)" :id="record.resolvedBy" :text="record.resolvedBy" />
           <span v-else-if="record.resolvedBy" class="num c-3 t-12">{{ record.resolvedBy }}</span>
         </span>
@@ -153,7 +156,7 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
         <span class="t-12 c-3">状态</span><span class="t-14" :class="stCls(cur.status)">{{ cur.status }}<span v-if="cur.handler" class="c-3"> · {{ cur.handler }}</span></span>
         <span class="t-12 c-3">关联</span><span class="t-14"><CrTag v-if="isCr(cur.resolvedBy)" :id="cur.resolvedBy!" /><span v-else class="c-2 num">{{ cur.resolvedBy ?? '--' }}</span></span>
       </div>
-      <div v-if="cur.resolvedBy === 'CR-0008'" class="t-12 c-2">CR-0008 已为出库及时率 v1 补充同义词“发货及时率”（已通过，随 {{ NEXT_VERSION }} 发布）；评测“履约相关 3 题”试跑全部通过。</div>
+      <div v-if="cur.status === '待发布生效' && cur.resolvedBy" class="t-12 c-2">{{ cur.resolvedBy }} 已为{{ cur.fix.target }}补充同义词“{{ cur.fix.text }}”，变更单已通过，随 {{ NEXT_VERSION }} 发布后生效；生效前问数仍按当前版本 {{ CUR_VERSION }} 回答，发布前自动回放 {{ relEvals }} 道相关评测题。</div>
       <div class="qd-sec">
         <div class="t-14 fw-600 c-1">问题与回答</div>
         <div class="qd-row"><span class="t-12 c-3 qd-k">问题</span><span class="t-14 c-1">{{ cur.question }}</span></div>

@@ -4,7 +4,7 @@
  * 与 src/mock/changes.ts 对齐（只读引用）：
  *  - CR-0010 退款率 v2→v3（审核中）：认证问答“上个月各大区的退款率”待重新认证；评测“退款相关 4 题”发布前自动回放
  *  - CR-0011 毛利率 v2→v3（草稿）：认证问答“各品类毛利率排名”待重新认证；规则 R-007 阈值需重估
- *  - CR-0008 同义词“发货及时率”→出库及时率（已通过）：评测“履约相关 3 题”召回率预计提升；对应反馈已解决
+ *  - CR-0008 同义词“发货及时率”→出库及时率（已通过）：评测“履约相关 3 题”召回率预计提升；对应反馈“待发布生效”
  *  - CR-0015 同义词“成交单量”→有效订单数（已通过）：“订单量相关 2 题”；与 CR-0008 一起进 v2026.10.4，发布前自动回放 5 题（ER-0025）
  */
 import { CHANGE_REQUESTS, NEXT_VERSION, type ChangeRequest } from './changes';
@@ -25,19 +25,37 @@ export const crById = (id: string): ChangeRequest | undefined => CHANGE_REQUESTS
 /** 待发布 v2026.10.4 包含的变更单（与“变更与发布”的整版发布一致） */
 export const NEXT_RELEASE_CRS = ['CR-0008', 'CR-0015'];
 
-/** 问数可用的指标（名称 + 口径版本）；drawerId 有值的在公共 METRICS 里能打开指标抽屉 */
+/**
+ * 未发布变更单 → 受影响指标（只列改口径的单；同义词单不影响已认证答案）。
+ * master 的 changes.ts 用 touches（metric:refund_rate / metric:gross_margin）表达同样的关系；
+ * qa 分支的 changes.ts 还没有 touches，所以这里放一个小映射，metricIds 与 touches 的写法一致。
+ */
+export const CR_METRIC_TOUCHES: Record<string, { metricIds: string[]; note: string }> = {
+  'CR-0010': { metricIds: ['refund_rate'], note: '退款率将由 v2（申请时间）改为 v3（退款完成时间），发布后需按 v3 重新认证' },
+  'CR-0011': { metricIds: ['gross_margin'], note: '毛利率将扣除促销补贴（v2 → v3），发布后需重新认证' },
+};
+/** 本页指标 key → touches 里的指标 id */
+const METRIC_IDS: Record<string, string> = { gmv: 'gmv', gmv_tax: 'gmv_tax', margin: 'gross_margin', orders: 'order_cnt', ship: 'ship_ontime', atv: 'atv', repeat: 'repeat_sales', repeat_tax: 'repeat_sales_tax', refund: 'refund_rate' };
+const isPending = (id: string) => { const st = crById(id)?.status; return !!st && st !== '已发布' && st !== '已驳回'; };
+/** 指标当前受哪张未发布的改口径变更单影响 */
+export const pendingCrOf = (metricKey: string): string | undefined =>
+  Object.keys(CR_METRIC_TOUCHES).find((id) => isPending(id) && CR_METRIC_TOUCHES[id].metricIds.includes(METRIC_IDS[metricKey] ?? metricKey));
+
+/** 问数可用的指标（名称 + 口径版本）；drawerId 有值的在公共 METRICS 里能打开指标抽屉；cr 由 pendingCrOf 推导 */
 export interface TMetric { key: string; name: string; version: string; drawerId?: string; cr?: string }
 export const T_METRICS: Record<string, TMetric> = {
   gmv: { key: 'gmv', name: '销售额（不含税）', version: 'v3', drawerId: 'gmv' },
   gmv_tax: { key: 'gmv_tax', name: '销售额（含税）', version: 'v2', drawerId: 'gmv_tax' },
-  margin: { key: 'margin', name: '毛利率', version: 'v2', drawerId: 'gross_margin', cr: 'CR-0011' },
+  margin: { key: 'margin', name: '毛利率', version: 'v2', drawerId: 'gross_margin' },
   orders: { key: 'orders', name: '有效订单数', version: 'v1', drawerId: 'order_cnt' },
   ship: { key: 'ship', name: '出库及时率', version: 'v1', drawerId: 'ship_ontime' },
   atv: { key: 'atv', name: '客单价（不含税）', version: 'v1', drawerId: 'atv' },
   repeat: { key: 'repeat', name: QA_METRIC.ex.name, version: QA_METRIC.ex.version },
   repeat_tax: { key: 'repeat_tax', name: QA_METRIC.in.name, version: QA_METRIC.in.version },
-  refund: { key: 'refund', name: '退款率', version: 'v2', cr: 'CR-0010' },
+  refund: { key: 'refund', name: '退款率', version: 'v2' },
 };
+Object.values(T_METRICS).forEach((m) => { m.cr = pendingCrOf(m.key); });
+
 export const metricLabel = (k: string) => `${T_METRICS[k].name} ${T_METRICS[k].version}`;
 
 export interface SemPlan { metric: string; dims: string[]; time: string; filter?: string; sort?: string }
@@ -91,10 +109,11 @@ const CERT_SEEDS: CertSeed[] = [
 function buildCerts(): CertQa[] {
   return CERT_SEEDS.map(([question, plan, certifier, certifiedAt, hits, variants], i) => {
     const m = T_METRICS[plan.metric];
-    const affected = (question === '上个月各大区的退款率' && 'CR-0010') || (question === '各品类毛利率排名' && 'CR-0011') || undefined;
-    const status: CertStatus = affected ? '待重新认证' : i === 26 ? '已停用' : i === 13 || i === 25 ? '待认证' : '已认证';
-    const note = affected === 'CR-0010' ? '退款率将由 v2（申请时间）改为 v3（退款完成时间），发布后需按 v3 重新认证'
-      : affected === 'CR-0011' ? '毛利率将扣除促销补贴（v2 → v3，变更单草稿），发布后需重新认证'
+    // 按绑定指标推导：绑定了“未发布改口径变更单”所改指标的问答都要重新认证（已停用的除外）
+    const disabled = i === 26;
+    const affected = disabled ? undefined : m.cr;
+    const status: CertStatus = disabled ? '已停用' : affected ? '待重新认证' : i === 13 || i === 25 ? '待认证' : '已认证';
+    const note = affected ? CR_METRIC_TOUCHES[affected].note
       : status === '已停用' ? '与“各渠道退款率”重复，已合并' : status === '待认证' ? `${m.name}仍是草稿口径，发布后再认证` : undefined;
     return {
       id: `CQ-${String(i + 1).padStart(3, '0')}`, question, variants: variants ?? [], plan, status, cr: affected,
@@ -152,7 +171,7 @@ const EQ_SEEDS: [string, EvalGroup, SemPlan, boolean?][] = [
 // 题数与 changes.ts 对齐：退款相关 4 题（CR-0010）、履约相关 3 题（CR-0008）、订单量相关 2 题（CR-0015，问法含“成交单量”）
 export const EVAL_QS: EvalQ[] = EQ_SEEDS.map(([question, group, expect, fail], i) => ({
   id: `EQ-${String(i + 1).padStart(3, '0')}`, question, group, expect, last: fail ? '失败' : '通过',
-  cr: question.includes('成交单量') ? 'CR-0015' : group === '退款' ? 'CR-0010' : group === '履约' ? 'CR-0008' : group === '毛利' ? 'CR-0011' : undefined,
+  cr: pendingCrOf(expect.metric) ?? (question.includes('成交单量') ? 'CR-0015' : group === '履约' ? 'CR-0008' : undefined),
 }));
 export const EVAL_GROUPS: EvalGroup[] = ['销售', '退款', '履约', '毛利', '复购', '订单'];
 
@@ -190,13 +209,15 @@ const LAST_FAILS = EVAL_QS.filter((q) => q.last === '失败').map((q) => q.id);
 const OLDER_FAILS = ['EQ-012', 'EQ-030', 'EQ-022', 'EQ-033'];
 function buildRuns(): EvalRun[] {
   const all = EVAL_QS.length;
+  const nOf = (id: string) => EVAL_QS.filter((q) => q.cr === id).length;
+  const nRel = NEXT_RELEASE_CRS.reduce((n, id) => n + nOf(id), 0);
   const runs: EvalRun[] = [
-    { id: 'ER-0025', time: '发布前自动', trigger: '整版发布前回放', version: `${NEXT_VERSION}（候选）`, scope: '履约 3 + 订单量 2 题', total: 5, passed: 0, status: '待运行', operator: '系统', fails: [], crs: NEXT_RELEASE_CRS, note: `整版发布 ${NEXT_VERSION}（CR-0008 + CR-0015）前自动回放 5 道评测题；当前版本 5 题均未召回，同义词生效后预计全部通过` },
-    { id: 'ER-0024', time: '审核通过后', trigger: `CR-0010 发布前回放`, version: '待定', scope: '退款相关 4 题', total: 4, passed: 0, status: '待运行', operator: '系统', fails: [], cr: 'CR-0010', note: `CR-0010 审核中，不在 ${NEXT_VERSION}；审核通过、纳入整版发布前自动回放，按 v3（退款完成时间）比对` },
+    { id: 'ER-0025', time: '发布前自动', trigger: '整版发布前回放', version: `${NEXT_VERSION}（候选）`, scope: `履约 ${nOf('CR-0008')} + 订单量 ${nOf('CR-0015')} 题`, total: nRel, passed: 0, status: '待运行', operator: '系统', fails: [], crs: NEXT_RELEASE_CRS, note: `整版发布 ${NEXT_VERSION}（CR-0008 + CR-0015）前自动回放 ${nRel} 道评测题；当前版本 ${EVAL_QS.filter((q) => q.cr && NEXT_RELEASE_CRS.includes(q.cr) && q.last === '失败').length} 题未召回，同义词生效后预计全部通过` },
+    { id: 'ER-0024', time: '审核通过后', trigger: `CR-0010 发布前回放`, version: '待定', scope: `退款相关 ${nOf('CR-0010')} 题`, total: nOf('CR-0010'), passed: 0, status: '待运行', operator: '系统', fails: [], cr: 'CR-0010', note: `CR-0010 审核中，不在 ${NEXT_VERSION}；审核通过、纳入整版发布前自动回放，按 v3（退款完成时间）比对` },
     { id: 'ER-0023', time: '2026-10-25 14:30', trigger: '手动运行', version: CUR_VERSION, scope: `全部 ${all} 题`, total: all, passed: all - LAST_FAILS.length, status: '已完成', operator: '王敏', fails: LAST_FAILS.map(failCase) },
     { id: 'ER-0022', time: '2026-10-25 02:00', trigger: '每日定时', version: CUR_VERSION, scope: `全部 ${all} 题`, total: all, passed: all - LAST_FAILS.length, status: '已完成', operator: '系统', fails: LAST_FAILS.map(failCase) },
     { id: 'ER-0021', time: '2026-10-24 21:40', trigger: 'v2026.10.3 发布后回放', version: CUR_VERSION, scope: `全部 ${all} 题`, total: all, passed: all - LAST_FAILS.length, status: '已完成', operator: '系统', fails: LAST_FAILS.map(failCase), note: 'CR-0007（销售额改不含税）随 v2026.10.3 发布后整版回放，失败与发布前一致' },
-    { id: 'ER-0020', time: '2026-10-24 16:20', trigger: 'CR-0008 审核通过后试跑', version: `${NEXT_VERSION}（候选）`, scope: '履约相关 3 题', total: 3, passed: 3, status: '已完成', operator: '周晓峰', fails: [], cr: 'CR-0008', note: '同义词“发货及时率”生效后召回 3/3（当前版本 1/3），发布后预计提升' },
+    { id: 'ER-0020', time: '2026-10-24 16:20', trigger: 'CR-0008 审核通过后试跑', version: `${NEXT_VERSION}（候选）`, scope: `履约相关 ${nOf('CR-0008')} 题`, total: nOf('CR-0008'), passed: nOf('CR-0008'), status: '已完成', operator: '周晓峰', fails: [], cr: 'CR-0008', note: `同义词“发货及时率”生效后召回 ${nOf('CR-0008')}/${nOf('CR-0008')}（当前版本 ${EVAL_QS.filter((q) => q.cr === 'CR-0008' && q.last === '通过').length}/${nOf('CR-0008')}），发布后预计提升` },
   ];
   // 往前的每日定时：失败数逐步下降
   const days = ['10-24', '10-23', '10-22', '10-21', '10-20', '10-19', '10-18', '10-17', '10-16', '10-15', '10-14', '10-13', '10-12', '10-11', '10-10'];
@@ -212,7 +233,8 @@ export const EVAL_RUNS: EvalRun[] = buildRuns();
 export const passRate = (r: EvalRun) => (r.total ? r.passed / r.total : 0);
 
 /* ───────── 反馈与纠错 ───────── */
-export type FbStatus = '待处理' | '已转同义词' | '已转认证问答' | '已忽略' | '已解决';
+/** 待发布生效：修正已在已通过的变更单里，随整版发布后生效 */
+export type FbStatus = '待处理' | '已转同义词' | '已转认证问答' | '已忽略' | '待发布生效';
 export interface Feedback {
   id: string; time: string; user: string; dept: string; question: string; answer: string; reason: string;
   fix: { kind: '同义词' | '认证问答'; text: string; target?: string };
@@ -220,7 +242,7 @@ export interface Feedback {
 }
 type FbSeed = [string, string, string, string, string, Feedback['fix'], FbStatus?, string?];
 const FB_SEEDS: FbSeed[] = [
-  ['李娜', '华东一区运营', '上周各门店发货及时率', '未识别“发货及时率”，按 有效订单数 v1 回答', '我问的是发货及时率，不是订单数', { kind: '同义词', text: '发货及时率', target: '出库及时率 v1' }, '已解决', 'CR-0008'],
+  ['李娜', '华东一区运营', '上周各门店发货及时率', '未识别“发货及时率”，按 有效订单数 v1 回答', '我问的是发货及时率，不是订单数', { kind: '同义词', text: '发货及时率', target: '出库及时率 v1' }, '待发布生效', 'CR-0008'],
   ['赵磊', '华东大区经营', '上个月 GMV 最高的门店', '未识别“GMV”，按 有效订单数 v1 回答', 'GMV 就是销售额', { kind: '同义词', text: 'GMV', target: '销售额（不含税）v3' }],
   ['钱芳', '会员运营', '老客销售额走势', '未识别“老客”，按 销售额（不含税）v3 回答', '老客应该是复购客户', { kind: '同义词', text: '老客', target: `${QA_METRIC.ex.name} ${QA_METRIC.ex.version}` }],
   ['孙悦', '华东二区运营', '哪个门店毛利最低', '按 品类 排序回答', '要的是门店，不是品类', { kind: '认证问答', text: '哪个门店毛利最低', target: '毛利率 v2 · 按 门店 · 上个月 · 升序 · 前 1' }],
@@ -236,9 +258,9 @@ const FB_SEEDS: FbSeed[] = [
   ['许强', '门店运营', '客单价', '提示“客单价（不含税）v1 仍是草稿”', '能不能先给个数', { kind: '认证问答', text: '各门店客单价', target: '客单价（不含税）v1（草稿，发布后认证）' }, '已忽略'],
   ['何静', '财务', '各品类毛利率排名', '按 v2（未扣促销补贴）回答', '月报已扣补贴，对不上', { kind: '认证问答', text: '各品类毛利率排名', target: '毛利率（待 CR-0011 发布后按 v3）' }],
   ['邓丽', '华东三区运营', '本月退单率', '未识别“退单率”', '退单率就是退款率', { kind: '同义词', text: '退单率', target: '退款率 v2' }],
-  ['宋洁', '电商运营', '线上渠道本月成交单量', '未识别“成交单量”，追问用户', '成交单量就是有效订单数', { kind: '同义词', text: '成交单量', target: '有效订单数 v1' }, '已解决', 'CR-0015'],
+  ['宋洁', '电商运营', '线上渠道本月成交单量', '未识别“成交单量”，追问用户', '成交单量就是有效订单数', { kind: '同义词', text: '成交单量', target: '有效订单数 v1' }, '待发布生效', 'CR-0015'],
   ['唐军', '华东一区运营', '各区县门店销售', '区县维度未下钻到门店', '要列到门店', { kind: '认证问答', text: '上海各区县门店销售额', target: '销售额（不含税）v3 · 按 区县、门店 · 上个月' }, '已转认证问答'],
-  ['冯雪', '华东二区运营', '上周各门店发货及时率', '未识别“发货及时率”', '同上', { kind: '同义词', text: '发货及时率', target: '出库及时率 v1' }, '已解决', 'CR-0008'],
+  ['冯雪', '华东二区运营', '上周各门店发货及时率', '未识别“发货及时率”', '同上', { kind: '同义词', text: '发货及时率', target: '出库及时率 v1' }, '待发布生效', 'CR-0008'],
   ['韩梅', '供应链', '缺货率', '本体里暂无“缺货率”指标', '希望能加', { kind: '认证问答', text: '各门店缺货率', target: '需先在指标口径中新建' }],
   ['曹宇', '门店运营', '昨天销售额前五', '返回了前 10', '只要前五', { kind: '认证问答', text: '昨天销售额最高的 5 家门店', target: '销售额（不含税）v3 · 按 门店 · 昨天 · 降序 · 前 5' }, '已转认证问答'],
   ['彭飞', '华东大区经营', '大区销售（含税）', '按 不含税 回答', '要含税的', { kind: '同义词', text: '销售（含税）', target: '销售额（含税）v2' }],
@@ -256,7 +278,7 @@ export const FEEDBACKS: Feedback[] = FB_SEEDS.map(([user, dept, question, answer
     handler: status && status !== '待处理' ? (resolvedBy ? '周晓峰' : PEOPLE_T[i % PEOPLE_T.length]) : undefined,
   };
 });
-export const fbStatusText = (f: Feedback) => (f.status === '已解决' && f.resolvedBy ? `已解决 · ${f.resolvedBy}` : f.status);
+export const fbStatusText = (f: Feedback) => (f.status === '待发布生效' && f.resolvedBy ? `待发布生效 · ${f.resolvedBy}` : f.status);
 
 /* ───────── 高频问题推荐 ───────── */
 export interface FreqQ { id: string; question: string; hits7: number; hits30: number; users: number; plan: SemPlan; consistency: number; lastAsked: string; certId?: string }

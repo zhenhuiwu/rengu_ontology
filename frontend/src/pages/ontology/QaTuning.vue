@@ -27,6 +27,7 @@ const tab = computed({
   set: (v: string) => router.replace({ query: { ...(v === 'cert' ? {} : { tab: v }), ...(route.query.ver ? { ver: route.query.ver } : {}) } }),
 });
 const pendingFb = computed(() => tuning.feedbacks.filter((f) => f.status === '待处理').length);
+const recert = computed(() => tuning.certs.filter((c) => c.status === '待重新认证').length);
 const uncert = computed(() => tuning.freq.filter((f) => !f.certId).length);
 
 /* 新建认证问答 */
@@ -94,7 +95,7 @@ async function runEval() {
 
   <div class="panel qt">
     <a-tabs v-model:active-key="tab" class="qt-tabs">
-      <a-tab-pane key="cert" :tab="`认证问答（${tuning.certs.length}）`" />
+      <a-tab-pane key="cert" :tab="`认证问答（待重新认证 ${recert}）`" />
       <a-tab-pane key="eval" :tab="`评测题库（${EVAL_QS.length}）`" />
       <a-tab-pane key="feedback" :tab="`反馈与纠错（待处理 ${pendingFb}）`" />
       <a-tab-pane key="freq" :tab="`高频问题推荐（未认证 ${uncert}）`" />
