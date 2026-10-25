@@ -10,14 +10,17 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 
 from app.common.auth import CurrentUser, CurrentUserDep, require_func
 from app.db.session import SessionDep
 from app.modules.integration.schemas import (
     ExtSystemDetailOut,
+    ExtSystemIn,
     ExtSystemListOut,
     ExtSystemOut,
+    ExtSystemTestIn,
+    ExtSystemTestOut,
     LinkedActionTypeOut,
 )
 from app.modules.integration.service import ExtSystemService
@@ -26,6 +29,7 @@ router = APIRouter(tags=["integration"])  # /api/data/v1
 
 _ext_view = require_func("external-systems", "view")
 _action_view = require_func("action-types", "view")
+_ext_manage = require_func("external-systems", "manage")
 
 
 async def ext_list_access(
@@ -47,8 +51,13 @@ async def list_ext_systems(
     kw: Annotated[str | None, Query(description="名称 / 编号 / 厂商包含")] = None,
 ) -> ExtSystemListOut:
     _user, writeback = access  # writeback 只在依赖里声明一次，参数错误只报一条
-    rows = await ExtSystemService(session).search(writeback=bool(writeback), kw=kw)
-    return ExtSystemListOut(items=[ExtSystemOut.model_validate(r) for r in rows])
+    svc = ExtSystemService(session)
+    rows = await svc.search(writeback=bool(writeback), kw=kw)
+    counts = await svc.action_counts()
+    items = [
+        ExtSystemOut.model_validate(r).model_copy(update={"action_count": counts.get(r.id, 0)}) for r in rows
+    ]
+    return ExtSystemListOut(items=items)
 
 
 @router.get(
@@ -59,6 +68,52 @@ async def list_ext_systems(
 )
 async def get_ext_system(sys_id: str, session: SessionDep) -> ExtSystemDetailOut:
     s, actions = await ExtSystemService(session).get(sys_id)
+    out = ExtSystemDetailOut.model_validate(s)
+    out.action_types = [LinkedActionTypeOut.model_validate(a) for a in actions]
+    return out
+
+
+@router.post("/ext-systems", response_model=ExtSystemDetailOut, summary="新建外部系统（直接生效）")
+async def create_ext_system(
+    body: ExtSystemIn, session: SessionDep, user: Annotated[CurrentUser, Depends(_ext_manage)]
+) -> ExtSystemDetailOut:
+    svc = ExtSystemService(session)
+    s = await svc.create(body, actor=user.id)
+    return await _detail(svc, s.code)
+
+
+@router.post("/ext-systems/{sys_id}:test", response_model=ExtSystemTestOut, summary="测试调用（连通性探测）")
+async def test_ext_system(
+    sys_id: str,
+    session: SessionDep,
+    user: Annotated[CurrentUser, Depends(_ext_manage)],
+    body: Annotated[ExtSystemTestIn | None, Body()] = None,
+) -> ExtSystemTestOut:
+    rec = await ExtSystemService(session).test_call(sys_id, f"{user.name}（{user.id}）")
+    return ExtSystemTestOut.model_validate(rec)
+
+
+# 注意：要排在 :test 之后注册，否则 POST /ext-systems/EXT-X:test 会被 {sys_id} 吃掉。
+# 【推断】文档写的是 PUT；前端 apiClient（src/api/http.ts，公共文件）只有 get / post，
+# 所以同一个处理函数也挂 POST /ext-systems/{id}，前端用 POST。两个方法行为完全一样。
+@router.put("/ext-systems/{sys_id}", response_model=ExtSystemDetailOut, summary="编辑外部系统")
+async def update_ext_system(
+    sys_id: str, body: ExtSystemIn, session: SessionDep, user: Annotated[CurrentUser, Depends(_ext_manage)]
+) -> ExtSystemDetailOut:
+    svc = ExtSystemService(session)
+    await svc.update(sys_id, body, actor=user.id)
+    return await _detail(svc, sys_id)
+
+
+@router.post("/ext-systems/{sys_id}", response_model=ExtSystemDetailOut, summary="编辑外部系统（POST 同义）")
+async def update_ext_system_post(
+    sys_id: str, body: ExtSystemIn, session: SessionDep, user: Annotated[CurrentUser, Depends(_ext_manage)]
+) -> ExtSystemDetailOut:
+    return await update_ext_system(sys_id, body, session, user)
+
+
+async def _detail(svc: ExtSystemService, code: str) -> ExtSystemDetailOut:
+    s, actions = await svc.get(code)
     out = ExtSystemDetailOut.model_validate(s)
     out.action_types = [LinkedActionTypeOut.model_validate(a) for a in actions]
     return out

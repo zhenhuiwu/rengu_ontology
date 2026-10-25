@@ -2,6 +2,8 @@
 /**
  * 事件类型：左侧事件列表，右侧详情。页签：概览 / 载荷字段 / 订阅方 / 近期事件 / 版本历史。
  * URL：?event= 选中项，?tab= 页签，?fpage/fsize 载荷字段分页，?range= 时间范围 + ?epage= 近期事件分页，?view=draft 草稿，?ver= 历史版本只读。
+ * 真接口（开关 action 打开）：左侧列表（来源 / 关键字 / 分页）走 GET /event-types；详情（含 specific）、载荷字段、订阅方、
+ * 版本历史走 api/action.ts 的快照。近期事件与趋势（/events 未实现）、规则名、草稿写入（versioning）仍读 mock。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -18,13 +20,17 @@ import { paginate } from '@/mock/paginate';
 import { fmtInt } from '@/mock/format';
 import { RULES } from '@/mock/dynamic';
 import {
-  EVENT_TYPES, EVENT_SOURCES, EVENT_VERSION_NOTES, payloadOf, subscribersOf, eventsOf, eventDaily, versionsOf,
+  EVENT_TYPES, EVENT_SOURCES, eventsOf, eventDaily,
   type EventType, type EventOutcome, type PayloadField, type Subscriber,
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
+import { isApiError } from '@/api/http';
+import {
+  actionApi, snap, loadSnapshot, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
+} from '@/api/action';
 
 const route = useRoute();
 const router = useRouter();
@@ -39,8 +45,31 @@ const filtered = computed(() => EVENT_TYPES.filter((e) => (source.value === '全
 const LPAGE = 22;
 const lpage = ref(1);
 watch([source, kw], () => { lpage.value = 1; });
-const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
-const cur = computed<EventType>(() => EVENT_TYPES.find((e) => e.id === route.query.event) ?? EVENT_TYPES[0]);
+
+/* 真接口：列表分页 / 筛选走后台，其余读快照；快照没到之前不渲染主体（cur 先拿 mock 第一条占位，免得各 computed 读空） */
+const real = actionApi.isReal();
+const loadErr = ref('');
+const realList = reactive<{ items: EventTypeRow[]; total: number; sources: string[] }>({ items: [], total: 0, sources: [] });
+const apiMsg = (e: unknown) => (isApiError(e) ? e.message : String(e));
+if (real) {
+  watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { loadErr.value = apiMsg(e); }); }, { immediate: true });
+  let seq = 0;
+  watch([source, kw, lpage, () => route.query.ver], async () => {
+    const n = ++seq;
+    try {
+      const r = await listEventTypes({ source: source.value, kw: kw.value, page: lpage.value, size: LPAGE });
+      if (n === seq) Object.assign(realList, { items: r.items, total: r.total, sources: r.sources });
+    } catch (e) { if (n === seq) message.error(`事件类型列表加载失败：${apiMsg(e)}`); }
+  }, { immediate: true });
+}
+const ready = computed(() => !real || snap.state === 'ready');
+const sources = computed(() => (real && realList.sources.length ? realList.sources : EVENT_SOURCES));
+const list = computed<EventTypeRow[]>(() => (real ? realList.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
+const listTotal = computed(() => (real ? realList.total : filtered.value.length));
+const cur = computed<EventType>(() => {
+  const all = ready.value ? eventTypes() : EVENT_TYPES;
+  return all.find((e) => e.id === route.query.event) ?? all[0] ?? EVENT_TYPES[0];
+});
 const RESET = { view: undefined, fpage: undefined, fsize: undefined, epage: undefined };
 const statusColor = (s: EventType['status']) => (s === '变更中' ? 'warning' : 'default');
 
@@ -183,7 +212,7 @@ const recentCols = [
 const outcomeBadge = (o: EventOutcome) => (o === '投递失败' ? 'error' : 'default');
 
 /* 版本历史 */
-const versions = computed(() => versionsOf(cur.value.version, cur.value.owner, EVENT_VERSION_NOTES));
+const versions = computed(() => eventVersionsOf(cur.value));
 const verCols = [
   { title: '版本', dataIndex: 'ver', width: 80 },
   { title: '本体发布', dataIndex: 'release', width: 120 },
@@ -200,11 +229,14 @@ const verCols = [
     <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange('新建事件类型')">新建事件类型</a-button></a-tooltip>
   </Teleport>
 
-  <div class="et">
+  <div v-if="!ready" class="panel et-wait">
+    <span v-if="loadErr" class="c-3">事件类型加载失败：{{ loadErr }}</span><a-spin v-else />
+  </div>
+  <div v-else class="et">
     <div class="panel et-list">
       <div class="et-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称" class="et-kw" />
-        <a-select v-model:value="source" :options="EVENT_SOURCES.map((g) => ({ value: g, label: g === '全部' ? '全部来源' : g }))" class="et-sel" />
+        <a-select v-model:value="source" :options="sources.map((g) => ({ value: g, label: g === '全部' ? '全部来源' : g }))" class="et-sel" />
       </div>
       <ul class="et-items">
         <a-tooltip v-for="e in list" :key="e.id" placement="right" :mouse-enter-delay="0.4" :title="`${e.api} · ${e.source} · ${e.object}`">
@@ -217,7 +249,7 @@ const verCols = [
         </a-tooltip>
       </ul>
       <div class="et-foot">
-        <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" unit="个事件" class="et-pager" empty-text="没有匹配的事件类型" />
+        <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="个事件" class="et-pager" empty-text="没有匹配的事件类型" />
       </div>
     </div>
 
@@ -420,6 +452,7 @@ const verCols = [
 <style scoped>
 .et { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .et-list { width: 300px; flex: none; }
+.et-wait { display: flex; align-items: center; justify-content: center; min-height: 240px; }
 .et-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
 .et-kw { flex: 1; min-width: 0; }
 .et-sel { width: 108px; flex: none; }
