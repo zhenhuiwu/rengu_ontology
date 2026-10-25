@@ -139,6 +139,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
    - `rowFilterNotice`：回答提示了已按权限过滤；
    - `orClarify`：直接作答对了算通过，先反问也算通过。
 9. `asScope`：带这个字段的题，用评测身份加对应的行范围来跑，网关照常注入行过滤，gold 里已经手工写好了同样的条件。其他题用评测身份跑，不注入行过滤（照 qa-api.md T11 [推断]）。
+10. **角色身份的影响（题库没有角色维度，题目未改）**：题库只有 `asScope`（行范围）这一个身份维度，不按角色出题，所以没有题要改预期。但按前端 `roles.ts:110`（`static-api.md` §1.5 L424，master `443c009`），R-05 业务查看、R-06 门店店长、R-08 大区经理（华东）都是 `defaultDeny`、都没配商品范围，**商品不可见**；用这三种角色（或只有这几种角色的用户）来跑时，凡连 `product` 的 10 题（EV-Q-002、006、011、016、017、022、039、060、089、094）预期应是「无权限 / 不可见」：网关给 `product` 注入 `FALSE`，结果为空，回答要提示已按权限过滤或拒答带申请入口 [推断]。R-06 另外因订单.门店范围值对不上种子（qa-api §2.2），所有读订单的题都是 0 行。骨架 `72204b0` 里 `product` 仍登记为不限制（`register_unrestricted`），全拒身份下这 10 题照样出数，跟前端不一致，**[待骨架实现]**；骨架改完后如果要测角色，再给题加 `asRole` 字段和对应预期。
 
 ## 6. 文件格式（`questions.json`）
 
@@ -162,7 +163,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | `source` | 是 | `ao_trial#N` 或 `new` |
 | `tags` | 否 | 这题依赖的 [推断] 点和数据缺口（如“种子无退款”），口径确认后按 tag 批量改 |
 | `inferredCols` | 否 | gold 用到、骨架里仍标 [推断] 的列（现在只有 `store.big_region`、`store.is_test`，30 题） |
-| `scratchPreview` | 否 | 在骨架真实结构 + 真种子上跑出的 `{rows, sample}`（v0.4 已覆盖，种子变了要重跑）。`rows` 是结果行数（含全 NULL 的行），`sample` 里 SQL NULL 写成 `NULL`；行数已按 `select count(*) from (<goldSql>) t` 逐题复核，只有 EV-Q-029 由 0 行改成 1 行 NULL（生成脚本把 psql 输出的空行丢了） |
+| `scratchPreview` | 否 | 在骨架真实结构 + 真种子上跑出的 `{rows, sample}`（v0.4 已覆盖，种子变了要重跑）。`rows` 是结果行数（含全 NULL 的行），`sample` 里 SQL NULL 写成 `NULL`；行数已按 `select count(*) from (<goldSql>) t` 逐题复核，只有 EV-Q-029 由 0 行改成 1 行 NULL（生成脚本把 psql 输出的空行丢了）。EV-Q-006 的 gold 原来是 `order by 2 desc limit 1`，乳品、粮油调味各 3 个并列，结果不确定；改成返回并列全部（`having count(*) = max`，备选用 `rank() = 1`），2 行；其他带 `limit` 的题（EV-Q-017、018、039、060、091）在截断处没有并列 |
 
 目录：`backend/seeds/extra/qa/eval/`（PDE 定，跟 `seeds/extra/README.md` 按导出分组的约定一致）。
 
@@ -237,6 +238,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | 9 | ~~“表名前缀 bz_”注释~~ 已结清（`72204b0` 已删） | — | — |
 | 10 | 优惠金额没有指标定义，暂按剔除已取消、下单时间 | EV-Q-053 | 指标负责人 |
 | 11 | 散客 = `member_phone` 为空 | EV-Q-015 | 本体小白 |
+| 12 | 商品可见性：`defaultDeny` 角色（R-05/R-06/R-08）没配品类范围时商品不可见，骨架 `product` 现登记为不限制 [待骨架实现]；题库暂无角色维度（第 5 节第 10 条） | 连 `product` 的 10 题 | 本体小白 |
 
 v0.4 已结清：列名和类型按骨架确认（`area`、`created_at_biz`、状态英文码、`is_seed`），bz_ 注释。
 

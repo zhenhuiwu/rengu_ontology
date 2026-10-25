@@ -95,16 +95,17 @@
     "category": "agg",
     "question": "Which product category has the most products?",
     "expectedType": "answer",
-    "goldSql": "select split_part(p.category, '/', 1) as category, count(*) from product p group by 1 order by 2 desc limit 1",
+    "goldSql": "select split_part(p.category, '/', 1) as category, count(*) from product p group by 1 having count(*) = (select max(c) from (select count(*) c from product p2 group by split_part(p2.category, '/', 1)) t) order by 1",
     "goldSqlAlt": [
-      "select split_part(p.category, '/', 1), count(*) from product p group by 1 having count(*) = (select max(c) from (select count(*) c from product group by split_part(category, '/', 1)) t)"
+      "select category, n from (select split_part(p.category, '/', 1) as category, count(*) as n, rank() over (order by count(*) desc) as rk from product p group by 1) t where rk = 1 order by 1"
     ],
-    "expected": "按一级品类；并列时多行都算对",
+    "expected": "按一级品类；乳品、粮油调味各 3 个并列第一，两行都要返回（只返回其中一个判错）",
     "source": "ao_trial#8",
     "scratchPreview": {
-      "rows": 1,
+      "rows": 2,
       "sample": [
-        "乳品 | 3"
+        "乳品 | 3",
+        "粮油调味 | 3"
       ]
     }
   },
