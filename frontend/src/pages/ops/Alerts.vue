@@ -8,6 +8,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
+import AppPagination from '@/components/AppPagination.vue';
+import { usePagedQuery } from '@/composables/usePagedQuery';
 import HoverCard from '@/components/HoverCard.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
@@ -51,15 +53,10 @@ const tab = computed({
 const level = ref('全部');
 const ruleId = ref('全部');
 const kw = ref('');
-const page = computed({
-  get: () => Number(route.query.page) || 1,
-  set: (v: number) => router.replace({ query: { ...route.query, page: v > 1 ? String(v) : undefined } }),
-});
-const pageSize = computed({
-  get: () => Number(route.query.size) || 12,
-  set: (v: number) => router.replace({ query: { ...route.query, size: v === 12 ? undefined : String(v), page: undefined } }),
-});
-watch([level, ruleId, kw], () => { if (page.value !== 1) page.value = 1; });
+/** 分页进 URL（?page=&size=），一屏 12 条；筛选变化回到第 1 页 */
+const pq = usePagedQuery({ defaultSize: 12, filters: [level, ruleId, kw] });
+const page = pq.page;
+const pageSize = pq.size;
 
 const rows = computed(() => {
   const t = TABS.find((x) => x.key === tab.value) ?? TABS[3];
@@ -92,7 +89,8 @@ const pick = (a: Alert) => (pinned.value = a.id, router.replace({ query: { ...ro
 
 const statusBadge = (s: AlertStatus) =>
   s === '待处理' ? 'warning' : 'default';
-const levelClass = (l: Alert['level']) => (l === '高' ? 'c-error fw-600' : 'c-2');
+/** 级别是提醒程度，不是失败：高 = 加粗深灰，其余灰 */
+const levelClass = (l: Alert['level']) => (l === '高' ? 'c-1 fw-600' : 'c-2');
 
 const columns = [
   { title: '级别', key: 'level', width: 64 },
@@ -216,10 +214,9 @@ async function runAction() {
           <a-input-search v-model:value="kw" size="small" placeholder="告警编号 / 对象" style="width: 200px" />
         </div>
       </div>
-      <div class="al-table">
-        <a-table :columns="columns" :data-source="rows" row-key="id" size="middle"
-          :row-selection="{ selectedRowKeys: selectedKeys, onChange: (k: (string | number)[]) => (selectedKeys = k as string[]), getCheckboxProps: (r: Row) => ({ disabled: readonly || isClosed(r.status) }) }" :scroll="pageSize > 12 ? { y: 572 } : undefined"
-          :pagination="{ current: page, pageSize, total: rows.length, showSizeChanger: true, pageSizeOptions: ['12', '20', '50'], showQuickJumper: rows.length > pageSize * 10, showTotal: (t: number) => `共 ${t.toLocaleString('zh-CN')} 条`, onChange: (p: number, sz: number) => { if (sz !== pageSize) pageSize = sz; else page = p; } }"
+      <div class="al-table paged-scroll">
+        <a-table :columns="columns" :data-source="pageRows" row-key="id" size="middle" :pagination="false"
+          :row-selection="{ selectedRowKeys: selectedKeys, onChange: (k: (string | number)[]) => (selectedKeys = k as string[]), getCheckboxProps: (r: Row) => ({ disabled: readonly || isClosed(r.status) }) }"
           :row-class-name="(r: Row) => (r.id === selectedId ? 'al-row-active' : '')"
           :custom-row="(r: Row) => ({ onClick: () => pick(r) })">
           <template #bodyCell="{ column, record }">
@@ -236,6 +233,7 @@ async function runAction() {
           </template>
         </a-table>
       </div>
+      <AppPagination v-model:page="page" v-model:size="pageSize" variant="full" :total="rows.length" :default-size="pq.defaultSize" unit="条告警" empty-text="没有符合条件的告警" class="al-pager" />
     </div>
 
     <div v-if="current && rule" class="panel al-detail">
@@ -265,7 +263,7 @@ async function runAction() {
 
         <div class="t-14 fw-600 al-sub">处理记录</div>
         <a-timeline class="al-tl">
-          <a-timeline-item v-for="(t, i) in current.log" :key="i" :color="t.abnormal ? 'red' : 'gray'">
+          <a-timeline-item v-for="(t, i) in current.log" :key="i" :color="t.abnormal ? 'var(--tl-attention)' : 'gray'">
             <div class="t-14">{{ t.text }}</div>
             <div class="t-12 c-3 num">{{ t.time }} · {{ t.who }}</div>
           </a-timeline-item>
@@ -311,7 +309,7 @@ async function runAction() {
 .al-list { flex: 1; }
 .al-filters { display: flex; gap: 8px; }
 .al-table { flex: 1; min-height: 0; padding: 0 16px; }
-.al-table :deep(.ant-table-body) { overflow-y: auto !important; }
+.al-pager { flex: none; padding: 8px 16px 12px; }
 .al-table :deep(.ant-table-row) { cursor: pointer; }
 .al-table :deep(.al-row-active > td) { background: var(--brand-bg) !important; }
 .al-detail { width: 480px; flex: none; }

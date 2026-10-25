@@ -27,7 +27,8 @@ import {
 } from '@/mock/rules';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { useDraftView } from './parts/useDraftView';
+import { useDraftView, draftOf } from './parts/useDraftView';
+import { CHANGE_REQUESTS } from '@/mock/changes';
 
 /** 新建 / 修改草稿时记当前时间 */
 const nowText = () => {
@@ -41,14 +42,25 @@ const { readonly, reason } = useReadonly();
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQ = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 
+/** 规则状态取自所在变更单（同 ObjBehaviorAutomation）：草稿中 = 灰，审核中 = 橙 */
+function ruleStatus(r: RuleDef): { text: string; badge: 'warning' | 'default'; cr?: string } {
+  const d = draftOf('rule', r.id);
+  if (!d) return { text: r.status === '变更中' ? '草稿中' : r.status, badge: 'default' };
+  const st = CHANGE_REQUESTS.find((c) => c.id === d.id)?.status;
+  return st === '审核中' ? { text: '审核中', badge: 'warning', cr: d.id } : { text: '草稿中', badge: 'default', cr: d.id };
+}
+
 /* 左侧列表 */
 const kw = ref('');
 const trig = ref('全部');
+const stf = ref('全部');
+const STATUS_OPTS = computed(() => ['全部', ...new Set(RULE_DEFS.map((r) => ruleStatus(r).text))].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v })));
 const filtered = computed(() => RULE_DEFS.filter((r) => (trig.value === '全部' || r.trigger.kind === trig.value)
+  && (stf.value === '全部' || ruleStatus(r).text === stf.value)
   && (!kw.value || r.name.includes(kw.value) || r.id.toLowerCase().includes(kw.value.toLowerCase()))));
 const LPAGE = 12;
 const lpage = ref(1);
-watch([kw, trig], () => { lpage.value = 1; });
+watch([kw, trig, stf], () => { lpage.value = 1; });
 const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
 const base = computed<RuleDef>(() => RULE_DEFS.find((r) => r.id === route.query.rule) ?? RULE_DEFS[0]);
 // 切换规则时清掉与上一条规则相关的状态，包括抽屉（drawer / drawer2 / hit）
@@ -156,6 +168,15 @@ const hitTimeline = computed(() => {
   return [{ time: h.at, text: `规则 ${h.ruleId} v${rule.value.version} 命中`, desc: '系统', status: 'done' },
     { time: h.at, text: h.result === '已去重' ? `去重键相同，冷却期（${rule.value.cooldown}）内不再通知` : `已通知负责人 ${rule.value.owner}`, desc: '系统', status: 'done' }];
 });
+/** 条件页下半部：最近几次命中（只读速览，完整列表在“命中历史”）；草稿多横幅和旧表达式，只放 3 条保证一屏 */
+const recentHits = computed(() => [...hitsOf(base.value.id)].sort((a, b) => b.at.localeCompare(a.at)).slice(0, isDraft.value ? 3 : 5));
+const recentCols = computed(() => [
+  { title: '命中时间', dataIndex: 'at', width: 172 },
+  { title: '告警 / 命中编号', key: 'id', width: 200 },
+  { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
+  { title: '命中值', dataIndex: 'value', width: 200, ellipsis: { showTitle: true } },
+  { title: '处理状态', key: 'result', width: 110 },
+]);
 const resultBadge = (s: string) => (s === '待处理' ? 'warning' : 'default');
 
 /* 回放试跑 */
@@ -199,12 +220,13 @@ const verCols = [
       <div class="ru-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称" class="ru-kw" />
         <a-select v-model:value="trig" :options="['全部', '定时', '事件'].map((g) => ({ value: g, label: g === '全部' ? '全部触发' : g }))" class="ru-sel" />
+        <a-select v-model:value="stf" :options="STATUS_OPTS" class="ru-sel" />
       </div>
       <ul class="ru-items">
         <li v-for="r in list" :key="r.id" :class="{ active: r.id === base.id }" @click="pick(r.id)">
           <div class="ru-row">
             <span class="t-14 ru-name">{{ r.name }}</span>
-            <span class="t-12 num c-3">{{ r.status === '已发布' ? '' : r.status + ' · ' }}v{{ r.version }}</span>
+            <span class="t-12 num c-3"><span v-if="r.status !== '已发布'" :class="ruleStatus(r).badge === 'warning' ? 'tl-attention' : 'c-3'">{{ ruleStatus(r).text }} · </span>v{{ r.version }}</span>
           </div>
           <div class="ru-row">
             <span class="t-12 c-3 num">{{ r.id }}</span>
@@ -224,7 +246,7 @@ const verCols = [
         <span class="t-16 fw-600 c-1">{{ rule.name }}</span>
         <span class="t-14 c-3 num">{{ rule.id }}</span>
         <span class="t-14 c-3 num">{{ isDraft ? `草稿 v${rule.version}（已发布 v${base.version}）` : `v${rule.version}` }}</span>
-        <a-badge status="default" :text="rule.status" />
+        <a-tooltip :title="ruleStatus(base).cr ? `所在变更单 ${ruleStatus(base).cr}` : undefined"><a-badge :status="ruleStatus(base).badge" :text="ruleStatus(base).text" /></a-tooltip>
         <a-segmented v-if="draftCR && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draftCR.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
@@ -291,6 +313,18 @@ const verCols = [
           <a-descriptions-item label="负责人">{{ rule.owner }}</a-descriptions-item>
           <a-descriptions-item label="近 7 天命中">{{ fmtInt(hits7) }} 次</a-descriptions-item>
         </a-descriptions>
+        <div class="ru-tool ru-sec">
+          <span class="t-14 fw-600">最近命中</span>
+          <span class="ru-sp" />
+          <a class="t-12" @click="tab = 'hits'">查看全部命中历史</a>
+        </div>
+        <a-table :columns="recentCols" :data-source="recentHits" :pagination="false" size="small" row-key="id" :locale="{ emptyText: '还没有命中' }">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'id'"><a class="num" @click="openHit(record)">{{ record.id }}</a></template>
+            <template v-else-if="column.key === 'obj'"><ObjRef :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef></template>
+            <template v-else-if="column.key === 'result'"><a-badge :status="resultBadge(record.result)" :text="record.result" /></template>
+          </template>
+        </a-table>
       </div>
 
       <!-- 触发方式 -->
@@ -470,9 +504,9 @@ const verCols = [
 <style scoped>
 .ru { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .ru-list { width: 300px; flex: none; }
-.ru-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
-.ru-kw { flex: 1; min-width: 0; }
-.ru-sel { width: 108px; flex: none; }
+.ru-filter { padding: 12px 12px 8px; display: flex; flex-wrap: wrap; gap: 8px; flex: none; }
+.ru-kw { flex: 1 1 100%; min-width: 0; }
+.ru-sel { flex: 1; min-width: 0; }
 .ru-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
 .ru-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .ru-items li:hover { background: var(--g3); }
