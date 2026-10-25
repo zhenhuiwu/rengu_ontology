@@ -5,7 +5,7 @@
 > 作者：PDE工程师 · 2026-10-25（UTC+8）。v0.3：按 PDE 评审意见和本体小白评审（eacb371）修订，变化见 §8.3。
 >
 > **分工说明**
-> - **静态本体页**（对象类型的定义部分、关系类型、指标口径、维度与字典、业务知识、变更与发布）的业务规则、表结构、变更单状态机、校验项 V1–V17、发布事务，**以静态本体负责人的 `/workspace/ui-vue/docs/backend/static-api.md`（v0.2，commit `103d302`）为准**。本文对这些页只补“读接口和字段清单”（static-api.md §3 写明“字段清单以 PDE 汇总为准”），并在 §5 列出两份文档和前端代码之间的差异。
+> - **静态本体页**（对象类型的定义部分、关系类型、指标口径、维度与字典、业务知识、变更与发布）的业务规则、表结构、变更单状态机、校验项 V1–V17、发布事务，**以静态本体负责人的 `/workspace/ui-vue/docs/backend/static-api.md`（最新版，aaf60c4+）为准**。本文对这些页只补“读接口和字段清单”（static-api.md §3 写明“字段清单以 PDE 汇总为准”），并在 §5 列出两份文档和前端代码之间的差异。
 > - **动态本体页**（告警处理、动作中心、规则与自动化、情景推演、对象类型的生命周期、动作、自动化页签）**以动态本体负责人的 dynamic-api.md 为准**（branch `dynamic` 最新 commit `dfa6111`：`git -C /workspace/ui-vue show dfa6111:docs/backend/dynamic-api.md`；用户点名的是 `0d6d806`，之后还有更新，按最新的 `dfa6111`）。接口路径（`/action-runs`、`:start-action`、`:batch-close` 等）、错误码（`NOT_ASSIGNEE`、`SCENARIO_*` 等）本文都跟它一致。各页的“差异”小节列出它和前端代码不一致的地方。
 > - **动作类型、事件类型**以 Palantir专家的 `docs/backend/action-event-api.md` 为准（branch `palantir-backend-doc` 最新 commit `cedf5ae`；用户点名的是 `736fe56`，之后还有更新，按最新的 `cedf5ae`）；**问数五页**（工作台、我的页面、对象搜索、对象详情、问数调优）以问数负责人的 `docs/backend/qa-api.md` 为准（commit `40eeef2`）。§2.2–2.5、§3.7、§3.12、§3.14 只列接口表和种子来源，并标出差异。
 > - **已定的约定**（PDE 决定）：
@@ -62,7 +62,9 @@
 |---|---|
 | 动态（ontology） | `action_run`、`action_run_log`（执行时间线）；`alert`、`rule*`、`scenario*`、`lifecycle*` |
 | Palantir（integration 代码目录；`ext_system`、`writeback_call` 的接口走 data 模块，其余走 ontology） | `event`、`event_delivery`、`reconcile_task`、`writeback_call`（**唯一的外部调用记录表**；动态文档里的 `ext_call` 合并进来，不再单独建）、`ext_system`；动作类型、事件类型定义表 |
-| 静态（ontology） | `metric`、`ontology_release`、`change_request` 及 items / 校验 / 评审记录、对象类型、关系、维度、业务知识、函数（含 `fn_version`） |
+| 静态（ontology） | `metric`、`change_request` 及 items / 校验 / 评审记录、对象类型、关系、维度、业务知识 |
+| 版本层 versioning（本体小白） | `ontology_release`（只追加，唯一入口 `create_version`；static-api.md §1） |
+| 待定（动态确认） | 函数及 `fn_version` 的负责方由动态定 |
 | 问数（qa） | `qa_*` |
 | PDE / data | `datasource` 及同步、质量检查表 |
 | PDE / admin | `sys_user`、`sys_role`、`api_key`、`setting`、`audit_log` |
@@ -71,7 +73,7 @@
 **表命名和公共列（已定）**：
 - 表名不带模块前缀，snake_case、**单数业务名词**（`metric`、`action_run`、`writeback_call`、`datasource`、`api_key`、`audit_log`、`store`、`product`）；只有和 SQL 关键字或别的含义冲突的才加限定：`ontology_release`、`sys_user`、`sys_role`、`biz_order`。上表里旧写法按此改（`users` → `sys_user`、`roles` → `sys_role`、`api_keys` → `api_key`、`settings` → `setting`、`audit` → `audit_log`、`release` → `ontology_release`）。
 - 主键一律单列代理键 `id`，业务编号（`CR-0015`、`A-0413`、`AK-…`）另建唯一约束。
-- 可变的表都有 `created_at`、`updated_at`、`created_by`、`is_seed`、`lock_version`；只追加的表（日志、事件、调用记录、审计，如 `action_run_log`、`event`、`writeback_call`、`audit_log`）不加 `lock_version`，也不做软删除。
+- 可变的表都有 `created_at`、`updated_at`、`created_by`、`is_seed`、`lock_version`；只追加的表（日志、事件、审计，如 `action_run_log`、`event`、`audit_log`）不加 `lock_version`，也不做软删除。`writeback_call` 是可变表（`:mark-checked` 会改 `result`，action-event-api.md v0.5.7 表清单），带 `lock_version`。
 
 ### 1.2 错误格式
 
@@ -95,7 +97,7 @@
 | `NOT_CONFIRMER` | 403 | 规则暂存的动作，不是指定确认人 |
 | `NOT_OWNER` | 403 | 别人的方案、别人的告警（只有本人处理中的告警才能关闭或发起动作） |
 | `STATE_INVALID` | 409 | 状态机不允许，比如对“已撤回”的动作发起对账 |
-| static-api.md 里的码 | — | `NOT_IN_DRAFT`、`CR_LOCKED`、`CR_STATE_INVALID`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`、`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST` |
+| static-api.md 里的码 | — | `NOT_IN_DRAFT`、`CR_LOCKED`、`CR_STATE_INVALID`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`、`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`DUPLICATE_KEY` |
 
 ### 1.3 分页
 
@@ -152,7 +154,7 @@
     - `?ver=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /objects/{kind}/export`，以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（`QaApplyDrawer.vue` 的“提交申请”和 `QaConversation.vue` 的“申请权限”都不判断只读，历史版本和预览下都能提交；会落库，是白名单里唯一的落库写，【推断 §8.1-9】）。
     - `?previewAs=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /scoped-ask`（§1.8），以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（同上，【推断 §8.1-9】）。
     - 不在白名单里的写请求一律 403 `READONLY`。
-  - **版本快照（已定）**：每个版本**一份**快照，按 section 分块，每块由所属模块负责组装：静态的 `objectTypes`（不含生命周期）、`linkTypes`、`metrics`、`dimensions`、`knowledge`；Palantir 的 `actionTypes`、`eventTypes`；动态的 `rules`、`lifecycles`（按对象类型的前端 id 分键）。`create_version` 提供注册机制，各模块注册自己 section 的组装函数，生成版本时依次调用。运行数据（告警、执行记录、事件、调用记录等）不进快照；函数也不进（§3.8）。每个 section 内按**前端 id** 分键（如对象类型 `SalesOrder`，和前端 mock 里的 id 一致），`?ver=` 读接口直接按 id 取。
+  - **版本快照（已定）**：每个版本**一份**快照，按 section 分块，每块由所属模块负责组装：静态的 `objectTypes`（不含生命周期）、`properties`、`links`、`metrics`、`dimensions`、`terms`、`qaPaths`（节名以 static-api.md §2.8 和骨架 `SECTION_OWNERS` 为准；`qaPaths` 待本体小白在 `SECTION_OWNERS` 登记）；Palantir 的 `actionTypes`、`eventTypes`；动态的 `rules`、`lifecycles`（按对象类型的前端 id 分键）。`create_version` 提供注册机制，各模块注册自己 section 的组装函数，生成版本时依次调用。运行数据（告警、执行记录、事件、调用记录等）不进快照；函数也不进（§3.8）。每个 section 内按**前端 id** 分键（如对象类型 `order`，即 mock/links.ts `LINK_OBJECTS` 的 `id`；`SalesOrder` 是 API 名，只是定义里的字段，不作键），`?ver=` 读接口直接按 id 取。
   - 历史版本里的问数：口径框显示“按该版本默认”。已经回答过的消息保留回答当时的依据（本体版本），不会改写。
   - 本体总览在历史版本下不显示当前的待处理事项，最近发布只列到所选版本为止。
 
@@ -571,12 +573,12 @@
 
 | 方法 | 路径 | 参数 | 返回 | 分页 | 读/写 | 约束 | 种子（src/mock） |
 |---|---|---|---|---|---|---|---|
-| GET | /object-types | `kw,page,size,ver?` | `PageResult<LinkObject & {status, pendingCr?}>`（mock/links.ts `LINK_OBJECTS`） | 页码 | 读 | | `links.ts` `LINK_OBJECTS`（以 static-api.md 种子表为准） |
+| GET | /object-types | `kw,page,size,ver?` | `PageResult<LinkObject & {status, pendingCr?}>`（mock/links.ts `LINK_OBJECTS`） | 页码（22/页，ObjectTypes.vue `LPAGE`） | 读 | | `links.ts` `LINK_OBJECTS`（以 static-api.md 种子表为准） |
 | GET | /object-types/{id} | `ver?,view?,cr?` | `{meta: ObjMeta（mock/objectProps.ts）, brief: QObjType（mock/quality.ts）, props: ObjProp[], db}` | — | 读 | 草稿视图里每行带 `mark`（static-api.md） | `objectProps.ts` `objectMeta()` + `quality.ts` `Q_OBJECT_TYPES` |
 | GET | /object-types/{id}/properties | `kw,page,size,ver?,view?,cr?` | `PageResult<ObjProp>` + `diff: PropDiff[]` | 页码（12/页，前端页码不进 URL） | 读 | | `objectProps.ts` `OBJECT_PROPS`、`draftPropDiff` |
 | GET | /object-types/{id}/links | `ver?` | `LinkType[]`（mock/links.ts） | 全量（前端不分页） | 读 | | `links.ts` `LINKS` |
 | GET | /object-types/{id}/mappings | `page,size,ver?` | `PageResult<{prop,sourceField,sourceType,transform}>`（ObjectTypes.vue 的映射列） | 页码（12/页，前端页码不进 URL） | 读 | | `objectProps.ts` `OBJECT_PROPS`（映射列） |
-| POST | /object-types/{id}/mappings:refresh-metadata | — | `{jobId}` | — | 写 | 来自 static-api.md | — |
+| POST | /object-types/{id}/mappings:refresh-metadata | — | `{jobId}` | — | 写 | 来自 static-api.md；前端“重新采集元数据”按钮在 `?ver=` / 预览下没有置灰（ObjectTypes.vue:387），后台按只读拒绝是【推断】 | — |
 | GET | /object-types/{id}/lifecycle | `ver?,view?,cr?` | `Lifecycle` + `draft?: LcDraft`（mock/lifecycle.ts） | — | 读 | 历史版本返回 `lifecycleAsOf` | `lifecycle.ts` `LIFECYCLES`、`LC_DRAFT_EDITS` |
 | GET | /object-types/{id}/lifecycle/illegal | — | `LcIllegal[]` | 全量（前端不分页） | 读 | | `lifecycle.ts` `illegalOf()`（计算） |
 | GET | /object-types/{id}/lifecycle/changes | `illegal?,page,size` | `PageResult<LcChange>` | 页码 | 读 | `?lcpage=`；生命周期相关以 dynamic-api.md §2.3/§6.5 为准 | `lifecycle.ts` `changesOf()`（计算，导入时生成） |
@@ -665,12 +667,12 @@
 
 | 方法 | 路径 | 参数 | 返回 | 分页 | 读/写 | 约束 | 种子（src/mock） |
 |---|---|---|---|---|---|---|---|
-| GET | /metrics | `kw,group,page,size,ver?` | `PageResult<Metric>`（mock/metrics.ts）+ `pendingCr?` | 页码 | 读 | | `metrics.ts` `METRICS` |
+| GET | /metrics | `kw,group,page,size,ver?` | `PageResult<MetricListItem>`（mock/metricCatalog.ts `METRIC_LIST`）+ `pendingCr?` | 页码（18/页，Metrics.vue `LPAGE`） | 读 | | `metricCatalog.ts` `METRIC_LIST` |
 | GET | /metrics/{id} | `ver?,view?,cr?` | `Metric` + `api, desc, formula`；`dims: {dim,level,source,defaultGrain,note}[]`；`disallowed: {dim,reason}[]`（Metrics.vue 的列） | — | 读 | | `metrics.ts` `METRICS` |
 | POST | /metrics/{id}:trial | 见 static-api.md | | | 不落库 | 历史版本、预览下允许 | — （计算接口，读已导入的数据） |
 | GET | /metrics/{id}/versions | `page,size` | `PageResult<MetricVersion>`（字段见 static-api.md） | 页码（10/页） | 读 | | 见 static-api.md 种子表 |
 | GET | /metrics/{id}/refs | `page,size` | `PageResult<MetricRef>`（字段见 static-api.md） | 页码（10/页） | 读 | | 见 static-api.md 种子表 |
-| POST | /metrics/{id}:rollback | `{toVersion, crId?}` | `ChangeRequest`（草稿） | — | 写 | **新增**（Metrics.vue:127-134）：不直接改口径，生成一张草稿变更单（带 `crId` 时加入已有变更单），内容是把定义改回 `toVersion`；评审通过后随下一次整版发布生效，发布前当前口径继续生效 | — |
+| POST | /metrics/{id}:rollback | `{toVersion, crId?}` | `ChangeRequest`（草稿） | — | 写 | **新增**（Metrics.vue:70-77 `rollback`，按钮 :197）：不直接改口径，生成一张草稿变更单（带 `crId` 时加入已有变更单），内容是把定义改回 `toVersion`；评审通过后随下一次整版发布生效，发布前当前口径继续生效 | — |
 
 ### 3.10 维度与字典 `/build/ontology/dimensions`（静态本体，以 static-api.md 为准）
 
@@ -826,7 +828,7 @@
 
 | 方法 | 路径 | 参数 | 返回 | 分页 | 读/写 | 约束 | 种子（src/mock） |
 |---|---|---|---|---|---|---|---|
-| GET | /change-requests | `status,kw,page,size,focusId?` | `PageResult<ChangeRequest>` | 页码（17/页，支持 `focusId`） | 读 | 来自 static-api.md | `changes.ts` `CHANGE_REQUESTS`（只用这一份；`releases.ts` `DRAFTS` 不导入） |
+| GET | /change-requests | `status,kw,page,size,focusId?` | `PageResult<ChangeRequest>`；`status=草稿` 且不传 `page` 时返回全量数组 `ChangeRequest[]` | 页码（17/页，支持 `focusId`）；草稿全量用于发起变更弹窗“加入已有变更单”下拉（StartChangeModal.vue:14 `allDrafts()`） | 读 | 来自 static-api.md | `changes.ts` `CHANGE_REQUESTS`（只用这一份；`releases.ts` `DRAFTS` 不导入） |
 | GET | /change-requests/{id} | — | `ChangeRequest` + `CRDetail` | — | 读 | 来自 static-api.md；`diffs` 走分页子接口 | `changes.ts` `CR_DETAILS`、`crDetail`、`reviewLog` |
 | GET | /change-requests/{id}/diffs | `page,size` | `PageResult<DiffRow>` | 页码（10/页） | 读 | Releases.vue 改动清单分页；checks、impact、events 全量 | `changes.ts` `crDetail` |
 | POST | /change-requests/{id}:validate | — | `{jobId}` | — | 写 | | — |
@@ -839,7 +841,7 @@
 | DELETE | /change-requests/{id} | — | 204 | — | 写 | | — |
 | POST | /releases:merge-check | — | `{rows: CheckRow[], blocked}` | — | 不落库 | 只算合并校验，不保存 | — |
 | POST | /releases | `{note, lockVersion}` | `Release` | — | 写 | 只有本体管理员 | — |
-| POST | /releases/{ver}:rollback | — | `Release` | — | 写 | 只能回滚最近一次发布，否则 `ROLLBACK_NOT_LATEST`；走 `create_version` 生成新版本（内容等于上一版本），同时写一条回滚变更单记录；只有本体管理员能回滚【推断，§8.1-1】；前端回滚按钮没有按只读置灰，但后台在 `?ver=` 和预览下拒绝（§8.1-8） | — |
+| POST | /releases/{ver}:rollback | — | `Release` | — | 写 | 只能回滚最近一次发布，否则 `ROLLBACK_NOT_LATEST`；走 `create_version` 生成新版本（内容等于上一版本），同时写一条回滚变更单记录；只有本体管理员能回滚【推断，§8.1-1】；只读模式（`?ver=` / 预览）下前端整块操作区换成只读说明（Releases.vue:227-229），回滚按钮不出现，后台按 §1.7 统一返回 403 `READONLY` | — |
 
 4. **状态**：`CRStatus` 中“审核中”为橙；`CheckResult` 中“阻断”为红、“警告”为橙。
 
@@ -982,7 +984,7 @@
 
 已定的只留结论；还没定的在 §8.2。
 
-### 5.1 static-api.md（103d302，静态本体）
+### 5.1 static-api.md（最新版 aaf60c4+，静态本体）
 
 1. **字段命名（已定）**：接口 JSON 一律 camelCase（Pydantic `alias_generator=to_camel`），库里 snake_case（`base_release` → `baseRelease`、`lock_version` → `lockVersion`）。
 2. **枚举值（已定）**：接口用前端 mock 的值，变更单状态 `草稿 / 审核中 / 已通过 / 已发布 / 已驳回`（mock/changes.ts `CRStatus`）。static-api.md 状态图里的 `draft / in_review …` 只是库里的 code，在 Pydantic 层转换。
@@ -1058,7 +1060,7 @@
    - 纯计算逻辑后台要真正实现，**不导入结果**：`scenarios.ts` `simulate` / `stagePlanOf`（已运行方案的结果除外）、`roles.ts` `effectiveAccess`、`rules.ts` `replay`、`paginate.ts`。
 3. **时间**：脚本把 `TZ` 固定为 Asia/Shanghai 再加载 mock；`Date` 一律写成带 `+08:00` 的 ISO（如 `2026-10-25T15:42:18.000+08:00`），字符串时间原样保留，**不平移到导入当天**。种子环境（开发、测试、演示）里后台的 `now()` 固定为 **2026-10-25 15:42 +08:00**，保证“今天”“近 7 天”等和 mock 一致；生产用真实时间。
 4. **确定性**：mock 用 `format.ts` 的 `seeded()` 固定种子，两次导出逐字节一致。后台不要用 Python 重写这些生成逻辑，直接用导出的 JSON。
-5. **导入**：后台统一的 `seed` 命令（数据库迁移之后执行），读 JSON 按自然主键 upsert，可以重复执行。
+5. **导入**：后台统一的 `seed` 命令（数据库迁移之后执行），读 JSON 按业务编码（唯一约束）upsert，可以重复执行。
    - 中文枚举在 Pydantic / seed 层转成库里的 code；接口返回时转回前端的值。
    - 人名按 `admin.ts` `ADMIN_USERS`、`qa-pages.ts` `PEOPLE`、`qa-tuning.ts` `PEOPLE_T` 映射到用户表；指标显示名映射到 `metric@version`。
    - API 密钥数据范围的展示文本在导入时解析成 `RowScope[]` + `metadataOnly`（§4.4）。
@@ -1182,13 +1184,13 @@
 | 94 | ontology | POST | `/api/ontology/v1/alerts:batch-claim` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
 | 95 | ontology | POST | `/api/ontology/v1/alerts:batch-close` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
 | 96 | ontology | GET | `/api/ontology/v1/change-requests` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `CHANGE_REQUESTS`（只用这一份；`releases.ts` `DRAFTS` 不导入） |
-| 97 | ontology | POST | `/api/ontology/v1/change-requests` | 写 | 3.4、3.16 | ontology-overview/releases·manage | — | N | N | N | — |
+| 97 | ontology | POST | `/api/ontology/v1/change-requests` | 写 | 3.4、3.16 | 目标页·manage（按 `target.kind`：object→object-types、link→link-types、metric→metrics、dimension→dimensions、knowledge→glossary、action→action-types、event→event-types、rule→rules） | — | N | N | N | — |
 | 98 | ontology | DELETE | `/api/ontology/v1/change-requests/{id}` | 写 | 3.15 | releases·manage | — | N | N | N | — |
 | 99 | ontology | GET | `/api/ontology/v1/change-requests/{id}` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `CR_DETAILS`、`crDetail`、`reviewLog` |
 | 100 | ontology | GET | `/api/ontology/v1/change-requests/{id}/diffs` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `crDetail` |
-| 101 | ontology | PUT | `/api/ontology/v1/change-requests/{id}/items` | 写 | 3.7、3.12、3.13、3.16 | action-types/event-types/rules/releases·manage | — | N | N | N | — |
-| 102 | ontology | POST | `/api/ontology/v1/change-requests/{id}/targets` | 写 | 3.16 | releases·manage | — | N | N | N | — |
-| 103 | ontology | DELETE | `/api/ontology/v1/change-requests/{id}/targets/{kind}/{targetId}` | 写 | 3.16 | releases·manage | — | N | N | N | — |
+| 101 | ontology | PUT | `/api/ontology/v1/change-requests/{id}/items` | 写 | 3.7、3.12、3.13、3.16 | 目标页·manage（按 `target.kind`：object→object-types、link→link-types、metric→metrics、dimension→dimensions、knowledge→glossary、action→action-types、event→event-types、rule→rules） | — | N | N | N | — |
+| 102 | ontology | POST | `/api/ontology/v1/change-requests/{id}/targets` | 写 | 3.16 | 目标页·manage（按 `target.kind`：object→object-types、link→link-types、metric→metrics、dimension→dimensions、knowledge→glossary、action→action-types、event→event-types、rule→rules） | — | N | N | N | — |
+| 103 | ontology | DELETE | `/api/ontology/v1/change-requests/{id}/targets/{kind}/{targetId}` | 写 | 3.16 | 目标页·manage（按 `target.kind`：object→object-types、link→link-types、metric→metrics、dimension→dimensions、knowledge→glossary、action→action-types、event→event-types、rule→rules） | — | N | N | N | — |
 | 104 | ontology | POST | `/api/ontology/v1/change-requests/{id}:approve` | 写 | 3.15 | releases·manage | — | N | N | N | — |
 | 105 | ontology | POST | `/api/ontology/v1/change-requests/{id}:reject` | 写 | 3.15 | releases·manage | — | N | N | N | — |
 | 106 | ontology | POST | `/api/ontology/v1/change-requests/{id}:reopen` | 写 | 3.15 | releases·manage | — | N | N | N | — |
@@ -1247,7 +1249,7 @@
 | 159 | ontology | GET | `/api/ontology/v1/object-types/{id}/lifecycle/illegal` | 读 | 3.5 | object-types·view | 元数据读取 | Y | Y | N | `lifecycle.ts` `illegalOf()`（计算） |
 | 160 | ontology | GET | `/api/ontology/v1/object-types/{id}/links` | 读 | 3.5 | object-types·view | 元数据读取 | Y | Y | N | `links.ts` `LINKS` |
 | 161 | ontology | GET | `/api/ontology/v1/object-types/{id}/mappings` | 读 | 3.5 | object-types·view | 元数据读取 | Y | Y | N | `objectProps.ts` `OBJECT_PROPS`（映射列） |
-| 162 | ontology | POST | `/api/ontology/v1/object-types/{id}/mappings:refresh-metadata` | 写 | 3.5 | object-types·manage | — | N | N | N | — |
+| 162 | ontology | POST | `/api/ontology/v1/object-types/{id}/mappings:refresh-metadata` | 写 | 3.5 | object-types·manage | — | N【推断】 | N【推断】 | N | — |
 | 163 | ontology | GET | `/api/ontology/v1/object-types/{id}/permissions` | 读 | 3.5 | object-types·view | 元数据读取 | Y | Y | N | `roles.ts` `ROLES`、`roleMembers` |
 | 164 | ontology | GET | `/api/ontology/v1/object-types/{id}/properties` | 读 | 3.5 | object-types·view | 元数据读取 | Y | Y | N | `objectProps.ts` `OBJECT_PROPS`、`draftPropDiff` |
 | 165 | ontology | GET | `/api/ontology/v1/object-types/{id}/rule-hits` | 读 | 3.5 | object-types·view | 元数据读取 | Y | Y | N | `rules.ts` `hitsOf()`（计算，导入时生成） |
@@ -1257,7 +1259,7 @@
 | 169 | ontology | GET | `/api/ontology/v1/ontology/overview` | 读 | 3.4 | ontology-overview·view | 元数据读取 | Y | Y | N | 由各本体表统计（Overview.vue），不单独导入 |
 | 170 | ontology | GET | `/api/ontology/v1/ontology/todos` | 读 | 3.4 | ontology-overview·view | 元数据读取 | Y | Y | N | `changes.ts` `CHANGE_REQUESTS` + `dynamic.ts` `ALERTS` 等统计【推断】 |
 | 171 | ontology | GET | `/api/ontology/v1/people` | 读 | 2.6 | alerts·view | 元数据读取 | Y | Y | N | `Alerts.vue` `PEOPLE` → `sys_user`（`alert_assignable=true`） |
-| 172 | ontology | GET | `/api/ontology/v1/releases` | 读 | 1.11、3.4 | ontology-overview·view | 元数据读取 | Y | Y | N | `releases.ts` `RELEASES` |
+| 172 | ontology | GET | `/api/ontology/v1/releases` | 读 | 1.11、3.4 | 登录即可（顶栏版本选择器每页都有，TopBar.vue:70 `VersionPicker`）；返回 `{items, current}` | 元数据读取 | Y | Y | N | `releases.ts` `RELEASES` |
 | 173 | ontology | POST | `/api/ontology/v1/releases` | 写 | 3.15 | releases·manage | — | N | N | N | — |
 | 174 | ontology | POST | `/api/ontology/v1/releases/{ver}:rollback` | 写 | 3.15 | releases·manage | — | N | N | N | — |
 | 175 | ontology | POST | `/api/ontology/v1/releases:merge-check` | 不落库 | 3.15 | releases·manage | — | N | N | N | — |
@@ -1353,7 +1355,7 @@
 5. 对账、重新提交限制操作人（例如只能动作发起人或执行人角色）（§2.7、§5.2-5）。前端不限制，后台先不限制。
 6. 历史版本 `?ver=` 下的动作试运行（写回预检）按所选版本的定义执行，只校验、模拟写回，不调外部系统（§3.7、§5.3-6）。
 7. 同一幂等键、请求内容不同时返回 409 `IDEMPOTENCY_CONFLICT`（§1.6）。前端没有这种情况。
-8. 整版发布页的“回滚”按钮前端没有按只读置灰，但后台在 `?ver=` 和预览下一律拒绝（403 `READONLY`）（§3.15）。
+8. （已删除：原“回滚按钮没有按只读置灰”不成立，Releases.vue:227-229 只读时整块操作区被替换，回滚按钮不出现；编号保留，避免 §8.1-9 等引用错位。）
 9. W16 申请权限（`POST /api/qa/v1/permission-requests`）在历史版本 `?ver=` 和预览 `?previewAs=` 下都**放行**（前端两种模式都允许提交，§1.7 白名单）。如果要收紧成和其他写一样返回 403 `READONLY`（`details.mode` 按模式，两个参数都带时为 `preview`），请用户拍板。
 
 另：action-event-api.md §8.2 的“只有执行人角色才能试运行”“只有负责人才能模拟触发”同属推断，以该文档为准。
@@ -1378,10 +1380,11 @@
 - 分页统一 `{items,total,page,size}`；子表按前端是否分页决定全量或分页并逐个写明；关系类型、维度、业务知识、变更单列表支持 `focusId`。
 - 新增 `POST /metrics/{id}:rollback`；整版回滚只能回滚最近一次（`ROLLBACK_NOT_LATEST`），走 `create_version`。
 - 变更单种子只用 `changes.ts`；`/object-types/brief` 归 ontology。
-- 引用版本：static 103d302、dynamic dfa6111、qa 40eeef2、action-event cedf5ae。
+- 引用版本：static static-api.md 最新版（aaf60c4+）、dynamic dfa6111、qa 40eeef2、action-event cedf5ae。
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- 按静态本体负责人对 97e86e9 的评审（逐条对照前端 6bac4b1 核实）：§1.7 快照节名改为 `objectTypes`/`properties`/`links`/`metrics`/`dimensions`/`terms`/`qaPaths`（+ `actionTypes`/`eventTypes`、`rules`/`lifecycles`），节内键用前端 id（`order`）；删除 §8.1-8（只读时 Releases.vue:227-229 整块操作区被替换，回滚不可达），§3.15 回滚说明同步；§7 #97/#101/#102/#103 草稿写权限改为按 `target.kind` 的目标页·manage；#172 `GET /releases` 登录即可、返回 `{items, current}`；§1.2 `ontology_release` 归版本层（本体小白），函数 / `fn_version` 负责方待动态定；`GET /change-requests?status=草稿` 不传 `page` 返回全量（StartChangeModal.vue:14）；static-api.md 引用改为最新版 aaf60c4+；种子按业务编码（唯一约束）upsert；`/metrics` 改为 `METRIC_LIST`、18/页，`/object-types` 22/页，`:rollback` 行号改为 Metrics.vue:70-77；`:refresh-metadata` 只读拒绝标【推断】；错误码补 `EMPTY_INPUT`、`DUPLICATE_KEY`；`writeback_call` 改为可变表。
 - 对齐 qa-api（qa 69725f9）：§2.2 W16 请求体 `metric` 改为 `object`（mock `QA_APPLY.object`）；`/session-options` 即 qa-api W17，删掉 §2.2 和 §8.2-9 的“未单列【待定】”；`POST /scoped-ask` 页面权限改为 `object-search/object-detail·view`，预览下放行且不落会话、不进 `qa_query_log`（§2.4、§7），和 qa O4 一致；`/action-runs:stage`、`/{id}:confirm`、`/{id}:withdraw` 从问数工作台 / 对象详情发起时按页面 `view` + 对象权限 `actions` 放行【推断】（§2.7、§7）；问数工作台 W2–W15 写接口的 API 密钥范围统一为“问数查询【推断】”（W11 导出仍为“数据导出”，W16 仍为“—”，都和 qa-api §1.4 一致）（§7）。
 - W16 申请权限在 `?ver=` 和预览 `?previewAs=` 下都放行（前端两种模式都允许）：§1.7 两份白名单、§1.8、§2.2、§7 说明和该行“预览”列（改为 Y）、§8.1-9 已同步；删除“预览下拒绝”的说法；两个参数都带时 `details.mode='preview'` 不变。
 - 问数用户对自己的会话和页面的写（W2–W16、P2–P10）页面权限改为 `qa-workbench·view` / `qa-pages·view`（原为 manage），和 qa-api 一致，已定（§1.4、§7 说明和 18 行）；qa-api §11-10 已定：权限申请存问数自己的表 `qa_permission_request`（只有问数有入口），以后可能并入 admin 统一审批（§2.2 W16）。
