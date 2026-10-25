@@ -6,8 +6,12 @@ import InfoTip from '../InfoTip.vue';
 import { QuestionCircleOutlined, ClockCircleOutlined, SyncOutlined } from '@ant-design/icons-vue';
 import { REGION_EC, QA_TIMELINE, QA_UNKNOWN_LABEL, type QaTimelineLevel } from '@/mock';
 
-/** highlight：从答案里的“建议动作”打开确认卡时，高亮对应动作行；状态只在本栏显示 */
-defineProps<{ pending: boolean; submitted: boolean; highlight?: boolean }>();
+/**
+ * highlight：从答案里的“建议动作”打开确认卡时，高亮对应动作行；状态只在本栏显示。
+ * run：真接口提交后的 action_run（编号、审批人）；「待审批」变成去动作中心「执行记录」的入口
+ */
+const props = defineProps<{ pending: boolean; submitted: boolean; highlight?: boolean; run?: { id: string; approver: string | null } }>();
+const runLink = () => ({ path: '/use/ops/actions', query: { tab: 'records', act: props.run?.id } });
 const { readonly, reason } = useReadonly();
 const emit = defineEmits<{ (e: 'run'): void; (e: 'detail'): void }>();
 const tab = ref('summary');
@@ -57,10 +61,11 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
     <div class="qa-obj-sec qa-obj-last">
       <div class="qa-obj-h"><span class="t-16 fw-600">可执行动作</span></div>
       <div class="qa-act" :class="{ hl: highlight }">
-        <a-tooltip :title="submitted ? '王敏 10-25 15:36 提交 · 待 赵磊 审批' : pending ? '王敏 10-25 15:36 发起 · 赵磊 审批' : '条件满足 · 影响 3,812 位客户'" placement="left">
+        <a-tooltip :title="run ? `${run.id} 已提交 · 待 ${run.approver ?? '执行'}${run.approver ? ' 审批' : ''}` : submitted ? '王敏 10-25 15:36 提交 · 待 赵磊 审批' : pending ? '王敏 10-25 15:36 发起 · 赵磊 审批' : '条件满足 · 影响 3,812 位客户'" placement="left">
           <span class="qa-act-main qa-obj-ell">发放复购召回优惠券</span>
         </a-tooltip>
-        <span v-if="submitted" class="qa-act-status"><ClockCircleOutlined />待审批</span>
+        <a-tooltip v-if="submitted && run" title="去动作中心查看"><router-link :to="runLink()" class="qa-act-status qa-act-link"><ClockCircleOutlined />待审批</router-link></a-tooltip>
+        <span v-else-if="submitted" class="qa-act-status"><ClockCircleOutlined />待审批</span>
         <span v-else-if="pending" class="qa-act-status"><ClockCircleOutlined />待确认</span>
         <a-tooltip v-else :title="reason"><a-button size="small" :disabled="readonly" @click="emit('run')"><span>发起</span></a-button></a-tooltip>
       </div>
@@ -104,6 +109,7 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
 .qa-act.hl + .qa-act { border-top-color: transparent; }
 .qa-act :deep(.ant-tag) { margin-inline-end: 0; }
 /* 状态：无边框灰字 + 小图标；只有可点的“发起”是带边框的按钮 */
+.qa-act-status.qa-act-link { color: var(--brand); }
 .qa-act-status { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--g8); font-size: var(--fs-14); line-height: 24px; }
 .qa-obj-tl :deep(.ant-timeline-item-head-custom) { font-size: var(--fs-14); }
 </style>

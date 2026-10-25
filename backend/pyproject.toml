@@ -16,6 +16,7 @@ dependencies = [
     "procrastinate>=3",
     "psycopg[binary]>=3.2",
     "sqlglot>=30.24.0",
+    "openai>=1.50",
 ]
 
 [dependency-groups]

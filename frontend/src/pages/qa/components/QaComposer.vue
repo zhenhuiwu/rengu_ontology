@@ -1,7 +1,9 @@
 <script setup lang="ts">
 /** 输入框。下方“范围”“口径”是整个会话共用的（v-model 由工作台持有），中途修改会在对话里插入系统提示 */
 import { ref, computed } from 'vue';
-import { useQaSession } from '../useQaSession';
+import { message } from 'ant-design-vue';
+import { useQaSession, errText, clarifyFollowUp } from '../useQaSession';
+import { getSessionOptions } from '@/api/qa';
 import { SendOutlined, PaperClipOutlined } from '@ant-design/icons-vue';
 import { QA_SCOPE_OPTIONS, QA_CALIBER_OPTIONS } from '@/mock';
 import { useReadonly } from '@/composables/useReadonly';
@@ -13,10 +15,16 @@ const { active: previewing } = usePreview();
 const HIST_CALIBER = [{ value: '__ver', label: '口径：按该版本默认' }];
 const scope = defineModel<string>('scope', { required: true });
 const caliber = defineModel<string>('caliber', { required: true });
-const { draft: text, send } = useQaSession();
+const { draft: text, send, real, sending, activeId, detail } = useQaSession();
+/* 真接口：范围 / 口径选项取 W17 */
+const scopeOpts = ref<{ value: string; label: string }[]>(QA_SCOPE_OPTIONS);
+const caliberOpts = ref<{ value: string; label: string }[]>(QA_CALIBER_OPTIONS);
+if (real) {
+  getSessionOptions().then((o) => { scopeOpts.value = o.scopes; caliberOpts.value = o.calibers; }).catch((e) => message.error(`范围口径选项加载失败：${errText(e)}`));
+}
 const input = ref<{ focus: () => void }>();
-const canSend = computed(() => !readonly.value && !!text.value.trim());
-const sendTip = computed(() => reason.value || (text.value.trim() ? '' : '先输入问题'));
+const canSend = computed(() => !readonly.value && !!text.value.trim() && !(real && (sending.value || !activeId.value)));
+const sendTip = computed(() => reason.value || (real && sending.value ? '正在查询上一问' : text.value.trim() ? '' : '先输入问题'));
 function onSend() { if (canSend.value) send(); }
 /** Enter 发送，Shift + Enter 换行；输入法组字中不发送 */
 function onKey(e: KeyboardEvent) {
@@ -24,8 +32,25 @@ function onKey(e: KeyboardEvent) {
   e.preventDefault(); onSend();
 }
 /** 追问词：直接发送 */
-function onChip(f: string) { if (!readonly.value) send(f); }
-const followUps = ['按门店等级再拆一下', '和去年同期比', '为什么安徽降得最多'];
+const MOCK_FOLLOW_UPS = ['按门店等级再拆一下', '和去年同期比', '为什么安徽降得最多'];
+/** 真接口：取本会话最后一轮回答的 answer.suggest.followUps（链路目前只在反问轮给，= 反问选项）；没有就不显示追问条 [推断] */
+const lastAnswer = computed(() => {
+  const ts = detail.value?.id === activeId.value ? detail.value.turns : [];
+  const t = ts[ts.length - 1];
+  return t && t.kind === 'answer' ? t : null;
+});
+const followUps = computed<string[]>(() => {
+  if (!real) return MOCK_FOLLOW_UPS;
+  const a = lastAnswer.value?.answer as { suggest?: { followUps?: string[] } } | undefined;
+  return a?.suggest?.followUps ?? [];
+});
+/** 反问轮的追问词跟卡片选项一样拼成自包含问题 */
+function onChip(f: string) {
+  if (readonly.value || (real && sending.value)) return;
+  const t = lastAnswer.value;
+  if (real && t && 'card' in t.answer && t.answer.card === 'clarify') send(clarifyFollowUp(t.question, t.answer.clarify.term, f));
+  else send(f);
+}
 </script>
 
 <template>
@@ -34,11 +59,11 @@ const followUps = ['按门店等级再拆一下', '和去年同期比', '为什�
       <a-textarea ref="input" v-model:value="text" @keydown="onKey" :disabled="readonly" :title="reason || undefined" :bordered="false" :auto-size="{ minRows: 1, maxRows: 1 }" placeholder="继续追问，Enter 发送，Shift + Enter 换行" />
       <div class="qa-cp-bar">
         <a-space :size="8">
-            <a-select v-model:value="scope" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="QA_SCOPE_OPTIONS" />
+            <a-select v-model:value="scope" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="scopeOpts" />
             <a-select v-if="readonly && !previewing" value="__ver" :title="reason" disabled size="small" class="qa-cp-sel qa-cp-sel-wide" :options="HIST_CALIBER" />
-            <a-select v-else v-model:value="caliber" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="QA_CALIBER_OPTIONS" />
+            <a-select v-else v-model:value="caliber" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="caliberOpts" />
           <a-tooltip :title="reason || '暂未开放：引用对象将在后续版本提供'"><a-button size="small" type="text" disabled><template #icon><PaperClipOutlined /></template>引用对象</a-button></a-tooltip>
-          <a-divider type="vertical" />
+          <a-divider v-if="followUps.length" type="vertical" />
           <a-tooltip v-for="f in followUps" :key="f" :title="reason || '点击直接追问'"><a-tag class="qa-cp-chip" :class="{ off: readonly }" @click="onChip(f)">{{ f }}</a-tag></a-tooltip>
         </a-space>
         <a-tooltip :title="sendTip || undefined"><a-button type="primary" class="qa-cp-send" :disabled="!canSend" @click="onSend"><template #icon><SendOutlined /></template>发送</a-button></a-tooltip>

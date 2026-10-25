@@ -4,7 +4,7 @@
  * 受变更单影响的条目显示“待重新认证 · 受 CR-xxxx 影响”。行点击打开抽屉（?cq=CQ-001）。
  * URL：?ckw=&cst=&cm=&cpage=
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -12,7 +12,9 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
 import { T_METRICS, certStatusText, metricLabel, planText, crById, type CertQa, type CertStatus } from '@/mock/qa-tuning';
-import { tuning, NOW, ME } from './state';
+import { tuning, tuningTick, NOW, ME } from './state';
+import { qaReal, listCerts, getCert, certifyCert, toggleCert, putCertVariants, getTuningSummary } from '@/api/qa';
+import type { PageResult } from '@/api/http';
 import CrTag from './CrTag.vue';
 import MetricRef from './MetricRef.vue';
 import PlanView from './PlanView.vue';
@@ -35,8 +37,27 @@ const rows = computed(() => tuning.certs
     && (!stF.value || c.status === stF.value) && (!mF.value || c.plan.metric === mF.value))
   .slice().sort((a, b) => rank(a.status) - rank(b.status)));
 const pq = usePagedQuery({ defaultSize: 15, filters: [kw, stF, mF], prefix: 'c' });
-const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
-const reCount = computed(() => tuning.certs.filter((c) => c.status === '待重新认证').length);
+/* 真接口（开关 qa）：T3 列表 / T4 抽屉 / T1 待重新认证计数；写完 tuningTick+1 重拉 */
+const real = qaReal();
+const remote = ref<PageResult<CertQa>>({ items: [], total: 0, page: 1, size: 15 });
+const remoteRe = ref(0);
+const remoteCur = ref<CertQa>();
+const loadErr = (e: unknown) => message.error(`加载认证问答失败：${(e as Error).message}`);
+if (real) {
+  watch([kw, stF, mF, pq.page, pq.size, tuningTick], async () => {
+    try {
+      remote.value = await listCerts({ kw: kw.value || undefined, status: stF.value, metric: mF.value, page: pq.page.value, size: pq.size.value });
+      remoteRe.value = (await getTuningSummary()).recertCount;
+    } catch (e) { loadErr(e); }
+  }, { immediate: true });
+  watch([() => q('cq'), tuningTick], async ([id]) => {
+    if (!id) { remoteCur.value = undefined; return; }
+    try { remoteCur.value = await getCert(id as string); } catch (e) { remoteCur.value = undefined; loadErr(e); }
+  }, { immediate: true });
+}
+const paged = computed(() => (real ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
+const reCount = computed(() => (real ? remoteRe.value : tuning.certs.filter((c) => c.status === '待重新认证').length));
+const fail = (e: unknown) => message.error((e as Error).message);
 
 const cols = [
   { title: '编号', dataIndex: 'id', key: 'id', width: 80 },
@@ -53,7 +74,7 @@ const stCls = (s: CertStatus) => (s === '待重新认证' ? 'c-1' : s === '已�
 const planShort = (c: CertQa) => planText(c.plan).replace(`${metricLabel(c.plan.metric)} · `, '');
 
 /* 抽屉 */
-const cur = computed(() => tuning.certs.find((c) => c.id === q('cq')));
+const cur = computed(() => (real ? remoteCur.value : tuning.certs.find((c) => c.id === q('cq'))));
 const open = (c: CertQa) => setQuery({ cq: c.id });
 const rowProps = (c: CertQa) => ({ class: c.id === q('cq') ? 'qt-row-on' : '', onClick: () => open(c) });
 
@@ -70,6 +91,10 @@ async function certify(c: CertQa) {
     okText: '认证',
   });
   if (!ok) return;
+  if (real) {
+    try { const n = await certifyCert(c.id); tuningTick.value++; message.success(n.status === '待重新认证' ? `已按当前口径认证「${c.question}」，${n.cr} 发布后会再次提醒` : `已认证「${c.question}」`); } catch (e) { fail(e); }
+    return;
+  }
   c.status = '已认证'; c.certifier = ME; c.certifiedAt = NOW;
   if (!pending) { c.cr = undefined; c.note = undefined; } else c.note = `已按 ${T_METRICS[c.plan.metric].version} 认证；${cr!.id} 发布后需再次认证`;
   if (pending) c.status = '待重新认证';
@@ -83,17 +108,27 @@ async function toggle(c: CertQa) {
     impact: stop ? '停用后此问题回到常规理解流程，回答不再标注“已认证”。' : '启用后恢复为已认证。',
   });
   if (!ok) return;
+  if (real) {
+    try { await toggleCert(c.id, !stop); tuningTick.value++; message.success(`${stop ? '已停用' : '已启用'}「${c.question}」`); } catch (e) { fail(e); }
+    return;
+  }
   c.status = stop ? '已停用' : '已认证';
   message.success(`${stop ? '已停用' : '已启用'}「${c.question}」`);
 }
 /* 抽屉里加同问法 */
 const newVar = ref('');
-function addVariant(c: CertQa) {
+async function addVariant(c: CertQa) {
   const v = newVar.value.trim(); if (!v) return;
   if (c.variants.includes(v)) { message.warning('已有相同问法'); return; }
-  c.variants.push(v); newVar.value = ''; message.success(`已添加同问法「${v}」`);
+  if (real) {
+    try { remoteCur.value = await putCertVariants(c.id, [...c.variants, v]); tuningTick.value++; } catch (e) { fail(e); return; }
+  } else c.variants.push(v);
+  newVar.value = ''; message.success(`已添加同问法「${v}」`);
 }
-const removeVariant = (c: CertQa, v: string) => { c.variants = c.variants.filter((x) => x !== v); };
+async function removeVariant(c: CertQa, v: string) {
+  if (!real) { c.variants = c.variants.filter((x) => x !== v); return; }
+  try { remoteCur.value = await putCertVariants(c.id, c.variants.filter((x) => x !== v)); tuningTick.value++; } catch (e) { fail(e); }
+}
 </script>
 
 <template>

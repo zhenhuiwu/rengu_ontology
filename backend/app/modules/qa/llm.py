@@ -1,5 +1,8 @@
 """问数 LLM 客户端（可插拔）：真实实现走 DashScope OpenAI 兼容接口，测试用 FakeLLM。
 
+- 复用 OpenAI 官方 Python SDK（openai，Apache-2.0，https://github.com/openai/openai-python）
+  的 AsyncOpenAI 调 DashScope compatible-mode，不再手写 httpx 请求 / 重试 / 响应解析。
+
 - 路由用 `Depends(get_llm)` 取客户端，测试 `app.dependency_overrides[get_llm] = lambda: FakeLLM(...)`。
 - key 只读环境变量 DASHSCOPE_API_KEY，不硬编码、不打印；模型 QA_LLM_MODEL（默认 qwen-flash）、
   QA_LLM_BASE_URL、QA_LLM_TIMEOUT_S 也走环境变量。
@@ -12,7 +15,7 @@ from __future__ import annotations
 import os
 from typing import Protocol
 
-import httpx
+from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
 
 from app.core.errors import AppError
 
@@ -34,31 +37,33 @@ class LLMClient(Protocol):
 
 
 class DashScopeLLM:
-    """POST {base}/chat/completions，返回 choices[0].message.content 原文（SQL 由调用方抽取）。"""
+    """AsyncOpenAI(base_url=DashScope).chat.completions.create，返回首条回复原文（SQL 由调用方抽取）。"""
 
     def __init__(self, api_key: str, model: str, base_url: str, timeout_s: float) -> None:
-        self._key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        self._client = AsyncOpenAI(api_key=api_key, base_url=self.base_url, timeout=timeout_s, max_retries=1)
 
     def __repr__(self) -> str:  # 不把 key 带进日志 / traceback
         return f"DashScopeLLM(model={self.model!r})"
 
     async def generate_sql(self, prompt: list[dict[str, str]]) -> str:
-        body = {"model": self.model, "messages": prompt, "temperature": 0}
-        headers = {"Authorization": f"Bearer {self._key}"}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s) as c:
-                r = await c.post(f"{self.base_url}/chat/completions", json=body, headers=headers)
-        except httpx.HTTPError as e:
+            r = await self._client.chat.completions.create(
+                model=self.model,
+                messages=prompt,
+                temperature=0,  # type: ignore[arg-type]
+            )
+        except APIStatusError as e:
+            raise QaLlmFailed(f"大模型返回 {e.status_code}") from None
+        except APIConnectionError as e:
             raise QaLlmFailed(f"调用大模型失败：{type(e).__name__}") from None
-        if r.status_code != 200:
-            raise QaLlmFailed(f"大模型返回 {r.status_code}")
-        try:
-            return r.json()["choices"][0]["message"]["content"] or ""
-        except (ValueError, KeyError, IndexError, TypeError):
+        except APIError:
             raise QaLlmFailed("大模型返回格式无法解析") from None
+        if not r.choices:
+            raise QaLlmFailed("大模型返回格式无法解析")
+        return r.choices[0].message.content or ""
 
 
 class FakeLLM:

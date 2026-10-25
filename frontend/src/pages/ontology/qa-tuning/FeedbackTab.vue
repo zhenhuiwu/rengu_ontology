@@ -13,7 +13,8 @@ import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
-import { CUR_VERSION, EVAL_QS, NEXT_VERSION, T_METRICS, crById, metricLabel, planText, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
+import { useAppStore } from '@/stores/app';
+import { EVAL_QS, T_METRICS, crById, metricLabel, planText, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
 import { CHANGE_REQUESTS, CR_DETAILS, changeRow, registerChange } from '@/mock/changes';
 import { tuning, addCert, ME } from './state';
 import CrTag from './CrTag.vue';
@@ -25,6 +26,10 @@ defineProps<{ readonly: boolean; reason?: string }>();
 const route = useRoute();
 const router = useRouter();
 const confirm = useConfirmStore();
+// 当前 / 下一版本号取 app store（mock 模式是 mock 值，versioning 走真接口时是 /releases/current 的 current / next）
+const app = useAppStore();
+const CUR_VERSION = computed(() => app.ontologyVersion);
+const NEXT_VERSION = computed(() => app.ontologyNextVersion);
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 

@@ -242,6 +242,20 @@
 
 **分享会话**：前端只复制链接 `?session=sid`。别人打开时用 W3，**按打开人自己的权限重新执行每一轮的语义计划**，超出他范围的轮次返回 `denied`；拥有者自己看时用快照 [推断]。预览期间「分享」置灰。
 
+**联调实现（qa-joint，W2/W4/W5/W9–W12/W15/W16 已落；X1/X2/X2b 前端已接动态）**：
+- W2 返回 201 + 会话详情（同 W3，`turns: []`）；`scope` 缺省 `华东`、`caliber` 缺省 `不含税`（同 `Workbench.vue` 初值）；会话号 = `S` + 现有最大序号 + 1 [推断]。
+- W4 返回会话详情（同 W3）。`title` trim 后为空就不改（同 `QaSessionPanel.saveRename`）；`scope`/`caliber` 只有值真变了才追加系统轮次（`kind=system`，`snapshot.text`），并刷新 `last_at` [推断]。
+- W5、W15 返回 204；不是自己的会话 / 常用问题一律 404（不暴露存在性）[推断]。
+- W16 返回 201 `{id, status:'待审批', approver}`；申请号 `AP` + 4 位序号 [推断]；审批人第一期固定取 `QA_APPLY.approver`（按范围路由待 admin 权限审批流）[推断]；`sourceTurnId` 不是有效用户自己会话里的轮次 → 404；`duration` 只收 30/90/180（其他 422）；只读白名单（`?ver=` / `?previewAs=` 都放行，`readonly_extra`）。申请人记有效用户（预览时 = 被预览人，跟轮次归属一致；第 12 节 #4 仍待定）[推断]。W3 里越权轮次若有待审批申请，带 `applied: true`（前端显示「已申请 · 待审批」，刷新后保留）[推断]；`?apply=1` 刷新复现时没有轮次号，按本会话最后一个未申请的越权轮次提交 [推断]。
+- W6 生成的 SQL 过了网关但执行报错（列不存在、`statement_timeout`）→ 422 `QA_SQL_FAILED`，不落轮次，前端提示「生成的查询执行失败，请换个问法再试」并把问题放回输入框 [推断]。
+- W9 只对主回答卡（`card=main`）生效，其他卡 422 `VALIDATION_FAILED`；只把口径记成这一轮的变体（`qa_turn.caliber_variant`），返回 W3 同形的 `answer`（带 `caliber`），W3 里主卡的 `answer.caliber` 也带上；含税数值仍由前端按 `TAX_RATE` 同一公式换算（同 `QaAnswer.inTax`）[推断]。不是自己会话里的轮次 → 404。
+- W10 只对门店表那一轮（`card=store`）和链路表格回答（`card=table`）生效，其他 422。门店表的行取种子 `QA_EC_STORES`（38 行，同前端 mock），`summary = {count, sales, mom, orders}` 按全部行算（`mom` = 合计 / 上期合计 − 1，同 `QaStoreAnswer`）[推断]；链路表格取快照里的 `table`，`summary = {text}`。页码越界回落到最后一页（P10）。GET，`?ver` / `?previewAs` 下放行。
+- W11 同 W10 的行，导出全部行；`xlsx`（缺省）用标准库写最小 OOXML（不加依赖）、`csv` 带 BOM（Excel 直接打开不乱码）；文件名取 `exportFile`（如「门店销售额」）加扩展名，`Content-Disposition: attachment; filename*=UTF-8''…`；写审计 `qa.turn.export`；预览中 403 `EXPORT_FORBIDDEN`（第 12 节 #2）[推断]。前端导出按钮不判断预览，预览时点了提示「导出失败：没有导出权限」。
+- W12 返回 `{id, vote}`，W3 里这一轮带 `vote`（没投不带）。新踩 → 生成一条 `open` 反馈（`FB-` + 最大序号 + 1；问题 = 这一轮问题、回答 = `text` / `metric`（主卡用「期间 + 大区」）；修正方式缺省「认证问答」、修正内容缺省 = 问题）[推断]；从踩改成赞或取消 → 撤掉这一轮还是 `open` 的反馈（已处理的保留）[推断]；重复踩不重复生成。
+- X1/X2/X2b（开关 `dynamic`）：工作台「建议动作」/ 右栏「发起」先 `POST /action-runs:stage`（`source = {type:'问数', session, sessionTitle}`，对象 = 客户群 `SEG-EC-60D`「华东大区 · 近 60 天未复购」，参数 = 确认卡上的参数文案）[推断]，确认卡里的动作类型版本、审批人、写回系统、幂等键换成 stage 返回值（影响、预算、提交条件三行动态没有返回，仍是前端文案）；「确认提交」→ `:confirm`，右栏变「待审批」并可点击跳动作中心 `/use/ops/actions?tab=records&act=编号`；「取消」→ `:withdraw {reason:'确认卡取消'}`。`?confirm=1` 刷新复现时会再 stage 一条 [推断]。
+- 前端：开关 `qa` 切真接口时，左栏列表 / 搜索 / 时间筛选 / 翻页走 W1（服务端分页），切会话 W3，新建 W2，重命名 / 改范围口径 W4，删除 W5，发送 W6（同步等 202 结果，未接 SSE W7），常用问题 / 我的页面抽屉走 W13 / P1（服务端分页、`q`/`kw` 搜索），移出 W15（移出后左栏贴底的常用问题前 3 条同步重取），左栏贴底取 W13 前 3 条、P1 前 2 条；回答卡赞踩 W12、口径 W9，门店表翻页 W10（`?tblPage`）、导出 W11。PATCH / PUT / DELETE 走 `apiClient`（pde-integ 215819d）；W11 要拿文件，`src/api/qa.ts` 里暂留一个只做 GET 下载的小工具（规则同 `http.ts` request），等 `apiClient` 有下载方法后改回。链路新回答（`card=table`）用新轮次的回答气泡显示 `text`，多于 1 行 / 1 列时气泡下给结果表（前 50 行本地每页 10）[推断]。
+- 反问 / 拒答（qa-reuse a35d3b6 链路）：反问轮次 `kind=answer`、`answer.card='clarify'`，前端回答卡读 `answer.clarify {term, chosen, options[{value,label}]}`，显示「需要确认“term”」+ 问题 `text` + 选项按钮；点选项 = 发一条新提问（W6）。链路不带多轮上下文，所以追问句由前端拼成自包含问题 [推断]：选项短（≤ term 长 + 6）且原问题含 term → 把 term 替换成选项（「哪个门店表现最好？」+「销售额最高」→「哪个门店销售额最高？」）；选项本身是长句（≥ 8 字）→ 去掉开头「是，」直接当问题；否则「原问题（选项）」。选中的选项不回写 `clarify.chosen`，刷新后按后续轮次问题反推高亮、其余选项置灰 [推断]；发送失败选项恢复可点。拒答轮次 `kind=denied {lead,bold,tail,tag,code}` 照越权卡显示（锁图标 + tag）；「申请权限」只在 `code=NO_PERMISSION`（或旧轮次无 code）时出现，`NOT_SELECT` / `OUT_OF_SCOPE` / `NO_DATA` 不给申请入口 [推断]（与 qa-eval EV-Q-080 `refuseCode: OUT_OF_SCOPE` + `applyEntry: true` 冲突，待 qa-reuse 定）。生成 SQL 被网关拒（403 `SQL_REJECTED`）时不落轮次，前端提示「提问失败：…」。
+
 ### 2.2 一次提问的流水线
 
 ```
@@ -260,17 +274,48 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 
 ---
 
-### 2.3 第一期已实现的最小链路（W6，分支 qa-chain）[推断]
+### 2.3 第一期已实现的最小链路（W6，分支 qa-chain → qa-reuse）[推断]
 
 代码：`app/modules/qa/llm.py`（LLM 客户端）、`app/modules/qa/chain.py`（上下文 / prompt / 执行 / 成形）、`router.py` W6；测试 `tests/test_qa_chain.py`（FakeLLM，不调真实接口）。
 
-- **流水线（简化版）**：问题 → `build_context`（`store / product / biz_order / order_line` 表结构 + `object_type` 说明 + 对象间 `link_type.join_sql` + 有公式的 `metric` + `qa_synonym_link` / `dim_mapping` 同义词 + `onto_qa_path` 默认路径）→ prompt → LLM 直接写 SQL → 抽 ```sql``` 代码块 → `sql_guard.assert_single_select` → 外包 `SELECT * FROM (…) AS _qa LIMIT 201` → `run_guarded`（表白名单 + 行级权限注入）→ 只读引擎执行（`statement_timeout`、`default_transaction_read_only`）→ 成形答案轮次。[推断] SemPlan JSON → 校验器 → 编译器是二期；本期 LLM 直接写 SQL（Vanna / SQLBot 式）。
+- **流水线（简化版）**：问题 → `build_context`（`store / product / biz_order / order_line` 表结构 + `object_type` 说明 + 对象间 `link_type.join_sql` + 有公式的 `metric` + `qa_synonym_link` / `dim_mapping` 同义词 + `onto_qa_path` 默认路径）→ prompt → LLM 直接写 SQL → 抽 ```sql``` 代码块 → `sql_guard.assert_single_select`（返回 sqlglot AST）→ 用 sqlglot 构造外包 `SELECT * FROM (…) AS _qa LIMIT 201`（`chain.wrap_limit`，不拼字符串）→ `run_guarded`（表白名单 + 行级权限注入）→ 只读引擎执行（`statement_timeout`、`default_transaction_read_only`）→ 成形答案轮次。[推断] SemPlan JSON → 校验器 → 编译器是二期；本期 LLM 直接写 SQL（Vanna / SQLBot 式）。
+- **复用的开源件**（用户要求「有现成的就拿来用」；只抄 MIT / Apache-2.0 代码，SQLBot、WrenAI 是 GPL/AGPL，只参考思路）：
+
+  | 环节 | 用的开源件 | 许可证 |
+  |---|---|---|
+  | 调 DashScope | OpenAI 官方 Python SDK `AsyncOpenAI`（`base_url` 指向 compatible-mode，`max_retries=1`），替掉手写 httpx | Apache-2.0 |
+  | prompt 结构 | Vanna `get_sql_prompt`：系统消息 = 说明 + `===Tables`（DDL）+ `===Additional Context`（本体对象 / 关联 / 指标 / 同义词 / 默认路径 / 数据截至）+ `===Response Guidelines`，问题单独一条 user | MIT |
+  | 表结构序列化 | SQLAlchemy 自带 DDL 编译：`CreateTable` + `COMMENT ON TABLE/COLUMN`（带 CHECK 枚举值），替掉手拼“列：a（注释）” | MIT |
+  | PG 方言规则 | NVIDIA auto-ontology `text_to_sql/prompts.py` 的 `_POSTGRES_DIALECT_RULES`（别名不能进 WHERE / GROUP BY） | Apache-2.0 |
+  | 抽 SQL | Vanna `extract_sql` 的围栏规则（先 ```sql 块，再任意 ``` 块，取最后一个）；[推断] 不抄它的 `SELECT … ;` 正则，那条会把 `select 1; drop …` 截短后放行，这里让多语句原样进 sql_guard 被拒 | MIT |
+  | 解析 / 校验 / LIMIT | sqlglot（`app/common/sql_guard` 已在用） | MIT |
+
+- **上下文补强（联调 EV-Q 后加）**：
+  - 表结构：系统列（`is_seed / lock_version / created_at / created_by / updated_at`）不进 DDL；枚举列（库里存英文 code）的 `COMMENT ON COLUMN` 写成 `code=中文标签`（来自 `LabelEnum`）。
+  - 「过滤列（按表）」：从表结构推出每张表能加的过滤列（目前只有 `is_test`：store、biz_order），没有的表明说不要加，避免模型给 product 加 `is_test / is_seed`。
+  - 「维度层级与取值」：本体 `dimension / dim_level / dim_value`（Store / SalesOrder / Category / Product 上的维度），每个值带层级、同义词、上级；值和枚举标签对得上时标出库里的 code（如 `已出库=shipped`）。取值超过 40 个的维度（时间以外如门店、组织）不列。
+  - 「列取值（全部）」：QA 表里低基数文本列（≤ 30 个 distinct，如 `store.city`、`biz_order.channel`）的全部取值，让 WHERE 照抄真实值（auto-ontology 附 sample values 的思路，Apache-2.0，非代码复制）。[推断] 取值查询不走行级权限，现阶段行级权限对已登录用户不裁剪；以后裁剪时这里要跟着收。
+  - 「指标口径」：公式后附指标定义页里的「基础对象 / 时间字段 / 默认过滤 / 同名默认」；多个指标定义页相同只贴一次。[推断] 种子里所有指标共用同一份定义页（看着是模板照抄），有效订单数的「默认过滤 已出库」和公式「状态 ≠ 已取消」冲突，规则写了「公式里写了条件时以公式为准」，需指标负责人确认。
+  - 「时间」：当前时间按业务时钟（`clock.local_now()`，测试里是 `RENGU_FIXED_NOW`）+ 今天 / 昨天 / 前天 / 本周 / 上周 / 本月 / 上月 / 今年 / 近 3、7 天的左闭右开区间，要求 SQL 只写日期字面量、不用 `NOW()`（库时间不是业务时钟）。思路同 auto-ontology `main_system_prompt_template` 的「Today's date」。
+  - 规则：并列（问“最多 / 最高”没说前 N 时用 `WHERE n = (SELECT MAX(n) …)` 返回全部并列，不用 `LIMIT 1`；Spider / BIRD 金标常见写法，思路非代码 [推断]，和 auto-ontology「单数最值 → LIMIT 1」相反）；路径型列（`product.category` = 大类/中类）默认按大类 `split_part` 聚合；题目和口径都没提到的条件不要加；列对象时返回 code + name；`'--'` 等占位值计数 / 分组时排除；按日 / 月分组输出 `::date`。另抄了 auto-ontology `**Style**` 段的 DISTINCT / NULL 两条（Apache-2.0）。
+- **意图判断（三选一输出，W6 内同一次 LLM 调用）**：思路参考 SQLBot / DB-GPT 的意图识别 + Vanna「上下文不够就说明」，非代码复制。规则 1 要求模型只回三种之一：```sql``` 块；```json {"clarify":{"term","question","options"}}```（说法有多种合理口径、且没有同名默认时才问，只缺时间不问）；```json {"refuse":{"code","reason"}}```（拒答优先于澄清，code ∈ `NOT_SELECT / OUT_OF_SCOPE / NO_PERMISSION / NO_DATA`，未知 code 归 `OUT_OF_SCOPE`）。`chain.parse_intent` 只认 json 围栏或整段 JSON，其余走 `extract_sql`。
+  - 澄清 → `kind=answer`，`answer = {card:'clarify', dataAsOf, text:<问题>, clarify:{term, chosen:null, options:[{value:'o1', label}]}, suggest:{followUps:[label…]}}`（选项最多 6 个），不执行 SQL。
+  - 拒答 → `kind=denied`，`snapshot = {lead:'', bold:<原因>, tail:'。', tag:'权限拦截'(NO_PERMISSION) | '无法回答', code}`（同 QA_DEMO_TURNS T-02 形状），不执行 SQL。`qa_query_log` 记 `denied`、0 行。
+  - 两种都返回 202、照常落 `qa_turn`；HTTP 错误码不变。[推断] 前端 `QaAnswer.vue` 的澄清卡目前是写死的 mock，要接 `answer.clarify` 才能显示真实选项（前端负责人）。
+- **口径裁定与拒答清单（qa 自己的数据）**：`backend/seeds/extra/qa/caliber/notes.json`（`{term, aliases, caliber, sql, source}`：销售额 = 不含税 = 行含税 ÷ 1.13、出库状态 + 出库时间；含税销售额；有效订单数 / 单量 / 几单 = 状态 ≠ 已取消、按出库时间；订单数、销量、出库及时率、优惠金额等，口径同 qa-eval §4）和 `refuse.json`（`{term, code, reason}`：毛利 / 成本 / 退款 / 会员 → NO_DATA；敏感字段、sys_* 表、关行级权限 → NO_PERMISSION；工资 / 天气等 → OUT_OF_SCOPE；写操作 → NOT_SELECT）。进 prompt 两段「口径裁定」「拒答清单」，排在最前；跟静态「指标口径」冲突时以口径裁定为准（规则 3：命中别名就保留该口径的全部条件，只有时间字段可按题目换）。不改 `static/` 种子和前端 mock。[推断] 口径定稿后应进 qa 表（要迁移），现在是文件。
+- **时间上限**：所有窗口的上界都不超过当前时间（本月 / 今年 / 本周 / 近 N 天都截到「现在」）；加了近 30 天。规则 8：问「每个 / 各」门店、商品时 SELECT 和 GROUP BY 都带 code + name。
+- **口径校验（sqlglot，执行前，回喂一次）**：`notes.json` 条目带 `check`（`status_eq` / `status_ne` / `time`）。`chain.matched_calibers` 按最长匹配找出问题命中的口径（“不含税”里的“含税”不算），`caliber_violations` 在 AST 里查状态条件在不在（`o.status = 'shipped'` / `<> 'cancelled'` / `NOT IN`）、用了时间列时是不是该口径的时间列（题目说了“下单 / 出库”按题目换）；不过就把问题回喂 LLM 改一次，改完不再查。[推断] 不查窗口边界，那个由下一条兜底。
+- **时间上界截到现在**：`chain.cap_time_upper` 把「时间列 < / <= 晚于当前时间的字面量」改成当前时间（库里有晚于业务时钟的出库单），sql_text 存改后的 SQL。
+- **值锚定与 0 行值修复（移植 auto-ontology，Apache-2.0）**：思路来自 `agents/proactive_value_check.py`、`agents/empty_result_value_repair.py`，`_string_predicates` 改写自 `db_probe/literal_check.py`；不探库做 DISTINCT、不用向量库，门店 / 商品名列表在 Python 里按最长公共子串比。(1) 提问前：问题里 ≥3 个字对上的门店 / 商品真实名称进 prompt 段「问题里提到的门店 / 商品」；(2) 执行后 0 行：`store.name / product.name` 上 `= / IN / LIKE` 的字面量在库里不存在时，把最接近的真实值回喂改一次，仍为空照常返回 `empty`。[推断] `join_path_check` / `sql_reconstruction` 本轮没移植（剩余失败里没有错 join 路径的，主要是订单行 join 后对订单金额求和的扇出，见 qa-eval 剩余失败）。
+- **答案里的枚举 code 换标签**：成形前 `_label_rows` 看每一列，非空值全是 QA 表枚举 code（且这个 code 只属于一个枚举）时换成中文标签（`shipped → 已出库`、`open → 营业中`），列、行、形状不变。
+- **查询超时**：只读连接 `statement_timeout` 触发（SQLSTATE 57014）→ 504 `QUERY_TIMEOUT`「查询超时，请缩小时间范围或条件后再问」，不回喂重试。
+- **执行报错回喂一次**：SQL 过了 sql_guard 但执行报错（如列不存在），在 savepoint 里回滚，把数据库报错首行作为新一轮 user 消息回喂 LLM 改一次（`FIX_RETRIES=1`，常见自修正思路，非代码复制）；仍失败照旧 500 `INTERNAL_ERROR`。sql_guard 拒绝不重试，仍 403。[推断]
 - **同步返回**：W6 跑完整条链路后返回 202 `{turnId, streamUrl, turn}`，`turn` 就是 W3 的轮次形状，前端可以直接追加；W7 SSE 未实现，`streamUrl` 先占位。[推断]
 - **答案形状**：`kind=answer`，`answer = {card:'table', dataAsOf, basis:{caliber, perm}, text, table:{id:'result', title, columns:[{key:'c0', title:<SQL 列别名>, align?:'right'}], items:[{c0:…}], total, summary, paged}}`；0 行 → `kind=empty`（`lead/bold/tail/tag`）。最多 200 行，超过 10 行 `paged=true`。[推断] kpis / trend / insight / suggest 本期不出。
 - **落库**：`qa_turn`（`code = {会话号}-T{seq:03d}` [推断]、`kind`、`question`、`refs`、`snapshot`、`sql_text`（不出接口）、`asked_at`、`elapsed_ms`），更新 `qa_session.last_at`，第一问改标题；追加 `qa_query_log`。`qa_turn_event` / `sem_plan` 本期不写。
-- **LLM**：DashScope OpenAI 兼容接口 `POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`，`temperature=0`。环境变量：`DASHSCOPE_API_KEY`（必填，只从环境读，不打日志）、`QA_LLM_MODEL`（默认 `qwen-flash`）、`QA_LLM_BASE_URL`、`QA_LLM_TIMEOUT_S`（默认 30）。[推断] 先不进 `app/core/config`，以后再收进 Settings。
+- **LLM**：DashScope OpenAI 兼容接口（`openai` SDK，`base_url=https://dashscope.aliyuncs.com/compatible-mode/v1`），`temperature=0`。依赖：`backend/pyproject.toml` 新增 `openai>=1.50`（锁 3.37.0）。环境变量：`DASHSCOPE_API_KEY`（必填，只从环境读，不打日志）、`QA_LLM_MODEL`（默认 `qwen-flash`）、`QA_LLM_BASE_URL`、`QA_LLM_TIMEOUT_S`（默认 30）。[推断] 先不进 `app/core/config`，以后再收进 Settings。
 - **错误**：没配 key → 503 `QA_LLM_UNAVAILABLE`；没配只读库 `RENGU_QA_READONLY_DATABASE_URL` → 503 `QA_EXEC_UNAVAILABLE`；LLM 调用失败 → 502 `QA_LLM_FAILED`；SQL 不是单条 SELECT、写 / DDL、用了白名单外的表 → 403 `SQL_REJECTED`（不落轮次）；会话不是自己的 → 404。
-- **权限**：沿用 `require_func("qa-workbench","view")` + 行级权限（`row_filter` 桩：管理员不限，其他人 DENY_ALL）；预览 / 历史版本由全局 readonly_guard 拒（403 READONLY）。
+- **权限**：沿用 `require_func("qa-workbench","view")` + 行级权限（权限初版 auth-min：已登录不裁剪，未登录 401）；预览 / 历史版本由全局 readonly_guard 拒（403 READONLY）。
 
 ## 3. 流式回答（SSE）
 
@@ -415,6 +460,15 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 | T20 | `GET /tuning/synonyms` | — | 已经走了变更单的同义词 `TunedSynonym{word,target,cr}`，给 T14 判断是否已覆盖 | `qa-tuning.ts` · `TUNED_SYNONYMS`（静态 `ef3d6dd` 从 `state.ts` 搬进 mock） |
 
 **高频统计 [推断]**：每天从 `qa_query_log` 聚合，周期按 `now()` 往前数 7 / 30 天。问题先归一，再用 pgvector 聚类近义问法。`consistency` = 这一类问题里最常见的那份语义计划占比。只统计正式身份的提问，不统计预览和评测的。
+
+**联调实现（qa-joint，认证问答 T1/T3–T8、高频问题 T18/T19 已落；评测题库 T9–T12、反馈与纠错 T13–T17 前端仍是 mock）**：
+- T5 返回 201 + `CertQa`（同 T4），`status='待认证'`、`source='手动新建'`；查重按问题**忽略大小写**比较 [推断]；编号 `CQ-` + 现有最大序号 + 1（3 位）[推断]；`plan.metric` 不是 T2 里的指标 → 422 `VALIDATION_FAILED`；指标有未发布 CR 时带上 `cr`，`note` 同前端 `createCert` 文案；同问题的高频问题（`qa_freq_question`）顺带关联到新认证问答 [推断]。前端撞重名时提示「已有认证问答「…」」（warning，不关弹窗）。
+- T6 只允许从 `待认证` / `待重新认证` 发起，其他状态 409 `STATE_INVALID` [推断]；`certifier` = 有效用户名、`certifiedAt` = `now()`；`cr` 仍未发布 → `待重新认证`，`note` =「已按 {版本} 认证；{CR} 发布后需再次认证」；否则 `已认证`，清掉 `cr` / `note`。
+- T7 按上表照前端：`enabled=false` → `已停用`，`enabled=true` → `已认证`。
+- T8 整体替换同问法列表（后台按差集删 / 加）；列表内重复、或者跟**别的认证问答**的同问法重复 → `DUPLICATE_KEY` [推断：同问法全局唯一，否则命中时不知道按哪条答]。
+- T19 这条高频问题已经关联了认证问答（不论状态）→ 409 `STATE_INVALID` [推断]；否则按 T5 新建（`source='高频问题推荐'`，`hits` = 近 30 天命中）再按 T6 认证，返回 `CertQa`。
+- 以上写接口都写审计（`qa.cert.create` / `qa.cert.certify` / `qa.cert.toggle` / `qa.cert.variants` / `qa.freq.certify`），都受只读规则约束（`?ver=` / `?previewAs=` 下 403 `READONLY`）。
+- 前端：开关 `qa` 切真接口时，认证问答页签的列表 / 筛选 / 翻页走 T3（服务端分页），抽屉 T4，新建 T5、认证 T6、停用启用 T7、同问法 T8；高频问题页签走 T18（`hp`/`hc`/`hkw`/翻页）、设为认证问答 T19；页签计数里「待重新认证」「未认证」取 T1，「评测题库」「反馈与纠错」计数仍取 mock（这两个页签未接）。写完后统一刷新当前列表、抽屉和计数。
 
 ### 7.1 状态流转（写的是接口值；库里的码见 1.3）
 

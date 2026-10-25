@@ -1,5 +1,5 @@
 /** 问数调优四个页签共用的可变状态（反馈转认证问答、高频问题设为认证问答都会写进认证问答列表） */
-import { reactive } from 'vue';
+import { reactive, ref } from 'vue';
 import { CERT_QAS, EVAL_RUNS, FEEDBACKS, FREQ_QS, TUNED_SYNONYMS, type CertQa, type EvalRun, type Feedback, type FreqQ, type SemPlan, type TunedSynonym } from '@/mock/qa-tuning';
 
 export const tuning = reactive({
@@ -31,3 +31,6 @@ export function startRun(scope: string, total: number, version: string): EvalRun
   tuning.runs.splice(i < 0 ? 0 : i, 0, r);
   return r;
 }
+
+/** 真接口（开关 qa）下各页签写完后 +1：页签计数（T1）、认证问答列表 / 抽屉、高频问题列表据此重新拉取 */
+export const tuningTick = ref(0);

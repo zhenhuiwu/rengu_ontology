@@ -4,7 +4,7 @@
 卡片、语义计划、轮次快照、刷新计划这些前端整体使用的结构用 dict 原样透传。
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -29,6 +29,67 @@ class SessionDetailOut(SessionOut):
     caliber: str  # 不含税 / 含税
     owner_id: str
     turns: list[dict[str, Any]]
+
+
+class SessionCreateIn(ApiModel):
+    """W2 请求体：{scope, caliber: 不含税|含税}（默认同 Workbench.vue:50-51）。"""
+
+    scope: str | None = Field(default="华东", max_length=60)
+    caliber: Literal["不含税", "含税"] = "不含税"
+
+
+class SessionPatchIn(ApiModel):
+    """W4 请求体：{title?} / {scope?, caliber?}。"""
+
+    title: str | None = Field(default=None, min_length=1, max_length=60)
+    scope: str | None = Field(default=None, max_length=60)
+    caliber: Literal["不含税", "含税"] | None = None
+
+
+class PermRequestIn(ApiModel):
+    """W16 请求体。duration：前端单选文字「30 天」转成天数整数后提交。"""
+
+    scope: str = Field(min_length=1, max_length=60)
+    object: str = Field(min_length=1, max_length=60)
+    reason: str = Field(min_length=1, max_length=200)
+    duration: Literal[30, 90, 180]
+    source_turn_id: str | None = None
+
+
+class PermRequestOut(ApiModel):
+    id: str
+    status: str
+    approver: str | None = None
+
+
+class VoteIn(ApiModel):
+    """W12：跟 QaAnswer.vote 一致，'' = 取消。"""
+
+    vote: Literal["up", "down", ""]
+
+
+class VoteOut(ApiModel):
+    id: str
+    vote: str
+
+
+class RecalcIn(ApiModel):
+    """W9：澄清条单选（ex 不含税 / in 含税 / both 两者对比）。"""
+
+    caliber: Literal["ex", "in", "both"]
+
+
+class ResultColumnOut(ApiModel):
+    key: str
+    title: str
+    align: str | None = None
+
+
+class TurnResultOut(Page[dict[str, Any]]):
+    """W10：结果表一页 + 列 + 按全部数据算的合计。"""
+
+    columns: list[ResultColumnOut]
+    summary: dict[str, Any]
 
 
 class FavoriteOut(ApiModel):
@@ -311,3 +372,30 @@ class AskOut(ApiModel):
     turn_id: str
     stream_url: str
     turn: dict[str, Any]
+
+
+class CertPlanIn(ApiModel):
+    """T5：语义计划（同前端 SemPlan）。"""
+
+    metric: str
+    dims: list[str] = Field(default_factory=list)
+    time: str
+    filter: str | None = None
+    sort: str | None = None
+
+
+class CertCreateIn(ApiModel):
+    question: str = Field(min_length=1, max_length=40)
+    plan: CertPlanIn
+
+
+class CertToggleIn(ApiModel):
+    """T7：停用 / 启用。"""
+
+    enabled: bool
+
+
+class CertVariantsIn(ApiModel):
+    """T8：整组替换同问法。"""
+
+    variants: list[str]

@@ -9,7 +9,9 @@ import { computed, ref, watch, nextTick } from 'vue';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
 import { QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
-import { useQaSession } from '../useQaSession';
+import type { QaSession } from '@/mock/qa';
+import { useQaSession, errText } from '../useQaSession';
+import * as qaApi from '@/api/qa';
 import AppPagination from '@/components/AppPagination.vue';
 import { useQueryParam, useQueryPage } from '../useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
@@ -18,7 +20,12 @@ const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
 const PAGE_SIZE = 12;
-const { sessions: list, activeId: active, newSession } = useQaSession();
+const { sessions: mockList, activeId: active, newSession, real, detail, listTick, favTick, newSessionReal } = useQaSession();
+/* 真接口：当前页由 W1 取（q / range / page / size=12）；mock 照旧本地过滤 */
+const srv = ref<{ items: QaSession[]; total: number }>({ items: [], total: 0 });
+const list = computed<QaSession[]>({ get: () => (real ? srv.value.items : mockList.value), set: (v) => { mockList.value = v; } });
+const favTop = ref<string[]>(real ? [] : QA_FAVORITES);
+const pageTop = ref<string[]>(real ? [] : QA_MY_PAGES);
 const editing = ref('');
 const draft = ref('');
 const menuId = ref('');
@@ -30,21 +37,40 @@ async function onMenu(id: string, key: string) {
   if (key === 'rename') { editing.value = id; draft.value = s.title; await nextTick(); editInput.value[0]?.focus(); }
   else delId.value = id;
 }
-function saveRename() {
-  const s = list.value.find((x) => x.id === editing.value);
-  if (s && draft.value.trim()) s.title = draft.value.trim();
+async function saveRename() {
+  const id = editing.value;
+  const s = list.value.find((x) => x.id === id);
   editing.value = '';
+  if (!s || !draft.value.trim() || draft.value.trim() === s.title) return;
+  if (!real) { s.title = draft.value.trim(); return; }
+  try {
+    const d = await qaApi.patchSession(id, { title: draft.value.trim() });
+    s.title = d.title;
+    if (detail.value?.id === id) detail.value.title = d.title;
+  } catch (e) { message.error(`重命名失败：${errText(e)}`); }
 }
-function doDelete(id: string) {
-  list.value = list.value.filter((x) => x.id !== id);
+async function doDelete(id: string) {
   delId.value = '';
-  if (active.value === id && list.value.length) active.value = list.value[0].id;
+  if (real) {
+    try { await qaApi.deleteSession(id); } catch (e) { message.error(`删除失败：${errText(e)}`); return; }
+    message.success('会话已删除');
+    await load();
+    if (active.value === id) {
+      active.value = srv.value.items[0]?.id ?? '';
+      // 删的是最后一个会话：清掉屏上的旧对话，回到空状态
+      if (!active.value) detail.value = null;
+    }
+    return;
+  }
+  list.value = list.value.filter((x) => x.id !== id);
+  if (active.value === id) active.value = list.value[0]?.id ?? '';
   message.success('会话已删除');
 }
-function onNew() {
+async function onNew() {
   if (readonly.value) return;
   kw.value = ''; range.value = 'all'; page.value = 1;
-  newSession();
+  if (real) await newSessionReal(detail.value?.scope ?? '华东', detail.value?.caliber ?? '不含税');
+  else newSession();
 }
 function select(id: string) { if (editing.value !== id) active.value = id; }
 const pageModel = computed({ get: () => current.value, set: (p: number) => { page.value = p; } });
@@ -63,9 +89,28 @@ const filtered = computed(() => {
   const limit = range.value === 'today' ? 0 : range.value === '7d' ? 6 : range.value === '30d' ? 29 : Infinity;
   return list.value.filter((s) => (!k || s.title.includes(k)) && daysAgo(s.date) <= limit);
 });
-const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / PAGE_SIZE)));
+const total = computed(() => (real ? srv.value.total : filtered.value.length));
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 const current = computed(() => Math.min(page.value, pageCount.value));
-const rows = computed(() => filtered.value.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE));
+const rows = computed(() => (real ? srv.value.items : filtered.value.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE)));
+let reqSeq = 0;
+async function load() {
+  if (!real) return;
+  const my = ++reqSeq;
+  try {
+    const r = await qaApi.listSessions({ q: kw.value.trim() || undefined, range: range.value, page: page.value, size: PAGE_SIZE });
+    if (my !== reqSeq) return;
+    srv.value = { items: r.items, total: r.total };
+    // 页码超出（比如删掉最后一页唯一一条）回落到最后一页
+    if (!r.items.length && r.total && page.value > 1) { page.value = Math.ceil(r.total / PAGE_SIZE); return; }
+    if (!active.value && r.items.length) active.value = r.items[0].id;
+  } catch (e) { if (my === reqSeq) message.error(`会话列表加载失败：${errText(e)}`); }
+}
+if (real) {
+  watch([kw, range, page, listTick], load, { immediate: true });
+  watch(favTick, () => qaApi.listFavorites({ page: 1, size: 3 }).then((r) => { favTop.value = r.items.map((x) => x.question); }).catch((e) => message.error(`常用问题加载失败：${errText(e)}`)), { immediate: true });
+  qaApi.listPagesBrief({ page: 1, size: 2 }).then((r) => { pageTop.value = r.items.map((x) => x.name); }).catch((e) => message.error(`我的页面加载失败：${errText(e)}`));
+}
 const when = (date: string) => (date === QA_TODAY ? '今天' : date.slice(5));
 // 改关键词或时间范围后回到第 1 页
 watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
@@ -80,7 +125,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
       </a-input>
       <a-select v-model:value="range" :options="RANGES" class="qa-ss-range" />
     </div>
-    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="filtered.length <= PAGE_SIZE" class="t-12">共 {{ filtered.length }} 条</span></div>
+    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="total <= PAGE_SIZE" class="t-12">共 {{ total }} 条</span></div>
     <div class="qa-ss-list">
       <div v-for="s in rows" :key="s.id" class="qa-ss-item"
         :class="{ on: s.id === active, hold: menuId === s.id || delId === s.id, edit: editing === s.id }" :title="s.title" @click="select(s.id)">
@@ -106,12 +151,12 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
       </div>
       <div v-if="!rows.length" class="qa-ss-empty c-3">没有匹配的会话</div>
     </div>
-    <AppPagination v-if="filtered.length > PAGE_SIZE" v-model:page="pageModel" variant="simple" :total="filtered.length" :size="PAGE_SIZE" :empty="false" class="qa-ss-pager" />
+    <AppPagination v-if="total > PAGE_SIZE" v-model:page="pageModel" variant="simple" :total="total" :size="PAGE_SIZE" :empty="false" class="qa-ss-pager" />
     <div class="qa-ss-bottom">
       <div class="qa-ss-group c-3">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
-      <div v-for="s in QA_FAVORITES" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
+      <div v-for="s in favTop" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
       <div class="qa-ss-group c-3">我的页面<a @click="emit('panel', 'pages')">全部</a></div>
-      <div v-for="s in QA_MY_PAGES" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
+      <div v-for="s in pageTop" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
     </div>
   </section>
 </template>

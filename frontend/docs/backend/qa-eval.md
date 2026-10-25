@@ -228,7 +228,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | # | 事项 | 涉及题 | 找谁 |
 |---|---|---|---|
 | 1 | `store.is_test` 测试店：口径写了“门店.是否测试店 = 否”（`metricCatalog.ts:33`），但前端门店属性里没有这个字段；种子全部为否 | 全部 29 道 gmv/gmv_tax 题 | 本体小白 / 静态本体 |
-| 2 | 订单行不含税金额怎么算：种子没有，暂按行含税 ÷ 1.13，订单级优惠不分摊 | 27 道 gmv 题 | 本体小白 / 指标负责人 |
+| 2 | 订单行不含税金额怎么算：种子没有，暂按行含税 ÷ 1.13，订单级优惠不分摊。**[推断] qa 已裁定（2026-10-26）：采用行含税 ÷ 1.13、不分摊订单级优惠，记在 `backend/seeds/extra/qa/caliber/notes.json`，跟 §4 一致；静态指标定义页没改，冲突处以 qa 裁定为准，待指标负责人确认** | 27 道 gmv 题 | 本体小白 / 指标负责人 |
 | 3 | 退款种子没有，gmv 和 gmv_tax 的退款项按 0 | 29 题；退款率 EV-Q-051 拒答 | 本体小白 |
 | 4 | 含税销售额的时间字段（出库时间）和默认过滤（同 gmv） | EV-Q-043、EV-Q-052、EV-Q-087 | 指标负责人 |
 | 5 | 出库及时率的“应出库订单”定义（暂按状态∉{待支付, 已取消}），以及用 `shipped_at` 代替状态变更时刻。时间字段已定为出库时间 | EV-Q-049 | 周晓峰（ship_ontime owner） |
@@ -239,6 +239,8 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | 10 | 优惠金额没有指标定义，暂按剔除已取消、下单时间 | EV-Q-053 | 指标负责人 |
 | 11 | 散客 = `member_phone` 为空 | EV-Q-015 | 本体小白 |
 | 12 | 商品可见性：`defaultDeny` 角色（R-05/R-06/R-08）没配品类范围时商品不可见，骨架 `c646bd5` 已按此实现（`effective_expr`），`auth.row_filter` 仍是桩 [待骨架实现]；题库暂无角色维度（第 5 节第 10 条） | 连 `product` 的 10 题 | 本体小白 |
+| 13 | **[推断] 评测与界面冲突：EV-Q-080 越权申请入口**。题库要求华南越权拒答且 `applyEntry: true`，`refuseCode: OUT_OF_SCOPE`；工作台（qa-joint）照前端只在 `code=NO_PERMISSION`（或无 code 的旧轮次）时显示「申请权限」，`OUT_OF_SCOPE` / `NOT_SELECT` / `NO_DATA` 不给入口。按前端为准：要么链路把越权大区判成 `NO_PERMISSION`，要么题库把 EV-Q-080 的 `applyEntry` 改为 `false`。另：真 qwen-flash 下该题有时回反问（「华南大区不存在…是否查询华东」） | EV-Q-080 | qa-reuse / PDE |
+| 14 | **[推断] 生成 SQL 被网关拒（403 `SQL_REJECTED`）**：照现有界面行为，不落轮次，前端提示「提问失败：…」，问题留给用户重问；评测里只有 `refuseCode: NOT_SELECT` 的题把 `SQL_REJECTED` 算作拒答通过，其他题算失败 | 偶发（如「昨天的毛利率」一次） | qa-reuse |
 
 v0.4 已结清：列名和类型按骨架确认（`area`、`created_at_biz`、状态英文码、`is_seed`），bz_ 注释。
 

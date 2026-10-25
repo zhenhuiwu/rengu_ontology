@@ -1,11 +1,18 @@
 <script setup lang="ts">
-/** 左下“常用问题 · 管理”“我的页面 · 全部”的本页抽屉（不跳转）。每页 10 条 simple 分页；状态 ?panel=favorites|pages */
+/** 左下“常用问题 · 管理”“我的页面 · 全部”的本页抽屉（不跳转）。每页 10 条 simple 分页；状态 ?panel=favorites|pages
+ * 真接口（开关 qa）：常用问题 W13（q）、我的页面 P1 view=brief（kw）按页取，移出走 W15 */
 import { ref, computed, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { SearchOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
 import { QA_FAVORITE_LIST, QA_PAGE_LIST } from '@/mock';
+import * as qaApi from '@/api/qa';
+import { errText, useQaSession } from '../useQaSession';
+
+type Row = { id: string; name: string; c1: string; c2: string; tag?: string };
+const real = qaApi.qaReal();
+const srv = ref<{ items: Row[]; total: number }>({ items: [], total: 0 });
 
 const props = defineProps<{ panel: string }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'ask', q: string): void }>();
@@ -21,10 +28,43 @@ const rows = computed(() => {
     ? favs.value.filter((f) => !k || f.question.includes(k)).map((f) => ({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }))
     : QA_PAGE_LIST.filter((p) => !k || p.name.includes(k)).map((p) => ({ id: p.id, name: p.name, c1: `${p.cards} 张卡片`, c2: `${p.updatedAt} 更新`, tag: p.shared ? '已共享' : '' }));
 });
-const paged = computed(() => paginate(rows.value, { page: page.value, size: SIZE }));
+const paged = computed<{ items: Row[]; total: number }>(() => (real ? srv.value : paginate<Row>(rows.value, { page: page.value, size: SIZE })));
 watch(() => props.panel, () => { page.value = 1; kw.value = ''; });
 watch(kw, () => { page.value = 1; });
-function remove(id: string) { favs.value = favs.value.filter((f) => f.id !== id); message.success('已移出常用问题'); }
+let reqSeq = 0;
+async function load() {
+  if (!real || (props.panel !== 'favorites' && props.panel !== 'pages')) return;
+  const my = ++reqSeq;
+  const k = kw.value.trim() || undefined;
+  try {
+    const items: Row[] = [];
+    let total = 0;
+    if (isFav.value) {
+      const r = await qaApi.listFavorites({ q: k, page: page.value, size: SIZE });
+      r.items.forEach((f) => items.push({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }));
+      total = r.total;
+    } else {
+      const r = await qaApi.listPagesBrief({ kw: k, page: page.value, size: SIZE });
+      r.items.forEach((p) => items.push({ id: p.id, name: p.name, c1: `${p.cards} 张卡片`, c2: `${p.updatedAt} 更新`, tag: p.shared ? '已共享' : '' }));
+      total = r.total;
+    }
+    if (my !== reqSeq) return;
+    srv.value = { items, total };
+    if (!items.length && total && page.value > 1) page.value = Math.ceil(total / SIZE);
+  } catch (e) { if (my === reqSeq) message.error(`${title.value}加载失败：${errText(e)}`); }
+}
+if (real) watch([() => props.panel, kw, page], load, { immediate: true });
+const { favTick } = useQaSession();
+async function remove(id: string) {
+  if (real) {
+    try { await qaApi.deleteFavorite(id); } catch (e) { message.error(`移出失败：${errText(e)}`); return; }
+    message.success('已移出常用问题');
+    favTick.value++;
+    await load();
+    return;
+  }
+  favs.value = favs.value.filter((f) => f.id !== id); message.success('已移出常用问题');
+}
 </script>
 
 <template>

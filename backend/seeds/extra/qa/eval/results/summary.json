@@ -1,0 +1,48 @@
+{
+ "sel": "all",
+ "tag": "_runA",
+ "model": "qwen-flash",
+ "fixedNow": "2026-10-25T15:42:00+08:00",
+ "ok": 76,
+ "total": 100,
+ "byType": {
+  "answer": {
+   "ok": 62,
+   "total": 74
+  },
+  "refuse": {
+   "ok": 9,
+   "total": 16
+  },
+  "clarify": {
+   "ok": 5,
+   "total": 10
+  }
+ },
+ "failed": [
+  "EV-Q-012",
+  "EV-Q-014",
+  "EV-Q-016",
+  "EV-Q-022",
+  "EV-Q-025",
+  "EV-Q-026",
+  "EV-Q-042",
+  "EV-Q-051",
+  "EV-Q-052",
+  "EV-Q-058",
+  "EV-Q-061",
+  "EV-Q-063",
+  "EV-Q-066",
+  "EV-Q-067",
+  "EV-Q-069",
+  "EV-Q-071",
+  "EV-Q-072",
+  "EV-Q-078",
+  "EV-Q-080",
+  "EV-Q-081",
+  "EV-Q-082",
+  "EV-Q-084",
+  "EV-Q-091",
+  "EV-Q-095"
+ ]
+}
