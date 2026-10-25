@@ -8,4 +8,5 @@ export const PDE_PAGES: Record<string, () => Promise<unknown>> = {
   'external-systems': () => import('@/pages/data/ExternalSystems.vue'),
   'data-quality': () => import('@/pages/data/DataQuality.vue'),
   functions: () => import('@/pages/functions/Functions.vue'),
+  roles: () => import('@/pages/admin/Roles.vue'),
 };
