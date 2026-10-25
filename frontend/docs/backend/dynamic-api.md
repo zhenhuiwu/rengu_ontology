@@ -490,7 +490,7 @@ stateDiagram-v2
 | 状态变化 / 非法迁移 | `GET /object-types/{id}/lifecycle/changes?illegal=1&page&size`、`/illegal?since=7d` | 一屏 6；非法迁移按 from→to 汇总，取 SM-ORD 命中 |
 | 行为汇总 | `GET /object-types/{id}/action-types`、`/action-runs?status&action&page`、`/rules`、`/rule-hits?rule&page` | 只读 |
 
-错误码：先用**通用错误码**（骨架 `1aeb5d1` `app/core/errors.py`、`CONVENTIONS.md` §2）：动作提交条件不满足（`:start-action`、`:stage`、`:confirm`，含问数「发起」经 `:stage`）→ 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed=[{name, fail}]`，`name`/`fail` 即动作类型提交条件的 `name`/`fail`（前端 `SubmitCond{kind, name, expr, fail}`，`mock/actionEvent.ts` L192；动态页面前端不求值提交条件，后台照 PDE 规则重新校验）[已定：PDE api-index `10a074e`，`ACTION_BLOCKED` 已取消，动态不另设码]；状态不允许 → 409 `STATE_INVALID`（原 `ACTION_STATE_INVALID`）；关闭原因、撤回原因、对账说明等必填为空 → 422 `VALIDATION_FAILED`，`details.fields=[{field, message}]`（原 `REASON_REQUIRED`）；另有 409 `DUPLICATE_KEY` / `EMPTY_INPUT` / `VERSION_CONFLICT`、403 `READONLY` / `NO_PERMISSION`、404 `NOT_FOUND`。动态新增（HTTP 状态由动态定）：
+错误码：先用**通用错误码**（骨架 `1aeb5d1` `app/core/errors.py`、`CONVENTIONS.md` §2）：动作提交条件不满足（`:start-action`、`:stage`、`:confirm`，含问数「发起」经 `:stage`）→ 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed=[{name, fail}]`，`name`/`fail` 即动作类型提交条件的 `name`/`fail`（前端 `SubmitCond{kind, name, expr, fail}`，`mock/actionEvent.ts` L192；动态页面前端不求值提交条件，后台照 PDE 规则重新校验）[已定：PDE api-index `10a074e`，`ACTION_BLOCKED` 已取消，动态不另设码]；状态不允许 → 409 `STATE_INVALID`（原 `ACTION_STATE_INVALID`）；关闭原因、撤回原因、对账说明等必填为空 → 422 `VALIDATION_FAILED`，`details.fields=[{field, message}]`（原 `REASON_REQUIRED`）；另有 409 `DUPLICATE_KEY` / `EMPTY_INPUT` / `VERSION_CONFLICT` / `IDEMPOTENCY_CONFLICT`（同一幂等键、内容不同；或同动作类型同业务键已有在途动作 `[推断 P4]`；内容相同仍返回已有记录 `[推断 P9]`；骨架增量收进公共码）、403 `READONLY` / `NO_PERMISSION`、404 `NOT_FOUND`。动态新增（HTTP 状态由动态定）：
 
 | code | HTTP | 场景 |
 |---|---|---|
@@ -498,7 +498,6 @@ stateDiagram-v2
 | `NOT_ASSIGNEE` | 403 | 非处理人处理告警 |
 | `ALERT_LOCKED_BY_ACTION` | 409 | 告警有进行中的关联动作，不能关闭 / 转派 |
 | `ALREADY_RESUBMITTED` | 409 | 失败动作已重新提交过（`retried_as` 非空） |
-| `IDEMPOTENCY_CONFLICT` | 409 | 通用码（PDE api-index `10a074e`）：同一幂等键、请求内容不同；或同动作类型同业务键已有在途动作（`[推断 P4]`）。同一幂等键、内容相同仍返回已有记录（`[推断 P9]`）。前端没有这两种情况 |
 | `STAGE_MAPPING_MISSING` | 422 | 自动暂存缺必填参数的取值来源 |
 | `SCENARIO_NOT_OWNER` | 403 | 非 owner 改名 / 运行 / 转动作 |
 | `SCENARIO_RUNNING` | 409 | 方案运行中（status=running），不能再运行 |
