@@ -231,8 +231,8 @@ async function rollback() {
           <a-tooltip :title="editTo ? '' : '这张单子没有可跳转的草稿页面'">
             <a-button :disabled="!editTo" @click="edit">编辑</a-button>
           </a-tooltip>
-          <a-tooltip :title="blocked ? `有 ${counts['阻断']} 项阻断未通过` : ''">
-            <a-button type="primary" :disabled="blocked" @click="submit">提交审核</a-button>
+          <a-tooltip :title="!cur.changes ? '草稿里还没有改动，无法提交' : blocked ? `有 ${counts['阻断']} 项阻断未通过` : ''">
+            <a-button type="primary" :disabled="blocked || !cur.changes" @click="submit">提交审核</a-button>
           </a-tooltip>
         </template>
         <template v-else-if="cur.status === '审核中'">
