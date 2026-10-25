@@ -112,17 +112,19 @@ def session_out(s: QaSession) -> SessionOut:
     return SessionOut(id=s.code, title=s.title, date=fmt_date(s.last_at) or "")
 
 
-def turn_out(t: QaTurn) -> dict[str, Any]:
+def turn_out(t: QaTurn, applied: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {"id": t.code, "kind": t.kind.value}
     if t.asked_at:
         out["time"] = fmt_hm(t.asked_at)
     if t.question is not None:
         out["question"] = t.question
     out.update(t.snapshot or {})
+    if applied:
+        out["applied"] = True  # [推断] 越权轮次已提交过待审批的申请（W16）→「已申请 · 待审批」
     return out
 
 
-def session_detail_out(s: QaSession) -> SessionDetailOut:
+def session_detail_out(s: QaSession, applied: set[int] | frozenset[int] = frozenset()) -> SessionDetailOut:
     return SessionDetailOut(
         id=s.code,
         title=s.title,
@@ -130,7 +132,7 @@ def session_detail_out(s: QaSession) -> SessionDetailOut:
         scope=s.scope,
         caliber=s.caliber.value,
         owner_id=s.owner.code,
-        turns=[turn_out(t) for t in s.turns],
+        turns=[turn_out(t, t.id in applied) for t in s.turns],
     )
 
 

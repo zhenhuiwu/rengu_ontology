@@ -13,7 +13,7 @@ import { message } from 'ant-design-vue';
 import { ShareAltOutlined, LayoutOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { useConfirmStore } from '@/stores/confirm';
-import { REGION_EC } from '@/mock';
+import { REGION_EC, QA_APPLY } from '@/mock';
 import { useQueryParam } from './useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
@@ -80,7 +80,22 @@ function toPage() {
   router.push({ path: '/use/qa/pages', query: { newName: title } });
 }
 function onPinned(page: string) { pin.value = ''; message.success(`已固定到「${page}」`); }
-function onApplied() { apply.value = ''; applied.value = true; message.success('申请已提交，等待审批'); }
+/* 真接口（W16）：申请的是点了「申请权限」的那一轮；刷新后（?apply=1 复现）按本会话最后一个未申请的越权轮次 [推断] */
+const applyTurn = ref('');
+const applying = ref(false);
+function openApply(turnId?: string) { applyTurn.value = turnId ?? ''; apply.value = '1'; }
+async function onApplied(v: { reason: string; duration: string }) {
+  if (!sess.real) { apply.value = ''; applied.value = true; message.success('申请已提交，等待审批'); return; }
+  const d = sess.detail.value;
+  const tid = applyTurn.value || [...(d?.turns ?? [])].reverse().find((t) => t.kind === 'denied' && !t.applied)?.id;
+  applying.value = true;
+  try {
+    await qaApi.createPermissionRequest({ scope: QA_APPLY.scope, object: QA_APPLY.object, reason: v.reason, duration: Number.parseInt(v.duration, 10), sourceTurnId: tid ?? null });
+    apply.value = ''; applyTurn.value = '';
+    message.success('申请已提交，等待审批');
+    if (d) await sess.loadDetail(d.id);
+  } catch (e) { message.error(`提交申请失败：${errText(e)}`); } finally { applying.value = false; }
+}
 
 function setConfirmQuery(on: boolean) {
   const q = { ...route.query };
@@ -136,14 +151,14 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
       <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
-      <QaConversation :applied="applied" :tips="tips" @suggest="runAction" @pin="pin = '1'" @apply="apply = '1'" />
+      <QaConversation :applied="applied" :tips="tips" @suggest="runAction" @pin="pin = '1'" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
     <QaObjectPanel :pending="pending" :submitted="submitted" :highlight="highlight" @run="runAction" @detail="drawer.open('region', REGION_EC.id)" />
   </div>
   <QaPinModal :open="pin === '1'" card="上个月华东大区复购客户的销售额（按省份）" @close="pin = ''" @done="onPinned" />
   <QaListDrawer :panel="panel" @close="panel = ''" @ask="panel = ''" />
-  <QaApplyDrawer :open="apply === '1'" @close="apply = ''" @submit="onApplied" />
+  <QaApplyDrawer :open="apply === '1'" :submitting="applying" @close="apply = ''" @submit="onApplied" />
 </template>
 
 <style scoped>

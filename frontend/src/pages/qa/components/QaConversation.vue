@@ -12,7 +12,7 @@ import QaStoreAnswer from './QaStoreAnswer.vue';
 import type { QaRealTurn, QaChainAnswer } from '@/api/qa';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
 const props = defineProps<{ applied: boolean; tips: string[] }>();
-const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'apply'): void }>();
+const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'apply', turnId?: string): void }>();
 const { isNew, activeTurns, activeId, draft, real, detail, sending, loading } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
@@ -69,8 +69,8 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
     <div v-else-if="t.kind === 'denied'" class="qa-b">
       <LockOutlined class="c-3" />
       <span class="qa-b-txt">{{ t.lead }}<span class="fw-600">{{ t.bold }}</span>{{ t.tail }}</span>
-      <span v-if="applied" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
-      <template v-else><a-tag>{{ t.tag }}</a-tag><a-button size="small" @click="emit('apply')">申请权限</a-button></template>
+      <span v-if="real ? t.applied : applied" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
+      <template v-else><a-tag>{{ t.tag }}</a-tag><a-button size="small" @click="emit('apply', t.id)">申请权限</a-button></template>
     </div>
     <div v-else class="qa-b">
       <InboxOutlined class="c-3" />

@@ -6,8 +6,9 @@
 import { ref } from 'vue';
 import { QA_APPLY } from '@/mock';
 
-defineProps<{ open: boolean }>();
-const emit = defineEmits<{ (e: 'close'): void; (e: 'submit'): void }>();
+/** submitting：真接口提交中（W16）；submit 带上理由和有效期（显示文字，提交时由调用方转天数） */
+defineProps<{ open: boolean; submitting?: boolean }>();
+const emit = defineEmits<{ (e: 'close'): void; (e: 'submit', v: { reason: string; duration: string }): void }>();
 const reason = ref('');
 const duration = ref(QA_APPLY.durations[1]);
 </script>
@@ -31,7 +32,7 @@ const duration = ref(QA_APPLY.durations[1]);
     <template #footer>
       <div class="qa-ap-foot">
         <a-button @click="emit('close')">取消</a-button>
-        <a-button type="primary" :disabled="!reason.trim()" @click="emit('submit')">提交申请</a-button>
+        <a-button type="primary" :disabled="!reason.trim()" :loading="submitting" @click="emit('submit', { reason: reason.trim(), duration })">提交申请</a-button>
       </div>
     </template>
   </a-drawer>

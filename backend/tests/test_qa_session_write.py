@@ -95,3 +95,40 @@ async def test_ask_sql_exec_error_is_422_not_500(qa, session):
         app.dependency_overrides.pop(get_llm, None)
     assert r.status_code == 422, r.text
     assert r.json()["code"] == "QA_SQL_FAILED"
+
+
+async def _denied_turn(qa) -> str:
+    turns = (await qa.get(f"{B}/sessions/S0001")).json()["turns"]
+    return next(t["id"] for t in turns if t["kind"] == "denied")
+
+
+async def test_permission_request_marks_turn_applied(qa):
+    tid = await _denied_turn(qa)
+    body = {
+        "scope": "大区 = 华南",
+        "object": "复购客户销售额（不含税） v3",
+        "reason": " Q4 复购对比 ",
+        "duration": 90,
+        "sourceTurnId": tid,
+    }
+    r = await qa.post(f"{B}/permission-requests", json=body)
+    assert r.status_code == 201, r.text
+    assert r.json() == {"id": "AP0001", "status": "待审批", "approver": "刘洋（数据权限管理员）"}
+    turn = next(t for t in (await qa.get(f"{B}/sessions/S0001")).json()["turns"] if t["id"] == tid)
+    assert turn["applied"] is True
+    # 只读白名单：历史版本下也能提交
+    r = await qa.post(f"{B}/permission-requests?ver=v2026.10.2", json={**body, "sourceTurnId": None})
+    assert r.status_code == 201 and r.json()["id"] == "AP0002"
+
+
+async def test_permission_request_validation(qa):
+    tid = await _denied_turn(qa)
+    base = {"scope": "大区 = 华南", "object": "x", "reason": "r", "sourceTurnId": tid}
+    assert (await qa.post(f"{B}/permission-requests", json={**base, "duration": 45})).status_code == 422
+    assert (
+        await qa.post(f"{B}/permission-requests", json={**base, "duration": 30, "reason": ""})
+    ).status_code == 422
+    r = await qa.post(
+        f"{B}/permission-requests", json={**base, "duration": 30}, headers={"X-Demo-As": "U010006"}
+    )
+    assert r.status_code == 404

@@ -13,7 +13,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.common.auth import CurrentUserDep, require_func
-from app.common.context import ViewContextDep
+from app.common.context import ViewContextDep, readonly_extra
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
 from app.core.errors import AppError, NotFound
@@ -29,6 +29,8 @@ from app.modules.qa.models import (
     FixKind,
     PageSourceKind,
     PageStatus,
+    PermRequestStatus,
+    QaPermissionRequest,
     QaQueryLog,
     QaSession,
     QaTemplate,
@@ -53,6 +55,8 @@ from app.modules.qa.schemas import (
     OptionOut,
     PageFullOut,
     PageListOut,
+    PermRequestIn,
+    PermRequestOut,
     PlanOptionsOut,
     SessionCreateIn,
     SessionDetailOut,
@@ -139,7 +143,20 @@ async def get_session(sid: str, session: SessionDep, user: CurrentUserDep, ctx: 
     # [推断] 非拥有者打开分享会话需按打开人重算（第一批未实现），先按不存在处理
     if s is None or s.owner_id != pk:
         raise NotFound("会话不存在", details={"id": sid})
-    return svc.session_detail_out(s)
+    return await _detail_out(session, s)
+
+
+async def _detail_out(session, s: QaSession) -> SessionDetailOut:
+    """W3 详情；越权轮次带上是否已申请（W16 待审批）。"""
+    ids = [t.id for t in s.turns if t.kind == TurnKind.denied]
+    applied: set[int] = set()
+    if ids:
+        stmt = select(QaPermissionRequest.source_turn_id).where(
+            QaPermissionRequest.source_turn_id.in_(ids),
+            QaPermissionRequest.status == PermRequestStatus.pending,
+        )
+        applied = {x for x in (await session.scalars(stmt)).all() if x is not None}
+    return svc.session_detail_out(s, applied)
 
 
 async def _own_session(session, pk: int, sid: str) -> QaSession:
@@ -172,7 +189,7 @@ async def create_session(
     )
     session.add(s)
     await session.flush()
-    return svc.session_detail_out(await _own_session(session, pk, s.code))
+    return await _detail_out(session, await _own_session(session, pk, s.code))
 
 
 @router.patch(
@@ -205,7 +222,7 @@ async def patch_session(
         s.last_at = now
     await session.flush()
     session.expire(s)
-    return svc.session_detail_out(await _own_session(session, pk, sid))
+    return await _detail_out(session, await _own_session(session, pk, sid))
 
 
 @router.delete("/sessions/{sid}", dependencies=_WB, status_code=204, summary="W5 删除会话")
@@ -297,6 +314,47 @@ async def delete_favorite(fid: str, session: SessionDep, user: CurrentUserDep, c
     await session.delete(f)
     await session.flush()
     return Response(status_code=204)
+
+
+@router.post(
+    "/permission-requests",
+    dependencies=_WB,
+    status_code=201,
+    response_model=PermRequestOut,
+    summary="W16 申请数据权限",
+    openapi_extra=readonly_extra("history", "preview"),  # 只读白名单（1.1）
+)
+async def create_permission_request(
+    body: PermRequestIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
+):
+    # [推断] 申请人记有效用户（预览时 = 被预览人，跟轮次归属一致）；第 12 节 #4 待定
+    pk, _ = await svc.effective_user(session, user, ctx)
+    turn_pk = None
+    if body.source_turn_id:
+        t = await session.scalar(
+            select(QaTurn)
+            .join(QaSession, QaTurn.session_id == QaSession.id)
+            .where(QaTurn.code == body.source_turn_id, QaSession.owner_id == pk)
+        )
+        if t is None:
+            raise NotFound("轮次不存在", details={"id": body.source_turn_id})
+        turn_pk = t.id
+    codes = (await session.scalars(select(QaPermissionRequest.code))).all()
+    nums = [int(c[2:]) for c in codes if c.startswith("AP") and c[2:].isdigit()]
+    req = QaPermissionRequest(
+        code=f"AP{(max(nums) if nums else 0) + 1:04d}",  # [推断] 申请号 AP0001…
+        requester_id=pk,
+        scope=body.scope,
+        object_label=body.object,
+        reason=body.reason.strip(),
+        duration_days=body.duration,
+        source_turn_id=turn_pk,
+        approver=catalog.load("QA_APPLY").get("approver"),  # [推断] 第一期固定路由给 QA_APPLY.approver
+        status=PermRequestStatus.pending,
+    )
+    session.add(req)
+    await session.flush()
+    return PermRequestOut(id=req.code, status=req.status.value, approver=req.approver)
 
 
 @router.get(

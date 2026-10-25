@@ -40,8 +40,9 @@ async function write<T>(method: 'PATCH' | 'DELETE', path: string, body?: unknown
 /** W3 会话详情：轮次快照形状同 QA_DEMO_TURNS；链路新生成的回答是 card='table' + text（后台 chain.py） */
 export interface QaChainTable { id: string; title: string; columns: { key: string; title: string; align?: string }[]; items: Record<string, unknown>[]; total: number; summary: string; paged: boolean }
 export interface QaChainAnswer { card: 'table'; text: string; dataAsOf?: string; basis?: Record<string, string>; table: QaChainTable }
+/** applied：越权轮次已提交待审批的申请（W16 之后 W3 返回） */
 export type QaRealTurn =
-  | QaDemoTurn
+  | (QaDemoTurn & { applied?: boolean })
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaChainAnswer }
   | { id: string; kind: 'empty'; time?: string; question: string; lead: string; bold: string; tail: string; tag: string; retry?: undefined };
 export interface QaSessionDetail extends QaSession { scope: string | null; caliber: string; ownerId: string; turns: QaRealTurn[] }
@@ -63,4 +64,8 @@ export const deleteFavorite = (id: string) => write<void>('DELETE', `/favorites/
 /** P1 简版（左栏贴底、「我的页面 · 全部」抽屉） */
 export const listPagesBrief = (q: { kw?: string; page: number; size: number }) =>
   api.get<PageResult<QaPage>>('/pages', { query: { ...q, view: 'brief' } });
+/** W16 申请数据权限；duration 为天数 30 | 90 | 180（前端单选文字转数字） */
+export interface QaPermRequestIn { scope: string; object: string; reason: string; duration: number; sourceTurnId: string | null }
+export const createPermissionRequest = (body: QaPermRequestIn) =>
+  api.post<{ id: string; status: string; approver: string | null }>('/permission-requests', body);
 export const getSessionOptions = () => api.get<QaSessionOptions>('/session-options');

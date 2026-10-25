@@ -46,6 +46,22 @@ class SessionPatchIn(ApiModel):
     caliber: Literal["不含税", "含税"] | None = None
 
 
+class PermRequestIn(ApiModel):
+    """W16 请求体。duration：前端单选文字「30 天」转成天数整数后提交。"""
+
+    scope: str = Field(min_length=1, max_length=60)
+    object: str = Field(min_length=1, max_length=60)
+    reason: str = Field(min_length=1, max_length=200)
+    duration: Literal[30, 90, 180]
+    source_turn_id: str | None = None
+
+
+class PermRequestOut(ApiModel):
+    id: str
+    status: str
+    approver: str | None = None
+
+
 class FavoriteOut(ApiModel):
     """W13 · QaFavorite。"""
 
