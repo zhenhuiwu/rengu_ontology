@@ -1,7 +1,7 @@
 """integration：外部系统 ext_system（action-event-api §9.1；writeback_call / reconcile_task 在后续迁移）
 
 Revision ID: integration_0001
-Revises: 0003
+Revises: static_0001
 Create Date: 2026-10-25
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "integration_0001"
-down_revision: str | None = "0003"
+down_revision: str | None = "static_0001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
