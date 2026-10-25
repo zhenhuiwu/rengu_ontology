@@ -59,5 +59,11 @@ Excel 不收（api-index【待定】）。
 
 ## 前端
 
-Users.vue **仍走 mock**（团队规则允许）。原因：`apiClient` 只有 `get/post`，没有 `put`，`PUT /users/{id}` 接不上，
-而本阶段不改 `apiClient` 核心。下一步：PDE 给 apiClient 加 `put` 后，在 `src/api/admin.ts` 加用户接口并接到 Users.vue。
+Users.vue 已接真接口（`src/api/admin.ts`，apiClient 的 put/patch/delete 由 cherry-pick 215819d 补上），回退规则同审计日志：
+开关 admin 没切到真接口、或后台没起来（网络错 / 5xx）→ 用本地 mock，原逻辑不变；其他错误（409 / 422 等）弹提示。
+
+- 列表：`queryUsers` 按 部门 / 状态 / 关键词 / page / size 查一页；部门下拉来自 `GET /depts`（失败回退 ADMIN_DEPTS）。
+- 新建 / 编辑：`POST /users`、`PUT /users/{id}`，成功后重新拉当前页。
+- 批量导入：只收模板 CSV，上传即调 `users:import-preview`，预览表多一列「校验」（error）；确认后 `users:import`，有错的行跳过。
+- 启用 / 停用：`users/{id}:enable`、`users/{id}:disable`；有待办审批时把转交人作为 `transferTo` 传上去。
+- 已知限制：真接口下编辑抽屉、停用转交人候选只在当前页里找（mock 下是全量）；Excel 导入未做。
