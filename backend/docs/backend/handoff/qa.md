@@ -11,6 +11,8 @@
 - **反问卡 / 拒答（qa-reuse a35d3b6 新链路）**：`answer.card='clarify'` 读 `answer.clarify` 渲染选项，点选项发一条自包含追问（EV-Q-064 / 065 验过，「哪个门店表现最好？」+「销售额最高」→「哪个门店销售额最高？」）；刷新后按后续轮次反推已选项。`kind=denied` 按 `code` 渲染（锁图标 + tag），「申请权限」只给 `NO_PERMISSION`（NO_DATA / NOT_SELECT 验过无入口；手机号、关行级权限两题验过有入口且 W16 通过）。
 - **R5 问数调优 · 认证问答页签**：T3 列表、T4 抽屉、T5 新建、T6 认证（有未发布 CR → 待重新认证）、T7 启停、T8 同问法；T1 只取待重新认证 / 未认证计数。
 - **R5 · 高频问题页签**：T18 列表、T19 一键认证（已关联认证 → 409）。
+- **R5 · 新建认证问答选项**：指标 / 维度 / 时间下拉取 T2（真接口），新建走 T5。
+- **R1 范围 / 口径下拉**：取 W17。**追问条**：读最后一轮回答的 `answer.suggest.followUps`（链路目前只在反问轮给，等于反问选项），点了按反问选项同样拼追问句；没有就隐藏（不再显示写死的 3 条）[推断]。
 - 后端：`backend/app/modules/qa/{router,service,repo,schemas}.py` 对应实现，测试 `backend/tests/test_qa*.py`。最近一次全量检查（01:11，反问 / 拒答提交前）：pytest 403 passed / 1 skipped，ruff check + format、alembic check、`npm run build` 通过。
 
 ### 1.2 链路（qa-reuse，`a35d3b6`；chain.py / llm.py / test_qa_chain.py 归 qa-reuse，本分支未改）
@@ -26,16 +28,14 @@
 | 范围 | 状态 | 还差什么 | 接口 / 文件 |
 |---|---|---|---|
 | R1 流式回答 | 未做 | 前端 W6 同步等 202 里的 `turn`，没接 SSE；后端 W7 未实现流 | W7 `GET /turns/{tid}/stream`（`qa-api.md` §3）；`src/pages/qa/useQaSession.ts` `sendReal`、`QaAnswer.vue` / `QaStoreAnswer.vue` |
-| R1 固定到页面 | mock | 弹窗 `QaPinModal` 仍写死卡名、不调后端 | P2 `POST /pages`、P7 `POST /pages/{pid}/cards`；`src/pages/qa/Workbench.vue`（`QaPinModal`） |
-| R1 追问建议条 | mock | 输入框上方追问 chip 是写死的 3 条，没读 `answer.suggest.followUps` | `src/pages/qa/components/QaComposer.vue`（`followUps`） |
-| R1 会话选项 | 未接 | 范围 / 口径下拉仍用前端常量 | W17 `GET /session-options`（`qa.ts` 已有 `getSessionOptions`，未调用） |
+| R1 固定到页面 | mock | 弹窗 `QaPinModal` 仍写死卡名、页面列表取 mock、不调后端；后端 P2 / P7 未实现；固定后的卡要在「我的页面」显示，而 R2 仍是 mock，所以单接这一步也不算完成 | P2 `POST /pages`、P7 `POST /pages/{pid}/cards`；`src/pages/qa/Workbench.vue`（`QaPinModal`） |
 | R1 建议动作对象 | 部分 | 动作卡对象固定为客户群 `SEG-EC-60D`、参数是卡片文案；影响 / 预算 / 提交条件三行仍是前端文案（stage 无返回）[推断] | X1 `action-runs:stage`；`Workbench.vue` `runAction` |
 | R1 反问追问 | 部分 | 链路无多轮上下文，追问句由前端启发式拼接 [推断]；所选项不回写 `clarify.chosen` [推断] | `QaConversation.vue` `followUp` / `chosenOf` |
 | R1 第二期 | 未做 | 停止生成、加入常用 | W8 `:cancel`、W14 `POST /favorites` |
-| R5 问数调优（整页**不算完成**） | 部分 | 评测题库页签（T9 运行列表、T10 运行详情、T11 发起评测、T12 题目）、反馈与纠错页签（T13 列表、T14 详情、T15 转同义词 → 静态 X3 变更单、T16 转认证问答、T17 忽略 / 重开）全部仍是 mock；页签角标里评测、反馈计数是 mock；新建认证问答的计划选项没接 T2；T20 同义词未接 | `src/pages/ontology/qa-tuning/EvalTab.vue`、`FeedbackTab.vue`、`QaTuning.vue`（计数）、`CertTab.vue`（T2）；后端 T2 / T9–T17 / T20 路由 |
-| R2 我的页面与模板库 `/use/qa/pages` | 未开始，mock | 全部 12 个接口 | P1–P12；`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*` |
-| R3 对象搜索 `/use/objects/search` | 未开始，mock | 类型、搜索、导出、带范围提问 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
-| R4 对象详情 `/use/objects/detail` | 未开始，mock | 概览、关联、时间线、可执行动作、对它提问 | O5–O7、O9、O4、X7；`src/pages/objects/ObjectDetail.vue`、`parts/ObjAskModal.vue` |
+| R5 问数调优（整页**不算完成**） | 部分 | 评测题库页签（T9 运行列表、T10 运行详情、T11 发起评测、T12 题目）、反馈与纠错页签（T13 列表、T14 详情、T15 转同义词 → 静态 X3 变更单、T16 转认证问答、T17 忽略 / 重开）全部仍是 mock（后端只有 T9 / T10 / T12 / T13 / T14 / T20 的读接口；T11 发起评测、T16 转认证、T17 忽略 / 重开未实现；T15 转同义词要调静态 X3 变更单，静态模块目前没有 change-requests 路由，**阻塞**）；页头「运行评测」按钮、页签角标里评测和反馈计数也是 mock（列表是 mock 时计数跟着 mock，避免对不上） | `src/pages/ontology/qa-tuning/EvalTab.vue`、`FeedbackTab.vue`、`QaTuning.vue`（计数、`runEval`）；后端 T11、T15–T17 路由 |
+| R2 我的页面与模板库 `/use/qa/pages` | 未开始，mock | 前端未接；后端只有读接口 P1 / P3 / P11 / P12，写接口 P2、P4–P10 未实现 | P1–P12；`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*` |
+| R3 对象搜索 `/use/objects/search` | 未开始，mock | 前端未接；后端只有 O1 类型列表，O2–O4 未实现 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
+| R4 对象详情 `/use/objects/detail` | 未开始，mock | 前端未接；后端 O5–O7、O9 未实现（动作记录走动态 X7） | O5–O7、O9、O4、X7；`src/pages/objects/ObjectDetail.vue`、`parts/ObjAskModal.vue` |
 | W11 下载 | 临时 | `apiClient` 没有拿 blob 的方法，`src/api/qa.ts` 里留了一个只做 GET 下载的小工具 | 等 PDE 在 `src/api/http.ts` 加下载方法后改回 |
 
 ### 2.1 链路未完成 / 待裁定
