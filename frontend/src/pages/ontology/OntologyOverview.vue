@@ -7,7 +7,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { message } from 'ant-design-vue';
+import { Empty, message } from 'ant-design-vue';
 import { RightOutlined } from '@ant-design/icons-vue';
 import type { Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
@@ -18,13 +18,18 @@ import { GRAY, STATUS } from '@/theme';
 import { LINK_OBJECTS, LINKS } from '@/mock/links';
 import { ACTION_TYPES, EVENT_TYPES, runsOf, eventsOf } from '@/mock/actionEvent';
 import { METRICS } from '@/mock/metrics';
-import { OBJECT_PROPS } from '@/mock/objectProps';
-import { CHANGE_REQUESTS, CURRENT_VERSION, NEXT_VERSION } from '@/mock/changes';
+import { DIM_ITEMS } from '@/mock/dimensions';
+import { draftOf, useDraftView } from './parts/useDraftView';
+import { useAppStore } from '@/stores/app';
+import { CHANGE_REQUESTS, CURRENT_USER, CURRENT_VERSION, NEXT_VERSION } from '@/mock/changes';
 import { QUALITY_CHECKS, DATA_CUTOFF } from '@/mock/quality';
 import { RELEASES } from '@/mock/releases';
 
 const router = useRouter();
 const { readonly, reason } = useReadonly();
+const app = useAppStore();
+/** 查看历史版本（?ver=）：不显示当前待处理，最近发布只列到所选版本；预览模式不算 */
+const histVer = computed(() => (app.viewMode === 'history' ? app.viewVersion : null));
 
 /* ── 资源卡片 ── */
 type Tone = 'normal' | 'attention' | 'failed';
@@ -36,11 +41,11 @@ const failedByType = new Map<string, number>();
 failedChecks.forEach((c) => failedByType.set(c.typeKey, (failedByType.get(c.typeKey) ?? 0) + 1));
 const runs = ACTION_TYPES.flatMap((a) => runsOf(a.id));
 const events = EVENT_TYPES.flatMap((e) => eventsOf(e.id));
-const dimProps = Object.values(OBJECT_PROPS).flat().filter((p) => p.dim);
-const dicts = new Set(dimProps.map((p) => p.enumName).filter(Boolean));
+// 维度与字典：与“维度与字典”页同一份数据（dimensions.ts），历史版本只算当时已有的
+const dimItems = computed(() => DIM_ITEMS.filter((d) => d.status !== '已驳回' && (!histVer.value || d.since <= histVer.value)));
 const openCrs = CHANGE_REQUESTS.filter((c) => c.status === '草稿' || c.status === '审核中' || c.status === '已通过');
 
-const cards: Card[] = [
+const cards = computed<Card[]>(() => [
   { key: 'obj', title: '对象类型', unit: '个', path: '/build/ontology/object-types', count: LINK_OBJECTS.filter((o) => !o.draft).length, health: [
     { n: LINK_OBJECTS.filter((o) => o.draft).length, text: '个草稿', tone: 'normal' },
     { n: failedByType.size, text: '个有质量检查失败', tone: 'failed' },
@@ -62,11 +67,12 @@ const cards: Card[] = [
     { n: METRICS.filter((m) => m.status === '草稿').length, text: '个草稿', tone: 'normal' },
     { n: METRICS.filter((m) => m.status === '已下线').length, text: '个已下线', tone: 'normal' },
   ] },
-  { key: 'dim', title: '维度', unit: '个', path: '/build/ontology/dimensions', count: dimProps.length, health: [
-    { n: dicts.size, text: '个取值字典', tone: 'normal' },
-    { n: openCrs.filter((c) => c.title.includes('枚举')).length, text: '个字典变更草稿', tone: 'normal' },
+  { key: 'dim', title: '维度与字典', unit: '个', path: '/build/ontology/dimensions', count: dimItems.value.length, health: [
+    { n: dimItems.value.filter((d) => d.kind === '维度').length, text: '个维度', tone: 'normal' },
+    { n: dimItems.value.filter((d) => d.kind === '码表').length, text: '个码表', tone: 'normal' },
+    { n: dimItems.value.filter((d) => d.status === '草稿' || draftOf('dimension', d.id)).length, text: '个变更中', tone: 'normal' },
   ] },
-];
+]);
 const toneCls = (h: Health) => (h.n === 0 || h.tone === 'normal' ? 'c-3' : h.tone === 'failed' ? 'tl-failed' : 'tl-attention');
 
 /* ── 待处理：未发布的变更单 + 失败的数据质量检查 ── */
@@ -142,6 +148,10 @@ function draw(g: Graph) {
 }
 
 /* ── 最近发布 ── */
+const releases = computed(() => {
+  const i = histVer.value ? RELEASES.findIndex((r) => r.ver === histVer.value) : 0;
+  return RELEASES.slice(Math.max(0, i));
+});
 const crOf = (ver: string) => CHANGE_REQUESTS.find((c) => c.release === ver)?.id;
 const openRelease = (ver: string) => {
   const cr = crOf(ver);
@@ -150,10 +160,19 @@ const openRelease = (ver: string) => {
 
 /* ── 发起变更 ── */
 const changeOpen = ref(false);
+const dv = useDraftView('object', () => '');
 function start(opts: { join?: string; title?: string }) {
   if (opts.join) { router.push({ path: '/build/ontology/releases', query: { cr: opts.join } }); return; }
-  message.success(`已创建变更草稿“${opts.title}”，将随 ${NEXT_VERSION} 发布`);
-  router.push({ path: '/build/ontology/releases', query: { st: '草稿' } });
+  // 总览没有具体对象：只建单（不切草稿视图），登记到变更与发布的列表里，再跳过去选中新单
+  const id = dv.start({ title: opts.title, target: 'ontology' });
+  const at = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  CHANGE_REQUESTS.unshift({
+    id, title: opts.title || '未命名变更', owner: app.user?.name || CURRENT_USER, reviewer: '待指定', status: '草稿', level: '修订', changes: 0,
+    updatedAt: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`, reason: '从本体总览发起，待补充',
+  });
+  message.success(`已创建变更单 ${id}，将随 ${NEXT_VERSION} 发布`);
+  router.push({ path: '/build/ontology/releases', query: { cr: id } });
 }
 </script>
 
@@ -195,9 +214,10 @@ function start(opts: { join?: string; title?: string }) {
         <div class="panel oo-todo">
           <div class="panel-head">
             <span class="t-16 fw-600 c-1">待处理</span>
-            <a-segmented v-model:value="filterKind" size="small" :options="['全部', '变更', '数据质量']" />
+            <a-segmented v-if="!histVer" v-model:value="filterKind" size="small" :options="['全部', '变更', '数据质量']" />
           </div>
-          <div ref="listEl" class="oo-list">
+          <div v-if="histVer" class="oo-hist"><a-empty :image="Empty.PRESENTED_IMAGE_SIMPLE" description="查看历史版本时不显示待处理" /></div>
+          <div v-show="!histVer" ref="listEl" class="oo-list">
             <div v-for="t in pageRows" :key="t.id" class="oo-row" role="link" @click="t.go()">
               <span class="t-12 c-3 oo-kind">{{ t.kind }}</span>
               <div class="oo-row-main">
@@ -207,7 +227,7 @@ function start(opts: { join?: string; title?: string }) {
               <span class="t-12 oo-st" :class="stCls(t.tone)"><i class="oo-dot" />{{ t.status }}</span>
             </div>
           </div>
-          <AppPagination v-model:page="page" variant="simple" :total="shown.length" :size="size" unit="项" class="oo-pager" />
+          <AppPagination v-if="!histVer" v-model:page="page" variant="simple" :total="shown.length" :size="size" unit="项" class="oo-pager" />
         </div>
 
         <div class="panel oo-rel">
@@ -215,7 +235,7 @@ function start(opts: { join?: string; title?: string }) {
             <span class="t-16 fw-600 c-1">最近发布</span>
             <a class="t-12 c-2 oo-more" @click="router.push({ path: '/build/ontology/releases', query: { st: '已发布' } })">全部发布记录</a>
           </div>
-          <div v-for="r in RELEASES" :key="r.ver" class="oo-rrow" role="link" @click="openRelease(r.ver)">
+          <div v-for="r in releases" :key="r.ver" class="oo-rrow" role="link" @click="openRelease(r.ver)">
             <span class="t-14 num c-1 oo-ver">{{ r.ver }}</span>
             <span class="t-14 c-2 oo-ell oo-note">{{ r.note }}</span>
             <span class="t-12 c-3 num">{{ r.by }} · {{ r.publishedAt.slice(5) }}</span>
@@ -237,6 +257,7 @@ function start(opts: { join?: string; title?: string }) {
 .oo-health { display: flex; flex-wrap: wrap; column-gap: 12px; }
 .oo-main { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .oo-graph { flex: 1; min-width: 0; }
+.oo-hist { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .oo-canvas { flex: 1; min-height: 0; }
 .oo-legend { display: flex; gap: 16px; align-items: center; }
 .oo-legend > span { display: inline-flex; align-items: center; gap: 6px; }
