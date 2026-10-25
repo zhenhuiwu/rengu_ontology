@@ -25,6 +25,8 @@ const ref = (src, key, row) => ({ ref: src, key, id: row[key] });
  */
 export default async function derived(load) {
   const ae = await load('/src/mock/actionEvent.ts');
+  const rel = await load('/src/mock/releases.ts');
+  const hist = await load('/src/mock/objectHistory.ts');
   const resolvers = (await load('/src/components/actionEventResolvers.ts')).ACTION_EVENT_RESOLVERS;
   const dyn = await load('/src/mock/dynamic.ts');
   const rules = await load('/src/mock/rules.ts');
@@ -167,10 +169,12 @@ export default async function derived(load) {
   const OT = quality.Q_OBJECT_TYPES; // 与 ObjectTypes.vue 的 TYPES 一致（id = key）
   add('static', 'viewsOf', S_ST, OT.map((t) => ({ args: [t.key, t.name], run: () => views.viewsOf(t.key, t.name) })));
   add('static', 'objectMeta', S_ST, OT.map((t) => ({ args: [t.key, t.name, t.group], run: () => props.objectMeta(t.key, t.name, t.group) })));
-  const drafts = changes.CHANGE_REQUESTS.filter((c) => c.status === '草稿');
-  add('static', 'draftPropDiff', 'guessed', drafts.flatMap((c) => OT.map((t) => ({
-    args: [c.id, t.name, { ref: 'static/OBJECT_PROPS', key: t.key }], run: () => props.draftPropDiff(c.id, t.name, props.OBJECT_PROPS[t.key] ?? []) }))),
-    '文档写“每张草稿单涉及的对象”，但单与对象的对应在 useDraftView.ts 的 TARGETS（不在 src/mock）；这里对每张草稿单 × 每个对象类型调用，props 用 OBJECT_PROPS（不含页面草稿新增属性 ADDED）');
+  // 草稿单 → 对象类型：mock/releases.ts 的 DRAFT_TARGETS（ObjectTypes.vue / ViewsTab.vue 只对 draftOf('object', id) 命中的单调用）
+  const draftObj = Object.entries(rel.DRAFT_TARGETS).flatMap(([cr, t]) => (t.object ?? []).map((id) => [cr, OT.find((o) => o.key === id)]).filter(([, o]) => o));
+  add('static', 'draftPropDiff', 'DRAFT_TARGETS (6428b87)；props 用 OBJECT_PROPS，不含页面草稿新增属性 ADDED', draftObj.map(([cr, t]) => ({
+    args: [cr, t.name, { ref: 'static/OBJECT_PROPS', key: t.key }], run: () => props.draftPropDiff(cr, t.name, props.OBJECT_PROPS[t.key] ?? []) })));
+  // 历史版本页签（HistoryTab.vue / ObjectTypes.vue）按 (对象类型 id, 名称) 调用，每个对象类型一次
+  add('static', 'legacyRevs', S_ST, OT.map((t) => ({ args: [t.key, t.name], run: () => hist.legacyRevs(t.key, t.name) })));
   add('static', 'dsTables', S_ST, ds.DATASOURCES.map((d) => ({ args: [ref('system/DATASOURCES', 'id', d)], run: () => ds.dsTables(d) })));
   add('static', 'metricUsage', S_ST, dims.DIM_ITEMS.map((d) => ({ args: [ref('static/DIM_ITEMS', 'id', d)], run: () => dims.metricUsage(d) })));
   add('static', 'reviewLog', S_ST, changes.CHANGE_REQUESTS.map((c) => ({ args: [ref('static/CHANGE_REQUESTS', 'id', c)], run: () => changes.reviewLog(c) })));
