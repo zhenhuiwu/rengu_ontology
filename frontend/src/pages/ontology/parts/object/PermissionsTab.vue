@@ -6,6 +6,7 @@
  * 列级：敏感属性默认脱敏，个别角色按对象明文。“敏感”是对象类型定义的一部分，改它要进变更草稿，
  *       草稿视图里逐行“设为敏感 / 取消敏感”，经确认卡后留灰色“修改”标记。
  */
+import InfoTip from '@/components/InfoTip.vue';
 import { computed, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -104,13 +105,12 @@ async function toggleSens(p: ObjProp) {
     <div class="pm-tool">
       <a-segmented v-model:value="mode" :options="[{ label: '行级权限', value: 'row' }, { label: '列级权限', value: 'col' }]" />
       <template v-if="mode === 'row'">
-        <span class="t-12 c-3">行级范围按角色在“角色与权限”里配置，保存即生效，不走本体变更单</span>
+        <InfoTip text="行级范围按角色在“角色与权限”里配置，保存即生效，不走本体变更单" />
         <span v-if="!permObj" class="t-12 c-warning">{{ name }}还没纳入角色的对象权限，默认不可见的角色看不到它</span>
       </template>
       <template v-else>
-        <span class="t-12 c-3">敏感 {{ sensCount }} 个 · 敏感属性默认脱敏，橙色“明文”为按对象单独授权</span>
-        <span v-if="readonly" class="t-12 c-3">已发布版本只读，改敏感标记请先发起变更</span>
-        <span v-else-if="Object.keys(sensEdits).length" class="t-12 c-3">本草稿改了 {{ Object.keys(sensEdits).length }} 处敏感标记</span>
+        <InfoTip :text="`敏感 ${sensCount} 个 · 敏感属性默认脱敏，橙色“明文”为按对象单独授权${readonly ? '。已发布版本只读，改敏感标记请先发起变更' : ''}`" />
+        <span v-if="!readonly && Object.keys(sensEdits).length" class="t-12 c-3">本草稿改了 {{ Object.keys(sensEdits).length }} 处敏感标记</span>
       </template>
       <span class="pm-sp" />
       <router-link v-if="mode === 'row'" to="/admin/system/roles">角色与权限</router-link>
@@ -147,9 +147,8 @@ async function toggleSens(p: ObjProp) {
       <a-table :columns="colCols" :data-source="colItems" :pagination="false" size="small" row-key="api">
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'prop'">
-            <span class="t-14 c-1">{{ record.name }}</span>
+            <span class="t-14 c-1" :title="`${record.name} · ${record.api}`">{{ record.name }}</span>
             <a-tag v-if="sensEdits[record.api] != null" class="pm-tag">修改</a-tag>
-            <div class="t-12 c-3 num">{{ record.api }}</div>
           </template>
           <template v-else-if="column.key === 'sens'">
             <a-tag v-if="isSens(record)" class="pm-tag0">敏感</a-tag>

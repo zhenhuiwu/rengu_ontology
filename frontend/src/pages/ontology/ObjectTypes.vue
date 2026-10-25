@@ -4,7 +4,8 @@
  * 选中类型写进 ?type=，页签写进 ?tab=。属性、概览、映射都按对象类型各自取数（src/mock/objectProps.ts 的 OBJECT_PROPS / objectMeta，
  * 负责人、数据源、数据质量取 src/mock/quality.ts）。状态从变更单推：审核中 → 橙色；只有草稿 → 灰色“草稿中”；其余灰色。
  */
-import { computed, ref, watch, type Component } from 'vue';
+import InfoTip from '@/components/InfoTip.vue';
+import { computed, reactive, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import GroupedTabs from '@/components/GroupedTabs.vue';
 import HoverCard from '@/components/HoverCard.vue';
@@ -13,7 +14,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView, draftOf } from './parts/useDraftView';
 import { message } from 'ant-design-vue';
 import { LINKS as ALL_LINKS, LINK_OBJECTS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
-import { OBJECT_PROPS, draftPropDiff, objectMeta, dbOf, type ObjProp } from '@/mock/objectProps';
+import { OBJECT_PROPS, draftPropDiff, objectMeta, dbOf, type ObjProp, type PropDiff } from '@/mock/objectProps';
 import { qObjType, QUALITY_CHECKS } from '@/mock/quality';
 import { PERM_OBJECTS } from '@/mock/roles';
 import { RULE_DEFS } from '@/mock/rules';
@@ -105,7 +106,7 @@ const openChange = (name: string) => { changeTarget.value = name; changeOpen.val
 
 // 左侧列表：搜索 + 简洁分页
 const kw = ref('');
-const LPAGE = 14;
+const LPAGE = 22;
 const lpage = ref(1);
 watch(kw, () => { lpage.value = 1; });
 const filtered = computed(() => TYPES.filter((t) => !kw.value || t.name.includes(kw.value) || t.api.toLowerCase().includes(kw.value.toLowerCase())));
@@ -113,10 +114,22 @@ const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpag
 
 // —— 属性（每个对象类型各一份，src/mock/objectProps.ts）——
 type P = ObjProp;
-const PROPS = computed<P[]>(() => OBJECT_PROPS[current.value.id] ?? []);
+/** 草稿里新增的属性（只在本页内存里，提交审核时随草稿走），不改 mock */
+const ADDED = reactive<Record<string, P[]>>({});
+const PROPS = computed<P[]>(() => [...(isDraft.value ? ADDED[current.value.id] ?? [] : []), ...(OBJECT_PROPS[current.value.id] ?? [])]);
+const addOpen = ref(false);
+const addForm = reactive({ name: '', api: '', type: 'string', required: false });
+const addErr = computed(() => (!addForm.name.trim() || !addForm.api.trim() ? '请填写名称和 API 名' : !/^[a-z][a-z0-9_]*$/.test(addForm.api.trim()) ? 'API 名只能用小写字母、数字和下划线，字母开头' : PROPS.value.some((p) => p.api === addForm.api.trim()) ? 'API 名已存在' : ''));
+function openAdd() { Object.assign(addForm, { name: '', api: '', type: 'string', required: false }); addOpen.value = true; }
+function saveAdd() {
+  if (addErr.value) return;
+  (ADDED[current.value.id] ??= []).unshift({ api: addForm.api.trim(), name: addForm.name.trim(), type: addForm.type, group: '其他', source: '--', desc: addForm.required ? '必填' : '选填' });
+  addOpen.value = false; ppage.value = 1;
+  message.success(`已新增属性“${addForm.name.trim()}”，保存到草稿 ${draft.value?.id ?? ''}`);
+}
 /** 草稿视图里的差异：按草稿单号从 changes.ts 的 diffs 取（门店 CR-0009、会员 CR-0012） */
 const draftDiff = computed(() => (draft.value ? draftPropDiff(draft.value.id, current.value.name, PROPS.value) : { map: {}, other: 0 }));
-const DIFF = computed(() => (isDraft.value ? draftDiff.value.map : {}));
+const DIFF = computed<Record<string, PropDiff>>(() => (isDraft.value ? { ...draftDiff.value.map, ...Object.fromEntries((ADDED[current.value.id] ?? []).map((p) => [p.api, { kind: '新增', field: '属性', before: '', after: `${p.name}（${p.type}）`, row: '--' } as PropDiff])) } : {}));
 const pkw = ref('');
 const ppage = ref(1);
 const PPAGE = 12;
@@ -212,14 +225,11 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
     <div class="panel ot-list">
       <div class="ot-search"><a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" /></div>
       <ul class="ot-items">
-        <li v-for="t in list" :key="t.id" :class="{ active: t.id === current.id }" @click="pick(t.id)">
+        <li v-for="t in list" :key="t.id" :class="{ active: t.id === current.id }" :title="`${t.name} · ${t.api} · ${t.group}`" @click="pick(t.id)">
           <div class="ot-row">
             <span class="t-14 ot-name">{{ t.name }}</span>
-            <span class="t-12 num" :class="shownStatus(t) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(t) === '已发布' ? '' : shownStatus(t) }}</span>
-          </div>
-          <div class="ot-row">
-            <span class="t-12 c-3 num">{{ t.api }}</span>
-            <span class="t-12 c-3">{{ t.group }}</span>
+            <span class="t-12 c-3 ot-grp">{{ t.group }}</span>
+            <span v-if="shownStatus(t) !== '已发布'" class="t-12 num" :class="shownStatus(t) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(t) }}</span>
           </div>
         </li>
       </ul>
@@ -240,7 +250,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
           @change="(v: any) => setView(v)" />
         <span class="ot-sp" />
         <span class="t-12 c-3">数据截至 {{ qo?.cutoff ?? '--' }}</span>
-        <a-button>预览数据</a-button>
+        <a-tooltip title="暂未开放"><a-button disabled>预览数据</a-button></a-tooltip>
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${current.name}（${current.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
@@ -290,7 +300,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
                 <template v-if="usedMetrics.length > 2"> 等 {{ usedMetrics.length }} 个</template>
               </template>
               <span v-else class="c-3">无</span></dd>
-            <dt class="t-14 c-3">动作类型</dt><dd class="t-14 num">{{ actionCount }} 个<span v-if="actionCount" class="c-3">（第三期启用）</span></dd>
+            <dt class="t-14 c-3">动作类型</dt><dd class="t-14 num">{{ actionCount }} 个<span v-if="actionCount" class="c-3">（暂未启用）</span></dd>
             <dt class="t-14 c-3">规则</dt><dd class="t-14 num">{{ ruleCount }} 条</dd>
             <dt class="t-14 c-3">看板卡片</dt><dd class="t-14 num">{{ meta.cards }} 张</dd>
             <dt class="t-14 c-3">近 30 天问数</dt><dd class="t-14 num">{{ meta.qa30.toLocaleString('zh-CN') }} 次</dd>
@@ -314,16 +324,16 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
       <div v-else-if="tab === 'properties'" class="ot-body">
         <div class="ot-tool">
           <a-input-search v-model:value="pkw" placeholder="搜索属性名或 API 名" class="ot-tool-search" />
-          <span class="t-12 c-3">主键 1 · 维度 {{ srcProps.filter((p) => p.dim).length }} · 敏感 {{ srcProps.filter((p) => p.sensitive).length }}</span>
+          <InfoTip :text="`主键 1 · 维度 ${srcProps.filter((p) => p.dim).length} · 敏感 ${srcProps.filter((p) => p.sensitive).length}`" />
           <span v-if="isDraft && draft" class="t-12 c-3">草稿 {{ draft.id }}：属性改动 {{ Object.keys(DIFF).length }} 处<template v-if="draftDiff.other">，其余 {{ draftDiff.other }} 处（对象类型、关系、映射、指标等）见<router-link :to="`/build/ontology/releases?cr=${draft.id}`">变更单</router-link></template></span>
           <span class="ot-sp" />
-          <a-tooltip :title="editTip"><a-button :disabled="!canEdit">批量编辑</a-button></a-tooltip>
-          <a-tooltip :title="editTip"><a-button :type="canEdit ? 'primary' : 'default'" :disabled="!canEdit">新增属性</a-button></a-tooltip>
+          <a-tooltip :title="canEdit ? '暂未开放' : editTip"><a-button disabled>批量编辑</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button :type="canEdit ? 'primary' : 'default'" :disabled="!canEdit" @click="openAdd">新增属性</a-button></a-tooltip>
         </div>
         <a-table :columns="propCols" :data-source="prows" :pagination="false" size="small" row-key="api">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
-              <a>{{ record.name }}</a>
+              <span class="c-1" :title="`${record.name} · ${record.api}`">{{ record.name }}</span>
               <a-tag v-if="DIFF[record.api]" class="ot-diff">{{ DIFF[record.api].kind }}</a-tag>
             </template>
             <template v-else-if="column.key === 'type'">{{ record.type }}<span v-if="record.enumName" class="c-3"> · {{ record.enumName }}</span></template>
@@ -338,7 +348,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
                 <a-tag v-if="record.pk">主键</a-tag>
                 <a-tag v-if="record.title">标题</a-tag>
                 <a-tag v-if="record.dim">维度</a-tag>
-                <a-tag v-if="record.sensitive" color="warning">敏感</a-tag>
+                <a-tag v-if="record.sensitive">敏感</a-tag>
               </span>
             </template>
           </template>
@@ -351,9 +361,9 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
       <!-- 关系 -->
       <div v-else-if="tab === 'links'" class="ot-body">
         <div class="ot-tool">
-          <span class="t-12 c-3">{{ linkTip }}</span>
+          <InfoTip v-if="linkTip" :text="linkTip" />
           <span class="ot-sp" />
-          <a-tooltip :title="editTip"><a-button type="primary" :disabled="!canEdit">新增关系</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button :type="canEdit ? 'primary' : 'default'" :disabled="!canEdit" @click="router.push({ path: '/build/ontology/link-types', query: { from: current.id } })">新增关系</a-button></a-tooltip>
         </div>
         <a-table :columns="linkCols" :data-source="LINKS" :pagination="false" size="middle" row-key="name">
           <template #bodyCell="{ column, record }">
@@ -381,10 +391,9 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
           <a-descriptions-item label="数据截至"><span class="num">{{ qo?.cutoff ?? '--' }}</span></a-descriptions-item>
         </a-descriptions>
         <div class="ot-tool">
-          <span class="t-14 fw-600">字段映射</span>
-          <span class="t-12 c-3">已映射 {{ MAP_ALL.length }} / 源表 {{ MAP_ALL.length + meta.unused }} 个字段，{{ meta.unused }} 个未使用</span>
+          <span class="t-14 fw-600">字段映射<InfoTip :text="`已映射 ${MAP_ALL.length} / 源表 ${MAP_ALL.length + meta.unused} 个字段，${meta.unused} 个未使用`" /></span>
           <span class="ot-sp" />
-          <a-button>重新采集元数据</a-button>
+          <a-button @click="message.success(`已提交重新采集 ${current.name} 源表元数据，完成后映射会自动刷新`)">重新采集元数据</a-button>
         </div>
         <a-table :columns="MAP_COLS" :data-source="mrows" size="small" row-key="prop" :pagination="false" />
         <div class="ot-pager">
@@ -398,6 +407,14 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
     </div>
   </div>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="start" />
+  <a-modal v-model:open="addOpen" :title="`新增属性 · ${current.name}`" ok-text="保存到草稿" :ok-button-props="{ disabled: !!addErr }" :width="480" @ok="saveAdd">
+    <a-form layout="vertical">
+      <a-form-item label="名称" required><a-input v-model:value="addForm.name" placeholder="如：配送方式" /></a-form-item>
+      <a-form-item label="API 名" required :help="addForm.api && addErr ? addErr : undefined" :validate-status="addForm.api && addErr ? 'error' : undefined"><a-input v-model:value="addForm.api" placeholder="如：delivery_mode" class="num" /></a-form-item>
+      <a-form-item label="类型"><a-select v-model:value="addForm.type" :options="['string', 'int', 'decimal', 'date', 'timestamp', 'boolean', 'enum'].map((v) => ({ value: v, label: v }))" /></a-form-item>
+      <a-checkbox v-model:checked="addForm.required">必填</a-checkbox>
+    </a-form>
+  </a-modal>
 </template>
 
 <style scoped>
@@ -410,6 +427,8 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
 .ot-items li.active { background: var(--brand-bg); }
 .ot-items li.active .ot-name { color: var(--brand); }
 .ot-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ot-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ot-grp { flex-shrink: 0; }
 .ot-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
 .ot-detail { flex: 1; }
 .ot-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }

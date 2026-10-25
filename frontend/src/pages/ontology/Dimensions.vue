@@ -53,7 +53,7 @@ const filtered = computed(() => visible.value.filter((d) =>
   (kind.value === 'all' || d.kind === kind.value) && (!grp.value || d.group === grp.value)
   && (!kw.value || d.name.includes(kw.value) || d.api.includes(kw.value) || d.objectName.includes(kw.value)
     || d.values.some((v) => v.name.includes(kw.value) || v.synonyms.includes(kw.value)))));
-const LPAGE = 12;
+const LPAGE = 18;
 const lpage = ref(Number(q('lp')) || 1);
 watch([kw, kind, grp], () => { lpage.value = 1; });
 watch(lpage, (p) => { if (String(p) !== (q('lp') || '1')) setQ({ lp: p > 1 ? String(p) : undefined }); });
@@ -140,7 +140,6 @@ const valueCols = computed(() => [
   { title: '说明', key: 'note' },
   { title: '操作', key: 'op', width: 112 },
 ]);
-const vpager = computed(() => ({ current: vp.value, pageSize: VPAGE, showSizeChanger: false, showTotal: (t: number) => `共 ${t} 条`, size: 'small' as const, onChange: (p: number) => { vp.value = p; } }));
 
 // —— 新增 / 编辑取值（只在草稿里）——
 interface VForm { code: string; name: string; level: string; parent: string; synonyms: string[]; status: ValueStatus; note: string }
@@ -250,7 +249,6 @@ const mapCols = [
   { title: '近 7 天命中', key: 'hits', width: 104, align: 'right' as const },
   { title: '歧义与处理', key: 'conflict' },
 ];
-const mpager = computed(() => ({ current: vp.value, pageSize: 8, showSizeChanger: false, showTotal: (t: number) => `共 ${t} 条`, size: 'small' as const, onChange: (p: number) => { vp.value = p; } }));
 
 // 试一试：输入问句里的词，看会匹配到哪些取值
 const tryText = ref(q('try'));
@@ -343,7 +341,9 @@ const CHECKS = computed(() => {
 const checkClass = (r: string) => (r === '阻断' ? 'c-error' : r === '警告' ? 'c-warning' : 'c-3');
 
 // —— 使用情况 / 版本历史 ——
-const TABLE_PAGER = { pageSize: 10, showSizeChanger: false, showTotal: (t: number) => `共 ${t} 条`, size: 'small' as const };
+const up = ref(1);
+const hp = ref(1);
+watch(() => cur.value?.id, () => { up.value = 1; hp.value = 1; });
 const usageRows = computed(() => [...metricUsage(cur.value), ...cur.value.usage]);
 const usageCols = [{ title: '类型', dataIndex: 'type', width: 96 }, { title: '名称', key: 'name', width: 320 }, { title: '使用方式', dataIndex: 'note' }];
 const usageSummary = computed(() => {
@@ -378,15 +378,11 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
         </div>
       </div>
       <ul class="dm-items">
-        <li v-for="d in list" :key="d.id" :class="{ active: d.id === cur?.id }" @click="pick(d.id)">
+        <li v-for="d in list" :key="d.id" :class="{ active: d.id === cur?.id }" :title="`${d.name} · ${d.kind === '维度' ? levelText(d) : d.attr} · ${d.values.filter((v) => live(v, ver) && !v.draft).length} 个取值`" @click="pick(d.id)">
           <div class="dm-row">
-            <span class="t-14 dm-name">{{ d.name }}</span>
+            <span class="t-14 dm-name dm-ell">{{ d.name }}</span>
             <span v-if="hasDraft(d)" class="t-12 c-3">有草稿</span>
             <span v-else class="t-12 c-3">{{ d.kind }}</span>
-          </div>
-          <div class="dm-row">
-            <span class="t-12 c-3 dm-ell">{{ d.kind === '维度' ? levelText(d) : d.attr }}</span>
-            <span class="t-12 c-3 num">{{ d.values.filter((v) => live(v, ver) && !v.draft).length }} 个取值</span>
           </div>
         </li>
       </ul>
@@ -410,7 +406,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => guard(() => { editing = false; setView(v); })" />
         <span class="dm-sp" />
-        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
@@ -496,7 +492,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
           <span class="dm-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openValue()">新增取值</a-button></a-tooltip>
         </div>
-        <a-table :columns="valueCols" :data-source="shownValues" :pagination="vpager" size="small" row-key="key" table-layout="fixed" class="dm-table">
+        <a-table :columns="valueCols" :data-source="shownValues.slice((vp - 1) * VPAGE, vp * VPAGE)" :pagination="false" size="small" row-key="key" table-layout="fixed" class="dm-table">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <ObjRef v-if="record.ref" :kind="record.ref.kind" :id="record.ref.id">{{ record.name }}</ObjRef>
@@ -523,6 +519,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
             </template>
           </template>
         </a-table>
+        <AppPagination v-model:page="vp" variant="full" :total="shownValues.length" :size="VPAGE" unit="条" :empty="false" />
         <div v-if="isDraft && cur.draftNote" class="t-12 c-3">{{ cur.draftNote }}。</div>
         <div class="t-12 c-3">{{ cur.valuesNote ? `${cur.valuesNote}。` : '' }}取值来自 {{ cur.valueSrc }}；停用的取值不参与问数匹配，历史数据仍按原取值统计。</div>
       </div>
@@ -553,7 +550,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
           <span class="dm-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openMap">新增说法</a-button></a-tooltip>
         </div>
-        <a-table :columns="mapCols" :data-source="shownMaps" :pagination="mpager" size="small" row-key="key" table-layout="fixed" class="dm-table">
+        <a-table :columns="mapCols" :data-source="shownMaps.slice((vp - 1) * 8, vp * 8)" :pagination="false" size="small" row-key="key" table-layout="fixed" class="dm-table">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'phrase'">
               <span class="c-1">{{ record.phrase }}</span>
@@ -573,13 +570,14 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
             </template>
           </template>
         </a-table>
+        <AppPagination v-model:page="vp" variant="full" :total="shownMaps.length" :size="8" unit="条" :empty="false" />
         <div class="t-12 c-3">匹配顺序：精确命中 › 同义词 › 包含匹配；同一说法对应多个取值时按“处理方式”回答，没有处理方式时追问用户。有歧义不阻断发布（V9 警告）。</div>
       </div>
 
       <!-- 使用情况 -->
       <div v-else-if="tab === 'usage'" class="dm-body">
         <div class="t-14 c-2">{{ usageRows.length ? `共 ${usageRows.length} 项使用本${cur.kind}：${usageSummary}` : `暂无指标、视图或规则使用本${cur.kind}` }}</div>
-        <a-table v-if="usageRows.length" :columns="usageCols" :data-source="usageRows" :pagination="usageRows.length > 10 ? TABLE_PAGER : false" size="middle" :row-key="(r: any) => r.type + r.name">
+        <a-table v-if="usageRows.length" :columns="usageCols" :data-source="usageRows.slice((up - 1) * 10, up * 10)" :pagination="false" size="small" :row-key="(r: any) => r.type + r.name">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <ObjRef v-if="record.hover" :kind="record.hover.kind" :id="record.hover.id">{{ record.name }}</ObjRef>
@@ -587,12 +585,13 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
             </template>
           </template>
         </a-table>
+        <AppPagination v-model:page="up" variant="full" :total="usageRows.length" :size="10" unit="条" :empty="false" />
         <div class="t-12 c-3">指标按“允许的维度”统计（见指标口径）。停用取值、改层级或改同义词时，以上各项会出现在变更单的影响分析里。</div>
       </div>
 
       <!-- 版本历史 -->
       <div v-else class="dm-body">
-        <a-table :columns="histCols" :data-source="histRows" :pagination="histRows.length > 10 ? TABLE_PAGER : false" size="middle" :row-key="(r: any) => r.ver + (r.cr ?? '') + r.at">
+        <a-table :columns="histCols" :data-source="histRows.slice((hp - 1) * 10, hp * 10)" :pagination="false" size="small" :row-key="(r: any) => r.ver + (r.cr ?? '') + r.at">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'cr'">
               <a v-if="record.cr" class="num" @click="crLink(record.cr)">{{ record.cr }}</a>
@@ -603,6 +602,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
             </template>
           </template>
         </a-table>
+        <AppPagination v-model:page="hp" variant="full" :total="histRows.length" :size="10" unit="条" :empty="false" />
         <div class="t-12 c-3">维度和码表只随本体整版发布生效；回滚会生成新的变更单，经审核后随下一次发布生效。</div>
       </div>
     </div>
@@ -681,4 +681,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
 .dm-try-input { width: 360px; flex: none; }
 .dm-try-res { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; overflow: hidden; white-space: nowrap; }
 .dm-try-amb { flex: 1; min-width: 0; }
+
+.dm-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-ft { flex-shrink: 0; }
 </style>

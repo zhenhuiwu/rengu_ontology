@@ -4,6 +4,7 @@
  * 后面接变更单流程上线前的修订记录（src/mock/objectHistory.ts，无单号、不能跳转）。
  * 状态颜色：审核中橙色，其余（含已驳回）灰色。点单号进“变更与发布”；已发布的历史版本可切到该版本只读查看。
  */
+import InfoTip from '@/components/InfoTip.vue';
 import { computed, ref, watch } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
@@ -60,7 +61,7 @@ const cols = [
   <div class="ot-body">
     <div class="hs-tool">
       <a-segmented :value="filter" :options="FILTERS.map((f) => ({ label: `${f} ${count(f)}`, value: f }))" @change="(v: any) => (filter = v)" />
-      <span class="t-12 c-3">变更单 {{ crCount }} 张 · 当前生效版本 <span class="num">{{ CURRENT_VERSION }}</span>，{{ NEXT_VERSION }} 待发布。{{ RELEASES[RELEASES.length - 1].ver }} 之前的修订没有变更单</span>
+      <InfoTip :text="`变更单 ${crCount} 张 · 当前生效版本 ${CURRENT_VERSION}，${NEXT_VERSION} 待发布。${RELEASES[RELEASES.length - 1].ver} 之前的修订没有变更单`" />
     </div>
     <a-table :columns="cols" :data-source="pageRows" :pagination="false" size="small" row-key="key">
       <template #bodyCell="{ column, record }">

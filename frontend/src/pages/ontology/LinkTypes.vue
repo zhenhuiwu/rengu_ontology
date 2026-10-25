@@ -4,6 +4,7 @@
  * URL：?link= 选中关系，?tab= 页签，?mode=graph 关系图，?q= / ?src= / ?st= 列表筛选，?view=draft 草稿视图。
  * 草稿逻辑用公共的 useDraftView('link')（已发布只读，唯一入口“发起变更”）；新建关系经公共 start 登记到所选变更单。
  */
+import InfoTip from '@/components/InfoTip.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -54,7 +55,7 @@ const ST_OPTIONS = [{ value: '', label: '全部状态' }, { value: '已发布', 
 const filtered = computed(() => visible.value.filter((l) =>
   (!src.value || l.from === src.value) && (!st.value || l.status === st.value)
   && (!kw.value || l.name.includes(kw.value) || apiOf(l).includes(kw.value) || objName(l.from).includes(kw.value) || objName(l.to).includes(kw.value))));
-const LPAGE = 12;
+const LPAGE = 18;
 const lpage = ref(1);
 watch([kw, src, st], () => { lpage.value = 1; });
 const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
@@ -196,7 +197,8 @@ const chain = (p: QaPath) => {
 const curPathCount = computed(() => curGroups.value.reduce((n, g) => n + g.paths.length, 0));
 
 // —— 使用情况 / 版本历史 ——
-const TABLE_PAGER = { pageSize: 10, showSizeChanger: false, showTotal: (t: number) => `共 ${t} 条`, size: 'small' as const };
+const up = ref(1);
+watch(() => cur.value?.id, () => { up.value = 1; });
 const usageCols = [{ title: '类型', dataIndex: 'type', width: 96 }, { title: '名称', key: 'name', width: 320 }, { title: '使用方式', dataIndex: 'note' }];
 const usageSummary = computed(() => {
   const m = new Map<string, number>();
@@ -294,14 +296,11 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
         </div>
       </div>
       <ul class="lt-items">
-        <li v-for="l in list" :key="l.id" :class="{ active: l.id === cur?.id }" @click="pick(l.id)">
+        <li v-for="l in list" :key="l.id" :class="{ active: l.id === cur?.id }" :title="`${l.name} · ${objName(l.from)} → ${l.to ? objName(l.to) : '未选择'} · ${l.card}`" @click="pick(l.id)">
           <div class="lt-row">
-            <span class="t-14 lt-name">{{ l.name }}</span>
+            <span class="t-14 lt-name lt-ell">{{ l.name }}</span>
+            <span class="t-12 c-3 lt-ft">{{ objName(l.from) }} → {{ l.to ? objName(l.to) : '未选择' }}</span>
             <span v-if="l.status !== '已发布'" class="t-12" :class="statusClass(l.status)">{{ l.status }}</span>
-          </div>
-          <div class="lt-row">
-            <span class="t-12 c-3">{{ objName(l.from) }} → {{ l.to ? objName(l.to) : '未选择' }}</span>
-            <span class="t-12 c-3 num">{{ l.card }}</span>
           </div>
         </li>
       </ul>
@@ -313,12 +312,11 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
     <!-- 关系图 -->
     <div v-if="mode === 'graph'" class="panel lt-detail">
       <div class="lt-head">
-        <span class="t-16 fw-600 c-1">关系图</span>
+        <span class="t-16 fw-600 c-1">关系图<InfoTip text="点击连线选中关系，点击对象查看对象类型" /></span>
         <span class="t-12 c-3">{{ graphNodes.length }} 个对象 · {{ graphLinks.length }} 条关系{{ src || st || kw ? '（按左侧筛选）' : '' }}</span>
         <span class="lt-sp" />
         <span class="t-12 c-3 lt-legend"><i class="lg-solid" />已发布</span>
         <span class="t-12 c-3 lt-legend"><i class="lg-dash" />草稿 / 已驳回</span>
-        <span class="t-12 c-3">点击连线选中关系，点击对象查看对象类型</span>
       </div>
       <div ref="gbox" class="lt-graph">
         <svg :width="gw" :height="gh" class="lt-svg">
@@ -376,7 +374,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => guard(() => { editing = false; setView(v); })" />
         <span class="lt-sp" />
-        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${apiOf(cur)}）`)">{{ cur.status === '已驳回' ? '重新发起变更' : '发起变更' }}</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
@@ -449,28 +447,23 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
           <div class="lt-ends">
             <div class="lt-end">
               <span class="t-12 c-3">源对象</span>
-              <span class="t-14 c-1">{{ objName(cur.from) }}</span>
-              <span class="t-12 c-3 num lt-tbl" :title="objById(cur.from)?.table">{{ objById(cur.from)?.table }}</span>
+              <span class="t-14 c-1 lt-ell" :title="`${objName(cur.from)} · ${objById(cur.from)?.table ?? '--'}`">{{ objName(cur.from) }}</span>
             </div>
-            <div class="lt-arrow t-12 c-3">
-              <span>{{ cur.name }} →</span>
-              <span class="num">{{ cur.card }}</span>
-              <span>← {{ cur.reverse || '--' }}</span>
+            <div class="lt-arrow t-12 c-3" :title="`${cur.name} → · ${cur.card} · ← ${cur.reverse || '--'}`">
+              <span class="num">→ {{ cur.card }} →</span>
             </div>
             <div class="lt-end">
               <span class="t-12 c-3">目标对象</span>
-              <span class="t-14 c-1">{{ cur.to ? objName(cur.to) : '未选择' }}</span>
-              <span class="t-12 c-3 num lt-tbl" :title="objById(cur.to)?.table">{{ objById(cur.to)?.table ?? '--' }}</span>
+              <span class="t-14 c-1 lt-ell" :title="`${cur.to ? objName(cur.to) : '未选择'} · ${objById(cur.to)?.table ?? '--'}`">{{ cur.to ? objName(cur.to) : '未选择' }}</span>
             </div>
           </div>
-          <div class="lt-sec t-14 fw-600">发布校验</div>
+          <div class="lt-sec t-14 fw-600">发布校验<InfoTip :text="`关系定义只随本体整版发布生效；问数始终使用已发布版本 ${app.ontologyVersion}。`" /></div>
           <div v-for="c in CHECKS" :key="c.code" class="lt-check">
             <span class="t-12 c-3 num lt-check-code">{{ c.code }}</span>
             <span class="t-14 c-1 lt-check-name">{{ c.name }}</span>
             <span class="t-12" :class="checkClass(c.result)">{{ c.result }}</span>
-            <span class="t-12 c-3 lt-check-note">{{ c.note }}</span>
+            <span class="t-12 c-3 lt-check-note" :title="c.note">{{ c.note }}</span>
           </div>
-          <div class="t-12 c-3">关系定义只随本体整版发布生效；问数始终使用已发布版本 {{ app.ontologyVersion }}。</div>
         </div>
       </div>
 
@@ -488,24 +481,20 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
           </div>
           <div class="lt-kpis">
             <div class="lt-kpi">
-              <span class="t-12 c-3">关联命中率</span>
+              <span class="t-12 c-3">关联命中率<InfoTip text="源端非空关联键能在目标端找到记录的比例" /></span>
               <span class="t-kpi fw-600" :class="hitWarn(cur.quality.hit) ? 'c-warning' : 'c-1'">{{ cur.quality.hit }}%</span>
-              <span class="t-12 c-3">源端非空关联键能在目标端找到记录的比例</span>
             </div>
             <div class="lt-kpi">
-              <span class="t-12 c-3">孤儿记录</span>
+              <span class="t-12 c-3">孤儿记录<InfoTip text="关联键有值，但目标端不存在" /></span>
               <span class="t-kpi fw-600" :class="cur.quality.orphans && hitWarn(cur.quality.hit) ? 'c-warning' : 'c-1'">{{ fmtInt(cur.quality.orphans) }}</span>
-              <span class="t-12 c-3">关联键有值，但目标端不存在</span>
             </div>
             <div class="lt-kpi">
-              <span class="t-12 c-3">关联键为空</span>
+              <span class="t-12 c-3">关联键为空<InfoTip :text="cur.nullable ? '允许为空，不计入命中率' : '不允许为空'" /></span>
               <span class="t-kpi fw-600 c-1">{{ fmtInt(cur.quality.nulls) }}</span>
-              <span class="t-12 c-3">{{ cur.nullable ? '允许为空，不计入命中率' : '不允许为空' }}</span>
             </div>
             <div class="lt-kpi">
-              <span class="t-12 c-3">重复匹配</span>
+              <span class="t-12 c-3">重复匹配<InfoTip :text="cur.card === 'N : 1' ? '一条源记录匹配到多条目标（应为 0）' : '目标端主键重复（应为 0）'" /></span>
               <span class="t-kpi fw-600" :class="cur.quality.dup ? 'c-error' : 'c-1'">{{ fmtInt(cur.quality.dup) }}</span>
-              <span class="t-12 c-3">{{ cur.card === 'N : 1' ? '一条源记录匹配到多条目标（应为 0）' : '目标端主键重复（应为 0）' }}</span>
             </div>
           </div>
           <div v-if="cur.quality.note" class="t-14" :class="hitWarn(cur.quality.hit) ? 'c-warning' : 'c-2'">{{ cur.quality.note }}</div>
@@ -568,7 +557,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
       <!-- 使用情况 -->
       <div v-else-if="tab === 'usage'" class="lt-body">
         <div class="t-14 c-2">{{ cur.usage.length ? `共 ${cur.usage.length} 项依赖本关系：${usageSummary}` : '暂无指标、认证问答、视图或规则依赖本关系' }}</div>
-        <a-table v-if="cur.usage.length" :columns="usageCols" :data-source="cur.usage" :pagination="cur.usage.length > 10 ? TABLE_PAGER : false" size="middle" row-key="name">
+        <a-table v-if="cur.usage.length" :columns="usageCols" :data-source="cur.usage.slice((up - 1) * 10, up * 10)" :pagination="false" size="middle" row-key="name">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <ObjRef v-if="record.hover" :kind="record.hover.kind" :id="record.hover.id">{{ record.name }}</ObjRef>
@@ -576,6 +565,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
             </template>
           </template>
         </a-table>
+        <AppPagination v-model:page="up" variant="full" :total="cur.usage.length" :size="10" unit="条" :empty="false" />
         <div class="t-12 c-3">修改或下线本关系时，以上对象会出现在变更单的影响分析里；已发布的 API 名不可删除或改名（V7）。</div>
       </div>
 
@@ -631,12 +621,12 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
 .lt-form :deep(.ant-form-item) { margin-bottom: 12px; }
 .lt-ends { display: flex; align-items: stretch; gap: 8px; }
 .lt-tbl { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lt-end { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border: var(--border); border-radius: var(--radius); min-width: 0; }
-.lt-arrow { width: 120px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.lt-end { flex: 1; display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border: var(--border); border-radius: var(--radius); min-width: 0; }
+.lt-arrow { width: 120px; flex: none; display: flex; align-items: center; justify-content: center; text-align: center; }
 .lt-check { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: var(--border); }
 .lt-check-code { width: 32px; flex: none; }
 .lt-check-name { width: 104px; flex: none; }
-.lt-check-note { flex: 1; min-width: 0; text-align: right; }
+.lt-check-note { flex: 1; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lt-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .lt-kpi { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; border: var(--border); border-radius: var(--radius); }
 .lt-empty { padding: 24px 0; }
@@ -670,4 +660,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
 .lt-sel-label rect { fill: #fff; stroke: var(--brand); }
 .lt-sel-label text { fill: var(--brand); }
 .lt-gfoot { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-top: var(--border); flex: none; min-width: 0; }
+
+.lt-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt-ft { flex-shrink: 0; }
 </style>

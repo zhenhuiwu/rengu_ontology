@@ -3,6 +3,7 @@
  * 对象类型 → 使用与治理 → 指标：基础对象或维度涉及这个对象类型的指标。
  * 状态从变更单推：审核中 → 橙色；有草稿 → 灰色“草稿中”；其余按指标自身状态，一律灰色。点指标名进指标口径页。
  */
+import InfoTip from '@/components/InfoTip.vue';
 import { computed, ref } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
@@ -48,13 +49,12 @@ const cols = [
   <div class="ot-body">
     <div class="mt-tool">
       <a-segmented v-model:value="kind" :options="[{ label: '全部', value: 'all' }, { label: '作为基础对象', value: 'base' }, { label: '仅作为维度', value: 'dim' }]" @change="page = 1" />
-      <span class="t-12 c-3">以{{ name }}为基础对象 {{ all.filter((u) => u.base.includes(objectId)).length }} 个 · 按{{ name }}拆分 {{ all.filter((u) => u.via.length).length }} 个。指标口径改动在“指标口径”页发起变更</span>
+      <InfoTip :text="`以${name}为基础对象 ${all.filter((u) => u.base.includes(objectId)).length} 个 · 按${name}拆分 ${all.filter((u) => u.via.length).length} 个。指标口径改动在“指标口径”页发起变更`" />
     </div>
     <a-table :columns="cols" :data-source="pageRows" :pagination="false" size="small" :row-key="(u: MetricUse) => u.m.id">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'">
-          <router-link :to="`/build/ontology/metrics?metric=${record.m.id}`">{{ record.m.name }}</router-link>
-          <span class="t-12 c-3 num mt-api">{{ record.m.id }}</span>
+          <router-link :to="`/build/ontology/metrics?metric=${record.m.id}`" :title="`${record.m.name} · ${record.m.id}`">{{ record.m.name }}</router-link>
         </template>
         <template v-else-if="column.key === 'via'">{{ via(record) }}</template>
         <template v-else-if="column.key === 'formula'"><span class="num" :title="record.m.formula">{{ record.m.formula }}</span></template>

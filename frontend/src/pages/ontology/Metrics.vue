@@ -15,6 +15,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView, draftOf } from './parts/useDraftView';
 import { CHANGE_REQUESTS } from '@/mock/changes';
 import { message } from 'ant-design-vue';
+import { useConfirmStore } from '@/stores/confirm';
 
 interface M {
   id: string; name: string; api: string; group: string; unit: string; version: string;
@@ -61,7 +62,7 @@ const openChange = (name: string) => { changeTarget.value = name; changeOpen.val
 const group = ref('全部');
 const kw = ref('');
 const filtered = computed(() => LIST.filter((m) => (group.value === '全部' || m.group === group.value) && (!kw.value || m.name.includes(kw.value) || m.api.includes(kw.value))));
-const LPAGE = 12;
+const LPAGE = 18;
 const lpage = ref(1);
 watch([group, kw], () => { lpage.value = 1; });
 const lpages = computed(() => Math.max(1, Math.ceil(filtered.value.length / LPAGE)));
@@ -120,7 +121,18 @@ const trendOption = {
   series: [{ type: 'line', data: trend.map((d) => d.value), symbol: 'none', lineStyle: { width: 1.5, color: BRAND } }],
 };
 
-const TABLE_PAGER = { pageSize: 10, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showQuickJumper: true, showTotal: (t: number) => `共 ${t} 条`, size: 'small' as const };
+const verPage = ref(1);
+const refPage = ref(1);
+const confirm = useConfirmStore();
+async function rollback(v: { ver: string; release: string }) {
+  const ok = await confirm.ask({
+    title: '回滚口径版本', target: `${cur.value.name} · 回滚到 ${v.ver}（${v.release}）`,
+    fields: [{ label: '当前生效', value: VERSIONS.find((x) => x.status === '生效中')?.ver ?? '--' }, { label: '回滚到', value: v.ver }],
+    impact: '回滚会生成一个新的变更单，经评审后随下一次本体整版发布生效；发布前当前口径继续生效。',
+    okText: '生成变更单',
+  });
+  if (ok) openChange(`${cur.value.name}（${cur.value.api}）回滚到 ${v.ver}`);
+}
 const dimCols = [
   { title: '维度', dataIndex: 'dim', width: 88 },
   { title: '层级', dataIndex: 'hier' },
@@ -157,14 +169,10 @@ const refCols = [
         <a-segmented v-model:value="group" :options="GROUPS" block size="small" />
       </div>
       <ul class="mt-items">
-        <li v-for="m in list" :key="m.id" :class="{ active: m.id === cur.id }" @click="pick(m.id)">
+        <li v-for="m in list" :key="m.id" :class="{ active: m.id === cur.id }" :title="`${m.name} · ${m.api} · ${m.group}`" @click="pick(m.id)">
           <div class="mt-row">
-            <span class="t-14 mt-name">{{ m.name }}</span>
+            <span class="t-14 mt-name mt-ell">{{ m.name }}</span>
             <span class="t-12 num" :class="shownStatus(m) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(m) === '已发布' ? '' : shownStatus(m) + ' · ' }}{{ m.version }}</span>
-          </div>
-          <div class="mt-row">
-            <span class="t-12 c-3 num">{{ m.api }}</span>
-            <span class="t-12 c-3">{{ m.group }}</span>
           </div>
         </li>
       </ul>
@@ -186,9 +194,9 @@ const refCols = [
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="mt-sp" />
-        <a-button>试算</a-button>
-        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
-        <a-tooltip v-else-if="reviewCr(cur)" :title="`${reviewCr(cur)} 审核中`"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-button @click="router.replace({ query: { ...route.query, tab: 'def' } }); message.success(`已按${isDraft ? `草稿 ${draft?.id}` : '已发布口径'}试算近 30 日，结果见“近 30 日试算”`)">试算</a-button>
+        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
+        <a-tooltip v-else-if="reviewCr(cur)" :title="`${reviewCr(cur)} 审核中`"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
@@ -220,7 +228,7 @@ const refCols = [
           <div class="mt-sec t-14 fw-600">不允许的维度</div>
           <div v-for="d in DENY" :key="d.dim" class="mt-deny">
             <span class="t-14 c-1">{{ d.dim }}</span>
-            <span class="t-12 c-3">{{ d.reason }}</span>
+            <span class="t-12 c-3 mt-ell" :title="d.reason">{{ d.reason }}</span>
           </div>
           <div class="mt-sec t-14 fw-600">被引用</div>
           <div class="mt-refs t-14">
@@ -237,25 +245,27 @@ const refCols = [
       </div>
 
       <div v-else-if="tab === 'versions'" class="mt-body">
-        <a-table :columns="verCols" :data-source="VERSIONS" :pagination="TABLE_PAGER" size="middle" row-key="ver">
+        <a-table :columns="verCols" :data-source="VERSIONS.slice((verPage - 1) * 10, verPage * 10)" :pagination="false" size="middle" row-key="ver">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'">
               <a-badge status="default" :text="record.status" />
             </template>
             <template v-else-if="column.key === 'op'">
-              <a-space><a>对比</a><a v-if="record.status !== '生效中'">回滚</a></a-space>
+              <a-space><a-tooltip title="暂未开放"><span class="c-3">对比</span></a-tooltip><a v-if="record.status !== '生效中' && !readonly" @click="rollback(record)">回滚</a><a-tooltip v-else-if="record.status !== '生效中'" :title="reason"><span class="c-3">回滚</span></a-tooltip></a-space>
             </template>
           </template>
         </a-table>
+        <AppPagination v-model:page="verPage" variant="full" :total="VERSIONS.length" :size="10" unit="条" :empty="false" />
         <div class="t-12 c-3 mt-note">口径版本只随本体整版发布生效；回滚会生成一个新的变更单，经评审后随下一次发布生效。</div>
       </div>
 
       <div v-else class="mt-body">
-        <a-table :columns="refCols" :data-source="REFS" :pagination="TABLE_PAGER" size="middle" row-key="name">
+        <a-table :columns="refCols" :data-source="REFS.slice((refPage - 1) * 10, refPage * 10)" :pagination="false" size="middle" row-key="name">
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'name'"><a>{{ record.name }}</a></template>
+            <template v-if="column.key === 'name'"><span class="c-1">{{ record.name }}</span></template>
           </template>
         </a-table>
+        <AppPagination v-model:page="refPage" variant="full" :total="REFS.length" :size="10" unit="条" :empty="false" />
         <div class="t-12 c-3 mt-note">修改本指标时，以上对象会出现在变更单的影响分析里。</div>
       </div>
     </div>
@@ -289,7 +299,10 @@ const refCols = [
 .mt-sec-row { display: flex; justify-content: space-between; align-items: baseline; }
 .mt-formula { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; }
 .mt-chart { height: 200px; }
-.mt-deny { display: flex; flex-direction: column; padding: 6px 0; border-bottom: var(--border); }
+.mt-deny { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: var(--border); }
 .mt-refs { display: flex; flex-direction: column; gap: 4px; }
 .mt-note { margin-top: 4px; }
+
+.mt-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-ft { flex-shrink: 0; }
 </style>

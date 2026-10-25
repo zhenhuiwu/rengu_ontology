@@ -5,6 +5,7 @@
  * 选中变更单写进 ?cr=，页签写进 ?tab=，状态筛选写进 ?st=。查看历史版本时整页只读。
  * 权限：只有该单的审核人能通过 / 驳回，提交人不能审自己的单子；所有状态流转都走确认卡并写进评审记录。
  */
+import InfoTip from '@/components/InfoTip.vue';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -38,7 +39,7 @@ const st = computed({
 });
 const kw = ref('');
 const lpage = ref(1);
-const LPAGE = 11;
+const LPAGE = 17;
 watch([st, kw], () => { lpage.value = 1; });
 const filtered = computed(() => CRS.filter((c) => (st.value === '全部' || c.status === st.value) && (!kw.value || c.title.includes(kw.value) || c.id.includes(kw.value.toUpperCase()))));
 const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
@@ -54,8 +55,8 @@ const tab = computed({
 const detail = computed(() => crDetail(cur.value.id));
 const log = computed(() => [...(extraLog[cur.value.id] ?? []), ...reviewLog(cur.value)]);
 
-const statusClass = (s: CRStatus) => (s === '审核中' ? 'c-warning' : s === '已驳回' ? 'c-error' : 'c-3');
-const tagColor = (s: CRStatus) => ({ 草稿: 'default', 审核中: 'warning', 已通过: 'default', 已发布: 'default', 已驳回: 'error' })[s];
+const statusClass = (s: CRStatus) => (s === '审核中' ? 'c-warning' : 'c-3');
+const tagColor = (s: CRStatus) => ({ 草稿: 'default', 审核中: 'warning', 已通过: 'default', 已发布: 'default', 已驳回: 'default' })[s];
 const resultClass = (r: CheckResult) => (r === '阻断' ? 'c-error' : r === '警告' ? 'c-warning' : r === '通过' ? 'c-2' : 'c-3');
 
 const counts = computed(() => checkCounts(detail.value.checks));
@@ -198,14 +199,11 @@ async function rollback() {
         <a-select v-model:value="st" :options="STATUSES.map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" class="rl-st" />
       </div>
       <ul class="rl-items">
-        <li v-for="c in list" :key="c.id" :class="{ active: c.id === cur.id }" @click="pick(c.id)">
+        <li v-for="c in list" :key="c.id" :class="{ active: c.id === cur.id }" :title="`${c.title} · ${c.id} · ${c.owner} · ${c.updatedAt} · ${c.release ?? c.level}`" @click="pick(c.id)">
           <div class="rl-row">
-            <span class="t-14 rl-name">{{ c.title }}</span>
+            <span class="t-14 rl-name rl-ell">{{ c.title }}</span>
+            <span class="t-12 c-2 num rl-ft">{{ c.owner }} · {{ c.updatedAt.slice(5, 10) }}</span>
             <span class="t-12" :class="statusClass(c.status)">{{ c.status }}</span>
-          </div>
-          <div class="rl-row">
-            <span class="t-12 c-3 num">{{ c.id }} · {{ c.owner }} · {{ c.updatedAt.slice(5) }}</span>
-            <span class="t-12 c-3 num">{{ c.release ?? c.level }}</span>
           </div>
         </li>
       </ul>
@@ -264,11 +262,13 @@ async function rollback() {
           <a-tooltip :title="isLatest ? '' : rolledBack && cur.release === CURRENT_VERSION ? '已回滚' : '只能回滚最近一次发布'"><a-button danger :disabled="!isLatest" @click="rollback">回滚</a-button></a-tooltip>
         </template>
       </div>
-      <div class="rl-meta t-12 c-3 num">
-        <span>提交人 {{ cur.owner }}</span><span>审核人 {{ cur.reviewer }}</span><span>改动 {{ cur.changes }} 处</span>
-        <span>更新于 {{ cur.updatedAt }}</span><span class="rl-reason">原因：{{ cur.reason }}</span>
-      </div>
       <a-tabs v-model:activeKey="tab" class="rl-tabs">
+        <template #rightExtra>
+          <span class="rl-meta t-12 c-3 num">
+            <span>{{ cur.owner }} 提交 · {{ cur.reviewer }} 审核 · 改动 {{ cur.changes }} 处 · 更新于 {{ cur.updatedAt }}</span>
+            <InfoTip :text="`原因：${cur.reason}`" />
+          </span>
+        </template>
         <a-tab-pane key="diff" tab="改动清单" />
         <a-tab-pane key="checks" :tab="`发布校验${counts['阻断'] ? ' · 阻断 ' + counts['阻断'] : ''}`" />
         <a-tab-pane key="impact" tab="影响分析" />
@@ -318,10 +318,10 @@ async function rollback() {
         <div class="rl-cols">
           <div v-for="col in [{ k: 'direct', t: '直接改动' }, { k: 'defs', t: '受影响的定义' }, { k: 'usage', t: '下游使用' }]" :key="col.k" class="rl-col">
             <div class="t-14 fw-600 c-1 rl-col-title">{{ col.t }}</div>
-            <div v-for="it in (detail.impact as any)[col.k]" :key="it.name" class="rl-card">
-              <div class="t-12 c-3">{{ it.kind }}</div>
-              <div class="t-14 c-1"><HoverCard v-if="it.hover" :kind="it.hover.kind" :id="it.hover.id">{{ it.name }}</HoverCard><template v-else>{{ it.name }}</template></div>
-              <div class="t-12 c-3">{{ it.note }}</div>
+            <div v-for="it in (detail.impact as any)[col.k]" :key="it.name" class="rl-card" :title="`${it.kind} · ${it.name}${it.note ? ` · ${it.note}` : ''}`">
+              <span class="t-12 c-3 rl-ft">{{ it.kind }}</span>
+              <span class="t-14 c-1 rl-ft"><HoverCard v-if="it.hover" :kind="it.hover.kind" :id="it.hover.id">{{ it.name }}</HoverCard><template v-else>{{ it.name }}</template></span>
+              <span class="t-12 c-3 rl-ell">{{ it.note }}</span>
             </div>
             <div v-if="!(detail.impact as any)[col.k].length" class="t-12 c-3">暂无</div>
           </div>
@@ -359,7 +359,7 @@ async function rollback() {
 .rl-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .rl-head :deep(.ant-tag) { margin-inline-end: 0; }
 .rl-sp { flex: 1; }
-.rl-meta { display: flex; gap: 24px; padding: 0 16px 8px; flex: none; }
+.rl-meta { display: inline-flex; align-items: center; white-space: nowrap; }
 .rl-reason { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
 .rl-tabs { padding: 0 16px; flex: none; }
 .rl-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
@@ -376,7 +376,10 @@ async function rollback() {
 .rl-cols { display: flex; gap: 16px; }
 .rl-col { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .rl-col-title { margin-bottom: 4px; }
-.rl-card { border: var(--border); border-radius: var(--radius); padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+.rl-card { border: var(--border); border-radius: var(--radius); padding: 8px 12px; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .rl-trial { width: 50%; }
 .rl-log { max-width: 720px; }
+
+.rl-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-ft { flex-shrink: 0; }
 </style>

@@ -70,7 +70,7 @@ const ST_OPTIONS = [{ value: '', label: '全部状态' }, ...(['已发布', '草
 const filtered = computed(() => visible.value.filter((e) =>
   (!ktype.value || e.type === ktype.value) && (!st.value || shownStatus(e) === st.value)
   && (!kw.value || e.name.includes(kw.value) || e.id.includes(kw.value) || e.synonyms.some((s) => s.includes(kw.value)))));
-const LPAGE = 13;
+const LPAGE = 19;
 const lpage = ref(1);
 watch([kw, ktype, st], () => { lpage.value = 1; });
 const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
@@ -320,14 +320,11 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
         </div>
       </div>
       <ul class="gl-items">
-        <li v-for="e in list" :key="e.id" :class="{ active: e.id === cur?.id }" @click="pick(e.id)">
+        <li v-for="e in list" :key="e.id" :class="{ active: e.id === cur?.id }" :title="`${e.name} · ${e.type}${e.synonyms.length ? ` · ${e.synonyms.slice(0, 3).join('、')}` : ''} · ${e.id}`" @click="pick(e.id)">
           <div class="gl-row">
-            <span class="t-14 gl-name">{{ e.name }}</span>
+            <span class="t-14 gl-name gl-ell">{{ e.name }}</span>
+            <span class="t-12 c-3 gl-ft">{{ e.type }}</span>
             <span v-if="shownStatus(e) !== '已发布'" class="t-12 num" :class="shownClass(shownStatus(e))">{{ shownStatus(e) }}{{ crOf(e) && shownStatus(e) !== '已停用' ? ` · ${crOf(e)}` : '' }}</span>
-          </div>
-          <div class="gl-row">
-            <span class="t-12 c-3 gl-syn">{{ e.type }}{{ e.synonyms.length ? ` · ${e.synonyms.slice(0, 3).join('、')}` : '' }}</span>
-            <span class="t-12 c-3 num">{{ e.id }}</span>
           </div>
         </li>
       </ul>
@@ -354,7 +351,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
         <span class="gl-sp" />
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>停用</a-button></a-tooltip>
         <a-button v-else-if="canStop" @click="stop">停用</a-button>
-        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.id}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
@@ -572,4 +569,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
 .gl-try-row + .gl-try-row { border-top: var(--border); }
 .gl-try-k { width: 72px; flex: none; }
 .gl-ref-foot { display: flex; justify-content: flex-end; }
+
+.gl-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gl-ft { flex-shrink: 0; }
 </style>

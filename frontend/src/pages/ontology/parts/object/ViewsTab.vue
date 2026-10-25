@@ -3,6 +3,7 @@
  * 对象类型 → 使用与治理 → 视图：建在这个对象类型上的我的页面卡片、保存的对象列表、工作台视图（src/mock/objectViews.ts）。
  * 草稿里改动的属性如果被视图用到，标橙色“受草稿影响”，发布前提醒负责人。只读列表，没有写操作。
  */
+import InfoTip from '@/components/InfoTip.vue';
 import { computed, ref, watch } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
@@ -60,8 +61,8 @@ const cols = [
       <a-segmented v-model:value="kind" :options="[{ label: `全部 ${all.length}`, value: '全部' }, { label: `对象列表 ${count('对象列表')}`, value: '对象列表' }, { label: `我的页面 ${count('我的页面')}`, value: '我的页面' }, { label: `工作台视图 ${count('工作台视图')}`, value: '工作台视图' }]" />
       <a-input-search v-model:value="kw" placeholder="搜索视图名称或所有者" class="vw-search" allow-clear />
       <a-checkbox v-if="draft" v-model:checked="onlyHit">只看受草稿 {{ draft.id }} 影响的（{{ hitCount }}）</a-checkbox>
+      <InfoTip text="视图由使用者在对象搜索、我的页面里保存，这里只读" />
       <span class="vw-sp" />
-      <span class="t-12 c-3">视图由使用者在对象搜索、我的页面里保存，这里只读</span>
     </div>
     <a-table :columns="cols" :data-source="pageRows" :pagination="false" size="small" row-key="id">
       <template #bodyCell="{ column, record }">
@@ -83,7 +84,7 @@ const cols = [
         <template v-else-if="column.key === 'lastUsed'"><span class="num c-2">{{ record.lastUsed }}</span></template>
         <template v-else-if="column.key === 'op'">
           <router-link v-if="openTo(record)" :to="openTo(record)">打开</router-link>
-          <a-tooltip v-else title="工作台第三期开放"><span class="c-3">打开</span></a-tooltip>
+          <a-tooltip v-else title="暂未开放"><span class="c-3">打开</span></a-tooltip>
         </template>
       </template>
       <template #emptyText><span class="t-14 c-3">没有符合条件的视图</span></template>
