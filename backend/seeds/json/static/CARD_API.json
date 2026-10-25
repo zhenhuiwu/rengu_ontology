@@ -1,0 +1,6 @@
+{
+  "1 : 1": "one_to_one",
+  "1 : N": "one_to_many",
+  "N : 1": "many_to_one",
+  "N : M": "many_to_many"
+}

@@ -2,6 +2,7 @@
 
 QA 跑骨架时发现：还没有模块登记快照 section 时，versioning 阶段报「没有任何快照 section 登记」，
 整个 seed 失败。现在应跳过版本记录、其余阶段照常写入，并且可以重复跑（幂等）。
+静态模块登记 section 之后（static_0001），seed 会写出 mock 的 5 个历史版本。
 """
 
 import asyncio
@@ -57,7 +58,8 @@ async def test_full_seed_on_fresh_db():
             assert "完成：" in r.stdout
         assert await _count(plain, "sys_user") > 0
         assert await _count(plain, "biz_order") > 0
-        assert await _count(plain, "ontology_release") == 0  # 没有 section：版本记录跳过，不写空快照
+        # 静态已登记 section：写出 RELEASES 的 5 个版本（没有 section 时的跳过见 test_versioning）
+        assert await _count(plain, "ontology_release") == 5
     finally:
         await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)
         await admin.execute(f'DROP DATABASE IF EXISTS "{db}"')

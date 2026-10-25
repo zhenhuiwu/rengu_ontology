@@ -1,0 +1,4577 @@
+[
+  {
+    "id": "time",
+    "name": "时间",
+    "api": "dim_time",
+    "kind": "维度",
+    "group": "时间",
+    "status": "已发布",
+    "owner": "王敏",
+    "object": "order",
+    "objectName": "订单",
+    "attr": "订单.下单时间（各对象的时间属性）",
+    "column": "DIM.T_CALENDAR.cal_date",
+    "valueSrc": "公共日历表 DIM.T_CALENDAR（含财务结账月、节假日）",
+    "sync": "每年 12 月生成下一年日历",
+    "desc": "所有对象的时间属性都关联到公共日历表。周按 ISO 周（周一开始）；“月”默认自然月，财务结账以财务月为准。",
+    "levels": [
+      {
+        "name": "年",
+        "api": "year",
+        "source": "cal_year",
+        "count": 8
+      },
+      {
+        "name": "季",
+        "api": "quarter",
+        "source": "cal_quarter",
+        "count": 32
+      },
+      {
+        "name": "月",
+        "api": "month",
+        "source": "cal_month",
+        "count": 96
+      },
+      {
+        "name": "周",
+        "api": "week",
+        "source": "iso_week",
+        "count": 418,
+        "note": "ISO 周，周一开始"
+      },
+      {
+        "name": "日",
+        "api": "day",
+        "source": "cal_date",
+        "count": 2922
+      }
+    ],
+    "qa": {
+      "defaultLevel": "日",
+      "unspecified": "时间范围 ≤ 31 天按日，≤ 1 年按月，超过 1 年按年",
+      "nullAs": "--",
+      "sort": "按时间升序",
+      "note": "问题里没有时间时默认“近 7 天”，并在回答里写明"
+    },
+    "values": [
+      {
+        "key": "月:2026-12",
+        "code": "2026-12",
+        "name": "2026 年 12 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q4",
+        "note": "未开始"
+      },
+      {
+        "key": "月:2026-11",
+        "code": "2026-11",
+        "name": "2026 年 11 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q4",
+        "note": "未开始"
+      },
+      {
+        "key": "月:2026-10",
+        "code": "2026-10",
+        "name": "2026 年 10 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [
+          "本月",
+          "10 月"
+        ],
+        "parent": "2026Q4",
+        "note": "进行中，数据截至 2026-10-24"
+      },
+      {
+        "key": "月:2026-09",
+        "code": "2026-09",
+        "name": "2026 年 9 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [
+          "上月",
+          "9 月"
+        ],
+        "parent": "2026Q3",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-08",
+        "code": "2026-08",
+        "name": "2026 年 8 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q3",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-07",
+        "code": "2026-07",
+        "name": "2026 年 7 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q3",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-06",
+        "code": "2026-06",
+        "name": "2026 年 6 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q2",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-05",
+        "code": "2026-05",
+        "name": "2026 年 5 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q2",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-04",
+        "code": "2026-04",
+        "name": "2026 年 4 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q2",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-03",
+        "code": "2026-03",
+        "name": "2026 年 3 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q1",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-02",
+        "code": "2026-02",
+        "name": "2026 年 2 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q1",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2026-01",
+        "code": "2026-01",
+        "name": "2026 年 1 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2026Q1",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-12",
+        "code": "2025-12",
+        "name": "2025 年 12 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q4",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-11",
+        "code": "2025-11",
+        "name": "2025 年 11 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q4",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-10",
+        "code": "2025-10",
+        "name": "2025 年 10 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [
+          "去年同期"
+        ],
+        "parent": "2025Q4",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-09",
+        "code": "2025-09",
+        "name": "2025 年 9 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q3",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-08",
+        "code": "2025-08",
+        "name": "2025 年 8 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q3",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-07",
+        "code": "2025-07",
+        "name": "2025 年 7 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q3",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-06",
+        "code": "2025-06",
+        "name": "2025 年 6 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q2",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-05",
+        "code": "2025-05",
+        "name": "2025 年 5 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q2",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-04",
+        "code": "2025-04",
+        "name": "2025 年 4 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q2",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-03",
+        "code": "2025-03",
+        "name": "2025 年 3 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q1",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-02",
+        "code": "2025-02",
+        "name": "2025 年 2 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q1",
+        "note": "财务已结账"
+      },
+      {
+        "key": "月:2025-01",
+        "code": "2025-01",
+        "name": "2025 年 1 月",
+        "level": "月",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "2025Q1",
+        "note": "财务已结账"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "近 7 天>2026-10-18 至 2026-10-24",
+        "phrase": "近 7 天",
+        "targets": [
+          "2026-10-18 至 2026-10-24"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 3820,
+        "resolve": "不含今天"
+      },
+      {
+        "key": "上周>2026-W43（10-19 至 10-25）",
+        "phrase": "上周",
+        "targets": [
+          "2026-W43（10-19 至 10-25）"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 1264
+      },
+      {
+        "key": "今年>2026 年",
+        "phrase": "今年",
+        "targets": [
+          "2026 年"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 902
+      },
+      {
+        "key": "Q3>2026 年第 3 季度",
+        "phrase": "Q3",
+        "targets": [
+          "2026 年第 3 季度"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 318
+      },
+      {
+        "key": "国庆>2026-10-01 至 2026-10-07",
+        "phrase": "国庆",
+        "targets": [
+          "2026-10-01 至 2026-10-07"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 211
+      },
+      {
+        "key": "双 11>2026-11-11",
+        "phrase": "双 11",
+        "targets": [
+          "2026-11-11"
+        ],
+        "match": "精确",
+        "source": "问数反馈",
+        "hits": 146,
+        "conflict": "与促销活动“双 11 大促”（11-01 至 11-11）同名",
+        "resolve": "默认按 11-11 当天；问活动效果时追问"
+      },
+      {
+        "key": "上个财务月>2026-09（财务月）",
+        "phrase": "上个财务月",
+        "targets": [
+          "2026-09（财务月）"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 74,
+        "resolve": "财务月与自然月一致，结账日 次月 5 日"
+      }
+    ],
+    "metricDims": [
+      "日期"
+    ],
+    "metricNote": {
+      "gmv": "按下单时间",
+      "ship_ontime": "按应出库时间",
+      "atv": "按下单时间"
+    },
+    "usage": [
+      {
+        "type": "规则",
+        "name": "R-021 门店销售额环比下降",
+        "note": "按周（ISO 周）比较",
+        "hover": {
+          "kind": "rule",
+          "id": "R-021"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-015 出库超 48 小时未签收",
+        "note": "按出库时间计时长",
+        "hover": {
+          "kind": "rule",
+          "id": "R-015"
+        }
+      },
+      {
+        "type": "认证问答",
+        "name": "上月各大区销售额",
+        "note": "“上月”= 2026-09"
+      },
+      {
+        "type": "评测题",
+        "name": "时间解析 14 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "valuesNote": "取值按月列出 2025—2026 年；年、季、周、日由日历表生成"
+  },
+  {
+    "id": "org",
+    "name": "组织",
+    "api": "dim_org",
+    "kind": "维度",
+    "group": "组织",
+    "status": "已发布",
+    "owner": "陈立军",
+    "object": "store",
+    "objectName": "门店",
+    "attr": "门店（所属大区）",
+    "column": "ORG.T_STORE.region_code",
+    "valueSrc": "门店主数据 ORG.T_REGION、ORG.T_STORE",
+    "sync": "每日 02:00 全量同步",
+    "desc": "考核组织。门店经“所属大区”直属大区，不经过省份（CR-0005）；按省份统计用“行政区域”维度。门店的“区域”（华东一区—五区）是运营片区，不是本维度的层级。",
+    "levels": [
+      {
+        "name": "大区",
+        "api": "region",
+        "source": "门店.所属大区 → 大区",
+        "count": 6,
+        "note": "其中 1 个有门店"
+      },
+      {
+        "name": "门店",
+        "api": "store",
+        "source": "门店",
+        "count": 486
+      }
+    ],
+    "qa": {
+      "defaultLevel": "大区",
+      "unspecified": "问“各大区”按所属大区；只说“各门店”按门店，超过 20 家时只列前 20 并给出总数",
+      "nullAs": "--",
+      "sort": "按指标值降序",
+      "note": "订单按下单门店归属；履约门店需用户指明"
+    },
+    "levelsBefore": {
+      "ver": "v2026.10.2",
+      "levels": [
+        {
+          "name": "省份",
+          "api": "province",
+          "source": "门店.所在省份 → 省份",
+          "count": 31
+        },
+        {
+          "name": "门店",
+          "api": "store",
+          "source": "门店",
+          "count": 486
+        }
+      ],
+      "qa": {
+        "defaultLevel": "省份",
+        "unspecified": "问“各大区”时按省份归属汇总（经省份所属大区）",
+        "sort": "按指标值降序",
+        "note": "订单按下单门店归属"
+      },
+      "desc": "考核组织。门店经“所在省份”归属省份，省份再归属大区；大区不作为本维度的层级（v2026.10.2 由 CR-0005 改为 大区 › 门店）。",
+      "attr": "门店（所在省份）",
+      "column": "ORG.T_STORE.province_code",
+      "footnote": "该版本里省份既是行政区划又是考核口径；v2026.10.2 起省份拆为独立的“行政区域”维度。"
+    },
+    "values": [
+      {
+        "key": "大区:REG-EC",
+        "code": "REG-EC",
+        "name": "华东大区",
+        "level": "大区",
+        "status": "启用",
+        "synonyms": [
+          "华东区",
+          "华东"
+        ],
+        "count": 486,
+        "ref": {
+          "kind": "region",
+          "id": "REG-EC"
+        },
+        "note": "负责人 陈杰 · 下辖 7 个省份的门店"
+      },
+      {
+        "key": "大区:REG-NC",
+        "code": "REG-NC",
+        "name": "华北大区",
+        "level": "大区",
+        "status": "停用",
+        "synonyms": [
+          "华北区"
+        ],
+        "count": 0,
+        "note": "已建档，暂无门店（行政上辖 8 个省份）"
+      },
+      {
+        "key": "大区:REG-SC",
+        "code": "REG-SC",
+        "name": "华南大区",
+        "level": "大区",
+        "status": "停用",
+        "synonyms": [
+          "华南区"
+        ],
+        "count": 0,
+        "note": "已建档，暂无门店（行政上辖 3 个省份）"
+      },
+      {
+        "key": "大区:REG-CC",
+        "code": "REG-CC",
+        "name": "华中大区",
+        "level": "大区",
+        "status": "停用",
+        "synonyms": [
+          "华中区"
+        ],
+        "count": 0,
+        "note": "已建档，暂无门店（行政上辖 3 个省份）"
+      },
+      {
+        "key": "大区:REG-SW",
+        "code": "REG-SW",
+        "name": "西南大区",
+        "level": "大区",
+        "status": "停用",
+        "synonyms": [
+          "西南区"
+        ],
+        "count": 0,
+        "note": "已建档，暂无门店（行政上辖 5 个省份）"
+      },
+      {
+        "key": "大区:REG-NW",
+        "code": "REG-NW",
+        "name": "西北大区",
+        "level": "大区",
+        "status": "停用",
+        "synonyms": [
+          "西北区"
+        ],
+        "count": 0,
+        "note": "已建档，暂无门店（行政上辖 5 个省份）"
+      },
+      {
+        "key": "门店:SH0031",
+        "code": "SH0031",
+        "name": "上海浦东张江高科店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "张江店",
+          "张江高科"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0031"
+        },
+        "note": "上海 · 华东一区 · 社区店"
+      },
+      {
+        "key": "门店:SH0047",
+        "code": "SH0047",
+        "name": "上海徐汇漕河泾店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0047"
+        },
+        "note": "上海 · 华东一区 · 写字楼店"
+      },
+      {
+        "key": "门店:SH0102",
+        "code": "SH0102",
+        "name": "上海闵行七宝万科广场B1店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "七宝店",
+          "七宝万科"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0102"
+        },
+        "note": "上海 · 华东一区 · 商场店"
+      },
+      {
+        "key": "门店:HZ0012",
+        "code": "HZ0012",
+        "name": "杭州西湖文三路店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "文三路店"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HZ0012"
+        },
+        "note": "杭州 · 华东二区 · 社区店"
+      },
+      {
+        "key": "门店:HZ0058",
+        "code": "HZ0058",
+        "name": "杭州滨江星光大道店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "星光大道店"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HZ0058"
+        },
+        "note": "杭州 · 华东二区 · 商场店 · 装修中"
+      },
+      {
+        "key": "门店:NJ0021",
+        "code": "NJ0021",
+        "name": "南京鼓楼湖南路店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NJ0021"
+        },
+        "note": "南京 · 华东三区 · 社区店"
+      },
+      {
+        "key": "门店:NJ0076",
+        "code": "NJ0076",
+        "name": "南京江宁百家湖店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "百家湖店"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NJ0076"
+        },
+        "note": "南京 · 华东三区 · 社区店"
+      },
+      {
+        "key": "门店:SZ0009",
+        "code": "SZ0009",
+        "name": "苏州工业园区湖西CBD店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "湖西店",
+          "园区店"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SZ0009"
+        },
+        "note": "苏州 · 华东三区 · 写字楼店"
+      },
+      {
+        "key": "门店:NB0015",
+        "code": "NB0015",
+        "name": "宁波鄞州万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "鄞州万达店"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NB0015"
+        },
+        "note": "宁波 · 华东二区 · 商场店"
+      },
+      {
+        "key": "门店:HF0004",
+        "code": "HF0004",
+        "name": "合肥政务区天鹅湖店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HF0004"
+        },
+        "note": "合肥 · 华东四区 · 社区店"
+      },
+      {
+        "key": "门店:WX0011",
+        "code": "WX0011",
+        "name": "无锡梁溪崇安寺店",
+        "level": "门店",
+        "status": "停用",
+        "synonyms": [
+          "崇安寺店"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "WX0011"
+        },
+        "note": "无锡 · 华东三区 · 社区店 · 已闭店"
+      },
+      {
+        "key": "门店:SH0133",
+        "code": "SH0133",
+        "name": "上海静安大悦城店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [
+          "大悦城店"
+        ],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0133"
+        },
+        "note": "上海 · 华东一区 · 商场店"
+      },
+      {
+        "key": "门店:FZ0011",
+        "code": "FZ0011",
+        "name": "福州鼓楼东街口店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "FZ0011"
+        },
+        "note": "福州 · 华东五区 · 商场店"
+      },
+      {
+        "key": "门店:FZ0028",
+        "code": "FZ0028",
+        "name": "福州仓山万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "FZ0028"
+        },
+        "note": "福州 · 华东五区 · 商场店"
+      },
+      {
+        "key": "门店:HF0028",
+        "code": "HF0028",
+        "name": "合肥蜀山大溪地店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HF0028"
+        },
+        "note": "合肥 · 华东四区 · 社区店"
+      },
+      {
+        "key": "门店:HF0045",
+        "code": "HF0045",
+        "name": "合肥包河万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HF0045"
+        },
+        "note": "合肥 · 华东四区 · 商场店"
+      },
+      {
+        "key": "门店:HZ0045",
+        "code": "HZ0045",
+        "name": "杭州拱墅大关店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HZ0045"
+        },
+        "note": "杭州 · 华东二区 · 商场店"
+      },
+      {
+        "key": "门店:HZ0062",
+        "code": "HZ0062",
+        "name": "杭州余杭未来科技城店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HZ0062"
+        },
+        "note": "杭州 · 华东二区 · 商场店"
+      },
+      {
+        "key": "门店:HZ0079",
+        "code": "HZ0079",
+        "name": "杭州萧山市心店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "HZ0079"
+        },
+        "note": "杭州 · 华东二区 · 写字楼店"
+      },
+      {
+        "key": "门店:JN0011",
+        "code": "JN0011",
+        "name": "济南历下泉城路店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "JN0011"
+        },
+        "note": "济南 · 华东五区 · 社区店"
+      },
+      {
+        "key": "门店:JN0028",
+        "code": "JN0028",
+        "name": "济南槐荫万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "JN0028"
+        },
+        "note": "济南 · 华东五区 · 商场店"
+      },
+      {
+        "key": "门店:JN0045",
+        "code": "JN0045",
+        "name": "济南高新区汉峪金谷店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "JN0045"
+        },
+        "note": "济南 · 华东五区 · 社区店"
+      },
+      {
+        "key": "门店:NB0028",
+        "code": "NB0028",
+        "name": "宁波海曙天一店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NB0028"
+        },
+        "note": "宁波 · 华东二区 · 写字楼店"
+      },
+      {
+        "key": "门店:NB0045",
+        "code": "NB0045",
+        "name": "宁波江北来福士店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NB0045"
+        },
+        "note": "宁波 · 华东二区 · 商场店"
+      },
+      {
+        "key": "门店:NC0011",
+        "code": "NC0011",
+        "name": "南昌红谷滩万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NC0011"
+        },
+        "note": "南昌 · 华东五区 · 社区店"
+      },
+      {
+        "key": "门店:NC0028",
+        "code": "NC0028",
+        "name": "南昌东湖八一广场店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NC0028"
+        },
+        "note": "南昌 · 华东五区 · 商场店"
+      },
+      {
+        "key": "门店:NJ0045",
+        "code": "NJ0045",
+        "name": "南京建邺河西店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NJ0045"
+        },
+        "note": "南京 · 华东三区 · 社区店"
+      },
+      {
+        "key": "门店:NJ0062",
+        "code": "NJ0062",
+        "name": "南京玄武新街口店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "NJ0062"
+        },
+        "note": "南京 · 华东三区 · 商场店"
+      },
+      {
+        "key": "门店:SH0079",
+        "code": "SH0079",
+        "name": "上海长宁中山公园店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0079"
+        },
+        "note": "上海 · 华东一区 · 商场店"
+      },
+      {
+        "key": "门店:SH0096",
+        "code": "SH0096",
+        "name": "上海杨浦五角场店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0096"
+        },
+        "note": "上海 · 华东一区 · 社区店"
+      },
+      {
+        "key": "门店:SH0113",
+        "code": "SH0113",
+        "name": "上海普陀长风店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0113"
+        },
+        "note": "上海 · 华东一区 · 写字楼店"
+      },
+      {
+        "key": "门店:SH0130",
+        "code": "SH0130",
+        "name": "上海宝山顾村店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0130"
+        },
+        "note": "上海 · 华东一区 · 商场店"
+      },
+      {
+        "key": "门店:SH0147",
+        "code": "SH0147",
+        "name": "上海松江万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0147"
+        },
+        "note": "上海 · 华东一区 · 社区店"
+      },
+      {
+        "key": "门店:SZ0028",
+        "code": "SZ0028",
+        "name": "苏州姑苏观前店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SZ0028"
+        },
+        "note": "苏州 · 华东三区 · 商场店"
+      },
+      {
+        "key": "门店:SZ0045",
+        "code": "SZ0045",
+        "name": "苏州吴中石湖店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SZ0045"
+        },
+        "note": "苏州 · 华东三区 · 社区店"
+      },
+      {
+        "key": "门店:SZ0062",
+        "code": "SZ0062",
+        "name": "苏州相城高铁新城店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "SZ0062"
+        },
+        "note": "苏州 · 华东三区 · 写字楼店"
+      },
+      {
+        "key": "门店:WX0028",
+        "code": "WX0028",
+        "name": "无锡滨湖万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "WX0028"
+        },
+        "note": "无锡 · 华东三区 · 商场店"
+      },
+      {
+        "key": "门店:WX0045",
+        "code": "WX0045",
+        "name": "无锡新吴硕放店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "华东大区",
+        "ref": {
+          "kind": "store",
+          "id": "WX0045"
+        },
+        "note": "无锡 · 华东三区 · 写字楼店"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "华东>华东大区",
+        "phrase": "华东",
+        "targets": [
+          "华东大区"
+        ],
+        "match": "包含",
+        "source": "取值同义词",
+        "hits": 2894,
+        "conflict": "包含匹配还会命中运营片区“华东一区”—“华东五区”",
+        "resolve": "精确命中优先：按华东大区；问“华东一区”等按片区"
+      },
+      {
+        "key": "总部>全部大区",
+        "phrase": "总部",
+        "targets": [
+          "全部大区"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 96,
+        "resolve": "不加组织筛选"
+      },
+      {
+        "key": "文三路店>杭州西湖文三路店",
+        "phrase": "文三路店",
+        "targets": [
+          "杭州西湖文三路店"
+        ],
+        "match": "精确",
+        "source": "取值同义词",
+        "hits": 188,
+        "conflict": "前置仓“杭州西湖文三”（QZ0004）名称相近，CR-0009 建档后会同时出现",
+        "resolve": "默认指门店 HZ0012；前置仓需写明“前置仓”"
+      },
+      {
+        "key": "各店>门店（全部）",
+        "phrase": "各店",
+        "targets": [
+          "门店（全部）"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 1408
+      },
+      {
+        "key": "我的门店>当前用户可见门店",
+        "phrase": "我的门店",
+        "targets": [
+          "当前用户可见门店"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 362,
+        "resolve": "按数据权限的行级范围"
+      }
+    ],
+    "metricDims": [
+      "大区",
+      "门店"
+    ],
+    "metricNote": {
+      "gmv": "组织维度默认路径：下单门店 → 所属大区",
+      "order_cnt": "按门店、大区拆分（下单门店）",
+      "ship_ontime": "按门店拆分；履约门店需指明"
+    },
+    "usage": [
+      {
+        "type": "规则",
+        "name": "R-021 门店销售额环比下降",
+        "note": "按门店判断，按大区汇总告警",
+        "hover": {
+          "kind": "rule",
+          "id": "R-021"
+        }
+      },
+      {
+        "type": "视图",
+        "name": "华东大区销售周报",
+        "note": "随 CR-0005 新增"
+      },
+      {
+        "type": "视图",
+        "name": "华东大区经营日报",
+        "note": "4 个卡片"
+      },
+      {
+        "type": "认证问答",
+        "name": "上月各大区销售额",
+        "note": "已认证"
+      },
+      {
+        "type": "认证问答",
+        "name": "上个月各大区的有效订单数是多少？",
+        "note": "已认证"
+      },
+      {
+        "type": "权限",
+        "name": "门店店长",
+        "note": "行级范围：本店"
+      },
+      {
+        "type": "权限",
+        "name": "大区经理（华东）",
+        "note": "行级范围：华东大区"
+      },
+      {
+        "type": "评测题",
+        "name": "大区相关 6 题",
+        "note": "v2026.10.2 发布前回放全部通过"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.10.2",
+        "cr": "CR-0005",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-17 20:45",
+        "change": "层级改为 大区 → 门店；省份改为行政维度"
+      },
+      {
+        "ver": "v2026.03.2",
+        "status": "已替代",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布：省份 → 门店"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "门店数",
+    "valuesNote": "门店共 486 家，这里列出示例数据中的 38 家；其余按名称和同义词检索"
+  },
+  {
+    "id": "geo",
+    "name": "行政区域",
+    "api": "dim_geo",
+    "kind": "维度",
+    "group": "组织",
+    "status": "已发布",
+    "owner": "陈立军",
+    "object": "province",
+    "objectName": "省份",
+    "attr": "门店.所在省份、门店.城市",
+    "column": "ORG.T_STORE.province_code",
+    "valueSrc": "国家行政区划代码（GB/T 2260）ORG.T_PROVINCE",
+    "sync": "每季度核对一次",
+    "desc": "门店所在的行政区划：省份 › 城市 › 区县 › 门店，经“所在省份”关系。行政大区（省份所属大区）与考核大区可能不同，按省份归属统计需用户指明。",
+    "levels": [
+      {
+        "name": "省份",
+        "api": "province",
+        "source": "门店.所在省份 → 省份",
+        "count": 31,
+        "note": "有门店 7 个"
+      },
+      {
+        "name": "城市",
+        "api": "city",
+        "source": "门店.城市",
+        "count": 10,
+        "note": "有门店的城市"
+      },
+      {
+        "name": "区县",
+        "api": "district",
+        "source": "门店.区县",
+        "count": 9,
+        "note": "目前只维护上海的区县"
+      },
+      {
+        "name": "门店",
+        "api": "store",
+        "source": "门店",
+        "count": 486
+      }
+    ],
+    "qa": {
+      "defaultLevel": "省份",
+      "unspecified": "说“各省”按省份，说“各城市”按城市，说“各区县”按区县（如“上海各区县”= 城市 上海 + 区县）",
+      "nullAs": "--",
+      "sort": "按指标值降序",
+      "note": "只列有数据的省份；“按省份归属的大区”经省份所属大区，需写明“按省份”"
+    },
+    "values": [
+      {
+        "key": "省份:31",
+        "code": "31",
+        "name": "上海市",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "上海",
+          "沪"
+        ],
+        "count": 132,
+        "note": "行政大区：华东大区"
+      },
+      {
+        "key": "省份:32",
+        "code": "32",
+        "name": "江苏省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "江苏",
+          "苏"
+        ],
+        "count": 121,
+        "note": "行政大区：华东大区"
+      },
+      {
+        "key": "省份:33",
+        "code": "33",
+        "name": "浙江省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "浙江",
+          "浙"
+        ],
+        "count": 98,
+        "note": "行政大区：华东大区"
+      },
+      {
+        "key": "省份:34",
+        "code": "34",
+        "name": "安徽省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "安徽",
+          "皖"
+        ],
+        "count": 54,
+        "note": "行政大区：华东大区"
+      },
+      {
+        "key": "省份:35",
+        "code": "35",
+        "name": "福建省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "福建",
+          "闽"
+        ],
+        "count": 27,
+        "note": "行政大区：华东大区"
+      },
+      {
+        "key": "省份:36",
+        "code": "36",
+        "name": "江西省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "江西",
+          "赣"
+        ],
+        "count": 24,
+        "note": "行政大区：华东大区"
+      },
+      {
+        "key": "省份:37",
+        "code": "37",
+        "name": "山东省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "山东",
+          "鲁"
+        ],
+        "count": 30,
+        "note": "行政大区：华东大区"
+      },
+      {
+        "key": "省份:11",
+        "code": "11",
+        "name": "北京市",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "北京"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:12",
+        "code": "12",
+        "name": "天津市",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "天津"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:13",
+        "code": "13",
+        "name": "河北省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "河北"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:14",
+        "code": "14",
+        "name": "山西省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "山西"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:15",
+        "code": "15",
+        "name": "内蒙古自治区",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "内蒙古"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:21",
+        "code": "21",
+        "name": "辽宁省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "辽宁"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:22",
+        "code": "22",
+        "name": "吉林省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "吉林"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:23",
+        "code": "23",
+        "name": "黑龙江省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "黑龙江"
+        ],
+        "count": 0,
+        "note": "行政大区：华北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:44",
+        "code": "44",
+        "name": "广东省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "广东"
+        ],
+        "count": 0,
+        "note": "行政大区：华南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:45",
+        "code": "45",
+        "name": "广西壮族自治区",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "广西"
+        ],
+        "count": 0,
+        "note": "行政大区：华南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:46",
+        "code": "46",
+        "name": "海南省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "海南"
+        ],
+        "count": 0,
+        "note": "行政大区：华南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:41",
+        "code": "41",
+        "name": "河南省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "河南"
+        ],
+        "count": 0,
+        "note": "行政大区：华中大区 · 暂无门店"
+      },
+      {
+        "key": "省份:42",
+        "code": "42",
+        "name": "湖北省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "湖北"
+        ],
+        "count": 0,
+        "note": "行政大区：华中大区 · 暂无门店"
+      },
+      {
+        "key": "省份:43",
+        "code": "43",
+        "name": "湖南省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "湖南"
+        ],
+        "count": 0,
+        "note": "行政大区：华中大区 · 暂无门店"
+      },
+      {
+        "key": "省份:50",
+        "code": "50",
+        "name": "重庆市",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "重庆"
+        ],
+        "count": 0,
+        "note": "行政大区：西南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:51",
+        "code": "51",
+        "name": "四川省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "四川"
+        ],
+        "count": 0,
+        "note": "行政大区：西南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:52",
+        "code": "52",
+        "name": "贵州省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "贵州"
+        ],
+        "count": 0,
+        "note": "行政大区：西南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:53",
+        "code": "53",
+        "name": "云南省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "云南"
+        ],
+        "count": 0,
+        "note": "行政大区：西南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:54",
+        "code": "54",
+        "name": "西藏自治区",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "西藏"
+        ],
+        "count": 0,
+        "note": "行政大区：西南大区 · 暂无门店"
+      },
+      {
+        "key": "省份:61",
+        "code": "61",
+        "name": "陕西省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "陕西"
+        ],
+        "count": 0,
+        "note": "行政大区：西北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:62",
+        "code": "62",
+        "name": "甘肃省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "甘肃"
+        ],
+        "count": 0,
+        "note": "行政大区：西北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:63",
+        "code": "63",
+        "name": "青海省",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "青海"
+        ],
+        "count": 0,
+        "note": "行政大区：西北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:64",
+        "code": "64",
+        "name": "宁夏回族自治区",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "宁夏"
+        ],
+        "count": 0,
+        "note": "行政大区：西北大区 · 暂无门店"
+      },
+      {
+        "key": "省份:65",
+        "code": "65",
+        "name": "新疆维吾尔自治区",
+        "level": "省份",
+        "status": "启用",
+        "synonyms": [
+          "新疆"
+        ],
+        "count": 0,
+        "note": "行政大区：西北大区 · 暂无门店"
+      },
+      {
+        "key": "城市:3101",
+        "code": "3101",
+        "name": "上海市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "上海"
+        ],
+        "parent": "上海市",
+        "count": 132
+      },
+      {
+        "key": "城市:3201",
+        "code": "3201",
+        "name": "南京市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "南京"
+        ],
+        "parent": "江苏省",
+        "count": 58
+      },
+      {
+        "key": "城市:3205",
+        "code": "3205",
+        "name": "苏州市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "苏州"
+        ],
+        "parent": "江苏省",
+        "count": 41
+      },
+      {
+        "key": "城市:3202",
+        "code": "3202",
+        "name": "无锡市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "无锡"
+        ],
+        "parent": "江苏省",
+        "count": 22
+      },
+      {
+        "key": "城市:3301",
+        "code": "3301",
+        "name": "杭州市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "杭州"
+        ],
+        "parent": "浙江省",
+        "count": 71
+      },
+      {
+        "key": "城市:3302",
+        "code": "3302",
+        "name": "宁波市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "宁波"
+        ],
+        "parent": "浙江省",
+        "count": 27
+      },
+      {
+        "key": "城市:3401",
+        "code": "3401",
+        "name": "合肥市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "合肥"
+        ],
+        "parent": "安徽省",
+        "count": 54
+      },
+      {
+        "key": "城市:3501",
+        "code": "3501",
+        "name": "福州市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "福州"
+        ],
+        "parent": "福建省",
+        "count": 27
+      },
+      {
+        "key": "城市:3601",
+        "code": "3601",
+        "name": "南昌市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "南昌"
+        ],
+        "parent": "江西省",
+        "count": 24
+      },
+      {
+        "key": "城市:3701",
+        "code": "3701",
+        "name": "济南市",
+        "level": "城市",
+        "status": "启用",
+        "synonyms": [
+          "济南"
+        ],
+        "parent": "山东省",
+        "count": 30
+      },
+      {
+        "key": "区县:310115",
+        "code": "310115",
+        "name": "浦东新区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "浦东"
+        ],
+        "parent": "上海市",
+        "count": 31
+      },
+      {
+        "key": "区县:310104",
+        "code": "310104",
+        "name": "徐汇区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "徐汇"
+        ],
+        "parent": "上海市",
+        "count": 14
+      },
+      {
+        "key": "区县:310112",
+        "code": "310112",
+        "name": "闵行区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "闵行"
+        ],
+        "parent": "上海市",
+        "count": 19
+      },
+      {
+        "key": "区县:310106",
+        "code": "310106",
+        "name": "静安区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "静安"
+        ],
+        "parent": "上海市",
+        "count": 12
+      },
+      {
+        "key": "区县:310105",
+        "code": "310105",
+        "name": "长宁区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "长宁"
+        ],
+        "parent": "上海市",
+        "count": 9
+      },
+      {
+        "key": "区县:310110",
+        "code": "310110",
+        "name": "杨浦区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "杨浦"
+        ],
+        "parent": "上海市",
+        "count": 11
+      },
+      {
+        "key": "区县:310107",
+        "code": "310107",
+        "name": "普陀区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "普陀"
+        ],
+        "parent": "上海市",
+        "count": 10
+      },
+      {
+        "key": "区县:310113",
+        "code": "310113",
+        "name": "宝山区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "宝山"
+        ],
+        "parent": "上海市",
+        "count": 13
+      },
+      {
+        "key": "区县:310117",
+        "code": "310117",
+        "name": "松江区",
+        "level": "区县",
+        "status": "启用",
+        "synonyms": [
+          "松江"
+        ],
+        "parent": "上海市",
+        "count": 13
+      },
+      {
+        "key": "门店:SH0031",
+        "code": "SH0031",
+        "name": "上海浦东张江高科店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "浦东新区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0031"
+        }
+      },
+      {
+        "key": "门店:SH0047",
+        "code": "SH0047",
+        "name": "上海徐汇漕河泾店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "徐汇区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0047"
+        }
+      },
+      {
+        "key": "门店:SH0102",
+        "code": "SH0102",
+        "name": "上海闵行七宝万科广场B1店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "闵行区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0102"
+        }
+      },
+      {
+        "key": "门店:SH0133",
+        "code": "SH0133",
+        "name": "上海静安大悦城店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "静安区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0133"
+        }
+      },
+      {
+        "key": "门店:SH0079",
+        "code": "SH0079",
+        "name": "上海长宁中山公园店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "长宁区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0079"
+        }
+      },
+      {
+        "key": "门店:SH0096",
+        "code": "SH0096",
+        "name": "上海杨浦五角场店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "杨浦区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0096"
+        }
+      },
+      {
+        "key": "门店:SH0113",
+        "code": "SH0113",
+        "name": "上海普陀长风店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "普陀区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0113"
+        }
+      },
+      {
+        "key": "门店:SH0130",
+        "code": "SH0130",
+        "name": "上海宝山顾村店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "宝山区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0130"
+        }
+      },
+      {
+        "key": "门店:SH0147",
+        "code": "SH0147",
+        "name": "上海松江万达店",
+        "level": "门店",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "松江区",
+        "ref": {
+          "kind": "store",
+          "id": "SH0147"
+        }
+      }
+    ],
+    "mappings": [
+      {
+        "key": "江浙沪>上海市|江苏省|浙江省",
+        "phrase": "江浙沪",
+        "targets": [
+          "上海市",
+          "江苏省",
+          "浙江省"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 734
+      },
+      {
+        "key": "苏>江苏省",
+        "phrase": "苏",
+        "targets": [
+          "江苏省"
+        ],
+        "match": "精确",
+        "source": "取值同义词",
+        "hits": 41,
+        "conflict": "单字“苏”也可能指苏州市",
+        "resolve": "单独出现按江苏省；“苏锡常”按城市"
+      },
+      {
+        "key": "苏锡常>苏州市|无锡市|常州市",
+        "phrase": "苏锡常",
+        "targets": [
+          "苏州市",
+          "无锡市",
+          "常州市"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 58,
+        "conflict": "常州市暂无门店，取值里没有",
+        "resolve": "按苏州、无锡回答，并说明常州无门店"
+      },
+      {
+        "key": "长三角>上海市|江苏省|浙江省|安徽省",
+        "phrase": "长三角",
+        "targets": [
+          "上海市",
+          "江苏省",
+          "浙江省",
+          "安徽省"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 129
+      },
+      {
+        "key": "华东>上海市|江苏省|浙江省|安徽省|福建省|江西省|山东省",
+        "phrase": "华东",
+        "targets": [
+          "上海市",
+          "江苏省",
+          "浙江省",
+          "安徽省",
+          "福建省",
+          "江西省",
+          "山东省"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 46,
+        "conflict": "与组织“华东大区”同名；行政大区按省份归属，与考核大区范围不同",
+        "resolve": "默认按组织“华东大区”；写明“按省份”时按行政大区 7 省"
+      }
+    ],
+    "metricDims": [
+      "省份"
+    ],
+    "metricNote": {
+      "gmv": "省份维度（经所在省份）"
+    },
+    "usage": [
+      {
+        "type": "视图",
+        "name": "门店经营月报",
+        "note": "省份筛选"
+      },
+      {
+        "type": "认证问答",
+        "name": "按省份归属统计各大区门店数",
+        "note": "已认证，问题里写明“按省份”"
+      },
+      {
+        "type": "认证问答",
+        "name": "上海各区县门店销售额",
+        "note": "已认证：城市 = 上海，按区县拆分"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.10.2",
+        "cr": "CR-0005",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-17 20:45",
+        "change": "从组织维度拆出，作为独立的行政维度（此前是组织维度的上级层级）"
+      }
+    ],
+    "since": "v2026.10.2",
+    "countLabel": "门店数",
+    "valuesNote": "城市只列有门店的 10 个"
+  },
+  {
+    "id": "area",
+    "name": "运营片区",
+    "api": "dim_store_area",
+    "kind": "维度",
+    "group": "组织",
+    "status": "已发布",
+    "owner": "陈立军",
+    "object": "store",
+    "objectName": "门店",
+    "attr": "门店.区域",
+    "column": "ORG.T_STORE.area_name",
+    "valueSrc": "门店主数据（门店属性，无单独主表）",
+    "sync": "每日 02:00 随门店同步",
+    "desc": "华东大区内部的运营片区，门店的“区域”属性。不是组织层级；问“各区域”“一区”时用本维度。",
+    "levels": [
+      {
+        "name": "片区",
+        "api": "area",
+        "source": "门店.区域",
+        "count": 5
+      }
+    ],
+    "qa": {
+      "defaultLevel": "片区",
+      "unspecified": "说“各区域”“各片区”按片区",
+      "nullAs": "--",
+      "sort": "按片区编号",
+      "note": "“华东”精确命中华东大区，不按片区"
+    },
+    "values": [
+      {
+        "key": "片区:EC1",
+        "code": "EC1",
+        "name": "华东一区",
+        "level": "片区",
+        "status": "启用",
+        "synonyms": [
+          "一区",
+          "上海片区"
+        ],
+        "count": 132,
+        "note": "上海"
+      },
+      {
+        "key": "片区:EC2",
+        "code": "EC2",
+        "name": "华东二区",
+        "level": "片区",
+        "status": "启用",
+        "synonyms": [
+          "二区"
+        ],
+        "count": 98,
+        "note": "杭州、宁波"
+      },
+      {
+        "key": "片区:EC3",
+        "code": "EC3",
+        "name": "华东三区",
+        "level": "片区",
+        "status": "启用",
+        "synonyms": [
+          "三区"
+        ],
+        "count": 121,
+        "note": "南京、苏州、无锡"
+      },
+      {
+        "key": "片区:EC4",
+        "code": "EC4",
+        "name": "华东四区",
+        "level": "片区",
+        "status": "启用",
+        "synonyms": [
+          "四区"
+        ],
+        "count": 54,
+        "note": "合肥"
+      },
+      {
+        "key": "片区:EC5",
+        "code": "EC5",
+        "name": "华东五区",
+        "level": "片区",
+        "status": "启用",
+        "synonyms": [
+          "五区"
+        ],
+        "count": 81,
+        "note": "福州、南昌、济南"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "区域>运营片区（全部）",
+        "phrase": "区域",
+        "targets": [
+          "运营片区（全部）"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 517,
+        "conflict": "用户常把“区域”和“大区”混用",
+        "resolve": "“各区域”按片区；“各大区”按组织维度"
+      }
+    ],
+    "metricDims": [
+      "区域"
+    ],
+    "usage": [
+      {
+        "type": "视图",
+        "name": "片区经营周报",
+        "note": "2 个卡片"
+      },
+      {
+        "type": "评测题",
+        "name": "片区相关 3 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "门店数"
+  },
+  {
+    "id": "category",
+    "name": "商品品类",
+    "api": "dim_category",
+    "kind": "维度",
+    "group": "商品",
+    "status": "已发布",
+    "owner": "王敏",
+    "object": "category",
+    "objectName": "品类",
+    "attr": "商品.所属品类 → 品类（上级品类）",
+    "column": "MDM.T_CATEGORY.category_id",
+    "valueSrc": "商品主数据 MDM.T_CATEGORY（三级）",
+    "sync": "每日 01:30 增量同步",
+    "desc": "三级品类加 SKU。商品经“所属品类”挂到小类，小类经“上级品类”逐级上卷到中类、大类。",
+    "levels": [
+      {
+        "name": "大类",
+        "api": "category_l1",
+        "source": "品类（level = 1）",
+        "count": 12
+      },
+      {
+        "name": "中类",
+        "api": "category_l2",
+        "source": "品类（level = 2）",
+        "count": 86
+      },
+      {
+        "name": "小类",
+        "api": "category_l3",
+        "source": "品类（level = 3）",
+        "count": 1106
+      },
+      {
+        "name": "SKU",
+        "api": "sku",
+        "source": "商品",
+        "count": 48213
+      }
+    ],
+    "qa": {
+      "defaultLevel": "大类",
+      "unspecified": "说“各品类”按大类；点名中类、小类时按点名的层级",
+      "nullAs": "未分类",
+      "sort": "按指标值降序",
+      "note": "小类、SKU 取值很多，这里只列大类和中类；问数按名称和同义词检索全部层级"
+    },
+    "values": [
+      {
+        "key": "大类:C01",
+        "code": "C01",
+        "name": "酒水饮料",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "饮料",
+          "酒水"
+        ],
+        "count": 6120
+      },
+      {
+        "key": "大类:C02",
+        "code": "C02",
+        "name": "粮油调味",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "粮油"
+        ],
+        "count": 5482
+      },
+      {
+        "key": "大类:C03",
+        "code": "C03",
+        "name": "乳品",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "奶制品"
+        ],
+        "count": 2316
+      },
+      {
+        "key": "大类:C04",
+        "code": "C04",
+        "name": "休闲食品",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "零食"
+        ],
+        "count": 7905
+      },
+      {
+        "key": "大类:C05",
+        "code": "C05",
+        "name": "日化家清",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "日化",
+          "家清"
+        ],
+        "count": 4877
+      },
+      {
+        "key": "大类:C06",
+        "code": "C06",
+        "name": "生鲜",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "生鲜果蔬"
+        ],
+        "count": 3654
+      },
+      {
+        "key": "大类:C07",
+        "code": "C07",
+        "name": "冷冻食品",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "冻品"
+        ],
+        "count": 2208
+      },
+      {
+        "key": "大类:C08",
+        "code": "C08",
+        "name": "个护美妆",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "个护"
+        ],
+        "count": 5133
+      },
+      {
+        "key": "大类:C09",
+        "code": "C09",
+        "name": "母婴用品",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "母婴"
+        ],
+        "count": 2861
+      },
+      {
+        "key": "大类:C10",
+        "code": "C10",
+        "name": "家居百货",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "百货"
+        ],
+        "count": 4102
+      },
+      {
+        "key": "大类:C11",
+        "code": "C11",
+        "name": "速食冲调",
+        "level": "大类",
+        "status": "启用",
+        "synonyms": [
+          "速食"
+        ],
+        "count": 3555
+      },
+      {
+        "key": "大类:C12",
+        "code": "C12",
+        "name": "烟草",
+        "level": "大类",
+        "status": "停用",
+        "synonyms": [
+          "香烟"
+        ],
+        "count": 0,
+        "note": "2025-12 起不再经营，历史销售保留"
+      },
+      {
+        "key": "中类:C0101",
+        "code": "C0101",
+        "name": "饮用水",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "矿泉水",
+          "纯净水"
+        ],
+        "parent": "酒水饮料",
+        "count": 412
+      },
+      {
+        "key": "中类:C0102",
+        "code": "C0102",
+        "name": "碳酸饮料",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "汽水"
+        ],
+        "parent": "酒水饮料",
+        "count": 538
+      },
+      {
+        "key": "中类:C0103",
+        "code": "C0103",
+        "name": "啤酒",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "酒水饮料",
+        "count": 621
+      },
+      {
+        "key": "中类:C0201",
+        "code": "C0201",
+        "name": "食用油",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "粮油调味",
+        "count": 486
+      },
+      {
+        "key": "中类:C0202",
+        "code": "C0202",
+        "name": "大米",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "粮油调味",
+        "count": 305
+      },
+      {
+        "key": "中类:C0203",
+        "code": "C0203",
+        "name": "酱油",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "粮油调味",
+        "count": 274
+      },
+      {
+        "key": "中类:C0301",
+        "code": "C0301",
+        "name": "常温奶",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "纯牛奶"
+        ],
+        "parent": "乳品",
+        "count": 388
+      },
+      {
+        "key": "中类:C0302",
+        "code": "C0302",
+        "name": "低温奶",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "鲜奶",
+          "巴氏奶"
+        ],
+        "parent": "乳品",
+        "count": 296
+      },
+      {
+        "key": "中类:C0303",
+        "code": "C0303",
+        "name": "乳饮料",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "乳品",
+        "count": 211
+      },
+      {
+        "key": "中类:C0401",
+        "code": "C0401",
+        "name": "坚果",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "坚果炒货"
+        ],
+        "parent": "休闲食品",
+        "count": 642
+      },
+      {
+        "key": "中类:C0402",
+        "code": "C0402",
+        "name": "膨化食品",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "薯片"
+        ],
+        "parent": "休闲食品",
+        "count": 915
+      },
+      {
+        "key": "中类:C0501",
+        "code": "C0501",
+        "name": "洗衣",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "洗衣液"
+        ],
+        "parent": "日化家清",
+        "count": 433
+      },
+      {
+        "key": "中类:C0502",
+        "code": "C0502",
+        "name": "纸品",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "纸巾",
+          "抽纸"
+        ],
+        "parent": "日化家清",
+        "count": 368
+      },
+      {
+        "key": "中类:C0601",
+        "code": "C0601",
+        "name": "水果",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "生鲜",
+        "count": 702
+      },
+      {
+        "key": "中类:C0602",
+        "code": "C0602",
+        "name": "肉禽",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [
+          "肉类"
+        ],
+        "parent": "生鲜",
+        "count": 531
+      },
+      {
+        "key": "中类:C0603",
+        "code": "C0603",
+        "name": "蔬菜",
+        "level": "中类",
+        "status": "启用",
+        "synonyms": [],
+        "parent": "生鲜",
+        "count": 846
+      }
+    ],
+    "mappings": [
+      {
+        "key": "牛奶>常温奶|低温奶",
+        "phrase": "牛奶",
+        "targets": [
+          "常温奶",
+          "低温奶"
+        ],
+        "match": "多值",
+        "source": "取值同义词",
+        "hits": 466,
+        "conflict": "同时对应 2 个中类",
+        "resolve": "默认合并两个中类；说“纯牛奶”只按常温奶"
+      },
+      {
+        "key": "水>饮用水",
+        "phrase": "水",
+        "targets": [
+          "饮用水"
+        ],
+        "match": "精确",
+        "source": "问数反馈",
+        "hits": 82
+      },
+      {
+        "key": "烟>烟草",
+        "phrase": "烟",
+        "targets": [
+          "烟草"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 9,
+        "resolve": "烟草已停用，回答时说明 2025-12 起不再经营"
+      }
+    ],
+    "metricDims": [
+      "品类"
+    ],
+    "metricNote": {
+      "gmv": "商品维度：大类 › 中类 › 小类",
+      "gross_margin": "商品、品类维度"
+    },
+    "usage": [
+      {
+        "type": "规则",
+        "name": "R-007 商品毛利率越线",
+        "note": "按品类设阈值",
+        "hover": {
+          "kind": "rule",
+          "id": "R-007"
+        }
+      },
+      {
+        "type": "视图",
+        "name": "品类毛利看板",
+        "note": "3 个卡片"
+      },
+      {
+        "type": "评测题",
+        "name": "品类相关 8 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "SKU 数",
+    "valuesNote": "小类 1,106 个、SKU 48,213 个，这里只列大类和示例中类"
+  },
+  {
+    "id": "channel",
+    "name": "渠道",
+    "api": "dim_channel",
+    "kind": "维度",
+    "group": "交易",
+    "status": "已发布",
+    "owner": "陈立军",
+    "object": "order",
+    "objectName": "订单",
+    "attr": "订单.渠道",
+    "column": "ERP.T_SALE_ORDER.channel_code",
+    "valueSrc": "码表 MDM.T_DICT（dict_type = SALE_CHANNEL）",
+    "sync": "码表变更时实时同步",
+    "desc": "订单的下单渠道，两级：渠道类型 › 渠道。启用 6 个渠道，停用的渠道保留历史订单。",
+    "levels": [
+      {
+        "name": "渠道类型",
+        "api": "channel_type",
+        "source": "码表上级",
+        "count": 3
+      },
+      {
+        "name": "渠道",
+        "api": "channel",
+        "source": "订单.渠道",
+        "count": 9,
+        "note": "启用 6 个"
+      }
+    ],
+    "qa": {
+      "defaultLevel": "渠道",
+      "unspecified": "说“各渠道”按渠道；说“线上线下”按渠道类型",
+      "nullAs": "--",
+      "sort": "按指标值降序",
+      "note": "停用渠道只在历史时间范围里出现"
+    },
+    "values": [
+      {
+        "key": "渠道类型:OFFLINE",
+        "code": "OFFLINE",
+        "name": "线下门店",
+        "level": "渠道类型",
+        "status": "启用",
+        "synonyms": [
+          "线下"
+        ]
+      },
+      {
+        "key": "渠道类型:OWN",
+        "code": "OWN",
+        "name": "自营线上",
+        "level": "渠道类型",
+        "status": "启用",
+        "synonyms": [
+          "自营"
+        ]
+      },
+      {
+        "key": "渠道类型:PLATFORM",
+        "code": "PLATFORM",
+        "name": "第三方平台",
+        "level": "渠道类型",
+        "status": "启用",
+        "synonyms": [
+          "平台"
+        ]
+      },
+      {
+        "key": "渠道:POS",
+        "code": "POS",
+        "name": "门店POS",
+        "level": "渠道",
+        "status": "启用",
+        "synonyms": [
+          "门店收银",
+          "线下收银"
+        ],
+        "parent": "线下门店",
+        "count": 702318
+      },
+      {
+        "key": "渠道:MINI",
+        "code": "MINI",
+        "name": "小程序到家",
+        "level": "渠道",
+        "status": "启用",
+        "synonyms": [
+          "小程序",
+          "到家"
+        ],
+        "parent": "自营线上",
+        "count": 196402
+      },
+      {
+        "key": "渠道:GROUP",
+        "code": "GROUP",
+        "name": "社群团购",
+        "level": "渠道",
+        "status": "启用",
+        "synonyms": [
+          "社群",
+          "团购"
+        ],
+        "parent": "自营线上",
+        "count": 61877
+      },
+      {
+        "key": "渠道:MT",
+        "code": "MT",
+        "name": "美团闪购",
+        "level": "渠道",
+        "status": "启用",
+        "synonyms": [
+          "美团"
+        ],
+        "parent": "第三方平台",
+        "count": 158210
+      },
+      {
+        "key": "渠道:ELE",
+        "code": "ELE",
+        "name": "饿了么",
+        "level": "渠道",
+        "status": "启用",
+        "synonyms": [
+          "饿百"
+        ],
+        "parent": "第三方平台",
+        "count": 104655
+      },
+      {
+        "key": "渠道:JD",
+        "code": "JD",
+        "name": "京东到家",
+        "level": "渠道",
+        "status": "启用",
+        "synonyms": [
+          "京东"
+        ],
+        "parent": "第三方平台",
+        "count": 62940
+      },
+      {
+        "key": "渠道:DY",
+        "code": "DY",
+        "name": "抖音小时达",
+        "level": "渠道",
+        "status": "停用",
+        "synonyms": [],
+        "parent": "第三方平台",
+        "count": 0,
+        "note": "2026-06 试点结束"
+      },
+      {
+        "key": "渠道:DMALL",
+        "code": "DMALL",
+        "name": "多点",
+        "level": "渠道",
+        "status": "停用",
+        "synonyms": [],
+        "parent": "第三方平台",
+        "count": 0,
+        "note": "2025-08 停止合作"
+      },
+      {
+        "key": "渠道:TEL",
+        "code": "TEL",
+        "name": "电话订购",
+        "level": "渠道",
+        "status": "停用",
+        "synonyms": [],
+        "parent": "自营线上",
+        "count": 0,
+        "note": "2025-03 下线"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "线上>自营线上|第三方平台",
+        "phrase": "线上",
+        "targets": [
+          "自营线上",
+          "第三方平台"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 1937,
+        "conflict": "财务报表里“线上”只算自营线上",
+        "resolve": "默认两类都算；问“财务口径”时只算自营线上"
+      },
+      {
+        "key": "到家>小程序到家",
+        "phrase": "到家",
+        "targets": [
+          "小程序到家"
+        ],
+        "match": "包含",
+        "source": "取值同义词",
+        "hits": 845,
+        "conflict": "包含匹配还会命中“京东到家”",
+        "resolve": "精确命中优先：小程序到家；“到家业务”按自营线上 + 第三方平台"
+      },
+      {
+        "key": "门店>门店POS",
+        "phrase": "门店",
+        "targets": [
+          "门店POS"
+        ],
+        "match": "精确",
+        "source": "问数反馈",
+        "hits": 38,
+        "conflict": "与组织维度“门店”同名",
+        "resolve": "默认理解为组织维度；“门店渠道”“线下”才指本值"
+      }
+    ],
+    "metricDims": [
+      "渠道"
+    ],
+    "usage": [
+      {
+        "type": "视图",
+        "name": "门店经营月报",
+        "note": "渠道占比卡片"
+      },
+      {
+        "type": "认证问答",
+        "name": "本月各渠道销售额占比",
+        "note": "已认证"
+      },
+      {
+        "type": "评测题",
+        "name": "渠道相关 5 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "订单数"
+  },
+  {
+    "id": "member_level",
+    "name": "会员等级",
+    "api": "dim_member_level",
+    "kind": "维度",
+    "group": "客户",
+    "status": "已发布",
+    "owner": "吴佳",
+    "object": "member_level",
+    "objectName": "会员等级",
+    "attr": "会员.会员等级 → 会员等级",
+    "column": "CRM.T_MEMBER.level_code",
+    "valueSrc": "会员中心 CRM.T_MEMBER_LEVEL",
+    "sync": "每日 03:00 全量同步",
+    "desc": "会员当前所在等级（5 个，L0–L4）。订单没有会员的归入“散客”。CR-0001 新增“黑金”已驳回。",
+    "levels": [
+      {
+        "name": "会员等级",
+        "api": "level",
+        "source": "会员等级",
+        "count": 5
+      },
+      {
+        "name": "会员",
+        "api": "member",
+        "source": "会员",
+        "count": 863027
+      }
+    ],
+    "qa": {
+      "defaultLevel": "会员等级",
+      "unspecified": "说“各等级”按会员等级；含散客",
+      "nullAs": "散客",
+      "sort": "按等级编码",
+      "note": "按订单统计时用下单时的会员等级快照"
+    },
+    "values": [
+      {
+        "key": "会员等级:GUEST",
+        "code": "GUEST",
+        "name": "散客",
+        "level": "会员等级",
+        "status": "启用",
+        "synonyms": [
+          "非会员"
+        ],
+        "src": "会员为空",
+        "note": "不是 CRM 等级，统计时补的取值"
+      },
+      {
+        "key": "会员等级:L0",
+        "code": "L0",
+        "name": "普卡",
+        "level": "会员等级",
+        "status": "启用",
+        "synonyms": [
+          "普通会员"
+        ],
+        "count": 512330,
+        "src": "CRM L0"
+      },
+      {
+        "key": "会员等级:L1",
+        "code": "L1",
+        "name": "银卡",
+        "level": "会员等级",
+        "status": "启用",
+        "synonyms": [
+          "银卡会员"
+        ],
+        "count": 201486,
+        "src": "CRM L1"
+      },
+      {
+        "key": "会员等级:L2",
+        "code": "L2",
+        "name": "金卡",
+        "level": "会员等级",
+        "status": "启用",
+        "synonyms": [
+          "金卡会员"
+        ],
+        "count": 104215,
+        "src": "CRM L2"
+      },
+      {
+        "key": "会员等级:L3",
+        "code": "L3",
+        "name": "铂金卡",
+        "level": "会员等级",
+        "status": "启用",
+        "synonyms": [
+          "铂金",
+          "白金"
+        ],
+        "count": 37902,
+        "src": "CRM L3"
+      },
+      {
+        "key": "会员等级:L4",
+        "code": "L4",
+        "name": "钻石卡",
+        "level": "会员等级",
+        "status": "启用",
+        "synonyms": [
+          "钻石",
+          "钻卡"
+        ],
+        "count": 7094,
+        "src": "CRM L4"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "高等级会员>铂金卡|钻石卡",
+        "phrase": "高等级会员",
+        "targets": [
+          "铂金卡",
+          "钻石卡"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 213
+      },
+      {
+        "key": "黑金>",
+        "phrase": "黑金",
+        "targets": [],
+        "match": "精确",
+        "source": "问数反馈",
+        "hits": 17,
+        "conflict": "没有对应取值（CR-0001 已驳回）",
+        "resolve": "回答“没有黑金等级”，列出现有 5 个等级"
+      }
+    ],
+    "metricDims": [
+      "会员等级"
+    ],
+    "metricNote": {
+      "gmv": "会员等级维度"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "新增会员数",
+        "note": "按等级拆分"
+      },
+      {
+        "type": "视图",
+        "name": "会员等级分布",
+        "note": "1 个卡片"
+      },
+      {
+        "type": "评测题",
+        "name": "会员相关 6 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "—",
+        "cr": "CR-0001",
+        "status": "已驳回",
+        "by": "吴佳",
+        "at": "2026-09-12 10:02",
+        "change": "新增取值“黑金”（L5）；CRM 没有 L5 等级码"
+      },
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "吴佳",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "会员数"
+  },
+  {
+    "id": "format",
+    "name": "业态",
+    "api": "dim_store_format",
+    "kind": "维度",
+    "group": "组织",
+    "status": "已发布",
+    "owner": "陈立军",
+    "object": "store",
+    "objectName": "门店",
+    "attr": "门店.业态",
+    "column": "ORG.T_STORE.format_code",
+    "valueSrc": "取值字典“门店业态” MDM.T_DICT（dict_type = STORE_FORMAT）",
+    "sync": "码表变更时实时同步",
+    "desc": "门店的经营业态。CR-0009 草稿新增“前置仓”，用于 6 家前置仓建档后按业态单独统计。",
+    "levels": [
+      {
+        "name": "业态",
+        "api": "format",
+        "source": "门店.业态",
+        "count": 4,
+        "note": "启用 3 个"
+      }
+    ],
+    "qa": {
+      "defaultLevel": "业态",
+      "unspecified": "说“各业态”按业态",
+      "nullAs": "--",
+      "sort": "按指标值降序",
+      "note": "业态是门店属性，按订单的下单门店取值"
+    },
+    "values": [
+      {
+        "key": "业态:SQ",
+        "code": "SQ",
+        "name": "社区店",
+        "level": "业态",
+        "status": "启用",
+        "synonyms": [
+          "社区"
+        ],
+        "count": 268
+      },
+      {
+        "key": "业态:SC",
+        "code": "SC",
+        "name": "商场店",
+        "level": "业态",
+        "status": "启用",
+        "synonyms": [
+          "购物中心店"
+        ],
+        "count": 141
+      },
+      {
+        "key": "业态:XZL",
+        "code": "XZL",
+        "name": "写字楼店",
+        "level": "业态",
+        "status": "启用",
+        "synonyms": [
+          "写字楼",
+          "办公楼店"
+        ],
+        "count": 77
+      },
+      {
+        "key": "业态:BLD",
+        "code": "BLD",
+        "name": "便利店",
+        "level": "业态",
+        "status": "停用",
+        "synonyms": [],
+        "count": 0,
+        "note": "2024-07 并入社区店"
+      },
+      {
+        "key": "业态:FWH",
+        "code": "FWH",
+        "name": "前置仓",
+        "level": "业态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 6,
+        "note": "6 家待门店主数据建档（QZ0001 等）",
+        "draft": "CR-0009",
+        "diff": "新增"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "前置仓>前置仓",
+        "phrase": "前置仓",
+        "targets": [
+          "前置仓"
+        ],
+        "match": "精确",
+        "source": "取值同义词",
+        "hits": 0,
+        "draft": "CR-0009",
+        "diff": "新增",
+        "conflict": "与“仓库”对象名称相近（V9 信息）",
+        "resolve": "优先理解为门店业态；问库存、出库时按仓库"
+      },
+      {
+        "key": "便利店>社区店",
+        "phrase": "便利店",
+        "targets": [
+          "社区店"
+        ],
+        "match": "精确",
+        "source": "业务知识",
+        "hits": 64,
+        "resolve": "停用取值“便利店”并入社区店"
+      }
+    ],
+    "draftNote": "发布前，这 6 家前置仓在问数里归入“未分类业态”，不会被静默丢掉；按业态汇总的合计仍等于全部门店数",
+    "metricDims": [
+      "业态"
+    ],
+    "usage": [
+      {
+        "type": "视图",
+        "name": "门店经营月报",
+        "note": "业态筛选"
+      },
+      {
+        "type": "视图",
+        "name": "门店业态分布",
+        "note": "1 个卡片"
+      },
+      {
+        "type": "评测题",
+        "name": "业态相关 2 题",
+        "note": "发布前自动回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "—",
+        "cr": "CR-0009",
+        "status": "草稿",
+        "by": "陈立军",
+        "at": "2026-10-21 10:26",
+        "change": "新增取值“前置仓”（FWH）"
+      },
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "门店数"
+  },
+  {
+    "id": "warehouse",
+    "name": "仓库",
+    "api": "dim_warehouse",
+    "kind": "维度",
+    "group": "供应链",
+    "status": "已发布",
+    "owner": "孙浩然",
+    "object": "warehouse",
+    "objectName": "仓库",
+    "attr": "出库单.出库仓 → 仓库",
+    "column": "WMS.T_WAREHOUSE.wh_code",
+    "valueSrc": "供应链 WMS 库 WMS.T_WAREHOUSE",
+    "sync": "每日 02:30 全量同步",
+    "desc": "实际出库的仓库。订单按出库单的出库仓归属；门店自提订单没有仓库。",
+    "levels": [
+      {
+        "name": "仓库",
+        "api": "warehouse",
+        "source": "仓库",
+        "count": 4
+      }
+    ],
+    "qa": {
+      "defaultLevel": "仓库",
+      "unspecified": "说“各仓”按仓库",
+      "nullAs": "门店自提",
+      "sort": "按指标值降序",
+      "note": "“补货仓”和“实际出库仓”是两条路径，问补货时需写明"
+    },
+    "values": [
+      {
+        "key": "仓库:WH-SH01",
+        "code": "WH-SH01",
+        "name": "上海嘉定常温仓",
+        "level": "仓库",
+        "status": "启用",
+        "synonyms": [
+          "嘉定仓"
+        ],
+        "count": 412880
+      },
+      {
+        "key": "仓库:WH-SH02",
+        "code": "WH-SH02",
+        "name": "上海青浦冷链仓",
+        "level": "仓库",
+        "status": "启用",
+        "synonyms": [
+          "冷链仓",
+          "青浦仓"
+        ],
+        "count": 168204
+      },
+      {
+        "key": "仓库:WH-HZ01",
+        "code": "WH-HZ01",
+        "name": "杭州萧山常温仓",
+        "level": "仓库",
+        "status": "启用",
+        "synonyms": [
+          "萧山仓"
+        ],
+        "count": 301557
+      },
+      {
+        "key": "仓库:WH-NJ01",
+        "code": "WH-NJ01",
+        "name": "南京江宁中心仓",
+        "level": "仓库",
+        "status": "启用",
+        "synonyms": [
+          "江宁仓"
+        ],
+        "count": 314585
+      }
+    ],
+    "mappings": [
+      {
+        "key": "仓>仓库（全部）",
+        "phrase": "仓",
+        "targets": [
+          "仓库（全部）"
+        ],
+        "match": "包含",
+        "source": "问数反馈",
+        "hits": 122,
+        "conflict": "“前置仓”草稿通过后也会命中",
+        "resolve": "“前置仓”精确命中业态，其余按仓库"
+      }
+    ],
+    "metricDims": [
+      "仓库"
+    ],
+    "metricNote": {
+      "ship_ontime": "按仓库拆分的默认路径"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "平均出库时长",
+        "note": "按实际出库仓拆分"
+      },
+      {
+        "type": "视图",
+        "name": "仓配日报",
+        "note": "3 个卡片"
+      },
+      {
+        "type": "规则",
+        "name": "R-012 可用库存低于安全线",
+        "note": "通知补货仓",
+        "hover": {
+          "kind": "rule",
+          "id": "R-012"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "出库单数"
+  },
+  {
+    "id": "order_status",
+    "name": "订单状态",
+    "api": "dict_order_status",
+    "kind": "码表",
+    "group": "交易",
+    "status": "已发布",
+    "owner": "王敏",
+    "object": "order",
+    "objectName": "订单",
+    "attr": "订单.状态",
+    "column": "ERP.T_SALE_ORDER.status",
+    "valueSrc": "ERP 订单状态码 + WMS 出库状态，统一到 MDM.T_DICT（ORDER_STATUS）",
+    "sync": "码表变更时实时同步",
+    "desc": "订单生命周期状态，与状态机 SM-ORD（订单生命周期 v4）一致。CR-0004 起 ERP“已发货”和 WMS“OUTBOUND”统一为“已出库”。",
+    "levels": [
+      {
+        "name": "状态",
+        "api": "status",
+        "source": "订单.状态",
+        "count": 6
+      }
+    ],
+    "qa": {
+      "defaultLevel": "状态",
+      "unspecified": "“订单数”默认不含已取消",
+      "nullAs": "--",
+      "sort": "按生命周期顺序",
+      "note": "“已发货”是“已出库”的同义词，不是独立状态"
+    },
+    "values": [
+      {
+        "key": "状态:WAIT_PAY",
+        "code": "WAIT_PAY",
+        "name": "待支付",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "待付款"
+        ],
+        "count": 3214,
+        "src": "ERP S0"
+      },
+      {
+        "key": "状态:WAIT_OUT",
+        "code": "WAIT_OUT",
+        "name": "待出库",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "待发货"
+        ],
+        "count": 8906,
+        "src": "ERP S1"
+      },
+      {
+        "key": "状态:PICKING",
+        "code": "PICKING",
+        "name": "拣货中",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "备货中"
+        ],
+        "count": 5127,
+        "src": "ERP S2 · WMS PICKING"
+      },
+      {
+        "key": "状态:OUTBOUND",
+        "code": "OUTBOUND",
+        "name": "已出库",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "已发货",
+          "已发出"
+        ],
+        "count": 498310,
+        "src": "ERP S3 · WMS OUTBOUND",
+        "since": "v2026.10.1"
+      },
+      {
+        "key": "状态:S3",
+        "code": "S3",
+        "name": "已发货",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 498310,
+        "src": "ERP S3",
+        "until": "v2026.10.1",
+        "note": "WMS OUTBOUND 未映射"
+      },
+      {
+        "key": "状态:SIGNED",
+        "code": "SIGNED",
+        "name": "已签收",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "已收货"
+        ],
+        "count": 712640,
+        "src": "ERP S4"
+      },
+      {
+        "key": "状态:CANCELLED",
+        "code": "CANCELLED",
+        "name": "已取消",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "取消单"
+        ],
+        "count": 58205,
+        "src": "ERP S9"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "未发货>待出库|拣货中",
+        "phrase": "未发货",
+        "targets": [
+          "待出库",
+          "拣货中"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 412
+      },
+      {
+        "key": "已完成>已签收",
+        "phrase": "已完成",
+        "targets": [
+          "已签收"
+        ],
+        "match": "精确",
+        "source": "问数反馈",
+        "hits": 286,
+        "conflict": "退款单也有“已完成”状态",
+        "resolve": "按问题主体判断；没有主体时按订单"
+      }
+    ],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "指标",
+        "name": "有效订单数",
+        "note": "状态 ≠ 已取消",
+        "hover": {
+          "kind": "metric",
+          "id": "order_cnt"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "note": "分子按变为“已出库”计",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "经订单行取订单状态过滤",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "SM-ORD 订单状态非法迁移",
+        "note": "状态机 v4 的状态集合",
+        "hover": {
+          "kind": "rule",
+          "id": "SM-ORD"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-015 出库超 48 小时未签收",
+        "note": "状态 = 已出库",
+        "hover": {
+          "kind": "rule",
+          "id": "R-015"
+        }
+      },
+      {
+        "type": "动作",
+        "name": "提交状态修正",
+        "note": "目标状态取自本码表",
+        "hover": {
+          "kind": "action",
+          "id": "correct_order_status"
+        }
+      },
+      {
+        "type": "评测题",
+        "name": "订单状态相关 4 题",
+        "note": "CR-0004 发布前回放，全部通过"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.10.1",
+        "cr": "CR-0004",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-10-09 22:03",
+        "change": "“已发货”统一为“已出库”；WMS OUTBOUND 映射到已出库；“已发货”改为同义词"
+      },
+      {
+        "ver": "v2026.03.2",
+        "status": "已替代",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "订单数"
+  },
+  {
+    "id": "refund_reason",
+    "name": "退款原因",
+    "api": "dict_refund_reason",
+    "kind": "码表",
+    "group": "交易",
+    "status": "已发布",
+    "owner": "刘婷",
+    "object": "refund",
+    "objectName": "退款单",
+    "attr": "退款单.退款原因",
+    "column": "ERP.T_REFUND.reason_code",
+    "valueSrc": "码表 MDM.T_DICT（dict_type = REFUND_REASON）",
+    "sync": "码表变更时实时同步",
+    "desc": "顾客或门店提交退款时选择的原因，分商品、履约、顾客三类责任。",
+    "levels": [
+      {
+        "name": "原因",
+        "api": "reason",
+        "source": "退款单.退款原因",
+        "count": 12,
+        "note": "启用 11 个"
+      }
+    ],
+    "qa": {
+      "defaultLevel": "原因",
+      "unspecified": "说“退款原因分布”按原因，前 10 项之外合并为“其他”",
+      "nullAs": "其他",
+      "sort": "按退款单数降序",
+      "note": "按退款单计数；按退款行计数需写明"
+    },
+    "values": [
+      {
+        "key": "原因:RR01",
+        "code": "RR01",
+        "name": "商品破损",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "破损",
+          "坏了"
+        ],
+        "count": 6382,
+        "note": "商品责任"
+      },
+      {
+        "key": "原因:RR02",
+        "code": "RR02",
+        "name": "质量问题",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "质量差"
+        ],
+        "count": 5127,
+        "note": "商品责任"
+      },
+      {
+        "key": "原因:RR03",
+        "code": "RR03",
+        "name": "少件漏发",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "漏发",
+          "少发"
+        ],
+        "count": 4410,
+        "note": "履约责任"
+      },
+      {
+        "key": "原因:RR04",
+        "code": "RR04",
+        "name": "发错商品",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "发错"
+        ],
+        "count": 2266,
+        "note": "履约责任"
+      },
+      {
+        "key": "原因:RR05",
+        "code": "RR05",
+        "name": "商品临期或过期",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "过期",
+          "临期"
+        ],
+        "count": 1953,
+        "note": "商品责任"
+      },
+      {
+        "key": "原因:RR06",
+        "code": "RR06",
+        "name": "配送超时",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "送太慢",
+          "超时"
+        ],
+        "count": 3871,
+        "note": "履约责任"
+      },
+      {
+        "key": "原因:RR07",
+        "code": "RR07",
+        "name": "缺货取消",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "缺货"
+        ],
+        "count": 2894,
+        "note": "履约责任"
+      },
+      {
+        "key": "原因:RR08",
+        "code": "RR08",
+        "name": "不想要了",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "买错了",
+          "七天无理由"
+        ],
+        "count": 7206,
+        "note": "顾客原因"
+      },
+      {
+        "key": "原因:RR09",
+        "code": "RR09",
+        "name": "价格变动",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [
+          "降价"
+        ],
+        "count": 1388,
+        "note": "顾客原因"
+      },
+      {
+        "key": "原因:RR10",
+        "code": "RR10",
+        "name": "地址填错",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [],
+        "count": 905,
+        "note": "顾客原因"
+      },
+      {
+        "key": "原因:RR11",
+        "code": "RR11",
+        "name": "七天无理由",
+        "level": "原因",
+        "status": "停用",
+        "synonyms": [],
+        "count": 0,
+        "note": "2025-11 合并到“不想要了”"
+      },
+      {
+        "key": "原因:RR99",
+        "code": "RR99",
+        "name": "其他",
+        "level": "原因",
+        "status": "启用",
+        "synonyms": [],
+        "count": 2512
+      }
+    ],
+    "mappings": [
+      {
+        "key": "买错了>不想要了",
+        "phrase": "买错了",
+        "targets": [
+          "不想要了"
+        ],
+        "match": "精确",
+        "source": "取值同义词",
+        "hits": 37,
+        "conflict": "与“发错商品”容易混淆",
+        "resolve": "“买错”归顾客原因，“发错”归履约责任"
+      },
+      {
+        "key": "门店原因>少件漏发|发错商品|配送超时|缺货取消",
+        "phrase": "门店原因",
+        "targets": [
+          "少件漏发",
+          "发错商品",
+          "配送超时",
+          "缺货取消"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 92
+      }
+    ],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "指标",
+        "name": "退款率",
+        "note": "可按原因拆分（CR-0010 审核中，改按退款完成时间）"
+      },
+      {
+        "type": "动作",
+        "name": "退款审核",
+        "note": "审核单展示退款原因",
+        "hover": {
+          "kind": "action",
+          "id": "approve_refund"
+        }
+      },
+      {
+        "type": "认证问答",
+        "name": "上周退款率最高的门店",
+        "note": "附原因分布"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "退款单数"
+  },
+  {
+    "id": "store_status",
+    "name": "门店状态",
+    "api": "dict_store_status",
+    "kind": "码表",
+    "group": "组织",
+    "status": "已发布",
+    "owner": "陈立军",
+    "object": "store",
+    "objectName": "门店",
+    "attr": "门店.状态",
+    "column": "ORG.T_STORE.status",
+    "valueSrc": "门店主数据（ERP 组织状态）",
+    "sync": "每日 02:00 随门店同步",
+    "desc": "门店经营状态，由“变更门店状态”动作写回组织主数据。",
+    "levels": [
+      {
+        "name": "状态",
+        "api": "status",
+        "source": "门店.状态",
+        "count": 4,
+        "note": "启用 3 个"
+      }
+    ],
+    "qa": {
+      "defaultLevel": "状态",
+      "unspecified": "统计门店数默认只算营业中",
+      "nullAs": "--",
+      "sort": "按状态编码",
+      "note": "已闭店门店的历史数据仍参与历史时间范围的统计"
+    },
+    "values": [
+      {
+        "key": "状态:OPEN",
+        "code": "OPEN",
+        "name": "营业中",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "在营",
+          "营业"
+        ],
+        "count": 471
+      },
+      {
+        "key": "状态:RENOV",
+        "code": "RENOV",
+        "name": "装修中",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "装修"
+        ],
+        "count": 9
+      },
+      {
+        "key": "状态:CLOSED",
+        "code": "CLOSED",
+        "name": "已闭店",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "闭店",
+          "关店"
+        ],
+        "count": 6
+      },
+      {
+        "key": "状态:PREP",
+        "code": "PREP",
+        "name": "筹备中",
+        "level": "状态",
+        "status": "停用",
+        "synonyms": [],
+        "count": 0,
+        "note": "2025 年起筹备门店不在主数据建档"
+      }
+    ],
+    "mappings": [
+      {
+        "key": "停业>装修中|已闭店",
+        "phrase": "停业",
+        "targets": [
+          "装修中",
+          "已闭店"
+        ],
+        "match": "多值",
+        "source": "业务知识",
+        "hits": 23,
+        "conflict": "“停业”可能是临时停业或闭店",
+        "resolve": "两个状态都算，并在回答里分开列出"
+      }
+    ],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "动作",
+        "name": "变更门店状态",
+        "note": "营业中 / 装修中 / 已闭店之间切换",
+        "hover": {
+          "kind": "action",
+          "id": "change_store_status"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-021 门店销售额环比下降",
+        "note": "只看营业中的门店",
+        "hover": {
+          "kind": "rule",
+          "id": "R-021"
+        }
+      },
+      {
+        "type": "视图",
+        "name": "门店经营月报",
+        "note": "状态筛选"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "门店数"
+  },
+  {
+    "id": "pay_method",
+    "name": "支付方式",
+    "api": "dict_pay_method",
+    "kind": "码表",
+    "group": "交易",
+    "status": "已发布",
+    "owner": "陈立军",
+    "object": "order",
+    "objectName": "订单",
+    "attr": "订单.支付方式",
+    "column": "ERP.T_SALE_ORDER.pay_type",
+    "valueSrc": "码表 MDM.T_DICT（dict_type = PAY_TYPE）",
+    "sync": "码表变更时实时同步",
+    "desc": "订单的主支付方式；组合支付按金额最大的一笔。",
+    "levels": [
+      {
+        "name": "支付方式",
+        "api": "pay_type",
+        "source": "订单.支付方式",
+        "count": 7
+      }
+    ],
+    "qa": {
+      "defaultLevel": "支付方式",
+      "unspecified": "按主支付方式",
+      "nullAs": "未知",
+      "sort": "按订单数降序",
+      "note": ""
+    },
+    "values": [
+      {
+        "key": "支付方式:WX",
+        "code": "WX",
+        "name": "微信支付",
+        "level": "支付方式",
+        "status": "启用",
+        "synonyms": [
+          "微信"
+        ],
+        "count": 628104
+      },
+      {
+        "key": "支付方式:ALI",
+        "code": "ALI",
+        "name": "支付宝",
+        "level": "支付方式",
+        "status": "启用",
+        "synonyms": [],
+        "count": 301446
+      },
+      {
+        "key": "支付方式:UNION",
+        "code": "UNION",
+        "name": "银联卡",
+        "level": "支付方式",
+        "status": "启用",
+        "synonyms": [
+          "刷卡",
+          "银行卡"
+        ],
+        "count": 96233
+      },
+      {
+        "key": "支付方式:CASH",
+        "code": "CASH",
+        "name": "现金",
+        "level": "支付方式",
+        "status": "启用",
+        "synonyms": [],
+        "count": 41290
+      },
+      {
+        "key": "支付方式:SVC",
+        "code": "SVC",
+        "name": "储值卡",
+        "level": "支付方式",
+        "status": "启用",
+        "synonyms": [
+          "会员卡支付"
+        ],
+        "count": 88315
+      },
+      {
+        "key": "支付方式:ECNY",
+        "code": "ECNY",
+        "name": "数字人民币",
+        "level": "支付方式",
+        "status": "启用",
+        "synonyms": [
+          "数币"
+        ],
+        "count": 6120
+      },
+      {
+        "key": "支付方式:PLAT",
+        "code": "PLAT",
+        "name": "平台代收",
+        "level": "支付方式",
+        "status": "启用",
+        "synonyms": [],
+        "count": 124894,
+        "note": "美团闪购、饿了么、京东到家"
+      }
+    ],
+    "mappings": [],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "视图",
+        "name": "门店经营月报",
+        "note": "支付方式占比卡片"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "订单数"
+  },
+  {
+    "id": "delivery_type",
+    "name": "配送方式",
+    "api": "dict_delivery_type",
+    "kind": "码表",
+    "group": "交易",
+    "status": "已发布",
+    "owner": "周晓峰",
+    "object": "order",
+    "objectName": "订单",
+    "attr": "订单.配送方式",
+    "column": "ERP.T_SALE_ORDER.delivery_type",
+    "valueSrc": "码表 MDM.T_DICT（dict_type = DELIVERY_TYPE）",
+    "sync": "码表变更时实时同步",
+    "desc": "线上订单的履约方式；门店POS 订单为“到店购买”。",
+    "levels": [
+      {
+        "name": "配送方式",
+        "api": "delivery_type",
+        "source": "订单.配送方式",
+        "count": 5
+      }
+    ],
+    "qa": {
+      "defaultLevel": "配送方式",
+      "unspecified": "按配送方式",
+      "nullAs": "到店购买",
+      "sort": "按订单数降序",
+      "note": ""
+    },
+    "values": [
+      {
+        "key": "配送方式:INSTORE",
+        "code": "INSTORE",
+        "name": "到店购买",
+        "level": "配送方式",
+        "status": "启用",
+        "synonyms": [],
+        "count": 702318
+      },
+      {
+        "key": "配送方式:PICKUP",
+        "code": "PICKUP",
+        "name": "到店自提",
+        "level": "配送方式",
+        "status": "启用",
+        "synonyms": [
+          "自提"
+        ],
+        "count": 58410
+      },
+      {
+        "key": "配送方式:STORE",
+        "code": "STORE",
+        "name": "门店配送",
+        "level": "配送方式",
+        "status": "启用",
+        "synonyms": [
+          "自配送"
+        ],
+        "count": 199869
+      },
+      {
+        "key": "配送方式:RIDER",
+        "code": "RIDER",
+        "name": "平台骑手",
+        "level": "配送方式",
+        "status": "启用",
+        "synonyms": [
+          "骑手配送"
+        ],
+        "count": 325805
+      },
+      {
+        "key": "配送方式:EXPRESS",
+        "code": "EXPRESS",
+        "name": "快递",
+        "level": "配送方式",
+        "status": "停用",
+        "synonyms": [],
+        "count": 0,
+        "note": "2025-05 停止"
+      }
+    ],
+    "mappings": [],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "视图",
+        "name": "履约时效看板",
+        "note": "配送方式筛选"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "周晓峰",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "订单数"
+  },
+  {
+    "id": "shipment_status",
+    "name": "出库单状态",
+    "api": "dict_shipment_status",
+    "kind": "码表",
+    "group": "供应链",
+    "status": "已发布",
+    "owner": "孙浩然",
+    "object": "shipment",
+    "objectName": "出库单",
+    "attr": "出库单.状态",
+    "column": "TMS.T_SHIPMENT.status",
+    "valueSrc": "WMS / TMS 运单状态，统一到 MDM.T_DICT（SHIP_STATUS）",
+    "sync": "码表变更时实时同步",
+    "desc": "出库单在仓内和运输中的状态。与订单状态不是同一套，“已签收”两边都有。",
+    "levels": [
+      {
+        "name": "状态",
+        "api": "status",
+        "source": "出库单.状态",
+        "count": 6
+      }
+    ],
+    "qa": {
+      "defaultLevel": "状态",
+      "unspecified": "按状态",
+      "nullAs": "--",
+      "sort": "按流程顺序",
+      "note": ""
+    },
+    "values": [
+      {
+        "key": "状态:WAIT_PICK",
+        "code": "WAIT_PICK",
+        "name": "待拣货",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 6230
+      },
+      {
+        "key": "状态:PICKING",
+        "code": "PICKING",
+        "name": "拣货中",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 4118
+      },
+      {
+        "key": "状态:OUT",
+        "code": "OUT",
+        "name": "已出库",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 18406
+      },
+      {
+        "key": "状态:TRANSIT",
+        "code": "TRANSIT",
+        "name": "运输中",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "在途"
+        ],
+        "count": 9972
+      },
+      {
+        "key": "状态:SIGNED",
+        "code": "SIGNED",
+        "name": "已签收",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 1151290
+      },
+      {
+        "key": "状态:REJECT",
+        "code": "REJECT",
+        "name": "已拒收",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "拒收"
+        ],
+        "count": 7210
+      }
+    ],
+    "mappings": [],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "指标",
+        "name": "平均出库时长",
+        "note": "状态 = 已出库 的时间点"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "出库单数"
+  },
+  {
+    "id": "product_status",
+    "name": "商品状态",
+    "api": "dict_product_status",
+    "kind": "码表",
+    "group": "商品",
+    "status": "已发布",
+    "owner": "王敏",
+    "object": "product",
+    "objectName": "商品",
+    "attr": "商品.状态",
+    "column": "MDM.T_SKU.status",
+    "valueSrc": "商品主数据 MDM.T_SKU",
+    "sync": "每日 01:30 增量同步",
+    "desc": "商品的经营状态。只有“在售”的商品参与缺货率、毛利率预警。",
+    "levels": [
+      {
+        "name": "状态",
+        "api": "status",
+        "source": "商品.状态",
+        "count": 4
+      }
+    ],
+    "qa": {
+      "defaultLevel": "状态",
+      "unspecified": "商品数默认只算在售",
+      "nullAs": "--",
+      "sort": "按状态编码",
+      "note": ""
+    },
+    "values": [
+      {
+        "key": "状态:ON",
+        "code": "ON",
+        "name": "在售",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "上架"
+        ],
+        "count": 41862
+      },
+      {
+        "key": "状态:PENDING",
+        "code": "PENDING",
+        "name": "待上架",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 1307
+      },
+      {
+        "key": "状态:OFF",
+        "code": "OFF",
+        "name": "停售",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [
+          "下架"
+        ],
+        "count": 3911
+      },
+      {
+        "key": "状态:ELIM",
+        "code": "ELIM",
+        "name": "淘汰",
+        "level": "状态",
+        "status": "启用",
+        "synonyms": [],
+        "count": 1133
+      }
+    ],
+    "mappings": [],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "规则",
+        "name": "R-007 商品毛利率越线",
+        "note": "只看在售商品",
+        "hover": {
+          "kind": "rule",
+          "id": "R-007"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-012 可用库存低于安全线",
+        "note": "只看在售商品",
+        "hover": {
+          "kind": "rule",
+          "id": "R-012"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2",
+    "countLabel": "SKU 数"
+  },
+  {
+    "id": "alert_level",
+    "name": "告警级别",
+    "api": "dict_alert_level",
+    "kind": "码表",
+    "group": "自动化",
+    "status": "已发布",
+    "owner": "孙浩然",
+    "object": "order",
+    "objectName": "订单",
+    "attr": "告警.级别",
+    "column": "OPS.T_ALERT.level",
+    "valueSrc": "平台内置码表",
+    "sync": "随本体发布",
+    "desc": "规则命中后生成的告警级别，决定通知方式和处理时限。",
+    "levels": [
+      {
+        "name": "级别",
+        "api": "level",
+        "source": "告警.级别",
+        "count": 3
+      }
+    ],
+    "qa": {
+      "defaultLevel": "级别",
+      "unspecified": "按级别",
+      "nullAs": "--",
+      "sort": "高 → 低",
+      "note": ""
+    },
+    "values": [
+      {
+        "key": "级别:HIGH",
+        "code": "HIGH",
+        "name": "高",
+        "level": "级别",
+        "status": "启用",
+        "synonyms": [
+          "严重",
+          "紧急"
+        ],
+        "note": "电话 + 站内通知，2 小时内处理"
+      },
+      {
+        "key": "级别:MID",
+        "code": "MID",
+        "name": "中",
+        "level": "级别",
+        "status": "启用",
+        "synonyms": [
+          "一般"
+        ],
+        "note": "站内通知，当天处理"
+      },
+      {
+        "key": "级别:LOW",
+        "code": "LOW",
+        "name": "低",
+        "level": "级别",
+        "status": "启用",
+        "synonyms": [
+          "提示"
+        ],
+        "note": "只记录"
+      }
+    ],
+    "mappings": [],
+    "metricDims": [],
+    "usage": [
+      {
+        "type": "规则",
+        "name": "SM-ORD 订单状态非法迁移",
+        "note": "固定为高",
+        "hover": {
+          "kind": "rule",
+          "id": "SM-ORD"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-015 出库超 48 小时未签收",
+        "note": "固定为中",
+        "hover": {
+          "kind": "rule",
+          "id": "R-015"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ],
+    "since": "v2026.03.2"
+  }
+]

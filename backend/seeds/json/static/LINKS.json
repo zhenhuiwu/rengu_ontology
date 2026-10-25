@@ -1,0 +1,1434 @@
+[
+  {
+    "id": "order_has_lines",
+    "name": "包含订单行",
+    "from": "order",
+    "to": "order_line",
+    "card": "1 : N",
+    "key": "order_id = order_line.order_id",
+    "fromProp": "order_id",
+    "toProp": "order_id",
+    "join": "T_SALE_ORDER.order_id = T_SALE_ORDER_LINE.order_id",
+    "reverse": "所属订单",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "陈立军",
+    "desc": "一张订单包含一到多行商品明细；金额类指标在订单行上汇总。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "基础对象为订单行，经本关系取订单状态过滤",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "note": "经订单行汇总成本",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        }
+      },
+      {
+        "type": "认证问答",
+        "name": "上月各大区销售额",
+        "note": "订单行 → 订单 → 门店 → 大区"
+      },
+      {
+        "type": "视图",
+        "name": "门店经营月报",
+        "note": "2 个卡片"
+      },
+      {
+        "type": "评测题",
+        "name": "销售额相关 9 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "order_belongs_to_store",
+    "name": "下单门店",
+    "from": "order",
+    "to": "store",
+    "card": "N : 1",
+    "key": "store_id = store.store_id",
+    "fromProp": "store_id",
+    "toProp": "store_id",
+    "join": "T_SALE_ORDER.store_id = T_STORE.store_id",
+    "reverse": "门店订单",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "陈立军",
+    "desc": "顾客下单所在的门店；线上订单为下单时选择的门店。问“各门店订单数、销售额”默认按本关系。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "有效订单数",
+        "note": "按门店、大区拆分时的默认路径",
+        "hover": {
+          "kind": "metric",
+          "id": "order_cnt"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "组织维度默认路径",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "客单价（不含税）",
+        "note": "按门店拆分",
+        "hover": {
+          "kind": "metric",
+          "id": "atv"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-021 门店销售额环比下降",
+        "note": "按下单门店汇总",
+        "hover": {
+          "kind": "rule",
+          "id": "R-021"
+        }
+      },
+      {
+        "type": "认证问答",
+        "name": "上个月各大区的有效订单数是多少？",
+        "note": "已认证"
+      },
+      {
+        "type": "视图",
+        "name": "华东大区经营日报",
+        "note": "4 个卡片"
+      },
+      {
+        "type": "评测题",
+        "name": "门店相关 12 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "order_fulfilled_by_store",
+    "name": "履约门店",
+    "from": "order",
+    "to": "store",
+    "card": "N : 1",
+    "key": "fulfill_store_id = store.store_id",
+    "fromProp": "fulfill_store_id",
+    "toProp": "store_id",
+    "join": "T_SALE_ORDER.fulfill_store_id = T_STORE.store_id",
+    "reverse": "履约订单",
+    "nullable": true,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "周晓峰",
+    "desc": "实际出库发货的门店；到店自提时与下单门店相同。问数中需用户指明“履约门店”或“发货门店”。",
+    "quality": {
+      "hit": 98.73,
+      "orphans": 16284,
+      "nulls": 402115,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "孤儿记录集中在 6 家前置仓：门店主数据还没有“前置仓”业态（见 CR-0009 草稿）",
+      "orphanSamples": [
+        {
+          "key": "QZ0001",
+          "count": 4912,
+          "reason": "前置仓·上海闵行莘庄，门店主数据未建档"
+        },
+        {
+          "key": "QZ0002",
+          "count": 3876,
+          "reason": "前置仓·上海浦东金桥，门店主数据未建档"
+        },
+        {
+          "key": "QZ0004",
+          "count": 2731,
+          "reason": "前置仓·杭州西湖文三，门店主数据未建档"
+        },
+        {
+          "key": "（其余 3 个编码）",
+          "count": 4765,
+          "reason": "同上"
+        }
+      ]
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "note": "按履约门店拆分（显式指定路径）",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        }
+      },
+      {
+        "type": "认证问答",
+        "name": "9 月各履约门店的出库及时率",
+        "note": "已认证，问题里写明“履约门店”"
+      },
+      {
+        "type": "视图",
+        "name": "履约时效看板",
+        "note": "1 个卡片"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "周晓峰",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布；问数路径设为需用户指明"
+      }
+    ]
+  },
+  {
+    "id": "order_placed_by_member",
+    "name": "下单会员",
+    "from": "order",
+    "to": "member",
+    "card": "N : 1",
+    "key": "member_id = member.member_id",
+    "fromProp": "member_id",
+    "toProp": "member_id",
+    "join": "T_SALE_ORDER.member_id = T_MEMBER.member_id",
+    "reverse": "会员订单",
+    "nullable": true,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "刘婷",
+    "desc": "下单的会员；散客订单为空，统计时归入“散客”。",
+    "quality": {
+      "hit": 99.82,
+      "orphans": 2315,
+      "nulls": 318407,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "孤儿记录为已注销会员的历史订单，会员中心不保留注销会员",
+      "orphanSamples": [
+        {
+          "key": "（注销会员 1,906 个）",
+          "count": 2315,
+          "reason": "会员注销后主数据删除"
+        }
+      ]
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "会员维度",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "复购率",
+        "note": "按会员统计 90 天内订单数"
+      },
+      {
+        "type": "指标",
+        "name": "复购客户销售额（不含税）",
+        "note": "会员过滤"
+      },
+      {
+        "type": "认证问答",
+        "name": "上月复购客户销售额",
+        "note": "已认证"
+      },
+      {
+        "type": "评测题",
+        "name": "复购相关 7 题",
+        "note": "每次发布回放"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "order_ships_from_warehouse",
+    "name": "发货仓",
+    "from": "order",
+    "to": "warehouse",
+    "card": "N : 1",
+    "key": "warehouse_id = warehouse.wh_id",
+    "fromProp": "warehouse_id",
+    "toProp": "wh_id",
+    "join": "T_SALE_ORDER.wh_code = T_WAREHOUSE.wh_code",
+    "reverse": "仓库订单",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "孙浩然",
+    "desc": "下单时分配的发货仓。问“各仓订单数”默认按本关系；按实际出库仓统计需指明。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "note": "按仓库拆分的默认路径",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "平均出库时长",
+        "note": "按仓库拆分"
+      },
+      {
+        "type": "视图",
+        "name": "仓配日报",
+        "note": "3 个卡片"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "order_has_refunds",
+    "name": "退款单",
+    "from": "order",
+    "to": "refund",
+    "card": "1 : N",
+    "key": "order_id = refund.order_id",
+    "fromProp": "order_id",
+    "toProp": "order_id",
+    "join": "T_SALE_ORDER.order_id = T_REFUND.order_id",
+    "reverse": "原订单",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "刘婷",
+    "desc": "一张订单可以发生多次退款。",
+    "quality": {
+      "hit": 99.97,
+      "orphans": 11,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "11 张退款单的原订单在 2025 年归档库，未同步",
+      "orphanSamples": [
+        {
+          "key": "（2025 年归档订单）",
+          "count": 11,
+          "reason": "原订单在归档库"
+        }
+      ]
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "退款率",
+        "note": "分子按退款单计数（CR-0010 审核中，改按退款完成时间）"
+      },
+      {
+        "type": "认证问答",
+        "name": "上周退款率最高的门店",
+        "note": "已认证"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "order_has_shipments",
+    "name": "出库单",
+    "from": "order",
+    "to": "shipment",
+    "card": "1 : N",
+    "key": "order_id = shipment.order_id",
+    "fromProp": "order_id",
+    "toProp": "order_id",
+    "join": "T_SALE_ORDER.order_id = T_SHIPMENT.order_id",
+    "reverse": "来源订单",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "孙浩然",
+    "desc": "一张订单拆单时有多张出库单。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "出库及时率",
+        "note": "取首张出库单的出库时间",
+        "hover": {
+          "kind": "metric",
+          "id": "ship_ontime"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-015 出库超 48 小时未签收",
+        "note": "经出库单取运单状态",
+        "hover": {
+          "kind": "rule",
+          "id": "R-015"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "order_in_promotions",
+    "name": "参与活动",
+    "from": "order",
+    "to": "promotion",
+    "card": "N : M",
+    "key": "经 order_promotion 中间表",
+    "fromProp": "order_id",
+    "toProp": "promo_id",
+    "via": "order_promotion",
+    "join": "T_SALE_ORDER.order_id = T_ORDER_PROMO.order_id AND T_ORDER_PROMO.promo_id = T_ACTIVITY.promo_id",
+    "reverse": "活动订单",
+    "nullable": true,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "刘婷",
+    "desc": "一单可参加多个活动，金额不可加；按活动拆分销售额会重复计算，请用“活动让利额”。",
+    "quality": {
+      "hit": 99.41,
+      "orphans": 1208,
+      "nulls": 903518,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "1,208 条中间表记录指向已删除的草稿活动"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "活动让利额",
+        "note": "按活动拆分"
+      },
+      {
+        "type": "认证问答",
+        "name": "国庆活动带来多少订单",
+        "note": "已认证"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "order_line_product",
+    "name": "订单行商品",
+    "from": "order_line",
+    "to": "product",
+    "card": "N : 1",
+    "key": "sku = product.sku",
+    "fromProp": "sku",
+    "toProp": "sku",
+    "join": "T_SALE_ORDER_LINE.sku_code = T_SKU.sku_code",
+    "reverse": "销售明细",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "王敏",
+    "desc": "订单行售出的商品。",
+    "quality": {
+      "hit": 99.996,
+      "orphans": 207,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "207 行为临时编码（门店手工录入的散称商品）"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "商品维度",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "note": "商品、品类维度",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-007 商品毛利率越线",
+        "note": "按商品汇总",
+        "hover": {
+          "kind": "rule",
+          "id": "R-007"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "refund_has_lines",
+    "name": "包含退款行",
+    "from": "refund",
+    "to": "refund_line",
+    "card": "1 : N",
+    "key": "refund_id = refund_line.refund_id",
+    "fromProp": "refund_id",
+    "toProp": "refund_id",
+    "join": "T_REFUND.refund_id = T_REFUND_LINE.refund_id",
+    "reverse": "所属退款单",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "刘婷",
+    "desc": "一张退款单包含一到多行退款明细。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "扣减退款行不含税金额",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "refund_line_of_order_line",
+    "name": "原订单行",
+    "from": "refund_line",
+    "to": "order_line",
+    "card": "N : 1",
+    "key": "order_line_id = order_line.line_id",
+    "fromProp": "order_line_id",
+    "toProp": "line_id",
+    "join": "T_REFUND_LINE.src_line_id = T_SALE_ORDER_LINE.line_id",
+    "reverse": "退款明细",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "刘婷",
+    "desc": "退款行对应的原订单行，用于按商品扣减销售额。",
+    "quality": {
+      "hit": 99.95,
+      "orphans": 26,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "26 行的原订单行在归档库"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "v3 起按退款行不含税金额扣减（CR-0007）",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "note": "退货冲减成本",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "member_has_level",
+    "name": "会员等级",
+    "from": "member",
+    "to": "member_level",
+    "card": "N : 1",
+    "key": "level_code = member_level.level_code",
+    "fromProp": "level_code",
+    "toProp": "level_code",
+    "join": "T_MEMBER.level_code = T_MEMBER_LEVEL.level_code",
+    "reverse": "等级会员",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "吴佳",
+    "desc": "会员当前所在等级。CR-0001 新增“黑金”已驳回，等级仍为 5 个。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "会员等级维度",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "新增会员数",
+        "note": "按等级拆分"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "吴佳",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "member_registered_at_store",
+    "name": "注册门店",
+    "from": "member",
+    "to": "store",
+    "card": "N : 1",
+    "key": "reg_store_id = store.store_id",
+    "fromProp": "reg_store_id",
+    "toProp": "store_id",
+    "join": "T_MEMBER.reg_store_id = T_STORE.store_id",
+    "reverse": "注册会员",
+    "nullable": true,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "吴佳",
+    "desc": "会员开卡注册的门店；线上注册为空。",
+    "quality": {
+      "hit": 99.63,
+      "orphans": 2964,
+      "nulls": 211840,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "2,964 个会员的注册门店已闭店"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "新增会员数",
+        "note": "按门店拆分的默认路径"
+      },
+      {
+        "type": "认证问答",
+        "name": "各门店本月新增会员数",
+        "note": "已认证"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "吴佳",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "member_holds_cards",
+    "name": "持有",
+    "from": "member",
+    "to": "stored_card",
+    "card": "1 : N",
+    "key": "member_id = stored_card.member_id",
+    "fromProp": "member_id",
+    "toProp": "member_id",
+    "join": "T_MEMBER.member_id = T_SVC_CARD.member_id",
+    "reverse": "持卡会员",
+    "nullable": true,
+    "status": "草稿",
+    "cr": "CR-0012",
+    "owner": "王敏",
+    "desc": "会员名下的储值卡，一个会员可持有多张。储值余额改由储值卡汇总。",
+    "quality": {
+      "hit": 99.88,
+      "orphans": 412,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 15:02",
+      "note": "测试环境抽检：412 张卡的会员已注销（迁移方式待补，见 CR-0012 V15 警告）"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "储值卡余额",
+        "note": "新增 v1（同一变更单）"
+      },
+      {
+        "type": "指标",
+        "name": "会员储值余额",
+        "note": "改为经本关系汇总"
+      }
+    ],
+    "history": [
+      {
+        "ver": "—",
+        "cr": "CR-0012",
+        "status": "草稿",
+        "by": "王敏",
+        "at": "2026-10-25 15:02",
+        "change": "新增关系：会员 → 储值卡（1 : N）"
+      }
+    ]
+  },
+  {
+    "id": "store_in_region",
+    "name": "所属大区",
+    "from": "store",
+    "to": "region",
+    "card": "N : 1",
+    "key": "region_code = region.region_code",
+    "fromProp": "region_code",
+    "toProp": "region_code",
+    "join": "T_STORE.region_code = T_REGION.region_code",
+    "reverse": "大区门店",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.10.2",
+    "cr": "CR-0005",
+    "owner": "陈立军",
+    "desc": "门店按组织调整后的考核大区直接归属，不经过省份。问“各大区”默认按本关系。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "486 家门店各属于一个大区（V10 通过）"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "大区维度",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "有效订单数",
+        "note": "大区维度",
+        "hover": {
+          "kind": "metric",
+          "id": "order_cnt"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-021 门店销售额环比下降",
+        "note": "按大区汇总告警",
+        "hover": {
+          "kind": "rule",
+          "id": "R-021"
+        }
+      },
+      {
+        "type": "视图",
+        "name": "华东大区销售周报",
+        "note": "随 CR-0005 新增"
+      },
+      {
+        "type": "认证问答",
+        "name": "上月各大区销售额",
+        "note": "已认证"
+      },
+      {
+        "type": "评测题",
+        "name": "大区相关 6 题",
+        "note": "v2026.10.2 发布前回放全部通过"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.10.2",
+        "cr": "CR-0005",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-17 20:45",
+        "change": "新增关系：门店 → 大区（N : 1），问数默认路径"
+      }
+    ]
+  },
+  {
+    "id": "store_in_province",
+    "name": "所在省份",
+    "from": "store",
+    "to": "province",
+    "card": "N : 1",
+    "key": "province_code = province.province_code",
+    "fromProp": "province_code",
+    "toProp": "province_code",
+    "join": "T_STORE.province_code = T_PROVINCE.province_code",
+    "reverse": "省内门店",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "陈立军",
+    "desc": "门店所在行政省份。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "省份维度",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "视图",
+        "name": "门店经营月报",
+        "note": "省份筛选"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "province_in_region",
+    "name": "省份所属大区",
+    "from": "province",
+    "to": "region",
+    "card": "N : 1",
+    "key": "region_code = region.region_code",
+    "fromProp": "region_code",
+    "toProp": "region_code",
+    "join": "T_PROVINCE.region_code = T_REGION.region_code",
+    "reverse": "下辖省份",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "陈立军",
+    "desc": "省份的行政大区归属。组织调整后个别门店的考核大区与所在省份不同，按省份归属统计需指明。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "认证问答",
+        "name": "按省份归属统计各大区门店数",
+        "note": "已认证，问题里写明“按省份”"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.10.2",
+        "cr": "CR-0005",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-17 20:45",
+        "change": "关系定义不变；门店 → 大区 改走“所属大区”，本路径改为需用户指明"
+      },
+      {
+        "ver": "v2026.03.2",
+        "status": "已替代",
+        "by": "陈立军",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "employee_works_at_store",
+    "name": "所属门店",
+    "from": "employee",
+    "to": "store",
+    "card": "N : 1",
+    "key": "store_id = store.store_id",
+    "fromProp": "store_id",
+    "toProp": "store_id",
+    "join": "T_EMPLOYEE.store_id = T_STORE.store_id",
+    "reverse": "门店员工",
+    "nullable": true,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "王敏",
+    "desc": "员工任职的门店；总部和仓库员工为空。员工为敏感对象，只有人事和门店运营可见。",
+    "quality": {
+      "hit": 99.71,
+      "orphans": 21,
+      "nulls": 1430,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "21 名员工的门店已闭店，人事未调岗"
+    },
+    "usage": [
+      {
+        "type": "视图",
+        "name": "门店人效看板",
+        "note": "仅人事、门店运营可见"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "store_manager",
+    "name": "店长",
+    "from": "store",
+    "to": "employee",
+    "card": "N : 1",
+    "key": "manager_emp_no = employee.emp_no",
+    "fromProp": "manager_emp_no",
+    "toProp": "emp_no",
+    "join": "T_STORE_MGR.manager_emp_no = T_EMPLOYEE.emp_no",
+    "reverse": "管理门店",
+    "nullable": true,
+    "status": "已驳回",
+    "cr": "CR-0006",
+    "owner": "孙浩然",
+    "desc": "门店的店长。CR-0006 已驳回：员工是敏感对象，需先在权限里定好店长信息的可见范围再提。",
+    "usage": [],
+    "history": [
+      {
+        "ver": "—",
+        "cr": "CR-0006",
+        "status": "已驳回",
+        "by": "孙浩然",
+        "at": "2026-10-22 14:48",
+        "change": "新增关系：门店 → 员工（店长）；王敏驳回：请先定好店长信息的可见范围"
+      }
+    ]
+  },
+  {
+    "id": "store_replenished_from",
+    "name": "补货仓",
+    "from": "store",
+    "to": "warehouse",
+    "card": "N : 1",
+    "key": "replenish_wh_id = warehouse.wh_id",
+    "fromProp": "replenish_wh_id",
+    "toProp": "wh_id",
+    "join": "T_STORE.replenish_wh_code = T_WAREHOUSE.wh_code",
+    "reverse": "配送门店",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "孙浩然",
+    "desc": "给门店补货的配送仓。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "缺货率",
+        "note": "按补货仓拆分"
+      },
+      {
+        "type": "规则",
+        "name": "R-012 可用库存低于安全线",
+        "note": "通知补货仓",
+        "hover": {
+          "kind": "rule",
+          "id": "R-012"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "product_in_category",
+    "name": "所属品类",
+    "from": "product",
+    "to": "category",
+    "card": "N : 1",
+    "key": "category_id = category.category_id",
+    "fromProp": "category_id",
+    "toProp": "category_id",
+    "join": "T_SKU.category_code = T_CATEGORY.category_code",
+    "reverse": "品类商品",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "王敏",
+    "desc": "商品挂在最末级品类（小类）上。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "销售额（不含税）",
+        "note": "商品维度：大类 › 中类 › 小类",
+        "hover": {
+          "kind": "metric",
+          "id": "gmv"
+        }
+      },
+      {
+        "type": "指标",
+        "name": "毛利率",
+        "note": "品类维度",
+        "hover": {
+          "kind": "metric",
+          "id": "gross_margin"
+        }
+      },
+      {
+        "type": "规则",
+        "name": "R-007 商品毛利率越线",
+        "note": "按品类阈值",
+        "hover": {
+          "kind": "rule",
+          "id": "R-007"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "category_parent",
+    "name": "上级品类",
+    "from": "category",
+    "to": "category",
+    "card": "N : 1",
+    "key": "parent_id = category.category_id",
+    "fromProp": "parent_id",
+    "toProp": "category_id",
+    "join": "T_CATEGORY.parent_code = T_CATEGORY.category_code",
+    "reverse": "下级品类",
+    "nullable": true,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "王敏",
+    "desc": "品类三级层级（大类 › 中类 › 小类）；大类的上级为空。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 24,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "24 个大类无上级，符合预期"
+    },
+    "usage": [
+      {
+        "type": "视图",
+        "name": "品类经营分析",
+        "note": "层级下钻"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "product_main_supplier",
+    "name": "主供应商",
+    "from": "product",
+    "to": "supplier",
+    "card": "N : 1",
+    "key": "main_supplier_id = supplier.supplier_id",
+    "fromProp": "main_supplier_id",
+    "toProp": "supplier_id",
+    "join": "T_SKU.main_vendor_code = T_SUPPLIER.supplier_code",
+    "reverse": "供货商品",
+    "nullable": true,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "孙浩然",
+    "desc": "商品的主供应商。销售额不允许按供应商拆分（一个订单行对应多个供应商批次），请用“采购金额”。",
+    "quality": {
+      "hit": 97.86,
+      "orphans": 1031,
+      "nulls": 3620,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00",
+      "note": "1,031 个商品的主供应商已停用，采购未更新"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "采购金额",
+        "note": "按供应商拆分"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "promotion_products",
+    "name": "活动商品",
+    "from": "promotion",
+    "to": "product",
+    "card": "N : M",
+    "key": "经 promotion_sku 中间表",
+    "fromProp": "promo_id",
+    "toProp": "sku",
+    "via": "promotion_sku",
+    "join": "T_ACTIVITY.promo_id = T_PROMO_SKU.promo_id AND T_PROMO_SKU.sku_code = T_SKU.sku_code",
+    "reverse": "参与活动",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "刘婷",
+    "desc": "活动适用的商品范围。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "活动让利额",
+        "note": "按商品拆分"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "inventory_of_product",
+    "name": "库存商品",
+    "from": "inventory",
+    "to": "product",
+    "card": "N : 1",
+    "key": "sku = product.sku",
+    "fromProp": "sku",
+    "toProp": "sku",
+    "join": "T_STOCK_SNAPSHOT.sku_code = T_SKU.sku_code",
+    "reverse": "库存快照",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "孙浩然",
+    "desc": "库存快照对应的商品。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "缺货率",
+        "note": "按商品拆分"
+      },
+      {
+        "type": "规则",
+        "name": "R-012 可用库存低于安全线",
+        "note": "按商品判断",
+        "hover": {
+          "kind": "rule",
+          "id": "R-012"
+        }
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "inventory_in_warehouse",
+    "name": "所在仓库",
+    "from": "inventory",
+    "to": "warehouse",
+    "card": "N : 1",
+    "key": "warehouse_id = warehouse.wh_id",
+    "fromProp": "warehouse_id",
+    "toProp": "wh_id",
+    "join": "T_STOCK_SNAPSHOT.wh_code = T_WAREHOUSE.wh_code",
+    "reverse": "仓库库存",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "孙浩然",
+    "desc": "库存快照所在的仓库。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "缺货率",
+        "note": "按仓库拆分"
+      },
+      {
+        "type": "视图",
+        "name": "仓配日报",
+        "note": "库存卡片"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "id": "shipment_from_warehouse",
+    "name": "出库仓",
+    "from": "shipment",
+    "to": "warehouse",
+    "card": "N : 1",
+    "key": "warehouse_id = warehouse.wh_id",
+    "fromProp": "warehouse_id",
+    "toProp": "wh_id",
+    "join": "T_SHIPMENT.out_wh_code = T_WAREHOUSE.wh_code",
+    "reverse": "仓库出库单",
+    "nullable": false,
+    "status": "已发布",
+    "since": "v2026.03.2",
+    "owner": "孙浩然",
+    "desc": "出库单实际出库的仓库；调拨时与订单的发货仓不同。",
+    "quality": {
+      "hit": 100,
+      "orphans": 0,
+      "nulls": 0,
+      "dup": 0,
+      "checkedAt": "2026-10-25 06:00"
+    },
+    "usage": [
+      {
+        "type": "指标",
+        "name": "平均出库时长",
+        "note": "按实际出库仓拆分（显式指定路径）"
+      },
+      {
+        "type": "认证问答",
+        "name": "各仓实际出库单量",
+        "note": "已认证，问题里写明“实际出库”"
+      }
+    ],
+    "history": [
+      {
+        "ver": "v2026.03.2",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-03-18 10:06",
+        "change": "首次发布"
+      }
+    ]
+  }
+]

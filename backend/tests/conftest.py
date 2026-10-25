@@ -83,6 +83,20 @@ async def client(session) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_sections():
+    """快照 section 注册表按测试隔离：业务模块（如静态）在包导入时登记真实 builder，
+    骨架的 versioning 测试按「空注册表 + 测试替身」写；每个测试先清空，结束后恢复。
+    需要真实 builder 的测试自己请求对应模块的 fixture（如 static_sections）。"""
+    from app.modules.versioning import sections as reg
+
+    saved = dict(reg._registry)
+    reg._registry.clear()
+    yield
+    reg._registry.clear()
+    reg._registry.update(saved)
+
+
 class FakeObjectTypesSection:
     """测试替身：模拟静态登记的 objectTypes section（真实实现归静态模块）。"""
 

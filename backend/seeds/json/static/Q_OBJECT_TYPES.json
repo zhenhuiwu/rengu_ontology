@@ -1,0 +1,200 @@
+[
+  {
+    "key": "order",
+    "name": "订单",
+    "api": "SalesOrder",
+    "group": "交易",
+    "source": "POS 交易库（华东）",
+    "count": 1286402,
+    "owner": "陈立军",
+    "pk": "order_id",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "order_line",
+    "name": "订单行",
+    "api": "SalesOrderLine",
+    "group": "交易",
+    "source": "POS 交易库（华东）",
+    "count": 4917355,
+    "owner": "陈立军",
+    "pk": "line_id",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "refund",
+    "name": "退款单",
+    "api": "Refund",
+    "group": "交易",
+    "source": "POS 交易库（华东）",
+    "count": 38914,
+    "owner": "陈立军",
+    "pk": "refund_id",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "refund_line",
+    "name": "退款行",
+    "api": "RefundLine",
+    "group": "交易",
+    "source": "POS 交易库（华东）",
+    "count": 52307,
+    "owner": "陈立军",
+    "pk": "line_id",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "member",
+    "name": "会员",
+    "api": "Member",
+    "group": "客户",
+    "source": "会员中心",
+    "count": 863027,
+    "owner": "刘婷",
+    "pk": "member_id",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "member_level",
+    "name": "会员等级",
+    "api": "MemberLevel",
+    "group": "客户",
+    "source": "会员中心",
+    "count": 5,
+    "owner": "刘婷",
+    "pk": "level_code",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "store",
+    "name": "门店",
+    "api": "Store",
+    "group": "组织",
+    "source": "门店主数据",
+    "count": 486,
+    "owner": "陈立军",
+    "pk": "store_id",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "region",
+    "name": "大区",
+    "api": "Region",
+    "group": "组织",
+    "source": "门店主数据",
+    "count": 6,
+    "owner": "陈立军",
+    "pk": "region_code",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "province",
+    "name": "省份",
+    "api": "Province",
+    "group": "组织",
+    "source": "门店主数据",
+    "count": 31,
+    "owner": "陈立军",
+    "pk": "province_code",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "product",
+    "name": "商品",
+    "api": "Product",
+    "group": "商品",
+    "source": "商品主数据",
+    "count": 48213,
+    "owner": "王敏",
+    "pk": "sku_code",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "category",
+    "name": "品类",
+    "api": "Category",
+    "group": "商品",
+    "source": "商品主数据",
+    "count": 1204,
+    "owner": "王敏",
+    "pk": "category_code",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "promotion",
+    "name": "促销活动",
+    "api": "Promotion",
+    "group": "商品",
+    "source": "促销引擎",
+    "count": 2671,
+    "owner": "刘婷",
+    "pk": "promo_id",
+    "cutoff": "2026-10-24 20:00"
+  },
+  {
+    "key": "warehouse",
+    "name": "仓库",
+    "api": "Warehouse",
+    "group": "供应链",
+    "source": "供应链 WMS 库",
+    "count": 4,
+    "owner": "孙浩然",
+    "pk": "wh_code",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "inventory",
+    "name": "库存快照",
+    "api": "InventorySnapshot",
+    "group": "供应链",
+    "source": "供应链 WMS 库",
+    "count": 9412880,
+    "owner": "孙浩然",
+    "pk": "wh_code + sku_code",
+    "cutoff": "2026-10-24 17:30"
+  },
+  {
+    "key": "supplier",
+    "name": "供应商",
+    "api": "Supplier",
+    "group": "供应链",
+    "source": "用友 NC 采购",
+    "count": 1148,
+    "owner": "孙浩然",
+    "pk": "supplier_code",
+    "cutoff": "2026-10-24 22:40"
+  },
+  {
+    "key": "purchase",
+    "name": "采购单",
+    "api": "PurchaseOrder",
+    "group": "供应链",
+    "source": "用友 NC 采购",
+    "count": 76530,
+    "owner": "孙浩然",
+    "pk": "po_no",
+    "cutoff": "2026-10-24 14:28"
+  },
+  {
+    "key": "shipment",
+    "name": "出库单",
+    "api": "Shipment",
+    "group": "供应链",
+    "source": "物流运单",
+    "count": 1197226,
+    "owner": "孙浩然",
+    "pk": "shipment_no",
+    "cutoff": "2026-10-24 23:00"
+  },
+  {
+    "key": "employee",
+    "name": "员工",
+    "api": "Employee",
+    "group": "组织",
+    "source": "HR 人事库",
+    "count": 7382,
+    "owner": "王敏",
+    "pk": "emp_no",
+    "cutoff": "2026-10-24 03:30"
+  }
+]

@@ -1,0 +1,156 @@
+[
+  {
+    "id": "gmv",
+    "name": "销售额（不含税）",
+    "api": "sales_amount_net",
+    "group": "销售",
+    "unit": "元",
+    "version": "v3",
+    "status": "已发布",
+    "owner": "陈立军"
+  },
+  {
+    "id": "gmv_tax",
+    "name": "销售额（含税）",
+    "api": "sales_amount_gross",
+    "group": "销售",
+    "unit": "元",
+    "version": "v2",
+    "status": "已发布",
+    "owner": "陈立军"
+  },
+  {
+    "id": "repeat_sales",
+    "name": "复购客户销售额（不含税）",
+    "api": "repeat_customer_sales_net",
+    "group": "销售",
+    "unit": "元",
+    "version": "v3",
+    "status": "已发布",
+    "owner": "刘婷"
+  },
+  {
+    "id": "repeat_sales_tax",
+    "name": "复购客户销售额（含税）",
+    "api": "repeat_customer_sales_gross",
+    "group": "销售",
+    "unit": "元",
+    "version": "v1",
+    "status": "已发布",
+    "owner": "刘婷"
+  },
+  {
+    "id": "order_cnt",
+    "name": "有效订单数",
+    "api": "valid_order_count",
+    "group": "销售",
+    "unit": "单",
+    "version": "v1",
+    "status": "已发布",
+    "owner": "陈立军"
+  },
+  {
+    "id": "atv",
+    "name": "客单价（不含税）",
+    "api": "avg_ticket_value",
+    "group": "销售",
+    "unit": "元",
+    "version": "v1",
+    "status": "草稿",
+    "owner": "刘婷"
+  },
+  {
+    "id": "refund_rate",
+    "name": "退款率",
+    "api": "refund_rate",
+    "group": "销售",
+    "unit": "%",
+    "version": "v2",
+    "status": "已发布",
+    "owner": "刘婷",
+    "review": {
+      "cr": "CR-0010",
+      "note": "审核中：v2 → v3，改按退款完成时间统计"
+    }
+  },
+  {
+    "id": "gross_margin",
+    "name": "毛利率",
+    "api": "gross_margin_rate",
+    "group": "利润",
+    "unit": "%",
+    "version": "v2",
+    "status": "已发布",
+    "owner": "刘婷"
+  },
+  {
+    "id": "gross_profit",
+    "name": "毛利额",
+    "api": "gross_profit",
+    "group": "利润",
+    "unit": "元",
+    "version": "v2",
+    "status": "已发布",
+    "owner": "刘婷"
+  },
+  {
+    "id": "ship_ontime",
+    "name": "出库及时率",
+    "api": "ship_ontime_rate",
+    "group": "履约",
+    "unit": "%",
+    "version": "v1",
+    "status": "已发布",
+    "owner": "周晓峰"
+  },
+  {
+    "id": "ship_avg",
+    "name": "平均出库时长",
+    "api": "avg_ship_minutes",
+    "group": "履约",
+    "unit": "分钟",
+    "version": "v1",
+    "status": "已发布",
+    "owner": "周晓峰"
+  },
+  {
+    "id": "stockout",
+    "name": "缺货率",
+    "api": "stockout_rate",
+    "group": "库存",
+    "unit": "%",
+    "version": "v1",
+    "status": "已发布",
+    "owner": "周晓峰"
+  },
+  {
+    "id": "turnover",
+    "name": "库存周转天数",
+    "api": "inventory_turnover_days",
+    "group": "库存",
+    "unit": "天",
+    "version": "v1",
+    "status": "已下线",
+    "owner": "周晓峰"
+  },
+  {
+    "id": "new_member",
+    "name": "新增会员数",
+    "api": "new_member_count",
+    "group": "会员",
+    "unit": "人",
+    "version": "v1",
+    "status": "已发布",
+    "owner": "吴佳"
+  },
+  {
+    "id": "repurchase",
+    "name": "复购率",
+    "api": "repurchase_rate",
+    "group": "会员",
+    "unit": "%",
+    "version": "v2",
+    "status": "已发布",
+    "owner": "吴佳"
+  }
+]

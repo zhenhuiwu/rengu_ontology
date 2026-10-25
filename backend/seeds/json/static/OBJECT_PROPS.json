@@ -1,0 +1,1863 @@
+{
+  "order": [
+    {
+      "api": "order_id",
+      "name": "订单号",
+      "type": "string",
+      "group": "标识",
+      "source": "order_id",
+      "desc": "业务主键，全局唯一",
+      "pk": true
+    },
+    {
+      "api": "order_no_display",
+      "name": "展示单号",
+      "type": "string",
+      "group": "标识",
+      "source": "order_no",
+      "desc": "小票和客服使用的单号",
+      "title": true
+    },
+    {
+      "api": "channel",
+      "name": "渠道",
+      "type": "enum",
+      "group": "交易",
+      "source": "channel_code",
+      "desc": "门店、小程序、外卖平台、社区团购",
+      "enumName": "销售渠道",
+      "dim": true
+    },
+    {
+      "api": "status",
+      "name": "订单状态",
+      "type": "enum",
+      "group": "交易",
+      "source": "status",
+      "desc": "待支付、待出库、拣货中、已出库、已签收、已取消",
+      "enumName": "订单状态",
+      "dim": true
+    },
+    {
+      "api": "store_id",
+      "name": "门店",
+      "type": "string",
+      "group": "交易",
+      "source": "store_id",
+      "desc": "外键 → 门店（store_id）",
+      "dim": true
+    },
+    {
+      "api": "fulfill_store_id",
+      "name": "履约门店",
+      "type": "string",
+      "group": "交易",
+      "source": "fulfill_store_id",
+      "desc": "外键 → 门店（store_id）；实际出库发货的门店，自提单为空",
+      "dim": true
+    },
+    {
+      "api": "member_id",
+      "name": "会员",
+      "type": "string",
+      "group": "交易",
+      "source": "member_id",
+      "desc": "外键 → 会员；散客为空"
+    },
+    {
+      "api": "warehouse_id",
+      "name": "发货仓",
+      "type": "string",
+      "group": "交易",
+      "source": "wh_code",
+      "desc": "外键 → 仓库",
+      "dim": true
+    },
+    {
+      "api": "created_at",
+      "name": "下单时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "create_time",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "paid_at",
+      "name": "支付时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "pay_time",
+      "desc": ""
+    },
+    {
+      "api": "shipped_at",
+      "name": "出库时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "out_time",
+      "desc": "财务口径的时间字段",
+      "dim": true
+    },
+    {
+      "api": "signed_at",
+      "name": "签收时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "sign_time",
+      "desc": ""
+    },
+    {
+      "api": "cancelled_at",
+      "name": "取消时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "cancel_time",
+      "desc": ""
+    },
+    {
+      "api": "amount_gross",
+      "name": "应付金额（含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "total_amt",
+      "desc": "单位：元"
+    },
+    {
+      "api": "amount_net",
+      "name": "应付金额（不含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "total_amt_notax",
+      "desc": "单位：元"
+    },
+    {
+      "api": "discount_amount",
+      "name": "优惠金额",
+      "type": "decimal",
+      "group": "金额",
+      "source": "discount_amt",
+      "desc": "单位：元"
+    },
+    {
+      "api": "paid_amount",
+      "name": "实付金额",
+      "type": "decimal",
+      "group": "金额",
+      "source": "pay_amt",
+      "desc": "单位：元"
+    },
+    {
+      "api": "freight_amount",
+      "name": "运费",
+      "type": "decimal",
+      "group": "金额",
+      "source": "freight_amt",
+      "desc": "单位：元"
+    },
+    {
+      "api": "tax_amount",
+      "name": "税额",
+      "type": "decimal",
+      "group": "金额",
+      "source": "tax_amt",
+      "desc": "单位：元"
+    },
+    {
+      "api": "pay_method",
+      "name": "支付方式",
+      "type": "enum",
+      "group": "交易",
+      "source": "pay_type",
+      "desc": "",
+      "enumName": "支付方式",
+      "dim": true
+    },
+    {
+      "api": "line_count",
+      "name": "商品行数",
+      "type": "integer",
+      "group": "交易",
+      "source": "item_cnt",
+      "desc": ""
+    },
+    {
+      "api": "is_test",
+      "name": "是否测试单",
+      "type": "boolean",
+      "group": "交易",
+      "source": "test_flag",
+      "desc": "默认过滤掉"
+    },
+    {
+      "api": "receiver_name",
+      "name": "收货人",
+      "type": "string",
+      "group": "收货",
+      "source": "recv_name",
+      "desc": "脱敏显示",
+      "sensitive": true
+    },
+    {
+      "api": "receiver_phone",
+      "name": "收货电话",
+      "type": "string",
+      "group": "收货",
+      "source": "recv_mobile",
+      "desc": "脱敏显示",
+      "sensitive": true
+    },
+    {
+      "api": "receiver_address",
+      "name": "收货地址",
+      "type": "string",
+      "group": "收货",
+      "source": "recv_addr",
+      "desc": "脱敏显示",
+      "sensitive": true
+    },
+    {
+      "api": "receiver_city",
+      "name": "收货城市",
+      "type": "string",
+      "group": "收货",
+      "source": "recv_city",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "delivery_type",
+      "name": "配送方式",
+      "type": "enum",
+      "group": "收货",
+      "source": "deliver_type",
+      "desc": "自提、同城配送、快递",
+      "enumName": "配送方式",
+      "dim": true
+    },
+    {
+      "api": "promotion_ids",
+      "name": "参与活动",
+      "type": "json",
+      "group": "交易",
+      "source": "promo_list",
+      "desc": "数组；一单可参与多个活动"
+    },
+    {
+      "api": "coupon_code",
+      "name": "优惠券码",
+      "type": "string",
+      "group": "交易",
+      "source": "coupon_no",
+      "desc": ""
+    },
+    {
+      "api": "remark",
+      "name": "买家备注",
+      "type": "string",
+      "group": "其他",
+      "source": "buyer_memo",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "order_line": [
+    {
+      "api": "line_id",
+      "name": "订单行号",
+      "type": "string",
+      "group": "标识",
+      "source": "line_id",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "order_id",
+      "name": "订单",
+      "type": "string",
+      "group": "标识",
+      "source": "order_id",
+      "desc": "外键 → 订单"
+    },
+    {
+      "api": "sku",
+      "name": "商品",
+      "type": "string",
+      "group": "交易",
+      "source": "sku_code",
+      "desc": "外键 → 商品（sku）",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "qty",
+      "name": "数量",
+      "type": "decimal",
+      "group": "交易",
+      "source": "qty",
+      "desc": "称重商品按千克"
+    },
+    {
+      "api": "unit_price",
+      "name": "单价（含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "price",
+      "desc": "单位：元"
+    },
+    {
+      "api": "amount_ex_tax",
+      "name": "行金额（不含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "line_amt_notax",
+      "desc": "销售额（不含税）的取数字段"
+    },
+    {
+      "api": "discount_amount",
+      "name": "行优惠",
+      "type": "decimal",
+      "group": "金额",
+      "source": "line_discount",
+      "desc": "单位：元"
+    },
+    {
+      "api": "cost_amount",
+      "name": "行成本",
+      "type": "decimal",
+      "group": "金额",
+      "source": "line_cost",
+      "desc": "移动加权平均成本"
+    },
+    {
+      "api": "tax_rate",
+      "name": "税率",
+      "type": "decimal",
+      "group": "金额",
+      "source": "tax_rate",
+      "desc": ""
+    },
+    {
+      "api": "is_gift",
+      "name": "是否赠品",
+      "type": "boolean",
+      "group": "交易",
+      "source": "gift_flag",
+      "desc": ""
+    },
+    {
+      "api": "promo_id",
+      "name": "促销活动",
+      "type": "string",
+      "group": "交易",
+      "source": "promo_id",
+      "desc": "外键 → 促销活动"
+    },
+    {
+      "api": "created_at",
+      "name": "下单时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "create_time",
+      "desc": "冗余自订单",
+      "dim": true
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "refund": [
+    {
+      "api": "refund_id",
+      "name": "退款单号",
+      "type": "string",
+      "group": "标识",
+      "source": "refund_id",
+      "desc": "业务主键",
+      "pk": true,
+      "title": true
+    },
+    {
+      "api": "order_id",
+      "name": "原订单",
+      "type": "string",
+      "group": "标识",
+      "source": "order_id",
+      "desc": "外键 → 订单"
+    },
+    {
+      "api": "refund_type",
+      "name": "退款类型",
+      "type": "enum",
+      "group": "退款",
+      "source": "refund_type",
+      "desc": "仅退款、退货退款",
+      "enumName": "退款类型",
+      "dim": true
+    },
+    {
+      "api": "refund_reason",
+      "name": "退款原因",
+      "type": "enum",
+      "group": "退款",
+      "source": "reason_code",
+      "desc": "",
+      "enumName": "退款原因",
+      "dim": true
+    },
+    {
+      "api": "status",
+      "name": "退款状态",
+      "type": "enum",
+      "group": "退款",
+      "source": "status",
+      "desc": "申请中、已同意、已拒绝、已完成",
+      "enumName": "退款状态",
+      "dim": true
+    },
+    {
+      "api": "applied_at",
+      "name": "申请时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "apply_time",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "refund_done_at",
+      "name": "退款完成时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "done_time",
+      "desc": "退款率口径的时间字段（CR-0010 审核中）",
+      "dim": true
+    },
+    {
+      "api": "refund_amount",
+      "name": "退款金额（含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "refund_amt",
+      "desc": "单位：元"
+    },
+    {
+      "api": "refund_ex_tax",
+      "name": "退款金额（不含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "refund_amt_notax",
+      "desc": "单位：元"
+    },
+    {
+      "api": "channel",
+      "name": "渠道",
+      "type": "enum",
+      "group": "退款",
+      "source": "channel_code",
+      "desc": "同原订单",
+      "enumName": "销售渠道",
+      "dim": true
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "refund_line": [
+    {
+      "api": "refund_line_id",
+      "name": "退款行号",
+      "type": "string",
+      "group": "标识",
+      "source": "line_id",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "refund_id",
+      "name": "退款单",
+      "type": "string",
+      "group": "标识",
+      "source": "refund_id",
+      "desc": "外键 → 退款单"
+    },
+    {
+      "api": "order_line_id",
+      "name": "原订单行",
+      "type": "string",
+      "group": "标识",
+      "source": "order_line_id",
+      "desc": "外键 → 订单行"
+    },
+    {
+      "api": "sku",
+      "name": "商品",
+      "type": "string",
+      "group": "退款",
+      "source": "sku_code",
+      "desc": "外键 → 商品",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "qty",
+      "name": "退货数量",
+      "type": "decimal",
+      "group": "退款",
+      "source": "qty",
+      "desc": ""
+    },
+    {
+      "api": "refund_ex_tax",
+      "name": "退款金额（不含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "refund_amt_notax",
+      "desc": "单位：元"
+    },
+    {
+      "api": "restock",
+      "name": "是否回库",
+      "type": "boolean",
+      "group": "退款",
+      "source": "restock_flag",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "member": [
+    {
+      "api": "member_id",
+      "name": "会员号",
+      "type": "string",
+      "group": "标识",
+      "source": "member_id",
+      "desc": "业务主键，会员中心生成",
+      "pk": true
+    },
+    {
+      "api": "nickname",
+      "name": "昵称",
+      "type": "string",
+      "group": "标识",
+      "source": "nick_name",
+      "desc": "",
+      "title": true
+    },
+    {
+      "api": "mobile",
+      "name": "手机号",
+      "type": "string",
+      "group": "联系方式",
+      "source": "mobile",
+      "desc": "脱敏显示；空值率阈值 2%",
+      "sensitive": true
+    },
+    {
+      "api": "real_name",
+      "name": "姓名",
+      "type": "string",
+      "group": "联系方式",
+      "source": "real_name",
+      "desc": "脱敏显示",
+      "sensitive": true
+    },
+    {
+      "api": "gender",
+      "name": "性别",
+      "type": "enum",
+      "group": "画像",
+      "source": "gender",
+      "desc": "",
+      "enumName": "性别",
+      "dim": true
+    },
+    {
+      "api": "birthday",
+      "name": "生日",
+      "type": "date",
+      "group": "画像",
+      "source": "birthday",
+      "desc": "只用于生日券，不进问数",
+      "sensitive": true
+    },
+    {
+      "api": "level_code",
+      "name": "会员等级",
+      "type": "string",
+      "group": "会员",
+      "source": "level_code",
+      "desc": "外键 → 会员等级",
+      "dim": true
+    },
+    {
+      "api": "reg_store_id",
+      "name": "注册门店",
+      "type": "string",
+      "group": "会员",
+      "source": "reg_store_id",
+      "desc": "外键 → 门店（store_id）；线上注册为空",
+      "dim": true
+    },
+    {
+      "api": "reg_channel",
+      "name": "注册渠道",
+      "type": "enum",
+      "group": "会员",
+      "source": "reg_channel",
+      "desc": "门店、小程序、外卖平台",
+      "enumName": "销售渠道",
+      "dim": true
+    },
+    {
+      "api": "registered_at",
+      "name": "注册时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "reg_time",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "last_order_at",
+      "name": "最近下单时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "last_order_time",
+      "desc": "复购客户判断用"
+    },
+    {
+      "api": "points",
+      "name": "积分余额",
+      "type": "integer",
+      "group": "资产",
+      "source": "points",
+      "desc": ""
+    },
+    {
+      "api": "stored_balance",
+      "name": "储值余额",
+      "type": "decimal",
+      "group": "资产",
+      "source": "svc_balance",
+      "desc": "会员表上的余额字段"
+    },
+    {
+      "api": "tags",
+      "name": "会员标签",
+      "type": "json",
+      "group": "画像",
+      "source": "tag_list",
+      "desc": "CRM 同步，数组"
+    },
+    {
+      "api": "status",
+      "name": "会员状态",
+      "type": "enum",
+      "group": "会员",
+      "source": "status",
+      "desc": "正常、冻结、注销",
+      "enumName": "会员状态",
+      "dim": true
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "member_level": [
+    {
+      "api": "level_code",
+      "name": "等级编码",
+      "type": "string",
+      "group": "标识",
+      "source": "level_code",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "level_name",
+      "name": "等级名称",
+      "type": "string",
+      "group": "标识",
+      "source": "level_name",
+      "desc": "普卡、银卡、金卡、钻石、至尊",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "min_points",
+      "name": "起始积分",
+      "type": "integer",
+      "group": "规则",
+      "source": "min_points",
+      "desc": ""
+    },
+    {
+      "api": "discount_rate",
+      "name": "会员折扣",
+      "type": "decimal",
+      "group": "规则",
+      "source": "discount",
+      "desc": ""
+    },
+    {
+      "api": "sort_order",
+      "name": "排序",
+      "type": "integer",
+      "group": "其他",
+      "source": "sort_no",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": ""
+    }
+  ],
+  "store": [
+    {
+      "api": "store_id",
+      "name": "门店编码",
+      "type": "string",
+      "group": "标识",
+      "source": "store_id",
+      "desc": "业务主键；订单、会员、员工都按 store_id 关联",
+      "pk": true
+    },
+    {
+      "api": "store_name",
+      "name": "门店名称",
+      "type": "string",
+      "group": "标识",
+      "source": "store_name",
+      "desc": "",
+      "title": true
+    },
+    {
+      "api": "short_name",
+      "name": "门店简称",
+      "type": "string",
+      "group": "标识",
+      "source": "short_name",
+      "desc": "看板展示用"
+    },
+    {
+      "api": "format",
+      "name": "业态",
+      "type": "enum",
+      "group": "组织",
+      "source": "format_code",
+      "desc": "直营店、加盟店、社区店、mini 店",
+      "enumName": "门店业态",
+      "dim": true
+    },
+    {
+      "api": "region_code",
+      "name": "所属大区",
+      "type": "string",
+      "group": "组织",
+      "source": "region_code",
+      "desc": "外键 → 大区（region_code），CR-0005 起门店直接挂大区",
+      "dim": true
+    },
+    {
+      "api": "province_code",
+      "name": "所在省份",
+      "type": "string",
+      "group": "组织",
+      "source": "province_code",
+      "desc": "外键 → 省份",
+      "dim": true
+    },
+    {
+      "api": "city",
+      "name": "城市",
+      "type": "string",
+      "group": "地址",
+      "source": "city_name",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "address",
+      "name": "门店地址",
+      "type": "string",
+      "group": "地址",
+      "source": "address",
+      "desc": ""
+    },
+    {
+      "api": "longitude",
+      "name": "经度",
+      "type": "decimal",
+      "group": "地址",
+      "source": "lng",
+      "desc": ""
+    },
+    {
+      "api": "latitude",
+      "name": "纬度",
+      "type": "decimal",
+      "group": "地址",
+      "source": "lat",
+      "desc": ""
+    },
+    {
+      "api": "replenish_wh_id",
+      "name": "补货仓",
+      "type": "string",
+      "group": "供应链",
+      "source": "replenish_wh_code",
+      "desc": "外键 → 仓库",
+      "dim": true
+    },
+    {
+      "api": "area_sqm",
+      "name": "营业面积",
+      "type": "decimal",
+      "group": "经营",
+      "source": "area",
+      "desc": "单位：平方米"
+    },
+    {
+      "api": "opened_at",
+      "name": "开业日期",
+      "type": "date",
+      "group": "经营",
+      "source": "open_date",
+      "desc": "同店口径按开业满 12 个月",
+      "dim": true
+    },
+    {
+      "api": "status",
+      "name": "门店状态",
+      "type": "enum",
+      "group": "经营",
+      "source": "status",
+      "desc": "筹备、营业、停业、闭店",
+      "enumName": "门店状态",
+      "dim": true
+    },
+    {
+      "api": "phone",
+      "name": "门店电话",
+      "type": "string",
+      "group": "地址",
+      "source": "tel",
+      "desc": ""
+    },
+    {
+      "api": "business_hours",
+      "name": "营业时间",
+      "type": "string",
+      "group": "经营",
+      "source": "biz_hours",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "region": [
+    {
+      "api": "region_code",
+      "name": "大区编码",
+      "type": "string",
+      "group": "标识",
+      "source": "region_code",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "region_name",
+      "name": "大区名称",
+      "type": "string",
+      "group": "标识",
+      "source": "region_name",
+      "desc": "华东、华南、华北、华中、西南、西北",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "short_name",
+      "name": "简称",
+      "type": "string",
+      "group": "标识",
+      "source": "short_name",
+      "desc": ""
+    },
+    {
+      "api": "manager_emp_no",
+      "name": "大区经理",
+      "type": "string",
+      "group": "组织",
+      "source": "manager_emp_no",
+      "desc": "员工工号；店长信息权限未定前不建关系"
+    },
+    {
+      "api": "hq_city",
+      "name": "总部城市",
+      "type": "string",
+      "group": "组织",
+      "source": "hq_city",
+      "desc": ""
+    },
+    {
+      "api": "store_count",
+      "name": "门店数",
+      "type": "integer",
+      "group": "经营",
+      "source": "store_cnt",
+      "desc": "每日由门店主数据汇总"
+    },
+    {
+      "api": "province_count",
+      "name": "下辖省份数",
+      "type": "integer",
+      "group": "经营",
+      "source": "province_cnt",
+      "desc": ""
+    },
+    {
+      "api": "budget_annual",
+      "name": "年度预算",
+      "type": "decimal",
+      "group": "经营",
+      "source": "budget_amt",
+      "desc": "单位：万元；“调整大区预算”动作改的就是它"
+    },
+    {
+      "api": "status",
+      "name": "状态",
+      "type": "enum",
+      "group": "组织",
+      "source": "status",
+      "desc": "启用、停用",
+      "enumName": "启用状态",
+      "dim": true
+    },
+    {
+      "api": "established_at",
+      "name": "设立日期",
+      "type": "date",
+      "group": "组织",
+      "source": "setup_date",
+      "desc": ""
+    },
+    {
+      "api": "sort_order",
+      "name": "排序",
+      "type": "integer",
+      "group": "其他",
+      "source": "sort_no",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "province": [
+    {
+      "api": "province_code",
+      "name": "省份编码",
+      "type": "string",
+      "group": "标识",
+      "source": "province_code",
+      "desc": "国标行政区划码前两位",
+      "pk": true
+    },
+    {
+      "api": "province_name",
+      "name": "省份名称",
+      "type": "string",
+      "group": "标识",
+      "source": "province_name",
+      "desc": "",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "region_code",
+      "name": "所属大区",
+      "type": "string",
+      "group": "组织",
+      "source": "region_code",
+      "desc": "外键 → 大区",
+      "dim": true
+    },
+    {
+      "api": "store_count",
+      "name": "门店数",
+      "type": "integer",
+      "group": "经营",
+      "source": "store_cnt",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": ""
+    }
+  ],
+  "product": [
+    {
+      "api": "sku",
+      "name": "SKU 编码",
+      "type": "string",
+      "group": "标识",
+      "source": "sku_code",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "sku_name",
+      "name": "商品名称",
+      "type": "string",
+      "group": "标识",
+      "source": "sku_name",
+      "desc": "",
+      "title": true
+    },
+    {
+      "api": "barcode",
+      "name": "条码",
+      "type": "string",
+      "group": "标识",
+      "source": "barcode",
+      "desc": "EAN-13"
+    },
+    {
+      "api": "category_id",
+      "name": "所属品类",
+      "type": "string",
+      "group": "分类",
+      "source": "category_code",
+      "desc": "外键 → 品类",
+      "dim": true
+    },
+    {
+      "api": "brand",
+      "name": "品牌",
+      "type": "string",
+      "group": "分类",
+      "source": "brand_name",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "spec",
+      "name": "规格",
+      "type": "string",
+      "group": "分类",
+      "source": "spec",
+      "desc": ""
+    },
+    {
+      "api": "unit",
+      "name": "销售单位",
+      "type": "enum",
+      "group": "分类",
+      "source": "unit",
+      "desc": "件、盒、千克",
+      "enumName": "计量单位"
+    },
+    {
+      "api": "is_weighed",
+      "name": "是否称重",
+      "type": "boolean",
+      "group": "分类",
+      "source": "weigh_flag",
+      "desc": ""
+    },
+    {
+      "api": "main_supplier_id",
+      "name": "主供应商",
+      "type": "string",
+      "group": "供应链",
+      "source": "main_vendor_code",
+      "desc": "外键 → 供应商"
+    },
+    {
+      "api": "retail_price",
+      "name": "零售价（含税）",
+      "type": "decimal",
+      "group": "价格",
+      "source": "retail_price",
+      "desc": "单位：元；“门店调价”动作改门店价"
+    },
+    {
+      "api": "cost_price",
+      "name": "进价（不含税）",
+      "type": "decimal",
+      "group": "价格",
+      "source": "cost_price",
+      "desc": "单位：元"
+    },
+    {
+      "api": "tax_rate",
+      "name": "税率",
+      "type": "decimal",
+      "group": "价格",
+      "source": "tax_rate",
+      "desc": ""
+    },
+    {
+      "api": "shelf_life_days",
+      "name": "保质期（天）",
+      "type": "integer",
+      "group": "供应链",
+      "source": "shelf_life",
+      "desc": "CR-0003 新增"
+    },
+    {
+      "api": "safety_stock",
+      "name": "安全库存",
+      "type": "decimal",
+      "group": "供应链",
+      "source": "safety_qty",
+      "desc": "“调整安全库存”动作改的就是它"
+    },
+    {
+      "api": "status",
+      "name": "商品状态",
+      "type": "enum",
+      "group": "分类",
+      "source": "status",
+      "desc": "新品、在售、停售、淘汰",
+      "enumName": "商品状态",
+      "dim": true
+    },
+    {
+      "api": "launched_at",
+      "name": "上市日期",
+      "type": "date",
+      "group": "分类",
+      "source": "launch_date",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "category": [
+    {
+      "api": "category_id",
+      "name": "品类编码",
+      "type": "string",
+      "group": "标识",
+      "source": "category_code",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "category_name",
+      "name": "品类名称",
+      "type": "string",
+      "group": "标识",
+      "source": "category_name",
+      "desc": "",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "parent_id",
+      "name": "上级品类",
+      "type": "string",
+      "group": "层级",
+      "source": "parent_code",
+      "desc": "外键 → 品类；一级品类为空",
+      "dim": true
+    },
+    {
+      "api": "level",
+      "name": "层级",
+      "type": "integer",
+      "group": "层级",
+      "source": "cat_level",
+      "desc": "1–3 级",
+      "dim": true
+    },
+    {
+      "api": "buyer",
+      "name": "采购负责人",
+      "type": "string",
+      "group": "组织",
+      "source": "buyer_name",
+      "desc": ""
+    },
+    {
+      "api": "sort_order",
+      "name": "排序",
+      "type": "integer",
+      "group": "其他",
+      "source": "sort_no",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": ""
+    }
+  ],
+  "promotion": [
+    {
+      "api": "promo_id",
+      "name": "活动编号",
+      "type": "string",
+      "group": "标识",
+      "source": "promo_id",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "promo_name",
+      "name": "活动名称",
+      "type": "string",
+      "group": "标识",
+      "source": "promo_name",
+      "desc": "",
+      "title": true
+    },
+    {
+      "api": "promo_type",
+      "name": "活动类型",
+      "type": "enum",
+      "group": "活动",
+      "source": "promo_type",
+      "desc": "满减、折扣、买赠、券",
+      "enumName": "活动类型",
+      "dim": true
+    },
+    {
+      "api": "funded_by",
+      "name": "出资方",
+      "type": "enum",
+      "group": "活动",
+      "source": "fund_side",
+      "desc": "自营、品牌、平台",
+      "enumName": "出资方",
+      "dim": true
+    },
+    {
+      "api": "start_at",
+      "name": "开始时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "begin_time",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "end_at",
+      "name": "结束时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "end_time",
+      "desc": ""
+    },
+    {
+      "api": "budget",
+      "name": "活动预算",
+      "type": "decimal",
+      "group": "金额",
+      "source": "budget_amt",
+      "desc": "单位：元"
+    },
+    {
+      "api": "status",
+      "name": "活动状态",
+      "type": "enum",
+      "group": "活动",
+      "source": "status",
+      "desc": "",
+      "enumName": "活动状态",
+      "dim": true
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "warehouse": [
+    {
+      "api": "wh_id",
+      "name": "仓库编码",
+      "type": "string",
+      "group": "标识",
+      "source": "wh_code",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "wh_name",
+      "name": "仓库名称",
+      "type": "string",
+      "group": "标识",
+      "source": "wh_name",
+      "desc": "",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "wh_type",
+      "name": "仓库类型",
+      "type": "enum",
+      "group": "仓储",
+      "source": "wh_type",
+      "desc": "常温、冷链",
+      "enumName": "仓库类型",
+      "dim": true
+    },
+    {
+      "api": "city",
+      "name": "城市",
+      "type": "string",
+      "group": "仓储",
+      "source": "city_name",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "capacity",
+      "name": "库容",
+      "type": "decimal",
+      "group": "仓储",
+      "source": "capacity",
+      "desc": "单位：托"
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": ""
+    }
+  ],
+  "inventory": [
+    {
+      "api": "snapshot_key",
+      "name": "快照键",
+      "type": "string",
+      "group": "标识",
+      "source": "wh_code + sku_code",
+      "desc": "仓库 + 商品 + 快照时间",
+      "pk": true
+    },
+    {
+      "api": "warehouse_id",
+      "name": "仓库",
+      "type": "string",
+      "group": "库存",
+      "source": "wh_code",
+      "desc": "外键 → 仓库",
+      "dim": true
+    },
+    {
+      "api": "sku",
+      "name": "商品",
+      "type": "string",
+      "group": "库存",
+      "source": "sku_code",
+      "desc": "外键 → 商品",
+      "title": true,
+      "dim": true
+    },
+    {
+      "api": "on_hand",
+      "name": "在库量",
+      "type": "decimal",
+      "group": "库存",
+      "source": "onhand_qty",
+      "desc": ""
+    },
+    {
+      "api": "available",
+      "name": "可用量",
+      "type": "decimal",
+      "group": "库存",
+      "source": "avail_qty",
+      "desc": ""
+    },
+    {
+      "api": "locked",
+      "name": "锁定量",
+      "type": "decimal",
+      "group": "库存",
+      "source": "lock_qty",
+      "desc": ""
+    },
+    {
+      "api": "snapshot_at",
+      "name": "快照时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "snap_time",
+      "desc": "每 30 分钟",
+      "dim": true
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "supplier": [
+    {
+      "api": "supplier_id",
+      "name": "供应商编码",
+      "type": "string",
+      "group": "标识",
+      "source": "supplier_code",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "supplier_name",
+      "name": "供应商名称",
+      "type": "string",
+      "group": "标识",
+      "source": "supplier_name",
+      "desc": "",
+      "title": true
+    },
+    {
+      "api": "credit_code",
+      "name": "统一社会信用代码",
+      "type": "string",
+      "group": "资质",
+      "source": "uscc",
+      "desc": ""
+    },
+    {
+      "api": "contact",
+      "name": "联系人",
+      "type": "string",
+      "group": "联系方式",
+      "source": "contact_name",
+      "desc": "脱敏显示",
+      "sensitive": true
+    },
+    {
+      "api": "contact_phone",
+      "name": "联系电话",
+      "type": "string",
+      "group": "联系方式",
+      "source": "contact_tel",
+      "desc": "脱敏显示",
+      "sensitive": true
+    },
+    {
+      "api": "settle_type",
+      "name": "结算方式",
+      "type": "enum",
+      "group": "结算",
+      "source": "settle_type",
+      "desc": "月结、票到 30 天、票到 60 天",
+      "enumName": "结算方式",
+      "dim": true
+    },
+    {
+      "api": "status",
+      "name": "合作状态",
+      "type": "enum",
+      "group": "资质",
+      "source": "status",
+      "desc": "",
+      "enumName": "合作状态",
+      "dim": true
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "purchase": [
+    {
+      "api": "po_no",
+      "name": "采购单号",
+      "type": "string",
+      "group": "标识",
+      "source": "po_no",
+      "desc": "业务主键",
+      "pk": true,
+      "title": true
+    },
+    {
+      "api": "supplier_id",
+      "name": "供应商",
+      "type": "string",
+      "group": "采购",
+      "source": "supplier_code",
+      "desc": "外键 → 供应商",
+      "dim": true
+    },
+    {
+      "api": "warehouse_id",
+      "name": "收货仓",
+      "type": "string",
+      "group": "采购",
+      "source": "wh_code",
+      "desc": "外键 → 仓库",
+      "dim": true
+    },
+    {
+      "api": "status",
+      "name": "采购状态",
+      "type": "enum",
+      "group": "采购",
+      "source": "status",
+      "desc": "",
+      "enumName": "采购状态",
+      "dim": true
+    },
+    {
+      "api": "ordered_at",
+      "name": "下单时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "po_time",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "amount",
+      "name": "采购金额（不含税）",
+      "type": "decimal",
+      "group": "金额",
+      "source": "po_amt_notax",
+      "desc": "单位：元"
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "shipment": [
+    {
+      "api": "shipment_no",
+      "name": "出库单号",
+      "type": "string",
+      "group": "标识",
+      "source": "shipment_no",
+      "desc": "业务主键",
+      "pk": true,
+      "title": true
+    },
+    {
+      "api": "order_id",
+      "name": "订单",
+      "type": "string",
+      "group": "标识",
+      "source": "order_id",
+      "desc": "外键 → 订单"
+    },
+    {
+      "api": "warehouse_id",
+      "name": "出库仓",
+      "type": "string",
+      "group": "物流",
+      "source": "out_wh_code",
+      "desc": "外键 → 仓库",
+      "dim": true
+    },
+    {
+      "api": "waybill_no",
+      "name": "运单号",
+      "type": "string",
+      "group": "物流",
+      "source": "waybill_no",
+      "desc": "自提单为空"
+    },
+    {
+      "api": "carrier",
+      "name": "承运商",
+      "type": "enum",
+      "group": "物流",
+      "source": "carrier_code",
+      "desc": "",
+      "enumName": "承运商",
+      "dim": true
+    },
+    {
+      "api": "shipped_at",
+      "name": "出库时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "out_time",
+      "desc": "",
+      "dim": true
+    },
+    {
+      "api": "delivered_at",
+      "name": "送达时间",
+      "type": "timestamp",
+      "group": "时间",
+      "source": "sign_time",
+      "desc": ""
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ],
+  "employee": [
+    {
+      "api": "emp_no",
+      "name": "工号",
+      "type": "string",
+      "group": "标识",
+      "source": "emp_no",
+      "desc": "业务主键",
+      "pk": true
+    },
+    {
+      "api": "emp_name",
+      "name": "姓名",
+      "type": "string",
+      "group": "标识",
+      "source": "emp_name",
+      "desc": "敏感对象，按权限可见",
+      "title": true,
+      "sensitive": true
+    },
+    {
+      "api": "store_id",
+      "name": "所属门店",
+      "type": "string",
+      "group": "组织",
+      "source": "store_id",
+      "desc": "外键 → 门店（store_id）；总部员工为空",
+      "dim": true
+    },
+    {
+      "api": "position",
+      "name": "岗位",
+      "type": "enum",
+      "group": "组织",
+      "source": "post_code",
+      "desc": "",
+      "enumName": "岗位",
+      "dim": true
+    },
+    {
+      "api": "mobile",
+      "name": "手机号",
+      "type": "string",
+      "group": "联系方式",
+      "source": "mobile",
+      "desc": "脱敏显示",
+      "sensitive": true
+    },
+    {
+      "api": "hired_at",
+      "name": "入职日期",
+      "type": "date",
+      "group": "组织",
+      "source": "hire_date",
+      "desc": ""
+    },
+    {
+      "api": "status",
+      "name": "在职状态",
+      "type": "enum",
+      "group": "组织",
+      "source": "status",
+      "desc": "",
+      "enumName": "在职状态",
+      "dim": true
+    },
+    {
+      "api": "source_updated_at",
+      "name": "源数据更新时间",
+      "type": "timestamp",
+      "group": "其他",
+      "source": "update_time",
+      "desc": "冲突策略按此列判断最新值"
+    },
+    {
+      "api": "etl_batch",
+      "name": "同步批次",
+      "type": "string",
+      "group": "其他",
+      "source": "etl_batch_id",
+      "desc": "系统字段"
+    }
+  ]
+}

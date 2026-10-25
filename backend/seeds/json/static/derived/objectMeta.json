@@ -1,0 +1,466 @@
+[
+  {
+    "args": [
+      "order",
+      "订单",
+      "交易"
+    ],
+    "result": {
+      "domain": "零售交易",
+      "desc": "顾客在门店、小程序、外卖平台、社区团购下的一笔交易。一单可以有多行商品，按出库时间计入销售。测试单默认不参与统计。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每小时增量，按源数据更新时间",
+      "qs": [
+        {
+          "q": "上个月各大区的有效订单数是多少？",
+          "cert": true,
+          "query": "metric: order_cnt\nbreakdown: [组织.大区]\ntime: 出库时间 = 上月\nrelease: v2026.10.3"
+        },
+        {
+          "q": "华东大区 9 月小程序渠道的订单，出库及时率是多少？",
+          "cert": true,
+          "query": "metric: ship_ontime\nfilters: [大区 = 华东, 渠道 = 小程序]\ntime: 出库时间 = 2026-09\nrelease: v2026.10.3"
+        },
+        {
+          "q": "本周取消的订单里，哪些门店最多？",
+          "cert": false
+        }
+      ],
+      "cards": 14,
+      "qa30": 2318,
+      "unused": 6
+    }
+  },
+  {
+    "args": [
+      "order_line",
+      "订单行",
+      "交易"
+    ],
+    "result": {
+      "domain": "零售交易",
+      "desc": "订单里的一行商品，销售额（不含税）和毛利都从这里取数。称重商品数量按千克记录。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "上周销售额（不含税）前 10 的商品是哪些？",
+          "cert": true,
+          "query": "metric: gmv\nbreakdown: [商品]\ntime: 下单时间 = 上周\nlimit: 10\nrelease: v2026.10.3"
+        },
+        {
+          "q": "赠品行占全部订单行的比例是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 9,
+      "qa30": 1206,
+      "unused": 4
+    }
+  },
+  {
+    "args": [
+      "refund",
+      "退款单",
+      "交易"
+    ],
+    "result": {
+      "domain": "售后",
+      "desc": "顾客对一笔订单发起的退款或退货退款。退款率口径正在改为按退款完成时间统计（CR-0010 审核中）。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "上个月各渠道的退款金额（不含税）是多少？",
+          "cert": true,
+          "query": "metric: refund_amount\nbreakdown: [渠道]\ntime: 退款完成时间 = 上月\nrelease: v2026.10.3"
+        },
+        {
+          "q": "退款原因里“商品质量”占多少？",
+          "cert": false
+        }
+      ],
+      "cards": 5,
+      "qa30": 486,
+      "unused": 3
+    }
+  },
+  {
+    "args": [
+      "refund_line",
+      "退款行",
+      "交易"
+    ],
+    "result": {
+      "domain": "零售交易",
+      "desc": "退款行的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的退款行数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 5,
+      "qa30": 141,
+      "unused": 4
+    }
+  },
+  {
+    "args": [
+      "member",
+      "会员",
+      "客户"
+    ],
+    "result": {
+      "domain": "会员运营",
+      "desc": "在会员中心注册过的顾客。手机号、姓名、生日是敏感字段，问数里默认脱敏；储值卡正在拆成独立对象（CR-0012 草稿）。",
+      "conflict": "源系统优先（会员中心为准）",
+      "lifecycle": "正式",
+      "sync": "每 2 小时增量，按源数据更新时间",
+      "qs": [
+        {
+          "q": "9 月新注册会员里，30 天内复购的比例是多少？",
+          "cert": true,
+          "query": "metric: repeat_rate\nfilters: [注册时间 = 2026-09]\nwindow: 30d\nrelease: v2026.10.3"
+        },
+        {
+          "q": "华东各门店的金卡会员有多少？",
+          "cert": true,
+          "query": "metric: member_cnt\nbreakdown: [注册门店]\nfilters: [大区 = 华东, 会员等级 = 金卡]\nrelease: v2026.10.3"
+        },
+        {
+          "q": "冻结的会员主要来自哪些注册渠道？",
+          "cert": false
+        }
+      ],
+      "cards": 11,
+      "qa30": 1532,
+      "unused": 8
+    }
+  },
+  {
+    "args": [
+      "member_level",
+      "会员等级",
+      "客户"
+    ],
+    "result": {
+      "domain": "会员运营",
+      "desc": "会员等级的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的会员等级数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 3,
+      "qa30": 41,
+      "unused": 4
+    }
+  },
+  {
+    "args": [
+      "store",
+      "门店",
+      "组织"
+    ],
+    "result": {
+      "domain": "组织与门店",
+      "desc": "直营、加盟、社区店和 mini 店。订单、会员、员工都按门店编码关联；CR-0005 起门店直接挂在大区下。新开的前置仓正在作为业态补充（CR-0009 草稿）。",
+      "conflict": "源系统优先（门店主数据为准）",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "华东大区上周销售额（不含税）最低的 5 家门店是哪些？",
+          "cert": true,
+          "query": "metric: gmv\nbreakdown: [门店]\nfilters: [大区 = 华东]\ntime: 出库时间 = 上周\norder: asc\nlimit: 5\nrelease: v2026.10.3"
+        },
+        {
+          "q": "开业满 12 个月的门店，同店销售增长是多少？",
+          "cert": true,
+          "query": "metric: gmv\nfilters: [开业日期 ≤ 今天 − 12 个月]\ncompare: 去年同期\nrelease: v2026.10.3"
+        },
+        {
+          "q": "社区店的平均营业面积是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 18,
+      "qa30": 3104,
+      "unused": 5
+    }
+  },
+  {
+    "args": [
+      "region",
+      "大区",
+      "组织"
+    ],
+    "result": {
+      "domain": "组织与门店",
+      "desc": "集团六个经营大区。门店直接挂在大区下，大区经理按大区看经营数据；“调整大区预算”动作改的是年度预算。",
+      "conflict": "源系统优先（门店主数据为准）",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "本月各大区的销售额（不含税）和毛利率分别是多少？",
+          "cert": true,
+          "query": "metric: [gmv, gross_margin]\nbreakdown: [大区]\ntime: 出库时间 = 本月\nrelease: v2026.10.3"
+        },
+        {
+          "q": "哪个大区的门店数增长最快？",
+          "cert": false
+        }
+      ],
+      "cards": 7,
+      "qa30": 942,
+      "unused": 2
+    }
+  },
+  {
+    "args": [
+      "province",
+      "省份",
+      "组织"
+    ],
+    "result": {
+      "domain": "组织与门店",
+      "desc": "省份的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的省份数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 0,
+      "qa30": 90,
+      "unused": 1
+    }
+  },
+  {
+    "args": [
+      "product",
+      "商品",
+      "商品"
+    ],
+    "result": {
+      "domain": "商品",
+      "desc": "在售和停售的 SKU。品类按四级挂在品类树上；保质期属性自 v2026.09.4 起提供，临期预警规则依赖它。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每小时增量，按源数据更新时间",
+      "qs": [
+        {
+          "q": "生鲜品类上周毛利率低于 18% 的商品有哪些？",
+          "cert": true,
+          "query": "metric: gross_margin\nbreakdown: [商品]\nfilters: [品类 = 生鲜]\nhaving: 毛利率 < 18%\nrelease: v2026.10.3"
+        },
+        {
+          "q": "保质期不足 7 天的在库商品有多少？",
+          "cert": false
+        }
+      ],
+      "cards": 12,
+      "qa30": 1877,
+      "unused": 9
+    }
+  },
+  {
+    "args": [
+      "category",
+      "品类",
+      "商品"
+    ],
+    "result": {
+      "domain": "商品",
+      "desc": "品类的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的品类数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 4,
+      "qa30": 34,
+      "unused": 3
+    }
+  },
+  {
+    "args": [
+      "promotion",
+      "促销活动",
+      "商品"
+    ],
+    "result": {
+      "domain": "商品",
+      "desc": "促销活动的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的促销活动数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 3,
+      "qa30": 193,
+      "unused": 5
+    }
+  },
+  {
+    "args": [
+      "warehouse",
+      "仓库",
+      "供应链"
+    ],
+    "result": {
+      "domain": "供应链",
+      "desc": "仓库的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的仓库数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 1,
+      "qa30": 53,
+      "unused": 5
+    }
+  },
+  {
+    "args": [
+      "inventory",
+      "库存快照",
+      "供应链"
+    ],
+    "result": {
+      "domain": "供应链",
+      "desc": "库存快照的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的库存快照数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 4,
+      "qa30": 242,
+      "unused": 2
+    }
+  },
+  {
+    "args": [
+      "supplier",
+      "供应商",
+      "供应链"
+    ],
+    "result": {
+      "domain": "供应链",
+      "desc": "供应商的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的供应商数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 2,
+      "qa30": 188,
+      "unused": 5
+    }
+  },
+  {
+    "args": [
+      "purchase",
+      "采购单",
+      "供应链"
+    ],
+    "result": {
+      "domain": "供应链",
+      "desc": "采购单的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的采购单数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 1,
+      "qa30": 13,
+      "unused": 5
+    }
+  },
+  {
+    "args": [
+      "shipment",
+      "出库单",
+      "供应链"
+    ],
+    "result": {
+      "domain": "供应链",
+      "desc": "出库单的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的出库单数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 2,
+      "qa30": 104,
+      "unused": 3
+    }
+  },
+  {
+    "args": [
+      "employee",
+      "员工",
+      "组织"
+    ],
+    "result": {
+      "domain": "组织与门店",
+      "desc": "员工的主数据，按源系统同步到本体，供问数、看板和对象详情使用。",
+      "conflict": "用户编辑优先",
+      "lifecycle": "正式",
+      "sync": "每日 02:00 全量",
+      "qs": [
+        {
+          "q": "各大区的员工数量分别是多少？",
+          "cert": false
+        }
+      ],
+      "cards": 0,
+      "qa30": 48,
+      "unused": 5
+    }
+  }
+]
