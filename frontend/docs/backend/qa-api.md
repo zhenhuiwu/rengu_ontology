@@ -493,7 +493,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 | permission_requests | `qa_permission_request`（问数自有，PDE 已定） | `qa.ts` · `QA_APPLY` | 0（只有预填模板） | |
 | pages | `qa_page`、`qa_page_card`、`qa_page_share_member`、`qa_page_subscription` | `mock/qa-pages.ts` · `MY_PAGES`、`OTHER_PAGES`（卡片来自 `CARD_LIB`） | 27 + 5 个页面 / 197 张卡片 | 前 13 个页面跟 `QA_PAGE_LIST` 是同一批 |
 | templates | `qa_template`、`qa_template_card` | `qa-pages.ts` · `PAGE_TEMPLATES` | 22 / 104 | |
-| people | → admin `sys_user`（只给人员**外键列**做姓名 → `code` 映射，用骨架 `code_by_name(name)`，查不到或重名报错；软引用列不经这里） | `qa-pages.ts` · `PEOPLE`、`OWNER_DEPT`；`qa-tuning.ts` · `PEOPLE_T` | 12 | 骨架 `sys_user` = `ADMIN_USERS` 120 人 + `extra/system/SYS_USERS.json` 8 人（见下面「演示用户」）。PEOPLE 里 赵磊、周婷、周晓峰、刘洋、张伟、钱一鸣、马晨 7 人 `sys_user` 里没有：**不要 admin 补人**，外键列只映射 9 个演示用户（U010001–U010008、U010231），mock 里落在外键列上的其他人按 9.2 核对表改派或剔除 [推断]；落在软引用列上的照存姓名 |
+| people | → admin `sys_user`（只给人员**外键列**做姓名 → `code` 映射，用骨架 `code_by_name(name)`，查不到或重名报错；软引用列不经这里） | `qa-pages.ts` · `PEOPLE`、`OWNER_DEPT`；`qa-tuning.ts` · `PEOPLE_T` | 12 | 骨架 `sys_user` = `ADMIN_USERS` 120 人 + `extra/system/SYS_USERS.json` 8 人（见下面「演示用户」）。PEOPLE 里 赵磊、周婷、周晓峰、刘洋、张伟、钱一鸣、马晨 7 人 `sys_user` 里没有：**不要 admin 补人**，外键列按 `sys_user` 全表（128 人，含 `ADMIN_USERS`；陈杰 U010763、苏刚 U010231 都在）用 `code_by_name` 映射，全表查不到的才按 9.2 核对表改派或剔除 [推断]；落在软引用列上的照存姓名 |
 | certs | `qa_cert`、`qa_cert_variant` | `mock/qa-tuning.ts` · `CERT_QAS` | 30 | |
 | eval | `qa_eval_question`、`qa_eval_run`、`qa_eval_fail` | `qa-tuning.ts` · `EVAL_QS`、`EVAL_RUNS` | 40 / 21 / 222 | |
 | feedbacks | `qa_feedback` | `qa-tuning.ts` · `FEEDBACKS` | 26 | |
@@ -537,7 +537,7 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | `MY_PAGES`、`OTHER_PAGES` | qa-pages | `qa_page` + `qa_page_card` + `qa_page_share_member` + `qa_page_subscription` | `code`；卡片 `(page_id, card_key)`；成员 `(page_id, user_id)`；订阅 `page_id` |
 | `PAGE_TEMPLATES` | qa-pages | `qa_template` + `qa_template_card` | `code`；卡片 `(template_id, card_key)` |
 | `PAGE_SCOPES` | qa-pages | 不建表：页面「适用范围」的可选值，接口从用户的行级范围推出（种子环境就是这 6 个）[推断] | — |
-| `PEOPLE`、`OWNER_DEPT` | qa-pages | → `sys_user`（外键列的姓名 → 用户编号 `code` 映射；不在 9 个演示用户里的按 9.2 核对表处理） | — |
+| `PEOPLE`、`OWNER_DEPT` | qa-pages | → `sys_user`（外键列的姓名 → 用户编号 `code` 映射；`sys_user` 全表查不到的按 9.2 核对表处理） | — |
 | `PAGES_CUTOFF`、`TUNING_CUTOFF`、`OBJ_CUTOFF` | 各文件 | 不入库：数据截至时间，按 `now()` 和刷新记录算 | — |
 | `CERT_QAS` | qa-tuning | `qa_cert` + `qa_cert_variant` | `code`；同问法 `lower(question)` |
 | `EVAL_QS` | qa-tuning | `qa_eval_question` | `code` |
@@ -596,19 +596,19 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | `qa_query_log` | 只追加 | `id bigint`, `turn_id`, `user_id`, `question`, `norm_question`, `sem_plan jsonb`, `plan_hash`, `metric_id`, `cert_id`, `asked_at timestamptz`, `elapsed_ms`, `row_count int`, `kind varchar(12)`, `embedding vector` | PK `id`；FK `user_id → sys_user(id)`（不级联）；`turn_id` 不加外键（只追加表，删会话后保留日志，`turn_id` 可能指向已删的轮次）；IX `(asked_at)`；IX `(norm_question, asked_at)`；预览和评测不写 |
 | 外表引用 | — | 动态 `action_run.qa_session_id` | FK `→ qa_session(id) ON DELETE SET NULL`（列由动态建；外键约束由问数迁移补上，因为问数迁移在后；种子由问数回填，见第 8 节） |
 
-**人员列**（规则同静态 / 动态：只有前端语义是「当前登录用户」的列才是 `sys_user` 外键，种子用 `code_by_name` 映射、必须查得到；定义类的负责人 / 处理人 / 审核人存人名软引用。外键列只映射 9 个演示用户：王敏 U010001、陈立军 U010002、何静 U010003、刘婷 U010004、孙浩然 U010005、李娜 U010006、赵蕾 U010007、吴佳 U010008、苏刚 U010231；mock 核对基于 master `/workspace/ui-vue/src/mock` 的 `qa.ts`、`qa-pages.ts`、`qa-tuning.ts`）
+**人员列**（规则同静态 / 动态：只有前端语义是「当前登录用户」的列才是 `sys_user` 外键，种子用 `code_by_name` 映射、必须查得到；定义类的负责人 / 处理人 / 审核人存人名软引用。外键列按 `sys_user` 全表映射（`ADMIN_USERS` 120 人 + `SYS_USERS` 8 人 = 128 人，骨架 `72204b0`，无重名）；PEOPLE / mock 里全表查不到的是 周婷、赵磊、周晓峰、刘洋、张伟、钱一鸣、马晨（陈杰 = U010763，查得到）；mock 核对基于 master `/workspace/ui-vue/src/mock` 的 `qa.ts`、`qa-pages.ts`、`qa-tuning.ts`）
 
-| 列 | 方式 | mock 取值 | 不在 9 人里的 | 种子怎么处理 |
+| 列 | 方式 | mock 取值 | `sys_user` 查不到的 | 种子怎么处理 |
 |---|---|---|---|---|
 | `qa_session.owner_id` | 外键 | 无 owner 字段，隐含当前用户王敏 | 无 | 全部 → U010001 |
 | `qa_favorite.owner_id` | 外键 | 同上，王敏 | 无 | 全部 → U010001 |
 | `qa_permission_request.requester_id` | 外键 | 无种子行（W16 运行时写当前用户） | — | — |
-| `qa_page.owner_id` | 外键 | 王敏（`MY_PAGES` 28 张）、苏刚（P901–P903）、陈杰（P904）、周婷（P905） | 陈杰、周婷 | **P904 → 孙浩然 U010005、P905 → 李娜 U010006** [推断]（`OTHER_PAGES` 是「别人共享给我」的演示，换成 9 人里的非王敏用户，页面内容不变） |
-| `qa_page_share_member.user_id` | 外键 | 27 行，涉及 陈杰、赵磊、刘婷、陈立军、周婷、周晓峰、何静、刘洋、苏刚 | 陈杰、赵磊、周婷、周晓峰、刘洋，共 13 行（P001、P007、P010、P013、P015、P023、P027、P902、P904） | **剔除这 13 行，其余 14 行照写** [推断]；剔除后 P001、P007（所在部门）和 P902（指定成员）成员为空 |
+| `qa_page.owner_id` | 外键 | 王敏（`MY_PAGES` 28 张）、苏刚（P901–P903）、陈杰（P904）、周婷（P905） | 周婷（P905） | P904 陈杰照写（U010763）；**P905 → 李娜 U010006** [推断]（`OTHER_PAGES` 是「别人共享给我」的演示，换成查得到的非王敏用户，页面内容不变） |
+| `qa_page_share_member.user_id` | 外键 | 27 行，涉及 陈杰、赵磊、刘婷、陈立军、周婷、周晓峰、何静、刘洋、苏刚 | 赵磊、周婷、周晓峰、刘洋，共 11 行（P001 赵磊；P007 赵磊、周婷；P010 周晓峰；P013 周婷；P015 周晓峰、刘洋；P023 周婷；P027 赵磊、周婷；P904 赵磊） | **剔除这 11 行，其余 16 行照写**（含 P001、P902 的陈杰）[推断]；剔除后只有 P007（所在部门）成员为空，P001 留陈杰、P902 留陈杰 |
 | `qa_query_log.user_id` | 外键 | 无种子 | — | — |
-| `qa_feedback.user_id` / `user_name` | 外键（可空）+ 姓名快照 | `FEEDBACKS.user` 26 个随机姓名 | 24 人（只有李娜、何静在 9 人里） | `user_name` 原样存；`user_id` 只给李娜、何静 2 行填，其余 24 行为空 [推断]；运行时 W12 踩一律填当前用户 |
+| `qa_feedback.user_id` / `user_name` | 外键（可空）+ 姓名快照 | `FEEDBACKS.user` 26 个随机姓名 | 23 人（查得到的只有李娜 U010006、何静 U010003、冯雪 U010910） | `user_name` 原样存；`user_id` 只给这 3 行填，其余 23 行为空 [推断]；运行时 W12 踩一律填当前用户 |
 | `qa_permission_request.approver` | 软引用 | `QA_APPLY.approver`「刘洋（数据权限管理员）」 | 刘洋 | 原样存 |
-| `qa_page_subscription.recipients` | 软引用数组 | 王敏、陈杰、赵磊、刘婷、陈立军、周婷、周晓峰（21 个，6 个不在 9 人里） | 陈杰、赵磊、周婷、周晓峰 | 原样存 |
+| `qa_page_subscription.recipients` | 软引用数组 | 王敏、陈杰、赵磊、刘婷、陈立军、周婷、周晓峰（21 个，5 个 `sys_user` 查不到） | 赵磊、周婷、周晓峰 | 原样存 |
 | `qa_template.provider` | 软引用 | 数据平台（官方）、刘婷 | — | 原样存 |
 | `qa_cert.certifier` | 软引用 | 刘婷、何静、王敏、孙浩然、周晓峰、陈立军（30 行，4 行周晓峰） | 周晓峰 | 原样存 |
 | `qa_eval_run.operator` | 软引用 | 系统（19）、王敏、周晓峰 | 系统、周晓峰 | 原样存 |
@@ -616,7 +616,7 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | `qa_feedback.resolved_by` | CR 编号软引用（不是人） | CR-0008、CR-0015 | — | 原样存 |
 | 各表 `created_by` | 公共列，用户编号 `varchar(64)`，非外键 | — | — | 种子按骨架默认 |
 
-注：陈杰在 `sys_user` 里其实有（`ADMIN_USERS` U010763），`code_by_name` 查得到；按「外键列只映射 9 个演示用户」仍改派 / 剔除 [推断]，如果放开到全部 128 人，P904 拥有者和 P001、P902 的陈杰成员可以照写。
+注：核对用 `git show 72204b0:seeds/json/system/ADMIN_USERS.json` + `seeds/extra/system/SYS_USERS.json` 按 `name` 精确匹配；软引用列不受影响。
 
 ### 9.3 时间字段的接口格式
 
@@ -767,6 +767,6 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | 29 | `SQL_REJECTED` | 网关拒绝生成的 SQL 时按回答失败显示 | 前端没有这种情况 |
 | 30 | `qa_eval_question.kind` / `gold_sql` | 评测题分 `semplan` / `sql` 两种，SQL 题带标准 SQL（PDE 定） | 前端 `EvalQ` 没有这两个字段，T12 不返回 |
 | 31 | X4 `release.published` 的处理 | 只有对象类型 / 属性 / 指标的展示定义变了才给 `qa_object_type_view` 追加新行；回滚（`kind="rollback"`）不写行（事件由版本层经 `outbox_event` 发，已定） | 前端没有 |
-| 32 | 人员列（9.2「人员列」） | 外键列只映射 9 个演示用户：`OTHER_PAGES` P904 拥有者陈杰 → 孙浩然、P905 周婷 → 李娜；共享成员里不在 9 人的 13 行剔除 | mock 里是别的姓名 |
-| 33 | `qa_feedback.user_id` | 提交人外键可空，另存 `user_name` 快照；种子只有李娜、何静 2 行有 `user_id` | mock 只有姓名 |
+| 32 | 人员列（9.2「人员列」） | 外键列按 `sys_user` 全表映射，只处理全表查不到的人：`OTHER_PAGES` P905 拥有者周婷 → 李娜（P904 陈杰照写）；共享成员里赵磊、周婷、周晓峰、刘洋共 11 行剔除，P007 成员变空 | mock 里是别的姓名 |
+| 33 | `qa_feedback.user_id` | 提交人外键可空，另存 `user_name` 快照；种子只有李娜、何静、冯雪 3 行有 `user_id` | mock 只有姓名 |
 | 34 | `qa_feedback.resolved_by` | 存 CR 编号（mock 就是 `CR-xxxx`），不是人；跟 `cr_id` 的关系待确认 | mock 字段名像人 |
