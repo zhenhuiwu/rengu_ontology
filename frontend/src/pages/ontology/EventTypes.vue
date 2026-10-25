@@ -11,39 +11,36 @@ import ObjRef from '@/components/ObjRef.vue';
 import EChart from '@/components/EChart.vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { usePagedQuery, useCursorQuery } from '@/composables/usePagedQuery';
-import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
 import { GRAY } from '@/theme';
 import { paginate, paginateCursor } from '@/mock/paginate';
 import { fmtInt } from '@/mock/format';
 import { RULES } from '@/mock/dynamic';
-import type { DraftCR } from '@/mock/releases';
 import {
-  EVENT_TYPES, EVENT_SOURCES, EVENT_DRAFTS, EVENT_VERSION_NOTES, payloadOf, subscribersOf, eventsOf, eventDaily, versionsOf,
-  type EventType, type EventOutcome,
+  EVENT_TYPES, EVENT_SOURCES, EVENT_VERSION_NOTES, payloadOf, subscribersOf, eventsOf, eventDaily, versionsOf,
+  type EventType, type EventOutcome, type PayloadField, type Subscriber,
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { allDrafts } from './parts/useDraftView';
+import { useDraftView } from './parts/useDraftView';
+import { useDraftEdits, type DiffRow } from './useDraftEdits';
 
 const route = useRoute();
 const router = useRouter();
 const drawer = useDrawer();
 const confirm = useConfirmStore();
-const { readonly, reason } = useReadonly();
 
 /* 左侧列表 */
 const source = ref('全部');
 const kw = ref('');
 const filtered = computed(() => EVENT_TYPES.filter((e) => (source.value === '全部' || e.source === source.value)
-  && (!kw.value || e.name.includes(kw.value) || e.api.toLowerCase().includes(kw.value.toLowerCase()))));
+  && (!kw.value || e.name.includes(kw.value))));
 const LPAGE = 14;
 const lpage = ref(1);
 watch([source, kw], () => { lpage.value = 1; });
 const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
 const cur = computed<EventType>(() => EVENT_TYPES.find((e) => e.id === route.query.event) ?? EVENT_TYPES[0]);
 const RESET = { view: undefined, fpage: undefined, fsize: undefined, cursor: undefined };
-const pick = (id: string) => router.replace({ query: { ...route.query, ...RESET, event: id } });
 const statusColor = (s: EventType['status']) => (s === '已发布' ? 'success' : s === '变更中' ? 'warning' : 'default');
 
 const TABS = ['overview', 'payload', 'subs', 'recent', 'versions'];
@@ -52,34 +49,72 @@ const tab = computed({
   set: (v) => router.replace({ query: { ...route.query, ...RESET, view: route.query.view, tab: v === 'overview' ? undefined : v } }),
 });
 
-/* 草稿（本页本地维护，共用 DraftBanner / StartChangeModal） */
-const created = reactive<Record<string, DraftCR>>({});
-const draft = computed<DraftCR | undefined>(() => created[cur.value.id] ?? EVENT_DRAFTS[cur.value.id]);
-const isDraft = computed(() => !readonly.value && !!draft.value && route.query.view === 'draft');
-const editTip = computed(() => (readonly.value ? reason.value : isDraft.value ? '' : '已发布版本只读，请先发起变更'));
-const setView = (v: 'published' | 'draft') => router.replace({ query: { ...route.query, view: v === 'draft' ? 'draft' : undefined } });
+/* 草稿（公共 useDraftView：CR-0013 → 门店价格变更；增删改与改动标记用本页 useDraftEdits） */
+const { draft, isDraft, editTip: viewTip, readonly, reason, setView, start } = useDraftView('event', () => cur.value.id);
+const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军' });
+const { canEdit, editTip, dirty, bannerDraft } = de;
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
-function start(opts: { join?: string; title?: string }) {
-  const found = opts.join ? allDrafts().find((d) => d.id === opts.join) : undefined;
-  created[cur.value.id] = found ?? { id: `CR-${String(30 + Object.keys(created).length).padStart(4, '0')}`, title: opts.title || '未命名变更', owner: '王敏', updatedAt: '2026-10-25 16:40', changes: 0 };
-  setView('draft');
+/** 切换左侧选中项：清掉抽屉与分页；有未保存修改先确认 */
+const pick = (id: string) => de.guard(() => router.replace({ query: { ...route.query, ...RESET, drawer: undefined, drawer2: undefined, event: id } }));
+const onView = (v: 'published' | 'draft') => (v === 'published' ? de.guard(() => setView('published')) : setView(v));
+
+const fieldSec = de.section<PayloadField>('payload', () => cur.value.specific, (f) => f.api);
+const subSec = de.section<Subscriber>('subs', () => subscribersOf(cur.value), (x) => x.name);
+const SECS = { payload: fieldSec, subs: subSec } as const;
+type SecName = keyof typeof SECS;
+const flat = <T extends object>(rows: DiffRow<T>[]) => rows.map((r) => ({ ...r.data, _key: r.key, _mark: r.mark }));
+const editCol = (cols: any[]) => (isDraft.value ? [...cols, { title: '改动', key: '_mark', width: 64 }, { title: '操作', key: '_op', width: 96 }] : cols);
+const delRow = (r: { _mark: string; _env?: boolean }) => (r._mark === '删除' ? 'et-del' : '');
+
+interface FieldDef { k: string; label: string; kind?: 'input' | 'select' | 'switch'; options?: { value: any; label: string }[]; required?: boolean }
+const FIELD_TYPES = ['字符串', '整数', '金额', '日期', '日期时间', '枚举', '文本', '布尔'];
+const opt = (xs: string[]) => xs.map((x) => ({ value: x, label: x }));
+const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: () => any }> = {
+  payload: { title: '载荷字段', blank: () => ({ name: '', api: '', type: '字符串', required: false, desc: '', sample: '' }), fields: () => [
+    { k: 'name', label: '字段名', required: true }, { k: 'api', label: 'API 名', required: true },
+    { k: 'type', label: '类型', kind: 'select', options: opt(FIELD_TYPES) }, { k: 'required', label: '必填', kind: 'switch' },
+    { k: 'desc', label: '说明' }, { k: 'sample', label: '示例' }] },
+  subs: { title: '订阅方', blank: () => ({ kind: '自动化', name: '', filter: '全部', then: '', status: '启用', weekly: 0 }), fields: () => [
+    { k: 'kind', label: '类型', kind: 'select', options: opt(['规则', '自动化', '通知', '外部订阅']) },
+    { k: 'name', label: '订阅方', required: true }, { k: 'filter', label: '过滤条件', required: true }, { k: 'then', label: '收到后', required: true },
+    { k: 'status', label: '状态', kind: 'select', options: opt(['启用', '停用']) }] },
+};
+const editor = reactive<{ open: boolean; sec: SecName; key: string | null; form: Record<string, any> }>({ open: false, sec: 'payload', key: null, form: {} });
+const editorDef = computed(() => FORMS[editor.sec]);
+function openAdd(sec: SecName) { if (!canEdit.value) return; Object.assign(editor, { open: true, sec, key: null, form: FORMS[sec].blank() }); }
+function openEdit(sec: SecName, key: string) {
+  if (!canEdit.value) return;
+  const row = SECS[sec].rows.value.find((r) => r.key === key);
+  if (row) Object.assign(editor, { open: true, sec, key, form: { ...(row.data as object) } });
 }
+function saveEditor() {
+  const miss = editorDef.value.fields().find((f) => f.required && !String(editor.form[f.k] ?? '').trim());
+  if (miss) { message.warning(`请填写${miss.label}`); return; }
+  if (editor.sec === 'payload' && editor.key === null && payloadOf(cur.value).some((f) => f.api === editor.form.api)) { message.warning('API 名与已有字段（含信封字段）重复'); return; }
+  const sec = SECS[editor.sec] as { add: (d: any) => boolean; update: (k: string, d: any) => void };
+  if (editor.key === null) { if (!sec.add({ ...editor.form })) { message.warning('已存在同名项'); return; } }
+  else sec.update(editor.key, { ...editor.form });
+  editor.open = false;
+}
+const delItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].remove(key);
+const restoreItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].restore(key);
 
 async function simulate() {
   const e = cur.value;
   const ok = await confirm.ask({
     title: `模拟触发：${e.name}`, target: `${e.object}（使用示例载荷）`, tag: '测试',
-    fields: e.specific.slice(0, 4).map((f) => ({ label: f.name, value: f.sample })),
+    fields: flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').slice(0, 4).map((f) => ({ label: f.name, value: f.sample })),
     impact: '只投递到订阅方的测试通道，用来验证过滤条件，不会产生告警、执行动作或写入下游。',
     okText: '发送测试事件',
   });
-  if (ok) message.success(`测试事件已投递 ${subscribersOf(e).filter((s) => s.status !== '停用').length} 个订阅方的测试通道`);
+  if (ok) message.success(`测试事件已投递 ${liveSubs.value.filter((s) => s.status !== '停用').length} 个订阅方的测试通道`);
 }
 
 /* 概览 */
-const subs = computed(() => subscribersOf(cur.value));
+const subs = computed(() => flat(subSec.rows.value));
+const liveSubs = computed(() => subs.value.filter((x) => x._mark !== '删除'));
 const daily = computed(() => eventDaily(cur.value.id, cur.value.weekly));
 const chartOption = computed(() => ({
   grid: { left: 48, right: 8, top: 12, bottom: 24 },
@@ -98,26 +133,27 @@ const health = computed(() => {
 
 /* 载荷字段 */
 const fq = usePagedQuery({ defaultSize: 12, prefix: 'f' });
-const fields = computed(() => paginate(payloadOf(cur.value), { page: fq.page.value, size: fq.size.value }));
-const fieldCols = [
+const envelope = computed(() => payloadOf(cur.value).filter((f) => !cur.value.specific.some((x) => x.api === f.api)).map((f) => ({ ...f, _key: `env:${f.api}`, _mark: '', _env: true })));
+const fieldRows = computed(() => [...flat(fieldSec.rows.value), ...envelope.value]);
+const fields = computed(() => paginate(fieldRows.value, { page: fq.page.value, size: fq.size.value }));
+const fieldCols = computed(() => editCol([
   { title: '字段', dataIndex: 'name', width: 140 },
   { title: 'API 名', dataIndex: 'api', width: 150 },
   { title: '类型', dataIndex: 'type', width: 100 },
   { title: '必填', key: 'required', width: 72 },
   { title: '说明', dataIndex: 'desc', ellipsis: { showTitle: true } },
   { title: '示例', dataIndex: 'sample', width: 260, ellipsis: { showTitle: true } },
-];
-const isEnvelope = (api: string) => !cur.value.specific.some((f) => f.api === api);
+]));
 
 /* 订阅方 */
-const subCols = [
+const subCols = computed(() => editCol([
   { title: '类型', dataIndex: 'kind', width: 96 },
   { title: '订阅方', key: 'name', width: 280 },
   { title: '过滤条件', dataIndex: 'filter', width: 220, ellipsis: { showTitle: true } },
   { title: '收到后', dataIndex: 'then', ellipsis: { showTitle: true } },
   { title: '近 7 天投递', key: 'weekly', width: 120, align: 'right' as const },
   { title: '状态', key: 'status', width: 88 },
-];
+]));
 
 /* 近期事件（事件流：先选时间范围，游标分页） */
 const RANGES = [{ label: '近 24 小时', value: '24h' }, { label: '近 7 天', value: '7d' }];
@@ -166,7 +202,7 @@ const verCols = [
   <div class="et">
     <div class="panel et-list">
       <div class="et-filter">
-        <a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" class="et-kw" />
+        <a-input-search v-model:value="kw" placeholder="搜索名称" class="et-kw" />
         <a-select v-model:value="source" :options="EVENT_SOURCES.map((g) => ({ value: g, label: g === '全部' ? '全部来源' : g }))" class="et-sel" />
       </div>
       <ul class="et-items">
@@ -187,8 +223,8 @@ const verCols = [
     </div>
 
     <div class="panel et-detail">
-      <DraftBanner v-if="isDraft && draft" :draft="draft"
-        @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="setView('published')" />
+      <DraftBanner v-if="isDraft && bannerDraft" :draft="bannerDraft"
+        @submit="de.submit()" @discard="de.discard(() => setView('published'))" />
       <div class="et-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
         <span class="t-14 c-3 num">{{ cur.api }}</span>
@@ -197,13 +233,12 @@ const verCols = [
         <a-tag :color="statusColor(cur.status)">{{ cur.status }}</a-tag>
         <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
-          @change="(v: any) => setView(v)" />
+          @change="(v: any) => onView(v)" />
         <span class="et-sp" />
         <a-button :disabled="cur.status === '草稿'" @click="simulate">模拟触发</a-button>
-        <a-tooltip :title="reason">
-          <a-button v-if="!draft || readonly" type="primary" :disabled="readonly" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
-          <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
-        </a-tooltip>
+        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
+        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="et-tabs">
         <a-tab-pane key="overview" tab="概览" />
@@ -226,7 +261,7 @@ const verCols = [
             <a-descriptions-item label="触发对象">{{ cur.object }}（{{ cur.objectApi }}）</a-descriptions-item>
             <a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item>
             <a-descriptions-item label="说明" :span="2">{{ cur.desc }}</a-descriptions-item>
-            <a-descriptions-item label="载荷摘要" :span="2">{{ cur.specific.map((f) => f.name).join('、') }}，另含 10 个通用信封字段</a-descriptions-item>
+            <a-descriptions-item label="载荷摘要" :span="2">{{ flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').map((f) => f.name).join('、') }}，另含 {{ envelope.length }} 个通用信封字段</a-descriptions-item>
             <a-descriptions-item label="去重键"><span class="num">{{ cur.dedupKey }}</span></a-descriptions-item>
             <a-descriptions-item label="去重窗口">{{ cur.dedupWindow }}</a-descriptions-item>
             <a-descriptions-item label="投递保证">{{ cur.delivery }}</a-descriptions-item>
@@ -235,9 +270,9 @@ const verCols = [
             <a-descriptions-item label="近 7 天">{{ fmtInt(cur.weekly) }} 条</a-descriptions-item>
           </a-descriptions>
           <div class="et-sec t-14 fw-600 et-sec-row">
-            <span>订阅方 {{ subs.length }} 个</span><span class="t-12 c-3 fw-400">完整列表见“订阅方”页签</span>
+            <span>订阅方 {{ liveSubs.length }} 个</span><span class="t-12 c-3 fw-400">完整列表见“订阅方”页签</span>
           </div>
-          <div v-for="s in subs.slice(0, 4)" :key="s.name" class="et-sub">
+          <div v-for="s in liveSubs.slice(0, 4)" :key="s._key" class="et-sub">
             <span class="t-12 c-3 et-sub-k">{{ s.kind }}</span>
             <span class="t-14 c-1">
               <template v-if="s.ruleId"><ObjRef kind="rule" :id="s.ruleId">{{ s.ruleId }}</ObjRef></template><span :class="{ 'et-gap': s.ruleId }">{{ s.name }}</span>
@@ -276,13 +311,24 @@ const verCols = [
         <div class="et-tool">
           <span class="t-12 c-3">事件自身字段在前，通用信封字段在后（所有事件类型共有，不可修改）</span>
           <span class="et-sp" />
-          <a-tooltip :title="editTip"><a-button size="small" :disabled="!isDraft">新增字段</a-button></a-tooltip>
+          <template v-if="isDraft">
+            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
+            <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
+            <a-button size="small" :disabled="!dirty" @click="de.save()">保存草稿</a-button>
+          </template>
+          <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('payload')">新增字段</a-button></a-tooltip>
         </div>
         <div class="paged-scroll">
-          <a-table :columns="fieldCols" :data-source="fields.items" :pagination="false" size="middle" row-key="api">
+          <a-table :columns="fieldCols" :data-source="fields.items" :pagination="false" size="middle" row-key="_key" :row-class-name="delRow">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'required'">{{ record.required ? '是' : '否' }}</template>
-              <template v-else-if="column.dataIndex === 'name'">{{ record.name }}<span v-if="isEnvelope(record.api)" class="t-12 c-3"> · 信封</span></template>
+              <template v-else-if="column.dataIndex === 'name'">{{ record.name }}<span v-if="record._env" class="t-12 c-3"> · 信封</span></template>
+              <template v-else-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
+              <template v-else-if="column.key === '_op'">
+                <span v-if="record._env" class="t-12 c-3">信封字段</span>
+                <a-space v-else-if="record._mark === '删除'"><a :class="{ 'et-dis': !canEdit }" @click="restoreItem('payload', record._key)">恢复</a></a-space>
+                <a-space v-else><a :class="{ 'et-dis': !canEdit }" @click="openEdit('payload', record._key)">编辑</a><a :class="{ 'et-dis': !canEdit }" @click="delItem('payload', record._key)">删除</a></a-space>
+              </template>
             </template>
           </a-table>
         </div>
@@ -294,9 +340,14 @@ const verCols = [
         <div class="et-tool">
           <span class="t-12 c-3">规则、自动化、通知和外部订阅都按同一份载荷接收；点规则编号在当前页查看规则</span>
           <span class="et-sp" />
-          <a-tooltip :title="editTip"><a-button size="small" :disabled="!isDraft">新增订阅</a-button></a-tooltip>
+          <template v-if="isDraft">
+            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
+            <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
+            <a-button size="small" :disabled="!dirty" @click="de.save()">保存草稿</a-button>
+          </template>
+          <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('subs')">新增订阅</a-button></a-tooltip>
         </div>
-        <a-table :columns="subCols" :data-source="subs" :pagination="false" size="middle" row-key="name">
+        <a-table :columns="subCols" :data-source="subs" :pagination="false" size="middle" row-key="_key" :row-class-name="delRow">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <template v-if="record.ruleId"><ObjRef kind="rule" :id="record.ruleId">{{ record.ruleId }}</ObjRef></template><span :class="{ 'et-gap': record.ruleId }">{{ record.name }}</span>
@@ -305,6 +356,11 @@ const verCols = [
             <template v-else-if="column.key === 'status'">
               <a-badge :status="record.status === '异常' ? 'warning' : 'default'" :text="record.status" />
             </template>
+            <template v-else-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
+              <template v-else-if="column.key === '_op'">
+                <a-space v-if="record._mark === '删除'"><a :class="{ 'et-dis': !canEdit }" @click="restoreItem('subs', record._key)">恢复</a></a-space>
+                <a-space v-else><a :class="{ 'et-dis': !canEdit }" @click="openEdit('subs', record._key)">编辑</a><a :class="{ 'et-dis': !canEdit }" @click="delItem('subs', record._key)">删除</a></a-space>
+              </template>
           </template>
         </a-table>
       </div>
@@ -352,6 +408,16 @@ const verCols = [
     </div>
   </div>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="start" />
+  <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="520" @ok="saveEditor">
+    <a-form layout="vertical" class="et-form">
+      <a-form-item v-for="f in editorDef.fields()" :key="f.k" :label="f.label" :required="f.required">
+        <a-select v-if="f.kind === 'select'" v-model:value="editor.form[f.k]" :options="f.options" />
+        <a-switch v-else-if="f.kind === 'switch'" v-model:checked="editor.form[f.k]" />
+        <a-input v-else v-model:value="editor.form[f.k]" />
+      </a-form-item>
+    </a-form>
+    <div class="t-12 c-3">{{ editor.sec === 'payload' ? '新增字段建议设为可选；删除或改类型属于不兼容变更，需要所有订阅方确认。' : '' }}改动先保存在本地，点“保存草稿”后计入 {{ draft?.id }} 的改动数。</div>
+  </a-modal>
 </template>
 
 <style scoped>
@@ -389,5 +455,7 @@ const verCols = [
 .et-gap { margin-left: 4px; }
 .et-ev { display: grid; grid-template-columns: 190px 150px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: var(--border); }
 .et-ev-s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.et-form :deep(.ant-form-item) { margin-bottom: 12px; }
+:deep(.et-del td) { text-decoration: line-through; color: var(--g7); }
 .et-dis { color: var(--g7); cursor: not-allowed; }
 </style>

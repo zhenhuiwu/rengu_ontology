@@ -1,0 +1,120 @@
+/**
+ * 动作类型 / 事件类型草稿里的增删改（只给 ActionTypes.vue、EventTypes.vue 用）。
+ * 草稿来源、视图切换、发起变更仍用公共的 parts/useDraftView；这里只管“草稿里改了什么”：
+ *   - section(name, base, keyOf)：一张可编辑的表（参数、提交条件、写回、载荷字段、订阅方……），
+ *     行带改动标记 新增 / 修改 / 删除（和已发布版比较）；
+ *   - 改动先进“未保存”，保存草稿后计入变更单改动数；有未保存改动时切换左侧对象、切回已发布、离开页面都要确认（useUnsavedGuard）；
+ *   - 提交审核后草稿锁定，不能再改。
+ * 状态按 变更单 + 对象 保存在模块里，切换页签不丢。
+ */
+import { computed, reactive, type Ref } from 'vue';
+import { message } from 'ant-design-vue';
+import type { DraftCR } from '@/mock/releases';
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
+import { useConfirmStore } from '@/stores/confirm';
+
+export type DiffMark = '新增' | '修改' | '删除' | '';
+export interface DiffRow<T> { key: string; data: T; base?: T; mark: DiffMark }
+interface Row { key: string; data: unknown; deleted?: boolean }
+
+const saved = reactive<Record<string, Row[]>>({});
+const working = reactive<Record<string, Row[]>>({});
+const submitted = reactive<Record<string, string>>({});
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+export interface DraftEditsOptions {
+  draft: Ref<DraftCR | undefined>;
+  isDraft: Ref<boolean>;
+  editTip: Ref<string>;
+  targetId: () => string;
+  targetName: () => string;
+  reviewer?: string;
+}
+
+export function useDraftEdits(o: DraftEditsOptions) {
+  const confirm = useConfirmStore();
+  const prefix = () => `${o.draft.value?.id ?? '-'}|${o.targetId()}|`;
+  const locked = computed(() => !!o.draft.value && !!submitted[o.draft.value.id]);
+  const canEdit = computed(() => o.isDraft.value && !locked.value);
+  const editTip = computed(() => (o.isDraft.value && locked.value ? `${o.draft.value!.id} 已提交审核，驳回后才能继续修改` : o.editTip.value));
+  const dirty = computed(() => Object.keys(working).some((k) => k.startsWith(prefix())));
+  const sections: { marks: (src: 'saved' | 'all') => number }[] = [];
+
+  function section<T>(name: string, base: () => T[], keyOf: (t: T) => string) {
+    const key = () => prefix() + name;
+    const baseRows = (): Row[] => base().map((d) => ({ key: keyOf(d), data: d }));
+    const current = (): Row[] => working[key()] ?? saved[key()] ?? baseRows();
+    const diff = (src: Row[]): DiffRow<T>[] => {
+      const b = new Map(baseRows().map((r) => [r.key, r.data as T]));
+      return src.map((r) => ({
+        key: r.key, data: r.data as T, base: b.get(r.key),
+        mark: r.deleted ? '删除' : !b.has(r.key) ? '新增' : same(b.get(r.key), r.data) ? '' : '修改',
+      }));
+    };
+    const rows = computed<DiffRow<T>[]>(() => (o.isDraft.value ? diff(current()) : base().map((d) => ({ key: keyOf(d), data: d, mark: '' as const }))));
+    const edit = (fn: (rs: Row[]) => void) => {
+      if (!canEdit.value) return;
+      const rs = current().map((r) => ({ ...r }));
+      fn(rs);
+      working[key()] = rs;
+    };
+    sections.push({ marks: (src) => diff(src === 'saved' ? saved[key()] ?? baseRows() : current()).filter((r) => r.mark).length });
+    return {
+      rows,
+      /** 键已存在（未删除）时返回 false */
+      add(d: T) {
+        if (current().some((r) => r.key === keyOf(d) && !r.deleted)) return false;
+        edit((rs) => { const i = rs.findIndex((r) => r.key === keyOf(d)); if (i >= 0) rs[i] = { key: keyOf(d), data: d }; else rs.push({ key: keyOf(d), data: d }); });
+        return true;
+      },
+      update(k: string, d: T) { edit((rs) => { const r = rs.find((x) => x.key === k); if (r) r.data = d; }); },
+      remove(k: string) {
+        const isBase = baseRows().some((r) => r.key === k);
+        edit((rs) => { const i = rs.findIndex((x) => x.key === k); if (i < 0) return; if (isBase) rs[i].deleted = true; else rs.splice(i, 1); });
+      },
+      restore(k: string) {
+        const b = baseRows().find((r) => r.key === k);
+        edit((rs) => { const r = rs.find((x) => x.key === k); if (r && b) { r.deleted = false; r.data = b.data; } });
+      },
+    };
+  }
+
+  /** 已保存进草稿的改动数 / 含未保存的改动数 */
+  const savedChanges = computed(() => sections.reduce((s, x) => s + x.marks('saved'), 0));
+  const allChanges = computed(() => sections.reduce((s, x) => s + x.marks('all'), 0));
+  /** 给 DraftBanner 用：改动数 = 变更单原有改动 + 本对象已保存的改动 */
+  const bannerDraft = computed<DraftCR | undefined>(() => o.draft.value && { ...o.draft.value, changes: o.draft.value.changes + savedChanges.value, ...(savedChanges.value ? { updatedAt: '2026-10-25 17:10' } : {}) });
+
+  function save() {
+    Object.keys(working).filter((k) => k.startsWith(prefix())).forEach((k) => { saved[k] = working[k]; delete working[k]; });
+    message.success('已保存到草稿');
+  }
+  function revert() { Object.keys(working).filter((k) => k.startsWith(prefix())).forEach((k) => delete working[k]); }
+  const guardRaw = useUnsavedGuard(() => dirty.value);
+  /** 有未保存改动时先确认；确认放弃后丢掉未保存改动再执行 fn */
+  const guard = (fn: () => void) => guardRaw(() => { revert(); fn(); });
+
+  async function submit() {
+    const d = o.draft.value;
+    if (!d) return;
+    if (locked.value) { message.info(`${d.id} 已提交审核`); return; }
+    if (dirty.value) { message.warning('还有未保存的修改，请先保存草稿'); return; }
+    const ok = await confirm.ask({
+      title: '提交审核', target: `${d.id} ${d.title}`, okText: '提交',
+      fields: [{ label: '本对象', value: o.targetName() }, { label: '本对象改动', value: `${savedChanges.value} 处` }, { label: '变更单改动', value: `${d.changes + savedChanges.value} 处` }, ...(o.reviewer ? [{ label: '审核人', value: o.reviewer }] : [])],
+      impact: '提交后草稿锁定，审核人驳回后才能继续修改；审核通过后随下一次整版发布生效，发布前问数和规则仍用已发布版本。',
+    });
+    if (ok) { submitted[d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交审核，可在“变更与发布”查看`); }
+  }
+  async function discard(after: () => void) {
+    const d = o.draft.value;
+    if (!d) return;
+    const ok = await confirm.ask({ title: '放弃草稿', target: `${d.id} · ${o.targetName()}`, okText: '放弃', danger: true,
+      impact: '丢弃本对象在草稿里的全部改动（含已保存的），已发布版本不受影响。' });
+    if (!ok) return;
+    Object.keys({ ...saved, ...working }).filter((k) => k.startsWith(prefix())).forEach((k) => { delete saved[k]; delete working[k]; });
+    after();
+  }
+  return { section, canEdit, editTip, locked, dirty, savedChanges, allChanges, bannerDraft, save, revert, guard, submit, discard };
+}
