@@ -1,11 +1,16 @@
 <script setup lang="ts">
-/** 页面卡片缩略预览：指标卡 / 折线 / 柱状 / 表格；底部标口径（完整名称 + 版本），有待发布变更时提示 */
+/**
+ * 页面卡片缩略预览：指标卡 / 折线 / 柱状 / 表格；底部标口径（完整名称 + 版本），有待发布变更时提示。
+ * 无权限：后台对范围外的卡片返回 {denied:true}（qa-api P3，只留标题 / 图形 / 口径，不出数值），
+ * 这里只显示“无权限”（文案同 PageDrawer.vue:128/283），不给数值、不加操作。
+ */
 import { computed } from 'vue';
+import { LockOutlined } from '@ant-design/icons-vue';
 import EChart from '@/components/EChart.vue';
 import InfoTip from '../InfoTip.vue';
 import type { PageCard } from '@/mock/qa-pages';
 
-const props = defineProps<{ card: PageCard; index?: number }>();
+const props = defineProps<{ card: PageCard & { denied?: boolean }; index?: number }>();
 const option = computed(() => ({
   grid: { left: 36, right: 8, top: 8, bottom: 20 },
   tooltip: { trigger: 'axis' },
@@ -25,7 +30,8 @@ const option = computed(() => ({
       <span class="t-12 c-3 cp-viz">{{ card.viz }}</span>
     </div>
     <div class="cp-body">
-      <template v-if="card.viz === '指标卡'">
+      <div v-if="card.denied" class="cp-deny t-12 c-3" title="看到的数据按各自的数据权限裁剪，范围外的卡片显示“无权限”。"><LockOutlined /> 无权限</div>
+      <template v-else-if="card.viz === '指标卡'">
         <div class="cp-ell" :title="card.sub"><span class="t-20 fw-600 num c-1">{{ card.value }}</span> <span class="t-12 c-3">{{ card.unit }}</span> <span class="t-12 c-2 num">{{ card.sub }}</span></div>
       </template>
       <div v-else-if="card.viz === '表格'" class="cp-tbl">
@@ -45,5 +51,6 @@ const option = computed(() => ({
 .cp-chart { height: 88px; }
 .cp-tbl { display: flex; flex-direction: column; gap: 2px; }
 .cp-tr { display: flex; justify-content: space-between; gap: 8px; }
+.cp-deny { display: flex; align-items: center; justify-content: center; gap: 4px; }
 .cp-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 </style>
