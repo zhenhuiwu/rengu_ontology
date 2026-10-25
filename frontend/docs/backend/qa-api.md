@@ -1,6 +1,6 @@
 # 智能问数：后台接口、操作流程与种子数据（v0.3 草案）
 
-> 依据：`/workspace/ui-vue` master（`b27758b`）的前端代码与 mock。v0.3 在 v0.2 基础上按 PDE 两轮条件通过意见修订（代理主键 + `code`、只读 403 `READONLY`、会话口径与回答口径分开等），并按本体小白复审 D′ 和骨架 `72204b0`（PDE 已过；`app/common/sql_guard.py`、`app/common/auth.py`、`app/common/outbox.py`、`app/db/session.py`、`app/core/errors.py`、`app/modules/biz/`、`app/contracts/versioning.py`、`app/seeds/registry.py`）对齐；行级范围映射按静态 `static-api.md` §1.5（`9c7fe84`）。v0.2 按 PDE 评审和 `api-index.md`（pde 分支 `97e86e9`）§5.4 修订：分页改 `size`；W3 去掉游标；X1/X2 改成动态模块的 `action-runs:stage` / `:confirm`；字段名和枚举值跟前端 mock 一致；第 10 节补全交互；新增第 12 节 [推断] 清单。
+> 依据：`/workspace/ui-vue` master（`b27758b`）的前端代码与 mock。v0.3 在 v0.2 基础上按 PDE 两轮条件通过意见修订（代理主键 + `code`、只读 403 `READONLY`、会话口径与回答口径分开等），并按本体小白复审 D′ 和骨架 `72204b0`（PDE 已过；`app/common/sql_guard.py`、`app/common/auth.py`、`app/common/outbox.py`、`app/db/session.py`、`app/core/errors.py`、`app/modules/biz/`、`app/contracts/versioning.py`、`app/seeds/registry.py`）对齐；行级范围映射按静态 `static-api.md` §1.5（静态 master `4641ebf`）。v0.2 按 PDE 评审和 `api-index.md`（pde 分支 `97e86e9`）§5.4 修订：分页改 `size`；W3 去掉游标；X1/X2 改成动态模块的 `action-runs:stage` / `:confirm`；字段名和枚举值跟前端 mock 一致；第 10 节补全交互；新增第 12 节 [推断] 清单。
 > 范围：问数工作台、我的页面与模板库、对象搜索、对象详情（含「带范围提问」浮层）、问数调优（4 个页签），共 **5 个路由**。
 > 编号：页面 R1–R5；接口 W(工作台)/P(页面)/O(对象)/T(调优)/X(外部模块)。
 > 标注：**[推断]** 表示前端代码里没有直接体现、是文档补上的规则或限制（**团队约定：后台照前端做，凡是前端没有的限制都标 [推断]，并汇总到第 12 节给用户确认**）；**[第二期]** 表示前端还没有入口或显示「暂未开放」，第一期不做；**[待用户定]** 表示前端两处不一致，需要用户拍板。
@@ -31,7 +31,7 @@
 |---|---|
 | 分页 | `page`（从 1 开始）、`size`；响应 `{items, total, page, size}`，跟 `static-api.md`、`dynamic-api.md` 一样。前端 `usePagedQuery` 的 URL 参数是 `page`/`size`，带前缀时是 `<前缀>page`/`<前缀>size`（如认证问答 `cpage`/`csize`），`size` 等于默认值时不写进 URL。前端 simple 分页（‹ 1/N ›）也要返回 `total`。筛选或搜索变化后前端回到第 1 页。默认条数见各接口。不分页的接口（W3）一次返回全部。 |
 | 时间 | **接口按 mock 里每个字段原来的格式返回**（北京时间，逐字段见 9.3），入参用同样的格式；库里一律 `timestamptz`（日期 `date`）。相对时间按 `now()`（种子环境固定 `2026-10-25 15:42`）。 |
-| 人员 | 返回 `xxxId` 加显示名（如 `ownerId`、`owner`）。mock 里只有姓名（`王敏`），种子数据按姓名映射到 `sys_user.code`（用户编号，如 `U010001`；第 9 节）。 |
+| 人员 | 分两类（跟静态 `owner`、动态经办人 / 确认人一致；逐列见 9.2「人员列」）：**① 当前登录用户**（会话、常用、页面拥有者和共享成员、申请人、反馈提交人、查询日志）存外键 `→ sys_user(id)`，返回 `xxxId`（用户编号 `sys_user.code`，如 `U010001`）加显示名；种子按姓名映射，查不到报错。**② 定义类的负责人 / 处理人 / 审核人**（认证人、评测操作人、反馈处理人、审批人、模板提供方、订阅接收人）存人名软引用 `varchar`，**不是外键**，原样返回姓名，不查 `sys_user`。 |
 | 枚举 | **接口返回前端 mock 里的值**（如认证状态 `已认证`、对象类型 `store`、口径 `ex`），不另加 `label`。数据库可以存英文码，Pydantic 层转换，对照见 1.3。 |
 | 语义计划 `SemPlan` | `{metric, dims[], time, filter?, sort?}`，跟 `mock/qa-tuning.ts` 的 `SemPlan` 一致。回答依据、认证问答、评测期望、高频问题、页面卡片**共用这一个结构**；`planText` 的拼接规则搬到后台，响应带 `planText`。 |
 | 指标引用 | 接口里跟 mock 一样用 `metric` + `version`（如 `PageCard{metric, version}`），响应带 `metricLabel`（`复购客户销售额（不含税） v3`）。**数据库存 `metric_id bigint → metric(id)`**（静态 `metric` 的一行就是一个 api 名 + 版本），接口返回时连表取 `metric` + `version`，不存 `metric@version` 字符串。`T_METRICS` 的键（`repeat`、`margin`…）不是指标 API 名，种子经 `drawerId` / `QA_METRIC` 映射（第 9 节）。静态 `metric` 的业务唯一键是 `(code, version int)`：mock 的中文名按 `metrics.ts` / `QA_METRIC` 的 `name → id` 换成 `metric.code`，`"v3"` 去掉 `v` 换成整数 `3`；接口返回时再拼回 `"v" + version`（对照表见 9.1）。 |
@@ -109,7 +109,7 @@
 | `SQL_REJECTED` | 403 | 问数网关拒绝执行生成的 SQL（骨架 `sql_guard`：不是单条只读 SELECT；查了没登记的表；调用白名单以外的函数；带 schema 的函数调用（`pg_catalog.lower()`、`x.age()`）；类型转换目标不在白名单（只允许数值 / 文本 / 日期时间 / 布尔，拒 `regclass`、`oid`、`json`、数组、自定义类型等）；查 `public` 以外的 schema；`TABLESAMPLE`）；`details` 视情况带 `function` / `type` / `table`；问答流里按「回答失败」显示，不展示 SQL [推断：前端没有单独提示] |
 | `QUERY_TIMEOUT` / `DATASOURCE_DELAY` | 504/503 | 回答失败；页面「刷新失败」，保留上次结果 |
 | `LLM_UNAVAILABLE` | 503 | 回答失败，可重试 |
-| `USER_NOT_FOUND` | 422 | 请求里引用的用户编号（`sys_user.code`）不存在（骨架版本层 `create_version` 的 `published_by` 已用；问数凡按编号引用人的写接口同样返回，如 P10 共享成员、W16 审批人）`details.userId`。注意：`X-Demo-As` 编号不存在走 401 `UNAUTHORIZED`，不是本码 |
+| `USER_NOT_FOUND` | 422 | 请求里引用的用户编号（`sys_user.code`）不存在（骨架版本层 `create_version` 的 `published_by` 已用；问数凡按编号引用人的写接口同样返回，如 P10 共享成员；软引用列（审批人、认证人等）存姓名，不校验、不返回本码）`details.userId`。注意：`X-Demo-As` 编号不存在走 401 `UNAUTHORIZED`，不是本码 |
 | `VALIDATION_FAILED` | 422 | 表单校验，`details.fields[{field, message}]`（`field` 用接口的 camelCase 字段名） |
 | `INTERNAL_ERROR` | 500 | 未处理异常，不带堆栈；同样带 `requestId` 和 `X-Request-ID` 头 |
 | `ROLLBACK_NOT_LATEST` / `EMPTY_RELEASE` | 409 | 骨架通用码（版本层 `create_version`）；问数接口不会返回，列在这里是为了跟 api-index §1.2 主表对齐 |
@@ -249,7 +249,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
    → 权限预判（问题里明确的范围超出用户行级范围时：直接 denied，不执行，也不透露那个范围有没有数据）
    → compiler（SemPlan → sqlglot AST → 目标库方言）
    → sql_guard（api-index `f40c81e` §1.4 网关硬规则；骨架 `app/common/sql_guard.py`）：sqlglot 解析后**检查整棵语法树**（不只看第一个关键字），只放行单条只读 SELECT：拒绝多语句、DDL/DML、CTE 里夹带的 INSERT/UPDATE/DELETE、`SELECT … INTO`、`FOR UPDATE/SHARE`；**函数按白名单放行**（聚合、窗口、日期、数学、字符串、条件），`pg_sleep` / `dblink` / `lo_*` / `pg_read_file` / `set_config` / `current_setting` / `query_to_xml` 这类一律拒绝，**带 schema 的函数调用**一律拒绝；**类型转换**（`::`、`CAST`）只允许数值 / 文本 / 日期时间 / 布尔；`TABLESAMPLE` 直接拒绝（不静默丢掉）；表名解析**按 CTE 作用域**（只有当前作用域里定义的 CTE 名才算 CTE，同名的真实表照样检查）；**带 schema 且不是 `public` 的表一律拒绝**（`pg_catalog`、`information_schema`、元数据 schema 都进不来）。被拒返回 403 `SQL_REJECTED`
-   → security（骨架 `sql_guard.row_filters_for(user)`：按 `auth.row_filter(user, object_type)` + `row_filter.to_sql` 编出各受控表的谓词，再由 `inject_row_filters(sql, {table: (pred, params)}, allowed) -> (sql, params)` 把受控表换成 `(SELECT * FROM public.t WHERE 谓词) AS t`，不依赖模型自己写过滤；谓词里的表固定写成 `public.<表>`（不会被用户同名 CTE 劫持），不加过滤的表也改写成 `public.<表>`；**谓词里的值一律走绑定参数，不拼进 SQL 字符串**，多张表的参数合并后按 `$1..$n` 重新编号；`DENY_ALL` 编译成 `FALSE`；既不在受控表也不在 `allowed` 里的表一律拒绝（`SQL_REJECTED`）；预览时传被预览人。**受控表登记**（`app/modules/biz/governance.py`）：`store` 按 `store.big_region` / `store.region` 过滤；`biz_order` 经一跳关系 `order_belongs_to_store`（`biz_order.store_id → store.id`）按 `store.big_region` 过滤；`order_line` 经 `order_id → biz_order` **继承订单的谓词**（`EXISTS (SELECT 1 FROM public.biz_order AS _rf_biz_order WHERE _rf_biz_order.id = order_line.order_id AND <订单谓词>)`，实际是 order_line → biz_order → store 两跳）；`product` 是维度表，显式登记为不限制（`register_unrestricted`）。**大区取值**：库里 `store.big_region` 存 `华东`（由区域「华东一区」派生 [推断]）；静态裁定维度值是「华东大区」、同义词「华东」，SQL 里写 `big_region = '华东'`。**静态 `static-api.md` §1.5（`9c7fe84`）另两类范围**：① 商品.品类：范围值按 `app/contracts/static.py` 的 `CATEGORY_SCOPE_ALIAS` [推断] 换成一级类目（乳品烘焙→乳品、休闲零食→休闲食品、日化清洁→日化家清，生鲜 / 粮油调味 / 酒水饮料同名），谓词 `split_part(product.category, '/', 1) = ANY($n)` 加在 `product` 上；有品类范围的用户才加，没有的仍不限制；`order_line` 要不要也按商品品类过滤是 [推断]（现在只继承订单的谓词）；② 订单.门店：经 `biz_order.store_id → store.name` 一跳 `EXISTS`，谓词 `store.name = ANY($n)`，值原样按门店名比；mock 范围值（`roles.ts:26`「上海徐汇店」等简称）跟种子全称对不上，匹配 0 行，效果等于拒绝 [推断]，要不要加别名表由用户定（12 节 #26）。**没有任何角色的用户默认拿不到任何行**（deny by default：谓词为 false，结果为空））
+   → security（骨架 `sql_guard.row_filters_for(user)`：按 `auth.row_filter(user, object_type)` + `row_filter.to_sql` 编出各受控表的谓词，再由 `inject_row_filters(sql, {table: (pred, params)}, allowed) -> (sql, params)` 把受控表换成 `(SELECT * FROM public.t WHERE 谓词) AS t`，不依赖模型自己写过滤；谓词里的表固定写成 `public.<表>`（不会被用户同名 CTE 劫持），不加过滤的表也改写成 `public.<表>`；**谓词里的值一律走绑定参数，不拼进 SQL 字符串**，多张表的参数合并后按 `$1..$n` 重新编号；`DENY_ALL` 编译成 `FALSE`；既不在受控表也不在 `allowed` 里的表一律拒绝（`SQL_REJECTED`）；预览时传被预览人。**受控表登记**（`app/modules/biz/governance.py`）：`store` 按 `store.big_region` / `store.region` 过滤；`biz_order` 经一跳关系 `order_belongs_to_store`（`biz_order.store_id → store.id`）按 `store.big_region` 过滤；`order_line` 经 `order_id → biz_order` **继承订单的谓词**（`EXISTS (SELECT 1 FROM public.biz_order AS _rf_biz_order WHERE _rf_biz_order.id = order_line.order_id AND <订单谓词>)`，实际是 order_line → biz_order → store 两跳）；`product` 是维度表，显式登记为不限制（`register_unrestricted`）。**大区取值**：库里 `store.big_region` 存 `华东`（由区域「华东一区」派生 [推断]）；静态裁定维度值是「华东大区」、同义词「华东」，SQL 里写 `big_region = '华东'`。**静态 `static-api.md` §1.5（静态 master `4641ebf`）另两类范围**：① 商品.品类：范围值按 `app/contracts/static.py` 的 `CATEGORY_SCOPE_ALIAS` [推断] 换成一级类目（乳品烘焙→乳品、休闲零食→休闲食品、日化清洁→日化家清，生鲜 / 粮油调味 / 酒水饮料同名），谓词 `split_part(product.category, '/', 1) = ANY($n)` 加在 `product` 上；有品类范围的用户才加，没有的仍不限制；`order_line` **不按品类过滤，只继承订单的谓词**（静态裁定：前端范围按对象类型分，`roles.ts:62` R-04 的 S-41 在订单上、S-42 在商品上）；② 订单.门店（静态 master `4641ebf`）：经 `biz_order.store_id → store.name` 一跳 `EXISTS`，谓词 `store.name = ANY($n)`，值原样按门店名比；同一用户同时有订单.大区范围时，**跟大区范围取 AND** **[待骨架实现]**；mock 范围值（`roles.ts:26`「上海徐汇店」等简称）跟种子全称对不上，匹配 0 行，效果等于拒绝——**R-06 门店店长（`roles.ts:69`，S-61 订单.门店 = 上海徐汇店）因此看不到任何订单**，要不要加门店别名表 **[待用户定]**（11 节 #17、12 节 #26）；③ 会员.常去门店所属大区：**一期不支持**（静态裁定，骨架没有会员表），带这类范围的角色在会员上照 deny by default 处理。**没有任何角色的用户默认拿不到任何行**（deny by default：谓词为 false，结果为空））
    → executor：只用骨架 `app/db/session.get_qa_readonly_engine()`，连 `RENGU_QA_READONLY_DATABASE_URL`，每个连接设 `default_transaction_read_only=on` 和 `statement_timeout`（`RENGU_QA_STATEMENT_TIMEOUT_MS`，默认 15000）；库账号本身也只读、只授权业务表、不授权元数据表（运维配置，第二道闸）+ 行数上限；**没配置就抛 `QaReadonlyNotConfigured` 拒绝执行，不回退到主库账号**；执行 = `sql_guard.run_guarded(conn, sql, user)`（校验 + 注入 + `exec_driver_sql`）
    → 0 行时返回 empty，带解释，例如「该门店 2026-10-18 开业」；能给改写建议就带上
    → 解释（结论文字、KPI、图表、归因、引用对象、追问词、建议动作）
@@ -462,7 +462,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
      | 复购客户销售额（含税） v1（`QA_METRIC.in`） | `repeat_sales_tax` | 1 |
 
    - 每个导出文件对应哪张表见 9.1 的映射表。
-2. `backend/app/modules/qa/seeds/*.py` 读 `backend/seeds/json/qa/` 写库：中文枚举按 1.3 转成库里的码，人名按 `PEOPLE` / `PEOPLE_T` 映射到 `sys_user`，mock 的编号写进 `code`（`id` 由库生成），外键按 `code` 查出 `id` 再写；指标按 `(metric.code, version int)` 查出 `metric_id`：mock 的中文名先按 `metrics.ts` / `QA_METRIC` 的 `name → id` 换成 code，`"v3"` 换成 `3`（`T_METRICS` 的键经 `drawerId` 映射，`repeat`/`repeat_tax` 经 `QA_METRIC`）；查不到直接报错，不静默跳过。迁移跑完后由骨架统一的 `make seed` 执行。
+2. `backend/app/modules/qa/seeds/*.py` 读 `backend/seeds/json/qa/` 写库：中文枚举按 1.3 转成库里的码，人员列按 9.2「人员列」分开处理：**外键列**（当前登录用户）用骨架 `code_by_name(name)` 换成 `sys_user`，**查不到直接报错**；**软引用列**原样写 mock 里的姓名，不查 `sys_user`、不报错；mock 的编号写进 `code`（`id` 由库生成），外键按 `code` 查出 `id` 再写；指标按 `(metric.code, version int)` 查出 `metric_id`：mock 的中文名先按 `metrics.ts` / `QA_METRIC` 的 `name → id` 换成 code，`"v3"` 换成 `3`（`T_METRICS` 的键经 `drawerId` 映射，`repeat`/`repeat_tax` 经 `QA_METRIC`）；外键（含人员外键列）查不到直接报错，不静默跳过（人员外键列的 mock 值已按 9.2 改写或剔除，见那里的核对表）。迁移跑完后由骨架统一的 `make seed` 执行。
 3. 种子可以重复执行：按业务键（一般是 `code`）**批量** upsert（骨架 `SeedSpec.key`；每张表按批 `INSERT … ON CONFLICT … DO UPDATE`，不逐行提交），种子行由 loader 统一标 `is_seed=true`；`make seed` 跑两次结果相同。前端 mock 改了之后重新执行 `npm run export-mock`。
 4. **当前时间**：种子环境的 `now()` 由骨架固定为 `2026-10-25 15:42`（Asia/Shanghai）。问数里的今天、近 7 / 30 天、上个月、环比、数据截至、高频统计周期、下次刷新时间都按 `now()` 算，这样跟 mock 显示一致。
 - 函数算出的数据（`export-mock` 会跳过函数，需在派生配置里逐个调用后导出到 `backend/seeds/json/qa/derived/<函数名>.json`，每个文件是 `[{args, result}]`）：
@@ -493,7 +493,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 | permission_requests | `qa_permission_request`（问数自有，PDE 已定） | `qa.ts` · `QA_APPLY` | 0（只有预填模板） | |
 | pages | `qa_page`、`qa_page_card`、`qa_page_share_member`、`qa_page_subscription` | `mock/qa-pages.ts` · `MY_PAGES`、`OTHER_PAGES`（卡片来自 `CARD_LIB`） | 27 + 5 个页面 / 197 张卡片 | 前 13 个页面跟 `QA_PAGE_LIST` 是同一批 |
 | templates | `qa_template`、`qa_template_card` | `qa-pages.ts` · `PAGE_TEMPLATES` | 22 / 104 | |
-| people | → admin `sys_user`（只做姓名 → `code` 映射，用骨架 `code_by_name(name)`，重名报错） | `qa-pages.ts` · `PEOPLE`、`OWNER_DEPT`；`qa-tuning.ts` · `PEOPLE_T` | 12 | 骨架 `sys_user` = `ADMIN_USERS` 120 人 + `extra/system/SYS_USERS.json` 8 人（见下面「演示用户」）。**PEOPLE 里 赵磊、周婷、周晓峰、刘洋、张伟、钱一鸣、马晨 7 人现在 `sys_user` 里没有**，问数种子按「查不到直接报错」会失败，要 admin 种子补（找本体小白） |
+| people | → admin `sys_user`（只给人员**外键列**做姓名 → `code` 映射，用骨架 `code_by_name(name)`，查不到或重名报错；软引用列不经这里） | `qa-pages.ts` · `PEOPLE`、`OWNER_DEPT`；`qa-tuning.ts` · `PEOPLE_T` | 12 | 骨架 `sys_user` = `ADMIN_USERS` 120 人 + `extra/system/SYS_USERS.json` 8 人（见下面「演示用户」）。PEOPLE 里 赵磊、周婷、周晓峰、刘洋、张伟、钱一鸣、马晨 7 人 `sys_user` 里没有：**不要 admin 补人**，外键列只映射 9 个演示用户（U010001–U010008、U010231），mock 里落在外键列上的其他人按 9.2 核对表改派或剔除 [推断]；落在软引用列上的照存姓名 |
 | certs | `qa_cert`、`qa_cert_variant` | `mock/qa-tuning.ts` · `CERT_QAS` | 30 | |
 | eval | `qa_eval_question`、`qa_eval_run`、`qa_eval_fail` | `qa-tuning.ts` · `EVAL_QS`、`EVAL_RUNS` | 40 / 21 / 222 | |
 | feedbacks | `qa_feedback` | `qa-tuning.ts` · `FEEDBACKS` | 26 | |
@@ -537,7 +537,7 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | `MY_PAGES`、`OTHER_PAGES` | qa-pages | `qa_page` + `qa_page_card` + `qa_page_share_member` + `qa_page_subscription` | `code`；卡片 `(page_id, card_key)`；成员 `(page_id, user_id)`；订阅 `page_id` |
 | `PAGE_TEMPLATES` | qa-pages | `qa_template` + `qa_template_card` | `code`；卡片 `(template_id, card_key)` |
 | `PAGE_SCOPES` | qa-pages | 不建表：页面「适用范围」的可选值，接口从用户的行级范围推出（种子环境就是这 6 个）[推断] | — |
-| `PEOPLE`、`OWNER_DEPT` | qa-pages | → `sys_user`（只做姓名 → 用户编号 `code` 映射，admin 种子负责；缺的 7 人见 9.1 people） | — |
+| `PEOPLE`、`OWNER_DEPT` | qa-pages | → `sys_user`（外键列的姓名 → 用户编号 `code` 映射；不在 9 个演示用户里的按 9.2 核对表处理） | — |
 | `PAGES_CUTOFF`、`TUNING_CUTOFF`、`OBJ_CUTOFF` | 各文件 | 不入库：数据截至时间，按 `now()` 和刷新记录算 | — |
 | `CERT_QAS` | qa-tuning | `qa_cert` + `qa_cert_variant` | `code`；同问法 `lower(question)` |
 | `EVAL_QS` | qa-tuning | `qa_eval_question` | `code` |
@@ -548,7 +548,7 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | `TUNED_SYNONYMS` | qa-tuning | `qa_synonym_link` | `(word, cr_id)` |
 | `T_METRICS` | qa-tuning | → 静态 `metric`（只引用；键经 `drawerId` / `QA_METRIC` 映射） | — |
 | `CUR_VERSION`、`NEXT_VERSION`、`NEXT_RELEASE_CRS`、`CR_METRIC_TOUCHES` | qa-tuning | → 静态 `ontology_release` / `change_request` / `cr_target`（只核对） | — |
-| `PEOPLE_T` | qa-tuning | → `sys_user`（姓名 → `code` 映射；周晓峰现在没有） | — |
+| `PEOPLE_T` | qa-tuning | 不建表：调优页的人（认证人、处理人、评测操作人）都是软引用列，原样存姓名（周晓峰不在 `sys_user` 也不影响） | — |
 | `TUNING_DIMS`、`TUNING_TIMES` | qa-tuning | 不建表：T2 直接返回 | — |
 | `OBJ_TYPES`、`FIELD_GROUPS`、`KIND_LABEL` | objects-qa | `qa_object_type_view`（39 个函数字段走 `derived/`） | `(kind, release_id)` |
 | `OBJ_SCOPE` | objects-qa | 不入库：演示用的可见范围文字，接口由 `auth.row_filter` 的结果生成 | — |
@@ -576,25 +576,47 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | `qa_session_option` | 可变 | `id bigint`, `kind varchar(16)`（scope/caliber）, `option_value varchar(60)`, `label`, `sort_order int` | PK `id`；UQ `(kind, option_value)` |
 | `qa_turn` | 可变（`vote`、`status` 会变） | `id bigint`, `code varchar(32)`, `session_id`, `seq int`, `kind varchar(12)`（answer/denied/empty/system/failed）, `question text`, `refs jsonb`, `sem_plan jsonb`, `snapshot jsonb`（3.3 的完整回答快照）, `metric_id`, `release_id`, `status varchar(12)`（streaming/done/failed）, `vote varchar(4)`（''/up/down）, `caliber_variant varchar(8)`, `asked_at timestamptz`, `elapsed_ms int` | PK `id`；UQ `code`；FK `session_id → qa_session ON DELETE CASCADE`；FK `metric_id → metric(id)`；FK `release_id → ontology_release(id)`；UQ `(session_id, seq)` |
 | `qa_turn_event` | 可变（服务层只 INSERT；不挂只追加触发器，因为删会话要级联删掉） | `id bigint`, `turn_id`, `seq int`（= SSE `id`）, `event_name varchar(16)`, `payload jsonb` | PK `id`；UQ `(turn_id, seq)`（续传按它查）；FK `turn_id → qa_turn ON DELETE CASCADE` |
-| `qa_favorite` | 可变 | `id bigint`, `code varchar(32)`, `owner_id`, `question text`, `uses int`, `last_used timestamptz` | PK `id`；UQ `code`；UQ `(owner_id, question)`；IX `(owner_id, uses desc)` |
-| `qa_permission_request` | 可变 | `id bigint`, `code varchar(32)`（`PR-YYYYMMDD-NNNN`，按当天序号 [推断]）, `requester_id`, `scope`, `object_label`, `reason varchar(200)`, `duration_days int`（30/90/180）, `source_turn_id`, `approver_id`, `status varchar(12)`, `decided_at timestamptz` | PK `id`；UQ `code`；FK `requester_id`、`approver_id → sys_user(id)`；FK `source_turn_id → qa_turn ON DELETE SET NULL`；IX `(requester_id, status)`；问数自有（PDE 已定） |
-| `qa_page` | 可变 | `id bigint`, `code varchar(32)`, `owner_id`, `name varchar(30)`, `scope`, `source_kind varchar(12)`, `source_ref`, `status varchar(16)`, `status_note`, `refresh jsonb`（RefreshPlan）, `next_run timestamptz`, `last_refresh timestamptz`, `data_as_of timestamptz`, `share_mode varchar(8)`, `share_link bool`, `allow_export bool`, `link_token` | PK `id`；UQ `code`；**UQ `(owner_id, name)`**；IX `(owner_id, updated_at desc)`；IX `next_run`（定时刷新） |
+| `qa_favorite` | 可变 | `id bigint`, `code varchar(32)`, `owner_id`, `question text`, `uses int`, `last_used timestamptz` | PK `id`；UQ `code`；FK `owner_id → sys_user(id)`；UQ `(owner_id, question)`；IX `(owner_id, uses desc)` |
+| `qa_permission_request` | 可变 | `id bigint`, `code varchar(32)`（`PR-YYYYMMDD-NNNN`，按当天序号 [推断]）, `requester_id`, `scope`, `object_label`, `reason varchar(200)`, `duration_days int`（30/90/180）, `source_turn_id`, `approver varchar(64)`（人名软引用，非外键）, `status varchar(12)`, `decided_at timestamptz` | PK `id`；UQ `code`；FK `requester_id → sys_user(id)`；FK `source_turn_id → qa_turn ON DELETE SET NULL`；IX `(requester_id, status)`；问数自有（PDE 已定） |
+| `qa_page` | 可变 | `id bigint`, `code varchar(32)`, `owner_id`, `name varchar(30)`, `scope`, `source_kind varchar(12)`, `source_ref`, `status varchar(16)`, `status_note`, `refresh jsonb`（RefreshPlan）, `next_run timestamptz`, `last_refresh timestamptz`, `data_as_of timestamptz`, `share_mode varchar(8)`, `share_link bool`, `allow_export bool`, `link_token` | PK `id`；UQ `code`；FK `owner_id → sys_user(id)`；**UQ `(owner_id, name)`**；IX `(owner_id, updated_at desc)`；IX `next_run`（定时刷新） |
 | `qa_page_card` | 可变 | `id bigint`, `page_id`, `card_key`, `sort_order int`, `title`, `viz varchar(8)`, `sem_plan jsonb`（**冻结的语义计划**）, `metric_id`（**冻结的指标版本**）, `pending_cr`, `source_turn_id`, `result_cache jsonb`, `perm_fingerprint` | PK `id`；UQ `(page_id, card_key)`；FK `page_id → qa_page ON DELETE CASCADE`；FK `metric_id → metric(id)`；`source_turn_id` 不加外键（删会话不影响卡片） |
-| `qa_page_share_member` | 可变 | `id bigint`, `page_id`, `user_id`, `perm varchar(8)`（view/edit） | PK `id`；UQ `(page_id, user_id)`；FK `page_id → qa_page ON DELETE CASCADE` |
-| `qa_page_subscription` | 可变 | `id bigint`, `page_id`, `enabled bool`, `channels varchar[]`, `send_when varchar(16)`, `recipients varchar[]` | PK `id`；UQ `page_id`；FK `page_id → qa_page ON DELETE CASCADE` |
-| `qa_template` | 可变 | `id bigint`, `code varchar(32)`, `name`, `scene`, `description`, `provider`, `official bool`, `uses int` | PK `id`；UQ `code`；UQ `name`；IX `scene` |
+| `qa_page_share_member` | 可变 | `id bigint`, `page_id`, `user_id`, `perm varchar(8)`（view/edit） | PK `id`；UQ `(page_id, user_id)`；FK `page_id → qa_page ON DELETE CASCADE`；FK `user_id → sys_user(id)` |
+| `qa_page_subscription` | 可变 | `id bigint`, `page_id`, `enabled bool`, `channels varchar[]`, `send_when varchar(16)`, `recipients varchar[]`（人名软引用数组，非外键） | PK `id`；UQ `page_id`；FK `page_id → qa_page ON DELETE CASCADE` |
+| `qa_template` | 可变 | `id bigint`, `code varchar(32)`, `name`, `scene`, `description`, `provider varchar(64)`（提供方名称软引用，如「数据平台（官方）」「刘婷」，非外键）, `official bool`, `uses int` | PK `id`；UQ `code`；UQ `name`；IX `scene` |
 | `qa_template_card` | 可变 | `id bigint`, `template_id`, `card_key`, `sort_order`, `title`, `viz`, `sem_plan jsonb`, `metric_id` | PK `id`；UQ `(template_id, card_key)`；FK `template_id → qa_template ON DELETE CASCADE` |
-| `qa_cert` | 可变 | `id bigint`, `code varchar(32)`, `question varchar(40)`, `sem_plan jsonb`, `metric_id`, `status varchar(12)`, `cr_id`, `certifier_id`, `certified_at timestamptz`, `hits int`, `source varchar(20)`, `note`, `embedding vector` | PK `id`；UQ `code`；**UQ `lower(question)`**；FK `metric_id → metric(id)`；IX `status`；IX ivfflat `embedding` |
+| `qa_cert` | 可变 | `id bigint`, `code varchar(32)`, `question varchar(40)`, `sem_plan jsonb`, `metric_id`, `status varchar(12)`, `cr_id`, `certifier varchar(64)`（人名软引用，非外键）, `certified_at timestamptz`, `hits int`, `source varchar(20)`, `note`, `embedding vector` | PK `id`；UQ `code`；**UQ `lower(question)`**；FK `metric_id → metric(id)`；IX `status`；IX ivfflat `embedding` |
 | `qa_cert_variant` | 可变 | `id bigint`, `cert_id`, `question varchar(40)` | PK `id`；**UQ `lower(question)`**（同问法全局唯一，也不能跟 `qa_cert.question` 重复，由服务层校验）；FK `cert_id → qa_cert ON DELETE CASCADE` |
 | `qa_eval_question` | 可变 | `id bigint`, `code varchar(32)`, `question`, `group_name varchar(8)`, `kind varchar(8)`（`semplan` / `sql`，默认 `semplan`；mock 的 `EVAL_QS` 全是 `semplan`，`backend/seeds/extra/qa/eval/` 的题是 `sql`）, `gold_sql text`（可空，`kind='sql'` 时必填）, `expect jsonb`（SemPlan，`kind='semplan'` 时用）, `last_result varchar(4)`（pass/fail）, `cr_id` | PK `id`；UQ `code`；UQ `question`；CK `kind <> 'sql' OR gold_sql IS NOT NULL`；IX `(kind, group_name)` |
-| `qa_eval_run` | 可变（状态会变） | `id bigint`, `code varchar(32)`, `run_at timestamptz`（还没跑的为空）, `time_label varchar(16)`（mock 里 `'发布前自动'`、`'审核通过后'` 这类排队中的文字，`run_at` 为空时返回它）, `trigger_label varchar(40)`, `release_id`, `scope`, `total int`, `passed int`, `status varchar(8)`, `operator_id`, `crs varchar[]`, `note` | PK `id`；UQ `code`；FK `release_id → ontology_release(id)`；IX `run_at desc nulls first` |
+| `qa_eval_run` | 可变（状态会变） | `id bigint`, `code varchar(32)`, `run_at timestamptz`（还没跑的为空）, `time_label varchar(16)`（mock 里 `'发布前自动'`、`'审核通过后'` 这类排队中的文字，`run_at` 为空时返回它）, `trigger_label varchar(40)`, `release_id`, `scope`, `total int`, `passed int`, `status varchar(8)`, `operator varchar(64)`（人名软引用，非外键；含「系统」）, `crs varchar[]`, `note` | PK `id`；UQ `code`；FK `release_id → ontology_release(id)`；IX `run_at desc nulls first` |
 | `qa_eval_fail` | 只追加 | `id bigint`, `run_id`, `question_id`, `actual jsonb`, `kind varchar(24)` | PK `id`；UQ `(run_id, question_id)`；FK `run_id → qa_eval_run`、`question_id → qa_eval_question`（都不级联：评测记录前端没有删除入口）；IX `(run_id, kind)` |
-| `qa_feedback` | 可变 | `id bigint`, `code varchar(32)`, `turn_id`, `fed_back_at timestamptz`（接口 `time`）, `user_id`, `dept`, `question`, `answer`, `reason`, `fix_kind varchar(8)`, `fix_text`, `fix_target`, `status varchar(16)`, `cr_id`, `cert_id`, `handler_id`, `resolved_by` | PK `id`；UQ `code`；FK `turn_id → qa_turn ON DELETE SET NULL`；FK `cert_id → qa_cert`；IX `(status, fed_back_at desc)`；IX `fix_text`（同词批量改状态） |
+| `qa_feedback` | 可变 | `id bigint`, `code varchar(32)`, `turn_id`, `fed_back_at timestamptz`（接口 `time`）, `user_id`（提交人，可空 [推断]）, `user_name varchar(64)`（提交人姓名快照，接口 `user`）, `dept`, `question`, `answer`, `reason`, `fix_kind varchar(8)`, `fix_text`, `fix_target`, `status varchar(16)`, `cr_id`, `cert_id`, `handler varchar(64)`（人名软引用，非外键）, `resolved_by varchar(32)`（mock `resolvedBy` 是 CR 编号如 `CR-0008`，**不是人**；存编号软引用 [推断]） | PK `id`；UQ `code`；FK `user_id → sys_user(id)`；FK `turn_id → qa_turn ON DELETE SET NULL`；FK `cert_id → qa_cert`；IX `(status, fed_back_at desc)`；IX `fix_text`（同词批量改状态） |
 | `qa_freq_question` | 可变（物化统计，定时重算） | `id bigint`, `code varchar(32)`, `question`, `hits7 int`, `hits30 int`, `users int`, `sem_plan jsonb`, `consistency numeric(4,3)`, `last_asked timestamptz`, `cert_id`, `computed_at timestamptz` | PK `id`；UQ `code`；UQ `question`；FK `cert_id → qa_cert ON DELETE SET NULL` |
 | `qa_synonym_link` | 可变 | `id bigint`, `word`, `target`, `cr_id` | PK `id`；UQ `(word, cr_id) NULLS NOT DISTINCT`（`cr_id` 为空时也唯一；PG15+，项目用 PG17）；FK `cr_id → change_request(id)`（种子按 `word + cr` upsert） |
 | `qa_object_type_view` | 只追加（按版本） | `id bigint`, `kind varchar(16)`, `release_id`, `label`, `unit`, `facet_defs jsonb`, `column_defs jsonb`, `field_groups jsonb`, `kpis jsonb`, `quick_questions jsonb` | PK `id`；UQ `(kind, release_id)`；FK `release_id → ontology_release(id)`；**跟静态 `object_view` 区分命名**。**读取回退** [推断]：新版本发布时不复制行，只有展示定义变了才追加；按请求版本（不带 `?ver=` 就是当前版本）取每个 `kind` 里 `release_id` ≤ 该版本 id 的最新一行（`ontology_release` 只追加，id 单调递增）；请求版本是回滚生成的，先换成它恢复的那一版（`rollback_of_id` 的 `parent_id`，可递归）再取。新行只由 X4 `release.published` 的处理追加（见第 8 节）；一期只有种子那一版 |
-| `qa_query_log` | 只追加 | `id bigint`, `turn_id`, `user_id`, `question`, `norm_question`, `sem_plan jsonb`, `plan_hash`, `metric_id`, `cert_id`, `asked_at timestamptz`, `elapsed_ms`, `row_count int`, `kind varchar(12)`, `embedding vector` | PK `id`；`turn_id` 不加外键（只追加表，删会话后保留日志，`turn_id` 可能指向已删的轮次）；IX `(asked_at)`；IX `(norm_question, asked_at)`；预览和评测不写 |
+| `qa_query_log` | 只追加 | `id bigint`, `turn_id`, `user_id`, `question`, `norm_question`, `sem_plan jsonb`, `plan_hash`, `metric_id`, `cert_id`, `asked_at timestamptz`, `elapsed_ms`, `row_count int`, `kind varchar(12)`, `embedding vector` | PK `id`；FK `user_id → sys_user(id)`（不级联）；`turn_id` 不加外键（只追加表，删会话后保留日志，`turn_id` 可能指向已删的轮次）；IX `(asked_at)`；IX `(norm_question, asked_at)`；预览和评测不写 |
 | 外表引用 | — | 动态 `action_run.qa_session_id` | FK `→ qa_session(id) ON DELETE SET NULL`（列由动态建；外键约束由问数迁移补上，因为问数迁移在后；种子由问数回填，见第 8 节） |
+
+**人员列**（规则同静态 / 动态：只有前端语义是「当前登录用户」的列才是 `sys_user` 外键，种子用 `code_by_name` 映射、必须查得到；定义类的负责人 / 处理人 / 审核人存人名软引用。外键列只映射 9 个演示用户：王敏 U010001、陈立军 U010002、何静 U010003、刘婷 U010004、孙浩然 U010005、李娜 U010006、赵蕾 U010007、吴佳 U010008、苏刚 U010231；mock 核对基于 master `/workspace/ui-vue/src/mock` 的 `qa.ts`、`qa-pages.ts`、`qa-tuning.ts`）
+
+| 列 | 方式 | mock 取值 | 不在 9 人里的 | 种子怎么处理 |
+|---|---|---|---|---|
+| `qa_session.owner_id` | 外键 | 无 owner 字段，隐含当前用户王敏 | 无 | 全部 → U010001 |
+| `qa_favorite.owner_id` | 外键 | 同上，王敏 | 无 | 全部 → U010001 |
+| `qa_permission_request.requester_id` | 外键 | 无种子行（W16 运行时写当前用户） | — | — |
+| `qa_page.owner_id` | 外键 | 王敏（`MY_PAGES` 28 张）、苏刚（P901–P903）、陈杰（P904）、周婷（P905） | 陈杰、周婷 | **P904 → 孙浩然 U010005、P905 → 李娜 U010006** [推断]（`OTHER_PAGES` 是「别人共享给我」的演示，换成 9 人里的非王敏用户，页面内容不变） |
+| `qa_page_share_member.user_id` | 外键 | 27 行，涉及 陈杰、赵磊、刘婷、陈立军、周婷、周晓峰、何静、刘洋、苏刚 | 陈杰、赵磊、周婷、周晓峰、刘洋，共 13 行（P001、P007、P010、P013、P015、P023、P027、P902、P904） | **剔除这 13 行，其余 14 行照写** [推断]；剔除后 P001、P007（所在部门）和 P902（指定成员）成员为空 |
+| `qa_query_log.user_id` | 外键 | 无种子 | — | — |
+| `qa_feedback.user_id` / `user_name` | 外键（可空）+ 姓名快照 | `FEEDBACKS.user` 26 个随机姓名 | 24 人（只有李娜、何静在 9 人里） | `user_name` 原样存；`user_id` 只给李娜、何静 2 行填，其余 24 行为空 [推断]；运行时 W12 踩一律填当前用户 |
+| `qa_permission_request.approver` | 软引用 | `QA_APPLY.approver`「刘洋（数据权限管理员）」 | 刘洋 | 原样存 |
+| `qa_page_subscription.recipients` | 软引用数组 | 王敏、陈杰、赵磊、刘婷、陈立军、周婷、周晓峰（21 个，6 个不在 9 人里） | 陈杰、赵磊、周婷、周晓峰 | 原样存 |
+| `qa_template.provider` | 软引用 | 数据平台（官方）、刘婷 | — | 原样存 |
+| `qa_cert.certifier` | 软引用 | 刘婷、何静、王敏、孙浩然、周晓峰、陈立军（30 行，4 行周晓峰） | 周晓峰 | 原样存 |
+| `qa_eval_run.operator` | 软引用 | 系统（19）、王敏、周晓峰 | 系统、周晓峰 | 原样存 |
+| `qa_feedback.handler` | 软引用 | 周晓峰、陈立军、刘婷、何静、孙浩然、王敏（11 行有值，4 行周晓峰） | 周晓峰 | 原样存 |
+| `qa_feedback.resolved_by` | CR 编号软引用（不是人） | CR-0008、CR-0015 | — | 原样存 |
+| 各表 `created_by` | 公共列，用户编号 `varchar(64)`，非外键 | — | — | 种子按骨架默认 |
+
+注：陈杰在 `sys_user` 里其实有（`ADMIN_USERS` U010763），`code_by_name` 查得到；按「外键列只映射 9 个演示用户」仍改派 / 剔除 [推断]，如果放开到全部 128 人，P904 拥有者和 P001、P902 的陈杰成员可以照写。
 
 ### 9.3 时间字段的接口格式
 
@@ -706,6 +728,7 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 14. `nav.ts` 的问数调优备注写「高频问题推荐第二期」，但页面上高频页签已经能用；本文按页面做（T18、T19 第一期）。
 15. ~~指标外键~~ **已定**：按代理主键规则存 `metric_id → metric(id)`，接口连表返回 `metric@version`，本条关闭。
 16. ~~用户表表名~~ **已定**：`sys_user`，本条关闭。
+17. **[待用户定]** 订单.门店范围值是简称（`roles.ts:26`），种子门店是全称，按名原样比匹配 0 行：R-06 门店店长（`roles.ts:69`）现在看不到任何订单。要不要加门店别名表（或改 mock 范围值为全称）。
 
 ---
 
@@ -738,9 +761,12 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 | 23 | 所有可变表的写接口 | 带 `lockVersion`，不一致返回 `VERSION_CONFLICT` 409 | 前端没有并发冲突提示，也不传版本号 |
 | 24 | `PAGE_SCOPES`、范围选项 | 不建表，从用户的行级范围推出 | mock 写死 6 个 / 3 个 |
 | 25 | 删除会话、页面、常用问题 | 物理删除，不做软删除 | 前端写着「不可恢复」，没有恢复入口 |
-| 26 | 行级范围 | 订单一跳到门店、订单行经订单继承（两跳），未声明的关系拒绝（`SQL_REJECTED`）；商品.品类范围按 `CATEGORY_SCOPE_ALIAS` 换一级类目 [推断]，订单行要不要也按品类过滤 [推断]；订单.门店范围按门店名原样比，mock 简称对不上种子全称，效果等于拒绝，**要不要加门店别名表 [待用户定]** | 前端没有这类提示 |
+| 26 | 行级范围 | 订单一跳到门店、订单行经订单继承（两跳），未声明的关系拒绝（`SQL_REJECTED`）；商品.品类范围按 `CATEGORY_SCOPE_ALIAS` 换一级类目 [推断]，订单行不按品类过滤、只继承订单（静态裁定，已定）；订单.门店范围按门店名原样比、跟大区范围取 AND [待骨架实现]，mock 简称对不上种子全称，R-06 门店店长看不到任何订单，**要不要加门店别名表 [待用户定]**（11 节 #17）；会员范围一期不支持 | 前端没有这类提示 |
 | 27 | `qa_permission_request.code` | 编号 `PR-YYYYMMDD-NNNN`，按当天序号 | 前端只显示「已提交」，没有编号 |
 | 28 | `qa_object_type_view` | 新版本不复制行，按「`release_id` ≤ 请求版本的最新一行」回退，回滚版本先换成它恢复的那一版 | 前端 `OBJ_TYPES` 不分版本 |
 | 29 | `SQL_REJECTED` | 网关拒绝生成的 SQL 时按回答失败显示 | 前端没有这种情况 |
 | 30 | `qa_eval_question.kind` / `gold_sql` | 评测题分 `semplan` / `sql` 两种，SQL 题带标准 SQL（PDE 定） | 前端 `EvalQ` 没有这两个字段，T12 不返回 |
 | 31 | X4 `release.published` 的处理 | 只有对象类型 / 属性 / 指标的展示定义变了才给 `qa_object_type_view` 追加新行；回滚（`kind="rollback"`）不写行（事件由版本层经 `outbox_event` 发，已定） | 前端没有 |
+| 32 | 人员列（9.2「人员列」） | 外键列只映射 9 个演示用户：`OTHER_PAGES` P904 拥有者陈杰 → 孙浩然、P905 周婷 → 李娜；共享成员里不在 9 人的 13 行剔除 | mock 里是别的姓名 |
+| 33 | `qa_feedback.user_id` | 提交人外键可空，另存 `user_name` 快照；种子只有李娜、何静 2 行有 `user_id` | mock 只有姓名 |
+| 34 | `qa_feedback.resolved_by` | 存 CR 编号（mock 就是 `CR-xxxx`），不是人；跟 `cr_id` 的关系待确认 | mock 字段名像人 |
