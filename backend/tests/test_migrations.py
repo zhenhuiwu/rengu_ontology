@@ -1,0 +1,80 @@
+"""迁移约定（CONVENTIONS §16）：线性单 head、模块 revision 命名、升 → 降到 base → 再升。"""
+
+import asyncio
+import re
+import uuid
+from pathlib import Path
+
+import asyncpg
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy.engine import make_url
+
+from tests.conftest import BASE_URL
+
+SKELETON = {"0001", "0002", "0003"}
+MODULE_REV = re.compile(r"^[a-z_]+_\d{4}$")
+
+
+def _script() -> ScriptDirectory:
+    return ScriptDirectory.from_config(Config("alembic.ini"))
+
+
+def test_single_head_and_module_revision_names():
+    script = _script()
+    assert len(script.get_heads()) == 1, script.get_heads()
+    revs = list(script.walk_revisions())
+    assert {r.revision for r in revs} >= SKELETON
+    for r in revs:
+        assert not r.branch_labels, r.revision  # 不用 branch_labels
+        assert not r.is_merge_point, r.revision  # 不写 merge 迁移
+        if r.revision in SKELETON:
+            continue
+        assert MODULE_REV.match(r.revision), r.revision
+        assert Path(r.path).name.startswith(f"{r.revision}_"), (r.revision, r.path)
+        module = r.revision.rsplit("_", 1)[0]
+        assert (Path("app/modules") / module).is_dir(), f"{r.revision}：app/modules/{module} 不存在"
+
+
+async def test_upgrade_downgrade_base_upgrade_on_temp_db():
+    """在临时库上跑（不碰会话共用的 rengu_test，避免和其它测试的连接抢锁）。"""
+    db = f"rengu_mig_{uuid.uuid4().hex[:8]}"
+    admin = await asyncpg.connect(
+        make_url(BASE_URL).set(drivername="postgresql").render_as_string(hide_password=False)
+    )
+    await admin.execute(f'CREATE DATABASE "{db}"')
+    try:
+        cfg = Config("alembic.ini")
+        cfg.attributes["database_url"] = (
+            make_url(BASE_URL).set(database=db).render_as_string(hide_password=False)
+        )
+        plain = (
+            make_url(BASE_URL).set(drivername="postgresql", database=db).render_as_string(hide_password=False)
+        )
+
+        async def state() -> tuple[int, str | None]:
+            conn = await asyncpg.connect(plain)
+            try:
+                tables = await conn.fetchval(
+                    "SELECT count(*) FROM pg_tables"
+                    " WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+                )
+                has_ver = await conn.fetchval("SELECT to_regclass('public.alembic_version') IS NOT NULL")
+                ver = await conn.fetchval("SELECT version_num FROM alembic_version") if has_ver else None
+                return tables, ver
+            finally:
+                await conn.close()
+
+        head = _script().get_current_head()
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+        tables, ver = await state()
+        assert tables > 0 and ver == head
+        await asyncio.to_thread(command.downgrade, cfg, "base")
+        assert await state() == (0, None)  # 每个 downgrade 都真把表删干净
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+        assert await state() == (tables, head)
+    finally:
+        await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)
+        await admin.execute(f'DROP DATABASE IF EXISTS "{db}"')
+        await admin.close()

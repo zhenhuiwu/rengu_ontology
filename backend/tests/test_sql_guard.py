@@ -437,7 +437,7 @@ async def test_e2e_order_line_inherits_region(biz, conn, monkeypatch):
     assert await q("select round(sum(qty * price), 2) from order_line", _U(admin=True)) == total
 
 
-# ---- static-api.md §1.5（静态 9c7fe84）：订单.门店、商品.品类 ----
+# ---- static-api.md §1.5（团队 master 443c009）：订单.门店、商品.品类 ----
 def _scoped(monkeypatch, by_obj: dict[str, list]):
     """row_filter 桩：按对象类型给角色，经 effective_expr 合并。
 
@@ -487,7 +487,7 @@ def test_scope_expr_maps_props_values_and_ors():
         "value": ["乳品", "冷冻"],  # 别名换名；不在表里的值原样保留
     }
     both = scope_expr(g["biz_order"], [_sc("大区", "华东"), _sc("门店", "上海徐汇店")])
-    assert both == {  # 多条范围 OR [推断]（static 0cfb2eb §1.5）
+    assert both == {  # 多条范围 OR [推断]（static-api §1.5@master 443c009）
         "or": [
             {"field": "order_belongs_to_store.big_region", "op": "=", "value": "华东"},
             {"field": "order_belongs_to_store.name", "op": "=", "value": "上海徐汇店"},
@@ -622,7 +622,7 @@ async def test_e2e_order_store_name_scope(biz, conn, monkeypatch):
     # mock roles.ts:26 的简称在 seed 里一个都对不上 → 0 行（用户已定 2026-10-25：不加别名表）
     _scoped(monkeypatch, {"order": [_sc("门店", "上海徐汇店")]})
     assert await q("select count(*) from biz_order") == 0
-    # 同一角色上和大区同时配 → 也是 OR [推断]（static 0cfb2eb §1.5 / roles.ts:114）：b 已改成华南
+    # 同一角色上和大区同时配 → 也是 OR [推断]（static-api §1.5@master 443c009 / roles.ts:114）：b 已改成华南
     region_or_name = text(
         "SELECT count(*) FROM biz_order o JOIN store s ON s.id = o.store_id"
         " WHERE s.big_region = :r OR s.name = ANY(:n)"
@@ -632,7 +632,7 @@ async def test_e2e_order_store_name_scope(biz, conn, monkeypatch):
         want = await biz.scalar(region_or_name, {"r": r, "n": [a, b]})
         only_region = await biz.scalar(region_or_name, {"r": r, "n": []})
         assert want > only_region and await q("select count(*) from biz_order") == want
-    # 分在两个角色上 → OR（roles.ts:112-117 effectiveAccess）：华东大区的全部订单 ∪ 门店 b 的订单
+    # 分在两个角色上 → OR（roles.ts:110-117 effectiveAccess）：华东大区的全部订单 ∪ 门店 b 的订单
     from app.common.sql_guard import RoleAccess
 
     east = await biz.scalar(
@@ -665,7 +665,8 @@ async def test_e2e_order_store_name_scope(biz, conn, monkeypatch):
     assert await q(joined) == n_lines
 
 
-# ---- 未映射的范围一律拒绝（fail closed，static 4641ebf §1.5：一期没有 member 表，会员范围按拒绝）----
+# ---- 未映射的范围一律拒绝（fail closed）----
+# static-api §1.5@master 443c009：一期没有 member 表，会员范围按拒绝
 def test_unmapped_scope_fails_closed():
     from app.common.row_filter import DENY_ALL, combine_or
     from app.common.sql_guard import RoleAccess, effective_expr, scope_expr, scope_expr_for_object
@@ -691,7 +692,7 @@ def test_unmapped_scope_fails_closed():
 
 
 def test_effective_expr_follows_roles_ts():
-    """roles.ts:110-117 effectiveAccess（static 0db86b3 §1.5）。"""
+    """roles.ts:110-117 effectiveAccess（static-api §1.5@master 443c009）。"""
     from app.common.row_filter import DENY_ALL
     from app.common.sql_guard import RoleAccess, effective_expr
 
@@ -713,7 +714,7 @@ def test_effective_expr_follows_roles_ts():
     assert effective_expr("order", [RoleAccess(True), RoleAccess(True, scopes=(east,))]) is None
     # defaultDeny 但配了该对象范围 → 按范围
     assert effective_expr("order", [RoleAccess(True, default_deny=True, scopes=(east,))]) == east_expr
-    # 跨角色 OR；同一角色内多条也 OR [推断]（static 0cfb2eb）
+    # 跨角色 OR；同一角色内多条也 OR [推断]（static-api §1.5@master 443c009）
     st = _sc("门店", "X店")
     two = [RoleAccess(True, scopes=(east,)), RoleAccess(True, scopes=(st,))]
     assert effective_expr("order", two) == {"or": [east_expr, store_expr]}
@@ -820,3 +821,63 @@ async def test_e2e_unmapped_scope_denies(biz, conn, monkeypatch):
     _scoped(monkeypatch, r06)
     for t in ("biz_order", "order_line", "product", "store"):
         assert await q(f"select count(*) from {t}") == 0
+
+
+# ---- RowScope.values 不合法 → DENY_ALL（不拆字符、不 500）----
+@pytest.mark.parametrize(
+    "values",
+    ["华东", ["华东", None], [None], [], ["华东", ""], ["华东", 1], None, ("华东", None), {"华东"}],
+)
+def test_malformed_scope_values_fail_closed(values):
+    from app.common.row_filter import DENY_ALL, from_row_scope
+    from app.common.sql_guard import RoleAccess, effective_expr, scope_expr
+
+    g = _gov()
+    sc = {"prop": "大区", "op": "∈", "values": values}
+    assert from_row_scope(sc, {"大区": "big_region"}) == DENY_ALL
+    assert from_row_scope({**sc, "op": "="}, {"大区": "big_region"}) == DENY_ALL
+    assert scope_expr(g["store"], [sc]) == DENY_ALL
+    assert scope_expr(g["product"], [{**sc, "prop": "品类"}]) == DENY_ALL  # 走别名换名的路径也不炸
+    assert effective_expr("store", [RoleAccess(True, scopes=(sc,))]) == DENY_ALL
+    # 和合法范围 OR：坏的那条不贡献行，也不放宽
+    ok = {"field": "big_region", "op": "=", "value": "华东"}
+    assert scope_expr(g["store"], [sc, _sc("大区", "华东")]) == ok
+    sc_missing = {"prop": "大区", "op": "∈"}
+    assert from_row_scope(sc_missing) == DENY_ALL and scope_expr(g["store"], [sc_missing]) == DENY_ALL
+
+
+def test_valid_scope_values_tuple_ok():
+    from app.common.row_filter import from_row_scope
+
+    assert from_row_scope({"prop": "region", "op": "∈", "values": ("华东", "华南")}) == {
+        "field": "region",
+        "op": "in",
+        "value": ["华东", "华南"],
+    }
+
+
+# ---- 一个 object_type 只能对应一张受控表（scope_expr_for_object 取第一个匹配）----
+def test_register_rejects_duplicate_object_type():
+    from sqlalchemy import Column, Integer, MetaData, Table
+
+    from app.common.sql_guard import GovernedTable, register_governed
+
+    g = _gov()
+    before = governed_tables()
+    dup = Table("store_copy", MetaData(), Column("id", Integer, primary_key=True))
+    with pytest.raises(ValueError, match="store"):
+        register_governed(GovernedTable(dup, "store", {"id": dup.c.id}))
+    # 两张新表在同一次调用里抢同一个对象类型也拒绝（第二张时报错）
+    a = Table("dup_a", MetaData(), Column("id", Integer, primary_key=True))
+    b = Table("dup_b", MetaData(), Column("id", Integer, primary_key=True))
+    with pytest.raises(ValueError, match="dup_obj"):
+        register_governed(
+            GovernedTable(a, "dup_obj", {"id": a.c.id}), GovernedTable(b, "dup_obj", {"id": b.c.id})
+        )
+    from app.common import sql_guard
+
+    sql_guard._GOVERNED.pop("dup_a", None)  # 清掉第一张，别污染别的测试
+    assert governed_tables() == before
+    # 同一张表重复登记（模块重新 import）不算冲突
+    register_governed(g["store"])
+    assert governed_tables() == before

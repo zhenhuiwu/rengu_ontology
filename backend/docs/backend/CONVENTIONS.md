@@ -267,11 +267,11 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
   - **一跳关系**：字段写 `<关系 id>.<属性>`，`links` 由 `link_paths_from_definitions(对象类型, 静态 LINKS 定义, 对象表)` 生成，编译成 `EXISTS`；未声明的关系、多跳一律拒绝。
   - 值一律走绑定参数，不会被拼接进 SQL；`like` 只接受字符串，非 `in/not_in` 不接受数组；多值用户属性配 `=` 自动变 IN，配别的操作符报错。
 - **前端 mock 转换**：`from_row_scope({prop, op, values})` 把前端 RowScope 转成这个结构。
-- **多角色合并**（static-api.md §1.5，static 0db86b3 / 0cfb2eb，照 `roles.ts:110-117` effectiveAccess）：`sql_guard.effective_expr(object_type, [RoleAccess(view, default_deny, scopes)…])`，**所有对象（含商品）同一套**：
+- **多角色合并**（static-api.md §1.5 @ 团队 master 443c009，照 `roles.ts:110-117` effectiveAccess）：`sql_guard.effective_expr(object_type, [RoleAccess(view, default_deny, scopes)…])`，**所有对象（含商品）同一套**：
   1. 只算 granted 角色：对该对象有查看权，且不是「defaultDeny 又没配该对象范围」（roles.ts:110）。一个都没有 → `DENY_ALL`（`WHERE false`）。所以 defaultDeny 角色（R-05/R-06/R-08）能看但没配范围的对象 = 看不到，单独持有时是 DENY，不是不限制；
   2. granted 里任一角色没配该对象范围 → 不限制（None）；
-  3. 否则把 granted 角色的**全部范围摊平取 OR**（角色间 OR；同一角色内多条也 OR **[推断]**，static 0cfb2eb，roles.ts:114）。「门店」和「大区」不会 AND。
-  - **fail closed**：没映射的属性、非正向 op、一期没建表的对象（会员、库存快照）上的范围 → 那条 `DENY_ALL`，在 OR 里不贡献行，绝不被当成「不限制」或被忽略（static 4641ebf §1.5：会员范围按拒绝）。`combine_or` 丢掉 DENY 成员，全是 DENY → `DENY_ALL`。
+  3. 否则把 granted 角色的**全部范围摊平取 OR**（角色间 OR；同一角色内多条也 OR **[推断]**，static-api.md §1.5 @ 团队 master 443c009，roles.ts:114）。「门店」和「大区」不会 AND。
+  - **fail closed**：没映射的属性、非正向 op、一期没建表的对象（会员、库存快照）上的范围 → 那条 `DENY_ALL`，在 OR 里不贡献行，绝不被当成「不限制」或被忽略（static-api.md §1.5 @ 团队 master 443c009：会员范围按拒绝）。`combine_or` 丢掉 DENY 成员，全是 DENY → `DENY_ALL`。
   - 桩 `auth.row_filter`：本体管理员不限制，其余一律 `DENY_ALL`；PDE 实现时组 `RoleAccess` 调 `effective_expr`。
 - **注入方式（biz 等业务数据必须这样写）**：
   `stmt = await apply_row_filter(select(Store), user, "store", {"region": Store.region, ...})`。
@@ -293,7 +293,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
     - **继承上级权限**：`GovernedTable(..., inherit=InheritVia(local, parent, parent_key))`。biz 的 `order_line` 经 `order_id → biz_order` 继承订单谓词：`EXISTS (SELECT 1 FROM public.biz_order AS _rf_biz_order WHERE _rf_biz_order.id = order_line.order_id AND <订单谓词>)`，订单谓词再一跳到 store（实际两跳）。行级表达式按上级的对象类型取（order_line → `order`）。注入用的别名统一 `_rf_` 前缀，只在注入的子查询内部可见，和用户别名不冲突。
     - **显式放行**：`register_unrestricted(...)`，`run_guarded` 自动并进 `allowed`；同一张表不能既受控又放行。没登记的表照样拒绝（一期没有放行的表）。
     - **前端 RowScope → 表达式**：`scope_expr(g, 一个角色在该对象上的 scopes)`，属性按 `field_of_prop` 换字段、取值按 `value_alias` 换名（不在表里的原样比），多条范围 OR；没登记的属性 / 非正向 op → 那条 `DENY_ALL`。多个角色用 `effective_expr`（见上）。
-    - **订单.门店**（static-api.md §1.5，静态 9c7fe84）：biz_order 的「门店」→ `order_belongs_to_store.name`，一跳 `EXISTS (… public.store … store.name IN ($n…))`，范围值原样是门店名、不换 code；和「大区」是 OR（见多角色合并）。mock `roles.ts:26` 的门店名（「上海徐汇店」等 6 个）在 seed `ALL_STORES` 里一个都对不上（seed 是「上海徐汇漕河泾店」这类全称），照原样匹配 0 行。**用户已定（2026-10-25）：不加门店简称别名表（只是测试数据），0 行是预期结果。**
+    - **订单.门店**（static-api.md §1.5，团队 master 443c009）：biz_order 的「门店」→ `order_belongs_to_store.name`，一跳 `EXISTS (… public.store … store.name IN ($n…))`，范围值原样是门店名、不换 code；和「大区」是 OR（见多角色合并）。mock `roles.ts:26` 的门店名（「上海徐汇店」等 6 个）在 seed `ALL_STORES` 里一个都对不上（seed 是「上海徐汇漕河泾店」这类全称），照原样匹配 0 行。**用户已定（2026-10-25）：不加门店简称别名表（只是测试数据），0 行是预期结果。**
     - **R-06 门店店长**（defaultDeny，只在订单上配了 `订单.门店=上海徐汇店`）：订单、订单行 0 行（店名对不上，用户已定 2026-10-25：不加别名表，0 行是预期）；商品、门店、会员能看但没配范围 → defaultDeny 下 DENY；库存快照一期没表，直接拒绝。
     - **商品.品类**（同上）：product 是普通受控表，和其它对象一样走 `effective_expr`：非 defaultDeny 角色有查看权且没配品类 → 不限制；defaultDeny 角色（R-05/R-06/R-08）没配商品范围 → 看不到。谓词 `SPLIT_PART(product.category, '/', 1) IN ($n…)`（和文档的 `= ANY($n)` 等价；`'/'`、`1` 是字面量，只有范围值是参数）；范围值先经 `app/contracts/static.py` 的 `CATEGORY_SCOPE_ALIAS` 换成一级类目（乳品烘焙→乳品、休闲零食→休闲食品、日化清洁→日化家清，生鲜/粮油调味/酒水饮料同名）**[推断]**。
     - **order_line 只继承订单范围，不按商品品类过滤**（已定：静态，`roles.ts:62` 行级范围按对象类型配，S-41 配在订单、S-42 配在商品）。连 product 查时 product 一侧照样按品类过滤。
@@ -339,8 +339,8 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
   3. 在 `app/db/models.py` 里 import 模型，alembic 才能发现。
   4. 在 `app/seeds/registry.py` 里注册 seed 顺序：被外键依赖的模块排在前面（见 §9「加载顺序」；一个模块要分两段加载时，用 `SEED_STAGES` 登记第二段）。
 - **迁移**：
-  - 每个 PR 最多一个迁移，文件名格式 `YYYYMMDD_NNNN_<模块>_<说明>.py`。
-  - 必须能 downgrade。
+  - 每个 PR 最多一个迁移；revision id、文件名、链怎么接见 **§16 模块迁移和 seed**。
+  - 必须能 downgrade（§16）。
   - 提交前运行 `make lint`，其中包含 `alembic check`，保证模型和迁移一致。
   - 已合并的迁移不再修改，有问题就写新迁移修正。
   - 触发器、扩展这类 DDL 用 `op.execute`，每次只执行一条语句（asyncpg 不支持一次执行多条）。
@@ -367,10 +367,36 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 - `ontology_release.kind`（发布/回滚）、`rollbackOf` 字段：前端只展示文案，这两个字段是后台加的。
 - 行级过滤中，缺少用户属性时结果为 false（宁严勿宽）。
 - 商品品类范围值 → 一级类目的别名（`CATEGORY_SCOPE_ALIAS`，静态 static-api.md §1.5）：前端没给对应关系，按名称最接近的定；不在表里的值原样比。
-- 同一角色对同一对象多条范围取 OR（static 0cfb2eb §1.5，roles.ts:114；mock 里没有这种角色）。
+- 同一角色对同一对象多条范围取 OR（static-api.md §1.5 @ 团队 master 443c009，roles.ts:114；mock 里没有这种角色）。
 - 演示人物编号：孙浩然 U010005、李娜 U010006（PDE 已确认）、赵蕾 U010007、吴佳 U010008，mock 里都没有编号，后端补。
 - 整版回滚时被恢复版本没有某一节（content 为 None）：不调用该节的 `restore_section`，定义表不动（静态裁定，和动态一致）。
 
 ## 15. 待 PDE 定的事项
 
 - （已定）`GET /releases` = `{items, current}`。
+
+## 16. 模块迁移和 seed
+
+- **编号**：
+  - 骨架（基础层）占 `0001`–`0003`，revision id 是纯数字，文件名保留 `YYYYMMDD_NNNN_<说明>.py`。
+  - 各模块的迁移：revision id = `<模块>_<NNNN>`，模块 = `app/modules/` 下的目录名，如 `static_0001`、`dynamic_0001`、`action_0001`、`qa_0001`。
+  - 文件名 = `<模块>_<NNNN>_<说明>.py`，放在现有唯一的 `migrations/versions/` 目录里，不另开目录、不用 `version_locations`。
+  - 生成：`uv run alembic revision --autogenerate --rev-id static_0001 -m "说明"`（`alembic.ini` 的 `file_template = %(rev)s_%(slug)s`，文件名前缀自动等于 revision id）。
+  - 合并前，模块的第一个迁移 `down_revision = "0003"`。
+- **历史保持线性、只有一个 head**：
+  - 后合并的一方负责 rebase：在一个后续提交里把自己第一个迁移的 `down_revision` 改成当前 head。
+  - 不写 merge 迁移，不用 `branch_labels`。
+- **只动自己的表**：
+  - 模块的迁移只建 / 改本模块的表。
+  - 指向别的模块表的外键：只有对方已经合并（在链上更早）才能建。否则先按编号（code）软引用，等对方合并后在后面的迁移里补外键。
+- **必须能回退**：
+  - 每个迁移都要有可用的 `downgrade()`。
+  - `alembic upgrade head` → `downgrade base` → `upgrade head` 必须跑通。
+- **测试**：`tests/test_migrations.py` 会检查以下几点：
+  - 只有一个 head；
+  - 非骨架 revision id 都符合 `^[a-z_]+_\d{4}$`，且文件名前缀等于 revision id；
+  - 在临时库上跑一遍升 → 降到 base → 再升。
+- **seed**：
+  - 只放在 `app/modules/<模块>/seeds/`，经现有的 seed 注册表加载（`app/seeds/registry.py` 的 `SEED_MODULES` / `SEED_STAGES`，§9）。
+  - 已登记的模块不用改注册表；新模块 / 新阶段只加自己那一行。
+  - 不改别的模块的 seed。

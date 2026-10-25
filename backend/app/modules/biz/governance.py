@@ -6,11 +6,11 @@
 - 权限范围里的中文属性：大区 → store.big_region；订单经 order_belongs_to_store.big_region 一跳过滤；
 - order_line 经 order_id → biz_order 继承订单的行级权限（InheritVia，复用订单那一跳，
   实际是 order_line → biz_order → store 两跳；前端按订单所属大区控权限）；
-- 订单.门店（static-api.md §1.5，静态 9c7fe84）：经 order_belongs_to_store 一跳比 `store.name`，
+- 订单.门店（static-api.md §1.5，团队 master 443c009）：经 order_belongs_to_store 一跳比 `store.name`，
   范围值原样是门店名、不换 code；
 - 商品.品类（同上）：product 登记为受控，谓词按类目路径第一段 `split_part(category, '/', 1)` 比，
   范围值先经 contracts.static.CATEGORY_SCOPE_ALIAS 换成一级类目 [推断]；
-- 多条范围的合并（static 0cfb2eb §1.5，roles.ts:110-117）：granted 角色的全部范围摊平取 OR
+- 多条范围的合并（static-api §1.5@master 443c009，roles.ts:110-117）：granted 角色的全部范围摊平取 OR
   （同一角色内也 OR [推断]）；有查看权且没配该对象范围的角色（defaultDeny 的除外）→ 不限制；
   见 sql_guard.effective_expr。「门店」和「大区」不会 AND；
 - order_line 只继承订单的范围，不按商品品类过滤（已定：静态，roles.ts:62 范围按对象类型配）。

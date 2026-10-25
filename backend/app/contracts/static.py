@@ -1,7 +1,7 @@
 """契约：静态本体 → 基础层（行级范围的取值映射）。
 
 - `CATEGORY_SCOPE_ALIAS`：`roles.ts` 里「商品.品类」的范围值 → `product.category` 第一段（一级类目）。
-  static-api.md §1.5（静态 9c7fe84）：谓词 `split_part(product.category, '/', 1) = ANY($n)`，
+  static-api.md §1.5（团队 master 443c009）：谓词 `split_part(product.category, '/', 1) = ANY($n)`，
   范围值先按这张表换名，不在表里的值原样比（对不上就匹配 0 行）。
   **[推断]** 前端没给对应关系，按名称最接近的一级类目定。
 - TODO(静态本体负责人)：semantic_map（维度同义词，如「华东大区」→ big_region='华东'）也放这里。

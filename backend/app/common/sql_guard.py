@@ -25,9 +25,10 @@
   别名 `_rf_` 前缀，只在注入的子查询内部可见，不会和用户的别名冲突。
 - 不需要行级的表要**显式**登记 `register_unrestricted(...)`；没登记的表一律拒绝（不是默认放行）。
 - 范围值换名用 `value_alias`（product：「商品.品类」按 `split_part(category, '/', 1)` 过滤，值先换一级类目）。
-- 前端角色 → 表达式：`effective_expr(object_type, [RoleAccess…])`，按 roles.ts:112-117 effectiveAccess 合并：
+- 前端角色 → 表达式：`effective_expr(object_type, [RoleAccess…])`，按 roles.ts:110-117 effectiveAccess 合并：
   跨角色——只看对该对象有查看权、且不是「defaultDeny 又没配该对象范围」的角色；其中任一角色没配范围 → 不限制，
-  否则把这些角色的全部范围摊平取 OR（同一角色多条也 OR，[推断]，static 0cfb2eb §1.5 / roles.ts:114）；
+  否则把这些角色的全部范围摊平取 OR（同一角色多条也 OR，[推断]，
+  static-api §1.5@master 443c009 / roles.ts:114）；
   没映射的属性 / 没建表的对象 → 这条范围不贡献任何行（DENY，宁严勿宽）。
 `row_filters_for(user)` 按 `auth.row_filter(user, object_type)` + `row_filter.to_sql` 编出各表谓词；
 `run_guarded(conn, sql, user)` = 校验 + 注入 + 执行。
@@ -304,6 +305,12 @@ def register_governed(*tables: GovernedTable) -> None:
     for g in tables:
         if g.name in _UNRESTRICTED:
             raise ValueError(f"表 {g.name} 已登记为不限制，不能再登记为受控")
+        # scope_expr_for_object 按 object_type 找表（取第一个），所以一个对象类型只能对应一张受控表
+        clash = next(
+            (n for n, t in _GOVERNED.items() if t.object_type == g.object_type and n != g.name), None
+        )
+        if clash:
+            raise ValueError(f"对象类型 {g.object_type} 已由表 {clash} 登记，不能再登记表 {g.name}")
         _GOVERNED[g.name] = g
 
 
@@ -350,17 +357,18 @@ def scope_expr(g: GovernedTable, scopes: Sequence[dict[str, Any]]) -> dict | Non
     """前端 RowScope 列表 {prop, op, values} → 行级表达式（多条之间 OR）。
 
     属性名按 field_of_prop 换成字段，取值按 value_alias 换名（不在表里的原样保留）；
-    多条范围 OR **[推断]**（static 0cfb2eb §1.5 / roles.ts:114：同一角色多条也 OR；mock 里没有这种角色）。
+    多条范围 OR **[推断]**（static-api §1.5@master 443c009 / roles.ts:114：同一角色多条也 OR；
+    mock 里没有这种角色）。
     **没映射的属性 / 非正向 op → 这条是 DENY_ALL**（宁严勿宽，绝不忽略成「不限制」）：
     OR 里它不贡献行，全都这样 → DENY_ALL。
     空列表 → None（不限制）。多个角色用 effective_expr 合并。
     """
-    from app.common.row_filter import DENY_ALL, combine_or, from_row_scope
+    from app.common.row_filter import DENY_ALL, combine_or, from_row_scope, valid_scope_values
 
     parts: list[dict] = []
     for sc in scopes:
-        prop = sc["prop"]
-        if prop not in g.field_of_prop:
+        prop = sc.get("prop")
+        if prop not in g.field_of_prop or not valid_scope_values(sc.get("values")):
             parts.append(dict(DENY_ALL))
             continue
         alias = g.value_alias.get(prop, {})
@@ -395,11 +403,14 @@ class RoleAccess:
 
 
 def effective_expr(object_type: str, roles: Sequence[RoleAccess]) -> dict | None:
-    """一个用户在某对象上的有效行级表达式，照前端 effectiveAccess（roles.ts:110-117，static 0db86b3 §1.5）。
+    """一个用户在某对象上的有效行级表达式。
+
+    照前端 effectiveAccess（roles.ts:110-117，static-api §1.5@master 443c009）：
 
     1. 只算 granted 角色：有查看权，且不是「defaultDeny 又没配该对象范围」（roles.ts:110）；没有 → DENY_ALL；
     2. granted 里任一角色没配该对象范围 → None（不限制）；
-    3. 否则 granted 角色的全部范围摊平后 OR（角色内、角色间都 OR，角色内 [推断]，static 0cfb2eb §1.5）；
+    3. 否则 granted 角色的全部范围摊平后 OR（角色内、角色间都 OR，角色内 [推断]，
+       static-api §1.5@master 443c009）；
        映射不了的范围不贡献行，全都映射不了 → DENY_ALL。
     """
     from app.common.row_filter import DENY_ALL
