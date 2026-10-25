@@ -63,15 +63,14 @@ const synCovered = (f: Feedback) => tuning.synonyms.find((s) => s.word === f.fix
 
 /**
  * 同义词指向的对象：指向指标的登记为 kind 'metric'（id 取公共指标 id）；
- * 指向维度取值的（如“双十一备货期”→时间范围）应登记为 'dimension'，master 的 useDraftView 还没有这个 kind，
- * 先同样按 'metric' 登记、id 写成 dimension:<词>，master 有 dimension 后改这一处即可。
+ * 指向维度取值的（如“双十一备货期”→时间范围）登记为 kind 'dimension'（id 为词本身），改动范围写 dimension:<词>。
  */
-function synTarget(f: Feedback): { id: string; name: string } {
+function synTarget(f: Feedback): { kind: 'metric' | 'dimension'; id: string; name: string } {
   const norm = (x: string) => x.replace(/\s/g, '');
   const m = Object.values(T_METRICS).find((x) => norm(`${x.name}${x.version}`) === norm(f.fix.target ?? '') || norm(x.name) === norm(f.fix.target ?? ''));
-  return m ? { id: m.drawerId ?? m.key, name: `${m.name} ${m.version}` } : { id: `dimension:${f.fix.text}`, name: f.fix.target ?? '--' };
+  return m ? { kind: 'metric', id: m.drawerId ?? m.key, name: `${m.name} ${m.version}` } : { kind: 'dimension', id: f.fix.text, name: f.fix.target ?? '--' };
 }
-const dv = useDraftView('metric', () => '');
+const dv = { metric: useDraftView('metric', () => ''), dimension: useDraftView('dimension', () => '') };
 const changeOpen = ref(false);
 const changeFb = ref<Feedback>();
 const changeTargetName = computed(() => (changeFb.value ? `同义词“${changeFb.value.fix.text}”→ ${synTarget(changeFb.value).name}` : ''));
@@ -85,7 +84,7 @@ function toSynonym(f: Feedback) {
 function onStartChange(opts: { join?: string; title?: string }) {
   const f = changeFb.value; if (!f) return;
   const t = synTarget(f);
-  const cr = dv.start({ ...opts, target: t.id });
+  const cr = dv[t.kind].start({ ...opts, target: t.id });
   const diff = (key: number) => changeRow(key, '同义词', t.name, '同义词', '新增', '', f.fix.text);
   if (opts.join) {
     const d = CR_DETAILS[cr]; if (d) { d.diffs.push(diff(d.diffs.length + 1)); (d.synonyms ??= []).push({ word: f.fix.text, to: t.name }); }
@@ -96,8 +95,8 @@ function onStartChange(opts: { join?: string; title?: string }) {
       { id: cr, title: opts.title || '未命名变更', owner: ME, reviewer: '刘婷', status: '草稿', level: '修订', changes: 1, updatedAt: at, reason: `问数反馈 ${f.id}：用户说“${f.fix.text}”，问数召回不到` },
       {
         diffs: [diff(1)],
-        impact: { direct: [{ kind: '同义词', name: f.fix.text, note: `指向${t.name}` }], defs: [{ kind: '指标', name: t.name, note: '口径不变，版本不变' }], usage: [{ kind: '问数反馈', name: f.id, note: f.question }] },
-        touches: t.id.startsWith('dimension:') ? [] : [`metric:${t.id}`],
+        impact: { direct: [{ kind: '同义词', name: f.fix.text, note: `指向${t.name}` }], defs: [{ kind: t.kind === 'metric' ? '指标' : '维度', name: t.name, note: t.kind === 'metric' ? '口径不变，版本不变' : '取值不变' }], usage: [{ kind: '问数反馈', name: f.id, note: f.question }] },
+        touches: [`${t.kind}:${t.id}`],
         synonyms: [{ word: f.fix.text, to: t.name }],
         times: { created: at },
       },
