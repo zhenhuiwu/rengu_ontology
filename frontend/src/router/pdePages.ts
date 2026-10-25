@@ -7,4 +7,5 @@ export const PDE_PAGES: Record<string, () => Promise<unknown>> = {
   connections: () => import('@/pages/data/Connections.vue'),
   'external-systems': () => import('@/pages/data/ExternalSystems.vue'),
   'data-quality': () => import('@/pages/data/DataQuality.vue'),
+  functions: () => import('@/pages/functions/Functions.vue'),
 };
