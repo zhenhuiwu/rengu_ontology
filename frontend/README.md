@@ -24,7 +24,7 @@ SHOT_BASE=http://localhost:5281 npm run shot -- /       # 对 preview 截图（�
 npm run shot -- --skip-check /                          # 只截图不验收
 ```
 
-- 截图规格：viewport 1920×1080、deviceScaleFactor 1.3333，输出 2560×1440 PNG 到 `shots/`，文件名由路由生成（`/` → `home.png`，`/build/ontology/object-types` → `build_ontology_object-types.png`）。
+- 截图规格：viewport 1920×1080、deviceScaleFactor 1.3333，输出 2560×1440 PNG 到 `shots/`，文件名 = 路由和状态 + `__时分_短提交号`（`/` → `home__1642_e09a371.png`，`/build/ontology/object-types?tab=props` → `build_ontology_object-types__tab-props__1642_e09a371.png`）。写入前会删掉同一路由+状态的旧图，`shots/` 里每个状态只保留最新一张；发图前看文件名里的提交号对不对得上。
 - 每张截图之前会自动跑两个检查，并打印结果：
   - `/workspace/ui/check_onescreen.py`：2560×1440、1920×1080 两档下页面不出现滚动条，主区内最多一个滚动区，且不嵌套。
   - `/workspace/ui/check_fonts.py`：字号只能是 12/14/16/20/24，字重只能是 400/600。
@@ -171,6 +171,10 @@ const onSelect = (id: string) => guard(() => { selected.value = id; dirty.value 
 ## Mock 数据（src/mock/）
 
 一份零售数据集（另有管理区的 `ADMIN_USERS` 120 人、`AUDIT_LOGS` 512 条，在 `admin.ts`）：12 家门店（`STORES`）、12 个 SKU（`PRODUCTS`）、1286 条订单（`ORDERS`，固定种子，每次一样）、指标（`METRICS`、`DAILY_GMV`）。订单状态用“已出库”，不用“已发货”。格式化统一用 `fmtMoney` / `fmtInt` / `fmtPct` / `fmtDelta`，空值显示 `--`（`EMPTY`）。数字要像真实导出的数据：带小数、不凑整。
+
+## 全局提示
+
+`message` 已在 `src/main.ts` 统一配置：同时最多 1 条（`maxCount: 1`），距顶部 56px（顶栏下方，不挡搜索框）。页面里直接 `message.success('已保存')`，不要再各自 `config`。
 
 ## 页面归属表
 

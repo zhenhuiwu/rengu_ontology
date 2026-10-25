@@ -10,9 +10,11 @@
 流程：每个路由先跑 /workspace/ui/check_onescreen.py（2560×1440、1920×1080 两档）和
 /workspace/ui/check_fonts.py（字号 12/14/16/20/24、字重 400/600 白名单），打印结果；
 再用 Playwright 以 viewport 1920×1080、deviceScaleFactor 1.3333 截出 2560×1440 的图到 shots/。
+文件名 = 路由+状态 + __时分_短提交号，例如 use_ops_alerts__1642_e09a371.png；
+写入前删掉同一路由+状态的旧图（含旧格式 use_ops_alerts.png），shots/ 里每个状态只留最新一张。
 任一检查不通过，退出码为 1（图照样截，方便对照修改）。
 """
-import os, re, subprocess, sys, pathlib, urllib.request
+import os, re, subprocess, sys, pathlib, urllib.request, datetime
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SHOTS = ROOT / "shots"
@@ -30,6 +32,23 @@ def slug(route: str) -> str:
     s = (path.strip("/") or "home") + (("?" + query) if query else "")
     s = s.replace("/", "_").replace("?", "__").replace("&", "_").replace("=", "-").replace(":", "-")
     return re.sub(r"[^\w\-.]", "_", s)
+
+
+def git_short() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip() or "nogit"
+    except Exception:
+        return "nogit"
+
+
+def shot_path(route: str, stamp: str) -> pathlib.Path:
+    """新文件名，并删除同一路由+状态的旧截图"""
+    base = slug(route)
+    old = re.compile(rf"^{re.escape(base)}(__\d{{4}}_[0-9a-z]+)?\.png$")
+    for f in SHOTS.glob(f"{base}*.png"):
+        if old.match(f.name):
+            f.unlink()
+    return SHOTS / f"{base}__{stamp}.png"
 
 
 def run(cmd):
@@ -59,6 +78,7 @@ def main(argv):
 
     from playwright.sync_api import sync_playwright
     SHOTS.mkdir(exist_ok=True)
+    stamp = f"{datetime.datetime.now():%H%M}_{git_short()}"
     summary = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -79,7 +99,7 @@ def main(argv):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(url, wait_until="networkidle")
             page.wait_for_timeout(800)
-            out = SHOTS / f"{slug(r)}.png"
+            out = shot_path(r, stamp)
             page.screenshot(path=str(out))
             page.close()
             if errors:
