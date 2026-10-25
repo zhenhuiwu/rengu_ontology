@@ -231,3 +231,83 @@ async def test_synonyms_and_plan_options(qa):
     assert await get(qa, "/tuning/synonyms") == mock("TUNED_SYNONYMS")
     po = await get(qa, "/tuning/plan-options")
     assert po["dims"] == mock("TUNING_DIMS") and len(po["metrics"]) == len(mock("T_METRICS"))
+
+
+# ---------------------------------------------------------------- 卡片判权（P1/P3，row_filter 桩）
+
+_DATA_KEYS = {"value", "unit", "sub", "series", "labels", "rows"}
+
+
+def _assert_denied(cards, want):
+    assert [c["key"] for c in cards] == [c["key"] for c in want]
+    for got, w in zip(cards, want, strict=True):
+        assert got["denied"] is True
+        assert not (_DATA_KEYS & set(got)), got
+        frame = {k: w[k] for k in ("key", "title", "viz", "metric", "version", "pending") if k in w}
+        assert {k: v for k, v in got.items() if k != "denied"} == frame
+
+
+async def test_shared_member_gets_denied_cards(qa):
+    want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
+    got = await get(qa, "/pages/P905", user="U010231")  # 苏刚：P905（周婷）的共享成员，非本体管理员
+    _assert_denied(got["cards"], want)
+    # 口径标签仍可见（只是元数据）
+    assert {c["label"] for c in got["calibers"]} == {f"{c['metric']} {c['version']}" for c in want}
+
+
+async def test_owner_still_gets_values(qa, session):
+    owners = await _owner_codes(session)
+    want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
+    got = await get(qa, "/pages/P905", user=owners["P905"])
+    assert got["cards"] == want and not any("denied" in c for c in got["cards"])
+    # 预览拥有者本人：查看人 = 拥有者，不裁剪
+    got = await get(qa, "/pages/P905", previewAs=owners["P905"])
+    assert got["cards"] == want
+
+
+async def test_preview_follows_row_filter(qa):
+    want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
+    # 管理员预览苏刚：数据身份 = 苏刚，row_filter 桩 = DENY_ALL → 共享页卡片无权限（详情和列表一致）
+    _assert_denied((await get(qa, "/pages/P905", previewAs="U010231"))["cards"], want)
+    items = (await get(qa, "/pages", previewAs="U010231", size=200))["items"]
+    p905 = next(p for p in items if p["id"] == "P905")
+    _assert_denied(p905["cards"], want)
+    own = [p for p in items if p["id"] in ("P901", "P902", "P903")]  # 苏刚自己的页面不裁剪
+    assert own and all(not any(c.get("denied") for c in p["cards"]) for p in own)
+
+
+async def test_admin_shared_member_unrestricted(qa, session):
+    """本体管理员（row_filter = None）作为被共享人看到的是原值。"""
+    from app.core.config import get_settings as gs
+
+    admin = gs().demo_admin_codes[0]
+    row = (
+        await session.execute(
+            text(
+                "SELECT p.code FROM qa_page p JOIN qa_page_share_member m ON m.page_id = p.id "
+                "JOIN sys_user u ON u.id = m.user_id JOIN sys_user o ON o.id = p.owner_id "
+                "WHERE u.code = :c AND o.code <> :c LIMIT 1"
+            ),
+            {"c": admin},
+        )
+    ).first()
+    if row is None:
+        pytest.skip("种子里没有共享给管理员的他人页面")
+    got = await get(qa, f"/pages/{row[0]}", user=admin)
+    assert not any(c.get("denied") for c in got["cards"])
+
+
+async def test_keywords_trimmed(qa):
+    a = await get(qa, "/sessions", q="复购", size=200)
+    b = await get(qa, "/sessions", q="  复购 ", size=200)
+    assert a == b and a["total"] > 0
+    assert await get(qa, "/sessions", q="   ", size=200) == await get(qa, "/sessions", size=200)
+    assert await get(qa, "/pages", kw=" 周报 ", view="brief", size=200) == await get(
+        qa, "/pages", kw="周报", view="brief", size=200
+    )
+    assert await get(qa, "/tuning/certs", kw="  ", size=200) == await get(qa, "/tuning/certs", size=200)
+    fav = await get(qa, "/favorites", size=200)
+    word = fav["items"][0]["question"][:2]
+    assert await get(qa, "/favorites", q=f" {word}  ", size=200) == await get(
+        qa, "/favorites", q=word, size=200
+    )

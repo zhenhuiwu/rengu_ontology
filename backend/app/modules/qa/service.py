@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.auth import CurrentUser, resolve_user
+from app.common.auth import CurrentUser, resolve_user, row_filter
 from app.common.context import ViewContext
 from app.common.pagination import Page, PageParams
 from app.core import clock
@@ -82,18 +82,27 @@ def _ver(n: int | None) -> str:
 # ---------------------------------------------------------------- 身份
 
 
-async def effective_user(session: AsyncSession, user: CurrentUser, ctx: ViewContext) -> tuple[int, SysUser]:
+async def effective_viewer(
+    session: AsyncSession, user: CurrentUser, ctx: ViewContext
+) -> tuple[int, SysUser, CurrentUser]:
     """数据身份：预览时是被预览人（?previewAs=用户编号），否则是当前用户。
 
-    EXTENSION POINT (PDE): 预览需要「角色与权限 · 管理」，权限体系接入后在这里校验。
+    返回 (代理 id, SysUser, 查看人 CurrentUser)。
+
+    EXTENSION POINT (PDE): 预览需要「角色与权限 · 管理」，权限体系接入后在这里校验
+    （现在不校验：普通用户带 ?previewAs= 也能以他人身份读，[推断] 由骨架鉴权接住）。
     """
     code = ctx.preview_as or user.id
-    if ctx.preview_as:
-        await resolve_user(session, code)  # 不存在 / 停用 → 401
+    viewer = await resolve_user(session, code) if ctx.preview_as else user  # 不存在 / 停用 → 401
     u = await r.SysUserRepo(session).get_by_code(code)
     if u is None:
         raise NotFound("用户不存在", details={"id": code})
-    return u.id, u
+    return u.id, u, viewer
+
+
+async def effective_user(session: AsyncSession, user: CurrentUser, ctx: ViewContext) -> tuple[int, SysUser]:
+    pk, u, _ = await effective_viewer(session, user, ctx)
+    return pk, u
 
 
 # ---------------------------------------------------------------- 工作台
@@ -146,6 +155,33 @@ def card_out(c) -> dict[str, Any]:
     return out
 
 
+# 无权限卡片只留卡片框（标题、图形、口径），数值字段一律不出：
+# 形状按 qa-api P3「范围外的卡片返回 {denied:true}，显示“无权限”」；前端 PageCard（mock/qa-pages.ts:12-20）
+# 的数据字段是 value/unit/sub/series/labels/rows，文案见 PageDrawer.vue:128/283。
+_CARD_FRAME_KEYS = ("key", "title", "viz", "metric", "version", "pending")
+
+# [推断] 卡片判权用的对象类型：页面卡片按大区 / 门店范围取数，先按门店判；row_filter 现在是桩，不看对象类型。
+CARD_SCOPE_OBJECT = "store"
+
+
+def denied_card(card: dict[str, Any]) -> dict[str, Any]:
+    out = {k: card[k] for k in _CARD_FRAME_KEYS if k in card}
+    out["denied"] = True
+    return out
+
+
+async def cards_denied_for(viewer: CurrentUser, viewer_pk: int, page: QaPage) -> bool:
+    """非拥有者（被共享人 / 预览他人看到共享页）且行级范围不是「不限制」→ 整页卡片标无权限。
+
+    EXTENSION POINT (qa) [推断]：现在存的是拥有者权限下算出的卡片值，没法按查看人裁剪，所以只要
+    `auth.row_filter` 不是 None 就整页标「无权限」（宁可看不到，不能看多；桩实现：本体管理员 None，
+    其他人 DENY_ALL）。row_filter 接入真实范围后改成按查看人的范围逐张重算卡片（qa-api P3）。
+    """
+    if page.owner_id == viewer_pk:
+        return False
+    return await row_filter(viewer, CARD_SCOPE_OBJECT) is not None
+
+
 def calibers_of(cards: list[dict[str, Any]]) -> list[CaliberTagOut]:
     """同 PageDrawer.vue：按「指标名 版本」去重，后出现的卡片覆盖 pending。"""
     m: dict[str, str | None] = {}
@@ -164,8 +200,10 @@ def page_brief_out(p: QaPage) -> PageBriefOut:
     )
 
 
-def page_full_out(p: QaPage) -> PageFullOut:
+def page_full_out(p: QaPage, *, deny_cards: bool = False) -> PageFullOut:
     cards = [card_out(c) for c in p.cards]
+    if deny_cards:
+        cards = [denied_card(c) for c in cards]
     sub = p.subscription
     return PageFullOut(
         id=p.code,
