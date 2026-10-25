@@ -547,6 +547,7 @@ def test_static_routes_func_permissions():
 
     want = {"object-types": "object-types", "link-types": "link-types", "metrics": "metrics"}
     want |= {"dimensions": "dimensions", "knowledge": "glossary", "change-requests": "releases"}
+    want["ontology"] = "ontology-overview"
     for r in router.routes:
         if "GET" not in r.methods:
             continue
