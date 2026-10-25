@@ -2,6 +2,8 @@
 
 > 依据：`/workspace/ui-vue` 前端代码与 mock（以前端为准）；表结构在 `/workspace/palantir-ontology/静态本体-后台表结构与接口定义-v0.1.md` 基础上按前端补齐。v0.3 按本体小白审核意见（阻断 1–3 + 非阻断建议）和 PDE 对 api-index 的意见修订。
 > 范围：对象类型（定义页签 + 使用与治理页签）、关系类型、指标口径、维度与字典、业务知识、变更与发布。
+> 交接（已完成 / 未完成 / 代码在哪 / 下一步）：见 `backend/docs/backend/handoff/static.md`。
+
 > 标注：**[推断]** = 前端没有限制或没有体现，是按页面行为推出来的；**[第二期]** = 前端没有入口或显示「暂未开放」；**[待用户定]** = 需要用户或 PDE 拍板。
 > 前缀 `/api/ontology/v1`。**读接口的路径、参数、返回字段以 api-index §3.5、§3.6、§3.9–3.11、§3.15–3.16 为准**；本文第 3 节只写写接口、计算接口和业务规则，读接口只写与 api-index 不同或补充的部分。
 > 命名：表名不加模块前缀，单数 snake_case 业务名词，只有关键字或易混的名字加限定词（`ontology_release`）。**接口 JSON 一律 camelCase**（`baseRelease`、`lockVersion`、`isNew`、`jobId`、`toVersion`、`releaseTag`、`rejectReason`…），枚举值与 mock 完全一致（中文）；ER 图和表字段用 snake_case，状态列存英文码，由 Pydantic 转换（对照见 §1.3）。
