@@ -6,7 +6,7 @@
 > 标注：**[推断]**（不带编号）= 实现细节，代码里没有直接体现，按页面行为推出；**[待定]** = 见第 7 节；**[已定]** = 群里已拍板，第 7 节注明谁定的。全站路径与字段清单以 PDE 汇总为准，本文第 4 节只列关键业务接口。
 > 用户要求：**后台逐条实现前端界面逻辑（1:1），当前 mock 数据作为种子数据入库**（第 5、6 节）。
 > 前缀统一 `/api/ontology/v1`（PDE 定：`/api/<模块>/v1`，动态归 `ontology` 模块）。分页参数一律 `page`、`size`，返回 `{items, total, page, size}`（与静态一致）。
-> **接口字段与枚举 = 前端 mock 原样** [已定：PDE]：JSON 字段 camelCase，状态等枚举返回 mock 里的中文值；数据库用 snake_case + 英文码，由 Pydantic 层转换，对照见 1.3。与 Palantir专家 `action-event-api.md`（master `736fe56`）的分工见 2.7。mock 里的当前用户固定为 `王敏`（`CURRENT_USER` / `ME`），后台改为登录身份。
+> **接口字段与枚举 = 前端 mock 原样** [已定：PDE]：JSON 字段 camelCase，状态等枚举返回 mock 里的中文值；数据库用 snake_case + 英文码，由 Pydantic 层转换，对照见 1.3。与 Palantir专家 `action-event-api.md`（v0.5，`b7ffba4`）的分工见 2.7。mock 里的当前用户固定为 `王敏`（`CURRENT_USER` / `ME`），后台改为登录身份。
 
 ## 1. 总览：核心实体与表结构
 
@@ -173,6 +173,8 @@
 | 字段名（动作，两份 mock 不同） | `action_type_id`；`params_text`；`elapsed_ms / result_code / retry_count` | 统一响应类型 `ActionRun` 同时返回 `typeId` 和 `action`（中文动作名）、`params` 和 `summary`（同值 = `params_text`）、`ms / code / retries`（ACTIONS 来源为 null），各页按原字段读，不用改前端 | `ActionRecord`、`actionEvent.ts` `ActionRun` |
 | 字段名（告警） | `rule_id, obj_kind, obj_id, obj_label, store_id, store_label, triggered_at, data_cutoff` | `ruleId, objKind, objId, objLabel, storeId, storeLabel, triggeredAt, cutoff` | `Alert` |
 
+生命周期迁移的字段名：接口（含快照 `lifecycles` 段）照 mock 用 `transitions[].id / from / to / eventId / actionId`，库内列为 `lifecycle_transition.code / from_state / to_state / event_type_id / action_type_id`；规则 `trigger.eventId`、`actionTypeId` 同理对 `event_type_id` / `action_type_id`。
+
 **时间字段** [已定：PDE]：库内一律 `timestamptz`；**接口按每个字段的 mock 格式返回**（北京时间，不带时区）。默认 `YYYY-MM-DD HH:mm`，**只有 mock 带秒的字段才带秒**。下表格式是用 esbuild 打包 `src/mock/*`、在 Node 里逐条读导出值和派生函数结果核出来的（所有行格式一致）：
 
 | 接口字段 | 库内列 | 格式 | mock 出处 |
@@ -210,7 +212,7 @@ stateDiagram-v2
   执行中 --> 成功: 外部返回成功（写 ext_ref）
   执行中 --> 失败: 外部明确返回失败（同一幂等键按 maxRetry 自动重试仍失败）
   执行中 --> 结果未知: submit 返回结果未知（超过 timeoutMs 未返回，不重试写入）
-  结果未知 --> 结果未知: Palantir 定时查询（每 15 分钟，最多 3 次）/ 人工对账「仍无法确认」（再查 3 轮）
+  结果未知 --> 结果未知: Palantir 定时查询（每 15 分钟，最多 3 次）/ 人工对账「仍无法确认」（再开一轮，最多 3 次：`round+1`，`tries` 清零）
   结果未知 --> 已对账: 系统：Palantir 查到结果回调 on_reconciled
   结果未知 --> 已对账: 人工对账选「外部已成功」/「外部未执行」
   note right of 已对账: reconcile_result = succeeded / not_executed；<br/>not_executed 不能重新提交，需重新发起新动作
@@ -228,11 +230,11 @@ stateDiagram-v2
 | 确认提交 | 有 `source.confirmer` 时只能是该确认人（规则固定确认人、推演方案 owner），别人只能看，提示「只有确认人可以确认提交或撤回」；**没有 `source.confirmer` 时不校验操作人**（与前端 `Actions.vue` L87 `notMine` 一致）；收紧到动作类型 runners 见 `[推断 P6]` | status=staged；非只读 | → approving；log「确认提交」「等待审批 · 审批人 X」 |
 | 撤回 | 同确认提交（只在有 `source.confirmer` 时限定本人） | status=staged；原因必填 | → withdrawn（终态）；不写外部 |
 | 审批通过 | `approver` | status=approving | → executing；**动态调 Palantir `submit(action_run_id, idem_key)`**，按同步返回写 action_run；log「审批通过」「调用 {系统}：{调用说明} · 幂等键」 |
-| 外部成功 | 动态（依据 `submit` 返回） | — | → succeeded，写 `ext_ref` |
+| 外部成功 | 动态（依据 `submit` 返回） | — | → succeeded，写 `ext_ref`；**同步返回成功时同样由动态提交本体修改并发 `ActionExecuted`**（与对账成功一致）[已定：Palantir专家] |
 | 失败 | 动态（依据 `submit` 返回；重试在 Palantir 适配器内） | **照前端**：外部明确返回失败（如 `NC-2071 供货仓可用库存不足`）时，用同一幂等键按 `ext_system.maxRetry` 自动重试（按 `extsys.ts` 各系统 `maxRetry`，如 CRM/ERP/OMS 3 次 1s/2s/4s、WMS 2 次 3s/6s，不支持幂等的短信 0 次），仍失败 → 失败；log「明确返回失败，已自动重试 N 次仍失败」（`actions.ts` `buildLog`、`extsys.ts` `retry`）[已定]。「明确业务错误不重试」见 `[推断 P1]` | → failed，写 `fail_reason`（外部错误码原文）、`retry_count` |
-| 超时 | 动态（依据 `submit` 返回结果未知；超时判定在 Palantir 适配器） | 超过 `ext_system.timeoutMs`（CRM/OMS 5 秒、ERP 10 秒…） | → unknown；**绝不重试写入**；log「N 秒未返回结果，标记为结果未知（不重试写入）」 |
+| 超时 | 动态（依据 `submit` 返回结果未知；超时判定在 Palantir 适配器） | 超过 `ext_system.timeoutMs`（CRM/OMS 5 秒、ERP 10 秒…） | → unknown；**绝不重试写入**；log「N 秒未返回结果，标记为结果未知（不重试写入）」；转为结果未知时动态经 Palantir `emit` 发 `ActionOutcomeUnknown`，`eventId` 由动态生成 [已定：Palantir专家] |
 | 自动查询 | Palantir 对账任务（调度见 2.7），动态只接回调 | status=unknown | 每 15 分钟调 `query_by_key`，**最多 3 次**（返回「查无」也算一次）[已定]；3 次仍无法确认 → 停止自动查询，log「转人工对账」。查到结果 → Palantir 回调 `on_reconciled(action_run_id, 结果)`，动态改为 reconciled，`reconcile_result` = `succeeded` 或 `not_executed`（接口 `reconcile` = 外部已成功 / 外部未执行，见 1.3）。**查到也转「已对账」，不转「成功」** [已定]。结果为 `succeeded` 时，**由动态提交本体修改并发 `ActionExecuted` 事件** [已定：动态本体负责人、Palantir专家] |
-| 人工对账 | 任何人（前端不校验操作人；mock 记对账人 = 当前用户）；限定操作人见 `[推断 P6]` | status=unknown；结论必选、说明必填 | 外部已成功 / 外部未执行 → reconciled（`reconcile_result` 分别为 `succeeded/not_executed`）；选外部已成功时**由动态提交本体修改并发 `ActionExecuted`** [已定]；对账前先按幂等键查一次见 `[推断 P7]`；仍无法确认 → 保持 unknown、log，**再自动查 3 轮**（通知 Palantir 重排 `reconcile_task`，计数清零）[已定] |
+| 人工对账 | 任何人（前端不校验操作人；mock 记对账人 = 当前用户）；限定操作人见 `[推断 P6]` | status=unknown；结论必选、说明必填 | 外部已成功 / 外部未执行 → reconciled（`reconcile_result` 分别为 `succeeded/not_executed`）；选外部已成功时**由动态提交本体修改并发 `ActionExecuted`** [已定]；对账前先按幂等键查一次见 `[推断 P7]`；仍无法确认 → 保持 unknown、log，**再开一轮自动查询，最多 3 次**（动态调 Palantir `reopen_reconcile(action_run_id)`：`round+1`、`tries` 清零、重排 `next_at`）[已定] |
 | 重新提交 | 任何人（前端只校验状态）；限定操作人见 `[推断 P6]` | **只限 status=failed** 且 `retried_as` 为空（`Actions.vue` L143）；**不可逆**确认卡。已对账·外部未执行**不能重新提交**，后台返回 `ACTION_STATE_INVALID`，按前端提示「如仍需执行请重新发起」（L205）新建动作（新 run、新幂等键） | 新 `action_run`（`Actions.vue` L162）：新 id、幂等键 `{原键去掉 -rN}-r{N+1}`、`retry_of=原 id`、`status=executing`、`initiator=当前操作人`；来源为告警/规则的保留原 source、清空 `source.confirmer`，来源为问数/手动/推演的一律改为 `手动`；沿用原审批（不再确认、不再审批），然后调 `submit`；原记录写 `retried_as`、log「已重新提交为 X」，状态仍为失败 |
 
 **幂等键规则**（`actions.ts`）：
@@ -242,7 +244,7 @@ stateDiagram-v2
 - 传给外部系统的字段名按外部系统登记：CRM `X-Idempotency-Key`、ERP `srcBillNo`、OMS `X-Request-Id`、WMS `requestNo`；短信平台不支持幂等（`maxRetry=0`），**只发通知、不做写回，也不对账** [已定]。
 - **外部幂等键只用 `act-…` 这一套** [已定]。动作类型目录里的业务键模板（如 `correctOrderStatus:{订单号}:{目标状态}`）存 `biz_key`，和 `idem_key` 分开存；暂存时按它拦截重复（`IDEMPOTENCY_CONFLICT`）前端没有，见 `[推断 P4]`。
 - 幂等键在**暂存时由动态生成**；告警页发起的动作在 `:start-action` 时生成。
-- 新记录的 `idem_key` 唯一（部分唯一索引 `WHERE NOT is_seed`）；同一幂等键重复提交返回已有记录，不再调外部。种子里 31 个重复的键原样保留（见 5 节约束 5）。
+- 新记录的 `idem_key` 唯一（部分唯一索引 `WHERE NOT is_seed`）；同一幂等键重复提交返回已有记录、不再调外部 `[推断 P9]`（前端没有：重新提交总是生成新键 `-rN`，`Actions.vue` L144–145）。种子里 31 个重复的键原样保留（见 5 节约束 5）。
 
 **告警页发起动作**：确认卡字段 = 来源告警、触发值、审批人、幂等键 `act-<告警号>`。审批人**照前端按对象类型写死**（`Alerts.vue` L173：商品 → 品类经理 王敏，其他 → 区域运营 陈立军）；改为取动作类型审批配置见 `[推断 P5]`；确认后直接 `审批中`（处理人即确认人）。一条告警只对应一个动作（幂等键由告警号决定）。
 
@@ -267,7 +269,7 @@ stateDiagram-v2
 | 关闭 | 仅 `status=processing && assignee=本人`；动作在途时禁止；结果（已解决/已忽略）+ 原因必填 | → resolved/ignored；log「关闭为X：原因（from → to）」 |
 | 批量关闭 | **照前端 `closable`**（`Alerts.vue` L148）：只作用于勾选项中「本人处理中」的，不查在途动作；原因必填。在途的跳过并返回 skipped 列表见 `[推断 P3]` | 同上 |
 | 发起动作 | 仅本人处理中、规则绑定了动作、尚无关联动作 | 新 action_run（见 2.1），alert.action_run_id；log「发起动作…动作成功后告警自动转为已解决」 |
-| 动作结果联动 | 系统 | 动作 succeeded → 告警 resolved，log「关联动作执行成功，状态 处理中 → 已解决」；失败/已对账后解锁，由处理人手动关闭 [推断] |
+| 动作结果联动 | 系统 | 动作 succeeded → 告警 resolved，log「关联动作执行成功，状态 处理中 → 已解决」；失败/已对账后解锁，由处理人手动关闭 [推断]；对账外部已成功后自动转已解决见 `[推断 P10]` |
 
 已关闭告警没有重开入口。详情显示「近 7 天同一规则、同一对象第 N 次触发」（含本条，按 rule_id+obj_id 计数）。
 
@@ -339,6 +341,8 @@ stateDiagram-v2
 | `submit(action_run_id, idempotency_key)` | 动态 → Palantir | 审批通过（或免审确认）后调用。同步返回 `成功 / 失败 / 结果未知` + 外部回执号 `ext_ref` + 返回码；动态据此改 succeeded / failed / unknown。重试和超时判定都在 Palantir 适配器内，口径照前端：超时 = 结果未知、**不重试**；外部明确失败 = 同一幂等键按 maxRetry 自动重试，仍失败 = 失败 [已定]。Palantir 提的「明确业务错误不重试、只重试网络错误/限流/5xx」见 `[推断 P1]` |
 | `query_by_key(idempotency_key)` | Palantir 对账任务内部用 | 定时对账按幂等键查询；「查无」算一次 [已定]。人工对账前由动态主动调一次见 `[推断 P7]` |
 | `on_reconciled(action_run_id, 结果)` | Palantir → 动态 | 定时对账查到结论时回调，结果 ∈ `succeeded` / `not_executed`（接口值 外部已成功 / 外部未执行，见 1.3）；动态改为 reconciled + `reconcile_result`；`succeeded` 时**动态提交本体修改并发 `ActionExecuted`**（人工对账选「外部已成功」同样处理）[已定]。Palantir 不直接写 `action_run.status` |
+| `reopen_reconcile(action_run_id)` | 动态 → Palantir | 人工对账选「仍无法确认」时由动态调用；Palantir 设 `reconcile_task.round = round+1`、`tries = 0`、重排 `next_at`，再自动查询最多 3 次 [已定：Palantir专家]。本体小白 把它加进骨架的动作契约（`contracts/actions`） |
+| `emit(event)` | 动态 → Palantir | 动态产生的事件（`ActionExecuted`、`ActionOutcomeUnknown` 等）经 Palantir 的 `emit` 写入；完整信封含 `eventId`，**由动态生成**，Palantir 按 `eventId` 去重 |
 
 - `action_run`、`action_run_log` 只由动态写。`writeback_call`、`ext_system`（integration 模块）和 `reconcile_task`（reconcile 模块，含 `tries`、`round`、`manual`、`next_at`）归 Palantir，动态只读。
 - 动态负责 `action_run` 的状态流转、幂等键生成（暂存时）、重新提交（新 run + 新键 `-rN`）、人工对账，以及对账成功后提交本体修改、发 `ActionExecuted`。
@@ -348,22 +352,22 @@ stateDiagram-v2
 
 **调度**：归 本体小白 的骨架。本体小白 提 procrastinate（基于 PostgreSQL 的任务队列，自带 cron 和任务锁），Palantir专家 提 APScheduler + PostgreSQL 咨询锁；两种都满足「多实例不重复执行」，**本体小白 已定用 procrastinate**（定时任务扫 `reconcile_task.next_at`），不用 APScheduler。跑在上面的任务：定时规则（cron）、每 15 分钟的结果未知对账、情景推演异步运行、关联质量检查。
 
-**开发 / 测试环境**：所有外部系统适配器统一走 mock 适配器，结果按幂等键固定、每次一样；对账任务照常跑，但打不到真实系统。mock 适配器按种子状态原样返回：20 条结果未知的动作一直是结果未知，页面显示和现在一样。
+**开发 / 测试环境**：所有外部系统适配器统一走 mock 适配器，结果按幂等键固定、每次一样；对账任务照常跑，但打不到真实系统。mock 适配器按种子状态原样返回：74 条结果未知的动作（ACTIONS 20 + RUNS 54）一直是结果未知，页面显示和现在一样。
 
 **种子环境的「现在」** [已定：PDE]：固定为 **2026-10-25 15:42（北京时间）**，由骨架的 `now()` 提供；所有「今天」「近 7 天」「N 分钟前」都按它算，不用系统时钟。
 
 ### 2.8 本体版本快照的 `rules`、`lifecycles` 段 [已定：群决定]
 
-整版发布时，**完整快照 = 静态各段 + `actionTypes` + `eventTypes` + `rules` + `lifecycles`**，**各段由所属模块组装**，交给静态的 `create_version` 写入版本；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`、`order`）。动态负责组装 `rules` 和 `lifecycles` 两段。
+整版发布时，**完整快照 = 静态各段 + `actionTypes` + `eventTypes` + `rules` + `lifecycles`**，**各段由所属模块组装**。版本由本体小白的版本基础层 `create_version(change_order_ids, rollback_of=None)` 生成：各模块启动时按段名登记组装函数，发布时基础层逐段调用；回滚（`rollback_of`）**原样复制**目标版本的快照，不调用组装函数 [已定：本体小白、PDE]。动态登记 **`rules`、`lifecycles` 两个组装函数**；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`、`order`）。动态负责组装 `rules` 和 `lifecycles` 两段。
 
 **`rules` 段**：
 
 | 项 | 约定 |
 |---|---|
-| 内容 | 数组，**每条规则一项 = 该规则在本次发布后生效的那个版本的完整定义**；草稿、已替代版本不放 |
+| 形状 | **对象，键 = 规则前端 id**：`{"R-007": {...}, "R-012": {...}}`；值 = 该规则在本次发布后生效的那个版本的完整定义；草稿、已替代版本不放 |
 | 每项字段 | `id`、`version`，加定义字段（与 `rule_version` / `RULE_DEFS` 相同，接口名照 mock）：`name, desc, owner, status, core, objKind, level, output, conds[{metric, metricVer, field, op, value}], logic, expr, dedupe, cooldown, trigger{kind, cron, text, eventId, filter}, actionTypeId, autoStage{enabled, actionTypeId, confirmer, mapping[{param, from}]}` |
 | 不放 | `weekly`（近 7 天命中数，统计值）；`published_by/published_at/change_note/release` 由版本本身记录 |
-| 组装时机 | 发布事务里：本次 CR 里的规则先生成新的 `rule_version` 行，再按每条规则的当前生效版本组装整段交给 `create_version` |
+| 组装时机 | 发布事务里：本次 CR 里的规则先生成新的 `rule_version` 行，再由登记的 `rules` 组装函数按每条规则的当前生效版本组装整段 |
 | 历史 | `rule_version` 照旧单独保存每条规则的全部历史版本；快照只是发布那一刻的全量生效版本 |
 | 运行数据 | 告警、动作执行、规则命中、生命周期状态变化都是运行数据，**不进快照**；它们产生时记下当时的 `rule_version` / `type_version` 即可追溯 |
 
@@ -372,17 +376,17 @@ stateDiagram-v2
 | 项 | 约定 |
 |---|---|
 | 键 | 对象类型的**前端 id**（如 `order`、`store`），与静态 `objectTypes` 段的键一致；静态的 `objectTypes` 段**不含**生命周期 |
-| 内容 | 每个有生命周期的对象类型一项 = 本次发布后生效版本的完整定义：`objectId, version, field, owner, ruleId, desc, states[{key, name, kind, desc, sla, x, y}], transitions[{id, from, to, trigger, by, eventId, actionId, guard, effect}]` |
+| 形状 | **对象，键 = 对象类型前端 id**：`{"order": {...}, "store": {...}}`；值 = 本次发布后生效版本的完整定义：`objectId, version, field, owner, ruleId, desc, states[{key, name, kind, desc, sla, x, y}], transitions[{id, from, to, trigger, by, eventId, actionId, guard, effect}]` |
 | 不放 | `count`、`weekly`（统计值）；`versions[]`、`updatedAt`、`undo`（版本记录，存 `lifecycle_version`） |
-| 组装时机 | 与 `rules` 段相同：发布事务里，本次 CR 里的生命周期先生成新的 `lifecycle_version` 行，再按每个对象类型的当前生效版本组装整段 |
+| 组装时机 | 与 `rules` 段相同：发布事务里，本次 CR 里的生命周期先生成新的 `lifecycle_version` 行，再由登记的 `lifecycles` 组装函数按每个对象类型的当前生效版本组装整段 |
 | 历史 | `lifecycle_version` 照旧单独保存全部历史版本（含 `snapshot` = `lifecycleAsOf`） |
 
 ## 3. 权限与只读
 
 | 场景 | 规则 |
 |---|---|
-| 历史版本 `?ver=` | 所有动态页只读：告警不能处理、动作不能确认/撤回/重提/对账、规则不能发起变更/试跑/回滚、方案不能新建/运行/转动作；悬停「正在查看历史版本 X，只读」。生命周期显示该版本发布时生效的状态机（按 `undo` 倒推）；状态变化和非法迁移列表为空 |
-| 以此用户预览 | 同只读，原因「正在以 X 的权限预览，只读」；后端按真实身份拒写 `READONLY_PREVIEW` |
+| 历史版本 `?ver=` | 所有动态页只读：告警不能处理、动作不能确认/撤回/重提/对账、规则不能发起变更/试跑/回滚、方案不能新建/运行/转动作；悬停「正在查看历史版本 X，只读」。生命周期显示该版本发布时生效的状态机（按 `undo` 倒推）；状态变化和非法迁移列表为空。只读只看 query 参数 `?ver=` / `?previewAs=`，不用请求头；带 `?ver=` 的写接口返回 **403 `READONLY`**，`details.mode = history`，message「正在查看历史版本 X，只读」[已定：PDE] |
+| 以此用户预览 | 同只读，原因「正在以 X 的权限预览，只读」；带 `?previewAs=` 的写接口返回 **403 `READONLY`**，`details.mode = preview`，message「正在以 X 的权限预览，只读」[已定：PDE] |
 | 已发布 vs 草稿 | 规则、生命周期只在草稿视图可编辑（见 2.3） |
 | 他人所有 | 有 `source.confirmer` 的动作只有该确认人能确认/撤回；告警只有本人处理中才能关闭/发起动作；方案只有 owner 能改/运行/转动作 |
 | 动作在途锁 | 关联动作在途时告警不能转派、关闭 |
@@ -402,7 +406,7 @@ stateDiagram-v2
 | 转派选人 | `GET /people` | 返回 `string[]`（用户姓名），**只返回 `sys_user` 中带 `alert_assignable` 标记的用户，按 mock `PEOPLE` 原顺序**，转派下拉与现在完全一样。`sys_user` 归 admin 模块（PDE），动态只读，不读种子 JSON、不建自己的表 [已定：群决定]；种子见 5 |
 | 关闭 / 批量关闭 | `POST /alerts/{id}:close {as, reason}`、`POST /alerts:batch-close {ids, as, reason}` | `as` ∈ 已解决/已忽略；仅本人处理中；批量返回 `{closed}`（`skipped[]` 见 `[推断 P3]`） |
 | 告警发起动作 | `POST /alerts/{id}:start-action` | 生成 action_run（审批中），幂等键 `act-<告警号>` 由动态生成并返回（不需要请求头 `Idempotency-Key`） |
-| 动作列表 | `GET /action-runs?tab&status&action&actionType&sysId&objKind&objId&alertId&ruleId&kw&page&size`（参数见下方「唯一执行记录接口」） | 一屏 16；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页「执行记录」「最近异常」也用这个接口（`action_type` + `status` 多选，每页 14），同一张表 |
+| 动作列表 | `GET /action-runs?tab&status&action&actionType&sysId&objKind&objId&alertId&ruleId&kw&page&size`（参数见下方「唯一执行记录接口」） | 一屏 16；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页「执行记录」「最近异常」也用这个接口（`actionType` + `status` 多选，每页 14），同一张表 |
 | 筛选下拉 | `GET /actions/meta` | `ACTION_NAMES`、`ACTION_SYSTEMS`、`ACTION_META`（mock/actions.ts） |
 | 动作详情 | `GET /action-runs/{id}` | 返回 `ActionRun` + `log`（时间线 = `action_run_log`）、确认人、能否操作及原因 |
 | 暂存 | `POST /api/ontology/v1/action-runs:stage` | 规则引擎、推演、问数调用；只生成待确认；**幂等键此时由动态生成**并返回 `ActionRecord`（含 `id, idemKey, status:'待确认', source.confirmer`）；业务键冲突拦截见 `[推断 P4]` |
@@ -459,7 +463,8 @@ stateDiagram-v2
 | `dynamic/derived/hitsOf.json` | rule_hit | |
 | `dynamic/RULE_DRAFTS.json` | cr_item / cr_target | 与静态共用 CR 表 |
 | `dynamic/ACTIONS.json`（含 `log`） | action_run、action_run_log | `dynamic/derived/buildLog.json` 只作核对 |
-| `action/derived/runsOf.json` | action_run、action_run_log | 与 ACTIONS 合并，见约束 5 |
+| `action/derived/runsOf.json` | action_run | 与 ACTIONS 合并，见约束 5；**runsOf 行没有 `log`** |
+| `action/derived/ACTION_EVENT_RESOLVERS.action.json` 的 `result.timeline` | action_run_log（RUNS 1,849 条） | 按 `args[0]` = 执行记录 id 对应，1,849 条全有，共 8,217 行 `{time, text, desc, status}`。**时间格式**：每条第一行 `YYYY-MM-DD HH:mm:ss`，后面各行只有 `HH:mm:ss`，入库时补上日期；时刻比上一行小时日期加一天（49 处跨零点） |
 | `dynamic/SCENARIOS.json`（含 `result`） | scenario、scenario_result、scenario_impact | `derived/simulate.json`、`derived/stagePlanOf.json` 只作核对 |
 | `dynamic/LIFECYCLES.json` | lifecycle、lifecycle_version、lifecycle_state、lifecycle_transition | |
 | `dynamic/derived/lifecycleAsOf.json` | lifecycle_version.snapshot | |
@@ -483,7 +488,7 @@ stateDiagram-v2
 | `rules.ts` `RULE_DRAFTS` + `useDraftView` TARGETS | cr_item / cr_target（R-007 在 CR-0011） | 1 | 与静态共用 CR 表 |
 | `rules.ts` `hitsOf(ruleId)` 全部规则 | rule_hit | 1186 | 核心规则命中 = 告警 + 合成的「已去重」；其余为已通知/已去重 |
 | `actions.ts` `ACTIONS`（含 `buildLog`） | action_run、action_run_log | 141（待确认 25、审批中 7、执行中 4、失败 11、结果未知 20、成功 58、已撤回 5、已对账 11；来源 规则 33、问数 72、手动 36） | 幂等键、编号已由 build 算好，原样入库；`RULE_CONFIRMER` 写 confirmer |
-| `actionEvent.ts` `runsOf()`（`RUNS`） | action_run、action_run_log（与上一行合并成同一张表） | 1,849（编号 `ACT-…-2001`～`3849`） | **由动态统一 seed** [已定]：`RUNS`、`EVENTS`、`runsOf` 等由 PDE 的派生配置导出到 **`backend/seeds/json/action/derived/`**（`runsOf.json` 等），动态读这里和 ACTIONS 的 JSON 按 id 合并。合并规则见下方约束 5 |
+| `actionEvent.ts` `runsOf()`（`RUNS`） | action_run（与上一行合并成同一张表）；日志来自 `ACTION_EVENT_RESOLVERS.action` 的 `timeline` | 1,849（编号 `ACT-…-2001`～`3849`） | **由动态统一 seed** [已定]：`RUNS`、`EVENTS`、`runsOf` 等由 PDE 的派生配置导出到 **`backend/seeds/json/action/derived/`**（`runsOf.json` 等），动态读这里和 ACTIONS 的 JSON 按 id 合并。合并规则见下方约束 5 |
 | `actions.ts` `SEGMENTS`、`QA_SESSIONS`、`ACTION_META` | 引用数据（会员分群、问数会话、动作类型本地审批人） | 6 / 3 / 7 | 会话归问数模块；审批人示例与动作类型审批规则的关系 [待定] |
 | `scenarios.ts` `SCENARIOS` | scenario | 18（已完成 15、失败 1、草稿 2） | |
 | `scenarios.ts` `simulate()`（已完成方案在构造时已算） | scenario_result、scenario_impact | 15 份结果 | `ranAt` 原样保留 |
@@ -496,7 +501,7 @@ stateDiagram-v2
 种子约束：
 1. 时间：mock 时间是北京时间字符串，入库转 `timestamptz +08:00`。种子环境的「现在」固定为 **2026-10-25 15:42（北京时间）**，由骨架 `now()` 提供 [已定：PDE]；种子保留原时间，不要按入库时间平移，否则「今天」「近 7 天」（`SINCE_7D = 2026-10-19`）对不上。
 2. 编号序列：入库后把 AL / SCN / CR 各序列设为现有最大号 + 1；ACT、AL 编号带日期、**按天计数**，序列按天取当天最大号 + 1 [已定：本体小白]。
-3. 运行时状态 [已定]：种子环境适配器统一走 mock（见 2.7）。mock 里没有 `next_query_at` 字段；20 条结果未知的动作日志已是「自动查询 3 次 … 转人工对账」，所以种子写 `reconcile_task(tries=3, round=1, manual=true, state=manual, next_at=null)`（等人工对账），与页面一致；不保留、也不推算 `next_query_at` [已定：本体小白 更正]。开发 / 测试环境的 mock 适配器按种子状态原样返回，对账任务虽在跑，入库后页面不变。人工选「仍无法确认」后才再排 3 轮查询。
+3. 运行时状态 [已定]：种子环境适配器统一走 mock（见 2.7）。mock 里没有 `next_query_at` 字段；结果未知共 **74 条 = ACTIONS 20 + RUNS 54**（`action/derived/runsOf.json` 实跑计数）。ACTIONS 20 条的日志已是「自动查询 3 次 … 转人工对账」；RUNS 54 条的时间线最后一行是「系统按幂等键自动查询，查不到再人工对账」，最晚一条 14:40:05 距种子「现在」15:42 已超过 3×15 分钟。所以 74 条都写 `reconcile_task(tries=3, round=1, manual=true, state=manual, next_at=null)`（等人工对账）[已定：Palantir专家]，与页面一致；不保留、也不推算 `next_query_at` [已定：本体小白 更正]。开发 / 测试环境的 mock 适配器按种子状态原样返回，对账任务虽在跑，入库后页面不变。人工选「仍无法确认」后由 `reopen_reconcile` 再开一轮（`round+1`、`tries=0`，最多 3 次）。
 4. 校验：入库后用同一套前端页面对比 4 个列表的页签计数与首屏数据，一致才算通过。
 5. 执行记录合并（`ACTIONS` 141 + `RUNS` 1,849）[已定：PDE、本体小白]。**不改任何 mock 值**：
    - 动作名：mock 的 `action` 是中文名，按 `ACTION_TYPES.name` 映射成 `action_type_id`；RUNS 直接用 `typeId`。
@@ -559,7 +564,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | C3 | 确认提交 | 待确认；有 `source.confirmer` 时须本人是确认人（L87）；非只读 | `:confirm` | 待确认 → 审批中；log ×2 |
 | C4 | 撤回（原因） | 待确认；有 `source.confirmer` 时须本人是确认人；原因非空 | `:withdraw` | 待确认 → 已撤回 |
 | C5 | 重新提交（不可逆确认卡） | 只限失败；未重提过（已对账·外部未执行不可，提示重新发起） | `:resubmit` | 新动作 执行中 + 新幂等键 `-rN`，发起人 = 当前操作人，问数/手动/推演来源改为手动；原动作写 retried_as；动态调 `submit` |
-| C6 | 发起对账（结论 + 说明） | 结果未知；结论已选；说明非空 | `:reconcile`（先查一次见 `[推断 P7]`） | → 已对账（`reconcile`=外部已成功/外部未执行），外部已成功时动态提交本体修改并发 `ActionExecuted`；或「仍无法确认」保持结果未知并再查 3 轮 |
+| C6 | 发起对账（结论 + 说明） | 结果未知；结论已选；说明非空 | `:reconcile`（先查一次见 `[推断 P7]`） | → 已对账（`reconcile`=外部已成功/外部未执行），外部已成功时动态提交本体修改并发 `ActionExecuted`；或「仍无法确认」保持结果未知并调 `reopen_reconcile` 再开一轮（最多 3 次） |
 | C7 | 跳到重提后的新动作 / 原动作 | retried_as / retry_of 存在 | `GET /action-runs/{id}` | — |
 | C8 | 审批通过 | （前端无按钮） | `:approve` | 审批中 → 执行中；动态调 Palantir `submit` 并写 action_run |
 | C9 | 外部结果回写 | 系统 | Palantir `submit` 同步返回（明确失败同键按 maxRetry 重试；超时不重试） | 动态写：执行中 → 成功/失败/结果未知 |
@@ -620,7 +625,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 3. 【部分已定，Palantir专家】**外部系统适配器**：Palantir 统一提供 `submit` / `query_by_key`。判定口径照前端：超时 = 结果未知、不重试；外部明确失败 = 同键按 maxRetry 自动重试后失败（Palantir 的「明确业务错误不重试」见 7.1 P1）。短信平台只发通知、不写回、不对账。**仍待定**：OA/ERP/OMS/CRM 是否真有「按幂等键查询」接口，没人能确认。
 4. **审计日志**：alert_log、action_run_log、cr_event 之外是否要统一的全局审计表（谁、何时、对象、前后值）；推演运行、试跑、只读拒绝要不要记。
 5. **审批**：审批在本系统内做还是由外部系统（如泛微 OA）回调；审批驳回前端没有，见 7.1 P2；动作类型里「免审」条件（如补货 ≤2 万元、改为合法状态）满足时是否跳过 审批中。
-6. 【已定，Palantir专家 提、动态采纳】**自动查询次数**：自动查 3 次后停下，转人工对账；人工选「仍无法确认」后再查 3 轮；查到结果转「已对账」，不转「成功」。
+6. 【已定，Palantir专家 提、动态采纳】**自动查询次数**：自动查 3 次后停下，转人工对账；人工选「仍无法确认」后再开一轮，最多 3 次（`round+1`，`tries` 清零）；查到结果转「已对账」，不转「成功」。
 7. 【已定，PDE、Palantir专家：照前端】**自动重试**：外部明确失败时用同一幂等键按 `maxRetry` 自动重试（`extsys.ts` `retry`、`actions.ts` `buildLog`）；超时 = 结果未知、不重试；重新提交 = 新执行记录 + 新幂等键 `-rN`。Palantir 提的「明确业务错误不重试、只重试网络错误/限流/5xx」前端没有，列为 7.1 P1。
 8. 【已定，Palantir专家 提、动态采纳】**幂等键格式**：传给外部系统的只用 `act-…`；业务键模板只用来拦截重复暂存，存 `biz_key`，与 `idem_key` 分开。
 9. 【已定：照前端】**重新提交、人工对账的操作人**：前端没有限制，后台也不限制；收紧见 7.1 P6。
@@ -631,11 +636,11 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 14. **生命周期版本绑定**：SM-ORD 表达式写死 `lifecycle("SalesOrder", 4)`，生命周期升版时规则是否必须同一张 CR 一起升。
 15. **推演模型**：示意模型（弹性 −1.6 等）换成真实模型的来源与运行时长；推演用哪个本体版本的数据快照。
 16. **规则历史版本内容**：mock 只有版本元数据，回滚需要完整历史定义，是否按版本存全量。
-17. 【已定，本体小白（更正）、Palantir专家】**种子环境的外部调用**：开发 / 测试环境适配器统一走 mock，按种子状态原样返回；对账任务照常跑但打不到真实系统，20 条结果未知入库后保持结果未知。mock **没有** `next_query_at`，20 条的日志已是「自动查询 3 次 … 转人工对账」，种子写 `reconcile_task(tries=3, state=manual, next_at=null)`（见第 5 节约束 3）。种子环境「现在」= 2026-10-25 15:42（北京时间，骨架 `now()`）。
+17. 【已定，本体小白（更正）、Palantir专家】**种子环境的外部调用**：开发 / 测试环境适配器统一走 mock，按种子状态原样返回；对账任务照常跑但打不到真实系统，74 条结果未知（ACTIONS 20 + RUNS 54）入库后保持结果未知。mock **没有** `next_query_at`，74 条都写 `reconcile_task(tries=3, round=1, manual=true, next_at=null)`（见第 5 节约束 3）。种子环境「现在」= 2026-10-25 15:42（北京时间，骨架 `now()`）。
+18. 动态侧的发布校验（规则映射齐全、生命周期迁移引用的动作/事件存在等）是否并入静态 V 系列（同静态待定 12）。
 19. 【已定，Palantir专家、PDE、本体小白】**执行记录种子**：`actions.ts` 与 `actionEvent.ts`（导出在 `backend/seeds/json/action/derived/runsOf.json`）的执行记录由动态统一 seed，按 id 合并进 `action_run`，不改任何 mock 值；31 个重复幂等键原样保留（`is_seed` + 部分唯一索引），232 条告警关联两边都留，来源原文保留（第 5 节约束 5）。
 20. 【已定，Palantir专家、动态本体负责人】**对账成功后的本体修改**：收到 `on_reconciled`（`succeeded`），或人工对账选「外部已成功」（同为 `succeeded`），由动态提交本体修改并发 `ActionExecuted`；定时查询返回「查无」算一次查询。
 21. 【已定，用户规则】**跨页统计不一致**：mock 数据不要求跨页一致，按天 / 按周统计与明细对不上的按原样入库，不需要用户决定。
-18. 动态侧的发布校验（规则映射齐全、生命周期迁移引用的动作/事件存在等）是否并入静态 V 系列（同静态待定 12）。
 
 ### 7.1 待用户定的 [推断] 项
 
@@ -651,5 +656,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | P6 | 操作人限制 | 确认 / 撤回只在有 `source.confirmer` 时限本人（L87）；重新提交、人工对账不限操作人 | 确认 / 撤回 / 重新提交 / 人工对账限定为确认人或动作类型 `runners` | 动态本体负责人（原第 7 节第 9 条） |
 | P7 | 人工对账前先按幂等键查一次 | 对账弹窗只有结论 + 说明，没有「按幂等键查询」按钮 | 加 `GET /action-runs/{id}:query-external`（经 Palantir `query_by_key`），对账前先查 | Palantir专家 |
 | P8 | 规则版本「对比」「回滚」 | 两个链接没有点击处理（`Rules.vue` L469） | `POST /rules/{id}:rollback {toVersion}`，回滚生成新 CR | 动态本体负责人 |
+| P9 | 同一幂等键重复提交返回已有记录 | 前端没有按幂等键查重；重新提交总是新 run + 新键 `-rN`（`Actions.vue` L144–145） | `POST` 写入前按 `idem_key` 查已有记录，有则直接返回、不调外部 | Palantir专家 |
+| P10 | 对账为外部已成功后告警自动转已解决 | 对账（`Actions.vue` L177–197）只改动作状态和日志，不动告警；告警页只在动作「成功」时写「动作成功后告警自动转为已解决」（`Alerts.vue` L182） | 对账 `succeeded` 后，关联告警按「动作成功」同样处理：处理中 → 已解决并记 log | Palantir专家 |
 
 已核对、**不是**推断项（前端已有，照做）：转派目标 ≠ 当前处理人（`Alerts.vue` L278 下拉已排除）；已对账·外部未执行不能重新提交（L205 提示重新发起）；确认人只在有 `source.confirmer` 时校验（L87）；重新提交只限失败且未重提（L143），新记录发起人 = 当前操作人、来源按 L162 处理。
