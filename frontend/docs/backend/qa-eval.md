@@ -3,12 +3,12 @@
 > 题目文件：`backend/seeds/extra/qa/eval/questions.json`（PDE 定的目录，v0.1 在 `qa_eval/`，已 git mv），共 100 题，编号 EV-Q-001 至 EV-Q-100。
 > v0.2 改动：按静态本体负责人对指标口径的裁定（来源是前端 mock）重写了 gmv、含税销售额、出库及时率的 gold；同义词改为以语义映射为准；按 PDE 和本体小白的裁定改了越权拒答、会员题、表名列名、文件目录，每题加了 `kind`。
 > v0.3 改动（静态本体负责人裁定，以前端为准）：凡读 `biz_order` 的 gold 和备选 SQL 都加 `not o.is_test`（测试单默认过滤）；有效订单数和出库及时率改按出库时间；GMV 确认是 gmv 的同义词，EV-Q-067 由反问改为作答。
-> v0.4 改动（对齐本体小白骨架 `72204b0` 的 `app/modules/biz/models.py`）：`area_sqm` → `area`；下单时间 `created_at` → `created_at_biz`（`created_at` 是行审计时间，种子里全是同一时刻）；订单、门店状态改用库里的英文码（`'已出库'` → `'shipped'` 等）；`inferredCols` 只剩骨架自己标 [推断] 的 `store.big_region`、`store.is_test`；改了 58 条 gold、4 条备选。
+> v0.4 改动（对齐本体小白骨架 `0c35c1d` 的 `app/modules/biz/models.py`）：`area_sqm` → `area`；下单时间 `created_at` → `created_at_biz`（`created_at` 是行审计时间，种子里全是同一时刻）；订单、门店状态改用库里的英文码（`'已出库'` → `'shipped'` 等）；`inferredCols` 只剩骨架自己标 [推断] 的 `store.big_region`、`store.is_test`；改了 58 条 gold、4 条备选。
 > 状态：**gold SQL 已在骨架真实结构 + 真种子上跑过**。库是本机临时 PG 17（会话时区 Asia/Shanghai），用骨架自己的 `alembic upgrade head`（0001–0003）建表，`python -m app.cli seed -m admin`、`-m biz` 灌种子（门店 95、商品 12、订单 1286、订单行 3905、用户 128）；100 题的 80 条 gold 和备选 SQL 全部跑通，`scratchPreview` 已用这次结果覆盖。另外 80 条 SQL 全部过了骨架 `sql_guard.inject_row_filters`（不限制 / 华东一区范围 / 全拒三种身份都能执行；不限制时结果跟原 SQL 完全一致；EV-Q-025 注入华东一区后跟 gold 一致）。
 
 ## 0. 业务表结构
 
-列名、类型以骨架 `72204b0` `app/modules/biz/models.py` 为准；骨架自己标 [推断] 的只剩 `store.big_region`、`store.is_test`。四张表另外都有 `MutableTableMixin` 的 `created_at`、`updated_at`、`created_by`、`is_seed`、`lock_version`（审计列，题库不用）。
+列名、类型以骨架 `0c35c1d` `app/modules/biz/models.py` 为准；骨架自己标 [推断] 的只剩 `store.big_region`、`store.is_test`。四张表另外都有 `MutableTableMixin` 的 `created_at`、`updated_at`、`created_by`、`is_seed`、`lock_version`（审计列，题库不用）。
 
 | 表 | 列（已确认） | [推断] | 说明 |
 |---|---|---|---|
@@ -19,14 +19,14 @@
 
 **跟 v0.3 第 0 节（和已提交的 gold）对不上的列**，v0.4 已全部改掉：
 
-| v0.3 写法 | 骨架 `72204b0` | 不改的后果 |
+| v0.3 写法 | 骨架 `0c35c1d` | 不改的后果 |
 |---|---|---|
 | `store.area_sqm` | `store.area` | EV-Q-009、EV-Q-020 直接报错 |
 | `biz_order.created_at` 当下单时间 | 下单时间是 `created_at_biz`；`created_at` 是审计列，种子里全部 = 2026-10-25 15:42+08 | 按下单时间的题静默算错（时间窗全中或全不中），不报错 |
 | `status` 存中文（`'已出库'`、`'已取消'`、`'营业中'`） | `enum_column` 存英文码（见上表） | 状态过滤静默匹配 0 行，不报错 |
 | `biz_order.is_seed` 列名 [推断] | `MutableTableMixin` 的 `is_seed`，已确认 | — |
 | 其余非主键列 [推断] | 除 `store.big_region`、`store.is_test` 外全部已确认 | — |
-| “表名前缀 bz_”注释冲突 | `72204b0` 的文档字符串已没有这句 | — |
+| “表名前缀 bz_”注释冲突 | `0c35c1d` 的文档字符串已没有这句 | — |
 
 旧 gold 在骨架库上：2 题报错、45 题结果跟临时库不同；改完后 80 条全部跑通，结果跟 v0.3 临时库除状态显示成英文码外完全一致（EV-Q-093–095 只是无序分组的行顺序不同）。
 
@@ -139,7 +139,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
    - `rowFilterNotice`：回答提示了已按权限过滤；
    - `orClarify`：直接作答对了算通过，先反问也算通过。
 9. `asScope`：带这个字段的题，用评测身份加对应的行范围来跑，网关照常注入行过滤，gold 里已经手工写好了同样的条件。其他题用评测身份跑，不注入行过滤（照 qa-api.md T11 [推断]）。
-10. **角色身份的影响（题库没有角色维度，题目未改）**：题库只有 `asScope`（行范围）这一个身份维度，不按角色出题，所以没有题要改预期。但按前端 `roles.ts:110`（`static-api.md` §1.5 L424，master `443c009`），R-05 业务查看、R-06 门店店长、R-08 大区经理（华东）都是 `defaultDeny`、都没配商品范围，**商品不可见**；用这三种角色（或只有这几种角色的用户）来跑时，凡连 `product` 的 10 题（EV-Q-002、006、011、016、017、022、039、060、089、094）预期应是「无权限 / 不可见」：网关给 `product` 注入 `FALSE`，结果为空，回答要提示已按权限过滤或拒答带申请入口 [推断]。R-06 另外因订单.门店范围值对不上种子（qa-api §2.2），所有读订单的题都是 0 行。骨架 `72204b0` 里 `product` 仍登记为不限制（`register_unrestricted`），全拒身份下这 10 题照样出数，跟前端不一致，**[待骨架实现]**；骨架改完后如果要测角色，再给题加 `asRole` 字段和对应预期。
+10. **角色身份的影响（题库没有角色维度，题目未改）**：题库只有 `asScope`（行范围）这一个身份维度，不按角色出题，所以没有题要改预期。但按前端 `roles.ts:110`（`static-api.md` §1.5 L424，master `443c009`），R-05 业务查看、R-06 门店店长、R-08 大区经理（华东）都是 `defaultDeny`、都没配商品范围，**商品不可见**；用这三种角色（或只有这几种角色的用户）来跑时，凡连 `product` 的 10 题（EV-Q-002、006、011、016、017、022、039、060、089、094）预期应是「无权限 / 不可见」：网关给 `product` 注入 `FALSE`，结果为空，回答要提示已按权限过滤或拒答带申请入口 [推断]。R-06 另外因订单.门店范围值对不上种子（qa-api §2.2），所有读订单的题都是 0 行（已定：用户——不加门店别名表，0 行是预期）；R-06 也没配门店范围（`roles.ts:66-69` 只有 S-61 订单.门店、S-62 库存快照.仓库），又是 `defaultDeny`，按 L110 门店不可见，读 `store` 的题同样为空。骨架 `c646bd5` 起 `product` 登记为受控表、`sql_guard.effective_expr` 已按 L110 合并（商品可见性已实现）；但 `auth.row_filter` 仍是桩（非管理员一律 `DENY_ALL`），还没按角色调 `effective_expr` **[待骨架实现]**；骨架改完后如果要测角色，再给题加 `asRole` 字段和对应预期。
 
 ## 6. 文件格式（`questions.json`）
 
@@ -215,7 +215,7 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
   - EV-Q 题的 `group_name` 填 `问数SQL`，`expect` 存 `{expectedType, goldSql, goldSqlAlt, checks, asScope, refuseCode, clarifyAbout}`；
   - T11 的 group 参数加一个 `sql` 选项。
 
-  qa-api.md 同一提交里已对齐骨架 `72204b0`。
+  qa-api.md 同一提交里已对齐骨架 `0c35c1d`。
 
 ## 9. 模型
 
@@ -235,10 +235,10 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | 6 | `store.big_region` 列名和取值（骨架仍标 [推断]，种子只有 `华东`；静态裁定维度值「华东大区」、同义词「华东」）。其他列已按骨架确认 | 见各题 `inferredCols`（30 题） | 本体小白 |
 | 7 | 外卖指哪些渠道；单量、几单、卖了多少钱、卖得最好这些口语说法 | EV-Q-058、EV-Q-059、EV-Q-061、EV-Q-063、EV-Q-060 | 静态本体（semantic-map） |
 | 8 | 履约门店数据什么时候接入 | EV-Q-026、EV-Q-068 | 本体小白 |
-| 9 | ~~“表名前缀 bz_”注释~~ 已结清（`72204b0` 已删） | — | — |
+| 9 | ~~“表名前缀 bz_”注释~~ 已结清（`0c35c1d` 已删） | — | — |
 | 10 | 优惠金额没有指标定义，暂按剔除已取消、下单时间 | EV-Q-053 | 指标负责人 |
 | 11 | 散客 = `member_phone` 为空 | EV-Q-015 | 本体小白 |
-| 12 | 商品可见性：`defaultDeny` 角色（R-05/R-06/R-08）没配品类范围时商品不可见，骨架 `product` 现登记为不限制 [待骨架实现]；题库暂无角色维度（第 5 节第 10 条） | 连 `product` 的 10 题 | 本体小白 |
+| 12 | 商品可见性：`defaultDeny` 角色（R-05/R-06/R-08）没配品类范围时商品不可见，骨架 `c646bd5` 已按此实现（`effective_expr`），`auth.row_filter` 仍是桩 [待骨架实现]；题库暂无角色维度（第 5 节第 10 条） | 连 `product` 的 10 题 | 本体小白 |
 
 v0.4 已结清：列名和类型按骨架确认（`area`、`created_at_biz`、状态英文码、`is_seed`），bz_ 注释。
 
