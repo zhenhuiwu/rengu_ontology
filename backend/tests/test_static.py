@@ -1,15 +1,10 @@
 """静态本体：迁移往返、seed 条数与 mock 一致、只读接口形状和样例记录与 mock 一致、?ver= 规则。"""
 
-import asyncio
 import json
-import uuid
 
-import asyncpg
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select
-from sqlalchemy.engine import make_url
 
 from app.core.config import get_settings
 from app.modules.static import history
@@ -31,7 +26,6 @@ from app.modules.static.models import (
     QaPathStep,
 )
 from app.seeds.loader import run_seeds
-from tests.conftest import BASE_URL
 
 P = "/api/ontology/v1"
 JSON = get_settings().seeds_json_dir / "static"
@@ -75,13 +69,12 @@ def without(d: dict, *keys: str) -> dict:
 
 @pytest.fixture
 def static_sections():
-    """登记静态真实的 7 个快照 section（conftest 每个测试先清空注册表）。"""
+    """只登记静态真实的 7 个快照 section（骨架 isolated_sections：块内隔离，结束恢复）。"""
     from app.modules.static.sections import BUILDERS
-    from app.modules.versioning.sections import register_section
+    from app.modules.versioning.sections import isolated_sections
 
-    for b in BUILDERS:
-        register_section(b)
-    return BUILDERS
+    with isolated_sections(*BUILDERS):
+        yield BUILDERS
 
 
 @pytest.fixture
@@ -121,47 +114,10 @@ def static_parent() -> str:
 
 
 async def test_migration_round_trip():
-    """全新库：upgrade head → downgrade base → upgrade head；static_0001 只建 / 删静态自己的表。
+    """static_0001 往返：用骨架 assert_module_round_trip（不写死父迁移 / head）。"""
+    from tests.helpers.migrations import assert_module_round_trip
 
-    不管 static_0001 前后还有哪些模块的迁移：在它的上一个迁移和它自己之间来回，比较表集合。
-    """
-    db = f"rengu_mig_{uuid.uuid4().hex[:8]}"
-    admin_dsn = make_url(BASE_URL).set(drivername="postgresql").render_as_string(hide_password=False)
-    admin = await asyncpg.connect(admin_dsn)
-    await admin.execute(f'CREATE DATABASE "{db}"')
-    url = make_url(BASE_URL).set(database=db).render_as_string(hide_password=False)
-    plain = make_url(url).set(drivername="postgresql").render_as_string(hide_password=False)
-
-    async def tables() -> set[str]:
-        c = await asyncpg.connect(plain)
-        try:
-            rows = await c.fetch("SELECT tablename FROM pg_tables WHERE schemaname='public'")
-            return {r[0] for r in rows}
-        finally:
-            await c.close()
-
-    parent = static_parent()
-    try:
-        cfg = Config("alembic.ini")
-        cfg.attributes["database_url"] = url
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        head = await tables()
-        assert head >= STATIC_TABLES
-        await asyncio.to_thread(command.downgrade, cfg, parent)
-        before = await tables()
-        assert not before & STATIC_TABLES
-        await asyncio.to_thread(command.upgrade, cfg, "static_0001")
-        assert await tables() - before == STATIC_TABLES  # 只建静态自己的表
-        await asyncio.to_thread(command.downgrade, cfg, parent)
-        assert await tables() == before  # 只删静态自己的表
-        await asyncio.to_thread(command.downgrade, cfg, "base")
-        assert await tables() <= {"alembic_version"}
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        assert await tables() == head
-    finally:
-        await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)
-        await admin.execute(f'DROP DATABASE IF EXISTS "{db}"')
-        await admin.close()
+    await assert_module_round_trip("static", STATIC_TABLES)
 
 
 def test_migration_conventions():
@@ -232,11 +188,38 @@ async def test_seed_counts_match_mock_and_idempotent(static_seeded):
         await static_seeded.flush()
 
 
+STATIC_SECTIONS = ["objectTypes", "properties", "links", "metrics", "dimensions", "terms", "qaPaths"]
+
+
+def test_static_sections_discovered_by_load_sections():
+    """静态 section 只经 sections.py 的 BUILDERS 由 load_sections() 发现，按 BUILDERS 顺序登记。"""
+    from app.modules.static.sections import BUILDERS
+    from app.modules.versioning.sections import isolated_sections, load_sections
+
+    with isolated_sections():
+        names = load_sections()
+    assert [n for n in names if n in STATIC_SECTIONS] == [b.section for b in BUILDERS] == STATIC_SECTIONS
+
+
+def test_import_static_does_not_register_sections():
+    """导入 app.modules.static（及其 sections.py）不登记任何 section（import 时登记已废弃，新进程里验证）。"""
+    import subprocess
+    import sys
+
+    code = (
+        "import app.modules.static, app.modules.static.sections\n"
+        "from app.modules.versioning.sections import registered_sections as r\n"
+        f"assert not set(r()) & set({STATIC_SECTIONS!r}), sorted(r())\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-3000:]
+
+
 async def test_release_snapshots_have_static_sections(static_seeded):
     from app.modules.versioning.service import VersioningService
 
     snap = await VersioningService().get_snapshot(static_seeded, "v2026.09.3")
-    assert {"objectTypes", "properties", "links", "metrics", "dimensions", "terms", "qaPaths"} <= set(snap)
+    assert set(STATIC_SECTIONS) <= set(snap)
     # 历史版本：关系只含当时已发布的；业务知识只含 since ≤ ver 的
     assert set(snap["links"]) == {x["id"] for x in history.links_at(LINKS, "v2026.09.3")}
     assert set(snap["terms"]) == {k["id"] for k in KNOWLEDGE if k.get("since") and k["since"] <= "v2026.09.3"}
@@ -263,14 +246,38 @@ async def test_qa_paths_section_from_tables(static_seeded):
     from app.seeds import SeedContext
 
     built = await QaPathsSection().build_section(static_seeded, None, [])
+    expect = {f"{g['from']}→{g['to']}": g for g in PATH_GROUPS}
     assert built == QaPathsSection().seed_section("v2026.10.3", SeedContext(JSON, root=JSON.parent))
-    assert built == {f"{g['from']}→{g['to']}": g for g in PATH_GROUPS}
+    assert built == expect
+    assert list(built) == list(expect)  # 组键顺序 = PATH_GROUPS / repo id 首次出现顺序，不是 object_id
     assert built == (await VersioningService().get_snapshot(static_seeded, None))["qaPaths"]
     ex = built["order→store"]["examples"][1]
     assert ex["path"] == -1  # 先追问：path_id 为空
     assert await static_seeded.scalar(select(func.count()).where(QaPath.is_default)) == len(PATH_GROUPS)
     base = {"k": 1}
     assert await QaPathsSection().build_section(static_seeded, base, []) == base
+
+
+async def test_qa_paths_examples_without_paths(static_seeded):
+    """组只有 examples、没有 paths 时组装成空 paths，不 KeyError。"""
+    from app.modules.static.models import ObjectType, QaPathExample
+    from app.modules.static.sections import QaPathsSection
+
+    objs = {o.code: o for o in (await static_seeded.scalars(select(ObjectType))).all()}
+    static_seeded.add(
+        QaPathExample(
+            from_object_id=objs["order"].id,
+            to_object_id=objs["member"].id,
+            seq=0,
+            question="只有试问",
+            path_id=None,
+            how="先追问",
+        )
+    )
+    await static_seeded.flush()
+    built = await QaPathsSection().build_section(static_seeded, None, [])
+    g = built["order→member"]
+    assert g["paths"] == [] and g["examples"] == [{"q": "只有试问", "path": -1, "how": "先追问"}]
 
 
 # ---------------------------------------------------------------- 对象类型
@@ -340,6 +347,44 @@ async def test_link_types(client, static_seeded):
     paths = await get(client, "/link-types/paths?from=order&to=store")
     pg = next(g for g in load("PATH_GROUPS.json") if g["from"] == "order" and g["to"] == "store")
     assert paths == [pg]
+
+
+def mock_paginate(rows: list, page: int, size: int) -> dict:
+    """前端 src/mock/paginate.ts:10-14 原样：page = min(max(1, page), max(1, ceil(total / size)))。"""
+    pages = max(1, -(-len(rows) // size))
+    pg = min(max(1, page), pages)
+    return {"items": rows[(pg - 1) * size : pg * size], "total": len(rows), "page": pg, "size": size}
+
+
+def test_paginate_clamps_like_frontend():
+    """service.paginate：先 clamp(total) 再 Page.of；focusId 先定页，再收拢。"""
+    from app.common.pagination import PageParams
+    from app.modules.static.service import paginate
+
+    rows = [{"id": f"r{i}"} for i in range(25)]
+    for page in (1, 2, 3, 99, 0, -3):
+        p = PageParams(page=page, size=10)
+        assert paginate(rows, p) == mock_paginate(rows, page, 10), page
+    assert paginate(rows, PageParams(page=99, size=10))["page"] == 3  # 越界 → 最后一页，page 为收拢后的值
+    assert paginate([], PageParams(page=5, size=10)) == {"items": [], "total": 0, "page": 1, "size": 10}
+    assert paginate(rows, PageParams(page=1, size=10), "r24")["page"] == 3  # focusId 所在页
+    assert paginate(rows, PageParams(page=99, size=10), "nope")["page"] == 3  # 找不到 focusId → 按 page 收拢
+
+
+async def test_list_pagination_clamps(client, static_seeded):
+    """page=0 / page=-3 → 第 1 页（不报 422）；越界 → 最后一页且 page 为收拢后的值；total=0 → page 1、空。"""
+    last = -(-len(LINKS) // 18)
+    for page, want in ((0, 1), (-3, 1), (999, last), (last + 1, last)):
+        body = await get(client, f"/link-types?page={page}")
+        assert body == mock_paginate(LINKS, page, 18), page
+        assert body["page"] == want
+    assert (await get(client, "/link-types?page=999&size=5"))["page"] == -(-len(LINKS) // 5)
+    empty = await get(client, "/link-types?q=__no_such_link__&page=7")
+    assert empty == {"items": [], "total": 0, "page": 1, "size": 18}
+    usage = await get(client, f"/link-types/{LINKS[0]['id']}/usage?page=-1")
+    assert usage["page"] == 1
+    for bad in ("size=0", "size=201", "page=x"):
+        await get(client, f"/link-types?{bad}", 422)  # size 照旧校验
 
 
 # ---------------------------------------------------------------- 指标

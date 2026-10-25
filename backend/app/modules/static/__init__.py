@@ -6,10 +6,6 @@
 编辑保存、回滚直接生成新 fn_version，不走 versioning.create_version、不写 ontology_release。
 规范见 docs/backend/CONVENTIONS.md。
 
-导入本包即登记静态负责的 7 个快照 section（objectTypes / properties / links / metrics /
-dimensions / terms / qaPaths，见 sections.py）。
+静态负责的 7 个快照 section（objectTypes / properties / links / metrics / dimensions / terms /
+qaPaths）在 sections.py 的 BUILDERS 里，由骨架 load_sections() 自动发现登记；导入本包不登记。
 """
-
-from app.modules.static.sections import register_all
-
-register_all()
