@@ -56,7 +56,7 @@ export const NAV: NavArea[] = [
         { key: 'event-types', title: '事件类型', path: '/build/ontology/event-types', phase: 2, group: '自动化', component: () => import('@/pages/ontology/EventTypes.vue') },
         { key: 'rules', title: '规则与自动化', path: '/build/ontology/rules', phase: 2, group: '自动化', note: '页签：条件、触发方式、命中历史、回放试跑；自动暂存动作第四期' },
         { key: 'qa-tuning', title: '问数调优', path: '/build/ontology/qa-tuning', phase: 1, group: '调优', note: '页签：认证问答、评测题库、反馈与纠错；高频问题推荐第二期' },
-        { key: 'releases', title: '变更与发布', path: '/build/ontology/releases', phase: 1, group: '发布', note: '依赖图（血缘和影响分析合一）、版本对比、评审' },
+        { key: 'releases', title: '变更与发布', path: '/build/ontology/releases', phase: 1, group: '发布', note: '依赖图（血缘和影响分析合一）、版本对比、评审', component: () => import('@/pages/ontology/Releases.vue') },
       ] },
     ],
   },
