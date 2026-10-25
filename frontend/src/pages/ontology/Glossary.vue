@@ -399,7 +399,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
             <a-descriptions-item label="负责人">{{ view.owner }}<a-tag v-if="mark('owner')" class="gl-diff">{{ mark('owner') }}</a-tag></a-descriptions-item>
             <a-descriptions-item label="状态">
               <span :class="view.status === '已停用' ? 'c-3' : 'c-1'">{{ view.status }}</span><a-tag v-if="mark('status')" class="gl-diff">{{ mark('status') }}</a-tag>
-              <span v-if="mark('status')" class="t-12 c-3">（已发布版：{{ cur.status }}）</span>
+              <span v-if="mark('status') === '修改'" class="t-12 c-3">（已发布版：{{ cur.status }}）</span>
             </a-descriptions-item>
             <a-descriptions-item label="生效版本">
               <span class="num">{{ cur.since ? `${cur.since} 起` : `未发布 · ${cur.cr} 草稿` }}{{ cur.stoppedIn ? `，${cur.stoppedIn} 停用` : '' }}</span>
