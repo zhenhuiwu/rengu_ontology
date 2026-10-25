@@ -1,6 +1,6 @@
-# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.3 草案）
+# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.4 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.3（v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；尚未发布到 master）
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.4（v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `f54db65` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
@@ -32,7 +32,7 @@
 
 ### 1.1 本模块提供给动态的内部接口（进程内调用或 `/internal/v1`）
 
-动态对外的接口（只引用，不在本文定义）：暂存 `POST /api/ontology/v1/action-runs:stage`、确认 `POST /api/ontology/v1/action-runs/{id}:confirm`、执行记录列表 `GET /api/ontology/v1/action-runs`（动作类型页的“执行记录”“最近异常”调它）。
+动态对外的接口（只引用，不在本文定义）：暂存 `POST /api/ontology/v1/action-runs:stage`、确认 `POST /api/ontology/v1/action-runs/{id}:confirm`、执行记录 `GET /api/ontology/v1/action-runs` 和 `GET /api/ontology/v1/action-runs/{id}`（动态的**唯一**执行记录接口，返回 `ActionRun`，时间线来自 `action_run_log`；动作类型页的“执行记录”“最近异常”和执行抽屉都调它）。
 
 | 接口 | 入参 | 同步返回 | 说明 |
 |---|---|---|---|
@@ -48,9 +48,9 @@
 - 定时对账：**每 15 分钟**按幂等键查询一次，每轮最多 3 次（“查无”也计 1 次）。查到结果就调 `on_reconciled`，对账人记为“系统”；3 次后仍无法确认的转人工。人工对账选“仍无法确认”时**再开一轮 3 次自动查询**（前端文案：“保持结果未知，继续自动查询”）。
 - **调度器**：用 **procrastinate**（PostgreSQL 任务队列，带 cron 和锁）。定时对账（每 15 分钟的 cron，同一条执行记录按 `actionRunId` 加锁）、按订阅方的重投、按保留期删除过期事件，都用它（已定（PDE 汇总团队决定，2026-10-25））。
 - **数据归属**：
-  - 我的表：`writeback_call`（每次外部调用；它和 `ext_system` 的表名与归属模块待 PDE 定，integration 或 data，见 §9）、`reconcile_task`（对账次数、轮次、下次查询时间只放在这里）、`ext_system`（放在 `integration` 模块；PDE 的“外部系统”页通过我的接口读写），以及动作类型、事件类型的定义表和事件、投递表。
+  - 我的表：`writeback_call`（每次外部调用，`integration` 模块；动态原来的 `ext_call` 已并入这张表）、`reconcile_task`（对账次数、轮次、下次查询时间只放在这里）、`ext_system`（放在 `integration` 模块；PDE 的“外部系统”页通过我的接口读写），以及动作类型、事件类型的定义表和事件、投递表。
   - 动态的表：`action_run`（只由动态写，seed 也由动态做，包括动作中心的 `ACTIONS` 和本模块的 `RUNS`）、`action_run_log`（执行时间线）。
-- **seed、dev、test 环境里所有适配器都用 mock 实现**，不连真实外部系统。外部系统页的“测试连接”在 dev/test 也走 mock 适配器；**只有生产环境、经用户授权**才连真实外部系统。seed 进来的“结果未知”执行记录（动作中心 20 条，`RUNS` 里 54 条），mock 适配器的 `query_by_key` 一律返回“仍无法确认”，`next_at` 保留导出原值（mock 里没有，所以是空）。这样对账任务不会改动这些记录，页面和现在一模一样（详见 §7.1）。
+- **seed、dev、test 环境里所有适配器都用 mock 实现**，不连真实外部系统。外部系统页的“测试调用”在 dev/test 也走 mock 适配器；**只有生产环境、经用户授权**才连真实外部系统。seed 进来的“结果未知”执行记录（动作中心 20 条，`RUNS` 里 54 条），mock 适配器的 `query_by_key` 一律返回“仍无法确认”，`next_at` 保留导出原值（mock 里没有，所以是空）。这样对账任务不会改动这些记录，页面和现在一模一样（详见 §7.1）。
 - 结果未知超过 30 分钟，由“结果未知提醒”这个订阅方通过企业微信通知发起人和确认人（mock：`actionEvent.ts` 的 `subscribersOf('action_outcome_unknown')`）。
 
 ### 1.2 代码位置（与 PDE 约定）
@@ -157,10 +157,21 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /action-types/{id}/stats/daily` | `days=14` | `items[{date,ok,failed,unknown}]` | — | `runDaily()` |
 | `GET /action-types/{id}/versions` | — | `items[{ver,release,status,by,at,change}]` | 不分页 | `versionsOf()`、`ACTION_VERSION_NOTES` |
 | `POST /action-types/{id}:dry-run` | query `view`、`cr`（草稿视图按草稿内容校验，`checked` = 草稿里未删除的条件数）、`release`；body `{params?}` | `{passed, checked, failed[{name,fail}]}` | — | `condsOf()`；`ActionTypes.vue` `dryRun()` |
-| `GET /ext-systems?writeback=1` | — | `items[{id,name,idemKey,timeoutMs,maxRetry,retry,idempotent,status,env}]` | 不分页 | `extsys.ts` `EXT_SYSTEMS`；过滤同 `writebackSystems()`（生产环境且未停用）。`ext_system` 归本模块 `integration`，外部系统页也调这组接口 |
+| `GET /ext-systems?writeback=1` | — | `items[{id,name,idemKey,timeoutMs,maxRetry,retry,idempotent,status,env}]` | 不分页 | `extsys.ts` `EXT_SYSTEMS`；过滤同 `writebackSystems()`（生产环境且未停用）。`ext_system` 归本模块 `integration`，外部系统页也调这组接口（见下方“外部系统”） |
 | 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'action',id}`，`section ∈ params\|conds\|edits\|effects\|config` | 静态接口 | — | `useDraftEdits.ts` |
 
-动态的接口（只引用）：`GET /action-runs`（`typeId`、`status` 可多选、`page`、`size=14`；返回 `RUNS` 的字段 `id,typeId,at,initiator,confirmer,approver,source,objKind,objId,objLabel,summary,status,ms,code,retries,ruleId,alertId,idemKey,extRef,reconcile`）、`GET /action-runs/{id}`（抽屉 + `action_run_log` 时间线）。“最近异常”= `GET /action-runs?typeId=&status=失败,结果未知&size=4`。
+动态的接口（只引用，动态唯一的执行记录接口）：`GET /action-runs`（`typeId`、`status` 可多选、`page`、`size=14`；返回 `RUNS` 的字段 `id,typeId,at,initiator,confirmer,approver,source,objKind,objId,objLabel,summary,status,ms,code,retries,ruleId,alertId,idemKey,extRef,reconcile`）、`GET /action-runs/{id}`（返回 `ActionRun` + `action_run_log` 时间线，执行抽屉用）。“最近异常”= `GET /action-runs?typeId=&status=失败,结果未知&size=4`。
+
+**外部系统（`integration` 模块，PDE 的“外部系统”页和动作类型页共用）**
+
+| 方法 路径 | 参数 / 请求体 | 返回（字段名取自 `extsys.ts`） | 分页 | 说明 |
+|---|---|---|---|---|
+| `GET /ext-systems` | `writeback=1`（只返回生产环境且未停用的，同 `writebackSystems()`）、`kw` | `items[{id,name,vendor,category,endpoint,auth,authDetail,idempotent,idemKey,timeoutMs,maxRetry,retry,rateLimit,owner,status,env,usage}]` | 不分页 | `EXT_SYSTEMS`；密钥不返回明文 |
+| `GET /ext-systems/{id}` | — | 同上，加关联的动作类型 | — | — |
+| `POST /ext-systems`、`PUT /ext-systems/{id}` | 同上字段 | 保存后的对象 | — | 新建、编辑外部系统；直接生效，不走变更单（和前端一致） |
+| `POST /ext-systems/{id}:test` | `{op?}` | `{http, ms, result, msg}` | — | “测试调用”；系统已停用时返回 `EXT_SYSTEM_DISABLED`（前端文案“该系统已停用，先在‘编辑’里改为正常再测试”）。**dev/test 走 mock 适配器**；只有生产环境、经用户授权才连真实系统 |
+| `GET /ext-systems/{id}/calls` | `result`、`page`、`size` | `{items[...ExtCall], total, page, size}` | 页码 | `writeback_call` 的行（含测试调用） |
+| `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功` | — | “人工核对 · 确认对方已处理”。调用记录按前端改为成功；它关联的执行记录转给动态的人工对账（外部已成功 → 已对账） |
 
 ### 3.2 事件类型
 
@@ -181,10 +192,12 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 ### 3.3 只读与权限
 
+- **第一期单租户**：不设 `tenant_id`，所有表和接口都不按租户隔离。
 - 带 `release`（历史版本）的写请求返回 `READONLY_HISTORY`。试运行、模拟触发在历史版本下前端没有置灰，后台**不拦截**，按当前查看的版本执行。
 - **以此用户预览**时，所有确认卡被锁住，试运行和模拟触发也点不下去；后台对 `:dry-run`、`:simulate` 和所有写接口返回 `READONLY_PREVIEW`。
-- 试运行、模拟触发对能进入页面的用户都开放，只在类型为草稿时置灰（`TYPE_IS_DRAFT`）。“只有执行人角色才能试运行”“只有负责人才能模拟触发”是【推断】，见 §8.2。
-- 草稿写入的权限按静态的 CR 规则。
+- 试运行、模拟触发对能进入页面的用户（页面权限 `view` 及以上）都开放，只在类型为草稿时置灰（`TYPE_IS_DRAFT`）。“只有执行人角色才能试运行”“只有负责人才能模拟触发”是【推断】，见 §8.2 U6。
+- 草稿写入的权限按静态的 CR 规则（静态的接口，不在下表）。
+- 每个接口的权限见 §3.6。
 
 ### 3.4 错误码（在静态 §4 的基础上增加）
 
@@ -196,6 +209,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `WRITEBACK_SYSTEM_INVALID` | 422 | 写回系统不是生产环境，或者已停用（和前端下拉的过滤规则一样） | — |
 | `TYPE_IS_DRAFT` | 409 | 对草稿状态的类型做试运行或模拟触发 | — |
 | `READONLY_PREVIEW` | 403 | 以此用户预览时调用试运行、模拟触发或写接口 | “正在以 xx 的权限预览，只读” |
+| `EXT_SYSTEM_DISABLED` | 409 | 对已停用的外部系统做测试调用 | “该系统已停用，先在‘编辑’里改为正常再测试” |
 | `EXT_TIMEOUT` | — | 不是 HTTP 错误；submit 返回 `result=结果未知`，`code` 为“超时 N 秒未响应 · 未重试” | — |
 
 `INCOMPATIBLE_PAYLOAD_CHANGE`、`IDEMPOTENCY_CONFLICT` 前端没有对应的拦截，第一期不做，列在 §8.2。
@@ -220,6 +234,45 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `writeback_call.result` | `succeeded`→成功，`failed`→失败，`unknown`→结果未知 |
 | `reconcile_task.state`（不出接口） | `querying` 查询中，`resolved` 已有结论，`manual` 转人工 |
 | 字段名 | 库 `business_key_template` ↔ 接口 `idemKey`（动作类型）；库 `idem_key` ↔ 接口 `idemKey`（执行记录）；其余 snake_case ↔ camelCase 一一对应 |
+
+### 3.6 每个接口的权限
+
+- **pageKey + 级别**：pageKey 取 `src/nav.ts` 的页面 key，级别取 `src/mock/roles.ts` 的 `FuncLevel`（`view | manage`）。读接口要 `view`，改数据的接口要 `manage`。
+- **API 密钥 scope**：取 `src/mock/apikeys.ts` 的 `KEY_SCOPES`。“不开放”表示只能用登录会话调用，API 密钥调不了（前端 `API_PATHS` 里没有这些路径）。
+- **`?ver=`**：“是”表示带 `release` 也能调；写接口为“否”，返回 `READONLY_HISTORY`。
+- **预览**：“以此用户预览”时能不能调；“否”返回 `READONLY_PREVIEW`。读接口按被预览用户的权限返回。
+- **行级过滤**：是否按角色的行级范围（`RowScope`，如“订单 大区 = 华东”）过滤返回的行。前端这两页和外部系统页都**不按行级范围过滤**，所以第一期一律“否”；要加的话见 §8.2 U12。
+
+| 接口 | pageKey · 级别 | API 密钥 scope | `?ver=` | 预览 | 行级过滤 |
+|---|---|---|---|---|---|
+| `GET /action-types` | action-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /action-types/{id}` | action-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /action-types/{id}/params` | action-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /action-types/{id}/submission-criteria` | action-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /action-types/{id}/writeback` | action-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /action-types/{id}/used-by` | action-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /action-types/{id}/stats`、`/stats/daily` | action-types · view | 不开放 | 是（运行数据不分版本） | 是 | 否 |
+| `GET /action-types/{id}/versions` | action-types · view | 元数据读取 | 是 | 是 | 否 |
+| **`POST /action-types/{id}:dry-run`** | **action-types · view**（前端不按级别限制；要 manage 或执行人角色是【推断】U6） | **不开放** | **是**（前端不置灰，按当前查看的版本） | **否**（`READONLY_PREVIEW`） | **否** |
+| `GET /event-types` | event-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /event-types/{id}` | event-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /event-types/{id}/payload-fields` | event-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /event-types/{id}/subscribers` | event-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /event-types/{id}/stats` | event-types · view | 不开放 | 是（运行数据不分版本） | 是 | 否 |
+| `GET /event-types/{id}/events` | event-types · view | 不开放 | 是 | 是 | 否 |
+| `GET /events/{id}` | event-types · view | 不开放 | 是 | 是 | 否 |
+| `GET /event-deliveries` | event-types · view | 不开放 | 是 | 是 | 否 |
+| **`POST /event-types/{id}:simulate`** | **event-types · view**（前端不按级别限制；只给负责人和管理员是【推断】U6） | **不开放** | **是**（前端不置灰，按当前查看的版本） | **否**（`READONLY_PREVIEW`） | **否** |
+| `GET /event-types/{id}/versions` | event-types · view | 元数据读取 | 是 | 是 | 否 |
+| `GET /ext-systems`（含 `?writeback=1`） | external-systems · view；动作类型页的写回下拉按 action-types · view 放行 | 不开放 | 是（不受版本影响） | 是 | 否 |
+| `GET /ext-systems/{id}` | external-systems · view | 不开放 | 是 | 是 | 否 |
+| `GET /ext-systems/{id}/calls` | external-systems · view | 不开放 | 是 | 是 | 否 |
+| `POST /ext-systems`、`PUT /ext-systems/{id}` | external-systems · manage | 不开放 | 否 | 否 | 否 |
+| `POST /ext-systems/{id}:test` | external-systems · view（前端只按只读置灰；要 manage 是【推断】U13） | 不开放 | 否（前端在只读时置灰） | 否 | 否 |
+| `POST /writeback-calls/{id}:mark-checked` | external-systems · manage | 不开放 | 否 | 否 | 否 |
+| `POST /internal/v1/events` | —（服务间调用，内部凭证） | 外部系统的回调从 `Webhook 回调` scope 的 `POST /api/v1/webhooks/ext/callback` 进来，转成 `emit` | — | — | 否 |
+
+动态的接口（`/action-runs…`）、静态的接口（变更单、草稿写入）的权限由各自文档定义，不在此表。
 
 ---
 
@@ -448,8 +501,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `subscribersOf()`（`SUBS`、`SUBS_RULE`、默认） | `event_subscription` | `weekly` 存进 `event_subscription_weekly_stat` |
 | `EVENTS`（直接导出） | `event`、`event_delivery` | 按 `subscribers` 生成投递记录：“部分投递”的 1 条记为待重试，“投递失败”的全部记为死信【推断，与抽屉文案一致】 |
 | `eventDaily()`、`EventType.weekly` | `event_daily_stat` | 和 `EVENTS` 对不上，不处理 |
-| `extsys.ts` · `EXT_SYSTEMS` | `ext_system`（暂放 `integration`，归属待 PDE 定，见 §9） | PDE 的外部系统页通过我的接口读写；密钥**加密存储**，mock 值只是示例 |
-| `extsys.ts` · `extCalls()` | `writeback_call` | 外部系统页的调用记录 |
+| `extsys.ts` · `EXT_SYSTEMS` | `ext_system`（`integration` 模块，归我） | PDE 的外部系统页通过我的接口读写；密钥**加密存储**，mock 值只是示例 |
+| `extsys.ts` · `extCalls()` | `writeback_call` | 外部系统页的调用记录；动态原来的 `ext_call` 并入此表 |
 | `dynamic.ts` · `RULES`、`ALERTS`；`actions.ts` · `ACTIONS` | 动态的 `rule`、`alert`、`action_run` | 本模块只引用 |
 | `useDraftView.ts` · `TARGETS`（CR-0013 → `store_price_changed`，CR-0014 → `adjust_region_budget`）、`releases.ts` · `DRAFTS` | 静态的 `change_request`、`cr_item` | 静态 seed；本模块确认目标正确 |
 | `stores.ts` / `products.ts` / `orders.ts` | 基础层的对象实例 | 必须先入库 |
@@ -521,12 +574,14 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | U9 | 模拟触发不计入近期事件和统计 | 前端不写数据 | 不计入（不改变页面） |
 | U10 | 执行抽屉显示**执行时锁定的版本**，而不是当前类型版本 | 显示当前类型版本（resolver 用 `a.version`） | 按前端，显示当前版本 |
 | U11 | “仍无法确认”再开的自动查询轮数上限（如最多 3 轮后不再允许） | 没有上限，文案只说“继续自动查询” | 每次 3 次，不设轮数上限 |
+| U12 | 按角色行级范围（`RowScope`）过滤执行统计、近期事件、投递记录、外部调用记录 | 不过滤 | 不过滤 |
+| U13 | 外部系统“测试调用”要求 external-systems · manage | 只按只读置灰 | 按前端（view） |
 
 ---
 
 ## 9. 表结构建议（【建议】，给 本体小白 对齐用）
 
-> **待定**：`ext_system` 和外部调用表（现名 `writeback_call`）的**表名与归属模块待 PDE 定（integration 或 data）**；本体小白 提议放 data 模块，用一张 `ext_call` 合并 `writeback_call`。在 PDE 定之前本文沿用 `writeback_call`。不论表放哪里，**适配器、`submit`、`query_by_key`、对账任务的代码归 Palantir**。
+> `ext_system`、`writeback_call` 都在 `integration` 模块，归 Palantir（PDE 已定，2026-10-25）；动态原来的 `ext_call` 已并入 `writeback_call`。
 > 定义表按静态的约定存：已发布内容来自基础层的版本快照，草稿是 `cr_item` 增量。下面是“当前版本展开表”和运行数据表。枚举列存英文代码（§3.5）。
 
 | 表 | 关键字段 | 说明 |
@@ -537,8 +592,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `submission_criterion` | action_type_id, seq, kind(current_user/parameter/context_object), name, expr_text, expr_ast jsonb, fail_msg | (action_type_id, name) 唯一 |
 | `ontology_edit_rule` | action_type_id, seq, op(modify/create/link), obj, field | — |
 | `side_effect` | action_type_id, seq, kind(notify/event/webhook), target, when_text, note | (action_type_id, target) 唯一 |
-| `ext_system` | id(`EXT-ERP`…), name, vendor, category, endpoint, auth_type, secret_ref(加密), idempotent, idem_header, timeout_ms, max_retry, backoff jsonb, rate_limit, owner, status(ok/degraded/disabled), env, usage | 暂放 `integration` 模块（归属待 PDE 定，见上）；PDE 的外部系统页通过我的接口读写 |
-| `writeback_call` | id, action_run_id, sys_id, idem_key, kind(write/query), attempt, method, path, http_status, biz_code, elapsed_ms, result(succeeded/failed/unknown), msg, at | 表名、归属待 PDE 定（可能并入 data 模块的 `ext_call`）；每次 HTTP 调用一行，包括重试和对账查询 |
+| `ext_system` | id(`EXT-ERP`…), name, vendor, category, endpoint, auth_type, secret_ref(加密), idempotent, idem_header, timeout_ms, max_retry, backoff jsonb, rate_limit, owner, status(ok/degraded/disabled), env, usage | `integration` 模块，归我；PDE 的外部系统页通过我的接口读写 |
+| `writeback_call` | id, action_run_id, sys_id, idem_key, kind(write/query/test), attempt, method, path, http_status, biz_code, elapsed_ms, result(succeeded/failed/unknown), msg, at | `integration` 模块，归我；动态原来的 `ext_call` 已并入；每次 HTTP 调用一行，包括写回重试、对账查询、外部系统页的测试调用（kind 加 `test`） |
 | `reconcile_task` | action_run_id(pk), idem_key, sys_id, state(querying/resolved/manual), round, tries, next_at, manual(bool，是否已转人工), last_ext_status, resolved_at, reconciler(系统/人名), reconcile_result(succeeded/not_executed) | 归我；**查询次数和下次时间只在这里**。cron 每 15 分钟扫 `next_at`；seed 的结果未知行 `tries=3, state=manual, manual=true, next_at=null` |
 | `action_run` *(动态)* | id, action_type_id, action_type_version, at, initiator, confirmer, approver, source, rule_id, alert_id, obj_kind, obj_id, obj_label, params jsonb, summary, status, ms, code, retries, idem_key, business_key, ext_ref, reconcile_note, reconcile_result, retry_of, is_seed | **只由动态写**，以动态文档为准；没有自动查询字段。`UNIQUE(idem_key) WHERE NOT is_seed`。本模块只读 |
 | `action_run_log` *(动态)* | action_run_id, seq, time, text, desc, status | 执行时间线，归动态 |
