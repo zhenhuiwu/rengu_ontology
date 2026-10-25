@@ -395,3 +395,78 @@ async def test_history_version_reads(client, static_seeded):
 
     # previewAs：定义数据不按人裁剪
     assert await get(client, "/metrics?previewAs=U010002") == await get(client, "/metrics")
+
+
+async def _mutate_current(session) -> None:
+    """改当前定义表（模拟快照之后又发布过改动）：订单改名、首个属性改名、记录数变化；GMV 改名改公式。"""
+    o = await session.scalar(select(ObjectType).where(ObjectType.code == "order"))
+    o.display_name = "订单（新）"
+    o.record_count = 7
+    p = min(o.properties, key=lambda x: x.seq)
+    p.display_name = p.display_name + "（新）"
+    m = await session.scalar(select(Metric).where(Metric.code == "gmv"))
+    m.display_name = "GMV（新）"
+    m.formula = "新公式"
+    await session.flush()
+    session.expire_all()
+
+
+async def test_history_objects_metrics_from_snapshot(client, static_seeded):
+    """?ver=：对象类型、属性、指标取该版快照；记录数、问数统计、指标当前值等运行数据取当前表。"""
+    ver = "v2026.09.3"
+    await get(client, "/object-types/brief?ver=v1999.01.1", 404)
+    await get(client, "/metrics?ver=v1999.01.1", 404)
+    await get(client, f"/object-types/nope?ver={ver}", 404)
+    await get(client, f"/object-types/nope/properties?ver={ver}", 404)
+    await get(client, f"/metrics/nope?ver={ver}", 404)
+
+    # seed 出的快照与当前一致（前端历史模式下对象 / 属性 / 指标不变）
+    assert await get(client, f"/object-types/brief?ver={ver}") == Q_OBJ
+    assert await get(client, f"/object-types?ver={ver}") == await get(client, "/object-types")
+    assert await get_all(client, f"/metrics?ver={ver}") == METRIC_LIST
+    assert await get(client, f"/object-types/order?ver={ver}") == await get(client, "/object-types/order")
+    assert await get(client, f"/metrics/gmv?ver={ver}") == await get(client, "/metrics/gmv")
+    old_props = await get_all(client, "/object-types/order/properties")
+    old_detail = await get(client, "/metrics/gmv")
+
+    await _mutate_current(static_seeded)
+
+    cur = await get(client, "/object-types/order")
+    assert cur["name"] == "订单（新）" and cur["brief"]["count"] == 7
+    hist = await get(client, f"/object-types/order?ver={ver}")
+    assert hist["name"] == hist["brief"]["name"] == "订单"  # 定义取快照
+    assert hist["brief"]["count"] == 7  # 记录数是运行数据，取当前
+    assert hist["props"] == old_props
+    assert await get_all(client, f"/object-types/order/properties?ver={ver}") == old_props
+    assert (await get_all(client, "/object-types/order/properties"))[0]["name"].endswith("（新）")
+    row = next(x for x in await get_all(client, f"/object-types?ver={ver}") if x["id"] == "order")
+    assert row["name"] == "订单" and row["count"] == "7"
+    brief = next(x for x in await get(client, f"/object-types/brief?ver={ver}") if x["key"] == "order")
+    assert brief["name"] == "订单" and brief["count"] == 7
+
+    assert await get_all(client, f"/metrics?ver={ver}") == METRIC_LIST
+    assert (await get(client, "/metrics/gmv"))["name"] == "GMV（新）"
+    hd = await get(client, f"/metrics/gmv?ver={ver}")
+    assert hd == old_detail  # 名称、公式取快照；当前值本来就没变
+    assert hd["formula"] != "新公式"
+
+
+async def test_history_objects_metrics_fallback_without_section(client, static_seeded, monkeypatch):
+    """快照没有 objectTypes / properties / metrics 节时（早于静态登记 section 的版本），按当前表返回。"""
+    from app.modules.static import service as svc_mod
+
+    orig = svc_mod.VersioningService.get_snapshot
+
+    async def no_static(self, session, ver=None):
+        snap = await orig(self, session, ver)
+        return {k: v for k, v in (snap or {}).items() if k not in ("objectTypes", "properties", "metrics")}
+
+    monkeypatch.setattr(svc_mod.VersioningService, "get_snapshot", no_static)
+    await _mutate_current(static_seeded)
+    ver = "v2026.09.3"
+    for url in ("/object-types", "/object-types/brief", "/object-types/order", "/metrics", "/metrics/gmv"):
+        assert await get(client, f"{url}?ver={ver}") == await get(client, url), url
+    assert await get(client, f"/object-types/order/properties?ver={ver}") == await get(
+        client, "/object-types/order/properties"
+    )
+    assert (await get(client, f"/metrics/gmv?ver={ver}"))["name"] == "GMV（新）"
