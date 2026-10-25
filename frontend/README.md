@@ -175,7 +175,7 @@ const onSelect = (id: string) => guard(() => { selected.value = id; dirty.value 
 
 ## 全局提示
 
-`message` 已在 `src/main.ts` 统一配置：同时最多 1 条（`maxCount: 1`），距顶部 56px（顶栏下方，不挡搜索框）。页面里直接 `message.success('已保存')`，不要再各自 `config`。
+`message` 已在 `src/main.ts` 统一配置：同时最多 1 条（`maxCount: 1`），距顶部 `calc(var(--topbar-h) + 8px)`，即顶栏 48px 下方 8px（共 56px，不挡搜索框；顶栏高度只认 `--topbar-h`）。页面里直接 `message.success('已保存')`，不要再各自 `config`。
 
 ## 页面归属表
 

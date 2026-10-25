@@ -32,8 +32,11 @@ const channel = ref<string>('全部');
 const kw = ref('');
 // 分页：一屏 15 行（1920×1080），页码/条数同步到 URL，筛选变化回到第 1 页
 const pq = usePagedQuery({ defaultSize: 15, filters: [status, channel, kw] });
+// 与页头“数据截至 2026-10-24 23:00”一致：首页只用截至该时刻的订单（样本订单里有 10 月 25 日的实时单，首页不展示）
+const CUTOFF = '2026-10-24 23:00:59';
+const CUT_ORDERS = ORDERS.filter((o) => o.createdAt <= CUTOFF);
 const rows = computed(() =>
-  ORDERS.filter((o) =>
+  CUT_ORDERS.filter((o) =>
     (status.value === '全部' || o.status === status.value) &&
     (channel.value === '全部' || o.channel === channel.value) &&
     (!kw.value || o.id.includes(kw.value) || (storeById(o.storeId)?.name ?? '').includes(kw.value)),
@@ -41,7 +44,7 @@ const rows = computed(() =>
 );
 const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
 const statusBadge = (s: Order['status']) =>
-  s === '已出库' || s === '已签收' ? 'success' : s === '已取消' ? 'default' : s === '待支付' ? 'warning' : 'processing';
+  s === '待支付' ? 'warning' : 'default'; // 状态不用蓝/绿：正常流转都是灰色，待支付需要关注为橙色
 const columns = [
   { title: '订单号', dataIndex: 'id', key: 'id', width: 200 },
   { title: '门店', key: 'store', ellipsis: true },
@@ -70,7 +73,7 @@ const trendOption = {
 
 // 门店排行（按样本订单实付金额汇总）
 const fullRanking = STORES.map((s) => {
-  const os = ORDERS.filter((o) => o.storeId === s.id);
+  const os = CUT_ORDERS.filter((o) => o.storeId === s.id);
   // 销售额（不含税）= 实付金额 ÷ (1 + 13%)，与指标 gmv 同口径
   return { id: s.id, name: s.name, city: s.city, cnt: os.length, amount: exTax(os.reduce((a, o) => a + o.amount, 0)) };
 }).sort((a, b) => b.amount - a.amount).map((r, i) => ({ ...r, rank: i + 1 }));
@@ -112,7 +115,7 @@ const rankCols = [
     <div class="row">
       <div class="panel orders">
         <div class="panel-head">
-          <span class="t-16 fw-600">今日订单</span>
+          <span class="t-16 fw-600">最近订单（截至 10 月 24 日 23:00）</span>
           <a-space>
             <a-select v-model:value="status" size="small" class="w-120"
               :options="['全部', '待支付', '待出库', '拣货中', '已出库', '已签收', '已取消'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
