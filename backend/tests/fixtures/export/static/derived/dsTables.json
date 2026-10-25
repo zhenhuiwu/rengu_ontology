@@ -1,0 +1,60 @@
+[
+ {
+  "args": [
+   {
+    "ref": "system/DATASOURCES",
+    "key": "id",
+    "id": "DS-001"
+   }
+  ],
+  "result": [
+   {
+    "schema": "dim",
+    "name": "refund",
+    "comment": "退款单",
+    "rows": 323831,
+    "cols": 32,
+    "objectType": "退款",
+    "updatedAt": "2026-10-25 15:00"
+   },
+   {
+    "schema": "ods",
+    "name": "order_line",
+    "comment": "订单明细",
+    "rows": 4653097,
+    "cols": 34,
+    "objectType": "订单行",
+    "updatedAt": "2026-10-25 10:47"
+   }
+  ]
+ },
+ {
+  "args": [
+   {
+    "ref": "system/DATASOURCES",
+    "key": "id",
+    "id": "DS-002"
+   }
+  ],
+  "result": [
+   {
+    "schema": "BI_READER",
+    "name": "COUPON",
+    "comment": "优惠券",
+    "rows": 294912,
+    "cols": 19,
+    "objectType": null,
+    "updatedAt": "2026-10-25 13:34"
+   },
+   {
+    "schema": "BI_READER",
+    "name": "COUPON_H1",
+    "comment": "优惠券（历史）",
+    "rows": 16311,
+    "cols": 11,
+    "objectType": null,
+    "updatedAt": "2026-10-25 13:50"
+   }
+  ]
+ }
+]

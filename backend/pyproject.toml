@@ -1,0 +1,54 @@
+[project]
+name = "rengu-ontology-backend"
+version = "0.1.0"
+description = "rengu_ontology 本体智能平台后台"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3",
+    "typer>=0.12",
+    "procrastinate>=3",
+    "psycopg[binary]>=3.2",
+    "sqlglot>=30.24.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "ruff>=0.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["migrations/versions", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "ASYNC", "RUF", "TID", "DTZ"]
+ignore = ["RUF001", "RUF002", "RUF003", "RUF012", "B008", "N818", "UP046"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"datetime.datetime.now".msg = "用 app.core.clock.now()（统一时钟）"
+"datetime.datetime.utcnow".msg = "用 app.core.clock.now()（统一时钟）"
+"datetime.date.today".msg = "用 app.core.clock.today()（统一时钟）"
+
+[tool.ruff.lint.per-file-ignores]
+"migrations/*" = ["N999"]
+"app/core/clock.py" = ["TID251"]

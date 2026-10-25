@@ -1,0 +1,41 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from sqlalchemy import text
+
+from app.api import include_routers
+from app.core.config import get_settings
+from app.core.errors import install_error_handlers
+from app.core.logging import setup_logging
+from app.core.request_id import RequestIdMiddleware
+from app.db.session import dispose_engine, get_sessionmaker
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await dispose_engine()
+
+
+def create_app() -> FastAPI:
+    s = get_settings()
+    setup_logging(s.log_level)
+    app = FastAPI(title=s.app_name, version="0.1.0", lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
+    install_error_handlers(app)
+    include_routers(app)
+
+    @app.get("/healthz", tags=["系统"], summary="存活检查（不查库）")
+    async def healthz() -> dict:
+        return {"status": "ok"}
+
+    @app.get("/readyz", tags=["系统"], summary="就绪检查（查库）")
+    async def readyz() -> dict:
+        async with get_sessionmaker()() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "ok"}
+
+    return app
+
+
+app = create_app()
