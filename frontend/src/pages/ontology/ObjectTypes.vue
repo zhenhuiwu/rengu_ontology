@@ -12,6 +12,7 @@ import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
 import { message } from 'ant-design-vue';
+import { LINKS as ALL_LINKS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
 
 const TYPES = [
   { id: 'order', name: '订单', api: 'SalesOrder', group: '交易', props: 31, count: '1,286,402', status: '已发布' },
@@ -113,16 +114,18 @@ const propCols = [
 ];
 
 // —— 关系 ——
-const LINKS = [
-  { name: '包含订单行', target: '订单行', card: '1 : N', key: 'order_id = order_line.order_id', reverse: '所属订单', isDefault: true },
-  { name: '下单门店', target: '门店', card: 'N : 1', key: 'store_id = store.store_id', reverse: '门店订单', isDefault: true },
-  { name: '履约门店', target: '门店', card: 'N : 1', key: 'fulfill_store_id = store.store_id', reverse: '履约订单', isDefault: false },
-  { name: '下单会员', target: '会员', card: 'N : 1', key: 'member_id = member.member_id', reverse: '会员订单', isDefault: true },
-  { name: '发货仓', target: '仓库', card: 'N : 1', key: 'warehouse_id = warehouse.wh_id', reverse: '仓库订单', isDefault: true },
-  { name: '退款单', target: '退款单', card: '1 : N', key: 'order_id = refund.order_id', reverse: '原订单', isDefault: true },
-  { name: '出库单', target: '出库单', card: '1 : N', key: 'order_id = shipment.order_id', reverse: '来源订单', isDefault: true },
-  { name: '参与活动', target: '促销活动', card: 'N : M', key: '经 order_promotion 中间表', reverse: '活动订单', isDefault: false },
-];
+// 与“关系类型”页共用 src/mock/links.ts；这里列当前对象类型作为源端的已发布关系
+const LINKS = computed(() => ALL_LINKS.filter((l) => l.from === current.value.id && l.status === '已发布').map((l) => ({
+  name: l.name, target: objName(l.to), card: l.card, key: l.key, reverse: l.reverse, isDefault: defaultLabel(l.id) !== '需用户指明',
+})));
+const linkTip = computed(() => {
+  const gs = PATH_GROUPS.filter((g) => g.from === current.value.id);
+  if (!gs.length) return '';
+  return gs.map((g) => {
+    const d = g.paths.find((p) => p.isDefault)!;
+    return `${objName(g.from)}到${objName(g.to)}有 ${g.paths.length} 条路径，默认按“${d.links.map((x) => ALL_LINKS.find((l) => l.id === x)?.name).join(' → ')}”`;
+  }).join('；') + '，其余需在问题里指明（发布校验 V13）';
+});
 const linkCols = [
   { title: '关系名', dataIndex: 'name', width: 140 },
   { title: '目标对象', dataIndex: 'target', width: 120 },
@@ -240,7 +243,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         <div class="ot-ov-right">
           <div class="t-14 fw-600">使用情况</div>
           <dl class="ot-stat">
-            <dt class="t-14 c-3">关系</dt><dd class="t-14 num">8 条</dd>
+            <dt class="t-14 c-3">关系</dt><dd class="t-14 num">{{ LINKS.length }} 条</dd>
             <dt class="t-14 c-3">引用的指标</dt><dd class="t-14 num">
               <HoverCard kind="metric" id="order_cnt">有效订单数</HoverCard>、<HoverCard kind="metric" id="atv">客单价（不含税）</HoverCard> 等 6 个</dd>
             <dt class="t-14 c-3">动作类型</dt><dd class="t-14 num">3 个（第三期启用）</dd>
@@ -292,7 +295,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
       <!-- 关系 -->
       <div v-else-if="tab === 'links'" class="ot-body">
         <div class="ot-tool">
-          <span class="t-12 c-3">订单到门店有两条路径：问“各门店订单数”默认按下单门店，按履约门店统计需在问题里指明（发布校验 V13）</span>
+          <span class="t-12 c-3">{{ linkTip }}</span>
           <span class="ot-sp" />
           <a-tooltip :title="editTip"><a-button type="primary" :disabled="!canEdit">新增关系</a-button></a-tooltip>
         </div>

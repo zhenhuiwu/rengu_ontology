@@ -1,0 +1,690 @@
+<script setup lang="ts">
+/**
+ * 关系类型：左侧关系列表，右侧详情（定义 / 关联映射 / 问数路径 / 使用情况 / 版本历史），页头可切到“关系图”。
+ * URL：?link= 选中关系，?tab= 页签，?mode=graph 关系图，?q= / ?src= / ?st= 列表筛选，?view=draft 草稿视图。
+ * 草稿逻辑与对象类型、指标口径页一致（已发布只读，唯一入口“发起变更”）；共用的 useDraftView 还不支持关系，
+ * 先在本页按同样的接口实现，变更单编号取现有最大单号加一。
+ */
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { message } from 'ant-design-vue';
+import ObjRef from '@/components/ObjRef.vue';
+import HoverCard from '@/components/HoverCard.vue';
+import AppPagination from '@/components/AppPagination.vue';
+import { useDrawer } from '@/composables/useDrawer';
+import { useReadonly } from '@/composables/useReadonly';
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
+import { useAppStore } from '@/stores/app';
+import { CHANGE_REQUESTS } from '@/mock/changes';
+import type { DraftCR } from '@/mock/releases';
+import {
+  LINKS, LINK_OBJECTS, CARD_API, PATH_GROUPS, objById, objName,
+  type LinkType, type LinkStatus, type Cardinality, type QaPath,
+} from '@/mock/links';
+import DraftBanner from './parts/DraftBanner.vue';
+import StartChangeModal from './parts/StartChangeModal.vue';
+import { allDrafts } from './parts/useDraftView';
+
+const route = useRoute();
+const router = useRouter();
+const app = useAppStore();
+const { open: openDrawer } = useDrawer();
+const { readonly, reason } = useReadonly();
+
+const links = reactive<LinkType[]>(LINKS.map((l) => ({ ...l })));
+/** 查看历史版本时只列出该版本已发布的关系 */
+const visible = computed(() => {
+  const ver = app.viewVersion;
+  if (!readonly.value || !ver) return links;
+  return links.filter((l) => l.status === '已发布' && !!l.since && l.since <= ver);
+});
+const visibleIds = computed(() => new Set(visible.value.map((l) => l.id)));
+
+// —— 列表筛选（写进 URL）——
+const q = (k: string) => (route.query[k] as string) || '';
+const setQ = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
+const kw = computed({ get: () => q('q'), set: (v) => setQ({ q: v || undefined }) });
+const src = computed({ get: () => q('src'), set: (v) => setQ({ src: v || undefined }) });
+const st = computed({ get: () => q('st'), set: (v) => setQ({ st: v || undefined }) });
+const SRC_OPTIONS = computed(() => [
+  { value: '', label: '全部源对象' },
+  ...LINK_OBJECTS.filter((o) => visible.value.some((l) => l.from === o.id)).map((o) => ({ value: o.id, label: o.name })),
+]);
+const ST_OPTIONS = [{ value: '', label: '全部状态' }, { value: '已发布', label: '已发布' }, { value: '草稿', label: '草稿' }, { value: '已驳回', label: '已驳回' }];
+const filtered = computed(() => visible.value.filter((l) =>
+  (!src.value || l.from === src.value) && (!st.value || l.status === st.value)
+  && (!kw.value || l.name.includes(kw.value) || apiOf(l).includes(kw.value) || objName(l.from).includes(kw.value) || objName(l.to).includes(kw.value))));
+const LPAGE = 12;
+const lpage = ref(1);
+watch([kw, src, st], () => { lpage.value = 1; });
+const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
+
+const apiOf = (l: LinkType) => l.api ?? l.id;
+const cur = computed(() => visible.value.find((l) => l.id === route.query.link) ?? visible.value[0]);
+// 选中项不在当前页时翻到它所在的页
+watch(() => cur.value?.id, (id) => {
+  const i = filtered.value.findIndex((l) => l.id === id);
+  if (i >= 0) lpage.value = Math.floor(i / LPAGE) + 1;
+}, { immediate: true });
+
+const mode = computed({
+  get: () => (route.query.mode === 'graph' ? 'graph' : 'list'),
+  set: (v) => guard(() => setQ({ mode: v === 'graph' ? 'graph' : undefined })),
+});
+const tab = computed({
+  get: () => (route.query.tab as string) || 'def',
+  set: (v) => guard(() => { editing.value = false; setQ({ tab: v }); }),
+});
+/** 切换关系时清掉草稿视图和两层抽屉 */
+const pick = (id: string) => guard(() => {
+  editing.value = false;
+  router.replace({ query: { ...route.query, link: id, view: undefined, drawer: undefined, drawer2: undefined } });
+});
+
+// —— 草稿（与 useDraftView 同一套接口，关系类型在本页实现）——
+const LINK_TARGETS = reactive<Record<string, string[]>>({ 'CR-0012': ['member_holds_cards'] });
+const createdCRs = reactive<DraftCR[]>([]);
+const drafts = () => [...createdCRs, ...allDrafts()];
+const draft = computed(() => {
+  const cr = Object.entries(LINK_TARGETS).find(([, ids]) => ids.includes(cur.value?.id))?.[0];
+  return drafts().find((d) => d.id === cr);
+});
+/** 只存在于草稿里的关系（新增的），直接看草稿 */
+const draftOnly = computed(() => cur.value?.status === '草稿');
+const isDraft = computed(() => !readonly.value && !!draft.value && (draftOnly.value || route.query.view === 'draft'));
+const canEdit = computed(() => isDraft.value);
+const editTip = computed(() => (readonly.value ? reason.value : isDraft.value ? '' : cur.value?.status === '已驳回' ? '变更单已驳回，请重新发起变更' : '已发布版本只读，请先发起变更'));
+const setView = (v: 'published' | 'draft') => router.replace({ query: { ...route.query, view: v === 'draft' ? 'draft' : undefined } });
+const nextCrId = () => {
+  const ids = [...CHANGE_REQUESTS.map((c) => c.id), ...drafts().map((d) => d.id)];
+  const max = Math.max(...ids.map((id) => Number(id.replace('CR-', '')) || 0));
+  return `CR-${String(max + 1).padStart(4, '0')}`;
+};
+const changeOpen = ref(false);
+const changeTarget = ref('');
+const creating = ref(false);
+const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
+function start(opts: { join?: string; title?: string }) {
+  let id = opts.join;
+  if (!id) {
+    id = nextCrId();
+    createdCRs.unshift({ id, title: opts.title || '未命名变更', owner: '王敏', updatedAt: '2026-10-25 17:40', changes: 0 });
+  }
+  const ids = (LINK_TARGETS[id] ??= []);
+  if (creating.value) {
+    const n = links.filter((l) => l.id.startsWith('new_link_')).length + 1;
+    const from = src.value || cur.value?.from || 'order';
+    const nl: LinkType = {
+      id: `new_link_${n}`, api: '', name: '未命名关系', from, to: '', card: 'N : 1', key: '', fromProp: '', toProp: '', join: '',
+      reverse: '', nullable: false, desc: '', status: '草稿', cr: id, owner: '王敏', usage: [],
+      history: [{ ver: '—', cr: id, status: '草稿', by: '王敏', at: '2026-10-25 17:40', change: '新增关系（待填写）' }],
+    };
+    links.unshift(nl);
+    ids.push(nl.id);
+    router.replace({ query: { ...route.query, link: nl.id, tab: 'def', mode: undefined, view: 'draft', drawer: undefined, drawer2: undefined, src: undefined, st: undefined, q: undefined } })
+      .then(() => beginEdit());
+  } else {
+    ids.includes(cur.value.id) || ids.push(cur.value.id);
+    setView('draft');
+  }
+}
+const rejectedCR = computed(() => (cur.value?.status === '已驳回' ? CHANGE_REQUESTS.find((c) => c.id === cur.value.cr) : undefined));
+
+// —— 定义：草稿里可编辑 ——
+interface Form { name: string; api: string; to: string; card: Cardinality; fromProp: string; toProp: string; via: string; reverse: string; nullable: boolean; desc: string }
+const editing = ref(false);
+const form = reactive<Form>({ name: '', api: '', to: '', card: 'N : 1', fromProp: '', toProp: '', via: '', reverse: '', nullable: false, desc: '' });
+const snap = ref('');
+function beginEdit() {
+  const l = cur.value;
+  Object.assign(form, { name: l.name, api: apiOf(l), to: l.to, card: l.card, fromProp: l.fromProp, toProp: l.toProp, via: l.via ?? '', reverse: l.reverse, nullable: l.nullable, desc: l.desc });
+  snap.value = JSON.stringify(form);
+  editing.value = true;
+}
+const dirty = computed(() => editing.value && JSON.stringify(form) !== snap.value);
+const guard = useUnsavedGuard(dirty);
+function save() {
+  const l = cur.value;
+  const key = form.card === 'N : M' ? `经 ${form.via || '（未选择）'} 中间表` : form.to ? `${form.fromProp} = ${form.to}.${form.toProp}` : '';
+  Object.assign(l, { name: form.name, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
+  if (l.status === '草稿') l.api = form.api;
+  editing.value = false;
+  message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
+}
+const cancelEdit = () => guard(() => { editing.value = false; });
+const CARDS: Cardinality[] = ['N : 1', '1 : N', '1 : 1', 'N : M'];
+const CARD_OPTIONS = CARDS.map((k) => ({ value: k, label: `${k}（${CARD_API[k]}）` }));
+const OBJ_OPTIONS = LINK_OBJECTS.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）` }));
+
+const statusColor = (s: LinkStatus) => (s === '草稿' ? 'warning' : s === '已驳回' ? 'error' : 'default');
+const statusClass = (s: LinkStatus) => (s === '草稿' ? 'c-warning' : s === '已驳回' ? 'c-error' : 'c-3');
+/** 能解析出抽屉的对象类型（储值卡只在草稿里，没有对象详情） */
+const canRef = (id: string) => !!id && !objById(id)?.draft;
+const groupsOf = (id: string) => PATH_GROUPS
+  .map((g) => ({ ...g, paths: g.paths.filter((p) => p.links.every((x) => visibleIds.value.has(x))) }))
+  .filter((g) => g.paths.length > 1 && g.paths.some((p) => p.links.includes(id)));
+const curGroups = computed(() => (cur.value ? groupsOf(cur.value.id) : []));
+
+const CHECKS = computed(() => {
+  const l = cur.value;
+  const rows: { code: string; name: string; result: '通过' | '警告' | '阻断'; note: string }[] = [];
+  rows.push(!l.to
+    ? { code: 'V3', name: '两端对象', result: '阻断', note: '还没有选择目标对象' }
+    : l.card === 'N : M' && !l.via
+      ? { code: 'V3', name: '两端对象', result: '阻断', note: '多对多需要指定中间对象' }
+      : { code: 'V3', name: '两端对象', result: '通过', note: `${objName(l.from)} 与 ${objName(l.to)} 都存在，关联键类型一致${l.via ? `；经中间表 ${l.via}` : ''}` });
+  if (l.status === '已发布') rows.push({ code: 'V7', name: '已发布 API 名', result: '通过', note: `${apiOf(l)} 已发布，不可删除或改名` });
+  rows.push(l.desc.length >= 8 ? { code: 'V11', name: '自然语言描述', result: '通过', note: '问数用它理解这条关系' } : { code: 'V11', name: '自然语言描述', result: '警告', note: '描述过短，问数可能选错路径' });
+  const g = groupsOf(l.id)[0];
+  rows.push(g ? { code: 'V13', name: '多路径默认', result: '通过', note: g.check } : l.id === 'store_manager'
+    ? { code: 'V13', name: '多路径默认', result: '警告', note: '与“所属门店”反向连接同一对对象，重新提交时需指定默认路径' }
+    : { code: 'V13', name: '多路径默认', result: '通过', note: '两端之间只有这一条路径' });
+  return rows;
+});
+const checkClass = (r: string) => (r === '阻断' ? 'c-error' : r === '警告' ? 'c-warning' : 'c-3');
+
+const DEF_ITEMS = computed(() => {
+  const l = cur.value;
+  return [
+    { k: '基数', v: `${l.card}（${CARD_API[l.card]}）` },
+    { k: '允许为空', v: l.nullable ? '是：源端外键可以为空，为空的记录不参与关联' : '否：源端每条记录都必须关联到目标' },
+    { k: '反向名称', v: l.reverse ? `${l.reverse}（从${objName(l.to)}看${objName(l.from)}）` : '' },
+    { k: '中间对象', v: l.via ?? '--' },
+    { k: '负责人', v: l.owner },
+    { k: '生效版本', v: l.since ? `随本体发布 ${l.since} 生效${l.cr ? `（${l.cr}）` : ''}` : l.cr ? `未发布 · ${l.cr} ${l.status}` : '未发布' },
+  ];
+});
+
+// —— 关联映射 ——
+const fmtInt = (n: number) => n.toLocaleString('en-US');
+const hitWarn = (h: number) => h < 99.5;
+const orphanCols = [{ title: '源端关联键', dataIndex: 'key', width: 200 }, { title: '记录数', key: 'count', width: 120, align: 'right' as const }, { title: '原因', dataIndex: 'reason' }];
+
+// —— 问数路径 ——
+const linkName = (id: string) => links.find((l) => l.id === id)?.name ?? id;
+const chain = (p: QaPath) => {
+  const steps: { obj: string; via?: string }[] = [];
+  p.links.forEach((id, i) => {
+    const l = links.find((x) => x.id === id)!;
+    if (i === 0) steps.push({ obj: l.from });
+    steps.push({ obj: l.to, via: l.name });
+  });
+  return steps;
+};
+const curPathCount = computed(() => curGroups.value.reduce((n, g) => n + g.paths.length, 0));
+
+// —— 使用情况 / 版本历史 ——
+const TABLE_PAGER = { pageSize: 10, showSizeChanger: false, showTotal: (t: number) => `共 ${t} 条`, size: 'small' as const };
+const usageCols = [{ title: '类型', dataIndex: 'type', width: 96 }, { title: '名称', key: 'name', width: 320 }, { title: '使用方式', dataIndex: 'note' }];
+const usageSummary = computed(() => {
+  const m = new Map<string, number>();
+  cur.value.usage.forEach((u) => m.set(u.type, (m.get(u.type) ?? 0) + 1));
+  return [...m].map(([k, v]) => `${k} ${v}`).join(' · ');
+});
+const histCols = [
+  { title: '本体发布', dataIndex: 'ver', width: 120 },
+  { title: '变更单', key: 'cr', width: 120 },
+  { title: '状态', key: 'status', width: 96 },
+  { title: '变更说明', dataIndex: 'change' },
+  { title: '操作人', dataIndex: 'by', width: 96 },
+  { title: '时间', dataIndex: 'at', width: 168 },
+];
+const crLink = (id: string) => router.push({ path: '/build/ontology/releases', query: { cr: id } });
+
+// —— 关系图 ——
+const POS: Record<string, [number, number]> = {
+  promotion: [0.25, 0.1], product: [0.5, 0.12], category: [0.69, 0.05], supplier: [0.9, 0.2],
+  refund_line: [0.07, 0.33], order_line: [0.27, 0.33], inventory: [0.73, 0.34],
+  refund: [0.25, 0.52], order: [0.5, 0.5], warehouse: [0.92, 0.55], shipment: [0.72, 0.64],
+  member_level: [0.07, 0.6], member: [0.25, 0.72], stored_card: [0.07, 0.86],
+  store: [0.5, 0.8], employee: [0.86, 0.84], province: [0.3, 0.94], region: [0.7, 0.94],
+};
+const NW = 104;
+const NH = 36;
+const gbox = ref<HTMLElement | null>(null);
+const gw = ref(1200);
+const gh = ref(720);
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  ro = new ResizeObserver(([e]) => { gw.value = e.contentRect.width; gh.value = e.contentRect.height; });
+  watch(gbox, (el, old) => { if (old) ro?.unobserve(old); if (el) ro?.observe(el); }, { immediate: true });
+});
+onBeforeUnmount(() => ro?.disconnect());
+const PAD = 40;
+const pt = (id: string) => { const [fx, fy] = POS[id] ?? [0.5, 0.5]; return { x: PAD + fx * (gw.value - PAD * 2), y: PAD / 2 + fy * (gh.value - PAD) }; };
+const graphLinks = computed(() => filtered.value.filter((l) => l.to && POS[l.from] && POS[l.to]));
+const graphNodes = computed(() => {
+  const used = new Set<string>();
+  visible.value.forEach((l) => { used.add(l.from); if (l.to) used.add(l.to); });
+  return LINK_OBJECTS.filter((o) => used.has(o.id) && POS[o.id]).map((o) => ({ ...o, ...pt(o.id) }));
+});
+const trim = (from: { x: number; y: number }, to: { x: number; y: number }) => {
+  const dx = to.x - from.x; const dy = to.y - from.y;
+  const t = Math.min(dx ? (NW / 2 + 4) / Math.abs(dx) : Infinity, dy ? (NH / 2 + 4) / Math.abs(dy) : Infinity);
+  return { x: from.x + dx * t, y: from.y + dy * t };
+};
+const edges = computed(() => {
+  const pairCount = new Map<string, number>();
+  const pairIdx = new Map<string, number>();
+  const pk = (l: LinkType) => [l.from, l.to].sort().join('|');
+  graphLinks.value.forEach((l) => pairCount.set(pk(l), (pairCount.get(pk(l)) ?? 0) + 1));
+  return graphLinks.value.map((l) => {
+    const k = pk(l);
+    const i = pairIdx.get(k) ?? 0; pairIdx.set(k, i + 1);
+    const n = pairCount.get(k)!;
+    const a = pt(l.from); const b = pt(l.to);
+    if (l.from === l.to) {
+      const d = `M ${a.x - 20} ${a.y - NH / 2} C ${a.x - 40} ${a.y - 70}, ${a.x + 40} ${a.y - 70}, ${a.x + 20} ${a.y - NH / 2 - 2}`;
+      return { l, d, lx: a.x, ly: a.y - 64 };
+    }
+    // 同一对对象之间多条关系时弯成弧线
+    const sign = l.from < l.to ? 1 : -1;
+    const off = (i - (n - 1) / 2) * 56 * sign;
+    const mx = (a.x + b.x) / 2; const my = (a.y + b.y) / 2;
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const c = { x: mx - ((b.y - a.y) / len) * off, y: my + ((b.x - a.x) / len) * off };
+    const s = trim(a, c); const e = trim(b, c);
+    return { l, d: `M ${s.x} ${s.y} Q ${c.x} ${c.y} ${e.x} ${e.y}`, lx: 0.25 * s.x + 0.5 * c.x + 0.25 * e.x, ly: 0.25 * s.y + 0.5 * c.y + 0.25 * e.y };
+  });
+});
+const selEdge = computed(() => edges.value.find((e) => e.l.id === cur.value?.id));
+const isEnd = (id: string) => cur.value && (cur.value.from === id || cur.value.to === id);
+const hoverEdge = ref('');
+const clickNode = (id: string) => { if (canRef(id)) openDrawer('object-type', id); };
+const toDetail = () => guard(() => setQ({ mode: undefined }));
+</script>
+
+<template>
+  <Teleport defer to="#page-extra">
+    <a-segmented v-model:value="mode" :options="[{ label: '列表', value: 'list' }, { label: '关系图', value: 'graph' }]" />
+    <a-tooltip :title="readonly ? reason : ''">
+      <a-button :disabled="readonly" @click="openChange('新建关系类型', true)">新建关系类型</a-button>
+    </a-tooltip>
+  </Teleport>
+
+  <div class="lt">
+    <div class="panel lt-list">
+      <div class="lt-filter">
+        <a-input-search :value="kw" placeholder="搜索关系名、API 名或对象" allow-clear @change="(e: any) => (kw = e.target.value)" />
+        <div class="lt-selects">
+          <a-select v-model:value="src" :options="SRC_OPTIONS" size="small" class="lt-sel" />
+          <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="lt-sel" />
+        </div>
+      </div>
+      <ul class="lt-items">
+        <li v-for="l in list" :key="l.id" :class="{ active: l.id === cur?.id }" @click="pick(l.id)">
+          <div class="lt-row">
+            <span class="t-14 lt-name">{{ l.name }}</span>
+            <span v-if="l.status !== '已发布'" class="t-12" :class="statusClass(l.status)">{{ l.status }}</span>
+          </div>
+          <div class="lt-row">
+            <span class="t-12 c-3">{{ objName(l.from) }} → {{ l.to ? objName(l.to) : '未选择' }}</span>
+            <span class="t-12 c-3 num">{{ l.card }}</span>
+          </div>
+        </li>
+      </ul>
+      <div class="lt-foot">
+        <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" unit="条" class="lt-pager" empty-text="没有匹配的关系" />
+      </div>
+    </div>
+
+    <!-- 关系图 -->
+    <div v-if="mode === 'graph'" class="panel lt-detail">
+      <div class="lt-head">
+        <span class="t-16 fw-600 c-1">关系图</span>
+        <span class="t-12 c-3">{{ graphNodes.length }} 个对象 · {{ graphLinks.length }} 条关系{{ src || st || kw ? '（按左侧筛选）' : '' }}</span>
+        <span class="lt-sp" />
+        <span class="t-12 c-3 lt-legend"><i class="lg-solid" />已发布</span>
+        <span class="t-12 c-3 lt-legend"><i class="lg-dash" />草稿 / 已驳回</span>
+        <span class="t-12 c-3">点击连线选中关系，点击对象查看对象类型</span>
+      </div>
+      <div ref="gbox" class="lt-graph">
+        <svg :width="gw" :height="gh" class="lt-svg">
+          <defs>
+            <marker id="lt-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--g7)" />
+            </marker>
+            <marker id="lt-arr-sel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--brand)" />
+            </marker>
+          </defs>
+          <g v-for="e in edges" :key="e.l.id" class="lt-edge" @click="pick(e.l.id)" @mouseenter="hoverEdge = e.l.id" @mouseleave="hoverEdge = ''">
+            <path :d="e.d" class="lt-hit" />
+            <path :d="e.d" class="lt-line" :class="{ sel: e.l.id === cur?.id, hov: hoverEdge === e.l.id, dash: e.l.status !== '已发布' }"
+              :marker-end="e.l.id === cur?.id ? 'url(#lt-arr-sel)' : 'url(#lt-arr)'" />
+            <text v-if="hoverEdge === e.l.id && e.l.id !== cur?.id" :x="e.lx" :y="e.ly - 6" text-anchor="middle" class="lt-elabel t-12">{{ e.l.name }} · {{ e.l.card }}</text>
+          </g>
+          <g v-for="n in graphNodes" :key="n.id" class="lt-node" :class="{ end: isEnd(n.id), draft: n.draft, link: canRef(n.id) }" @click="clickNode(n.id)">
+            <rect :x="n.x - NW / 2" :y="n.y - NH / 2" :width="NW" :height="NH" rx="4" />
+            <text :x="n.x" :y="n.y + 5" text-anchor="middle" class="t-14">{{ n.name }}</text>
+          </g>
+          <g v-if="selEdge" class="lt-sel-label">
+            <rect :x="selEdge.lx - 64" :y="selEdge.ly - 12" width="128" height="24" rx="4" />
+            <text :x="selEdge.lx" :y="selEdge.ly + 5" text-anchor="middle" class="t-12">{{ selEdge.l.name }} · {{ selEdge.l.card }}</text>
+          </g>
+        </svg>
+      </div>
+      <div v-if="cur" class="lt-gfoot">
+        <span class="t-14 fw-600 c-1">{{ cur.name }}</span>
+        <span class="t-12 c-3 num">{{ apiOf(cur) }}</span>
+        <a-tag :color="statusColor(cur.status)">{{ cur.status }}</a-tag>
+        <span class="t-14 c-2">{{ objName(cur.from) }} → {{ cur.to ? objName(cur.to) : '未选择' }} · {{ cur.card }}</span>
+        <span class="t-12 c-3 num">{{ cur.key }}</span>
+        <span v-if="curGroups.length" class="t-12 c-3">问数：{{ curGroups.map((g) => g.check.replace(/^V13 通过：/, '')).join('；') }}</span>
+        <span class="lt-sp" />
+        <a @click="toDetail">查看详情</a>
+      </div>
+    </div>
+
+    <!-- 详情 -->
+    <div v-else-if="cur" class="panel lt-detail">
+      <DraftBanner v-if="isDraft && draft" :draft="draft"
+        @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="draftOnly ? message.info('这条关系只在草稿里，放弃请到变更单处理') : setView('published')" />
+      <div class="lt-head">
+        <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
+        <span class="t-14 c-3 num">{{ apiOf(cur) || '（未填写 API 名）' }}</span>
+        <a-tag :color="statusColor(cur.status)">{{ cur.status }}</a-tag>
+        <span class="t-14 c-2">
+          <ObjRef v-if="canRef(cur.from)" kind="object-type" :id="cur.from">{{ objName(cur.from) }}</ObjRef><template v-else>{{ objName(cur.from) }}</template>
+          →
+          <ObjRef v-if="canRef(cur.to)" kind="object-type" :id="cur.to">{{ objName(cur.to) }}</ObjRef><template v-else>{{ cur.to ? objName(cur.to) : '未选择' }}</template>
+          <span class="c-3 num"> · {{ cur.card }}</span>
+        </span>
+        <a-segmented v-if="draft && !readonly && !draftOnly" size="small" :value="isDraft ? 'draft' : 'published'"
+          :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
+          @change="(v: any) => guard(() => { editing = false; setView(v); })" />
+        <span class="lt-sp" />
+        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${apiOf(cur)}）`)">{{ cur.status === '已驳回' ? '重新发起变更' : '发起变更' }}</a-button>
+        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
+      </div>
+      <div v-if="rejectedCR" class="lt-reject t-12">
+        <span class="c-error fw-600">{{ rejectedCR.id }} 已驳回</span>
+        <span class="c-2">{{ rejectedCR.reviewer }}：{{ rejectedCR.rejectReason }}</span>
+        <span class="c-3">没有已发布的版本，问数中不存在这条关系</span>
+      </div>
+      <a-tabs v-model:activeKey="tab" class="lt-tabs">
+        <a-tab-pane key="def" tab="定义" />
+        <a-tab-pane key="mapping" tab="关联映射" />
+        <a-tab-pane key="paths" tab="问数路径" />
+        <a-tab-pane key="usage" tab="使用情况" />
+        <a-tab-pane key="history" tab="版本历史" />
+      </a-tabs>
+
+      <!-- 定义 -->
+      <div v-if="tab === 'def'" class="lt-body lt-def">
+        <div class="lt-def-left">
+          <div class="lt-sec t-14 fw-600 lt-sec-row">
+            <span>关系定义</span>
+            <a-space v-if="editing">
+              <a-button size="small" @click="cancelEdit">取消</a-button>
+              <a-button size="small" :disabled="!dirty" @click="save">保存到草稿</a-button>
+            </a-space>
+            <a-tooltip v-else :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">编辑定义</a-button></a-tooltip>
+          </div>
+          <a-descriptions v-if="!editing" :column="2" bordered size="small" class="lt-desc">
+            <a-descriptions-item label="显示名">{{ cur.name }}</a-descriptions-item>
+            <a-descriptions-item label="API 名"><span class="num">{{ apiOf(cur) || '--' }}</span></a-descriptions-item>
+            <a-descriptions-item label="源对象">
+              <ObjRef v-if="canRef(cur.from)" kind="object-type" :id="cur.from">{{ objName(cur.from) }}</ObjRef><template v-else>{{ objName(cur.from) }}</template>
+              <span class="c-3 num">（{{ objById(cur.from)?.api }}）</span>
+            </a-descriptions-item>
+            <a-descriptions-item label="目标对象">
+              <template v-if="cur.to">
+                <ObjRef v-if="canRef(cur.to)" kind="object-type" :id="cur.to">{{ objName(cur.to) }}</ObjRef><template v-else>{{ objName(cur.to) }}<span class="c-warning">（草稿对象）</span></template>
+                <span class="c-3 num">（{{ objById(cur.to)?.api }}）</span>
+              </template>
+              <span v-else class="c-error">未选择</span>
+            </a-descriptions-item>
+            <a-descriptions-item label="关联键" :span="2"><span class="num">{{ cur.key || '--' }}</span><span v-if="cur.fromProp && cur.card !== 'N : M'" class="c-3">（{{ objName(cur.from) }}.{{ cur.fromProp }} → {{ objName(cur.to) }}.{{ cur.toProp }}）</span></a-descriptions-item>
+            <a-descriptions-item v-for="d in DEF_ITEMS" :key="d.k" :label="d.k">{{ d.v || '--' }}</a-descriptions-item>
+            <a-descriptions-item label="说明" :span="2">{{ cur.desc || '--' }}</a-descriptions-item>
+          </a-descriptions>
+          <a-form v-else layout="horizontal" :label-col="{ style: { width: '96px' } }" class="lt-form">
+            <div class="lt-form-grid">
+              <a-form-item label="显示名"><a-input v-model:value="form.name" /></a-form-item>
+              <a-form-item label="API 名">
+                <a-tooltip :title="cur.status === '草稿' ? '' : '已发布的 API 名不可改名（V7）'"><a-input v-model:value="form.api" :disabled="cur.status !== '草稿'" placeholder="例如 order_belongs_to_store" /></a-tooltip>
+              </a-form-item>
+              <a-form-item label="源对象"><a-input :value="objName(cur.from)" disabled /></a-form-item>
+              <a-form-item label="目标对象"><a-select v-model:value="form.to" :options="OBJ_OPTIONS" show-search option-filter-prop="label" placeholder="选择对象类型" /></a-form-item>
+              <a-form-item label="基数"><a-select v-model:value="form.card" :options="CARD_OPTIONS" /></a-form-item>
+              <a-form-item label="允许为空"><a-switch v-model:checked="form.nullable" size="small" /></a-form-item>
+              <a-form-item v-if="form.card === 'N : M'" label="中间对象"><a-input v-model:value="form.via" placeholder="中间表或中间对象" /></a-form-item>
+              <template v-else>
+                <a-form-item label="源端属性"><a-input v-model:value="form.fromProp" /></a-form-item>
+                <a-form-item label="目标端属性"><a-input v-model:value="form.toProp" /></a-form-item>
+              </template>
+              <a-form-item label="反向名称"><a-input v-model:value="form.reverse" /></a-form-item>
+            </div>
+            <a-form-item label="说明"><a-textarea v-model:value="form.desc" :rows="2" placeholder="问数会用这段描述理解这条关系（V11）" /></a-form-item>
+          </a-form>
+          <div class="lt-sec t-14 fw-600">生成的关联</div>
+          <div class="lt-code t-14 num">{{ cur.join ? `LEFT JOIN ${objById(cur.to)?.table ?? ''} ON ${cur.join}` : '--' }}</div>
+        </div>
+        <div class="lt-def-right">
+          <div class="lt-sec t-14 fw-600">两端对象</div>
+          <div class="lt-ends">
+            <div class="lt-end">
+              <span class="t-12 c-3">源对象</span>
+              <span class="t-14 c-1">{{ objName(cur.from) }}</span>
+              <span class="t-12 c-3 num">{{ objById(cur.from)?.table }}</span>
+            </div>
+            <div class="lt-arrow t-12 c-3">
+              <span>{{ cur.name }} →</span>
+              <span class="num">{{ cur.card }}</span>
+              <span>← {{ cur.reverse || '--' }}</span>
+            </div>
+            <div class="lt-end">
+              <span class="t-12 c-3">目标对象</span>
+              <span class="t-14 c-1">{{ cur.to ? objName(cur.to) : '未选择' }}</span>
+              <span class="t-12 c-3 num">{{ objById(cur.to)?.table ?? '--' }}</span>
+            </div>
+          </div>
+          <div class="lt-sec t-14 fw-600">发布校验</div>
+          <div v-for="c in CHECKS" :key="c.code" class="lt-check">
+            <span class="t-12 c-3 num lt-check-code">{{ c.code }}</span>
+            <span class="t-14 c-1 lt-check-name">{{ c.name }}</span>
+            <span class="t-12" :class="checkClass(c.result)">{{ c.result }}</span>
+            <span class="t-12 c-3 lt-check-note">{{ c.note }}</span>
+          </div>
+          <div class="t-12 c-3">关系定义只随本体整版发布生效；问数始终使用已发布版本 {{ app.ontologyVersion }}。</div>
+        </div>
+      </div>
+
+      <!-- 关联映射 -->
+      <div v-else-if="tab === 'mapping'" class="lt-body">
+        <a-descriptions :column="3" bordered size="small">
+          <a-descriptions-item label="源表"><span class="num">{{ objById(cur.from)?.table }}</span></a-descriptions-item>
+          <a-descriptions-item label="目标表"><span class="num">{{ objById(cur.to)?.table ?? '--' }}</span></a-descriptions-item>
+          <a-descriptions-item label="关联方式">{{ cur.via ? `经中间表 ${cur.via}` : cur.nullable ? 'LEFT JOIN（允许为空）' : 'INNER JOIN 语义（不允许为空）' }}</a-descriptions-item>
+          <a-descriptions-item label="JOIN 条件" :span="3"><span class="num">{{ cur.join || '--' }}</span></a-descriptions-item>
+        </a-descriptions>
+        <template v-if="cur.quality">
+          <div class="lt-sec t-14 fw-600 lt-sec-row">
+            <span>关联质量</span><span class="t-12 c-3 fw-400">每日 06:00 检查 · 最近 {{ cur.quality.checkedAt }}{{ cur.status === '草稿' ? ' · 测试环境' : '' }}</span>
+          </div>
+          <div class="lt-kpis">
+            <div class="lt-kpi">
+              <span class="t-12 c-3">关联命中率</span>
+              <span class="t-kpi fw-600" :class="hitWarn(cur.quality.hit) ? 'c-warning' : 'c-1'">{{ cur.quality.hit }}%</span>
+              <span class="t-12 c-3">源端非空关联键能在目标端找到记录的比例</span>
+            </div>
+            <div class="lt-kpi">
+              <span class="t-12 c-3">孤儿记录</span>
+              <span class="t-kpi fw-600" :class="cur.quality.orphans && hitWarn(cur.quality.hit) ? 'c-warning' : 'c-1'">{{ fmtInt(cur.quality.orphans) }}</span>
+              <span class="t-12 c-3">关联键有值，但目标端不存在</span>
+            </div>
+            <div class="lt-kpi">
+              <span class="t-12 c-3">关联键为空</span>
+              <span class="t-kpi fw-600 c-1">{{ fmtInt(cur.quality.nulls) }}</span>
+              <span class="t-12 c-3">{{ cur.nullable ? '允许为空，不计入命中率' : '不允许为空' }}</span>
+            </div>
+            <div class="lt-kpi">
+              <span class="t-12 c-3">重复匹配</span>
+              <span class="t-kpi fw-600" :class="cur.quality.dup ? 'c-error' : 'c-1'">{{ fmtInt(cur.quality.dup) }}</span>
+              <span class="t-12 c-3">{{ cur.card === 'N : 1' ? '一条源记录匹配到多条目标（应为 0）' : '目标端主键重复（应为 0）' }}</span>
+            </div>
+          </div>
+          <div v-if="cur.quality.note" class="t-14" :class="hitWarn(cur.quality.hit) ? 'c-warning' : 'c-2'">{{ cur.quality.note }}</div>
+          <template v-if="cur.quality.orphanSamples">
+            <div class="lt-sec t-14 fw-600">孤儿记录分布</div>
+            <a-table :columns="orphanCols" :data-source="cur.quality.orphanSamples" :pagination="false" size="small" row-key="key">
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'count'"><span class="num">{{ fmtInt(record.count) }}</span></template>
+              </template>
+            </a-table>
+          </template>
+        </template>
+        <div v-else class="lt-empty t-14 c-3">{{ cur.status === '已驳回' ? '变更单已驳回，没有做关联检查' : '保存两端对象和关联键后，会在测试环境做一次关联检查' }}</div>
+      </div>
+
+      <!-- 问数路径 -->
+      <div v-else-if="tab === 'paths'" class="lt-body">
+        <template v-if="curGroups.length">
+          <div class="t-14 c-2">{{ objName(curGroups[0].from) }} 和 {{ objName(curGroups[0].to) }} 之间有 {{ curPathCount }} 条路径。发布校验 V13 要求有且只有一条默认路径，其余路径需要用户在问题里指明。</div>
+          <div v-for="g in curGroups" :key="g.from + g.to" class="lt-group">
+            <div class="lt-sec t-14 fw-600 lt-sec-row">
+              <span>{{ objName(g.from) }} → {{ objName(g.to) }}</span>
+              <span class="t-12 c-3 fw-400">{{ g.check }}</span>
+            </div>
+            <div class="lt-paths">
+              <div v-for="(p, i) in g.paths" :key="i" class="lt-path" :class="{ cur: p.links.includes(cur.id) }">
+                <span class="t-12 c-3 num lt-path-no">路径 {{ i + 1 }}</span>
+                <span class="t-14 lt-chain">
+                  <template v-for="(s, j) in chain(p)" :key="j">
+                    <span v-if="s.via" class="c-3 t-12"> —{{ s.via }}→ </span><span class="c-1">{{ objName(s.obj) }}</span>
+                  </template>
+                </span>
+                <span class="t-12 c-3">{{ p.links.length }} 跳</span>
+                <span class="t-12 lt-path-mode" :class="p.isDefault ? 'c-1 fw-600' : 'c-3'">{{ p.isDefault ? '默认路径' : '需用户指明' }}</span>
+                <span class="t-12 c-3 lt-path-hint">{{ p.hint ? `指明方式：${p.hint}` : '问题里没有指明路径时使用' }}</span>
+              </div>
+            </div>
+            <a-table :columns="[{ title: '示例问题', dataIndex: 'q', width: 340 }, { title: '解析路径', key: 'path', width: 280 }, { title: '说明', dataIndex: 'how' }]"
+              :data-source="g.examples" :pagination="false" size="small" row-key="q">
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'path'">
+                  <span :class="g.paths[record.path].links.includes(cur.id) ? 'c-1' : 'c-3'">{{ g.paths[record.path].links.map(linkName).join(' → ') }}</span>
+                </template>
+              </template>
+            </a-table>
+          </div>
+        </template>
+        <template v-else>
+          <div class="t-14 c-2">{{ objName(cur.from) }} 和 {{ cur.to ? objName(cur.to) : '目标对象' }} 之间只有这一条路径，问数直接使用，不需要用户指明（V13 不涉及）。</div>
+          <div v-if="cur.id === 'store_manager'" class="t-14 c-warning">未发布。重新提交时，门店和员工之间会有两条路径（本关系，以及“员工 → 门店 所属门店”的反向），需要指定默认路径。</div>
+          <a-descriptions :column="1" bordered size="small" class="lt-desc">
+            <a-descriptions-item label="正向">{{ objName(cur.from) }} —{{ cur.name }}→ {{ objName(cur.to) }}（{{ cur.card }}）</a-descriptions-item>
+            <a-descriptions-item label="反向">{{ objName(cur.to) }} —{{ cur.reverse || '--' }}→ {{ objName(cur.from) }}</a-descriptions-item>
+            <a-descriptions-item label="问数用法">{{ cur.desc || '--' }}</a-descriptions-item>
+          </a-descriptions>
+        </template>
+      </div>
+
+      <!-- 使用情况 -->
+      <div v-else-if="tab === 'usage'" class="lt-body">
+        <div class="t-14 c-2">{{ cur.usage.length ? `共 ${cur.usage.length} 项依赖本关系：${usageSummary}` : '暂无指标、认证问答、视图或规则依赖本关系' }}</div>
+        <a-table v-if="cur.usage.length" :columns="usageCols" :data-source="cur.usage" :pagination="cur.usage.length > 10 ? TABLE_PAGER : false" size="middle" row-key="name">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'name'">
+              <ObjRef v-if="record.hover" :kind="record.hover.kind" :id="record.hover.id">{{ record.name }}</ObjRef>
+              <span v-else class="c-1">{{ record.name }}</span>
+            </template>
+          </template>
+        </a-table>
+        <div class="t-12 c-3">修改或下线本关系时，以上对象会出现在变更单的影响分析里；已发布的 API 名不可删除或改名（V7）。</div>
+      </div>
+
+      <!-- 版本历史 -->
+      <div v-else class="lt-body">
+        <a-table :columns="histCols" :data-source="cur.history" :pagination="false" size="middle" :row-key="(r: any) => r.ver + (r.cr ?? '') + r.at">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'cr'">
+              <a v-if="record.cr" class="num" @click="crLink(record.cr)">{{ record.cr }}</a>
+              <span v-else class="c-3">启用变更单前</span>
+            </template>
+            <template v-else-if="column.key === 'status'">
+              <span :class="record.status === '草稿' ? 'c-warning' : record.status === '已驳回' ? 'c-error' : record.status === '生效中' ? 'c-1' : 'c-3'">{{ record.status }}</span>
+            </template>
+          </template>
+        </a-table>
+        <div class="t-12 c-3">关系定义只随本体整版发布生效；回滚会生成新的变更单，经审核后随下一次发布生效。</div>
+      </div>
+    </div>
+  </div>
+  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="start" />
+</template>
+
+<style scoped>
+.lt { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
+.lt-list { width: 300px; flex: none; }
+.lt-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
+.lt-selects { display: flex; gap: 8px; }
+.lt-sel { flex: 1; min-width: 0; }
+.lt-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
+.lt-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
+.lt-items li:hover { background: var(--g3); }
+.lt-items li.active { background: var(--brand-bg); }
+.lt-items li.active .lt-name { color: var(--brand); }
+.lt-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.lt-pager { flex: 1; min-height: 0; }
+.lt-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
+.lt-detail { flex: 1; min-width: 0; }
+.lt-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
+.lt-sp { flex: 1; }
+.lt-reject { display: flex; gap: 12px; align-items: center; padding: 6px 16px; border-top: var(--border); border-bottom: var(--border); background: var(--g2); flex: none; }
+.lt-tabs { padding: 0 16px; flex: none; }
+.lt-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
+.lt-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.lt-def { flex-direction: row; gap: 16px; }
+.lt-def-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.lt-def-right { width: 440px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }
+.lt-sec { margin-top: 4px; }
+.lt-sec-row { display: flex; justify-content: space-between; align-items: baseline; }
+.lt-desc :deep(.ant-descriptions-item-label) { width: 112px; }
+.lt-code { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; word-break: break-all; }
+.lt-form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.lt-form :deep(.ant-form-item) { margin-bottom: 12px; }
+.lt-ends { display: flex; align-items: stretch; gap: 8px; }
+.lt-end span { overflow-wrap: anywhere; }
+.lt-end { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border: var(--border); border-radius: var(--radius); min-width: 0; }
+.lt-arrow { width: 120px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.lt-check { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: var(--border); }
+.lt-check-code { width: 32px; flex: none; }
+.lt-check-name { width: 104px; flex: none; }
+.lt-check-note { flex: 1; min-width: 0; text-align: right; }
+.lt-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.lt-kpi { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; border: var(--border); border-radius: var(--radius); }
+.lt-empty { padding: 24px 0; }
+.lt-group { display: flex; flex-direction: column; gap: 8px; }
+.lt-paths { display: flex; flex-direction: column; border: var(--border); border-radius: var(--radius); }
+.lt-path { display: flex; align-items: center; gap: 16px; padding: 8px 12px; }
+.lt-path + .lt-path { border-top: var(--border); }
+.lt-path.cur { background: var(--brand-bg); }
+.lt-path-no { width: 48px; flex: none; }
+.lt-chain { width: 420px; flex: none; }
+.lt-path-mode { width: 72px; flex: none; }
+.lt-path-hint { flex: 1; min-width: 0; }
+.lt-graph { flex: 1; min-height: 0; position: relative; overflow: hidden; border-top: var(--border); }
+.lt-svg { position: absolute; inset: 0; display: block; }
+.lt-legend { display: inline-flex; align-items: center; gap: 6px; }
+.lg-solid, .lg-dash { display: inline-block; width: 24px; height: 0; border-top: 1.5px solid var(--g7); }
+.lg-dash { border-top-style: dashed; }
+.lt-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+.lt-line { fill: none; stroke: var(--g6); stroke-width: 1.5; pointer-events: none; }
+.lt-line.hov { stroke: var(--g8); }
+.lt-line.dash { stroke-dasharray: 5 4; }
+.lt-line.sel { stroke: var(--brand); stroke-width: 2; }
+.lt-elabel { fill: var(--g9); paint-order: stroke; stroke: #fff; stroke-width: 4px; pointer-events: none; }
+.lt-node rect { fill: #fff; stroke: var(--g6); }
+.lt-node text { fill: var(--g10); pointer-events: none; }
+.lt-node.link { cursor: pointer; }
+.lt-node.link:hover rect { stroke: var(--g8); }
+.lt-node.draft rect { stroke-dasharray: 4 3; }
+.lt-node.end rect { stroke: var(--brand); fill: var(--brand-bg); }
+.lt-node.end text { fill: var(--brand); }
+.lt-sel-label rect { fill: #fff; stroke: var(--brand); }
+.lt-sel-label text { fill: var(--brand); }
+.lt-gfoot { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-top: var(--border); flex: none; min-width: 0; }
+</style>

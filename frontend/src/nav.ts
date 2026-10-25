@@ -47,7 +47,7 @@ export const NAV: NavArea[] = [
       { key: 'ontology', title: '本体', icon: 'ApartmentOutlined', pages: [
         { key: 'ontology-overview', title: '本体总览', path: '/build/ontology/overview', phase: 1, group: '资源', note: '关系图谱', component: () => import('@/pages/ontology/OntologyOverview.vue') },
         { key: 'object-types', title: '对象类型', path: '/build/ontology/object-types', phase: 1, group: '资源', note: '页签分三组：定义（概览、属性、关系、数据源与映射）、行为（生命周期、动作、自动化）、使用与治理（指标、视图、权限、版本历史）', component: () => import('@/pages/ontology/ObjectTypes.vue') },
-        { key: 'link-types', title: '关系类型', path: '/build/ontology/link-types', phase: 1, group: '资源' },
+        { key: 'link-types', title: '关系类型', path: '/build/ontology/link-types', phase: 1, group: '资源', component: () => import('@/pages/ontology/LinkTypes.vue') },
         { key: 'action-types', title: '动作类型', path: '/build/ontology/action-types', phase: 3, group: '资源', note: '页签：参数、提交条件、写回模式、执行记录', component: () => import('@/pages/ontology/ActionTypes.vue') },
         { key: 'functions', title: '函数', path: '/build/ontology/functions', phase: 3, group: '资源' },
         { key: 'metrics', title: '指标口径', path: '/build/ontology/metrics', phase: 1, group: '语义', note: '允许的维度、版本历史', component: () => import('@/pages/ontology/Metrics.vue') },
