@@ -252,7 +252,7 @@ stateDiagram-v2
 - 传给外部系统的字段名按外部系统登记：CRM `X-Idempotency-Key`、ERP `srcBillNo`、OMS `X-Request-Id`、WMS `requestNo`；短信平台不支持幂等（`maxRetry=0`），**只发通知、不做写回，也不对账** [已定]。
 - **外部幂等键只用 `act-…` 这一套** [已定]。动作类型目录里的业务键模板（如 `correctOrderStatus:{订单号}:{目标状态}`）存 `biz_key`，和 `idem_key` 分开存；暂存时按它拦截重复（`IDEMPOTENCY_CONFLICT`）前端没有，见 `[推断 P4]`。
 - 幂等键在**暂存时由动态生成**；告警页发起的动作在 `:start-action` 时生成。
-- 新记录的 `idem_key` 唯一（部分唯一索引 `WHERE NOT is_seed`）；同一幂等键重复提交返回已有记录、不再调外部 `[推断 P9]`（前端没有：重新提交总是生成新键 `-rN`，`Actions.vue` L144–145）。种子里 31 个重复的键原样保留（见 5 节约束 5）。
+- 新记录的 `idem_key` 唯一（部分唯一索引 `WHERE NOT is_seed`）；同一幂等键、内容相同的重复提交返回已有记录、不再调外部 `[推断 P9]`；同一幂等键、内容不同返回 409 `IDEMPOTENCY_CONFLICT`（PDE api-index `10a074e`）（前端没有：重新提交总是生成新键 `-rN`，`Actions.vue` L144–145）。种子里 31 个重复的键原样保留（见 5 节约束 5）。
 
 **告警页发起动作**：确认卡字段 = 来源告警、触发值、审批人、幂等键 `act-<告警号>`。审批人**照前端按对象类型写死**（`Alerts.vue` L173：商品 → 品类经理 王敏，其他 → 区域运营 陈立军）；改为取动作类型审批配置见 `[推断 P5]`；确认后直接 `审批中`（处理人即确认人）。一条告警只对应一个动作（幂等键由告警号决定）。
 
@@ -466,12 +466,12 @@ stateDiagram-v2
 | 转派 | `POST /alerts/{id}:transfer {to}` | 在途锁；`to` ≠ 当前处理人（前端下拉已排除，`Alerts.vue` L278） |
 | 转派选人 | `GET /people` | 返回 `string[]`（用户姓名），**只返回 `sys_user` 中带 `alert_assignable` 标记的用户，按 mock `PEOPLE` 原顺序**，转派下拉与现在完全一样。`sys_user` 归 admin 模块（PDE），动态只读，不读种子 JSON、不建自己的表 [已定：群决定]；种子见 5 |
 | 关闭 / 批量关闭 | `POST /alerts/{id}:close {as, reason}`、`POST /alerts:batch-close {ids, as, reason}` | `as` ∈ 已解决/已忽略；仅本人处理中；批量返回 `{closed}`（`skipped[]` 见 `[推断 P3]`） |
-| 告警发起动作 | `POST /alerts/{id}:start-action` | 生成 action_run（审批中），幂等键 `act-<告警号>` 由动态生成并返回（不需要请求头 `Idempotency-Key`） |
+| 告警发起动作 | `POST /alerts/{id}:start-action` | 生成 action_run（审批中），幂等键 `act-<告警号>` 由动态生成并返回（不需要请求头 `Idempotency-Key`）；提交条件不满足返回 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed[{name, fail}]`（通用码，PDE api-index `10a074e`） |
 | 动作列表 | `GET /action-runs?tab&status&action&actionType&sysId&objKind&objId&alertId&ruleId&kw&page&size`（参数见下方「唯一执行记录接口」） | 一屏 16；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页「执行记录」「最近异常」也用这个接口（`actionType` + `status` 多选，每页 14），同一张表 |
 | 筛选下拉 | `GET /actions/meta` | `ACTION_NAMES`、`ACTION_SYSTEMS`、`ACTION_META`（mock/actions.ts） |
 | 动作详情 | `GET /action-runs/{id}` | 返回 `ActionRun` + `log`（时间线 = `action_run_log`）、确认人、能否操作及原因 |
-| 暂存 | `POST /action-runs:stage` | 规则引擎、推演、问数调用；只生成待确认；**幂等键此时由动态生成**并返回 `ActionRecord`（含 `id, idemKey, status:'待确认', source.confirmer`）；业务键冲突拦截见 `[推断 P4]` |
-| 确认提交 / 撤回 | `POST /action-runs/{id}:confirm`、`POST /action-runs/{id}:withdraw {reason}` | 有 `source.confirmer` 时仅该确认人 |
+| 暂存 | `POST /action-runs:stage` | 规则引擎、推演、问数调用；只生成待确认；**幂等键此时由动态生成**并返回 `ActionRecord`（含 `id, idemKey, status:'待确认', source.confirmer`）；业务键冲突拦截见 `[推断 P4]`；提交条件不满足返回 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed[{name, fail}]`（通用码，PDE api-index `10a074e`） |
+| 确认提交 / 撤回 | `POST /action-runs/{id}:confirm`、`POST /action-runs/{id}:withdraw {reason}` | 有 `source.confirmer` 时仅该确认人；`:confirm` 重新校验提交条件，提交条件不满足返回 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed[{name, fail}]`（通用码，PDE api-index `10a074e`） |
 | 审批通过 | `POST /action-runs/{id}:approve` | 前端没有页面调用，但「审批中 → 执行中」在前端状态里存在，后台要有这一步；审批入口 [待定]。驳回 `:reject` 见 `[推断 P2]` |
 | 重新提交 | `POST /action-runs/{id}:resubmit` | 只限失败；已对账·外部未执行返回 409 `STATE_INVALID`；返回新动作 id 与新幂等键 |
 | 人工对账 | `POST /action-runs/{id}:reconcile {result, note}` | `result` ∈ 外部已成功/外部未执行/仍无法确认；返回 `ActionRecord`，结论在 `reconcile` 字段。`GET …:query-external` 见 `[推断 P7]` |
@@ -490,7 +490,7 @@ stateDiagram-v2
 | 状态变化 / 非法迁移 | `GET /object-types/{id}/lifecycle/changes?illegal=1&page&size`、`/illegal?since=7d` | 一屏 6；非法迁移按 from→to 汇总，取 SM-ORD 命中 |
 | 行为汇总 | `GET /object-types/{id}/action-types`、`/action-runs?status&action&page`、`/rules`、`/rule-hits?rule&page` | 只读 |
 
-错误码：先用**通用错误码**（骨架 `1aeb5d1` `app/core/errors.py`、`CONVENTIONS.md` §2）：状态不允许 → 409 `STATE_INVALID`（原 `ACTION_STATE_INVALID`）；关闭原因、撤回原因、对账说明等必填为空 → 422 `VALIDATION_FAILED`，`details.fields=[{field, message}]`（原 `REASON_REQUIRED`）；另有 409 `DUPLICATE_KEY` / `EMPTY_INPUT` / `VERSION_CONFLICT`、403 `READONLY` / `NO_PERMISSION`、404 `NOT_FOUND`。动态新增（HTTP 状态由动态定）：
+错误码：先用**通用错误码**（骨架 `1aeb5d1` `app/core/errors.py`、`CONVENTIONS.md` §2）：动作提交条件不满足（`:start-action`、`:stage`、`:confirm`，含问数「发起」经 `:stage`）→ 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed=[{name, fail}]`，`name`/`fail` 即动作类型提交条件的 `name`/`fail`（前端 `SubmitCond{kind, name, expr, fail}`，`mock/actionEvent.ts` L192；动态页面前端不求值提交条件，后台照 PDE 规则重新校验）[已定：PDE api-index `10a074e`，`ACTION_BLOCKED` 已取消，动态不另设码]；状态不允许 → 409 `STATE_INVALID`（原 `ACTION_STATE_INVALID`）；关闭原因、撤回原因、对账说明等必填为空 → 422 `VALIDATION_FAILED`，`details.fields=[{field, message}]`（原 `REASON_REQUIRED`）；另有 409 `DUPLICATE_KEY` / `EMPTY_INPUT` / `VERSION_CONFLICT`、403 `READONLY` / `NO_PERMISSION`、404 `NOT_FOUND`。动态新增（HTTP 状态由动态定）：
 
 | code | HTTP | 场景 |
 |---|---|---|
@@ -498,7 +498,7 @@ stateDiagram-v2
 | `NOT_ASSIGNEE` | 403 | 非处理人处理告警 |
 | `ALERT_LOCKED_BY_ACTION` | 409 | 告警有进行中的关联动作，不能关闭 / 转派 |
 | `ALREADY_RESUBMITTED` | 409 | 失败动作已重新提交过（`retried_as` 非空） |
-| `IDEMPOTENCY_CONFLICT` | 409 | 业务键重复暂存（仅 `[推断 P4]` 采纳时用） |
+| `IDEMPOTENCY_CONFLICT` | 409 | 通用码（PDE api-index `10a074e`）：同一幂等键、请求内容不同；或同动作类型同业务键已有在途动作（`[推断 P4]`）。同一幂等键、内容相同仍返回已有记录（`[推断 P9]`）。前端没有这两种情况 |
 | `STAGE_MAPPING_MISSING` | 422 | 自动暂存缺必填参数的取值来源 |
 | `SCENARIO_NOT_OWNER` | 403 | 非 owner 改名 / 运行 / 转动作 |
 | `SCENARIO_RUNNING` | 409 | 方案运行中（status=running），不能再运行 |
@@ -734,7 +734,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | P6 | 操作人限制 | 确认 / 撤回只在有 `source.confirmer` 时限本人（L87）；重新提交、人工对账不限操作人 | 确认 / 撤回 / 重新提交 / 人工对账限定为确认人或动作类型 `runners` | 动态本体负责人（原第 7 节第 9 条） |
 | P7 | 人工对账前先按幂等键查一次 | 对账弹窗只有结论 + 说明，没有「按幂等键查询」按钮 | 加 `GET /action-runs/{id}:query-external`（经 Palantir `query_by_key`），对账前先查 | Palantir专家 |
 | P8 | 规则版本「对比」「回滚」 | 两个链接没有点击处理（`Rules.vue` L469） | `POST /rules/{id}:rollback {toVersion}`，回滚生成新 CR | 动态本体负责人 |
-| P9 | 同一幂等键重复提交返回已有记录 | 前端没有按幂等键查重；重新提交总是新 run + 新键 `-rN`（`Actions.vue` L144–145） | `POST` 写入前按 `idem_key` 查已有记录，有则直接返回、不调外部 | Palantir专家 |
+| P9 | 同一幂等键重复提交返回已有记录 | 前端没有按幂等键查重；重新提交总是新 run + 新键 `-rN`（`Actions.vue` L144–145） | `POST` 写入前按 `idem_key` 查已有记录：内容相同直接返回、不调外部；内容不同 409 `IDEMPOTENCY_CONFLICT` | Palantir专家 |
 | P10 | 对账为外部已成功后告警自动转已解决 | 对账（`Actions.vue` L177–197）只改动作状态和日志，不动告警；告警页只在动作「成功」时写「动作成功后告警自动转为已解决」（`Alerts.vue` L182） | 对账 `succeeded` 后，关联告警按「动作成功」同样处理：处理中 → 已解决并记 log | Palantir专家 |
 
 已核对、**不是**推断项（前端已有，照做）：转派目标 ≠ 当前处理人（`Alerts.vue` L278 下拉已排除）；已对账·外部未执行不能重新提交（L205 提示重新发起）；确认人只在有 `source.confirmer` 时校验（L87）；重新提交只限失败且未重提（L143），新记录发起人 = 当前操作人、来源按 L162 处理。
