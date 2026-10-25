@@ -18,6 +18,8 @@ import { message } from 'ant-design-vue';
 interface M {
   id: string; name: string; api: string; group: string; unit: string; version: string;
   status: '已发布' | '草稿' | '变更中' | '已下线'; owner: string;
+  /** 已提交审核、尚未发布的变更单（不是草稿，不能在这里编辑） */
+  review?: { cr: string; note: string };
 }
 const LIST: M[] = [
   { id: 'gmv', name: '销售额（不含税）', api: 'sales_amount_net', group: '销售', unit: '元', version: 'v3', status: '已发布', owner: '陈立军' },
@@ -26,7 +28,7 @@ const LIST: M[] = [
   { id: 'repeat_sales_tax', name: '复购客户销售额（含税）', api: 'repeat_customer_sales_gross', group: '销售', unit: '元', version: 'v1', status: '已发布', owner: '刘婷' },
   { id: 'order_cnt', name: '有效订单数', api: 'valid_order_count', group: '销售', unit: '单', version: 'v1', status: '已发布', owner: '陈立军' },
   { id: 'atv', name: '客单价（不含税）', api: 'avg_ticket_value', group: '销售', unit: '元', version: 'v1', status: '草稿', owner: '刘婷' },
-  { id: 'refund_rate', name: '退款率', api: 'refund_rate', group: '销售', unit: '%', version: 'v2', status: '已发布', owner: '刘婷' },
+  { id: 'refund_rate', name: '退款率', api: 'refund_rate', group: '销售', unit: '%', version: 'v2', status: '变更中', owner: '刘婷', review: { cr: 'CR-0010', note: '审核中：v2 → v3，改按退款完成时间统计' } },
   { id: 'gross_margin', name: '毛利率', api: 'gross_margin_rate', group: '利润', unit: '%', version: 'v2', status: '变更中', owner: '刘婷' },
   { id: 'gross_profit', name: '毛利额', api: 'gross_profit', group: '利润', unit: '元', version: 'v2', status: '已发布', owner: '刘婷' },
   { id: 'ship_ontime', name: '出库及时率', api: 'ship_ontime_rate', group: '履约', unit: '%', version: 'v1', status: '已发布', owner: '周晓峰' },
@@ -174,6 +176,7 @@ const refCols = [
         <span class="t-14 c-3 num">{{ cur.api }} · {{ cur.unit }}</span>
         <a-tag :color="statusColor(cur.status)">{{ cur.status }}</a-tag>
         <span class="t-14 c-3">口径 {{ cur.version }}</span>
+        <span v-if="cur.review" class="t-12 c-3">变更单 <a @click="router.push({ path: '/build/ontology/releases', query: { cr: cur.review.cr } })">{{ cur.review.cr }}</a> {{ cur.review.note }}</span>
         <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
@@ -193,7 +196,7 @@ const refCols = [
       <div v-if="tab === 'def'" class="mt-body mt-def">
         <div class="mt-def-left">
           <div class="mt-sec t-14 fw-600 mt-sec-row">
-            <span>计算公式<a-tag v-if="isDraft" color="warning" class="mt-diff">修改</a-tag></span>
+            <span>计算公式<a-tag v-if="isDraft" class="mt-diff">修改</a-tag></span>
             <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit">编辑定义</a-button></a-tooltip>
           </div>
           <div class="mt-formula t-14 num">{{ FORMULA }}</div>
