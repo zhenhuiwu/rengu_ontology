@@ -14,7 +14,7 @@ export const PDE_RESOLVERS: Record<string, (id: string) => ObjView | null> = {
     const failed = checks.filter((c) => c.result === '失败');
     return {
       kind: 'object-type', kindLabel: '对象类型', id: t.key, title: t.name, code: t.api,
-      status: failed.length ? { text: `质量检查失败 ${failed.length} 项`, color: 'error' } : { text: '质量检查通过', color: 'success' },
+      status: failed.length ? { text: `质量检查失败 ${failed.length} 项`, color: 'error' } : { text: '质量检查通过', color: 'default' },
       brief: [
         { label: '分组', value: t.group }, { label: '对象数', value: fmtInt(t.count) },
         { label: '数据源', value: t.source }, { label: '数据截至', value: t.cutoff },

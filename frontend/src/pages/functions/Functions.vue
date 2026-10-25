@@ -37,7 +37,7 @@ const LSIZE = 12;
 const lpage = ref(1);
 watch([kw, statusF], () => { lpage.value = 1; });
 const listPaged = computed(() => paginate(listRows.value, { page: lpage.value, size: LSIZE }));
-const statusBadge = (s: OntFunction['status']) => (s === '已发布' ? 'success' : s === '草稿' ? 'processing' : 'default');
+const statusBadge = (s: OntFunction['status']) => (s === '草稿' ? 'warning' : 'default');
 
 const fn = computed(() => fns.value.find((f) => f.id === q('fn')) ?? fns.value[0]);
 const tab = computed({ get: () => q('tab') || 'def', set: (v: string) => setQuery({ tab: v === 'def' ? undefined : v }) });
@@ -218,7 +218,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
             <template #bodyCell="{ column, record }">
               <span v-if="column.key === 'ver'" class="num c-1">{{ record.ver }}</span>
               <span v-else-if="column.key === 'time'" class="num c-2">{{ record.time }}</span>
-              <a-tag v-else-if="column.key === 'status'" :color="record.status === '当前' ? 'success' : undefined">{{ record.status }}</a-tag>
+              <a-tag v-else-if="column.key === 'status'" >{{ record.status }}</a-tag>
               <span v-else-if="column.key === 'op'">
                 <a-tooltip v-if="record.status !== '当前'" :title="reason"><a :class="{ 'fn-dis': readonly }" @click="!readonly && rollback(record)">回滚到此版本</a></a-tooltip>
               </span>

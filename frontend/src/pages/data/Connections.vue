@@ -47,7 +47,7 @@ watch(() => q('ds'), (id) => {
 const tab = computed({ get: () => q('tab') || 'params', set: (v: string) => setQuery({ tab: v === 'params' ? undefined : v }) });
 const select = (id: string) => setQuery({ ds: id });
 
-const statusBadge = (s: DsStatus) => (s === '正常' ? 'success' : s === '异常' ? 'error' : 'default');
+const statusBadge = (s: DsStatus) => (s === '异常' ? 'error' : 'default');
 const typeShort: Record<DsType, string> = { PostgreSQL: 'PG', '达梦 DM8': 'DM8', '人大金仓 KingbaseES': 'KES', MySQL: 'MySQL', ERP: 'ERP' };
 
 // ---------- 详情：连接参数 ----------
@@ -210,7 +210,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         <div class="cn-title">
           <span class="t-20 fw-600 c-1">{{ selected.name }}</span>
           <a-tag>{{ selected.type }}</a-tag>
-          <a-tag v-if="modeText(selected)" color="blue">{{ modeText(selected) }}</a-tag>
+          <a-tag v-if="modeText(selected)">{{ modeText(selected) }}</a-tag>
           <a-badge :status="statusBadge(selected.status)" :text="selected.status" />
         </div>
         <a-space>
@@ -266,7 +266,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
               <span v-if="column.key === 'name'" class="num c-1">{{ record.name }}</span>
               <span v-else-if="column.key === 'rows'" class="num">{{ fmtInt(record.rows) }}</span>
               <span v-else-if="column.key === 'objectType'">
-                <a-tag v-if="record.objectType" color="blue">{{ record.objectType }}</a-tag><span v-else class="c-3">未映射</span>
+                <a-tag v-if="record.objectType">{{ record.objectType }}</a-tag><span v-else class="c-3">未映射</span>
               </span>
               <span v-else-if="column.key === 'updatedAt'" class="num">{{ record.updatedAt }}</span>
             </template>
