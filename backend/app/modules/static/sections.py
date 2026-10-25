@@ -179,26 +179,24 @@ class QaPathsSection(_Base):
     section = "qaPaths"
 
     async def current(self, repo: StaticRepo) -> Obj:
+        # 按 repo id 顺序（组首次出现顺序，见 repo.qa_paths）；不要按 object_id 重排。
         paths, examples = await repo.qa_paths()
         out: Obj = {}
-        for p in sorted(paths, key=lambda x: (x.from_object_id, x.to_object_id, x.seq)):
-            g = out.setdefault(
-                p.group_key,
-                {
-                    "from": p.from_object.code,
-                    "to": p.to_object.code,
-                    "check": None,
-                    "paths": [],
-                    "examples": [],
-                },
-            )
+
+        def group(frm: str, to: str) -> Obj:
+            key = f"{frm}→{to}"
+            return out.setdefault(key, {"from": frm, "to": to, "check": None, "paths": [], "examples": []})
+
+        for p in paths:
+            g = group(p.from_object.code, p.to_object.code)
             if p.is_default:
                 g["check"] = p.check_note
             g["paths"].append(
                 shapes.opt({"links": [s.link.code for s in p.steps], "isDefault": p.is_default}, hint=p.hint)
             )
-        for e in sorted(examples, key=lambda x: (x.from_object_id, x.to_object_id, x.seq)):
-            g = out[f"{e.from_object.code}→{e.to_object.code}"]
+        for e in examples:
+            # 组只有 examples、没有 paths 时也建空组（避免 KeyError）
+            g = group(e.from_object.code, e.to_object.code)
             g["examples"].append({"q": e.question, "path": e.path.seq if e.path else -1, "how": e.how})
         return out
 
