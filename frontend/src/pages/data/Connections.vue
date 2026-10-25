@@ -97,7 +97,7 @@ async function testConn(d: Datasource) {
 const confirm = useConfirmStore();
 async function remove(d: Datasource) {
   const ok = await confirm.ask({
-    title: '删除数据连接', target: `${d.name}（${d.id}）`, danger: true, okText: '删除', irreversible: true,
+    title: '删除数据连接', target: `${d.name}（${d.id}）`, danger: true, okText: '删除',
     fields: [
       { label: '类型', value: d.type },
       { label: '地址', value: `${d.host}:${d.port} / ${d.database}` },
@@ -243,8 +243,8 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-descriptions-item label="用户名"><span class="num">{{ selected.user }}</span></a-descriptions-item>
           <a-descriptions-item label="密码"><span class="num">••••••••</span><span class="t-12 c-3 cn-gap">已加密保存，不回显</span></a-descriptions-item>
           <a-descriptions-item label="SSL">{{ selected.ssl ? '启用' : '未启用' }}</a-descriptions-item>
-          <a-descriptions-item v-if="selected.type === '达梦 DM8'" label="兼容模式">{{ selected.compatMode }}</a-descriptions-item>
-          <a-descriptions-item v-if="selected.type === '人大金仓 KingbaseES'" label="database_mode">{{ selected.databaseMode }}</a-descriptions-item>
+          <a-descriptions-item v-if="selected.type === '达梦 DM8'" label="兼容模式" :span="2">{{ selected.compatMode }}</a-descriptions-item>
+          <a-descriptions-item v-if="selected.type === '人大金仓 KingbaseES'" label="database_mode" :span="2">{{ selected.databaseMode }}</a-descriptions-item>
           <a-descriptions-item v-if="selected.type === 'ERP'" label="ERP 系统">{{ selected.erpSystem }}</a-descriptions-item>
           <a-descriptions-item v-if="selected.type === 'ERP'" label="应用 ID"><span class="num">{{ selected.appId }}</span></a-descriptions-item>
           <a-descriptions-item label="连接串" :span="2"><span class="num">{{ jdbc(selected) }}</span></a-descriptions-item>

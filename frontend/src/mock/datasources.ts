@@ -77,6 +77,8 @@ const TBL_CN: Record<string, [string, string | null]> = {
   member: ['会员', '会员'], member_level: ['会员等级', '会员等级'], store: ['门店', '门店'], region: ['大区', '大区'], sku: ['商品 SKU', '商品'],
   category: ['品类', '品类'], promo_rule: ['促销规则', '促销活动'], warehouse: ['仓库', '仓库'], stock_snapshot: ['库存快照', '库存'],
   supplier: ['供应商', '供应商'], purchase_order: ['采购单', '采购单'], shipment: ['出库单', '出库单'], employee: ['员工', '员工'],
+  payment: ['支付流水', null], coupon: ['优惠券', null], price_change: ['调价记录', null], pos_shift: ['收银班次', null],
+  cashier: ['收银员', null], device: ['收银设备', null], daily_close: ['门店日结', null],
 };
 const cache = new Map<string, DsTable[]>();
 /** 某个数据源的库表清单（按 schema、表名排序） */
