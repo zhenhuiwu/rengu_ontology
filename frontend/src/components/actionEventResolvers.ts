@@ -10,7 +10,7 @@ const runColor = (s: RunStatus): NonNullable<ObjView['status']>['color'] =>
   s === '失败' ? 'error' : s === '结果未知' || s === '待确认' ? 'warning' : 'default';
 const runText = (s: RunStatus) => (s === '结果未知' ? '结果未知 · 待对账' : s);
 const evColor = (o: EventOutcome): NonNullable<ObjView['status']>['color'] =>
-  o === '投递失败' ? 'error' : o === '部分投递' ? 'warning' : 'default';
+  o === '投递失败' ? 'error' : 'default';
 const addSec = (t: string, s: number) => {
   const d = new Date(t.replace(' ', 'T') + '+08:00');
   d.setSeconds(d.getSeconds() + s);
@@ -115,7 +115,7 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
       { time: addSec(ev.at, 0), text: ev.outcome === '已去重' ? `去重命中，丢弃（${t.dedupKey}，${t.dedupWindow}）` : '去重检查通过', status: 'done' },
     ];
     if (ev.outcome !== '已去重') tl.push({ time: addSec(ev.at, 1), text: ev.outcome === '投递失败' ? '投递失败，3 次重试后进入死信队列' : ev.outcome === '部分投递' ? `投递 ${ev.subscribers} 个订阅方，1 个超时待重试` : `投递 ${ev.subscribers} 个订阅方`,
-      status: ev.outcome === '投递失败' ? 'error' : ev.outcome === '部分投递' ? 'warn' : 'done' });
+      status: ev.outcome === '投递失败' ? 'error' : 'done' });
     const related: NonNullable<ObjView['related']> = [];
     if (ev.objKind) related.push({ kind: ev.objKind, id: ev.objId, label: ev.objLabel, note: `事件对象（${t.object}）` });
     if (t.ruleId) related.push({ kind: 'rule', id: t.ruleId, label: `${t.ruleId} ${RULES[t.ruleId].name}`, note: '产生该事件的规则' });

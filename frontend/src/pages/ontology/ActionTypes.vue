@@ -316,13 +316,13 @@ const verCols = [
             <a-descriptions-item label="目标对象">{{ cur.target }}（{{ cur.targetApi }}）</a-descriptions-item>
             <a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item>
             <a-descriptions-item label="说明" :span="2"><span class="at-ell" :title="cur.desc">{{ cur.desc }}</span></a-descriptions-item>
-            <a-descriptions-item label="谁可以执行">{{ cur.runners }}</a-descriptions-item>
-            <a-descriptions-item label="审批">{{ cur.approval }}</a-descriptions-item>
+            <a-descriptions-item label="谁可以执行"><span class="at-ell" :title="cur.runners">{{ cur.runners }}</span></a-descriptions-item>
+            <a-descriptions-item label="审批"><span class="at-ell" :title="cur.approval">{{ cur.approval }}</span></a-descriptions-item>
             <a-descriptions-item label="写回系统">{{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span></a-descriptions-item>
             <a-descriptions-item label="写回接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
             <a-descriptions-item label="幂等键规则" :span="2"><span class="num">{{ eff.idemKey }}</span></a-descriptions-item>
-            <a-descriptions-item label="超时">{{ eff.timeout }}</a-descriptions-item>
-            <a-descriptions-item label="重试">{{ eff.retry }}</a-descriptions-item>
+            <a-descriptions-item label="超时"><span class="at-ell" :title="eff.timeout">{{ eff.timeout }}</span></a-descriptions-item>
+            <a-descriptions-item label="重试"><span class="at-ell" :title="eff.retry">{{ eff.retry }}</span></a-descriptions-item>
           </a-descriptions>
           <div class="at-sec t-14 fw-600 at-sec-row">
             <span>使用该动作的规则与告警<InfoTip text="点规则编号在当前页查看规则" /></span>
@@ -437,8 +437,8 @@ const verCols = [
             </a-descriptions-item>
             <a-descriptions-item label="接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
             <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ eff.idemKey }}</span><span v-if="sys"> · 请求头 {{ sys.idemKey }}</span></a-descriptions-item>
-            <a-descriptions-item label="超时">{{ eff.timeout }}</a-descriptions-item>
-            <a-descriptions-item label="重试">{{ eff.retry }}</a-descriptions-item>
+            <a-descriptions-item label="超时"><span class="at-ell" :title="eff.timeout">{{ eff.timeout }}</span></a-descriptions-item>
+            <a-descriptions-item label="重试"><span class="at-ell" :title="eff.retry">{{ eff.retry }}</span></a-descriptions-item>
             <a-descriptions-item label="超时处理" :span="2">
               <span v-if="internal" class="c-2">本体内部编辑，不存在结果未知</span>
               <span v-else class="c-warning at-ell" :title="`结果未知 · 待对账：不重试，${UNKNOWN_FOLLOWUP}`"><QuestionCircleOutlined /> 结果未知 · 待对账：不重试，{{ UNKNOWN_FOLLOWUP }}</span>

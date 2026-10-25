@@ -180,7 +180,7 @@ const recentCols = [
   { title: '延迟', key: 'lat', width: 96, align: 'right' as const },
   { title: '结果', key: 'outcome', width: 120 },
 ];
-const outcomeBadge = (o: EventOutcome) => (o === '投递失败' ? 'error' : o === '部分投递' ? 'warning' : 'default');
+const outcomeBadge = (o: EventOutcome) => (o === '投递失败' ? 'error' : 'default');
 
 /* 版本历史 */
 const versions = computed(() => versionsOf(cur.value.version, cur.value.owner, EVENT_VERSION_NOTES));
@@ -285,7 +285,7 @@ const verCols = [
             <a class="t-14 num" @click="drawer.open('event', r.id)">{{ r.id }}</a>
             <span class="t-12 c-2 num">{{ r.at }}</span>
             <span class="t-12 c-2 et-ev-s" :title="r.summary">{{ r.summary }}</span>
-            <span class="t-12" :class="r.outcome === '投递失败' ? 'c-error' : r.outcome === '部分投递' ? 'c-warning' : 'c-3'">{{ r.outcome }}</span>
+            <span class="t-12" :class="r.outcome === '投递失败' ? 'c-error' : 'c-3'">{{ r.outcome }}</span>
           </div>
           <div v-if="!recentAll.length" class="t-12 c-3">草稿未发布，暂无事件</div>
         </div>
@@ -385,7 +385,7 @@ const verCols = [
             </template>
           </a-table>
         </div>
-        <AppPagination v-model:page="eq.page.value" variant="simple" :total="recent.total" :size="eq.size.value" unit="个事件" :empty="false">
+        <AppPagination v-model:page="eq.page.value" variant="simple" class="et-pg-nt" :total="recent.total" :size="eq.size.value" unit="个事件" :empty="false">
           <template #extra><span class="t-12 c-2">保留期 {{ cur.retention }}</span><InfoTip text="事件流不显示总数" /></template>
         </AppPagination>
       </div>
@@ -451,6 +451,7 @@ const verCols = [
 .et-desc.et-desc :deep(.ant-descriptions-view > table) { table-layout: fixed; width: 100%; }
 .et-desc :deep(.ant-descriptions-item-label) { width: 96px; white-space: nowrap; }
 .et-desc :deep(.ant-descriptions-item-content) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.et-pg-nt > :deep(.num:first-child) { display: none; }
 .et-ell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et-sub { display: grid; grid-template-columns: 72px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: var(--border); }
 .et-empty { margin-top: 32px; }
