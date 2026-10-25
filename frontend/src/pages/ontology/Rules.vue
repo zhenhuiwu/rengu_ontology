@@ -8,7 +8,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { QuestionCircleOutlined } from '@ant-design/icons-vue';
+import { QuestionCircleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
@@ -58,7 +58,7 @@ const STATUS_OPTS = computed(() => ['全部', ...new Set(RULE_DEFS.map((r) => ru
 const filtered = computed(() => RULE_DEFS.filter((r) => (trig.value === '全部' || r.trigger.kind === trig.value)
   && (stf.value === '全部' || ruleStatus(r).text === stf.value)
   && (!kw.value || r.name.includes(kw.value) || r.id.toLowerCase().includes(kw.value.toLowerCase()))));
-const LPAGE = 12;
+const LPAGE = 16;
 const lpage = ref(1);
 watch([kw, trig, stf], () => { lpage.value = 1; });
 const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
@@ -224,13 +224,9 @@ const verCols = [
       </div>
       <ul class="ru-items">
         <li v-for="r in list" :key="r.id" :class="{ active: r.id === base.id }" @click="pick(r.id)">
-          <div class="ru-row">
+          <div class="ru-row" :title="`${r.id} · ${r.trigger.kind} · ${objKindLabel(r.objKind)} · ${r.output}`">
             <span class="t-14 ru-name">{{ r.name }}</span>
-            <span class="t-12 num c-3"><span v-if="r.status !== '已发布'" :class="ruleStatus(r).badge === 'warning' ? 'tl-attention' : 'c-3'">{{ ruleStatus(r).text }} · </span>v{{ r.version }}</span>
-          </div>
-          <div class="ru-row">
-            <span class="t-12 c-3 num">{{ r.id }}</span>
-            <span class="t-12 c-3">{{ r.trigger.kind }} · {{ objKindLabel(r.objKind) }} · {{ r.output }}</span>
+            <span class="t-12 num ru-meta"><span v-if="r.status !== '已发布'" :class="ruleStatus(r).badge === 'warning' ? 'tl-attention' : 'c-2'">{{ ruleStatus(r).text }} · </span><span class="c-1">v{{ r.version }}</span></span>
           </div>
         </li>
       </ul>
@@ -276,7 +272,8 @@ const verCols = [
         </div>
         <div class="ru-sec t-14 fw-600">{{ rule.desc }}</div>
         <div class="ru-tool">
-          <span class="t-12 c-3">以下条件同时满足（{{ rule.logic }}）时命中；指标引用的是本体里发布的口径，口径升版不会自动跟随</span>
+          <span class="t-12 c-2">以下条件同时满足（{{ rule.logic }}）时命中</span>
+          <a-tooltip title="指标引用的是本体里发布的口径，口径升版不会自动跟随"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
           <span class="ru-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!isDraft">添加条件</a-button></a-tooltip>
         </div>
@@ -331,7 +328,8 @@ const verCols = [
       <div v-else-if="tab === 'trigger'" class="ru-body">
         <div class="ru-tool">
           <a-segmented :value="rule.trigger.kind" :options="['定时', '事件']" size="small" :disabled="!isDraft" />
-          <span class="t-12 c-3">{{ rule.trigger.kind === '定时' ? '按计划时间批量计算' : '收到事件后逐条计算，延迟秒级' }}</span>
+          <span class="t-12 c-2">{{ rule.trigger.kind === '定时' ? '按计划时间批量计算' : '收到事件后逐条计算，延迟秒级' }}</span>
+          <a-tooltip title="规则版本发布后才按新的触发方式运行；草稿里的修改只在回放试跑中生效。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
           <span class="ru-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!isDraft">修改触发方式</a-button></a-tooltip>
         </div>
@@ -351,7 +349,6 @@ const verCols = [
           <a-descriptions-item label="事件去重">{{ evType?.dedupKey }}，窗口 {{ evType?.dedupWindow }}</a-descriptions-item>
           <a-descriptions-item label="近 7 天收到">{{ fmtInt(evType?.weekly) }} 条事件，命中 {{ fmtInt(hits7) }} 次</a-descriptions-item>
         </a-descriptions>
-        <div class="t-12 c-3">规则版本发布后才按新的触发方式运行；草稿里的修改只在回放试跑中生效。</div>
       </div>
 
       <!-- 动作 -->
@@ -365,12 +362,11 @@ const verCols = [
             <a-descriptions-item label="幂等键"><span class="num">{{ actType?.idemKey ?? '--' }}</span></a-descriptions-item>
           </a-descriptions>
           <div class="ru-sec t-14 fw-600 ru-sec-row">
-            <span>自动暂存动作</span>
+            <span>自动暂存动作 <a-tooltip title="命中后按下面的映射生成动作，放进动作中心“待确认”，由确认人逐条确认后才提交外部系统；规则不会直接执行动作。"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip></span>
             <a-tooltip :title="editTip">
               <a-switch :checked="stageEdit.enabled" :disabled="!isDraft" size="small" @change="(v: any) => (ensureEdits().autoStage.enabled = !!v)" />
             </a-tooltip>
           </div>
-          <div class="t-12 c-3">命中后按下面的映射生成动作，放进动作中心“待确认”，由确认人逐条确认后才提交外部系统；规则不会直接执行动作。</div>
           <div class="ru-form">
             <span class="t-12 c-3">动作类型</span>
             <a-select :value="stageEdit.actionTypeId || undefined" :options="actOptions" :disabled="!isDraft || !stageEdit.enabled" placeholder="选择动作类型" size="small" @change="(v: any) => onStageType(v)" />
@@ -391,15 +387,14 @@ const verCols = [
           </a-table>
         </div>
         <div class="ru-act-right">
-          <div class="ru-sec t-14 fw-600 ru-sec-row"><span>已暂存的动作</span><span class="t-12 c-3 fw-400">待确认 {{ stagedPending }} 条 · 共 {{ staged.length }} 条</span></div>
+          <div class="ru-sec t-14 fw-600 ru-sec-row"><span>已暂存的动作 <a-tooltip title="在左侧导航“运行 · 动作中心”的“待确认”里确认或撤回。"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip></span><span class="t-12 c-2 fw-400">待确认 {{ stagedPending }} 条 · 共 {{ staged.length }} 条</span></div>
           <div v-for="a in staged.slice(0, 9)" :key="a.id" class="ru-st">
             <span class="t-12 num c-2">{{ a.id }}</span>
-            <span class="t-12 c-3 ru-st-o">{{ a.objLabel }}</span>
+            <span class="t-12 c-1 ru-st-o" :title="a.objLabel">{{ a.objLabel }}</span>
             <span v-if="a.status === '结果未知'" class="t-12 tl-attention"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
             <a-badge v-else :status="a.status === '待确认' ? 'warning' : a.status === '失败' ? 'error' : 'default'" :text="a.status" />
           </div>
           <div v-if="!staged.length" class="t-12 c-3">暂无。开启后命中生成的动作会出现在这里和动作中心“待确认”。</div>
-          <div class="t-12 c-3">在左侧导航“运行 · 动作中心”的“待确认”里确认或撤回。</div>
         </div>
       </div>
 
@@ -439,12 +434,12 @@ const verCols = [
         </div>
         <template v-if="result">
           <div class="ru-stats">
-            <div><div class="t-12 c-3">实际命中（v{{ base.version }}）</div><div class="t-20 fw-600 c-1 num">{{ result.actual }}</div></div>
-            <div><div class="t-12 c-3">试跑会命中（{{ rver === 'draft' ? `草稿 v${draftDef?.version}` : `当前 v${base.version}` }}）</div><div class="t-20 fw-600 c-1 num">{{ result.would }}</div></div>
-            <div><div class="t-12 c-3">新增命中</div><div class="t-20 fw-600 num c-1">{{ result.added }}</div></div>
-            <div><div class="t-12 c-3">不再命中</div><div class="t-20 fw-600 num c-1">{{ result.removed }}</div></div>
+            <div><span class="t-12 c-2">实际命中（v{{ base.version }}）</span><span class="t-16 fw-600 c-1 num">{{ result.actual }}</span></div>
+            <div><span class="t-12 c-2">试跑会命中（{{ rver === 'draft' ? `草稿 v${draftDef?.version}` : `当前 v${base.version}` }}）</span><span class="t-16 fw-600 c-1 num">{{ result.would }}</span></div>
+            <div><span class="t-12 c-2">新增命中</span><span class="t-16 fw-600 num c-1">{{ result.added }}</span></div>
+            <div><span class="t-12 c-2">不再命中</span><span class="t-16 fw-600 num c-1">{{ result.removed }}</span></div>
+            <div><span class="t-12 c-2">被去重 <a-tooltip :title="`命中数只算会生成告警 / 通知的命中；去重键相同、在冷却期（${base.cooldown}）内的样本列为“被去重”，不计入`"><InfoCircleOutlined class="c-3" /></a-tooltip></span><span class="t-16 fw-600 num c-1">{{ result.deduped }}</span></div>
           </div>
-          <div class="t-12 c-3">命中数只算会生成告警 / 通知的命中；另有 <span class="num">{{ result.deduped }}</span> 个样本去重键相同、在冷却期（{{ base.cooldown }}）内，列为“被去重”，不计入</div>
           <div class="paged-scroll">
             <a-table :columns="sampleCols" :data-source="samples.items" :pagination="false" size="middle" row-key="key" :locale="{ emptyText: '该时间范围内没有命中样本' }">
               <template #bodyCell="{ column, record }">
@@ -461,6 +456,10 @@ const verCols = [
 
       <!-- 版本历史 -->
       <div v-else class="ru-body">
+        <div class="ru-tool">
+          <span class="t-12 c-2">共 {{ versions.length }} 个版本</span>
+          <a-tooltip title="规则版本随本体整版发布；回滚会生成一张新的变更单，审核通过后生效。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+        </div>
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'ver'"><span class="num">v{{ record.ver }}</span></template>
@@ -470,7 +469,6 @@ const verCols = [
             </template>
           </template>
         </a-table>
-        <div class="t-12 c-3">规则版本随本体整版发布；回滚会生成一张新的变更单，审核通过后生效。</div>
       </div>
     </div>
   </div>
@@ -512,6 +510,8 @@ const verCols = [
 .ru-items li:hover { background: var(--g3); }
 .ru-items li.active { background: var(--brand-bg); }
 .ru-items li.active .ru-name { color: var(--brand); }
+.ru-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ru-meta { flex: none; }
 .ru-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .ru-pager { flex: 1; min-height: 0; }
 .ru-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; }
@@ -538,8 +538,8 @@ const verCols = [
 .ru-mapsel { width: 100%; }
 .ru-st { display: grid; grid-template-columns: 150px 1fr auto; gap: 8px; align-items: center; padding: 5px 0; border-bottom: var(--border); }
 .ru-st-o { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ru-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; flex: none; }
-.ru-stats > div { padding: 8px 12px; border: var(--border); border-radius: var(--radius); }
+.ru-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; flex: none; }
+.ru-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; white-space: nowrap; overflow: hidden; padding: 8px 12px; border: var(--border); border-radius: var(--radius); }
 .ru-empty { margin-top: 48px; }
 .ru-dis { color: var(--g7); cursor: not-allowed; }
 </style>

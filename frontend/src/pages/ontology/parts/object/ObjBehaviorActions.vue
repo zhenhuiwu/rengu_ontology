@@ -7,7 +7,7 @@
  */
 import { computed, ref } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
-import { QuestionCircleOutlined } from '@ant-design/icons-vue';
+import { QuestionCircleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
@@ -30,14 +30,15 @@ const drives = (t: ActionType) => (lc.value?.transitions ?? []).filter((x) => x.
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
 const typeCols = [
-  { title: '动作类型', key: 'name', width: 200 },
-  { title: '版本', key: 'version', width: 70 },
-  { title: '状态', key: 'status', width: 90 },
-  { title: '外部系统', key: 'system', width: 190 },
-  { title: '审批', key: 'approval', width: 200 },
-  { title: '驱动的状态迁移', key: 'drives' },
-  { title: '被规则暂存', key: 'usedBy', width: 160 },
-  { title: '近 30 天执行', key: 'runs', width: 330 },
+  { title: '动作类型', key: 'name', width: 170, ellipsis: true },
+  { title: '版本', key: 'version', width: 60 },
+  { title: '状态', key: 'status', width: 84 },
+  { title: '外部系统', key: 'system', width: 100, ellipsis: true },
+  { title: '超时 · 幂等', key: 'timeout', width: 100 },
+  { title: '审批', key: 'approval', width: 170, ellipsis: true },
+  { title: '驱动的状态迁移', key: 'drives', ellipsis: true },
+  { title: '被规则暂存', key: 'usedBy', width: 110, ellipsis: true },
+  { title: '近 30 天执行', key: 'runs', width: 380 },
 ];
 
 /* 抽屉：动作类型详情（?actype=） */
@@ -68,7 +69,7 @@ const recCols = [
   { title: '编号', key: 'id', width: 170 },
   { title: '动作', dataIndex: 'action', key: 'action', width: 150 },
   { title: '对象', key: 'obj', width: 280 },
-  { title: '参数', key: 'params' },
+  { title: '参数', key: 'params', ellipsis: true },
   { title: '来源', key: 'source', width: 200 },
   { title: '状态', key: 'status', width: 170 },
   { title: '提交时间', key: 'submittedAt', width: 170 },
@@ -80,23 +81,27 @@ const recCols = [
     <template v-if="types.length">
       <div class="ba-bar">
         <span class="t-14 fw-600 c-1">作用在{{ objName }}上的动作类型 {{ types.length }}</span>
-        <span class="t-12 c-3">来自动作类型目录；参数、提交条件、写回在“动作类型”页维护，这里只读汇总{{ histRo ? `（${reason}）` : props.readonly ? '' : '，草稿不改动作类型' }}</span>
+        <a-tooltip :title="`来自动作类型目录；参数、提交条件、写回在“动作类型”页维护，这里只读汇总${histRo ? `（${reason}）` : props.readonly ? '' : '，草稿不改动作类型'}`"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
         <span class="ba-sp" />
         <RouterLink class="t-14" to="/build/ontology/action-types">去动作类型</RouterLink>
       </div>
       <a-table size="small" :columns="typeCols" :data-source="types" row-key="id" :pagination="false" class="ba-types"
         :custom-row="(r: ActionType) => ({ onClick: () => setOpen(r.id) })">
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'name'"><a>{{ record.name }}</a><div class="t-12 c-3 num">{{ record.api }}</div></template>
+          <template v-if="column.key === 'name'"><a :title="record.api">{{ record.name }}</a></template>
           <template v-else-if="column.key === 'version'"><span class="num">{{ record.version }}</span></template>
           <template v-else-if="column.key === 'status'"><a-badge status="default" :text="record.status" /></template>
           <template v-else-if="column.key === 'system'">
-            <template v-if="record.sysId">{{ record.system }}<div class="t-12 c-3">超时 {{ record.timeout }} · {{ record.idempotent ? '幂等' : '非幂等' }}</div></template>
+            <template v-if="record.sysId">{{ record.system }}</template>
             <span v-else class="c-3">本体内部</span>
           </template>
-          <template v-else-if="column.key === 'approval'"><span class="c-2">{{ record.approval }}</span></template>
+          <template v-else-if="column.key === 'timeout'">
+            <span v-if="record.sysId" class="num">{{ record.timeout }} · {{ record.idempotent ? '幂等' : '非幂等' }}</span>
+            <span v-else class="c-3">--</span>
+          </template>
+          <template v-else-if="column.key === 'approval'"><span class="c-2" :title="record.approval">{{ record.approval }}</span></template>
           <template v-else-if="column.key === 'drives'">
-            <template v-if="drives(record).length"><div v-for="t in drives(record)" :key="t.id">{{ t.id }} {{ trName(t) }}</div></template>
+            <span v-if="drives(record).length" :title="drives(record).map((t) => `${t.id} ${trName(t)}`).join('、')">{{ drives(record).map((t) => `${t.id} ${trName(t)}`).join('、') }}</span>
             <span v-else class="c-3">不改{{ objName }}状态</span>
           </template>
           <template v-else-if="column.key === 'usedBy'">
@@ -106,11 +111,11 @@ const recCols = [
             <span v-else class="c-3">只手动发起</span>
           </template>
           <template v-else-if="column.key === 'runs'">
-            <template v-if="record.status !== '草稿'">
+            <span v-if="record.status !== '草稿'" class="ba-nowrap">
               <span class="num">{{ runStats(record.id).total }}</span> 次 · 成功率 <span class="num">{{ pct(runStats(record.id).rate) }}</span>
               <span v-if="runStats(record.id).failed" class="tl-failed"> · 失败 <span class="num">{{ runStats(record.id).failed }}</span></span>
               <span v-if="runStats(record.id).unknown" class="tl-attention"> · <QuestionCircleOutlined /> 结果未知 <span class="num">{{ runStats(record.id).unknown }}</span></span>
-            </template>
+            </span>
             <span v-else class="c-3">草稿，未上线</span>
           </template>
         </template>
@@ -118,7 +123,7 @@ const recCols = [
 
       <div class="ba-bar">
         <span class="t-14 fw-600 c-1">动作中心里的{{ objName }}动作</span>
-        <span class="t-12 c-3">待确认 <span :class="pendingN ? 'tl-attention' : ''" class="num">{{ pendingN }}</span> · 结果未知待对账 <span :class="unknownN ? 'tl-attention' : ''" class="num">{{ unknownN }}</span></span>
+        <span class="t-12 c-2">待确认 <span :class="pendingN ? 'tl-attention' : ''" class="num">{{ pendingN }}</span> · 结果未知待对账 <span :class="unknownN ? 'tl-attention' : ''" class="num">{{ unknownN }}</span></span>
         <span class="ba-sp" />
         <a-select v-model:value="actName" size="small" class="ba-sel" :options="names.map((n) => ({ value: n, label: n === '全部' ? '全部动作' : n }))" />
         <a-select v-model:value="status" size="small" class="ba-sel" :options="['全部', ...STATUSES].map((s) => ({ value: s, label: s === '全部' ? '全部状态' : s }))" />
@@ -132,7 +137,7 @@ const recCols = [
               <ObjRef v-if="hasObjRef(record.objKind)" :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef>
               <span v-else>{{ record.objLabel }}</span>
             </template>
-            <template v-else-if="column.key === 'params'"><span class="c-2">{{ record.params }}</span></template>
+            <template v-else-if="column.key === 'params'"><span class="c-2" :title="record.params">{{ record.params }}</span></template>
             <template v-else-if="column.key === 'source'"><span class="c-2">{{ sourceText(record) }}</span></template>
             <template v-else-if="column.key === 'status'">
               <span v-if="record.status === '结果未知'" class="tl-attention ba-nowrap"><QuestionCircleOutlined /> 结果未知 · 待对账</span>

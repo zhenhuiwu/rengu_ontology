@@ -264,8 +264,7 @@ async function runAction() {
         <div class="t-14 fw-600 al-sub">处理记录</div>
         <a-timeline class="al-tl">
           <a-timeline-item v-for="(t, i) in current.log" :key="i" :color="t.abnormal ? 'var(--tl-attention)' : 'gray'">
-            <div class="t-14">{{ t.text }}</div>
-            <div class="t-12 c-3 num">{{ t.time }} · {{ t.who }}</div>
+            <div class="al-tl-row"><span class="t-14 al-tl-text" :title="t.text">{{ t.text }}</span><span class="t-12 c-1 num al-tl-meta">{{ t.time }} · {{ t.who }}</span></div>
           </a-timeline-item>
         </a-timeline>
       </div>
@@ -321,4 +320,7 @@ async function runAction() {
 .al-pop-foot { display: flex; justify-content: flex-end; }
 .al-act-state { align-self: center; }
 .al-foot { flex: none; align-items: center; display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: var(--border); }
+.al-tl-row { display: flex; align-items: baseline; gap: 12px; }
+.al-tl-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.al-tl-meta { flex: none; }
 </style>

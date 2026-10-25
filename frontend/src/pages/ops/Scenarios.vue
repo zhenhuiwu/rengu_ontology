@@ -8,7 +8,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue';
+import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { CURRENT_USER } from '@/mock/changes';
 import EChart from '@/components/EChart.vue';
@@ -154,7 +154,7 @@ const impPaged = computed(() => paginate(current.value?.result?.impacts ?? [], {
 const impCols = [
   { title: '商品', key: 'sku', ellipsis: true }, { title: '门店', key: 'store', ellipsis: true },
   { title: '基线销售额', key: 'base', align: 'right', width: 110 }, { title: '方案销售额', key: 'sales', align: 'right', width: 110 },
-  { title: '变化', key: 'delta', align: 'right', width: 84 }, { title: '缺货率', key: 'so', align: 'right', width: 116 },
+  { title: '变化', key: 'delta', align: 'right', width: 84 }, { title: '缺货率', key: 'so', align: 'right', width: 132 },
   { title: '建议动作', key: 'suggest', width: 170 },
 ];
 const money = (v: number) => `${(v / 1e4).toFixed(2)} 万`;
@@ -266,7 +266,6 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           :options="['全部', '草稿', '运行中', '已完成', '失败'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
         <a-input-search v-model:value="kw" size="small" placeholder="方案名称 / 编号" class="sc-kw" />
       </div>
-      <div v-if="mode === 'cmp'" class="sc-cmp-hint t-12 c-3">勾选最多 3 个已完成方案对比（已选 {{ cmpIds.length }} / 3）</div>
       <div class="sc-items">
         <div v-for="s in paged.items" :key="s.id" class="sc-item"
           :class="{ 'sc-item-on': mode === 'one' ? s.id === current?.id : cmpIds.includes(s.id), 'sc-item-off': mode === 'cmp' && !!cmpTip(s) }"
@@ -274,14 +273,9 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           <a-tooltip v-if="mode === 'cmp'" :title="cmpTip(s)" placement="right">
             <a-checkbox :checked="cmpIds.includes(s.id)" :disabled="!!cmpTip(s)" class="sc-ck" @click.stop="toggleCmp(s)" />
           </a-tooltip>
-          <div class="sc-item-main">
-            <div class="sc-item-name">{{ s.name }}</div>
-            <div class="t-12 c-3 sc-item-meta"><span class="num">{{ s.id }}</span> · {{ s.owner }} · <span class="num">{{ s.createdAt.slice(5, 16) }}</span></div>
-          </div>
-          <div class="sc-item-st t-12">
-            <a-badge :status="badge(s.status)" /><span class="t-12 c-2">{{ s.status }}</span>
-            <div v-if="s.staged.length" class="c-3">已暂存 {{ s.staged.length }}</div>
-          </div>
+          <div class="sc-item-name" :title="`${s.id} · ${s.owner} · ${s.createdAt.slice(5, 16)}${s.staged.length ? ` · 已暂存 ${s.staged.length} 条` : ''}`">{{ s.name }}</div>
+          <span class="sc-item-owner t-12">{{ s.owner }}</span>
+          <span class="sc-item-st"><a-badge :status="badge(s.status)" /><span class="t-12 c-2">{{ s.status }}</span></span>
         </div>
       </div>
       <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="simple" class="sc-pager"
@@ -298,6 +292,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           <span v-if="cfgDirty && current.result" class="t-12 tl-attention"><ExclamationCircleOutlined /> 配置已改动，结果对应上一次运行</span>
           <span v-else-if="nameDirty" class="t-12 c-3">名称未保存</span>
           <span v-if="notMine" class="t-12 c-3">{{ current.owner }} 的方案 · 只读</span>
+          <a-tooltip :title="`${current.id} · ${current.owner} · 创建于 ${current.createdAt.slice(0, 16)}；基于本体 ${current.baseVer} · 价格弹性 −1.6（示意模型）`"><InfoCircleOutlined class="c-3" /></a-tooltip>
         </div>
         <div class="sc-btns">
           <a-tooltip :title="roReason"><a-button :type="primary === 'copy' ? 'primary' : 'default'" :disabled="readonly" data-act="copy" @click="create(current)"><CopyOutlined />复制为新方案</a-button></a-tooltip>
@@ -345,7 +340,6 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
               </div>
             </a-form-item>
           </a-form>
-          <div class="sc-cfg-foot t-12 c-3">基于本体 {{ current.baseVer }} · 价格弹性 −1.6（示意模型）</div>
         </div>
 
         <!-- 结果 -->
@@ -355,21 +349,21 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           </template>
           <template v-else-if="current.status === '失败'">
             <div class="sc-empty">
-              <div class="tl-failed fw-600">推演失败</div>
+              <div class="tl-failed fw-600">推演失败 <a-tooltip title="数据补齐后可“重新运行”；失败不会自动重试。"><InfoCircleOutlined class="c-3" /></a-tooltip></div>
               <div class="c-2 sc-fail">{{ current.failReason }}</div>
-              <div class="t-12 c-3">数据补齐后可“重新运行”；失败不会自动重试。</div>
             </div>
           </template>
           <template v-else-if="!current.result">
-            <div class="sc-empty"><div class="c-2">草稿方案尚未运行</div><div class="t-12 c-3">在左侧设置范围和驱动后点击“运行推演”。</div></div>
+            <div class="sc-empty"><div class="c-2">草稿方案尚未运行：在左侧设置范围和驱动后点击“运行推演”</div></div>
           </template>
           <template v-else>
             <div class="sc-kpis">
-              <div v-for="k in current.result.kpis" :key="k.key" class="sc-kpi">
-                <div class="t-12 c-3">{{ k.label }}</div>
-                <div class="t-20 num fw-600">{{ fmtV(k, k.value) }}</div>
-                <div class="t-12 num c-2">{{ k.key === 'promo' ? '' : `基线 ${fmtV(k, k.base)} · ` }}{{ kpiText(k) }}</div>
-              </div>
+              <a-tooltip v-for="k in current.result.kpis" :key="k.key" :title="k.key === 'promo' ? '基线无促销成本' : `基线 ${fmtV(k, k.base)}`">
+                <div class="sc-kpi">
+                  <div class="t-12 c-2">{{ k.label }}</div>
+                  <div class="sc-kpi-v"><span class="t-20 num fw-600">{{ fmtV(k, k.value) }}</span><span class="t-12 num c-2">{{ kpiText(k) }}</span></div>
+                </div>
+              </a-tooltip>
             </div>
             <div v-if="current.staged.length" class="sc-staged t-12">
               <span class="c-2">已暂存 {{ current.staged.length }} 条</span><span class="c-3"> · </span><router-link :to="pendingLink">去动作中心</router-link>
@@ -384,7 +378,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
                   <template v-else-if="column.key === 'base'"><span class="num">{{ money(record.baseSales) }}</span></template>
                   <template v-else-if="column.key === 'sales'"><span class="num">{{ money(record.sales) }}</span></template>
                   <template v-else-if="column.key === 'delta'"><span class="num">{{ fmtPct(record.sales / record.baseSales - 1) }}</span></template>
-                  <template v-else-if="column.key === 'so'"><span class="num">{{ record.stockoutBase }}% → {{ record.stockout }}%</span></template>
+                  <template v-else-if="column.key === 'so'"><span class="num sc-nowrap">{{ record.stockoutBase }}% → {{ record.stockout }}%</span></template>
                   <template v-else-if="column.key === 'suggest'"><span :class="record.suggest === '—' ? 'c-3' : ''">{{ record.suggest }}</span></template>
                 </template>
               </a-table>
@@ -400,7 +394,8 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
       <div class="panel-head">
         <div class="sc-title">
           <span class="t-16 fw-600">方案对比</span>
-          <span class="t-12 c-3">{{ cmpIds.length }} / 3</span>
+          <span class="t-12 c-2 num">已选 {{ cmpIds.length }} / 3</span>
+          <a-tooltip title="在左侧勾选最多 3 个已完成方案对比"><InfoCircleOutlined class="c-3" /></a-tooltip>
           <span v-if="scopeDiff" class="t-12 c-2">方案范围不同（区域 / 品类 / 周数），基线不同，仅供参考</span>
         </div>
         <div class="sc-btns">
@@ -408,28 +403,27 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           <a-tooltip :title="convertBlocked"><a-button type="primary" :disabled="!!convertBlocked" data-act="convert" @click="openPlan">将选定方案转为暂存动作</a-button></a-tooltip>
         </div>
       </div>
-      <div v-if="!cmpList.length" class="sc-empty"><div class="c-2">尚未选择方案</div><div class="t-12 c-3">在左侧勾选最多 3 个已完成的方案。</div></div>
+      <div v-if="!cmpList.length" class="sc-empty"><div class="c-2">尚未选择方案：在左侧勾选最多 3 个已完成的方案</div></div>
       <div v-else class="sc-cmp">
         <div class="sc-cmp-charts">
-          <div class="sc-cmp-chart"><div class="t-12 c-3">关键指标较基线变化</div><div class="sc-cmp-ec"><EChart :option="barOpt" /></div></div>
-          <div class="sc-cmp-chart"><div class="t-12 c-3">周销售额</div><div class="sc-cmp-ec"><EChart :option="cmpLineOpt" /></div></div>
+          <div class="sc-cmp-chart"><div class="t-12 fw-600">关键指标较基线变化</div><div class="sc-cmp-ec"><EChart :option="barOpt" /></div></div>
+          <div class="sc-cmp-chart"><div class="t-12 fw-600">周销售额</div><div class="sc-cmp-ec"><EChart :option="cmpLineOpt" /></div></div>
         </div>
         <table class="sc-ct">
           <thead>
             <tr>
               <th class="sc-ct-k">指标</th>
               <th v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }">
-                <a-radio :checked="s.id === pickId" @change="setQ({ pick: s.id })"><span class="num">{{ s.id }}</span></a-radio>
-                <div class="sc-ct-name">{{ s.name }}</div>
-                <div class="t-12 c-3 fw-400">{{ s.scope.area }} · {{ s.scope.category }} · {{ s.scope.weeks }} 周</div>
+                <div class="sc-ct-name" :title="s.name"><a-radio :checked="s.id === pickId" @change="setQ({ pick: s.id })"><span class="num">{{ s.id }}</span></a-radio>{{ s.name }}</div>
               </th>
             </tr>
           </thead>
           <tbody>
-            <tr><td class="c-3">驱动</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12">
-              价格 {{ s.drivers.pricePct > 0 ? '+' : '' }}{{ s.drivers.pricePct }}% · 补货 {{ s.drivers.replenishPct > 0 ? '+' : '' }}{{ s.drivers.replenishPct }}% · 安全库存 {{ s.drivers.safetyDays }} 天<br>
-              促销 {{ s.drivers.promo === '无' ? '无' : `${s.drivers.promo} ${s.drivers.promoDepth}% × ${s.drivers.promoWeeks} 周` }}
-            </td></tr>
+            <tr><td class="c-3">范围</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12">{{ s.scope.area }} · {{ s.scope.category }} · {{ s.scope.weeks }} 周</td></tr>
+            <tr><td class="c-3">价格 / 补货</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12 num">
+              价格 {{ s.drivers.pricePct > 0 ? '+' : '' }}{{ s.drivers.pricePct }}% · 补货 {{ s.drivers.replenishPct > 0 ? '+' : '' }}{{ s.drivers.replenishPct }}% · 安全库存 {{ s.drivers.safetyDays }} 天</td></tr>
+            <tr><td class="c-3">促销</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12 num">
+              {{ s.drivers.promo === '无' ? '无' : `${s.drivers.promo} ${s.drivers.promoDepth}% × ${s.drivers.promoWeeks} 周` }}</td></tr>
             <tr v-for="key in KPI_KEYS" :key="key">
               <td class="c-3">{{ kpiOf(cmpList[0], key).label }}</td>
               <td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }">
@@ -448,10 +442,9 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
     </div>
 
     <!-- 转为暂存动作：预览 -->
-    <a-modal v-model:open="planOpen" title="转为暂存动作" :width="920" ok-text="下一步" cancel-text="取消" @ok="doStage">
-      <div class="t-12 c-2 sc-plan-note">
-        按方案 <span class="num">{{ target?.id }}</span>「{{ target?.name }}」的驱动生成以下动作，勾选要暂存的条目。暂存后在动作中心“待确认”，不会自动提交或执行。
-      </div>
+    <a-modal v-model:open="planOpen" :width="920" ok-text="下一步" cancel-text="取消" @ok="doStage">
+      <template #title>转为暂存动作 <span class="t-12 c-2 fw-400">· 方案 <span class="num">{{ target?.id }}</span>「{{ target?.name }}」</span>
+        <a-tooltip title="按方案的驱动生成以下动作，勾选要暂存的条目。暂存后在动作中心“待确认”，不会自动提交或执行。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip></template>
       <a-table :columns="planCols" :data-source="plan" row-key="key" size="small" :pagination="false"
         :row-selection="{ selectedRowKeys: planKeys, onChange: (k: any[]) => (planKeys = k as string[]) }" class="sc-plan">
         <template #bodyCell="{ column, record }">
@@ -470,18 +463,18 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
 .sc-filters { display: flex; gap: 8px; padding: 8px 16px 4px; }
 .sc-w96 { width: 104px; flex: none; }
 .sc-kw { flex: 1; }
-.sc-cmp-hint { padding: 0 16px 4px; }
+.sc-cmp-hint { margin-left: auto; margin-right: 8px; white-space: nowrap; }
 .sc-items { flex: 1; min-height: 0; padding: 4px 8px; }
-.sc-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: var(--radius); cursor: pointer; }
+.sc-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .sc-item:hover { background: var(--g2); }
 .sc-item-on, .sc-item-on:hover { background: var(--brand-bg); }
 .sc-item-off { cursor: default; }
 .sc-item-off .sc-item-name { color: var(--g8); }
-.sc-ck { margin-top: 2px; }
+.sc-item-name { flex: 1; min-width: 0; }
+.sc-item-owner { flex: none; color: var(--g10); }
 .sc-item-main { flex: 1; min-width: 0; }
 .sc-item-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-item-meta { white-space: nowrap; }
-.sc-item-st { flex: none; text-align: right; }
+.sc-item-st { flex: none; width: 64px; white-space: nowrap; }
 .sc-pager { padding: 4px 16px 8px; }
 .sc-main { flex: 1; }
 .sc-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -505,6 +498,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
 .sc-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; flex: none; }
 .sc-kpi { border: var(--border); border-radius: var(--radius); padding: 8px 12px; min-width: 0; }
 .sc-kpi > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-kpi-v { display: flex; align-items: baseline; gap: 8px; }
 .sc-staged { margin-top: 8px; white-space: nowrap; }
 .sc-chart { flex: 1 1 200px; min-height: 160px; max-height: 280px; margin-top: 8px; }
 .sc-imp-head { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; flex: none; }
@@ -520,6 +514,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
 .sc-ct-k { width: 120px; }
 .sc-ct .sc-ct-on { background: var(--brand-bg); }
 .sc-ct-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-ct td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-ct-d { margin-left: 8px; }
-.sc-plan-note { margin-bottom: 8px; }
+.sc-nowrap { white-space: nowrap; }
 </style>

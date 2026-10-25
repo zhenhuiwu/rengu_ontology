@@ -20,6 +20,7 @@ import { BRAND, GRAY, STATUS } from '@/theme';
 import { useDraftView } from '../useDraftView';
 import { useConfirmStore } from '@/stores/confirm';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
+import { InfoCircleOutlined } from '@ant-design/icons-vue';
 import {
   LC_DRAFT_EDITS, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
@@ -197,9 +198,9 @@ const defCols = [
   { title: '编号', key: 'id', width: 64 },
   { title: '迁移', key: 'tr', width: 170 },
   { title: '触发', key: 'trigger', width: 64 },
-  { title: '来源', key: 'by', width: 260 },
-  { title: '条件', key: 'guard' },
-  { title: '结果', key: 'effect' },
+  { title: '来源', key: 'by', ellipsis: true },
+  { title: '条件', key: 'guard', width: 210, ellipsis: true },
+  { title: '结果', key: 'effect', width: 210, ellipsis: true },
   { title: '近 7 天', key: 'weekly', width: 90, align: 'right' as const },
 ];
 const chgCols = [
@@ -348,8 +349,8 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
                   <RouterLink v-if="byLink(record)" :to="byLink(record)!" :title="byTitle(record)">{{ record.by }}</RouterLink>
                   <span v-else>{{ record.by }}</span>
                 </template>
-                <template v-else-if="column.key === 'guard'"><span class="c-2">{{ record.guard }}</span></template>
-                <template v-else-if="column.key === 'effect'"><span class="c-2">{{ record.effect }}</span></template>
+                <template v-else-if="column.key === 'guard'"><span class="c-2" :title="record.guard">{{ record.guard }}</span></template>
+                <template v-else-if="column.key === 'effect'"><span class="c-2" :title="record.effect">{{ record.effect }}</span></template>
                 <template v-else-if="column.key === 'weekly'"><span class="num">{{ fmt(record.weekly) }}</span></template>
               </template>
             </a-table>
@@ -414,6 +415,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
             <div class="lc-side-head">
               <span class="t-16 fw-600 c-1">{{ trName(selTr) }}</span>
               <span class="t-12 c-3 num">迁移 {{ selTr.id }}<template v-if="selTr.mark"> · {{ selTr.mark }}</template></span>
+              <a-tooltip v-if="selTr.actionId" title="经动作执行的迁移：动作在动作中心确认、外部系统返回成功后才改状态；结果未知时状态不变，待对账。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
               <span class="lc-sp" /><a class="t-14" @click="setSel('')">返回概要</a>
             </div>
             <a-descriptions :column="1" size="small" bordered class="lc-desc">
@@ -425,7 +427,6 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
               <a-descriptions-item label="结果">{{ selTr.effect }}</a-descriptions-item>
               <a-descriptions-item label="近 7 天"><span class="num">{{ fmt(selTr.weekly) }}</span> 次</a-descriptions-item>
             </a-descriptions>
-            <div v-if="selTr.actionId" class="t-12 c-3">经动作执行的迁移：动作在动作中心确认、外部系统返回成功后才改状态；结果未知时状态不变，待对账。</div>
             <div v-if="editable" class="lc-acts">
               <a-button @click="openTr(selTr)">修改</a-button>
               <a-button danger @click="removeTr(selTr)">删除迁移</a-button>
@@ -436,6 +437,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
             <div class="lc-side-head">
               <span class="t-16 fw-600 tl-attention">{{ selIll.from }} → {{ selIll.to }}</span>
               <span class="t-12 c-3">非法迁移</span>
+              <a-tooltip title="不在迁移定义里的状态变化。规则产生告警，并在动作中心暂存“订单状态修正”待确认；若确属合法业务，请在草稿里补这条迁移。"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
               <span class="lc-sp" /><a class="t-14" @click="setSel('')">返回概要</a>
             </div>
             <a-descriptions :column="1" size="small" bordered class="lc-desc">
@@ -447,7 +449,6 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
                 <span v-else class="c-3">冷却期内已去重，未单独产生告警</span>
               </a-descriptions-item>
             </a-descriptions>
-            <div class="t-12 c-3">不在迁移定义里的状态变化。规则产生告警，并在动作中心暂存“订单状态修正”待确认；若确属合法业务，请在草稿里补这条迁移。</div>
           </template>
 
           <template v-else>
@@ -468,21 +469,24 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
             </template>
 
             <template v-if="base.ruleId && !histAt">
-              <div class="t-14 fw-600 c-1">近 7 天非法迁移 <span class="num tl-attention">{{ illegalTotal }}</span> 次</div>
+              <div class="t-14 fw-600 c-1">近 7 天非法迁移 <span class="num tl-attention">{{ illegalTotal }}</span> 次
+                <a-tooltip :title="`由规则 ${base.ruleId} 按本表检测；统计含冷却期内被去重的命中。`"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip>
+                <RouterLink class="t-12 fw-400 lc-rl" :to="{ path: '/build/ontology/rules', query: { rule: base.ruleId } }">{{ base.ruleId }}</RouterLink></div>
               <ul class="lc-ul">
                 <li v-for="x in illegal" :key="`${x.from}→${x.to}`">
                   <a @click="setSel(`x:${x.from}→${x.to}`)">{{ x.from }} → {{ x.to }}</a><span class="num tl-attention">{{ x.count }} 次</span>
                 </li>
               </ul>
-              <div class="t-12 c-3">由规则 <RouterLink :to="{ path: '/build/ontology/rules', query: { rule: base.ruleId } }">{{ base.ruleId }}</RouterLink> 按本表检测；统计含冷却期内被去重的命中。</div>
             </template>
 
             <div class="t-14 fw-600 c-1">版本记录</div>
             <ul class="lc-ul">
-              <li v-for="v in base.versions" :key="v.ver" class="lc-ver">
-                <span><span class="num c-1">v{{ v.ver }}</span><span class="t-12 c-3"> · {{ v.status }} · {{ v.by }} · {{ v.at }}<template v-if="v.release"> · 发布 {{ v.release }}</template></span></span>
-                <span class="t-14 c-2">{{ v.change }}</span>
-              </li>
+              <a-tooltip v-for="v in base.versions" :key="v.ver" :title="`${v.change}${v.release ? `（发布 ${v.release}）` : ''}`" placement="left">
+                <li class="lc-ver">
+                  <span class="lc-ver-l"><span class="num c-1">v{{ v.ver }}</span> <span class="t-12 c-2">{{ v.status }}</span></span>
+                  <span class="t-12 c-1 num lc-ver-r">{{ v.by }} · {{ v.at }}</span>
+                </li>
+              </a-tooltip>
             </ul>
           </template>
         </div>
@@ -537,7 +541,10 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
 .lc-desc :deep(.ant-descriptions-item-label) { width: 96px; }
 .lc-ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .lc-ul li { display: flex; justify-content: space-between; gap: 8px; }
-.lc-ul li.lc-ver { flex-direction: column; gap: 2px; }
+.lc-ul li.lc-ver { align-items: baseline; }
+.lc-ver-l { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-ver-r { flex: none; white-space: nowrap; }
+.lc-rl { margin-left: 8px; }
 .lc-acts { display: flex; gap: 8px; }
 .lc-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
 .lc-form-row { display: flex; gap: 12px; }

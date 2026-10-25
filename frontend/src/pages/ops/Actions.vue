@@ -8,7 +8,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { QuestionCircleOutlined } from '@ant-design/icons-vue';
+import { QuestionCircleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import StatusTimeline from '@/components/StatusTimeline.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -310,10 +310,9 @@ const terminalText = computed(() => {
             <a-popover trigger="click" placement="topRight">
               <template #content>
                 <div class="ac-pop">
-                  <div class="t-14 fw-600">{{ current.system }} 返回失败</div>
+                  <div class="t-14 fw-600">{{ current.system }} 返回失败 <a-tooltip title="修正原因后重新提交，会生成新动作和新幂等键。"><InfoCircleOutlined class="c-3 t-12 fw-400" /></a-tooltip></div>
                   <div class="t-14 c-error">{{ current.failReason }}</div>
-                  <div class="t-12 c-3 num">外部单号 {{ current.extRef ?? '--' }} · 幂等键 {{ current.idemKey }}</div>
-                  <div class="t-12 c-3">修正原因后重新提交，会生成新动作和新幂等键。</div>
+                  <div class="t-12"><span class="c-2">外部单号</span> <span class="c-1 num">{{ current.extRef ?? '--' }}</span><span class="c-2 ac-pop-gap">幂等键</span> <span class="c-1 num">{{ current.idemKey }}</span></div>
                 </div>
               </template>
               <a-button>查看原因</a-button>
@@ -387,4 +386,5 @@ const terminalText = computed(() => {
 .ac-pop-foot { display: flex; justify-content: flex-end; }
 .ac-foot { flex: none; min-height: 57px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: var(--border); }
 .ac-foot-note { margin-right: auto; }
+.ac-pop-gap { margin-left: 16px; }
 </style>

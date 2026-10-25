@@ -16,6 +16,7 @@ import { RULE_DEFS, hitsOf, stagedOf, type Hit, type RuleDef } from '@/mock/rule
 import { OBJ_TYPE_KIND, OBJ_TYPE_NAME, SINCE_7D } from '@/mock/lifecycle';
 import { useDraftView, draftOf } from '../useDraftView';
 import { CHANGE_REQUESTS } from '@/mock/changes';
+import { InfoCircleOutlined } from '@ant-design/icons-vue';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const route = useRoute();
@@ -44,16 +45,18 @@ const totals = computed(() => ({
 }));
 
 const ruleCols = [
-  { title: '规则', key: 'name', width: 260 },
-  { title: '状态', key: 'status', width: 90 },
-  { title: '触发', key: 'trigger', width: 220 },
-  { title: '条件', key: 'expr' },
-  { title: '输出', key: 'output', width: 90 },
-  { title: '自动暂存动作', key: 'stage', width: 230 },
-  { title: '近 7 天命中', key: 'hits', width: 110, align: 'right' as const },
+  { title: '规则', key: 'name', width: 200, ellipsis: true },
+  { title: '负责人', key: 'owner', width: 72 },
+  { title: '状态', key: 'status', width: 84 },
+  { title: '触发', key: 'trigger', width: 170, ellipsis: true },
+  { title: '条件', key: 'expr', ellipsis: true },
+  { title: '输出', key: 'output', width: 56 },
+  { title: '自动暂存动作', key: 'stage', width: 130, ellipsis: true },
+  { title: '确认人', key: 'confirmer', width: 140, ellipsis: true },
+  { title: '近 7 天命中', key: 'hits', width: 96, align: 'right' as const },
 ];
 const evCols = [
-  { title: '事件类型', key: 'name' },
+  { title: '事件类型', key: 'name', ellipsis: true },
   { title: '来源', key: 'source', width: 140 },
   { title: '订阅', key: 'subs', width: 60, align: 'right' as const },
   { title: '近 7 天', key: 'weekly', width: 90, align: 'right' as const },
@@ -71,7 +74,7 @@ const hitCols = [
   { title: '命中时间', key: 'at', width: 170 },
   { title: '规则', key: 'rule', width: 230 },
   { title: '对象', key: 'obj' },
-  { title: '值 / 阈值', key: 'value', width: 260 },
+  { title: '值 / 阈值', key: 'value', width: 300, ellipsis: true },
   { title: '结果', key: 'result', width: 110 },
   { title: '告警', key: 'alert', width: 170 },
 ];
@@ -85,9 +88,9 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
     <template v-if="rules.length || events.length">
       <div class="bu-bar">
         <span class="t-14 fw-600 c-1">作用在{{ objName }}上的规则 {{ rules.length }} · 事件类型 {{ events.length }}</span>
-        <span class="t-12 c-3">近 7 天命中 <span class="num">{{ fmt(totals.hits) }}</span> 次，产生告警 <span class="num">{{ fmt(totals.alerts) }}</span> 条，暂存动作待确认
+        <a-tooltip :title="`规则在“规则与自动化”页维护、走自己的变更单，这里只读汇总${histRo ? `（${reason}）` : ''}`"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
+        <span class="t-12 c-2">近 7 天命中 <span class="num">{{ fmt(totals.hits) }}</span> 次，产生告警 <span class="num">{{ fmt(totals.alerts) }}</span> 条，暂存动作待确认
           <span class="num" :class="totals.pending ? 'tl-attention' : ''">{{ totals.pending }}</span></span>
-        <span class="t-12 c-3">规则在“规则与自动化”页维护、走自己的变更单，这里只读汇总{{ histRo ? `（${reason}）` : '' }}</span>
         <span class="bu-sp" />
         <RouterLink class="t-14" to="/build/ontology/rules">去规则与自动化</RouterLink>
       </div>
@@ -96,9 +99,9 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
           <a-table size="small" :columns="ruleCols" :data-source="rules" row-key="id" :pagination="false" :locale="{ emptyText: `还没有作用在${objName}上的规则` }">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
-                <RouterLink :to="{ path: '/build/ontology/rules', query: { rule: record.id } }"><span class="num">{{ record.id }}</span> {{ record.name }}</RouterLink>
-                <div class="t-12 c-3">v{{ record.version }} · {{ record.owner }} · {{ record.level }}级</div>
+                <RouterLink :to="{ path: '/build/ontology/rules', query: { rule: record.id } }" :title="`${record.id} ${record.name} · v${record.version} · ${record.level}级`"><span class="num">{{ record.id }}</span> {{ record.name }}</RouterLink>
               </template>
+              <template v-else-if="column.key === 'owner'">{{ record.owner }}</template>
               <template v-else-if="column.key === 'status'"><a-tooltip :title="ruleStatus(record).cr ? `所在变更单 ${ruleStatus(record).cr}` : undefined"><a-badge :status="ruleStatus(record).badge" :text="ruleStatus(record).text" /></a-tooltip></template>
               <template v-else-if="column.key === 'trigger'">
                 <RouterLink v-if="record.trigger.kind === '事件'" :to="{ path: '/build/ontology/event-types', query: { event: record.trigger.eventId } }">{{ triggerText(record) }}</RouterLink>
@@ -107,11 +110,12 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
               <template v-else-if="column.key === 'expr'"><span class="c-2 bu-expr" :title="record.expr">{{ record.expr }}</span></template>
               <template v-else-if="column.key === 'output'">{{ record.output }}</template>
               <template v-else-if="column.key === 'stage'">
-                <template v-if="record.autoStage.enabled">
-                  <RouterLink :to="{ path: '/build/ontology/action-types', query: { action: record.autoStage.actionTypeId } }">{{ actName(record.autoStage.actionTypeId) }}</RouterLink>
-                  <div class="t-12 c-3">确认人 {{ record.autoStage.confirmer }}<template v-if="pendingOf(record.id)"> · <RouterLink :to="{ path: '/use/ops/actions', query: { tab: 'pending' } }"><span class="tl-attention">待确认 {{ pendingOf(record.id) }}</span></RouterLink></template></div>
-                </template>
+                <RouterLink v-if="record.autoStage.enabled" :to="{ path: '/build/ontology/action-types', query: { action: record.autoStage.actionTypeId } }">{{ actName(record.autoStage.actionTypeId) }}</RouterLink>
                 <span v-else class="c-3">不暂存</span>
+              </template>
+              <template v-else-if="column.key === 'confirmer'">
+                <span v-if="record.autoStage.enabled" class="bu-nowrap">{{ record.autoStage.confirmer }}<template v-if="pendingOf(record.id)"> · <RouterLink :to="{ path: '/use/ops/actions', query: { tab: 'pending' } }"><span class="tl-attention">待确认 {{ pendingOf(record.id) }}</span></RouterLink></template></span>
+                <span v-else class="c-3">--</span>
               </template>
               <template v-else-if="column.key === 'hits'"><span class="num">{{ fmt(hits7(record.id).length) }}</span></template>
             </template>
@@ -121,8 +125,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
           <a-table size="small" :columns="evCols" :data-source="events" row-key="id" :pagination="false" :locale="{ emptyText: `还没有${objName}的事件类型` }">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
-                <RouterLink :to="{ path: '/build/ontology/event-types', query: { event: record.id } }">{{ record.name }}</RouterLink>
-                <div class="t-12 c-3 num">{{ record.api }}</div>
+                <RouterLink :to="{ path: '/build/ontology/event-types', query: { event: record.id } }" :title="record.api">{{ record.name }}</RouterLink>
               </template>
               <template v-else-if="column.key === 'source'"><span class="c-2">{{ record.source }}{{ record.ruleId ? ` · ${record.ruleId}` : '' }}</span></template>
               <template v-else-if="column.key === 'subs'"><span class="num">{{ subscribersOf(record).length }}</span></template>
@@ -134,7 +137,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
 
       <div class="bu-bar">
         <span class="t-14 fw-600 c-1">近 7 天命中</span>
-        <span class="t-12 c-3">与“规则与自动化”页的命中记录同源；被去重的命中不产生告警</span>
+        <a-tooltip title="与“规则与自动化”页的命中记录同源；被去重的命中不产生告警"><InfoCircleOutlined class="c-3 t-12" /></a-tooltip>
         <span class="bu-sp" />
         <a-select v-model:value="ruleFilter" size="small" class="bu-sel" :options="[{ value: '全部', label: '全部规则' }, ...rules.map((r) => ({ value: r.id, label: `${r.id} ${r.name}` }))]" />
       </div>
@@ -147,7 +150,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
               <ObjRef :kind="(record as Hit).objKind" :id="record.objId">{{ record.objLabel }}</ObjRef>
               <span v-if="record.storeLabel && record.objKind !== 'store'" class="c-3"> · {{ record.storeLabel }}</span>
             </template>
-            <template v-else-if="column.key === 'value'"><span class="num">{{ record.value }}</span><span class="c-3"> / {{ record.threshold }}</span></template>
+            <template v-else-if="column.key === 'value'"><span :title="`${record.value} / ${record.threshold}`"><span class="num">{{ record.value }}</span><span class="c-3"> / {{ record.threshold }}</span></span></template>
             <template v-else-if="column.key === 'result'"><a-badge :status="resultBadge(record.result)" :text="record.result" /></template>
             <template v-else-if="column.key === 'alert'">
               <RouterLink v-if="record.alertId && record.result !== '已去重'" class="num" :to="{ path: '/use/ops/alerts', query: { alert: record.alertId } }">{{ record.alertId }}</RouterLink>
@@ -176,4 +179,5 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
 .bu-sel { width: 300px; }
 .bu-hits { flex: 1; min-height: 0; overflow: auto; }
 .bu-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.bu-nowrap { white-space: nowrap; }
 </style>
