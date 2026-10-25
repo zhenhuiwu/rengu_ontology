@@ -240,7 +240,7 @@ const refCols = [
         <a-table :columns="verCols" :data-source="VERSIONS" :pagination="TABLE_PAGER" size="middle" row-key="ver">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'">
-              <a-badge :status="record.status === '生效中' ? 'success' : 'default'" :text="record.status" />
+              <a-badge status="default" :text="record.status" />
             </template>
             <template v-else-if="column.key === 'op'">
               <a-space><a>对比</a><a v-if="record.status !== '生效中'">回滚</a></a-space>
