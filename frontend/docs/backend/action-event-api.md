@@ -1,6 +1,6 @@
-# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.3 草案）
+# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.4 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.3（v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.4（v0.5.4 `query_by_key` 返回值对齐动态：查到·成功 / 查到·未执行 / 查无；v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `2e5b002` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
@@ -37,7 +37,7 @@
 | 接口 | 入参 | 同步返回 | 说明 |
 |---|---|---|---|
 | `submit(actionRunId, idemKey)` | 执行记录号和**外部幂等键**；本模块再按 `actionRunId` 读执行时锁定的动作类型版本和参数快照 | `result: 成功 \| 失败 \| 结果未知`，`extRef`（外部回执号，可空），`code`（返回码或失败原因），`retries`，`ms`，`calls[]`（每次调用：attempt、http、ms） | 先校验提交条件，再调用外部系统。**重试规则（以前端为准，和动态评审一致）**：外部**明确返回失败**（HTTP 4xx/5xx 或业务失败码，如 ERP 的 `NC-2071 供货仓可用库存不足`）时，对方支持幂等就用**同一个幂等键**自动重试，最多 `maxRetry` 次；重试完仍失败，返回失败。对方不支持幂等（`maxRetry=0`）不重试。mock 依据：失败记录 `retries = maxRetry`；成功记录有“第 2 次成功（首次 HTTP 503 明确失败）”。**超时或无响应**记为结果未知，**写操作永不重试**。成功后的本体编辑和 `ActionExecuted` 见 §4.1。 |
-| `query_by_key(idemKey)` | 外部幂等键 | `extStatus: 已处理 \| 未处理 \| 查无 \| 不支持查询`，`extRef`，`raw` | 定时对账（本模块的 cron）调这个接口。人工对账前是否先调一次给对账人参考，前端没有（对账弹窗只有结论 + 说明），属于【推断】，见 dynamic-api.md `[推断 P7]`。“查无”也算一次查询。对方不支持幂等查询（如短信、企业微信）时返回“不支持查询”。 |
+| `query_by_key(idemKey)` | 外部幂等键 | `extStatus: 查到·成功 \| 查到·未执行 \| 查无`（与动态口径一致；「仍无法确认」是人工对账的选项、触发 `reopen_reconcile`，不是返回值），`extRef`，`raw` | 定时对账（本模块的 cron）调这个接口。人工对账前是否先调一次给对账人参考，前端没有（对账弹窗只有结论 + 说明），属于【推断】，见 dynamic-api.md `[推断 P7]`。“查无”也算一次查询。对方不支持幂等查询（`ext_system.idempotent=false`，如短信、企业微信）时不调这个接口，对账任务建好即转人工。 |
 | 回调 `on_reconciled(actionRunId, reconcileResult, reconciler)` | 由本模块调用动态 | — | 定时对账有结论时回调。**一律变成“已对账”，不会变成“成功”**；`reconcileResult = succeeded \| not_executed`（界面文案“外部已成功 / 外部未执行”），`reconciler` 为“系统”。`succeeded` 时由**动态**提交本体编辑并发出 `ActionExecuted`（人工对账选“外部已成功”同样处理）。`not_executed` 不提交、不发事件，原记录**不能重新提交**，前端提示“如仍需执行请重新发起”。本模块不写 `action_run`。 |
 | `dry_run(actionTypeId, params, view?, cr?, ver?)` | 动作类型、参数；草稿视图带 `view=draft&cr=` | `passed`，`checked`，`failed[{name, fail}]` | 对应“试运行”。只校验提交条件并模拟调用，不写外部系统，不改本体。 |
 | `emit(event)` | **完整信封（含生产方生成的 `eventId`）**和载荷 | `eventId`，`deduped: bool` | `eventId` 由**生产方**生成并放在请求里；本模块是消费方，先按 `eventId` 去重（同一个 `eventId` 重发直接返回 `deduped=true`），再按去重键窗口去重。动作成功或对账为外部已成功后，动态调用它发 `ActionExecuted`；结果未知时发 `ActionOutcomeUnknown`；规则、数据同步、外部回调也走这个接口。 |
@@ -314,8 +314,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 6. **提交本体编辑**：写回成功后才提交（修改、新建、关联），保证本体和外部系统一致。没有外部系统的动作直接提交，失败就报错，不重试。
 7. **副作用（异步）**：通知、事件、Webhook。成功后发 `ActionExecuted`；结果未知时发 `ActionOutcomeUnknown`。副作用失败不影响动作结果。
 8. **定时对账**：procrastinate 的 cron 每 15 分钟对 `reconcile_task.next_at` 到期的任务调一次 `query_by_key`，每轮最多 3 次（“查无”也计次）。
-   - 查到“已处理” → `on_reconciled(succeeded, 系统)` → 动态把状态改成**已对账**（**不是成功**），再由动态提交本体编辑、发 `ActionExecuted`。
-   - 查到“未处理” → `on_reconciled(not_executed, 系统)` → **已对账**，不提交本体编辑，不能重新提交（“如仍需执行请重新发起”）。
+   - 查到“查到·成功” → `on_reconciled(succeeded, 系统)` → 动态把状态改成**已对账**（**不是成功**），再由动态提交本体编辑、发 `ActionExecuted`。
+   - 查到“查到·未执行” → `on_reconciled(not_executed, 系统)` → **已对账**，不提交本体编辑，不能重新提交（“如仍需执行请重新发起”）。
    - 3 次后仍无法确认 → 转人工（`state=manual`，`next_at=null`）。人工对账由对账人直接选结论（前端弹窗只有结论 + 说明；先调 `query_by_key` 查一次是【推断】，见动态 `[推断 P7]`）：外部已成功（同“已处理”，动态提交本体编辑、发 `ActionExecuted`）/ 外部未执行 / **仍无法确认**（保持结果未知，`round + 1`，`tries` 归零，再自动查 3 次）。
 
 ### 4.2 动作类型的版本与变更
@@ -404,8 +404,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 执行中 | `submit` 返回成功 | 成功（终态） | 动态（依据本模块的返回） |
 | 执行中 | `submit` 返回失败（提交条件未通过，或外部明确失败且同键重试 `maxRetry` 次后仍失败） | 失败 | 动态 |
 | 执行中 | `submit` 返回结果未知（超时，未重试） | 结果未知 | 动态 |
-| 结果未知 | 定时对账查到“已处理” → `on_reconciled(succeeded)` | **已对账**（终态，不是成功）；动态提交本体编辑、发 `ActionExecuted` | 本模块回调，动态改状态 |
-| 结果未知 | 定时对账查到“未处理” → `on_reconciled(not_executed)` | **已对账**（终态），`reconcileResult=not_executed`；**不能重新提交**，提示“如仍需执行请重新发起” | 本模块回调，动态改状态 |
+| 结果未知 | 定时对账查到“查到·成功” → `on_reconciled(succeeded)` | **已对账**（终态，不是成功）；动态提交本体编辑、发 `ActionExecuted` | 本模块回调，动态改状态 |
+| 结果未知 | 定时对账查到“查到·未执行” → `on_reconciled(not_executed)` | **已对账**（终态），`reconcileResult=not_executed`；**不能重新提交**，提示“如仍需执行请重新发起” | 本模块回调，动态改状态 |
 | 结果未知 | 人工对账选“外部已成功” | 已对账（`succeeded`）；动态提交本体编辑、发 `ActionExecuted` | 动态 |
 | 结果未知 | 人工对账选“外部未执行” | 已对账（`not_executed`），不能重新提交 | 动态 |
 | 结果未知 | 人工对账选“仍无法确认” | 结果未知（不变）；本模块再开一轮 3 次自动查询 | 动态，本模块调度 |
@@ -420,11 +420,11 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 调用中 | 429 限流 | 按 `Retry-After`（没有就按外部系统的 `rateLimit` 和退避）等待后同键重试，计入 `maxRetry`；适配器本身按 `rateLimit` 排队，排队不算重试【建议】 |
 | 调用中 | 明确失败，重试次数用完，或对方不支持幂等 | 失败 |
 | 调用中 | 超时或无响应 | 结果未知，**不重试** → 新建 `reconcile_task(state=querying, round=1, tries=0, next_at=+15 分钟)` |
-| querying | `query_by_key` 返回已处理 | `resolved`，回调 `on_reconciled(succeeded, 系统)` → 已对账 |
-| querying | 返回未处理 | `resolved`，回调 `on_reconciled(not_executed, 系统)` → 已对账，不能重新提交 |
+| querying | `query_by_key` 返回查到·成功 | `resolved`，回调 `on_reconciled(succeeded, 系统)` → 已对账 |
+| querying | 返回查到·未执行 | `resolved`，回调 `on_reconciled(not_executed, 系统)` → 已对账，不能重新提交 |
 | querying | 返回查无或无法确认，`tries + 1 < 3` | 仍 `querying`，`tries + 1`，`next_at` 加 15 分钟（“查无”也计次） |
 | querying | 第 3 次仍无法确认 | `manual`（`manual=true`，`next_at=null`），等动态人工对账 |
-| querying | 对方不支持查询 | 直接 `manual` |
+| （建任务时） | 对方不支持幂等查询（`idempotent=false`） | 直接 `manual`，不调 `query_by_key` |
 | manual | 人工选“仍无法确认” | `querying`，`round + 1`，`tries=0`，`next_at=+15 分钟`（再查 3 次） |
 | manual | 人工选“外部已成功 / 外部未执行” | `resolved`，记 `reconciler=人名` |
 
