@@ -166,3 +166,59 @@ async def test_exec_error_fed_back_once(qa, session):
     assert len(fake.prompts) == 2 and "is_test" in fake.prompts[1][-1]["content"]
     t = await session.scalar(select(QaTurn).where(QaTurn.code == r.json()["turnId"]))
     assert "is_test" not in t.sql_text
+
+
+def test_ddl_hides_system_cols_and_filters_per_table():
+    ddl = "\n\n".join(chain._schema_lines())
+    assert "is_seed" not in ddl and "lock_version" not in ddl
+    product = next(x for x in chain._schema_lines() if x.startswith("CREATE TABLE product"))
+    assert "is_test" not in product
+    filters = "\n".join(chain._filter_lines())
+    assert "- store：is_test = false" in filters and "- biz_order：is_test = false" in filters
+    none = next(x for x in chain._filter_lines() if "没有过滤列" in x)
+    assert "product" in none and "order_line" in none
+    # 枚举列注释带 code=标签
+    assert "shipped=已出库" in ddl and "open=营业中" in ddl
+
+
+def test_label_rows_maps_codes_keeps_shape():
+    rows = [["shipped", 3], ["delivered", 1], [None, 0]]
+    assert chain._label_rows(rows) == [["已出库", 3], ["已签收", 1], [None, 0]]
+    # 列里混着非 code 的值就整列不动
+    assert chain._label_rows([["shipped"], ["上海"]]) == [["shipped"], ["上海"]]
+
+
+async def test_answer_labels_status_codes(qa):
+    use_llm('select status, count(*) as "门店数" from store group by status order by 1')
+    t = (await qa.post(URL, json={"question": "各状态门店数"})).json()["turn"]
+    labels = {it["c0"] for it in t["answer"]["table"]["items"]}
+    assert labels and labels <= {"营业中", "装修中", "已闭店"}
+
+
+async def test_prompt_guidelines_time_and_samples(qa):
+    fake = use_llm("select 1")
+    await qa.post(URL, json={"question": "Which product category has the most products?"})
+    c = fake.prompts[0][0]["content"]
+    assert "## 过滤列（按表）" in c and "MAX(n)" in c and "禁止 ORDER BY … LIMIT 1" in c
+    assert "split_part" in c and "**Style**" in c
+    # 时间锚点按业务时钟（RENGU_FIXED_NOW）算，不让模型用 NOW()
+    assert "昨天 [" in c and "不要用 NOW()" in c
+    # 低基数文本列的全部取值
+    assert "## 列取值（全部）" in c and "- store.city：" in c
+
+
+async def test_dimension_and_metric_context(users, session):
+    await run_seeds(users, ["static"])
+    await users.flush()
+    ctx = await chain.build_context(session)
+    dims = "\n".join(ctx["dims"])
+    assert "商品品类（层级 大类 > 中类" in dims and "已出库=shipped" in dims
+    assert any("时间字段" in m for m in ctx["metrics"])
+
+
+async def test_statement_timeout_maps_to_query_timeout(qa, session):
+    await (await session.connection()).exec_driver_sql("set local statement_timeout = 50")
+    use_llm("select count(*) from order_line a, order_line b, order_line c")
+    r = await qa.post(URL, json={"question": "很慢的查询"})
+    assert r.status_code == 504, r.text
+    assert r.json()["code"] == "QUERY_TIMEOUT"

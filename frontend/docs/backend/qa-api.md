@@ -276,6 +276,16 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
   | 抽 SQL | Vanna `extract_sql` 的围栏规则（先 ```sql 块，再任意 ``` 块，取最后一个）；[推断] 不抄它的 `SELECT … ;` 正则，那条会把 `select 1; drop …` 截短后放行，这里让多语句原样进 sql_guard 被拒 | MIT |
   | 解析 / 校验 / LIMIT | sqlglot（`app/common/sql_guard` 已在用） | MIT |
 
+- **上下文补强（联调 EV-Q 后加）**：
+  - 表结构：系统列（`is_seed / lock_version / created_at / created_by / updated_at`）不进 DDL；枚举列（库里存英文 code）的 `COMMENT ON COLUMN` 写成 `code=中文标签`（来自 `LabelEnum`）。
+  - 「过滤列（按表）」：从表结构推出每张表能加的过滤列（目前只有 `is_test`：store、biz_order），没有的表明说不要加，避免模型给 product 加 `is_test / is_seed`。
+  - 「维度层级与取值」：本体 `dimension / dim_level / dim_value`（Store / SalesOrder / Category / Product 上的维度），每个值带层级、同义词、上级；值和枚举标签对得上时标出库里的 code（如 `已出库=shipped`）。取值超过 40 个的维度（时间以外如门店、组织）不列。
+  - 「列取值（全部）」：QA 表里低基数文本列（≤ 30 个 distinct，如 `store.city`、`biz_order.channel`）的全部取值，让 WHERE 照抄真实值（auto-ontology 附 sample values 的思路，Apache-2.0，非代码复制）。[推断] 取值查询不走行级权限，现阶段行级权限对已登录用户不裁剪；以后裁剪时这里要跟着收。
+  - 「指标口径」：公式后附指标定义页里的「基础对象 / 时间字段 / 默认过滤 / 同名默认」；多个指标定义页相同只贴一次。[推断] 种子里所有指标共用同一份定义页（看着是模板照抄），有效订单数的「默认过滤 已出库」和公式「状态 ≠ 已取消」冲突，规则写了「公式里写了条件时以公式为准」，需指标负责人确认。
+  - 「时间」：当前时间按业务时钟（`clock.local_now()`，测试里是 `RENGU_FIXED_NOW`）+ 今天 / 昨天 / 前天 / 本周 / 上周 / 本月 / 上月 / 今年 / 近 3、7 天的左闭右开区间，要求 SQL 只写日期字面量、不用 `NOW()`（库时间不是业务时钟）。思路同 auto-ontology `main_system_prompt_template` 的「Today's date」。
+  - 规则：并列（问“最多 / 最高”没说前 N 时用 `WHERE n = (SELECT MAX(n) …)` 返回全部并列，不用 `LIMIT 1`；Spider / BIRD 金标常见写法，思路非代码 [推断]，和 auto-ontology「单数最值 → LIMIT 1」相反）；路径型列（`product.category` = 大类/中类）默认按大类 `split_part` 聚合；题目和口径都没提到的条件不要加；列对象时返回 code + name；`'--'` 等占位值计数 / 分组时排除；按日 / 月分组输出 `::date`。另抄了 auto-ontology `**Style**` 段的 DISTINCT / NULL 两条（Apache-2.0）。
+- **答案里的枚举 code 换标签**：成形前 `_label_rows` 看每一列，非空值全是 QA 表枚举 code（且这个 code 只属于一个枚举）时换成中文标签（`shipped → 已出库`、`open → 营业中`），列、行、形状不变。
+- **查询超时**：只读连接 `statement_timeout` 触发（SQLSTATE 57014）→ 504 `QUERY_TIMEOUT`「查询超时，请缩小时间范围或条件后再问」，不回喂重试。
 - **执行报错回喂一次**：SQL 过了 sql_guard 但执行报错（如列不存在），在 savepoint 里回滚，把数据库报错首行作为新一轮 user 消息回喂 LLM 改一次（`FIX_RETRIES=1`，常见自修正思路，非代码复制）；仍失败照旧 500 `INTERNAL_ERROR`。sql_guard 拒绝不重试，仍 403。[推断]
 - **同步返回**：W6 跑完整条链路后返回 202 `{turnId, streamUrl, turn}`，`turn` 就是 W3 的轮次形状，前端可以直接追加；W7 SSE 未实现，`streamUrl` 先占位。[推断]
 - **答案形状**：`kind=answer`，`answer = {card:'table', dataAsOf, basis:{caliber, perm}, text, table:{id:'result', title, columns:[{key:'c0', title:<SQL 列别名>, align?:'right'}], items:[{c0:…}], total, summary, paged}}`；0 行 → `kind=empty`（`lead/bold/tail/tag`）。最多 200 行，超过 10 行 `paged=true`。[推断] kpis / trend / insight / suggest 本期不出。
