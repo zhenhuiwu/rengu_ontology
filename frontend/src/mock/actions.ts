@@ -3,6 +3,7 @@
  * 对象全部取自 ORDERS / PRODUCTS / STORES，来源告警取自 ALERTS（同一套 ID，ObjRef 都能解析）。
  * 状态流转：待确认 →（确认提交）审批中 → 执行中 → 成功 / 失败 / 结果未知 →（对账）已对账；待确认可撤回为已撤回。
  */
+import { reactive } from 'vue';
 import { seeded } from './format';
 import { ORDERS } from './orders';
 import { PRODUCTS } from './products';
@@ -45,7 +46,7 @@ export const QA_SESSIONS = [
  * 来源：规则 = 规则命中后自动暂存（发起人记为“规则 R-xxx”，确认人按规则固定）；告警 = 处理告警时人工发起；
  * 问数 = 问数会话建议（session 为会话编号 S0001…）；手动 = 动作中心直接发起。
  */
-export interface ActionSource { type: '规则' | '告警' | '问数' | '手动'; alertId?: string; ruleId?: string; ruleVersion?: string; confirmer?: string; session?: string; sessionTitle?: string }
+export interface ActionSource { type: '规则' | '告警' | '问数' | '手动' | '推演'; scenarioId?: string; scenarioName?: string; alertId?: string; ruleId?: string; ruleVersion?: string; confirmer?: string; session?: string; sessionTitle?: string }
 export interface ActionLog { time: string; text: string; desc?: string; status?: 'done' | 'warn' | 'error' | 'unknown' }
 export interface ActionRecord {
   id: string; action: ActionName; typeVersion: string; source: ActionSource;
@@ -130,6 +131,7 @@ export function buildLog(x: ActionRecord): ActionLog[] {
   if (x.source.type === '规则') log.push({ time: addMin(t, -6), text: `规则 ${x.source.ruleId} ${x.source.ruleVersion} 命中${x.source.alertId ? `（告警 ${x.source.alertId}）` : ''}，自动暂存动作`, desc: '系统' });
   else if (x.source.type === '告警') log.push({ time: addMin(t, -6), text: `告警 ${x.source.alertId} 命中规则 ${x.source.ruleId} ${x.source.ruleVersion}`, desc: '系统' });
   else if (x.source.type === '问数') log.push({ time: addMin(t, -3), text: `问数会话 ${x.source.session}「${x.source.sessionTitle}」建议`, desc: x.initiator });
+  else if (x.source.type === '推演') log.push({ time: addMin(t, -1), text: `情景推演 ${x.source.scenarioId}「${x.source.scenarioName}」选定方案，转为暂存动作`, desc: x.initiator });
   else log.push({ time: addMin(t, -1), text: '手动发起', desc: x.initiator });
   log.push({ time: t, text: `生成动作「${x.action}」· 动作类型 ${m.version}`, desc: `发起人 ${x.initiator}${x.source.confirmer ? ` · 确认人 ${x.source.confirmer}` : ''} · 幂等键 ${x.idemKey}` });
   if (x.status === '待确认') { log.push({ time: t, text: '等待确认提交', desc: `确认人 ${owner}，确认后进入 ${x.approver} 审批`, status: 'warn' }); return log; }
@@ -236,4 +238,29 @@ function build(): ActionRecord[] {
   return list;
 }
 
-export const ACTIONS: ActionRecord[] = build();
+/** 全站共用的动作列表（响应式）：动作中心的确认 / 撤回 / 重新提交、情景推演的暂存都改这一份 */
+export const ACTIONS: ActionRecord[] = reactive(build()) as ActionRecord[];
+
+/** 暂存动作的入参：只生成“待确认”记录，不提交、不调用外部系统 */
+export interface StageInput {
+  action: ActionName; objKind: ObjKind; objId: string; objLabel: string; params: string;
+  initiator: string; source: ActionSource; at: string;
+}
+/**
+ * 暂存一条动作到动作中心“待确认”（情景推演等来源用）。永远不执行：确认人在动作中心确认提交后才进入审批 / 写回。
+ * 编号接着当天最大编号往后排；幂等键 = act-<编号>。
+ */
+export function stageAction(p: StageInput): ActionRecord {
+  const m = ACTION_META[p.action];
+  const day = p.at.slice(0, 10).replace(/-/g, '');
+  const seq = Math.max(0, ...ACTIONS.map((a) => Number(a.id.slice(-4)))) + 1;
+  const id = `ACT-${day}-${pad(seq, 4)}`;
+  const rec: ActionRecord = {
+    id, action: p.action, typeVersion: m.version, source: p.source, objKind: p.objKind, objId: p.objId, objLabel: p.objLabel,
+    initiator: p.initiator, approver: m.approver, idemKey: `act-${id.slice(4).toLowerCase()}`, status: '待确认',
+    submittedAt: p.at, sysId: m.sysId, system: sysName(m.sysId), extRef: null, params: p.params, log: [],
+  };
+  rec.log = buildLog(rec);
+  ACTIONS.unshift(rec);
+  return ACTIONS[0];
+}

@@ -22,7 +22,7 @@ import {
 } from '@/mock/actions';
 
 /** 页面内的动作状态（模拟后台：确认、撤回、重新提交、对账都会改它并写执行记录） */
-const LIST = reactive<ActionRecord[]>(ACTIONS.map((a) => ({ ...a, log: [...a.log] })));
+const LIST = ACTIONS;
 const ME = '王敏';
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(40 + tick).padStart(2, '0')}:00`; };
@@ -79,6 +79,7 @@ const sourceText = (a: ActionRecord) =>
   a.source.type === '规则' ? `规则 ${a.source.ruleId} ${a.source.ruleVersion}${a.source.alertId ? ` · 告警 ${a.source.alertId}` : ''}`
   : a.source.type === '告警' ? `告警 ${a.source.alertId}`
   : a.source.type === '问数' ? `问数 · ${a.source.session} ${a.source.sessionTitle}`
+  : a.source.type === '推演' ? `情景推演 · ${a.source.scenarioId} ${a.source.scenarioName}`
   : a.retryOf ? `重新提交 · ${a.retryOf}` : '手动';
 /** 规则暂存的动作由规则指定的确认人确认 / 撤回；其他人只能查看 */
 const confirmerOf = (a: ActionRecord) => a.source.confirmer ?? a.initiator;
@@ -137,12 +138,11 @@ function doWithdraw() {
 }
 
 // 失败 → 重新提交：生成新动作、新幂等键，原记录保留
-let nextSeq = Math.max(...ACTIONS.map((a) => Number(a.id.slice(-4)))) + 1;
 async function resubmit() {
   const a = current.value; if (!a || a.status !== '失败' || a.retriedAs) return;
   const n = (a.idemKey.match(/-r(\d+)$/)?.[1] ?? '0');
   const newKey = `${a.idemKey.replace(/-r\d+$/, '')}-r${Number(n) + 1}`;
-  const newId = `ACT-20261025-${String(nextSeq).padStart(4, '0')}`;
+  const newId = `ACT-20261025-${String(Math.max(...LIST.map((x) => Number(x.id.slice(-4)))) + 1).padStart(4, '0')}`;
   const ok = await confirm.ask({
     title: `重新提交：${a.action}`, okText: '重新提交', irreversible: true,
     target: `${kindLabel(a.objKind)} ${a.objLabel}`,
@@ -155,7 +155,6 @@ async function resubmit() {
     impact: `沿用原审批（${a.approver}），生成新动作 ${newId} 并用新幂等键调用 ${a.system}；原动作 ${a.id} 保留为失败，便于追溯。`,
   });
   if (!ok) return;
-  nextSeq += 1;
   const t = now();
   const rec: ActionRecord = reactive({
     ...a, id: newId, idemKey: newKey, status: '执行中', submittedAt: t, extRef: null, failReason: undefined,

@@ -32,7 +32,7 @@ export const NAV: NavArea[] = [
       { key: 'ops', title: '运行', icon: 'ThunderboltOutlined', pages: [
         { key: 'alerts', title: '告警处理', path: '/use/ops/alerts', phase: 2, note: '含状态机违规这类告警；抽屉看对象和触发规则', component: () => import('@/pages/ops/Alerts.vue') },
         { key: 'action-center', title: '动作中心', path: '/use/ops/actions', phase: 3, note: '页签：待确认、执行记录、结果未知与对账（对账第四期）', component: () => import('@/pages/ops/Actions.vue') },
-        { key: 'scenarios', title: '情景推演', path: '/use/ops/scenarios', phase: 4, note: '选定方案转成暂存动作' },
+        { key: 'scenarios', title: '情景推演', path: '/use/ops/scenarios', phase: 4, note: '选定方案转成暂存动作', component: () => import('@/pages/ops/Scenarios.vue') },
       ] },
     ],
   },
