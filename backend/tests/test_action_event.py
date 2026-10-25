@@ -416,12 +416,15 @@ async def test_build_section_equals_seed_section(ae):
         assert json.loads(json.dumps(built)) == b.seed_section("v2026.10.3", ctx), b.section
 
 
-def test_sections_register_on_import_idempotently():
-    """import sections.py 即登记（新进程里验证；测试进程的注册表被 conftest 按测试清空）；重复登记不报错。"""
+def test_sections_registered_by_load_sections_not_on_import():
+    """import sections.py 不登记；骨架 load_sections() 调 register() 登记（新进程里验证，测试进程的注册表
+    被 conftest 按测试清空）；register() 幂等。"""
     code = (
         "import json\n"
         "import app.modules.action.sections as a, app.modules.event.sections as e\n"
-        "from app.modules.versioning.sections import registered_sections as r\n"
+        "from app.modules.versioning.sections import load_sections, registered_sections as r\n"
+        "assert not {'actionTypes', 'eventTypes'} & set(r())\n"
+        "load_sections()\n"
         "assert r()['actionTypes'] is a.BUILDER and r()['eventTypes'] is e.BUILDER\n"
         "assert a.register() is a.BUILDER and e.register() is e.BUILDER\n"
         "print(json.dumps(sorted(r())))"

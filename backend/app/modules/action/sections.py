@@ -9,8 +9,8 @@ system / timeout / retry / idempotent（随 ext_system）和统计字段不进�
 - restore_section(session, content, *, release_id)（整版回滚，团队约定的签名）：同一事务里把定义表
   改回 content；content 里没有的类型置 retired_release_id = release_id（新回滚记录的 id），
   content 里有的清掉 retired_release_id（重新发布即恢复）。版本表只追加，回滚不写版本行 [推断]。
-- **import 即登记**（幂等）：骨架会自动发现 app/modules/<m>/sections.py；在那之前临时由
-  seeds/loader.py 和 action/router.py 导入本文件触发（见 loader.py 的 TEMP 注释）。
+- 登记：骨架的 load_sections() 发现本文件、调用幂等的 register()（create_app / seed CLI 各调一次）；
+  import 本文件不登记。
 """
 
 from typing import Any
@@ -231,12 +231,9 @@ BUILDER = ActionTypesSection()
 
 
 def register() -> ActionTypesSection:
-    """幂等：已登记（本实例或测试替身）就不重复登记。import 本模块时自动调用。"""
+    """幂等：已登记（本实例或测试替身）就不重复登记。由骨架 load_sections() 调用，import 时不登记。"""
     from app.modules.versioning.sections import register_section, registered_sections
 
     if SECTION not in registered_sections():
         register_section(BUILDER)
     return BUILDER
-
-
-register()

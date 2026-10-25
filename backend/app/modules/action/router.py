@@ -12,7 +12,6 @@ from app.common.auth import require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page
 from app.db.session import SessionDep
-from app.modules.action import sections as _sections  # noqa: F401  TEMP：import 即登记快照 section（骨架自动发现前）
 from app.modules.action.schemas import (
     ActionTypeDetailOut,
     ActionTypeListOut,

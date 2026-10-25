@@ -185,12 +185,9 @@ BUILDER = EventTypesSection()
 
 
 def register() -> EventTypesSection:
-    """幂等：已登记（本实例或测试替身）就不重复登记。import 本模块时自动调用。"""
+    """幂等：已登记（本实例或测试替身）就不重复登记。由骨架 load_sections() 调用，import 时不登记。"""
     from app.modules.versioning.sections import register_section, registered_sections
 
     if SECTION not in registered_sections():
         register_section(BUILDER)
     return BUILDER
-
-
-register()
