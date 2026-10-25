@@ -19,6 +19,8 @@ export const METRICS: Metric[] = [
   { id: 'gmv_tax', name: '销售额（含税）', formula: 'SUM(订单.实付金额) − SUM(退款.退款金额)', unit: '元', owner: '陈立军', version: 'v2', status: '已发布', dims: ['门店', '大区', '区域', '渠道', '品类', '日期'], value: GMV_INCL.value, prev: GMV_INCL.prev, updatedAt: '2026-10-25 06:00:12' },
   { id: 'gross_margin', name: '毛利率', formula: '(销售额 − 销售成本) / 销售额', unit: '%', owner: '刘婷', version: 'v2', status: '已发布', dims: ['门店', '大区', '区域', '品类', '日期'], value: 0.2186, prev: 0.2231, updatedAt: '2026-10-25 06:00:12' },
   { id: 'order_cnt', name: '有效订单数', formula: 'COUNT(订单) WHERE 状态 ≠ 已取消', unit: '单', owner: '陈立军', version: 'v1', status: '已发布', dims: ['门店', '大区', '渠道', '日期'], value: ORDER_CNT.value, prev: ORDER_CNT.prev, updatedAt: '2026-10-25 06:00:12' },
+  // CR-0010（审核中）把退款率改为 v3：按退款完成时间、只计已完成的退款；发布前这里仍是 v2
+  { id: 'refund_rate', name: '退款率', formula: 'COUNT(退款单) WHERE 状态 ∈ {已申请, 已完成}（按退款单.申请时间） / 有效订单数', unit: '%', owner: '刘婷', version: 'v2', status: '已发布', dims: ['门店', '大区', '渠道', '日期'], value: 0.0336, prev: 0.0318, updatedAt: '2026-10-25 06:00:12' },
   { id: 'ship_ontime', name: '出库及时率', formula: '30 分钟内变为“已出库”的订单数 / 应出库订单数', unit: '%', owner: '周晓峰', version: 'v1', status: '已发布', dims: ['门店', '仓库', '渠道', '日期'], value: 0.9682, prev: 0.9715, updatedAt: '2026-10-25 06:00:12' },
   { id: 'atv', name: '客单价（不含税）', formula: '销售额（不含税） / 有效订单数', unit: '元', owner: '刘婷', version: 'v1', status: '草稿', dims: ['门店', '渠道', '日期'], value: Math.round((exTax(GMV_INCL.value) / ORDER_CNT.value) * 100) / 100, prev: Math.round((exTax(GMV_INCL.prev) / ORDER_CNT.prev) * 100) / 100, updatedAt: '2026-10-24 18:31:47' },
 ];
