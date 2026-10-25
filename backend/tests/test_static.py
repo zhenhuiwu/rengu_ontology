@@ -259,7 +259,10 @@ async def test_object_type_detail_and_tabs(client, static_seeded):
     assert views == next(v["result"] for v in VIEWS if v["args"][0] == "order")
     metrics = await get_all(client, "/object-types/order/usage?kind=metric")
     assert metrics and all("base" in m and "via" in m for m in metrics)
-    await get(client, "/object-types/order/usage?kind=cr", 422)
+    err = await get(client, "/object-types/order/usage?kind=cr", 422)
+    assert err["code"] == "VALIDATION_FAILED"
+    fields = err["details"]["fields"]
+    assert [f["field"] for f in fields] == ["kind"] and fields[0]["message"]
     await get(client, "/object-types/nope", 404)
 
 
@@ -395,3 +398,36 @@ async def test_history_version_reads(client, static_seeded):
 
     # previewAs：定义数据不按人裁剪
     assert await get(client, "/metrics?previewAs=U010002") == await get(client, "/metrics")
+
+
+async def test_all_static_gets_require_login(client, static_seeded):
+    """每个静态 GET 都依赖 CurrentUserDep：未知 / 停用的 X-Demo-As → 401，正常身份 → 200。"""
+    from app.modules.static.router import router
+
+    ids = {"object-types": "order", "link-types": LINKS[0]["id"], "metrics": "gmv"}
+    ids |= {"dimensions": DIMS[0]["id"], "knowledge": KNOWLEDGE[0]["id"]}
+    urls = []
+    for r in router.routes:
+        path = r.path
+        if "{id}" in path:
+            path = path.replace("{id}", ids[path.split("/")[1]])
+        urls.append(path + ("?kind=view" if path.endswith("/usage") and "object-types" in path else ""))
+    assert len(urls) == len(router.routes) >= 25
+    for who, status in (("U999999", 401), ("U010308", 401), ("U010006", 200)):  # 不存在 / 高伟停用 / 李娜
+        for url in urls:
+            r = await client.get(P + url, headers={"X-Demo-As": who})
+            assert r.status_code == status, (who, url, r.text[:300])
+            if status == 401:
+                assert r.json()["code"] == "UNAUTHORIZED"
+
+
+def test_static_routes_func_permissions():
+    """功能权限 = api-index 权限表：/object-types/brief → data-quality·view，其余按所在页面 key·view。"""
+    from app.modules.static.router import FUNC_OF, router
+
+    want = {"object-types": "object-types", "link-types": "link-types", "metrics": "metrics"}
+    want |= {"dimensions": "dimensions", "knowledge": "glossary"}
+    for r in router.routes:
+        key = "data-quality" if r.path == "/object-types/brief" else want[r.path.split("/")[1]]
+        assert FUNC_OF[r.path] == key, r.path
+        assert len(r.dependencies) == 1, r.path

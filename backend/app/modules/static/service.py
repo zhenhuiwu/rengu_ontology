@@ -4,7 +4,10 @@
 - `?ver=`（static-api.md §2.7）：版本不存在 404；关系、维度、业务知识按该版本快照里的定义返回，
   运行数据（关系质量 / 使用情况、维度使用情况、知识引用）从当前表补（§2.8）；对象类型、属性、指标返回当前。
   快照里没有这一节（例如该版本早于静态登记 section）时按当前表 + §2.7 规则现算 [推断]。
-- `?previewAs=`：定义类数据不按人裁剪，原样返回 [推断]。
+- 鉴权：所有接口依赖 CurrentUserDep（router._svc），未知 / 停用的 X-Demo-As → 401；
+  功能权限按 api-index 权限表 require_func(页面 key, "view")（router.py）。
+- `?previewAs=`：定义类数据不按被预览用户裁剪，原样返回（已核对前端：ObjectTypes / LinkTypes / Metrics /
+  Dimensions / Glossary 都不读预览状态，预览只做整页可见性 canPage + 只读，见 static-api.md）。
 """
 
 from typing import Any
@@ -12,6 +15,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.context import ViewContext
+from app.common.pagination import Page
 from app.core.errors import AppError, NotFound
 from app.modules.static import history, shapes
 from app.modules.static.repo import StaticRepo
@@ -56,14 +60,18 @@ def in_order(sec: Obj, cur: list[Obj]) -> list[tuple[str, Obj]]:
     return sorted(sec.items(), key=lambda kv: (rank.get(kv[0], len(rank)), kv[0]))
 
 
+KIND_MSG = "kind 只支持 metric、view（变更单历史随变更单模块提供）"
+
+
 def paginate(items: list[Obj], page: int, size: int, focus_id: str | None = None, key: str = "id") -> Obj:
-    """前端 slice 分页；focusId 在筛选结果里时直接返回它所在的页（api-index §1 focusId）。"""
+    """前端 slice 分页（形状 = 骨架 app.common.pagination.Page）；
+    focusId 在筛选结果里时直接返回它所在的页（api-index §1 focusId）。"""
     if focus_id:
         i = next((n for n, x in enumerate(items) if x.get(key) == focus_id), -1)
         if i >= 0:
             page = i // size + 1
     start = (page - 1) * size
-    return {"items": items[start : start + size], "total": len(items), "page": page, "size": size}
+    return Page[Obj](items=items[start : start + size], total=len(items), page=page, size=size).model_dump()
 
 
 def hits_for(p: str) -> int:
@@ -195,11 +203,13 @@ class StaticService:
             elif flt == "dim":
                 items = [u for u in items if u["via"] and oid not in u["base"]]
             return paginate(items, page, size)
+        # 统一参数校验错误（core/errors.py:6）：422 VALIDATION_FAILED，details.fields = [{field, message}]。
+        # TODO(变更单模块)：kind=cr 等变更单模块接入后返回该对象的变更单历史（static-api.md）。
         raise AppError(
-            "kind 只支持 metric、view（变更单历史随变更单模块提供）[推断]",
-            code="VALIDATION_ERROR",
+            "参数校验失败",
+            code="VALIDATION_FAILED",
             status_code=422,
-            details={"kind": kind},
+            details={"fields": [{"field": "kind", "message": KIND_MSG}]},
         )
 
     # ================================================================ 关系类型

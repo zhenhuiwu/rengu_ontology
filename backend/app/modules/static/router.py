@@ -13,6 +13,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 
+from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.db.session import SessionDep
 from app.modules.static.schemas import Rec, RecPage, SynonymConflicts
@@ -21,8 +22,19 @@ from app.modules.static.service import StaticService
 router = APIRouter(tags=["static"])
 
 
-async def _svc(session: SessionDep, ctx: ViewContextDep) -> StaticService:
+async def _svc(session: SessionDep, ctx: ViewContextDep, _: CurrentUserDep) -> StaticService:
+    """所有静态 GET 都要登录：未知 / 停用的 X-Demo-As → 401（app.common.auth）。"""
     return StaticService(session, ctx)
+
+
+# 功能权限（api-index 权限表）：页面 key·view；
+# /object-types/brief 是多页共用的对象下拉，表里记 data-quality·view
+FUNC_OF: dict[str, str] = {}
+
+
+def get(path: str, func: str, **kw: Any) -> Any:
+    FUNC_OF[path] = func
+    return router.get(path, dependencies=[Depends(require_func(func, "view"))], **kw)
 
 
 Svc = Annotated[StaticService, Depends(_svc)]
@@ -38,37 +50,37 @@ def Size(n: int) -> Any:  # noqa: N802
 # ---------------------------------------------------------------- 对象类型（ObjectTypes.vue）
 
 
-@router.get("/object-types", response_model=RecPage)
+@get("/object-types", "object-types", response_model=RecPage)
 async def list_object_types(svc: Svc, kw: Kw = "", page: Page = 1, size: int = Size(22)) -> Any:
     return await svc.object_list(kw, page, size)
 
 
-@router.get("/object-types/brief", response_model=list[Rec])
+@get("/object-types/brief", "data-quality", response_model=list[Rec])
 async def object_types_brief(svc: Svc) -> Any:
     return await svc.object_brief()
 
 
-@router.get("/object-types/{id}", response_model=Rec)
+@get("/object-types/{id}", "object-types", response_model=Rec)
 async def get_object_type(id: str, svc: Svc) -> Any:
     return await svc.object_detail(id)
 
 
-@router.get("/object-types/{id}/properties", response_model=RecPage)
+@get("/object-types/{id}/properties", "object-types", response_model=RecPage)
 async def object_properties(id: str, svc: Svc, kw: Kw = "", page: Page = 1, size: int = Size(12)) -> Any:
     return await svc.object_properties(id, kw, page, size)
 
 
-@router.get("/object-types/{id}/links", response_model=list[Rec])
+@get("/object-types/{id}/links", "object-types", response_model=list[Rec])
 async def object_links(id: str, svc: Svc) -> Any:
     return await svc.object_links(id)
 
 
-@router.get("/object-types/{id}/mappings", response_model=RecPage)
+@get("/object-types/{id}/mappings", "object-types", response_model=RecPage)
 async def object_mappings(id: str, svc: Svc, page: Page = 1, size: int = Size(12)) -> Any:
     return await svc.object_mappings(id, page, size)
 
 
-@router.get("/object-types/{id}/usage", response_model=RecPage)
+@get("/object-types/{id}/usage", "object-types", response_model=RecPage)
 async def object_usage(
     id: str,
     svc: Svc,
@@ -84,7 +96,7 @@ async def object_usage(
 # ---------------------------------------------------------------- 关系类型（LinkTypes.vue）
 
 
-@router.get("/link-types", response_model=RecPage)
+@get("/link-types", "link-types", response_model=RecPage)
 async def list_link_types(
     svc: Svc,
     q: Kw = "",
@@ -97,24 +109,24 @@ async def list_link_types(
     return await svc.link_list(q, src, st, page, size, focus_id)
 
 
-@router.get("/link-types/paths", response_model=list[Rec])
+@get("/link-types/paths", "link-types", response_model=list[Rec])
 async def link_paths(
     svc: Svc, from_: Annotated[str | None, Query(alias="from")] = None, to: str | None = None
 ) -> Any:
     return await svc.link_paths(from_, to)
 
 
-@router.get("/link-types/{id}", response_model=Rec)
+@get("/link-types/{id}", "link-types", response_model=Rec)
 async def get_link_type(id: str, svc: Svc) -> Any:
     return await svc.link_detail(id)
 
 
-@router.get("/link-types/{id}/quality", response_model=Rec)
+@get("/link-types/{id}/quality", "link-types", response_model=Rec)
 async def link_quality(id: str, svc: Svc) -> Any:
     return await svc.link_quality(id)
 
 
-@router.get("/link-types/{id}/usage", response_model=RecPage)
+@get("/link-types/{id}/usage", "link-types", response_model=RecPage)
 async def link_usage(id: str, svc: Svc, page: Page = 1, size: int = Size(10)) -> Any:
     return await svc.link_usage(id, page, size)
 
@@ -122,22 +134,22 @@ async def link_usage(id: str, svc: Svc, page: Page = 1, size: int = Size(10)) ->
 # ---------------------------------------------------------------- 指标（Metrics.vue）
 
 
-@router.get("/metrics", response_model=RecPage)
+@get("/metrics", "metrics", response_model=RecPage)
 async def list_metrics(svc: Svc, kw: Kw = "", group: Kw = "", page: Page = 1, size: int = Size(18)) -> Any:
     return await svc.metric_list(kw, group, page, size)
 
 
-@router.get("/metrics/{id}", response_model=Rec)
+@get("/metrics/{id}", "metrics", response_model=Rec)
 async def get_metric(id: str, svc: Svc) -> Any:
     return await svc.metric_detail(id)
 
 
-@router.get("/metrics/{id}/versions", response_model=RecPage)
+@get("/metrics/{id}/versions", "metrics", response_model=RecPage)
 async def metric_versions(id: str, svc: Svc, page: Page = 1, size: int = Size(10)) -> Any:
     return await svc.metric_versions(id, page, size)
 
 
-@router.get("/metrics/{id}/refs", response_model=RecPage)
+@get("/metrics/{id}/refs", "metrics", response_model=RecPage)
 async def metric_refs(id: str, svc: Svc, page: Page = 1, size: int = Size(10)) -> Any:
     return await svc.metric_refs(id, page, size)
 
@@ -145,7 +157,7 @@ async def metric_refs(id: str, svc: Svc, page: Page = 1, size: int = Size(10)) -
 # ---------------------------------------------------------------- 维度与码表（Dimensions.vue）
 
 
-@router.get("/dimensions", response_model=RecPage)
+@get("/dimensions", "dimensions", response_model=RecPage)
 async def list_dimensions(
     svc: Svc,
     q: Kw = "",
@@ -158,12 +170,12 @@ async def list_dimensions(
     return await svc.dim_list(q, kind, group, page, size, focus_id)
 
 
-@router.get("/dimensions/{id}", response_model=Rec)
+@get("/dimensions/{id}", "dimensions", response_model=Rec)
 async def get_dimension(id: str, svc: Svc) -> Any:
     return await svc.dim_detail(id)
 
 
-@router.get("/dimensions/{id}/values", response_model=RecPage)
+@get("/dimensions/{id}/values", "dimensions", response_model=RecPage)
 async def dimension_values(
     id: str,
     svc: Svc,
@@ -176,7 +188,7 @@ async def dimension_values(
     return await svc.dim_values(id, level, q, status, page, size)
 
 
-@router.get("/dimensions/{id}/mappings", response_model=RecPage)
+@get("/dimensions/{id}/mappings", "dimensions", response_model=RecPage)
 async def dimension_mappings(
     id: str,
     svc: Svc,
@@ -187,12 +199,12 @@ async def dimension_mappings(
     return await svc.dim_mappings(id, conflict, page, size)
 
 
-@router.get("/dimensions/{id}/usage", response_model=RecPage)
+@get("/dimensions/{id}/usage", "dimensions", response_model=RecPage)
 async def dimension_usage(id: str, svc: Svc, page: Page = 1, size: int = Size(10)) -> Any:
     return await svc.dim_usage(id, page, size)
 
 
-@router.get("/dimensions/{id}/history", response_model=RecPage)
+@get("/dimensions/{id}/history", "dimensions", response_model=RecPage)
 async def dimension_history(id: str, svc: Svc, page: Page = 1, size: int = Size(10)) -> Any:
     return await svc.dim_history(id, page, size)
 
@@ -200,7 +212,7 @@ async def dimension_history(id: str, svc: Svc, page: Page = 1, size: int = Size(
 # ---------------------------------------------------------------- 业务知识（Glossary.vue）
 
 
-@router.get("/knowledge", response_model=RecPage)
+@get("/knowledge", "glossary", response_model=RecPage)
 async def list_knowledge(
     svc: Svc,
     q: Kw = "",
@@ -213,16 +225,16 @@ async def list_knowledge(
     return await svc.knowledge_list(q, type, st, page, size, focus_id)
 
 
-@router.get("/knowledge/synonym-conflicts", response_model=SynonymConflicts)
+@get("/knowledge/synonym-conflicts", "glossary", response_model=SynonymConflicts)
 async def synonym_conflicts(svc: Svc) -> Any:
     return await svc.synonym_conflicts()
 
 
-@router.get("/knowledge/{id}", response_model=Rec)
+@get("/knowledge/{id}", "glossary", response_model=Rec)
 async def get_knowledge(id: str, svc: Svc) -> Any:
     return await svc.knowledge_detail(id)
 
 
-@router.get("/knowledge/{id}/refs", response_model=RecPage)
+@get("/knowledge/{id}/refs", "glossary", response_model=RecPage)
 async def knowledge_refs(id: str, svc: Svc, page: Page = 1, size: int = Size(8)) -> Any:
     return await svc.knowledge_refs(id, page, size)

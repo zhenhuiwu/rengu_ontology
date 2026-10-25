@@ -9,20 +9,16 @@ from typing import Any
 
 from pydantic import ConfigDict
 
+from app.common.pagination import Page
 from app.core.schema import ApiModel
 
 Rec = dict[str, Any]
 
 
-class RecPage(ApiModel):
-    """分页结果（api-index §1 PageResult）；附加键原样透传。"""
+class RecPage(Page[Rec]):
+    """分页结果 = 骨架 app.common.pagination.Page（{items,total,page,size}）；附加键原样透传。"""
 
     model_config = ConfigDict(extra="allow")
-
-    items: list[Rec]
-    total: int
-    page: int
-    size: int
 
 
 class SynonymConflict(ApiModel):
