@@ -2,7 +2,7 @@
 /**
  * 对象类型 → 使用与治理 → 版本历史：改到这个对象类型的变更单（按 changes.ts 的 touches / diffs 认），
  * 后面接变更单流程上线前的修订记录（src/mock/objectHistory.ts，无单号、不能跳转）。
- * 状态颜色：审核中橙色，已驳回红色，其余灰色。点单号进“变更与发布”；已发布的历史版本可切到该版本只读查看。
+ * 状态颜色：审核中橙色，其余（含已驳回）灰色。点单号进“变更与发布”；已发布的历史版本可切到该版本只读查看。
  */
 import { computed, ref, watch } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -40,7 +40,7 @@ const size = ref(12);
 watch(filter, () => { page.value = 1; });
 const pageRows = computed(() => paginate(rows.value, { page: page.value, size: size.value }).items);
 const canView = (r: Row) => !r.pending && r.version !== CURRENT_VERSION && RELEASES.some((x) => x.ver === r.version);
-const tone = (s: string) => (s === '审核中' ? 'warning' : s === '已驳回' ? 'error' : 'default');
+const tone = (s: string) => (s === '审核中' ? 'warning' : 'default');
 const crCount = computed(() => all.value.filter((r) => r.cr).length);
 
 const cols = [

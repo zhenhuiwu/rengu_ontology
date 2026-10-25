@@ -231,7 +231,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
       <div class="ot-head">
         <span class="t-16 fw-600 c-1">{{ current.name }}</span>
         <span class="t-14 c-3 num">{{ current.api }} · {{ PROPS.length }} 个属性 · {{ current.count }} 条</span>
-        <a-tag :color="statusColor(current)">{{ shownStatus(current) }}</a-tag>
+        <a-tag v-if="!(shownStatus(current) === '草稿中' && draft && !readonly)" :color="statusColor(current)">{{ shownStatus(current) }}</a-tag>
         <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
