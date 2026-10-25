@@ -5,6 +5,7 @@
  * 合计行固定在表底，按全部数据计算（不是当前页）。翻页写在 URL：?tblPage=2。
  */
 import { computed } from 'vue';
+import { message } from 'ant-design-vue';
 import { ApartmentOutlined, DownloadOutlined } from '@ant-design/icons-vue';
 import { QA_EC_STORES, fmtMoney, fmtInt } from '@/mock';
 import { useQueryPage } from '../useQueryParam';
@@ -29,6 +30,7 @@ const columns = [
   { title: '订单数', dataIndex: 'orders', key: 'orders', align: 'right' as const },
 ];
 const pageRows = computed(() => (paged ? rows.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE) : rows));
+function onExport() { message.info(`已导出 ${rows.length} 行（门店销售额.xlsx）`); }
 const pageModel = computed({ get: () => current.value, set: (p: number) => { page.value = p; } });
 </script>
 
@@ -43,7 +45,7 @@ const pageModel = computed({ get: () => current.value, set: (p: number) => { pag
     <div class="qa-sa-box">
       <div class="qa-sa-box-head">
         <span>按门店拆分</span>
-        <a-button size="small"><template #icon><DownloadOutlined /></template>导出</a-button>
+        <a-button size="small" @click="onExport"><template #icon><DownloadOutlined /></template>导出</a-button>
       </div>
       <a-table size="small" :columns="columns" :data-source="pageRows" row-key="key" :pagination="false" class="qa-sa-tbl">
         <template #bodyCell="{ column, record, index }">

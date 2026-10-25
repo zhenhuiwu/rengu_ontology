@@ -120,7 +120,7 @@ const trigText = (r: EvalRun) => crsOf(r).reduce((t, id) => t.replace(id + ' ', 
           <span v-else-if="column.key === 'passed'" class="num">{{ record.status === '已完成' ? `${record.passed} / ${record.total}` : `-- / ${record.total}` }}</span>
           <span v-else-if="column.key === 'rate'" class="num c-1">{{ record.status === '已完成' ? pct(passRate(record)) : '--' }}</span>
           <span v-else-if="column.key === 'fails'" class="num" :class="record.fails.length ? 'tl-failed' : 'c-3'">{{ record.status === '已完成' ? record.fails.length : '--' }}</span>
-          <span v-else-if="column.key === 'status'" :class="record.status === '已完成' ? 'c-2' : 'tl-attention'">{{ record.status }}</span>
+          <span v-else-if="column.key === 'status'" :class="record.status === '已完成' ? 'c-2' : 'c-1'">{{ record.status }}</span>
           <span v-else-if="column.key === 'note'" class="c-3" :title="record.note">{{ record.note ?? '' }}</span>
         </template>
       </a-table>

@@ -49,7 +49,7 @@ const cols = [
   { title: '近 30 天命中', key: 'hits', width: 100, align: 'right' },
   { title: '操作', key: 'op', width: 130 },
 ];
-const stCls = (s: CertStatus) => (s === '待重新认证' ? 'tl-attention' : s === '已停用' ? 'c-3' : s === '待认证' ? 'c-2' : 'c-1');
+const stCls = (s: CertStatus) => (s === '待重新认证' ? 'c-1' : s === '已停用' ? 'c-3' : s === '待认证' ? 'c-2' : 'c-1');
 const planShort = (c: CertQa) => planText(c.plan).replace(`${metricLabel(c.plan.metric)} · `, '');
 
 /* 抽屉 */
@@ -138,7 +138,7 @@ const removeVariant = (c: CertQa, v: string) => { c.variants = c.variants.filter
       </div>
       <div v-if="cur.cr || cur.note" class="qd-note">
         <CrTag v-if="cur.cr" :id="cur.cr" />
-        <span class="t-12 c-warning qd-ell qd-grow" :title="cur.note">{{ cur.note }}</span>
+        <span class="t-12 c-2 qd-ell qd-grow" :title="cur.note">{{ cur.note }}</span>
       </div>
       <div class="qd-sec">
         <div class="qd-head"><span class="t-14 fw-600 c-1">语义计划</span><InfoTip title="本体查询模块按此计划生成达梦 DM8、金仓 KES 的查询；问数不写 SQL。" /></div>

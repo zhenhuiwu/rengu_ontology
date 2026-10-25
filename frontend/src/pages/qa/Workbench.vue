@@ -17,6 +17,7 @@ import { REGION_EC } from '@/mock';
 import { useQueryParam } from './useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
+import { useQaSession } from './useQaSession';
 import QaSessionPanel from './components/QaSessionPanel.vue';
 import QaConversation from './components/QaConversation.vue';
 import QaComposer from './components/QaComposer.vue';
@@ -51,6 +52,16 @@ const caliber = ref('不含税');
 const tips = ref<string[]>([]);
 watch([scope, caliber], ([s, c]) => { tips.value.push(`从这里开始按 大区 = ${s}、口径 = ${c} 回答`); });
 
+const sess = useQaSession();
+const shareLink = computed(() => `${location.origin}/use/qa/workbench?session=${sess.activeId.value}`);
+async function copyLink() {
+  try { await navigator.clipboard.writeText(shareLink.value); message.info('链接已复制'); } catch { message.info('浏览器不允许自动复制，请手动选中复制'); }
+}
+function toPage() {
+  if (readonly.value) return;
+  const title = sess.sessions.value.find((s) => s.id === sess.activeId.value)?.title ?? '';
+  router.push({ path: '/use/qa/pages', query: { newName: title } });
+}
 function onPinned(page: string) { pin.value = ''; message.success(`已固定到「${page}」`); }
 function onApplied() { apply.value = ''; applied.value = true; message.success('申请已提交，等待审批'); }
 
@@ -90,9 +101,19 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="pv.active.value ? pv.reason.value : undefined"><a-button :disabled="pv.active.value"><template #icon><ShareAltOutlined /></template>分享</a-button></a-tooltip>
-    <a-tooltip :title="reason"><a-button :disabled="readonly"><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button></a-tooltip>
-    <a-tooltip :title="pv.active.value ? pv.reason.value : undefined"><a-button :disabled="pv.active.value"><template #icon><EllipsisOutlined /></template></a-button></a-tooltip>
+    <a-tooltip v-if="pv.active.value" :title="pv.reason.value"><a-button disabled><template #icon><ShareAltOutlined /></template>分享</a-button></a-tooltip>
+    <a-popover v-else trigger="click" placement="bottomRight" title="分享会话">
+      <template #content>
+        <div class="qa-share">
+          <a-input :value="shareLink" readonly size="small" />
+          <a-button size="small" @click="copyLink">复制链接</a-button>
+        </div>
+        <div class="t-12 c-3 qa-share-tip">拿到链接的人按自己的权限看到结果</div>
+      </template>
+      <a-button><template #icon><ShareAltOutlined /></template>分享</a-button>
+    </a-popover>
+    <a-tooltip :title="reason || '新建一个页面，再把回答卡片固定上去'"><a-button :disabled="readonly" @click="toPage"><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button></a-tooltip>
+    <a-tooltip :title="pv.active.value ? pv.reason.value : '更多操作暂未开放'"><a-button disabled><template #icon><EllipsisOutlined /></template></a-button></a-tooltip>
   </Teleport>
   <div class="qa-wb">
     <QaSessionPanel @panel="(v) => (panel = v)" />
@@ -111,5 +132,7 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
 <style scoped>
 .qa-wb { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .qa-center { flex: 1; background: var(--g3); }
+.qa-share { display: flex; gap: 8px; width: 360px; }
+.qa-share-tip { margin-top: 8px; }
 .qa-pv { flex: none; padding: 8px 16px; border-bottom: var(--border); background: var(--g2); }
 </style>

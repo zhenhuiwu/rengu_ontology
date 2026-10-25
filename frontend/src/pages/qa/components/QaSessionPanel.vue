@@ -8,7 +8,9 @@
 import { computed, ref, watch, nextTick } from 'vue';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
-import { QA_SESSION_LIST, QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
+import { QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
+import { useQaSession } from '../useQaSession';
+import AppPagination from '@/components/AppPagination.vue';
 import { useQueryParam, useQueryPage } from '../useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
 
@@ -16,7 +18,7 @@ const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
 const PAGE_SIZE = 12;
-const list = ref([...QA_SESSION_LIST]);
+const { sessions: list, activeId: active, newSession } = useQaSession();
 const editing = ref('');
 const draft = ref('');
 const menuId = ref('');
@@ -36,9 +38,16 @@ function saveRename() {
 function doDelete(id: string) {
   list.value = list.value.filter((x) => x.id !== id);
   delId.value = '';
+  if (active.value === id && list.value.length) active.value = list.value[0].id;
   message.success('会话已删除');
 }
-const active = QA_SESSION_LIST[0].id;
+function onNew() {
+  if (readonly.value) return;
+  kw.value = ''; range.value = 'all'; page.value = 1;
+  newSession();
+}
+function select(id: string) { if (editing.value !== id) active.value = id; }
+const pageModel = computed({ get: () => current.value, set: (p: number) => { page.value = p; } });
 const kw = useQueryParam('sessQ');
 const range = useQueryParam('sessRange', 'all');
 const page = useQueryPage('sessPage');
@@ -64,17 +73,17 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 
 <template>
   <section class="panel qa-sessions">
-    <a-tooltip :title="reason"><a-button block :disabled="readonly"><template #icon><PlusOutlined /></template>新建会话</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button block :disabled="readonly" @click="onNew"><template #icon><PlusOutlined /></template>新建会话</a-button></a-tooltip>
     <div class="qa-ss-filter">
       <a-input :value="kw" placeholder="搜索会话" allow-clear @change="(e: Event) => (kw = (e.target as HTMLInputElement).value)">
         <template #prefix><SearchOutlined class="c-3" /></template>
       </a-input>
       <a-select v-model:value="range" :options="RANGES" class="qa-ss-range" />
     </div>
-    <div class="qa-ss-head c-3"><span>历史会话</span><span class="t-12">共 {{ filtered.length }} 条</span></div>
+    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="filtered.length <= PAGE_SIZE" class="t-12">共 {{ filtered.length }} 条</span></div>
     <div class="qa-ss-list">
       <div v-for="s in rows" :key="s.id" class="qa-ss-item"
-        :class="{ on: s.id === active, hold: menuId === s.id || delId === s.id, edit: editing === s.id }" :title="s.title">
+        :class="{ on: s.id === active, hold: menuId === s.id || delId === s.id, edit: editing === s.id }" :title="s.title" @click="select(s.id)">
         <a-input v-if="editing === s.id" ref="editInput" v-model:value="draft" size="small" class="qa-ss-edit"
           @press-enter="saveRename" @blur="saveRename" @keydown.esc="editing = ''" />
         <template v-else>
@@ -97,8 +106,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
       </div>
       <div v-if="!rows.length" class="qa-ss-empty c-3">没有匹配的会话</div>
     </div>
-    <a-pagination v-if="filtered.length > PAGE_SIZE" simple size="small" class="qa-ss-pager"
-      :current="current" :page-size="PAGE_SIZE" :total="filtered.length" @change="(p: number) => (page = p)" />
+    <AppPagination v-if="filtered.length > PAGE_SIZE" v-model:page="pageModel" variant="simple" :total="filtered.length" :size="PAGE_SIZE" :empty="false" class="qa-ss-pager" />
     <div class="qa-ss-bottom">
       <div class="qa-ss-group c-3">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
       <div v-for="s in QA_FAVORITES" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
@@ -126,7 +134,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 .qa-ss-item:hover .qa-ss-more, .qa-ss-item.hold .qa-ss-more { display: inline-flex; align-items: center; justify-content: center; }
 .qa-ss-item:hover .qa-ss-date, .qa-ss-item.hold .qa-ss-date { display: none; }
 .qa-ss-empty { padding: 16px 8px; text-align: center; }
-.qa-ss-pager { display: flex; justify-content: center; padding: 8px 0 4px; }
+.qa-ss-pager { padding: 0 8px; min-height: 32px; }
 .qa-ss-group { display: flex; justify-content: space-between; padding: 8px 8px 4px; }
 .qa-ss-bottom { margin-top: auto; border-top: var(--border); padding-top: 4px; }
 </style>

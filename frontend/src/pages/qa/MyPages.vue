@@ -106,8 +106,9 @@ async function remove(p: QaPageFull) {
 }
 
 /* 新建空白页面 */
-const newOpen = ref(false);
-const newName = ref('');
+/* 从问数工作台“把会话整理成页面”进入时带 ?newName=，直接打开新建并填好名称 */
+const newOpen = ref(!!q('newName'));
+const newName = ref(q('newName'));
 const newScope = ref('华东大区');
 function createBlank() {
   const id = nextId();
@@ -207,7 +208,7 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
             <span v-else-if="column.key === 'refresh'" class="c-2">{{ freqLabel(record.refresh) }}</span>
             <span v-else-if="column.key === 'sub'" class="c-2">{{ record.sub.on ? `${record.sub.channel} · ${record.sub.receivers.length} 人` : '--' }}</span>
             <span v-else-if="column.key === 'share'" class="c-2">{{ shareText(record) }}</span>
-            <span v-else-if="column.key === 'asof'" class="num" :class="record.status === '刷新失败' ? 'tl-failed' : 'c-2'">{{ record.dataAsOf.slice(5) }}</span>
+            <span v-else-if="column.key === 'asof'" class="num c-2">{{ record.dataAsOf.slice(5) }}</span>
             <span v-else-if="column.key === 'status'" :class="stCls(record.status)" :title="record.statusNote">{{ record.status }}</span>
             <span v-else-if="column.key === 'op'" class="mp-ops" @click.stop>
               <a-tooltip :title="reason"><a-button type="link" size="small" :disabled="readonly" @click="refresh(record)">刷新</a-button></a-tooltip>

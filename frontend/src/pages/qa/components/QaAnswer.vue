@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /** 主回答卡：一行灰色元信息 + 可展开“依据”；澄清；结论；指标 + 趋势；省份（表格/图表切换）；操作 */
 import { ref, computed } from 'vue';
-import { ArrowDownOutlined, SearchOutlined, ThunderboltOutlined, PushpinOutlined,
-  LikeOutlined, DislikeOutlined, CopyOutlined, DownOutlined, UpOutlined, ApartmentOutlined } from '@ant-design/icons-vue';
+import { message } from 'ant-design-vue';
+import { SearchOutlined, ThunderboltOutlined, PushpinOutlined,
+  LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CopyOutlined, DownOutlined, UpOutlined, ApartmentOutlined } from '@ant-design/icons-vue';
 import EChart from '@/components/EChart.vue';
 import { GRAY } from '@/theme';
 import { QA_PROVINCES, QA_TREND, QA_TOTAL_SALES, QA_TOTAL_CUSTOMERS, fmtMoney, fmtInt, qaMetricLabel, QA_METRIC, TAX_RATE } from '@/mock';
@@ -16,6 +17,15 @@ const ANSWERED_VER = 'v2026.10.3';
 const metricLabel = computed(() => (caliber.value === 'both' ? `${qaMetricLabel('ex')} / ${qaMetricLabel('in')}` : qaMetricLabel(caliber.value)));
 const inTax = (n: number) => n * (1 + TAX_RATE);
 const showBasis = ref(false);
+const topDrops = [...QA_PROVINCES].sort((a, b) => a.mom - b.mom).slice(0, 3);
+const sign = (n: number) => `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(1)}%`;
+/** 赞/踩：二选一，再点一次取消 */
+const vote = ref<'' | 'up' | 'down'>('');
+function onVote(v: 'up' | 'down') { vote.value = vote.value === v ? '' : v; if (vote.value) message.info(v === 'up' ? '已记录：回答正确' : '已记录：回答有误，会进入问数调优的反馈'); }
+async function onCopy() {
+  const t = document.querySelector('.qa-ans-text')?.textContent?.trim() ?? '';
+  try { await navigator.clipboard.writeText(t); message.info('已复制回答'); } catch { message.info('浏览器不允许自动复制，请手动选中复制'); }
+}
 const view = ref('表格');
 const f1 = (n: number) => fmtMoney(n, 1);
 const columns = computed(() => [
@@ -89,7 +99,7 @@ const barOption = computed(() => ({
       <div class="qa-ans-left">
         <a-descriptions bordered size="small" :column="2" :label-style="{ width: '84px', whiteSpace: 'nowrap' }">
           <a-descriptions-item label="销售额"><span class="fw-600 num">¥1,286.0 万</span></a-descriptions-item>
-          <a-descriptions-item label="环比"><span class="fw-600 num c-error"><ArrowDownOutlined /> 8.4%</span></a-descriptions-item>
+          <a-descriptions-item label="环比"><span class="fw-600 num">−8.4%</span></a-descriptions-item>
           <a-descriptions-item label="复购客户"><span class="fw-600 num">{{ fmtInt(QA_TOTAL_CUSTOMERS) }} 人</span></a-descriptions-item>
           <a-descriptions-item label="占大区"><span class="fw-600 num">62.0%</span></a-descriptions-item>
         </a-descriptions>
@@ -124,14 +134,21 @@ const barOption = computed(() => ({
 
     <div class="qa-ans-actions">
       <a-space :size="8">
-        <a-button><template #icon><SearchOutlined /></template>查看原因</a-button>
+        <a-popover trigger="click" placement="topLeft" title="下降原因：7 省全部下降，降幅最大的 3 个" overlay-class-name="qa-reason-pop">
+          <template #content>
+            <div class="qa-reason">
+              <div v-for="r in topDrops" :key="r.key" class="qa-reason-row"><span>{{ r.province }}（{{ f1(r.sales) }} 万元）</span><span class="num">{{ sign(r.mom) }}</span></div>
+            </div>
+          </template>
+          <a-button><template #icon><SearchOutlined /></template>查看原因</a-button>
+        </a-popover>
         <a-tooltip :title="reason"><a-button :disabled="readonly" @click="emit('suggest')"><template #icon><ThunderboltOutlined /></template>建议动作</a-button></a-tooltip>
         <a-tooltip :title="reason"><a-button :disabled="readonly" @click="emit('pin')"><template #icon><PushpinOutlined /></template>固定到页面</a-button></a-tooltip>
       </a-space>
       <a-space :size="4">
-        <a-tooltip title="复制"><a-button type="text"><template #icon><CopyOutlined /></template></a-button></a-tooltip>
-        <a-tooltip title="回答正确"><a-button type="text"><template #icon><LikeOutlined /></template></a-button></a-tooltip>
-        <a-tooltip title="回答有误"><a-button type="text"><template #icon><DislikeOutlined /></template></a-button></a-tooltip>
+        <a-tooltip title="复制"><a-button type="text" @click="onCopy"><template #icon><CopyOutlined /></template></a-button></a-tooltip>
+        <a-tooltip :title="vote === 'up' ? '已标记回答正确，再点取消' : '回答正确'"><a-button type="text" :class="{ 'qa-ans-voted': vote === 'up' }" @click="onVote('up')"><template #icon><LikeFilled v-if="vote === 'up'" /><LikeOutlined v-else /></template></a-button></a-tooltip>
+        <a-tooltip :title="vote === 'down' ? '已标记回答有误，再点取消' : '回答有误'"><a-button type="text" :class="{ 'qa-ans-voted': vote === 'down' }" @click="onVote('down')"><template #icon><DislikeFilled v-if="vote === 'down'" /><DislikeOutlined v-else /></template></a-button></a-tooltip>
       </a-space>
     </div>
   </div>
@@ -159,5 +176,8 @@ const barOption = computed(() => ({
 .qa-ans-tbl :deep(.ant-table-small .ant-table-tbody > tr > td),
 .qa-ans-tbl :deep(.ant-table-small .ant-table-summary td) { padding-top: 6px; padding-bottom: 6px; }
 .qa-ans-sum :deep(td) { background: var(--g2); }
+.qa-ans-voted { color: var(--brand); }
+.qa-reason { display: flex; flex-direction: column; gap: 4px; min-width: 280px; }
+.qa-reason-row { display: flex; justify-content: space-between; gap: 16px; white-space: nowrap; }
 .qa-ans-actions { display: flex; justify-content: space-between; align-items: center; border-top: var(--border); padding-top: 10px; }
 </style>

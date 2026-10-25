@@ -175,11 +175,11 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
         <a-tag class="od-kind">{{ view.kindLabel }}</a-tag>
         <span v-if="view.status" class="c-2">{{ view.status.text }}</span>
         <span class="c-3 num">{{ view.code }}</span>
+        <span v-if="view.brief.length" class="od-brief od-ell" :title="view.brief.map((b) => `${b.label} ${b.value}`).join('　')">
+          <span v-for="b in view.brief" :key="b.label"><span class="c-2">{{ b.label }}</span> {{ b.value }}</span>
+        </span>
         <span v-if="pv.active.value" class="od-cut t-12 c-2">{{ pv.userName.value }} 的{{ pv.scopeLabel(pvLabel) }}</span>
         <span class="t-12 c-3" :class="{ 'od-cut': !pv.active.value }">数据截至 <span class="num">{{ OBJ_CUTOFF }}</span></span>
-      </div>
-      <div class="od-brief">
-        <span v-for="b in view.brief" :key="b.label"><span class="c-3">{{ b.label }}</span> {{ b.value }}</span>
       </div>
     </div>
 
@@ -287,7 +287,8 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 .od-title { display: flex; align-items: center; gap: 12px; }
 .od-kind { margin: 0; }
 .od-cut { margin-left: auto; }
-.od-brief { display: flex; gap: 24px; flex-wrap: wrap; }
+.od-brief { flex: 0 1 auto; min-width: 0; white-space: nowrap; }
+.od-brief > span + span { margin-left: 16px; }
 .od-row { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .od-main { flex: 1; }
 .od-tabs { flex: none; padding: 0 16px; }
