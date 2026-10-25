@@ -145,6 +145,13 @@ export function objRow(kind: string, id: string): any {
   const t = OBJ_TYPES.find((x) => x.kind === kind);
   return t ? t.rows().find((r) => t.id(r) === id) : undefined;
 }
+/** 预览时这个对象是否看不到（只判断门店、商品、订单、大区；不在预览时为 false） */
+export function previewDenied(kind: string, id: string, scopeOf: (objType: string) => string | null, label?: string): boolean {
+  if (!['store', 'product', 'order', 'region'].includes(kind)) return false;
+  const s = scopeOf(KIND_LABEL[kind]);
+  if (s === null) return false;
+  return !inScope(kind, objRow(kind, id) ?? { name: label ?? id }, s);
+}
 export function inScope(kind: string, row: any, scope: string | null): boolean {
   if (scope === null || scope === '全部') return true;
   if (scope === '无权限') return false;

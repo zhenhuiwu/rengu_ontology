@@ -3,7 +3,7 @@
  * 对象搜索（/use/objects/search）。参考 Object Explorer：类型 + 关键词，左侧按维度属性分面（带计数），右侧结果表。
  * URL：?type=store&kw=&region=华东一区,华东二区&city=&format=&status=&page=&size=&ask=1
  * 行点击打开公共详情抽屉（?drawer=kind:id）；“完整视图”进对象详情；“用这批对象提问”在当前页打开提问浮层。
- * 以此用户预览（?previewAs=U010231）：行和分面计数按 usePreview().scopeOf 过滤，左侧显示被预览用户的数据范围；导出、提问只读。
+ * 以此用户预览（?previewAs=U010231）：行和分面计数按 usePreview().scopeOf 过滤，左侧显示被预览用户的数据范围；导出只读，提问照常（回答只含范围内数据）。
  */
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
@@ -15,7 +15,7 @@ import { usePreview } from '@/composables/usePreview';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import { fmtInt, fmtMoney } from '@/mock/format';
-import { OBJ_TYPES, OBJ_SCOPE, objType, inScope, type AskScope } from '@/mock/objects-qa';
+import { OBJ_TYPES, OBJ_SCOPE, objType, inScope, previewDenied, KIND_LABEL, type AskScope } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
 
 const route = useRoute();
@@ -49,6 +49,17 @@ const pq = usePagedQuery({ defaultSize: 16, filters: filterSig });
 
 /* 预览：被预览用户的行级范围 */
 const pv = usePreview();
+/* 预览：无权对象的侧抽屉（含 URL 直接打开）一律拦下 */
+watch(() => [route.query.drawer, route.query.drawer2, pv.active.value], () => {
+  for (const k of ['drawer2', 'drawer']) {
+    const v = qs(k); const i = v.indexOf(':');
+    if (i > 0 && previewDenied(v.slice(0, i), v.slice(i + 1), pv.scopeOf)) {
+      message.warning(`${pv.userName.value} 无权查看这个${KIND_LABEL[v.slice(0, i)]}，预览中不能打开`);
+      patch(k === 'drawer' ? { drawer: null, drawer2: null } : { drawer2: null });
+      return;
+    }
+  }
+}, { immediate: true });
 const pvScope = computed(() => pv.scopeOf(type.value.label));
 const scopedRows = computed(() => type.value.rows().filter((r) => inScope(type.value.kind, r, pvScope.value)));
 const pvNoAccess = computed(() => pvScope.value === '无权限');
@@ -90,7 +101,7 @@ const fmtCell = (r: any, key: string) => {
   if (typeof v === 'number') return key === 'area' || key === 'sales' ? fmtMoney(v, 1) : fmtMoney(v);
   return v;
 };
-const tone = (v: string) => (['装修中', '待支付'].includes(v) ? 'c-warning' : ['已闭店', '已取消'].includes(v) ? 'c-3' : '');
+const tone = (v: string) => (['已闭店', '已取消'].includes(v) ? 'c-3' : ['装修中', '待支付'].includes(v) ? 'c-2' : '');
 
 /* 多选与导出 */
 const selKeys = ref<string[]>([]);
@@ -108,7 +119,7 @@ function exportCsv() {
 }
 
 /* 用这批对象提问：浮层，不跳转；?ask=1 可复现 */
-const askOpen = computed({ get: () => qs('ask') === '1' && !pv.active.value, set: (v: boolean) => patch({ ask: v ? '1' : null }) });
+const askOpen = computed({ get: () => qs('ask') === '1', set: (v: boolean) => patch({ ask: v ? '1' : null }) });
 const askScope = computed<AskScope>(() => {
   const ids = selKeys.value.length ? selKeys.value : rows.value.map((r) => type.value.id(r));
   return { kind: type.value.kind, label: type.value.label, conds: selKeys.value.length ? [`已选 ${selKeys.value.length} 个`] : conds.value, ids };
@@ -160,7 +171,7 @@ function openDetail(r: any) {
         </div>
         <a-space :size="8">
           <a-tooltip :title="pv.reason.value || undefined"><a-button :disabled="pv.active.value || !rows.length" @click="exportCsv"><template #icon><DownloadOutlined /></template>{{ selKeys.length ? '导出所选' : '导出' }}</a-button></a-tooltip>
-          <a-tooltip :title="pv.reason.value || undefined"><a-button type="primary" :disabled="pv.active.value || !rows.length" @click="askOpen = true"><template #icon><MessageOutlined /></template>用这批对象提问</a-button></a-tooltip>
+          <a-button type="primary" :disabled="!rows.length" @click="askOpen = true"><template #icon><MessageOutlined /></template>用这批对象提问</a-button>
         </a-space>
       </div>
       <div class="os-body">

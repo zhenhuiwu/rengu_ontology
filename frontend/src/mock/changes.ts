@@ -544,8 +544,9 @@ export const ONTOLOGY_ADMINS = ['王敏'];
  * 单号由公共 useDraftView().start 分配；这里只补列表行和详情（改动、影响、同义词），不改已有单子。
  */
 export function registerChange(cr: ChangeRequest, detail?: Partial<CRDetail>) {
-  if (!CHANGE_REQUESTS.some((c) => c.id === cr.id)) CHANGE_REQUESTS.unshift(cr);
-  if (detail) CR_DETAILS[cr.id] = { ...EMPTY, ...detail, times: detail.times ?? { created: cr.updatedAt } };
+  const old = CHANGE_REQUESTS.find((c) => c.id === cr.id);
+  if (old) Object.assign(old, cr); else CHANGE_REQUESTS.unshift(cr);
+  if (detail) { const prev = CR_DETAILS[cr.id]; CR_DETAILS[cr.id] = { ...EMPTY, ...prev, ...detail, times: detail.times ?? prev?.times ?? { created: cr.updatedAt } }; }
 }
 /** 生成登记用的改动行 */
 export const changeRow = row;

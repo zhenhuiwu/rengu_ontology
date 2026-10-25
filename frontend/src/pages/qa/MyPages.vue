@@ -16,7 +16,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
-import { MY_PAGES, PAGE_TEMPLATES, PAGES_CUTOFF, PAGE_SCOPES, freqLabel, type QaPageFull, type QaTemplate, type TplCreate, type RefreshPlan } from '@/mock/qa-pages';
+import { MY_PAGES, OTHER_PAGES, OWNER_DEPT, PAGE_TEMPLATES, PAGES_CUTOFF, PAGE_SCOPES, freqLabel, type QaPageFull, type QaTemplate, type TplCreate, type RefreshPlan } from '@/mock/qa-pages';
 import PageDrawer from './pages/PageDrawer.vue';
 import TemplateDrawer from './pages/TemplateDrawer.vue';
 import UseTemplatePop from './pages/UseTemplatePop.vue';
@@ -31,7 +31,16 @@ const pv = usePreview();
 const pvText = computed(() => pv.limited.value.map((o) => `${o.name} ${o.scope}`).join('；') || '全部');
 const confirm = useConfirmStore();
 
-const pages = reactive<QaPageFull[]>(MY_PAGES.map((p) => ({ ...p })));
+const pages = reactive<QaPageFull[]>([...MY_PAGES, ...OTHER_PAGES].map((p) => ({ ...p })));
+/** 列表可见：平时是我（王敏）的页面；预览时是被预览用户自己的页面 + 共享给他的 */
+const ME = '王敏';
+const visible = (p: QaPageFull) => {
+  const who = pv.active.value ? pv.userName.value : ME;
+  const dept = pv.active.value ? (pv.session.value?.user.dept ?? '') : OWNER_DEPT[ME];
+  if (p.owner === who) return true;
+  if (!pv.active.value) return false;
+  return (p.share.mode === '指定成员' && p.share.members.some((m) => m.name === who)) || (p.share.mode === '所在部门' && !!dept && dept.includes(OWNER_DEPT[p.owner] ?? '-'));
+};
 const tab = computed({ get: () => (q('tab') === 'templates' ? 'templates' : 'pages'), set: (v: string) => setQuery({ tab: v === 'templates' ? 'templates' : undefined }) });
 
 /* ── 我的页面 ── */
@@ -39,7 +48,7 @@ const kw = computed({ get: () => q('kw'), set: (v: string) => setQuery({ kw: v |
 const srcF = computed({ get: () => q('src') || undefined, set: (v?: string) => setQuery({ src: v || undefined }) });
 const shareF = computed({ get: () => q('share') || undefined, set: (v?: string) => setQuery({ share: v || undefined }) });
 const statusF = computed({ get: () => q('status') || undefined, set: (v?: string) => setQuery({ status: v || undefined }) });
-const rows = computed(() => pages.filter((p) => (!kw.value || p.name.includes(kw.value))
+const rows = computed(() => pages.filter((p) => visible(p) && (!kw.value || p.name.includes(kw.value))
   && (!srcF.value || p.sourceKind === srcF.value)
   && (!shareF.value || (shareF.value === '已共享' ? p.share.mode !== '仅自己' : p.share.mode === '仅自己'))
   && (!statusF.value || p.status === statusF.value)));
@@ -60,7 +69,7 @@ const cols = [
 ];
 const caliberText = (p: QaPageFull) => { const s = [...new Set(p.cards.map((c) => `${c.metric} ${c.version}`))]; return { text: s.join('、'), n: s.length }; };
 const shareText = (p: QaPageFull) => (p.share.mode === '仅自己' ? '仅自己' : p.share.mode === '所在部门' ? '所在部门' : `${p.share.members.length} 位成员`);
-const stCls = (s: string) => (s === '刷新失败' ? 'tl-failed' : s === '口径待更新' ? 'tl-attention' : 'c-2');
+const stCls = (s: string) => (s === '刷新失败' ? 'tl-failed' : 'c-2');
 
 /* 抽屉 */
 const current = computed(() => pages.find((p) => p.id === q('page_id')));
@@ -164,7 +173,7 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
 
   <div class="panel mp">
     <a-tabs v-model:active-key="tab" class="mp-tabs">
-      <a-tab-pane key="pages" :tab="`我的页面（${pages.length}）`" />
+      <a-tab-pane key="pages" :tab="`${pv.active.value ? `${pv.userName.value} 的页面` : '我的页面'}（${pages.filter(visible).length}）`" />
       <a-tab-pane key="templates" :tab="`模板库（${PAGE_TEMPLATES.length}）`" />
     </a-tabs>
 
@@ -189,6 +198,7 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
                   </div>
                 </template>
                 <span class="c-1">{{ record.name }}</span>
+                <span v-if="pv.active.value && record.owner !== pv.userName.value" class="t-12 c-3"> · {{ record.owner }} 共享</span>
               </a-popover>
             </template>
             <span v-else-if="column.key === 'cards'" class="num">{{ record.cards.length }}</span>

@@ -133,3 +133,23 @@ export const MY_PAGES: QaPageFull[] = build();
 export const PAGE_TEMPLATES: QaTemplate[] = buildTemplates();
 export const PAGE_SCOPES = SCOPES;
 export interface TplCreate { tpl: QaTemplate; name: string; scope: string; caliber: string; refresh: string }
+
+/* ───────────── 其他人的页面（权限预览用：被预览用户自己的 + 共享给他的） ───────────── */
+/** 页面所有者的部门（“所在部门”共享按此判断） */
+export const OWNER_DEPT: Record<string, string> = { 王敏: '华东事业部 / 运营中心', 苏刚: '华东事业部 / 运营中心', 陈杰: '华东事业部 / 运营中心', 周婷: '华东事业部 / 会员中心' };
+const OTHER_DEFS: [string, string, string, '仅自己' | '指定成员' | '所在部门', string[]][] = [
+  ['P901', '华东门店日巡看板', '苏刚', '仅自己', []],
+  ['P902', '华东二区出库跟踪', '苏刚', '指定成员', ['陈杰']],
+  ['P903', '华东订单周报', '苏刚', '仅自己', []],
+  ['P904', '运营中心门店排名', '陈杰', '指定成员', ['苏刚', '赵磊']],
+  ['P905', '会员复购周报（华东）', '周婷', '指定成员', ['苏刚']],
+];
+export const OTHER_PAGES: QaPageFull[] = OTHER_DEFS.map(([id, name, owner, mode, who], i) => {
+  const b = MY_PAGES[(i * 5 + 2) % MY_PAGES.length];
+  return {
+    ...b, id, name, owner, scope: ['华东大区', '华东二区', '华东一区'][i % 3], sourceKind: '手动新建', source: '手动新建', status: b.status === '刷新失败' ? '正常' : b.status,
+    cards: b.cards.map((c, j) => ({ ...c, key: `${id}-C${j + 1}` })),
+    sub: { ...b.sub, on: false, receivers: [] },
+    share: { mode, members: who.map((n) => ({ name: n, dept: PEOPLE.find((p) => p.name === n)?.dept ?? OWNER_DEPT[n] ?? '', perm: '可查看' as SharePerm })), link: false, allowExport: true },
+  };
+});

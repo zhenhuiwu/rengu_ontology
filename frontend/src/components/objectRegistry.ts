@@ -30,7 +30,7 @@ export interface ObjView {
 }
 
 const orderStatusColor = (s: string): NonNullable<ObjView['status']>['color'] =>
-  s === '已出库' || s === '已签收' ? 'success' : s === '已取消' ? 'default' : s === '待支付' ? 'warning' : 'processing';
+  s === '已出库' || s === '已签收' ? 'success' : s === '已取消' ? 'default' : s === '待支付' ? 'default' : 'processing';
 
 const RESOLVERS: Record<string, (id: string) => ObjView | null> = {
   // 大区（问数工作台右栏“打开对象详情”）
@@ -73,7 +73,7 @@ const RESOLVERS: Record<string, (id: string) => ObjView | null> = {
     const orders = ORDERS.filter((o) => o.storeId === s.id);
     return {
       kind: 'store', kindLabel: '门店', id: s.id, title: s.name, code: s.code,
-      status: { text: s.status, color: s.status === '营业中' ? 'success' : s.status === '装修中' ? 'warning' : 'default' },
+      status: { text: s.status, color: s.status === '营业中' ? 'success' : 'default' },
       brief: [
         { label: '区域', value: s.region }, { label: '店长', value: s.manager },
         { label: '业态', value: s.format }, { label: '营业面积', value: s.area == null ? EMPTY : `${fmtMoney(s.area, 1)} ㎡` },

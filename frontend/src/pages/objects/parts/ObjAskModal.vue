@@ -7,12 +7,16 @@ import { computed, ref, watch } from 'vue';
 import { SendOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import { useReadonly } from '@/composables/useReadonly';
+import { usePreview } from '@/composables/usePreview';
 import { answerFor, type AskAnswer, type AskScope } from '@/mock/objects-qa';
 import { fmtInt } from '@/mock/format';
 
 const props = defineProps<{ scope: AskScope; suggestions: string[]; initial?: string }>();
 const open = defineModel<boolean>('open', { default: false });
-const { readonly, reason } = useReadonly();
+const { readonly: ro, reason } = useReadonly();
+const pv = usePreview();
+/** 提问只读：预览时照常可问，回答只含被预览用户范围内的数据 */
+const readonly = computed(() => ro.value && !pv.active.value);
 const q = ref('');
 const asked = ref('');
 const answer = ref<AskAnswer | null>(null);
@@ -41,6 +45,7 @@ const countText = computed(() => (props.scope.single ? '' : `共 ${fmtInt(props.
         <span>{{ scope.label }}</span>
         <a-tag v-for="c in scope.conds" :key="c" class="oa-tag">{{ c }}</a-tag>
         <span v-if="countText" class="c-3 num">{{ countText }}</span>
+        <span v-if="pv.active.value" class="t-12 c-2">只含 {{ pv.userName.value }} 数据范围内的数据</span>
       </div>
 
       <template v-if="answer">

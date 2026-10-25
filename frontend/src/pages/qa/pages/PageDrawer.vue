@@ -12,7 +12,7 @@ import { computed, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { HolderOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
-import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
+import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { useConfirmStore } from '@/stores/confirm';
 import CardPreview from './CardPreview.vue';
 import { PEOPLE, PAGE_SCOPES, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
@@ -102,19 +102,29 @@ const pagedMembers = computed(() => share.value.members.slice((mpage.value - 1) 
 function newViewers(): string[] {
   const pg = props.page; if (!pg) return [];
   const s = share.value;
-  if (s.mode === '所在部门') return pg.share.mode === '所在部门' ? [] : ['华东事业部 / 运营中心 全体'];
-  if (s.mode === '指定成员') return s.members.filter((m) => pg.share.mode !== '指定成员' || !pg.share.members.some((x) => x.name === m.name)).map((m) => `${m.name}（${m.perm}）`);
-  return [];
+  const out: string[] = [];
+  if (s.mode === '所在部门' && pg.share.mode !== '所在部门') out.push('华东事业部 / 运营中心 全体');
+  if (s.mode === '指定成员') out.push(...s.members.filter((m) => pg.share.mode !== '指定成员' || !pg.share.members.some((x) => x.name === m.name)).map((m) => `${m.name}（${m.perm}）`));
+  return out;
+}
+/** 保存后新扩大的权限：开启链接访问、允许导出 */
+function newGrants(): string[] {
+  const pg = props.page; if (!pg) return [];
+  const s = share.value; const out: string[] = [];
+  if (s.mode !== '仅自己' && s.link && !(pg.share.mode !== '仅自己' && pg.share.link)) out.push('开启链接访问：有链接且有数据权限的人都能打开');
+  if (s.mode !== '仅自己' && s.allowExport && !(pg.share.mode !== '仅自己' && pg.share.allowExport)) out.push('允许导出：可见人能下载卡片明细');
+  return out;
 }
 async function saveShare() {
   if (!props.page) return;
   if (share.value.mode === '指定成员' && !share.value.members.length) { message.warning('指定成员共享时至少添加一位成员'); return; }
   const add = newViewers();
-  if (add.length) {
+  const grants = newGrants();
+  if (add.length || grants.length) {
     const ok = await confirm.ask({
       title: '保存共享设置', target: props.page.name,
-      fields: [{ label: '新增可见人', value: add.join('、') }, { label: '链接访问', value: share.value.link ? '开启' : '关闭' }, { label: '允许导出', value: share.value.allowExport ? '允许' : '不允许' }],
-      impact: `新增可见人：${add.join('、')}。他们看到的数据按各自的数据权限裁剪，范围外的卡片显示“无权限”。`,
+      fields: [{ label: '新增可见人', value: add.length ? add.join('、') : '无' }, { label: '链接访问', value: share.value.link ? '开启' : '关闭' }, { label: '允许导出', value: share.value.allowExport ? '允许' : '不允许' }],
+      impact: `${[add.length ? `新增可见人：${add.join('、')}` : '', ...grants].filter(Boolean).join('；')}。看到的数据按各自的数据权限裁剪，范围外的卡片显示“无权限”。`,
       okText: '共享',
     });
     if (!ok) return;
@@ -130,6 +140,7 @@ const normShare = (x: ShareSetting) => json({ ...x, members: x.mode === '仅自�
 const shareDirty = computed(() => !!props.page && normShare(share.value) !== normShare(props.page.share));
 const dirty = computed(() => !props.readonly && (cardsDirty.value || schedDirty.value || shareDirty.value));
 const guard = useUnsavedGuard(dirty);
+const cancelEdit = async () => { if (cardsDirty.value && !(await confirmDiscard())) return; editing.value = false; };
 const discard = () => { editing.value = false; resetDrafts(); };
 const tabV = computed({ get: () => props.tab || 'preview', set: (v: string) => { guard(() => { discard(); emit('update:tab', v); }); } });
 const close = () => guard(() => { discard(); emit('close'); });
@@ -165,7 +176,7 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
         <div><span class="c-3">共享</span> <span class="c-1">{{ page.share.mode === '仅自己' ? '仅自己' : page.share.mode === '所在部门' ? '所在部门' : `${page.share.members.length} 位成员` }}</span></div>
         <div><span class="c-3">订阅</span> <span class="c-1">{{ page.sub.on ? `${page.sub.channel} · ${page.sub.receivers.length} 人` : '未开启' }}</span></div>
       </div>
-      <div v-if="page.statusNote" class="t-12" :class="page.status === '刷新失败' ? 'tl-failed' : 'c-warning'">{{ page.statusNote }}</div>
+      <div v-if="page.statusNote" class="t-12" :class="page.status === '刷新失败' ? 'tl-failed' : 'c-2'">{{ page.statusNote }}</div>
 
       <a-tabs v-model:active-key="tabV" size="small">
         <a-tab-pane key="preview" :tab="`预览（${page.cards.length}）`" />
@@ -176,10 +187,10 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
       <template v-if="tabV === 'preview'">
         <div class="pd-row">
           <span class="c-3 t-12">口径版本</span>
-          <a-tag v-for="c in calibers" :key="c.label" :class="{ 'c-warning': c.pending }" :title="c.pending">{{ c.label }}{{ c.pending ? ' · 待更新' : '' }}</a-tag>
+          <a-tag v-for="c in calibers" :key="c.label" :class="{ 'c-2': c.pending }" :title="c.pending">{{ c.label }}{{ c.pending ? ' · 待更新' : '' }}</a-tag>
           <span class="pd-sp" />
           <template v-if="editing">
-            <a-button size="small" @click="editing = false">取消</a-button>
+            <a-button size="small" @click="cancelEdit">取消</a-button>
             <a-button size="small" type="primary" @click="saveCards">保存顺序</a-button>
           </template>
           <a-tooltip v-else :title="reason"><a-button size="small" :disabled="readonly" @click="startEdit">调整卡片</a-button></a-tooltip>

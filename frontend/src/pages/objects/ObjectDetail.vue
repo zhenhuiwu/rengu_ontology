@@ -19,7 +19,7 @@ import { usePreview } from '@/composables/usePreview';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import {
-  KIND_LABEL, FIELD_GROUPS, OBJ_CUTOFF, caliberOf, storeExtraKpi, relationGroups, extraTimeline, actionRecords, objActions, quickQuestions, objType, objRow, inScope,
+  KIND_LABEL, FIELD_GROUPS, OBJ_CUTOFF, caliberOf, storeExtraKpi, relationGroups, extraTimeline, actionRecords, objActions, quickQuestions, objType, objRow, inScope, previewDenied,
   type AskScope, type ObjAction,
 } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
@@ -36,14 +36,31 @@ const patch = (p: Record<string, string | null>) => {
 };
 
 const kind = computed(() => qs('kind') || 'store');
-const id = computed(() => qs('id') || 'SH0047');
-const view = computed(() => resolveObject(kind.value, id.value));
+const id = computed(() => qs('id'));
+const view = computed(() => (id.value ? resolveObject(kind.value, id.value) : undefined));
 /* 预览：被预览用户对这类对象的行级范围 */
 const pv = usePreview();
 const pvLabel = computed(() => KIND_LABEL[kind.value] ?? view.value?.kindLabel ?? '');
 const pvOut = computed(() => !!view.value && pv.active.value && !inScope(kind.value, objRow(kind.value, id.value) ?? { name: view.value.title }, pv.scopeOf(pvLabel.value)));
 const TABS = [{ key: 'overview', title: '概览' }, { key: 'related', title: '关联对象' }, { key: 'timeline', title: '时间线' }, { key: 'actions', title: '动作记录' }];
 const tab = computed({ get: () => qs('tab') || 'overview', set: (v: string) => patch({ tab: v === 'overview' ? null : v, apage: null, asize: null }) });
+/* 切换到另一个对象：页签回到概览 */
+watch(() => `${kind.value}:${id.value}`, (n, o) => { if (o && n !== o && qs('tab')) patch({ tab: null, apage: null, asize: null }); });
+/* 预览：关联对象里无权的对象类 / 范围外的对象 */
+const relDeniedKind = (k: string) => pv.active.value && ['store', 'product', 'order', 'region'].includes(k) && pv.scopeOf(KIND_LABEL[k]) === '无权限';
+const relDenied = (it: { kind: string; id: string; label: string }) => previewDenied(it.kind, it.id, pv.scopeOf, it.label);
+/* 预览：无权对象的侧抽屉（含 URL 直接打开）一律拦下 */
+watch(() => [route.query.drawer, route.query.drawer2, pv.active.value], () => {
+  for (const k of ['drawer2', 'drawer']) {
+    const v = qs(k); const i = v.indexOf(':');
+    if (i > 0 && previewDenied(v.slice(0, i), v.slice(i + 1), pv.scopeOf)) {
+      message.warning(`${pv.userName.value} 无权查看这个${KIND_LABEL[v.slice(0, i)]}，预览中不能打开`);
+      patch(k === 'drawer' ? { drawer: null, drawer2: null } : { drawer2: null });
+      return;
+    }
+  }
+}, { immediate: true });
+
 
 /* 面包屑：回到搜索结果，保留筛选 */
 const back = computed(() => {
@@ -134,11 +151,16 @@ const askScope = computed<AskScope>(() => ({
   kind: kind.value, label: `${view.value?.kindLabel ?? ''} ${view.value?.title ?? ''}`, conds: [], ids: [id.value],
   single: { kind: kind.value, id: id.value, title: view.value?.title ?? '' },
 }));
+/** 提问是只读操作：预览时照常可问（回答只含被预览用户范围内的数据） */
+const askOff = computed(() => readonly.value && !pv.active.value);
 function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 </script>
 
 <template>
-  <div v-if="!view" class="panel od-missing">
+  <div v-if="!id" class="panel od-missing">
+    <a-empty description="没有指定对象，请从对象搜索里选择一个对象"><a-button type="primary" @click="goBack">去对象搜索</a-button></a-empty>
+  </div>
+  <div v-else-if="!view" class="panel od-missing">
     <a-empty :description="`没有找到对象 ${kind}:${id}`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
   </div>
   <div v-else-if="pvOut" class="panel od-missing">
@@ -173,7 +195,7 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
                 <div v-for="k in kpis" :key="k.label" class="od-kpi">
                   <div class="c-3">{{ k.label }}</div>
                   <div><span class="t-20 fw-600 num">{{ k.value }}</span> <span class="c-3">{{ k.unit }}</span></div>
-                  <div class="t-12" :class="k.tone === 'down' ? 'c-error' : 'c-3'">{{ k.compare || ' ' }}</div>
+                  <div class="t-12" :class="k.tone === 'down' ? 'c-2' : 'c-3'">{{ k.compare || ' ' }}</div>
                   <div class="t-12 c-3">口径：{{ k.caliber || '未登记口径' }}</div>
                 </div>
               </div>
@@ -190,11 +212,15 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
             <a-empty v-if="!rels.length" description="暂无关联对象" />
             <div v-for="g in rels" :key="g.key" class="od-rel">
               <div class="od-rel-head"><span class="fw-600">{{ g.title }}</span>
-                <AppPagination v-model:page="relPage[g.key]" variant="simple" :total="g.items.length" :size="REL_SIZE" :empty="false" unit="个" /></div>
-              <div v-for="it in relItems(g.key, g.items)" :key="it.kind + it.id" class="od-rel-row">
-                <ObjRef :kind="it.kind" :id="it.id">{{ it.label }}</ObjRef>
-                <span class="c-3 od-ell">{{ it.note }}</span>
-              </div>
+                <AppPagination v-if="!relDeniedKind(g.items[0]?.kind ?? '')" v-model:page="relPage[g.key]" variant="simple" :total="g.items.length" :size="REL_SIZE" :empty="false" unit="个" /></div>
+              <div v-if="relDeniedKind(g.items[0]?.kind ?? '')" class="od-rel-deny t-12 c-3">{{ pv.userName.value }} 无权查看{{ KIND_LABEL[g.items[0]?.kind ?? ''] }}，预览中不显示</div>
+              <template v-else>
+                <div v-for="it in relItems(g.key, g.items)" :key="it.kind + it.id" class="od-rel-row">
+                  <span v-if="relDenied(it)" class="c-3">无权查看</span>
+                  <ObjRef v-else :kind="it.kind" :id="it.id">{{ it.label }}</ObjRef>
+                  <span v-if="!relDenied(it)" class="c-3 od-ell">{{ it.note }}</span>
+                </div>
+              </template>
             </div>
           </div>
 
@@ -240,11 +266,11 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
         <div class="panel">
           <div class="panel-head"><span class="t-16 fw-600">对它提问</span></div>
           <div class="od-asks">
-            <a-tooltip v-for="q in askSugs" :key="q" :title="readonly ? reason : undefined">
-              <a-button class="od-ask" :disabled="readonly" @click="ask(q)">{{ q }}</a-button>
+            <a-tooltip v-for="q in askSugs" :key="q" :title="askOff ? reason : undefined">
+              <a-button class="od-ask" :disabled="askOff" @click="ask(q)">{{ q }}</a-button>
             </a-tooltip>
-            <a-tooltip :title="readonly ? reason : undefined">
-              <a-button type="link" class="od-ask-free" :disabled="readonly" @click="ask()"><MessageOutlined /> 自己输入问题</a-button>
+            <a-tooltip :title="askOff ? reason : undefined">
+              <a-button type="link" class="od-ask-free" :disabled="askOff" @click="ask()"><MessageOutlined /> 自己输入问题</a-button>
             </a-tooltip>
           </div>
         </div>
@@ -277,6 +303,7 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 .od-rels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
 .od-rel { border: var(--border); border-radius: var(--radius); padding: 4px 12px 8px; }
 .od-rel-head { display: flex; justify-content: space-between; align-items: center; height: 36px; border-bottom: var(--border); }
+.od-rel-deny { padding: 8px 0; }
 .od-rel-row { display: flex; align-items: center; gap: 12px; height: 32px; }
 .od-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .od-tl { flex: 1; min-height: 0; }
