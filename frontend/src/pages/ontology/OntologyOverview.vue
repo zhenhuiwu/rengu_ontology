@@ -221,8 +221,8 @@ function start(opts: { join?: string; title?: string }) {
             <div v-for="t in pageRows" :key="t.id" class="oo-row" role="link" @click="t.go()">
               <span class="t-12 c-3 oo-kind">{{ t.kind }}</span>
               <div class="oo-row-main">
-                <div class="t-14 c-1 oo-ell"><span class="num c-2">{{ t.id }}</span>　{{ t.title }}</div>
-                <div class="t-12 c-3 oo-ell">{{ t.who }} · <span class="num">{{ t.time }}</span></div>
+                <div class="t-14 c-1 oo-ell" :title="`${t.id}　${t.title}`"><span class="num c-2">{{ t.id }}</span>　{{ t.title }}</div>
+                <div class="t-12 c-3 oo-ell" :title="`${t.who} · ${t.time}`">{{ t.who }} · <span class="num">{{ t.time }}</span></div>
               </div>
               <span class="t-12 oo-st" :class="stCls(t.tone)"><i class="oo-dot" />{{ t.status }}</span>
             </div>
@@ -237,7 +237,7 @@ function start(opts: { join?: string; title?: string }) {
           </div>
           <div v-for="r in releases" :key="r.ver" class="oo-rrow" role="link" @click="openRelease(r.ver)">
             <span class="t-14 num c-1 oo-ver">{{ r.ver }}</span>
-            <span class="t-14 c-2 oo-ell oo-note">{{ r.note }}</span>
+            <span class="t-14 c-2 oo-ell oo-note" :title="r.note">{{ r.note }}</span>
             <span class="t-12 c-3 num">{{ r.by }} · {{ r.publishedAt.slice(5) }}</span>
           </div>
         </div>
