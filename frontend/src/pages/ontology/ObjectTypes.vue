@@ -93,7 +93,7 @@ const shownStatus = (t: (typeof TYPES)[number]) => {
   return draftOf('object', t.id) ? '草稿中' : '已发布';
 };
 const statusColor = (t: (typeof TYPES)[number]) => (shownStatus(t) === '审核中' ? 'warning' : 'default');
-const pick = (id: string) => router.replace({ query: { ...route.query, type: id, view: undefined } });
+const pick = (id: string) => router.replace({ query: { ...route.query, type: id, view: undefined, p: undefined, lcpage: undefined, acpage: undefined, aupage: undefined } });
 const { draft, isDraft, canEdit, editTip, readonly, reason, setView, start } = useDraftView('object', () => current.value.id);
 const changeOpen = ref(false);
 const changeTarget = ref('');
