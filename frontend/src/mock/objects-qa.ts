@@ -210,7 +210,7 @@ const TL_EVENTS: [TlStatus, string, string][] = [
   ['warn', '正常 → 预警', '规则「客流环比预警」触发 · 系统'],
   [undefined, '预警 → 正常', '规则「客流环比预警」解除 · 系统'],
   [undefined, '动作成功：发放复购召回优惠券', '王敏 发起 · 赵磊 审批'],
-  ['error', '动作失败：门店调价', '王敏 发起 · POS 价格中心返回 500'],
+  ['error', '动作失败：门店调价', '王敏 发起 · 用友 ERP 返回 500'],
   [undefined, '规则命中：库存低于安全线', '事件「缺货」· 系统'],
   ['unknown', '发放复购召回优惠券', '规则自动发起 · CRM 超时'],
   [undefined, '动作成功：补货申请', '陈杰 发起'],
@@ -239,8 +239,8 @@ export function extraTimeline(kind: string, id: string, base: TlItem[] = []): Tl
 export interface ActRecord { id: string; action: string; by: string; approver: string; time: string; result: '成功' | '失败' | '待审批' | '结果未知' | '执行中' }
 export function actionRecords(kind: string, id: string): ActRecord[] {
   const NAMES: Record<string, string[]> = {
-    // 动作名与动作类型（mock/actionEvent.ts ACTION_TYPES）一致；草稿态的类型没有执行记录
-    store: ['发放复购召回优惠券', '变更门店状态', '补货申请', '门店调价'],
+    // 动作名与对象类型按 master actionEvent.ts（862d79f）对齐：门店只挂“变更门店状态”；发券、调预算在大区；调价、补货在商品
+    store: ['变更门店状态'],
     region: ['发放复购召回优惠券', '指派大区经理跟进', '调整大区预算'],
     product: ['门店调价', '发起调价审批', '补货申请'],
     order: ['补发出库单', '发起物流催派', '订单状态修正', '退款审核'],
