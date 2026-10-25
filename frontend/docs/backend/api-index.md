@@ -63,7 +63,7 @@
 | 动态（ontology） | `action_run`、`action_run_log`（执行时间线）；`alert`、`rule*`、`scenario*`、`lifecycle*` |
 | Palantir（integration 代码目录；`ext_system`、`writeback_call` 的接口走 data 模块，其余走 ontology） | `event`、`event_delivery`、`reconcile_task`、`writeback_call`（**唯一的外部调用记录表**；动态文档里的 `ext_call` 合并进来，不再单独建）、`ext_system`；动作类型、事件类型定义表 |
 | 静态（ontology） | `metric`、`change_request` 及 items / 校验 / 评审记录、对象类型、关系、维度、业务知识、函数（`function`、`fn_param`、`fn_version`、`fn_use`，页面 `/build/ontology/functions`，已定） |
-| 版本层 versioning（本体小白） | `ontology_release`（只追加，唯一入口 `create_version`；static-api.md §1） |
+| 版本层 versioning（本体小白） | `ontology_release`（只追加，唯一入口 `create_version`；static-api.md §1）。**已定**：`release.published` outbox 事件由版本层在 `create_version` 内、同一事务里写入，各模块只订阅，不自己写 |
 | 问数（qa） | `qa_*` |
 | PDE / data | `datasource` 及同步、质量检查表 |
 | PDE / admin | `sys_user`、`sys_role`、`api_key`、`setting`、`audit_log` |
@@ -89,14 +89,21 @@
 |---|---|---|
 | `VALIDATION_FAILED` | 422 | 表单校验，`details.fields[{field,message}]` |
 | `NOT_FOUND` | 404 | |
+| `UNAUTHORIZED` | 401 | 未登录或会话无效（骨架 `Unauthorized`；prod 在鉴权接入前一律 401，§1.4） |
 | `NO_PERMISSION` | 403 | 功能级、对象级、行级都没有权限 |
 | `READONLY` | 403 | **已定**：只读模式下的写请求统一用这一个码，`details.mode = 'history'`（带 `?ver=`，§1.7）或 `'preview'`（带 `?previewAs=`，§1.8）；两者都带时取 `preview`。原来的 `READONLY_HISTORY` / `READONLY_PREVIEW` 作废。允许的例外见 §1.7 白名单 |
 | `ACTION_BLOCKED` | 409 | 通用前置条件不满足，`details.reasons[]` 对应确认卡的 `blocked` |
-| `DUPLICATE_KEY` / `DUPLICATE_NAME` | 409 | 重名，比如“角色名已存在”“已有同名页面”“已有相同问法” |
+| `DUPLICATE_KEY` | 409 | 重名或违反唯一约束，比如“角色名已存在”“已有同名页面”“已有相同问法”（骨架 `DuplicateKey`，BaseRepository 自动转换）。`DUPLICATE_NAME` 作废 |
+| `EMPTY_INPUT` | 409 | 必须至少一项的输入为空（骨架 `EmptyInput`） |
+| `VERSION_CONFLICT` | 409 | 乐观锁 `lockVersion` 不一致（骨架 `VersionConflict`） |
+| `ROLLBACK_NOT_LATEST` | 409 | 只能回滚最近一次发布（骨架 versioning `create_version(rollback_of=…)`） |
+| `EMPTY_RELEASE` | 409 | 发布没有包含任何变更单（骨架 `EmptyRelease`） |
+| `SQL_REJECTED` | 403 | 问数网关拒绝执行生成的 SQL（§1.4；骨架 `app/common/sql_guard.py` `SqlRejected`） |
+| `INTERNAL_ERROR` | 500 | 未处理异常，不泄露堆栈；同样带 `requestId` 和 `X-Request-ID` 头（骨架 `app/core/request_id.py`） |
 | `NOT_CONFIRMER` | 403 | 规则暂存的动作，不是指定确认人 |
 | `NOT_OWNER` | 403 | 别人的方案、别人的告警（只有本人处理中的告警才能关闭或发起动作） |
 | `STATE_INVALID` | 409 | 状态机不允许，比如对“已撤回”的动作发起对账 |
-| static-api.md 里的码 | — | `NOT_IN_DRAFT`、`CR_LOCKED`、`CR_STATE_INVALID`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`、`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`DUPLICATE_KEY` |
+| static-api.md 里的码 | — | `NOT_IN_DRAFT`、`CR_LOCKED`、`CR_STATE_INVALID`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`（`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`DUPLICATE_KEY` 是骨架通用码，见上） |
 
 ### 1.3 分页
 
@@ -119,7 +126,7 @@
 
 ### 1.4 身份与 API 密钥
 
-- **界面登录**：前端没有登录页。演示身份用 `?as=admin|viewer` 切换（`stores/app.ts` 的 `PERSONAS`）。**开发身份（已定）**：开发和测试环境用请求头 **`X-Demo-As: admin|viewer`**（生产关闭），映射：`admin` = 王敏（数据产品经理，可进 use/build/admin 三个区，对应角色“系统管理员”）；`viewer` = 李娜（门店运营（只读），只能进 use 区，对应角色“业务查看”）。两个用户在 `seeds/extra` 里补（`is_seed=true`），`ADMIN_USERS` 是随机生成的，不保证有这两个名字。后台需要一个 `GET /me`，返回当前用户、能进入的区（`use|build|admin`）、各页面的功能级别（`FuncLevel = 'none'|'view'|'manage'`）。登录方式（SSO/账号密码/MFA）【待定】；安全策略页有密码规则、锁定、会话时长、MFA 的配置（§4.5），登录实现要读这些配置。
+- **界面登录**：前端没有登录页。演示身份用 `?as=admin|viewer` 切换（`stores/app.ts` 的 `PERSONAS`）。**开发身份（已定）**：开发和测试环境用请求头 **`X-Demo-As: <用户名>`**（与骨架 1aeb5d1 `app/common/auth.py` 一致：值就是用户名，同时作为 `CurrentUser.id` 和 `name`；不带时用配置 `RENGU_DEV_USER`）。它只是会话桩，**prod 一律忽略该头**（骨架在鉴权接入前 prod 直接 401 `UNAUTHORIZED`）。前端两个演示身份对应：`?as=admin` → `X-Demo-As: 王敏`（数据产品经理，可进 use/build/admin 三个区，对应角色“系统管理员”）；`?as=viewer` → `X-Demo-As: 李娜`（门店运营（只读），只能进 use 区，对应角色“业务查看”）。两个用户在 `seeds/extra` 里补（`is_seed=true`），`ADMIN_USERS` 是随机生成的，不保证有这两个名字。后台需要一个 `GET /me`，返回当前用户、能进入的区（`use|build|admin`）、各页面的功能级别（`FuncLevel = 'none'|'view'|'manage'`）。登录方式（SSO/账号密码/MFA）【待定】；安全策略页有密码规则、锁定、会话时长、MFA 的配置（§4.5），登录实现要读这些配置。
 - **API 密钥**（外部系统调用，见“API 密钥”页）：`Authorization: Bearer <secret>`。数据库只存哈希，另外存 `prefix` 和 `last4` 用于展示。每个密钥必须绑定身份：`角色` 或 `服务账号 + 数据范围`（`KeyBinding`，mock/apikeys.ts）。按 `scopes`（`KEY_SCOPES`：问数查询、对象读取、指标读取、动作执行、数据导出、元数据读取、Webhook 回调）控制能调用哪些接口，并检查 `ipAllow` 和 `expiresAt`。每次调用记一条 `KeyCall`（时间、接口、IP、状态码、耗时）。
 - **权限模型**（mock/roles.ts，角色页维护）：
   - 功能权限：`Role.func[pageKey]`，取值 none/view/manage。view 只能读，写接口要求 manage。**例外（已定）**：问数用户对自己的会话和页面的写（工作台 W2–W16，含常用问题、赞踩、停止、重算、申请权限；我的页面 P2–P10，含卡片、刷新、订阅、共享）只要求 `qa-workbench·view` / `qa-pages·view`，和 qa-api 一致；能不能改某一条仍按拥有者 / 可编辑成员校验。问数调优（`qa-tuning`）的写仍要求 manage。
@@ -130,9 +137,10 @@
   - 列级：敏感属性（`ObjProp.sensitive`）默认脱敏，个别角色可以看明文（PermissionsTab）。
   - 多个角色合并为“有效权限” `EffectiveAccess{rs, func, objs, areasIn}`。
 - **问数 NL2SQL 网关硬规则（已定）**：
-  - 执行前用 sqlglot 解析生成的 SQL，只放行**单条 `SELECT`**（多语句、DDL/DML、其他语句一律拒绝）；执行用**只读数据库账号**。
-  - 身份只取我方会话（界面登录会话、API 密钥绑定身份；预览时为 `?previewAs=` 校验后的被预览用户），**忽略请求头里传来的任何用户 id**。
-  - 行级范围（`RowScope`、`defaultDeny`）由网关注入到 SQL 里，不依赖上游生成的 SQL 自带过滤。
+  - 执行前用 sqlglot 解析生成的 SQL，**检查整棵语法树**（不只看第一个关键字），只放行**单条只读 `SELECT`**：拒绝多语句、DDL/DML、CTE 里夹带的 INSERT/UPDATE/DELETE、`SELECT … INTO`、`FOR UPDATE/SHARE`，以及 `pg_sleep`、`dblink`、`lo_*`、`pg_read_file`、`set_config` 等函数（骨架 1aeb5d1 `app/common/sql_guard.py` `assert_single_select`，带测试）。被拒返回 **403 `SQL_REJECTED`**。
+  - 执行只用单独的只读库账号 **`RENGU_QA_READONLY_DATABASE_URL`**：库层设 `default_transaction_read_only=on`，只授权业务表、不授权元数据表，另设 `statement_timeout`（骨架代码里还没有这一项，部署时在账号或连接上配置）。没配置就拒绝执行，**不回退到主库账号**。
+  - 身份只取我方会话（骨架 `CurrentUserDep`：界面登录会话、API 密钥绑定身份；预览时为 `?previewAs=` 校验后的被预览用户），**忽略请求里传来的任何用户 id**。dev/test 的 `X-Demo-As` 只是会话桩，prod 忽略（见上）。
+  - 行级范围（`RowScope`、`defaultDeny`）由网关注入到 SQL 里：`inject_row_filters` 把受控表换成 `(SELECT * FROM t WHERE 谓词) AS t`；谓词由 `row_filter` + `to_sql` 编译得到，不依赖模型自己写过滤条件；`DENY_ALL` 生成 `FALSE`；没登记的表一律拒绝（`SQL_REJECTED`）。
 
 ### 1.5 审计
 
@@ -154,8 +162,8 @@
   - 本体类资源（对象、关系、指标、维度、知识、动作类型、事件类型、规则、生命周期）的读接口接受 query 参数 **`?ver=<版本>`**（和前端 URL 同名；static-api.md 的 `release=` 参数作废），返回该版本的快照。
   - **已定**：只读模式只靠 query 参数传递，不用请求头（v0.2 的 `X-View-Release` 作废）。前端在历史版本模式下，所有请求都带 `?ver=<版本>`；只要请求带 `ver`，后台的**写接口一律返回 403 `READONLY`（`details.mode='history'`）**，包括系统管理、数据连接这类和版本无关的页面，因为前端在这些页面也是整页只读。“不落库”的 POST（试运行、试算、测试连接等）是否允许，按 §7 的 `?ver=` 列（照前端是否置灰来定）。
   - **只读下放行的非读接口（白名单，和 §7 一致）**：
-    - `?ver=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /functions/{id}:test`、`POST /objects/{kind}/export`，以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（`QaApplyDrawer.vue` 的“提交申请”和 `QaConversation.vue` 的“申请权限”都不判断只读，历史版本和预览下都能提交；会落库，是白名单里唯一的落库写，【推断 §8.1-9】）。
-    - `?previewAs=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /functions/{id}:test`、`POST /scoped-ask`（§1.8），以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（同上，【推断 §8.1-9】）。
+    - `?ver=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /event-types/{id}:simulate`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /functions/{id}:test`、`POST /objects/{kind}/export`，以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（`QaApplyDrawer.vue` 的“提交申请”和 `QaConversation.vue` 的“申请权限”都不判断只读，历史版本和预览下都能提交；会落库，是白名单里唯一的落库写，【推断 §8.1-9】）。
+    - `?previewAs=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /functions/{id}:test`、`POST /scoped-ask`（§1.8），以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（同上，【推断 §8.1-9】）。
     - 不在白名单里的写请求一律 403 `READONLY`。
   - **版本快照（已定）**：每个版本**一份**快照，按 section 分块，每块由所属模块负责组装：静态的 `objectTypes`（不含生命周期）、`properties`、`links`、`metrics`、`dimensions`、`terms`、`qaPaths`（节名以 static-api.md §2.8 和骨架 `SECTION_OWNERS` 为准）；Palantir 的 `actionTypes`、`eventTypes`；动态的 `rules`、`lifecycles`（按对象类型的前端 id 分键）。`create_version` 提供注册机制，各模块注册自己 section 的组装函数，生成版本时依次调用。运行数据（告警、执行记录、事件、调用记录等）不进快照；函数也不进（§3.8）。每个 section 内按**前端 id** 分键（如对象类型 `order`，即 mock/links.ts `LINK_OBJECTS` 的 `id`；`SalesOrder` 是 API 名，只是定义里的字段，不作键），`?ver=` 读接口直接按 id 取。
   - 历史版本里的问数：口径框显示“按该版本默认”。已经回答过的消息保留回答当时的依据（本体版本），不会改写。
@@ -190,7 +198,7 @@
 | 数据连接测试、同步，数据质量检查 | 按钮或定时 | §3.1、§3.3 |
 | 发布后的评测回放 | 变更单发布 | static-api.md、qa-api.md |
 | 事件投递、失败重投 | 事件产生后入队；投递失败按退避重投 | action-event-api.md |
-| outbox 分发 | 业务事务里写 outbox，任务异步分发（事件、通知、副作用） | action-event-api.md、dynamic-api.md |
+| outbox 分发 | 业务事务里写 outbox，任务异步分发（事件、通知、副作用）。**已定**：`release.published` 由版本层在 `create_version` 的同一事务里写，各模块只订阅（§1.1） | action-event-api.md、dynamic-api.md |
 | 发布后展开 | **已定**：定义表的展开（把变更单内容写进各定义表、生成版本快照）在发布事务里**同步**完成，不放进任务；任务只做发布提交后的问数缓存刷新、受影响页面标“口径待更新” | static-api.md |
 | “仍无法确认”后再查 3 轮 | 人工对账结论为“仍无法确认”时，按幂等键再自动查询 3 轮 | dynamic-api.md |
 | 导出 | `POST /exports`、审计导出等异步导出 | §2.1、§4.3 |
@@ -250,7 +258,7 @@
 
 ### 1.13 内部接口：语义地图（不对前端开放）
 
-- `GET /api/ontology/v1/semantic-map?ver=`（static-api.md §3.7，已定）：后台内部接口，前端没有入口，不对 API 密钥开放；只接受内部服务鉴权（服务间凭证），不接受界面会话。只读。
+- `GET /api/ontology/v1/semantic-map?ver=`（static-api.md §3.7，已定）：后台内部契约，前端没有入口，不对 API 密钥开放，也不接受界面会话。**问数在进程内直接调用静态提供的函数**（同一个后台进程，不走 HTTP、不需要服务间凭证；骨架没有服务间凭证）。下面的路径只作契约名，一期不挂 HTTP 路由。只读。
 - 带 `ver` 读该版本快照，不带读当前生效版本。
 - 返回 `[{kind, api, parent, name, synonyms[]}]`：`kind ∈ object|property|link|metric|dimension|dimValue|term`；`parent` 在 `property` 时是所属对象类型的 `api`，在 `dimValue` 时是所属维度的 `api`，其余为 `null`。
 - 不计入 §7 的 253 个前端接口。
@@ -642,7 +650,7 @@
 5. **差异**：
    - action-event-api.md §3 开头写的前缀是 `/api/v1`，按决定改成 `/api/ontology/v1`。
    - 执行记录：本文之前写的 `/action-types/{id}/runs` 作废，改用统一的 `/action-runs?actionType=`（§2.7）。**种子已定**：`action_run` 由动态写，`RUNS`（1849 条，编号 2000 段）和 `actions.ts` `ACTIONS`（141 条）按 id 合并进同一张表（§6）。
-   - 历史版本和预览下：前端没有把“试运行”置灰，所以都允许（§7 `?ver=` 列、预览列为 Y）；action-event-api.md §3.3 “一律返回 `READONLY_HISTORY`”只对落库的写接口适用（码已统一为 `READONLY`，§1.2）。
+   - 历史版本下允许：“试运行”只在草稿状态置灰（`ActionTypes.vue:297`），`?ver=` 下确认卡不阻断（§7 `?ver=` 列 Y）。**预览下拒绝**（403 `READONLY`，§7 预览列 N）：按钮能点，但走 `confirm.ask`（`ActionTypes.vue:129`），`stores/confirm.ts:29-31` 在预览期间给所有确认卡加阻断原因“只读，不能执行”。“模拟触发”同理（`EventTypes.vue:237`、`:106`）。与 action-event-api.md §3.3 一致。
 
 ### 3.8 函数 `/build/ontology/functions`（归静态，已定；以 static-api.md §3.8 为准）
 
@@ -750,7 +758,7 @@
 | GET | /event-types/{id}/events | `range=24h\|7d,outcome,page,size` | `PageResult<EventRecord>`（含 `total`） | **页码**（见差异） | 读 | | `actionEvent.ts` `eventsOf()`（`EVENTS` 1243） |
 | GET | /events/{id} | — | 抽屉字段 + `timeline[]` + `related[]` | — | 读 | | `actionEvent.ts` `eventById()`；`actionEventResolvers.ts` `event()` |
 | GET | /event-deliveries | `eventId` | `Delivery[]` | 不分页（见差异） | 读 | | 由 `eventsOf()` 的 `outcome`/`subscribers` 推出来【推断】 |
-| POST | /event-types/{id}:simulate | `{payload?}` | `{testEventId,deliveredTo}` | — | 写（测试通道） | 草稿状态返回 `TYPE_IS_DRAFT` | — |
+| POST | /event-types/{id}:simulate | `{payload?}` | `{testEventId,deliveredTo}` | — | 不落库 | 只投递到测试通道，不写 `event`；草稿状态返回 `TYPE_IS_DRAFT`；历史版本下允许，预览下 403 `READONLY`（`EventTypes.vue:237`、`:106`，`stores/confirm.ts:29-31`） | — |
 | GET | /event-types/{id}/versions | — | `TypeVersion[]` | 不分页 | 读 | | `actionEvent.ts` `versionsOf()`、`EVENT_VERSION_NOTES` |
 | PUT | /change-requests/{id}/items | `target{kind:'event'}`，`section ∈ payload\|subs` | 见 static-api.md | — | 写 | 不兼容变更返回 `INCOMPATIBLE_PAYLOAD_CHANGE` | — |
 
@@ -1022,14 +1030,14 @@
 
 ### 5.3 action-event-api.md（21f5f45，Palantir专家）
 
-> 按 21f5f45 核对，有实质差异（待对齐，本次未改正文）：第 2 条该文档现为“第一期 `event` 表不分区”；第 3 条 `GET /event-deliveries` 现带 `page`、`size`；第 6 条该文档写 `:dry-run`、`:simulate` 在 `?previewAs=` 下返回 403 `READONLY`，与 §1.7 预览白名单不一致。
+> 按 21f5f45 核对，有实质差异（待对齐，本次未改正文）：第 2 条该文档现为“第一期 `event` 表不分区”；第 3 条 `GET /event-deliveries` 现带 `page`、`size`；第 6 条的预览冲突已按前端解决：`:dry-run`、`:simulate` 在 `?previewAs=` 下返回 403 `READONLY`，本文 §1.7 预览白名单已删去（action-event-api.md 正确）。
 
 1. **前缀（已定）**：`/api/ontology/v1`。
 2. **近期事件分页（已定）**：`page/size` + `total`，不用游标；事件表按天分区，`count(*)` 可以限定在 `range`（24 小时或 7 天）内统计。
 3. **`/event-deliveries`**：抽屉里一次显示全部，不分页。
 4. **`action_run`（已定）**：一张表，归动态（§1.1 表归属），种子由动态写；动作类型页只按 `actionType` 筛选统一的 `GET /action-runs`（§2.7）。外部调用记录只有 `writeback_call` 一张表，归 Palantir，`ext_call` 合并进来；`ext_system` 也归 Palantir。
 5. **`runDaily()`、`eventDaily()`**：按天统计和明细对不上（统计另外随机生成）。按“和前端显示一致”，单独存按天统计表；以后从明细重算时数字会变。
-6. **历史版本下的试运行和模拟触发（已定）**：前端没有置灰，所以允许（§7 `?ver=` 列 Y）；该文档 §3.3 的只读拒绝（码已统一为 `READONLY`）只适用于落库的写接口。试运行按所选历史版本的定义执行，列为【推断，§8.1-6】。
+6. **历史版本下的试运行和模拟触发（已定）**：前端没有置灰，所以允许（§7 `?ver=` 列 Y）；预览下按钮能点但确认卡被锁（`stores/confirm.ts:29-31`），所以拒绝（预览列 N），与该文档一致；该文档 §3.3 的只读拒绝（码已统一为 `READONLY`）只适用于落库的写接口。试运行按所选历史版本的定义执行，列为【推断，§8.1-6】。
 7. **字段命名**：文档里的 `target_api`、`idem_key_rule` 是库里的列名，接口用 camelCase（§5.1-1）。
 8. **种子目录**：按 §6。
 
@@ -1093,7 +1101,7 @@
 
 ## 7. 接口总表（去重，脚本从各页接口表汇总）
 
-- 各页接口表共 265 行；按“模块 + 方法 + 路径”去重后共 **253 个接口**：`admin` 43、`biz` 3、`data` 22、`ontology` 127、`qa` 58；读 143，写 100，不落库 10。
+- 各页接口表共 265 行；按“模块 + 方法 + 路径”去重后共 **253 个接口**：`admin` 43、`biz` 3、`data` 22、`ontology` 127、`qa` 58；读 143，写 99，不落库 11。
 - 不含内部接口（`POST /internal/v1/events`、`GET /api/ontology/v1/semantic-map`（§1.13），外部系统适配器的 `submit`/`query_by_key`），也不含 static-api.md 里有、但前端页面没有用到的接口；完整清单以各负责人文档为准。
 - **类型**：`读`、`写`、`不落库`（POST 但不写库：试运行、试算、测试连接、导出、回放、合并校验、导入预览等）。
 - **页面权限**：`pageKey·level`，pageKey 是 `nav.ts` 的页面 key，level 是 `FuncLevel`（`view` 能看，`manage` 能改）；多个页面用 `/` 连接，满足其一即可。“登录即可”= 只要登录。**例外（已定）**：问数用户对自己的会话和页面的写（工作台 W2–W16、我的页面 P2–P10）只要求 `qa-workbench·view` / `qa-pages·view`，和 qa-api 一致；能不能改某一条仍按拥有者 / 可编辑成员校验（§1.4）。
@@ -1188,7 +1196,7 @@
 | 83 | ontology | GET | `/api/ontology/v1/action-types/{id}/used-by` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `usedBy`、`RULE_ACTION`、`RULE_CONFIRMER`；`dynamic.ts` `RULES`、`ALERTS` |
 | 84 | ontology | GET | `/api/ontology/v1/action-types/{id}/versions` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `versionsOf()`、`ACTION_VERSION_NOTES` |
 | 85 | ontology | GET | `/api/ontology/v1/action-types/{id}/writeback` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `writebackOf()`（本体编辑 36 条 / 副作用 47 条） |
-| 86 | ontology | POST | `/api/ontology/v1/action-types/{id}:dry-run` | 不落库 | 3.7 | action-types·view | — | Y | Y | N | — |
+| 86 | ontology | POST | `/api/ontology/v1/action-types/{id}:dry-run` | 不落库 | 3.7 | action-types·view | — | Y | N | N | — |
 | 87 | ontology | GET | `/api/ontology/v1/actions/meta` | 读 | 2.7 | action-center·view | 元数据读取 | Y | Y | Y | `actions.ts` `ACTION_NAMES`、`ACTION_SYSTEMS`、`ACTION_META` |
 | 88 | ontology | GET | `/api/ontology/v1/alerts` | 读 | 2.6 | alerts·view | 对象读取 | Y | Y | Y | `dynamic.ts` `ALERTS` |
 | 89 | ontology | GET | `/api/ontology/v1/alerts/{id}` | 读 | 2.6 | alerts·view | 对象读取 | Y | Y | Y | `dynamic.ts` `ALERTS`、`alertTimeline` |
@@ -1228,7 +1236,7 @@
 | 123 | ontology | GET | `/api/ontology/v1/event-types/{id}/stats` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventDaily()`、`EventType.weekly`；健康指标按 `eventsOf()` 计算 |
 | 124 | ontology | GET | `/api/ontology/v1/event-types/{id}/subscribers` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `subscribersOf()`（37） |
 | 125 | ontology | GET | `/api/ontology/v1/event-types/{id}/versions` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `versionsOf()`、`EVENT_VERSION_NOTES` |
-| 126 | ontology | POST | `/api/ontology/v1/event-types/{id}:simulate` | 写 | 3.12 | event-types·manage | — | N | N | N | — |
+| 126 | ontology | POST | `/api/ontology/v1/event-types/{id}:simulate` | 不落库 | 3.12 | event-types·view | — | Y | N | N | — |
 | 127 | ontology | GET | `/api/ontology/v1/events/{id}` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventById()`；`actionEventResolvers.ts` `event()` |
 | 128 | ontology | GET | `/api/ontology/v1/functions` | 读 | 3.8 | functions·view | 元数据读取 | Y | Y | N | `functions.ts` `FUNCTIONS`、`FN_PENDING` |
 | 129 | ontology | POST | `/api/ontology/v1/functions` | 写 | 3.8 | functions·manage | — | N | N | N | — |
@@ -1400,6 +1408,7 @@
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- 按本体小白对 d8ab0d6 的审核，对齐骨架 1aeb5d1：§1.4 网关规则改为整棵语法树检查、403 `SQL_REJECTED`、只读账号 `RENGU_QA_READONLY_DATABASE_URL`（加 `statement_timeout`，不回退主库）、`inject_row_filters`；`X-Demo-As` 统一为骨架语义（值为用户名，不带时用 `RENGU_DEV_USER`，prod 忽略）；§1.13 语义地图改为进程内调用；错误码主表补 `UNAUTHORIZED`/`EMPTY_INPUT`/`VERSION_CONFLICT`/`ROLLBACK_NOT_LATEST`/`EMPTY_RELEASE`/`SQL_REJECTED`/`INTERNAL_ERROR`，删 `DUPLICATE_NAME`。记录已定：`release.published` 由版本层在 `create_version` 同一事务写 outbox。按前端解决预览冲突：`:dry-run`、`:simulate` 预览下 403 `READONLY`、历史版本下允许（`stores/confirm.ts:29-31`），`:simulate` 改为不落库、event-types·view；§7 计数改为写 99、不落库 11。
 - 按静态负责人对 d8ab0d6 的审核：函数 `:test`（#134）改为不落库、functions·view、`?ver=`/预览 Y，并加入 §1.7 两个白名单；§3.8 新建/编辑请求体、`:test` 返回 `{output,ms,at}`、列表与版本历史 12/页；#96 补草稿下拉的权限与密钥；L842 补 `trial`；`GET /metrics/{id}` 种子改为 `metricCatalog.ts`；删 `qaPaths` 待登记；§5.2–5.4 引用改为 a43f15a/21f5f45/f8fe052 并记核对差异；§7 计数改为写 100、不落库 10。
 - 记录已定事项：static-api.md 引用改为 829e57a，引用版本改为 dynamic a43f15a、qa f8fe052、action-event 21f5f45（逐个 git 核对为各分支当前 head）；函数和 `fn_version` 归静态（§1.1 表、§3.8）；新增 §1.13 内部接口 `GET /api/ontology/v1/semantic-map?ver=`（不计入 253）；§1.4 加问数 NL2SQL 网关硬规则（sqlglot 只放行单条 SELECT + 只读库账号、身份只取我方会话、行级范围网关注入）；删除 §2.2 关于 qa X1/X2 为 `/actions/{actionKey}:preview` 的过时差异，§5.4-3 同步；`event` 改为可变表；§8.1 新增第 10 条：预览下提问允许、不落库【推断】待用户定。
 - 按静态本体负责人对 97e86e9 的评审（逐条对照前端 6bac4b1 核实）：§1.7 快照节名改为 `objectTypes`/`properties`/`links`/`metrics`/`dimensions`/`terms`/`qaPaths`（+ `actionTypes`/`eventTypes`、`rules`/`lifecycles`），节内键用前端 id（`order`）；删除 §8.1-8（只读时 Releases.vue:227-229 整块操作区被替换，回滚不可达），§3.15 回滚说明同步；§7 #97/#101/#102/#103 草稿写权限改为按 `target.kind` 的目标页·manage；#172 `GET /releases` 登录即可、返回 `{items, current}`；§1.2 `ontology_release` 归版本层（本体小白），函数 / `fn_version` 负责方待动态定；`GET /change-requests?status=草稿` 不传 `page` 返回全量（StartChangeModal.vue:14）；static-api.md 引用改为最新版 aaf60c4+；种子按业务编码（唯一约束）upsert；`/metrics` 改为 `METRIC_LIST`、18/页，`/object-types` 22/页，`:rollback` 行号改为 Metrics.vue:70-77；`:refresh-metadata` 只读拒绝标【推断】；错误码补 `EMPTY_INPUT`、`DUPLICATE_KEY`；`writeback_call` 改为可变表。
