@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /**
- * 反馈与纠错：点踩反馈队列（用户、问题、回答、用户说明、建议修正），可转为同义词（生成变更单草稿）或认证问答，均走确认卡。
+ * 反馈与纠错：点踩反馈队列（用户、问题、回答、用户说明、建议修正），可转为同义词或认证问答。
+ * 转为同义词走公共“发起变更”（StartChangeModal + useDraftView.start）：弹窗里先是“新建变更单”，确认后才分配 CR 编号，
+ * 取消不消耗编号；新单经 changes.ts 的 registerChange 写进公共变更单列表，“变更与发布”里能看到同一张单。
  * “发货及时率”召回不到的反馈已由 CR-0008（同义词“发货及时率”→出库及时率 v1，已通过）解决。
  * 行点击 → 反馈抽屉（?fb=FB-248）。URL：?fkw=&fst=&fk=&fpage=
  */
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -12,8 +14,11 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
 import { CUR_VERSION, EVAL_QS, NEXT_VERSION, T_METRICS, crById, metricLabel, planText, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
-import { tuning, addCert, nextDraftCr, ME } from './state';
+import { CHANGE_REQUESTS, CR_DETAILS, changeRow, registerChange } from '@/mock/changes';
+import { tuning, addCert, ME } from './state';
 import CrTag from './CrTag.vue';
+import StartChangeModal from '../parts/StartChangeModal.vue';
+import { useDraftView, allDrafts } from '../parts/useDraftView';
 
 defineProps<{ readonly: boolean; reason?: string }>();
 const route = useRoute();
@@ -56,21 +61,53 @@ const certBlock = (f: Feedback) => (existing(f) || planFor(f) ? '' : f.fix.targe
 const relEvals = computed(() => (cur.value?.resolvedBy ? EVAL_QS.filter((x) => x.cr === cur.value!.resolvedBy).length : 0));
 const synCovered = (f: Feedback) => tuning.synonyms.find((s) => s.word === f.fix.text);
 
-async function toSynonym(f: Feedback) {
+/**
+ * 同义词指向的对象：指向指标的登记为 kind 'metric'（id 取公共指标 id）；
+ * 指向维度取值的（如“双十一备货期”→时间范围）应登记为 'dimension'，master 的 useDraftView 还没有这个 kind，
+ * 先同样按 'metric' 登记、id 写成 dimension:<词>，master 有 dimension 后改这一处即可。
+ */
+function synTarget(f: Feedback): { id: string; name: string } {
+  const norm = (x: string) => x.replace(/\s/g, '');
+  const m = Object.values(T_METRICS).find((x) => norm(`${x.name}${x.version}`) === norm(f.fix.target ?? '') || norm(x.name) === norm(f.fix.target ?? ''));
+  return m ? { id: m.drawerId ?? m.key, name: `${m.name} ${m.version}` } : { id: `dimension:${f.fix.text}`, name: f.fix.target ?? '--' };
+}
+const dv = useDraftView('metric', () => '');
+const changeOpen = ref(false);
+const changeFb = ref<Feedback>();
+const changeTargetName = computed(() => (changeFb.value ? `同义词“${changeFb.value.fix.text}”→ ${synTarget(changeFb.value).name}` : ''));
+
+function toSynonym(f: Feedback) {
   const covered = synCovered(f);
   if (covered) { f.status = awaitingRelease(covered.cr) ? '待发布生效' : '已转同义词'; f.resolvedBy = covered.cr; f.handler = ME; message.success(`「${f.fix.text}」已在 ${covered.cr} 中，已关联`); return; }
-  const cr = nextDraftCr();
-  const ok = await confirm.ask({
-    title: '转为同义词', target: `${f.id} ${f.question}`,
-    fields: [{ label: '同义词', value: f.fix.text }, { label: '指向', value: f.fix.target ?? '--' }, { label: '变更单', value: `${cr}（修订级 · 草稿）` }],
-    impact: `同义词属于本体改动：生成变更单草稿 ${cr}，审核通过并随 ${NEXT_VERSION} 整版发布后问数才能召回；发布前会自动回放相关评测题。`,
-    okText: '生成变更单',
-  });
-  if (!ok) return;
+  changeFb.value = f; changeOpen.value = true;
+}
+/** 发起变更弹窗确认后才分配编号（新建）或加入已有草稿；取消不分配 */
+function onStartChange(opts: { join?: string; title?: string }) {
+  const f = changeFb.value; if (!f) return;
+  const t = synTarget(f);
+  const cr = dv.start({ ...opts, target: t.id });
+  const diff = (key: number) => changeRow(key, '同义词', t.name, '同义词', '新增', '', f.fix.text);
+  if (opts.join) {
+    const d = CR_DETAILS[cr]; if (d) { d.diffs.push(diff(d.diffs.length + 1)); (d.synonyms ??= []).push({ word: f.fix.text, to: t.name }); }
+    const c = CHANGE_REQUESTS.find((x) => x.id === cr); if (c) c.changes += 1;
+  } else {
+    const at = allDrafts().find((d) => d.id === cr)?.updatedAt ?? '';
+    registerChange(
+      { id: cr, title: opts.title || '未命名变更', owner: ME, reviewer: '刘婷', status: '草稿', level: '修订', changes: 1, updatedAt: at, reason: `问数反馈 ${f.id}：用户说“${f.fix.text}”，问数召回不到` },
+      {
+        diffs: [diff(1)],
+        impact: { direct: [{ kind: '同义词', name: f.fix.text, note: `指向${t.name}` }], defs: [{ kind: '指标', name: t.name, note: '口径不变，版本不变' }], usage: [{ kind: '问数反馈', name: f.id, note: f.question }] },
+        touches: t.id.startsWith('dimension:') ? [] : [`metric:${t.id}`],
+        synonyms: [{ word: f.fix.text, to: t.name }],
+        times: { created: at },
+      },
+    );
+  }
   tuning.synonyms.push({ word: f.fix.text, target: f.fix.target ?? '', cr });
   tuning.feedbacks.filter((x) => x.status === '待处理' && x.fix.kind === '同义词' && x.fix.text === f.fix.text)
     .forEach((x) => { x.status = '已转同义词'; x.resolvedBy = cr; x.handler = ME; });
-  message.success(`已生成变更单草稿 ${cr}：同义词「${f.fix.text}」→ ${f.fix.target}`);
+  message.success(opts.join ? `已加入变更单 ${cr}：同义词「${f.fix.text}」→ ${t.name}` : `已生成变更单草稿 ${cr}，可在“变更与发布”中查看`);
+  changeFb.value = undefined;
 }
 async function toCert(f: Feedback) {
   const ex = existing(f);
@@ -172,6 +209,7 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
       </div>
     </div>
   </a-drawer>
+  <StartChangeModal v-model:open="changeOpen" :target-name="changeTargetName" title-placeholder="例如：销售额补充同义词“GMV”" @ok="onStartChange" />
 </template>
 
 <style scoped src="./qt.css"></style>

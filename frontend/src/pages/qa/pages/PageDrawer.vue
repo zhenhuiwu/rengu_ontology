@@ -5,17 +5,20 @@
  *  刷新与订阅：刷新计划 + 订阅推送
  *  共享：共享方式、成员及权限、链接、导出
  * 历史版本只读：所有修改禁用并提示原因。
+ * 未保存保护（公共 useUnsavedGuard）：卡片调整、刷新与订阅、共享有未保存改动时，关闭抽屉 / 切页签 / 离开页面先提醒。
+ * 保存顺序时移除了卡片、保存共享时新增了可见人，走公共确认卡写明“将移除 N 张卡片”/“新增可见人：xx”。
  */
 import { computed, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { HolderOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
+import { useConfirmStore } from '@/stores/confirm';
 import CardPreview from './CardPreview.vue';
 import { PEOPLE, PAGE_SCOPES, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
 
 const props = defineProps<{ page?: QaPageFull; tab: string; readonly: boolean; reason: string }>();
 const emit = defineEmits<{ close: []; 'update:tab': [string]; refresh: [QaPageFull]; rename: [QaPageFull, string]; remove: [QaPageFull] }>();
-const tabV = computed({ get: () => props.tab || 'preview', set: (v: string) => emit('update:tab', v) });
 
 /* 预览 */
 const CSIZE = 6;
@@ -37,7 +40,22 @@ function onDrop(to: number) {
   const list = [...draftCards.value]; const [c] = list.splice(dragFrom.value, 1); list.splice(to, 0, c); draftCards.value = list; dragFrom.value = null;
 }
 const removeCard = (i: number) => { draftCards.value = draftCards.value.filter((_, j) => j !== i); };
-function saveCards() { if (!props.page) return; props.page.cards = draftCards.value; editing.value = false; message.success(`已保存卡片顺序，共 ${props.page.cards.length} 张`); }
+const confirm = useConfirmStore();
+async function saveCards() {
+  const pg = props.page; if (!pg) return;
+  const removed = pg.cards.filter((c) => !draftCards.value.some((d) => d.key === c.key));
+  if (removed.length) {
+    const ok = await confirm.ask({
+      title: '保存卡片调整', target: pg.name,
+      fields: [{ label: '移除', value: removed.map((c) => c.title).join('、') }, { label: '保存后', value: `${draftCards.value.length} 张卡片` }],
+      impact: `将移除 ${removed.length} 张卡片，共享和订阅这个页面的人也看不到了；需要时可在问数工作台重新固定。`,
+      okText: `移除 ${removed.length} 张并保存`, danger: true,
+    });
+    if (!ok) return;
+  }
+  pg.cards = draftCards.value; editing.value = false;
+  message.success(removed.length ? `已保存，移除 ${removed.length} 张，剩 ${pg.cards.length} 张` : `已保存卡片顺序，共 ${pg.cards.length} 张`);
+}
 
 /* 刷新与订阅 */
 const plan = ref<RefreshPlan>({ freq: '每天', time: '08:00', onFail: '保留上次结果' });
@@ -80,12 +98,41 @@ function addMembers() {
 const MSIZE = 5;
 const mpage = ref(1);
 const pagedMembers = computed(() => share.value.members.slice((mpage.value - 1) * MSIZE, mpage.value * MSIZE));
-function saveShare() {
+/** 保存后比保存前多出来的可见人：新加的成员，或改成“所在部门” */
+function newViewers(): string[] {
+  const pg = props.page; if (!pg) return [];
+  const s = share.value;
+  if (s.mode === '所在部门') return pg.share.mode === '所在部门' ? [] : ['华东事业部 / 运营中心 全体'];
+  if (s.mode === '指定成员') return s.members.filter((m) => pg.share.mode !== '指定成员' || !pg.share.members.some((x) => x.name === m.name)).map((m) => `${m.name}（${m.perm}）`);
+  return [];
+}
+async function saveShare() {
   if (!props.page) return;
   if (share.value.mode === '指定成员' && !share.value.members.length) { message.warning('指定成员共享时至少添加一位成员'); return; }
+  const add = newViewers();
+  if (add.length) {
+    const ok = await confirm.ask({
+      title: '保存共享设置', target: props.page.name,
+      fields: [{ label: '新增可见人', value: add.join('、') }, { label: '链接访问', value: share.value.link ? '开启' : '关闭' }, { label: '允许导出', value: share.value.allowExport ? '允许' : '不允许' }],
+      impact: `新增可见人：${add.join('、')}。他们看到的数据按各自的数据权限裁剪，范围外的卡片显示“无权限”。`,
+      okText: '共享',
+    });
+    if (!ok) return;
+  }
   props.page.share = { ...share.value, members: share.value.mode === '仅自己' ? [] : share.value.members.map((m) => ({ ...m })) };
   message.success(share.value.mode === '仅自己' ? '已取消共享' : `已共享：${share.value.mode === '所在部门' ? '华东事业部 / 运营中心' : `${props.page.share.members.length} 位成员`}`);
 }
+/* 未保存保护 */
+const json = (x: unknown) => JSON.stringify(x);
+const cardsDirty = computed(() => editing.value && json(draftCards.value.map((c) => c.key)) !== json((props.page?.cards ?? []).map((c) => c.key)));
+const schedDirty = computed(() => !!props.page && (json(plan.value) !== json(props.page.refresh) || json(sub.value) !== json(props.page.sub)));
+const normShare = (x: ShareSetting) => json({ ...x, members: x.mode === '仅自己' ? [] : x.members });
+const shareDirty = computed(() => !!props.page && normShare(share.value) !== normShare(props.page.share));
+const dirty = computed(() => !props.readonly && (cardsDirty.value || schedDirty.value || shareDirty.value));
+const guard = useUnsavedGuard(dirty);
+const discard = () => { editing.value = false; resetDrafts(); };
+const tabV = computed({ get: () => props.tab || 'preview', set: (v: string) => { guard(() => { discard(); emit('update:tab', v); }); } });
+const close = () => guard(() => { discard(); emit('close'); });
 const copyLink = () => message.success(`已复制链接：https://bi.example.com/p/${props.page?.id}`);
 
 /* 重命名 */
@@ -96,7 +143,7 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
 </script>
 
 <template>
-  <a-drawer :open="!!page" :width="760" :title="page?.name" @close="emit('close')">
+  <a-drawer :open="!!page" :width="760" :title="page?.name" @close="close">
     <template #extra>
       <a-space v-if="page">
         <a-tooltip :title="reason"><a-button size="small" :disabled="readonly" @click="emit('refresh', page)">立即刷新</a-button></a-tooltip>
@@ -148,7 +195,7 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
             <span class="num c-3 t-12">{{ (cpage - 1) * CSIZE + i + 1 }}</span>
             <span class="pd-ell c-1">{{ c.title }}</span>
             <span class="t-12 c-3">{{ c.viz }} · {{ c.metric }} {{ c.version }}</span>
-            <a-button size="small" type="text" @click="removeCard((cpage - 1) * CSIZE + i)"><DeleteOutlined /></a-button>
+            <a-button size="small" type="text" @click="removeCard((cpage - 1) * CSIZE + i)"><DeleteOutlined />移除</a-button>
           </div>
         </div>
         <AppPagination v-model:page="cpage" variant="simple" :total="shownCards.length" :size="CSIZE" unit="张卡片" />

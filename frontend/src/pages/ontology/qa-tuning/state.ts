@@ -21,9 +21,7 @@ export function addCert(question: string, plan: SemPlan, source: string, extra: 
   tuning.freq.filter((f) => f.question === question).forEach((f) => { f.certId = c.id; });
   return c;
 }
-/** 同义词改动走变更单：这里只生成变更单草稿编号 */
-let crSeq = 17; // CR-0012…0016 已被“变更与发布”占用
-export const nextDraftCr = () => `CR-${String(crSeq++).padStart(4, '0')}`;
+/** 同义词改动走变更单：编号由公共 useDraftView().start 在确认时分配（见 FeedbackTab），这里不预占 */
 
 /** 手动运行评测：新增一条“运行中”的记录 */
 export function startRun(scope: string, total: number, version: string): EvalRun {

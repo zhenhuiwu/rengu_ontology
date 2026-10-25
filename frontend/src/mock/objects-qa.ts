@@ -205,16 +205,23 @@ export function relationGroups(kind: string, id: string, related: RelItem[] = []
 
 export type TlStatus = 'done' | 'warn' | 'error' | 'unknown' | undefined;
 export interface TlItem { time: string; text: string; desc?: string; status?: TlStatus }
-const TL_EVENTS: [TlStatus, string, string][] = [
-  [undefined, '日结数据已同步', '系统'],
-  ['warn', '正常 → 预警', '规则「客流环比预警」触发 · 系统'],
-  [undefined, '预警 → 正常', '规则「客流环比预警」解除 · 系统'],
-  [undefined, '动作成功：发放复购召回优惠券', '王敏 发起 · 赵磊 审批'],
-  ['error', '动作失败：门店调价', '王敏 发起 · 用友 ERP 返回 500'],
-  [undefined, '规则命中：库存低于安全线', '事件「缺货」· 系统'],
-  ['unknown', '发放复购召回优惠券', '规则 R-027 暂存 · 吴佳 确认 · CRM 超时'],
-  [undefined, '动作成功：补货申请', '陈杰 发起'],
-];
+/** 补充时间线按对象类型各取各的：门店只有门店自己的状态和动作，不混入商品 / 大区的动作 */
+const TL_BY_KIND: Record<string, [TlStatus, string, string][]> = {
+  store: [
+    [undefined, '日结数据已同步', '系统'],
+    ['warn', '正常 → 预警', '规则「客流环比预警」触发 · 系统'],
+    [undefined, '预警 → 正常', '规则「客流环比预警」解除 · 系统'],
+    [undefined, '动作成功：变更门店状态', '王敏 发起 · 赵磊 审批'],
+    ['error', '动作失败：变更门店状态', '周婷 发起 · 赵磊 审批 · 门店主数据写回超时'],
+  ],
+  product: [
+    [undefined, '日结数据已同步', '系统'],
+    ['error', '动作失败：门店调价', '王敏 发起 · 用友 ERP 返回 500'],
+    [undefined, '规则命中：库存低于安全线', '规则 R-012 · 系统'],
+    ['unknown', '门店调价', '规则 R-007 暂存 · 王敏 确认 · 用友 ERP 超时'],
+    [undefined, '动作成功：补货申请', '规则 R-012 暂存 · 周晓峰 确认'],
+  ],
+};
 const fmtTime = (t: number) => {
   const d = new Date(t); const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -226,9 +233,10 @@ export function extraTimeline(kind: string, id: string, base: TlItem[] = []): Tl
   const out: TlItem[] = [];
   let t = new Date('2026-10-24T22:00:00+08:00').getTime();
   for (let i = 0; i < 18; i++) {
-    let [status, text, desc] = TL_EVENTS[Math.floor(r() * TL_EVENTS.length)];
+    const EV = TL_BY_KIND[kind] ?? TL_BY_KIND.store;
+    let [status, text, desc] = EV[Math.floor(r() * EV.length)];
     // “结果未知 · 待对账”只保留最近一条，更早的视为已对账
-    while (status === 'unknown' && (out.some((o) => o.status === 'unknown') || base.some((o) => o.status === 'unknown'))) [status, text, desc] = TL_EVENTS[Math.floor(r() * TL_EVENTS.length)];
+    while (status === 'unknown' && (out.some((o) => o.status === 'unknown') || base.some((o) => o.status === 'unknown'))) [status, text, desc] = EV[Math.floor(r() * EV.length)];
     out.push({ time: fmtTime(t), text, desc, status });
     t -= 86400000 * (1 + Math.floor(r() * 4)) + 3600000 * Math.floor(r() * 9);
   }
@@ -236,7 +244,16 @@ export function extraTimeline(kind: string, id: string, base: TlItem[] = []): Tl
   return [...base, ...out].sort((a, b) => b.time.localeCompare(a.time));
 }
 
-export interface ActRecord { id: string; action: string; by: string; approver: string; time: string; result: '成功' | '失败' | '待审批' | '结果未知' | '执行中' }
+/**
+ * by：人工发起写人名；规则产生的写“规则 R-xxx 暂存 · 确认人 xx”（规则只暂存，确认人在动作中心确认后才执行）。
+ * approver：人工发起的审批人，或规则暂存的确认结果（“王敏 已确认”）；待确认时结果为“待确认”。
+ */
+export interface ActRecord { id: string; action: string; by: string; approver: string; time: string; result: '成功' | '失败' | '待审批' | '待确认' | '结果未知' | '执行中' }
+/** 规则 → 确认人（与动作中心、规则与自动化一致）；动作 → 会暂存它的规则。门店的“变更门店状态”没有规则暂存，只能人工发起并审批 */
+const RULE_CONFIRMER: Record<string, string> = { 'R-007': '王敏', 'R-012': '周晓峰', 'R-015': '陈立军', 'SM-ORD': '孙浩然', 'R-027': '吴佳' };
+const RULE_OF_ACTION: Record<string, string> = { 门店调价: 'R-007', 发起调价审批: 'R-007', 补货申请: 'R-012', 发起物流催派: 'R-015', 补发出库单: 'R-015', 订单状态修正: 'SM-ORD', 发放复购召回优惠券: 'R-027' };
+/** 需要审批的动作（与 objActions 的 approver 一致） */
+const APPROVER_OF: Record<string, string> = { 变更门店状态: '赵磊', 门店调价: '赵磊', 调整大区预算: '赵磊' };
 export function actionRecords(kind: string, id: string): ActRecord[] {
   const NAMES: Record<string, string[]> = {
     // 动作名与对象类型按 master actionEvent.ts（862d79f）对齐：门店只挂“变更门店状态”；发券、调预算在大区；调价、补货在商品
@@ -246,7 +263,7 @@ export function actionRecords(kind: string, id: string): ActRecord[] {
     order: ['补发出库单', '发起物流催派', '订单状态修正', '退款审核'],
   };
   const names = NAMES[kind] ?? NAMES.store;
-  const who = ['王敏', '陈杰', '周婷', '规则自动发起'];
+  const who = ['王敏', '陈杰', '周婷'];
   const res: ActRecord['result'][] = ['成功', '成功', '成功', '成功', '失败', '结果未知', '成功', '待审批'];
   const r = seeded(hash(kind + id) + 23);
   const n = kind === 'order' ? 6 : 24 + Math.floor(r() * 10);
@@ -257,10 +274,22 @@ export function actionRecords(kind: string, id: string): ActRecord[] {
     let result: ActRecord['result'] = i === 0 ? '待审批' : res[Math.floor(r() * res.length)];
     if (result === '待审批' && i > 2) result = '成功';
     if (result === '结果未知' && out.some((o) => o.result === '结果未知')) result = '成功';
-    const by = who[Math.floor(r() * who.length)];
-    const approver = result === '待审批' || (by !== '规则自动发起' && r() > 0.4) ? '赵磊' : '--';
-    out.push({ id: `ACT-${fmtTime(t).slice(0, 10).replace(/-/g, '')}-${String(100 + Math.floor(r() * 900))}`, action: names[Math.floor(r() * names.length)],
-      by, approver, time: fmtTime(t), result });
+    const action = names[Math.floor(r() * names.length)];
+    const rule = RULE_OF_ACTION[action];
+    const byRule = !!rule && r() > 0.5;
+    let by: string; let approver: string;
+    if (byRule) {
+      const cf = RULE_CONFIRMER[rule];
+      by = `规则 ${rule} 暂存 · 确认人 ${cf}`;
+      if (result === '待审批') result = '待确认';
+      approver = result === '待确认' ? `${cf} 待确认` : `${cf} 已确认`;
+    } else {
+      by = who[Math.floor(r() * who.length)];
+      const ap = APPROVER_OF[action];
+      approver = ap ?? '--';
+      if (result === '待审批' && !ap) result = '执行中';
+    }
+    out.push({ id: `ACT-${fmtTime(t).slice(0, 10).replace(/-/g, '')}-${String(100 + Math.floor(r() * 900))}`, action, by, approver, time: fmtTime(t), result });
     t -= 3600000 * (6 + Math.floor(r() * 60));
   }
   return out;

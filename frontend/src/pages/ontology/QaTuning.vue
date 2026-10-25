@@ -44,10 +44,12 @@ function createCert() {
   const qn = nq.value.trim();
   if (tuning.certs.some((c) => c.question === qn)) { message.warning(`已有认证问答「${qn}」`); return; }
   const m = T_METRICS[nm.value];
-  const c = addCert(qn, newPlan.value, '手动新建', m.cr ? { status: '待重新认证', cr: m.cr, note: `已按 ${m.version} 认证；${m.cr} 发布后需再次认证` } : {});
+  // 新建只是登记问题和语义计划，需在认证问答里点“认证”复核后才生效；不直接“已认证”
+  const c = addCert(qn, newPlan.value, '手动新建', { status: '待认证', certifier: '--', certifiedAt: '--', cr: m.cr,
+    note: m.cr ? `${m.name}受 ${m.cr} 影响（未发布），认证后发布还需按新口径重新认证` : '新建问答，复核语义计划后点“认证”' });
   newOpen.value = false; nq.value = ''; nd.value = []; nf.value = '';
   router.replace({ query: { cq: c.id } });
-  message.success(`已新建认证问答 ${c.id}`);
+  message.success(`已新建认证问答 ${c.id}（待认证）`);
 }
 
 /* 运行评测 */

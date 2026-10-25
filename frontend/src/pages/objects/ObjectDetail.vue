@@ -93,12 +93,12 @@ const recPaged = computed(() => paginate(records.value, { page: apq.page.value, 
 const recCols = [
   { title: '记录号', dataIndex: 'id', key: 'id', width: 180 },
   { title: '动作', dataIndex: 'action', key: 'action' },
-  { title: '发起', dataIndex: 'by', key: 'by', width: 140 },
-  { title: '审批', dataIndex: 'approver', key: 'approver', width: 100 },
+  { title: '发起', dataIndex: 'by', key: 'by', width: 240 },
+  { title: '审批 / 确认', dataIndex: 'approver', key: 'approver', width: 120 },
   { title: '时间', dataIndex: 'time', key: 'time', width: 168 },
   { title: '结果', dataIndex: 'result', key: 'result', width: 150 },
 ];
-const resTone = (r: string) => (r === '失败' ? 'tl-failed' : r === '结果未知' ? 'tl-attention' : 'c-2');
+const resTone = (r: string) => (r === '失败' ? 'tl-failed' : r === '结果未知' || r === '待确认' ? 'tl-attention' : 'c-2');
 
 /* 可执行动作：公共确认卡；确认卡打开时显示“待确认”，取消/关闭恢复“发起”，提交后“待审批/执行中” */
 const actions = computed(() => (view.value ? objActions(view.value.kind, view.value.id) : []));
@@ -199,6 +199,7 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
                 <a-table :columns="recCols" :data-source="recPaged.items" row-key="id" size="small" :pagination="false">
                   <template #bodyCell="{ column, record }">
                     <span v-if="column.key === 'id' || column.key === 'time'" class="num">{{ record[column.key] }}</span>
+                    <span v-else-if="column.key === 'by' || column.key === 'approver'" class="od-nowrap">{{ record[column.key] }}</span>
                     <span v-else-if="column.key === 'result'" :class="resTone(record.result)" class="od-nowrap">{{ record.result === '结果未知' ? '结果未知 · 待对账' : record.result }}</span>
                   </template>
                 </a-table>
