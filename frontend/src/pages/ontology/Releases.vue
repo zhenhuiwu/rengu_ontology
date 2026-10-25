@@ -19,6 +19,7 @@ import {
   CHANGE_REQUESTS, CURRENT_USER, ONTOLOGY_ADMINS, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, reviewLog,
   type ChangeRequest, type CheckResult, type CRStatus, type ReviewEvent,
 } from '@/mock/changes';
+import { fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease } from '@/api/static';
 
 const route = useRoute();
 const router = useRouter();
@@ -168,8 +169,20 @@ async function reopen() {
   if (ok) move('草稿', '改回草稿', '按驳回意见修改后重新提交');
 }
 const approved = computed(() => CRS.filter((c) => c.status === '已通过'));
+/** real 模式（VITE_API_REAL_MODULES 含 static）：合并校验、发布、回滚走接口；失败提示后不改页面 */
+const apiErr = (e: unknown) => message.error(e instanceof Error ? e.message : String(e));
+/** 发布 / 回滚成功后按 GET /releases/current 刷新 app store 的当前 / 下一版本号（顶栏、本页按钮跟着变）；刷新失败只提示，不影响已成功的写操作 */
+async function syncVersion() {
+  try {
+    const r = await fetchCurrentAfterWrite();
+    if (r.current) app.ontologyVersion = r.current;
+    if (r.release?.publishedAt) app.ontologyPublishedAt = r.release.publishedAt;
+    app.ontologyNextVersion = r.next;
+  } catch (e) { message.warning(`版本号刷新失败：${e instanceof Error ? e.message : String(e)}`); }
+}
 async function publish() {
-  const m = mergeCheck(approved.value);
+  let m: ReturnType<typeof mergeCheck>;
+  try { m = isStaticReal() ? (await mergeCheckApi()) as ReturnType<typeof mergeCheck> : mergeCheck(approved.value); } catch (e) { apiErr(e); return; }
   const verdict = m.rows.map((r) => ({ label: r.code === '提示' ? '提示' : `${r.code} ${r.result}`, value: `${r.name}：${r.note}` }));
   const ok = await confirm.ask({ title: `整版发布 ${NEXT_VERSION.value}`, target: `本体（当前 ${CURRENT_VERSION.value}）`, okText: '发布',
     tag: m.blocked ? '合并校验有阻断' : '合并校验通过',
@@ -179,8 +192,10 @@ async function publish() {
       : '发布后新提问按新版本回答；已有答案、页面和告警保留各自的口径版本。可回滚到上一版本。',
     blocked: m.blocked ? m.rows.filter((r) => r.result === '阻断').map((r) => `${r.note}（${r.code}）`).join('；') : undefined });
   if (ok && !m.blocked) {
-    approved.value.forEach((c) => { c.status = '已发布'; c.release = NEXT_VERSION.value; c.updatedAt = now(); (extraLog[c.id] ??= []).unshift({ time: now(), text: `${me.value} 整版发布为 ${NEXT_VERSION.value}`, desc: `合并校验：${m.rows.filter((r) => r.result !== '通过').map((r) => r.note).join('；') || '全部通过'}` }); });
-    message.success(`已发布 ${NEXT_VERSION.value}`);
+    let ver = NEXT_VERSION.value;
+    if (isStaticReal()) { try { ver = (await publishRelease()).ver; } catch (e) { apiErr(e); return; } await syncVersion(); }
+    approved.value.forEach((c) => { c.status = '已发布'; c.release = ver; c.updatedAt = now(); (extraLog[c.id] ??= []).unshift({ time: now(), text: `${me.value} 整版发布为 ${ver}`, desc: `合并校验：${m.rows.filter((r) => r.result !== '通过').map((r) => r.note).join('；') || '全部通过'}` }); });
+    message.success(`已发布 ${ver}`);
   }
 }
 async function rollback() {
@@ -188,6 +203,7 @@ async function rollback() {
   const ok = await confirm.ask({ title: `回滚 ${cur.value.release}`, target: `本体 ${cur.value.release}`, okText: '回滚', danger: true,
     fields: [{ label: '回滚到', value: prev ?? '上一版本' }, { label: '涉及变更单', value: CRS.filter((c) => c.release === cur.value.release).map((c) => c.id).join('、') }],
     impact: '回滚会生成一个新版本，内容等于上一版本；只能回滚最近一次发布。' });
+  if (ok && isStaticReal()) { try { await rollbackRelease(cur.value.release!); } catch (e) { apiErr(e); return; } await syncVersion(); }
   if (ok) { rolledBack.value = true; (extraLog[cur.value.id] ??= []).unshift({ time: now(), text: `${me.value} 回滚 ${cur.value.release}`, desc: `生成新版本，内容同 ${prev}`, status: 'warn' }); message.success(`已回滚 ${cur.value.release}`); }
 }
 </script>
