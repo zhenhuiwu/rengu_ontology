@@ -78,7 +78,7 @@ async function copyLink() {
 }
 function toPage() {
   if (readonly.value) return;
-  const title = sess.real ? sess.detail.value?.title ?? '' : sess.sessions.value.find((s) => s.id === sess.activeId.value)?.title ?? '';
+  const title = sess.live.value ? sess.detail.value?.title ?? '' : sess.sessions.value.find((s) => s.id === sess.activeId.value)?.title ?? '';
   router.push({ path: '/use/qa/pages', query: { newName: title } });
 }
 function onPinned(page: string) { pin.value = ''; message.success(`已固定到「${page}」`); }

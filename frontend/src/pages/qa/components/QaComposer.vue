@@ -3,6 +3,7 @@
 import { ref, computed } from 'vue';
 import { message } from 'ant-design-vue';
 import { useQaSession, errText, clarifyFollowUp } from '../useQaSession';
+import { qaFallBackIfDown } from '../qaFallback';
 import { getSessionOptions } from '@/api/qa';
 import { SendOutlined, PaperClipOutlined } from '@ant-design/icons-vue';
 import { QA_SCOPE_OPTIONS, QA_CALIBER_OPTIONS } from '@/mock';
@@ -15,12 +16,12 @@ const { active: previewing } = usePreview();
 const HIST_CALIBER = [{ value: '__ver', label: '口径：按该版本默认' }];
 const scope = defineModel<string>('scope', { required: true });
 const caliber = defineModel<string>('caliber', { required: true });
-const { draft: text, send, real, sending, activeId, detail } = useQaSession();
+const { draft: text, send, real, live, sending, activeId, detail } = useQaSession();
 /* 真接口：范围 / 口径选项取 W17 */
 const scopeOpts = ref<{ value: string; label: string }[]>(QA_SCOPE_OPTIONS);
 const caliberOpts = ref<{ value: string; label: string }[]>(QA_CALIBER_OPTIONS);
 if (real) {
-  getSessionOptions().then((o) => { scopeOpts.value = o.scopes; caliberOpts.value = o.calibers; }).catch((e) => message.error(`范围口径选项加载失败：${errText(e)}`));
+  getSessionOptions().then((o) => { scopeOpts.value = o.scopes; caliberOpts.value = o.calibers; }).catch((e) => { if (!qaFallBackIfDown(e)) message.error(`范围口径选项加载失败：${errText(e)}`); });
 }
 const input = ref<{ focus: () => void }>();
 const canSend = computed(() => !readonly.value && !!text.value.trim() && !(real && (sending.value || !activeId.value)));
@@ -40,7 +41,7 @@ const lastAnswer = computed(() => {
   return t && t.kind === 'answer' ? t : null;
 });
 const followUps = computed<string[]>(() => {
-  if (!real) return MOCK_FOLLOW_UPS;
+  if (!live.value) return MOCK_FOLLOW_UPS;
   const a = lastAnswer.value?.answer as { suggest?: { followUps?: string[] } } | undefined;
   return a?.suggest?.followUps ?? [];
 });

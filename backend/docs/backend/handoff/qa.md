@@ -14,6 +14,7 @@
 - **R5 · 新建认证问答选项**：指标 / 维度 / 时间下拉取 T2（真接口），新建走 T5。
 - **R1 范围 / 口径下拉**：取 W17。**追问条**：读最后一轮回答的 `answer.suggest.followUps`（链路目前只在反问轮给，等于反问选项），点了按反问选项同样拼追问句；没有就隐藏（不再显示写死的 3 条）[推断]。
 - **评审跟进（本体小白，01:3x）**：删掉最后一个会话后清空对话区、显示空状态（`QaSessionPanel.vue` / `QaConversation.vue`）；`?confirm=1` 刷新不再重复暂存动作——暂存后把 `run=<编号>` 写进 URL，刷新时 GET `/action-runs/{code}` 复用，已确认 / 撤回就去掉参数不弹卡（`Workbench.vue`，`qa.ts getAction`）。
+- **连不上后台回退 mock**（复用 `src/api/fallback.ts`，同 c988cf5 / 2c6eae4 / StaticGate；问数侧薄封装 `src/pages/qa/qaFallback.ts` 给出 `qaLive`）：开关 qa 为真时，读接口遇到 `isBackendDown(e)` → `backend.down=true`，`qaLive` 变 false，页面改走 mock 渲染，只提示一次 `后台未启动，暂时显示演示数据`；其余错误照旧提示；写操作仍按开关走真接口并照旧报错（不假装成功）。覆盖：工作台会话列表 / 当前会话 / 对话区 / 追问条 / 范围口径选项 / 左栏常用与我的页面 / 常用与我的页面抽屉；问数调优页签计数、T2 选项、认证问答列表与抽屉、高频问题列表。回退在本次会话内保持，后台起来后刷新恢复 [推断]。手工验过：停 8061 后两页都显示演示数据 + 提示一次、无报错；起回后恢复真数据。
 - 后端：`backend/app/modules/qa/{router,service,repo,schemas}.py` 对应实现，测试 `backend/tests/test_qa*.py`。最终检查（01:27，变基到 `740a554` 后，RENGU_TEST_DB=rengu_test_qa_joint）：pytest 408 passed / 1 skipped，ruff check + format、alembic check、`npm run build` 通过；页面单查（真后端：反问卡 → 追问条 → 追问、W17 范围下拉、T2 时间选项）无报错。
 
 ### 1.2 链路（qa-reuse 最终 `740a554`，在 `a39b314` 上；chain.py / llm.py / test_qa_chain.py / eval/ 归 qa-reuse，本分支未改）
@@ -39,7 +40,7 @@
 | R3 对象搜索 `/use/objects/search` | 未开始，mock | 前端未接；后端只有 O1 类型列表，O2–O4 未实现 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
 | R4 对象详情 `/use/objects/detail` | 未开始，mock | 前端未接；后端 O5–O7、O9 未实现（动作记录走动态 X7） | O5–O7、O9、O4、X7；`src/pages/objects/ObjectDetail.vue`、`parts/ObjAskModal.vue` |
 | W11 下载 | 临时 | `apiClient` 没有拿 blob 的方法，`src/api/qa.ts` 里留了一个只做 GET 下载的小工具 | 等 PDE 在 `src/api/http.ts` 加下载方法后改回 |
-| 连不上后台回退 mock | 未做 | 团队约定是 `isBackendDown(e)` 时回退演示数据并 `message.warning('后台未启动，暂时显示演示数据')`（`src/api/index.ts` 发布记录的做法）。问数的真 / mock 是模块加载时定死的 `real` 常量（`useQaSession.ts`、`qa.ts qaReal()`），工作台 6 个组件和 QaTuning 各自按它分支；要回退得把 `real` 改成响应式并让各组件在回退后重读 mock，改动面大，这轮没做。现在连不上时只弹「会话加载失败 / 加载失败（NETWORK_ERROR）」，页面空着。 |
+| 连不上后台回退 mock（剩余） | 部分 | 已覆盖见 1.1。没覆盖：工作台的 W12 投票 / W9 重算 / W10 门店表 / W11 导出等卡片内读接口（`QaAnswer.vue` / `QaStoreAnswer.vue`，回退后卡片本来就是 mock 不再发请求，只有回退前已渲染的真卡片会照旧报错）；问数调优评测 / 反馈页签本来就是 mock。`backend.down` 是全站共用的：别的模块先判定后台没起来，问数页也会直接走 mock。 |
 
 ### 2.1 链路未完成 / 待裁定
 - **最近评测分（真 qwen-flash，`740a554`）**：**76 / 100**，见 `backend/seeds/extra/qa/eval/results/summary.json`（作答 62/74、拒答 9/16、反问 5/10；失败 24 题：EV-Q-012、014、016、022、025、026、042、051、052、058、061、063、066、067、069、071、072、078、080、081、082、084、091、095）。

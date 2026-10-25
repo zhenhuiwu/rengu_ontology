@@ -13,6 +13,7 @@ import { useAppStore } from '@/stores/app';
 import { EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, TUNING_DIMS, TUNING_TIMES, planText, type SemPlan } from '@/mock/qa-tuning';
 import { tuning, tuningTick, addCert, startRun } from './qa-tuning/state';
 import { qaReal, getTuningSummary, getPlanOptions, createCert as apiCreateCert, type QaTuningSummary } from '@/api/qa';
+import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import { ApiError } from '@/api/http';
 import CertTab from './qa-tuning/CertTab.vue';
 import EvalTab from './qa-tuning/EvalTab.vue';
@@ -35,9 +36,9 @@ const pendingFb = computed(() => tuning.feedbacks.filter((f) => f.status === '�
 // 真接口（开关 qa）：认证问答、高频问题两个页签的计数取 T1；评测 / 反馈页签仍是 mock，计数照旧
 const real = qaReal();
 const summary = ref<QaTuningSummary>();
-if (real) watch(tuningTick, async () => { try { summary.value = await getTuningSummary(); } catch { /* 计数失败不挡页面 */ } }, { immediate: true });
-const recert = computed(() => (real ? summary.value?.recertCount ?? 0 : tuning.certs.filter((c) => c.status === '待重新认证').length));
-const uncert = computed(() => (real ? summary.value?.uncertFreq ?? 0 : tuning.freq.filter((f) => !f.certId).length));
+if (real) watch(tuningTick, async () => { if (!live.value) return; try { summary.value = await getTuningSummary(); } catch (e) { qaFallBackIfDown(e); /* 计数失败不挡页面 */ } }, { immediate: true });
+const recert = computed(() => (live.value ? summary.value?.recertCount ?? 0 : tuning.certs.filter((c) => c.status === '待重新认证').length));
+const uncert = computed(() => (live.value ? summary.value?.uncertFreq ?? 0 : tuning.freq.filter((f) => !f.certId).length));
 
 /* 新建认证问答 */
 const newOpen = ref(false);
@@ -59,7 +60,7 @@ if (real) {
       dims: o.dims.map((d) => ({ value: d, label: d })),
       times: o.times.map((d) => ({ value: d, label: d })),
     };
-  }).catch((e) => message.error(`语义计划选项加载失败：${(e as Error).message}`));
+  }).catch((e) => { if (!qaFallBackIfDown(e)) message.error(`语义计划选项加载失败：${(e as Error).message}`); });
 }
 const newPlan = computed<SemPlan>(() => ({ metric: nm.value, dims: nd.value, time: nt.value, filter: nf.value.trim() || undefined }));
 async function createCert() {

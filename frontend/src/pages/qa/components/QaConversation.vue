@@ -13,10 +13,10 @@ import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer } from '@/api/qa';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
 const props = defineProps<{ applied: boolean; tips: string[] }>();
 const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'apply', turnId?: string): void }>();
-const { isNew, activeTurns, activeId, draft, real, detail, sending, loading, send } = useQaSession();
+const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
-const TURNS = computed<QaRealTurn[]>(() => (real ? detail.value?.turns ?? [] : activeId.value ? QA_DEMO_TURNS : []));
+const TURNS = computed<QaRealTurn[]>(() => (live.value ? detail.value?.turns ?? [] : activeId.value ? QA_DEMO_TURNS : []));
 /** 真接口：链路新生成的回答（card = table）——沿用新轮次的回答气泡，多行结果在气泡下给出结果表 */
 type ChainTurn = Extract<QaRealTurn, { answer: QaChainAnswer }>;
 const isChain = (t: QaRealTurn): t is ChainTurn => t.kind === 'answer' && (t.answer as { card: string }).card === 'table';
@@ -62,7 +62,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
 
 <template>
   <div ref="conv" class="qa-conv scroll-area">
-    <div v-if="real && loading && !detail" class="qa-empty"><a-spin /></div>
+    <div v-if="live && loading && !detail" class="qa-empty"><a-spin /></div>
     <a-empty v-else-if="!activeId" class="qa-empty" description="还没有会话：点左侧「新建会话」开始提问" />
     <a-empty v-if="isNew && !activeTurns.length" class="qa-empty" description="新会话：在下方输入问题，Enter 发送">
       <template #image><MessageOutlined class="qa-empty-ic c-3" /></template>
@@ -82,13 +82,13 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
         :pagination="t.answer.table.paged ? { pageSize: 10, size: 'small', showSizeChanger: false } : false" :scroll="{ x: 'max-content' }" />
     </template>
     <template v-else-if="t.kind === 'answer'">
-    <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="real ? t.id : undefined" />
-    <QaAnswer v-else :card="t.answer" :turn-id="real ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @pin="emit('pin')" @clarify="(l: string) => onClarify(t, l)" />
+    <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="live ? t.id : undefined" />
+    <QaAnswer v-else :card="t.answer" :turn-id="live ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @pin="emit('pin')" @clarify="(l: string) => onClarify(t, l)" />
     </template>
     <div v-else-if="t.kind === 'denied'" class="qa-b">
       <LockOutlined class="c-3" />
       <span class="qa-b-txt">{{ t.lead }}<span class="fw-600">{{ t.bold }}</span>{{ t.tail }}</span>
-      <span v-if="canApply(t) && (real ? t.applied : applied)" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
+      <span v-if="canApply(t) && (live ? t.applied : applied)" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
       <template v-else><a-tag>{{ t.tag }}</a-tag><a-button v-if="canApply(t)" size="small" @click="emit('apply', t.id)">申请权限</a-button></template>
     </div>
     <div v-else class="qa-b">
@@ -100,7 +100,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
     </template>
     <div v-for="(t, i) in tips" :key="i" class="qa-sys t-12 c-3"><span>{{ t }}</span></div>
     </template>
-    <div v-if="real && sending" class="qa-b qa-b-ans"><ApartmentOutlined class="qa-b-av" /><span class="qa-b-txt c-3">正在查询…</span><a-spin size="small" /></div>
+    <div v-if="live && sending" class="qa-b qa-b-ans"><ApartmentOutlined class="qa-b-av" /><span class="qa-b-txt c-3">正在查询…</span><a-spin size="small" /></div>
     <template v-for="t in activeTurns" :key="t.id">
       <div class="qa-u"><span class="t-12 c-3">{{ t.time }}</span><span class="qa-bubble">{{ t.q }}</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
       <div class="qa-b qa-b-ans">

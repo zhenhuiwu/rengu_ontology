@@ -3,19 +3,22 @@
  * 原型（mock）：发送后用固定的示例回答追加一轮；新建会话得到一个空会话。
  * 真接口（开关 qa）：列表由左栏按页取（W1），当前会话详情 W3，发送 W6，新建 W2；见 src/api/qa.ts。
  */
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { QA_SESSION_LIST, QA_TODAY } from '@/mock';
 import type { QaSession } from '@/mock/qa';
 import * as qaApi from '@/api/qa';
 import { isApiError } from '@/api/http';
+import { qaLive, qaFallBackIfDown } from './qaFallback';
 
+/** real：开关 qa（写操作按它走真接口）；live：渲染 / 读接口（后台没起来时回退 mock） */
 const real = qaApi.qaReal();
+const live = qaLive;
 
 export interface QaTurn { id: number; q: string; time: string; }
 
 const sessions = ref<QaSession[]>([...QA_SESSION_LIST]);
-const activeId = ref<string>(real ? '' : QA_SESSION_LIST[0].id);
+const activeId = ref<string>(live.value ? '' : QA_SESSION_LIST[0].id);
 /** 真接口：当前会话详情（含全部轮次）；listTick 变了左栏重取当前页 */
 const detail = ref<qaApi.QaSessionDetail | null>(null);
 const loading = ref(false);
@@ -28,18 +31,20 @@ let loadSeq = 0;
 export const errText = (e: unknown) => (isApiError(e) ? `${e.message || e.code}（${e.code}）` : String(e));
 
 async function loadDetail(id = activeId.value) {
-  if (!real || !id) return;
+  if (!live.value || !id) return;
   const my = ++loadSeq;
   loading.value = true;
   try {
     const d = await qaApi.getSession(id);
     if (my === loadSeq) detail.value = d;
   } catch (e) {
-    if (my === loadSeq) { detail.value = null; message.error(`会话加载失败：${errText(e)}`); }
+    if (my === loadSeq) { detail.value = null; if (!qaFallBackIfDown(e)) message.error(`会话加载失败：${errText(e)}`); }
   } finally { if (my === loadSeq) loading.value = false; }
 }
 /** 每个会话里本次新追加的轮次（原有历史轮次由 QaConversation 固定渲染，只属于第一个会话） */
 const turns = ref<Record<string, QaTurn[]>>({});
+// 后台没起来 → 回退 mock：当前会话切到示例会话
+watch(live, (on) => { if (!on) { loadSeq++; loading.value = false; detail.value = null; activeId.value = QA_SESSION_LIST[0].id; } });
 const draft = ref('');
 let seq = 0;
 let newSeq = 0;
@@ -55,7 +60,7 @@ export function clarifyFollowUp(question: string, term: string, label: string) {
 
 export function useQaSession() {
   /** 新建的会话没有历史轮次，对话区显示空状态 */
-  const isNew = computed(() => (real ? !!detail.value && detail.value.id === activeId.value && !detail.value.turns.length : activeId.value.startsWith('NEW-')));
+  const isNew = computed(() => (live.value ? !!detail.value && detail.value.id === activeId.value && !detail.value.turns.length : activeId.value.startsWith('NEW-')));
   const activeTurns = computed(() => turns.value[activeId.value] ?? []);
   async function sendReal(q: string) {
     const sid = activeId.value;
@@ -100,5 +105,5 @@ export function useQaSession() {
     draft.value = '';
     return id;
   }
-  return { sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, detail, loading, sending, listTick, favTick, loadDetail, newSessionReal };
+  return { sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, live, detail, loading, sending, listTick, favTick, loadDetail, newSessionReal };
 }
