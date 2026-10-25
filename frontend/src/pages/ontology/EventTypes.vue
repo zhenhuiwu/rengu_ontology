@@ -37,7 +37,7 @@ const source = ref('全部');
 const kw = ref('');
 const filtered = computed(() => EVENT_TYPES.filter((e) => (source.value === '全部' || e.source === source.value)
   && (!kw.value || e.name.includes(kw.value) || e.api.toLowerCase().includes(kw.value.toLowerCase()))));
-const LPAGE = 12;
+const LPAGE = 14;
 const lpage = ref(1);
 watch([source, kw], () => { lpage.value = 1; });
 const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
@@ -130,7 +130,7 @@ const outcome = computed({
   get: () => (OUTCOMES.includes(route.query.oc as string) ? (route.query.oc as string) : '全部'),
   set: (v) => router.replace({ query: { ...route.query, oc: v === '全部' ? undefined : v, cursor: undefined } }),
 });
-const cq = useCursorQuery({ size: 12 });
+const cq = useCursorQuery({ size: 14 });
 const CUTOFF_24H = '2026-10-24 15:42:18';
 const recentRows = computed(() => recentAll.value.filter((r) => (range.value === '7d' || r.at >= CUTOFF_24H) && (outcome.value === '全部' || r.outcome === outcome.value)));
 const recent = computed(() => paginateCursor(recentRows.value, { cursor: cq.cursor.value, size: cq.size }));
@@ -166,8 +166,8 @@ const verCols = [
   <div class="et">
     <div class="panel et-list">
       <div class="et-filter">
-        <a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" />
-        <a-segmented v-model:value="source" :options="EVENT_SOURCES" block size="small" />
+        <a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" class="et-kw" />
+        <a-select v-model:value="source" :options="EVENT_SOURCES.map((g) => ({ value: g, label: g === '全部' ? '全部来源' : g }))" class="et-sel" />
       </div>
       <ul class="et-items">
         <li v-for="e in list" :key="e.id" :class="{ active: e.id === cur.id }" @click="pick(e.id)">
@@ -220,7 +220,7 @@ const verCols = [
           <a-descriptions :column="2" bordered size="small">
             <a-descriptions-item label="来源">{{ cur.source }}</a-descriptions-item>
             <a-descriptions-item label="来源说明">
-              <template v-if="cur.ruleId"><ObjRef kind="rule" :id="cur.ruleId">{{ cur.ruleId }}</ObjRef> {{ RULES[cur.ruleId].name }}</template>
+              <template v-if="cur.ruleId"><ObjRef kind="rule" :id="cur.ruleId">{{ cur.ruleId }}</ObjRef><span class="et-gap">{{ RULES[cur.ruleId].name }}</span></template>
               <template v-else>{{ cur.sourceRef }}</template>
             </a-descriptions-item>
             <a-descriptions-item label="触发对象">{{ cur.object }}（{{ cur.objectApi }}）</a-descriptions-item>
@@ -240,10 +240,20 @@ const verCols = [
           <div v-for="s in subs.slice(0, 4)" :key="s.name" class="et-sub">
             <span class="t-12 c-3 et-sub-k">{{ s.kind }}</span>
             <span class="t-14 c-1">
-              <template v-if="s.ruleId"><ObjRef kind="rule" :id="s.ruleId">{{ s.ruleId }}</ObjRef> </template>{{ s.name }}
+              <template v-if="s.ruleId"><ObjRef kind="rule" :id="s.ruleId">{{ s.ruleId }}</ObjRef></template><span :class="{ 'et-gap': s.ruleId }">{{ s.name }}</span>
             </span>
             <span class="t-12" :class="s.status === '异常' ? 'c-warning' : 'c-3'">{{ s.status }}</span>
           </div>
+          <div class="et-sec t-14 fw-600 et-sec-row">
+            <span>最近事件</span><span class="t-12 c-3 fw-400">完整事件流见“近期事件”页签</span>
+          </div>
+          <div v-for="r in recentAll.slice(0, 5)" :key="r.id" class="et-ev">
+            <a class="t-14 num" @click="drawer.open('event', r.id)">{{ r.id }}</a>
+            <span class="t-12 c-3 num">{{ r.at }}</span>
+            <span class="t-12 c-2 et-ev-s">{{ r.summary }}</span>
+            <span class="t-12" :class="r.outcome === '投递失败' ? 'c-error' : r.outcome === '部分投递' ? 'c-warning' : 'c-3'">{{ r.outcome }}</span>
+          </div>
+          <div v-if="!recentAll.length" class="t-12 c-3">草稿未发布，暂无事件</div>
         </div>
         <div class="et-ov-right">
           <div class="et-sec t-14 fw-600 et-sec-row"><span>近 14 天事件数</span><span class="t-12 c-3 fw-400">截至 2026-10-25 15:42</span></div>
@@ -289,7 +299,7 @@ const verCols = [
         <a-table :columns="subCols" :data-source="subs" :pagination="false" size="middle" row-key="name">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
-              <template v-if="record.ruleId"><ObjRef kind="rule" :id="record.ruleId">{{ record.ruleId }}</ObjRef> </template>{{ record.name }}
+              <template v-if="record.ruleId"><ObjRef kind="rule" :id="record.ruleId">{{ record.ruleId }}</ObjRef></template><span :class="{ 'et-gap': record.ruleId }">{{ record.name }}</span>
             </template>
             <template v-else-if="column.key === 'weekly'"><span class="num">{{ fmtInt(record.weekly) }}</span></template>
             <template v-else-if="column.key === 'status'">
@@ -347,7 +357,9 @@ const verCols = [
 <style scoped>
 .et { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .et-list { width: 300px; flex: none; }
-.et-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
+.et-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
+.et-kw { flex: 1; min-width: 0; }
+.et-sel { width: 108px; flex: none; }
 .et-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
 .et-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .et-items li:hover { background: var(--g3); }
@@ -374,5 +386,8 @@ const verCols = [
 .et-sub { display: grid; grid-template-columns: 72px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: var(--border); }
 .et-empty { margin-top: 32px; }
 .et-tool { display: flex; align-items: center; gap: 8px; flex: none; }
+.et-gap { margin-left: 4px; }
+.et-ev { display: grid; grid-template-columns: 190px 150px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: var(--border); }
+.et-ev-s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et-dis { color: var(--g7); cursor: not-allowed; }
 </style>

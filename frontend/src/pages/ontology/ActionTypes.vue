@@ -40,7 +40,7 @@ const group = ref('全部');
 const kw = ref('');
 const filtered = computed(() => ACTION_TYPES.filter((a) => (group.value === '全部' || a.group === group.value)
   && (!kw.value || a.name.includes(kw.value) || a.api.toLowerCase().includes(kw.value.toLowerCase()))));
-const LPAGE = 12;
+const LPAGE = 14;
 const lpage = ref(1);
 watch([group, kw], () => { lpage.value = 1; });
 const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
@@ -164,7 +164,7 @@ const runFilter = computed({
   get: () => (RUN_FILTERS.includes(route.query.rs as string) ? (route.query.rs as string) : '全部'),
   set: (v) => router.replace({ query: { ...route.query, rs: v === '全部' ? undefined : v, rpage: undefined } }),
 });
-const rq = usePagedQuery({ defaultSize: 12, prefix: 'r' });
+const rq = usePagedQuery({ defaultSize: 14, prefix: 'r' });
 const runRows = computed(() => runsOf(cur.value.id).filter((r) => runFilter.value === '全部' || r.status === runFilter.value));
 const runs = computed(() => paginate(runRows.value, { page: rq.page.value, size: rq.size.value }));
 const runCols = [
@@ -200,8 +200,8 @@ const verCols = [
   <div class="at">
     <div class="panel at-list">
       <div class="at-filter">
-        <a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" />
-        <a-segmented v-model:value="group" :options="ACTION_GROUPS" block size="small" />
+        <a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" class="at-kw" />
+        <a-select v-model:value="group" :options="ACTION_GROUPS.map((g) => ({ value: g, label: g === '全部' ? '全部分组' : g }))" class="at-sel" />
       </div>
       <ul class="at-items">
         <li v-for="a in list" :key="a.id" :class="{ active: a.id === cur.id }" @click="pick(a.id)">
@@ -270,12 +270,18 @@ const verCols = [
           <a-table :columns="usedCols" :data-source="usedBy" :pagination="false" size="small" row-key="id"
             :locale="{ emptyText: '暂无规则使用，只能在对象详情里手动执行' }">
             <template #bodyCell="{ column, record }">
-              <template v-if="column.key === 'rule'"><ObjRef kind="rule" :id="record.id">{{ record.id }}</ObjRef><span class="c-1"> {{ record.name }}</span></template>
+              <template v-if="column.key === 'rule'"><ObjRef kind="rule" :id="record.id">{{ record.id }}</ObjRef><span class="c-1 at-gap">{{ record.name }}</span></template>
               <template v-else-if="column.key === 'alerts'">
                 <span class="num">{{ record.alerts }}</span><span v-if="record.open" class="t-12 c-warning num">（待处理 {{ record.open }}）</span>
               </template>
             </template>
           </a-table>
+          <div class="at-sec t-14 fw-600 at-sec-row">
+            <span>提交条件 {{ conds.length }} 项</span><span class="t-12 c-3 fw-400">表达式见“提交条件”页签</span>
+          </div>
+          <div v-for="c in conds.slice(0, 5)" :key="c.name" class="at-cond">
+            <span class="t-12 c-3">{{ c.kind }}</span><span class="t-14 c-1">{{ c.name }}</span><span class="t-12 c-3 at-cond-f">{{ c.fail }}</span>
+          </div>
         </div>
         <div class="at-ov-right">
           <div class="at-sec t-14 fw-600 at-sec-row"><span>近 30 天执行</span><span class="t-12 c-3 fw-400">截至 2026-10-25 15:42</span></div>
@@ -407,7 +413,9 @@ const verCols = [
 <style scoped>
 .at { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .at-list { width: 300px; flex: none; }
-.at-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
+.at-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
+.at-kw { flex: 1; min-width: 0; }
+.at-sel { width: 108px; flex: none; }
 .at-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
 .at-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .at-items li:hover { background: var(--g3); }
@@ -436,5 +444,8 @@ const verCols = [
 .at-empty { margin-top: 32px; }
 .at-tool { display: flex; align-items: center; gap: 8px; flex: none; }
 .at-code { font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; color: var(--g9); }
+.at-gap { margin-left: 4px; }
+.at-cond { display: grid; grid-template-columns: 96px 160px 1fr; gap: 8px; align-items: center; padding: 6px 0; border-bottom: var(--border); }
+.at-cond-f { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .at-dis { color: var(--g7); cursor: not-allowed; }
 </style>
