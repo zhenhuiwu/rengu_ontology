@@ -1,6 +1,7 @@
 # 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.1 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.2（并入 PDE 的 export-mock、调度器、分页、对账结论；尚未发布到 master，等两人审阅）
+> **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `f54db65` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
 > `src/components/actionEventResolvers.ts`、`src/mock/actionEvent.ts`、`extsys.ts`、`dynamic.ts`、`paginate.ts`，以及 `composables/usePagedQuery.ts`、`useDrawer.ts`、`useReadonly.ts`、`useUnsavedGuard.ts`、`stores/confirm.ts`。
@@ -25,7 +26,7 @@
 | 归属 | 负责内容 |
 |---|---|
 | **动态（Dynamic）** | 动作执行的**状态流转**和对应接口：暂存（规则命中后生成待确认动作）、确认、审批、撤回、重新提交、人工对账。`action_run` 表由动态负责。**幂等键在暂存时由动态生成**；重新提交会生成**新的执行记录和新的幂等键**，原记录保留。 |
-| **Palantir（本模块）** | 动作类型、事件类型的定义（读接口 + 草稿校验）；外部系统适配器；幂等键**规则**（动作类型上的模板，例如 `requestReplenishment:{门店ID}:{SKU}:{日期}`）和按键调用、查询；超时判定；定时对账任务；事件的接收、去重、投递和投递记录。 |
+| **Palantir（本模块）** | 动作类型、事件类型的定义（读接口 + 草稿校验）；外部系统适配器；幂等键**规则**（动作类型上的模板，例如 `requestReplenishment:{门店ID}:{SKU}:{日期}`）和按键调用、查询；超时判定；定时对账任务（procrastinate 调度）；事件的接收、去重、投递和投递记录。 |
 | **静态（Static）** | 变更单（CR）、草稿增量 `cr_item`、校验、整版发布。动作类型和事件类型的**所有定义改动**都走这条链路，不另做一套。 |
 | **本体小白（基础层）** | 本体版本的存储（`ontology_release` 快照）和 `?ver=` 历史版本的读取。本模块的读接口只把 `release` 参数透传给基础层，自己不存历史快照。 |
 
@@ -33,13 +34,16 @@
 
 | 接口 | 入参 | 同步返回 | 说明 |
 |---|---|---|---|
-| `submit(action_run_id, idempotency_key)` | 执行记录号和幂等键；本模块再按 `action_run_id` 读执行时锁定的动作类型版本和参数快照 | `result: 成功 \| 失败 \| 结果未知`，`ext_ref`（外部回执号，可空），`code`（返回码或失败原因），`retries`，`elapsed_ms`，`calls[]`（每次调用：attempt、http、ms） | 先校验提交条件，再调用外部系统，成功后提交本体编辑，最后异步执行副作用。外部**明确返回失败**时，如果对方支持幂等，就按同一个幂等键自动重试（次数和间隔取外部系统配置）。**超时或无响应**时记为结果未知，**不重试**。本体内部动作（不写外部系统）不存在结果未知。 |
-| `query_by_key(idempotency_key)` | 幂等键 | `ext_status: 已处理 \| 未处理 \| 查无 \| 不支持查询`，`ext_ref`，`raw` | 定时对账和动态的**人工对账**都走这个接口，不直接连外部系统。对方不支持幂等（如短信、企业微信）时返回 `不支持查询`。 |
-| 回调 `on_reconciled(action_run_id, result)` | 由本模块调用动态 | — | 定时对账有了结论时回调动态，由**动态**改状态（结果未知 → 已对账，或 → 失败，见 §4 待定问题）。本模块不直接写 `action_run.status`。 |
+| `submit(action_run_id, idempotency_key)` | 执行记录号和幂等键；本模块再按 `action_run_id` 读执行时锁定的动作类型版本和参数快照 | `result: 成功 \| 失败 \| 结果未知`，`ext_ref`（外部回执号，可空），`code`（返回码或失败原因），`retries`，`elapsed_ms`，`calls[]`（每次调用：attempt、http、ms） | 先校验提交条件，再调用外部系统，成功后提交本体编辑，最后异步执行副作用。外部**明确返回失败**（HTTP 4xx/5xx，或业务失败码，如 ERP 的 `NC-2071 供货仓可用库存不足`）时，如果对方支持幂等，就用同一个幂等键自动重试，最多 `ext_system.max_retry` 次，退避按外部系统配置；重试完仍失败，返回失败。对方不支持幂等时不重试。这与前端一致：mock 里失败记录的 `retries = maxRetry`，成功记录有“第 2 次成功（首次 HTTP 503 明确失败）”。**超时或无响应**时记为结果未知，**写操作永不重试**。本体内部动作（不写外部系统）不存在结果未知。 |
+| `query_by_key(idempotency_key)` | 幂等键 | `ext_status: 已处理 \| 未处理 \| 查无 \| 不支持查询`，`ext_ref`，`raw` | 定时对账和动态的**人工对账**都走这个接口：动态做人工对账时**先调 `query_by_key`**，把结果给对账人参考，再由对账人选结论；不直接连外部系统。对方不支持幂等（如短信、企业微信）时返回 `不支持查询`。 |
+| 回调 `on_reconciled(action_run_id, result)` | 由本模块调用动态 | — | 定时对账有了结论时回调动态，由**动态**改状态：结果未知 → 已对账，`result` 带 `reconcile_result=executed | not_executed`；外部未执行**也记为已对账**，不改成失败（已定（PDE 汇总团队决定，2026-10-25））。按前端，“已对账 · 外部未执行”**不能**在原记录上重新提交，页面提示“如仍需执行请重新发起”，也就是另外新发起一个动作。定时对账查到结果时，对账人记为 **“系统”**。本模块不直接写 `action_run.status`。 |
 | `dry_run(action_type_id, params, release?)` | 动作类型和参数 | `passed`，`failed[{name, fail}]` | 对应“试运行”。只校验提交条件并模拟调用，不写外部系统，不改本体。 |
 | `emit(event)` | 事件信封和载荷 | `event_id`，`deduped: bool` | 动作成功后产生 `ActionExecuted`，结果未知时产生 `ActionOutcomeUnknown`；规则和数据同步也走这个接口。 |
 
-- 定时对账：**每 15 分钟**按幂等键查询一次，最多 3 次。3 次后仍无法确认的，留给动态做人工对账（mock：`actions.ts` 里的 `AUTO_QUERY_TEXT`、`extsys.ts` 里调用记录的提示文字）。
+- 定时对账：**每 15 分钟**按幂等键查询一次，最多 3 次。查到结果就调 `on_reconciled`，状态变成已对账，对账人记为“系统”；3 次后仍无法确认的，留给动态做人工对账（mock：`actions.ts` 里的 `AUTO_QUERY_TEXT`、`extsys.ts` 里调用记录的提示文字）。
+- **调度器**：用 **procrastinate**（基于 PostgreSQL 的任务队列，自带 cron 定时和锁）。定时对账（每 15 分钟一次的 cron 任务，同一条执行记录按 `action_run_id` 加锁，不会被重复查询）和**按订阅方的重投**（每个失败的投递记录一个任务，退避重试）都用它，不再另外引入 APScheduler 或 advisory lock（已定（PDE 汇总团队决定，2026-10-25））。
+- **数据归属**：外部调用记录 `ext_call` 和对账任务的状态（`auto_query_count`、`next_query_at` 等）放在**本模块的表**（`ext_call`、`reconcile_task`）里，不放进 `action_run`。
+- **seed、dev、test 环境里所有适配器都用 mock 实现**，不连真实外部系统。seed 进来的“结果未知”执行记录，mock 适配器的 `query_by_key` 一律返回“仍无法确认”，`next_query_at` 照导出的原值保留。这样定时对账跑起来也不会改动这些记录，页面和现在一模一样（详见 §7.1）。
 - 结果未知超过 30 分钟，由“结果未知提醒”这个订阅方通过企业微信通知发起人和确认人（mock：`actionEvent.ts` 的 `subscribersOf('action_outcome_unknown')`）。
 
 ### 1.2 代码位置（与 PDE 约定）
@@ -51,10 +55,12 @@ backend/app/modules/
   event/             事件类型定义、事件接收与去重、投递、投递记录、模拟触发
     seeds/
   integration/       外部系统适配器（每个 EXT-* 一个 adapter）：超时、重试、幂等请求头
-  reconcile/         定时对账任务（可以并入 action，见 §8 待定问题）
+  reconcile/         定时对账任务（procrastinate；可以并入 action，见 §8 待定问题）
 ```
 
-FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项目调研员 的建议一致）。迁移跑完后执行统一的 `seed` 命令。
+FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项目调研员 的建议一致）；任务队列用 procrastinate。迁移跑完后执行统一的 `seed` 命令。
+
+> 下面写到的“已定”都是 PDE 在 2026-10-25 汇总团队讨论后定下的。
 
 ---
 
@@ -117,13 +123,13 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 近期事件 | 时间范围（`?range=24h\|7d`，默认 7 天）和投递结果筛选（`?oc=`：全部/已投递/已生成告警/已去重/部分投递/投递失败），每页 14 条（`?epage=`）；列：时间、事件、对象、载荷摘要、订阅方数、延迟、结果；分页只显示 ‹ 1/N ›，不显示总数，旁边显示保留期 | 改范围或筛选会回到第 1 页 |
 | 事件抽屉 | 字段：事件类型、来源、发生时间、处理延迟、对象、载荷摘要、去重键、投递结果；时间线：接收 → 去重检查（命中则丢弃）→ 投递 N 个订阅方 / 部分投递（1 个超时待重试）/ 投递失败（3 次重试后进入死信队列）；关联：事件对象、产生该事件的规则 | — |
 
-> **事件流分页的差异**：`paginate.ts` 已经提供游标分页 `paginateCursor`，`AppPagination` 也有 `cursor` 变体，但近期事件页现在用的是页码分页，只是用 CSS 把总数隐藏了。‹ 1/N › 里的 N 本身需要总数。后台按**游标**设计（§3.3），同时给一个 `has_more`。前端要么改用 `useCursorQuery`，要么后台额外返回估算页数，需要 PDE 定（§8）。
+> **事件流分页**（已定（PDE 汇总团队决定，2026-10-25））：近期事件页和其他显示 ‹ 1/N › 的列表一样，用 `page/size`，后台**返回 `total`**，前端只是不显示总数。**不用游标**。只有前端本来就用游标的页面（如审计日志）才用游标。
 
 ---
 
 ## 3. 接口清单
 
-通用约定沿用静态 §4：页码分页 `{items, total, page, size}`；读接口接受 `release`（即 `?ver=`）、`view=published|draft`、`cr`；错误体 `{code, message, details}`，`message` 可以直接用作悬停文字或确认卡上的阻断原因。前缀统一为 `/api/v1`。
+通用约定沿用静态 §4：页码分页，请求参数 `page`、`size`，响应 `{items, total, page, size}`（与 `usePagedQuery` 一致）；读接口接受 `release`（即 `?ver=`）、`view=published|draft`、`cr`；错误体 `{code, message, details}`，`message` 可以直接用作悬停文字或确认卡上的阻断原因。前缀统一为 `/api/v1`。
 “来源 mock”一列是 seed 数据和接口返回形状的出处（`src/mock/` 下）。
 
 ### 3.1 动作类型
@@ -156,9 +162,9 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /event-types/{id}/payload-fields` | `page`、`size=12`、`view`、`cr` | `items[{name,api,type,required,desc,sample,envelope:bool,mark?}]`、`total`；`envelope_count` | 页码 | `EventType.specific`、`ENVELOPE`、`payloadOf()` |
 | `GET /event-types/{id}/subscribers` | `view`、`cr` | `items[{kind,name,rule_id?,filter,then,status,weekly,mark?}]` | 不分页 | `subscribersOf()`（`SUBS` / `SUBS_RULE` / 默认） |
 | `GET /event-types/{id}/stats` | — | `weekly,p95_ms,dedup,failed,partial,as_of`；`daily[{date,value}]`（14 天） | — | `eventDaily()`；健康指标按 `eventsOf()` 计算 |
-| `GET /event-types/{id}/events` | `range=24h\|7d`、`outcome`、`cursor`、`size=14` | `items[{id,at,obj_kind,obj_id,obj_label,summary,subscribers,latency_ms,outcome}]`、`next_cursor`、`has_more`；**不返回 total** | 游标 | `eventsOf()`（`EVENTS`） |
+| `GET /event-types/{id}/events` | `range=24h\|7d`、`outcome`、`page`、`size=14` | `items[{id,at,obj_kind,obj_id,obj_label,summary,subscribers,latency_ms,outcome}]`、`total`（前端只显示 ‹ 1/N ›） | 页码 | `eventsOf()`（`EVENTS`） |
 | `GET /events/{id}` | — | 抽屉字段 + `timeline[]` + `related[]` | — | `eventById()`、`actionEventResolvers.ts` `event()` |
-| `GET /event-deliveries` | `event_id`（必填）或 `subscription_id`+`cursor` | `items[{subscription,status,attempts,last_error,delivered_at}]` | 游标 | mock 里没有逐个订阅方的记录，按 `outcome` 和 `subscribers` 推出来【推断】 |
+| `GET /event-deliveries` | `event_id`（必填），或 `subscription_id` 加 `page`、`size` | `items[{subscription,status,attempts,last_error,delivered_at}]`；按订阅方查时带 `total` | 按事件查不分页，按订阅方查用页码 | mock 里没有逐个订阅方的记录，按 `outcome` 和 `subscribers` 推出来【推断】 |
 | `POST /event-types/{id}:simulate` | `{payload?}`（默认取各字段的示例值） | `{test_event_id, delivered_to}` | — | 页面逻辑 `EventTypes.vue` `simulate()`（只算启用中的订阅方）；`subscribersOf()` |
 | `GET /event-types/{id}/versions` | — | 同动作类型 | 不分页 | `versionsOf()`、`EVENT_VERSION_NOTES` |
 | 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'event',id}`，`section ∈ payload\|subs` | 静态接口 | — | `useDraftEdits.ts` |
@@ -167,7 +173,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 ### 3.3 只读与权限
 
 - 带 `release`（历史版本）的请求只能读；写接口返回 `READONLY_HISTORY`。
-- 试运行需要当前用户满足该动作的“执行人角色”条件（mock 写在 `runners` 里）；模拟触发只允许事件负责人和本体管理员【推断】。
+- 试运行、模拟触发：前端对所有能进入页面的用户都开放，只在类型为草稿时置灰，历史版本下也能用。后台**按前端，不加额外权限限制**。“只有执行人角色才能试运行”“只有负责人才能模拟触发”属于【推断】，见 §8.2。
 - 草稿写入的权限按静态的 CR 规则。
 
 ### 3.4 错误码（在静态 §4 的基础上增加）
@@ -177,10 +183,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `SUBMISSION_CRITERIA_FAILED` | 422 | 试运行或 submit 时有条件不满足 | `details.failed[{name,fail}]`，如“只有会员运营组可以同步会员标签” |
 | `DUPLICATE_KEY` | 409 | 草稿新增参数、条件、字段、订阅方时键重复 | “已存在同名项”；载荷字段为“API 名与已有字段（含信封字段）重复” |
 | `ENVELOPE_READONLY` | 409 | 试图改信封字段 | “信封字段所有事件类型共有，不可修改” |
-| `INCOMPATIBLE_PAYLOAD_CHANGE` | 422 | 草稿里删除载荷字段或改字段类型、却没有拿到全部订阅方的确认 | “删除或改类型属于不兼容变更，需要所有订阅方确认” |
-| `WRITEBACK_SYSTEM_INVALID` | 422 | 写回系统不是生产环境，或者已停用 | — |
+| `INCOMPATIBLE_PAYLOAD_CHANGE` | 422 | 【推断】草稿里删除载荷字段或改字段类型、却没有拿到全部订阅方的确认。**前端只是提示，不拦截**，所以第一期默认**只警告、不拦截**；要不要拦截见 §8.2 | “删除或改类型属于不兼容变更，需要所有订阅方确认” |
+| `WRITEBACK_SYSTEM_INVALID` | 422 | 写回系统不是生产环境，或者已停用（和前端下拉的过滤规则一样） | — |
 | `TYPE_IS_DRAFT` | 409 | 对草稿状态的类型做试运行或模拟触发 | — |
-| `IDEMPOTENCY_CONFLICT` | 409 | 同一个幂等键带着不同参数再次提交 | 【推断】 |
+| `IDEMPOTENCY_CONFLICT` | 409 | 【推断】同一个幂等键带着不同参数再次提交（前端没有这个场景，第一期默认不做，见 §8.2） | — |
 | `EXT_TIMEOUT` | — | 不是 HTTP 错误；submit 返回 `result=结果未知`，`code` 为“超时 N 秒未响应 · 未重试” | — |
 
 ---
@@ -191,24 +197,27 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 1. **读版本**：按执行记录锁定的动作类型版本执行。新版本发布后，进行中的执行仍按提交时的版本完成（版本历史页签的 ⓘ）。
 2. **参数校验**：类型、必填，以及“校验”一列里的规则（如 `1 ≤ 天数 ≤ 30`、`≤ 200 字`）。对象引用参数检查对象是否存在。
-3. **提交条件**：三种模板——当前用户、参数、上下文对象。**全部满足**才能提交，任一不满足就返回它的“不满足时提示”。规则命中生成的动作，在确认人确认时才求值【推断：mock 里条件失败只出现在确认之后】。
-4. **审批**：审批由动态负责。本模块只提供“这次是否需要审批”的判断，例如“单次 > 500 张需审批”【推断：mock 只有一段文字说明，需要做成可求值的阈值表达式】。
+3. **提交条件**：三种模板——当前用户、参数、上下文对象。**全部满足**才能提交，任一不满足就返回它的“不满足时提示”。规则命中生成的动作，在确认人确认时才求值（与 resolver 时间线的顺序一致：确认提交 → 提交条件）。
+4. **审批**：审批由动态负责。本模块只提供“这次是否需要审批”的判断，例如“单次 > 500 张需审批”【推断：mock 只有一段文字说明；第一期按原文存储，做不做成可求值的表达式见 §8.2 U8】。
 5. **写回外部系统（同步，决定动作结果）**：适配器带上外部系统的幂等请求头（如 `X-Request-Id`、`requestNo`），值就是执行记录的幂等键。
    - 返回 2xx：成功，记下 `ext_ref`（外部回执号）。
-   - 明确失败（4xx/5xx，或对方返回业务失败码）：对方支持幂等时，按同一个键重试，次数和退避取外部系统配置（如“最多 3 次，1s/2s/4s”）；对方不支持幂等时不重试，直接失败。
+   - 明确失败（4xx/5xx，或对方返回业务失败码，如 `NC-2071`）：对方支持幂等时，用同一个键自动重试，最多 `ext_system.max_retry` 次，退避取外部系统配置（如“最多 3 次，1s/2s/4s”）；重试完仍失败就返回失败。对方不支持幂等时不重试，直接失败。这是前端 mock 的行为，以它为准。
+   - 【推断，备选，见 §8.2】业务失败码不重试，只对网络错误、429、5xx，在超时预算内用同一个键重试。
    - 超时或无响应：**结果未知，不重试**，因为对方可能已经处理，重试可能造成重复写回。
 6. **提交本体编辑**：写回成功后才提交（修改、新建、关联），保证本体和外部系统一致。没有外部系统的动作直接提交，失败就报错，不重试。
 7. **副作用（异步）**：通知、事件、Webhook。成功后产生 `ActionExecuted`；结果未知时产生 `ActionOutcomeUnknown`。副作用失败不影响动作结果。
-8. **定时对账**：结果未知的执行每 15 分钟调一次 `query_by_key`，最多 3 次。查到“已处理”就回调 `on_reconciled(成功/已对账)`，补发 `ActionExecuted` 并提交本体编辑【推断：resolver 的时间线里，已对账之后才“本体编辑已提交”】；3 次后仍无法确认，留给动态做人工对账。
+8. **定时对账**：procrastinate 的 cron 任务每 15 分钟对结果未知的执行调一次 `query_by_key`，最多 3 次。查到“已处理”就回调 `on_reconciled(已对账, reconcile_result=executed, reconciler=系统)`，补发 `ActionExecuted` 并提交本体编辑【推断：resolver 的时间线里，已对账之后才“本体编辑已提交”】；查到“未处理”就回调 `on_reconciled(已对账, reconcile_result=not_executed, reconciler=系统)`，不提交本体编辑；3 次后仍无法确认，留给动态做人工对账（动态先调 `query_by_key`，再让对账人选结论：外部已成功 / 外部未执行 / 仍无法确认）。
 
 ### 4.2 动作类型的版本与变更
 
 - 所有改动（参数、条件、本体编辑、副作用、写回配置）都写进变更单草稿的 `cr_item`，`target_kind=action`，`section` 和前端一致。审核通过后**随本体整版发布生效**，没有单独发布动作类型这回事。
+- **回滚**：两页的回滚链接现在都置灰（“回滚暂未开放”），第一期不做。开放以后按前端/静态的口径，**生成一个新版本**（调基础层的 `create_version`，内容等于目标版本），不是把当前指针移回去。
 - 本模块给静态的校验链路提供动作类型自己的校验项（并入静态的 V 系列，见静态待定问题第 12 条）【建议】：
   - API 名唯一；
   - 引用的外部系统可用；
   - 幂等键模板里的占位符必须都能从参数中取到；
   - 对外部系统、本体都没有写操作时给出警告。
+  - 以上都是【推断】，前端目前没有这些校验，第一期默认**只警告**，见 §8.2。
 
 ### 4.3 事件：定义、产生、投递
 
@@ -216,7 +225,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 2. **兼容规则**：载荷只能新增**可选**字段。删除字段或改类型属于不兼容变更，需要所有订阅方确认，再随整版发布生效。
 3. **产生**：有 4 种来源——数据同步（CDC 或定时增量）、规则命中、动作（写回成功或结果未知）、外部系统（Webhook 推送或回调）。都调用 `emit`。
 4. **去重**：按去重键模板计算 `dedup_key`，在去重窗口内命中就丢弃，事件结果记为“已去重”，订阅方数为 0。窗口可以是“永久”。
-5. **投递**：按订阅方的过滤条件匹配，每个启用的订阅方生成一条投递记录。失败重试 3 次后进入死信队列。
+5. **投递**：按订阅方的过滤条件匹配，每个启用的订阅方生成一条投递记录。每条投递记录是一个 procrastinate 任务，失败后按退避重新入队，重试 3 次后进入死信队列。
    - 整条事件的结果：全部成功为“已投递”（规则来源的为“已生成告警”）；部分成功、其余还在重试为“部分投递”；全部失败为“投递失败”。
 6. **模拟触发**：只投递到订阅方的测试通道，不产生告警，不执行动作，不写下游，也不计入近期事件和统计【推断】。
 7. **保留期**：超过保留期的事件和投递记录按分区删除。
@@ -234,25 +243,27 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 待确认 | 确认人确认提交 | 审批中（需要审批）/ 执行中 | 动态 |
 | 待确认 | 确认人撤回（必须填原因） | 已撤回（终态，不写外部系统） | 动态 |
 | 审批中 | 审批通过 | 执行中 | 动态 |
-| 审批中 | 驳回 | 未定义，见 §8 | 动态 |
+| 审批中 | 审批人驳回 | 【推断，默认不实现】前端没有“已驳回”。动态的备选方案：新增终态“已驳回”，关联告警退回“处理中”，要再做就新发起。见 §8.2 | 动态 |
 | 执行中 | `submit` 返回成功 | 成功（终态） | 动态（依据本模块的返回） |
 | 执行中 | `submit` 返回失败（提交条件未通过，或外部明确失败且重试后仍失败） | 失败 | 动态 |
 | 执行中 | `submit` 返回结果未知 | 结果未知 | 动态 |
-| 结果未知 | 定时对账查到已处理 → `on_reconciled`；或人工对账 | 已对账（终态） | 本模块回调，动态改状态 |
-| 结果未知 | 对账确认对方未处理 | 未定义，见 §8 | — |
-| 失败 | 重新提交 | 原记录不变；新建一条执行记录，用新的幂等键 | 动态 |
+| 结果未知 | 定时对账查到已处理 → `on_reconciled`（对账人“系统”）；或人工对账 | 已对账（终态），`reconcile_result=executed` | 本模块回调，动态改状态 |
+| 结果未知 | 对账确认对方未处理 | 已对账（终态），`reconcile_result=not_executed`；**不能重新提交**，前端提示“如仍需执行请重新发起”（已定（PDE 汇总团队决定，2026-10-25）；前端为准） | 本模块回调或人工对账，动态改状态 |
+| 结果未知 | 人工对账选“仍无法确认” | 结果未知（不变） | 动态 |
+| 失败 | 重新提交（只有失败可以，和前端一致） | 原记录不变；新建一条执行记录，用新的幂等键 | 动态 |
 
 ### 5.2 外部写回调用（本模块内部）
 
 | 状态 | 触发 | 下一状态 |
 |---|---|---|
 | 调用中 | 2xx | 成功 |
-| 调用中 | 明确失败，且对方支持幂等，且还有重试次数 | 退避后重试（attempt + 1） |
+| 调用中 | 明确失败（HTTP 4xx/5xx 或业务失败码），且对方支持幂等，且还没到 `max_retry` | 退避后用同一个幂等键重试（attempt + 1） |
 | 调用中 | 明确失败，没有重试次数了，或对方不支持幂等 | 失败 |
 | 调用中 | 超时或无响应 | 结果未知 → 进入对账任务 |
-| 对账中 | `query_by_key` 返回已处理 | 已确认（回调 `on_reconciled`） |
-| 对账中 | 返回未处理 | 已确认未处理（回调，结果待定，见 §8） |
-| 对账中 | 返回查无，或第 3 次仍无法确认 | 转人工 |
+| 对账中 | `query_by_key` 返回已处理 | 已确认（回调 `on_reconciled`，对账人“系统”）；`auto_query_count + 1` |
+| 对账中 | 返回未处理 | 已确认未处理（回调 `reconcile_result=not_executed`） |
+| 对账中 | 返回查无或无法确认，且 `auto_query_count < 3` | 继续查询，`next_query_at` 加 15 分钟 |
+| 对账中 | 第 3 次仍无法确认 | 转人工（`next_query_at = null`） |
 | 对账中 | 对方不支持查询 | 直接转人工 |
 
 ### 5.3 事件（整条）
@@ -288,7 +299,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 规则 | Ontology 规则包括新建、修改、删除对象和关系；Function 规则不能和其他规则混用；另有通知规则和 Webhook 规则。通知在所有改动应用之后发出 | “本体编辑”只有修改、新建、关联三种，**没有删除**；通知放在副作用里，写回成功后发 | 【官方】https://www.palantir.com/docs/foundry/action-types/rules/ ；取舍为【笔者归纳】 |
 | 提交条件 | 三种模板：Current user、Parameter、Execution context（是否在 Scenario 里执行）。**全部满足**才能提交；每个根级条件有自己的失败提示；可以在 Ontology Manager 里试运行 | 模板是 当前用户 / 参数 / 上下文对象。我们的“上下文对象”是**检查对象状态**（如“告警.状态 = 处理中”），Palantir 是用 Parameter 模板检查对象参数的属性；它的 Execution context 指 Scenario。名字相近但含义不同，别混用。“试运行”对应它的 test run | 【官方】https://www.palantir.com/docs/foundry/action-types/submission-criteria/ ；对应关系为【笔者归纳】 |
 | 写回与副作用 | Webhook 分两种：**writeback**（在其他规则之前执行，失败则什么都不改，失败会显示给用户；只能配置一个）；**side effect**（在改动之后执行，可以有多个，顺序不保证，用户可能先看到成功）。官方说明：外部请求成功、但 Ontology 改动失败的情况仍可能发生 | 完全照这个分层：写回同步、只有一个、决定结果；本体编辑在写回成功后提交；副作用异步、失败不影响结果 | 【官方】https://www.palantir.com/docs/foundry/action-types/webhooks/ |
-| 幂等键、超时 → 结果未知 → 对账 | 我读的上面这几页没有讲幂等键、超时和对账 | 我们加的：每次执行一个幂等键；明确失败才重试；超时记结果未知，不重试；每 15 分钟按键查询，最多 3 次，之后人工对账 | 【笔者归纳】 |
+| 幂等键、超时 → 结果未知 → 对账 | 我读的上面这几页没有讲幂等键、超时和对账 | 我们加的：每次执行一个幂等键；明确失败时用同一个键重试，最多 max_retry 次；超时记结果未知，写操作永不重试；每 15 分钟按键查询，最多 3 次，之后人工对账 | 【笔者归纳】 |
 | 执行记录 | Action log 只记录**成功**的提交（失败看 Action metrics）；必记字段包括 Action RID、动作类型版本（每次更新动作类型都会自动加 1）、提交时间、提交人、被编辑的对象，以及调用过的 webhook 和发过的通知 | 我们的执行记录**成功和失败都记**，状态更多（待确认、结果未知、已对账……），相当于 action log 加 action metrics 的合体。版本号随**本体整版发布**变，不是每改一次就加 1 | 【官方】https://www.palantir.com/docs/foundry/action-types/action-log/ ；差异为【笔者归纳】 |
 | 函数支持的动作 | 用 `@OntologyEditFunction()` 写的函数作为唯一一条规则；函数版本要手动升级，也可以开自动升级（只升兼容版本，`0.y.z` 不能自动升级） | 第一期不做函数支持的动作；以后如果要做，动作类型应**锁定函数版本**，随整版发布一起升级 | 【官方】https://www.palantir.com/docs/foundry/action-types/function-actions-getting-started/ ；取舍为【笔者归纳】 |
 | 事件 / 自动化 | Automate 取代 Object Monitoring。条件有时间、对象数据、数据集三类；效果有提交动作、AIP Logic、函数、通知。官方建议：后果重大的改动先**暂存，等人审核** | 规则命中 → 生成“待确认”动作 → 确认人确认后提交，和官方的这条建议一致 | 【官方】https://www.palantir.com/docs/foundry/automate/overview/ |
@@ -303,14 +314,61 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 用户的要求：后台按前端界面逻辑逐项实现，**现在 mock 里的数据全部要进数据库**，上线第一天页面和现在看到的一模一样。
 
-### 7.1 seed 方案
+### 7.1 seed 方案（已定（PDE 汇总团队决定，2026-10-25））
 
-- 位置：`backend/app/modules/action/seeds/`、`backend/app/modules/event/seeds/`，由统一的 `seed` 命令在迁移之后执行。
-- **原样读取 mock，不改 mock**。很多数据是 mock 模块加载时用固定种子随机生成的（`RUNS`、`EVENTS`、`runDaily`、`eventDaily`、没有专门配置的参数和条件），在 Python 里重写一遍很难保证完全一致。所以分两步：
-  1. `export_mock.ts`：import `frontend/src/mock/actionEvent.ts`、`extsys.ts`、`dynamic.ts`，调用里面导出的函数（`paramsOf`、`condsOf`、`writebackOf`、`runsOf`、`subscribersOf`、`eventsOf`、`versionsOf`、`runStats`、`runDaily`、`eventDaily`），把结果写成 JSON。用 esbuild 打包后在 node 里运行。**已在本机验证可行**：17 个动作类型、101 个参数、59 条提交条件、36 条本体编辑、47 条副作用、1,849 条执行记录、15 个事件类型、37 个订阅方、1,243 条事件、10 个外部系统、5 条规则、154 条告警、31 + 27 条版本记录。
-  2. `seed.py`：读 JSON，幂等写库（`INSERT … ON CONFLICT DO NOTHING`），ID 保持原样（`ACT-…`、`EV-…`、`CR-0013/0014`）。
-- 执行时间线（`actionEventResolvers.ts`）是按状态**算出来**的。seed 时调用 resolver 的生成逻辑，写进 `action_run_step` / `event_delivery`。上线后由真实执行过程写入。
-- 校验：seed 之后跑一个对比脚本，逐个接口请求，结果和 mock 函数的输出比较，必须完全一致（分页、排序、统计数字）。
+- **导出**：统一用 PDE 写的脚本 `npm run export-mock`（`scripts/export-mock.mjs`，pde 分支 `d9e61c3`），把 `src/mock/*` 的每个导出**原样**写成 `${OUT_DIR}/<module>/<export>.json`，另外生成 `manifest.json`。`OUT_DIR` 默认是 `backend/seeds/json`。各模块的 Python seed 只从这里读，模块里**不再**自己写 esbuild/tsx 导出步骤。
+  - 时间：字符串形式的时间（如 `2026-10-25 14:28:03`）原样保留，都是北京时间；`Date` 对象写成带 `+08:00` 的 ISO 字符串。
+  - 本模块对应的导出模块是 `action`（`actionEvent.ts`），另外还读 `dynamic/`（`dynamic.ts`、`actions.ts`）、`system/`（`extsys.ts`）、`common/`（stores、products、orders）。
+  - **顶层导出是函数的会被跳过**。可是两页要用的数据大多是函数算出来的（下面列了），所以要放进 PDE 的 derived 调用清单，输出到 `json/<module>/derived/`，见 §7.1.1。
+  - 数量参考（我在本机数过，导出后应该一致）：17 个动作类型、101 个参数、59 条提交条件、36 条本体编辑、47 条副作用、1,849 条执行记录（`actionEvent.ts`）、15 个事件类型、37 个订阅方、1,243 条事件、10 个外部系统、5 条规则、154 条告警、31 + 27 条版本记录；动作中心 `actions.ts` 有 141 条执行记录。
+
+#### 7.1.0 2026-10-25 试跑结果（临时 worktree 检出 `d9e61c3`，`OUT_DIR=/tmp/pde-exp-out`，跑完已删除）
+
+- 结果：0 个失败，120 个函数被跳过。`action` 模块只导出 8 个：`ACTION_GROUPS`(7)、`ACTION_TYPES`(17，已经带上 `withSystem` 合并进来的 system/timeout/retry/idempotent 字段)、`ACTION_VERSION_NOTES`(4)、`EVENT_SOURCES`(5)、`EVENT_TYPES`(15，含 `specific` 载荷字段)、`EVENT_VERSION_NOTES`(3)、`RULE_ACTION`(4)、`UNKNOWN_FOLLOWUP`。
+- 其他模块里本模块要用的都导出了：`dynamic/ACTIONS`(141，带 `log` 时间线)、`dynamic/RULE_CONFIRMER`、`dynamic/AUTO_QUERY_TEXT`、`dynamic/ALERTS`(154)、`dynamic/RULES`(5)、`system/EXT_SYSTEMS`(10)。
+- **缺失的数据**：
+  - `actionEvent.ts` 里没有导出的常量：`RUNS`、`EVENTS`、`ENVELOPE`、`PARAMS`、`CONDS`、`SUBS`。
+  - 被跳过的函数：`paramsOf`、`condsOf`、`writebackOf`、`runsOf`、`runStats`、`runDaily`、`versionsOf`、`writebackSystems`、`payloadOf`、`subscribersOf`、`eventsOf`、`eventDaily`；还有 `extsys.ts` 的 `extCalls`、`dynamic.ts` 的 `alertTimeline`。
+  - 抽屉 resolver：`src/components/actionEventResolvers.ts` **不在 `src/mock/` 下**，脚本根本不会加载，执行记录和事件的抽屉时间线就拿不到。
+  - 变更单目标：`useDraftView.ts` 的 `TARGETS` 也不在 `src/mock/`（属于静态，CR-0013/0014 由静态的 seed 写入）。
+- 单纯的查找函数（`actionTypeById`、`eventTypeById`、`runById`、`eventById`、`ruleById`、`extSystemOf`、`ruleConfirmer`、`withSystem`）不用导出，后台按 id 查就行。
+
+#### 7.1.1 交给 PDE 的 derived 调用清单（输出到 `json/action/derived/`）
+
+参数里的 id 都取自已经导出的 `action/ACTION_TYPES.json`、`action/EVENT_TYPES.json`。每个 id 写一个文件，或者合成一个以 id 为键的对象，由 PDE 定。
+
+| 输出 | 调用 | 参数（按 id 逐个调） | 对应表 |
+|---|---|---|---|
+| `derived/params.json` | `paramsOf(actionTypeById(id))` | 17 个动作类型 id | action_param |
+| `derived/conds.json` | `condsOf(actionTypeById(id))` | 同上 | submission_criterion |
+| `derived/writeback.json` | `writebackOf(actionTypeById(id))` → `{edits, effects}` | 同上 | ontology_edit_rule, side_effect |
+| `derived/runs.json` | `runsOf(id)`（合起来就是全部 `RUNS`，1,849 条） | 同上 | action_run（交给动态，按 id 合并）、ext_call、reconcile_task |
+| `derived/run_stats.json` | `runStats(id)` | 同上 | 对比校验用 |
+| `derived/run_daily.json` | `runDaily(id)` | 同上 | action_run_daily_stat |
+| `derived/action_versions.json` | `versionsOf(a.version, a.owner, ACTION_VERSION_NOTES)` | 每个动作类型 `a` | action_type_version |
+| `derived/writeback_systems.json` | `writebackSystems()` | 无参数 | 对比校验用（编辑写回下拉） |
+| `derived/payload.json` | `payloadOf(eventTypeById(id))`（事件自身字段 + 10 个信封字段；`ENVELOPE` = 任一结果的最后 10 项） | 15 个事件类型 id | event_payload_field, event_envelope_field |
+| `derived/subscribers.json` | `subscribersOf(eventTypeById(id))` | 同上 | event_subscription |
+| `derived/events.json` | `eventsOf(id)`（合起来就是全部 `EVENTS`，1,243 条） | 同上 | event, event_delivery |
+| `derived/event_daily.json` | `eventDaily(id, e.weekly)` | 每个事件类型 `e`：`order_status_changed` 48210、`inventory_changed` 126480、`stock_below_safety` 386、`store_sales_drop` 9、`gross_margin_breach` 54、`shipment_overdue` 212、`member_churn_risk` 3120、`illegal_transition` 31、`action_executed` 1864、`action_outcome_unknown` 37、`coupon_redeemed` 8640、`refund_created` 1420、`store_price_changed` 2260、`waybill_signed` 31240、`alert_closed` 318 | event_daily_stat |
+| `derived/event_versions.json` | `versionsOf(e.version, e.owner, EVENT_VERSION_NOTES)` | 每个事件类型 `e` | event_type_version |
+| `derived/action_drawers.json` | `ACTION_EVENT_RESOLVERS.action(runId)`（`src/components/actionEventResolvers.ts`，**需要把这个文件加进脚本**；返回的对象里如果有函数字段就去掉） | `runs.json` 里每个执行记录 id | action_run_step |
+| `derived/event_drawers.json` | `ACTION_EVENT_RESOLVERS.event(eventId)` | `events.json` 里每个事件 id | event_delivery（时间线） |
+| `derived/rule_drawers.json`（动态的，可选） | `ACTION_EVENT_RESOLVERS.rule(ruleId)` | `RULES` 的键 | 动态的 rule |
+
+17 个动作类型 id：`issue_recall_coupon, sync_member_tags, assign_region_manager, adjust_region_budget, correct_order_status, request_replenish, adjust_store_price, start_price_approval, close_alert, urge_logistics, claim_alert, reassign_alert, reissue_shipment, approve_refund, change_member_level, change_store_status, set_safety_stock`。
+
+需要额外处理的 seed：
+- `runs`、`events`、`run_daily`、`event_daily`、两个 drawers 都依赖固定种子的生成顺序，**必须在同一个进程里、按模块原来的加载顺序调用**。只是调用函数，不会改变随机序列，因为数据在模块加载时就生成好了。
+- `action_run_step` 和 `event_delivery` 的时间线来自 drawers 的输出。拿不到 drawers 时，seed 只能用 Python 按 resolver 规则重算，这就做不到“原样”了。
+- `ext_call`：mock 里没有每条执行记录的调用明细，只有 `retries`、`code`、`ms`。seed 按 `attempt = retries + 1` 展开调用记录【推断】。外部系统页用的 `extCalls(sys, ops)` 归系统模块。
+
+- **入库**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 读 `backend/seeds/json/<module>/`，幂等写库（`INSERT … ON CONFLICT DO NOTHING`），ID 保持原样（`ACT-…`、`EV-…`、`CR-0013/0014`）。统一的 `seed` 命令在迁移之后执行。
+- **执行记录由动态 seed**：`action_run` 由动态的 seed 写入，读同一个脚本导出的两份数据（动作中心 `actions.ts` 和本模块的 `RUNS`），**按 id 合并**。两份的编号段不冲突。本模块只 seed 自己的表（`ext_call`、`action_run_step`、`reconcile_task`，以及各种定义表），而且在动态之后执行。对账任务的状态（`auto_query_count`、`next_query_at`）只放在 `reconcile_task`，不放进 `action_run`。
+- **适配器全部用 mock**：seed、dev、test 环境里 `integration/` 下的适配器都用 mock 实现。seed 进来的“结果未知”执行记录（动作中心 `actions.ts` 20 条；`RUNS` 里还有 54 条，同样处理），mock 的 `query_by_key` 一律返回“仍无法确认”，`next_query_at` 照导出原值保留。procrastinate 的对账任务跑起来也不会改动这些记录，页面保持不变。
+  - 注意：现在的 mock 里**没有** `next_query_at` 字段。动作中心那 20 条的时间线已经写到“按幂等键自动查询 3 次（每 15 分钟），仍无法确认 → 转人工对账”。所以导出值为空时，`reconcile_task` 记为 `auto_query_count=3, state=转人工, next_query_at=null`，不会再被调度。
+- 执行时间线（`actionEventResolvers.ts`、`actions.ts` 的 `buildLog`）是按状态**算出来**的。seed 时优先读 derived 的 drawers 输出（§7.1.1），写进 `action_run_step` / `event_delivery`；动作中心的 141 条已经带 `log`，直接用。上线后由真实执行过程写入。
+- **校验**：seed 之后跑一个对比脚本，逐个接口请求，结果和导出的 JSON 比较，必须完全一致（分页、`total`、排序、统计数字）。
 
 ### 7.2 mock → 表 对照
 
@@ -324,7 +382,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `writebackOf().edits` / `.effects` | `ontology_edit_rule` / `side_effect` | — |
 | `ActionTypeDef.sysId/endpoint/idemKey` | `action_type.sys_id/endpoint/idem_key_rule` | — |
 | `UNKNOWN_FOLLOWUP`、超时处理文案 | 常量（写在代码里） | 不进库 |
-| `runsOf()`（`RUNS`） | `action_run`（**归动态**）+ `writeback_call` + `action_run_step` | 编号是 2000 段，和动作中心 `actions.ts` 的 0413–0532 不冲突；两份数据合并进同一张表，由谁写见 §8 |
+| `runsOf()`（`RUNS`） | `action_run`（**归动态**）+ `ext_call` + `action_run_step` + `reconcile_task` | 编号和动作中心 `actions.ts`（约 0412–0544 段）不冲突；由动态的 seed 按 id 把两份合并进同一张表（已定，见 §8 第 5 条） |
 | `runStats()` / `runDaily()` | 统计接口实时算；`runDaily` 先写进 `action_run_daily_stat` | **`runDaily` 和 `RUNS` 对不上**：它是用另一个随机种子生成的，所以照原样入库，保证页面不变，见 §8 |
 | `versionsOf()` + `ACTION_VERSION_NOTES` / `EVENT_VERSION_NOTES` | `action_type_version` / `event_type_version`（关联基础层的 `ontology_release`） | 发布号 `v2026.10.3` 等必须和 `releases.ts` 对上 |
 | `EVENT_TYPES` | `event_type`、`event_type_version` | — |
@@ -335,7 +393,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `eventsOf()`（`EVENTS`） | `event`、`event_delivery` | 每条事件按 `subscribers` 生成投递记录：“部分投递”的其中 1 条记为待重试，“投递失败”的全部记为死信【推断，与抽屉文案一致】 |
 | `eventDaily()`、`EventType.weekly` | `event_daily_stat` | 和 `EVENTS` 对不上，原因同 `runDaily` |
 | `extsys.ts` · `EXT_SYSTEMS` | `ext_system` | 本模块负责（适配器配置）。鉴权信息里的密钥必须**加密存储**，mock 里的值只是示例 |
-| `extsys.ts` · `extCalls()` | `writeback_call` | 属于外部系统页面，不在这两页的范围内；建议和 `RUNS` 一起入库 |
+| `extsys.ts` · `extCalls()` | `ext_call` | 属于外部系统页面，不在这两页的范围内；建议和 `RUNS` 一起入库 |
 | `dynamic.ts` · `RULES`、`ALERTS` | 动态的 `rule`、`alert` | 本模块只引用 |
 | `useDraftView.ts` · `TARGETS`（CR-0013 → `store_price_changed`，CR-0014 → `adjust_region_budget`）、`releases.ts` · `DRAFTS` | 静态的 `change_request`、`cr_item` | 由静态的 seed 写入；本模块确认这两张单的目标正确 |
 | `stores.ts` / `products.ts` / `orders.ts` | 基础层的对象实例 | 执行记录和事件引用这些对象的 ID，必须先入库 |
@@ -349,7 +407,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | A3 | 使用该动作的规则与告警 | `GET /action-types/{id}/used-by` | rule, alert（动态） |
 | A4 | 近 30 天统计、14 天柱图 | `GET …/stats`、`…/stats/daily` | action_run, action_run_daily_stat |
 | A5 | 最近异常、执行记录：筛选和分页 | `GET /action-runs` | action_run |
-| A6 | 执行抽屉和时间线 | `GET /action-runs/{id}` | action_run, action_run_step, writeback_call |
+| A6 | 执行抽屉和时间线 | `GET /action-runs/{id}` | action_run, action_run_step, ext_call |
 | A7 | 参数页签和分页 | `GET …/params` | action_param |
 | A8 | 提交条件页签 | `GET …/submission-criteria` | submission_criterion |
 | A9 | 写回与副作用、执行顺序 | `GET …/writeback` | action_type, ontology_edit_rule, side_effect, ext_system |
@@ -377,19 +435,33 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 ## 8. 待定问题
 
-1. **审批驳回**之后的状态：前端 8 个状态里没有“已驳回”。是回到待确认、记为失败，还是新增一个状态？（动态定）
-2. **对账确认对方没处理**之后：mock 里“已对账”的意思只是“外部已处理”。没处理时是记失败、允许重新提交，还是新增“已对账·未处理”？`on_reconciled` 的 `result` 取值要跟着这个定。
-3. **事件流分页**：后台用游标、不返回总数，可是前端现在显示 ‹ 1/N ›。是前端改用 `useCursorQuery` / `cursor` 变体，还是后台返回估算页数？（PDE 定）
+1. **审批驳回** → 改为【推断】，待用户确认（动态 2026-10-25 更新）：前端没有“已驳回”，默认不实现。见 §8.2。
+2. ~~对账确认外部没处理~~ → **已定（PDE 汇总团队决定，2026-10-25），以前端为准**：仍然是“已对账”，`reconcile_result=not_executed`；原记录**不能重新提交**，前端提示“如仍需执行请重新发起”。
+3. ~~事件流分页~~ → **已定（PDE 汇总团队决定，2026-10-25）**：近期事件和所有显示 ‹ 1/N › 的列表都用 `page`、`size`，响应 `{items,total,page,size}`，不用游标；只有本来就用游标的页面（如审计日志）才用游标。前端不用改。
 4. **`runDaily`、`eventDaily`、订阅方的 `weekly` 和明细数据对不上**：现在照原样入库保证页面不变。上线后改成按明细实时统计，数字会变，需要用户确认可以接受。
-5. **执行记录由谁 seed**：`actionEvent.ts` 的 `RUNS`（1,849 条）和动作中心 `actions.ts` 的记录要进同一张 `action_run` 表。是动态的 seed 统一读两份，还是本模块提供 JSON 给动态？
+5. ~~执行记录由谁 seed~~ → **已定（建议归动态，由动态确认、PDE 汇总，2026-10-25）**：`action_run` 的 seed 归动态；本模块的 `RUNS`（1,849 条）用同一个 `npm run export-mock` 导出，动态按 id 和动作中心 `actions.ts`（141 条）合并。
 6. **审批条件**现在是一段文字（如“单次 ≤ 500 张免审”），需要做成可以求值的表达式。放在动作类型定义里（本模块），还是放在动态的审批配置里？
-7. **试运行、模拟触发在 `?ver=` 下按哪个版本执行**：前端在历史版本下没有把这两个按钮置灰。
+7. **试运行、模拟触发在 `?ver=` 下按哪个版本执行**：前端在历史版本下没有把这两个按钮置灰，所以后台也不拦截；默认按当前查看的版本执行【推断】。
 8. **“部分投递”的事件**在剩下的重试也成功后，是改成“已投递”，还是保持“部分投递”留痕？
-9. 是否提供**死信重投**接口（前端目前没有入口）。
+9. 【推断】是否提供**死信重投**接口（前端目前没有入口，第一期不做）；如果做，就是把死信里的投递记录重新放进 procrastinate 队列。
 10. `reconcile` 是独立模块，还是放进 `action` 模块。
 11. 第一期是否要做**函数支持的动作**（我的建议是不做）。
 
 ---
+
+### 8.2 待用户确认：前端没有、后台可能要加的规则（全部【推断】，默认不做或只警告）
+
+| # | 规则 | 前端现状 | 第一期默认 |
+|---|---|---|---|
+| U1 | 审批驳回后进入新终态“已驳回”，关联告警退回“处理中”，要再做就新发起（动态提的方案） | 没有这个状态 | 不实现 |
+| U2 | 业务失败码（如 `NC-2071`）不重试，只对网络错误、429、5xx，在超时预算内用同一个键重试 | 明确失败一律按 `maxRetry` 重试 | 按前端 |
+| U3 | 同一幂等键带不同参数时拒绝（`IDEMPOTENCY_CONFLICT`） | 没有这个场景 | 不做 |
+| U4 | 载荷不兼容变更（删字段、改类型）必须所有订阅方确认才能提交或发布 | 只提示 | 只警告 |
+| U5 | 动作类型发布校验：幂等键占位符都能从参数取到；对外部和本体都没有写操作时给出警告 | 没有 | 只警告 |
+| U6 | 试运行只给执行人角色、模拟触发只给负责人和管理员 | 不限制 | 不限制 |
+| U7 | 历史版本 `?ver=` 下禁止试运行和模拟触发 | 不禁止 | 不禁止 |
+| U8 | 审批条件做成可求值的阈值表达式（如“单次 > 500 张需审批”） | 只是文字说明 | 原文存储 |
+| U9 | 模拟触发不计入近期事件和统计 | 前端不写数据 | 不计入（不改变页面） |
 
 ## 9. 表结构建议（【建议】，给 本体小白 对齐用）
 
@@ -404,9 +476,9 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `ontology_edit_rule` | action_type_id, seq, op(修改/新建/关联), obj, field | — |
 | `side_effect` | action_type_id, seq, kind(通知/事件/Webhook), target, when_text, note | (action_type_id, target) 唯一 |
 | `ext_system` | id(`EXT-ERP`…), name, vendor, category, endpoint, auth_type, secret_ref(加密), idempotent, idem_header, timeout_ms, max_retry, backoff jsonb, rate_limit, owner, status, env | 适配器配置 |
-| `writeback_call` | id, action_run_id, sys_id, idem_key, attempt, method, path, http_status, elapsed_ms, result(成功/失败/结果未知), msg, at | 每次 HTTP 调用一行，包括重试 |
-| `reconcile_task` | action_run_id(pk), idem_key, sys_id, tries, next_at, last_status, state(查询中/已确认/转人工), resolved_at, resolution | 定时任务每 15 分钟扫 next_at |
-| `action_run` *(动态)* | id, action_type_id, action_type_version, at, initiator, confirmer, approver, source, rule_id, alert_id, obj_kind, obj_id, obj_label, params jsonb, summary, status, ms, code, retries, idem_key(unique), ext_ref, reconcile_note, retry_of | 本模块只读 |
+| `ext_call` | id, action_run_id, sys_id, idem_key, attempt, method, path, http_status, biz_code, elapsed_ms, result(成功/失败/结果未知), msg, at | 本模块负责；每次 HTTP 调用一行，包括重试和对账查询（kind=write/query） |
+| `reconcile_task` | action_run_id(pk), idem_key, sys_id, auto_query_count, next_query_at, last_status, state(查询中/已确认/转人工), resolved_at, reconciler(系统/人名), reconcile_result(executed/not_executed) | procrastinate cron 每 15 分钟扫 next_query_at；seed 数据原样保留 |
+| `action_run` *(动态)* | id, action_type_id, action_type_version, at, initiator, confirmer, approver, source, rule_id, alert_id, obj_kind, obj_id, obj_label, params jsonb, summary, status(前端 8 种), ms, code, retries, idem_key(unique), ext_ref, reconcile_note, reconcile_result, retry_of（对账任务状态不在这里） | 本模块只读 |
 | `action_run_step` | action_run_id, seq, time, text, desc, status | 抽屉时间线 |
 | `action_run_daily_stat` | action_type_id, date, ok, failed, unknown | seed 用，见 §8 第 4 条 |
 | `event_type` | id, name, api(unique), source, source_ref, rule_id, object, object_api, obj_kind, status, version, owner, desc, dedup_key_rule, dedup_window, delivery, ordering, retention_days, release_id | — |
@@ -414,9 +486,9 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `event_payload_field` | event_type_id, seq, name, api, type, required, desc, sample | (event_type_id, api) 唯一，而且不能和信封字段重名 |
 | `event_envelope_field` | api(pk), name, type, required, desc, sample | 全局 10 行，只读 |
 | `event_subscription` | id, event_type_id, kind, name, rule_id, filter_text, filter_expr jsonb, then_text, target(topic/url/automation_id), status(启用/停用/异常) | — |
-| `event` | id(`EV-…`), event_type_id, occurred_at, ingested_at, source, object_type, object_id, obj_label, ontology_version, dedup_key, trace_id, payload jsonb, summary, outcome, subscriber_count, latency_ms, is_test | **按天分区**，按保留期删除；索引 (event_type_id, ingested_at desc, id) 支持游标分页 |
+| `event` | id(`EV-…`), event_type_id, occurred_at, ingested_at, source, object_type, object_id, obj_label, ontology_version, dedup_key, trace_id, payload jsonb, summary, outcome, subscriber_count, latency_ms, is_test | **按天分区**，按保留期删除；索引 (event_type_id, ingested_at desc, id) 支持页码分页和 count |
 | `event_dedup` | event_type_id, dedup_key, expires_at | 也可以改用 Redis |
-| `event_delivery` | id, event_id, subscription_id, status(待投递/投递中/已投递/待重试/死信), attempts, next_at, last_error, delivered_at | 按天分区 |
+| `event_delivery` | id, event_id, subscription_id, status(待投递/投递中/已投递/待重试/死信), attempts, next_at, last_error, delivered_at | 按天分区；重投由 procrastinate 任务执行 |
 | `event_daily_stat` / `event_subscription_weekly_stat` | event_type_id/subscription_id, date, value | seed 用 |
 | `dict_item` | dict, value, seq | 动作分组、事件来源等字典 |
 
