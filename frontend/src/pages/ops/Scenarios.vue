@@ -9,6 +9,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 影响明细服务端分页 / 转动作预览（stage-plan）与暂存（:stage）都走 /scenarios 接口；默认 mock 路径不变。
  */
 import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue';
@@ -43,7 +44,10 @@ let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(50 + (tick % 10)).padStart(2, '0')}:${String(tick * 7 % 60).padStart(2, '0')}`; };
 const q1 = (k: string) => { const v = route.query[k]; return typeof v === 'string' ? v : ''; };
 /* ───── 真接口模式状态（mock 模式下不用） ───── */
-const REAL = dynamicApi.isReal();
+const REAL_API = dynamicApi.isReal();
+/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
+const live = computed(() => REAL_API && !backend.down);
+const readFail = (e: unknown) => { if (!fallBackIfDown(e)) apiFail(e); };
 const remote = reactive<{
   meta: ScenarioMetaDto | null; list: { items: Scenario[]; total: number }; rev: number;
   detail: Scenario | null; cmp: Scenario[]; imp: { items: ScImpact[]; total: number }; plans: Record<string, StagePlan[]>;
@@ -63,18 +67,18 @@ const kw = ref('');
 const pq = usePagedQuery({ defaultSize: 12, filters: [statusF, kw] });
 const rows = computed(() => SCENARIOS.filter((s) => (statusF.value === '全部' || s.status === statusF.value)
   && (!kw.value || s.name.includes(kw.value) || s.id.includes(kw.value.toUpperCase()))));
-const paged = computed(() => (REAL ? remote.list : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
+const paged = computed(() => (live.value ? remote.list : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
 const badge = (s: ScStatus) => (s === '失败' ? 'error' : 'default');
 
 const mode = computed<'one' | 'cmp'>({ get: () => (q1('mode') === 'cmp' ? 'cmp' : 'one'), set: (v) => setQ({ mode: v === 'cmp' ? 'cmp' : null }) });
 /** 未指定 ?sc= 时默认第一次载入列表的首个方案（与 mock 的 SCENARIOS[0] 一致，筛选不改变选中） */
 const defaultId = ref('');
-const scId = computed(() => (REAL ? q1('sc') || defaultId.value : ''));
-const current = computed<Scenario | undefined>(() => (REAL ? (remote.detail && remote.detail.id === scId.value ? remote.detail : undefined)
+const scId = computed(() => (live.value ? q1('sc') || defaultId.value : ''));
+const current = computed<Scenario | undefined>(() => (live.value ? (remote.detail && remote.detail.id === scId.value ? remote.detail : undefined)
   : scenarioById(q1('sc')) ?? SCENARIOS[0]));
-const cmpIds = computed<string[]>(() => (REAL ? q1('cmp').split(',').filter(Boolean).slice(0, 3)
+const cmpIds = computed<string[]>(() => (live.value ? q1('cmp').split(',').filter(Boolean).slice(0, 3)
   : q1('cmp').split(',').filter((id) => scenarioById(id)?.status === '已完成').slice(0, 3)));
-const cmpList = computed<Scenario[]>(() => (REAL ? remote.cmp : cmpIds.value.map((id) => scenarioById(id)!)));
+const cmpList = computed<Scenario[]>(() => (live.value ? remote.cmp : cmpIds.value.map((id) => scenarioById(id)!)));
 /** 真接口：列表 / 详情 / 对比 / meta 加载；只采用与当前条件一致的最后一次响应 */
 let listSeq = 0;
 async function loadList() {
@@ -82,19 +86,19 @@ async function loadList() {
   try {
     const r = await listScenarios({ status: statusF.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
     if (seq === listSeq) { remote.list = { items: r.items.map(asSc), total: r.total }; if (!defaultId.value) defaultId.value = r.items[0]?.id ?? ''; }
-  } catch (e) { apiFail(e); }
+  } catch (e) { readFail(e); }
 }
 async function loadDetail() {
   const id = scId.value; if (!id) { remote.detail = null; return; }
-  try { const d = await getScenario(id); if (id === scId.value) remote.detail = asSc(d); } catch (e) { apiFail(e); }
+  try { const d = await getScenario(id); if (id === scId.value) remote.detail = asSc(d); } catch (e) { readFail(e); }
 }
 async function loadCmp() {
   const ids = cmpIds.value; const key = ids.join(',');
   if (mode.value !== 'cmp' || !ids.length) { remote.cmp = []; return; }
-  try { const r = await compareScenarios(ids); if (key === cmpIds.value.join(',')) remote.cmp = r.items.map(asSc); } catch (e) { remote.cmp = []; apiFail(e); }
+  try { const r = await compareScenarios(ids); if (key === cmpIds.value.join(',')) remote.cmp = r.items.map(asSc); } catch (e) { remote.cmp = []; readFail(e); }
 }
-if (REAL) {
-  getScenariosMeta().then((m) => { remote.meta = m; }).catch(apiFail);
+if (live.value) {
+  getScenariosMeta().then((m) => { remote.meta = m; }).catch(readFail);
   watch([statusF, kw, pq.page, pq.size, () => remote.rev], loadList, { immediate: true });
   watch(scId, loadDetail, { immediate: true });
   watch([mode, () => cmpIds.value.join(',')], loadCmp, { immediate: true });
@@ -145,7 +149,7 @@ onBeforeRouteUpdate(async (to, from) => {
 });
 const saveName = async () => {
   const s = current.value; if (!s || !form.name.trim()) return;
-  if (REAL) {
+  if (REAL_API) {
     try { const d = asSc(await renameScenario(s.id, form.name.trim())); remote.detail = d; form.name = d.name; remote.rev += 1; message.success('名称已保存'); } catch (e) { apiFail(e); }
     return;
   }
@@ -172,7 +176,7 @@ async function run() {
     });
     if (!ok || current.value?.id !== s.id) return;
   }
-  if (REAL) {
+  if (REAL_API) {
     const id = s.id;
     const body = { name: form.name.trim() || undefined, scope: { ...form.scope }, drivers: { ...form.drivers } };
     remote.detail = { ...s, status: '运行中', failReason: undefined, result: undefined };
@@ -199,7 +203,7 @@ async function create(from?: Scenario) {
   if (readonly.value) return;
   if (dirty.value && !(await confirmDiscard())) return;
   passGuard = true;
-  if (REAL) {
+  if (REAL_API) {
     try {
       const d = asSc(await createScenario(from?.id));
       remote.detail = d; statusF.value = '全部'; kw.value = ''; remote.rev += 1;
@@ -239,14 +243,14 @@ const lineOpt = computed(() => {
   };
 });
 const ipq = usePagedQuery({ defaultSize: 6, prefix: 'im', filters: [() => current.value?.id, () => current.value?.result?.ranAt] });
-const impPaged = computed(() => (REAL ? remote.imp : paginate(current.value?.result?.impacts ?? [], { page: ipq.page.value, size: ipq.size.value })));
+const impPaged = computed(() => (live.value ? remote.imp : paginate(current.value?.result?.impacts ?? [], { page: ipq.page.value, size: ipq.size.value })));
 let impSeq = 0;
 async function loadImp() {
   const s = current.value; const seq = ++impSeq;
   if (!s?.result) { remote.imp = { items: [], total: 0 }; return; }
-  try { const r = await listScenarioImpacts(s.id, ipq.page.value, ipq.size.value); if (seq === impSeq) remote.imp = { items: r.items, total: r.total }; } catch (e) { apiFail(e); }
+  try { const r = await listScenarioImpacts(s.id, ipq.page.value, ipq.size.value); if (seq === impSeq) remote.imp = { items: r.items, total: r.total }; } catch (e) { readFail(e); }
 }
-if (REAL) watch([() => current.value?.id, () => current.value?.result?.ranAt, ipq.page, ipq.size], loadImp, { immediate: true });
+if (live.value) watch([() => current.value?.id, () => current.value?.result?.ranAt, ipq.page, ipq.size], loadImp, { immediate: true });
 const impCols = [
   { title: '商品', key: 'sku', ellipsis: true }, { title: '门店', key: 'store', ellipsis: true },
   { title: '基线销售额', key: 'base', align: 'right', width: 110 }, { title: '方案销售额', key: 'sales', align: 'right', width: 110 },
@@ -285,15 +289,15 @@ const cmpLineOpt = computed(() => {
 
 /* ───── 转为暂存动作 ───── */
 const target = computed<Scenario | undefined>(() => (mode.value === 'cmp'
-  ? (REAL ? cmpList.value.find((x) => x.id === pickId.value) : scenarioById(pickId.value)) : current.value));
+  ? (live.value ? cmpList.value.find((x) => x.id === pickId.value) : scenarioById(pickId.value)) : current.value));
 /** 转动作建议：mock 本地算；真接口按方案取 /stage-plan 缓存（运行 / 暂存后作废） */
-const planOf = (s: Scenario): StagePlan[] | undefined => (REAL ? remote.plans[s.id] : stagePlanOf(s));
+const planOf = (s: Scenario): StagePlan[] | undefined => (live.value ? remote.plans[s.id] : stagePlanOf(s));
 async function loadPlans() {
   const ss = (mode.value === 'cmp' ? cmpList.value : current.value ? [current.value] : [])
     .filter((x) => x.status === '已完成' && !x.staged.length && !remote.plans[x.id]);
-  await Promise.all(ss.map(async (x) => { try { remote.plans[x.id] = await getScenarioStagePlan(x.id); } catch (e) { apiFail(e); } }));
+  await Promise.all(ss.map(async (x) => { try { remote.plans[x.id] = await getScenarioStagePlan(x.id); } catch (e) { readFail(e); } }));
 }
-if (REAL) watch([mode, () => current.value?.id, () => current.value?.status, () => current.value?.result?.ranAt, () => cmpList.value.map((x) => x.id).join(',')], loadPlans, { immediate: true });
+if (live.value) watch([mode, () => current.value?.id, () => current.value?.status, () => current.value?.result?.ranAt, () => cmpList.value.map((x) => x.id).join(',')], loadPlans, { immediate: true });
 const convertBlocked = computed(() => {
   const s = target.value;
   if (readonly.value) return roReason.value;
@@ -339,7 +343,7 @@ async function doStage() {
     impact: '只生成“待确认”动作，不提交审批、不写外部系统。需要你在动作中心逐条确认提交后才会进入审批；未确认前可撤回。',
   });
   if (!ok) { planOpen.value = true; return; } // 取消确认卡：回到预览，勾选保持不变
-  if (REAL) {
+  if (REAL_API) {
     try {
       const r = await stageScenario(s.id, items.map((p) => p.key));
       planFor.value = ''; plan.value = []; delete remote.plans[s.id];

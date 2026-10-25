@@ -6,6 +6,7 @@
  * 认领、批量认领、转派、关闭、批量关闭、发起动作一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
 import { computed, reactive, ref, watch } from 'vue';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
@@ -39,10 +40,13 @@ const LIST = reactive<Row[]>(ALERTS.map((a) => {
 /** 关联动作还没有结果时锁定转派和关闭 */
 const IN_FLIGHT = ['待确认', '审批中', '执行中', '结果未知'];
 /** 是否走真接口（开关 dynamic）；构建时确定 */
-const REAL = dynamicApi.isReal();
+const REAL_API = dynamicApi.isReal();
+/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
+const live = computed(() => REAL_API && !backend.down);
+const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
 const app = useAppStore();
 /** 当前处理人：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
-const ME = REAL ? app.user.name : '王敏';
+const ME = REAL_API ? app.user.name : '王敏';
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(30 + tick).padStart(2, '0')}:00`; };
 const isClosed = (s: AlertStatus) => s === '已解决' || s === '已忽略';
@@ -84,7 +88,7 @@ const toDetail = (d: AlertDetailDto) => ({
 const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
 
 const rows = computed(() => {
-  if (REAL) return remote.items;
+  if (live.value) return remote.items;
   const t = TABS.find((x) => x.key === tab.value) ?? TABS[3];
   return LIST.filter((a) =>
     t.match(a.status) &&
@@ -93,28 +97,28 @@ const rows = computed(() => {
     (!kw.value || a.id.includes(kw.value) || a.objLabel.includes(kw.value)),
   );
 });
-const count = (key: string) => REAL ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.match(a.status)).length;
+const count = (key: string) => live.value ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.match(a.status)).length;
 
-const total = computed(() => (REAL ? remote.total : rows.value.length));
-const pageRows = computed(() => REAL ? remote.items : rows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
+const total = computed(() => (live.value ? remote.total : rows.value.length));
+const pageRows = computed(() => live.value ? remote.items : rows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 /** 刚处理过的告警即使离开当前页签也继续显示在右侧，避免详情突然换成别的告警 */
 const pinned = ref<string>();
 const selectedId = computed(() => (route.query.alert as string) || pinned.value || pageRows.value[0]?.id);
-const current = computed<Row | undefined>(() => REAL ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? pageRows.value[0]);
-const rule = computed<AlertRuleDto | null>(() => (REAL ? remote.detail?.rule ?? null : current.value ? RULES[current.value.ruleId] : null));
-const locked = computed(() => REAL ? !!remote.detail?.locked : !!current.value?.actionStatus && IN_FLIGHT.includes(current.value.actionStatus));
+const current = computed<Row | undefined>(() => live.value ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? pageRows.value[0]);
+const rule = computed<AlertRuleDto | null>(() => (live.value ? remote.detail?.rule ?? null : current.value ? RULES[current.value.ruleId] : null));
+const locked = computed(() => live.value ? !!remote.detail?.locked : !!current.value?.actionStatus && IN_FLIGHT.includes(current.value.actionStatus));
 const metric = computed(() => (rule.value?.metric ? METRICS.find((m) => m.id === rule.value!.metric) : undefined));
 /** 同一规则、同一对象近 7 天的触发次数（含本条） */
 const recent = computed(() => {
   const a = current.value; if (!a) return 0;
-  if (REAL) return remote.detail?.recent7d ?? 0;
+  if (live.value) return remote.detail?.recent7d ?? 0;
   const end = new Date(a.triggeredAt.replace(' ', 'T')).getTime();
   return ALERTS.filter((x) => x.ruleId === a.ruleId && x.objId === a.objId &&
     end - new Date(x.triggeredAt.replace(' ', 'T')).getTime() < 7 * 864e5 &&
     new Date(x.triggeredAt.replace(' ', 'T')).getTime() <= end).length + (a.ruleId === 'R-012' ? 2 : 0);
 });
 const pick = (a: Alert) => (pinned.value = a.id, router.replace({ query: { ...route.query, alert: a.id } }));
-const people = computed(() => (REAL ? remote.people : PEOPLE));
+const people = computed(() => (live.value ? remote.people : PEOPLE));
 const ruleName = (id: string) => RULES[id]?.name ?? id;
 
 // ---- 真接口：取列表 / 详情 ----
@@ -126,7 +130,7 @@ async function loadList() {
     if (seq !== listSeq) return;
     remote.items = r.items.map(toRow); remote.total = r.total; remote.counts = r.counts;
     remote.items.forEach((a) => seen.set(a.id, a));
-  } catch (e) { if (seq === listSeq) fail(e); }
+  } catch (e) { if (seq === listSeq) readFail(e); }
 }
 async function loadDetail(id = selectedId.value) {
   const seq = ++detailSeq;
@@ -134,17 +138,17 @@ async function loadDetail(id = selectedId.value) {
   try {
     const d = await getAlert(id);
     if (seq === detailSeq) remote.detail = toDetail(d);
-  } catch (e) { if (seq === detailSeq) { remote.detail = null; fail(e); } }
+  } catch (e) { if (seq === detailSeq) { remote.detail = null; readFail(e); } }
 }
 /** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
 async function afterWrite(d?: AlertDetailDto) {
   if (d) { ++detailSeq; remote.detail = toDetail(d); seen.set(d.id, toRow(d)); }
   await loadList();
 }
-if (REAL) {
+if (live.value) {
   watch([tab, level, ruleId, kw, page, pageSize], loadList, { immediate: true });
   watch(selectedId, (id) => { loadDetail(id); }, { immediate: true });
-  listPeople().then((p) => { remote.people = p; }, fail);
+  listPeople().then((p) => { remote.people = p; }, readFail);
 }
 
 const statusBadge = (s: AlertStatus) =>
@@ -171,7 +175,7 @@ function claimRow(a: Row, who = ME) {
 async function claim() {
   const a = current.value; if (!a) return;
   pinned.value = a.id;
-  if (REAL) {
+  if (REAL_API) {
     try { await afterWrite(await claimAlert(a.id)); message.success(`已认领 ${a.id}`); } catch (e) { fail(e); }
     return;
   }
@@ -184,7 +188,7 @@ const transferOpen = ref(false);
 async function doTransfer() {
   const a = current.value; if (!a || !transferTo.value) return;
   pinned.value = a.id;
-  if (REAL) {
+  if (REAL_API) {
     try { await afterWrite(await transferAlert(a.id, transferTo.value)); transferOpen.value = false; transferTo.value = undefined; message.success('已转派'); } catch (e) { fail(e); }
     return;
   }
@@ -212,7 +216,7 @@ function closeRows(rowsToClose: Row[]) {
 async function doClose() {
   const a = current.value; if (!a || !closeReason.value.trim()) return;
   pinned.value = a.id;
-  if (REAL) {
+  if (REAL_API) {
     try { await afterWrite(await closeAlert(a.id, closeAs.value, closeReason.value.trim())); closeOpen.value = false; closeReason.value = ''; message.success('已关闭'); } catch (e) { fail(e); }
     return;
   }
@@ -224,10 +228,10 @@ const selectedKeys = ref<string[]>([]);
 /** 只有本人处理中的告警才能关闭、发起动作 */
 const mine = computed(() => current.value?.status === '处理中' && current.value.assignee === ME);
 const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
-const selectedRows = computed(() => (REAL ? selectedKeys.value.map((k) => seen.get(k)).filter((a): a is Row => !!a) : LIST.filter((a) => selectedKeys.value.includes(a.id))));
+const selectedRows = computed(() => (live.value ? selectedKeys.value.map((k) => seen.get(k)).filter((a): a is Row => !!a) : LIST.filter((a) => selectedKeys.value.includes(a.id))));
 const closable = computed(() => selectedRows.value.filter((a) => a.status === '处理中' && a.assignee === ME));
 async function batchClaim() {
-  if (REAL) {
+  if (REAL_API) {
     try {
       const r = await batchClaimAlerts([...selectedKeys.value]);
       selectedKeys.value = [];
@@ -243,7 +247,7 @@ async function batchClaim() {
 }
 async function doBatchClose() {
   if (!closeReason.value.trim()) return;
-  if (REAL) {
+  if (REAL_API) {
     try {
       const r = await batchCloseAlerts(closable.value.map((a) => a.id), closeAs.value, closeReason.value.trim());
       batchCloseOpen.value = false; closeReason.value = ''; selectedKeys.value = [];
@@ -275,7 +279,7 @@ async function runAction() {
   });
   if (!ok) return;
   pinned.value = a.id;
-  if (REAL) {
+  if (REAL_API) {
     try { const res = await startAlertAction(a.id); await afterWrite(res.alert); message.success(`已提交：${res.action.action}`); } catch (e) { fail(e); }
     return;
   }

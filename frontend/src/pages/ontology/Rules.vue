@@ -10,6 +10,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 变更单（useDraftView / CHANGE_REQUESTS）、动作类型 / 事件类型 / 指标目录仍由各自模块提供。
  */
 import { computed, reactive, ref, watch } from 'vue';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
@@ -42,7 +43,10 @@ import {
 } from '@/api/dynamic';
 
 /** 是否走真接口（开关 dynamic）；构建时确定 */
-const REAL = dynamicApi.isReal();
+const REAL_API = dynamicApi.isReal();
+/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
+const live = computed(() => REAL_API && !backend.down);
+const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
 const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
 /** 真接口状态：列表页、详情（含 draft）、下拉、命中、命中抽屉、回放结果、版本、已暂存动作 */
 const remote = reactive({
@@ -67,7 +71,7 @@ const setQ = (patch: Record<string, string | undefined>) => router.replace({ que
 
 /** 规则状态取自所在变更单（同 ObjBehaviorAutomation）：草稿中 = 灰，审核中 = 橙 */
 function ruleStatus(r: RuleDef): { text: string; badge: 'warning' | 'default'; cr?: string } {
-  if (REAL) {
+  if (live.value) {
     const x = (r.id === remote.detail?.id ? remote.detail : remote.items.find((i) => i.id === r.id)) as RuleDto | undefined;
     if (x) return { text: x.displayStatus, badge: x.displayStatus === '审核中' ? 'warning' : 'default', cr: x.cr ?? undefined };
   }
@@ -81,19 +85,19 @@ function ruleStatus(r: RuleDef): { text: string; badge: 'warning' | 'default'; c
 const kw = ref('');
 const trig = ref('全部');
 const stf = ref('全部');
-const STATUS_OPTS = computed(() => (REAL ? remote.meta.statuses : ['全部', ...new Set(RULE_DEFS.map((r) => ruleStatus(r).text))]).map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v })));
+const STATUS_OPTS = computed(() => (live.value ? remote.meta.statuses : ['全部', ...new Set(RULE_DEFS.map((r) => ruleStatus(r).text))]).map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v })));
 const filtered = computed(() => RULE_DEFS.filter((r) => (trig.value === '全部' || r.trigger.kind === trig.value)
   && (stf.value === '全部' || ruleStatus(r).text === stf.value)
   && (!kw.value || r.name.includes(kw.value) || r.id.toLowerCase().includes(kw.value.toLowerCase()))));
 const LPAGE = 16;
 const lpage = ref(1);
 watch([kw, trig, stf], () => { lpage.value = 1; });
-const list = computed<RuleDef[]>(() => (REAL ? remote.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
-const listTotal = computed(() => (REAL ? remote.total : filtered.value.length));
+const list = computed<RuleDef[]>(() => (live.value ? remote.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
+const listTotal = computed(() => (live.value ? remote.total : filtered.value.length));
 /** 真接口：选中项 = ?rule= 或列表第一条；详情回来前先用列表行（同一份定义）占位 */
 const realId = computed(() => (route.query.rule as string) || remote.items[0]?.id || RULE_DEFS[0].id);
 const base = computed<RuleDef>(() => {
-  if (!REAL) return RULE_DEFS.find((r) => r.id === route.query.rule) ?? RULE_DEFS[0];
+  if (!live.value) return RULE_DEFS.find((r) => r.id === route.query.rule) ?? RULE_DEFS[0];
   if (remote.detail && remote.detail.id === realId.value) return stripDraft(remote.detail);
   return remote.items.find((r) => r.id === realId.value) ?? RULE_DEFS.find((r) => r.id === realId.value) ?? RULE_DEFS[0];
 });
@@ -117,7 +121,7 @@ const openChange = (name: string) => { changeTarget.value = name; changeOpen.val
 const edits = reactive<Record<string, { autoStage: AutoStage; thresholds: string[] }>>({});
 const draftDef = computed<RuleDef | undefined>(() => {
   if (!draftCR.value) return undefined;
-  if (REAL) return remote.detail?.id === base.value.id && remote.detail.draft ? remote.detail.draft : undefined;
+  if (live.value) return remote.detail?.id === base.value.id && remote.detail.draft ? remote.detail.draft : undefined;
   const p = RULE_DRAFTS[base.value.id] ?? {};
   return { ...base.value, ...p, version: p.version ?? base.value.version + 1 };
 });
@@ -140,7 +144,7 @@ const metricBumped = computed(() => {
 });
 async function saveDraft() {
   const cr = draftCR.value!;
-  if (REAL) {
+  if (REAL_API) {
     const e = ensureEdits();
     try {
       remote.detail = await saveRuleDraft(base.value.id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds });
@@ -181,16 +185,16 @@ function setMapping(param: string, from: string) {
 }
 function onStageType(id: string) { const s = ensureEdits().autoStage; s.actionTypeId = id; s.mapping = []; }
 const mapCols = [{ title: '动作参数', key: 'param', width: 160 }, { title: '取值来源', key: 'from' }];
-const staged = computed(() => (REAL ? remote.staged : stagedOf(base.value.id)));
+const staged = computed(() => (live.value ? remote.staged : stagedOf(base.value.id)));
 const stagedPending = computed(() => staged.value.filter((a) => a.status === '待确认').length);
 
 /* 命中历史 */
 const HRANGES = [{ label: '近 7 天', value: '7d' }, { label: '近 30 天', value: '30d' }];
 const hrange = computed({ get: () => (q('hrange') === '30d' ? '30d' : '7d'), set: (v) => setQ({ hrange: v === '7d' ? undefined : v, hpage: undefined }) });
 const hq = usePagedQuery({ defaultSize: 12, prefix: 'h' });
-const hits7 = computed(() => (REAL ? remote.hits7 : hitsOf(base.value.id).filter((h) => h.at > '2026-10-18 23:59:59').length));
+const hits7 = computed(() => (live.value ? remote.hits7 : hitsOf(base.value.id).filter((h) => h.at > '2026-10-18 23:59:59').length));
 const hitsAll = computed(() => hitsOf(base.value.id).filter((h) => h.at > (hrange.value === '7d' ? '2026-10-18 23:59:59' : '2026-09-25')));
-const hits = computed(() => (REAL ? remote.hits : paginate(hitsAll.value, { page: hq.page.value, size: hq.size.value })));
+const hits = computed(() => (live.value ? remote.hits : paginate(hitsAll.value, { page: hq.page.value, size: hq.size.value })));
 /** 商品类规则（R-007 / R-012）去重键含门店，命中与回放样本单列门店 */
 const STORE_COL = { title: '门店', key: 'store', width: 220, ellipsis: true };
 const hitCols = computed(() => [
@@ -203,18 +207,18 @@ const hitCols = computed(() => [
   { title: '处理状态', key: 'result', width: 110 },
 ]);
 const hitOpen = computed<Hit | RuleHitDetailDto | undefined>(() => (q('hit')
-  ? (REAL ? (remote.hit?.id === q('hit') ? remote.hit : undefined) : hitsOf(base.value.id).find((h) => h.id === q('hit'))) : undefined));
+  ? (live.value ? (remote.hit?.id === q('hit') ? remote.hit : undefined) : hitsOf(base.value.id).find((h) => h.id === q('hit'))) : undefined));
 const openHit = (h: Hit) => setQ({ hit: h.id });
-const hitLinked = computed(() => (REAL ? (remote.hit?.linkedAction ?? undefined) : hitOpen.value?.alertId ? ACTIONS.find((a) => a.source.alertId === hitOpen.value!.alertId) : undefined));
+const hitLinked = computed(() => (live.value ? (remote.hit?.linkedAction ?? undefined) : hitOpen.value?.alertId ? ACTIONS.find((a) => a.source.alertId === hitOpen.value!.alertId) : undefined));
 const hitTimeline = computed(() => {
   const h = hitOpen.value; if (!h) return [];
-  if (REAL) return remote.hit?.timeline ?? [];
+  if (live.value) return remote.hit?.timeline ?? [];
   if ('alert' in h && h.alert) return alertTimeline(h.alert as Alert).map((t) => ({ time: t.time, text: t.text, desc: t.who, status: t.abnormal ? 'warn' : 'done' }));
   return [{ time: h.at, text: `规则 ${h.ruleId} v${rule.value.version} 命中`, desc: '系统', status: 'done' },
     { time: h.at, text: h.result === '已去重' ? `去重键相同，冷却期（${rule.value.cooldown}）内不再通知` : `已通知负责人 ${rule.value.owner}`, desc: '系统', status: 'done' }];
 });
 /** 条件页下半部：最近几次命中（只读速览，完整列表在“命中历史”）；草稿多横幅和旧表达式，只放 3 条保证一屏 */
-const recentHits = computed(() => (REAL ? remote.recent : [...hitsOf(base.value.id)]).sort((a, b) => b.at.localeCompare(a.at)).slice(0, isDraft.value ? 3 : 5));
+const recentHits = computed(() => (live.value ? remote.recent : [...hitsOf(base.value.id)]).sort((a, b) => b.at.localeCompare(a.at)).slice(0, isDraft.value ? 3 : 5));
 const recentCols = computed(() => [
   { title: '命中时间', dataIndex: 'at', width: 172 },
   { title: '告警 / 命中编号', key: 'id', width: 200 },
@@ -237,17 +241,17 @@ async function fetchReplay() {
   try {
     const r = await replayRule(base.value.id, rrange.value as '7d' | '30d', rver.value === 'draft' ? 'draft' : 'current');
     if (k === replayKey.value) remote.replay = { ...r, k };
-  } catch (e) { fail(e); } finally { running.value = false; }
+  } catch (e) { readFail(e); } finally { running.value = false; }
 }
 function runReplay() {
-  if (REAL) { if (ran.value) fetchReplay(); else setQ({ run: '1', rpage: undefined }); return; }
+  if (live.value) { if (ran.value) fetchReplay(); else setQ({ run: '1', rpage: undefined }); return; }
   running.value = true; setTimeout(() => { running.value = false; setQ({ run: '1', rpage: undefined }); }, 400);
 }
-const result = computed(() => (!ran.value ? null : REAL ? (remote.replay?.k === replayKey.value ? remote.replay : null)
+const result = computed(() => (!ran.value ? null : live.value ? (remote.replay?.k === replayKey.value ? remote.replay : null)
   : replay(base.value, rrange.value as '7d' | '30d', rver.value === 'draft')));
 const rq = usePagedQuery({ defaultSize: 9, prefix: 'r' });
 const samples = computed(() => paginate(result.value?.samples ?? [], { page: rq.page.value, size: rq.size.value }));
-const dedupeText = computed(() => (REAL ? remote.replay?.dedupeReason ?? '' : dedupeReason(base.value)));
+const dedupeText = computed(() => (live.value ? remote.replay?.dedupeReason ?? '' : dedupeReason(base.value)));
 const sampleCols = computed(() => [
   { title: '时间', dataIndex: 'at', width: 172 },
   { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
@@ -257,9 +261,9 @@ const sampleCols = computed(() => [
 ]);
 
 /* 版本历史 */
-const versions = computed(() => (REAL ? remote.versions : ruleVersions(base.value, draftDef.value?.version)));
-const confirmers = computed(() => (REAL ? remote.meta.confirmers : CONFIRMERS));
-const mappingSources = computed(() => (REAL ? remote.meta.mappingSources : MAPPING_SOURCES));
+const versions = computed(() => (live.value ? remote.versions : ruleVersions(base.value, draftDef.value?.version)));
+const confirmers = computed(() => (live.value ? remote.meta.confirmers : CONFIRMERS));
+const mappingSources = computed(() => (live.value ? remote.meta.mappingSources : MAPPING_SOURCES));
 
 // ---- 真接口：按当前选中 / 页签 / 筛选取数，失败给提示 ----
 let listSeq = 0;
@@ -268,13 +272,13 @@ async function loadList() {
   try {
     const r = await listRules({ trigger: trig.value, status: stf.value, kw: kw.value, page: lpage.value, size: LPAGE });
     if (seq === listSeq) { remote.items = r.items; remote.total = r.total; }
-  } catch (e) { if (seq === listSeq) fail(e); }
+  } catch (e) { if (seq === listSeq) readFail(e); }
 }
 const guard = <T,>(key: () => string, run: () => Promise<T>, set: (v: T) => void) => {
   let seq = 0;
   return async () => {
     const s = ++seq; const k = key(); if (!k) return;
-    try { const v = await run(); if (s === seq) set(v); } catch (e) { if (s === seq) fail(e); }
+    try { const v = await run(); if (s === seq) set(v); } catch (e) { if (s === seq) readFail(e); }
   };
 };
 const loadDetail = guard(() => realId.value, () => getRule(realId.value), (v) => { remote.detail = v; });
@@ -285,8 +289,8 @@ const loadOverview = guard(() => realId.value, async () => {
 }, (v) => { remote.hits7 = v.h7; remote.recent = v.rec; remote.versions = v.vers; remote.staged = v.st; });
 const loadHits = guard(() => (tab.value === 'hits' ? realId.value : ''), () => listRuleHits(realId.value, hrange.value as '7d' | '30d', hq.page.value, hq.size.value), (v) => { remote.hits = v; });
 const loadHit = guard(() => q('hit'), () => getRuleHit(q('hit')), (v) => { remote.hit = v as RuleHitDetailDto; });
-if (REAL) {
-  getRulesMeta().then((m) => { remote.meta = m; }, fail);
+if (live.value) {
+  getRulesMeta().then((m) => { remote.meta = m; }, readFail);
   watch([kw, trig, stf, lpage], loadList, { immediate: true });
   watch(realId, () => { loadDetail(); loadOverview(); }, { immediate: true });
   watch([realId, tab, hrange, hq.page, hq.size], loadHits, { immediate: true });

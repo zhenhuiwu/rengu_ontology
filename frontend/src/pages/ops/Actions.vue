@@ -9,6 +9,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 确认提交、撤回、重新提交、对账一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
 import { computed, reactive, ref, watch } from 'vue';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
@@ -33,10 +34,13 @@ import {
 /** 页面内的动作状态（模拟后台：确认、撤回、重新提交、对账都会改它并写执行记录） */
 const LIST = ACTIONS;
 /** 是否走真接口（开关 dynamic）；构建时确定 */
-const REAL = dynamicApi.isReal();
+const REAL_API = dynamicApi.isReal();
+/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
+const live = computed(() => REAL_API && !backend.down);
+const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
 const app = useAppStore();
 /** 当前用户：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
-const ME = REAL ? app.user.name : '王敏';
+const ME = REAL_API ? app.user.name : '王敏';
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(40 + tick).padStart(2, '0')}:00`; };
 const TERMINAL: ActionStatus[] = ['成功', '已撤回', '已对账'];
@@ -70,12 +74,12 @@ const remote = reactive({
 });
 const toRec = (a: ActionRunDto | ActionRunDetailDto): ActionRecord => ({ ...a, log: 'log' in a ? a.log : [] } as ActionRecord);
 const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
-const actionNames = computed<string[]>(() => (REAL ? remote.meta?.actionNames ?? [] : ACTION_NAMES));
-const actionSystems = computed<{ id: string; name: string }[]>(() => (REAL ? remote.meta?.actionSystems ?? [] : ACTION_SYSTEMS));
-const callOf = (name: string) => (REAL ? remote.meta?.actionMeta[name]?.call ?? '--' : ACTION_META[name as keyof typeof ACTION_META]?.call ?? '--');
+const actionNames = computed<string[]>(() => (live.value ? remote.meta?.actionNames ?? [] : ACTION_NAMES));
+const actionSystems = computed<{ id: string; name: string }[]>(() => (live.value ? remote.meta?.actionSystems ?? [] : ACTION_SYSTEMS));
+const callOf = (name: string) => (live.value ? remote.meta?.actionMeta[name]?.call ?? '--' : ACTION_META[name as keyof typeof ACTION_META]?.call ?? '--');
 
 const rows = computed(() => {
-  if (REAL) return remote.items;
+  if (live.value) return remote.items;
   const t = curTab.value;
   const k = kw.value.trim();
   const list = LIST.filter((a) =>
@@ -87,13 +91,13 @@ const rows = computed(() => {
   // 对账页签：待对账的排在前面
   return t.key === 'unknown' ? [...list].sort((a, b) => Number(b.status === '结果未知') - Number(a.status === '结果未知')) : list;
 });
-const count = (key: string) => REAL ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.statuses.includes(a.status)).length;
-const paged = computed(() => (REAL ? { items: remote.items, total: remote.total } : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
+const count = (key: string) => live.value ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.statuses.includes(a.status)).length;
+const paged = computed(() => (live.value ? { items: remote.items, total: remote.total } : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
 
 /** 刚处理过的动作即使离开当前页签也继续显示在右侧，避免详情突然换成别的动作 */
 const pinned = ref<string>();
 const selectedId = computed(() => (route.query.act as string) || pinned.value || paged.value.items[0]?.id);
-const current = computed<ActionRecord | undefined>(() => REAL ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? paged.value.items[0]);
+const current = computed<ActionRecord | undefined>(() => live.value ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? paged.value.items[0]);
 const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
 const pick = (a: Pick<ActionRecord, 'id'>) => { pinned.value = a.id; router.replace({ query: { ...route.query, act: a.id } }); };
 
@@ -105,7 +109,7 @@ async function loadList() {
     const r = await listActionRuns({ tab: tab.value as ActionTab, status: status.value, action: actionName.value, sysId: system.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
     if (seq !== listSeq) return;
     remote.items = r.items.map(toRec); remote.total = r.total; remote.counts = r.counts;
-  } catch (e) { if (seq === listSeq) fail(e); }
+  } catch (e) { if (seq === listSeq) readFail(e); }
 }
 async function loadDetail(id = selectedId.value) {
   const seq = ++detailSeq;
@@ -113,17 +117,17 @@ async function loadDetail(id = selectedId.value) {
   try {
     const d = await getActionRun(id);
     if (seq === detailSeq) remote.detail = toRec(d);
-  } catch (e) { if (seq === detailSeq) { remote.detail = null; fail(e); } }
+  } catch (e) { if (seq === detailSeq) { remote.detail = null; readFail(e); } }
 }
 /** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
 async function afterWrite(d?: ActionRunDetailDto) {
   if (d) { ++detailSeq; remote.detail = toRec(d); }
   await loadList();
 }
-if (REAL) {
+if (live.value) {
   watch([tab, actionName, system, status, kw, pq.page, pq.size], loadList, { immediate: true });
   watch(selectedId, (id) => { loadDetail(id); }, { immediate: true });
-  getActionMeta().then((m) => { remote.meta = m; }, fail);
+  getActionMeta().then((m) => { remote.meta = m; }, readFail);
 }
 
 /** 状态点：待确认橙（需要关注）、失败红，其余灰；结果未知单独显示橙色问号 + “结果未知 · 待对账” */
@@ -173,7 +177,7 @@ async function submit() {
   });
   if (!ok) return;
   pinned.value = a.id;
-  if (REAL) {
+  if (REAL_API) {
     try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(`已提交：${d.action}，等待 ${d.approver} 审批`); } catch (e) { fail(e); }
     return;
   }
@@ -189,7 +193,7 @@ const withdrawReason = ref('');
 async function doWithdraw() {
   const a = current.value; if (!a || !withdrawReason.value.trim() || notMine(a)) return;
   pinned.value = a.id;
-  if (REAL) {
+  if (REAL_API) {
     try { await afterWrite(await withdrawActionRun(a.id, withdrawReason.value.trim())); withdrawOpen.value = false; withdrawReason.value = ''; message.success(`已撤回 ${a.id}`); } catch (e) { fail(e); }
     return;
   }
@@ -205,7 +209,7 @@ async function resubmit() {
   const n = (a.idemKey.match(/-r(\d+)$/)?.[1] ?? '0');
   const newKey = `${a.idemKey.replace(/-r\d+$/, '')}-r${Number(n) + 1}`;
   // 真接口时新编号由后台生成，确认卡里不预先显示
-  const newId = REAL ? '' : `ACT-20261025-${String(Math.max(...LIST.map((x) => Number(x.id.slice(-4)))) + 1).padStart(4, '0')}`;
+  const newId = REAL_API ? '' : `ACT-20261025-${String(Math.max(...LIST.map((x) => Number(x.id.slice(-4)))) + 1).padStart(4, '0')}`;
   const ok = await confirm.ask({
     title: `重新提交：${a.action}`, okText: '重新提交', irreversible: true,
     target: `${kindLabel(a.objKind)} ${a.objLabel}`,
@@ -218,7 +222,7 @@ async function resubmit() {
     impact: `沿用原审批（${a.approver}），生成新动作${newId ? ` ${newId}` : ''} 并用新幂等键调用 ${a.system}；原动作 ${a.id} 保留为失败，便于追溯。`,
   });
   if (!ok) return;
-  if (REAL) {
+  if (REAL_API) {
     try {
       const r = await resubmitActionRun(a.id);
       pinned.value = a.id;
@@ -253,7 +257,7 @@ async function doReconcile() {
   const a = current.value; if (!a || a.status !== '结果未知' || !reconAs.value || !reconNote.value.trim()) return;
   pinned.value = a.id;
   const note = reconNote.value.trim();
-  if (REAL) {
+  if (REAL_API) {
     try {
       const as = reconAs.value;
       await afterWrite(await reconcileActionRun(a.id, as, note));

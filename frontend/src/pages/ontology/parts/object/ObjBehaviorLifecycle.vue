@@ -10,6 +10,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 草稿改动每次改完整份 PUT …/lifecycle/draft（键 = 变更单:对象类型）；否则用 mock/lifecycle（不变）。
  */
 import { computed, reactive, ref, shallowRef, watch, nextTick } from 'vue';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
 import type { Cell, Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
@@ -48,20 +49,22 @@ const objName = computed(() => OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
 
 /* ───── 生效版本（历史版本取当时发布时间） ───── */
 const histAt = computed(() => (histRo.value && app.viewVersion ? releaseByVer(app.viewVersion)?.publishedAt ?? null : null));
-const REAL = dynamicApi.isReal();
+const REAL_API = dynamicApi.isReal();
+/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
+const live = computed(() => REAL_API && !backend.down);
 const remote = reactive({
   lc: null as LifecycleDto | null, key: '', illegal: [] as LcIllegal[],
   changes: { items: [] as LcChange[], total: 0 }, edits: {} as Record<string, LcDraft>,
 });
-const base = computed(() => (REAL ? remote.lc ?? undefined : lifecycleAsOf(props.objectId, histAt.value)));
+const base = computed(() => (live.value ? remote.lc ?? undefined : lifecycleAsOf(props.objectId, histAt.value)));
 
 /* ───── 草稿改动（本会话，按 变更单:对象 存） ───── */
 const dkey = computed(() => (draft.value ? `${draft.value.id}:${props.objectId}` : ''));
-const EDIT_STORE = REAL ? remote.edits : LC_DRAFT_EDITS;
+const EDIT_STORE = live.value ? remote.edits : LC_DRAFT_EDITS;
 const edits = computed<LcDraft>(() => (isDraft.value && dkey.value ? (EDIT_STORE[dkey.value] ??= emptyLcDraft()) : emptyLcDraft()));
 /** 真接口：草稿改动改完后整份保存；失败时重新拉后台草稿，界面回到已保存的样子 */
 async function persist() {
-  if (!REAL || !isDraft.value || !draft.value) return;
+  if (!REAL_API || !isDraft.value || !draft.value) return;
   const cr = draft.value.id; const key = dkey.value;
   try {
     const r = await saveLifecycleDraft(props.objectId, cr, edits.value);
@@ -88,7 +91,7 @@ const transitions = computed<VTr[]>(() => {
     ...e.addTransitions.map((t) => ({ ...t, mark: '新增' as Mark })),
   ];
 });
-const illegal = computed(() => (REAL ? remote.illegal : histAt.value ? [] : illegalOf(props.objectId)));
+const illegal = computed(() => (live.value ? remote.illegal : histAt.value ? [] : illegalOf(props.objectId)));
 const illegalTotal = computed(() => illegal.value.reduce((n, x) => n + x.count, 0));
 const showIllegal = ref(true);
 const verText = computed(() => (base.value ? (isDraft.value ? `v${base.value.version} → 草稿 v${base.value.version + 1}` : `v${base.value.version}`) : ''));
@@ -229,11 +232,11 @@ const view = computed({
 const onlyIllegal = ref(false);
 const pq = usePagedQuery({ defaultSize: 6, prefix: 'lc', filters: [() => props.objectId, onlyIllegal] });
 const changes = computed(() => (histAt.value ? [] : changesOf(props.objectId)).filter((c) => !onlyIllegal.value || !c.trId));
-const changePage = computed(() => (REAL ? remote.changes : paginate(changes.value, { page: pq.page.value, size: pq.size.value })));
+const changePage = computed(() => (live.value ? remote.changes : paginate(changes.value, { page: pq.page.value, size: pq.size.value })));
 
 /* ───── 真接口加载 ───── */
 async function guard<T>(p: Promise<T>, apply: (v: T) => void) {
-  try { apply(await p); } catch (e) { message.error(isApiError(e) ? e.message : String(e)); }
+  try { apply(await p); } catch (e) { if (!fallBackIfDown(e)) message.error(isApiError(e) ? e.message : String(e)); }
 }
 const lcKey = computed(() => `${props.objectId}|${app.viewVersion ?? ''}|${isDraft.value ? draft.value?.id ?? '' : ''}`);
 async function loadLc() {
@@ -252,7 +255,7 @@ async function loadChanges() {
     if (k === `${lcKey.value}|${onlyIllegal.value}|${pq.page.value}|${pq.size.value}`) remote.changes = r;
   });
 }
-if (REAL) {
+if (live.value) {
   watch(lcKey, () => { remote.lc = null; loadLc(); }, { immediate: true });
   watch(() => [lcKey.value, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true });
 }
