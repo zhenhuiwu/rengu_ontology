@@ -132,3 +132,50 @@ async def test_upgrade_downgrade_base_upgrade_on_temp_db():
         await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)
         await admin.execute(f'DROP DATABASE IF EXISTS "{db}"')
         await admin.close()
+
+
+SKELETON_TABLES = {
+    "ontology_release",
+    "outbox_event",
+    "sys_user",
+    "store",
+    "product",
+    "biz_order",
+    "order_line",
+}
+
+
+async def test_skeleton_round_trip_with_helper():
+    """骨架自己用 tests/helpers/migrations.py：第一个迁移 0001 的父 = base，降到 base 再升回 head。"""
+    from tests.helpers.migrations import assert_module_round_trip, module_parent, revision_module
+
+    assert module_parent("skeleton") == "base"
+    assert revision_module("0003") == "skeleton" and revision_module("action_type_0002") == "action_type"
+    head = await assert_module_round_trip("skeleton", SKELETON_TABLES)
+    from app.db.ddl import GUARD_FUNCTION
+
+    assert GUARD_FUNCTION in head.functions  # 函数也纳入「不留残留」检查
+
+
+def test_module_parent_follows_down_revision_not_0003(monkeypatch):
+    """模块的父迁移按 ScriptDirectory 查：合并后 down_revision 被改指别的 head 也照样对。"""
+    from types import SimpleNamespace
+
+    from tests.helpers import migrations as h
+
+    fake = [
+        SimpleNamespace(revision=r, down_revision=d)
+        for r, d in [
+            ("0001", None),
+            ("0002", "0001"),
+            ("0003", "0002"),
+            ("qa_0001", "0003"),
+            ("static_0001", "qa_0001"),
+            ("static_0002", "static_0001"),
+            ("action_0001", "static_0002"),
+        ]
+    ]
+    monkeypatch.setattr(h, "chain", lambda: fake)
+    assert h.module_parent("static") == "qa_0001"
+    assert h.module_parent("action") == "static_0002"
+    assert [s.revision for s in h.module_revisions("static")] == ["static_0001", "static_0002"]

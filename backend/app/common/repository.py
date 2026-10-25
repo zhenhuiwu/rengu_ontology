@@ -61,9 +61,14 @@ class BaseRepository(Generic[M]):
         return obj
 
     async def list_page(self, stmt: Select[tuple[M]], page: PageParams) -> tuple[Sequence[M], int]:
-        total = await self.session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
-        rows = (await self.session.scalars(stmt.offset(page.offset).limit(page.size))).all()
-        return rows, int(total or 0)
+        """先 count 再取一页（两条语句）。页码越界按前端收拢到最后一页（pagination.py），
+        响应用 `Page.of(rows, total, page)`，它的 page 字段同样收拢。"""
+        total = int(
+            await self.session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+        )
+        p = page.clamp(total)
+        rows = (await self.session.scalars(stmt.offset(p.offset).limit(p.size))).all()
+        return rows, total
 
     # ---- 写入 ----
     async def create(self, obj: M, *, actor: str | None = None) -> M:

@@ -118,18 +118,70 @@ async def test_create_version_requires_change_orders(seeded):
     assert e.value.code == "EMPTY_RELEASE" and e.value.status_code == 409
 
 
-async def test_releases_are_append_only_in_db(seeded):
-    for sql in (
-        "UPDATE ontology_release SET note='x' WHERE ver='v2026.10.3'",
-        "DELETE FROM ontology_release WHERE ver='v2026.10.3'",
-        "TRUNCATE ontology_release",
-    ):
-        sp = await seeded.begin_nested()
-        with pytest.raises(DBAPIError, match="只追加"):
-            await seeded.execute(text(sql))
+APPEND_ONLY_VIOLATIONS = (
+    "UPDATE ontology_release SET note='x' WHERE ver='v2026.10.3'",
+    "DELETE FROM ontology_release WHERE ver='v2026.10.3'",
+    # 有别的表外键指向 ontology_release 时，不带 CASCADE 的 TRUNCATE 在触发器之前就被外键检查拒绝
+    # （"referenced in a foreign key constraint"）；CASCADE 时 PG 先对**所有**要清空的表触发
+    # BEFORE TRUNCATE 语句级触发器，再动数据，所以照样被只追加触发器拦下。
+    "TRUNCATE ontology_release CASCADE",
+)
+
+
+async def _assert_append_only(session):
+    for sql in APPEND_ONLY_VIOLATIONS:
+        sp = await session.begin_nested()  # 每条在 savepoint 里执行，失败后回滚，不影响后续
+        with pytest.raises(DBAPIError, match="ontology_release 只追加"):
+            await session.execute(text(sql))
         await sp.rollback()
     # 内容不变的 UPDATE（seed 重跑）放行
-    await seeded.execute(text("UPDATE ontology_release SET note=note WHERE ver='v2026.10.3'"))
+    await session.execute(text("UPDATE ontology_release SET note=note WHERE ver='v2026.10.3'"))
+    assert await session.scalar(text("SELECT count(*) FROM ontology_release")) == len(MOCK)
+
+
+async def test_release_triggers_are_before_statement_truncate_and_row_update_delete(seeded):
+    rows = (
+        await seeded.execute(
+            text(
+                "SELECT tgname, tgtype FROM pg_trigger"
+                " WHERE tgrelid = 'ontology_release'::regclass AND NOT tgisinternal ORDER BY tgname"
+            )
+        )
+    ).all()
+    t = dict(rows)
+    row, before, delete, update, truncate = 1, 2, 8, 16, 32  # pg_trigger.tgtype 位
+    trunc = t["trg_ontology_release_no_truncate"]
+    assert trunc & before and trunc & truncate and not trunc & row  # BEFORE TRUNCATE FOR EACH STATEMENT
+    au = t["trg_ontology_release_append_only"]
+    assert au & before and au & row and au & update and au & delete
+
+
+async def test_releases_are_append_only_in_db(seeded):
+    await _assert_append_only(seeded)
+
+
+async def test_append_only_holds_with_fk_referencing_releases(seeded):
+    """其它模块可以建指向 ontology_release(id) 的外键（retired_release_id、qa 的 release_id…）。
+
+    有了外键也照样只追加。"""
+    await seeded.execute(
+        text(
+            "CREATE TABLE _probe_release_ref (id bigserial PRIMARY KEY,"
+            " release_id bigint NOT NULL REFERENCES ontology_release(id))"
+        )
+    )
+    try:
+        rid = await seeded.scalar(text("SELECT id FROM ontology_release WHERE ver='v2026.10.3'"))
+        await seeded.execute(text("INSERT INTO _probe_release_ref (release_id) VALUES (:r)"), {"r": rid})
+        sp = await seeded.begin_nested()  # 不带 CASCADE：被外键检查拒绝（同样清不掉）
+        with pytest.raises(DBAPIError, match="foreign key"):
+            await seeded.execute(text("TRUNCATE ontology_release"))
+        await sp.rollback()
+        await _assert_append_only(seeded)
+        # 引用方的行也没被 CASCADE 清掉
+        assert await seeded.scalar(text("SELECT count(*) FROM _probe_release_ref")) == 1
+    finally:
+        await seeded.execute(text("DROP TABLE IF EXISTS _probe_release_ref"))
 
 
 async def test_rollback_creates_new_version_with_target_content(seeded):
@@ -214,7 +266,7 @@ async def test_sections_registry_and_default_provider(seeded):
 async def test_rollback_calls_restore_section_hooks(seeded):
     from app.modules.versioning.sections import register_section, unregister_section
 
-    restored = []
+    restored, ids, vers = [], [], []
 
     class Hooked:
         section = "rules"
@@ -225,8 +277,11 @@ async def test_rollback_calls_restore_section_hooks(seeded):
         def seed_section(self, ver, ctx):
             return {}
 
-        async def restore_section(self, session, content):
+        async def restore_section(self, session, content, *, release_id):
             restored.append(content)
+            ids.append(release_id)
+            row = await session.get(OntologyRelease, release_id)  # 新版本行已写入、同一事务里可见
+            vers.append(row.ver if row else None)
 
     register_section(Hooked())
     try:
@@ -240,12 +295,14 @@ async def test_rollback_calls_restore_section_hooks(seeded):
         now = datetime(2026, 10, 25, 12, tzinfo=UTC)
         v4 = await svc.create_version(seeded, ["CR-0011"], published_by="U010001", note="", now=now)
         v5 = await svc.create_version(seeded, ["CR-0012"], published_by="U010001", note="", now=now)
-        await svc.create_version(
+        v6 = await svc.create_version(
             seeded, ["CR-0015"], rollback_of=v5, published_by="U010001", note="", now=now
         )
         prev = await svc.get_snapshot(seeded, v4)
         assert prev["rules"] == {"R-007": {"version": 9}}
         assert restored == [prev["rules"]]
+        assert ids == [(await _by_ver(seeded, v6)).id]  # 这次回滚新写入的版本行
+        assert vers == [v6]
         # 回滚到没有 rules 这一节的版本（v2026.10.3 的 rules 为空）→ 不调钩子（静态裁定）
         restored.clear()
         assert (await svc.get_snapshot(seeded, "v2026.10.3")).get("rules") is None
@@ -356,14 +413,14 @@ async def test_restore_section_skipped_when_content_none(seeded):
         def seed_section(self, ver, ctx):
             return {}
 
-        async def restore_section(self, session, content):
-            calls.append((self.section, content))
+        async def restore_section(self, session, content, *, release_id):
+            calls.append((self.section, content, release_id))
 
     for name in ("qaPaths", "eventTypes", "lifecycles"):
         register_section(Hooked(name))
     try:
-        await restore_sections(seeded, {"qaPaths": None, "eventTypes": {}})  # lifecycles 缺失
-        assert calls == [("eventTypes", {})]
+        await restore_sections(seeded, {"qaPaths": None, "eventTypes": {}}, 42)  # lifecycles 缺失
+        assert calls == [("eventTypes", {}, 42)]
     finally:
         for name in ("qaPaths", "eventTypes", "lifecycles"):
             unregister_section(name)

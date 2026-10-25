@@ -109,8 +109,20 @@ class FakeObjectTypesSection:
         return {"order": {"label": "订单", "since": ver}}
 
 
+@pytest.fixture(autouse=True)
+def _isolated_sections():
+    """每个测试从空的快照 section 注册表开始，结束后恢复（业务模块在导入时登记的真实 builder 不受影响）。
+
+    用公开的 isolated_sections()，不要直接改 sections._registry。
+    """
+    from app.modules.versioning.sections import isolated_sections
+
+    with isolated_sections():
+        yield
+
+
 @pytest.fixture
-def sections():
+def sections(_isolated_sections):  # 依赖隔离 fixture：保证先清空再登记
     from app.modules.versioning.sections import register_section, unregister_section
 
     b = FakeObjectTypesSection()

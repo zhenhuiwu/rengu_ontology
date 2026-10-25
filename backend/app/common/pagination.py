@@ -6,9 +6,16 @@ PDE 定的规则：
 - 只有**页面本来就是游标翻页**的（审计日志等）才用游标分页：`?cursor=&size=` → `{items, nextCursor}`，
   cursor 是不透明字符串，nextCursor=null 表示到底
 细节（默认值、上限、cursor 编码）由 PDE 定，这里保持最小。
+
+页码越界按前端 mock 收拢（src/mock/paginate.ts:12-13）：
+`page = min(max(1, page), max(1, ceil(total / size)))`。超过最后一页 → 返回最后一页的数据，响应里的
+`page` 也是收拢后的页码；total = 0 → page = 1、items = []。所以必须**先数 total、再算 offset**：
+用 `BaseRepository.list_page`（先 count 再取这一页，两条语句）+ `Page.of(...)`；自己拼 SQL 的用
+`page.clamp(total).offset`。
 """
 
-from typing import Annotated, Generic, TypeVar
+from collections.abc import Sequence
+from typing import Annotated, Any, Generic, Self, TypeVar
 
 from fastapi import Depends, Query
 from pydantic import Field
@@ -26,7 +33,17 @@ class PageParams(ApiModel):
 
     @property
     def offset(self) -> int:
+        """按请求的 page 算，不收拢。分页列表先 clamp(total) 再取 offset。"""
         return (self.page - 1) * self.size
+
+    def clamp(self, total: int) -> "PageParams":
+        """按 total 收拢页码（前端 paginate.ts:13）：越界 → 最后一页；total=0 → 第 1 页。"""
+        return PageParams(page=min(self.page, page_count(total, self.size)), size=self.size)
+
+
+def page_count(total: int, size: int) -> int:
+    """总页数，至少 1（前端 paginate.ts:12 `Math.max(1, Math.ceil(total / size))`）。"""
+    return max(1, -(-total // size))
 
 
 def _page_params(
@@ -44,6 +61,12 @@ class Page(ApiModel, Generic[T]):
     total: int
     page: int
     size: int
+
+    @classmethod
+    def of(cls, items: Sequence[Any], total: int, params: PageParams, **extra: Any) -> Self:
+        """组装响应：page 用收拢后的页码（和 list_page 取的那一页一致）。extra 给子类多出的字段。"""
+        p = params.clamp(total)
+        return cls(items=list(items), total=total, page=p.page, size=p.size, **extra)
 
 
 class CursorPage(ApiModel, Generic[T]):

@@ -59,7 +59,8 @@
 - **页面上有 ‹ 1/N › 或页码的列表**用 `page`/`size`：
   - 参数：`?page=1&size=20`，size 不超过 200。
   - 返回 `{items, total, page, size}`。
-  - 实现：`PageParamsDep` 加 `Page[T]`，或者用 `BaseRepository.list_page`。
+  - **页码越界按前端收拢**（`src/mock/paginate.ts:13`：`page = min(max(1, page), max(1, ceil(total/size)))`）：超过最后一页返回**最后一页**的数据，响应 `page` 是收拢后的页码；`total = 0` → `page = 1`、`items = []`。不返回空页、不报错。
+  - 实现：`PageParamsDep` + `rows, total = await repo.list_page(stmt, page)`（先 count 再按收拢后的 offset 取一页，仍是两条语句）+ `Page.of(rows, total, page, **额外字段)`。不要再写 `page=page.page`。自己拼 SQL / 内存分页的用 `page.clamp(total).offset` 和 `.size`。
 - **页面本来就用游标的**（如审计日志）：
   - 参数：`?cursor=&size=`。
   - 返回 `{items, nextCursor}`。
@@ -130,7 +131,9 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 | `SoftDeleteMixin` | `deleted_at/by`，**只给前端有删除/恢复的表** |
 | `OntologyVersionMixin` | `release_id` → `ontology_release.id`（外键，不存版本号字符串；接口仍返回 `ver`，经关系取） |
 
-- **只追加表**（版本、日志、事件、命中）在迁移里调 `app.db.ddl.enable_append_only(table)`：触发器拒绝 DELETE、TRUNCATE 和修改内容的 UPDATE（内容不变的 UPDATE 放行，seed 重跑幂等）。
+- **只追加表**（版本、日志、事件、命中）在迁移里调 `app.db.ddl.enable_append_only(table)`：触发器拒绝 DELETE、TRUNCATE 和修改内容的 UPDATE（内容不变的 UPDATE 放行，seed 重跑幂等）。触发器是 `BEFORE UPDATE OR DELETE … FOR EACH ROW` 加 `BEFORE TRUNCATE … FOR EACH STATEMENT`。
+- **指向 `ontology_release(id)` 的外键允许且推荐**（版本号类字段一律存外键，不存 `ver` 字符串）：`OntologyVersionMixin.release_id`、Palantir `action_type/event_type.retired_release_id`、qa 的 `release_id` 等。`ON DELETE` 用默认的 NO ACTION（或 RESTRICT），**不要 CASCADE / SET NULL**：版本行永不删除（只追加触发器保证），外键只用来保证引用存在。
+  - 测试注意：有外键指向它之后，`TRUNCATE ontology_release` 不带 CASCADE 会先被外键检查拒绝（还没到触发器）；要验证只追加就用 `TRUNCATE ontology_release CASCADE`（放在 savepoint 里），Postgres 先触发所有表的 BEFORE TRUNCATE 语句级触发器，被只追加触发器拦下、数据不动（`tests/test_versioning.py::test_append_only_holds_with_fk_referencing_releases`）。测试和 fixture 不要靠 TRUNCATE / DELETE 清理版本行，靠每个测试的外层事务回滚。
 - 批量写入用 `get_adapter(session).upsert(...)`：按 32767 个绑定参数自动分批，批内按冲突键去重（后出现的覆盖）。
 - 跨数据库差异走 `app/db/dialects`：`get_adapter(session).upsert(...)` 和 `.xact_lock(key)`。业务代码不要直接写 `ON CONFLICT`。
 
@@ -144,12 +147,28 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
   - 接口 `Release` 两个人员字段：`by` = 发布人**姓名**（前端 `Release.by`，VersionPicker.vue:26、OntologyOverview.vue:243 直接显示）；`byId` = 发布人 **sys_user.code**（同一外键，团队约定“人员外键在接口上传/返回 sys_user.code”，api-index.md:134、static-api.md:523）。`byId` 是新增字段，前端不读；`ReleaseInfo.published_by_code` 同值。
   - **outbox**：同一事务里写一条 `outbox_event`（topic `release.published`，`event_id = ontology_release:<ver>:release.published`），发布和回滚都写；payload `{ver, parentVer, kind: "release"|"rollback", rollbackOf, changeOrderIds}`。发布回滚，事件一起回滚。
   - 版本号格式 `vYYYY.MM.N`，月份按北京时间算；`parent_id` 指向上一版的 id。
-  - 快照 = 各 section 由负责模块组装（`SECTION_OWNERS`：静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths，动态 rules/lifecycles，Palantir actionTypes/eventTypes），段内按前端 id 作键。模块实现 `SnapshotSectionBuilder`（`build_section` + `seed_section`），在 `app/modules/versioning/sections.py` 按段登记；未登记的段沿用上一版。seed 不写空快照：还没有任何模块登记 section 时，versioning seed 经 `SeedSpec.skip_if` **跳过并记一行日志**（不报错，`ontology_release` 为空），全量 `python -m app.cli seed` 在新库上能跑完（`tests/test_seed_fresh_db.py`）；直接调 `seed_snapshot` 仍拒绝空快照。
+  - 快照 = 各 section 由负责模块组装（`SECTION_OWNERS`：静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths，动态 rules/lifecycles，Palantir actionTypes/eventTypes），段内按前端 id 作键。模块实现 `SnapshotSectionBuilder`（`build_section` + `seed_section`），按 §7「section 唯一登记点」登记；未登记的段沿用上一版。seed 不写空快照：还没有任何模块登记 section 时，versioning seed 经 `SeedSpec.skip_if` **跳过并记一行日志**（不报错，`ontology_release` 为空），全量 `python -m app.cli seed` 在新库上能跑完（`tests/test_seed_fresh_db.py`）；直接调 `seed_snapshot` 仍拒绝空快照。
 - **回滚 = 同一个入口传 `rollback_of=<当前最新版本号>`**：
   - 只能回滚最近一次发布，否则 409 `ROLLBACK_NOT_LATEST`。
   - **不调用** section builder，快照原样复制被回滚版本的上一版（`changeSummary.restoredFrom`）；`kind=rollback`，`rollback_of_id` 指向被回滚的版本，接口返回 `rollbackOf` 版本号。
   - 回滚变更单号作为 `change_order_ids` 传入，供审计追溯。
-  - **定义表也要回去**：同一事务里对每个登记的 builder 调可选钩子 `restore_section(session, content)`（content = 被恢复版本这一节的快照），由模块把自己的定义表（如动态 `rule` 当前版本、`lifecycle.version`）恢复成那一版；不实现钩子的段只回快照。被恢复版本没有这一节（content 为 None）时**不调用**钩子、定义表不动（静态裁定，和动态一致）【推断】；空内容 `{}` 照样调用。
+  - **定义表也要回去**：版本层**先写入这次回滚的新版本行**，再在同一事务里按登记顺序对每个 builder 调可选钩子（`app/contracts/versioning.py` 的 `RestorableSection`）：
+
+    ```python
+    async def restore_section(self, session, content, *, release_id: int) -> None: ...
+    ```
+
+    - `content` = 被恢复版本快照里这一节（`snapshot.get(section)`），原样 JSON；
+    - `release_id`（keyword-only）= 这次回滚新写入的 `ontology_release.id`（不是版本号；行已 flush，可 `session.get` 读到）。例如 Palantir 把快照里没有的类型 `retired_release_id = release_id`（action-event-api.md:325）。
+    - 由模块把自己的定义表（如动态 `rule` 当前版本、`lifecycle.version`、静态对象/指标）恢复成那一版；不实现钩子的段只回快照。钩子抛错 → 整个发布（含新版本行、outbox）随调用方事务回滚。
+    - 被恢复版本没有这一节（content 为 None）时**不调用**钩子、定义表不动（静态裁定，和动态一致）【推断】；空内容 `{}` 照样调用。
+    - 旧的两参数写法 `restore_section(session, content)` 已废弃（此前没有模块实现）；照旧写会 TypeError、回滚失败。dynamic-api.md「写新版本之前调 restore_sections」的描述以此为准更新。
+- **section 唯一登记点**（骨架负责，模块不用改 main / cli）：
+  - 负责 section 的模块在 `app/modules/<模块>/sections.py` 导出模块级 `BUILDERS = [XxxSection(), ...]`（按此顺序登记）；或者导出一个**幂等**的 `register()`（已登记同类实例就直接返回）。模块包的 `__init__` 里不要再登记。
+  - `app.modules.versioning.sections.load_sections()` 按子包名排序扫描 `app.modules.*.sections`（pkgutil）并登记；`create_app()` 和 `python -m app.cli seed` 开头都会调。幂等：同一实例重复登记放行，同一 section 换了另一个实例照旧报 `ValueError`。
+  - 直接调 `run_seeds(...)`（测试里）不会自动发现，测试自己登记要用的 builder。
+  - **迁移**：静态现在在 `static/__init__.py` 里 `register_all()`、`sections.py` 已有 `BUILDERS` → 删掉 `__init__` 里的调用即可（留着也不冲突，同一实例）。Palantir `action/sections.py`、`event/sections.py` 已有幂等 `register()` → 不用改；也可以改成导出 `BUILDERS`。
+  - **验收**：全新空库 `alembic upgrade head` + `python -m app.cli seed`（默认参数）后，每个 `ontology_release.snapshot` 都含你的 section（`tests/test_seed_fresh_db.py::test_full_seed_on_fresh_db` 会对本分支实际发现的 section 断言这一点）。
 - **只追加，不改不删**：见 §6 的只追加触发器。
 - `GET /releases` 不分页、登录即可调：`{items, current}`（前端版本选择器要全量）。
 - `?ver=vX`：只读读取历史快照，`ViewContextDep` 负责解析。只读由**全局守卫**负责（§13），模块不用自己挂依赖。
@@ -312,7 +331,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 | 外部调用 | 表名沿用 `writeback_call`、`ext_system`，归 integration 模块（Palantir专家）；不建 `ext_call` | `app/modules/integration/` |
 | 函数版本 | 函数（Functions）单独存 `fn_version` 表，各函数分别递增版本号；**不走** `create_version`、不写 `ontology_release`（编辑保存 / 回滚直接生成新函数版本） | `app/modules/static/`（PDE 定）、contracts/versioning 规则 11 |
 | 业务数据 | 演示门店、商品、订单归 biz 模块；所有查询由基础层注入行级过滤（§10） | `app/modules/biz/` |
-| 订单列表 | `GET /api/biz/v1/orders`（首页 Home.vue:32-46）：前端下拉选「全部」时客户端**不传** `status` / `channel`（后台不认“全部”）；`kw` = 订单号或门店名包含（不区分大小写，`%`、`_` 按字面）；`cutoff` = `createdAt <= cutoff`，收 `YYYY-MM-DD HH:mm` / `HH:mm:ss`，不带时区按北京时间，只到分钟时含整分钟（与前端 `CUTOFF='2026-10-24 23:00:59'` 一致 **[推断]**），格式错 422 `VALIDATION_FAILED`（`details.fields[].field = "cutoff"`）。响应 = 分页 + `dataAsOf`（`min(cutoff, 当前时间)` 截到分钟，对应页头“数据截至”）；列表项带 `lineCount`（关联子查询，不加载 `lines`），详情带完整 `lines` | `app/modules/biz/router.py` |
+| 订单列表 | `GET /api/biz/v1/orders`（首页 Home.vue:32-46）：前端下拉选「全部」时客户端**不传** `status` / `channel`（后台不认“全部”）；`kw` = 订单号或门店名包含（**区分大小写**，同前端 `includes`，前端为准；`%`、`_` 按字面，值走绑定参数）；`cutoff` = `createdAt <= cutoff`，收 `YYYY-MM-DD HH:mm` / `HH:mm:ss`，不带时区按北京时间，只到分钟时含整分钟（与前端 `CUTOFF='2026-10-24 23:00:59'` 一致 **[推断]**），格式错 422 `VALIDATION_FAILED`（`details.fields[].field = "cutoff"`）。响应 = 分页 + `dataAsOf`（`min(cutoff, 当前时间)` 截到分钟，对应页头“数据截至”）；列表项带 `lineCount`（关联子查询，不加载 `lines`），详情带完整 `lines` | `app/modules/biz/router.py` |
 
 ### 后台任务（procrastinate，`app/jobs/__init__.py` + `app/jobs/worker.py`）
 
@@ -355,6 +374,12 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
   - 改动基础层（core/db/common/contracts）时，必须有本体小白评审。
   - 改动扩展点时，必须有 PDE 评审。
 - **提交前**：必须跑 `make check`（ruff、alembic check、pytest）。
+- **测试库**：每个模块 / worktree 用**自己的** `RENGU_TEST_DB`（如 `rengu_test_static`、`rengu_test_qa`、`rengu_test_xiaobai`），建在本机已有的 Postgres 上。**不要共用 `rengu_test`**：各分支的 alembic 版本号不同，共用会互相把 `alembic_version` 盖掉，报 `Can't locate revision`。
+- **测试里的 section 注册表**：只用公开接口，**不要直接动 `sections._registry`**：
+  - `tests/conftest.py` 的 autouse fixture `_isolated_sections` 用 `isolated_sections()`：每个测试从空注册表开始，结束后恢复（含 `load_sections()` 发现的 section）。
+  - `with isolated_sections(*builders, empty=True):` 进入时清空（`empty=False` 则保留现有）并登记 builders，退出（含异常）恢复原样；名字和冲突照常校验。
+  - 需要自己存取时用 `snap = registry_snapshot()` / `registry_restore(snap)`（有序、不可变）。
+  - 要真实 section：`load_sections()`（默认扫 `app.modules`）或直接 `register_section(b)` 你的 `BUILDERS`。静态 conftest 里 `saved=dict(reg._registry)…` 那段换成 `with isolated_sections(): yield`。
 - **`?ver=` / `?previewAs=`**（只看 query 参数，不看请求头）：
   - 所有读接口都要支持这两个参数，用 `ViewContextDep` 解析。
   - **只读由全局守卫负责**：`app/api.py` 给每个分组路由挂 `ReadonlyGuardDep`，非 GET 请求带任一参数 → 403 `READONLY`（两个都带按 preview）。
@@ -397,7 +422,19 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 - **测试**：`tests/test_migrations.py` 会检查以下几点：
   - 只有一个 head；
   - 非骨架 revision id 都符合 `^[a-z_]+_\d{4}$`，且文件名前缀等于 revision id；
-  - 在临时库上跑一遍升 → 降到 base → 再升。
+  - 在临时库上跑一遍升 → 降到 base → 再升（不留表、自定义类型）。
+- **模块自己的往返测试**：**不要假设自己是 head，也不要假设父迁移是 `0003`**（合并时 `down_revision` 会被改指当前 head）。不写死 `downgrade "0003"`、`get_current_head() == "static_0001"`、`down_revision == "0003"` 这类断言。直接用骨架的辅助函数：
+
+  ```python
+  from tests.helpers.migrations import assert_module_round_trip
+
+  async def test_static_migration_round_trip():
+      await assert_module_round_trip("static", STATIC_TABLES, own_types={"..."})  # 只列本模块自己的表 / 类型
+  ```
+
+  - 它用 `ScriptDirectory` 查本模块第一个迁移的 `down_revision`（`module_parent("static")`），在临时库上：升到该 revision 记状态 → 升 head（本模块的表都在）→ 降回该 revision（排在后面的模块迁移一起降掉；本模块的表消失，表 / enum 等自定义类型 / 函数和降之前**完全一致**，不留残留）→ 再升 head（和第一次 head 完全一致）。
+  - 只比较本模块自己的表和类型，别的模块的表不用列。骨架自己也用它（`module="skeleton"`，父 = base）。
+  - 要检查迁移链形状时用 `module_revisions(m)` / `module_parent(m)`，只断言「本模块的迁移在链上连续、第一个的父不属于本模块」这类不随合并变化的性质。
 - **seed**：
   - 只放在 `app/modules/<模块>/seeds/`，经现有的 seed 注册表加载（`app/seeds/registry.py` 的 `SEED_MODULES` / `SEED_STAGES`，§9）。
   - 已登记的模块不用改注册表；新模块 / 新阶段只加自己那一行。

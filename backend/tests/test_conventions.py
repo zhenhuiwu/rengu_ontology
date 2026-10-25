@@ -69,6 +69,24 @@ async def repo(session, conn):
     return WidgetRepo(session)
 
 
+def test_page_clamp_matches_frontend_paginate():
+    from app.common.pagination import Page, page_count
+
+    def front(page: int, size: int, total: int) -> int:  # src/mock/paginate.ts:12-13
+        return min(max(1, page), max(1, -(-total // size)))
+
+    for total in (0, 1, 19, 20, 21, 100):
+        for page in (1, 2, 3, 6, 99):
+            for size in (1, 20, 50):
+                p = PageParams(page=page, size=size).clamp(total)
+                assert (p.page, p.size) == (front(page, size, total), size), (page, size, total)
+                assert p.offset == (p.page - 1) * size
+    assert page_count(0, 20) == 1 and page_count(41, 20) == 3
+    body = Page[int].of([], 0, PageParams(page=3, size=20))
+    assert (body.page, body.total, body.items) == (1, 0, [])
+    assert Page[int].of([1], 41, PageParams(page=9, size=20)).page == 3
+
+
 async def test_crud_soft_delete(repo, session):
     w = await repo.create(Widget(code="W-1", name="甲"), actor="王敏")
     assert w.created_by == "王敏" and w.lock_version == 1
@@ -79,6 +97,9 @@ async def test_crud_soft_delete(repo, session):
     assert await repo.get_by_code("W-1") is None and await repo.get(w.id) is None
     _, total = await repo.list_page(repo.base_query(), PageParams())
     assert total == 1
+    # 页码越界收拢到最后一页（前端 paginate.ts:13）
+    rows, total = await repo.list_page(repo.base_query(), PageParams(page=7, size=1))
+    assert total == 1 and [r.code for r in rows] == ["W-2"]
     with pytest.raises(AppError) as e:
         await repo.get_by_code_or_404("W-1")
     assert e.value.code == "NOT_FOUND"

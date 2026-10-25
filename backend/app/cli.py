@@ -23,7 +23,10 @@ def seed(
 ) -> None:
     """把各模块 seeds/ 下的数据幂等地写入数据库。"""
     from app.db.session import dispose_engine, get_sessionmaker
+    from app.modules.versioning.sections import load_sections
     from app.seeds.loader import run_seeds
+
+    load_sections()  # versioning 的 seed 按已登记的 section 组装历史快照
 
     async def _run() -> None:
         async with get_sessionmaker()() as session:

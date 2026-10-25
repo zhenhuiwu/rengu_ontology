@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     # 后端补充的 seed（mock 里没有、只为满足外键等）：backend/seeds/extra/<module>/，is_seed=true
     seeds_extra_dir: Path = Path(__file__).resolve().parents[2] / "seeds" / "extra"
 
+    # 快照 section 自动发现的包（load_sections 扫描 <包>.<模块>.sections）。只有测试会追加别的包
+    section_packages: list[str] = Field(default_factory=lambda: ["app.modules"])
+
     # auto-ontology 问数底座（独立服务，只在内网，由我们的网关转发）
     auto_ontology_url: str | None = None
 
