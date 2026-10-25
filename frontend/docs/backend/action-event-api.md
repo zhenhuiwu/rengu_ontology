@@ -1,6 +1,6 @@
-# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.4 草案）
+# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.2 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5（v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.2（v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `2e5b002` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
@@ -151,7 +151,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 方法 路径 | 参数 / 请求体 | 返回（字段名取自 mock） | 分页 | 来源 mock |
 |---|---|---|---|---|
 | `GET /action-types` | `group`、`kw`（匹配名称）、`page`、`size=22`、`ver` | `items[{id,name,api,group,status,version,target,targetApi,targetKind}]`；`groups[]` | 页码 | `actionEvent.ts` `ACTION_TYPES`、`ACTION_GROUPS` |
-| `GET /action-types/{id}` | `ver`、`view`、`cr` | 上面的字段，加 `owner,desc,runners,approval,sysId,system,endpoint,idemKey(业务键模板),timeout,retry,idempotent,usedBy[]`；草稿视图另带 `draft{crId,title,changes,owner,updatedAt,locked}` | — | `ACTION_TYPES`（已含 `withSystem` 合并的系统字段）、`useDraftView.ts` `TARGETS`、`releases.ts` `DRAFTS` |
+| `GET /action-types/{id}` | `ver`、`view`、`cr` | 上面的字段，加 `owner,desc,runners,approval,sysId,system,endpoint,idemKey(业务键模板),timeout,retry,idempotent,usedBy[]`；草稿视图另带 `draft{crId,title,changes,owner,updatedAt,locked}` | — | `ACTION_TYPES`（已含 `withSystem` 合并的系统字段）、`releases.ts` `DRAFT_TARGETS`、`DRAFTS` |
 | `GET /action-types/{id}/params` | `page`、`size=12`、`ver`、`view`、`cr` | `items[{name,api,type,required,def,rule,mark?}]` | 页码 | `paramsOf()` |
 | `GET /action-types/{id}/submission-criteria` | `ver`、`view`、`cr` | `items[{kind,name,expr,fail,mark?}]` | 不分页 | `condsOf()` |
 | `GET /action-types/{id}/writeback` | `ver`、`view`、`cr` | `config{sysId,endpoint,idemKey,mark?}`、`edits[{op,obj,field,mark?}]`、`effects[{kind,target,when,note,mark?}]`、`flow[{text,desc,status}]` | — | `writebackOf()`、`extsys.ts` `EXT_SYSTEMS` |
@@ -174,7 +174,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `POST /ext-systems`、`PUT /ext-systems/{id}` | 同上字段 | 保存后的对象 | — | 新建、编辑外部系统；直接生效，不走变更单（和前端一致） |
 | `POST /ext-systems/{id}:test` | `{op?}` | `{http, ms, result, msg}` | — | “测试调用”；系统已停用时返回 `EXT_SYSTEM_DISABLED`（前端文案“该系统已停用，先在‘编辑’里改为正常再测试”）。**dev/test 走 mock 适配器**；只有生产环境、经用户授权才连真实系统 |
 | `GET /ext-systems/{id}/calls` | `result`、`page`、`size` | `{items[...ExtCall], total, page, size}` | 页码 | `writeback_call` 的行（含测试调用） |
-| `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功` | — | “人工核对 · 确认对方已处理”。调用记录按前端改为成功；它关联的执行记录转给动态的人工对账（外部已成功 → 已对账） |
+| `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功` | — | “人工核对 · 确认对方已处理”。前端只对不带 runId 的调用显示这个按钮（`ExternalSystems.vue` L319–323），带 runId 的只跳到动作中心。只改这条调用记录的结果，不碰执行记录 |
 
 ### 3.2 事件类型
 
@@ -225,9 +225,9 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 字段 | 库内值 → 接口值 |
 |---|---|
 | 动作/事件类型 `status`、版本 `status` | `published`→已发布，`changing`→变更中，`draft`→草稿；版本另有 `active`→生效中，`superseded`→已替代 |
-| 执行状态 `action_run.status`（动态的表） | `pending_confirm`→待确认，`approving`→审批中，`running`→执行中，`succeeded`→成功，`failed`→失败，`unknown`→结果未知，`withdrawn`→已撤回，`reconciled`→已对账（【推断】`rejected`→已驳回，只有用户确认 U1 才加） |
+| 执行状态 `action_run.status`（动态的表） | 库内码以 dynamic-api.md 1.3 为准，本文不重复（【推断】已驳回只有用户确认 U1 才加） |
 | `reconcile_result` | `succeeded`→外部已成功，`not_executed`→外部未执行 |
-| 执行来源 `source` | `rule`→规则，`alert`→告警处理，`ask`→问数，`manual`→手动 |
+| 执行来源 `source`（动态的表） | 库内码以 dynamic-api.md 1.3 为准；接口按 `source_label` 原文返回 |
 | 提交条件 `kind` | `current_user`→当前用户，`parameter`→参数，`context_object`→上下文对象 |
 | 本体编辑 `op` / 副作用 `kind` | `modify`→修改，`create`→新建，`link`→关联；`notify`→通知，`event`→事件，`webhook`→Webhook |
 | 事件来源 `source` | `sync`→数据同步，`rule`→规则，`action`→动作，`external`→外部系统 |
@@ -395,7 +395,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 当前状态 | 触发 | 下一状态 | 由谁做 |
 |---|---|---|---|
-| （无） | 规则命中，暂存（生成外部幂等键，按业务键防重复暂存） | 待确认 | 动态 |
+| （无） | 规则命中，暂存（生成外部幂等键，按业务键防重复暂存【推断 P4】） | 待确认 | 动态 |
 | （无） | 人手动发起 | 审批中 / 执行中 | 动态 |
 | 待确认 | 确认人确认提交 | 审批中（需要审批）/ 执行中 | 动态 |
 | 待确认 | 确认人撤回（必须填原因） | 已撤回（终态，不写外部系统） | 动态 |
@@ -497,12 +497,12 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 - 核数：`runsOf` 17 次调用、1,849 行，按 id 去重 1,849 条（结果未知 54 条）；`eventsOf` 15 次、1,243 条；`ACTION_EVENT_RESOLVERS.action` 1,849 次、`.event` 1,243 次；本模块条目 manifest 里都没有 `guessed`。
 - 当时 `action` 导出的 8 个：`ACTION_GROUPS`(7)、`ACTION_TYPES`(17，已带 `withSystem` 合并的 system/timeout/retry/idempotent)、`ACTION_VERSION_NOTES`(4)、`EVENT_SOURCES`(5)、`EVENT_TYPES`(15，含 `specific`)、`EVENT_VERSION_NOTES`(3)、`RULE_ACTION`(4)、`UNKNOWN_FOLLOWUP`。`RUNS`、`EVENTS` 不导出，从 derived 还原。（更早在 `d9e61c3` 上试跑过一次，结论相同，以本次为准。）
 - 其他模块要用的都已导出：`dynamic/ACTIONS`(141，带 `log`)、`dynamic/RULE_CONFIRMER`、`dynamic/AUTO_QUERY_TEXT`、`dynamic/ALERTS`(154)、`dynamic/RULES`(5)、`system/EXT_SYSTEMS`(10)。
-- 仍然缺的：`ENVELOPE`、`PARAMS`、`CONDS`、`SUBS` 没导出（通过 derived 的函数结果拿到，不必单独导出）；抽屉 resolver `src/components/actionEventResolvers.ts` 不在 `src/mock/` 下，`e03a575` 已在 derived 里加载并导出；`useDraftView.ts` 的 `TARGETS` 也不在 `src/mock/`（归静态，CR-0013/0014 由静态 seed）。
+- 仍然缺的：`ENVELOPE`、`PARAMS`、`CONDS`、`SUBS` 没导出（通过 derived 的函数结果拿到，不必单独导出）；抽屉 resolver `src/components/actionEventResolvers.ts` 不在 `src/mock/` 下，`e03a575` 已在 derived 里加载并导出；草稿目标已在 `6428b87` 挪成 `releases.ts` 的 `DRAFT_TARGETS`（归静态，CR-0013/0014 由静态 seed）。
 - 纯查找函数（`actionTypeById`、`eventTypeById`、`runById`、`eventById`、`ruleById`、`extSystemOf`、`ruleConfirmer`、`withSystem`）不用导出。
 
 #### 7.1.1 derived 调用清单（PDE 已实现，`e03a575` / master `2e5b002`，`scripts/export-mock.derived.mjs`）
 
-每个函数一个文件：`${OUT_DIR}/<模块>/derived/<函数名>.json`，内容是 `[{args, result}]`，每次调用一项；参数里的对象写成引用 `{ref, key, id}`，后台按引用去对应的导出 JSON 找那一行。每次调用的参数、行数、是否 `guessed` 记在 `manifest.json` 的 `derived`。本模块的条目都按本文 §7.1.1 调用，没有 `guessed`。2026-10-25 在 master `2e5b002` 实跑核对过（§7.1.0），文件名就是下表第一列，数量全部和“数量参考”一致。
+每个函数一个文件：`${OUT_DIR}/<模块>/derived/<函数名>.json`，内容是 `[{args, result}]`，每次调用一项；参数里的对象写成引用 `{ref, key, id}`（整份常量如 `ACTION_VERSION_NOTES` 只有 `{ref}`），后台按引用去对应的导出 JSON 找那一行。每次调用的参数、行数、是否 `guessed` 记在 `manifest.json` 的 `derived`。本模块的条目都按本文 §7.1.1 调用，没有 `guessed`。2026-10-25 在 master `2e5b002` 实跑核对过（§7.1.0），文件名就是下表第一列，数量全部和“数量参考”一致。
 
 | 输出（`json/action/derived/`） | 源文件 | 调用 | 参数 / 遍历 | 用途 / 对应表 |
 |---|---|---|---|---|
@@ -566,7 +566,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `extsys.ts` · `EXT_SYSTEMS` | `ext_system`（`integration` 模块，归我） | PDE 的外部系统页通过我的接口读写；密钥**加密存储**，mock 值只是示例 |
 | `extsys.ts` · `extCalls()`（`system/derived/extCalls.json`） | `writeback_call` | 外部系统页的调用记录；动态原来的 `ext_call` 并入此表 |
 | `dynamic.ts` · `RULES`、`ALERTS`；`actions.ts` · `ACTIONS` | 动态的 `rule`、`alert`、`action_run` | 本模块只引用 |
-| `useDraftView.ts` · `TARGETS`（CR-0013 → `store_price_changed`，CR-0014 → `adjust_region_budget`）、`releases.ts` · `DRAFTS` | 静态的 `change_request`、`cr_item` | 静态 seed；本模块确认目标正确 |
+| `releases.ts` · `DRAFT_TARGETS`（CR-0013 → `store_price_changed`，CR-0014 → `adjust_region_budget`）、`releases.ts` · `DRAFTS` | 静态的 `change_request`、`cr_item` | 静态 seed；本模块确认目标正确 |
 | `stores.ts` / `products.ts` / `orders.ts` | 基础层的对象实例 | 必须先入库 |
 
 ### 7.3 页面操作 → 接口 → 表 核对清单
@@ -664,11 +664,11 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `event_envelope_field` | 可变（全局 10 行，只读） | `id` bigint | `api` |
 | `event_subscription` | 可变 | `id` | `(event_type_id, name)` |
 | `ext_system` | 可变 | `id`（`EXT-ERP`…） | `name` |
-| `writeback_call` | 只追加 | `id` | — |
+| `writeback_call` | 可变（`:mark-checked` 改 `result`） | `id` | — |
 | `reconcile_task` | 可变 | `id` bigint | `action_run_id` |
 | `event` | 可变（`outcome` 会变） | `id`（生产方 `eventId`） | — |
 | `event_delivery` | 可变 | `id` bigint | `(event_id, subscription_id)` |
-| `event_dedup` | 只追加（到期按 `expires_at` 物理删除） | `id` bigint | `(event_type_id, dedup_key)` |
+| `event_dedup` | 可变（到期按 `expires_at` 物理删除） | `id` bigint | `(event_type_id, dedup_key)` |
 | `action_run_daily_stat` / `event_daily_stat` / `event_subscription_weekly_stat` | 只追加（seed） | `id` bigint | `(…_id, date)` |
 | `dict_item` | 可变 | `id` bigint | `(dict, value)` |
 
