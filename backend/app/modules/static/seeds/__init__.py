@@ -17,12 +17,17 @@
 | PATH_GROUPS.json（paths）    | onto_qa_path         | 7 行（3 组）；组级 check 存默认路径行 [推断] |
 | PATH_GROUPS.json（paths.links）| onto_qa_path_step    | 10 行 |
 | PATH_GROUPS.json（examples） | onto_qa_path_example | 9 行；path=-1（先追问）→ path_id 空 |
+| CHANGE_REQUESTS.json         | change_request       | 16 行；+ CR_DETAILS（见下）[推断] |
+
+extra/static/CR_DETAILS.json：mock/changes.ts 的 CR_DETAILS（export-mock 还没导出，整版发布的合并校验要用
+touches / synonyms / checks / impact），由 vite ssrLoadModule 原样导出；export-mock 补上后改读 json/。
 
 不落表、接口直接读 JSON 常量的：K_TYPES、CARD_API、CONFLICT_RULE。
 export-mock 没导出、照抄前端页内常量的（[推断]）：ORDER_MAP_ROWS（objectProps.ts:379）、
 Metrics.vue 的 DENY（不允许的维度）、ObjectTypes.vue TYPES 里 purchase 的「草稿」状态。
 """
 
+import json
 from typing import Any
 
 from app.core.enums import from_api
@@ -30,7 +35,10 @@ from app.core.schema import parse_display_dt
 from app.modules.static.models import (
     ApplyKind,
     Cardinality,
+    ChangeRequest,
     ConflictStrategy,
+    CRLevel,
+    CRStatus,
     DefStatus,
     Dimension,
     DimKind,
@@ -59,6 +67,7 @@ from app.modules.static.models import (
     ViewKind,
     ViewVisibility,
 )
+from app.modules.versioning.models import OntologyRelease
 from app.seeds import Ref, Row, SeedContext, SeedSpec, derived_args
 
 JSON_MODULE = "static"
@@ -488,6 +497,35 @@ def _qa_path_examples(g: Row, _ctx: SeedContext) -> list[Row]:
     ]
 
 
+# ---------------------------------------------------------------- 变更单
+
+
+def _cr_details(ctx: SeedContext) -> dict[str, Row]:
+    key = "extra:CR_DETAILS.json"
+    if key not in ctx.cache:
+        f = ctx.json_dir.parent.parent / "extra" / JSON_MODULE / "CR_DETAILS.json"
+        ctx.cache[key] = {x["id"]: x for x in json.loads(f.read_text(encoding="utf-8"))}
+    return ctx.cache[key]
+
+
+def _change_request(r: Row, ctx: SeedContext) -> Row:
+    d = {k: v for k, v in (_cr_details(ctx).get(r["id"]) or {}).items() if k != "id"}
+    return {
+        "code": r["id"],
+        "title": r["title"],
+        "reason": r.get("reason") or "",
+        "owner": r["owner"],
+        "reviewer": r["reviewer"],
+        "status": from_api(CRStatus, r["status"]),
+        "level": from_api(CRLevel, r["level"]),
+        "changes": r.get("changes") or 0,
+        "reject_reason": r.get("rejectReason"),
+        "release_id": r.get("release"),
+        "detail": d,
+        "status_at": _dt(r["updatedAt"]),
+    }
+
+
 _OBJ = Ref(ObjectType, "code", nullable=False)
 _QA_PATH = Ref(QaPath, ("group_key", "seq"))
 
@@ -589,5 +627,13 @@ SEEDS = [
         key=("from_object_id", "to_object_id", "seq"),
         transform=_qa_path_examples,
         refs={"from_object_id": _OBJ, "to_object_id": _OBJ, "path_id": _QA_PATH},
+    ),
+    SeedSpec(
+        ChangeRequest,
+        "CHANGE_REQUESTS.json",
+        key=("code",),
+        transform=_change_request,
+        refs={"release_id": Ref(OntologyRelease, "ver")},
+        description="变更单",
     ),
 ]

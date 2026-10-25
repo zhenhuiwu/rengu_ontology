@@ -2,6 +2,8 @@
 
 > 依据：`/workspace/ui-vue` 前端代码与 mock（以前端为准）；表结构在 `/workspace/palantir-ontology/静态本体-后台表结构与接口定义-v0.1.md` 基础上按前端补齐。v0.3 按本体小白审核意见（阻断 1–3 + 非阻断建议）和 PDE 对 api-index 的意见修订。
 > 范围：对象类型（定义页签 + 使用与治理页签）、关系类型、指标口径、维度与字典、业务知识、变更与发布。
+> 交接（已完成 / 未完成 / 代码在哪 / 下一步）：见 `backend/docs/backend/handoff/static.md`。
+
 > 标注：**[推断]** = 前端没有限制或没有体现，是按页面行为推出来的；**[第二期]** = 前端没有入口或显示「暂未开放」；**[待用户定]** = 需要用户或 PDE 拍板。
 > 前缀 `/api/ontology/v1`。**读接口的路径、参数、返回字段以 api-index §3.5、§3.6、§3.9–3.11、§3.15–3.16 为准**；本文第 3 节只写写接口、计算接口和业务规则，读接口只写与 api-index 不同或补充的部分。
 > 命名：表名不加模块前缀，单数 snake_case 业务名词，只有关键字或易混的名字加限定词（`ontology_release`）。**接口 JSON 一律 camelCase**（`baseRelease`、`lockVersion`、`isNew`、`jobId`、`toVersion`、`releaseTag`、`rejectReason`…），枚举值与 mock 完全一致（中文）；ER 图和表字段用 snake_case，状态列存英文码，由 Pydantic 转换（对照见 §1.3）。
@@ -618,21 +620,21 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 读草稿视图 | `GET /{kind}/{id}?view=draft&cr={crId}` | 每行 `mark`、`base`；`locked`（审核中） | 目标页:view | 元数据读取 | ✓（历史版本下没有草稿视图，返回已发布） | ✓ | 否 |
 | 保存到草稿 | `PUT /change-requests/{id}/items` | 入 `target`、`section`、`rows[{key,op,after}]`、`lockVersion`；锁定返回 `CR_LOCKED` | 目标页:manage | — | ✗ | ✗ | 否 |
 | 放弃本对象草稿 | `DELETE /change-requests/{id}/targets/{kind}/{targetId}` | 丢弃该目标全部 cr_item | 目标页:manage | — | ✗ | ✗ | 否 |
-| 删除草稿单 | `DELETE /change-requests/{id}` | 仅 owner + 草稿；软删 | releases:manage | — | ✗ | ✗ | 否 |
+| 删除草稿单 | `DELETE /change-requests/{id}` | 仅 owner + 草稿；软删。**已实现**：硬删 [推断]（`cr_event` 级联删除），非 owner 403、非草稿 409 `CR_STATE`、成功 204；`Releases.vue` 真接口模式删除后重新载入列表 | releases:manage | — | ✗ | ✗ | 否 |
 | 重新校验 | `POST /change-requests/{id}:validate` | 异步，出 `jobId`，结果写 cr_check；已发布 CR 拒绝。前端只读时置灰（`Releases.vue:312`） | releases:manage | — | ✗ | ✗ | 否 |
-| 提交审核 | `POST /change-requests/{id}:submit` | 规则见 §2.2-2；不限提交人（限 owner 是 [推断]，默认不做） | releases:manage | — | ✗ | ✗ | 否 |
-| 撤回提交 | `POST /change-requests/{id}:withdraw` | owner（`Releases.vue:250`），审核中 → 草稿 | releases:manage + owner | — | ✗ | ✗ | 否 |
-| 审核通过 / 驳回 | `POST /change-requests/{id}:approve` / `:reject` | reject 必填 `rejectReason` | releases:manage + reviewer | — | ✗ | ✗ | 否 |
-| 撤回已通过 | `POST /change-requests/{id}:unapprove` | owner/reviewer，已通过 → 草稿 | releases:manage | — | ✗ | ✗ | 否 |
-| 改回草稿 | `POST /change-requests/{id}:reopen` | owner/reviewer，已驳回 → 草稿 | releases:manage | — | ✗ | ✗ | 否 |
-| 变更单列表 | `GET /change-requests?status&kw&page&size&focusId` | 每页 17（`Releases.vue:42`、`:216`）；`focusId`（深链 `?cr=`）返回含该单的那一页 | releases:view | — | ✓ | ✓ | 否 |
-| 变更单详情 | `GET /change-requests/{id}` | 头部、说明、迁移方式、`times{created,checked,submitted}`，并一次带回 `checks`（V1–V17 全部）、`impact{direct[],defs[],usage[]}`、`trial{rows[],scope}`（没有试跑为 `null`）、`events`（`ReviewEvent[]`）、`touches`（原样）；前端详情一次取整份 `CRDetail`，不设这四个子接口 | releases:view | — | ✓ | ✓ | 否 |
+| 提交审核 | `POST /change-requests/{id}:submit` | 规则见 §2.2-2；不限提交人（限 owner 是 [推断]，默认不做）。**已实现**（以下 6 个动作同一套，照 `Releases.vue` `move()` 与按钮显示条件）：草稿 → 审核中；有阻断 409 `CR_BLOCKED`、改动 0 → 409 `CR_EMPTY`；写 `cr_event`「{me} 提交审核」/「审核人 {reviewer}」。状态不对一律 409 `CR_STATE`（`details.status`、`details.action`），人不对 403 `NO_PERMISSION`；成功 200 返回该单详情（同 `GET /change-requests/{id}`）。owner / reviewer 按姓名比对（库里和 mock 都存姓名，不是 sys_user.code）[推断] | releases:manage | — | ✗ | ✗ | 否 |
+| 撤回提交 | `POST /change-requests/{id}:withdraw` | owner（`Releases.vue:250`），审核中 → 草稿。**已实现**：事件「{me} 撤回提交」 | releases:manage + owner | — | ✗ | ✗ | 否 |
+| 审核通过 / 驳回 | `POST /change-requests/{id}:approve` / `:reject` | reject 必填 `rejectReason`。**已实现**：审核人且不是提交人；approve 有阻断 409 `CR_BLOCKED`，审核中 → 已通过，事件「{me} 审核通过」/「等待整版发布 {下一版本}」；reject 原因为空 422 `VALIDATION_FAILED`（`details.fields[0].field = rejectReason`），审核中 → 已驳回，写 `rejectReason`，事件「{me} 驳回」/「{原因}」(error)。原因不限定为前端 5 个预设 [推断] | releases:manage + reviewer | — | ✗ | ✗ | 否 |
+| 撤回已通过 | `POST /change-requests/{id}:unapprove` | owner/reviewer，已通过 → 草稿。**已实现**：事件「{me} 撤回审核结果」/「不进入 {下一版本}」 | releases:manage | — | ✗ | ✗ | 否 |
+| 改回草稿 | `POST /change-requests/{id}:reopen` | owner/reviewer，已驳回 → 草稿。**已实现**：事件「{me} 改回草稿」/「按驳回意见修改后重新提交」；和 mock 一样不清空 `rejectReason` | releases:manage | — | ✗ | ✗ | 否 |
+| 变更单列表 | `GET /change-requests?status&kw&page&size&focusId` | 每页 17（`Releases.vue:42`、`:216`）；`focusId`（深链 `?cr=`）返回含该单的那一页。**已实现**：行为 mock `CHANGE_REQUESTS` 同形（单号倒序，`release` / `rejectReason` 没有时不出现），`status` 不认识的值 422；`kw` 同 `Releases.vue:61`（标题包含或单号包含大写 kw）；带 `page` / `size` / `focusId` 任一个时返回 `{items,total,page,size}`（默认 17，越界收到最后一页，`focusId` 返回所在页），都不带返回整个数组 [推断]；`full=true` 每行再带 `detail`（整份 CRDetail）和 `events`。`Releases.vue` 真接口模式仍整表载入后本地筛选、分页；不随 `?ver` 变 [推断] | releases:view | — | ✓ | ✓ | 否 |
+| 变更单详情 | `GET /change-requests/{id}` | 头部、说明、迁移方式、`times{created,checked,submitted}`，并一次带回 `checks`（V1–V17 全部）、`impact{direct[],defs[],usage[]}`、`trial{rows[],scope}`（没有试跑为 `null`）、`events`（`ReviewEvent[]`）、`touches`（原样）；前端详情一次取整份 `CRDetail`，不设这四个子接口。**已实现**：一行 + `detail`（`change_request.detail` 原样）+ `events`（`cr_event` 追加记录，新的在前；`times` 推出来的节点前端照 mock `reviewLog` 现算）；不存在 404 | releases:view | — | ✓ | ✓ | 否 |
 | 改动 | `GET /change-requests/{id}/diffs?page&size` | 每页 10（`Releases.vue:83`、`:292`） | releases:view | — | ✓ | ✓ | 否 |
 | 补充迁移方式 | `PATCH /change-requests/{id}` `{migration}` | **[推断：前端只显示迁移方式（`Releases.vue:294-295`），没有编辑入口]**，先不做 | — | — | ✗ | ✗ | 否 |
-| 合并校验预览 | `POST /releases:merge-check` | 不落库；出 `rows[{code,name,result,note}]`、`blocked`。由「发布」触发，发布按钮在只读时置灰（`Releases.vue:195-196`） | releases:manage | — | ✗ | ✗ | 否 |
+| 合并校验预览 | `POST /releases:merge-check` | 不落库；出 `rows[{code,name,result,note}]`、`blocked`。**已实现**：对全部「已通过」单子按 mock `mergeCheck` 原样计算（M1 / V9 / V17 / V1–V17 / 提示，单子按编号倒序，与 mock 列表同序），数据取 `change_request.detail`（mock CR_DETAILS 原样，`seeds/extra/static/CR_DETAILS.json`）[推断]。由「发布」触发，发布按钮在只读时置灰（`Releases.vue:195-196`） | releases:manage | — | ✗ | ✗ | 否 |
 | 版本列表 | `GET /releases` | 不分页：返回 `{items: Release[], current}`（`current` 为当前生效版本号）；顶栏版本选择器对所有页面都显示（`TopBar.vue:70` `VersionPicker`） | 任意已登录用户 | 元数据读取 | ✓ | ✓ | 否 |
-| 整版发布 | `POST /releases` `{note, lockVersion}` | 本体管理员；出 `ver`（版本层生成） | releases:manage + 管理员 | — | ✗ | ✗ | 否 |
-| 回滚版本 | `POST /releases/{ver}:rollback` | 只能最近一次，否则 409 `ROLLBACK_NOT_LATEST`；经 `create_version(rollback_of=…)`（§2.2-6）；不限管理员（限管理员是 [推断]，默认不做） | releases:manage | — | ✗ | ✗ | 否 |
+| 整版发布 | `POST /releases` `{note, lockVersion}` | 本体管理员；出 `ver`（版本层生成）。**已实现**：非管理员 403 `NO_PERMISSION`；合并校验有阻断 → 409 `MERGE_BLOCKED`（`details.rows` = 合并校验行，什么都不改）；没有已通过的单子 → 409 `EMPTY_RELEASE`（create_version）；成功 201 返回版本层 `ReleaseOut`，已通过的单子 → 已发布、`release_id` = 新版本、`status_at` = 现在，每张写一条 `cr_event`「{me} 整版发布为 {ver}」/「合并校验：{非通过行说明；}」或「全部通过」（与 mock 一致）。`note`、`lockVersion` 可省；`lockVersion` 暂不校验，发布串行靠版本层事务锁 [推断] | releases:manage + 管理员 | — | ✗ | ✗ | 否 |
+| 回滚版本 | `POST /releases/{ver}:rollback` | 只能最近一次，否则 409 `ROLLBACK_NOT_LATEST`；经 `create_version(rollback_of=…)`（§2.2-6）；不限管理员（限管理员是 [推断]，默认不做）。**已实现**：新建回滚单（下一个 CR 号，标题「回滚 {ver}」，提交人 = 审核人 = 本人，已发布，一般，改动 0，`release_id` = 新版本）；被回滚版本的单子各写一条 `cr_event`「{me} 回滚 {ver}」/「生成新版本，内容同 {上一版}」(warn)；版本不存在 404；成功 201 返回 `ReleaseOut`（`kind=回滚`、`rollbackOf`）。静态 section 还没实现 `restore_section`，回滚只复制快照、不改定义表 [推断，第二期] | releases:manage | — | ✗ | ✗ | 否 |
 | 版本对比 | `GET /releases/{a}/diff/{b}` | **[第二期]** | releases:view | — | ✓ | ✓ | 否 |
 
 ### 3.2 对象类型
@@ -677,6 +679,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 |---|---|---|---|---|---|---|---|
 | 新增/编辑/停用取值、说法映射 | CR items，`section=values` / `mappings` | 停用的取值不参与匹配；多值映射必须写 `resolve` | dimensions:manage | — | ✗ | ✗ | 否 |
 | 列表 | `GET /dimensions?page&size&focusId` | 每页 18（`Dimensions.vue:56`、`:390`）；`focusId`（深链 `?dim=`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
+| 整条维度（前端整表载入） | `GET /dimensions/{id}?full=true` | **[推断]** 返回完整 DimItem（含 `values` / `mappings` / `usage` / `history`，草稿行原样、不按 `ver` 裁剪）；`Dimensions.vue` 拿 `DIM_ITEMS` 自己算取值 / 映射 / 使用情况 / 历史视图，联调第一版整表载入用。不带 `full` 时同原来（摘要） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 取值 | `GET /dimensions/{id}/values?page&size` | 每页 10（`Dimensions.vue:132`、`:522`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 说法映射 / 只看冲突 | `GET /dimensions/{id}/mappings?conflict&page&size` | 每页 8（`Dimensions.vue:573`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 使用情况 | `GET /dimensions/{id}/usage?page&size` | 每页 10（`Dimensions.vue:588`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
@@ -717,6 +720,10 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 新建函数 | `POST /functions` `{name, title, desc, timeoutS, code}` | `name`、`title` 必填，`name` 重名 `DUPLICATE_KEY`；新建为草稿 v1（确认卡文案「测试通过并发布后才能被动作和规则引用」，`Functions.vue:118-125`）。前端确认后并没有加进列表，草稿怎么发布前端没有入口 [推断] | functions:manage | — | ✗ | ✗ | 否 |
 
 - 前端编辑/回滚不走变更单，后台照此实现；是否改为走变更单（像 FN-003 随 CR-0011 那样）列入 §5 [推断]。
+
+### 3.9 总览图谱（`/build/ontology` 总览页）
+
+- `GET /ontology/graph?ver=`（api-index §3.4、第 168 号）。**已实现**：`{nodes: LinkObject[], edges: {from, to, linkId, status}[]}`；nodes = 已发布对象类型（mock `LINK_OBJECTS` 去掉草稿储值卡）[推断]，edges = 两端都在 nodes 里的关系，`status` 给前端区分实线 / 虚线 [推断]；版本不存在 404。节点坐标仍由前端写死。总览页（`OntologyOverview.vue`）还没切换。
 
 ## 4. 通用约定
 

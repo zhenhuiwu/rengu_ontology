@@ -16,9 +16,10 @@ import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
 import { useAppStore } from '@/stores/app';
 import {
-  CHANGE_REQUESTS, CURRENT_USER, ONTOLOGY_ADMINS, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, reviewLog,
+  CHANGE_REQUESTS, CURRENT_USER, ONTOLOGY_ADMINS, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, registerChange, reviewLog,
   type ChangeRequest, type CheckResult, type CRStatus, type ReviewEvent,
 } from '@/mock/changes';
+import { crAction, deleteCR, fetchChangeRequests, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease, type CRAction } from '@/api/static';
 
 const route = useRoute();
 const router = useRouter();
@@ -33,6 +34,19 @@ const isAdmin = computed(() => ONTOLOGY_ADMINS.includes(me.value));
 
 const CRS = reactive<ChangeRequest[]>(CHANGE_REQUESTS.map((c) => ({ ...c })));
 const extraLog = reactive<Record<string, ReviewEvent[]>>({});
+/** real 模式：变更单整表从 GET /change-requests?full=true 载入（详情经 registerChange 交给 mock 的 crDetail / reviewLog，
+ *  评审追加记录 = 库里的 cr_event），每次写操作后重新载入，刷新页面状态不丢；mock 模式不走这里 */
+async function loadCRs() {
+  let rows;
+  try { rows = await fetchChangeRequests(); } catch (e) { message.error(`变更单载入失败：${e instanceof Error ? e.message : String(e)}`); return false; }
+  const list = rows.map(({ detail: d, events, ...c }) => { registerChange({ ...c }, d); return { c, events }; });
+  CRS.splice(0, CRS.length, ...list.map((x) => x.c));
+  for (const k of Object.keys(extraLog)) delete extraLog[k];
+  for (const x of list) extraLog[x.c.id] = x.events;
+  return true;
+}
+const realMode = isStaticReal();
+if (realMode) void loadCRs();
 const rolledBack = ref(false);
 
 const STATUSES = ['全部', '草稿', '审核中', '已通过', '已发布', '已驳回'];
@@ -111,6 +125,13 @@ const trialCols = [
 const pad = (n: number) => String(n).padStart(2, '0');
 const now = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const target = () => `${cur.value.id} ${cur.value.title}`;
+/** real 模式的状态按钮：POST 后按库重新载入；失败提示后页面不变 */
+async function moveReal(action: CRAction, done: string, rejectReason?: string) {
+  const id = cur.value.id;
+  try { await crAction(id, action, rejectReason); } catch (e) { apiErr(e); return; }
+  await loadCRs();
+  message.success(`${id} ${done}`);
+}
 function move(to: CRStatus, text: string, desc?: string, status?: string) {
   const c = cur.value;
   c.status = to;
@@ -121,7 +142,8 @@ async function submit() {
   const ok = await confirm.ask({ title: '提交审核', target: target(), okText: '提交',
     fields: [{ label: '审核人', value: cur.value.reviewer }, { label: '改动', value: `${cur.value.changes} 处` }, { label: '发布校验', value: checkSummary(detail.value.checks) || '暂无' }],
     impact: '提交后草稿锁定；审核人驳回或你撤回提交后才能继续修改。' });
-  if (ok) { move('审核中', '提交审核', `审核人 ${cur.value.reviewer}`); message.success(`${cur.value.id} 已提交审核`); }
+  if (ok && isStaticReal()) await moveReal('submit', '已提交审核');
+  else if (ok) { move('审核中', '提交审核', `审核人 ${cur.value.reviewer}`); message.success(`${cur.value.id} 已提交审核`); }
 }
 function edit() {
   if (!editTo.value) return;
@@ -135,6 +157,13 @@ async function removeDraft() {
     impact: '删除后草稿里的改动全部丢弃，不能恢复；已发布版本不受影响。' });
   if (!ok) return;
   const id = cur.value.id;
+  if (realMode) {
+    try { await deleteCR(id); } catch (e) { apiErr(e); return; }
+    await loadCRs();
+    message.success(`${id} 已删除`);
+    pick(CRS.find((c) => c.status === '草稿')?.id ?? CRS[0].id);
+    return;
+  }
   CRS.splice(CRS.findIndex((c) => c.id === id), 1);
   message.success(`${id} 已删除`);
   pick(CRS.find((c) => c.status === '草稿')?.id ?? CRS[0].id);
@@ -142,34 +171,51 @@ async function removeDraft() {
 async function recall() {
   const ok = await confirm.ask({ title: '撤回提交', target: target(), okText: '撤回',
     impact: `撤回后回到草稿，${cur.value.reviewer} 不再看到这张审核。` });
-  if (ok) move('草稿', '撤回提交');
+  if (ok && isStaticReal()) await moveReal('withdraw', '已撤回提交');
+  else if (ok) move('草稿', '撤回提交');
 }
 async function approve() {
   const ok = await confirm.ask({ title: '审核通过', target: target(), okText: '通过',
     fields: [{ label: '提交人', value: cur.value.owner }, { label: '发布校验', value: checkSummary(detail.value.checks) }, { label: '目标版本', value: NEXT_VERSION.value }],
     impact: '通过后进入待发布，和其他已通过的变更单一起整版发布。' });
-  if (ok) move('已通过', '审核通过', `等待整版发布 ${NEXT_VERSION.value}`);
+  if (ok && isStaticReal()) await moveReal('approve', '已审核通过');
+  else if (ok) move('已通过', '审核通过', `等待整版发布 ${NEXT_VERSION.value}`);
 }
 async function reject() {
   const ok = await confirm.ask({ title: '驳回', target: target(), okText: '驳回', danger: true,
     fields: [{ label: '提交人', value: cur.value.owner }],
     picker: { label: '驳回原因', required: true, options: ['口径与财务不一致', '影响范围没写清楚', '迁移方式不完整', '与其他变更单冲突', '权限或可见范围未定'].map((v) => ({ value: v, label: v })) } });
-  if (ok) { cur.value.rejectReason = confirm.pickValue; move('已驳回', '驳回', confirm.pickValue, 'error'); }
+  if (ok && isStaticReal()) await moveReal('reject', '已驳回', confirm.pickValue);
+  else if (ok) { cur.value.rejectReason = confirm.pickValue; move('已驳回', '驳回', confirm.pickValue, 'error'); }
 }
 async function unapprove() {
   const ok = await confirm.ask({ title: '撤回', target: target(), okText: '撤回', danger: true,
     impact: `撤回后回到草稿，不会进入 ${NEXT_VERSION.value}；修改后需要重新提交审核。` });
-  if (ok) move('草稿', '撤回审核结果', `不进入 ${NEXT_VERSION.value}`);
+  if (ok && isStaticReal()) await moveReal('unapprove', '已撤回审核结果');
+  else if (ok) move('草稿', '撤回审核结果', `不进入 ${NEXT_VERSION.value}`);
 }
 async function reopen() {
   const ok = await confirm.ask({ title: '改回草稿', target: target(), okText: '改回草稿',
     fields: [{ label: '驳回原因', value: cur.value.rejectReason ?? '暂无' }],
     impact: '改回草稿后可以按驳回意见修改，再重新提交审核。' });
-  if (ok) move('草稿', '改回草稿', '按驳回意见修改后重新提交');
+  if (ok && isStaticReal()) await moveReal('reopen', '已改回草稿');
+  else if (ok) move('草稿', '改回草稿', '按驳回意见修改后重新提交');
 }
 const approved = computed(() => CRS.filter((c) => c.status === '已通过'));
+/** real 模式（VITE_API_REAL_MODULES 含 static）：合并校验、发布、回滚走接口；失败提示后不改页面 */
+const apiErr = (e: unknown) => message.error(e instanceof Error ? e.message : String(e));
+/** 发布 / 回滚成功后按 GET /releases/current 刷新 app store 的当前 / 下一版本号（顶栏、本页按钮跟着变）；刷新失败只提示，不影响已成功的写操作 */
+async function syncVersion() {
+  try {
+    const r = await fetchCurrentAfterWrite();
+    if (r.current) app.ontologyVersion = r.current;
+    if (r.release?.publishedAt) app.ontologyPublishedAt = r.release.publishedAt;
+    app.ontologyNextVersion = r.next;
+  } catch (e) { message.warning(`版本号刷新失败：${e instanceof Error ? e.message : String(e)}`); }
+}
 async function publish() {
-  const m = mergeCheck(approved.value);
+  let m: ReturnType<typeof mergeCheck>;
+  try { m = isStaticReal() ? (await mergeCheckApi()) as ReturnType<typeof mergeCheck> : mergeCheck(approved.value); } catch (e) { apiErr(e); return; }
   const verdict = m.rows.map((r) => ({ label: r.code === '提示' ? '提示' : `${r.code} ${r.result}`, value: `${r.name}：${r.note}` }));
   const ok = await confirm.ask({ title: `整版发布 ${NEXT_VERSION.value}`, target: `本体（当前 ${CURRENT_VERSION.value}）`, okText: '发布',
     tag: m.blocked ? '合并校验有阻断' : '合并校验通过',
@@ -179,8 +225,13 @@ async function publish() {
       : '发布后新提问按新版本回答；已有答案、页面和告警保留各自的口径版本。可回滚到上一版本。',
     blocked: m.blocked ? m.rows.filter((r) => r.result === '阻断').map((r) => `${r.note}（${r.code}）`).join('；') : undefined });
   if (ok && !m.blocked) {
-    approved.value.forEach((c) => { c.status = '已发布'; c.release = NEXT_VERSION.value; c.updatedAt = now(); (extraLog[c.id] ??= []).unshift({ time: now(), text: `${me.value} 整版发布为 ${NEXT_VERSION.value}`, desc: `合并校验：${m.rows.filter((r) => r.result !== '通过').map((r) => r.note).join('；') || '全部通过'}` }); });
-    message.success(`已发布 ${NEXT_VERSION.value}`);
+    let ver = NEXT_VERSION.value;
+    if (isStaticReal()) {
+      try { ver = (await publishRelease()).ver; } catch (e) { apiErr(e); return; }
+      await syncVersion(); await loadCRs(); message.success(`已发布 ${ver}`); return;
+    }
+    approved.value.forEach((c) => { c.status = '已发布'; c.release = ver; c.updatedAt = now(); (extraLog[c.id] ??= []).unshift({ time: now(), text: `${me.value} 整版发布为 ${ver}`, desc: `合并校验：${m.rows.filter((r) => r.result !== '通过').map((r) => r.note).join('；') || '全部通过'}` }); });
+    message.success(`已发布 ${ver}`);
   }
 }
 async function rollback() {
@@ -188,6 +239,11 @@ async function rollback() {
   const ok = await confirm.ask({ title: `回滚 ${cur.value.release}`, target: `本体 ${cur.value.release}`, okText: '回滚', danger: true,
     fields: [{ label: '回滚到', value: prev ?? '上一版本' }, { label: '涉及变更单', value: CRS.filter((c) => c.release === cur.value.release).map((c) => c.id).join('、') }],
     impact: '回滚会生成一个新版本，内容等于上一版本；只能回滚最近一次发布。' });
+  if (ok && isStaticReal()) {
+    const ver = cur.value.release!;
+    try { await rollbackRelease(ver); } catch (e) { apiErr(e); return; }
+    await syncVersion(); await loadCRs(); rolledBack.value = true; message.success(`已回滚 ${ver}`); return;
+  }
   if (ok) { rolledBack.value = true; (extraLog[cur.value.id] ??= []).unshift({ time: now(), text: `${me.value} 回滚 ${cur.value.release}`, desc: `生成新版本，内容同 ${prev}`, status: 'warn' }); message.success(`已回滚 ${cur.value.release}`); }
 }
 </script>

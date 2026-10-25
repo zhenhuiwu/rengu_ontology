@@ -31,3 +31,26 @@ class SynonymConflicts(ApiModel):
 
     conflicts: list[SynonymConflict]
     rule: dict[str, str]
+
+
+class PublishIn(ApiModel):
+    """POST /releases：mock 发布不填说明 → note 可省 [推断]；lockVersion 先收下不校验（发布串行由版本层的
+    事务锁保证）[推断]。"""
+
+    note: str | None = None
+    lock_version: int | None = None
+
+
+class RollbackIn(ApiModel):
+    note: str | None = None
+
+
+class MergeCheckOut(ApiModel):
+    rows: list[dict[str, Any]]
+    blocked: bool
+
+
+class RejectIn(ApiModel):
+    """POST /change-requests/{id}:reject：驳回原因必填（前端 5 个预设之一，后台不限定取值 [推断]）。"""
+
+    reject_reason: str | None = None

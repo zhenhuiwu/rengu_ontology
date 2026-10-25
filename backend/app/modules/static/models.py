@@ -42,7 +42,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import LabelEnum
-from app.db.base import Base, CodeMixin, IdMixin, MutableTableMixin, unique_except_seed
+from app.db.base import AppendOnlyTableMixin, Base, CodeMixin, IdMixin, MutableTableMixin, unique_except_seed
 from app.db.types import JsonType, enum_column
 
 # ---------------------------------------------------------------- 枚举（static-api.md §1.3）
@@ -608,3 +608,73 @@ class KnowledgeApply(IdMixin, MutableTableMixin, Base):
     target_code: Mapped[str] = mapped_column(String(64), nullable=False)
     target_name: Mapped[str] = mapped_column(String(128), nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+# ---------------------------------------------------------------- 变更单与发布（static_0002）[推断]
+# 这一批只建整版发布 / 回滚链路要用的两张表：
+# change_request（含 CRDetail 原样 jsonb）+ cr_event（追加的评审记录）。
+# 设计稿 §1 里的 cr_item / cr_target / cr_check / cr_impact / cr_trial 拆表放第二期：
+# 合并校验要的 touches / synonyms / checks / impact 先从 detail（mock CR_DETAILS 原样）里读。
+
+
+class CRStatus(LabelEnum):
+    draft = "草稿"
+    in_review = "审核中"
+    approved = "已通过"
+    rejected = "已驳回"
+    published = "已发布"
+
+
+class CRLevel(LabelEnum):
+    major = "重大"
+    minor = "一般"
+    patch = "修订"
+
+
+class ChangeRequest(CodeMixin, MutableTableMixin, Base):
+    """变更单（mock CHANGE_REQUESTS + CR_DETAILS）。code = CR-NNNN（全局序列，契约第 9 条）。
+
+    owner / reviewer 存姓名 [推断]：同 knowledge.owner；mock 里的周晓峰不在 sys_user。
+    """
+
+    __tablename__ = "change_request"
+    __table_args__ = ({"comment": "变更单"},)
+
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    owner: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[CRStatus] = mapped_column(enum_column(CRStatus, 16), nullable=False)
+    level: Mapped[CRLevel] = mapped_column(enum_column(CRLevel, 16), nullable=False)
+    changes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reject_reason: Mapped[str | None] = mapped_column(String(128))
+    release_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("ontology_release.id"), index=True, comment="进入的版本（发布 / 回滚后写）"
+    )
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JsonType, nullable=False, default=dict, comment="[推断] CRDetail 原样（checks/touches/synonyms…）"
+    )
+    status_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="mock updatedAt"
+    )
+
+
+class CrEvent(IdMixin, AppendOnlyTableMixin, Base):
+    """评审记录追加行（前端 extraLog：发布 / 回滚等实际操作）。
+
+    mock reviewLog 按 detail.times 现算的节点不落这里。
+    """
+
+    __tablename__ = "cr_event"
+    __table_args__ = ({"comment": "变更单评审记录（只追加）"},)
+
+    cr_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("change_request.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    action: Mapped[str] = mapped_column(String(16), nullable=False, comment="publish|rollback|…")
+    actor: Mapped[str] = mapped_column(String(64), nullable=False, comment="操作人姓名")
+    actor_code: Mapped[str | None] = mapped_column(String(32), comment="操作人 sys_user.code")
+    text: Mapped[str] = mapped_column(String(256), nullable=False)
+    desc: Mapped[str | None] = mapped_column(Text)
+    level: Mapped[str | None] = mapped_column(String(16), comment="前端 ReviewEvent.status：warn / error")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
