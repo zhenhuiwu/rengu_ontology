@@ -149,8 +149,8 @@
   - 本体类资源（对象、关系、指标、维度、知识、动作类型、事件类型、规则、生命周期）的读接口接受 query 参数 **`?ver=<版本>`**（和前端 URL 同名；static-api.md 的 `release=` 参数作废），返回该版本的快照。
   - **已定**：只读模式只靠 query 参数传递，不用请求头（v0.2 的 `X-View-Release` 作废）。前端在历史版本模式下，所有请求都带 `?ver=<版本>`；只要请求带 `ver`，后台的**写接口一律返回 403 `READONLY`（`details.mode='history'`）**，包括系统管理、数据连接这类和版本无关的页面，因为前端在这些页面也是整页只读。“不落库”的 POST（试运行、试算、测试连接等）是否允许，按 §7 的 `?ver=` 列（照前端是否置灰来定）。
   - **只读下放行的非读接口（白名单，和 §7 一致）**：
-    - `?ver=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /objects/{kind}/export`，以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（`QaApplyDrawer.vue` 的“提交申请”没有按只读置灰，历史版本下可以提交；会落库，是白名单里唯一的落库写，【推断 §8.1-9】）。
-    - `?previewAs=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /scoped-ask`（§1.8）。
+    - `?ver=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /objects/{kind}/export`，以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（`QaApplyDrawer.vue` 的“提交申请”和 `QaConversation.vue` 的“申请权限”都不判断只读，历史版本和预览下都能提交；会落库，是白名单里唯一的落库写，【推断 §8.1-9】）。
+    - `?previewAs=` 下：`DELETE /preview-sessions/{id}`、`POST /datasources:test`、`POST /action-types/{id}:dry-run`、`POST /dimensions:match`、`POST /knowledge:resolve`、`POST /metrics/{id}:trial`、`POST /scoped-ask`（§1.8），以及 **W16 申请权限 `POST /api/qa/v1/permission-requests`**（同上，【推断 §8.1-9】）。
     - 不在白名单里的写请求一律 403 `READONLY`。
   - **版本快照（已定）**：每个版本**一份**快照，按 section 分块，每块由所属模块负责组装：静态的 `objectTypes`（不含生命周期）、`linkTypes`、`metrics`、`dimensions`、`knowledge`；Palantir 的 `actionTypes`、`eventTypes`；动态的 `rules`、`lifecycles`（按对象类型的前端 id 分键）。`create_version` 提供注册机制，各模块注册自己 section 的组装函数，生成版本时依次调用。运行数据（告警、执行记录、事件、调用记录等）不进快照；函数也不进（§3.8）。每个 section 内按**前端 id** 分键（如对象类型 `SalesOrder`，和前端 mock 里的 id 一致），`?ver=` 读接口直接按 id 取。
   - 历史版本里的问数：口径框显示“按该版本默认”。已经回答过的消息保留回答当时的依据（本体版本），不会改写。
@@ -167,7 +167,7 @@
   - 提问照常可用，回答只包含范围内的数据。导出禁用。
 - 后台：
   - `POST /preview-sessions {userId}`：只有对“角色与权限”有 manage 权限的人能调用。返回 `PreviewSession{user, roles, func, objs, startedAt, returnTo}`，并写审计“开始预览”。
-  - 之后前端每个请求都带 query 参数 **`?previewAs=<userId>`**（和前端 URL 同名；qa-api.md §1.1 的 `X-Preview-As` 请求头、本文 v0.1 的 `X-Preview-Session` 都作废）。后台先确认调用人有一个进行中的预览会话、并且会话的对象就是这个 userId，再按被预览用户的 `EffectiveAccess` 计算读权限；写接口一律返回 403 `READONLY`（`details.mode='preview'`），导出返回 `EXPORT_FORBIDDEN`。例外：对象搜索里的范围内提问 `POST /scoped-ask` 在预览中可用（`ObjAskModal.vue` 只在历史版本下置灰），按被预览用户的范围回答。
+  - 之后前端每个请求都带 query 参数 **`?previewAs=<userId>`**（和前端 URL 同名；qa-api.md §1.1 的 `X-Preview-As` 请求头、本文 v0.1 的 `X-Preview-Session` 都作废）。后台先确认调用人有一个进行中的预览会话、并且会话的对象就是这个 userId，再按被预览用户的 `EffectiveAccess` 计算读权限；写接口一律返回 403 `READONLY`（`details.mode='preview'`），导出返回 `EXPORT_FORBIDDEN`。例外：对象搜索里的范围内提问 `POST /scoped-ask` 在预览中可用（`ObjAskModal.vue` 只在历史版本下置灰），按被预览用户的范围回答；W16 申请权限 `POST /api/qa/v1/permission-requests` 在预览中也放行（前端不拦，【推断 §8.1-9】）。两个参数都带时仍按 `details.mode='preview'` 判断。
   - `DELETE /preview-sessions/{id}`：退出预览，写审计“结束预览”。
   - **已定**：每个用户同时只有**一个**进行中的预览会话（新开一个会结束旧的）；请求只认 `?previewAs=` 这一个参数。前端按标签页存在 sessionStorage 里，后台不区分标签页。
 
@@ -299,7 +299,7 @@
 | GET | /favorites | `q,page,size` | `PageResult<QaFavorite>` | 页码 | 读 | | `qa.ts` `QA_FAVORITE_LIST`（18） |
 | POST | /favorites | `{question}` | `QaFavorite` | — | 写 | 【推断】前端还没有“加入常用”的入口 | — |
 | DELETE | /favorites/{id} | — | 204 | — | 写 | | — |
-| POST | /permission-requests | `{scope,metric,reason,duration,sourceTurnId}` | `{id,status,approver}` | — | 写 | W16；历史版本 `?ver=` 下放行（§1.7 白名单，【推断 §8.1-9】），预览下 403 `READONLY`。**存储（已定，qa-api §11-10）**：存问数自己的表 `qa_permission_request`（只有问数有申请入口）；以后可能并入 admin 的统一审批 | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
+| POST | /permission-requests | `{scope,metric,reason,duration,sourceTurnId}` | `{id,status,approver}` | — | 写 | W16；历史版本 `?ver=` 和预览 `?previewAs=` 下都放行（§1.7 白名单，【推断 §8.1-9】）。**存储（已定，qa-api §11-10）**：存问数自己的表 `qa_permission_request`（只有问数有申请入口）；以后可能并入 admin 的统一审批 | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
 | GET | /session-options | — | `{scopes,calibers,metric}` | — | 读 | qa-api.md 里没有单列这个接口，本文补充【待定】 | `qa.ts` `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
 
 - 右栏（当前对象、时间线、可执行动作）复用 §2.5 的 O5/O7/O9。“固定到页面”用 §2.3 的 `GET /pages?view=brief` 和 `POST /pages/{pid}/cards`。
@@ -1081,7 +1081,7 @@
 - **类型**：`读`、`写`、`不落库`（POST 但不写库：试运行、试算、测试连接、导出、回放、合并校验、导入预览等）。
 - **页面权限**：`pageKey·level`，pageKey 是 `nav.ts` 的页面 key，level 是 `FuncLevel`（`view` 能看，`manage` 能改）；多个页面用 `/` 连接，满足其一即可。“登录即可”= 只要登录。**例外（已定）**：问数用户对自己的会话和页面的写（工作台 W2–W16、我的页面 P2–P10）只要求 `qa-workbench·view` / `qa-pages·view`，和 qa-api 一致；能不能改某一条仍按拥有者 / 可编辑成员校验（§1.4）。
 - **API 密钥范围**：调用方用 API 密钥时需要的 `KEY_SCOPES`（mock/apikeys.ts）；`—` 表示不对 API 密钥开放。这一列是 PDE 的划分建议【推断】，前端没有逐个接口的对应。Webhook 回调只用于内部事件接入，不在本表。
-- **?ver= / 预览**：请求带 `?ver=` 或 `?previewAs=` 时是否允许。按前端行为：前端没有拦的就是 Y；写一律 N（403 `READONLY`），W16 申请权限在 `?ver=` 下例外为 Y（§1.7 白名单），导出在预览下 N（`EXPORT_FORBIDDEN`）。
+- **?ver= / 预览**：请求带 `?ver=` 或 `?previewAs=` 时是否允许。按前端行为：前端没有拦的就是 Y；写一律 N（403 `READONLY`），W16 申请权限在 `?ver=` 和预览下都例外为 Y（§1.7 白名单），导出在预览下 N（`EXPORT_FORBIDDEN`）。
 - **行级范围**：Y = 返回业务数据，按调用人（或被预览用户、API 密钥绑定身份）的 `RowScope` 过滤；N = 元数据或管理数据，不过滤。写接口另按 §1.4 校验对象权限。
 
 | # | 模块 | 方法 | 完整路径 | 类型 | 页面（章节） | 页面权限 | API 密钥范围 | ?ver= | 预览 | 行级范围 | 种子（src/mock） |
@@ -1301,7 +1301,7 @@
 | 213 | qa | PUT | `/api/qa/v1/pages/{pid}/schedule` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
 | 214 | qa | PUT | `/api/qa/v1/pages/{pid}/share` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
 | 215 | qa | POST | `/api/qa/v1/pages/{pid}:refresh` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
-| 216 | qa | POST | `/api/qa/v1/permission-requests` | 写 | 2.2 | qa-workbench·view | — | Y【推断 §8.1-9】 | N | N | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
+| 216 | qa | POST | `/api/qa/v1/permission-requests` | 写 | 2.2 | qa-workbench·view | — | Y【推断 §8.1-9】 | Y【推断 §8.1-9】 | N | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
 | 217 | qa | POST | `/api/qa/v1/scoped-ask` | 写 | 2.4 | object-search·manage | 问数查询【推断】 | N | Y | Y | `objects-qa.ts`（`AskAnswer` 由函数生成） |
 | 218 | qa | GET | `/api/qa/v1/session-options` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
 | 219 | qa | GET | `/api/qa/v1/sessions` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_SESSION_LIST`（103） |
@@ -1354,7 +1354,7 @@
 6. 历史版本 `?ver=` 下的动作试运行（写回预检）按所选版本的定义执行，只校验、模拟写回，不调外部系统（§3.7、§5.3-6）。
 7. 同一幂等键、请求内容不同时返回 409 `IDEMPOTENCY_CONFLICT`（§1.6）。前端没有这种情况。
 8. 整版发布页的“回滚”按钮前端没有按只读置灰，但后台在 `?ver=` 和预览下一律拒绝（403 `READONLY`）（§3.15）。
-9. W16 申请权限（`POST /api/qa/v1/permission-requests`）在历史版本 `?ver=` 下**放行**（前端允许提交，§1.7 白名单）。如果要收紧成和其他写一样返回 403 `READONLY`，请用户拍板。预览下前端同样没拦，但本文按“预览一律不落库”拒绝（被预览人不能替别人申请权限），也可一并确认。
+9. W16 申请权限（`POST /api/qa/v1/permission-requests`）在历史版本 `?ver=` 和预览 `?previewAs=` 下都**放行**（前端两种模式都允许提交，§1.7 白名单）。如果要收紧成和其他写一样返回 403 `READONLY`（`details.mode` 按模式，两个参数都带时为 `preview`），请用户拍板。
 
 另：action-event-api.md §8.2 的“只有执行人角色才能试运行”“只有负责人才能模拟触发”同属推断，以该文档为准。
 
@@ -1382,6 +1382,7 @@
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- W16 申请权限在 `?ver=` 和预览 `?previewAs=` 下都放行（前端两种模式都允许）：§1.7 两份白名单、§1.8、§2.2、§7 说明和该行“预览”列（改为 Y）、§8.1-9 已同步；删除“预览下拒绝”的说法；两个参数都带时 `details.mode='preview'` 不变。
 - 问数用户对自己的会话和页面的写（W2–W16、P2–P10）页面权限改为 `qa-workbench·view` / `qa-pages·view`（原为 manage），和 qa-api 一致，已定（§1.4、§7 说明和 18 行）；qa-api §11-10 已定：权限申请存问数自己的表 `qa_permission_request`（只有问数有入口），以后可能并入 admin 统一审批（§2.2 W16）。
 - 只读拒绝统一为 403 `READONLY` + `details.mode='history'|'preview'`（`READONLY_HISTORY` / `READONLY_PREVIEW` 作废）；§1.7 列出只读白名单，W16 申请权限在 `?ver=` 下放行（【推断 §8.1-9】，可收紧）；按冒号规则 `/pages/{pid}/refresh`、`/turns/{tid}/recalc` 改为 `:refresh`、`:recalc`。
 - 按团队决定：`/ext-systems*`、`/ext-calls*` 改到 `/api/data/v1`（外部系统归 data 模块，代码仍在 Palantir 的 integration 目录）；动作类型、事件类型、`/action-runs*`、对账仍在 `/api/ontology/v1`。§1、§3.2、§3.7、§7 已同步，§7 计数随之变化。
