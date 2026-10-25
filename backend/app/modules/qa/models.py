@@ -10,9 +10,9 @@
 - 静态 `metric`、`change_request` 和动态 `action_run` 还没合入骨架：`metric_id` 改成软引用
   `metric_code varchar(64)` + `metric_version int`，`cr_id` 改成 `cr_code varchar(32)`；
   `action_run.qa_session_id` 外键不建。等那些表合入后由新迁移（qa_000N）换成外键。
-- `release_id` 暂按 id 软引用 ontology_release、不建外键（QaReleaseMixin）：建外键会让骨架
-  tests/test_versioning.py 的 `TRUNCATE ontology_release` 先报外键错而不是「只追加」错。
-  种子环境的 ontology_release 可能为空（tests/test_seed_fresh_db），所以种子不填 release_id，
+- `release_id`（qa_turn、qa_eval_run、qa_object_type_view）用骨架的 OntologyVersionMixin，
+  是指向 ontology_release(id) 的真外键（qa_0002，ON DELETE NO ACTION，CONVENTIONS §6；qa_0001 时
+  是软引用）。列可空：种子环境的 ontology_release 可能为空（tests/test_seed_fresh_db），种子不填 release_id，
   另存版本号文字：qa_turn.answered_ver、
   qa_eval_run.version_label（mock 里还有「v2026.10.4（候选）」「待定」这种不是版本号的值）。
 - 订阅按前端 Subscription：单个 channel、receivers、onlyChanged（文档写 channels[]，前端是单选）。
@@ -46,17 +46,9 @@ from app.db.base import (
     CodeMixin,
     IdMixin,
     MutableTableMixin,
+    OntologyVersionMixin,
 )
 from app.db.types import JsonType, StrArray, enum_column
-
-
-class QaReleaseMixin:
-    """同 OntologyVersionMixin 的 release_id，但不建外键（见模块说明）。"""
-
-    release_id: Mapped[int | None] = mapped_column(
-        BigInteger, index=True, comment="本体版本（ontology_release.id，软引用）"
-    )
-
 
 # ---------------------------------------------------------------- 枚举（库码 = 成员名，接口值 = value）
 
@@ -228,7 +220,7 @@ class QaSessionOption(IdMixin, MutableTableMixin, Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-class QaTurn(CodeMixin, QaReleaseMixin, MutableTableMixin, Base):
+class QaTurn(CodeMixin, OntologyVersionMixin, MutableTableMixin, Base):
     """一轮问答（W3 快照）。snapshot = mock QaDemoTurn 去掉 id/kind/time 的其余字段。"""
 
     __tablename__ = "qa_turn"
@@ -518,7 +510,7 @@ class QaEvalQuestion(CodeMixin, MutableTableMixin, Base):
     cr_code: Mapped[str | None] = mapped_column(String(32))
 
 
-class QaEvalRun(CodeMixin, QaReleaseMixin, MutableTableMixin, Base):
+class QaEvalRun(CodeMixin, OntologyVersionMixin, MutableTableMixin, Base):
     __tablename__ = "qa_eval_run"
     __table_args__ = (Index("ix_qa_eval_run_run_at", "run_at"), {"comment": "评测运行"})
 
@@ -612,7 +604,7 @@ class QaSynonymLink(IdMixin, MutableTableMixin, Base):
 # ---------------------------------------------------------------- 对象展示定义 / 查询日志
 
 
-class QaObjectTypeView(IdMixin, QaReleaseMixin, AppendOnlyTableMixin, Base):
+class QaObjectTypeView(IdMixin, OntologyVersionMixin, AppendOnlyTableMixin, Base):
     """对象搜索 / 详情的展示定义（按版本，只追加）。跟静态 object_view 区分命名。"""
 
     __tablename__ = "qa_object_type_view"
