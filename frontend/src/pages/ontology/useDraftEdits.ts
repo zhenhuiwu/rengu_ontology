@@ -9,6 +9,7 @@
  */
 import { computed, reactive, type Ref } from 'vue';
 import { message } from 'ant-design-vue';
+import { useRouter } from 'vue-router';
 import type { DraftCR } from '@/mock/releases';
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useConfirmStore } from '@/stores/confirm';
@@ -34,6 +35,7 @@ export interface DraftEditsOptions {
 
 export function useDraftEdits(o: DraftEditsOptions) {
   const confirm = useConfirmStore();
+  const router = useRouter();
   const prefix = () => `${o.draft.value?.id ?? '-'}|${o.targetId()}|`;
   const locked = computed(() => !!o.draft.value && !!submitted[o.draft.value.id]);
   const canEdit = computed(() => o.isDraft.value && !locked.value);
@@ -105,7 +107,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
       fields: [{ label: '本对象', value: o.targetName() }, { label: '本对象改动', value: `${savedChanges.value} 处` }, { label: '变更单改动', value: `${d.changes + savedChanges.value} 处` }, ...(o.reviewer ? [{ label: '审核人', value: o.reviewer }] : [])],
       impact: '提交后草稿锁定，审核人驳回后才能继续修改；审核通过后随下一次整版发布生效，发布前问数和规则仍用已发布版本。',
     });
-    if (ok) { submitted[d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交审核，可在“变更与发布”查看`); }
+    if (ok) { submitted[d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交评审`); router.push({ path: '/build/ontology/releases', query: { cr: d.id } }); }
   }
   async function discard(after: () => void) {
     const d = o.draft.value;
