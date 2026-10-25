@@ -1,0 +1,56 @@
+{
+  "gmv": {
+    "key": "gmv",
+    "name": "销售额（不含税）",
+    "version": "v3",
+    "drawerId": "gmv"
+  },
+  "gmv_tax": {
+    "key": "gmv_tax",
+    "name": "销售额（含税）",
+    "version": "v2",
+    "drawerId": "gmv_tax"
+  },
+  "margin": {
+    "key": "margin",
+    "name": "毛利率",
+    "version": "v2",
+    "drawerId": "gross_margin",
+    "cr": "CR-0011"
+  },
+  "orders": {
+    "key": "orders",
+    "name": "有效订单数",
+    "version": "v1",
+    "drawerId": "order_cnt"
+  },
+  "ship": {
+    "key": "ship",
+    "name": "出库及时率",
+    "version": "v1",
+    "drawerId": "ship_ontime"
+  },
+  "atv": {
+    "key": "atv",
+    "name": "客单价（不含税）",
+    "version": "v1",
+    "drawerId": "atv"
+  },
+  "repeat": {
+    "key": "repeat",
+    "name": "复购客户销售额（不含税）",
+    "version": "v3"
+  },
+  "repeat_tax": {
+    "key": "repeat_tax",
+    "name": "复购客户销售额（含税）",
+    "version": "v1"
+  },
+  "refund": {
+    "key": "refund",
+    "name": "退款率",
+    "version": "v2",
+    "drawerId": "refund_rate",
+    "cr": "CR-0010"
+  }
+}

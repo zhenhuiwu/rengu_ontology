@@ -1,0 +1,542 @@
+[
+  {
+    "id": "EQ-001",
+    "question": "华东大区上周销售额",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "上周",
+      "filter": "大区 = 华东大区"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-002",
+    "question": "上周华东卖了多少钱",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "上周",
+      "filter": "大区 = 华东大区"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-003",
+    "question": "各大区本月营业额",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "大区"
+      ],
+      "time": "本月至今"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-004",
+    "question": "上个月销售额最高的门店",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "降序 · 前 1"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-005",
+    "question": "杭州各门店昨天的销售",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "昨天",
+      "filter": "城市 = 杭州"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-006",
+    "question": "各品类销售额占比",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "品类"
+      ],
+      "time": "上个月"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-007",
+    "question": "今年每月销售额（含税）",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv_tax",
+      "dims": [
+        "月份"
+      ],
+      "time": "今年"
+    },
+    "last": "失败"
+  },
+  {
+    "id": "EQ-008",
+    "question": "上海门店 GMV",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "本月至今",
+      "filter": "城市 = 上海"
+    },
+    "last": "失败"
+  },
+  {
+    "id": "EQ-009",
+    "question": "双 11 备货期间日销售额",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "日期"
+      ],
+      "time": "2026-10-20 至今"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-010",
+    "question": "合肥政务区天鹅湖店本周销售额",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "本周",
+      "filter": "门店 = 合肥政务区天鹅湖店"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-011",
+    "question": "线上渠道上周销售额",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "上周",
+      "filter": "渠道 = 线上"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-012",
+    "question": "南京门店销售额环比",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "本月至今",
+      "filter": "城市 = 南京",
+      "sort": "环比"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-013",
+    "question": "上个月各大区的退款率",
+    "group": "退款",
+    "expect": {
+      "metric": "refund",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月"
+    },
+    "last": "通过",
+    "cr": "CR-0010"
+  },
+  {
+    "id": "EQ-014",
+    "question": "各渠道退款率",
+    "group": "退款",
+    "expect": {
+      "metric": "refund",
+      "dims": [
+        "渠道"
+      ],
+      "time": "近 30 天"
+    },
+    "last": "通过",
+    "cr": "CR-0010"
+  },
+  {
+    "id": "EQ-015",
+    "question": "退款率最高的 10 家门店",
+    "group": "退款",
+    "expect": {
+      "metric": "refund",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "降序 · 前 10"
+    },
+    "last": "通过",
+    "cr": "CR-0010"
+  },
+  {
+    "id": "EQ-016",
+    "question": "华东一区本周退款率",
+    "group": "退款",
+    "expect": {
+      "metric": "refund",
+      "dims": [],
+      "time": "本周",
+      "filter": "大区 = 华东一区"
+    },
+    "last": "失败",
+    "cr": "CR-0010"
+  },
+  {
+    "id": "EQ-017",
+    "question": "昨天各仓库出库及时率",
+    "group": "履约",
+    "expect": {
+      "metric": "ship",
+      "dims": [
+        "仓库"
+      ],
+      "time": "昨天"
+    },
+    "last": "通过",
+    "cr": "CR-0008"
+  },
+  {
+    "id": "EQ-018",
+    "question": "上周各门店发货及时率",
+    "group": "履约",
+    "expect": {
+      "metric": "ship",
+      "dims": [
+        "门店"
+      ],
+      "time": "上周"
+    },
+    "last": "失败",
+    "cr": "CR-0008"
+  },
+  {
+    "id": "EQ-019",
+    "question": "华东一区发货及时率是多少",
+    "group": "履约",
+    "expect": {
+      "metric": "ship",
+      "dims": [],
+      "time": "本周",
+      "filter": "大区 = 华东一区"
+    },
+    "last": "失败",
+    "cr": "CR-0008"
+  },
+  {
+    "id": "EQ-020",
+    "question": "各品类毛利率排名",
+    "group": "毛利",
+    "expect": {
+      "metric": "margin",
+      "dims": [
+        "品类"
+      ],
+      "time": "本月至今",
+      "sort": "毛利率降序"
+    },
+    "last": "通过",
+    "cr": "CR-0011"
+  },
+  {
+    "id": "EQ-021",
+    "question": "毛利率低于 18% 的商品",
+    "group": "毛利",
+    "expect": {
+      "metric": "margin",
+      "dims": [
+        "商品"
+      ],
+      "time": "近 30 天",
+      "filter": "毛利率 < 18%"
+    },
+    "last": "通过",
+    "cr": "CR-0011"
+  },
+  {
+    "id": "EQ-022",
+    "question": "生鲜毛利率近 12 周",
+    "group": "毛利",
+    "expect": {
+      "metric": "margin",
+      "dims": [
+        "周"
+      ],
+      "time": "近 12 周",
+      "filter": "品类 = 生鲜"
+    },
+    "last": "通过",
+    "cr": "CR-0011"
+  },
+  {
+    "id": "EQ-023",
+    "question": "各大区毛利率",
+    "group": "毛利",
+    "expect": {
+      "metric": "margin",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月"
+    },
+    "last": "通过",
+    "cr": "CR-0011"
+  },
+  {
+    "id": "EQ-024",
+    "question": "哪个门店毛利最低",
+    "group": "毛利",
+    "expect": {
+      "metric": "margin",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "升序 · 前 1"
+    },
+    "last": "失败",
+    "cr": "CR-0011"
+  },
+  {
+    "id": "EQ-025",
+    "question": "近 6 个月复购客户销售额趋势",
+    "group": "复购",
+    "expect": {
+      "metric": "repeat",
+      "dims": [
+        "月份"
+      ],
+      "time": "近 6 个月"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-026",
+    "question": "老客销售额走势",
+    "group": "复购",
+    "expect": {
+      "metric": "repeat",
+      "dims": [
+        "月份"
+      ],
+      "time": "近 6 个月"
+    },
+    "last": "失败"
+  },
+  {
+    "id": "EQ-027",
+    "question": "复购客户销售额（含税）按大区",
+    "group": "复购",
+    "expect": {
+      "metric": "repeat_tax",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-028",
+    "question": "各门店复购客户销售额 Top 10",
+    "group": "复购",
+    "expect": {
+      "metric": "repeat",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "降序 · 前 10"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-029",
+    "question": "会员复购客户销售额占比",
+    "group": "复购",
+    "expect": {
+      "metric": "repeat",
+      "dims": [
+        "会员等级"
+      ],
+      "time": "上个月"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-030",
+    "question": "华东一区复购客户销售额（含税）",
+    "group": "复购",
+    "expect": {
+      "metric": "repeat_tax",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "大区 = 华东一区"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-031",
+    "question": "本周有效订单数按渠道",
+    "group": "订单",
+    "expect": {
+      "metric": "orders",
+      "dims": [
+        "渠道"
+      ],
+      "time": "本周"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-032",
+    "question": "各城市上周成交单量排名",
+    "group": "订单",
+    "expect": {
+      "metric": "orders",
+      "dims": [
+        "城市"
+      ],
+      "time": "上周",
+      "sort": "降序"
+    },
+    "last": "失败",
+    "cr": "CR-0015"
+  },
+  {
+    "id": "EQ-033",
+    "question": "昨天一共多少单",
+    "group": "订单",
+    "expect": {
+      "metric": "orders",
+      "dims": [],
+      "time": "昨天"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-034",
+    "question": "线上渠道本月成交单量",
+    "group": "订单",
+    "expect": {
+      "metric": "orders",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "渠道 = 线上"
+    },
+    "last": "失败",
+    "cr": "CR-0015"
+  },
+  {
+    "id": "EQ-035",
+    "question": "取消订单占比",
+    "group": "订单",
+    "expect": {
+      "metric": "orders",
+      "dims": [
+        "订单状态"
+      ],
+      "time": "近 30 天"
+    },
+    "last": "失败"
+  },
+  {
+    "id": "EQ-036",
+    "question": "杭州门店客单价",
+    "group": "订单",
+    "expect": {
+      "metric": "atv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "filter": "城市 = 杭州"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-037",
+    "question": "上海门店客单价对比",
+    "group": "订单",
+    "expect": {
+      "metric": "atv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上周",
+      "filter": "城市 = 上海"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-038",
+    "question": "各大区销售额排名",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月",
+      "sort": "降序"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-039",
+    "question": "新店开业 30 天销售额",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "开业后 30 天",
+      "filter": "门店状态 = 新开"
+    },
+    "last": "通过"
+  },
+  {
+    "id": "EQ-040",
+    "question": "各城市销售额（含税）",
+    "group": "销售",
+    "expect": {
+      "metric": "gmv_tax",
+      "dims": [
+        "城市"
+      ],
+      "time": "上个月"
+    },
+    "last": "通过"
+  }
+]

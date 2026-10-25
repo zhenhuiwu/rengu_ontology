@@ -1,0 +1,51 @@
+[
+  {
+    "key": "sh",
+    "province": "上海",
+    "sales": 352.4,
+    "mom": -6.1,
+    "customers": 12840
+  },
+  {
+    "key": "js",
+    "province": "江苏",
+    "sales": 298.6,
+    "mom": -9.8,
+    "customers": 11260
+  },
+  {
+    "key": "zj",
+    "province": "浙江",
+    "sales": 276.3,
+    "mom": -7.2,
+    "customers": 10380
+  },
+  {
+    "key": "ah",
+    "province": "安徽",
+    "sales": 128.9,
+    "mom": -12.5,
+    "customers": 5120
+  },
+  {
+    "key": "fj",
+    "province": "福建",
+    "sales": 102.5,
+    "mom": -4.3,
+    "customers": 3960
+  },
+  {
+    "key": "jx",
+    "province": "江西",
+    "sales": 68.7,
+    "mom": -10.9,
+    "customers": 2730
+  },
+  {
+    "key": "sd",
+    "province": "山东",
+    "sales": 58.6,
+    "mom": -11.4,
+    "customers": 1920
+  }
+]

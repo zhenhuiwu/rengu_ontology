@@ -1,0 +1,188 @@
+[
+  {
+    "kind": "store",
+    "label": "门店",
+    "unit": "家",
+    "kwPlaceholder": "门店名称 / 编码 / 店长",
+    "facets": [
+      {
+        "key": "region",
+        "label": "区域",
+        "order": [
+          "华东一区",
+          "华东二区",
+          "华东三区",
+          "华东四区",
+          "华东五区"
+        ]
+      },
+      {
+        "key": "city",
+        "label": "城市"
+      },
+      {
+        "key": "format",
+        "label": "业态",
+        "order": [
+          "社区店",
+          "商场店",
+          "写字楼店"
+        ]
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "order": [
+          "营业中",
+          "装修中",
+          "已闭店"
+        ]
+      }
+    ],
+    "columns": [
+      {
+        "key": "code",
+        "title": "门店编码",
+        "width": 120
+      },
+      {
+        "key": "city",
+        "title": "城市",
+        "width": 72
+      },
+      {
+        "key": "region",
+        "title": "区域",
+        "width": 96
+      },
+      {
+        "key": "format",
+        "title": "业态",
+        "width": 96
+      },
+      {
+        "key": "manager",
+        "title": "店长",
+        "width": 88
+      },
+      {
+        "key": "area",
+        "title": "营业面积（㎡）",
+        "num": true,
+        "width": 128
+      },
+      {
+        "key": "sales",
+        "title": "9 月销售额（不含税，万元）",
+        "num": true,
+        "width": 200
+      },
+      {
+        "key": "openedAt",
+        "title": "开业日期",
+        "width": 112
+      },
+      {
+        "key": "status",
+        "title": "状态",
+        "width": 88
+      }
+    ]
+  },
+  {
+    "kind": "product",
+    "label": "商品",
+    "unit": "个",
+    "kwPlaceholder": "商品名称 / SKU / 条码",
+    "facets": [
+      {
+        "key": "cat",
+        "label": "品类"
+      },
+      {
+        "key": "brand",
+        "label": "品牌"
+      }
+    ],
+    "columns": [
+      {
+        "key": "sku",
+        "title": "SKU",
+        "width": 100
+      },
+      {
+        "key": "spec",
+        "title": "规格",
+        "width": 160
+      },
+      {
+        "key": "category",
+        "title": "品类",
+        "width": 160
+      },
+      {
+        "key": "brand",
+        "title": "品牌",
+        "width": 120
+      },
+      {
+        "key": "price",
+        "title": "零售价（元）",
+        "num": true,
+        "width": 120
+      }
+    ]
+  },
+  {
+    "kind": "order",
+    "label": "订单",
+    "unit": "单",
+    "kwPlaceholder": "订单号 / 门店 / 运单号",
+    "facets": [
+      {
+        "key": "channel",
+        "label": "渠道"
+      },
+      {
+        "key": "ostatus",
+        "label": "状态",
+        "order": [
+          "待支付",
+          "待出库",
+          "拣货中",
+          "已出库",
+          "已签收",
+          "已取消"
+        ]
+      }
+    ],
+    "columns": [
+      {
+        "key": "store",
+        "title": "门店",
+        "width": 220
+      },
+      {
+        "key": "channel",
+        "title": "渠道",
+        "width": 112
+      },
+      {
+        "key": "amount",
+        "title": "实付金额（含税，元）",
+        "num": true,
+        "width": 160
+      },
+      {
+        "key": "createdAt",
+        "title": "下单时间",
+        "width": 168
+      },
+      {
+        "key": "status",
+        "title": "状态",
+        "width": 88
+      }
+    ]
+  }
+]

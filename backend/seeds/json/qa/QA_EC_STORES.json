@@ -1,0 +1,382 @@
+[
+  {
+    "key": "FZ0011",
+    "id": "FZ0011",
+    "dist": "GL",
+    "store": "福州鼓楼东街口店",
+    "city": "福州",
+    "sales": 16,
+    "mom": -13.7,
+    "orders": 2303
+  },
+  {
+    "key": "SH0113",
+    "id": "SH0113",
+    "dist": "PT",
+    "store": "上海普陀长风店",
+    "city": "上海",
+    "sales": 15.9,
+    "mom": -8.1,
+    "orders": 3621
+  },
+  {
+    "key": "HZ0045",
+    "id": "HZ0045",
+    "dist": "GS",
+    "store": "杭州拱墅大关店",
+    "city": "杭州",
+    "sales": 15.5,
+    "mom": -6.7,
+    "orders": 3180
+  },
+  {
+    "key": "WX0045",
+    "id": "WX0045",
+    "dist": "XW",
+    "store": "无锡新吴硕放店",
+    "city": "无锡",
+    "sales": 15.4,
+    "mom": 1.4,
+    "orders": 2700
+  },
+  {
+    "key": "JN0045",
+    "id": "JN0045",
+    "dist": "GX",
+    "store": "济南高新区汉峪金谷店",
+    "city": "济南",
+    "sales": 14.5,
+    "mom": -2,
+    "orders": 3582
+  },
+  {
+    "key": "SZ0009",
+    "id": "SZ0009",
+    "dist": "GY",
+    "store": "苏州工业园区湖西CBD店",
+    "city": "苏州",
+    "sales": 14.4,
+    "mom": -5.2,
+    "orders": 3835
+  },
+  {
+    "key": "NB0028",
+    "id": "NB0028",
+    "dist": "HS",
+    "store": "宁波海曙天一店",
+    "city": "宁波",
+    "sales": 14.4,
+    "mom": -0.5,
+    "orders": 2026
+  },
+  {
+    "key": "SH0133",
+    "id": "SH0133",
+    "dist": "JA",
+    "store": "上海静安大悦城店",
+    "city": "上海",
+    "sales": 14,
+    "mom": -4.9,
+    "orders": 2024
+  },
+  {
+    "key": "HZ0079",
+    "id": "HZ0079",
+    "dist": "XS",
+    "store": "杭州萧山市心店",
+    "city": "杭州",
+    "sales": 13.9,
+    "mom": -4.8,
+    "orders": 3547
+  },
+  {
+    "key": "SZ0045",
+    "id": "SZ0045",
+    "dist": "WZ",
+    "store": "苏州吴中石湖店",
+    "city": "苏州",
+    "sales": 13.6,
+    "mom": -8.8,
+    "orders": 2409
+  },
+  {
+    "key": "SZ0028",
+    "id": "SZ0028",
+    "dist": "GS",
+    "store": "苏州姑苏观前店",
+    "city": "苏州",
+    "sales": 13.5,
+    "mom": -10.6,
+    "orders": 2949
+  },
+  {
+    "key": "SH0031",
+    "id": "SH0031",
+    "dist": "PD",
+    "store": "上海浦东张江高科店",
+    "city": "上海",
+    "sales": 13.4,
+    "mom": -13.1,
+    "orders": 2481
+  },
+  {
+    "key": "NB0045",
+    "id": "NB0045",
+    "dist": "JB",
+    "store": "宁波江北来福士店",
+    "city": "宁波",
+    "sales": 13.1,
+    "mom": -6,
+    "orders": 4171
+  },
+  {
+    "key": "WX0011",
+    "id": "WX0011",
+    "dist": "LX",
+    "store": "无锡梁溪崇安寺店",
+    "city": "无锡",
+    "sales": 12.9,
+    "mom": -8.8,
+    "orders": 3263
+  },
+  {
+    "key": "NC0028",
+    "id": "NC0028",
+    "dist": "DH",
+    "store": "南昌东湖八一广场店",
+    "city": "南昌",
+    "sales": 12.4,
+    "mom": -12.6,
+    "orders": 3227
+  },
+  {
+    "key": "WX0028",
+    "id": "WX0028",
+    "dist": "BH",
+    "store": "无锡滨湖万达店",
+    "city": "无锡",
+    "sales": 12.2,
+    "mom": -6.3,
+    "orders": 4225
+  },
+  {
+    "key": "HF0028",
+    "id": "HF0028",
+    "dist": "SS",
+    "store": "合肥蜀山大溪地店",
+    "city": "合肥",
+    "sales": 11.8,
+    "mom": -10.3,
+    "orders": 3759
+  },
+  {
+    "key": "SH0079",
+    "id": "SH0079",
+    "dist": "CN",
+    "store": "上海长宁中山公园店",
+    "city": "上海",
+    "sales": 10.9,
+    "mom": -7.4,
+    "orders": 3794
+  },
+  {
+    "key": "FZ0028",
+    "id": "FZ0028",
+    "dist": "CS",
+    "store": "福州仓山万达店",
+    "city": "福州",
+    "sales": 10.7,
+    "mom": 0.1,
+    "orders": 4113
+  },
+  {
+    "key": "HF0045",
+    "id": "HF0045",
+    "dist": "BH",
+    "store": "合肥包河万达店",
+    "city": "合肥",
+    "sales": 10.6,
+    "mom": -6.4,
+    "orders": 4793
+  },
+  {
+    "key": "HZ0012",
+    "id": "HZ0012",
+    "dist": "XH",
+    "store": "杭州西湖文三路店",
+    "city": "杭州",
+    "sales": 10.4,
+    "mom": 0.5,
+    "orders": 3084
+  },
+  {
+    "key": "SZ0062",
+    "id": "SZ0062",
+    "dist": "XC",
+    "store": "苏州相城高铁新城店",
+    "city": "苏州",
+    "sales": 10.3,
+    "mom": -10.4,
+    "orders": 3474
+  },
+  {
+    "key": "NJ0045",
+    "id": "NJ0045",
+    "dist": "JY",
+    "store": "南京建邺河西店",
+    "city": "南京",
+    "sales": 10.1,
+    "mom": -1.9,
+    "orders": 2852
+  },
+  {
+    "key": "SH0130",
+    "id": "SH0130",
+    "dist": "BS",
+    "store": "上海宝山顾村店",
+    "city": "上海",
+    "sales": 9.9,
+    "mom": 1.4,
+    "orders": 2942
+  },
+  {
+    "key": "HZ0062",
+    "id": "HZ0062",
+    "dist": "YH",
+    "store": "杭州余杭未来科技城店",
+    "city": "杭州",
+    "sales": 9.3,
+    "mom": -7.3,
+    "orders": 2244
+  },
+  {
+    "key": "JN0011",
+    "id": "JN0011",
+    "dist": "LX",
+    "store": "济南历下泉城路店",
+    "city": "济南",
+    "sales": 8.8,
+    "mom": -5.2,
+    "orders": 2408
+  },
+  {
+    "key": "NJ0062",
+    "id": "NJ0062",
+    "dist": "XW",
+    "store": "南京玄武新街口店",
+    "city": "南京",
+    "sales": 8.7,
+    "mom": -1.6,
+    "orders": 4638
+  },
+  {
+    "key": "SH0047",
+    "id": "SH0047",
+    "dist": "XH",
+    "store": "上海徐汇漕河泾店",
+    "city": "上海",
+    "sales": 8.2,
+    "mom": 0.5,
+    "orders": 3184
+  },
+  {
+    "key": "HF0004",
+    "id": "HF0004",
+    "dist": "ZW",
+    "store": "合肥政务区天鹅湖店",
+    "city": "合肥",
+    "sales": 8,
+    "mom": -0.7,
+    "orders": 4000
+  },
+  {
+    "key": "NB0015",
+    "id": "NB0015",
+    "dist": "YZ",
+    "store": "宁波鄞州万达店",
+    "city": "宁波",
+    "sales": 7.7,
+    "mom": -7.2,
+    "orders": 4707
+  },
+  {
+    "key": "NC0011",
+    "id": "NC0011",
+    "dist": "HG",
+    "store": "南昌红谷滩万达店",
+    "city": "南昌",
+    "sales": 7.6,
+    "mom": -4.3,
+    "orders": 4100
+  },
+  {
+    "key": "NJ0021",
+    "id": "NJ0021",
+    "dist": "GL",
+    "store": "南京鼓楼湖南路店",
+    "city": "南京",
+    "sales": 7.2,
+    "mom": -12.7,
+    "orders": 3144
+  },
+  {
+    "key": "HZ0058",
+    "id": "HZ0058",
+    "dist": "BJ",
+    "store": "杭州滨江星光大道店",
+    "city": "杭州",
+    "sales": 7.1,
+    "mom": -13.7,
+    "orders": 4323
+  },
+  {
+    "key": "NJ0076",
+    "id": "NJ0076",
+    "dist": "JN",
+    "store": "南京江宁百家湖店",
+    "city": "南京",
+    "sales": 7.1,
+    "mom": -12.6,
+    "orders": 2276
+  },
+  {
+    "key": "SH0096",
+    "id": "SH0096",
+    "dist": "YP",
+    "store": "上海杨浦五角场店",
+    "city": "上海",
+    "sales": 6.8,
+    "mom": 0.6,
+    "orders": 4015
+  },
+  {
+    "key": "JN0028",
+    "id": "JN0028",
+    "dist": "HY",
+    "store": "济南槐荫万达店",
+    "city": "济南",
+    "sales": 6.7,
+    "mom": -5.6,
+    "orders": 4713
+  },
+  {
+    "key": "SH0102",
+    "id": "SH0102",
+    "dist": "MH",
+    "store": "上海闵行七宝万科广场B1店",
+    "city": "上海",
+    "sales": 6.6,
+    "mom": -0.7,
+    "orders": 2680
+  },
+  {
+    "key": "SH0147",
+    "id": "SH0147",
+    "dist": "SJ",
+    "store": "上海松江万达店",
+    "city": "上海",
+    "sales": 6.5,
+    "mom": -8.3,
+    "orders": 4043
+  }
+]
