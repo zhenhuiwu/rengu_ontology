@@ -87,8 +87,11 @@ erDiagram
   DIMENSION ||--o{ PROPERTY : enum_of
   OBJECT_TYPE ||--o{ LINK_TYPE : from_to
   LINK_TYPE ||--o| LINK_QUALITY : checked
-  LINK_TYPE ||--o{ QA_PATH_STEP : used_in
-  QA_PATH ||--o{ QA_PATH_STEP : steps
+  LINK_TYPE ||--o{ ONTO_QA_PATH_STEP : used_in
+  OBJECT_TYPE ||--o{ ONTO_QA_PATH : from_to
+  ONTO_QA_PATH ||--|{ ONTO_QA_PATH_STEP : steps
+  OBJECT_TYPE ||--o{ ONTO_QA_PATH_EXAMPLE : from_to
+  ONTO_QA_PATH |o--o{ ONTO_QA_PATH_EXAMPLE : "path_id 可空"
   OBJECT_TYPE ||--o{ METRIC : base_object
   DIMENSION ||--o{ DIM_LEVEL : levels
   DIMENSION ||--o{ DIM_VALUE : values
