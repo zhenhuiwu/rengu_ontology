@@ -1,0 +1,18 @@
+[
+  {
+    "id": "EXT-OA",
+    "name": "泛微 OA"
+  },
+  {
+    "id": "EXT-ERP",
+    "name": "用友 ERP"
+  },
+  {
+    "id": "EXT-OMS",
+    "name": "订单 OMS"
+  },
+  {
+    "id": "EXT-CRM",
+    "name": "会员 CRM"
+  }
+]

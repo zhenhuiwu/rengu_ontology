@@ -1,0 +1,51 @@
+{
+  "发起调价审批": {
+    "sysId": "EXT-OA",
+    "kind": "product",
+    "version": "v3",
+    "approver": "品类经理 王敏",
+    "call": "发起调价审批流程"
+  },
+  "补货申请": {
+    "sysId": "EXT-ERP",
+    "kind": "product",
+    "version": "v3",
+    "approver": "品类经理 王敏",
+    "call": "保存请购单（补货申请）"
+  },
+  "发起物流催派": {
+    "sysId": "EXT-OMS",
+    "kind": "order",
+    "version": "v1",
+    "approver": "区域运营 陈立军",
+    "call": "提交催派工单"
+  },
+  "订单状态修正": {
+    "sysId": "EXT-OMS",
+    "kind": "order",
+    "version": "v4",
+    "approver": "区域运营 陈立军",
+    "call": "回写订单状态"
+  },
+  "同步会员标签": {
+    "sysId": "EXT-CRM",
+    "kind": "segment",
+    "version": "v1",
+    "approver": "会员运营 何静",
+    "call": "推送会员标签任务"
+  },
+  "调整大区预算": {
+    "sysId": "EXT-ERP",
+    "kind": "region",
+    "version": "v2",
+    "approver": "财务总监 赵磊",
+    "call": "提交预算调整单"
+  },
+  "发放复购召回优惠券": {
+    "sysId": "EXT-CRM",
+    "kind": "region",
+    "version": "v3",
+    "approver": "营销经理 吴佳",
+    "call": "发放会员券"
+  }
+}
