@@ -276,6 +276,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
   | 抽 SQL | Vanna `extract_sql` 的围栏规则（先 ```sql 块，再任意 ``` 块，取最后一个）；[推断] 不抄它的 `SELECT … ;` 正则，那条会把 `select 1; drop …` 截短后放行，这里让多语句原样进 sql_guard 被拒 | MIT |
   | 解析 / 校验 / LIMIT | sqlglot（`app/common/sql_guard` 已在用） | MIT |
 
+- **执行报错回喂一次**：SQL 过了 sql_guard 但执行报错（如列不存在），在 savepoint 里回滚，把数据库报错首行作为新一轮 user 消息回喂 LLM 改一次（`FIX_RETRIES=1`，常见自修正思路，非代码复制）；仍失败照旧 500 `INTERNAL_ERROR`。sql_guard 拒绝不重试，仍 403。[推断]
 - **同步返回**：W6 跑完整条链路后返回 202 `{turnId, streamUrl, turn}`，`turn` 就是 W3 的轮次形状，前端可以直接追加；W7 SSE 未实现，`streamUrl` 先占位。[推断]
 - **答案形状**：`kind=answer`，`answer = {card:'table', dataAsOf, basis:{caliber, perm}, text, table:{id:'result', title, columns:[{key:'c0', title:<SQL 列别名>, align?:'right'}], items:[{c0:…}], total, summary, paged}}`；0 行 → `kind=empty`（`lead/bold/tail/tag`）。最多 200 行，超过 10 行 `paged=true`。[推断] kpis / trend / insight / suggest 本期不出。
 - **落库**：`qa_turn`（`code = {会话号}-T{seq:03d}` [推断]、`kind`、`question`、`refs`、`snapshot`、`sql_text`（不出接口）、`asked_at`、`elapsed_ms`），更新 `qa_session.last_at`，第一问改标题；追加 `qa_query_log`。`qa_turn_event` / `sem_plan` 本期不写。

@@ -143,3 +143,26 @@ def test_dashscope_llm_uses_openai_sdk():
     llm = DashScopeLLM("sk-test", "qwen-flash", DEFAULT_BASE_URL, 5)
     assert isinstance(llm._client, AsyncOpenAI)
     assert str(llm._client.base_url).rstrip("/") == DEFAULT_BASE_URL
+
+
+class SeqLLM(FakeLLM):
+    def __init__(self, *replies: str) -> None:
+        super().__init__(replies[-1])
+        self.replies = list(replies)
+
+    async def generate_sql(self, prompt):
+        self.prompts.append(prompt)
+        return self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+
+
+async def test_exec_error_fed_back_once(qa, session):
+    fake = SeqLLM(
+        "select count(*) from product where is_test = false", 'select count(*) as "商品数" from product'
+    )
+    app.dependency_overrides[get_llm] = lambda: fake
+    r = await qa.post(URL, json={"question": "How many products are there in total?"})
+    assert r.status_code == 202, r.text
+    assert r.json()["turn"]["answer"]["table"]["items"] == [{"c0": 12}]
+    assert len(fake.prompts) == 2 and "is_test" in fake.prompts[1][-1]["content"]
+    t = await session.scalar(select(QaTurn).where(QaTurn.code == r.json()["turnId"]))
+    assert "is_test" not in t.sql_text

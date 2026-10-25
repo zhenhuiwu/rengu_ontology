@@ -24,6 +24,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from sqlalchemy.schema import CreateTable, SetColumnComment, SetTableComment
 from sqlglot import exp
@@ -41,6 +42,7 @@ from app.modules.static.models import DimMapping, LinkType, Metric, ObjectType, 
 QA_TABLES = ("store", "product", "biz_order", "order_line")
 TABLE_PAGE = 10  # 前端表格首屏行数，超过标 paged
 ROW_LIMIT = 200  # 单次结果最多行数（外包 LIMIT）
+FIX_RETRIES = 1  # 执行报错后回喂 LLM 修正的次数
 
 
 class QaExecUnavailable(AppError):
@@ -138,7 +140,9 @@ _GUIDELINES = (
     "1. 上下文足够时，只输出一条 SELECT（可用 WITH），放在 ```sql 代码块里，不要解释；\n"
     "2. 只能用 ===Tables 里的表和列；不要写 INSERT/UPDATE/DELETE/DDL；\n"
     "3. 指标按“指标口径”计算；用户说法按“同义词”映射；多表关联优先用“关联”与“默认问数路径”；\n"
-    '4. 列用中文别名（AS "门店数"），结果行数尽量少；默认剔除 is_test = true 的测试数据；\n'
+    '4. 列用中文别名（AS "门店数"），结果行数尽量少；\n'
+    "   只有 ===Tables 里带 is_test 列的表（store、biz_order）才加 is_test = false，"
+    "product 等没有这列的表不要加；\n"
     "5. 确保 SQL 符合 PostgreSQL 语法、可直接执行。\n"
 )
 
@@ -201,12 +205,28 @@ async def answer(
     """
     t0 = time.monotonic()
     ctx = await build_context(session)
-    sql = extract_sql(await llm.generate_sql(build_prompt(question, ctx)))
-    tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准
+    messages = build_prompt(question, ctx)
     limit = ROW_LIMIT
-    res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
-    keys = list(res.keys())
-    rows = [[_cell(v) for v in r] for r in res.fetchall()]
+    for attempt in range(1 + FIX_RETRIES):
+        reply = await llm.generate_sql(messages)
+        sql = extract_sql(reply)
+        tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
+        try:
+            async with conn.begin_nested():  # savepoint：执行报错不弄坏连接上的事务
+                res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
+                keys = list(res.keys())
+                rows = [[_cell(v) for v in r] for r in res.fetchall()]
+            break
+        except DBAPIError as e:
+            if attempt >= FIX_RETRIES:
+                raise
+            # 报错回喂再改一次（常见的自修正思路，非代码复制；只回喂数据库报错首行，不含数据）
+            err = str(e.orig).splitlines()[0][:300] if e.orig else type(e).__name__
+            messages = [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {"role": "user", "content": f"上面的 SQL 执行报错：{err}\n请修正后只输出一条 SQL。"},
+            ]
     truncated = len(rows) > limit
     rows = rows[:limit]
     elapsed = int((time.monotonic() - t0) * 1000)
