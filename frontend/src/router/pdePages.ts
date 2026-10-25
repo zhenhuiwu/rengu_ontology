@@ -10,4 +10,5 @@ export const PDE_PAGES: Record<string, () => Promise<unknown>> = {
   functions: () => import('@/pages/functions/Functions.vue'),
   roles: () => import('@/pages/admin/Roles.vue'),
   'api-keys': () => import('@/pages/admin/ApiKeys.vue'),
+  settings: () => import('@/pages/admin/Settings.vue'),
 };
