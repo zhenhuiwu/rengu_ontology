@@ -49,6 +49,7 @@ export interface SystemSettings {
 }
 
 export const NOTIFY_EVENTS: NotifyEvent[] = [
+  { key: 'action-pending', name: '动作待确认', desc: '规则暂存的动作，发给该规则的固定确认人（如 R-027 → 吴佳）', level: '一般' },
   { key: 'action-failed', name: '动作执行失败', desc: '外部系统明确返回失败', level: '重要' },
   { key: 'action-unknown', name: '结果未知 · 待对账', desc: '超时或无响应，不会自动重试', level: '紧急' },
   { key: 'quality-failed', name: '数据质量检查不通过', desc: '阻断级规则不通过', level: '重要' },
@@ -98,6 +99,7 @@ export const SYSTEM_SETTINGS: SystemSettings = {
     { id: 'sms', name: '短信', enabled: true, via: '外部系统 EXT-SMS', extId: 'EXT-SMS', target: '阿里云短信 · 签名「鲜邻」· 模板 SMS_2931xxx', receivers: '值班手机号（仅紧急事件）', lastTest: '2026-10-18 21:40', lastResult: '成功', note: '不支持幂等：发送超时标记结果未知，不重发' },
   ],
   routes: {
+    'action-pending': ['inbox', 'wecom'],
     'action-failed': ['inbox', 'email', 'wecom'],
     'action-unknown': ['inbox', 'wecom', 'sms'],
     'quality-failed': ['inbox', 'email', 'wecom'],
