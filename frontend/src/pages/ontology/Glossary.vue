@@ -14,7 +14,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useAppStore } from '@/stores/app';
 import { useConfirmStore } from '@/stores/confirm';
-import { CURRENT_USER } from '@/mock/changes';
+import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import { METRICS } from '@/mock/metrics';
 import { Q_OBJECT_TYPES } from '@/mock/quality';
 import {
@@ -23,7 +23,7 @@ import {
 } from '@/mock/knowledge';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { allDrafts, useDraftView } from './parts/useDraftView';
+import { allDrafts, draftOf, useDraftView } from './parts/useDraftView';
 
 const route = useRoute();
 const router = useRouter();
@@ -45,6 +45,19 @@ const statusOf = (e: KEntry): KStatus => {
   if (readonly.value && ver) return e.stoppedIn && e.stoppedIn <= ver ? '已停用' : '已发布';
   return e.status;
 };
+/** 条目所在的未发布变更单：以 useDraftView 登记为准，没有登记的用条目自带的 cr */
+const crOf = (e: KEntry) => draftOf('knowledge', e.id)?.id ?? (e.status === '草稿' ? e.cr : undefined);
+/** 显示状态：从变更单推出来（与指标口径一致）。变更单审核中 → 橙色“审核中”；只有草稿 → 灰色“草稿中”（问数仍用已发布版）；已发布、已停用灰色。 */
+type Shown = '已发布' | '草稿中' | '审核中' | '已停用';
+const shownStatus = (e: KEntry): Shown => {
+  const s = statusOf(e);
+  if (readonly.value && app.viewVersion) return s === '已停用' ? '已停用' : '已发布';
+  if (s === '已停用') return '已停用';
+  const cr = crOf(e);
+  if (!cr) return s === '草稿' ? '草稿中' : '已发布';
+  return CHANGE_REQUESTS.find((c) => c.id === cr)?.status === '审核中' ? '审核中' : '草稿中';
+};
+const shownClass = (s: Shown) => (s === '审核中' ? 'c-warning' : 'c-3');
 
 // —— 列表筛选（写进 URL）——
 const q = (k: string) => (route.query[k] as string) || '';
@@ -53,9 +66,9 @@ const kw = computed({ get: () => q('q'), set: (v) => setQ({ q: v || undefined })
 const ktype = computed({ get: () => q('type'), set: (v) => setQ({ type: v || undefined }) });
 const st = computed({ get: () => q('st'), set: (v) => setQ({ st: v || undefined }) });
 const TYPE_OPTIONS = [{ value: '', label: '全部类型' }, ...K_TYPES.map((t) => ({ value: t, label: t }))];
-const ST_OPTIONS = [{ value: '', label: '全部状态' }, { value: '已发布', label: '已发布' }, { value: '草稿', label: '草稿' }, { value: '已停用', label: '已停用' }];
+const ST_OPTIONS = [{ value: '', label: '全部状态' }, ...(['已发布', '草稿中', '审核中', '已停用'] as const).map((v) => ({ value: v, label: v }))];
 const filtered = computed(() => visible.value.filter((e) =>
-  (!ktype.value || e.type === ktype.value) && (!st.value || statusOf(e) === st.value)
+  (!ktype.value || e.type === ktype.value) && (!st.value || shownStatus(e) === st.value)
   && (!kw.value || e.name.includes(kw.value) || e.id.includes(kw.value) || e.synonyms.some((s) => s.includes(kw.value)))));
 const LPAGE = 13;
 const lpage = ref(1);
@@ -286,7 +299,6 @@ const histCols = [
 ];
 const crLink = (id: string) => router.push({ path: '/build/ontology/releases', query: { cr: id } });
 
-const statusClass = (s: KStatus) => (s === '已停用' ? 'c-3' : 'c-3');
 const canStop = computed(() => !readonly.value && view.value.status === '已发布' && !draftOnly.value);
 const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.id === a.id) : Q_OBJECT_TYPES.some((t) => t.key === a.id));
 </script>
@@ -311,8 +323,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
         <li v-for="e in list" :key="e.id" :class="{ active: e.id === cur?.id }" @click="pick(e.id)">
           <div class="gl-row">
             <span class="t-14 gl-name">{{ e.name }}</span>
-            <span v-if="statusOf(e) !== '已发布'" class="t-12" :class="statusClass(statusOf(e))">{{ statusOf(e) }}</span>
-            <span v-else-if="!readonly && e.cr" class="t-12 c-3 num">草稿 {{ e.cr }}</span>
+            <span v-if="shownStatus(e) !== '已发布'" class="t-12 num" :class="shownClass(shownStatus(e))">{{ shownStatus(e) }}{{ crOf(e) && shownStatus(e) !== '已停用' ? ` · ${crOf(e)}` : '' }}</span>
           </div>
           <div class="gl-row">
             <span class="t-12 c-3 gl-syn">{{ e.type }}{{ e.synonyms.length ? ` · ${e.synonyms.slice(0, 3).join('、')}` : '' }}</span>
@@ -332,7 +343,9 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
         <span class="t-16 fw-600 c-1">{{ view.name }}</span>
         <span class="t-14 c-3 num">{{ cur.id }}</span>
         <a-tag>{{ view.type }}</a-tag>
-        <a-tag>{{ view.status }}</a-tag>
+        <a-tooltip :title="crOf(cur) && shownStatus(cur) !== '已发布' ? `${crOf(cur)} ${shownStatus(cur) === '审核中' ? '审核中' : '草稿'}，问数仍使用已发布版本` : ''">
+          <a-tag :color="shownStatus(cur) === '审核中' ? 'warning' : undefined">{{ shownStatus(cur) }}</a-tag>
+        </a-tooltip>
         <a-tag v-if="mark('status')" class="gl-diff">{{ mark('status') }}</a-tag>
         <span class="t-12 c-3">{{ view.owner }} · 更新于 {{ cur.updatedAt }}</span>
         <a-segmented v-if="draft && !readonly && !draftOnly" size="small" :value="isDraft ? 'draft' : 'published'"
