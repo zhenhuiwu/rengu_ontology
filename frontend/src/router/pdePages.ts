@@ -9,4 +9,5 @@ export const PDE_PAGES: Record<string, () => Promise<unknown>> = {
   'data-quality': () => import('@/pages/data/DataQuality.vue'),
   functions: () => import('@/pages/functions/Functions.vue'),
   roles: () => import('@/pages/admin/Roles.vue'),
+  'api-keys': () => import('@/pages/admin/ApiKeys.vue'),
 };
