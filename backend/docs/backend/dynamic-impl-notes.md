@@ -1,12 +1,12 @@
 # 动态本体（告警 / 动作中心）后台实现说明
 
 > 依据：`ui-vue/docs/backend/dynamic-api.md`（未改动）。代码：`app/modules/dynamic/`，迁移 `migrations/versions/dynamic_0001_alert_action_run.py`。
-> 基线：共享仓库 `ui-vue` 的 `master` = `a6785f4`（骨架 + qa + static，单 head `static_0001`；骨架在 `backend/`）。本分支先在 `c705c25` 上搬入，再 rebase 到 `a6785f4`。最初在独立仓库基于骨架 `72204b0` 开发，搬入后对应关系：`72204b0`→`0c35c1d`、`b1fc30a`→`c646bd5`、`56a6dd2`→`4c22942`；本文和提交信息里引用的 `5b8fc21` 是 ui-vue 前端 mock 的导出版本，搬迁前后不变。
+> 基线：共享仓库 `ui-vue` 的 `master` = `fa07b57`（骨架 + qa + static + Palantir action / event / integration，单 head `event_0001`；骨架在 `backend/`）。本分支先在 `c705c25` 上搬入，再 rebase 到 `fa07b57`。最初在独立仓库基于骨架 `72204b0` 开发，搬入后对应关系：`72204b0`→`0c35c1d`、`b1fc30a`→`c646bd5`、`56a6dd2`→`4c22942`；本文和提交信息里引用的 `5b8fc21` 是 ui-vue 前端 mock 的导出版本，搬迁前后不变。
 > 本文只记**规格没写死、实现时自行判断**的点（[推断]）、桩、软引用和已知差异。
 
 ## 1. 范围
 
-- 表：`alert`、`alert_log`、`action_run`、`action_run_log`（迁移 `dynamic_0001`，down_revision=`static_0001`；无 branch_labels、无合并迁移；可完整 downgrade）。
+- 表：`alert`、`alert_log`、`action_run`、`action_run_log`（迁移 `dynamic_0001`，down_revision=`event_0001`；无 branch_labels、无合并迁移；可完整 downgrade）。
 - 接口（前缀 `/api/ontology/v1`，共 18 个）：
   - 告警：`GET /alerts`、`GET /alerts/{id}`、`POST /alerts/{id}:claim`、`POST /alerts:batch-claim`、`POST /alerts/{id}:transfer`、`POST /alerts/{id}:close`、`POST /alerts:batch-close`、`POST /alerts/{id}:start-action`、`GET /people`
   - 动作：`GET /action-runs`、`GET /action-runs/{id}`、`GET /actions/meta`、`POST /action-runs:stage`、`:confirm`、`:withdraw`、`:approve`、`:resubmit`、`:reconcile`
@@ -14,7 +14,8 @@
 - **不在本批**：版本快照的 seed_section（规则 rules、生命周期 lifecycles）还没登记，`ontology_release` 快照里暂时没有动态的分区；规则 / 生命周期表等对应模块合入后再做。
 - 鉴权：18 个接口（GET 也一样）都依赖 `CurrentUserDep`（未知 / 停用的 `X-Demo-As` → 401），并挂了 `require_func`（骨架里目前是桩）：告警页 key `alerts`，动作中心 key `action-center`；读 = `view`，写 = `manage`（级别照前端 `roles.ts` 的 `FuncLevel`，不是 edit）。`start-action` 按 `alerts manage` 校验 [推断]。
 - 分页：列表返回 `app.common.pagination.Page` 的子类（多了 counts），页码参数用骨架 `PageParams`（router 只给默认条数：告警 12、动作 16，照前端；page 不自设下限，0 / 负数怎么处理由骨架 `PageParams` 定——骨架 9c3e506 起收成第 1 页，在那之前的骨架上转成 422 VALIDATION_FAILED），上限 `MAX_PAGE_SIZE`。本分支基线的骨架还没有 `clamp` / `list_page` 收拢 / `Page.of`，所以切片（count + offset/limit）只在 `service.fetch_page` 一处，留了 TODO：骨架分支 9521968 / 9c3e506 合并后删掉它，改 `self.repo.list_page(stmt, page)` + `AlertPage.of` / `ActionRunPage.of`。**页码越界**：前端 mock `src/mock/paginate.ts:13` 收拢到最后一页（`Alerts.vue:72` 自己 slice、`Actions.vue:67` 用 paginate）；收拢由骨架 `PageParams.clamp` / `Page.of` 做（响应 page = 收拢后的值，total=0 → page 1），**这不是动态的 [推断]**；本分支的测试不断言越界页的结果。
-- 迁移顺序：`down_revision` = 当前 master 的 head `static_0001`（单 head）；之后 Palantir 的 `integration_0001` 等合入时由合并方再改成当时的 head。`tests/test_dynamic_migration.py` 不假定 dynamic_0001 是 head：按 ScriptDirectory 取它的 down_revision，在临时库升到 `dynamic_0001`、降回去，只比较 dynamic 自己的四张表和类型；骨架 `tests/helpers/migrations.py::assert_module_round_trip` 合并后改用它。
+- 迁移顺序：`down_revision` = 当前 master 的 head `event_0001`（单 head）；之后再有模块先合入时由合并方改成当时的 head。`tests/test_dynamic_migration.py` 不假定 dynamic_0001 是 head：按 ScriptDirectory 取它的 down_revision，在临时库升到 `dynamic_0001`、降回去，只比较 dynamic 自己的四张表和类型；骨架 `tests/helpers/migrations.py::assert_module_round_trip` 合并后改用它。
+- 动作类型：本批仍是软引用 `action_run.action_type_code`（FK to add later → Palantir `action_type.code`）。在 master `fa07b57` 全量 seed 的临时库核对：action_run 种子里 15 个不同的动作类型编码，15 个都在 `action_type`（共 17 行）里，没有缺的；其中 `adjust_region_budget` 状态是 `changing`，其余 `published`。历史列表只在用户传 `actionType` 筛选时按编码过滤，不 join 动作类型表，类型下线 / 缺失的记录照样列出（`tests/test_dynamic_actions.py::test_history_keeps_runs_with_retired_or_missing_action_type`）。
 - 枚举列都用骨架的 `enum_column`（varchar + CHECK，不建 PG 原生 enum），downgrade 后不留类型（`tests/test_migrations.py`）。
 - 模块外改动：只有 `app/db/models.py` 一行 import（让 Alembic 看见 dynamic 的表）。`SEED_MODULES` 骨架里已有 `dynamic`，没改；路由由骨架自动发现。
 

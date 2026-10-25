@@ -277,3 +277,26 @@ async def test_readonly_and_stubs(dyn, client):  # noqa: F811
     # 默认 StubSubmitter：审批后真实走成功分支
     d = (await client.post(f"{API}/action-runs/{APPROVING}:approve")).json()
     assert d["status"] == "成功" and d["extRef"]
+
+
+async def test_history_keeps_runs_with_retired_or_missing_action_type(dyn, client):  # noqa: F811
+    """动作类型是软引用（action_type_code，FK to add later）：
+    类型下线 / 不在目录里，历史记录照样列出、详情照样能看。"""
+    gone = "retired_gone_type"
+    from sqlalchemy import func, select, update
+
+    from app.modules.dynamic.models import ActionRun
+
+    before = (await client.get(f"{API}/action-runs", params={"scope": "all", "size": 1})).json()["total"]
+    code = await dyn.scalar(select(ActionRun.code).order_by(ActionRun.code).limit(1))
+    await dyn.execute(
+        update(ActionRun).where(ActionRun.code == code).values(action_type_code="retired_gone_type")
+    )
+    await dyn.commit()
+    assert await dyn.scalar(select(func.count()).where(ActionRun.action_type_code == gone)) == 1
+    after = (await client.get(f"{API}/action-runs", params={"scope": "all", "size": 200})).json()
+    assert after["total"] == before
+    if after["total"] <= 200:
+        assert code in {x["id"] for x in after["items"]}
+    d = await client.get(f"{API}/action-runs/{code}")
+    assert d.status_code == 200, d.text

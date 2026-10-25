@@ -6,7 +6,7 @@ alert.action_run_id ↔ action_run.alert_id 互指，alert 的外键在 action_r
 alert_log / action_run_log 只追加（数据库触发器兜底）。
 
 Revision ID: dynamic_0001
-Revises: static_0001
+Revises: event_0001
 Create Date: 2026-10-25
 """
 
@@ -19,7 +19,7 @@ from sqlalchemy.dialects import postgresql
 from app.db.ddl import disable_append_only, enable_append_only
 
 revision: str = "dynamic_0001"
-down_revision: str | None = "static_0001"  # 合并方按当时的 master head 再改
+down_revision: str | None = "event_0001"  # 合并方按当时的 master head 再改
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

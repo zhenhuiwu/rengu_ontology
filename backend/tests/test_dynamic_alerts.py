@@ -1,5 +1,6 @@
 """告警处理：每个迁移、每个错误码、只读、在途锁、发起动作、动作成功后自动转已解决。"""
 
+import pytest
 from sqlalchemy import select, update
 
 from app.modules.dynamic.models import Alert
@@ -208,15 +209,16 @@ async def test_start_action_errors(dyn, client, fakes):  # noqa: F811
     assert await dyn.scalar(select(Alert.action_run_id).where(Alert.code == OPEN_ORDER)) is None
 
 
-async def test_page_params_come_from_skeleton(dyn, client):  # noqa: F811
+@pytest.mark.parametrize("path", ["/alerts", "/action-runs"])
+async def test_page_params_come_from_skeleton(dyn, client, path):  # noqa: F811
     """页码交给骨架 PageParams：默认条数照前端（12 / 16），size 照传；page ≤ 0 不由 dynamic 决定——
-    骨架收拢（9c3e506 起）→ 第 1 页；更早的骨架 PageParams 拒绝 → 422 VALIDATION_FAILED。两种都不能是 500。"""
-    assert (await client.get(f"{API}/alerts")).json()["size"] == 12
-    assert (await client.get(f"{API}/action-runs")).json()["size"] == 16
-    assert (await client.get(f"{API}/alerts", params={"size": 5})).json()["size"] == 5
-    for path in ("/alerts", "/action-runs"):
-        r = await client.get(f"{API}{path}", params={"page": 0})
-        if r.status_code == 200:
-            assert r.json()["page"] == 1
-        else:
-            assert err(r, 422, "VALIDATION_FAILED")["details"]["fields"][0]["field"] == "page"
+    骨架收拢（9c3e506 起）→ 第 1 页；更早的骨架 PageParams 拒绝 → 422 VALIDATION_FAILED。两种都不能是 500。
+    按 path 参数化：每个用例最多一个出错请求。"""
+    default = 12 if path == "/alerts" else 16
+    assert (await client.get(f"{API}{path}")).json()["size"] == default
+    assert (await client.get(f"{API}{path}", params={"size": 5})).json()["size"] == 5
+    r = await client.get(f"{API}{path}", params={"page": 0})
+    if r.status_code == 200:
+        assert r.json()["page"] == 1
+    else:
+        assert err(r, 422, "VALIDATION_FAILED")["details"]["fields"][0]["field"] == "page"
