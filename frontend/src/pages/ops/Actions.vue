@@ -17,7 +17,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import {
-  ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS,
+  ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS, OBJ_KIND_LABEL, hasObjRef,
   type ActionRecord, type ActionStatus, type ActionLog,
 } from '@/mock/actions';
 
@@ -58,7 +58,7 @@ const rows = computed(() => {
     (status.value === '全部' || a.status === status.value) &&
     (actionName.value === '全部' || a.action === actionName.value) &&
     (system.value === '全部' || a.sysId === system.value) &&
-    (!k || a.id.includes(k) || a.objLabel.includes(k) || a.idemKey.includes(k.toLowerCase()) || (a.extRef ?? '').includes(k) || (a.source.alertId ?? '').includes(k)));
+    (!k || a.id.includes(k) || a.objLabel.includes(k) || a.idemKey.includes(k.toLowerCase()) || (a.extRef ?? '').includes(k) || (a.source.alertId ?? '').includes(k) || (a.source.ruleId ?? '') === k || (a.source.session ?? '') === k));
   // 对账页签：待对账的排在前面
   return t.key === 'unknown' ? [...list].sort((a, b) => Number(b.status === '结果未知') - Number(a.status === '结果未知')) : list;
 });
@@ -74,9 +74,16 @@ const pick = (a: ActionRecord) => { pinned.value = a.id; router.replace({ query:
 
 /** 状态点：待确认橙（需要关注）、失败红，其余灰；结果未知单独显示橙色问号 + “结果未知 · 待对账” */
 const badge = (s: ActionStatus) => (s === '待确认' ? 'warning' : s === '失败' ? 'error' : 'default');
-const kindLabel = (k: string) => (k === 'order' ? '订单' : k === 'product' ? '商品' : '门店');
+const kindLabel = (k: ActionRecord['objKind']) => OBJ_KIND_LABEL[k];
 const sourceText = (a: ActionRecord) =>
-  a.source.type === '告警' ? `告警 ${a.source.alertId}` : a.source.type === '问数' ? `问数 · ${a.source.session}` : a.retryOf ? `重新提交 · ${a.retryOf}` : '手动';
+  a.source.type === '规则' ? `规则 ${a.source.ruleId} ${a.source.ruleVersion}${a.source.alertId ? ` · 告警 ${a.source.alertId}` : ''}`
+  : a.source.type === '告警' ? `告警 ${a.source.alertId}`
+  : a.source.type === '问数' ? `问数 · ${a.source.session} ${a.source.sessionTitle}`
+  : a.retryOf ? `重新提交 · ${a.retryOf}` : '手动';
+/** 规则暂存的动作由规则指定的确认人确认 / 撤回；其他人只能查看 */
+const confirmerOf = (a: ActionRecord) => a.source.confirmer ?? a.initiator;
+const notMine = (a: ActionRecord) => !!a.source.confirmer && a.source.confirmer !== ME;
+const notMineText = (a: ActionRecord) => `该动作由规则 ${a.source.ruleId} 暂存，指定确认人为 ${a.source.confirmer}，只有确认人可以确认提交或撤回`;
 const timeline = computed(() => (current.value?.log ?? []).map((l: ActionLog) => ({ time: l.desc ? `${l.time} · ${l.desc}` : l.time, text: l.text, status: l.status })));
 
 const columns = [
@@ -101,10 +108,12 @@ async function submit() {
     fields: [
       { label: '参数', value: a.params },
       { label: '来源', value: a.source.type === '告警' ? `${a.source.alertId}（${a.source.ruleId} ${a.source.ruleVersion}）` : sourceText(a) },
+      { label: '确认人', value: confirmerOf(a) },
       { label: '审批人', value: a.approver },
       { label: '外部系统', value: `${a.system} · ${ACTION_META[a.action].call}` },
       { label: '幂等键', value: a.idemKey },
     ],
+    blocked: notMine(a) ? notMineText(a) : undefined,
     impact: `确认后进入审批，审批通过后写回 ${a.system}；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时人工对账，不自动重试写入。`,
   });
   if (!ok) return;
@@ -119,7 +128,7 @@ async function submit() {
 const withdrawOpen = ref(false);
 const withdrawReason = ref('');
 function doWithdraw() {
-  const a = current.value; if (!a || !withdrawReason.value.trim()) return;
+  const a = current.value; if (!a || !withdrawReason.value.trim() || notMine(a)) return;
   pinned.value = a.id;
   a.status = '已撤回';
   push(a, { time: now(), text: `撤回：${withdrawReason.value.trim()}`, desc: ME });
@@ -150,7 +159,7 @@ async function resubmit() {
   const t = now();
   const rec: ActionRecord = reactive({
     ...a, id: newId, idemKey: newKey, status: '执行中', submittedAt: t, extRef: null, failReason: undefined,
-    initiator: ME, retryOf: a.id, retriedAs: undefined, source: a.source.type === '告警' ? a.source : { type: '手动' },
+    initiator: ME, retryOf: a.id, retriedAs: undefined, source: a.source.type === '告警' || a.source.type === '规则' ? { ...a.source, confirmer: undefined } : { type: '手动' },
     log: [
       { time: t, text: `重新提交自 ${a.id}（上次失败：${a.failReason ?? '--'}）`, desc: ME },
       { time: t, text: `生成动作「${a.action}」· 动作类型 ${a.typeVersion}`, desc: `发起人 ${ME} · 幂等键 ${newKey}` },
@@ -222,9 +231,9 @@ const terminalText = computed(() => {
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'id'"><span class="num">{{ record.id }}</span></template>
             <template v-else-if="column.key === 'obj'">
-              <ObjRef :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef>
+              <ObjRef v-if="hasObjRef(record.objKind)" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
             </template>
-            <template v-else-if="column.key === 'source'"><span :class="record.source.type === '告警' ? 'num' : 'c-2'">{{ sourceText(record) }}</span></template>
+            <template v-else-if="column.key === 'source'"><span :class="record.source.type === '手动' ? 'c-2' : 'num'">{{ sourceText(record) }}</span></template>
             <template v-else-if="column.key === 'status'"><span v-if="record.status === '结果未知'" class="tl-attention ac-unk"><QuestionCircleOutlined /> 结果未知 · 待对账</span><a-badge v-else :status="badge(record.status)" :text="record.status" /></template>
             <template v-else-if="column.key === 'submittedAt'"><span class="num">{{ record.submittedAt }}</span></template>
           </template>
@@ -247,14 +256,16 @@ const terminalText = computed(() => {
           <a-descriptions-item label="动作" :span="2">{{ current.action }}<span class="c-3"> · 动作类型 {{ current.typeVersion }}</span></a-descriptions-item>
           <a-descriptions-item label="参数" :span="2">{{ current.params }}</a-descriptions-item>
           <a-descriptions-item label="对象" :span="2">
-            <span class="c-3">{{ kindLabel(current.objKind) }} </span><ObjRef :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef>
+            <span class="c-3">{{ kindLabel(current.objKind) }} </span><ObjRef v-if="hasObjRef(current.objKind)" :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef><span v-else class="c-1">{{ current.objLabel }}</span>
           </a-descriptions-item>
           <a-descriptions-item label="来源" :span="2">
             <template v-if="current.source.type === '告警'"><span class="num">告警 {{ current.source.alertId }}</span><span class="c-3"> · 规则 {{ current.source.ruleId }} {{ current.source.ruleVersion }}</span></template>
+            <template v-else-if="current.source.type === '规则'"><span class="num">规则 {{ current.source.ruleId }} {{ current.source.ruleVersion }}</span><span v-if="current.source.alertId" class="c-3 num"> · 告警 {{ current.source.alertId }}</span><span class="c-3"> · 命中后自动暂存</span></template>
             <template v-else>{{ sourceText(current) }}</template>
           </a-descriptions-item>
           <a-descriptions-item label="发起人">{{ current.initiator }}</a-descriptions-item>
-          <a-descriptions-item label="审批人">{{ current.approver }}</a-descriptions-item>
+          <a-descriptions-item label="确认人">{{ confirmerOf(current) }}</a-descriptions-item>
+          <a-descriptions-item label="审批人" :span="2">{{ current.approver }}</a-descriptions-item>
           <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
           <a-descriptions-item label="外部系统">{{ current.system }}</a-descriptions-item>
           <a-descriptions-item label="外部单号"><span class="num">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
@@ -268,6 +279,12 @@ const terminalText = computed(() => {
         <template v-if="readonly">
           <span class="t-14 c-3 ac-foot-note">{{ roReason }}，不能处理动作</span>
           <a-tooltip :title="roReason"><a-button disabled>{{ current.status === '结果未知' ? '发起对账' : current.status === '失败' ? '重新提交' : '确认提交' }}</a-button></a-tooltip>
+        </template>
+
+        <template v-else-if="current.status === '待确认' && notMine(current)">
+          <span class="t-14 c-3 ac-foot-note">确认人为 {{ current.source.confirmer }}，你只能查看</span>
+          <a-tooltip :title="notMineText(current)"><a-button disabled>撤回</a-button></a-tooltip>
+          <a-tooltip :title="notMineText(current)"><a-button type="primary" disabled>确认提交</a-button></a-tooltip>
         </template>
 
         <template v-else-if="current.status === '待确认'">

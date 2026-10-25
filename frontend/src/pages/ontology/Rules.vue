@@ -21,14 +21,19 @@ import { alertTimeline } from '@/mock/dynamic';
 import { metricById } from '@/mock/metrics';
 import { ACTIONS } from '@/mock/actions';
 import { ACTION_TYPES, actionTypeById, eventTypeById, paramsOf } from '@/mock/actionEvent';
-import type { DraftCR } from '@/mock/releases';
 import {
   RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel,
   type RuleDef, type AutoStage, type Hit,
 } from '@/mock/rules';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { allDrafts } from './parts/useDraftView';
+import { useDraftView } from './parts/useDraftView';
+
+/** 新建 / 修改草稿时记当前时间 */
+const nowText = () => {
+  const d = new Date(); const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -57,25 +62,16 @@ const tab = computed({
   set: (v) => router.replace({ query: { ...route.query, ...RESET, view: route.query.view, tab: v === 'cond' ? undefined : v } }),
 });
 
-/* 草稿：本页本地维护（共用 DraftBanner / StartChangeModal） */
-const created = reactive<Record<string, DraftCR>>({});
-const draftCR = computed<DraftCR | undefined>(() => created[base.value.id] ?? RULE_DRAFTS[base.value.id]?.cr);
-const isDraft = computed(() => !readonly.value && !!draftCR.value && route.query.view === 'draft');
-const editTip = computed(() => (readonly.value ? reason.value : isDraft.value ? '' : '已发布版本只读，请先发起变更'));
-const setView = (v: 'published' | 'draft') => router.replace({ query: { ...route.query, view: v === 'draft' ? 'draft' : undefined } });
+/* 草稿：公共 useDraftView('rule')，变更单信息取自变更单本身（R-007 在 CR-0011）；本地只保留规则草稿的改动内容 */
+const { draft: draftCR, isDraft, editTip, setView, start } = useDraftView('rule', () => base.value.id);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
-function start(opts: { join?: string; title?: string }) {
-  const found = opts.join ? allDrafts().find((d) => d.id === opts.join) : undefined;
-  created[base.value.id] = found ?? { id: `CR-${String(40 + Object.keys(created).length).padStart(4, '0')}`, title: opts.title || '未命名变更', owner: '王敏', updatedAt: '2026-10-25 16:40', changes: 0 };
-  setView('draft');
-}
 /** 草稿里的改动（自动暂存配置、阈值） */
 const edits = reactive<Record<string, { autoStage: AutoStage; thresholds: string[] }>>({});
 const draftDef = computed<RuleDef | undefined>(() => {
   if (!draftCR.value) return undefined;
-  const p = RULE_DRAFTS[base.value.id]?.patch ?? {};
+  const p = RULE_DRAFTS[base.value.id] ?? {};
   return { ...base.value, ...p, version: p.version ?? base.value.version + 1 };
 });
 function ensureEdits() {
@@ -97,7 +93,7 @@ const metricBumped = computed(() => {
 });
 function saveDraft() {
   const cr = draftCR.value!;
-  cr.changes += 1; cr.updatedAt = '2026-10-25 16:42';
+  cr.changes += 1; cr.updatedAt = nowText();
   message.success(`已保存到草稿 ${cr.id}，发布前不影响线上规则`);
 }
 
@@ -114,6 +110,8 @@ const evType = computed(() => (rule.value.trigger.eventId ? eventTypeById(rule.v
 
 /* 动作 */
 const actType = computed(() => (rule.value.actionTypeId ? actionTypeById(rule.value.actionTypeId) : undefined));
+/** 外部系统名由动作类型目录按 EXT_SYSTEMS 解析（发起调价审批 → 泛微 OA） */
+const actSystem = computed(() => actType.value?.system ?? '--');
 const stageEdit = computed(() => (isDraft.value ? ensureEdits().autoStage : rule.value.autoStage));
 const stageType = computed(() => (stageEdit.value.actionTypeId ? actionTypeById(stageEdit.value.actionTypeId) : undefined));
 const actOptions = computed(() => ACTION_TYPES.filter((a) => a.targetKind === rule.value.objKind && a.status !== '草稿').map((a) => ({ value: a.id, label: `${a.name} · ${a.version}` })));
@@ -138,14 +136,17 @@ const hq = usePagedQuery({ defaultSize: 12, prefix: 'h' });
 const hits7 = computed(() => hitsOf(base.value.id).filter((h) => h.at > '2026-10-18 23:59:59').length);
 const hitsAll = computed(() => hitsOf(base.value.id).filter((h) => h.at > (hrange.value === '7d' ? '2026-10-18 23:59:59' : '2026-09-25')));
 const hits = computed(() => paginate(hitsAll.value, { page: hq.page.value, size: hq.size.value }));
-const hitCols = [
+/** 商品类规则（R-007 / R-012）去重键含门店，命中与回放样本单列门店 */
+const STORE_COL = { title: '门店', key: 'store', width: 220, ellipsis: true };
+const hitCols = computed(() => [
   { title: '命中时间', dataIndex: 'at', width: 172 },
   { title: '告警 / 命中编号', key: 'id', width: 200 },
-  { title: '对象', key: 'obj', ellipsis: true },
+  { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
+  ...(base.value.objKind === 'product' ? [STORE_COL] : []),
   { title: '命中值', dataIndex: 'value', width: 200, ellipsis: { showTitle: true } },
   { title: '阈值', dataIndex: 'threshold', width: 160, ellipsis: { showTitle: true } },
   { title: '处理状态', key: 'result', width: 110 },
-];
+]);
 const hitOpen = computed(() => (q('hit') ? hitsOf(base.value.id).find((h) => h.id === q('hit')) : undefined));
 const openHit = (h: Hit) => setQ({ hit: h.id });
 const hitLinked = computed(() => (hitOpen.value?.alertId ? ACTIONS.find((a) => a.source.alertId === hitOpen.value!.alertId) : undefined));
@@ -167,12 +168,13 @@ function runReplay() { running.value = true; setTimeout(() => { running.value = 
 const result = computed(() => (ran.value ? replay(base.value, rrange.value as '7d' | '30d', rver.value === 'draft') : null));
 const rq = usePagedQuery({ defaultSize: 9, prefix: 'r' });
 const samples = computed(() => paginate(result.value?.samples ?? [], { page: rq.page.value, size: rq.size.value }));
-const sampleCols = [
+const sampleCols = computed(() => [
   { title: '时间', dataIndex: 'at', width: 172 },
-  { title: '对象', key: 'obj', ellipsis: true },
+  { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
+  ...(base.value.objKind === 'product' ? [STORE_COL] : []),
   { title: '命中值', dataIndex: 'value', width: 220, ellipsis: { showTitle: true } },
   { title: '与实际命中对比', key: 'diff', width: 160 },
-];
+]);
 
 /* 版本历史 */
 const versions = computed(() => ruleVersions(base.value, draftDef.value?.version));
@@ -201,7 +203,7 @@ const verCols = [
         <li v-for="r in list" :key="r.id" :class="{ active: r.id === base.id }" @click="pick(r.id)">
           <div class="ru-row">
             <span class="t-14 ru-name">{{ r.name }}</span>
-            <span class="t-12 num" :class="r.status === '变更中' ? 'c-warning' : 'c-3'">{{ r.status === '已发布' ? '' : r.status + ' · ' }}v{{ r.version }}</span>
+            <span class="t-12 num c-3">{{ r.status === '已发布' ? '' : r.status + ' · ' }}v{{ r.version }}</span>
           </div>
           <div class="ru-row">
             <span class="t-12 c-3 num">{{ r.id }}</span>
@@ -220,8 +222,8 @@ const verCols = [
       <div class="ru-head">
         <span class="t-16 fw-600 c-1">{{ rule.name }}</span>
         <span class="t-14 c-3 num">{{ rule.id }}</span>
-        <span class="t-14 c-3">v{{ rule.version }}</span>
-        <a-badge :status="rule.status === '变更中' ? 'warning' : 'default'" :text="rule.status" />
+        <span class="t-14 c-3 num">{{ isDraft ? `草稿 v${rule.version}（已发布 v${base.version}）` : `v${rule.version}` }}</span>
+        <a-badge status="default" :text="rule.status" />
         <a-segmented v-if="draftCR && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draftCR.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
@@ -262,7 +264,10 @@ const verCols = [
               <span v-else>{{ record.field }}</span>
             </template>
             <template v-else-if="column.key === 'ver'">
-              <span v-if="record.metricVer" class="num" :class="isDraft && record.metricVer !== base.conds[index]?.metricVer ? 'c-warning' : 'c-2'">口径 v{{ record.metricVer }}</span>
+              <template v-if="record.metricVer">
+                <span v-if="isDraft && record.metricVer !== base.conds[index]?.metricVer" class="num c-2"><span class="c-3 ru-old">v{{ base.conds[index]?.metricVer }}</span> → 口径 v{{ record.metricVer }}<a-tag class="ru-diff">修改</a-tag></span>
+                <span v-else class="num c-2">口径 v{{ record.metricVer }}</span>
+              </template>
               <span v-else class="c-3">对象字段</span>
             </template>
             <template v-else-if="column.key === 'value'">
@@ -272,7 +277,11 @@ const verCols = [
           </template>
         </a-table>
         <div class="ru-sec t-14 fw-600">原始表达式</div>
-        <pre class="ru-expr num t-12">{{ rule.expr }}</pre>
+        <template v-if="isDraft && rule.expr !== base.expr">
+          <pre class="ru-expr ru-expr-old num t-12 c-3">{{ base.expr }}</pre>
+          <pre class="ru-expr num t-12">{{ rule.expr }}<a-tag class="ru-diff">修改</a-tag></pre>
+        </template>
+        <pre v-else class="ru-expr num t-12">{{ rule.expr }}</pre>
         <a-descriptions :column="3" bordered size="small">
           <a-descriptions-item label="去重键">{{ rule.dedupe }}</a-descriptions-item>
           <a-descriptions-item label="冷却">{{ rule.cooldown }}</a-descriptions-item>
@@ -316,7 +325,7 @@ const verCols = [
           <div class="ru-sec t-14 fw-600">命中后可执行的动作</div>
           <a-descriptions :column="2" bordered size="small">
             <a-descriptions-item label="动作类型">{{ actType ? `${actType.name} · ${actType.version}` : '无（只通知）' }}</a-descriptions-item>
-            <a-descriptions-item label="外部系统">{{ actType?.system ?? '--' }}</a-descriptions-item>
+            <a-descriptions-item label="外部系统">{{ actSystem }}</a-descriptions-item>
             <a-descriptions-item label="审批">{{ actType?.approval ?? '--' }}</a-descriptions-item>
             <a-descriptions-item label="幂等键"><span class="num">{{ actType?.idemKey ?? '--' }}</span></a-descriptions-item>
           </a-descriptions>
@@ -371,6 +380,7 @@ const verCols = [
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'id'"><a class="num" @click="openHit(record)">{{ record.id }}</a></template>
               <template v-else-if="column.key === 'obj'"><ObjRef :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef></template>
+              <template v-else-if="column.key === 'store'"><ObjRef v-if="record.storeId" kind="store" :id="record.storeId">{{ record.storeLabel }}</ObjRef><span v-else class="c-3">--</span></template>
               <template v-else-if="column.key === 'result'"><a-badge :status="resultBadge(record.result)" :text="record.result" /></template>
             </template>
           </a-table>
@@ -396,14 +406,16 @@ const verCols = [
           <div class="ru-stats">
             <div><div class="t-12 c-3">实际命中（v{{ base.version }}）</div><div class="t-20 fw-600 c-1 num">{{ result.actual }}</div></div>
             <div><div class="t-12 c-3">试跑会命中（{{ rver === 'draft' ? `草稿 v${draftDef?.version}` : `当前 v${base.version}` }}）</div><div class="t-20 fw-600 c-1 num">{{ result.would }}</div></div>
-            <div><div class="t-12 c-3">新增命中</div><div class="t-20 fw-600 num" :class="result.added ? 'c-warning' : 'c-1'">{{ result.added }}</div></div>
-            <div><div class="t-12 c-3">不再命中</div><div class="t-20 fw-600 num" :class="result.removed ? 'c-warning' : 'c-1'">{{ result.removed }}</div></div>
+            <div><div class="t-12 c-3">新增命中</div><div class="t-20 fw-600 num c-1">{{ result.added }}</div></div>
+            <div><div class="t-12 c-3">不再命中</div><div class="t-20 fw-600 num c-1">{{ result.removed }}</div></div>
           </div>
+          <div class="t-12 c-3">命中数只算会生成告警 / 通知的命中；另有 <span class="num">{{ result.deduped }}</span> 个样本去重键相同、在冷却期（{{ base.cooldown }}）内，列为“被去重”，不计入</div>
           <div class="paged-scroll">
             <a-table :columns="sampleCols" :data-source="samples.items" :pagination="false" size="middle" row-key="key" :locale="{ emptyText: '该时间范围内没有命中样本' }">
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'obj'"><ObjRef :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef></template>
-                <template v-else-if="column.key === 'diff'"><a-badge :status="record.diff === '一致' ? 'default' : 'warning'" :text="record.diff" /></template>
+                <template v-else-if="column.key === 'store'"><ObjRef v-if="record.storeId" kind="store" :id="record.storeId">{{ record.storeLabel }}</ObjRef><span v-else class="c-3">--</span></template>
+                <template v-else-if="column.key === 'diff'"><a-badge status="default" :text="record.diff" /></template>
               </template>
             </a-table>
           </div>
@@ -433,6 +445,7 @@ const verCols = [
       <a-descriptions :column="1" bordered size="small">
         <a-descriptions-item label="规则">{{ base.id }} {{ base.name }} · v{{ base.version }}</a-descriptions-item>
         <a-descriptions-item label="对象"><ObjRef :kind="hitOpen.objKind" :id="hitOpen.objId">{{ hitOpen.objLabel }}</ObjRef></a-descriptions-item>
+        <a-descriptions-item v-if="hitOpen.storeId" label="门店"><ObjRef kind="store" :id="hitOpen.storeId">{{ hitOpen.storeLabel }}</ObjRef></a-descriptions-item>
         <a-descriptions-item label="命中值">{{ hitOpen.value }}，阈值 {{ hitOpen.threshold }}</a-descriptions-item>
         <a-descriptions-item label="命中时间"><span class="num">{{ hitOpen.at }}</span></a-descriptions-item>
         <a-descriptions-item v-if="hitOpen.alert" label="级别 / 处理人">{{ hitOpen.alert.level }} · {{ hitOpen.alert.assignee ?? '未认领' }}</a-descriptions-item>
@@ -477,6 +490,9 @@ const verCols = [
 .ru-sec-row { display: flex; justify-content: space-between; align-items: center; }
 .ru-tool { display: flex; align-items: center; gap: 8px; flex: none; }
 .ru-remind { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border: var(--border); border-radius: var(--radius); background: var(--warning-bg); flex: none; }
+.ru-old { text-decoration: line-through; }
+.ru-diff { margin-left: 8px; }
+.ru-expr-old { text-decoration: line-through; margin-bottom: -4px; }
 .ru-expr { margin: 0; padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); white-space: pre-wrap; }
 .ru-th { width: 200px; }
 .ru-gap { margin-left: 8px; }

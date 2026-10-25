@@ -6,7 +6,7 @@ export type AlertStatus = '待处理' | '处理中' | '已解决' | '已忽略';
 
 export interface RuleRef { id: string; name: string; version: string; trigger: '定时' | '事件' | '阈值越线' | '状态机' }
 export const RULES: Record<string, RuleRef & { condition: string; schedule: string; dedupe: string; action?: string; metric?: string }> = {
-  'R-007': { id: 'R-007', name: '商品毛利率越线', version: 'v3', trigger: '阈值越线', metric: 'gross_margin', condition: '毛利率 < 18.00%，且上次计算 ≥ 18.00%', schedule: '每天 08:00', dedupe: '规则 + 商品 + 门店 + 日期，冷却 7 天', action: '调价审批' },
+  'R-007': { id: 'R-007', name: '商品毛利率越线', version: 'v3', trigger: '阈值越线', metric: 'gross_margin', condition: '毛利率 < 18.00%，且上次计算 ≥ 18.00%', schedule: '每天 08:00', dedupe: '规则 + 商品 + 门店 + 日期，冷却 7 天', action: '发起调价审批' },
   'R-012': { id: 'R-012', name: '可用库存低于安全线', version: 'v2', trigger: '事件', condition: '收到“库存变动”事件后：可用库存 < 安全库存', schedule: '事件触发', dedupe: '规则 + 商品 + 门店，冷却 24 小时', action: '补货申请' },
   'R-015': { id: 'R-015', name: '出库超 48 小时未签收', version: 'v1', trigger: '定时', condition: '订单状态 = 已出库，且出库时长 > 48 小时', schedule: '每小时第 10 分', dedupe: '规则 + 订单，不重复', action: '发起物流催派' },
   'R-021': { id: 'R-021', name: '门店销售额环比下降', version: 'v2', trigger: '定时', metric: 'gmv', condition: '销售额（不含税）周环比 < −15.0%', schedule: '每周一 09:00', dedupe: '规则 + 门店 + 周，冷却 7 天' },
@@ -16,6 +16,8 @@ export const RULES: Record<string, RuleRef & { condition: string; schedule: stri
 export interface Alert {
   id: string; level: AlertLevel; ruleId: keyof typeof RULES;
   objKind: 'store' | 'product' | 'order'; objId: string; objLabel: string;
+  /** 商品类告警发生在哪家门店（R-007 / R-012 的去重键含门店） */
+  storeId?: string; storeLabel?: string;
   value: string; threshold: string; triggeredAt: string; status: AlertStatus; assignee: string | null;
   cutoff: string;
 }
@@ -92,3 +94,7 @@ import { STORES } from './stores';
     }
   }
 })();
+
+/** 商品类告警补上门店（按告警编号固定取，不影响上面的随机序列） */
+export const storeOfKey = (key: string) => STORES[key.split('').reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 100003, 7) % STORES.length];
+for (const a of ALERTS) if (a.objKind === 'product' && !a.storeId) { const st = storeOfKey(a.id); a.storeId = st.id; a.storeLabel = st.name; }

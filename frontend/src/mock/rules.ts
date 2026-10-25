@@ -5,12 +5,11 @@
  * 规则版本、指标口径版本都是整数。
  */
 import { seeded } from './format';
-import { RULES, ALERTS, type Alert } from './dynamic';
+import { RULES, ALERTS, storeOfKey, type Alert } from './dynamic';
 import { PRODUCTS } from './products';
 import { STORES } from './stores';
 import { ORDERS } from './orders';
 import { ACTIONS } from './actions';
-import type { DraftCR } from './releases';
 
 export type RuleStatus = '已发布' | '变更中' | '已停用';
 export type ObjKind = 'store' | 'product' | 'order';
@@ -43,7 +42,7 @@ export const RULE_DEFS: RuleDef[] = [
     conds: [{ field: '可用库存', op: '<', value: '安全库存' }, { field: '商品状态', op: '=', value: '在售' }],
     logic: '且', expr: 'event.available < product.safetyStock(store) AND product.status = "在售"', dedupe: '规则 + 商品 + 门店', cooldown: '24 小时',
     trigger: { kind: '事件', eventId: 'inventory_changed', text: '订阅“库存变动”（InventoryChanged）', filter: 'changeType ∈ {出库, 调拨出, 盘亏}' }, actionTypeId: 'request_replenish',
-    autoStage: AS('request_replenish', [['商品', '事件.SKU'], ['门店', '事件.门店'], ['补货数量', '安全库存 × 1.5 − 可用库存'], ['补货方式', '固定值：仓库调拨'], ['关联告警', '告警.ID']], '门店店长') },
+    autoStage: AS('request_replenish', [['商品', '事件.SKU'], ['门店', '事件.门店'], ['补货数量', '安全库存 × 1.5 − 可用库存'], ['补货方式', '固定值：仓库调拨'], ['关联告警', '告警.ID']], '供应链计划员 周晓峰') },
   { id: 'R-015', name: RULES['R-015'].name, version: 1, status: '已发布', owner: '陈立军', core: true, objKind: 'order', level: '中', output: '告警', weekly: 212,
     desc: '已出库超过 48 小时仍未签收的订单，每单只产生一次告警。',
     conds: [{ field: '订单状态', op: '=', value: '已出库' }, { field: '出库时长', op: '>', value: '48 小时' }],
@@ -112,23 +111,27 @@ export const ruleDefById = (id: string) => RULE_DEFS.find((r) => r.id === id);
 export const isCoreRule = (id: string) => id in RULES;
 
 /** 变更中的规则：R-007 随 CR-0011（毛利率口径扣除促销补贴，口径 v2 → v3）一起改 */
-export const RULE_DRAFTS: Record<string, { cr: DraftCR; patch: Partial<RuleDef> }> = {
+/** 规则草稿的改动内容（变更单信息以变更单为准：R-007 在 CR-0011，见 useDraftView） */
+export const RULE_DRAFTS: Record<string, Partial<RuleDef>> = {
   'R-007': {
-    cr: { id: 'CR-0011', title: '毛利率口径扣除促销补贴', owner: '何静', updatedAt: '2026-10-24 18:40', changes: 3 },
-    patch: {
-      version: 4,
-      conds: [{ metric: 'gross_margin', metricVer: 3, field: '毛利率', op: '<', value: '18.00%' }, { metric: 'gross_margin', metricVer: 3, field: '上次计算的毛利率', op: '≥', value: '18.00%' }],
-      expr: 'gross_margin@v3(sku, store, day) < 0.18 AND prev(gross_margin@v3) >= 0.18',
-    },
+    version: 4,
+    conds: [{ metric: 'gross_margin', metricVer: 3, field: '毛利率', op: '<', value: '18.00%' }, { metric: 'gross_margin', metricVer: 3, field: '上次计算的毛利率', op: '≥', value: '18.00%' }],
+    expr: 'gross_margin@v3(sku, store, day) < 0.18 AND prev(gross_margin@v3) >= 0.18',
   },
 };
 
 /* ───────── 命中记录 ───────── */
 export interface Hit {
   id: string; ruleId: string; at: string; objKind: ObjKind; objId: string; objLabel: string;
+  storeId?: string; storeLabel?: string;
   value: string; threshold: string; alertId: string | null; result: string; alert?: Alert;
 }
 const SAMPLE_VALUE: Record<string, (r: () => number) => string> = {
+  'R-007': (r) => `${(15 + r() * 2.95).toFixed(2)}%`,
+  'R-012': (r) => `可用 ${Math.floor(r() * 12)} · 安全 ${12 + Math.floor(r() * 12)}`,
+  'R-015': (r) => `已出库 ${49 + Math.floor(r() * 40)} 小时`,
+  'R-021': (r) => `−${(15 + r() * 9).toFixed(1)}%`,
+  'SM-ORD': (r) => (r() < 0.5 ? '已签收 → 已出库' : '已取消 → 待发货'),
   'R-003': (r) => `${(88 + r() * 6.9).toFixed(2)}%`,
   'R-009': (r) => `${(500 + r() * 1800).toFixed(2)} 元`,
   'R-010': (r) => `${(72 + r() * 30).toFixed(1)} 小时`,
@@ -155,7 +158,9 @@ function synthHits(rule: RuleDef): Hit[] {
       else { objId = ORDERS[Math.floor(r() * ORDERS.length)].id; objLabel = objId; }
       const c = rule.conds[0];
       const v = SAMPLE_VALUE[rule.id]?.(r) ?? c.field;
-      out.push({ id: `HIT-${rule.id.replace('-', '')}-${time.slice(5, 10).replace('-', '')}${pad(k)}`, ruleId: rule.id, at: time, objKind: rule.objKind, objId, objLabel,
+      const hid = `HIT-${rule.id.replace('-', '')}-${time.slice(5, 10).replace('-', '')}${pad(k)}`;
+      const st = rule.objKind === 'product' ? storeOfKey(hid) : undefined;
+      out.push({ id: hid, ruleId: rule.id, at: time, objKind: rule.objKind, objId, objLabel, storeId: st?.id, storeLabel: st?.name,
         value: v, threshold: `${c.op} ${c.value}`, alertId: null, result: r() < 0.9 ? '已通知' : '已去重' });
     }
   }
@@ -165,9 +170,11 @@ const HIT_CACHE = new Map<string, Hit[]>();
 export function hitsOf(ruleId: string): Hit[] {
   if (HIT_CACHE.has(ruleId)) return HIT_CACHE.get(ruleId)!;
   const rule = ruleDefById(ruleId)!;
+  // 核心规则：产生告警的命中 + 去重键相同、冷却期内被去重（不再产生告警）的命中
   const hits = rule.core
-    ? ALERTS.filter((a) => a.ruleId === ruleId).map((a) => ({ id: a.id, ruleId, at: a.triggeredAt, objKind: a.objKind, objId: a.objId, objLabel: a.objLabel,
-      value: a.value, threshold: a.threshold, alertId: a.id, result: a.status, alert: a }))
+    ? [...ALERTS.filter((a) => a.ruleId === ruleId).map((a): Hit => ({ id: a.id, ruleId, at: a.triggeredAt, objKind: a.objKind, objId: a.objId, objLabel: a.objLabel,
+      storeId: a.storeId, storeLabel: a.storeLabel, value: a.value, threshold: a.threshold, alertId: a.id, result: a.status, alert: a })),
+    ...synthHits(rule).filter((_, i) => i % 3 === 0).map((h): Hit => ({ ...h, result: '已去重' }))]
       .sort((a, b) => b.at.localeCompare(a.at))
     : synthHits(rule);
   HIT_CACHE.set(ruleId, hits);
@@ -178,26 +185,36 @@ export function hitsOf(ruleId: string): Hit[] {
 export const stagedOf = (ruleId: string) => ACTIONS.filter((a) => a.source.ruleId === ruleId);
 
 /* ───────── 回放试跑（示例计算） ───────── */
-export interface ReplaySample { key: string; at: string; objKind: ObjKind; objId: string; objLabel: string; value: string; diff: '一致' | '新增命中' | '不再命中' }
+export type ReplayDiff = '一致' | '新增命中' | '不再命中' | '被去重';
+export interface ReplaySample { key: string; at: string; objKind: ObjKind; objId: string; objLabel: string; storeId?: string; storeLabel?: string; value: string; diff: ReplayDiff }
+/**
+ * 用历史数据重算规则：逐条列出命中样本。去重键相同、冷却期内的重复命中列为“被去重”，不计入命中数
+ * （命中数 = 会产生告警 / 通知的命中，与变更单影响面“近 7 天回放命中 3 → 5”同口径）。
+ * 草稿只升了口径（R-007 毛利率 v2 → v3，扣除促销补贴后毛利只会更低）：原命中全部保留，另有新增命中。
+ */
 export function replay(rule: RuleDef, range: '7d' | '30d', useDraft: boolean) {
   const cut = range === '7d' ? '2026-10-18 23:59:59' : '2026-09-25 00:00:00';
-  const actual = hitsOf(rule.id).filter((h) => h.at > cut);
-  const r = seeded(actual.length * 13 + (useDraft ? 7 : 1) + (range === '7d' ? 3 : 5));
-  const samples: ReplaySample[] = actual.map((h) => ({ key: h.id, at: h.at, objKind: h.objKind, objId: h.objId, objLabel: h.objLabel, value: h.value,
-    diff: useDraft && r() < 0.18 ? '不再命中' : '一致' }));
+  const all = hitsOf(rule.id).filter((h) => h.at > cut);
+  const counted = all.filter((h) => h.result !== '已去重');
+  const r = seeded(all.length * 13 + (useDraft ? 7 : 1) + (range === '7d' ? 3 : 5));
+  const samples: ReplaySample[] = all.map((h) => ({ key: h.id, at: h.at, objKind: h.objKind, objId: h.objId, objLabel: h.objLabel, storeId: h.storeId, storeLabel: h.storeLabel, value: h.value,
+    diff: h.result === '已去重' ? '被去重' : useDraft && !rule.core && r() < 0.18 ? '不再命中' : '一致' }));
   if (useDraft) {
-    const extra = Math.max(2, Math.round(actual.length * 0.12));
+    const extra = Math.max(2, Math.round(counted.length * 0.12));
     for (let i = 0; i < extra; i++) {
-      const h = actual[Math.floor(r() * Math.max(1, actual.length))];
+      const h = counted[Math.floor(r() * Math.max(1, counted.length))];
       if (!h) break;
-      const p = rule.objKind === 'product' ? PRODUCTS[Math.floor(r() * PRODUCTS.length)] : null;
+      const used = new Set(samples.map((x) => x.objId));
+      const p = rule.objKind === 'product' ? PRODUCTS.find((x) => !used.has(x.sku)) ?? PRODUCTS[0] : null;
+      const st = rule.objKind === 'product' ? storeOfKey(`${rule.id}-NEW-${i}`) : undefined;
       samples.push({ key: `NEW-${i}`, at: h.at, objKind: h.objKind, objId: p ? p.sku : h.objId, objLabel: p ? `${p.name} ${p.spec}` : h.objLabel,
+        storeId: st?.id ?? h.storeId, storeLabel: st?.name ?? h.storeLabel,
         value: rule.objKind === 'product' ? `${(17 + r()).toFixed(2)}%` : h.value, diff: '新增命中' });
     }
   }
   samples.sort((a, b) => b.at.localeCompare(a.at));
-  const would = samples.filter((s) => s.diff !== '不再命中').length;
-  return { actual: actual.length, would, added: samples.filter((s) => s.diff === '新增命中').length, removed: samples.filter((s) => s.diff === '不再命中').length, samples };
+  const n = (d: ReplayDiff) => samples.filter((s) => s.diff === d).length;
+  return { actual: counted.length, would: n('一致') + n('新增命中'), added: n('新增命中'), removed: n('不再命中'), deduped: n('被去重'), samples };
 }
 
 /* ───────── 版本历史 ───────── */
@@ -213,5 +230,5 @@ export function ruleVersions(rule: RuleDef, draftVer?: number): RuleVersion[] {
   return out;
 }
 
-export const CONFIRMERS = ['品类经理 王敏', '门店店长', '订单运营组 陈立军', '订单运营组 孙浩然', '客服主管 何静', '供应链计划员 周晓峰', '定价委员会'];
+export const CONFIRMERS = ['品类经理 王敏', '供应链计划员 周晓峰', '订单运营组 陈立军', '订单运营组 孙浩然', '客服主管 何静', '营销经理 吴佳', '定价委员会'];
 export const MAPPING_SOURCES = ['告警.对象', '规则.命中说明', '告警.门店', '告警.ID', '事件.SKU', '事件.门店', '事件.订单号', '命中.对象', '规则.建议值（毛利率回到 18%）', '安全库存 × 1.5 − 可用库存', '固定值', '—'];
