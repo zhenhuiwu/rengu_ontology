@@ -140,7 +140,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 - **前缀**：动作类型、事件类型、事件、对账相关接口用 `/api/ontology/v1`（`/api/ontology/v1/action-types/…`、`/event-types/…`、`/events/…`）；**外部系统 `/ext-systems*` 和 `/writeback-calls*` 用 `/api/data/v1`**（PDE 定：外部系统属数据模块，和骨架一致）。代码仍在 `integration/` 目录，归我。下表省略前缀。
 - **分页**：页码分页，请求参数 `page`、`size`，响应 `{items, total, page, size}`（与 `usePagedQuery` 一致）。所有显示 ‹ 1/N › 的列表（包括近期事件）都这样，**不用游标**。
 - **字段和取值与前端 mock 完全一致**：JSON 用 camelCase（`typeId`、`objLabel`、`latencyMs`……），枚举用 mock 里的中文值（`已发布`、`结果未知`、`部分投递`……）。库里用 snake_case 和英文代码，在 Pydantic 层转换，对照见 §3.5。
-- 读接口接受 `ver`（即前端的 `?ver=`，历史版本）、`previewAs`（即“以此用户预览”）、`view=published|draft`、`cr`。**只读状态只看 query 参数 `?ver=` / `?previewAs=`，不用请求头**；带这两个参数的写请求一律 **403 `READONLY`**（与 PDE/骨架一致）。
+- 读接口接受 `ver`（即前端的 `?ver=`，历史版本）、`previewAs`（即“以此用户预览”）、`view=published|draft`、`cr`。**只读状态只看 query 参数 `?ver=` / `?previewAs=`，不用请求头**；带这两个参数的写请求一律 **403 `READONLY`**，`details.mode` 填 `history`（`?ver=`）或 `preview`（`?previewAs=`）（与 PDE/骨架一致）。
 - **白名单**：`:dry-run`、`:simulate` 是**不落库的 POST**，列入骨架的只读白名单——带 `?ver=` 时照常执行（前端不置灰）；带 `?previewAs=` 时前端已锁住，后台仍返回 403 `READONLY`（见 §3.3）。
 - **错误体**（骨架统一）：`{code, message, details, requestId}`，`message` 可以直接用作悬停文字或确认卡上的阻断原因。字段校验失败统一 **422 `VALIDATION_FAILED`**，`details.fields[{field, message}]`（`field` 用接口的 camelCase 字段名）。
 - **动作类接口用冒号风格**：`:dry-run`、`:simulate`、`:test`、`:mark-checked`；动态的 `:stage`、`:confirm`、`:submit`、`:reconcile`，静态的 `:submit`、`:rollback` 同样写法。
@@ -211,7 +211,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `ENVELOPE_READONLY` | 409 | 试图改信封字段 | “信封字段所有事件类型共有，不可修改” |
 | `WRITEBACK_SYSTEM_INVALID` | 422 | 写回系统不是生产环境，或者已停用（和前端下拉的过滤规则一样） | — |
 | `TYPE_IS_DRAFT` | 409 | 对草稿状态的类型做试运行或模拟触发 | — |
-| `READONLY` | 403 | 带 `?ver=` 的写请求；带 `?previewAs=` 时调用试运行、模拟触发或写接口（骨架统一码） | “正在查看历史版本 x，只读” / “正在以 xx 的权限预览，只读” |
+| `READONLY` | 403 | 带 `?ver=` 的写请求；带 `?previewAs=` 时调用试运行、模拟触发或写接口（骨架统一码；`details.mode` = `history` / `preview`） | “正在查看历史版本 x，只读” / “正在以 xx 的权限预览，只读” |
 | `VALIDATION_FAILED` | 422 | 请求字段校验不过（骨架统一码） | `details.fields[{field, message}]` |
 | `EXT_SYSTEM_DISABLED` | 409 | 对已停用的外部系统做测试调用 | “该系统已停用，先在‘编辑’里改为正常再测试” |
 | `EXT_TIMEOUT` | — | 不是 HTTP 错误；submit 返回 `result=结果未知`，`code` 为“超时 N 秒未响应 · 未重试” | — |
