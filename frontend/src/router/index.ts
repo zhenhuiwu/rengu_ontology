@@ -1,15 +1,16 @@
 import { createRouter, createWebHistory, type RouteRecordRaw, type RouteComponent } from 'vue-router';
 import AppLayout from '@/layouts/AppLayout.vue';
 import { PAGES } from '@/nav';
+import { PDE_PAGES } from './pdePages';
 import { useAppStore, PERSONAS, type AreaKey, type PersonaKey } from '@/stores/app';
 
 const Placeholder = () => import('@/pages/PlaceholderPage.vue');
 
-/** 二级页面路由全部由 src/nav.ts 生成：name = 页面 key，meta.navKey 用于菜单高亮和面包屑 */
+/** 二级页面路由全部由 src/nav.ts 生成：name = 页面 key，meta.navKey 用于菜单高亮和面包屑；页面组件取 nav.ts 的 component，其次 ./pdePages */
 const pageRoutes: RouteRecordRaw[] = PAGES.map((p) => ({
   path: p.path,
   name: p.key,
-  component: (p.component ?? Placeholder) as () => Promise<RouteComponent>,
+  component: (p.component ?? PDE_PAGES[p.key] ?? Placeholder) as () => Promise<RouteComponent>,
   meta: { navKey: p.key },
 }));
 
