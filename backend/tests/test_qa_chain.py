@@ -268,3 +268,45 @@ async def test_prompt_has_qa_caliber_and_refuse_list(qa):
     c = fake.prompts[0][0]["content"]
     assert "## 口径裁定" in c and "÷ 1.13" in c and "o.status <> 'cancelled'" in c
     assert "## 拒答清单" in c and "NO_DATA" in c and '{"clarify"' in c
+
+
+async def test_caliber_check_feeds_back_once(qa):
+    # 含税销售额漏了出库状态 → 回喂一次口径问题；FakeLLM 还回原 SQL，就照常执行，不再查
+    fake = use_llm('```sql\nselect sum(o.amount) as "含税" from biz_order o where not o.is_test\n```')
+    r = await qa.post(URL, json={"question": "昨天的含税销售额"})
+    assert r.status_code == 202, r.text
+    assert r.json()["turn"]["kind"] in ("answer", "empty")
+    assert len(fake.prompts) == 2
+    fix = fake.prompts[1][-1]["content"]
+    assert "不符合口径裁定" in fix and "o.status = 'shipped'" in fix
+
+
+async def test_caliber_check_passes_without_retry(qa):
+    fake = use_llm(
+        '```sql\nselect count(*) as "单量" from biz_order o '
+        "where o.status <> 'cancelled' and not o.is_test and o.shipped_at >= '2026-10-24'\n```"
+    )
+    r = await qa.post(URL, json={"question": "昨天的单量"})
+    assert r.status_code == 202, r.text
+    assert len(fake.prompts) == 1
+
+
+def test_caliber_violations_longest_match_and_time_hint():
+    import sqlglot
+
+    def t(q):
+        return sqlglot.parse_one(q, read="postgres")
+
+    terms = [x for x, _ in chain.matched_calibers("昨天销售额（不含税）是多少")]
+    assert terms == ["销售额"]  # “不含税”里的“含税”不算
+    bad = chain.caliber_violations(
+        "小程序昨天的单量",
+        t("select count(*) from biz_order o where o.status <> 'cancelled' and o.created_at_biz >= 'x'"),
+    )
+    assert bad == ["有效订单数 的时间窗要用 o.shipped_at"]
+    # 题目说了“下单的”：时间字段按题目换
+    ok = t(
+        "select 1 from order_line l join biz_order o on o.id = l.order_id"
+        " where o.status = 'shipped' and o.created_at_biz >= 'x'"
+    )
+    assert chain.caliber_violations("昨天下单的订单，销售额是多少", ok) == []

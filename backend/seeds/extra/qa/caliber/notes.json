@@ -1,59 +1,130 @@
 [
   {
     "term": "销售额",
-    "aliases": ["不含税销售额", "营业额", "销售收入", "流水", "净销售额", "GMV", "gmv", "卖了多少钱"],
+    "aliases": [
+      "不含税",
+      "不含税销售额",
+      "营业额",
+      "销售收入",
+      "流水",
+      "净销售额",
+      "GMV",
+      "gmv",
+      "卖了多少钱"
+    ],
     "caliber": "同名默认 = 不含税 = 订单行含税金额 ÷ 1.13，先汇总后保留 2 位；只算已出库订单（已签收不算），剔除测试单和测试店，时间字段是出库时间；退款按 0",
     "sql": "round(sum(l.qty * l.price) / 1.13, 2) FROM order_line l JOIN biz_order o ON o.id = l.order_id JOIN store s ON s.id = o.store_id WHERE o.status = 'shipped' AND NOT o.is_test AND NOT s.is_test AND o.shipped_at 在时间窗内",
-    "source": "qa-eval.md §4 gmv v3；§10 #2 [推断]"
+    "source": "qa-eval.md §4 gmv v3；§10 #2 [推断]",
+    "check": {
+      "status_eq": [
+        "shipped"
+      ],
+      "time": "shipped_at"
+    }
   },
   {
     "term": "含税销售额",
-    "aliases": ["含税", "实付金额合计", "含税实付"],
+    "aliases": [
+      "含税",
+      "实付金额合计",
+      "含税实付"
+    ],
     "caliber": "订单实付金额合计（不 join 订单行）；过滤同销售额：已出库、剔除测试单和测试店，时间字段是出库时间；只有题目明确说“含税”时才用",
     "sql": "sum(o.amount) FROM biz_order o JOIN store s ON s.id = o.store_id WHERE o.status = 'shipped' AND NOT o.is_test AND NOT s.is_test AND o.shipped_at 在时间窗内",
-    "source": "qa-eval.md §4 gmv_tax v2 [推断]"
+    "source": "qa-eval.md §4 gmv_tax v2 [推断]",
+    "check": {
+      "status_eq": [
+        "shipped"
+      ],
+      "time": "shipped_at"
+    }
   },
   {
     "term": "有效订单数",
-    "aliases": ["单量", "几单", "有效订单"],
+    "aliases": [
+      "单量",
+      "几单",
+      "有效订单"
+    ],
     "caliber": "状态 ≠ 已取消的订单数，剔除测试单（不剔除测试店），时间字段是出库时间（没出库的订单不进时间窗）",
     "sql": "count(*) FROM biz_order o WHERE o.status <> 'cancelled' AND NOT o.is_test AND o.shipped_at 在时间窗内",
-    "source": "qa-eval.md §4 order_cnt v1（静态本体负责人裁定）"
+    "source": "qa-eval.md §4 order_cnt v1（静态本体负责人裁定）",
+    "check": {
+      "status_ne": [
+        "cancelled"
+      ],
+      "time": "shipped_at"
+    }
   },
   {
     "term": "订单数",
-    "aliases": ["下了多少单", "下单数", "订单量"],
+    "aliases": [
+      "下了多少单",
+      "下单数",
+      "订单量"
+    ],
     "caliber": "题面没说“有效”时：全部订单（不按状态过滤），只剔除测试单，时间字段是下单时间",
     "sql": "count(*) FROM biz_order o WHERE NOT o.is_test AND o.created_at_biz 在时间窗内",
-    "source": "qa-eval.md §4"
+    "source": "qa-eval.md §4",
+    "check": {
+      "time": "created_at_biz"
+    }
   },
   {
     "term": "销量",
-    "aliases": ["卖得最好", "卖了多少件", "销售数量"],
+    "aliases": [
+      "卖得最好",
+      "卖了多少件",
+      "销售数量"
+    ],
     "caliber": "订单行数量合计；只算已出库订单，剔除测试单，时间字段是出库时间；“卖得最好”按销量排",
     "sql": "sum(l.qty) FROM order_line l JOIN biz_order o ON o.id = l.order_id WHERE o.status = 'shipped' AND NOT o.is_test AND o.shipped_at 在时间窗内",
-    "source": "qa-eval.md §4 [推断]"
+    "source": "qa-eval.md §4 [推断]",
+    "check": {
+      "status_eq": [
+        "shipped"
+      ],
+      "time": "shipped_at"
+    }
   },
   {
     "term": "客单价",
-    "aliases": ["atv", "平均每单销售额"],
+    "aliases": [
+      "atv",
+      "平均每单销售额"
+    ],
     "caliber": "销售额（不含税） ÷ 有效订单数，分子分母各按自己的口径算；草稿口径，回答要提示“草稿口径”",
     "sql": "(销售额子查询) / nullif(有效订单数子查询, 0)",
     "source": "qa-eval.md §4 atv（草稿）"
   },
   {
     "term": "出库及时率",
-    "aliases": ["及时出库率", "ship_ontime"],
+    "aliases": [
+      "及时出库率",
+      "ship_ontime"
+    ],
     "caliber": "分母：时间窗内出库、状态不是待支付也不是已取消的订单（剔除测试单）；分子：其中 shipped_at ≤ created_at_biz + 30 分钟的；结果是比例（不是百分数），保留 4 位小数",
     "sql": "round(count(*) FILTER (WHERE o.shipped_at <= o.created_at_biz + interval '30 minutes')::numeric / nullif(count(*), 0), 4) FROM biz_order o WHERE o.status NOT IN ('pending_payment', 'cancelled') AND NOT o.is_test AND o.shipped_at 在时间窗内",
-    "source": "qa-eval.md §4 ship_ontime v1 [推断]"
+    "source": "qa-eval.md §4 ship_ontime v1 [推断]",
+    "check": {
+      "time": "shipped_at"
+    }
   },
   {
     "term": "优惠金额",
-    "aliases": ["优惠合计", "折扣金额"],
+    "aliases": [
+      "优惠合计",
+      "折扣金额"
+    ],
     "caliber": "订单优惠合计，剔除已取消和测试单，时间字段是下单时间",
     "sql": "sum(o.discount) FROM biz_order o WHERE o.status <> 'cancelled' AND NOT o.is_test AND o.created_at_biz 在时间窗内",
-    "source": "qa-eval.md §10 #10 [推断]"
+    "source": "qa-eval.md §10 #10 [推断]",
+    "check": {
+      "status_ne": [
+        "cancelled"
+      ],
+      "time": "created_at_biz"
+    }
   },
   {
     "term": "其他订单统计（实付均值等）",

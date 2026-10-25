@@ -248,6 +248,94 @@ def _caliber_lines() -> list[str]:
         alias = f"（又叫 {'、'.join(n['aliases'])}）" if n.get("aliases") else ""
         sql = f"；写法：{n['sql']}" if n.get("sql") else ""
         out.append(f"- {n['term']}{alias}：{n['caliber']}{sql}")
+    names = [x for n in json.loads(f.read_text(encoding="utf-8")) for x in [n["term"], *n.get("aliases", [])]]
+    out.append(
+        f"- 上面这些中文说法（{'、'.join(x for x in names if not x.isascii())}）口径已裁定，"
+        "问到时直接按裁定写 SQL，不要因为指标反问"
+    )
+    return out
+
+
+@cache
+def _caliber_checks() -> list[tuple[str, list[str], dict[str, Any]]]:
+    """口径裁定里带 check 的条目：(term, [term + aliases], check)。"""
+    f = _caliber_dir() / "notes.json"
+    if not f.exists():
+        return []
+    return [
+        (n["term"], [n["term"], *n.get("aliases", [])], n["check"])
+        for n in json.loads(f.read_text(encoding="utf-8"))
+        if n.get("check")
+    ]
+
+
+_TIME_COLS = ("shipped_at", "created_at_biz")
+_TIME_HINTS = {"created_at_biz": ("下单", "下的单"), "shipped_at": ("出库",)}
+
+
+def matched_calibers(question: str) -> list[tuple[str, dict[str, Any]]]:
+    """问题里命中的口径裁定（最长匹配：被更长说法盖住的短说法不算，如“不含税”里的“含税”）。"""
+    hits = []
+    for term, names, check in _caliber_checks():
+        for nm in names:
+            start = question.find(nm)
+            while start >= 0:
+                hits.append((start, start + len(nm), term, check))
+                start = question.find(nm, start + 1)
+    out: dict[str, dict[str, Any]] = {}
+    for a, b, term, check in hits:
+        if not any(a2 <= a and b <= b2 and (b2 - a2) > (b - a) for a2, b2, *_ in hits):
+            out.setdefault(term, check)
+    return list(out.items())
+
+
+def _status_ok(tree: exp.Expression, check: dict[str, Any]) -> bool:
+    def is_status(e: exp.Expression) -> bool:
+        return isinstance(e, exp.Column) and e.name == "status"
+
+    def lits(e: exp.Expression) -> set[str]:
+        return {x.this for x in e.find_all(exp.Literal) if x.is_string}
+
+    if want := check.get("status_eq"):
+        for e in tree.find_all(exp.EQ, exp.In):
+            if is_status(e.this) and lits(e) & set(want) and not isinstance(e.parent, exp.Not):
+                return True
+        return False
+    if want := check.get("status_ne"):
+        for e in tree.find_all(exp.NEQ, exp.Not):
+            inner = e.this if isinstance(e, exp.Not) else e
+            if (
+                isinstance(inner, (exp.EQ, exp.In, exp.NEQ))
+                and is_status(inner.this)
+                and lits(inner) & set(want)
+            ):
+                return True
+        return False
+    return True
+
+
+def caliber_violations(question: str, tree: exp.Expression) -> list[str]:
+    """按口径裁定的 check 校验 SQL（sqlglot AST）：状态条件在不在、时间字段对不对。
+
+    时间：SQL 用了时间列才查；题目明说了“下单 / 出库”就按题目换时间字段（规则 3）。
+    [推断] 只查命中的口径，不查窗口边界。
+    """
+    cols = {c.name for c in tree.find_all(exp.Column)}
+    out = []
+    for term, check in matched_calibers(question):
+        if not _status_ok(tree, check):
+            cond = (
+                f"o.status = '{check['status_eq'][0]}'"
+                if check.get("status_eq")
+                else f"o.status <> '{check['status_ne'][0]}'"
+            )
+            out.append(f"{term} 要加条件 {cond}")
+        want = check.get("time")
+        for col, hints in _TIME_HINTS.items():
+            if any(h in question for h in hints):
+                want = col
+        if want and cols & set(_TIME_COLS) and want not in cols:
+            out.append(f"{term} 的时间窗要用 o.{want}")
     return out
 
 
@@ -342,6 +430,9 @@ _GUIDELINES = (
     '只输出 ```json {"clarify": {"term": "有歧义的说法", "question": "反问的话", '
     '"options": ["候选1", "候选2"]}} ```；'
     "有同名默认口径的（如销售额默认不含税）、只缺时间但能按默认理解的不要反问；"
+    "门店名或简称在“列取值 / 门店”里只对上一家时直接答，对上多家才反问；"
+    "英文泛称（sales、performance）和“业绩 / 表现”这类没落到口径裁定说法上的要反问；"
+    "“地区 / 区域”可指大区、区域、城市多个列时反问；渠道组合说法（如“外卖”）没有对应维度值时反问；"
     '(c) 命中“拒答清单”、要写操作、问本体外的东西时，只输出 ```json {"refuse": {"code": '
     '"NO_DATA|NO_PERMISSION|OUT_OF_SCOPE|NOT_SELECT", "reason": "原因"}} ```，'
     "不能用别的列凑答案；拒答优先于反问；code 选法：敏感字段 / 系统表 / 改权限 → NO_PERMISSION，"
@@ -545,7 +636,8 @@ async def answer(
     ctx = await build_context(session)
     messages = build_prompt(question, ctx)
     limit = ROW_LIMIT
-    for attempt in range(1 + FIX_RETRIES):
+    attempt, checked = 0, False
+    while True:
         reply = await llm.generate_sql(messages)
         intent, val = parse_intent(reply)
         if intent != "sql":  # 反问 / 拒答：不执行 SQL
@@ -555,6 +647,20 @@ async def answer(
             return "denied", refuse_snapshot(val), 0, elapsed, None
         sql = val
         tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
+        if not checked:  # 口径校验不过，回喂改一次（只一次，改完不再查）
+            checked = True
+            if bad := caliber_violations(question, tree):
+                messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": "上面的 SQL 不符合口径裁定："
+                        + "；".join(bad)
+                        + "。请修正后只输出一条 SQL。",
+                    },
+                ]
+                continue
         try:
             async with conn.begin_nested():  # savepoint：执行报错不弄坏连接上的事务
                 res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
@@ -567,6 +673,7 @@ async def answer(
                 raise QaQueryTimeout() from None
             if attempt >= FIX_RETRIES:
                 raise
+            attempt += 1
             # 报错回喂再改一次（常见的自修正思路，非代码复制；只回喂数据库报错首行，不含数据）
             err = str(e.orig).splitlines()[0][:300] if e.orig else type(e).__name__
             messages = [
