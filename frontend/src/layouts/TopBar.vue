@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { message } from 'ant-design-vue';
 import { useAppStore, TENANTS } from '@/stores/app';
 import { PAGES } from '@/nav';
 import VersionPicker from '@/components/VersionPicker.vue';
@@ -17,6 +18,12 @@ function onKey(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); inputRef.value?.focus(); }
 }
 onMounted(() => window.addEventListener('keydown', onKey));
+// 顶栏 ⓘ 使用帮助菜单（原型：快速入门 / 反馈只给提示）
+function onHelp({ key }: { key: string | number }) {
+  if (key === 'kbd') setTimeout(() => inputRef.value?.focus(), 0);
+  else if (key === 'start') message.info('快速入门：在顶部搜索框输入对象、指标或直接提问');
+  else if (key === 'feedback') message.info('请把问题和截图发给平台管理员王敏');
+}
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 
 const options = () => {
@@ -68,7 +75,19 @@ function onSelect(v: string) {
           <a-button type="text" size="small" class="tb-icon" aria-label="通知"><BellOutlined /></a-button>
         </a-badge>
       </a-popover>
-      <a-button type="text" size="small" class="tb-icon"><QuestionCircleOutlined /></a-button>
+      <a-dropdown trigger="click" placement="bottomRight">
+        <a-button type="text" size="small" class="tb-icon" aria-label="使用帮助" title="使用帮助"><QuestionCircleOutlined /></a-button>
+        <template #overlay>
+          <a-menu class="tb-help" @click="onHelp">
+            <a-menu-item-group title="使用帮助">
+              <a-menu-item key="start">快速入门</a-menu-item>
+              <a-menu-item key="kbd"><span class="tb-help-row">快捷键：搜索<span class="tb-kbd t-12 c-2">Ctrl K</span></span></a-menu-item>
+              <a-menu-item key="feedback">反馈问题</a-menu-item>
+              <a-menu-item key="ver" disabled><span class="tb-help-row c-2">版本<span class="num">v2026.10.3</span></span></a-menu-item>
+            </a-menu-item-group>
+          </a-menu>
+        </template>
+      </a-dropdown>
       <a-dropdown placement="bottomRight">
         <span class="tb-user">
           <a-avatar :size="24" class="tb-avatar"><span class="t-12">{{ app.user.name.slice(0, 1) }}</span></a-avatar>
@@ -93,4 +112,6 @@ function onSelect(v: string) {
 .tb-icon { color: var(--g9); }
 .tb-user { display: flex; align-items: center; gap: 8px; cursor: pointer; padding-left: 8px; }
 .tb-avatar { background: var(--brand); }
+.tb-help { min-width: 200px; }
+.tb-help-row { display: flex; justify-content: space-between; gap: 16px; white-space: nowrap; }
 </style>
