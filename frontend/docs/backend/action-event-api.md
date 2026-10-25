@@ -173,8 +173,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /ext-systems/{id}` | — | 同上，加关联的动作类型 | — | — |
 | `POST /ext-systems`、`PUT /ext-systems/{id}`（编辑也接受 `POST /ext-systems/{id}`，见 §11） | 同上字段 | 保存后的对象 | — | 新建、编辑外部系统；直接生效，不走变更单（和前端一致） |
 | `POST /ext-systems/{id}:test` | `{op?}`（可不带请求体） | 一条 `ExtCall`（`id,sysId,time,action,target,method,path,idemKey,ms,http,result,attempt,actor,msg`，见 §11） | — | “测试调用”；系统已停用时返回 `EXT_SYSTEM_DISABLED`（前端文案“该系统已停用，先在‘编辑’里改为正常再测试”）。**dev/test 走 mock 适配器**（状态「降级」的系统固定返回 502，「停用」的直接拦住）；只有生产环境、经用户授权才连真实系统 |
-| `GET /ext-systems/{id}/calls` | `result`、`page`、`size=10`（前端固定每页 10 条） | `{items[...ExtCall], total, page, size}` | 页码 | `writeback_call` 的行（含测试调用） |
-| `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功` | — | “人工核对 · 确认对方已处理”。前端只对不带 runId 的调用显示这个按钮（`ExternalSystems.vue` L319–323），带 runId 的只跳到动作中心。只改这条调用记录的结果，不碰执行记录 |
+| `GET /ext-systems/{id}/calls` | `result`（全部 / 成功 / 失败 / 结果未知）、`page`、`size=10`（前端固定每页 10 条） | `{items[...ExtCall, runId], total, page, size, counts}`；`counts` = `{全部,成功,失败,结果未知}`（单选按钮上的数字，不受 `result` 影响）【推断】 | 页码 | `writeback_call` 的行（含测试调用）。顺序：测试调用在最前（新的在上），其余按 `at` 倒序、同时间按 `code` 倒序（同 `extCalls()`）【推断】 |
+| `GET /writeback-calls` | `sysId`（可不传）、`result`、`page`、`size=10` | 同上 | 页码 | 跨系统查调用记录（同一个查询） |
+| `GET /writeback-calls/{id}` | — | 一条 `ExtCall`（无执行记录时 `runId=null`） | — | 调用详情抽屉 `?call=` |
+| `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功`，`msg=人工核对：对方已处理（{姓名} {HH:mm} 标记）` | — | “人工核对 · 确认对方已处理”，要 `external-systems · manage`。不是「结果未知」或带执行记录的 → 409 `CALL_NOT_CHECKABLE`。前端只对不带 runId 的调用显示这个按钮（`ExternalSystems.vue` L319–323），带 runId 的只跳到动作中心。只改这条调用记录的结果，不碰执行记录 |
 
 ### 3.2 事件类型
 
@@ -786,23 +788,26 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 重名 | 名称与其他系统重复 → 409 `DUPLICATE_KEY`“系统名称已存在”（改成自己原来的名字不算） |
 | 不支持幂等时 | 后台把 `idemKey` 存成 `-`、`maxRetry` 存成 0，`retry` 文案由后台按 `idempotent / maxRetry` 生成（同页面 `retryText()`） |
 | `usage` 不传 = 不改 | 编辑表单不含用途说明 |
-| `:test` 返回一条 `ExtCall` 形状 | 页面把结果直接插到“最近调用”表头部。dev/test 走模拟：「降级」→ 502 / 失败 / 3120 ms，「停用」→ 409 `EXT_SYSTEM_DISABLED`，其余 → 200 / 成功 / `140 + timeoutMs % 97` ms。id = `{编号去掉 EXT-}-T{6 位随机}`。【推断】测试调用**不落库**（`writeback_call` 表还没建），刷新后消失 |
+| `:test` 返回一条 `ExtCall` 形状 | dev/test 走模拟：「降级」→ 502 / 失败 / 3120 ms，「停用」→ 409 `EXT_SYSTEM_DISABLED`，其余 → 200 / 成功 / `140 + timeoutMs % 97` ms。id = `{编号去掉 EXT-}-T{6 位随机}`。【推断】测试调用**落库**：写一行 `writeback_call`（`kind=test`），页面重新拉“最近调用”，它排在最前（页面文案“结果记入下方最近调用”） |
+| `writeback_call` 列 | 按前端 `ExtCall` 建：`code`=id、`sys_id`、`at`=time、`op_name`=action、`target_label`=target、`method`、`path`、`idem_key`、`elapsed_ms`=ms、`http_status`=http（超时为空）、`result`、`attempt`、`actor`、`msg`、`action_run_id`=runId。§9.1 设计里的 `biz_code` 前端没有，**没建**。`kind`【推断】：种子里 GET → query，其余 → write；测试调用 → test |
+| 种子 | `integration_runs` 阶段（registry 已登记，dynamic 之后）读 `system/derived/extCalls.json`（PDE `export-mock` 原样输出，756 行，20 行带 runId）；**不用改 `seeds/loader.py`** |
+| 迁移 | `integration_0002`，`down_revision = event_0002`。合并时如果 master 先有 `static_0002`，要把 down_revision 改接到新的 head |
+| 排序 / `counts` | 见 §3.1；dev 时钟固定在 15:42，比种子里最晚的调用（16:29）还早，所以测试调用不能靠时间排最前，按 `kind=test` 排【推断】 |
 | `:test` 要 manage | 同 §3.6 U13【推断】；功能权限校验本身是 PDE 的扩展点（`require_func` 目前放行） |
 
 ### 11.2 前端怎么接（不改页面样式）
 
 - **动作类型 / 事件类型**：左侧列表（分组 / 来源、关键字、分页 22）直接调列表接口；详情和各页签（参数、提交条件、写回、版本历史；载荷字段、订阅方、版本历史）进页面时一次取回所有类型做成快照（17 + 15 个类型，约 180 个 GET），`?ver=` 变了重取。原因：页面和草稿编辑（`useDraftEdits`）都是同步读 `paramsOf()` 这类函数，快照方式页面改动最小。快照没到前只显示加载中。【推断】数量大了再改成按选中项取。
-- **外部系统**：列表、详情（关联动作类型）、新建、编辑、测试调用走真接口。
+- **外部系统**：列表、详情（关联动作类型）、新建、编辑、测试调用、最近调用（结果筛选、分页、`?call=` 详情抽屉）、人工核对走真接口；测试调用和人工核对后重新拉当前页。
+- **动作类型写回 tab 的外部系统下拉**：`GET /ext-systems?writeback=1`（每次进动作类型页重取，取到之前用 mock `writebackSystems()`）。
 
 ### 11.3 还没接通（仍读 mock）
 
 | 页面操作 | 原因 |
 |---|---|
-| 外部系统“最近调用”（`GET /ext-systems/{id}/calls`）、回写记录“人工核对”（`POST /writeback-calls/{id}:mark-checked`） | `writeback_call` 表和迁移还没建，seed 也没有导出 `extCalls`（`seeds/json` 不归我）。页面保留 mock，测试调用的结果只在当前页面会话里 |
 | 动作类型“执行记录”和统计 | 数据在动态的 `/action-runs`（不归我） |
 | 事件类型“近期事件”和趋势（`/event-types/{id}/events`、`/stats`） | 还没实现（依赖事件表的数据） |
 | 两页的草稿保存 / 提交 | 走变更单（versioning，不归我） |
-| 写回 tab 里外部系统下拉 | 仍用 mock `writebackSystems()`；真接口 `GET /ext-systems?writeback=1` 已有，形状一致，下一步换 |
 | 删除外部系统 | 页面没有删除操作 |
 
 ---

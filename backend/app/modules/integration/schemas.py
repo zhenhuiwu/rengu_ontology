@@ -137,3 +137,32 @@ class ExtSystemTestOut(ApiModel):
     attempt: int
     actor: str
     msg: str
+
+
+class ExtCallOut(ApiModel):
+    """外部调用记录（前端 extsys.ts ExtCall）。runId 只有写回调用结果未知时有（mock 同），其余为 null。"""
+
+    id: str
+    sys_id: str
+    time: str
+    action: str
+    target: str
+    method: str
+    path: str
+    idem_key: str | None = None
+    ms: int
+    http: int | None
+    result: str
+    attempt: int
+    actor: str
+    msg: str
+    run_id: str | None = None
+
+
+class ExtCallPageOut(ApiModel):
+    items: list[ExtCallOut]
+    total: int
+    page: int
+    size: int
+    # 「最近调用」单选按钮上的数字，键 = 按钮文字（全部 / 成功 / 失败 / 结果未知），不受 result 筛选影响
+    counts: dict[str, int]

@@ -8,13 +8,16 @@
 冒号动作按 PDE api-index：`POST /ext-systems/{id}:test` 等。
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Query
 
 from app.common.auth import CurrentUser, CurrentUserDep, require_func
+from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
 from app.modules.integration.schemas import (
+    ExtCallOut,
+    ExtCallPageOut,
     ExtSystemDetailOut,
     ExtSystemIn,
     ExtSystemListOut,
@@ -23,7 +26,7 @@ from app.modules.integration.schemas import (
     ExtSystemTestOut,
     LinkedActionTypeOut,
 )
-from app.modules.integration.service import ExtSystemService
+from app.modules.integration.service import ExtSystemService, WritebackCallService
 
 router = APIRouter(tags=["integration"])  # /api/data/v1
 
@@ -117,3 +120,68 @@ async def _detail(svc: ExtSystemService, code: str) -> ExtSystemDetailOut:
     out = ExtSystemDetailOut.model_validate(s)
     out.action_types = [LinkedActionTypeOut.model_validate(a) for a in actions]
     return out
+
+
+# ---------------------------------------------------------------- 回写调用（外部系统页「最近调用」）
+
+_RESULT_Q = Query(description="成功 / 失败 / 结果未知；全部 / 不传 = 不过滤")
+CallResultQ = Literal["全部", "成功", "失败", "结果未知"]
+
+
+def _calls_page(
+    page: Annotated[int, Query()] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
+) -> PageParams:
+    """前端「最近调用」每页 10 条（ExternalSystems.vue SIZE）；page ≤ 0 收成 1。"""
+    return PageParams(page=page, size=size)
+
+
+@router.get(
+    "/ext-systems/{sys_id}/calls",
+    response_model=ExtCallPageOut,
+    summary="某外部系统的最近调用（按结果筛选，分页）",
+    dependencies=[Depends(_ext_view)],
+)
+async def list_ext_system_calls(
+    sys_id: str,
+    session: SessionDep,
+    page: Annotated[PageParams, Depends(_calls_page)],
+    result: Annotated[CallResultQ | None, _RESULT_Q] = None,
+) -> dict:
+    return await WritebackCallService(session).search(sys_code=sys_id, result=result, page=page)
+
+
+@router.get(
+    "/writeback-calls",
+    response_model=ExtCallPageOut,
+    summary="回写调用记录（按系统 / 结果筛选，分页）",
+    dependencies=[Depends(_ext_view)],
+)
+async def list_writeback_calls(
+    session: SessionDep,
+    page: Annotated[PageParams, Depends(_calls_page)],
+    sys_id: Annotated[str | None, Query(alias="sysId", description="外部系统编号；不传 = 全部系统")] = None,
+    result: Annotated[CallResultQ | None, _RESULT_Q] = None,
+) -> dict:
+    return await WritebackCallService(session).search(sys_code=sys_id, result=result, page=page)
+
+
+@router.get(
+    "/writeback-calls/{call_id}",
+    response_model=ExtCallOut,
+    summary="调用详情（抽屉 ?call=）",
+    dependencies=[Depends(_ext_view)],
+)
+async def get_writeback_call(call_id: str, session: SessionDep) -> dict:
+    return await WritebackCallService(session).get(call_id)
+
+
+@router.post(
+    "/writeback-calls/{call_id}:mark-checked",
+    response_model=ExtCallOut,
+    summary="人工核对 · 确认对方已处理（只限结果未知、无执行记录的调用）",
+)
+async def mark_writeback_call_checked(
+    call_id: str, session: SessionDep, user: Annotated[CurrentUser, Depends(_ext_manage)]
+) -> dict:
+    return await WritebackCallService(session).mark_checked(call_id, user.name)

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 
 from app.common.repository import BaseRepository
-from app.modules.integration.models import ExtSystem
+from app.modules.integration.models import ExtSystem, WritebackCall
 
 
 class ExtSystemRepo(BaseRepository[ExtSystem]):
@@ -14,3 +14,8 @@ class ExtSystemRepo(BaseRepository[ExtSystem]):
 
     async def all_ordered(self) -> Sequence[ExtSystem]:
         return (await self.session.scalars(select(ExtSystem).order_by(ExtSystem.id))).all()
+
+
+class WritebackCallRepo(BaseRepository[WritebackCall]):
+    model = WritebackCall
+    not_found_message = "调用记录不存在"

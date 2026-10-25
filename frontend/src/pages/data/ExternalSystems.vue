@@ -6,8 +6,8 @@
  * 关联动作：按动作类型的 sysId（mock/actionEvent.ts）过滤得到，点动作名进动作类型；不做写回的集成（短信、企业微信、顺丰、美团）显示用途。
  * 新建 / 编辑系统：配置抽屉（?edit=EXT-WMS / ?edit=new），保存前确认；测试调用：确认后发一次连通性请求，结果记入最近调用。
  * URL：?sys=EXT-WMS&result=失败&call=WMS-00012&edit=EXT-WMS
- * 真接口（开关 integration，src/api/integration.ts）：系统列表、关联动作、新建 / 编辑、测试调用走后台；
- * 最近调用、人工核对仍按 mock 计算（后台 writeback_call 表未建，见 action-event-api.md §3.1【推断】）。
+ * 真接口（开关 integration，src/api/integration.ts）：系统列表、关联动作、新建 / 编辑、测试调用、
+ * 最近调用（筛选 / 分页 / 详情）、人工核对都走后台（writeback_call 表，见 action-event-api.md §3.1）。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -22,7 +22,7 @@ import { EXT_SYSTEMS, extCalls, type CallResult, type ExtCall, type ExtOp, type 
 import { ACTION_TYPES, runsOf, type ActionType, type ActionRun } from '@/mock/actionEvent';
 import { ACTIONS, RULE_CONFIRMER, OBJ_KIND_LABEL, type ActionRecord } from '@/mock/actions';
 import { isApiError } from '@/api/http';
-import { integrationApi, listExtSystems, getExtSystem, createExtSystem, updateExtSystem, testExtSystem, type ExtSystemDto, type LinkedActionTypeDto } from '@/api/integration';
+import { integrationApi, listExtSystems, getExtSystem, createExtSystem, updateExtSystem, testExtSystem, listExtCalls, getWritebackCall, markWritebackChecked, type ExtCallPage, type ExtSystemDto, type LinkedActionTypeDto } from '@/api/integration';
 
 const route = useRoute();
 const router = useRouter();
@@ -91,6 +91,7 @@ const overrides = ref<Record<string, Partial<ExtCall>>>({});
 const tests = ref<ExtCall[]>([]);
 const calls = computed(() => [...tests.value.filter((c) => c.sysId === selected.value.id), ...extCalls(selected.value, opsOf(selected.value))].map((c) => ({ ...c, ...overrides.value[c.id] })));
 const counts = computed(() => {
+  if (real) return realPage.value?.sysId === selected.value.id ? realPage.value.counts : { 全部: 0, 成功: 0, 失败: 0, 结果未知: 0 };
   const m: Record<string, number> = { 全部: calls.value.length, 成功: 0, 失败: 0, 结果未知: 0 };
   calls.value.forEach((c) => { m[c.result] += 1; });
   return m;
@@ -100,7 +101,22 @@ const filtered = computed(() => calls.value.filter((c) => result.value === '全�
 const SIZE = 10;
 const page = ref(1);
 watch([() => selected.value.id, result], () => { page.value = 1; });
-const paged = computed(() => paginate(filtered.value, { page: page.value, size: SIZE }));
+const paged = computed(() => (real ? { items: realPage.value?.items ?? [] } : paginate(filtered.value, { page: page.value, size: SIZE })));
+const callTotal = computed(() => (real ? realPage.value?.total ?? 0 : filtered.value.length));
+/** 真接口：当前系统 × 结果 × 页 的一页调用（counts 也取后台）；seq 防止切换快时旧响应覆盖新的 */
+const realPage = ref<(ExtCallPage & { sysId: string }) | null>(null);
+const callsTick = ref(0);
+let callsSeq = 0;
+async function loadCalls() {
+  const sysId = selected.value.id;
+  if (!sysId) return;
+  const seq = ++callsSeq;
+  try {
+    const r = await listExtCalls(sysId, { result: result.value, page: page.value, size: SIZE });
+    if (seq === callsSeq) realPage.value = { ...r, sysId };
+  } catch (e) { apiFail(e); }
+}
+if (real) watch([() => selected.value.id, result, page, callsTick], loadCalls, { immediate: true });
 const tl = (r: CallResult) => (r === '成功' ? 'tl-normal' : r === '结果未知' ? 'tl-attention' : 'tl-failed');
 const cols = [
   { title: '时间', key: 'time', width: 160 },
@@ -116,7 +132,17 @@ const cols = [
 ];
 
 // 调用详情抽屉
-const call = computed(() => calls.value.find((c) => c.id === q('call')) ?? null);
+/** 真接口：抽屉按 ?call= 取详情（只认当前系统的调用，同 mock） */
+const realCall = ref<ExtCall | null>(null);
+async function loadCall(id: string) {
+  realCall.value = null;
+  if (!id) return;
+  try { const c = await getWritebackCall(id); if (q('call') === id) realCall.value = c; } catch (e) { apiFail(e); }
+}
+if (real) watch(() => q('call'), loadCall, { immediate: true });
+const call = computed(() => (real
+  ? (realCall.value && realCall.value.id === q('call') && realCall.value.sysId === selected.value.id ? realCall.value : null)
+  : calls.value.find((c) => c.id === q('call')) ?? null));
 const openCall = (id: string) => setQuery({ call: id });
 const closeCall = () => setQuery({ call: undefined });
 const reqBody = (c: ExtCall) => JSON.stringify({ action: c.action, target: c.target, operator: c.actor, ...(c.idemKey ? { [selected.value.idemKey.split('（')[0]]: c.idemKey } : {}) }, null, 2);
@@ -132,6 +158,12 @@ async function markChecked(c: ExtCall) {
     impact: `${selected.value.name} 不支持幂等，从不重试。请先在对方系统确认这条请求已处理，再标记为成功；没处理的话请重新发起动作。`,
   });
   if (!ok) return;
+  if (real) {
+    try { realCall.value = await markWritebackChecked(c.id); } catch (e) { apiFail(e); return; }
+    callsTick.value += 1;
+    message.success('已标记为成功');
+    return;
+  }
   overrides.value[c.id] = { result: '成功', msg: '人工核对：对方已处理（王敏 16:30 标记）' };
   message.success('已标记为成功');
 }
@@ -153,9 +185,10 @@ async function testCall() {
     testing.value = true;
     let rec: ExtCall;
     try { rec = await testExtSystem(sys.id); } catch (e) { apiFail(e); return; } finally { testing.value = false; }
-    tests.value.unshift(rec);
+    // 后台已记入 writeback_call（排在最近调用最前），重新拉第一页
     setQuery({ result: undefined });
     page.value = 1;
+    callsTick.value += 1;
     if (rec.result === '成功') message.success(`测试通过：HTTP ${rec.http} · ${rec.ms} ms`);
     else message.error(`测试失败：HTTP ${rec.http ?? '—'} · ${rec.ms} ms`);
     return;
@@ -336,7 +369,7 @@ async function saveEdit() {
           </template>
         </a-table>
       </div>
-      <AppPagination v-model:page="page" variant="simple" :total="filtered.length" :size="SIZE" unit="次调用" class="ex-pager" />
+      <AppPagination v-model:page="page" variant="simple" :total="callTotal" :size="SIZE" unit="次调用" class="ex-pager" />
     </div>
   </div>
 
