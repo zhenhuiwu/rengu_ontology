@@ -1,6 +1,7 @@
 /**
  * 维度与字典（静态本体负责人）。问数用的分析维度（层级、取值、同义词）和属性取值码表。
  * 与其他 mock 对齐：
+ *   关系（所属大区、所在省份）和对象名取自 links.ts，不在本文件重复维护。
  *   组织维度 = 大区 › 门店（CR-0005，v2026.10.2 起门店直属考核大区，不经过省份）；省份是行政维度，经“所在省份”关系；
  *   业态“前置仓 FWH”只在 CR-0009 草稿里；订单状态“已发货”自 v2026.10.1（CR-0004）起是“已出库”的同义词；
  *   会员等级 5 个（L0–L4），CR-0001“黑金 L5”已驳回；渠道与 orders.ts CHANNELS 一致（启用 6 个）；
@@ -9,6 +10,10 @@
  */
 import { METRICS } from './metrics';
 import { ALL_STORES } from './stores';
+import { linkById, objName } from './links';
+
+/** 层级经关系取值时，文案取自 links.ts（单一来源），如“门店.所属大区 → 大区” */
+const via = (id: string) => { const l = linkById(id); return l ? `${objName(l.from)}.${l.name} → ${objName(l.to)}` : id; };
 
 export type DimKind = '维度' | '码表';
 export type DimStatus = '已发布' | '草稿' | '已驳回';
@@ -107,6 +112,11 @@ const PROVINCES: [string, string, string, number, string[]][] = [
   ['61', '陕西省', '西北大区', 0, ['陕西']], ['62', '甘肃省', '西北大区', 0, ['甘肃']], ['63', '青海省', '西北大区', 0, ['青海']], ['64', '宁夏回族自治区', '西北大区', 0, ['宁夏']],
   ['65', '新疆维吾尔自治区', '西北大区', 0, ['新疆']],
 ];
+/** 上海的区县（门店名里带区名），供“上海各区县门店销售额”这类问题 */
+const DISTRICTS: [string, string, number][] = [
+  ['310115', '浦东新区', 31], ['310104', '徐汇区', 14], ['310112', '闵行区', 19], ['310106', '静安区', 12], ['310105', '长宁区', 9],
+  ['310110', '杨浦区', 11], ['310107', '普陀区', 10], ['310113', '宝山区', 13], ['310117', '松江区', 13],
+];
 const CITIES: [string, string, string, number][] = [
   ['3101', '上海', '上海市', 132], ['3201', '南京', '江苏省', 58], ['3205', '苏州', '江苏省', 41], ['3202', '无锡', '江苏省', 22], ['3301', '杭州', '浙江省', 71],
   ['3302', '宁波', '浙江省', 27], ['3401', '合肥', '安徽省', 54], ['3501', '福州', '福建省', 27], ['3601', '南昌', '江西省', 24], ['3701', '济南', '山东省', 30],
@@ -114,6 +124,10 @@ const CITIES: [string, string, string, number][] = [
 const GEO_VALUES: DimValue[] = [
   ...PROVINCES.map(([code, name, reg, n, syn]) => V(code, name, '省份', { count: n, synonyms: syn, note: `行政大区：${reg}${n ? '' : ' · 暂无门店'}` })),
   ...CITIES.map(([code, name, prov, n]) => V(code, `${name}市`, '城市', { parent: prov, count: n, synonyms: [name] })),
+  ...DISTRICTS.map(([code, name, n]) => V(code, name, '区县', { parent: '上海市', count: n, synonyms: [name.replace(/(新区|区)$/, '')] })),
+  ...ALL_STORES.filter((st) => st.city === '上海').map((st) => V(st.id, st.name, '门店', {
+    parent: DISTRICTS.find(([, name]) => st.name.startsWith(`上海${name.replace(/(新区|区)$/, '')}`))?.[1] ?? '上海市', ref: { kind: 'store', id: st.id },
+  })),
 ];
 
 // —— 商品品类：大类 12 个，列出与商品 mock 对应的中类 ——
@@ -171,14 +185,14 @@ export const DIM_ITEMS: DimItem[] = [
     valueSrc: '门店主数据 ORG.T_REGION、ORG.T_STORE', sync: '每日 02:00 全量同步',
     desc: '考核组织。门店经“所属大区”直属大区，不经过省份（CR-0005）；按省份统计用“行政区域”维度。门店的“区域”（华东一区—五区）是运营片区，不是本维度的层级。',
     levels: [
-      { name: '大区', api: 'region', source: '门店.所属大区 → 大区', count: 6, note: '其中 1 个有门店' },
+      { name: '大区', api: 'region', source: via('store_in_region'), count: 6, note: '其中 1 个有门店' },
       { name: '门店', api: 'store', source: '门店', count: 486 },
     ],
     qa: { defaultLevel: '大区', unspecified: '问“各大区”按所属大区；只说“各门店”按门店，超过 20 家时只列前 20 并给出总数', nullAs: '--', sort: '按指标值降序', note: '订单按下单门店归属；履约门店需用户指明' },
     levelsBefore: {
       ver: 'v2026.10.2',
       levels: [
-        { name: '省份', api: 'province', source: '门店.所在省份 → 省份', count: 31 },
+        { name: '省份', api: 'province', source: via('store_in_province'), count: 31 },
         { name: '门店', api: 'store', source: '门店', count: 486 },
       ],
       qa: { defaultLevel: '省份', unspecified: '问“各大区”时按省份归属汇总（经省份所属大区）', sort: '按指标值降序', note: '订单按下单门店归属' },
@@ -212,12 +226,14 @@ export const DIM_ITEMS: DimItem[] = [
     id: 'geo', name: '行政区域', api: 'dim_geo', kind: '维度', group: '组织', status: '已发布', owner: '陈立军',
     object: 'province', objectName: '省份', attr: '门店.所在省份、门店.城市', column: 'ORG.T_STORE.province_code',
     valueSrc: '国家行政区划代码（GB/T 2260）ORG.T_PROVINCE', sync: '每季度核对一次',
-    desc: '门店所在的行政省份和城市，经“所在省份”关系。行政大区（省份所属大区）与考核大区可能不同，按省份归属统计需用户指明。',
+    desc: '门店所在的行政区划：省份 › 城市 › 区县 › 门店，经“所在省份”关系。行政大区（省份所属大区）与考核大区可能不同，按省份归属统计需用户指明。',
     levels: [
-      { name: '省份', api: 'province', source: '门店.所在省份 → 省份', count: 31, note: '有门店 7 个' },
+      { name: '省份', api: 'province', source: via('store_in_province'), count: 31, note: '有门店 7 个' },
       { name: '城市', api: 'city', source: '门店.城市', count: 10, note: '有门店的城市' },
+      { name: '区县', api: 'district', source: '门店.区县', count: 9, note: '目前只维护上海的区县' },
+      { name: '门店', api: 'store', source: '门店', count: 486 },
     ],
-    qa: { defaultLevel: '省份', unspecified: '说“各省”按省份，说“各城市”按城市', nullAs: '--', sort: '按指标值降序', note: '只列有数据的省份；“按省份归属的大区”经省份所属大区，需写明“按省份”' },
+    qa: { defaultLevel: '省份', unspecified: '说“各省”按省份，说“各城市”按城市，说“各区县”按区县（如“上海各区县”= 城市 上海 + 区县）', nullAs: '--', sort: '按指标值降序', note: '只列有数据的省份；“按省份归属的大区”经省份所属大区，需写明“按省份”' },
     values: GEO_VALUES,
     mappings: [
       MP('江浙沪', ['上海市', '江苏省', '浙江省'], '多值', '业务知识', 734),
@@ -229,6 +245,7 @@ export const DIM_ITEMS: DimItem[] = [
     usage: [
       { type: '视图', name: '门店经营月报', note: '省份筛选' },
       { type: '认证问答', name: '按省份归属统计各大区门店数', note: '已认证，问题里写明“按省份”' },
+      { type: '认证问答', name: '上海各区县门店销售额', note: '已认证：城市 = 上海，按区县拆分' },
     ],
     history: [
       { ver: 'v2026.10.2', cr: 'CR-0005', status: '生效中', by: '陈立军', at: '2026-10-17 20:45', change: '从组织维度拆出，作为独立的行政维度（此前是组织维度的上级层级）' },
