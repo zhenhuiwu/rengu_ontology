@@ -4,8 +4,12 @@
  *   只读 mock，不改任何值；mock 文件本身不动。
  *
  * 输出：${OUT_DIR}/<模块>/<导出名>.json，加 ${OUT_DIR}/manifest.json（源文件、导出名、行数、跳过/失败项）。
- *   OUT_DIR 默认 ../backend/seeds/json（相对前端根目录；GitHub 上 frontend/ 与 backend/ 并列）。
+ *   OUT_DIR 必须显式给出（相对前端根目录或绝对路径），没有默认值，不给直接报错退出。
  *   例：OUT_DIR=/tmp/export-mock-test npm run export-mock
+ *       OUT_DIR=../backend/seeds/json npm run export-mock
+ * 派生数据：函数按参数算出的种子（hitsOf、runsOf、viewsOf……）按 scripts/export-mock.derived.mjs 的调用清单，
+ *   在同一进程、常量导出之后逐个调用，写到 ${OUT_DIR}/<模块>/derived/<函数>.json（[{ args, result }]），
+ *   每次调用的参数、是否推断（guessed）、行数记在 manifest.derived。
  *
  * 时间：mock 按北京时间写（new Date(2026, 9, 25, …)、getHours() 等本地时间函数），
  *   所以脚本先把 TZ 固定为 Asia/Shanghai，再加载 mock，算出的值与浏览器里一致；
@@ -37,7 +41,11 @@ import fs from 'node:fs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MOCK_DIR = path.join(ROOT, 'src/mock');
-const OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR || '../backend/seeds/json');
+if (!process.env.OUT_DIR) {
+  console.error('✗ 未设置 OUT_DIR。请显式指定输出目录，例如：OUT_DIR=/tmp/export-mock-test npm run export-mock');
+  process.exit(1);
+}
+const OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR);
 
 const MODULES = {
   common: ['stores', 'products', 'orders', 'format', 'paginate'],
@@ -100,7 +108,7 @@ const server = await createServer({
   server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] },
 });
 
-const manifest = { generatedBy: 'scripts/export-mock.mjs', timezone: 'Asia/Shanghai (+08:00)', modules: MODULES, files: [], exports: [], skipped: [], failed: [] };
+const manifest = { generatedBy: 'scripts/export-mock.mjs', timezone: 'Asia/Shanghai (+08:00)', modules: MODULES, files: [], exports: [], skipped: [], failed: [], derived: [] };
 const files = fs.readdirSync(MOCK_DIR).filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts')).sort();
 const written = [];
 try {
@@ -145,16 +153,58 @@ try {
       }
     }
   }
+  await exportDerived();
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(path.join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 } finally {
   await server.close();
 }
 
+/** 派生调用：按清单逐个调用，写 <模块>/derived/<函数>.json */
+async function exportDerived() {
+  let list;
+  try {
+    const { default: derived } = await import('./export-mock.derived.mjs');
+    list = await derived((f) => server.ssrLoadModule(f));
+  } catch (e) {
+    manifest.failed.push({ source: 'scripts/export-mock.derived.mjs', export: '*', error: String(e?.message || e).split('\n')[0] });
+    return;
+  }
+  for (const d of list) {
+    const rel = `${d.module}/derived/${d.fn}.json`;
+    const ctx = { dropped: [], notes: new Set(), dates: 0 };
+    const rows = [], calls = [], errors = [];
+    for (const c of d.calls) {
+      try {
+        const result = toPlain(c.run(), `${d.fn}(${calls.length})`, ctx, new WeakSet());
+        const n = Array.isArray(result) ? result.length : result == null ? 0 : 1;
+        rows.push({ args: c.args, result: result === undefined ? null : result });
+        calls.push({ args: c.args, rows: n });
+      } catch (e) {
+        errors.push({ args: c.args, error: String(e?.message || e).split('\n')[0] });
+      }
+    }
+    const out = path.join(OUT_DIR, rel);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify(rows, null, 2) + '\n');
+    manifest.derived.push({
+      module: d.module, fn: d.fn, file: rel, spec: d.spec, guessed: d.guessed ?? false,
+      calls: calls.length, rows: calls.reduce((s, c) => s + c.rows, 0),
+      ...(ctx.dates ? { dateObjects: ctx.dates } : {}),
+      ...(ctx.dropped.length ? { droppedFunctionFields: ctx.dropped.length } : {}),
+      ...(ctx.notes.size ? { notes: [...ctx.notes].sort() } : {}),
+      argSets: calls,
+    });
+    for (const e of errors) manifest.failed.push({ source: 'derived', module: d.module, export: d.fn, args: e.args, error: e.error });
+  }
+}
+
 const byMod = {};
 for (const e of manifest.exports) { byMod[e.module] ??= { exports: 0, rows: 0 }; byMod[e.module].exports++; byMod[e.module].rows += e.rows; }
 console.log(`导出到 ${OUT_DIR}`);
 for (const [m, s] of Object.entries(byMod)) console.log(`  ${m.padEnd(8)} ${String(s.exports).padStart(3)} 个导出  ${s.rows} 行`);
+const dRows = manifest.derived.reduce((s, d) => s + d.rows, 0), dCalls = manifest.derived.reduce((s, d) => s + d.calls, 0);
+console.log(`  派生 ${manifest.derived.length} 个函数  ${dCalls} 次调用  ${dRows} 行（推断参数 ${manifest.derived.filter((d) => d.guessed).length} 个）`);
 console.log(`  跳过函数 ${manifest.skipped.length} 个，失败 ${manifest.failed.length} 个`);
 for (const x of manifest.failed) console.log(`  ✗ ${x.source} ${x.export}: ${x.error}`);
 process.exitCode = manifest.failed.length ? 2 : 0;
