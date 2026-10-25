@@ -311,3 +311,74 @@ async def test_keywords_trimmed(qa):
     assert await get(qa, "/favorites", q=f" {word}  ", size=200) == await get(
         qa, "/favorites", q=word, size=200
     )
+
+
+# ------------------------------------------------ 分页收拢（CONVENTIONS §3，前端 paginate.ts:13）
+
+NO_HIT = "__没有这个关键词__"
+
+
+def _items_page(all_items: list, page: int, size: int) -> tuple[list, int]:
+    """前端 paginate()：page = min(max(1, page), max(1, ceil(total/size)))。"""
+    pages = max(1, -(-len(all_items) // size))
+    p = min(max(1, page), pages)
+    return all_items[(p - 1) * size : p * size], p
+
+
+async def _assert_clamped(c, url: str, *, pick=lambda b: b, kw: str | None = None, size: int = 3, **params):
+    """越界 → 最后一页（page 也收拢）；page=0 / -3 → 第 1 页；total=0 → 第 1 页、空列表。"""
+    full = pick(await get(c, url, size=200, **params))
+    assert full["total"] > size, f"{url} 数据不够翻页"
+    for req in (999, full["total"] // size + 2, 0, -3, 1, 2):
+        body = pick(await get(c, url, page=req, size=size, **params))
+        want, page = _items_page(full["items"], req, size)
+        assert (body["page"], body["size"], body["total"]) == (page, size, full["total"]), (url, req)
+        assert body["items"] == want, (url, req)
+    if kw:
+        for req in (1, 0, -3, 5):
+            empty = pick(await get(c, url, page=req, size=size, **{kw: NO_HIT}, **params))
+            assert (empty["page"], empty["total"], empty["items"]) == (1, 0, []), (url, req)
+
+
+async def test_paging_clamped_sessions(qa):
+    await _assert_clamped(qa, "/sessions", kw="q")
+    assert (await get(qa, "/sessions", page=0))["size"] == 12  # 默认条数不变
+
+
+async def test_paging_clamped_lists(qa):
+    await _assert_clamped(qa, "/favorites", kw="q")
+    await _assert_clamped(qa, "/pages", kw="kw", view="brief")
+    await _assert_clamped(qa, "/templates", kw="kw")
+    await _assert_clamped(qa, "/tuning/certs", kw="kw")
+    await _assert_clamped(qa, "/tuning/eval/runs")
+    await _assert_clamped(qa, "/tuning/eval/questions", kw="kw")
+    await _assert_clamped(qa, "/tuning/feedbacks", kw="kw")
+
+
+async def test_paging_clamped_freq(qa):
+    """T18 自己拼 SQL（count + select 两条），先 clamp(total) 再算 offset。"""
+    await _assert_clamped(qa, "/tuning/freq", kw="kw")
+    await _assert_clamped(qa, "/tuning/freq", kw="kw", period=7)
+    body = await get(qa, "/tuning/freq", page=999)
+    assert body["size"] == 15 and body["items"] and body["page"] == max(1, -(-body["total"] // 15))
+    assert body["items"][-1]["rank"] == body["total"]
+
+
+async def test_paging_clamped_eval_run_fails(qa):
+    """T10 详情里的 fails 子分页（service.run_detail）。"""
+    runs = (await get(qa, "/tuning/eval/runs", size=200))["items"]
+    rid = max(runs, key=lambda x: x["failCount"])["id"]
+    await _assert_clamped(qa, f"/tuning/eval/runs/{rid}", pick=lambda b: b["fails"])
+    assert (await get(qa, f"/tuning/eval/runs/{rid}", page=-3))["fails"]["size"] == 12
+    zero = next(x["id"] for x in runs if x["failCount"] == 0)
+    for req in (1, 0, 7):
+        f = (await get(qa, f"/tuning/eval/runs/{zero}", page=req))["fails"]
+        assert (f["page"], f["total"], f["items"]) == (1, 0, [])
+
+
+@pytest.mark.parametrize("url", ["/sessions", "/tuning/freq", "/tuning/eval/runs/ER-0023"])
+@pytest.mark.parametrize("size", [0, 201])
+async def test_paging_size_still_validated(qa, url, size):
+    """size 照骨架校验（1–200，越界 422）；一个请求一个用例（422 会回滚测试共用的会话）。"""
+    r = await qa.get(API + url, params={"size": size})
+    assert r.status_code == 422, r.text

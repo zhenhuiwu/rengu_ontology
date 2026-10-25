@@ -68,10 +68,12 @@ def _kw(v: str | None) -> str | None:
 
 
 def page_dep(default: int) -> Callable[..., PageParams]:
-    """各接口默认条数不同（qa-api §2–§7：12 / 10 / 15）。"""
+    """骨架 `PageParamsDep`（pagination._page_params）的同款，只是默认条数按接口不同
+    （qa-api §2–§7：12 / 10 / 15，同前端各页 PAGE_SIZE）。page 不设下限：0、负数由 `PageParams`
+    收成 1（CONVENTIONS §3）；size 照骨架校验 1–MAX_PAGE_SIZE。越界页码由 list_page / Page.of 收拢。"""
 
     def _dep(
-        page: Annotated[int, Query(ge=1)] = 1,
+        page: Annotated[int, Query()] = 1,
         size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = default,
     ) -> PageParams:
         return PageParams(page=page, size=size)
@@ -84,10 +86,6 @@ P12 = Annotated[PageParams, Depends(page_dep(12))]
 P15 = Annotated[PageParams, Depends(page_dep(15))]
 
 _RANGE_DAYS = {"today": 0, "7d": 6, "30d": 29}  # 同 QaSessionPanel：daysAgo <= N
-
-
-def _page(items, total: int, p: PageParams) -> dict:
-    return {"items": items, "total": total, "page": p.page, "size": p.size}
 
 
 # ---------------------------------------------------------------- 工作台
@@ -106,7 +104,7 @@ async def list_sessions(
     since = svc.day_start(_RANGE_DAYS[range_]) if range_ in _RANGE_DAYS else None
     repo = r.SessionRepo(session)
     rows, total = await repo.list_page(repo.list_query(pk, _kw(q), since), p)
-    return _page([svc.session_out(s) for s in rows], total, p)
+    return Page.of([svc.session_out(s) for s in rows], total, p)
 
 
 @router.get(
@@ -128,7 +126,7 @@ async def list_favorites(
     pk, _ = await svc.effective_user(session, user, ctx)
     repo = r.FavoriteRepo(session)
     rows, total = await repo.list_page(repo.list_query(pk, _kw(q)), p)
-    return _page([svc.favorite_out(f) for f in rows], total, p)
+    return Page.of([svc.favorite_out(f) for f in rows], total, p)
 
 
 @router.get(
@@ -178,7 +176,7 @@ async def list_pages(
         items = [svc.page_full_out(x, deny_cards=await svc.cards_denied_for(viewer, pk, x)) for x in rows]
     else:
         items = [svc.page_brief_out(x) for x in rows]
-    return {**_page(items, total, p), "from_workbench_count": wb_total}
+    return PageListOut.of(items, total, p, from_workbench_count=wb_total)
 
 
 @router.get(
@@ -207,7 +205,7 @@ async def list_templates(
 ):
     repo = r.TemplateRepo(session)
     rows, total = await repo.list_page(repo.list_query(_kw(kw), scene), p)
-    return _page([svc.template_out(t) for t in rows], total, p)
+    return Page.of([svc.template_out(t) for t in rows], total, p)
 
 
 @router.get("/templates/{tid}", dependencies=_PG, response_model=TemplateOut, summary="P12 模板详情")
@@ -283,7 +281,7 @@ async def list_certs(
 ):
     repo = r.CertRepo(session)
     rows, total = await repo.list_page(repo.list_query(_kw(kw), status, metric), p)
-    return _page([svc.cert_out(c) for c in rows], total, p)
+    return Page.of([svc.cert_out(c) for c in rows], total, p)
 
 
 @tuning.get("/certs/{cid}", response_model=CertOut, response_model_exclude_none=True, summary="T4")
@@ -301,7 +299,7 @@ async def list_runs(session: SessionDep, user: CurrentUserDep, p: P15, trigger: 
     repo = r.EvalRunRepo(session)
     rows, total = await repo.list_page(repo.list_query(trigger), p)
     counts = await repo.fail_counts([x.id for x in rows])
-    return _page([svc.run_out(x, counts.get(x.id, 0)) for x in rows], total, p)
+    return Page.of([svc.run_out(x, counts.get(x.id, 0)) for x in rows], total, p)
 
 
 @tuning.get(
@@ -333,7 +331,7 @@ async def list_eval_questions(
     rows, total = await repo.list_page(repo.list_query(group, last, _kw(kw)), p)
     counts = await repo.group_counts()
     groups = [GroupCountOut(group=g, n=counts.get(g, 0)) for g in catalog.load("EVAL_GROUPS")]
-    return {**_page([svc.eval_q_out(q) for q in rows], total, p), "group_counts": groups}
+    return EvalQListOut.of([svc.eval_q_out(q) for q in rows], total, p, group_counts=groups)
 
 
 @tuning.get(
@@ -353,7 +351,7 @@ async def list_feedbacks(
     repo = r.FeedbackRepo(session)
     rows, total = await repo.list_page(repo.list_query(_kw(kw), status, fix_kind), p)
     codes = await repo.user_codes([f.user_id for f in rows if f.user_id])
-    return _page([svc.feedback_out(f, codes.get(f.user_id)) for f in rows], total, p)
+    return Page.of([svc.feedback_out(f, codes.get(f.user_id)) for f in rows], total, p)
 
 
 @tuning.get(
@@ -382,8 +380,9 @@ async def list_freq(
     certified = None if cert is None else cert == "已认证"
     stmt, _ = repo.list_query(int(period), certified, _kw(kw))
     total = await r.count_of(session, stmt)
-    rows = (await session.execute(stmt.offset(p.offset).limit(p.size))).all()
-    return _page([svc.freq_out(x, rank) for x, rank in rows], total, p)
+    c = p.clamp(total)  # 先数 total 再按收拢后的页码取（越界 → 最后一页，CONVENTIONS §3）
+    rows = (await session.execute(stmt.offset(c.offset).limit(c.size))).all()
+    return Page.of([svc.freq_out(x, rank) for x, rank in rows], total, p)
 
 
 @tuning.get("/synonyms", response_model=list[SynonymOut], response_model_exclude_none=True, summary="T20")

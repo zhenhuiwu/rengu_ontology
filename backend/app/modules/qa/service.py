@@ -315,8 +315,8 @@ def eval_q_out(q: QaEvalQuestion) -> EvalQOut:
 async def run_detail(session: AsyncSession, x: QaEvalRun, page: PageParams) -> EvalRunDetailOut:
     rr = r.EvalRunRepo(session)
     rows, total = await rr.list_page(rr.fails_query(x.id), page)
-    fails = Page(
-        items=[
+    fails = Page[FailCaseOut].of(
+        [
             FailCaseOut(
                 qid=f.question.code,
                 question=f.question.question,
@@ -326,9 +326,8 @@ async def run_detail(session: AsyncSession, x: QaEvalRun, page: PageParams) -> E
             )
             for f in rows
         ],
-        total=total,
-        page=page.page,
-        size=page.size,
+        total,
+        page,
     )
     stats = [KindStatOut(kind=k.value, n=n) for k, n in await rr.kind_stats(x.id)]
     replay: list[EvalQOut] = []
