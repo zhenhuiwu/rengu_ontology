@@ -276,3 +276,101 @@ export function draftPropDiff(crId: string, objName: string, props: ObjProp[]) {
   }
   return { map, other };
 }
+
+/**
+ * 对象类型概览用的元信息（按对象类型 id）。负责人、数据源取 quality.ts 的 Q_OBJECT_TYPES，
+ * 这里只补业务域、描述、示例问题、看板卡片数、近 30 天问数次数、源表未使用字段数等页面上要显示的值。
+ * 没写到的对象类型按分组给默认值（见 objectMeta）。
+ */
+export interface ObjQ { q: string; cert: boolean; query?: string }
+export interface ObjMeta {
+  domain: string; desc: string; conflict: string; lifecycle: string; sync: string;
+  qs: ObjQ[]; cards: number; qa30: number; unused: number;
+}
+const REL = 'release: v2026.10.3';
+const META: Record<string, Partial<ObjMeta>> = {
+  order: {
+    domain: '零售交易', sync: '每小时增量，按源数据更新时间', cards: 14, qa30: 2318, unused: 6,
+    desc: '顾客在门店、小程序、外卖平台、社区团购下的一笔交易。一单可以有多行商品，按出库时间计入销售。测试单默认不参与统计。',
+    qs: [
+      { q: '上个月各大区的有效订单数是多少？', cert: true, query: `metric: order_cnt\nbreakdown: [组织.大区]\ntime: 出库时间 = 上月\n${REL}` },
+      { q: '华东大区 9 月小程序渠道的订单，出库及时率是多少？', cert: true, query: `metric: ship_ontime\nfilters: [大区 = 华东, 渠道 = 小程序]\ntime: 出库时间 = 2026-09\n${REL}` },
+      { q: '本周取消的订单里，哪些门店最多？', cert: false },
+    ],
+  },
+  order_line: {
+    domain: '零售交易', cards: 9, qa30: 1206, unused: 4,
+    desc: '订单里的一行商品，销售额（不含税）和毛利都从这里取数。称重商品数量按千克记录。',
+    qs: [
+      { q: '上周销售额（不含税）前 10 的商品是哪些？', cert: true, query: `metric: gmv\nbreakdown: [商品]\ntime: 下单时间 = 上周\nlimit: 10\n${REL}` },
+      { q: '赠品行占全部订单行的比例是多少？', cert: false },
+    ],
+  },
+  refund: {
+    domain: '售后', cards: 5, qa30: 486, unused: 3,
+    desc: '顾客对一笔订单发起的退款或退货退款。退款率口径正在改为按退款完成时间统计（CR-0010 审核中）。',
+    qs: [
+      { q: '上个月各渠道的退款金额（不含税）是多少？', cert: true, query: `metric: refund_amount\nbreakdown: [渠道]\ntime: 退款完成时间 = 上月\n${REL}` },
+      { q: '退款原因里“商品质量”占多少？', cert: false },
+    ],
+  },
+  member: {
+    domain: '会员运营', conflict: '源系统优先（会员中心为准）', sync: '每 2 小时增量，按源数据更新时间', cards: 11, qa30: 1532, unused: 8,
+    desc: '在会员中心注册过的顾客。手机号、姓名、生日是敏感字段，问数里默认脱敏；储值卡正在拆成独立对象（CR-0012 草稿）。',
+    qs: [
+      { q: '9 月新注册会员里，30 天内复购的比例是多少？', cert: true, query: `metric: repeat_rate\nfilters: [注册时间 = 2026-09]\nwindow: 30d\n${REL}` },
+      { q: '华东各门店的金卡会员有多少？', cert: true, query: `metric: member_cnt\nbreakdown: [注册门店]\nfilters: [大区 = 华东, 会员等级 = 金卡]\n${REL}` },
+      { q: '冻结的会员主要来自哪些注册渠道？', cert: false },
+    ],
+  },
+  store: {
+    domain: '组织与门店', conflict: '源系统优先（门店主数据为准）', sync: '每日 02:00 全量', cards: 18, qa30: 3104, unused: 5,
+    desc: '直营、加盟、社区店和 mini 店。订单、会员、员工都按门店编码关联；CR-0005 起门店直接挂在大区下。新开的前置仓正在作为业态补充（CR-0009 草稿）。',
+    qs: [
+      { q: '华东大区上周销售额（不含税）最低的 5 家门店是哪些？', cert: true, query: `metric: gmv\nbreakdown: [门店]\nfilters: [大区 = 华东]\ntime: 出库时间 = 上周\norder: asc\nlimit: 5\n${REL}` },
+      { q: '开业满 12 个月的门店，同店销售增长是多少？', cert: true, query: `metric: gmv\nfilters: [开业日期 ≤ 今天 − 12 个月]\ncompare: 去年同期\n${REL}` },
+      { q: '社区店的平均营业面积是多少？', cert: false },
+    ],
+  },
+  region: {
+    domain: '组织与门店', conflict: '源系统优先（门店主数据为准）', sync: '每日 02:00 全量', cards: 7, qa30: 942, unused: 2,
+    desc: '集团六个经营大区。门店直接挂在大区下，大区经理按大区看经营数据；“调整大区预算”动作改的是年度预算。',
+    qs: [
+      { q: '本月各大区的销售额（不含税）和毛利率分别是多少？', cert: true, query: `metric: [gmv, gross_margin]\nbreakdown: [大区]\ntime: 出库时间 = 本月\n${REL}` },
+      { q: '哪个大区的门店数增长最快？', cert: false },
+    ],
+  },
+  product: {
+    domain: '商品', sync: '每小时增量，按源数据更新时间', cards: 12, qa30: 1877, unused: 9,
+    desc: '在售和停售的 SKU。品类按四级挂在品类树上；保质期属性自 v2026.09.4 起提供，临期预警规则依赖它。',
+    qs: [
+      { q: '生鲜品类上周毛利率低于 18% 的商品有哪些？', cert: true, query: `metric: gross_margin\nbreakdown: [商品]\nfilters: [品类 = 生鲜]\nhaving: 毛利率 < 18%\n${REL}` },
+      { q: '保质期不足 7 天的在库商品有多少？', cert: false },
+    ],
+  },
+};
+const GROUP_DOMAIN: Record<string, string> = { 交易: '零售交易', 客户: '会员运营', 组织: '组织与门店', 商品: '商品', 供应链: '供应链' };
+
+/** 某个对象类型的概览元信息；name / group 用于没写到的对象类型生成默认值 */
+export function objectMeta(id: string, name: string, group: string): ObjMeta {
+  const m = META[id] ?? {};
+  const n = [...id].reduce((s, c) => s + c.charCodeAt(0), 0);
+  return {
+    domain: m.domain ?? GROUP_DOMAIN[group] ?? group,
+    desc: m.desc ?? `${name}的主数据，按源系统同步到本体，供问数、看板和对象详情使用。`,
+    conflict: m.conflict ?? '用户编辑优先',
+    lifecycle: m.lifecycle ?? '正式',
+    sync: m.sync ?? '每日 02:00 全量',
+    qs: m.qs ?? [{ q: `各大区的${name}数量分别是多少？`, cert: false }],
+    cards: m.cards ?? n % 6,
+    qa30: m.qa30 ?? (n * 7) % 400,
+    unused: m.unused ?? (n % 5) + 1,
+  };
+}
+
+/** 数据源 → 数据库类型（数据源名与 quality.ts 的 Q_OBJECT_TYPES.source 一致） */
+const SOURCE_DB: Record<string, string> = {
+  'POS 交易库（华东）': 'Oracle 19c', 会员中心: 'MySQL 8.0', 门店主数据: '达梦 DM8 · Oracle 兼容模式', 商品主数据: '达梦 DM8 · Oracle 兼容模式',
+  促销引擎: 'MySQL 8.0', '供应链 WMS 库': 'SQL Server 2019', '用友 NC 采购': 'Oracle 19c', 物流运单: 'MySQL 8.0', 'HR 人事库': '达梦 DM8 · Oracle 兼容模式',
+};
+export const dbOf = (source?: string) => (source && SOURCE_DB[source]) || '--';

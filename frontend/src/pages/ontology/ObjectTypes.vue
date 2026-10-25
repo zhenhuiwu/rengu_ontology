@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 对象类型：左侧对象类型列表（简洁分页），右侧详情按 v5 分三组页签（定义 / 行为 / 使用与治理）。
- * 选中类型写进 ?type=，页签写进 ?tab=。属性按对象类型各自一份（src/mock/objectProps.ts）；概览、映射的示例仍以“订单”为准。
+ * 选中类型写进 ?type=，页签写进 ?tab=。属性、概览、映射都按对象类型各自取数（src/mock/objectProps.ts 的 OBJECT_PROPS / objectMeta，
+ * 负责人、数据源、数据质量取 src/mock/quality.ts）。状态从变更单推：审核中 → 橙色；只有草稿 → 灰色“草稿中”；其余灰色。
  */
 import { computed, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -9,10 +10,19 @@ import GroupedTabs from '@/components/GroupedTabs.vue';
 import HoverCard from '@/components/HoverCard.vue';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { useDraftView } from './parts/useDraftView';
+import { useDraftView, draftOf } from './parts/useDraftView';
 import { message } from 'ant-design-vue';
 import { LINKS as ALL_LINKS, LINK_OBJECTS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
-import { OBJECT_PROPS, draftPropDiff, type ObjProp } from '@/mock/objectProps';
+import { OBJECT_PROPS, draftPropDiff, objectMeta, dbOf, type ObjProp } from '@/mock/objectProps';
+import { qObjType, QUALITY_CHECKS } from '@/mock/quality';
+import { PERM_OBJECTS } from '@/mock/roles';
+import { RULE_DEFS } from '@/mock/rules';
+import { legacyRevs } from '@/mock/objectHistory';
+import MetricsTab from './parts/object/MetricsTab.vue';
+import ViewsTab from './parts/object/ViewsTab.vue';
+import PermissionsTab from './parts/object/PermissionsTab.vue';
+import HistoryTab from './parts/object/HistoryTab.vue';
+import { crsOf, metricsOf } from './parts/object/objectGov';
 
 /**
  * 页签配置。新增页签只需在这里加一项，页面其他地方不用动。
@@ -36,10 +46,10 @@ const TABS: ObjTab[] = [
   { key: 'lifecycle', label: '生命周期', phase: 'behavior' },
   { key: 'actions', label: '动作', phase: 'behavior' },
   { key: 'automation', label: '自动化', phase: 'behavior' },
-  { key: 'metrics', label: '指标', phase: 'governance' },
-  { key: 'views', label: '视图', phase: 'governance' },
-  { key: 'permissions', label: '权限', phase: 'governance' },
-  { key: 'history', label: '版本历史', phase: 'governance' },
+  { key: 'metrics', label: '指标', phase: 'governance', component: MetricsTab },
+  { key: 'views', label: '视图', phase: 'governance', component: ViewsTab },
+  { key: 'permissions', label: '权限', phase: 'governance', component: PermissionsTab },
+  { key: 'history', label: '版本历史', phase: 'governance', component: HistoryTab },
 ];
 const PHASES = [{ key: 'def', title: '定义' }, { key: 'behavior', title: '行为' }, { key: 'governance', title: '使用与治理' }] as const;
 const TAB_GROUPS = PHASES.map((g) => ({ key: g.key, title: g.title, tabs: TABS.filter((t) => t.phase === g.key).map((t) => ({ key: t.key, title: t.label })) }))
@@ -50,9 +60,9 @@ const TYPES = [
   { id: 'order_line', name: '订单行', api: 'SalesOrderLine', group: '交易', props: 14, count: '4,917,355', status: '已发布' },
   { id: 'refund', name: '退款单', api: 'Refund', group: '交易', props: 16, count: '38,914', status: '已发布' },
   { id: 'refund_line', name: '退款行', api: 'RefundLine', group: '交易', props: 11, count: '52,307', status: '已发布' },
-  { id: 'member', name: '会员', api: 'Member', group: '客户', props: 22, count: '863,027', status: '变更中' },
+  { id: 'member', name: '会员', api: 'Member', group: '客户', props: 22, count: '863,027', status: '已发布' },
   { id: 'member_level', name: '会员等级', api: 'MemberLevel', group: '客户', props: 6, count: '5', status: '已发布' },
-  { id: 'store', name: '门店', api: 'Store', group: '组织', props: 18, count: '486', status: '变更中' },
+  { id: 'store', name: '门店', api: 'Store', group: '组织', props: 18, count: '486', status: '已发布' },
   { id: 'region', name: '大区', api: 'Region', group: '组织', props: 9, count: '6', status: '已发布' },
   { id: 'province', name: '省份', api: 'Province', group: '组织', props: 5, count: '31', status: '已发布' },
   { id: 'product', name: '商品', api: 'Product', group: '商品', props: 26, count: '48,213', status: '已发布' },
@@ -76,6 +86,13 @@ const tab = computed({
 const curTab = computed(() => TABS.find((t) => t.key === tab.value));
 const tabTitle = computed(() => curTab.value?.label);
 const current = computed(() => TYPES.find((t) => t.id === selected.value) ?? TYPES[0]);
+/** 显示状态：未发布的新对象类型按自身状态；有审核中的变更单 → 审核中（橙）；只有草稿 → 草稿中（灰）；其余已发布（灰） */
+const shownStatus = (t: (typeof TYPES)[number]) => {
+  if (t.status !== '已发布') return t.status;
+  if (crsOf(t.id).some((u) => u.cr.status === '审核中')) return '审核中';
+  return draftOf('object', t.id) ? '草稿中' : '已发布';
+};
+const statusColor = (t: (typeof TYPES)[number]) => (shownStatus(t) === '审核中' ? 'warning' : 'default');
 const pick = (id: string) => router.replace({ query: { ...route.query, type: id, view: undefined } });
 const { draft, isDraft, canEdit, editTip, readonly, reason, setView, start } = useDraftView('object', () => current.value.id);
 const changeOpen = ref(false);
@@ -158,11 +175,24 @@ const OVERRIDE = Object.fromEntries(MAP_ROWS.map((r) => [r.prop, r]));
 const srcTable = computed(() => LINK_OBJECTS.find((o) => o.id === current.value.id)?.table ?? '--');
 const pkProp = computed(() => PROPS.value.find((p) => p.pk));
 const MAP_ALL = computed(() => PROPS.value.map((p) => (current.value.id === 'order' && OVERRIDE[p.name]) || { prop: p.name, col: p.source, srcType: SRC_TYPE[p.type] ?? 'VARCHAR2(64)', transform: p.sensitive ? '敏感字段：脱敏显示' : '' }));
-const QS = [
-  { q: '上个月各大区的有效订单数是多少？', cert: true, query: 'metric: valid_order_count\nbreakdown: [组织.大区]\ntime: 出库时间 = 上月\nrelease: v2026.10.3' },
-  { q: '华东大区 9 月小程序渠道的订单，出库及时率是多少？', cert: true, query: 'metric: ship_ontime_rate\nfilters: [大区 = 华东, 渠道 = 小程序]\ntime: 出库时间 = 2026-09\nrelease: v2026.10.3' },
-  { q: '本周取消的订单里，哪些门店最多？', cert: false, query: '' },
-];
+// —— 概览（按对象类型取数）——
+const meta = computed(() => objectMeta(current.value.id, current.value.name, current.value.group));
+const qo = computed(() => qObjType(current.value.id));
+const titleProp = computed(() => PROPS.value.find((p) => p.title));
+/** 当前版本 / 最近修改：最近一张已发布的变更单；没有就取迁移前最后一次修订 */
+const lastRev = computed(() => {
+  const cr = crsOf(current.value.id).find((u) => u.cr.release)?.cr;
+  if (cr) return { ver: cr.release!, by: cr.owner, time: cr.updatedAt };
+  const h = legacyRevs(current.value.id, current.value.name)[0];
+  return { ver: h.version, by: h.author, time: h.time };
+});
+const usedMetrics = computed(() => metricsOf(current.value.id).map((u) => u.m));
+const actionCount = computed(() => PERM_OBJECTS.find((o) => o.name === current.value.name)?.actions.length ?? 0);
+const ruleCount = computed(() => RULE_DEFS.filter((r) => r.objKind === current.value.id).length);
+const checks = computed(() => QUALITY_CHECKS.filter((c) => c.typeKey === current.value.id));
+const fullSync = computed(() => meta.value.sync.includes('全量'));
+const freshFail = computed(() => checks.value.find((c) => c.kind === '新鲜度' && c.result === '失败'));
+const lastSync = computed(() => (fullSync.value ? '2026-10-25 02:00' : '2026-10-25 15:00'));
 const mpage = ref(1);
 const MPAGE = 12;
 const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpage.value * MPAGE));
@@ -171,7 +201,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
 <template>
   <Teleport defer to="#page-extra">
     <a-button :disabled="readonly" @click="!readonly && openChange('从数据源导入对象类型')">从数据源导入</a-button>
-    <a-button type="primary" :disabled="readonly" @click="!readonly && openChange('新建对象类型')">新建对象类型</a-button>
+    <a-button :disabled="readonly" @click="!readonly && openChange('新建对象类型')">新建对象类型</a-button>
   </Teleport>
 
   <div class="ot">
@@ -181,7 +211,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
         <li v-for="t in list" :key="t.id" :class="{ active: t.id === current.id }" @click="pick(t.id)">
           <div class="ot-row">
             <span class="t-14 ot-name">{{ t.name }}</span>
-            <span class="t-12 num" :class="t.status === '变更中' ? 'c-warning' : 'c-3'">{{ t.status === '已发布' ? '' : t.status }}</span>
+            <span class="t-12 num" :class="shownStatus(t) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(t) === '已发布' ? '' : shownStatus(t) }}</span>
           </div>
           <div class="ot-row">
             <span class="t-12 c-3 num">{{ t.api }}</span>
@@ -201,12 +231,12 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
       <div class="ot-head">
         <span class="t-16 fw-600 c-1">{{ current.name }}</span>
         <span class="t-14 c-3 num">{{ current.api }} · {{ PROPS.length }} 个属性 · {{ current.count }} 条</span>
-        <a-tag :color="current.status === '已发布' ? 'success' : current.status === '变更中' ? 'warning' : 'default'">{{ current.status }}</a-tag>
+        <a-tag :color="statusColor(current)">{{ shownStatus(current) }}</a-tag>
         <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="ot-sp" />
-        <span class="t-12 c-3">数据截至 2026-10-24 23:00</span>
+        <span class="t-12 c-3">数据截至 {{ qo?.cutoff ?? '--' }}</span>
         <a-button>预览数据</a-button>
         <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${current.name}（${current.api}）`)">发起变更</a-button>
@@ -221,27 +251,27 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
       <div v-else-if="tab === 'overview'" class="ot-body ot-ov">
         <div class="ot-ov-left">
           <a-descriptions :column="2" bordered size="small">
-            <a-descriptions-item label="显示名">订单</a-descriptions-item>
-            <a-descriptions-item label="API 名">SalesOrder</a-descriptions-item>
-            <a-descriptions-item label="业务域">零售交易</a-descriptions-item>
-            <a-descriptions-item label="负责人">陈立军 · 财务数据组</a-descriptions-item>
-            <a-descriptions-item label="主键">订单号（order_id）</a-descriptions-item>
-            <a-descriptions-item label="标题属性">展示单号</a-descriptions-item>
-            <a-descriptions-item label="数据源">ERP 生产库（达梦 DM8 · Oracle 兼容）</a-descriptions-item>
-            <a-descriptions-item label="同步方式">每小时增量，按源数据更新时间</a-descriptions-item>
-            <a-descriptions-item label="冲突策略">用户编辑优先</a-descriptions-item>
-            <a-descriptions-item label="生命周期">正式</a-descriptions-item>
-            <a-descriptions-item label="当前版本">随本体发布 v2026.10.3 生效</a-descriptions-item>
-            <a-descriptions-item label="最近修改">陈立军 · 2026-10-24 21:17</a-descriptions-item>
-            <a-descriptions-item label="描述" :span="2">顾客在门店、小程序、外卖平台、社区团购下的一笔交易。一单可以有多行商品，按出库时间计入销售。测试单默认不参与统计。</a-descriptions-item>
+            <a-descriptions-item label="显示名">{{ current.name }}</a-descriptions-item>
+            <a-descriptions-item label="API 名"><span class="num">{{ current.api }}</span></a-descriptions-item>
+            <a-descriptions-item label="业务域">{{ meta.domain }}</a-descriptions-item>
+            <a-descriptions-item label="负责人">{{ qo?.owner ?? '--' }}</a-descriptions-item>
+            <a-descriptions-item label="主键">{{ pkProp ? `${pkProp.name}（${pkProp.api}）` : '--' }}</a-descriptions-item>
+            <a-descriptions-item label="标题属性">{{ titleProp?.name ?? '--' }}</a-descriptions-item>
+            <a-descriptions-item label="数据源">{{ qo?.source ?? '--' }}（{{ dbOf(qo?.source) }}）</a-descriptions-item>
+            <a-descriptions-item label="同步方式">{{ meta.sync }}</a-descriptions-item>
+            <a-descriptions-item label="冲突策略">{{ meta.conflict }}</a-descriptions-item>
+            <a-descriptions-item label="生命周期">{{ meta.lifecycle }}</a-descriptions-item>
+            <a-descriptions-item label="当前版本">随本体发布 <span class="num">{{ lastRev.ver }}</span> 生效</a-descriptions-item>
+            <a-descriptions-item label="最近修改">{{ lastRev.by }} · <span class="num">{{ lastRev.time }}</span></a-descriptions-item>
+            <a-descriptions-item label="描述" :span="2">{{ meta.desc }}</a-descriptions-item>
           </a-descriptions>
           <div class="t-14 fw-600">问数示例问题</div>
           <ul class="ot-qs t-14 c-2">
-            <li v-for="q in QS" :key="q.q">
+            <li v-for="q in meta.qs" :key="q.q">
               <span>{{ q.q }}</span>
               <a-popover v-if="q.cert" placement="right">
                 <template #content><pre class="ot-sq t-12">{{ q.query }}</pre></template>
-                <a-tag color="success" class="ot-cert">已认证</a-tag>
+                <a-tag class="ot-cert">已认证</a-tag>
               </a-popover>
               <span v-else class="t-12 c-3">未认证</span>
             </li>
@@ -252,17 +282,27 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
           <dl class="ot-stat">
             <dt class="t-14 c-3">关系</dt><dd class="t-14 num">{{ LINKS.length }} 条</dd>
             <dt class="t-14 c-3">引用的指标</dt><dd class="t-14 num">
-              <HoverCard kind="metric" id="order_cnt">有效订单数</HoverCard>、<HoverCard kind="metric" id="atv">客单价（不含税）</HoverCard> 等 6 个</dd>
-            <dt class="t-14 c-3">动作类型</dt><dd class="t-14 num">3 个（第三期启用）</dd>
-            <dt class="t-14 c-3">规则</dt><dd class="t-14 num">2 条</dd>
-            <dt class="t-14 c-3">看板卡片</dt><dd class="t-14 num">14 张</dd>
-            <dt class="t-14 c-3">近 30 天问数</dt><dd class="t-14 num">2,318 次</dd>
+              <template v-if="usedMetrics.length">
+                <template v-for="(m, i) in usedMetrics.slice(0, 2)" :key="m.id"><template v-if="i">、</template><HoverCard kind="metric" :id="m.id">{{ m.name }}</HoverCard></template>
+                <template v-if="usedMetrics.length > 2"> 等 {{ usedMetrics.length }} 个</template>
+              </template>
+              <span v-else class="c-3">无</span></dd>
+            <dt class="t-14 c-3">动作类型</dt><dd class="t-14 num">{{ actionCount }} 个<span v-if="actionCount" class="c-3">（第三期启用）</span></dd>
+            <dt class="t-14 c-3">规则</dt><dd class="t-14 num">{{ ruleCount }} 条</dd>
+            <dt class="t-14 c-3">看板卡片</dt><dd class="t-14 num">{{ meta.cards }} 张</dd>
+            <dt class="t-14 c-3">近 30 天问数</dt><dd class="t-14 num">{{ meta.qa30.toLocaleString('zh-CN') }} 次</dd>
           </dl>
           <div class="t-14 fw-600">数据质量</div>
           <dl class="ot-stat">
-            <dt class="t-14 c-3">主键唯一</dt><dd class="t-14 c-success">通过</dd>
-            <dt class="t-14 c-3">外键可关联</dt><dd class="t-14">门店 100%，会员 99.82%</dd>
-            <dt class="t-14 c-3">最近同步</dt><dd class="t-14 num">2026-10-25 15:00 · 3,912 条</dd>
+            <template v-for="c in checks" :key="c.id">
+              <dt class="t-14 c-3">{{ c.kind }}</dt>
+              <dd class="t-14" :class="c.result === '失败' ? 'c-error' : 'c-2'">
+                <a-tooltip :title="`${c.rule} · 阈值 ${c.threshold} · 最近检查 ${c.lastRun}`">
+                  {{ c.result }}<span v-if="c.result === '失败'"> · {{ c.actual }}</span>
+                </a-tooltip>
+              </dd>
+            </template>
+            <dt class="t-14 c-3">数据截至</dt><dd class="t-14 num c-2">{{ qo?.cutoff ?? '--' }}</dd>
           </dl>
         </div>
       </div>
@@ -326,18 +366,21 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
       <!-- 数据源与映射 -->
       <div v-else-if="tab === 'mapping'" class="ot-body">
         <a-descriptions :column="4" bordered size="small">
-          <a-descriptions-item label="数据源">ERP 生产库</a-descriptions-item>
-          <a-descriptions-item label="数据库">达梦 DM8 · Oracle 兼容模式</a-descriptions-item>
+          <a-descriptions-item label="数据源">{{ qo?.source ?? '--' }}</a-descriptions-item>
+          <a-descriptions-item label="数据库">{{ dbOf(qo?.source) }}</a-descriptions-item>
           <a-descriptions-item label="源表">{{ srcTable }}</a-descriptions-item>
           <a-descriptions-item label="主键映射">{{ pkProp ? `${pkProp.source} → ${pkProp.name}` : '--' }}</a-descriptions-item>
-          <a-descriptions-item label="同步方式">每小时增量</a-descriptions-item>
-          <a-descriptions-item label="增量字段">update_time</a-descriptions-item>
-          <a-descriptions-item label="最近同步">2026-10-25 15:00 · 成功</a-descriptions-item>
-          <a-descriptions-item label="数据截至">2026-10-24 23:00</a-descriptions-item>
+          <a-descriptions-item label="同步方式">{{ meta.sync }}</a-descriptions-item>
+          <a-descriptions-item label="增量字段">{{ fullSync ? '--（全量同步）' : 'update_time' }}</a-descriptions-item>
+          <a-descriptions-item label="最近同步">
+            <span v-if="freshFail" class="c-error">{{ lastSync }} · 延迟（{{ freshFail.actual }}）</span>
+            <span v-else class="num">{{ lastSync }} · 成功</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="数据截至"><span class="num">{{ qo?.cutoff ?? '--' }}</span></a-descriptions-item>
         </a-descriptions>
         <div class="ot-tool">
           <span class="t-14 fw-600">字段映射</span>
-          <span class="t-12 c-3">已映射 {{ MAP_ALL.length }} / 源表 {{ MAP_ALL.length + 6 }} 个字段，6 个未使用</span>
+          <span class="t-12 c-3">已映射 {{ MAP_ALL.length }} / 源表 {{ MAP_ALL.length + meta.unused }} 个字段，{{ meta.unused }} 个未使用</span>
           <span class="ot-sp" />
           <a-button>重新采集元数据</a-button>
         </div>
