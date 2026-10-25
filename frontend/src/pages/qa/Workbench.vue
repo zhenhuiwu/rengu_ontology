@@ -15,6 +15,7 @@ import { useDrawer } from '@/composables/useDrawer';
 import { useConfirmStore } from '@/stores/confirm';
 import { REGION_EC } from '@/mock';
 import { useQueryParam } from './useQueryParam';
+import { useReadonly } from '@/composables/useReadonly';
 import QaSessionPanel from './components/QaSessionPanel.vue';
 import QaConversation from './components/QaConversation.vue';
 import QaComposer from './components/QaComposer.vue';
@@ -30,16 +31,15 @@ const drawer = useDrawer();
 const confirm = useConfirmStore();
 const submitted = ref(false);
 const pending = computed(() => confirm.open && confirm.req?.title === ACTION);
-const pin = useQueryParam('pin', '');
+const pinQ = useQueryParam('pin', '');
+const pin = computed({ get: () => (readonly.value ? '' : pinQ.value), set: (v: string) => (pinQ.value = v) });
 const panel = useQueryParam('panel', '');
 const apply = useQueryParam('apply', '');
 const applied = ref(false);
 
-// 右栏动作行高亮：确认卡打开期间 + 关闭后 2 秒
-const flash = ref(false);
-let flashTimer: number | undefined;
-const highlight = computed(() => pending.value || flash.value);
-watch(pending, (v) => { if (!v) { flash.value = true; clearTimeout(flashTimer); flashTimer = window.setTimeout(() => (flash.value = false), 2000); } });
+// 右栏动作行只在确认卡打开期间高亮；取消/关闭后恢复“发起”，提交后才变“待审批”
+const highlight = pending;
+const { readonly, reason } = useReadonly();
 
 // 会话级范围与口径
 const scope = ref('华东');
@@ -57,6 +57,7 @@ function setConfirmQuery(on: boolean) {
 }
 
 async function runAction() {
+  if (readonly.value) return;
   setConfirmQuery(true);
   const ok = await confirm.ask({
     title: ACTION,
@@ -86,7 +87,7 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
 <template>
   <Teleport defer to="#page-extra">
     <a-button><template #icon><ShareAltOutlined /></template>分享</a-button>
-    <a-button><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button>
+    <a-tooltip :title="reason"><a-button :disabled="readonly"><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button></a-tooltip>
     <a-button><template #icon><EllipsisOutlined /></template></a-button>
   </Teleport>
   <div class="qa-wb">

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /** 右栏：当前对象（华东大区）摘要、状态时间线、可执行动作（含执行状态） */
+import { useReadonly } from '@/composables/useReadonly';
 import { ref } from 'vue';
 import { QuestionCircleOutlined, ClockCircleOutlined, SyncOutlined } from '@ant-design/icons-vue';
-import { REGION_EC, QA_TIMELINE, type QaTimelineLevel } from '@/mock';
+import { REGION_EC, QA_TIMELINE, QA_UNKNOWN_LABEL, type QaTimelineLevel } from '@/mock';
 
 /** highlight：从答案里的“建议动作”打开确认卡时，高亮对应动作行；状态只在本栏显示 */
 defineProps<{ pending: boolean; submitted: boolean; highlight?: boolean }>();
+const { readonly, reason } = useReadonly();
 const emit = defineEmits<{ (e: 'run'): void; (e: 'detail'): void }>();
 const tab = ref('summary');
 // 时间线颜色统一用 tokens.css 的语义色：灰=正常，橙=需关注（结果未知也是橙 + 问号），红=失败
@@ -41,7 +43,7 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
         <a-timeline-item v-for="t in QA_TIMELINE" :key="t.time" :color="dot[t.level]">
           <template v-if="t.level === 'unknown'" #dot><QuestionCircleOutlined class="tl-attention" /></template>
           <div class="qa-obj-tl-row"><span :class="{ 'tl-attention': t.level === 'unknown' }">{{ t.title }}</span><span class="t-12 c-3 num">{{ t.time.slice(5) }}</span></div>
-          <div class="c-3 qa-obj-ell">{{ t.desc }}</div>
+          <div class="c-3 qa-obj-ell"><span v-if="t.level === 'unknown'" class="tl-attention">{{ QA_UNKNOWN_LABEL }} · </span>{{ t.desc }}</div>
         </a-timeline-item>
       </a-timeline>
     </div>
@@ -57,7 +59,7 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
         </div>
         <span v-if="submitted" class="qa-act-status"><ClockCircleOutlined />待审批</span>
         <span v-else-if="pending" class="qa-act-status"><ClockCircleOutlined />待确认</span>
-        <a-button v-else size="small" type="primary" ghost @click="emit('run')"><span>发起</span></a-button>
+        <a-tooltip v-else :title="reason"><a-button size="small" type="primary" ghost :disabled="readonly" @click="emit('run')"><span>发起</span></a-button></a-tooltip>
       </div>
       <div class="qa-act">
         <div class="qa-act-main">
@@ -71,7 +73,7 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
           <div class="c-3">调整大区预算</div>
           <div class="c-3 qa-obj-ell">条件不满足 · 需财务审批权限</div>
         </div>
-        <a-button size="small" disabled><span>发起</span></a-button>
+        <a-tooltip :title="reason || '条件不满足'"><a-button size="small" disabled><span>发起</span></a-button></a-tooltip>
       </div>
     </div>
   </aside>

@@ -35,14 +35,14 @@ export const REGION_EC = {
 /**
  * 状态时间线：只放状态迁移和动作结果（属性变更如“负责人变更”不放）。
  * level 配色（群内已定）：normal 灰色＝正常；warn 橙色＝需要关注；unknown 结果未知也用橙色（警告色）+ 问号图标，
- * 文字统一写“结果未知 · 待对账”，不再用紫色；error 红色＝失败；蓝色只用于当前选中。
+ * 标题写动作名，“结果未知 · 待对账”由 StatusTimeline 自动补一行（右栏自绘时间线同样补一行），不再用紫色；error 红色＝失败；蓝色只用于当前选中。
  */
 export type QaTimelineLevel = 'warn' | 'error' | 'unknown' | 'normal';
 export const QA_TIMELINE: { level: QaTimelineLevel; title: string; time: string; desc: string }[] = [
   { level: 'warn', title: '正常 → 预警', time: '2026-10-08 08:05', desc: '规则「复购环比预警」触发 · 环比 -8.4%' },
   { level: 'normal', title: '规则命中：复购率连降', time: '2026-09-21 09:40', desc: '事件「复购率下降」· 上海 12 店 · 系统' },
   { level: 'normal', title: '动作成功：调整促销预算', time: '2026-09-03 17:45', desc: '王敏 发起 · 赵磊 审批 · +¥200,000' },
-  { level: 'unknown', title: '结果未知 · 待对账', time: '2026-08-29 22:10', desc: '同步会员标签 · 规则自动发起 · CRM 超时' },
+  { level: 'unknown', title: '同步会员标签', time: '2026-08-29 22:10', desc: '规则自动发起 · CRM 超时' },
   { level: 'error', title: '动作失败：门店调拨补货', time: '2026-08-21 10:30', desc: '周婷 发起 · 赵磊 审批 · WMS 缺货' },
   { level: 'normal', title: '预警 → 正常', time: '2026-08-02 08:05', desc: '规则「复购环比预警」解除 · 系统' },
 ];
@@ -124,7 +124,7 @@ function buildRegionTimeline() {
     ['normal', '规则命中：库存低于安全线', '事件「缺货」· 杭州 3 店 · 系统'],
     ['error', '动作失败：同步价签', '规则自动发起 · ESL 接口返回 500'],
     ['normal', '动作成功：调拨补货', '周婷 发起 · 赵磊 审批'],
-    ['unknown', '结果未知 · 待对账', '推送会员积分 · 规则自动发起 · CRM 超时'],
+    ['unknown', '推送会员积分', '规则自动发起 · CRM 超时'],
   ];
   let t = new Date('2026-07-30T09:00:00').getTime();
   for (let i = 0; i < 20; i++) {
@@ -165,7 +165,17 @@ export const QA_CALIBER_OPTIONS = [
 ];
 
 /** 申请权限抽屉的审批人（按申请范围路由到数据负责人；不展示该范围是否有数据） */
-export const QA_APPLY = { scope: '大区 = 华南', object: '复购客户销售额（指标）', approver: '刘洋（数据权限管理员）', durations: ['30 天', '90 天', '180 天'] };
+/**
+ * 指标完整名称 + 版本，和指标口径页（静态负责人提交 1aaa55b）一致。
+ * 公共 METRICS 里暂无 repeat_sales / repeat_sales_tax，先在这里登记；PDE 补进公共 mock 后改为从 metricById 读。
+ */
+export const QA_METRIC = {
+  ex: { id: 'repeat_sales', name: '复购客户销售额（不含税）', version: 'v3' },
+  in: { id: 'repeat_sales_tax', name: '复购客户销售额（含税）', version: 'v1' },
+} as const;
+export const qaMetricLabel = (k: 'ex' | 'in') => `${QA_METRIC[k].name} ${QA_METRIC[k].version}`;
+
+export const QA_APPLY = { scope: '大区 = 华南', object: `${QA_METRIC.ex.name} ${QA_METRIC.ex.version}`, approver: '刘洋（数据权限管理员）', durations: ['30 天', '90 天', '180 天'] };
 
 /** 左栏贴底只露前几条 */
 export const QA_FAVORITES = QA_FAVORITE_LIST.slice(0, 3).map((f) => f.question);

@@ -5,20 +5,26 @@ import { ArrowDownOutlined, SearchOutlined, ThunderboltOutlined, PushpinOutlined
   LikeOutlined, DislikeOutlined, CopyOutlined, DownOutlined, UpOutlined, ApartmentOutlined } from '@ant-design/icons-vue';
 import EChart from '@/components/EChart.vue';
 import { GRAY } from '@/theme';
-import { QA_PROVINCES, QA_TREND, QA_TOTAL_SALES, QA_TOTAL_CUSTOMERS, fmtMoney, fmtInt } from '@/mock';
+import { QA_PROVINCES, QA_TREND, QA_TOTAL_SALES, QA_TOTAL_CUSTOMERS, fmtMoney, fmtInt, qaMetricLabel, QA_METRIC, TAX_RATE } from '@/mock';
+import { useReadonly } from '@/composables/useReadonly';
 
 const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void }>();
-const caliber = ref('ex');
+const { readonly, reason } = useReadonly();
+const caliber = ref<'ex' | 'in' | 'both'>('ex');
+/** 按当前口径显示指标完整名称和版本 */
+const HIST_NAME = '复购客户销售额';
+const metricLabel = computed(() => readonly.value ? `${HIST_NAME} · 口径按该版本默认` : (caliber.value === 'both' ? `${qaMetricLabel('ex')} / ${qaMetricLabel('in')}` : qaMetricLabel(caliber.value)));
+const inTax = (n: number) => n * (1 + TAX_RATE);
 const showBasis = ref(false);
 const view = ref('表格');
 const f1 = (n: number) => fmtMoney(n, 1);
-const columns = [
+const columns = computed(() => [
   { title: '省份', dataIndex: 'province', key: 'province', width: '16%' },
-  { title: '复购客户销售额（万元）', dataIndex: 'sales', key: 'sales', align: 'right' as const },
+  { title: readonly.value ? `${HIST_NAME}（万元）` : '复购客户销售额（不含税，万元）', dataIndex: 'sales', key: 'sales', align: 'right' as const },
   { title: '环比', dataIndex: 'mom', key: 'mom', align: 'right' as const },
   { title: '复购客户（人）', dataIndex: 'customers', key: 'customers', align: 'right' as const },
   { title: '占比', key: 'share', align: 'right' as const },
-];
+]);
 const axis = { axisLine: { lineStyle: { color: GRAY.g6 } }, axisTick: { show: false }, axisLabel: { color: GRAY.g8, fontSize: 12 } };
 const valueAxis = { type: 'value', min: 0, splitNumber: 4, axisLabel: { color: GRAY.g8, fontSize: 12 }, splitLine: { lineStyle: { color: GRAY.g4 } } };
 const label = { show: true, fontSize: 12, color: GRAY.g9, formatter: (p: { value: number }) => f1(p.value) };
@@ -47,7 +53,7 @@ const barOption = computed(() => ({
     <div class="qa-ans-head">
       <a-avatar size="small" shape="square" class="qa-ans-av"><template #icon><ApartmentOutlined /></template></a-avatar>
       <span class="fw-600">智能问数</span>
-      <span class="c-3">复购客户销售额（不含税）v3 · 数据截至 2026-10-24 23:00 ·
+      <span class="c-3">{{ metricLabel }} · 数据截至 2026-10-24 23:00 ·
         <a-tooltip title="本体版本、筛选、口径校验与权限过滤">
           <a class="qa-ans-basis-link" @click="showBasis = !showBasis">依据 <UpOutlined v-if="showBasis" /><DownOutlined v-else /></a>
         </a-tooltip>
@@ -56,7 +62,7 @@ const barOption = computed(() => ({
 
     <a-descriptions v-if="showBasis" bordered size="small" :column="2" class="qa-ans-basis" :label-style="{ width: '96px' }">
       <a-descriptions-item label="本体版本">2026.10.25-1</a-descriptions-item>
-      <a-descriptions-item label="指标">复购客户销售额（不含税）v3</a-descriptions-item>
+      <a-descriptions-item label="指标">{{ metricLabel }}</a-descriptions-item>
       <a-descriptions-item label="筛选">大区 = 华东、客户分群 = 复购客户</a-descriptions-item>
       <a-descriptions-item label="维度">省份</a-descriptions-item>
       <a-descriptions-item label="口径">已出库、剔除退款；口径校验通过</a-descriptions-item>
@@ -66,15 +72,19 @@ const barOption = computed(() => ({
     <a-alert type="info" show-icon class="qa-ans-clarify">
       <template #message>
         <div class="qa-ans-clarify-row">
-          <span>“销售额”有两种口径，已按默认口径 <span class="fw-600">不含税</span> 回答</span>
-          <a-radio-group v-model:value="caliber" size="small" option-type="button"
+          <span v-if="readonly">历史版本只读：口径按该版本默认，“不含税”口径自 v2026.10.3 起才发布</span>
+          <span v-else>“销售额”有两种口径，已按默认口径 <span class="fw-600">不含税</span> 回答</span>
+          <a-radio-group v-if="!readonly" v-model:value="caliber" size="small" option-type="button"
             :options="[{ label: '不含税', value: 'ex' }, { label: '含税', value: 'in' }, { label: '两者对比', value: 'both' }]" />
         </div>
       </template>
     </a-alert>
 
     <p class="qa-ans-text">
-      2026 年 9 月，华东大区复购客户销售额（不含税）为 <span class="fw-600 num">1,286.0 万元</span>，环比下降 8.4%（8 月 1,404.0 万元），占大区销售额 62.0%。7 个省份全部下降，安徽（-12.5%）和江苏（-9.8%）降幅最大。
+      <template v-if="readonly">2026 年 9 月，华东大区{{ HIST_NAME }}为 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>，环比下降 8.4%（8 月 1,404.0 万元），占大区销售额 62.0%。</template>
+      <template v-else-if="caliber === 'ex'">2026 年 9 月，华东大区{{ QA_METRIC.ex.name }}为 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>，环比下降 8.4%（8 月 1,404.0 万元），占大区销售额 62.0%。</template>
+      <template v-else-if="caliber === 'in'">2026 年 9 月，华东大区{{ QA_METRIC.in.name }}为 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比下降 8.4%（8 月 {{ f1(inTax(1404.0)) }} 万元）。下方明细仍按不含税展示。</template>
+      <template v-else>2026 年 9 月，华东大区复购客户销售额不含税 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>、含税 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比均下降 8.4%。</template>7 个省份全部下降，安徽（-12.5%）和江苏（-9.8%）降幅最大。
     </p>
 
     <div class="qa-ans-row">
@@ -117,8 +127,8 @@ const barOption = computed(() => ({
     <div class="qa-ans-actions">
       <a-space :size="8">
         <a-button><template #icon><SearchOutlined /></template>查看原因</a-button>
-        <a-button type="primary" @click="emit('suggest')"><template #icon><ThunderboltOutlined /></template>建议动作</a-button>
-        <a-button @click="emit('pin')"><template #icon><PushpinOutlined /></template>固定到页面</a-button>
+        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="emit('suggest')"><template #icon><ThunderboltOutlined /></template>建议动作</a-button></a-tooltip>
+        <a-tooltip :title="reason"><a-button :disabled="readonly" @click="emit('pin')"><template #icon><PushpinOutlined /></template>固定到页面</a-button></a-tooltip>
       </a-space>
       <a-space :size="4">
         <a-tooltip title="复制"><a-button type="text"><template #icon><CopyOutlined /></template></a-button></a-tooltip>
