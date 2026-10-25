@@ -209,11 +209,11 @@ const TL_EVENTS: [TlStatus, string, string][] = [
   [undefined, '日结数据已同步', '系统'],
   ['warn', '正常 → 预警', '规则「客流环比预警」触发 · 系统'],
   [undefined, '预警 → 正常', '规则「客流环比预警」解除 · 系统'],
-  [undefined, '动作成功：发放门店优惠券', '王敏 发起 · 赵磊 审批'],
-  ['error', '动作失败：同步价签', '规则自动发起 · ESL 接口返回 500'],
+  [undefined, '动作成功：发放复购召回优惠券', '王敏 发起 · 赵磊 审批'],
+  ['error', '动作失败：门店调价', '王敏 发起 · POS 价格中心返回 500'],
   [undefined, '规则命中：库存低于安全线', '事件「缺货」· 系统'],
-  ['unknown', '推送会员积分', '规则自动发起 · CRM 超时'],
-  [undefined, '动作成功：指派巡店任务', '陈杰 发起'],
+  ['unknown', '发放复购召回优惠券', '规则自动发起 · CRM 超时'],
+  [undefined, '动作成功：补货申请', '陈杰 发起'],
 ];
 const fmtTime = (t: number) => {
   const d = new Date(t); const p = (n: number) => String(n).padStart(2, '0');
@@ -239,10 +239,11 @@ export function extraTimeline(kind: string, id: string, base: TlItem[] = []): Tl
 export interface ActRecord { id: string; action: string; by: string; approver: string; time: string; result: '成功' | '失败' | '待审批' | '结果未知' | '执行中' }
 export function actionRecords(kind: string, id: string): ActRecord[] {
   const NAMES: Record<string, string[]> = {
-    store: ['发放门店优惠券', '指派巡店任务', '同步价签', '调拨补货', '推送会员积分'],
-    region: ['发放复购召回优惠券', '指派大区经理跟进', '调整大区预算', '同步会员标签'],
-    product: ['调整零售价', '同步价签', '设置安全库存'],
-    order: ['补发出库单', '修改收货地址', '发起退款'],
+    // 动作名与动作类型（mock/actionEvent.ts ACTION_TYPES）一致；草稿态的类型没有执行记录
+    store: ['发放复购召回优惠券', '变更门店状态', '补货申请', '门店调价'],
+    region: ['发放复购召回优惠券', '指派大区经理跟进', '调整大区预算'],
+    product: ['门店调价', '发起调价审批', '补货申请'],
+    order: ['补发出库单', '发起物流催派', '订单状态修正', '退款审核'],
   };
   const names = NAMES[kind] ?? NAMES.store;
   const who = ['王敏', '陈杰', '周婷', '规则自动发起'];
@@ -271,28 +272,29 @@ export function objActions(kind: string, id: string): ObjAction[] {
     const s = storeById(id);
     const closed = s?.status === '已闭店';
     return [
-      { key: 'coupon', name: '发放门店优惠券', desc: '满 99 减 10 · 约 1,200 位会员', fields: [{ label: '券模板', value: '满 99 减 10（门店券）' }, { label: '有效期', value: '7 天' }], impact: '向该门店近 90 天到店会员发券，约 1,200 人', approver: '赵磊', blocked: closed ? '已闭店门店不能发券' : undefined },
-      { key: 'patrol', name: '指派巡店任务', desc: `指派给店长 ${s?.manager ?? '--'}`, fields: [{ label: '执行人', value: s?.manager ?? '--' }, { label: '截止', value: '2026-10-27' }], impact: '生成一条巡店任务，不改业务数据' },
-      { key: 'status', name: '调整营业状态', desc: `当前：${s?.status ?? '--'}`, fields: [{ label: '调整为', value: s?.status === '营业中' ? '装修中' : '营业中' }], impact: '写回门店主数据，影响线上门店可见性', irreversible: true, approver: '赵磊' },
+      { key: 'coupon', name: '发放复购召回优惠券', desc: '该店 60 天未复购会员 · 约 1,200 位', fields: [{ label: '券模板', value: '复购召回券 20 元' }, { label: '人群', value: '常去门店为本店、60 天未复购的会员' }], impact: '向约 1,200 位会员发券', approver: '赵磊', blocked: closed ? '已闭店门店不能发券' : undefined },
+      { key: 'replenish', name: '补货申请', desc: '该店低于安全线的 6 个商品', fields: [{ label: '商品', value: '低于安全线的 6 个商品' }, { label: '发货仓', value: '默认区域仓' }], impact: '生成补货单，提交给区域仓', blocked: closed ? '已闭店门店不能补货' : undefined },
+      { key: 'status', name: '变更门店状态', desc: `当前：${s?.status ?? '--'}`, fields: [{ label: '调整为', value: s?.status === '营业中' ? '装修中' : '营业中' }], impact: '写回门店主数据，影响线上门店可见性', irreversible: true, approver: '赵磊' },
     ];
   }
   if (kind === 'region') {
     return [
       { key: 'coupon', name: '发放复购召回优惠券', desc: '影响 3,812 位会员', fields: [{ label: '券模板', value: '复购召回券 20 元' }, { label: '人群', value: '华东大区 60 天未复购会员' }], impact: '向 3,812 位会员发券', approver: '赵磊' },
       { key: 'follow', name: '指派大区经理跟进', desc: `指派给 ${REGION_EC.owner}`, fields: [{ label: '执行人', value: REGION_EC.owner }], impact: '生成跟进任务，不改业务数据' },
+      { key: 'budget', name: '调整大区预算', desc: '动作类型变更中', fields: [], impact: '调整大区预算科目额度', approver: '赵磊', blocked: '动作类型“调整大区预算”变更中，暂不可发起' },
     ];
   }
   if (kind === 'product') {
     const p = productBySku(id);
     return [
-      { key: 'price', name: '调整零售价', desc: `当前 ${p ? fmtMoney(p.price) : '--'} 元`, fields: [{ label: '新售价', value: p ? fmtMoney(Math.round(p.price * 95) / 100) : '--' }], impact: '写回全部门店价签', irreversible: true, approver: '赵磊' },
-      { key: 'esl', name: '同步价签', desc: '推送到 107 家门店电子价签', fields: [], impact: '只同步现有价格' },
+      { key: 'price', name: '门店调价', desc: `当前 ${p ? fmtMoney(p.price) : '--'} 元`, fields: [{ label: '新售价', value: p ? fmtMoney(Math.round(p.price * 95) / 100) : '--' }], impact: '写回全部门店价签', irreversible: true, approver: '赵磊' },
+      { key: 'replenish', name: '补货申请', desc: '缺货门店 7 家', fields: [{ label: '门店', value: '低于安全线的 7 家门店' }], impact: '生成补货单，提交给区域仓' },
     ];
   }
   const o = orderById(id);
   return [
     { key: 'reship', name: '补发出库单', desc: o?.status === '已出库' || o?.status === '已签收' ? '订单已出库' : '重新下发到仓', fields: [{ label: '发货仓', value: o?.warehouse ?? '--' }], impact: '重新生成出库单', blocked: o?.status === '已出库' || o?.status === '已签收' ? '订单已出库，不能补发' : undefined },
-    { key: 'refund', name: '发起退款', desc: `实付 ${o ? fmtMoney(o.amount) : '--'} 元`, fields: [{ label: '退款金额', value: o ? fmtMoney(o.amount) : '--' }], impact: '原路退回，不可撤销', irreversible: true, approver: '赵磊' },
+    { key: 'refund', name: '退款审核', desc: `实付 ${o ? fmtMoney(o.amount) : '--'} 元`, fields: [{ label: '审核结果', value: '同意退款' }, { label: '退款金额', value: o ? fmtMoney(o.amount) : '--' }], impact: '同意后原路退回，不可撤销', irreversible: true, approver: '赵磊' },
   ];
 }
 

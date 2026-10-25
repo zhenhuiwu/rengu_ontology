@@ -41,9 +41,9 @@ export type QaTimelineLevel = 'warn' | 'error' | 'unknown' | 'normal';
 export const QA_TIMELINE: { level: QaTimelineLevel; title: string; time: string; desc: string }[] = [
   { level: 'warn', title: '正常 → 预警', time: '2026-10-08 08:05', desc: '规则「复购环比预警」触发 · 环比 -8.4%' },
   { level: 'normal', title: '规则命中：复购率连降', time: '2026-09-21 09:40', desc: '事件「复购率下降」· 上海 12 店 · 系统' },
-  { level: 'normal', title: '动作成功：调整促销预算', time: '2026-09-03 17:45', desc: '王敏 发起 · 赵磊 审批 · +¥200,000' },
-  { level: 'unknown', title: '同步会员标签', time: '2026-08-29 22:10', desc: '规则自动发起 · CRM 超时' },
-  { level: 'error', title: '动作失败：门店调拨补货', time: '2026-08-21 10:30', desc: '周婷 发起 · 赵磊 审批 · WMS 缺货' },
+  { level: 'normal', title: '动作成功：调整大区预算', time: '2026-09-03 17:45', desc: '王敏 发起 · 赵磊 审批 · +¥200,000' },
+  { level: 'unknown', title: '发放复购召回优惠券', time: '2026-08-29 22:10', desc: '规则自动发起 · CRM 超时' },
+  { level: 'error', title: '动作失败：补货申请', time: '2026-08-21 10:30', desc: '周婷 发起 · 赵磊 审批 · WMS 缺货' },
   { level: 'normal', title: '预警 → 正常', time: '2026-08-02 08:05', desc: '规则「复购环比预警」解除 · 系统' },
 ];
 
@@ -127,13 +127,13 @@ export const QA_REGION_RELATED = QA_EC_STORES.map((s) => ({
 function buildRegionTimeline() {
   const older: { level: QaTimelineLevel; title: string; time: string; desc: string }[] = [];
   const evts: [QaTimelineLevel, string, string][] = [
-    ['normal', '动作成功：发放会员日优惠券', '王敏 发起 · 赵磊 审批'],
+    ['normal', '动作成功：发放复购召回优惠券', '王敏 发起 · 赵磊 审批'],
     ['warn', '正常 → 预警', '规则「客流环比预警」触发 · 系统'],
     ['normal', '预警 → 正常', '规则「客流环比预警」解除 · 系统'],
     ['normal', '规则命中：库存低于安全线', '事件「缺货」· 杭州 3 店 · 系统'],
-    ['error', '动作失败：同步价签', '规则自动发起 · ESL 接口返回 500'],
-    ['normal', '动作成功：调拨补货', '周婷 发起 · 赵磊 审批'],
-    ['unknown', '推送会员积分', '规则自动发起 · CRM 超时'],
+    ['error', '动作失败：门店调价', '王敏 发起 · POS 价格中心返回 500'],
+    ['normal', '动作成功：补货申请', '周婷 发起 · 赵磊 审批'],
+    ['normal', '动作成功：指派大区经理跟进', '王敏 发起'],
   ];
   let t = new Date('2026-07-30T09:00:00').getTime();
   for (let i = 0; i < 20; i++) {

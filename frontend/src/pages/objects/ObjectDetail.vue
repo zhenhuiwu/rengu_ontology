@@ -49,6 +49,8 @@ const back = computed(() => {
 });
 const backLabel = computed(() => {
   const n = Object.keys(back.value).filter((k) => !['type', 'page', 'size'].includes(k)).length;
+  // 大区等不在搜索类型里的对象：只显示“对象搜索”，不冒充门店
+  if (!(kind.value in { store: 1, product: 1, order: 1 }) && !sessionStorage.getItem('obj-search:last')) return '对象搜索';
   return `对象搜索 · ${objType(String(back.value.type ?? 'store')).label}${n ? `（${n} 个筛选）` : ''}`;
 });
 function goBack() { router.push({ path: '/use/objects/search', query: back.value }); }
