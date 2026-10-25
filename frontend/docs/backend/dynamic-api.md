@@ -252,7 +252,7 @@ stateDiagram-v2
 - 传给外部系统的字段名按外部系统登记：CRM `X-Idempotency-Key`、ERP `srcBillNo`、OMS `X-Request-Id`、WMS `requestNo`；短信平台不支持幂等（`maxRetry=0`），**只发通知、不做写回，也不对账** [已定]。
 - **外部幂等键只用 `act-…` 这一套** [已定]。动作类型目录里的业务键模板（如 `correctOrderStatus:{订单号}:{目标状态}`）存 `biz_key`，和 `idem_key` 分开存；暂存时按它拦截重复（`IDEMPOTENCY_CONFLICT`）前端没有，见 `[推断 P4]`。
 - 幂等键在**暂存时由动态生成**；告警页发起的动作在 `:start-action` 时生成。
-- 新记录的 `idem_key` 唯一（部分唯一索引 `WHERE NOT is_seed`）；同一幂等键、内容相同的重复提交返回已有记录、不再调外部 `[推断 P9]`；同一幂等键、内容不同返回 409 `IDEMPOTENCY_CONFLICT`（PDE api-index `10a074e`）（前端没有：重新提交总是生成新键 `-rN`，`Actions.vue` L144–145）。种子里 31 个重复的键原样保留（见 5 节约束 5）。
+- 新记录的 `idem_key` 唯一（部分唯一索引 `WHERE NOT is_seed`）；同一幂等键、内容相同的重复提交返回已有记录、不再调外部 `[推断 P9]`；同一幂等键、内容不同返回 409 `IDEMPOTENCY_CONFLICT` `[推断 P9]`（PDE api-index `10a074e`）（前端没有：重新提交总是生成新键 `-rN`，`Actions.vue` L144–145）。种子里 31 个重复的键原样保留（见 5 节约束 5）。
 
 **告警页发起动作**：确认卡字段 = 来源告警、触发值、审批人、幂等键 `act-<告警号>`。审批人**照前端按对象类型写死**（`Alerts.vue` L173：商品 → 品类经理 王敏，其他 → 区域运营 陈立军）；改为取动作类型审批配置见 `[推断 P5]`；确认后直接 `审批中`（处理人即确认人）。一条告警只对应一个动作（幂等键由告警号决定）。
 
