@@ -8,7 +8,9 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue';
+import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue';
+import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
+import { CURRENT_USER } from '@/mock/changes';
 import EChart from '@/components/EChart.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -17,7 +19,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import { BRAND, GRAY } from '@/theme';
-import { stageAction, ACTIONS } from '@/mock/actions';
+import { stageAction } from '@/mock/actions';
 import {
   SCENARIOS, SC_AREAS, SC_CATEGORIES, PROMO_TYPES, BASE_DRIVERS, simulate, stagePlanOf, scenarioById, nextScenarioId, fmtPct,
   type Scenario, type ScStatus, type ScScope, type ScDrivers, type StagePlan, type ScKpi,
@@ -27,7 +29,7 @@ const route = useRoute();
 const router = useRouter();
 const confirm = useConfirmStore();
 const { readonly, reason: roReason } = useReadonly();
-const ME = '王敏';
+const ME = CURRENT_USER;
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(50 + (tick % 10)).padStart(2, '0')}:${String(tick * 7 % 60).padStart(2, '0')}`; };
 const q1 = (k: string) => { const v = route.query[k]; return typeof v === 'string' ? v : ''; };
@@ -44,13 +46,18 @@ const pq = usePagedQuery({ defaultSize: 12, filters: [statusF, kw] });
 const rows = computed(() => SCENARIOS.filter((s) => (statusF.value === '全部' || s.status === statusF.value)
   && (!kw.value || s.name.includes(kw.value) || s.id.includes(kw.value.toUpperCase()))));
 const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
-const badge = (s: ScStatus) => (s === '失败' ? 'error' : s === '运行中' ? 'processing' : 'default');
+const badge = (s: ScStatus) => (s === '失败' ? 'error' : 'default');
 
 const mode = computed<'one' | 'cmp'>({ get: () => (q1('mode') === 'cmp' ? 'cmp' : 'one'), set: (v) => setQ({ mode: v === 'cmp' ? 'cmp' : null }) });
 const current = computed<Scenario | undefined>(() => scenarioById(q1('sc')) ?? SCENARIOS[0]);
 const cmpIds = computed<string[]>(() => q1('cmp').split(',').filter((id) => scenarioById(id)?.status === '已完成').slice(0, 3));
 const cmpList = computed(() => cmpIds.value.map((id) => scenarioById(id)!));
-function pick(s: Scenario) { if (mode.value === 'one') setQ({ sc: s.id }); else toggleCmp(s); }
+async function pick(s: Scenario) {
+  if (mode.value !== 'one') { toggleCmp(s); return; }
+  if (s.id === current.value?.id) return;
+  if (dirty.value && !(await confirmDiscard())) return;
+  setQ({ sc: s.id });
+}
 function toggleCmp(s: Scenario) {
   if (s.status !== '已完成') return;
   const ids = [...cmpIds.value];
@@ -65,15 +72,23 @@ const cmpTip = (s: Scenario) => (s.status !== '已完成' ? `${s.status}的方�
 const form = reactive<{ name: string; scope: ScScope; drivers: ScDrivers }>({ name: '', scope: { area: '', category: '', weeks: 8 }, drivers: BASE_DRIVERS() });
 const load = (s?: Scenario) => { if (!s) return; form.name = s.name; form.scope = { ...s.scope }; form.drivers = { ...s.drivers }; };
 watch(() => current.value?.id, () => load(current.value), { immediate: true });
-const dirty = computed(() => !!current.value && (JSON.stringify(form.scope) !== JSON.stringify(current.value.scope)
-  || JSON.stringify(form.drivers) !== JSON.stringify(current.value.drivers) || form.name !== current.value.name));
+/** cfgDirty：范围 / 驱动改了（结果作废，需重新运行）；dirty：再加上改名（离开 / 切换要确认） */
+const cfgDirty = computed(() => !!current.value && (JSON.stringify(form.scope) !== JSON.stringify(current.value.scope)
+  || JSON.stringify(form.drivers) !== JSON.stringify(current.value.drivers)));
+const nameDirty = computed(() => !!current.value && form.name.trim() !== current.value.name);
+const dirty = computed(() => cfgDirty.value || nameDirty.value);
+useUnsavedGuard(dirty);
+const saveName = () => { const s = current.value; if (s && form.name.trim()) { s.name = form.name.trim(); form.name = s.name; message.success('名称已保存'); } };
+/** 别人的方案只读：不能改、运行、转动作，可复制为自己的新方案 */
+const notMine = computed(() => !!current.value && current.value.owner !== CURRENT_USER);
 const lockReason = computed(() => readonly.value ? roReason.value
+  : notMine.value ? `${current.value!.owner} 的方案，只读（不能修改、运行或转为动作）；如需调整请“复制为新方案”`
   : current.value?.status === '运行中' ? '推演运行中，完成后可修改'
   : current.value?.staged.length ? `已转为 ${current.value.staged.length} 条暂存动作，配置锁定；如需调整请“复制为新方案”` : '');
 const noDriver = computed(() => form.drivers.pricePct === 0 && form.drivers.replenishPct === 0 && form.drivers.safetyDays === 7 && (form.drivers.promo === '无' || form.drivers.promoDepth === 0));
 watch(() => form.drivers.promo, (p) => { if (p === '无') { form.drivers.promoDepth = 0; form.drivers.promoWeeks = 0; } else if (!form.drivers.promoDepth) { form.drivers.promoDepth = 10; form.drivers.promoWeeks = 2; } });
 
-const needRun = computed(() => !!current.value && (current.value.status !== '已完成' || dirty.value));
+const needRun = computed(() => !!current.value && (current.value.status !== '已完成' || cfgDirty.value));
 const runBlocked = computed(() => lockReason.value || (noDriver.value ? '至少调整一个驱动（价格 / 库存 / 促销）' : ''));
 function run() {
   const s = current.value; if (!s || runBlocked.value) return;
@@ -86,8 +101,9 @@ function run() {
     message.success(`${x.id} 推演完成`);
   }, 1200);
 }
-function create(from?: Scenario) {
+async function create(from?: Scenario) {
   if (readonly.value) return;
+  if (dirty.value && !(await confirmDiscard())) return;
   const s: Scenario = {
     id: nextScenarioId(), name: from ? `${from.name}（副本）` : '新方案', owner: ME, createdAt: now(), baseVer: 'v2026.10.3', status: '草稿',
     scope: from ? { ...from.scope } : { area: '华东大区全部', category: '全部品类', weeks: 8 }, drivers: from ? { ...from.drivers } : BASE_DRIVERS(), staged: [],
@@ -132,7 +148,7 @@ const pickId = computed(() => (cmpIds.value.includes(q1('pick')) ? q1('pick') : 
 const KPI_KEYS = ['sales', 'gp', 'rate', 'stockout', 'turn', 'promo'];
 const kpiOf = (s: Scenario, key: string) => s.result!.kpis.find((k) => k.key === key)!;
 const scopeDiff = computed(() => new Set(cmpList.value.map((s) => `${s.scope.area}|${s.scope.category}|${s.scope.weeks}`)).size > 1);
-const CMP_COLORS = [BRAND, '#7aa3e5', GRAY.g8];
+const CMP_COLORS = [BRAND, GRAY.g9, GRAY.g7];
 const barOpt = computed(() => ({
   tooltip: { trigger: 'axis', valueFormatter: (v: number) => `${v}%` }, legend: { top: 0, right: 0, itemWidth: 14 },
   grid: { left: 44, right: 12, top: 28, bottom: 24 },
@@ -162,7 +178,8 @@ const convertBlocked = computed(() => {
   if (readonly.value) return roReason.value;
   if (!s) return mode.value === 'cmp' ? '先勾选要对比的方案' : '';
   if (s.status !== '已完成') return '方案推演完成后才能转为动作';
-  if (mode.value === 'one' && dirty.value) return '配置已改动，请先重新运行';
+  if (s.owner !== CURRENT_USER) return `${s.owner} 的方案，只读；如需转为动作请“复制为新方案”后运行`;
+  if (mode.value === 'one' && cfgDirty.value) return '配置已改动，请先重新运行';
   if (s.staged.length) return `已转为 ${s.staged.length} 条暂存动作，请到动作中心确认`;
   if (!stagePlanOf(s).length) return '该方案没有可生成的动作';
   return '';
@@ -170,9 +187,12 @@ const convertBlocked = computed(() => {
 const planOpen = ref(false);
 const plan = ref<StagePlan[]>([]);
 const planKeys = ref<string[]>([]);
+const planFor = ref('');
 function openPlan() {
   const s = target.value; if (!s || convertBlocked.value) return;
-  plan.value = stagePlanOf(s); planKeys.value = plan.value.map((p) => p.key); planOpen.value = true;
+  // 同一方案再次打开（例如确认卡取消后）保留上次的勾选
+  if (planFor.value !== s.id || !plan.value.length) { plan.value = stagePlanOf(s); planKeys.value = plan.value.map((p) => p.key); planFor.value = s.id; }
+  planOpen.value = true;
 }
 const planCols = [
   { title: '动作', dataIndex: 'action', width: 150 }, { title: '对象', key: 'obj', width: 200, ellipsis: true },
@@ -195,20 +215,20 @@ async function doStage() {
     ],
     impact: '只生成“待确认”动作，不提交审批、不写外部系统。需要你在动作中心逐条确认提交后才会进入审批；未确认前可撤回。',
   });
-  if (!ok) return;
+  if (!ok) { planOpen.value = true; return; } // 取消确认卡：回到预览，勾选保持不变
   const at = now();
   const ids = items.map((p) => stageAction({
     action: p.action, objKind: p.objKind, objId: p.objId, objLabel: p.objLabel, params: p.params, initiator: ME, at,
     source: { type: '推演', scenarioId: s.id, scenarioName: s.name, confirmer: ME },
   }).id);
-  s.staged = ids;
+  s.staged = ids; planFor.value = ''; plan.value = [];
   message.success(`已暂存 ${ids.length} 条动作到动作中心（待确认）`);
 }
-const stagedOf = (s?: Scenario) => (s ? s.staged.map((id) => ACTIONS.find((a) => a.id === id)).filter((a) => !!a) : []);
-const actLink = (id: string) => ({ path: '/use/ops/actions', query: { tab: 'pending', act: id } });
+const pendingLink = { path: '/use/ops/actions', query: { tab: 'pending' } };
 
-const primary = computed<'run' | 'convert' | ''>(() => {
+const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
   if (mode.value === 'cmp') return 'convert';
+  if (notMine.value) return 'copy';
   if (needRun.value) return 'run';
   return current.value?.staged.length ? '' : 'convert';
 });
@@ -259,10 +279,12 @@ const primary = computed<'run' | 'convert' | ''>(() => {
           <span class="t-16 fw-600">{{ current.name }}</span>
           <span class="num c-3 t-12">{{ current.id }}</span>
           <a-badge :status="badge(current.status)" :text="current.status" class="t-12" />
-          <span v-if="dirty && current.result" class="t-12 tl-attention"><ExclamationCircleOutlined /> 配置已改动，结果对应上一次运行</span>
+          <span v-if="cfgDirty && current.result" class="t-12 tl-attention"><ExclamationCircleOutlined /> 配置已改动，结果对应上一次运行</span>
+          <span v-else-if="nameDirty" class="t-12 tl-attention"><ExclamationCircleOutlined /> 名称未保存</span>
+          <span v-if="notMine" class="t-12 c-3">{{ current.owner }} 的方案 · 只读</span>
         </div>
         <div class="sc-btns">
-          <a-tooltip :title="roReason"><a-button :disabled="readonly" @click="create(current)"><CopyOutlined />复制为新方案</a-button></a-tooltip>
+          <a-tooltip :title="roReason"><a-button :type="primary === 'copy' ? 'primary' : 'default'" :disabled="readonly" data-act="copy" @click="create(current)"><CopyOutlined />复制为新方案</a-button></a-tooltip>
           <a-tooltip :title="runBlocked">
             <a-button :type="primary === 'run' ? 'primary' : 'default'" :disabled="!!runBlocked || !needRun" :loading="current.status === '运行中'" data-act="run" @click="run">
               {{ current.status === '失败' ? '重新运行' : current.status === '运行中' ? '推演中' : '运行推演' }}
@@ -279,7 +301,10 @@ const primary = computed<'run' | 'convert' | ''>(() => {
           <div v-if="lockReason" class="sc-lock t-12 c-2">{{ lockReason }}</div>
           <a-form layout="horizontal" :label-col="{ style: { width: '84px' } }" size="small" :disabled="!!lockReason" class="sc-form">
             <div class="sc-sec t-12 c-3">方案</div>
-            <a-form-item label="名称"><a-input v-model:value="form.name" :maxlength="30" /></a-form-item>
+            <a-form-item label="名称">
+              <div class="sc-pair"><a-input v-model:value="form.name" :maxlength="30" @press-enter="saveName" />
+                <a-button v-if="nameDirty" size="small" :disabled="!form.name.trim()" data-act="save-name" @click="saveName">保存名称</a-button></div>
+            </a-form-item>
             <div class="sc-sec t-12 c-3">范围</div>
             <a-form-item label="区域"><a-select v-model:value="form.scope.area" :options="SC_AREAS.map((v) => ({ value: v, label: v }))" /></a-form-item>
             <a-form-item label="品类"><a-select v-model:value="form.scope.category" :options="SC_CATEGORIES.map((v) => ({ value: v, label: v }))" /></a-form-item>
@@ -310,7 +335,7 @@ const primary = computed<'run' | 'convert' | ''>(() => {
         <!-- 结果 -->
         <div class="sc-res">
           <template v-if="current.status === '运行中'">
-            <div class="sc-empty"><a-spin /><div class="c-2">推演运行中：按 {{ current.scope.area }} · {{ current.scope.category }} · {{ current.scope.weeks }} 周计算…</div></div>
+            <div class="sc-empty"><LoadingOutlined class="c-3 sc-spin" /><div class="c-2">推演运行中：按 {{ current.scope.area }} · {{ current.scope.category }} · {{ current.scope.weeks }} 周计算…</div></div>
           </template>
           <template v-else-if="current.status === '失败'">
             <div class="sc-empty">
@@ -331,8 +356,7 @@ const primary = computed<'run' | 'convert' | ''>(() => {
               </div>
             </div>
             <div v-if="current.staged.length" class="sc-staged t-12">
-              <span class="c-2">已转为暂存动作（动作中心 · 待确认）：</span>
-              <router-link v-for="a in stagedOf(current)" :key="a!.id" :to="actLink(a!.id)" class="num sc-staged-a">{{ a!.id }}<span class="c-3"> {{ a!.status }}</span></router-link>
+              <span class="c-2">已暂存 {{ current.staged.length }} 条</span><span class="c-3"> · </span><router-link :to="pendingLink">去动作中心</router-link>
             </div>
             <div class="sc-chart"><EChart :option="lineOpt" /></div>
             <div class="sc-imp-head"><span class="fw-600">影响明细</span><span class="t-12 c-3">按销售额变化绝对值排序 · 运行于 <span class="num">{{ current.result.ranAt }}</span></span></div>
@@ -398,7 +422,8 @@ const primary = computed<'run' | 'convert' | ''>(() => {
               </td>
             </tr>
             <tr><td class="c-3">暂存动作</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12">
-              <template v-if="s.staged.length">已暂存 {{ s.staged.length }} 条 · <router-link :to="actLink(s.staged[0])">去动作中心</router-link></template>
+              <template v-if="s.staged.length">已暂存 {{ s.staged.length }} 条 · <router-link :to="pendingLink">去动作中心</router-link></template>
+              <span v-else-if="s.owner !== CURRENT_USER" class="c-3">{{ s.owner }} 的方案 · 只读</span>
               <span v-else class="c-3">可生成 {{ stagePlanOf(s).length }} 条</span>
             </td></tr>
           </tbody>
@@ -466,7 +491,8 @@ const primary = computed<'run' | 'convert' | ''>(() => {
 .sc-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; flex: none; }
 .sc-kpi { border: var(--border); border-radius: var(--radius); padding: 8px 12px; min-width: 0; }
 .sc-kpi > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-staged { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.sc-staged { margin-top: 8px; white-space: nowrap; }
+.sc-spin { font-size: 20px; }
 .sc-chart { flex: 1 1 200px; min-height: 160px; max-height: 280px; margin-top: 8px; }
 .sc-imp-head { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; flex: none; }
 .sc-imp { flex: none; }
