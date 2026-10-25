@@ -10,23 +10,19 @@
  */
 import { computed, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { DRAFTS, type DraftCR } from '@/mock/releases';
+import { DRAFTS, DRAFT_TARGETS, type DraftCR, type TargetKind } from '@/mock/releases';
 import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import { useReadonly } from '@/composables/useReadonly';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link' | 'dimension' | 'knowledge';
+export type { TargetKind };
 
-/** 每张草稿改了哪些对象 / 指标 / 动作类型 / 事件类型 / 关系 / 业务知识（示例数据） */
-const TARGETS = reactive<Record<string, Partial<Record<TargetKind, string[]>>>>({
-  'CR-0014': { action: ['adjust_region_budget'] },
-  'CR-0013': { event: ['store_price_changed'] },
-  'CR-0012': { object: ['member'], link: ['member_holds_cards'] },
-  'CR-0011': { metric: ['gross_margin'], rule: ['R-007'], knowledge: ['K-018', 'K-024'] },
-  'CR-0009': { object: ['store'], dimension: ['format'] },
-});
+/** 每张草稿改了哪些定义：数据在 mock/releases.ts 的 DRAFT_TARGETS，这里复制一份，本会话新建/加入的登记不改 mock */
+const TARGETS = reactive<Record<string, Partial<Record<TargetKind, string[]>>>>(
+  Object.fromEntries(Object.entries(DRAFT_TARGETS).map(([cr, t]) => [cr, Object.fromEntries(Object.entries(t).map(([k, ids]) => [k, [...ids]]))])),
+);
 const created = reactive<DraftCR[]>([]);
 export const allDrafts = () => [...created, ...DRAFTS];
 

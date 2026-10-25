@@ -22,6 +22,16 @@ export const DRAFTS: DraftCR[] = [
   { id: 'CR-0009', title: '门店新增“业态”枚举值“前置仓”', owner: '陈立军', updatedAt: '2026-10-21 10:26', changes: 1 },
 ];
 
+export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link' | 'dimension' | 'knowledge';
+/** 每张草稿改了哪些对象 / 指标 / 动作类型 / 事件类型 / 关系 / 业务知识（示例数据；ontology/parts/useDraftView 复制一份再用） */
+export const DRAFT_TARGETS: Record<string, Partial<Record<TargetKind, string[]>>> = {
+  'CR-0014': { action: ['adjust_region_budget'] },
+  'CR-0013': { event: ['store_price_changed'] },
+  'CR-0012': { object: ['member'], link: ['member_holds_cards'] },
+  'CR-0011': { metric: ['gross_margin'], rule: ['R-007'], knowledge: ['K-018', 'K-024'] },
+  'CR-0009': { object: ['store'], dimension: ['format'] },
+};
+
 export interface Notice { id: string; kind: string; objId: string; title: string; desc: string; time: string; read: boolean }
 export const NOTICES: Notice[] = [
   { id: 'N-0107', kind: 'region', objId: 'REG-EC', title: '华东大区进入预警', desc: '复购客户销售额环比 -8.4%', time: '15:41', read: false },
