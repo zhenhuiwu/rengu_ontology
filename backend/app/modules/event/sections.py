@@ -176,7 +176,9 @@ class EventTypesSection:
     async def restore_section(
         self, session: AsyncSession, content: Any, *, release_id: int | None = None
     ) -> None:
-        await restore_event_types(session, content or {}, await new_release_id(session, release_id))
+        if content is None:  # 那一版快照里没有这一节：什么都不做 [推断]
+            return
+        await restore_event_types(session, content, await new_release_id(session, release_id))
 
 
 BUILDER = EventTypesSection()

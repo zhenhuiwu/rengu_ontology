@@ -506,6 +506,17 @@ async def test_restore_section_overwrites_and_retires(ae):
     assert sum(weekly.values()) == want
 
 
+async def test_restore_section_none_leaves_types_untouched(ae):
+    """content=None（那一版快照里没有这一节）：什么都不做，在用的类型不下线、定义不变。"""
+    acts, evs = await _snap(ae)
+    await action_sections.BUILDER.restore_section(ae, None, release_id=987654)
+    await event_sections.BUILDER.restore_section(ae, None, release_id=987654)
+    assert await _snap(ae) == (acts, evs)
+    for model in (ActionType, EventType):
+        n_ret = select(func.count()).select_from(model).where(model.retired_release_id.is_not(None))
+        assert await ae.scalar(n_ret) == 0
+
+
 async def test_restore_section_without_release_id_uses_next_release(released):
     """骨架改签名前不传 release_id：用 max(ontology_release.id)+1（新回滚记录的 id 不会小于它）。"""
     top = await released.scalar(select(func.max(OntologyRelease.id)))
