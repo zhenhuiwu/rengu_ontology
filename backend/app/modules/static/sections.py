@@ -215,10 +215,3 @@ BUILDERS = [
     TermsSection(),
     QaPathsSection(),
 ]
-
-
-def register_all() -> None:
-    from app.modules.versioning.sections import register_section
-
-    for b in BUILDERS:
-        register_section(b)

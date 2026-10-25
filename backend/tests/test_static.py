@@ -75,13 +75,12 @@ def without(d: dict, *keys: str) -> dict:
 
 @pytest.fixture
 def static_sections():
-    """登记静态真实的 7 个快照 section（conftest 每个测试先清空注册表）。"""
+    """只登记静态真实的 7 个快照 section（骨架 isolated_sections：块内隔离，结束恢复）。"""
     from app.modules.static.sections import BUILDERS
-    from app.modules.versioning.sections import register_section
+    from app.modules.versioning.sections import isolated_sections
 
-    for b in BUILDERS:
-        register_section(b)
-    return BUILDERS
+    with isolated_sections(*BUILDERS):
+        yield BUILDERS
 
 
 @pytest.fixture
@@ -232,11 +231,38 @@ async def test_seed_counts_match_mock_and_idempotent(static_seeded):
         await static_seeded.flush()
 
 
+STATIC_SECTIONS = ["objectTypes", "properties", "links", "metrics", "dimensions", "terms", "qaPaths"]
+
+
+def test_static_sections_discovered_by_load_sections():
+    """静态 section 只经 sections.py 的 BUILDERS 由 load_sections() 发现，按 BUILDERS 顺序登记。"""
+    from app.modules.static.sections import BUILDERS
+    from app.modules.versioning.sections import isolated_sections, load_sections
+
+    with isolated_sections():
+        names = load_sections()
+    assert [n for n in names if n in STATIC_SECTIONS] == [b.section for b in BUILDERS] == STATIC_SECTIONS
+
+
+def test_import_static_does_not_register_sections():
+    """导入 app.modules.static（及其 sections.py）不登记任何 section（import 时登记已废弃，新进程里验证）。"""
+    import subprocess
+    import sys
+
+    code = (
+        "import app.modules.static, app.modules.static.sections\n"
+        "from app.modules.versioning.sections import registered_sections as r\n"
+        f"assert not set(r()) & set({STATIC_SECTIONS!r}), sorted(r())\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-3000:]
+
+
 async def test_release_snapshots_have_static_sections(static_seeded):
     from app.modules.versioning.service import VersioningService
 
     snap = await VersioningService().get_snapshot(static_seeded, "v2026.09.3")
-    assert {"objectTypes", "properties", "links", "metrics", "dimensions", "terms", "qaPaths"} <= set(snap)
+    assert set(STATIC_SECTIONS) <= set(snap)
     # 历史版本：关系只含当时已发布的；业务知识只含 since ≤ ver 的
     assert set(snap["links"]) == {x["id"] for x in history.links_at(LINKS, "v2026.09.3")}
     assert set(snap["terms"]) == {k["id"] for k in KNOWLEDGE if k.get("since") and k["since"] <= "v2026.09.3"}
