@@ -32,7 +32,7 @@ const option = computed(() => ({
       <div v-else class="cp-chart"><EChart :option="option" /></div>
     </div>
     <div class="t-12 c-3 cp-ell">口径：{{ card.metric }} {{ card.version }}</div>
-    <div v-if="card.pending" class="t-12 c-warning cp-ell" :title="card.pending">{{ card.pending }}</div>
+    <div v-if="card.pending" class="t-12 tl-normal cp-ell" :title="card.pending">{{ card.pending }}</div>
   </div>
 </template>
 
