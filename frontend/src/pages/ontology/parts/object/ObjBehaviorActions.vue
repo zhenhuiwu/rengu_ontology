@@ -51,6 +51,10 @@ const actName = ref('全部');
 const pq = usePagedQuery({ defaultSize: 10, prefix: 'ac', filters: [status, actName, () => props.objectId] });
 const all = computed(() => (kind.value ? ACTIONS.filter((a) => a.objKind === kind.value) : []));
 const names = computed(() => ['全部', ...new Set(all.value.map((a) => a.action))]);
+/** 能把对象状态往回改的动作：在详情里写明回退边界（按生命周期 v4） */
+const GUARDS: Record<string, string> = {
+  correct_order_status: '只能回退到生命周期 v4 中的上一个合法状态；订单已出库（含已签收）的修正不走免审，需订单运营负责人审批',
+};
 const STATUSES: ActionStatus[] = ['待确认', '审批中', '执行中', '成功', '失败', '结果未知', '已撤回', '已对账'];
 const rows = computed(() => all.value.filter((a) => (status.value === '全部' || a.status === status.value) && (actName.value === '全部' || a.action === actName.value)));
 const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
@@ -148,7 +152,7 @@ const recCols = [
 
     <a-drawer :open="!!openType" :width="560" :title="openType ? `${openType.name} · ${openType.version}` : ''" @close="setOpen('')">
       <template v-if="openType">
-        <a-descriptions :column="1" size="small" bordered>
+        <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px', whiteSpace: 'nowrap' }">
           <a-descriptions-item label="说明">{{ openType.desc }}</a-descriptions-item>
           <a-descriptions-item label="作用对象">{{ kind ? OBJ_KIND_LABEL[kind] : objName }}</a-descriptions-item>
           <a-descriptions-item label="外部系统">
@@ -160,6 +164,7 @@ const recCols = [
           <a-descriptions-item label="幂等键"><span class="num">{{ openType.idemKey }}</span></a-descriptions-item>
           <a-descriptions-item label="可发起">{{ openType.runners }}</a-descriptions-item>
           <a-descriptions-item label="审批">{{ openType.approval }}</a-descriptions-item>
+          <a-descriptions-item v-if="GUARDS[openType.id]" label="回退限制">{{ GUARDS[openType.id] }}</a-descriptions-item>
           <a-descriptions-item label="负责人">{{ openType.owner }}</a-descriptions-item>
         </a-descriptions>
         <div class="t-14 fw-600 c-1 ba-sec">参数</div>
