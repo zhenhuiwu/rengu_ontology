@@ -52,7 +52,7 @@ export const NAV: NavArea[] = [
         { key: 'functions', title: '函数', path: '/build/ontology/functions', phase: 3, group: '资源' },
         { key: 'metrics', title: '指标口径', path: '/build/ontology/metrics', phase: 1, group: '语义', note: '允许的维度、版本历史', component: () => import('@/pages/ontology/Metrics.vue') },
         { key: 'dimensions', title: '维度与字典', path: '/build/ontology/dimensions', phase: 1, group: '语义', note: '页签：定义、取值字典、同义词与问数映射、使用情况、版本历史', component: () => import('@/pages/ontology/Dimensions.vue') },
-        { key: 'glossary', title: '业务知识', path: '/build/ontology/glossary', phase: 1, group: '语义', note: '同义词、术语' },
+        { key: 'glossary', title: '业务知识', path: '/build/ontology/glossary', phase: 1, group: '语义', note: '同义词、术语；页签：内容、问数中的作用、引用、版本历史', component: () => import('@/pages/ontology/Glossary.vue') },
         { key: 'event-types', title: '事件类型', path: '/build/ontology/event-types', phase: 2, group: '自动化', component: () => import('@/pages/ontology/EventTypes.vue') },
         { key: 'rules', title: '规则与自动化', path: '/build/ontology/rules', phase: 2, group: '自动化', component: () => import('@/pages/ontology/Rules.vue') },
         { key: 'qa-tuning', title: '问数调优', path: '/build/ontology/qa-tuning', phase: 1, group: '调优', note: '页签：认证问答、评测题库、反馈与纠错；高频问题推荐第二期', component: () => import('@/pages/ontology/QaTuning.vue') },
