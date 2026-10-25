@@ -36,6 +36,7 @@
 | 项 | 约定 |
 |---|---|
 | 前缀 | `/api/<模块>/v1`，JSON，UTF-8。模块划分见下表 |
+| 动作路径 | **已定**：对资源的动作一律用冒号写法 `/{资源}/{id}:{动作}`（`:submit`、`:stage`、`:confirm`、`:rollback`、`:reconcile`、`:test` 等），不用 `/{id}/submit` 这类子路径 |
 | 字段命名 | **已定**：JSON 字段一律 **camelCase**，和前端 TS 一致（如 `lastTest`、`idemKey`、`baseRelease`）。数据库用 snake_case，转换放在 Pydantic（`alias_generator=to_camel` + `populate_by_name=True`）。负责人文档里写成 snake_case 的字段名，只当作数据库列名看 |
 | 枚举 | **已定**：接口里的枚举值**和前端 mock 完全一样**：中文的仍是中文（`待确认`、`审批中`、`已发布`、`处理中`），英文的仍是英文（告警页签 `open\|doing\|closed\|all`、`FuncLevel` 的 `none\|view\|manage`）。数据库可以存英文 code，转换放在 Pydantic 里（序列化时转回前端的值）。负责人文档里的英文 code（`processing`、`in_review`、`pending_confirm` 等）只是数据库层的写法 |
 | 时间 | **已定**：每个字段的格式**和 mock 里一样**：mock 里是 `YYYY-MM-DD HH:mm` 字符串的，接口也返回同样格式的字符串（北京时间）；mock 里是 `Date` 的，返回带 `+08:00` 的 ISO 8601（如 `2026-10-24T23:00:00.000+08:00`，和 export-mock 的输出一致）。数据库一律存 `timestamptz`，格式转换放在 Pydantic |
@@ -47,20 +48,20 @@
 
 | 模块 | 页面 | 负责人文档 |
 |---|---|---|
-| `ontology` | 静态（对象类型定义、关系类型、指标、维度、业务知识、函数、变更与发布、本体总览）+ 动态（告警、动作中心、规则、情景推演、生命周期，以及统一的 `/action-runs`）+ 动作类型 / 事件类型、外部系统与写回（Palantir 的 integration 代码目录）；顶栏的版本列表 | static-api.md、dynamic-api.md、action-event-api.md |
+| `ontology` | 静态（对象类型定义、关系类型、指标、维度、业务知识、函数、变更与发布、本体总览）+ 动态（告警、动作中心、规则、情景推演、生命周期，以及统一的 `/action-runs` 和对账 `:reconcile`）+ 动作类型 / 事件类型（Palantir 的 integration 代码目录）；顶栏的版本列表 | static-api.md、dynamic-api.md、action-event-api.md |
 | `qa` | 问数工作台、我的页面、对象搜索、对象详情（含公共抽屉）、问数调优 | qa-api.md |
-| `data` | 数据连接、数据质量 | 本文 |
+| `data` | 数据连接、数据质量、**外部系统与写回调用记录**（`/ext-systems*`、`/ext-calls*`；代码仍在 Palantir 的 integration 目录） | 本文、action-event-api.md |
 | `admin` | 用户与组织、角色与权限、审计日志、API 密钥、系统设置、安全策略，以及 `/me`、租户、通知、预览会话、下载中心 | 本文 |
 | `biz` | 演示业务数据（门店、商品、订单）及首页看板。**骨架由本体小白负责**；只存一份，首页和问数的对象搜索共用，行级范围由底层统一注入 | 本文 |
 
-模块名已定（不再是待确认）。外部系统页（§3.2）挂在构建区的“数据接入”下，但接口归 Palantir：`/api/ontology/v1/ext-systems*`、`/api/ontology/v1/ext-calls*`（和 cedf5ae 的 `/ext-systems?writeback=1` 同一组）。
+模块名已定（不再是待确认）。**已定**：外部系统页（§3.2）挂在构建区的“数据接入”下，接口归 `data` 模块：`/api/data/v1/ext-systems*`、`/api/data/v1/ext-calls*`（和 cedf5ae 的 `/ext-systems?writeback=1` 同一组；动作类型页的写回下拉也调 `/api/data/v1/ext-systems`）。代码仍放在 integration 目录，由 Palantir 负责。动作类型、事件类型、`/action-runs*`、对账仍在 `/api/ontology/v1`。
 
 **表归属**（谁写迁移、谁写种子；别的模块只读，跨模块写一律调接口）
 
 | 负责方 | 表 |
 |---|---|
 | 动态（ontology） | `action_run`、`action_run_log`（执行时间线）；`alert`、`rule*`、`scenario*`、`lifecycle*` |
-| Palantir（ontology，integration 代码目录） | `event`、`event_delivery`、`reconcile_task`、`writeback_call`（**唯一的外部调用记录表**；动态文档里的 `ext_call` 合并进来，不再单独建）、`ext_system`；动作类型、事件类型定义表 |
+| Palantir（integration 代码目录；`ext_system`、`writeback_call` 的接口走 data 模块，其余走 ontology） | `event`、`event_delivery`、`reconcile_task`、`writeback_call`（**唯一的外部调用记录表**；动态文档里的 `ext_call` 合并进来，不再单独建）、`ext_system`；动作类型、事件类型定义表 |
 | 静态（ontology） | `metric`、`ontology_release`、`change_request` 及 items / 校验 / 评审记录、对象类型、关系、维度、业务知识、函数（含 `fn_version`） |
 | 问数（qa） | `qa_*` |
 | PDE / data | `datasource` 及同步、质量检查表 |
@@ -148,6 +149,7 @@
 - 后台：
   - 本体类资源（对象、关系、指标、维度、知识、动作类型、事件类型、规则、生命周期）的读接口接受 query 参数 **`?ver=<版本>`**（和前端 URL 同名；static-api.md 的 `release=` 参数作废），返回该版本的快照。
   - **已定**：只读模式只靠 query 参数传递，不用请求头（v0.2 的 `X-View-Release` 作废）。前端在历史版本模式下，所有请求都带 `?ver=<版本>`；只要请求带 `ver`，后台的**写接口一律返回 403 `READONLY_HISTORY`**，包括系统管理、数据连接这类和版本无关的页面，因为前端在这些页面也是整页只读。“不落库”的 POST（试运行、试算、测试连接等）是否允许，按 §7 的 `?ver=` 列（照前端是否置灰来定）。
+  - **版本快照（已定）**：每个版本**一份**快照，按 section 分块，每块由所属模块负责组装：静态的 `objectTypes`（不含生命周期）、`linkTypes`、`metrics`、`dimensions`、`knowledge`；Palantir 的 `actionTypes`、`eventTypes`；动态的 `rules`、`lifecycles`（按对象类型的前端 id 分键）。`create_version` 提供注册机制，各模块注册自己 section 的组装函数，生成版本时依次调用。运行数据（告警、执行记录、事件、调用记录等）不进快照；函数也不进（§3.8）。每个 section 内按**前端 id** 分键（如对象类型 `SalesOrder`，和前端 mock 里的 id 一致），`?ver=` 读接口直接按 id 取。
   - 历史版本里的问数：口径框显示“按该版本默认”。已经回答过的消息保留回答当时的依据（本体版本），不会改写。
   - 本体总览在历史版本下不显示当前的待处理事项，最近发布只列到所选版本为止。
 
@@ -181,7 +183,7 @@
 | 发布后的评测回放 | 变更单发布 | static-api.md、qa-api.md |
 | 事件投递、失败重投 | 事件产生后入队；投递失败按退避重投 | action-event-api.md |
 | outbox 分发 | 业务事务里写 outbox，任务异步分发（事件、通知、副作用） | action-event-api.md、dynamic-api.md |
-| 发布后展开 | 整版发布提交后：刷新快照、问数缓存、受影响页面标“口径待更新” | static-api.md |
+| 发布后展开 | **已定**：定义表的展开（把变更单内容写进各定义表、生成版本快照）在发布事务里**同步**完成，不放进任务；任务只做发布提交后的问数缓存刷新、受影响页面标“口径待更新” | static-api.md |
 | “仍无法确认”后再查 3 轮 | 人工对账结论为“仍无法确认”时，按幂等键再自动查询 3 轮 | dynamic-api.md |
 | 导出 | `POST /exports`、审计导出等异步导出 | §2.1、§4.3 |
 | API 密钥到期 | 每天扫描，到期置为“已过期”，即将过期发通知 | §4.4 |
@@ -286,7 +288,7 @@
 | DELETE | /sessions/{sid} | — | 204 | — | 写 | | — |
 | POST | /sessions/{sid}/turns | `{question,refs?,clientId}` | 202 `{turnId,streamUrl}` | — | 写 | 历史版本下拒绝；预览时是否允许提问见差异 | — |
 | GET | /turns/{tid}/stream | `Last-Event-ID` | SSE 事件流（qa-api.md §3.1） | — | 读 | | — |
-| POST | /turns/{tid}/cancel | — | — | — | 写 | 【推断】前端没有停止按钮 | — |
+| POST | /turns/{tid}:cancel | — | — | — | 写 | 【推断】前端没有停止按钮 | — |
 | POST | /turns/{tid}/recalc | `{caliber:ex\|in\|both}` | `Answer`（同步返回） | — | 写 | | — |
 | GET | /turns/{tid}/result | `page,size` | `{columns,items,total,summary}` | 页码 | 读 | 合计按全部数据计算 | `qa.ts` `QA_EC_STORES`（38） |
 | GET | /turns/{tid}/export | `format=xlsx\|csv` | 文件 | — | 读 | 预览时返回 `EXPORT_FORBIDDEN`；写审计 | — |
@@ -389,12 +391,12 @@
 | POST | /alerts:batch-close | `{ids[], as, reason}` | `{closed}` | — | 写 | 只作用于本人处理中的告警 | — |
 | POST | /alerts/{id}:start-action | — | `ActionRun`（§2.7） | — | 写 | 幂等键由服务端生成：`act-<告警号小写>`（§1.6） | — |
 | GET | /rules/refs | — | `RuleRef[]`（mock/dynamic.ts `RULES`） | — | 读 | 规则筛选下拉 | `dynamic.ts` `RULES` |
-| GET | /people | — | `string[]`（Alerts.vue `PEOPLE`；以后改成从用户表取） | — | 读 | 转派选人 | `Alerts.vue` `PEOPLE`（不在 src/mock 下）→ 用户表 `admin.ts` `ADMIN_USERS` |
+| GET | /people | — | `string[]`（用户名，和 mock 同形）：返回 `sys_user.alert_assignable = true` 的用户，按 `Alerts.vue` `PEOPLE` 的顺序 | 全量 | 读 | 转派选人 | `Alerts.vue` `PEOPLE` → `sys_user`（`alert_assignable=true`） |
 
 4. **状态**：“待处理”为橙；级别“高”只加粗。
 5. **差异**
    - 页签值（已定）：接口用前端的 `status=open|doing|closed|all`；告警状态字段返回中文 `待处理 | 处理中 | 已解决 | 已忽略`。dynamic-api.md 的 `processing` 等只是库里的 code。
-   - 转派选人：前端写死了 `PEOPLE` 列表，后台需要提供人员接口。dynamic-api.md 没有写这个接口。
+   - 转派选人（已定）：`PEOPLE` 导入 `sys_user`，带 `alert_assignable=true` 标记（顺序存 `sort_order`）；`GET /people` 返回这些用户，顺序和 mock 一致。dynamic-api.md 没有写这个接口。
 
 ### 2.7 动作中心 `/use/ops/actions`（动态本体：**以 dynamic-api.md 为准**；动作类型的定义归 Palantir专家）
 
@@ -491,7 +493,7 @@
 ### 3.2 外部系统 `/build/data/external`
 
 1. **用途**：维护动作写回用的系统（CRM、WMS、OMS、OA、ERP、短信、企业微信、顺丰、美团等）：配置、幂等、超时和重试，以及调用记录。
-   - **归属（已定）**：`ext_system` 和 `writeback_call` 两张表都归 Palantir（integration 代码目录），接口前缀 `/api/ontology/v1`。本页只是这组接口的界面；动作类型的写回配置（§3.7 `GET /ext-systems?writeback=1`）调的是同一组接口。调用记录只有 `writeback_call` 一张表（动态文档里的 `ext_call` 合并进来）。
+   - **归属（已定）**：`ext_system` 和 `writeback_call` 两张表都归 Palantir（integration 代码目录），接口前缀 **`/api/data/v1`**（已定，代码仍在 integration 目录）。本页只是这组接口的界面；动作类型的写回配置（§3.7 `GET /ext-systems?writeback=1`）调的是同一组接口。调用记录只有 `writeback_call` 一张表（动态文档里的 `ext_call` 合并进来）。
 2. **操作流程**
    1. 左栏系统列表；右栏配置。“关联动作”按动作类型的 `sysId` 计算；不做写回的集成显示用途说明。
    2. 最近调用：按结果筛选（`?result=成功|失败|结果未知`），分页。点“详情”打开调用抽屉（`?call=`），显示请求体和响应体。
@@ -619,7 +621,7 @@
 | POST | /action-types/{id}:dry-run | `{params?}`（版本用 query `?ver=`） | `{passed,checked,failed[]}` | — | 不落库 | 草稿状态返回 `TYPE_IS_DRAFT`，条件不满足返回 `SUBMISSION_CRITERIA_FAILED` | — |
 | GET | /action-runs | `actionType,status,page,size` | `PageResult<ActionRun>` | 页码（14/页，`?rpage=`） | 读 | 执行记录页签：§2.7 的统一接口按 `actionType` 筛选（归动态） | 同 §2.7 |
 | GET | /action-runs/{id} | — | `ActionRun` + `timeline[]`（`action_run_log`） | — | 读 | 执行记录抽屉，同 §2.7 | 同 §2.7 |
-| GET | /ext-systems | `writeback=1` | `ExtSystem[]` | 全量（前端不分页） | 读 | 编辑写回时的下拉；同 §3.2 的接口（Palantir） | `extsys.ts` `EXT_SYSTEMS` |
+| GET | /ext-systems | `writeback=1` | `ExtSystem[]` | 全量（前端不分页） | 读 | 编辑写回时的下拉；同 §3.2 的接口（`/api/data/v1`，Palantir） | `extsys.ts` `EXT_SYSTEMS` |
 | PUT | /change-requests/{id}/items | `target{kind:'action'}`，`section ∈ params\|conds\|edits\|effects\|config` | 见 static-api.md | — | 写 | | — |
 
 4. **状态**：`已发布|变更中|草稿`；执行结果 `RunStatus`。
@@ -942,7 +944,8 @@
    - 选角色时：数据范围就是这个角色的 `RowScope[]`，不另存。
    - 种子：`SA_SCOPES` 和 `BINDINGS` 里的展示文本在导入时解析——`仅元数据（不读业务数据）` → `metadataOnly=true, scopes=[]`；`大区 = 华东、华南` → 对 `SCOPE_PROPS` 里有“大区”这个权限依据的每个对象类型各生成一条 `RowScope`（`op` 一个值用 `=`、多个值用 `∈`）。
    - 中文名在导入时换成 API 名：对象类型按 `PERM_OBJECTS`（订单 → `SalesOrder`、门店 → `Store`、商品 → `Product`、会员 → `Member`、库存快照 → `InventorySnapshot`），属性按对象类型的属性表（`OBJECT_PROPS`）找 API 名。找不到的导入时报错，不静默跳过。
-   - `会员 · 常去门店所属大区` 不是会员表上的直接属性，要经“会员 → 常去门店 → 大区”一跳关系才能过滤。做成派生属性还是在查询里展开关系，【待定】（§8.2）。
+   - `会员 · 常去门店所属大区` 不是会员表上的直接属性，要经“会员 → 常去门店 → 大区”一跳关系才能过滤。【推断】按下面的一跳规则在查询里展开（会员 → 门店 → 门店的 `region` 属性），前提是“会员—常去门店”是已声明并列入白名单的关系；`Member` 的关系定义还没核实（§8.2）。
+   - **行级范围编译 `to_sql`（已定，一期）**：只支持沿**已声明且列入白名单**的关系路径做**一跳**关联，编译成 `EXISTS` 子查询，值一律绑定参数，不拼字符串；多跳或未声明的路径在保存 API 密钥 / 角色时直接拒绝（`VALIDATION_FAILED`）。
 
 ### 4.5 模型与系统配置 `/admin/system/settings`
 
@@ -994,7 +997,7 @@
 ### 5.2 dynamic-api.md（dfa6111，动态本体）
 
 1. **告警页签（已定）**：接口用前端的 `status=open|doing|closed|all`，`processing` 只是库里的 code。
-2. **转派选人**：`Alerts.vue` 写死了 `PEOPLE`；建议用 §4.1 的 `GET /users?kw`，§2.6 的 `/people` 只是过渡。
+2. **转派选人（已定）**：`Alerts.vue` 的 `PEOPLE` 导入 `sys_user` 并标 `alert_assignable`；`GET /people` 按 mock 顺序返回带标记的用户（§2.6）。
 3. **规则版本的“对比”和“回滚”**：`Rules.vue` 第 469 行附近两个按钮没有点击处理；`:rollback` 接口先留着。
 4. **回放样本分页**：按前端 `usePagedQuery` 的 `page/size` 实现。
 5. **对账（已定）**：结论字段接口里叫 `result`，`reconcile_result` 是库里的列名。操作人先不限制，要限制列为【推断，§8.1-5】。
@@ -1058,6 +1061,8 @@
    - API 密钥数据范围的展示文本在导入时解析成 `RowScope[]` + `metadataOnly`（§4.4）。
    - 导入后每张表的序列设为“最大编号 + 1”（变更单号、`A-…`、`EV-…` 等）。
    - 敏感数据：`API_KEYS` 只导入前缀、后 4 位和哈希；连接密码、渠道密钥用演示占位值加密保存，接口只返回掩码。
+   - **版本快照的种子（已定）**：版本相关的种子调用静态提供的 `seed_snapshot(ver)` 生成快照（走 `create_version` 注册的各 section 组装函数），**静态的种子排在最前面**，保证组装时定义表已有数据；不允许写空 `{}` 快照。
+   - 人员：`Alerts.vue` `PEOPLE` 的 7 人导入 `sys_user`，`alert_assignable=true`，按 mock 顺序写 `sort_order`。
 6. **种子才需要的补充数据**：mock 里没有、但外键需要的行（例如 `repeat_sales`、`repeat_sales_tax` 两个指标，问数调优引用了它们，`metrics.ts` 里没有），放在后端 `seeds/extra/`，这些行带 `is_seed=true`，**不加进 mock**。`X-Demo-As` 用到的演示用户（§1.4）也放这里。
 7. **mock 的修改规则（已定）**：mock 的**值**一律不改。把组件里写死的数据**原样搬进 `src/mock`**（界面和数值都不变）是允许的，需两人评审通过。目前要搬的：问数演示 4 轮回答、`QaTuning.vue` 的 `DIMS`/`TIMES`、`qa-tuning/state.ts` 的同义词、`stores/app.ts` 的 `TENANTS`/`PERSONAS`、`Alerts.vue` 的 `PEOPLE`。
 8. **动作执行记录（已定）**：`action_run` 和 `action_run_log` 由动态的 seed 写，`ACTIONS`（141 条，0413–0532）和 `RUNS`（1849 条，2000 段）按 id 合并，字段取并集。种子行保留 mock 里的原幂等键（可能和新规则生成的键重复）；幂等键唯一约束用**部分唯一索引**，只约束 `is_seed=false` 的行。
@@ -1068,7 +1073,7 @@
 
 ## 7. 接口总表（去重，脚本从各页接口表汇总）
 
-- 各页接口表共 265 行；按“模块 + 方法 + 路径”去重后共 **253 个接口**：`admin` 43、`biz` 3、`data` 14、`ontology` 135、`qa` 58；读 143，写 101，不落库 9。
+- 各页接口表共 265 行；按“模块 + 方法 + 路径”去重后共 **253 个接口**：`admin` 43、`biz` 3、`data` 22、`ontology` 127、`qa` 58；读 143，写 101，不落库 9。
 - 不含内部接口（`POST /internal/v1/events`，外部系统适配器的 `submit`/`query_by_key`），也不含 static-api.md 里有、但前端页面没有用到的接口；完整清单以各负责人文档为准。
 - **类型**：`读`、`写`、`不落库`（POST 但不写库：试运行、试算、测试连接、导出、回放、合并校验、导入预览等）。
 - **页面权限**：`pageKey·level`，pageKey 是 `nav.ts` 的页面 key，level 是 `FuncLevel`（`view` 能看，`manage` 能改）；多个页面用 `/` 连接，满足其一即可。“登录即可”= 只要登录。
@@ -1133,78 +1138,78 @@
 | 53 | data | GET | `/api/data/v1/datasources/{id}/tables` | 读 | 3.1 | connections·view | 元数据读取 | Y | Y | N | `datasources.ts` `dsTables()` |
 | 54 | data | POST | `/api/data/v1/datasources/{id}:test` | 写 | 3.1 | connections·manage | — | N | N | N | — |
 | 55 | data | POST | `/api/data/v1/datasources:test` | 不落库 | 3.1 | connections·view | — | Y | Y | N | — |
-| 56 | data | GET | `/api/data/v1/quality-checks` | 读 | 3.3 | data-quality·view | 元数据读取 | Y | Y | N | `quality.ts` `QUALITY_CHECKS`、`DATA_CUTOFF` |
-| 57 | data | POST | `/api/data/v1/quality-checks` | 写 | 3.3 | data-quality·manage | — | N | N | N | — |
-| 58 | data | GET | `/api/data/v1/quality-checks/{id}/runs` | 读 | 3.3 | data-quality·view | 元数据读取 | Y | Y | N | `quality.ts` `QUALITY_CHECKS`（`runs`） |
-| 59 | data | POST | `/api/data/v1/quality-checks/{id}:run` | 写 | 3.3 | data-quality·manage | — | N | N | N | — |
-| 60 | data | POST | `/api/data/v1/quality-checks:run-all` | 写 | 3.3 | data-quality·manage | — | N | N | N | — |
-| 61 | ontology | GET | `/api/ontology/v1/action-runs` | 读 | 2.5、2.7、3.5、3.7 | object-detail/action-center/object-types/action-types·view | 对象读取 | Y | Y | Y | 同 §2.7 |
-| 62 | ontology | GET | `/api/ontology/v1/action-runs/{id}` | 读 | 2.7、3.7 | action-center/action-types·view | 对象读取 | Y | Y | Y | 同上；`actionEvent.ts` `runById()` |
-| 63 | ontology | POST | `/api/ontology/v1/action-runs/{id}:approve` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
-| 64 | ontology | POST | `/api/ontology/v1/action-runs/{id}:confirm` | 写 | 2.7 | action-center·manage | 动作执行 | N | N | N | — |
-| 65 | ontology | POST | `/api/ontology/v1/action-runs/{id}:reconcile` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
-| 66 | ontology | POST | `/api/ontology/v1/action-runs/{id}:resubmit` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
-| 67 | ontology | POST | `/api/ontology/v1/action-runs/{id}:withdraw` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
-| 68 | ontology | POST | `/api/ontology/v1/action-runs:stage` | 写 | 2.7 | action-center·manage | 动作执行 | N | N | N | — |
-| 69 | ontology | GET | `/api/ontology/v1/action-types` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ACTION_TYPES`（17）、`ACTION_GROUPS` |
-| 70 | ontology | GET | `/api/ontology/v1/action-types/{id}` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ACTION_TYPES`；`RULE_ACTION` |
-| 71 | ontology | GET | `/api/ontology/v1/action-types/{id}/params` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `paramsOf()`（101） |
-| 72 | ontology | GET | `/api/ontology/v1/action-types/{id}/stats` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `runStats()` |
-| 73 | ontology | GET | `/api/ontology/v1/action-types/{id}/stats/daily` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `runDaily()`（原样存入 `action_run_daily_stat`） |
-| 74 | ontology | GET | `/api/ontology/v1/action-types/{id}/submission-criteria` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `condsOf()`（59） |
-| 75 | ontology | GET | `/api/ontology/v1/action-types/{id}/used-by` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `usedBy`、`RULE_ACTION`、`RULE_CONFIRMER`；`dynamic.ts` `RULES`、`ALERTS` |
-| 76 | ontology | GET | `/api/ontology/v1/action-types/{id}/versions` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `versionsOf()`、`ACTION_VERSION_NOTES` |
-| 77 | ontology | GET | `/api/ontology/v1/action-types/{id}/writeback` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `writebackOf()`（本体编辑 36 条 / 副作用 47 条） |
-| 78 | ontology | POST | `/api/ontology/v1/action-types/{id}:dry-run` | 不落库 | 3.7 | action-types·view | — | Y | Y | N | — |
-| 79 | ontology | GET | `/api/ontology/v1/actions/meta` | 读 | 2.7 | action-center·view | 元数据读取 | Y | Y | Y | `actions.ts` `ACTION_NAMES`、`ACTION_SYSTEMS`、`ACTION_META` |
-| 80 | ontology | GET | `/api/ontology/v1/alerts` | 读 | 2.6 | alerts·view | 对象读取 | Y | Y | Y | `dynamic.ts` `ALERTS` |
-| 81 | ontology | GET | `/api/ontology/v1/alerts/{id}` | 读 | 2.6 | alerts·view | 对象读取 | Y | Y | Y | `dynamic.ts` `ALERTS`、`alertTimeline` |
-| 82 | ontology | POST | `/api/ontology/v1/alerts/{id}:claim` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
-| 83 | ontology | POST | `/api/ontology/v1/alerts/{id}:close` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
-| 84 | ontology | POST | `/api/ontology/v1/alerts/{id}:start-action` | 写 | 2.6 | alerts·manage | 动作执行 | N | N | N | — |
-| 85 | ontology | POST | `/api/ontology/v1/alerts/{id}:transfer` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
-| 86 | ontology | POST | `/api/ontology/v1/alerts:batch-claim` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
-| 87 | ontology | POST | `/api/ontology/v1/alerts:batch-close` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
-| 88 | ontology | GET | `/api/ontology/v1/change-requests` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `CHANGE_REQUESTS`（只用这一份；`releases.ts` `DRAFTS` 不导入） |
-| 89 | ontology | POST | `/api/ontology/v1/change-requests` | 写 | 3.4、3.16 | ontology-overview/releases·manage | — | N | N | N | — |
-| 90 | ontology | DELETE | `/api/ontology/v1/change-requests/{id}` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 91 | ontology | GET | `/api/ontology/v1/change-requests/{id}` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `CR_DETAILS`、`crDetail`、`reviewLog` |
-| 92 | ontology | GET | `/api/ontology/v1/change-requests/{id}/diffs` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `crDetail` |
-| 93 | ontology | PUT | `/api/ontology/v1/change-requests/{id}/items` | 写 | 3.7、3.12、3.13、3.16 | action-types/event-types/rules/releases·manage | — | N | N | N | — |
-| 94 | ontology | POST | `/api/ontology/v1/change-requests/{id}/targets` | 写 | 3.16 | releases·manage | — | N | N | N | — |
-| 95 | ontology | DELETE | `/api/ontology/v1/change-requests/{id}/targets/{kind}/{targetId}` | 写 | 3.16 | releases·manage | — | N | N | N | — |
-| 96 | ontology | POST | `/api/ontology/v1/change-requests/{id}:approve` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 97 | ontology | POST | `/api/ontology/v1/change-requests/{id}:reject` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 98 | ontology | POST | `/api/ontology/v1/change-requests/{id}:reopen` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 99 | ontology | POST | `/api/ontology/v1/change-requests/{id}:submit` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 100 | ontology | POST | `/api/ontology/v1/change-requests/{id}:unapprove` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 101 | ontology | POST | `/api/ontology/v1/change-requests/{id}:validate` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 102 | ontology | POST | `/api/ontology/v1/change-requests/{id}:withdraw` | 写 | 3.15 | releases·manage | — | N | N | N | — |
-| 103 | ontology | GET | `/api/ontology/v1/dimensions` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS` |
-| 104 | ontology | GET | `/api/ontology/v1/dimensions/{id}` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS` |
-| 105 | ontology | GET | `/api/ontology/v1/dimensions/{id}/history` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS`（history） |
-| 106 | ontology | GET | `/api/ontology/v1/dimensions/{id}/mappings` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS`（mappings） |
-| 107 | ontology | GET | `/api/ontology/v1/dimensions/{id}/usage` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `metricUsage` |
-| 108 | ontology | GET | `/api/ontology/v1/dimensions/{id}/values` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS`（values） |
-| 109 | ontology | POST | `/api/ontology/v1/dimensions:match` | 不落库 | 3.10 | dimensions·view | — | Y | Y | N | — （计算接口，读已导入的数据） |
-| 110 | ontology | GET | `/api/ontology/v1/event-deliveries` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | 由 `eventsOf()` 的 `outcome`/`subscribers` 推出来【推断】 |
-| 111 | ontology | GET | `/api/ontology/v1/event-types` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `EVENT_TYPES`（15）、`EVENT_SOURCES` |
-| 112 | ontology | GET | `/api/ontology/v1/event-types/{id}` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `EVENT_TYPES` |
-| 113 | ontology | GET | `/api/ontology/v1/event-types/{id}/events` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventsOf()`（`EVENTS` 1243） |
-| 114 | ontology | GET | `/api/ontology/v1/event-types/{id}/payload-fields` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ENVELOPE`（10）+ `EventType.specific` |
-| 115 | ontology | GET | `/api/ontology/v1/event-types/{id}/stats` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventDaily()`、`EventType.weekly`；健康指标按 `eventsOf()` 计算 |
-| 116 | ontology | GET | `/api/ontology/v1/event-types/{id}/subscribers` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `subscribersOf()`（37） |
-| 117 | ontology | GET | `/api/ontology/v1/event-types/{id}/versions` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `versionsOf()`、`EVENT_VERSION_NOTES` |
-| 118 | ontology | POST | `/api/ontology/v1/event-types/{id}:simulate` | 写 | 3.12 | event-types·manage | — | N | N | N | — |
-| 119 | ontology | GET | `/api/ontology/v1/events/{id}` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventById()`；`actionEventResolvers.ts` `event()` |
-| 120 | ontology | GET | `/api/ontology/v1/ext-calls/{callId}` | 读 | 3.2 | external-systems·view | 元数据读取 | Y | Y | N | `extsys.ts` `extCalls()` |
-| 121 | ontology | POST | `/api/ontology/v1/ext-calls/{callId}:mark-checked` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
-| 122 | ontology | GET | `/api/ontology/v1/ext-systems` | 读 | 3.2、3.7 | external-systems/action-types·view | 元数据读取 | Y | Y | N | `extsys.ts` `EXT_SYSTEMS` |
-| 123 | ontology | POST | `/api/ontology/v1/ext-systems` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
-| 124 | ontology | GET | `/api/ontology/v1/ext-systems/{id}` | 读 | 3.2 | external-systems·view | 元数据读取 | Y | Y | N | `extsys.ts` `EXT_SYSTEMS` + `actionEvent.ts` `ACTION_TYPES` |
-| 125 | ontology | PUT | `/api/ontology/v1/ext-systems/{id}` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
-| 126 | ontology | GET | `/api/ontology/v1/ext-systems/{id}/calls` | 读 | 3.2 | external-systems·view | 元数据读取 | Y | Y | N | `extsys.ts` `extCalls()` |
-| 127 | ontology | POST | `/api/ontology/v1/ext-systems/{id}:test` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
+| 56 | data | GET | `/api/data/v1/ext-calls/{callId}` | 读 | 3.2 | external-systems·view | 元数据读取 | Y | Y | N | `extsys.ts` `extCalls()` |
+| 57 | data | POST | `/api/data/v1/ext-calls/{callId}:mark-checked` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
+| 58 | data | GET | `/api/data/v1/ext-systems` | 读 | 3.2、3.7 | external-systems/action-types·view | 元数据读取 | Y | Y | N | `extsys.ts` `EXT_SYSTEMS` |
+| 59 | data | POST | `/api/data/v1/ext-systems` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
+| 60 | data | GET | `/api/data/v1/ext-systems/{id}` | 读 | 3.2 | external-systems·view | 元数据读取 | Y | Y | N | `extsys.ts` `EXT_SYSTEMS` + `actionEvent.ts` `ACTION_TYPES` |
+| 61 | data | PUT | `/api/data/v1/ext-systems/{id}` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
+| 62 | data | GET | `/api/data/v1/ext-systems/{id}/calls` | 读 | 3.2 | external-systems·view | 元数据读取 | Y | Y | N | `extsys.ts` `extCalls()` |
+| 63 | data | POST | `/api/data/v1/ext-systems/{id}:test` | 写 | 3.2 | external-systems·manage | — | N | N | N | — |
+| 64 | data | GET | `/api/data/v1/quality-checks` | 读 | 3.3 | data-quality·view | 元数据读取 | Y | Y | N | `quality.ts` `QUALITY_CHECKS`、`DATA_CUTOFF` |
+| 65 | data | POST | `/api/data/v1/quality-checks` | 写 | 3.3 | data-quality·manage | — | N | N | N | — |
+| 66 | data | GET | `/api/data/v1/quality-checks/{id}/runs` | 读 | 3.3 | data-quality·view | 元数据读取 | Y | Y | N | `quality.ts` `QUALITY_CHECKS`（`runs`） |
+| 67 | data | POST | `/api/data/v1/quality-checks/{id}:run` | 写 | 3.3 | data-quality·manage | — | N | N | N | — |
+| 68 | data | POST | `/api/data/v1/quality-checks:run-all` | 写 | 3.3 | data-quality·manage | — | N | N | N | — |
+| 69 | ontology | GET | `/api/ontology/v1/action-runs` | 读 | 2.5、2.7、3.5、3.7 | object-detail/action-center/object-types/action-types·view | 对象读取 | Y | Y | Y | 同 §2.7 |
+| 70 | ontology | GET | `/api/ontology/v1/action-runs/{id}` | 读 | 2.7、3.7 | action-center/action-types·view | 对象读取 | Y | Y | Y | 同上；`actionEvent.ts` `runById()` |
+| 71 | ontology | POST | `/api/ontology/v1/action-runs/{id}:approve` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
+| 72 | ontology | POST | `/api/ontology/v1/action-runs/{id}:confirm` | 写 | 2.7 | action-center·manage | 动作执行 | N | N | N | — |
+| 73 | ontology | POST | `/api/ontology/v1/action-runs/{id}:reconcile` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
+| 74 | ontology | POST | `/api/ontology/v1/action-runs/{id}:resubmit` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
+| 75 | ontology | POST | `/api/ontology/v1/action-runs/{id}:withdraw` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
+| 76 | ontology | POST | `/api/ontology/v1/action-runs:stage` | 写 | 2.7 | action-center·manage | 动作执行 | N | N | N | — |
+| 77 | ontology | GET | `/api/ontology/v1/action-types` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ACTION_TYPES`（17）、`ACTION_GROUPS` |
+| 78 | ontology | GET | `/api/ontology/v1/action-types/{id}` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ACTION_TYPES`；`RULE_ACTION` |
+| 79 | ontology | GET | `/api/ontology/v1/action-types/{id}/params` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `paramsOf()`（101） |
+| 80 | ontology | GET | `/api/ontology/v1/action-types/{id}/stats` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `runStats()` |
+| 81 | ontology | GET | `/api/ontology/v1/action-types/{id}/stats/daily` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `runDaily()`（原样存入 `action_run_daily_stat`） |
+| 82 | ontology | GET | `/api/ontology/v1/action-types/{id}/submission-criteria` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `condsOf()`（59） |
+| 83 | ontology | GET | `/api/ontology/v1/action-types/{id}/used-by` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `usedBy`、`RULE_ACTION`、`RULE_CONFIRMER`；`dynamic.ts` `RULES`、`ALERTS` |
+| 84 | ontology | GET | `/api/ontology/v1/action-types/{id}/versions` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `versionsOf()`、`ACTION_VERSION_NOTES` |
+| 85 | ontology | GET | `/api/ontology/v1/action-types/{id}/writeback` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `writebackOf()`（本体编辑 36 条 / 副作用 47 条） |
+| 86 | ontology | POST | `/api/ontology/v1/action-types/{id}:dry-run` | 不落库 | 3.7 | action-types·view | — | Y | Y | N | — |
+| 87 | ontology | GET | `/api/ontology/v1/actions/meta` | 读 | 2.7 | action-center·view | 元数据读取 | Y | Y | Y | `actions.ts` `ACTION_NAMES`、`ACTION_SYSTEMS`、`ACTION_META` |
+| 88 | ontology | GET | `/api/ontology/v1/alerts` | 读 | 2.6 | alerts·view | 对象读取 | Y | Y | Y | `dynamic.ts` `ALERTS` |
+| 89 | ontology | GET | `/api/ontology/v1/alerts/{id}` | 读 | 2.6 | alerts·view | 对象读取 | Y | Y | Y | `dynamic.ts` `ALERTS`、`alertTimeline` |
+| 90 | ontology | POST | `/api/ontology/v1/alerts/{id}:claim` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
+| 91 | ontology | POST | `/api/ontology/v1/alerts/{id}:close` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
+| 92 | ontology | POST | `/api/ontology/v1/alerts/{id}:start-action` | 写 | 2.6 | alerts·manage | 动作执行 | N | N | N | — |
+| 93 | ontology | POST | `/api/ontology/v1/alerts/{id}:transfer` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
+| 94 | ontology | POST | `/api/ontology/v1/alerts:batch-claim` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
+| 95 | ontology | POST | `/api/ontology/v1/alerts:batch-close` | 写 | 2.6 | alerts·manage | — | N | N | N | — |
+| 96 | ontology | GET | `/api/ontology/v1/change-requests` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `CHANGE_REQUESTS`（只用这一份；`releases.ts` `DRAFTS` 不导入） |
+| 97 | ontology | POST | `/api/ontology/v1/change-requests` | 写 | 3.4、3.16 | ontology-overview/releases·manage | — | N | N | N | — |
+| 98 | ontology | DELETE | `/api/ontology/v1/change-requests/{id}` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 99 | ontology | GET | `/api/ontology/v1/change-requests/{id}` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `CR_DETAILS`、`crDetail`、`reviewLog` |
+| 100 | ontology | GET | `/api/ontology/v1/change-requests/{id}/diffs` | 读 | 3.15 | releases·view | 元数据读取 | Y | Y | N | `changes.ts` `crDetail` |
+| 101 | ontology | PUT | `/api/ontology/v1/change-requests/{id}/items` | 写 | 3.7、3.12、3.13、3.16 | action-types/event-types/rules/releases·manage | — | N | N | N | — |
+| 102 | ontology | POST | `/api/ontology/v1/change-requests/{id}/targets` | 写 | 3.16 | releases·manage | — | N | N | N | — |
+| 103 | ontology | DELETE | `/api/ontology/v1/change-requests/{id}/targets/{kind}/{targetId}` | 写 | 3.16 | releases·manage | — | N | N | N | — |
+| 104 | ontology | POST | `/api/ontology/v1/change-requests/{id}:approve` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 105 | ontology | POST | `/api/ontology/v1/change-requests/{id}:reject` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 106 | ontology | POST | `/api/ontology/v1/change-requests/{id}:reopen` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 107 | ontology | POST | `/api/ontology/v1/change-requests/{id}:submit` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 108 | ontology | POST | `/api/ontology/v1/change-requests/{id}:unapprove` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 109 | ontology | POST | `/api/ontology/v1/change-requests/{id}:validate` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 110 | ontology | POST | `/api/ontology/v1/change-requests/{id}:withdraw` | 写 | 3.15 | releases·manage | — | N | N | N | — |
+| 111 | ontology | GET | `/api/ontology/v1/dimensions` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS` |
+| 112 | ontology | GET | `/api/ontology/v1/dimensions/{id}` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS` |
+| 113 | ontology | GET | `/api/ontology/v1/dimensions/{id}/history` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS`（history） |
+| 114 | ontology | GET | `/api/ontology/v1/dimensions/{id}/mappings` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS`（mappings） |
+| 115 | ontology | GET | `/api/ontology/v1/dimensions/{id}/usage` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `metricUsage` |
+| 116 | ontology | GET | `/api/ontology/v1/dimensions/{id}/values` | 读 | 3.10 | dimensions·view | 元数据读取 | Y | Y | N | `dimensions.ts` `DIM_ITEMS`（values） |
+| 117 | ontology | POST | `/api/ontology/v1/dimensions:match` | 不落库 | 3.10 | dimensions·view | — | Y | Y | N | — （计算接口，读已导入的数据） |
+| 118 | ontology | GET | `/api/ontology/v1/event-deliveries` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | 由 `eventsOf()` 的 `outcome`/`subscribers` 推出来【推断】 |
+| 119 | ontology | GET | `/api/ontology/v1/event-types` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `EVENT_TYPES`（15）、`EVENT_SOURCES` |
+| 120 | ontology | GET | `/api/ontology/v1/event-types/{id}` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `EVENT_TYPES` |
+| 121 | ontology | GET | `/api/ontology/v1/event-types/{id}/events` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventsOf()`（`EVENTS` 1243） |
+| 122 | ontology | GET | `/api/ontology/v1/event-types/{id}/payload-fields` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ENVELOPE`（10）+ `EventType.specific` |
+| 123 | ontology | GET | `/api/ontology/v1/event-types/{id}/stats` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventDaily()`、`EventType.weekly`；健康指标按 `eventsOf()` 计算 |
+| 124 | ontology | GET | `/api/ontology/v1/event-types/{id}/subscribers` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `subscribersOf()`（37） |
+| 125 | ontology | GET | `/api/ontology/v1/event-types/{id}/versions` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `versionsOf()`、`EVENT_VERSION_NOTES` |
+| 126 | ontology | POST | `/api/ontology/v1/event-types/{id}:simulate` | 写 | 3.12 | event-types·manage | — | N | N | N | — |
+| 127 | ontology | GET | `/api/ontology/v1/events/{id}` | 读 | 3.12 | event-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `eventById()`；`actionEventResolvers.ts` `event()` |
 | 128 | ontology | GET | `/api/ontology/v1/functions` | 读 | 3.8 | functions·view | 元数据读取 | Y | Y | N | `functions.ts` `FUNCTIONS`、`FN_PENDING` |
 | 129 | ontology | POST | `/api/ontology/v1/functions` | 写 | 3.8 | functions·manage | — | N | N | N | — |
 | 130 | ontology | GET | `/api/ontology/v1/functions/{id}` | 读 | 3.8 | functions·view | 元数据读取 | Y | Y | N | `functions.ts` `FUNCTIONS`、`fnSignature` |
@@ -1248,7 +1253,7 @@
 | 168 | ontology | GET | `/api/ontology/v1/ontology/graph` | 读 | 3.4 | ontology-overview·view | 元数据读取 | Y | Y | N | `links.ts` `LINK_OBJECTS`、`LINKS` |
 | 169 | ontology | GET | `/api/ontology/v1/ontology/overview` | 读 | 3.4 | ontology-overview·view | 元数据读取 | Y | Y | N | 由各本体表统计（Overview.vue），不单独导入 |
 | 170 | ontology | GET | `/api/ontology/v1/ontology/todos` | 读 | 3.4 | ontology-overview·view | 元数据读取 | Y | Y | N | `changes.ts` `CHANGE_REQUESTS` + `dynamic.ts` `ALERTS` 等统计【推断】 |
-| 171 | ontology | GET | `/api/ontology/v1/people` | 读 | 2.6 | alerts·view | 元数据读取 | Y | Y | N | `Alerts.vue` `PEOPLE`（不在 src/mock 下）→ 用户表 `admin.ts` `ADMIN_USERS` |
+| 171 | ontology | GET | `/api/ontology/v1/people` | 读 | 2.6 | alerts·view | 元数据读取 | Y | Y | N | `Alerts.vue` `PEOPLE` → `sys_user`（`alert_assignable=true`） |
 | 172 | ontology | GET | `/api/ontology/v1/releases` | 读 | 1.11、3.4 | ontology-overview·view | 元数据读取 | Y | Y | N | `releases.ts` `RELEASES` |
 | 173 | ontology | POST | `/api/ontology/v1/releases` | 写 | 3.15 | releases·manage | — | N | N | N | — |
 | 174 | ontology | POST | `/api/ontology/v1/releases/{ver}:rollback` | 写 | 3.15 | releases·manage | — | N | N | N | — |
@@ -1325,12 +1330,12 @@
 | 245 | qa | GET | `/api/qa/v1/tuning/plan-options` | 读 | 3.14 | qa-tuning·view | — | Y | Y | N | `qa-tuning.ts` `T_METRICS`；`DIMS`、`TIMES` 现在写在 `QaTuning.vue` 里 |
 | 246 | qa | GET | `/api/qa/v1/tuning/summary` | 读 | 3.14 | qa-tuning·view | — | Y | Y | N | 由下面几组数据统计出来 |
 | 247 | qa | GET | `/api/qa/v1/tuning/synonyms` | 读 | 3.14 | qa-tuning·view | — | Y | Y | N | `pages/ontology/qa-tuning/state.ts` `tuning.synonyms`（2 条，**不在 src/mock 下**） |
-| 248 | qa | POST | `/api/qa/v1/turns/{tid}/cancel` | 写 | 2.2 | qa-workbench·manage | 问数查询 | N | N | N | — |
-| 249 | qa | GET | `/api/qa/v1/turns/{tid}/export` | 读 | 2.2 | qa-workbench·view | 数据导出 | Y | N | Y | — |
-| 250 | qa | POST | `/api/qa/v1/turns/{tid}/recalc` | 写 | 2.2 | qa-workbench·manage | 问数查询 | N | N | N | — |
-| 251 | qa | GET | `/api/qa/v1/turns/{tid}/result` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_EC_STORES`（38） |
-| 252 | qa | GET | `/api/qa/v1/turns/{tid}/stream` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | — |
-| 253 | qa | PUT | `/api/qa/v1/turns/{tid}/vote` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
+| 248 | qa | GET | `/api/qa/v1/turns/{tid}/export` | 读 | 2.2 | qa-workbench·view | 数据导出 | Y | N | Y | — |
+| 249 | qa | POST | `/api/qa/v1/turns/{tid}/recalc` | 写 | 2.2 | qa-workbench·manage | 问数查询 | N | N | N | — |
+| 250 | qa | GET | `/api/qa/v1/turns/{tid}/result` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_EC_STORES`（38） |
+| 251 | qa | GET | `/api/qa/v1/turns/{tid}/stream` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | — |
+| 252 | qa | PUT | `/api/qa/v1/turns/{tid}/vote` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
+| 253 | qa | POST | `/api/qa/v1/turns/{tid}:cancel` | 写 | 2.2 | qa-workbench·manage | 问数查询 | N | N | N | — |
 
 ---
 
@@ -1352,7 +1357,7 @@
 ### 8.2 【待定】（还没定）
 
 1. 登录方式（SSO / 账号密码 / MFA）；二期多租户的隔离方式（§1.1、§1.4）。
-2. 会员行级范围“常去门店所属大区”要跨一跳关系：做成派生属性还是查询时展开（§4.4）。
+2. 【推断】会员行级范围“常去门店所属大区”按一跳 `EXISTS` 展开，前提是会员—常去门店关系已声明并在白名单里（§4.4）。
 3. 预览时能不能提问：工作台和对象页要统一（§5.4-5）。
 4. 按天统计（`runDaily`/`eventDaily`）保留 mock 原样还是从明细重算（§5.3-5）。
 5. 问数回答状态 `answer.status` 的取值：前端还没有定义（§2.2）。
@@ -1373,4 +1378,6 @@
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- 按团队决定：`/ext-systems*`、`/ext-calls*` 改到 `/api/data/v1`（外部系统归 data 模块，代码仍在 Palantir 的 integration 目录）；动作类型、事件类型、`/action-runs*`、对账仍在 `/api/ontology/v1`。§1、§3.2、§3.7、§7 已同步，§7 计数随之变化。
+- 记录已定事项：动作路径一律冒号写法（`/turns/{tid}/cancel` 改为 `:cancel`）；定义表展开在发布事务里同步执行；版本种子调用静态的 `seed_snapshot(ver)`、静态种子排最前、不写空 `{}` 快照；每版一份快照，按 section 归属模块（含 `actionTypes`、`eventTypes`、`rules`，以及动态组装的 `lifecycles`，静态 `objectTypes` 不含生命周期），按前端 id 分键，不含运行数据，`create_version` 注册各 section 的组装函数；`PEOPLE` 导入 `sys_user` 并标 `alert_assignable`，`GET /people` 按 mock 顺序返回；行级范围 `to_sql` 一期只支持白名单内已声明关系的一跳 `EXISTS`（参数绑定），多跳或未声明的拒绝，会员“常去门店所属大区”仍为【推断】。
 - 按本体小白的评审：§7 加权限策略列，不落库的 POST 单独标出；API 密钥数据范围存 `RowScope[]` + `metadataOnly`；执行记录只有一个接口（归动态），`writeback_call` / `ext_system` 归 Palantir，新增 §1.1 表归属和 `biz` 模块；一期单租户、`X-Demo-As`、单预览会话、测试连接走 mock 适配器、函数不进快照、新增 7 个 procrastinate 任务、`/object-views` 并入 qa。
