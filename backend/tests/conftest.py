@@ -27,6 +27,11 @@ from app.core.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
 
+# 在 autouse 的 _isolated_sections 之前导入 app：create_app() 会调 load_sections() 登记真实 builder。
+# 若首次导入发生在某个测试的 client fixture 里（隔离注册表内），真实 objectTypes 会占位，
+# 随后 sections fixture 登记 FakeObjectTypesSection 就报「已经登记过」（单独跑某个测试文件时复现）。
+import app.main  # noqa: E402, F401
+
 
 async def _ensure_db() -> None:
     admin = make_url(BASE_URL).set(drivername="postgresql")

@@ -139,6 +139,8 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
 ## 7. 本体版本（整版本、只追加）
 
+对外接口、前端对应关系、谁负责发布/回滚接口：见仓库根目录 `docs/backend/versioning-api.md`。测试注意：`tests/conftest.py` 在模块级 `import app.main`，让 `load_sections()` 在 autouse 隔离之前跑完，避免单独跑某个文件时报「section 已经登记过」。
+
 接口定义在 `app/contracts/versioning.py`，参考实现是 `app/modules/versioning/service.py`。
 
 - **唯一入口** `create_version(session, change_order_ids, *, rollback_of=None, published_by, note)`：
