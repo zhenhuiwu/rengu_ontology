@@ -41,7 +41,7 @@ watch([source, kw], () => { lpage.value = 1; });
 const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
 const cur = computed<EventType>(() => EVENT_TYPES.find((e) => e.id === route.query.event) ?? EVENT_TYPES[0]);
 const RESET = { view: undefined, fpage: undefined, fsize: undefined, cursor: undefined };
-const statusColor = (s: EventType['status']) => (s === '已发布' ? 'success' : s === '变更中' ? 'warning' : 'default');
+const statusColor = (s: EventType['status']) => (s === '变更中' ? 'warning' : 'default');
 
 const TABS = ['overview', 'payload', 'subs', 'recent', 'versions'];
 const tab = computed({
@@ -196,7 +196,7 @@ const verCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="openChange('新建事件类型')">新建事件类型</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange('新建事件类型')">新建事件类型</a-button></a-tooltip>
   </Teleport>
 
   <div class="et">
@@ -236,7 +236,7 @@ const verCols = [
           @change="(v: any) => onView(v)" />
         <span class="et-sp" />
         <a-button :disabled="cur.status === '草稿'" @click="simulate">模拟触发</a-button>
-        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
