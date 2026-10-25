@@ -474,6 +474,75 @@ async def test_demo_as_header_over_http(client, users):
         app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", "") != "/__test/me"]
 
 
+async def test_prod_ignores_demo_as(client, users, monkeypatch):
+    """prod 不认 X-Demo-As / RENGU_DEV_USER：传管理员编号也是 401（真实鉴权接入前一律拒绝）。"""
+    from app.common.auth import CurrentUserDep, get_current_user
+    from app.core.config import get_settings
+    from app.core.errors import Unauthorized
+    from app.main import app
+
+    @app.get("/__test/me")
+    async def me(user: CurrentUserDep) -> dict:
+        return {"id": user.id}
+
+    monkeypatch.setenv("RENGU_ENV", "prod")
+    get_settings.cache_clear()
+    try:
+        assert get_settings().env == "prod"
+        with pytest.raises(Unauthorized):
+            await get_current_user(users, x_demo_as="U010001")
+        for h in ({"X-Demo-As": "U010001"}, {}):
+            r = await client.get("/__test/me", headers=h)
+            assert (r.status_code, r.json()["code"]) == (401, "UNAUTHORIZED")
+    finally:
+        monkeypatch.setenv("RENGU_ENV", "test")
+        get_settings.cache_clear()
+        app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", "") != "/__test/me"]
+    assert get_settings().env == "test"
+
+
+async def test_seed_personas_and_unique_names(users, session, monkeypatch):
+    """SYS_USERS 补的演示人物；seed 的 sys_user 姓名必须唯一（动态按姓名比较「本人」），重名整批不写。"""
+    import dataclasses
+
+    from sqlalchemy import func, update
+
+    from app.common.auth import get_current_user
+    from app.modules.admin import seeds as admin_seeds
+    from app.modules.admin.models import SysUser
+    from app.seeds.loader import module_checks, run_seeds
+
+    for code, name in (("U010005", "孙浩然"), ("U010006", "李娜"), ("U010007", "赵蕾"), ("U010008", "吴佳")):
+        u = await get_current_user(users, x_demo_as=code)
+        assert (u.name, u.is_ontology_admin) == (name, False)
+    # alert_assignable 不由 admin seed 写（动态的 seed 按姓名回填）
+    assert await users.scalar(select(func.count()).where(SysUser.alert_assignable.is_not(None))) == 0
+    names = (await users.execute(select(SysUser.name))).scalars().all()
+    assert len(names) == len(set(names))
+
+    assert admin_seeds.check_unique_names in module_checks("admin")
+    admin_seeds.check_unique_names({"sys_user": [{"code": "A", "name": "甲"}, {"code": "B", "name": "乙"}]})
+    with pytest.raises(ValueError, match="姓名重复"):
+        admin_seeds.check_unique_names(
+            {"sys_user": [{"code": "A", "name": "甲"}, {"code": "B", "name": "甲"}]}
+        )
+
+    # 端到端：SYS_USERS 里把赵蕾改名成王敏 → run_seeds 抛错，一行都不写
+    def dup(r, ctx):
+        row = admin_seeds._user(r, ctx)
+        return {**row, "name": "王敏"} if row["code"] == "U010007" else row
+
+    specs = [
+        dataclasses.replace(s, transform=dup) if s.file == "SYS_USERS.json" else s for s in admin_seeds.SEEDS
+    ]
+    monkeypatch.setattr(admin_seeds, "SEEDS", specs)
+    await session.execute(update(SysUser).where(SysUser.code == "U010001").values(dept="x"))
+    with pytest.raises(ValueError, match="王敏"):
+        await run_seeds(session, ["admin"])
+    assert await session.scalar(select(SysUser.name).where(SysUser.code == "U010007")) == "赵蕾"
+    assert await session.scalar(select(SysUser.dept).where(SysUser.code == "U010001")) == "x"  # 没被覆盖
+
+
 async def test_one_preview_session_per_user():
     from app.contracts.preview import InMemoryPreviewSessions, PreviewSessions
 

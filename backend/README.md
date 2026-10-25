@@ -21,6 +21,16 @@ make check     # 提交前必跑：ruff 检查 + 格式检查 + alembic check + 
 - 示例接口：`GET /api/ontology/v1/releases`、`/releases/current`、`/releases/{ver}`、`/releases/{ver}/snapshot`；演示业务数据 `GET /api/biz/v1/orders`、`/orders/{id}`。
 - 升级到迁移 0002 前库里不能有版本行（published_by 改成外键），已有库请 `make db-reset`。
 - 演示身份：请求头 `X-Demo-As: U010001`（sys_user 编号；王敏=管理员，U010006 李娜=非管理员），只在 dev/test 生效。
+- 演示人物（`seeds/extra/system/SYS_USERS.json`）：
+
+  | 编号 | 姓名 | 角色 | 来源 |
+  |---|---|---|---|
+  | U010001 | 王敏 | 本体管理员 | mock 审计日志 |
+  | U010002 / U010003 / U010004 | 陈立军 / 何静 / 刘婷 | 非管理员 | mock 审计日志 |
+  | U010005 / U010006 | 孙浩然 / 李娜 | 非管理员 | [推断]，PDE 已确认 |
+  | U010007 / U010008 | 赵蕾 / 吴佳 | 非管理员 | [推断] |
+
+  seed 的 sys_user 姓名必须唯一（动态按姓名比较「本人」，重名 seed 报错）；`sys_user.alert_assignable`（1..7 = 动态 PEOPLE 顺序，null = 不可指派）由动态的 seed 按姓名回填，admin seed 不写。
 - 时钟：dev/test 环境固定在 `2026-10-25T15:42:00+08:00`（`RENGU_FIXED_NOW`）；prod 用真实时间。
 - 测试使用独立的 `rengu_test` 库，测试会自动建库和迁移。每个用例在事务里运行，跑完回滚。
 - 也可以用容器跑 API：`docker compose -p rengu-backend --profile api up`。

@@ -149,7 +149,7 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
   - 只能回滚最近一次发布，否则 409 `ROLLBACK_NOT_LATEST`。
   - **不调用** section builder，快照原样复制被回滚版本的上一版（`changeSummary.restoredFrom`）；`kind=rollback`，`rollback_of_id` 指向被回滚的版本，接口返回 `rollbackOf` 版本号。
   - 回滚变更单号作为 `change_order_ids` 传入，供审计追溯。
-  - **定义表也要回去**：同一事务里对每个登记的 builder 调可选钩子 `restore_section(session, content)`（content = 被恢复版本这一节的快照），由模块把自己的定义表（如动态 `rule` 当前版本、`lifecycle.version`）恢复成那一版；不实现钩子的段只回快照。
+  - **定义表也要回去**：同一事务里对每个登记的 builder 调可选钩子 `restore_section(session, content)`（content = 被恢复版本这一节的快照），由模块把自己的定义表（如动态 `rule` 当前版本、`lifecycle.version`）恢复成那一版；不实现钩子的段只回快照。被恢复版本没有这一节（content 为 None）时**不调用**钩子、定义表不动（静态裁定，和动态一致）【推断】；空内容 `{}` 照样调用。
 - **只追加，不改不删**：见 §6 的只追加触发器。
 - `GET /releases` 不分页、登录即可调：`{items, current}`（前端版本选择器要全量）。
 - `?ver=vX`：只读读取历史快照，`ViewContextDep` 负责解析。只读由**全局守卫**负责（§13），模块不用自己挂依赖。
@@ -219,7 +219,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 
 | # | 阶段 | 负责模块 | 写哪些表 / 为什么在这里 |
 |---|---|---|---|
-| 1 | `admin` | admin（PDE） | sys_user 等；其它模块的人名（发布人、处理人）外键指向 sys_user。目前的 `sys_user` 是基础层放的**最小占位**（code/name/account/dept/status/last_login_at），PDE 补全；seed 里只有人名时用 `admin.seeds.code_by_name` 换成编号 |
+| 1 | `admin` | admin（PDE） | sys_user 等；其它模块的人名（发布人、处理人）外键指向 sys_user。目前的 `sys_user` 是基础层放的**最小占位**（code/name/account/dept/status/last_login_at），PDE 补全；seed 里只有人名时用 `admin.seeds.code_by_name` 换成编号。演示人物（`extra/system/SYS_USERS.json`）：王敏 U010001（管理员）、陈立军 U010002、何静 U010003、刘婷 U010004（编号照抄 mock 审计日志）；孙浩然 U010005、李娜 U010006（PDE 已确认，仍标 [推断]）；赵蕾 U010007、吴佳 U010008（[推断]，非管理员）。**seed 的 sys_user.name 必须唯一**（动态按姓名比较「本人」）：`admin.seeds.CHECKS` 在写库前校验 ADMIN_USERS + SYS_USERS，重名整批报错（loader 支持模块包里的可选 `CHECKS`）。`sys_user.alert_assignable smallint NULL`：告警可指派的人在动态 PEOPLE 列表里的顺序 1..7，null = 不可指派；**admin seed 不写**，由动态的 seed 按姓名回填 |
 | 2 | `data` | data | 数据源 |
 | 3 | `integration` | integration（Palantir） | **只写 ext_system**（动作、数据源引用外部系统） |
 | 4 | `biz` | biz | store / product / biz_order / order_line（不建 member、store_sales）。订单号在 mock 里有重复（2 组），`biz_order.code` 只对非 seed 行唯一，seed 键 = (code, created_at_biz)；详情按 id 取第一行 |
@@ -276,10 +276,17 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
   - `assert_single_select(sql)`：sqlglot 解析，只放行单条只读 SELECT（拒多语句、DDL/DML、CTE 里的写、`SELECT INTO`、`FOR UPDATE`、用户 SQL 里的绑定占位符），不合规返回 403 `SQL_REJECTED`。
     - **函数白名单**（聚合、窗口、日期、字符串、数学、条件、类型转换），其它一律拒绝（`query_to_xml`、`pg_stat_file`、`current_setting`、`set_config`、`pg_advisory_lock`、`pg_sleep`、`dblink`、`lo_*` 等）。
     - **只允许 public schema**（`pg_catalog.*`、`information_schema.*`、跨库三段名都拒绝）。
+    - **带 schema 的函数调用一律拒绝**（`pg_catalog.lower(x)`、`public.age(x)`，白名单函数也不行）。
+    - **类型转换白名单**（`::`、`CAST`、`TRY_CAST` 同一套）：只允许数值（smallint/int/bigint/numeric/decimal/real/double）、文本（text/varchar/char）、日期时间（date/time/timetz/timestamp/timestamptz/interval）、布尔；`regclass`/`oid`/`regproc`/`regtype` 等对象标识类型、带 schema 的类型、自定义类型、json/bytea、数组一律拒绝。
+    - 拒绝 `TABLESAMPLE`。
   - `inject_row_filters(sql, {表: (谓词 sql, params) | None}, allowed) -> (sql, params)`：受控表替换成 `(SELECT * FROM public.t WHERE 谓词) AS t`。
+    - 不过滤的受控表（谓词 None）和 `allowed` 里的表也改写成 `public.<表>`，不依赖 search_path。
     - 按 sqlglot **作用域**判断：只跳过确实解析到 CTE 的引用；`with store as (select * from store) …` 里内层 store 照样过滤。谓词里的表固定成 `public.<表>`，用户同名 CTE 劫持不了。
     - 谓词值走 **`$1..$n` 绑定参数**，多表合并后重新编号，执行用 `conn.exec_driver_sql(sql, tuple(params))`；`DENY = ("FALSE", [])`；未登记的表一律拒绝。
-    - 受控表由模块 `register_governed(GovernedTable(...))` 登记（biz：store 的「大区」→ `big_region`；biz_order 经一跳 `order_belongs_to_store.big_region` 编成 EXISTS）。`row_filters_for(user)` = `auth.row_filter` + `compile_predicate`；`run_guarded(conn, sql, user)` = 校验 + 注入 + 执行。
+    - 受控表由模块 `register_governed(GovernedTable(...))` 登记（biz：store 的「大区」→ `big_region`；biz_order 经一跳 `order_belongs_to_store.big_region` 编成 EXISTS）。
+    - **继承上级权限**：`GovernedTable(..., inherit=InheritVia(local, parent, parent_key))`。biz 的 `order_line` 经 `order_id → biz_order` 继承订单谓词：`EXISTS (SELECT 1 FROM public.biz_order AS _rf_biz_order WHERE _rf_biz_order.id = order_line.order_id AND <订单谓词>)`，订单谓词再一跳到 store（实际两跳）。行级表达式按上级的对象类型取（order_line → `order`）。注入用的别名统一 `_rf_` 前缀，只在注入的子查询内部可见，和用户别名不冲突。
+    - **维度表显式放行**：`register_unrestricted("product")`，`run_guarded` 自动并进 `allowed`；同一张表不能既受控又放行。没登记的表照样拒绝。
+    - **大区取值**：`store.big_region` 存「华东/华南/…」（行级范围的取值，`roles.ts:25/27`），谓词按 `big_region = 用户范围值` 比较；维度里的「华东大区」由 semantic-map 同义词映射成 `big_region='华东'`（静态裁定）。`row_filters_for(user)` = `auth.row_filter` + `compile_predicate`；`run_guarded(conn, sql, user)` = 校验 + 注入 + 执行。
   - 执行只用只读引擎 `get_qa_readonly_engine()`（`RENGU_QA_READONLY_DATABASE_URL`，连接参数设 `default_transaction_read_only=on`、`statement_timeout=RENGU_QA_STATEMENT_TIMEOUT_MS`，库账号也应只授权业务表）；没配置抛 `QaReadonlyNotConfigured`，不回退到主库账号。
   - 身份只取 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；dev/test 的 `X-Demo-As`（值 = sys_user.code）是会话桩，prod 忽略。
 
@@ -288,7 +295,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 | 主题 | 约定 | 落点 |
 |---|---|---|
 | 租户 | 一期单租户：接受 `X-Tenant-Id`，放进 `CurrentUser.tenant_id`，只透传，不过滤；**表里不加 tenant_id 列** | `app/common/auth.py` |
-| 开发身份 | 演示身份请求头 `X-Demo-As: <sys_user.code>`（默认 `RENGU_DEV_USER=U010001` 王敏，本体管理员；`U010006` 李娜为非管理员），按 `sys_user.code` 解析 CurrentUser，编号不存在或停用 → 401；请求头只能是 ASCII，所以传编号不传姓名。管理员名单 `RENGU_DEMO_ADMIN_CODES`（桩）。**只在 dev/test 环境生效**；prod 忽略该头 | `app/common/auth.py` |
+| 开发身份 | 演示身份请求头 `X-Demo-As: <sys_user.code>`（默认 `RENGU_DEV_USER=U010001` 王敏，本体管理员；`U010006` 李娜为非管理员；演示人物编号见 §9 admin 行），按 `sys_user.code` 解析 CurrentUser，编号不存在或停用 → 401；请求头只能是 ASCII，所以传编号不传姓名。管理员名单 `RENGU_DEMO_ADMIN_CODES`（桩）。**只在 dev/test 环境生效**；prod 忽略该头 | `app/common/auth.py` |
 | 预览 | **每个用户同一时间只有一个预览会话**：开始新的预览会替换旧的，不报错；`?previewAs=` 下只读 | `app/contracts/preview.py`（Protocol + dev 内存实现） |
 | 测试连接 | 数据连接和外部系统的“测试连接”接口在 dev/test 环境用 mock 适配器（`mockFail: true` 模拟失败）；prod 由负责人接入真实实现 | `app/modules/data/adapters.py` |
 | 外部调用 | 表名沿用 `writeback_call`、`ext_system`，归 integration 模块（Palantir专家）；不建 `ext_call` | `app/modules/integration/` |
@@ -347,6 +354,9 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 - `EMPTY_RELEASE`：没有变更单时不允许发布。
 - `ontology_release.kind`（发布/回滚）、`rollbackOf` 字段：前端只展示文案，这两个字段是后台加的。
 - 行级过滤中，缺少用户属性时结果为 false（宁严勿宽）。
+- 商品品类权限范围：`roles.ts` 的 `商品.品类` 取值是一级品类（生鲜、乳品烘焙…），`product.category` 存的是品类路径（生鲜/水果），一期 product 登记为不限制、不按品类过滤；以后要按品类控权限，按路径第一段比较（`split_part(category, '/', 1)`）还是加一级品类列，待定；而且一级名也对不上（seed 里是「乳品 / 休闲食品 / 日化家清」，范围取值是「乳品烘焙 / 休闲零食 / 日化清洁」），需要静态给映射。
+- 演示人物编号：孙浩然 U010005、李娜 U010006（PDE 已确认）、赵蕾 U010007、吴佳 U010008，mock 里都没有编号，后端补。
+- 整版回滚时被恢复版本没有某一节（content 为 None）：不调用该节的 `restore_section`，定义表不动（静态裁定，和动态一致）。
 
 ## 15. 待 PDE 定的事项
 

@@ -5,7 +5,9 @@
   （演示身份王敏 admin / 李娜 viewer、版本发布人）。
   - 编号能在 mock 审计日志里找到的照抄：王敏 U010001、陈立军 U010002、何静 U010003、刘婷 U010004；
   - 孙浩然、李娜 mock 里没有编号，[推断] 补 U010005、U010006
-    （ontology_release.published_by_id、X-Demo-As 要用）。
+    （ontology_release.published_by_id、X-Demo-As 要用）；
+  - 赵蕾 U010007、吴佳 U010008：[推断] 非管理员演示人物，mock 里没有编号。
+- 写库前 CHECKS 校验 seed 里的 sys_user.name 不重名（动态按姓名比较「本人」），重名直接报错。
 
 `code_by_name(name)`：别的模块 seed 里 mock 只写了人名时（如 RELEASES.by），换成用户编号（重名报错）。
 """
@@ -54,6 +56,18 @@ def code_by_name(name: str) -> str:
         )
     return codes[0]
 
+
+def check_unique_names(by_table: dict[str, list[Row]]) -> None:
+    """seed 的 sys_user 姓名必须唯一（ADMIN_USERS + SYS_USERS 合起来看）：动态按姓名比较「本人」。"""
+    seen: dict[str, list[str]] = {}
+    for r in by_table.get(SysUser.__tablename__, []):
+        seen.setdefault(r["name"], []).append(r["code"])
+    dup = {n: c for n, c in seen.items() if len(c) > 1}
+    if dup:
+        raise ValueError(f"seed 里 sys_user 姓名重复：{dup}（动态按姓名比较「本人」，姓名必须唯一）")
+
+
+CHECKS = [check_unique_names]
 
 SEEDS: list[SeedSpec] = [
     SeedSpec(SysUser, "ADMIN_USERS.json", key=("code",), transform=_user, description="用户"),

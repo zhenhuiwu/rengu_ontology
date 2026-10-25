@@ -219,14 +219,33 @@ async def test_rollback_calls_restore_section_hooks(seeded):
 
     register_section(Hooked())
     try:
-        svc = VersioningService(FakeStaticProvider())
+
+        class WithRules(FakeStaticProvider):
+            async def build_snapshot(self, session, base_ver, change_order_ids):
+                snap = await super().build_snapshot(session, base_ver, change_order_ids)
+                return snap | {"rules": {"R-007": {"version": 9}}}
+
+        svc = VersioningService(WithRules())
         now = datetime(2026, 10, 25, 12, tzinfo=UTC)
         v4 = await svc.create_version(seeded, ["CR-0011"], published_by="U010001", note="", now=now)
+        v5 = await svc.create_version(seeded, ["CR-0012"], published_by="U010001", note="", now=now)
         await svc.create_version(
-            seeded, ["CR-0015"], rollback_of=v4, published_by="U010001", note="", now=now
+            seeded, ["CR-0015"], rollback_of=v5, published_by="U010001", note="", now=now
         )
-        prev = await svc.get_snapshot(seeded, "v2026.10.3")
-        assert restored == [prev.get("rules")]
+        prev = await svc.get_snapshot(seeded, v4)
+        assert prev["rules"] == {"R-007": {"version": 9}}
+        assert restored == [prev["rules"]]
+        # 回滚到没有 rules 这一节的版本（v2026.10.3 的 rules 为空）→ 不调钩子（静态裁定）
+        restored.clear()
+        assert (await svc.get_snapshot(seeded, "v2026.10.3")).get("rules") is None
+        plain = VersioningService(FakeStaticProvider())
+        v7 = await plain.create_version(seeded, ["CR-0013"], published_by="U010001", note="", now=now)
+        v8 = await plain.create_version(seeded, ["CR-0014"], published_by="U010001", note="", now=now)
+        assert (await plain.get_snapshot(seeded, v7)).get("rules") is None
+        await plain.create_version(
+            seeded, ["CR-0016"], rollback_of=v8, published_by="U010001", note="", now=now
+        )
+        assert restored == []
     finally:
         unregister_section("rules")
 
@@ -308,3 +327,32 @@ async def test_latest_is_by_id_not_published_at(seeded):
         seeded, ["CR-0011"], published_by="U010001", note="", now=datetime(2020, 1, 1, tzinfo=UTC)
     )
     assert (await ReleaseRepo(seeded).latest()).ver == ver
+
+
+async def test_restore_section_skipped_when_content_none(seeded):
+    """静态裁定：被恢复版本没有这一节（None）→ 不调用钩子；空内容 {} 照样调用。"""
+    from app.modules.versioning.sections import register_section, restore_sections, unregister_section
+
+    calls = []
+
+    class Hooked:
+        def __init__(self, section):
+            self.section = section
+
+        async def build_section(self, session, base, change_order_ids):
+            return base
+
+        def seed_section(self, ver, ctx):
+            return {}
+
+        async def restore_section(self, session, content):
+            calls.append((self.section, content))
+
+    for name in ("qaPaths", "eventTypes", "lifecycles"):
+        register_section(Hooked(name))
+    try:
+        await restore_sections(seeded, {"qaPaths": None, "eventTypes": {}})  # lifecycles 缺失
+        assert calls == [("eventTypes", {})]
+    finally:
+        for name in ("qaPaths", "eventTypes", "lifecycles"):
+            unregister_section(name)

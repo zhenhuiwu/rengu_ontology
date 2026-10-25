@@ -1,5 +1,6 @@
 import importlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from app.seeds import (
     DERIVED_OWNER,
     EXPORT_GROUPS,
     Ref,
+    Row,
     SeedContext,
     SeedSpec,
     derived_rows,
@@ -45,6 +47,11 @@ def module_specs(module: str, json_root: Path | None = None) -> tuple[Path, list
     pkg = importlib.import_module(stage_package(module))
     root = json_root or get_settings().seeds_json_dir
     return root / module_group(module), list(getattr(pkg, "SEEDS", []))
+
+
+def module_checks(module: str) -> list[Callable[[dict[str, list[Row]]], None]]:
+    """模块 seed 包里可选的 `CHECKS`：写库前对本模块所有行（表名 → 行）做整体校验，不通过就抛错。"""
+    return list(getattr(importlib.import_module(stage_package(module)), "CHECKS", []))
 
 
 def spec_group(module: str, spec: SeedSpec) -> str:
@@ -136,7 +143,8 @@ async def run_seeds(
         s = get_settings()
         roots = {"json": json_root or s.seeds_json_dir, "extra": extra_root or s.seeds_extra_dir}
         ctxs: dict[tuple[str, str], SeedContext] = {}
-        # 先 json/（前端 mock 导出），再 extra/（后端补充）
+        loaded: list[tuple[SeedSpec, str, list[Row]]] = []
+        # 先 json/（前端 mock 导出），再 extra/（后端补充）；全部读完、跑完模块的 CHECKS 再写库
         for spec in sorted(specs, key=lambda x: x.source != "json"):
             group = spec_group(module, spec)
             ctx = ctxs.setdefault(
@@ -145,7 +153,13 @@ async def run_seeds(
             if not (ctx.json_dir / spec.file).exists():
                 _log.warning("seed 文件缺失，跳过：%s（先跑 npm run export-mock）", ctx.json_dir / spec.file)
                 continue
-            rows = _load_rows(ctx, spec)
+            loaded.append((spec, group, _load_rows(ctx, spec)))
+        by_table: dict[str, list[Row]] = {}
+        for spec, _g, rows in loaded:
+            by_table.setdefault(spec.model.__table__.name, []).extend(rows)  # type: ignore[attr-defined]
+        for check in module_checks(module):
+            check(by_table)  # 不通过直接抛错（如 sys_user 姓名重复），整批不写
+        for spec, group, rows in loaded:
             if "is_seed" in spec.model.__table__.c:  # type: ignore[attr-defined]
                 rows = [{**r, "is_seed": True} for r in rows]
             n = await _upsert_resolving(session, adapter, spec, rows)

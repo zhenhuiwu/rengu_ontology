@@ -2,7 +2,9 @@
 
 1. `assert_single_select(sql)`：sqlglot 解析，只放行**单条只读 SELECT**。拒绝多语句、DDL/DML、
    `SELECT … INTO`、`FOR UPDATE/SHARE`、CTE 里夹带的 INSERT/UPDATE/DELETE、绑定参数占位符、
-   public 以外的 schema；函数走**白名单**（聚合、日期、字符串、数学、条件，见 `_ALLOWED_FUNCS`），
+   TABLESAMPLE、public 以外的 schema、带 schema 的函数调用（`x.age()`、`pg_catalog.lower()`）、
+   白名单以外的类型转换（只允许数值 / 文本 / 日期时间 / 布尔，拒 regclass、oid、自定义类型等）；
+   函数走**白名单**（聚合、日期、字符串、数学、条件，见 `_ALLOWED_FUNCS`），
    其它一律 SQL_REJECTED（query_to_xml、pg_stat_file、current_setting、pg_advisory_lock 等）。
    执行用只读引擎 `app.db.session.get_qa_readonly_engine()`（连接时设 statement_timeout 和
    default_transaction_read_only=on；未配置直接报错，不回退主库）。
@@ -13,9 +15,15 @@
      （`with store as (select * from store) select * from store` 里内层 store 会被过滤）；
    - 谓词 = `(sql, params)`，sql 里用 `$1..$n`（asyncpg / `exec_driver_sql` 的占位符），值走绑定参数，
      不拼进 SQL；多张表的参数合并后重新编号；谓词里的表都写成 `public.<表>`，不会被用户的同名 CTE 劫持；
-   - None = 不限制；`DENY` = `("FALSE", [])`；不在 filters 也不在 allowed 里的表一律拒绝。
+   - None = 不限制；`DENY` = `("FALSE", [])`；不在 filters 也不在 allowed 里的表一律拒绝；
+   - 不加过滤的表（谓词 None、allowed）也改写成 `public.<表>`，不依赖 search_path。
 
-受控表登记：模块启动时 `register_governed(GovernedTable(...))`（例如 biz 登记 store、biz_order）。
+受控表登记：模块启动时 `register_governed(GovernedTable(...))`（例如 biz 登记 store、biz_order、order_line）。
+- 继承上级行级权限：`GovernedTable(..., inherit=InheritVia(local, parent, parent_key))`，如 order_line 经
+  order_id → biz_order 继承订单的谓词：`EXISTS (SELECT 1 FROM public.biz_order AS _rf_biz_order
+  WHERE _rf_biz_order.id = order_line.order_id AND <biz_order 的谓词>)`（订单谓词本身再一跳到 store）。
+  别名 `_rf_` 前缀，只在注入的子查询内部可见，不会和用户的别名冲突。
+- 不需要行级的维度表要**显式**登记 `register_unrestricted("product")`；没登记的表一律拒绝（不是默认放行）。
 `row_filters_for(user)` 按 `auth.row_filter(user, object_type)` + `row_filter.to_sql` 编出各表谓词；
 `run_guarded(conn, sql, user)` = 校验 + 注入 + 执行。
 """
@@ -27,9 +35,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import sqlglot
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.dialects.postgresql import asyncpg as _pg_asyncpg
 from sqlalchemy.sql import ColumnElement, FromClause
+from sqlalchemy.sql.util import ClauseAdapter
 from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
@@ -54,7 +63,20 @@ _FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
     exp.Lock,
     exp.Placeholder,
     exp.Parameter,
+    exp.TableSample,  # 不静默丢掉 TABLESAMPLE，直接拒
 )
+
+# 类型转换白名单（::、CAST()、TRY_CAST 都检查）：数值、文本、日期时间、布尔。其它（regclass、oid、json、
+# bytea、数组、xml、带 schema 的自定义类型）一律 SQL_REJECTED。
+_T = exp.DataType.Type
+_ALLOWED_TYPES = frozenset(
+    {
+        _T.SMALLINT, _T.INT, _T.BIGINT, _T.DECIMAL, _T.FLOAT, _T.DOUBLE,
+        _T.TEXT, _T.VARCHAR, _T.CHAR, _T.BPCHAR,
+        _T.DATE, _T.TIME, _T.TIMETZ, _T.TIMESTAMP, _T.TIMESTAMPTZ, _T.INTERVAL,
+        _T.BOOLEAN,
+    }
+)  # fmt: skip
 
 # 函数白名单：sqlglot 的函数类名（同一函数的不同写法会归到同一个类，如 date_part → Extract）。
 _ALLOWED_FUNCS = frozenset(
@@ -96,6 +118,13 @@ def _func_allowed(node: exp.Func) -> bool:
     return type(node).__name__ in _ALLOWED_FUNCS
 
 
+def _type_allowed(dt: exp.DataType) -> bool:
+    if dt.this not in _ALLOWED_TYPES:
+        return False
+    # 只允许长度 / 精度参数（varchar(32)、numeric(10,2)）；不允许嵌套类型、带 schema 的名字
+    return all(isinstance(c, exp.DataTypeParam) for c in dt.iter_expressions())
+
+
 def _check_schema(table: exp.Table) -> None:
     if table.catalog or table.db.lower() not in ALLOWED_SCHEMAS:
         raise SqlRejected(f"只允许查询 public schema：{table.sql(dialect=DIALECT)}")
@@ -115,6 +144,15 @@ def assert_single_select(sql: str) -> exp.Expression:
     for node in tree.walk():
         if isinstance(node, _FORBIDDEN_NODES):
             raise SqlRejected(f"不允许 {node.key.upper()}")
+        if isinstance(node, exp.Dot) and isinstance(node.expression, exp.Func):
+            # x.age(now())、public.age(…)、pg_catalog.lower(…)：带 schema 的函数调用一律拒绝
+            raise SqlRejected(f"不允许带 schema 的函数调用：{node.sql(dialect=DIALECT)}")
+        if isinstance(node, exp.ObjectIdentifier) or (
+            isinstance(node, exp.DataType) and not _type_allowed(node)
+        ):  # regclass / oid / regproc / regtype 解析成 ObjectIdentifier
+            raise SqlRejected(
+                f"不允许转换成类型 {node.sql(dialect=DIALECT)}", details={"type": node.sql(dialect=DIALECT)}
+            )
         if isinstance(node, exp.Func) and not _func_allowed(node):
             name = node.name if isinstance(node, exp.Anonymous) else node.sql_name()
             raise SqlRejected(f"不允许调用 {name.lower()}", details={"function": name.lower()})
@@ -159,6 +197,11 @@ def _parse_predicate(pred: Predicate) -> exp.Expression:
     return node
 
 
+def _pin_public(table: exp.Table) -> None:
+    """不加过滤的表也写成 public.<表>，不依赖 search_path（search_path 被改也查不到别的 schema）。"""
+    table.set("db", exp.to_identifier("public"))
+
+
 def inject_row_filters(
     sql: str,
     filters: dict[str, Predicate | None],
@@ -175,6 +218,7 @@ def inject_row_filters(
         if name in filters:
             pred = filters[name]
             if pred is None:
+                _pin_public(table)
                 continue
             node = _parse_predicate(pred)
             _renumber(node, len(params), len(pred[1]))
@@ -182,12 +226,23 @@ def inject_row_filters(
             alias = table.alias_or_name
             sub = exp.select("*").from_(exp.to_table(f"public.{name}")).where(node)
             table.replace(exp.Subquery(this=sub, alias=exp.TableAlias(this=exp.to_identifier(alias))))
-        elif name not in allowed:
+        elif name in allowed:
+            _pin_public(table)
+        else:
             raise SqlRejected(f"不允许查询表 {name}", details={"table": name})
     return tree.sql(dialect=DIALECT), params
 
 
 # ---------------------------------------------------------------- 受控表登记
+
+
+@dataclass(frozen=True)
+class InheritVia:
+    """本表经外键继承上级受控表的行级权限：本表.local = 上级.parent_key。"""
+
+    local: ColumnElement
+    parent: GovernedTable
+    parent_key: ColumnElement
 
 
 @dataclass(frozen=True)
@@ -203,22 +258,43 @@ class GovernedTable:
     columns: dict[str, ColumnElement]
     links: dict[str, Any] = field(default_factory=dict)
     field_of_prop: dict[str, str] = field(default_factory=dict)
+    inherit: InheritVia | None = None  # 设了就不用自己的 columns/links，权限按上级的 object_type 取
 
     @property
     def name(self) -> str:
         return self.table.name  # type: ignore[attr-defined]
 
+    @property
+    def scope_object_type(self) -> str:
+        """取行级表达式用的对象类型：继承的表用上级的（order_line → order）。"""
+        return self.inherit.parent.scope_object_type if self.inherit else self.object_type
+
 
 _GOVERNED: dict[str, GovernedTable] = {}
+_UNRESTRICTED: set[str] = set()
 
 
 def register_governed(*tables: GovernedTable) -> None:
     for g in tables:
+        if g.name in _UNRESTRICTED:
+            raise ValueError(f"表 {g.name} 已登记为不限制，不能再登记为受控")
         _GOVERNED[g.name] = g
+
+
+def register_unrestricted(*names: str) -> None:
+    """显式登记不需要行级过滤的表（维度表，如 product）。"""
+    for n in names:
+        if n in _GOVERNED:
+            raise ValueError(f"表 {n} 已登记为受控，不能再登记为不限制")
+        _UNRESTRICTED.add(n)
 
 
 def governed_tables() -> dict[str, GovernedTable]:
     return dict(_GOVERNED)
+
+
+def unrestricted_tables() -> frozenset[str]:
+    return frozenset(_UNRESTRICTED)
 
 
 _PG = _pg_asyncpg.dialect()
@@ -226,13 +302,13 @@ _PG = _pg_asyncpg.dialect()
 
 def compile_predicate(g: GovernedTable, expr: dict | None, user_attrs: dict[str, Any]) -> Predicate | None:
     """行级表达式 → 谓词 (sql, params)，占位符 $n（和 exec_driver_sql 一致）。None = 不限制。"""
-    from app.common.row_filter import is_deny_all, to_sql
+    from app.common.row_filter import is_deny_all
 
     if expr is None:
         return None
     if is_deny_all(expr):
         return DENY
-    cond = to_sql(expr, g.columns, user_attrs, g.links)
+    cond = _condition(g, expr, user_attrs)
     compiled = (
         select(1)
         .select_from(g.table)
@@ -244,12 +320,28 @@ def compile_predicate(g: GovernedTable, expr: dict | None, user_attrs: dict[str,
     return where.sql(dialect=DIALECT), [compiled.params[n] for n in names]
 
 
+_ALIAS_PREFIX = "_rf_"
+
+
+def _condition(g: GovernedTable, expr: dict, user_attrs: dict[str, Any]) -> ColumnElement[bool]:
+    from app.common.row_filter import to_sql
+
+    via = g.inherit
+    if via is None:
+        return to_sql(expr, g.columns, user_attrs, g.links)
+    parent = via.parent
+    alias = parent.table.alias(_ALIAS_PREFIX + parent.name)
+    inner = ClauseAdapter(alias).traverse(_condition(parent, expr, user_attrs))
+    key = alias.c[via.parent_key.key]
+    return exists(select(1).select_from(alias).where(key == via.local, inner))
+
+
 async def row_filters_for(user: Any) -> dict[str, Predicate | None]:
     from app.common.auth import row_filter
 
     out: dict[str, Predicate | None] = {}
     for name, g in _GOVERNED.items():
-        out[name] = compile_predicate(g, await row_filter(user, g.object_type), user.attrs)
+        out[name] = compile_predicate(g, await row_filter(user, g.scope_object_type), user.attrs)
     return out
 
 
@@ -258,5 +350,5 @@ async def run_guarded(conn: Any, sql: str, user: Any, allowed: frozenset[str] = 
 
     conn = 只读引擎的 AsyncConnection（`get_qa_readonly_engine().connect()`）。
     """
-    final, params = inject_row_filters(sql, await row_filters_for(user), allowed)
+    final, params = inject_row_filters(sql, await row_filters_for(user), allowed | unrestricted_tables())
     return await conn.exec_driver_sql(final, tuple(params))

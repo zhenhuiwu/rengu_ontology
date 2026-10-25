@@ -4,14 +4,16 @@
 - 一跳关系取前端 mock links.ts:74 的 order_belongs_to_store（order.store_id = store.store_id）。
   静态模块把关系定义入库后，改成从当前版本快照读（link_paths_from_definitions 不变）；
 - 权限范围里的中文属性：大区 → store.big_region；订单经 order_belongs_to_store.big_region 一跳过滤；
-- order_line / product 没有登记：问数直接查 order_line 会被 sql_guard 拒绝（order_line → 门店要两跳）。
+- order_line 经 order_id → biz_order 继承订单的行级权限（InheritVia，复用订单那一跳，
+  实际是 order_line → biz_order → store 两跳；前端按订单所属大区控权限）；
+- product 是维度表，显式登记为不限制（register_unrestricted）。品类权限范围怎么落 [推断]，见 CONVENTIONS。
 """
 
 from app.common.row_filter import LinkPath, ObjectTable, link_paths_from_definitions
-from app.common.sql_guard import GovernedTable, register_governed
-from app.modules.biz.models import BizOrder, Store
+from app.common.sql_guard import GovernedTable, InheritVia, register_governed, register_unrestricted
+from app.modules.biz.models import BizOrder, OrderLine, Product, Store
 
-S, OC = Store.__table__.c, BizOrder.__table__.c
+S, OC, LC = Store.__table__.c, BizOrder.__table__.c, OrderLine.__table__.c
 
 STORE_COLUMNS = {
     "store_id": S.id,
@@ -61,4 +63,12 @@ ORDER_GOV = GovernedTable(
     {"大区": "order_belongs_to_store.big_region", "区域": "order_belongs_to_store.region"},
 )
 
-register_governed(STORE_GOV, ORDER_GOV)
+ORDER_LINE_GOV = GovernedTable(
+    OrderLine.__table__,
+    "order_line",
+    {},
+    inherit=InheritVia(local=LC.order_id, parent=ORDER_GOV, parent_key=OC.id),
+)
+
+register_governed(STORE_GOV, ORDER_GOV, ORDER_LINE_GOV)
+register_unrestricted(Product.__tablename__)

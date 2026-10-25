@@ -49,11 +49,16 @@ class SectionSnapshotProvider:
 
 
 async def restore_sections(session: AsyncSession, snapshot: Snapshot) -> None:
-    """整版回滚：同一事务里让实现了 restore_section 的 builder 把定义表恢复成 snapshot 里的那一节。"""
+    """整版回滚：同一事务里让实现了 restore_section 的 builder 把定义表恢复成 snapshot 里的那一节。
+
+    被恢复版本没有这一节（缺失或 null）→ 不调用钩子、定义表不动（静态裁定，和动态一致）[推断]；
+    空内容（{} / []）照样调用，由模块把定义表恢复成「空」（静态全部置失效，动态 version 置空）。
+    """
     for name, builder in _registry.items():
         hook = getattr(builder, "restore_section", None)
-        if hook is not None:
-            await hook(session, snapshot.get(name))
+        content = snapshot.get(name)
+        if hook is not None and content is not None:
+            await hook(session, content)
 
 
 def seed_snapshot(ver: str, ctx: Any) -> Snapshot:

@@ -13,6 +13,7 @@
    定义表（静态的对象 / 指标…、动态 rule 当前版本 / lifecycle.version、Palantir 动作类型…）也要回到那一版：
    版本层在同一事务里对每个登记的 builder 调可选钩子 `restore_section(session, content)`（content =
    被恢复版本这一节的快照内容）；没实现钩子的 section 只回快照、不动定义表。
+   被恢复版本没有这一节（content 为 None）时版本层**不调用**钩子、定义表不动 [推断]；空内容 {} 照样调用。
    和前端 Releases 页一致：「回滚会生成一个新版本，内容等于上一版本；只能回滚最近一次发布」。
 5. 快照 = {section 名: section 内容}。每个 section 由**负责它的模块**组装（SECTION_OWNERS）：
    静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths；动态 rules/lifecycles
@@ -90,7 +91,8 @@ class SnapshotSectionBuilder(Protocol):
     def seed_section(self, ver: str, ctx: Any) -> Any: ...
 
     # 可选：整版回滚时把本模块的定义表恢复成 content（被恢复版本这一节的快照）。不实现 = 只回快照。
-    # async def restore_section(self, session: AsyncSession, content: Any | None) -> None: ...
+    # content 不会是 None（被恢复版本没有这一节时版本层不调用钩子）。
+    # async def restore_section(self, session: AsyncSession, content: Any) -> None: ...
 
 
 @runtime_checkable
