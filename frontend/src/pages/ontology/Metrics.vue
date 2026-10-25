@@ -12,12 +12,13 @@ import { GRAY, BRAND } from '@/theme';
 import { DAILY_GMV, fmtMoney, RULES } from '@/mock';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { useDraftView } from './parts/useDraftView';
+import { useDraftView, draftOf } from './parts/useDraftView';
+import { CHANGE_REQUESTS } from '@/mock/changes';
 import { message } from 'ant-design-vue';
 
 interface M {
   id: string; name: string; api: string; group: string; unit: string; version: string;
-  status: '已发布' | '草稿' | '变更中' | '已下线'; owner: string;
+  status: '已发布' | '草稿' | '已下线'; owner: string;
   /** 已提交审核、尚未发布的变更单（不是草稿，不能在这里编辑） */
   review?: { cr: string; note: string };
 }
@@ -28,8 +29,8 @@ const LIST: M[] = [
   { id: 'repeat_sales_tax', name: '复购客户销售额（含税）', api: 'repeat_customer_sales_gross', group: '销售', unit: '元', version: 'v1', status: '已发布', owner: '刘婷' },
   { id: 'order_cnt', name: '有效订单数', api: 'valid_order_count', group: '销售', unit: '单', version: 'v1', status: '已发布', owner: '陈立军' },
   { id: 'atv', name: '客单价（不含税）', api: 'avg_ticket_value', group: '销售', unit: '元', version: 'v1', status: '草稿', owner: '刘婷' },
-  { id: 'refund_rate', name: '退款率', api: 'refund_rate', group: '销售', unit: '%', version: 'v2', status: '变更中', owner: '刘婷', review: { cr: 'CR-0010', note: '审核中：v2 → v3，改按退款完成时间统计' } },
-  { id: 'gross_margin', name: '毛利率', api: 'gross_margin_rate', group: '利润', unit: '%', version: 'v2', status: '变更中', owner: '刘婷' },
+  { id: 'refund_rate', name: '退款率', api: 'refund_rate', group: '销售', unit: '%', version: 'v2', status: '已发布', owner: '刘婷', review: { cr: 'CR-0010', note: '审核中：v2 → v3，改按退款完成时间统计' } },
+  { id: 'gross_margin', name: '毛利率', api: 'gross_margin_rate', group: '利润', unit: '%', version: 'v2', status: '已发布', owner: '刘婷' },
   { id: 'gross_profit', name: '毛利额', api: 'gross_profit', group: '利润', unit: '元', version: 'v2', status: '已发布', owner: '刘婷' },
   { id: 'ship_ontime', name: '出库及时率', api: 'ship_ontime_rate', group: '履约', unit: '%', version: 'v1', status: '已发布', owner: '周晓峰' },
   { id: 'ship_avg', name: '平均出库时长', api: 'avg_ship_minutes', group: '履约', unit: '分钟', version: 'v1', status: '已发布', owner: '周晓峰' },
@@ -39,7 +40,11 @@ const LIST: M[] = [
   { id: 'repurchase', name: '复购率', api: 'repurchase_rate', group: '会员', unit: '%', version: 'v2', status: '已发布', owner: '吴佳' },
 ];
 const GROUPS = ['全部', '销售', '利润', '履约', '库存', '会员'];
-const statusColor = (s: M['status']) => (s === '已发布' ? 'success' : s === '变更中' ? 'warning' : 'default');
+/** 审核中的变更单号：按变更单状态判断（只有“审核中”才算，草稿、已驳回不算） */
+const reviewCr = (m: M) => (m.review && CHANGE_REQUESTS.find((c) => c.id === m.review!.cr)?.status === '审核中' ? m.review.cr : undefined);
+/** 显示状态：从变更单推出来。审核中 → 橙色“审核中”；只有草稿 → 灰色“草稿中”（问数仍用已发布版）；其余按指标自身状态，一律灰色。 */
+const shownStatus = (m: M) => (m.status !== '已发布' ? m.status : reviewCr(m) ? '审核中' : draftOf('metric', m.id) ? '草稿中' : '已发布');
+const statusColor = (m: M) => (shownStatus(m) === '审核中' ? 'warning' : 'default');
 
 const route = useRoute();
 const router = useRouter();
@@ -142,7 +147,7 @@ const refCols = [
 <template>
   <Teleport defer to="#page-extra">
     <a-button :disabled="readonly" @click="!readonly && openChange('导入指标')">导入</a-button>
-    <a-button type="primary" :disabled="readonly" @click="!readonly && openChange('新建指标')">新建指标</a-button>
+    <a-button :disabled="readonly" @click="!readonly && openChange('新建指标')">新建指标</a-button>
   </Teleport>
 
   <div class="mt">
@@ -155,7 +160,7 @@ const refCols = [
         <li v-for="m in list" :key="m.id" :class="{ active: m.id === cur.id }" @click="pick(m.id)">
           <div class="mt-row">
             <span class="t-14 mt-name">{{ m.name }}</span>
-            <span class="t-12 num" :class="m.status === '变更中' ? 'c-warning' : 'c-3'">{{ m.status === '已发布' ? '' : m.status + ' · ' }}{{ m.version }}</span>
+            <span class="t-12 num" :class="shownStatus(m) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(m) === '已发布' ? '' : shownStatus(m) + ' · ' }}{{ m.version }}</span>
           </div>
           <div class="mt-row">
             <span class="t-12 c-3 num">{{ m.api }}</span>
@@ -174,7 +179,7 @@ const refCols = [
       <div class="mt-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
         <span class="t-14 c-3 num">{{ cur.api }} · {{ cur.unit }}</span>
-        <a-tag :color="statusColor(cur.status)">{{ cur.status }}</a-tag>
+        <a-tag :color="statusColor(cur)">{{ shownStatus(cur) }}</a-tag>
         <span class="t-14 c-3">口径 {{ cur.version }}</span>
         <span v-if="cur.review" class="t-12 c-3">变更单 <a @click="router.push({ path: '/build/ontology/releases', query: { cr: cur.review.cr } })">{{ cur.review.cr }}</a> {{ cur.review.note }}</span>
         <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
@@ -183,6 +188,7 @@ const refCols = [
         <span class="mt-sp" />
         <a-button>试算</a-button>
         <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-tooltip v-else-if="reviewCr(cur)" :title="`${reviewCr(cur)} 审核中`"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
@@ -200,7 +206,7 @@ const refCols = [
             <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit">编辑定义</a-button></a-tooltip>
           </div>
           <div class="mt-formula t-14 num">{{ FORMULA }}</div>
-          <a-descriptions :column="2" bordered size="small" class="mt-desc">
+          <a-descriptions :column="2" bordered size="small" class="mt-desc" :label-style="{ width: '96px', whiteSpace: 'nowrap' }">
             <a-descriptions-item v-for="d in DEF" :key="d.k" :label="d.k">{{ d.v }}</a-descriptions-item>
           </a-descriptions>
           <div class="mt-sec t-14 fw-600">允许的维度</div>

@@ -496,7 +496,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
           <span class="dm-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openValue()">新增取值</a-button></a-tooltip>
         </div>
-        <a-table :columns="valueCols" :data-source="shownValues" :pagination="vpager" size="small" row-key="key" class="dm-table">
+        <a-table :columns="valueCols" :data-source="shownValues" :pagination="vpager" size="small" row-key="key" table-layout="fixed" class="dm-table">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <ObjRef v-if="record.ref" :kind="record.ref.kind" :id="record.ref.id">{{ record.name }}</ObjRef>
@@ -553,21 +553,23 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
           <span class="dm-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openMap">新增说法</a-button></a-tooltip>
         </div>
-        <a-table :columns="mapCols" :data-source="shownMaps" :pagination="mpager" size="small" row-key="key" class="dm-table">
+        <a-table :columns="mapCols" :data-source="shownMaps" :pagination="mpager" size="small" row-key="key" table-layout="fixed" class="dm-table">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'phrase'">
               <span class="c-1">{{ record.phrase }}</span>
               <a-tag v-if="record.diffTag" class="dm-tag-gap">{{ record.diffTag }}</a-tag>
             </template>
             <template v-else-if="column.key === 'targets'">
-              <span v-if="record.targets.length" class="c-2">{{ record.targets.join('、') }}</span>
+              <span v-if="record.targets.length" class="c-2 dm-ell1" :title="record.targets.join('、')">{{ record.targets.join('、') }}</span>
               <span v-else class="c-warning">没有对应取值</span>
             </template>
             <template v-else-if="column.key === 'hits'"><span class="num">{{ fmtInt(record.hits) }}</span></template>
             <template v-else-if="column.key === 'conflict'">
-              <span v-if="conflictText(record)" class="c-warning">{{ conflictText(record) }}</span>
-              <span v-if="record.resolve" class="c-3">{{ conflictText(record) ? '；' : '' }}{{ record.resolve }}</span>
-              <span v-if="!conflictText(record) && !record.resolve" class="c-3">--</span>
+              <span v-if="conflictText(record) || record.resolve" class="dm-ell1" :title="[conflictText(record), record.resolve].filter(Boolean).join('；')">
+                <span v-if="conflictText(record)" class="c-warning">{{ conflictText(record) }}</span>
+                <span v-if="record.resolve" class="c-3">{{ conflictText(record) ? '；' : '' }}{{ record.resolve }}</span>
+              </span>
+              <span v-else class="c-3">--</span>
             </template>
           </template>
         </a-table>
@@ -670,7 +672,8 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
 .dm-bar { display: flex; align-items: center; gap: 12px; flex: none; }
 .dm-bar-sel { width: 120px; }
 .dm-bar-search { width: 240px; }
-.dm-table :deep(.ant-table-cell) { white-space: nowrap; }
+/* 固定列宽：长文本单行省略、悬停看全文，表格不会把页面撑出横向滚动 */
+.dm-table :deep(.ant-table-cell) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dm-tag-gap { margin-left: 8px; }
 .dm-nowrap { white-space: nowrap; }
 .dm-off { color: var(--g6); cursor: not-allowed; }
