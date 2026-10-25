@@ -290,7 +290,7 @@ stateDiagram-v2
 
 ## 5. 种子数据方案
 
-原则：**不手抄数据**，直接执行前端 mock 模块导出 JSON 再入库，保证后台返回的数据与前端现在显示的一模一样。已验证 mock 模块可在 Node 下用 `npx tsx` 直接 import（不依赖浏览器）。建议脚本 `backend/seed/export_mock.ts` 导出 → `seed/*.json` → 入库脚本按下表写表。
+原则：**不手抄数据**，直接执行前端 mock 模块导出 JSON 再入库，保证后台返回的数据与前端现在显示的一模一样。已验证 mock 模块可在 Node 下用 `npx tsx` 直接 import（不依赖浏览器）。按 PDE 约定，种子放在 `backend/app/modules/<模块>/seeds/`（alerts / actions / rules / scenarios / lifecycle 各自一份）：导出脚本跑 mock 生成 JSON 放进对应 `seeds/`，由本体小白提供的统一 `seed` 命令按下表写表。
 
 | mock 文件 / 导出 | 写入表 | 当前条数（master `5fb26ab` 实跑） | 注意 |
 |---|---|---|---|
