@@ -35,7 +35,7 @@
 | 枚举 | **接口返回前端 mock 里的值**（如认证状态 `已认证`、对象类型 `store`、口径 `ex`），不另加 `label`。数据库可以存英文码，Pydantic 层转换，对照见 1.3。 |
 | 语义计划 `SemPlan` | `{metric, dims[], time, filter?, sort?}`，跟 `mock/qa-tuning.ts` 的 `SemPlan` 一致。回答依据、认证问答、评测期望、高频问题、页面卡片**共用这一个结构**；`planText` 的拼接规则搬到后台，响应带 `planText`。 |
 | 指标引用 | 接口里跟 mock 一样用 `metric` + `version`（如 `PageCard{metric, version}`），响应带 `metricLabel`（`复购客户销售额（不含税） v3`）。**数据库存 `metric_id bigint → metric(id)`**（静态 `metric` 的一行就是一个 api 名 + 版本），接口返回时连表取 `metric` + `version`，不存 `metric@version` 字符串。`T_METRICS` 的键（`repeat`、`margin`…）不是指标 API 名，种子经 `drawerId` / `QA_METRIC` 映射（第 9 节）。静态 `metric` 的业务唯一键是 `(code, version int)`：mock 的中文名按 `metrics.ts` / `QA_METRIC` 的 `name → id` 换成 `metric.code`，`"v3"` 去掉 `v` 换成整数 `3`；接口返回时再拼回 `"v" + version`（对照表见 9.1）。 |
-| 身份 | 第一期单租户。身份只取服务端会话（骨架 `CurrentUserDep`：会话 / API 密钥绑定的身份 / 校验后的 `?previewAs=`），**不读请求体或请求头里的用户 id**。开发身份用请求头 `X-Demo-As: <sys_user.code>`（跟骨架 `0c35c1d` `app/common/auth.py` 一致：值是**用户编号**（前端 userId，如 `U010001`），**不是姓名**；按编号查 `sys_user`，`CurrentUser.id` = 编号、`name` = 姓名；查不到或已停用 → 401 `UNAUTHORIZED`；不带时用 `RENGU_DEV_USER`，它也是编号，默认 `U010001`），**只在 dev/test 环境生效**，只是会话桩；**prod 一律忽略该头**（鉴权接入前 prod 直接 401 `UNAUTHORIZED`，之后走 SSO）。前端演示身份 `?as=admin` → `X-Demo-As: U010001`（王敏），`?as=viewer` → `X-Demo-As: U010006`（李娜，编号 [推断]：mock 里没有，骨架补的）（同 api-index §1.4）。**只读状态一律走查询参数，不用请求头**：历史版本 `?ver=<版本>`，预览 `?previewAs=<userId>`（跟前端 URL 一致；每人同一时间只有一个预览会话，所以只带被预览人 id，不带会话 id）。 |
+| 身份 | 第一期单租户。身份只取服务端会话（骨架 `CurrentUserDep`：会话 / API 密钥绑定的身份 / 校验后的 `?previewAs=`；**现状**：qa-impl 还不校验 `previewAs` 的「角色与权限 · 管理」权限，只按编号解析被预览人（`service.py` `effective_viewer` 的 EXTENSION POINT），待骨架鉴权接入后在那里校验 [推断]），**不读请求体或请求头里的用户 id**。开发身份用请求头 `X-Demo-As: <sys_user.code>`（跟骨架 `0c35c1d` `app/common/auth.py` 一致：值是**用户编号**（前端 userId，如 `U010001`），**不是姓名**；按编号查 `sys_user`，`CurrentUser.id` = 编号、`name` = 姓名；查不到或已停用 → 401 `UNAUTHORIZED`；不带时用 `RENGU_DEV_USER`，它也是编号，默认 `U010001`），**只在 dev/test 环境生效**，只是会话桩；**prod 一律忽略该头**（鉴权接入前 prod 直接 401 `UNAUTHORIZED`，之后走 SSO）。前端演示身份 `?as=admin` → `X-Demo-As: U010001`（王敏），`?as=viewer` → `X-Demo-As: U010006`（李娜，编号 [推断]：mock 里没有，骨架补的）（同 api-index §1.4）。**只读状态一律走查询参数，不用请求头**：历史版本 `?ver=<版本>`，预览 `?previewAs=<userId>`（跟前端 URL 一致；每人同一时间只有一个预览会话，所以只带被预览人 id，不带会话 id）。 |
 | 主键与编号 | **接口只暴露业务编号**：响应里的 `id` 和路径里的 `{sid}`/`{pid}`/`{id}` 都是前端 mock 的编号（`S0001`、`P001`、`CQ-001`…，库列 `code`），库内代理主键 `id bigint` 不出现在接口里（9.2）。 |
 | 字段名 | camelCase，跟 mock 的 TS 类型同名（`certifiedAt`、`lastRefresh`、`allowExport`）。下文写的结构都按 mock 类型。 |
 | 错误体 | `{code, message, details, requestId}`（见 1.2）；`message` 可以直接用作悬停文字或确认卡上的阻断原因。 |
@@ -55,7 +55,7 @@
 
 | 接口 | 历史版本 `?ver=` | 预览 `?previewAs=` | 依据 |
 |---|---|---|---|
-| 所有读接口（W1/W3/W7/W10/W13/W17、P1/P3/P11/P12、O1/O2/O5–O7/O9、T1–T4/T9/T10/T12–T14/T18/T20） | 允许，带 `?ver=`：只影响本体元数据（O1 的分面和列、O5 的字段分组和 KPI 口径名、T 系列按该版本读认证问答和评测题）；业务数据和会话快照不随版本变 [推断] | 允许，按被预览人的权限和可见性 | 前端读都不拦 |
+| 所有读接口（W1/W3/W7/W10/W13/W17、P1/P3/P11/P12、O1/O2/O5–O7/O9、T1–T4/T9/T10/T12–T14/T18/T20） | 允许，带 `?ver=`：只影响本体元数据（O1 的分面和列、O5 的字段分组和 KPI 口径名、T 系列按该版本读认证问答和评测题）；业务数据和会话快照不随版本变 [推断]。**现状**：qa-impl 读接口不按 `?ver` 取数，只把它原样回显到 `version`——前端只把版本当标签用（`QaTuning.vue:23` `viewVer` 只用于显示和切换），按版本取数 [推断]，二期 | 允许，按被预览人的权限和可见性 | 前端读都不拦 |
 | W2 新建会话 | 拒 | 拒 | 「新建」按钮 `readonly` 置灰 |
 | W4 改范围 / 口径 | 拒 | 拒 | 范围、口径下拉 `readonly` 置灰 |
 | W4 重命名、W5 删除会话 | 拒 [推断] | 拒 [推断] | **前端会话 ⋯ 菜单没有判断 readonly**，历史和预览下都能点 |
@@ -148,6 +148,8 @@
 
 ### 1.4 每个接口的权限策略
 
+**现状**：qa-impl 已在路由上挂骨架 `require_func(pageKey, 'view')` 依赖（`router.py:58-61`：工作台 `qa-workbench`、页面/模板 `qa-pages`、对象类型 `object-search`、`/tuning/*` 子路由 `qa-tuning`），但骨架 `require_func` 仍是桩、不拦任何人；`manage` 级别和 API 密钥范围待权限体系接入。
+
 列说明：**页面权限** = `pageKey`（`nav.ts` 的 key）+ 级别（`view` 查看 / `manage` 管理，对应 `mock/roles.ts` 的 `FuncLevel`）；**API 密钥范围** = 外部系统用 API 密钥调用时需要的 `KeyScope`（`mock/apikeys.ts`：问数查询、对象读取、数据导出、动作执行…；「—」表示只给登录用户，不对密钥开放 [推断]）；**`?ver=`** / **预览** 见 1.1；**行级** = 是否经骨架 `auth.row_filter(user, object_type)` 过滤。页面权限、密钥范围、行级三列前端都没有按接口体现，整列算 [推断]（前端只按页面权限控制导航可见）；**例外（PDE 已定）**：自己的会话和页面的写操作（W2–W16、P2–P10）只要求页面权限 `view`，不另设 `manage`（「拥有者 / 可编辑成员」是资源级判断，仍按下表）。预览时能否提问仍是 **[待用户定]**。X 系列的权限由动态 / 静态 / admin 各自定义（动作还要看对象权限里的 `actions`）。
 
 | # | 页面权限 | API 密钥范围 | `?ver=` | 预览 | 行级 |
@@ -171,7 +173,7 @@
 | W17 | qa-workbench · view | 问数查询 | 允许 | 允许（按被预览人） | 否 |
 | P1 | qa-pages · view | —（只限登录用户）[推断] | 允许 | 允许 | 否（自己的 + 共享给自己的） |
 | P2 | qa-pages · view | — | 拒 | 拒 | 否 |
-| P3 | qa-pages · view（拥有者或被共享人） | — | 允许 | 允许 | 是（卡片按查看人重算） |
+| P3 | qa-pages · view（拥有者或被共享人） | — | 允许 | 允许 | 是（目标：卡片按查看人重算 [推断]；**现状**：查看人不是拥有者且 `row_filter(查看人)` 不为 None 时整页卡片 `{denied:true}`，见 9.2「[推断] 待后续补齐」③） |
 | P4 | qa-pages · view（拥有者或「可编辑」）[推断] | — | 拒 | 拒 | 否 |
 | P5 | qa-pages · view（仅拥有者）[推断] | — | 拒 | 拒 | 否 |
 | P6 | qa-pages · view（拥有者或「可编辑」）[推断] | — | 拒 | 拒 | 是 |
@@ -306,7 +308,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 |---|---|---|---|---|
 | P1 | `GET /pages` | `kw`、`src=问数工作台\|模板\|手动新建`、`share=已共享\|仅自己`、`status=正常\|口径待更新\|刷新失败`、`page`、`size=15`、`view=brief\|full`（参数名跟 URL 一致） | `QaPageFull` 列表（brief 只返回 `{id,name,cards,updatedAt,shared}`，即 `QaPage`）+ `fromWorkbenchCount`。只返回我的页面；预览时返回被预览人自己的页面加共享给他的 | `mock/qa-pages.ts` `MY_PAGES`、`OTHER_PAGES`；`mock/qa.ts` `QA_PAGE_LIST` |
 | P2 | `POST /pages` | `{name(≤30), scope}`，或者 `{name, scope, template:{id, caliber, refresh}}` | 新建空白页面或从模板新建；从模板新建时 `status` 按卡片是否有 `pending` 定为 `口径待更新` 或 `正常`；`share` 默认 `{mode:'仅自己', members:[], link:false, allowExport:true}`；重名返回 `DUPLICATE_KEY` [推断：前端新建时不查重，只有重命名查重]。**`refresh` 转换**：「用此模板新建」气泡的刷新选项是显示文字，后台收 `RefreshPlan`，前端按 `MyPages.fromTemplate` 的规则转（见表下） | `createBlank`、`fromTemplate` |
-| P3 | `GET /pages/{pid}` | — | `QaPageFull`：`{id,name,owner,scope,source,sourceKind,cards:PageCard[],dataAsOf,lastRefresh,updatedAt,refresh,sub,share,status,statusNote,views,calibers[{label,pending}]}`。**卡片数据按查看人的权限裁剪**，范围外的卡片返回 `{denied:true}`，显示「无权限」 | `QaPageFull`、`PageCard` |
+| P3 | `GET /pages/{pid}` | — | `QaPageFull`：`{id,name,owner,scope,source,sourceKind,cards:PageCard[],dataAsOf,lastRefresh,updatedAt,refresh,sub,share,status,statusNote,views,calibers[{label,pending}]}`。**卡片数据按查看人的权限裁剪**，范围外的卡片返回 `{denied:true}`，显示「无权限」。**现状**（qa-impl）：查看人（被共享人，或 `?previewAs=` 的被预览人）不是拥有者、且骨架 `auth.row_filter(查看人, 'store')` 不为 None 时，**所有卡片**都返回 `{key,title,viz,metric,version,pending?,denied:true}`，不带 `value/unit/sub/series/labels/rows`；拥有者看自己的页面不变；P1 `view=full` 同样处理。`calibers` 照常返回。前端 `CardPreview.vue` 还没有 `denied` 分支 [待前端] | `QaPageFull`、`PageCard` |
 | P4 | `PATCH /pages/{pid}` | `{name}` | 重名返回 `DUPLICATE_KEY`（前端也查重） | `rename` |
 | P5 | `DELETE /pages/{pid}` | — | 停掉定时刷新和订阅；被共享人从此打不开；问数会话里的原始回答不受影响。确认卡（不可逆）上的字段「卡片 / 共享 / 订阅」用 P3 的返回 | `remove` |
 | P6 | `POST /pages/{pid}:refresh` | — | 30 秒内同步返回 `{lastRefresh, dataAsOf, status, statusNote}`，超时返回 202 `{jobId}`（`jobId` 是字符串任务编号，如 `JOB-20261025-0001`，不暴露库内数字 id）。刷新成功后从「刷新失败」恢复成 `正常` 或 `口径待更新`；`lastRefresh` 按 `now()` | `refresh` |
@@ -565,7 +567,7 @@ export-mock 的 `qa` 分组共 48 个导出（第二个提交后加上 `QA_DEMO_
 - 外部表：指标 `metric`（静态）、版本 `ontology_release`（**版本层，本体小白**）、用户表 `sys_user`（admin）、`change_request`、`action_run`（动态）、biz 的 `store` / `product` / `biz_order`。指标存 `metric_id → metric(id)`，版本 `release_id` 暂为软引用、不建外键（见上一条）；用户外键**只有当前登录用户列** `*_id → sys_user(id)`：`qa_session.owner_id`、`qa_favorite.owner_id`、`qa_permission_request.requester_id`、`qa_page.owner_id`、`qa_page_share_member.user_id`、`qa_feedback.user_id`（可空）、`qa_query_log.user_id`（可空）（跟 qa-impl `models.py` 一致）；审批人 `approver`、认证人 `certifier`、评测操作人 `operator`、反馈处理人 `handler` 等按 9.2「人员列」存人名软引用 `varchar`，**不是外键**（同第 34 行）；变更单存 `cr_id → change_request(id)`（`qa_cert`、`qa_eval_question`、`qa_feedback`、`qa_synonym_link`）；指向外表的外键都不级联（默认 RESTRICT）；接口返回的 `metric`/`version`/`ver` 连表取，当前用户列的人名连 `sys_user` 取，软引用列原样返回姓名（原第 11 节第 15 条的复合外键问题因此不再存在）。
 
 **公共列**
-- **[推断] 待后续补齐**（qa-impl 现状）：① 页面卡片、门店等数据是种子从 mock 原样复制进 qa 自己的表，读取时**还没有按权限 / 行级范围过滤**；② O1 及 T 系列接口**还不按 `?ver` 取数**，`router.py:219` 等处只把 `ctx.ver` 原样回显到 `version`。③ P3 `GET /pages/{pid}`（qa-impl `router.py` 中 `include_shared=True`）在非预览时也会读共享给当前用户的页面，卡片原样全量返回；按「宁可看不到，不能看多」，页面拥有者不是当前用户时，卡片应按当前用户权限裁剪或隐藏，**待 `row_filter` 接入后强制执行**。后续补：卡片和门店数据接行过滤，O1/T 系列按请求版本读。
+- **[推断] 待后续补齐**（qa-impl 现状）：① 页面卡片、门店等数据是种子从 mock 原样复制进 qa 自己的表，读取时**还没有按权限 / 行级范围过滤**；② O1 及 T 系列接口**还不按 `?ver` 取数**，`router.py:219` 等处只把 `ctx.ver` 原样回显到 `version`。③ P3 `GET /pages/{pid}`（及 P1 `view=full`）的无权限标记**已实现**：查看人（被共享人，或预览时的被预览人）不是页面拥有者、且 `auth.row_filter(查看人, 'store')` 不为 None 时，整页卡片标 `{denied:true}`、不带数值，显示「无权限」（qa-impl `service.py` `cards_denied_for` / `denied_card`，`router.py` `get_page` 的 EXTENSION POINT）；拥有者看自己的页面照旧全量。骨架 `row_filter` 现在是桩（管理员 None、其他人 DENY_ALL），所以非管理员的被共享人一律看到无权限。**只有按查看人重算卡片值**推迟到 `row_filter` 真正接入后（门店对象 `store` 为 [推断]）。后续补：卡片和门店数据接行过滤，O1/T 系列按请求版本读。
 - qa 迁移 `qa_0001` 共建 **22 张**表。
 - **可变表**（会改、会删的业务表）：`created_at timestamptz`、`updated_at timestamptz`、`created_by varchar(64)`（操作人 `CurrentUser.id`，即用户编号 `sys_user.code`，跟骨架 `MutableTableMixin` 一致，不是外键）、`is_seed bool default false`、`lock_version int default 1`（接口叫 `lockVersion`，改的时候带上，不一致返回 `VERSION_CONFLICT`）。
 - **只追加的表**（日志、按版本的快照、评测失败明细）：`created_at`、`created_by`、`is_seed`，**没有 `lock_version`，也不做软删除**；迁移里挂骨架的 `enable_append_only` 触发器（拒 DELETE、TRUNCATE 和改内容的 UPDATE）。所以**只追加表上不能有 `ON DELETE CASCADE` / `SET NULL` 的外键**（父表删除会触发 DELETE/UPDATE 被拦下）：`qa_eval_fail` 的外键不级联，`qa_query_log.turn_id` 不加外键。`qa_turn_event` 要随会话物理删除（W5），所以归可变表、不挂触发器，服务层只 INSERT。
