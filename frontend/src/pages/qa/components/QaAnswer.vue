@@ -125,7 +125,7 @@ const barOption = computed(() => ({
     <div class="qa-ans-actions">
       <a-space :size="8">
         <a-button><template #icon><SearchOutlined /></template>查看原因</a-button>
-        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="emit('suggest')"><template #icon><ThunderboltOutlined /></template>建议动作</a-button></a-tooltip>
+        <a-tooltip :title="reason"><a-button :disabled="readonly" @click="emit('suggest')"><template #icon><ThunderboltOutlined /></template>建议动作</a-button></a-tooltip>
         <a-tooltip :title="reason"><a-button :disabled="readonly" @click="emit('pin')"><template #icon><PushpinOutlined /></template>固定到页面</a-button></a-tooltip>
       </a-space>
       <a-space :size="4">

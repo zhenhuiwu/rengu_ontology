@@ -59,7 +59,7 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
         </div>
         <span v-if="submitted" class="qa-act-status"><ClockCircleOutlined />待审批</span>
         <span v-else-if="pending" class="qa-act-status"><ClockCircleOutlined />待确认</span>
-        <a-tooltip v-else :title="reason"><a-button size="small" type="primary" ghost :disabled="readonly" @click="emit('run')"><span>发起</span></a-button></a-tooltip>
+        <a-tooltip v-else :title="reason"><a-button size="small" :disabled="readonly" @click="emit('run')"><span>发起</span></a-button></a-tooltip>
       </div>
       <div class="qa-act">
         <div class="qa-act-main">
