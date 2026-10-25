@@ -6,6 +6,7 @@
 import { computed, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { DRAFTS, type DraftCR } from '@/mock/releases';
+import { useReadonly } from '@/composables/useReadonly';
 
 export type TargetKind = 'object' | 'metric';
 
@@ -27,7 +28,11 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
   const route = useRoute();
   const router = useRouter();
   const draft = computed(() => draftOf(kind, targetId()));
-  const isDraft = computed(() => !!draft.value && route.query.view === 'draft');
+  const { readonly, reason } = useReadonly();
+  // 查看历史版本时整页只读：不进草稿，编辑和发起变更都置灰
+  const isDraft = computed(() => !readonly.value && !!draft.value && route.query.view === 'draft');
+  const canEdit = computed(() => isDraft.value);
+  const editTip = computed(() => (readonly.value ? reason.value : isDraft.value ? '' : '已发布版本只读，请先发起变更'));
   const setView = (v: 'published' | 'draft') => router.replace({ query: { ...route.query, view: v === 'draft' ? 'draft' : undefined } });
 
   /** 新建变更单或加入已有变更单，然后切到草稿视图 */
@@ -41,5 +46,5 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
     (t[kind] ??= []).includes(targetId()) || t[kind]!.push(targetId());
     setView('draft');
   }
-  return { draft, isDraft, setView, start, READONLY_TIP: '已发布版本只读，请先发起变更' };
+  return { draft, isDraft, canEdit, editTip, readonly, reason, setView, start };
 }

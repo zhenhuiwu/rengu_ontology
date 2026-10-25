@@ -44,7 +44,7 @@ const tab = computed({
 const tabTitle = computed(() => OBJECT_TYPE_TAB_GROUPS.flatMap((g) => g.tabs).find((t) => t.key === tab.value)?.title);
 const current = computed(() => TYPES.find((t) => t.id === selected.value) ?? TYPES[0]);
 const pick = (id: string) => router.replace({ query: { ...route.query, type: id, view: undefined } });
-const { draft, isDraft, setView, start, READONLY_TIP } = useDraftView('object', () => current.value.id);
+const { draft, isDraft, canEdit, editTip, readonly, reason, setView, start } = useDraftView('object', () => current.value.id);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
@@ -163,8 +163,8 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-button @click="openChange('从数据源导入对象类型')">从数据源导入</a-button>
-    <a-button type="primary" @click="openChange('新建对象类型')">新建对象类型</a-button>
+    <a-button :disabled="readonly" @click="!readonly && openChange('从数据源导入对象类型')">从数据源导入</a-button>
+    <a-button type="primary" :disabled="readonly" @click="!readonly && openChange('新建对象类型')">新建对象类型</a-button>
   </Teleport>
 
   <div class="ot">
@@ -195,13 +195,14 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         <span class="t-16 fw-600 c-1">{{ current.name }}</span>
         <span class="t-14 c-3 num">{{ current.api }} · {{ current.props }} 个属性 · {{ current.count }} 条</span>
         <a-tag :color="current.status === '已发布' ? 'success' : current.status === '变更中' ? 'warning' : 'default'">{{ current.status }}</a-tag>
-        <a-segmented v-if="draft" size="small" :value="isDraft ? 'draft' : 'published'"
+        <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="ot-sp" />
         <span class="t-12 c-3">数据截至 2026-10-24 23:00</span>
         <a-button>预览数据</a-button>
-        <a-button v-if="!draft" type="primary" @click="openChange(`${current.name}（${current.api}）`)">发起变更</a-button>
+        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-button v-else-if="!draft" type="primary" @click="openChange(`${current.name}（${current.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <GroupedTabs v-model="tab" :groups="OBJECT_TYPE_TAB_GROUPS" />
@@ -262,8 +263,8 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
           <a-input-search v-model:value="pkw" placeholder="搜索属性名或 API 名" class="ot-tool-search" />
           <span class="t-12 c-3">主键 1 · 维度 {{ isDraft ? 12 : 11 }} · 敏感 3<template v-if="isDraft"> · 草稿改动 2</template></span>
           <span class="ot-sp" />
-          <a-tooltip :title="isDraft ? '' : READONLY_TIP"><a-button :disabled="!isDraft">批量编辑</a-button></a-tooltip>
-          <a-tooltip :title="isDraft ? '' : READONLY_TIP"><a-button type="primary" :disabled="!isDraft">新增属性</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button :disabled="!canEdit">批量编辑</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button type="primary" :disabled="!canEdit">新增属性</a-button></a-tooltip>
         </div>
         <a-table :columns="propCols" :data-source="prows" :pagination="false" size="small" row-key="api">
           <template #bodyCell="{ column, record }">
@@ -293,7 +294,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         <div class="ot-tool">
           <span class="t-12 c-3">订单到门店有两条路径：问“各门店订单数”默认按下单门店，按履约门店统计需在问题里指明（发布校验 V13）</span>
           <span class="ot-sp" />
-          <a-tooltip :title="isDraft ? '' : READONLY_TIP"><a-button type="primary" :disabled="!isDraft">新增关系</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button type="primary" :disabled="!canEdit">新增关系</a-button></a-tooltip>
         </div>
         <a-table :columns="linkCols" :data-source="LINKS" :pagination="false" size="middle" row-key="name">
           <template #bodyCell="{ column, record }">

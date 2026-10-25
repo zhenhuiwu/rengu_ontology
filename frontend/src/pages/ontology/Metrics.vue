@@ -47,7 +47,7 @@ const tab = computed({
   set: (v) => router.replace({ query: { ...route.query, tab: v } }),
 });
 const pick = (id: string) => router.replace({ query: { ...route.query, metric: id, view: undefined } });
-const { draft, isDraft, setView, start, READONLY_TIP } = useDraftView('metric', () => cur.value.id);
+const { draft, isDraft, canEdit, editTip, readonly, reason, setView, start } = useDraftView('metric', () => cur.value.id);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
@@ -138,8 +138,8 @@ const refCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-button @click="openChange('导入指标')">导入</a-button>
-    <a-button type="primary" @click="openChange('新建指标')">新建指标</a-button>
+    <a-button :disabled="readonly" @click="!readonly && openChange('导入指标')">导入</a-button>
+    <a-button type="primary" :disabled="readonly" @click="!readonly && openChange('新建指标')">新建指标</a-button>
   </Teleport>
 
   <div class="mt">
@@ -173,12 +173,13 @@ const refCols = [
         <span class="t-14 c-3 num">{{ cur.api }} · {{ cur.unit }}</span>
         <a-tag :color="statusColor(cur.status)">{{ cur.status }}</a-tag>
         <span class="t-14 c-3">口径 {{ cur.version }}</span>
-        <a-segmented v-if="draft" size="small" :value="isDraft ? 'draft' : 'published'"
+        <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="mt-sp" />
         <a-button>试算</a-button>
-        <a-button v-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
+        <a-tooltip v-if="readonly" :title="reason"><a-button type="primary" disabled>发起变更</a-button></a-tooltip>
+        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="mt-tabs">
@@ -192,7 +193,7 @@ const refCols = [
         <div class="mt-def-left">
           <div class="mt-sec t-14 fw-600 mt-sec-row">
             <span>计算公式<a-tag v-if="isDraft" color="warning" class="mt-diff">修改</a-tag></span>
-            <a-tooltip :title="isDraft ? '' : READONLY_TIP"><a-button size="small" :disabled="!isDraft">编辑定义</a-button></a-tooltip>
+            <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit">编辑定义</a-button></a-tooltip>
           </div>
           <div class="mt-formula t-14 num">{{ FORMULA }}</div>
           <a-descriptions :column="2" bordered size="small" class="mt-desc">
