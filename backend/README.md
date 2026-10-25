@@ -32,7 +32,7 @@ app/
   db/          engine/session、base（mixin + 命名约定 + is_seed + unique_except_seed）、types、dialects（upsert / 事务锁）
   common/      扩展点（PDE）：auth（身份/租户/行级范围）、row_filter（jsonb 行级过滤结构 + 转 SQL + 注入）、
                audit、pagination（page/size 和 cursor）、context（?ver= / ?previewAs=）、repository
-  contracts/   跨模块契约（Protocol）：versioning（create_version / create_version_from）、actions（submit / 对账）、preview
+  contracts/   跨模块契约（Protocol）：versioning（create_version(rollback_of=…) 唯一入口、SECTION_OWNERS）、actions（submit / query_by_key / reopen_reconcile / emit）、preview
   jobs/        procrastinate 任务桩（8 个）
   seeds/       seed 框架（SeedSpec、loader、registry）
   modules/

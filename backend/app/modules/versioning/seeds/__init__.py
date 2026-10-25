@@ -1,36 +1,41 @@
-"""versioning 模块 seed。
+"""versioning 模块 seed：导出文件 → 表。
 
-数据：backend/seeds/json/versioning/（PDE 的 export-mock 生成；仓库里附了一份小样例）
-- releases.json        ← 前端 src/mock/releases.ts 的 RELEASES（原样）
-- change_requests.json ← src/mock/changes.ts 的 CHANGE_REQUESTS（这里只用 status=已发布 的 id↔release 关联；
-                          变更单本身由静态模块 seed）
+数据：backend/seeds/json/static/（export-mock 的 static 组，文件名 = mock 导出名）
+| 导出文件                    | 表               | 说明 |
+|-----------------------------|------------------|------|
+| static/RELEASES.json        | ontology_release | 每条一行，业务键 ver；parent_id 由上一版的 ver 换成 id |
+| static/CHANGE_REQUESTS.json | —（只读关联）    | 已发布且 release=该版本的单号 → change_order_ids |
 
-mock 里的版本没有快照内容（静态定义的快照要等静态模块的 seed 落库后才能拼出来），
-所以 seed 写入空快照 {}；变更单号从 changes.ts 的 CHANGE_REQUESTS（status=已发布、release=该版本）关联出来。
+快照：按各模块登记的 section builder 的 seed_section(ver, ctx) 组装（app/modules/versioning/sections.py），
+**不写空快照 {}**；seed_section 只读导出 JSON、不读表，所以 SEED_MODULES 里 versioning 在 static 之前
+（静态的 release_id 外键按 ver 换 id，要求版本行先写）。
+还没有模块登记 section 时，这个 seed 会明确报错。（变更单本身由静态 seed。）
 """
 
 from app.core.schema import parse_display_dt
-from app.modules.versioning.models import OntRelease
+from app.modules.versioning.models import OntologyRelease
+from app.modules.versioning.sections import seed_snapshot
 from app.modules.versioning.service import snapshot_digest
-from app.seeds import Row, SeedContext, SeedSpec
+from app.seeds import Ref, Row, SeedContext, SeedSpec
 
 
 def _release(r: Row, ctx: SeedContext) -> Row:
-    releases = ctx.load("releases.json")
+    releases = ctx.load("RELEASES.json")
     # RELEASES 新→旧排列，下一条就是上一版
     idx = next(i for i, x in enumerate(releases) if x["ver"] == r["ver"])
     parent = releases[idx + 1]["ver"] if idx + 1 < len(releases) else None
     crs = [
         c["id"]
-        for c in ctx.load("change_requests.json")
+        for c in ctx.load("CHANGE_REQUESTS.json")
         if c.get("status") == "已发布" and c.get("release") == r["ver"]
     ]
+    snapshot = seed_snapshot(r["ver"], ctx)
     return {
         "ver": r["ver"],
-        "parent_ver": parent,
+        "parent_id": parent,  # 先写版本号，loader 按 refs 换成 id（自引用：上一版先写入）
         "kind": "publish",  # upsert 直接写 DB code
-        "snapshot": {},
-        "snapshot_sha256": snapshot_digest({}),
+        "snapshot": snapshot,
+        "snapshot_sha256": snapshot_digest(snapshot),
         "change_order_ids": sorted(crs),
         "change_summary": {"changeOrders": len(crs), "seeded": True},
         "note": r["note"],
@@ -39,8 +44,15 @@ def _release(r: Row, ctx: SeedContext) -> Row:
     }
 
 
-JSON_MODULE = "versioning"
+JSON_MODULE = "static"
 
 SEEDS = [
-    SeedSpec(OntRelease, "releases.json", key=("ver",), transform=_release, description="本体发布记录"),
+    SeedSpec(
+        OntologyRelease,
+        "RELEASES.json",
+        key=("ver",),
+        transform=_release,
+        description="本体发布记录",
+        refs={"parent_id": Ref(OntologyRelease, "ver")},
+    ),
 ]

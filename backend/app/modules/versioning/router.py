@@ -8,22 +8,24 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.common.auth import CurrentUserDep
-from app.common.pagination import Page, PageParamsDep
 from app.core import clock
 from app.db.session import SessionDep
 from app.modules.versioning.repo import ReleaseRepo
-from app.modules.versioning.schemas import CurrentVersionOut, ReleaseDetailOut, ReleaseOut
+from app.modules.versioning.schemas import CurrentVersionOut, ReleaseDetailOut, ReleaseListOut, ReleaseOut
 from app.modules.versioning.service import VersioningService, get_version_service, next_ver
 
 router = APIRouter(prefix="/releases", tags=["本体版本"])
 ServiceDep = Annotated[VersioningService, Depends(get_version_service)]
 
 
-@router.get("", response_model=Page[ReleaseOut], summary="版本列表（新→旧，第一条是当前版本）")
-async def list_releases(session: SessionDep, page: PageParamsDep, _: CurrentUserDep) -> Page[ReleaseOut]:
-    rows, total = await ReleaseRepo(session).page(page)
-    return Page[ReleaseOut](
-        items=[ReleaseOut.model_validate(r) for r in rows], total=total, page=page.page, size=page.size
+@router.get("", response_model=ReleaseListOut, summary="版本列表（不分页，新→旧，第一条是当前版本）")
+async def list_releases(session: SessionDep, _: CurrentUserDep) -> ReleaseListOut:
+    """PDE api-index §1.11：RELEASES 全量 + current；登录即可调用，不分页。"""
+    rows = await ReleaseRepo(session).all()
+    items = [ReleaseOut.model_validate(r) for r in rows]
+    return ReleaseListOut(
+        items=items,
+        current=items[0].ver if items else None,
     )
 
 
@@ -46,11 +48,11 @@ def _next_from(ver: str) -> str:
 
 @router.get("/{ver}", response_model=ReleaseDetailOut, summary="单个版本详情")
 async def get_release(ver: str, session: SessionDep, _: CurrentUserDep) -> ReleaseDetailOut:
-    r = await ReleaseRepo(session).get_or_404(ver)
+    r = await ReleaseRepo(session).by_ver_or_404(ver)
     return ReleaseDetailOut.model_validate(r)
 
 
 @router.get("/{ver}/snapshot", summary="版本快照（?ver= 只读查看用）")
 async def get_release_snapshot(ver: str, session: SessionDep, svc: ServiceDep, _: CurrentUserDep) -> dict:
-    await ReleaseRepo(session).get_or_404(ver)
+    await ReleaseRepo(session).by_ver_or_404(ver)
     return await svc.get_snapshot(session, ver) or {}

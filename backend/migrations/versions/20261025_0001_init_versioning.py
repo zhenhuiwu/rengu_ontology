@@ -1,4 +1,4 @@
-"""初始化：pgvector 扩展 + 本体版本表 ont_release
+"""初始化：pgvector 扩展 + 只追加表的通用触发器函数 + 本体版本表 ontology_release
 
 Revision ID: 0001
 Revises:
@@ -11,6 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from app.db.ddl import GUARD_FUNCTION, append_only_guard_function, disable_append_only, enable_append_only
+
 revision: str = "0001"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
@@ -19,10 +21,12 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    op.execute(append_only_guard_function())
     op.create_table(
-        "ont_release",
-        sa.Column("ver", sa.String(32), nullable=False, comment="版本号 vYYYY.MM.N"),
-        sa.Column("parent_ver", sa.String(32), nullable=True, comment="上一版"),
+        "ontology_release",
+        sa.Column("id", sa.BigInteger(), sa.Identity(always=False), nullable=False),
+        sa.Column("ver", sa.String(32), nullable=False, comment="版本号 vYYYY.MM.N（业务键，唯一）"),
+        sa.Column("parent_id", sa.BigInteger(), nullable=True, comment="上一版（ontology_release.id）"),
         sa.Column(
             "kind",
             sa.Enum("publish", "rollback", name="releasekind", native_enum=False, length=16, create_constraint=True),
@@ -30,12 +34,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column(
-            "rollback_of",
-            sa.String(32),
+            "rollback_of_id",
+            sa.BigInteger(),
             nullable=True,
-            comment="回滚生成的版本：被回滚掉的版本号（内容恢复为它的上一版）",
+            comment="回滚生成的版本：被回滚的版本（ontology_release.id；新版本内容 = 它的上一版）",
         ),
-        sa.Column("snapshot", postgresql.JSONB(), nullable=False, comment="整版定义快照"),
+        sa.Column("snapshot", postgresql.JSONB(), nullable=False, comment="整版定义快照（各模块组装，版本层不解析）"),
         sa.Column("snapshot_sha256", sa.String(64), nullable=False),
         sa.Column("change_order_ids", postgresql.ARRAY(sa.String(64)), nullable=False),
         sa.Column("change_summary", postgresql.JSONB(), nullable=False),
@@ -43,32 +47,29 @@ def upgrade() -> None:
         sa.Column("published_by", sa.String(64), nullable=False),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("created_by", sa.String(64), nullable=True),
         sa.Column("is_seed", sa.Boolean(), server_default="false", nullable=False),
-        sa.CheckConstraint(r"ver ~ '^v[0-9]{4}\.[0-9]{2}\.[0-9]+$'", name=op.f("ck_ont_release_ver_format")),
-        sa.PrimaryKeyConstraint("ver", name=op.f("pk_ont_release")),
+        sa.CheckConstraint(r"ver ~ '^v[0-9]{4}\.[0-9]{2}\.[0-9]+$'", name=op.f("ck_ontology_release_ver_format")),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_ontology_release")),
+        sa.ForeignKeyConstraint(
+            ["parent_id"], ["ontology_release.id"], name=op.f("fk_ontology_release_parent_id_ontology_release")
+        ),
+        sa.ForeignKeyConstraint(
+            ["rollback_of_id"],
+            ["ontology_release.id"],
+            name=op.f("fk_ontology_release_rollback_of_id_ontology_release"),
+        ),
+        sa.UniqueConstraint("ver", name=op.f("uq_ontology_release_ver")),
         comment="本体整版发布（只追加）",
     )
-    op.create_index(op.f("ix_ont_release_published_at"), "ont_release", ["published_at"])
-    # 只追加：禁止删除和真正改变内容的 UPDATE（数据库层兜底）。
-    # 内容完全相同的 UPDATE 放行，这样 seed 的 UPSERT 可以重复执行（幂等）。
-    op.execute(
-        """
-        CREATE FUNCTION ont_release_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          IF TG_OP = 'UPDATE' AND NEW IS NOT DISTINCT FROM OLD THEN
-            RETURN NEW;
-          END IF;
-          RAISE EXCEPTION 'ont_release 只追加，不允许 %', TG_OP USING ERRCODE = 'raise_exception';
-        END $$
-        """
-    )
-    op.execute(
-        "CREATE TRIGGER trg_ont_release_immutable BEFORE UPDATE OR DELETE ON ont_release "
-        "FOR EACH ROW EXECUTE FUNCTION ont_release_immutable()"
-    )
+    op.create_index(op.f("ix_ontology_release_published_at"), "ontology_release", ["published_at"])
+    for sql in enable_append_only("ontology_release"):
+        op.execute(sql)
+
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS trg_ont_release_immutable ON ont_release")
-    op.execute("DROP FUNCTION IF EXISTS ont_release_immutable()")
-    op.drop_index(op.f("ix_ont_release_published_at"), table_name="ont_release")
-    op.drop_table("ont_release")
+    for sql in disable_append_only("ontology_release"):
+        op.execute(sql)
+    op.drop_index(op.f("ix_ontology_release_published_at"), table_name="ontology_release")
+    op.drop_table("ontology_release")
+    op.execute(f"DROP FUNCTION IF EXISTS {GUARD_FUNCTION}()")

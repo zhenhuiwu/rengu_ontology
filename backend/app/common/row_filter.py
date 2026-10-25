@@ -13,7 +13,12 @@
 - 叶子 Condition：field + op + （value | valueFrom 二选一；is_null / not_null 两者都不要）
 - valueFrom 只能取当前用户属性：`user.<attr>`（attr 来自 CurrentUser.attrs，PDE 负责填充）
 - 组 Group：{"and": [...]} 或 {"or": [...]}，可嵌套，最多 MAX_DEPTH 层
-- 空表达式 / null = 不限制（和前端“空=全部”一致）
+- 单个角色的空表达式 / null = 该角色不限制（只有明确配置为「全部」的角色才会是空）；
+  一个用户**没有任何**带范围的角色 → 什么都看不到（combine_or([]) = 拒绝，宁严勿宽）
+- 跨对象一跳：field 写成 `<关系id>.<目标对象属性>`（如 `order_belongs_to_store.region`），
+  关系必须来自**静态的关系定义**（LINKS：from / to / fromProp / toProp），用 link_paths_from_definitions()
+  生成白名单；编译成 `EXISTS (SELECT 1 FROM 目标 WHERE 目标.toProp = 本表.fromProp AND 条件)`，值走绑定参数。
+  多跳（两个点）或未声明的关系直接拒绝。
 
 转 SQL：`to_sql(expr, columns, user_attrs)`
 - columns 是**白名单** {field: SQLAlchemy 列}，不在白名单里的字段直接报错；
@@ -22,10 +27,11 @@
 前端 mock 的 RowScope{objType, prop, op: '=' | '∈', values} 用 `from_row_scope()` 转换。
 """
 
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import Field, model_validator
-from sqlalchemy import ColumnElement, Select, and_, false, or_, true
+from sqlalchemy import ColumnElement, FromClause, Select, and_, exists, false, or_, select, true
 
 from app.core.errors import AppError
 from app.core.schema import ApiModel
@@ -36,7 +42,8 @@ _OP_ALIASES = {"∈": "in", "∉": "not_in", "≠": "!=", "≥": ">=", "≤": "<
 
 
 class Condition(ApiModel):
-    field: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    # 本表字段，或一跳 `<关系id>.<目标属性>`；两个点（多跳）在校验时就拒绝
+    field: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
     op: Op
     value: Any = None
     value_from: str | None = Field(default=None, pattern=r"^user\.[A-Za-z_][A-Za-z0-9_]*$")
@@ -59,6 +66,10 @@ class Condition(ApiModel):
             raise ValueError("value 和 valueFrom 必须且只能给一个")
         if self.op in ("in", "not_in") and has_value and not isinstance(self.value, list):
             raise ValueError("in / not_in 的 value 必须是数组")
+        if self.op not in ("in", "not_in") and isinstance(self.value, list | dict):
+            raise ValueError(f"{self.op} 的 value 必须是单个值（数组请用 in / not_in）")
+        if self.op == "like" and has_value and not isinstance(self.value, str):
+            raise ValueError("like 的 value 必须是字符串")
         return self
 
 
@@ -97,27 +108,88 @@ def _depth(e: Expr) -> int:
     return 1 + max(_depth(c) for c in children)
 
 
+@dataclass(frozen=True)
+class ObjectTable:
+    """一个对象类型落在哪张表、属性 → 列（白名单）。"""
+
+    table: FromClause
+    columns: dict[str, ColumnElement]
+
+
+@dataclass(frozen=True)
+class LinkPath:
+    """一跳关系（来自静态关系定义）：本表.local = 目标.target_key。"""
+
+    link_id: str
+    local: ColumnElement
+    target: FromClause
+    target_key: ColumnElement
+    target_columns: dict[str, ColumnElement]
+
+
+def link_paths_from_definitions(
+    object_type: str, link_defs: list[dict[str, Any]], objects: dict[str, ObjectTable]
+) -> dict[str, LinkPath]:
+    """把静态的关系定义（LINKS 里 from == object_type 的那些）转成一跳白名单。
+
+    link_defs 的每项至少有 id / from / to / fromProp / toProp（前端 mock LINKS 的字段）；
+    objects 是对象类型 id → ObjectTable。关系两端的属性必须在对应对象的列白名单里。
+    """
+    out: dict[str, LinkPath] = {}
+    src = objects.get(object_type)
+    if src is None:
+        raise ValueError(f"对象类型 {object_type} 没有登记表")
+    for d in link_defs:
+        if d.get("from") != object_type:
+            continue
+        dst = objects.get(d["to"])
+        if dst is None:
+            continue  # 目标对象没有登记表 → 这条关系不能用于行级过滤
+        local, key = src.columns.get(d["fromProp"]), dst.columns.get(d["toProp"])
+        if local is None or key is None:
+            raise ValueError(f"关系 {d['id']} 的 fromProp/toProp 不在列白名单")
+        out[d["id"]] = LinkPath(d["id"], local, dst.table, key, dst.columns)
+    return out
+
+
+def _bad(field: str, why: str) -> AppError:
+    return AppError(f"行级过滤字段 {field} {why}", code="BAD_ROW_FILTER", details={"field": field})
+
+
 def to_sql(
-    expr: Expr | dict | None, columns: dict[str, ColumnElement], user_attrs: dict[str, Any]
+    expr: Expr | dict | None,
+    columns: dict[str, ColumnElement],
+    user_attrs: dict[str, Any],
+    links: dict[str, LinkPath] | None = None,
 ) -> ColumnElement[bool]:
-    """表达式 → SQLAlchemy 条件。None = 不限制（true()）。"""
+    """表达式 → SQLAlchemy 条件。None = 该角色不限制（true()）。links = 允许的一跳关系白名单。"""
     if isinstance(expr, dict):
+        if is_deny_all(expr):
+            return false()
         expr = parse_row_filter(expr)
     if expr is None:
         return true()
     if isinstance(expr, AndGroup):
-        return and_(*(to_sql(c, columns, user_attrs) for c in expr.and_))
+        return and_(*(to_sql(c, columns, user_attrs, links) for c in expr.and_))
     if isinstance(expr, OrGroup):
-        return or_(*(to_sql(c, columns, user_attrs) for c in expr.or_))
-    return _cond(expr, columns, user_attrs)
-
-
-def _cond(c: Condition, columns: dict[str, ColumnElement], user_attrs: dict[str, Any]) -> ColumnElement:
-    col = columns.get(c.field)
+        return or_(*(to_sql(c, columns, user_attrs, links) for c in expr.or_))
+    if "." in expr.field:
+        link_id, prop = expr.field.split(".", 1)
+        link = (links or {}).get(link_id)
+        if link is None:
+            raise _bad(expr.field, "引用的关系没有在静态关系定义里声明（或不是一跳）")
+        col = link.target_columns.get(prop)
+        if col is None:
+            raise _bad(expr.field, "不在目标对象的白名单")
+        inner = _cond(expr, col, user_attrs)
+        return exists(select(1).select_from(link.target).where(link.target_key == link.local, inner))
+    col = columns.get(expr.field)
     if col is None:
-        raise AppError(
-            f"行级过滤字段 {c.field} 不在白名单", code="BAD_ROW_FILTER", details={"field": c.field}
-        )
+        raise _bad(expr.field, "不在白名单")
+    return _cond(expr, col, user_attrs)
+
+
+def _cond(c: Condition, col: ColumnElement, user_attrs: dict[str, Any]) -> ColumnElement:
     if c.op == "is_null":
         return col.is_(None)
     if c.op == "not_null":
@@ -128,6 +200,10 @@ def _cond(c: Condition, columns: dict[str, ColumnElement], user_attrs: dict[str,
         if attr not in user_attrs:
             return false()  # 用户没有这个属性 → 什么都看不到（宁严勿宽）
         value = user_attrs[attr]
+        if isinstance(value, list | tuple | set) and c.op not in ("in", "not_in"):
+            if c.op != "=":
+                raise _bad(c.field, f"的用户属性 {attr} 是多值，不能用 {c.op}")
+            return col.in_(list(value))
     if c.op in ("in", "not_in"):
         vals = value if isinstance(value, list | tuple | set) else [value]
         return col.in_(list(vals)) if c.op == "in" else col.not_in(list(vals))
@@ -151,21 +227,43 @@ def from_row_scope(scope: dict[str, Any], field_of_prop: dict[str, str] | None =
     return {"field": field, "op": "in", "value": values}
 
 
+DENY_ALL: dict = {"deny": True}  # 哨兵：什么都看不到
+
+
 def combine_or(exprs: list[dict | None]) -> dict | None:
-    """一个用户多个角色：范围取并集（任一角色允许即可见）。任一为空（=全部）则整体不限制。"""
-    if not exprs or any(not e for e in exprs):
+    """一个用户多个角色：范围取并集（任一角色允许即可见）。
+
+    - 没有任何角色范围（[]）→ DENY_ALL（拒绝，不是“不限制”）；
+    - 某个角色明确配置为「全部」（传 None / {}）→ 整体不限制，返回 None。
+    """
+    if not exprs:
+        return DENY_ALL
+    if any(not e for e in exprs):
         return None
     return exprs[0] if len(exprs) == 1 else {"or": exprs}
 
 
+def is_deny_all(expr: dict | None) -> bool:
+    return expr == DENY_ALL
+
+
 async def apply_row_filter(
-    stmt: Select, user: Any, object_type: str, columns: dict[str, ColumnElement]
+    stmt: Select,
+    user: Any,
+    object_type: str,
+    columns: dict[str, ColumnElement],
+    links: dict[str, LinkPath] | None = None,
 ) -> Select:
     """基础层注入行级过滤：biz 等业务数据查询统一这样写，不要自己拼条件。
 
     stmt = await apply_row_filter(select(Store), user, "store", {"region": Store.region})
+    links 由 link_paths_from_definitions(静态关系定义) 生成；不传则不允许跨对象字段。
     """
     from app.common.auth import row_filter  # 避免循环导入
 
     expr = await row_filter(user, object_type)
-    return stmt if expr is None else stmt.where(to_sql(expr, columns, user.attrs))
+    if expr is None:
+        return stmt
+    if is_deny_all(expr):
+        return stmt.where(false())
+    return stmt.where(to_sql(expr, columns, user.attrs, links))

@@ -26,22 +26,136 @@ async def test_request_id_is_echoed_into_error_body(client):
     assert r.json() == {
         "code": "NOT_FOUND",
         "message": "版本不存在",
-        "details": {"id": "v1999.01.1"},
+        "details": {"ver": "v1999.01.1"},
         "requestId": "rid-123",
     }
 
 
-async def test_validation_error_envelope(client):
-    r = await client.get("/api/ontology/v1/releases?size=0")
+def _probe_app() -> FastAPI:
+    from fastapi import APIRouter, Query
+
+    from app.common.context import ReadonlyGuardDep, allow_in_readonly, readonly_extra
+
+    app = FastAPI()
+    app.add_middleware(RequestIdMiddleware)
+    install_error_handlers(app)
+    r = APIRouter()
+
+    @r.get("/v")
+    async def v(size: int = Query(ge=1)) -> dict:
+        return {"size": size}
+
+    @r.get("/boom")
+    async def boom() -> dict:
+        raise RuntimeError("x")
+
+    @r.post("/w")
+    async def w_post() -> dict:
+        return {"ok": True}
+
+    @r.put("/w")
+    async def w_put() -> dict:
+        return {"ok": True}
+
+    @r.patch("/w")
+    async def w_patch() -> dict:
+        return {"ok": True}
+
+    @r.delete("/w")
+    async def w_delete() -> dict:
+        return {"ok": True}
+
+    @r.post("/rules/{rid}:dry-run")
+    @allow_in_readonly
+    async def dry_run(rid: str) -> dict:
+        return {"ok": rid}
+
+    @r.post(
+        "/permission-requests", openapi_extra=readonly_extra("history", "preview")
+    )  # qa W16 申请权限：落库但前端允许
+    async def ask() -> dict:
+        return {"ok": True}
+
+    @r.post("/history-only")
+    @allow_in_readonly(modes={"history"})
+    async def history_only() -> dict:
+        return {"ok": True}
+
+    app.include_router(r, prefix="/api/x/v1", dependencies=[ReadonlyGuardDep])
+    return app
+
+
+async def test_validation_error_envelope():
+    async with AsyncClient(transport=ASGITransport(app=_probe_app()), base_url="http://t") as c:
+        r = await c.get("/api/x/v1/v?size=0", headers={"X-Request-ID": "rid-v"})
     body = r.json()
-    assert r.status_code == 422 and body["code"] == "VALIDATION_ERROR"
-    assert body["details"][0]["loc"] == ["query", "size"]
-    assert body["requestId"]
+    assert r.status_code == 422 and body["code"] == "VALIDATION_FAILED"
+    assert body["details"]["fields"][0]["field"] == "size" and body["details"]["fields"][0]["message"]
+    assert body["requestId"] == "rid-v"
 
 
-async def test_unknown_route_envelope(client):
-    r = await client.get("/api/nope/v1/x")
-    assert r.status_code == 404 and r.json()["code"] == "NOT_FOUND"
+async def test_unhandled_500_has_request_id():
+    async with AsyncClient(
+        transport=ASGITransport(app=_probe_app(), raise_app_exceptions=False), base_url="http://t"
+    ) as c:
+        r = await c.get("/api/x/v1/boom", headers={"X-Request-ID": "rid-500"})
+    assert r.status_code == 500 and r.headers["x-request-id"] == "rid-500"
+    assert r.json() == {
+        "code": "INTERNAL_ERROR",
+        "message": "服务器内部错误",
+        "details": None,
+        "requestId": "rid-500",
+    }
+
+
+async def test_global_readonly_guard_and_whitelist():
+    async with AsyncClient(transport=ASGITransport(app=_probe_app()), base_url="http://t") as c:
+        for m in ("post", "put", "patch", "delete"):
+            assert (await c.request(m, "/api/x/v1/w")).status_code == 200
+            r = await c.request(m, "/api/x/v1/w?ver=v2026.10.1")
+            assert r.status_code == 403 and r.json()["code"] == "READONLY"
+            assert r.json()["details"]["mode"] == "history"
+            r = await c.request(m, "/api/x/v1/w?previewAs=何静")
+            assert r.status_code == 403 and r.json()["details"]["mode"] == "preview"
+        assert (await c.get("/api/x/v1/v?size=1&ver=v2026.10.1")).status_code == 200  # 读不受限
+        assert (await c.post("/api/x/v1/rules/R-1:dry-run?ver=v2026.10.1")).status_code == 200
+        assert (await c.post("/api/x/v1/permission-requests?previewAs=何静")).status_code == 200
+        r = await c.post("/api/x/v1/w?ver=v2026.10.1&previewAs=何静")  # 两个都带 → preview
+        assert r.status_code == 403 and r.json()["details"]["mode"] == "preview"
+        assert (await c.post("/api/x/v1/history-only?ver=v2026.10.1")).status_code == 200
+        r = await c.post("/api/x/v1/history-only?previewAs=何静")
+        assert r.status_code == 403 and r.json()["details"]["mode"] == "preview"
+
+
+async def test_every_mounted_write_route_is_guarded(monkeypatch):
+    """遍历真实挂载（app.api.MOUNTS）里的所有写接口：带 ?ver= 一律 403（白名单除外）。"""
+    from fastapi import APIRouter
+
+    import app.api as api
+    from app.main import create_app
+
+    probe = APIRouter()
+
+    @probe.post("/__probe")
+    async def _p() -> dict:
+        return {"ok": True}
+
+    monkeypatch.setattr(api, "MOUNTS", [*api.MOUNTS, ("ontology", probe)])
+    app = create_app()
+    ops = [
+        (m, path, item[m])
+        for path, item in app.openapi()["paths"].items()
+        for m in item
+        if m.upper() not in ("GET", "HEAD", "OPTIONS")
+    ]
+    assert any(p == "/api/ontology/v1/__probe" for _, p, _ in ops)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        for m, path, op in ops:
+            if "history" in (op.get("x-allow-in-readonly") or ()):
+                continue
+            url = path.replace("{", "").replace("}", "")
+            r = await c.request(m, f"{url}?ver=v2026.10.1")
+            assert r.status_code == 403 and r.json()["code"] == "READONLY", (m, path)
 
 
 def _guard_app() -> FastAPI:
@@ -60,9 +174,11 @@ async def test_ver_and_preview_are_read_only():
     async with AsyncClient(transport=ASGITransport(app=_guard_app()), base_url="http://t") as c:
         assert (await c.post("/w")).json() == {"ok": True}
         r = await c.post("/w?ver=v2026.10.1")
-        assert r.status_code == 409 and r.json()["code"] == "READONLY_HISTORY"
+        assert r.status_code == 403 and r.json()["code"] == "READONLY"
+        assert r.json()["details"] == {"mode": "history", "ver": "v2026.10.1"}
         r = await c.post("/w?previewAs=何静")
-        assert r.status_code == 409 and r.json()["code"] == "READONLY_PREVIEW"
+        assert r.status_code == 403 and r.json()["code"] == "READONLY"
+        assert r.json()["details"] == {"mode": "preview", "previewAs": "何静"}
 
 
 async def test_openapi_has_module_prefixes(client):

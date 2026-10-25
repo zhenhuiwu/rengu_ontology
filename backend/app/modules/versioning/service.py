@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.contracts.versioning import ReleaseInfo, Snapshot, SnapshotProvider
 from app.core import clock
 from app.core.config import get_settings
-from app.core.errors import AppError, NotFound
+from app.core.errors import AppError, EmptyRelease
 from app.db.dialects import get_adapter
-from app.modules.versioning.models import OntRelease, ReleaseKind
+from app.modules.versioning.models import OntologyRelease, ReleaseKind
 from app.modules.versioning.repo import ReleaseRepo
+from app.modules.versioning.sections import restore_sections
 
 PUBLISH_LOCK = "ontology.publish"
 
@@ -32,7 +33,7 @@ def next_ver(current: str | None, now: datetime) -> str:
     return f"{prefix}1"
 
 
-def _info(r: OntRelease) -> ReleaseInfo:
+def _info(r: OntologyRelease) -> ReleaseInfo:
     return ReleaseInfo(
         ver=r.ver,
         parent_ver=r.parent_ver,
@@ -45,82 +46,64 @@ def _info(r: OntRelease) -> ReleaseInfo:
     )
 
 
-class EmptySnapshotProvider:
-    """占位：静态模块实现 SnapshotProvider 之前，沿用上一版快照并记录变更单号。"""
-
-    async def build_snapshot(
-        self, session: AsyncSession, base_ver: str | None, change_order_ids: list[str]
-    ) -> Snapshot:
-        base = await VersioningService(self).get_snapshot(session, base_ver) if base_ver else None
-        return dict(base or {})
-
-
 class VersioningService:
     def __init__(self, provider: SnapshotProvider | None = None) -> None:
-        self.provider: SnapshotProvider = provider or EmptySnapshotProvider()
+        if provider is None:
+            from app.modules.versioning.sections import SectionSnapshotProvider
+
+            provider = SectionSnapshotProvider()
+        self.provider: SnapshotProvider = provider
 
     async def create_version(
         self,
         session: AsyncSession,
         change_order_ids: list[str],
         *,
+        rollback_of: str | None = None,
         published_by: str,
         note: str,
         now: datetime | None = None,
     ) -> str:
-        # [推断] 前端发布按钮只在有已通过的变更单时可用，这里同样要求至少一张
+        """唯一入口。发布与回滚都生成新版本（只追加，不改任何旧行），同事务、不 commit。
+
+        - 普通发布（rollback_of=None）：依次调用各模块登记的 section builder 组装快照；
+        - 回滚（rollback_of=被回滚的版本号，必须是当前最新版）：**不调用** builder，
+          快照原样复制它的上一版（restoredFrom），change_order_ids 是那张回滚变更单。
+        """
         if not change_order_ids:
-            raise AppError("发布至少要包含一张变更单", code="EMPTY_RELEASE")
+            raise EmptyRelease()
         await get_adapter(session).xact_lock(session, PUBLISH_LOCK)
-        latest = await ReleaseRepo(session).latest()
+        repo = ReleaseRepo(session)
+        latest = await repo.latest()
         base_ver = latest.ver if latest else None
-        snapshot = await self.provider.build_snapshot(session, base_ver, list(change_order_ids))
+        cr_ids = list(change_order_ids)
+        if rollback_of is None:
+            snapshot = await self.provider.build_snapshot(session, base_ver, cr_ids)
+            summary: dict = {"changeOrders": len(cr_ids)}
+        else:
+            # 前端规则：「只能回滚最近一次发布」
+            if latest is None or latest.ver != rollback_of or latest.parent is None:
+                raise AppError(
+                    "只能回滚最近一次发布",
+                    code="ROLLBACK_NOT_LATEST",
+                    status_code=409,
+                    details={"current": base_ver, "rollbackOf": rollback_of},
+                )
+            target = latest.parent
+            snapshot = dict(target.snapshot)
+            await restore_sections(session, snapshot)  # 各模块定义表回到被恢复的那一版（可选钩子）
+            summary = {"changeOrders": len(cr_ids), "rollbackOf": rollback_of, "restoredFrom": target.ver}
         return await self._append(
             session,
             base_ver,
             snapshot,
-            list(change_order_ids),
-            {"changeOrders": len(change_order_ids)},
+            cr_ids,
+            summary,
             published_by=published_by,
             note=note,
             now=now,
-        )
-
-    async def create_version_from(
-        self,
-        session: AsyncSession,
-        target_ver: str,
-        rollback_cr_id: str,
-        *,
-        published_by: str,
-        note: str,
-        now: datetime | None = None,
-    ) -> str:
-        """整版回滚：生成新版本，快照原样复制 target_ver。只追加，不改任何旧行。"""
-        await get_adapter(session).xact_lock(session, PUBLISH_LOCK)
-        repo = ReleaseRepo(session)
-        latest = await repo.latest()
-        target = await repo.get(target_ver)
-        if target is None:
-            raise NotFound("版本不存在", details={"ver": target_ver})
-        # 前端规则：「只能回滚最近一次发布」，回滚到的就是当前版本的上一版
-        if latest is None or latest.parent_ver != target_ver:
-            raise AppError(
-                "只能回滚最近一次发布",
-                code="ROLLBACK_NOT_LATEST",
-                status_code=409,
-                details={"current": latest and latest.ver, "allowedTarget": latest and latest.parent_ver},
-            )
-        return await self._append(
-            session,
-            latest.ver,
-            dict(target.snapshot),
-            [rollback_cr_id],
-            {"changeOrders": 1, "rollbackOf": latest.ver, "restoredFrom": target_ver},
-            published_by=published_by,
-            note=note,
-            now=now,
-            rollback_of=latest.ver,
+            latest=latest,
+            rollback=rollback_of is not None,
         )
 
     async def _append(
@@ -134,16 +117,17 @@ class VersioningService:
         published_by: str,
         note: str,
         now: datetime | None,
-        rollback_of: str | None = None,
+        latest: OntologyRelease | None,
+        rollback: bool = False,
     ) -> str:
         now = now or clock.now()
         ver = next_ver(base_ver, now)
         await ReleaseRepo(session).add(
-            OntRelease(
+            OntologyRelease(
                 ver=ver,
-                parent_ver=base_ver,
-                kind=ReleaseKind.rollback if rollback_of else ReleaseKind.publish,
-                rollback_of=rollback_of,
+                parent=latest,  # parent_id = 上一版的 id
+                kind=ReleaseKind.rollback if rollback else ReleaseKind.publish,
+                rollback_target=latest if rollback else None,  # rollback_of_id
                 snapshot=snapshot,
                 snapshot_sha256=snapshot_digest(snapshot),
                 change_order_ids=change_order_ids,
@@ -160,15 +144,15 @@ class VersioningService:
         return latest.ver if latest else None
 
     async def get_release(self, session: AsyncSession, ver: str) -> ReleaseInfo | None:
-        r = await ReleaseRepo(session).get(ver)
+        r = await ReleaseRepo(session).by_ver(ver)
         return _info(r) if r else None
 
     async def get_snapshot(self, session: AsyncSession, ver: str | None = None) -> Snapshot | None:
         repo = ReleaseRepo(session)
-        r = await (repo.get(ver) if ver else repo.latest())
+        r = await (repo.by_ver(ver) if ver else repo.latest())
         return dict(r.snapshot) if r else None
 
 
 def get_version_service() -> VersioningService:
-    # 静态模块实现 SnapshotProvider 后，在这里注入：VersioningService(StaticSnapshotProvider())
+    # 快照 = 各模块登记的 section builder 拼成（app/modules/versioning/sections.py）
     return VersioningService()

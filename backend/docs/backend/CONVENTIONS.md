@@ -15,13 +15,14 @@
 |---|---|
 | `/api/ontology/v1` | versioning（版本/发布）、static（静态本体）、dynamic（动态规则）、action、event |
 | `/api/qa/v1` | qa（问数，代理 auto-ontology） |
-| `/api/data/v1` | data（数据连接）、integration（外部系统 ext_system、回写调用 writeback_call、对账；Palantir专家） |
-| `/api/admin/v1` | admin（用户、角色、API Key、配置、审计） |
-| `/api/biz/v1` [推断] | biz（演示业务数据：门店、商品、订单等，首页看板和问数对象搜索用；分组待 PDE 确认） |
+| `/api/data/v1` | data（数据连接）、integration 的外部系统接口 `/ext-systems`（Palantir专家） |
+| `/api/ontology/v1` | integration 的动作执行、事件、对账接口（同一模块的另一个路由，Palantir专家） |
+| `/api/admin/v1` | admin（用户 sys_user、角色、API Key、配置、审计） |
+| `/api/biz/v1` | biz（演示业务数据：门店、商品、订单等，首页看板和问数对象搜索用；PDE 定） |
 
 - 挂载表在 `app/api.py` 的 `MOUNTS`，前缀由 `settings.api_prefix_template = "/api/{module}/v1"` 生成。代码按模块分目录，路由按分组挂载。
 - 资源名用复数、kebab-case：`/releases`、`/change-requests/{id}`。
-- 动作用子路径 `POST /change-requests/{id}/submit`（不用 `:submit`）。
+- 动作用冒号：`POST /change-requests/{id}:submit`、`POST /alerts:batch-close`（PDE 定，和前端 / 各模块文档一致）。
 - 健康检查：`/healthz`（进程活着）、`/readyz`（数据库可用）。不加前缀。
 
 ## 2. JSON 和错误
@@ -30,16 +31,20 @@
 - 数据库内部用 snake_case 加英文代码，在 Pydantic 层转换。
 - 所有接口模型继承 `app.core.schema.ApiModel`，它带 `alias_generator=to_camel`、`populate_by_name`、`from_attributes`。
 - 成功响应直接返回资源本身，不包 `{data: ...}`。
-- 失败响应统一为 `{code, message, details, requestId}`，HTTP 状态码表达错误类别。
+- 失败响应统一为 `{code, message, details, requestId}`，HTTP 状态码表达错误类别。未处理异常（含提交失败）也是这个结构的 500，并带 `X-Request-ID` 响应头。
 
 | code | HTTP | 场景 |
 |---|---|---|
-| `VALIDATION_ERROR` | 422 | 参数校验失败（details 里是字段错误） |
+| `VALIDATION_FAILED` | 422 | 参数校验失败，`details.fields = [{field, message}]` |
 | `UNAUTHORIZED` / `NO_PERMISSION` | 401 / 403 | 未登录 / 无权限 |
 | `NOT_FOUND` | 404 | 资源不存在 |
-| `DUPLICATE_KEY` | 409 | 违反唯一约束 |
+| `DUPLICATE_KEY` | 409 | 违反唯一约束（BaseRepository 自动转换；模块做「已存在」校验也用它，`DuplicateKey`） |
+| `EMPTY_INPUT` | 409 | 必须至少一项的输入为空（`EmptyInput`） |
+| `STATE_INVALID` | 409 | 当前状态不允许该操作（`ensure_transition`） |
 | `VERSION_CONFLICT` | 409 | 乐观锁 `lockVersion` 不一致 |
-| `READONLY_HISTORY` / `READONLY_PREVIEW` | 409 | 在 `?ver=` 或 `?previewAs=` 下写入 |
+| `SQL_REJECTED` | 403 | 问数网关拒绝执行生成的 SQL（非单条只读 SELECT、查了未登记的表），`app/common/sql_guard.py` |
+| `READONLY` | 403 | 在 `?ver=` / `?previewAs=` 下写入；`details.mode = "history" \| "preview"`，两个参数都带时按 preview |
+| `ROLLBACK_NOT_LATEST` / `EMPTY_RELEASE` | 409 | 只能回滚最近一次发布 / 发布没有变更单 |
 | `INTERNAL_ERROR` | 500 | 未处理异常（不泄露堆栈） |
 
 - 业务错误要抛 `app.core.errors` 里的 AppError 子类，不要直接抛 HTTPException。
@@ -78,12 +83,13 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
 - 数据库列是 `varchar` 加 CHECK 约束（`native_enum=False`）。加枚举值只需写一个迁移改 CHECK，不用 `ALTER TYPE`。
 - 状态机：每个模块在 `service.py` 里写一张 `TRANSITIONS: dict[Status, set[Status]]`，统一由 `ensure_transition(cur, nxt)` 校验。
-  - 不合法的流转返回 409 `INVALID_TRANSITION`。
+  - 不合法的流转返回 409 `STATE_INVALID`。
   - 允许哪些流转**照抄前端按钮的出现条件**，前端能点的后台都要放行。
-- 时间格式：
-  - 前端 mock 用 `YYYY-MM-DD HH:mm`（北京时间），接口用 `DisplayDateTime` 输出同样格式。
-  - 入参既接受这个格式，也接受 ISO 8601。
+- 时间格式（PDE 定：**按每个字段的 mock 格式**）：
+  - 北京时间、不带时区。默认 `YYYY-MM-DD HH:mm` 用 `DateTimeMin`；mock 带秒的字段用 `DateTimeSec`（`YYYY-MM-DD HH:mm:ss`）。
+  - 各模块文档里列「接口字段 → 格式」表；入参两种长度和 ISO 8601 都接受。
   - 数据库一律存 `timestamptz`。
+  - 只有首行带日期的时间线（如 RUNS 时间线），seed 用 `fill_timeline_dates()` 补日期，时刻倒退时日期 +1。
 
 ## 5. 时间：中央时钟
 
@@ -102,25 +108,13 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
 ## 6. 表设计
 
-- **表名前缀**按模块区分，格式是前缀加下划线：
-
-| 前缀 | 模块 |
-|---|---|
-| `ont_` | 版本/发布（versioning） |
-| `st_` | 静态本体（static） |
-| `dy_` | 动态规则（dynamic） |
-| `ac_` | 动作和事件（action、event） |
-| `qa_` | 问数（qa） |
-| `dt_` | 数据连接（data） |
-| `sys_` | 管理（admin） |
-| `bz_` | 演示业务数据（biz） |
-| 无前缀 | integration 的 `writeback_call`、`ext_system`（团队约定沿用原表名；**不要新建 `ext_call`**） |
-
-- 表名用单数 snake_case，例如 `st_object_type`。
-- **主键**两种用法：
-  - 有业务编码的（`CR-0016`、`v2026.10.3`、对象 api 名），用 `StrIdMixin`（`id varchar(64)`）或直接以业务码为主键。
-  - 其余用 `IdMixin`（`bigint identity`）。
-  - 前端 mock 的复合主键，在后台改成单列主键加唯一约束。
+- **表名不加模块前缀**：单数 snake_case 业务名词（`object_type`、`action_run`、`sys_user`），只有撞 SQL 关键字或有歧义时加限定词（`ontology_release`、`biz_order`）。integration 的 `writeback_call`、`ext_system` 沿用原名，**不要新建 `ext_call`**。
+- **主键一律代理键 `id bigint`（identity，`IdMixin`）**（PDE 定）：
+  - 前端可见的业务编号（`CR-0016`、`ACT-20261025-3834`、`R-007`）放 `code` 列 + UNIQUE（`CodeMixin`）；已有自然列名的（`ontology_release.ver`、对象类型 `api_name`）自己声明列 + `UniqueConstraint`。
+  - **外键一律指向对方的 `id`**（含自引用，如 `ontology_release.parent_id / rollback_of_id`）。
+  - **接口只暴露业务编号**：输出模型 `id: CodeId`（从 ORM 的 `code` 读），引用字段（`ruleId`、`parentVer`）连表换回对方编号；路由参数用编号，`BaseRepository.get_by_code_or_404`。
+  - mock 的复合键改成业务唯一约束。
+  - seed：transform 输出编号，`SeedSpec.refs={"外键列": Ref(目标模型, "目标业务键列")}` 由 loader 换成 id（找不到报错；自引用按层写入）。
 - **约束命名**由 `NAMING_CONVENTION` 自动生成（`pk_`、`fk_`、`uq_`、`ix_`、`ck_`），不要手写约束名。
 - **时间**一律用 `timestamptz`，不用 `timestamp`。日期用 `date`。
 - **JSONB** 用 `JsonType`。只用于结构由前端整体读写、不参与过滤的字段，例如快照、配置、`calls[]`。要过滤的字段必须拆成列。
@@ -128,28 +122,32 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
 | mixin | 提供的列 |
 |---|---|
-| `AuditColumnsMixin` | `created_at/by`、`updated_at/by` |
-| `SoftDeleteMixin` | `deleted_at/by` |
-| `LockVersionMixin` | `lock_version`，接口叫 `lockVersion`，乐观锁 |
-| `SeedMarkMixin` | `is_seed` |
+| `IdMixin` / `CodeMixin` | `id bigint` 代理主键 / 另加 `code varchar(64) UNIQUE` |
+| `MutableTableMixin` | 可变表 5 列：`created_at, updated_at, created_by, is_seed, lock_version`（接口 `lockVersion`，乐观锁） |
+| `AppendOnlyTableMixin` | 只追加表：`created_at, created_by, is_seed`（无 lock_version、无软删除） |
+| `SoftDeleteMixin` | `deleted_at/by`，**只给前端有删除/恢复的表** |
 | `OntologyVersionMixin` | `ontology_ver` |
 
+- **只追加表**（版本、日志、事件、命中）在迁移里调 `app.db.ddl.enable_append_only(table)`：触发器拒绝 DELETE、TRUNCATE 和修改内容的 UPDATE（内容不变的 UPDATE 放行，seed 重跑幂等）。
+- 批量写入用 `get_adapter(session).upsert(...)`：按 32767 个绑定参数自动分批，批内按冲突键去重（后出现的覆盖）。
 - 跨数据库差异走 `app/db/dialects`：`get_adapter(session).upsert(...)` 和 `.xact_lock(key)`。业务代码不要直接写 `ON CONFLICT`。
 
 ## 7. 本体版本（整版本、只追加）
 
 接口定义在 `app/contracts/versioning.py`，参考实现是 `app/modules/versioning/service.py`。
 
-- `create_version(session, change_order_ids, *, published_by, note)`：
-  - 和调用方的业务写入在**同一事务**里执行。
-  - 会先加全局锁 `ontology.publish`，再写一行新的 `ont_release`。
-  - 版本号格式 `vYYYY.MM.N`，月份按北京时间算。
-- **回滚 = 生成新版本**：`create_version_from(session, target_ver, rollback_cr_id, ...)`。
-  - 新版本内容等于 `target_ver`，`kind=rollback`，`rollbackOf=target_ver`。
-  - 同时生成一张回滚变更单，供审计追溯。
-  - 前端规则：“只能回滚最近一次发布”，也就是 target 必须是当前版本的 parent。
-- **只追加，不改不删**：数据库触发器拒绝 `DELETE` 和修改内容的 `UPDATE`（内容不变的 UPDATE 放行，seed 重跑才能幂等）。
-- `?ver=vX`：只读读取历史快照，`ViewContextDep` 负责解析。写接口要依赖 `WritableDep`，在 `?ver=` 或 `?previewAs=` 下写入会返回 409。
+- **唯一入口** `create_version(session, change_order_ids, *, rollback_of=None, published_by, note)`：
+  - 和调用方的业务写入在**同一事务**里执行；先加全局锁 `ontology.publish`，再追加一行 `ontology_release`。
+  - 版本号格式 `vYYYY.MM.N`，月份按北京时间算；`parent_id` 指向上一版的 id。
+  - 快照 = 各 section 由负责模块组装（`SECTION_OWNERS`：静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths，动态 rules/lifecycles，Palantir actionTypes/eventTypes），段内按前端 id 作键。模块实现 `SnapshotSectionBuilder`（`build_section` + `seed_section`），在 `app/modules/versioning/sections.py` 按段登记；未登记的段沿用上一版。seed 不写空快照。
+- **回滚 = 同一个入口传 `rollback_of=<当前最新版本号>`**：
+  - 只能回滚最近一次发布，否则 409 `ROLLBACK_NOT_LATEST`。
+  - **不调用** section builder，快照原样复制被回滚版本的上一版（`changeSummary.restoredFrom`）；`kind=rollback`，`rollback_of_id` 指向被回滚的版本，接口返回 `rollbackOf` 版本号。
+  - 回滚变更单号作为 `change_order_ids` 传入，供审计追溯。
+  - **定义表也要回去**：同一事务里对每个登记的 builder 调可选钩子 `restore_section(session, content)`（content = 被恢复版本这一节的快照），由模块把自己的定义表（如动态 `rule` 当前版本、`lifecycle.version`）恢复成那一版；不实现钩子的段只回快照。
+- **只追加，不改不删**：见 §6 的只追加触发器。
+- `GET /releases` 不分页、登录即可调：`{items, current}`（前端版本选择器要全量）。
+- `?ver=vX`：只读读取历史快照，`ViewContextDep` 负责解析。只读由**全局守卫**负责（§13），模块不用自己挂依赖。
 - `[推断]` 规则：
   - 没有变更单时发布返回 409 `EMPTY_RELEASE`。
   - `kind` 字段（发布/回滚）。
@@ -158,21 +156,25 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
 接口定义在 `app/contracts/actions.py`。
 
-- `submit(action_run_id, idempotency_key) -> SubmitResult`：
-  - 返回状态之一：`SUCCESS`（成功）、`FAILED`（失败）、`UNKNOWN`（结果未知），外加回执 `receiptId`、`code`、`retries`、`elapsedMs`、`calls[]`。
-  - `UNKNOWN` 交给对账处理：`ReconcileQuery.query_by_key` 查结果，然后回调 `ReconciliationListener.on_reconciled(action_run_id, result)`。
-- **幂等键在暂存（staging）时生成**（`new_idempotency_key()`），之后不再改变。
-- **重新提交时新建一条 run，并换一个新键**（`new_resubmit_key(old, n)`，格式是原键加 `-rN` 后缀），不复用旧 run。
-- 表结构写法：`idempotency_key varchar(64) not null`，加部分唯一索引 `unique_except_seed(...)`（见 §9）。
+- `submit(action_run_id, idempotency_key) -> SubmitResult`：`SUCCESS`（成功）/ `FAILED`（失败）/ `UNKNOWN`（结果未知），外加 `receiptId`、`code`、`retries`、`elapsedMs`、`calls[]`。
+  - 外部明确失败：适配器用**同一个键**自动重试，最多 `ext_system.maxRetry` 次；超时 = 结果未知，写操作不重试。
+  - SUCCESS → dynamic 同事务提交本体变更并发 `ActionExecuted`；UNKNOWN → dynamic 生成 eventId，经 integration `EventEmitter.emit` 发 `ActionOutcomeUnknown`，integration 建 `reconcile_task`。
+- 对账：`query_by_key` 只返回 查到·成功 / 查到·未执行 / 查无（「查无」也算一次）；cron `*/15` 每轮最多 3 次，仍查无 → 转人工。`ext_system.idempotent=false` 的系统从不调 `query_by_key`，任务建好即转人工。
+  - 结论只有 `succeeded`（外部已成功）/ `not_executed`（外部未执行），经 `on_reconciled` 回调；not_executed 不能重新提交。
+  - 人工选「仍无法确认」→ `ReconcileScheduler.reopen_reconcile(action_run_id)`：`round+1`、`tries=0`、`next_at=now`（idempotent=false 仍停在人工）。
+  - seed：结果未知 74 条（ACTIONS 20 + RUNS 54）都是 `tries=3`、人工、`next_at=null`。
+- **幂等键在暂存时生成**：`idempotency_key_for("ACT-20261025-3834") == "act-20261025-3834"`，之后不再改变。
+- **用户重新提交（只从「失败」）**：新建一条 run + 新键 `new_resubmit_key(old)`（`<原键去掉 -rN>-r<N+1>`），旧 run 不改。
+- 表结构写法：`idem_key varchar(64) not null`，加部分唯一索引 `unique_except_seed(...)`（见 §9）。
 
 ## 9. Seed：mock 数据入库
 
 ### 目录
 
 ```
-backend/seeds/json/<module>/*.json          ← PDE 的 npm run export-mock 生成，不要手改
-backend/seeds/json/<module>/derived/*.json  ← 派生/函数类 mock（export-mock 的 derived 配置）
-backend/seeds/extra/<module>/*.json         ← 后端补充：mock 里没有，只为满足外键等（手写）
+backend/seeds/json/<组>/*.json          ← PDE 的 npm run export-mock 生成，不要手改；组 = common/static/dynamic/action/qa/system
+backend/seeds/json/<组>/derived/*.json  ← 派生/函数类 mock：[{args, result}]，loader 自动展开（derived_args 取参数）
+backend/seeds/extra/<组>/*.json         ← 后端补充：mock 里没有，只为满足外键等（手写）
 backend/app/modules/<module>/seeds/__init__.py  ← 本模块的 loader（SeedSpec 列表）
 ```
 
@@ -182,15 +184,16 @@ backend/app/modules/<module>/seeds/__init__.py  ← 本模块的 loader（SeedSp
    - 时间保持北京时间原值，由 `parse_display_dt` 解析。
 2. **先 json/ 再 extra/**，所有写入在同一事务内完成。
    - 如果某个外键要靠 extra 里的行才能满足，这个外键要声明 `DEFERRABLE INITIALLY DEFERRED`。
-3. **按业务键 UPSERT**（`SeedSpec.key`，例如 `("ver",)`），重跑幂等。`make seed` 跑两次结果相同，这一条有测试覆盖。
-4. **`is_seed`**：表混入了 `SeedMarkMixin` 时，loader 会自动把 seed 写入的行标成 `is_seed=true`。
+3. **按业务键 UPSERT**（`SeedSpec.key`，例如 `("ver",)`、`("code",)`，不是代理键 id），重跑幂等；外键编号用 `SeedSpec.refs` 换成 id。
+   - 模块用 `JSON_MODULE` 指定默认组（admin/data/integration→system，event→action，biz→common，versioning→static）；读别的组用 `SeedSpec.group`。`derived/dsTables.json` 只认 system 组。`make seed` 跑两次结果相同，这一条有测试覆盖。
+4. **`is_seed`**：表带 `is_seed` 列（`MutableTableMixin` / `AppendOnlyTableMixin` 都含）时，loader 会自动把 seed 写入的行标成 `is_seed=true`。
 5. **mock 本身违反唯一约束时**（例如 31 个重复的幂等键），把唯一约束改成部分唯一索引：
 
 ```python
-class ActionRun(IdMixin, SeedMarkMixin, Base):
-    __tablename__ = "ac_action_run"
-    __table_args__ = (unique_except_seed("ac_action_run", "idempotency_key"),)
-# → CREATE UNIQUE INDEX uq_ac_action_run_idempotency_key_nonseed ON ac_action_run (idempotency_key) WHERE NOT is_seed
+class ActionRun(CodeMixin, MutableTableMixin, Base):
+    __tablename__ = "action_run"
+    __table_args__ = (unique_except_seed("action_run", "idem_key"),)
+# → CREATE UNIQUE INDEX uq_action_run_idem_key_nonseed ON action_run (idem_key) WHERE NOT is_seed
 ```
 
    - seed 行之间可以重复，业务新写入的行仍然受唯一约束（见 `tests/test_conventions.py::test_seed_marks_and_partial_unique`）。
@@ -198,8 +201,8 @@ class ActionRun(IdMixin, SeedMarkMixin, Base):
 
 ### 模块负责人迁移 mock 的步骤
 
-1. 让 PDE 在 export-mock 配置里加上你的文件，执行 `npm run export-mock`，输出到 `seeds/json/<module>/`。
-2. 在 `models.py` 建表，执行 `make revision m="st: add object_type"` 生成迁移，再人工检查迁移内容。
+1. 让 PDE 在 export-mock 配置里加上你的文件，执行 `npm run export-mock`，输出到 `seeds/json/<组>/`。
+2. 在 `models.py` 建表，执行 `make revision m="static: add object_type"` 生成迁移，再人工检查迁移内容。
 3. 在 `app/modules/<module>/seeds/__init__.py` 写 `SEEDS = [SeedSpec(Model, "xxx.json", key=(...), transform=...)]`。
    - transform 负责三件事：camelCase 转 snake_case、中文标签转英文代码（`from_api(Enum, v)`）、时间解析。
    - JSON 顶层是对象时，用 `path=` 指定要读的数组。
@@ -223,16 +226,22 @@ class ActionRun(IdMixin, SeedMarkMixin, Base):
   - `valueFrom` 只能写成 `user.<attr>`，取值来自 `CurrentUser.attrs`。
   - 当前用户缺少该属性时，条件结果为 false，也就是什么都看不到。
 - **组合**：用 `{and: [...]}` 或 `{or: [...]}` 组合条件，最多嵌套 5 层。值为空或 null 表示不限制，与前端“空=全部”一致。
-- **转 SQL**：`to_sql(expr, columns_whitelist, user.attrs)` 返回 SQLAlchemy 条件表达式。
+- **转 SQL**：`to_sql(expr, columns_whitelist, user.attrs, links=None)` 返回 SQLAlchemy 条件表达式。
   - 字段必须在白名单里，否则返回 `BAD_ROW_FILTER`。
-  - 值一律走绑定参数，不会被拼接进 SQL。
+  - **一跳关系**：字段写 `<关系 id>.<属性>`，`links` 由 `link_paths_from_definitions(对象类型, 静态 LINKS 定义, 对象表)` 生成，编译成 `EXISTS`；未声明的关系、多跳一律拒绝。
+  - 值一律走绑定参数，不会被拼接进 SQL；`like` 只接受字符串，非 `in/not_in` 不接受数组；多值用户属性配 `=` 自动变 IN，配别的操作符报错。
 - **前端 mock 转换**：`from_row_scope({prop, op, values})` 把前端 RowScope 转成这个结构。
-- **多角色合并**：用 `combine_or`，结果取并集；任一角色不限制，整体就不限制。
+- **多角色合并**：用 `combine_or`，结果取并集；任一角色明确配置为「全部」整体不限制；**一个角色范围都没有 → `DENY_ALL`（`WHERE false`）**。
 - **注入方式（biz 等业务数据必须这样写）**：
   `stmt = await apply_row_filter(select(Store), user, "store", {"region": Store.region, ...})`。
   - 行级条件由基础层注入，业务模块不要自己拼过滤条件。
   - 白名单 columns 由模块声明：字段名对应对象属性的 api 名。
   - `row_filter()` 目前是扩展点，由 PDE 实现：读取角色范围、处理 defaultDeny。
+- **问数 NL2SQL 网关（api-index §1.4 硬规则，已定）**：模型生成的 SQL 不能走上面的 SQLAlchemy 注入，改用 `app/common/sql_guard.py`：
+  - `assert_single_select(sql)`：sqlglot 解析，只放行单条只读 SELECT（拒多语句、DDL/DML、CTE 里的写、`SELECT INTO`、`FOR UPDATE`、`pg_sleep`/`dblink`/`lo_*` 等），不合规返回 403 `SQL_REJECTED`。
+  - `inject_row_filters(sql, {表: 谓词 SQL | None}, allowed)`：受控表替换成 `(SELECT * FROM t WHERE 谓词) AS t`；`"FALSE"` = DENY_ALL；未登记的表一律拒绝。谓词由 `row_filter` + `to_sql` 编译得到。
+  - 执行只用只读库账号 `RENGU_QA_READONLY_DATABASE_URL`（库层 `default_transaction_read_only=on`、只授权业务表），没配置就拒绝执行，不回退到主库账号。
+  - 身份只取 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；dev/test 的 `X-Demo-As` 是会话桩，prod 忽略。
 
 ## 11. 团队决定（PDE，一期）
 
@@ -243,25 +252,25 @@ class ActionRun(IdMixin, SeedMarkMixin, Base):
 | 预览 | **每个用户同一时间只有一个预览会话**：开始新的预览会替换旧的，不报错；`?previewAs=` 下只读 | `app/contracts/preview.py`（Protocol + dev 内存实现） |
 | 测试连接 | 数据连接和外部系统的“测试连接”接口在 dev/test 环境用 mock 适配器（`mockFail: true` 模拟失败）；prod 由负责人接入真实实现 | `app/modules/data/adapters.py` |
 | 外部调用 | 表名沿用 `writeback_call`、`ext_system`，归 integration 模块（Palantir专家）；不建 `ext_call` | `app/modules/integration/` |
-| 函数版本 | 函数（Functions）单独存 `fn_version` 表，各函数分别递增版本号；**不走** `create_version` | `app/modules/dynamic/`、contracts/versioning 规则 6 |
+| 函数版本 | 函数（Functions）单独存 `fn_version` 表，各函数分别递增版本号；**不走** `create_version`、不写 `ontology_release`（编辑保存 / 回滚直接生成新函数版本） | `app/modules/static/`（PDE 定）、contracts/versioning 规则 11 |
 | 业务数据 | 演示门店、商品、订单归 biz 模块；所有查询由基础层注入行级过滤（§10） | `app/modules/biz/` |
 
-### 后台任务（procrastinate 桩，`app/jobs/__init__.py`）
+### 后台任务（procrastinate，`app/jobs/__init__.py` + `app/jobs/worker.py`）
 
 | 任务名 | 队列 | 周期 | 负责人 | 说明 |
 |---|---|---|---|---|
 | `event.deliver` | events | 按需 defer | event | 事件投递 |
 | `event.redeliver_failed` | events | 每 5 分钟 | event | 失败事件重投（退避） |
 | `outbox.dispatch` | outbox | 每分钟 | PDE | outbox 分发 |
-| `release.expand` | release | 发布提交后 defer | static | 发布后把快照展开到已发布定义表、刷新缓存 |
-| `action.reconcile` | reconcile | 按需 defer | integration | 处理结果未知的提交：标为「仍无法确认」后**再额外对账 3 轮**（`EXTRA_RECONCILE_ROUNDS`），之后转人工 |
+| `release.after_commit` | release | 发布提交后 defer | static | 只做可重做的派生刷新（问数缓存等）；**定义表展开在发布事务里同步完成，不走任务** |
+| `action.reconcile` | reconcile | `*/15 * * * *` | integration | 扫 `reconcile_task.next_at` 到期的任务调 `query_by_key`（§8） |
 | `export.run` | export | 按需 defer | 各模块 | 导出 |
 | `admin.expire_api_keys` | maintenance | 每小时 | admin | API Key 到期后置为过期 |
-| `admin.cleanup_audit` | maintenance | 每天 03:30 | admin | 按保留期清理审计日志（180 天，[推断]，待 PDE 定） |
+| `admin.cleanup_audit` | maintenance | **停用** | admin | 前端没有审计保留期，先不清理 |
 
-- 任务必须幂等，因为可能被重投。
-- 时间一律用 `clock`（§5）。
-- 骨架还没引入 procrastinate 依赖，接入时由 PDE 在 `app/jobs/worker.py` 里按 `JOBS` 注册。
+- 任务必须幂等，因为可能被重投。时间一律用 `clock`（§5）。
+- `app/jobs/worker.py` 按 `JOBS` 注册 procrastinate 任务和周期任务（连接串去掉 `+asyncpg`）；procrastinate 自己的表不进 alembic check。
+- 行级过滤可选依赖 sqlglot（问数 SQL 改写用）。
 
 ## 12. 新增模块 / 迁移
 
@@ -286,23 +295,19 @@ class ActionRun(IdMixin, SeedMarkMixin, Base):
   - 改动基础层（core/db/common/contracts）时，必须有本体小白评审。
   - 改动扩展点时，必须有 PDE 评审。
 - **提交前**：必须跑 `make check`（ruff、alembic check、pytest）。
-- **`?ver=` / `?previewAs=`**：
+- **`?ver=` / `?previewAs=`**（只看 query 参数，不看请求头）：
   - 所有读接口都要支持这两个参数，用 `ViewContextDep` 解析。
-  - 写接口要挂 `WritableDep`。
+  - **只读由全局守卫负责**：`app/api.py` 给每个分组路由挂 `ReadonlyGuardDep`，非 GET 请求带任一参数 → 403 `READONLY`（两个都带按 preview）。
+  - 个别写接口前端允许在只读下调用（dry-run、qa W16 申请权限），在路由上标放行模式：`@allow_in_readonly`（两种都放行）、`@allow_in_readonly(modes={"history"})`，或 `openapi_extra=readonly_extra("history", "preview")`。
+  - 测试 `tests/test_core.py::test_every_mounted_write_route_is_guarded` 扫描所有挂载的写接口。
   - `previewAs` 表示以另一个用户的身份预览，由 PDE 的鉴权扩展点实现。每人同一时间只有一个预览会话（§11）。
 
 ## 14. [推断] 清单
 
 - `EMPTY_RELEASE`：没有变更单时不允许发布。
-- `ont_release.kind`（发布/回滚）、`rollbackOf` 字段：前端只展示文案，这两个字段是后台加的。
+- `ontology_release.kind`（发布/回滚）、`rollbackOf` 字段：前端只展示文案，这两个字段是后台加的。
 - 行级过滤中，缺少用户属性时结果为 false（宁严勿宽）。
-- biz 挂在 `/api/biz/v1`（api-index v0.2 的四个分组里没有 biz）。
-- 审计日志保留 180 天；cron 周期。
 
-## 15. 不确定、待 PDE 定的事项
+## 15. 待 PDE 定的事项
 
-- 时间是否全部用 `YYYY-MM-DD HH:mm` 格式。
-- 由 PDE 定（见 README 和交付报告）：
-  - CR 号序列放在哪个模块；
-  - 快照 JSON 的结构；
-  - export-mock 输出的 JSON 顶层结构。
+- （已定）`GET /releases` = `{items, current}`。

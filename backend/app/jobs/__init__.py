@@ -1,9 +1,12 @@
 """后台任务桩（procrastinate）。
 
 约定：
-- 任务函数是普通 async 函数，签名定死；接入 procrastinate 时由 PDE 在 app/jobs/worker.py 里
-  `app.task(name=spec.name, queue=spec.queue)(spec.fn)` 注册，周期任务按 spec.cron 配 periodic。
-  （骨架暂不引入 procrastinate 依赖，避免锁定版本。）
+- 任务函数是普通 async 函数，签名定死；app/jobs/worker.py 用 procrastinate（3.10，锁在 uv.lock）
+  把 JOBS 里的 8 个任务全部注册（`build_app()`），周期任务按 spec.cron 配 periodic。
+  启动 worker：`uv run procrastinate --app=app.jobs.worker.app worker`（建表：`... schema --apply`）。
+- 发布时定义表的展开**不是**异步任务：静态在发布事务里同步完成（CONVENTIONS §11）。
+  原 release.expand 改为 release.after_commit：发布提交后只做可重做的派生刷新（问数缓存等）。
+- 一期没有审计保留期清理：admin.cleanup_audit 保留注册但 enabled=False（不配周期、函数体不删数据）。
 - **所有“现在 / 今天 / 近 N 天”都用 app.core.clock**，dev/test 下是 2026-10-25 15:42（北京时间）。
 - 任务必须幂等（可能被重投）；业务写入在任务自己的事务里提交。
 - 每个任务的实现归对应模块负责人，函数体里写 EXTENSION POINT。
@@ -11,7 +14,6 @@
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
 from app.core import clock
@@ -28,6 +30,7 @@ class JobSpec:
     fn: Callable[..., Awaitable[Any]]
     cron: str | None = None  # 周期任务；None = 由业务 defer
     description: str = ""
+    enabled: bool = True  # False = 注册但不排周期（一期不用）
 
 
 async def deliver_event(event_id: str) -> None:
@@ -48,15 +51,18 @@ async def dispatch_outbox() -> int:
     return 0
 
 
-async def expand_release(ver: str) -> None:
-    """发布后展开：把 ver 的快照展开到已发布定义表，刷新问数缓存等。发布事务提交后 defer。"""
-    # EXTENSION POINT (static 负责人)
+async def after_release_commit(ver: str) -> None:
+    """发布**提交后**的派生刷新（问数缓存、搜索索引等，可重做）。定义表展开已在发布事务里同步完成。"""
+    # EXTENSION POINT (static / qa 负责人)
 
 
-async def reconcile_unknown(action_run_id: str, round_no: int) -> None:
-    """对 UNKNOWN 的提交按幂等键查外部结果（contracts.actions.ReconcileQuery）。
-    结果为「仍无法确认」且 round_no < EXTRA_RECONCILE_ROUNDS 时再 defer 一轮；用完转人工。"""
+async def reconcile_due() -> int:
+    """周期 */15：扫 reconcile_task 里 next_at <= clock.now() 的任务，按幂等键查外部结果
+    （contracts.actions.ReconcileQuery）。每轮最多 EXTRA_RECONCILE_ROUNDS 次尝试，用完 next_at=null 转人工，
+    人工「再对账一轮」走 contracts.actions.ReconcileScheduler.reopen_reconcile。返回本轮处理条数。"""
+    _due_before = clock.now()
     # EXTENSION POINT (integration / Palantir专家)
+    return 0
 
 
 async def export_job(export_id: str) -> None:
@@ -71,13 +77,8 @@ async def expire_api_keys() -> int:
     return 0
 
 
-AUDIT_RETENTION = timedelta(days=180)  # [推断] 保留期，PDE 定
-
-
 async def cleanup_audit_logs() -> int:
-    """删除早于 clock.now() - AUDIT_RETENTION 的审计日志。返回条数。"""
-    _cutoff = clock.now() - AUDIT_RETENTION
-    # EXTENSION POINT (admin / PDE)
+    """一期不做审计保留期清理（PDE 定）：任务停用，函数体不删任何数据。"""
     return 0
 
 
@@ -85,17 +86,25 @@ JOBS: list[JobSpec] = [
     JobSpec("event.deliver", "events", "event", deliver_event, description="事件投递"),
     JobSpec("event.redeliver_failed", "events", "event", redeliver_failed_events, "*/5 * * * *", "失败重投"),
     JobSpec("outbox.dispatch", "outbox", "PDE", dispatch_outbox, "* * * * *", "outbox 分发"),
-    JobSpec("release.expand", "release", "static", expand_release, description="发布后展开"),
+    JobSpec(
+        "release.after_commit", "release", "static", after_release_commit, description="发布提交后的派生刷新"
+    ),
     JobSpec(
         "action.reconcile",
         "reconcile",
         "integration",
-        reconcile_unknown,
-        description=f"结果未知对账；仍无法确认后再对 {EXTRA_RECONCILE_ROUNDS} 轮",
+        reconcile_due,
+        "*/15 * * * *",
+        f"结果未知定时对账（扫 reconcile_task.next_at，每轮 {EXTRA_RECONCILE_ROUNDS} 次）",
     ),
     JobSpec("export.run", "export", "各模块", export_job, description="导出"),
     JobSpec("admin.expire_api_keys", "maintenance", "admin", expire_api_keys, "0 * * * *", "API Key 过期"),
     JobSpec(
-        "admin.cleanup_audit", "maintenance", "admin", cleanup_audit_logs, "30 3 * * *", "审计日志保留期清理"
+        "admin.cleanup_audit",
+        "maintenance",
+        "admin",
+        cleanup_audit_logs,
+        description="审计保留期清理（一期停用）",
+        enabled=False,
     ),
 ]

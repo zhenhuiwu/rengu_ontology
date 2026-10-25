@@ -6,13 +6,13 @@ by 是“接口名和库列名不同”的示范（库列 published_by）。
 
 from pydantic import Field
 
-from app.core.schema import ApiModel, DisplayDateTime
+from app.core.schema import ApiModel, DateTimeMin
 from app.modules.versioning.models import ReleaseKind
 
 
 class ReleaseOut(ApiModel):
     ver: str
-    published_at: DisplayDateTime
+    published_at: DateTimeMin
     by: str = Field(validation_alias="published_by")
     note: str
     parent_ver: str | None = None
@@ -32,3 +32,10 @@ class CurrentVersionOut(ApiModel):
     current: str | None
     next: str
     release: ReleaseOut | None
+
+
+class ReleaseListOut(ApiModel):
+    """GET /releases：不分页。items = 前端 RELEASES（新→旧）；current = CURRENT_VERSION。"""
+
+    items: list[ReleaseOut]
+    current: str | None

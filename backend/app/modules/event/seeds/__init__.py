@@ -5,5 +5,5 @@
 
 from app.seeds import SeedSpec
 
-JSON_MODULE = "event"
+JSON_MODULE = "action"
 SEEDS: list[SeedSpec] = []

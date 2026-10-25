@@ -1,6 +1,7 @@
 """异步引擎与会话。
 
 - 请求内用依赖 `SessionDep` 拿会话；一个请求一个事务，正常返回时提交，抛错时回滚。
+  依赖用 `scope="function"`：提交在**发送响应之前**完成，提交失败 → 500（不会先回 200 再丢数据）。
 - 服务层不要自己 commit（跨模块的契约，例如发布时 create_version，要求在调用方同一个事务里完成）。
 """
 
@@ -50,4 +51,4 @@ async def get_session() -> AsyncIterator[AsyncSession]:
             raise
 
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
+SessionDep = Annotated[AsyncSession, Depends(get_session, scope="function")]

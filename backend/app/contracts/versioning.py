@@ -6,14 +6,32 @@
    调用方负责同一事务内把变更单置为「已发布」并 commit；任何一步失败整体回滚，版本号不会被占用。
 2. 版本只追加、不可修改；“当前版本”= 最新一条，没有可移动的指针。
 3. `?ver=` 只读地读取那一版的快照（`get_snapshot(ver)`）。
-4. 整版回滚 = 调用 `create_version_from(session, target_ver, rollback_cr_id, ...)`：
-   生成一个**新版本**，快照原样复制自 target_ver，并记录一张回滚变更单（审计用）和 rollback_of；
-   仍然只追加，绝不移动指针、不改旧版本。和前端 Releases 页一致：
-   「回滚会生成一个新版本，内容等于上一版本；只能回滚最近一次发布」——
-   所以 target_ver 必须是当前版本的上一版（parent_ver），否则 ROLLBACK_NOT_LATEST。
-5. 快照内容由静态模块提供（SnapshotProvider），版本层不理解快照里的业务结构，只负责存储、
-   校验和（sha256）、版本号和并发控制（全局发布锁）。
-6. 函数（Functions）**不走**本契约：单独存 fn_version 表（按函数各自递增版本，dynamic 模块负责）。
+4. **只有一个入口** `create_version(session, change_order_ids, *, rollback_of=None, ...)`。
+   整版回滚 = 同一个入口传 `rollback_of=<被回滚的版本号>`（必须是当前最新版，否则 409 ROLLBACK_NOT_LATEST），
+   change_order_ids = 那张回滚变更单：生成一个**新版本**，**不调用** build_section，快照原样复制被回滚
+   版本的上一版（change_summary.restoredFrom），记录 rollback_of。仍然只追加，绝不移动指针、不改旧版本。
+   定义表（静态的对象 / 指标…、动态 rule 当前版本 / lifecycle.version、Palantir 动作类型…）也要回到那一版：
+   版本层在同一事务里对每个登记的 builder 调可选钩子 `restore_section(session, content)`（content =
+   被恢复版本这一节的快照内容）；没实现钩子的 section 只回快照、不动定义表。
+   和前端 Releases 页一致：「回滚会生成一个新版本，内容等于上一版本；只能回滚最近一次发布」。
+5. 快照 = {section 名: section 内容}。每个 section 由**负责它的模块**组装（SECTION_OWNERS）：
+   静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths；动态 rules/lifecycles
+   （lifecycles 按对象类型前端 id 作键）；Palantir actionTypes/eventTypes。
+   section 内按**前端 id / API 名**作键（如 "order"、"gross_margin"、"R-007"）。
+   各模块实现 SnapshotSectionBuilder（build_section + seed_section），按 section 在 versioning 的注册表登记
+   （app/modules/versioning/sections.py 的 register_section）；create_version 依次调用已登记的 builder，
+   未登记的 section 原样沿用上一版。
+   版本层把 section 内容当不透明 JSON：不解析、不校验结构，只负责组装顺序、存储、校验和（sha256）、
+   版本号和并发控制（全局发布锁）。
+6. 发布时定义表的展开（把变更单内容写进各定义表）由静态在**同一个发布事务里同步完成**，不走异步任务。
+7. 版本号 vYYYY.MM.N 由 create_version 生成（同月递增，跨月从 1 开始），调用方不传。
+8. 整版回滚 = 新版本 + 回滚变更单；没有「已回滚」状态，旧版本不改。
+9. 变更单号 CR-NNNN 是**一个全局序列**（不按天重置），归静态模块；动态的规则、动作、事件的变更单也用它。
+   版本层只记录变更单号，不分配。
+10. seed：历史版本的快照由各 builder 的 `seed_section(ver, ctx)` 组装（读 export-mock 的 JSON），
+    **不写空快照 {}**：没有任何 builder 登记、或拼出来是空的，版本 seed 直接报错。
+    seed 顺序里 versioning 在 static 之前（静态的 release_id 等外键按 ver 查 ontology_release.id）。
+11. 函数（Functions）**不走**本契约：单独存 fn_version 表（按函数各自递增版本，static 模块负责）。
 """
 
 from dataclasses import dataclass
@@ -23,6 +41,21 @@ from typing import Any, Protocol, runtime_checkable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 Snapshot = dict[str, Any]
+
+# 快照 section → 负责组装的模块（文档 / 登记校验用；版本层不理解内容）
+SECTION_OWNERS: dict[str, str] = {
+    "objectTypes": "static",
+    "properties": "static",
+    "links": "static",
+    "metrics": "static",
+    "dimensions": "static",
+    "terms": "static",
+    "qaPaths": "static",
+    "rules": "dynamic",
+    "lifecycles": "dynamic",
+    "actionTypes": "action",  # Palantir 负责（action 模块）
+    "eventTypes": "event",  # Palantir 负责（event 模块）
+}
 
 
 @dataclass(frozen=True)
@@ -38,8 +71,31 @@ class ReleaseInfo:
 
 
 @runtime_checkable
+class SnapshotSectionBuilder(Protocol):
+    """各模块实现自己负责的 section（section 名见 SECTION_OWNERS）。
+
+    - build_section：发布事务里同步调用。base 是上一版这个 section 的内容（没有则 None），
+      返回应用这些变更单后的完整 section（变更单不涉及本 section 时原样返回 base）；
+      定义表的同步展开也在这里（同一事务）完成，不走异步任务。
+    - seed_section：seed 时为 mock 里的历史版本 ver 组装 section（ctx 是 app.seeds.SeedContext，
+      `ctx.load("RULE_DEFS.json", group="dynamic")` 之类）。
+    """
+
+    section: str
+
+    async def build_section(
+        self, session: AsyncSession, base: Any | None, change_order_ids: list[str]
+    ) -> Any: ...
+
+    def seed_section(self, ver: str, ctx: Any) -> Any: ...
+
+    # 可选：整版回滚时把本模块的定义表恢复成 content（被恢复版本这一节的快照）。不实现 = 只回快照。
+    # async def restore_section(self, session: AsyncSession, content: Any | None) -> None: ...
+
+
+@runtime_checkable
 class SnapshotProvider(Protocol):
-    """静态本体负责人实现：在 base_ver 快照基础上应用这些变更单，返回新的完整快照。"""
+    """组装整版快照。默认实现 = 按注册表依次调用各模块的 SnapshotSectionBuilder（版本层提供）。"""
 
     async def build_snapshot(
         self, session: AsyncSession, base_ver: str | None, change_order_ids: list[str]
@@ -55,22 +111,16 @@ class VersionService(Protocol):
         session: AsyncSession,
         change_order_ids: list[str],
         *,
+        rollback_of: str | None = None,
         published_by: str,
         note: str,
     ) -> str:
-        """同事务写快照，返回新版本号。不 commit。"""
-        ...
+        """唯一入口：同事务写快照，返回新版本号，不 commit。
 
-    async def create_version_from(
-        self,
-        session: AsyncSession,
-        target_ver: str,
-        rollback_cr_id: str,
-        *,
-        published_by: str,
-        note: str,
-    ) -> str:
-        """整版回滚：新版本内容 = target_ver 的快照。同事务、不 commit，返回新版本号。"""
+        rollback_of=None：调用各 section builder 组装；
+        rollback_of=<当前最新版本号>：不调 builder，快照原样复制它的上一版，记录回滚变更单和 rollback_of；
+        不是最新版 → 409 ROLLBACK_NOT_LATEST。
+        """
         ...
 
     async def current_version(self, session: AsyncSession) -> str | None: ...

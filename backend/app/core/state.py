@@ -15,7 +15,7 @@ type Transitions[S] = Mapping[S, Set[S]]
 
 
 class InvalidTransition(AppError):
-    status_code, code, message = 409, "INVALID_TRANSITION", "当前状态不允许该操作"
+    status_code, code, message = 409, "STATE_INVALID", "当前状态不允许该操作"
 
 
 def ensure_transition[S](table: Transitions[S], cur: S, nxt: S) -> None:

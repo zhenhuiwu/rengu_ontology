@@ -58,7 +58,9 @@ CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 
 
 async def row_filter(user: CurrentUser, object_type: str) -> dict | None:
-    """返回该用户对某对象类型的行级过滤表达式（jsonb 结构见 app/common/row_filter.py），None = 不限制。
+    """返回该用户对某对象类型的行级过滤表达式（jsonb 结构见 app/common/row_filter.py）。
+
+    None = 不限制（只有某个角色明确配置为「全部」时）；没有任何角色范围 → combine_or([]) = DENY_ALL（拒绝）。
 
     查询层：`stmt.where(to_sql(await row_filter(user, "store"), {"region": Store.region, ...}, user.attrs))`
     """

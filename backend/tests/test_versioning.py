@@ -10,35 +10,41 @@ from sqlalchemy.exc import DBAPIError
 from app.contracts.versioning import SnapshotProvider, VersionService
 from app.core.config import get_settings
 from app.core.errors import AppError
-from app.modules.versioning.models import OntRelease
+from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.schemas import ReleaseOut
 from app.modules.versioning.service import VersioningService, next_ver, snapshot_digest
 from app.seeds.loader import run_seeds
 
-MOCK = json.loads((get_settings().seeds_json_dir / "versioning" / "releases.json").read_text("utf-8"))
+_RAW = json.loads((get_settings().seeds_json_dir / "static" / "RELEASES.json").read_text("utf-8"))
+MOCK = [{k: r[k] for k in ("ver", "publishedAt", "by", "note")} for r in _RAW]
 
 
 # ---- seed ----
-async def test_seed_is_idempotent(session):
+async def _by_ver(session, ver):
+    return await session.scalar(select(OntologyRelease).where(OntologyRelease.ver == ver))
+
+
+async def test_seed_is_idempotent(session, sections):
     await run_seeds(session, ["versioning"])
     await run_seeds(session, ["versioning"])
-    assert await session.scalar(select(func.count()).select_from(OntRelease)) == len(MOCK) == 5
-    r = await session.get(OntRelease, "v2026.10.3")
+    assert await session.scalar(select(func.count()).select_from(OntologyRelease)) == len(MOCK) == 5
+    r = await _by_ver(session, "v2026.10.3")
+    assert r.snapshot == {"objectTypes": {"order": {"label": "订单", "since": "v2026.10.3"}}}
     assert r.parent_ver == "v2026.10.2" and r.change_order_ids == ["CR-0007"]
 
 
 # ---- 接口与 mock 一一对应 ----
+async def test_seed_refuses_empty_snapshot(session):
+    with pytest.raises(RuntimeError, match="不写空快照"):
+        await run_seeds(session, ["versioning"])
+
+
 async def test_list_matches_mock_exactly(client, seeded):
     body = (await client.get("/api/ontology/v1/releases")).json()
-    assert body["total"] == 5 and body["page"] == 1 and body["size"] == 20
     got = [{k: it[k] for k in ("ver", "publishedAt", "by", "note")} for it in body["items"]]
-    assert got == MOCK  # 字段、取值、顺序都与前端 RELEASES 相同
-
-
-async def test_list_paging(client, seeded):
-    body = (await client.get("/api/ontology/v1/releases?page=2&size=2")).json()
-    assert [i["ver"] for i in body["items"]] == ["v2026.10.1", "v2026.09.4"]
-    assert body["total"] == 5
+    assert got == MOCK  # 不分页：字段、取值、顺序都与前端 RELEASES 相同
+    assert body["current"] == "v2026.10.3" and set(body) == {"items", "current"}
+    assert "total" not in body
 
 
 async def test_current_and_next(client, seeded):
@@ -52,8 +58,9 @@ async def test_detail_and_snapshot(client, seeded):
     body = (await client.get("/api/ontology/v1/releases/v2026.09.3")).json()
     assert body["kind"] == "发布"
     assert body["by"] == "孙浩然" and body["parentVer"] is None and body["changeOrderIds"] == ["CR-0002"]
-    assert body["snapshotSha256"] == snapshot_digest({})
-    assert (await client.get("/api/ontology/v1/releases/v2026.09.3/snapshot")).json() == {}
+    snap = {"objectTypes": {"order": {"label": "订单", "since": "v2026.09.3"}}}
+    assert body["snapshotSha256"] == snapshot_digest(snap)
+    assert (await client.get("/api/ontology/v1/releases/v2026.09.3/snapshot")).json() == snap
 
 
 # ---- create_version 契约 ----
@@ -94,20 +101,21 @@ async def test_create_version_in_callers_transaction(seeded):
 async def test_create_version_requires_change_orders(seeded):
     with pytest.raises(AppError) as e:
         await VersioningService().create_version(seeded, [], published_by="王敏", note="")
-    assert e.value.code == "EMPTY_RELEASE"
+    assert e.value.code == "EMPTY_RELEASE" and e.value.status_code == 409
 
 
 async def test_releases_are_append_only_in_db(seeded):
     for sql in (
-        "UPDATE ont_release SET note='x' WHERE ver='v2026.10.3'",
-        "DELETE FROM ont_release WHERE ver='v2026.10.3'",
+        "UPDATE ontology_release SET note='x' WHERE ver='v2026.10.3'",
+        "DELETE FROM ontology_release WHERE ver='v2026.10.3'",
+        "TRUNCATE ontology_release",
     ):
         sp = await seeded.begin_nested()
         with pytest.raises(DBAPIError, match="只追加"):
             await seeded.execute(text(sql))
         await sp.rollback()
     # 内容不变的 UPDATE（seed 重跑）放行
-    await seeded.execute(text("UPDATE ont_release SET note=note WHERE ver='v2026.10.3'"))
+    await seeded.execute(text("UPDATE ontology_release SET note=note WHERE ver='v2026.10.3'"))
 
 
 async def test_rollback_creates_new_version_with_target_content(seeded):
@@ -115,34 +123,104 @@ async def test_rollback_creates_new_version_with_target_content(seeded):
     now = datetime(2026, 10, 25, 12, tzinfo=UTC)
     v4 = await svc.create_version(seeded, ["CR-0011"], published_by="王敏", note="毛利率口径", now=now)
     before = await svc.get_snapshot(seeded, v4)
-    # 只能回滚最近一次发布：目标必须是当前版本的上一版
+    # 只能回滚最近一次发布：rollback_of 必须是当前最新版
     with pytest.raises(AppError) as e:
-        await svc.create_version_from(seeded, "v2026.10.1", "CR-0015", published_by="王敏", note="", now=now)
-    assert e.value.code == "ROLLBACK_NOT_LATEST"
-    v5 = await svc.create_version_from(
-        seeded, "v2026.10.3", "CR-0015", published_by="王敏", note="回滚 v2026.10.4", now=now
+        await svc.create_version(
+            seeded, ["CR-0015"], rollback_of="v2026.10.3", published_by="王敏", note="", now=now
+        )
+    assert e.value.code == "ROLLBACK_NOT_LATEST" and e.value.status_code == 409
+    calls = []
+    svc.provider.build_snapshot = lambda *a: calls.append(a)  # 回滚不调用任何 builder
+    v5 = await svc.create_version(
+        seeded, ["CR-0015"], rollback_of=v4, published_by="王敏", note="回滚 v2026.10.4", now=now
     )
+    assert calls == []
     assert v5 == "v2026.10.5" and await svc.current_version(seeded) == v5
     assert await svc.get_snapshot(seeded, v5) == await svc.get_snapshot(seeded, "v2026.10.3")
     info = await svc.get_release(seeded, v5)
-    r5 = await seeded.get(OntRelease, v5)
+    r5 = await _by_ver(seeded, v5)
+    assert r5.change_summary["restoredFrom"] == "v2026.10.3"
     assert r5.kind.name == "rollback"
-    db_kind = await seeded.scalar(text("SELECT kind FROM ont_release WHERE ver=:v"), {"v": v5})
+    db_kind = await seeded.scalar(text("SELECT kind FROM ontology_release WHERE ver=:v"), {"v": v5})
     assert db_kind == "rollback"  # 库里英文 code
     assert ReleaseOut.model_validate(r5).model_dump(mode="json", by_alias=True)["kind"] == "回滚"  # 接口中文
     assert info.parent_ver == v4 and info.rollback_of == v4 and info.change_order_ids == ("CR-0015",)
     assert await svc.get_snapshot(seeded, v4) == before  # 旧版本不变
-    assert await seeded.scalar(select(func.count()).select_from(OntRelease)) == 7
+    assert await seeded.scalar(select(func.count()).select_from(OntologyRelease)) == 7
 
 
 async def test_rollback_unknown_target(seeded):
     with pytest.raises(AppError) as e:
-        await VersioningService().create_version_from(seeded, "v1999.01.1", "CR-9", published_by="x", note="")
-    assert e.value.code == "NOT_FOUND"
+        await VersioningService().create_version(
+            seeded, ["CR-9"], rollback_of="v1999.01.1", published_by="x", note=""
+        )
+    assert e.value.code == "ROLLBACK_NOT_LATEST"
 
 
 async def test_publish_uses_central_clock(seeded):
     ver = await VersioningService().create_version(seeded, ["CR-0011"], published_by="王敏", note="")
-    r = await seeded.get(OntRelease, ver)
+    r = await _by_ver(seeded, ver)
     assert ver == "v2026.10.4"
     assert r.published_at == datetime.fromisoformat("2026-10-25T15:42:00+08:00")
+
+
+async def test_sections_registry_and_default_provider(seeded):
+    from app.contracts.versioning import SECTION_OWNERS
+    from app.modules.versioning.sections import register_section, registered_sections
+
+    assert SECTION_OWNERS["rules"] == SECTION_OWNERS["lifecycles"] == "dynamic"
+    assert SECTION_OWNERS["actionTypes"] == "action" and SECTION_OWNERS["eventTypes"] == "event"
+
+    class Bad:
+        section = "nope"
+
+    with pytest.raises(ValueError):
+        register_section(Bad())
+    with pytest.raises(ValueError):  # 同一 section 不能登记两个 builder
+        register_section(type(registered_sections()["objectTypes"])())
+    seeded.add(
+        OntologyRelease(
+            ver="v2026.10.9",
+            snapshot={"objectTypes": {}, "rules": {"R-007": {"x": 1}}},
+            snapshot_sha256="0" * 64,
+            change_order_ids=["CR-0001"],
+            change_summary={},
+            note="",
+            published_by="x",
+            published_at=datetime(2026, 10, 25, 16, tzinfo=UTC),
+        )
+    )
+    await seeded.flush()
+    ver = await VersioningService().create_version(seeded, ["CR-0011"], published_by="王敏", note="")
+    snap = await VersioningService().get_snapshot(seeded, ver)
+    assert snap["rules"] == {"R-007": {"x": 1}}  # 未登记的 section 原样沿用上一版
+    assert snap["objectTypes"]["order"]["applied"] == ["CR-0011"]  # 登记的 builder 组装
+
+
+async def test_rollback_calls_restore_section_hooks(seeded):
+    from app.modules.versioning.sections import register_section, unregister_section
+
+    restored = []
+
+    class Hooked:
+        section = "rules"
+
+        async def build_section(self, session, base, change_order_ids):
+            return {"R-007": {"version": 9}}
+
+        def seed_section(self, ver, ctx):
+            return {}
+
+        async def restore_section(self, session, content):
+            restored.append(content)
+
+    register_section(Hooked())
+    try:
+        svc = VersioningService(FakeStaticProvider())
+        now = datetime(2026, 10, 25, 12, tzinfo=UTC)
+        v4 = await svc.create_version(seeded, ["CR-0011"], published_by="王敏", note="", now=now)
+        await svc.create_version(seeded, ["CR-0015"], rollback_of=v4, published_by="王敏", note="", now=now)
+        prev = await svc.get_snapshot(seeded, "v2026.10.3")
+        assert restored == [prev.get("rules")]
+    finally:
+        unregister_section("rules")

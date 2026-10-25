@@ -1,12 +1,16 @@
 """ORM 基类、命名规范和公共列 mixin。
 
-每张表按需组合：
-- IdMixin / StrIdMixin：主键（见 CONVENTIONS.md「主键」）
-- AuditColumnsMixin：created_at/by、updated_at/by（所有业务表都要）
-- SoftDeleteMixin：deleted_at/by（可删除的运行时数据；本体定义不用，删除走变更单）
-- LockVersionMixin：乐观锁 lock_version（前端会并发编辑的表：变更单、设置、角色……）
-- SeedMarkMixin：is_seed（seed 写入的行；mock 数据违反的唯一约束改成 `WHERE NOT is_seed` 的部分唯一索引）
+表的公共列（PDE 定，一期）：
+- 可修改的表 → `MutableTableMixin`：created_at、updated_at、created_by、is_seed、lock_version
+- 只追加的表（日志、版本、事件、命中记录）→ `AppendOnlyTableMixin`：created_at、created_by、is_seed；
+  没有 lock_version，也不软删除
+- 软删除**不是默认**：只有前端有「删除 / 恢复」的表才额外混入 `SoftDeleteMixin`（deleted_at/by）
+- 主键：所有表都是代理键 id bigint（IdMixin）；业务编号放 code（CodeMixin，唯一）
+  或自然列（ver、api_name）+ 唯一约束；外键指向 id
 - OntologyVersionMixin：ontology_ver（运行时记录要记下“按哪个本体版本产生”：问数轮次、告警、动作、事件）
+
+表名：业务名词、snake_case 单数、**不加模块前缀**；只有和 SQL 关键字冲突或有歧义时才加限定词
+（ontology_release、sys_user、sys_role、biz_order）。
 """
 
 from datetime import datetime
@@ -30,23 +34,31 @@ class Base(DeclarativeBase):
 
 
 class IdMixin:
-    """没有业务编号的表：bigint 自增（IDENTITY）。"""
+    """**所有表**的主键：代理键 id bigint 自增（IDENTITY）。外键一律指向 id。"""
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
 
 
-class StrIdMixin:
-    """有前端可见业务编号的表（CR-0011、ACT-20261025-0001、K-018）：编号本身做主键。"""
+class CodeMixin(IdMixin):
+    """有前端可见业务编号的表（CR-0011、ACT-20261025-3834、K-018）：id 仍是代理主键，编号放 code（唯一）。
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    接口里前端看到的 `id` 字段 = code（Pydantic 层映射）；路由参数也是 code，用 BaseRepository.get_by_code。
+    业务键本来就有自然列名的（ontology_release.ver、对象类型 api_name）不用这个 mixin，
+    自己声明列 + UniqueConstraint。
+    """
+
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, comment="业务编号（前端 id）")
 
 
-class AuditColumnsMixin:
+class CreatedColumnsMixin:
     # 时间由应用时钟写入（app/core/clock.py）；server_default 只是直接写 SQL 时的兜底
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=clock.now, server_default=func.now(), nullable=False
     )
     created_by: Mapped[str | None] = mapped_column(String(64))
+
+
+class UpdatedAtMixin:
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=clock.now,
@@ -54,10 +66,11 @@ class AuditColumnsMixin:
         server_default=func.now(),
         nullable=False,
     )
-    updated_by: Mapped[str | None] = mapped_column(String(64))
 
 
 class SoftDeleteMixin:
+    """只给前端有「删除 / 恢复」的表用（不是默认列）。"""
+
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[str | None] = mapped_column(String(64))
 
@@ -82,10 +95,18 @@ class SeedMarkMixin:
     is_seed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
 
+class MutableTableMixin(CreatedColumnsMixin, UpdatedAtMixin, SeedMarkMixin, LockVersionMixin):
+    """可修改的表的标准公共列：created_at、updated_at、created_by、is_seed、lock_version。"""
+
+
+class AppendOnlyTableMixin(CreatedColumnsMixin, SeedMarkMixin):
+    """只追加的表（日志、版本、事件、命中）：created_at、created_by、is_seed；无 lock_version、无软删除。"""
+
+
 def unique_except_seed(table: str, *columns: str) -> Index:
     """部分唯一索引：只约束非 seed 行。前端 mock 本身有重复（例如重复的幂等键）时用。
 
-    __table_args__ = (unique_except_seed("dy_action_run", "idempotency_key"),)
+    __table_args__ = (unique_except_seed("action_run", "idem_key"),)
     """
     return Index(
         f"uq_{table}_{'_'.join(columns)}_nonseed",

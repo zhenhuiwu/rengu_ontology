@@ -1,0 +1,86 @@
+[
+ {
+  "args": [
+   "issue_recall_coupon"
+  ],
+  "result": [
+   {
+    "id": "ACT-20261025-3834",
+    "typeId": "issue_recall_coupon",
+    "at": "2026-10-25 13:32:06",
+    "initiator": "陈立军",
+    "confirmer": "陈立军",
+    "approver": "营销经理",
+    "source": "手动",
+    "objKind": "region",
+    "objId": "REG-EC",
+    "objLabel": "华东大区",
+    "summary": "满 99 减 15 · 14 天 · 小程序",
+    "status": "执行中",
+    "ms": 1860,
+    "code": "已调用，等待返回",
+    "retries": 0,
+    "idemKey": "act-20261025-3834"
+   },
+   {
+    "id": "ACT-20261025-3829",
+    "typeId": "issue_recall_coupon",
+    "at": "2026-10-25 13:14:27",
+    "initiator": "赵蕾",
+    "confirmer": "赵蕾",
+    "approver": "营销经理",
+    "source": "手动",
+    "objKind": "region",
+    "objId": "REG-EC",
+    "objLabel": "华东大区",
+    "summary": "满 99 减 15 · 14 天 · 小程序",
+    "status": "结果未知",
+    "ms": 5000,
+    "code": "超时 5 秒未响应 · 未重试",
+    "retries": 0,
+    "idemKey": "act-20261025-3829"
+   }
+  ]
+ },
+ {
+  "args": [
+   "sync_member_tags"
+  ],
+  "result": [
+   {
+    "id": "ACT-20261025-3825",
+    "typeId": "sync_member_tags",
+    "at": "2026-10-25 13:01:18",
+    "initiator": "何静",
+    "confirmer": "何静",
+    "approver": "会员运营 何静 ",
+    "source": "手动",
+    "objId": "SEG-103",
+    "objLabel": "分群 · 新客 30 天内",
+    "summary": "标签“沉睡 60 天” · 覆盖 3938 人 · 增量",
+    "status": "执行中",
+    "ms": 647,
+    "code": "已调用，等待返回",
+    "retries": 0,
+    "idemKey": "act-20261025-3825"
+   },
+   {
+    "id": "ACT-20261025-3821",
+    "typeId": "sync_member_tags",
+    "at": "2026-10-25 12:17:10",
+    "initiator": "王敏",
+    "confirmer": "王敏",
+    "approver": "会员运营 何静 ",
+    "source": "问数",
+    "objId": "SEG-101",
+    "objLabel": "分群 · 近 90 天复购 ≥ 3 次",
+    "summary": "标签“沉睡 60 天” · 覆盖 2215 人 · 增量",
+    "status": "结果未知",
+    "ms": 5000,
+    "code": "超时 5 秒未响应 · 未重试",
+    "retries": 0,
+    "idemKey": "act-20261025-3821"
+   }
+  ]
+ }
+]

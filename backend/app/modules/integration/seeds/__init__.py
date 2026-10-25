@@ -5,5 +5,5 @@
 
 from app.seeds import SeedSpec
 
-JSON_MODULE = "integration"
+JSON_MODULE = "system"
 SEEDS: list[SeedSpec] = []

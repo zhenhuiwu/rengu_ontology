@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://rengu:rengu@127.0.0.1:5440/rengu"
     db_echo: bool = False
     db_pool_size: int = 10
+    # 问数 NL2SQL 执行用的只读库账号（api-index §1.4 硬规则；库层 default_transaction_read_only=on、
+    # 只授权业务表）。不配置时网关拒绝执行，不回退到 database_url。
+    qa_readonly_database_url: str | None = None
 
     # 全站“数据截至”（前端 DATA_CUTOFF）。以后由数据同步任务写入，这里只是兜底值。
     data_cutoff: str = "2026-10-24 23:00"

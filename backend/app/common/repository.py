@@ -1,7 +1,8 @@
 """通用数据访问基类（骨架负责）。模块的 repo.py 继承它，只写本模块特有的查询。
 
-提供：get / get_or_404 / list_page / create / update（带乐观锁）/ soft_delete。
-- 软删除：模型带 deleted_at 时，查询默认排除已删除行；
+提供：get / get_or_404（按代理主键 id）、get_by_code / get_by_code_or_404（按业务编号，
+路由参数用这个）/ list_page / create / update（带乐观锁）/ soft_delete。
+- 软删除：只有混入 SoftDeleteMixin 的表（前端有删除/恢复的）才有 deleted_at，查询默认排除已删除行；
 - 乐观锁：模型带 lock_version 时，update 需传入客户端看到的 lock_version，不一致抛 VERSION_CONFLICT；
 - 不 commit：事务由请求依赖统一提交。
 """
@@ -16,7 +17,7 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from app.common.pagination import PageParams
 from app.core import clock
-from app.core.errors import Conflict, NotFound, VersionConflict
+from app.core.errors import DuplicateKey, NotFound, VersionConflict
 from app.db.base import Base
 
 M = TypeVar("M", bound=Base)
@@ -48,6 +49,17 @@ class BaseRepository(Generic[M]):
             raise NotFound(self.not_found_message, details={"id": id_})
         return obj
 
+    async def get_by_code(self, code: str, *, column: str = "code") -> M | None:
+        """按业务键取（默认 code 列；ontology_release 这类传 column="ver"）。"""
+        stmt = self.base_query().where(getattr(self.model, column) == code)
+        return (await self.session.scalars(stmt)).one_or_none()
+
+    async def get_by_code_or_404(self, code: str, *, column: str = "code") -> M:
+        obj = await self.get_by_code(code, column=column)
+        if obj is None:
+            raise NotFound(self.not_found_message, details={"id": code})
+        return obj
+
     async def list_page(self, stmt: Select[tuple[M]], page: PageParams) -> tuple[Sequence[M], int]:
         total = await self.session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
         rows = (await self.session.scalars(stmt.offset(page.offset).limit(page.size))).all()
@@ -55,13 +67,13 @@ class BaseRepository(Generic[M]):
 
     # ---- 写入 ----
     async def create(self, obj: M, *, actor: str | None = None) -> M:
-        if hasattr(obj, "created_by"):
-            obj.created_by = obj.updated_by = actor  # type: ignore[attr-defined]
+        if hasattr(obj, "created_by") and getattr(obj, "created_by", None) is None:
+            obj.created_by = actor  # type: ignore[attr-defined]
         self.session.add(obj)
         try:
             await self.session.flush()
         except IntegrityError as e:
-            raise Conflict("记录已存在或违反唯一约束", code="DUPLICATE_KEY") from e
+            raise DuplicateKey("记录已存在或违反唯一约束") from e
         return obj
 
     async def update(
@@ -71,8 +83,6 @@ class BaseRepository(Generic[M]):
             raise VersionConflict(details={"expected": lock_version, "actual": obj.lock_version})  # type: ignore[attr-defined]
         for k, v in values.items():
             setattr(obj, k, v)
-        if hasattr(obj, "updated_by"):
-            obj.updated_by = actor  # type: ignore[attr-defined]
         try:
             await self.session.flush()
         except StaleDataError as e:

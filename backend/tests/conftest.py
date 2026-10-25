@@ -83,8 +83,30 @@ async def client(session) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides.clear()
 
 
+class FakeObjectTypesSection:
+    """测试替身：模拟静态登记的 objectTypes section（真实实现归静态模块）。"""
+
+    section = "objectTypes"
+
+    async def build_section(self, session, base, change_order_ids):
+        return {**(base or {}), "order": {"label": "订单", "applied": change_order_ids}}
+
+    def seed_section(self, ver, ctx):
+        return {"order": {"label": "订单", "since": ver}}
+
+
 @pytest.fixture
-async def seeded(session) -> AsyncSession:
+def sections():
+    from app.modules.versioning.sections import register_section, unregister_section
+
+    b = FakeObjectTypesSection()
+    register_section(b)
+    yield b
+    unregister_section(b.section)
+
+
+@pytest.fixture
+async def seeded(session, sections) -> AsyncSession:
     from app.seeds.loader import run_seeds
 
     await run_seeds(session, ["versioning"])
