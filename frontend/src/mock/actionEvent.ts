@@ -24,7 +24,7 @@ export type PubStatus = '已发布' | '变更中' | '草稿';
 /**
  * 执行状态与动作中心（动态本体 mock/actions.ts 的 ActionStatus）一致：
  * 待确认 →（确认提交）审批中 → 执行中 → 成功 / 失败 / 结果未知 →（对账）已对账；待确认可撤回为已撤回。
- * 颜色：成功 / 已对账 / 已撤回灰，待确认 / 审批中 / 执行中橙，失败红，结果未知橙色问号“结果未知 · 待对账”。
+ * 颜色：成功 / 已对账 / 已撤回 / 审批中 / 执行中灰，待确认橙，失败红，结果未知橙色问号“结果未知 · 待对账”。
  */
 export type RunStatus = '待确认' | '审批中' | '执行中' | '成功' | '失败' | '结果未知' | '已撤回' | '已对账';
 
@@ -46,9 +46,9 @@ export const ACTION_GROUPS = ['全部', '营销', '组织', '交易', '供应链
 export const RULE_ACTION: Record<string, string> = {
   'R-007': 'start_price_approval', 'R-012': 'request_replenish', 'R-015': 'urge_logistics', 'SM-ORD': 'correct_order_status',
 };
-/** 规则生成的动作由谁确认（确认人是具体的人） */
-const RULE_CONFIRMERS: Record<string, string[]> = {
-  'R-007': ['王敏', '何静'], 'R-012': ['周晓峰', '刘婷'], 'R-015': ['陈立军', '孙浩然'], 'SM-ORD': ['孙浩然', '陈立军'],
+/** 规则生成的动作：每条规则固定一位确认人 */
+const RULE_CONFIRMER: Record<string, string> = {
+  'R-007': '王敏', 'R-012': '周晓峰', 'R-015': '陈立军', 'SM-ORD': '孙浩然',
 };
 const RULE_RUNNER = (rule: string) => `规则 ${rule}（生成后待确认）`;
 const ALERT_RULES = ['R-007', 'R-012', 'R-015', 'R-021', 'SM-ORD'];
@@ -119,7 +119,7 @@ export const actionTypeById = (id: string) => ACTION_TYPES.find((a) => a.id === 
 export const writebackSystems = () => EXT_SYSTEMS.filter((s) => s.env === '生产' && s.status !== '停用');
 export const extSystemOf = (a: ActionType) => extSystemById(a.sysId);
 /** 规则生成的动作：发起人 = 规则，确认人 = 具体的人 */
-export const ruleConfirmers = (rule: string) => RULE_CONFIRMERS[rule] ?? [];
+export const ruleConfirmer = (rule: string) => RULE_CONFIRMER[rule] ?? '';
 const RULE_ACTION_REV: Record<string, string> = Object.fromEntries(Object.entries(RULE_ACTION).map(([k, v]) => [v, k]));
 
 /* 参数 */
@@ -331,9 +331,9 @@ ACTION_TYPES.forEach((a, ai) => {
     if (i === 0 && !internal && !rule) status = '执行中';
     if (i === 0 && rule) status = '待确认';
     if (i === 2 && rule) status = '待确认';
-    const pool = rule ? ruleConfirmers(rule) : [];
     const person = PEOPLE[Math.floor(r() * PEOPLE.length)];
-    const confirmer = rule ? pool[Math.floor(r() * pool.length)] : person;
+    r(); // 保持随机序列不变（原先抽确认人）
+    const confirmer = rule ? ruleConfirmer(rule) : person;
     const explicitFail = status === '失败' && !internal;
     const firstFailCode = sys ? (FAIL_CODES[sys.id] ?? ['HTTP 500'])[Math.floor(r() * (FAIL_CODES[sys.id]?.length ?? 1))] : '提交条件未通过';
     const retries = explicitFail && sys!.idempotent ? sys!.maxRetry : status === '成功' && !internal && r() < 0.12 ? 1 : 0;
@@ -501,7 +501,7 @@ const SUBS_RULE = (e: EventType): Subscriber[] => {
   const rule = e.ruleId ? RULES[e.ruleId] : undefined;
   const list: Subscriber[] = [];
   const act = e.ruleId && RULE_ACTION[e.ruleId] ? actionTypeById(RULE_ACTION[e.ruleId]) : undefined;
-  if (act) list.push({ kind: '自动化', name: `生成动作“${act.name}”`, filter: '告警级别 ∈ {高, 中}', then: `生成“${act.name}”，待 ${ruleConfirmers(e.ruleId!).join(' / ')} 确认后提交`, status: '启用', weekly: Math.round(e.weekly * 0.6) });
+  if (act) list.push({ kind: '自动化', name: `生成动作“${act.name}”`, filter: '告警级别 ∈ {高, 中}', then: `生成“${act.name}”，待 ${ruleConfirmer(e.ruleId!)} 确认后提交`, status: '启用', weekly: Math.round(e.weekly * 0.6) });
   list.push({ kind: '通知', name: '告警推送', filter: '全部', then: '企业微信通知规则订阅人', status: '启用', weekly: e.weekly });
   if (e.id === 'gross_margin_breach') list.push({ kind: '规则', name: '门店销售额环比下降', ruleId: 'R-021', filter: '同门店当周 ≥ 3 条', then: '作为辅助信号参与周度复核', status: '启用', weekly: 6 });
   list.push({ kind: '外部订阅', name: '经营分析数据集', filter: '全部', then: '投递 Kafka topic ontology.alerts', status: e.source === '规则' ? '启用' : '异常', weekly: e.weekly });
@@ -531,7 +531,12 @@ function eventObj(e: EventType, r: () => number): Pick<EventRecord, 'objKind' | 
   if (e.objKind === 'product') { const p = PRODUCTS[Math.floor(r() * PRODUCTS.length)]; return { objKind: 'product', objId: p.sku, objLabel: p.name }; }
   if (e.objKind === 'store') { const s = STORES[Math.floor(r() * STORES.length)]; return { objKind: 'store', objId: s.id, objLabel: s.name }; }
   if (e.object === '告警') { const al = ALERTS[Math.floor(r() * ALERTS.length)]; return { objId: al.id, objLabel: al.id }; }
-  if (e.object === '动作执行') { const run = RUNS[Math.floor(r() * RUNS.length)]; return { objKind: 'action', objId: run.id, objLabel: run.id }; }
+  if (e.object === '动作执行') {
+    // 动作执行完成只引用已成功 / 已对账的执行记录，动作结果未知只引用结果未知的
+    const pool = RUNS.filter((x) => (e.id === 'action_executed' ? x.status === '成功' || x.status === '已对账' : x.status === '结果未知'));
+    const run = (pool.length ? pool : RUNS)[Math.floor(r() * (pool.length || RUNS.length))];
+    return { objKind: 'action', objId: run.id, objLabel: run.id };
+  }
   const m = `M${String(31000000 + Math.floor(r() * 899999)).slice(0, 8)}`;
   return { objId: m, objLabel: `会员 ${m}` };
 }

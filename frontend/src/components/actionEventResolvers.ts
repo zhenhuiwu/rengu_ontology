@@ -4,10 +4,10 @@
  */
 import type { ObjView } from './objectRegistry';
 import { RULES, ALERTS } from '@/mock/dynamic';
-import { runById, actionTypeById, eventById, eventTypeById, ACTION_TYPES, RULE_ACTION, ruleConfirmers, extSystemOf, UNKNOWN_FOLLOWUP, type RunStatus, type EventOutcome } from '@/mock/actionEvent';
+import { runById, actionTypeById, eventById, eventTypeById, ACTION_TYPES, RULE_ACTION, ruleConfirmer, extSystemOf, UNKNOWN_FOLLOWUP, type RunStatus, type EventOutcome } from '@/mock/actionEvent';
 
 const runColor = (s: RunStatus): NonNullable<ObjView['status']>['color'] =>
-  s === '失败' ? 'error' : s === '结果未知' || s === '待确认' || s === '审批中' || s === '执行中' ? 'warning' : 'default';
+  s === '失败' ? 'error' : s === '结果未知' || s === '待确认' ? 'warning' : 'default';
 const runText = (s: RunStatus) => (s === '结果未知' ? '结果未知 · 待对账' : s);
 const evColor = (o: EventOutcome): NonNullable<ObjView['status']>['color'] =>
   o === '投递失败' ? 'error' : o === '部分投递' ? 'warning' : 'default';
@@ -24,7 +24,7 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
     const r = RULES[id];
     if (!r) return null;
     const act = RULE_ACTION[id] ? actionTypeById(RULE_ACTION[id]) : undefined;
-    const actText = act ? `生成“${act.name}”，待 ${ruleConfirmers(id).join(' / ')} 确认后提交` : '仅生成告警（不绑定动作）';
+    const actText = act ? `生成“${act.name}”，待 ${ruleConfirmer(id)} 确认后提交` : '仅生成告警（不绑定动作）';
     const manual = ACTION_TYPES.filter((a) => a.usedBy.includes(id) && a.id !== act?.id).map((a) => a.name);
     const alerts = ALERTS.filter((a) => a.ruleId === id);
     return {
@@ -64,11 +64,11 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
     const condFail = st === '失败' && !sys;
     if (st !== '待确认' && st !== '已撤回') {
       tl.push({ time: addSec(run.at, base), text: condFail ? `提交条件未通过：${run.code}` : '提交条件校验通过', status: condFail ? 'error' : 'done' });
-      if (run.approver) tl.push({ time: addSec(run.at, base + 1), text: st === '审批中' ? `审批中（${run.approver}）` : `${run.approver} 审批通过`, desc: a.approval, status: st === '审批中' ? 'warn' : 'done' });
+      if (run.approver) tl.push({ time: addSec(run.at, base + 1), text: st === '审批中' ? `审批中（${run.approver}）` : `${run.approver} 审批通过`, desc: a.approval, status: 'done' });
       if (st !== '审批中' && !condFail) {
         if (sys) {
           const t0 = base + 2;
-          tl.push({ time: addSec(run.at, t0), text: `调用 ${sys.name}（${sys.id}）`, desc: `${a.endpoint} · 幂等键 ${run.idemKey}`, status: st === '执行中' ? 'warn' : 'done' });
+          tl.push({ time: addSec(run.at, t0), text: `调用 ${sys.name}（${sys.id}）`, desc: `${a.endpoint} · 幂等键 ${run.idemKey}`, status: 'done' });
           if (st === '失败') {
             tl.push({ time: addSec(run.at, t0 + 1), text: `外部明确返回失败：${run.code}`, status: 'error' });
             if (run.retries) tl.push({ time: addSec(run.at, t0 + 8), text: `按同一幂等键自动重试 ${run.retries} 次，仍失败`, desc: sys.retry, status: 'error' });

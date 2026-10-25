@@ -99,9 +99,9 @@ export function useDraftEdits(o: DraftEditsOptions) {
     const d = o.draft.value;
     if (!d) return;
     if (locked.value) { message.info(`${d.id} 已提交审核`); return; }
-    if (dirty.value) { message.warning('还有未保存的修改，请先保存草稿'); return; }
     const ok = await confirm.ask({
       title: '提交审核', target: `${d.id} ${d.title}`, okText: '提交',
+      blocked: dirty.value ? '本对象还有未保存的修改，请先保存草稿或撤销修改后再提交' : undefined,
       fields: [{ label: '本对象', value: o.targetName() }, { label: '本对象改动', value: `${savedChanges.value} 处` }, { label: '变更单改动', value: `${d.changes + savedChanges.value} 处` }, ...(o.reviewer ? [{ label: '审核人', value: o.reviewer }] : [])],
       impact: '提交后草稿锁定，审核人驳回后才能继续修改；审核通过后随下一次整版发布生效，发布前问数和规则仍用已发布版本。',
     });

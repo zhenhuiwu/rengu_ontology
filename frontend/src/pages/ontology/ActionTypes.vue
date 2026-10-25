@@ -23,7 +23,7 @@ import { RULES, ALERTS } from '@/mock/dynamic';
 import { extSystemById } from '@/mock/extsys';
 import {
   ACTION_TYPES, ACTION_GROUPS, ACTION_VERSION_NOTES, RULE_ACTION, UNKNOWN_FOLLOWUP, paramsOf, condsOf, writebackOf,
-  runsOf, runStats, runDaily, versionsOf, withSystem, writebackSystems, ruleConfirmers,
+  runsOf, runStats, runDaily, versionsOf, withSystem, writebackSystems, ruleConfirmer,
   type ActionType, type RunStatus, type ActionParam, type SubmitCond, type OntologyEdit, type SideEffect,
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
@@ -140,7 +140,7 @@ const usedBy = computed(() => cur.value.usedBy.map((id) => {
   const r = RULES[id];
   const alerts = ALERTS.filter((al) => al.ruleId === id);
   const gen = RULE_ACTION[id] === cur.value.id;
-  return { id, name: r.name, trigger: r.trigger, mode: gen ? `命中后生成动作 · 待 ${ruleConfirmers(id).join(' / ')} 确认后提交` : '处理告警时手动执行', alerts: alerts.length, open: alerts.filter((al) => al.status === '待处理').length };
+  return { id, name: r.name, trigger: r.trigger, mode: gen ? `命中后生成动作 · 待 ${ruleConfirmer(id)} 确认后提交` : '处理告警时手动执行', alerts: alerts.length, open: alerts.filter((al) => al.status === '待处理').length };
 }));
 const usedCols = [
   { title: '规则', key: 'rule', width: 220 },
@@ -239,7 +239,7 @@ const runCols = [
   { title: '结果', key: 'status', width: 150 },
   { title: '耗时', key: 'ms', width: 80, align: 'right' as const },
 ];
-const runBadge = (s: RunStatus) => (s === '失败' ? 'error' : s === '待确认' || s === '审批中' || s === '执行中' ? 'warning' : 'default');
+const runBadge = (s: RunStatus) => (s === '失败' ? 'error' : s === '待确认' ? 'warning' : 'default');
 
 /* 版本历史 */
 const versions = computed(() => versionsOf(cur.value.version, cur.value.owner, ACTION_VERSION_NOTES));
