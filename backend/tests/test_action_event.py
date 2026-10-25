@@ -246,7 +246,7 @@ EVENT_LIST_KEYS = ("id", "name", "api", "source", "status", "version", "object")
 EVENT_DETAIL_KEYS = (
     *EVENT_LIST_KEYS,
     "sourceRef", "ruleId", "objectApi", "objKind", "owner", "desc", "dedupKey", "dedupWindow",
-    "delivery", "ordering", "retention", "weekly",
+    "delivery", "ordering", "retention", "weekly", "specific",
 )  # fmt: skip
 
 
@@ -288,10 +288,14 @@ async def test_event_detail_and_subresources(client, ae):
 
 
 async def test_ext_systems(client, ae):
+    # 列表多带一个 actionCount（第 2 批，页面“关联动作”列用），其余字段 = mock
+    def rows(b):
+        return [drop_none({k: v for k, v in s.items() if k != "actionCount"}) for s in b["items"]]
+
     body = (await client.get(f"{DATA}/ext-systems")).json()
-    assert [drop_none(s) for s in body["items"]] == SYSTEMS
+    assert rows(body) == SYSTEMS
     body = (await client.get(f"{DATA}/ext-systems", params={"writeback": 1})).json()
-    assert [drop_none(s) for s in body["items"]] == mock("action/derived/writebackSystems.json")[0]["result"]
+    assert rows(body) == mock("action/derived/writebackSystems.json")[0]["result"]
     body = (await client.get(f"{DATA}/ext-systems", params={"kw": "CRM"})).json()
     assert [s["id"] for s in body["items"]] == [
         s["id"] for s in SYSTEMS if "CRM" in s["name"] or "CRM" in s["id"] or "CRM" in s["vendor"]

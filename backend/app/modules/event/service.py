@@ -46,7 +46,7 @@ class EventTypeService:
     async def detail(self, ctx: ViewContext, type_id: str) -> dict[str, Any]:
         d = await self.one(ctx, type_id)
         cur = next((r for r in await self.rows() if r.code == type_id), None)
-        return {**d, "weekly": cur.weekly if cur else 0}
+        return {**d, "weekly": cur.weekly if cur else 0, "specific": d.get("payload") or []}
 
     async def payload_fields(self, ctx: ViewContext, type_id: str) -> tuple[list[dict[str, Any]], int]:
         """payloadOf()：专有字段 + 通用信封字段（envelope=true）。"""

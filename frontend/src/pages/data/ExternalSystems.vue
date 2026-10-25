@@ -6,6 +6,8 @@
  * 关联动作：按动作类型的 sysId（mock/actionEvent.ts）过滤得到，点动作名进动作类型；不做写回的集成（短信、企业微信、顺丰、美团）显示用途。
  * 新建 / 编辑系统：配置抽屉（?edit=EXT-WMS / ?edit=new），保存前确认；测试调用：确认后发一次连通性请求，结果记入最近调用。
  * URL：?sys=EXT-WMS&result=失败&call=WMS-00012&edit=EXT-WMS
+ * 真接口（开关 integration，src/api/integration.ts）：系统列表、关联动作、新建 / 编辑、测试调用、
+ * 最近调用（筛选 / 分页 / 详情）、人工核对都走后台（writeback_call 表，见 action-event-api.md §3.1）。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -19,6 +21,8 @@ import { paginate, EMPTY } from '@/mock';
 import { EXT_SYSTEMS, extCalls, type CallResult, type ExtCall, type ExtOp, type ExtSample, type ExtSystem } from '@/mock/extsys';
 import { ACTION_TYPES, runsOf, type ActionType, type ActionRun } from '@/mock/actionEvent';
 import { ACTIONS, RULE_CONFIRMER, OBJ_KIND_LABEL, type ActionRecord } from '@/mock/actions';
+import { isApiError } from '@/api/http';
+import { integrationApi, listExtSystems, getExtSystem, createExtSystem, updateExtSystem, testExtSystem, listExtCalls, getWritebackCall, markWritebackChecked, type ExtCallPage, type ExtSystemDto, type LinkedActionTypeDto } from '@/api/integration';
 
 const route = useRoute();
 const router = useRouter();
@@ -27,10 +31,27 @@ const setQuery = (patch: Record<string, string | undefined>) => router.replace({
 const { readonly, reason } = useReadonly();
 
 // 系统列表：直接包装共享的 EXT_SYSTEMS（本次会话里新建 / 编辑后，动作类型页的写回目标也能看到）
-const systems = reactive(EXT_SYSTEMS);
-const selected = computed<ExtSystem>(() => systems.find((s) => s.id === q('sys')) ?? systems[0]);
+// 真接口：列表取后台（不改共享的 mock 数组），加载前用空表单占位
+const real = integrationApi.isReal();
+const systems = real ? reactive<(ExtSystem & Pick<ExtSystemDto, 'actionCount'>)[]>([]) : reactive(EXT_SYSTEMS);
+const apiFail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+async function loadSystems() {
+  try { const rows = await listExtSystems(); systems.splice(0, systems.length, ...rows); } catch (e) { apiFail(e); }
+}
+if (real) void loadSystems();
+const LOADING: ExtSystem = { id: '', name: '加载中…', vendor: '', category: '', endpoint: '', auth: '', authDetail: '', idempotent: false, idemKey: '-', timeoutMs: 0, maxRetry: 0, retry: '', rateLimit: '', owner: '', status: '正常', env: '' };
+const selected = computed<ExtSystem>(() => systems.find((s) => s.id === q('sys')) ?? systems[0] ?? LOADING);
+/** 真接口：选中系统的详情（关联动作类型由后台按 action_type.sys_id 查） */
+const realLinked = ref<{ sysId: string; items: LinkedActionTypeDto[] } | null>(null);
+async function loadLinked(id: string) {
+  if (!id) return;
+  try { const d = await getExtSystem(id); if (d.id === selected.value.id) realLinked.value = { sysId: d.id, items: d.actionTypes }; } catch (e) { apiFail(e); }
+}
+if (real) watch(() => selected.value.id, loadLinked, { immediate: true });
 /** 关联动作：动作类型里 sysId 指向该系统的（名称与动作类型页完全一致） */
-const linked = computed(() => ACTION_TYPES.filter((a) => a.sysId === selected.value.id));
+const linked = computed<{ id: string; name: string }[]>(() => (real
+  ? (realLinked.value?.sysId === selected.value.id ? realLinked.value.items : [])
+  : ACTION_TYPES.filter((a) => a.sysId === selected.value.id)));
 const opsOf = (sys: ExtSystem): ExtOp[] => {
   const acts = ACTION_TYPES.filter((a) => a.sysId === sys.id);
   // 草稿动作没有执行过，不产生调用记录
@@ -59,7 +80,7 @@ function samplesOf(a: ActionType): ExtSample[] {
   if (center.length) return center.map(fromCenter);
   return runsOf(a.id).filter((x) => DONE.includes(x.status)).map((x) => fromRun(a, x));
 }
-const actionCount = (sys: ExtSystem) => ACTION_TYPES.filter((a) => a.sysId === sys.id).length;
+const actionCount = (sys: ExtSystem & Pick<ExtSystemDto, 'actionCount'>) => (real ? sys.actionCount ?? 0 : ACTION_TYPES.filter((a) => a.sysId === sys.id).length);
 // 状态点：正常 / 停用 灰，降级 红（有失败调用）；橙色只留给 待确认 / 结果未知，不用绿、蓝
 const statusBadge = (s: ExtSystem['status']) => ('default' as const);
 const resultText = (r: CallResult) => (r === '结果未知' ? '结果未知 · 待对账' : r);
@@ -70,6 +91,7 @@ const overrides = ref<Record<string, Partial<ExtCall>>>({});
 const tests = ref<ExtCall[]>([]);
 const calls = computed(() => [...tests.value.filter((c) => c.sysId === selected.value.id), ...extCalls(selected.value, opsOf(selected.value))].map((c) => ({ ...c, ...overrides.value[c.id] })));
 const counts = computed(() => {
+  if (real) return realPage.value?.sysId === selected.value.id ? realPage.value.counts : { 全部: 0, 成功: 0, 失败: 0, 结果未知: 0 };
   const m: Record<string, number> = { 全部: calls.value.length, 成功: 0, 失败: 0, 结果未知: 0 };
   calls.value.forEach((c) => { m[c.result] += 1; });
   return m;
@@ -79,7 +101,22 @@ const filtered = computed(() => calls.value.filter((c) => result.value === '全�
 const SIZE = 10;
 const page = ref(1);
 watch([() => selected.value.id, result], () => { page.value = 1; });
-const paged = computed(() => paginate(filtered.value, { page: page.value, size: SIZE }));
+const paged = computed(() => (real ? { items: realPage.value?.items ?? [] } : paginate(filtered.value, { page: page.value, size: SIZE })));
+const callTotal = computed(() => (real ? realPage.value?.total ?? 0 : filtered.value.length));
+/** 真接口：当前系统 × 结果 × 页 的一页调用（counts 也取后台）；seq 防止切换快时旧响应覆盖新的 */
+const realPage = ref<(ExtCallPage & { sysId: string }) | null>(null);
+const callsTick = ref(0);
+let callsSeq = 0;
+async function loadCalls() {
+  const sysId = selected.value.id;
+  if (!sysId) return;
+  const seq = ++callsSeq;
+  try {
+    const r = await listExtCalls(sysId, { result: result.value, page: page.value, size: SIZE });
+    if (seq === callsSeq) realPage.value = { ...r, sysId };
+  } catch (e) { apiFail(e); }
+}
+if (real) watch([() => selected.value.id, result, page, callsTick], loadCalls, { immediate: true });
 const tl = (r: CallResult) => (r === '成功' ? 'tl-normal' : r === '结果未知' ? 'tl-attention' : 'tl-failed');
 const cols = [
   { title: '时间', key: 'time', width: 160 },
@@ -95,7 +132,17 @@ const cols = [
 ];
 
 // 调用详情抽屉
-const call = computed(() => calls.value.find((c) => c.id === q('call')) ?? null);
+/** 真接口：抽屉按 ?call= 取详情（只认当前系统的调用，同 mock） */
+const realCall = ref<ExtCall | null>(null);
+async function loadCall(id: string) {
+  realCall.value = null;
+  if (!id) return;
+  try { const c = await getWritebackCall(id); if (q('call') === id) realCall.value = c; } catch (e) { apiFail(e); }
+}
+if (real) watch(() => q('call'), loadCall, { immediate: true });
+const call = computed(() => (real
+  ? (realCall.value && realCall.value.id === q('call') && realCall.value.sysId === selected.value.id ? realCall.value : null)
+  : calls.value.find((c) => c.id === q('call')) ?? null));
 const openCall = (id: string) => setQuery({ call: id });
 const closeCall = () => setQuery({ call: undefined });
 const reqBody = (c: ExtCall) => JSON.stringify({ action: c.action, target: c.target, operator: c.actor, ...(c.idemKey ? { [selected.value.idemKey.split('（')[0]]: c.idemKey } : {}) }, null, 2);
@@ -111,6 +158,12 @@ async function markChecked(c: ExtCall) {
     impact: `${selected.value.name} 不支持幂等，从不重试。请先在对方系统确认这条请求已处理，再标记为成功；没处理的话请重新发起动作。`,
   });
   if (!ok) return;
+  if (real) {
+    try { realCall.value = await markWritebackChecked(c.id); } catch (e) { apiFail(e); return; }
+    callsTick.value += 1;
+    message.success('已标记为成功');
+    return;
+  }
   overrides.value[c.id] = { result: '成功', msg: '人工核对：对方已处理（王敏 16:30 标记）' };
   message.success('已标记为成功');
 }
@@ -128,6 +181,18 @@ async function testCall() {
     blocked: sys.status === '停用' ? '该系统已停用，先在“编辑”里改为正常再测试' : undefined,
   });
   if (!ok) return;
+  if (real) {
+    testing.value = true;
+    let rec: ExtCall;
+    try { rec = await testExtSystem(sys.id); } catch (e) { apiFail(e); return; } finally { testing.value = false; }
+    // 后台已记入 writeback_call（排在最近调用最前），重新拉第一页
+    setQuery({ result: undefined });
+    page.value = 1;
+    callsTick.value += 1;
+    if (rec.result === '成功') message.success(`测试通过：HTTP ${rec.http} · ${rec.ms} ms`);
+    else message.error(`测试失败：HTTP ${rec.http ?? '—'} · ${rec.ms} ms`);
+    return;
+  }
   testing.value = true;
   await new Promise((r) => setTimeout(r, 600));
   testing.value = false;
@@ -179,7 +244,11 @@ const formErrors = computed(() => {
   if (!(form.timeoutMs >= 1000 && form.timeoutMs <= 60000)) e.push('超时需在 1～60 秒之间');
   return e;
 });
-const usedBy = computed(() => (editing.value ? ACTION_TYPES.filter((a) => a.sysId === editing.value!.id) : []));
+const usedBy = computed<{ name: string }[]>(() => {
+  if (!editing.value) return [];
+  if (real) return realLinked.value?.sysId === editing.value.id ? realLinked.value.items : [];
+  return ACTION_TYPES.filter((a) => a.sysId === editing.value!.id);
+});
 const openEdit = (id: string) => setQuery({ edit: id, call: undefined });
 async function closeEdit() {
   if (formDirty.value && !(await confirmDiscard())) return;
@@ -199,6 +268,17 @@ async function saveEdit() {
     blocked: formErrors.value[0],
   });
   if (!ok) return;
+  if (real) {
+    const { id: _id, ...body } = { ...JSON.parse(JSON.stringify(form)) as ExtSystem, name: form.name.trim(), vendor: form.vendor.trim(), endpoint: form.endpoint.trim(), retry: retryText(form) };
+    let saved: ExtSystem;
+    try { saved = isNew ? await createExtSystem(body) : await updateExtSystem(before!.id, body); } catch (e) { apiFail(e); return; }
+    await loadSystems();
+    formSnap.value = JSON.stringify(form);
+    setQuery({ edit: undefined, sys: saved.id });
+    await loadLinked(saved.id);
+    message.success(isNew ? `已新建外部系统：${saved.name}` : `已保存：${saved.name}`);
+    return;
+  }
   const next: ExtSystem = { ...JSON.parse(JSON.stringify(form)), name: form.name.trim(), vendor: form.vendor.trim(), endpoint: form.endpoint.trim(), retry: retryText(form), idemKey: form.idempotent ? form.idemKey : '-' };
   if (isNew) {
     next.id = `EXT-N${String(systems.filter((s) => s.id.startsWith('EXT-N')).length + 1).padStart(2, '0')}`;
@@ -289,7 +369,7 @@ async function saveEdit() {
           </template>
         </a-table>
       </div>
-      <AppPagination v-model:page="page" variant="simple" :total="filtered.length" :size="SIZE" unit="次调用" class="ex-pager" />
+      <AppPagination v-model:page="page" variant="simple" :total="callTotal" :size="SIZE" unit="次调用" class="ex-pager" />
     </div>
   </div>
 

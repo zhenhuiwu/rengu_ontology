@@ -23,6 +23,15 @@ class EventTypeListOut(ApiModel):
     size: int
 
 
+class FieldOut(ApiModel):
+    name: str
+    api: str
+    type: str
+    required: bool
+    desc: str
+    sample: str
+
+
 class EventTypeDetailOut(EventTypeOut):
     source_ref: str
     rule_id: str | None = None
@@ -36,15 +45,11 @@ class EventTypeDetailOut(EventTypeOut):
     ordering: str
     retention: str
     weekly: int
+    specific: list[FieldOut] = []
+    """事件自身载荷字段（= mock EVENT_TYPES[].specific，不含信封字段）；页面草稿编辑和信封区分都按它算。"""
 
 
-class PayloadFieldOut(ApiModel):
-    name: str
-    api: str
-    type: str
-    required: bool
-    desc: str
-    sample: str
+class PayloadFieldOut(FieldOut):
     envelope: bool
 
 

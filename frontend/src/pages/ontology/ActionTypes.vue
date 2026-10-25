@@ -4,6 +4,8 @@
  * URL：?action= 选中项，?tab= 页签，?ppage/psize 参数分页，?rpage/rsize 执行记录分页，?rs= 执行结果筛选，?view=draft 草稿，?ver= 历史版本只读。
  * 规则、执行记录在当前页用抽屉打开（useDrawer），不跳转。
  * 草稿：草稿来源与视图切换用公共 parts/useDraftView（与指标口径一致）；草稿里的增删改与改动标记用本页 useDraftEdits。
+ * 真接口（开关 action 打开）：左侧列表（分组 / 关键字 / 分页）走 GET /action-types；详情、参数、提交条件、写回、版本历史
+ * 走 api/action.ts 的快照；执行记录与统计走 dynamic 的 /action-runs（dynamic 开关，取不到用 mock）。被规则引用、草稿写入（versioning）仍读 mock。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -23,14 +25,18 @@ import { fmtPct, fmtInt } from '@/mock/format';
 import { RULES, ALERTS } from '@/mock/dynamic';
 import { extSystemById } from '@/mock/extsys';
 import {
-  ACTION_TYPES, ACTION_GROUPS, ACTION_VERSION_NOTES, RULE_ACTION, UNKNOWN_FOLLOWUP, paramsOf, condsOf, writebackOf,
-  runsOf, runStats, runDaily, versionsOf, withSystem, writebackSystems, ruleConfirmer,
+  ACTION_TYPES, ACTION_GROUPS, RULE_ACTION, UNKNOWN_FOLLOWUP,
+  runDaily, withSystem, ruleConfirmer,
   type ActionType, type RunStatus, type ActionParam, type SubmitCond, type OntologyEdit, type SideEffect,
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
+import { isApiError } from '@/api/http';
+import {
+  actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, loadRuns, type ActionTypeRow,
+} from '@/api/action';
 
 const route = useRoute();
 const router = useRouter();
@@ -45,8 +51,33 @@ const filtered = computed(() => ACTION_TYPES.filter((a) => (group.value === '全
 const LPAGE = 22;
 const lpage = ref(1);
 watch([group, kw], () => { lpage.value = 1; });
-const list = computed(() => paginate(filtered.value, { page: lpage.value, size: LPAGE }).items);
-const cur = computed<ActionType>(() => ACTION_TYPES.find((a) => a.id === route.query.action) ?? ACTION_TYPES[0]);
+
+/* 真接口：列表分页 / 筛选走后台，其余读快照；快照没到之前不渲染主体（cur 先拿 mock 第一条占位，免得各 computed 读空） */
+const real = actionApi.isReal();
+const loadErr = ref('');
+const realList = reactive<{ items: ActionTypeRow[]; total: number; groups: string[] }>({ items: [], total: 0, groups: [] });
+const apiMsg = (e: unknown) => (isApiError(e) ? e.message : String(e));
+// 写回 tab 外部系统下拉：integration 开关开着时取 ?writeback=1（和 action 开关独立）
+loadWritebackSystems().catch(() => { /* 取不到时下拉退回 mock 列表 */ });
+if (real) {
+  watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { loadErr.value = apiMsg(e); }); }, { immediate: true });
+  let seq = 0;
+  watch([group, kw, lpage, () => route.query.ver], async () => {
+    const n = ++seq;
+    try {
+      const r = await listActionTypes({ group: group.value, kw: kw.value, page: lpage.value, size: LPAGE });
+      if (n === seq) Object.assign(realList, { items: r.items, total: r.total, groups: r.groups });
+    } catch (e) { if (n === seq) message.error(`动作类型列表加载失败：${apiMsg(e)}`); }
+  }, { immediate: true });
+}
+const ready = computed(() => !real || snap.state === 'ready');
+const groups = computed(() => (real && realList.groups.length ? realList.groups : ACTION_GROUPS));
+const list = computed<ActionTypeRow[]>(() => (real ? realList.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
+const listTotal = computed(() => (real ? realList.total : filtered.value.length));
+const cur = computed<ActionType>(() => {
+  const all = ready.value ? actionTypes() : ACTION_TYPES;
+  return all.find((a) => a.id === route.query.action) ?? all[0] ?? ACTION_TYPES[0];
+});
 const statusColor = (s: ActionType['status']) => (s === '变更中' ? 'warning' : 'default');
 
 const TABS = ['overview', 'params', 'conds', 'writeback', 'runs', 'versions'];
@@ -136,6 +167,8 @@ async function dryRun() {
 }
 
 /* 概览 */
+// 执行记录 / 统计：dynamic 开关开着时按选中的动作类型取 /action-runs（取不到时 runsOf 退回 mock）
+watch(() => cur.value?.id, (id) => { if (id) loadRuns(id).catch(() => { /* 退回 mock */ }); }, { immediate: true });
 const stats = computed(() => runStats(cur.value.id));
 const usedBy = computed(() => cur.value.usedBy.map((id) => {
   const r = RULES[id];
@@ -243,7 +276,7 @@ const runCols = [
 const runBadge = (s: RunStatus) => (s === '失败' ? 'error' : s === '待确认' ? 'warning' : 'default');
 
 /* 版本历史 */
-const versions = computed(() => versionsOf(cur.value.version, cur.value.owner, ACTION_VERSION_NOTES));
+const versions = computed(() => actionVersionsOf(cur.value));
 const verCols = [
   { title: '版本', dataIndex: 'ver', width: 80 },
   { title: '本体发布', dataIndex: 'release', width: 120 },
@@ -260,11 +293,14 @@ const verCols = [
     <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange('新建动作类型')">新建动作类型</a-button></a-tooltip>
   </Teleport>
 
-  <div class="at">
+  <div v-if="!ready" class="panel at-wait">
+    <span v-if="loadErr" class="c-3">动作类型加载失败：{{ loadErr }}</span><a-spin v-else />
+  </div>
+  <div v-else class="at">
     <div class="panel at-list">
       <div class="at-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称" class="at-kw" />
-        <a-select v-model:value="group" :options="ACTION_GROUPS.map((g) => ({ value: g, label: g === '全部' ? '全部分组' : g }))" class="at-sel" />
+        <a-select v-model:value="group" :options="groups.map((g) => ({ value: g, label: g === '全部' ? '全部分组' : g }))" class="at-sel" />
       </div>
       <ul class="at-items">
         <a-tooltip v-for="a in list" :key="a.id" placement="right" :mouse-enter-delay="0.4" :title="`${a.api} → ${a.target} · ${a.group}`">
@@ -277,7 +313,7 @@ const verCols = [
         </a-tooltip>
       </ul>
       <div class="at-foot">
-        <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" unit="个动作" class="at-pager" empty-text="没有匹配的动作类型" />
+        <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="个动作" class="at-pager" empty-text="没有匹配的动作类型" />
       </div>
     </div>
 
@@ -538,6 +574,7 @@ const verCols = [
 <style scoped>
 .at { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .at-list { width: 300px; flex: none; }
+.at-wait { display: flex; align-items: center; justify-content: center; min-height: 240px; }
 .at-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
 .at-kw { flex: 1; min-width: 0; }
 .at-sel { width: 108px; flex: none; }
