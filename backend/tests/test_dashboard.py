@@ -1,4 +1,4 @@
-"""首页看板：/api/biz/v1/dashboard/kpis、/api/biz/v1/stores/ranking 与 Home.vue 的 mock 计算一致；未登录 401。"""
+"""首页看板：/dashboard/kpis、/stores/ranking 与 Home.vue 的 mock 计算一致；未登录 401。"""
 
 import json
 import math
@@ -29,7 +29,9 @@ def mock_ranking() -> list[dict]:
         amt = 0.0
         for o in os_:
             amt += o["amount"]
-        rows.append({"id": s["id"], "name": s["name"], "city": s["city"], "cnt": len(os_), "amount": ex_tax(amt)})
+        rows.append(
+            {"id": s["id"], "name": s["name"], "city": s["city"], "cnt": len(os_), "amount": ex_tax(amt)}
+        )
     rows.sort(key=lambda r: -r["amount"])
     return [{**r, "rank": i + 1} for i, r in enumerate(rows)]
 
@@ -52,7 +54,10 @@ async def test_kpis_match_mock(client, seeded):
         want = METRICS[m["id"]]
         assert set(m) == {"id", "name", "unit", "value", "prev"}
         assert (m["name"], m["unit"], m["value"], m["prev"]) == (
-            want["name"], want["unit"], want["value"], want["prev"]
+            want["name"],
+            want["unit"],
+            want["value"],
+            want["prev"],
         )
 
 
@@ -71,7 +76,9 @@ async def test_ranking_matches_mock(client, seeded):
     assert body["total"] == len(want) == 12
     assert (body["page"], body["size"], body["dataAsOf"]) == (1, 10, "2026-10-24 23:00")
     assert body["items"] == want[:10]
-    p2 = (await client.get(P + "/stores/ranking", params={"to": "2026-10-24 23:00", "page": 2, "size": 10})).json()
+    p2 = (
+        await client.get(P + "/stores/ranking", params={"to": "2026-10-24 23:00", "page": 2, "size": 10})
+    ).json()
     assert p2["items"] == want[10:] and p2["page"] == 2
     over = (await client.get(P + "/stores/ranking", params={"to": CUTOFF, "page": 9, "size": 10})).json()
     assert over["page"] == 2 and over["items"] == want[10:]  # 越界收拢到最后一页
