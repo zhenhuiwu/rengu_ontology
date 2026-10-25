@@ -1,6 +1,6 @@
-# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.5 草案）
+# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.6 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.5（v0.5.5 主键按 PDE 全员统一：代理主键 `id bigint` + `code` 唯一，外键指向 `id`；v0.5.4 `query_by_key` 返回值对齐动态：查到·成功 / 查到·未执行 / 查无；v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.6（v0.5.6 对账状态表去掉旧枚举、`idempotent=false` 人工再开一轮仍停在 manual【推断】；v0.5.5 主键按 PDE 全员统一：代理主键 `id bigint` + `code` 唯一，外键指向 `id`；v0.5.4 `query_by_key` 返回值对齐动态：查到·成功 / 查到·未执行 / 查无；v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `2e5b002` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
@@ -316,7 +316,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 8. **定时对账**：procrastinate 的 cron 每 15 分钟对 `reconcile_task.next_at` 到期的任务调一次 `query_by_key`，每轮最多 3 次（“查无”也计次）。
    - 查到“查到·成功” → `on_reconciled(succeeded, 系统)` → 动态把状态改成**已对账**（**不是成功**），再由动态提交本体编辑、发 `ActionExecuted`。
    - 查到“查到·未执行” → `on_reconciled(not_executed, 系统)` → **已对账**，不提交本体编辑，不能重新提交（“如仍需执行请重新发起”）。
-   - 3 次后仍无法确认 → 转人工（`state=manual`，`next_at=null`）。人工对账由对账人直接选结论（前端弹窗只有结论 + 说明；先调 `query_by_key` 查一次是【推断】，见动态 `[推断 P7]`）：外部已成功（同“已处理”，动态提交本体编辑、发 `ActionExecuted`）/ 外部未执行 / **仍无法确认**（保持结果未知，`round + 1`，`tries` 归零，再自动查 3 次）。
+   - 3 次后仍无法确认 → 转人工（`state=manual`，`next_at=null`）。人工对账由对账人直接选结论（前端弹窗只有结论 + 说明；先调 `query_by_key` 查一次是【推断】，见动态 `[推断 P7]`）：外部已成功（同“查到·成功”，动态提交本体编辑、发 `ActionExecuted`）/ 外部未执行 / **仍无法确认**（保持结果未知，`round + 1`，`tries` 归零，再自动查 3 次）。
 
 ### 4.2 动作类型的版本与变更
 
@@ -422,10 +422,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 调用中 | 超时或无响应 | 结果未知，**不重试** → 新建 `reconcile_task(state=querying, round=1, tries=0, next_at=+15 分钟)` |
 | querying | `query_by_key` 返回查到·成功 | `resolved`，回调 `on_reconciled(succeeded, 系统)` → 已对账 |
 | querying | 返回查到·未执行 | `resolved`，回调 `on_reconciled(not_executed, 系统)` → 已对账，不能重新提交 |
-| querying | 返回查无或无法确认，`tries + 1 < 3` | 仍 `querying`，`tries + 1`，`next_at` 加 15 分钟（“查无”也计次） |
-| querying | 第 3 次仍无法确认 | `manual`（`manual=true`，`next_at=null`），等动态人工对账 |
+| querying | 返回查无，`tries + 1 < 3` | 仍 `querying`，`tries + 1`，`next_at` 加 15 分钟（“查无”也计次） |
+| querying | 第 3 次仍查无 | `manual`（`manual=true`，`next_at=null`），等动态人工对账 |
 | （建任务时） | 对方不支持幂等查询（`idempotent=false`） | 直接 `manual`，不调 `query_by_key` |
-| manual | 人工选“仍无法确认” | `querying`，`round + 1`，`tries=0`，`next_at=+15 分钟`（再查 3 次） |
+| manual | 人工选“仍无法确认” | `querying`，`round + 1`，`tries=0`，`next_at=+15 分钟`（再查 3 次）；**`idempotent=false` 时仍停在 `manual`，不入队**【推断：前端“继续自动查询”文案不区分；目前没有动作写回短信或企业微信，界面上碰不到】 |
 | manual | 人工选“外部已成功 / 外部未执行” | `resolved`，记 `reconciler=人名` |
 
 ### 5.3 事件（整条）
@@ -533,7 +533,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 - **入库脚本**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 都读 `backend/seeds/json/action/` 和 `backend/seeds/json/action/derived/`，`integration` 的 seed 读 `backend/seeds/json/system/EXT_SYSTEMS.json`。幂等写库（`INSERT … ON CONFLICT DO NOTHING`），业务编码原样写进 `code` 列（`ACT-…`、`EV-…`、`EXT-…`），`id` 由库生成，外键在 seed 时按 `code` 查回 `id`。统一的 `seed` 命令在迁移之后执行。
 - **执行记录由动态 seed**：`action_run` 只由动态写，动态的 seed 读动作中心的 `dynamic/ACTIONS.json` 和本模块的 `action/derived/runsOf.json`（所有调用结果的并集），按 id 合并（`RUNS` 编号从 2000 起，和 `ACTIONS` 不冲突）；执行时间线写进动态的 `action_run_log`（`ACTIONS` 自带 `log`，`RUNS` 用 `action/derived/ACTION_EVENT_RESOLVERS.action.json`）。本模块的 seed 在动态之后执行，只写自己的表：`writeback_call`、`reconcile_task`、`ext_system`、定义表、事件和投递表。
 - **seed 保留 mock 原值**：外部幂等键即使重复（如告警生成的 `act-al-…`）也照原样入库。`action_run` 加 `is_seed` 列，`idem_key` 只对非 seed 行唯一：`CREATE UNIQUE INDEX … ON action_run(idem_key) WHERE NOT is_seed`（建议动态这样建）。
-- **`writeback_call`**：mock 没有逐次调用明细，只有 `retries`、`code`、`ms`。**一行 = 一次业务调用**（同 `extCalls` 的一行），`attempt` 记这次调用一共试了几次（前端的「第 N 次」），重试不另起行。seed **只取 `system/derived/extCalls.json`**，不从 `RUNS`/`ACTIONS` 展开；带 `runId` 的行写进 `action_run_id`，执行记录这边的重试次数、耗时仍看动态的 `action_run`，两边不合并，所以不会重复。
+- **`writeback_call`**：执行记录侧的重试次数、耗时看动态的 `action_run`。**一行 = 一次业务调用**（同 `extCalls` 的一行），`attempt` 记这次调用一共试了几次（前端的「第 N 次」），重试不另起行。seed **只取 `system/derived/extCalls.json`**，不从 `RUNS`/`ACTIONS` 展开；带 `runId` 的行写进 `action_run_id`，执行记录这边的重试次数、耗时仍看动态的 `action_run`，两边不合并，所以不会重复。
 - **对账任务**：seed 进来的结果未知记录（`ACTIONS` 20 条、`RUNS` 54 条）都建 `reconcile_task`，**`tries=3, state=manual, manual=true, round=1, next_at=null`**（mock 里没有下次查询时间，时间线已写到“自动查询 3 次仍无法确认 → 转人工”），不会再被调度。种子里对账说明的原文（如“（某人 复核）”）照原样保留，不改写。
 - **适配器全部用 mock**：seed、dev、test 环境里 `integration/` 下的适配器都是 mock 实现，`query_by_key` 一律返回枚举里的「查无」（计 1 次）。seed 的结果未知记录都是 `state=manual, next_at=null`，定时对账不会扫到，页面不变；只有人工选「仍无法确认」再开一轮时才会真的去查，mock 连续 3 次「查无」后再转人工，这一轮新增的时间线是用户操作产生的，属预期。
 - **统计**：`runDaily`、`eventDaily`、订阅方的 `weekly` 和明细对不上（另一个随机种子），**不处理**——照原样入库，不要求 mock 内部一致。
