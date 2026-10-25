@@ -239,6 +239,8 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 | 10 | 优惠金额没有指标定义，暂按剔除已取消、下单时间 | EV-Q-053 | 指标负责人 |
 | 11 | 散客 = `member_phone` 为空 | EV-Q-015 | 本体小白 |
 | 12 | 商品可见性：`defaultDeny` 角色（R-05/R-06/R-08）没配品类范围时商品不可见，骨架 `c646bd5` 已按此实现（`effective_expr`），`auth.row_filter` 仍是桩 [待骨架实现]；题库暂无角色维度（第 5 节第 10 条） | 连 `product` 的 10 题 | 本体小白 |
+| 13 | **[推断] 评测与界面冲突：EV-Q-080 越权申请入口**。题库要求华南越权拒答且 `applyEntry: true`，`refuseCode: OUT_OF_SCOPE`；工作台（qa-joint）照前端只在 `code=NO_PERMISSION`（或无 code 的旧轮次）时显示「申请权限」，`OUT_OF_SCOPE` / `NOT_SELECT` / `NO_DATA` 不给入口。按前端为准：要么链路把越权大区判成 `NO_PERMISSION`，要么题库把 EV-Q-080 的 `applyEntry` 改为 `false`。另：真 qwen-flash 下该题有时回反问（「华南大区不存在…是否查询华东」） | EV-Q-080 | qa-reuse / PDE |
+| 14 | **[推断] 生成 SQL 被网关拒（403 `SQL_REJECTED`）**：照现有界面行为，不落轮次，前端提示「提问失败：…」，问题留给用户重问；评测里只有 `refuseCode: NOT_SELECT` 的题把 `SQL_REJECTED` 算作拒答通过，其他题算失败 | 偶发（如「昨天的毛利率」一次） | qa-reuse |
 
 v0.4 已结清：列名和类型按骨架确认（`area`、`created_at_biz`、状态英文码、`is_seed`），bz_ 注释。
 

@@ -46,6 +46,13 @@ let newSeq = 0;
 
 const now = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
+/** 反问选项 → 自包含追问句（链路无多轮上下文）[推断]：短选项替换原问题里的 term；长句选项去掉开头「是，」直接当问题；否则「原问题（选项）」 */
+export function clarifyFollowUp(question: string, term: string, label: string) {
+  if (term && question.includes(term) && label.length <= term.length + 6) return question.replace(term, label);
+  if (label.length >= 8) return label.replace(/^是[，,、\s]*/, '');
+  return `${question}（${label}）`;
+}
+
 export function useQaSession() {
   /** 新建的会话没有历史轮次，对话区显示空状态 */
   const isNew = computed(() => (real ? !!detail.value && detail.value.id === activeId.value && !detail.value.turns.length : activeId.value.startsWith('NEW-')));

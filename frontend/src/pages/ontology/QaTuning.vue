@@ -12,7 +12,7 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useAppStore } from '@/stores/app';
 import { EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, TUNING_DIMS, TUNING_TIMES, planText, type SemPlan } from '@/mock/qa-tuning';
 import { tuning, tuningTick, addCert, startRun } from './qa-tuning/state';
-import { qaReal, getTuningSummary, createCert as apiCreateCert, type QaTuningSummary } from '@/api/qa';
+import { qaReal, getTuningSummary, getPlanOptions, createCert as apiCreateCert, type QaTuningSummary } from '@/api/qa';
 import { ApiError } from '@/api/http';
 import CertTab from './qa-tuning/CertTab.vue';
 import EvalTab from './qa-tuning/EvalTab.vue';
@@ -46,6 +46,21 @@ const nm = ref('gmv');
 const nd = ref<string[]>([]);
 const nt = ref('上个月');
 const nf = ref('');
+/* 真接口：选项取 T2；mock 用前端常量 */
+const planOpts = ref({
+  metrics: Object.values(T_METRICS).map((m) => ({ value: m.key, label: `${m.name} ${m.version}` })),
+  dims: TUNING_DIMS.map((d) => ({ value: d, label: d })),
+  times: TUNING_TIMES.map((d) => ({ value: d, label: d })),
+});
+if (real) {
+  getPlanOptions().then((o) => {
+    planOpts.value = {
+      metrics: o.metrics.map((m) => ({ value: m.key, label: `${m.name} ${m.version}` })),
+      dims: o.dims.map((d) => ({ value: d, label: d })),
+      times: o.times.map((d) => ({ value: d, label: d })),
+    };
+  }).catch((e) => message.error(`语义计划选项加载失败：${(e as Error).message}`));
+}
 const newPlan = computed<SemPlan>(() => ({ metric: nm.value, dims: nd.value, time: nt.value, filter: nf.value.trim() || undefined }));
 async function createCert() {
   const qn = nq.value.trim();
@@ -100,9 +115,9 @@ async function runEval() {
           <div class="qt-pop">
             <div class="t-14 fw-600 c-1">新建认证问答</div>
             <div class="qt-f"><span class="t-12 c-3 qt-l">问题</span><a-input v-model:value="nq" class="qt-c" :maxlength="40" placeholder="例如：上周各大区有效订单数" /></div>
-            <div class="qt-f"><span class="t-12 c-3 qt-l">指标</span><a-select v-model:value="nm" class="qt-c" :options="Object.values(T_METRICS).map((m) => ({ value: m.key, label: `${m.name} ${m.version}` }))" /></div>
-            <div class="qt-f"><span class="t-12 c-3 qt-l">维度</span><a-select v-model:value="nd" mode="multiple" class="qt-c" placeholder="不选为汇总" :options="TUNING_DIMS.map((d) => ({ value: d, label: d }))" /></div>
-            <div class="qt-f"><span class="t-12 c-3 qt-l">时间</span><a-select v-model:value="nt" class="qt-c" :options="TUNING_TIMES.map((d) => ({ value: d, label: d }))" /></div>
+            <div class="qt-f"><span class="t-12 c-3 qt-l">指标</span><a-select v-model:value="nm" class="qt-c" :options="planOpts.metrics" /></div>
+            <div class="qt-f"><span class="t-12 c-3 qt-l">维度</span><a-select v-model:value="nd" mode="multiple" class="qt-c" placeholder="不选为汇总" :options="planOpts.dims" /></div>
+            <div class="qt-f"><span class="t-12 c-3 qt-l">时间</span><a-select v-model:value="nt" class="qt-c" :options="planOpts.times" /></div>
             <div class="qt-f"><span class="t-12 c-3 qt-l">过滤</span><a-input v-model:value="nf" class="qt-c" placeholder="可选，例如：大区 = 华东一区" /></div>
             <div class="t-12 c-3">语义计划：{{ planText(newPlan) }}</div>
             <div class="qt-btns"><a-button size="small" @click="newOpen = false">取消</a-button><a-button size="small" type="primary" :disabled="!nq.trim()" @click="createCert">认证</a-button></div>

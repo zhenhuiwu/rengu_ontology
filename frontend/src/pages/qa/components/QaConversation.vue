@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router';
 import { LockOutlined, InboxOutlined, ClockCircleOutlined, ApartmentOutlined, MessageOutlined } from '@ant-design/icons-vue';
 import { QA_DEMO_TURNS, QA_DEMO_CANNED } from '@/mock';
 import { useReadonly } from '@/composables/useReadonly';
-import { useQaSession } from '../useQaSession';
+import { useQaSession, clarifyFollowUp } from '../useQaSession';
 import { useAppStore } from '@/stores/app';
 import QaAnswer from './QaAnswer.vue';
 import QaStoreAnswer from './QaStoreAnswer.vue';
@@ -32,12 +32,7 @@ function retry(text: string) { draft.value = text; }
  * - 其他 → 原问题后补「（选项）」。
  */
 type ClarifyTurn = Extract<QaRealTurn, { answer: QaClarifyAnswer }>;
-function followUp(t: ClarifyTurn, label: string) {
-  const term = t.answer.clarify.term;
-  if (term && t.question.includes(term) && label.length <= term.length + 6) return t.question.replace(term, label);
-  if (label.length >= 8) return label.replace(/^是[，,、\s]*/, '');
-  return `${t.question}（${label}）`;
-}
+const followUp = (t: ClarifyTurn, label: string) => clarifyFollowUp(t.question, t.answer.clarify.term, label);
 function onClarify(t: QaRealTurn, label: string) { if (t.kind === 'answer' && t.answer.card === 'clarify') send(followUp(t as ClarifyTurn, label)); }
 /** 已按哪个选项追问过：后面有一轮的问题正好是那句追问（刷新后也能还原；chosen 不回写后台）[推断] */
 function chosenOf(t: QaRealTurn): string | null {

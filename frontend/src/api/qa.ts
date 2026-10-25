@@ -117,6 +117,9 @@ export interface QaTuningSummary { version: string; dataAsOf: string; recertCoun
 type CertDto = Omit<CertQa, 'certifier' | 'certifiedAt'> & { certifier?: string; certifiedAt?: string; planText: string };
 const certIn = (c: CertDto): CertQa => ({ ...c, variants: c.variants ?? [], certifier: c.certifier ?? '--', certifiedAt: c.certifiedAt ?? '--' });
 export const getTuningSummary = () => api.get<QaTuningSummary>('/tuning/summary');
+export interface QaPlanOptions { metrics: { key: string; name: string; version: string; cr?: string }[]; dims: string[]; times: string[] }
+/** T2 新建认证问答的指标 / 维度 / 时间选项 */
+export const getPlanOptions = () => api.get<QaPlanOptions>('/tuning/plan-options');
 export async function listCerts(q: { kw?: string; status?: string; metric?: string; page: number; size: number }): Promise<PageResult<CertQa>> {
   const r = await api.get<PageResult<CertDto>>('/tuning/certs', { query: q });
   return { ...r, items: r.items.map(certIn) };
