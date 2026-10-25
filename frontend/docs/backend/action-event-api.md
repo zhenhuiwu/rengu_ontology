@@ -1,6 +1,6 @@
-# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.4 草案）
+# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.5 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.4（v0.5.4 `query_by_key` 返回值对齐动态：查到·成功 / 查到·未执行 / 查无；v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.5（v0.5.5 主键按 PDE 全员统一：代理主键 `id bigint` + `code` 唯一，外键指向 `id`；v0.5.4 `query_by_key` 返回值对齐动态：查到·成功 / 查到·未执行 / 查无；v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `2e5b002` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
@@ -530,7 +530,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 #### 7.1.2 入库
 
-- **入库脚本**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 都读 `backend/seeds/json/action/` 和 `backend/seeds/json/action/derived/`，`integration` 的 seed 读 `backend/seeds/json/system/EXT_SYSTEMS.json`。幂等写库（`INSERT … ON CONFLICT DO NOTHING`），ID 保持原样（`ACT-…`、`EV-…`、`EXT-…`）。统一的 `seed` 命令在迁移之后执行。
+- **入库脚本**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 都读 `backend/seeds/json/action/` 和 `backend/seeds/json/action/derived/`，`integration` 的 seed 读 `backend/seeds/json/system/EXT_SYSTEMS.json`。幂等写库（`INSERT … ON CONFLICT DO NOTHING`），业务编码原样写进 `code` 列（`ACT-…`、`EV-…`、`EXT-…`），`id` 由库生成，外键在 seed 时按 `code` 查回 `id`。统一的 `seed` 命令在迁移之后执行。
 - **执行记录由动态 seed**：`action_run` 只由动态写，动态的 seed 读动作中心的 `dynamic/ACTIONS.json` 和本模块的 `action/derived/runsOf.json`（所有调用结果的并集），按 id 合并（`RUNS` 编号从 2000 起，和 `ACTIONS` 不冲突）；执行时间线写进动态的 `action_run_log`（`ACTIONS` 自带 `log`，`RUNS` 用 `action/derived/ACTION_EVENT_RESOLVERS.action.json`）。本模块的 seed 在动态之后执行，只写自己的表：`writeback_call`、`reconcile_task`、`ext_system`、定义表、事件和投递表。
 - **seed 保留 mock 原值**：外部幂等键即使重复（如告警生成的 `act-al-…`）也照原样入库。`action_run` 加 `is_seed` 列，`idem_key` 只对非 seed 行唯一：`CREATE UNIQUE INDEX … ON action_run(idem_key) WHERE NOT is_seed`（建议动态这样建）。
 - **`writeback_call`**：mock 没有逐次调用明细，只有 `retries`、`code`、`ms`。**一行 = 一次业务调用**（同 `extCalls` 的一行），`attempt` 记这次调用一共试了几次（前端的「第 N 次」），重试不另起行。seed **只取 `system/derived/extCalls.json`**，不从 `RUNS`/`ACTIONS` 展开；带 `runId` 的行写进 `action_run_id`，执行记录这边的重试次数、耗时仍看动态的 `action_run`，两边不合并，所以不会重复。
@@ -646,7 +646,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 ### 9.0 表规范（PDE 已定）
 
 - 表名 snake_case、单数，**不加模块前缀**。
-- **单列主键** + 业务键唯一约束：mock 里的复合键都改成 `id bigint` 主键 + 唯一约束（下表“唯一”列）。
+- **主键全员统一（PDE 已定，2026-10-25）**：每张表都用代理主键 `id bigint`（identity），业务编码（`request_replenish`、`EXT-ERP`、`EV-…`、`ACT-…`）放在 `code` 列并加唯一约束；**外键一律指向 `id`**；接口对外只用业务编码（字段名仍叫 `id`）。mock 里的复合键都改成唯一约束（下表“唯一”列）。
 - **可变表**都带 `created_at, updated_at, created_by, is_seed, lock_version`；**只追加表**只带 `created_at, created_by, is_seed`，**没有 `lock_version`、没有软删除**（下表不重复列出这些列）。
 - **软删除只用在前端有删除 / 恢复的地方**：本模块页面上的“删除 / 恢复”（参数、条件、本体编辑、副作用、载荷字段、订阅方）都是变更单草稿里的标记，落在静态的 `cr_item`；外部系统只有“停用”（`status=disabled`），没有删除。所以**本模块的表都不软删**。
 - 时间列一律 `timestamptz`，接口格式见 §3.5.1。
@@ -654,7 +654,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 表 | 类型 | 主键 | 唯一 |
 |---|---|---|---|
-| `action_type` / `event_type` | 可变（当前版本展开） | `id`（前端 id，如 `request_replenish`） | `api` |
+| `action_type` / `event_type` | 可变（当前版本展开） | `id` bigint | `code`（前端 id，如 `request_replenish`）；`api` |
 | `action_param` | 可变（随发布重写） | `id` bigint | `(action_type_id, api)` |
 | `submission_criterion` | 可变（随发布重写） | `id` bigint | `(action_type_id, name)` |
 | `ontology_edit_rule` | 可变（随发布重写） | `id` bigint | `(action_type_id, op, obj)` |
@@ -663,11 +663,11 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `action_type_version` / `event_type_version` | 只追加 | `id` bigint | `(action_type_id, ver)` / `(event_type_id, ver)` |
 | `event_payload_field` | 可变（随发布重写） | `id` bigint | `(event_type_id, api)` |
 | `event_envelope_field` | 可变（全局 10 行，只读） | `id` bigint | `api` |
-| `event_subscription` | 可变 | `id` | `(event_type_id, name)` |
-| `ext_system` | 可变 | `id`（`EXT-ERP`…） | `name` |
-| `writeback_call` | 可变（`:mark-checked` 改 `result`） | `id` | — |
+| `event_subscription` | 可变 | `id` bigint | `(event_type_id, name)` |
+| `ext_system` | 可变 | `id` bigint | `code`（`EXT-ERP`…）；`name` |
+| `writeback_call` | 可变（`:mark-checked` 改 `result`） | `id` bigint | `code`（`extCalls` 的 `id`） |
 | `reconcile_task` | 可变 | `id` bigint | `action_run_id` |
-| `event` | 可变（`outcome` 会变） | `id`（生产方 `eventId`） | — |
+| `event` | 可变（`outcome` 会变） | `id` bigint | `code`（生产方 `eventId`） |
 | `event_delivery` | 可变 | `id` bigint | `(event_id, subscription_id)` |
 | `event_dedup` | 可变（到期按 `expires_at` 物理删除） | `id` bigint | `(event_type_id, dedup_key)` |
 | `action_run_daily_stat` / `event_daily_stat` / `event_subscription_weekly_stat` | 只追加（seed） | `id` bigint | `(…_id, date)` |
@@ -680,15 +680,15 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| `action_type` | id(pk, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, owner, desc_tpl, runners, approval, sys_id(fk ext_system, 可空), endpoint, biz_key_template, release_id | 当前版本 |
+| `action_type` | id(pk bigint), code(unique, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, owner, desc_tpl, runners, approval, sys_id(fk ext_system.id, 可空), endpoint, biz_key_template, release_id | 当前版本 |
 | `action_type_rule` | id(pk), action_type_id, rule_id, seq, mode_text | 使用该动作的规则（`ACTION_TYPES[].usedBy`）；`(action_type_id, rule_id)` 唯一；进快照 |
 | `action_type_version` | id(pk), action_type_id, ver, release_id(fk ontology_release), status(active/superseded), change_note, by, at, definition jsonb | 每次整版发布写一行 |
 | `action_param` | id(pk), action_type_id, seq, name, api, type, required, default_text, rule_text, rule_expr jsonb(可空) | (action_type_id, api) 唯一 |
 | `submission_criterion` | id(pk), action_type_id, seq, kind(current_user/parameter/context_object), name, expr_text, expr_ast jsonb, fail_msg | (action_type_id, name) 唯一 |
 | `ontology_edit_rule` | id(pk), action_type_id, seq, op(modify/create/link), obj, field | — |
 | `side_effect` | id(pk), action_type_id, seq, kind(notify/event/webhook), target, when_text, note | (action_type_id, target) 唯一 |
-| `ext_system` | id(`EXT-ERP`…), name, vendor, category, endpoint, auth_type, auth_detail（接口 `authDetail`，脱敏原文）, secret_ref(加密), idempotent, idem_header, timeout_ms, max_retry, retry_text（接口 `retry` 原文）, backoff jsonb, rate_limit, owner, status(ok/degraded/disabled), env, usage | `integration` 模块，归我；PDE 的外部系统页通过我的接口读写 |
-| `writeback_call` | id, action_run_id(可空), sys_id, idem_key, kind(write/query/test), op_name（接口 `action`，如“补货申请”）, target_label（接口 `target`）, actor（接口 `actor`，发起人原文）, attempt, method, path, http_status, biz_code, elapsed_ms, result(succeeded/failed/unknown), msg, at | `integration` 模块，归我；动态原来的 `ext_call` 已并入；一行 = 一次业务调用（重试计入 `attempt`，不另起行），包括写回、对账查询、外部系统页的测试调用（kind 加 `test`）；通知类调用没有执行记录，`action_run_id` 为空 |
+| `ext_system` | id(pk bigint), code(unique, `EXT-ERP`…), name, vendor, category, endpoint, auth_type, auth_detail（接口 `authDetail`，脱敏原文）, secret_ref(加密), idempotent, idem_header, timeout_ms, max_retry, retry_text（接口 `retry` 原文）, backoff jsonb, rate_limit, owner, status(ok/degraded/disabled), env, usage | `integration` 模块，归我；PDE 的外部系统页通过我的接口读写 |
+| `writeback_call` | id(pk bigint), code(unique, `extCalls` 的 `id`), action_run_id(fk action_run.id, 可空), sys_id, idem_key, kind(write/query/test), op_name（接口 `action`，如“补货申请”）, target_label（接口 `target`）, actor（接口 `actor`，发起人原文）, attempt, method, path, http_status, biz_code, elapsed_ms, result(succeeded/failed/unknown), msg, at | `integration` 模块，归我；动态原来的 `ext_call` 已并入；一行 = 一次业务调用（重试计入 `attempt`，不另起行），包括写回、对账查询、外部系统页的测试调用（kind 加 `test`）；通知类调用没有执行记录，`action_run_id` 为空 |
 | `reconcile_task` | id(pk), action_run_id(unique), idem_key, sys_id, state(querying/resolved/manual), round, tries, next_at, manual(bool，是否已转人工), last_ext_status, resolved_at, reconciler(系统/人名), reconcile_result(succeeded/not_executed) | 归我；**查询次数和下次时间只在这里**。cron 每 15 分钟扫 `next_at`；seed 的结果未知行 `tries=3, state=manual, manual=true, next_at=null` |
 | `action_run` *(动态)* | 见 dynamic-api.md 1.2 | 只由动态写，字段、约束以动态文档为准（含 `biz_key`、`reconcile_result`、`UNIQUE(idem_key) WHERE NOT is_seed`）；本模块只读 |
 | `action_run_log` *(动态)* | 见 dynamic-api.md 1.2 | 只追加，归动态 |
@@ -698,7 +698,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `event_payload_field` | id(pk), event_type_id, seq, name, api, type, required, desc, sample | (event_type_id, api) 唯一，不能和信封字段重名 |
 | `event_envelope_field` | id(pk), api(unique), name, type, required, desc, sample | 全局 10 行，只读 |
 | `event_subscription` | id, event_type_id, kind, name, rule_id, filter_text, filter_expr jsonb, then_text, target(topic/url/automation_id), status(enabled/disabled/error) | — |
-| `event` | id(pk，即生产方生成的 `eventId`；seed 为 `EV-…`), event_type_id, occurred_at, ingested_at, source, object_type, object_id, obj_label, ontology_version, dedup_key, trace_id, payload jsonb, summary, outcome(pending/delivered/alert_created/deduped/partial/failed), subscriber_count, latency_ms, is_test | **第一期不分区**，按保留期定时删除；**兼作 outbox**：部分索引 `(ingested_at) WHERE outcome IN ('pending','partial')`；索引 (event_type_id, ingested_at desc, id) 支持页码分页和 count |
+| `event` | id(pk bigint), code(unique，即生产方生成的 `eventId`；seed 为 `EV-…`), event_type_id, occurred_at, ingested_at, source, object_type, object_id, obj_label, ontology_version, dedup_key, trace_id, payload jsonb, summary, outcome(pending/delivered/alert_created/deduped/partial/failed), subscriber_count, latency_ms, is_test | **第一期不分区**，按保留期定时删除；**兼作 outbox**：部分索引 `(ingested_at) WHERE outcome IN ('pending','partial')`；索引 (event_type_id, ingested_at desc, id) 支持页码分页和 count |
 | `event_dedup` | id(pk), event_type_id, dedup_key, expires_at | 去重窗口，**不用 Redis** |
 | `event_delivery` | id(pk), event_id, subscription_id, status(pending/sending/delivered/retrying/dead), attempts, next_at, last_error, delivered_at | `UNIQUE(event_id, subscription_id)`；不分区；重投由 procrastinate 执行，只重投失败的订阅方 |
 | `event_daily_stat` / `event_subscription_weekly_stat` | event_type_id/subscription_id, date, value | seed 用 |
