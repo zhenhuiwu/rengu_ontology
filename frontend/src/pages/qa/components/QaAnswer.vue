@@ -11,16 +11,16 @@ import { useReadonly } from '@/composables/useReadonly';
 const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void }>();
 const { readonly, reason } = useReadonly();
 const caliber = ref<'ex' | 'in' | 'both'>('ex');
-/** 按当前口径显示指标完整名称和版本 */
-const HIST_NAME = '复购客户销售额';
-const metricLabel = computed(() => readonly.value ? `${HIST_NAME} · 口径按该版本默认` : (caliber.value === 'both' ? `${qaMetricLabel('ex')} / ${qaMetricLabel('in')}` : qaMetricLabel(caliber.value)));
+/** 按当前口径显示指标完整名称和版本；已回答的消息保留原依据（回答时的本体版本），查看历史版本时不改写 */
+const ANSWERED_VER = 'v2026.10.3';
+const metricLabel = computed(() => (caliber.value === 'both' ? `${qaMetricLabel('ex')} / ${qaMetricLabel('in')}` : qaMetricLabel(caliber.value)));
 const inTax = (n: number) => n * (1 + TAX_RATE);
 const showBasis = ref(false);
 const view = ref('表格');
 const f1 = (n: number) => fmtMoney(n, 1);
 const columns = computed(() => [
   { title: '省份', dataIndex: 'province', key: 'province', width: '16%' },
-  { title: readonly.value ? `${HIST_NAME}（万元）` : '复购客户销售额（不含税，万元）', dataIndex: 'sales', key: 'sales', align: 'right' as const },
+  { title: '复购客户销售额（不含税，万元）', dataIndex: 'sales', key: 'sales', align: 'right' as const },
   { title: '环比', dataIndex: 'mom', key: 'mom', align: 'right' as const },
   { title: '复购客户（人）', dataIndex: 'customers', key: 'customers', align: 'right' as const },
   { title: '占比', key: 'share', align: 'right' as const },
@@ -53,7 +53,7 @@ const barOption = computed(() => ({
     <div class="qa-ans-head">
       <a-avatar size="small" shape="square" class="qa-ans-av"><template #icon><ApartmentOutlined /></template></a-avatar>
       <span class="fw-600">智能问数</span>
-      <span class="c-3">{{ metricLabel }} · 数据截至 2026-10-24 23:00 ·
+      <span class="c-3">{{ metricLabel }} · 按 {{ ANSWERED_VER }} 回答 · 数据截至 2026-10-24 23:00 ·
         <a-tooltip title="本体版本、筛选、口径校验与权限过滤">
           <a class="qa-ans-basis-link" @click="showBasis = !showBasis">依据 <UpOutlined v-if="showBasis" /><DownOutlined v-else /></a>
         </a-tooltip>
@@ -72,17 +72,15 @@ const barOption = computed(() => ({
     <a-alert type="info" show-icon class="qa-ans-clarify">
       <template #message>
         <div class="qa-ans-clarify-row">
-          <span v-if="readonly">历史版本只读：口径按该版本默认，“不含税”口径自 v2026.10.3 起才发布</span>
-          <span v-else>“销售额”有两种口径，已按默认口径 <span class="fw-600">不含税</span> 回答</span>
-          <a-radio-group v-if="!readonly" v-model:value="caliber" size="small" option-type="button"
-            :options="[{ label: '不含税', value: 'ex' }, { label: '含税', value: 'in' }, { label: '两者对比', value: 'both' }]" />
+          <span>“销售额”有两种口径，已按默认口径 <span class="fw-600">不含税</span> 回答</span>
+          <a-tooltip :title="reason"><a-radio-group v-model:value="caliber" size="small" option-type="button" :disabled="readonly"
+            :options="[{ label: '不含税', value: 'ex' }, { label: '含税', value: 'in' }, { label: '两者对比', value: 'both' }]" /></a-tooltip>
         </div>
       </template>
     </a-alert>
 
     <p class="qa-ans-text">
-      <template v-if="readonly">2026 年 9 月，华东大区{{ HIST_NAME }}为 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>，环比下降 8.4%（8 月 1,404.0 万元），占大区销售额 62.0%。</template>
-      <template v-else-if="caliber === 'ex'">2026 年 9 月，华东大区{{ QA_METRIC.ex.name }}为 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>，环比下降 8.4%（8 月 1,404.0 万元），占大区销售额 62.0%。</template>
+      <template v-if="caliber === 'ex'">2026 年 9 月，华东大区{{ QA_METRIC.ex.name }}为 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>，环比下降 8.4%（8 月 1,404.0 万元），占大区销售额 62.0%。</template>
       <template v-else-if="caliber === 'in'">2026 年 9 月，华东大区{{ QA_METRIC.in.name }}为 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比下降 8.4%（8 月 {{ f1(inTax(1404.0)) }} 万元）。下方明细仍按不含税展示。</template>
       <template v-else>2026 年 9 月，华东大区复购客户销售额不含税 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>、含税 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比均下降 8.4%。</template>7 个省份全部下降，安徽（-12.5%）和江苏（-9.8%）降幅最大。
     </p>

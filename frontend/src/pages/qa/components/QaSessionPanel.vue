@@ -10,6 +10,9 @@ import { message } from 'ant-design-vue';
 import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
 import { QA_SESSION_LIST, QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
 import { useQueryParam, useQueryPage } from '../useQueryParam';
+import { useReadonly } from '@/composables/useReadonly';
+
+const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
 const PAGE_SIZE = 12;
@@ -61,7 +64,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 
 <template>
   <section class="panel qa-sessions">
-    <a-button type="primary" block><template #icon><PlusOutlined /></template>新建会话</a-button>
+    <a-tooltip :title="reason"><a-button type="primary" block :disabled="readonly"><template #icon><PlusOutlined /></template>新建会话</a-button></a-tooltip>
     <div class="qa-ss-filter">
       <a-input :value="kw" placeholder="搜索会话" allow-clear @change="(e: Event) => (kw = (e.target as HTMLInputElement).value)">
         <template #prefix><SearchOutlined class="c-3" /></template>
