@@ -84,26 +84,35 @@ export const QA_SESSION_LIST: QaSession[] = buildSessions();
 export const QA_TODAY = '2026-10-25';
 
 /** 历史轮次：“上个月华东各重点门店的销售额？”—— 38 家门店，演示结果表分页、导出 */
-export interface QaStoreRow { key: string; id: string; store: string; city: string; sales: number; mom: number; orders: number }
-const EC_CITIES: [string, string, string[]][] = [
-  ['上海', 'SH', ['浦东张江', '徐汇漕河泾', '闵行七宝', '静安大悦城', '长宁中山公园', '杨浦五角场', '普陀长风', '宝山顾村', '松江万达']],
-  ['杭州', 'HZ', ['西湖文三路', '滨江星光', '拱墅大关', '余杭未来科技城', '萧山市心']],
-  ['南京', 'NJ', ['鼓楼湖南路', '江宁百家湖', '建邺河西', '玄武新街口']],
-  ['苏州', 'SZ', ['园区湖西', '姑苏观前', '吴中石湖', '相城高铁新城']],
-  ['宁波', 'NB', ['鄞州万达', '海曙天一', '江北来福士']],
-  ['合肥', 'HF', ['政务区天鹅湖', '蜀山大溪地', '包河万达']],
-  ['无锡', 'WX', ['梁溪崇安寺', '滨湖万达', '新吴硕放']],
-  ['福州', 'FZ', ['鼓楼东街口', '仓山万达']],
-  ['南昌', 'NC', ['红谷滩万达', '东湖八一广场']],
-  ['济南', 'JN', ['历下泉城路', '槐荫万达', '高新区汉峪金谷']],
+export interface QaStoreRow { key: string; id: string; store: string; city: string; sales: number; mom: number; orders: number; /** 区县缩写 */ dist: string }
+/** [城市, 城市码, [店名片段, 区县缩写][]]；区县缩写供公共门店编码“城市-区县-编号”使用（QaStoreRow.dist） */
+const EC_CITIES: [string, string, [string, string][]][] = [
+  ['上海', 'SH', [['浦东张江', 'PD'], ['徐汇漕河泾', 'XH'], ['闵行七宝', 'MH'], ['静安大悦城', 'JA'], ['长宁中山公园', 'CN'], ['杨浦五角场', 'YP'], ['普陀长风', 'PT'], ['宝山顾村', 'BS'], ['松江万达', 'SJ']]],
+  ['杭州', 'HZ', [['西湖文三路', 'XH'], ['滨江星光', 'BJ'], ['拱墅大关', 'GS'], ['余杭未来科技城', 'YH'], ['萧山市心', 'XS']]],
+  ['南京', 'NJ', [['鼓楼湖南路', 'GL'], ['江宁百家湖', 'JN'], ['建邺河西', 'JY'], ['玄武新街口', 'XW']]],
+  ['苏州', 'SZ', [['园区湖西', 'GY'], ['姑苏观前', 'GS'], ['吴中石湖', 'WZ'], ['相城高铁新城', 'XC']]],
+  ['宁波', 'NB', [['鄞州万达', 'YZ'], ['海曙天一', 'HS'], ['江北来福士', 'JB']]],
+  ['合肥', 'HF', [['政务区天鹅湖', 'ZW'], ['蜀山大溪地', 'SS'], ['包河万达', 'BH']]],
+  ['无锡', 'WX', [['梁溪崇安寺', 'LX'], ['滨湖万达', 'BH'], ['新吴硕放', 'XW']]],
+  ['福州', 'FZ', [['鼓楼东街口', 'GL'], ['仓山万达', 'CS']]],
+  ['南昌', 'NC', [['红谷滩万达', 'HG'], ['东湖八一广场', 'DH']]],
+  ['济南', 'JN', [['历下泉城路', 'LX'], ['槐荫万达', 'HY'], ['高新区汉峪金谷', 'GX']]],
 ];
+/** 与公共 STORES（stores.ts）是同一家店的：沿用公共 id 和全称，避免出现同名不同 id 的门店 */
+const SAME_AS_SHARED: Record<string, [string, string]> = {
+  上海浦东张江: ['SH0031', '上海浦东张江高科店'], 上海徐汇漕河泾: ['SH0047', '上海徐汇漕河泾店'], 上海闵行七宝: ['SH0102', '上海闵行七宝万科广场B1店'],
+  上海静安大悦城: ['SH0133', '上海静安大悦城店'], 杭州西湖文三路: ['HZ0012', '杭州西湖文三路店'], 杭州滨江星光: ['HZ0058', '杭州滨江星光大道店'],
+  南京鼓楼湖南路: ['NJ0021', '南京鼓楼湖南路店'], 南京江宁百家湖: ['NJ0076', '南京江宁百家湖店'], 苏州园区湖西: ['SZ0009', '苏州工业园区湖西CBD店'],
+  宁波鄞州万达: ['NB0015', '宁波鄞州万达店'], 合肥政务区天鹅湖: ['HF0004', '合肥政务区天鹅湖店'], 无锡梁溪崇安寺: ['WX0011', '无锡梁溪崇安寺店'],
+};
 function buildStores(): QaStoreRow[] {
   const rnd = seeded(9038);
   const rows: QaStoreRow[] = [];
   for (const [city, code, names] of EC_CITIES) {
-    names.forEach((n, i) => {
-      const id = `${code}${String(11 + i * 17).padStart(4, '0')}`;
-      rows.push({ key: id, id, store: `${city}${n}店`, city, sales: Math.round((6 + rnd() * 10) * 10) / 10,
+    names.forEach(([n, dist], i) => {
+      const same = SAME_AS_SHARED[`${city}${n}`];
+      const id = same?.[0] ?? `${code}${String(11 + i * 17).padStart(4, '0')}`;
+      rows.push({ key: id, id, dist, store: same?.[1] ?? `${city}${n}店`, city, sales: Math.round((6 + rnd() * 10) * 10) / 10,
         mom: Math.round((-14 + rnd() * 16) * 10) / 10, orders: Math.round(1800 + rnd() * 3200) });
     });
   }

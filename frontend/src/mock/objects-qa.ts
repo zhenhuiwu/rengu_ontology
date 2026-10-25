@@ -12,19 +12,21 @@ import { ORDERS, orderById } from './orders';
 import { metricById } from './metrics';
 import { REGION_EC, QA_EC_STORES, QA_METRIC } from './qa';
 import { seeded, fmtMoney, fmtInt } from './format';
+import { DATA_CUTOFF } from './quality';
 
 /* ---------------- 1. 扩充门店 ---------------- */
-const CITY: Record<string, { code: string; region: string; names: string[] }> = {
-  上海: { code: 'SH', region: '华东一区', names: ['虹口北外滩', '黄浦新天地', '嘉定新城', '青浦赵巷', '奉贤南桥', '金山万达', '浦东世纪公园', '浦东金桥', '浦东周浦万达', '闵行莘庄', '徐汇田林', '长宁古北', '普陀真如', '杨浦新江湾'] },
-  杭州: { code: 'HZ', region: '华东二区', names: ['上城湖滨', '西湖黄龙', '拱墅运河', '滨江龙湖天街', '余杭良渚', '临平新城', '萧山万象汇', '钱塘下沙'] },
-  南京: { code: 'NJ', region: '华东三区', names: ['秦淮夫子庙', '栖霞仙林', '浦口江浦', '雨花台软件谷', '鼓楼龙江', '江宁九龙湖'] },
-  苏州: { code: 'SZ', region: '华东三区', names: ['园区金鸡湖', '吴江太湖新城', '高新区狮山', '昆山花桥', '常熟虞山'] },
-  宁波: { code: 'NB', region: '华东二区', names: ['北仑新碶', '镇海骆驼', '鄞州南部商务区', '慈溪新城'] },
-  合肥: { code: 'HF', region: '华东四区', names: ['庐阳四牌楼', '瑶海万达', '高新区创新产业园', '滨湖新区'] },
-  无锡: { code: 'WX', region: '华东三区', names: ['惠山万达', '锡山东亭', '江阴澄江'] },
-  福州: { code: 'FZ', region: '华东五区', names: ['台江万象城', '晋安宝龙', '马尾快安', '闽侯上街'] },
-  南昌: { code: 'NC', region: '华东五区', names: ['西湖万达', '青山湖高新', '新建望城', '红谷滩秋水广场'] },
-  济南: { code: 'JN', region: '华东五区', names: ['市中万达', '天桥北园', '历城华山', '长清大学城', '高新区奥体'] },
+/** 每家：[店名片段, 区县缩写]；编码按公共格式“城市-区县-编号”，如 SH-HK-0201 */
+const CITY: Record<string, { code: string; region: string; names: [string, string][] }> = {
+  上海: { code: 'SH', region: '华东一区', names: [['虹口北外滩', 'HK'], ['黄浦新天地', 'HP'], ['嘉定新城', 'JD'], ['青浦赵巷', 'QP'], ['奉贤南桥', 'FX'], ['金山万达', 'JS'], ['浦东世纪公园', 'PD'], ['浦东金桥', 'PD'], ['浦东周浦万达', 'PD'], ['闵行莘庄', 'MH'], ['徐汇田林', 'XH'], ['长宁古北', 'CN'], ['普陀真如', 'PT'], ['杨浦新江湾', 'YP']] },
+  杭州: { code: 'HZ', region: '华东二区', names: [['上城湖滨', 'SC'], ['西湖黄龙', 'XH'], ['拱墅运河', 'GS'], ['滨江龙湖天街', 'BJ'], ['余杭良渚', 'YH'], ['临平新城', 'LP'], ['萧山万象汇', 'XS'], ['钱塘下沙', 'QT']] },
+  南京: { code: 'NJ', region: '华东三区', names: [['秦淮夫子庙', 'QH'], ['栖霞仙林', 'QX'], ['浦口江浦', 'PK'], ['雨花台软件谷', 'YH'], ['鼓楼龙江', 'GL'], ['江宁九龙湖', 'JN']] },
+  苏州: { code: 'SZ', region: '华东三区', names: [['园区金鸡湖', 'GY'], ['吴江太湖新城', 'WJ'], ['高新区狮山', 'GX'], ['昆山花桥', 'KS'], ['常熟虞山', 'CS']] },
+  宁波: { code: 'NB', region: '华东二区', names: [['北仑新碶', 'BL'], ['镇海骆驼', 'ZH'], ['鄞州南部商务区', 'YZ'], ['慈溪新城', 'CX']] },
+  合肥: { code: 'HF', region: '华东四区', names: [['庐阳四牌楼', 'LY'], ['瑶海万达', 'YH'], ['高新区创新产业园', 'GX'], ['滨湖新区', 'BH']] },
+  无锡: { code: 'WX', region: '华东三区', names: [['惠山万达', 'HS'], ['锡山东亭', 'XS'], ['江阴澄江', 'JY']] },
+  福州: { code: 'FZ', region: '华东五区', names: [['台江万象城', 'TJ'], ['晋安宝龙', 'JA'], ['马尾快安', 'MW'], ['闽侯上街', 'MH']] },
+  南昌: { code: 'NC', region: '华东五区', names: [['西湖万达', 'XH'], ['青山湖高新', 'QS'], ['新建望城', 'XJ'], ['红谷滩秋水广场', 'HG']] },
+  济南: { code: 'JN', region: '华东五区', names: [['市中万达', 'SZ'], ['天桥北园', 'TQ'], ['历城华山', 'LC'], ['长清大学城', 'CQ'], ['高新区奥体', 'GX']] },
 };
 const MANAGERS = ['顾晓彤', '方建华', '姚倩', '蒋志远', '沈佳怡', '陆海峰', '潘雪', '杜文涛', '叶思敏', '程立', '袁梦', '丁浩'];
 export const OBJ_EXTRA_STORES: Store[] = (() => {
@@ -32,14 +34,14 @@ export const OBJ_EXTRA_STORES: Store[] = (() => {
   const out: Store[] = [];
   let i = 0;
   for (const [city, c] of Object.entries(CITY)) {
-    c.names.forEach((n, k) => {
+    c.names.forEach(([n, dist], k) => {
       const fmt = n.includes('万达') || n.includes('万象') || n.includes('天街') || n.includes('宝龙') ? '商场店'
         : n.includes('软件谷') || n.includes('产业园') || n.includes('商务区') || n.includes('高新') ? '写字楼店' : '社区店';
       const roll = r();
       const id = `${c.code}${String(201 + k * 7).padStart(4, '0')}`;
       const y = 2017 + Math.floor(r() * 9);
       out.push({
-        id, code: `${c.code}-${id.slice(2)}`, name: `${city}${n}店`, city, region: c.region, format: fmt,
+        id, code: `${c.code}-${dist}-${id.slice(2)}`, name: `${city}${n}店`, city, region: c.region, format: fmt,
         manager: MANAGERS[i % MANAGERS.length],
         area: roll < 0.05 ? null : Math.round(((fmt === '商场店' ? 430 : fmt === '写字楼店' ? 220 : 310) + r() * 200) * 10) / 10,
         openedAt: `${y}-${String(1 + Math.floor(r() * 12)).padStart(2, '0')}-${String(1 + Math.floor(r() * 28)).padStart(2, '0')}`,
@@ -50,8 +52,8 @@ export const OBJ_EXTRA_STORES: Store[] = (() => {
   }
   return out;
 })();
-// 追加进公共 ALL_STORES（只加不改，按 id 去重，热更新重复执行也不会重复追加）
-OBJ_EXTRA_STORES.forEach((s) => { if (!ALL_STORES.some((x) => x.id === s.id)) ALL_STORES.push(s); });
+// 追加进公共 ALL_STORES（只加不改，按 id 和店名去重，热更新重复执行也不会重复追加）
+OBJ_EXTRA_STORES.forEach((s) => { if (!ALL_STORES.some((x) => x.id === s.id || x.name === s.name)) ALL_STORES.push(s); });
 
 /** 门店 9 月销售额（不含税，万元）与环比：问数结果表里有的用原值，其余按 id 生成 */
 const hash = (s: string) => [...s].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
@@ -126,7 +128,8 @@ export const OBJ_TYPES: ObjType[] = [
 export const objType = (k: string) => OBJ_TYPES.find((t) => t.kind === k) ?? OBJ_TYPES[0];
 /** 当前用户可见范围（王敏：大区 = 华东）。无权限范围只说明“无权限”，不给数量 */
 export const OBJ_SCOPE = { visible: '华东大区（华东一区至五区）', hidden: '其他大区' };
-export const OBJ_CUTOFF = '2026-10-25 06:00';
+/** 数据截至：与指标页、问数统一（公共 DATA_CUTOFF） */
+export const OBJ_CUTOFF = DATA_CUTOFF;
 
 /* ---------------- 3. 详情页补充数据 ---------------- */
 export const KIND_LABEL: Record<string, string> = { store: '门店', product: '商品', order: '订单', region: '大区', metric: '指标' };
