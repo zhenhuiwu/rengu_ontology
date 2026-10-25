@@ -322,7 +322,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 - 所有改动（参数、条件、本体编辑、副作用、写回配置）都写进变更单草稿的 `cr_item`，`target_kind=action`，`section` 和前端一致。审核通过后**随本体整版发布生效**，没有单独发布动作类型这回事。
 - **回滚**：两页的回滚链接现在都置灰（“回滚暂未开放”），第一期不做。开放以后按前端/静态的口径，**生成一个新版本**（调基础层的 `create_version`，内容等于目标版本），不是把当前指针移回去。
-- **整版回滚时恢复本模块定义表**（发布管理页的整版回滚前端已开放，`Releases.vue:183-189`，跟上一条单个类型的回滚不同）：按骨架契约 `app/contracts/versioning.py` 第 4 条，`actionTypes`、`eventTypes` 两个 builder 都实现可选钩子 `restore_section(session, content)`，由版本层在 `create_version` 回滚分支里同一事务内调用，`content` = 被恢复那一版（`rollback_of` 的上一版）快照里这一节。做法与静态 §2.2-6、动态 §2.8 一致：按前端 id upsert，把 `action_type`/`event_type` 及其参数、条件、编辑、副作用、载荷、订阅方等定义行改回快照里的值，并把当前版本指针指回快照里的 `version`；`action_type_version`/`event_type_version` 只追加，不动。快照里没有的类型不删行，也不加新的 `status` 值（前端类型状态只有已发布/变更中/草稿），而是把该行 `retired_release_id` 写成这次回滚产生的那一版的 `ontology_release.id`：当前视图的列表和详情都不返回它（详情按不存在处理），`?ver=V` 历史视图在「V 那一版的 id ≥ `retired_release_id`」时不出现（版本号是 `v2026.10.N` 字符串，不能按字符串比；按 id 比和骨架取「最新版」的口径一致）；以后再发布到这个类型时把 `retired_release_id` 清空 [推断]。`content=None`（那一版快照里根本没有这一节）时什么都不做 [推断]。
+- **整版回滚时恢复本模块定义表**（发布管理页的整版回滚前端已开放，`Releases.vue:183-189`，跟上一条单个类型的回滚不同）：按骨架契约 `app/contracts/versioning.py` 第 4 条，`actionTypes`、`eventTypes` 两个 builder 都实现可选钩子 `restore_section(session, content, *, release_id)`（`release_id` = 这次回滚产生的那一版的 `ontology_release.id`，见 §10.4），由版本层在 `create_version` 回滚分支里同一事务内调用，`content` = 被恢复那一版（`rollback_of` 的上一版）快照里这一节。做法与静态 §2.2-6、动态 §2.8 一致：按前端 id upsert，把 `action_type`/`event_type` 及其参数、条件、编辑、副作用、载荷、订阅方等定义行改回快照里的值，并把当前版本指针指回快照里的 `version`；`action_type_version`/`event_type_version` 只追加，不动。快照里没有的类型不删行，也不加新的 `status` 值（前端类型状态只有已发布/变更中/草稿），而是把该行 `retired_release_id` 写成这次回滚产生的那一版的 `ontology_release.id`：当前视图的列表和详情都不返回它（详情按不存在处理），`?ver=V` 历史视图在「V 那一版的 id ≥ `retired_release_id`」时不出现（版本号是 `v2026.10.N` 字符串，不能按字符串比；按 id 比和骨架取「最新版」的口径一致）；以后再发布到这个类型时把 `retired_release_id` 清空 [推断]。`content=None`（那一版快照里根本没有这一节）时什么都不做 [推断]。
 - **发布快照里的本模块分段**（PDE 定：每个模块自己组装自己的分段交给基础层 `create_version`；**发布在发布事务里同步展开**，展开失败整次发布回滚）。快照分段 = 静态的各段 + `actionTypes`、`eventTypes`（本模块）+ `rules`、`lifecycles`（动态）。基础层 `create_version` 按分段登记组装函数：**本模块在启动时登记 `actionTypes`、`eventTypes` 两个组装函数**（`action/` 登记 `actionTypes`，`event/` 登记 `eventTypes`），发布时由 `create_version` 在同一事务里依次调用。两段的键用**前端 id**（`ACTION_TYPES[].id`、`EVENT_TYPES[].id`），字段名和取值与前端 mock 一致（中文枚举，库内转换见 §3.5）：
 
 ```json
@@ -706,6 +706,66 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `event_delivery` | id(pk), event_id, subscription_id, status(pending/sending/delivered/retrying/dead), attempts, next_at, last_error, delivered_at | `UNIQUE(event_id, subscription_id)`；不分区；重投由 procrastinate 执行，只重投失败的订阅方 |
 | `event_daily_stat` / `event_subscription_weekly_stat` | id(pk), event_type_id/subscription_id, date, value | seed 用 |
 | `dict_item` | id(pk), dict, value, seq | 动作分组、事件来源等字典 |
+
+## 10. 后台实现里的【推断】（第 1 批 `292ee28` + review 修订 `ee39f8b`，基于 master `c705c25`）
+
+前端没写死、实现时由我补的口径，全部【推断】，用户或 PDE 改口径时按这里逐条改。
+
+### 10.1 第 1 批（11 条）
+
+1. **`?ver=` 回退**：快照里没有 `actionTypes`/`eventTypes` 这一节（或该版本不存在这一节）时，退回读当前定义表——前端历史视图显示的就是当前 mock。【推断】
+2. **`seed_section` 用当前 mock**：mock 只有当前定义，seed 出来的历史各版快照都用当前定义组装。【推断】
+3. **分组来自数据**：`groups` = `['全部']` + 定义表里按首次出现顺序的分组；前端 `ACTION_GROUPS` 是常量，mock 里与此一致。【推断】
+4. **`weekly` 读当前行**：事件类型、订阅方的「近 7 天」计数暂作为列存在定义表上（统计表不在本批），seed 来自 mock，以后由统计任务刷新；不进快照。【推断】
+5. **`generates` 标记**：`action_type_rule.generates`（规则命中生成本动作，来自 `RULE_ACTION`）暂存在动作类型的规则行上，动态合并后改读规则。【推断】
+6. **`retention_days`**：事件 `retention` 原文「N 天」入库存整数天，接口按原文格式输出；不是「N 天」格式 seed 直接报错。【推断】
+7. **描述列命名**：接口字段 `desc` 库里统一叫 `description`（避开 SQL 关键字）。【推断】
+8. **类型行不存 `release_id`**：定义表只存当前定义，属于哪一版由发布快照和 `*_version.release_ver` 表达。【推断】
+9. **版本行 `definition` 为空**：seed 的 `action_type_version`/`event_type_version` 没有逐版定义，`definition` 留 `null`。【推断】
+10. **外部系统接口**：
+    - 权限：`external-systems · view` 或（`writeback=1` 时）`action-types · view` 二者满足其一；`require_func` 现在是桩，落地后改成「其一」。
+    - `kw` 匹配字段：名称 / 编号 / 厂商。
+    - 详情带 `actionTypes`（引用它的动作类型）。【推断】
+11. **流程时间线 `time`**：mock 没有时间，`time` 按步骤序号输出（`"1"`、`"2"`…）。【推断】
+
+### 10.2 review 修订新增
+
+- **ext-systems `kw`**：前端外部系统页**没有搜索框**，`kw` 是后台补的可选过滤（名称 / 编号 / 厂商包含），不传 = 全部。【推断】
+- **`/action-types/{id}/versions`、`/event-types/{id}/versions` 按视图可见性返回 404**：当前视图下已下线（`retired_release_id` 非空）的类型 404；`?ver=V` 下 V 里看不到的类型也 404。【推断】
+- **分页**：跟骨架一致。`app.common.pagination` 目前没有切片 helper，模块内暂时自己切片；TODO：骨架补上 helper 后改为调用它。
+- **`restore_section` 的过渡口径**：见 §10.4 第 4–7 条。
+
+### 10.3 软引用（不建外键）
+
+| 列 | 指向 | 为什么不建外键 |
+|---|---|---|
+| `action_type_rule.rule_code` | 规则 `R-…`（动态） | 规则表归动态，未合并 |
+| `event_type.rule_code` | 规则 `R-…` | 同上 |
+| `event_subscription.rule_code` | 规则 `R-…` | 同上 |
+| `action_type.target_kind`、`event_type.obj_kind` | 静态的对象类型（前端 id） | 跨模块，静态表结构未定稿 |
+| `action_type_version.release_ver` / `event_type_version.release_ver` | `ontology_release.ver` | mock 版本记录里有发布表没有的版本号（如 `v2026.09.2`、`v2026.08.1`），只能按字符串存 |
+| `action_type.retired_release_id` / `event_type.retired_release_id` | `ontology_release.id` | 有外键指向 `ontology_release` 时 `TRUNCATE` 会失败（测试和重新 seed 要清表），所以只存 id |
+
+### 10.4 `restore_section(session, content, *, release_id)` 的行为
+
+`actionTypes`、`eventTypes` 两个 builder 在 `app/modules/action/sections.py`、`app/modules/event/sections.py` 里，**import 时幂等登记**（重复登记同一实例不报错）。骨架自动发现 `sections.py` 之前，临时由 `app/seeds/loader.py` 和两个 router import 触发，可整段删。
+
+1. **覆盖定义**：按前端 id（`code`）upsert `content` 里的每个类型，把类型行及子表改回快照里的值：
+   - 动作：参数、条件、编辑、副作用、规则
+   - 事件：载荷字段、订阅方
+   - 外部系统 `sysId` 解析成 `ext_system.id`
+2. **缺席即下线**：当前在用、但 `content` 里没有的类型，`retired_release_id = release_id`。不删行，也不加新 `status`。
+3. **重新出现即恢复**：`content` 里有的类型清空 `retired_release_id`。所以恢复一个包含该类型的版本时，它会重新出现。
+4. **`release_id` 不传**：骨架 `restore_sections` 现在不传 `release_id`，并且在插入新版本行之前就调用。过渡期按 `max(ontology_release.id) + 1` 取值：identity 只增不减，新版本行的 id ≥ 它，中间也不会插进别的版本。骨架改成传入后以传入为准。【推断】
+5. **子行 `is_seed` 跟随父行**：mock 自带重复 api 的参数只在 seed 行上放行。【推断】
+6. **快照里没有的运行数据保留旧值**：
+   - 规则行的 `generates`
+   - 订阅方的 `weekly`，按 `(event_type_id, name)` 对应
+   - 全局信封字段：不进快照，不动
+
+   【推断】
+7. **版本表只追加**：回滚不写 `*_version` 行。【推断】
+8. **`content=None`**：那一版快照里根本没有这一节时，什么都不做。【推断】
 
 ---
 
