@@ -1,22 +1,23 @@
 <script setup lang="ts">
 /**
  * 模型与系统配置（PDE工程师）。
- * 左侧分组：租户信息、大模型连接（占位，第二期接入）、通知渠道、安全策略；右侧是该分组的表单。
+ * 左侧分组：租户信息、大模型连接、通知渠道、安全策略；右侧是该分组的表单。
+ * 大模型连接：连接列表（新建 / 编辑抽屉 ?llm=new|LLM-01，密钥只在填写当次可见、之后只显示掩码；测试连接要确认，模拟返回延迟和模型版本）、
+ * 每个用途的默认连接、数据出域策略（默认只发送字段名和口径；发送明细只允许私有化部署）。只在前端配置，不发网络请求。
  * 所有分组共用一份草稿：有修改时底部出现保存条（放弃修改 / 保存，保存前确认），离开页面受 useUnsavedGuard 保护；切换分组不丢修改。
  * 通知渠道的配置在抽屉里改（确定后写进草稿，仍需保存）；发送测试要确认。历史版本只读。
- * URL：?group=tenant|llm|notify|security&channel=email
+ * URL：?group=tenant|llm|notify|security&channel=email&llm=LLM-01
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { ADMIN_DEPTS } from '@/mock';
 import {
-  SYSTEM_SETTINGS, NOTIFY_EVENTS, CHANNEL_ORDER, LLM_PLACEHOLDER, SETTINGS_UPDATED,
-  type SystemSettings, type NotifyChannel, type ChannelId,
+  SYSTEM_SETTINGS, NOTIFY_EVENTS, CHANNEL_ORDER, SETTINGS_UPDATED, LLM_USAGES, LLM_KINDS, EGRESS_OPTIONS, MASK_FIELDS,
+  type SystemSettings, type NotifyChannel, type ChannelId, type LlmConnection, type LlmUsage, type LlmTest, type LlmKind, type LlmDeploy,
 } from '@/mock/settings';
 
 const route = useRoute();
@@ -31,7 +32,7 @@ const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 type GroupKey = 'tenant' | 'llm' | 'notify' | 'security';
 const GROUPS: { key: GroupKey; title: string; desc: string }[] = [
   { key: 'tenant', title: '租户信息', desc: '名称、组织、时区与口径' },
-  { key: 'llm', title: '大模型连接', desc: '第二期接入，当前为占位' },
+  { key: 'llm', title: '大模型连接', desc: '模型接口、用途分配与数据出域' },
   { key: 'notify', title: '通知渠道', desc: '渠道配置与事件通知规则' },
   { key: 'security', title: '安全策略', desc: '密码、登录、会话与数据' },
 ];
@@ -66,6 +67,22 @@ const changes = computed<Change[]>(() => {
     const a = (s.tenant as unknown as Record<string, unknown>)[k]; const b = (draft.tenant as unknown as Record<string, unknown>)[k];
     if (JSON.stringify(a) !== JSON.stringify(b)) out.push({ group: 'tenant', label: TENANT_LABEL[k], from: show(k, a), to: show(k, b) });
   }
+  for (const c of draft.llm.connections) {
+    const o = s.llm.connections.find((x) => x.id === c.id);
+    if (!o) { out.push({ group: 'llm', label: `新建连接 · ${c.name}`, from: '—', to: `${c.kind} · ${c.model}` }); continue; }
+    if (o.enabled !== c.enabled) out.push({ group: 'llm', label: `${c.name} 状态`, from: o.enabled ? '启用' : '停用', to: c.enabled ? '启用' : '停用' });
+    const keys = ['name', 'kind', 'deploy', 'baseUrl', 'model', 'keyMask', 'timeoutSec', 'maxConcurrency', 'usages'] as const;
+    const diff = keys.filter((k) => JSON.stringify(o[k]) !== JSON.stringify(c[k]));
+    if (diff.length) out.push({ group: 'llm', label: `${o.name} 配置`, from: '原配置', to: diff.map((k) => LLM_FIELD[k]).join('、') + ' 已修改' });
+  }
+  for (const o of s.llm.connections) if (!draft.llm.connections.some((c) => c.id === o.id)) out.push({ group: 'llm', label: `删除连接 · ${o.name}`, from: `${o.kind} · ${o.model}`, to: '—' });
+  for (const u of LLM_USAGES) {
+    const a = s.llm.defaults[u.key]; const b = draft.llm.defaults[u.key];
+    if (a !== b) out.push({ group: 'llm', label: `默认连接 · ${u.key}`, from: connName(a, s.llm.connections), to: connName(b) });
+  }
+  if (s.llm.egress.policy !== draft.llm.egress.policy) out.push({ group: 'llm', label: '数据出域策略', from: egressLabel(s.llm.egress.policy), to: egressLabel(draft.llm.egress.policy) });
+  if (draft.llm.egress.policy === 'masked' && (s.llm.egress.sampleRows !== draft.llm.egress.sampleRows || s.llm.egress.maskFields.slice().sort().join() !== draft.llm.egress.maskFields.slice().sort().join()))
+    out.push({ group: 'llm', label: '脱敏样例设置', from: `${s.llm.egress.sampleRows} 行 · 脱敏 ${s.llm.egress.maskFields.join('、') || '无'}`, to: `${draft.llm.egress.sampleRows} 行 · 脱敏 ${draft.llm.egress.maskFields.join('、') || '无'}` });
   for (const c of draft.channels) {
     const o = s.channels.find((x) => x.id === c.id)!;
     if (o.enabled !== c.enabled) out.push({ group: 'notify', label: `${c.name}渠道`, from: show('', o.enabled), to: show('', c.enabled) });
@@ -81,6 +98,9 @@ const changes = computed<Change[]>(() => {
   }
   return out;
 });
+const LLM_FIELD: Record<string, string> = { name: '名称', kind: '接口类型', deploy: '部署方式', baseUrl: '地址', model: '模型名', keyMask: '密钥', timeoutSec: '超时', maxConcurrency: '最大并发', usages: '用途' };
+function connName(id: string, list: LlmConnection[] = draft.llm.connections) { return list.find((c) => c.id === id)?.name ?? '未设置'; }
+const egressLabel = (v: string) => EGRESS_OPTIONS.find((o) => o.value === v)?.label ?? v;
 const routeText = (ids: ChannelId[]) => CHANNEL_ORDER.filter((id) => ids.includes(id)).map(chName).join('、') || '不通知';
 const dirty = computed(() => changes.value.length > 0);
 const dirtyOf = (g: GroupKey) => changes.value.filter((c) => c.group === g).length;
@@ -90,6 +110,26 @@ const guard = useUnsavedGuard(dirty);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CIDR_RE = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
 const badIps = computed(() => draft.security.ipAllow.split(/\s+/).filter((x) => x && !CIDR_RE.test(x)));
+const llmErrors = computed(() => {
+  const e: string[] = [];
+  const L = draft.llm;
+  for (const u of LLM_USAGES) {
+    const c = L.connections.find((x) => x.id === L.defaults[u.key]);
+    if (!c) e.push(`用途「${u.key}」没有默认连接`);
+    else if (!c.enabled) e.push(`用途「${u.key}」的默认连接「${c.name}」已停用`);
+    else if (!c.usages.includes(u.key)) e.push(`连接「${c.name}」不支持用途「${u.key}」`);
+  }
+  if (L.egress.policy === 'detail') {
+    // 已启用、且可能拿到查询结果（问数解析 / 结果解释）的连接都必须是私有化部署
+    const pub = L.connections.filter((c) => c.enabled && c.deploy === '公有云' && c.usages.some((u) => u !== '向量化')).map((c) => c.name);
+    if (pub.length) e.push(`发送明细只允许私有化部署的连接：「${pub.join('、')}」是公有云，先停用或改用脱敏样例`);
+  }
+  if (L.egress.policy === 'masked') {
+    if (!(L.egress.sampleRows >= 1 && L.egress.sampleRows <= 20)) e.push('脱敏样例行数需在 1～20 之间');
+    if (!L.egress.maskFields.includes('手机号') || !L.egress.maskFields.includes('身份证号')) e.push('脱敏样例必须脱敏手机号和身份证号');
+  }
+  return e;
+});
 const errors = computed(() => {
   const e: string[] = [];
   if (!draft.tenant.name.trim()) e.push('租户全称不能为空');
@@ -97,6 +137,7 @@ const errors = computed(() => {
   if (!EMAIL_RE.test(draft.tenant.contact)) e.push('运维联系邮箱格式不对');
   if (badIps.value.length) e.push(`IP 白名单有 ${badIps.value.length} 条格式不对`);
   if (!draft.security.pwdRules.length) e.push('密码至少要求包含一类字符');
+  e.push(...llmErrors.value);
   for (const ev of NOTIFY_EVENTS) if (ev.level === '紧急' && !draft.routes[ev.key].some((id) => id !== 'inbox' && draft.channels.find((c) => c.id === id)!.enabled)) e.push(`紧急事件「${ev.name}」至少要有一个站内消息以外的已启用渠道`);
   return e;
 });
@@ -107,6 +148,7 @@ async function save() {
   const impact: string[] = [];
   if (groups.includes('security')) impact.push('安全策略：会话超时、IP 白名单立即生效（不在白名单内的已登录会话会被退出）；密码规则在用户下次改密码时生效。');
   if (groups.includes('notify')) impact.push('通知：新规则对之后产生的事件生效，已发出的通知不受影响。');
+  if (groups.includes('llm')) impact.push('大模型连接：新开始的问数会话使用新的连接、默认用途和出域策略，进行中的会话不受影响。');
   if (groups.includes('tenant')) impact.push('租户信息：时区、财年、数据截至时间会影响报表口径，下次计算时生效。');
   impact.push('修改会记入审计日志。');
   const shown = list.slice(0, 6).map((c) => ({ label: c.label, value: `${c.from} → ${c.to}` }));
@@ -117,7 +159,7 @@ async function save() {
     blocked: errors.value.length ? `请先改正：${errors.value.join('；')}` : undefined,
   });
   if (!ok) return;
-  for (const g of groups) if (g !== 'llm') updated[g] = `${nowStr} · 王敏`;
+  for (const g of groups) updated[g] = `${nowStr} · 王敏`;
   saved.value = clone(draft as SystemSettings);
   message.success(`已保存 ${list.length} 处修改`);
 }
@@ -125,7 +167,7 @@ async function discard() {
   if (!(await confirmDiscard())) return;
   Object.assign(draft, clone(saved.value));
 }
-const selectGroup = (g: GroupKey) => setQuery({ group: g === 'tenant' ? undefined : g, channel: undefined });
+const selectGroup = (g: GroupKey) => setQuery({ group: g === 'tenant' ? undefined : g, channel: undefined, llm: undefined });
 
 // 通知渠道
 const channel = computed(() => draft.channels.find((c) => c.id === q('channel')) ?? null);
@@ -184,6 +226,135 @@ const evCols = computed(() => [
   ...CHANNEL_ORDER.map((id) => ({ title: chName(id), key: id, width: 100, align: 'center' as const })),
 ]);
 
+// 大模型连接
+const llmCols = [
+  { title: '连接', key: 'name', width: 230 },
+  { title: '地址 / 模型', key: 'url', ellipsis: true },
+  { title: '用途', key: 'usages', width: 230 },
+  { title: '超时 / 并发', key: 'limits', width: 110 },
+  { title: '状态', key: 'status', width: 80 },
+  { title: '最近测试', key: 'test', width: 220 },
+  { title: '操作', key: 'op', width: 200 },
+];
+const defaultsOf = (id: string) => LLM_USAGES.filter((u) => draft.llm.defaults[u.key] === id).map((u) => u.key);
+const candidates = (u: LlmUsage) => draft.llm.connections.filter((c) => c.usages.includes(u));
+const tlTest = (t?: LlmTest) => (!t ? 'c-3' : t.ok ? 'c-3' : 'tl-failed');
+const testing = ref('');
+const KNOWN_VERSION: Record<string, string> = {
+  'qwen2.5-72b-instruct': 'Qwen2.5-72B-Instruct-GPTQ-Int4 · vLLM 0.6.3', 'bge-m3': 'bge-m3 · 1024 维 · TEI 1.5.0', 'qwen-max': 'qwen-max-2025-01-25',
+  'qwen2.5-32b-instruct': 'Qwen2.5-32B-Instruct-AWQ · vLLM 0.6.3', 'deepseek-v3': 'DeepSeek-V3-0324 · SGLang 0.4',
+};
+const hash = (str: string) => [...str].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
+/** 模拟测试：不发请求，按部署方式、地址算一个稳定的延迟；地址里带 .invalid / 127.0.0.1 视为连不上 */
+function simulateTest(c: Pick<LlmConnection, 'deploy' | 'baseUrl' | 'model' | 'timeoutSec'>): LlmTest {
+  const at = nowStr;
+  if (/\.invalid\b|127\.0\.0\.1|localhost/.test(c.baseUrl)) return { at, ok: false, latencyMs: c.timeoutSec * 1000, version: '—', msg: `${c.timeoutSec} 秒内没有响应（连接超时）` };
+  const base = c.deploy === '私有化部署' ? (c.model.includes('bge') ? 30 : 320) : 860;
+  return { at, ok: true, latencyMs: base + (hash(c.baseUrl + c.model) % 180), version: KNOWN_VERSION[c.model] ?? `${c.model} · 由 /v1/models 返回` };
+}
+async function runTest(c: Pick<LlmConnection, 'name' | 'kind' | 'deploy' | 'baseUrl' | 'model' | 'timeoutSec' | 'enabled'>, opts: { blocked?: string } = {}): Promise<LlmTest | null> {
+  const ok = await confirm.ask({
+    title: '测试连接', target: `${c.name || '未命名连接'}（${c.kind} · ${c.deploy}）`, okText: '开始测试',
+    fields: [{ label: '地址', value: c.baseUrl }, { label: '模型名', value: c.model || '—' }, { label: '超时', value: `${c.timeoutSec} 秒` }],
+    impact: '发送一条固定的测试提示词（“请回复 OK”），不带任何业务字段或数据；记录延迟和服务端返回的模型版本。公有云连接会产生一次很少的调用费用。',
+    blocked: opts.blocked ?? (!c.enabled ? '连接已停用，先启用再测试' : undefined),
+  });
+  if (!ok) return null;
+  testing.value = c.name;
+  await new Promise((r) => setTimeout(r, 300));
+  testing.value = '';
+  const t = simulateTest(c);
+  if (t.ok) message.success(`连接正常 · 延迟 ${t.latencyMs} ms · 模型版本 ${t.version}`);
+  else message.error(`连接失败：${t.msg}`);
+  return t;
+}
+async function testConn(c: LlmConnection) {
+  const t = await runTest(c);
+  if (!t) return;
+  c.lastTest = t;
+  const sv = saved.value.llm.connections.find((x) => x.id === c.id);
+  if (sv) sv.lastTest = clone(t);
+}
+function toggleConn(c: LlmConnection) {
+  c.enabled = !c.enabled;
+  const used = defaultsOf(c.id);
+  if (!c.enabled && used.length) message.warning(`「${c.name}」是 ${used.join('、')} 的默认连接，请先换一个默认连接，否则不能保存`);
+}
+async function removeConn(c: LlmConnection) {
+  const used = defaultsOf(c.id);
+  const ok = await confirm.ask({
+    title: '删除大模型连接', target: c.name, okText: '删除', danger: true,
+    fields: [{ label: '地址', value: c.baseUrl }, { label: '模型名', value: c.model }, { label: '用途', value: c.usages.join('、') }],
+    impact: '删除写入草稿，保存后生效；密钥一并删除，不能恢复。',
+    blocked: used.length ? `它是「${used.join('、')}」的默认连接，先在“用途默认连接”里换成其他连接再删除` : undefined,
+  });
+  if (!ok) return;
+  draft.llm.connections = draft.llm.connections.filter((x) => x.id !== c.id);
+  message.info(`已删除「${c.name}」（草稿），保存后生效`);
+}
+
+// 连接抽屉 ?llm=new|LLM-01
+const llmKey = computed(() => (group.value === 'llm' ? q('llm') : ''));
+const llmConn = computed(() => (llmKey.value && llmKey.value !== 'new' ? draft.llm.connections.find((c) => c.id === llmKey.value) ?? null : null));
+interface LlmForm { name: string; kind: LlmKind; deploy: LlmDeploy; baseUrl: string; model: string; key: string; changeKey: boolean; timeoutSec: number; maxConcurrency: number; usages: LlmUsage[]; enabled: boolean }
+const blankLlm = (): LlmForm => ({ name: '', kind: 'OpenAI 兼容', deploy: '私有化部署', baseUrl: 'http://', model: '', key: '', changeKey: true, timeoutSec: 60, maxConcurrency: 8, usages: ['问数解析'], enabled: true });
+const lf = reactive<LlmForm>(blankLlm());
+const lfSnap = ref('');
+const lfTest = ref<LlmTest | null>(null);
+watch(llmKey, (k) => {
+  if (!k) return;
+  const c = llmConn.value;
+  Object.assign(lf, c ? { name: c.name, kind: c.kind, deploy: c.deploy, baseUrl: c.baseUrl, model: c.model, key: '', changeKey: false, timeoutSec: c.timeoutSec, maxConcurrency: c.maxConcurrency, usages: [...c.usages], enabled: c.enabled } : blankLlm());
+  lfSnap.value = JSON.stringify(lf);
+  lfTest.value = c?.lastTest ? { ...c.lastTest } : null;
+}, { immediate: true });
+const lfDirty = computed(() => !!llmKey.value && JSON.stringify(lf) !== lfSnap.value);
+const needKey = computed(() => lf.kind !== 'Ollama');
+const lfErrors = computed(() => {
+  const e: string[] = [];
+  if (!lf.name.trim()) e.push('请填写名称');
+  else if (draft.llm.connections.some((c) => c.name === lf.name.trim() && c.id !== llmConn.value?.id)) e.push('名称已存在');
+  if (!/^https?:\/\/[^\s/]+(\/\S*)?$/.test(lf.baseUrl.trim()) || /^https?:\/\/$/.test(lf.baseUrl.trim())) e.push('地址需以 http:// 或 https:// 开头');
+  else if (lf.deploy === '公有云' && !lf.baseUrl.startsWith('https://')) e.push('公有云地址必须使用 https');
+  if (!lf.model.trim()) e.push('请填写模型名');
+  if (needKey.value && lf.changeKey && lf.key.trim().length < 8) e.push(llmConn.value?.keyMask ? '新密钥至少 8 位；不更换请点“保留原密钥”' : '请填写密钥（至少 8 位）');
+  if (!(lf.timeoutSec >= 5 && lf.timeoutSec <= 300)) e.push('超时需在 5～300 秒之间');
+  if (!(lf.maxConcurrency >= 1 && lf.maxConcurrency <= 64)) e.push('最大并发需在 1～64 之间');
+  if (!lf.usages.length) e.push('至少选一个用途');
+  const c = llmConn.value;
+  if (c) {
+    const lost = defaultsOf(c.id).filter((u) => !lf.usages.includes(u as LlmUsage));
+    if (lost.length) e.push(`它是「${lost.join('、')}」的默认连接，不能去掉该用途`);
+    if (!lf.enabled && defaultsOf(c.id).length) e.push('默认连接不能停用');
+  }
+  return e;
+});
+const maskOf = (k: string) => `${k.startsWith('sk-') ? 'sk-' : ''}••••••••${k.trim().slice(-4)}`;
+async function closeLlm() {
+  if (lfDirty.value && !(await confirmDiscard())) return;
+  lfSnap.value = JSON.stringify(lf);
+  setQuery({ llm: undefined });
+}
+async function testForm() {
+  const t = await runTest({ ...lf, name: lf.name.trim() }, { blocked: lfErrors.value.filter((x) => !x.includes('默认连接')).length ? `请先改正：${lfErrors.value[0]}` : !lf.enabled ? '连接已停用，先启用再测试' : undefined });
+  if (t) lfTest.value = t;
+}
+function applyLlm() {
+  if (lfErrors.value.length) return;
+  const base = { name: lf.name.trim(), kind: lf.kind, deploy: lf.deploy, baseUrl: lf.baseUrl.trim(), model: lf.model.trim(), timeoutSec: lf.timeoutSec, maxConcurrency: lf.maxConcurrency, usages: LLM_USAGES.map((u) => u.key).filter((u) => lf.usages.includes(u)), enabled: lf.enabled };
+  const keyMask = !needKey.value ? '' : lf.changeKey ? maskOf(lf.key) : llmConn.value?.keyMask ?? '';
+  const c = llmConn.value;
+  if (c) Object.assign(c, base, { keyMask }, lfTest.value ? { lastTest: lfTest.value } : {});
+  else {
+    const n = Math.max(0, ...draft.llm.connections.map((x) => Number(x.id.slice(4)) || 0), ...saved.value.llm.connections.map((x) => Number(x.id.slice(4)) || 0)) + 1;
+    draft.llm.connections.push({ id: `LLM-${String(n).padStart(2, '0')}`, ...base, keyMask, createdAt: nowStr, createdBy: '王敏', ...(lfTest.value ? { lastTest: lfTest.value } : {}) });
+  }
+  lf.key = '';
+  lfSnap.value = JSON.stringify(lf);
+  setQuery({ llm: undefined });
+  message.info(`${c ? '修改' : '新建'}「${base.name}」已写入草稿，保存后生效；密钥只显示掩码，明文不再可见`);
+}
+
 const TZ = ['Asia/Shanghai（UTC+8）', 'Asia/Hong_Kong（UTC+8）', 'Asia/Singapore（UTC+8）', 'Asia/Tokyo（UTC+9）', 'UTC'];
 const fieldDis = computed(() => readonly.value);
 </script>
@@ -195,7 +366,6 @@ const fieldDis = computed(() => readonly.value);
       <div v-for="g in GROUPS" :key="g.key" class="st-item" :class="{ on: g.key === group }" @click="selectGroup(g.key)">
         <div class="st-l1">
           <span class="t-14 c-1" :class="{ 'fw-600': g.key === group }">{{ g.title }}</span>
-          <a-tag v-if="g.key === 'llm'" class="st-tag">占位</a-tag>
           <span v-if="dirtyOf(g.key)" class="t-12 tl-attention st-mod">已修改 {{ dirtyOf(g.key) }}</span>
         </div>
         <div class="t-12 c-3">{{ g.desc }}</div>
@@ -227,21 +397,74 @@ const fieldDis = computed(() => readonly.value);
         </a-form>
       </div>
 
-      <!-- 大模型连接（占位） -->
+      <!-- 大模型连接 -->
       <div v-else-if="group === 'llm'" class="st-body">
-        <div class="st-note t-14 c-2">
-          <QuestionCircleOutlined class="c-3" />
-          自定义大模型连接在第二期开放。当前问数、解读和检索都使用平台内置模型，数据不出平台。下面是规划中的配置项，暂不能填写。
+        <div class="st-rowhead">
+          <span class="t-14 fw-600 c-1">模型连接</span>
+          <span class="t-12 c-3">支持 OpenAI 兼容接口；密钥加密保存，只在填写当次可见。停用的连接不会被调用。</span>
+          <a-tooltip :title="reason"><a-button type="primary" size="small" class="st-add" :disabled="readonly" @click="setQuery({ llm: 'new' })">新建连接</a-button></a-tooltip>
         </div>
-        <a-form layout="horizontal" :label-col="{ style: { width: '128px' } }" disabled class="st-grid">
-          <a-form-item v-for="f in LLM_PLACEHOLDER.fields" :key="f" :label="f"><a-input placeholder="第二期开放" /></a-form-item>
-        </a-form>
-        <div class="t-14 fw-600 c-1 st-h">用途分配</div>
-        <a-table size="small" row-key="use" :pagination="false" :data-source="LLM_PLACEHOLDER.usages" class="st-usage"
-          :columns="[{ title: '用途', dataIndex: 'use', key: 'use' }, { title: '当前模型', dataIndex: 'model', key: 'model', width: 240 }, { title: '可切换', key: 'sw', width: 160 }]">
-          <template #bodyCell="{ column }"><span v-if="column.key === 'sw'" class="c-3">第二期开放</span></template>
+        <a-table size="small" row-key="id" :columns="llmCols" :data-source="draft.llm.connections" :pagination="false">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'name'">
+              <div :class="record.enabled ? 'c-1' : 'c-3'">{{ record.name }}</div>
+              <div class="t-12 c-3">{{ record.kind }} · {{ record.deploy }}</div>
+            </template>
+            <template v-else-if="column.key === 'url'">
+              <div class="num st-ellip" :class="record.enabled ? 'c-1' : 'c-3'">{{ record.baseUrl }}</div>
+              <div class="t-12 c-3 st-ellip"><span class="num">{{ record.model }}</span> · 密钥 <span class="num">{{ record.keyMask || '无需密钥' }}</span></div>
+            </template>
+            <template v-else-if="column.key === 'usages'">
+              <span v-for="u in record.usages" :key="u" class="st-use t-12" :class="{ def: draft.llm.defaults[u as LlmUsage] === record.id }">{{ u }}<template v-if="draft.llm.defaults[u as LlmUsage] === record.id"> · 默认</template></span>
+            </template>
+            <span v-else-if="column.key === 'limits'" class="num c-2">{{ record.timeoutSec }} 秒 / {{ record.maxConcurrency }}</span>
+            <a-badge v-else-if="column.key === 'status'" status="default" :text="record.enabled ? '已启用' : '已停用'" />
+            <template v-else-if="column.key === 'test'">
+              <template v-if="record.lastTest">
+                <div class="num" :class="tlTest(record.lastTest)"><span class="c-2">{{ record.lastTest.at }}</span> · {{ record.lastTest.ok ? `${record.lastTest.latencyMs} ms` : '失败' }}</div>
+                <div class="t-12 c-3 st-ellip">{{ record.lastTest.ok ? record.lastTest.version : record.lastTest.msg }}</div>
+              </template>
+              <span v-else class="c-3">未测试</span>
+            </template>
+            <a-space v-else-if="column.key === 'op'" :size="12">
+              <a @click="setQuery({ llm: record.id })">{{ readonly ? '查看' : '编辑' }}</a>
+              <a-tooltip :title="reason"><a :class="{ 'st-dis': readonly }" @click="!readonly && testConn(record)">{{ testing === record.name ? '测试中…' : '测试连接' }}</a></a-tooltip>
+              <a-tooltip :title="reason"><a :class="{ 'st-dis': readonly }" @click="!readonly && toggleConn(record)">{{ record.enabled ? '停用' : '启用' }}</a></a-tooltip>
+              <a-tooltip :title="reason"><a :class="{ 'st-dis': readonly }" @click="!readonly && removeConn(record)">删除</a></a-tooltip>
+            </a-space>
+          </template>
         </a-table>
-        <div><a-tooltip title="第二期开放"><a-button disabled>测试连接</a-button></a-tooltip></div>
+
+        <div class="st-llm2">
+          <div class="st-sect">
+            <div class="st-rowhead st-h"><span class="t-14 fw-600 c-1">用途默认连接</span><span class="t-12 c-3">每个用途调用哪个连接；只能选声明了该用途的连接</span></div>
+            <a-form layout="horizontal" :label-col="{ style: { width: '96px' } }" :disabled="fieldDis">
+              <a-form-item v-for="u in LLM_USAGES" :key="u.key" :label="u.key" :extra="u.desc"
+                :validate-status="llmErrors.some((x) => x.includes(`「${u.key}」`)) ? 'error' : ''" :help="llmErrors.find((x) => x.includes(`「${u.key}」`))">
+                <a-select v-model:value="draft.llm.defaults[u.key]" class="st-w360"
+                  :options="candidates(u.key).map((c) => ({ value: c.id, label: `${c.name}${c.enabled ? '' : '（已停用）'}`, disabled: !c.enabled }))" />
+              </a-form-item>
+            </a-form>
+          </div>
+          <div class="st-sect">
+            <div class="st-rowhead st-h"><span class="t-14 fw-600 c-1">数据出域策略</span><span class="t-12 c-3">发给大模型的内容范围，对所有连接生效</span></div>
+            <a-form layout="vertical" :disabled="fieldDis">
+              <a-radio-group v-model:value="draft.llm.egress.policy" class="st-egress">
+                <a-radio v-for="o in EGRESS_OPTIONS" :key="o.value" :value="o.value">
+                  <span class="c-1">{{ o.label }}</span><span v-if="o.value === 'schema'" class="t-12 c-3">（默认）</span>
+                  <div class="t-12 c-3 st-egdesc">{{ o.desc }}</div>
+                </a-radio>
+              </a-radio-group>
+              <div v-if="draft.llm.egress.policy === 'masked'" class="st-mask">
+                <a-form-item label="每次最多样例行数" class="st-mask1"><a-input-number v-model:value="draft.llm.egress.sampleRows" :min="1" :max="20" addon-after="行" class="st-w160" /></a-form-item>
+                <a-form-item label="先脱敏的字段" :help="llmErrors.find((x) => x.includes('脱敏样例必须'))" :validate-status="llmErrors.some((x) => x.includes('脱敏样例必须')) ? 'error' : ''">
+                  <a-checkbox-group v-model:value="draft.llm.egress.maskFields" :options="MASK_FIELDS" />
+                </a-form-item>
+              </div>
+              <div v-if="llmErrors.find((x) => x.startsWith('发送明细'))" class="t-12 tl-failed">{{ llmErrors.find((x) => x.startsWith('发送明细')) }}</div>
+            </a-form>
+          </div>
+        </div>
       </div>
 
       <!-- 通知渠道 -->
@@ -329,6 +552,45 @@ const fieldDis = computed(() => readonly.value);
     </div>
   </div>
 
+  <a-drawer :open="!!llmKey" :width="600" :title="llmConn ? `大模型连接 · ${llmConn.name}` : '新建大模型连接'" @close="closeLlm">
+    <a-form layout="vertical" class="st-chform" :disabled="readonly">
+      <div class="st-frow">
+        <a-form-item label="名称" required class="st-f2"><a-input v-model:value="lf.name" :maxlength="30" placeholder="例如：私有化 Qwen（问数）" /></a-form-item>
+        <a-form-item label="接口类型" class="st-f1"><a-select v-model:value="lf.kind" :options="LLM_KINDS.map((v) => ({ value: v }))" /></a-form-item>
+      </div>
+      <a-form-item label="部署方式"><a-radio-group v-model:value="lf.deploy" :options="['私有化部署', '公有云']" /></a-form-item>
+      <a-form-item label="地址" required extra="OpenAI 兼容接口的 Base URL，例如 http://10.20.8.15:8000/v1"><a-input v-model:value="lf.baseUrl" class="num" /></a-form-item>
+      <a-form-item label="模型名" required><a-input v-model:value="lf.model" class="num" placeholder="例如：qwen2.5-72b-instruct" /></a-form-item>
+      <a-form-item v-if="needKey" label="密钥" :required="lf.changeKey">
+        <template v-if="lf.changeKey">
+          <a-input-password v-model:value="lf.key" class="num" placeholder="粘贴 API Key" autocomplete="new-password" />
+          <div class="t-12 c-3 st-keyhint">只在本次填写时可见；点“确定”后只保留末四位掩码，之后无法再查看明文。<a v-if="llmConn?.keyMask" @click="lf.changeKey = false; lf.key = ''">保留原密钥</a></div>
+        </template>
+        <div v-else class="st-keyrow"><span class="num c-2">{{ llmConn?.keyMask || '未设置' }}</span><a @click="lf.changeKey = true">更换密钥</a></div>
+      </a-form-item>
+      <div class="st-frow">
+        <a-form-item label="超时" class="st-f1"><a-input-number v-model:value="lf.timeoutSec" :min="5" :max="300" addon-after="秒" class="st-wfull" /></a-form-item>
+        <a-form-item label="最大并发" class="st-f1"><a-input-number v-model:value="lf.maxConcurrency" :min="1" :max="64" addon-after="个请求" class="st-wfull" /></a-form-item>
+      </div>
+      <a-form-item label="用途" required><a-checkbox-group v-model:value="lf.usages" :options="LLM_USAGES.map((u) => u.key)" /></a-form-item>
+      <a-form-item label="状态"><a-switch v-model:checked="lf.enabled" checked-children="启用" un-checked-children="停用" /></a-form-item>
+    </a-form>
+    <a-descriptions v-if="lfTest" size="small" :column="1" bordered class="st-desc" title="测试结果">
+      <a-descriptions-item label="结果"><span :class="lfTest.ok ? 'c-1' : 'tl-failed'">{{ lfTest.ok ? '连接正常' : `失败：${lfTest.msg}` }}</span></a-descriptions-item>
+      <a-descriptions-item label="延迟"><span class="num">{{ lfTest.latencyMs }} ms</span></a-descriptions-item>
+      <a-descriptions-item label="模型版本"><span class="num">{{ lfTest.version }}</span></a-descriptions-item>
+      <a-descriptions-item label="测试时间"><span class="num">{{ lfTest.at }}</span></a-descriptions-item>
+    </a-descriptions>
+    <template #footer>
+      <div class="st-foot">
+        <a class="st-fl" :class="{ 'st-dis': readonly }" @click="!readonly && testForm()">{{ testing ? '测试中…' : '用当前填写测试' }}</a>
+        <span v-if="lfErrors.length && !readonly" class="t-12 tl-failed">{{ lfErrors[0] }}</span>
+        <a-button @click="closeLlm">取消</a-button>
+        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || !!lfErrors.length || (!lfDirty && !!llmConn)" @click="applyLlm">确定</a-button></a-tooltip>
+      </div>
+    </template>
+  </a-drawer>
+
   <a-drawer :open="!!channel" :width="560" :title="channel ? `通知渠道 · ${channel.name}` : ''" @close="closeChannel">
     <template v-if="channel">
       <a-descriptions size="small" :column="1" bordered class="st-desc">
@@ -364,7 +626,6 @@ const fieldDis = computed(() => readonly.value);
 .st-item:hover { background: var(--g2); }
 .st-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
 .st-l1 { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
-.st-tag { margin: 0; }
 .st-mod { margin-left: auto; }
 .st-navfoot { margin-top: auto; padding: 12px 16px; }
 .st-main { flex: 1; min-width: 0; }
@@ -373,8 +634,6 @@ const fieldDis = computed(() => readonly.value);
 .st-sec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .st-sect { min-width: 0; }
 .st-h { margin-bottom: 12px; }
-.st-note { display: flex; gap: 8px; align-items: baseline; background: var(--g2); border: var(--border); border-radius: var(--radius); padding: 10px 14px; max-width: 1088px; }
-.st-usage { max-width: 1088px; }
 .st-rowhead { display: flex; align-items: baseline; gap: 12px; margin-top: 4px; }
 .st-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-w160 { width: 160px; }
@@ -386,4 +645,19 @@ const fieldDis = computed(() => readonly.value);
 .st-desc :deep(.ant-descriptions-item-label) { width: 110px; }
 .st-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .st-fl { margin-right: auto; }
+.st-add { margin-left: auto; }
+.st-use { display: inline-block; margin: 2px 6px 2px 0; padding: 0 6px; line-height: 20px; border: var(--border); border-radius: 4px; color: var(--g8); }
+.st-use.def { border-color: var(--g7); color: var(--g9); font-weight: 600; }
+.st-llm2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; margin-top: 4px; }
+.st-w360 { width: 360px; }
+.st-egress { display: flex; flex-direction: column; gap: 10px; }
+.st-egdesc { margin-top: 2px; }
+.st-mask { margin: 10px 0 0 24px; }
+.st-mask1 { margin-bottom: 8px; }
+.st-frow { display: flex; gap: 12px; }
+.st-f1 { flex: 1; min-width: 0; }
+.st-f2 { flex: 2; min-width: 0; }
+.st-wfull { width: 100%; }
+.st-keyhint { margin-top: 4px; }
+.st-keyrow { display: flex; gap: 16px; align-items: center; }
 </style>
