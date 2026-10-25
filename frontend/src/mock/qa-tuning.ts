@@ -321,3 +321,7 @@ export const FREQ_QS: FreqQ[] = FREQ_SEEDS.map(([question, hits7, hits30, plan, 
   plan, consistency, lastAsked: `2026-10-25 ${String(16 - (i % 8)).padStart(2, '0')}:${String((i * 17) % 60).padStart(2, '0')}`,
   certId: CERT_QAS.find((c) => c.question === question)?.id,
 }));
+
+/** 已走变更单的同义词（CR-0008 / CR-0015 已通过，待 v2026.10.4 发布） */
+export interface TunedSynonym { word: string; target: string; cr: string }
+export const TUNED_SYNONYMS: TunedSynonym[] = [{ word: '发货及时率', target: '出库及时率 v1', cr: 'CR-0008' }, { word: '成交单量', target: '有效订单数 v1', cr: 'CR-0015' }];

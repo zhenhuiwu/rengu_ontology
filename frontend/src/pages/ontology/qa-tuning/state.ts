@@ -1,6 +1,6 @@
 /** 问数调优四个页签共用的可变状态（反馈转认证问答、高频问题设为认证问答都会写进认证问答列表） */
 import { reactive } from 'vue';
-import { CERT_QAS, EVAL_RUNS, FEEDBACKS, FREQ_QS, type CertQa, type EvalRun, type Feedback, type FreqQ, type SemPlan } from '@/mock/qa-tuning';
+import { CERT_QAS, EVAL_RUNS, FEEDBACKS, FREQ_QS, TUNED_SYNONYMS, type CertQa, type EvalRun, type Feedback, type FreqQ, type SemPlan, type TunedSynonym } from '@/mock/qa-tuning';
 
 export const tuning = reactive({
   certs: CERT_QAS.map((c) => ({ ...c, variants: [...c.variants] })) as CertQa[],
@@ -8,7 +8,7 @@ export const tuning = reactive({
   feedbacks: FEEDBACKS.map((f) => ({ ...f })) as Feedback[],
   freq: FREQ_QS.map((f) => ({ ...f })) as FreqQ[],
   /** 已走变更单的同义词（CR-0008 / CR-0015 已通过，待 v2026.10.4 发布） */
-  synonyms: [{ word: '发货及时率', target: '出库及时率 v1', cr: 'CR-0008' }, { word: '成交单量', target: '有效订单数 v1', cr: 'CR-0015' }] as { word: string; target: string; cr: string }[],
+  synonyms: TUNED_SYNONYMS.map((x) => ({ ...x })) as TunedSynonym[],
 });
 
 export const NOW = '2026-10-25 17:10';
