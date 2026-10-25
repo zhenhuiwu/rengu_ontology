@@ -51,7 +51,7 @@ export const NAV: NavArea[] = [
         { key: 'action-types', title: '动作类型', path: '/build/ontology/action-types', phase: 3, group: '资源', note: '页签：参数、提交条件、写回模式、执行记录', component: () => import('@/pages/ontology/ActionTypes.vue') },
         { key: 'functions', title: '函数', path: '/build/ontology/functions', phase: 3, group: '资源' },
         { key: 'metrics', title: '指标口径', path: '/build/ontology/metrics', phase: 1, group: '语义', note: '允许的维度、版本历史', component: () => import('@/pages/ontology/Metrics.vue') },
-        { key: 'dimensions', title: '维度与字典', path: '/build/ontology/dimensions', phase: 1, group: '语义', note: '层级、取值字典' },
+        { key: 'dimensions', title: '维度与字典', path: '/build/ontology/dimensions', phase: 1, group: '语义', note: '页签：定义、取值字典、同义词与问数映射、使用情况、版本历史', component: () => import('@/pages/ontology/Dimensions.vue') },
         { key: 'glossary', title: '业务知识', path: '/build/ontology/glossary', phase: 1, group: '语义', note: '同义词、术语' },
         { key: 'event-types', title: '事件类型', path: '/build/ontology/event-types', phase: 2, group: '自动化', component: () => import('@/pages/ontology/EventTypes.vue') },
         { key: 'rules', title: '规则与自动化', path: '/build/ontology/rules', phase: 2, group: '自动化', component: () => import('@/pages/ontology/Rules.vue') },
