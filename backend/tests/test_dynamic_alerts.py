@@ -22,7 +22,10 @@ async def test_list_filters(dyn, client):  # noqa: F811
         x["ruleId"] == "R-012" and x["status"] in ("已解决", "已忽略") for x in r["items"]
     )
     r = (await client.get(f"{API}/alerts", params={"status": "all", "level": "高"})).json()
-    assert all(x["level"] == "高" for x in r["items"])
+    assert r["total"] > 0 and all(x["level"] == "高" for x in r["items"])
+    err(
+        await client.get(f"{API}/alerts", params={"status": "all", "level": "严重"}), 422, "VALIDATION_FAILED"
+    )
     r = (await client.get(f"{API}/alerts", params={"status": "all", "kw": "0126"})).json()
     assert [x["id"] for x in r["items"]] == [OPEN]
     r = (await client.get(f"{API}/alerts", params={"status": "all", "kw": "%"})).json()

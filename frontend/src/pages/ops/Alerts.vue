@@ -2,6 +2,8 @@
 /**
  * 告警处理（动态本体）：左侧告警列表（分页），右侧当前告警详情：触发依据、处理记录、可执行动作。
  * 当前选中写进 ?alert=，状态页签写进 ?status=。对象点开走公共抽屉，不跳转。
+ * 开关 dynamic 走真接口时（src/api/dynamic.ts）：列表 / 计数 / 详情 / 处理记录 / 处理人下拉都取后台，
+ * 认领、批量认领、转派、关闭、批量关闭、发起动作一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -16,6 +18,12 @@ import { useReadonly } from '@/composables/useReadonly';
 import { ALERTS, RULES, METRICS, alertTimeline, type Alert, type AlertStatus } from '@/mock';
 import { PEOPLE } from '@/mock/dynamic';
 import { ACTIONS } from '@/mock/actions';
+import { useAppStore } from '@/stores/app';
+import { isApiError } from '@/api/http';
+import {
+  dynamicApi, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts,
+  startAlertAction, listPeople, type AlertDto, type AlertDetailDto, type AlertRuleDto, type AlertTab,
+} from '@/api/dynamic';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
 type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string };
@@ -30,7 +38,11 @@ const LIST = reactive<Row[]>(ALERTS.map((a) => {
 }));
 /** 关联动作还没有结果时锁定转派和关闭 */
 const IN_FLIGHT = ['待确认', '审批中', '执行中', '结果未知'];
-const ME = '王敏';
+/** 是否走真接口（开关 dynamic）；构建时确定 */
+const REAL = dynamicApi.isReal();
+const app = useAppStore();
+/** 当前处理人：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
+const ME = REAL ? app.user.name : '王敏';
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(30 + tick).padStart(2, '0')}:00`; };
 const isClosed = (s: AlertStatus) => s === '已解决' || s === '已忽略';
@@ -58,7 +70,21 @@ const pq = usePagedQuery({ defaultSize: 12, filters: [level, ruleId, kw] });
 const page = pq.page;
 const pageSize = pq.size;
 
+/** 真接口状态：当前页、总数、页签计数、当前详情、处理人下拉；seen 记住看过的行（跨页勾选时批量操作用） */
+const remote = reactive({ items: [] as Row[], total: 0, counts: { open: 0, doing: 0, closed: 0, all: 0 } as Record<string, number>, detail: null as (Row & { rule: AlertRuleDto | null; recent7d: number; locked: boolean }) | null, people: [] as string[] });
+const seen = new Map<string, Row>();
+const toRow = (a: AlertDto): Row => ({
+  ...a, storeId: a.storeId ?? undefined, storeLabel: a.storeLabel ?? undefined,
+  actionRef: a.actionRef ?? undefined, actionStatus: a.actionStatus ?? undefined, log: [],
+});
+const toDetail = (d: AlertDetailDto) => ({
+  ...toRow(d), rule: d.rule, recent7d: d.recent7d, locked: d.locked,
+  log: d.log.map((l) => ({ time: l.time, text: l.text, who: l.who, abnormal: l.abnormal ?? undefined })),
+});
+const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+
 const rows = computed(() => {
+  if (REAL) return remote.items;
   const t = TABS.find((x) => x.key === tab.value) ?? TABS[3];
   return LIST.filter((a) =>
     t.match(a.status) &&
@@ -67,25 +93,59 @@ const rows = computed(() => {
     (!kw.value || a.id.includes(kw.value) || a.objLabel.includes(kw.value)),
   );
 });
-const count = (key: string) => LIST.filter((a) => TABS.find((t) => t.key === key)!.match(a.status)).length;
+const count = (key: string) => REAL ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.match(a.status)).length;
 
-const pageRows = computed(() => rows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
+const total = computed(() => (REAL ? remote.total : rows.value.length));
+const pageRows = computed(() => REAL ? remote.items : rows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 /** 刚处理过的告警即使离开当前页签也继续显示在右侧，避免详情突然换成别的告警 */
 const pinned = ref<string>();
 const selectedId = computed(() => (route.query.alert as string) || pinned.value || pageRows.value[0]?.id);
-const current = computed<Row | undefined>(() => LIST.find((a) => a.id === selectedId.value) ?? pageRows.value[0]);
-const rule = computed(() => (current.value ? RULES[current.value.ruleId] : null));
-const locked = computed(() => !!current.value?.actionStatus && IN_FLIGHT.includes(current.value.actionStatus));
+const current = computed<Row | undefined>(() => REAL ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? pageRows.value[0]);
+const rule = computed<AlertRuleDto | null>(() => (REAL ? remote.detail?.rule ?? null : current.value ? RULES[current.value.ruleId] : null));
+const locked = computed(() => REAL ? !!remote.detail?.locked : !!current.value?.actionStatus && IN_FLIGHT.includes(current.value.actionStatus));
 const metric = computed(() => (rule.value?.metric ? METRICS.find((m) => m.id === rule.value!.metric) : undefined));
 /** 同一规则、同一对象近 7 天的触发次数（含本条） */
 const recent = computed(() => {
   const a = current.value; if (!a) return 0;
+  if (REAL) return remote.detail?.recent7d ?? 0;
   const end = new Date(a.triggeredAt.replace(' ', 'T')).getTime();
   return ALERTS.filter((x) => x.ruleId === a.ruleId && x.objId === a.objId &&
     end - new Date(x.triggeredAt.replace(' ', 'T')).getTime() < 7 * 864e5 &&
     new Date(x.triggeredAt.replace(' ', 'T')).getTime() <= end).length + (a.ruleId === 'R-012' ? 2 : 0);
 });
 const pick = (a: Alert) => (pinned.value = a.id, router.replace({ query: { ...route.query, alert: a.id } }));
+const people = computed(() => (REAL ? remote.people : PEOPLE));
+const ruleName = (id: string) => RULES[id]?.name ?? id;
+
+// ---- 真接口：取列表 / 详情 ----
+let listSeq = 0; let detailSeq = 0;
+async function loadList() {
+  const seq = ++listSeq;
+  try {
+    const r = await listAlerts({ status: (TABS.some((t) => t.key === tab.value) ? tab.value : 'all') as AlertTab, level: level.value, ruleId: ruleId.value, kw: kw.value, page: page.value, size: pageSize.value });
+    if (seq !== listSeq) return;
+    remote.items = r.items.map(toRow); remote.total = r.total; remote.counts = r.counts;
+    remote.items.forEach((a) => seen.set(a.id, a));
+  } catch (e) { if (seq === listSeq) fail(e); }
+}
+async function loadDetail(id = selectedId.value) {
+  const seq = ++detailSeq;
+  if (!id) { remote.detail = null; return; }
+  try {
+    const d = await getAlert(id);
+    if (seq === detailSeq) remote.detail = toDetail(d);
+  } catch (e) { if (seq === detailSeq) { remote.detail = null; fail(e); } }
+}
+/** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
+async function afterWrite(d?: AlertDetailDto) {
+  if (d) { ++detailSeq; remote.detail = toDetail(d); seen.set(d.id, toRow(d)); }
+  await loadList();
+}
+if (REAL) {
+  watch([tab, level, ruleId, kw, page, pageSize], loadList, { immediate: true });
+  watch(selectedId, (id) => { loadDetail(id); }, { immediate: true });
+  listPeople().then((p) => { remote.people = p; }, fail);
+}
 
 const statusBadge = (s: AlertStatus) =>
   s === '待处理' ? 'warning' : 'default';
@@ -108,14 +168,26 @@ function claimRow(a: Row, who = ME) {
   a.status = '处理中'; a.assignee = who;
   a.log.push({ time: now(), text: '认领，状态 待处理 → 处理中', who });
 }
-function claim() { if (current.value) { pinned.value = current.value.id; claimRow(current.value); message.success(`已认领 ${current.value.id}`); } }
+async function claim() {
+  const a = current.value; if (!a) return;
+  pinned.value = a.id;
+  if (REAL) {
+    try { await afterWrite(await claimAlert(a.id)); message.success(`已认领 ${a.id}`); } catch (e) { fail(e); }
+    return;
+  }
+  claimRow(a); message.success(`已认领 ${a.id}`);
+}
 
 // 转派
 const transferTo = ref<string>();
 const transferOpen = ref(false);
-function doTransfer() {
+async function doTransfer() {
   const a = current.value; if (!a || !transferTo.value) return;
   pinned.value = a.id;
+  if (REAL) {
+    try { await afterWrite(await transferAlert(a.id, transferTo.value)); transferOpen.value = false; transferTo.value = undefined; message.success('已转派'); } catch (e) { fail(e); }
+    return;
+  }
   const from = a.assignee ?? '未认领';
   if (a.status === '待处理') a.status = '处理中';
   a.assignee = transferTo.value;
@@ -137,23 +209,49 @@ function closeRows(rowsToClose: Row[]) {
   }
   closeOpen.value = false; batchCloseOpen.value = false; closeReason.value = '';
 }
-function doClose() { if (current.value && closeReason.value.trim()) { pinned.value = current.value.id; closeRows([current.value]); message.success('已关闭'); } }
+async function doClose() {
+  const a = current.value; if (!a || !closeReason.value.trim()) return;
+  pinned.value = a.id;
+  if (REAL) {
+    try { await afterWrite(await closeAlert(a.id, closeAs.value, closeReason.value.trim())); closeOpen.value = false; closeReason.value = ''; message.success('已关闭'); } catch (e) { fail(e); }
+    return;
+  }
+  closeRows([a]); message.success('已关闭');
+}
 
 // 批量
 const selectedKeys = ref<string[]>([]);
 /** 只有本人处理中的告警才能关闭、发起动作 */
 const mine = computed(() => current.value?.status === '处理中' && current.value.assignee === ME);
 const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
-const selectedRows = computed(() => LIST.filter((a) => selectedKeys.value.includes(a.id)));
+const selectedRows = computed(() => (REAL ? selectedKeys.value.map((k) => seen.get(k)).filter((a): a is Row => !!a) : LIST.filter((a) => selectedKeys.value.includes(a.id))));
 const closable = computed(() => selectedRows.value.filter((a) => a.status === '处理中' && a.assignee === ME));
-function batchClaim() {
+async function batchClaim() {
+  if (REAL) {
+    try {
+      const r = await batchClaimAlerts([...selectedKeys.value]);
+      selectedKeys.value = [];
+      await afterWrite(); await loadDetail();
+      message.success(`已认领 ${r.claimed} 条`);
+    } catch (e) { fail(e); }
+    return;
+  }
   const n = selectedRows.value.filter((a) => a.status === '待处理').length;
   selectedRows.value.forEach((a) => claimRow(a));
   selectedKeys.value = [];
   message.success(`已认领 ${n} 条`);
 }
-function doBatchClose() {
+async function doBatchClose() {
   if (!closeReason.value.trim()) return;
+  if (REAL) {
+    try {
+      const r = await batchCloseAlerts(closable.value.map((a) => a.id), closeAs.value, closeReason.value.trim());
+      batchCloseOpen.value = false; closeReason.value = ''; selectedKeys.value = [];
+      await afterWrite(); await loadDetail();
+      message.success(`已关闭 ${r.closed} 条`);
+    } catch (e) { fail(e); }
+    return;
+  }
   const n = closable.value.length;
   closeRows(closable.value);
   selectedKeys.value = [];
@@ -177,6 +275,10 @@ async function runAction() {
   });
   if (!ok) return;
   pinned.value = a.id;
+  if (REAL) {
+    try { const res = await startAlertAction(a.id); await afterWrite(res.alert); message.success(`已提交：${res.action.action}`); } catch (e) { fail(e); }
+    return;
+  }
   a.actionRef = `act-${a.id.toLowerCase()}`;
   a.actionStatus = '审批中';
   a.log.push({ time: now(), text: `发起动作「${r.action}」，待${a.objKind === 'product' ? '品类经理 王敏' : '区域运营 陈立军'}审批；动作成功后告警自动转为已解决`, who: ME });
@@ -222,7 +324,7 @@ async function runAction() {
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'level'"><span :class="levelClass(record.level)" >{{ record.level }}</span></template>
             <template v-else-if="column.key === 'id'"><span class="num">{{ record.id }}</span></template>
-            <template v-else-if="column.key === 'rule'">{{ RULES[record.ruleId].name }}</template>
+            <template v-else-if="column.key === 'rule'">{{ ruleName(record.ruleId) }}</template>
             <template v-else-if="column.key === 'obj'">
               <ObjRef :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef>
             </template>
@@ -233,7 +335,7 @@ async function runAction() {
           </template>
         </a-table>
       </div>
-      <AppPagination v-model:page="page" v-model:size="pageSize" variant="full" :total="rows.length" :default-size="pq.defaultSize" unit="条告警" empty-text="没有符合条件的告警" class="al-pager" />
+      <AppPagination v-model:page="page" v-model:size="pageSize" variant="full" :total="total" :default-size="pq.defaultSize" unit="条告警" empty-text="没有符合条件的告警" class="al-pager" />
     </div>
 
     <div v-if="current && rule" class="panel al-detail">
@@ -275,7 +377,7 @@ async function runAction() {
           <a-popover v-model:open="transferOpen" trigger="click" placement="topRight">
             <template #content>
               <div class="al-pop">
-                <a-select v-model:value="transferTo" placeholder="转派给" :options="PEOPLE.filter((p) => p !== current!.assignee).map((p) => ({ value: p, label: p }))" />
+                <a-select v-model:value="transferTo" placeholder="转派给" :options="people.filter((p) => p !== current!.assignee).map((p) => ({ value: p, label: p }))" />
                 <div class="al-pop-foot"><a-button size="small" type="primary" :disabled="!transferTo" @click="doTransfer">转派</a-button></div>
               </div>
             </template>

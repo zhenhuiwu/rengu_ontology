@@ -460,7 +460,7 @@ stateDiagram-v2
 
 | 用途 | 接口 | 要点 |
 |---|---|---|
-| 告警列表 | `GET /alerts?status=open|doing|closed|all&level&ruleId&kw&page&size` | 一屏 12；kw 匹配编号或对象；返回各页签计数 |
+| 告警列表 | `GET /alerts?status=open|doing|closed|all&level&ruleId&kw&page&size` | 一屏 12；kw 匹配编号或对象；返回各页签计数；`level` 只收 高/中/低/全部（空或「全部」不过滤），其他值 422 VALIDATION_FAILED |
 | 告警详情 | `GET /alerts/{id}` | 含规则摘要、指标、去重说明、近 7 天次数、关联动作、log |
 | 认领 / 批量认领 | `POST /alerts/{id}:claim`、`POST /alerts:batch-claim {ids}` | |
 | 转派 | `POST /alerts/{id}:transfer {to}` | 在途锁；`to` ≠ 当前处理人（前端下拉已排除，`Alerts.vue` L278） |

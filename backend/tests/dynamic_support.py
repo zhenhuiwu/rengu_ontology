@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+import app.main  # noqa: F401  收集阶段就建好 app：create_app 的 load_sections 先登记真实 section，免得在 sections 替身之后才 import 撞名
 from app.contracts.actions import SubmitResult, SubmitStatus
 from app.modules.admin.models import SysUser
 from app.modules.dynamic import ports
@@ -14,10 +15,14 @@ API = "/api/ontology/v1"
 
 
 @pytest.fixture
-async def dyn(session, sections):
+async def dyn(session, _isolated_sections):
+    from app.modules.versioning.sections import load_sections
     from app.seeds.loader import run_seeds
+    from app.seeds.registry import SEED_MODULES
 
-    await run_seeds(session, ["admin", "dynamic"])
+    # 规则 → action_type、生命周期 → object_type、推演 → ontology_release：灌到 dynamic 为止（含依赖）
+    load_sections()  # 真实 section（含本模块 rules / lifecycles），版本快照照真实流程写
+    await run_seeds(session, SEED_MODULES[: SEED_MODULES.index("dynamic") + 1])
     await session.commit()  # 释放 savepoint：之后接口出错回滚也不会把种子一起回滚
     return session
 

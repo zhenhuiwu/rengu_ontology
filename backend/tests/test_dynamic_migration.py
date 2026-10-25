@@ -5,7 +5,26 @@
 
 from tests.helpers.migrations import assert_module_round_trip
 
-OWN_TABLES = {"alert", "alert_log", "action_run", "action_run_log"}
+OWN_TABLES = {
+    "alert",
+    "alert_log",
+    "action_run",
+    "action_run_log",
+    # dynamic_0002：规则 / 情景推演 / 生命周期
+    "rule",
+    "rule_version",
+    "rule_draft",
+    "rule_hit",
+    "scenario",
+    "scenario_result",
+    "scenario_impact",
+    "lifecycle",
+    "lifecycle_version",
+    "lifecycle_state",
+    "lifecycle_transition",
+    "lifecycle_change",
+    "lifecycle_draft",
+}
 
 
 async def test_dynamic_module_round_trip():

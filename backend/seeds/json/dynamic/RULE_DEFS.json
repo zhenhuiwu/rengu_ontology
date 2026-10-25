@@ -1,0 +1,795 @@
+[
+  {
+    "id": "R-007",
+    "name": "商品毛利率越线",
+    "version": 3,
+    "status": "变更中",
+    "owner": "刘婷",
+    "core": true,
+    "objKind": "product",
+    "level": "高",
+    "output": "告警",
+    "weekly": 54,
+    "desc": "商品毛利率从 ≥ 18% 跌破 18% 时产生告警，只在越线那一次触发。",
+    "conds": [
+      {
+        "metric": "gross_margin",
+        "metricVer": 2,
+        "field": "毛利率",
+        "op": "<",
+        "value": "18.00%"
+      },
+      {
+        "metric": "gross_margin",
+        "metricVer": 2,
+        "field": "上次计算的毛利率",
+        "op": "≥",
+        "value": "18.00%"
+      }
+    ],
+    "logic": "且",
+    "expr": "gross_margin@v2(sku, store, day) < 0.18 AND prev(gross_margin@v2) >= 0.18",
+    "dedupe": "规则 + 商品 + 门店 + 日期",
+    "cooldown": "7 天",
+    "trigger": {
+      "kind": "定时",
+      "cron": "0 8 * * *",
+      "text": "每天 08:00（数据截至前一日 23:00）"
+    },
+    "actionTypeId": "start_price_approval",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "start_price_approval",
+      "confirmer": "品类经理 王敏",
+      "mapping": [
+        {
+          "param": "商品",
+          "from": "告警.对象"
+        },
+        {
+          "param": "原因",
+          "from": "规则.命中说明"
+        },
+        {
+          "param": "备注",
+          "from": "规则.建议值（毛利率回到 18%）"
+        },
+        {
+          "param": "关联告警",
+          "from": "告警.ID"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-012",
+    "name": "可用库存低于安全线",
+    "version": 2,
+    "status": "已发布",
+    "owner": "周晓峰",
+    "core": true,
+    "objKind": "product",
+    "level": "高",
+    "output": "告警",
+    "weekly": 386,
+    "desc": "收到库存变动事件后，可用库存低于门店安全库存时产生告警。",
+    "conds": [
+      {
+        "field": "可用库存",
+        "op": "<",
+        "value": "安全库存"
+      },
+      {
+        "field": "商品状态",
+        "op": "=",
+        "value": "在售"
+      }
+    ],
+    "logic": "且",
+    "expr": "event.available < product.safetyStock(store) AND product.status = \"在售\"",
+    "dedupe": "规则 + 商品 + 门店",
+    "cooldown": "24 小时",
+    "trigger": {
+      "kind": "事件",
+      "eventId": "inventory_changed",
+      "text": "订阅“库存变动”（InventoryChanged）",
+      "filter": "changeType ∈ {出库, 调拨出, 盘亏}"
+    },
+    "actionTypeId": "request_replenish",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "request_replenish",
+      "confirmer": "供应链计划员 周晓峰",
+      "mapping": [
+        {
+          "param": "商品",
+          "from": "事件.SKU"
+        },
+        {
+          "param": "门店",
+          "from": "事件.门店"
+        },
+        {
+          "param": "补货数量",
+          "from": "安全库存 × 1.5 − 可用库存"
+        },
+        {
+          "param": "补货方式",
+          "from": "固定值：仓库调拨"
+        },
+        {
+          "param": "关联告警",
+          "from": "告警.ID"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-015",
+    "name": "出库超 48 小时未签收",
+    "version": 1,
+    "status": "已发布",
+    "owner": "陈立军",
+    "core": true,
+    "objKind": "order",
+    "level": "中",
+    "output": "告警",
+    "weekly": 212,
+    "desc": "已出库超过 48 小时仍未签收的订单，每单只产生一次告警。",
+    "conds": [
+      {
+        "field": "订单状态",
+        "op": "=",
+        "value": "已出库"
+      },
+      {
+        "field": "出库时长",
+        "op": ">",
+        "value": "48 小时"
+      }
+    ],
+    "logic": "且",
+    "expr": "order.status = \"已出库\" AND hours_since(order.shippedAt) > 48",
+    "dedupe": "规则 + 订单",
+    "cooldown": "不重复",
+    "trigger": {
+      "kind": "定时",
+      "cron": "10 * * * *",
+      "text": "每小时第 10 分"
+    },
+    "actionTypeId": "urge_logistics",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "urge_logistics",
+      "confirmer": "订单运营组 陈立军",
+      "mapping": [
+        {
+          "param": "订单",
+          "from": "告警.对象"
+        },
+        {
+          "param": "原因",
+          "from": "规则.命中说明"
+        },
+        {
+          "param": "关联告警",
+          "from": "告警.ID"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-021",
+    "name": "门店销售额环比下降",
+    "version": 2,
+    "status": "已发布",
+    "owner": "陈立军",
+    "core": true,
+    "objKind": "store",
+    "level": "中",
+    "output": "告警",
+    "weekly": 9,
+    "desc": "每周一按销售额（不含税）周环比计算，下降超过 15% 的门店产生告警。",
+    "conds": [
+      {
+        "metric": "gmv",
+        "metricVer": 3,
+        "field": "销售额（不含税）周环比",
+        "op": "<",
+        "value": "−15.0%"
+      }
+    ],
+    "logic": "且",
+    "expr": "wow(gmv@v3(store, week)) < -0.15",
+    "dedupe": "规则 + 门店 + 周",
+    "cooldown": "7 天",
+    "trigger": {
+      "kind": "定时",
+      "cron": "0 9 * * 1",
+      "text": "每周一 09:00"
+    },
+    "autoStage": {
+      "enabled": false,
+      "actionTypeId": "",
+      "mapping": [],
+      "confirmer": ""
+    }
+  },
+  {
+    "id": "SM-ORD",
+    "name": "订单状态非法迁移",
+    "version": 4,
+    "status": "已发布",
+    "owner": "孙浩然",
+    "core": true,
+    "objKind": "order",
+    "level": "高",
+    "output": "告警",
+    "weekly": 31,
+    "desc": "订单状态变更不在生命周期 v4 允许的迁移里时产生告警。",
+    "conds": [
+      {
+        "field": "状态迁移（原 → 新）",
+        "op": "∉",
+        "value": "生命周期 v4 合法迁移"
+      }
+    ],
+    "logic": "且",
+    "expr": "(event.fromStatus, event.toStatus) NOT IN lifecycle(\"SalesOrder\", 4).transitions",
+    "dedupe": "事件 ID",
+    "cooldown": "不重复",
+    "trigger": {
+      "kind": "事件",
+      "eventId": "order_status_changed",
+      "text": "订阅“订单状态变更”（OrderStatusChanged）",
+      "filter": "全部"
+    },
+    "actionTypeId": "correct_order_status",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "correct_order_status",
+      "confirmer": "订单运营组 孙浩然",
+      "mapping": [
+        {
+          "param": "订单",
+          "from": "事件.订单号"
+        },
+        {
+          "param": "目标状态",
+          "from": "生命周期上一个合法状态"
+        },
+        {
+          "param": "修正原因",
+          "from": "固定值：系统同步乱序"
+        },
+        {
+          "param": "关联告警",
+          "from": "告警.ID"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-003",
+    "name": "门店出库及时率低于 95%",
+    "version": 2,
+    "status": "已发布",
+    "owner": "周晓峰",
+    "core": false,
+    "objKind": "store",
+    "level": "中",
+    "output": "通知",
+    "weekly": 17,
+    "desc": "门店前一日出库及时率低于 95% 时通知区域运营。",
+    "conds": [
+      {
+        "metric": "ship_ontime",
+        "metricVer": 1,
+        "field": "出库及时率",
+        "op": "<",
+        "value": "95.00%"
+      }
+    ],
+    "logic": "且",
+    "expr": "ship_ontime@v1(store, day) < 0.95",
+    "dedupe": "规则 + 门店 + 日期",
+    "cooldown": "24 小时",
+    "trigger": {
+      "kind": "定时",
+      "cron": "30 7 * * *",
+      "text": "每天 07:30"
+    },
+    "autoStage": {
+      "enabled": false,
+      "actionTypeId": "",
+      "mapping": [],
+      "confirmer": ""
+    }
+  },
+  {
+    "id": "R-009",
+    "name": "大额退款复核",
+    "version": 1,
+    "status": "已发布",
+    "owner": "孙浩然",
+    "core": false,
+    "objKind": "order",
+    "level": "中",
+    "output": "通知",
+    "weekly": 42,
+    "desc": "单笔退款超过 500 元时通知客服主管复核。",
+    "conds": [
+      {
+        "field": "退款金额",
+        "op": ">",
+        "value": "500.00 元"
+      }
+    ],
+    "logic": "且",
+    "expr": "event.amount > 500",
+    "dedupe": "退款单号",
+    "cooldown": "不重复",
+    "trigger": {
+      "kind": "事件",
+      "eventId": "refund_created",
+      "text": "订阅“退款单创建”（RefundCreated）",
+      "filter": "全部"
+    },
+    "actionTypeId": "approve_refund",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "approve_refund",
+      "confirmer": "客服主管 何静",
+      "mapping": [
+        {
+          "param": "订单",
+          "from": "事件.订单号"
+        },
+        {
+          "param": "原因",
+          "from": "事件.退款原因"
+        },
+        {
+          "param": "备注",
+          "from": "固定值：大额退款复核"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-010",
+    "name": "运单超 72 小时未签收升级",
+    "version": 1,
+    "status": "已发布",
+    "owner": "陈立军",
+    "core": false,
+    "objKind": "order",
+    "level": "高",
+    "output": "通知",
+    "weekly": 23,
+    "desc": "已催派仍超过 72 小时未签收的订单升级给物流经理。",
+    "conds": [
+      {
+        "field": "订单状态",
+        "op": "=",
+        "value": "已出库"
+      },
+      {
+        "field": "出库时长",
+        "op": ">",
+        "value": "72 小时"
+      }
+    ],
+    "logic": "且",
+    "expr": "order.status = \"已出库\" AND hours_since(order.shippedAt) > 72",
+    "dedupe": "规则 + 订单",
+    "cooldown": "不重复",
+    "trigger": {
+      "kind": "定时",
+      "cron": "10 */4 * * *",
+      "text": "每 4 小时第 10 分"
+    },
+    "actionTypeId": "reissue_shipment",
+    "autoStage": {
+      "enabled": false,
+      "actionTypeId": "reissue_shipment",
+      "mapping": [],
+      "confirmer": ""
+    }
+  },
+  {
+    "id": "R-014",
+    "name": "临期商品库存积压",
+    "version": 3,
+    "status": "已发布",
+    "owner": "王敏",
+    "core": false,
+    "objKind": "product",
+    "level": "中",
+    "output": "通知",
+    "weekly": 66,
+    "desc": "距保质期不足 7 天且库存超过 7 天销量时，提醒门店做临期促销。",
+    "conds": [
+      {
+        "field": "剩余保质天数",
+        "op": "<",
+        "value": "7 天"
+      },
+      {
+        "field": "库存 / 近 7 天日均销量",
+        "op": ">",
+        "value": "7"
+      }
+    ],
+    "logic": "且",
+    "expr": "days_to_expire(batch) < 7 AND stock / avg_daily_sales(7d) > 7",
+    "dedupe": "规则 + 商品 + 门店 + 批次",
+    "cooldown": "3 天",
+    "trigger": {
+      "kind": "定时",
+      "cron": "0 6 * * *",
+      "text": "每天 06:00"
+    },
+    "actionTypeId": "adjust_store_price",
+    "autoStage": {
+      "enabled": false,
+      "actionTypeId": "adjust_store_price",
+      "confirmer": "品类经理 王敏",
+      "mapping": [
+        {
+          "param": "商品",
+          "from": "命中.对象"
+        },
+        {
+          "param": "原因",
+          "from": "固定值：临期促销"
+        },
+        {
+          "param": "生效时间",
+          "from": "次日 0 点"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-017",
+    "name": "门店有效订单数骤降",
+    "version": 1,
+    "status": "已发布",
+    "owner": "陈立军",
+    "core": false,
+    "objKind": "store",
+    "level": "高",
+    "output": "通知",
+    "weekly": 5,
+    "desc": "营业时段内门店近 1 小时有效订单数比上周同时段下降超过 40%。",
+    "conds": [
+      {
+        "metric": "order_cnt",
+        "metricVer": 1,
+        "field": "有效订单数 同比上周同时段",
+        "op": "<",
+        "value": "−40.0%"
+      }
+    ],
+    "logic": "且",
+    "expr": "yoy_week(order_cnt@v1(store, hour)) < -0.40 AND store.isOpen(now)",
+    "dedupe": "规则 + 门店 + 小时",
+    "cooldown": "2 小时",
+    "trigger": {
+      "kind": "定时",
+      "cron": "5 9-22 * * *",
+      "text": "营业时段每小时第 5 分（09:05–22:05）"
+    },
+    "autoStage": {
+      "enabled": false,
+      "actionTypeId": "",
+      "mapping": [],
+      "confirmer": ""
+    }
+  },
+  {
+    "id": "R-018",
+    "name": "商品毛利率为负",
+    "version": 2,
+    "status": "已发布",
+    "owner": "刘婷",
+    "core": false,
+    "objKind": "product",
+    "level": "高",
+    "output": "通知",
+    "weekly": 8,
+    "desc": "商品毛利率低于 0 时立即通知定价委员会。",
+    "conds": [
+      {
+        "metric": "gross_margin",
+        "metricVer": 2,
+        "field": "毛利率",
+        "op": "<",
+        "value": "0.00%"
+      }
+    ],
+    "logic": "且",
+    "expr": "gross_margin@v2(sku, store, day) < 0",
+    "dedupe": "规则 + 商品 + 门店 + 日期",
+    "cooldown": "24 小时",
+    "trigger": {
+      "kind": "定时",
+      "cron": "0 8 * * *",
+      "text": "每天 08:00"
+    },
+    "actionTypeId": "start_price_approval",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "start_price_approval",
+      "confirmer": "定价委员会",
+      "mapping": [
+        {
+          "param": "商品",
+          "from": "命中.对象"
+        },
+        {
+          "param": "原因",
+          "from": "固定值：负毛利"
+        },
+        {
+          "param": "关联告警",
+          "from": "—"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-019",
+    "name": "调价后毛利率越线",
+    "version": 1,
+    "status": "已发布",
+    "owner": "王敏",
+    "core": false,
+    "objKind": "product",
+    "level": "中",
+    "output": "通知",
+    "weekly": 29,
+    "desc": "门店新价生效后重新计算毛利率，低于 18% 时提醒品类经理。",
+    "conds": [
+      {
+        "metric": "gross_margin",
+        "metricVer": 2,
+        "field": "新价下的毛利率",
+        "op": "<",
+        "value": "18.00%"
+      }
+    ],
+    "logic": "且",
+    "expr": "gross_margin@v2(sku, store, price = event.newPrice) < 0.18",
+    "dedupe": "门店 + SKU + 生效日期",
+    "cooldown": "24 小时",
+    "trigger": {
+      "kind": "事件",
+      "eventId": "store_price_changed",
+      "text": "订阅“门店价格变更”（StorePriceChanged）",
+      "filter": "newPrice < oldPrice"
+    },
+    "autoStage": {
+      "enabled": false,
+      "actionTypeId": "",
+      "mapping": [],
+      "confirmer": ""
+    }
+  },
+  {
+    "id": "R-023",
+    "name": "订单支付超时未取消",
+    "version": 2,
+    "status": "已发布",
+    "owner": "孙浩然",
+    "core": false,
+    "objKind": "order",
+    "level": "低",
+    "output": "通知",
+    "weekly": 140,
+    "desc": "待支付超过 30 分钟仍未自动取消的订单，提示订单运营核查。",
+    "conds": [
+      {
+        "field": "订单状态",
+        "op": "=",
+        "value": "待支付"
+      },
+      {
+        "field": "下单时长",
+        "op": ">",
+        "value": "30 分钟"
+      }
+    ],
+    "logic": "且",
+    "expr": "order.status = \"待支付\" AND minutes_since(order.createdAt) > 30",
+    "dedupe": "规则 + 订单",
+    "cooldown": "不重复",
+    "trigger": {
+      "kind": "定时",
+      "cron": "*/15 * * * *",
+      "text": "每 15 分钟"
+    },
+    "actionTypeId": "correct_order_status",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "correct_order_status",
+      "confirmer": "订单运营组 孙浩然",
+      "mapping": [
+        {
+          "param": "订单",
+          "from": "命中.对象"
+        },
+        {
+          "param": "目标状态",
+          "from": "固定值：已取消"
+        },
+        {
+          "param": "修正原因",
+          "from": "固定值：系统同步乱序"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-027",
+    "name": "大区复购客户销售额周环比下降",
+    "version": 1,
+    "status": "已发布",
+    "owner": "吴佳",
+    "core": false,
+    "objKind": "region",
+    "level": "中",
+    "output": "通知",
+    "weekly": 1,
+    "desc": "每周六晚按大区汇总复购客户销售额（不含税），周环比下降超过 8% 时通知营销经理，并把复购召回券暂存到动作中心待确认。",
+    "conds": [
+      {
+        "metric": "gmv",
+        "metricVer": 3,
+        "field": "复购客户销售额（不含税）周环比",
+        "op": "<",
+        "value": "−8.0%"
+      }
+    ],
+    "logic": "且",
+    "expr": "wow(gmv@v3(region, week | customer.isRepeat)) < -0.08",
+    "dedupe": "规则 + 大区 + 周",
+    "cooldown": "7 天",
+    "trigger": {
+      "kind": "定时",
+      "cron": "0 22 * * 6",
+      "text": "每周六 22:00（本周日至周六数据）"
+    },
+    "actionTypeId": "issue_recall_coupon",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "issue_recall_coupon",
+      "confirmer": "营销经理 吴佳",
+      "mapping": [
+        {
+          "param": "大区",
+          "from": "命中.对象"
+        },
+        {
+          "param": "召回会员",
+          "from": "大区内 60 天未复购会员"
+        },
+        {
+          "param": "召回活动",
+          "from": "固定值：复购召回"
+        },
+        {
+          "param": "券模板",
+          "from": "固定值：满 99 减 15"
+        },
+        {
+          "param": "面额（元）",
+          "from": "固定值：15.00"
+        },
+        {
+          "param": "使用门槛（元）",
+          "from": "固定值：99.00"
+        },
+        {
+          "param": "有效天数",
+          "from": "固定值：14"
+        },
+        {
+          "param": "发放渠道",
+          "from": "固定值：小程序"
+        },
+        {
+          "param": "预算科目",
+          "from": "固定值：会员召回"
+        },
+        {
+          "param": "召回原因",
+          "from": "固定值：60 天未复购"
+        }
+      ]
+    }
+  },
+  {
+    "id": "R-025",
+    "name": "门店销售额连续 3 天低于目标",
+    "version": 1,
+    "status": "已停用",
+    "owner": "陈立军",
+    "core": false,
+    "objKind": "store",
+    "level": "中",
+    "output": "通知",
+    "weekly": 0,
+    "desc": "已停用：与 R-021 重复，保留历史命中记录。",
+    "conds": [
+      {
+        "metric": "gmv",
+        "metricVer": 3,
+        "field": "销售额（不含税）/ 日目标",
+        "op": "<",
+        "value": "90.0%（连续 3 天）"
+      }
+    ],
+    "logic": "且",
+    "expr": "consecutive_days(gmv@v3(store, day) / target(store, day) < 0.9) >= 3",
+    "dedupe": "规则 + 门店",
+    "cooldown": "7 天",
+    "trigger": {
+      "kind": "定时",
+      "cron": "0 9 * * *",
+      "text": "每天 09:00"
+    },
+    "autoStage": {
+      "enabled": false,
+      "actionTypeId": "",
+      "mapping": [],
+      "confirmer": ""
+    }
+  },
+  {
+    "id": "R-026",
+    "name": "安全库存设置偏低",
+    "version": 1,
+    "status": "已发布",
+    "owner": "周晓峰",
+    "core": false,
+    "objKind": "product",
+    "level": "低",
+    "output": "通知",
+    "weekly": 12,
+    "desc": "近 14 天缺货超过 2 次的商品，提示供应链计划员上调安全库存。",
+    "conds": [
+      {
+        "field": "近 14 天缺货次数",
+        "op": ">",
+        "value": "2"
+      }
+    ],
+    "logic": "且",
+    "expr": "count(stockout, 14d) > 2",
+    "dedupe": "规则 + 商品 + 门店",
+    "cooldown": "14 天",
+    "trigger": {
+      "kind": "定时",
+      "cron": "0 5 * * 1",
+      "text": "每周一 05:00"
+    },
+    "actionTypeId": "set_safety_stock",
+    "autoStage": {
+      "enabled": true,
+      "actionTypeId": "set_safety_stock",
+      "confirmer": "供应链计划员 周晓峰",
+      "mapping": [
+        {
+          "param": "商品",
+          "from": "命中.对象"
+        },
+        {
+          "param": "原因",
+          "from": "固定值：频繁缺货"
+        }
+      ]
+    }
+  }
+]

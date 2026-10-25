@@ -6,6 +6,8 @@ import InfoTip from '@/components/InfoTip.vue';
  * 草稿单用 useDraftView('object', () => props.objectId) 取；草稿视图里可新增状态、新增 / 修改 / 删除迁移，改动标灰色“新增 / 修改 / 删除”。
  * 查看历史版本（?ver=）时显示该次发布时生效的生命周期，全部只读并写明原因。
  * URL：?lc= 选中项（s:状态 / t:迁移编号 / x:非法迁移），?lcv= 下方列表（defs / changes），?lcpage= 状态变化页码。
+ * 数据：开关 dynamic 切到真接口（dynamicApi.isReal()）时状态机 / 非法迁移 / 状态变化来自后台 object-types/{id}/lifecycle*，
+ * 草稿改动每次改完整份 PUT …/lifecycle/draft（键 = 变更单:对象类型）；否则用 mock/lifecycle（不变）。
  */
 import { computed, reactive, ref, shallowRef, watch, nextTick } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
@@ -26,6 +28,12 @@ import {
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
 } from '@/mock/lifecycle';
 import { actionTypeById, EVENT_TYPES } from '@/mock/actionEvent';
+import { message } from 'ant-design-vue';
+import { isApiError } from '@/api/http';
+import {
+  dynamicApi, getLifecycle, listLifecycleChanges, listLifecycleIllegal, saveLifecycleDraft, type LifecycleDto,
+} from '@/api/dynamic';
+import type { LcChange, LcIllegal } from '@/mock/lifecycle';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const route = useRoute();
@@ -40,11 +48,29 @@ const objName = computed(() => OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
 
 /* ───── 生效版本（历史版本取当时发布时间） ───── */
 const histAt = computed(() => (histRo.value && app.viewVersion ? releaseByVer(app.viewVersion)?.publishedAt ?? null : null));
-const base = computed(() => lifecycleAsOf(props.objectId, histAt.value));
+const REAL = dynamicApi.isReal();
+const remote = reactive({
+  lc: null as LifecycleDto | null, key: '', illegal: [] as LcIllegal[],
+  changes: { items: [] as LcChange[], total: 0 }, edits: {} as Record<string, LcDraft>,
+});
+const base = computed(() => (REAL ? remote.lc ?? undefined : lifecycleAsOf(props.objectId, histAt.value)));
 
 /* ───── 草稿改动（本会话，按 变更单:对象 存） ───── */
 const dkey = computed(() => (draft.value ? `${draft.value.id}:${props.objectId}` : ''));
-const edits = computed<LcDraft>(() => (isDraft.value && dkey.value ? (LC_DRAFT_EDITS[dkey.value] ??= emptyLcDraft()) : emptyLcDraft()));
+const EDIT_STORE = REAL ? remote.edits : LC_DRAFT_EDITS;
+const edits = computed<LcDraft>(() => (isDraft.value && dkey.value ? (EDIT_STORE[dkey.value] ??= emptyLcDraft()) : emptyLcDraft()));
+/** 真接口：草稿改动改完后整份保存；失败时重新拉后台草稿，界面回到已保存的样子 */
+async function persist() {
+  if (!REAL || !isDraft.value || !draft.value) return;
+  const cr = draft.value.id; const key = dkey.value;
+  try {
+    const r = await saveLifecycleDraft(props.objectId, cr, edits.value);
+    remote.edits[key] = r.edits;
+  } catch (e) {
+    message.error(isApiError(e) ? e.message : String(e));
+    await loadLc();
+  }
+}
 
 type Mark = '新增' | '修改' | '';
 interface VState extends LcState { mark: Mark }
@@ -62,7 +88,7 @@ const transitions = computed<VTr[]>(() => {
     ...e.addTransitions.map((t) => ({ ...t, mark: '新增' as Mark })),
   ];
 });
-const illegal = computed(() => (histAt.value ? [] : illegalOf(props.objectId)));
+const illegal = computed(() => (REAL ? remote.illegal : histAt.value ? [] : illegalOf(props.objectId)));
 const illegalTotal = computed(() => illegal.value.reduce((n, x) => n + x.count, 0));
 const showIllegal = ref(true);
 const verText = computed(() => (base.value ? (isDraft.value ? `v${base.value.version} → 草稿 v${base.value.version + 1}` : `v${base.value.version}`) : ''));
@@ -187,7 +213,7 @@ function onReady(g: Graph) {
   g.on('blank:click', () => setSel(''));
   draw(true);
 }
-watch(() => [props.objectId, histAt.value, isDraft.value], () => draw(true));
+watch(() => [props.objectId, histAt.value, isDraft.value, remote.key], () => draw(true));
 watch(sel, (v) => {
   if (!v.startsWith('t:')) return;
   const i = transitions.value.findIndex((t) => t.id === v.slice(2));
@@ -203,7 +229,33 @@ const view = computed({
 const onlyIllegal = ref(false);
 const pq = usePagedQuery({ defaultSize: 6, prefix: 'lc', filters: [() => props.objectId, onlyIllegal] });
 const changes = computed(() => (histAt.value ? [] : changesOf(props.objectId)).filter((c) => !onlyIllegal.value || !c.trId));
-const changePage = computed(() => paginate(changes.value, { page: pq.page.value, size: pq.size.value }));
+const changePage = computed(() => (REAL ? remote.changes : paginate(changes.value, { page: pq.page.value, size: pq.size.value })));
+
+/* ───── 真接口加载 ───── */
+async function guard<T>(p: Promise<T>, apply: (v: T) => void) {
+  try { apply(await p); } catch (e) { message.error(isApiError(e) ? e.message : String(e)); }
+}
+const lcKey = computed(() => `${props.objectId}|${app.viewVersion ?? ''}|${isDraft.value ? draft.value?.id ?? '' : ''}`);
+async function loadLc() {
+  const k = lcKey.value; const cr = isDraft.value ? draft.value?.id : undefined;
+  await guard(getLifecycle(props.objectId, cr), (r) => {
+    if (k !== lcKey.value) return;
+    remote.lc = r; remote.key = k;
+    if (cr && r.draft) remote.edits[`${cr}:${props.objectId}`] = r.draft.edits;
+  });
+  await guard(listLifecycleIllegal(props.objectId), (r) => { if (k === lcKey.value) remote.illegal = r; });
+}
+async function loadChanges() {
+  if (view.value !== 'changes') return;
+  const k = `${lcKey.value}|${onlyIllegal.value}|${pq.page.value}|${pq.size.value}`;
+  await guard(listLifecycleChanges(props.objectId, onlyIllegal.value, pq.page.value, pq.size.value), (r) => {
+    if (k === `${lcKey.value}|${onlyIllegal.value}|${pq.page.value}|${pq.size.value}`) remote.changes = r;
+  });
+}
+if (REAL) {
+  watch(lcKey, () => { remote.lc = null; loadLc(); }, { immediate: true });
+  watch(() => [lcKey.value, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true });
+}
 const refKind = computed(() => (['order', 'store', 'product'].includes(props.objectId) ? props.objectId : ''));
 const defCols = [
   { title: '编号', key: 'id', width: 64 },
@@ -257,6 +309,7 @@ function saveState() {
     x: 40 + n * 220, y: maxY + 150, sla: stForm.sla || undefined });
   stOpen.value = false;
   setSel(`s:${stForm.name.trim()}`);
+  persist();
 }
 function openTr(t?: VTr) {
   trEditId.value = t?.id ?? '';
@@ -279,6 +332,7 @@ function saveTr() {
     setSel(`t:${id}`);
   }
   trOpen.value = false;
+  persist();
 }
 async function removeTr(t: VTr) {
   const added = t.mark === '新增';
@@ -293,6 +347,7 @@ async function removeTr(t: VTr) {
   if (t.mark === '新增') e.addTransitions = e.addTransitions.filter((x) => x.id !== t.id);
   else { delete e.editTransitions[t.id]; e.removeTransitions.push(t.id); }
   setSel('');
+  persist();
 }
 /** 删除草稿新增的状态；从“撤销”进来且没有连带迁移时不必确认 */
 async function removeState(s: VState, fromUndo = false) {
@@ -307,15 +362,16 @@ async function removeState(s: VState, fromUndo = false) {
   e.addStates = e.addStates.filter((x) => x.key !== s.key);
   e.addTransitions = e.addTransitions.filter((t) => t.from !== s.key && t.to !== s.key);
   setSel('');
+  persist();
 }
 const changeList = computed(() => {
   const e = edits.value;
   const bt = (id: string) => base.value?.transitions.find((t) => t.id === id);
   return [
     ...e.addStates.map((s) => ({ key: `as:${s.key}`, mark: '新增', text: `状态“${s.name}”（${s.kind}）`, undo: () => removeState({ ...s, mark: '新增' }, true) })),
-    ...e.addTransitions.map((t) => ({ key: `at:${t.id}`, mark: '新增', text: `迁移 ${t.id} ${trName(t)}`, undo: () => { e.addTransitions = e.addTransitions.filter((x) => x.id !== t.id); } })),
-    ...Object.keys(e.editTransitions).map((id) => ({ key: `et:${id}`, mark: '修改', text: `迁移 ${id} ${bt(id) ? trName(bt(id)!) : ''}`, undo: () => { delete e.editTransitions[id]; } })),
-    ...e.removeTransitions.map((id) => ({ key: `rt:${id}`, mark: '删除', text: `迁移 ${id} ${bt(id) ? trName(bt(id)!) : ''}`, undo: () => { e.removeTransitions = e.removeTransitions.filter((x) => x !== id); } })),
+    ...e.addTransitions.map((t) => ({ key: `at:${t.id}`, mark: '新增', text: `迁移 ${t.id} ${trName(t)}`, undo: () => { e.addTransitions = e.addTransitions.filter((x) => x.id !== t.id); persist(); } })),
+    ...Object.keys(e.editTransitions).map((id) => ({ key: `et:${id}`, mark: '修改', text: `迁移 ${id} ${bt(id) ? trName(bt(id)!) : ''}`, undo: () => { delete e.editTransitions[id]; persist(); } })),
+    ...e.removeTransitions.map((id) => ({ key: `rt:${id}`, mark: '删除', text: `迁移 ${id} ${bt(id) ? trName(bt(id)!) : ''}`, undo: () => { e.removeTransitions = e.removeTransitions.filter((x) => x !== id); persist(); } })),
   ];
 });
 const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) => (dir === 'in' ? t.to === key : t.from === key));

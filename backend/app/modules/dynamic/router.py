@@ -220,3 +220,8 @@ async def resubmit_action(code: str, svc: ActionSvc) -> ResubmitOut:
 @router.post("/action-runs/{code}:reconcile", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
 async def reconcile_action(code: str, body: ReconcileIn, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.reconcile(code, body.result, body.note))
+
+
+from app.modules.dynamic.rules_router import router as _rules_router  # noqa: E402  第二部分：规则 / 推演 / 生命周期
+
+router.include_router(_rules_router)
