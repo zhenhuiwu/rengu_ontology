@@ -57,6 +57,9 @@ export const T_METRICS: Record<string, TMetric> = {
 Object.values(T_METRICS).forEach((m) => { m.cr = pendingCrOf(m.key); });
 
 export const metricLabel = (k: string) => `${T_METRICS[k].name} ${T_METRICS[k].version}`;
+/** 新建认证问答的语义计划可选项（原在 QaTuning.vue） */
+export const TUNING_DIMS = ['大区', '城市', '区县', '门店', '仓库', '渠道', '品类', '商品', '会员等级', '日期', '周', '月份'];
+export const TUNING_TIMES = ['昨天', '本周', '上周', '本月至今', '上个月', '近 7 天', '近 30 天', '近 6 个月', '今年'];
 
 export interface SemPlan { metric: string; dims: string[]; time: string; filter?: string; sort?: string }
 export const planText = (p: SemPlan) =>

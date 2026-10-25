@@ -7,10 +7,11 @@
 import { computed } from 'vue';
 import { message } from 'ant-design-vue';
 import { ApartmentOutlined, DownloadOutlined } from '@ant-design/icons-vue';
-import { QA_EC_STORES, fmtMoney, fmtInt } from '@/mock';
+import { QA_EC_STORES, fmtMoney, fmtInt, type QaDemoStoreCard } from '@/mock';
 import { useQueryPage } from '../useQueryParam';
 import AppPagination from '@/components/AppPagination.vue';
 
+const props = defineProps<{ card: QaDemoStoreCard }>();
 const PAGE_SIZE = 10;
 const rows = QA_EC_STORES;
 const page = useQueryPage('tblPage');
@@ -30,7 +31,7 @@ const columns = [
   { title: '订单数', dataIndex: 'orders', key: 'orders', align: 'right' as const },
 ];
 const pageRows = computed(() => (paged ? rows.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE) : rows));
-function onExport() { message.info(`已导出 ${rows.length} 行（门店销售额.xlsx）`); }
+function onExport() { message.info(`已导出 ${rows.length} 行（${props.card.exportFile}）`); }
 const pageModel = computed({ get: () => current.value, set: (p: number) => { page.value = p; } });
 </script>
 
@@ -39,9 +40,9 @@ const pageModel = computed({ get: () => current.value, set: (p: number) => { pag
     <div class="qa-sa-head">
       <a-avatar size="small" shape="square" class="qa-sa-av"><template #icon><ApartmentOutlined /></template></a-avatar>
       <span class="fw-600">智能问数</span>
-      <span class="c-3">门店销售额（含税）v2 · 依据：大区 = 华东、口径 = 含税 · 数据截至 2026-10-24 23:00</span>
+      <span class="c-3">{{ card.metric }} · 依据：{{ card.basis }} · 数据截至 {{ card.dataAsOf }}</span>
     </div>
-    <p class="qa-sa-text">2026 年 9 月，华东 {{ rows.length }} 家重点门店销售额（含税）合计 <span class="fw-600 num">{{ f1(total) }} 万元</span>，按销售额从高到低排列。</p>
+    <p class="qa-sa-text">{{ card.period }}，{{ card.region }} {{ rows.length }} 家重点门店销售额（含税）合计 <span class="fw-600 num">{{ f1(total) }} 万元</span>，按销售额从高到低排列。</p>
     <div class="qa-sa-box">
       <div class="qa-sa-box-head">
         <span>按门店拆分</span>

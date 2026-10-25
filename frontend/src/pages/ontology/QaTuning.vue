@@ -9,7 +9,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
-import { CUR_VERSION, EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, planText, type SemPlan } from '@/mock/qa-tuning';
+import { CUR_VERSION, EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, TUNING_DIMS, TUNING_TIMES, planText, type SemPlan } from '@/mock/qa-tuning';
 import { tuning, addCert, startRun } from './qa-tuning/state';
 import CertTab from './qa-tuning/CertTab.vue';
 import EvalTab from './qa-tuning/EvalTab.vue';
@@ -37,8 +37,6 @@ const nm = ref('gmv');
 const nd = ref<string[]>([]);
 const nt = ref('上个月');
 const nf = ref('');
-const DIMS = ['大区', '城市', '区县', '门店', '仓库', '渠道', '品类', '商品', '会员等级', '日期', '周', '月份'];
-const TIMES = ['昨天', '本周', '上周', '本月至今', '上个月', '近 7 天', '近 30 天', '近 6 个月', '今年'];
 const newPlan = computed<SemPlan>(() => ({ metric: nm.value, dims: nd.value, time: nt.value, filter: nf.value.trim() || undefined }));
 function createCert() {
   const qn = nq.value.trim();
@@ -81,8 +79,8 @@ async function runEval() {
             <div class="t-14 fw-600 c-1">新建认证问答</div>
             <div class="qt-f"><span class="t-12 c-3 qt-l">问题</span><a-input v-model:value="nq" class="qt-c" :maxlength="40" placeholder="例如：上周各大区有效订单数" /></div>
             <div class="qt-f"><span class="t-12 c-3 qt-l">指标</span><a-select v-model:value="nm" class="qt-c" :options="Object.values(T_METRICS).map((m) => ({ value: m.key, label: `${m.name} ${m.version}` }))" /></div>
-            <div class="qt-f"><span class="t-12 c-3 qt-l">维度</span><a-select v-model:value="nd" mode="multiple" class="qt-c" placeholder="不选为汇总" :options="DIMS.map((d) => ({ value: d, label: d }))" /></div>
-            <div class="qt-f"><span class="t-12 c-3 qt-l">时间</span><a-select v-model:value="nt" class="qt-c" :options="TIMES.map((d) => ({ value: d, label: d }))" /></div>
+            <div class="qt-f"><span class="t-12 c-3 qt-l">维度</span><a-select v-model:value="nd" mode="multiple" class="qt-c" placeholder="不选为汇总" :options="TUNING_DIMS.map((d) => ({ value: d, label: d }))" /></div>
+            <div class="qt-f"><span class="t-12 c-3 qt-l">时间</span><a-select v-model:value="nt" class="qt-c" :options="TUNING_TIMES.map((d) => ({ value: d, label: d }))" /></div>
             <div class="qt-f"><span class="t-12 c-3 qt-l">过滤</span><a-input v-model:value="nf" class="qt-c" placeholder="可选，例如：大区 = 华东一区" /></div>
             <div class="t-12 c-3">语义计划：{{ planText(newPlan) }}</div>
             <div class="qt-btns"><a-button size="small" @click="newOpen = false">取消</a-button><a-button size="small" type="primary" :disabled="!nq.trim()" @click="createCert">认证</a-button></div>

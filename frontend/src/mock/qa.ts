@@ -2,7 +2,7 @@
  * 问数工作台示例：2026 年 9 月华东大区复购客户销售额（不含税）。
  * 与评审稿 A.html 一致：合计 1,286.0 万元，环比 -8.4%（8 月 1,404.0 万元），复购客户 48,210 人。
  */
-import { seeded } from './format';
+import { seeded, fmtMoney } from './format';
 
 export interface QaProvinceRow { key: string; province: string; sales: number; mom: number; customers: number }
 
@@ -189,3 +189,50 @@ export const QA_APPLY = { scope: '大区 = 华南', object: `${QA_METRIC.ex.name
 /** 左栏贴底只露前几条 */
 export const QA_FAVORITES = QA_FAVORITE_LIST.slice(0, 3).map((f) => f.question);
 export const QA_MY_PAGES = QA_PAGE_LIST.slice(0, 2).map((p) => p.name);
+
+/**
+ * 工作台第一个会话的示例轮次（4 轮 + 1 条系统提示），原写死在 QaConversation / QaAnswer / QaStoreAnswer 里。
+ * kind：answer 正常回答（card 区分门店表回答 / 主回答卡）、denied 权限拦截、empty 结果为空、system 系统提示。
+ * 文字按「普通 + 加粗 + 普通」拆开，数值仍以上面的 QA_PROVINCES / QA_TOTAL_* / QA_EC_STORES 为准。
+ */
+export interface QaDemoStoreCard { card: 'store'; metric: string; basis: string; dataAsOf: string; period: string; region: string; exportFile: string }
+export interface QaDemoMainCard {
+  card: 'main';
+  /** 回答时的本体版本（查看历史版本时不改写） */
+  answeredVer: string;
+  dataAsOf: string;
+  basis: { ontologyVer: string; filter: string; dim: string; caliber: string; perm: string };
+  period: string;
+  region: string;
+  /** 环比（%），上月销售额（万元），占大区销售额（%） */
+  mom: number;
+  lastMonth: number;
+  regionShare: number;
+  insight: string;
+  reasonTitle: string;
+}
+interface QaDemoTurnBase { id: string; time?: string }
+export type QaDemoTurn =
+  | (QaDemoTurnBase & { kind: 'system'; time: string; text: string })
+  | (QaDemoTurnBase & { kind: 'answer'; question: string; answer: QaDemoStoreCard | QaDemoMainCard })
+  | (QaDemoTurnBase & { kind: 'denied'; question: string; lead: string; bold: string; tail: string; tag: string })
+  | (QaDemoTurnBase & { kind: 'empty'; question: string; lead: string; bold: string; tail: string; tag: string; retry: { label: string; tip: string; draft: string } });
+
+export const QA_DEMO_TURNS: QaDemoTurn[] = [
+  { id: 'T-01', kind: 'answer', time: '14:05', question: '上个月华东各重点门店的销售额？',
+    answer: { card: 'store', metric: '门店销售额（含税）v2', basis: '大区 = 华东、口径 = 含税', dataAsOf: '2026-10-24 23:00', period: '2026 年 9 月', region: '华东', exportFile: '门店销售额.xlsx' } },
+  { id: 'SYS-01', kind: 'system', time: '14:20', text: '从这里开始按 大区 = 华东、口径 = 不含税 回答' },
+  { id: 'T-02', kind: 'denied', question: '上个月华南大区复购客户的销售额？', lead: '', bold: '你问的华南大区不在你的权限范围内', tail: '（当前可查：大区 = 华东）。', tag: '权限拦截' },
+  { id: 'T-03', kind: 'empty', question: '上个月嘉兴南湖店的销售额？', lead: '查询已执行，', bold: '没有符合条件的记录', tail: '（0 行）。该门店 2026-10-18 开业，9 月尚无订单。', tag: '结果为空',
+    retry: { label: '改查 10 月', tip: '把改查 10 月的问题填入输入框', draft: '上个月嘉兴南湖店的销售额？改查 2026 年 10 月' } },
+  { id: 'T-04', kind: 'answer', time: '15:32', question: '上个月华东大区复购客户的销售额是多少？',
+    answer: { card: 'main', answeredVer: 'v2026.10.3', dataAsOf: '2026-10-24 23:00',
+      basis: { ontologyVer: '2026.10.25-1', filter: '大区 = 华东、客户分群 = 复购客户', dim: '省份', caliber: '已出库、剔除退款；口径校验通过', perm: '已按行级权限过滤' },
+      period: '2026 年 9 月', region: '华东大区', mom: -8.4, lastMonth: 1404.0, regionShare: 62.0,
+      insight: '7 个省份全部下降，安徽（-12.5%）和江苏（-9.8%）降幅最大。', reasonTitle: '下降原因：7 省全部下降，降幅最大的 3 个' } },
+];
+/** 原型：会话里新追加的轮次统一用这条示例回答（数据与主回答卡一致） */
+export const QA_DEMO_CANNED = {
+  text: `2026 年 9 月，华东大区复购客户销售额（不含税）为 ${fmtMoney(QA_TOTAL_SALES, 1)} 万元，环比 −8.4%；7 个省份全部下降，安徽（−12.5%）和江苏（−9.8%）降幅最大。`,
+  meta: '按 大区 = 华东、口径 = 不含税 回答',
+};

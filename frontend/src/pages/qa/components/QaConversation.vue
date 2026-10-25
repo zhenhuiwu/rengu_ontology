@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /** 对话区：页面里唯一的滚动区（.scroll-area）。内容不足时贴底显示 */
-import { ref, onMounted, nextTick, watch } from 'vue';
+import { ref, onMounted, nextTick, watch, type ComponentPublicInstance } from 'vue';
 import { useRoute } from 'vue-router';
 import { LockOutlined, InboxOutlined, ClockCircleOutlined, ApartmentOutlined, MessageOutlined } from '@ant-design/icons-vue';
-import { QA_TOTAL_SALES, fmtMoney } from '@/mock';
+import { QA_DEMO_TURNS, QA_DEMO_CANNED } from '@/mock';
 import { useReadonly } from '@/composables/useReadonly';
 import { useQaSession } from '../useQaSession';
 import { useAppStore } from '@/stores/app';
@@ -14,13 +14,15 @@ const props = defineProps<{ applied: boolean; tips: string[] }>();
 const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'apply'): void }>();
 const { isNew, activeTurns, activeId, draft } = useQaSession();
 const { readonly, reason } = useReadonly();
-/** 原型：新追加的轮次统一用这条示例回答（数据与主回答卡一致） */
-const CANNED = `2026 年 9 月，华东大区复购客户销售额（不含税）为 ${fmtMoney(QA_TOTAL_SALES, 1)} 万元，环比 −8.4%；7 个省份全部下降，安徽（−12.5%）和江苏（−9.8%）降幅最大。`;
-function retryOct() { draft.value = '上个月嘉兴南湖店的销售额？改查 2026 年 10 月'; }
+/** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
+const TURNS = QA_DEMO_TURNS;
+function retry(text: string) { draft.value = text; }
 const me = useAppStore().user.name.slice(0, 1);
 const route = useRoute();
 const conv = ref<HTMLElement>();
 const storeTurn = ref<HTMLElement>();
+/** 门店表那一轮的提问行，用于 ?tblPage 定位 */
+function setStoreTurn(el: Element | ComponentPublicInstance | null) { if (el instanceof HTMLElement) storeTurn.value = el; }
 // 默认停在最新一轮（底部）；URL 带 ?tblPage 时定位到门店表那一轮，便于复现翻页状态
 onMounted(async () => {
   await nextTick();
@@ -38,32 +40,35 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value], async
       <template #image><MessageOutlined class="qa-empty-ic c-3" /></template>
     </a-empty>
     <template v-if="!isNew">
-    <div ref="storeTurn" class="qa-u"><span class="t-12 c-3">14:05</span><span class="qa-bubble">上个月华东各重点门店的销售额？</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
-    <QaStoreAnswer />
-    <div class="qa-sys t-12 c-3"><span>14:20 · 从这里开始按 大区 = 华东、口径 = 不含税 回答</span></div>
-    <div class="qa-u"><span class="qa-bubble">上个月华南大区复购客户的销售额？</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
-    <div class="qa-b">
+    <template v-for="t in TURNS" :key="t.id">
+    <div v-if="t.kind === 'system'" class="qa-sys t-12 c-3"><span>{{ t.time }} · {{ t.text }}</span></div>
+    <template v-else>
+    <div :ref="t.kind === 'answer' && t.answer.card === 'store' ? setStoreTurn : undefined" class="qa-u"><span v-if="t.time" class="t-12 c-3">{{ t.time }}</span><span class="qa-bubble">{{ t.question }}</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
+    <template v-if="t.kind === 'answer'">
+    <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" />
+    <QaAnswer v-else :card="t.answer" @suggest="emit('suggest')" @pin="emit('pin')" />
+    </template>
+    <div v-else-if="t.kind === 'denied'" class="qa-b">
       <LockOutlined class="c-3" />
-      <span class="qa-b-txt"><span class="fw-600">你问的华南大区不在你的权限范围内</span>（当前可查：大区 = 华东）。</span>
+      <span class="qa-b-txt">{{ t.lead }}<span class="fw-600">{{ t.bold }}</span>{{ t.tail }}</span>
       <span v-if="applied" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
-      <template v-else><a-tag>权限拦截</a-tag><a-button size="small" @click="emit('apply')">申请权限</a-button></template>
+      <template v-else><a-tag>{{ t.tag }}</a-tag><a-button size="small" @click="emit('apply')">申请权限</a-button></template>
     </div>
-    <div class="qa-u"><span class="qa-bubble">上个月嘉兴南湖店的销售额？</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
-    <div class="qa-b">
+    <div v-else class="qa-b">
       <InboxOutlined class="c-3" />
-      <span class="qa-b-txt">查询已执行，<span class="fw-600">没有符合条件的记录</span>（0 行）。该门店 2026-10-18 开业，9 月尚无订单。</span>
-      <a-tag>结果为空</a-tag><a-tooltip :title="reason || '把改查 10 月的问题填入输入框'"><a-button size="small" :disabled="readonly" @click="retryOct">改查 10 月</a-button></a-tooltip>
+      <span class="qa-b-txt">{{ t.lead }}<span class="fw-600">{{ t.bold }}</span>{{ t.tail }}</span>
+      <a-tag>{{ t.tag }}</a-tag><a-tooltip :title="reason || t.retry.tip"><a-button size="small" :disabled="readonly" @click="retry(t.retry.draft)">{{ t.retry.label }}</a-button></a-tooltip>
     </div>
-    <div class="qa-u"><span class="t-12 c-3">15:32</span><span class="qa-bubble">上个月华东大区复购客户的销售额是多少？</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
-    <QaAnswer @suggest="emit('suggest')" @pin="emit('pin')" />
+    </template>
+    </template>
     <div v-for="(t, i) in tips" :key="i" class="qa-sys t-12 c-3"><span>{{ t }}</span></div>
     </template>
     <template v-for="t in activeTurns" :key="t.id">
       <div class="qa-u"><span class="t-12 c-3">{{ t.time }}</span><span class="qa-bubble">{{ t.q }}</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
       <div class="qa-b qa-b-ans">
         <ApartmentOutlined class="qa-b-av" />
-        <span class="qa-b-txt">{{ CANNED }}</span>
-        <span class="t-12 c-3 qa-b-meta">按 大区 = 华东、口径 = 不含税 回答</span>
+        <span class="qa-b-txt">{{ QA_DEMO_CANNED.text }}</span>
+        <span class="t-12 c-3 qa-b-meta">{{ QA_DEMO_CANNED.meta }}</span>
       </div>
     </template>
   </div>
