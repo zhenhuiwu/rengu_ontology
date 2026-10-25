@@ -298,9 +298,11 @@ async function pickEgress(v: EgressPolicy) {
   const L = draft.llm;
   if (v === 'detail' && L.egress.policy !== 'detail') {
     const targets = L.connections.filter((c) => c.enabled && c.usages.some((u) => u !== '向量化'));
+    const pubTargets = targets.filter((c) => c.deploy === '公有云');
     const ok = await confirm.ask({
       title: '改为发送明细数据', target: !targets.length ? '没有可用的连接' : targets.every((c) => c.deploy === '私有化部署') ? `将发送给 ${targets.map((c) => c.id).join('、')}（私有化）` : `将发送给 ${targets.map((c) => `${c.id}（${c.deploy === '私有化部署' ? '私有化' : '公有云'}）`).join('、')}`,
       okText: '改为发送明细', danger: true,
+      blocked: pubTargets.length ? `明细数据只允许发送给私有化部署的连接：${pubTargets.map((c) => c.id).join('、')} 为公有云，先停用或改用脱敏样例` : undefined,
       fields: targets.map((c) => ({ label: c.id, value: `${c.name} · ${c.baseUrl}` })),
       impact: '风险：查询结果明细（含门店、会员、订单等业务数据）会离开平台发给上述模型；只允许私有化部署的连接，保存后才生效并记入审计日志。',
     });
