@@ -1,0 +1,75 @@
+/*
+ * 设计规范 CSS 变量 + 工具类。与 src/theme.ts 保持一致。
+ * 自写元素一律用 .t-* 工具类控制字号，不准写 font-size。
+ */
+:root {
+  --brand: #1f5fd1;
+  --brand-bg: #e8effb;
+
+  --g1: #ffffff; --g2: #fafafa; --g3: #f5f5f5; --g4: #f0f0f0; --g5: #e5e6e8;
+  --g6: #d9d9d9; --g7: #bfbfbf; --g8: #8c8c8c; --g9: #595959; --g10: #262626;
+
+  --success: #389e0d; --warning: #d46b08; --error: #cf1322;
+  --warning-bg: #fff7e6; --banner-h: 28px; /* 顶部细横幅（历史版本、草稿），一屏预算内 */
+
+  /* 时间线语义色（见 theme.ts TIMELINE_TONES）：灰=正常/已完成，橙=需关注（含结果未知），红=失败，蓝=仅当前选中 */
+  --tl-normal: var(--g7); --tl-attention: var(--warning); --tl-failed: var(--error); --tl-current: var(--brand);
+
+  --fs-12: 12px;  /* 辅助：时间戳、单位、表格脚注 */
+  --fs-14: 14px;  /* 正文、表格、表单、按钮、导航 */
+  --fs-16: 16px;  /* 区块标题 */
+  --fs-20: 20px;  /* 页面标题 */
+  --fs-kpi: 24px; /* 仅限少数关键指标数字 */
+  --fw-regular: 400;
+  --fw-strong: 600;
+
+  --radius: 4px;
+  --border: 1px solid var(--g5);
+  --topbar-h: 48px;
+  --sider-w: 216px;
+  --gap: 12px;
+}
+
+/* 字号工具类 */
+.t-12 { font-size: var(--fs-12); line-height: 20px; }
+.t-14 { font-size: var(--fs-14); line-height: 22px; }
+.t-16 { font-size: var(--fs-16); line-height: 24px; }
+.t-20 { font-size: var(--fs-20); line-height: 28px; }
+.t-kpi { font-size: var(--fs-kpi); line-height: 32px; font-variant-numeric: tabular-nums; }
+.fw-400 { font-weight: var(--fw-regular); }
+.fw-600 { font-weight: var(--fw-strong); }
+
+/* 颜色工具类 */
+.c-1 { color: var(--g10); }
+.c-2 { color: var(--g9); }
+.c-3 { color: var(--g8); }
+.c-brand { color: var(--brand); }
+.c-success { color: var(--success); }
+.c-warning { color: var(--warning); }
+.c-error { color: var(--error); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* 全局：整页 100vh。这里故意不写 overflow:hidden——内容超出一屏时让问题暴露出来（验收脚本会判 FAIL），而不是被悄悄裁掉 */
+html, body, #app { height: 100%; margin: 0; }
+body { background: var(--g3); color: var(--g10); font-size: var(--fs-14); }
+
+/* 区块（面板）：白底 + 1px 细边框，无阴影 */
+.panel { background: var(--g1); border: var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.panel-head { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: var(--border); }
+.panel-body { flex: 1; min-height: 0; padding: 12px 16px; }
+
+/* 页面里唯一允许的滚动区，必须显式加这个类 */
+.scroll-area { overflow: auto; min-height: 0; }
+
+/* antd 菜单分组标题按辅助字号 */
+.ant-menu-item-group-title { font-size: var(--fs-12) !important; padding: 8px 16px 4px 24px !important; }
+
+/* 时间线语义色工具类 */
+.tl-normal { color: var(--tl-normal); }
+.tl-attention { color: var(--tl-attention); }
+.tl-failed { color: var(--tl-failed); }
+.tl-current { color: var(--tl-current); }
+
+/* 分页表格容器固定加 .paged-scroll：放得下时不滚动；条数多于一屏或顶部出现横幅时，它是页面唯一滚动区，表头吸顶 */
+.paged-scroll { flex: 1; min-height: 0; overflow: auto; }
+.paged-scroll .ant-table-thead > tr > th { position: sticky; top: 0; z-index: 2; }

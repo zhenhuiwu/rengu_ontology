@@ -1,0 +1,35 @@
+{
+  "name": "ontology-platform-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5280 --strictPort",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 5281 --strictPort",
+    "typecheck": "vue-tsc --noEmit",
+    "shot": "python3 scripts/shot.py"
+  },
+  "dependencies": {
+    "@ant-design/icons-vue": "^7.0.1",
+    "@antv/x6": "^3.1.8",
+    "ant-design-vue": "^4.2.6",
+    "dayjs": "^1.11.23",
+    "echarts": "^5.6.0",
+    "pinia": "^4.1.0",
+    "vue": "^3.5.44",
+    "vue-echarts": "^7.0.3",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vue-tsc": "^3.3.13"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true,
+    "vue-demi@0.13.11": true
+  }
+}

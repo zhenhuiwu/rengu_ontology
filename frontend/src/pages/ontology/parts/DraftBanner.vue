@@ -1,0 +1,25 @@
+<script setup lang="ts">
+/** 草稿视图顶部常驻提示条，高度用 --banner-h。 */
+import type { DraftCR } from '@/mock/releases';
+import { useAppStore } from '@/stores/app';
+defineProps<{ draft: DraftCR }>();
+defineEmits<{ submit: []; discard: [] }>();
+const app = useAppStore();
+</script>
+
+<template>
+  <div class="db t-12">
+    <span class="db-tag">草稿 · 未发布</span>
+    <span class="c-2 num">变更单 {{ draft.id }}　{{ draft.title }}　{{ draft.changes }} 处改动　{{ draft.owner }} 最后编辑于 {{ draft.updatedAt }}</span>
+    <span class="c-3">问数仍使用已发布版本 {{ app.ontologyVersion }}</span>
+    <span class="db-sp" />
+    <a @click="$emit('submit')">提交审核</a>
+    <a class="c-3" @click="$emit('discard')">放弃草稿</a>
+  </div>
+</template>
+
+<style scoped>
+.db { display: flex; align-items: center; gap: 12px; height: var(--banner-h); padding: 0 16px; background: var(--warning-bg); border-bottom: var(--border); flex: none; }
+.db-tag { color: var(--warning); font-weight: var(--fw-strong); }
+.db-sp { flex: 1; }
+</style>
