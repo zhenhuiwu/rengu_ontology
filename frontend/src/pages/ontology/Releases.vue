@@ -43,9 +43,8 @@ const tab = computed({
 const detail = computed(() => crDetail(cur.value.id));
 const log = computed(() => [...(extraLog[cur.value.id] ?? []), ...reviewLog(cur.value)]);
 
-const statusClass = (s: CRStatus) => (s === '审核中' || s === '已通过' ? 'c-warning' : s === '已驳回' ? 'c-error' : 'c-3');
-const tagColor = (s: CRStatus) => ({ 草稿: 'default', 审核中: 'warning', 已通过: 'processing', 已发布: 'success', 已驳回: 'error' })[s];
-const kindColor = (k: string) => (k === '新增' ? 'success' : k === '删除' ? 'error' : 'warning');
+const statusClass = (s: CRStatus) => (s === '审核中' ? 'c-warning' : s === '已驳回' ? 'c-error' : 'c-3');
+const tagColor = (s: CRStatus) => ({ 草稿: 'default', 审核中: 'warning', 已通过: 'default', 已发布: 'default', 已驳回: 'error' })[s];
 const resultClass = (r: string) => (r === '阻断' ? 'c-error' : r === '警告' ? 'c-warning' : r === '通过' ? 'c-2' : 'c-3');
 
 const counts = computed(() => {
@@ -130,7 +129,7 @@ const isLatest = computed(() => cur.value.release === 'v2026.10.3');
   <Teleport defer to="#page-extra">
     <span class="t-12 c-3">待发布 {{ approved.length }} 张</span>
     <a-tooltip :title="readonly ? reason : approved.length ? '' : '没有已通过的变更单'">
-      <a-button type="primary" :disabled="readonly || !approved.length" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
+      <a-button :type="cur.status === '草稿' || cur.status === '审核中' ? 'default' : 'primary'" :disabled="readonly || !approved.length" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
     </a-tooltip>
   </Teleport>
 
@@ -200,7 +199,7 @@ const isLatest = computed(() => cur.value.release === 'v2026.10.3');
       <div v-if="tab === 'diff'" class="rl-body">
         <a-table :columns="diffCols" :data-source="drows" :pagination="false" size="small" row-key="key">
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'kind'"><a-tag :color="kindColor(record.kind)">{{ record.kind }}</a-tag></template>
+            <template v-if="column.key === 'kind'"><a-tag>{{ record.kind }}</a-tag></template>
             <template v-else-if="column.key === 'before'"><span v-if="record.before" class="c-3 rl-old">{{ record.before }}</span><span v-else class="c-3">--</span></template>
             <template v-else-if="column.key === 'after'"><span class="c-1">{{ record.after }}</span></template>
           </template>
