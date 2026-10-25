@@ -366,7 +366,7 @@ stateDiagram-v2
 
 ### 2.8 本体版本快照的 `rules`、`lifecycles` 段 [已定：群决定]
 
-整版发布时，**完整快照 = 静态各段 + `actionTypes` + `eventTypes` + `rules` + `lifecycles`**，**各段由所属模块组装**。版本由本体小白的版本基础层 `create_version(session, change_order_ids, *, rollback_of=None, published_by, note)` 生成（骨架 `1aeb5d1` `app/modules/versioning/service.py` L57–66）：各模块启动时用 `register_section` 按段名登记组装函数（`sections.py` L20），发布时基础层逐段调用。**整版回滚** = 同一入口传 `rollback_of=<当前最新版本号>`（不是最新返回 409 `ROLLBACK_NOT_LATEST`）：生成一个**新版本**，**不调用**组装函数，快照原样复制**被回滚版本的上一版**（`target = latest.parent`，`change_summary.restoredFrom` 记上一版版本号），旧版本不改（`service.py` L84–95；契约 `app/contracts/versioning.py` 第 4 条 L9–16）[已定：本体小白、PDE]。动态登记 **`rules`、`lifecycles` 两个组装函数**；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`、`order`）。动态负责组装 `rules` 和 `lifecycles` 两段。
+整版发布时，**完整快照 = 静态各段 + `actionTypes` + `eventTypes` + `rules` + `lifecycles`**，**各段由所属模块组装**。版本由本体小白的版本基础层 `create_version(session, change_order_ids, *, rollback_of=None, published_by, note)` 生成（骨架 `6e3b38c` `app/modules/versioning/service.py` L57–66）：各模块启动时用 `register_section` 按段名登记组装函数（`sections.py` L20），发布时基础层逐段调用。**整版回滚** = 同一入口传 `rollback_of=<当前最新版本号>`（不是最新返回 409 `ROLLBACK_NOT_LATEST`）：生成一个**新版本**，**不调用**组装函数，快照原样复制**被回滚版本的上一版**（`target = latest.parent`，`change_summary.restoredFrom` 记上一版版本号），旧版本不改（`service.py` L84–95；契约 `app/contracts/versioning.py` 第 4 条 L9–16）[已定：本体小白、PDE]。动态登记 **`rules`、`lifecycles` 两个组装函数**；段内一律用**前端 id** 作键（如 `R-007`、`start_price_approval`、`order`）。动态负责组装 `rules` 和 `lifecycles` 两段。
 
 **`release.published` 事件** [已定：全员]：由版本层在 `create_version` 里、同一事务写 outbox，载荷 `{ver, parentVer, kind, rollbackOf, changeOrderIds}`，发布和回滚都发；动态不发这个事件，目前也不订阅。
 
@@ -394,7 +394,7 @@ stateDiagram-v2
 | 历史 | `lifecycle_version` 照旧单独保存全部历史版本（含 `snapshot` = `lifecycleAsOf`） |
 | 整版回滚 `restore_section` | 见下 |
 
-**整版回滚时恢复定义表**（`restore_section`）：骨架的 `SnapshotSectionBuilder` 有可选钩子 `async def restore_section(self, session: AsyncSession, content: Any | None) -> None`（骨架 `1aeb5d1` `app/contracts/versioning.py` L92–93）；回滚时 `create_version` 在同一事务里、写新版本之前调 `restore_sections(session, snapshot)`（`service.py` L94），对每个登记的 builder 传入**被恢复那一版**这一节的内容 `snapshot.get(section)`（`sections.py` L51–56）。没实现钩子的段只回快照、不动定义表。动态的 `rules`、`lifecycles` 两个 builder **都实现它**：
+**整版回滚时恢复定义表**（`restore_section`）：骨架协议 `RestorableSection`（`app/contracts/versioning.py`，CONVENTIONS §7，骨架 `40f30a7`）的钩子是 `async def restore_section(self, session: AsyncSession, content: Any | None, *, release_id: int) -> None`。回滚时**先写这次回滚的发布记录**（新的 `ontology_release` 行），再在**同一事务**里按登记顺序对每个实现了钩子的 builder 调用一次：`content` = **被恢复那一版**里本节的内容（`snapshot.get(section)`），`release_id` = 刚写的这条回滚发布记录的 `id` [已定：本体小白，群内约定]。没实现钩子的段只回快照、不动定义表。动态的 `rules`、`lifecycles` 两个 builder **都实现它**（动态用不到 `release_id`，只接收）：
 
 | 段 | `restore_section` 做什么 |
 |---|---|
@@ -490,7 +490,7 @@ stateDiagram-v2
 | 状态变化 / 非法迁移 | `GET /object-types/{id}/lifecycle/changes?illegal=1&page&size`、`/illegal?since=7d` | 一屏 6；非法迁移按 from→to 汇总，取 SM-ORD 命中 |
 | 行为汇总 | `GET /object-types/{id}/action-types`、`/action-runs?status&action&page`、`/rules`、`/rule-hits?rule&page` | 只读 |
 
-错误码：先用**通用错误码**（骨架 `1aeb5d1` `app/core/errors.py`、`CONVENTIONS.md` §2）：动作提交条件不满足（`:start-action`、`:stage`、`:confirm`，含问数「发起」经 `:stage`）→ 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed=[{name, fail}]`，`name`/`fail` 即动作类型提交条件的 `name`/`fail`（前端 `SubmitCond{kind, name, expr, fail}`，`mock/actionEvent.ts` L192；动态页面前端不求值提交条件，后台照 PDE 规则重新校验）[已定：PDE api-index `10a074e`，`ACTION_BLOCKED` 已取消，动态不另设码]；状态不允许 → 409 `STATE_INVALID`（原 `ACTION_STATE_INVALID`）；关闭原因、撤回原因、对账说明等必填为空 → 422 `VALIDATION_FAILED`，`details.fields=[{field, message}]`（原 `REASON_REQUIRED`）；另有 409 `DUPLICATE_KEY` / `EMPTY_INPUT` / `VERSION_CONFLICT` / `IDEMPOTENCY_CONFLICT`（同一幂等键、内容不同；或同动作类型同业务键已有在途动作 `[推断 P4]`；内容相同仍返回已有记录 `[推断 P9]`；骨架增量收进公共码）、403 `READONLY` / `NO_PERMISSION`、404 `NOT_FOUND`。动态新增（HTTP 状态由动态定）：
+错误码：先用**通用错误码**（骨架 `6e3b38c` `app/core/errors.py`、`CONVENTIONS.md` §2）：动作提交条件不满足（`:start-action`、`:stage`、`:confirm`，含问数「发起」经 `:stage`）→ 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed=[{name, fail}]`，`name`/`fail` 即动作类型提交条件的 `name`/`fail`（前端 `SubmitCond{kind, name, expr, fail}`，`mock/actionEvent.ts` L192；动态页面前端不求值提交条件，后台照 PDE 规则重新校验）[已定：PDE api-index `10a074e`，`ACTION_BLOCKED` 已取消，动态不另设码]；状态不允许 → 409 `STATE_INVALID`（原 `ACTION_STATE_INVALID`）；关闭原因、撤回原因、对账说明等必填为空 → 422 `VALIDATION_FAILED`，`details.fields=[{field, message}]`（原 `REASON_REQUIRED`）；另有 409 `DUPLICATE_KEY` / `EMPTY_INPUT` / `VERSION_CONFLICT` / `IDEMPOTENCY_CONFLICT`（同一幂等键、内容不同；或同动作类型同业务键已有在途动作 `[推断 P4]`；内容相同仍返回已有记录 `[推断 P9]`；骨架增量收进公共码）、403 `READONLY` / `NO_PERMISSION`、404 `NOT_FOUND`。动态新增（HTTP 状态由动态定）：
 
 | code | HTTP | 场景 |
 |---|---|---|
@@ -553,7 +553,7 @@ stateDiagram-v2
 - `PEOPLE` 不单独入库、不由后台读 JSON 返回；人放在 admin 模块的 `sys_user`（归 PDE / admin，表结构和用户种子由 admin 负责）。
 - 只用 `mock/dynamic.ts` 的 `PEOPLE`（7 人：王敏、陈立军、刘婷、孙浩然、何静、赵蕾、吴佳）；`actions.ts` L95 有一份相同的私有副本（不导出），不用管。
 - 人由 admin 的种子（骨架 `SYS_USERS.json`，归本体小白）收进 `sys_user`，带 `code`（前端 userId）：王敏 U010001、陈立军 U010002、何静 U010003、刘婷 U010004、孙浩然 U010005、赵蕾 U010007、吴佳 U010008（后三个前端没有 id，编号由 PDE 定，标 [推断]）[已定：群决定，PDE、本体小白]。**动态的种子不插人**，只在 admin 种子之后按**姓名**找到这 7 行设 `alert_assignable`；找不到就报错。`sys_user.name` 由 admin 种子保证不重名。
-- 这 7 人设 `alert_assignable` 标记。为了保留下拉顺序，建议该列用 `smallint null`：null = 不可转派，1–7 = `PEOPLE` 里的顺序 [已定：本体小白，列加在骨架 admin 的 `sys_user`，admin 种子不填值，由动态的种子按姓名设]。`GET /people` 按它升序返回姓名。
+- 这 7 人设 `alert_assignable` 标记。为了保留下拉顺序，该列用 `smallint null`：null = 不可转派，1–7 = `PEOPLE` 里的顺序 [已定：本体小白，列加在骨架 admin 的 `sys_user`，admin 种子不填值，由动态的种子按姓名设]。`GET /people` 按它升序返回姓名。
 - **人员字段**：告警的 `assignee`、动作的 `confirmer`/发起人、日志里的操作人照 mock 存姓名，是软引用，不做外键（跟静态定义上的 `owner` 同一写法）。当前用户由 `X-Demo-As`/`RENGU_DEV_USER` 传 `sys_user.code` 解析成 `CurrentUser`，判断「本人」（认领、关闭、确认提交、撤回、方案 owner）时用 `CurrentUser` 的姓名比。
 
 | mock 文件 / 导出 | 写入表 | 当前条数（master `5fb26ab` 实跑） | 注意 |
@@ -584,7 +584,7 @@ stateDiagram-v2
 5. 执行记录合并（`ACTIONS` 141 + `RUNS` 1,849）[已定：PDE、本体小白]。**不改任何 mock 值**：
    - 动作名：mock 的 `action` 是中文名，按 `ACTION_TYPES.name` 映射成 `action_type_id`；RUNS 直接用 `typeId`。
    - **id 不重叠**（ACTIONS `ACT-20260829-0412`～`ACT-20261025-0552`，RUNS 各日 `2001`～`3849` 段），合并共 1,990 条。入库前校验合并后 `id` 无重复，重复即失败。
-   - **幂等键有 31 个重复**（都是 `act-al-…`：两份 mock 都给告警关联的动作用了 `act-<告警号>`），例如 `act-al-20261025-0127` = ACTIONS `ACT-20261025-0550` 与 RUNS `ACT-20261025-3848`；`act-al-20261024-0105` = ACTIONS 0527（结果未知）与 RUNS 3779（成功）；`act-al-20261012-0018` = ACTIONS 0430 与 RUNS 3622（已对账）。**原样入库、不去重**（两个页面都显示这些键），`is_seed=true`；唯一约束用骨架的部分唯一索引 `unique_except_seed("action_run", "idem_key")` → `CREATE UNIQUE INDEX uq_action_run_idem_key_nonseed ON action_run (idem_key) WHERE NOT is_seed`（骨架 `1aeb5d1` `app/db/base.py` L106–117，`CONVENTIONS.md` §9「规则」第 5 条），只管新记录。已实跑核对：ACTIONS 141 + RUNS 1,849（各动作类型 `runsOf` 并集）按 id 合并 1,990 条，重复的 `idem_key` **31 个**、全是 `act-al-…`，各出现 2 次，共 62 行。校验：重复只允许出现在种子之间，且数量 = 31。
+   - **幂等键有 31 个重复**（都是 `act-al-…`：两份 mock 都给告警关联的动作用了 `act-<告警号>`），例如 `act-al-20261025-0127` = ACTIONS `ACT-20261025-0550` 与 RUNS `ACT-20261025-3848`；`act-al-20261024-0105` = ACTIONS 0527（结果未知）与 RUNS 3779（成功）；`act-al-20261012-0018` = ACTIONS 0430 与 RUNS 3622（已对账）。**原样入库、不去重**（两个页面都显示这些键），`is_seed=true`；唯一约束用骨架的部分唯一索引 `unique_except_seed("action_run", "idem_key")` → `CREATE UNIQUE INDEX uq_action_run_idem_key_nonseed ON action_run (idem_key) WHERE NOT is_seed`（骨架 `6e3b38c` `app/db/base.py` L106–117，`CONVENTIONS.md` §9「规则」第 5 条），只管新记录。已实跑核对：ACTIONS 141 + RUNS 1,849（各动作类型 `runsOf` 并集）按 id 合并 1,990 条，重复的 `idem_key` **31 个**、全是 `act-al-…`，各出现 2 次，共 62 行。校验：重复只允许出现在种子之间，且数量 = 31。
    - **告警关联**：RUNS 里有 232 条引用的告警在 ACTIONS 里也有关联动作。**两边都保留、不去重**（前端两个页面各自显示）；`alert.action_run_id` 按 `Alerts.vue` L23–28 取 ACTIONS 中 `source.alertId` 匹配的第一条，告警页不变；RUNS 的 `alert_id` 原样存。
    - **来源取值**：RUNS 是「告警处理」，ACTIONS 是「告警」。库内统一 `source_type=alert`，`source_label` 存原文，接口按原文返回，各页显示不变。
 6. 页面之间对不上不处理 [已定：用户规则]：mock 数据不要求跨页一致；按天 / 按周统计与明细对不上的（如 `runDaily`、`eventDaily`）**按 mock 原样入库**，不需要用户再定。
