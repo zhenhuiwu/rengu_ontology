@@ -26,8 +26,8 @@ export const NAV: NavArea[] = [
         { key: 'qa-pages', title: '我的页面与模板库', path: '/use/qa/pages', phase: 1, note: '卡片与固定看板第一期；拖拽编辑、共享、订阅第二期' },
       ] },
       { key: 'objects', title: '对象', icon: 'AppstoreOutlined', pages: [
-        { key: 'object-search', title: '对象搜索', path: '/use/objects/search', phase: 1, note: '全局入口，按类型浏览' },
-        { key: 'object-detail', title: '对象详情', path: '/use/objects/detail', phase: 1, note: '页签：属性、时间线、关联对象；动作就地弹出确认；也做成公共抽屉' },
+        { key: 'object-search', title: '对象搜索', path: '/use/objects/search', phase: 1, note: '全局入口，按类型浏览', component: () => import('@/pages/objects/ObjectSearch.vue') },
+        { key: 'object-detail', title: '对象详情', path: '/use/objects/detail', phase: 1, note: '页签：属性、时间线、关联对象；动作就地弹出确认；也做成公共抽屉', component: () => import('@/pages/objects/ObjectDetail.vue') },
       ] },
       { key: 'ops', title: '运行', icon: 'ThunderboltOutlined', pages: [
         { key: 'alerts', title: '告警处理', path: '/use/ops/alerts', phase: 2, note: '含状态机违规这类告警；抽屉看对象和触发规则', component: () => import('@/pages/ops/Alerts.vue') },
