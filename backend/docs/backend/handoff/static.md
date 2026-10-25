@@ -65,6 +65,11 @@
 12. **`semantic_map` 契约没做**：`app/contracts/static.py:7` TODO（static-api.md §3.7，给本体小白）。
 13. **草稿项仍在定义表**：草稿 / 已驳回的关系、知识、取值仍放在定义表里，用 `status` / `draft_cr` 区分（`models.py:12-25`）；按 §1.3 应移到 cr_item，依赖第 9 条。
 14. **种子里已删除的 CR**：开发库 `rengu_static_integ` 里 CR-0013、CR-0012 在测试中被删了，需要的话重新灌种子。
+15. **Releases.vue 变更单回退 mock 时写按钮仍走真接口**（审核意见，`Releases.vue:39-47`）
+   - 缺：`loadCRs` 失败时列表显示 mock 变更单，但提交 / 审批 / 删除 / 发布按钮仍调真接口，会 404/409。
+   - 从哪开始：失败时记一个 `crFallback` 标记，为 true 时禁用写按钮或提示「演示数据」。
+16. **发布 / 回滚后端不校验权限**：前端只用 `isAdmin` 拦，`require_func` 目前不拦（权限是初版）。从 `router.py` 发布 / 回滚路由加功能码开始。
+17. **`/ontology/graph?ver=` 不按版本筛节点**：从快照 `objects` / `links` 节取，对应第 8 条总览页切换。
 
 ### [推断] 决定清单（前端没定义，后台自行定的；请用户 / PDE 确认）
 
