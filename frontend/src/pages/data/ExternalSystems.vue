@@ -2,7 +2,7 @@
 /**
  * 外部系统：动作写回用到的系统（CRM、WMS、短信、顺丰……）。
  * 左侧系统列表，右侧配置（地址、认证、幂等、超时 / 重试）+ 最近调用（simple 分页，按结果筛选）。
- * 调用结果颜色按时间线规则：成功 灰、结果未知 橙、失败 红。点“详情”打开调用抽屉（?call=），结果未知可按幂等键重试或人工核对。
+ * 调用结果颜色按时间线规则：成功 灰、结果未知 橙、失败 红。点“详情”打开调用抽屉（?call=），结果未知不在本页重试：写回调用到动作中心对账（?tab=unknown&act=），通知类不支持幂等的人工核对。
  * 关联动作：按动作类型的 sysId（mock/actionEvent.ts）过滤得到，点动作名进动作类型；不做写回的集成（短信、企业微信、顺丰、美团）显示用途。
  * 新建 / 编辑系统：配置抽屉（?edit=EXT-WMS / ?edit=new），保存前确认；测试调用：确认后发一次连通性请求，结果记入最近调用。
  * URL：?sys=EXT-WMS&result=失败&call=WMS-00012&edit=EXT-WMS
@@ -16,8 +16,9 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { paginate, EMPTY } from '@/mock';
-import { EXT_SYSTEMS, extCalls, type CallResult, type ExtCall, type ExtOp, type ExtSystem } from '@/mock/extsys';
-import { ACTION_TYPES } from '@/mock/actionEvent';
+import { EXT_SYSTEMS, extCalls, type CallResult, type ExtCall, type ExtOp, type ExtSample, type ExtSystem } from '@/mock/extsys';
+import { ACTION_TYPES, runsOf, type ActionType, type ActionRun } from '@/mock/actionEvent';
+import { ACTIONS, RULE_CONFIRMER, OBJ_KIND_LABEL, type ActionRecord } from '@/mock/actions';
 
 const route = useRoute();
 const router = useRouter();
@@ -32,12 +33,35 @@ const selected = computed<ExtSystem>(() => systems.find((s) => s.id === q('sys')
 const linked = computed(() => ACTION_TYPES.filter((a) => a.sysId === selected.value.id));
 const opsOf = (sys: ExtSystem): ExtOp[] => {
   const acts = ACTION_TYPES.filter((a) => a.sysId === sys.id);
-  if (acts.length) return acts.map((a) => { const [method, path] = a.endpoint.split(' '); return { name: a.name, method, path }; });
+  // 草稿动作没有执行过，不产生调用记录
+  if (acts.length) return acts.filter((a) => a.status !== '草稿').map((a) => { const [method, path] = a.endpoint.split(' '); return { name: a.name, method, path, samples: samplesOf(a) }; });
   return (sys.usage?.ops ?? []).map((name) => ({ name }));
 };
+/**
+ * 调用记录的对象 / 发起人取自动作执行记录：优先动作中心（mock/actions.ts，结果未知可按 ACT 编号跳去对账），
+ * 动作中心未收录的动作类型取动作类型页的执行记录（只取已有结果的，不产生结果未知）。
+ * 对象类型 = 动作类型的目标对象；发起人是人，或“规则 R-027 · 确认人 吴佳”（规则只暂存动作，由固定确认人提交；R-021 只告警）。
+ */
+const ruleActor = (rule: string) => `规则 ${rule} · 确认人 ${RULE_CONFIRMER[rule] ?? '—'}`;
+const withType = (type: string, label: string) => (label.includes(type) ? label : `${type} ${label}`);
+const fromCenter = (x: ActionRecord): ExtSample => ({
+  obj: withType(OBJ_KIND_LABEL[x.objKind], x.objLabel), actor: x.source.ruleId ? ruleActor(x.source.ruleId) : x.initiator,
+  runId: x.id, idemKey: x.idemKey, unknown: x.status === '结果未知',
+  time: x.log.find((l) => l.text.startsWith('调用'))?.time ?? x.submittedAt,
+});
+const fromRun = (a: ActionType, x: ActionRun): ExtSample => ({
+  obj: withType(a.target, x.objLabel.replace(/^分群 · /, '')), actor: x.ruleId ? ruleActor(x.ruleId) : x.initiator,
+  runId: x.id, idemKey: x.idemKey, unknown: false,
+});
+const DONE = ['成功', '失败', '结果未知', '已对账', '执行中'];
+function samplesOf(a: ActionType): ExtSample[] {
+  const center = ACTIONS.filter((x) => x.action === a.name && DONE.includes(x.status));
+  if (center.length) return center.map(fromCenter);
+  return runsOf(a.id).filter((x) => DONE.includes(x.status)).map((x) => fromRun(a, x));
+}
 const actionCount = (sys: ExtSystem) => ACTION_TYPES.filter((a) => a.sysId === sys.id).length;
-// 状态点：正常 / 停用 灰，降级 橙（不用绿、蓝）
-const statusBadge = (s: ExtSystem['status']) => (s === '降级' ? 'warning' : 'default');
+// 状态点：正常 / 停用 灰，降级 红（有失败调用）；橙色只留给 待确认 / 结果未知，不用绿、蓝
+const statusBadge = (s: ExtSystem['status']) => (s === '降级' ? 'error' : 'default');
 const resultText = (r: CallResult) => (r === '结果未知' ? '结果未知 · 待对账' : r);
 
 // 调用记录：本页内可改（重试 / 核对后结果会变）
@@ -78,16 +102,8 @@ const reqBody = (c: ExtCall) => JSON.stringify({ action: c.action, target: c.tar
 const respBody = (c: ExtCall) => (c.http == null ? `（${selected.value.timeoutMs / 1000} 秒内没有收到响应）` : JSON.stringify(c.http === 200 ? { code: 0, msg: 'success' } : { code: c.http, msg: c.http === 429 ? '请求过于频繁' : c.http === 401 ? '签名校验失败' : '服务暂时不可用' }, null, 2));
 
 const confirm = useConfirmStore();
-async function retry(c: ExtCall) {
-  const ok = await confirm.ask({
-    title: '用同一幂等键重试', target: `${c.action} · ${c.target}`, okText: '重试',
-    fields: [{ label: '系统', value: `${selected.value.name}（${selected.value.vendor}）` }, { label: '幂等键', value: c.idemKey ?? EMPTY }, { label: '原调用', value: `${c.id} · ${c.time}` }],
-    impact: `这次调用超时，系统没有自动重试。请先对账；确认要重试时，对方按幂等键 ${c.idemKey} 去重：上次已处理则只返回原结果，不会重复执行。`,
-  });
-  if (!ok) return;
-  overrides.value[c.id] = { result: '成功', http: 200, ms: 236, attempt: c.attempt + 1, msg: '人工对账后重试成功：对方返回原处理结果（幂等命中）' };
-  message.success('重试成功：对方已处理过，返回原结果');
-}
+/** 写回调用结果未知：不在本页重试，到动作中心按执行记录对账 */
+const reconcileLink = (c: ExtCall) => ({ path: '/use/ops/actions', query: { tab: 'unknown', act: c.runId } });
 async function markChecked(c: ExtCall) {
   const ok = await confirm.ask({
     title: '人工核对结果', target: `${c.action} · ${c.target}`, okText: '确认对方已处理', tag: '结果未知 · 待对账',
@@ -226,7 +242,7 @@ async function saveEdit() {
           <a-tag>{{ selected.category }}</a-tag>
           <a-tag>{{ selected.env }}</a-tag>
           <a-badge :status="statusBadge(selected.status)" :text="selected.status" />
-          <span v-if="selected.status === '降级'" class="t-12 tl-attention">最近 6 次调用有失败 / 结果未知；结果未知不自动重试，需对账</span>
+          <span v-if="selected.status === '降级'" class="t-12 c-2">最近 6 次调用有失败 / 结果未知；结果未知不自动重试，需对账</span>
         </div>
         <a-space>
           <a-tooltip :title="reason"><a-button :disabled="readonly" :loading="testing" @click="testCall">测试调用</a-button></a-tooltip>
@@ -241,7 +257,7 @@ async function saveEdit() {
           <a-descriptions-item label="凭证" :span="2"><span class="num">{{ selected.authDetail }}</span></a-descriptions-item>
           <a-descriptions-item label="幂等">
             <span v-if="selected.idempotent">支持 · <span class="num">{{ selected.idemKey }}</span></span>
-            <span v-else class="tl-attention">不支持（从不重试；结果未知需人工对账）</span>
+            <span v-else class="c-2">不支持（从不重试；结果未知需人工对账）</span>
           </a-descriptions-item>
           <a-descriptions-item label="超时"><span class="num">{{ selected.timeoutMs / 1000 }} 秒</span></a-descriptions-item>
           <a-descriptions-item label="限流">{{ selected.rateLimit }}</a-descriptions-item>
@@ -284,11 +300,15 @@ async function saveEdit() {
     <template v-if="call">
       <div class="ex-dr-status" :class="tl(call.result)"><QuestionCircleOutlined v-if="call.result === '结果未知'" /><span v-else class="ex-dot" /><span class="t-16 fw-600">{{ resultText(call.result) }}</span></div>
       <div class="t-12 c-2 ex-dr-msg">{{ call.msg }}</div>
+      <div v-if="call.result === '结果未知'" class="t-12 c-2 ex-dr-note">
+        处理方式：调用超时即标记为结果未知，系统不自动重试；{{ selected.idempotent ? '每 15 分钟按幂等键向对方查询一次处理结果，查到即自动更新' : '对方不支持幂等，无法自动查询' }}；仍查不到时，在动作中心“结果未知与对账”中人工对账。
+      </div>
       <a-descriptions :column="1" bordered size="small" class="ex-desc">
         <a-descriptions-item label="系统">{{ selected.name }}（{{ selected.vendor }}）</a-descriptions-item>
         <a-descriptions-item label="动作">{{ call.action }}</a-descriptions-item>
         <a-descriptions-item label="对象"><span class="num">{{ call.target }}</span></a-descriptions-item>
         <a-descriptions-item label="发起人">{{ call.actor }}</a-descriptions-item>
+        <a-descriptions-item v-if="call.runId" label="执行记录"><span class="num">{{ call.runId }}</span></a-descriptions-item>
         <a-descriptions-item label="时间"><span class="num">{{ call.time }}</span></a-descriptions-item>
         <a-descriptions-item label="请求"><span class="num">{{ call.method }} {{ call.path }}</span></a-descriptions-item>
         <a-descriptions-item label="幂等键"><span class="num">{{ call.idemKey ?? '不支持' }}</span></a-descriptions-item>
@@ -301,9 +321,9 @@ async function saveEdit() {
     </template>
     <template v-if="call && call.result === '结果未知'" #footer>
       <div class="ex-foot">
-        <a-tooltip :title="reason">
-          <a-button v-if="call.idemKey" type="primary" :disabled="readonly" @click="retry(call)">用同一幂等键重试</a-button>
-          <a-button v-else type="primary" :disabled="readonly" @click="markChecked(call)">人工核对</a-button>
+        <router-link v-if="call.runId" :to="reconcileLink(call)"><a-button type="link">去动作中心对账</a-button></router-link>
+        <a-tooltip v-else :title="reason">
+          <a-button type="primary" :disabled="readonly" @click="markChecked(call)">人工核对</a-button>
         </a-tooltip>
       </div>
     </template>
@@ -372,6 +392,7 @@ async function saveEdit() {
 .ex-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .ex-dr-status { display: flex; align-items: center; gap: 8px; }
 .ex-dr-msg { margin: 4px 0 12px 16px; }
+.ex-dr-note { margin: -4px 0 12px 16px; padding: 8px 12px; background: var(--g2); border-radius: var(--radius); }
 .ex-dr-sub { margin: 16px 0 6px; }
 .ex-pre { background: var(--g2); border: var(--border); border-radius: var(--radius); padding: 8px 12px; margin: 0; color: var(--g9); white-space: pre-wrap; }
 .ex-foot { display: flex; justify-content: flex-end; }
