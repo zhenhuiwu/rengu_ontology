@@ -6,9 +6,10 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from pydantic import ValidationError
 
 from app.common.auth import CurrentUserDep, require_func
-from app.common.pagination import MAX_PAGE_SIZE
+from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
 from app.modules.dynamic.catalog import JsonRefCatalog, get_catalog
 from app.modules.dynamic.ports import PortsDep
@@ -30,12 +31,34 @@ from app.modules.dynamic.schemas import (
     TransferIn,
     WithdrawIn,
 )
-from app.modules.dynamic.service import ActionService, AlertService
+from app.modules.dynamic.service import ActionService, AlertService, validation_failed
 
 router = APIRouter(tags=["dynamic"])
 
 CatalogDep = Annotated[JsonRefCatalog, Depends(get_catalog)]
-PageQ = Annotated[int, Query(ge=1)]
+
+
+def _page_params(default_size: int):
+    """页码参数一律交给骨架 PageParams（page 的下限 / 收拢由骨架定，这里不设 ge）；只有默认条数照前端。
+
+    骨架 9c3e506 起 page ≤ 0 在 PageParams 里收成 1；在它之前的骨架上 PageParams 自己拒绝 page < 1，
+    这里转成 422 VALIDATION_FAILED（和骨架 PageParamsDep 当时的行为一致），不自己收拢。
+    """
+
+    def dep(
+        page: Annotated[int, Query()] = 1,
+        size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = default_size,
+    ) -> PageParams:
+        try:
+            return PageParams(page=page, size=size)
+        except ValidationError as e:
+            raise validation_failed("page", e.errors()[0]["msg"]) from e
+
+    return dep
+
+
+AlertPageQ = Annotated[PageParams, Depends(_page_params(12))]  # Alerts.vue 每页 12
+ActionPageQ = Annotated[PageParams, Depends(_page_params(16))]  # Actions.vue 每页 16
 
 # 功能权限（require_func 目前是桩，PDE 接入后生效）。
 # 页面 key 与级别照前端 nav / roles.ts（FuncLevel = view / manage）：
@@ -66,15 +89,14 @@ ActionSvc = Annotated[ActionService, Depends(_actions)]
 
 @router.get("/alerts", response_model=AlertPage, dependencies=ALERTS_VIEW)
 async def list_alerts(
+    page: AlertPageQ,
     svc: AlertSvc,
     status_: Annotated[str, Query(alias="status")] = "open",
     level: str | None = None,
     rule_id: Annotated[str | None, Query(alias="ruleId")] = None,
     kw: str | None = None,
-    page: PageQ = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 12,
 ) -> AlertPage:
-    return await svc.search(status=status_, level=level, rule_id=rule_id, kw=kw, page=page, size=size)
+    return await svc.search(status=status_, level=level, rule_id=rule_id, kw=kw, page=page)
 
 
 @router.get("/alerts/{code}", response_model=AlertDetail, dependencies=ALERTS_VIEW)
@@ -125,6 +147,7 @@ async def people(session: SessionDep, _user: CurrentUserDep) -> list[str]:
 
 @router.get("/action-runs", response_model=ActionRunPage, dependencies=ACTIONS_VIEW)
 async def list_action_runs(
+    page: ActionPageQ,
     svc: ActionSvc,
     tab: str | None = None,
     status_: Annotated[str | None, Query(alias="status")] = None,
@@ -138,15 +161,12 @@ async def list_action_runs(
     session_id: Annotated[str | None, Query(alias="sessionId")] = None,
     kw: str | None = None,
     scope: Annotated[str | None, Query(description="[推断] center/runs/all；有 tab 时固定 center")] = None,
-    page: PageQ = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 16,
 ) -> ActionRunPage:
     return await svc.search(
         tab=tab,
         status=status_,
         scope=scope,
         page=page,
-        size=size,
         action=action,
         action_type=action_type,
         sys_id=sys_id,

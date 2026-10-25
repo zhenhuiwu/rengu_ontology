@@ -106,16 +106,16 @@ def validation_failed(field: str, message: str) -> AppError:
     )
 
 
-async def fetch_page(
-    session: AsyncSession, stmt: Select, page: int, size: int
-) -> tuple[list, int, PageParams]:
+async def fetch_page(session: AsyncSession, stmt: Select, pp: PageParams) -> tuple[list, int, PageParams]:
     """dynamic 唯一的分页切片处：count + offset/limit，返回 (本页行, total, 实际页码参数)。
 
-    TODO(skeleton): app.common.pagination 目前只有 Page / PageParams，没有切片 helper；骨架即将加上
-    （越界页码夹到最后一页，total=0 → page=1）。加上后这里直接改调骨架 helper，调用方不用动。
+    TODO(skeleton): 本分支基线 a70cba2 的骨架还没有收拢 helper。骨架分支 9521968 / 9c3e506（未合并）加了
+    `PageParams.clamp(total)`、`BaseRepository.list_page`（先 count 再按收拢后的页取）和 `Page.of(...)`；
+    合并后删掉本函数，两个 search 改成 `rows, total = await self.repo.list_page(stmt, page)` +
+    `AlertPage.of / ActionRunPage.of(items, total, page, counts=...)`
+    （越界收拢由骨架做，不是 dynamic 的 [推断]）。
     """
     total = int(await session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0)
-    pp = PageParams(page=page, size=size)
     rows = list((await session.scalars(stmt.offset(pp.offset).limit(pp.size))).all())
     return rows, total, pp
 
@@ -317,8 +317,7 @@ class ActionService:
         tab: str | None,
         status: str | None,
         scope: str | None,
-        page: int,
-        size: int,
+        page: PageParams,
         **filters: Any,
     ) -> ActionRunPage:
         if tab is not None and tab not in ACTION_TABS:
@@ -346,7 +345,7 @@ class ActionService:
         if tab == "unknown":
             order = (case((ActionRun.status == ActionStatus.unknown, 0), else_=1), *order)
         stmt = stmt.order_by(*order)
-        rows, total, pp = await fetch_page(self.session, stmt, page, size)
+        rows, total, pp = await fetch_page(self.session, stmt, page)
 
         tab_counts = dict(
             (
@@ -864,7 +863,7 @@ class AlertService:
         return run is not None and run.status in IN_FLIGHT
 
     async def search(
-        self, *, status: str, level: str | None, rule_id: str | None, kw: str | None, page: int, size: int
+        self, *, status: str, level: str | None, rule_id: str | None, kw: str | None, page: PageParams
     ) -> AlertPage:
         if status not in ALERT_TABS:
             raise validation_failed("status", "status 只能是 open / doing / closed / all")
@@ -882,7 +881,7 @@ class AlertService:
                 or_(Alert.code.contains(k, autoescape=True), Alert.obj_label.contains(k, autoescape=True))
             )
         stmt = stmt.order_by(*seed_first_order(Alert))
-        rows, total, pp = await fetch_page(self.session, stmt, page, size)
+        rows, total, pp = await fetch_page(self.session, stmt, page)
         links = await self._links(rows)
         by_status = dict(
             (await self.session.execute(select(Alert.status, func.count()).group_by(Alert.status))).all()

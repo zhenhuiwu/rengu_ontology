@@ -206,3 +206,17 @@ async def test_start_action_errors(dyn, client, fakes):  # noqa: F811
     b = err(await client.post(f"{API}/alerts/{OPEN_ORDER}:start-action"), 409, "STATE_INVALID")
     assert b["message"] == "规则未绑定动作"
     assert await dyn.scalar(select(Alert.action_run_id).where(Alert.code == OPEN_ORDER)) is None
+
+
+async def test_page_params_come_from_skeleton(dyn, client):  # noqa: F811
+    """页码交给骨架 PageParams：默认条数照前端（12 / 16），size 照传；page ≤ 0 不由 dynamic 决定——
+    骨架收拢（9c3e506 起）→ 第 1 页；更早的骨架 PageParams 拒绝 → 422 VALIDATION_FAILED。两种都不能是 500。"""
+    assert (await client.get(f"{API}/alerts")).json()["size"] == 12
+    assert (await client.get(f"{API}/action-runs")).json()["size"] == 16
+    assert (await client.get(f"{API}/alerts", params={"size": 5})).json()["size"] == 5
+    for path in ("/alerts", "/action-runs"):
+        r = await client.get(f"{API}{path}", params={"page": 0})
+        if r.status_code == 200:
+            assert r.json()["page"] == 1
+        else:
+            assert err(r, 422, "VALIDATION_FAILED")["details"]["fields"][0]["field"] == "page"
