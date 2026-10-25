@@ -721,6 +721,10 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
 - 前端编辑/回滚不走变更单，后台照此实现；是否改为走变更单（像 FN-003 随 CR-0011 那样）列入 §5 [推断]。
 
+### 3.9 总览图谱（`/build/ontology` 总览页）
+
+- `GET /ontology/graph?ver=`（api-index §3.4、第 168 号）。**已实现**：`{nodes: LinkObject[], edges: {from, to, linkId, status}[]}`；nodes = 已发布对象类型（mock `LINK_OBJECTS` 去掉草稿储值卡）[推断]，edges = 两端都在 nodes 里的关系，`status` 给前端区分实线 / 虚线 [推断]；版本不存在 404。节点坐标仍由前端写死。总览页（`OntologyOverview.vue`）还没切换。
+
 ## 4. 通用约定
 
 - **前缀**：`/api/ontology/v1`。

@@ -474,6 +474,23 @@ async def test_knowledge(client, static_seeded):
     await get(client, "/knowledge/K-999", 404)
 
 
+# ---------------------------------------------------------------- 总览图谱
+
+
+async def test_ontology_graph(client, static_seeded):
+    g = await get(client, "/ontology/graph")
+    want = [x for x in load("LINK_OBJECTS.json") if not x.get("draft")]
+    assert sorted(g["nodes"], key=lambda x: x["id"]) == sorted(want, key=lambda x: x["id"])
+    ids = {x["id"] for x in want}
+    assert g["edges"] == [
+        {"from": x["from"], "to": x["to"], "linkId": x["id"], "status": x["status"]}
+        for x in LINKS
+        if x["from"] in ids and x.get("to") in ids
+    ]
+    assert len(g["nodes"]) == 17 and "stored_card" not in ids
+    await get(client, "/ontology/graph?ver=v1999.01.1", 404)
+
+
 # ---------------------------------------------------------------- ?ver= / ?previewAs=
 
 

@@ -229,6 +229,26 @@ class StaticService:
         runtime = {x["id"]: {k: x[k] for k in history.LINK_RUNTIME if k in x} for x in cur}
         return [{**d, **runtime.get(i, {})} for i, d in in_order(sec, cur)]
 
+    async def graph(self) -> Obj:
+        """总览图谱（OntologyOverview.vue draw()；api-index §3.4 `/ontology/graph`）。
+
+        nodes = LINK_OBJECTS 形状，取已发布的对象类型（mock LINK_OBJECTS 没有草稿对象类型 purchase）；
+        草稿对象（如 CR-0012 的储值卡）只在变更单里、不是对象类型，不返回
+        （同 src/api/static.ts loadObjects）[推断]。
+        edges = 两端都在 nodes 里的关系 `{from, to, linkId, status}`（`?ver=` 按该版本快照的关系）；
+        `status` 给前端区分实线 / 虚线 [推断]。节点坐标仍由前端写死。
+        """
+        await self._check_ver()
+        objs = [o for o in await self.repo.object_types() if o.status.value == "已发布"]
+        nodes = [shapes.object_link_obj(o) for o in objs]
+        ids = {n["id"] for n in nodes}
+        edges = [
+            {"from": x["from"], "to": x["to"], "linkId": x["id"], "status": x.get("status")}
+            for x in await self._links()
+            if x.get("from") in ids and x.get("to") in ids
+        ]
+        return {"nodes": nodes, "edges": edges}
+
     async def link_list(self, q: str, src: str, st: str, p: PageParams, focus_id: str | None) -> Obj:
         objs = {o.code: o.display_name for o in await self.repo.object_types()}
         name = lambda i: objs.get(i, i)  # noqa: E731  mock objName：不在 LINK_OBJECTS 的原样显示 id

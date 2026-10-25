@@ -11,6 +11,7 @@
 
 后台（`backend/app/modules/static/`，前缀 `/api/ontology/v1`）：
 - **定义表**（static_0001）：对象类型、属性、字段映射、关系类型、问数路径（`onto_qa_path` / `_step` / `_example`）、指标及口径版本、维度 / 层级 / 取值 / 说法映射、业务知识及适用范围等；种子由 export-mock JSON 灌入。
+- **总览图谱 `GET /ontology/graph`**（`service.py` `graph`）：`{nodes: LinkObject[], edges: {from,to,linkId,status}[]}`，nodes = 已发布对象类型（同 mock LINK_OBJECTS 去掉草稿储值卡），edges = 两端都在 nodes 里的关系，支持 `?ver=`。
 - **26 个只读 GET**：对象类型 7、关系类型 5、指标 4、维度 6、业务知识 4（`router.py:86-267`），支持 `?ver=` 读历史版本（§2.7）和 `?previewAs=`，返回记录与 mock 同形（`shapes.py`）。
 - **7 个快照 section**（`sections.py`）：objectTypes、properties、links、metrics、dimensions、terms、**qaPaths**（已在骨架 `SECTION_OWNERS` 登记）；`seed_section` 按版本规则裁剪，`build_section` 发布时组装。
 - **static_0002**（`change_request` + `cr_event`，down = `event_0002`；dynamic_0002 会接在它后面，**不要改名或重新编号**）。
@@ -35,10 +36,7 @@
    - 缺：表上同时有 `(from_object_id, to_object_id, seq)` 和 `(group_key, seq)` 两个唯一约束；应保留前者、删掉 `uq_onto_qa_path_group_key_seq`。
    - 为什么：原计划在 static_0002 里顺带清理，但 static_0002 只做了变更单表；`group_key` 作为 seed 业务键仍在用。
    - 从哪开始：`app/modules/static/models.py:337` 删掉 `UniqueConstraint("group_key", "seq")`；在 static_0002 的 upgrade/downgrade 里 drop/create `uq_onto_qa_path_group_key_seq`（原约束建在 `static_0001_static_definitions.py:791`）。迁移文件名和 revision 不改。
-3. **`GET /ontology/graph` 没做**
-   - 缺：总览图谱接口（api-index.md:597、:1302，返回 `{nodes, edges}`，数据来自 `mock/links.ts`）。
-   - 为什么：总览页（OntologyOverview）没切换，暂时没有调用方。
-   - 从哪开始：`router.py` 加一个 `@get("/ontology/graph", ...)`，`service.py` 用现有 links / objects 读取拼出来。
+3. ~~`GET /ontology/graph` 没做~~ **已完成**（见「已完成」）。总览页本身仍没切换（第 8 条）；储值卡这类草稿对象不在 nodes 里 [推断]。
 4. ~~变更单列表不分页~~ **已完成**（见「已完成」）。仍不随 `?ver` 变 [推断]。
 5. **`lockVersion` 收下但没校验**
    - 缺：`POST /releases` 的 `lockVersion` 没和当前版本比对。
@@ -55,7 +53,7 @@
 8. **总览页（OntologyOverview.vue）没切换**
    - 缺：仍读 mock（links / actionEvent / metrics / objectProps / changes / quality / releases）。
    - 为什么：这是共用页，数据跨静态 / 动态 / 质量模块。
-   - 从哪开始：先做第 3 条 graph 接口，再和各模块负责人商定。
+   - 从哪开始：graph 接口已有（`/ontology/graph`）；页面里 `LINK_OBJECTS` / `LINKS` 换成接口数据，其余卡片和各模块负责人商定。
 9. **变更单写路径没做**
    - 缺：发起变更 `POST /change-requests`、加入已有 `/targets`、保存草稿 `PUT /items`、放弃对象草稿、`:validate`、改动分页 `/diffs`、`PATCH migration`。真接口模式下 5 个定义页的编辑仍只改前端本地 mock，不落库。
    - 为什么：需要 cr_item / cr_target / cr_check / cr_impact / cr_trial 表（§1.3 已设计），static_0002 只建了 `change_request`（CRDetail 整份存 `detail` jsonb）和 `cr_event`。
@@ -84,6 +82,7 @@
 - 种子：export-mock 没导出的页内常量照抄（ORDER_MAP_ROWS、Metrics.vue DENY、ObjectTypes.vue TYPES 草稿状态）；非对象关系端点只存 code；METRIC_DEF 等共用示例存到每个指标（`seeds/__init__.py`）。
 - 快照里没有该节（版本早于静态登记 section）时按当前表 + §2.7 规则现算（`service.py:6`）。
 - `GET /dimensions/{id}?full=true` 返回完整 DimItem，给前端整表载入用。
+- `/ontology/graph`：nodes 只取已发布对象类型，草稿储值卡不出；edges 多带 `status`。
 - 前端：草稿对象（如 CR-0012 的储值卡）静态接口不返回，前端保留 mock 的草稿项（`src/api/static.ts:62`）。
 - 行级范围：「商品.品类」范围值按名称最接近的一级类目映射（`contracts/static.py`）；「会员.常去门店所属大区」按注册门店所属大区（static-api.md §5-15）。
 - 其余见 static-api.md 正文的 [推断] 标注和 §5 第 18 条。
@@ -109,6 +108,6 @@
 
 1. 本地起服务：开发库 `DATABASE_URL=postgresql+asyncpg://…/rengu_static_integ`，`alembic upgrade head` 后灌种子；前端在 `.env.local` 设 `VITE_API_REAL_MODULES=static`（**不提交**），代理到后台。
 2. 测试：`RENGU_TEST_DB=<自己的测试库> pytest -q`，`ruff check . && ruff format --check .`，`npx vue-tsc --noEmit`，`npm run build`。
-3. 建议顺序：第 3 条（graph 接口）→ 第 1 条（restore_section，在 `begin_nested` 里按外键顺序写，测试：回滚后 GET 返回旧定义）→ 第 9 条（cr_* 表 + 写路径，最大）。
+3. 建议顺序：第 1 条（restore_section，在 `begin_nested` 里按外键顺序写，测试：回滚后 GET 返回旧定义）→ 第 9 条（cr_* 表 + 写路径，最大）。
 4. 新迁移接在当时的单 head 后面；不要改 static_0002 的 revision。
 5. 每做完一条，更新本文件「已完成 / 未完成」，并在 static-api.md 对应行写「已实现」。

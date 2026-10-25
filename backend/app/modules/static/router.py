@@ -125,6 +125,15 @@ async def object_usage(
     return await svc.object_usage(id, kind, q, filter, p)
 
 
+# ---------------------------------------------------------------- 总览（OntologyOverview.vue）
+
+
+@get("/ontology/graph", "ontology-overview")
+async def ontology_graph(svc: Svc) -> Any:
+    """`{nodes: LinkObject[], edges: {from, to, linkId, status}[]}`（api-index §3.4）。"""
+    return await svc.graph()
+
+
 # ---------------------------------------------------------------- 关系类型（LinkTypes.vue）
 
 
