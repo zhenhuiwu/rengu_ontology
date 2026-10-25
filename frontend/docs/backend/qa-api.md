@@ -260,6 +260,18 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 
 ---
 
+### 2.3 第一期已实现的最小链路（W6，分支 qa-chain）[推断]
+
+代码：`app/modules/qa/llm.py`（LLM 客户端）、`app/modules/qa/chain.py`（上下文 / prompt / 执行 / 成形）、`router.py` W6；测试 `tests/test_qa_chain.py`（FakeLLM，不调真实接口）。
+
+- **流水线（简化版）**：问题 → `build_context`（`store / product / biz_order / order_line` 表结构 + `object_type` 说明 + 对象间 `link_type.join_sql` + 有公式的 `metric` + `qa_synonym_link` / `dim_mapping` 同义词 + `onto_qa_path` 默认路径）→ prompt → LLM 直接写 SQL → 抽 ```sql``` 代码块 → `sql_guard.assert_single_select` → 外包 `SELECT * FROM (…) AS _qa LIMIT 201` → `run_guarded`（表白名单 + 行级权限注入）→ 只读引擎执行（`statement_timeout`、`default_transaction_read_only`）→ 成形答案轮次。[推断] SemPlan JSON → 校验器 → 编译器是二期；本期 LLM 直接写 SQL（Vanna / SQLBot 式）。
+- **同步返回**：W6 跑完整条链路后返回 202 `{turnId, streamUrl, turn}`，`turn` 就是 W3 的轮次形状，前端可以直接追加；W7 SSE 未实现，`streamUrl` 先占位。[推断]
+- **答案形状**：`kind=answer`，`answer = {card:'table', dataAsOf, basis:{caliber, perm}, text, table:{id:'result', title, columns:[{key:'c0', title:<SQL 列别名>, align?:'right'}], items:[{c0:…}], total, summary, paged}}`；0 行 → `kind=empty`（`lead/bold/tail/tag`）。最多 200 行，超过 10 行 `paged=true`。[推断] kpis / trend / insight / suggest 本期不出。
+- **落库**：`qa_turn`（`code = {会话号}-T{seq:03d}` [推断]、`kind`、`question`、`refs`、`snapshot`、`sql_text`（不出接口）、`asked_at`、`elapsed_ms`），更新 `qa_session.last_at`，第一问改标题；追加 `qa_query_log`。`qa_turn_event` / `sem_plan` 本期不写。
+- **LLM**：DashScope OpenAI 兼容接口 `POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`，`temperature=0`。环境变量：`DASHSCOPE_API_KEY`（必填，只从环境读，不打日志）、`QA_LLM_MODEL`（默认 `qwen-flash`）、`QA_LLM_BASE_URL`、`QA_LLM_TIMEOUT_S`（默认 30）。[推断] 先不进 `app/core/config`，以后再收进 Settings。
+- **错误**：没配 key → 503 `QA_LLM_UNAVAILABLE`；没配只读库 `RENGU_QA_READONLY_DATABASE_URL` → 503 `QA_EXEC_UNAVAILABLE`；LLM 调用失败 → 502 `QA_LLM_FAILED`；SQL 不是单条 SELECT、写 / DDL、用了白名单外的表 → 403 `SQL_REJECTED`（不落轮次）；会话不是自己的 → 404。
+- **权限**：沿用 `require_func("qa-workbench","view")` + 行级权限（`row_filter` 桩：管理员不限，其他人 DENY_ALL）；预览 / 历史版本由全局 readonly_guard 拒（403 READONLY）。
+
 ## 3. 流式回答（SSE）
 
 ### 3.1 事件

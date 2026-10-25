@@ -8,15 +8,19 @@ from collections.abc import Callable
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
+from app.core import clock
 from app.core.errors import NotFound
 from app.db.session import SessionDep
-from app.modules.qa import catalog
+from app.modules.qa import catalog, chain
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
+from app.modules.qa.llm import LLMClient, get_llm
 from app.modules.qa.models import (
     CertStatus,
     EvalLast,
@@ -24,9 +28,14 @@ from app.modules.qa.models import (
     FixKind,
     PageSourceKind,
     PageStatus,
+    QaQueryLog,
     QaTemplate,
+    QaTurn,
+    TurnKind,
 )
 from app.modules.qa.schemas import (
+    AskIn,
+    AskOut,
     CertOut,
     EvalQListOut,
     EvalRunDetailOut,
@@ -117,6 +126,65 @@ async def get_session(sid: str, session: SessionDep, user: CurrentUserDep, ctx: 
     if s is None or s.owner_id != pk:
         raise NotFound("会话不存在", details={"id": sid})
     return svc.session_detail_out(s)
+
+
+@router.post(
+    "/sessions/{sid}/turns",
+    dependencies=_WB,
+    status_code=202,
+    response_model=AskOut,
+    summary="W6 提问（同步跑最小 NL2SQL 链路）",
+)
+async def ask(
+    sid: str,
+    body: AskIn,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    llm: Annotated[LLMClient, Depends(get_llm)],
+    conn: Annotated[AsyncConnection, Depends(chain.get_qa_conn)],
+):
+    pk, _ = await svc.effective_user(session, user, ctx)
+    s = await r.SessionRepo(session).detail(sid)
+    if s is None or s.owner_id != pk:
+        raise NotFound("会话不存在", details={"id": sid})
+    question = body.question.strip()
+    kind, snapshot, rows, elapsed, sql = await chain.answer(session, conn, llm, user, question)
+    seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
+    now = clock.now()
+    turn = QaTurn(
+        code=f"{s.code}-T{seq:03d}",  # [推断] 轮次编号 = 会话号-T序号
+        session_id=s.id,
+        seq=seq,
+        kind=TurnKind(kind),
+        question=question,
+        refs=body.refs,
+        snapshot=snapshot,
+        sql_text=sql,
+        asked_at=now,
+        elapsed_ms=elapsed,
+    )
+    session.add(turn)
+    s.last_at = now
+    if seq == 1:
+        s.title = question[:20]  # 第一问把会话标题设成问题前 20 字（§10）
+    await session.flush()
+    session.add(
+        QaQueryLog(
+            turn_id=turn.id,
+            user_id=pk,
+            question=question,
+            norm_question=question.lower(),
+            asked_at=now,
+            elapsed_ms=elapsed,
+            row_count=rows,
+            kind=kind,
+        )
+    )
+    await session.flush()
+    return AskOut(
+        turn_id=turn.code, stream_url=f"/api/qa/v1/turns/{turn.code}/stream", turn=svc.turn_out(turn)
+    )
 
 
 @router.get("/favorites", dependencies=_WB, response_model=Page[FavoriteOut], summary="W13 常用问题")
