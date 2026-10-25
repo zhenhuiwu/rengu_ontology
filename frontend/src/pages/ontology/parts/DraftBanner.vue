@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 草稿视图顶部常驻提示条，高度用 --banner-h。 */
+/** 草稿视图顶部常驻提示条，高度用 --banner-h。草稿按规范用灰色（中性底 + 正文色），不用橙色。 */
 import type { DraftCR } from '@/mock/releases';
 import { useAppStore } from '@/stores/app';
 import { useRoute, useRouter } from 'vue-router';
@@ -24,7 +24,7 @@ const back = () => router.push(String(route.query.back));
 </template>
 
 <style scoped>
-.db { display: flex; align-items: center; gap: 12px; height: var(--banner-h); padding: 0 16px; background: var(--warning-bg); border-bottom: var(--border); flex: none; }
-.db-tag { color: var(--warning); font-weight: var(--fw-strong); }
+.db { display: flex; align-items: center; gap: 12px; height: var(--banner-h); padding: 0 16px; background: var(--g3); border-bottom: var(--border); flex: none; }
+.db-tag { color: var(--g10); font-weight: var(--fw-strong); }
 .db-sp { flex: 1; }
 </style>
