@@ -2,8 +2,7 @@
 /**
  * 关系类型：左侧关系列表，右侧详情（定义 / 关联映射 / 问数路径 / 使用情况 / 版本历史），页头可切到“关系图”。
  * URL：?link= 选中关系，?tab= 页签，?mode=graph 关系图，?q= / ?src= / ?st= 列表筛选，?view=draft 草稿视图。
- * 草稿逻辑与对象类型、指标口径页一致（已发布只读，唯一入口“发起变更”）；共用的 useDraftView 还不支持关系，
- * 先在本页按同样的接口实现，变更单编号取现有最大单号加一。
+ * 草稿逻辑用公共的 useDraftView('link')（已发布只读，唯一入口“发起变更”）；新建关系经公共 start 登记到所选变更单。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -15,21 +14,22 @@ import { useDrawer } from '@/composables/useDrawer';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useAppStore } from '@/stores/app';
-import { CHANGE_REQUESTS } from '@/mock/changes';
-import type { DraftCR } from '@/mock/releases';
+import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import {
   LINKS, LINK_OBJECTS, CARD_API, PATH_GROUPS, objById, objName,
   type LinkType, type LinkStatus, type Cardinality, type QaPath,
 } from '@/mock/links';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { allDrafts } from './parts/useDraftView';
+import { useDraftView } from './parts/useDraftView';
 
 const route = useRoute();
 const router = useRouter();
 const app = useAppStore();
 const { open: openDrawer } = useDrawer();
 const { readonly, reason } = useReadonly();
+const pad = (n: number) => String(n).padStart(2, '0');
+const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
 const links = reactive<LinkType[]>(LINKS.map((l) => ({ ...l })));
 /** 查看历史版本时只列出该版本已发布的关系 */
@@ -81,52 +81,34 @@ const pick = (id: string) => guard(() => {
   router.replace({ query: { ...route.query, link: id, view: undefined, drawer: undefined, drawer2: undefined } });
 });
 
-// —— 草稿（与 useDraftView 同一套接口，关系类型在本页实现）——
-const LINK_TARGETS = reactive<Record<string, string[]>>({ 'CR-0012': ['member_holds_cards'] });
-const createdCRs = reactive<DraftCR[]>([]);
-const drafts = () => [...createdCRs, ...allDrafts()];
-const draft = computed(() => {
-  const cr = Object.entries(LINK_TARGETS).find(([, ids]) => ids.includes(cur.value?.id))?.[0];
-  return drafts().find((d) => d.id === cr);
-});
+// —— 草稿（公共 useDraftView，kind = link）——
+const dv = useDraftView('link', () => cur.value?.id ?? '');
+const { draft, setView } = dv;
 /** 只存在于草稿里的关系（新增的），直接看草稿 */
 const draftOnly = computed(() => cur.value?.status === '草稿');
-const isDraft = computed(() => !readonly.value && !!draft.value && (draftOnly.value || route.query.view === 'draft'));
+const isDraft = computed(() => dv.isDraft.value || (!readonly.value && !!draft.value && draftOnly.value));
 const canEdit = computed(() => isDraft.value);
-const editTip = computed(() => (readonly.value ? reason.value : isDraft.value ? '' : cur.value?.status === '已驳回' ? '变更单已驳回，请重新发起变更' : '已发布版本只读，请先发起变更'));
-const setView = (v: 'published' | 'draft') => router.replace({ query: { ...route.query, view: v === 'draft' ? 'draft' : undefined } });
-const nextCrId = () => {
-  const ids = [...CHANGE_REQUESTS.map((c) => c.id), ...drafts().map((d) => d.id)];
-  const max = Math.max(...ids.map((id) => Number(id.replace('CR-', '')) || 0));
-  return `CR-${String(max + 1).padStart(4, '0')}`;
-};
+const editTip = computed(() => (isDraft.value ? '' : !readonly.value && cur.value?.status === '已驳回' ? '变更单已驳回，请重新发起变更' : dv.editTip.value));
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const creating = ref(false);
 const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
 function start(opts: { join?: string; title?: string }) {
-  let id = opts.join;
-  if (!id) {
-    id = nextCrId();
-    createdCRs.unshift({ id, title: opts.title || '未命名变更', owner: '王敏', updatedAt: '2026-10-25 17:40', changes: 0 });
-  }
-  const ids = (LINK_TARGETS[id] ??= []);
-  if (creating.value) {
-    const n = links.filter((l) => l.id.startsWith('new_link_')).length + 1;
-    const from = src.value || cur.value?.from || 'order';
-    const nl: LinkType = {
-      id: `new_link_${n}`, api: '', name: '未命名关系', from, to: '', card: 'N : 1', key: '', fromProp: '', toProp: '', join: '',
-      reverse: '', nullable: false, desc: '', status: '草稿', cr: id, owner: '王敏', usage: [],
-      history: [{ ver: '—', cr: id, status: '草稿', by: '王敏', at: '2026-10-25 17:40', change: '新增关系（待填写）' }],
-    };
-    links.unshift(nl);
-    ids.push(nl.id);
-    router.replace({ query: { ...route.query, link: nl.id, tab: 'def', mode: undefined, view: 'draft', drawer: undefined, drawer2: undefined, src: undefined, st: undefined, q: undefined } })
-      .then(() => beginEdit());
-  } else {
-    ids.includes(cur.value.id) || ids.push(cur.value.id);
-    setView('draft');
-  }
+  if (!creating.value) { dv.start(opts); return; }
+  const n = links.filter((l) => l.id.startsWith('new_link_')).length + 1;
+  const nid = `new_link_${n}`;
+  const id = dv.start({ ...opts, target: nid });
+  const from = src.value || cur.value?.from || 'order';
+  const by = CURRENT_USER;
+  const at = nowText();
+  const nl: LinkType = {
+    id: nid, api: '', name: '未命名关系', from, to: '', card: 'N : 1', key: '', fromProp: '', toProp: '', join: '',
+    reverse: '', nullable: false, desc: '', status: '草稿', cr: id, owner: by, usage: [],
+    history: [{ ver: '—', cr: id, status: '草稿', by, at, change: '新增关系（待填写）' }],
+  };
+  links.unshift(nl);
+  router.replace({ query: { ...route.query, link: nl.id, tab: 'def', mode: undefined, view: 'draft', drawer: undefined, drawer2: undefined, src: undefined, st: undefined, q: undefined } })
+    .then(() => beginEdit());
 }
 const rejectedCR = computed(() => (cur.value?.status === '已驳回' ? CHANGE_REQUESTS.find((c) => c.id === cur.value.cr) : undefined));
 

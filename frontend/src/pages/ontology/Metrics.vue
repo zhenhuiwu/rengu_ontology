@@ -77,7 +77,7 @@ const FORMULA = 'SUM(订单行.不含税金额) − SUM(退款行.不含税退�
 
 const DIMS = [
   { dim: '时间', hier: '年 › 季 › 月 › 周 › 日', obj: '订单行.出库时间', def: '月', note: '' },
-  { dim: '组织', hier: '大区 › 省份 › 城市 › 门店', obj: '门店', def: '大区', note: '按门店在出库日的归属计算' },
+  { dim: '组织', hier: '大区 › 门店', obj: '门店', def: '大区', note: '门店直属考核大区（CR-0005），按出库日的归属计算' },
   { dim: '商品', hier: '大类 › 中类 › 小类 › SKU', obj: '商品', def: '大类', note: '' },
   { dim: '渠道', hier: '渠道', obj: '订单.渠道', def: '', note: '字典 4 项' },
   { dim: '会员', hier: '会员等级 › 会员', obj: '会员', def: '', note: '非会员订单归入“散客”' },

@@ -15,7 +15,7 @@ import { message } from 'ant-design-vue';
 import { LINKS as ALL_LINKS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
 
 const TYPES = [
-  { id: 'order', name: '订单', api: 'SalesOrder', group: '交易', props: 31, count: '1,286,402', status: '已发布' },
+  { id: 'order', name: '订单', api: 'SalesOrder', group: '交易', props: 32, count: '1,286,402', status: '已发布' },
   { id: 'order_line', name: '订单行', api: 'SalesOrderLine', group: '交易', props: 14, count: '4,917,355', status: '已发布' },
   { id: 'refund', name: '退款单', api: 'Refund', group: '交易', props: 16, count: '38,914', status: '已发布' },
   { id: 'refund_line', name: '退款行', api: 'RefundLine', group: '交易', props: 11, count: '52,307', status: '已发布' },
@@ -50,7 +50,7 @@ const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
 /** 草稿视图里的差异（示例：订单属性） */
-const DIFF: Record<string, '新增' | '修改'> = { 渠道: '修改', 履约门店: '新增' };
+const DIFF: Record<string, '新增' | '修改'> = { 渠道: '修改' };
 
 // 左侧列表：搜索 + 简洁分页
 const kw = ref('');
@@ -60,7 +60,7 @@ watch(kw, () => { lpage.value = 1; });
 const filtered = computed(() => TYPES.filter((t) => !kw.value || t.name.includes(kw.value) || t.api.toLowerCase().includes(kw.value.toLowerCase())));
 const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
 
-// —— 属性（订单，31 个）——
+// —— 属性（订单，32 个）——
 interface P { api: string; name: string; type: string; group: string; pk?: boolean; title?: boolean; dim?: boolean; sensitive?: boolean; enumName?: string; source: string; desc: string }
 const PROPS: P[] = [
   { api: 'order_id', name: '订单号', type: 'string', group: '标识', pk: true, source: 'order_id', desc: '业务主键，全局唯一' },
@@ -68,6 +68,7 @@ const PROPS: P[] = [
   { api: 'channel', name: '渠道', type: 'enum', group: '交易', dim: true, enumName: '销售渠道', source: 'channel_code', desc: '门店、小程序、外卖平台、社区团购' },
   { api: 'status', name: '订单状态', type: 'enum', group: '交易', dim: true, enumName: '订单状态', source: 'status', desc: '待支付、待出库、拣货中、已出库、已签收、已取消' },
   { api: 'store_id', name: '门店', type: 'string', group: '交易', dim: true, source: 'store_code', desc: '外键 → 门店' },
+  { api: 'fulfill_store_id', name: '履约门店', type: 'string', group: '交易', dim: true, source: 'fulfill_store_id', desc: '外键 → 门店；实际出库发货的门店，自提单为空' },
   { api: 'member_id', name: '会员', type: 'string', group: '交易', source: 'member_id', desc: '外键 → 会员；散客为空' },
   { api: 'warehouse_id', name: '发货仓', type: 'string', group: '交易', dim: true, source: 'wh_code', desc: '外键 → 仓库' },
   { api: 'created_at', name: '下单时间', type: 'timestamp', group: '时间', dim: true, source: 'create_time', desc: '' },
@@ -99,8 +100,7 @@ const pkw = ref('');
 const ppage = ref(1);
 const PPAGE = 12;
 watch(pkw, () => { ppage.value = 1; });
-const NEW_PROP: P = { api: 'fulfill_store_id', name: '履约门店', type: 'string', group: '组织', dim: true, source: 'fulfill_store_id', desc: '实际出库发货的门店' };
-const srcProps = computed(() => (isDraft.value ? [...PROPS, NEW_PROP] : PROPS));
+const srcProps = computed(() => PROPS);
 const pfiltered = computed(() => srcProps.value.filter((p) => !pkw.value || p.name.includes(pkw.value) || p.api.includes(pkw.value)));
 const prows = computed(() => pfiltered.value.slice((ppage.value - 1) * PPAGE, ppage.value * PPAGE));
 const propCols = [
@@ -264,7 +264,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
       <div v-else-if="tab === 'properties'" class="ot-body">
         <div class="ot-tool">
           <a-input-search v-model:value="pkw" placeholder="搜索属性名或 API 名" class="ot-tool-search" />
-          <span class="t-12 c-3">主键 1 · 维度 {{ isDraft ? 12 : 11 }} · 敏感 3<template v-if="isDraft"> · 草稿改动 2</template></span>
+          <span class="t-12 c-3">主键 1 · 维度 {{ srcProps.filter((p) => p.dim).length }} · 敏感 {{ srcProps.filter((p) => p.sensitive).length }}<template v-if="isDraft"> · 草稿改动 {{ Object.keys(DIFF).length }}</template></span>
           <span class="ot-sp" />
           <a-tooltip :title="editTip"><a-button :disabled="!canEdit">批量编辑</a-button></a-tooltip>
           <a-tooltip :title="editTip"><a-button type="primary" :disabled="!canEdit">新增属性</a-button></a-tooltip>
@@ -323,7 +323,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         </a-descriptions>
         <div class="ot-tool">
           <span class="t-14 fw-600">字段映射</span>
-          <span class="t-12 c-3">已映射 31 / 源表 38 个字段，7 个未使用</span>
+          <span class="t-12 c-3">已映射 32 / 源表 38 个字段，6 个未使用</span>
           <span class="ot-sp" />
           <a-button>重新采集元数据</a-button>
         </div>
