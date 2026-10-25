@@ -217,8 +217,8 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-button :disabled="readonly" @click="!readonly && openChange('从数据源导入对象类型')">从数据源导入</a-button>
-    <a-button :disabled="readonly" @click="!readonly && openChange('新建对象类型')">新建对象类型</a-button>
+    <a-tooltip :title="readonly ? reason : ''"><a-button :disabled="readonly" @click="!readonly && openChange('从数据源导入对象类型')">从数据源导入</a-button></a-tooltip>
+    <a-tooltip :title="readonly ? reason : ''"><a-button :disabled="readonly" @click="!readonly && openChange('新建对象类型')">新建对象类型</a-button></a-tooltip>
   </Teleport>
 
   <div class="ot">

@@ -53,6 +53,11 @@ const tab = computed({
   set: (v) => router.replace({ query: { ...route.query, tab: v } }),
 });
 const detail = computed(() => crDetail(cur.value.id));
+const rechecking = ref(false);
+function recheck() {
+  rechecking.value = true;
+  setTimeout(() => { rechecking.value = false; message.success(`${cur.value.id} 校验完成：${checkSummary(detail.value.checks) || '全部通过'}`); }, 800);
+}
 const log = computed(() => [...(extraLog[cur.value.id] ?? []), ...reviewLog(cur.value)]);
 
 const statusClass = (s: CRStatus) => (s === '审核中' ? 'c-warning' : 'c-3');
@@ -304,7 +309,7 @@ async function rollback() {
           <span v-if="counts['信息']" class="c-3">信息 {{ counts['信息'] }}</span>
           <span class="c-2">通过 {{ counts['通过'] }}</span><span class="c-3">不适用 {{ counts['不适用'] }}</span>
           <span class="rl-sp" /><span class="t-12 c-3 num">校验于 {{ detail.times.checked ?? '--' }} · 目标库 达梦 DM8、金仓 KES</span>
-          <a-button size="small" :disabled="readonly || cur.status === '已发布'">重新校验</a-button>
+          <a-tooltip :title="readonly ? reason : cur.status === '已发布' ? '已发布的变更单不再校验' : ''"><a-button size="small" :loading="rechecking" :disabled="readonly || cur.status === '已发布'" @click="recheck">重新校验</a-button></a-tooltip>
         </div>
         <a-table :columns="checkCols" :data-source="detail.checks" :pagination="false" size="small" row-key="code" :locale="{ emptyText: '暂无校验结果' }">
           <template #bodyCell="{ column, record }">

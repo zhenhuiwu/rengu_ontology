@@ -382,7 +382,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
             </a-descriptions-item>
             <a-descriptions-item label="计算说明" :span="2">
               <div v-if="mark('calc') === '修改'" class="c-3 num gl-del">{{ before('calc') }}</div>
-              <span class="num">{{ view.calc || '--' }}</span><a-tag v-if="mark('calc')" class="gl-diff">{{ mark('calc') }}</a-tag>
+              <span class="num gl-ell" :title="view.calc">{{ view.calc || '--' }}</span><a-tag v-if="mark('calc')" class="gl-diff">{{ mark('calc') }}</a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="同义词" :span="2">
               <template v-if="view.synonyms.length">
@@ -449,7 +449,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
               <a-tag v-for="w in words" :key="w" :color="isConflict(w) ? 'warning' : undefined">{{ w }}</a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="映射为">{{ view.maps || '--' }}</a-descriptions-item>
-            <a-descriptions-item label="计算说明"><span class="num">{{ view.calc || '--' }}</span></a-descriptions-item>
+            <a-descriptions-item label="计算说明"><span class="num gl-ell" :title="view.calc">{{ view.calc || '--' }}</span></a-descriptions-item>
           </a-descriptions>
           <div class="gl-sec t-14 fw-600 gl-sec-row"><span>默认过滤</span><span class="t-12 c-3 fw-400">问题里没写时自动加上，回答里注明</span></div>
           <a-table v-if="view.filters.length" :columns="filterCols" :data-source="view.filters" :pagination="false" size="small" row-key="field" />
@@ -527,6 +527,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
 </template>
 
 <style scoped>
+.gl-ell { display: inline-block; max-width: calc(100% - 48px); vertical-align: bottom; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .gl { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .gl-list { width: 300px; flex: none; }
 .gl-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
@@ -553,7 +554,8 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
 .gl-right { width: 520px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }
 .gl-sec { margin-top: 4px; }
 .gl-sec-row { display: flex; justify-content: space-between; align-items: baseline; }
-.gl-desc :deep(.ant-descriptions-item-label) { width: 104px; }
+.gl-desc :deep(.ant-descriptions-item-label) { width: 104px; white-space: nowrap; }
+.gl-desc :deep(table) { table-layout: fixed; }
 .gl-diff { margin-inline: 8px 0; }
 .gl-del { text-decoration: line-through; }
 .gl-form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
