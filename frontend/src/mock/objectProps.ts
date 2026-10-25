@@ -374,3 +374,14 @@ const SOURCE_DB: Record<string, string> = {
   促销引擎: 'MySQL 8.0', '供应链 WMS 库': 'SQL Server 2019', '用友 NC 采购': 'Oracle 19c', 物流运单: 'MySQL 8.0', 'HR 人事库': '达梦 DM8 · Oracle 兼容模式',
 };
 export const dbOf = (source?: string) => (source && SOURCE_DB[source]) || '--';
+
+/** 订单（order）字段映射页签里手工写全的行（原在 pages/ontology/ObjectTypes.vue 页内），按属性名覆盖自动生成的映射 */
+export const ORDER_MAP_ROWS = [
+  { prop: '订单号', col: 'order_id', srcType: 'VARCHAR2(32)', transform: '' },
+  { prop: '渠道', col: 'channel_code', srcType: 'CHAR(2)', transform: '字典映射：01→门店，02→小程序，03→外卖平台，04→社区团购' },
+  { prop: '订单状态', col: 'status', srcType: 'NUMBER(2)', transform: '字典映射：10→待支付 … 50→已出库' },
+  { prop: '出库时间', col: 'out_time', srcType: 'DATE', transform: '按 Asia/Shanghai 解释' },
+  { prop: '应付金额（不含税）', col: 'total_amt_notax', srcType: 'NUMBER(14,2)', transform: '' },
+  { prop: '收货电话', col: 'recv_mobile', srcType: 'VARCHAR2(20)', transform: '敏感字段：中间 4 位脱敏' },
+  { prop: '是否测试单', col: 'test_flag', srcType: 'CHAR(1)', transform: "'Y' → 是，其余 → 否" },
+];

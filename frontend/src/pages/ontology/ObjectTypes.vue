@@ -14,7 +14,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView, draftOf } from './parts/useDraftView';
 import { message } from 'ant-design-vue';
 import { LINKS as ALL_LINKS, LINK_OBJECTS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
-import { OBJECT_PROPS, draftPropDiff, objectMeta, dbOf, type ObjProp, type PropDiff } from '@/mock/objectProps';
+import { OBJECT_PROPS, draftPropDiff, objectMeta, dbOf, ORDER_MAP_ROWS as MAP_ROWS, type ObjProp, type PropDiff } from '@/mock/objectProps';
 import { qObjType, QUALITY_CHECKS } from '@/mock/quality';
 import { PERM_OBJECTS } from '@/mock/roles';
 import { RULE_DEFS } from '@/mock/rules';
@@ -177,15 +177,6 @@ const MAP_COLS = [
   { title: '源字段', dataIndex: 'col', width: 170 },
   { title: '源类型', dataIndex: 'srcType', width: 140 },
   { title: '转换', dataIndex: 'transform' },
-];
-const MAP_ROWS = [
-  { prop: '订单号', col: 'order_id', srcType: 'VARCHAR2(32)', transform: '' },
-  { prop: '渠道', col: 'channel_code', srcType: 'CHAR(2)', transform: '字典映射：01→门店，02→小程序，03→外卖平台，04→社区团购' },
-  { prop: '订单状态', col: 'status', srcType: 'NUMBER(2)', transform: '字典映射：10→待支付 … 50→已出库' },
-  { prop: '出库时间', col: 'out_time', srcType: 'DATE', transform: '按 Asia/Shanghai 解释' },
-  { prop: '应付金额（不含税）', col: 'total_amt_notax', srcType: 'NUMBER(14,2)', transform: '' },
-  { prop: '收货电话', col: 'recv_mobile', srcType: 'VARCHAR2(20)', transform: '敏感字段：中间 4 位脱敏' },
-  { prop: '是否测试单', col: 'test_flag', srcType: 'CHAR(1)', transform: "'Y' → 是，其余 → 否" },
 ];
 const SRC_TYPE: Record<string, string> = { string: 'VARCHAR2(64)', enum: 'NUMBER(2)', timestamp: 'DATE', decimal: 'NUMBER(14,2)', integer: 'NUMBER(6)', boolean: 'CHAR(1)', json: 'CLOB' };
 const OVERRIDE = Object.fromEntries(MAP_ROWS.map((r) => [r.prop, r]));
