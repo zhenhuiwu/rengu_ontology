@@ -1,13 +1,13 @@
 /**
  * 统一接口调用（fetch）。所有真接口请求都从这里走：
- * - 地址：`/api/<模块>/v1<path>`（开发时由 Vite 代理到后台骨架，见 vite.config.ts）；
+ * - 地址：`/api/<前缀>/v1<path>`；开关键（谁负责）和前缀分开，见 config.ts，接口文件用 apiClient(开关键, 前缀) 声明（开发时由 Vite 代理到后台骨架，见 vite.config.ts）；
  * - 身份：请求头 `X-Demo-As: <sys_user.code>`，由当前演示身份换算（?as=admin → U010001，?as=viewer → U010006，api-index §1.4）；
  * - 只读模式：页面处于历史版本（?ver=）或以此用户预览（?previewAs=）时，每个请求自动带同名 query 参数（api-index §1.7、§1.8）；
  * - 错误：后台统一错误体 `{code, message, details, requestId}` 转成 ApiError（api-index §1.2）。
  *
  * 不依赖 store：当前身份 / 版本 / 预览由 setApiContext 注册的函数提供（src/api/index.ts 里注册），避免和 store 循环引用。
  */
-import type { ApiModule } from './config';
+import { isReal, type ApiPrefix, type SwitchKey } from './config';
 
 export const API_BASE = '/api';
 
@@ -61,7 +61,7 @@ export interface RequestOptions {
   readonlyParams?: boolean;
 }
 
-export function buildUrl(module: ApiModule, path: string, opts: Pick<RequestOptions, 'query' | 'readonlyParams'> = {}): string {
+export function buildUrl(prefix: ApiPrefix, path: string, opts: Pick<RequestOptions, 'query' | 'readonlyParams'> = {}): string {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(opts.query ?? {})) {
     for (const one of Array.isArray(v) ? v : [v]) if (one !== undefined && one !== null && one !== '') qs.append(k, String(one));
@@ -72,7 +72,7 @@ export function buildUrl(module: ApiModule, path: string, opts: Pick<RequestOpti
     if (ctx.previewAs && !qs.has('previewAs')) qs.set('previewAs', ctx.previewAs);
   }
   const s = qs.toString();
-  return `${API_BASE}/${module}/v1${path.startsWith('/') ? path : `/${path}`}${s ? `?${s}` : ''}`;
+  return `${API_BASE}/${prefix}/v1${path.startsWith('/') ? path : `/${path}`}${s ? `?${s}` : ''}`;
 }
 
 async function parseError(res: Response): Promise<ApiError> {
@@ -84,7 +84,7 @@ async function parseError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, { code: `HTTP_${res.status}`, message: res.statusText || `请求失败（${res.status}）`, requestId: res.headers.get('X-Request-ID') });
 }
 
-export async function request<T>(module: ApiModule, path: string, opts: RequestOptions = {}): Promise<T> {
+export async function request<T>(prefix: ApiPrefix, path: string, opts: RequestOptions = {}): Promise<T> {
   const ctx = currentApiContext();
   const headers: Record<string, string> = { Accept: 'application/json', ...(opts.headers ?? {}) };
   if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
@@ -92,7 +92,7 @@ export async function request<T>(module: ApiModule, path: string, opts: RequestO
   if (opts.body !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(opts.body); }
   let res: Response;
   try {
-    res = await fetch(buildUrl(module, path, opts), { method: opts.method ?? 'GET', headers, body, signal: opts.signal });
+    res = await fetch(buildUrl(prefix, path, opts), { method: opts.method ?? 'GET', headers, body, signal: opts.signal });
   } catch (e) {
     if ((e as { name?: string })?.name === 'AbortError') throw e;
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: `无法连接后台：${(e as Error)?.message ?? e}` });
@@ -103,9 +103,24 @@ export async function request<T>(module: ApiModule, path: string, opts: RequestO
 }
 
 export const http = {
-  get: <T>(module: ApiModule, path: string, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(module, path, { ...opts, method: 'GET' }),
-  post: <T>(module: ApiModule, path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(module, path, { ...opts, method: 'POST', body }),
+  get: <T>(prefix: ApiPrefix, path: string, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(prefix, path, { ...opts, method: 'GET' }),
+  post: <T>(prefix: ApiPrefix, path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(prefix, path, { ...opts, method: 'POST', body }),
 };
+
+/**
+ * 接口文件的入口：声明「归哪个开关」和「挂在哪个前缀」。
+ * 例：apiClient('versioning', 'ontology') → 开关看 versioning，地址 /api/ontology/v1/...
+ */
+export function apiClient(key: SwitchKey, prefix: ApiPrefix) {
+  return {
+    key,
+    prefix,
+    /** 这个开关当前是否走真接口 */
+    isReal: () => isReal(key),
+    get: <T>(path: string, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(prefix, path, { ...opts, method: 'GET' }),
+    post: <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(prefix, path, { ...opts, method: 'POST', body }),
+  };
+}
 
 /** 页码分页统一返回（api-index §1.3） */
 export interface PageResult<T> { items: T[]; total: number; page: number; size: number }

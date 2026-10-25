@@ -1,5 +1,5 @@
 /**
- * 本体发布记录（ontology 模块，后台骨架 versioning：GET /api/ontology/v1/releases、/releases/current）。
+ * 本体发布记录。开关键 versioning，前缀 ontology（GET /api/ontology/v1/releases、/releases/current）。
  *
  * 页面从这里读 RELEASES / releaseByVer，不再直接读 src/mock/releases.ts：
  * - mock 模式：内容就是 mock 的 RELEASES（同样的值、同样的顺序），界面不变；
@@ -7,8 +7,9 @@
  */
 import { shallowReactive } from 'vue';
 import { RELEASES as MOCK_RELEASES, type Release } from '@/mock/releases';
-import { isReal } from './config';
-import { http } from './http';
+import { apiClient } from './http';
+
+const api = apiClient('versioning', 'ontology');
 
 export type { Release };
 
@@ -26,12 +27,12 @@ export const toRelease = (r: ReleaseDto): Release => ({ ver: r.ver, publishedAt:
 export const RELEASES: Release[] = shallowReactive([...MOCK_RELEASES]);
 export const releaseByVer = (v: string) => RELEASES.find((r) => r.ver === v);
 
-export const fetchReleases = () => http.get<ReleaseListDto>('ontology', '/releases');
-export const fetchCurrentRelease = () => http.get<CurrentVersionDto>('ontology', '/releases/current');
+export const fetchReleases = () => api.get<ReleaseListDto>('/releases');
+export const fetchCurrentRelease = () => api.get<CurrentVersionDto>('/releases/current');
 
 /** real 模式下拉取发布记录；返回当前版本（给 app store 用）。mock 模式什么都不做，返回 null。 */
 export async function loadReleases(): Promise<{ current: string; publishedAt: string; next: string } | null> {
-  if (!isReal('ontology')) return null;
+  if (!api.isReal()) return null;
   const [list, cur] = await Promise.all([fetchReleases(), fetchCurrentRelease()]);
   RELEASES.splice(0, RELEASES.length, ...list.items.map(toRelease));
   const head = list.items.find((r) => r.ver === list.current) ?? list.items[0];

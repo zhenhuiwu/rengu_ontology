@@ -31,7 +31,7 @@ RENGU_DEV_USER=U010001 uv run uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```bash
 npm run dev                                                  # mock（默认），和以前一样
 VITE_API_MODE=real VITE_API_PROXY_TARGET=http://127.0.0.1:8010 npm run dev   # 真接口
-VITE_API_REAL_MODULES=ontology VITE_API_PROXY_TARGET=http://127.0.0.1:8010 npm run dev  # 只切 ontology
+VITE_API_REAL_MODULES=versioning VITE_API_PROXY_TARGET=http://127.0.0.1:8010 npm run dev  # 只切发布记录（versioning）
 ```
 
 5280 被占用时加 `-- --port 5290`。变量也可以写进 `.env.local`（已加入 .gitignore），参考 `.env.example`。
@@ -41,20 +41,38 @@ VITE_API_REAL_MODULES=ontology VITE_API_PROXY_TARGET=http://127.0.0.1:8010 npm r
 | 变量 | 取值 | 说明 |
 |---|---|---|
 | `VITE_API_MODE` | `mock`（默认）/ `real` | mock：全部走 `src/mock`，**不发任何 /api 请求**，启动流程和以前一样同步挂载。real：已接线模块全部走真接口 |
-| `VITE_API_REAL_MODULES` | 逗号分隔：`ontology,qa,data,admin,biz` | mock 模式下：只把列出的模块切真接口。real 模式下：只有列出的模块走真接口（不写 = 全部） |
+| `VITE_API_REAL_MODULES` | 逗号分隔的**开关键**（见下表），例如 `versioning,biz` | mock 模式下：只把列出的开关切真接口。real 模式下：只有列出的开关走真接口（不写 = 全部）。未知键（例如旧写法 `ontology`）忽略并在控制台 warn |
 | `VITE_API_PROXY_TARGET` | URL，默认 `http://127.0.0.1:8000` | 只给开发服务器用：`/api` → 这个地址（vite.config.ts `server.proxy`） |
 
-判断入口：`src/api/config.ts` 的 `isReal(module)` / `anyReal()`。构建时写死（`import.meta.env`），换模式要重启 dev / 重新 build。
+**开关键 ≠ 接口前缀。** 开关按负责的后台模块切；地址仍按 api-index §1.1 的前缀拼 `/api/<前缀>/v1`。static / dynamic / action / versioning 同在 `/api/ontology/v1` 下，但各自独立切换。
+
+| 开关键 | 负责 | 接口前缀 | 已接线的接口文件 |
+|---|---|---|---|
+| `static` | 静态本体（对象类型、关系、指标、维度、业务知识…） | `ontology` | — |
+| `dynamic` | 动态本体（规则、告警、action-runs…） | `ontology` | — |
+| `action` | 动作 / 事件类型（Palantir） | `ontology` | — |
+| `versioning` | 发布记录、快照 | `ontology` | `releases.ts` |
+| `qa` | 问数 | `qa` | — |
+| `biz` | 演示业务数据 | `biz` | `biz.ts`（未接页面） |
+| `admin` | 系统管理 | `admin` | — |
+| `data` | 数据接入 | `data` | — |
+| `integration` | 外部系统 / 写回（代码在 integration，接口挂 data） | `data` | — |
+
+每个接口文件用 `apiClient(开关键, 前缀)` 声明归属，例如 `releases.ts`：`apiClient('versioning', 'ontology')`，`biz.ts`：`apiClient('biz', 'biz')`。新加接口文件照此声明，判断用 `api.isReal()`。
+
+判断入口：`src/api/config.ts` 的 `isReal(key)` / `anyReal()`、`SWITCH_PREFIX`（开关键 → 前缀）。构建时写死（`import.meta.env`），换模式要重启 dev / 重新 build。
+
+real 模式下启动数据（目前只有发布记录）加载失败：回退 mock 数据，控制台 `console.error`，页面挂载后 `message.warning('发布记录接口加载失败，暂时显示演示数据（<code>）')`。mock 模式不走这段，界面不变。
 
 ## 3. 接口层（src/api）
 
 | 文件 | 内容 |
 |---|---|
-| `http.ts` | fetch 封装。地址 `/api/<模块>/v1<path>`；请求头 `X-Demo-As`；只读模式自动带 `?ver=` / `?previewAs=`；错误体 `{code,message,details,requestId}` → `ApiError`（`status/code/details/requestId`，`readonlyMode` 取 403 READONLY 的 `details.mode`）；连不上后台 → `ApiError(0,'NETWORK_ERROR')`，非 JSON 错误 → `HTTP_<status>`；`PageResult<T>` = `{items,total,page,size}` |
-| `config.ts` | 开关解析 |
-| `index.ts` | `setupApi(pinia)`：注册请求上下文（演示身份 admin→`U010001`，viewer→`U010006`；`app.viewVersion` → `ver`；预览会话 `session.user.id` → `previewAs`）。`bootstrapApi(pinia)`：real 模式下挂载前先按 `?as=` 定身份，再拉启动数据 |
-| `releases.ts` | 发布记录数据源 + 适配（见 §4） |
-| `biz.ts` | 订单列表 / 详情调用 + 适配，未接页面（见 §5） |
+| `http.ts` | fetch 封装 + `apiClient(开关键, 前缀)`。地址 `/api/<前缀>/v1<path>`；请求头 `X-Demo-As`；只读模式自动带 `?ver=` / `?previewAs=`；错误体 `{code,message,details,requestId}` → `ApiError`（`status/code/details/requestId`，`readonlyMode` 取 403 READONLY 的 `details.mode`）；连不上后台 → `ApiError(0,'NETWORK_ERROR')`，非 JSON 错误 → `HTTP_<status>`；`PageResult<T>` = `{items,total,page,size}` |
+| `config.ts` | 开关解析（开关键、`SWITCH_PREFIX`） |
+| `index.ts` | `setupApi(pinia)`：注册请求上下文（演示身份 admin→`U010001`，viewer→`U010006`；`app.viewVersion` → `ver`；预览会话 `session.user.id` → `previewAs`）。`bootstrapApi(pinia)`：real 模式下挂载前先按 `?as=` 定身份，再拉启动数据；不 reject，返回失败提示文字 |
+| `releases.ts` | 开关 `versioning`。发布记录数据源 + 适配（见 §4） |
+| `biz.ts` | 开关 `biz`。订单列表 / 详情调用 + 适配，未接页面（见 §5） |
 
 请求上下文不直接引用 store（避免 store ↔ api 循环引用），由 `setupApi` 注入。
 
@@ -64,8 +82,8 @@ VITE_API_REAL_MODULES=ontology VITE_API_PROXY_TARGET=http://127.0.0.1:8010 npm r
 
 | 接口 | 前端 | 状态 |
 |---|---|---|
-| `GET /api/ontology/v1/releases` | `RELEASES`（顶栏版本选择、本体总览历史、对象「修订记录」、生命周期历史时间） | **已接**（real 模式启动时拉取，整体替换） |
-| `GET /api/ontology/v1/releases/current` | app store `ontologyVersion` / `ontologyPublishedAt` | **已接** |
+| `GET /api/ontology/v1/releases` | `RELEASES`（顶栏版本选择、本体总览历史、对象「修订记录」、生命周期历史时间） | **已接**，开关 `versioning`（启动时拉取，整体替换） |
+| `GET /api/ontology/v1/releases/current` | app store `ontologyVersion` / `ontologyPublishedAt` | **已接**，开关 `versioning` |
 | `GET /api/ontology/v1/releases/{ver}` | — | 有调用价值但页面没有对应位置，未接 |
 | `GET /api/ontology/v1/releases/{ver}/snapshot` | — | 快照是假 section，未接 |
 | `GET /api/biz/v1/orders`（page,size,storeId,status,channel） | `listOrders()` | 只有调用 + 适配，未接页面 |
@@ -104,3 +122,14 @@ real 模式下接口失败不挡启动：保留 mock 数据并在控制台 `cons
 - `listOrders({size:2})`：total 1286；viewer total 0（M5）。错误映射：订单不存在 → `ApiError 404 NOT_FOUND details {id}`；`size=abc` → `422 VALIDATION_FAILED details.fields`；`/api/admin/v1/users` → `404 NOT_FOUND`；`X-Demo-As: U999` → `401 UNAUTHORIZED`。均带 requestId。
 - mock `/`：**没有任何 /api 请求**，版本选择内容和 real 相同。
 - `npm run build`（mock 和 `VITE_API_MODE=real` 各一次）通过。
+
+### 6.1 复验（开关键拆分后，2026-10-25 晚）
+
+同样的骨架 + 临时库，前端分别用 `VITE_API_MODE=real`、`VITE_API_REAL_MODULES=versioning`、mock 起 dev，Playwright 记录 /api 请求：
+
+- 只切 `versioning`（`VITE_API_MODE` 不设）：只发 `/api/ontology/v1/releases`、`/releases/current`（200）；`isReal('versioning')=true`，同前缀的 `isReal('static')=false`、`isReal('biz')=false`；打开订单抽屉 `?drawer=order:…` 没有 `/api/biz` 请求（仍走 mock）。
+- 代理指向没有后台的端口（real 模式）：两条请求失败 → 版本选择仍是 mock 的 5 条，页面出现 `message.warning`“发布记录接口加载失败，暂时显示演示数据（HTTP_500）”（Vite 代理连不上后台时返回 500）。
+- real 全切：同两条请求 200，无提示。
+- mock：没有任何 /api 请求，也没有提示。
+- `npm run build` 与 `VITE_API_MODE=real npm run build` 均通过。
+

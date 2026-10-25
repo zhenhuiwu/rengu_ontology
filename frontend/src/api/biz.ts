@@ -1,12 +1,14 @@
 /**
- * 演示业务数据（biz 模块，后台骨架 72204b0：GET /api/biz/v1/orders、/orders/{id}）。
+ * 演示业务数据。开关键 biz，前缀 biz（后台骨架 72204b0：GET /api/biz/v1/orders、/orders/{id}）。
  *
  * 只提供调用和适配，**还没有接到页面**：首页、对象抽屉等现在都在前端对 ORDERS 全量做统计和筛选，
  * 骨架的订单列表还缺 kw / cutoff、列表不带 lines，非管理员的行级范围是桩（一律 0 行），
  * 切过去会改变页面结果。差异见 docs/backend/integration.md §5。
  */
 import type { Order, OrderLine, OrderStatus } from '@/mock/orders';
-import { http, type PageResult } from './http';
+import { apiClient, type PageResult } from './http';
+
+const api = apiClient('biz', 'biz');
 
 /** 后台 OrderOut / OrderDetailOut（app/modules/biz/schemas.py） */
 export interface OrderLineDto { lineNo: number; sku: string; name: string; qty: number; price: number }
@@ -29,9 +31,9 @@ export const toOrder = (o: OrderDto | OrderDetailDto): Order & { storeName: stri
 });
 
 export async function listOrders(q: OrderQuery = {}): Promise<PageResult<Order & { storeName: string }>> {
-  const r = await http.get<PageResult<OrderDto>>('biz', '/orders', { query: { ...q } });
+  const r = await api.get<PageResult<OrderDto>>('/orders', { query: { ...q } });
   return { ...r, items: r.items.map(toOrder) };
 }
 export async function getOrder(id: string): Promise<Order & { storeName: string }> {
-  return toOrder(await http.get<OrderDetailDto>('biz', `/orders/${encodeURIComponent(id)}`));
+  return toOrder(await api.get<OrderDetailDto>(`/orders/${encodeURIComponent(id)}`));
 }

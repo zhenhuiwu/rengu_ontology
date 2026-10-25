@@ -7,7 +7,7 @@
 import type { Pinia } from 'pinia';
 import { useAppStore, PERSONAS, type PersonaKey } from '@/stores/app';
 import { usePreviewStore } from '@/stores/preview';
-import { setApiContext } from './http';
+import { isApiError, setApiContext } from './http';
 import { anyReal, realModules, API_MODE } from './config';
 import { loadReleases } from './releases';
 
@@ -25,8 +25,12 @@ export function setupApi(pinia: Pinia) {
   });
 }
 
-export async function bootstrapApi(pinia: Pinia): Promise<void> {
-  if (!anyReal()) return;
+/**
+ * real 模式启动数据。不会 reject：失败的项回退 mock，返回要提示给用户的文字（main.ts 挂载后用 message.warning 显示）。
+ */
+export async function bootstrapApi(pinia: Pinia): Promise<string[]> {
+  const warnings: string[] = [];
+  if (!anyReal()) return warnings;
   console.info(`[api] VITE_API_MODE=${API_MODE}，走真接口的模块：${realModules().join(', ')}`);
   // 启动请求发生在路由守卫之前：先按 ?as= 定好演示身份（和守卫的处理一样），保证 X-Demo-As 是本次的身份
   const as = new URLSearchParams(window.location.search).get('as');
@@ -41,5 +45,7 @@ export async function bootstrapApi(pinia: Pinia): Promise<void> {
   } catch (e) {
     // 接口失败不挡启动：发布记录保持 mock 数据，控制台报错（联调时看这里）
     console.error('[api] 发布记录加载失败，仍显示 mock 数据', e);
+    warnings.push(`发布记录接口加载失败，暂时显示演示数据（${isApiError(e) ? e.code : '未知错误'}）`);
   }
+  return warnings;
 }
