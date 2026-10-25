@@ -791,7 +791,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `:test` 返回一条 `ExtCall` 形状 | dev/test 走模拟：「降级」→ 502 / 失败 / 3120 ms，「停用」→ 409 `EXT_SYSTEM_DISABLED`，其余 → 200 / 成功 / `140 + timeoutMs % 97` ms。id = `{编号去掉 EXT-}-T{6 位随机}`。【推断】测试调用**落库**：写一行 `writeback_call`（`kind=test`），页面重新拉“最近调用”，它排在最前（页面文案“结果记入下方最近调用”） |
 | `writeback_call` 列 | 按前端 `ExtCall` 建：`code`=id、`sys_id`、`at`=time、`op_name`=action、`target_label`=target、`method`、`path`、`idem_key`、`elapsed_ms`=ms、`http_status`=http（超时为空）、`result`、`attempt`、`actor`、`msg`、`action_run_id`=runId。§9.1 设计里的 `biz_code` 前端没有，**没建**。`kind`【推断】：种子里 GET → query，其余 → write；测试调用 → test |
 | 种子 | `integration_runs` 阶段（registry 已登记，dynamic 之后）读 `system/derived/extCalls.json`（PDE `export-mock` 原样输出，756 行，20 行带 runId）；**不用改 `seeds/loader.py`** |
-| 迁移 | `integration_0002`，`down_revision = event_0002`。合并时如果 master 先有 `static_0002`，要把 down_revision 改接到新的 head |
+| 迁移 | `integration_0002`，`down_revision = dynamic_0002`。合并顺序 static_0002（接 event_0002）→ dynamic_0002（接 static_0002）→ integration_0002；改接是本分支最后一个单独提交，单独合时回退它即回到 event_0002 |
 | 排序 / `counts` | 见 §3.1；dev 时钟固定在 15:42，比种子里最晚的调用（16:29）还早，所以测试调用不能靠时间排最前，按 `kind=test` 排【推断】 |
 | `:test` 要 manage | 同 §3.6 U13【推断】；功能权限校验本身是 PDE 的扩展点（`require_func` 目前放行） |
 

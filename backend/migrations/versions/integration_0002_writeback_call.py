@@ -1,9 +1,10 @@
 """integration：外部系统调用记录 writeback_call（action-event-api §9.1、§11.4）。
 
-合并提示：down_revision 现在接 master head event_0002；static_0002 等先合进 master 时按当时的 head 重接。
+合并顺序：static_0002（接 event_0002）→ dynamic_0002（接 static_0002）→ 本迁移接 dynamic_0002。
+单独合本分支时把本提交回退即可（回到 event_0002）。
 
 Revision ID: integration_0002
-Revises: event_0002
+Revises: dynamic_0002
 Create Date: 2026-10-26 00:37:15.705174+08:00
 """
 
@@ -13,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "integration_0002"
-down_revision: str | None = "event_0002"
+down_revision: str | None = "dynamic_0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
