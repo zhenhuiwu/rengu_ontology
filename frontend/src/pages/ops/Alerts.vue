@@ -14,6 +14,7 @@ import HoverCard from '@/components/HoverCard.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { ALERTS, RULES, METRICS, alertTimeline, type Alert, type AlertStatus } from '@/mock';
+import { PEOPLE } from '@/mock/dynamic';
 import { ACTIONS } from '@/mock/actions';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
@@ -30,7 +31,6 @@ const LIST = reactive<Row[]>(ALERTS.map((a) => {
 /** 关联动作还没有结果时锁定转派和关闭 */
 const IN_FLIGHT = ['待确认', '审批中', '执行中', '结果未知'];
 const ME = '王敏';
-const PEOPLE = ['王敏', '陈立军', '刘婷', '孙浩然', '何静', '赵蕾', '吴佳'];
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(30 + tick).padStart(2, '0')}:00`; };
 const isClosed = (s: AlertStatus) => s === '已解决' || s === '已忽略';

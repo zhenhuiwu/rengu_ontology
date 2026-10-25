@@ -98,3 +98,6 @@ import { STORES } from './stores';
 /** 商品类告警补上门店（按告警编号固定取，不影响上面的随机序列） */
 export const storeOfKey = (key: string) => STORES[key.split('').reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 100003, 7) % STORES.length];
 for (const a of ALERTS) if (a.objKind === 'product' && !a.storeId) { const st = storeOfKey(a.id); a.storeId = st.id; a.storeLabel = st.name; }
+
+/** 告警转派可选的处理人（原在 pages/ops/Alerts.vue；后台 GET /people） */
+export const PEOPLE = ['王敏', '陈立军', '刘婷', '孙浩然', '何静', '赵蕾', '吴佳'];
