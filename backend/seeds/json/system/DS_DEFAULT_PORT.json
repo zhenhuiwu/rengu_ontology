@@ -1,0 +1,7 @@
+{
+  "PostgreSQL": 5432,
+  "达梦 DM8": 5236,
+  "人大金仓 KingbaseES": 54321,
+  "MySQL": 3306,
+  "ERP": 443
+}

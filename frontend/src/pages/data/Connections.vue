@@ -4,8 +4,9 @@
  * URL：?ds=DS-001&tab=params|tables|sync&form=new|edit，刷新可还原。
  * 新建 / 编辑在抽屉表单里（达梦显示兼容模式，金仓显示 database_mode，ERP 显示系统和应用 ID）；删除走 ConfirmActionModal。
  * 历史版本只读（useReadonly）；表单有未保存修改时，关闭抽屉或离开页面要确认（useUnsavedGuard）。
+ * 开关 data 切到真接口时数据走 src/api/datasources.ts；后台没起来时回退 mock 并提示。
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -16,8 +17,13 @@ import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { paginate, fmtInt, EMPTY } from '@/mock';
 import {
   DATASOURCES, DS_TYPES, DS_DEFAULT_PORT, DM_COMPAT, KB_MODES, ERP_SYSTEMS, dsTables,
-  type Datasource, type DsType, type DsStatus,
+  type Datasource, type DsType, type DsStatus, type DsTable,
 } from '@/mock/datasources';
+import { isApiError, isBackendDown } from '@/api/http';
+import {
+  isDataReal, listDatasources, listDsTables, createDatasource, updateDatasource, deleteDatasource,
+  testDatasource, testDatasourceParams, type DatasourceWrite,
+} from '@/api/datasources';
 
 const route = useRoute();
 const router = useRouter();
@@ -27,6 +33,22 @@ const setQuery = (patch: Record<string, string | undefined>) =>
 
 const { readonly, reason } = useReadonly();
 const list = ref<Datasource[]>(DATASOURCES.map((d) => ({ ...d })));
+
+// ---------- 真接口（开关 data）；后台没起来时 real = false，页面回退 mock ----------
+const real = ref(isDataReal());
+const apiFail = (what: string, e: unknown) => {
+  console.error(`[api] 数据连接：${what}失败`, e);
+  message.error(`${what}失败：${isApiError(e) ? e.message || e.code : '未知错误'}`);
+};
+function fallbackToMock(e: unknown) {
+  console.error('[api] 数据连接接口不可用，显示演示数据', e);
+  real.value = false;
+  message.warning(isBackendDown(e) ? '后台未启动，数据连接暂时显示演示数据' : '数据连接接口加载失败，暂时显示演示数据');
+}
+onMounted(async () => {
+  if (!real.value) return;
+  try { list.value = await listDatasources(); } catch (e) { fallbackToMock(e); }
+});
 
 // ---------- 左侧列表 ----------
 const LIST_SIZE = 12;
@@ -67,7 +89,17 @@ const TABLE_SIZE = 12;
 const tablePage = ref(1);
 const tableKw = ref('');
 watch([() => selected.value?.id, tableKw], () => { tablePage.value = 1; });
-const tables = computed(() => (selected.value ? dsTables(selected.value) : []).filter((t) =>
+const realTables = ref<{ id: string; items: DsTable[] } | null>(null);
+watch([() => selected.value?.id, real], async ([id]) => {
+  if (!real.value || !id) return;
+  try {
+    const items = await listDsTables(id);
+    if (selected.value?.id === id) realTables.value = { id, items };
+  } catch (e) { apiFail('加载库表', e); }
+}, { immediate: true });
+const tableSource = (d: Datasource): DsTable[] =>
+  !real.value ? dsTables(d) : realTables.value?.id === d.id ? realTables.value.items : [];
+const tables = computed(() => (selected.value ? tableSource(selected.value) : []).filter((t) =>
   !tableKw.value || t.name.toLowerCase().includes(tableKw.value.toLowerCase()) || t.comment.includes(tableKw.value)));
 const tablesPaged = computed(() => paginate(tables.value, { page: tablePage.value, size: TABLE_SIZE }));
 const tableCols = [
@@ -84,6 +116,14 @@ const tableCols = [
 const testing = ref(false);
 async function testConn(d: Datasource) {
   testing.value = true;
+  if (real.value) {
+    try {
+      const t = await testDatasource(d.id);
+      d.lastTest = t;
+      if (t.ok) { d.status = '正常'; message.success(`连接成功，耗时 ${t.ms} ms`); } else message.error(`连接失败：${t.msg}`);
+    } catch (e) { apiFail('测试连接', e); } finally { testing.value = false; }
+    return;
+  }
   await new Promise((r) => setTimeout(r, 600));
   testing.value = false;
   const fail = d.status === '异常';
@@ -109,6 +149,9 @@ async function remove(d: Datasource) {
       : '没有对象类型使用这个连接，删除后同步计划一起删除。',
   });
   if (!ok) return;
+  if (real.value) {
+    try { await deleteDatasource(d.id); } catch (e) { apiFail('删除', e); return; }
+  }
   list.value = list.value.filter((x) => x.id !== d.id);
   setQuery({ ds: undefined, tab: undefined });
   message.success(`已删除：${d.name}`);
@@ -138,13 +181,45 @@ const formTesting = ref(false);
 async function formTest() {
   if (!form.host) { message.warning('请先填写主机'); return; }
   formTesting.value = true;
+  if (real.value) {
+    try {
+      const t = await testDatasourceParams(writeBody());
+      if (t.ok) message.success(`连接成功：${form.host}:${form.port}，耗时 ${t.ms} ms`); else message.error(`连接失败：${t.msg}`);
+    } catch (e) { apiFail('测试连接', e); } finally { formTesting.value = false; }
+    return;
+  }
   await new Promise((r) => setTimeout(r, 600));
   formTesting.value = false;
   message.success(`连接成功：${form.host}:${form.port}，耗时 37 ms`);
 }
+const writeBody = (): DatasourceWrite => ({
+  name: form.name, type: form.type, host: form.host, port: form.port, database: form.database, user: form.user, password: form.password,
+  compatMode: form.compatMode, databaseMode: form.databaseMode, erpSystem: form.erpSystem, appId: form.appId,
+  ssl: form.ssl, owner: form.owner, mode: form.mode, cron: form.cron,
+});
+const saving = ref(false);
+async function saveReal() {
+  saving.value = true;
+  try {
+    if (formMode.value === 'edit' && selected.value) {
+      const d = await updateDatasource(selected.value.id, writeBody());
+      list.value = list.value.map((x) => (x.id === d.id ? d : x));
+      formInit.value = JSON.stringify(form);
+      setQuery({ form: undefined });
+      message.success(`已保存：${d.name}`);
+    } else {
+      const d = await createDatasource(writeBody());
+      list.value.unshift(d);
+      formInit.value = JSON.stringify(form);
+      setQuery({ form: undefined, ds: d.id });
+      message.success(`已创建：${d.name}`);
+    }
+  } catch (e) { apiFail('保存', e); } finally { saving.value = false; }
+}
 function save() {
   if (!form.name || !form.host || !form.database || !form.user) { message.warning('请填写名称、主机、数据库和用户名'); return; }
   if (formMode.value === 'new' && !form.password) { message.warning('请填写密码'); return; }
+  if (real.value) { void saveReal(); return; }
   const extra = { compatMode: form.type === '达梦 DM8' ? form.compatMode : undefined, databaseMode: form.type === '人大金仓 KingbaseES' ? form.databaseMode : undefined, erpSystem: form.type === 'ERP' ? form.erpSystem : undefined, appId: form.type === 'ERP' ? form.appId : undefined };
   if (formMode.value === 'edit' && selected.value) {
     const d = selected.value;
@@ -341,7 +416,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         <a-space>
           <span v-if="formDirty" class="t-12 c-2">有未保存的修改</span>
           <a-button @click="closeForm">取消</a-button>
-          <a-button type="primary" :disabled="readonly" @click="save">保存</a-button>
+          <a-button type="primary" :loading="saving" :disabled="readonly" @click="save">保存</a-button>
         </a-space>
       </div>
     </template>

@@ -1,0 +1,1391 @@
+[
+  {
+    "id": "DS-001",
+    "name": "POS 交易库（华东）",
+    "type": "PostgreSQL",
+    "host": "10.12.8.21",
+    "port": 5432,
+    "database": "pos_prod",
+    "user": "sync_ro",
+    "owner": "陈立军",
+    "objectTypes": [
+      "订单",
+      "订单行",
+      "退款",
+      "退款行"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:44",
+      "ok": true,
+      "ms": 127,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "*/15 * * * *",
+      "cronText": "每 15 分钟",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 16:40"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:09",
+        "result": "成功",
+        "rows": 11097,
+        "secs": 115,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:36",
+        "result": "成功",
+        "rows": 39344,
+        "secs": 55,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:09",
+        "result": "成功",
+        "rows": 2652,
+        "secs": 64,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:26",
+        "result": "成功",
+        "rows": 19931,
+        "secs": 93,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:15",
+        "result": "成功",
+        "rows": 20188,
+        "secs": 44,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:31",
+        "result": "成功",
+        "rows": 16121,
+        "secs": 108,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 06:55",
+        "result": "成功",
+        "rows": 5753,
+        "secs": 98,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:36",
+        "result": "成功",
+        "rows": 24865,
+        "secs": 81,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 50,
+    "createdAt": "2026-01-03",
+    "note": "只读数据源，不是外部系统：订单数据从这里同步；写回订单走 外部系统 → 订单 OMS"
+  },
+  {
+    "id": "DS-002",
+    "name": "财务总账",
+    "type": "达梦 DM8",
+    "host": "10.12.20.5",
+    "port": 5236,
+    "database": "FIN_GL",
+    "user": "BI_READER",
+    "owner": "何静",
+    "objectTypes": [],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:44",
+      "ok": true,
+      "ms": 142,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "0 2 * * *",
+      "cronText": "每天 02:00",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 17:00"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:08",
+        "result": "成功",
+        "rows": 43087,
+        "secs": 79,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:39",
+        "result": "成功",
+        "rows": 15762,
+        "secs": 63,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:19",
+        "result": "成功",
+        "rows": 1542,
+        "secs": 57,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:42",
+        "result": "延迟",
+        "rows": 27283,
+        "secs": 95,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 10:18",
+        "result": "成功",
+        "rows": 5360,
+        "secs": 123,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:29",
+        "result": "成功",
+        "rows": 21756,
+        "secs": 30,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:02",
+        "result": "成功",
+        "rows": 44626,
+        "secs": 45,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:31",
+        "result": "成功",
+        "rows": 23104,
+        "secs": 26,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 46,
+    "createdAt": "2026-02-04",
+    "compatMode": "Oracle",
+    "refOnly": {
+      "objects": [
+        "门店",
+        "大区"
+      ],
+      "source": "门店主数据（ORG.T_STORE / ORG.T_REGION）"
+    },
+    "note": "门店、大区表只作财务对账参考，未映射；门店、大区以 门店主数据（ORG.T_STORE / ORG.T_REGION）为准"
+  },
+  {
+    "id": "DS-003",
+    "name": "供应链 WMS 库",
+    "type": "人大金仓 KingbaseES",
+    "host": "10.12.31.40",
+    "port": 54321,
+    "database": "wms",
+    "user": "wms_ro",
+    "owner": "孙浩然",
+    "objectTypes": [
+      "仓库",
+      "库存",
+      "出库单"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:43",
+      "ok": true,
+      "ms": 156,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "*/30 * * * *",
+      "cronText": "每 30 分钟",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 17:19"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:07",
+        "result": "延迟",
+        "rows": 27078,
+        "secs": 44,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 14:41",
+        "result": "成功",
+        "rows": 40180,
+        "secs": 71,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 12:58",
+        "result": "成功",
+        "rows": 431,
+        "secs": 50,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:28",
+        "result": "成功",
+        "rows": 34634,
+        "secs": 97,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:21",
+        "result": "延迟",
+        "rows": 38532,
+        "secs": 61,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 08:27",
+        "result": "成功",
+        "rows": 27391,
+        "secs": 92,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:09",
+        "result": "延迟",
+        "rows": 35499,
+        "secs": 131,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 05:27",
+        "result": "成功",
+        "rows": 21343,
+        "secs": 111,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 42,
+    "createdAt": "2026-03-05",
+    "databaseMode": "oracle"
+  },
+  {
+    "id": "DS-004",
+    "name": "会员中心",
+    "type": "MySQL",
+    "host": "10.12.9.77",
+    "port": 3306,
+    "database": "member_center",
+    "user": "bi_sync",
+    "owner": "刘婷",
+    "objectTypes": [
+      "会员",
+      "会员等级"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:42",
+      "ok": true,
+      "ms": 171,
+      "msg": "连接成功"
+    },
+    "ssl": false,
+    "sync": {
+      "mode": "实时（CDC）",
+      "cron": "-",
+      "cronText": "持续同步",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": null
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:06",
+        "result": "成功",
+        "rows": 11068,
+        "secs": 9,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 15:14",
+        "result": "延迟",
+        "rows": 16599,
+        "secs": 79,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 14:08",
+        "result": "延迟",
+        "rows": 47320,
+        "secs": 43,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 13:14",
+        "result": "成功",
+        "rows": 41985,
+        "secs": 99,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 12:25",
+        "result": "成功",
+        "rows": 23704,
+        "secs": 140,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:24",
+        "result": "成功",
+        "rows": 33026,
+        "secs": 14,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:16",
+        "result": "成功",
+        "rows": 26372,
+        "secs": 78,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 09:22",
+        "result": "成功",
+        "rows": 19582,
+        "secs": 55,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 32,
+    "createdAt": "2026-04-06"
+  },
+  {
+    "id": "DS-005",
+    "name": "用友 NC 采购",
+    "type": "ERP",
+    "host": "nc.xianlin.local",
+    "port": 443,
+    "database": "NCC-PUR",
+    "user": "api_bi",
+    "owner": "孙浩然",
+    "objectTypes": [
+      "采购单",
+      "供应商"
+    ],
+    "status": "异常",
+    "lastTest": {
+      "time": "2026-10-25 15:52",
+      "ok": false,
+      "ms": 10000,
+      "msg": "连接超时（10 秒）：nc.xianlin.local:443 无响应"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "0 */2 * * *",
+      "cronText": "每 2 小时",
+      "window": "全天",
+      "cursorField": "ts",
+      "nextRun": "2026-10-25 17:19"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:24",
+        "result": "失败",
+        "rows": 0,
+        "secs": 61,
+        "msg": "连接超时，已重试 3 次"
+      },
+      {
+        "time": "2026-10-25 14:28",
+        "result": "失败",
+        "rows": 0,
+        "secs": 113,
+        "msg": "连接超时，已重试 3 次"
+      },
+      {
+        "time": "2026-10-25 13:16",
+        "result": "成功",
+        "rows": 41017,
+        "secs": 87,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:47",
+        "result": "成功",
+        "rows": 46210,
+        "secs": 37,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:00",
+        "result": "成功",
+        "rows": 1337,
+        "secs": 101,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:28",
+        "result": "成功",
+        "rows": 8877,
+        "secs": 79,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:22",
+        "result": "成功",
+        "rows": 38661,
+        "secs": 76,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:53",
+        "result": "成功",
+        "rows": 17245,
+        "secs": 24,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 31,
+    "createdAt": "2026-05-07",
+    "erpSystem": "用友 NC Cloud",
+    "appId": "ncc-bi-0192"
+  },
+  {
+    "id": "DS-006",
+    "name": "商品主数据",
+    "type": "PostgreSQL",
+    "host": "10.12.8.35",
+    "port": 5432,
+    "database": "mdm_product",
+    "user": "sync_ro",
+    "owner": "王敏",
+    "objectTypes": [
+      "商品",
+      "品类"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:41",
+      "ok": true,
+      "ms": 40,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "0 * * * *",
+      "cronText": "每小时整点",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 16:39"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:04",
+        "result": "延迟",
+        "rows": 27049,
+        "secs": 78,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 14:49",
+        "result": "成功",
+        "rows": 17435,
+        "secs": 95,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 12:56",
+        "result": "成功",
+        "rows": 45099,
+        "secs": 30,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:46",
+        "result": "成功",
+        "rows": 8688,
+        "secs": 103,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:02",
+        "result": "成功",
+        "rows": 42049,
+        "secs": 18,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:50",
+        "result": "成功",
+        "rows": 44296,
+        "secs": 138,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:00",
+        "result": "成功",
+        "rows": 8117,
+        "secs": 111,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:43",
+        "result": "成功",
+        "rows": 16060,
+        "secs": 85,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 31,
+    "createdAt": "2026-06-08"
+  },
+  {
+    "id": "DS-007",
+    "name": "促销引擎",
+    "type": "MySQL",
+    "host": "10.12.9.102",
+    "port": 3306,
+    "database": "promo",
+    "user": "bi_sync",
+    "owner": "刘婷",
+    "objectTypes": [
+      "促销活动"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:40",
+      "ok": true,
+      "ms": 54,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "0 */4 * * *",
+      "cronText": "每 4 小时",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 16:59"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:03",
+        "result": "成功",
+        "rows": 11039,
+        "secs": 43,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:51",
+        "result": "成功",
+        "rows": 41854,
+        "secs": 103,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:06",
+        "result": "成功",
+        "rows": 43988,
+        "secs": 23,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:32",
+        "result": "成功",
+        "rows": 16040,
+        "secs": 106,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:05",
+        "result": "成功",
+        "rows": 27221,
+        "secs": 97,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:48",
+        "result": "成功",
+        "rows": 1931,
+        "secs": 60,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:07",
+        "result": "成功",
+        "rows": 46990,
+        "secs": 57,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:38",
+        "result": "延迟",
+        "rows": 14299,
+        "secs": 30,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      }
+    ],
+    "tableCount": 27,
+    "createdAt": "2026-07-09"
+  },
+  {
+    "id": "DS-008",
+    "name": "HR 人事库",
+    "type": "达梦 DM8",
+    "host": "10.12.20.18",
+    "port": 5236,
+    "database": "HR_CORE",
+    "user": "BI_READER",
+    "owner": "王敏",
+    "objectTypes": [
+      "员工"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:39",
+      "ok": true,
+      "ms": 69,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时全量",
+      "cron": "30 3 * * *",
+      "cronText": "每天 03:30",
+      "window": "00:00—06:00",
+      "cursorField": "-",
+      "nextRun": "2026-10-25 17:19"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:02",
+        "result": "成功",
+        "rows": 43030,
+        "secs": 7,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:54",
+        "result": "成功",
+        "rows": 18272,
+        "secs": 111,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:15",
+        "result": "成功",
+        "rows": 42878,
+        "secs": 16,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:48",
+        "result": "成功",
+        "rows": 23391,
+        "secs": 108,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:08",
+        "result": "成功",
+        "rows": 12393,
+        "secs": 35,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:46",
+        "result": "成功",
+        "rows": 7566,
+        "secs": 121,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:14",
+        "result": "延迟",
+        "rows": 37863,
+        "secs": 143,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 05:33",
+        "result": "成功",
+        "rows": 12538,
+        "secs": 115,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 23,
+    "createdAt": "2026-08-10",
+    "compatMode": "MySQL"
+  },
+  {
+    "id": "DS-009",
+    "name": "门店主数据",
+    "type": "PostgreSQL",
+    "host": "10.12.8.36",
+    "port": 5432,
+    "database": "mdm_store",
+    "user": "sync_ro",
+    "owner": "陈立军",
+    "objectTypes": [
+      "门店",
+      "大区",
+      "省份"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:38",
+      "ok": true,
+      "ms": 83,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "0 * * * *",
+      "cronText": "每小时整点",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 16:49"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:01",
+        "result": "成功",
+        "rows": 27020,
+        "secs": 112,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:26",
+        "result": "成功",
+        "rows": 42690,
+        "secs": 119,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:25",
+        "result": "成功",
+        "rows": 41767,
+        "secs": 10,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:34",
+        "result": "成功",
+        "rows": 30742,
+        "secs": 110,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:12",
+        "result": "成功",
+        "rows": 45565,
+        "secs": 114,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:44",
+        "result": "成功",
+        "rows": 13201,
+        "secs": 43,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:21",
+        "result": "成功",
+        "rows": 28736,
+        "secs": 90,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:29",
+        "result": "成功",
+        "rows": 10777,
+        "secs": 60,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 19,
+    "createdAt": "2026-09-11"
+  },
+  {
+    "id": "DS-010",
+    "name": "冷链温控",
+    "type": "人大金仓 KingbaseES",
+    "host": "10.12.31.52",
+    "port": 54321,
+    "database": "coldchain",
+    "user": "cc_ro",
+    "owner": "孙浩然",
+    "objectTypes": [
+      "仓库"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:37",
+      "ok": true,
+      "ms": 98,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "*/10 * * * *",
+      "cronText": "每 10 分钟",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 17:09"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:00",
+        "result": "成功",
+        "rows": 11011,
+        "secs": 77,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:29",
+        "result": "成功",
+        "rows": 19109,
+        "secs": 127,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:04",
+        "result": "成功",
+        "rows": 40657,
+        "secs": 143,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:50",
+        "result": "成功",
+        "rows": 38094,
+        "secs": 112,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:15",
+        "result": "成功",
+        "rows": 30737,
+        "secs": 53,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:42",
+        "result": "成功",
+        "rows": 18836,
+        "secs": 105,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 06:58",
+        "result": "成功",
+        "rows": 19609,
+        "secs": 36,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:54",
+        "result": "成功",
+        "rows": 9016,
+        "secs": 5,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 65,
+    "createdAt": "2026-01-12",
+    "databaseMode": "pg"
+  },
+  {
+    "id": "DS-011",
+    "name": "到家订单（美团 / 饿了么）",
+    "type": "MySQL",
+    "host": "10.12.9.140",
+    "port": 3306,
+    "database": "o2o_order",
+    "user": "bi_sync",
+    "owner": "陈立军",
+    "objectTypes": [
+      "订单",
+      "订单行"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:37",
+      "ok": true,
+      "ms": 112,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "*/5 * * * *",
+      "cronText": "每 5 分钟",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 16:38"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 15:58",
+        "result": "成功",
+        "rows": 43001,
+        "secs": 41,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:31",
+        "result": "延迟",
+        "rows": 43527,
+        "secs": 135,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 13:14",
+        "result": "成功",
+        "rows": 39546,
+        "secs": 136,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:36",
+        "result": "延迟",
+        "rows": 45445,
+        "secs": 114,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 10:18",
+        "result": "成功",
+        "rows": 15910,
+        "secs": 132,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:39",
+        "result": "成功",
+        "rows": 24472,
+        "secs": 27,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:05",
+        "result": "成功",
+        "rows": 10482,
+        "secs": 123,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:49",
+        "result": "成功",
+        "rows": 7255,
+        "secs": 90,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 61,
+    "createdAt": "2026-02-13"
+  },
+  {
+    "id": "DS-012",
+    "name": "金蝶费用报销",
+    "type": "ERP",
+    "host": "k3cloud.xianlin.local",
+    "port": 443,
+    "database": "K3-EXP",
+    "user": "api_bi",
+    "owner": "何静",
+    "objectTypes": [
+      "门店"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:36",
+      "ok": true,
+      "ms": 127,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "0 1 * * *",
+      "cronText": "每天 01:00",
+      "window": "全天",
+      "cursorField": "ts",
+      "nextRun": "2026-10-25 16:58"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 15:57",
+        "result": "成功",
+        "rows": 26991,
+        "secs": 6,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:34",
+        "result": "成功",
+        "rows": 19945,
+        "secs": 143,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:23",
+        "result": "成功",
+        "rows": 38435,
+        "secs": 129,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:52",
+        "result": "成功",
+        "rows": 4797,
+        "secs": 116,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:22",
+        "result": "成功",
+        "rows": 1082,
+        "secs": 71,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:37",
+        "result": "成功",
+        "rows": 30107,
+        "secs": 89,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:12",
+        "result": "成功",
+        "rows": 1355,
+        "secs": 69,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:45",
+        "result": "延迟",
+        "rows": 5494,
+        "secs": 35,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      }
+    ],
+    "tableCount": 58,
+    "createdAt": "2026-03-14",
+    "erpSystem": "金蝶云·星空",
+    "appId": "k3c-298113"
+  },
+  {
+    "id": "DS-013",
+    "name": "物流运单",
+    "type": "PostgreSQL",
+    "host": "10.12.8.60",
+    "port": 5432,
+    "database": "tms",
+    "user": "sync_ro",
+    "owner": "孙浩然",
+    "objectTypes": [
+      "出库单"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:35",
+      "ok": true,
+      "ms": 141,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时增量",
+      "cron": "*/15 * * * *",
+      "cronText": "每 15 分钟",
+      "window": "全天",
+      "cursorField": "updated_at",
+      "nextRun": "2026-10-25 17:18"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 15:56",
+        "result": "成功",
+        "rows": 10982,
+        "secs": 111,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:36",
+        "result": "成功",
+        "rows": 44364,
+        "secs": 11,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:03",
+        "result": "成功",
+        "rows": 37325,
+        "secs": 123,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:38",
+        "result": "成功",
+        "rows": 12148,
+        "secs": 118,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 09:55",
+        "result": "延迟",
+        "rows": 34254,
+        "secs": 9,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 08:35",
+        "result": "成功",
+        "rows": 35742,
+        "secs": 11,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:19",
+        "result": "延迟",
+        "rows": 40228,
+        "secs": 16,
+        "msg": "源库负载高，比计划晚 12 分钟"
+      },
+      {
+        "time": "2026-10-25 05:40",
+        "result": "成功",
+        "rows": 3733,
+        "secs": 119,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 54,
+    "createdAt": "2026-04-15"
+  },
+  {
+    "id": "DS-014",
+    "name": "社群团购",
+    "type": "MySQL",
+    "host": "10.12.9.150",
+    "port": 3306,
+    "database": "groupbuy",
+    "user": "bi_sync",
+    "owner": "刘婷",
+    "objectTypes": [
+      "订单"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:34",
+      "ok": true,
+      "ms": 156,
+      "msg": "连接成功"
+    },
+    "ssl": false,
+    "sync": {
+      "mode": "手动",
+      "cron": "-",
+      "cronText": "手动触发",
+      "window": "全天",
+      "cursorField": "-",
+      "nextRun": null
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 15:55",
+        "result": "成功",
+        "rows": 42972,
+        "secs": 76,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:39",
+        "result": "成功",
+        "rows": 20782,
+        "secs": 19,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:12",
+        "result": "成功",
+        "rows": 36214,
+        "secs": 116,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:54",
+        "result": "成功",
+        "rows": 19499,
+        "secs": 120,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 09:59",
+        "result": "成功",
+        "rows": 19426,
+        "secs": 88,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:33",
+        "result": "成功",
+        "rows": 41377,
+        "secs": 73,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 06:56",
+        "result": "成功",
+        "rows": 31101,
+        "secs": 102,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:35",
+        "result": "成功",
+        "rows": 1972,
+        "secs": 64,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 31,
+    "createdAt": "2026-05-16"
+  },
+  {
+    "id": "DS-015",
+    "name": "财务报表（测试）",
+    "type": "达梦 DM8",
+    "host": "10.12.70.3",
+    "port": 5236,
+    "database": "FIN_RPT_UAT",
+    "user": "BI_READER",
+    "owner": "何静",
+    "objectTypes": [],
+    "status": "未测试",
+    "lastTest": null,
+    "ssl": true,
+    "sync": {
+      "mode": "手动",
+      "cron": "-",
+      "cronText": "手动触发",
+      "window": "全天",
+      "cursorField": "-",
+      "nextRun": null
+    },
+    "runs": [],
+    "tableCount": 56,
+    "createdAt": "2026-06-17",
+    "compatMode": "Oracle"
+  },
+  {
+    "id": "DS-016",
+    "name": "SAP 集团合并",
+    "type": "ERP",
+    "host": "s4.group.local",
+    "port": 443,
+    "database": "S4-FI",
+    "user": "RFC_BI",
+    "owner": "何静",
+    "objectTypes": [
+      "大区"
+    ],
+    "status": "正常",
+    "lastTest": {
+      "time": "2026-10-24 14:33",
+      "ok": true,
+      "ms": 25,
+      "msg": "连接成功"
+    },
+    "ssl": true,
+    "sync": {
+      "mode": "定时全量",
+      "cron": "0 4 * * 1",
+      "cronText": "每周一 04:00",
+      "window": "00:00—06:00",
+      "cursorField": "-",
+      "nextRun": "2026-10-25 16:38"
+    },
+    "runs": [
+      {
+        "time": "2026-10-25 16:23",
+        "result": "成功",
+        "rows": 10953,
+        "secs": 5,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 14:44",
+        "result": "成功",
+        "rows": 21619,
+        "secs": 35,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 13:01",
+        "result": "成功",
+        "rows": 33993,
+        "secs": 102,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 11:26",
+        "result": "成功",
+        "rows": 34202,
+        "secs": 125,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 10:05",
+        "result": "成功",
+        "rows": 37770,
+        "secs": 106,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 08:29",
+        "result": "成功",
+        "rows": 4647,
+        "secs": 56,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 07:10",
+        "result": "成功",
+        "rows": 12847,
+        "secs": 135,
+        "msg": "完成"
+      },
+      {
+        "time": "2026-10-25 05:26",
+        "result": "成功",
+        "rows": 46450,
+        "secs": 94,
+        "msg": "完成"
+      }
+    ],
+    "tableCount": 42,
+    "createdAt": "2026-07-18",
+    "erpSystem": "SAP S/4HANA",
+    "appId": "S4P-800"
+  }
+]

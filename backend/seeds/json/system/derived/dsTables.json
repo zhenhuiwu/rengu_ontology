@@ -1,0 +1,6192 @@
+[
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-001"
+      }
+    ],
+    "result": [
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 323831,
+        "cols": 32,
+        "objectType": "退款",
+        "updatedAt": "2026-10-25 15:00"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 4653097,
+        "cols": 34,
+        "objectType": "订单行",
+        "updatedAt": "2026-10-25 10:47"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 114735,
+        "cols": 12,
+        "objectType": "订单",
+        "updatedAt": "2026-10-25 11:20"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 967952,
+        "cols": 15,
+        "objectType": "退款行",
+        "updatedAt": "2026-10-25 12:01"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 3195,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:00"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close_h1",
+        "comment": "门店日结（历史）",
+        "rows": 313345,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:57"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 229290,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:28"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 41355,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:02"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 318633,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:04"
+      },
+      {
+        "schema": "dim",
+        "name": "payment_h1",
+        "comment": "支付流水（历史）",
+        "rows": 120302,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:09"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 367913,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:36"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift_h1",
+        "comment": "收银班次（历史）",
+        "rows": 386868,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:11"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 360382,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:32"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order_h1",
+        "comment": "采购单（历史）",
+        "rows": 131782,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:25"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 373295,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:25"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 156608,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:33"
+      },
+      {
+        "schema": "dim",
+        "name": "sku_h1",
+        "comment": "商品 SKU（历史）",
+        "rows": 207651,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:59"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 325704,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:27"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse_h1",
+        "comment": "仓库（历史）",
+        "rows": 37937,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:43"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 192705,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:00"
+      },
+      {
+        "schema": "ods",
+        "name": "device_h1",
+        "comment": "收银设备（历史）",
+        "rows": 13155,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:18"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 125908,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:11"
+      },
+      {
+        "schema": "ods",
+        "name": "employee_h1",
+        "comment": "员工（历史）",
+        "rows": 271826,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:23"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 233060,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:19"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 36148,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:24"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 714905,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:16"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h2",
+        "comment": "订单明细（历史）",
+        "rows": 4761009,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:06"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 174540,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:30"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change_h1",
+        "comment": "调价记录（历史）",
+        "rows": 293128,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:33"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 127676,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:51"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule_h1",
+        "comment": "促销规则（历史）",
+        "rows": 157878,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:07"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 108913,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:05"
+      },
+      {
+        "schema": "ods",
+        "name": "region_h1",
+        "comment": "大区（历史）",
+        "rows": 336560,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:54"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 303464,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:14"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier_h1",
+        "comment": "供应商（历史）",
+        "rows": 311340,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:43"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 322135,
+        "cols": 46,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:27"
+      },
+      {
+        "schema": "public",
+        "name": "cashier_h1",
+        "comment": "收银员（历史）",
+        "rows": 191315,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:45"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 39634,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:29"
+      },
+      {
+        "schema": "public",
+        "name": "category_h1",
+        "comment": "品类（历史）",
+        "rows": 388146,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:15"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 355214,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:56"
+      },
+      {
+        "schema": "public",
+        "name": "coupon_h1",
+        "comment": "优惠券（历史）",
+        "rows": 343245,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:32"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 190017,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:29"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h2",
+        "comment": "订单头（历史）",
+        "rows": 177830,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:23"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 7627617,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:20"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 19070,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:14"
+      },
+      {
+        "schema": "public",
+        "name": "shipment_h1",
+        "comment": "出库单（历史）",
+        "rows": 277467,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:45"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 328297,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:46"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot_h1",
+        "comment": "库存快照（历史）",
+        "rows": 114435,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:17"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 199420,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:56"
+      },
+      {
+        "schema": "public",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 188203,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:07"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-002"
+      }
+    ],
+    "result": [
+      {
+        "schema": "BI_READER",
+        "name": "COUPON",
+        "comment": "优惠券",
+        "rows": 294912,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:34"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "COUPON_H1",
+        "comment": "优惠券（历史）",
+        "rows": 16311,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:50"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "DEVICE",
+        "comment": "收银设备",
+        "rows": 271625,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:45"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "EMPLOYEE",
+        "comment": "员工",
+        "rows": 134116,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:14"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "EMPLOYEE_H1",
+        "comment": "员工（历史）",
+        "rows": 281817,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:31"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "MEMBER",
+        "comment": "会员",
+        "rows": 220589,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:13"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "MEMBER_H1",
+        "comment": "会员（历史）",
+        "rows": 59625,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:10"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "ORDER_HEADER",
+        "comment": "订单头",
+        "rows": 135043,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:22"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "ORDER_HEADER_H1",
+        "comment": "订单头（历史）",
+        "rows": 252284,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:10"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "POS_SHIFT",
+        "comment": "收银班次",
+        "rows": 270772,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:10"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "POS_SHIFT_H1",
+        "comment": "收银班次（历史）",
+        "rows": 141159,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:42"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PROMO_RULE",
+        "comment": "促销规则",
+        "rows": 118113,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:55"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PROMO_RULE_H1",
+        "comment": "促销规则（历史）",
+        "rows": 79402,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:41"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PURCHASE_ORDER",
+        "comment": "采购单",
+        "rows": 82615,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:23"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PURCHASE_ORDER_H1",
+        "comment": "采购单（历史）",
+        "rows": 43744,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:28"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "REFUND",
+        "comment": "退款单",
+        "rows": 110171,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:35"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "REFUND_H1",
+        "comment": "退款单（历史）",
+        "rows": 388926,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:05"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "SKU",
+        "comment": "商品 SKU",
+        "rows": 308248,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:26"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "SKU_H1",
+        "comment": "商品 SKU（历史）",
+        "rows": 202221,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:26"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STOCK_SNAPSHOT",
+        "comment": "库存快照",
+        "rows": 12774,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:48"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STOCK_SNAPSHOT_H1",
+        "comment": "库存快照（历史）",
+        "rows": 220375,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:40"
+      },
+      {
+        "ref": "门店主数据（ORG.T_STORE / ORG.T_REGION）",
+        "schema": "BI_READER",
+        "name": "STORE",
+        "comment": "门店",
+        "rows": 245233,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:36"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STORE_H1",
+        "comment": "门店（历史）",
+        "rows": 241396,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:19"
+      },
+      {
+        "schema": "ODS",
+        "name": "CASHIER",
+        "comment": "收银员",
+        "rows": 62014,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:08"
+      },
+      {
+        "schema": "ODS",
+        "name": "CASHIER_H1",
+        "comment": "收银员（历史）",
+        "rows": 318063,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:45"
+      },
+      {
+        "schema": "ODS",
+        "name": "CATEGORY",
+        "comment": "品类",
+        "rows": 234374,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:48"
+      },
+      {
+        "schema": "ODS",
+        "name": "CATEGORY_H1",
+        "comment": "品类（历史）",
+        "rows": 165556,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:38"
+      },
+      {
+        "schema": "ODS",
+        "name": "DAILY_CLOSE",
+        "comment": "门店日结",
+        "rows": 353188,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:15"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL",
+        "comment": "会员等级",
+        "rows": 252680,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:34"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL_H1",
+        "comment": "会员等级（历史）",
+        "rows": 242831,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:33"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE",
+        "comment": "订单明细",
+        "rows": 3295393,
+        "cols": 46,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:17"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE_H1",
+        "comment": "订单明细（历史）",
+        "rows": 2129708,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:56"
+      },
+      {
+        "schema": "ODS",
+        "name": "PAYMENT",
+        "comment": "支付流水",
+        "rows": 173521,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:07"
+      },
+      {
+        "schema": "ODS",
+        "name": "PAYMENT_H1",
+        "comment": "支付流水（历史）",
+        "rows": 321518,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:00"
+      },
+      {
+        "schema": "ODS",
+        "name": "PRICE_CHANGE",
+        "comment": "调价记录",
+        "rows": 156196,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:21"
+      },
+      {
+        "schema": "ODS",
+        "name": "PRICE_CHANGE_H1",
+        "comment": "调价记录（历史）",
+        "rows": 113898,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:42"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE",
+        "comment": "退款明细",
+        "rows": 5699726,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:55"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE_H1",
+        "comment": "退款明细（历史）",
+        "rows": 1762704,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:24"
+      },
+      {
+        "ref": "门店主数据（ORG.T_STORE / ORG.T_REGION）",
+        "schema": "ODS",
+        "name": "REGION",
+        "comment": "大区",
+        "rows": 1144,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:09"
+      },
+      {
+        "schema": "ODS",
+        "name": "REGION_H1",
+        "comment": "大区（历史）",
+        "rows": 18616,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:02"
+      },
+      {
+        "schema": "ODS",
+        "name": "SHIPMENT",
+        "comment": "出库单",
+        "rows": 372365,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:17"
+      },
+      {
+        "schema": "ODS",
+        "name": "SHIPMENT_H1",
+        "comment": "出库单（历史）",
+        "rows": 285576,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:36"
+      },
+      {
+        "schema": "ODS",
+        "name": "SUPPLIER",
+        "comment": "供应商",
+        "rows": 380971,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:49"
+      },
+      {
+        "schema": "ODS",
+        "name": "SUPPLIER_H1",
+        "comment": "供应商（历史）",
+        "rows": 257087,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:38"
+      },
+      {
+        "schema": "ODS",
+        "name": "WAREHOUSE",
+        "comment": "仓库",
+        "rows": 100669,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:39"
+      },
+      {
+        "schema": "ODS",
+        "name": "WAREHOUSE_H1",
+        "comment": "仓库（历史）",
+        "rows": 289734,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:38"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-003"
+      }
+    ],
+    "result": [
+      {
+        "schema": "ODS",
+        "name": "SHIPMENT",
+        "comment": "出库单",
+        "rows": 325661,
+        "cols": 10,
+        "objectType": "出库单",
+        "updatedAt": "2026-10-25 16:20"
+      },
+      {
+        "schema": "ODS",
+        "name": "WAREHOUSE",
+        "comment": "仓库",
+        "rows": 275633,
+        "cols": 12,
+        "objectType": "仓库",
+        "updatedAt": "2026-10-25 13:51"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "STOCK_SNAPSHOT",
+        "comment": "库存快照",
+        "rows": 97251,
+        "cols": 15,
+        "objectType": "库存",
+        "updatedAt": "2026-10-25 15:50"
+      },
+      {
+        "schema": "ODS",
+        "name": "CASHIER",
+        "comment": "收银员",
+        "rows": 201894,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:50"
+      },
+      {
+        "schema": "ODS",
+        "name": "CATEGORY",
+        "comment": "品类",
+        "rows": 29113,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:08"
+      },
+      {
+        "schema": "ODS",
+        "name": "CATEGORY_H1",
+        "comment": "品类（历史）",
+        "rows": 342966,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:02"
+      },
+      {
+        "schema": "ODS",
+        "name": "DAILY_CLOSE",
+        "comment": "门店日结",
+        "rows": 303180,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:31"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL",
+        "comment": "会员等级",
+        "rows": 276070,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:39"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL_H1",
+        "comment": "会员等级（历史）",
+        "rows": 44307,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:04"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE",
+        "comment": "订单明细",
+        "rows": 1937688,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:47"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE_H1",
+        "comment": "订单明细（历史）",
+        "rows": 3544511,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:37"
+      },
+      {
+        "schema": "ODS",
+        "name": "PAYMENT",
+        "comment": "支付流水",
+        "rows": 28409,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:10"
+      },
+      {
+        "schema": "ODS",
+        "name": "PAYMENT_H1",
+        "comment": "支付流水（历史）",
+        "rows": 122733,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:52"
+      },
+      {
+        "schema": "ODS",
+        "name": "PRICE_CHANGE",
+        "comment": "调价记录",
+        "rows": 137851,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:12"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE",
+        "comment": "退款明细",
+        "rows": 1431500,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:49"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE_H1",
+        "comment": "退款明细（历史）",
+        "rows": 4897790,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:28"
+      },
+      {
+        "schema": "ODS",
+        "name": "REGION",
+        "comment": "大区",
+        "rows": 293375,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:13"
+      },
+      {
+        "schema": "ODS",
+        "name": "REGION_H1",
+        "comment": "大区（历史）",
+        "rows": 100673,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:11"
+      },
+      {
+        "schema": "ODS",
+        "name": "SHIPMENT_H1",
+        "comment": "出库单（历史）",
+        "rows": 293685,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:27"
+      },
+      {
+        "schema": "ODS",
+        "name": "SUPPLIER",
+        "comment": "供应商",
+        "rows": 58478,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:24"
+      },
+      {
+        "schema": "ODS",
+        "name": "SUPPLIER_H1",
+        "comment": "供应商（历史）",
+        "rows": 202834,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:34"
+      },
+      {
+        "schema": "ODS",
+        "name": "WAREHOUSE_H1",
+        "comment": "仓库（历史）",
+        "rows": 141530,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:33"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "COUPON",
+        "comment": "优惠券",
+        "rows": 234609,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:11"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "DEVICE",
+        "comment": "收银设备",
+        "rows": 350545,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:30"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "EMPLOYEE",
+        "comment": "员工",
+        "rows": 142324,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:18"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "EMPLOYEE_H1",
+        "comment": "员工（历史）",
+        "rows": 291808,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:40"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "MEMBER",
+        "comment": "会员",
+        "rows": 208118,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:07"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "MEMBER_H1",
+        "comment": "会员（历史）",
+        "rows": 83102,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:56"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "ORDER_HEADER",
+        "comment": "订单头",
+        "rows": 155350,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:24"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "ORDER_HEADER_H1",
+        "comment": "订单头（历史）",
+        "rows": 314552,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:51"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "POS_SHIFT",
+        "comment": "收银班次",
+        "rows": 173631,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:45"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "PROMO_RULE",
+        "comment": "促销规则",
+        "rows": 108551,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:58"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "PROMO_RULE_H1",
+        "comment": "促销规则（历史）",
+        "rows": 927,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:15"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "PURCHASE_ORDER",
+        "comment": "采购单",
+        "rows": 204848,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:13"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "PURCHASE_ORDER_H1",
+        "comment": "采购单（历史）",
+        "rows": 355706,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:31"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "REFUND",
+        "comment": "退款单",
+        "rows": 296512,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:10"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "REFUND_H1",
+        "comment": "退款单（历史）",
+        "rows": 4557,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:45"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "SKU",
+        "comment": "商品 SKU",
+        "rows": 59889,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:19"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "SKU_H1",
+        "comment": "商品 SKU（历史）",
+        "rows": 196792,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:52"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "STOCK_SNAPSHOT_H1",
+        "comment": "库存快照（历史）",
+        "rows": 326315,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:04"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "STORE",
+        "comment": "门店",
+        "rows": 291046,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:17"
+      },
+      {
+        "schema": "wms_ro",
+        "name": "STORE_H1",
+        "comment": "门店（历史）",
+        "rows": 294589,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:31"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-004"
+      }
+    ],
+    "result": [
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 299459,
+        "cols": 44,
+        "objectType": "会员等级",
+        "updatedAt": "2026-10-25 13:44"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 195647,
+        "cols": 32,
+        "objectType": "会员",
+        "updatedAt": "2026-10-25 10:00"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 253173,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:46"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 245783,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:35"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 283297,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:14"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 76491,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:19"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 327081,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:04"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 82852,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:45"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 20188,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:25"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 211529,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:11"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 50598,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:03"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 29465,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:14"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 150533,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:22"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 106579,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:42"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 579984,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:17"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 4959315,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:17"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 119507,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:03"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 98988,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:02"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 185606,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:16"
+      },
+      {
+        "schema": "ods",
+        "name": "region_h1",
+        "comment": "大区（历史）",
+        "rows": 182730,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:19"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 135985,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:00"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 341773,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:32"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 223852,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:27"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 174307,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:49"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 175658,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:26"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 376819,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:31"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 6163273,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:43"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 8032876,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:32"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 278956,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:23"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 181728,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:52"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 336858,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:57"
+      },
+      {
+        "schema": "public",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 347782,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:43"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-005"
+      }
+    ],
+    "result": [
+      {
+        "schema": "api",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 49315,
+        "cols": 21,
+        "objectType": "采购单",
+        "updatedAt": "2026-10-25 09:55"
+      },
+      {
+        "schema": "api",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 213493,
+        "cols": 7,
+        "objectType": "供应商",
+        "updatedAt": "2026-10-25 08:35"
+      },
+      {
+        "schema": "api",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 81652,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:13"
+      },
+      {
+        "schema": "api",
+        "name": "category",
+        "comment": "品类",
+        "rows": 18591,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:46"
+      },
+      {
+        "schema": "api",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 114004,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:27"
+      },
+      {
+        "schema": "api",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 203165,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:02"
+      },
+      {
+        "schema": "api",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 108384,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:59"
+      },
+      {
+        "schema": "api",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 158741,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:25"
+      },
+      {
+        "schema": "api",
+        "name": "member",
+        "comment": "会员",
+        "rows": 183176,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:54"
+      },
+      {
+        "schema": "api",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 130055,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:28"
+      },
+      {
+        "schema": "api",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 322849,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:49"
+      },
+      {
+        "schema": "api",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 47258,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:06"
+      },
+      {
+        "schema": "api",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 195966,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:28"
+      },
+      {
+        "schema": "api",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 39087,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:12"
+      },
+      {
+        "schema": "api",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 8222279,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:47"
+      },
+      {
+        "schema": "api",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 6374118,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:58"
+      },
+      {
+        "schema": "api",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 138185,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:17"
+      },
+      {
+        "schema": "api",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 379350,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:53"
+      },
+      {
+        "schema": "api",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 101162,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:54"
+      },
+      {
+        "schema": "api",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 89425,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:06"
+      },
+      {
+        "schema": "api",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 269193,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:20"
+      },
+      {
+        "schema": "api",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 35819,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:05"
+      },
+      {
+        "schema": "api",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 1895047,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:36"
+      },
+      {
+        "schema": "api",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 2167962,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:36"
+      },
+      {
+        "schema": "api",
+        "name": "region",
+        "comment": "大区",
+        "rows": 77838,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:20"
+      },
+      {
+        "schema": "api",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 232252,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:26"
+      },
+      {
+        "schema": "api",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 363170,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:04"
+      },
+      {
+        "schema": "api",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 266205,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:54"
+      },
+      {
+        "schema": "api",
+        "name": "store",
+        "comment": "门店",
+        "rows": 382671,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:38"
+      },
+      {
+        "schema": "api",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 975,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:56"
+      },
+      {
+        "schema": "api",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 225562,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:14"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-006"
+      }
+    ],
+    "result": [
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 114810,
+        "cols": 27,
+        "objectType": "商品",
+        "updatedAt": "2026-10-25 15:57"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 213331,
+        "cols": 46,
+        "objectType": "品类",
+        "updatedAt": "2026-10-25 13:05"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 153158,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:18"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 346239,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:55"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 248734,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:37"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 393073,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:20"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 282209,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:28"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 171548,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:46"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 55533,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:55"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 51450,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:45"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 527,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:26"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 187304,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:44"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 166949,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:29"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 170705,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:47"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 153532,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:13"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 6864575,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:16"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 7788922,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:38"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 82818,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:45"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 79862,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:09"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 370069,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:24"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 291000,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:10"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 221532,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:55"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 53702,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:04"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 216274,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:30"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 101354,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:52"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 6626821,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:30"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 5303048,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:40"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 185547,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:29"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 350682,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:57"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 28484,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:18"
+      },
+      {
+        "schema": "public",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 54168,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:08"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-007"
+      }
+    ],
+    "result": [
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 70299,
+        "cols": 17,
+        "objectType": "促销活动",
+        "updatedAt": "2026-10-25 09:13"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 103150,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:33"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 369629,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:00"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 247961,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:24"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 185069,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:02"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 293781,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:37"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 241874,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:30"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 67081,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:25"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 266451,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:50"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 175491,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:38"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 266224,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:29"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 175157,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:32"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 158234,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:41"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 5506870,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:46"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 203725,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:18"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 64473,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:36"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 262300,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:27"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 368507,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:45"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 361411,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:37"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 8070,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:25"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 393400,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:42"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 236581,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:32"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 163621,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:33"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 2358595,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:24"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 138843,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:32"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 35160,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:59"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 74297,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:59"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-008"
+      }
+    ],
+    "result": [
+      {
+        "schema": "BI_READER",
+        "name": "EMPLOYEE",
+        "comment": "员工",
+        "rows": 183366,
+        "cols": 30,
+        "objectType": "员工",
+        "updatedAt": "2026-10-25 09:36"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "COUPON",
+        "comment": "优惠券",
+        "rows": 333097,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:19"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "DEVICE",
+        "comment": "收银设备",
+        "rows": 345144,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:13"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "MEMBER",
+        "comment": "会员",
+        "rows": 145762,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:34"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "ORDER_HEADER",
+        "comment": "订单头",
+        "rows": 256889,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:34"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "POS_SHIFT",
+        "comment": "收银班次",
+        "rows": 87928,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:37"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PROMO_RULE",
+        "comment": "促销规则",
+        "rows": 60737,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:17"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PURCHASE_ORDER",
+        "comment": "采购单",
+        "rows": 16014,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:28"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "REFUND",
+        "comment": "退款单",
+        "rows": 28214,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:05"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "SKU",
+        "comment": "商品 SKU",
+        "rows": 18092,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:43"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STOCK_SNAPSHOT",
+        "comment": "库存快照",
+        "rows": 119637,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:01"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STORE",
+        "comment": "门店",
+        "rows": 120109,
+        "cols": 46,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:40"
+      },
+      {
+        "schema": "ODS",
+        "name": "CASHIER",
+        "comment": "收银员",
+        "rows": 101290,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:18"
+      },
+      {
+        "schema": "ODS",
+        "name": "CATEGORY",
+        "comment": "品类",
+        "rows": 202809,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:44"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL",
+        "comment": "会员等级",
+        "rows": 393018,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:05"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE",
+        "comment": "订单明细",
+        "rows": 4149165,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:16"
+      },
+      {
+        "schema": "ODS",
+        "name": "PAYMENT",
+        "comment": "支付流水",
+        "rows": 102849,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:27"
+      },
+      {
+        "schema": "ODS",
+        "name": "PRICE_CHANGE",
+        "comment": "调价记录",
+        "rows": 46129,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:28"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE",
+        "comment": "退款明细",
+        "rows": 7090369,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:18"
+      },
+      {
+        "schema": "ODS",
+        "name": "REGION",
+        "comment": "大区",
+        "rows": 154531,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:31"
+      },
+      {
+        "schema": "ODS",
+        "name": "SHIPMENT",
+        "comment": "出库单",
+        "rows": 92138,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:35"
+      },
+      {
+        "schema": "ODS",
+        "name": "SUPPLIER",
+        "comment": "供应商",
+        "rows": 46014,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:21"
+      },
+      {
+        "schema": "ODS",
+        "name": "WAREHOUSE",
+        "comment": "仓库",
+        "rows": 350456,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:50"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-009"
+      }
+    ],
+    "result": [
+      {
+        "schema": "ORG",
+        "name": "T_REGION",
+        "comment": "大区",
+        "rows": 46762,
+        "cols": 30,
+        "objectType": "大区",
+        "updatedAt": "2026-10-25 08:34"
+      },
+      {
+        "schema": "ORG",
+        "name": "T_STORE",
+        "comment": "门店",
+        "rows": 165922,
+        "cols": 12,
+        "objectType": "门店",
+        "updatedAt": "2026-10-25 13:20"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 16408,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:10"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 357737,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:30"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 138247,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:19"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 214555,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:40"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 169732,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:36"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 125420,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:02"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 191574,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:40"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 133291,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:28"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 2791461,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:46"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 51174,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:20"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 123522,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:56"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 397549,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:03"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 272795,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:57"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 277197,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:36"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 2822143,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:11"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 45434,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:38"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 204114,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:03"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-010"
+      }
+    ],
+    "result": [
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 300385,
+        "cols": 28,
+        "objectType": "仓库",
+        "updatedAt": "2026-10-25 12:14"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 353128,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:20"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close_h1",
+        "comment": "门店日结（历史）",
+        "rows": 102392,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:29"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 39798,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:16"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 254637,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:41"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h2",
+        "comment": "会员等级（历史）",
+        "rows": 114756,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:16"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 212625,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:34"
+      },
+      {
+        "schema": "dim",
+        "name": "payment_h1",
+        "comment": "支付流水（历史）",
+        "rows": 331243,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:52"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 293646,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:46"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift_h1",
+        "comment": "收银班次（历史）",
+        "rows": 175490,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:51"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 260480,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:10"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order_h1",
+        "comment": "采购单（历史）",
+        "rows": 139443,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:50"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order_h2",
+        "comment": "采购单（历史）",
+        "rows": 69374,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:48"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 895,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:15"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 113974,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:25"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h2",
+        "comment": "退款单（历史）",
+        "rows": 196984,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:43"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 321373,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:29"
+      },
+      {
+        "schema": "dim",
+        "name": "sku_h1",
+        "comment": "商品 SKU（历史）",
+        "rows": 158785,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:56"
+      },
+      {
+        "schema": "dim",
+        "name": "sku_h2",
+        "comment": "商品 SKU（历史）",
+        "rows": 132505,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:35"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse_h1",
+        "comment": "仓库（历史）",
+        "rows": 304107,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:59"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse_h2",
+        "comment": "仓库（历史）",
+        "rows": 244108,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:42"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 102984,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:43"
+      },
+      {
+        "schema": "ods",
+        "name": "device_h1",
+        "comment": "收银设备（历史）",
+        "rows": 144329,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:44"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 199782,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:43"
+      },
+      {
+        "schema": "ods",
+        "name": "employee_h1",
+        "comment": "员工（历史）",
+        "rows": 361746,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:42"
+      },
+      {
+        "schema": "ods",
+        "name": "employee_h2",
+        "comment": "员工（历史）",
+        "rows": 133365,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:33"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 120820,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:21"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 247439,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:17"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h2",
+        "comment": "会员（历史）",
+        "rows": 14375,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:32"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 1433756,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:16"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 4448135,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:20"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h2",
+        "comment": "订单明细（历史）",
+        "rows": 4374367,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:12"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 9440,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:10"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change_h1",
+        "comment": "调价记录（历史）",
+        "rows": 280061,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:53"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 41611,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:24"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule_h1",
+        "comment": "促销规则（历史）",
+        "rows": 251596,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:11"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule_h2",
+        "comment": "促销规则（历史）",
+        "rows": 149933,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:28"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 338993,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:38"
+      },
+      {
+        "schema": "ods",
+        "name": "region_h1",
+        "comment": "大区（历史）",
+        "rows": 275070,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:10"
+      },
+      {
+        "schema": "ods",
+        "name": "region_h2",
+        "comment": "大区（历史）",
+        "rows": 340472,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:53"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 201029,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:31"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier_h1",
+        "comment": "供应商（历史）",
+        "rows": 223062,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:04"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier_h2",
+        "comment": "供应商（历史）",
+        "rows": 359729,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:25"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 381049,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:42"
+      },
+      {
+        "schema": "public",
+        "name": "cashier_h1",
+        "comment": "收银员（历史）",
+        "rows": 132050,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:43"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 192288,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:22"
+      },
+      {
+        "schema": "public",
+        "name": "category_h1",
+        "comment": "品类（历史）",
+        "rows": 384838,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:48"
+      },
+      {
+        "schema": "public",
+        "name": "category_h2",
+        "comment": "品类（历史）",
+        "rows": 137651,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:09"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 212492,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:34"
+      },
+      {
+        "schema": "public",
+        "name": "coupon_h1",
+        "comment": "优惠券（历史）",
+        "rows": 200841,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:10"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 297505,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:38"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 350424,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:34"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h2",
+        "comment": "订单头（历史）",
+        "rows": 256171,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:29"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 7553917,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:05"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 8843393,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:56"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h2",
+        "comment": "退款明细（历史）",
+        "rows": 5164597,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:57"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 398729,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:41"
+      },
+      {
+        "schema": "public",
+        "name": "shipment_h1",
+        "comment": "出库单（历史）",
+        "rows": 350449,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:22"
+      },
+      {
+        "schema": "public",
+        "name": "shipment_h2",
+        "comment": "出库单（历史）",
+        "rows": 234936,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:18"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 288591,
+        "cols": 46,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:05"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot_h1",
+        "comment": "库存快照（历史）",
+        "rows": 267892,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:49"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot_h2",
+        "comment": "库存快照（历史）",
+        "rows": 198443,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:26"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 211735,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:01"
+      },
+      {
+        "schema": "public",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 266940,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:57"
+      },
+      {
+        "schema": "public",
+        "name": "store_h2",
+        "comment": "门店（历史）",
+        "rows": 144521,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:27"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-011"
+      }
+    ],
+    "result": [
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 76052,
+        "cols": 36,
+        "objectType": "订单行",
+        "updatedAt": "2026-10-25 15:46"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 317812,
+        "cols": 45,
+        "objectType": "订单",
+        "updatedAt": "2026-10-25 11:40"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 303121,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:35"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close_h1",
+        "comment": "门店日结（历史）",
+        "rows": 301174,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:46"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 63188,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:21"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 56113,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:12"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h2",
+        "comment": "会员等级（历史）",
+        "rows": 362023,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:10"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 67513,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:37"
+      },
+      {
+        "schema": "dim",
+        "name": "payment_h1",
+        "comment": "支付流水（历史）",
+        "rows": 132458,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:44"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 196506,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:20"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift_h1",
+        "comment": "收银班次（历史）",
+        "rows": 329781,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:22"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 382713,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:01"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order_h1",
+        "comment": "采购单（历史）",
+        "rows": 51406,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:53"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 187236,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:50"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 129605,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:05"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h2",
+        "comment": "退款单（历史）",
+        "rows": 285957,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:16"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 73013,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:22"
+      },
+      {
+        "schema": "dim",
+        "name": "sku_h1",
+        "comment": "商品 SKU（历史）",
+        "rows": 153355,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:22"
+      },
+      {
+        "schema": "dim",
+        "name": "sku_h2",
+        "comment": "商品 SKU（历史）",
+        "rows": 256540,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:02"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 75349,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:26"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse_h1",
+        "comment": "仓库（历史）",
+        "rows": 155903,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:54"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse_h2",
+        "comment": "仓库（历史）",
+        "rows": 387810,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:01"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 181903,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:27"
+      },
+      {
+        "schema": "ods",
+        "name": "device_h1",
+        "comment": "收银设备（历史）",
+        "rows": 336682,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:40"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 207991,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:47"
+      },
+      {
+        "schema": "ods",
+        "name": "employee_h1",
+        "comment": "员工（历史）",
+        "rows": 371737,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:51"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 108349,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:15"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 270916,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:02"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h2",
+        "comment": "会员（历史）",
+        "rows": 97009,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:14"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 5862938,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:00"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h2",
+        "comment": "订单明细（历史）",
+        "rows": 2331406,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:00"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 391096,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:01"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change_h1",
+        "comment": "调价记录（历史）",
+        "rows": 100831,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:02"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 32048,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:28"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule_h1",
+        "comment": "促销规则（历史）",
+        "rows": 173120,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:45"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule_h2",
+        "comment": "促销规则（历史）",
+        "rows": 131548,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:48"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 231224,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:42"
+      },
+      {
+        "schema": "ods",
+        "name": "region_h1",
+        "comment": "大区（历史）",
+        "rows": 357127,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:18"
+      },
+      {
+        "schema": "ods",
+        "name": "region_h2",
+        "comment": "大区（历史）",
+        "rows": 330320,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:32"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 278536,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:06"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier_h1",
+        "comment": "供应商（历史）",
+        "rows": 168809,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:00"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 120928,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:23"
+      },
+      {
+        "schema": "public",
+        "name": "cashier_h1",
+        "comment": "收银员（历史）",
+        "rows": 258799,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:43"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 387027,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:42"
+      },
+      {
+        "schema": "public",
+        "name": "category_h1",
+        "comment": "品类（历史）",
+        "rows": 162248,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:12"
+      },
+      {
+        "schema": "public",
+        "name": "category_h2",
+        "comment": "品类（历史）",
+        "rows": 14218,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:20"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 152190,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:12"
+      },
+      {
+        "schema": "public",
+        "name": "coupon_h1",
+        "comment": "优惠券（历史）",
+        "rows": 273907,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:28"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 12691,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:15"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h2",
+        "comment": "订单头（历史）",
+        "rows": 309320,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:09"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 3285691,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:59"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 2978479,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:00"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h2",
+        "comment": "退款明细（历史）",
+        "rows": 8518647,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:24"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 352025,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:43"
+      },
+      {
+        "schema": "public",
+        "name": "shipment_h1",
+        "comment": "出库单（历史）",
+        "rows": 358559,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:13"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 373068,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:07"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot_h1",
+        "comment": "库存快照（历史）",
+        "rows": 373831,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:12"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot_h2",
+        "comment": "库存快照（历史）",
+        "rows": 179197,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:10"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 257548,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:41"
+      },
+      {
+        "schema": "public",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 320133,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:09"
+      },
+      {
+        "schema": "public",
+        "name": "store_h2",
+        "comment": "门店（历史）",
+        "rows": 286850,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:12"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-012"
+      }
+    ],
+    "result": [
+      {
+        "schema": "api",
+        "name": "store",
+        "comment": "门店",
+        "rows": 303360,
+        "cols": 33,
+        "objectType": "门店",
+        "updatedAt": "2026-10-25 07:22"
+      },
+      {
+        "schema": "api",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 260807,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:05"
+      },
+      {
+        "schema": "api",
+        "name": "cashier_h1",
+        "comment": "收银员（历史）",
+        "rows": 385547,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:43"
+      },
+      {
+        "schema": "api",
+        "name": "category",
+        "comment": "品类",
+        "rows": 181767,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:01"
+      },
+      {
+        "schema": "api",
+        "name": "category_h1",
+        "comment": "品类（历史）",
+        "rows": 339658,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:36"
+      },
+      {
+        "schema": "api",
+        "name": "category_h2",
+        "comment": "品类（历史）",
+        "rows": 290785,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:31"
+      },
+      {
+        "schema": "api",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 91888,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:49"
+      },
+      {
+        "schema": "api",
+        "name": "coupon_h1",
+        "comment": "优惠券（历史）",
+        "rows": 346973,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:45"
+      },
+      {
+        "schema": "api",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 253113,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:51"
+      },
+      {
+        "schema": "api",
+        "name": "daily_close_h1",
+        "comment": "门店日结（历史）",
+        "rows": 99957,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:02"
+      },
+      {
+        "schema": "api",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 260823,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:12"
+      },
+      {
+        "schema": "api",
+        "name": "device_h1",
+        "comment": "收银设备（历史）",
+        "rows": 129035,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:36"
+      },
+      {
+        "schema": "api",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 216199,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:51"
+      },
+      {
+        "schema": "api",
+        "name": "employee_h1",
+        "comment": "员工（历史）",
+        "rows": 381728,
+        "cols": 44,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:00"
+      },
+      {
+        "schema": "api",
+        "name": "member",
+        "comment": "会员",
+        "rows": 95878,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:08"
+      },
+      {
+        "schema": "api",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 294393,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:48"
+      },
+      {
+        "schema": "api",
+        "name": "member_h2",
+        "comment": "会员（历史）",
+        "rows": 179644,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:56"
+      },
+      {
+        "schema": "api",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 86577,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:26"
+      },
+      {
+        "schema": "api",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 257588,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:43"
+      },
+      {
+        "schema": "api",
+        "name": "member_level_h2",
+        "comment": "会员等级（历史）",
+        "rows": 209290,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:05"
+      },
+      {
+        "schema": "api",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 338120,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:41"
+      },
+      {
+        "schema": "api",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 74959,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:55"
+      },
+      {
+        "schema": "api",
+        "name": "order_header_h2",
+        "comment": "订单头（历史）",
+        "rows": 362469,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:50"
+      },
+      {
+        "schema": "api",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 7718347,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:16"
+      },
+      {
+        "schema": "api",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 7277742,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:41"
+      },
+      {
+        "schema": "api",
+        "name": "order_line_h2",
+        "comment": "订单明细（历史）",
+        "rows": 288446,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:47"
+      },
+      {
+        "schema": "api",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 322401,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:40"
+      },
+      {
+        "schema": "api",
+        "name": "payment_h1",
+        "comment": "支付流水（历史）",
+        "rows": 333674,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:35"
+      },
+      {
+        "schema": "api",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 99365,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:54"
+      },
+      {
+        "schema": "api",
+        "name": "pos_shift_h1",
+        "comment": "收银班次（历史）",
+        "rows": 84072,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:53"
+      },
+      {
+        "schema": "api",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 372751,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:52"
+      },
+      {
+        "schema": "api",
+        "name": "price_change_h1",
+        "comment": "调价记录（历史）",
+        "rows": 321601,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:11"
+      },
+      {
+        "schema": "api",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 22486,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:31"
+      },
+      {
+        "schema": "api",
+        "name": "promo_rule_h1",
+        "comment": "促销规则（历史）",
+        "rows": 94644,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:18"
+      },
+      {
+        "schema": "api",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 104946,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:52"
+      },
+      {
+        "schema": "api",
+        "name": "purchase_order_h1",
+        "comment": "采购单（历史）",
+        "rows": 363368,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:56"
+      },
+      {
+        "schema": "api",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 373576,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:25"
+      },
+      {
+        "schema": "api",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 145236,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:45"
+      },
+      {
+        "schema": "api",
+        "name": "refund_h2",
+        "comment": "退款单（历史）",
+        "rows": 374931,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:49"
+      },
+      {
+        "schema": "api",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 8017465,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:53"
+      },
+      {
+        "schema": "api",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 6113565,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:04"
+      },
+      {
+        "schema": "api",
+        "name": "refund_line_h2",
+        "comment": "退款明细（历史）",
+        "rows": 2872697,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:52"
+      },
+      {
+        "schema": "api",
+        "name": "region",
+        "comment": "大区",
+        "rows": 123455,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:45"
+      },
+      {
+        "schema": "api",
+        "name": "region_h1",
+        "comment": "大区（历史）",
+        "rows": 39184,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:27"
+      },
+      {
+        "schema": "api",
+        "name": "region_h2",
+        "comment": "大区（历史）",
+        "rows": 320167,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:11"
+      },
+      {
+        "schema": "api",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 305320,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:46"
+      },
+      {
+        "schema": "api",
+        "name": "shipment_h1",
+        "comment": "出库单（历史）",
+        "rows": 366668,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:04"
+      },
+      {
+        "schema": "api",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 224654,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:15"
+      },
+      {
+        "schema": "api",
+        "name": "sku_h1",
+        "comment": "商品 SKU（历史）",
+        "rows": 147926,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:49"
+      },
+      {
+        "schema": "api",
+        "name": "sku_h2",
+        "comment": "商品 SKU（历史）",
+        "rows": 380575,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:29"
+      },
+      {
+        "schema": "api",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 57545,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:09"
+      },
+      {
+        "schema": "api",
+        "name": "stock_snapshot_h1",
+        "comment": "库存快照（历史）",
+        "rows": 79771,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:36"
+      },
+      {
+        "schema": "api",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 373326,
+        "cols": 11,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:21"
+      },
+      {
+        "schema": "api",
+        "name": "store_h2",
+        "comment": "门店（历史）",
+        "rows": 29178,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:56"
+      },
+      {
+        "schema": "api",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 356044,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:41"
+      },
+      {
+        "schema": "api",
+        "name": "supplier_h1",
+        "comment": "供应商（历史）",
+        "rows": 114556,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:55"
+      },
+      {
+        "schema": "api",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 250314,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:38"
+      },
+      {
+        "schema": "api",
+        "name": "warehouse_h1",
+        "comment": "仓库（历史）",
+        "rows": 7700,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:49"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-013"
+      }
+    ],
+    "result": [
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 258616,
+        "cols": 13,
+        "objectType": "出库单",
+        "updatedAt": "2026-10-25 06:49"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 203106,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:07"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close_h1",
+        "comment": "门店日结（历史）",
+        "rows": 298740,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:19"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 109967,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:31"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 59064,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:14"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h2",
+        "comment": "会员等级（历史）",
+        "rows": 56557,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:59"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 177289,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:44"
+      },
+      {
+        "schema": "dim",
+        "name": "payment_h1",
+        "comment": "支付流水（历史）",
+        "rows": 134889,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:27"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 2224,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:29"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift_h1",
+        "comment": "收银班次（历史）",
+        "rows": 238363,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:24"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 227179,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:43"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order_h1",
+        "comment": "采购单（历史）",
+        "rows": 275331,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:58"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 159917,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:00"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 160867,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:25"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h2",
+        "comment": "退款单（历史）",
+        "rows": 63904,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:22"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 376295,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:08"
+      },
+      {
+        "schema": "dim",
+        "name": "sku_h1",
+        "comment": "商品 SKU（历史）",
+        "rows": 142496,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:15"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 25278,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:50"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse_h1",
+        "comment": "仓库（历史）",
+        "rows": 259496,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:44"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 339743,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:57"
+      },
+      {
+        "schema": "ods",
+        "name": "device_h1",
+        "comment": "收银设备（历史）",
+        "rows": 321387,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:32"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 224407,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:54"
+      },
+      {
+        "schema": "ods",
+        "name": "employee_h1",
+        "comment": "员工（历史）",
+        "rows": 391719,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:09"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 83407,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:02"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 317870,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:34"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h2",
+        "comment": "会员（历史）",
+        "rows": 262278,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:38"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 6360642,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:46"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 8692545,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:21"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h2",
+        "comment": "订单明细（历史）",
+        "rows": 7245486,
+        "cols": 34,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:35"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 354407,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:43"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change_h1",
+        "comment": "调价记录（历史）",
+        "rows": 142372,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:20"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 12923,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:35"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule_h1",
+        "comment": "促销规则（历史）",
+        "rows": 16168,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:52"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 15686,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:49"
+      },
+      {
+        "schema": "ods",
+        "name": "region_h1",
+        "comment": "大区（历史）",
+        "rows": 121240,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:35"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 33551,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:17"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier_h1",
+        "comment": "供应商（历史）",
+        "rows": 60302,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:51"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 687,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:47"
+      },
+      {
+        "schema": "public",
+        "name": "cashier_h1",
+        "comment": "收银员（历史）",
+        "rows": 112296,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:42"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 376506,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:20"
+      },
+      {
+        "schema": "public",
+        "name": "category_h1",
+        "comment": "品类（历史）",
+        "rows": 117068,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:59"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 31585,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:27"
+      },
+      {
+        "schema": "public",
+        "name": "coupon_h1",
+        "comment": "优惠券（历史）",
+        "rows": 20039,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:03"
+      },
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 358428,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:43"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 137226,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:36"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h2",
+        "comment": "订单头（历史）",
+        "rows": 15618,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:30"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 3749239,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:46"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 248652,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:08"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h2",
+        "comment": "退款明细（历史）",
+        "rows": 6226747,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:20"
+      },
+      {
+        "schema": "public",
+        "name": "shipment_h1",
+        "comment": "出库单（历史）",
+        "rows": 374777,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:55"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 142022,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:11"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot_h1",
+        "comment": "库存快照（历史）",
+        "rows": 185711,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:00"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 349173,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:02"
+      },
+      {
+        "schema": "public",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 26519,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:33"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-014"
+      }
+    ],
+    "result": [
+      {
+        "schema": "public",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 378736,
+        "cols": 31,
+        "objectType": "订单",
+        "updatedAt": "2026-10-25 10:45"
+      },
+      {
+        "schema": "dim",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 153098,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:22"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 133357,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:37"
+      },
+      {
+        "schema": "dim",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 260540,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:45"
+      },
+      {
+        "schema": "dim",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 32177,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:47"
+      },
+      {
+        "schema": "dim",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 305084,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:03"
+      },
+      {
+        "schema": "dim",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 349412,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:34"
+      },
+      {
+        "schema": "dim",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 346257,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:35"
+      },
+      {
+        "schema": "dim",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 176498,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:05"
+      },
+      {
+        "schema": "dim",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 127935,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:00"
+      },
+      {
+        "schema": "dim",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 200243,
+        "cols": 37,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:02"
+      },
+      {
+        "schema": "ods",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 18663,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:42"
+      },
+      {
+        "schema": "ods",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 232616,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:58"
+      },
+      {
+        "schema": "ods",
+        "name": "member",
+        "comment": "会员",
+        "rows": 70936,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:55"
+      },
+      {
+        "schema": "ods",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 341347,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:20"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 5002938,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:16"
+      },
+      {
+        "schema": "ods",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 1107348,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:01"
+      },
+      {
+        "schema": "ods",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 336062,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:34"
+      },
+      {
+        "schema": "ods",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 3360,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:39"
+      },
+      {
+        "schema": "ods",
+        "name": "region",
+        "comment": "大区",
+        "rows": 307917,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:53"
+      },
+      {
+        "schema": "ods",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 111058,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:52"
+      },
+      {
+        "schema": "public",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 140566,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:29"
+      },
+      {
+        "schema": "public",
+        "name": "category",
+        "comment": "品类",
+        "rows": 171245,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:40"
+      },
+      {
+        "schema": "public",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 371283,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:04"
+      },
+      {
+        "schema": "public",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 199493,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:17"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 8481012,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:40"
+      },
+      {
+        "schema": "public",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 3383738,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:12"
+      },
+      {
+        "schema": "public",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 211911,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:52"
+      },
+      {
+        "schema": "public",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 226499,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:13"
+      },
+      {
+        "schema": "public",
+        "name": "store",
+        "comment": "门店",
+        "rows": 394986,
+        "cols": 6,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:43"
+      },
+      {
+        "schema": "public",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 79712,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:46"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-015"
+      }
+    ],
+    "result": [
+      {
+        "schema": "BI_READER",
+        "name": "COUPON",
+        "comment": "优惠券",
+        "rows": 310980,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:42"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "COUPON_H1",
+        "comment": "优惠券（历史）",
+        "rows": 166172,
+        "cols": 16,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:38"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "DEVICE",
+        "comment": "收银设备",
+        "rows": 97583,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:26"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "DEVICE_H1",
+        "comment": "收银设备（历史）",
+        "rows": 306093,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:24"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "EMPLOYEE",
+        "comment": "员工",
+        "rows": 240824,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:01"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "EMPLOYEE_H1",
+        "comment": "员工（历史）",
+        "rows": 11701,
+        "cols": 15,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:27"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "MEMBER",
+        "comment": "会员",
+        "rows": 58464,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:49"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "MEMBER_H1",
+        "comment": "会员（历史）",
+        "rows": 364823,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:06"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "MEMBER_H2",
+        "comment": "会员（历史）",
+        "rows": 27546,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:01"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "ORDER_HEADER",
+        "comment": "订单头",
+        "rows": 399043,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:47"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "ORDER_HEADER_H1",
+        "comment": "订单头（历史）",
+        "rows": 261761,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:57"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "ORDER_HEADER_H2",
+        "comment": "订单头（历史）",
+        "rows": 121916,
+        "cols": 8,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:52"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "POS_SHIFT",
+        "comment": "收银班次",
+        "rows": 207943,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:38"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "POS_SHIFT_H1",
+        "comment": "收银班次（历史）",
+        "rows": 146946,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:26"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PROMO_RULE",
+        "comment": "促销规则",
+        "rows": 393797,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:42"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PROMO_RULE_H1",
+        "comment": "促销规则（历史）",
+        "rows": 259217,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:00"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PURCHASE_ORDER",
+        "comment": "采购单",
+        "rows": 71645,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:25"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "PURCHASE_ORDER_H1",
+        "comment": "采购单（历史）",
+        "rows": 99256,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:04"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "REFUND",
+        "comment": "退款单",
+        "rows": 132598,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:10"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "REFUND_H1",
+        "comment": "退款单（历史）",
+        "rows": 192129,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:45"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "REFUND_H2",
+        "comment": "退款单（历史）",
+        "rows": 241851,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:27"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "SKU",
+        "comment": "商品 SKU",
+        "rows": 279576,
+        "cols": 23,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:53"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "SKU_H1",
+        "comment": "商品 SKU（历史）",
+        "rows": 131637,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:08"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STOCK_SNAPSHOT",
+        "comment": "库存快照",
+        "rows": 310976,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:15"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STOCK_SNAPSHOT_H1",
+        "comment": "库存快照（历史）",
+        "rows": 397590,
+        "cols": 36,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:47"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STORE",
+        "comment": "门店",
+        "rows": 40799,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:24"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STORE_H1",
+        "comment": "门店（历史）",
+        "rows": 132905,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:58"
+      },
+      {
+        "schema": "BI_READER",
+        "name": "STORE_H2",
+        "comment": "门店（历史）",
+        "rows": 56163,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:09"
+      },
+      {
+        "schema": "ODS",
+        "name": "CASHIER",
+        "comment": "收银员",
+        "rows": 280445,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:10"
+      },
+      {
+        "schema": "ODS",
+        "name": "CASHIER_H1",
+        "comment": "收银员（历史）",
+        "rows": 365793,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:42"
+      },
+      {
+        "schema": "ODS",
+        "name": "CATEGORY",
+        "comment": "品类",
+        "rows": 365984,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:59"
+      },
+      {
+        "schema": "ODS",
+        "name": "CATEGORY_H1",
+        "comment": "品类（历史）",
+        "rows": 71889,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:47"
+      },
+      {
+        "schema": "ODS",
+        "name": "DAILY_CLOSE",
+        "comment": "门店日结",
+        "rows": 103091,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:38"
+      },
+      {
+        "schema": "ODS",
+        "name": "DAILY_CLOSE_H1",
+        "comment": "门店日结（历史）",
+        "rows": 296306,
+        "cols": 40,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:53"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL",
+        "comment": "会员等级",
+        "rows": 156747,
+        "cols": 32,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:42"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL_H1",
+        "comment": "会员等级（历史）",
+        "rows": 62016,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:16"
+      },
+      {
+        "schema": "ODS",
+        "name": "MEMBER_LEVEL_H2",
+        "comment": "会员等级（历史）",
+        "rows": 151090,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:47"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE",
+        "comment": "订单明细",
+        "rows": 3645233,
+        "cols": 46,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:46"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE_H1",
+        "comment": "订单明细（历史）",
+        "rows": 2522152,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:42"
+      },
+      {
+        "schema": "ODS",
+        "name": "ORDER_LINE_H2",
+        "comment": "订单明细（历史）",
+        "rows": 3159565,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:09"
+      },
+      {
+        "schema": "ODS",
+        "name": "PAYMENT",
+        "comment": "支付流水",
+        "rows": 287065,
+        "cols": 7,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:50"
+      },
+      {
+        "schema": "ODS",
+        "name": "PAYMENT_H1",
+        "comment": "支付流水（历史）",
+        "rows": 137321,
+        "cols": 26,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:10"
+      },
+      {
+        "schema": "ODS",
+        "name": "PRICE_CHANGE",
+        "comment": "调价记录",
+        "rows": 317718,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:26"
+      },
+      {
+        "schema": "ODS",
+        "name": "PRICE_CHANGE_H1",
+        "comment": "调价记录（历史）",
+        "rows": 183912,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:38"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE",
+        "comment": "退款明细",
+        "rows": 4212786,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:34"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE_H1",
+        "comment": "退款明细（历史）",
+        "rows": 6518824,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:16"
+      },
+      {
+        "schema": "ODS",
+        "name": "REFUND_LINE_H2",
+        "comment": "退款明细（历史）",
+        "rows": 3934848,
+        "cols": 20,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:15"
+      },
+      {
+        "schema": "ODS",
+        "name": "REGION",
+        "comment": "大区",
+        "rows": 200148,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:56"
+      },
+      {
+        "schema": "ODS",
+        "name": "REGION_H1",
+        "comment": "大区（历史）",
+        "rows": 285354,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:52"
+      },
+      {
+        "schema": "ODS",
+        "name": "REGION_H2",
+        "comment": "大区（历史）",
+        "rows": 289710,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:07"
+      },
+      {
+        "schema": "ODS",
+        "name": "SHIPMENT",
+        "comment": "出库单",
+        "rows": 165207,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:55"
+      },
+      {
+        "schema": "ODS",
+        "name": "SHIPMENT_H1",
+        "comment": "出库单（历史）",
+        "rows": 390995,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:36"
+      },
+      {
+        "schema": "ODS",
+        "name": "SUPPLIER",
+        "comment": "供应商",
+        "rows": 188565,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:27"
+      },
+      {
+        "schema": "ODS",
+        "name": "SUPPLIER_H1",
+        "comment": "供应商（历史）",
+        "rows": 351796,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:42"
+      },
+      {
+        "schema": "ODS",
+        "name": "WAREHOUSE",
+        "comment": "仓库",
+        "rows": 375207,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:14"
+      },
+      {
+        "schema": "ODS",
+        "name": "WAREHOUSE_H1",
+        "comment": "仓库（历史）",
+        "rows": 363090,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:34"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/DATASOURCES",
+        "key": "id",
+        "id": "DS-016"
+      }
+    ],
+    "result": [
+      {
+        "schema": "api",
+        "name": "region",
+        "comment": "大区",
+        "rows": 92379,
+        "cols": 14,
+        "objectType": "大区",
+        "updatedAt": "2026-10-25 11:00"
+      },
+      {
+        "schema": "api",
+        "name": "cashier",
+        "comment": "收银员",
+        "rows": 20325,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:52"
+      },
+      {
+        "schema": "api",
+        "name": "category",
+        "comment": "品类",
+        "rows": 160724,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:18"
+      },
+      {
+        "schema": "api",
+        "name": "category_h1",
+        "comment": "品类（历史）",
+        "rows": 249299,
+        "cols": 43,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:11"
+      },
+      {
+        "schema": "api",
+        "name": "coupon",
+        "comment": "优惠券",
+        "rows": 250678,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:20"
+      },
+      {
+        "schema": "api",
+        "name": "daily_close",
+        "comment": "门店日结",
+        "rows": 53083,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:53"
+      },
+      {
+        "schema": "api",
+        "name": "device",
+        "comment": "收银设备",
+        "rows": 176503,
+        "cols": 24,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:11"
+      },
+      {
+        "schema": "api",
+        "name": "employee",
+        "comment": "员工",
+        "rows": 249032,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:05"
+      },
+      {
+        "schema": "api",
+        "name": "employee_h1",
+        "comment": "员工（历史）",
+        "rows": 21692,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:36"
+      },
+      {
+        "schema": "api",
+        "name": "member",
+        "comment": "会员",
+        "rows": 45993,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:42"
+      },
+      {
+        "schema": "api",
+        "name": "member_h1",
+        "comment": "会员（历史）",
+        "rows": 388300,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:51"
+      },
+      {
+        "schema": "api",
+        "name": "member_level",
+        "comment": "会员等级",
+        "rows": 180136,
+        "cols": 35,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:47"
+      },
+      {
+        "schema": "api",
+        "name": "member_level_h1",
+        "comment": "会员等级（历史）",
+        "rows": 263491,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 12:47"
+      },
+      {
+        "schema": "api",
+        "name": "order_header",
+        "comment": "订单头",
+        "rows": 19351,
+        "cols": 22,
+        "objectType": null,
+        "updatedAt": "2026-10-25 06:49"
+      },
+      {
+        "schema": "api",
+        "name": "order_header_h1",
+        "comment": "订单头（历史）",
+        "rows": 324028,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:38"
+      },
+      {
+        "schema": "api",
+        "name": "order_line",
+        "comment": "订单明细",
+        "rows": 2287529,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:16"
+      },
+      {
+        "schema": "api",
+        "name": "order_line_h1",
+        "comment": "订单明细（历史）",
+        "rows": 3936955,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:22"
+      },
+      {
+        "schema": "api",
+        "name": "payment",
+        "comment": "支付流水",
+        "rows": 141953,
+        "cols": 31,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:53"
+      },
+      {
+        "schema": "api",
+        "name": "payment_h1",
+        "comment": "支付流水（历史）",
+        "rows": 338536,
+        "cols": 30,
+        "objectType": null,
+        "updatedAt": "2026-10-25 13:01"
+      },
+      {
+        "schema": "api",
+        "name": "pos_shift",
+        "comment": "收银班次",
+        "rows": 110802,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:12"
+      },
+      {
+        "schema": "api",
+        "name": "price_change",
+        "comment": "调价记录",
+        "rows": 299373,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:17"
+      },
+      {
+        "schema": "api",
+        "name": "promo_rule",
+        "comment": "促销规则",
+        "rows": 384235,
+        "cols": 12,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:46"
+      },
+      {
+        "schema": "api",
+        "name": "promo_rule_h1",
+        "comment": "促销规则（历史）",
+        "rows": 180741,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 11:34"
+      },
+      {
+        "schema": "api",
+        "name": "purchase_order",
+        "comment": "采购单",
+        "rows": 193878,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:16"
+      },
+      {
+        "schema": "api",
+        "name": "purchase_order_h1",
+        "comment": "采购单（历史）",
+        "rows": 11218,
+        "cols": 39,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:07"
+      },
+      {
+        "schema": "api",
+        "name": "refund",
+        "comment": "退款单",
+        "rows": 318938,
+        "cols": 42,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:45"
+      },
+      {
+        "schema": "api",
+        "name": "refund_h1",
+        "comment": "退款单（历史）",
+        "rows": 207760,
+        "cols": 21,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:25"
+      },
+      {
+        "schema": "api",
+        "name": "refund_line",
+        "comment": "退款明细",
+        "rows": 8944560,
+        "cols": 38,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:28"
+      },
+      {
+        "schema": "api",
+        "name": "refund_line_h1",
+        "comment": "退款明细（历史）",
+        "rows": 653910,
+        "cols": 10,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:20"
+      },
+      {
+        "schema": "api",
+        "name": "region_h1",
+        "comment": "大区（历史）",
+        "rows": 367410,
+        "cols": 25,
+        "objectType": null,
+        "updatedAt": "2026-10-25 08:00"
+      },
+      {
+        "schema": "api",
+        "name": "shipment",
+        "comment": "出库单",
+        "rows": 118503,
+        "cols": 13,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:58"
+      },
+      {
+        "schema": "api",
+        "name": "shipment_h1",
+        "comment": "出库单（历史）",
+        "rows": 399105,
+        "cols": 45,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:27"
+      },
+      {
+        "schema": "api",
+        "name": "sku",
+        "comment": "商品 SKU",
+        "rows": 31216,
+        "cols": 18,
+        "objectType": null,
+        "updatedAt": "2026-10-25 14:46"
+      },
+      {
+        "schema": "api",
+        "name": "sku_h1",
+        "comment": "商品 SKU（历史）",
+        "rows": 126207,
+        "cols": 33,
+        "objectType": null,
+        "updatedAt": "2026-10-25 07:34"
+      },
+      {
+        "schema": "api",
+        "name": "stock_snapshot",
+        "comment": "库存快照",
+        "rows": 395454,
+        "cols": 9,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:17"
+      },
+      {
+        "schema": "api",
+        "name": "stock_snapshot_h1",
+        "comment": "库存快照（历史）",
+        "rows": 103529,
+        "cols": 27,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:10"
+      },
+      {
+        "schema": "api",
+        "name": "store",
+        "comment": "门店",
+        "rows": 86611,
+        "cols": 19,
+        "objectType": null,
+        "updatedAt": "2026-10-25 16:04"
+      },
+      {
+        "schema": "api",
+        "name": "store_h1",
+        "comment": "门店（历史）",
+        "rows": 186098,
+        "cols": 14,
+        "objectType": null,
+        "updatedAt": "2026-10-25 10:10"
+      },
+      {
+        "schema": "api",
+        "name": "supplier",
+        "comment": "供应商",
+        "rows": 266073,
+        "cols": 28,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:02"
+      },
+      {
+        "schema": "api",
+        "name": "supplier_h1",
+        "comment": "供应商（历史）",
+        "rows": 297543,
+        "cols": 17,
+        "objectType": null,
+        "updatedAt": "2026-10-25 15:38"
+      },
+      {
+        "schema": "api",
+        "name": "warehouse",
+        "comment": "仓库",
+        "rows": 150172,
+        "cols": 41,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:26"
+      },
+      {
+        "schema": "api",
+        "name": "warehouse_h1",
+        "comment": "仓库（历史）",
+        "rows": 214886,
+        "cols": 29,
+        "objectType": null,
+        "updatedAt": "2026-10-25 09:29"
+      }
+    ]
+  }
+]
