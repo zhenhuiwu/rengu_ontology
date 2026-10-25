@@ -31,6 +31,8 @@
 1. **回滚不恢复静态定义表**
    - 缺：静态 section 没有实现 `restore_section`，整版回滚只复制快照、生成新版本，定义表不变，回滚后当前读接口仍是回滚前的定义。
    - 为什么：恢复要把快照节反写回十几张有外键的表（对象→属性→映射、关系→路径→步骤等），风险大，本期先不做 [推断，第二期]。
+   - 评估（01:16，本轮决定不做）：版本层已在 `app/modules/versioning/sections.py:144` `restore_sections` 里用 `session.begin_nested()` 包好、按登记顺序调钩子，只差静态这边实现。难点是快照节是**有损**的（`shapes.py` 输出形状，不含运行数据；草稿行仍在定义表里；history 是合并后的数组），要为 7 节各写一个“快照 → 多张子表”的反向映射。以种子为例，回滚 v2026.10.3 时只有 `terms` 不同（K-011 是 v2026.10.3 新建，K-010 的 history 多一条），其余 6 节相同。
+   - 建议做法：先只做 `TermsSection.restore_section`——content 里没有的知识设 `stopped_release` 或删除（连同 `knowledge_applies`），有的按 content 更新定义列；测试：回滚后 `GET /knowledge` 返回旧定义、K-011 不见。其余节照此逐个加，每节一个测试。
    - 从哪开始：`app/contracts/versioning.py:115` `RestorableSection.restore_section(session, content, *, release_id)`；在 `sections.py` 各 `*Section` 类上实现（按外键顺序删 / 插）。版本层回滚时在同一事务里调用。注意 static-api.md §2.2-6 写的签名少了 `release_id`，以 contracts 为准。
 2. **`onto_qa_path` 唯一约束冗余没清理**
    - 缺：表上同时有 `(from_object_id, to_object_id, seq)` 和 `(group_key, seq)` 两个唯一约束；应保留前者、删掉 `uq_onto_qa_path_group_key_seq`。
