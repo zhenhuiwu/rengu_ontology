@@ -11,6 +11,7 @@ from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
+from app.common.pagination import PageParams
 from app.contracts.actions import (
     EVENT_ACTION_EXECUTED,
     EVENT_ACTION_OUTCOME_UNKNOWN,
@@ -103,6 +104,20 @@ def validation_failed(field: str, message: str) -> AppError:
         status_code=422,
         details={"fields": [{"field": field, "message": message}]},
     )
+
+
+async def fetch_page(
+    session: AsyncSession, stmt: Select, page: int, size: int
+) -> tuple[list, int, PageParams]:
+    """dynamic 唯一的分页切片处：count + offset/limit，返回 (本页行, total, 实际页码参数)。
+
+    TODO(skeleton): app.common.pagination 目前只有 Page / PageParams，没有切片 helper；骨架即将加上
+    （越界页码夹到最后一页，total=0 → page=1）。加上后这里直接改调骨架 helper，调用方不用动。
+    """
+    total = int(await session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0)
+    pp = PageParams(page=page, size=size)
+    rows = list((await session.scalars(stmt.offset(pp.offset).limit(pp.size))).all())
+    return rows, total, pp
 
 
 def approver_for_alert(obj_kind: str) -> str:
@@ -331,10 +346,7 @@ class ActionService:
         if tab == "unknown":
             order = (case((ActionRun.status == ActionStatus.unknown, 0), else_=1), *order)
         stmt = stmt.order_by(*order)
-        total = int(
-            await self.session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
-        )
-        rows = (await self.session.scalars(stmt.offset((page - 1) * size).limit(size))).all()
+        rows, total, pp = await fetch_page(self.session, stmt, page, size)
 
         tab_counts = dict(
             (
@@ -356,8 +368,8 @@ class ActionService:
         return ActionRunPage(
             items=await self.to_out(rows),
             total=total,
-            page=page,
-            size=size,
+            page=pp.page,
+            size=pp.size,
             counts=ActionTabCounts(**{k: n(v, tab_counts) for k, v in ACTION_TABS.items()}),
             status_counts={
                 ActionStatus.staged.value: n([ActionStatus.staged], status_counts),
@@ -870,10 +882,7 @@ class AlertService:
                 or_(Alert.code.contains(k, autoescape=True), Alert.obj_label.contains(k, autoescape=True))
             )
         stmt = stmt.order_by(*seed_first_order(Alert))
-        total = int(
-            await self.session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
-        )
-        rows = (await self.session.scalars(stmt.offset((page - 1) * size).limit(size))).all()
+        rows, total, pp = await fetch_page(self.session, stmt, page, size)
         links = await self._links(rows)
         by_status = dict(
             (await self.session.execute(select(Alert.status, func.count()).group_by(Alert.status))).all()
@@ -885,8 +894,8 @@ class AlertService:
         return AlertPage(
             items=[self._out(a, links.get(a.action_run_id) if a.action_run_id else None) for a in rows],
             total=total,
-            page=page,
-            size=size,
+            page=pp.page,
+            size=pp.size,
             counts=AlertCounts(**counts),
         )
 
