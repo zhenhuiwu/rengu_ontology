@@ -80,8 +80,8 @@ CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 async def row_filter(user: CurrentUser, object_type: str) -> dict | None:
     """返回该用户对某对象类型的行级过滤表达式（jsonb 结构见 app/common/row_filter.py）。
 
-    None = 不限制（只有某个角色明确配置为「全部」时；桩实现里只有本体管理员）；
-    没有任何角色范围 → combine_or([]) = DENY_ALL（拒绝）。
+    None = 不限制。初版最简：所有已登录用户一律 None（不做行级裁剪）；
+    接入真实范围后：没有任何角色范围 → combine_or([]) = DENY_ALL（拒绝）。
 
     查询层：`stmt.where(to_sql(await row_filter(user, "store"), {"region": Store.region, ...}, user.attrs))`
     """
@@ -89,10 +89,8 @@ async def row_filter(user: CurrentUser, object_type: str) -> dict | None:
     # sql_guard.RoleAccess，交给 sql_guard.effective_expr(object_type, roles) 合并（照 roles.ts:110-117
     # effectiveAccess：跨角色 OR、任一 granted 角色没配范围即不限制、defaultDeny 没配范围的角色不算；
     # 同一角色多条也 OR [推断]；没映射的属性 / 不支持的 op / 没建表的对象 → 那条范围 DENY，不贡献行）。
-    # 桩实现：只有本体管理员不限制，其他人一律 DENY_ALL（宁可看不到，不能看多）。
-    from app.common.row_filter import DENY_ALL
-
-    return None if user.is_ontology_admin else DENY_ALL
+    # 初版最简（用户 / PDE 定）：任何已登录用户都不做行级裁剪，联调先看到数据；未登录由 CurrentUserDep 401。
+    return None
 
 
 def require_func(page_key: str, level: str = "view"):

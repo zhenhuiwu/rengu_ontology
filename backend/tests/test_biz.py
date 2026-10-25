@@ -75,11 +75,12 @@ async def test_order_detail_first_duplicate_by_id(client, biz):
     assert (await client.get("/api/biz/v1/orders/SO0")).status_code == 404
 
 
-async def test_viewer_is_denied_by_row_filter_stub(client, biz):
-    h = {"X-Demo-As": "U010006"}  # 李娜：非管理员，row_filter 桩 → 全部拒绝
+async def test_viewer_sees_all_with_minimal_row_filter(client, biz):
+    h = {"X-Demo-As": "U010006"}  # 李娜：非管理员；初版最简 row_filter → 不裁剪，和管理员一样
     r = await client.get("/api/biz/v1/orders", headers=h)
-    assert r.status_code == 200 and r.json()["total"] == 0
-    assert (await client.get("/api/biz/v1/orders/SO202610240889017", headers=h)).status_code == 404
+    admin = await client.get("/api/biz/v1/orders")
+    assert r.status_code == 200 and r.json()["total"] == admin.json()["total"] > 0
+    assert (await client.get("/api/biz/v1/orders/SO202610240889017", headers=h)).status_code == 200
 
 
 # ---- M7 lineCount / M9 kw、cutoff、dataAsOf（首页 Home.vue:32-46、:54、:103） ----

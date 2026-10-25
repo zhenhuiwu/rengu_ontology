@@ -676,9 +676,8 @@ async def test_apply_row_filter_injection(monkeypatch, users):
     stmt = select(Widget)
     assert await apply_row_filter(stmt, user, "widget", {}) is stmt  # 桩：管理员不限制
     viewer = await auth.get_current_user(users, x_demo_as="U010006")  # 李娜
-    assert await auth.row_filter(viewer, "widget") == {"deny": True}  # 桩：非管理员一律拒绝
-    out = await apply_row_filter(stmt, viewer, "widget", {})
-    assert "WHERE false" in str(out.compile(dialect=postgresql.dialect()))
+    assert await auth.row_filter(viewer, "widget") is None  # 初版最简：已登录一律不裁剪
+    assert await apply_row_filter(stmt, viewer, "widget", {}) is stmt
 
     async def none_roles(_user, _obj):
         from app.common.row_filter import combine_or

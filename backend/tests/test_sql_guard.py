@@ -264,9 +264,9 @@ async def test_e2e_one_hop_exists_filters_orders(biz, conn, monkeypatch):
     assert filters["store"] == ("store.big_region = CAST($1 AS VARCHAR)", ["华东"])
 
 
-async def test_e2e_stub_denies_non_admin(biz, conn):
-    _gov()
-    assert (await run_guarded(conn, "select count(*) from store", _U(admin=False))).scalar() == 0
+async def test_e2e_minimal_stub_allows_non_admin(biz, conn):
+    _gov()  # 初版最简 row_filter：非管理员也不裁剪
+    assert (await run_guarded(conn, "select count(*) from store", _U(admin=False))).scalar() == 95
     assert (await run_guarded(conn, "select count(*) from store", _U(admin=True))).scalar() == 95
 
 
@@ -430,9 +430,8 @@ async def test_e2e_order_line_inherits_region(biz, conn, monkeypatch):
     # 没有属性 / 桩实现的非管理员 → 看不到
     assert await q("select count(*) from order_line", _U()) == 0
     monkeypatch.undo()
-    assert await q("select count(*) from order_line", _U()) == 0
-    # product：桩实现对非管理员一律 DENY_ALL（不再有「没配品类就放开」的特例）
-    assert await q("select count(*) from product", _U()) == 0
+    # 初版最简 row_filter：非管理员不裁剪 → 和管理员一样看全量
+    assert await q("select round(sum(qty * price), 2) from order_line", _U()) == total
     # 管理员看全量
     assert await q("select round(sum(qty * price), 2) from order_line", _U(admin=True)) == total
 
