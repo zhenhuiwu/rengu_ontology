@@ -21,7 +21,7 @@
 | 回放试跑 rule_replay | `replay()`（`ReplaySample`） | 用历史数据重算，只读结果，不生成告警和动作 |
 | 动作执行 action_run | `mock/actions.ts` `ACTIONS`（`ActionRecord`） | 一次动作实例：来源、对象、参数、确认人、审批人、幂等键、外部系统、外部单号、状态、重新提交链 |
 | 动作执行记录 action_run_log | `buildLog()`、`Actions.vue` 各操作 | 触发 → 生成 → 确认 → 审批 → 调用 → 结果 / 对账。**与 Palantir 的 `action_run_step` 合成这一张，归动态** [已定：本体小白] |
-| 外部调用 | `extsys.ts`（`ExtCall`） | 动态**不建表**，用 integration（Palantir）的 `writeback_call`，只读引用 [已定：本体小白] |
+| 外部调用 | `extsys.ts`（`ExtCall`） | **外部调用表（归属待 PDE 定，动态只引用）**：Palantir 提 integration 的 `writeback_call`，本体小白 提 data 模块单一 `ext_call`；动态不建表 [待定：PDE] |
 | 情景方案 scenario | `mock/scenarios.ts` `SCENARIOS` | 范围（区域、品类、周数）+ 驱动（价格、补货、安全库存、促销）、基于的本体版本、状态、已暂存动作 |
 | 推演结果 scenario_result | `simulate()`（`ScResult`） | 周序列、KPI、SKU×门店影响；每次运行覆盖 |
 | 生命周期 lifecycle / lifecycle_state / lifecycle_transition | `mock/lifecycle.ts` `LIFECYCLES` | 对象类型的状态字段、状态（初始/中间/终态、SLA）、迁移（触发、来源、条件、结果）、版本 |
@@ -142,7 +142,7 @@
 | 生命周期版本状态 | active / superseded | 生效中 / 已替代 | `lifecycle.ts` |
 | 规则触发方式 | `trigger.kind` = schedule / event / threshold / state_machine | 定时 / 事件 / 阈值越线 / 状态机 | `RuleRef.trigger` |
 | 字段名（动作） | `idem_key, ext_ref, sys_id, type_version, submitted_at, fail_reason, unknown_reason, retry_of, retried_as, obj_kind, obj_id, obj_label` | `idemKey, extRef, sysId, typeVersion, submittedAt, failReason, unknownReason, retryOf, retriedAs, objKind, objId, objLabel` | `ActionRecord` |
-| 字段名（动作，两份 mock 不同） | `action_type_id`；`params_text`；`elapsed_ms / result_code / retry_count` | ACTIONS 返回 `action`（中文动作名）、`params`；RUNS 返回 `typeId`、`summary`、`ms / code / retries` | `ActionRecord`、`ActionRun` |
+| 字段名（动作，两份 mock 不同） | `action_type_id`；`params_text`；`elapsed_ms / result_code / retry_count` | 统一响应类型 `ActionRun` 同时返回 `typeId` 和 `action`（中文动作名）、`params` 和 `summary`（同值 = `params_text`）、`ms / code / retries`（ACTIONS 来源为 null），各页按原字段读，不用改前端 | `ActionRecord`、`actionEvent.ts` `ActionRun` |
 | 字段名（告警） | `rule_id, obj_kind, obj_id, obj_label, store_id, store_label, triggered_at, data_cutoff` | `ruleId, objKind, objId, objLabel, storeId, storeLabel, triggeredAt, cutoff` | `Alert` |
 
 时间：库内 `timestamptz`；接口按 PDE 公共约定返回带 `+08:00` 的 ISO 8601，前端格式化回 mock 原样。
@@ -292,7 +292,7 @@ stateDiagram-v2
 | `query_by_key(idempotency_key)` | Palantir 对账任务内部用 | 定时对账按幂等键查询；「查无」算一次 [已定]。人工对账前由动态主动调一次见 `[推断 P7]` |
 | `on_reconciled(action_run_id, 结果)` | Palantir → 动态 | 定时对账查到结论时回调，结果 ∈ 外部已处理 / 外部未处理；动态改为 reconciled + `reconcile_result`；外部已处理时**动态提交本体修改并发 `ActionExecuted`**（人工对账选「外部已成功」同样处理）[已定]。Palantir 不直接写 `action_run.status` |
 
-- `action_run`、`action_run_log` 只由动态写。`writeback_call`（integration）、`reconcile_task`（reconcile 模块，含 `tries`、`round`、`manual`、`next_at`）归 Palantir，动态只读。
+- `action_run`、`action_run_log` 只由动态写。外部调用表（归属待 PDE 定，动态只引用）、`reconcile_task`（reconcile 模块，含 `tries`、`round`、`manual`、`next_at`）归 Palantir，动态只读。
 - 动态负责 `action_run` 的状态流转、幂等键生成（暂存时）、重新提交（新 run + 新键 `-rN`）、人工对账，以及对账成功后提交本体修改、发 `ActionExecuted`。
 - 各外部系统是否真有「按键查询」接口目前没人能确认 [待定，见第 7 节第 3 条]；没有的，`query_by_key` 返回「不支持查询」，直接转人工。
 
@@ -329,9 +329,9 @@ stateDiagram-v2
 | 转派选人 | `GET /people` | 返回 `string[]`，种子 = `mock/dynamic.ts` `PEOPLE`（原在 `Alerts.vue`，已移入 mock）；以后改用 admin 模块 `GET /api/admin/v1/users?kw` |
 | 关闭 / 批量关闭 | `POST /alerts/{id}:close {as, reason}`、`POST /alerts:batch-close {ids, as, reason}` | `as` ∈ 已解决/已忽略；仅本人处理中；批量返回 `{closed}`（`skipped[]` 见 `[推断 P3]`） |
 | 告警发起动作 | `POST /alerts/{id}:start-action` | 生成 action_run（审批中），幂等键 `act-<告警号>` 由动态生成并返回（不需要请求头 `Idempotency-Key`） |
-| 动作列表 | `GET /action-runs?tab=pending|records|unknown&status&action&actionType&sysId&kw&page&size` | 一屏 16；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页「执行记录」「最近异常」也用这个接口（`action_type` + `status` 多选，每页 14），同一张表 |
+| 动作列表 | `GET /action-runs?tab&status&action&actionType&sysId&objKind&objId&alertId&ruleId&kw&page&size`（参数见下方「唯一执行记录接口」） | 一屏 16；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页「执行记录」「最近异常」也用这个接口（`action_type` + `status` 多选，每页 14），同一张表 |
 | 筛选下拉 | `GET /actions/meta` | `ACTION_NAMES`、`ACTION_SYSTEMS`、`ACTION_META`（mock/actions.ts） |
-| 动作详情 | `GET /action-runs/{id}` | 含 log、确认人、能否操作及原因 |
+| 动作详情 | `GET /action-runs/{id}` | 返回 `ActionRun` + `log`（时间线 = `action_run_log`）、确认人、能否操作及原因 |
 | 暂存 | `POST /api/ontology/v1/action-runs:stage` | 规则引擎、推演、问数调用；只生成待确认；**幂等键此时由动态生成**并返回 `ActionRecord`（含 `id, idemKey, status:'待确认', source.confirmer`）；业务键冲突拦截见 `[推断 P4]` |
 | 确认提交 / 撤回 | `POST /api/ontology/v1/action-runs/{id}:confirm`、`POST /api/ontology/v1/action-runs/{id}:withdraw {reason}` | 有 `source.confirmer` 时仅该确认人 |
 | 审批通过 | `POST /action-runs/{id}:approve` | 前端没有页面调用，但「审批中 → 执行中」在前端状态里存在，后台要有这一步；审批入口 [待定]。驳回 `:reject` 见 `[推断 P2]` |
@@ -353,6 +353,22 @@ stateDiagram-v2
 | 行为汇总 | `GET /object-types/{id}/action-types`、`/action-runs?status&action&page`、`/rules`、`/rule-hits?rule&page` | 只读 |
 
 错误码（在静态错误码基础上新增）：`NOT_CONFIRMER`、`NOT_ASSIGNEE`、`ALERT_LOCKED_BY_ACTION`、`ACTION_STATE_INVALID`、`ALREADY_RESUBMITTED`、`IDEMPOTENCY_CONFLICT`（仅 `[推断 P4]` 采纳时用）、`STAGE_MAPPING_MISSING`、`SCENARIO_NOT_OWNER`、`SCENARIO_RUNNING`、`SCENARIO_STAGED_LOCKED`、`SCENARIO_NO_DRIVER`、`SCENARIO_CONFIG_DIRTY`、`COMPARE_LIMIT`、`REASON_REQUIRED`。`message` 直接用作前端悬停原因（与现有文案一致）。
+
+**唯一执行记录接口** [已定：PDE]：`GET /api/ontology/v1/action-runs` 和 `GET /api/ontology/v1/action-runs/{id}` 只有动态这一份，响应类型只有一个 `ActionRun`（字段见 1.3），详情时间线 = `action_run_log`。其他页面都是给这个接口加过滤，**不另建表、不另开接口**。参数 = 各前端调用方用到的并集：
+
+| 参数 | 含义 | 用到的页面（代码） |
+|---|---|---|
+| `tab` = pending / records / unknown | 页签 → 状态集合（`Actions.vue` L38–40）；unknown 页签结果未知排前 | 动作中心 |
+| `status` | 单值或逗号分隔多值（中文） | 动作中心「状态」；对象类型 动作页签（`ObjBehaviorActions.vue` L61）；动作类型 执行记录页签 `?rs=`（`ActionTypes.vue` L224–230）、最近异常 `status=失败,结果未知&size=4`（L165）；外部系统 调用样本 `status=成功,失败,结果未知,已对账,执行中`（`ExternalSystems.vue` L56） |
+| `action` / `actionType` | **两个别名都收**：`action` = 中文动作名（动作中心、对象类型页、外部系统按 `x.action === a.name`）；`actionType` = 动作类型 id（动作类型页、外部系统 `runsOf(a.id)`） | 同上 |
+| `sysId` | 外部系统 | 动作中心「系统」 |
+| `objKind`、`objId` | 对象类型 / 对象 | 对象类型 动作页签（`ObjBehaviorActions.vue` L54 按 `objKind`） |
+| `alertId` | 来源告警；告警页、规则命中抽屉取匹配的第一条（`Alerts.vue` L24、`Rules.vue` L165） | 告警处理、规则 |
+| `ruleId` | 来源规则 | 规则（R12） |
+| `kw` | 编号 / 对象 / 幂等键 / 外部单号 / 告警号 / 规则号 / 会话号（`Actions.vue` L62） | 动作中心 |
+| `page`、`size` | 各页自带（动作中心 16、对象类型页 10、动作类型页 14） | 全部 |
+
+列表可附带 `counts`（`待确认`、`结果未知` 数，对象类型页 L63–64 用）。动作类型页的 `runStats`/`runDaily`、本体总览的汇总是统计接口，按同一张 `action_run` 聚合。问数对象详情目前代码里没有读执行记录（`QaAnswer.vue`、`ObjectDetail.vue` 未引用 actions mock），以后接入也走这个接口。
 
 ## 5. 种子数据方案
 
@@ -461,7 +477,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | R9 | 开始试跑（范围、版本 当前/草稿） | 非只读 | `:replay` | 无 |
 | R10 | 去回放试跑（口径升版提示） | 草稿口径升版 | — | 跳 replay，版本=草稿 |
 | R11 | 版本历史 对比 / 回滚 | 前端链接没有点击处理（`Rules.vue` L469） | `GET /versions`；`:rollback` 见 `[推断 P8]` | — |
-| R12 | 已暂存待确认数 / 跳动作中心 | — | `GET /action-runs?rule_id` | — |
+| R12 | 已暂存待确认数 / 跳动作中心 | — | `GET /action-runs?ruleId&status=待确认` | — |
 | R13 | 提交审核 / 通过 / 驳回 / 发布 | 在变更与发布页 | 复用静态 3.1 | CR 状态机 |
 
 ### 6.4 情景推演 `/use/ops/scenarios`
