@@ -4,14 +4,16 @@
  * 页签：认证问答（?tab=cert）、评测题库（eval）、反馈与纠错（feedback）、高频问题推荐（freq）。
  * 路线 B：问数不写 SQL；回答由本体查询模块按语义计划生成。与 changes.ts 的 CR-0010 / CR-0011 / CR-0008 对齐。
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
 import { useAppStore } from '@/stores/app';
 import { EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, TUNING_DIMS, TUNING_TIMES, planText, type SemPlan } from '@/mock/qa-tuning';
-import { tuning, addCert, startRun } from './qa-tuning/state';
+import { tuning, tuningTick, addCert, startRun } from './qa-tuning/state';
+import { qaReal, getTuningSummary, createCert as apiCreateCert, type QaTuningSummary } from '@/api/qa';
+import { ApiError } from '@/api/http';
 import CertTab from './qa-tuning/CertTab.vue';
 import EvalTab from './qa-tuning/EvalTab.vue';
 import FeedbackTab from './qa-tuning/FeedbackTab.vue';
@@ -30,8 +32,12 @@ const tab = computed({
   set: (v: string) => router.replace({ query: { ...(v === 'cert' ? {} : { tab: v }), ...(route.query.ver ? { ver: route.query.ver } : {}) } }),
 });
 const pendingFb = computed(() => tuning.feedbacks.filter((f) => f.status === '待处理').length);
-const recert = computed(() => tuning.certs.filter((c) => c.status === '待重新认证').length);
-const uncert = computed(() => tuning.freq.filter((f) => !f.certId).length);
+// 真接口（开关 qa）：认证问答、高频问题两个页签的计数取 T1；评测 / 反馈页签仍是 mock，计数照旧
+const real = qaReal();
+const summary = ref<QaTuningSummary>();
+if (real) watch(tuningTick, async () => { try { summary.value = await getTuningSummary(); } catch { /* 计数失败不挡页面 */ } }, { immediate: true });
+const recert = computed(() => (real ? summary.value?.recertCount ?? 0 : tuning.certs.filter((c) => c.status === '待重新认证').length));
+const uncert = computed(() => (real ? summary.value?.uncertFreq ?? 0 : tuning.freq.filter((f) => !f.certId).length));
 
 /* 新建认证问答 */
 const newOpen = ref(false);
@@ -41,8 +47,21 @@ const nd = ref<string[]>([]);
 const nt = ref('上个月');
 const nf = ref('');
 const newPlan = computed<SemPlan>(() => ({ metric: nm.value, dims: nd.value, time: nt.value, filter: nf.value.trim() || undefined }));
-function createCert() {
+async function createCert() {
   const qn = nq.value.trim();
+  if (real) {
+    try {
+      const c = await apiCreateCert(qn, newPlan.value);
+      newOpen.value = false; nq.value = ''; nd.value = []; nf.value = '';
+      tuningTick.value++;
+      router.replace({ query: { cq: c.id } });
+      message.success(`已新建认证问答 ${c.id}（待认证）`);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'DUPLICATE_KEY') message.warning(`已有认证问答「${qn}」`);
+      else message.error((e as Error).message);
+    }
+    return;
+  }
   if (tuning.certs.some((c) => c.question === qn)) { message.warning(`已有认证问答「${qn}」`); return; }
   const m = T_METRICS[nm.value];
   // 新建只是登记问题和语义计划，需在认证问答里点“认证”复核后才生效；不直接“已认证”

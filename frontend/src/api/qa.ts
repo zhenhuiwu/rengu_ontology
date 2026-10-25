@@ -3,6 +3,7 @@
  * 开关没切到真接口时页面照旧走 src/mock，这里的函数不会被调用。
  */
 import type { QaSession, QaFavorite, QaPage, QaDemoTurn } from '@/mock/qa';
+import type { CertQa, FreqQ, SemPlan } from '@/mock/qa-tuning';
 import { apiClient, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult } from './http';
 
 const api = apiClient('qa');
@@ -104,3 +105,22 @@ export interface QaStageIn { action: string; source: { type: '问数'; session?:
 export const stageAction = (body: QaStageIn) => dyn.post<QaActionRun>('/action-runs:stage', body);
 export const confirmAction = (code: string) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:confirm`, {});
 export const withdrawAction = (code: string, reason = '确认卡取消') => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:withdraw`, { reason });
+
+/* ───────── R5 问数调优 · 认证问答 / 高频问题（qa-api §7 T1 T3–T8 T18 T19） ───────── */
+export interface QaTuningSummary { version: string; dataAsOf: string; recertCount: number; openFeedback: number; uncertFreq: number; evalTotal: number }
+/** 后端 certifier / certifiedAt 待认证时为空（exclude_none），前端表格按 '--' 显示（同 mock createCert） */
+type CertDto = Omit<CertQa, 'certifier' | 'certifiedAt'> & { certifier?: string; certifiedAt?: string; planText: string };
+const certIn = (c: CertDto): CertQa => ({ ...c, variants: c.variants ?? [], certifier: c.certifier ?? '--', certifiedAt: c.certifiedAt ?? '--' });
+export const getTuningSummary = () => api.get<QaTuningSummary>('/tuning/summary');
+export async function listCerts(q: { kw?: string; status?: string; metric?: string; page: number; size: number }): Promise<PageResult<CertQa>> {
+  const r = await api.get<PageResult<CertDto>>('/tuning/certs', { query: q });
+  return { ...r, items: r.items.map(certIn) };
+}
+export const getCert = async (id: string) => certIn(await api.get<CertDto>(`/tuning/certs/${encodeURIComponent(id)}`));
+export const createCert = async (question: string, plan: SemPlan) => certIn(await api.post<CertDto>('/tuning/certs', { question, plan }));
+export const certifyCert = async (id: string) => certIn(await api.post<CertDto>(`/tuning/certs/${encodeURIComponent(id)}:certify`, {}));
+export const toggleCert = async (id: string, enabled: boolean) => certIn(await api.patch<CertDto>(`/tuning/certs/${encodeURIComponent(id)}`, { enabled }));
+export const putCertVariants = async (id: string, variants: string[]) => certIn(await api.put<CertDto>(`/tuning/certs/${encodeURIComponent(id)}/variants`, { variants }));
+export type QaFreq = FreqQ & { rank: number; certStatus?: string };
+export const listFreq = (q: { period?: string; cert?: string; kw?: string; page: number; size: number }) => api.get<PageResult<QaFreq>>('/tuning/freq', { query: q });
+export const certifyFreq = async (id: string) => certIn(await api.post<CertDto>(`/tuning/freq/${encodeURIComponent(id)}:certify`, {}));

@@ -18,7 +18,8 @@ from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep, readonly_extra
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
-from app.core.errors import AppError, ExportForbidden, NotFound
+from app.core.errors import AppError, DuplicateKey, EmptyInput, ExportForbidden, NotFound
+from app.core.state import InvalidTransition as StateInvalid
 from app.db.session import SessionDep
 from app.modules.qa import catalog, chain
 from app.modules.qa import repo as r
@@ -32,7 +33,10 @@ from app.modules.qa.models import (
     PageSourceKind,
     PageStatus,
     PermRequestStatus,
+    QaCert,
+    QaCertVariant,
     QaFeedback,
+    QaFreqQuestion,
     QaPermissionRequest,
     QaQueryLog,
     QaSession,
@@ -44,7 +48,10 @@ from app.modules.qa.models import (
 from app.modules.qa.schemas import (
     AskIn,
     AskOut,
+    CertCreateIn,
     CertOut,
+    CertToggleIn,
+    CertVariantsIn,
     EvalQListOut,
     EvalRunDetailOut,
     EvalRunOut,
@@ -650,6 +657,138 @@ async def get_cert(cid: str, session: SessionDep, user: CurrentUserDep):
     return svc.cert_out(await r.CertRepo(session).get_by_code_or_404(cid))
 
 
+def _pending_crs() -> set[str]:
+    # T_METRICS 里的 cr 就是影响该指标、还没发布的变更单（同 T2）
+    return {m["cr"] for m in catalog.t_metrics().values() if m.get("cr")}
+
+
+def _metric_of(key: str) -> dict:
+    m = catalog.t_metrics().get(key)
+    if m is None:
+        raise CertBadPlan(details={"metric": key})
+    return m
+
+
+class CertBadPlan(AppError):
+    status_code, code, message = 422, "VALIDATION_FAILED", "语义计划里的指标不存在"
+
+
+async def _new_cert(session, question: str, plan: dict, source: str, **kw) -> QaCert:
+    if await session.scalar(select(QaCert.id).where(func.lower(QaCert.question) == question.lower())):
+        raise DuplicateKey(f"已有认证问答「{question}」", details={"question": question})
+    m = _metric_of(plan["metric"])
+    codes = (await session.scalars(select(QaCert.code))).all()
+    nums = [int(c[3:]) for c in codes if c.startswith("CQ-") and c[3:].isdigit()]
+    c = QaCert(
+        code=f"CQ-{(max(nums) if nums else 0) + 1:03d}",  # 同前端 addCert：CQ-最大号+1
+        question=question,
+        sem_plan=plan,
+        metric_code=catalog.metric_code_of_key(plan["metric"]),
+        metric_version=int(m["version"].lstrip("v") or 0),
+        source=source,
+        variants=[],
+        **kw,
+    )
+    session.add(c)
+    await session.flush()
+    # 同前端 addCert：同一问题的高频问题挂上这条认证问答
+    for f in (await session.scalars(select(QaFreqQuestion).where(QaFreqQuestion.question == question))).all():
+        f.cert_id = c.id
+    await session.flush()
+    await session.refresh(c, ["variants"])
+    return c
+
+
+_CERT = {"response_model": CertOut, "response_model_exclude_none": True}
+
+
+@tuning.post("/certs", status_code=201, **_CERT, summary="T5 新建认证问答")
+async def create_cert(body: CertCreateIn, session: SessionDep, user: CurrentUserDep):
+    q = body.question.strip()
+    if not q:
+        raise EmptyInput("问题不能为空")
+    plan = body.plan.model_dump(exclude_none=True)
+    m = _metric_of(plan["metric"])
+    cr = m.get("cr") if m.get("cr") in _pending_crs() else None
+    c = await _new_cert(
+        session,
+        q,
+        plan,
+        "手动新建",
+        status=CertStatus.pending,  # 新建只登记，复核后点「认证」才生效
+        cr_code=cr,
+        note=f"{m['name']}受 {cr} 影响（未发布），认证后发布还需按新口径重新认证"
+        if cr
+        else "新建问答，复核语义计划后点“认证”",
+    )
+    await audit(session, user, action="qa.cert.create", target=c.code)
+    return svc.cert_out(c)
+
+
+def _certify(c: QaCert, name: str) -> None:
+    m = catalog.t_metrics().get(c.sem_plan.get("metric"), {})
+    pending = c.cr_code if c.cr_code in _pending_crs() else None
+    c.certifier, c.certified_at = name, clock.now()
+    if pending:
+        c.status = CertStatus.recert
+        c.note = f"已按 {m.get('version', '')} 认证；{pending} 发布后需再次认证"
+    else:
+        c.status, c.cr_code, c.note = CertStatus.certified, None, None
+
+
+@tuning.post("/certs/{cid}:certify", **_CERT, summary="T6 认证")
+async def certify_cert(cid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    _, u = await svc.effective_user(session, user, ctx)
+    c = await r.CertRepo(session).get_by_code_or_404(cid)
+    if c.status not in (CertStatus.pending, CertStatus.recert):
+        raise StateInvalid(details={"id": cid, "status": c.status.value})
+    _certify(c, u.name)
+    await session.flush()
+    await audit(session, user, action="qa.cert.certify", target=c.code)
+    return svc.cert_out(c)
+
+
+@tuning.patch("/certs/{cid}", **_CERT, summary="T7 停用 / 启用")
+async def toggle_cert(cid: str, body: CertToggleIn, session: SessionDep, user: CurrentUserDep):
+    c = await r.CertRepo(session).get_by_code_or_404(cid)
+    # 照前端 CertTab.toggle：停用 → 已停用；启用一律 → 已认证（第 12 节待定）
+    c.status = CertStatus.certified if body.enabled else CertStatus.disabled
+    await session.flush()
+    await audit(session, user, action="qa.cert.toggle", target=c.code, detail={"enabled": body.enabled})
+    return svc.cert_out(c)
+
+
+@tuning.put("/certs/{cid}/variants", **_CERT, summary="T8 同问法")
+async def put_variants(cid: str, body: CertVariantsIn, session: SessionDep, user: CurrentUserDep):
+    c = await r.CertRepo(session).get_by_code_or_404(cid)
+    want = [v.strip() for v in body.variants if v.strip()]
+    if len({v.lower() for v in want}) != len(want):
+        raise DuplicateKey("已有相同问法", details={"variants": want})
+    taken = (
+        await session.scalars(
+            select(QaCertVariant.question).where(
+                QaCertVariant.cert_id != c.id,
+                func.lower(QaCertVariant.question).in_([v.lower() for v in want]),
+            )
+        )
+    ).all()
+    if taken:
+        raise DuplicateKey("同问法已挂在别的认证问答上", details={"variants": list(taken)})
+    keep = set(want)
+    for v in list(c.variants):
+        if v.question not in keep:
+            c.variants.remove(v)
+    await session.flush()
+    have = {v.question for v in c.variants}
+    for v in want:
+        if v not in have:
+            c.variants.append(QaCertVariant(question=v))
+    await session.flush()
+    await session.refresh(c, ["variants"])
+    await audit(session, user, action="qa.cert.variants", target=c.code)
+    return svc.cert_out(c)
+
+
 @tuning.get(
     "/eval/runs",
     response_model=Page[EvalRunOut],
@@ -744,6 +883,23 @@ async def list_freq(
     c = p.clamp(total)  # 先数 total 再按收拢后的页码取（越界 → 最后一页，CONVENTIONS §3）
     rows = (await session.execute(stmt.offset(c.offset).limit(c.size))).all()
     return Page.of([svc.freq_out(x, rank) for x, rank in rows], total, p)
+
+
+@tuning.post("/freq/{fid}:certify", **_CERT, summary="T19 高频问题设为认证问答")
+async def certify_freq(fid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    _, u = await svc.effective_user(session, user, ctx)
+    f = await r.FreqRepo(session).get_by_code_or_404(fid)
+    if f.cert_id is not None:
+        raise StateInvalid(details={"id": fid, "cert": f.cert.code if f.cert else None})
+    m = _metric_of(f.sem_plan.get("metric"))
+    cr = m.get("cr") if m.get("cr") in _pending_crs() else None
+    c = await _new_cert(
+        session, f.question, f.sem_plan, "高频问题推荐", hits=f.hits30, cr_code=cr, status=CertStatus.pending
+    )
+    _certify(c, u.name)  # 同 T6：有未发布 CR → 待重新认证
+    await session.flush()
+    await audit(session, user, action="qa.freq.certify", target=c.code, detail={"freq": fid})
+    return svc.cert_out(c)
 
 
 @tuning.get("/synonyms", response_model=list[SynonymOut], response_model_exclude_none=True, summary="T20")

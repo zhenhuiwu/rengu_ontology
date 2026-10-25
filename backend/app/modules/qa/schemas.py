@@ -372,3 +372,30 @@ class AskOut(ApiModel):
     turn_id: str
     stream_url: str
     turn: dict[str, Any]
+
+
+class CertPlanIn(ApiModel):
+    """T5：语义计划（同前端 SemPlan）。"""
+
+    metric: str
+    dims: list[str] = Field(default_factory=list)
+    time: str
+    filter: str | None = None
+    sort: str | None = None
+
+
+class CertCreateIn(ApiModel):
+    question: str = Field(min_length=1, max_length=40)
+    plan: CertPlanIn
+
+
+class CertToggleIn(ApiModel):
+    """T7：停用 / 启用。"""
+
+    enabled: bool
+
+
+class CertVariantsIn(ApiModel):
+    """T8：整组替换同问法。"""
+
+    variants: list[str]

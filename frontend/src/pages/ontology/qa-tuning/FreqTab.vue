@@ -3,7 +3,7 @@
  * 高频问题推荐：按命中次数排序的高频问题（近 7 天 / 近 30 天），未认证的可“设为认证问答”（确认卡）。
  * 回答一致率低（同一问题多次回答的语义计划不一致）的优先处理。URL：?hp=7&hc=未认证&hkw=&hpage=
  */
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -11,7 +11,9 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
 import { T_METRICS, crById, metricLabel, planText, type FreqQ } from '@/mock/qa-tuning';
-import { tuning, addCert, ME } from './state';
+import { tuning, tuningTick, addCert, ME } from './state';
+import { qaReal, listFreq, certifyFreq, getTuningSummary, type QaFreq } from '@/api/qa';
+import type { PageResult } from '@/api/http';
 import MetricRef from './MetricRef.vue';
 
 defineProps<{ readonly: boolean; reason?: string }>();
@@ -26,12 +28,24 @@ const cF = computed({ get: () => q('hc') || undefined, set: (v?: string) => setQ
 const kw = computed({ get: () => q('hkw'), set: (v: string) => setQuery({ hkw: v || undefined }) });
 const hits = (f: FreqQ) => (period.value === '7' ? f.hits7 : f.hits30);
 const ranked = computed(() => tuning.freq.slice().sort((a, b) => hits(b) - hits(a)));
-const rankOf = (f: FreqQ) => ranked.value.indexOf(f) + 1;
+const rankOf = (f: FreqQ) => (real ? (f as QaFreq).rank : ranked.value.indexOf(f) + 1);
 const rows = computed(() => ranked.value.filter((f) => (!kw.value || f.question.includes(kw.value))
   && (!cF.value || (cF.value === '已认证' ? !!f.certId : !f.certId))));
 const pq = usePagedQuery({ defaultSize: 15, filters: [period, cF, kw], prefix: 'h' });
-const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
-const uncert = computed(() => tuning.freq.filter((f) => !f.certId).length);
+/* 真接口（开关 qa）：T18 列表（排名、认证状态由后端给）/ T1 未认证计数；设为认证问答走 T19 */
+const real = qaReal();
+const remote = ref<PageResult<QaFreq>>({ items: [], total: 0, page: 1, size: 15 });
+const remoteUn = ref(0);
+if (real) {
+  watch([period, cF, kw, pq.page, pq.size, tuningTick], async () => {
+    try {
+      remote.value = await listFreq({ period: period.value, cert: cF.value, kw: kw.value || undefined, page: pq.page.value, size: pq.size.value });
+      remoteUn.value = (await getTuningSummary()).uncertFreq;
+    } catch (e) { message.error(`加载高频问题失败：${(e as Error).message}`); }
+  }, { immediate: true });
+}
+const paged = computed(() => (real ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
+const uncert = computed(() => (real ? remoteUn.value : tuning.freq.filter((f) => !f.certId).length));
 
 const cols = [
   { title: '排名', key: 'rank', width: 60, align: 'right' },
@@ -44,7 +58,7 @@ const cols = [
   { title: '最近提问', key: 'last', width: 110 },
   { title: '认证', key: 'cert', width: 160 },
 ];
-const certOf = (f: FreqQ) => tuning.certs.find((c) => c.id === f.certId);
+const certOf = (f: FreqQ) => (real ? (f.certId ? { status: (f as QaFreq).certStatus ?? '' } : undefined) : tuning.certs.find((c) => c.id === f.certId));
 const openCert = (id: string) => setQuery({ tab: 'cert', cq: id });
 
 async function certify(f: FreqQ) {
@@ -68,6 +82,10 @@ async function certify(f: FreqQ) {
     okText: '设为认证问答',
   });
   if (!ok) return;
+  if (real) {
+    try { const c = await certifyFreq(f.id); tuningTick.value++; message.success(`已设为认证问答 ${c.id}`); } catch (e) { message.error((e as Error).message); }
+    return;
+  }
   const c = addCert(f.question, f.plan, '高频问题推荐', { hits: f.hits30, ...(pendingCr ? { status: '待重新认证' as const, cr: pendingCr.id, note: `已按 ${m.version} 认证；${pendingCr.id} 发布后需再次认证` } : {}) });
   message.success(`已设为认证问答 ${c.id}`);
 }
