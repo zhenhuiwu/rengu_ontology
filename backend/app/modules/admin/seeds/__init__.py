@@ -7,6 +7,7 @@
   - 孙浩然、李娜 mock 里没有编号，[推断] 补 U010005、U010006
     （ontology_release.published_by_id、X-Demo-As 要用）；
   - 赵蕾 U010007、吴佳 U010008：[推断] 非管理员演示人物，mock 里没有编号。
+  - 苏刚 U010231（前端 `?previewAs=` 默认预览对象）已在 ADMIN_USERS.json，不在这里重复。
 - 写库前 CHECKS 校验 seed 里的 sys_user.name 不重名（动态按姓名比较「本人」），重名直接报错。
 
 `code_by_name(name)`：别的模块 seed 里 mock 只写了人名时（如 RELEASES.by），换成用户编号（重名报错）。

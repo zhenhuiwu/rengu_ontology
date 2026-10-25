@@ -92,6 +92,8 @@ class SeedSpec:
     group: str | None = None  # 文件不在本模块默认组时指定（如 dynamic 读 action/derived/runsOf.json）
     derived: bool | None = None  # None = 按路径判断（derived/ 开头即按 [{args, result}] 展开）
     refs: dict[str, Ref] = field(default_factory=dict)  # 外键列 → 引用（编号 → id）
+    # 运行时前置条件：返回非空字符串 = 跳过这条 seed 的原因（loader 记一行日志，不报错）
+    skip_if: Callable[[], str | None] | None = None
 
     @property
     def is_derived(self) -> bool:

@@ -67,6 +67,7 @@ REGION = ("big_region = $1", ["华东"])
         "select name::json from store",
         "select name::bytea from store",
         "select array[1]::int[]",
+        "select '1'::interval[]",
         # TABLESAMPLE
         "select * from store tablesample system (10)",
         "select * from biz_order tablesample bernoulli (1) repeatable (42)",
@@ -95,6 +96,8 @@ def test_rejects(sql):
         " cast(created_at_biz as time), try_cast(channel as int) from biz_order",
         "select is_test::boolean, cast(1 as bool) from biz_order"
         " where created_at_biz >= date '2026-10-01' - interval '1 day'",
+        # PDE 二审不阻塞：带字段限定的 interval
+        "select '1'::interval day, cast('1' as interval hour), '1'::interval day to second",
     ],
 )
 def test_allows_whitelisted(sql):
@@ -191,7 +194,8 @@ def _gov():
 
 def test_biz_governed_tables_registered():
     g = _gov()
-    assert {"store", "biz_order", "order_line"} <= g.keys() and "product" not in g
+    assert {"store", "biz_order", "order_line", "product"} <= g.keys()
+    assert g["product"].field_of_prop == {"品类": "category_l1"}
     assert g["order_line"].scope_object_type == "order"
     assert g["store"].field_of_prop["大区"] == "big_region"
     assert g["biz_order"].field_of_prop["大区"] == "order_belongs_to_store.big_region"
@@ -215,6 +219,9 @@ async def biz(session):
 
     await run_seeds(session, ["admin", "biz"])
     await session.flush()
+    # 数据只在本事务里、表从没 analyze 过 → 规划器按 1 行估，多层 EXISTS 会退化成嵌套循环（跑几分钟）
+    for t in ("store", "product", "biz_order", "order_line"):
+        await session.execute(text(f"ANALYZE {t}"))
     return session
 
 
@@ -235,6 +242,8 @@ async def test_e2e_one_hop_exists_filters_orders(biz, conn, monkeypatch):
     assert 0 < expected < total
 
     async def scope(_user, obj):
+        if obj == "product":  # 商品没配范围的角色这里按「不可见」给（只验证订单 / 门店）
+            return {"deny": True}
         field = "big_region" if obj == "store" else "order_belongs_to_store.big_region"
         return {"field": field, "op": "=", "valueFrom": "user.region"}
 
@@ -302,20 +311,17 @@ async def test_qa_readonly_engine_settings(monkeypatch):
 ORDER_SCOPE = {"field": "order_belongs_to_store.big_region", "op": "=", "valueFrom": "user.region"}
 
 
-def test_product_registered_unrestricted_explicitly():
-    from app.common.sql_guard import (
-        GovernedTable,
-        register_governed,
-        register_unrestricted,
-        unrestricted_tables,
-    )
+def test_unrestricted_registry_and_unregistered_tables_rejected():
+    from app.common.sql_guard import register_unrestricted, unrestricted_tables
 
-    g = _gov()
-    assert "product" in unrestricted_tables() and "product" not in g
+    _gov()
+    assert (
+        "product" not in unrestricted_tables()
+    )  # 品类范围落地后 product 改为受控（只对有品类范围的用户过滤）
     with pytest.raises(ValueError):
         register_unrestricted("order_line")  # 受控表不能再登记为放行
     with pytest.raises(ValueError):
-        register_governed(GovernedTable(g["store"].table.metadata.tables["product"], "product", {}))
+        register_unrestricted("product")
     # 没登记的表照样拒绝（不是默认放行）
     with pytest.raises(SqlRejected):
         inject_row_filters("select * from sys_user", {}, unrestricted_tables())
@@ -380,6 +386,8 @@ async def test_e2e_order_line_inherits_region(biz, conn, monkeypatch):
     assert 0 < east < total
 
     async def scope(_user, obj):
+        if obj == "product":  # 能看商品、没配品类范围 → 不限制
+            return None
         field = "big_region" if obj == "store" else "order_belongs_to_store.big_region"
         return {"field": field, "op": "=", "valueFrom": "user.region"}
 
@@ -423,7 +431,392 @@ async def test_e2e_order_line_inherits_region(biz, conn, monkeypatch):
     assert await q("select count(*) from order_line", _U()) == 0
     monkeypatch.undo()
     assert await q("select count(*) from order_line", _U()) == 0
-    # product 维度表不过滤（非管理员桩也能查全量）
-    assert await q("select count(*) from product", _U()) == 12
+    # product：桩实现对非管理员一律 DENY_ALL（不再有「没配品类就放开」的特例）
+    assert await q("select count(*) from product", _U()) == 0
     # 管理员看全量
     assert await q("select round(sum(qty * price), 2) from order_line", _U(admin=True)) == total
+
+
+# ---- static-api.md §1.5（静态 9c7fe84）：订单.门店、商品.品类 ----
+def _scoped(monkeypatch, by_obj: dict[str, list]):
+    """row_filter 桩：按对象类型给角色，经 effective_expr 合并。
+
+    值是 RowScope 列表 → 一个有查看权、非 defaultDeny 的角色（空列表 = 该角色不限范围）；
+    值是 RoleAccess 列表 → 照给的角色。没给的对象 → 没有角色能看 → DENY_ALL。
+    """
+    import app.common.auth as auth
+    from app.common.sql_guard import RoleAccess, effective_expr
+
+    _gov()
+
+    def roles(v: list) -> list[RoleAccess]:
+        if v and isinstance(v[0], RoleAccess):
+            return v
+        return [RoleAccess(view=True, scopes=tuple(v))]
+
+    async def fake(user, obj):
+        if user.is_ontology_admin:
+            return None
+        return effective_expr(obj, roles(by_obj.get(obj, [])) if obj in by_obj else [])
+
+    monkeypatch.setattr(auth, "row_filter", fake)
+
+
+def _sc(prop, *values):
+    return {"prop": prop, "op": "∈" if len(values) > 1 else "=", "values": list(values)}
+
+
+def test_category_alias_contract():
+    from app.contracts.static import CATEGORY_SCOPE_ALIAS
+
+    # roles.ts SCOPE_PROPS 商品.品类 的 6 个取值都有映射；映射目标是 seed 里的一级类目
+    assert set(CATEGORY_SCOPE_ALIAS) == {"生鲜", "乳品烘焙", "粮油调味", "休闲零食", "酒水饮料", "日化清洁"}
+    assert CATEGORY_SCOPE_ALIAS["乳品烘焙"] == "乳品" and CATEGORY_SCOPE_ALIAS["日化清洁"] == "日化家清"
+    assert CATEGORY_SCOPE_ALIAS["休闲零食"] == "休闲食品" and CATEGORY_SCOPE_ALIAS["生鲜"] == "生鲜"
+    with pytest.raises(TypeError):
+        CATEGORY_SCOPE_ALIAS["x"] = "y"  # type: ignore[index]
+
+
+def test_scope_expr_maps_props_values_and_ors():
+    from app.common.sql_guard import scope_expr
+
+    g = _gov()
+    assert scope_expr(g["product"], [_sc("品类", "乳品烘焙", "冷冻")]) == {
+        "field": "category_l1",
+        "op": "in",
+        "value": ["乳品", "冷冻"],  # 别名换名；不在表里的值原样保留
+    }
+    both = scope_expr(g["biz_order"], [_sc("大区", "华东"), _sc("门店", "上海徐汇店")])
+    assert both == {  # 多条范围 OR [推断]（static 0cfb2eb §1.5）
+        "or": [
+            {"field": "order_belongs_to_store.big_region", "op": "=", "value": "华东"},
+            {"field": "order_belongs_to_store.name", "op": "=", "value": "上海徐汇店"},
+        ]
+    }
+    assert scope_expr(g["biz_order"], []) is None
+
+
+def test_compile_category_and_store_name_predicates():
+    from app.common.sql_guard import scope_expr
+
+    g = _gov()
+    sql, params = compile_predicate(
+        g["product"], scope_expr(g["product"], [_sc("品类", "生鲜", "日化清洁")]), {}
+    )
+    assert sql.startswith("SPLIT_PART(product.category, '/', 1) IN (")
+    assert params == ["生鲜", "日化家清"] and "'生鲜'" not in sql
+    # 不限制（None）/ 不可见（DENY_ALL）和别的受控表一样；「没配品类范围」由 effective_expr 给 None
+    assert compile_predicate(g["product"], {"deny": True}, {}) == DENY
+    assert compile_predicate(g["product"], None, {}) is None
+    sql, params = compile_predicate(
+        g["biz_order"], scope_expr(g["biz_order"], [_sc("门店", "A店", "B店")]), {}
+    )
+    assert sql.startswith(
+        "EXISTS(SELECT 1 FROM store WHERE store.id = biz_order.store_id AND store.name IN ("
+    )
+    assert params == ["A店", "B店"]
+    # 订单没配范围照旧拒绝（只有 product 是「没配 = 不限制」）
+    assert compile_predicate(g["biz_order"], {"deny": True}, {}) == DENY
+
+
+def test_inject_product_pins_public_and_renumbers():
+    from app.common.sql_guard import scope_expr
+
+    g = _gov()
+    filters = {
+        "product": compile_predicate(g["product"], scope_expr(g["product"], [_sc("品类", "乳品烘焙")]), {}),
+        "order_line": compile_predicate(
+            g["order_line"], scope_expr(g["biz_order"], [_sc("门店", "X店")]), {}
+        ),
+    }
+    sql, params = inject_row_filters(
+        "with product as (select 1 as id) "
+        "select * from order_line l join public.product p on p.id = l.product_id",
+        filters,
+    )
+    assert (
+        "(SELECT * FROM public.product WHERE SPLIT_PART(product.category, '/', 1) = CAST($2 AS VARCHAR)) AS p"
+        in sql
+    )
+    assert "store.name = CAST($1 AS VARCHAR)" in sql and params == ["X店", "乳品"]
+
+
+async def test_e2e_product_category_scope(biz, conn, monkeypatch):
+    async def q(sql, u=None):
+        return (await run_guarded(conn, sql, u or _U())).scalar()
+
+    async def truth(*l1):
+        return await biz.scalar(
+            text("SELECT count(*) FROM product WHERE split_part(category, '/', 1) = ANY(:v)"), {"v": list(l1)}
+        )
+
+    dairy, fresh = await truth("乳品"), await truth("生鲜")
+    assert dairy > 0 and fresh > 0 and dairy + fresh < 12
+    # 能看商品、但角色没配品类范围 → product 不过滤；对商品没有查看权 → 拒绝
+    _scoped(monkeypatch, {"order": [_sc("大区", "华东")], "product": []})
+    assert await q("select count(*) from product") == 12
+    _scoped(monkeypatch, {"order": [_sc("大区", "华东")]})
+    assert await q("select count(*) from product") == 0
+    # 别名换名：乳品烘焙 → 乳品；生鲜同名
+    _scoped(monkeypatch, {"product": [_sc("品类", "乳品烘焙")]})
+    assert await q("select count(*) from product") == dairy
+    assert await q("select count(*) from product p where p.category like '生鲜%' or true") == dairy
+    _scoped(monkeypatch, {"product": [_sc("品类", "乳品烘焙", "生鲜")]})
+    assert await q("select count(*) from product") == dairy + fresh
+    # 同名 CTE 劫持不了；子查询绕不开
+    assert await q("with product as (select * from product) select count(*) from product") == dairy + fresh
+    assert await q("select count(*) from (select * from public.product) x") == dairy + fresh
+    # 不在别名表、库里也没有的一级类目 → 0 行；和已知值混着给只匹配已知的
+    _scoped(monkeypatch, {"product": [_sc("品类", "冷冻食品")]})
+    assert await q("select count(*) from product") == 0
+    _scoped(monkeypatch, {"product": [_sc("品类", "冷冻食品", "休闲零食")]})
+    assert await q("select count(*) from product") == await truth("休闲食品") == 1
+    # 塞 SQL 只是参数值
+    _scoped(monkeypatch, {"product": [_sc("品类", "生鲜' OR '1'='1")]})
+    assert await q("select count(*) from product") == 0
+    # order_line 只继承订单范围、不按品类过滤（已定：静态，roles.ts:62）
+    _scoped(monkeypatch, {"product": [_sc("品类", "乳品烘焙")], "order": [_sc("大区", "华东")]})
+    east_lines = await biz.scalar(
+        text(
+            "SELECT count(*) FROM order_line l JOIN biz_order o ON o.id = l.order_id "
+            "JOIN store s ON s.id = o.store_id WHERE s.big_region = '华东'"
+        )
+    )
+    assert await q("select count(*) from order_line") == east_lines
+    # 连 product 时，product 这一侧照样按品类过滤（inner join 后只剩乳品的行）
+    dairy_east = await biz.scalar(
+        text(
+            "SELECT count(*) FROM order_line l JOIN biz_order o ON o.id = l.order_id "
+            "JOIN store s ON s.id = o.store_id JOIN product p ON p.id = l.product_id "
+            "WHERE s.big_region = '华东' AND split_part(p.category, '/', 1) = '乳品'"
+        )
+    )
+    assert await q("select count(*) from order_line l join product p on p.id = l.product_id") == dairy_east
+    # 管理员不限制
+    assert await q("select count(*) from product", _U(admin=True)) == 12
+
+
+async def test_e2e_order_store_name_scope(biz, conn, monkeypatch):
+    async def q(sql, u=None):
+        return (await run_guarded(conn, sql, u or _U())).scalar()
+
+    a, b = "无锡梁溪崇安寺店", "合肥政务区天鹅湖店"
+    await biz.execute(text("UPDATE store SET big_region = '华南' WHERE name = :n"), {"n": b})
+    by_name = text(
+        "SELECT count(*) FROM biz_order o JOIN store s ON s.id = o.store_id WHERE s.name = ANY(:n)"
+        " AND (CAST(:r AS text) IS NULL OR s.big_region = :r)"
+    )
+    n_a = await biz.scalar(by_name, {"n": [a], "r": None})
+    n_ab = await biz.scalar(by_name, {"n": [a, b], "r": None})
+    assert 0 < n_a < n_ab
+    # 门店名原样比
+    _scoped(monkeypatch, {"order": [_sc("门店", a)]})
+    assert await q("select count(*) from biz_order") == n_a
+    _scoped(monkeypatch, {"order": [_sc("门店", a, b)]})
+    assert await q("select count(*) from biz_order") == n_ab
+    # 同名 CTE 劫持不了谓词里的 store
+    hijack = (
+        f"with store as (select id, '{a}'::text as name from public.store) select count(*) from biz_order"
+    )
+    assert await q(hijack) == n_ab
+    # mock roles.ts:26 的简称在 seed 里一个都对不上 → 0 行（用户已定 2026-10-25：不加别名表）
+    _scoped(monkeypatch, {"order": [_sc("门店", "上海徐汇店")]})
+    assert await q("select count(*) from biz_order") == 0
+    # 同一角色上和大区同时配 → 也是 OR [推断]（static 0cfb2eb §1.5 / roles.ts:114）：b 已改成华南
+    region_or_name = text(
+        "SELECT count(*) FROM biz_order o JOIN store s ON s.id = o.store_id"
+        " WHERE s.big_region = :r OR s.name = ANY(:n)"
+    )
+    for r in ("华东", "华南"):
+        _scoped(monkeypatch, {"order": [_sc("大区", r), _sc("门店", a, b)]})
+        want = await biz.scalar(region_or_name, {"r": r, "n": [a, b]})
+        only_region = await biz.scalar(region_or_name, {"r": r, "n": []})
+        assert want > only_region and await q("select count(*) from biz_order") == want
+    # 分在两个角色上 → OR（roles.ts:112-117 effectiveAccess）：华东大区的全部订单 ∪ 门店 b 的订单
+    from app.common.sql_guard import RoleAccess
+
+    east = await biz.scalar(
+        text("SELECT count(*) FROM biz_order o JOIN store s ON s.id = o.store_id WHERE s.big_region = '华东'")
+    )
+    n_b = n_ab - n_a
+    two_roles = [RoleAccess(True, scopes=(_sc("大区", "华东"),)), RoleAccess(True, scopes=(_sc("门店", b),))]
+    _scoped(monkeypatch, {"order": two_roles})
+    assert await q("select count(*) from biz_order") == east + n_b  # b 在华南，不重叠
+    # order_line 继承门店名范围（两跳）
+    lines = text(
+        "SELECT count(*) FROM order_line l JOIN biz_order o ON o.id = l.order_id "
+        "JOIN store s ON s.id = o.store_id WHERE s.name = :n"
+    )
+    _scoped(monkeypatch, {"order": [_sc("门店", a)]})
+    n_lines = await biz.scalar(lines, {"n": a})
+    assert n_lines > n_a  # 一单多行
+    assert await q("select count(*) from order_line") == n_lines
+    assert (
+        await q("with biz_order as (select * from public.biz_order) select count(*) from order_line")
+        == n_lines
+    )
+    # 参数编号：store 一条范围、订单两条范围（OR）、订单行继承，一条 SQL 里合并
+    _scoped(monkeypatch, {"order": [_sc("大区", "华南"), _sc("门店", a)], "store": [_sc("大区", "华东")]})
+    joined = (
+        "select count(*) from order_line l join biz_order o on o.id = l.order_id"
+        " join store s on s.id = o.store_id"
+    )
+    # 订单：华南（只有 b）∪ 门店 a；store 只剩华东 → b 被 join 掉，只剩 a 的订单行
+    assert await q(joined) == n_lines
+
+
+# ---- 未映射的范围一律拒绝（fail closed，static 4641ebf §1.5：一期没有 member 表，会员范围按拒绝）----
+def test_unmapped_scope_fails_closed():
+    from app.common.row_filter import DENY_ALL, combine_or
+    from app.common.sql_guard import RoleAccess, effective_expr, scope_expr, scope_expr_for_object
+
+    g = _gov()
+    # 对象上没映射的属性（订单.品类、商品.品牌）：这条 → DENY_ALL，不是被忽略；OR 里它不贡献行
+    east = {"field": "order_belongs_to_store.big_region", "op": "=", "value": "华东"}
+    assert scope_expr(g["biz_order"], [_sc("品类", "生鲜")]) == DENY_ALL
+    assert scope_expr(g["biz_order"], [_sc("大区", "华东"), _sc("品类", "生鲜")]) == east
+    assert scope_expr(g["product"], [_sc("品牌", "光明")]) == DENY_ALL
+    # 一期没建表的对象（会员、库存快照）配了范围 → DENY_ALL；没配 → None
+    assert scope_expr_for_object("member", [_sc("常去门店所属大区", "华东")]) == DENY_ALL
+    assert scope_expr_for_object("inventory_snapshot", [_sc("仓库", "上海嘉定仓")]) == DENY_ALL
+    assert scope_expr_for_object("member", []) is None
+    assert effective_expr("member", [RoleAccess(True, scopes=(_sc("常去门店所属大区", "华东"),))]) == DENY_ALL
+    for t in ("product", "biz_order", "order_line"):
+        assert compile_predicate(g[t], DENY_ALL, {}) == DENY
+    # 多角色：映射不了的角色不贡献范围（不会把别的角色放宽，也不会被当成「不限制」）
+    ok = {"field": "big_region", "op": "=", "value": "华东"}
+    assert combine_or([DENY_ALL, ok]) == ok
+    assert combine_or([DENY_ALL]) == DENY_ALL and combine_or([]) == DENY_ALL
+    assert combine_or([DENY_ALL, None]) is None
+
+
+def test_effective_expr_follows_roles_ts():
+    """roles.ts:110-117 effectiveAccess（static 0db86b3 §1.5）。"""
+    from app.common.row_filter import DENY_ALL
+    from app.common.sql_guard import RoleAccess, effective_expr
+
+    _gov()
+    east = _sc("大区", "华东")
+    east_expr = {"field": "order_belongs_to_store.big_region", "op": "=", "value": "华东"}
+    store_expr = {"field": "order_belongs_to_store.name", "op": "=", "value": "X店"}
+    # 没有角色 / 没有查看权 → 拒绝
+    assert effective_expr("order", []) == DENY_ALL
+    assert effective_expr("order", [RoleAccess(False)]) == DENY_ALL
+    assert effective_expr("order", [RoleAccess(False), RoleAccess(True, scopes=(east,))]) == east_expr
+    # defaultDeny 且该对象没配范围（R-06 对会员）：单独持有 → 拒绝，不是不限制
+    r06_member = RoleAccess(True, default_deny=True)
+    assert effective_expr("member", [r06_member]) == DENY_ALL
+    assert effective_expr("order", [r06_member]) == DENY_ALL
+    # 混合：defaultDeny 没配范围的角色不算「不限制」，只剩有范围那个角色的谓词
+    assert effective_expr("order", [r06_member, RoleAccess(True, scopes=(east,))]) == east_expr
+    # 普通角色有查看权且没配范围 → 整体不限制
+    assert effective_expr("order", [RoleAccess(True), RoleAccess(True, scopes=(east,))]) is None
+    # defaultDeny 但配了该对象范围 → 按范围
+    assert effective_expr("order", [RoleAccess(True, default_deny=True, scopes=(east,))]) == east_expr
+    # 跨角色 OR；同一角色内多条也 OR [推断]（static 0cfb2eb）
+    st = _sc("门店", "X店")
+    two = [RoleAccess(True, scopes=(east,)), RoleAccess(True, scopes=(st,))]
+    assert effective_expr("order", two) == {"or": [east_expr, store_expr]}
+    one = [RoleAccess(True, scopes=(east, st))]
+    assert effective_expr("order", one) == {"or": [east_expr, store_expr]}
+    # 某角色映射不了 → 它不贡献；另一角色照常
+    bad = RoleAccess(True, scopes=(_sc("渠道", "美团"),))
+    assert effective_expr("order", [bad, RoleAccess(True, scopes=(east,))]) == east_expr
+    assert effective_expr("order", [bad]) == DENY_ALL
+    # 前端 RowScope.op 只有 '=' / '∈'（roles.ts L12/L49）；'in' 视同 '∈'；其它 op → 这条 DENY（不当成不限制）
+    east_in = {**east, "op": "∈", "values": ["华东", "华南"]}
+    in_expr = {"field": "order_belongs_to_store.big_region", "op": "in", "value": ["华东", "华南"]}
+    assert effective_expr("order", [RoleAccess(True, scopes=(east_in,))]) == in_expr
+    assert effective_expr("order", [RoleAccess(True, scopes=({**east_in, "op": "in"},))]) == in_expr
+    for op in ("≠", "!=", "not in", "∉", "like", "", None):
+        neg = RoleAccess(True, scopes=({**east, "op": op},))
+        assert effective_expr("order", [neg]) == DENY_ALL, op
+        assert (
+            effective_expr("product", [RoleAccess(True, scopes=({**_sc("品类", "生鲜"), "op": op},))])
+            == DENY_ALL
+        )
+        assert effective_expr("order", [neg, RoleAccess(True, scopes=(st,))]) == store_expr
+
+
+def test_effective_expr_product_same_rule():
+    """商品和其它对象同一套 roles.ts:110 规则，没有「没配品类就放开」的特例。"""
+    from app.common.row_filter import DENY_ALL
+    from app.common.sql_guard import RoleAccess, effective_expr
+
+    _gov()
+    r05 = RoleAccess(True, default_deny=True)  # R-05/R-06/R-08：能看商品、没配商品范围
+    dairy, fresh = _sc("品类", "乳品烘焙"), _sc("品类", "生鲜")
+    assert effective_expr("product", [r05]) == DENY_ALL
+    assert effective_expr("product", [RoleAccess(True)]) is None  # 非 defaultDeny、没配品类 → 不限制
+    d = effective_expr("product", [RoleAccess(True, scopes=(dairy,))])
+    f = effective_expr("product", [RoleAccess(True, scopes=(fresh,))])
+    assert d not in (None, DENY_ALL)
+    assert effective_expr("product", [r05, RoleAccess(True, scopes=(dairy,))]) == d
+    both = [RoleAccess(True, scopes=(dairy,)), RoleAccess(True, scopes=(fresh,))]
+    assert effective_expr("product", both) == {"or": [d, f]}
+    assert effective_expr("product", [RoleAccess(True, scopes=(dairy, fresh))]) == {"or": [d, f]}
+
+
+async def test_e2e_r05_alone_on_product_denies(biz, conn, monkeypatch):
+    from app.common.sql_guard import RoleAccess
+
+    async def q(sql):
+        return (await run_guarded(conn, sql, _U())).scalar()
+
+    _scoped(monkeypatch, {"product": [RoleAccess(True, default_deny=True)]})
+    assert await q("select count(*) from product") == 0
+    _scoped(monkeypatch, {"product": [RoleAccess(True)]})
+    assert await q("select count(*) from product") == 12
+    _scoped(
+        monkeypatch,
+        {
+            "product": [
+                RoleAccess(True, default_deny=True),
+                RoleAccess(True, scopes=(_sc("品类", "乳品烘焙"),)),
+            ]
+        },
+    )
+    dairy = await biz.scalar(text("SELECT count(*) FROM product WHERE split_part(category, '/', 1) = '乳品'"))
+    assert 0 < dairy < 12 and await q("select count(*) from product") == dairy
+
+
+async def test_e2e_unmapped_scope_denies(biz, conn, monkeypatch):
+    from app.common.sql_guard import RoleAccess
+
+    async def q(sql):
+        return (await run_guarded(conn, sql, _U())).scalar()
+
+    # 商品上配了没映射的属性 → product 拒绝
+    _scoped(monkeypatch, {"product": [_sc("品牌", "光明")]})
+    assert await q("select count(*) from product") == 0
+    # 订单范围全是没映射的属性 → 订单、订单行都拒绝
+    _scoped(monkeypatch, {"order": [_sc("渠道", "美团")]})
+    assert await q("select count(*) from biz_order") == 0
+    assert await q("select count(*) from order_line") == 0
+    # 和能映射的范围 OR 在一起：没映射那条不贡献行（绝不当成「不限制」）
+    shop = await biz.scalar(
+        text("SELECT s.name FROM biz_order o JOIN store s ON s.id = o.store_id ORDER BY s.code LIMIT 1")
+    )
+    _scoped(monkeypatch, {"order": [_sc("门店", shop), _sc("渠道", "美团")]})
+    n_shop = await biz.scalar(
+        text("SELECT count(*) FROM biz_order o JOIN store s ON s.id = o.store_id WHERE s.name = :n"),
+        {"n": shop},
+    )
+    total = await biz.scalar(text("SELECT count(*) FROM biz_order"))
+    assert 0 < n_shop < total and await q("select count(*) from biz_order") == n_shop
+    # 会员范围：一期没有 member 表，查会员本身就拒绝；不影响别的对象
+    _scoped(monkeypatch, {"member": [_sc("常去门店所属大区", "华东")], "store": [_sc("大区", "华东")]})
+    with pytest.raises(SqlRejected):
+        await q("select count(*) from member")
+    assert await q("select count(*) from biz_order") == 0
+    assert await q("select count(*) from store") > 0
+    # R-06 门店店长（defaultDeny，订单.门店=上海徐汇店，商品没配范围）：
+    # 订单 0 行（店名对不上，用户已定：预期如此），商品、门店拒绝
+    r06 = {
+        "order": [RoleAccess(True, default_deny=True, scopes=(_sc("门店", "上海徐汇店"),))],
+        "product": [RoleAccess(True, default_deny=True)],
+        "store": [RoleAccess(True, default_deny=True)],
+    }
+    _scoped(monkeypatch, r06)
+    for t in ("biz_order", "order_line", "product", "store"):
+        assert await q(f"select count(*) from {t}") == 0

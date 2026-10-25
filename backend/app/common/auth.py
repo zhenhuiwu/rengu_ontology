@@ -85,9 +85,10 @@ async def row_filter(user: CurrentUser, object_type: str) -> dict | None:
 
     查询层：`stmt.where(to_sql(await row_filter(user, "store"), {"region": Store.region, ...}, user.attrs))`
     """
-    # EXTENSION POINT (PDE): 读该用户各角色的 ROLE_OBJECT_SCOPE.row_filter，用 combine_or 合并；
-    # 权限范围里的中文属性名（如「大区」）按 sql_guard.GovernedTable.field_of_prop
-    # 转成字段（from_row_scope）。
+    # EXTENSION POINT (PDE): 把该用户每个角色在该对象上的 {查看权, defaultDeny, RowScope 列表} 组成
+    # sql_guard.RoleAccess，交给 sql_guard.effective_expr(object_type, roles) 合并（照 roles.ts:110-117
+    # effectiveAccess：跨角色 OR、任一 granted 角色没配范围即不限制、defaultDeny 没配范围的角色不算；
+    # 同一角色多条也 OR [推断]；没映射的属性 / 不支持的 op / 没建表的对象 → 那条范围 DENY，不贡献行）。
     # 桩实现：只有本体管理员不限制，其他人一律 DENY_ALL（宁可看不到，不能看多）。
     from app.common.row_filter import DENY_ALL
 

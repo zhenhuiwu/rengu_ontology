@@ -12,14 +12,15 @@
 快照：按各模块登记的 section builder 的 seed_section(ver, ctx) 组装（app/modules/versioning/sections.py），
 **不写空快照 {}**；seed_section 只读导出 JSON、不读表，所以 SEED_MODULES 里 versioning 在 static 之前
 （静态的 release_id 外键按 ver 换 id，要求版本行先写）。
-还没有模块登记 section 时，这个 seed 会明确报错。（变更单本身由静态 seed。）
+还没有模块登记 section 时（骨架阶段）这条 seed **跳过并记一行日志**，不写空快照、也不让整个
+`python -m app.cli seed` 失败；有 section 但全空时 seed_snapshot 仍报错。（变更单本身由静态 seed。）
 """
 
 from app.core.schema import parse_display_dt
 from app.modules.admin.models import SysUser
 from app.modules.admin.seeds import code_by_name
 from app.modules.versioning.models import OntologyRelease
-from app.modules.versioning.sections import seed_snapshot
+from app.modules.versioning.sections import registered_sections, seed_snapshot
 from app.modules.versioning.service import snapshot_digest
 from app.seeds import Ref, Row, SeedContext, SeedSpec
 
@@ -49,6 +50,12 @@ def _release(r: Row, ctx: SeedContext) -> Row:
     }
 
 
+def _no_sections() -> str | None:
+    if registered_sections():
+        return None
+    return "还没有模块登记快照 section（register_section），不写空快照，版本记录暂不 seed"
+
+
 JSON_MODULE = "static"
 
 SEEDS = [
@@ -59,5 +66,6 @@ SEEDS = [
         transform=_release,
         description="本体发布记录",
         refs={"parent_id": Ref(OntologyRelease, "ver"), "published_by_id": Ref(SysUser, "code")},
+        skip_if=_no_sections,
     ),
 ]

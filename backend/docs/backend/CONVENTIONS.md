@@ -144,7 +144,7 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
   - `published_by` 传 **sys_user.code**（如 `U010001`，取自 `CurrentUser.id`）；存 `published_by_id` 外键 → `sys_user.id`，接口 `by` 仍返回姓名。编号不存在 → 422 `USER_NOT_FOUND`。
   - **outbox**：同一事务里写一条 `outbox_event`（topic `release.published`，`event_id = ontology_release:<ver>:release.published`），发布和回滚都写；payload `{ver, parentVer, kind: "release"|"rollback", rollbackOf, changeOrderIds}`。发布回滚，事件一起回滚。
   - 版本号格式 `vYYYY.MM.N`，月份按北京时间算；`parent_id` 指向上一版的 id。
-  - 快照 = 各 section 由负责模块组装（`SECTION_OWNERS`：静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths，动态 rules/lifecycles，Palantir actionTypes/eventTypes），段内按前端 id 作键。模块实现 `SnapshotSectionBuilder`（`build_section` + `seed_section`），在 `app/modules/versioning/sections.py` 按段登记；未登记的段沿用上一版。seed 不写空快照。
+  - 快照 = 各 section 由负责模块组装（`SECTION_OWNERS`：静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths，动态 rules/lifecycles，Palantir actionTypes/eventTypes），段内按前端 id 作键。模块实现 `SnapshotSectionBuilder`（`build_section` + `seed_section`），在 `app/modules/versioning/sections.py` 按段登记；未登记的段沿用上一版。seed 不写空快照：还没有任何模块登记 section 时，versioning seed 经 `SeedSpec.skip_if` **跳过并记一行日志**（不报错，`ontology_release` 为空），全量 `python -m app.cli seed` 在新库上能跑完（`tests/test_seed_fresh_db.py`）；直接调 `seed_snapshot` 仍拒绝空快照。
 - **回滚 = 同一个入口传 `rollback_of=<当前最新版本号>`**：
   - 只能回滚最近一次发布，否则 409 `ROLLBACK_NOT_LATEST`。
   - **不调用** section builder，快照原样复制被回滚版本的上一版（`changeSummary.restoredFrom`）；`kind=rollback`，`rollback_of_id` 指向被回滚的版本，接口返回 `rollbackOf` 版本号。
@@ -219,7 +219,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 
 | # | 阶段 | 负责模块 | 写哪些表 / 为什么在这里 |
 |---|---|---|---|
-| 1 | `admin` | admin（PDE） | sys_user 等；其它模块的人名（发布人、处理人）外键指向 sys_user。目前的 `sys_user` 是基础层放的**最小占位**（code/name/account/dept/status/last_login_at），PDE 补全；seed 里只有人名时用 `admin.seeds.code_by_name` 换成编号。演示人物（`extra/system/SYS_USERS.json`）：王敏 U010001（管理员）、陈立军 U010002、何静 U010003、刘婷 U010004（编号照抄 mock 审计日志）；孙浩然 U010005、李娜 U010006（PDE 已确认，仍标 [推断]）；赵蕾 U010007、吴佳 U010008（[推断]，非管理员）。**seed 的 sys_user.name 必须唯一**（动态按姓名比较「本人」）：`admin.seeds.CHECKS` 在写库前校验 ADMIN_USERS + SYS_USERS，重名整批报错（loader 支持模块包里的可选 `CHECKS`）。`sys_user.alert_assignable smallint NULL`：告警可指派的人在动态 PEOPLE 列表里的顺序 1..7，null = 不可指派；**admin seed 不写**，由动态的 seed 按姓名回填 |
+| 1 | `admin` | admin（PDE） | sys_user 等。其它模块引用人分两种：**外键**（库里存 `sys_user.id`，接口 / seed 按用户编号 code 换）——版本发布人 publishedBy、变更单 owner / reviewer、函数 owner / author；**姓名软引用**（存姓名字符串，不建外键）——告警 assignee、处理人 handler、定义上的 owner、审计 / 事件 actor。目前的 `sys_user` 是基础层放的**最小占位**（code/name/account/dept/status/last_login_at），PDE 补全；seed 里只有人名时用 `admin.seeds.code_by_name` 换成编号。演示人物（`extra/system/SYS_USERS.json`）：王敏 U010001（管理员）、陈立军 U010002、何静 U010003、刘婷 U010004（编号照抄 mock 审计日志）；孙浩然 U010005、李娜 U010006（PDE 已确认，仍标 [推断]）；赵蕾 U010007、吴佳 U010008（[推断]，非管理员）；苏刚 U010231（非管理员，前端 `?previewAs=` 默认预览对象 `preview.ts:14`）已在 ADMIN_USERS.json，不在 SYS_USERS 重复。**seed 的 sys_user.name 必须唯一**（动态按姓名比较「本人」）：`admin.seeds.CHECKS` 在写库前校验 ADMIN_USERS + SYS_USERS，重名整批报错（loader 支持模块包里的可选 `CHECKS`）。`sys_user.alert_assignable smallint NULL`：告警可指派的人在动态 PEOPLE 列表里的顺序 1..7，null = 不可指派；**admin seed 不写**，由动态的 seed 按姓名回填 |
 | 2 | `data` | data | 数据源 |
 | 3 | `integration` | integration（Palantir） | **只写 ext_system**（动作、数据源引用外部系统） |
 | 4 | `biz` | biz | store / product / biz_order / order_line（不建 member、store_sales）。订单号在 mock 里有重复（2 组），`biz_order.code` 只对非 seed 行唯一，seed 键 = (code, created_at_biz)；详情按 id 取第一行 |
@@ -258,6 +258,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 
 - **条件写法**：每个条件是 `{field, op, value | valueFrom}`。
   - op 可选：`= != in not_in > >= < <= like is_null not_null`。前端写的 `∈` 等同于 `in`。
+  - **前端 RowScope 只有正向 op**（`=`、`∈`，`roles.ts` L12/L49；`in` 视同 `∈`）：`from_row_scope` 只认这三个，其它 op（`≠`、`not in`、拼错的…）→ 这条范围 `DENY_ALL`（fail closed）。下面「全 OR 合并」**只在正向 op 下成立**（负向条件 OR 起来会放大可见范围），以后要支持负向 op 得重新定合并规则。
   - `valueFrom` 只能写成 `user.<attr>`，取值来自 `CurrentUser.attrs`。
   - 当前用户缺少该属性时，条件结果为 false，也就是什么都看不到。
 - **组合**：用 `{and: [...]}` 或 `{or: [...]}` 组合条件，最多嵌套 5 层。值为空或 null 表示不限制，与前端“空=全部”一致。
@@ -266,7 +267,12 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
   - **一跳关系**：字段写 `<关系 id>.<属性>`，`links` 由 `link_paths_from_definitions(对象类型, 静态 LINKS 定义, 对象表)` 生成，编译成 `EXISTS`；未声明的关系、多跳一律拒绝。
   - 值一律走绑定参数，不会被拼接进 SQL；`like` 只接受字符串，非 `in/not_in` 不接受数组；多值用户属性配 `=` 自动变 IN，配别的操作符报错。
 - **前端 mock 转换**：`from_row_scope({prop, op, values})` 把前端 RowScope 转成这个结构。
-- **多角色合并**：用 `combine_or`，结果取并集；任一角色明确配置为「全部」整体不限制；**一个角色范围都没有 → `DENY_ALL`（`WHERE false`）**。
+- **多角色合并**（static-api.md §1.5，static 0db86b3 / 0cfb2eb，照 `roles.ts:110-117` effectiveAccess）：`sql_guard.effective_expr(object_type, [RoleAccess(view, default_deny, scopes)…])`，**所有对象（含商品）同一套**：
+  1. 只算 granted 角色：对该对象有查看权，且不是「defaultDeny 又没配该对象范围」（roles.ts:110）。一个都没有 → `DENY_ALL`（`WHERE false`）。所以 defaultDeny 角色（R-05/R-06/R-08）能看但没配范围的对象 = 看不到，单独持有时是 DENY，不是不限制；
+  2. granted 里任一角色没配该对象范围 → 不限制（None）；
+  3. 否则把 granted 角色的**全部范围摊平取 OR**（角色间 OR；同一角色内多条也 OR **[推断]**，static 0cfb2eb，roles.ts:114）。「门店」和「大区」不会 AND。
+  - **fail closed**：没映射的属性、非正向 op、一期没建表的对象（会员、库存快照）上的范围 → 那条 `DENY_ALL`，在 OR 里不贡献行，绝不被当成「不限制」或被忽略（static 4641ebf §1.5：会员范围按拒绝）。`combine_or` 丢掉 DENY 成员，全是 DENY → `DENY_ALL`。
+  - 桩 `auth.row_filter`：本体管理员不限制，其余一律 `DENY_ALL`；PDE 实现时组 `RoleAccess` 调 `effective_expr`。
 - **注入方式（biz 等业务数据必须这样写）**：
   `stmt = await apply_row_filter(select(Store), user, "store", {"region": Store.region, ...})`。
   - 行级条件由基础层注入，业务模块不要自己拼过滤条件。
@@ -277,7 +283,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
     - **函数白名单**（聚合、窗口、日期、字符串、数学、条件、类型转换），其它一律拒绝（`query_to_xml`、`pg_stat_file`、`current_setting`、`set_config`、`pg_advisory_lock`、`pg_sleep`、`dblink`、`lo_*` 等）。
     - **只允许 public schema**（`pg_catalog.*`、`information_schema.*`、跨库三段名都拒绝）。
     - **带 schema 的函数调用一律拒绝**（`pg_catalog.lower(x)`、`public.age(x)`，白名单函数也不行）。
-    - **类型转换白名单**（`::`、`CAST`、`TRY_CAST` 同一套）：只允许数值（smallint/int/bigint/numeric/decimal/real/double）、文本（text/varchar/char）、日期时间（date/time/timetz/timestamp/timestamptz/interval）、布尔；`regclass`/`oid`/`regproc`/`regtype` 等对象标识类型、带 schema 的类型、自定义类型、json/bytea、数组一律拒绝。
+    - **类型转换白名单**（`::`、`CAST`、`TRY_CAST` 同一套）：只允许数值（smallint/int/bigint/numeric/decimal/real/double）、文本（text/varchar/char）、日期时间（date/time/timetz/timestamp/timestamptz/interval，含字段限定 `interval day`、`interval day to second`）、布尔；`regclass`/`oid`/`regproc`/`regtype` 等对象标识类型、带 schema 的类型、自定义类型、json/bytea、数组一律拒绝。
     - 拒绝 `TABLESAMPLE`。
   - `inject_row_filters(sql, {表: (谓词 sql, params) | None}, allowed) -> (sql, params)`：受控表替换成 `(SELECT * FROM public.t WHERE 谓词) AS t`。
     - 不过滤的受控表（谓词 None）和 `allowed` 里的表也改写成 `public.<表>`，不依赖 search_path。
@@ -285,7 +291,12 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
     - 谓词值走 **`$1..$n` 绑定参数**，多表合并后重新编号，执行用 `conn.exec_driver_sql(sql, tuple(params))`；`DENY = ("FALSE", [])`；未登记的表一律拒绝。
     - 受控表由模块 `register_governed(GovernedTable(...))` 登记（biz：store 的「大区」→ `big_region`；biz_order 经一跳 `order_belongs_to_store.big_region` 编成 EXISTS）。
     - **继承上级权限**：`GovernedTable(..., inherit=InheritVia(local, parent, parent_key))`。biz 的 `order_line` 经 `order_id → biz_order` 继承订单谓词：`EXISTS (SELECT 1 FROM public.biz_order AS _rf_biz_order WHERE _rf_biz_order.id = order_line.order_id AND <订单谓词>)`，订单谓词再一跳到 store（实际两跳）。行级表达式按上级的对象类型取（order_line → `order`）。注入用的别名统一 `_rf_` 前缀，只在注入的子查询内部可见，和用户别名不冲突。
-    - **维度表显式放行**：`register_unrestricted("product")`，`run_guarded` 自动并进 `allowed`；同一张表不能既受控又放行。没登记的表照样拒绝。
+    - **显式放行**：`register_unrestricted(...)`，`run_guarded` 自动并进 `allowed`；同一张表不能既受控又放行。没登记的表照样拒绝（一期没有放行的表）。
+    - **前端 RowScope → 表达式**：`scope_expr(g, 一个角色在该对象上的 scopes)`，属性按 `field_of_prop` 换字段、取值按 `value_alias` 换名（不在表里的原样比），多条范围 OR；没登记的属性 / 非正向 op → 那条 `DENY_ALL`。多个角色用 `effective_expr`（见上）。
+    - **订单.门店**（static-api.md §1.5，静态 9c7fe84）：biz_order 的「门店」→ `order_belongs_to_store.name`，一跳 `EXISTS (… public.store … store.name IN ($n…))`，范围值原样是门店名、不换 code；和「大区」是 OR（见多角色合并）。mock `roles.ts:26` 的门店名（「上海徐汇店」等 6 个）在 seed `ALL_STORES` 里一个都对不上（seed 是「上海徐汇漕河泾店」这类全称），照原样匹配 0 行。**用户已定（2026-10-25）：不加门店简称别名表（只是测试数据），0 行是预期结果。**
+    - **R-06 门店店长**（defaultDeny，只在订单上配了 `订单.门店=上海徐汇店`）：订单、订单行 0 行（店名对不上，用户已定 2026-10-25：不加别名表，0 行是预期）；商品、门店、会员能看但没配范围 → defaultDeny 下 DENY；库存快照一期没表，直接拒绝。
+    - **商品.品类**（同上）：product 是普通受控表，和其它对象一样走 `effective_expr`：非 defaultDeny 角色有查看权且没配品类 → 不限制；defaultDeny 角色（R-05/R-06/R-08）没配商品范围 → 看不到。谓词 `SPLIT_PART(product.category, '/', 1) IN ($n…)`（和文档的 `= ANY($n)` 等价；`'/'`、`1` 是字面量，只有范围值是参数）；范围值先经 `app/contracts/static.py` 的 `CATEGORY_SCOPE_ALIAS` 换成一级类目（乳品烘焙→乳品、休闲零食→休闲食品、日化清洁→日化家清，生鲜/粮油调味/酒水饮料同名）**[推断]**。
+    - **order_line 只继承订单范围，不按商品品类过滤**（已定：静态，`roles.ts:62` 行级范围按对象类型配，S-41 配在订单、S-42 配在商品）。连 product 查时 product 一侧照样按品类过滤。
     - **大区取值**：`store.big_region` 存「华东/华南/…」（行级范围的取值，`roles.ts:25/27`），谓词按 `big_region = 用户范围值` 比较；维度里的「华东大区」由 semantic-map 同义词映射成 `big_region='华东'`（静态裁定）。`row_filters_for(user)` = `auth.row_filter` + `compile_predicate`；`run_guarded(conn, sql, user)` = 校验 + 注入 + 执行。
   - 执行只用只读引擎 `get_qa_readonly_engine()`（`RENGU_QA_READONLY_DATABASE_URL`，连接参数设 `default_transaction_read_only=on`、`statement_timeout=RENGU_QA_STATEMENT_TIMEOUT_MS`，库账号也应只授权业务表）；没配置抛 `QaReadonlyNotConfigured`，不回退到主库账号。
   - 身份只取 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；dev/test 的 `X-Demo-As`（值 = sys_user.code）是会话桩，prod 忽略。
@@ -318,6 +329,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 - 任务必须幂等，因为可能被重投。时间一律用 `clock`（§5）。
 - `app/jobs/worker.py` 按 `JOBS` 注册 procrastinate 任务和周期任务（连接串去掉 `+asyncpg`）；procrastinate 自己的表不进 alembic check。
 - 行级过滤可选依赖 sqlglot（问数 SQL 改写用）。
+- **用户已定（2026-10-25）**：数据库保持 PostgreSQL；模型一律经 API 调用（不在本机部署）。
 
 ## 12. 新增模块 / 迁移
 
@@ -354,7 +366,8 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 - `EMPTY_RELEASE`：没有变更单时不允许发布。
 - `ontology_release.kind`（发布/回滚）、`rollbackOf` 字段：前端只展示文案，这两个字段是后台加的。
 - 行级过滤中，缺少用户属性时结果为 false（宁严勿宽）。
-- 商品品类权限范围：`roles.ts` 的 `商品.品类` 取值是一级品类（生鲜、乳品烘焙…），`product.category` 存的是品类路径（生鲜/水果），一期 product 登记为不限制、不按品类过滤；以后要按品类控权限，按路径第一段比较（`split_part(category, '/', 1)`）还是加一级品类列，待定；而且一级名也对不上（seed 里是「乳品 / 休闲食品 / 日化家清」，范围取值是「乳品烘焙 / 休闲零食 / 日化清洁」），需要静态给映射。
+- 商品品类范围值 → 一级类目的别名（`CATEGORY_SCOPE_ALIAS`，静态 static-api.md §1.5）：前端没给对应关系，按名称最接近的定；不在表里的值原样比。
+- 同一角色对同一对象多条范围取 OR（static 0cfb2eb §1.5，roles.ts:114；mock 里没有这种角色）。
 - 演示人物编号：孙浩然 U010005、李娜 U010006（PDE 已确认）、赵蕾 U010007、吴佳 U010008，mock 里都没有编号，后端补。
 - 整版回滚时被恢复版本没有某一节（content 为 None）：不调用该节的 `restore_section`，定义表不动（静态裁定，和动态一致）。
 

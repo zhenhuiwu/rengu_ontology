@@ -1,7 +1,7 @@
 r"""事务性 outbox（基础层，PDE 定：事件由写方在**同一事务**里写 outbox，其它模块只订阅）。
 
     from app.common.outbox import emit
-    await emit(session, "release.published", {...}, event_id=f"ontology_release:{ver}:published")
+    await emit(session, "release.published", {...}, event_id=f"ontology_release:{ver}:release.published")
 
 - 写方：只调 `emit`，不 commit（跟业务行同一事务，回滚则事件一起消失）；
 - event_id 唯一（同一事件重复写报 DUPLICATE_KEY），订阅方按 event_id 去重；

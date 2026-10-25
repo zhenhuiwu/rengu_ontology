@@ -218,8 +218,18 @@ def _cond(c: Condition, col: ColumnElement, user_attrs: dict[str, Any]) -> Colum
     }[c.op]()
 
 
+DENY_ALL: dict = {"deny": True}  # 哨兵：什么都看不到
+POSITIVE_OPS = frozenset({"=", "∈", "in"})  # 前端 RowScope.op（roles.ts L12/L49）
+
+
 def from_row_scope(scope: dict[str, Any], field_of_prop: dict[str, str] | None = None) -> dict:
-    """前端 RowScope {prop, op, values} → 表达式 jsonb。prop 是显示名时用 field_of_prop 映射到字段名。"""
+    """前端 RowScope {prop, op, values} → 表达式 jsonb。prop 是显示名时用 field_of_prop 映射到字段名。
+
+    前端 RowScope.op 只有正向的 '=' 和 '∈'（roles.ts L12/L49；'in' 视同 '∈'）。
+    其它 op（≠、not in、拼错的…）→ DENY_ALL（宁严勿宽；全 OR 合并只在正向 op 下成立）。
+    """
+    if scope.get("op") not in POSITIVE_OPS:
+        return dict(DENY_ALL)
     field = (field_of_prop or {}).get(scope["prop"], scope["prop"])
     values = list(scope["values"])
     if scope["op"] == "=" and len(values) == 1:
@@ -227,24 +237,22 @@ def from_row_scope(scope: dict[str, Any], field_of_prop: dict[str, str] | None =
     return {"field": field, "op": "in", "value": values}
 
 
-DENY_ALL: dict = {"deny": True}  # 哨兵：什么都看不到
-
-
 def combine_or(exprs: list[dict | None]) -> dict | None:
     """一个用户多个角色：范围取并集（任一角色允许即可见）。
 
-    - 没有任何角色范围（[]）→ DENY_ALL（拒绝，不是“不限制”）；
+    - 没有任何角色范围（[]）或全是 DENY_ALL → DENY_ALL（拒绝，不是“不限制”）；DENY_ALL 的角色不参与并集；
     - 某个角色明确配置为「全部」（传 None / {}）→ 整体不限制，返回 None。
     """
-    if not exprs:
-        return DENY_ALL
     if any(not e for e in exprs):
         return None
-    return exprs[0] if len(exprs) == 1 else {"or": exprs}
+    allowed = [e for e in exprs if not is_deny_all(e)]  # 拒绝的角色不贡献可见范围
+    if not allowed:
+        return DENY_ALL
+    return allowed[0] if len(allowed) == 1 else {"or": allowed}
 
 
 def is_deny_all(expr: dict | None) -> bool:
-    return expr == DENY_ALL
+    return isinstance(expr, dict) and expr.get("deny") is True
 
 
 async def apply_row_filter(

@@ -35,9 +35,19 @@ async def test_seed_is_idempotent(session, sections):
 
 
 # ---- 接口与 mock 一一对应 ----
-async def test_seed_refuses_empty_snapshot(users):
-    with pytest.raises(RuntimeError, match="不写空快照"):
-        await run_seeds(users, ["versioning"])
+async def test_seed_skips_without_sections(users, monkeypatch):
+    """还没有模块登记 section（骨架阶段）：versioning seed 跳过并记日志，不写空快照、不报错。"""
+    from app.modules.versioning.sections import registered_sections, seed_snapshot
+    from app.seeds import loader
+
+    logged: list[str] = []  # app.seeds logger 不向上传播，caplog 收不到，直接截 info
+    monkeypatch.setattr(loader._log, "info", lambda msg, *a: logged.append(msg % a))
+    assert not registered_sections()
+    reports = await run_seeds(users, ["versioning"])
+    assert reports == [] and any("没有模块登记快照 section" in m for m in logged)
+    assert await users.scalar(select(func.count()).select_from(OntologyRelease)) == 0
+    with pytest.raises(RuntimeError, match="不写空快照"):  # 直接调用仍拒绝空快照
+        seed_snapshot("v2026.10.3", None)
 
 
 async def test_list_matches_mock_exactly(client, seeded):

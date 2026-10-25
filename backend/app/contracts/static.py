@@ -1,0 +1,24 @@
+"""契约：静态本体 → 基础层（行级范围的取值映射）。
+
+- `CATEGORY_SCOPE_ALIAS`：`roles.ts` 里「商品.品类」的范围值 → `product.category` 第一段（一级类目）。
+  static-api.md §1.5（静态 9c7fe84）：谓词 `split_part(product.category, '/', 1) = ANY($n)`，
+  范围值先按这张表换名，不在表里的值原样比（对不上就匹配 0 行）。
+  **[推断]** 前端没给对应关系，按名称最接近的一级类目定。
+- TODO(静态本体负责人)：semantic_map（维度同义词，如「华东大区」→ big_region='华东'）也放这里。
+
+只放常量和类型，不放实现；基础层在 `app/modules/biz/governance.py` 里引用。
+"""
+
+from types import MappingProxyType
+
+# 范围值（roles.ts SCOPE_PROPS 商品.品类）→ 一级类目（seed PRODUCTS.category 的第一段）
+CATEGORY_SCOPE_ALIAS = MappingProxyType(
+    {
+        "生鲜": "生鲜",
+        "乳品烘焙": "乳品",
+        "粮油调味": "粮油调味",
+        "休闲零食": "休闲食品",
+        "酒水饮料": "酒水饮料",
+        "日化清洁": "日化家清",
+    }
+)

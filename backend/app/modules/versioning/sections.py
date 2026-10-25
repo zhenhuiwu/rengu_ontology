@@ -62,7 +62,10 @@ async def restore_sections(session: AsyncSession, snapshot: Snapshot) -> None:
 
 
 def seed_snapshot(ver: str, ctx: Any) -> Snapshot:
-    """seed 用：按登记的 builder 组装历史版本 ver 的快照；不允许空快照。"""
+    """seed 用：按登记的 builder 组装历史版本 ver 的快照；不允许空快照。
+
+    没有登记任何 section 时 versioning seed 用 skip_if 整条跳过、不会走到这里；这里的报错只防直接调用。
+    """
     if not _registry:
         raise RuntimeError(
             f"没有任何快照 section 登记，版本 {ver} 的 seed 不写空快照；"

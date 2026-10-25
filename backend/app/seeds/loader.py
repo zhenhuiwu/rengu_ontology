@@ -150,6 +150,9 @@ async def run_seeds(
             ctx = ctxs.setdefault(
                 (spec.source, group), SeedContext(roots[spec.source] / group, root=roots[spec.source])
             )
+            if spec.skip_if is not None and (reason := spec.skip_if()):
+                _log.info("seed %s ← %s/%s/%s 跳过：%s", module, spec.source, group, spec.file, reason)
+                continue
             if not (ctx.json_dir / spec.file).exists():
                 _log.warning("seed 文件缺失，跳过：%s（先跑 npm run export-mock）", ctx.json_dir / spec.file)
                 continue

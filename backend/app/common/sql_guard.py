@@ -23,14 +23,19 @@
   order_id → biz_order 继承订单的谓词：`EXISTS (SELECT 1 FROM public.biz_order AS _rf_biz_order
   WHERE _rf_biz_order.id = order_line.order_id AND <biz_order 的谓词>)`（订单谓词本身再一跳到 store）。
   别名 `_rf_` 前缀，只在注入的子查询内部可见，不会和用户的别名冲突。
-- 不需要行级的维度表要**显式**登记 `register_unrestricted("product")`；没登记的表一律拒绝（不是默认放行）。
+- 不需要行级的表要**显式**登记 `register_unrestricted(...)`；没登记的表一律拒绝（不是默认放行）。
+- 范围值换名用 `value_alias`（product：「商品.品类」按 `split_part(category, '/', 1)` 过滤，值先换一级类目）。
+- 前端角色 → 表达式：`effective_expr(object_type, [RoleAccess…])`，按 roles.ts:112-117 effectiveAccess 合并：
+  跨角色——只看对该对象有查看权、且不是「defaultDeny 又没配该对象范围」的角色；其中任一角色没配范围 → 不限制，
+  否则把这些角色的全部范围摊平取 OR（同一角色多条也 OR，[推断]，static 0cfb2eb §1.5 / roles.ts:114）；
+  没映射的属性 / 没建表的对象 → 这条范围不贡献任何行（DENY，宁严勿宽）。
 `row_filters_for(user)` 按 `auth.row_filter(user, object_type)` + `row_filter.to_sql` 编出各表谓词；
 `run_guarded(conn, sql, user)` = 校验 + 注入 + 执行。
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -118,7 +123,25 @@ def _func_allowed(node: exp.Func) -> bool:
     return type(node).__name__ in _ALLOWED_FUNCS
 
 
+def _interval_with_fields(this: object) -> bool:
+    """`interval day`、`interval day to second`：sqlglot 解析成 DataType(this=Interval(unit=…))。
+
+    只放行字段名（PDE 二审不阻塞项）。
+    """
+    if not isinstance(this, exp.Interval) or this.this is not None:
+        return False
+    unit = this.args.get("unit")
+    parts = [unit.this, unit.expression] if isinstance(unit, exp.IntervalSpan) else [unit]
+    return all(isinstance(p, exp.Var) for p in parts)
+
+
 def _type_allowed(dt: exp.DataType) -> bool:
+    if isinstance(dt, exp.IntervalSpan):  # `day to second` 本身也是 DataType 子类，只能出现在 interval 里
+        return isinstance(dt.parent, exp.Interval) and all(
+            isinstance(p, exp.Var) for p in (dt.this, dt.expression)
+        )
+    if _interval_with_fields(dt.this):
+        return True
     if dt.this not in _ALLOWED_TYPES:
         return False
     # 只允许长度 / 精度参数（varchar(32)、numeric(10,2)）；不允许嵌套类型、带 schema 的名字
@@ -251,6 +274,8 @@ class GovernedTable:
 
     field_of_prop：权限范围里的中文属性名 → 字段
     （如 {"大区": "big_region"}，或一跳 "order_belongs_to_store.big_region"）。
+    value_alias：权限范围里的中文属性名 → {范围值: 库里的值}（如 品类 → CATEGORY_SCOPE_ALIAS），
+    `scope_expr` 换名，不在表里的值原样比。
     """
 
     table: FromClause
@@ -259,6 +284,7 @@ class GovernedTable:
     links: dict[str, Any] = field(default_factory=dict)
     field_of_prop: dict[str, str] = field(default_factory=dict)
     inherit: InheritVia | None = None  # 设了就不用自己的 columns/links，权限按上级的 object_type 取
+    value_alias: dict[str, Mapping[str, str]] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -318,6 +344,72 @@ def compile_predicate(g: GovernedTable, expr: dict | None, user_attrs: dict[str,
     where = sqlglot.parse_one(str(compiled), read=DIALECT).args["where"].this
     names: Sequence[str] = compiled.positiontup or ()
     return where.sql(dialect=DIALECT), [compiled.params[n] for n in names]
+
+
+def scope_expr(g: GovernedTable, scopes: Sequence[dict[str, Any]]) -> dict | None:
+    """前端 RowScope 列表 {prop, op, values} → 行级表达式（多条之间 OR）。
+
+    属性名按 field_of_prop 换成字段，取值按 value_alias 换名（不在表里的原样保留）；
+    多条范围 OR **[推断]**（static 0cfb2eb §1.5 / roles.ts:114：同一角色多条也 OR；mock 里没有这种角色）。
+    **没映射的属性 / 非正向 op → 这条是 DENY_ALL**（宁严勿宽，绝不忽略成「不限制」）：
+    OR 里它不贡献行，全都这样 → DENY_ALL。
+    空列表 → None（不限制）。多个角色用 effective_expr 合并。
+    """
+    from app.common.row_filter import DENY_ALL, combine_or, from_row_scope
+
+    parts: list[dict] = []
+    for sc in scopes:
+        prop = sc["prop"]
+        if prop not in g.field_of_prop:
+            parts.append(dict(DENY_ALL))
+            continue
+        alias = g.value_alias.get(prop, {})
+        parts.append(
+            from_row_scope({**sc, "values": [alias.get(v, v) for v in sc["values"]]}, g.field_of_prop)
+        )
+    if not parts:
+        return None
+    return combine_or(parts)
+
+
+def scope_expr_for_object(object_type: str, scopes: Sequence[dict[str, Any]]) -> dict | None:
+    """按对象类型找受控表再 scope_expr。
+
+    对象类型没有登记受控表（一期的会员、库存快照）且配了范围 → DENY_ALL。
+    """
+    from app.common.row_filter import DENY_ALL
+
+    g = next((t for t in _GOVERNED.values() if t.object_type == object_type), None)
+    if g is None:
+        return dict(DENY_ALL) if scopes else None
+    return scope_expr(g, scopes)
+
+
+@dataclass(frozen=True)
+class RoleAccess:
+    """用户的一个角色在某个对象上的权限（PDE 的 row_filter 从角色表组装）。"""
+
+    view: bool  # 该角色对该对象有查看权（roles.ts objs[].view）
+    default_deny: bool = False  # roles.ts Role.defaultDeny
+    scopes: tuple[dict[str, Any], ...] = ()  # 该角色在**该对象**上的 RowScope {prop, op, values}
+
+
+def effective_expr(object_type: str, roles: Sequence[RoleAccess]) -> dict | None:
+    """一个用户在某对象上的有效行级表达式，照前端 effectiveAccess（roles.ts:110-117，static 0db86b3 §1.5）。
+
+    1. 只算 granted 角色：有查看权，且不是「defaultDeny 又没配该对象范围」（roles.ts:110）；没有 → DENY_ALL；
+    2. granted 里任一角色没配该对象范围 → None（不限制）；
+    3. 否则 granted 角色的全部范围摊平后 OR（角色内、角色间都 OR，角色内 [推断]，static 0cfb2eb §1.5）；
+       映射不了的范围不贡献行，全都映射不了 → DENY_ALL。
+    """
+    from app.common.row_filter import DENY_ALL
+
+    granted = [r for r in roles if r.view and not (r.default_deny and not r.scopes)]
+    if not granted:
+        return dict(DENY_ALL)
+    if any(not r.scopes for r in granted):
+        return None
+    return scope_expr_for_object(object_type, [sc for r in granted for sc in r.scopes])
 
 
 _ALIAS_PREFIX = "_rf_"

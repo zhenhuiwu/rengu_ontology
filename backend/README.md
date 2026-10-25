@@ -17,11 +17,13 @@ make dev       # 启动 http://127.0.0.1:8000，接口文档在 /docs
 make check     # 提交前必跑：ruff 检查 + 格式检查 + alembic check + pytest
 ```
 
+还没有模块登记版本快照 section 时，`make seed` 的 versioning 一步会记一行「跳过」日志，不写 `ontology_release`、不报错。
+
 - 健康检查：`GET /healthz`、`GET /readyz`（readyz 会连库）。
 - 示例接口：`GET /api/ontology/v1/releases`、`/releases/current`、`/releases/{ver}`、`/releases/{ver}/snapshot`；演示业务数据 `GET /api/biz/v1/orders`、`/orders/{id}`。
 - 升级到迁移 0002 前库里不能有版本行（published_by 改成外键），已有库请 `make db-reset`。
 - 演示身份：请求头 `X-Demo-As: U010001`（sys_user 编号；王敏=管理员，U010006 李娜=非管理员），只在 dev/test 生效。
-- 演示人物（`seeds/extra/system/SYS_USERS.json`）：
+- 演示人物（共 9 人：前 8 人在 `seeds/extra/system/SYS_USERS.json`，苏刚在 `seeds/json/system/ADMIN_USERS.json`）：
 
   | 编号 | 姓名 | 角色 | 来源 |
   |---|---|---|---|
@@ -29,8 +31,9 @@ make check     # 提交前必跑：ruff 检查 + 格式检查 + alembic check + 
   | U010002 / U010003 / U010004 | 陈立军 / 何静 / 刘婷 | 非管理员 | mock 审计日志 |
   | U010005 / U010006 | 孙浩然 / 李娜 | 非管理员 | [推断]，PDE 已确认 |
   | U010007 / U010008 | 赵蕾 / 吴佳 | 非管理员 | [推断] |
+  | U010231 | 苏刚 | 非管理员（业务查看） | 已在 `seeds/json/system/ADMIN_USERS.json`（mock 部门成员），不在 SYS_USERS.json 重复；前端 `?previewAs=` 的默认预览对象（`src/stores/preview.ts:14`） |
 
-  seed 的 sys_user 姓名必须唯一（动态按姓名比较「本人」，重名 seed 报错）；`sys_user.alert_assignable`（1..7 = 动态 PEOPLE 顺序，null = 不可指派）由动态的 seed 按姓名回填，admin seed 不写。
+  seed 的 sys_user 姓名必须唯一（ADMIN_USERS.json + SYS_USERS.json 合起来校验；动态按姓名比较「本人」，重名 seed 报错）；`sys_user.alert_assignable`（1..7 = 动态 PEOPLE 顺序，null = 不可指派）由动态的 seed 按姓名回填，admin seed 不写。
 - 时钟：dev/test 环境固定在 `2026-10-25T15:42:00+08:00`（`RENGU_FIXED_NOW`）；prod 用真实时间。
 - 测试使用独立的 `rengu_test` 库，测试会自动建库和迁移。每个用例在事务里运行，跑完回滚。
 - 也可以用容器跑 API：`docker compose -p rengu-backend --profile api up`。
@@ -75,6 +78,7 @@ auto-ontology（问数引擎）**作为独立服务部署在我们的网关后�
   - 所有请求都必须经过 qa 模块转发，由 qa 模块在转发前注入用户身份。
 - **auto-ontology 不负责**行级过滤、数据截止日、变更单流程。这些由本后台在 qa 模块里补齐：
   - 行级过滤：转发前把用户的 `row_filter` 换算成它能接受的条件；做不到的就在返回后过滤。
+    多角色合并照前端 `roles.ts:110-117`：defaultDeny 又没配该对象范围的角色不算；任一剩下的角色没配范围 → 不限制；否则全部范围 OR（同一角色内也 OR，[推断]）；没映射的属性 / 非正向 op / 没建表的对象 → 那条拒绝（详见 CONVENTIONS §10）。
   - 数据截止日：`RENGU_DATA_CUTOFF`。
   - 本体变更：走我们的变更单流程，不让它直接改模型。
 - **按角色配置模型（LLM）**：模型 API Key 由 auto-ontology 服务端从自己的环境变量读取，不经过本后台，也不写进 seed 或日志。

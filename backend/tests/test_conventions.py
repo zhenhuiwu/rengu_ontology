@@ -512,7 +512,14 @@ async def test_seed_personas_and_unique_names(users, session, monkeypatch):
     from app.modules.admin.models import SysUser
     from app.seeds.loader import module_checks, run_seeds
 
-    for code, name in (("U010005", "孙浩然"), ("U010006", "李娜"), ("U010007", "赵蕾"), ("U010008", "吴佳")):
+    people = (
+        ("U010005", "孙浩然"),
+        ("U010006", "李娜"),
+        ("U010007", "赵蕾"),
+        ("U010008", "吴佳"),
+        ("U010231", "苏刚"),
+    )
+    for code, name in people:  # 苏刚（?previewAs= 默认预览对象）来自 ADMIN_USERS.json
         u = await get_current_user(users, x_demo_as=code)
         assert (u.name, u.is_ontology_admin) == (name, False)
     # alert_assignable 不由 admin seed 写（动态的 seed 按姓名回填）
@@ -538,6 +545,16 @@ async def test_seed_personas_and_unique_names(users, session, monkeypatch):
     monkeypatch.setattr(admin_seeds, "SEEDS", specs)
     await session.execute(update(SysUser).where(SysUser.code == "U010001").values(dept="x"))
     with pytest.raises(ValueError, match="王敏"):
+        await run_seeds(session, ["admin"])
+    # 跨文件也查：SYS_USERS 里的人和 ADMIN_USERS 的苏刚重名 → 报错
+    specs2 = [
+        dataclasses.replace(s, transform=lambda r, c: {**admin_seeds._user(r, c), "name": "苏刚"})
+        if s.file == "SYS_USERS.json"
+        else s
+        for s in admin_seeds.SEEDS
+    ]
+    monkeypatch.setattr(admin_seeds, "SEEDS", specs2)
+    with pytest.raises(ValueError, match="苏刚"):
         await run_seeds(session, ["admin"])
     assert await session.scalar(select(SysUser.name).where(SysUser.code == "U010007")) == "赵蕾"
     assert await session.scalar(select(SysUser.dept).where(SysUser.code == "U010001")) == "x"  # 没被覆盖
