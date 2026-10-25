@@ -28,6 +28,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import {
   actionApi, snap, loadSnapshot, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
 } from '@/api/action';
@@ -52,20 +53,23 @@ const loadErr = ref('');
 const realList = reactive<{ items: EventTypeRow[]; total: number; sources: string[] }>({ items: [], total: 0, sources: [] });
 const apiMsg = (e: unknown) => (isApiError(e) ? e.message : String(e));
 if (real) {
-  watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { loadErr.value = apiMsg(e); }); }, { immediate: true });
+  watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { if (!fallBackIfDown(e)) loadErr.value = apiMsg(e); }); }, { immediate: true });
   let seq = 0;
   watch([source, kw, lpage, () => route.query.ver], async () => {
+    if (backend.down) return;
     const n = ++seq;
     try {
       const r = await listEventTypes({ source: source.value, kw: kw.value, page: lpage.value, size: LPAGE });
       if (n === seq) Object.assign(realList, { items: r.items, total: r.total, sources: r.sources });
-    } catch (e) { if (n === seq) message.error(`事件类型列表加载失败：${apiMsg(e)}`); }
+    } catch (e) { if (n === seq && !fallBackIfDown(e)) message.error(`事件类型列表加载失败：${apiMsg(e)}`); }
   }, { immediate: true });
 }
-const ready = computed(() => !real || snap.state === 'ready');
-const sources = computed(() => (real && realList.sources.length ? realList.sources : EVENT_SOURCES));
-const list = computed<EventTypeRow[]>(() => (real ? realList.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
-const listTotal = computed(() => (real ? realList.total : filtered.value.length));
+/** 后台没起来（backend.down）：整页回退 mock，和开关关着时一样渲染 */
+const live = computed(() => real && !backend.down);
+const ready = computed(() => !live.value || snap.state === 'ready');
+const sources = computed(() => (live.value && realList.sources.length ? realList.sources : EVENT_SOURCES));
+const list = computed<EventTypeRow[]>(() => (live.value ? realList.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
+const listTotal = computed(() => (live.value ? realList.total : filtered.value.length));
 const cur = computed<EventType>(() => {
   const all = ready.value ? eventTypes() : EVENT_TYPES;
   return all.find((e) => e.id === route.query.event) ?? all[0] ?? EVENT_TYPES[0];

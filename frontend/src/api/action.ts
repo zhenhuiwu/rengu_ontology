@@ -10,6 +10,7 @@
  *
  * 执行记录 / 统计：dynamic 开关开着时取 GET /api/ontology/v1/action-runs?actionType=&scope=runs（dynamic 的接口），按动作类型整份缓存，
  * 统计按 mock runStats() 同样的口径在前端算；取不到 / 开关关着时用 mock runsOf()。
+ * 后台没起来（fallback.ts 的 backend.down）时以下取数函数都回退 mock，loadSnapshot / loadRuns / loadWritebackSystems 不再发请求。
  * 不在本文件：近期事件（/events）、草稿写入（PUT /change-requests/…，versioning）。
  */
 import { reactive } from 'vue';
@@ -22,6 +23,7 @@ import {
 import type { ExtSystem } from '@/mock/extsys';
 import { integrationApi, listExtSystems } from './integration';
 import { apiClient, currentApiContext, type PageResult } from './http';
+import { backend } from './fallback';
 
 export const actionApi = apiClient('action');
 const api = actionApi;
@@ -67,7 +69,7 @@ interface Snap {
   eventVersions: Record<string, TypeVersion[]>;
 }
 export const snap = reactive<Snap>({ state: 'idle', ver: '', actions: [], params: {}, conds: {}, writeback: {}, actionVersions: {}, events: [], payload: {}, subs: {}, eventVersions: {} });
-const on = () => api.isReal() && snap.state === 'ready';
+const on = () => api.isReal() && !backend.down && snap.state === 'ready';
 
 const items = async <T>(path: string, query: Record<string, number> = {}) => clean((await api.get<{ items: T[] }>(path, { query })).items);
 const allIds = async (path: string) => (await api.get<PageResult<{ id: string }>>(path, { query: { page: 1, size: ALL } })).items.map((x) => x.id);
@@ -108,7 +110,7 @@ async function loadEvents() {
 let pending: Promise<void> | null = null;
 /** 取快照（动作 + 事件一起，两个页面共用）。?ver= 变了重取（请求本身由 http.ts 自动带 ver）；失败抛 ApiError，页面自己提示。 */
 export function loadSnapshot(ver = currentApiContext().ver ?? ''): Promise<void> {
-  if (!api.isReal()) return Promise.resolve();
+  if (!api.isReal() || backend.down) return Promise.resolve();
   if (snap.ver === ver && (snap.state === 'ready' || (snap.state === 'loading' && pending))) return pending ?? Promise.resolve();
   snap.state = 'loading'; snap.ver = ver;
   pending = Promise.all([loadActions(), loadEvents()]).then(() => { if (snap.ver === ver) snap.state = 'ready'; }, (e) => { snap.state = 'error'; pending = null; throw e; });
@@ -117,14 +119,14 @@ export function loadSnapshot(ver = currentApiContext().ver ?? ''): Promise<void>
 
 // ---------------- 页面用的取数函数（真接口快照 / mock） ----------------
 
-export const actionTypes = (): ActionType[] => (api.isReal() ? snap.actions : ACTION_TYPES);
+export const actionTypes = (): ActionType[] => (api.isReal() && !backend.down ? snap.actions : ACTION_TYPES);
 export const paramsOf = (a: ActionType): ActionParam[] => (on() ? snap.params[a.id] ?? [] : mockParams(a));
 export const condsOf = (a: ActionType): SubmitCond[] => (on() ? snap.conds[a.id] ?? [] : mockConds(a));
 export const writebackOf = (a: ActionType): { edits: OntologyEdit[]; effects: SideEffect[] } =>
   (on() ? snap.writeback[a.id] ?? { edits: [], effects: [] } : mockWriteback(a));
 export const actionVersionsOf = (a: ActionType): TypeVersion[] => (on() ? snap.actionVersions[a.id] ?? [] : mockVersions(a.version, a.owner, ACTION_VERSION_NOTES));
 
-export const eventTypes = (): EventType[] => (api.isReal() ? snap.events : EVENT_TYPES);
+export const eventTypes = (): EventType[] => (api.isReal() && !backend.down ? snap.events : EVENT_TYPES);
 export const payloadOf = (e: EventType): PayloadField[] => (on() ? snap.payload[e.id] ?? [] : mockPayload(e));
 export const subscribersOf = (e: EventType): Subscriber[] => (on() ? snap.subs[e.id] ?? [] : mockSubs(e));
 export const eventVersionsOf = (e: EventType): TypeVersion[] => (on() ? snap.eventVersions[e.id] ?? [] : mockVersions(e.version, e.owner, EVENT_VERSION_NOTES));
@@ -137,13 +139,13 @@ export const eventVersionsOf = (e: EventType): TypeVersion[] => (on() ? snap.eve
  */
 export const wbSys = reactive<{ loading: boolean; loaded: boolean; items: ExtSystem[] }>({ loading: false, loaded: false, items: [] });
 export function loadWritebackSystems(): Promise<void> {
-  if (!integrationApi.isReal() || wbSys.loading) return Promise.resolve();
+  if (!integrationApi.isReal() || backend.down || wbSys.loading) return Promise.resolve();
   wbSys.loading = true;
   return listExtSystems({ writeback: true }).then(
     (items) => { wbSys.items = items; wbSys.loaded = true; },
   ).finally(() => { wbSys.loading = false; });
 }
-export const writebackSystems = (): ExtSystem[] => (integrationApi.isReal() && wbSys.loaded ? wbSys.items : mockWbSystems());
+export const writebackSystems = (): ExtSystem[] => (integrationApi.isReal() && !backend.down && wbSys.loaded ? wbSys.items : mockWbSystems());
 
 // ---------------- 执行记录 / 统计（dynamic 模块：GET /api/ontology/v1/action-runs） ----------------
 
@@ -156,7 +158,7 @@ const pickRun = (r: Record<string, unknown>): ActionRun =>
 /** 按动作类型缓存全部执行记录（每个类型 100 多条，一次取完；顺序 = 后台顺序，和 mock 一致） */
 export const runsSnap = reactive<{ byType: Record<string, ActionRun[]>; loading: Record<string, boolean> }>({ byType: {}, loading: {} });
 export async function loadRuns(typeId: string, force = false): Promise<void> {
-  if (!dynamicApi.isReal() || runsSnap.loading[typeId] || (!force && runsSnap.byType[typeId])) return;
+  if (!dynamicApi.isReal() || backend.down || runsSnap.loading[typeId] || (!force && runsSnap.byType[typeId])) return;
   runsSnap.loading[typeId] = true;
   try {
     const rows: ActionRun[] = [];
@@ -169,7 +171,7 @@ export async function loadRuns(typeId: string, force = false): Promise<void> {
   } finally { runsSnap.loading[typeId] = false; }
 }
 export const runsOf = (typeId: string): ActionRun[] =>
-  (dynamicApi.isReal() && runsSnap.byType[typeId] ? runsSnap.byType[typeId] : mockRuns(typeId));
+  (dynamicApi.isReal() && !backend.down && runsSnap.byType[typeId] ? runsSnap.byType[typeId] : mockRuns(typeId));
 /** 同 mock runStats() 的口径（只是换成上面的 runsOf） */
 export function runStats(typeId: string) {
   const rows = runsOf(typeId);

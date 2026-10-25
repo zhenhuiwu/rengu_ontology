@@ -34,6 +34,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
+import { backend, fallBackIfDown } from '@/api/fallback';
 import {
   actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, loadRuns, type ActionTypeRow,
 } from '@/api/action';
@@ -58,22 +59,25 @@ const loadErr = ref('');
 const realList = reactive<{ items: ActionTypeRow[]; total: number; groups: string[] }>({ items: [], total: 0, groups: [] });
 const apiMsg = (e: unknown) => (isApiError(e) ? e.message : String(e));
 // 写回 tab 外部系统下拉：integration 开关开着时取 ?writeback=1（和 action 开关独立）
-loadWritebackSystems().catch(() => { /* 取不到时下拉退回 mock 列表 */ });
+loadWritebackSystems().catch((e) => { fallBackIfDown(e); /* 取不到时下拉退回 mock 列表 */ });
 if (real) {
-  watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { loadErr.value = apiMsg(e); }); }, { immediate: true });
+  watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { if (!fallBackIfDown(e)) loadErr.value = apiMsg(e); }); }, { immediate: true });
   let seq = 0;
   watch([group, kw, lpage, () => route.query.ver], async () => {
+    if (backend.down) return;
     const n = ++seq;
     try {
       const r = await listActionTypes({ group: group.value, kw: kw.value, page: lpage.value, size: LPAGE });
       if (n === seq) Object.assign(realList, { items: r.items, total: r.total, groups: r.groups });
-    } catch (e) { if (n === seq) message.error(`动作类型列表加载失败：${apiMsg(e)}`); }
+    } catch (e) { if (n === seq && !fallBackIfDown(e)) message.error(`动作类型列表加载失败：${apiMsg(e)}`); }
   }, { immediate: true });
 }
-const ready = computed(() => !real || snap.state === 'ready');
-const groups = computed(() => (real && realList.groups.length ? realList.groups : ACTION_GROUPS));
-const list = computed<ActionTypeRow[]>(() => (real ? realList.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
-const listTotal = computed(() => (real ? realList.total : filtered.value.length));
+/** 后台没起来（backend.down）：整页回退 mock，和开关关着时一样渲染 */
+const live = computed(() => real && !backend.down);
+const ready = computed(() => !live.value || snap.state === 'ready');
+const groups = computed(() => (live.value && realList.groups.length ? realList.groups : ACTION_GROUPS));
+const list = computed<ActionTypeRow[]>(() => (live.value ? realList.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
+const listTotal = computed(() => (live.value ? realList.total : filtered.value.length));
 const cur = computed<ActionType>(() => {
   const all = ready.value ? actionTypes() : ACTION_TYPES;
   return all.find((a) => a.id === route.query.action) ?? all[0] ?? ACTION_TYPES[0];
@@ -168,7 +172,7 @@ async function dryRun() {
 
 /* 概览 */
 // 执行记录 / 统计：dynamic 开关开着时按选中的动作类型取 /action-runs（取不到时 runsOf 退回 mock）
-watch(() => cur.value?.id, (id) => { if (id) loadRuns(id).catch(() => { /* 退回 mock */ }); }, { immediate: true });
+watch(() => cur.value?.id, (id) => { if (id) loadRuns(id).catch((e) => { fallBackIfDown(e); /* 退回 mock */ }); }, { immediate: true });
 const stats = computed(() => runStats(cur.value.id));
 const usedBy = computed(() => cur.value.usedBy.map((id) => {
   const r = RULES[id];
