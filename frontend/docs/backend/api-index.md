@@ -104,8 +104,8 @@
 | `INTERNAL_ERROR` | 500 | 未处理异常，不泄露堆栈；同样带 `requestId` 和 `X-Request-ID` 头（骨架 `app/core/request_id.py`） |
 | `NOT_CONFIRMER` | 403 | 规则暂存的动作，不是指定确认人 |
 | `NOT_OWNER` | 403 | 别人的方案、别人的告警（只有本人处理中的告警才能关闭或发起动作） |
-| `STATE_INVALID` | 409 | 状态机不允许，比如对“已撤回”的动作发起对账 |
-| static-api.md 里的码 | — | `NOT_IN_DRAFT`、`CR_LOCKED`、`CR_STATE_INVALID`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`（`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`DUPLICATE_KEY` 是骨架通用码，见上） |
+| `STATE_INVALID` | 409 | 状态机不允许，比如对“已撤回”的动作发起对账；变更单状态不允许也用它（static-api.md 2c81f30 已把 `CR_STATE_INVALID` 并入） |
+| static-api.md 里的码 | — | `NOT_IN_DRAFT`、`CR_LOCKED`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`（`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`DUPLICATE_KEY` 是骨架通用码，见上） |
 
 ### 1.3 分页
 
@@ -262,7 +262,7 @@
 
 - `GET /api/ontology/v1/semantic-map?ver=`（static-api.md §3.7，已定）：后台内部契约，前端没有入口，不对 API 密钥开放，也不接受界面会话。**问数在进程内直接调用静态提供的函数**（同一个后台进程，不走 HTTP、不需要服务间凭证；骨架没有服务间凭证）。下面的路径只作契约名，一期不挂 HTTP 路由。只读。
 - 带 `ver` 读该版本快照，不带读当前生效版本。
-- 返回 `[{kind, api, parent, name, synonyms[]}]`：`kind ∈ object|property|link|metric|dimension|dimValue|term`；`parent` 在 `property` 时是所属对象类型的 `api`，在 `dimValue` 时是所属维度的 `api`，其余为 `null`。
+- 契约函数 `contracts/static.semantic_map(session, ver=None)`（static-api.md 2c81f30 §3.7）。返回 `[{kind, id, api, parent, name, synonyms[]}]`：`kind ∈ object|property|link|metric|dimension|dimValue|term`；`id` = 前端 id（快照节里的键，如 `order`、`gross_margin`、`K-018`）；`api` = `api_name`（如对象 `SalesOrder`、指标 `gross_margin_rate`），维度取值（dimValue）和业务知识（term）没有 `api_name`，取 `code`；`parent` 也取 `api_name`：`property` 时是所属对象类型的 `api_name`，`dimValue` 时是所属维度的 `api_name`，其余为 `null`。
 - 不计入 §7 的 253 个前端接口。
 
 ---
@@ -1410,6 +1410,7 @@
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- 按静态负责人对 d8ab0d6..f40c81e 的审核（对照 static-api.md 2c81f30）：§1.2 static 码清单删 `CR_STATE_INVALID`（已并入通用 `STATE_INVALID` 409）；§1.13 语义地图返回加 `id`（前端 id），`api`/`parent` 取 `api_name`，dimValue 和 term 取 `code`。
 - 错误码主表补 `EXPORT_FORBIDDEN` 403、`IDEMPOTENCY_CONFLICT` 409；`ACTION_BLOCKED` 409 与问数 `SUBMISSION_CRITERIA_FAILED` 422 是同一场景（动作提交条件不满足），统一为 `SUBMISSION_CRITERIA_FAILED` 422（Palantir、问数文档用的码），§1.6、§2.5 同步；`statement_timeout` 注明骨架必须实现；修正旧修订记录里“函数负责方待动态定”（已定归静态）；核对前端：`:match`、`:resolve` 不走确认卡，预览和历史版本下都允许，白名单不变。
 - 按本体小白对 d8ab0d6 的审核，对齐骨架 1aeb5d1：§1.4 网关规则改为整棵语法树检查、403 `SQL_REJECTED`、只读账号 `RENGU_QA_READONLY_DATABASE_URL`（加 `statement_timeout`，不回退主库）、`inject_row_filters`；`X-Demo-As` 统一为骨架语义（值为用户名，不带时用 `RENGU_DEV_USER`，prod 忽略）；§1.13 语义地图改为进程内调用；错误码主表补 `UNAUTHORIZED`/`EMPTY_INPUT`/`VERSION_CONFLICT`/`ROLLBACK_NOT_LATEST`/`EMPTY_RELEASE`/`SQL_REJECTED`/`INTERNAL_ERROR`，删 `DUPLICATE_NAME`。记录已定：`release.published` 由版本层在 `create_version` 同一事务写 outbox。按前端解决预览冲突：`:dry-run`、`:simulate` 预览下 403 `READONLY`、历史版本下允许（`stores/confirm.ts:29-31`），`:simulate` 改为不落库、event-types·view；§7 计数改为写 99、不落库 11。
 - 按静态负责人对 d8ab0d6 的审核：函数 `:test`（#134）改为不落库、functions·view、`?ver=`/预览 Y，并加入 §1.7 两个白名单；§3.8 新建/编辑请求体、`:test` 返回 `{output,ms,at}`、列表与版本历史 12/页；#96 补草稿下拉的权限与密钥；L842 补 `trial`；`GET /metrics/{id}` 种子改为 `metricCatalog.ts`；删 `qaPaths` 待登记；§5.2–5.4 引用改为 a43f15a/21f5f45/f8fe052 并记核对差异；§7 计数改为写 100、不落库 10。
