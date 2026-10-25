@@ -17,14 +17,19 @@ const color = (s: string | undefined, sel: boolean) => `var(--tl-${timelineTone(
   <a-timeline class="stl">
     <a-timeline-item v-for="(t, i) in items" :key="i" :color="color(t.status, selected === i)">
       <template v-if="t.status === 'unknown'" #dot><QuestionCircleOutlined class="tl-attention" /></template>
-      <div class="t-14 c-1">{{ t.text }}</div>
-      <div v-if="t.status === 'unknown'" class="t-12 tl-attention">结果未知 · 待对账</div>
-      <div v-if="t.desc" class="t-12 c-3">{{ t.desc }}</div>
-      <div class="t-12 c-3 num">{{ t.time }}</div>
+      <div class="t-14 stl-row" :title="t.desc ? `${t.text}\n${t.desc}` : t.text">
+        <span class="c-1 stl-ell">{{ t.text }}</span>
+        <span v-if="t.status === 'unknown'" class="tl-attention stl-none">· 结果未知 · 待对账</span>
+        <span class="c-2 num stl-time">· {{ t.time }}</span>
+      </div>
     </a-timeline-item>
   </a-timeline>
 </template>
 
 <style scoped>
 .stl { padding-top: 8px; }
+.stl-row { display: flex; gap: 4px; min-width: 0; white-space: nowrap; }
+.stl-ell { flex: none; max-width: 65%; overflow: hidden; text-overflow: ellipsis; }
+.stl-time { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.stl-none { flex: none; }
 </style>

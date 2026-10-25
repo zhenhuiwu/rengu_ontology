@@ -12,10 +12,9 @@ const view = computed(() => resolveObject(props.kind, props.id));
     <template #content>
       <div class="hc">
         <div class="hc-head">
-          <span class="t-14 fw-600 c-1 hc-title">{{ view.title }}</span>
+          <span class="t-14 fw-600 c-1 hc-title" :title="`${view.title} · ${view.kindLabel} · ${view.code}`">{{ view.title }}<span class="fw-400 c-2 num"> · {{ view.code }}</span></span>
           <a-tag v-if="view.status" :color="view.status.color" class="hc-tag">{{ view.status.text }}</a-tag>
         </div>
-        <div class="t-12 c-3">{{ view.kindLabel }} · {{ view.code }}</div>
         <dl class="hc-list">
           <template v-for="f in view.brief" :key="f.label">
             <dt class="t-12 c-3">{{ f.label }}</dt>

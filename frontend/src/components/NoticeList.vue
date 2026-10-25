@@ -29,8 +29,7 @@ function pick(n: (typeof app.notices)[number]) {
       <li v-for="n in paged.items" :key="n.id" class="nl-item" @click="pick(n)">
         <span class="nl-dot" :class="{ on: !n.read }" />
         <div class="nl-body">
-          <div class="nl-row"><span :class="n.read ? 'c-2' : 'c-1'">{{ n.title }}</span><span class="t-12 c-3 num">{{ n.time }}</span></div>
-          <div class="t-12 c-3">{{ n.desc }}</div>
+          <div class="nl-row" :title="n.desc ? `${n.title}\n${n.desc}` : n.title"><span class="nl-ell" :class="n.read ? 'c-2' : 'c-1'">{{ n.title }}</span><span class="t-12 c-2 num nl-time">{{ n.time }}</span></div>
         </div>
       </li>
     </ul>
@@ -48,5 +47,7 @@ function pick(n: (typeof app.notices)[number]) {
 .nl-dot.on { background: var(--brand); }
 .nl-body { flex: 1; min-width: 0; }
 .nl-row { display: flex; justify-content: space-between; gap: 8px; }
+.nl-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.nl-time { flex: none; }
 .nl-pager { padding-top: 8px; }
 </style>

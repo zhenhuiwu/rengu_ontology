@@ -78,6 +78,7 @@ async function resend() {
         <template v-if="view">
           <span class="t-16 fw-600 c-1">{{ view.title }}</span>
           <a-tag v-if="view.status" :color="view.status.color">{{ view.status.text }}</a-tag>
+          <span class="t-14 fw-400 c-2 num dd-code">{{ view.kindLabel }} · {{ view.code }}</span>
         </template>
         <span v-else class="t-16 fw-600">未找到对象</span>
       </div>
@@ -90,9 +91,6 @@ async function resend() {
     </template>
 
     <template v-if="view">
-      <div class="t-12 c-3 dd-sub">
-        <template v-if="level === 2 && parentTitle"><a class="dd-crumb" @click="back">{{ parentTitle }}</a> / </template>{{ view.kindLabel }} · {{ view.code }}
-      </div>
       <a-tabs v-model:activeKey="tab" size="small">
         <a-tab-pane key="props" tab="属性">
           <a-descriptions :column="2" size="small" bordered :label-style="{ width: '96px' }">
@@ -105,8 +103,7 @@ async function resend() {
             <div class="dd-kpis">
               <div v-for="k in t.kpis" :key="k.label" class="dd-kpi">
                 <div class="t-12 c-3">{{ k.label }}</div>
-                <div><span class="t-16 fw-600 c-1 num">{{ k.value }}</span> <span v-if="k.unit" class="t-12 c-3">{{ k.unit }}</span></div>
-                <div v-if="k.compare" class="t-12" :class="toneClass(k)">{{ k.compare }}</div>
+                <div class="dd-kv"><span class="t-16 fw-600 c-1 num">{{ k.value }}</span><span v-if="k.unit" class="t-12 c-2">{{ k.unit }}</span><span v-if="k.compare" class="t-12 dd-cmp" :class="toneClass(k)" :title="k.compare">{{ k.compare }}</span></div>
               </div>
             </div>
           </section>
@@ -152,8 +149,9 @@ async function resend() {
 <style scoped>
 .dd-title { display: flex; align-items: center; gap: 8px; }
 .dd-back { margin-left: -8px; }
-.dd-sub { margin: 8px 0 0; }
-.dd-crumb { color: var(--brand); }
+.dd-code { white-space: nowrap; }
+.dd-kv { display: flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; }
+.dd-cmp { margin-left: 8px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .dd-sec { margin-top: 16px; }
 .dd-sec-h { margin-bottom: 8px; }
 .dd-kpis { display: grid; grid-template-columns: repeat(2, 1fr); border: var(--border); border-radius: var(--radius); }
