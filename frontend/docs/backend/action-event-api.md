@@ -1,6 +1,6 @@
 # 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.4 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.4（v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；尚未发布到 master）
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.4.1（v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `f54db65` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
@@ -422,47 +422,48 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 ### 7.1 seed 方案（已定（PDE 汇总团队决定，2026-10-25））
 
-- **导出**：统一用 PDE 的 `npm run export-mock`（`scripts/export-mock.mjs`，pde 分支 `d9e61c3`；Vite `ssrLoadModule` 加载，`TZ=Asia/Shanghai`），把 `src/mock/*` 的每个导出**原样**写成 `${OUT_DIR}/<module>/<export>.json`，另生成 `manifest.json`。`OUT_DIR` 默认 `backend/seeds/json`。各模块的 Python seed 只从这里读，不再自己写导出步骤。
+- **导出**：统一用 PDE 的 `npm run export-mock`（`scripts/export-mock.mjs` + `scripts/export-mock.derived.mjs`，pde 分支 `e03a575`；Vite `ssrLoadModule` 加载，`TZ=Asia/Shanghai`），把 `src/mock/*` 的每个导出**原样**写成 `${OUT_DIR}/<module>/<export>.json`，另生成 `manifest.json`。**`OUT_DIR` 必须显式给出**（没有默认值，不给直接报错退出），seed 用 `OUT_DIR=../backend/seeds/json npm run export-mock`。各模块的 Python seed 只从这里读，不再自己写导出步骤。
   - 本模块读的目录（真实路径）：
     - `backend/seeds/json/action/`：`actionEvent.ts` 的导出。脚本的 MODULES 里只有 `action: ['actionEvent']`，**没有 `event/` 目录**，事件类型的数据也在这里。
-    - `backend/seeds/json/action/derived/`：函数调用结果（§7.1.1）。
+    - `backend/seeds/json/action/derived/<函数名>.json`：函数调用结果（§7.1.1），例如 `runsOf.json`。
     - `backend/seeds/json/dynamic/`：`ACTIONS`、`ALERTS`、`RULES`、`RULE_CONFIRMER`、`AUTO_QUERY_TEXT`（只读，归动态）。
     - `backend/seeds/json/system/`：`EXT_SYSTEMS`（`extsys.ts`）。
   - 时间：字符串时间（如 `2026-10-25 14:28:03`）原样保留，都是北京时间；`Date` 写成带 `+08:00` 的 ISO 字符串。
   - **seed 的“现在”固定为 2026-10-25 15:42（北京时间）**，取自骨架的设定（mock `NOW = 2026-10-25T15:42:18+08:00`）。统计接口的 `asOf`、近 24 小时 / 7 天 / 30 天的窗口都按这个时间算，seed 环境的页面才和 mock 一样。
-  - **顶层导出是函数的会被跳过**，所以这两页要用的函数结果放进 PDE 的 derived 调用清单（§7.1.1）。
-  - **PDE 已给 `RUNS`、`EVENTS` 加上 `export`**，它们直接导出为 `json/action/RUNS.json`（1,849 条）、`json/action/EVENTS.json`（1,243 条），不必再从 `runsOf`/`eventsOf` 拼。
+  - **顶层导出是函数的会被跳过**，函数结果由 derived 调用清单在同一进程、常量导出之后逐个调用得到（§7.1.1）。
+  - **`RUNS`、`EVENTS` 没有加 `export`**（`actionEvent.ts` 不改），所以**没有** `RUNS.json`、`EVENTS.json`。执行记录 = `action/derived/runsOf.json` 17 次调用结果的并集（1,849 条），事件 = `action/derived/eventsOf.json` 15 次调用结果的并集（1,243 条），按 id 去重后正好还原 `RUNS`、`EVENTS`。下文的 `RUNS`、`EVENTS` 都指这两个并集。
   - 数量参考（本机数过）：17 个动作类型、101 个参数、59 条提交条件、36 条本体编辑、47 条副作用、1,849 条执行记录（其中 54 条结果未知）、15 个事件类型、37 个订阅方、1,243 条事件、10 个外部系统、5 条规则、154 条告警、31 + 27 条版本记录；动作中心 `actions.ts` 141 条执行记录（其中 20 条结果未知）。
 
 #### 7.1.0 2026-10-25 试跑结果（临时 worktree 检出 `d9e61c3`，`OUT_DIR=/tmp/pde-exp-out`，跑完已删除）
 
-- 0 个失败，120 个函数被跳过。当时 `action` 只导出 8 个：`ACTION_GROUPS`(7)、`ACTION_TYPES`(17，已带 `withSystem` 合并的 system/timeout/retry/idempotent)、`ACTION_VERSION_NOTES`(4)、`EVENT_SOURCES`(5)、`EVENT_TYPES`(15，含 `specific`)、`EVENT_VERSION_NOTES`(3)、`RULE_ACTION`(4)、`UNKNOWN_FOLLOWUP`。加上 `RUNS`、`EVENTS` 的 `export` 后是 10 个。
+- 0 个失败，120 个函数被跳过。当时 `action` 只导出 8 个：`ACTION_GROUPS`(7)、`ACTION_TYPES`(17，已带 `withSystem` 合并的 system/timeout/retry/idempotent)、`ACTION_VERSION_NOTES`(4)、`EVENT_SOURCES`(5)、`EVENT_TYPES`(15，含 `specific`)、`EVENT_VERSION_NOTES`(3)、`RULE_ACTION`(4)、`UNKNOWN_FOLLOWUP`。`e03a575` 仍是这 8 个（`RUNS`、`EVENTS` 不导出，改从 derived 还原）。
 - 其他模块要用的都已导出：`dynamic/ACTIONS`(141，带 `log`)、`dynamic/RULE_CONFIRMER`、`dynamic/AUTO_QUERY_TEXT`、`dynamic/ALERTS`(154)、`dynamic/RULES`(5)、`system/EXT_SYSTEMS`(10)。
-- 仍然缺的：`ENVELOPE`、`PARAMS`、`CONDS`、`SUBS` 没导出（通过 derived 的函数结果拿到，不必单独导出）；抽屉 resolver `src/components/actionEventResolvers.ts` **不在 `src/mock/` 下**，要加进脚本；`useDraftView.ts` 的 `TARGETS` 也不在 `src/mock/`（归静态，CR-0013/0014 由静态 seed）。
+- 仍然缺的：`ENVELOPE`、`PARAMS`、`CONDS`、`SUBS` 没导出（通过 derived 的函数结果拿到，不必单独导出）；抽屉 resolver `src/components/actionEventResolvers.ts` 不在 `src/mock/` 下，`e03a575` 已在 derived 里加载并导出；`useDraftView.ts` 的 `TARGETS` 也不在 `src/mock/`（归静态，CR-0013/0014 由静态 seed）。
 - 纯查找函数（`actionTypeById`、`eventTypeById`、`runById`、`eventById`、`ruleById`、`extSystemOf`、`ruleConfirmer`、`withSystem`）不用导出。
 
-#### 7.1.1 交给 PDE 的 derived 调用清单（输出到 `backend/seeds/json/action/derived/`）
+#### 7.1.1 derived 调用清单（PDE 已实现，pde 分支 `e03a575`，`scripts/export-mock.derived.mjs`）
 
-已按 `src/mock/actionEvent.ts` 和 `src/components/actionEventResolvers.ts` 的函数签名核对过。“遍历”指按哪个列表里的 id 逐个调用；输出建议是以 id 为键的一个对象，由 PDE 定。
+每个函数一个文件：`${OUT_DIR}/<模块>/derived/<函数名>.json`，内容是 `[{args, result}]`，每次调用一项；参数里的对象写成引用 `{ref, key, id}`，后台按引用去对应的导出 JSON 找那一行。每次调用的参数、行数、是否 `guessed` 记在 `manifest.json` 的 `derived`。本模块的条目都按本文 §7.1.1 调用，没有 `guessed`。2026-10-25 核对过，数量全部和下面“数量参考”一致。
 
-| 输出（`json/action/derived/`） | 源文件 | 调用 | 参数 / 遍历 | 对应表 |
+| 输出（`json/action/derived/`） | 源文件 | 调用 | 参数 / 遍历 | 用途 / 对应表 |
 |---|---|---|---|---|
-| `params.json` | `src/mock/actionEvent.ts` | `paramsOf(actionTypeById(id))` | `ACTION_TYPES` 的 17 个 id | action_param |
-| `conds.json` | 同上 | `condsOf(actionTypeById(id))` | 同上 | submission_criterion |
-| `writeback.json` | 同上 | `writebackOf(actionTypeById(id))` → `{edits, effects}` | 同上 | ontology_edit_rule, side_effect |
-| `runs.json`（可选，校验用） | 同上 | `runsOf(id)` | 同上 | 与 `RUNS.json` 按 typeId 分组后对比 |
-| `run_stats.json` | 同上 | `runStats(id)` | 同上 | 对比校验 |
-| `run_daily.json` | 同上 | `runDaily(id)` | 同上 | action_run_daily_stat |
-| `action_versions.json` | 同上 | `versionsOf(a.version, a.owner, ACTION_VERSION_NOTES)` | `ACTION_TYPES` 每一项 `a` | action_type_version |
-| `writeback_systems.json` | 同上 | `writebackSystems()` | 无参数，调一次 | 对比校验（写回下拉） |
-| `payload.json` | 同上 | `payloadOf(eventTypeById(id))`（自身字段 + 10 个信封字段；`ENVELOPE` = 结果的最后 10 项） | `EVENT_TYPES` 的 15 个 id | event_payload_field, event_envelope_field |
-| `subscribers.json` | 同上 | `subscribersOf(eventTypeById(id))` | 同上 | event_subscription |
-| `events.json`（可选，校验用） | 同上 | `eventsOf(id)` | 同上 | 与 `EVENTS.json` 对比 |
-| `event_daily.json` | 同上 | `eventDaily(id, e.weekly)` | `EVENT_TYPES` 每一项 `e`（weekly 见下） | event_daily_stat |
-| `event_versions.json` | 同上 | `versionsOf(e.version, e.owner, EVENT_VERSION_NOTES)` | `EVENT_TYPES` 每一项 `e` | event_type_version |
-| `action_drawers.json` | `src/components/actionEventResolvers.ts`（**需加进脚本**） | `ACTION_EVENT_RESOLVERS.action(runId)`（去掉函数字段） | `RUNS.json` 每个 `id` | 交给动态写 `action_run_log`；外部调用部分写 `writeback_call` |
-| `event_drawers.json` | 同上 | `ACTION_EVENT_RESOLVERS.event(eventId)` | `EVENTS.json` 每个 `id` | event_delivery（时间线） |
-| `rule_drawers.json`（可选，动态的） | 同上 | `ACTION_EVENT_RESOLVERS.rule(ruleId)` | `RULES` 的键 | 动态的 rule |
+| `paramsOf.json` | `src/mock/actionEvent.ts` | `paramsOf(a)` | `ACTION_TYPES` 的 17 项（参数写成引用 `{ref:"action/ACTION_TYPES",key:"id",id}`） | action_param |
+| `condsOf.json` | 同上 | `condsOf(a)` | 同上 | submission_criterion |
+| `writebackOf.json` | 同上 | `writebackOf(a)` → `{edits, effects}` | 同上 | ontology_edit_rule, side_effect |
+| `runsOf.json` | 同上 | `runsOf(id)` | `ACTION_TYPES` 的 17 个 id | **执行记录的来源**：17 次调用的并集 = `RUNS`（1,849 条），交给动态写 `action_run` |
+| `runStats.json` | 同上 | `runStats(id)` | 同上 | 对比校验 |
+| `runDaily.json` | 同上 | `runDaily(id)` | 同上 | action_run_daily_stat |
+| `versionsOf.action.json` | 同上 | `versionsOf(a.version, a.owner, ACTION_VERSION_NOTES)` | `ACTION_TYPES` 每一项 | action_type_version |
+| `writebackSystems.json` | 同上 | `writebackSystems()` | 无参数，调一次 | 对比校验（写回下拉） |
+| `payloadOf.json` | 同上 | `payloadOf(e)`（自身字段 + 10 个信封字段；`ENVELOPE` = 结果的最后 10 项） | `EVENT_TYPES` 的 15 项（引用） | event_payload_field, event_envelope_field |
+| `subscribersOf.json` | 同上 | `subscribersOf(e)` | 同上 | event_subscription |
+| `eventsOf.json` | 同上 | `eventsOf(id)` | `EVENT_TYPES` 的 15 个 id | **事件的来源**：15 次调用的并集 = `EVENTS`（1,243 条） |
+| `eventDaily.json` | 同上 | `eventDaily(id, e.weekly)` | `EVENT_TYPES` 每一项（weekly 见下） | event_daily_stat |
+| `versionsOf.event.json` | 同上 | `versionsOf(e.version, e.owner, EVENT_VERSION_NOTES)` | `EVENT_TYPES` 每一项 | event_type_version |
+| `ACTION_EVENT_RESOLVERS.action.json` | `src/components/actionEventResolvers.ts` | `ACTION_EVENT_RESOLVERS.action(runId)`（函数字段已去掉） | `runsOf` 并集里每个 id | 交给动态写 `action_run_log`；外部调用部分写 `writeback_call` |
+| `ACTION_EVENT_RESOLVERS.event.json` | 同上 | `ACTION_EVENT_RESOLVERS.event(eventId)` | `eventsOf` 并集里每个 id | event_delivery（时间线） |
+
+其他模块的 derived 里和本模块有关的：`json/dynamic/derived/ACTION_EVENT_RESOLVERS.rule.json`（规则抽屉，动态的）、`json/system/derived/extCalls.json`（外部系统页的调用记录，参数照抄 `ExternalSystems.vue` 的 `opsOf`，manifest 标 `guessed`）。
 
 - 17 个动作类型 id：`issue_recall_coupon, sync_member_tags, assign_region_manager, adjust_region_budget, correct_order_status, request_replenish, adjust_store_price, start_price_approval, close_alert, urge_logistics, claim_alert, reassign_alert, reissue_shipment, approve_refund, change_member_level, change_store_status, set_safety_stock`。
 - `eventDaily` 的 weekly 参数：`order_status_changed` 48210、`inventory_changed` 126480、`stock_below_safety` 386、`store_sales_drop` 9、`gross_margin_breach` 54、`shipment_overdue` 212、`member_churn_risk` 3120、`illegal_transition` 31、`action_executed` 1864、`action_outcome_unknown` 37、`coupon_redeemed` 8640、`refund_created` 1420、`store_price_changed` 2260、`waybill_signed` 31240、`alert_closed` 318。
@@ -470,10 +471,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 #### 7.1.2 入库
 
-- **入库脚本**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 都读 `backend/seeds/json/action/`（和 `derived/`），`integration` 的 seed 读 `backend/seeds/json/system/EXT_SYSTEMS.json`。幂等写库（`INSERT … ON CONFLICT DO NOTHING`），ID 保持原样（`ACT-…`、`EV-…`、`EXT-…`）。统一的 `seed` 命令在迁移之后执行。
-- **执行记录由动态 seed**：`action_run` 只由动态写，动态的 seed 读动作中心的 `dynamic/ACTIONS.json` 和本模块的 `action/RUNS.json`，按 id 合并（`RUNS` 编号从 2000 起，和 `ACTIONS` 不冲突）；执行时间线写进动态的 `action_run_log`（`ACTIONS` 自带 `log`，`RUNS` 用 `action_drawers.json`）。本模块的 seed 在动态之后执行，只写自己的表：`writeback_call`、`reconcile_task`、`ext_system`、定义表、事件和投递表。
+- **入库脚本**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 都读 `backend/seeds/json/action/` 和 `backend/seeds/json/action/derived/`，`integration` 的 seed 读 `backend/seeds/json/system/EXT_SYSTEMS.json`。幂等写库（`INSERT … ON CONFLICT DO NOTHING`），ID 保持原样（`ACT-…`、`EV-…`、`EXT-…`）。统一的 `seed` 命令在迁移之后执行。
+- **执行记录由动态 seed**：`action_run` 只由动态写，动态的 seed 读动作中心的 `dynamic/ACTIONS.json` 和本模块的 `action/derived/runsOf.json`（所有调用结果的并集），按 id 合并（`RUNS` 编号从 2000 起，和 `ACTIONS` 不冲突）；执行时间线写进动态的 `action_run_log`（`ACTIONS` 自带 `log`，`RUNS` 用 `action/derived/ACTION_EVENT_RESOLVERS.action.json`）。本模块的 seed 在动态之后执行，只写自己的表：`writeback_call`、`reconcile_task`、`ext_system`、定义表、事件和投递表。
 - **seed 保留 mock 原值**：外部幂等键即使重复（如告警生成的 `act-al-…`）也照原样入库。`action_run` 加 `is_seed` 列，`idem_key` 只对非 seed 行唯一：`CREATE UNIQUE INDEX … ON action_run(idem_key) WHERE NOT is_seed`（建议动态这样建）。
-- **`writeback_call`**：mock 没有逐次调用明细，只有 `retries`、`code`、`ms`。seed 按 `attempt = retries + 1` 展开【推断】；有 drawers 输出时以 drawers 时间线为准。外部系统页的 `extCalls(sys, ops)` 也写这张表。
+- **`writeback_call`**：mock 没有逐次调用明细，只有 `retries`、`code`、`ms`。seed 按 `attempt = retries + 1` 展开【推断】；以 `ACTION_EVENT_RESOLVERS.action.json` 的时间线为准。外部系统页的调用记录来自 `system/derived/extCalls.json`，也写这张表。
 - **对账任务**：seed 进来的结果未知记录（`ACTIONS` 20 条、`RUNS` 54 条）都建 `reconcile_task`，**`tries=3, state=manual, manual=true, round=1, next_at=null`**（mock 里没有下次查询时间，时间线已写到“自动查询 3 次仍无法确认 → 转人工”），不会再被调度。
 - **适配器全部用 mock**：seed、dev、test 环境里 `integration/` 下的适配器都是 mock 实现，`query_by_key` 对这些记录一律返回“仍无法确认”。人工对账选“仍无法确认”再开一轮时，mock 也照样返回，页面不变。
 - **统计**：`runDaily`、`eventDaily`、订阅方的 `weekly` 和明细对不上（另一个随机种子），**不处理**——照原样入库，不要求 mock 内部一致。
@@ -491,7 +492,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `writebackOf().edits` / `.effects` | `ontology_edit_rule` / `side_effect` | — |
 | `ActionTypeDef.sysId/endpoint/idemKey` | `action_type.sys_id/endpoint/business_key_template` | `idemKey` 是业务键模板，接口字段名不变 |
 | `UNKNOWN_FOLLOWUP`、超时处理文案 | 代码常量 | 不进库 |
-| `RUNS`（直接导出） | `action_run`（**动态**）+ `action_run_log`（**动态**）+ `writeback_call` + `reconcile_task` | 动态按 id 和 `ACTIONS` 合并；`is_seed=true` |
+| `RUNS`（= `derived/runsOf.json` 并集） | `action_run`（**动态**）+ `action_run_log`（**动态**）+ `writeback_call` + `reconcile_task` | 动态按 id 和 `ACTIONS` 合并；`is_seed=true` |
 | `runStats()` / `runDaily()` | 统计接口实时算；`runDaily` 写进 `action_run_daily_stat` | 和 `RUNS` 对不上，不处理，原样入库 |
 | `versionsOf()` + `ACTION_VERSION_NOTES` / `EVENT_VERSION_NOTES` | `action_type_version` / `event_type_version`（关联 `ontology_release`） | 发布号 `v2026.10.3` 等要和 `releases.ts` 对上 |
 | `EVENT_TYPES` | `event_type`、`event_type_version` | — |
@@ -499,10 +500,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `ENVELOPE`（`payloadOf` 结果的最后 10 项） | `event_envelope_field` | 全局 10 行 |
 | `EVENT_SOURCES` | `dict_item(dict='event_source')` | — |
 | `subscribersOf()`（`SUBS`、`SUBS_RULE`、默认） | `event_subscription` | `weekly` 存进 `event_subscription_weekly_stat` |
-| `EVENTS`（直接导出） | `event`、`event_delivery` | 按 `subscribers` 生成投递记录：“部分投递”的 1 条记为待重试，“投递失败”的全部记为死信【推断，与抽屉文案一致】 |
+| `EVENTS`（= `derived/eventsOf.json` 并集） | `event`、`event_delivery` | 按 `subscribers` 生成投递记录：“部分投递”的 1 条记为待重试，“投递失败”的全部记为死信【推断，与抽屉文案一致】 |
 | `eventDaily()`、`EventType.weekly` | `event_daily_stat` | 和 `EVENTS` 对不上，不处理 |
 | `extsys.ts` · `EXT_SYSTEMS` | `ext_system`（`integration` 模块，归我） | PDE 的外部系统页通过我的接口读写；密钥**加密存储**，mock 值只是示例 |
-| `extsys.ts` · `extCalls()` | `writeback_call` | 外部系统页的调用记录；动态原来的 `ext_call` 并入此表 |
+| `extsys.ts` · `extCalls()`（`system/derived/extCalls.json`） | `writeback_call` | 外部系统页的调用记录；动态原来的 `ext_call` 并入此表 |
 | `dynamic.ts` · `RULES`、`ALERTS`；`actions.ts` · `ACTIONS` | 动态的 `rule`、`alert`、`action_run` | 本模块只引用 |
 | `useDraftView.ts` · `TARGETS`（CR-0013 → `store_price_changed`，CR-0014 → `adjust_region_budget`）、`releases.ts` · `DRAFTS` | 静态的 `change_request`、`cr_item` | 静态 seed；本模块确认目标正确 |
 | `stores.ts` / `products.ts` / `orders.ts` | 基础层的对象实例 | 必须先入库 |
