@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 动作确认卡：全站所有动作共用，只挂一个（在 AppLayout 里）。
- * 用法：const ok = await useConfirmStore().ask({ title, target, fields, impact, irreversible })
+ * 用法：const ok = await useConfirmStore().ask({ title, target, fields, impact, irreversible, blocked })
+ * blocked：有阻断时传原因文字，确定按钮锁住
  */
 import { ref, watch } from 'vue';
 import { useConfirmStore } from '@/stores/confirm';
@@ -18,7 +19,7 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
     :mask-closable="false"
     :ok-text="store.req?.okText ?? '确认执行'"
     cancel-text="取消"
-    :ok-button-props="{ danger: !!store.req?.danger, disabled: (!!store.req?.irreversible && !ack) || (!!store.req?.picker?.required && !store.pickValue) }"
+    :ok-button-props="{ danger: !!store.req?.danger, disabled: !!store.req?.blocked || (!!store.req?.irreversible && !ack) || (!!store.req?.picker?.required && !store.pickValue) }"
     @ok="store.settle(true)"
     @cancel="store.settle(false)"
   >
@@ -38,6 +39,7 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
           :placeholder="store.req.picker.placeholder ?? '请选择'" :options="store.req.picker.options"
         />
       </div>
+      <a-alert v-if="store.req.blocked" type="error" show-icon class="ca-blocked" :message="store.req.blocked" />
       <a-checkbox v-if="store.req.irreversible" v-model:checked="ack">此操作会写回业务系统，提交后不能撤销</a-checkbox>
     </template>
   </a-modal>
@@ -49,5 +51,6 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
 .ca-picker { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
 .ca-picker-label { width: 96px; flex: none; }
 .ca-picker-select { flex: 1; }
+.ca-blocked { margin: 12px 0; }
 .ca-impact { margin: 12px 0; padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); }
 </style>
