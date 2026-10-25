@@ -246,7 +246,7 @@ const tryRows = computed<TryRow[]>(() => {
       const ids = conflicts.value.get(w);
       if (ids && ids.length > 1) {
         seen.add(w);
-        rows.push({ k: `“${w}”`, v: `同义词冲突：${ids.map(nameOf).join(' / ')}。${CONFLICT_RULE[w] ?? '未设置默认，问数会先追问用户'}`, cls: 'c-warning' });
+        rows.push({ k: `“${w}”`, v: `同义词冲突：${ids.map(nameOf).join(' / ')}。${CONFLICT_RULE[w] ?? '未设置默认，问数会先追问用户'}`, cls: 'c-1' });
         ids.forEach((id) => hitIds.add(id));
       } else {
         seen.add(w);
@@ -386,11 +386,11 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
             </a-descriptions-item>
             <a-descriptions-item label="同义词" :span="2">
               <template v-if="view.synonyms.length">
-                <a-tag v-for="w in view.synonyms" :key="w" :color="isConflict(w) ? 'warning' : undefined">{{ w }}</a-tag>
+                <a-tag v-for="w in view.synonyms" :key="w" :title="isConflict(w) ? '与其他知识冲突，见“问数中的作用”' : undefined">{{ w }}</a-tag>
               </template>
               <span v-else class="c-3">--</span>
               <a-tag v-if="mark('synonyms')" class="gl-diff">{{ mark('synonyms') }}</a-tag>
-              <span v-if="conflictRows.length" class="t-12 c-warning">{{ conflictRows.length }} 个词与其他知识冲突，见“问数中的作用”</span>
+              <span v-if="conflictRows.length" class="t-12 c-1">{{ conflictRows.length }} 个词与其他知识冲突，见“问数中的作用”</span>
             </a-descriptions-item>
             <a-descriptions-item label="生效期">{{ view.period || '--' }}<a-tag v-if="mark('period')" class="gl-diff">{{ mark('period') }}</a-tag></a-descriptions-item>
             <a-descriptions-item label="负责人">{{ view.owner }}<a-tag v-if="mark('owner')" class="gl-diff">{{ mark('owner') }}</a-tag></a-descriptions-item>
@@ -446,7 +446,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
           <div class="gl-sec t-14 fw-600">术语识别</div>
           <a-descriptions :column="1" bordered size="small" class="gl-desc">
             <a-descriptions-item label="识别词">
-              <a-tag v-for="w in words" :key="w" :color="isConflict(w) ? 'warning' : undefined">{{ w }}</a-tag>
+              <a-tag v-for="w in words" :key="w" :title="isConflict(w) ? '与其他知识冲突' : undefined">{{ w }}</a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="映射为">{{ view.maps || '--' }}</a-descriptions-item>
             <a-descriptions-item label="计算说明"><span class="num gl-ell" :title="view.calc">{{ view.calc || '--' }}</span></a-descriptions-item>
@@ -456,15 +456,15 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
           <div v-else class="t-14 c-3">没有默认过滤条件</div>
           <div class="gl-sec t-14 fw-600 gl-sec-row">
             <span>同义词冲突</span>
-            <span class="t-12 fw-400" :class="conflictRows.length ? 'c-warning' : 'c-3'">{{ conflictRows.length ? `${conflictRows.length} 个词同时指向其他知识（V9）` : '没有冲突' }}</span>
+            <span class="t-12 fw-400" :class="conflictRows.length ? 'c-1' : 'c-3'">{{ conflictRows.length ? `${conflictRows.length} 个词同时指向其他知识（V9）` : '没有冲突' }}</span>
           </div>
           <div v-for="c in conflictRows" :key="c.word" class="gl-conflict">
-            <span class="t-14 c-warning fw-600 gl-cw">“{{ c.word }}”</span>
+            <span class="t-14 c-1 fw-600 gl-cw">“{{ c.word }}”</span>
             <span class="t-14 c-2">同时指向
               <template v-for="(o, i) in c.others" :key="o.id"><a @click="pick(o.id)">{{ o.name }}</a><span class="c-3 num">（{{ o.id }}）</span>{{ i < c.others.length - 1 ? '、' : '' }}</template>
             </span>
             <span class="gl-sp" />
-            <span class="t-12" :class="c.rule ? 'c-3' : 'c-warning'">{{ c.rule ?? '未设置默认，问数会先追问用户' }}</span>
+            <span class="t-12" :class="c.rule ? 'c-3' : 'c-1'">{{ c.rule ?? '未设置默认，问数会先追问用户' }}</span>
           </div>
         </div>
         <div class="gl-right gl-try">

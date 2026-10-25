@@ -532,12 +532,12 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
           <a-checkbox v-model:checked="tryAll" class="t-12">在全部维度中匹配</a-checkbox>
           <span class="dm-try-res">
             <template v-if="tryResult">
-              <span v-if="!tryResult.exact.length && !tryResult.contains.length" class="t-12 c-warning">{{ tryAll ? '没有匹配到取值，问数会追问用户' : `“${cur.name}”里没有匹配到，可勾选“在全部维度中匹配”` }}</span>
-              <span v-else-if="tryResult.crossDim" class="t-12 c-warning dm-ell1 dm-try-amb" :title="tryResult.groups.join('；')">歧义：命中 {{ tryResult.groups.length }} 个维度，默认按“组织”解析，写明维度时按写明的 · {{ tryResult.groups.join('；') }}</span>
+              <span v-if="!tryResult.exact.length && !tryResult.contains.length" class="t-12 c-1">{{ tryAll ? '没有匹配到取值，问数会追问用户' : `“${cur.name}”里没有匹配到，可勾选“在全部维度中匹配”` }}</span>
+              <span v-else-if="tryResult.crossDim" class="t-12 c-1 dm-ell1 dm-try-amb" :title="tryResult.groups.join('；')">歧义：命中 {{ tryResult.groups.length }} 个维度，默认按“组织”解析，写明维度时按写明的 · {{ tryResult.groups.join('；') }}</span>
               <template v-else>
                 <span v-if="tryResult.exact.length" class="t-12 c-2">精确：{{ tryResult.exact.map((h) => `${h.itemName} · ${h.value}`).join('、') }}</span>
                 <span v-if="tryResult.contains.length" class="t-12 c-3">包含：{{ tryResult.contains.map((h) => `${h.itemName} · ${h.value}`).join('、') }}{{ tryResult.more ? ` 等 ${tryResult.contains.length + tryResult.more} 个` : '' }}</span>
-                <span v-if="tryResult.exact.length + tryResult.contains.length > 1" class="t-12 c-warning">有歧义{{ tryResult.rule?.resolve ? `：${tryResult.rule.resolve}` : '，精确命中优先，仍有多个时追问' }}</span>
+                <span v-if="tryResult.exact.length + tryResult.contains.length > 1" class="t-12 c-1">有歧义{{ tryResult.rule?.resolve ? `：${tryResult.rule.resolve}` : '，精确命中优先，仍有多个时追问' }}</span>
               </template>
             </template>
             <span v-else class="t-12 c-3">{{ tryAll ? `在全部 ${visible.length} 个维度和码表里按名称、同义词和映射匹配` : `只在“${cur.name}”里按名称、同义词和映射匹配` }}</span>
@@ -545,7 +545,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
         </div>
         <div class="dm-bar">
           <span class="t-12 c-2">共 {{ mapRows.length }} 个说法</span>
-          <span v-if="conflictCount" class="t-12 c-warning">{{ conflictCount }} 个有歧义</span>
+          <span v-if="conflictCount" class="t-12 c-1" title="同一说法对应多个取值，按处理方式回答，没有处理方式时追问用户">{{ conflictCount }} 个有歧义</span>
           <a-checkbox v-model:checked="conf" class="t-12">只看有歧义的</a-checkbox>
           <span class="dm-sp" />
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openMap">新增说法</a-button></a-tooltip>
@@ -558,12 +558,12 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
             </template>
             <template v-else-if="column.key === 'targets'">
               <span v-if="record.targets.length" class="c-2 dm-ell1" :title="record.targets.join('、')">{{ record.targets.join('、') }}</span>
-              <span v-else class="c-warning">没有对应取值</span>
+              <span v-else class="c-1">没有对应取值</span>
             </template>
             <template v-else-if="column.key === 'hits'"><span class="num">{{ fmtInt(record.hits) }}</span></template>
             <template v-else-if="column.key === 'conflict'">
               <span v-if="conflictText(record) || record.resolve" class="dm-ell1" :title="[conflictText(record), record.resolve].filter(Boolean).join('；')">
-                <span v-if="conflictText(record)" class="c-warning">{{ conflictText(record) }}</span>
+                <span v-if="conflictText(record)" class="c-1">{{ conflictText(record) }}</span>
                 <span v-if="record.resolve" class="c-3">{{ conflictText(record) ? '；' : '' }}{{ record.resolve }}</span>
               </span>
               <span v-else class="c-3">--</span>
@@ -621,7 +621,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
       <a-form-item label="说明"><a-input v-model:value="vForm.note" /></a-form-item>
     </a-form>
     <div v-if="vErr" class="t-12 c-error">{{ vErr }}</div>
-    <div v-for="c in synConflicts" :key="c" class="t-12 c-warning">{{ c }}，问数会出现歧义</div>
+    <div v-for="c in synConflicts" :key="c" class="t-12 c-1">{{ c }}，问数会出现歧义</div>
   </a-modal>
 
   <a-modal v-model:open="mOpen" :title="`新增说法 · ${cur?.name}`" :width="560" ok-text="保存到草稿" :ok-button-props="{ disabled: !mForm.phrase.trim() || !mForm.targets.length }" @ok="saveMap">
@@ -631,7 +631,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
       <a-form-item label="匹配方式"><a-radio-group v-model:value="mForm.match"><a-radio value="精确">精确</a-radio><a-radio value="包含">包含</a-radio></a-radio-group></a-form-item>
       <a-form-item label="处理方式"><a-input v-model:value="mForm.resolve" placeholder="有歧义时问数怎么理解" /></a-form-item>
     </a-form>
-    <div v-if="mHits.length" class="t-12 c-warning">“{{ mForm.phrase.trim() }}”已对应 {{ mHits.map((h) => `${h.itemName} · ${h.value}`).join('、') }}，保存后会标为有歧义，建议写明处理方式</div>
+    <div v-if="mHits.length" class="t-12 c-1">“{{ mForm.phrase.trim() }}”已对应 {{ mHits.map((h) => `${h.itemName} · ${h.value}`).join('、') }}，保存后会标为有歧义，建议写明处理方式</div>
     <div v-else-if="mForm.phrase.trim()" class="t-12 c-3">没有重名的说法</div>
   </a-modal>
 </template>
