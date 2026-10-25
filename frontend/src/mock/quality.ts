@@ -28,7 +28,7 @@ export const qObjType = (key?: string | null) => Q_OBJECT_TYPES.find((t) => t.ke
 export type CheckKind = '新鲜度' | '空值率' | '唯一性' | '引用完整性';
 export type CheckResult = '通过' | '失败';
 export interface QRun { time: string; result: CheckResult; actual: string; ms: number }
-export interface QCheck { id: string; typeKey: string; typeName: string; kind: CheckKind; rule: string; threshold: string; actual: string; result: CheckResult; lastRun: string; failSince: string | null; history: QRun[] }
+export interface QCheck { id: string; typeKey: string; typeName: string; kind: CheckKind; rule: string; threshold: string; actual: string; result: CheckResult; lastRun: string; failSince: string | null; history: QRun[]; /** 补充说明（容易和别的问题混淆时） */ note?: string }
 
 /** 全局数据截至时间，和指标、问数页面一致 */
 export const DATA_CUTOFF = '2026-10-24 23:00';
@@ -56,6 +56,10 @@ const FAILING: Record<string, string> = {
 const FAIL_SINCE: Record<string, string> = {
   'inventory:新鲜度': '2026-10-24 19:30', 'purchase:新鲜度': '2026-10-24 18:30', 'member:空值率': '2026-10-21 23:30',
   'shipment:空值率': '2026-10-24 23:30', 'order_line:唯一性': '2026-10-23 23:30', 'employee:引用完整性': '2026-10-15 23:30',
+};
+// 补充说明：出库单运单号为空 16,307 条，数量接近“订单 → 履约门店”的孤儿记录 16,284 条（前置仓未建档），两者无关
+const NOTES: Record<string, string> = {
+  'shipment:空值率': '与“订单 → 履约门店”的 16,284 条孤儿记录（前置仓未在门店主数据建档）无关：这里是出库单已出库但承运商未回传运单号',
 };
 const pad = (n: number) => String(n).padStart(2, '0');
 const dayAt = (daysAgo: number, hhmm: string) => {
@@ -97,7 +101,7 @@ export const QUALITY_CHECKS: QCheck[] = (() => {
       runs.sort((a, b) => (a.time < b.time ? 1 : -1));
       out.push({
         id: `QC-${String(n).padStart(3, '0')}`, typeKey: t.key, typeName: t.name, kind, rule, threshold,
-        actual: failMsg ?? okActual, result: failMsg ? '失败' : '通过', lastRun: runs[0].time, failSince: since, history: runs,
+        actual: failMsg ?? okActual, result: failMsg ? '失败' : '通过', lastRun: runs[0].time, failSince: since, history: runs, note: NOTES[fk],
       });
     });
   });

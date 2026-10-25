@@ -92,7 +92,7 @@ const runNow = () => message.success(`已提交运行：${selected.value.id} ${s
           <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">
             <template #bodyCell="{ column, record }">
               <span v-if="column.key === 'type'">
-                <a v-if="record.result === '失败'" class="tl-failed" @click.stop="openType(record.typeKey)">{{ record.typeName }}</a>
+                <a v-if="record.result === '失败'" @click.stop="openType(record.typeKey)">{{ record.typeName }}</a>
                 <span v-else class="c-1">{{ record.typeName }}</span>
               </span>
               <span v-else-if="column.key === 'actual'" :class="record.result === '失败' ? 'tl-failed' : 'c-2'">{{ record.actual }}</span>
@@ -112,12 +112,13 @@ const runNow = () => message.success(`已提交运行：${selected.value.id} ${s
         <div class="dq-hhead">
           <div class="dq-htitle">
             <span class="num c-3 t-12">{{ selected.id }}</span>
-            <a v-if="selected.result === '失败'" class="t-14 fw-600 tl-failed" @click="openType(selected.typeKey)">{{ selected.typeName }}</a>
+            <a v-if="selected.result === '失败'" class="t-14 fw-600" @click="openType(selected.typeKey)">{{ selected.typeName }}</a>
             <span v-else class="t-14 fw-600 c-1">{{ selected.typeName }}</span>
             <span class="t-14 fw-600 c-1">· {{ selected.kind }}</span>
             <span class="dq-res t-12" :class="tl(selected.result)"><span class="dq-dot" />{{ selected.result }}</span>
           </div>
           <div class="t-12 c-2 dq-ellip">{{ selected.rule }} · 阈值 {{ selected.threshold }}</div>
+          <div v-if="selected.note" class="t-12 c-2">说明：{{ selected.note }}</div>
           <div class="t-12 c-3">
             近 {{ selected.history.length }} 次运行失败 {{ histFails }} 次<span v-if="selected.failSince">，自 <span class="num">{{ selected.failSince }}</span> 起持续失败</span>
           </div>
