@@ -13,7 +13,7 @@
 | 表 | 模块 | 说明 |
 |---|---|---|
 | object_type、property、object_mapping、property_mapping、domain | 静态 | 对象类型页 |
-| link_type、link_quality、qa_path、qa_path_step | 静态 | 关系类型页 |
+| link_type、link_quality、onto_qa_path、onto_qa_path_step、onto_qa_path_example | 静态 | 关系类型页 |
 | metric（含各版本） | 静态 | 指标口径页 |
 | dimension、dim_level、dim_value、dim_mapping | 静态 | 维度与字典页；码表即 `dimension(kind=codelist)`，不另建 ENUM_TYPE |
 | knowledge、knowledge_apply、synonym（同义词主表） | 静态 | 业务知识页；见 §1.3 同义词 |
@@ -40,7 +40,7 @@
 | 数据源映射 object_mapping / property_mapping | 「数据源与映射」页签、`mock/datasources.ts` | 对象 → 源表；属性 → 源列/表达式；「重新采集元数据」刷新源表结构 |
 | 关系类型 link_type | `mock/links.ts`（LinkType） | from/to、基数 `1:1/1:N/N:1/N:M`、关联键、via 中间对象、物理 JOIN、反向名、可空 |
 | 关联质量 link_quality | `LinkQuality` | 命中率、孤儿记录、空值、重复、孤儿样例；每日 06:00 检查 |
-| 问数路径 qa_path | `QaPath/PathGroup` | 两对象间多条路径及默认路径（V13） |
+| 问数路径 onto_qa_path | `QaPath/PathGroup` | 两对象间多条路径及默认路径（V13） |
 | 指标 metric（按版本） | `mock/metrics.ts`、`mock/metricCatalog.ts` | 公式、单位、允许维度、口径版本 vN；版本列表「生效中/已替代」 |
 | 维度/码表 dimension | `mock/dimensions.ts`（DimItem） | kind=维度/码表，来源对象+属性+列，取值来源与同步，层级 levels，问数口径 qa |
 | 维度层级 dim_level | `DimLevel` | 名称、api、来源、成员数 |
@@ -412,10 +412,12 @@ erDiagram
 | datasource_ref | `id` PK、`datasource_id` FK（指向 data 模块 `datasource.id`）、`db_schema`、`table_name`（`(datasource_id, db_schema, table_name)` UK）、`comment`、`rows`、`cols`、`updated_at`、`ref_note` | `DsTable{schema,name,comment,rows,cols,objectType,updatedAt,ref?}`；`dsTables(ds)` 已由 system 模块导出，静态只建引用、不重复导 |
 | object_mapping | `id` PK、`object_type_id` FK + UK（一个对象一条映射）、`datasource_ref_id` FK、`source_table`（如 `ERP.T_SALE_ORDER`）、`pk_mapping`、`sync_mode`（每小时增量…，全量时增量字段为空）、`incr_column`（`update_time`）、`last_sync_at`、`data_cutoff` | `ObjectTypes.vue:372-380` 映射头；`LINK_OBJECTS.table`；`Q_OBJECT_TYPES.source/cutoff`；`objectMeta().sync` |
 | property_mapping | `id` PK、`object_mapping_id` FK、`property_id` FK（`(object_mapping_id, property_id)` UK）、`source_column`、`source_type`（VARCHAR2(32)…）、`transform`（字典映射、时区、脱敏、表达式） | `mock/objectProps.ts` `ORDER_MAP_ROWS`（订单 7 行覆盖，`ObjectTypes.vue:175-182` 引用）+ `SRC_TYPE`（按属性类型推源类型）+ `ObjProp.source` |
-| qa_path | `id` PK、`from_object_id` FK、`to_object_id` FK、`seq`（`(from_object_id, to_object_id, seq)` UK）、`is_default`、`hint`；`(from_object_id, to_object_id)` 下 `is_default` 恰好 1 条（V13） | `PathGroup{from,to,paths,examples,check}`、`QaPath{links[],isDefault,hint?}` |
-| qa_path_step | `id` PK、`path_id` FK、`step_no`（`(path_id, step_no)` UK）、`link_type_id` FK | `QaPath.links[]` |
-| qa_path_example | `id` PK、`from_object_id` FK、`to_object_id` FK、`seq`（`(from_object_id, to_object_id, seq)` UK）、`question`、`path_id` FK [推断] | `PathGroup.examples` |
+| onto_qa_path | `id` PK、`group_key`（`from→to`，快照键，`(group_key, seq)` UK）[推断]、`from_object_id` FK、`to_object_id` FK、`seq`（`(from_object_id, to_object_id, seq)` UK，即前端 paths 下标）、`is_default`、`hint`、`check_note`（组级 `check`，只存默认路径行）[推断]；`(from_object_id, to_object_id)` 下 `is_default` 恰好 1 条（V13，部分唯一索引 `uq_onto_qa_path_default` 保证至多 1 条） | `PathGroup{from,to,paths,examples,check}`、`QaPath{links[],isDefault,hint?}` |
+| onto_qa_path_step | `id` PK、`path_id` FK、`step_no`（`(path_id, step_no)` UK）、`link_type_id` FK | `QaPath.links[]` |
+| onto_qa_path_example | `id` PK、`from_object_id` FK、`to_object_id` FK、`seq`（`(from_object_id, to_object_id, seq)` UK）、`question`、`path_id` FK（可空：前端 `path=-1` 先追问）[推断]、`how` | `PathGroup.examples` |
 | object_view | `id` PK、`code` UK（V-ORD0002）、`object_type_id` FK、`name`、`kind`（我的页面/对象列表/工作台视图）、`owner`（人名软引用，非外键）、`visibility`（仅自己/指定人员/角色/全员）、`visible_to`、`filter_text`、`props` jsonb、`last_used_at`、`uses_30d` | `ObjectView`；`viewsOf(objectId, objName)` |
+
+问数路径三张表用 `onto_` 前缀：`qa_` 前缀属于问数模块，按表名前缀归属模块时不会被认成问数的表。
 
 ### 1.5 行级范围（审核意见阻断 1：引用底层）
 
@@ -771,7 +773,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
   | derived `viewsOf` | object_view | 18 个对象 / 285 |
   | `LINKS` / `LINK_OBJECTS` | link_type / （对象下拉，不入表） | 27 / 18 |
   | `LINKS.*.quality` / `usage` / `history` | link_quality / usage 视图 / 由 CR 推出 | 26 / 65 / 28 |
-  | `PATH_GROUPS` | qa_path / qa_path_step / qa_path_example | 7 / 10 / 9（3 组） |
+  | `PATH_GROUPS` | onto_qa_path / onto_qa_path_step / onto_qa_path_example | 7 / 10 / 9（3 组） |
   | `METRICS` | metric（当前版本） | 7 |
   | `extra/static/metrics.json` | metric（`repeat_sales` v3、`repeat_sales_tax` v1，取自 `mock/metricCatalog.ts` `METRIC_LIST`） | 2 |
   | `DIM_ITEMS` | dimension | 17 |
