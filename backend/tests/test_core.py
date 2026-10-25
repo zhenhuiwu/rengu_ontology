@@ -19,6 +19,17 @@ async def test_readyz_checks_db(client):
     assert r.json() == {"status": "ok", "db": "ok"}
 
 
+async def test_client_422_does_not_poison_seeded_session(client, users):
+    """同一 client 里一次 422 不能把 users / seeded 回滚掉（否则后续请求 401）。
+
+    get_session 覆盖用 begin_nested：错误响应只撤这次请求的 SAVEPOINT。
+    """
+    bad = await client.get("/api/biz/v1/orders", params={"size": 0})
+    assert bad.status_code == 422 and bad.json()["code"] == "VALIDATION_FAILED"
+    ok = await client.get("/api/biz/v1/orders", params={"size": 1})
+    assert ok.status_code == 200, ok.json()  # 仍能解析 X-Demo-As / RENGU_DEV_USER → sys_user
+
+
 async def test_request_id_is_echoed_into_error_body(client, users):
     r = await client.get("/api/ontology/v1/releases/v1999.01.1", headers={"X-Request-ID": "rid-123"})
     assert r.status_code == 404

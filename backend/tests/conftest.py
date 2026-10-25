@@ -70,31 +70,15 @@ async def client(session) -> AsyncIterator[AsyncClient]:
     from app.main import app
 
     async def _override():
-        try:
+        # 每个请求一个 SAVEPOINT：422 / 业务错误只回滚这一次请求的写入，
+        # 不把 seeded / users 等外层夹具的数据一起清掉（否则同一 client 后续请求会 401）。
+        async with session.begin_nested():
             yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
 
     app.dependency_overrides[get_session] = _override
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
-
-
-@pytest.fixture(autouse=True)
-def _isolated_sections():
-    """快照 section 注册表按测试隔离：业务模块（如静态）在包导入时登记真实 builder，
-    骨架的 versioning 测试按「空注册表 + 测试替身」写；每个测试先清空，结束后恢复。
-    需要真实 builder 的测试自己请求对应模块的 fixture（如 static_sections）。"""
-    from app.modules.versioning import sections as reg
-
-    saved = dict(reg._registry)
-    reg._registry.clear()
-    yield
-    reg._registry.clear()
-    reg._registry.update(saved)
 
 
 class FakeObjectTypesSection:
