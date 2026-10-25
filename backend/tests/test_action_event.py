@@ -520,14 +520,14 @@ async def test_restore_section_none_leaves_types_untouched(ae):
         assert await ae.scalar(n_ret) == 0
 
 
-async def test_restore_section_without_release_id_uses_next_release(released):
-    """骨架改签名前不传 release_id：用 max(ontology_release.id)+1（新回滚记录的 id 不会小于它）。"""
-    top = await released.scalar(select(func.max(OntologyRelease.id)))
-    acts, _ = await _snap(released)
-    acts.pop("close_alert")
-    await action_sections.BUILDER.restore_section(released, acts)
-    got = await released.scalar(select(ActionType.retired_release_id).where(ActionType.code == "close_alert"))
-    assert got == top + 1
+def test_restore_section_release_id_is_required_keyword():
+    """release_id 是必填的 keyword-only 参数（骨架 restore_sections 先写新回滚记录再传它的 id）。"""
+    import inspect
+
+    for b in (action_sections.BUILDER, event_sections.BUILDER):
+        p = inspect.signature(b.restore_section).parameters["release_id"]
+        assert p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty
+        assert p.annotation in (int, "int")
 
 
 # ---------- 全新库：默认 seed 写出带 actionTypes / eventTypes 的版本记录；迁移往返只看自己的表 ----------

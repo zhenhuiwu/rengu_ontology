@@ -7,7 +7,8 @@ system / timeout / retry / idempotent（随 ext_system）和统计字段不进�
 - build_section：发布时把当前定义表（未下线的）整段导出；本批没有草稿写入，不看变更单 [推断]。
 - seed_section：mock 只有当前定义，历史各版都用当前定义组装 [推断]（前端 ?ver= 显示的也是当前 mock）。
 - restore_section(session, content, *, release_id)（整版回滚，团队约定的签名）：同一事务里把定义表
-  改回 content；content 里没有的类型置 retired_release_id = release_id（新回滚记录的 id），
+  改回 content；content 里没有的类型置 retired_release_id = release_id（必填：骨架 restore_sections
+  先写新回滚记录、再把它的 id 传进来），
   content 里有的清掉 retired_release_id（重新发布即恢复）。版本表只追加，回滚不写版本行 [推断]。
 - 登记：骨架的 load_sections() 发现本文件、调用幂等的 register()（create_app / seed CLI 各调一次）；
   import 本文件不登记。
@@ -15,7 +16,7 @@ system / timeout / retry / idempotent（随 ext_system）和统计字段不进�
 
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import from_api
@@ -121,23 +122,10 @@ class ActionTypesSection:
     def seed_section(self, ver: str, ctx: Any) -> Any:
         return {t["id"]: action_def_from_json(t, ctx) for t in ctx.load("ACTION_TYPES.json", group=GROUP)}
 
-    async def restore_section(
-        self, session: AsyncSession, content: Any, *, release_id: int | None = None
-    ) -> None:
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
         if content is None:  # 那一版快照里没有这一节：什么都不做 [推断]
             return
-        await restore_action_types(session, content, await new_release_id(session, release_id))
-
-
-async def new_release_id(session: AsyncSession, release_id: int | None) -> int:
-    """release_id = 新回滚记录的 id（约定签名）。骨架改签名前 restore_sections 在写新记录**之前**调用、
-    不传 release_id：过渡期用 max(id)+1 [推断]——identity 只增不减，新记录 id ≥ 它，且两者之间不会有别的版本，
-    「rel.id ≥ retired_release_id 即隐藏」的结果一样。"""
-    if release_id is not None:
-        return release_id
-    from app.modules.versioning.models import OntologyRelease
-
-    return int(await session.scalar(select(func.coalesce(func.max(OntologyRelease.id), 0)))) + 1
+        await restore_action_types(session, content, release_id)
 
 
 async def retire_missing(session: AsyncSession, model: Any, keep: set[str], release_id: int) -> None:

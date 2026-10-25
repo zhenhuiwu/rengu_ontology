@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import from_api
 from app.modules.action.models import TypeStatus
-from app.modules.action.sections import new_release_id, retire_missing
+from app.modules.action.sections import retire_missing
 from app.modules.event.models import (
     EventPayloadField,
     EventSource,
@@ -173,12 +173,10 @@ class EventTypesSection:
     def seed_section(self, ver: str, ctx: Any) -> Any:
         return {t["id"]: event_def_from_json(t, ctx) for t in ctx.load("EVENT_TYPES.json", group=GROUP)}
 
-    async def restore_section(
-        self, session: AsyncSession, content: Any, *, release_id: int | None = None
-    ) -> None:
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
         if content is None:  # 那一版快照里没有这一节：什么都不做 [推断]
             return
-        await restore_event_types(session, content, await new_release_id(session, release_id))
+        await restore_event_types(session, content, release_id)
 
 
 BUILDER = EventTypesSection()
