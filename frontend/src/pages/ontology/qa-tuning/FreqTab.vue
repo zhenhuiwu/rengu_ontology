@@ -13,6 +13,7 @@ import { paginate } from '@/mock';
 import { T_METRICS, crById, metricLabel, planText, type FreqQ } from '@/mock/qa-tuning';
 import { tuning, tuningTick, addCert, ME } from './state';
 import { qaReal, listFreq, certifyFreq, getTuningSummary, type QaFreq } from '@/api/qa';
+import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import type { PageResult } from '@/api/http';
 import MetricRef from './MetricRef.vue';
 
@@ -28,7 +29,7 @@ const cF = computed({ get: () => q('hc') || undefined, set: (v?: string) => setQ
 const kw = computed({ get: () => q('hkw'), set: (v: string) => setQuery({ hkw: v || undefined }) });
 const hits = (f: FreqQ) => (period.value === '7' ? f.hits7 : f.hits30);
 const ranked = computed(() => tuning.freq.slice().sort((a, b) => hits(b) - hits(a)));
-const rankOf = (f: FreqQ) => (real ? (f as QaFreq).rank : ranked.value.indexOf(f) + 1);
+const rankOf = (f: FreqQ) => (live.value ? (f as QaFreq).rank : ranked.value.indexOf(f) + 1);
 const rows = computed(() => ranked.value.filter((f) => (!kw.value || f.question.includes(kw.value))
   && (!cF.value || (cF.value === '已认证' ? !!f.certId : !f.certId))));
 const pq = usePagedQuery({ defaultSize: 15, filters: [period, cF, kw], prefix: 'h' });
@@ -38,14 +39,15 @@ const remote = ref<PageResult<QaFreq>>({ items: [], total: 0, page: 1, size: 15 
 const remoteUn = ref(0);
 if (real) {
   watch([period, cF, kw, pq.page, pq.size, tuningTick], async () => {
+    if (!live.value) return;
     try {
       remote.value = await listFreq({ period: period.value, cert: cF.value, kw: kw.value || undefined, page: pq.page.value, size: pq.size.value });
       remoteUn.value = (await getTuningSummary()).uncertFreq;
-    } catch (e) { message.error(`加载高频问题失败：${(e as Error).message}`); }
+    } catch (e) { if (!qaFallBackIfDown(e)) message.error(`加载高频问题失败：${(e as Error).message}`); }
   }, { immediate: true });
 }
-const paged = computed(() => (real ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
-const uncert = computed(() => (real ? remoteUn.value : tuning.freq.filter((f) => !f.certId).length));
+const paged = computed(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
+const uncert = computed(() => (live.value ? remoteUn.value : tuning.freq.filter((f) => !f.certId).length));
 
 const cols = [
   { title: '排名', key: 'rank', width: 60, align: 'right' },
@@ -58,7 +60,7 @@ const cols = [
   { title: '最近提问', key: 'last', width: 110 },
   { title: '认证', key: 'cert', width: 160 },
 ];
-const certOf = (f: FreqQ) => (real ? (f.certId ? { status: (f as QaFreq).certStatus ?? '' } : undefined) : tuning.certs.find((c) => c.id === f.certId));
+const certOf = (f: FreqQ) => (live.value ? (f.certId ? { status: (f as QaFreq).certStatus ?? '' } : undefined) : tuning.certs.find((c) => c.id === f.certId));
 const openCert = (id: string) => setQuery({ tab: 'cert', cq: id });
 
 async function certify(f: FreqQ) {

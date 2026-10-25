@@ -11,6 +11,7 @@ import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icon
 import { QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
 import type { QaSession } from '@/mock/qa';
 import { useQaSession, errText } from '../useQaSession';
+import { qaFallBackIfDown } from '../qaFallback';
 import * as qaApi from '@/api/qa';
 import AppPagination from '@/components/AppPagination.vue';
 import { useQueryParam, useQueryPage } from '../useQueryParam';
@@ -20,12 +21,15 @@ const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
 const PAGE_SIZE = 12;
-const { sessions: mockList, activeId: active, newSession, real, detail, listTick, favTick, newSessionReal } = useQaSession();
+const { sessions: mockList, activeId: active, newSession, real, live, detail, listTick, favTick, newSessionReal } = useQaSession();
 /* 真接口：当前页由 W1 取（q / range / page / size=12）；mock 照旧本地过滤 */
 const srv = ref<{ items: QaSession[]; total: number }>({ items: [], total: 0 });
-const list = computed<QaSession[]>({ get: () => (real ? srv.value.items : mockList.value), set: (v) => { mockList.value = v; } });
-const favTop = ref<string[]>(real ? [] : QA_FAVORITES);
-const pageTop = ref<string[]>(real ? [] : QA_MY_PAGES);
+const list = computed<QaSession[]>({ get: () => (live.value ? srv.value.items : mockList.value), set: (v) => { mockList.value = v; } });
+const favTop = ref<string[]>(live.value ? [] : QA_FAVORITES);
+const pageTop = ref<string[]>(live.value ? [] : QA_MY_PAGES);
+// 后台没起来 → 回退 mock（qaFallback.ts）
+watch(live, (on) => { if (!on) { favTop.value = QA_FAVORITES; pageTop.value = QA_MY_PAGES; } });
+const readErr = (what: string) => (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`${what}加载失败：${errText(e)}`); };
 const editing = ref('');
 const draft = ref('');
 const menuId = ref('');
@@ -89,13 +93,13 @@ const filtered = computed(() => {
   const limit = range.value === 'today' ? 0 : range.value === '7d' ? 6 : range.value === '30d' ? 29 : Infinity;
   return list.value.filter((s) => (!k || s.title.includes(k)) && daysAgo(s.date) <= limit);
 });
-const total = computed(() => (real ? srv.value.total : filtered.value.length));
+const total = computed(() => (live.value ? srv.value.total : filtered.value.length));
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 const current = computed(() => Math.min(page.value, pageCount.value));
-const rows = computed(() => (real ? srv.value.items : filtered.value.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE)));
+const rows = computed(() => (live.value ? srv.value.items : filtered.value.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE)));
 let reqSeq = 0;
 async function load() {
-  if (!real) return;
+  if (!live.value) return;
   const my = ++reqSeq;
   try {
     const r = await qaApi.listSessions({ q: kw.value.trim() || undefined, range: range.value, page: page.value, size: PAGE_SIZE });
@@ -104,12 +108,12 @@ async function load() {
     // 页码超出（比如删掉最后一页唯一一条）回落到最后一页
     if (!r.items.length && r.total && page.value > 1) { page.value = Math.ceil(r.total / PAGE_SIZE); return; }
     if (!active.value && r.items.length) active.value = r.items[0].id;
-  } catch (e) { if (my === reqSeq) message.error(`会话列表加载失败：${errText(e)}`); }
+  } catch (e) { if (my === reqSeq) readErr('会话列表')(e); }
 }
 if (real) {
   watch([kw, range, page, listTick], load, { immediate: true });
-  watch(favTick, () => qaApi.listFavorites({ page: 1, size: 3 }).then((r) => { favTop.value = r.items.map((x) => x.question); }).catch((e) => message.error(`常用问题加载失败：${errText(e)}`)), { immediate: true });
-  qaApi.listPagesBrief({ page: 1, size: 2 }).then((r) => { pageTop.value = r.items.map((x) => x.name); }).catch((e) => message.error(`我的页面加载失败：${errText(e)}`));
+  watch(favTick, () => { if (live.value) qaApi.listFavorites({ page: 1, size: 3 }).then((r) => { favTop.value = r.items.map((x) => x.question); }).catch(readErr('常用问题')); }, { immediate: true });
+  qaApi.listPagesBrief({ page: 1, size: 2 }).then((r) => { pageTop.value = r.items.map((x) => x.name); }).catch(readErr('我的页面'));
 }
 const when = (date: string) => (date === QA_TODAY ? '今天' : date.slice(5));
 // 改关键词或时间范围后回到第 1 页

@@ -14,6 +14,7 @@ import { paginate } from '@/mock';
 import { T_METRICS, certStatusText, metricLabel, planText, crById, type CertQa, type CertStatus } from '@/mock/qa-tuning';
 import { tuning, tuningTick, NOW, ME } from './state';
 import { qaReal, listCerts, getCert, certifyCert, toggleCert, putCertVariants, getTuningSummary } from '@/api/qa';
+import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import type { PageResult } from '@/api/http';
 import CrTag from './CrTag.vue';
 import MetricRef from './MetricRef.vue';
@@ -42,21 +43,22 @@ const real = qaReal();
 const remote = ref<PageResult<CertQa>>({ items: [], total: 0, page: 1, size: 15 });
 const remoteRe = ref(0);
 const remoteCur = ref<CertQa>();
-const loadErr = (e: unknown) => message.error(`加载认证问答失败：${(e as Error).message}`);
+const loadErr = (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`加载认证问答失败：${(e as Error).message}`); };
 if (real) {
   watch([kw, stF, mF, pq.page, pq.size, tuningTick], async () => {
+    if (!live.value) return;
     try {
       remote.value = await listCerts({ kw: kw.value || undefined, status: stF.value, metric: mF.value, page: pq.page.value, size: pq.size.value });
       remoteRe.value = (await getTuningSummary()).recertCount;
     } catch (e) { loadErr(e); }
   }, { immediate: true });
   watch([() => q('cq'), tuningTick], async ([id]) => {
-    if (!id) { remoteCur.value = undefined; return; }
+    if (!id || !live.value) { remoteCur.value = undefined; return; }
     try { remoteCur.value = await getCert(id as string); } catch (e) { remoteCur.value = undefined; loadErr(e); }
   }, { immediate: true });
 }
-const paged = computed(() => (real ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
-const reCount = computed(() => (real ? remoteRe.value : tuning.certs.filter((c) => c.status === '待重新认证').length));
+const paged = computed(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
+const reCount = computed(() => (live.value ? remoteRe.value : tuning.certs.filter((c) => c.status === '待重新认证').length));
 const fail = (e: unknown) => message.error((e as Error).message);
 
 const cols = [
@@ -74,7 +76,7 @@ const stCls = (s: CertStatus) => (s === '待重新认证' ? 'c-1' : s === '已�
 const planShort = (c: CertQa) => planText(c.plan).replace(`${metricLabel(c.plan.metric)} · `, '');
 
 /* 抽屉 */
-const cur = computed(() => (real ? remoteCur.value : tuning.certs.find((c) => c.id === q('cq'))));
+const cur = computed(() => (live.value ? remoteCur.value : tuning.certs.find((c) => c.id === q('cq'))));
 const open = (c: CertQa) => setQuery({ cq: c.id });
 const rowProps = (c: CertQa) => ({ class: c.id === q('cq') ? 'qt-row-on' : '', onClick: () => open(c) });
 
