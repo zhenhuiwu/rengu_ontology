@@ -65,7 +65,9 @@ body { background: var(--g3); color: var(--g10); font-size: var(--fs-14); }
 .ant-menu-item-group-title { font-size: var(--fs-12) !important; padding: 8px 16px 4px 24px !important; }
 
 /* 时间线语义色工具类 */
-.tl-normal { color: var(--tl-normal); }
+.tl-normal { color: var(--g8); }
+/* 圆点（background: currentColor）保持浅灰 token，只加深文字 */
+.tl-normal[class*="-dot"] { color: var(--tl-normal); }
 .tl-attention { color: var(--tl-attention); }
 .tl-failed { color: var(--tl-failed); }
 .tl-current { color: var(--tl-current); }
