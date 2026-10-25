@@ -372,3 +372,7 @@ SEEDS: list[SeedSpec] = [
         description="sys_user.alert_assignable ← PEOPLE 顺序",
     ),
 ]
+
+from app.modules.dynamic.seeds.rules import RULE_CHECKS, RULE_SEEDS  # noqa: E402  第二部分：规则 / 推演 / 生命周期
+
+SEEDS, CHECKS = SEEDS + RULE_SEEDS, CHECKS + RULE_CHECKS

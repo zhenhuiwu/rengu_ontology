@@ -14,9 +14,10 @@ DISABLED = "U010308"  # 高伟：ADMIN_USERS.json status=停用
 def _dynamic_routes() -> list[APIRoute]:
     # app.routes 里是惰性挂载的 _IncludedRouter，直接看模块 router（路径不含 /api/ontology/v1 前缀）
     from app.modules.dynamic.router import router
+    from app.modules.dynamic.rules_router import router as rules_router  # include_router 后也是惰性挂载
 
-    routes = [r for r in router.routes if isinstance(r, APIRoute)]
-    assert len(routes) == 18, [r.path for r in routes]
+    routes = [r for r in [*router.routes, *rules_router.routes] if isinstance(r, APIRoute)]
+    assert len(routes) == 18 + 23, [r.path for r in routes]  # 第一部分 18 + 规则 / 推演 / 生命周期 23
     return routes
 
 

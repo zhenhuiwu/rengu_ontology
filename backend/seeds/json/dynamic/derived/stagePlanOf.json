@@ -1,0 +1,417 @@
+[
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0018"
+      }
+    ],
+    "result": [
+      {
+        "key": "stock:1013309",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1013309",
+        "objLabel": "蒙牛特仑苏有机纯牛奶",
+        "params": "补货量 +20% · 安全库存 7 天 · 6 家门店",
+        "reason": "缺货率 7.1% → 6.3%"
+      },
+      {
+        "key": "stock:1020075",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1020075",
+        "objLabel": "娃哈哈AD钙奶",
+        "params": "补货量 +20% · 安全库存 7 天 · 4 家门店",
+        "reason": "缺货率 6.4% → 5.6%"
+      },
+      {
+        "key": "stock:1011846",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1011846",
+        "objLabel": "伊利纯牛奶",
+        "params": "补货量 +20% · 安全库存 7 天 · 6 家门店",
+        "reason": "缺货率 7.4% → 6.6%"
+      },
+      {
+        "key": "promo",
+        "action": "发放复购召回优惠券",
+        "objKind": "region",
+        "objId": "REG-EC",
+        "objLabel": "华东大区",
+        "params": "折扣 15% · 2 周 · 范围 华东大区 · 乳品",
+        "reason": "促销成本约 0.3 万元"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0017"
+      }
+    ],
+    "result": [
+      {
+        "key": "price:1013309",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1013309",
+        "objLabel": "蒙牛特仑苏有机纯牛奶",
+        "params": "建议降价 5% · 华东大区 11 家门店 · 8 周",
+        "reason": "方案销售额 +8.9%"
+      },
+      {
+        "key": "price:1020075",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1020075",
+        "objLabel": "娃哈哈AD钙奶",
+        "params": "建议降价 5% · 华东大区 11 家门店 · 8 周",
+        "reason": "方案销售额 +5.1%"
+      },
+      {
+        "key": "price:1011846",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1011846",
+        "objLabel": "伊利纯牛奶",
+        "params": "建议降价 5% · 华东大区 11 家门店 · 8 周",
+        "reason": "方案销售额 +3.0%"
+      },
+      {
+        "key": "stock:1013309",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1013309",
+        "objLabel": "蒙牛特仑苏有机纯牛奶",
+        "params": "补货量 +20% · 安全库存 9 天 · 1 家门店",
+        "reason": "缺货率 7.1% → 6.0%"
+      },
+      {
+        "key": "stock:1011846",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1011846",
+        "objLabel": "伊利纯牛奶",
+        "params": "补货量 +20% · 安全库存 9 天 · 1 家门店",
+        "reason": "缺货率 7.4% → 6.3%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0016"
+      }
+    ],
+    "result": [
+      {
+        "key": "stock:1013309",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1013309",
+        "objLabel": "蒙牛特仑苏有机纯牛奶",
+        "params": "补货量 +35% · 安全库存 10 天 · 5 家门店",
+        "reason": "缺货率 7.1% → 5.3%"
+      },
+      {
+        "key": "stock:1020075",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1020075",
+        "objLabel": "娃哈哈AD钙奶",
+        "params": "补货量 +35% · 安全库存 10 天 · 4 家门店",
+        "reason": "缺货率 6.4% → 4.7%"
+      },
+      {
+        "key": "stock:1011846",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1011846",
+        "objLabel": "伊利纯牛奶",
+        "params": "补货量 +35% · 安全库存 10 天 · 6 家门店",
+        "reason": "缺货率 7.4% → 5.5%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0015"
+      }
+    ],
+    "result": [
+      {
+        "key": "promo",
+        "action": "发放复购召回优惠券",
+        "objKind": "region",
+        "objId": "REG-EC",
+        "objLabel": "华东大区",
+        "params": "会员券 10% · 4 周 · 范围 华东大区 · 粮油调味",
+        "reason": "促销成本约 0.4 万元"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0014"
+      }
+    ],
+    "result": [
+      {
+        "key": "price:1035590",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1035590",
+        "objLabel": "蓝月亮深层洁净洗衣液",
+        "params": "建议提价 3% · 华东二区 3 家门店 · 8 周",
+        "reason": "方案销售额 −1.8%"
+      },
+      {
+        "key": "price:1031752",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1031752",
+        "objLabel": "维达超韧抽纸",
+        "params": "建议提价 3% · 华东二区 3 家门店 · 8 周",
+        "reason": "方案销售额 +0.9%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0012"
+      }
+    ],
+    "result": [
+      {
+        "key": "stock:1040281",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "1040281",
+        "objLabel": "三只松鼠每日坚果",
+        "params": "补货量 +10% · 安全库存 12 天 · 6 家门店",
+        "reason": "缺货率 7.1% → 6.0%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0011"
+      }
+    ],
+    "result": [
+      {
+        "key": "price:1002387",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1002387",
+        "objLabel": "农夫山泉饮用天然水",
+        "params": "建议降价 8% · 华东大区 11 家门店 · 8 周",
+        "reason": "方案销售额 +8.0%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0010"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0009"
+      }
+    ],
+    "result": [
+      {
+        "key": "promo",
+        "action": "发放复购召回优惠券",
+        "objKind": "region",
+        "objId": "REG-EC",
+        "objLabel": "华东大区",
+        "params": "折扣 10% · 3 周 · 范围 华东三区 · 乳品",
+        "reason": "促销成本约 0.1 万元"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0008"
+      }
+    ],
+    "result": [
+      {
+        "key": "price:1046637",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1046637",
+        "objLabel": "海天金标生抽",
+        "params": "建议降价 3% · 华东大区 11 家门店 · 12 周",
+        "reason": "方案销售额 +4.5%"
+      },
+      {
+        "key": "price:1024418",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1024418",
+        "objLabel": "五常大米 稻花香2号",
+        "params": "建议降价 3% · 华东大区 11 家门店 · 12 周",
+        "reason": "方案销售额 +0.9%"
+      },
+      {
+        "key": "price:1004512",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1004512",
+        "objLabel": "金龙鱼黄金比例食用调和油",
+        "params": "建议降价 3% · 华东大区 11 家门店 · 12 周",
+        "reason": "方案销售额 +2.7%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0007"
+      }
+    ],
+    "result": [
+      {
+        "key": "promo",
+        "action": "发放复购召回优惠券",
+        "objKind": "region",
+        "objId": "REG-EC",
+        "objLabel": "华东大区",
+        "params": "满减 12% · 2 周 · 范围 华东大区 · 日化家清",
+        "reason": "促销成本约 0.2 万元"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0006"
+      }
+    ],
+    "result": [
+      {
+        "key": "stock:2010437",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "2010437",
+        "objLabel": "冷鲜猪肋排（称重）",
+        "params": "补货量 +30% · 安全库存 4 天 · 8 家门店",
+        "reason": "缺货率 8.2% → 7.3%"
+      },
+      {
+        "key": "stock:2008814",
+        "action": "补货申请",
+        "objKind": "product",
+        "objId": "2008814",
+        "objLabel": "国产红富士苹果（称重）",
+        "params": "补货量 +30% · 安全库存 4 天 · 3 家门店",
+        "reason": "缺货率 6.7% → 5.9%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0004"
+      }
+    ],
+    "result": [
+      {
+        "key": "price:1011846",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1011846",
+        "objLabel": "伊利纯牛奶",
+        "params": "建议提价 2% · 华东大区 11 家门店 · 8 周",
+        "reason": "方案销售额 −2.3%"
+      },
+      {
+        "key": "price:1013309",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1013309",
+        "objLabel": "蒙牛特仑苏有机纯牛奶",
+        "params": "建议提价 2% · 华东大区 11 家门店 · 8 周",
+        "reason": "方案销售额 +3.3%"
+      },
+      {
+        "key": "price:1020075",
+        "action": "发起调价审批",
+        "objKind": "product",
+        "objId": "1020075",
+        "objLabel": "娃哈哈AD钙奶",
+        "params": "建议提价 2% · 华东大区 11 家门店 · 8 周",
+        "reason": "方案销售额 −0.3%"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0003"
+      }
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0002"
+      }
+    ],
+    "result": [
+      {
+        "key": "promo",
+        "action": "发放复购召回优惠券",
+        "objKind": "region",
+        "objId": "REG-EC",
+        "objLabel": "华东大区",
+        "params": "满减 8% · 2 周 · 范围 华东二区 · 休闲食品",
+        "reason": "促销成本约 0.0 万元"
+      }
+    ]
+  }
+]

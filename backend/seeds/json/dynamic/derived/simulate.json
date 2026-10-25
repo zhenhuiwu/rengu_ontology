@@ -1,0 +1,5904 @@
+[
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0018",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0018",
+        "field": "drivers"
+      },
+      "2026-10-25 15:12:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-25 15:12:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        26266,
+        25523,
+        29041,
+        26485,
+        24934,
+        25526,
+        32729,
+        25760
+      ],
+      "sales": [
+        30040,
+        29190,
+        29576,
+        26973,
+        25393,
+        25996,
+        33332,
+        26235
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        14.3,
+        14.3,
+        21,
+        21,
+        21,
+        21,
+        21,
+        21
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 21.6264,
+          "value": 22.6735,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 4.887566400000001,
+          "value": 4.364593999999999,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 19.24975852867885,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 5.6832,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 28.677467370525875,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0.2975896875,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 7873,
+          "sales": 9720,
+          "stockoutBase": 9.4,
+          "stockout": 8.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8328,
+          "sales": 10014,
+          "stockoutBase": 10.8,
+          "stockout": 9.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 5826,
+          "sales": 7100,
+          "stockoutBase": 8.5,
+          "stockout": 7.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7723,
+          "sales": 8934,
+          "stockoutBase": 3.1,
+          "stockout": 2.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6935,
+          "sales": 8108,
+          "stockoutBase": 4.1,
+          "stockout": 3.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5687,
+          "sales": 6741,
+          "stockoutBase": 6.3,
+          "stockout": 5.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 4120,
+          "sales": 5100,
+          "stockoutBase": 8.5,
+          "stockout": 7.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 7322,
+          "sales": 8302,
+          "stockoutBase": 9.9,
+          "stockout": 8.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4423,
+          "sales": 5355,
+          "stockoutBase": 8.6,
+          "stockout": 7.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4451,
+          "sales": 5238,
+          "stockoutBase": 11.4,
+          "stockout": 10.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 9431,
+          "sales": 10191,
+          "stockoutBase": 4.4,
+          "stockout": 3.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 3475,
+          "sales": 4234,
+          "stockoutBase": 3.9,
+          "stockout": 3.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 6787,
+          "sales": 7468,
+          "stockoutBase": 5.5,
+          "stockout": 4.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8133,
+          "sales": 8796,
+          "stockoutBase": 9.2,
+          "stockout": 8.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 8879,
+          "sales": 8263,
+          "stockoutBase": 8.6,
+          "stockout": 7.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3652,
+          "sales": 4257,
+          "stockoutBase": 12.7,
+          "stockout": 11.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5057,
+          "sales": 5639,
+          "stockoutBase": 10.8,
+          "stockout": 9.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4553,
+          "sales": 5110,
+          "stockoutBase": 3.2,
+          "stockout": 2.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 3983,
+          "sales": 4505,
+          "stockoutBase": 3.8,
+          "stockout": 3.4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 6385,
+          "sales": 6871,
+          "stockoutBase": 3.5,
+          "stockout": 3.1,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 5383,
+          "sales": 5865,
+          "stockoutBase": 4.3,
+          "stockout": 3.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 6551,
+          "sales": 6992,
+          "stockoutBase": 8.3,
+          "stockout": 7.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 5604,
+          "sales": 5178,
+          "stockoutBase": 9,
+          "stockout": 8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4426,
+          "sales": 4841,
+          "stockoutBase": 4,
+          "stockout": 3.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3350,
+          "sales": 3730,
+          "stockoutBase": 9.6,
+          "stockout": 8.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7015,
+          "sales": 6645,
+          "stockoutBase": 3.4,
+          "stockout": 3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4205,
+          "sales": 3863,
+          "stockoutBase": 6.6,
+          "stockout": 5.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3788,
+          "sales": 4074,
+          "stockoutBase": 3.8,
+          "stockout": 3.4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4531,
+          "sales": 4799,
+          "stockoutBase": 7.7,
+          "stockout": 6.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4348,
+          "sales": 4597,
+          "stockoutBase": 4.2,
+          "stockout": 3.7,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4896,
+          "sales": 4654,
+          "stockoutBase": 6.6,
+          "stockout": 5.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7502,
+          "sales": 7281,
+          "stockoutBase": 11.8,
+          "stockout": 10.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 8245,
+          "sales": 8234,
+          "stockoutBase": 4.3,
+          "stockout": 3.8,
+          "suggest": "—"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0017",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0017",
+        "field": "drivers"
+      },
+      "2026-10-25 14:40:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-25 14:40:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        26266,
+        25523,
+        29041,
+        26485,
+        24934,
+        25526,
+        32729,
+        25760
+      ],
+      "sales": [
+        27365,
+        26591,
+        30257,
+        27594,
+        25978,
+        26595,
+        34099,
+        26838
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        18.4,
+        18.4,
+        18.4,
+        18.4,
+        18.4,
+        18.4,
+        18.4,
+        18.4
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 21.6264,
+          "value": 22.5317,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 4.887566400000001,
+          "value": 4.145832799999999,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 18.4,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 5.4374400000000005,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 29.780403423475104,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 7873,
+          "sales": 9381,
+          "stockoutBase": 9.4,
+          "stockout": 8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8328,
+          "sales": 9666,
+          "stockoutBase": 10.8,
+          "stockout": 9.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 5826,
+          "sales": 6853,
+          "stockoutBase": 8.5,
+          "stockout": 7.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 8879,
+          "sales": 7975,
+          "stockoutBase": 8.6,
+          "stockout": 7.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7723,
+          "sales": 8623,
+          "stockoutBase": 3.1,
+          "stockout": 2.6,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6935,
+          "sales": 7826,
+          "stockoutBase": 4.1,
+          "stockout": 3.5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5687,
+          "sales": 6506,
+          "stockoutBase": 6.3,
+          "stockout": 5.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 4120,
+          "sales": 4922,
+          "stockoutBase": 8.5,
+          "stockout": 7.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4423,
+          "sales": 5169,
+          "stockoutBase": 8.6,
+          "stockout": 7.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 7322,
+          "sales": 8013,
+          "stockoutBase": 9.9,
+          "stockout": 8.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 3475,
+          "sales": 4087,
+          "stockoutBase": 3.9,
+          "stockout": 3.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 5604,
+          "sales": 4998,
+          "stockoutBase": 9,
+          "stockout": 7.6,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4451,
+          "sales": 5056,
+          "stockoutBase": 11.4,
+          "stockout": 9.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7015,
+          "sales": 6414,
+          "stockoutBase": 3.4,
+          "stockout": 2.9,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4205,
+          "sales": 3728,
+          "stockoutBase": 6.6,
+          "stockout": 5.6,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7502,
+          "sales": 7028,
+          "stockoutBase": 11.8,
+          "stockout": 10,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3652,
+          "sales": 4109,
+          "stockoutBase": 12.7,
+          "stockout": 10.8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 6787,
+          "sales": 7208,
+          "stockoutBase": 5.5,
+          "stockout": 4.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 9431,
+          "sales": 9836,
+          "stockoutBase": 4.4,
+          "stockout": 3.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4896,
+          "sales": 4492,
+          "stockoutBase": 6.6,
+          "stockout": 5.6,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5057,
+          "sales": 5443,
+          "stockoutBase": 10.8,
+          "stockout": 9.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4553,
+          "sales": 4932,
+          "stockoutBase": 3.2,
+          "stockout": 2.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 3983,
+          "sales": 4349,
+          "stockoutBase": 3.8,
+          "stockout": 3.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8133,
+          "sales": 8490,
+          "stockoutBase": 9.2,
+          "stockout": 7.8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 8245,
+          "sales": 7947,
+          "stockoutBase": 4.3,
+          "stockout": 3.7,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 5383,
+          "sales": 5661,
+          "stockoutBase": 4.3,
+          "stockout": 3.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3350,
+          "sales": 3600,
+          "stockoutBase": 9.6,
+          "stockout": 8.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 6385,
+          "sales": 6631,
+          "stockoutBase": 3.5,
+          "stockout": 3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4426,
+          "sales": 4672,
+          "stockoutBase": 4,
+          "stockout": 3.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 6551,
+          "sales": 6749,
+          "stockoutBase": 8.3,
+          "stockout": 7.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3788,
+          "sales": 3932,
+          "stockoutBase": 3.8,
+          "stockout": 3.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4531,
+          "sales": 4632,
+          "stockoutBase": 7.7,
+          "stockout": 6.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4348,
+          "sales": 4436,
+          "stockoutBase": 4.2,
+          "stockout": 3.6,
+          "suggest": "—"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0016",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0016",
+        "field": "drivers"
+      },
+      "2026-10-25 14:21:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-25 14:21:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        26266,
+        25523,
+        29041,
+        26485,
+        24934,
+        25526,
+        32729,
+        25760
+      ],
+      "sales": [
+        26721,
+        25966,
+        29545,
+        26944,
+        25366,
+        25969,
+        33297,
+        26207
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        22.2,
+        22.2,
+        22.2,
+        22.2,
+        22.2,
+        22.2,
+        22.2,
+        22.2
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 21.6264,
+          "value": 22.0015,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 4.887566400000001,
+          "value": 4.884333,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 22.2,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 4.77696,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 34.82512635597435,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 7873,
+          "sales": 9161,
+          "stockoutBase": 9.4,
+          "stockout": 7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8328,
+          "sales": 9438,
+          "stockoutBase": 10.8,
+          "stockout": 8.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 8879,
+          "sales": 7788,
+          "stockoutBase": 8.6,
+          "stockout": 6.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 5826,
+          "sales": 6692,
+          "stockoutBase": 8.5,
+          "stockout": 6.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7015,
+          "sales": 6263,
+          "stockoutBase": 3.4,
+          "stockout": 2.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 5604,
+          "sales": 4880,
+          "stockoutBase": 9,
+          "stockout": 6.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6935,
+          "sales": 7641,
+          "stockoutBase": 4.1,
+          "stockout": 3.1,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7723,
+          "sales": 8420,
+          "stockoutBase": 3.1,
+          "stockout": 2.3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 4120,
+          "sales": 4806,
+          "stockoutBase": 8.5,
+          "stockout": 6.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5687,
+          "sales": 6353,
+          "stockoutBase": 6.3,
+          "stockout": 4.7,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7502,
+          "sales": 6862,
+          "stockoutBase": 11.8,
+          "stockout": 8.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4423,
+          "sales": 5047,
+          "stockoutBase": 8.6,
+          "stockout": 6.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4205,
+          "sales": 3640,
+          "stockoutBase": 6.6,
+          "stockout": 4.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 3475,
+          "sales": 3990,
+          "stockoutBase": 3.9,
+          "stockout": 2.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4896,
+          "sales": 4386,
+          "stockoutBase": 6.6,
+          "stockout": 4.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 7322,
+          "sales": 7824,
+          "stockoutBase": 9.9,
+          "stockout": 7.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4451,
+          "sales": 4937,
+          "stockoutBase": 11.4,
+          "stockout": 8.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 8245,
+          "sales": 7760,
+          "stockoutBase": 4.3,
+          "stockout": 3.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3652,
+          "sales": 4012,
+          "stockoutBase": 12.7,
+          "stockout": 9.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 3983,
+          "sales": 4246,
+          "stockoutBase": 3.8,
+          "stockout": 2.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4553,
+          "sales": 4816,
+          "stockoutBase": 3.2,
+          "stockout": 2.4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5057,
+          "sales": 5315,
+          "stockoutBase": 10.8,
+          "stockout": 8.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 6787,
+          "sales": 7039,
+          "stockoutBase": 5.5,
+          "stockout": 4.1,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 9431,
+          "sales": 9605,
+          "stockoutBase": 4.4,
+          "stockout": 3.3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3350,
+          "sales": 3515,
+          "stockoutBase": 9.6,
+          "stockout": 7.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8133,
+          "sales": 8290,
+          "stockoutBase": 9.2,
+          "stockout": 6.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 5383,
+          "sales": 5527,
+          "stockoutBase": 4.3,
+          "stockout": 3.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4426,
+          "sales": 4562,
+          "stockoutBase": 4,
+          "stockout": 3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 6385,
+          "sales": 6475,
+          "stockoutBase": 3.5,
+          "stockout": 2.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3788,
+          "sales": 3840,
+          "stockoutBase": 3.8,
+          "stockout": 2.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 6551,
+          "sales": 6590,
+          "stockoutBase": 8.3,
+          "stockout": 6.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4348,
+          "sales": 4332,
+          "stockoutBase": 4.2,
+          "stockout": 3.1,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4531,
+          "sales": 4523,
+          "stockoutBase": 7.7,
+          "stockout": 5.7,
+          "suggest": "—"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0015",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0015",
+        "field": "drivers"
+      },
+      "2026-10-25 11:05:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-25 11:05:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        26290,
+        26691,
+        31882,
+        28729,
+        26365,
+        27552,
+        28047,
+        25008
+      ],
+      "sales": [
+        28656,
+        29093,
+        34751,
+        31315,
+        26642,
+        27841,
+        28341,
+        25271
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        15.8,
+        15.8,
+        15.8,
+        15.8,
+        20.9,
+        20.9,
+        20.9,
+        20.9
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 22.0564,
+          "value": 23.191,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 4.9847464,
+          "value": 4.2154625,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 18.17714846276573,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 26.542056074766354,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0.4058425,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 7841,
+          "sales": 9618,
+          "stockoutBase": 9.8,
+          "stockout": 9.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 7785,
+          "sales": 9102,
+          "stockoutBase": 11.4,
+          "stockout": 11.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7934,
+          "sales": 9245,
+          "stockoutBase": 11.6,
+          "stockout": 11.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 7103,
+          "sales": 8337,
+          "stockoutBase": 6.4,
+          "stockout": 6.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 7189,
+          "sales": 8315,
+          "stockoutBase": 11.7,
+          "stockout": 11.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4764,
+          "sales": 5856,
+          "stockoutBase": 4.7,
+          "stockout": 4.7,
+          "suggest": "—"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6400,
+          "sales": 7401,
+          "stockoutBase": 9.3,
+          "stockout": 9.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 7781,
+          "sales": 8750,
+          "stockoutBase": 7.8,
+          "stockout": 7.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4298,
+          "sales": 5243,
+          "stockoutBase": 4.9,
+          "stockout": 4.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 7592,
+          "sales": 8519,
+          "stockoutBase": 9.5,
+          "stockout": 9.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 9661,
+          "sales": 8872,
+          "stockoutBase": 11.7,
+          "stockout": 11.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3612,
+          "sales": 4377,
+          "stockoutBase": 8,
+          "stockout": 8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 4440,
+          "sales": 5166,
+          "stockoutBase": 7.3,
+          "stockout": 7.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 9420,
+          "sales": 8721,
+          "stockoutBase": 8.4,
+          "stockout": 8.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 3504,
+          "sales": 4202,
+          "stockoutBase": 5,
+          "stockout": 5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 8747,
+          "sales": 8070,
+          "stockoutBase": 3.6,
+          "stockout": 3.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 9487,
+          "sales": 10120,
+          "stockoutBase": 4.5,
+          "stockout": 4.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 5945,
+          "sales": 6573,
+          "stockoutBase": 9.8,
+          "stockout": 9.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 5432,
+          "sales": 5975,
+          "stockoutBase": 5,
+          "stockout": 5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 8304,
+          "sales": 8824,
+          "stockoutBase": 4.5,
+          "stockout": 4.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 7396,
+          "sales": 7913,
+          "stockoutBase": 3.4,
+          "stockout": 3.4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4249,
+          "sales": 4758,
+          "stockoutBase": 10,
+          "stockout": 10,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 4734,
+          "sales": 5122,
+          "stockoutBase": 2.6,
+          "stockout": 2.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6113,
+          "sales": 5740,
+          "stockoutBase": 11.2,
+          "stockout": 11.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 3619,
+          "sales": 3940,
+          "stockoutBase": 8.4,
+          "stockout": 8.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4373,
+          "sales": 4082,
+          "stockoutBase": 6.1,
+          "stockout": 6.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 3657,
+          "sales": 3368,
+          "stockoutBase": 6.1,
+          "stockout": 6.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 4670,
+          "sales": 4404,
+          "stockoutBase": 9.1,
+          "stockout": 9.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 4226,
+          "sales": 4414,
+          "stockoutBase": 3.8,
+          "stockout": 3.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 3370,
+          "sales": 3217,
+          "stockoutBase": 11.3,
+          "stockout": 11.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7171,
+          "sales": 7047,
+          "stockoutBase": 11.2,
+          "stockout": 11.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 6183,
+          "sales": 6289,
+          "stockoutBase": 7.9,
+          "stockout": 7.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 4514,
+          "sales": 4568,
+          "stockoutBase": 6.5,
+          "stockout": 6.5,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0014",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0014",
+        "field": "drivers"
+      },
+      "2026-10-24 17:48:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-24 17:48:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        4761,
+        5149,
+        5398,
+        4991,
+        4541,
+        4728,
+        5343,
+        4703
+      ],
+      "sales": [
+        4677,
+        5058,
+        5303,
+        4903,
+        4461,
+        4645,
+        5249,
+        4620
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        25,
+        25,
+        25,
+        25,
+        25,
+        25,
+        25,
+        25
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 3.9614,
+          "value": 3.8916,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 0.8952764000000001,
+          "value": 0.9729,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 25,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 29.77542023279324,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 8159,
+          "sales": 7192,
+          "stockoutBase": 8,
+          "stockout": 8,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 6816,
+          "sales": 5873,
+          "stockoutBase": 4.7,
+          "stockout": 4.7,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 9198,
+          "sales": 9778,
+          "stockoutBase": 6.6,
+          "stockout": 6.6,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8008,
+          "sales": 8566,
+          "stockoutBase": 12.3,
+          "stockout": 12.3,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5297,
+          "sales": 5847,
+          "stockoutBase": 4.4,
+          "stockout": 4.4,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 3928,
+          "sales": 3968,
+          "stockoutBase": 9.1,
+          "stockout": 9.1,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0012",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0012",
+        "field": "drivers"
+      },
+      "2026-10-24 10:02:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-24 10:02:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        8763,
+        8897,
+        10627,
+        9576,
+        8788,
+        9184,
+        9349,
+        8336
+      ],
+      "sales": [
+        8854,
+        8989,
+        10737,
+        9676,
+        8879,
+        9279,
+        9446,
+        8423
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        22.5,
+        22.5,
+        22.5,
+        22.5,
+        22.5,
+        22.5,
+        22.5,
+        22.5
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 7.352,
+          "value": 7.4283,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 1.6615520000000001,
+          "value": 1.6713675,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 22.499999999999996,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 5.4272,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 33.58890505515327,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 7841,
+          "sales": 9082,
+          "stockoutBase": 9.8,
+          "stockout": 8.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4764,
+          "sales": 5530,
+          "stockoutBase": 4.7,
+          "stockout": 4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6113,
+          "sales": 5420,
+          "stockoutBase": 11.2,
+          "stockout": 9.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6400,
+          "sales": 6988,
+          "stockoutBase": 9.3,
+          "stockout": 7.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4373,
+          "sales": 3855,
+          "stockoutBase": 6.1,
+          "stockout": 5.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 7781,
+          "sales": 8262,
+          "stockoutBase": 7.8,
+          "stockout": 6.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 3504,
+          "sales": 3968,
+          "stockoutBase": 5,
+          "stockout": 4.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 4440,
+          "sales": 4878,
+          "stockoutBase": 7.3,
+          "stockout": 6.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 6183,
+          "sales": 5939,
+          "stockoutBase": 7.9,
+          "stockout": 6.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 9487,
+          "sales": 9556,
+          "stockoutBase": 4.5,
+          "stockout": 3.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 8304,
+          "sales": 8332,
+          "stockoutBase": 4.5,
+          "stockout": 3.8,
+          "suggest": "—"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0011",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0011",
+        "field": "drivers"
+      },
+      "2026-10-23 19:22:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-23 19:22:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        8763,
+        8897,
+        10627,
+        9576,
+        8788,
+        9184,
+        9349,
+        8336
+      ],
+      "sales": [
+        9213,
+        9353,
+        11172,
+        10067,
+        9239,
+        9655,
+        9829,
+        8764
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        16.2,
+        16.2,
+        16.2,
+        16.2,
+        16.2,
+        16.2,
+        16.2,
+        16.2
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 7.352,
+          "value": 7.7292,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 1.6615520000000001,
+          "value": 1.2521304,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 16.2,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 24.853002516678576,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 7841,
+          "sales": 9450,
+          "stockoutBase": 9.8,
+          "stockout": 9.8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4764,
+          "sales": 5754,
+          "stockoutBase": 4.7,
+          "stockout": 4.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6400,
+          "sales": 7271,
+          "stockoutBase": 9.3,
+          "stockout": 9.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 7781,
+          "sales": 8597,
+          "stockoutBase": 7.8,
+          "stockout": 7.8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 4440,
+          "sales": 5075,
+          "stockoutBase": 7.3,
+          "stockout": 7.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 3504,
+          "sales": 4129,
+          "stockoutBase": 5,
+          "stockout": 5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6113,
+          "sales": 5639,
+          "stockoutBase": 11.2,
+          "stockout": 11.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 9487,
+          "sales": 9943,
+          "stockoutBase": 4.5,
+          "stockout": 4.5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 8304,
+          "sales": 8670,
+          "stockoutBase": 4.5,
+          "stockout": 4.5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4373,
+          "sales": 4011,
+          "stockoutBase": 6.1,
+          "stockout": 6.1,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 6183,
+          "sales": 6179,
+          "stockoutBase": 7.9,
+          "stockout": 7.9,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0010",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0010",
+        "field": "drivers"
+      },
+      "2026-10-23 15:11:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-23 15:11:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        38088,
+        41194,
+        43186,
+        39930,
+        36329,
+        37821,
+        42741,
+        37625
+      ],
+      "sales": [
+        37769,
+        40849,
+        42825,
+        39596,
+        36025,
+        37504,
+        42383,
+        37310
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 31.6914,
+          "value": 31.4261,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 7.1622563999999995,
+          "value": 7.1022986,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 22.6,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 7.183360000000001,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 24.988131438500684,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 8056,
+          "sales": 6809,
+          "stockoutBase": 6.9,
+          "stockout": 7.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 7947,
+          "sales": 6750,
+          "stockoutBase": 8.8,
+          "stockout": 9.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 8193,
+          "sales": 7157,
+          "stockoutBase": 12.2,
+          "stockout": 13.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 8324,
+          "sales": 9355,
+          "stockoutBase": 12.2,
+          "stockout": 13.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 8581,
+          "sales": 7586,
+          "stockoutBase": 8.1,
+          "stockout": 9.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 7956,
+          "sales": 7027,
+          "stockoutBase": 12.3,
+          "stockout": 13.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 8159,
+          "sales": 7259,
+          "stockoutBase": 8,
+          "stockout": 9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 6816,
+          "sales": 5928,
+          "stockoutBase": 4.7,
+          "stockout": 5.3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 5748,
+          "sales": 4890,
+          "stockoutBase": 4,
+          "stockout": 4.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 7538,
+          "sales": 6718,
+          "stockoutBase": 7.7,
+          "stockout": 8.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 6387,
+          "sales": 7177,
+          "stockoutBase": 8.9,
+          "stockout": 10,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 8830,
+          "sales": 9565,
+          "stockoutBase": 12,
+          "stockout": 13.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6074,
+          "sales": 5353,
+          "stockoutBase": 11.4,
+          "stockout": 12.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 5816,
+          "sales": 5101,
+          "stockoutBase": 4.4,
+          "stockout": 4.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6297,
+          "sales": 6991,
+          "stockoutBase": 5.1,
+          "stockout": 5.7,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6633,
+          "sales": 7323,
+          "stockoutBase": 6.6,
+          "stockout": 7.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 9198,
+          "sales": 9870,
+          "stockoutBase": 6.6,
+          "stockout": 7.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 8008,
+          "sales": 8646,
+          "stockoutBase": 12.3,
+          "stockout": 13.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 5297,
+          "sales": 5901,
+          "stockoutBase": 4.4,
+          "stockout": 4.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 9247,
+          "sales": 9807,
+          "stockoutBase": 12.5,
+          "stockout": 14,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 4399,
+          "sales": 3858,
+          "stockoutBase": 8.9,
+          "stockout": 10,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4221,
+          "sales": 4754,
+          "stockoutBase": 4.3,
+          "stockout": 4.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 5859,
+          "sales": 5326,
+          "stockoutBase": 3.7,
+          "stockout": 4.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 3695,
+          "sales": 3198,
+          "stockoutBase": 7.5,
+          "stockout": 8.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 9026,
+          "sales": 8532,
+          "stockoutBase": 2.9,
+          "stockout": 3.3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 6611,
+          "sales": 6122,
+          "stockoutBase": 2.8,
+          "stockout": 3.1,
+          "suggest": "—"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 9207,
+          "sales": 8746,
+          "stockoutBase": 11.2,
+          "stockout": 12.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6731,
+          "sales": 6285,
+          "stockoutBase": 7,
+          "stockout": 7.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 4097,
+          "sales": 3652,
+          "stockoutBase": 6.6,
+          "stockout": 7.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 3669,
+          "sales": 4085,
+          "stockoutBase": 7.5,
+          "stockout": 8.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 4027,
+          "sales": 3614,
+          "stockoutBase": 10,
+          "stockout": 11.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 3650,
+          "sales": 3241,
+          "stockoutBase": 10.8,
+          "stockout": 12.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 7938,
+          "sales": 8303,
+          "stockoutBase": 5,
+          "stockout": 5.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 4280,
+          "sales": 3948,
+          "stockoutBase": 6.9,
+          "stockout": 7.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4500,
+          "sales": 4817,
+          "stockoutBase": 5.8,
+          "stockout": 6.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 5165,
+          "sales": 5418,
+          "stockoutBase": 10.3,
+          "stockout": 11.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 6565,
+          "sales": 6314,
+          "stockoutBase": 8.4,
+          "stockout": 9.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 3790,
+          "sales": 3544,
+          "stockoutBase": 6.7,
+          "stockout": 7.5,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3362,
+          "sales": 3122,
+          "stockoutBase": 4.6,
+          "stockout": 5.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 5393,
+          "sales": 5622,
+          "stockoutBase": 3.1,
+          "stockout": 3.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 5019,
+          "sales": 5218,
+          "stockoutBase": 9.7,
+          "stockout": 10.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 9711,
+          "sales": 9518,
+          "stockoutBase": 10.1,
+          "stockout": 11.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 8945,
+          "sales": 8782,
+          "stockoutBase": 5,
+          "stockout": 5.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 3650,
+          "sales": 3504,
+          "stockoutBase": 4.8,
+          "stockout": 5.4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 9117,
+          "sales": 9030,
+          "stockoutBase": 6.5,
+          "stockout": 7.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 5519,
+          "sales": 5601,
+          "stockoutBase": 6.3,
+          "stockout": 7.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 3928,
+          "sales": 4005,
+          "stockoutBase": 9.1,
+          "stockout": 10.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 7182,
+          "sales": 7241,
+          "stockoutBase": 7.6,
+          "stockout": 8.5,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0009",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0009",
+        "field": "drivers"
+      },
+      "2026-10-22 18:40:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-22 18:40:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        7135,
+        7405,
+        8645,
+        6875,
+        7602,
+        7720,
+        7968,
+        7260
+      ],
+      "sales": [
+        7777,
+        8071,
+        9423,
+        6948,
+        7683,
+        7803,
+        8053,
+        7338
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        16.5,
+        16.5,
+        16.5,
+        21.3,
+        21.3,
+        21.3,
+        21.3,
+        21.3
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 6.061,
+          "value": 6.3096,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 1.369786,
+          "value": 1.2226440000000003,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 19.37751996957018,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 26.511085180863475,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0.08281350000000001,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 8398,
+          "sales": 10263,
+          "stockoutBase": 3,
+          "stockout": 3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 6763,
+          "sales": 8282,
+          "stockoutBase": 3.7,
+          "stockout": 3.7,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 6059,
+          "sales": 6909,
+          "stockoutBase": 5.2,
+          "stockout": 5.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3375,
+          "sales": 4060,
+          "stockoutBase": 2.6,
+          "stockout": 2.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 6464,
+          "sales": 7143,
+          "stockoutBase": 9.6,
+          "stockout": 9.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 5526,
+          "sales": 6035,
+          "stockoutBase": 3.3,
+          "stockout": 3.3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 7982,
+          "sales": 7659,
+          "stockoutBase": 10.4,
+          "stockout": 10.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 4993,
+          "sales": 4760,
+          "stockoutBase": 9.4,
+          "stockout": 9.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 8004,
+          "sales": 7894,
+          "stockoutBase": 11.3,
+          "stockout": 11.3,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0008",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0008",
+        "field": "drivers"
+      },
+      "2026-10-21 09:35:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-21 09:35:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8",
+        "W9",
+        "W10",
+        "W11",
+        "W12"
+      ],
+      "baseSales": [
+        26296,
+        28262,
+        30616,
+        25041,
+        24919,
+        27512,
+        31559,
+        27885,
+        26962,
+        27342,
+        26362,
+        27082
+      ],
+      "sales": [
+        26781,
+        28783,
+        31181,
+        25503,
+        25379,
+        28019,
+        32141,
+        28399,
+        27459,
+        27846,
+        26848,
+        27581
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2,
+        20.2
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 32.9838,
+          "value": 33.592,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 7.4543388,
+          "value": 6.785584,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 20.2,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 27.04911839803834,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 14330,
+          "sales": 16131,
+          "stockoutBase": 11.6,
+          "stockout": 11.6,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 14396,
+          "sales": 16046,
+          "stockoutBase": 3.7,
+          "stockout": 3.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 12212,
+          "sales": 13829,
+          "stockoutBase": 7.2,
+          "stockout": 7.2,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 13422,
+          "sales": 11853,
+          "stockoutBase": 9.8,
+          "stockout": 9.8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 10495,
+          "sales": 12059,
+          "stockoutBase": 6.3,
+          "stockout": 6.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 8703,
+          "sales": 10182,
+          "stockoutBase": 8.8,
+          "stockout": 8.8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 11678,
+          "sales": 10263,
+          "stockoutBase": 3.6,
+          "stockout": 3.6,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 13358,
+          "sales": 11954,
+          "stockoutBase": 8.4,
+          "stockout": 8.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 10457,
+          "sales": 11704,
+          "stockoutBase": 3,
+          "stockout": 3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 13161,
+          "sales": 14348,
+          "stockoutBase": 2.7,
+          "stockout": 2.7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 11590,
+          "sales": 12762,
+          "stockoutBase": 4,
+          "stockout": 4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8981,
+          "sales": 10049,
+          "stockoutBase": 9.5,
+          "stockout": 9.5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 6841,
+          "sales": 7897,
+          "stockoutBase": 2.8,
+          "stockout": 2.8,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 8955,
+          "sales": 7909,
+          "stockoutBase": 12.5,
+          "stockout": 12.5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 8384,
+          "sales": 9425,
+          "stockoutBase": 8.4,
+          "stockout": 8.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 10276,
+          "sales": 9256,
+          "stockoutBase": 7,
+          "stockout": 7,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 9068,
+          "sales": 10060,
+          "stockoutBase": 4.3,
+          "stockout": 4.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 14236,
+          "sales": 15208,
+          "stockoutBase": 6.5,
+          "stockout": 6.5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 8707,
+          "sales": 7841,
+          "stockoutBase": 3.1,
+          "stockout": 3.1,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 6313,
+          "sales": 5619,
+          "stockoutBase": 3.4,
+          "stockout": 3.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 12144,
+          "sales": 11499,
+          "stockoutBase": 5.4,
+          "stockout": 5.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 9925,
+          "sales": 10560,
+          "stockoutBase": 2.9,
+          "stockout": 2.9,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5581,
+          "sales": 4976,
+          "stockoutBase": 5.5,
+          "stockout": 5.5,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 10017,
+          "sales": 10595,
+          "stockoutBase": 2.9,
+          "stockout": 2.9,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 13306,
+          "sales": 12822,
+          "stockoutBase": 10.2,
+          "stockout": 10.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 9644,
+          "sales": 9232,
+          "stockoutBase": 3.6,
+          "stockout": 3.6,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 8770,
+          "sales": 9163,
+          "stockoutBase": 9.4,
+          "stockout": 9.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 10943,
+          "sales": 11284,
+          "stockoutBase": 8.7,
+          "stockout": 8.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 5776,
+          "sales": 5501,
+          "stockoutBase": 6.3,
+          "stockout": 6.3,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 5525,
+          "sales": 5796,
+          "stockoutBase": 8.4,
+          "stockout": 8.4,
+          "suggest": "发起调价审批（降价）"
+        },
+        {
+          "sku": "1024418",
+          "name": "五常大米 稻花香2号",
+          "category": "粮油调味",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 6874,
+          "sales": 7071,
+          "stockoutBase": 8.2,
+          "stockout": 8.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1046637",
+          "name": "海天金标生抽",
+          "category": "粮油调味",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 6078,
+          "sales": 5887,
+          "stockoutBase": 3.1,
+          "stockout": 3.1,
+          "suggest": "—"
+        },
+        {
+          "sku": "1004512",
+          "name": "金龙鱼黄金比例食用调和油",
+          "category": "粮油调味",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 14477,
+          "sales": 14655,
+          "stockoutBase": 9.2,
+          "stockout": 9.2,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0007",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0007",
+        "field": "drivers"
+      },
+      "2026-10-20 14:16:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-20 14:16:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        17527,
+        17794,
+        21255,
+        19153,
+        17577,
+        18368,
+        18698,
+        16672
+      ],
+      "sales": [
+        19420,
+        19716,
+        21408,
+        19291,
+        17704,
+        18500,
+        18833,
+        16792
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        16.2,
+        16.2,
+        21.6,
+        21.6,
+        21.6,
+        21.6,
+        21.6,
+        21.6
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 14.7044,
+          "value": 15.1664,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 3.3231944,
+          "value": 3.064608,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 20.20656187361536,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 27.09923664122137,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0.1592472,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 7841,
+          "sales": 9420,
+          "stockoutBase": 9.8,
+          "stockout": 9.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 7785,
+          "sales": 8915,
+          "stockoutBase": 11.4,
+          "stockout": 11.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7934,
+          "sales": 9055,
+          "stockoutBase": 11.6,
+          "stockout": 11.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 7103,
+          "sales": 8166,
+          "stockoutBase": 6.4,
+          "stockout": 6.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4764,
+          "sales": 5736,
+          "stockoutBase": 4.7,
+          "stockout": 4.7,
+          "suggest": "—"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 9661,
+          "sales": 8690,
+          "stockoutBase": 11.7,
+          "stockout": 11.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 9420,
+          "sales": 8542,
+          "stockoutBase": 8.4,
+          "stockout": 8.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6400,
+          "sales": 7248,
+          "stockoutBase": 9.3,
+          "stockout": 9.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 8747,
+          "sales": 7904,
+          "stockoutBase": 3.6,
+          "stockout": 3.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4298,
+          "sales": 5135,
+          "stockoutBase": 4.9,
+          "stockout": 4.9,
+          "suggest": "—"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 7781,
+          "sales": 8570,
+          "stockoutBase": 7.8,
+          "stockout": 7.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3612,
+          "sales": 4287,
+          "stockoutBase": 8,
+          "stockout": 8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 4440,
+          "sales": 5060,
+          "stockoutBase": 7.3,
+          "stockout": 7.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 3504,
+          "sales": 4116,
+          "stockoutBase": 5,
+          "stockout": 5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 5945,
+          "sales": 6438,
+          "stockoutBase": 9.8,
+          "stockout": 9.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 6113,
+          "sales": 5622,
+          "stockoutBase": 11.2,
+          "stockout": 11.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 9487,
+          "sales": 9912,
+          "stockoutBase": 4.5,
+          "stockout": 4.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4373,
+          "sales": 3998,
+          "stockoutBase": 6.1,
+          "stockout": 6.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 8304,
+          "sales": 8643,
+          "stockoutBase": 4.5,
+          "stockout": 4.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 4734,
+          "sales": 5017,
+          "stockoutBase": 2.6,
+          "stockout": 2.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1035590",
+          "name": "蓝月亮深层洁净洗衣液",
+          "category": "日化家清",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 4226,
+          "sales": 4323,
+          "stockoutBase": 3.8,
+          "stockout": 3.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1031752",
+          "name": "维达超韧抽纸",
+          "category": "日化家清",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 6183,
+          "sales": 6160,
+          "stockoutBase": 7.9,
+          "stockout": 7.9,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0006",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0006",
+        "field": "drivers"
+      },
+      "2026-10-19 11:48:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-19 11:48:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4"
+      ],
+      "baseSales": [
+        17506,
+        18854,
+        20205,
+        17230
+      ],
+      "sales": [
+        17638,
+        18996,
+        20358,
+        17360
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        22.2,
+        22.2,
+        22.2,
+        22.2
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 7.3795,
+          "value": 7.4352,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 1.6677670000000002,
+          "value": 1.6506144,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 22.2,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 5.69344,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 29.455647624088925,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4339,
+          "sales": 3793,
+          "stockoutBase": 4,
+          "stockout": 3.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3553,
+          "sales": 3057,
+          "stockoutBase": 12.6,
+          "stockout": 11.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 3828,
+          "sales": 4304,
+          "stockoutBase": 3.4,
+          "stockout": 3,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 3815,
+          "sales": 3343,
+          "stockoutBase": 4.8,
+          "stockout": 4.3,
+          "suggest": "—"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 2832,
+          "sales": 2508,
+          "stockoutBase": 4.1,
+          "stockout": 3.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 2264,
+          "sales": 2557,
+          "stockoutBase": 10.3,
+          "stockout": 9.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 4463,
+          "sales": 4173,
+          "stockoutBase": 7.2,
+          "stockout": 6.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 2766,
+          "sales": 2498,
+          "stockoutBase": 5.4,
+          "stockout": 4.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 2059,
+          "sales": 2308,
+          "stockoutBase": 12.4,
+          "stockout": 11,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 1822,
+          "sales": 2037,
+          "stockoutBase": 6.2,
+          "stockout": 5.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 2935,
+          "sales": 2732,
+          "stockoutBase": 3.5,
+          "stockout": 3.1,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 3396,
+          "sales": 3202,
+          "stockoutBase": 5.6,
+          "stockout": 5,
+          "suggest": "—"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 1906,
+          "sales": 2087,
+          "stockoutBase": 3.2,
+          "stockout": 2.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 2807,
+          "sales": 2645,
+          "stockoutBase": 12.6,
+          "stockout": 11.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 3242,
+          "sales": 3084,
+          "stockoutBase": 9.2,
+          "stockout": 8.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 4105,
+          "sales": 3977,
+          "stockoutBase": 8.3,
+          "stockout": 7.4,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 3790,
+          "sales": 3898,
+          "stockoutBase": 10.2,
+          "stockout": 9.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2010437",
+          "name": "冷鲜猪肋排（称重）",
+          "category": "生鲜",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 3898,
+          "sales": 3995,
+          "stockoutBase": 8,
+          "stockout": 7.1,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 4760,
+          "sales": 4670,
+          "stockoutBase": 5.6,
+          "stockout": 5,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 1823,
+          "sales": 1884,
+          "stockoutBase": 8.7,
+          "stockout": 7.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 3437,
+          "sales": 3470,
+          "stockoutBase": 6.2,
+          "stockout": 5.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "2008814",
+          "name": "国产红富士苹果（称重）",
+          "category": "生鲜",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 2810,
+          "sales": 2780,
+          "stockoutBase": 11.7,
+          "stockout": 10.4,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0004",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0004",
+        "field": "drivers"
+      },
+      "2026-10-17 10:20:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-17 10:20:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        26266,
+        25523,
+        29041,
+        26485,
+        24934,
+        25526,
+        32729,
+        25760
+      ],
+      "sales": [
+        25956,
+        25222,
+        28698,
+        26172,
+        24639,
+        25225,
+        32342,
+        25456
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        24.2,
+        24.2,
+        24.2,
+        24.2,
+        24.2,
+        24.2,
+        24.2,
+        24.2
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 21.6264,
+          "value": 21.371,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 4.887566400000001,
+          "value": 5.171782,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 24.2,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 29.31423836001939,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 8879,
+          "sales": 7565,
+          "stockoutBase": 8.6,
+          "stockout": 8.6,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 7873,
+          "sales": 8898,
+          "stockoutBase": 9.4,
+          "stockout": 9.4,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7015,
+          "sales": 6083,
+          "stockoutBase": 3.4,
+          "stockout": 3.4,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 5604,
+          "sales": 4740,
+          "stockoutBase": 9,
+          "stockout": 9,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8328,
+          "sales": 9168,
+          "stockoutBase": 10.8,
+          "stockout": 10.8,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7502,
+          "sales": 6666,
+          "stockoutBase": 11.8,
+          "stockout": 11.8,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 8245,
+          "sales": 7538,
+          "stockoutBase": 4.3,
+          "stockout": 4.3,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 5826,
+          "sales": 6500,
+          "stockoutBase": 8.5,
+          "stockout": 8.5,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4205,
+          "sales": 3536,
+          "stockoutBase": 6.6,
+          "stockout": 6.6,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 4896,
+          "sales": 4260,
+          "stockoutBase": 6.6,
+          "stockout": 6.6,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 4120,
+          "sales": 4669,
+          "stockoutBase": 8.5,
+          "stockout": 8.5,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 6935,
+          "sales": 7422,
+          "stockoutBase": 4.1,
+          "stockout": 4.1,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5687,
+          "sales": 6171,
+          "stockoutBase": 6.3,
+          "stockout": 6.3,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4423,
+          "sales": 4903,
+          "stockoutBase": 8.6,
+          "stockout": 8.6,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 7723,
+          "sales": 8179,
+          "stockoutBase": 3.1,
+          "stockout": 3.1,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 3475,
+          "sales": 3876,
+          "stockoutBase": 3.9,
+          "stockout": 3.9,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4451,
+          "sales": 4796,
+          "stockoutBase": 11.4,
+          "stockout": 11.4,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 7322,
+          "sales": 7600,
+          "stockoutBase": 9.9,
+          "stockout": 9.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3652,
+          "sales": 3898,
+          "stockoutBase": 12.7,
+          "stockout": 12.7,
+          "suggest": "发起调价审批（提价）"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 6551,
+          "sales": 6401,
+          "stockoutBase": 8.3,
+          "stockout": 8.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 3983,
+          "sales": 4125,
+          "stockoutBase": 3.8,
+          "stockout": 3.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4348,
+          "sales": 4208,
+          "stockoutBase": 4.2,
+          "stockout": 4.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 4531,
+          "sales": 4393,
+          "stockoutBase": 7.7,
+          "stockout": 7.7,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4553,
+          "sales": 4678,
+          "stockoutBase": 3.2,
+          "stockout": 3.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5057,
+          "sales": 5162,
+          "stockoutBase": 10.8,
+          "stockout": 10.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 9431,
+          "sales": 9329,
+          "stockoutBase": 4.4,
+          "stockout": 4.4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 6385,
+          "sales": 6290,
+          "stockoutBase": 3.5,
+          "stockout": 3.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 8133,
+          "sales": 8053,
+          "stockoutBase": 9.2,
+          "stockout": 9.2,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1013309",
+          "name": "蒙牛特仑苏有机纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3350,
+          "sales": 3414,
+          "stockoutBase": 9.6,
+          "stockout": 9.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3788,
+          "sales": 3730,
+          "stockoutBase": 3.8,
+          "stockout": 3.8,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 6787,
+          "sales": 6837,
+          "stockoutBase": 5.5,
+          "stockout": 5.5,
+          "suggest": "—"
+        },
+        {
+          "sku": "1011846",
+          "name": "伊利纯牛奶",
+          "category": "乳品",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 5383,
+          "sales": 5369,
+          "stockoutBase": 4.3,
+          "stockout": 4.3,
+          "suggest": "—"
+        },
+        {
+          "sku": "1020075",
+          "name": "娃哈哈AD钙奶",
+          "category": "乳品",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 4426,
+          "sales": 4431,
+          "stockoutBase": 4,
+          "stockout": 4,
+          "suggest": "—"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0003",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0003",
+        "field": "drivers"
+      },
+      "2026-10-15 09:12:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-15 09:12:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4"
+      ],
+      "baseSales": [
+        8761,
+        8373,
+        9433,
+        9363
+      ],
+      "sales": [
+        8694,
+        8309,
+        9361,
+        9291
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 3.593,
+          "value": 3.5655,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 0.812018,
+          "value": 0.805803,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 22.6,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 7.116800000000001,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 26.043443808998827,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0102",
+          "storeName": "上海闵行七宝万科广场B1店",
+          "baseSales": 3965,
+          "sales": 3376,
+          "stockoutBase": 8.4,
+          "stockout": 9.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "NJ0021",
+          "storeName": "南京鼓楼湖南路店",
+          "baseSales": 4798,
+          "sales": 4307,
+          "stockoutBase": 5,
+          "stockout": 5.6,
+          "suggest": "—"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "NJ0076",
+          "storeName": "南京江宁百家湖店",
+          "baseSales": 3316,
+          "sales": 3666,
+          "stockoutBase": 8.8,
+          "stockout": 9.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0133",
+          "storeName": "上海静安大悦城店",
+          "baseSales": 3669,
+          "sales": 3952,
+          "stockoutBase": 6.1,
+          "stockout": 6.8,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 2891,
+          "sales": 3112,
+          "stockoutBase": 3.8,
+          "stockout": 4.2,
+          "suggest": "—"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "HF0004",
+          "storeName": "合肥政务区天鹅湖店",
+          "baseSales": 4391,
+          "sales": 4191,
+          "stockoutBase": 8.4,
+          "stockout": 9.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SZ0009",
+          "storeName": "苏州工业园区湖西CBD店",
+          "baseSales": 3543,
+          "sales": 3660,
+          "stockoutBase": 11.1,
+          "stockout": 12.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0031",
+          "storeName": "上海浦东张江高科店",
+          "baseSales": 3850,
+          "sales": 3961,
+          "stockoutBase": 5.7,
+          "stockout": 6.3,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "SH0047",
+          "storeName": "上海徐汇漕河泾店",
+          "baseSales": 2825,
+          "sales": 2726,
+          "stockoutBase": 3.6,
+          "stockout": 4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 1643,
+          "sales": 1732,
+          "stockoutBase": 7.1,
+          "stockout": 7.9,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1002387",
+          "name": "农夫山泉饮用天然水",
+          "category": "酒水饮料",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 1953,
+          "sales": 2011,
+          "stockoutBase": 7.4,
+          "stockout": 8.2,
+          "suggest": "补货申请"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0002",
+        "field": "scope"
+      },
+      {
+        "ref": "dynamic/SCENARIOS",
+        "key": "id",
+        "id": "SCN-0002",
+        "field": "drivers"
+      },
+      "2026-10-12 15:40:40"
+    ],
+    "result": {
+      "ranAt": "2026-10-12 15:40:40",
+      "weeks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "baseSales": [
+        2381,
+        2575,
+        2699,
+        2496,
+        2271,
+        2364,
+        2671,
+        2352
+      ],
+      "sales": [
+        2552,
+        2760,
+        2712,
+        2508,
+        2282,
+        2375,
+        2684,
+        2363
+      ],
+      "baseMargin": [
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6,
+        22.6
+      ],
+      "margin": [
+        18.3,
+        18.3,
+        21.9,
+        21.9,
+        21.9,
+        21.9,
+        21.9,
+        21.9
+      ],
+      "kpis": [
+        {
+          "key": "sales",
+          "label": "销售额",
+          "unit": "万元",
+          "base": 1.9809,
+          "value": 2.0236,
+          "better": "up"
+        },
+        {
+          "key": "gp",
+          "label": "毛利额",
+          "unit": "万元",
+          "base": 0.4476834,
+          "value": 0.42404519999999996,
+          "better": "up"
+        },
+        {
+          "key": "rate",
+          "label": "毛利率",
+          "unit": "%",
+          "base": 22.6,
+          "value": 20.95499110496145,
+          "better": "up"
+        },
+        {
+          "key": "stockout",
+          "label": "缺货率",
+          "unit": "%",
+          "base": 6.4,
+          "value": 6.4,
+          "better": "down"
+        },
+        {
+          "key": "turn",
+          "label": "库存周转天数",
+          "unit": "天",
+          "base": 28.4,
+          "value": 27.51937984496124,
+          "better": "down"
+        },
+        {
+          "key": "promo",
+          "label": "促销成本",
+          "unit": "万元",
+          "base": 0,
+          "value": 0.0141652,
+          "better": "down"
+        }
+      ],
+      "impacts": [
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "HZ0012",
+          "storeName": "杭州西湖文三路店",
+          "baseSales": 9198,
+          "sales": 10271,
+          "stockoutBase": 6.6,
+          "stockout": 6.6,
+          "suggest": "补货申请"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "HZ0058",
+          "storeName": "杭州滨江星光大道店",
+          "baseSales": 5297,
+          "sales": 6142,
+          "stockoutBase": 4.4,
+          "stockout": 4.4,
+          "suggest": "—"
+        },
+        {
+          "sku": "1040281",
+          "name": "三只松鼠每日坚果",
+          "category": "休闲食品",
+          "storeId": "NB0015",
+          "storeName": "宁波鄞州万达店",
+          "baseSales": 6816,
+          "sales": 6169,
+          "stockoutBase": 4.7,
+          "stockout": 4.7,
+          "suggest": "—"
+        }
+      ]
+    }
+  }
+]

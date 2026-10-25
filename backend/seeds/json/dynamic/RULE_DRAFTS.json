@@ -1,0 +1,22 @@
+{
+  "R-007": {
+    "version": 4,
+    "conds": [
+      {
+        "metric": "gross_margin",
+        "metricVer": 3,
+        "field": "毛利率",
+        "op": "<",
+        "value": "18.00%"
+      },
+      {
+        "metric": "gross_margin",
+        "metricVer": 3,
+        "field": "上次计算的毛利率",
+        "op": "≥",
+        "value": "18.00%"
+      }
+    ],
+    "expr": "gross_margin@v3(sku, store, day) < 0.18 AND prev(gross_margin@v3) >= 0.18"
+  }
+}

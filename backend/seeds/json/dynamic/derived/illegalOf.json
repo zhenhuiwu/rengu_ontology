@@ -1,0 +1,67 @@
+[
+  {
+    "args": [
+      "order"
+    ],
+    "result": [
+      {
+        "from": "已签收",
+        "to": "已出库",
+        "count": 6,
+        "alertId": null,
+        "lastAt": "2026-10-25 14:55:11"
+      },
+      {
+        "from": "已取消",
+        "to": "待出库",
+        "count": 4,
+        "alertId": null,
+        "lastAt": "2026-10-25 07:01:48"
+      },
+      {
+        "from": "已签收",
+        "to": "待支付",
+        "count": 1,
+        "alertId": "AL-20261025-0143",
+        "lastAt": "2026-10-25 15:41:07"
+      },
+      {
+        "from": "已取消",
+        "to": "已出库",
+        "count": 1,
+        "alertId": "AL-20261024-0105",
+        "lastAt": "2026-10-24 11:02:45"
+      }
+    ]
+  },
+  {
+    "args": [
+      "store"
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      "product"
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      "member"
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      "promotion"
+    ],
+    "result": []
+  },
+  {
+    "args": [
+      "refund"
+    ],
+    "result": []
+  }
+]
