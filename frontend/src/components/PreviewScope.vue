@@ -33,7 +33,7 @@ const tip = computed(() => (limited.value.length ? limited.value.map((o) => `${o
 </template>
 
 <style scoped>
-.pvs { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: 1px solid var(--warning); background: var(--warning-bg); border-radius: var(--radius); white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+.pvs { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: var(--border); background: var(--g2); border-radius: var(--radius); white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
 </style>
 <style>
 .pvs-tip .ant-tooltip-inner { white-space: pre-line; }

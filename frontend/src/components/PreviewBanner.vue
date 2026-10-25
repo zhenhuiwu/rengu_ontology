@@ -15,7 +15,7 @@ function exit() {
 
 <template>
   <div v-if="pv.session" class="pvb t-12" role="status">
-    <EyeOutlined class="c-warning" />
+    <EyeOutlined class="c-2" />
     <a-tooltip :title="`角色：${pv.session.roles.join('、') || '无'} · ${pv.session.startedAt} 开始 · 已记入审计日志`">
       <span class="c-1">正在以 {{ pv.session.user.name }}（{{ pv.session.roles.join('、') || '无角色' }}）的权限预览 · 只读 ·</span>
     </a-tooltip>

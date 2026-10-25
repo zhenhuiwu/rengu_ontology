@@ -85,7 +85,7 @@ export const SYSTEM_SETTINGS: SystemSettings = {
       },
     ],
     defaults: { 问数解析: 'LLM-01', 向量化: 'LLM-02', 结果解释: 'LLM-01' },
-    egress: { policy: 'schema', sampleRows: 5, maskFields: ['手机号', '会员姓名', '收货地址'] },
+    egress: { policy: 'schema', sampleRows: 5, maskFields: ['手机号', '身份证号', '会员姓名', '收货地址'] },
   },
   security: {
     pwdMin: 10, pwdRules: ['大写字母', '小写字母', '数字'], pwdExpireDays: 90, lockAfter: 5, lockMinutes: 30,

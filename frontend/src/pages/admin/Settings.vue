@@ -17,7 +17,7 @@ import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { ADMIN_DEPTS } from '@/mock';
 import {
   SYSTEM_SETTINGS, NOTIFY_EVENTS, CHANNEL_ORDER, SETTINGS_UPDATED, LLM_USAGES, LLM_KINDS, EGRESS_OPTIONS, MASK_FIELDS,
-  type SystemSettings, type NotifyChannel, type ChannelId, type LlmConnection, type LlmUsage, type LlmTest, type LlmKind, type LlmDeploy,
+  type SystemSettings, type NotifyChannel, type ChannelId, type LlmConnection, type LlmUsage, type LlmTest, type LlmKind, type LlmDeploy, type EgressPolicy,
 } from '@/mock/settings';
 
 const route = useRoute();
@@ -293,6 +293,23 @@ async function removeConn(c: LlmConnection) {
   message.info(`已删除「${c.name}」（草稿），保存后生效`);
 }
 
+// 出域策略：选“发送明细”先确认会发给哪些连接；选“脱敏样例”时补齐必须脱敏的字段
+async function pickEgress(v: EgressPolicy) {
+  const L = draft.llm;
+  if (v === 'detail' && L.egress.policy !== 'detail') {
+    const targets = L.connections.filter((c) => c.enabled && c.usages.some((u) => u !== '向量化'));
+    const ok = await confirm.ask({
+      title: '改为发送明细数据', target: !targets.length ? '没有可用的连接' : targets.every((c) => c.deploy === '私有化部署') ? `将发送给 ${targets.map((c) => c.id).join('、')}（私有化）` : `将发送给 ${targets.map((c) => `${c.id}（${c.deploy === '私有化部署' ? '私有化' : '公有云'}）`).join('、')}`,
+      okText: '改为发送明细', danger: true,
+      fields: targets.map((c) => ({ label: c.id, value: `${c.name} · ${c.baseUrl}` })),
+      impact: '风险：查询结果明细（含门店、会员、订单等业务数据）会离开平台发给上述模型；只允许私有化部署的连接，保存后才生效并记入审计日志。',
+    });
+    if (!ok) return;
+  }
+  if (v === 'masked') for (const f of ['手机号', '身份证号']) if (!L.egress.maskFields.includes(f)) L.egress.maskFields.push(f);
+  L.egress.policy = v;
+}
+
 // 连接抽屉 ?llm=new|LLM-01
 const llmKey = computed(() => (group.value === 'llm' ? q('llm') : ''));
 const llmConn = computed(() => (llmKey.value && llmKey.value !== 'new' ? draft.llm.connections.find((c) => c.id === llmKey.value) ?? null : null));
@@ -301,13 +318,25 @@ const blankLlm = (): LlmForm => ({ name: '', kind: 'OpenAI 兼容', deploy: '私
 const lf = reactive<LlmForm>(blankLlm());
 const lfSnap = ref('');
 const lfTest = ref<LlmTest | null>(null);
+// 测试结果只对测试时的 地址 / 模型 / 密钥 / 接口类型 有效；这几项改了就作废，不能写进连接
+const testSig = () => JSON.stringify([lf.kind, lf.baseUrl.trim(), lf.model.trim(), lf.changeKey ? lf.key : '原密钥']);
+const lfTestSig = ref('');
+const lfStale = computed(() => !!lfTest.value && testSig() !== lfTestSig.value);
+// 新建时字段没碰过、也没点过确定，不显示红字
+const lfTried = ref(false);
+const touched = reactive<Record<string, boolean>>({});
 watch(llmKey, (k) => {
-  if (!k) return;
+  lfTried.value = false;
+  for (const f of Object.keys(touched)) delete touched[f];
+  if (!k) { lf.key = ''; return; }  // 抽屉关掉立即清掉明文密钥
   const c = llmConn.value;
   Object.assign(lf, c ? { name: c.name, kind: c.kind, deploy: c.deploy, baseUrl: c.baseUrl, model: c.model, key: '', changeKey: false, timeoutSec: c.timeoutSec, maxConcurrency: c.maxConcurrency, usages: [...c.usages], enabled: c.enabled } : blankLlm());
   lfSnap.value = JSON.stringify(lf);
   lfTest.value = c?.lastTest ? { ...c.lastTest } : null;
+  lfTestSig.value = testSig();
 }, { immediate: true });
+// 切到 Ollama：不需要密钥，立即清掉已填的明文；原密钥在点“确定”后清除
+watch(() => lf.kind, (k) => { if (k === 'Ollama') { lf.key = ''; } });
 const lfDirty = computed(() => !!llmKey.value && JSON.stringify(lf) !== lfSnap.value);
 const needKey = computed(() => lf.kind !== 'Ollama');
 const lfErrors = computed(() => {
@@ -329,25 +358,34 @@ const lfErrors = computed(() => {
   }
   return e;
 });
+const FIELD_OF: [string, string][] = [['名称', 'name'], ['地址', 'baseUrl'], ['公有云地址', 'baseUrl'], ['模型名', 'model'], ['密钥', 'key']];
+const lfShownErrors = computed(() => (lfTried.value || llmConn.value ? lfErrors.value : lfErrors.value.filter((e) => {
+  const f = FIELD_OF.find(([w]) => e.includes(w))?.[1];
+  return !f || touched[f];
+})));
 const maskOf = (k: string) => `${k.startsWith('sk-') ? 'sk-' : ''}••••••••${k.trim().slice(-4)}`;
 async function closeLlm() {
   if (lfDirty.value && !(await confirmDiscard())) return;
   lfSnap.value = JSON.stringify(lf);
+  lf.key = '';
   setQuery({ llm: undefined });
 }
 async function testForm() {
   const t = await runTest({ ...lf, name: lf.name.trim() }, { blocked: lfErrors.value.filter((x) => !x.includes('默认连接')).length ? `请先改正：${lfErrors.value[0]}` : !lf.enabled ? '连接已停用，先启用再测试' : undefined });
-  if (t) lfTest.value = t;
+  if (t) { lfTest.value = t; lfTestSig.value = testSig(); }
 }
 function applyLlm() {
+  lfTried.value = true;
   if (lfErrors.value.length) return;
+  // 配置改过但没重新测试：不写入旧的测试结果
+  const test = lfTest.value && !lfStale.value ? lfTest.value : null;
   const base = { name: lf.name.trim(), kind: lf.kind, deploy: lf.deploy, baseUrl: lf.baseUrl.trim(), model: lf.model.trim(), timeoutSec: lf.timeoutSec, maxConcurrency: lf.maxConcurrency, usages: LLM_USAGES.map((u) => u.key).filter((u) => lf.usages.includes(u)), enabled: lf.enabled };
   const keyMask = !needKey.value ? '' : lf.changeKey ? maskOf(lf.key) : llmConn.value?.keyMask ?? '';
   const c = llmConn.value;
-  if (c) Object.assign(c, base, { keyMask }, lfTest.value ? { lastTest: lfTest.value } : {});
+  if (c) { Object.assign(c, base, { keyMask }); if (test) c.lastTest = test; else delete c.lastTest; }
   else {
     const n = Math.max(0, ...draft.llm.connections.map((x) => Number(x.id.slice(4)) || 0), ...saved.value.llm.connections.map((x) => Number(x.id.slice(4)) || 0)) + 1;
-    draft.llm.connections.push({ id: `LLM-${String(n).padStart(2, '0')}`, ...base, keyMask, createdAt: nowStr, createdBy: '王敏', ...(lfTest.value ? { lastTest: lfTest.value } : {}) });
+    draft.llm.connections.push({ id: `LLM-${String(n).padStart(2, '0')}`, ...base, keyMask, createdAt: nowStr, createdBy: '王敏', ...(test ? { lastTest: test } : {}) });
   }
   lf.key = '';
   lfSnap.value = JSON.stringify(lf);
@@ -366,7 +404,7 @@ const fieldDis = computed(() => readonly.value);
       <div v-for="g in GROUPS" :key="g.key" class="st-item" :class="{ on: g.key === group }" @click="selectGroup(g.key)">
         <div class="st-l1">
           <span class="t-14 c-1" :class="{ 'fw-600': g.key === group }">{{ g.title }}</span>
-          <span v-if="dirtyOf(g.key)" class="t-12 tl-attention st-mod">已修改 {{ dirtyOf(g.key) }}</span>
+          <span v-if="dirtyOf(g.key)" class="t-12 c-3 st-mod">已修改 {{ dirtyOf(g.key) }}</span>
         </div>
         <div class="t-12 c-3">{{ g.desc }}</div>
       </div>
@@ -449,7 +487,7 @@ const fieldDis = computed(() => readonly.value);
           <div class="st-sect">
             <div class="st-rowhead st-h"><span class="t-14 fw-600 c-1">数据出域策略</span><span class="t-12 c-3">发给大模型的内容范围，对所有连接生效</span></div>
             <a-form layout="vertical" :disabled="fieldDis">
-              <a-radio-group v-model:value="draft.llm.egress.policy" class="st-egress">
+              <a-radio-group :value="draft.llm.egress.policy" class="st-egress" @change="(e: { target: { value: EgressPolicy } }) => pickEgress(e.target.value)">
                 <a-radio v-for="o in EGRESS_OPTIONS" :key="o.value" :value="o.value">
                   <span class="c-1">{{ o.label }}</span><span v-if="o.value === 'schema'" class="t-12 c-3">（默认）</span>
                   <div class="t-12 c-3 st-egdesc">{{ o.desc }}</div>
@@ -498,7 +536,7 @@ const fieldDis = computed(() => readonly.value);
         <a-table size="small" row-key="key" :columns="evCols" :data-source="NOTIFY_EVENTS" :pagination="false">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'event'"><span class="c-1">{{ record.name }}</span><span class="t-12 c-3"> · {{ record.desc }}</span></template>
-            <span v-else-if="column.key === 'level'" :class="record.level === '紧急' ? 'tl-attention' : 'c-2'">{{ record.level }}</span>
+            <span v-else-if="column.key === 'level'" :class="record.level === '紧急' ? 'c-1 fw-600' : 'c-2'">{{ record.level }}</span>
             <a-checkbox v-else-if="column.key === 'inbox'" :checked="true" disabled />
             <a-tooltip v-else :title="enabledOf(column.key as ChannelId) ? reason : '渠道未启用'">
               <a-checkbox :checked="draft.routes[record.key].includes(column.key as ChannelId)" :disabled="readonly || !enabledOf(column.key as ChannelId)"
@@ -524,7 +562,7 @@ const fieldDis = computed(() => readonly.value);
             <a-form-item label="会话超时" extra="无操作超过该时长需重新登录"><a-select v-model:value="draft.security.sessionMinutes" class="st-w160" :options="[30, 60, 120, 240, 480].map((v) => ({ value: v, label: `${v} 分钟` }))" /></a-form-item>
             <a-form-item label="双因素认证" :extra="draft.security.mfa === '关闭' ? '' : '企业微信扫码或动态口令'">
               <a-radio-group v-model:value="draft.security.mfa" :options="['关闭', '仅管理员', '全部用户']" />
-              <div v-if="draft.security.mfa === '关闭'" class="t-12 tl-attention">不建议：管理员账号将没有第二重验证</div>
+              <div v-if="draft.security.mfa === '关闭'" class="t-12 c-2">不建议：管理员账号将没有第二重验证</div>
             </a-form-item>
           </div>
           <div class="st-sect">
@@ -555,15 +593,16 @@ const fieldDis = computed(() => readonly.value);
   <a-drawer :open="!!llmKey" :width="600" :title="llmConn ? `大模型连接 · ${llmConn.name}` : '新建大模型连接'" @close="closeLlm">
     <a-form layout="vertical" class="st-chform" :disabled="readonly">
       <div class="st-frow">
-        <a-form-item label="名称" required class="st-f2"><a-input v-model:value="lf.name" :maxlength="30" placeholder="例如：私有化 Qwen（问数）" /></a-form-item>
+        <a-form-item label="名称" required class="st-f2"><a-input v-model:value="lf.name" :maxlength="30" placeholder="例如：私有化 Qwen（问数）" @blur="touched.name = true" /></a-form-item>
         <a-form-item label="接口类型" class="st-f1"><a-select v-model:value="lf.kind" :options="LLM_KINDS.map((v) => ({ value: v }))" /></a-form-item>
       </div>
       <a-form-item label="部署方式"><a-radio-group v-model:value="lf.deploy" :options="['私有化部署', '公有云']" /></a-form-item>
-      <a-form-item label="地址" required extra="OpenAI 兼容接口的 Base URL，例如 http://10.20.8.15:8000/v1"><a-input v-model:value="lf.baseUrl" class="num" /></a-form-item>
-      <a-form-item label="模型名" required><a-input v-model:value="lf.model" class="num" placeholder="例如：qwen2.5-72b-instruct" /></a-form-item>
+      <a-form-item label="地址" required extra="OpenAI 兼容接口的 Base URL，例如 http://10.20.8.15:8000/v1"><a-input v-model:value="lf.baseUrl" class="num" @blur="touched.baseUrl = true" /></a-form-item>
+      <a-form-item label="模型名" required><a-input v-model:value="lf.model" class="num" placeholder="例如：qwen2.5-72b-instruct" @blur="touched.model = true" /></a-form-item>
+      <div v-if="!needKey && llmConn?.keyMask" class="t-12 c-2 st-ollama">Ollama 不需要密钥：点“确定”后会清除已保存的密钥 <span class="num">{{ llmConn.keyMask }}</span></div>
       <a-form-item v-if="needKey" label="密钥" :required="lf.changeKey">
         <template v-if="lf.changeKey">
-          <a-input-password v-model:value="lf.key" class="num" placeholder="粘贴 API Key" autocomplete="new-password" />
+          <a-input-password v-model:value="lf.key" class="num" placeholder="粘贴 API Key" autocomplete="new-password" @blur="touched.key = true" />
           <div class="t-12 c-3 st-keyhint">只在本次填写时可见；点“确定”后只保留末四位掩码，之后无法再查看明文。<a v-if="llmConn?.keyMask" @click="lf.changeKey = false; lf.key = ''">保留原密钥</a></div>
         </template>
         <div v-else class="st-keyrow"><span class="num c-2">{{ llmConn?.keyMask || '未设置' }}</span><a @click="lf.changeKey = true">更换密钥</a></div>
@@ -575,7 +614,8 @@ const fieldDis = computed(() => readonly.value);
       <a-form-item label="用途" required><a-checkbox-group v-model:value="lf.usages" :options="LLM_USAGES.map((u) => u.key)" /></a-form-item>
       <a-form-item label="状态"><a-switch v-model:checked="lf.enabled" checked-children="启用" un-checked-children="停用" /></a-form-item>
     </a-form>
-    <a-descriptions v-if="lfTest" size="small" :column="1" bordered class="st-desc" title="测试结果">
+    <div v-if="lfStale" class="st-stale t-12 c-2">配置已改动，需重新测试（地址、模型、密钥或接口类型变了，之前的测试结果不再有效，也不会写入连接）</div>
+    <a-descriptions v-else-if="lfTest" size="small" :column="1" bordered class="st-desc" title="测试结果">
       <a-descriptions-item label="结果"><span :class="lfTest.ok ? 'c-1' : 'tl-failed'">{{ lfTest.ok ? '连接正常' : `失败：${lfTest.msg}` }}</span></a-descriptions-item>
       <a-descriptions-item label="延迟"><span class="num">{{ lfTest.latencyMs }} ms</span></a-descriptions-item>
       <a-descriptions-item label="模型版本"><span class="num">{{ lfTest.version }}</span></a-descriptions-item>
@@ -584,9 +624,9 @@ const fieldDis = computed(() => readonly.value);
     <template #footer>
       <div class="st-foot">
         <a class="st-fl" :class="{ 'st-dis': readonly }" @click="!readonly && testForm()">{{ testing ? '测试中…' : '用当前填写测试' }}</a>
-        <span v-if="lfErrors.length && !readonly" class="t-12 tl-failed">{{ lfErrors[0] }}</span>
+        <span v-if="lfShownErrors.length && !readonly" class="t-12 tl-failed">{{ lfShownErrors[0] }}</span>
         <a-button @click="closeLlm">取消</a-button>
-        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || !!lfErrors.length || (!lfDirty && !!llmConn)" @click="applyLlm">确定</a-button></a-tooltip>
+        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || (lfTried && !!lfErrors.length) || (!lfDirty && !!llmConn)" @click="applyLlm">确定</a-button></a-tooltip>
       </div>
     </template>
   </a-drawer>
@@ -650,6 +690,8 @@ const fieldDis = computed(() => readonly.value);
 .st-use.def { border-color: var(--g7); color: var(--g9); font-weight: 600; }
 .st-llm2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; margin-top: 4px; }
 .st-w360 { width: 360px; }
+.st-stale { margin-top: 12px; padding: 8px 12px; background: var(--g2); border-radius: var(--radius); }
+.st-ollama { margin: -8px 0 16px; }
 .st-egress { display: flex; flex-direction: column; gap: 10px; }
 .st-egdesc { margin-top: 2px; }
 .st-mask { margin: 10px 0 0 24px; }
