@@ -803,6 +803,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 ### 11.3 还没接通（仍读 mock）
 
+完整的未完成清单、代码位置和接手步骤见 `backend/docs/backend/handoff/palantir.md`。
+
 | 页面操作 | 原因 |
 |---|---|
 | 动作类型“执行记录”和统计 | 数据在动态的 `/action-runs`（不归我） |
