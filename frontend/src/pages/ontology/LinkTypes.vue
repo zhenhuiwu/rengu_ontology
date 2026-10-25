@@ -138,8 +138,8 @@ const CARDS: Cardinality[] = ['N : 1', '1 : N', '1 : 1', 'N : M'];
 const CARD_OPTIONS = CARDS.map((k) => ({ value: k, label: `${k}（${CARD_API[k]}）` }));
 const OBJ_OPTIONS = LINK_OBJECTS.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）` }));
 
-const statusColor = (s: LinkStatus) => (s === '草稿' ? 'warning' : s === '已驳回' ? 'error' : 'default');
-const statusClass = (s: LinkStatus) => (s === '草稿' ? 'c-warning' : s === '已驳回' ? 'c-error' : 'c-3');
+const statusColor = (s: LinkStatus) => (s === '草稿' ? 'default' : s === '已驳回' ? 'error' : 'default');
+const statusClass = (s: LinkStatus) => (s === '草稿' ? 'c-3' : s === '已驳回' ? 'c-error' : 'c-3');
 /** 能解析出抽屉的对象类型（储值卡只在草稿里，没有对象详情） */
 const canRef = (id: string) => !!id && !objById(id)?.draft;
 const groupsOf = (id: string) => PATH_GROUPS
@@ -413,7 +413,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
             </a-descriptions-item>
             <a-descriptions-item label="目标对象">
               <template v-if="cur.to">
-                <ObjRef v-if="canRef(cur.to)" kind="object-type" :id="cur.to">{{ objName(cur.to) }}</ObjRef><template v-else>{{ objName(cur.to) }}<span class="c-warning">（草稿对象）</span></template>
+                <ObjRef v-if="canRef(cur.to)" kind="object-type" :id="cur.to">{{ objName(cur.to) }}</ObjRef><template v-else>{{ objName(cur.to) }}<span class="c-3">（草稿对象）</span></template>
                 <span class="c-3 num">（{{ objById(cur.to)?.api }}）</span>
               </template>
               <span v-else class="c-error">未选择</span>
@@ -450,7 +450,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
             <div class="lt-end">
               <span class="t-12 c-3">源对象</span>
               <span class="t-14 c-1">{{ objName(cur.from) }}</span>
-              <span class="t-12 c-3 num">{{ objById(cur.from)?.table }}</span>
+              <span class="t-12 c-3 num lt-tbl" :title="objById(cur.from)?.table">{{ objById(cur.from)?.table }}</span>
             </div>
             <div class="lt-arrow t-12 c-3">
               <span>{{ cur.name }} →</span>
@@ -460,7 +460,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
             <div class="lt-end">
               <span class="t-12 c-3">目标对象</span>
               <span class="t-14 c-1">{{ cur.to ? objName(cur.to) : '未选择' }}</span>
-              <span class="t-12 c-3 num">{{ objById(cur.to)?.table ?? '--' }}</span>
+              <span class="t-12 c-3 num lt-tbl" :title="objById(cur.to)?.table">{{ objById(cur.to)?.table ?? '--' }}</span>
             </div>
           </div>
           <div class="lt-sec t-14 fw-600">发布校验</div>
@@ -547,7 +547,8 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
               :data-source="g.examples" :pagination="false" size="small" row-key="q">
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'path'">
-                  <span :class="g.paths[record.path].links.includes(cur.id) ? 'c-1' : 'c-3'">{{ g.paths[record.path].links.map(linkName).join(' → ') }}</span>
+                  <span v-if="record.path < 0" class="c-warning">先追问用户选择路径</span>
+                  <span v-else :class="g.paths[record.path].links.includes(cur.id) ? 'c-1' : 'c-3'">{{ g.paths[record.path].links.map(linkName).join(' → ') }}</span>
                 </template>
               </template>
             </a-table>
@@ -587,7 +588,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
               <span v-else class="c-3">启用变更单前</span>
             </template>
             <template v-else-if="column.key === 'status'">
-              <span :class="record.status === '草稿' ? 'c-warning' : record.status === '已驳回' ? 'c-error' : record.status === '生效中' ? 'c-1' : 'c-3'">{{ record.status }}</span>
+              <span :class="record.status === '草稿' ? 'c-3' : record.status === '已驳回' ? 'c-error' : record.status === '生效中' ? 'c-1' : 'c-3'">{{ record.status }}</span>
             </template>
           </template>
         </a-table>
@@ -595,7 +596,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
       </div>
     </div>
   </div>
-  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="start" />
+  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" :title-placeholder="creating ? '例如：会员持有储值卡' : undefined" @ok="start" />
 </template>
 
 <style scoped>
@@ -629,7 +630,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
 .lt-form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
 .lt-form :deep(.ant-form-item) { margin-bottom: 12px; }
 .lt-ends { display: flex; align-items: stretch; gap: 8px; }
-.lt-end span { overflow-wrap: anywhere; }
+.lt-tbl { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lt-end { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border: var(--border); border-radius: var(--radius); min-width: 0; }
 .lt-arrow { width: 120px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .lt-check { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: var(--border); }

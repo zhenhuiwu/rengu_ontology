@@ -3,7 +3,7 @@
 import { computed, ref, watch } from 'vue';
 import { allDrafts } from './useDraftView';
 
-const props = defineProps<{ targetName: string }>();
+const props = defineProps<{ targetName: string; titlePlaceholder?: string }>();
 const open = defineModel<boolean>('open', { default: false });
 const emit = defineEmits<{ ok: [opts: { join?: string; title?: string }] }>();
 
@@ -12,7 +12,7 @@ const title = ref('');
 const desc = ref('');
 const join = ref<string>();
 const options = computed(() => allDrafts().map((d) => ({ value: d.id, label: `${d.id}　${d.title}（${d.owner}）` })));
-watch(open, (v) => { if (v) { mode.value = 'new'; title.value = `${props.targetName}：`; desc.value = ''; join.value = undefined; } });
+watch(open, (v) => { if (v) { mode.value = 'new'; title.value = props.titlePlaceholder ? '' : `${props.targetName}：`; desc.value = ''; join.value = undefined; } });
 const canOk = computed(() => (mode.value === 'new' ? title.value.trim().length > 0 : !!join.value));
 function ok() { emit('ok', mode.value === 'join' ? { join: join.value } : { title: title.value.trim() }); open.value = false; }
 </script>
@@ -29,7 +29,7 @@ function ok() { emit('ok', mode.value === 'join' ? { join: join.value } : { titl
         </a-radio-group>
       </a-form-item>
       <template v-if="mode === 'new'">
-        <a-form-item label="变更标题" required><a-input v-model:value="title" :maxlength="40" /></a-form-item>
+        <a-form-item label="变更标题" required><a-input v-model:value="title" :maxlength="40" :placeholder="titlePlaceholder" /></a-form-item>
         <a-form-item label="变更说明"><a-textarea v-model:value="desc" :rows="3" placeholder="为什么改、影响哪些指标和问数" /></a-form-item>
       </template>
       <a-form-item v-else label="变更单" required>
