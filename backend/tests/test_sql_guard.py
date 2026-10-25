@@ -881,3 +881,46 @@ def test_register_rejects_duplicate_object_type():
     # 同一张表重复登记（模块重新 import）不算冲突
     register_governed(g["store"])
     assert governed_tables() == before
+
+
+# ---- RowScope.prop / op 不合法 → DENY_ALL（缺字段、空串、非字符串都不 500）----
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"op": "=", "values": ["华东"]},  # 缺 prop
+        {"prop": "", "op": "=", "values": ["华东"]},
+        {"prop": "  ", "op": "=", "values": ["华东"]},
+        {"prop": None, "op": "=", "values": ["华东"]},
+        {"prop": 1, "op": "=", "values": ["华东"]},
+        {"prop": ["大区"], "op": "=", "values": ["华东"]},  # 不可哈希，不能拿去查映射
+        {"prop": "大区", "values": ["华东"]},  # 缺 op
+        {"prop": "大区", "op": None, "values": ["华东"]},
+        {"prop": "大区", "op": "", "values": ["华东"]},
+        "大区=华东",  # 整条不是 dict
+        None,
+    ],
+)
+def test_malformed_scope_prop_or_op_fail_closed(scope):
+    from app.common.row_filter import DENY_ALL, from_row_scope, valid_row_scope
+    from app.common.sql_guard import RoleAccess, effective_expr, scope_expr
+
+    g = _gov()
+    assert not valid_row_scope(scope)
+    assert from_row_scope(scope, {"大区": "big_region"}) == DENY_ALL
+    assert scope_expr(g["store"], [scope]) == DENY_ALL
+    assert scope_expr(g["product"], [scope]) == DENY_ALL
+    assert effective_expr("store", [RoleAccess(True, scopes=(scope,))]) == DENY_ALL
+    # 和合法范围 OR：坏的那条不贡献行，也不放宽
+    assert scope_expr(g["store"], [scope, _sc("大区", "华东")]) == {
+        "field": "big_region",
+        "op": "=",
+        "value": "华东",
+    }
+
+
+def test_valid_row_scope_accepts_frontend_shapes():
+    from app.common.row_filter import valid_row_scope
+
+    assert valid_row_scope({"objType": "store", "prop": "大区", "op": "=", "values": ["华东"]})
+    assert valid_row_scope({"prop": "大区", "op": "∈", "values": ("华东", "华南")})
+    assert valid_row_scope({"prop": "大区", "op": "in", "values": ["华东"]})

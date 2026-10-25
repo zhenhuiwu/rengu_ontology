@@ -363,14 +363,15 @@ def scope_expr(g: GovernedTable, scopes: Sequence[dict[str, Any]]) -> dict | Non
     OR 里它不贡献行，全都这样 → DENY_ALL。
     空列表 → None（不限制）。多个角色用 effective_expr 合并。
     """
-    from app.common.row_filter import DENY_ALL, combine_or, from_row_scope, valid_scope_values
+    from app.common.row_filter import DENY_ALL, combine_or, from_row_scope, valid_row_scope
 
     parts: list[dict] = []
     for sc in scopes:
-        prop = sc.get("prop")
-        if prop not in g.field_of_prop or not valid_scope_values(sc.get("values")):
+        # 先查结构（prop 可能是列表等不可哈希的值，不能直接拿去查 field_of_prop）
+        if not valid_row_scope(sc) or sc["prop"] not in g.field_of_prop:
             parts.append(dict(DENY_ALL))
             continue
+        prop = sc["prop"]
         alias = g.value_alias.get(prop, {})
         parts.append(
             from_row_scope({**sc, "values": [alias.get(v, v) for v in sc["values"]]}, g.field_of_prop)

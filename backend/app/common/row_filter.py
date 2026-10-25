@@ -235,14 +235,31 @@ def valid_scope_values(values: Any) -> bool:
     )
 
 
+def valid_row_scope(scope: Any) -> bool:
+    """一条 RowScope 结构上合法：是 dict；prop 是非空字符串；op 是正向 op；values 合法。
+
+    缺 prop / 空串 / 非字符串（None、数字、列表…）、缺 op 或非正向 op、values 不合法 → False，
+    调用方返回 DENY_ALL。
+    """
+    if not isinstance(scope, dict):
+        return False
+    prop = scope.get("prop")
+    return (
+        isinstance(prop, str)
+        and prop.strip() != ""
+        and scope.get("op") in POSITIVE_OPS
+        and valid_scope_values(scope.get("values"))
+    )
+
+
 def from_row_scope(scope: dict[str, Any], field_of_prop: dict[str, str] | None = None) -> dict:
     """前端 RowScope {prop, op, values} → 表达式 jsonb。prop 是显示名时用 field_of_prop 映射到字段名。
 
     前端 RowScope.op 只有正向的 '=' 和 '∈'（roles.ts L12/L49；'in' 视同 '∈'）。
     其它 op（≠、not in、拼错的…）→ DENY_ALL（宁严勿宽；全 OR 合并只在正向 op 下成立）。
-    values 不合法（见 valid_scope_values）→ DENY_ALL。
+    结构不合法（见 valid_row_scope：缺 / 空 / 非字符串 prop、缺 op、values 不合法）→ DENY_ALL。
     """
-    if scope.get("op") not in POSITIVE_OPS or not valid_scope_values(scope.get("values")):
+    if not valid_row_scope(scope):
         return dict(DENY_ALL)
     field = (field_of_prop or {}).get(scope["prop"], scope["prop"])
     values = list(scope["values"])

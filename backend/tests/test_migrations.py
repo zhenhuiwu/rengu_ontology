@@ -1,4 +1,6 @@
-"""迁移约定（CONVENTIONS §16）：线性单 head、模块 revision 命名、升 → 降到 base → 再升。"""
+"""迁移约定（CONVENTIONS §16）：线性单 head、模块 revision 命名、
+升 → 降到 base（不留表和自定义类型）→ 再升。
+"""
 
 import asyncio
 import re
@@ -14,6 +16,24 @@ from sqlalchemy.engine import make_url
 from tests.conftest import BASE_URL
 
 SKELETON = {"0001", "0002", "0003"}
+
+# public 下用户定义的类型：enum(e) / 复合(c，只算 CREATE TYPE … AS，不算表的行类型) /
+# domain(d) / range(r, m)。
+# 不算数组类型（某类型的 typarray）和扩展自带的类型（如 vector，扩展不随 downgrade 删）。
+CUSTOM_TYPES_SQL = """
+SELECT t.typname, t.typtype::text AS typtype
+FROM pg_type t
+JOIN pg_namespace n ON n.oid = t.typnamespace
+LEFT JOIN pg_class c ON c.oid = t.typrelid
+WHERE n.nspname = 'public'
+  AND t.typtype IN ('e', 'c', 'd', 'r', 'm')
+  AND (t.typtype <> 'c' OR c.relkind = 'c')
+  AND NOT EXISTS (SELECT 1 FROM pg_type el WHERE el.typarray = t.oid)
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend d
+    WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
+  )
+"""
 MODULE_REV = re.compile(r"^[a-z_]+_\d{4}$")
 
 
@@ -53,6 +73,14 @@ async def test_upgrade_downgrade_base_upgrade_on_temp_db():
             make_url(BASE_URL).set(drivername="postgresql", database=db).render_as_string(hide_password=False)
         )
 
+        async def custom_types() -> set[tuple[str, str]]:
+            conn = await asyncpg.connect(plain)
+            try:
+                rows = await conn.fetch(CUSTOM_TYPES_SQL)
+                return {(r["typname"], r["typtype"]) for r in rows}
+            finally:
+                await conn.close()
+
         async def state() -> tuple[int, str | None]:
             conn = await asyncpg.connect(plain)
             try:
@@ -70,10 +98,30 @@ async def test_upgrade_downgrade_base_upgrade_on_temp_db():
         await asyncio.to_thread(command.upgrade, cfg, "head")
         tables, ver = await state()
         assert tables > 0 and ver == head
+        types = await custom_types()
         await asyncio.to_thread(command.downgrade, cfg, "base")
         assert await state() == (0, None)  # 每个 downgrade 都真把表删干净
+        assert (
+            await custom_types() == set()
+        )  # 也不留 enum / 复合类型 / domain（op.drop_table 不会顺带删 enum）
         await asyncio.to_thread(command.upgrade, cfg, "head")
         assert await state() == (tables, head)
+        assert await custom_types() == types
+
+        # 查询本身的自检：能看见 enum / 复合类型 / domain，不把表行类型、数组类型算进去
+        conn = await asyncpg.connect(plain)
+        try:
+            await conn.execute(
+                "CREATE TYPE _probe_enum AS ENUM ('a'); CREATE TYPE _probe_comp AS (x int);"
+                " CREATE DOMAIN _probe_dom AS text CHECK (VALUE <> ''); CREATE TABLE _probe_tbl (x int)"
+            )
+        finally:
+            await conn.close()
+        assert await custom_types() - types == {
+            ("_probe_enum", "e"),
+            ("_probe_comp", "c"),
+            ("_probe_dom", "d"),
+        }
     finally:
         await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)
         await admin.execute(f'DROP DATABASE IF EXISTS "{db}"')

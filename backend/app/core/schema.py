@@ -64,7 +64,7 @@ DateTimeSec = Annotated[
 ]
 DisplayDate = Annotated[date, PlainSerializer(lambda d: d.isoformat(), return_type=str, when_used="json")]
 
-# 旧名（a30beb6），保留兼容
+# 旧名（团队 master 6bb9c84），保留兼容
 DisplayDateTime = DateTimeMin
 DisplayDateTimeSec = DateTimeSec
 

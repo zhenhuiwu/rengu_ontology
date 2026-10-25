@@ -386,6 +386,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 - **历史保持线性、只有一个 head**：
   - 后合并的一方负责 rebase：在一个后续提交里把自己第一个迁移的 `down_revision` 改成当前 head。
   - 不写 merge 迁移，不用 `branch_labels`。
+  - 一个人负责多个模块时，也按模块分开写迁移（每个模块各自的 `<模块>_<NNNN>`，不合成一个），在自己的分支里线性串起来，如 `integration_0001` → `action_0001` → `event_0001`；其中第一个的 `down_revision` 设为当前 head，后面的依次指向前一个。
 - **只动自己的表**：
   - 模块的迁移只建 / 改本模块的表。
   - 指向别的模块表的外键：只有对方已经合并（在链上更早）才能建。否则先按编号（code）软引用，等对方合并后在后面的迁移里补外键。
