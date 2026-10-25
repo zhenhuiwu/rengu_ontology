@@ -64,7 +64,7 @@ async function runAction() {
     tag: '待确认',
     target: '客户群 · 华东大区 · 近 60 天未复购',
     fields: [
-      { label: '动作类型', value: '发放复购召回优惠券 v2' },
+      { label: '动作类型', value: '发放复购召回优惠券 v3' },
       { label: '参数', value: '面额 ¥30，满 ¥199 可用，有效期 14 天' },
       { label: '影响', value: '3,812 位客户（已排除 30 天内已领券 214 人）' },
       { label: '预算', value: '营销预算 -¥114,360' },

@@ -212,7 +212,7 @@ const TL_EVENTS: [TlStatus, string, string][] = [
   [undefined, '动作成功：发放复购召回优惠券', '王敏 发起 · 赵磊 审批'],
   ['error', '动作失败：门店调价', '王敏 发起 · 用友 ERP 返回 500'],
   [undefined, '规则命中：库存低于安全线', '事件「缺货」· 系统'],
-  ['unknown', '发放复购召回优惠券', '规则自动发起 · CRM 超时'],
+  ['unknown', '发放复购召回优惠券', '规则 R-027 暂存 · 吴佳 确认 · CRM 超时'],
   [undefined, '动作成功：补货申请', '陈杰 发起'],
 ];
 const fmtTime = (t: number) => {
@@ -272,8 +272,6 @@ export function objActions(kind: string, id: string): ObjAction[] {
     const s = storeById(id);
     const closed = s?.status === '已闭店';
     return [
-      { key: 'coupon', name: '发放复购召回优惠券', desc: '该店 60 天未复购会员 · 约 1,200 位', fields: [{ label: '券模板', value: '复购召回券 20 元' }, { label: '人群', value: '常去门店为本店、60 天未复购的会员' }], impact: '向约 1,200 位会员发券', approver: '赵磊', blocked: closed ? '已闭店门店不能发券' : undefined },
-      { key: 'replenish', name: '补货申请', desc: '该店低于安全线的 6 个商品', fields: [{ label: '商品', value: '低于安全线的 6 个商品' }, { label: '发货仓', value: '默认区域仓' }], impact: '生成补货单，提交给区域仓', blocked: closed ? '已闭店门店不能补货' : undefined },
       { key: 'status', name: '变更门店状态', desc: `当前：${s?.status ?? '--'}`, fields: [{ label: '调整为', value: s?.status === '营业中' ? '装修中' : '营业中' }], impact: '写回门店主数据，影响线上门店可见性', irreversible: true, approver: '赵磊' },
     ];
   }
