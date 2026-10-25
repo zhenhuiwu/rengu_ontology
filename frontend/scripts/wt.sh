@@ -8,7 +8,7 @@
 set -euo pipefail
 MAIN=/workspace/ui-vue
 WT=/workspace/ui-vue-wt
-declare -A PORT=([pde]=5291 [static]=5292 [dynamic]=5293 [qa]=5294 [palantir]=5295)
+declare -A PORT=([pde]=5286 [static]=5282 [dynamic]=5283 [qa]=5284 [palantir]=5285)
 cmd=${1:-}; name=${2:-}
 cur_branch() { git rev-parse --abbrev-ref HEAD; }
 start_dev() {
