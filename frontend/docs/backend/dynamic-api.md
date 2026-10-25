@@ -36,7 +36,34 @@
 
 ### 1.2 表与字段
 
-库内状态值统一存英文码；**接口返回前端 mock 原值**（对照见 1.3）。时间一律 `timestamptz`，mock 字符串为北京时间。
+库内状态值统一存英文码；**接口返回前端 mock 原值**（对照见 1.3）。时间一律 `timestamptz`，mock 字符串为北京时间；接口格式见 1.3「时间字段」。
+
+**表规范** [已定：PDE]：
+- 表名 snake_case、单数业务名词，**不加模块前缀**；只有撞关键字或有歧义时才加限定词。
+- **单列主键** + 业务键唯一约束；mock 里的复合键一律改成这样（下面 rule、lifecycle 系列已改）。
+- **可变表**都带 `created_at, updated_at, created_by, is_seed, lock_version`（下面各表不再重复列出）。
+- **只追加表**（日志、版本、命中、事件：alert_log、action_run_log、rule_version、rule_hit、lifecycle_version、lifecycle_state、lifecycle_transition、lifecycle_change）只带 `created_at, created_by, is_seed`，**没有 `lock_version`、没有软删除**。
+- **软删除**只在前端有删除 / 恢复的地方用；动态页面没有（生命周期「删除迁移 / 删除状态」是 CR 草稿里的改动，落在 cr_item），所以动态的表都不软删。
+
+| 表 | 类型 | 主键 | 业务唯一键 |
+|---|---|---|---|
+| alert | 可变 | `id`（AL-…） | — |
+| alert_log | 只追加 | `id` bigint | — |
+| rule | 可变（当前发布版） | `id`（R-007） | — |
+| rule_version | 只追加 | `id` bigint | `(rule_id, version)` |
+| rule_hit | 只追加 | `id`（告警编号或 HIT-…） | — |
+| action_run | 可变 | `id`（ACT-…） | `idem_key WHERE NOT is_seed`（部分唯一） |
+| action_run_log | 只追加 | `id` bigint | — |
+| scenario | 可变 | `id`（SCN-…） | — |
+| scenario_result | 可变（每次运行覆盖） | `scenario_id` | — |
+| scenario_impact | 可变（随结果覆盖） | `id` bigint | `(scenario_id, sku, store_id)` |
+| lifecycle | 可变（当前生效版） | `id` = 对象类型 id（order） | — |
+| lifecycle_version | 只追加 | `id` bigint | `(lifecycle_id, version)` |
+| lifecycle_state | 只追加（随版本） | `id` bigint | `(lifecycle_version_id, key)` |
+| lifecycle_transition | 只追加（随版本） | `id` bigint | `(lifecycle_version_id, code)`（code = T1…） |
+| lifecycle_change | 只追加 | `id` bigint | — |
+
+回放试跑（`replay()`）只算不存，没有表。
 
 **alert**
 
@@ -55,15 +82,14 @@
 | assignee | varchar null | 未认领为空 |
 | close_reason | text | 关闭必填 |
 | action_run_id FK null | varchar | 关联动作（`actionRef`，按 `source.alertId` 匹配最近一条） |
-| lock_version | int | 乐观锁 |
 
 **alert_log**：`id, alert_id FK, at, actor（'系统' 或用户）, op（created/claim/transfer/close/start_action/action_result）, text, from_status, to_status, abnormal bool`。
 
-**rule**（按 `(id, version)` 存已发布版本；草稿在 cr_item）
+**rule**（每条规则一行，存当前已发布版本；每个已发布版本的快照存只追加表 `rule_version`，唯一键 `(rule_id, version)`；草稿在 cr_item）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| id, version PK | varchar, int | `R-007` v3；版本整数 |
+| id PK, version | varchar, int | `R-007`；当前版本整数 v3 |
 | name, desc, owner | varchar | |
 | status | varchar | `published/changing/disabled` = 已发布/变更中/已停用；列表显示的「草稿中/审核中」由所在 CR 状态推导（`ruleStatus()`） |
 | core | bool | 5 条核心规则（产生告警）|
@@ -106,7 +132,6 @@
 | retry_of, retried_as | varchar FK | 重新提交链 |
 | withdraw_reason | text | 撤回原因（`reject_reason`、`rejected_at` 只在 `[推断 P2]` 采纳时加） |
 | submitted_at, confirmed_at, approved_at, finished_at | timestamptz | |
-| lock_version | int | |
 
 > `action_run` **只由动态写**。自动查询计数和下次查询时间不在本表，存 reconcile 模块的 `reconcile_task`（`tries`、`round`、`manual`、`next_at`、`state`），详情接口关联读取 [已定：本体小白]。
 > 索引：`(status, source_type, action_type_id, sys_id, submitted_at desc)`；关键词（编号、对象、幂等键、外部单号、告警号、规则号、会话号）用 pg_trgm。
@@ -116,12 +141,13 @@
 
 **scenario**：`id PK（SCN-0018）, name, owner, created_at, base_release（baseVer v2026.10.3）, status（draft/running/done/failed = 草稿/运行中/已完成/失败）, scope jsonb {area, category, weeks∈4|8|12}, drivers jsonb {pricePct −20~+10, replenishPct −30~+50, safetyDays 3~14, promo 无/满减/折扣/会员券, promoDepth 0~30, promoWeeks 0~4}, fail_reason, staged_action_ids text[], lock_version`。
 
-**scenario_result**：`scenario_id PK, ran_at, scope_snapshot, drivers_snapshot, weeks[], base_sales[], sales[], base_margin[], margin[], kpis jsonb[{key,label,unit,base,value,better}]`；**scenario_impact**：`scenario_id, sku, name, category, store_id, store_name, base_sales, sales, stockout_base, stockout, suggest`（分页读）。
+**scenario_result**：`scenario_id PK, ran_at, scope_snapshot, drivers_snapshot, weeks[], base_sales[], sales[], base_margin[], margin[], kpis jsonb[{key,label,unit,base,value,better}]`；**scenario_impact**：`id PK, scenario_id, sku, name, category, store_id, store_name, base_sales, sales, stockout_base, stockout, suggest`（分页读）。
 
-**lifecycle**：`object_type_id, version PK, field, owner, updated_at, rule_id（校验非法迁移的规则，如 SM-ORD）, desc, release, change_note, status（生效中/已替代）, undo jsonb`。
-**lifecycle_state**：`object_type_id, version, key PK, name, kind（initial/middle/final = 初始/中间/终态）, desc, sla, x, y（画布坐标）`；`count` 为统计值，不入定义表 [推断：按对象状态实时聚合]。
-**lifecycle_transition**：`object_type_id, version, id PK（T1…）, from_state, to_state, trigger（event/action/system/manual = 事件/动作/系统/人工）, by, event_type_id, action_type_id, guard, effect`；`weekly`（近 7 天次数）为统计值。
-**lifecycle_change**：`id, object_type_id, at, obj_id, obj_label, from_state, to_state, transition_id null（null=非法）, by, alert_id`。
+**lifecycle**：`id PK（= 对象类型 id，如 order）, version（当前生效）, field, owner, updated_at, rule_id（校验非法迁移的规则，如 SM-ORD）, desc`。
+**lifecycle_version**（只追加）：`id PK, lifecycle_id, version, at, by, change, release, status（active/superseded = 生效中/已替代）, undo jsonb, snapshot jsonb（= lifecycleAsOf）`；字段对 mock `LcVersion` 的 `ver, at, by, change, release, status, undo`，唯一 `(lifecycle_id, version)`。
+**lifecycle_state**：`id PK, lifecycle_version_id, key, name, kind（initial/middle/final = 初始/中间/终态）, desc, sla, x, y（画布坐标）`，唯一 `(lifecycle_version_id, key)`；`count` 为统计值，不入定义表 [推断：按对象状态实时聚合]。
+**lifecycle_transition**：`id PK, lifecycle_version_id, code（T1…，唯一 `(lifecycle_version_id, code)`）, from_state, to_state, trigger（event/action/system/manual = 事件/动作/系统/人工）, by, event_type_id, action_type_id, guard, effect`；`weekly`（近 7 天次数）为统计值。
+**lifecycle_change**：`id PK, lifecycle_id, at, obj_id, obj_label, from_state, to_state, transition_code null（T1…；null=非法）, by, alert_id`。
 
 ### 1.3 库内值 ↔ 接口值 [已定：PDE]
 
@@ -145,7 +171,27 @@
 | 字段名（动作，两份 mock 不同） | `action_type_id`；`params_text`；`elapsed_ms / result_code / retry_count` | 统一响应类型 `ActionRun` 同时返回 `typeId` 和 `action`（中文动作名）、`params` 和 `summary`（同值 = `params_text`）、`ms / code / retries`（ACTIONS 来源为 null），各页按原字段读，不用改前端 | `ActionRecord`、`actionEvent.ts` `ActionRun` |
 | 字段名（告警） | `rule_id, obj_kind, obj_id, obj_label, store_id, store_label, triggered_at, data_cutoff` | `ruleId, objKind, objId, objLabel, storeId, storeLabel, triggeredAt, cutoff` | `Alert` |
 
-时间：库内 `timestamptz`；接口按 PDE 公共约定返回带 `+08:00` 的 ISO 8601，前端格式化回 mock 原样。
+**时间字段** [已定：PDE]：库内一律 `timestamptz`；**接口按每个字段的 mock 格式返回**（北京时间，不带时区）。默认 `YYYY-MM-DD HH:mm`，**只有 mock 带秒的字段才带秒**。下表格式是用 esbuild 打包 `src/mock/*`、在 Node 里逐条读导出值和派生函数结果核出来的（所有行格式一致）：
+
+| 接口字段 | 库内列 | 格式 | mock 出处 |
+|---|---|---|---|
+| alert `triggeredAt` | `alert.triggered_at` | `YYYY-MM-DD HH:mm:ss` | `dynamic.ts` `ALERTS`（`hitsOf()[].alert` 同） |
+| alert `cutoff` | `alert.data_cutoff` | `YYYY-MM-DD HH:mm` | `ALERTS` |
+| alert `log[].time` | `alert_log.at` | `YYYY-MM-DD HH:mm:ss` | `alertTimeline()`、`Alerts.vue` 关联动作行（= 动作 `submittedAt`） |
+| 动作 `submittedAt` | `action_run.submitted_at` | `YYYY-MM-DD HH:mm:ss` | `actions.ts` `ACTIONS` |
+| 动作 `log[].time` | `action_run_log.at` | `YYYY-MM-DD HH:mm:ss` | `ACTIONS[].log`（`buildLog()`） |
+| 执行记录 `at`（动作类型页） | `action_run.submitted_at` | `YYYY-MM-DD HH:mm:ss` | `actionEvent.ts` `runsOf()` |
+| 执行日统计 `date` | — | `MM-DD` | `runDaily()` |
+| 命中 `at` | `rule_hit.at` | `YYYY-MM-DD HH:mm:ss` | `rules.ts` `hitsOf()`；回放 `replay().samples[].at` 同 |
+| 规则版本 `at` | `rule_version.published_at` | `YYYY-MM-DD HH:mm` | `ruleVersions()` |
+| 方案 `createdAt` | `scenario.created_at` | `YYYY-MM-DD HH:mm:ss` | `scenarios.ts` `SCENARIOS` |
+| 方案 `result.ranAt` | `scenario_result.ran_at` | `YYYY-MM-DD HH:mm:ss` | `SCENARIOS[].result`（`simulate()`） |
+| 生命周期 `updatedAt` | `lifecycle.updated_at` | `YYYY-MM-DD HH:mm` | `lifecycle.ts` `LIFECYCLES` |
+| 生命周期版本 `versions[].at` | `lifecycle_version.at` | `YYYY-MM-DD HH:mm` | `LIFECYCLES[].versions`（`lifecycleAsOf(id, at)` 的 `at` 同） |
+| 状态变化 `at` | `lifecycle_change.at` | `YYYY-MM-DD HH:mm:ss` | `changesOf()` |
+| 近 7 天起点 | — | `YYYY-MM-DD` | `lifecycle.ts` `SINCE_7D` |
+
+`RULE_DEFS` 本身没有时间字段。`confirmed_at`、`approved_at`、`finished_at` 前端只出现在日志文本里，没有独立字段；以后要返回时按默认 `YYYY-MM-DD HH:mm`。查询参数里的时间也按对应字段的格式收。
 
 ## 2. 核心链路
 
@@ -183,7 +229,7 @@ stateDiagram-v2
 | 外部成功 | 动态（依据 `submit` 返回） | — | → succeeded，写 `ext_ref` |
 | 失败 | 动态（依据 `submit` 返回；重试在 Palantir 适配器内） | **照前端**：外部明确返回失败（如 `NC-2071 供货仓可用库存不足`）时，用同一幂等键按 `ext_system.maxRetry` 自动重试（按 `extsys.ts` 各系统 `maxRetry`，如 CRM/ERP/OMS 3 次 1s/2s/4s、WMS 2 次 3s/6s，不支持幂等的短信 0 次），仍失败 → 失败；log「明确返回失败，已自动重试 N 次仍失败」（`actions.ts` `buildLog`、`extsys.ts` `retry`）[已定]。「明确业务错误不重试」见 `[推断 P1]` | → failed，写 `fail_reason`（外部错误码原文）、`retry_count` |
 | 超时 | 动态（依据 `submit` 返回结果未知；超时判定在 Palantir 适配器） | 超过 `ext_system.timeoutMs`（CRM/OMS 5 秒、ERP 10 秒…） | → unknown；**绝不重试写入**；log「N 秒未返回结果，标记为结果未知（不重试写入）」 |
-| 自动查询 | Palantir 对账任务（调度见 2.7），动态只接回调 | status=unknown | 每 15 分钟调 `query_by_key`，**最多 3 次**（返回「查无」也算一次）[已定]；3 次仍无法确认 → 停止自动查询，log「转人工对账」。查到结果 → Palantir 回调 `on_reconciled(action_run_id, 结果)`，动态改为 reconciled（外部已处理 → `succeeded`，外部未处理 → `not_executed`）。**查到也转「已对账」，不转「成功」** [已定]。结果为外部已处理时，**由动态提交本体修改并发 `ActionExecuted` 事件** [已定：动态本体负责人、Palantir专家] |
+| 自动查询 | Palantir 对账任务（调度见 2.7），动态只接回调 | status=unknown | 每 15 分钟调 `query_by_key`，**最多 3 次**（返回「查无」也算一次）[已定]；3 次仍无法确认 → 停止自动查询，log「转人工对账」。查到结果 → Palantir 回调 `on_reconciled(action_run_id, 结果)`，动态改为 reconciled，`reconcile_result` = `succeeded` 或 `not_executed`（接口 `reconcile` = 外部已成功 / 外部未执行，见 1.3）。**查到也转「已对账」，不转「成功」** [已定]。结果为 `succeeded` 时，**由动态提交本体修改并发 `ActionExecuted` 事件** [已定：动态本体负责人、Palantir专家] |
 | 人工对账 | 任何人（前端不校验操作人；mock 记对账人 = 当前用户）；限定操作人见 `[推断 P6]` | status=unknown；结论必选、说明必填 | 外部已成功 / 外部未执行 → reconciled（`reconcile_result` 分别为 `succeeded/not_executed`）；选外部已成功时**由动态提交本体修改并发 `ActionExecuted`** [已定]；对账前先按幂等键查一次见 `[推断 P7]`；仍无法确认 → 保持 unknown、log，**再自动查 3 轮**（通知 Palantir 重排 `reconcile_task`，计数清零）[已定] |
 | 重新提交 | 任何人（前端只校验状态）；限定操作人见 `[推断 P6]` | **只限 status=failed** 且 `retried_as` 为空（`Actions.vue` L143）；**不可逆**确认卡。已对账·外部未执行**不能重新提交**，后台返回 `ACTION_STATE_INVALID`，按前端提示「如仍需执行请重新发起」（L205）新建动作（新 run、新幂等键） | 新 `action_run`（`Actions.vue` L162）：新 id、幂等键 `{原键去掉 -rN}-r{N+1}`、`retry_of=原 id`、`status=executing`、`initiator=当前操作人`；来源为告警/规则的保留原 source、清空 `source.confirmer`，来源为问数/手动/推演的一律改为 `手动`；沿用原审批（不再确认、不再审批），然后调 `submit`；原记录写 `retried_as`、log「已重新提交为 X」，状态仍为失败 |
 
@@ -290,7 +336,7 @@ stateDiagram-v2
 |---|---|---|
 | `submit(action_run_id, idempotency_key)` | 动态 → Palantir | 审批通过（或免审确认）后调用。同步返回 `成功 / 失败 / 结果未知` + 外部回执号 `ext_ref` + 返回码；动态据此改 succeeded / failed / unknown。重试和超时判定都在 Palantir 适配器内，口径照前端：超时 = 结果未知、**不重试**；外部明确失败 = 同一幂等键按 maxRetry 自动重试，仍失败 = 失败 [已定]。Palantir 提的「明确业务错误不重试、只重试网络错误/限流/5xx」见 `[推断 P1]` |
 | `query_by_key(idempotency_key)` | Palantir 对账任务内部用 | 定时对账按幂等键查询；「查无」算一次 [已定]。人工对账前由动态主动调一次见 `[推断 P7]` |
-| `on_reconciled(action_run_id, 结果)` | Palantir → 动态 | 定时对账查到结论时回调，结果 ∈ 外部已处理 / 外部未处理；动态改为 reconciled + `reconcile_result`；外部已处理时**动态提交本体修改并发 `ActionExecuted`**（人工对账选「外部已成功」同样处理）[已定]。Palantir 不直接写 `action_run.status` |
+| `on_reconciled(action_run_id, 结果)` | Palantir → 动态 | 定时对账查到结论时回调，结果 ∈ `succeeded` / `not_executed`（接口值 外部已成功 / 外部未执行，见 1.3）；动态改为 reconciled + `reconcile_result`；`succeeded` 时**动态提交本体修改并发 `ActionExecuted`**（人工对账选「外部已成功」同样处理）[已定]。Palantir 不直接写 `action_run.status` |
 
 - `action_run`、`action_run_log` 只由动态写。`writeback_call`、`ext_system`（integration 模块）和 `reconcile_task`（reconcile 模块，含 `tries`、`round`、`manual`、`next_at`）归 Palantir，动态只读。
 - 动态负责 `action_run` 的状态流转、幂等键生成（暂存时）、重新提交（新 run + 新键 `-rN`）、人工对账，以及对账成功后提交本体修改、发 `ActionExecuted`。
@@ -372,7 +418,27 @@ stateDiagram-v2
 
 ## 5. 种子数据方案
 
-原则：**不手抄数据**，直接执行前端 mock 模块导出 JSON 再入库，保证后台返回的数据与前端现在显示的一模一样。按 PDE 约定：统一由 `npm run export-mock` 把 `src/mock/*` 原样导出到 `backend/seeds/json/<模块>/`（时间保持北京时间原值），动态各模块（alerts / actions / rules / scenarios / lifecycle）的 Python seed 放在 `backend/app/modules/<模块>/seeds/`，读这里的 JSON，由统一的 `make seed` 按下表写表，不各自跑 tsx。
+原则：**不手抄数据**，直接执行前端 mock 模块导出 JSON 再入库，保证后台返回的数据与前端现在显示的一模一样。按 PDE 约定：统一由 `npm run export-mock` 把 `src/mock/*` 原样导出到 `backend/seeds/json/<分组>/<导出名>.json`，派生函数到 `<分组>/derived/<函数名>.json`（时间保持北京时间原值）。分组照 `scripts/export-mock.mjs` 的 `MODULES`：**dynamic** = `dynamic.ts`、`actions.ts`、`rules.ts`、`lifecycle.ts`、`scenarios.ts`；**action** = `actionEvent.ts`（动态只用其中的 `runsOf`）。动态各模块（alerts / actions / rules / scenarios / lifecycle）的 Python seed 放在 `backend/app/modules/<模块>/seeds/`，读这里的 JSON，由统一的 `make seed` 按下表写表，不各自跑 tsx。
+
+
+**导出文件 → 表** [已定：PDE]：
+
+| 导出文件（`backend/seeds/json/` 下） | 写入表 | 说明 |
+|---|---|---|
+| `dynamic/ALERTS.json` | alert | |
+| `dynamic/derived/alertTimeline.json` + `dynamic/derived/alertActionLink.json` | alert_log | 450 + 5 = 455 行，组内按时间排 |
+| `dynamic/RULES.json` + `dynamic/RULE_DEFS.json` | rule | 两份合并，见下表 |
+| `dynamic/derived/ruleVersions.json`（+ `ruleVersions.draft.json` 的草稿版本） | rule_version（草稿版本 → cr_item） | |
+| `dynamic/derived/hitsOf.json` | rule_hit | |
+| `dynamic/RULE_DRAFTS.json` | cr_item / cr_target | 与静态共用 CR 表 |
+| `dynamic/ACTIONS.json`（含 `log`） | action_run、action_run_log | `dynamic/derived/buildLog.json` 只作核对 |
+| `action/derived/runsOf.json` | action_run、action_run_log | 与 ACTIONS 合并，见约束 5 |
+| `dynamic/SCENARIOS.json`（含 `result`） | scenario、scenario_result、scenario_impact | `derived/simulate.json`、`derived/stagePlanOf.json` 只作核对 |
+| `dynamic/LIFECYCLES.json` | lifecycle、lifecycle_version、lifecycle_state、lifecycle_transition | |
+| `dynamic/derived/lifecycleAsOf.json` | lifecycle_version.snapshot | |
+| `dynamic/derived/changesOf.json` | lifecycle_change | 246 条 |
+| `dynamic/derived/illegalOf.json`、`dynamic/derived/storeOfKey.json` | — | 只作核对 |
+| `dynamic/PEOPLE.json` | —（`GET /people` 直接返回，过渡用） | **只用 `mock/dynamic.ts` 的 `PEOPLE`**；`actions.ts` L95 有一份相同的私有副本（不导出），不用管 |
 
 | mock 文件 / 导出 | 写入表 | 当前条数（master `5fb26ab` 实跑） | 注意 |
 |---|---|---|---|
@@ -380,7 +446,7 @@ stateDiagram-v2
 | `dynamic.ts` `ALERTS`（含 `fillHistory` 补的历史告警、`storeOfKey` 补的门店） | alert | 154（待处理 4、处理中 4、已解决 115、已忽略 31） | 随机数有固定种子，结果稳定 |
 | `dynamic.ts` `alertTimeline()` + `Alerts.vue` 关联动作行 | alert_log | **455 行** = 派生 `alertTimeline`（450）+ `alertActionLink`（5 行：未关闭且有关联动作的告警）| 两份合并后按每条告警内时间升序排（与 `Alerts.vue` L27 `log.sort` 一致）再入库 |
 | `rules.ts` `RULE_DEFS` | rule（当前版本） | 16 | |
-| `rules.ts` `ruleVersions()` | rule（历史版本行，只有元数据） | 每条规则 version 行 | 历史版本的条件内容 mock 没有 [待定] |
+| `rules.ts` `ruleVersions()` | rule_version（只有元数据） | 每条规则 version 行 | 历史版本的条件内容 mock 没有 [待定] |
 | `rules.ts` `RULE_DRAFTS` + `useDraftView` TARGETS | cr_item / cr_target（R-007 在 CR-0011） | 1 | 与静态共用 CR 表 |
 | `rules.ts` `hitsOf(ruleId)` 全部规则 | rule_hit | 1186 | 核心规则命中 = 告警 + 合成的「已去重」；其余为已通知/已去重 |
 | `actions.ts` `ACTIONS`（含 `buildLog`） | action_run、action_run_log | 141（待确认 25、审批中 7、执行中 4、失败 11、结果未知 20、成功 58、已撤回 5、已对账 11；来源 规则 33、问数 72、手动 36） | 幂等键、编号已由 build 算好，原样入库；`RULE_CONFIRMER` 写 confirmer |
@@ -464,7 +530,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | C7 | 跳到重提后的新动作 / 原动作 | retried_as / retry_of 存在 | `GET /action-runs/{id}` | — |
 | C8 | 审批通过 | （前端无按钮） | `:approve` | 审批中 → 执行中；动态调 Palantir `submit` 并写 action_run |
 | C9 | 外部结果回写 | 系统 | Palantir `submit` 同步返回（明确失败同键按 maxRetry 重试；超时不重试） | 动态写：执行中 → 成功/失败/结果未知 |
-| C10 | 自动查询 | 系统，每 15 分钟，最多 3 次 | Palantir 对账任务轮询（「查无」算一次），查到后回调 `on_reconciled` | 动态写：结果未知 → 已对账；外部已处理时提交本体修改并发 `ActionExecuted` / 3 次后转人工 [已定] |
+| C10 | 自动查询 | 系统，每 15 分钟，最多 3 次 | Palantir 对账任务轮询（「查无」算一次），查到后回调 `on_reconciled` | 动态写：结果未知 → 已对账；`reconcile_result=succeeded` 时提交本体修改并发 `ActionExecuted` / 3 次后转人工 [已定] |
 
 ### 6.3 规则与自动化 `/build/ontology/rules`
 
@@ -534,7 +600,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 16. **规则历史版本内容**：mock 只有版本元数据，回滚需要完整历史定义，是否按版本存全量。
 17. 【已定，本体小白（更正）、Palantir专家】**种子环境的外部调用**：开发 / 测试环境适配器统一走 mock，按种子状态原样返回；对账任务照常跑但打不到真实系统，20 条结果未知入库后保持结果未知。mock **没有** `next_query_at`，20 条的日志已是「自动查询 3 次 … 转人工对账」，种子写 `reconcile_task(tries=3, state=manual, next_at=null)`（见第 5 节约束 3）。种子环境「现在」= 2026-10-25 15:42（北京时间，骨架 `now()`）。
 19. 【已定，Palantir专家、PDE、本体小白】**执行记录种子**：`actions.ts` 与 `actionEvent.ts`（导出在 `backend/seeds/json/action/derived/runsOf.json`）的执行记录由动态统一 seed，按 id 合并进 `action_run`，不改任何 mock 值；31 个重复幂等键原样保留（`is_seed` + 部分唯一索引），232 条告警关联两边都留，来源原文保留（第 5 节约束 5）。
-20. 【已定，Palantir专家、动态本体负责人】**对账成功后的本体修改**：收到 `on_reconciled`（外部已处理），或人工对账选「外部已成功」，由动态提交本体修改并发 `ActionExecuted`；定时查询返回「查无」算一次查询。
+20. 【已定，Palantir专家、动态本体负责人】**对账成功后的本体修改**：收到 `on_reconciled`（`succeeded`），或人工对账选「外部已成功」（同为 `succeeded`），由动态提交本体修改并发 `ActionExecuted`；定时查询返回「查无」算一次查询。
 21. 【已定，用户规则】**跨页统计不一致**：mock 数据不要求跨页一致，按天 / 按周统计与明细对不上的按原样入库，不需要用户决定。
 18. 动态侧的发布校验（规则映射齐全、生命周期迁移引用的动作/事件存在等）是否并入静态 V 系列（同静态待定 12）。
 
