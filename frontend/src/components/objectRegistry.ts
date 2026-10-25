@@ -7,6 +7,7 @@ import {
   fmtMoney, fmtInt, fmtPct, EMPTY,
 } from '@/mock';
 import { ACTION_EVENT_RESOLVERS } from './actionEventResolvers';
+import { PDE_RESOLVERS } from './pdeResolvers';
 
 export interface ObjField { label: string; value: string }
 /** 时间线状态 → 颜色见 theme.ts timelineTone：done/无=灰，warn/unknown=橙（unknown 带问号），error=红 */
@@ -174,6 +175,7 @@ const RESOLVERS: Record<string, (id: string) => ObjView | null> = {
   },
   // 规则、动作执行记录、事件（动作类型 / 事件类型页面新增）
   ...ACTION_EVENT_RESOLVERS,
+  ...PDE_RESOLVERS,
 };
 
 const warned = new Set<string>();
