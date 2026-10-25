@@ -57,6 +57,8 @@ export interface DimItem {
   usage: DimUsage[]; history: DimHistory[]; since: string;
   /** 取值表“记录数”列的叫法；取值只列了一部分时的说明 */
   countLabel?: string; valuesNote?: string;
+  /** 草稿视图取值页的说明（未发布前问数怎么处理新增取值） */
+  draftNote?: string;
 }
 
 const BASE = (by: string, change = '首次发布'): DimHistory => ({ ver: 'v2026.03.2', status: '生效中', by, at: '2026-03-18 10:06', change });
@@ -240,6 +242,7 @@ export const DIM_ITEMS: DimItem[] = [
       MP('苏', ['江苏省'], '精确', '取值同义词', 41, { conflict: '单字“苏”也可能指苏州市', resolve: '单独出现按江苏省；“苏锡常”按城市' }),
       MP('苏锡常', ['苏州市', '无锡市', '常州市'], '多值', '业务知识', 58, { conflict: '常州市暂无门店，取值里没有', resolve: '按苏州、无锡回答，并说明常州无门店' }),
       MP('长三角', ['上海市', '江苏省', '浙江省', '安徽省'], '多值', '业务知识', 129),
+      MP('华东', ['上海市', '江苏省', '浙江省', '安徽省', '福建省', '江西省', '山东省'], '多值', '业务知识', 46, { conflict: '与组织“华东大区”同名；行政大区按省份归属，与考核大区范围不同', resolve: '默认按组织“华东大区”；写明“按省份”时按行政大区 7 省' }),
     ],
     metricDims: ['省份'], metricNote: { gmv: '省份维度（经所在省份）' },
     usage: [
@@ -367,6 +370,7 @@ export const DIM_ITEMS: DimItem[] = [
       MP('前置仓', ['前置仓'], '精确', '取值同义词', 0, { draft: 'CR-0009', diff: '新增', conflict: '与“仓库”对象名称相近（V9 信息）', resolve: '优先理解为门店业态；问库存、出库时按仓库' }),
       MP('便利店', ['社区店'], '精确', '业务知识', 64, { resolve: '停用取值“便利店”并入社区店' }),
     ],
+    draftNote: '发布前，这 6 家前置仓在问数里归入“未分类业态”，不会被静默丢掉；按业态汇总的合计仍等于全部门店数',
     metricDims: ['业态'],
     usage: [{ type: '视图', name: '门店经营月报', note: '业态筛选' }, { type: '视图', name: '门店业态分布', note: '1 个卡片' }, { type: '评测题', name: '业态相关 2 题', note: '发布前自动回放' }],
     history: [

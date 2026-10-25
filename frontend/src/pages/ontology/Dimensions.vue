@@ -2,7 +2,7 @@
 /**
  * 维度与字典：左侧维度 / 码表列表，右侧详情（定义 / 取值 / 同义词与问数映射 / 使用情况 / 版本历史）。
  * URL：?dim= 选中项，?tab= 页签，?k= 维度或码表，?g= 分组，?q= 搜索，?lv= / ?vq= / ?vs= / ?vp= 取值筛选和页码，
- *      ?conf=1 只看冲突，?try= 试一试的说法，?view=draft 草稿视图，?ver= 历史版本（只读）。
+ *      ?conf=1 只看冲突，?try= 试一试的说法，?all=1 试一试在全部维度中匹配，?view=draft 草稿视图，?ver= 历史版本（只读）。
  * 草稿逻辑用公共的 useDraftView('dimension')：已发布只读，唯一入口“发起变更”；草稿里的改动用灰色“新增 / 修改”标出。
  */
 import { computed, reactive, ref, watch } from 'vue';
@@ -255,16 +255,24 @@ const mpager = computed(() => ({ current: vp.value, pageSize: 8, showSizeChanger
 // 试一试：输入问句里的词，看会匹配到哪些取值
 const tryText = ref(q('try'));
 watch(() => route.query.try, (v) => { tryText.value = (v as string) || ''; });
+const tryAll = computed({ get: () => q('all') === '1', set: (v) => setQ({ all: v ? '1' : undefined }) });
 const tryResult = computed(() => {
   const p = tryText.value.trim();
   if (!p) return null;
-  const exact = hitsOf(p);
+  const inScope = (h: Hit) => tryAll.value || h.item === cur.value.id;
+  const exact = hitsOf(p).filter(inScope);
   const contains: Hit[] = [];
   if (p.length >= 2) {
-    PHRASES.value.forEach((hs, k) => { if (k !== p && k.includes(p)) hs.forEach((h) => { if (!contains.some((x) => x.item === h.item && x.value === h.value) && !exact.some((x) => x.item === h.item && x.value === h.value)) contains.push(h); }); });
+    PHRASES.value.forEach((hs, k) => { if (k !== p && k.includes(p)) hs.filter(inScope).forEach((h) => { if (!contains.some((x) => x.item === h.item && x.value === h.value) && !exact.some((x) => x.item === h.item && x.value === h.value)) contains.push(h); }); });
   }
-  const rule = visible.value.flatMap((d) => d.mappings).find((m) => m.phrase === p && inView(m.draft));
-  return { exact, contains: contains.slice(0, 6), more: Math.max(0, contains.length - 6), rule };
+  const dims = tryAll.value ? visible.value : [cur.value];
+  const rule = [cur.value, ...dims].flatMap((d) => d.mappings).find((m) => m.phrase === p && inView(m.draft));
+  // 跨维度：按维度归并命中，精确命中的维度排前面
+  const byDim = new Map<string, { name: string; vals: string[] }>();
+  [...exact, ...contains].forEach((h) => { const g = byDim.get(h.item) ?? { name: h.itemName, vals: [] }; if (!g.vals.includes(h.value)) g.vals.push(h.value); byDim.set(h.item, g); });
+  const groups = [...byDim.entries()].sort(([a], [b]) => (a === 'org' ? -1 : b === 'org' ? 1 : 0))
+    .map(([, g]) => `${g.name} › ${g.vals.slice(0, 2).join('、')}${g.vals.length > 2 ? ` 等 ${g.vals.length} 个` : ''}`);
+  return { exact, contains: contains.slice(0, 6), more: Math.max(0, contains.length - 6), rule, groups, crossDim: tryAll.value && byDim.size > 1 };
 });
 const runTry = (v: string) => setQ({ try: v.trim() || undefined });
 
@@ -515,6 +523,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
             </template>
           </template>
         </a-table>
+        <div v-if="isDraft && cur.draftNote" class="t-12 c-3">{{ cur.draftNote }}。</div>
         <div class="t-12 c-3">{{ cur.valuesNote ? `${cur.valuesNote}。` : '' }}取值来自 {{ cur.valueSrc }}；停用的取值不参与问数匹配，历史数据仍按原取值统计。</div>
       </div>
 
@@ -523,15 +532,19 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
         <div class="dm-try">
           <span class="t-14 fw-600 c-1">试一试</span>
           <a-input-search v-model:value="tryText" placeholder="输入问句里的说法，例如 华东、前置仓、已发货" enter-button="匹配" size="small" class="dm-try-input" @search="runTry" />
-          <template v-if="tryResult">
-            <span v-if="!tryResult.exact.length && !tryResult.contains.length" class="t-12 c-warning">没有匹配到取值，问数会追问用户</span>
-            <template v-else>
-              <span v-if="tryResult.exact.length" class="t-12 c-2">精确：{{ tryResult.exact.map((h) => `${h.itemName} · ${h.value}`).join('、') }}</span>
-              <span v-if="tryResult.contains.length" class="t-12 c-3">包含：{{ tryResult.contains.map((h) => `${h.itemName} · ${h.value}`).join('、') }}{{ tryResult.more ? ` 等 ${tryResult.contains.length + tryResult.more} 个` : '' }}</span>
-              <span v-if="tryResult.exact.length + tryResult.contains.length > 1" class="t-12 c-warning">有歧义{{ tryResult.rule?.resolve ? `：${tryResult.rule.resolve}` : '，精确命中优先，仍有多个时追问' }}</span>
+          <a-checkbox v-model:checked="tryAll" class="t-12">在全部维度中匹配</a-checkbox>
+          <span class="dm-try-res">
+            <template v-if="tryResult">
+              <span v-if="!tryResult.exact.length && !tryResult.contains.length" class="t-12 c-warning">{{ tryAll ? '没有匹配到取值，问数会追问用户' : `“${cur.name}”里没有匹配到，可勾选“在全部维度中匹配”` }}</span>
+              <span v-else-if="tryResult.crossDim" class="t-12 c-warning dm-ell1 dm-try-amb" :title="tryResult.groups.join('；')">歧义：命中 {{ tryResult.groups.length }} 个维度，默认按“组织”解析，写明维度时按写明的 · {{ tryResult.groups.join('；') }}</span>
+              <template v-else>
+                <span v-if="tryResult.exact.length" class="t-12 c-2">精确：{{ tryResult.exact.map((h) => `${h.itemName} · ${h.value}`).join('、') }}</span>
+                <span v-if="tryResult.contains.length" class="t-12 c-3">包含：{{ tryResult.contains.map((h) => `${h.itemName} · ${h.value}`).join('、') }}{{ tryResult.more ? ` 等 ${tryResult.contains.length + tryResult.more} 个` : '' }}</span>
+                <span v-if="tryResult.exact.length + tryResult.contains.length > 1" class="t-12 c-warning">有歧义{{ tryResult.rule?.resolve ? `：${tryResult.rule.resolve}` : '，精确命中优先，仍有多个时追问' }}</span>
+              </template>
             </template>
-          </template>
-          <span v-else class="t-12 c-3">在全部 {{ visible.length }} 个维度和码表里按名称、同义词和映射匹配</span>
+            <span v-else class="t-12 c-3">{{ tryAll ? `在全部 ${visible.length} 个维度和码表里按名称、同义词和映射匹配` : `只在“${cur.name}”里按名称、同义词和映射匹配` }}</span>
+          </span>
         </div>
         <div class="dm-bar">
           <span class="t-12 c-2">共 {{ mapRows.length }} 个说法</span>
@@ -663,4 +676,6 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
 .dm-off { color: var(--g6); cursor: not-allowed; }
 .dm-try { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border: var(--border); border-radius: var(--radius); background: var(--g2); flex: none; min-width: 0; }
 .dm-try-input { width: 360px; flex: none; }
+.dm-try-res { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; overflow: hidden; white-space: nowrap; }
+.dm-try-amb { flex: 1; min-width: 0; }
 </style>
