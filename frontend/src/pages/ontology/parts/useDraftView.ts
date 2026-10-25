@@ -7,8 +7,11 @@
 import { computed, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { DRAFTS, type DraftCR } from '@/mock/releases';
-import { CHANGE_REQUESTS } from '@/mock/changes';
+import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import { useReadonly } from '@/composables/useReadonly';
+
+const pad = (n: number) => String(n).padStart(2, '0');
+const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
 export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule';
 
@@ -50,7 +53,7 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
     let id = opts.join;
     if (!id) {
       id = nextCrId();
-      created.unshift({ id, title: opts.title || '未命名变更', owner: '王敏', updatedAt: '2026-10-25 16:30', changes: 0 });
+      created.unshift({ id, title: opts.title || '未命名变更', owner: CURRENT_USER, updatedAt: nowText(), changes: 0 });
     }
     const t = (TARGETS[id] ??= {});
     (t[kind] ??= []).includes(targetId()) || t[kind]!.push(targetId());
