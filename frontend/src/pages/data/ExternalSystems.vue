@@ -85,7 +85,7 @@ const cols = [
   { title: '时间', key: 'time', width: 160 },
   { title: '动作', dataIndex: 'action', key: 'action', width: 130, ellipsis: true },
   { title: '对象', key: 'target', width: 200, ellipsis: true },
-  { title: '发起人', dataIndex: 'actor', key: 'actor', width: 130, ellipsis: true },
+  { title: '发起人', key: 'actor', width: 170, ellipsis: true },
   { title: '幂等键', key: 'idemKey', width: 130, ellipsis: true },
   { title: '耗时', key: 'ms', width: 80, align: 'right' as const },
   { title: '尝试', key: 'attempt', width: 50, align: 'right' as const },
@@ -287,6 +287,7 @@ async function saveEdit() {
             <span v-else-if="column.key === 'ms'" class="num">{{ record.ms }} ms</span>
             <span v-else-if="column.key === 'attempt'" class="num c-2">{{ record.attempt }}</span>
             <span v-else-if="column.key === 'http'" class="num" :class="record.http && record.http !== 200 ? 'tl-failed' : ''">{{ record.http ?? EMPTY }}</span>
+            <a-tooltip v-else-if="column.key === 'actor'" :title="record.actor" placement="topLeft"><span class="ex-ell">{{ record.actor }}</span></a-tooltip>
             <span v-else-if="column.key === 'result'" class="ex-res" :class="tl(record.result)"><QuestionCircleOutlined v-if="record.result === '结果未知'" /><span v-else class="ex-dot" />{{ resultText(record.result) }}</span>
             <a v-else-if="column.key === 'op'" @click="openCall(record.id)">详情</a>
           </template>
@@ -405,4 +406,5 @@ async function saveEdit() {
 .ex-w { width: 100%; }
 .ex-used { margin-top: 6px; }
 .ex-form :deep(.ant-form-item) { margin-bottom: 12px; }
+.ex-ell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
