@@ -15,15 +15,23 @@
   过滤列（is_test）按表从 DDL 推出，没有这列的表明确告诉模型不要加。
 - 并列第一：「= MAX / RANK() = 1」返回全部并列项，是 Spider / BIRD 评测里常见的金标写法
   [推断：思路，非代码复制]。
+- 意图判定（作答 / 反问 / 拒答三选一）：思路同 SQLBot、DB-GPT 的意图识别与 Vanna 的
+  「上下文不够就说明原因」（Vanna 第 1 条 guideline，MIT）；这里让模型在 SQL 之外可回一个 JSON
+  `{"clarify": …}` 或 `{"refuse": …}`，
+  映射到前端已有的 answer+clarify / denied 两种轮次 [推断：思路，非代码复制]。
+- 口径裁定是 qa 自有数据：seeds/extra/qa/caliber/notes.json（指标口径）、refuse.json（拒答清单），
+  跟 qa-eval.md §4 一致；静态 metric.def_rows 与之冲突时以这里为准，冲突项另报静态本体负责人。
 """
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections.abc import AsyncIterator
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from functools import cache
 from typing import Any
 
 import sqlalchemy as sa
@@ -225,6 +233,32 @@ async def _dimension_lines(session: AsyncSession) -> list[str]:
     return out
 
 
+def _caliber_dir():
+    return get_settings().seeds_extra_dir / "qa" / "caliber"
+
+
+@cache
+def _caliber_lines() -> list[str]:
+    """qa 自有口径裁定（seeds/extra/qa/caliber/notes.json），文件没有就不出这一段。"""
+    f = _caliber_dir() / "notes.json"
+    if not f.exists():
+        return []
+    out = []
+    for n in json.loads(f.read_text(encoding="utf-8")):
+        alias = f"（又叫 {'、'.join(n['aliases'])}）" if n.get("aliases") else ""
+        sql = f"；写法：{n['sql']}" if n.get("sql") else ""
+        out.append(f"- {n['term']}{alias}：{n['caliber']}{sql}")
+    return out
+
+
+@cache
+def _refuse_lines() -> list[str]:
+    f = _caliber_dir() / "refuse.json"
+    if not f.exists():
+        return []
+    return [f"- {n['term']} → {n['code']}：{n['reason']}" for n in json.loads(f.read_text(encoding="utf-8"))]
+
+
 async def build_context(session: AsyncSession) -> dict[str, list[str]]:
     """从本体表取：表结构、对象说明、关联 join、指标口径、同义词、默认问数路径。"""
     objs = (
@@ -258,6 +292,8 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
         for p in (await session.scalars(select(QaPath).where(QaPath.is_default).order_by(QaPath.id))).all()
     ]
     return {
+        "caliber": _caliber_lines(),
+        "refuse": _refuse_lines(),
         "schema": _schema_lines(),
         "filters": _filter_lines(),
         "dims": await _dimension_lines(session),
@@ -299,11 +335,26 @@ _STYLE_RULES = (
 
 _GUIDELINES = (
     "===Response Guidelines \n"
-    "1. 上下文足够时，只输出一条 SELECT（可用 WITH），放在 ```sql 代码块里，不要解释；\n"
+    "1. 三选一输出，不要解释：(a) 能答：只输出一条 SELECT（可用 WITH），放在 ```sql 代码块里；"
+    "(b) 问题有歧义、答案会因理解不同而不同（指标没说清，如“表现 / 业绩 / 卖得怎么样”；"
+    "时间和指标都没给；一个说法对应多个维度或多个对象，如“地区”“最大”、简称匹配到多家门店；"
+    "对比基准不明；同一句里出现两条路径，如“下单”和“履约”；说法不在同义词里也没有对应维度值）时，"
+    '只输出 ```json {"clarify": {"term": "有歧义的说法", "question": "反问的话", '
+    '"options": ["候选1", "候选2"]}} ```；'
+    "有同名默认口径的（如销售额默认不含税）、只缺时间但能按默认理解的不要反问；"
+    '(c) 命中“拒答清单”、要写操作、问本体外的东西时，只输出 ```json {"refuse": {"code": '
+    '"NO_DATA|NO_PERMISSION|OUT_OF_SCOPE|NOT_SELECT", "reason": "原因"}} ```，'
+    "不能用别的列凑答案；拒答优先于反问；code 选法：敏感字段 / 系统表 / 改权限 → NO_PERMISSION，"
+    "本体里没有的对象（工资、天气…）→ OUT_OF_SCOPE，"
+    "“拒答清单”里标 NO_DATA 的 → NO_DATA，写操作 → NOT_SELECT；\n"
     "2. 只能用 ===Tables 里的表和列；不要写 INSERT/UPDATE/DELETE/DDL；\n"
-    "3. 指标按“指标口径”计算；用户说法按“同义词”映射；多表关联优先用“关联”与“默认问数路径”；\n"
+    "3. 指标先按“口径裁定”，没有的再按“指标口径”计算；说法命中口径裁定的名称或别名就用那一条，"
+    "它写法里的条件（状态、is_test、join store、时间字段）一个都不能少，题目另说了时间口径（如“下单的”）"
+    "只换时间字段；"
+    "用户说法按“同义词”映射；多表关联优先用“关联”与“默认问数路径”；\n"
     '4. 列用中文别名（AS "门店数"），结果行数尽量少；过滤条件只按“过滤列（按表）”加，'
-    "表里没有的列不要写；题目和指标口径都没提到的条件（如门店状态、订单状态）不要自己加；\n"
+    "表里没有的列不要写；题目和口径（口径裁定 / 指标口径）都没提到的条件（如门店状态、订单状态）不要自己加，"
+    "口径裁定里写了的状态条件（如销售额、含税销售额的 o.status = 'shipped'）必须加；\n"
     "5. 路径型列（值形如“大类/中类”，如 product.category，见“维度层级与取值”）：问“品类 / category”"
     "没指明中类时，SELECT 和 GROUP BY 都用最上层 split_part(列, '/', 1)，不要按整串分组；"
     "按某个上层取值过滤用 LIKE '上层/%'；\n"
@@ -311,7 +362,8 @@ _GUIDELINES = (
     "禁止 ORDER BY … LIMIT 1。写法：WITH t AS (SELECT 分组, COUNT(*) AS n FROM … GROUP BY 分组) "
     "SELECT 分组, n FROM t WHERE n = (SELECT MAX(n) FROM t)；说了“前 N”才用 ORDER BY … LIMIT N；\n"
     "7. 枚举列在库里存英文 code（见 COMMENT 里的 code=标签），条件里用 code；\n"
-    "8. 列出或找出门店、商品这类对象时，同时返回业务编号 code 和名称 name；"
+    "8. 列出或找出门店、商品这类对象、或按“每个 / 各”门店、商品分组时，SELECT 和 GROUP BY 都带业务编号 code"
+    "（再带名称 name）；"
     "排名 / 最值题同时返回对象和对应数值；\n"
     "9. '--'、空串这类占位值表示“无”，按某列计数或分组时排除；文本条件的值照抄“列取值”；"
     "门店、商品用简称（如“张江店”）时用 name LIKE '%张江%'；\n"
@@ -346,17 +398,21 @@ def _time_anchor() -> str:
         "今年（截至目前）": (d.replace(month=1, day=1), cur),
         "近 3 天（含今天）": (d - timedelta(days=2), cur),
         "近 7 天（含今天）": (d - timedelta(days=6), cur),
+        "近 30 天（含今天）": (d - timedelta(days=29), cur),
     }
     spans = "；".join(f"{k} [{a}, {b})" for k, (a, b) in rng.items())
     return (
         f"## 时间\n当前时间：{now:%Y-%m-%d %H:%M}（周{_WEEKDAY[d.weekday()]}）；"
         f"数据截至：{get_settings().data_cutoff}\n常用区间（左闭右开）：{spans}\n"
-        f"“近 N 小时 / 近 N 天 / 截至目前”以当前时间 {cur} 为终点。"
+        f"“近 N 小时 / 近 N 天 / 截至目前”以当前时间 {cur} 为终点；任何时间窗（含“今天”“10 月”“2026 年每月”）"
+        f"的上界都不超过当前时间 {cur}（库里有出库时间晚于当前时间的单，不能算进来）。"
         "SQL 里只写这些日期字面量，不要用 NOW() / CURRENT_DATE（库时间不是业务时钟）。"
     )
 
 
 _DOC_TITLES = {
+    "caliber": "口径裁定（qa 裁定，跟“指标口径”冲突时以这里为准）",
+    "refuse": "拒答清单（问到这些直接拒答，不写 SQL）",
     "filters": "过滤列（按表）",
     "dims": "维度层级与取值",
     "samples": "列取值（全部）",
@@ -393,6 +449,61 @@ def extract_sql(text: str) -> str:
     return sql.rstrip(";").strip()
 
 
+REFUSE_CODES = ("NO_DATA", "NO_PERMISSION", "OUT_OF_SCOPE", "NOT_SELECT")
+_FENCE_JSON = re.compile(r"```json\s*\n?(.*?)```", re.S | re.I)
+
+
+def parse_intent(text: str) -> tuple[str, Any]:
+    """模型回复 → ("sql", sql) | ("clarify", {...}) | ("refuse", {...})。
+
+    只认 ```json 块或整段就是 JSON 对象的回复，且键是 clarify / refuse；别的都当 SQL 交给 sql_guard。
+    """
+    raw = text or ""
+    m = _FENCE_JSON.findall(raw)
+    body = m[-1].strip() if m else raw.strip()
+    if body.startswith("{"):
+        try:
+            obj = json.loads(body)
+        except ValueError:
+            obj = None
+        if isinstance(obj, dict):
+            c, r = obj.get("clarify"), obj.get("refuse")
+            if isinstance(c, dict):
+                opts = [str(o) for o in (c.get("options") or []) if str(o).strip()][:6]
+                return "clarify", {
+                    "term": str(c.get("term") or "")[:32],
+                    "question": str(c.get("question") or "请再具体一点")[:200],
+                    "options": opts,
+                }
+            if isinstance(r, dict):
+                code = str(r.get("code") or "").upper()
+                return "refuse", {
+                    "code": code if code in REFUSE_CODES else "OUT_OF_SCOPE",
+                    "reason": str(r.get("reason") or "这个问题暂时答不了")[:200],
+                }
+    return "sql", extract_sql(raw)
+
+
+def clarify_snapshot(c: dict[str, Any]) -> dict[str, Any]:
+    """反问 → answer 轮带 clarify（§3.1：澄清是 answer 里带 clarify），不执行 SQL、没有表格。"""
+    opts = [{"value": f"o{i}", "label": o} for i, o in enumerate(c["options"], 1)]
+    return {
+        "answer": {
+            "card": "clarify",  # [推断] 只有反问，没有表格卡
+            "dataAsOf": get_settings().data_cutoff,
+            "text": c["question"],
+            "clarify": {"term": c["term"], "chosen": None, "options": opts},
+            "suggest": {"followUps": [o["label"] for o in opts]},
+        }
+    }
+
+
+def refuse_snapshot(r: dict[str, Any]) -> dict[str, Any]:
+    """拒答 → denied 轮（形状同 QA_DEMO_TURNS 的 denied：lead/bold/tail/tag），多带 code。"""
+    tag = "权限拦截" if r["code"] == "NO_PERMISSION" else "无法回答"
+    return {"lead": "", "bold": r["reason"], "tail": "。", "tag": tag, "code": r["code"]}
+
+
 def wrap_limit(tree: exp.Expression, limit: int) -> str:
     """sqlglot 构造 SELECT * FROM (<原查询>) AS _qa LIMIT n，不拼字符串。"""
     return exp.select("*").from_(tree.subquery("_qa")).limit(limit).sql(dialect=DIALECT)
@@ -425,7 +536,7 @@ def _label_rows(rows: list[list[Any]]) -> list[list[Any]]:
 
 async def answer(
     session: AsyncSession, conn: AsyncConnection, llm: LLMClient, user: Any, question: str
-) -> tuple[str, dict[str, Any], int, int, str]:
+) -> tuple[str, dict[str, Any], int, int, str | None]:
     """返回 (kind, snapshot, row_count, elapsed_ms, sql)。
 
     SQL 只进 qa_turn.sql_text，不出接口；SQL 被拒抛 SqlRejected（403 SQL_REJECTED）。
@@ -436,7 +547,13 @@ async def answer(
     limit = ROW_LIMIT
     for attempt in range(1 + FIX_RETRIES):
         reply = await llm.generate_sql(messages)
-        sql = extract_sql(reply)
+        intent, val = parse_intent(reply)
+        if intent != "sql":  # 反问 / 拒答：不执行 SQL
+            elapsed = int((time.monotonic() - t0) * 1000)
+            if intent == "clarify":
+                return "answer", clarify_snapshot(val), 0, elapsed, None
+            return "denied", refuse_snapshot(val), 0, elapsed, None
+        sql = val
         tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
         try:
             async with conn.begin_nested():  # savepoint：执行报错不弄坏连接上的事务

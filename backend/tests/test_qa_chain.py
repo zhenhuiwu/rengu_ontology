@@ -222,3 +222,49 @@ async def test_statement_timeout_maps_to_query_timeout(qa, session):
     r = await qa.post(URL, json={"question": "很慢的查询"})
     assert r.status_code == 504, r.text
     assert r.json()["code"] == "QUERY_TIMEOUT"
+
+
+async def test_clarify_returns_answer_with_options_no_sql(qa, session):
+    use_llm(
+        '```json\n{"clarify": {"term": "地区", "question": "“地区”指大区、区域还是城市？",'
+        ' "options": ["大区", "区域", "城市"]}}\n```'
+    )
+    r = await qa.post(URL, json={"question": "按地区看本月销售额"})
+    assert r.status_code == 202, r.text
+    turn = r.json()["turn"]
+    assert turn["kind"] == "answer" and "table" not in turn["answer"]
+    c = turn["answer"]["clarify"]
+    assert c["term"] == "地区" and [o["label"] for o in c["options"]] == ["大区", "区域", "城市"]
+    assert turn["answer"]["text"].startswith("“地区”")
+    t = await session.scalar(select(QaTurn).where(QaTurn.code == r.json()["turnId"]))
+    assert t.sql_text is None  # 反问不执行 SQL
+
+
+async def test_refuse_returns_denied_with_code_no_sql(qa, session):
+    use_llm('{"refuse": {"code": "NO_DATA", "reason": "订单行没有成本，数据未接入"}}')
+    r = await qa.post(URL, json={"question": "昨天的毛利率"})
+    assert r.status_code == 202, r.text
+    turn = r.json()["turn"]
+    assert turn["kind"] == "denied" and turn["code"] == "NO_DATA"
+    assert turn["bold"] == "订单行没有成本，数据未接入" and turn["tag"] == "无法回答"
+    t = await session.scalar(select(QaTurn).where(QaTurn.code == r.json()["turnId"]))
+    assert t.sql_text is None
+    log = await session.scalar(select(QaQueryLog).where(QaQueryLog.turn_id == t.id))
+    assert log.kind == "denied" and log.row_count == 0
+
+
+def test_parse_intent_falls_back_to_sql():
+    assert chain.parse_intent("```sql\nselect 1\n```") == ("sql", "select 1")
+    # 不是 clarify/refuse 的 JSON、坏 JSON 都按 SQL 交给 sql_guard
+    assert chain.parse_intent('{"foo": 1}')[0] == "sql"
+    assert chain.parse_intent("{not json")[0] == "sql"
+    kind, r = chain.parse_intent('{"refuse": {"code": "weird", "reason": "x"}}')
+    assert kind == "refuse" and r["code"] == "OUT_OF_SCOPE"
+
+
+async def test_prompt_has_qa_caliber_and_refuse_list(qa):
+    fake = use_llm("select 1")
+    await qa.post(URL, json={"question": "昨天销售额"})
+    c = fake.prompts[0][0]["content"]
+    assert "## 口径裁定" in c and "÷ 1.13" in c and "o.status <> 'cancelled'" in c
+    assert "## 拒答清单" in c and "NO_DATA" in c and '{"clarify"' in c
