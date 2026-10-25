@@ -25,7 +25,7 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
   { id: 'CR-0016', title: '新增指标“客单价（不含税）”', owner: '刘婷', reviewer: '王敏', status: '审核中', level: '一般', changes: 3, updatedAt: '2026-10-25 14:10', reason: '门店运营周会要看客单价，目前问数只能现算' },
   { id: 'CR-0015', title: '有效订单数补充同义词“成交单量”', owner: '何静', reviewer: '刘婷', status: '已通过', level: '修订', changes: 2, updatedAt: '2026-10-25 10:18', reason: '财务和电商常说“成交单量”，问数召回不到' },
   { id: 'CR-0014', title: '调整大区预算：超 5% 增加二级审批', owner: '刘婷', reviewer: '陈立军', status: '草稿', level: '一般', changes: 3, updatedAt: '2026-10-25 11:26', reason: '预算调整幅度超过 5% 时需要财务 BP 一起审批' },
-  { id: 'CR-0013', title: '门店价格变更：增加促销价字段', owner: '王敏', reviewer: '周晓峰', status: '草稿', level: '修订', changes: 2, updatedAt: '2026-10-24 17:52', reason: 'POS 价格中心开始推送促销价，规则要按促销价判断毛利' },
+  { id: 'CR-0013', title: '门店价格变更：增加促销价字段', owner: '王敏', reviewer: '周晓峰', status: '草稿', level: '修订', changes: 2, updatedAt: '2026-10-24 17:52', reason: '用友 ERP 价格档案开始推送促销价，规则要按促销价判断毛利' },
   { id: 'CR-0012', title: '会员对象拆分“储值卡”', owner: '王敏', reviewer: '陈立军', status: '草稿', level: '重大', changes: 7, updatedAt: '2026-10-25 15:02', reason: '储值卡余额和会员积分分开管理，问数需要能单独查储值卡' },
   { id: 'CR-0011', title: '毛利率口径扣除促销补贴', owner: '何静', reviewer: '刘婷', status: '草稿', level: '重大', changes: 4, updatedAt: '2026-10-24 18:40', reason: '财务要求毛利按扣除平台和品牌促销补贴后计算，与月报一致' },
   { id: 'CR-0010', title: '退款率改按退款完成时间统计', owner: '刘婷', reviewer: '陈立军', status: '审核中', level: '重大', changes: 5, updatedAt: '2026-10-25 11:20', reason: '按申请时间统计会把后来被拒的退款也算进去，与财务口径不一致' },
@@ -48,7 +48,7 @@ export interface CheckRow { code: string; name: string; result: CheckResult; not
 export interface ImpactItem { kind: string; name: string; note: string; count?: number; hover?: { kind: string; id: string } }
 export interface TrialRow { period: string; before: string; after: string; delta: string }
 /** 编辑草稿时跳到哪个页面的草稿视图 */
-export interface EditTarget { kind: 'object' | 'metric' | 'action' | 'event' | 'rule'; id: string }
+export interface EditTarget { kind: 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link'; id: string }
 
 const CHECK_NAMES: [string, string][] = [
   ['V1', '主键与映射完整'], ['V2', '主键唯一性抽检'], ['V3', '关系两端与类型兼容'], ['V4', '枚举挂取值字典'],
@@ -148,7 +148,7 @@ export const CR_DETAILS: Record<string, CRDetail> = {
     impact: {
       direct: [{ kind: '事件类型', name: '门店价格变更', note: '载荷新增 2 个可选字段' }],
       defs: [{ kind: '对象类型', name: '商品', note: '事件挂在商品上，对象定义不变' }],
-      usage: [{ kind: '规则', name: 'R-007 商品毛利率越线', note: '可改为按促销价判断，需另提变更' }, { kind: '外部系统', name: 'POS 价格中心', note: '已在测试环境推送促销价' }],
+      usage: [{ kind: '规则', name: 'R-007 商品毛利率越线', note: '可改为按促销价判断，需另提变更' }, { kind: '外部系统', name: '用友 ERP 价格档案', note: '已在测试环境推送促销价' }],
     },
     touches: ['event:store_price_changed'],
     edit: { kind: 'event', id: 'store_price_changed' },
@@ -494,7 +494,7 @@ export function reviewLog(cr: ChangeRequest): ReviewEvent[] {
 /** 草稿编辑入口：跳到对应页面的草稿视图 */
 export function editRoute(e?: EditTarget) {
   if (!e) return undefined;
-  const map = { object: ['object-types', 'type'], metric: ['metrics', 'metric'], action: ['action-types', 'action'], event: ['event-types', 'event'], rule: ['rules', 'rule'] } as const;
+  const map = { object: ['object-types', 'type'], metric: ['metrics', 'metric'], action: ['action-types', 'action'], event: ['event-types', 'event'], rule: ['rules', 'rule'], link: ['link-types', 'link'] } as const;
   const [page, key] = map[e.kind];
   return { path: `/build/ontology/${page}`, query: { [key]: e.id, view: 'draft' } };
 }

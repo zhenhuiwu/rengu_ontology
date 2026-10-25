@@ -1,6 +1,8 @@
 /**
- * 已发布 / 草稿 两种视图（对象类型、指标口径、动作类型、事件类型、规则共用）。
+ * 已发布 / 草稿 两种视图（对象类型、指标口径、动作类型、事件类型、规则、关系类型共用）。
  * 用法：useDraftView('rule', () => cur.value.id)；draftOf('rule', 'R-007') 取规则所在草稿单。
+ *       useDraftView('link', () => cur.value.id)；draftOf('link', 'member_holds_cards') 取关系所在草稿单；
+ *       新建的关系用 start({ ...opts, target: newId }) 登记到所选变更单（传 target 时不切视图，由页面自己跳转）。
  * 规则：已发布版只读；改定义只有“发起变更”一个入口，进入变更草稿后编辑按钮才可用；
  * 有草稿的对象默认看已发布版（问数用的就是这一版），?view=draft 切到草稿。
  */
@@ -13,13 +15,13 @@ import { useReadonly } from '@/composables/useReadonly';
 const pad = (n: number) => String(n).padStart(2, '0');
 const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule';
+export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link';
 
 /** 每张草稿改了哪些对象 / 指标 / 动作类型 / 事件类型（示例数据） */
 const TARGETS = reactive<Record<string, Partial<Record<TargetKind, string[]>>>>({
   'CR-0014': { action: ['adjust_region_budget'] },
   'CR-0013': { event: ['store_price_changed'] },
-  'CR-0012': { object: ['member'] },
+  'CR-0012': { object: ['member'], link: ['member_holds_cards'] },
   'CR-0011': { metric: ['gross_margin'], rule: ['R-007'] },
   'CR-0009': { object: ['store'] },
 });
@@ -48,16 +50,21 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
   const editTip = computed(() => (readonly.value ? reason.value : isDraft.value ? '' : '已发布版本只读，请先发起变更'));
   const setView = (v: 'published' | 'draft') => router.replace({ query: { ...route.query, view: v === 'draft' ? 'draft' : undefined } });
 
-  /** 新建变更单或加入已有变更单，然后切到草稿视图 */
-  function start(opts: { join?: string; title?: string }) {
+  /**
+   * 新建变更单或加入已有变更单，然后切到草稿视图；返回变更单号。
+   * target：登记的目标（默认当前选中项）；新建的对象传新 id，这时不切视图，由页面自己跳转。
+   */
+  function start(opts: { join?: string; title?: string; target?: string }) {
     let id = opts.join;
     if (!id) {
       id = nextCrId();
       created.unshift({ id, title: opts.title || '未命名变更', owner: CURRENT_USER, updatedAt: nowText(), changes: 0 });
     }
+    const tid = opts.target ?? targetId();
     const t = (TARGETS[id] ??= {});
-    (t[kind] ??= []).includes(targetId()) || t[kind]!.push(targetId());
-    setView('draft');
+    (t[kind] ??= []).includes(tid) || t[kind]!.push(tid);
+    if (!opts.target) setView('draft');
+    return id;
   }
   return { draft, isDraft, canEdit, editTip, readonly, reason, setView, start };
 }
