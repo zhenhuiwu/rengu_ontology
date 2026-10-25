@@ -1,5 +1,6 @@
 /**
- * 已发布 / 草稿 两种视图（对象类型、指标口径、动作类型、事件类型共用）。
+ * 已发布 / 草稿 两种视图（对象类型、指标口径、动作类型、事件类型、规则共用）。
+ * 用法：useDraftView('rule', () => cur.value.id)；draftOf('rule', 'R-007') 取规则所在草稿单。
  * 规则：已发布版只读；改定义只有“发起变更”一个入口，进入变更草稿后编辑按钮才可用；
  * 有草稿的对象默认看已发布版（问数用的就是这一版），?view=draft 切到草稿。
  */
@@ -9,14 +10,14 @@ import { DRAFTS, type DraftCR } from '@/mock/releases';
 import { CHANGE_REQUESTS } from '@/mock/changes';
 import { useReadonly } from '@/composables/useReadonly';
 
-export type TargetKind = 'object' | 'metric' | 'action' | 'event';
+export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule';
 
 /** 每张草稿改了哪些对象 / 指标 / 动作类型 / 事件类型（示例数据） */
 const TARGETS = reactive<Record<string, Partial<Record<TargetKind, string[]>>>>({
   'CR-0014': { action: ['adjust_region_budget'] },
   'CR-0013': { event: ['store_price_changed'] },
   'CR-0012': { object: ['member'] },
-  'CR-0011': { metric: ['gross_margin'] },
+  'CR-0011': { metric: ['gross_margin'], rule: ['R-007'] },
   'CR-0009': { object: ['store'] },
 });
 const created = reactive<DraftCR[]>([]);

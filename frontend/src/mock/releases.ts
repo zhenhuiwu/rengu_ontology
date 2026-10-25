@@ -18,7 +18,7 @@ export const DRAFTS: DraftCR[] = [
   { id: 'CR-0014', title: '调整大区预算：超 5% 增加二级审批', owner: '刘婷', updatedAt: '2026-10-25 11:26', changes: 3 },
   { id: 'CR-0013', title: '门店价格变更：增加促销价字段', owner: '王敏', updatedAt: '2026-10-24 17:52', changes: 2 },
   { id: 'CR-0012', title: '会员对象拆分“储值卡”', owner: '王敏', updatedAt: '2026-10-25 15:02', changes: 7 },
-  { id: 'CR-0011', title: '毛利率口径扣除促销补贴', owner: '何静', updatedAt: '2026-10-24 18:40', changes: 3 },
+  { id: 'CR-0011', title: '毛利率口径扣除促销补贴', owner: '何静', updatedAt: '2026-10-24 18:40', changes: 4 },
   { id: 'CR-0009', title: '门店新增“业态”枚举值“前置仓”', owner: '陈立军', updatedAt: '2026-10-21 10:26', changes: 1 },
 ];
 
