@@ -79,7 +79,7 @@ const hitCols = [
   { title: '告警', key: 'alert', width: 170 },
 ];
 const ruleName = (id: string) => RULE_DEFS.find((r) => r.id === id)?.name ?? id;
-const resultBadge = (s: string) => (s === '待处理' ? 'warning' : 'default');
+const resultBadge = (_s: string) => 'default' as const;
 const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${eventTypeById(r.trigger.eventId!)?.name ?? r.trigger.eventId}` : `定时 · ${r.trigger.text}`);
 </script>
 

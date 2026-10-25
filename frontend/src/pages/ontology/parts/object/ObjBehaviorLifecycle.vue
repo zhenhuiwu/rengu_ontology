@@ -71,6 +71,12 @@ const verText = computed(() => (base.value ? (isDraft.value ? `v${base.value.ver
 const sel = computed(() => (route.query.lc as string) || '');
 const setSel = (v: string) => router.replace({ query: { ...route.query, lc: v || undefined } });
 const selState = computed(() => (sel.value.startsWith('s:') ? states.value.find((s) => s.key === sel.value.slice(2)) : undefined));
+// 迁移定义表分页：一页 TR_SIZE 条，1920×1080 下表格不内部滚动；数据变化回到第 1 页，选中迁移时跳到所在页
+const TR_SIZE = 6;
+const trPage = ref(1);
+const trSize = ref(TR_SIZE);
+const trPageRows = computed(() => transitions.value.slice((trPage.value - 1) * trSize.value, trPage.value * trSize.value));
+watch(() => [props.objectId, transitions.value.length], () => { trPage.value = 1; });
 const selTr = computed(() => (sel.value.startsWith('t:') ? transitions.value.find((t) => t.id === sel.value.slice(2)) : undefined));
 const selIll = computed(() => (sel.value.startsWith('x:') ? illegal.value.find((x) => `${x.from}→${x.to}` === sel.value.slice(2)) : undefined));
 
@@ -182,6 +188,11 @@ function onReady(g: Graph) {
   draw(true);
 }
 watch(() => [props.objectId, histAt.value, isDraft.value], () => draw(true));
+watch(sel, (v) => {
+  if (!v.startsWith('t:')) return;
+  const i = transitions.value.findIndex((t) => t.id === v.slice(2));
+  if (i >= 0) trPage.value = Math.floor(i / trSize.value) + 1;
+});
 watch(() => [sel.value, showIllegal.value, states.value, transitions.value], () => draw(false), { deep: true });
 
 /* ───── 下方列表 ───── */
@@ -190,7 +201,7 @@ const view = computed({
   set: (v: string) => router.replace({ query: { ...route.query, lcv: v === 'changes' ? 'changes' : undefined, lcpage: undefined } }),
 });
 const onlyIllegal = ref(false);
-const pq = usePagedQuery({ defaultSize: 10, prefix: 'lc', filters: [() => props.objectId, onlyIllegal] });
+const pq = usePagedQuery({ defaultSize: 6, prefix: 'lc', filters: [() => props.objectId, onlyIllegal] });
 const changes = computed(() => (histAt.value ? [] : changesOf(props.objectId)).filter((c) => !onlyIllegal.value || !c.trId));
 const changePage = computed(() => paginate(changes.value, { page: pq.page.value, size: pq.size.value }));
 const refKind = computed(() => (['order', 'store', 'product'].includes(props.objectId) ? props.objectId : ''));
@@ -336,7 +347,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
               <span class="lc-sp" />
               <a-checkbox v-if="view === 'changes' && base.ruleId" v-model:checked="onlyIllegal"><span class="t-14">只看非法迁移</span></a-checkbox>
             </div>
-            <a-table v-if="view === 'defs'" class="lc-table" size="small" :columns="defCols" :data-source="transitions" row-key="id" :pagination="false"
+            <a-table v-if="view === 'defs'" class="lc-table" size="small" :columns="defCols" :data-source="trPageRows" row-key="id" :pagination="false"
               :row-class-name="(r: VTr) => (sel === `t:${r.id}` ? 'lc-row-on' : '')" :custom-row="(r: VTr) => ({ onClick: () => setSel(`t:${r.id}`) })">
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'id'"><span class="num">{{ record.id }}</span></template>
@@ -354,6 +365,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
                 <template v-else-if="column.key === 'weekly'"><span class="num">{{ fmt(record.weekly) }}</span></template>
               </template>
             </a-table>
+            <AppPagination v-if="view === 'defs'" v-model:page="trPage" v-model:size="trSize" variant="simple" :total="transitions.length" unit="条迁移" :empty="false" />
             <template v-else>
               <a-table class="lc-table" size="small" :columns="chgCols" :data-source="changePage.items" row-key="id" :pagination="false"
                 :locale="{ emptyText: histAt ? '历史版本不显示状态变化记录' : '暂无记录' }">
@@ -529,9 +541,9 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
 .lc-main { flex: 1; min-height: 0; display: flex; gap: 12px; }
 .lc-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .lc-graph { flex: 1; min-height: 200px; border: var(--border); border-radius: var(--radius); overflow: hidden; }
-.lc-list { flex: 0 1 auto; max-height: 48%; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.lc-list { flex: none; display: flex; flex-direction: column; gap: 8px; }
 .lc-list-bar { display: flex; align-items: center; gap: 12px; }
-.lc-list > .lc-table { flex: 1; min-height: 0; overflow: auto; }
+.lc-list > .lc-table { flex: none; }
 .lc-table :deep(.ant-table-row) { cursor: pointer; }
 .lc-table :deep(.lc-row-on > td) { background: var(--brand-bg) !important; }
 .lc-nowrap { white-space: nowrap; }
