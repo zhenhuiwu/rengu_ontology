@@ -1,21 +1,24 @@
 """static 模块 seed：导出文件 → 表（seeds/json/static/，export-mock 的 static 组，原样导入，不修 mock）。
 
-| 导出文件                          | 表              | 说明 |
-|-----------------------------------|-----------------|------|
-| Q_OBJECT_TYPES.json               | object_type     | 18 行；+ derived/objectMeta + LINK_OBJECTS.table |
-| Q_OBJECT_TYPES × OBJECT_PROPS     | property        | 211 行；映射列按 ObjectTypes.vue 规则算好落库 |
-| derived/viewsOf.json              | object_view     | 285 行；业务键 (对象, 视图 id)（视图 id 跨对象重复） |
-| LINKS.json                        | link_type       | 27 行；非对象端点只存 code [推断] |
-| LINKS.json（quality）             | link_quality    | 26 行（有 quality 的关系） |
-| METRIC_LIST.json + METRICS.json   | metric          | 15 行；METRIC_DEF 等共用示例存到每个指标 [推断] |
-| DIM_ITEMS.json                    | dimension       | 17 行 |
-| DIM_ITEMS.json（levels）          | dim_level       | 30 行 |
-| DIM_ITEMS.json（values）          | dim_value       | 235 行 |
-| DIM_ITEMS.json（mappings）        | dim_mapping     | 34 行 |
-| KNOWLEDGE.json                    | knowledge       | 26 行 |
-| KNOWLEDGE.json（applies）         | knowledge_apply | 56 行 |
+| 导出文件                     | 表                    | 说明 |
+|------------------------------|----------------------|------|
+| Q_OBJECT_TYPES.json          | object_type          | 18 行；+ derived/objectMeta + LINK_OBJECTS.table |
+| Q_OBJECT_TYPES × OBJECT_PROPS | property             | 211 行；映射列按 ObjectTypes.vue 规则算好落库 |
+| derived/viewsOf.json         | object_view          | 285 行；业务键 (对象, 视图 id)（视图 id 跨对象重复） |
+| LINKS.json                   | link_type            | 27 行；非对象端点只存 code [推断] |
+| LINKS.json（quality）        | link_quality         | 26 行（有 quality 的关系） |
+| METRIC_LIST.json + METRICS.json | metric               | 15 行；METRIC_DEF 等共用示例存到每个指标 [推断] |
+| DIM_ITEMS.json               | dimension            | 17 行 |
+| DIM_ITEMS.json（levels）     | dim_level            | 30 行 |
+| DIM_ITEMS.json（values）     | dim_value            | 235 行 |
+| DIM_ITEMS.json（mappings）   | dim_mapping          | 34 行 |
+| KNOWLEDGE.json               | knowledge            | 26 行 |
+| KNOWLEDGE.json（applies）    | knowledge_apply      | 56 行 |
+| PATH_GROUPS.json（paths）    | onto_qa_path         | 7 行（3 组）；组级 check 存默认路径行 [推断] |
+| PATH_GROUPS.json（paths.links）| onto_qa_path_step    | 10 行 |
+| PATH_GROUPS.json（examples） | onto_qa_path_example | 9 行；path=-1（先追问）→ path_id 空 |
 
-不落表、接口直接读 JSON 常量的：K_TYPES、CARD_API、CONFLICT_RULE、PATH_GROUPS（qaPaths 快照节）。
+不落表、接口直接读 JSON 常量的：K_TYPES、CARD_API、CONFLICT_RULE。
 export-mock 没导出、照抄前端页内常量的（[推断]）：ORDER_MAP_ROWS（objectProps.ts:379）、
 Metrics.vue 的 DENY（不允许的维度）、ObjectTypes.vue TYPES 里 purchase 的「草稿」状态。
 """
@@ -50,6 +53,9 @@ from app.modules.static.models import (
     ObjectType,
     ObjectView,
     Property,
+    QaPath,
+    QaPathExample,
+    QaPathStep,
     ViewKind,
     ViewVisibility,
 )
@@ -438,7 +444,52 @@ def _knowledge_applies(r: Row, _ctx: SeedContext) -> list[Row]:
     ]
 
 
+# ---------------------------------------------------------------- 问数路径
+
+
+def group_key(g: Row) -> str:
+    return f"{g['from']}→{g['to']}"
+
+
+def _qa_paths(g: Row, _ctx: SeedContext) -> list[Row]:
+    return [
+        {
+            "group_key": group_key(g),
+            "from_object_id": g["from"],
+            "to_object_id": g["to"],
+            "seq": i,
+            "is_default": p["isDefault"],
+            "hint": p.get("hint"),
+            "check_note": g["check"] if p["isDefault"] else None,
+        }
+        for i, p in enumerate(g["paths"])
+    ]
+
+
+def _qa_path_steps(g: Row, _ctx: SeedContext) -> list[Row]:
+    return [
+        {"path_id": (group_key(g), i), "step_no": j, "link_type_id": link}
+        for i, p in enumerate(g["paths"])
+        for j, link in enumerate(p["links"])
+    ]
+
+
+def _qa_path_examples(g: Row, _ctx: SeedContext) -> list[Row]:
+    return [
+        {
+            "from_object_id": g["from"],
+            "to_object_id": g["to"],
+            "seq": i,
+            "question": e["q"],
+            "path_id": (group_key(g), e["path"]) if e["path"] >= 0 else None,
+            "how": e["how"],
+        }
+        for i, e in enumerate(g["examples"])
+    ]
+
+
 _OBJ = Ref(ObjectType, "code", nullable=False)
+_QA_PATH = Ref(QaPath, ("group_key", "seq"))
 
 SEEDS = [
     SeedSpec(
@@ -513,5 +564,30 @@ SEEDS = [
         key=("knowledge_id", "target_kind", "target_code"),
         transform=_knowledge_applies,
         refs={"knowledge_id": Ref(Knowledge, "code", nullable=False)},
+    ),
+    SeedSpec(
+        QaPath,
+        "PATH_GROUPS.json",
+        key=("from_object_id", "to_object_id", "seq"),
+        transform=_qa_paths,
+        refs={"from_object_id": _OBJ, "to_object_id": _OBJ},
+        description="问数路径",
+    ),
+    SeedSpec(
+        QaPathStep,
+        "PATH_GROUPS.json",
+        key=("path_id", "step_no"),
+        transform=_qa_path_steps,
+        refs={
+            "path_id": Ref(QaPath, ("group_key", "seq"), nullable=False),
+            "link_type_id": Ref(LinkType, "code", nullable=False),
+        },
+    ),
+    SeedSpec(
+        QaPathExample,
+        "PATH_GROUPS.json",
+        key=("from_object_id", "to_object_id", "seq"),
+        transform=_qa_path_examples,
+        refs={"from_object_id": _OBJ, "to_object_id": _OBJ, "path_id": _QA_PATH},
     ),
 ]

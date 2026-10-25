@@ -17,6 +17,8 @@ from app.modules.static.models import (
     ObjectType,
     ObjectView,
     Property,
+    QaPath,
+    QaPathExample,
 )
 
 
@@ -87,3 +89,10 @@ class StaticRepo:
     # ---- 业务知识
     async def knowledge(self) -> Sequence[Knowledge]:
         return (await self.session.scalars(select(Knowledge).order_by(Knowledge.seq))).all()
+
+    # ---- 问数路径
+    async def qa_paths(self) -> tuple[Sequence[QaPath], Sequence[QaPathExample]]:
+        """路径按插入顺序（组首次出现的顺序）、组内按 seq；试问同。"""
+        paths = (await self.session.scalars(select(QaPath).order_by(QaPath.id))).all()
+        examples = (await self.session.scalars(select(QaPathExample).order_by(QaPathExample.id))).all()
+        return paths, examples

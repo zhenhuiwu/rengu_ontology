@@ -1,5 +1,6 @@
 """静态定义表：object_type / property / object_view / link_type / link_quality / metric /
-dimension / dim_level / dim_value / dim_mapping / knowledge / knowledge_apply
+dimension / dim_level / dim_value / dim_mapping / knowledge / knowledge_apply /
+onto_qa_path / onto_qa_path_step / onto_qa_path_example（qa_ 前缀属问数模块，故加 onto_）
 
 只建静态自己的表；外键只指向静态表；其它模块按 code 软引用。
 
@@ -757,9 +758,126 @@ def upgrade() -> None:
         sa.UniqueConstraint("link_type_id", name=op.f("uq_link_quality_link_type_id")),
         comment="关系数据质量",
     )
+    op.create_table(
+        "onto_qa_path",
+        sa.Column("group_key", sa.String(length=160), nullable=False, comment="from→to（快照键）[推断]"),
+        sa.Column("from_object_id", sa.BigInteger(), nullable=False),
+        sa.Column("to_object_id", sa.BigInteger(), nullable=False),
+        sa.Column("seq", sa.Integer(), nullable=False, comment="组内序号（前端 paths 下标）"),
+        sa.Column("is_default", sa.Boolean(), nullable=False),
+        sa.Column("hint", sa.String(length=256), nullable=True, comment="需指明路径时的提示词"),
+        sa.Column(
+            "check_note", sa.Text(), nullable=True, comment="组级 V13 校验说明，只存在默认路径行 [推断]"
+        ),
+        sa.Column("id", sa.BigInteger(), sa.Identity(always=False), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("created_by", sa.String(length=64), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("is_seed", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column("lock_version", sa.Integer(), server_default="1", nullable=False),
+        sa.ForeignKeyConstraint(
+            ["from_object_id"], ["object_type.id"], name=op.f("fk_onto_qa_path_from_object_id_object_type")
+        ),
+        sa.ForeignKeyConstraint(
+            ["to_object_id"], ["object_type.id"], name=op.f("fk_onto_qa_path_to_object_id_object_type")
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_onto_qa_path")),
+        sa.UniqueConstraint(
+            "from_object_id",
+            "to_object_id",
+            "seq",
+            name=op.f("uq_onto_qa_path_from_object_id_to_object_id_seq"),
+        ),
+        sa.UniqueConstraint("group_key", "seq", name=op.f("uq_onto_qa_path_group_key_seq")),
+        comment="问数路径",
+    )
+    op.create_index(
+        "uq_onto_qa_path_default",
+        "onto_qa_path",
+        ["from_object_id", "to_object_id"],
+        unique=True,
+        postgresql_where=sa.text("is_default"),
+    )
+    op.create_table(
+        "onto_qa_path_example",
+        sa.Column("from_object_id", sa.BigInteger(), nullable=False),
+        sa.Column("to_object_id", sa.BigInteger(), nullable=False),
+        sa.Column("seq", sa.Integer(), nullable=False),
+        sa.Column("question", sa.Text(), nullable=False),
+        sa.Column("path_id", sa.BigInteger(), nullable=True, comment="空 = 先追问"),
+        sa.Column("how", sa.Text(), nullable=False),
+        sa.Column("id", sa.BigInteger(), sa.Identity(always=False), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("created_by", sa.String(length=64), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("is_seed", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column("lock_version", sa.Integer(), server_default="1", nullable=False),
+        sa.ForeignKeyConstraint(
+            ["from_object_id"],
+            ["object_type.id"],
+            name=op.f("fk_onto_qa_path_example_from_object_id_object_type"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["path_id"],
+            ["onto_qa_path.id"],
+            name=op.f("fk_onto_qa_path_example_path_id_onto_qa_path"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["to_object_id"],
+            ["object_type.id"],
+            name=op.f("fk_onto_qa_path_example_to_object_id_object_type"),
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_onto_qa_path_example")),
+        sa.UniqueConstraint(
+            "from_object_id",
+            "to_object_id",
+            "seq",
+            name=op.f("uq_onto_qa_path_example_from_object_id_to_object_id_seq"),
+        ),
+        comment="问数路径试问",
+    )
+    op.create_index(
+        op.f("ix_onto_qa_path_example_path_id"), "onto_qa_path_example", ["path_id"], unique=False
+    )
+    op.create_table(
+        "onto_qa_path_step",
+        sa.Column("path_id", sa.BigInteger(), nullable=False),
+        sa.Column("step_no", sa.Integer(), nullable=False, comment="从 0 起"),
+        sa.Column("link_type_id", sa.BigInteger(), nullable=False),
+        sa.Column("id", sa.BigInteger(), sa.Identity(always=False), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("created_by", sa.String(length=64), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("is_seed", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column("lock_version", sa.Integer(), server_default="1", nullable=False),
+        sa.ForeignKeyConstraint(
+            ["link_type_id"], ["link_type.id"], name=op.f("fk_onto_qa_path_step_link_type_id_link_type")
+        ),
+        sa.ForeignKeyConstraint(
+            ["path_id"],
+            ["onto_qa_path.id"],
+            name=op.f("fk_onto_qa_path_step_path_id_onto_qa_path"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_onto_qa_path_step")),
+        sa.UniqueConstraint("path_id", "step_no", name=op.f("uq_onto_qa_path_step_path_id_step_no")),
+        comment="问数路径步骤",
+    )
+    op.create_index(
+        op.f("ix_onto_qa_path_step_link_type_id"), "onto_qa_path_step", ["link_type_id"], unique=False
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_onto_qa_path_step_link_type_id"), table_name="onto_qa_path_step")
+    op.drop_table("onto_qa_path_step")
+    op.drop_index(op.f("ix_onto_qa_path_example_path_id"), table_name="onto_qa_path_example")
+    op.drop_table("onto_qa_path_example")
+    op.drop_index(
+        "uq_onto_qa_path_default", table_name="onto_qa_path", postgresql_where=sa.text("is_default")
+    )
+    op.drop_table("onto_qa_path")
     op.drop_table("link_quality")
     op.drop_index(op.f("ix_dim_value_dimension_id"), table_name="dim_value")
     op.drop_table("dim_value")

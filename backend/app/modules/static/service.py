@@ -262,7 +262,8 @@ class StaticService:
         return paginate((await self._link(lid))["usage"], page, size)
 
     async def link_paths(self, frm: str | None, to: str | None) -> list[Obj]:
-        """PATH_GROUPS：没有定义表，取该版本（默认当前版本）快照的 qaPaths 节 [推断]。
+        """PATH_GROUPS：取该版本（默认当前版本）快照的 qaPaths 节；
+        该节发布时由 onto_qa_path* 表组装（sections.py QaPathsSection）。
         路径只保留其关系在该版本都可见的（LinkTypes.vue groupsOf 的可见性过滤；「≥2 条」由页面自己判断）。"""
         if self.ver:
             await ReleaseRepo(self.session).by_ver_or_404(self.ver)

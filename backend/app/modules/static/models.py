@@ -1,4 +1,4 @@
-"""静态本体定义表（第一批：对象类型 / 属性 / 对象视图 / 关系 / 指标 / 维度 / 业务知识）。
+"""静态本体定义表（第一批：对象类型 / 属性 / 对象视图 / 关系 / 指标 / 维度 / 业务知识 / 问数路径）。
 
 依据 docs/backend/static-api.md（表与接口）+ 前端 pages/ontology、mock/*.ts（最终依据）。
 约定（CONVENTIONS §1、§12）：
@@ -31,11 +31,13 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -314,6 +316,89 @@ class LinkQuality(IdMixin, MutableTableMixin, Base):
     orphan_samples: Mapped[list[Any] | None] = mapped_column(JsonType)
 
     link: Mapped[LinkType] = relationship(back_populates="quality")
+
+
+# ---------------------------------------------------------------- 问数路径
+# static-api.md §1.4 onto_qa_path*；不用 qa_ 前缀（qa_ 属于问数模块，按前缀归属表会认错）
+
+
+class QaPath(IdMixin, MutableTableMixin, Base):
+    """问数路径（PATH_GROUPS.*.paths，7）。一组 (from, to) 下 seq 即前端 paths 数组下标。
+
+    [推断] 前端 PathGroup 没有独立的组表：
+    - group_key（"from→to"，即快照 qaPaths 的键）冗余存一份，作 seed 引用的业务键；
+    - 组级的 check（V13 校验说明）存在该组默认路径那一行的 check_note 上，其它行为空；
+    - V13「每组 is_default 恰好 1 条」：部分唯一索引保证至多 1 条，至少 1 条由 seed 测试 / 写接口校验。
+    """
+
+    __tablename__ = "onto_qa_path"
+    __table_args__ = (
+        UniqueConstraint("from_object_id", "to_object_id", "seq"),
+        UniqueConstraint("group_key", "seq"),
+        Index(
+            "uq_onto_qa_path_default",
+            "from_object_id",
+            "to_object_id",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
+        {"comment": "问数路径"},
+    )
+
+    group_key: Mapped[str] = mapped_column(String(160), nullable=False, comment="from→to（快照键）[推断]")
+    from_object_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("object_type.id"), nullable=False)
+    to_object_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("object_type.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, comment="组内序号（前端 paths 下标）")
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    hint: Mapped[str | None] = mapped_column(String(256), comment="需指明路径时的提示词")
+    check_note: Mapped[str | None] = mapped_column(Text, comment="组级 V13 校验说明，只存在默认路径行 [推断]")
+
+    from_object: Mapped[ObjectType] = relationship(foreign_keys=[from_object_id], lazy="selectin")
+    to_object: Mapped[ObjectType] = relationship(foreign_keys=[to_object_id], lazy="selectin")
+    steps: Mapped[list["QaPathStep"]] = relationship(order_by="QaPathStep.step_no", lazy="selectin")
+
+
+class QaPathStep(IdMixin, MutableTableMixin, Base):
+    """问数路径步骤（QaPath.links[]，10）。"""
+
+    __tablename__ = "onto_qa_path_step"
+    __table_args__ = (UniqueConstraint("path_id", "step_no"), {"comment": "问数路径步骤"})
+
+    path_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("onto_qa_path.id", ondelete="CASCADE"), nullable=False
+    )
+    step_no: Mapped[int] = mapped_column(Integer, nullable=False, comment="从 0 起")
+    link_type_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("link_type.id"), nullable=False, index=True
+    )
+
+    link: Mapped[LinkType] = relationship(lazy="selectin")
+
+
+class QaPathExample(IdMixin, MutableTableMixin, Base):
+    """问数路径试问（PATH_GROUPS.*.examples，9）。
+
+    path_id 为空 = 前端 path=-1（先追问用户走哪条路径）[推断]；how 是前端的解释文案。
+    """
+
+    __tablename__ = "onto_qa_path_example"
+    __table_args__ = (
+        UniqueConstraint("from_object_id", "to_object_id", "seq"),
+        {"comment": "问数路径试问"},
+    )
+
+    from_object_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("object_type.id"), nullable=False)
+    to_object_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("object_type.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    path_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("onto_qa_path.id", ondelete="CASCADE"), index=True, comment="空 = 先追问"
+    )
+    how: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    from_object: Mapped[ObjectType] = relationship(foreign_keys=[from_object_id], lazy="selectin")
+    to_object: Mapped[ObjectType] = relationship(foreign_keys=[to_object_id], lazy="selectin")
+    path: Mapped[QaPath | None] = relationship(lazy="selectin")
 
 
 # ---------------------------------------------------------------- 指标

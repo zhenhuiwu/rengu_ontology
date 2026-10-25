@@ -26,6 +26,9 @@ from app.modules.static.models import (
     ObjectType,
     ObjectView,
     Property,
+    QaPath,
+    QaPathExample,
+    QaPathStep,
 )
 from app.seeds.loader import run_seeds
 from tests.conftest import BASE_URL
@@ -45,6 +48,9 @@ STATIC_TABLES = {
     "dim_mapping",
     "knowledge",
     "knowledge_apply",
+    "onto_qa_path",
+    "onto_qa_path_step",
+    "onto_qa_path_example",
 }
 
 
@@ -59,6 +65,7 @@ LINKS = load("LINKS.json")
 METRIC_LIST = load("METRIC_LIST.json")
 DIMS = load("DIM_ITEMS.json")
 KNOWLEDGE = load("KNOWLEDGE.json")
+PATH_GROUPS = load("PATH_GROUPS.json")
 METRIC_USAGE = {x["args"][0]["id"]: x["result"] for x in load("derived/metricUsage.json")}
 
 
@@ -186,6 +193,9 @@ MOCK_COUNTS = {
     DimMapping: sum(len(d["mappings"]) for d in DIMS),
     Knowledge: len(KNOWLEDGE),
     KnowledgeApply: sum(len(k["applies"]) for k in KNOWLEDGE),
+    QaPath: sum(len(g["paths"]) for g in PATH_GROUPS),
+    QaPathStep: sum(len(p["links"]) for g in PATH_GROUPS for p in g["paths"]),
+    QaPathExample: sum(len(g["examples"]) for g in PATH_GROUPS),
 }
 
 
@@ -204,7 +214,11 @@ def test_mock_counts_are_the_expected_ones():
         "dim_mapping": 34,
         "knowledge": 26,
         "knowledge_apply": 56,
+        "onto_qa_path": 7,
+        "onto_qa_path_step": 10,
+        "onto_qa_path_example": 9,
     }
+    assert len(PATH_GROUPS) == 3
 
 
 async def test_seed_counts_match_mock_and_idempotent(static_seeded):
@@ -240,6 +254,23 @@ async def test_build_section_from_tables(static_seeded):
         assert built == cls().seed_section("v2026.10.3", ctx), cls.section
     base = {"x": {"keep": True}}
     assert await ObjectTypesSection().build_section(static_seeded, base, []) == base
+
+
+async def test_qa_paths_section_from_tables(static_seeded):
+    """qaPaths：从 onto_qa_path* 组装 == seed 快照里的 qaPaths 节（PATH_GROUPS 原样，键 from→to）。"""
+    from app.modules.static.sections import QaPathsSection
+    from app.modules.versioning.service import VersioningService
+    from app.seeds import SeedContext
+
+    built = await QaPathsSection().build_section(static_seeded, None, [])
+    assert built == QaPathsSection().seed_section("v2026.10.3", SeedContext(JSON, root=JSON.parent))
+    assert built == {f"{g['from']}→{g['to']}": g for g in PATH_GROUPS}
+    assert built == (await VersioningService().get_snapshot(static_seeded, None))["qaPaths"]
+    ex = built["order→store"]["examples"][1]
+    assert ex["path"] == -1  # 先追问：path_id 为空
+    assert await static_seeded.scalar(select(func.count()).where(QaPath.is_default)) == len(PATH_GROUPS)
+    base = {"k": 1}
+    assert await QaPathsSection().build_section(static_seeded, base, []) == base
 
 
 # ---------------------------------------------------------------- 对象类型

@@ -169,12 +169,38 @@ class TermsSection(_Base):
 
 
 class QaPathsSection(_Base):
-    """qaPaths：{"from→to": 路径组}（PATH_GROUPS 原样）。[推断] 没有定义表，发布时沿用上一版。"""
+    """qaPaths：{"from→to": 路径组}，路径组 = PATH_GROUPS 项原样
+    {from, to, check, paths:[{links, isDefault, hint?}], examples:[{q, path, how}]}。
+
+    当前定义从 onto_qa_path / onto_qa_path_step / onto_qa_path_example 组装
+    （examples.path 是 paths 下标，-1 = 先追问）。
+    """
 
     section = "qaPaths"
 
-    async def build_section(self, session: AsyncSession, base: Any, change_order_ids: list[str]) -> Any:
-        return base if base is not None else {}
+    async def current(self, repo: StaticRepo) -> Obj:
+        paths, examples = await repo.qa_paths()
+        out: Obj = {}
+        for p in sorted(paths, key=lambda x: (x.from_object_id, x.to_object_id, x.seq)):
+            g = out.setdefault(
+                p.group_key,
+                {
+                    "from": p.from_object.code,
+                    "to": p.to_object.code,
+                    "check": None,
+                    "paths": [],
+                    "examples": [],
+                },
+            )
+            if p.is_default:
+                g["check"] = p.check_note
+            g["paths"].append(
+                shapes.opt({"links": [s.link.code for s in p.steps], "isDefault": p.is_default}, hint=p.hint)
+            )
+        for e in sorted(examples, key=lambda x: (x.from_object_id, x.to_object_id, x.seq)):
+            g = out[f"{e.from_object.code}→{e.to_object.code}"]
+            g["examples"].append({"q": e.question, "path": e.path.seq if e.path else -1, "how": e.how})
+        return out
 
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         return {f"{g['from']}→{g['to']}": g for g in ctx.load("PATH_GROUPS.json", group=G)}
