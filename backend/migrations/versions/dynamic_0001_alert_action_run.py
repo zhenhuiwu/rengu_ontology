@@ -19,7 +19,7 @@ from sqlalchemy.dialects import postgresql
 from app.db.ddl import disable_append_only, enable_append_only
 
 revision: str = "dynamic_0001"
-down_revision: str | None = "event_0001"  # 合并方按当时的 master head 再改
+down_revision: str | None = "qa_0002"  # 合并方按当时的 master head 再改
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
