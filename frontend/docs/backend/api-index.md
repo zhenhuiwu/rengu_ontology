@@ -92,7 +92,9 @@
 | `UNAUTHORIZED` | 401 | 未登录或会话无效（骨架 `Unauthorized`；prod 在鉴权接入前一律 401，§1.4） |
 | `NO_PERMISSION` | 403 | 功能级、对象级、行级都没有权限 |
 | `READONLY` | 403 | **已定**：只读模式下的写请求统一用这一个码，`details.mode = 'history'`（带 `?ver=`，§1.7）或 `'preview'`（带 `?previewAs=`，§1.8）；两者都带时取 `preview`。原来的 `READONLY_HISTORY` / `READONLY_PREVIEW` 作废。允许的例外见 §1.7 白名单 |
-| `ACTION_BLOCKED` | 409 | 通用前置条件不满足，`details.reasons[]` 对应确认卡的 `blocked` |
+| `SUBMISSION_CRITERIA_FAILED` | 422 | 动作的提交条件不满足（HTTP 入口：动态的 `:stage`/`:confirm`/`:submit`，含问数“发起”）；`details.failed[{name,fail}]`，对应确认卡的 `blocked`。与 action-event-api.md §3.4、qa-api.md 同一个码；试运行不用它（一律 200）。原 `ACTION_BLOCKED` 409 作废 |
+| `EXPORT_FORBIDDEN` | 403 | 导出被拒：预览下导出，或共享页“允许导出”关闭（qa-api.md 错误码表） |
+| `IDEMPOTENCY_CONFLICT` | 409 | 幂等冲突：同一幂等键请求内容不同（§8.1-7），或同动作类型同业务键已有在途动作（dynamic-api.md【推断 P4】）。前端没有这种拦截，一期只在推断被采纳时使用 |
 | `DUPLICATE_KEY` | 409 | 重名或违反唯一约束，比如“角色名已存在”“已有同名页面”“已有相同问法”（骨架 `DuplicateKey`，BaseRepository 自动转换）。`DUPLICATE_NAME` 作废 |
 | `EMPTY_INPUT` | 409 | 必须至少一项的输入为空（骨架 `EmptyInput`） |
 | `VERSION_CONFLICT` | 409 | 乐观锁 `lockVersion` 不一致（骨架 `VersionConflict`） |
@@ -138,7 +140,7 @@
   - 多个角色合并为“有效权限” `EffectiveAccess{rs, func, objs, areasIn}`。
 - **问数 NL2SQL 网关硬规则（已定）**：
   - 执行前用 sqlglot 解析生成的 SQL，**检查整棵语法树**（不只看第一个关键字），只放行**单条只读 `SELECT`**：拒绝多语句、DDL/DML、CTE 里夹带的 INSERT/UPDATE/DELETE、`SELECT … INTO`、`FOR UPDATE/SHARE`，以及 `pg_sleep`、`dblink`、`lo_*`、`pg_read_file`、`set_config` 等函数（骨架 1aeb5d1 `app/common/sql_guard.py` `assert_single_select`，带测试）。被拒返回 **403 `SQL_REJECTED`**。
-  - 执行只用单独的只读库账号 **`RENGU_QA_READONLY_DATABASE_URL`**：库层设 `default_transaction_read_only=on`，只授权业务表、不授权元数据表，另设 `statement_timeout`（骨架代码里还没有这一项，部署时在账号或连接上配置）。没配置就拒绝执行，**不回退到主库账号**。
+  - 执行只用单独的只读库账号 **`RENGU_QA_READONLY_DATABASE_URL`**：库层设 `default_transaction_read_only=on`，只授权业务表、不授权元数据表，另设 `statement_timeout`（骨架 1aeb5d1 还没有实现，**骨架必须补上**：在只读账号或只读连接上设置，属骨架评审的必改项）。没配置就拒绝执行，**不回退到主库账号**。
   - 身份只取我方会话（骨架 `CurrentUserDep`：界面登录会话、API 密钥绑定身份；预览时为 `?previewAs=` 校验后的被预览用户），**忽略请求里传来的任何用户 id**。dev/test 的 `X-Demo-As` 只是会话桩，prod 忽略（见上）。
   - 行级范围（`RowScope`、`defaultDeny`）由网关注入到 SQL 里：`inject_row_filters` 把受控表换成 `(SELECT * FROM t WHERE 谓词) AS t`；谓词由 `row_filter` + `to_sql` 编译得到，不依赖模型自己写过滤条件；`DENY_ALL` 生成 `FALSE`；没登记的表一律拒绝（`SQL_REJECTED`）。
 
@@ -151,7 +153,7 @@
 ### 1.6 确认卡与阻断
 
 - 前端所有写操作都先弹一张公共确认卡（`stores/confirm.ts` 的 `ConfirmRequest`：title、target、fields、impact、irreversible、blocked、picker）。
-- 确认卡只是前端的交互，**后台必须重新校验前置条件**，不满足时返回 409 `ACTION_BLOCKED`（或者具体的码），`message` 就是阻断原因。
+- 确认卡只是前端的交互，**后台必须重新校验前置条件**，不满足时返回具体的码（动作提交条件 422 `SUBMISSION_CRITERIA_FAILED`，状态不允许 409 `STATE_INVALID`，以及各模块文档里的专用码），`message` 就是阻断原因。
 - 确认卡上显示的数字（影响人数、预算、改动数、校验摘要、影响分析等）应该由后台给出。需要的地方另设 `:precheck` 或 `GET .../impact` 接口，各页单独写明。
 - `irreversible: true` 的操作都是写外部系统（动作提交、重新提交）。**幂等键由服务端生成，客户端不传 `Idempotency-Key`**：告警发起动作（start-action）时生成 `act-<告警号小写>`，暂存（stage）时生成 `act-<动作号去掉前 4 位>`（和 mock `actions.ts` 一致）；重新提交生成新记录和带 `-rN` 后缀的新键。同一告警重复发起、同一暂存记录重复确认，后台按业务状态判重，返回已有记录。同一幂等键、请求内容不同时返回 409 `IDEMPOTENCY_CONFLICT`【推断，§8.1-7】。
 
@@ -389,7 +391,7 @@
 | GET | /action-runs | `objKind,objId,page,size` | `PageResult<ActionRun>` | 页码 | 读 | **归动态**（`/api/ontology/v1/action-runs`，§2.7 的统一接口加筛选）；qa-api.md 的 `/objects/{kind}/{id}/action-records` 作废 | 同 §2.7 |
 | GET | /objects/{kind}/{id}/actions | — | `ObjAction[]`（含 `state`、`stateTip`、`blocked`） | — | 读 | 按对象权限里的 `actions` 过滤 | `objects-qa.ts` `objActions` |
 
-- “发起”动作：调用动态模块（qa-api.md 的 X1/X2）。被阻断时返回 `ACTION_BLOCKED`。
+- “发起”动作：调用动态模块（qa-api.md 的 X1/X2）。提交条件不满足时返回 422 `SUBMISSION_CRITERIA_FAILED`（§1.2）。
 3. **差异**：
    - **已定**：公共抽屉（§1.10）和对象详情合并为同一个接口 `GET /api/qa/v1/objects/{kind}/{id}`，抽屉用 `?view=drawer`。
    - 本文之前写的 `POST /objects/{kind}/{id}/actions/{actionKey}` 作废，改走动态模块（见 §2.2 差异）。
@@ -711,7 +713,7 @@
 | GET | /dimensions/{id} | `ver?,view?,cr?` | `DimItem`（levels、qa；不含 values、mappings、usage、history，这四个走分页子接口） | — | 读 | | `dimensions.ts` `DIM_ITEMS` |
 | GET | /dimensions/{id}/values | `level,q,status,page,size,ver?,view?,cr?` | `PageResult<DimValue>` | 页码（10/页） | 读 | `?vp=` | `dimensions.ts` `DIM_ITEMS`（values） |
 | GET | /dimensions/{id}/mappings | `conflict?,page,size` | `PageResult<DimMapping>` | 页码（8/页） | 读 | 来自 static-api.md | `dimensions.ts` `DIM_ITEMS`（mappings） |
-| POST | /dimensions:match | 见 static-api.md | | | 不落库 | 试一试；历史版本、预览下允许 | — （计算接口，读已导入的数据） |
+| POST | /dimensions:match | 见 static-api.md | | | 不落库 | 试一试；历史版本、预览下允许（不走确认卡、不判断只读：`Dimensions.vue:275` `runTry`、`:531`） | — （计算接口，读已导入的数据） |
 | GET | /dimensions/{id}/usage | `page,size` | `PageResult<{metric, note}>`（`metricUsage`） | 页码（10/页） | 读 | 取代 v0.2 的 `/metric-usage` | `dimensions.ts` `metricUsage` |
 | GET | /dimensions/{id}/history | `page,size` | `PageResult<DimHistory>`（`DimItem.history`） | 页码（10/页） | 读 | **新增**（Dimensions.vue 版本历史分页） | `dimensions.ts` `DIM_ITEMS`（history） |
 
@@ -733,7 +735,7 @@
 |---|---|---|---|---|---|---|---|
 | GET | /knowledge | `q,type,st,page,size,focusId?,ver?` | `PageResult<KEntry>`（mock/knowledge.ts） | 页码（19/页，支持 `focusId`） | 读 | 历史版本下只返回 `since ≤ ver` 的条目 | `knowledge.ts` `KNOWLEDGE`、`K_TYPES` |
 | GET | /knowledge/{id} | `ver?,view?,cr?` | `KEntry`（含 `draft`、`history`（全量）、`periods`、`tries`；`refs` 走分页子接口） | — | 读 | | `knowledge.ts` `KNOWLEDGE` |
-| POST | /knowledge:resolve | 见 static-api.md | | | 不落库 | 历史版本、预览下允许 | — （计算接口，读已导入的数据） |
+| POST | /knowledge:resolve | 见 static-api.md | | | 不落库 | 历史版本、预览下允许（不走确认卡、不判断只读：`Glossary.vue:229` `runTry`、`:474`） | — （计算接口，读已导入的数据） |
 | GET | /knowledge/synonym-conflicts | — | `synonymConflicts` + `CONFLICT_RULE` | — | 读 | 来自 static-api.md | `knowledge.ts` `synonymConflicts`、`CONFLICT_RULE` |
 | GET | /knowledge/{id}/refs | `page,size` | `PageResult<KRef>` | 页码（8/页） | 读 | 来自 static-api.md | `knowledge.ts` `KNOWLEDGE`（refs） |
 
@@ -1408,10 +1410,11 @@
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- 错误码主表补 `EXPORT_FORBIDDEN` 403、`IDEMPOTENCY_CONFLICT` 409；`ACTION_BLOCKED` 409 与问数 `SUBMISSION_CRITERIA_FAILED` 422 是同一场景（动作提交条件不满足），统一为 `SUBMISSION_CRITERIA_FAILED` 422（Palantir、问数文档用的码），§1.6、§2.5 同步；`statement_timeout` 注明骨架必须实现；修正旧修订记录里“函数负责方待动态定”（已定归静态）；核对前端：`:match`、`:resolve` 不走确认卡，预览和历史版本下都允许，白名单不变。
 - 按本体小白对 d8ab0d6 的审核，对齐骨架 1aeb5d1：§1.4 网关规则改为整棵语法树检查、403 `SQL_REJECTED`、只读账号 `RENGU_QA_READONLY_DATABASE_URL`（加 `statement_timeout`，不回退主库）、`inject_row_filters`；`X-Demo-As` 统一为骨架语义（值为用户名，不带时用 `RENGU_DEV_USER`，prod 忽略）；§1.13 语义地图改为进程内调用；错误码主表补 `UNAUTHORIZED`/`EMPTY_INPUT`/`VERSION_CONFLICT`/`ROLLBACK_NOT_LATEST`/`EMPTY_RELEASE`/`SQL_REJECTED`/`INTERNAL_ERROR`，删 `DUPLICATE_NAME`。记录已定：`release.published` 由版本层在 `create_version` 同一事务写 outbox。按前端解决预览冲突：`:dry-run`、`:simulate` 预览下 403 `READONLY`、历史版本下允许（`stores/confirm.ts:29-31`），`:simulate` 改为不落库、event-types·view；§7 计数改为写 99、不落库 11。
 - 按静态负责人对 d8ab0d6 的审核：函数 `:test`（#134）改为不落库、functions·view、`?ver=`/预览 Y，并加入 §1.7 两个白名单；§3.8 新建/编辑请求体、`:test` 返回 `{output,ms,at}`、列表与版本历史 12/页；#96 补草稿下拉的权限与密钥；L842 补 `trial`；`GET /metrics/{id}` 种子改为 `metricCatalog.ts`；删 `qaPaths` 待登记；§5.2–5.4 引用改为 a43f15a/21f5f45/f8fe052 并记核对差异；§7 计数改为写 100、不落库 10。
 - 记录已定事项：static-api.md 引用改为 829e57a，引用版本改为 dynamic a43f15a、qa f8fe052、action-event 21f5f45（逐个 git 核对为各分支当前 head）；函数和 `fn_version` 归静态（§1.1 表、§3.8）；新增 §1.13 内部接口 `GET /api/ontology/v1/semantic-map?ver=`（不计入 253）；§1.4 加问数 NL2SQL 网关硬规则（sqlglot 只放行单条 SELECT + 只读库账号、身份只取我方会话、行级范围网关注入）；删除 §2.2 关于 qa X1/X2 为 `/actions/{actionKey}:preview` 的过时差异，§5.4-3 同步；`event` 改为可变表；§8.1 新增第 10 条：预览下提问允许、不落库【推断】待用户定。
-- 按静态本体负责人对 97e86e9 的评审（逐条对照前端 6bac4b1 核实）：§1.7 快照节名改为 `objectTypes`/`properties`/`links`/`metrics`/`dimensions`/`terms`/`qaPaths`（+ `actionTypes`/`eventTypes`、`rules`/`lifecycles`），节内键用前端 id（`order`）；删除 §8.1-8（只读时 Releases.vue:227-229 整块操作区被替换，回滚不可达），§3.15 回滚说明同步；§7 #97/#101/#102/#103 草稿写权限改为按 `target.kind` 的目标页·manage；#172 `GET /releases` 登录即可、返回 `{items, current}`；§1.2 `ontology_release` 归版本层（本体小白），函数 / `fn_version` 负责方待动态定；`GET /change-requests?status=草稿` 不传 `page` 返回全量（StartChangeModal.vue:14）；static-api.md 引用改为最新版 aaf60c4+；种子按业务编码（唯一约束）upsert；`/metrics` 改为 `METRIC_LIST`、18/页，`/object-types` 22/页，`:rollback` 行号改为 Metrics.vue:70-77；`:refresh-metadata` 只读拒绝标【推断】；错误码补 `EMPTY_INPUT`、`DUPLICATE_KEY`；`writeback_call` 改为可变表。
+- 按静态本体负责人对 97e86e9 的评审（逐条对照前端 6bac4b1 核实）：§1.7 快照节名改为 `objectTypes`/`properties`/`links`/`metrics`/`dimensions`/`terms`/`qaPaths`（+ `actionTypes`/`eventTypes`、`rules`/`lifecycles`），节内键用前端 id（`order`）；删除 §8.1-8（只读时 Releases.vue:227-229 整块操作区被替换，回滚不可达），§3.15 回滚说明同步；§7 #97/#101/#102/#103 草稿写权限改为按 `target.kind` 的目标页·manage；#172 `GET /releases` 登录即可、返回 `{items, current}`；§1.2 `ontology_release` 归版本层（本体小白），函数 / `fn_version` 负责方当时待定（后已定归静态，§1.1、§3.8）；`GET /change-requests?status=草稿` 不传 `page` 返回全量（StartChangeModal.vue:14）；static-api.md 引用改为最新版 aaf60c4+；种子按业务编码（唯一约束）upsert；`/metrics` 改为 `METRIC_LIST`、18/页，`/object-types` 22/页，`:rollback` 行号改为 Metrics.vue:70-77；`:refresh-metadata` 只读拒绝标【推断】；错误码补 `EMPTY_INPUT`、`DUPLICATE_KEY`；`writeback_call` 改为可变表。
 - 对齐 qa-api（qa 69725f9）：§2.2 W16 请求体 `metric` 改为 `object`（mock `QA_APPLY.object`）；`/session-options` 即 qa-api W17，删掉 §2.2 和 §8.2-9 的“未单列【待定】”；`POST /scoped-ask` 页面权限改为 `object-search/object-detail·view`，预览下放行且不落会话、不进 `qa_query_log`（§2.4、§7），和 qa O4 一致；`/action-runs:stage`、`/{id}:confirm`、`/{id}:withdraw` 从问数工作台 / 对象详情发起时按页面 `view` + 对象权限 `actions` 放行【推断】（§2.7、§7）；问数工作台 W2–W15 写接口的 API 密钥范围统一为“问数查询【推断】”（W11 导出仍为“数据导出”，W16 仍为“—”，都和 qa-api §1.4 一致）（§7）。
 - W16 申请权限在 `?ver=` 和预览 `?previewAs=` 下都放行（前端两种模式都允许）：§1.7 两份白名单、§1.8、§2.2、§7 说明和该行“预览”列（改为 Y）、§8.1-9 已同步；删除“预览下拒绝”的说法；两个参数都带时 `details.mode='preview'` 不变。
 - 问数用户对自己的会话和页面的写（W2–W16、P2–P10）页面权限改为 `qa-workbench·view` / `qa-pages·view`（原为 manage），和 qa-api 一致，已定（§1.4、§7 说明和 18 行）；qa-api §11-10 已定：权限申请存问数自己的表 `qa_permission_request`（只有问数有入口），以后可能并入 admin 统一审批（§2.2 W16）。
