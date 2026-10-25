@@ -80,9 +80,14 @@ class JsonRefCatalog:
 
     def waiting_text(self, code: str | None) -> str:
         """前端 waitingText(sys)：超过 N 秒未返回将标记为结果未知。"""
+        return f"超过 {self.timeout_sec(code)} 秒未返回将标记为结果未知"
+
+    def timeout_sec(self, code: str | None) -> str:
+        """前端 timeoutSec(sys) = (timeoutMs ?? 5000) / 1000，按 JS 数字格式输出（5、2.5）。"""
         s = self.ext_system(code)
-        secs = (s["timeoutMs"] if s else 10000) // 1000
-        return f"超过 {secs} 秒未返回将标记为结果未知"
+        ms = s.get("timeoutMs") if s else None
+        v = (ms if ms is not None else 5000) / 1000
+        return str(int(v)) if v == int(v) else str(v)
 
 
 @lru_cache
