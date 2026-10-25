@@ -7,7 +7,7 @@
 | 文件 | 内容 |
 |---|---|
 | `app/modules/dynamic/rules_models.py` | 13 张表：rule / rule_version / rule_draft / rule_hit、scenario / scenario_result / scenario_impact、lifecycle / lifecycle_version / lifecycle_state / lifecycle_transition / lifecycle_change / lifecycle_draft |
-| `migrations/versions/dynamic_0002_rules_scenarios_lifecycles.py` | down_revision = event_0002；枚举走 enum_column（varchar + CHECK） |
+| `migrations/versions/dynamic_0002_rules_scenarios_lifecycles.py` | down_revision = static_0002（static 分支先合并；本分支单独跑需先合入 static_0002）；枚举走 enum_column（varchar + CHECK） |
 | `app/modules/dynamic/seeds/rules.py` | 种子（RULE_DEFS / RULE_DRAFTS / SCENARIOS / LIFECYCLES + derived/*） |
 | `app/modules/dynamic/rules_sim.py` | 推演模型、回放，逐位照搬 mock（simulate / stagePlanOf / replay） |
 | `app/modules/dynamic/rules_schemas.py` / `rules_service.py` / `rules_router.py` | 接口；`router.py` 末尾 include 一行 |

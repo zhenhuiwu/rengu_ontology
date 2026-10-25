@@ -7,7 +7,7 @@ lifecycle_draft / lifecycle_change。
 rule_version / rule_hit / lifecycle_version / lifecycle_change 只追加（数据库触发器兜底）。
 
 Revision ID: dynamic_0002
-Revises: event_0002
+Revises: static_0002（静态本体变更单表；合并顺序：static 先于 dynamic）
 Create Date: 2026-10-26 00:19:55.923231+08:00
 """
 
@@ -20,7 +20,7 @@ from sqlalchemy.dialects import postgresql
 from app.db.ddl import disable_append_only, enable_append_only
 
 revision: str = "dynamic_0002"
-down_revision: str | None = "event_0002"
+down_revision: str | None = "static_0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
