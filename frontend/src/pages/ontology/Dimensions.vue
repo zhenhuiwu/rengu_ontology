@@ -531,7 +531,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
       <div v-else-if="tab === 'synonyms'" class="dm-body">
         <div class="dm-try">
           <span class="t-14 fw-600 c-1">试一试</span>
-          <a-input-search v-model:value="tryText" placeholder="输入问句里的说法，例如 华东、前置仓、已发货" enter-button="匹配" size="small" class="dm-try-input" @search="runTry" />
+          <a-input-search v-model:value="tryText" placeholder="输入问句里的说法，例如 华东、前置仓、已发货" size="small" class="dm-try-input" @search="runTry"><template #enterButton><a-button size="small">匹配</a-button></template></a-input-search>
           <a-checkbox v-model:checked="tryAll" class="t-12">在全部维度中匹配</a-checkbox>
           <span class="dm-try-res">
             <template v-if="tryResult">
