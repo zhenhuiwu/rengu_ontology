@@ -8,6 +8,7 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
@@ -21,7 +22,9 @@ const setQuery = (patch: Record<string, string | undefined>) => router.replace({
 const { readonly, reason } = useReadonly();
 
 const selected = computed<ExtSystem>(() => EXT_SYSTEMS.find((s) => s.id === q('sys')) ?? EXT_SYSTEMS[0]);
-const statusBadge = (s: ExtSystem['status']) => (s === '正常' ? 'success' : s === '降级' ? 'warning' : 'default');
+// 状态点：正常 / 停用 灰，降级 橙（不用绿、蓝）
+const statusBadge = (s: ExtSystem['status']) => (s === '降级' ? 'warning' : 'default');
+const resultText = (r: CallResult) => (r === '结果未知' ? '结果未知 · 待对账' : r);
 
 // 调用记录：本页内可改（重试 / 核对后结果会变）
 const overrides = ref<Record<string, Partial<ExtCall>>>({});
@@ -45,8 +48,9 @@ const cols = [
   { title: '发起人', dataIndex: 'actor', key: 'actor', width: 130, ellipsis: true },
   { title: '幂等键', key: 'idemKey', width: 130, ellipsis: true },
   { title: '耗时', key: 'ms', width: 80, align: 'right' as const },
+  { title: '尝试', key: 'attempt', width: 50, align: 'right' as const },
   { title: 'HTTP', key: 'http', width: 60, align: 'right' as const },
-  { title: '结果', key: 'result', width: 90 },
+  { title: '结果', key: 'result', width: 150 },
   { title: '操作', key: 'op', width: 60 },
 ];
 
@@ -62,17 +66,17 @@ async function retry(c: ExtCall) {
   const ok = await confirm.ask({
     title: '用同一幂等键重试', target: `${c.action} · ${c.target}`, okText: '重试',
     fields: [{ label: '系统', value: `${selected.value.name}（${selected.value.vendor}）` }, { label: '幂等键', value: c.idemKey ?? EMPTY }, { label: '原调用', value: `${c.id} · ${c.time}` }],
-    impact: `对方按幂等键 ${c.idemKey} 去重：如果上次已经处理，这次只返回原结果，不会重复执行。`,
+    impact: `这次调用超时，系统没有自动重试。请先对账；确认要重试时，对方按幂等键 ${c.idemKey} 去重：上次已处理则只返回原结果，不会重复执行。`,
   });
   if (!ok) return;
-  overrides.value[c.id] = { result: '成功', http: 200, ms: 236, attempt: c.attempt + 1, msg: '重试成功：对方返回原处理结果（幂等命中）' };
+  overrides.value[c.id] = { result: '成功', http: 200, ms: 236, attempt: c.attempt + 1, msg: '人工对账后重试成功：对方返回原处理结果（幂等命中）' };
   message.success('重试成功：对方已处理过，返回原结果');
 }
 async function markChecked(c: ExtCall) {
   const ok = await confirm.ask({
-    title: '人工核对结果', target: `${c.action} · ${c.target}`, okText: '确认对方已处理', tag: '结果未知',
+    title: '人工核对结果', target: `${c.action} · ${c.target}`, okText: '确认对方已处理', tag: '结果未知 · 待对账',
     fields: [{ label: '系统', value: `${selected.value.name}（${selected.value.vendor}）` }, { label: '原调用', value: `${c.id} · ${c.time}` }],
-    impact: `${selected.value.name} 不支持幂等，不能自动重试。请先在对方系统确认这条请求已处理，再标记为成功；没处理的话请重新发起动作。`,
+    impact: `${selected.value.name} 不支持幂等，从不重试。请先在对方系统确认这条请求已处理，再标记为成功；没处理的话请重新发起动作。`,
   });
   if (!ok) return;
   overrides.value[c.id] = { result: '成功', msg: '人工核对：对方已处理（王敏 16:30 标记）' };
@@ -112,7 +116,7 @@ async function markChecked(c: ExtCall) {
           <a-tag>{{ selected.category }}</a-tag>
           <a-tag>{{ selected.env }}</a-tag>
           <a-badge :status="statusBadge(selected.status)" :text="selected.status" />
-          <span v-if="selected.status === '降级'" class="t-12 tl-attention">最近 6 次调用有失败 / 结果未知，新调用排队重试</span>
+          <span v-if="selected.status === '降级'" class="t-12 tl-attention">最近 6 次调用有失败 / 结果未知；结果未知不自动重试，需对账</span>
         </div>
         <a-space>
           <a-button>测试调用</a-button>
@@ -127,7 +131,7 @@ async function markChecked(c: ExtCall) {
           <a-descriptions-item label="凭证" :span="2"><span class="num">{{ selected.authDetail }}</span></a-descriptions-item>
           <a-descriptions-item label="幂等">
             <span v-if="selected.idempotent">支持 · <span class="num">{{ selected.idemKey }}</span></span>
-            <span v-else class="tl-attention">不支持（结果未知需人工核对）</span>
+            <span v-else class="tl-attention">不支持（从不重试；结果未知需人工对账）</span>
           </a-descriptions-item>
           <a-descriptions-item label="超时"><span class="num">{{ selected.timeoutMs / 1000 }} 秒</span></a-descriptions-item>
           <a-descriptions-item label="限流">{{ selected.rateLimit }}</a-descriptions-item>
@@ -152,8 +156,9 @@ async function markChecked(c: ExtCall) {
             <span v-else-if="column.key === 'target'" class="num">{{ record.target }}</span>
             <span v-else-if="column.key === 'idemKey'" class="num c-3">{{ record.idemKey ?? EMPTY }}</span>
             <span v-else-if="column.key === 'ms'" class="num">{{ record.ms }} ms</span>
+            <span v-else-if="column.key === 'attempt'" class="num c-2">{{ record.attempt }}</span>
             <span v-else-if="column.key === 'http'" class="num" :class="record.http && record.http !== 200 ? 'tl-failed' : ''">{{ record.http ?? EMPTY }}</span>
-            <span v-else-if="column.key === 'result'" class="ex-res" :class="tl(record.result)"><span class="ex-dot" />{{ record.result }}</span>
+            <span v-else-if="column.key === 'result'" class="ex-res" :class="tl(record.result)"><QuestionCircleOutlined v-if="record.result === '结果未知'" /><span v-else class="ex-dot" />{{ resultText(record.result) }}</span>
             <a v-else-if="column.key === 'op'" @click="openCall(record.id)">详情</a>
           </template>
         </a-table>
@@ -164,7 +169,7 @@ async function markChecked(c: ExtCall) {
 
   <a-drawer :open="!!call" :width="560" :title="call ? `调用详情 · ${call.id}` : ''" @close="closeCall">
     <template v-if="call">
-      <div class="ex-dr-status" :class="tl(call.result)"><span class="ex-dot" /><span class="t-16 fw-600">{{ call.result }}</span></div>
+      <div class="ex-dr-status" :class="tl(call.result)"><QuestionCircleOutlined v-if="call.result === '结果未知'" /><span v-else class="ex-dot" /><span class="t-16 fw-600">{{ resultText(call.result) }}</span></div>
       <div class="t-12 c-2 ex-dr-msg">{{ call.msg }}</div>
       <a-descriptions :column="1" bordered size="small" class="ex-desc">
         <a-descriptions-item label="系统">{{ selected.name }}（{{ selected.vendor }}）</a-descriptions-item>
