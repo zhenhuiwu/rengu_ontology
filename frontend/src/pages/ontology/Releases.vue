@@ -15,7 +15,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
 import { useAppStore } from '@/stores/app';
 import {
-  CHANGE_REQUESTS, CURRENT_USER, CURRENT_VERSION, NEXT_VERSION, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, reviewLog,
+  CHANGE_REQUESTS, CURRENT_USER, ONTOLOGY_ADMINS, CURRENT_VERSION, NEXT_VERSION, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, reviewLog,
   type ChangeRequest, type CheckResult, type CRStatus, type ReviewEvent,
 } from '@/mock/changes';
 
@@ -25,6 +25,7 @@ const confirm = useConfirmStore();
 const app = useAppStore();
 const { readonly, reason } = useReadonly();
 const me = computed(() => app.user?.name || CURRENT_USER);
+const isAdmin = computed(() => ONTOLOGY_ADMINS.includes(me.value));
 
 const CRS = reactive<ChangeRequest[]>(CHANGE_REQUESTS.map((c) => ({ ...c })));
 const extraLog = reactive<Record<string, ReviewEvent[]>>({});
@@ -113,7 +114,12 @@ async function submit() {
     impact: '提交后草稿锁定；审核人驳回或你撤回提交后才能继续修改。' });
   if (ok) { move('审核中', '提交审核', `审核人 ${cur.value.reviewer}`); message.success(`${cur.value.id} 已提交审核`); }
 }
-function edit() { if (editTo.value) router.push(editTo.value); }
+function edit() {
+  if (!editTo.value) return;
+  const back = router.resolve({ path: route.path, query: { cr: cur.value.id, tab: tab.value } }).fullPath;
+  const to = router.resolve(editTo.value);
+  router.push({ path: to.path, query: { ...to.query, back } });
+}
 async function removeDraft() {
   const ok = await confirm.ask({ title: '删除草稿', target: target(), okText: '删除', danger: true,
     fields: [{ label: '改动', value: `${cur.value.changes} 处` }],
@@ -155,7 +161,7 @@ async function reopen() {
 const approved = computed(() => CRS.filter((c) => c.status === '已通过'));
 async function publish() {
   const m = mergeCheck(approved.value);
-  const verdict = m.rows.map((r) => ({ label: `${r.code} ${r.result}`, value: `${r.name}：${r.note}` }));
+  const verdict = m.rows.map((r) => ({ label: r.code === '提示' ? '提示' : `${r.code} ${r.result}`, value: `${r.name}：${r.note}` }));
   const ok = await confirm.ask({ title: `整版发布 ${NEXT_VERSION}`, target: `本体（当前 ${CURRENT_VERSION}）`, okText: '发布',
     tag: m.blocked ? '合并校验有阻断' : '合并校验通过',
     fields: [...approved.value.map((c) => ({ label: c.id, value: c.title })), ...verdict],
@@ -181,8 +187,8 @@ async function rollback() {
 <template>
   <Teleport defer to="#page-extra">
     <span class="t-12 c-3">待发布 {{ approved.length }} 张</span>
-    <a-tooltip :title="readonly ? reason : approved.length ? '' : '没有已通过的变更单'">
-      <a-button :type="detailPrimary ? 'default' : 'primary'" :disabled="readonly || !approved.length" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
+    <a-tooltip :title="readonly ? reason : !isAdmin ? '需要本体管理员发布' : approved.length ? '' : '没有已通过的变更单'">
+      <a-button :type="detailPrimary ? 'default' : 'primary'" :disabled="readonly || !isAdmin || !approved.length" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
     </a-tooltip>
   </Teleport>
 
@@ -295,7 +301,7 @@ async function rollback() {
       <!-- 发布校验：固定 17 项，不分页 -->
       <div v-else-if="tab === 'checks'" class="rl-body">
         <div class="rl-sum t-14">
-          <span class="c-error">阻断 {{ counts['阻断'] }}</span><span class="c-warning">警告 {{ counts['警告'] }}</span>
+          <span :class="counts['阻断'] ? 'c-error' : 'c-3'">阻断 {{ counts['阻断'] }}</span><span :class="counts['警告'] ? 'c-warning' : 'c-3'">警告 {{ counts['警告'] }}</span>
           <span v-if="counts['信息']" class="c-3">信息 {{ counts['信息'] }}</span>
           <span class="c-2">通过 {{ counts['通过'] }}</span><span class="c-3">不适用 {{ counts['不适用'] }}</span>
           <span class="rl-sp" /><span class="t-12 c-3 num">校验于 {{ detail.times.checked ?? '--' }} · 目标库 达梦 DM8、金仓 KES</span>

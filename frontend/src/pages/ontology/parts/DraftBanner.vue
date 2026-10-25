@@ -2,9 +2,13 @@
 /** 草稿视图顶部常驻提示条，高度用 --banner-h。 */
 import type { DraftCR } from '@/mock/releases';
 import { useAppStore } from '@/stores/app';
+import { useRoute, useRouter } from 'vue-router';
 defineProps<{ draft: DraftCR }>();
 defineEmits<{ submit: []; discard: [] }>();
 const app = useAppStore();
+const route = useRoute();
+const router = useRouter();
+const back = () => router.push(String(route.query.back));
 </script>
 
 <template>
@@ -13,6 +17,7 @@ const app = useAppStore();
     <span class="c-2 num">变更单 {{ draft.id }}　{{ draft.title }}　{{ draft.changes }} 处改动　{{ draft.owner }} 最后编辑于 {{ draft.updatedAt }}</span>
     <span class="c-3">问数仍使用已发布版本 {{ app.ontologyVersion }}</span>
     <span class="db-sp" />
+    <a v-if="route.query.back" @click="back">返回变更单 {{ draft.id }}</a>
     <a @click="$emit('submit')">提交审核</a>
     <a class="c-3" @click="$emit('discard')">放弃草稿</a>
   </div>

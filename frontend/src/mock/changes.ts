@@ -531,6 +531,9 @@ export function mergeCheck(crs: ChangeRequest[]) {
   const synCRs = crs.filter((c) => crDetail(c.id).synonyms?.length);
   if (synCRs.length > 1) rows.push({ code: '提示', name: '同义词索引', result: '信息', note: `${synCRs.map((c) => c.id).join('、')} 都改了同义词，发布后同义词索引一起重建，约 2 分钟生效` });
   const evals = crs.reduce((n, c) => n + impactSummary(crDetail(c.id)).evals, 0);
-  if (evals) rows.push({ code: '提示', name: '评测回放', result: '信息', note: `发布前自动回放 ${evals} 道评测题` });
+  if (evals) rows.push({ code: '提示', name: '评测回放', result: '信息', note: `已按 ${NEXT_VERSION} 草稿回放 ${evals} 道评测题，通过 ${evals} 题，失败 0 题` });
   return { rows, blocked: rows.some((r) => r.result === '阻断') };
 }
+
+/** 本体管理员：只有他们能整版发布。 */
+export const ONTOLOGY_ADMINS = ['王敏'];
