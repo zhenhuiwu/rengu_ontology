@@ -10,6 +10,7 @@
 | 动作类型、事件类型、外部系统三页切真接口（前端开关 `action`、`integration`）；路由拆分 | `c918b65` | pytest、ruff、`npm run build` |
 | 动作类型写回 tab 的外部系统下拉改调 `GET /api/data/v1/ext-systems?writeback=1`（取到之前用 mock） | `93dbcd6` | 下拉结果与 mock `writebackSystems()` 一致；页面确实发出这个请求 |
 | 回写调用 `writeback_call`：表、迁移 `integration_0002`、种子（`system/derived/extCalls.json`，756 行）、接口 `GET /ext-systems/{id}/calls`、`GET /writeback-calls`、`GET /writeback-calls/{id}`、`POST /writeback-calls/{id}:mark-checked`；`:test` 落库；外部系统页“最近调用”、详情抽屉、人工核对改走真接口 | `1cd8f9c`、`2620474` | 24 个测试；前端 client 与 mock 逐项比对（9 个系统 × 结果筛选 × 分页 + counts + 详情，679 项，0 差异）；Playwright 页面检查 |
+| 动态本体的执行记录、统计：动作类型页的“执行记录”页签、“最近异常”、概览统计改调动态的 `GET /api/ontology/v1/action-runs?actionType=&scope=runs`（前端开关 `dynamic`，按动作类型取全量缓存，统计口径同 mock `runStats()`；取不到时用 mock） | 本批 | 17 个类型 1,849 条记录与 mock `runsOf()` 逐条比对 |
 | 迁移改接 `integration_0002.down_revision = dynamic_0002` | 最后一个单独提交 | 在临时分支合入 `static-integ2` 和 `dynamic-rules`：只有一个 head，空库 `upgrade head`、种子、`alembic check` 都通过，回写测试 24 个通过 |
 
 - 种子阶段 `integration_runs` 已在 `app/seeds/registry.py` 登记，**`seeds/loader.py` 不用改**。
@@ -21,7 +22,7 @@
 
 | 页面操作 / 功能 | 现状 | 原因 / 归属 / 依赖 |
 |---|---|---|
-| 动作类型“执行记录”、“最近异常”、统计（`runStats`） | 读 mock | 数据在动态的 `GET /action-runs`（动态负责人）。前端改调动态接口即可，参数见 api 文档 §3.1（`actionType`、`status`、`size=14`） |
+| 动作类型的执行记录抽屉（`drawer.open('action', id)`）、近 14 天趋势图（`runDaily`） | 读 mock | 抽屉是公共组件，接动态的 `GET /action-runs/{id}`（动态负责人 / 抽屉归属方）；趋势图 mock 是随机数，等动态出按天统计的接口 |
 | 事件类型“近期事件”、趋势（`GET /event-types/{id}/events`、`/stats`）、事件抽屉 `GET /events/{id}` | 后台没实现，页面读 mock | 要先建事件表和投递表（`event`、`event_delivery`、`event_dedup`，api 文档 §9.1），再从 `eventsOf.json` 并集灌种子；我负责 |
 | 两页的新建、编辑、草稿保存、提交审核、放弃草稿 | 读 mock（`useDraftEdits` 本地） | 走变更单（静态 / versioning）。`static-integ2` 已有变更单接口：`GET /change-requests`（列表 + 详情）、`:submit` / `:withdraw` / `:approve` / `:reject` / `:unapprove` / `:reopen`、`DELETE`，格式见 `docs/backend/static-api.md` §3.1。action / event 的 `sections.py` 已登记快照段 |
 | 试运行 `POST /action-types/{id}:dry-run`、模拟触发 `POST /event-types/{id}:simulate` | 后台没实现，页面只弹本地提示 | 我负责。规则见 api 文档 §3.1、§3.3（一律 200，带 `?previewAs=` 时返回 403 `READONLY`） |
@@ -46,5 +47,5 @@
 2. 合并后检查：`alembic heads` 只有一个 head；空库跑 `upgrade head` 和 `python -m app.cli seed`（`writeback_call` 756 行）；跑 `alembic check`、全量 pytest、`npm run build`。
 3. 本地联调：`RENGU_DATABASE_URL=… uv run uvicorn …`，前端加 `VITE_API_REAL_MODULES=action,integration`（只在命令前面临时加，不要提交 env 文件）。
 4. **变更单**：02:00 合并后，把动作类型、事件类型的新建、编辑、草稿保存、提交审核、放弃草稿接到 `static-integ2` 的变更单接口（`GET /change-requests`、`:submit` / `:withdraw` / `:approve` / `:reject` / `:unapprove` / `:reopen`、`DELETE`，格式见 `docs/backend/static-api.md` §3.1）。
-5. **执行记录**：动态的 `GET /action-runs` 已在 master（`b688d5d`）。动作类型页的“执行记录”、“最近异常”和统计只要改 `src/api/action.ts` 和 `ActionTypes.vue`，改调这个接口（参数 `actionType`、`status`、`page`、`size=14`），再和 mock `runsOf()` 逐项比对。这一批没来得及做。
+5. **执行记录**：列表和统计已接上；剩执行抽屉（`GET /action-runs/{id}`）和趋势图（等动态出按天统计的接口）。
 6. 其余按第 2 节的顺序：事件表和近期事件 → dry-run / simulate → used-by → 对账任务。

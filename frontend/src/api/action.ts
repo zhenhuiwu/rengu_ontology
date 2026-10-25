@@ -8,14 +8,16 @@
  * 左侧列表的分组 / 关键字筛选和分页另走列表接口（listActionTypes / listEventTypes）。
  * 字段名、取值已和 mock 对齐（ActionType / EventType / ActionParam …），这里只把 null 收成可选字段。
  *
- * 不在本文件：执行记录 / 统计（GET /action-runs 归 dynamic）、近期事件（/events）、草稿写入（PUT /change-requests/…，versioning）。
+ * 执行记录 / 统计：dynamic 开关开着时取 GET /api/ontology/v1/action-runs?actionType=&scope=runs（dynamic 的接口），按动作类型整份缓存，
+ * 统计按 mock runStats() 同样的口径在前端算；取不到 / 开关关着时用 mock runsOf()。
+ * 不在本文件：近期事件（/events）、草稿写入（PUT /change-requests/…，versioning）。
  */
 import { reactive } from 'vue';
 import {
   ACTION_TYPES, EVENT_TYPES, ACTION_VERSION_NOTES, EVENT_VERSION_NOTES, paramsOf as mockParams, condsOf as mockConds,
   writebackOf as mockWriteback, payloadOf as mockPayload, subscribersOf as mockSubs, versionsOf as mockVersions,
   type ActionType, type ActionParam, type SubmitCond, type OntologyEdit, type SideEffect, type EventType, type PayloadField,
-  type Subscriber, type TypeVersion, writebackSystems as mockWbSystems,
+  type Subscriber, type TypeVersion, writebackSystems as mockWbSystems, runsOf as mockRuns, type ActionRun, type RunStatus,
 } from '@/mock/actionEvent';
 import type { ExtSystem } from '@/mock/extsys';
 import { integrationApi, listExtSystems } from './integration';
@@ -142,3 +144,39 @@ export function loadWritebackSystems(): Promise<void> {
   ).finally(() => { wbSys.loading = false; });
 }
 export const writebackSystems = (): ExtSystem[] => (integrationApi.isReal() && wbSys.loaded ? wbSys.items : mockWbSystems());
+
+// ---------------- 执行记录 / 统计（dynamic 模块：GET /api/ontology/v1/action-runs） ----------------
+
+export const dynamicApi = apiClient('dynamic');
+/** mock ActionRun 的字段；后台多出来的（action、typeVersion、submittedAt、sysId …）和 null 不要 */
+const RUN_KEYS = ['id', 'typeId', 'at', 'initiator', 'confirmer', 'approver', 'source', 'objKind', 'objId', 'objLabel', 'summary', 'status', 'ms', 'code', 'retries', 'idemKey', 'ruleId', 'alertId', 'extRef', 'reconcile'];
+const pickRun = (r: Record<string, unknown>): ActionRun =>
+  Object.fromEntries(RUN_KEYS.filter((k) => r[k] !== null && r[k] !== undefined).map((k) => [k, r[k]])) as unknown as ActionRun;
+
+/** 按动作类型缓存全部执行记录（每个类型 100 多条，一次取完；顺序 = 后台顺序，和 mock 一致） */
+export const runsSnap = reactive<{ byType: Record<string, ActionRun[]>; loading: Record<string, boolean> }>({ byType: {}, loading: {} });
+export async function loadRuns(typeId: string, force = false): Promise<void> {
+  if (!dynamicApi.isReal() || runsSnap.loading[typeId] || (!force && runsSnap.byType[typeId])) return;
+  runsSnap.loading[typeId] = true;
+  try {
+    const rows: ActionRun[] = [];
+    for (let page = 1; ; page++) {
+      const r = await dynamicApi.get<PageResult<Record<string, unknown>>>('/action-runs', { query: { actionType: typeId, scope: 'runs', page, size: ALL } });
+      rows.push(...r.items.map(pickRun));
+      if (rows.length >= r.total || !r.items.length) break;
+    }
+    runsSnap.byType[typeId] = rows;
+  } finally { runsSnap.loading[typeId] = false; }
+}
+export const runsOf = (typeId: string): ActionRun[] =>
+  (dynamicApi.isReal() && runsSnap.byType[typeId] ? runsSnap.byType[typeId] : mockRuns(typeId));
+/** 同 mock runStats() 的口径（只是换成上面的 runsOf） */
+export function runStats(typeId: string) {
+  const rows = runsOf(typeId);
+  const c = (s: RunStatus) => rows.filter((r) => r.status === s).length;
+  const ok = c('成功') + c('已对账');
+  const pending = c('待确认') + c('审批中') + c('执行中');
+  const done = rows.length - pending - c('已撤回');
+  return { total: rows.length, ok, failed: c('失败'), unknown: c('结果未知'), pending, confirm: c('待确认'), rate: done ? ok / done : 0,
+    avgMs: rows.length ? Math.round(rows.reduce((s, r) => s + r.ms, 0) / rows.length) : 0 };
+}

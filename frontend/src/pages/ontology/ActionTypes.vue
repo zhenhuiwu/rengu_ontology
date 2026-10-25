@@ -5,7 +5,7 @@
  * 规则、执行记录在当前页用抽屉打开（useDrawer），不跳转。
  * 草稿：草稿来源与视图切换用公共 parts/useDraftView（与指标口径一致）；草稿里的增删改与改动标记用本页 useDraftEdits。
  * 真接口（开关 action 打开）：左侧列表（分组 / 关键字 / 分页）走 GET /action-types；详情、参数、提交条件、写回、版本历史
- * 走 api/action.ts 的快照。执行记录与统计（dynamic 的 /action-runs）、被规则引用、草稿写入（versioning）、外部系统选项仍读 mock。
+ * 走 api/action.ts 的快照；执行记录与统计走 dynamic 的 /action-runs（dynamic 开关，取不到用 mock）。被规则引用、草稿写入（versioning）仍读 mock。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -26,7 +26,7 @@ import { RULES, ALERTS } from '@/mock/dynamic';
 import { extSystemById } from '@/mock/extsys';
 import {
   ACTION_TYPES, ACTION_GROUPS, RULE_ACTION, UNKNOWN_FOLLOWUP,
-  runsOf, runStats, runDaily, withSystem, ruleConfirmer,
+  runDaily, withSystem, ruleConfirmer,
   type ActionType, type RunStatus, type ActionParam, type SubmitCond, type OntologyEdit, type SideEffect,
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
@@ -35,7 +35,7 @@ import { useDraftView } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
 import {
-  actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, type ActionTypeRow,
+  actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, loadRuns, type ActionTypeRow,
 } from '@/api/action';
 
 const route = useRoute();
@@ -167,6 +167,8 @@ async function dryRun() {
 }
 
 /* 概览 */
+// 执行记录 / 统计：dynamic 开关开着时按选中的动作类型取 /action-runs（取不到时 runsOf 退回 mock）
+watch(() => cur.value?.id, (id) => { if (id) loadRuns(id).catch(() => { /* 退回 mock */ }); }, { immediate: true });
 const stats = computed(() => runStats(cur.value.id));
 const usedBy = computed(() => cur.value.usedBy.map((id) => {
   const r = RULES[id];
