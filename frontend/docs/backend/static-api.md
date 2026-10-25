@@ -420,18 +420,18 @@ erDiagram
 ### 1.5 行级范围（审核意见阻断 1：引用底层）
 
 - `role_object_scope.row_filter` 的 jsonb 结构、`from_row_scope({prop, op, values})` 转换、`apply_row_filter` / `to_sql` 注入都由底层负责（CONVENTIONS §10：`{field, op, value|valueFrom}`，`and/or` 组合，`∈` 等同 `in`，字段走白名单、值走绑定参数）。静态不建表、不定义格式。
-- 静态负责两件事：(1) `property` 表提供属性 API 名，`field` 只能是其中标为权限依据的属性，`apply_row_filter` 的白名单按它声明，跨对象的字段同时声明一跳关系路径（如 `order.store_id → store.region_code`），底层生成 `EXISTS`；(2) 有行级过滤的接口调底层注入（见第 3 节「行级」列）。
+- 静态负责两件事：(1) `property` 表提供属性 API 名，`field` 只能是其中标为权限依据的属性，`apply_row_filter` 的白名单按它声明，跨对象的字段同时声明一跳关系路径（如 `order_belongs_to_store.big_region`），底层生成 `EXISTS`；(2) 有行级过滤的接口调底层注入（见第 3 节「行级」列）。
 - 显示文字按前端 `scopeText = "${prop} ${op} ${values.join('、')}"` 生成，另存一列，不参与注入。`defaultDeny` 角色（R-05/R-06/R-08）没配范围时看不到数据，由底层 `row_filter()` 扩展点处理。
 - 种子时中文名换成 API 名：对象按 `PERM_OBJECTS`（订单→SalesOrder…），属性按 `OBJECT_PROPS`。mock 里 12 条范围、6 种 (对象, 属性)：
 
 | mock (objType, prop) | 静态 property | 说明 |
 |---|---|---|
-| 门店.大区 | `store.region_code`（所属大区） | 名称不完全一致，按此对应 |
-| 订单.门店 | `order.store_id` | values 是门店名，需按 `ALL_STORES` 换 code |
-| 商品.品类 | `product.category_id`（所属品类） | values 是品类名 |
+| 门店.大区 | `store.big_region`（所属大区，存「华东」这类值） | 骨架 `governance.py:56`；维度值「华东大区」的同义词是「华东」（`dimensions.ts:93/207`） |
+| 订单.门店 | `biz_order` 经 `order_belongs_to_store` 一跳到 `store.name`（`EXISTS`） | 谓词 `store.name = ANY($n)`，values 原样是门店名，不换 code。**[推断]** mock 的范围值（`roles.ts:26`「上海徐汇店」等 6 个）在 `ALL_STORES` 里一个都对不上（种子里是「上海徐汇漕河泾店」这类全称），照原样入库时这类范围匹配 0 行，效果等于拒绝；受影响的不只是下拉候选值：角色 R-06 门店店长（`roles.ts:69`，`defaultDeny`）配的就是 `订单.门店 = 上海徐汇店`，照这个写法它问数、查订单都是 0 行。要不要加别名表由用户定（列入待定清单），一期不做 |
+| 商品.品类 | `product.category`（类目路径，取第一段 `split_part(category, '/', 1)`） | 范围值按别名换成一级类目再比，谓词 `split_part(product.category, '/', 1) = ANY($n)`：乳品烘焙→乳品，休闲零食→休闲食品，日化清洁→日化家清；生鲜、粮油调味、酒水饮料同名直接比。别名表放在 `app/contracts/static.py`（`CATEGORY_SCOPE_ALIAS`）**[推断]**，前端没给对应关系，按名称最接近的一级类目定 |
 | 库存快照.仓库 | `inventory.warehouse_id` | values 是仓库名 |
-| 订单.大区 | 无直接属性，走 `order.store_id → store.region_code` | 已定：一期 `to_sql` 支持沿白名单里声明的关系路径走**一跳**（`EXISTS` 子查询）；两跳以上或未声明的路径返回 `BAD_ROW_FILTER` |
-| 会员.常去门店所属大区 | 无此属性（会员只有 `reg_store_id` 注册门店） | **[推断]** 先按「注册门店所属大区」（`member.reg_store_id → store.region_code`，一跳）处理，请用户确认 |
+| 订单.大区 | 无直接属性，`biz_order` 经 `order_belongs_to_store` 一跳到 `store.big_region`（骨架 `governance.py:63`） | 已定：一期 `to_sql` 支持沿白名单里声明的关系路径走**一跳**（`EXISTS` 子查询）；`order_line` 经 `biz_order` 继承（两跳，骨架 `72204b0`）；其余两跳以上或未声明的路径返回 `BAD_ROW_FILTER` |
+| 会员.常去门店所属大区 | 无此属性（会员只有 `reg_store_id` 注册门店） | **[推断]** 先按「注册门店所属大区」（`member.reg_store_id → store.big_region`，一跳）处理，请用户确认；骨架一期不建 `member` 表，这类范围网关先按拒绝处理 |
 
 ## 2. 核心链路：变更单 → 校验 → 整版发布
 
