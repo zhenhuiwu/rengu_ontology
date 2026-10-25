@@ -147,8 +147,8 @@ const barOption = computed(() => ({
       </a-space>
       <a-space :size="4">
         <a-tooltip title="复制"><a-button type="text" @click="onCopy"><template #icon><CopyOutlined /></template></a-button></a-tooltip>
-        <a-tooltip :title="vote === 'up' ? '已标记回答正确，再点取消' : '回答正确'"><a-button type="text" :class="{ 'qa-ans-voted': vote === 'up' }" @click="onVote('up')"><template #icon><LikeFilled v-if="vote === 'up'" /><LikeOutlined v-else /></template></a-button></a-tooltip>
-        <a-tooltip :title="vote === 'down' ? '已标记回答有误，再点取消' : '回答有误'"><a-button type="text" :class="{ 'qa-ans-voted': vote === 'down' }" @click="onVote('down')"><template #icon><DislikeFilled v-if="vote === 'down'" /><DislikeOutlined v-else /></template></a-button></a-tooltip>
+        <a-tooltip :title="readonly ? reason : vote === 'up' ? '已标记回答正确，再点取消' : '回答正确'"><a-button type="text" :class="{ 'qa-ans-voted': vote === 'up' }" :disabled="readonly" @click="onVote('up')"><template #icon><LikeFilled v-if="vote === 'up'" /><LikeOutlined v-else /></template></a-button></a-tooltip>
+        <a-tooltip :title="readonly ? reason : vote === 'down' ? '已标记回答有误，再点取消' : '回答有误'"><a-button type="text" :class="{ 'qa-ans-voted': vote === 'down' }" :disabled="readonly" @click="onVote('down')"><template #icon><DislikeFilled v-if="vote === 'down'" /><DislikeOutlined v-else /></template></a-button></a-tooltip>
       </a-space>
     </div>
   </div>

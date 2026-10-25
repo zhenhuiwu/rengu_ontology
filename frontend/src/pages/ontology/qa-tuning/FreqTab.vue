@@ -92,7 +92,7 @@ async function certify(f: FreqQ) {
         <span v-else-if="column.key === 'users'" class="num c-2">{{ record.users }}</span>
         <MetricRef v-else-if="column.key === 'metric'" :k="record.plan.metric" />
         <span v-else-if="column.key === 'plan'" class="c-2" :title="planText(record.plan)">{{ planText(record.plan).replace(metricLabel(record.plan.metric) + ' · ', '') }}</span>
-        <span v-else-if="column.key === 'cons'" class="num" :class="record.consistency < 0.7 ? 'tl-attention' : 'c-2'">{{ (record.consistency * 100).toFixed(0) }}%</span>
+        <span v-else-if="column.key === 'cons'" class="num" :class="record.consistency < 0.7 ? 'c-1 fw-600' : 'c-2'">{{ (record.consistency * 100).toFixed(0) }}%</span>
         <span v-else-if="column.key === 'last'" class="num c-2">{{ record.lastAsked.slice(5) }}</span>
         <span v-else-if="column.key === 'cert'">
           <a v-if="certOf(record)" class="c-2" @click="openCert(record.certId)">{{ certOf(record)!.status }} <span class="num">{{ record.certId }}</span></a>

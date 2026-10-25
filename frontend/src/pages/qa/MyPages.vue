@@ -214,7 +214,7 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
               <a-tooltip :title="reason"><a-button type="link" size="small" :disabled="readonly" @click="refresh(record)">刷新</a-button></a-tooltip>
               <a-tooltip :title="reason"><a-button type="link" size="small" :disabled="readonly" @click="openRename(record)">重命名</a-button></a-tooltip>
               <a-button type="link" size="small" @click="openPage(record, 'share')">共享</a-button>
-              <a-tooltip :title="reason"><a-button type="link" size="small" danger :disabled="readonly" @click="remove(record)">删除</a-button></a-tooltip>
+              <a-tooltip :title="reason"><a-button type="link" size="small" class="mp-del" :disabled="readonly" @click="remove(record)">删除</a-button></a-tooltip>
             </span>
           </template>
         </a-table>
@@ -253,6 +253,8 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
 </template>
 
 <style scoped>
+.mp-del:not(:disabled) { color: var(--g8); }
+.mp-del:not(:disabled):hover { color: var(--g10); }
 .mp { flex: 1; min-height: 0; }
 .mp-tabs { flex: none; padding: 0 16px; }
 .mp-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }

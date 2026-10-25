@@ -51,7 +51,7 @@ const cols = [
   { title: '状态', key: 'status', width: 190 },
   { title: '操作', key: 'op', width: 150 },
 ];
-const stCls = (s: FbStatus) => (s === '待处理' ? 'tl-attention' : s === '已忽略' || s === '待发布生效' ? 'c-3' : 'c-2');
+const stCls = (s: FbStatus) => (s === '待处理' ? 'tl-normal' : s === '已忽略' || s === '待发布生效' ? 'c-3' : 'c-2');
 /** 修正已在“已通过、待整版发布”的变更单里 */
 const awaitingRelease = (cr?: string) => !!cr && crById(cr)?.status === '已通过';
 
