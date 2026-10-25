@@ -123,7 +123,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly">新建函数</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button :type="formOpen ? 'default' : 'primary'" :disabled="readonly">新建函数</a-button></a-tooltip>
   </Teleport>
   <div class="fn">
     <div class="panel fn-list">
