@@ -224,7 +224,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 字段 | 库内值 → 接口值 |
 |---|---|
-| 动作/事件类型 `status`、版本 `status` | `published`→已发布，`changing`→变更中，`draft`→草稿；版本另有 `active`→生效中，`superseded`→已替代 |
+| 动作/事件类型 `status`、版本 `status` | `published`→已发布，`changing`→变更中，`draft`→草稿；版本的「生效中/已替代」不落库，按 `action_type.version`/`event_type.version` 推出（版本表只追加，见 §9） |
 | 执行状态 `action_run.status`（动态的表） | 库内码以 dynamic-api.md 1.3 为准，本文不重复（【推断】已驳回只有用户确认 U1 才加） |
 | `reconcile_result` | `succeeded`→外部已成功，`not_executed`→外部未执行 |
 | 执行来源 `source`（动态的表） | 库内码以 dynamic-api.md 1.3 为准；接口按 `source_label` 原文返回 |
@@ -685,7 +685,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 |---|---|---|
 | `action_type` | id(pk bigint), code(unique, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, owner, desc_tpl, runners, approval, sys_id(fk ext_system.id, 可空), endpoint, biz_key_template, release_id(fk ontology_release.id) | 当前版本 |
 | `action_type_rule` | id(pk), action_type_id, rule_id(fk 动态 rule.id；seed 按 `R-…` 查回), seq, mode_text | 使用该动作的规则（`ACTION_TYPES[].usedBy`）；`(action_type_id, rule_id)` 唯一；进快照 |
-| `action_type_version` | id(pk), action_type_id, ver, release_id(fk ontology_release.id), status(active/superseded), change_note, by, at, definition jsonb | 每次整版发布写一行 |
+| `action_type_version` | id(pk), action_type_id, ver, release_id(fk ontology_release.id), change_note, by, at, definition jsonb | 每次整版发布写一行；**只追加，不存状态**：`ver` 等于 `action_type.version` 的那行是生效中，其余是已替代（接口照前端返回「生效中/已替代」） |
 | `action_param` | id(pk), action_type_id, seq, name, api, type, required, default_text, rule_text, rule_expr jsonb(可空) | (action_type_id, api) 唯一 |
 | `submission_criterion` | id(pk), action_type_id, seq, kind(current_user/parameter/context_object), name, expr_text, expr_ast jsonb, fail_msg | (action_type_id, name) 唯一 |
 | `ontology_edit_rule` | id(pk), action_type_id, seq, op(modify/create/link), obj, field | — |
