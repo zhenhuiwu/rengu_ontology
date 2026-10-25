@@ -77,8 +77,8 @@ def load_sections(packages: list[str] | None = None) -> list[str]:
                     f"{name} 既没有 BUILDERS 也没有 register()：「import 时登记」已废弃（CONVENTIONS §7），"
                     "请导出模块级 BUILDERS = [...] 或幂等的 register()"
                 )
-    # 按包名排序整个注册表：create_app() 里 include_routers 会先 import 模块（静态 __init__ 的 register_all()
-    # 等 import 时登记），seed CLI 不会，两边登记顺序可能不同；排序后两边一致。同一模块内保持 BUILDERS 顺序。
+    # 按包名排序整个注册表：section 只由 load_sections() 经 BUILDERS / register() 发现，app 和 seed CLI
+    # 扫描/import 顺序可能不同；排序后两边一致。同一模块内保持 BUILDERS 顺序。
     ordered = sorted(_registry.items(), key=lambda kv: _package_of(kv[1]))
     _registry.clear()
     _registry.update(ordered)

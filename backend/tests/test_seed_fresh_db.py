@@ -108,8 +108,8 @@ async def test_default_seed_includes_discovered_sections():
             await conn.close()
         for r in rows:
             snap = json.loads(r["snapshot"])
-            # 不断言「只有这两节」：seed 导入静态模块时 static/__init__ 的 register_all() 仍会登记真实 section
-            # （import 时登记，§7 已禁止，待静态删掉）；替身名用 _test_ 前缀，所以并存也不冲突。
+            # 不断言「只有这两节」：load_sections() 也会经 BUILDERS / register() 发现真实模块的 section；
+            # 替身名用 _test_ 前缀，所以并存也不冲突。
             assert {ALPHA, BETA} <= set(snap)
             assert snap[ALPHA] == {"probe": {"since": r["ver"]}}
             assert snap[BETA] == {"probe_event": {"ver": r["ver"]}}

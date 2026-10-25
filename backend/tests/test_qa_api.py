@@ -247,7 +247,21 @@ def _assert_denied(cards, want):
         assert {k: v for k, v in got.items() if k != "denied"} == frame
 
 
-async def test_shared_member_gets_denied_cards(qa):
+def _old_deny_stub(monkeypatch):
+    """权限初版最简后 row_filter 对已登录用户一律 None；这两条测「非管理员 DENY」路径，换回旧桩。"""
+    import app.common.auth as auth
+    import app.modules.qa.service as qa_service
+    from app.common.row_filter import DENY_ALL
+
+    async def stub(user, _object_type):
+        return None if user.is_ontology_admin else dict(DENY_ALL)
+
+    monkeypatch.setattr(auth, "row_filter", stub)
+    monkeypatch.setattr(qa_service, "row_filter", stub)
+
+
+async def test_shared_member_gets_denied_cards(qa, monkeypatch):
+    _old_deny_stub(monkeypatch)
     want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
     got = await get(qa, "/pages/P905", user="U010231")  # 苏刚：P905（周婷）的共享成员，非本体管理员
     _assert_denied(got["cards"], want)
@@ -265,7 +279,8 @@ async def test_owner_still_gets_values(qa, session):
     assert got["cards"] == want
 
 
-async def test_preview_follows_row_filter(qa):
+async def test_preview_follows_row_filter(qa, monkeypatch):
+    _old_deny_stub(monkeypatch)
     want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
     # 管理员预览苏刚：数据身份 = 苏刚，row_filter 桩 = DENY_ALL → 共享页卡片无权限（详情和列表一致）
     _assert_denied((await get(qa, "/pages/P905", previewAs="U010231"))["cards"], want)
