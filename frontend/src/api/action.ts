@@ -15,8 +15,10 @@ import {
   ACTION_TYPES, EVENT_TYPES, ACTION_VERSION_NOTES, EVENT_VERSION_NOTES, paramsOf as mockParams, condsOf as mockConds,
   writebackOf as mockWriteback, payloadOf as mockPayload, subscribersOf as mockSubs, versionsOf as mockVersions,
   type ActionType, type ActionParam, type SubmitCond, type OntologyEdit, type SideEffect, type EventType, type PayloadField,
-  type Subscriber, type TypeVersion,
+  type Subscriber, type TypeVersion, writebackSystems as mockWbSystems,
 } from '@/mock/actionEvent';
+import type { ExtSystem } from '@/mock/extsys';
+import { integrationApi, listExtSystems } from './integration';
 import { apiClient, currentApiContext, type PageResult } from './http';
 
 export const actionApi = apiClient('action');
@@ -124,3 +126,19 @@ export const eventTypes = (): EventType[] => (api.isReal() ? snap.events : EVENT
 export const payloadOf = (e: EventType): PayloadField[] => (on() ? snap.payload[e.id] ?? [] : mockPayload(e));
 export const subscribersOf = (e: EventType): Subscriber[] => (on() ? snap.subs[e.id] ?? [] : mockSubs(e));
 export const eventVersionsOf = (e: EventType): TypeVersion[] => (on() ? snap.eventVersions[e.id] ?? [] : mockVersions(e.version, e.owner, EVENT_VERSION_NOTES));
+
+// ---------------- 写回 tab 的外部系统下拉（integration 模块：GET /api/data/v1/ext-systems?writeback=1） ----------------
+
+/**
+ * 可写回的外部系统（生产环境且未停用）。integration 开关开着时取真接口（每次进动作类型页重取，外部系统页新建 / 编辑后能看到），
+ * 第一次取到之前 / 开关关着时用 mock writebackSystems()。
+ */
+export const wbSys = reactive<{ loading: boolean; loaded: boolean; items: ExtSystem[] }>({ loading: false, loaded: false, items: [] });
+export function loadWritebackSystems(): Promise<void> {
+  if (!integrationApi.isReal() || wbSys.loading) return Promise.resolve();
+  wbSys.loading = true;
+  return listExtSystems({ writeback: true }).then(
+    (items) => { wbSys.items = items; wbSys.loaded = true; },
+  ).finally(() => { wbSys.loading = false; });
+}
+export const writebackSystems = (): ExtSystem[] => (integrationApi.isReal() && wbSys.loaded ? wbSys.items : mockWbSystems());

@@ -26,7 +26,7 @@ import { RULES, ALERTS } from '@/mock/dynamic';
 import { extSystemById } from '@/mock/extsys';
 import {
   ACTION_TYPES, ACTION_GROUPS, RULE_ACTION, UNKNOWN_FOLLOWUP,
-  runsOf, runStats, runDaily, withSystem, writebackSystems, ruleConfirmer,
+  runsOf, runStats, runDaily, withSystem, ruleConfirmer,
   type ActionType, type RunStatus, type ActionParam, type SubmitCond, type OntologyEdit, type SideEffect,
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
@@ -35,7 +35,7 @@ import { useDraftView } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
 import {
-  actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, type ActionTypeRow,
+  actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, type ActionTypeRow,
 } from '@/api/action';
 
 const route = useRoute();
@@ -57,6 +57,8 @@ const real = actionApi.isReal();
 const loadErr = ref('');
 const realList = reactive<{ items: ActionTypeRow[]; total: number; groups: string[] }>({ items: [], total: 0, groups: [] });
 const apiMsg = (e: unknown) => (isApiError(e) ? e.message : String(e));
+// 写回 tab 外部系统下拉：integration 开关开着时取 ?writeback=1（和 action 开关独立）
+loadWritebackSystems().catch(() => { /* 取不到时下拉退回 mock 列表 */ });
 if (real) {
   watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { loadErr.value = apiMsg(e); }); }, { immediate: true });
   let seq = 0;
