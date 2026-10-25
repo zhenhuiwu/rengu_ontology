@@ -6,11 +6,9 @@ from fastapi import APIRouter, Depends, Query
 
 from app.common.auth import require_func
 from app.common.context import ViewContextDep
-from app.common.pagination import MAX_PAGE_SIZE
+from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
 from app.modules.action.schemas import ItemsOut, TypeVersionOut
-from app.modules.action.service import paginate
-from app.modules.event import sections as _sections  # noqa: F401  TEMP：import 即登记快照 section（骨架自动发现前）
 from app.modules.event.schemas import (
     EventTypeDetailOut,
     EventTypeListOut,
@@ -23,7 +21,21 @@ from app.modules.event.service import EventTypeService
 
 router = APIRouter(tags=["event"], dependencies=[Depends(require_func("event-types", "view"))])
 
-PageNo = Annotated[int, Query(ge=1)]
+
+def _list_page(
+    page: Annotated[int, Query()] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 22,
+) -> PageParams:
+    """前端事件列表默认 size=22；page ≤ 0 收成 1（不报 422）。"""
+    return PageParams(page=page, size=size)
+
+
+def _nested_page(
+    page: Annotated[int, Query()] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 12,
+) -> PageParams:
+    """前端载荷字段默认 size=12。"""
+    return PageParams(page=page, size=size)
 
 
 @router.get(
@@ -32,19 +44,19 @@ PageNo = Annotated[int, Query(ge=1)]
 async def list_event_types(
     session: SessionDep,
     ctx: ViewContextDep,
+    page: Annotated[PageParams, Depends(_list_page)],
     source: Annotated[str | None, Query(description="来源（中文）；全部 / 不传 = 不过滤")] = None,
     kw: Annotated[str | None, Query(description="名称包含")] = None,
-    page: PageNo = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 22,
 ) -> EventTypeListOut:
     svc = EventTypeService(session)
     rows = await svc.search(ctx, source, kw)
+    p = page.clamp(len(rows))
     return EventTypeListOut(
-        items=[EventTypeOut.model_validate(r) for r in paginate(rows, page, size)],
+        items=[EventTypeOut.model_validate(r) for r in rows[p.offset : p.offset + p.size]],
         sources=svc.sources(),
         total=len(rows),
-        page=page,
-        size=size,
+        page=p.page,
+        size=p.size,
     )
 
 
@@ -62,16 +74,16 @@ async def list_payload_fields(
     type_id: str,
     session: SessionDep,
     ctx: ViewContextDep,
-    page: PageNo = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 12,
+    page: Annotated[PageParams, Depends(_nested_page)],
 ) -> PayloadFieldPageOut:
     rows, env_count = await EventTypeService(session).payload_fields(ctx, type_id)
+    p = page.clamp(len(rows))
     return PayloadFieldPageOut(
-        items=[PayloadFieldOut.model_validate(r) for r in paginate(rows, page, size)],
+        items=[PayloadFieldOut.model_validate(r) for r in rows[p.offset : p.offset + p.size]],
         envelope_count=env_count,
         total=len(rows),
-        page=page,
-        size=size,
+        page=p.page,
+        size=p.size,
     )
 
 

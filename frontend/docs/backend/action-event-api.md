@@ -138,7 +138,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 通用约定（沿用静态 §4）：
 - **前缀**：动作类型、事件类型、事件、对账相关接口用 `/api/ontology/v1`（`/api/ontology/v1/action-types/…`、`/event-types/…`、`/events/…`）；**外部系统 `/ext-systems*` 和 `/writeback-calls*` 用 `/api/data/v1`**（PDE 定：外部系统属数据模块，和骨架一致）。代码仍在 `integration/` 目录，归我。下表省略前缀。
-- **分页**：页码分页，请求参数 `page`、`size`，响应 `{items, total, page, size}`（与 `usePagedQuery` 一致）。所有显示 ‹ 1/N › 的列表（包括近期事件）都这样，**不用游标**。
+- **分页**：页码分页，请求参数 `page`、`size`，响应 `{items, total, page, size}`（与 `usePagedQuery` 一致）。所有显示 ‹ 1/N › 的列表（包括近期事件）都这样，**不用游标**。页码按骨架 `app.common.pagination` 收拢（同前端 `paginate.ts:12-13`）：`page ≤ 0` 当第 1 页（不报 422），超过最后一页返回最后一页，响应里的 `page` 是收拢后的页码，`total = 0` 时 `page = 1`；`size` 仍校验 1–200（超出 422）。默认 `size`：动作 / 事件列表 22，参数 / 载荷字段 12。
 - **字段和取值与前端 mock 完全一致**：JSON 用 camelCase（`typeId`、`objLabel`、`latencyMs`……），枚举用 mock 里的中文值（`已发布`、`结果未知`、`部分投递`……）。库里用 snake_case 和英文代码，在 Pydantic 层转换，对照见 §3.5。
 - 读接口接受 `ver`（即前端的 `?ver=`，历史版本）、`previewAs`（即“以此用户预览”）、`view=published|draft`、`cr`。**只读状态只看 query 参数 `?ver=` / `?previewAs=`，不用请求头**；带这两个参数的写请求一律 **403 `READONLY`**，`details.mode` 填 `history`（`?ver=`）或 `preview`（`?previewAs=`）（与 PDE/骨架一致）。
 - **白名单**：`:dry-run`、`:simulate` 是**不落库的 POST**，列入骨架的只读白名单——带 `?ver=` 时照常执行（前端不置灰）；带 `?previewAs=` 时前端已锁住，后台仍返回 403 `READONLY`（见 §3.3）。
@@ -732,8 +732,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 - **ext-systems `kw`**：前端外部系统页**没有搜索框**，`kw` 是后台补的可选过滤（名称 / 编号 / 厂商包含），不传 = 全部。【推断】
 - **`/action-types/{id}/versions`、`/event-types/{id}/versions` 按视图可见性返回 404**：当前视图下已下线（`retired_release_id` 非空）的类型 404；`?ver=V` 下 V 里看不到的类型也 404。【推断】
-- **分页**：跟骨架一致。`app.common.pagination` 目前没有切片 helper，模块内暂时自己切片；TODO：骨架补上 helper 后改为调用它。
-- **`restore_section` 的过渡口径**：见 §10.4 第 4–7 条。
+- **分页**：用骨架的 `PageParams`，先 `clamp(total)` 再切片（参数列表用 `Page.of`），口径见 §3 的「分页」。
+- **`restore_section` 的口径**：见 §10.4。
 
 ### 10.3 软引用（不建外键）
 
@@ -744,11 +744,11 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `event_subscription.rule_code` | 规则 `R-…` | 同上 |
 | `action_type.target_kind`、`event_type.obj_kind` | 静态的对象类型（前端 id） | 跨模块，静态表结构未定稿 |
 | `action_type_version.release_ver` / `event_type_version.release_ver` | `ontology_release.ver` | mock 版本记录里有发布表没有的版本号（如 `v2026.09.2`、`v2026.08.1`），只能按字符串存 |
-| `action_type.retired_release_id` / `event_type.retired_release_id` | `ontology_release.id` | 有外键指向 `ontology_release` 时 `TRUNCATE` 会失败（测试和重新 seed 要清表），所以只存 id |
+| `action_type.retired_release_id` / `event_type.retired_release_id` | `ontology_release.id` | **暂时**软引用：原先的理由（有外键时 `TRUNCATE` 会失败）已不成立，`ontology_release` 本来就只追加、不能 TRUNCATE，CONVENTIONS「指向 `ontology_release(id)` 的外键允许且推荐」。下一批单独补迁移 `event_0002`，改成外键（`ON DELETE` 默认 NO ACTION），串在当时 master 的 head 后面 |
 
 ### 10.4 `restore_section(session, content, *, release_id)` 的行为
 
-`actionTypes`、`eventTypes` 两个 builder 在 `app/modules/action/sections.py`、`app/modules/event/sections.py` 里，**import 时幂等登记**（重复登记同一实例不报错）。骨架自动发现 `sections.py` 之前，临时由 `app/seeds/loader.py` 和两个 router import 触发，可整段删。
+`actionTypes`、`eventTypes` 两个 builder 在 `app/modules/action/sections.py`、`app/modules/event/sections.py` 里，各自导出幂等的 `register()`（重复登记同一实例不报错）。由骨架 `load_sections()`（`create_app()`、seed CLI 各调一次）发现并调用；**import 时不登记**。
 
 1. **覆盖定义**：按前端 id（`code`）upsert `content` 里的每个类型，把类型行及子表改回快照里的值：
    - 动作：参数、条件、编辑、副作用、规则
@@ -756,7 +756,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
    - 外部系统 `sysId` 解析成 `ext_system.id`
 2. **缺席即下线**：当前在用、但 `content` 里没有的类型，`retired_release_id = release_id`。不删行，也不加新 `status`。
 3. **重新出现即恢复**：`content` 里有的类型清空 `retired_release_id`。所以恢复一个包含该类型的版本时，它会重新出现。
-4. **`release_id` 不传**：骨架 `restore_sections` 现在不传 `release_id`，并且在插入新版本行之前就调用。过渡期按 `max(ontology_release.id) + 1` 取值：identity 只增不减，新版本行的 id ≥ 它，中间也不会插进别的版本。骨架改成传入后以传入为准。【推断】
+4. **`release_id` 必填**（keyword-only `int`）：骨架 `restore_sections` 先写新回滚版本行，再把它的 `ontology_release.id` 传进来（所有钩子在同一个 SAVEPOINT 里，任一钩子出错整体撤销）。不再有 `max(id) + 1` 兜底。
 5. **子行 `is_seed` 跟随父行**：mock 自带重复 api 的参数只在 seed 行上放行。【推断】
 6. **快照里没有的运行数据保留旧值**：
    - 规则行的 `generates`

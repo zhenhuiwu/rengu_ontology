@@ -151,6 +151,15 @@ async def test_action_types_list(client, ae):
     assert [i["id"] for i in r.json()["items"]] == [a["id"] for a in ACTIONS if "告警" in a["name"]]
     r = await client.get(f"{ONT}/action-types", params={"page": 2, "size": 10})
     assert [i["id"] for i in r.json()["items"]] == [a["id"] for a in ACTIONS[10:20]]
+    # page ≤ 0 → 第 1 页（不报 422）；越界 → 最后一页，响应 page 也收拢
+    r = await client.get(f"{ONT}/action-types", params={"page": 0, "size": 10})
+    assert r.status_code == 200 and r.json()["page"] == 1
+    assert [i["id"] for i in r.json()["items"]] == [a["id"] for a in ACTIONS[:10]]
+    last = max(1, -(-len(ACTIONS) // 10))
+    r = await client.get(f"{ONT}/action-types", params={"page": 999, "size": 10})
+    body = r.json()
+    assert body["page"] == last
+    assert [i["id"] for i in body["items"]] == [a["id"] for a in ACTIONS[(last - 1) * 10 :]]
 
 
 @pytest.mark.parametrize("a", ACTIONS, ids=[a["id"] for a in ACTIONS])
@@ -416,12 +425,15 @@ async def test_build_section_equals_seed_section(ae):
         assert json.loads(json.dumps(built)) == b.seed_section("v2026.10.3", ctx), b.section
 
 
-def test_sections_register_on_import_idempotently():
-    """import sections.py 即登记（新进程里验证；测试进程的注册表被 conftest 按测试清空）；重复登记不报错。"""
+def test_sections_registered_by_load_sections_not_on_import():
+    """import sections.py 不登记；骨架 load_sections() 调 register() 登记（新进程里验证，测试进程的注册表
+    被 conftest 按测试清空）；register() 幂等。"""
     code = (
         "import json\n"
         "import app.modules.action.sections as a, app.modules.event.sections as e\n"
-        "from app.modules.versioning.sections import registered_sections as r\n"
+        "from app.modules.versioning.sections import load_sections, registered_sections as r\n"
+        "assert not {'actionTypes', 'eventTypes'} & set(r())\n"
+        "load_sections()\n"
         "assert r()['actionTypes'] is a.BUILDER and r()['eventTypes'] is e.BUILDER\n"
         "assert a.register() is a.BUILDER and e.register() is e.BUILDER\n"
         "print(json.dumps(sorted(r())))"
@@ -517,14 +529,14 @@ async def test_restore_section_none_leaves_types_untouched(ae):
         assert await ae.scalar(n_ret) == 0
 
 
-async def test_restore_section_without_release_id_uses_next_release(released):
-    """骨架改签名前不传 release_id：用 max(ontology_release.id)+1（新回滚记录的 id 不会小于它）。"""
-    top = await released.scalar(select(func.max(OntologyRelease.id)))
-    acts, _ = await _snap(released)
-    acts.pop("close_alert")
-    await action_sections.BUILDER.restore_section(released, acts)
-    got = await released.scalar(select(ActionType.retired_release_id).where(ActionType.code == "close_alert"))
-    assert got == top + 1
+def test_restore_section_release_id_is_required_keyword():
+    """release_id 是必填的 keyword-only 参数（骨架 restore_sections 先写新回滚记录再传它的 id）。"""
+    import inspect
+
+    for b in (action_sections.BUILDER, event_sections.BUILDER):
+        p = inspect.signature(b.restore_section).parameters["release_id"]
+        assert p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty
+        assert p.annotation in (int, "int")
 
 
 # ---------- 全新库：默认 seed 写出带 actionTypes / eventTypes 的版本记录；迁移往返只看自己的表 ----------
