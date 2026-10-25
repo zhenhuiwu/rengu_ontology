@@ -30,11 +30,11 @@ case "$cmd" in
   sync)
     b=$(cur_branch); [[ "$b" != master ]] || { echo "请在自己的工作区里执行"; exit 1; }
     git diff --quiet && git diff --cached --quiet || { echo "先提交自己的改动再同步"; exit 1; }
-    git rebase master ;;
+    git -c user.name="${GIT_COMMITTER_NAME:-$b}" rebase master ;;
   publish)
     b=$(cur_branch); [[ "$b" != master ]] || { echo "请在自己的工作区里执行"; exit 1; }
     git diff --quiet && git diff --cached --quiet || { echo "先提交自己的改动再合入"; exit 1; }
-    git rebase master
+    git -c user.name="${GIT_COMMITTER_NAME:-$b}" rebase master
     python3 scripts/check_imports.py
     npx vite build --logLevel error --outDir /tmp/wt-build-$b >/dev/null || { echo "构建失败，没有合入"; exit 1; }
     git -C "$MAIN" merge --ff-only "$b" && echo "已合入 master，http://localhost:5280 会自动刷新" ;;
