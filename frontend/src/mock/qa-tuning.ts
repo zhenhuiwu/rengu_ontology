@@ -52,7 +52,7 @@ export const T_METRICS: Record<string, TMetric> = {
   atv: { key: 'atv', name: '客单价（不含税）', version: 'v1', drawerId: 'atv' },
   repeat: { key: 'repeat', name: QA_METRIC.ex.name, version: QA_METRIC.ex.version },
   repeat_tax: { key: 'repeat_tax', name: QA_METRIC.in.name, version: QA_METRIC.in.version },
-  refund: { key: 'refund', name: '退款率', version: 'v2' },
+  refund: { key: 'refund', name: '退款率', version: 'v2', drawerId: 'refund_rate' },
 };
 Object.values(T_METRICS).forEach((m) => { m.cr = pendingCrOf(m.key); });
 
