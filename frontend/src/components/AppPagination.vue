@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 全站统一分页（规则见 README“分页规范”）。三种变体：
- *   full   “共 1,286 条” + 页码 + 每页条数（默认一屏条数, 10, 20, 50）+ 跳转（超过 10 页才显示）；主表格、卡片网格，右下对齐
+ *   full   “共 1,286 条” + 页码 + 每页条数（一屏（N）, 10, 20, 50）+ 跳转（超过 10 页才显示）；主表格、卡片网格，右下对齐
+ *          一屏条数的选项显示为“一屏（21）”，其余显示“20 条/页”
  *   simple “共 N 条    ‹ 1/3 ›”；主从布局左侧列表、抽屉、侧栏、问数回答表格
  *   cursor 只有 上一页 / 下一页，不显示总数；审计日志、事件流等海量数据
  * total 为 0 时隐藏分页；empty=true（默认）时显示空状态。表格自带空状态，表格下方用时传 :empty="false"。
@@ -30,6 +31,9 @@ const emit = defineEmits<{ prev: []; next: [] }>();
 const pages = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1, size.value))));
 const sizeOptions = computed(() =>
   [...new Set([props.defaultSize ?? size.value, 10, 20, 50])].map(String));
+// 一屏条数选项显示“一屏（21）”，选中后输入框里也是这个文字
+const optionText = ({ value }: { value: string | number }) =>
+  props.defaultSize != null && Number(value) === props.defaultSize ? `一屏（${value}）` : `${value} 条/页`;
 const totalText = computed(() => `共 ${fmtInt(props.total)} ${props.unit}`);
 const isEmpty = computed(() => props.variant !== 'cursor' && props.total === 0);
 // 筛选后总数变少时，页码自动收回到最后一页
@@ -49,6 +53,7 @@ function onFull(p: number, s: number) {
       <a-pagination
         size="small" :current="page" :page-size="size" :total="total"
         show-size-changer :show-quick-jumper="pages > 10" :page-size-options="sizeOptions"
+        :build-option-text="optionText"
         :show-total="() => totalText" @change="onFull"
       />
     </template>

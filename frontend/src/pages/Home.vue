@@ -1,22 +1,22 @@
 <script setup lang="ts">
 /**
  * 首页（示例页）：演示公共组件的用法——KPI 条（.t-kpi）、分页表格、ObjRef（悬停卡 + 抽屉）、
- * ConfirmActionModal、EChart。整页无滚动，表格分页。
+ * EChart。首页只看不改：订单动作（补发出库单）在订单抽屉里，用 ConfirmActionModal 确认。整页无滚动，表格分页。
  */
 import { computed, ref } from 'vue';
-import { message } from 'ant-design-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
 import EChart from '@/components/EChart.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
-import { useConfirmStore } from '@/stores/confirm';
+import { useRoute, useRouter } from 'vue-router';
 import { GRAY } from '@/theme';
 import {
   ORDERS, STORES, METRICS, DAILY_GMV_EX, storeById, paginate, fmtMoney, fmtInt, fmtPct, fmtDelta, type Order,
 } from '@/mock';
 
-const confirm = useConfirmStore();
+const route = useRoute();
+const router = useRouter();
 
 const kpis = ['gmv', 'order_cnt', 'gross_margin', 'ship_ontime'].map((id) => {
   const m = METRICS.find((x) => x.id === id)!;
@@ -43,31 +43,14 @@ const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: p
 const statusBadge = (s: Order['status']) =>
   s === '已出库' || s === '已签收' ? 'success' : s === '已取消' ? 'default' : s === '待支付' ? 'warning' : 'processing';
 const columns = [
-  { title: '订单号', dataIndex: 'id', key: 'id', width: 190 },
+  { title: '订单号', dataIndex: 'id', key: 'id', width: 200 },
   { title: '门店', key: 'store', ellipsis: true },
   { title: '渠道', dataIndex: 'channel', key: 'channel', width: 112 },
   { title: '商品数', key: 'lines', width: 76, align: 'right' as const },
   { title: '实付金额（元）', key: 'amount', width: 132, align: 'right' as const },
   { title: '状态', key: 'status', width: 96 },
   { title: '下单时间', dataIndex: 'createdAt', key: 'createdAt', width: 172 },
-  { title: '操作', key: 'op', width: 92 },
 ];
-
-async function resend(o: Order) {
-  const s = storeById(o.storeId);
-  const ok = await confirm.ask({
-    title: '补发出库单',
-    target: `订单 ${o.id}`,
-    fields: [
-      { label: '门店', value: s?.name ?? '--' },
-      { label: '发货仓', value: o.warehouse },
-      { label: '实付金额', value: `${fmtMoney(o.amount)} 元` },
-    ],
-    impact: '写回 WMS，生成新的出库单；原出库单保留，状态不变。',
-    irreversible: true,
-  });
-  if (ok) message.success(`已提交补发：${o.id}`);
-}
 
 // 趋势图
 const trendOption = {
@@ -86,12 +69,23 @@ const trendOption = {
 };
 
 // 门店排行（按样本订单实付金额汇总）
-const ranking = computed(() =>
-  STORES.map((s) => {
-    const os = ORDERS.filter((o) => o.storeId === s.id);
-    return { id: s.id, name: s.name, cnt: os.length, amount: os.reduce((a, o) => a + o.amount, 0) };
-  }).sort((a, b) => b.amount - a.amount).slice(0, 8),
-);
+const fullRanking = STORES.map((s) => {
+  const os = ORDERS.filter((o) => o.storeId === s.id);
+  return { id: s.id, name: s.name, city: s.city, cnt: os.length, amount: os.reduce((a, o) => a + o.amount, 0) };
+}).sort((a, b) => b.amount - a.amount).map((r, i) => ({ ...r, rank: i + 1 }));
+const ranking = fullRanking.slice(0, 10);
+// “全部”：抽屉里看完整排行（?rank=all，可截图复现），simple 分页
+const rankOpen = computed(() => route.query.rank === 'all');
+const setRankOpen = (v: boolean) => router.push({ query: { ...route.query, rank: v ? 'all' : undefined } });
+const RANK_SIZE = 10;
+const rankPage = ref(1);
+const rankPaged = computed(() => paginate(fullRanking, { page: rankPage.value, size: RANK_SIZE }));
+const rankCols = [
+  { title: '#', key: 'idx', width: 40 },
+  { title: '门店', key: 'name', ellipsis: true },
+  { title: '订单数', key: 'cnt', width: 80, align: 'right' as const },
+  { title: '实付金额（元）', key: 'amount', width: 132, align: 'right' as const },
+];
 </script>
 
 <template>
@@ -135,10 +129,6 @@ const ranking = computed(() =>
               <template v-else-if="column.key === 'amount'"><span class="num">{{ fmtMoney(record.amount) }}</span></template>
               <template v-else-if="column.key === 'status'"><a-badge :status="statusBadge(record.status)" :text="record.status" /></template>
               <template v-else-if="column.key === 'createdAt'"><span class="num">{{ record.createdAt }}</span></template>
-              <template v-else-if="column.key === 'op'">
-                <a v-if="record.status === '已出库'" @click="resend(record)">补发</a>
-                <span v-else class="c-3">--</span>
-              </template>
             </template>
           </a-table>
         </div>
@@ -157,18 +147,13 @@ const ranking = computed(() =>
           <div class="trend-chart"><EChart :option="trendOption" /></div>
         </div>
         <div class="panel rank">
-          <div class="panel-head"><span class="t-16 fw-600">门店实付金额排行</span><span class="t-12 c-3">样本订单</span></div>
-          <a-table
-            size="small" row-key="id" :pagination="false" :data-source="ranking"
-            :columns="[
-              { title: '#', key: 'idx', width: 40 },
-              { title: '门店', key: 'name', ellipsis: true },
-              { title: '订单数', key: 'cnt', width: 80, align: 'right' },
-              { title: '实付金额（元）', key: 'amount', width: 132, align: 'right' },
-            ]"
-          >
-            <template #bodyCell="{ column, record, index }">
-              <span v-if="column.key === 'idx'" class="num c-3">{{ index + 1 }}</span>
+          <div class="panel-head">
+            <span><span class="t-16 fw-600">门店实付金额排行</span><span class="t-12 c-3 rank-sub">前 10 · 样本订单</span></span>
+            <a class="t-14" @click="setRankOpen(true)">全部 {{ fullRanking.length }} 家</a>
+          </div>
+          <a-table size="small" row-key="id" :pagination="false" :data-source="ranking" :columns="rankCols" class="rank-table">
+            <template #bodyCell="{ column, record }">
+              <span v-if="column.key === 'idx'" class="num c-3">{{ record.rank }}</span>
               <ObjRef v-else-if="column.key === 'name'" kind="store" :id="record.id">{{ record.name }}</ObjRef>
               <span v-else-if="column.key === 'cnt'" class="num">{{ fmtInt(record.cnt) }}</span>
               <span v-else class="num">{{ fmtMoney(record.amount) }}</span>
@@ -178,6 +163,19 @@ const ranking = computed(() =>
       </div>
     </div>
   </div>
+
+  <a-drawer :open="rankOpen" :width="640" title="门店实付金额排行 · 全部" @close="setRankOpen(false)">
+    <div class="t-12 c-3 rank-note">按样本订单实付金额汇总，共 {{ fullRanking.length }} 家门店</div>
+    <a-table size="small" row-key="id" :pagination="false" :data-source="rankPaged.items" :columns="rankCols">
+      <template #bodyCell="{ column, record }">
+        <span v-if="column.key === 'idx'" class="num c-3">{{ record.rank }}</span>
+        <ObjRef v-else-if="column.key === 'name'" kind="store" :id="record.id">{{ record.name }}</ObjRef>
+        <span v-else-if="column.key === 'cnt'" class="num">{{ fmtInt(record.cnt) }}</span>
+        <span v-else class="num">{{ fmtMoney(record.amount) }}</span>
+      </template>
+    </a-table>
+    <AppPagination v-model:page="rankPage" variant="simple" :total="rankPaged.total" :size="RANK_SIZE" class="rank-pager" />
+  </a-drawer>
 </template>
 
 <style scoped>
@@ -194,6 +192,9 @@ const ranking = computed(() =>
 .trend { flex: 1; min-height: 0; }
 .trend-chart { flex: 1; min-height: 0; padding: 4px 8px; }
 .rank { flex: none; }
+.rank-sub { margin-left: 8px; }
+.rank-note { margin-bottom: 8px; }
+.rank-pager { padding-top: 8px; }
 .w-120 { width: 120px; }
 .w-200 { width: 200px; }
 </style>

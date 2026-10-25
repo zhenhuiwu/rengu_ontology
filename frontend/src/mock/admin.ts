@@ -33,6 +33,8 @@ export const ADMIN_USERS: AdminUser[] = (() => {
   return out;
 })();
 export const ADMIN_DEPTS = DEPTS;
+/** 用户名下待处理的审批数（动作审批、口径变更评审），停用前需要转交 */
+export const pendingApprovals = (u: AdminUser) => (u.status === '启用' ? (Number(u.id.slice(1)) * 13) % 5 : 0);
 
 export interface AuditRow { id: string; time: string; actor: string; action: string; target: string; ip: string; result: '成功' | '失败' | '拒绝' }
 const ACTIONS: [string, (r: () => number) => string][] = [

@@ -18,7 +18,7 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
     :mask-closable="false"
     :ok-text="store.req?.okText ?? '确认执行'"
     cancel-text="取消"
-    :ok-button-props="{ disabled: !!store.req?.irreversible && !ack }"
+    :ok-button-props="{ danger: !!store.req?.danger, disabled: (!!store.req?.irreversible && !ack) || (!!store.req?.picker?.required && !store.pickValue) }"
     @ok="store.settle(true)"
     @cancel="store.settle(false)"
   >
@@ -31,6 +31,13 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
         </a-descriptions-item>
       </a-descriptions>
       <div v-if="store.req.impact" class="ca-impact t-14 c-2">{{ store.req.impact }}</div>
+      <div v-if="store.req.picker" class="ca-picker">
+        <span class="t-14 c-2 ca-picker-label">{{ store.req.picker.label }}<span v-if="store.req.picker.required" class="c-error">*</span></span>
+        <a-select
+          v-model:value="store.pickValue" show-search option-filter-prop="label" class="ca-picker-select"
+          :placeholder="store.req.picker.placeholder ?? '请选择'" :options="store.req.picker.options"
+        />
+      </div>
       <a-checkbox v-if="store.req.irreversible" v-model:checked="ack">此操作会写回业务系统，提交后不能撤销</a-checkbox>
     </template>
   </a-modal>
@@ -39,5 +46,8 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
 <style scoped>
 .ca-tag { margin-inline-start: 8px; vertical-align: 2px; }
 .ca-target { margin: 8px 0 12px; }
+.ca-picker { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.ca-picker-label { width: 96px; flex: none; }
+.ca-picker-select { flex: 1; }
 .ca-impact { margin: 12px 0; padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); }
 </style>

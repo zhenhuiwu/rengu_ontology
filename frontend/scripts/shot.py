@@ -4,6 +4,7 @@
 用法:
   npm run shot -- <路由...>                  例：npm run shot -- / /build/ontology/object-types "/?drawer=metric:gross_margin"
   npm run shot -- --all                       截全部路由（首页 + 27 个二级页面）
+  npm run shot -- "/admin/system/users#click=停用"   交互状态：打开页面后依次点击文字（多步用 > 分隔），再截图
   可选：--base http://localhost:5281（默认 http://localhost:5280，也可用环境变量 SHOT_BASE）
         --skip-check  只截图不验收
 
@@ -84,7 +85,8 @@ def main(argv):
         browser = p.chromium.launch()
         ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, device_scale_factor=1.3333, locale="zh-CN")
         for r in routes:
-            url = base + r
+            path, _, clicks = r.partition("#click=")
+            url = base + path
             print(f"\n=== {r} ===")
             ok1 = ok2 = True
             if not skip:
@@ -99,6 +101,12 @@ def main(argv):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(url, wait_until="networkidle")
             page.wait_for_timeout(800)
+            for text in filter(None, clicks.split(">")):
+                try:
+                    page.get_by_text(text, exact=True).locator("visible=true").first.click(timeout=5000)
+                except Exception as e:
+                    errors.append(f"点击“{text}”失败：{str(e).splitlines()[0]}")
+                page.wait_for_timeout(600)
             out = shot_path(r, stamp)
             page.screenshot(path=str(out))
             page.close()

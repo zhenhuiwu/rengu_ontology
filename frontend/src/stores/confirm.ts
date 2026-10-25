@@ -9,14 +9,23 @@ export interface ConfirmRequest {
   irreversible?: boolean;        // 不可逆写回：需要勾选确认
   okText?: string;
   tag?: string;                  // 标题旁的状态标签，例如“待确认”
+  danger?: boolean;              // 确认按钮用危险色（停用、吊销、删除）
+  picker?: ConfirmPicker;        // 附带一个选择项，例如停用用户时选择待办转交人；确认后读 store.pickValue
+}
+export interface ConfirmPicker {
+  label: string;
+  placeholder?: string;
+  options: { value: string; label: string }[];
+  required?: boolean;            // 必选：没选时确认按钮不可点
 }
 
-/** 所有动作共用一张确认卡：const ok = await useConfirmStore().ask({...}) */
+/** 所有动作共用一张确认卡：const ok = await useConfirmStore().ask({...})；带 picker 时，确认后读 pickValue */
 export const useConfirmStore = defineStore('confirm', {
-  state: () => ({ open: false, req: null as ConfirmRequest | null, resolver: null as null | ((ok: boolean) => void) }),
+  state: () => ({ open: false, req: null as ConfirmRequest | null, pickValue: undefined as string | undefined, resolver: null as null | ((ok: boolean) => void) }),
   actions: {
     ask(req: ConfirmRequest) {
       this.req = req;
+      this.pickValue = undefined;
       this.open = true;
       return new Promise<boolean>((resolve) => { this.resolver = resolve; });
     },

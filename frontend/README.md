@@ -22,6 +22,7 @@ npm run shot -- "/?drawer=metric:gross_margin"          # 带抽屉状态（含 
 npm run shot -- --all                                   # 首页 + 全部 27 个二级页面
 SHOT_BASE=http://localhost:5281 npm run shot -- /       # 对 preview 截图（也可用 --base）
 npm run shot -- --skip-check /                          # 只截图不验收
+npm run shot -- "/admin/system/users#click=停用"         # 交互状态：点击文字后截图，多步用 > 分隔（一屏/字号检查按点击前的页面）
 ```
 
 - 截图规格：viewport 1920×1080、deviceScaleFactor 1.3333，输出 2560×1440 PNG 到 `shots/`，文件名 = 路由和状态 + `__时分_短提交号`（`/` → `home__1642_e09a371.png`，`/build/ontology/object-types?tab=props` → `build_ontology_object-types__tab-props__1642_e09a371.png`）。写入前会删掉同一路由+状态的旧图，`shots/` 里每个状态只保留最新一张；发图前看文件名里的提交号对不对得上。
@@ -111,7 +112,7 @@ close();                                  // 全部关闭
 | `simple` | 共 N 条 ‹ 1/3 › | 左侧主列表、抽屉、侧栏（指标列表、抽屉里的关联对象和时间线） |
 | `cursor` | 只有 上一页 / 下一页，不显示总数 | 审计日志、事件流等海量流水 |
 
-- 每页条数选项是 `[一屏默认条数, 10, 20, 50]`，默认值排第一，重复的去掉，不提供 100。
+- 每页条数选项是 `[一屏默认条数, 10, 20, 50]`，默认值排第一，重复的去掉，不提供 100。一屏默认条数的选项文字是“一屏（21）”，其余是“20 条/页”（AppPagination 统一处理）。
 - 页数超过 10 页才显示跳转框。
 - 默认条数 = 1920×1080 下一屏正好放下的行数（首页 15，用户 21，审计 21），各页面自己定。表格容器固定加 `.paged-scroll`：放得下时不滚动；选了更大的条数、或顶部出现历史版本横幅时，它是主区唯一的滚动区（表头吸顶），分页条始终可见。
 - 页码和条数放在 URL（`?page=2&size=50`，默认值不写），筛选条件变化时回到第 1 页：`const pq = usePagedQuery({ defaultSize: 15, filters: [status, kw] })`，一页里有两个分页时传 `prefix`。cursor 形式用 `useCursorQuery({ size, filters })`（`?cursor=`）。

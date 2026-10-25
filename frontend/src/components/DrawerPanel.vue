@@ -13,6 +13,7 @@ import { resolveObject, checkObject, type ObjKpi } from './objectRegistry';
 import StatusTimeline from './StatusTimeline.vue';
 import AppPagination from './AppPagination.vue';
 import { paginate } from '@/mock/paginate';
+import { orderById, storeById, fmtMoney } from '@/mock';
 
 const props = defineProps<{ target: DrawerRef | null; level: DrawerLevel; parentTitle?: string }>();
 provide(DRAWER_LEVEL, props.level);
@@ -38,16 +39,26 @@ if (import.meta.env.DEV) {
 const onClose = () => (props.level === 2 ? back() : close());
 const toneClass = (k: ObjKpi) => (k.tone === 'down' ? 'c-error' : k.tone === 'up' ? 'c-success' : 'c-3');
 
-async function demoAction() {
-  if (!view.value) return;
+// 订单动作“补发出库单”：只在订单抽屉里提供（首页等列表只看不改），仅已出库订单可用
+const resendOrder = computed(() => {
+  if (view.value?.kind !== 'order') return null;
+  const o = orderById(view.value.id);
+  return o && o.status === '已出库' ? o : null;
+});
+async function resend() {
+  const o = resendOrder.value; if (!o) return;
   const ok = await confirm.ask({
-    title: view.value.kind === 'order' ? '补发出库单' : '提交变更',
-    target: `${view.value.kindLabel} ${view.value.title}`,
-    fields: view.value.brief.slice(0, 3),
-    impact: '写回 WMS，生成新的出库单；原出库单保留。',
+    title: '补发出库单',
+    target: `订单 ${o.id}`,
+    fields: [
+      { label: '门店', value: storeById(o.storeId)?.name ?? '--' },
+      { label: '发货仓', value: o.warehouse },
+      { label: '实付金额', value: `${fmtMoney(o.amount)} 元` },
+    ],
+    impact: '写回 WMS，生成新的出库单；原出库单保留，状态不变。',
     irreversible: true,
   });
-  if (ok) message.success('已提交，可在动作中心查看执行记录');
+  if (ok) message.success(`已提交补发：${o.id}，可在动作中心查看执行记录`);
 }
 </script>
 
@@ -73,7 +84,7 @@ async function demoAction() {
     </template>
     <template #extra>
       <a-space>
-        <a-button v-if="view" size="small" @click="demoAction">{{ view.kind === 'order' ? '补发出库单' : '提交变更' }}</a-button>
+        <a-button v-if="resendOrder" size="small" @click="resend">补发出库单</a-button>
         <a-button size="small" type="text" title="关闭全部" @click="close"><CloseOutlined /></a-button>
       </a-space>
     </template>
