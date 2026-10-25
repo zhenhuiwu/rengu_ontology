@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.common.auth import require_func
 from app.common.context import ViewContextDep
-from app.common.pagination import MAX_PAGE_SIZE, Page
+from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.db.session import SessionDep
 from app.modules.action.schemas import (
     ActionTypeDetailOut,
@@ -22,11 +22,25 @@ from app.modules.action.schemas import (
     TypeVersionOut,
     WritebackOut,
 )
-from app.modules.action.service import ActionTypeService, paginate
+from app.modules.action.service import ActionTypeService
 
 router = APIRouter(tags=["action"], dependencies=[Depends(require_func("action-types", "view"))])
 
-PageNo = Annotated[int, Query(ge=1)]
+
+def _list_page(
+    page: Annotated[int, Query()] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 22,
+) -> PageParams:
+    """前端动作列表默认 size=22；page ≤ 0 收成 1（不报 422）。"""
+    return PageParams(page=page, size=size)
+
+
+def _nested_page(
+    page: Annotated[int, Query()] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 12,
+) -> PageParams:
+    """前端参数默认 size=12。"""
+    return PageParams(page=page, size=size)
 
 
 @router.get(
@@ -35,18 +49,18 @@ PageNo = Annotated[int, Query(ge=1)]
 async def list_action_types(
     session: SessionDep,
     ctx: ViewContextDep,
+    page: Annotated[PageParams, Depends(_list_page)],
     group: Annotated[str | None, Query(description="分组（中文）；全部 / 不传 = 不过滤")] = None,
     kw: Annotated[str | None, Query(description="名称包含")] = None,
-    page: PageNo = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 22,
 ) -> ActionTypeListOut:
     rows, groups = await ActionTypeService(session).search(ctx, group, kw)
+    p = page.clamp(len(rows))
     return ActionTypeListOut(
-        items=[ActionTypeOut.model_validate(r) for r in paginate(rows, page, size)],
+        items=[ActionTypeOut.model_validate(r) for r in rows[p.offset : p.offset + p.size]],
         groups=groups,
         total=len(rows),
-        page=page,
-        size=size,
+        page=p.page,
+        size=p.size,
     )
 
 
@@ -60,12 +74,11 @@ async def list_params(
     type_id: str,
     session: SessionDep,
     ctx: ViewContextDep,
-    page: PageNo = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 12,
+    page: Annotated[PageParams, Depends(_nested_page)],
 ) -> Page[ParamOut]:
     rows = (await ActionTypeService(session).one(ctx, type_id)).get("params") or []
-    items = [ParamOut.model_validate(r) for r in paginate(rows, page, size)]
-    return Page(items=items, total=len(rows), page=page, size=size)
+    p = page.clamp(len(rows))
+    return Page.of([ParamOut.model_validate(r) for r in rows[p.offset : p.offset + p.size]], len(rows), page)
 
 
 @router.get(

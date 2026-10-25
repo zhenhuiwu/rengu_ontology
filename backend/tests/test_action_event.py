@@ -151,6 +151,15 @@ async def test_action_types_list(client, ae):
     assert [i["id"] for i in r.json()["items"]] == [a["id"] for a in ACTIONS if "告警" in a["name"]]
     r = await client.get(f"{ONT}/action-types", params={"page": 2, "size": 10})
     assert [i["id"] for i in r.json()["items"]] == [a["id"] for a in ACTIONS[10:20]]
+    # page ≤ 0 → 第 1 页（不报 422）；越界 → 最后一页，响应 page 也收拢
+    r = await client.get(f"{ONT}/action-types", params={"page": 0, "size": 10})
+    assert r.status_code == 200 and r.json()["page"] == 1
+    assert [i["id"] for i in r.json()["items"]] == [a["id"] for a in ACTIONS[:10]]
+    last = max(1, -(-len(ACTIONS) // 10))
+    r = await client.get(f"{ONT}/action-types", params={"page": 999, "size": 10})
+    body = r.json()
+    assert body["page"] == last
+    assert [i["id"] for i in body["items"]] == [a["id"] for a in ACTIONS[(last - 1) * 10 :]]
 
 
 @pytest.mark.parametrize("a", ACTIONS, ids=[a["id"] for a in ACTIONS])

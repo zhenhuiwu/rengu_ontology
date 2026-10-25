@@ -166,11 +166,3 @@ class ActionTypeService:
             }
             for v in await self.repo.versions(at.id)
         ]
-
-
-def paginate(rows: list[Any], page: int, size: int) -> list[Any]:
-    """页码处理跟骨架一致（前端 mock paginate() 会把页码夹到最后一页）。
-
-    TODO：app.common.pagination 目前只有 Page / PageParams、没有切片 helper；骨架补上 helper 后改成调用它，
-    行为随骨架走。"""
-    return rows[(page - 1) * size : page * size]
