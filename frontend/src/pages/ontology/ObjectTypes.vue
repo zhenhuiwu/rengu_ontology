@@ -1,18 +1,49 @@
 <script setup lang="ts">
 /**
  * 对象类型：左侧对象类型列表（简洁分页），右侧详情按 v5 分三组页签（定义 / 行为 / 使用与治理）。
- * 选中类型写进 ?type=，页签写进 ?tab=。示例数据以“订单”为准写全，其余类型共用。
+ * 选中类型写进 ?type=，页签写进 ?tab=。属性按对象类型各自一份（src/mock/objectProps.ts）；概览、映射的示例仍以“订单”为准。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import GroupedTabs from '@/components/GroupedTabs.vue';
 import HoverCard from '@/components/HoverCard.vue';
-import { OBJECT_TYPE_TAB_GROUPS } from '@/nav';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
 import { message } from 'ant-design-vue';
-import { LINKS as ALL_LINKS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
+import { LINKS as ALL_LINKS, LINK_OBJECTS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
+import { OBJECT_PROPS, draftPropDiff, type ObjProp } from '@/mock/objectProps';
+
+/**
+ * 页签配置。新增页签只需在这里加一项，页面其他地方不用动。
+ *   { key, label, phase, component? }
+ *   - key：写进 ?tab= 的值，全页唯一
+ *   - label：页签上显示的文字
+ *   - phase：所在分组，'def' 定义 / 'behavior' 行为 / 'governance' 使用与治理（分组顺序固定，组内按数组顺序）
+ *   - component：可选。有 component 的页签由组件自己渲染，统一接收两个 props：
+ *       objectId: string   当前对象类型 id（如 'order'、'store'，与 src/mock/links.ts 的 LINK_OBJECTS.id 一致）
+ *       readonly: boolean  true = 不可编辑（看已发布版、历史版本或以此用户预览时）；只有在草稿视图里才是 false
+ *     组件放在 src/pages/ontology/parts/object/ 下；草稿单本身用 useDraftView('object', () => props.objectId) 取。
+ *     组件根节点请用 class="ot-body"（或自带 flex: 1; min-height: 0），保证一屏不出滚动条。
+ *   - 没有 component 的页签：概览 / 属性 / 关系 / 数据源与映射 在本页模板里内置渲染，其余显示“待设计”。
+ */
+interface ObjTab { key: string; label: string; phase: 'def' | 'behavior' | 'governance'; component?: Component }
+const TABS: ObjTab[] = [
+  { key: 'overview', label: '概览', phase: 'def' },
+  { key: 'properties', label: '属性', phase: 'def' },
+  { key: 'links', label: '关系', phase: 'def' },
+  { key: 'mapping', label: '数据源与映射', phase: 'def' },
+  { key: 'lifecycle', label: '生命周期', phase: 'behavior' },
+  { key: 'actions', label: '动作', phase: 'behavior' },
+  { key: 'automation', label: '自动化', phase: 'behavior' },
+  { key: 'metrics', label: '指标', phase: 'governance' },
+  { key: 'views', label: '视图', phase: 'governance' },
+  { key: 'permissions', label: '权限', phase: 'governance' },
+  { key: 'history', label: '版本历史', phase: 'governance' },
+];
+const PHASES = [{ key: 'def', title: '定义' }, { key: 'behavior', title: '行为' }, { key: 'governance', title: '使用与治理' }] as const;
+const TAB_GROUPS = PHASES.map((g) => ({ key: g.key, title: g.title, tabs: TABS.filter((t) => t.phase === g.key).map((t) => ({ key: t.key, title: t.label })) }))
+  .filter((g) => g.tabs.length);
 
 const TYPES = [
   { id: 'order', name: '订单', api: 'SalesOrder', group: '交易', props: 32, count: '1,286,402', status: '已发布' },
@@ -42,15 +73,14 @@ const tab = computed({
   get: () => (route.query.tab as string) || 'overview',
   set: (v) => router.replace({ query: { ...route.query, tab: v, p: undefined } }),
 });
-const tabTitle = computed(() => OBJECT_TYPE_TAB_GROUPS.flatMap((g) => g.tabs).find((t) => t.key === tab.value)?.title);
+const curTab = computed(() => TABS.find((t) => t.key === tab.value));
+const tabTitle = computed(() => curTab.value?.label);
 const current = computed(() => TYPES.find((t) => t.id === selected.value) ?? TYPES[0]);
 const pick = (id: string) => router.replace({ query: { ...route.query, type: id, view: undefined } });
 const { draft, isDraft, canEdit, editTip, readonly, reason, setView, start } = useDraftView('object', () => current.value.id);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
-/** 草稿视图里的差异（示例：订单属性） */
-const DIFF: Record<string, '新增' | '修改'> = { 渠道: '修改' };
 
 // 左侧列表：搜索 + 简洁分页
 const kw = ref('');
@@ -60,47 +90,19 @@ watch(kw, () => { lpage.value = 1; });
 const filtered = computed(() => TYPES.filter((t) => !kw.value || t.name.includes(kw.value) || t.api.toLowerCase().includes(kw.value.toLowerCase())));
 const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
 
-// —— 属性（订单，32 个）——
-interface P { api: string; name: string; type: string; group: string; pk?: boolean; title?: boolean; dim?: boolean; sensitive?: boolean; enumName?: string; source: string; desc: string }
-const PROPS: P[] = [
-  { api: 'order_id', name: '订单号', type: 'string', group: '标识', pk: true, source: 'order_id', desc: '业务主键，全局唯一' },
-  { api: 'order_no_display', name: '展示单号', type: 'string', group: '标识', title: true, source: 'order_no', desc: '小票和客服使用的单号' },
-  { api: 'channel', name: '渠道', type: 'enum', group: '交易', dim: true, enumName: '销售渠道', source: 'channel_code', desc: '门店、小程序、外卖平台、社区团购' },
-  { api: 'status', name: '订单状态', type: 'enum', group: '交易', dim: true, enumName: '订单状态', source: 'status', desc: '待支付、待出库、拣货中、已出库、已签收、已取消' },
-  { api: 'store_id', name: '门店', type: 'string', group: '交易', dim: true, source: 'store_code', desc: '外键 → 门店' },
-  { api: 'fulfill_store_id', name: '履约门店', type: 'string', group: '交易', dim: true, source: 'fulfill_store_id', desc: '外键 → 门店；实际出库发货的门店，自提单为空' },
-  { api: 'member_id', name: '会员', type: 'string', group: '交易', source: 'member_id', desc: '外键 → 会员；散客为空' },
-  { api: 'warehouse_id', name: '发货仓', type: 'string', group: '交易', dim: true, source: 'wh_code', desc: '外键 → 仓库' },
-  { api: 'created_at', name: '下单时间', type: 'timestamp', group: '时间', dim: true, source: 'create_time', desc: '' },
-  { api: 'paid_at', name: '支付时间', type: 'timestamp', group: '时间', source: 'pay_time', desc: '' },
-  { api: 'shipped_at', name: '出库时间', type: 'timestamp', group: '时间', dim: true, source: 'out_time', desc: '财务口径的时间字段' },
-  { api: 'signed_at', name: '签收时间', type: 'timestamp', group: '时间', source: 'sign_time', desc: '' },
-  { api: 'cancelled_at', name: '取消时间', type: 'timestamp', group: '时间', source: 'cancel_time', desc: '' },
-  { api: 'amount_gross', name: '应付金额（含税）', type: 'decimal', group: '金额', source: 'total_amt', desc: '单位：元' },
-  { api: 'amount_net', name: '应付金额（不含税）', type: 'decimal', group: '金额', source: 'total_amt_notax', desc: '单位：元' },
-  { api: 'discount_amount', name: '优惠金额', type: 'decimal', group: '金额', source: 'discount_amt', desc: '单位：元' },
-  { api: 'paid_amount', name: '实付金额', type: 'decimal', group: '金额', source: 'pay_amt', desc: '单位：元' },
-  { api: 'freight_amount', name: '运费', type: 'decimal', group: '金额', source: 'freight_amt', desc: '单位：元' },
-  { api: 'tax_amount', name: '税额', type: 'decimal', group: '金额', source: 'tax_amt', desc: '单位：元' },
-  { api: 'pay_method', name: '支付方式', type: 'enum', group: '交易', dim: true, enumName: '支付方式', source: 'pay_type', desc: '' },
-  { api: 'line_count', name: '商品行数', type: 'integer', group: '交易', source: 'item_cnt', desc: '' },
-  { api: 'is_test', name: '是否测试单', type: 'boolean', group: '交易', source: 'test_flag', desc: '默认过滤掉' },
-  { api: 'receiver_name', name: '收货人', type: 'string', group: '收货', sensitive: true, source: 'recv_name', desc: '脱敏显示' },
-  { api: 'receiver_phone', name: '收货电话', type: 'string', group: '收货', sensitive: true, source: 'recv_mobile', desc: '脱敏显示' },
-  { api: 'receiver_address', name: '收货地址', type: 'string', group: '收货', sensitive: true, source: 'recv_addr', desc: '脱敏显示' },
-  { api: 'receiver_city', name: '收货城市', type: 'string', group: '收货', dim: true, source: 'recv_city', desc: '' },
-  { api: 'delivery_type', name: '配送方式', type: 'enum', group: '收货', dim: true, enumName: '配送方式', source: 'deliver_type', desc: '自提、同城配送、快递' },
-  { api: 'promotion_ids', name: '参与活动', type: 'json', group: '交易', source: 'promo_list', desc: '数组；一单可参与多个活动' },
-  { api: 'coupon_code', name: '优惠券码', type: 'string', group: '交易', source: 'coupon_no', desc: '' },
-  { api: 'remark', name: '买家备注', type: 'string', group: '其他', source: 'buyer_memo', desc: '' },
-  { api: 'source_updated_at', name: '源数据更新时间', type: 'timestamp', group: '其他', source: 'update_time', desc: '冲突策略按此列判断最新值' },
-  { api: 'etl_batch', name: '同步批次', type: 'string', group: '其他', source: 'etl_batch_id', desc: '系统字段' },
-];
+// —— 属性（每个对象类型各一份，src/mock/objectProps.ts）——
+type P = ObjProp;
+const PROPS = computed<P[]>(() => OBJECT_PROPS[current.value.id] ?? []);
+/** 草稿视图里的差异：按草稿单号从 changes.ts 的 diffs 取（门店 CR-0009、会员 CR-0012） */
+const draftDiff = computed(() => (draft.value ? draftPropDiff(draft.value.id, current.value.name, PROPS.value) : { map: {}, other: 0 }));
+const DIFF = computed(() => (isDraft.value ? draftDiff.value.map : {}));
 const pkw = ref('');
 const ppage = ref(1);
 const PPAGE = 12;
 watch(pkw, () => { ppage.value = 1; });
-const srcProps = computed(() => PROPS);
+watch(() => [current.value.id, isDraft.value], () => { ppage.value = 1; mpage.value = 1; });
+// 草稿视图里有改动的属性排在最前，第一页就能看到
+const srcProps = computed(() => [...PROPS.value].sort((x, y) => Number(!!DIFF.value[y.api]) - Number(!!DIFF.value[x.api])));
 const pfiltered = computed(() => srcProps.value.filter((p) => !pkw.value || p.name.includes(pkw.value) || p.api.includes(pkw.value)));
 const prows = computed(() => pfiltered.value.slice((ppage.value - 1) * PPAGE, ppage.value * PPAGE));
 const propCols = [
@@ -110,7 +112,7 @@ const propCols = [
   { title: '分组', dataIndex: 'group', width: 72 },
   { title: '标记', key: 'flags', width: 200 },
   { title: '源字段', dataIndex: 'source', width: 150 },
-  { title: '说明', dataIndex: 'desc', ellipsis: true },
+  { title: '说明', key: 'desc', dataIndex: 'desc', ellipsis: true },
 ];
 
 // —— 关系 ——
@@ -153,7 +155,9 @@ const MAP_ROWS = [
 ];
 const SRC_TYPE: Record<string, string> = { string: 'VARCHAR2(64)', enum: 'NUMBER(2)', timestamp: 'DATE', decimal: 'NUMBER(14,2)', integer: 'NUMBER(6)', boolean: 'CHAR(1)', json: 'CLOB' };
 const OVERRIDE = Object.fromEntries(MAP_ROWS.map((r) => [r.prop, r]));
-const MAP_ALL = PROPS.map((p) => OVERRIDE[p.name] ?? { prop: p.name, col: p.source, srcType: SRC_TYPE[p.type] ?? 'VARCHAR2(64)', transform: p.sensitive ? '敏感字段：脱敏显示' : '' });
+const srcTable = computed(() => LINK_OBJECTS.find((o) => o.id === current.value.id)?.table ?? '--');
+const pkProp = computed(() => PROPS.value.find((p) => p.pk));
+const MAP_ALL = computed(() => PROPS.value.map((p) => (current.value.id === 'order' && OVERRIDE[p.name]) || { prop: p.name, col: p.source, srcType: SRC_TYPE[p.type] ?? 'VARCHAR2(64)', transform: p.sensitive ? '敏感字段：脱敏显示' : '' }));
 const QS = [
   { q: '上个月各大区的有效订单数是多少？', cert: true, query: 'metric: valid_order_count\nbreakdown: [组织.大区]\ntime: 出库时间 = 上月\nrelease: v2026.10.3' },
   { q: '华东大区 9 月小程序渠道的订单，出库及时率是多少？', cert: true, query: 'metric: ship_ontime_rate\nfilters: [大区 = 华东, 渠道 = 小程序]\ntime: 出库时间 = 2026-09\nrelease: v2026.10.3' },
@@ -161,7 +165,7 @@ const QS = [
 ];
 const mpage = ref(1);
 const MPAGE = 12;
-const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.value * MPAGE));
+const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpage.value * MPAGE));
 </script>
 
 <template>
@@ -196,7 +200,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="setView('published')" />
       <div class="ot-head">
         <span class="t-16 fw-600 c-1">{{ current.name }}</span>
-        <span class="t-14 c-3 num">{{ current.api }} · {{ current.props }} 个属性 · {{ current.count }} 条</span>
+        <span class="t-14 c-3 num">{{ current.api }} · {{ PROPS.length }} 个属性 · {{ current.count }} 条</span>
         <a-tag :color="current.status === '已发布' ? 'success' : current.status === '变更中' ? 'warning' : 'default'">{{ current.status }}</a-tag>
         <a-segmented v-if="draft && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
@@ -208,10 +212,13 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${current.name}（${current.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
-      <GroupedTabs v-model="tab" :groups="OBJECT_TYPE_TAB_GROUPS" />
+      <GroupedTabs v-model="tab" :groups="TAB_GROUPS" />
+
+      <!-- 配置了 component 的页签：统一传 objectId / readonly -->
+      <component :is="curTab.component" v-if="curTab?.component" :key="`${current.id}:${curTab.key}`" :object-id="current.id" :readonly="!canEdit" />
 
       <!-- 概览 -->
-      <div v-if="tab === 'overview'" class="ot-body ot-ov">
+      <div v-else-if="tab === 'overview'" class="ot-body ot-ov">
         <div class="ot-ov-left">
           <a-descriptions :column="2" bordered size="small">
             <a-descriptions-item label="显示名">订单</a-descriptions-item>
@@ -264,7 +271,8 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
       <div v-else-if="tab === 'properties'" class="ot-body">
         <div class="ot-tool">
           <a-input-search v-model:value="pkw" placeholder="搜索属性名或 API 名" class="ot-tool-search" />
-          <span class="t-12 c-3">主键 1 · 维度 {{ srcProps.filter((p) => p.dim).length }} · 敏感 {{ srcProps.filter((p) => p.sensitive).length }}<template v-if="isDraft"> · 草稿改动 {{ Object.keys(DIFF).length }}</template></span>
+          <span class="t-12 c-3">主键 1 · 维度 {{ srcProps.filter((p) => p.dim).length }} · 敏感 {{ srcProps.filter((p) => p.sensitive).length }}</span>
+          <span v-if="isDraft && draft" class="t-12 c-3">草稿 {{ draft.id }}：属性改动 {{ Object.keys(DIFF).length }} 处<template v-if="draftDiff.other">，其余 {{ draftDiff.other }} 处（对象类型、关系、映射、指标等）见<router-link :to="`/build/ontology/releases?cr=${draft.id}`">变更单</router-link></template></span>
           <span class="ot-sp" />
           <a-tooltip :title="editTip"><a-button :disabled="!canEdit">批量编辑</a-button></a-tooltip>
           <a-tooltip :title="editTip"><a-button type="primary" :disabled="!canEdit">新增属性</a-button></a-tooltip>
@@ -273,9 +281,15 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <a>{{ record.name }}</a>
-              <a-tag v-if="isDraft && DIFF[record.name]" :color="DIFF[record.name] === '新增' ? 'success' : 'warning'" class="ot-diff">{{ DIFF[record.name] }}</a-tag>
+              <a-tag v-if="DIFF[record.api]" class="ot-diff">{{ DIFF[record.api].kind }}</a-tag>
             </template>
             <template v-else-if="column.key === 'type'">{{ record.type }}<span v-if="record.enumName" class="c-3"> · {{ record.enumName }}</span></template>
+            <template v-else-if="column.key === 'desc'">
+              <a-tooltip v-if="DIFF[record.api]" :title="`${draft?.id} 第 ${DIFF[record.api].row} 行 · ${DIFF[record.api].field}：${DIFF[record.api].before ? `${DIFF[record.api].before} → ` : ''}${DIFF[record.api].after}`">
+                <span class="ot-desc"><span v-if="DIFF[record.api].before" class="c-3 ot-del">{{ DIFF[record.api].before }}</span><template v-else>{{ record.desc }}；</template><span class="c-1">{{ DIFF[record.api].field.startsWith('取值') ? `${DIFF[record.api].field}：` : '' }}{{ DIFF[record.api].after }}</span></span>
+              </a-tooltip>
+              <span v-else class="ot-desc">{{ record.desc }}</span>
+            </template>
             <template v-else-if="column.key === 'flags'">
               <span class="ot-flags">
                 <a-tag v-if="record.pk">主键</a-tag>
@@ -314,8 +328,8 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         <a-descriptions :column="4" bordered size="small">
           <a-descriptions-item label="数据源">ERP 生产库</a-descriptions-item>
           <a-descriptions-item label="数据库">达梦 DM8 · Oracle 兼容模式</a-descriptions-item>
-          <a-descriptions-item label="源表">ERP.T_SALE_ORDER</a-descriptions-item>
-          <a-descriptions-item label="主键映射">order_id → 订单号</a-descriptions-item>
+          <a-descriptions-item label="源表">{{ srcTable }}</a-descriptions-item>
+          <a-descriptions-item label="主键映射">{{ pkProp ? `${pkProp.source} → ${pkProp.name}` : '--' }}</a-descriptions-item>
           <a-descriptions-item label="同步方式">每小时增量</a-descriptions-item>
           <a-descriptions-item label="增量字段">update_time</a-descriptions-item>
           <a-descriptions-item label="最近同步">2026-10-25 15:00 · 成功</a-descriptions-item>
@@ -323,7 +337,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
         </a-descriptions>
         <div class="ot-tool">
           <span class="t-14 fw-600">字段映射</span>
-          <span class="t-12 c-3">已映射 32 / 源表 38 个字段，6 个未使用</span>
+          <span class="t-12 c-3">已映射 {{ MAP_ALL.length }} / 源表 {{ MAP_ALL.length + 6 }} 个字段，6 个未使用</span>
           <span class="ot-sp" />
           <a-button>重新采集元数据</a-button>
         </div>
@@ -372,5 +386,7 @@ const mrows = computed(() => MAP_ALL.slice((mpage.value - 1) * MPAGE, mpage.valu
 .ot-cert { margin-inline-end: 0; cursor: default; }
 .ot-sq { margin: 0; font-family: Menlo, Consolas, monospace; }
 .ot-diff { margin-inline: 8px 0; }
+.ot-desc { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ot-del { text-decoration: line-through; margin-right: 8px; }
 .ot-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 </style>
