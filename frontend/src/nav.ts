@@ -23,7 +23,7 @@ export const NAV: NavArea[] = [
     modules: [
       { key: 'qa', title: '智能问数', icon: 'MessageOutlined', pages: [
         { key: 'qa-workbench', title: '问数工作台', path: '/use/qa/workbench', phase: 1, note: '自动选图、下钻、导出；悬停卡预览对象，抽屉看时间线和归因', component: () => import('@/pages/qa/Workbench.vue') },
-        { key: 'qa-pages', title: '我的页面与模板库', path: '/use/qa/pages', phase: 1, note: '卡片与固定看板第一期；拖拽编辑、共享、订阅第二期' },
+        { key: 'qa-pages', title: '我的页面与模板库', path: '/use/qa/pages', phase: 1, note: '卡片与固定看板第一期；拖拽编辑、共享、订阅第二期', component: () => import('@/pages/qa/MyPages.vue') },
       ] },
       { key: 'objects', title: '对象', icon: 'AppstoreOutlined', pages: [
         { key: 'object-search', title: '对象搜索', path: '/use/objects/search', phase: 1, note: '全局入口，按类型浏览', component: () => import('@/pages/objects/ObjectSearch.vue') },

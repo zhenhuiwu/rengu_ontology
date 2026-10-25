@@ -1,0 +1,43 @@
+<script setup lang="ts">
+/** 模板预览抽屉（?tpl=T001）：说明、口径、卡片预览（simple 分页），底部“用此模板新建” */
+import { computed, ref, watch } from 'vue';
+import AppPagination from '@/components/AppPagination.vue';
+import CardPreview from './CardPreview.vue';
+import UseTemplatePop from './UseTemplatePop.vue';
+import type { QaTemplate, TplCreate } from '@/mock/qa-pages';
+
+const props = defineProps<{ tpl?: QaTemplate; readonly: boolean; reason: string }>();
+const emit = defineEmits<{ close: []; create: [TplCreate] }>();
+const SIZE = 6; const page = ref(1);
+watch(() => props.tpl?.id, () => { page.value = 1; });
+const cards = computed(() => (props.tpl?.cards ?? []).slice((page.value - 1) * SIZE, page.value * SIZE));
+const calibers = computed(() => [...new Set((props.tpl?.cards ?? []).map((c) => `${c.metric} ${c.version}`))]);
+</script>
+
+<template>
+  <a-drawer :open="!!tpl" :width="760" :title="tpl ? `模板预览 · ${tpl.name}` : ''" @close="emit('close')">
+    <template #extra>
+      <UseTemplatePop v-if="tpl" :tpl="tpl" size="middle" primary :disabled="readonly" :reason="reason" @create="(e) => emit('create', e)" />
+    </template>
+    <div v-if="tpl" class="td">
+      <div class="c-2">{{ tpl.desc }}</div>
+      <div class="td-meta">
+        <span><span class="c-3">场景</span> {{ tpl.scene }}</span>
+        <span><span class="c-3">提供方</span> {{ tpl.provider }}</span>
+        <span><span class="c-3">使用</span> <span class="num">{{ tpl.uses }}</span> 次</span>
+        <span><span class="c-3">更新</span> <span class="num">{{ tpl.updatedAt }}</span></span>
+      </div>
+      <div class="td-row"><span class="c-3 t-12">口径版本</span><a-tag v-for="c in calibers" :key="c">{{ c }}</a-tag></div>
+      <div class="td-grid"><CardPreview v-for="(c, i) in cards" :key="c.key" :card="c" :index="(page - 1) * SIZE + i + 1" /></div>
+      <AppPagination v-model:page="page" variant="simple" :total="tpl.cards.length" :size="SIZE" unit="张卡片" />
+      <div class="t-12 c-3">模板只含卡片结构和口径，不含数据；新建后按所选范围取数，示例数值仅供预览。</div>
+    </div>
+  </a-drawer>
+</template>
+
+<style scoped>
+.td { display: flex; flex-direction: column; gap: 10px; }
+.td-meta { display: flex; gap: 24px; }
+.td-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+</style>

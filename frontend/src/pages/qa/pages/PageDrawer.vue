@@ -1,0 +1,260 @@
+<script setup lang="ts">
+/**
+ * 我的页面抽屉（?page=P001&ptab=preview|schedule|share）
+ *  预览：数据截至、范围、来源、口径版本、卡片预览（simple 分页，每页 6 张）；“调整卡片”模式可拖拽排序、移除卡片
+ *  刷新与订阅：刷新计划 + 订阅推送
+ *  共享：共享方式、成员及权限、链接、导出
+ * 历史版本只读：所有修改禁用并提示原因。
+ */
+import { computed, ref, watch } from 'vue';
+import { message } from 'ant-design-vue';
+import { HolderOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import AppPagination from '@/components/AppPagination.vue';
+import CardPreview from './CardPreview.vue';
+import { PEOPLE, PAGE_SCOPES, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
+
+const props = defineProps<{ page?: QaPageFull; tab: string; readonly: boolean; reason: string }>();
+const emit = defineEmits<{ close: []; 'update:tab': [string]; refresh: [QaPageFull]; rename: [QaPageFull, string]; remove: [QaPageFull] }>();
+const tabV = computed({ get: () => props.tab || 'preview', set: (v: string) => emit('update:tab', v) });
+
+/* 预览 */
+const CSIZE = 6;
+const cpage = ref(1);
+const editing = ref(false);
+const draftCards = ref<PageCard[]>([]);
+watch(() => props.page?.id, () => { cpage.value = 1; editing.value = false; resetDrafts(); });
+const shownCards = computed(() => (editing.value ? draftCards.value : props.page?.cards ?? []));
+const pagedCards = computed(() => shownCards.value.slice((cpage.value - 1) * CSIZE, cpage.value * CSIZE));
+const calibers = computed(() => {
+  const m = new Map<string, PageCard>();
+  (props.page?.cards ?? []).forEach((c) => m.set(`${c.metric} ${c.version}`, c));
+  return [...m.entries()].map(([label, c]) => ({ label, pending: c.pending }));
+});
+function startEdit() { draftCards.value = [...(props.page?.cards ?? [])]; editing.value = true; cpage.value = 1; }
+const dragFrom = ref<number | null>(null);
+function onDrop(to: number) {
+  if (dragFrom.value == null || dragFrom.value === to) return;
+  const list = [...draftCards.value]; const [c] = list.splice(dragFrom.value, 1); list.splice(to, 0, c); draftCards.value = list; dragFrom.value = null;
+}
+const removeCard = (i: number) => { draftCards.value = draftCards.value.filter((_, j) => j !== i); };
+function saveCards() { if (!props.page) return; props.page.cards = draftCards.value; editing.value = false; message.success(`已保存卡片顺序，共 ${props.page.cards.length} 张`); }
+
+/* 刷新与订阅 */
+const plan = ref<RefreshPlan>({ freq: '每天', time: '08:00', onFail: '保留上次结果' });
+const sub = ref<Subscription>({ on: false, channel: '邮件', receivers: [], when: '每次刷新后', onlyChanged: false });
+const share = ref<ShareSetting>({ mode: '仅自己', members: [], link: false, allowExport: true });
+function resetDrafts() {
+  if (!props.page) return;
+  plan.value = { ...props.page.refresh };
+  sub.value = { ...props.page.sub, receivers: [...props.page.sub.receivers] };
+  share.value = { ...props.page.share, members: props.page.share.members.map((m) => ({ ...m })) };
+}
+watch(() => props.page, resetDrafts, { immediate: true });
+const TIMES = ['06:00', '07:00', '07:30', '08:00', '09:00', '12:00', '18:00', '22:00'];
+const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const people = PEOPLE.map((p) => ({ value: p.name, label: `${p.name} · ${p.dept}` }));
+const nextRun = computed(() => {
+  const p = plan.value;
+  if (p.freq === '手动') return '不自动刷新';
+  if (p.freq === '每小时') return '2026-10-25 18:00';
+  if (p.freq === '每天') return `2026-10-26 ${p.time}`;
+  if (p.freq === '每周') return `${p.weekday ?? '周一'} ${p.time}（2026-10-26 起）`;
+  return `2026-11-${String(p.monthday ?? 1).padStart(2, '0')} ${p.time}`;
+});
+function saveSchedule() {
+  if (!props.page) return;
+  if (sub.value.on && !sub.value.receivers.length) { message.warning('请至少选择一位接收人'); return; }
+  props.page.refresh = { ...plan.value }; props.page.sub = { ...sub.value, receivers: [...sub.value.receivers] };
+  message.success(`已保存：${freqLabel(plan.value)}${sub.value.on ? `，订阅推送给 ${sub.value.receivers.length} 人` : ''}`);
+}
+
+/* 共享 */
+const addWho = ref<string[]>([]);
+const addPerm = ref<SharePerm>('可查看');
+const candidates = computed(() => people.filter((p) => !share.value.members.some((m) => m.name === p.value)));
+function addMembers() {
+  const add = addWho.value.map((n) => ({ name: n, dept: PEOPLE.find((p) => p.name === n)?.dept ?? '', perm: addPerm.value }));
+  share.value.members = [...share.value.members, ...add]; addWho.value = [];
+  if (share.value.mode === '仅自己') share.value.mode = '指定成员';
+}
+const MSIZE = 5;
+const mpage = ref(1);
+const pagedMembers = computed(() => share.value.members.slice((mpage.value - 1) * MSIZE, mpage.value * MSIZE));
+function saveShare() {
+  if (!props.page) return;
+  if (share.value.mode === '指定成员' && !share.value.members.length) { message.warning('指定成员共享时至少添加一位成员'); return; }
+  props.page.share = { ...share.value, members: share.value.mode === '仅自己' ? [] : share.value.members.map((m) => ({ ...m })) };
+  message.success(share.value.mode === '仅自己' ? '已取消共享' : `已共享：${share.value.mode === '所在部门' ? '华东事业部 / 运营中心' : `${props.page.share.members.length} 位成员`}`);
+}
+const copyLink = () => message.success(`已复制链接：https://bi.example.com/p/${props.page?.id}`);
+
+/* 重命名 */
+const renameOpen = ref(false);
+const newName = ref('');
+watch(renameOpen, (o) => { if (o) newName.value = props.page?.name ?? ''; });
+function doRename() { if (props.page && newName.value.trim()) { emit('rename', props.page, newName.value.trim()); renameOpen.value = false; } }
+</script>
+
+<template>
+  <a-drawer :open="!!page" :width="760" :title="page?.name" @close="emit('close')">
+    <template #extra>
+      <a-space v-if="page">
+        <a-tooltip :title="reason"><a-button size="small" :disabled="readonly" @click="emit('refresh', page)">立即刷新</a-button></a-tooltip>
+        <a-popover v-model:open="renameOpen" trigger="click" placement="bottomRight">
+          <template #content>
+            <div class="pd-pop"><a-input v-model:value="newName" :maxlength="30" show-count @press-enter="doRename" /><a-button type="primary" size="small" :disabled="!newName.trim()" @click="doRename">确定</a-button></div>
+          </template>
+          <a-tooltip :title="reason"><a-button size="small" :disabled="readonly">重命名</a-button></a-tooltip>
+        </a-popover>
+        <a-tooltip :title="reason"><a-button size="small" danger :disabled="readonly" @click="emit('remove', page)">删除</a-button></a-tooltip>
+      </a-space>
+    </template>
+    <div v-if="page" class="pd">
+      <div class="pd-meta">
+        <div><span class="c-3">数据截至</span> <span class="num c-1">{{ page.dataAsOf }}</span><span v-if="page.status === '刷新失败'" class="tl-failed"> · 刷新失败</span></div>
+        <div><span class="c-3">范围</span> <span class="c-1">{{ page.scope }}</span></div>
+        <div><span class="c-3">刷新</span> <span class="c-1">{{ freqLabel(page.refresh) }}</span><span class="c-3"> · 最近 {{ page.lastRefresh.slice(5) }}</span></div>
+        <div class="pd-ell"><span class="c-3">来源</span> <span class="c-1">{{ page.source }}</span></div>
+        <div><span class="c-3">共享</span> <span class="c-1">{{ page.share.mode === '仅自己' ? '仅自己' : page.share.mode === '所在部门' ? '所在部门' : `${page.share.members.length} 位成员` }}</span></div>
+        <div><span class="c-3">订阅</span> <span class="c-1">{{ page.sub.on ? `${page.sub.channel} · ${page.sub.receivers.length} 人` : '未开启' }}</span></div>
+      </div>
+      <div v-if="page.statusNote" class="t-12" :class="page.status === '刷新失败' ? 'tl-failed' : 'c-warning'">{{ page.statusNote }}</div>
+
+      <a-tabs v-model:active-key="tabV" size="small">
+        <a-tab-pane key="preview" :tab="`预览（${page.cards.length}）`" />
+        <a-tab-pane key="schedule" tab="刷新与订阅" />
+        <a-tab-pane key="share" tab="共享" />
+      </a-tabs>
+
+      <template v-if="tabV === 'preview'">
+        <div class="pd-row">
+          <span class="c-3 t-12">口径版本</span>
+          <a-tag v-for="c in calibers" :key="c.label" :class="{ 'c-warning': c.pending }" :title="c.pending">{{ c.label }}{{ c.pending ? ' · 待更新' : '' }}</a-tag>
+          <span class="pd-sp" />
+          <template v-if="editing">
+            <a-button size="small" @click="editing = false">取消</a-button>
+            <a-button size="small" type="primary" @click="saveCards">保存顺序</a-button>
+          </template>
+          <a-tooltip v-else :title="reason"><a-button size="small" :disabled="readonly" @click="startEdit">调整卡片</a-button></a-tooltip>
+        </div>
+        <div v-if="!editing" class="pd-grid">
+          <CardPreview v-for="(c, i) in pagedCards" :key="c.key" :card="c" :index="(cpage - 1) * CSIZE + i + 1" />
+        </div>
+        <div v-else class="pd-edit">
+          <div class="t-12 c-3">拖动左侧手柄调整顺序；移除的卡片保存后从页面删除，可在问数工作台重新固定。</div>
+          <div v-for="(c, i) in pagedCards" :key="c.key" class="pd-erow" draggable="true"
+            @dragstart="dragFrom = (cpage - 1) * CSIZE + i" @dragover.prevent @drop="onDrop((cpage - 1) * CSIZE + i)">
+            <HolderOutlined class="c-3 pd-handle" />
+            <span class="num c-3 t-12">{{ (cpage - 1) * CSIZE + i + 1 }}</span>
+            <span class="pd-ell c-1">{{ c.title }}</span>
+            <span class="t-12 c-3">{{ c.viz }} · {{ c.metric }} {{ c.version }}</span>
+            <a-button size="small" type="text" @click="removeCard((cpage - 1) * CSIZE + i)"><DeleteOutlined /></a-button>
+          </div>
+        </div>
+        <AppPagination v-model:page="cpage" variant="simple" :total="shownCards.length" :size="CSIZE" unit="张卡片" />
+      </template>
+
+      <template v-else-if="tabV === 'schedule'">
+        <div class="pd-form">
+          <div class="t-16 fw-600">定时刷新</div>
+          <div class="pd-f"><span class="pd-l c-3">频率</span>
+            <a-radio-group v-model:value="plan.freq" :disabled="readonly">
+              <a-radio-button v-for="f in ['每小时', '每天', '每周', '每月', '手动']" :key="f" :value="f">{{ f }}</a-radio-button>
+            </a-radio-group>
+          </div>
+          <div v-if="plan.freq !== '手动' && plan.freq !== '每小时'" class="pd-f"><span class="pd-l c-3">时间</span>
+            <a-select v-if="plan.freq === '每周'" v-model:value="plan.weekday" :disabled="readonly" class="pd-s" :options="WEEKDAYS.map((w) => ({ value: w, label: w }))" />
+            <a-select v-if="plan.freq === '每月'" v-model:value="plan.monthday" :disabled="readonly" class="pd-s" :options="[1, 5, 10, 15, 20, 25].map((d) => ({ value: d, label: `${d} 日` }))" />
+            <a-select v-model:value="plan.time" :disabled="readonly" class="pd-s" :options="TIMES.map((t) => ({ value: t, label: t }))" />
+          </div>
+          <div class="pd-f"><span class="pd-l c-3">刷新失败时</span>
+            <a-radio-group v-model:value="plan.onFail" :disabled="readonly"><a-radio value="保留上次结果">保留上次结果</a-radio><a-radio value="标记失败并通知">标记失败并通知我</a-radio></a-radio-group>
+          </div>
+          <div class="pd-f"><span class="pd-l c-3">下次刷新</span><span class="num c-1">{{ nextRun }}</span><span class="t-12 c-3">按固定时的依据（范围、口径版本）取数，数据截至以数据源为准</span></div>
+
+          <div class="t-16 fw-600 pd-gap">订阅推送</div>
+          <div class="pd-f"><span class="pd-l c-3">开启订阅</span><a-switch v-model:checked="sub.on" :disabled="readonly" /></div>
+          <template v-if="sub.on">
+            <div class="pd-f"><span class="pd-l c-3">渠道</span>
+              <a-radio-group v-model:value="sub.channel" :disabled="readonly"><a-radio v-for="c in ['邮件', '企业微信', '站内信']" :key="c" :value="c">{{ c }}</a-radio></a-radio-group>
+            </div>
+            <div class="pd-f"><span class="pd-l c-3">接收人</span>
+              <a-select v-model:value="sub.receivers" mode="multiple" :disabled="readonly" class="pd-wide" placeholder="选择接收人" :options="[{ value: '王敏', label: '王敏（我）' }, ...people]" :max-tag-count="4" />
+            </div>
+            <div class="pd-f"><span class="pd-l c-3">推送时机</span>
+              <a-select v-model:value="sub.when" :disabled="readonly" class="pd-m" :options="['每次刷新后', '每天 09:00', '每周一 09:00'].map((w) => ({ value: w, label: w }))" />
+              <a-checkbox v-model:checked="sub.onlyChanged" :disabled="readonly">仅数据有变化时推送</a-checkbox>
+            </div>
+            <div class="pd-f"><span class="pd-l" /><span class="t-12 c-3">接收人只能看到自己有权限范围内的数据；无权限的卡片在推送里显示“无权限”。</span></div>
+          </template>
+          <div class="pd-f"><span class="pd-l" />
+            <a-button @click="resetDrafts">还原</a-button>
+            <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="saveSchedule">保存</a-button></a-tooltip>
+          </div>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="pd-form">
+          <div class="pd-f"><span class="pd-l c-3">共享方式</span>
+            <a-radio-group v-model:value="share.mode" :disabled="readonly">
+              <a-radio value="仅自己">仅自己</a-radio><a-radio value="指定成员">指定成员</a-radio><a-radio value="所在部门">所在部门（华东事业部 / 运营中心）</a-radio>
+            </a-radio-group>
+          </div>
+          <template v-if="share.mode === '指定成员'">
+            <div class="pd-f"><span class="pd-l c-3">添加成员</span>
+              <a-select v-model:value="addWho" mode="multiple" :disabled="readonly" class="pd-wide" placeholder="搜索姓名或部门" :options="candidates" option-filter-prop="label" :max-tag-count="3" />
+              <a-select v-model:value="addPerm" :disabled="readonly" class="pd-s" :options="[{ value: '可查看', label: '可查看' }, { value: '可编辑', label: '可编辑' }]" />
+              <a-button :disabled="readonly || !addWho.length" @click="addMembers">添加</a-button>
+            </div>
+            <div class="pd-members">
+              <div v-for="m in pagedMembers" :key="m.name" class="pd-mrow">
+                <span class="c-1 pd-mname">{{ m.name }}</span><span class="t-12 c-3 pd-ell">{{ m.dept }}</span>
+                <a-select v-model:value="m.perm" size="small" :disabled="readonly" class="pd-s" :options="[{ value: '可查看', label: '可查看' }, { value: '可编辑', label: '可编辑' }]" />
+                <a-button size="small" type="text" :disabled="readonly" @click="share.members = share.members.filter((x) => x.name !== m.name)">移除</a-button>
+              </div>
+              <div v-if="!share.members.length" class="t-12 c-3 pd-empty">还没有共享成员</div>
+            </div>
+            <AppPagination v-model:page="mpage" variant="simple" :total="share.members.length" :size="MSIZE" unit="位成员" :empty="false" />
+          </template>
+          <div class="pd-f"><span class="pd-l c-3">链接访问</span><a-switch v-model:checked="share.link" :disabled="readonly || share.mode === '仅自己'" />
+            <span class="t-12 c-3">有链接且有数据权限的人可查看</span>
+            <a-button v-if="share.link && share.mode !== '仅自己'" size="small" @click="copyLink">复制链接</a-button>
+          </div>
+          <div class="pd-f"><span class="pd-l c-3">允许导出</span><a-switch v-model:checked="share.allowExport" :disabled="readonly" /><span class="t-12 c-3">关闭后被共享人不能导出卡片数据</span></div>
+          <div class="pd-f"><span class="pd-l" /><span class="t-12 c-3">被共享人看到的数据按各自的数据权限裁剪，范围外的卡片显示“无权限”。</span></div>
+          <div class="pd-f"><span class="pd-l" />
+            <a-button @click="resetDrafts">还原</a-button>
+            <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="saveShare">保存共享设置</a-button></a-tooltip>
+          </div>
+        </div>
+      </template>
+    </div>
+  </a-drawer>
+</template>
+
+<style scoped>
+.pd { display: flex; flex-direction: column; gap: 8px; }
+.pd-meta { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px 16px; }
+.pd-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pd-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pd-sp { flex: 1; }
+.pd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pd-edit { display: flex; flex-direction: column; gap: 6px; }
+.pd-erow { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 8px; border: var(--border); border-radius: var(--radius); cursor: grab; }
+.pd-erow .pd-ell { flex: 1; }
+.pd-handle { cursor: grab; }
+.pd-form { display: flex; flex-direction: column; gap: 12px; }
+.pd-gap { margin-top: 8px; }
+.pd-f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pd-l { width: 80px; flex: none; }
+.pd-s { width: 110px; }
+.pd-m { width: 160px; }
+.pd-wide { width: 360px; }
+.pd-members { display: flex; flex-direction: column; margin-left: 88px; border-top: var(--border); }
+.pd-mrow { display: flex; align-items: center; gap: 12px; height: 40px; border-bottom: var(--border); }
+.pd-mname { width: 64px; flex: none; }
+.pd-mrow .pd-ell { flex: 1; }
+.pd-empty { padding: 12px 0; }
+.pd-pop { display: flex; gap: 8px; width: 300px; }
+</style>

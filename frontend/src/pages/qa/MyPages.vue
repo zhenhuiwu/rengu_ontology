@@ -1,0 +1,258 @@
+<script setup lang="ts">
+/**
+ * 我的页面与模板库（/use/qa/pages）
+ *  页签 我的页面 / 模板库（?tab=templates）；表格 full 分页（我的页面 ?page=，模板库 ?tpage=）
+ *  行点击 → 页面抽屉（?page_id=P001&ptab=preview|schedule|share）：卡片预览、数据截至、口径版本、刷新与订阅、共享
+ *  行内动作：重命名（气泡）、共享（抽屉共享页签）、刷新、删除（确认卡）
+ *  模板：预览抽屉（?tpl=T001）+ “用此模板新建”气泡
+ * 问数工作台“固定到页面”的页面（华东大区销售周报、门店履约看板……）就是这里的前 13 个页面（同一份 QA_PAGE_LIST）。
+ */
+import { computed, reactive, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { message } from 'ant-design-vue';
+import AppPagination from '@/components/AppPagination.vue';
+import { usePagedQuery } from '@/composables/usePagedQuery';
+import { useReadonly } from '@/composables/useReadonly';
+import { useConfirmStore } from '@/stores/confirm';
+import { paginate } from '@/mock';
+import { MY_PAGES, PAGE_TEMPLATES, PAGES_CUTOFF, PAGE_SCOPES, freqLabel, type QaPageFull, type QaTemplate, type TplCreate, type RefreshPlan } from '@/mock/qa-pages';
+import PageDrawer from './pages/PageDrawer.vue';
+import TemplateDrawer from './pages/TemplateDrawer.vue';
+import UseTemplatePop from './pages/UseTemplatePop.vue';
+
+const route = useRoute();
+const router = useRouter();
+const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
+const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
+const { readonly, reason } = useReadonly();
+const confirm = useConfirmStore();
+
+const pages = reactive<QaPageFull[]>(MY_PAGES.map((p) => ({ ...p })));
+const tab = computed({ get: () => (q('tab') === 'templates' ? 'templates' : 'pages'), set: (v: string) => setQuery({ tab: v === 'templates' ? 'templates' : undefined }) });
+
+/* ── 我的页面 ── */
+const kw = computed({ get: () => q('kw'), set: (v: string) => setQuery({ kw: v || undefined }) });
+const srcF = computed({ get: () => q('src') || undefined, set: (v?: string) => setQuery({ src: v || undefined }) });
+const shareF = computed({ get: () => q('share') || undefined, set: (v?: string) => setQuery({ share: v || undefined }) });
+const statusF = computed({ get: () => q('status') || undefined, set: (v?: string) => setQuery({ status: v || undefined }) });
+const rows = computed(() => pages.filter((p) => (!kw.value || p.name.includes(kw.value))
+  && (!srcF.value || p.sourceKind === srcF.value)
+  && (!shareF.value || (shareF.value === '已共享' ? p.share.mode !== '仅自己' : p.share.mode === '仅自己'))
+  && (!statusF.value || p.status === statusF.value)));
+const pq = usePagedQuery({ defaultSize: 15, filters: [kw, srcF, shareF, statusF] });
+const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
+const cols = [
+  { title: '页面名称', key: 'name', ellipsis: true },
+  { title: '卡片', key: 'cards', width: 64, align: 'right' },
+  { title: '范围', dataIndex: 'scope', key: 'scope', width: 96 },
+  { title: '口径版本', key: 'caliber', width: 260, ellipsis: true },
+  { title: '来源', key: 'source', width: 220, ellipsis: true },
+  { title: '刷新计划', key: 'refresh', width: 130 },
+  { title: '订阅', key: 'sub', width: 110 },
+  { title: '共享', key: 'share', width: 100 },
+  { title: '数据截至', key: 'asof', width: 130 },
+  { title: '状态', key: 'status', width: 100 },
+  { title: '操作', key: 'op', width: 210 },
+];
+const caliberText = (p: QaPageFull) => { const s = [...new Set(p.cards.map((c) => `${c.metric} ${c.version}`))]; return { text: s.join('、'), n: s.length }; };
+const shareText = (p: QaPageFull) => (p.share.mode === '仅自己' ? '仅自己' : p.share.mode === '所在部门' ? '所在部门' : `${p.share.members.length} 位成员`);
+const stCls = (s: string) => (s === '刷新失败' ? 'tl-failed' : s === '口径待更新' ? 'tl-attention' : 'c-2');
+
+/* 抽屉 */
+const current = computed(() => pages.find((p) => p.id === q('page_id')));
+const openPage = (p: QaPageFull, ptab?: string) => setQuery({ page_id: p.id, ptab: ptab && ptab !== 'preview' ? ptab : undefined, tpl: undefined });
+const closePage = () => setQuery({ page_id: undefined, ptab: undefined });
+const ptab = computed({ get: () => q('ptab') || 'preview', set: (v: string) => setQuery({ ptab: v === 'preview' ? undefined : v }) });
+
+/* 动作 */
+const NOW = '2026-10-25 17:10';
+function refresh(p: QaPageFull) {
+  p.lastRefresh = NOW; p.dataAsOf = PAGES_CUTOFF;
+  if (p.status === '刷新失败') { p.status = p.cards.some((c) => c.pending) ? '口径待更新' : '正常'; p.statusNote = p.cards.find((c) => c.pending)?.pending; }
+  message.success(`已刷新「${p.name}」，数据截至 ${PAGES_CUTOFF}`);
+}
+const renameId = ref<string>();
+const renameVal = ref('');
+function openRename(p: QaPageFull) { renameId.value = p.id; renameVal.value = p.name; }
+function rename(p: QaPageFull, name: string) {
+  if (pages.some((x) => x.id !== p.id && x.name === name)) { message.warning(`已有同名页面「${name}」`); return; }
+  const old = p.name; p.name = name; renameId.value = undefined; message.success(`已将「${old}」重命名为「${name}」`);
+}
+async function remove(p: QaPageFull) {
+  const shared = p.share.mode !== '仅自己';
+  const ok = await confirm.ask({
+    title: '删除页面', target: `${p.name}（${p.id}）`, danger: true, okText: '删除', tag: '不可恢复',
+    fields: [{ label: '卡片', value: `${p.cards.length} 张` }, { label: '共享', value: shareText(p) }, { label: '订阅', value: p.sub.on ? `${p.sub.channel} · ${p.sub.receivers.length} 人` : '未开启' }],
+    impact: `${shared ? '被共享人将无法再打开此页面，' : ''}${p.sub.on ? '订阅推送随之停止，' : ''}定时刷新停止。问数会话里的原始回答不受影响。`,
+    irreversible: true,
+  });
+  if (!ok) return;
+  const i = pages.findIndex((x) => x.id === p.id); if (i >= 0) pages.splice(i, 1);
+  if (q('page_id') === p.id) closePage();
+  message.success(`已删除「${p.name}」`);
+}
+
+/* 新建空白页面 */
+const newOpen = ref(false);
+const newName = ref('');
+const newScope = ref('华东大区');
+function createBlank() {
+  const id = nextId();
+  pages.unshift({ id, name: newName.value.trim(), owner: '王敏', scope: newScope.value, sourceKind: '手动新建', source: '手动新建', cards: [], dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,
+    refresh: { freq: '每天', time: '08:00', onFail: '保留上次结果' }, sub: { on: false, channel: '邮件', receivers: [], when: '每次刷新后', onlyChanged: false },
+    share: { mode: '仅自己', members: [], link: false, allowExport: true }, status: '正常', views: 0 });
+  newOpen.value = false; newName.value = '';
+  message.success('已新建空白页面，可在问数工作台把回答卡片固定到这里');
+}
+const nextId = () => `P${String(Math.max(...pages.map((p) => Number(p.id.slice(1))), 0) + 1).padStart(3, '0')}`;
+
+/* ── 模板库 ── */
+const tkw = computed({ get: () => q('tkw'), set: (v: string) => setQuery({ tkw: v || undefined }) });
+const sceneF = computed({ get: () => q('scene') || undefined, set: (v?: string) => setQuery({ scene: v || undefined }) });
+const SCENES = [...new Set(PAGE_TEMPLATES.map((t) => t.scene))];
+const trows = computed(() => PAGE_TEMPLATES.filter((t) => (!tkw.value || t.name.includes(tkw.value)) && (!sceneF.value || t.scene === sceneF.value)));
+const tq = usePagedQuery({ defaultSize: 15, filters: [tkw, sceneF], prefix: 't' });
+const tpaged = computed(() => paginate(trows.value, { page: tq.page.value, size: tq.size.value }));
+const tcols = [
+  { title: '模板名称', key: 'name', width: 200 },
+  { title: '场景', dataIndex: 'scene', key: 'scene', width: 96 },
+  { title: '卡片', key: 'cards', width: 64, align: 'right' },
+  { title: '包含口径', key: 'caliber', ellipsis: true },
+  { title: '提供方', key: 'provider', width: 150 },
+  { title: '使用次数', key: 'uses', width: 96, align: 'right' },
+  { title: '更新时间', key: 'updatedAt', width: 110 },
+  { title: '操作', key: 'op', width: 170 },
+];
+const tplCur = computed(() => PAGE_TEMPLATES.find((t) => t.id === q('tpl')));
+const openTpl = (t: QaTemplate) => setQuery({ tpl: t.id, page_id: undefined, ptab: undefined });
+function fromTemplate(e: TplCreate) {
+  const id = nextId();
+  const refresh: RefreshPlan = e.refresh.startsWith('每小时') ? { freq: '每小时', time: '整点', onFail: '保留上次结果' } : e.refresh.startsWith('每周') ? { freq: '每周', weekday: '周一', time: '08:00', onFail: '保留上次结果' } : e.refresh.startsWith('手动') ? { freq: '手动', time: '--', onFail: '保留上次结果' } : { freq: '每天', time: '08:00', onFail: '保留上次结果' };
+  const cards = e.tpl.cards.map((c, i) => ({ ...c, key: `${id}-C${i + 1}` }));
+  pages.unshift({ id, name: e.name, owner: '王敏', scope: e.scope, sourceKind: '模板', source: `模板「${e.tpl.name}」· ${e.caliber}`, cards, dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,
+    refresh, sub: { on: false, channel: '邮件', receivers: [], when: '每次刷新后', onlyChanged: false }, share: { mode: '仅自己', members: [], link: false, allowExport: true },
+    status: cards.some((c) => c.pending) ? '口径待更新' : '正常', statusNote: cards.find((c) => c.pending)?.pending, views: 0 });
+  router.replace({ query: { tab: undefined, page_id: id } });
+  message.success(`已用模板「${e.tpl.name}」新建「${e.name}」`);
+}
+const rowProps = (p: QaPageFull) => ({ class: p.id === q('page_id') ? 'mp-row-on' : '', onClick: () => openPage(p) });
+const trowProps = (t: QaTemplate) => ({ class: t.id === q('tpl') ? 'mp-row-on' : '', onClick: () => openTpl(t) });
+const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作台').length);
+</script>
+
+<template>
+  <Teleport defer to="#page-extra">
+    <a-space>
+      <span class="t-12 c-3">数据截至 <span class="num">{{ PAGES_CUTOFF }}</span></span>
+      <a-button @click="router.push('/use/qa/workbench')">去问数工作台</a-button>
+      <a-popover v-model:open="newOpen" trigger="click" placement="bottomRight" title="新建空白页面">
+        <template #content>
+          <div class="mp-pop">
+            <div class="mp-f"><span class="c-3 mp-l">页面名称</span><a-input v-model:value="newName" :maxlength="30" placeholder="例如：华东复购分析" /></div>
+            <div class="mp-f"><span class="c-3 mp-l">范围</span><a-select v-model:value="newScope" class="mp-c" :options="PAGE_SCOPES.map((s) => ({ value: s, label: s }))" /></div>
+            <div class="mp-btns"><a-button size="small" @click="newOpen = false">取消</a-button><a-button size="small" type="primary" :disabled="!newName.trim()" @click="createBlank">新建</a-button></div>
+          </div>
+        </template>
+        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly">新建页面</a-button></a-tooltip>
+      </a-popover>
+    </a-space>
+  </Teleport>
+
+  <div class="panel mp">
+    <a-tabs v-model:active-key="tab" class="mp-tabs">
+      <a-tab-pane key="pages" :tab="`我的页面（${pages.length}）`" />
+      <a-tab-pane key="templates" :tab="`模板库（${PAGE_TEMPLATES.length}）`" />
+    </a-tabs>
+
+    <template v-if="tab === 'pages'">
+      <div class="mp-filters">
+        <a-input-search v-model:value="kw" allow-clear placeholder="搜索页面名称" class="mp-kw" />
+        <a-select v-model:value="srcF" allow-clear placeholder="来源" class="mp-sel" :options="['问数工作台', '模板', '手动新建'].map((s) => ({ value: s, label: s }))" />
+        <a-select v-model:value="shareF" allow-clear placeholder="共享" class="mp-sel" :options="['已共享', '仅自己'].map((s) => ({ value: s, label: s }))" />
+        <a-select v-model:value="statusF" allow-clear placeholder="状态" class="mp-sel" :options="['正常', '口径待更新', '刷新失败'].map((s) => ({ value: s, label: s }))" />
+        <span class="t-12 c-3 mp-hint">{{ fromWb }} 个页面由问数工作台“固定到页面”生成</span>
+      </div>
+      <div class="mp-table" :class="{ 'paged-scroll': pq.overflow.value }">
+        <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'name'">
+              <a-popover :open="renameId === record.id" trigger="click" placement="bottomLeft" @open-change="(o: boolean) => { if (!o) renameId = undefined; }">
+                <template #content>
+                  <div class="mp-pop" @click.stop>
+                    <a-input v-model:value="renameVal" :maxlength="30" show-count @press-enter="rename(record, renameVal.trim())" />
+                    <div class="mp-btns"><a-button size="small" @click="renameId = undefined">取消</a-button><a-button size="small" type="primary" :disabled="!renameVal.trim()" @click="rename(record, renameVal.trim())">确定</a-button></div>
+                  </div>
+                </template>
+                <span class="c-1">{{ record.name }}</span>
+              </a-popover>
+            </template>
+            <span v-else-if="column.key === 'cards'" class="num">{{ record.cards.length }}</span>
+            <span v-else-if="column.key === 'caliber'" class="c-2" :title="caliberText(record).text">{{ caliberText(record).text || '--' }}</span>
+            <span v-else-if="column.key === 'source'" class="c-2" :title="record.source">{{ record.source }}</span>
+            <span v-else-if="column.key === 'refresh'" class="c-2">{{ freqLabel(record.refresh) }}</span>
+            <span v-else-if="column.key === 'sub'" class="c-2">{{ record.sub.on ? `${record.sub.channel} · ${record.sub.receivers.length} 人` : '--' }}</span>
+            <span v-else-if="column.key === 'share'" class="c-2">{{ shareText(record) }}</span>
+            <span v-else-if="column.key === 'asof'" class="num" :class="record.status === '刷新失败' ? 'tl-failed' : 'c-2'">{{ record.dataAsOf.slice(5) }}</span>
+            <span v-else-if="column.key === 'status'" :class="stCls(record.status)" :title="record.statusNote">{{ record.status }}</span>
+            <span v-else-if="column.key === 'op'" class="mp-ops" @click.stop>
+              <a-tooltip :title="reason"><a-button type="link" size="small" :disabled="readonly" @click="refresh(record)">刷新</a-button></a-tooltip>
+              <a-tooltip :title="reason"><a-button type="link" size="small" :disabled="readonly" @click="openRename(record)">重命名</a-button></a-tooltip>
+              <a-button type="link" size="small" @click="openPage(record, 'share')">共享</a-button>
+              <a-tooltip :title="reason"><a-button type="link" size="small" danger :disabled="readonly" @click="remove(record)">删除</a-button></a-tooltip>
+            </span>
+          </template>
+        </a-table>
+      </div>
+      <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="full" :total="paged.total" :default-size="pq.defaultSize" unit="个页面" empty-text="没有符合条件的页面" class="mp-pager" />
+    </template>
+
+    <template v-else>
+      <div class="mp-filters">
+        <a-input-search v-model:value="tkw" allow-clear placeholder="搜索模板名称" class="mp-kw" />
+        <a-select v-model:value="sceneF" allow-clear placeholder="场景" class="mp-sel" :options="SCENES.map((s) => ({ value: s, label: s }))" />
+        <span class="t-12 c-3 mp-hint">模板只含卡片结构和口径；新建后按所选范围取数</span>
+      </div>
+      <div class="mp-table" :class="{ 'paged-scroll': tq.overflow.value }">
+        <a-table size="small" row-key="id" :columns="tcols" :data-source="tpaged.items" :pagination="false" :custom-row="trowProps">
+          <template #bodyCell="{ column, record }">
+            <span v-if="column.key === 'name'" class="c-1">{{ record.name }}</span>
+            <span v-else-if="column.key === 'cards'" class="num">{{ record.cards.length }}</span>
+            <span v-else-if="column.key === 'caliber'" class="c-2">{{ [...new Set(record.cards.map((c: any) => `${c.metric} ${c.version}`))].join('、') }}</span>
+            <span v-else-if="column.key === 'provider'" class="c-2">{{ record.provider }}</span>
+            <span v-else-if="column.key === 'uses'" class="num">{{ record.uses }}</span>
+            <span v-else-if="column.key === 'updatedAt'" class="num c-2">{{ record.updatedAt }}</span>
+            <span v-else-if="column.key === 'op'" class="mp-ops" @click.stop>
+              <a-button type="link" size="small" @click="openTpl(record)">预览</a-button>
+              <UseTemplatePop :tpl="record" :disabled="readonly" :reason="reason" @create="fromTemplate" />
+            </span>
+          </template>
+        </a-table>
+      </div>
+      <AppPagination v-model:page="tq.page.value" v-model:size="tq.size.value" variant="full" :total="tpaged.total" :default-size="tq.defaultSize" unit="个模板" empty-text="没有符合条件的模板" class="mp-pager" />
+    </template>
+  </div>
+
+  <PageDrawer :page="current" v-model:tab="ptab" :readonly="readonly" :reason="reason" @close="closePage" @refresh="refresh" @rename="rename" @remove="remove" />
+  <TemplateDrawer :tpl="tplCur" :readonly="readonly" :reason="reason" @close="setQuery({ tpl: undefined })" @create="fromTemplate" />
+</template>
+
+<style scoped>
+.mp { flex: 1; min-height: 0; }
+.mp-tabs { flex: none; padding: 0 16px; }
+.mp-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
+.mp-filters { display: flex; gap: 8px; align-items: center; padding: 12px 16px; flex: none; }
+.mp-kw { width: 240px; }
+.mp-sel { width: 130px; }
+.mp-hint { margin-left: auto; }
+.mp-table { flex: 1; min-height: 0; padding: 0 16px; }
+.mp-table :deep(.ant-table-row) { cursor: pointer; }
+.mp-table :deep(.mp-row-on > td) { background: var(--brand-bg) !important; }
+.mp-pager { padding: 6px 16px 8px; }
+.mp-ops { display: inline-flex; }
+.mp-ops :deep(.ant-btn-link) { padding: 0 4px; }
+.mp-pop { width: 300px; display: flex; flex-direction: column; gap: 10px; }
+.mp-f { display: flex; align-items: center; gap: 8px; }
+.mp-l { width: 56px; flex: none; }
+.mp-c { flex: 1; }
+.mp-btns { display: flex; justify-content: flex-end; gap: 8px; }
+</style>
