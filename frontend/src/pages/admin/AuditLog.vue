@@ -3,11 +3,13 @@
  * 审计日志（示例：cursor 分页，512 条 mock）。海量流水不显示总数，只有 上一页 / 下一页，游标在 URL ?cursor=。
  * 时间范围必选（默认近 24 小时，不能清空），可按操作人或对象搜索。
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { message } from 'ant-design-vue';
 import dayjs, { type Dayjs } from 'dayjs';
 import AppPagination from '@/components/AppPagination.vue';
 import { useCursorQuery } from '@/composables/usePagedQuery';
-import { AUDIT_LOGS, paginateCursor } from '@/mock';
+import { exportAuditLogs, fetchAuditActions, mockAuditActions, queryAuditLogs, queryAuditLogsMock, type AuditQuery } from '@/api/admin';
+import { isApiError } from '@/api/http';
 
 // mock 的“现在”= 最新一条日志的时间
 const NOW = dayjs('2026-10-25 16:12:41');
@@ -23,16 +25,32 @@ const result = ref('全部');
 const field = ref<'actor' | 'target'>('actor');
 const kw = ref('');
 const cq = useCursorQuery({ size: 20, filters: [range, action, result, field, kw] });
-const rows = computed(() => {
+// 取数在 src/api/admin.ts：mock 模式同步算（和原来一样），real 模式走 /api/admin/v1/audit-logs
+const query = computed<AuditQuery>(() => {
   const [from, to] = range.value.map((d) => d.format('YYYY-MM-DD HH:mm:ss'));
-  const k = kw.value.trim();
-  return AUDIT_LOGS.filter((r) =>
-    r.time >= from && r.time <= to &&
-    (action.value === '全部' || r.action === action.value) && (result.value === '全部' || r.result === result.value) &&
-    (!k || r[field.value].includes(k)));
+  return { from, to, action: action.value, result: result.value, field: field.value, kw: kw.value, cursor: cq.cursor.value, size: cq.size };
 });
-const res = computed(() => paginateCursor(rows.value, { cursor: cq.cursor.value, size: cq.size }));
-const ACTIONS = ['全部', ...new Set(AUDIT_LOGS.map((r) => r.action))];
+const res = ref(queryAuditLogsMock(query.value));
+let seq = 0;
+watch(query, async (q) => {
+  const n = ++seq;
+  try {
+    const r = await queryAuditLogs(q);
+    if (n === seq) res.value = r;
+  } catch (e) {
+    if (n === seq) message.error(`审计日志加载失败（${isApiError(e) ? e.message || e.code : '未知错误'}）`);
+  }
+}, { immediate: true });
+const ACTIONS = ref(['全部', ...mockAuditActions()]);
+fetchAuditActions().then((a) => { ACTIONS.value = ['全部', ...a]; }).catch(() => { /* 保留 mock 下拉 */ });
+async function onExport() {
+  try {
+    const job = await exportAuditLogs(query.value);
+    if (job) message.success(`已创建导出任务 ${job}`);
+  } catch (e) {
+    message.error(isApiError(e) ? e.message : '导出失败');
+  }
+}
 const columns = [
   { title: '时间', dataIndex: 'time', key: 'time', width: 176 },
   { title: '操作人', dataIndex: 'actor', key: 'actor', width: 180 },
@@ -46,7 +64,7 @@ const columns = [
 <template>
   <Teleport defer to="#page-extra">
     <span class="t-12 c-3">日志保留 180 天</span>
-    <a-button>导出</a-button>
+    <a-button @click="onExport">导出</a-button>
   </Teleport>
   <div class="panel al">
     <div class="panel-head">
