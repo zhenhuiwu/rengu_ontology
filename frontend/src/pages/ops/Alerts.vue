@@ -6,16 +6,27 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { ALERTS, RULES, METRICS, alertTimeline, type Alert, type AlertStatus } from '@/mock';
+import { ACTIONS } from '@/mock/actions';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
-type Row = Alert & { log: LogItem[]; actionRef?: string };
+type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string };
 /** 页面内的告警状态（模拟后台：认领、转派、关闭、发起动作都会改它并写处理记录） */
-const LIST = reactive<Row[]>(ALERTS.map((a) => ({ ...a, log: alertTimeline(a) })));
+/** 关联动作取自动作中心同一份数据（mock/actions.ts，按来源告警匹配最近一条），两页的幂等键和状态一致 */
+const LIST = reactive<Row[]>(ALERTS.map((a) => {
+  const act = ACTIONS.find((x) => x.source.alertId === a.id);
+  const log = alertTimeline(a);
+  if (act && !(a.status === '已解决' || a.status === '已忽略')) log.push({ time: act.submittedAt, text: `发起动作「${act.action}」（${act.idemKey}），现为${act.status}`, who: act.initiator });
+  log.sort((x, y) => (x.time < y.time ? -1 : 1));
+  return { ...a, log, actionRef: act?.idemKey, actionStatus: act?.status };
+}));
+/** 关联动作还没有结果时锁定转派和关闭 */
+const IN_FLIGHT = ['待确认', '审批中', '执行中', '结果未知'];
 const ME = '王敏';
 const PEOPLE = ['王敏', '陈立军', '刘婷', '孙浩然', '何静', '赵蕾', '吴佳'];
 let tick = 0;
@@ -67,6 +78,7 @@ const pinned = ref<string>();
 const selectedId = computed(() => (route.query.alert as string) || pinned.value || pageRows.value[0]?.id);
 const current = computed<Row | undefined>(() => LIST.find((a) => a.id === selectedId.value) ?? pageRows.value[0]);
 const rule = computed(() => (current.value ? RULES[current.value.ruleId] : null));
+const locked = computed(() => !!current.value?.actionStatus && IN_FLIGHT.includes(current.value.actionStatus));
 const metric = computed(() => (rule.value?.metric ? METRICS.find((m) => m.id === rule.value!.metric) : undefined));
 /** 同一规则、同一对象近 7 天的触发次数（含本条） */
 const recent = computed(() => {
@@ -163,11 +175,12 @@ async function runAction() {
       { label: '审批人', value: a.objKind === 'product' ? '品类经理 王敏' : '区域运营 陈立军' },
       { label: '幂等键', value: `act-${a.id.toLowerCase()}` },
     ],
-    impact: '提交后写回外部系统；外部系统超时会标记为“结果未知”进入对账，不自动重试。',
+    impact: '提交后写回外部系统；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时在动作中心人工对账，不自动重试写入。',
   });
   if (!ok) return;
   pinned.value = a.id;
   a.actionRef = `act-${a.id.toLowerCase()}`;
+  a.actionStatus = '审批中';
   a.log.push({ time: now(), text: `发起动作「${r.action}」，待${a.objKind === 'product' ? '品类经理 王敏' : '区域运营 陈立军'}审批；动作成功后告警自动转为已解决`, who: ME });
   message.success(`已提交：${r.action}`);
 }
@@ -247,7 +260,7 @@ async function runAction() {
           <a-descriptions-item label="去重">{{ rule.dedupe }}</a-descriptions-item>
           <a-descriptions-item label="数据截至"><span class="num">{{ current.cutoff }}</span></a-descriptions-item>
           <a-descriptions-item label="处理人">{{ current.assignee ?? '未认领' }}</a-descriptions-item>
-          <a-descriptions-item v-if="current.actionRef" label="关联动作"><span class="num">{{ current.actionRef }}</span><span class="c-3"> · 待审批</span></a-descriptions-item>
+          <a-descriptions-item v-if="current.actionRef" label="关联动作"><span class="num">{{ current.actionRef }}</span><span v-if="current.actionStatus === '结果未知'" class="tl-attention"> · <QuestionCircleOutlined /> 结果未知 · 待对账</span><span v-else class="c-3"> · {{ current.actionStatus }}</span></a-descriptions-item>
         </a-descriptions>
 
         <div class="t-14 fw-600 al-sub">处理记录</div>
@@ -269,7 +282,7 @@ async function runAction() {
                 <div class="al-pop-foot"><a-button size="small" type="primary" :disabled="!transferTo" @click="doTransfer">转派</a-button></div>
               </div>
             </template>
-            <a-tooltip :title="current.actionRef ? '关联动作待审批，审批结束前不能转派' : undefined"><a-button :disabled="!!current.actionRef">转派</a-button></a-tooltip>
+            <a-tooltip :title="locked ? `关联动作${current.actionStatus}，有结果前不能转派` : undefined"><a-button :disabled="locked">转派</a-button></a-tooltip>
           </a-popover>
           <a-button v-if="current.status === '待处理'" type="primary" @click="claim">认领</a-button>
           <template v-if="mine">
@@ -281,9 +294,9 @@ async function runAction() {
                 <div class="al-pop-foot"><a-button size="small" type="primary" :disabled="!closeReason.trim()" @click="doClose">关闭告警</a-button></div>
               </div>
             </template>
-            <a-tooltip :title="current.actionRef ? '关联动作待审批，审批结束前不能关闭' : undefined"><a-button :disabled="!!current.actionRef">关闭</a-button></a-tooltip>
+            <a-tooltip :title="locked ? `关联动作${current.actionStatus}，有结果前不能关闭` : undefined"><a-button :disabled="locked">关闭</a-button></a-tooltip>
           </a-popover>
-          <span v-if="current.actionRef" class="t-14 c-3">{{ rule.action }} · 待审批</span>
+          <span v-if="current.actionRef" class="t-14 c-3">{{ rule.action }} · {{ current.actionStatus === '结果未知' ? '结果未知 · 待对账' : current.actionStatus }}</span>
           <a-button v-else-if="rule.action" type="primary" @click="runAction">{{ rule.action }}</a-button>
           </template>
         </template>

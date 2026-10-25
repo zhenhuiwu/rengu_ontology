@@ -2,11 +2,13 @@
 /**
  * 动作中心（动态本体）：左侧动作列表（full 分页），右侧 480px 当前动作详情：参数、来源、幂等键、外部单号、执行记录。
  * 页签写进 ?tab=（pending 待确认 / records 执行记录 / unknown 结果未知与对账），当前选中写进 ?act=，页码 ?page=&size=。
- * 写外部系统的动作（确认提交、重新提交）一律走公共确认卡；结果未知只能人工对账，不自动重试。
+ * 写外部系统的动作（确认提交、重新提交）一律走公共确认卡。结果未知：系统每 15 分钟按幂等键自动查询外部结果，
+ * 仍无法确认时人工发起对账；任何情况下都不自动重试写入。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import StatusTimeline from '@/components/StatusTimeline.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -15,7 +17,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import {
-  ACTIONS, ACTION_META, ACTION_NAMES, EXT_SYSTEMS,
+  ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS,
   type ActionRecord, type ActionStatus, type ActionLog,
 } from '@/mock/actions';
 
@@ -55,7 +57,7 @@ const rows = computed(() => {
     t.statuses.includes(a.status) &&
     (status.value === '全部' || a.status === status.value) &&
     (actionName.value === '全部' || a.action === actionName.value) &&
-    (system.value === '全部' || a.system === system.value) &&
+    (system.value === '全部' || a.sysId === system.value) &&
     (!k || a.id.includes(k) || a.objLabel.includes(k) || a.idemKey.includes(k.toLowerCase()) || (a.extRef ?? '').includes(k) || (a.source.alertId ?? '').includes(k)));
   // 对账页签：待对账的排在前面
   return t.key === 'unknown' ? [...list].sort((a, b) => Number(b.status === '结果未知') - Number(a.status === '结果未知')) : list;
@@ -70,8 +72,8 @@ const current = computed<ActionRecord | undefined>(() => LIST.find((a) => a.id =
 const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
 const pick = (a: ActionRecord) => { pinned.value = a.id; router.replace({ query: { ...route.query, act: a.id } }); };
 
-const badge = (s: ActionStatus) =>
-  s === '待确认' || s === '结果未知' ? 'warning' : s === '失败' ? 'error' : s === '成功' ? 'success' : s === '审批中' || s === '执行中' ? 'processing' : 'default';
+/** 状态点：待确认橙（需要关注）、失败红，其余灰；结果未知单独显示橙色问号 + “结果未知 · 待对账” */
+const badge = (s: ActionStatus) => (s === '待确认' ? 'warning' : s === '失败' ? 'error' : 'default');
 const kindLabel = (k: string) => (k === 'order' ? '订单' : k === 'product' ? '商品' : '门店');
 const sourceText = (a: ActionRecord) =>
   a.source.type === '告警' ? `告警 ${a.source.alertId}` : a.source.type === '问数' ? `问数 · ${a.source.session}` : a.retryOf ? `重新提交 · ${a.retryOf}` : '手动';
@@ -81,9 +83,9 @@ const columns = [
   { title: '动作编号', key: 'id', width: 168 },
   { title: '动作', dataIndex: 'action', key: 'action', width: 120 },
   { title: '对象', key: 'obj', ellipsis: true },
-  { title: '来源', key: 'source', width: 196, ellipsis: true },
+  { title: '来源', key: 'source', width: 180, ellipsis: true },
   { title: '外部系统', dataIndex: 'system', key: 'system', width: 84 },
-  { title: '状态', key: 'status', width: 96 },
+  { title: '状态', key: 'status', width: 150 },
   { title: '发起人', dataIndex: 'initiator', key: 'initiator', width: 80 },
   { title: '提交时间', key: 'submittedAt', width: 168 },
 ];
@@ -103,7 +105,7 @@ async function submit() {
       { label: '外部系统', value: `${a.system} · ${ACTION_META[a.action].call}` },
       { label: '幂等键', value: a.idemKey },
     ],
-    impact: `确认后进入审批，审批通过后写回 ${a.system}；外部系统超时会标记为“结果未知”进入对账，不自动重试。`,
+    impact: `确认后进入审批，审批通过后写回 ${a.system}；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时人工对账，不自动重试写入。`,
   });
   if (!ok) return;
   pinned.value = a.id;
@@ -163,7 +165,7 @@ async function resubmit() {
   message.success(`已重新提交为 ${newId}`);
 }
 
-// 结果未知 → 发起对账：人工核对外部系统后选结论并写说明；不自动重试
+// 结果未知 → 发起对账：自动查询仍无法确认时，人工核对外部系统后选结论并写说明；不自动重试写入
 const reconOpen = ref(false);
 const reconAs = ref<'外部已成功' | '外部未执行' | '仍无法确认'>();
 const reconNote = ref('');
@@ -172,7 +174,7 @@ function doReconcile() {
   pinned.value = a.id;
   const note = reconNote.value.trim();
   if (reconAs.value === '仍无法确认') {
-    push(a, { time: now(), text: `对账：仍无法确认（${note}）`, desc: `${ME} · 保持结果未知，不自动重试`, status: 'unknown' });
+    push(a, { time: now(), text: `对账：仍无法确认（${note}）`, desc: `${ME} · 保持结果未知，系统继续每 15 分钟按幂等键查询`, status: 'unknown' });
     message.info('已记录对账，仍为结果未知');
   } else {
     a.status = '已对账'; a.reconcile = reconAs.value;
@@ -207,7 +209,7 @@ const terminalText = computed(() => {
           <a-select v-model:value="actionName" size="small" class="ac-w140"
             :options="[{ value: '全部', label: '全部动作' }, ...ACTION_NAMES.map((v) => ({ value: v, label: v }))]" />
           <a-select v-model:value="system" size="small" class="ac-w120"
-            :options="[{ value: '全部', label: '全部外部系统' }, ...EXT_SYSTEMS.map((v) => ({ value: v, label: v }))]" />
+            :options="[{ value: '全部', label: '全部外部系统' }, ...ACTION_SYSTEMS.map((v) => ({ value: v.id, label: v.name }))]" />
           <a-select v-if="curTab.statuses.length > 1" v-model:value="status" size="small" class="ac-w120"
             :options="[{ value: '全部', label: '全部状态' }, ...curTab.statuses.map((v) => ({ value: v, label: v }))]" />
           <a-input-search v-model:value="kw" size="small" placeholder="编号 / 对象 / 幂等键 / 外部单号" class="ac-w240" />
@@ -223,7 +225,7 @@ const terminalText = computed(() => {
               <ObjRef :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef>
             </template>
             <template v-else-if="column.key === 'source'"><span :class="record.source.type === '告警' ? 'num' : 'c-2'">{{ sourceText(record) }}</span></template>
-            <template v-else-if="column.key === 'status'"><a-badge :status="badge(record.status)" :text="record.status" /></template>
+            <template v-else-if="column.key === 'status'"><span v-if="record.status === '结果未知'" class="tl-attention ac-unk"><QuestionCircleOutlined /> 结果未知 · 待对账</span><a-badge v-else :status="badge(record.status)" :text="record.status" /></template>
             <template v-else-if="column.key === 'submittedAt'"><span class="num">{{ record.submittedAt }}</span></template>
           </template>
         </a-table>
@@ -235,7 +237,8 @@ const terminalText = computed(() => {
     <div v-if="current" class="panel ac-detail">
       <div class="panel-head">
         <span class="t-16 fw-600">{{ current.action }}</span>
-        <a-badge :status="badge(current.status)" :text="current.status" />
+        <span v-if="current.status === '结果未知'" class="tl-attention ac-unk"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
+        <a-badge v-else :status="badge(current.status)" :text="current.status" />
       </div>
       <div class="ac-body scroll-area">
         <div v-if="!inList" class="t-12 c-3 ac-out">此动作已移出当前筛选（现为{{ current.status }}）</div>
@@ -303,27 +306,39 @@ const terminalText = computed(() => {
         </template>
 
         <template v-else-if="current.status === '结果未知'">
-          <span class="t-14 c-3 ac-foot-note">不自动重试，请到 {{ current.system }} 核对后对账</span>
-          <a-popover v-model:open="reconOpen" trigger="click" placement="topRight">
-            <template #content>
-              <div class="ac-pop">
-                <div class="t-14 c-2">在 {{ current.system }} 核对外部单号 <span class="num c-1">{{ current.extRef }}</span> 后选择结论：</div>
-                <a-radio-group v-model:value="reconAs" class="ac-radios">
-                  <a-radio value="外部已成功">外部已成功<span class="c-3">（标记为已对账）</span></a-radio>
-                  <a-radio value="外部未执行">外部未执行<span class="c-3">（标记为已对账，动作未生效）</span></a-radio>
-                  <a-radio value="仍无法确认">仍无法确认<span class="c-3">（保持结果未知）</span></a-radio>
-                </a-radio-group>
-                <a-textarea v-model:value="reconNote" :rows="3" placeholder="对账说明（必填），如核对人、外部查询结果" />
-                <div class="ac-pop-foot"><a-button size="small" type="primary" :disabled="!reconAs || !reconNote.trim()" @click="doReconcile">提交对账</a-button></div>
-              </div>
-            </template>
-            <a-button type="primary">发起对账</a-button>
-          </a-popover>
+          <span class="t-14 c-3 ac-foot-note">每 15 分钟按幂等键自动查询，仍无法确认</span>
+          <a-button type="primary" @click="reconOpen = true">发起对账</a-button>
         </template>
 
         <span v-else class="t-14 c-3">{{ terminalText }}</span>
       </div>
     </div>
+
+    <!-- 发起对账：与公共确认卡（ConfirmActionModal）同样式；公共卡只挂一个且不能放单选 + 必填说明，所以在页内单独实现 -->
+    <a-modal v-if="current" :open="reconOpen" :width="520" :mask-closable="false" ok-text="提交对账" cancel-text="取消"
+      :ok-button-props="{ disabled: !reconAs || !reconNote.trim() }" @ok="doReconcile" @cancel="reconOpen = false">
+      <template #title><span class="t-16 fw-600">发起对账：{{ current.action }}</span><a-tag class="ca-tag">结果未知</a-tag></template>
+      <div class="ca-target t-14 c-2">作用对象：<span class="c-1">{{ kindLabel(current.objKind) }} {{ current.objLabel }}</span></div>
+      <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px' }">
+        <a-descriptions-item label="动作编号"><span class="num">{{ current.id }}</span></a-descriptions-item>
+        <a-descriptions-item label="外部系统"><span class="num">{{ current.system }} · {{ ACTION_META[current.action].call }}</span></a-descriptions-item>
+        <a-descriptions-item label="外部单号"><span class="num">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
+        <a-descriptions-item label="幂等键"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
+      </a-descriptions>
+      <div class="ca-impact t-14 c-2">系统已每 15 分钟按幂等键自动查询 {{ current.system }}，仍无法确认。请人工核对后选择结论；对账不会重试写入外部系统。</div>
+      <div class="ca-row">
+        <span class="t-14 c-2 ca-label">对账结论<span class="c-error">*</span></span>
+        <a-radio-group v-model:value="reconAs" class="ac-radios">
+          <a-radio value="外部已成功">外部已成功<span class="c-3">（标记为已对账）</span></a-radio>
+          <a-radio value="外部未执行">外部未执行<span class="c-3">（标记为已对账，动作未生效）</span></a-radio>
+          <a-radio value="仍无法确认">仍无法确认<span class="c-3">（保持结果未知，继续自动查询）</span></a-radio>
+        </a-radio-group>
+      </div>
+      <div class="ca-row">
+        <span class="t-14 c-2 ca-label">对账说明<span class="c-error">*</span></span>
+        <a-textarea v-model:value="reconNote" :rows="3" placeholder="如核对人、外部查询结果" />
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -345,6 +360,12 @@ const terminalText = computed(() => {
 .ac-tl :deep(.ant-timeline-item) { padding-bottom: 12px; }
 .ac-pop { width: 300px; display: flex; flex-direction: column; gap: 8px; }
 .ac-radios { display: flex; flex-direction: column; gap: 4px; }
+.ac-unk { white-space: nowrap; }
+.ca-tag { margin-inline-start: 8px; vertical-align: 2px; }
+.ca-target { margin: 8px 0 12px; }
+.ca-impact { margin: 12px 0; padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); }
+.ca-row { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; }
+.ca-label { width: 96px; flex: none; }
 .ac-pop-foot { display: flex; justify-content: flex-end; }
 .ac-foot { flex: none; min-height: 57px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: var(--border); }
 .ac-foot-note { margin-right: auto; }

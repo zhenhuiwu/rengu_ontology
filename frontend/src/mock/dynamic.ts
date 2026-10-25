@@ -6,11 +6,11 @@ export type AlertStatus = '待处理' | '处理中' | '已解决' | '已忽略';
 
 export interface RuleRef { id: string; name: string; version: string; trigger: '定时' | '事件' | '阈值越线' | '状态机' }
 export const RULES: Record<string, RuleRef & { condition: string; schedule: string; dedupe: string; action?: string; metric?: string }> = {
-  'R-007': { id: 'R-007', name: '商品毛利率越线', version: 'v3', trigger: '阈值越线', metric: 'gross_margin', condition: '毛利率 < 18.00%，且上次计算 ≥ 18.00%', schedule: '每天 08:00', dedupe: '规则 + 商品 + 门店 + 日期，冷却 7 天', action: '发起调价审批' },
-  'R-012': { id: 'R-012', name: '可用库存低于安全线', version: 'v2', trigger: '事件', condition: '收到“库存变动”事件后：可用库存 < 安全库存', schedule: '事件触发', dedupe: '规则 + 商品 + 门店，冷却 24 小时', action: '发起补货申请' },
+  'R-007': { id: 'R-007', name: '商品毛利率越线', version: 'v3', trigger: '阈值越线', metric: 'gross_margin', condition: '毛利率 < 18.00%，且上次计算 ≥ 18.00%', schedule: '每天 08:00', dedupe: '规则 + 商品 + 门店 + 日期，冷却 7 天', action: '调价审批' },
+  'R-012': { id: 'R-012', name: '可用库存低于安全线', version: 'v2', trigger: '事件', condition: '收到“库存变动”事件后：可用库存 < 安全库存', schedule: '事件触发', dedupe: '规则 + 商品 + 门店，冷却 24 小时', action: '补货申请' },
   'R-015': { id: 'R-015', name: '出库超 48 小时未签收', version: 'v1', trigger: '定时', condition: '订单状态 = 已出库，且出库时长 > 48 小时', schedule: '每小时第 10 分', dedupe: '规则 + 订单，不重复', action: '发起物流催派' },
   'R-021': { id: 'R-021', name: '门店销售额环比下降', version: 'v2', trigger: '定时', metric: 'gmv', condition: '销售额（不含税）周环比 < −15.0%', schedule: '每周一 09:00', dedupe: '规则 + 门店 + 周，冷却 7 天' },
-  'SM-ORD': { id: 'SM-ORD', name: '订单状态非法迁移', version: 'v4', trigger: '状态机', condition: '订单生命周期 v4 中不存在该迁移', schedule: '事件触发', dedupe: '事件 ID', action: '提交状态修正' },
+  'SM-ORD': { id: 'SM-ORD', name: '订单状态非法迁移', version: 'v4', trigger: '状态机', condition: '订单生命周期 v4 中不存在该迁移', schedule: '事件触发', dedupe: '事件 ID', action: '订单状态修正' },
 };
 
 export interface Alert {
@@ -40,14 +40,20 @@ export const ALERTS: Alert[] = [
 ];
 
 /** 单条告警的处理记录（告警自身的状态时间线） */
+/** 'YYYY-MM-DD HH:mm:ss' 加分钟（本地时间） */
+function plusMin(t: string, m: number) {
+  const d = new Date(t.replace(' ', 'T')); d.setMinutes(d.getMinutes() + m);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 export function alertTimeline(a: Alert) {
   const t = a.triggeredAt;
   const items: { time: string; text: string; who: string; abnormal?: boolean }[] = [
     { time: t, text: `规则 ${a.ruleId} ${RULES[a.ruleId].version} 命中，生成告警`, who: '系统', abnormal: a.level === '高' },
   ];
-  if (a.status !== '待处理') items.push({ time: t.slice(0, 11) + '16:05:40', text: '认领，状态 待处理 → 处理中', who: a.assignee ?? '--' });
-  if (a.status === '已解决') items.push({ time: t.slice(0, 11) + '17:32:18', text: '关联动作执行成功，状态 处理中 → 已解决', who: a.assignee ?? '--' });
-  if (a.status === '已忽略') items.push({ time: t.slice(0, 11) + '10:14:02', text: '关闭为已忽略：门店装修，销售下降属预期', who: a.assignee ?? '--' });
+  if (a.status !== '待处理') items.push({ time: plusMin(t, 12),  text: '认领，状态 待处理 → 处理中', who: a.assignee ?? '--' });
+  if (a.status === '已解决') items.push({ time: plusMin(t, 95),  text: '关联动作执行成功，状态 处理中 → 已解决', who: a.assignee ?? '--' });
+  if (a.status === '已忽略') items.push({ time: plusMin(t, 40),  text: '关闭为已忽略：门店装修，销售下降属预期', who: a.assignee ?? '--' });
   return items;
 }
 
