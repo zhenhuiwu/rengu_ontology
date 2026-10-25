@@ -109,3 +109,37 @@ def test_get_llm_reads_env(monkeypatch):
 def test_extract_sql():
     assert chain.extract_sql("好的\n```sql\nselect 1;\n```") == "select 1"
     assert chain.extract_sql("select 2;") == "select 2"
+    assert chain.extract_sql("```\nselect 3\n```") == "select 3"
+    # 多语句不截断，原样交给 sql_guard 拒绝
+    assert chain.extract_sql("select 1; drop table store") == "select 1; drop table store"
+
+
+def test_wrap_limit_uses_sqlglot_ast():
+    from app.common.sql_guard import assert_single_select
+
+    tree = assert_single_select("with a as (select 1 as x) select x from a")
+    assert (
+        chain.wrap_limit(tree, 201)
+        == "SELECT * FROM (WITH a AS (SELECT 1 AS x) SELECT x FROM a) AS _qa LIMIT 201"
+    )
+
+
+async def test_prompt_vanna_sections(qa):
+    fake = use_llm("select 1")
+    await qa.post(URL, json={"question": "华东大区有多少家门店？"})
+    system, user = fake.prompts[0]
+    assert user == {"role": "user", "content": "华东大区有多少家门店？"}
+    c = system["content"]
+    for sec in ("===Tables", "===Additional Context", "===Response Guidelines", "CREATE TABLE store"):
+        assert sec in c
+    assert "COMMENT ON COLUMN store.big_region" in c
+
+
+def test_dashscope_llm_uses_openai_sdk():
+    from openai import AsyncOpenAI
+
+    from app.modules.qa.llm import DEFAULT_BASE_URL, DashScopeLLM
+
+    llm = DashScopeLLM("sk-test", "qwen-flash", DEFAULT_BASE_URL, 5)
+    assert isinstance(llm._client, AsyncOpenAI)
+    assert str(llm._client.base_url).rstrip("/") == DEFAULT_BASE_URL

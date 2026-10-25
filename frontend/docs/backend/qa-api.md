@@ -260,17 +260,28 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 
 ---
 
-### 2.3 第一期已实现的最小链路（W6，分支 qa-chain）[推断]
+### 2.3 第一期已实现的最小链路（W6，分支 qa-chain → qa-reuse）[推断]
 
 代码：`app/modules/qa/llm.py`（LLM 客户端）、`app/modules/qa/chain.py`（上下文 / prompt / 执行 / 成形）、`router.py` W6；测试 `tests/test_qa_chain.py`（FakeLLM，不调真实接口）。
 
-- **流水线（简化版）**：问题 → `build_context`（`store / product / biz_order / order_line` 表结构 + `object_type` 说明 + 对象间 `link_type.join_sql` + 有公式的 `metric` + `qa_synonym_link` / `dim_mapping` 同义词 + `onto_qa_path` 默认路径）→ prompt → LLM 直接写 SQL → 抽 ```sql``` 代码块 → `sql_guard.assert_single_select` → 外包 `SELECT * FROM (…) AS _qa LIMIT 201` → `run_guarded`（表白名单 + 行级权限注入）→ 只读引擎执行（`statement_timeout`、`default_transaction_read_only`）→ 成形答案轮次。[推断] SemPlan JSON → 校验器 → 编译器是二期；本期 LLM 直接写 SQL（Vanna / SQLBot 式）。
+- **流水线（简化版）**：问题 → `build_context`（`store / product / biz_order / order_line` 表结构 + `object_type` 说明 + 对象间 `link_type.join_sql` + 有公式的 `metric` + `qa_synonym_link` / `dim_mapping` 同义词 + `onto_qa_path` 默认路径）→ prompt → LLM 直接写 SQL → 抽 ```sql``` 代码块 → `sql_guard.assert_single_select`（返回 sqlglot AST）→ 用 sqlglot 构造外包 `SELECT * FROM (…) AS _qa LIMIT 201`（`chain.wrap_limit`，不拼字符串）→ `run_guarded`（表白名单 + 行级权限注入）→ 只读引擎执行（`statement_timeout`、`default_transaction_read_only`）→ 成形答案轮次。[推断] SemPlan JSON → 校验器 → 编译器是二期；本期 LLM 直接写 SQL（Vanna / SQLBot 式）。
+- **复用的开源件**（用户要求「有现成的就拿来用」；只抄 MIT / Apache-2.0 代码，SQLBot、WrenAI 是 GPL/AGPL，只参考思路）：
+
+  | 环节 | 用的开源件 | 许可证 |
+  |---|---|---|
+  | 调 DashScope | OpenAI 官方 Python SDK `AsyncOpenAI`（`base_url` 指向 compatible-mode，`max_retries=1`），替掉手写 httpx | Apache-2.0 |
+  | prompt 结构 | Vanna `get_sql_prompt`：系统消息 = 说明 + `===Tables`（DDL）+ `===Additional Context`（本体对象 / 关联 / 指标 / 同义词 / 默认路径 / 数据截至）+ `===Response Guidelines`，问题单独一条 user | MIT |
+  | 表结构序列化 | SQLAlchemy 自带 DDL 编译：`CreateTable` + `COMMENT ON TABLE/COLUMN`（带 CHECK 枚举值），替掉手拼“列：a（注释）” | MIT |
+  | PG 方言规则 | NVIDIA auto-ontology `text_to_sql/prompts.py` 的 `_POSTGRES_DIALECT_RULES`（别名不能进 WHERE / GROUP BY） | Apache-2.0 |
+  | 抽 SQL | Vanna `extract_sql` 的围栏规则（先 ```sql 块，再任意 ``` 块，取最后一个）；[推断] 不抄它的 `SELECT … ;` 正则，那条会把 `select 1; drop …` 截短后放行，这里让多语句原样进 sql_guard 被拒 | MIT |
+  | 解析 / 校验 / LIMIT | sqlglot（`app/common/sql_guard` 已在用） | MIT |
+
 - **同步返回**：W6 跑完整条链路后返回 202 `{turnId, streamUrl, turn}`，`turn` 就是 W3 的轮次形状，前端可以直接追加；W7 SSE 未实现，`streamUrl` 先占位。[推断]
 - **答案形状**：`kind=answer`，`answer = {card:'table', dataAsOf, basis:{caliber, perm}, text, table:{id:'result', title, columns:[{key:'c0', title:<SQL 列别名>, align?:'right'}], items:[{c0:…}], total, summary, paged}}`；0 行 → `kind=empty`（`lead/bold/tail/tag`）。最多 200 行，超过 10 行 `paged=true`。[推断] kpis / trend / insight / suggest 本期不出。
 - **落库**：`qa_turn`（`code = {会话号}-T{seq:03d}` [推断]、`kind`、`question`、`refs`、`snapshot`、`sql_text`（不出接口）、`asked_at`、`elapsed_ms`），更新 `qa_session.last_at`，第一问改标题；追加 `qa_query_log`。`qa_turn_event` / `sem_plan` 本期不写。
-- **LLM**：DashScope OpenAI 兼容接口 `POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`，`temperature=0`。环境变量：`DASHSCOPE_API_KEY`（必填，只从环境读，不打日志）、`QA_LLM_MODEL`（默认 `qwen-flash`）、`QA_LLM_BASE_URL`、`QA_LLM_TIMEOUT_S`（默认 30）。[推断] 先不进 `app/core/config`，以后再收进 Settings。
+- **LLM**：DashScope OpenAI 兼容接口（`openai` SDK，`base_url=https://dashscope.aliyuncs.com/compatible-mode/v1`），`temperature=0`。依赖：`backend/pyproject.toml` 新增 `openai>=1.50`（锁 3.37.0）。环境变量：`DASHSCOPE_API_KEY`（必填，只从环境读，不打日志）、`QA_LLM_MODEL`（默认 `qwen-flash`）、`QA_LLM_BASE_URL`、`QA_LLM_TIMEOUT_S`（默认 30）。[推断] 先不进 `app/core/config`，以后再收进 Settings。
 - **错误**：没配 key → 503 `QA_LLM_UNAVAILABLE`；没配只读库 `RENGU_QA_READONLY_DATABASE_URL` → 503 `QA_EXEC_UNAVAILABLE`；LLM 调用失败 → 502 `QA_LLM_FAILED`；SQL 不是单条 SELECT、写 / DDL、用了白名单外的表 → 403 `SQL_REJECTED`（不落轮次）；会话不是自己的 → 404。
-- **权限**：沿用 `require_func("qa-workbench","view")` + 行级权限（`row_filter` 桩：管理员不限，其他人 DENY_ALL）；预览 / 历史版本由全局 readonly_guard 拒（403 READONLY）。
+- **权限**：沿用 `require_func("qa-workbench","view")` + 行级权限（权限初版 auth-min：已登录不裁剪，未登录 401）；预览 / 历史版本由全局 readonly_guard 拒（403 READONLY）。
 
 ## 3. 流式回答（SSE）
 

@@ -3,6 +3,14 @@
 [推断] 本期 LLM 直接写 SQL（Vanna / SQLBot 式：schema + 本体指标/同义词/默认路径进 prompt）；
 落地方案里的 SemPlan JSON → 校验器 → 编译器是二期，这里不做。sql_guard 兜底：单条 SELECT、
 表白名单（受治理业务表）、行级权限注入；执行走只读引擎（statement_timeout + read_only）并外包 LIMIT。
+
+复用的开源件（只抄 MIT / Apache-2.0 代码；SQLBot、WrenAI 是 GPL/AGPL，只参考思路不抄代码）：
+- prompt 结构（===Tables DDL / ===Additional Context / ===Response Guidelines）、extract_sql 的围栏规则：
+  Vanna `legacy/base/base.py` get_sql_prompt / extract_sql，MIT，https://github.com/vanna-ai/vanna
+- PostgreSQL 方言规则段：NVIDIA auto-ontology `retrieval/text_to_sql/prompts.py`
+  `_POSTGRES_DIALECT_RULES`，Apache-2.0（本地 /workspace/tmp/auto-ontology）
+- 表结构序列化：SQLAlchemy 自带 DDL 编译（CreateTable / SetTableComment / SetColumnComment），MIT
+- 解析、校验、外包 LIMIT：sqlglot AST（app/common/sql_guard 已用），MIT
 """
 
 from __future__ import annotations
@@ -15,9 +23,12 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
+from sqlalchemy.schema import CreateTable, SetColumnComment, SetTableComment
+from sqlglot import exp
 
-from app.common.sql_guard import assert_single_select, run_guarded
+from app.common.sql_guard import DIALECT, assert_single_select, run_guarded
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.base import Base
@@ -52,13 +63,18 @@ async def get_qa_conn() -> AsyncIterator[AsyncConnection]:
 
 
 def _schema_lines() -> list[str]:
+    """Vanna 式 DDL 上下文：用 SQLAlchemy 把 ORM 表编译成 PG 的 CREATE TABLE + COMMENT ON。"""
+    dialect = postgresql.dialect()
     out = []
     for name in QA_TABLES:
         t = Base.metadata.tables.get(name)
         if t is None:
             continue
-        cols = ", ".join(f"{c.name}{f'（{c.comment}）' if c.comment else ''}" for c in t.columns)
-        out.append(f"- {name}{f'：{t.comment}' if t.comment else ''}\n  列：{cols}")
+        ddl = [str(CreateTable(t).compile(dialect=dialect)).strip() + ";"]
+        if t.comment:
+            ddl.append(str(SetTableComment(t).compile(dialect=dialect)) + ";")
+        ddl += [str(SetColumnComment(c).compile(dialect=dialect)) + ";" for c in t.columns if c.comment]
+        out.append("\n".join(ddl))
     return out
 
 
@@ -101,38 +117,68 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
     }
 
 
-_SYSTEM = """你是零售数据分析助手，把用户问题翻译成一条 PostgreSQL 查询。
-规则：
-1. 只输出一条 SELECT（可用 WITH），放在 ```sql 代码块里，不要解释；
-2. 只能用下面列出的表和列；不要写 INSERT/UPDATE/DELETE/DDL；
-3. 指标按“指标口径”计算；用户说法按“同义词”映射；多表关联优先用“关联”与“默认问数路径”；
-4. 列用中文别名（AS "门店数"），结果行数尽量少；默认剔除 is_test = true 的测试数据。"""
+# 照 Vanna get_sql_prompt：初始说明 + ===Tables + ===Additional Context + ===Response Guidelines，
+# 问题单独一条 user。
+_INITIAL = (
+    "你是 PostgreSQL 专家，也是零售数据分析助手。请生成一条 SQL 回答用户问题。"
+    "只能依据下面给出的上下文，并遵守回答规范和格式要求。\n"
+)
+
+# 摘自 auto-ontology prompts._POSTGRES_DIALECT_RULES（Apache-2.0, NVIDIA），删了与本项目无关的大小写一条。
+_PG_RULES = (
+    "**PostgreSQL-specific (STRICT — these will error at execution)**\n"
+    "- WHERE and HAVING cannot reference SELECT aliases. "
+    "Repeat the full expression or wrap in a subquery/CTE.\n"
+    "- GROUP BY cannot reference SELECT aliases. Repeat the full expression "
+    "(including CASE WHEN blocks) in GROUP BY, or wrap the query in a subquery/CTE.\n"
+)
+
+_GUIDELINES = (
+    "===Response Guidelines \n"
+    "1. 上下文足够时，只输出一条 SELECT（可用 WITH），放在 ```sql 代码块里，不要解释；\n"
+    "2. 只能用 ===Tables 里的表和列；不要写 INSERT/UPDATE/DELETE/DDL；\n"
+    "3. 指标按“指标口径”计算；用户说法按“同义词”映射；多表关联优先用“关联”与“默认问数路径”；\n"
+    '4. 列用中文别名（AS "门店数"），结果行数尽量少；默认剔除 is_test = true 的测试数据；\n'
+    "5. 确保 SQL 符合 PostgreSQL 语法、可直接执行。\n"
+)
+
+_DOC_TITLES = {
+    "objects": "本体对象",
+    "links": "关联",
+    "metrics": "指标口径",
+    "synonyms": "同义词",
+    "paths": "默认问数路径",
+}
 
 
 def build_prompt(question: str, ctx: dict[str, list[str]]) -> list[dict[str, str]]:
-    titles = {
-        "schema": "表结构",
-        "objects": "本体对象",
-        "links": "关联",
-        "metrics": "指标口径",
-        "synonyms": "同义词",
-        "paths": "默认问数路径",
-    }
-    parts = [_SYSTEM]
-    for k, title in titles.items():
-        if ctx.get(k):
-            parts.append(f"## {title}\n" + "\n".join(ctx[k]))
-    parts.append(f"数据截至：{get_settings().data_cutoff}")
-    return [{"role": "system", "content": "\n\n".join(parts)}, {"role": "user", "content": question}]
+    prompt = _INITIAL
+    if ctx.get("schema"):
+        prompt += "\n===Tables \n" + "\n\n".join(ctx["schema"]) + "\n\n"
+    docs = [f"## {title}\n" + "\n".join(ctx[k]) for k, title in _DOC_TITLES.items() if ctx.get(k)]
+    docs.append(f"数据截至：{get_settings().data_cutoff}")
+    prompt += "\n===Additional Context \n\n" + "\n\n".join(docs) + "\n\n"
+    prompt += _PG_RULES + "\n" + _GUIDELINES
+    return [{"role": "system", "content": prompt}, {"role": "user", "content": question}]
 
 
-_FENCE = re.compile(r"```(?:sql|SQL|postgresql)?\s*(.*?)```", re.S)
+# Vanna extract_sql 的围栏规则（先 ```sql 块，再任意 ``` 块，取最后一个）。
+# [推断] 没抄它前面的 `SELECT ... ;` 正则：那条会把 "select 1; drop …" 截成 "select 1" 静默放行，
+# 这里要让多语句原样交给 sql_guard 拒绝（403 SQL_REJECTED）。
+_FENCE_SQL = re.compile(r"```sql\s*\n(.*?)```", re.S | re.I)
+_FENCE_ANY = re.compile(r"```(.*?)```", re.S)
 
 
 def extract_sql(text: str) -> str:
-    m = _FENCE.search(text or "")
-    sql = (m.group(1) if m else text or "").strip()
+    text = text or ""
+    blocks = _FENCE_SQL.findall(text) or _FENCE_ANY.findall(text)
+    sql = (blocks[-1] if blocks else text).strip()
     return sql.rstrip(";").strip()
+
+
+def wrap_limit(tree: exp.Expression, limit: int) -> str:
+    """sqlglot 构造 SELECT * FROM (<原查询>) AS _qa LIMIT n，不拼字符串。"""
+    return exp.select("*").from_(tree.subquery("_qa")).limit(limit).sql(dialect=DIALECT)
 
 
 # ---------------------------------------------------------------- 执行 + 成形
@@ -156,9 +202,9 @@ async def answer(
     t0 = time.monotonic()
     ctx = await build_context(session)
     sql = extract_sql(await llm.generate_sql(build_prompt(question, ctx)))
-    assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准
+    tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准
     limit = ROW_LIMIT
-    res = await run_guarded(conn, f"SELECT * FROM ({sql}) AS _qa LIMIT {limit + 1}", user)
+    res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
     keys = list(res.keys())
     rows = [[_cell(v) for v in r] for r in res.fetchall()]
     truncated = len(rows) > limit
