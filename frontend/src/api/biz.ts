@@ -8,7 +8,7 @@
 import type { Order, OrderLine, OrderStatus } from '@/mock/orders';
 import { apiClient, type PageResult } from './http';
 
-const api = apiClient('biz', 'biz');
+const api = apiClient('biz');
 
 /** 后台 OrderOut / OrderDetailOut（app/modules/biz/schemas.py） */
 export interface OrderLineDto { lineNo: number; sku: string; name: string; qty: number; price: number }

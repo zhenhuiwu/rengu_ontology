@@ -61,7 +61,7 @@ const cols = [
   <div class="ot-body">
     <div class="hs-tool">
       <a-segmented :value="filter" :options="FILTERS.map((f) => ({ label: `${f} ${count(f)}`, value: f }))" @change="(v: any) => (filter = v)" />
-      <InfoTip :text="`变更单 ${crCount} 张 · 当前生效版本 ${CURRENT_VERSION}，${NEXT_VERSION} 待发布。${RELEASES[RELEASES.length - 1].ver} 之前的修订没有变更单`" />
+      <InfoTip :text="`变更单 ${crCount} 张 · 当前生效版本 ${CURRENT_VERSION}，${NEXT_VERSION} 待发布。${RELEASES[RELEASES.length - 1]?.ver ?? ''} 之前的修订没有变更单`" />
     </div>
     <a-table :columns="cols" :data-source="pageRows" :pagination="false" size="small" row-key="key">
       <template #bodyCell="{ column, record }">

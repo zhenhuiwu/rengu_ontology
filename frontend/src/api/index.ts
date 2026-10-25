@@ -7,7 +7,7 @@
 import type { Pinia } from 'pinia';
 import { useAppStore, PERSONAS, type PersonaKey } from '@/stores/app';
 import { usePreviewStore } from '@/stores/preview';
-import { isApiError, setApiContext } from './http';
+import { isApiError, isBackendDown, setApiContext } from './http';
 import { anyReal, realModules, API_MODE } from './config';
 import { loadReleases } from './releases';
 
@@ -37,15 +37,20 @@ export async function bootstrapApi(pinia: Pinia): Promise<string[]> {
   const app = useAppStore(pinia);
   if (as && as in PERSONAS && as !== app.persona) app.setPersona(as as PersonaKey);
   try {
-    const cur = await loadReleases();
-    if (cur) {
-      app.ontologyVersion = cur.current;
-      app.ontologyPublishedAt = cur.publishedAt;
+    const r = await loadReleases();
+    if (r.kind === 'ok') {
+      app.ontologyVersion = r.current;
+      app.ontologyPublishedAt = r.publishedAt;
+    } else if (r.kind === 'empty') {
+      console.warn('[api] 发布记录接口返回空列表，仍显示 mock 数据');
+      warnings.push('发布记录为空，暂时显示演示数据');
     }
   } catch (e) {
     // 接口失败不挡启动：发布记录保持 mock 数据，控制台报错（联调时看这里）
     console.error('[api] 发布记录加载失败，仍显示 mock 数据', e);
-    warnings.push(`发布记录接口加载失败，暂时显示演示数据（${isApiError(e) ? e.code : '未知错误'}）`);
+    warnings.push(isBackendDown(e)
+      ? '后台未启动，发布记录暂时显示演示数据'
+      : `发布记录接口加载失败，暂时显示演示数据（${isApiError(e) ? e.code : '未知错误'}）`);
   }
   return warnings;
 }

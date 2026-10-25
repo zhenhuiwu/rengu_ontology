@@ -8,23 +8,27 @@
  * - VITE_API_MODE=real：已接线的模块全部走真接口。
  * - VITE_API_REAL_MODULES=versioning,biz（可选，逗号分隔，取值见 SWITCH_KEYS）：
  *     mock 模式下只把列出的模块切到真接口；real 模式下只有列出的模块走真接口（不写 = 全部）。
- * 每个接口文件用 apiClient(开关键, 前缀) 声明自己归哪个开关（src/api/http.ts）。
+ *     变量设了非空值就照字面执行：全是未知键时一个模块都不切（不会退回“全部”）。
+ * 每个接口文件用 apiClient(开关键) 声明自己归哪个开关，前缀取 SWITCH_PREFIX（src/api/http.ts）。
  */
 
 /** 接口前缀：/api/<prefix>/v1（api-index §1.1） */
 export type ApiPrefix = 'ontology' | 'qa' | 'data' | 'admin' | 'biz';
 
-/** 开关键 = 后台负责模块 → 它的接口前缀 */
+/**
+ * 开关键 = 后台负责模块 → 它的接口前缀。
+ * action / integration 的归属由 Palantir专家确认（action-event-api.md:140、:168）。
+ */
 export const SWITCH_PREFIX = {
   static: 'ontology',      // 静态本体：对象类型、关系、指标、维度、业务知识…
-  dynamic: 'ontology',     // 动态本体：规则、告警、action-runs…
-  action: 'ontology',      // 动作 / 事件类型（Palantir）
+  dynamic: 'ontology',     // 动态本体：规则、告警，以及 /action-runs/…
+  action: 'ontology',      // 动作类型、事件类型、事件、投递，含 GET /action-types/{id}/writeback（Palantir）
   versioning: 'ontology',  // 发布记录、快照
   qa: 'qa',
   biz: 'biz',
   admin: 'admin',
   data: 'data',            // 数据接入
-  integration: 'data',     // 外部系统 / 写回（代码在 integration，接口挂 /api/data/v1，api-index §1.1）
+  integration: 'data',     // 外部系统 /ext-systems（含 ?writeback=1 下拉）、/writeback-calls/{id}:mark-checked；在 ontology 前缀下没有路由
 } as const satisfies Record<string, ApiPrefix>;
 
 export type SwitchKey = keyof typeof SWITCH_PREFIX;
@@ -40,7 +44,8 @@ if (unknown.length) {
 }
 const listed = new Set(raw.filter(isSwitchKey));
 
-const realSet: ReadonlySet<SwitchKey> = mode === 'real' && listed.size === 0 ? new Set(SWITCH_KEYS) : listed;
+// 只有变量没设 / 为空时，real 模式才表示“全部”；设了就照字面（全是未知键 = 一个都不切）
+const realSet: ReadonlySet<SwitchKey> = mode === 'real' && raw.length === 0 ? new Set(SWITCH_KEYS) : listed;
 
 export const API_MODE = mode;
 /** 某个开关键是否走真接口 */
