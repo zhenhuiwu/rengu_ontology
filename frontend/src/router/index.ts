@@ -41,12 +41,10 @@ router.beforeEach((to) => {
   const ver = typeof to.query.ver === 'string' ? to.query.ver : null;
   if (ver) app.setViewVersion(ver);
   else if (app.viewVersion) return { ...to, query: { ...to.query, ver: app.viewVersion } };
-  // 演示：?draft=CR-0012 直接进入草稿
-  if (typeof to.query.draft === 'string') app.setDraft(to.query.draft || null);
 });
 
 /** 记住每个区上次访问的路由（去掉抽屉、确认卡、演示身份参数），切换区时回到这里 */
-const TRANSIENT_QUERY = ['drawer', 'drawer2', 'confirm', 'as', 'ver', 'draft'];
+const TRANSIENT_QUERY = ['drawer', 'drawer2', 'confirm', 'as', 'ver'];
 router.afterEach((to) => {
   const area = areaOf(to.meta.navKey, to.meta.area);
   if (area && to.name !== 'not-found') {

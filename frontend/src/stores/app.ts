@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import type { NavArea } from '@/nav';
-import { NOTICES, DRAFTS, releaseByVer } from '@/mock';
+import { NOTICES, releaseByVer } from '@/mock';
 
 export const TENANTS = [
   { value: 'hd', label: '鲜邻零售集团 / 华东事业部' },
@@ -40,10 +40,6 @@ export const useAppStore = defineStore('app', {
       ontologyPublishedAt: '2026-10-24 21:17',
       /** 正在查看的历史版本（URL ?ver=）；null = 当前版本 */
       viewVersion: null as string | null,
-      /** 当前加入的草稿（变更请求），null = 在看已发布版本 */
-      activeDraft: null as string | null,
-      /** 加入草稿弹窗（JoinDraftModal，全站一个） */
-      joinDraft: { open: false, resolve: null as null | ((id: string | null) => void) },
       notices: NOTICES.map((n) => ({ ...n })),
       persona,
       user: { name: PERSONAS[persona].name as string, role: PERSONAS[persona].role as string },
@@ -56,7 +52,6 @@ export const useAppStore = defineStore('app', {
     can: (s) => (area: AreaKey) => s.permissions.includes(area),
     viewMode: (s): 'current' | 'history' => (s.viewVersion ? 'history' : 'current'),
     unread: (s) => s.notices.filter((n) => !n.read).length,
-    draft: (s) => DRAFTS.find((d) => d.id === s.activeDraft) ?? null,
   },
   actions: {
     setPersona(p: PersonaKey) {
@@ -68,11 +63,6 @@ export const useAppStore = defineStore('app', {
     /** 由路由守卫根据 ?ver= 调用；等于当前版本或不存在的版本都视为当前版本 */
     setViewVersion(v: string | null) {
       this.viewVersion = v && v !== this.ontologyVersion && releaseByVer(v) ? v : null;
-    },
-    setDraft(id: string | null) { this.activeDraft = id; },
-    /** 打开“加入草稿”弹窗，返回选中/新建的草稿号，取消返回 null */
-    askJoinDraft(): Promise<string | null> {
-      return new Promise((resolve) => { this.joinDraft = { open: true, resolve }; });
     },
     rememberRoute(area: AreaKey, fullPath: string) {
       this.lastRoute[area] = fullPath;

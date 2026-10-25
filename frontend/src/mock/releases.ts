@@ -12,6 +12,7 @@ export const RELEASES: Release[] = [
 ];
 export const releaseByVer = (v: string) => RELEASES.find((r) => r.ver === v);
 
+/** 变更草稿（CR）：ontology/parts/useDraftView 在用 */
 export interface DraftCR { id: string; title: string; owner: string; updatedAt: string; changes: number }
 export const DRAFTS: DraftCR[] = [
   { id: 'CR-0012', title: '会员对象拆分“储值卡”', owner: '王敏', updatedAt: '2026-10-25 15:02', changes: 7 },

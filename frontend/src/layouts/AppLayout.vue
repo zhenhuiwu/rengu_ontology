@@ -14,7 +14,6 @@ import DetailDrawer from '@/components/DetailDrawer.vue';
 import ConfirmActionModal from '@/components/ConfirmActionModal.vue';
 import { PAGES } from '@/nav';
 import VersionBanner from '@/components/VersionBanner.vue';
-import JoinDraftModal from '@/components/JoinDraftModal.vue';
 
 const route = useRoute();
 const page = computed(() => PAGES.find((p) => p.key === route.meta.navKey));
@@ -43,7 +42,6 @@ const crumbs = computed(() => {
     </div>
     <DetailDrawer />
     <ConfirmActionModal />
-    <JoinDraftModal />
   </div>
 </template>
 

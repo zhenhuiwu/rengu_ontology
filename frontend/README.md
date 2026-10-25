@@ -58,7 +58,6 @@ npm run shot -- --skip-check /                          # 只截图不验收
 | `StatusTimeline` | `<StatusTimeline :items="[{ time, text, desc?, status? }]" :selected="i" />`，按下面的“时间线配色”上色。 |
 | `AppPagination` | 统一分页，`variant="full" / "simple" / "cursor"`，见“分页规范”。 |
 | `VersionPicker` / `VersionBanner` | 顶栏版本选择和历史版本横幅，布局自动挂载。 |
-| `DraftBanner` / `JoinDraftModal` | 草稿横幅（页面里放）和加入草稿弹窗（全站一个，`app.askJoinDraft()`）。 |
 | `NoticeList` | 顶栏通知列表。 |
 | `ConfirmActionModal` | 所有动作共用的确认卡，全局只挂一个。`const ok = await useConfirmStore().ask({ title, target, fields, impact, irreversible })`；`irreversible: true` 时必须勾选确认才能执行。 |
 | `PageHeader` | 面包屑 + 标题，由 AppLayout 自动渲染，页面里不用再写。 |
@@ -139,21 +138,13 @@ close();                                  // 全部关闭
 
 **历史版本**：顶栏“本体 v2026.10.3”可点开发布记录（mock 5 个版本，`RELEASES`）。选旧版本后 URL 带 `?ver=v2026.10.1`，`useAppStore().viewMode === 'history'`，顶部出现 28px 横幅“正在查看历史版本 v… · 只读 · 返回当前版本”（AppLayout 自动显示）。历史版本里切换页面会自动带上 `?ver=`，点“返回当前版本”才退出。代码里切换：`useVersion().view(ver)` / `exit()`。
 
-**草稿**：`app.activeDraft`（如 `CR-0012`，演示用 `?draft=CR-0012`），`app.draft` 是草稿详情（`DRAFTS`）。
+**只读状态**：给建模页面用的 `useReadonly()`，只管历史版本：
 
 ```ts
-const { disabled, reason } = useEditable();   // 历史版本 → 只读；已发布版本且没加入草稿 → 不能编辑
-const app = useAppStore();
-const id = await app.askJoinDraft();          // 打开 JoinDraftModal：选已有草稿或新建，取消返回 null
+const { readonly, reason } = useReadonly();   // 历史版本 → readonly = true，reason = “正在查看历史版本 v…，只读”
 ```
 
-```vue
-<DraftBanner />   <!-- 放在建模页面主体最上面：“草稿 CR-0012 · 未发布”，没有草稿或看历史版本时不显示 -->
-<a-tooltip :title="reason"><a-button type="primary" :disabled="disabled">保存</a-button></a-tooltip>
-<a-button v-if="disabled && app.viewMode === 'current'" @click="app.askJoinDraft()">加入草稿后编辑</a-button>
-```
-
-建模类页面（对象类型、指标口径、规则等）由各页面负责人自己接入，公共层只提供上面这些。横幅高度 `var(--banner-h)`（28px），加上以后页面仍要通过一屏检查，截图时补一张 `?ver=v2026.10.1`。
+已发布 / 草稿的编辑规则（发起变更、草稿横幅、StartChangeModal）在页面负责人写的 `src/pages/ontology/parts/useDraftView`，那边把 `readonly` 合进自己的禁用条件即可，例如 `:disabled="readonly || !isDraft"`。横幅高度 `var(--banner-h)`（28px），加上以后页面仍要通过一屏检查，截图时补一张 `?ver=v2026.10.1`。
 
 ## 通知
 
@@ -180,6 +171,19 @@ const onSelect = (id: string) => guard(() => { selected.value = id; dirty.value 
 ## Mock 数据（src/mock/）
 
 一份零售数据集（另有管理区的 `ADMIN_USERS` 120 人、`AUDIT_LOGS` 512 条，在 `admin.ts`）：12 家门店（`STORES`）、12 个 SKU（`PRODUCTS`）、1286 条订单（`ORDERS`，固定种子，每次一样）、指标（`METRICS`、`DAILY_GMV`）。订单状态用“已出库”，不用“已发货”。格式化统一用 `fmtMoney` / `fmtInt` / `fmtPct` / `fmtDelta`，空值显示 `--`（`EMPTY`）。数字要像真实导出的数据：带小数、不凑整。
+
+## 页面归属表
+
+| 路径 | 负责人 |
+| --- | --- |
+| 公共部分：`src/components`、`src/layouts`、`src/composables`、`src/stores`、`src/theme.ts`、`src/styles`、`src/nav.ts`、`src/router`、`src/mock/index.ts`、`scripts` | PDE工程师 |
+| `src/pages/qa`、`src/mock/qa.ts` | 智能问数项目调研员 |
+| `src/pages/ontology`（`ActionTypes.vue`、`EventTypes.vue` 除外）、`src/pages/ontology/parts` | 静态本体负责人 |
+| `src/pages/ops`、`src/mock/dynamic.ts` | 动态本体负责人 |
+| `src/pages/ontology/ActionTypes.vue`、`src/pages/ontology/EventTypes.vue` | Palantir专家 |
+| 首页、`src/pages/admin/*`、数据接入页面、函数页面 | PDE工程师 |
+
+规则：每个人只提交自己负责的路径（`git add <路径>`，不用 `git add -A`）；要改别人的文件，先在群里说一声。
 
 ## 命名约定
 
