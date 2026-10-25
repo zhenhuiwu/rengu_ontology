@@ -41,6 +41,7 @@ export async function bootstrapApi(pinia: Pinia): Promise<string[]> {
     if (r.kind === 'ok') {
       app.ontologyVersion = r.current;
       app.ontologyPublishedAt = r.publishedAt;
+      app.ontologyNextVersion = r.next;
     } else if (r.kind === 'empty') {
       console.warn('[api] 发布记录接口返回空列表，仍显示 mock 数据');
       warnings.push('发布记录为空，暂时显示演示数据');

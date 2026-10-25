@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import type { NavArea } from '@/nav';
 import { NOTICES } from '@/mock';
 import { releaseByVer } from '@/api/releases';
+import { NEXT_VERSION as MOCK_NEXT_VERSION } from '@/mock/changes';
 
 export const TENANTS = [
   { value: 'hd', label: '鲜邻零售集团 / 华东事业部' },
@@ -39,6 +40,8 @@ export const useAppStore = defineStore('app', {
       tenant: 'hd',
       ontologyVersion: 'v2026.10.3',
       ontologyPublishedAt: '2026-10-24 21:17',
+      /** 下一个待发布版本号：mock 模式取 mock 的 NEXT_VERSION；versioning 走真接口时由 GET /releases/current 的 next 覆盖 */
+      ontologyNextVersion: MOCK_NEXT_VERSION,
       /** 正在查看的历史版本（URL ?ver=）；null = 当前版本 */
       viewVersion: null as string | null,
       notices: NOTICES.map((n) => ({ ...n })),
