@@ -5,7 +5,7 @@ onto_qa_path / onto_qa_path_step / onto_qa_path_example（qa_ 前缀属问数模
 只建静态自己的表；外键只指向静态表；其它模块按 code 软引用。
 
 Revision ID: static_0001
-Revises: 0003
+Revises: qa_0001
 Create Date: 2026-10-25 22:40:28.590602+08:00
 """
 
@@ -16,7 +16,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "static_0001"
-down_revision: str | None = "0003"
+down_revision: str | None = "qa_0001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

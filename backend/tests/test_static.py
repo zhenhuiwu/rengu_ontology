@@ -108,7 +108,7 @@ async def get_all(client, url: str) -> list:
 
 
 def static_parent() -> str:
-    """static_0001 的上一个迁移，从 ScriptDirectory 读（合并顺序可能是 0003 或 qa_0001），不写死。"""
+    """static_0001 的上一个迁移，从 ScriptDirectory 读（现为 qa_0001），不写死。"""
     from alembic.script import ScriptDirectory
 
     sd = ScriptDirectory.from_config(Config("alembic.ini"))
@@ -165,12 +165,12 @@ async def test_migration_round_trip():
 
 
 def test_migration_conventions():
-    """static_0001 接 0003 或 qa_0001（看合并顺序），单一 head，无 branch_labels，无 merge。"""
+    """static_0001 接 qa_0001（qa 先合入 master a70cba2），单一 head，无 branch_labels，无 merge。"""
     from alembic.script import ScriptDirectory
 
     sd = ScriptDirectory.from_config(Config("alembic.ini"))
     rev = sd.get_revision("static_0001")
-    assert rev.down_revision == static_parent() and rev.down_revision in {"0003", "qa_0001"}
+    assert rev.down_revision == static_parent() == "qa_0001"
     assert not rev.branch_labels
     assert rev.path.endswith("static_0001_static_definitions.py")
     assert len(sd.get_heads()) == 1
