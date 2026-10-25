@@ -9,23 +9,22 @@
 |---|---|---|
 | 版本功能对齐前端 | `versioning-integ`（`b688d5d..`，02:00 送审） | `tests/test_versioning.py` 新增 13 个契约测试（`GET /releases`、`/releases/current` 与前端 mock 一致）；`tests/conftest.py` 顶部一次性 `import app.main`，修掉单独跑一个测试文件时 section 重复登记；新文档 `docs/backend/versioning-api.md`，`docs/backend/CONVENTIONS.md` §7 链过去。 |
 | 表结构识别库 | `versioning-integ` 第二个提交 | `app/modules/auto_ontology/`：`introspect.py`（读表/列/主键/外键/注释）、`heuristic.py`（表→对象类型、列→属性、外键→关系、纯外键中间表→N:M）、`llm.py`（qwen-flash 只改名字/分组/说明；没 `DASHSCOPE_API_KEY` 时 `get_llm()` 返回 None，走规则结果）、`generate.py`（串起来，不写库）；测试 `tests/test_auto_ontology.py`。**不挂路由、不建表、无迁移、无 seed / sections。** |
-| 数据连接页 `src/pages/data/Connections.vue` | 分支 `datasources`（worktree `/workspace/ui-vue-wt/xiaobai-ds`），**状态待定，由主会话补最终状态** | 后端 `/api/data/v1/datasources` 一组接口 + 前端切真接口。不碰 Palantir 的 `ext-systems` / `writeback-calls`、`src/api/integration.ts`、`app/modules/integration/`。 |
-| 审计日志页 `src/pages/admin/AuditLog.vue` | 分支 `audit-logs`（worktree `/workspace/ui-vue-wt/xiaobai-audit`，`b688d5d..4d0e995`，391 passed，02:00 送审） | `c35cc7c` 后端：表 `audit_log`（触发器保证只追加）、`GET /api/admin/v1/audit-logs`（keyset 游标，`(time desc, id)`，`from,to` 必填，`api-index.md:960`）、`GET /audit-logs/actions`、`POST /audit-logs/export`（桩，只返回 jobId）；写入函数 `insert_audit()` 在 `app/modules/admin/repo.py`；种子为 `src/mock/admin.ts` `AUDIT_LOGS`（512 条随机 + 9 条固定 = 521 条，`admin.ts:53`、`:68-80`）。`4d0e995` 前端：`AuditLog.vue` 经 `src/api/admin.ts` 调真接口，接口不可用时回退 mock。**合并注意**：迁移 `admin_0001` 的 `down_revision` 合并时要改成 `data_0001`。详见该分支 `docs/backend/audit-logs-api.md`。 |
+| 数据连接页 `src/pages/data/Connections.vue` | 分支 `datasources`（worktree `/workspace/ui-vue-wt/xiaobai-ds`，`b688d5d..7ab91cf`，**已完成**） | `c77e271` 后端：`/api/data/v1/datasources` 一组 9 个接口；**合并注意**：迁移 `data_0001` 的 `down_revision` 合并时要改成 `integration_0002`。`1dce488`：cherry-pick `215819d`（apiClient 补 put/patch/delete）。`7ab91cf` 前端：`Connections.vue` 切真接口，接口不可用时回退 mock。不碰 Palantir 的 `ext-systems` / `writeback-calls`、`src/api/integration.ts`、`app/modules/integration/`。**未做**：真连接测试（现在不真连库）、已映射对象类型时删除返回 409、用 auto_ontology 库做真表结构识别、密码落库加密。 |
+| 审计日志页 `src/pages/admin/AuditLog.vue` + 用户页 `src/pages/admin/Users.vue` | 分支 `audit-logs`（worktree `/workspace/ui-vue-wt/xiaobai-audit`，`b688d5d..90fd67e`，**已完成**） | `c35cc7c` 审计后端：表 `audit_log`（触发器保证只追加）、`GET /api/admin/v1/audit-logs`（keyset 游标，`(time desc, id)`，`from,to` 必填，`api-index.md:960`）、`GET /audit-logs/actions`、`POST /audit-logs/export`（桩，只返回 jobId）；写入函数 `insert_audit()` 在 `app/modules/admin/repo.py`；种子为 `src/mock/admin.ts` `AUDIT_LOGS`（512 条随机 + 9 条固定 = 521 条，`admin.ts:53`、`:68-80`）。`4d0e995` 前端：`AuditLog.vue` 经 `src/api/admin.ts` 调真接口，接口不可用时回退 mock。`600c5a2` 用户后端：`sys_user` 加 `role`、`joined_on` 两列 + `/users`、`/depts` 共 8 个接口（迁移 `admin_0002`，接在 `admin_0001` 后）。`4097059`：cherry-pick `215819d`（apiClient 补 put/patch/delete）。`90fd67e` 前端：`Users.vue` 经 `src/api/admin.ts` 接全部 8 个接口（列表、部门、新建、编辑、导入预览、导入、启用、停用），接口不可用时回退 mock，`npm run build` 通过。**合并注意**：迁移 `admin_0001` 的 `down_revision` 合并时要改成 `data_0001`（`admin_0002` 跟在 `admin_0001` 后，不用改）。详见该分支 `docs/backend/audit-logs-api.md`、`docs/backend/admin-users-api.md`。 |
 
 首页 `/dashboard/kpis`、`/stores/ranking` 已转给 PDE工程师（新模块 `app/modules/dashboard/`），不在本清单。
 
 ## 2. 未完成
 
-### 2.1 用户页 `src/pages/admin/Users.vue`（api-index §4.1，`docs/backend/api-index.md:899-919`）
+### 2.1 用户页 `src/pages/admin/Users.vue`：已完成（`audit-logs` 分支，见 §1），和契约 / mock 的差异
 
-> 状态：正在 `audit-logs` 分支上尝试做后端，**最终状态待定，由主会话补**；做不完的部分按下面清单留到下一阶段。
-
-- **页面**：列表按部门、状态（启用/停用/待激活）、关键字（姓名/账号/ID）过滤（`Users.vue:18-26`），每页 17 条（`:21`）；列含“待办审批”数（`:22`）。抽屉新建/编辑：姓名、账号（新建才能填）、部门、角色、状态（`:50-68`）。批量导入：下载 CSV 模板 → 上传 → 预览 → 确认卡（`:91-120`）。启用（`:124-126`）、停用要选转交人（`:4`、`:130` 起）。
-- **mock**：`src/mock/admin.ts` `ADMIN_USERS`（120 人，`:16-34`，字段 `id,name,account,dept,role,status,lastLogin,createdAt`，`:9-12`）、`ADMIN_DEPTS`（`:35`，7 个部门，`:6`）、`pendingApprovals`（`:37`，算出来的，不入库）；角色下拉来自 `src/mock/roles.ts` `ROLES`（`Users.vue:14`）。
-- **接口（8 个，前缀 `/api/admin/v1`）**：`GET /users`、`GET /depts`、`POST /users`、`PUT /users/{id}`、`POST /users:import-preview`（不落库）、`POST /users:import`、`POST /users/{id}:enable`、`POST /users/{id}:disable {transferTo?}`（`api-index.md:912-919`）。
-- **现状**：`app/modules/admin/models.py:28-49` `SysUser` 只有 `code,name,account,dept,status,last_login_at,alert_assignable`，**没有角色列、没有 created_at 业务值**；`app/modules/admin/router.py` 只是空 `APIRouter`。seed 共 128 人：`seeds/json/system/ADMIN_USERS.json` 120 人 + `seeds/extra/system/SYS_USERS.json` 8 人（`app/modules/admin/seeds/__init__.py:3-10`），转换 `_user()`（`:27-36`）丢掉了 mock 的 `role`、`createdAt`。
-- **要改的表**：用户和角色是多对多（`roles.ts:80-91` `roleMembers` / `userRoles`），角色不能做成 `sys_user` 的一列，应放进 2.2 的 `role_member`；`sys_user` 只需补 mock 的 `createdAt`（可写进现有 `created_at` 或另加 `joined_at`【推断】）。“待办审批”按 `pendingApprovals` 规则算，或接动态/静态的待审数【待定，api-index:919】。
-- **估时**：接口 + seed + 契约测试约 3–4 小时（停用转交依赖待办审批来源，另算）。
+- **占位人不出现在列表里**：列表 = `role` 非空的 `sys_user`（mock 120 人）；`SYS_USERS.json` 的 8 个占位人没有角色，不显示。
+- **加了 `joined_on` 列**：存 mock 的 `createdAt`（前端 `createdAt` 字段），没复用 `created_at`。
+- **新用户编号排最后**：新建 / 导入的编号顺延、列表按编号升序，排在末尾；mock 是插到最前（unshift）。
+- **部门、角色是写死的常量**：部门 = mock `ADMIN_DEPTS`，角色名 = mock `ROLES` 名单（不在名单 → 422）；`role` 先做成 `sys_user` 上的单个字符串列，等 §2.2 建 `sys_role / role_member` 后改成多对多。
+- **有待办审批时停用必须带 `transferTo`**：否则 422 `TRANSFER_REQUIRED`；待办数仍按 mock `pendingApprovals` 规则计算，审批模块接上后改真实计数。
+- **没做**：Excel 导入（只收模板 CSV）、`lockVersion` 并发控制、写审计记录（依赖 §2.3）。
+- **前端已知限制**：真接口下编辑抽屉、停用转交人候选只在当前页里找。
 
 ### 2.2 角色页 `src/pages/admin/Roles.vue`（api-index §4.2，`api-index.md:921-950`）
 
@@ -71,7 +70,7 @@
   - `generate.py`：`generate(session, schema, tables, use_llm=, llm=)` → `Generated{tables, proposal, warnings, generator, model}`，不写库；
   - 测试 `tests/test_auto_ontology.py`（在测试事务里建临时 schema `ao_test`，随事务回滚）。
 - 搁置分支 `auto-ontology`（只存在本地 worktree，不推送）：草稿表/接口版本，仅供参考。
-- 用户/角色：`app/modules/admin/`（`models.py` 只有 `SysUser`，`router.py` 空）；权限底层 `app/common/auth.py`、`app/common/row_filter.py`、`app/common/sql_guard.py`。
+- 用户/角色：`app/modules/admin/`（`audit-logs` 分支上已有审计日志和用户接口，角色未做）；权限底层 `app/common/auth.py`、`app/common/row_filter.py`、`app/common/sql_guard.py`。
 - 审计：`app/common/audit.py`、`app/jobs/__init__.py:80`；读侧在 `audit-logs` 分支。
 - 前端：`src/pages/admin/{Users,Roles,AuditLog}.vue`、`src/pages/data/Connections.vue`、`src/pages/ontology/{ObjectTypes,LinkTypes}.vue`；mock `src/mock/{admin,roles,datasources}.ts`。
 
@@ -79,6 +78,6 @@
 
 1. **表结构识别库挪到 data 模块**【推断】：`datasources` 合入后，把 `introspect.py`、`heuristic.py` 挪到 `app/modules/data/`，`introspect()` 改成按 datasource 取连接（`introspect.py` 里 `EXTENSION POINT (data)`）；`auto_ontology_draft` 表不再建。
 2. **静态接“从数据源导入”**：静态的变更单接口就绪后，`ObjectTypes.vue:211` 调 `generate()` 拿草案，直接建变更单（不经草稿表）。其余几处见 §2.4 表，各归属方按需接。
-3. **用户/角色**：先建 `sys_role / role_scope / role_member`（迁移接在当时 master 的 head 后），seed 按 `roles.ts` `ROLES` 和 `roleMembers()` 规则展开；再做 §2.1、§2.2 的 22 个接口；最后单独一个提交打开 `row_filter` / `require_func`，跑全量回归。先请用户定“同一角色多条范围 AND 还是 OR”。
+3. **角色**：先建 `sys_role / role_scope / role_member`（迁移接在当时 master 的 head 后），seed 按 `roles.ts` `ROLES` 和 `roleMembers()` 规则展开，用户的单列 `role` 迁过去；再做 §2.2 的 14 个接口；最后单独一个提交打开 `row_filter` / `require_func`，跑全量回归。先请用户定“同一角色多条范围 AND 还是 OR”。
 4. **审计真写**：在 3 之后或同一阶段，PDE 点头后改 `audit.py`，全模块写测试一起回归。
 5. 测试统一用 `RENGU_TEST_DB=<自己的库> backend/.venv/bin/python -m pytest`；提交用自己的 `git -c user.name=… -c user.email=…`，只有 PDE 推送。
