@@ -8,6 +8,8 @@
     （ontology_release.published_by_id、X-Demo-As 要用）；
   - 赵蕾 U010007、吴佳 U010008：[推断] 非管理员演示人物，mock 里没有编号。
   - 苏刚 U010231（前端 `?previewAs=` 默认预览对象）已在 ADMIN_USERS.json，不在这里重复。
+- json/system/AUDIT_LOGS.json → audit_log：521 条，code = id（AL…/ALCR…），
+  time 按北京时间解析，结果中文 → 英文 code。
 - 写库前 CHECKS 校验 seed 里的 sys_user.name 不重名（动态按姓名比较「本人」），重名直接报错。
 
 `code_by_name(name)`：别的模块 seed 里 mock 只写了人名时（如 RELEASES.by），换成用户编号（重名报错）。
@@ -18,7 +20,7 @@ from functools import lru_cache
 
 from app.core.config import get_settings
 from app.core.schema import parse_display_dt
-from app.modules.admin.models import SysUser, UserStatus
+from app.modules.admin.models import AuditLog, AuditResult, SysUser, UserStatus
 from app.seeds import Row, SeedContext, SeedSpec
 
 JSON_MODULE = "system"
@@ -81,3 +83,26 @@ SEEDS: list[SeedSpec] = [
         description="mock 里出现但不在 ADMIN_USERS 的人（演示身份、发布人）",
     ),
 ]
+
+
+def _audit(r: Row, _ctx: SeedContext) -> Row:
+    return {
+        "code": r["id"],
+        "time": parse_display_dt(r["time"]),
+        "actor": r["actor"],
+        "action": r["action"],
+        "target": r["target"],
+        "ip": r["ip"],
+        "result": AuditResult(r["result"]).name,
+    }
+
+
+SEEDS.append(
+    SeedSpec(
+        AuditLog,
+        "AUDIT_LOGS.json",
+        key=("code",),
+        transform=_audit,
+        description="审计日志（512 条生成 + 9 条变更单固定行 = 521）",
+    )
+)
