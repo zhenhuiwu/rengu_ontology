@@ -45,6 +45,8 @@ STATIC_TABLES = {
     "onto_qa_path",
     "onto_qa_path_step",
     "onto_qa_path_example",
+    "change_request",
+    "cr_event",
 }
 
 
@@ -507,12 +509,13 @@ async def test_all_static_gets_require_login(client, static_seeded):
     ids = {"object-types": "order", "link-types": LINKS[0]["id"], "metrics": "gmv"}
     ids |= {"dimensions": DIMS[0]["id"], "knowledge": KNOWLEDGE[0]["id"]}
     urls = []
-    for r in router.routes:
+    gets = [r for r in router.routes if "GET" in r.methods]  # 写接口（发布 / 回滚）见 test_static_publish
+    for r in gets:
         path = r.path
         if "{id}" in path:
             path = path.replace("{id}", ids[path.split("/")[1]])
         urls.append(path + ("?kind=view" if path.endswith("/usage") and "object-types" in path else ""))
-    assert len(urls) == len(router.routes) >= 25
+    assert len(urls) == len(gets) >= 25
     for who, status in (("U999999", 401), ("U010308", 401), ("U010006", 200)):  # 不存在 / 高伟停用 / 李娜
         for url in urls:
             r = await client.get(P + url, headers={"X-Demo-As": who})
@@ -528,6 +531,8 @@ def test_static_routes_func_permissions():
     want = {"object-types": "object-types", "link-types": "link-types", "metrics": "metrics"}
     want |= {"dimensions": "dimensions", "knowledge": "glossary"}
     for r in router.routes:
+        if "GET" not in r.methods:
+            continue
         key = "data-quality" if r.path == "/object-types/brief" else want[r.path.split("/")[1]]
         assert FUNC_OF[r.path] == key, r.path
         assert len(r.dependencies) == 1, r.path

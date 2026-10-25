@@ -1,0 +1,3154 @@
+[
+  {
+    "id": "CR-0016",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "指标",
+        "target": "客单价（不含税）atv",
+        "field": "公式",
+        "kind": "新增",
+        "before": "",
+        "after": "销售额（不含税） / 有效订单数"
+      },
+      {
+        "key": "2",
+        "type": "指标",
+        "target": "客单价（不含税）",
+        "field": "允许的维度",
+        "kind": "新增",
+        "before": "",
+        "after": "门店、渠道、日期"
+      },
+      {
+        "key": "3",
+        "type": "指标",
+        "target": "有效订单数",
+        "field": "业务知识说明",
+        "kind": "修改",
+        "before": "状态 ≠ 已取消的订单数",
+        "after": "状态 ≠ 已取消的订单数；也是客单价的分母"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": "本次未改关系"
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "不适用",
+        "note": "新指标"
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": "新指标，从 v1 开始"
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": "本次未改关系"
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "一般级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "指标",
+          "name": "客单价（不含税）",
+          "note": "新增 v1",
+          "hover": {
+            "kind": "metric",
+            "id": "atv"
+          }
+        },
+        {
+          "kind": "指标",
+          "name": "有效订单数",
+          "note": "只改说明，口径不变",
+          "hover": {
+            "kind": "metric",
+            "id": "order_cnt"
+          }
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "销售额（不含税）",
+          "note": "作为分子引用，不受影响",
+          "hover": {
+            "kind": "metric",
+            "id": "gmv"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "评测题",
+          "name": "客单价相关 3 题",
+          "note": "新增，发布前自动回放",
+          "count": 3
+        },
+        {
+          "kind": "看板",
+          "name": "门店经营日报",
+          "note": "可新增客单价卡片"
+        }
+      ]
+    },
+    "trial": {
+      "title": "试跑（全部门店，新口径）",
+      "rows": [
+        {
+          "period": "2026-07",
+          "before": "--",
+          "after": "¥68.42",
+          "delta": "--"
+        },
+        {
+          "period": "2026-08",
+          "before": "--",
+          "after": "¥67.95",
+          "delta": "--"
+        },
+        {
+          "period": "2026-09",
+          "before": "--",
+          "after": "¥69.10",
+          "delta": "--"
+        }
+      ]
+    },
+    "touches": [
+      "metric:atv",
+      "metric:order_cnt"
+    ],
+    "synonyms": [
+      {
+        "word": "客单",
+        "to": "客单价（不含税）"
+      }
+    ],
+    "edit": {
+      "kind": "metric",
+      "id": "atv"
+    },
+    "times": {
+      "created": "2026-10-24 18:31",
+      "checked": "2026-10-25 14:02",
+      "submitted": "2026-10-25 14:10"
+    }
+  },
+  {
+    "id": "CR-0015",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "同义词",
+        "target": "有效订单数",
+        "field": "同义词",
+        "kind": "新增",
+        "before": "",
+        "after": "成交单量"
+      },
+      {
+        "key": "2",
+        "type": "业务知识",
+        "target": "有效订单数",
+        "field": "说明",
+        "kind": "修改",
+        "before": "状态 ≠ 已取消的订单数",
+        "after": "状态 ≠ 已取消的订单数；财务和电商说的“成交单量”即此指标"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": "口径不变"
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": "“成交单量”此前没有指向任何指标"
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "修订级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "同义词",
+          "name": "成交单量",
+          "note": "指向有效订单数"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "有效订单数",
+          "note": "口径不变，版本不变",
+          "hover": {
+            "kind": "metric",
+            "id": "order_cnt"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "评测题",
+          "name": "订单量相关 2 题",
+          "note": "召回率预计提升",
+          "count": 2
+        }
+      ]
+    },
+    "touches": [
+      "metric:order_cnt"
+    ],
+    "synonyms": [
+      {
+        "word": "成交单量",
+        "to": "有效订单数"
+      }
+    ],
+    "times": {
+      "created": "2026-10-24 15:40",
+      "checked": "2026-10-24 15:52",
+      "submitted": "2026-10-24 16:00",
+      "reviewed": "2026-10-25 10:18"
+    }
+  },
+  {
+    "id": "CR-0014",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "动作类型",
+        "target": "调整大区预算",
+        "field": "提交条件",
+        "kind": "修改",
+        "before": "大区总监审批",
+        "after": "幅度 ≤ 5%：大区总监；> 5%：大区总监 + 财务 BP"
+      },
+      {
+        "key": "2",
+        "type": "动作类型",
+        "target": "调整大区预算",
+        "field": "参数 调整幅度 pct",
+        "kind": "新增",
+        "before": "",
+        "after": "计算参数 · (新预算 − 原预算) / 原预算"
+      },
+      {
+        "key": "3",
+        "type": "动作类型",
+        "target": "调整大区预算",
+        "field": "写回 泛微 OA 流程",
+        "kind": "修改",
+        "before": "WF-BUD-01 一级审批",
+        "after": "WF-BUD-02 按幅度分级审批"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "不适用",
+        "note": "未改对象"
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "不适用",
+        "note": "不涉及查询"
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "警告",
+        "note": "还没写在途审批单怎么处理：建议仍按一级审批走完"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "动作类型",
+          "name": "调整大区预算",
+          "note": "v2 → v3"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "对象类型",
+          "name": "大区",
+          "note": "动作挂在大区上，对象定义不变"
+        }
+      ],
+      "usage": [
+        {
+          "kind": "外部系统",
+          "name": "泛微 OA",
+          "note": "需上线流程模板 WF-BUD-02"
+        },
+        {
+          "kind": "动作中心",
+          "name": "在途预算调整 2 单",
+          "note": "按旧流程走完"
+        }
+      ]
+    },
+    "touches": [
+      "action:adjust_region_budget"
+    ],
+    "edit": {
+      "kind": "action",
+      "id": "adjust_region_budget"
+    },
+    "times": {
+      "created": "2026-10-25 09:12",
+      "checked": "2026-10-25 11:26"
+    }
+  },
+  {
+    "id": "CR-0013",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "事件类型",
+        "target": "门店价格变更",
+        "field": "载荷字段 促销价 promoPrice",
+        "kind": "新增",
+        "before": "",
+        "after": "decimal · 元 · 可选"
+      },
+      {
+        "key": "2",
+        "type": "事件类型",
+        "target": "门店价格变更",
+        "field": "载荷字段 促销截止 promoEndAt",
+        "kind": "新增",
+        "before": "",
+        "after": "日期时间 · 可选"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "不适用",
+        "note": "未改对象"
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": "只新增可选字段，已有字段不变"
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "警告",
+        "note": "“促销截止”还没写自然语言描述"
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "不适用",
+        "note": "不涉及查询"
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "修订级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "不适用",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "事件类型",
+          "name": "门店价格变更",
+          "note": "载荷新增 2 个可选字段"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "对象类型",
+          "name": "商品",
+          "note": "事件挂在商品上，对象定义不变"
+        }
+      ],
+      "usage": [
+        {
+          "kind": "规则",
+          "name": "R-007 商品毛利率越线",
+          "note": "可改为按促销价判断，需另提变更"
+        },
+        {
+          "kind": "外部系统",
+          "name": "用友 ERP 价格档案",
+          "note": "已在测试环境推送促销价"
+        }
+      ]
+    },
+    "touches": [
+      "event:store_price_changed"
+    ],
+    "edit": {
+      "kind": "event",
+      "id": "store_price_changed"
+    },
+    "times": {
+      "created": "2026-10-24 17:20",
+      "checked": "2026-10-24 17:52"
+    }
+  },
+  {
+    "id": "CR-0012",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "对象类型",
+        "target": "储值卡 StoredValueCard",
+        "field": "对象类型",
+        "kind": "新增",
+        "before": "",
+        "after": "分组：客户 · 主键：卡号"
+      },
+      {
+        "key": "2",
+        "type": "属性",
+        "target": "储值卡",
+        "field": "卡号 card_no",
+        "kind": "新增",
+        "before": "",
+        "after": "string · 主键"
+      },
+      {
+        "key": "3",
+        "type": "属性",
+        "target": "储值卡",
+        "field": "余额 balance",
+        "kind": "新增",
+        "before": "",
+        "after": "decimal · 元"
+      },
+      {
+        "key": "4",
+        "type": "关系",
+        "target": "会员 → 储值卡",
+        "field": "持有",
+        "kind": "新增",
+        "before": "",
+        "after": "1 : N，会员.会员号 = 储值卡.会员号"
+      },
+      {
+        "key": "5",
+        "type": "属性",
+        "target": "会员",
+        "field": "储值余额 stored_balance",
+        "kind": "修改",
+        "before": "会员表上的余额字段",
+        "after": "标为弃用，值改为汇总名下储值卡余额"
+      },
+      {
+        "key": "6",
+        "type": "字段映射",
+        "target": "储值卡",
+        "field": "源表",
+        "kind": "新增",
+        "before": "",
+        "after": "CRM.T_SVC_CARD（每小时增量）"
+      },
+      {
+        "key": "7",
+        "type": "指标",
+        "target": "储值卡余额",
+        "field": "公式",
+        "kind": "新增",
+        "before": "",
+        "after": "SUM(储值卡.余额)"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": "抽检 10 万条，卡号无重复"
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": "会员.stored_balance 保留并标为弃用，不删 API 名"
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "通过",
+        "note": "会员 → 储值卡 只有一条路径"
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "警告",
+        "note": "迁移方式还没写已保存的页面怎么处理"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "通过",
+        "note": "储值卡使用“源系统优先”，时间字段 updated_at"
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "对象类型",
+          "name": "储值卡",
+          "note": "新增"
+        },
+        {
+          "kind": "属性",
+          "name": "会员.储值余额",
+          "note": "弃用，保留一个版本"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "储值卡余额",
+          "note": "新增 v1"
+        },
+        {
+          "kind": "指标",
+          "name": "会员储值余额",
+          "note": "改为由储值卡汇总，结果不变"
+        }
+      ],
+      "usage": [
+        {
+          "kind": "看板",
+          "name": "会员资产看板",
+          "note": "储值余额卡片改读储值卡"
+        },
+        {
+          "kind": "认证问答",
+          "name": "各门店会员储值余额",
+          "note": "需重新认证"
+        },
+        {
+          "kind": "评测题",
+          "name": "会员储值相关 5 题",
+          "note": "发布前自动回放",
+          "count": 5
+        }
+      ]
+    },
+    "trial": {
+      "title": "试跑对比（会员储值余额 vs 储值卡余额汇总）",
+      "rows": [
+        {
+          "period": "2026-07",
+          "before": "¥4,182.6 万",
+          "after": "¥4,182.6 万",
+          "delta": "0"
+        },
+        {
+          "period": "2026-08",
+          "before": "¥4,317.9 万",
+          "after": "¥4,317.9 万",
+          "delta": "0"
+        },
+        {
+          "period": "2026-09",
+          "before": "¥4,405.2 万",
+          "after": "¥4,405.2 万",
+          "delta": "0"
+        }
+      ]
+    },
+    "migration": "会员.储值余额保留一个版本并标为弃用，值改为汇总名下储值卡余额；新提问按储值卡回答。",
+    "touches": [
+      "object:stored_value_card",
+      "object:member",
+      "property:member.stored_balance",
+      "metric:svc_balance"
+    ],
+    "edit": {
+      "kind": "object",
+      "id": "member"
+    },
+    "times": {
+      "created": "2026-10-25 09:41",
+      "checked": "2026-10-25 15:02"
+    }
+  },
+  {
+    "id": "CR-0011",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "指标",
+        "target": "毛利额",
+        "field": "公式",
+        "kind": "修改",
+        "before": "不含税销售额 − 不含税成本",
+        "after": "不含税销售额 − 不含税成本 − 促销补贴"
+      },
+      {
+        "key": "2",
+        "type": "指标",
+        "target": "毛利率",
+        "field": "口径版本",
+        "kind": "修改",
+        "before": "v2",
+        "after": "v3"
+      },
+      {
+        "key": "3",
+        "type": "属性",
+        "target": "订单行",
+        "field": "促销补贴 promo_subsidy",
+        "kind": "新增",
+        "before": "",
+        "after": "decimal · 元"
+      },
+      {
+        "key": "4",
+        "type": "规则",
+        "target": "R-007 商品毛利率越线",
+        "field": "条件引用口径",
+        "kind": "修改",
+        "before": "gross_margin@v2（规则 v3）",
+        "after": "gross_margin@v3（规则 v4）"
+      },
+      {
+        "key": "5",
+        "type": "业务知识",
+        "target": "毛利口径说明",
+        "field": "说明",
+        "kind": "修改",
+        "before": "毛利 = 不含税销售额 − 不含税成本",
+        "after": "毛利 = 不含税销售额 − 不含税成本 − 促销补贴；与财务月报一致"
+      },
+      {
+        "key": "6",
+        "type": "业务知识",
+        "target": "促销补贴",
+        "field": "术语",
+        "kind": "新增",
+        "before": "",
+        "after": "平台券与品牌补贴之和；毛利、毛利率按扣除后计算"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "阻断",
+        "note": "订单行.促销补贴 还没有字段映射"
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": "本次未改关系"
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "阻断",
+        "note": "金仓 KES：促销补贴子查询 EXPLAIN 失败（字段不存在）"
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "警告",
+        "note": "还没写已有页面和告警的迁移方式"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "指标",
+          "name": "毛利额",
+          "note": "v2 → v3"
+        },
+        {
+          "kind": "属性",
+          "name": "订单行.促销补贴",
+          "note": "新增"
+        },
+        {
+          "kind": "业务知识",
+          "name": "促销补贴",
+          "note": "新增术语"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "毛利率",
+          "note": "由毛利额派生，跟着升到 v3",
+          "hover": {
+            "kind": "metric",
+            "id": "gross_margin"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "规则",
+          "name": "R-007 商品毛利率越线",
+          "note": "随本单升到 v4，条件改引用毛利率 v3；近 7 天回放命中 3 → 5，阈值 18.00% 不变"
+        },
+        {
+          "kind": "看板",
+          "name": "品类毛利看板",
+          "note": "毛利卡片按新口径重算"
+        },
+        {
+          "kind": "认证问答",
+          "name": "各品类毛利率排名",
+          "note": "需重新认证"
+        },
+        {
+          "kind": "业务知识",
+          "name": "毛利口径说明",
+          "note": "口径说明同步改为扣除促销补贴"
+        }
+      ]
+    },
+    "touches": [
+      "metric:gross_profit",
+      "metric:gross_margin",
+      "property:order_line.promo_subsidy",
+      "knowledge:K-018",
+      "knowledge:K-024"
+    ],
+    "edit": {
+      "kind": "metric",
+      "id": "gross_margin"
+    },
+    "times": {
+      "created": "2026-10-24 16:05",
+      "checked": "2026-10-24 18:40"
+    }
+  },
+  {
+    "id": "CR-0010",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "指标",
+        "target": "退款率",
+        "field": "时间字段",
+        "kind": "修改",
+        "before": "退款单.申请时间",
+        "after": "退款单.退款完成时间"
+      },
+      {
+        "key": "2",
+        "type": "指标",
+        "target": "退款率",
+        "field": "默认过滤",
+        "kind": "修改",
+        "before": "退款状态 ∈ {已申请, 已完成}",
+        "after": "退款状态 = 已完成"
+      },
+      {
+        "key": "3",
+        "type": "指标",
+        "target": "退款率",
+        "field": "口径版本",
+        "kind": "修改",
+        "before": "v2",
+        "after": "v3"
+      },
+      {
+        "key": "4",
+        "type": "属性",
+        "target": "退款单",
+        "field": "退款完成时间 refund_done_at",
+        "kind": "新增",
+        "before": "",
+        "after": "timestamp · 时间维度"
+      },
+      {
+        "key": "5",
+        "type": "字段映射",
+        "target": "退款单.退款完成时间",
+        "field": "源字段",
+        "kind": "新增",
+        "before": "",
+        "after": "ERP.T_REFUND.finish_time（DATE，按 Asia/Shanghai 解释）"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "警告",
+        "note": "“退款完成率”已是“退款单完成率”的同义词，建议在业务知识里确认"
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": "本次未改关系"
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": "达梦 DM8、金仓 KES（Oracle 兼容）均通过"
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "通过",
+        "note": "已写明：历史告警和已保存的页面保留旧口径 v2"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": "退款单使用“用户编辑优先”"
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "指标",
+          "name": "退款率",
+          "note": "v2 → v3"
+        },
+        {
+          "kind": "属性",
+          "name": "退款单.退款完成时间",
+          "note": "新增"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "销售额（不含税）",
+          "note": "共用退款行，不受影响",
+          "hover": {
+            "kind": "metric",
+            "id": "gmv"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "看板",
+          "name": "华东大区销售周报",
+          "note": "退款率卡片按新口径重算"
+        },
+        {
+          "kind": "认证问答",
+          "name": "上个月各大区的退款率",
+          "note": "需重新认证"
+        },
+        {
+          "kind": "评测题",
+          "name": "退款相关 4 题",
+          "note": "发布前自动回放",
+          "count": 4
+        },
+        {
+          "kind": "规则",
+          "name": "无",
+          "note": "没有规则引用退款率",
+          "count": 0
+        }
+      ]
+    },
+    "trial": {
+      "title": "试跑对比（华东大区，按新旧口径）",
+      "rows": [
+        {
+          "period": "2026-07",
+          "before": "3.42%",
+          "after": "3.05%",
+          "delta": "−0.37 pp"
+        },
+        {
+          "period": "2026-08",
+          "before": "3.18%",
+          "after": "2.91%",
+          "delta": "−0.27 pp"
+        },
+        {
+          "period": "2026-09",
+          "before": "3.36%",
+          "after": "3.12%",
+          "delta": "−0.24 pp"
+        }
+      ]
+    },
+    "migration": "历史告警和已保存的页面保留旧口径 v2；新提问按 v3 回答。",
+    "touches": [
+      "metric:refund_rate",
+      "object:refund",
+      "property:refund.refund_done_at"
+    ],
+    "synonyms": [
+      {
+        "word": "退款完成率",
+        "to": "退款率"
+      }
+    ],
+    "times": {
+      "created": "2026-10-24 15:10",
+      "checked": "2026-10-25 10:52",
+      "submitted": "2026-10-25 11:20"
+    },
+    "notes": [
+      {
+        "time": "2026-10-24 17:36",
+        "text": "刘婷 补充迁移方式",
+        "desc": "历史告警和已保存的页面保留旧口径 v2"
+      }
+    ]
+  },
+  {
+    "id": "CR-0009",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "枚举值",
+        "target": "门店.业态",
+        "field": "取值",
+        "kind": "新增",
+        "before": "",
+        "after": "前置仓（FWH）"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": "取值字典“门店业态”已加 FWH"
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "信息",
+        "note": "“前置仓”与仓库对象名称相近，问数会优先理解为门店业态"
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "一般级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "枚举值",
+          "name": "门店.业态 = 前置仓",
+          "note": "新增"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "销售额（不含税）",
+          "note": "可按业态拆出前置仓",
+          "hover": {
+            "kind": "metric",
+            "id": "gmv"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "看板",
+          "name": "门店业态分布",
+          "note": "新增一项"
+        },
+        {
+          "kind": "评测题",
+          "name": "业态相关 2 题",
+          "note": "发布前自动回放",
+          "count": 2
+        }
+      ]
+    },
+    "touches": [
+      "property:store.format"
+    ],
+    "edit": {
+      "kind": "object",
+      "id": "store"
+    },
+    "times": {
+      "created": "2026-10-21 10:02",
+      "checked": "2026-10-21 10:26"
+    }
+  },
+  {
+    "id": "CR-0008",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "同义词",
+        "target": "出库及时率",
+        "field": "同义词",
+        "kind": "新增",
+        "before": "",
+        "after": "发货及时率"
+      },
+      {
+        "key": "2",
+        "type": "业务知识",
+        "target": "出库及时率",
+        "field": "说明",
+        "kind": "修改",
+        "before": "30 分钟内变为“已出库”的订单占比",
+        "after": "30 分钟内变为“已出库”的订单占比；门店常说的“发货及时率”即此指标"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": "口径不变"
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "修订级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "同义词",
+          "name": "发货及时率",
+          "note": "指向出库及时率"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "出库及时率",
+          "note": "口径不变，版本不变",
+          "hover": {
+            "kind": "metric",
+            "id": "ship_ontime"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "评测题",
+          "name": "履约相关 3 题",
+          "note": "召回率预计提升",
+          "count": 3
+        }
+      ]
+    },
+    "touches": [
+      "metric:ship_ontime"
+    ],
+    "synonyms": [
+      {
+        "word": "发货及时率",
+        "to": "出库及时率"
+      }
+    ],
+    "times": {
+      "created": "2026-10-24 14:30",
+      "checked": "2026-10-24 14:41",
+      "submitted": "2026-10-24 14:45",
+      "reviewed": "2026-10-24 16:05"
+    }
+  },
+  {
+    "id": "CR-0007",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "指标",
+        "target": "销售额 gmv",
+        "field": "名称",
+        "kind": "修改",
+        "before": "销售额",
+        "after": "销售额（不含税）"
+      },
+      {
+        "key": "2",
+        "type": "指标",
+        "target": "销售额（不含税）",
+        "field": "公式",
+        "kind": "修改",
+        "before": "SUM(订单.实付金额) − SUM(退款.退款金额)",
+        "after": "SUM(订单行.不含税金额) − SUM(退款行.不含税退款金额)"
+      },
+      {
+        "key": "3",
+        "type": "指标",
+        "target": "销售额（不含税）",
+        "field": "口径版本",
+        "kind": "修改",
+        "before": "v2",
+        "after": "v3"
+      },
+      {
+        "key": "4",
+        "type": "指标",
+        "target": "销售额（含税）gmv_tax",
+        "field": "公式",
+        "kind": "新增",
+        "before": "",
+        "after": "SUM(订单.实付金额) − SUM(退款.退款金额)"
+      },
+      {
+        "key": "5",
+        "type": "属性",
+        "target": "订单行",
+        "field": "不含税金额 amount_ex_tax",
+        "kind": "新增",
+        "before": "",
+        "after": "decimal · 元"
+      },
+      {
+        "key": "6",
+        "type": "属性",
+        "target": "退款行",
+        "field": "不含税退款金额 refund_ex_tax",
+        "kind": "新增",
+        "before": "",
+        "after": "decimal · 元"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "通过",
+        "note": "销售额已升到 v3"
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": "“含税销售额”指向 gmv_tax，不与 gmv 冲突"
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": "本次未改关系"
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": "同名词“销售额”唯一默认：销售额（不含税）"
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "指标",
+          "name": "销售额（不含税）",
+          "note": "v2 → v3",
+          "hover": {
+            "kind": "metric",
+            "id": "gmv"
+          }
+        },
+        {
+          "kind": "指标",
+          "name": "销售额（含税）",
+          "note": "新增",
+          "hover": {
+            "kind": "metric",
+            "id": "gmv_tax"
+          }
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "毛利率",
+          "note": "分母改为不含税销售额",
+          "hover": {
+            "kind": "metric",
+            "id": "gross_margin"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "看板",
+          "name": "集团经营首页",
+          "note": "金额统一为不含税"
+        },
+        {
+          "kind": "认证问答",
+          "name": "上周各大区销售额",
+          "note": "已重新认证"
+        },
+        {
+          "kind": "认证问答",
+          "name": "本月销售额同比",
+          "note": "已重新认证"
+        },
+        {
+          "kind": "评测题",
+          "name": "销售额相关 9 题",
+          "note": "发布前已回放，全部通过",
+          "count": 9
+        }
+      ]
+    },
+    "trial": {
+      "title": "试跑对比（全部门店，含税 → 不含税）",
+      "rows": [
+        {
+          "period": "2026-07",
+          "before": "¥9,418.3 万",
+          "after": "¥8,357.5 万",
+          "delta": "−11.3%"
+        },
+        {
+          "period": "2026-08",
+          "before": "¥9,602.7 万",
+          "after": "¥8,521.1 万",
+          "delta": "−11.3%"
+        },
+        {
+          "period": "2026-09",
+          "before": "¥9,355.0 万",
+          "after": "¥8,298.4 万",
+          "delta": "−11.3%"
+        }
+      ]
+    },
+    "migration": "已保存的页面和告警保留含税口径 v2；新提问“销售额”按不含税回答，含税请问“含税销售额”。",
+    "touches": [
+      "metric:gmv",
+      "metric:gmv_tax",
+      "property:order_line.amount_ex_tax",
+      "property:refund_line.refund_ex_tax"
+    ],
+    "synonyms": [
+      {
+        "word": "含税销售额",
+        "to": "销售额（含税）"
+      }
+    ],
+    "times": {
+      "created": "2026-10-23 16:08",
+      "checked": "2026-10-24 11:20",
+      "submitted": "2026-10-24 11:26",
+      "reviewed": "2026-10-24 18:02"
+    }
+  },
+  {
+    "id": "CR-0006",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "关系",
+        "target": "门店 → 员工",
+        "field": "店长",
+        "kind": "新增",
+        "before": "",
+        "after": "N : 1，门店.店长工号 = 员工.工号"
+      },
+      {
+        "key": "2",
+        "type": "属性",
+        "target": "门店",
+        "field": "店长工号 manager_emp_no",
+        "kind": "新增",
+        "before": "",
+        "after": "string · 映射 HR_CORE.T_STORE_MGR"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "通过",
+        "note": "门店、员工两端类型兼容"
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "警告",
+        "note": "员工是敏感对象，影响分析没有写店长信息对谁可见"
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "一般级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "关系",
+          "name": "门店 → 员工（店长）",
+          "note": "新增"
+        },
+        {
+          "kind": "属性",
+          "name": "门店.店长工号",
+          "note": "新增"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "对象类型",
+          "name": "员工",
+          "note": "敏感对象，可见范围未定"
+        }
+      ],
+      "usage": [
+        {
+          "kind": "权限",
+          "name": "员工对象行级权限",
+          "note": "店长信息可见范围未定"
+        }
+      ]
+    },
+    "touches": [
+      "relation:store.manager",
+      "property:store.manager_emp_no"
+    ],
+    "times": {
+      "created": "2026-10-21 16:30",
+      "checked": "2026-10-21 16:42",
+      "submitted": "2026-10-21 16:50",
+      "reviewed": "2026-10-22 14:48"
+    }
+  },
+  {
+    "id": "CR-0005",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "关系",
+        "target": "门店 → 大区",
+        "field": "所属大区",
+        "kind": "新增",
+        "before": "",
+        "after": "N : 1，门店.大区编码 = 大区.编码"
+      },
+      {
+        "key": "2",
+        "type": "属性",
+        "target": "门店",
+        "field": "大区编码 region_code",
+        "kind": "新增",
+        "before": "",
+        "after": "string · 映射 ORG.T_STORE.region_code"
+      },
+      {
+        "key": "3",
+        "type": "层级",
+        "target": "组织层级",
+        "field": "层级",
+        "kind": "修改",
+        "before": "省份 → 门店",
+        "after": "大区 → 门店（省份改为行政维度，不再是上级）"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "通过",
+        "note": "门店、大区两端类型兼容"
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "通过",
+        "note": "486 家门店各属于一个大区"
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "通过",
+        "note": "门店 → 大区 默认走“所属大区”，不经过省份"
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "一般级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "关系",
+          "name": "门店 → 大区",
+          "note": "新增"
+        },
+        {
+          "kind": "层级",
+          "name": "组织层级",
+          "note": "增加大区一级"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "销售额（不含税）",
+          "note": "新增可用维度：大区",
+          "hover": {
+            "kind": "metric",
+            "id": "gmv"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "看板",
+          "name": "华东大区销售周报",
+          "note": "新增"
+        },
+        {
+          "kind": "规则",
+          "name": "R-021 门店销售额环比下降",
+          "note": "按大区汇总告警"
+        },
+        {
+          "kind": "评测题",
+          "name": "大区相关 6 题",
+          "note": "发布前已回放，全部通过",
+          "count": 6
+        }
+      ]
+    },
+    "touches": [
+      "relation:store.region",
+      "property:store.region_code",
+      "hierarchy:org"
+    ],
+    "times": {
+      "created": "2026-10-15 10:20",
+      "checked": "2026-10-16 15:12",
+      "submitted": "2026-10-16 15:30",
+      "reviewed": "2026-10-17 11:05"
+    }
+  },
+  {
+    "id": "CR-0004",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "枚举值",
+        "target": "订单.状态",
+        "field": "取值",
+        "kind": "修改",
+        "before": "已发货",
+        "after": "已出库"
+      },
+      {
+        "key": "2",
+        "type": "字段映射",
+        "target": "订单.状态",
+        "field": "ERP 状态码 S3",
+        "kind": "修改",
+        "before": "已发货",
+        "after": "已出库"
+      },
+      {
+        "key": "3",
+        "type": "字段映射",
+        "target": "订单.状态",
+        "field": "WMS 状态 OUTBOUND",
+        "kind": "新增",
+        "before": "",
+        "after": "已出库"
+      },
+      {
+        "key": "4",
+        "type": "同义词",
+        "target": "订单.状态 = 已出库",
+        "field": "同义词",
+        "kind": "新增",
+        "before": "",
+        "after": "已发货"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "通过",
+        "note": "取值字典“订单状态”已合并"
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": "“已发货”改为“已出库”的同义词，不再是独立状态"
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "通过",
+        "note": "已写明：历史订单状态统一改写为已出库"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "枚举值",
+          "name": "订单.状态 = 已出库",
+          "note": "合并已发货"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "出库及时率",
+          "note": "分子统一按已出库计",
+          "hover": {
+            "kind": "metric",
+            "id": "ship_ontime"
+          }
+        }
+      ],
+      "usage": [
+        {
+          "kind": "规则",
+          "name": "订单状态非法迁移",
+          "note": "状态机同步更新"
+        },
+        {
+          "kind": "评测题",
+          "name": "订单状态相关 4 题",
+          "note": "发布前已回放，全部通过",
+          "count": 4
+        }
+      ]
+    },
+    "trial": {
+      "title": "试跑对比（出库及时率，全部仓库）",
+      "rows": [
+        {
+          "period": "2026-07",
+          "before": "91.24%",
+          "after": "96.80%",
+          "delta": "+5.56 pp"
+        },
+        {
+          "period": "2026-08",
+          "before": "90.87%",
+          "after": "96.95%",
+          "delta": "+6.08 pp"
+        },
+        {
+          "period": "2026-09",
+          "before": "91.52%",
+          "after": "97.03%",
+          "delta": "+5.51 pp"
+        }
+      ]
+    },
+    "migration": "历史订单的“已发货”统一改写为“已出库”；“已发货”保留为同义词。",
+    "touches": [
+      "property:order.status"
+    ],
+    "synonyms": [
+      {
+        "word": "已发货",
+        "to": "订单.状态 = 已出库"
+      }
+    ],
+    "times": {
+      "created": "2026-10-08 10:12",
+      "checked": "2026-10-08 16:40",
+      "submitted": "2026-10-08 16:52",
+      "reviewed": "2026-10-09 15:30"
+    }
+  },
+  {
+    "id": "CR-0003",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "属性",
+        "target": "商品",
+        "field": "保质期天数 shelf_life_days",
+        "kind": "新增",
+        "before": "",
+        "after": "integer · 天"
+      },
+      {
+        "key": "2",
+        "type": "字段映射",
+        "target": "商品.保质期天数",
+        "field": "源字段",
+        "kind": "新增",
+        "before": "",
+        "after": "MDM.T_PRODUCT.shelf_life"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "修订级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "不适用",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "属性",
+          "name": "商品.保质期天数",
+          "note": "新增"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "对象类型",
+          "name": "商品",
+          "note": "属性 25 → 26"
+        }
+      ],
+      "usage": [
+        {
+          "kind": "规则",
+          "name": "临期商品预警",
+          "note": "按保质期计算"
+        }
+      ]
+    },
+    "touches": [
+      "property:product.shelf_life_days"
+    ],
+    "times": {
+      "created": "2026-09-26 14:00",
+      "checked": "2026-09-26 14:12",
+      "submitted": "2026-09-26 14:20",
+      "reviewed": "2026-09-27 10:40"
+    }
+  },
+  {
+    "id": "CR-0002",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "对象集",
+        "target": "复购客户",
+        "field": "定义",
+        "kind": "修改",
+        "before": "30 天内下单 ≥ 2 次的会员",
+        "after": "90 天内下单 ≥ 2 次的会员"
+      },
+      {
+        "key": "2",
+        "type": "指标",
+        "target": "复购率",
+        "field": "口径版本",
+        "kind": "修改",
+        "before": "v1",
+        "after": "v2"
+      },
+      {
+        "key": "3",
+        "type": "业务知识",
+        "target": "复购客户",
+        "field": "说明",
+        "kind": "修改",
+        "before": "30 天复购",
+        "after": "90 天复购；与会员中心口径一致"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "通过",
+        "note": "复购率已升到 v2"
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "通过",
+        "note": "已写明：历史告警保留 v1"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "对象集",
+          "name": "复购客户",
+          "note": "30 天 → 90 天"
+        },
+        {
+          "kind": "指标",
+          "name": "复购率",
+          "note": "v1 → v2"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "指标",
+          "name": "复购客户销售额",
+          "note": "跟着重算"
+        }
+      ],
+      "usage": [
+        {
+          "kind": "规则",
+          "name": "大区复购预警",
+          "note": "阈值按新口径重估"
+        },
+        {
+          "kind": "认证问答",
+          "name": "各大区复购率",
+          "note": "已重新认证"
+        },
+        {
+          "kind": "评测题",
+          "name": "复购相关 5 题",
+          "note": "发布前已回放，全部通过",
+          "count": 5
+        }
+      ]
+    },
+    "trial": {
+      "title": "试跑对比（复购率，全部会员）",
+      "rows": [
+        {
+          "period": "2026-06",
+          "before": "18.42%",
+          "after": "31.65%",
+          "delta": "+13.23 pp"
+        },
+        {
+          "period": "2026-07",
+          "before": "16.90%",
+          "after": "31.08%",
+          "delta": "+14.18 pp"
+        },
+        {
+          "period": "2026-08",
+          "before": "19.37%",
+          "after": "31.92%",
+          "delta": "+12.55 pp"
+        }
+      ]
+    },
+    "migration": "历史告警保留 v1；看板上的复购卡片标注口径从 v2026.09.3 起变化。",
+    "touches": [
+      "objectset:repeat_customer",
+      "metric:repeat_rate"
+    ],
+    "times": {
+      "created": "2026-09-15 09:30",
+      "checked": "2026-09-17 11:00",
+      "submitted": "2026-09-17 11:10",
+      "reviewed": "2026-09-18 16:20"
+    }
+  },
+  {
+    "id": "CR-0001",
+    "diffs": [
+      {
+        "key": "1",
+        "type": "枚举值",
+        "target": "会员等级",
+        "field": "取值",
+        "kind": "新增",
+        "before": "",
+        "after": "黑金（L5）"
+      }
+    ],
+    "checks": [
+      {
+        "code": "V1",
+        "name": "主键与映射完整",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V2",
+        "name": "主键唯一性抽检",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V3",
+        "name": "关系两端与类型兼容",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V4",
+        "name": "枚举挂取值字典",
+        "result": "警告",
+        "note": "CRM 等级码里没有 L5，取值字典映射不到源数据"
+      },
+      {
+        "code": "V5",
+        "name": "指标引用的属性已映射",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V6",
+        "name": "允许的维度可到达",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V7",
+        "name": "已发布 API 名不删不改",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V8",
+        "name": "改公式或过滤须升版本",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V9",
+        "name": "同义词冲突",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V10",
+        "name": "层级成员唯一父级",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V11",
+        "name": "自然语言描述齐全",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V12",
+        "name": "影响分析",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V13",
+        "name": "多路径须指定默认路径",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V14",
+        "name": "各目标库 EXPLAIN 通过",
+        "result": "通过",
+        "note": ""
+      },
+      {
+        "code": "V15",
+        "name": "重大改动写明迁移方式",
+        "result": "不适用",
+        "note": "修订级改动"
+      },
+      {
+        "code": "V16",
+        "name": "冲突策略时间字段",
+        "result": "不适用",
+        "note": ""
+      },
+      {
+        "code": "V17",
+        "name": "同名词唯一默认",
+        "result": "通过",
+        "note": ""
+      }
+    ],
+    "impact": {
+      "direct": [
+        {
+          "kind": "枚举值",
+          "name": "会员等级 = 黑金",
+          "note": "新增"
+        }
+      ],
+      "defs": [
+        {
+          "kind": "对象类型",
+          "name": "会员等级",
+          "note": "取值 5 → 6"
+        }
+      ],
+      "usage": [
+        {
+          "kind": "看板",
+          "name": "会员等级分布",
+          "note": "新增一项"
+        }
+      ]
+    },
+    "touches": [
+      "property:member_level.level"
+    ],
+    "times": {
+      "created": "2026-09-10 15:00",
+      "checked": "2026-09-10 15:08",
+      "submitted": "2026-09-10 15:20",
+      "reviewed": "2026-09-12 10:02"
+    }
+  }
+]

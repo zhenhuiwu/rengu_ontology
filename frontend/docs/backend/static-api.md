@@ -629,10 +629,10 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 变更单详情 | `GET /change-requests/{id}` | 头部、说明、迁移方式、`times{created,checked,submitted}`，并一次带回 `checks`（V1–V17 全部）、`impact{direct[],defs[],usage[]}`、`trial{rows[],scope}`（没有试跑为 `null`）、`events`（`ReviewEvent[]`）、`touches`（原样）；前端详情一次取整份 `CRDetail`，不设这四个子接口 | releases:view | — | ✓ | ✓ | 否 |
 | 改动 | `GET /change-requests/{id}/diffs?page&size` | 每页 10（`Releases.vue:83`、`:292`） | releases:view | — | ✓ | ✓ | 否 |
 | 补充迁移方式 | `PATCH /change-requests/{id}` `{migration}` | **[推断：前端只显示迁移方式（`Releases.vue:294-295`），没有编辑入口]**，先不做 | — | — | ✗ | ✗ | 否 |
-| 合并校验预览 | `POST /releases:merge-check` | 不落库；出 `rows[{code,name,result,note}]`、`blocked`。由「发布」触发，发布按钮在只读时置灰（`Releases.vue:195-196`） | releases:manage | — | ✗ | ✗ | 否 |
+| 合并校验预览 | `POST /releases:merge-check` | 不落库；出 `rows[{code,name,result,note}]`、`blocked`。**已实现**：对全部「已通过」单子按 mock `mergeCheck` 原样计算（M1 / V9 / V17 / V1–V17 / 提示，单子按编号倒序，与 mock 列表同序），数据取 `change_request.detail`（mock CR_DETAILS 原样，`seeds/extra/static/CR_DETAILS.json`）[推断]。由「发布」触发，发布按钮在只读时置灰（`Releases.vue:195-196`） | releases:manage | — | ✗ | ✗ | 否 |
 | 版本列表 | `GET /releases` | 不分页：返回 `{items: Release[], current}`（`current` 为当前生效版本号）；顶栏版本选择器对所有页面都显示（`TopBar.vue:70` `VersionPicker`） | 任意已登录用户 | 元数据读取 | ✓ | ✓ | 否 |
-| 整版发布 | `POST /releases` `{note, lockVersion}` | 本体管理员；出 `ver`（版本层生成） | releases:manage + 管理员 | — | ✗ | ✗ | 否 |
-| 回滚版本 | `POST /releases/{ver}:rollback` | 只能最近一次，否则 409 `ROLLBACK_NOT_LATEST`；经 `create_version(rollback_of=…)`（§2.2-6）；不限管理员（限管理员是 [推断]，默认不做） | releases:manage | — | ✗ | ✗ | 否 |
+| 整版发布 | `POST /releases` `{note, lockVersion}` | 本体管理员；出 `ver`（版本层生成）。**已实现**：非管理员 403 `NO_PERMISSION`；合并校验有阻断 → 409 `MERGE_BLOCKED`（`details.rows` = 合并校验行，什么都不改）；没有已通过的单子 → 409 `EMPTY_RELEASE`（create_version）；成功 201 返回版本层 `ReleaseOut`，已通过的单子 → 已发布、`release_id` = 新版本、`status_at` = 现在，每张写一条 `cr_event`「{me} 整版发布为 {ver}」/「合并校验：{非通过行说明；}」或「全部通过」（与 mock 一致）。`note`、`lockVersion` 可省；`lockVersion` 暂不校验，发布串行靠版本层事务锁 [推断] | releases:manage + 管理员 | — | ✗ | ✗ | 否 |
+| 回滚版本 | `POST /releases/{ver}:rollback` | 只能最近一次，否则 409 `ROLLBACK_NOT_LATEST`；经 `create_version(rollback_of=…)`（§2.2-6）；不限管理员（限管理员是 [推断]，默认不做）。**已实现**：新建回滚单（下一个 CR 号，标题「回滚 {ver}」，提交人 = 审核人 = 本人，已发布，一般，改动 0，`release_id` = 新版本）；被回滚版本的单子各写一条 `cr_event`「{me} 回滚 {ver}」/「生成新版本，内容同 {上一版}」(warn)；版本不存在 404；成功 201 返回 `ReleaseOut`（`kind=回滚`、`rollbackOf`）。静态 section 还没实现 `restore_section`，回滚只复制快照、不改定义表 [推断，第二期] | releases:manage | — | ✗ | ✗ | 否 |
 | 版本对比 | `GET /releases/{a}/diff/{b}` | **[第二期]** | releases:view | — | ✓ | ✓ | 否 |
 
 ### 3.2 对象类型

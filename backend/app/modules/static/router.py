@@ -7,19 +7,23 @@
 | /metrics[/{id},/{id}/versions,/{id}/refs] | Metrics.vue |
 | /dimensions[/{id},/values,/mappings,/usage,/history] | Dimensions.vue |
 | /knowledge[/synonym-conflicts,/{id},/{id}/refs] | Glossary.vue |
+| POST /releases:merge-check、POST /releases、POST /releases/{ver}:rollback | Releases.vue 发布 / 回滚按钮 |
 """
 
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
-from app.modules.static.schemas import Rec, RecPage, SynonymConflicts
+from app.modules.static.publish import PublishService
+from app.modules.static.schemas import MergeCheckOut, PublishIn, Rec, RecPage, RollbackIn, SynonymConflicts
 from app.modules.static.service import StaticService
+from app.modules.versioning.repo import ReleaseRepo
+from app.modules.versioning.schemas import ReleaseOut
 
 router = APIRouter(tags=["static"])
 
@@ -252,3 +256,33 @@ async def get_knowledge(id: str, svc: Svc) -> Any:
 @get("/knowledge/{id}/refs", "glossary", response_model=RecPage)
 async def knowledge_refs(id: str, svc: Svc, p: P8) -> Any:
     return await svc.knowledge_refs(id, p)
+
+
+# ---------------------------------------------------------------- 整版发布 / 回滚
+# 写接口：只读模式（?ver / previewAs）下骨架统一 403 READONLY
+_MANAGE = [Depends(require_func("releases", "manage"))]
+
+
+@router.post("/releases:merge-check", dependencies=_MANAGE, response_model=MergeCheckOut)
+async def merge_check(session: SessionDep, _: CurrentUserDep) -> Any:
+    """只算合并校验（mock mergeCheck(已通过的单子)），不落库。"""
+    return await PublishService(session).merge_check()
+
+
+@router.post("/releases", dependencies=_MANAGE, response_model=ReleaseOut, status_code=201)
+async def publish(
+    session: SessionDep, user: CurrentUserDep, body: Annotated[PublishIn, Body()] = PublishIn()
+) -> Any:
+    """整版发布：本体管理员。合并校验有阻断 → 409 MERGE_BLOCKED（details.rows）；
+    没有已通过的单子 → 409 EMPTY_RELEASE。"""
+    ver = await PublishService(session).publish(user, body.note)
+    return ReleaseOut.model_validate(await ReleaseRepo(session).by_ver_or_404(ver))
+
+
+@router.post("/releases/{ver}:rollback", dependencies=_MANAGE, response_model=ReleaseOut, status_code=201)
+async def rollback(
+    ver: str, session: SessionDep, user: CurrentUserDep, body: Annotated[RollbackIn, Body()] = RollbackIn()
+) -> Any:
+    """回滚最近一次发布：生成新版本（内容同上一版），不是最新版 → 409 ROLLBACK_NOT_LATEST。"""
+    new_ver = await PublishService(session).rollback(user, ver, body.note)
+    return ReleaseOut.model_validate(await ReleaseRepo(session).by_ver_or_404(new_ver))

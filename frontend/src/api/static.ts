@@ -126,3 +126,17 @@ export async function loadStatic(sets: readonly StaticDataset[]): Promise<void> 
   for (const k of [...cache.keys()]) if (!k.startsWith(`${ver}|`)) cache.delete(k);
   for (const ds of sets) await loadOne(ds);
 }
+
+// ---------------------------------------------------------------- 整版发布 / 回滚（Releases.vue 两个按钮，static-api.md §3.1）
+/** 合并校验行（mock/changes.ts CheckRow） */
+export interface MergeCheckRow { code: string; name: string; result: string; note: string }
+/** 版本层 ReleaseOut（GET /releases 的每项同形） */
+export interface ReleaseResult { ver: string; publishedAt: string; by: string; note: string; parentVer: string | null; kind: string; rollbackOf: string | null; changeOrderIds: string[] }
+/** POST /releases:merge-check：已通过单子的合并校验（不落库，和 mock mergeCheck 一致） */
+export const mergeCheckApi = () => api.post<{ rows: MergeCheckRow[]; blocked: boolean }>('/releases:merge-check');
+/** POST /releases：整版发布（本体管理员；合并校验阻断 → 409 MERGE_BLOCKED） */
+export const publishRelease = (note?: string) => api.post<ReleaseResult>('/releases', note ? { note } : {});
+/** POST /releases/{ver}:rollback：回滚最近一次发布（否则 409 ROLLBACK_NOT_LATEST） */
+export const rollbackRelease = (ver: string) => api.post<ReleaseResult>(`/releases/${encodeURIComponent(ver)}:rollback`, {});
+/** 发布 / 回滚成功后刷新顶栏版本号（同一后端前缀；versioning 不在真接口开关里时也能取到） */
+export const fetchCurrentAfterWrite = () => api.get<{ current: string | null; next: string; release: ReleaseResult | null }>('/releases/current');
