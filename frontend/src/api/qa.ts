@@ -9,24 +9,22 @@ const api = apiClient('qa');
 export const qaReal = () => api.isReal();
 
 /**
- * apiClient 目前只开放 get / post。W4（PATCH）、W5 / W15（DELETE）、W12（PUT）先在这里按 http.ts request 的同样规则发：
- * 同一开关把关、X-Demo-As、自动带 ?ver / ?previewAs、统一错误体 → ApiError。
- * W11 导出要拿文件（Blob + 文件名），apiClient.get 只解析 JSON，也走这里（raw）。
- * 待 http.ts 的 apiClient 补上 patch / put / del / 下载后改回（已报 PDE）。
+ * PATCH / PUT / DELETE 走 apiClient（PDE 215819d 补的 put / patch / delete）。
+ * W11 导出要拿文件（Blob + Content-Disposition 文件名），apiClient 只解析 JSON，暂留这个 GET 下载小工具；
+ * 规则同 http.ts request：同一开关把关、X-Demo-As、自动带 ?ver / ?previewAs、统一错误体 → ApiError（待 apiClient 有下载方法后改回，已报 PDE）。
  */
-async function send(method: 'GET' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown, query?: Record<string, string>): Promise<Response> {
+async function download(path: string, query?: Record<string, string>): Promise<Response> {
   if (!api.isReal()) throw new ApiError(0, { code: 'MOCK_ONLY', message: '开关 qa 未切到真接口', details: { key: 'qa' } });
   const ctx = currentApiContext();
   const qs = new URLSearchParams(query);
   if (ctx.ver) qs.set('ver', ctx.ver);
   if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = {};
   if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
   const url = `${API_BASE}/${api.prefix}/v1${path}${qs.size ? `?${qs}` : ''}`;
   let res: Response;
   try {
-    res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(url, { headers });
   } catch (e) {
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: `无法连接后台：${(e as Error)?.message ?? e}` });
   }
@@ -36,10 +34,6 @@ async function send(method: 'GET' | 'PUT' | 'PATCH' | 'DELETE', path: string, bo
     throw new ApiError(res.status, { code: typeof b?.code === 'string' ? b.code : `HTTP_${res.status}`, message: String(b?.message ?? res.statusText), details: b?.details, requestId: b?.requestId ?? null });
   }
   return res;
-}
-async function write<T>(method: 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
-  const res = await send(method, path, body);
-  return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
 /** W3 会话详情：轮次快照形状同 QA_DEMO_TURNS；链路新生成的回答是 card='table' + text（后台 chain.py） */
@@ -60,12 +54,12 @@ export const listSessions = (q: { q?: string; range?: string; page: number; size
 export const getSession = (sid: string) => api.get<QaSessionDetail>(`/sessions/${encodeURIComponent(sid)}`);
 export const createSession = (body: { scope: string; caliber: string }) => api.post<QaSessionDetail>('/sessions', body);
 export const patchSession = (sid: string, body: { title?: string; scope?: string; caliber?: string }) =>
-  write<QaSessionDetail>('PATCH', `/sessions/${encodeURIComponent(sid)}`, body);
-export const deleteSession = (sid: string) => write<void>('DELETE', `/sessions/${encodeURIComponent(sid)}`);
+  api.patch<QaSessionDetail>(`/sessions/${encodeURIComponent(sid)}`, body);
+export const deleteSession = (sid: string) => api.delete<void>(`/sessions/${encodeURIComponent(sid)}`);
 export const askTurn = (sid: string, question: string) =>
   api.post<QaAskOut>(`/sessions/${encodeURIComponent(sid)}/turns`, { question, refs: [] });
 export const listFavorites = (q: { q?: string; page: number; size: number }) => api.get<PageResult<QaFavorite>>('/favorites', { query: q });
-export const deleteFavorite = (id: string) => write<void>('DELETE', `/favorites/${encodeURIComponent(id)}`);
+export const deleteFavorite = (id: string) => api.delete<void>(`/favorites/${encodeURIComponent(id)}`);
 /** P1 简版（左栏贴底、「我的页面 · 全部」抽屉） */
 export const listPagesBrief = (q: { kw?: string; page: number; size: number }) =>
   api.get<PageResult<QaPage>>('/pages', { query: { ...q, view: 'brief' } });
@@ -81,14 +75,14 @@ export const recalcTurn = (tid: string, caliber: QaCaliberKey) =>
   api.post<Record<string, unknown> & { caliber: QaCaliberKey }>(`/turns/${encodeURIComponent(tid)}:recalc`, { caliber });
 /** W12 赞踩：'' = 取消；踩会在问数调优生成一条待处理反馈 */
 export type QaVote = '' | 'up' | 'down';
-export const voteTurn = (tid: string, vote: QaVote) => write<{ id: string; vote: QaVote }>('PUT', `/turns/${encodeURIComponent(tid)}/vote`, { vote });
+export const voteTurn = (tid: string, vote: QaVote) => api.put<{ id: string; vote: QaVote }>(`/turns/${encodeURIComponent(tid)}/vote`, { vote });
 /** W10 结果表翻页：summary 按全部数据算 */
 export interface QaTurnResult<R = Record<string, unknown>> extends PageResult<R> { columns: { key: string; title: string; align?: string }[]; summary: Record<string, number | string | null> }
 export const getTurnResult = <R = Record<string, unknown>>(tid: string, q: { page: number; size: number }) =>
   api.get<QaTurnResult<R>>(`/turns/${encodeURIComponent(tid)}/result`, { query: q });
 /** W11 导出全部行：浏览器下载，返回文件名 */
 export async function exportTurn(tid: string, format: 'xlsx' | 'csv' = 'xlsx'): Promise<string> {
-  const res = await send('GET', `/turns/${encodeURIComponent(tid)}/export`, undefined, { format });
+  const res = await download(`/turns/${encodeURIComponent(tid)}/export`, { format });
   const cd = res.headers.get('Content-Disposition') ?? '';
   const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
   const name = m ? decodeURIComponent(m[1]) : `${tid}.${format}`;
