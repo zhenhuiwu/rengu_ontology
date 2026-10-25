@@ -72,6 +72,30 @@ async def test_list_matches_mock(client, seeded):
     assert all(x["detail"] == DETAILS[x["id"]] and x["events"] == [] for x in full)
 
 
+async def test_list_paged(client, seeded):
+    """kw / page / size / focusId（同 Releases.vue filtered、LPAGE=17、选中单子所在页）。"""
+    allr = (await client.get(P + "/change-requests", headers=WANG)).json()
+    r = (await client.get(P + "/change-requests?page=1", headers=WANG)).json()
+    assert (r["total"], r["page"], r["size"]) == (16, 1, 17) and r["items"] == allr
+    r = (await client.get(P + "/change-requests?size=5&page=9", headers=WANG)).json()
+    assert (r["page"], [x["id"] for x in r["items"]]) == (4, ["CR-0001"])  # 越界收到最后一页
+    r = (await client.get(P + "/change-requests?size=5&focusId=CR-0008", headers=WANG)).json()
+    assert r["page"] == 2 and "CR-0008" in [x["id"] for x in r["items"]]
+    r = (await client.get(P + "/change-requests?size=5&page=3&focusId=CR-9999", headers=WANG)).json()
+    assert r["page"] == 3  # focusId 不在结果里 → 按 page
+    r = (await client.get(P + "/change-requests?kw=cr-001", headers=WANG)).json()
+    assert [x["id"] for x in r] == [f"CR-{n:04d}" for n in range(16, 9, -1)]
+    word = allr[0]["title"][:2]
+    r = (
+        await client.get(
+            P + "/change-requests", params={"kw": word, "status": "草稿", "page": 1}, headers=WANG
+        )
+    ).json()
+    want = [x["id"] for x in allr if word in x["title"] and x["status"] == "草稿"]
+    assert [x["id"] for x in r["items"]] == want and r["total"] == len(want)
+    assert (await client.get(P + "/change-requests?size=0", headers=WANG)).status_code == 422
+
+
 async def test_detail(client, seeded):
     d = await one(client, "CR-0010")
     assert d["status"] == "审核中" and d["detail"] == DETAILS["CR-0010"] and d["events"] == []

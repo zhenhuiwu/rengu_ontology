@@ -32,7 +32,7 @@ from app.modules.static.schemas import (
     RollbackIn,
     SynonymConflicts,
 )
-from app.modules.static.service import StaticService
+from app.modules.static.service import StaticService, paginate
 from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.schemas import ReleaseOut
 
@@ -305,12 +305,30 @@ CRStatusQ = Literal["草稿", "审核中", "已通过", "已发布", "已驳回"
 
 @get("/change-requests", "releases")
 async def list_change_requests(
-    session: SessionDep, _: CurrentUserDep, status: CRStatusQ | None = None, full: bool = False
+    session: SessionDep,
+    _: CurrentUserDep,
+    status: CRStatusQ | None = None,
+    full: bool = False,
+    kw: str = "",
+    page: Annotated[int | None, Query()] = None,
+    size: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    focus: Focus = None,
 ) -> Any:
-    """mock CHANGE_REQUESTS 原样（单号倒序），不分页：前端整表载入后本地筛选、分页 [推断]。
-    full=true 每行带 detail（CRDetail）和 events（评审追加记录）。
+    """mock CHANGE_REQUESTS 原样（单号倒序）。full=true 每行带 detail（CRDetail）和 events（评审追加记录）。
+
+    - `kw`：同 Releases.vue `filtered`——标题包含 kw，或单号包含 kw 的大写。
+    - 带了 `page` / `size` / `focusId` 任一个 → 分页，返回骨架 `Page`（`{items,total,page,size}`，
+      每页默认 17 = `Releases.vue:59` LPAGE）；`focusId` 在筛选结果里时返回它所在的页
+      （同 `Releases.vue:67`），越界页收到最后一页。
+    - 都不带 → 返回整个数组（Releases.vue 真接口模式整表载入后本地筛选、分页，保持兼容）[推断]。
     不随 ?ver 变（变更单不进版本快照）[推断]。"""
-    return await ChangeRequestService(session).list(status=status, full=full)
+    rows = await ChangeRequestService(session).list(status=status, full=full)
+    if kw:
+        up = kw.upper()
+        rows = [r for r in rows if kw in r["title"] or up in r["id"]]
+    if page is None and size is None and focus is None:
+        return rows
+    return paginate(rows, PageParams(page=page or 1, size=size or 17), focus)
 
 
 @get("/change-requests/{id}", "releases")

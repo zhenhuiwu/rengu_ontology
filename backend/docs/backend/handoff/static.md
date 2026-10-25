@@ -15,7 +15,7 @@
 - **7 个快照 section**（`sections.py`）：objectTypes、properties、links、metrics、dimensions、terms、**qaPaths**（已在骨架 `SECTION_OWNERS` 登记）；`seed_section` 按版本规则裁剪，`build_section` 发布时组装。
 - **static_0002**（`change_request` + `cr_event`，down = `event_0002`；dynamic_0002 会接在它后面，**不要改名或重新编号**）。
 - **合并校验 / 整版发布 / 回滚**：`POST /releases:merge-check`、`POST /releases`、`POST /releases/{ver}:rollback`（`publish.py`，经版本层 `create_version`）。
-- **变更单**：`GET /change-requests`（`?status`、`full=true`）、`GET /change-requests/{id}`；6 个状态动作 `:submit` / `:withdraw` / `:approve` / `:reject` / `:unapprove` / `:reopen`；`DELETE /change-requests/{id}`（`crs.py`）。
+- **变更单**：`GET /change-requests`（`?status`、`full=true`、`kw`；带 `page`/`size`/`focusId` 任一时按骨架 `PageParams.clamp` / `Page.of` 分页，每页默认 17，`focusId` 返回所在页；都不带返回整个数组，Releases.vue 现在仍整表载入）、`GET /change-requests/{id}`；6 个状态动作 `:submit` / `:withdraw` / `:approve` / `:reject` / `:unapprove` / `:reopen`；`DELETE /change-requests/{id}`（`crs.py`）。
 
 前端：
 - **5 个页面切真接口**：对象类型、关系类型、指标、维度、业务知识。页面外面包一层 `parts/StaticGate.vue` 整表载入（`src/api/static.ts` `loadStatic`），页面本体移到 `*Body.vue`，mock 模式下渲染不变。
@@ -39,10 +39,7 @@
    - 缺：总览图谱接口（api-index.md:597、:1302，返回 `{nodes, edges}`，数据来自 `mock/links.ts`）。
    - 为什么：总览页（OntologyOverview）没切换，暂时没有调用方。
    - 从哪开始：`router.py` 加一个 `@get("/ontology/graph", ...)`，`service.py` 用现有 links / objects 读取拼出来。
-4. **变更单列表不分页、不随 `?ver` 变**
-   - 缺：`GET /change-requests` 只支持 `status`（和 `full`），`kw/page/size/focusId` 没做，`?ver` 被忽略 [推断]。
-   - 为什么：Releases.vue 是整表载入后在本地筛选、分页（每页 17），先按前端现状交付。
-   - 从哪开始：`crs.py` `ChangeRequestService.list`、`router.py:306`；用骨架的 PageParams / Page 分页，`focusId` 返回含该单的那一页。
+4. ~~变更单列表不分页~~ **已完成**（见「已完成」）。仍不随 `?ver` 变 [推断]。
 5. **`lockVersion` 收下但没校验**
    - 缺：`POST /releases` 的 `lockVersion` 没和当前版本比对。
    - 为什么：发布串行靠版本层的事务锁保证 [推断]；前端也没有传可比较的值。
@@ -74,7 +71,7 @@
 - 变更单错误码：状态不对 409 `CR_STATE`、有阻断 409 `CR_BLOCKED`、没有改动 409 `CR_EMPTY`（`crs.py:14`）。
 - 删除草稿是**硬删**（表没有软删除列，前端也没有恢复入口），`cr_event` 级联删除；static-api.md 原写的是软删（`crs.py:16`）。
 - 只有 owner 能提交 / 编辑、回滚只限管理员：**都不做**（前端不限）。驳回原因后台不限定取值。
-- 变更单列表不分页、不随 `?ver` 变（变更单不进快照）（`router.py:310-312`）。
+- 变更单列表不带分页参数时返回整个数组（兼容现有前端），带了才分页；不随 `?ver` 变（变更单不进快照）（`router.py` `list_change_requests`）。
 - `note` 可省，不传时用变更单标题拼一句；`lockVersion` 不校验（`schemas.py:37`、`publish.py:149`）。
 - 合并校验数据取 `change_request.detail`（mock CR_DETAILS 原样）（`publish.py:4`）。
 - 回滚单：提交人 = 审核人 = 本人，直接已发布，改动 0；回滚只复制快照，不改定义表。
@@ -112,6 +109,6 @@
 
 1. 本地起服务：开发库 `DATABASE_URL=postgresql+asyncpg://…/rengu_static_integ`，`alembic upgrade head` 后灌种子；前端在 `.env.local` 设 `VITE_API_REAL_MODULES=static`（**不提交**），代理到后台。
 2. 测试：`RENGU_TEST_DB=<自己的测试库> pytest -q`，`ruff check . && ruff format --check .`，`npx vue-tsc --noEmit`，`npm run build`。
-3. 建议顺序：第 4 条（列表分页，小）→ 第 3 条（graph 接口）→ 第 1 条（restore_section，在 `begin_nested` 里按外键顺序写，测试：回滚后 GET 返回旧定义）→ 第 9 条（cr_* 表 + 写路径，最大）。
+3. 建议顺序：第 3 条（graph 接口）→ 第 1 条（restore_section，在 `begin_nested` 里按外键顺序写，测试：回滚后 GET 返回旧定义）→ 第 9 条（cr_* 表 + 写路径，最大）。
 4. 新迁移接在当时的单 head 后面；不要改 static_0002 的 revision。
 5. 每做完一条，更新本文件「已完成 / 未完成」，并在 static-api.md 对应行写「已实现」。
