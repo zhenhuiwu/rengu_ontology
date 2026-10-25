@@ -7,7 +7,8 @@
 - 软删除**不是默认**：只有前端有「删除 / 恢复」的表才额外混入 `SoftDeleteMixin`（deleted_at/by）
 - 主键：所有表都是代理键 id bigint（IdMixin）；业务编号放 code（CodeMixin，唯一）
   或自然列（ver、api_name）+ 唯一约束；外键指向 id
-- OntologyVersionMixin：ontology_ver（运行时记录要记下“按哪个本体版本产生”：问数轮次、告警、动作、事件）
+- OntologyVersionMixin：release_id → ontology_release.id（运行时记录要记下“按哪个本体版本产生”：
+  问数轮次、告警、动作、事件；接口仍返回 ver）
 
 表名：业务名词、snake_case 单数、**不加模块前缀**；只有和 SQL 关键字冲突或有歧义时才加限定词
 （ontology_release、sys_user、sys_role、biz_order）。
@@ -15,7 +16,19 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Identity, Index, Integer, MetaData, String, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 
 from app.core import clock
@@ -86,7 +99,15 @@ class LockVersionMixin:
 
 
 class OntologyVersionMixin:
-    ontology_ver: Mapped[str | None] = mapped_column(String(32), index=True)
+    """运行时记录「按哪个本体版本产生」：外键 release_id → ontology_release.id（不存版本号字符串）。
+
+    接口仍返回版本号 ver：模型里加 `release = relationship(OntologyRelease, lazy="joined")`，
+    schema 用 `ver: str | None = Field(validation_alias=AliasPath("release", "ver"))` 之类取。
+    """
+
+    release_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("ontology_release.id"), index=True, comment="本体版本（ontology_release.id）"
+    )
 
 
 class SeedMarkMixin:

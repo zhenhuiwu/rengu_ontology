@@ -15,6 +15,11 @@ from app.core.config import get_settings
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
+_qa_engine: AsyncEngine | None = None
+
+
+class QaReadonlyNotConfigured(RuntimeError):
+    """没配 RENGU_QA_READONLY_DATABASE_URL。问数网关不回退到主库。"""
 
 
 def get_engine() -> AsyncEngine:
@@ -34,11 +39,44 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return _sessionmaker
 
 
+def qa_readonly_engine_kwargs(statement_timeout_ms: int) -> dict:
+    """连接建立时（asyncpg server_settings，即 startup 参数）设置，会话里改不回只读以外的默认值。"""
+    return {
+        "connect_args": {
+            "server_settings": {
+                "statement_timeout": str(int(statement_timeout_ms)),
+                "default_transaction_read_only": "on",
+            }
+        },
+        "pool_pre_ping": True,
+    }
+
+
+def get_qa_readonly_engine() -> AsyncEngine:
+    """问数网关专用只读引擎（app/common/sql_guard.run_guarded 用它的连接）。
+
+    未配置 `qa_readonly_database_url` 直接抛 QaReadonlyNotConfigured，**不回退到 database_url**。
+    每个连接：statement_timeout = qa_statement_timeout_ms，default_transaction_read_only = on。
+    库账号本身也应只读、只授权业务表（运维配置），这里是第二道闸。
+    """
+    global _qa_engine
+    if _qa_engine is None:
+        s = get_settings()
+        if not s.qa_readonly_database_url:
+            raise QaReadonlyNotConfigured("未配置 RENGU_QA_READONLY_DATABASE_URL，问数网关拒绝执行")
+        _qa_engine = create_async_engine(
+            s.qa_readonly_database_url, **qa_readonly_engine_kwargs(s.qa_statement_timeout_ms)
+        )
+    return _qa_engine
+
+
 async def dispose_engine() -> None:
-    global _engine, _sessionmaker
+    global _engine, _sessionmaker, _qa_engine
     if _engine is not None:
         await _engine.dispose()
-    _engine, _sessionmaker = None, None
+    if _qa_engine is not None:
+        await _qa_engine.dispose()
+    _engine, _sessionmaker, _qa_engine = None, None, None
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -19,7 +19,7 @@ from app.seeds import (
     derived_rows,
     rows_of,
 )
-from app.seeds.registry import SEED_MODULES
+from app.seeds.registry import SEED_MODULES, stage_package
 
 _log = logging.getLogger("app.seeds")
 
@@ -33,8 +33,8 @@ class SeedReport:
 
 
 def module_group(module: str) -> str:
-    """模块默认读的 export 组（模块 seeds 包里的 JSON_MODULE）。"""
-    pkg = importlib.import_module(f"app.modules.{module}.seeds")
+    """模块（或 seed 阶段，见 registry.SEED_STAGES）默认读的 export 组（seeds 包里的 JSON_MODULE）。"""
+    pkg = importlib.import_module(stage_package(module))
     group = getattr(pkg, "JSON_MODULE", module)
     if group not in EXPORT_GROUPS:
         raise ValueError(f"{module}.JSON_MODULE={group!r} 不是 export-mock 的分组 {EXPORT_GROUPS}")
@@ -42,7 +42,7 @@ def module_group(module: str) -> str:
 
 
 def module_specs(module: str, json_root: Path | None = None) -> tuple[Path, list[SeedSpec]]:
-    pkg = importlib.import_module(f"app.modules.{module}.seeds")
+    pkg = importlib.import_module(stage_package(module))
     root = json_root or get_settings().seeds_json_dir
     return root / module_group(module), list(getattr(pkg, "SEEDS", []))
 
@@ -64,9 +64,8 @@ def _load_rows(ctx: SeedContext, spec: SeedSpec) -> list[dict]:
     out = []
     for x in raw:
         r = spec.transform(dict(x), ctx)
-        if r:
-            r = {k: v for k, v in r.items() if k != ARGS_KEY}
-            out.append(r)
+        for one in r if isinstance(r, list) else [r] if r else []:
+            out.append({k: v for k, v in one.items() if k != ARGS_KEY})
     return out
 
 
@@ -76,8 +75,15 @@ async def resolve_refs(session: AsyncSession, rows: list[dict], refs: dict[str, 
         codes = {r[col] for r in rows if r.get(col) is not None}
         if not codes:
             continue
-        key_col = getattr(ref.model, ref.key)
-        found = dict((await session.execute(select(key_col, ref.model.id).where(key_col.in_(codes)))).all())  # type: ignore[attr-defined]
+        if isinstance(ref.key, tuple):  # 复合业务键：编号是元组
+            cols = [getattr(ref.model, k) for k in ref.key]
+            res = await session.execute(select(*cols, ref.model.id).where(tuple_(*cols).in_(codes)))  # type: ignore[attr-defined]
+            found = {tuple(row[:-1]): row[-1] for row in res.all()}
+        else:
+            key_col = getattr(ref.model, ref.key)
+            found = dict(
+                (await session.execute(select(key_col, ref.model.id).where(key_col.in_(codes)))).all()
+            )  # type: ignore[attr-defined]
         missing = codes - found.keys()
         if missing:
             table = ref.model.__table__.name  # type: ignore[attr-defined]

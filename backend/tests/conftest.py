@@ -109,6 +109,16 @@ def sections():
 async def seeded(session, sections) -> AsyncSession:
     from app.seeds.loader import run_seeds
 
-    await run_seeds(session, ["versioning"])
+    await run_seeds(session, ["admin", "versioning"])
+    await session.flush()
+    return session
+
+
+@pytest.fixture
+async def users(session) -> AsyncSession:
+    """只灌 sys_user（X-Demo-As / 发布人按用户编号解析要用）。"""
+    from app.seeds.loader import run_seeds
+
+    await run_seeds(session, ["admin"])
     await session.flush()
     return session

@@ -10,6 +10,7 @@ from sqlalchemy.exc import DBAPIError
 from app.contracts.versioning import SnapshotProvider, VersionService
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.modules.admin.models import SysUser
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.schemas import ReleaseOut
 from app.modules.versioning.service import VersioningService, next_ver, snapshot_digest
@@ -25,8 +26,8 @@ async def _by_ver(session, ver):
 
 
 async def test_seed_is_idempotent(session, sections):
-    await run_seeds(session, ["versioning"])
-    await run_seeds(session, ["versioning"])
+    await run_seeds(session, ["admin", "versioning"])
+    await run_seeds(session, ["admin", "versioning"])
     assert await session.scalar(select(func.count()).select_from(OntologyRelease)) == len(MOCK) == 5
     r = await _by_ver(session, "v2026.10.3")
     assert r.snapshot == {"objectTypes": {"order": {"label": "订单", "since": "v2026.10.3"}}}
@@ -34,9 +35,9 @@ async def test_seed_is_idempotent(session, sections):
 
 
 # ---- 接口与 mock 一一对应 ----
-async def test_seed_refuses_empty_snapshot(session):
+async def test_seed_refuses_empty_snapshot(users):
     with pytest.raises(RuntimeError, match="不写空快照"):
-        await run_seeds(session, ["versioning"])
+        await run_seeds(users, ["versioning"])
 
 
 async def test_list_matches_mock_exactly(client, seeded):
@@ -87,7 +88,9 @@ async def test_create_version_in_callers_transaction(seeded):
     svc = VersioningService(FakeStaticProvider())
     now = datetime(2026, 10, 25, 12, tzinfo=UTC)
     async with seeded.begin_nested() as sp:  # 模拟静态模块的发布事务
-        ver = await svc.create_version(seeded, ["CR-0011"], published_by="王敏", note="毛利率口径", now=now)
+        ver = await svc.create_version(
+            seeded, ["CR-0011"], published_by="U010001", note="毛利率口径", now=now
+        )
         assert ver == "v2026.10.4"
         assert await svc.current_version(seeded) == "v2026.10.4"
         snap = await svc.get_snapshot(seeded)
@@ -100,7 +103,7 @@ async def test_create_version_in_callers_transaction(seeded):
 
 async def test_create_version_requires_change_orders(seeded):
     with pytest.raises(AppError) as e:
-        await VersioningService().create_version(seeded, [], published_by="王敏", note="")
+        await VersioningService().create_version(seeded, [], published_by="U010001", note="")
     assert e.value.code == "EMPTY_RELEASE" and e.value.status_code == 409
 
 
@@ -121,18 +124,18 @@ async def test_releases_are_append_only_in_db(seeded):
 async def test_rollback_creates_new_version_with_target_content(seeded):
     svc = VersioningService(FakeStaticProvider())
     now = datetime(2026, 10, 25, 12, tzinfo=UTC)
-    v4 = await svc.create_version(seeded, ["CR-0011"], published_by="王敏", note="毛利率口径", now=now)
+    v4 = await svc.create_version(seeded, ["CR-0011"], published_by="U010001", note="毛利率口径", now=now)
     before = await svc.get_snapshot(seeded, v4)
     # 只能回滚最近一次发布：rollback_of 必须是当前最新版
     with pytest.raises(AppError) as e:
         await svc.create_version(
-            seeded, ["CR-0015"], rollback_of="v2026.10.3", published_by="王敏", note="", now=now
+            seeded, ["CR-0015"], rollback_of="v2026.10.3", published_by="U010001", note="", now=now
         )
     assert e.value.code == "ROLLBACK_NOT_LATEST" and e.value.status_code == 409
     calls = []
     svc.provider.build_snapshot = lambda *a: calls.append(a)  # 回滚不调用任何 builder
     v5 = await svc.create_version(
-        seeded, ["CR-0015"], rollback_of=v4, published_by="王敏", note="回滚 v2026.10.4", now=now
+        seeded, ["CR-0015"], rollback_of=v4, published_by="U010001", note="回滚 v2026.10.4", now=now
     )
     assert calls == []
     assert v5 == "v2026.10.5" and await svc.current_version(seeded) == v5
@@ -152,13 +155,13 @@ async def test_rollback_creates_new_version_with_target_content(seeded):
 async def test_rollback_unknown_target(seeded):
     with pytest.raises(AppError) as e:
         await VersioningService().create_version(
-            seeded, ["CR-9"], rollback_of="v1999.01.1", published_by="x", note=""
+            seeded, ["CR-9"], rollback_of="v1999.01.1", published_by="U010001", note=""
         )
     assert e.value.code == "ROLLBACK_NOT_LATEST"
 
 
 async def test_publish_uses_central_clock(seeded):
-    ver = await VersioningService().create_version(seeded, ["CR-0011"], published_by="王敏", note="")
+    ver = await VersioningService().create_version(seeded, ["CR-0011"], published_by="U010001", note="")
     r = await _by_ver(seeded, ver)
     assert ver == "v2026.10.4"
     assert r.published_at == datetime.fromisoformat("2026-10-25T15:42:00+08:00")
@@ -186,12 +189,12 @@ async def test_sections_registry_and_default_provider(seeded):
             change_order_ids=["CR-0001"],
             change_summary={},
             note="",
-            published_by="x",
+            publisher=await seeded.scalar(select(SysUser).where(SysUser.code == "U010002")),
             published_at=datetime(2026, 10, 25, 16, tzinfo=UTC),
         )
     )
     await seeded.flush()
-    ver = await VersioningService().create_version(seeded, ["CR-0011"], published_by="王敏", note="")
+    ver = await VersioningService().create_version(seeded, ["CR-0011"], published_by="U010001", note="")
     snap = await VersioningService().get_snapshot(seeded, ver)
     assert snap["rules"] == {"R-007": {"x": 1}}  # 未登记的 section 原样沿用上一版
     assert snap["objectTypes"]["order"]["applied"] == ["CR-0011"]  # 登记的 builder 组装
@@ -218,9 +221,90 @@ async def test_rollback_calls_restore_section_hooks(seeded):
     try:
         svc = VersioningService(FakeStaticProvider())
         now = datetime(2026, 10, 25, 12, tzinfo=UTC)
-        v4 = await svc.create_version(seeded, ["CR-0011"], published_by="王敏", note="", now=now)
-        await svc.create_version(seeded, ["CR-0015"], rollback_of=v4, published_by="王敏", note="", now=now)
+        v4 = await svc.create_version(seeded, ["CR-0011"], published_by="U010001", note="", now=now)
+        await svc.create_version(
+            seeded, ["CR-0015"], rollback_of=v4, published_by="U010001", note="", now=now
+        )
         prev = await svc.get_snapshot(seeded, "v2026.10.3")
         assert restored == [prev.get("rules")]
     finally:
         unregister_section("rules")
+
+
+# ---- 发布人 = sys_user 外键；outbox release.published（PDE must-fix 5/6）----
+async def test_publisher_is_sys_user_fk(seeded):
+    r = await _by_ver(seeded, "v2026.10.3")
+    assert r.publisher.code and r.published_by == r.publisher.name  # 接口 by 仍是姓名
+    raw = await seeded.scalar(text("SELECT published_by_id FROM ontology_release WHERE ver='v2026.10.3'"))
+    assert raw == r.publisher.id
+    by_mock = {m["ver"]: m["by"] for m in MOCK}
+    for rel in (await seeded.scalars(select(OntologyRelease))).all():
+        assert rel.published_by == by_mock[rel.ver]
+    with pytest.raises(AppError) as e:  # 发布人传姓名 / 不存在的编号 → 422
+        await VersioningService().create_version(seeded, ["CR-0011"], published_by="王敏", note="")
+    assert (e.value.code, e.value.status_code) == ("USER_NOT_FOUND", 422)
+
+
+async def _events(session):
+    from app.common.outbox import OutboxEvent
+
+    return (await session.scalars(select(OutboxEvent).order_by(OutboxEvent.id))).all()
+
+
+async def test_outbox_release_and_rollback(seeded):
+    from app.common.outbox import RELEASE_PUBLISHED
+
+    svc, now = VersioningService(), datetime(2026, 10, 25, 16, tzinfo=UTC)
+    v4 = await svc.create_version(seeded, ["CR-0011", "CR-0012"], published_by="U010001", note="", now=now)
+    v5 = await svc.create_version(
+        seeded, ["CR-0015"], rollback_of=v4, published_by="U010001", note="", now=now
+    )
+    evs = await _events(seeded)
+    assert [e.topic for e in evs] == [RELEASE_PUBLISHED] * 2
+    assert [e.event_id for e in evs] == [f"ontology_release:{v}:release.published" for v in (v4, v5)]
+    assert evs[0].payload == {
+        "ver": v4,
+        "parentVer": "v2026.10.3",
+        "kind": "release",
+        "rollbackOf": None,
+        "changeOrderIds": ["CR-0011", "CR-0012"],
+    }
+    assert evs[1].payload == {
+        "ver": v5,
+        "parentVer": v4,
+        "kind": "rollback",
+        "rollbackOf": v4,
+        "changeOrderIds": ["CR-0015"],
+    }
+    assert all(e.dispatched_at is None and e.attempts == 0 for e in evs)
+
+
+async def test_outbox_rolls_back_with_release(seeded):
+    """同一事务：发布回滚，事件一起消失。"""
+    svc = VersioningService()
+    sp = await seeded.begin_nested()
+    await svc.create_version(seeded, ["CR-0011"], published_by="U010001", note="")
+    assert len(await _events(seeded)) == 1
+    await sp.rollback()
+    assert await _events(seeded) == [] and await svc.current_version(seeded) == "v2026.10.3"
+
+
+async def test_outbox_event_id_unique(session):
+    from app.common.outbox import emit
+
+    await emit(session, "t.x", {"a": 1}, event_id="e-1")
+    sp = await session.begin_nested()
+    with pytest.raises(Exception, match="uq_outbox_event_event_id"):
+        await emit(session, "t.x", {"a": 2}, event_id="e-1")
+    await sp.rollback()
+
+
+async def test_latest_is_by_id_not_published_at(seeded):
+    """后插入的版本即使 published_at 更早，也是最新（按 id desc，非时间）。"""
+    from app.modules.versioning.repo import ReleaseRepo
+
+    svc = VersioningService()
+    ver = await svc.create_version(
+        seeded, ["CR-0011"], published_by="U010001", note="", now=datetime(2020, 1, 1, tzinfo=UTC)
+    )
+    assert (await ReleaseRepo(seeded).latest()).ver == ver

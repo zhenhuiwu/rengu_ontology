@@ -1,7 +1,8 @@
 """对外 Schema。字段与前端 src/mock/releases.ts 的 `Release` 一一对应：
 { ver, publishedAt: 'YYYY-MM-DD HH:mm', by, note }；额外字段（parentVer、kind、rollbackOf、changeOrderIds）
 不影响前端。字段名由 ApiModel 自动转 camelCase（published_at → publishedAt）；
-by 是“接口名和库列名不同”的示范（库列 published_by）。
+by 是“接口名和库列名不同”的示范：库里是 published_by_id 外键 → sys_user，
+模型属性 published_by 取 publisher.name。
 """
 
 from pydantic import Field

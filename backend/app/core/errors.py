@@ -6,7 +6,10 @@
   参数校验失败统一 422 VALIDATION_FAILED，details.fields = [{field, message}]；
 - 通用 409：DUPLICATE_KEY（唯一约束）、EMPTY_INPUT（输入为空）、STATE_INVALID（状态不允许，app.core.state）、
   EMPTY_RELEASE（发布没有变更单）、VERSION_CONFLICT（乐观锁）；
-- 历史版本 / 预览下的写操作 403 READONLY，details.mode = "history" | "preview"。
+- 历史版本 / 预览下的写操作 403 READONLY，details.mode = "history" | "preview"；
+- 动作提交：422 SUBMISSION_CRITERIA_FAILED（details.failed = [{name, fail}]）、
+  409 IDEMPOTENCY_CONFLICT（同一幂等键、不同请求体）；导出：403 EXPORT_FORBIDDEN。
+  不设 ACTION_BLOCKED：提交前校验不通过一律用 SUBMISSION_CRITERIA_FAILED。
 
 业务代码只抛 AppError（或其子类），不要直接抛 HTTPException。
 """
@@ -71,6 +74,31 @@ class VersionConflict(AppError):
 
 class Forbidden(AppError):
     status_code, code, message = 403, "NO_PERMISSION", "不在你的权限范围内"
+
+
+class ExportForbidden(Forbidden):
+    """无导出权限（或导出范围超出行级权限）。"""
+
+    code, message = "EXPORT_FORBIDDEN", "没有导出权限"
+
+
+class IdempotencyConflict(Conflict):
+    """同一幂等键已用于内容不同的请求（内容相同的重放直接返回原结果，不抛错）。"""
+
+    code, message = "IDEMPOTENCY_CONFLICT", "幂等键已被另一请求使用"
+
+
+class SubmissionCriteriaFailed(AppError):
+    """动作提交前校验（submission criteria）不通过：422，details.failed = [{name, fail}]。
+
+    name = 校验项名称，fail = 不通过原因（前端确认卡逐条显示）。
+    """
+
+    status_code, code, message = 422, "SUBMISSION_CRITERIA_FAILED", "提交条件未满足"
+
+    def __init__(self, failed: list[dict[str, str]], message: str | None = None) -> None:
+        items = [{"name": str(f["name"]), "fail": str(f["fail"])} for f in failed]
+        super().__init__(message, details={"failed": items})
 
 
 class Unauthorized(AppError):

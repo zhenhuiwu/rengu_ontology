@@ -13,9 +13,8 @@ class ReleaseRepo(BaseRepository[OntologyRelease]):
     not_found_message = "版本不存在"
 
     def _ordered(self):
-        return select(OntologyRelease).order_by(
-            OntologyRelease.published_at.desc(), OntologyRelease.ver.desc()
-        )
+        # 只追加、按发布顺序写入，id 单调递增：最新 = id 最大（不依赖 published_at，时钟回拨也不乱）
+        return select(OntologyRelease).order_by(OntologyRelease.id.desc())
 
     async def by_ver(self, ver: str) -> OntologyRelease | None:
         return await self.session.scalar(select(OntologyRelease).where(OntologyRelease.ver == ver))

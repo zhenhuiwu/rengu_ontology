@@ -18,8 +18,9 @@ make check     # 提交前必跑：ruff 检查 + 格式检查 + alembic check + 
 ```
 
 - 健康检查：`GET /healthz`、`GET /readyz`（readyz 会连库）。
-- 示例接口：`GET /api/ontology/v1/releases`、`/releases/current`、`/releases/{ver}`、`/releases/{ver}/snapshot`。
-- 演示身份：请求头 `X-Demo-As: 李雷`，只在 dev/test 生效。
+- 示例接口：`GET /api/ontology/v1/releases`、`/releases/current`、`/releases/{ver}`、`/releases/{ver}/snapshot`；演示业务数据 `GET /api/biz/v1/orders`、`/orders/{id}`。
+- 升级到迁移 0002 前库里不能有版本行（published_by 改成外键），已有库请 `make db-reset`。
+- 演示身份：请求头 `X-Demo-As: U010001`（sys_user 编号；王敏=管理员，U010006 李娜=非管理员），只在 dev/test 生效。
 - 时钟：dev/test 环境固定在 `2026-10-25T15:42:00+08:00`（`RENGU_FIXED_NOW`）；prod 用真实时间。
 - 测试使用独立的 `rengu_test` 库，测试会自动建库和迁移。每个用例在事务里运行，跑完回滚。
 - 也可以用容器跑 API：`docker compose -p rengu-backend --profile api up`。

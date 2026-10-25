@@ -435,13 +435,43 @@ def test_state_machine():
 
 
 # ---- 团队决定：身份 / 租户 / 预览 / 测试连接 / 任务 / 行级注入 ----
-async def test_demo_as_and_tenant_header():
+async def test_demo_as_and_tenant_header(users):
+    """X-Demo-As / RENGU_DEV_USER 传用户编号（sys_user.code），按编号解析出姓名。"""
     from app.common.auth import get_current_user
     from app.core.config import get_settings
+    from app.core.errors import Unauthorized
 
-    u = await get_current_user(x_demo_as="李雷", x_tenant_id="t1")
-    assert (u.id, u.tenant_id) == ("李雷", "t1")
-    assert (await get_current_user()).id == get_settings().dev_user
+    u = await get_current_user(users, x_demo_as="U010231", x_tenant_id="t1")
+    assert (u.id, u.name, u.tenant_id, u.is_ontology_admin) == ("U010231", "苏刚", "t1", False)
+    me = await get_current_user(users)
+    assert (
+        (me.id, me.name, me.is_ontology_admin)
+        == (get_settings().dev_user, "王敏", True)
+        == ("U010001", "王敏", True)
+    )
+    li = await get_current_user(users, x_demo_as="U010006")
+    assert (li.name, li.is_ontology_admin) == ("李娜", False)
+    for bad in ("王敏", "U999999"):  # 传姓名 / 不存在的编号 → 401
+        with pytest.raises(Unauthorized):
+            await get_current_user(users, x_demo_as=bad)
+
+
+async def test_demo_as_header_over_http(client, users):
+    from app.common.auth import CurrentUserDep
+    from app.main import app
+
+    @app.get("/__test/me")
+    async def me(user: CurrentUserDep) -> dict:
+        return {"id": user.id, "name": user.name}
+
+    try:
+        assert (await client.get("/__test/me")).json() == {"id": "U010001", "name": "王敏"}
+        assert (await client.get("/__test/me", headers={"X-Demo-As": "U010006"})).json()["name"] == "李娜"
+        # 姓名本来也发不出去（HTTP 头只能 ASCII），不存在的编号 → 401
+        r = await client.get("/__test/me", headers={"X-Demo-As": "U999999"})
+        assert (r.status_code, r.json()["code"]) == (401, "UNAUTHORIZED")
+    finally:
+        app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", "") != "/__test/me"]
 
 
 async def test_one_preview_session_per_user():
@@ -495,15 +525,19 @@ def test_procrastinate_worker_registers_all_jobs():
     assert "admin.cleanup_audit" not in periodic
 
 
-async def test_apply_row_filter_injection(monkeypatch):
+async def test_apply_row_filter_injection(monkeypatch, users):
     from sqlalchemy.dialects import postgresql
 
     import app.common.auth as auth
     from app.common.row_filter import apply_row_filter
 
-    user = await auth.get_current_user()
+    user = await auth.get_current_user(users)  # 王敏，本体管理员
     stmt = select(Widget)
-    assert await apply_row_filter(stmt, user, "widget", {}) is stmt  # 桩：不限制
+    assert await apply_row_filter(stmt, user, "widget", {}) is stmt  # 桩：管理员不限制
+    viewer = await auth.get_current_user(users, x_demo_as="U010006")  # 李娜
+    assert await auth.row_filter(viewer, "widget") == {"deny": True}  # 桩：非管理员一律拒绝
+    out = await apply_row_filter(stmt, viewer, "widget", {})
+    assert "WHERE false" in str(out.compile(dialect=postgresql.dialect()))
 
     async def none_roles(_user, _obj):
         from app.common.row_filter import combine_or
@@ -628,3 +662,34 @@ def test_common_409_codes():
         e = cls()
         assert (e.status_code, e.code) == (409, code)
     assert (Forbidden().status_code, Forbidden().code) == (403, "NO_PERMISSION")
+
+
+def test_seed_order():
+    """加载顺序（CONVENTIONS §9「加载顺序」）。改顺序要同时改文档。"""
+    from app.seeds.loader import module_group, module_specs
+    from app.seeds.registry import SEED_MODULES, SEED_STAGES, stage_module, stage_package
+
+    assert SEED_MODULES == [
+        "admin",
+        "data",
+        "integration",
+        "biz",
+        "versioning",
+        "static",
+        "action",
+        "event",
+        "dynamic",
+        "integration_runs",
+        "qa",
+    ]
+    order = SEED_MODULES.index
+    assert order("versioning") < order("static")  # 静态外键 release_id 要先有版本行
+    assert order("integration") < order("versioning")  # ext_system 被引用
+    assert order("dynamic") < order("integration_runs") < order("qa")
+    assert set(SEED_STAGES) == {"integration_runs"}
+    assert stage_module("integration_runs") == "integration"
+    assert stage_package("integration_runs") == "app.modules.integration.seeds.runs"
+    assert stage_package("static") == "app.modules.static.seeds"
+    assert module_group("integration_runs") == module_group("integration") == "system"
+    for stage in SEED_MODULES:  # 每个阶段的 seeds 包都能导入
+        module_specs(stage)

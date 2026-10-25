@@ -42,6 +42,9 @@
 | `EMPTY_INPUT` | 409 | 必须至少一项的输入为空（`EmptyInput`） |
 | `STATE_INVALID` | 409 | 当前状态不允许该操作（`ensure_transition`） |
 | `VERSION_CONFLICT` | 409 | 乐观锁 `lockVersion` 不一致 |
+| `IDEMPOTENCY_CONFLICT` | 409 | 同一幂等键用于内容不同的请求（`IdempotencyConflict`；内容相同的重放返回原结果） |
+| `SUBMISSION_CRITERIA_FAILED` | 422 | 动作提交条件不满足，`details.failed = [{name, fail}]`（`SubmissionCriteriaFailed`）。**不设 `ACTION_BLOCKED`**，阻断一律用它 |
+| `EXPORT_FORBIDDEN` | 403 | 没有导出权限（`ExportForbidden`） |
 | `SQL_REJECTED` | 403 | 问数网关拒绝执行生成的 SQL（非单条只读 SELECT、查了未登记的表），`app/common/sql_guard.py` |
 | `READONLY` | 403 | 在 `?ver=` / `?previewAs=` 下写入；`details.mode = "history" \| "preview"`，两个参数都带时按 preview |
 | `ROLLBACK_NOT_LATEST` / `EMPTY_RELEASE` | 409 | 只能回滚最近一次发布 / 发布没有变更单 |
@@ -126,7 +129,7 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 | `MutableTableMixin` | 可变表 5 列：`created_at, updated_at, created_by, is_seed, lock_version`（接口 `lockVersion`，乐观锁） |
 | `AppendOnlyTableMixin` | 只追加表：`created_at, created_by, is_seed`（无 lock_version、无软删除） |
 | `SoftDeleteMixin` | `deleted_at/by`，**只给前端有删除/恢复的表** |
-| `OntologyVersionMixin` | `ontology_ver` |
+| `OntologyVersionMixin` | `release_id` → `ontology_release.id`（外键，不存版本号字符串；接口仍返回 `ver`，经关系取） |
 
 - **只追加表**（版本、日志、事件、命中）在迁移里调 `app.db.ddl.enable_append_only(table)`：触发器拒绝 DELETE、TRUNCATE 和修改内容的 UPDATE（内容不变的 UPDATE 放行，seed 重跑幂等）。
 - 批量写入用 `get_adapter(session).upsert(...)`：按 32767 个绑定参数自动分批，批内按冲突键去重（后出现的覆盖）。
@@ -138,6 +141,8 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
 - **唯一入口** `create_version(session, change_order_ids, *, rollback_of=None, published_by, note)`：
   - 和调用方的业务写入在**同一事务**里执行；先加全局锁 `ontology.publish`，再追加一行 `ontology_release`。
+  - `published_by` 传 **sys_user.code**（如 `U010001`，取自 `CurrentUser.id`）；存 `published_by_id` 外键 → `sys_user.id`，接口 `by` 仍返回姓名。编号不存在 → 422 `USER_NOT_FOUND`。
+  - **outbox**：同一事务里写一条 `outbox_event`（topic `release.published`，`event_id = ontology_release:<ver>:release.published`），发布和回滚都写；payload `{ver, parentVer, kind: "release"|"rollback", rollbackOf, changeOrderIds}`。发布回滚，事件一起回滚。
   - 版本号格式 `vYYYY.MM.N`，月份按北京时间算；`parent_id` 指向上一版的 id。
   - 快照 = 各 section 由负责模块组装（`SECTION_OWNERS`：静态 objectTypes/properties/links/metrics/dimensions/terms/qaPaths，动态 rules/lifecycles，Palantir actionTypes/eventTypes），段内按前端 id 作键。模块实现 `SnapshotSectionBuilder`（`build_section` + `seed_section`），在 `app/modules/versioning/sections.py` 按段登记；未登记的段沿用上一版。seed 不写空快照。
 - **回滚 = 同一个入口传 `rollback_of=<当前最新版本号>`**：
@@ -151,6 +156,13 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 - `[推断]` 规则：
   - 没有变更单时发布返回 409 `EMPTY_RELEASE`。
   - `kind` 字段（发布/回滚）。
+- **最新版本 = id 最大**（`ReleaseRepo.latest()` / 列表按 `id desc`），不按 published_at。
+
+### outbox（`app/common/outbox.py`，表 `outbox_event`）
+
+- 只有基础层定义表和 API：`emit(session, topic, payload, *, event_id, available_at=None)` 在调用方事务里加一行；`event_id` 全局唯一，用来做下游幂等。
+- 模块**只订阅**：`subscribe(topic, handler)`；分发任务 `outbox.dispatch`（PDE）扫 `dispatched_at IS NULL`（部分索引 `ix_outbox_event_pending`），成功写 `dispatched_at`，失败 `attempts+1`、记 `last_error`。
+- 已定主题：`release.published`（versioning，见上）。新增主题先在 `outbox.py` 文档里登记 payload。
 
 ## 8. 动作提交和幂等键
 
@@ -199,6 +211,29 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
    - seed 行之间可以重复，业务新写入的行仍然受唯一约束（见 `tests/test_conventions.py::test_seed_marks_and_partial_unique`）。
    - 只有在 mock 真的有重复时才这样做，不要预防性地放宽。
 
+6. **改 seed 快照要重建库**：只追加表（`ontology_release` 等）的触发器拒绝修改内容的 UPDATE，所以改了导出 JSON 或 `seed_section` 导致快照变化时，`make seed` 会报错而不是覆盖；要 `make db-reset`（或删库后 `alembic upgrade head` + `make seed`）重建。
+
+### 加载顺序（`app/seeds/registry.py` 的 `SEED_MODULES`）
+
+列表里是**阶段名**，按顺序在同一事务里加载；被外键依赖的排在前面。
+
+| # | 阶段 | 负责模块 | 写哪些表 / 为什么在这里 |
+|---|---|---|---|
+| 1 | `admin` | admin（PDE） | sys_user 等；其它模块的人名（发布人、处理人）外键指向 sys_user。目前的 `sys_user` 是基础层放的**最小占位**（code/name/account/dept/status/last_login_at），PDE 补全；seed 里只有人名时用 `admin.seeds.code_by_name` 换成编号 |
+| 2 | `data` | data | 数据源 |
+| 3 | `integration` | integration（Palantir） | **只写 ext_system**（动作、数据源引用外部系统） |
+| 4 | `biz` | biz | store / product / biz_order / order_line（不建 member、store_sales）。订单号在 mock 里有重复（2 组），`biz_order.code` 只对非 seed 行唯一，seed 键 = (code, created_at_biz)；详情按 id 取第一行 |
+| 5 | `versioning` | versioning | ontology_release（只读导出 JSON 组装快照，不读表）；静态的 release_id 外键要先有版本行 |
+| 6 | `static` | static | 本体定义、变更单 |
+| 7 | `action` | action | 动作类型、执行记录 |
+| 8 | `event` | event | 事件类型 |
+| 9 | `dynamic` | dynamic | 规则、告警、生命周期 |
+| 10 | `integration_runs` | integration（Palantir） | writeback_call、reconcile_task：外键指向 dynamic / action 的执行记录，所以排在 dynamic 之后 |
+| 11 | `qa` | qa | 问数会话 |
+
+- 阶段名就是模块名时，读 `app.modules.<模块>.seeds`；不是模块名的阶段（目前只有 `integration_runs`）在 `SEED_STAGES` 登记「负责模块 + seeds 包」（`app.modules.integration.seeds.runs`），默认 export 组跟负责模块一致。
+- `uv run python -m app.cli seed -m integration_runs` 可以单跑一个阶段。顺序由 `tests/test_conventions.py::test_seed_order` 固定，改顺序要同时改这张表和测试。
+
 ### 模块负责人迁移 mock 的步骤
 
 1. 让 PDE 在 export-mock 配置里加上你的文件，执行 `npm run export-mock`，输出到 `seeds/json/<组>/`。
@@ -238,17 +273,22 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
   - 白名单 columns 由模块声明：字段名对应对象属性的 api 名。
   - `row_filter()` 目前是扩展点，由 PDE 实现：读取角色范围、处理 defaultDeny。
 - **问数 NL2SQL 网关（api-index §1.4 硬规则，已定）**：模型生成的 SQL 不能走上面的 SQLAlchemy 注入，改用 `app/common/sql_guard.py`：
-  - `assert_single_select(sql)`：sqlglot 解析，只放行单条只读 SELECT（拒多语句、DDL/DML、CTE 里的写、`SELECT INTO`、`FOR UPDATE`、`pg_sleep`/`dblink`/`lo_*` 等），不合规返回 403 `SQL_REJECTED`。
-  - `inject_row_filters(sql, {表: 谓词 SQL | None}, allowed)`：受控表替换成 `(SELECT * FROM t WHERE 谓词) AS t`；`"FALSE"` = DENY_ALL；未登记的表一律拒绝。谓词由 `row_filter` + `to_sql` 编译得到。
-  - 执行只用只读库账号 `RENGU_QA_READONLY_DATABASE_URL`（库层 `default_transaction_read_only=on`、只授权业务表），没配置就拒绝执行，不回退到主库账号。
-  - 身份只取 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；dev/test 的 `X-Demo-As` 是会话桩，prod 忽略。
+  - `assert_single_select(sql)`：sqlglot 解析，只放行单条只读 SELECT（拒多语句、DDL/DML、CTE 里的写、`SELECT INTO`、`FOR UPDATE`、用户 SQL 里的绑定占位符），不合规返回 403 `SQL_REJECTED`。
+    - **函数白名单**（聚合、窗口、日期、字符串、数学、条件、类型转换），其它一律拒绝（`query_to_xml`、`pg_stat_file`、`current_setting`、`set_config`、`pg_advisory_lock`、`pg_sleep`、`dblink`、`lo_*` 等）。
+    - **只允许 public schema**（`pg_catalog.*`、`information_schema.*`、跨库三段名都拒绝）。
+  - `inject_row_filters(sql, {表: (谓词 sql, params) | None}, allowed) -> (sql, params)`：受控表替换成 `(SELECT * FROM public.t WHERE 谓词) AS t`。
+    - 按 sqlglot **作用域**判断：只跳过确实解析到 CTE 的引用；`with store as (select * from store) …` 里内层 store 照样过滤。谓词里的表固定成 `public.<表>`，用户同名 CTE 劫持不了。
+    - 谓词值走 **`$1..$n` 绑定参数**，多表合并后重新编号，执行用 `conn.exec_driver_sql(sql, tuple(params))`；`DENY = ("FALSE", [])`；未登记的表一律拒绝。
+    - 受控表由模块 `register_governed(GovernedTable(...))` 登记（biz：store 的「大区」→ `big_region`；biz_order 经一跳 `order_belongs_to_store.big_region` 编成 EXISTS）。`row_filters_for(user)` = `auth.row_filter` + `compile_predicate`；`run_guarded(conn, sql, user)` = 校验 + 注入 + 执行。
+  - 执行只用只读引擎 `get_qa_readonly_engine()`（`RENGU_QA_READONLY_DATABASE_URL`，连接参数设 `default_transaction_read_only=on`、`statement_timeout=RENGU_QA_STATEMENT_TIMEOUT_MS`，库账号也应只授权业务表）；没配置抛 `QaReadonlyNotConfigured`，不回退到主库账号。
+  - 身份只取 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；dev/test 的 `X-Demo-As`（值 = sys_user.code）是会话桩，prod 忽略。
 
 ## 11. 团队决定（PDE，一期）
 
 | 主题 | 约定 | 落点 |
 |---|---|---|
 | 租户 | 一期单租户：接受 `X-Tenant-Id`，放进 `CurrentUser.tenant_id`，只透传，不过滤；**表里不加 tenant_id 列** | `app/common/auth.py` |
-| 开发身份 | 演示身份请求头 `X-Demo-As`（默认 `RENGU_DEV_USER`），**只在 dev/test 环境生效**；prod 忽略该头 | `app/common/auth.py` |
+| 开发身份 | 演示身份请求头 `X-Demo-As: <sys_user.code>`（默认 `RENGU_DEV_USER=U010001` 王敏，本体管理员；`U010006` 李娜为非管理员），按 `sys_user.code` 解析 CurrentUser，编号不存在或停用 → 401；请求头只能是 ASCII，所以传编号不传姓名。管理员名单 `RENGU_DEMO_ADMIN_CODES`（桩）。**只在 dev/test 环境生效**；prod 忽略该头 | `app/common/auth.py` |
 | 预览 | **每个用户同一时间只有一个预览会话**：开始新的预览会替换旧的，不报错；`?previewAs=` 下只读 | `app/contracts/preview.py`（Protocol + dev 内存实现） |
 | 测试连接 | 数据连接和外部系统的“测试连接”接口在 dev/test 环境用 mock 适配器（`mockFail: true` 模拟失败）；prod 由负责人接入真实实现 | `app/modules/data/adapters.py` |
 | 外部调用 | 表名沿用 `writeback_call`、`ext_system`，归 integration 模块（Palantir专家）；不建 `ext_call` | `app/modules/integration/` |
@@ -278,7 +318,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
   1. 复制一个占位模块，例如 `app/modules/static/`。它有 `router / schemas / models / service / repo / seeds` 这几个文件。
   2. 在 `app/api.py` 的 `MOUNTS` 里挂到对应分组。
   3. 在 `app/db/models.py` 里 import 模型，alembic 才能发现。
-  4. 在 `app/seeds/registry.py` 里注册 seed 顺序：被外键依赖的模块排在前面。
+  4. 在 `app/seeds/registry.py` 里注册 seed 顺序：被外键依赖的模块排在前面（见 §9「加载顺序」；一个模块要分两段加载时，用 `SEED_STAGES` 登记第二段）。
 - **迁移**：
   - 每个 PR 最多一个迁移，文件名格式 `YYYYMMDD_NNNN_<模块>_<说明>.py`。
   - 必须能 downgrade。

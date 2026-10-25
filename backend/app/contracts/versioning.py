@@ -63,7 +63,7 @@ class ReleaseInfo:
     ver: str
     parent_ver: str | None
     published_at: datetime
-    published_by: str
+    published_by: str  # 发布人姓名（接口 by）
     note: str
     change_order_ids: tuple[str, ...]
     snapshot_sha256: str
@@ -120,6 +120,10 @@ class VersionService(Protocol):
         rollback_of=None：调用各 section builder 组装；
         rollback_of=<当前最新版本号>：不调 builder，快照原样复制它的上一版，记录回滚变更单和 rollback_of；
         不是最新版 → 409 ROLLBACK_NOT_LATEST。
+        published_by = 用户编号（CurrentUser.id = sys_user.code，如 U010001），库里存 sys_user.id 外键。
+        同一事务写 outbox 事件 `release.published`（发布和回滚都写），payload
+        `{ver, parentVer, kind: "release"|"rollback", rollbackOf, changeOrderIds}`；其它模块只订阅
+        （app.common.outbox.subscribe），不要在发布流程里直接调别的模块。
         """
         ...
 

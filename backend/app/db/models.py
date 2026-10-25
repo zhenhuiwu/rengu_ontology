@@ -1,6 +1,9 @@
 """汇总所有 ORM 模型，供 Alembic autogenerate 和测试建表使用。新模块的 models 在这里 import。"""
 
+from app.common import outbox as _outbox  # noqa: F401
 from app.db.base import Base
+from app.modules.admin import models as _admin  # noqa: F401
+from app.modules.biz import models as _biz  # noqa: F401
 from app.modules.versioning import models as _versioning  # noqa: F401
 
 __all__ = ["Base"]

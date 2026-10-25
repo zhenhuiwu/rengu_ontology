@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # 问数 NL2SQL 执行用的只读库账号（api-index §1.4 硬规则；库层 default_transaction_read_only=on、
     # 只授权业务表）。不配置时网关拒绝执行，不回退到 database_url。
     qa_readonly_database_url: str | None = None
+    # 只读引擎每个连接的 statement_timeout（毫秒），连接时设置（RENGU_QA_STATEMENT_TIMEOUT_MS）
+    qa_statement_timeout_ms: int = 15000
 
     # 全站“数据截至”（前端 DATA_CUTOFF）。以后由数据同步任务写入，这里只是兜底值。
     data_cutoff: str = "2026-10-24 23:00"
@@ -35,7 +37,10 @@ class Settings(BaseSettings):
 
     # 开发期身份桩：PDE 的鉴权实现上线前，没有身份时按这个用户处理（仅 dev/test 生效）
     # dev/test 默认身份（请求头 X-Demo-As 可覆盖；prod 不生效）
-    dev_user: str = Field(default="王敏")
+    # 值是用户编号 sys_user.code（前端 userId），不是姓名。U010001 = 王敏（演示身份 admin）
+    dev_user: str = Field(default="U010001")
+    # 桩鉴权里视为本体管理员的用户编号（mock ONTOLOGY_ADMINS = 王敏）。PDE 接入真实权限后删除
+    demo_admin_codes: list[str] = Field(default_factory=lambda: ["U010001"])
 
     # seed 数据目录：PDE 的 `npm run export-mock` 输出到 backend/seeds/json/<module>/
     seeds_json_dir: Path = Path(__file__).resolve().parents[2] / "seeds" / "json"

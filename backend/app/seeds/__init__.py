@@ -74,7 +74,8 @@ class Ref:
     """外键引用：transform 输出业务编号，loader 换成目标表的代理键 id。"""
 
     model: type[DeclarativeBase]
-    key: str = "code"  # 目标表的业务键列（code / ver / api_name …）
+    # 目标表的业务键列（code / ver / api_name …）；复合业务键写元组，transform 输出同样长度的元组
+    key: str | tuple[str, ...] = "code"
     nullable: bool = True  # 编号为 None 时外键写 None
 
 
@@ -83,7 +84,8 @@ class SeedSpec:
     model: type[DeclarativeBase]
     file: str  # 相对 seeds/json/<组>/，如 "RELEASES.json"、"derived/runsOf.json"
     key: tuple[str, ...]  # upsert 冲突键（业务键列名，如 ("code",)、("ver",)；不是代理主键 id）
-    transform: Callable[[Row, "SeedContext"], Row | None] = lambda r, _: r  # 返回 None 跳过该行
+    # 返回 None 跳过该行；返回 list 一行展开成多行（如订单 → 订单行）
+    transform: Callable[[Row, "SeedContext"], Row | list[Row] | None] = lambda r, _: r
     path: str | None = None  # JSON 顶层是对象时，取哪个键下的数组
     source: Literal["json", "extra"] = "json"  # seeds/json/<module>/ 或 seeds/extra/<module>/
     description: str = ""

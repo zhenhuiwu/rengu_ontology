@@ -6,6 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.enums import LabelEnum
 from app.db.base import AppendOnlyTableMixin, Base, IdMixin
 from app.db.types import JsonType, StrArray, enum_column
+from app.modules.admin.models import SysUser
 
 
 class ReleaseKind(LabelEnum):
@@ -56,7 +57,9 @@ class OntologyRelease(IdMixin, AppendOnlyTableMixin, Base):
     change_order_ids: Mapped[list[str]] = mapped_column(StrArray(), nullable=False, default=list)
     change_summary: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
     note: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="发布说明（页面显示）")
-    published_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    published_by_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sys_user.id"), nullable=False, comment="发布人（sys_user.id）"
+    )
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
     # 外键指向代理键 id；接口仍返回版本号（parentVer / rollbackOf），由下面两个关系取 ver。
@@ -66,6 +69,13 @@ class OntologyRelease(IdMixin, AppendOnlyTableMixin, Base):
     rollback_target: Mapped["OntologyRelease | None"] = relationship(
         foreign_keys=[rollback_of_id], remote_side="OntologyRelease.id", lazy="joined", join_depth=1
     )
+
+    publisher: Mapped[SysUser] = relationship(foreign_keys=[published_by_id], lazy="joined")
+
+    @property
+    def published_by(self) -> str:
+        """接口 by = 发布人姓名（前端显示）。"""
+        return self.publisher.name
 
     @property
     def parent_ver(self) -> str | None:

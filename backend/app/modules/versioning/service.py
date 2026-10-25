@@ -5,13 +5,16 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.outbox import RELEASE_PUBLISHED, emit
 from app.contracts.versioning import ReleaseInfo, Snapshot, SnapshotProvider
 from app.core import clock
 from app.core.config import get_settings
 from app.core.errors import AppError, EmptyRelease
 from app.db.dialects import get_adapter
+from app.modules.admin.models import SysUser
 from app.modules.versioning.models import OntologyRelease, ReleaseKind
 from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.sections import restore_sections
@@ -122,7 +125,12 @@ class VersioningService:
     ) -> str:
         now = now or clock.now()
         ver = next_ver(base_ver, now)
-        await ReleaseRepo(session).add(
+        publisher = await session.scalar(select(SysUser).where(SysUser.code == published_by))
+        if publisher is None:
+            raise AppError(
+                "发布人不存在", code="USER_NOT_FOUND", status_code=422, details={"userId": published_by}
+            )
+        release = await ReleaseRepo(session).add(
             OntologyRelease(
                 ver=ver,
                 parent=latest,  # parent_id = 上一版的 id
@@ -133,9 +141,22 @@ class VersioningService:
                 change_order_ids=change_order_ids,
                 change_summary=summary,
                 note=note,
-                published_by=published_by,
+                publisher=publisher,
                 published_at=now,
             )
+        )
+        # 同一事务写 outbox：其它模块只订阅 release.published（PDE 定）
+        await emit(
+            session,
+            RELEASE_PUBLISHED,
+            {
+                "ver": ver,
+                "parentVer": base_ver,
+                "kind": "rollback" if rollback else "release",
+                "rollbackOf": base_ver if rollback else None,
+                "changeOrderIds": list(change_order_ids),
+            },
+            event_id=f"ontology_release:{release.ver}:{RELEASE_PUBLISHED}",
         )
         return ver
 

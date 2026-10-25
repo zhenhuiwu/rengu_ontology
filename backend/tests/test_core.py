@@ -19,7 +19,7 @@ async def test_readyz_checks_db(client):
     assert r.json() == {"status": "ok", "db": "ok"}
 
 
-async def test_request_id_is_echoed_into_error_body(client):
+async def test_request_id_is_echoed_into_error_body(client, users):
     r = await client.get("/api/ontology/v1/releases/v1999.01.1", headers={"X-Request-ID": "rid-123"})
     assert r.status_code == 404
     assert r.headers["x-request-id"] == "rid-123"
