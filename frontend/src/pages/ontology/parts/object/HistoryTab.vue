@@ -9,7 +9,7 @@ import { computed, ref, watch } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
 import { CURRENT_VERSION, NEXT_VERSION } from '@/mock/changes';
-import { RELEASES } from '@/mock/releases';
+import { RELEASES } from '@/api/releases';
 import { legacyRevs } from '@/mock/objectHistory';
 import { useVersion } from '@/composables/useVersion';
 import { crsOf, objLabel } from './objectGov';

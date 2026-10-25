@@ -16,7 +16,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import { useAppStore } from '@/stores/app';
-import { releaseByVer } from '@/mock/releases';
+import { releaseByVer } from '@/api/releases';
 import { BRAND, GRAY, STATUS } from '@/theme';
 import { useDraftView } from '../useDraftView';
 import { useConfirmStore } from '@/stores/confirm';

@@ -24,7 +24,7 @@ import { draftOf, useDraftView } from './parts/useDraftView';
 import { useAppStore } from '@/stores/app';
 import { CHANGE_REQUESTS, CURRENT_USER, CURRENT_VERSION, NEXT_VERSION } from '@/mock/changes';
 import { QUALITY_CHECKS, DATA_CUTOFF } from '@/mock/quality';
-import { RELEASES } from '@/mock/releases';
+import { RELEASES } from '@/api/releases';
 
 const router = useRouter();
 const { readonly, reason } = useReadonly();

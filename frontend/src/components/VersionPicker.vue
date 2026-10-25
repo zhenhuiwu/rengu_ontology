@@ -3,7 +3,7 @@
 import { ref } from 'vue';
 import { useAppStore } from '@/stores/app';
 import { useVersion } from '@/composables/useVersion';
-import { RELEASES } from '@/mock';
+import { RELEASES } from '@/api/releases';
 
 const app = useAppStore();
 const { view } = useVersion();

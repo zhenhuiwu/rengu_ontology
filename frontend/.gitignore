@@ -2,3 +2,5 @@ node_modules
 dist
 shots/_check
 vite.config.ts.timestamp-*.mjs
+.env.local
+.env.*.local

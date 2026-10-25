@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import type { NavArea } from '@/nav';
-import { NOTICES, releaseByVer } from '@/mock';
+import { NOTICES } from '@/mock';
+import { releaseByVer } from '@/api/releases';
 
 export const TENANTS = [
   { value: 'hd', label: '鲜邻零售集团 / 华东事业部' },
