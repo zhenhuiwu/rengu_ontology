@@ -6,6 +6,8 @@
 
 from typing import Any
 
+from pydantic import Field
+
 from app.common.pagination import Page
 from app.core.schema import ApiModel
 
@@ -293,3 +295,19 @@ class SynonymOut(ApiModel):
     word: str
     target: str
     cr: str | None = None
+
+
+class AskIn(ApiModel):
+    """W6 请求体：{question, refs?, clientId?}。"""
+
+    question: str = Field(min_length=1, max_length=500)
+    refs: list[dict[str, Any]] = Field(default_factory=list)
+    client_id: str | None = None
+
+
+class AskOut(ApiModel):
+    """W6 响应（202）。[推断] 本期同步跑完链路，直接带回轮次 turn；streamUrl 留给 W7 SSE（未实现）。"""
+
+    turn_id: str
+    stream_url: str
+    turn: dict[str, Any]
