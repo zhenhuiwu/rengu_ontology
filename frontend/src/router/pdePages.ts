@@ -5,4 +5,5 @@
  */
 export const PDE_PAGES: Record<string, () => Promise<unknown>> = {
   connections: () => import('@/pages/data/Connections.vue'),
+  'external-systems': () => import('@/pages/data/ExternalSystems.vue'),
 };
