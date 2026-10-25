@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 用户与组织（示例：full 分页，120 个 mock 用户）。一屏 21 行，页码/条数在 URL ?page=&size=。
+ * 用户与组织（示例：full 分页，120 个 mock 用户）。一屏 17 行，页码/条数在 URL ?page=&size=。
  * 停用：确认卡说明会话保留为只读、待办审批需转交，并选择转交人（ConfirmActionModal 的 picker）。
  */
 import { computed, reactive, ref, watch } from 'vue';
@@ -18,7 +18,7 @@ import { confirmDiscard, useUnsavedGuard } from '@/composables/useUnsavedGuard';
 const dept = ref('全部');
 const status = ref('全部');
 const kw = ref('');
-const pq = usePagedQuery({ defaultSize: 21, filters: [dept, status, kw] });
+const pq = usePagedQuery({ defaultSize: 17, filters: [dept, status, kw] });
 const users = ref<(AdminUser & { pending: number })[]>(ADMIN_USERS.map((u) => ({ ...u, pending: pendingApprovals(u) })));
 const rows = computed(() => users.value.filter((u) =>
   (dept.value === '全部' || u.dept === dept.value) &&

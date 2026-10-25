@@ -182,7 +182,7 @@ async function closeCreate() {
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'name'" class="ak-name"><a class="num" @click="setQuery({ key: record.id })">{{ record.name }}</a><a-tag v-if="record.env === '测试'" class="ak-env">测试</a-tag></span>
           <span v-else-if="column.key === 'key'" class="num c-2">{{ mask(record) }}</span>
-          <span v-else-if="column.key === 'scopes'" class="ak-scopes"><a-tag v-for="s in record.scopes" :key="s">{{ s }}</a-tag></span>
+          <a-tooltip v-else-if="column.key === 'scopes'" :title="record.scopes.join('、')"><span class="ak-scopes"><a-tag v-for="s in record.scopes" :key="s">{{ s }}</a-tag></span></a-tooltip>
           <span v-else-if="column.key === 'binding'" class="c-2">{{ record.binding.kind === '角色' ? record.binding.role : record.binding.account }}</span>
           <span v-else-if="column.key === 'createdAt'" class="num c-2">{{ record.createdAt }}</span>
           <span v-else-if="column.key === 'lastUsed'" class="num" :class="record.lastUsed ? 'c-2' : 'c-3'">{{ record.lastUsed ?? '从未使用' }}</span>

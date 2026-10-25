@@ -99,20 +99,34 @@ function runTest() {
 }
 
 // 编辑抽屉
-interface Form { title: string; desc: string; timeoutS: number; code: string }
-const form = reactive<Form>({ title: '', desc: '', timeoutS: 5, code: '' });
+interface Form { name: string; title: string; desc: string; timeoutS: number; code: string }
+const form = reactive<Form>({ name: '', title: '', desc: '', timeoutS: 5, code: '' });
 const formInit = ref('');
-const formOpen = computed(() => q('form') === 'edit');
+const confirmStore = useConfirmStore();
+const isNew = computed(() => q('form') === 'new');
+const formOpen = computed(() => q('form') === 'edit' || isNew.value);
 const formDirty = computed(() => formOpen.value && JSON.stringify(form) !== formInit.value);
 const guard = useUnsavedGuard(formDirty);
-watch([formOpen, () => fn.value.id], () => {
+watch([formOpen, isNew, () => fn.value.id], () => {
   if (!formOpen.value) return;
-  Object.assign(form, { title: fn.value.title, desc: fn.value.desc, timeoutS: fn.value.timeoutS, code: fn.value.code });
+  if (isNew.value) Object.assign(form, { name: '', title: '', desc: '', timeoutS: 5, code: '' });
+  else Object.assign(form, { name: fn.value.name, title: fn.value.title, desc: fn.value.desc, timeoutS: fn.value.timeoutS, code: fn.value.code });
   formInit.value = JSON.stringify(form);
 }, { immediate: true });
 const closeForm = async () => { if (formDirty.value && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
-function save() {
+async function save() {
   if (!form.title.trim()) { message.warning('请填写中文名'); return; }
+  if (isNew.value) {
+    if (!form.name.trim()) { message.warning('请填写函数名'); return; }
+    const ok = await confirmStore.ask({ title: '新建函数', target: `${form.name.trim()}（${form.title.trim()}）`, okText: '新建', impact: '新函数为草稿 v1，测试通过并发布后才能被动作和规则引用。' });
+    if (!ok) return;
+    formInit.value = JSON.stringify(form);
+    setQuery({ form: undefined });
+    message.success(`已新建函数：${form.name.trim()}`);
+    return;
+  }
+  const ok = await confirmStore.ask({ title: '保存函数', target: `${fn.value.name}`, okText: '保存', impact: `保存后生成新版本 ${bump(fn.value.version)}。` });
+  if (!ok) return;
   addVersion('在线编辑', { title: form.title, desc: form.desc, timeoutS: form.timeoutS, code: form.code });
   formInit.value = JSON.stringify(form);
   setQuery({ form: undefined });
@@ -123,7 +137,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button :type="formOpen ? 'default' : 'primary'" :disabled="readonly">新建函数</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button :type="formOpen ? 'default' : 'primary'" :disabled="readonly" @click="guard(() => setQuery({ form: 'new' }))">新建函数</a-button></a-tooltip>
   </Teleport>
   <div class="fn">
     <div class="panel fn-list">
@@ -238,15 +252,15 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
     </div>
   </div>
 
-  <a-drawer :open="formOpen" :width="640" :title="`编辑函数 · ${fn.name}`" @close="closeForm">
+  <a-drawer :open="formOpen" :width="640" :title="isNew ? '新建函数' : `编辑函数 · ${fn.name}`" @close="closeForm">
     <a-form layout="vertical" :model="form">
-      <a-form-item label="函数名"><a-input :value="fn.name" disabled /></a-form-item>
+      <a-form-item label="函数名"><a-input v-if="isNew" v-model:value="form.name" placeholder="英文小写加下划线，如 calc_score" /><a-input v-else :value="fn.name" disabled /></a-form-item>
       <a-form-item label="中文名" required><a-input v-model:value="form.title" /></a-form-item>
       <a-form-item label="说明"><a-textarea v-model:value="form.desc" :rows="2" /></a-form-item>
       <a-form-item label="超时（秒）"><a-input-number v-model:value="form.timeoutS" :min="1" :max="60" /></a-form-item>
       <a-form-item label="代码"><a-textarea v-model:value="form.code" :rows="10" class="num" /></a-form-item>
     </a-form>
-    <div class="t-12 c-3">保存后生成新版本 <span class="num">{{ bump(fn.version) }}</span>；入参 / 出参类型变化会在发布校验里检查使用它的动作和规则。</div>
+    <div v-if="isNew" class="t-12 c-3">新建后为草稿 v1，测试通过并发布后才能被引用。</div><div v-else class="t-12 c-3">保存后生成新版本 <span class="num">{{ bump(fn.version) }}</span>；入参 / 出参类型变化会在发布校验里检查使用它的动作和规则。</div>
     <template #footer>
       <div class="fn-foot">
         <a-button @click="closeForm">取消</a-button>

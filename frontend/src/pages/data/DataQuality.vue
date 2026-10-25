@@ -5,7 +5,9 @@
  * 失败的检查点对象类型名，打开对象类型抽屉（?drawer=object-type:inventory），不跳转页面。
  * URL：?type=inventory&kind=新鲜度&result=失败&check=QC-045
  */
-import { computed, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
+import { useConfirmStore } from '@/stores/confirm';
+import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -61,16 +63,49 @@ const tl = (r: string) => (r === '失败' ? 'tl-failed' : 'tl-normal');
 const openType = (key: string) => drawer.open('object-type', key);
 const rowProps = (c: QCheck) => ({ class: c.id === selected.value.id ? 'dq-row-on' : '', onClick: () => setQuery({ check: c.id }) });
 const runNow = () => message.success(`已提交运行：${selected.value.id} ${selected.value.typeName} · ${selected.value.kind}`);
+
+// 新建检查
+const dqConfirm = useConfirmStore();
+const ncOpen = ref(false);
+const ncBlank = () => ({ name: '', obj: Q_OBJECT_TYPES[0]?.key ?? '', kind: '新鲜度', threshold: '', schedule: '每天 23:30' });
+const nc = reactive(ncBlank());
+const ncBase = ref('');
+const ncDirty = computed(() => ncOpen.value && JSON.stringify(nc) !== ncBase.value);
+useUnsavedGuard(ncDirty);
+function openNew() { Object.assign(nc, ncBlank()); ncBase.value = JSON.stringify(nc); ncOpen.value = true; }
+async function closeNew() { if (ncDirty.value && !(await confirmDiscard())) return; ncOpen.value = false; }
+const ncOk = computed(() => !!nc.name.trim() && !!nc.obj && !!nc.threshold.trim());
+async function saveNew() {
+  const ok = await dqConfirm.ask({ title: '新建检查', target: nc.name.trim(), okText: '新建', fields: [{ label: '对象', value: Q_OBJECT_TYPES.find((t) => t.key === nc.obj)?.name ?? nc.obj }, { label: '规则类型', value: nc.kind }, { label: '阈值', value: nc.threshold }, { label: '调度', value: nc.schedule }], impact: '新建后按调度自动运行，首次运行结果在下一个调度周期出现。' });
+  if (!ok) return;
+  ncBase.value = JSON.stringify(nc); ncOpen.value = false;
+  message.success(`已新建检查：${nc.name.trim()}`);
+}
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
     <a-space>
       <span class="t-12 c-3">数据截至 <span class="num">{{ DATA_CUTOFF }}</span></span>
-      <a-tooltip :title="reason"><a-button :disabled="readonly">新建检查</a-button></a-tooltip>
+      <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openNew">新建检查</a-button></a-tooltip>
       <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="message.success('已提交全部检查，预计 3 分钟完成')">全部运行</a-button></a-tooltip>
     </a-space>
   </Teleport>
+  <a-drawer :open="ncOpen && !readonly" :width="480" title="新建检查" @close="closeNew">
+    <a-form layout="vertical" :model="nc">
+      <a-form-item label="名称" required><a-input v-model:value="nc.name" placeholder="如：订单 · 新鲜度" /></a-form-item>
+      <a-form-item label="对象" required><a-select v-model:value="nc.obj" :options="Q_OBJECT_TYPES.map((t) => ({ value: t.key, label: t.name }))" /></a-form-item>
+      <a-form-item label="规则类型"><a-radio-group v-model:value="nc.kind" :options="['新鲜度', '空值率', '唯一性', '引用完整性'].map((v) => ({ value: v, label: v }))" /></a-form-item>
+      <a-form-item label="阈值" required extra="如：延迟 ≤ 2 小时、空值率 ≤ 1%"><a-input v-model:value="nc.threshold" /></a-form-item>
+      <a-form-item label="调度"><a-select v-model:value="nc.schedule" :options="['每 2 小时', '每天 23:30', '每周一 06:00'].map((v) => ({ value: v, label: v }))" /></a-form-item>
+    </a-form>
+    <template #footer>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <a-button @click="closeNew">取消</a-button>
+        <a-button type="primary" :disabled="!ncOk" @click="saveNew">新建</a-button>
+      </div>
+    </template>
+  </a-drawer>
   <div class="dq">
     <div class="dq-sum">
       <div class="panel dq-kpi"><div class="t-14 c-2">检查项<InfoTip :text="`覆盖 ${Q_OBJECT_TYPES.length} 个对象类型`" /></div><div class="t-24 fw-600 num c-1">{{ QUALITY_CHECKS.length }}</div></div>

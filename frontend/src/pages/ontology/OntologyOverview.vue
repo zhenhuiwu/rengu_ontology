@@ -53,7 +53,7 @@ const cards = computed<Card[]>(() => [
   ] },
   { key: 'link', title: '关系类型', unit: '条', path: '/build/ontology/link-types', count: LINKS.filter((l) => l.status === '已发布').length, health: [
     { n: LINKS.filter((l) => l.status === '草稿').length, text: '条草稿', tone: 'normal' },
-    { n: LINKS.filter((l) => (l.quality?.orphans ?? 0) > 0).length, text: '条有孤儿记录', tone: 'failed' },
+    { n: LINKS.filter((l) => (l.quality?.orphans ?? 0) > 0).length, text: '条有孤儿记录', tone: 'normal' },
   ] },
   { key: 'action', title: '动作类型', unit: '个', path: '/build/ontology/action-types', count: ACTION_TYPES.length, health: [
     { n: ACTION_TYPES.filter((a) => a.status !== '已发布').length, text: '个变更中 / 草稿', tone: 'normal' },

@@ -220,12 +220,42 @@ async function deleteRole() {
   setQuery({ role: undefined, tab: undefined });
   message.success(`已删除角色：${name}`);
 }
+
+// 新建角色
+const nrOpen = ref(false);
+const nrBlank = () => ({ name: '', desc: '', perms: [] as string[] });
+const nr = reactive(nrBlank());
+const nrBase = ref('');
+const nrDirty = computed(() => nrOpen.value && JSON.stringify(nr) !== nrBase.value);
+useUnsavedGuard(nrDirty);
+const NR_PERMS = ['查看对象', '导出数据', '执行动作', '发起变更', '审批变更', '管理用户'];
+function openNewRole() { Object.assign(nr, nrBlank()); nrBase.value = JSON.stringify(nr); nrOpen.value = true; }
+async function closeNewRole() { if (nrDirty.value && !(await confirmDiscard())) return; nrOpen.value = false; }
+async function saveNewRole() {
+  const ok = await useConfirmStore().ask({ title: '新建角色', target: nr.name.trim(), okText: '新建', fields: [{ label: '权限', value: nr.perms.join('、') || '无' }], impact: '新角色暂无成员；在「成员」页签添加用户后生效。' });
+  if (!ok) return;
+  nrBase.value = JSON.stringify(nr); nrOpen.value = false;
+  message.success(`已新建角色：${nr.name.trim()}`);
+}
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly">新建角色</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="openNewRole">新建角色</a-button></a-tooltip>
   </Teleport>
+  <a-drawer :open="nrOpen && !readonly" :width="480" title="新建角色" @close="closeNewRole">
+    <a-form layout="vertical" :model="nr">
+      <a-form-item label="名称" required><a-input v-model:value="nr.name" :maxlength="20" /></a-form-item>
+      <a-form-item label="说明"><a-textarea v-model:value="nr.desc" :rows="3" /></a-form-item>
+      <a-form-item label="权限"><a-checkbox-group v-model:value="nr.perms" :options="NR_PERMS" /></a-form-item>
+    </a-form>
+    <template #footer>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <a-button @click="closeNewRole">取消</a-button>
+        <a-button type="primary" :disabled="!nr.name.trim()" @click="saveNewRole">新建</a-button>
+      </div>
+    </template>
+  </a-drawer>
   <div class="rl">
     <div class="panel rl-list">
       <div class="panel-head"><span class="t-16 fw-600">角色</span><span class="t-14 c-2">共 {{ roles.length }} 个</span></div>

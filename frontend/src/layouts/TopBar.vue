@@ -71,7 +71,7 @@ function onSelect(v: string) {
       <a-divider type="vertical" />
       <a-popover v-model:open="noticeOpen" trigger="click" placement="bottomRight">
         <template #content><NoticeList @picked="noticeOpen = false" /></template>
-        <a-badge :count="app.unread" size="small">
+        <a-badge :count="app.unread" size="small" :number-style="{ backgroundColor: 'var(--g8)', color: '#fff', boxShadow: 'none' }">
           <a-button type="text" size="small" class="tb-icon" aria-label="通知"><BellOutlined /></a-button>
         </a-badge>
       </a-popover>

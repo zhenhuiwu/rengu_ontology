@@ -61,7 +61,7 @@ function samplesOf(a: ActionType): ExtSample[] {
 }
 const actionCount = (sys: ExtSystem) => ACTION_TYPES.filter((a) => a.sysId === sys.id).length;
 // 状态点：正常 / 停用 灰，降级 红（有失败调用）；橙色只留给 待确认 / 结果未知，不用绿、蓝
-const statusBadge = (s: ExtSystem['status']) => (s === '降级' ? 'error' : 'default');
+const statusBadge = (s: ExtSystem['status']) => ('default' as const);
 const resultText = (r: CallResult) => (r === '结果未知' ? '结果未知 · 待对账' : r);
 
 // 调用记录：本页内可改（重试 / 核对后结果会变）
@@ -225,7 +225,7 @@ async function saveEdit() {
           <div class="ex-l1" :title="`${s.name} · ${s.vendor} · ${s.env} · ${actionCount(s) ? actionCount(s) + ' 个动作' : '无动作写回'} · ${s.idempotent ? '支持幂等' : '不支持幂等'}`">
             <span class="ex-cat t-12">{{ s.category }}</span>
             <span class="t-14 fw-600 c-1 ex-ellip">{{ s.name }}</span>
-            <a-badge :status="statusBadge(s.status)" :text="s.status" class="ex-badge" />
+            <a-tooltip :title="s.status === '降级' ? '最近 6 次调用有失败 / 结果未知' : undefined"><a-badge :status="statusBadge(s.status)" :text="s.status" class="ex-badge" /></a-tooltip>
           </div>
         </div>
       </div>

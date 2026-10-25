@@ -3,6 +3,7 @@
  * 首页（示例页）：演示公共组件的用法——KPI 条（.t-kpi）、分页表格、ObjRef（悬停卡 + 抽屉）、
  * EChart。首页只看不改：订单动作（补发出库单）在订单抽屉里，用 ConfirmActionModal 确认。整页无滚动，表格分页。
  */
+import { message } from 'ant-design-vue';
 import { computed, ref } from 'vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
@@ -91,12 +92,24 @@ const rankCols = [
   { title: '订单数', key: 'cnt', width: 80, align: 'right' as const },
   { title: '销售额（元）', key: 'amount', width: 132, align: 'right' as const },
 ];
+
+function onExport({ key }: { key: string | number }) {
+  message.success(`已开始导出 ${key}：10 月 1 日—24 日，完成后可在下载中心获取`);
+}
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
     <span class="t-12 c-3">数据截至 2026-10-24 23:00</span>
-    <a-button>导出</a-button>
+    <a-dropdown :trigger="['click']">
+      <a-button>导出</a-button>
+      <template #overlay>
+        <a-menu @click="onExport">
+          <a-menu-item key="CSV">导出 CSV（当前时间段）</a-menu-item>
+          <a-menu-item key="Excel">导出 Excel（当前时间段）</a-menu-item>
+        </a-menu>
+      </template>
+    </a-dropdown>
   </Teleport>
 
   <div class="home">
@@ -106,7 +119,7 @@ const rankCols = [
         <div class="kpi-val">
           <span class="t-kpi fw-600 c-1">{{ k.value }}</span>
           <span v-if="k.unit" class="t-14 c-2">{{ k.unit }}</span>
-          <span class="t-14 c-2 kpi-delta">较上月同期 <span class="num" :class="k.delta >= 0 ? 'c-2' : 'c-error'">{{ k.deltaText }}</span></span>
+          <span class="t-14 c-2 kpi-delta">较上月同期 <span class="num c-2">{{ k.deltaText }}</span></span>
         </div>
       </div>
     </div>
