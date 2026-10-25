@@ -37,6 +37,8 @@ if (import.meta.env.DEV) {
 }
 
 const onClose = () => (props.level === 2 ? back() : close());
+// 属性值单行省略：字符串/数字给 title 看全文
+const valTitle = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : undefined);
 const toneClass = (k: ObjKpi) => (k.tone === 'down' ? 'c-error' : k.tone === 'up' ? 'c-2' : 'c-3');
 
 // 订单动作“补发出库单”：只在订单抽屉里提供（首页等列表只看不改），仅已出库订单可用
@@ -93,9 +95,9 @@ async function resend() {
     <template v-if="view">
       <a-tabs v-model:activeKey="tab" size="small">
         <a-tab-pane key="props" tab="属性">
-          <a-descriptions :column="2" size="small" bordered :label-style="{ width: '96px' }">
+          <a-descriptions :column="2" size="small" bordered :label-style="{ width: '96px' }" class="dd-desc">
             <a-descriptions-item v-for="f in view.fields" :key="f.label" :label="f.label">
-              <span class="num">{{ f.value }}</span>
+              <span class="num dd-val" :title="valTitle(f.value)">{{ f.value }}</span>
             </a-descriptions-item>
           </a-descriptions>
           <section v-for="t in pinned" :key="t.key" class="dd-sec">
@@ -118,8 +120,8 @@ async function resend() {
               <span v-else-if="column.key === 'compare'" :class="toneClass(record)">{{ record.compare ?? '--' }}</span>
             </template>
           </a-table>
-          <a-descriptions v-if="t.fields?.length" :column="2" size="small" bordered :label-style="{ width: '96px' }" class="dd-sec">
-            <a-descriptions-item v-for="f in t.fields" :key="f.label" :label="f.label"><span class="num">{{ f.value }}</span></a-descriptions-item>
+          <a-descriptions v-if="t.fields?.length" :column="2" size="small" bordered :label-style="{ width: '96px' }" class="dd-sec dd-desc">
+            <a-descriptions-item v-for="f in t.fields" :key="f.label" :label="f.label"><span class="num dd-val" :title="valTitle(f.value)">{{ f.value }}</span></a-descriptions-item>
           </a-descriptions>
         </a-tab-pane>
         <a-tab-pane v-if="view.timeline" key="timeline" tab="时间线">
@@ -152,6 +154,10 @@ async function resend() {
 .dd-code { white-space: nowrap; }
 .dd-kv { display: flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; }
 .dd-cmp { margin-left: 8px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dd-desc :deep(table) { table-layout: fixed; width: 100%; }
+.dd-desc :deep(.ant-descriptions-item-label) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dd-desc :deep(.ant-descriptions-item-content) { white-space: nowrap; overflow: hidden; max-width: 0; }
+.dd-val { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .dd-sec { margin-top: 16px; }
 .dd-sec-h { margin-bottom: 8px; }
 .dd-kpis { display: grid; grid-template-columns: repeat(2, 1fr); border: var(--border); border-radius: var(--radius); }
