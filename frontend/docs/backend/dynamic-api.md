@@ -41,29 +41,31 @@
 
 **表规范** [已定：PDE]：
 - 表名 snake_case、单数业务名词，**不加模块前缀**；只有撞关键字或有歧义时才加限定词。
-- **单列主键** + 业务键唯一约束；mock 里的复合键一律改成这样（下面 rule、lifecycle 系列已改）。
+- **主键一律代理键 `id bigint`（identity）** [已定：PDE]：业务编号（AL-…、ACT-…、R-007、CR-NNNN、SCN-…、生命周期的对象类型 id `order` 等）存 `code`（或已有的业务列）并加 **UNIQUE**；mock 里的复合键改成业务唯一约束。
+- **接口只暴露业务编号**：响应里的 `id` = `code`（路径参数、筛选参数、快照键同样用业务编号），`id bigint` 不出现在接口里。
+- **外键一律指向对方表的 `id bigint`**（含指向静态 / Palantir / admin 的表：对象类型、动作类型、事件类型、外部系统、用户）；接口里的引用字段（`ruleId`、`alertId`、`typeId`…）由后台连表换回对方的 `code`。种子导入时先写被引用表，再按 `code` 查 `id` 回填外键。
 - **可变表**都带 `created_at, updated_at, created_by, is_seed, lock_version`（下面各表不再重复列出）。
 - **只追加表**（日志、版本、命中、事件：alert_log、action_run_log、rule_version、rule_hit、lifecycle_version、lifecycle_state、lifecycle_transition、lifecycle_change）只带 `created_at, created_by, is_seed`，**没有 `lock_version`、没有软删除**。
 - **软删除**只在前端有删除 / 恢复的地方用；动态页面没有（生命周期「删除迁移 / 删除状态」是 CR 草稿里的改动，落在 cr_item），所以动态的表都不软删。
 
-| 表 | 类型 | 主键 | 业务唯一键 |
+| 表 | 类型 | 主键 | 业务唯一键（UNIQUE） |
 |---|---|---|---|
-| alert | 可变 | `id`（AL-…） | — |
+| alert | 可变 | `id` bigint | `code`（AL-…） |
 | alert_log | 只追加 | `id` bigint | — |
-| rule | 可变（当前发布版） | `id`（R-007） | — |
-| rule_version | 只追加 | `id` bigint | `(rule_id, version)` |
-| rule_hit | 只追加 | `id`（告警编号或 HIT-…） | — |
-| action_run | 可变 | `id`（ACT-…） | `idem_key WHERE NOT is_seed`（部分唯一） |
+| rule | 可变（当前发布版） | `id` bigint | `code`（R-007） |
+| rule_version | 只追加 | `id` bigint | `(rule_id, version)`，`rule_id` → rule.id |
+| rule_hit | 只追加 | `id` bigint | `code`（告警编号或 HIT-…） |
+| action_run | 可变 | `id` bigint | `code`（ACT-…）；`idem_key WHERE NOT is_seed`（部分唯一，种子里的重复照旧保留） |
 | action_run_log | 只追加 | `id` bigint | — |
-| scenario | 可变 | `id`（SCN-…） | — |
-| scenario_result | 可变（每次运行覆盖） | `scenario_id` | — |
+| scenario | 可变 | `id` bigint | `code`（SCN-…） |
+| scenario_result | 可变（每次运行覆盖） | `id` bigint | `scenario_id`（→ scenario.id，一个方案一份结果） |
 | scenario_impact | 可变（随结果覆盖） | `id` bigint | `(scenario_id, sku, store_id)` |
-| lifecycle | 可变（当前生效版） | `id` = 对象类型 id（order） | — |
+| lifecycle | 可变（当前生效版） | `id` bigint | `object_type_id`（→ 静态 object_type.id；接口和快照键用对象类型前端 id，如 `order`） |
 | lifecycle_version | 只追加 | `id` bigint | `(lifecycle_id, version)` |
 | lifecycle_state | 只追加（随版本） | `id` bigint | `(lifecycle_version_id, key)` |
 | lifecycle_transition | 只追加（随版本） | `id` bigint | `(lifecycle_version_id, code)`（code = T1…） |
 | lifecycle_change | 只追加 | `id` bigint | — |
-| sys_user | **归 admin（PDE）**，动态不写定义 | 按 admin 约定 | 按 admin 约定；动态只用 `alert_assignable` 列 |
+| sys_user | **归 admin（PDE）**，动态不写定义 | `id` bigint（按 admin 约定） | 按 admin 约定；动态只用 `alert_assignable` 列 |
 
 回放试跑（`replay()`）只算不存，没有表。
 
@@ -71,9 +73,10 @@
 
 | 字段 | 类型 | 说明 / mock 对应 |
 |---|---|---|
-| id PK | varchar | `AL-20261025-0143` |
-| rule_id FK, rule_version | varchar, int | `ruleId`，命中时的规则版本 |
-| hit_id FK | varchar | 产生本告警的命中 |
+| id PK | bigint | 代理键 |
+| code UNIQUE | varchar | `AL-20261025-0143`；接口 `id` |
+| rule_id FK, rule_version | bigint, int | → rule.id；接口 `ruleId` 返回规则 code；命中时的规则版本 |
+| hit_id FK | bigint | → rule_hit.id，产生本告警的命中 |
 | level | varchar | `high/medium/low` = 高/中/低（来自规则） |
 | obj_kind, obj_id, obj_label | varchar | `store/product/order`（规则 R-027 为 region，只发通知） |
 | store_id, store_label | varchar | 商品类告警所在门店（R-007/R-012 去重键含门店） |
@@ -83,15 +86,16 @@
 | status | varchar | `open/processing/resolved/ignored` = 待处理/处理中/已解决/已忽略 |
 | assignee | varchar null | 未认领为空 |
 | close_reason | text | 关闭必填 |
-| action_run_id FK null | varchar | 关联动作（`actionRef`，按 `source.alertId` 匹配最近一条） |
+| action_run_id FK null | bigint | → action_run.id；关联动作（`actionRef`，按 `source.alertId` 匹配最近一条） |
 
-**alert_log**：`id, alert_id FK, at, actor（'系统' 或用户）, op（created/claim/transfer/close/start_action/action_result）, text, from_status, to_status, abnormal bool`。
+**alert_log**：`id, alert_id FK（bigint → alert.id）, at, actor（'系统' 或用户）, op（created/claim/transfer/close/start_action/action_result）, text, from_status, to_status, abnormal bool`。
 
-**rule**（每条规则一行，存当前已发布版本；每个已发布版本的快照存只追加表 `rule_version`，唯一键 `(rule_id, version)`；草稿在 cr_item）
+**rule**（每条规则一行，存当前已发布版本；每个已发布版本的快照存只追加表 `rule_version`，`rule_id` bigint FK → rule.id，唯一键 `(rule_id, version)`；草稿在 cr_item，分段见 2.9）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| id PK, version | varchar, int | `R-007`；当前版本整数 v3 |
+| id PK | bigint | 代理键 |
+| code UNIQUE, version | varchar, int | `R-007`（接口 `id`）；当前版本整数 v3 |
 | name, desc, owner | varchar | |
 | status | varchar | `published/changing/disabled` = 已发布/变更中/已停用；列表显示的「草稿中/审核中」由所在 CR 状态推导（`ruleStatus()`） |
 | core | bool | 5 条核心规则（产生告警）|
@@ -102,21 +106,22 @@
 | logic, expr | varchar, text | 且/或；编译后表达式 |
 | dedupe, cooldown | varchar | 如「规则 + 商品 + 门店 + 日期」/「7 天」「不重复」 |
 | trigger | jsonb | `{kind: 定时/事件, cron, text, eventId, filter}` |
-| action_type_id | varchar | 绑定的动作类型 |
+| action_type_id FK | bigint | → action_type.id，绑定的动作类型 |
 | auto_stage | jsonb | `{enabled, actionTypeId, confirmer, mapping:[{param, from}]}` |
 | release | varchar | 随哪次本体发布生效 |
 | published_by, published_at, change_note | | 版本历史 `ruleVersions()` |
 
-**rule_hit**：`id PK（告警编号或 HIT-R003-102500）, rule_id, rule_version, at, obj_kind, obj_id, obj_label, store_id, store_label, value, threshold, dedupe_key, result（alert/notified/deduped = 产生告警/已通知/已去重）, alert_id FK null`。
+**rule_hit**：`id PK bigint, code UNIQUE（告警编号或 HIT-R003-102500）, rule_id FK（→ rule.id）, rule_version, at, obj_kind, obj_id, obj_label, store_id, store_label, value, threshold, dedupe_key, result（alert/notified/deduped = 产生告警/已通知/已去重）, alert_id FK null（→ alert.id）`。
 
 **action_run**
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| id PK | varchar | `ACT-20261025-0552`，后台序列分配 |
-| action_type_id, type_version | varchar | 名称取动作类型目录；`typeVersion` 如 v3 |
+| id PK | bigint | 代理键 |
+| code UNIQUE | varchar | `ACT-20261025-0552`（接口 `id`），后台按天编号 |
+| action_type_id FK, type_version | bigint, varchar | → action_type.id；名称取动作类型目录；`typeVersion` 如 v3 |
 | source_type, source_label | varchar, varchar | 库内码 rule/alert/qa/manual/scenario；`source_label` 存该条记录的**原文**（ACTIONS 为「告警」、RUNS 为「告警处理」），接口原样返回 [已定：PDE] |
-| rule_id, rule_version, alert_id, qa_session, scenario_id | varchar null | `source.*` |
+| rule_id FK, rule_version, alert_id FK, qa_session, scenario_id FK | bigint / int / bigint / varchar / bigint，均可空 | `source.*`；外键分别 → rule.id、alert.id、scenario.id，接口返回对方 code；`qa_session` 是问数会话号，问数会话表归问数模块，有表后改为 FK [待定] |
 | obj_kind, obj_id, obj_label | varchar | 含 member/segment/region/alert |
 | params, params_text | jsonb, text | `params_text` = mock 摘要串（ACTIONS `params` / RUNS `summary`）；`params` 结构化值 [推断：按动作类型参数存] |
 | elapsed_ms, result_code, retry_count | int, varchar, int | RUNS 的 `ms`、`code`、`retries`；ACTIONS 没有，为空 [已定：本体小白] |
@@ -127,29 +132,29 @@
 | is_seed | bool | 种子导入的行为 true，新产生的为 false |
 | biz_key | varchar null | 按动作类型业务键模板（如 `correctOrderStatus:{订单号}:{目标状态}`）算出，不传外部系统；列先建（种子为空）。用它拦截重复暂存及部分唯一索引 `(action_type_id, biz_key) WHERE status IN (staged, approving, executing, unknown)` 见 `[推断 P4]` |
 | status | varchar | `staged/approving/executing/succeeded/failed/unknown/withdrawn/reconciled` = 待确认/审批中/执行中/成功/失败/结果未知/已撤回/已对账（与前端 `ActionStatus` 一致）。「已驳回」前端没有，见 `[推断 P2]` |
-| sys_id, ext_ref | varchar | `EXT-OA/ERP/OMS/CRM`；外部单号 |
+| sys_id FK, ext_ref | bigint, varchar | → 外部系统表 id（接口返回 `EXT-OA/ERP/OMS/CRM`）；外部单号 |
 | fail_reason, unknown_reason | text | 外部返回原因 / 超时说明 |
 | reconcile_result, reconcile_note | varchar, text | `succeeded/not_executed` = 外部已成功/外部未执行；状态都是 `reconciled`，只靠这个字段区分 [已定] |
 | reconcile_by | varchar | `auto`（定时对账查到）或人工对账人 |
-| retry_of, retried_as | varchar FK | 重新提交链 |
+| retry_of, retried_as | bigint FK | → action_run.id，重新提交链 |
 | withdraw_reason | text | 撤回原因（`reject_reason`、`rejected_at` 只在 `[推断 P2]` 采纳时加） |
 | submitted_at, confirmed_at, approved_at, finished_at | timestamptz | |
 
 > `action_run` **只由动态写**。自动查询计数和下次查询时间不在本表，存 reconcile 模块的 `reconcile_task`（`tries`、`round`、`manual`、`next_at`、`state`），详情接口关联读取 [已定：本体小白]。
 > 索引：`(status, source_type, action_type_id, sys_id, submitted_at desc)`；关键词（编号、对象、幂等键、外部单号、告警号、规则号、会话号）用 pg_trgm。
-> 编号 `ACT-日期-NNNN` **按天计数**：序列按天取当天最大号 + 1，不是全局序列。
+> 编号（`code`）`ACT-日期-NNNN` **按天计数**：序列按天取当天最大号 + 1，不是全局序列。
 
-**action_run_log**（合并原 action_log 与 Palantir `action_run_step`）：`id, action_run_id, at, actor, text, level（done/warn/error/unknown）`（= `ActionLog{time,text,desc,status}`）。
+**action_run_log**（合并原 action_log 与 Palantir `action_run_step`）：`id, action_run_id FK（→ action_run.id）, at, actor, text, level（done/warn/error/unknown）`（= `ActionLog{time,text,desc,status}`）。
 
-**scenario**：`id PK（SCN-0018）, name, owner, created_at, base_release（baseVer v2026.10.3）, status（draft/running/done/failed = 草稿/运行中/已完成/失败）, scope jsonb {area, category, weeks∈4|8|12}, drivers jsonb {pricePct −20~+10, replenishPct −30~+50, safetyDays 3~14, promo 无/满减/折扣/会员券, promoDepth 0~30, promoWeeks 0~4}, fail_reason, staged_action_ids text[], lock_version`。
+**scenario**：`id PK bigint, code UNIQUE（SCN-0018）, name, owner, created_at, base_release（baseVer v2026.10.3）, status（draft/running/done/failed = 草稿/运行中/已完成/失败）, scope jsonb {area, category, weeks∈4|8|12}, drivers jsonb {pricePct −20~+10, replenishPct −30~+50, safetyDays 3~14, promo 无/满减/折扣/会员券, promoDepth 0~30, promoWeeks 0~4}, fail_reason, staged_action_ids bigint[]（→ action_run.id，数组不建外键约束）`。
 
-**scenario_result**：`scenario_id PK, ran_at, scope_snapshot, drivers_snapshot, weeks[], base_sales[], sales[], base_margin[], margin[], kpis jsonb[{key,label,unit,base,value,better}]`；**scenario_impact**：`id PK, scenario_id, sku, name, category, store_id, store_name, base_sales, sales, stockout_base, stockout, suggest`（分页读）。
+**scenario_result**：`id PK, scenario_id FK UNIQUE（→ scenario.id）, ran_at, scope_snapshot, drivers_snapshot, weeks[], base_sales[], sales[], base_margin[], margin[], kpis jsonb[{key,label,unit,base,value,better}]`；**scenario_impact**：`id PK, scenario_id FK（→ scenario.id）, sku, name, category, store_id, store_name, base_sales, sales, stockout_base, stockout, suggest`（分页读）。
 
-**lifecycle**：`id PK（= 对象类型 id，如 order）, version（当前生效）, field, owner, updated_at, rule_id（校验非法迁移的规则，如 SM-ORD）, desc`。
-**lifecycle_version**（只追加）：`id PK, lifecycle_id, version, at, by, change, release, status（active/superseded = 生效中/已替代）, undo jsonb, snapshot jsonb（= lifecycleAsOf）`；字段对 mock `LcVersion` 的 `ver, at, by, change, release, status, undo`，唯一 `(lifecycle_id, version)`。
-**lifecycle_state**：`id PK, lifecycle_version_id, key, name, kind（initial/middle/final = 初始/中间/终态）, desc, sla, x, y（画布坐标）`，唯一 `(lifecycle_version_id, key)`；`count` 为统计值，不入定义表 [推断：按对象状态实时聚合]。
-**lifecycle_transition**：`id PK, lifecycle_version_id, code（T1…，唯一 `(lifecycle_version_id, code)`）, from_state, to_state, trigger（event/action/system/manual = 事件/动作/系统/人工）, by, event_type_id, action_type_id, guard, effect`；`weekly`（近 7 天次数）为统计值。
-**lifecycle_change**：`id PK, lifecycle_id, at, obj_id, obj_label, from_state, to_state, transition_code null（T1…；null=非法）, by, alert_id`。
+**lifecycle**：`id PK bigint, object_type_id FK UNIQUE（→ 静态 object_type.id；接口 `objectId` 返回对象类型前端 id，如 order）, version（当前生效）, field, owner, updated_at, rule_id FK（→ rule.id；校验非法迁移的规则，如 SM-ORD，`rules.ts` L58；接口 `ruleId` 返回规则 code）, desc`。
+**lifecycle_version**（只追加）：`id PK, lifecycle_id FK（→ lifecycle.id）, version, at, by, change, release, status（active/superseded = 生效中/已替代）, undo jsonb, snapshot jsonb（= lifecycleAsOf）`；字段对 mock `LcVersion` 的 `ver, at, by, change, release, status, undo`，唯一 `(lifecycle_id, version)`。
+**lifecycle_state**：`id PK, lifecycle_version_id FK, key, name, kind（initial/middle/final = 初始/中间/终态）, desc, sla, x, y（画布坐标）`，唯一 `(lifecycle_version_id, key)`；`count` 为统计值，不入定义表 [推断：按对象状态实时聚合]。
+**lifecycle_transition**：`id PK, lifecycle_version_id FK, code（T1…，唯一 `(lifecycle_version_id, code)`）, from_state_id FK, to_state_id FK（→ 同版本 lifecycle_state.id）, trigger（event/action/system/manual = 事件/动作/系统/人工）, by, event_type_id FK, action_type_id FK（→ Palantir 的 event_type.id / action_type.id，可空）, guard, effect`；`weekly`（近 7 天次数）为统计值。
+**lifecycle_change**：`id PK, lifecycle_id FK, at, obj_id, obj_label, from_state, to_state（记同步来的状态原文，非法迁移的状态也照记，不建外键）, transition_id FK null（→ lifecycle_transition.id；null = 非法）, by, alert_id FK null（→ alert.id）`。
 
 ### 1.3 库内值 ↔ 接口值 [已定：PDE]
 
@@ -173,7 +178,7 @@
 | 字段名（动作，两份 mock 不同） | `action_type_id`；`params_text`；`elapsed_ms / result_code / retry_count` | 统一响应类型 `ActionRun` 同时返回 `typeId` 和 `action`（中文动作名）、`params` 和 `summary`（同值 = `params_text`）、`ms / code / retries`（ACTIONS 来源为 null），各页按原字段读，不用改前端 | `ActionRecord`、`actionEvent.ts` `ActionRun` |
 | 字段名（告警） | `rule_id, obj_kind, obj_id, obj_label, store_id, store_label, triggered_at, data_cutoff` | `ruleId, objKind, objId, objLabel, storeId, storeLabel, triggeredAt, cutoff` | `Alert` |
 
-生命周期迁移的字段名：接口（含快照 `lifecycles` 段）照 mock 用 `transitions[].id / from / to / eventId / actionId`，库内列为 `lifecycle_transition.code / from_state / to_state / event_type_id / action_type_id`；规则 `trigger.eventId`、`actionTypeId` 同理对 `event_type_id` / `action_type_id`。
+生命周期迁移的字段名：接口（含快照 `lifecycles` 段）照 mock 用 `transitions[].id / from / to / eventId / actionId`，库内列为 `lifecycle_transition.code / from_state_id / to_state_id / event_type_id / action_type_id`（后四个是 bigint 外键，接口换回状态 key 和对方 code）；规则 `trigger.eventId`、`actionTypeId` 同理对 `event_type_id` / `action_type_id`。
 
 **时间字段** [已定：PDE]：库内一律 `timestamptz`；**接口按每个字段的 mock 格式返回**（北京时间，不带时区）。默认 `YYYY-MM-DD HH:mm`，**只有 mock 带秒的字段才带秒**。下表格式是用 esbuild 打包 `src/mock/*`、在 Node 里逐条读导出值和派生函数结果核出来的（所有行格式一致）：
 
@@ -381,6 +386,43 @@ stateDiagram-v2
 | 组装时机 | 与 `rules` 段相同：发布事务里，本次 CR 里的生命周期先生成新的 `lifecycle_version` 行，再由登记的 `lifecycles` 组装函数按每个对象类型的当前生效版本组装整段 |
 | 历史 | `lifecycle_version` 照旧单独保存全部历史版本（含 `snapshot` = `lifecycleAsOf`） |
 
+### 2.9 变更单分段：规则与生命周期的 cr_item
+
+静态的 `cr_item(target_kind, target_id, section, item_key)` 按 `(section, item_key)` 把草稿叠到已发布行上（见 static-api 2.x）。动态用同一张表，分段**全部按前端草稿界面实际能改的部分定**；`item_key` 取前端识别 / 查重这一项用的键；整份定义上的字段用固定 `-` 键（同 Palantir 的 `config`）。
+
+**规则**：`target_kind = rule`，`target_id` = 规则编号（`useDraftView('rule', () => base.value.id)`，`Rules.vue` L79；CR-0011 含 `rule: ['R-007']`，`parts/useDraftView.ts` L27）。
+
+| section | 前端能改什么 | item_key | op | 依据 |
+|---|---|---|---|---|
+| `conds` | 每条条件的阈值（按下标存 `thresholds[index]`）；条件引用的指标口径版本、`expr` 只随 `RULE_DRAFTS` 变；「添加条件」按钮没有点击处理，没有删除 | **`-`**（整组：`conds[] + logic + expr`）[推断] | update | `Rules.vue` L83–99（edits = `{autoStage, thresholds[]}`、按下标合并）、L101–105（口径变化也按下标比）、L279（无 @click）、L281（表格 `row-key = field + op`，只用于渲染）、L295；`rules.ts` L122–128 |
+| `mapping` | 自动暂存的参数映射：每个参数选取值来源 | 参数名 `param` | add / update / delete | `Rules.vue` L136–139（`setMapping` 按 `param` 找行）、L378（`row-key="param"`）、L384；换动作类型时清空映射 L140 → 原映射逐条 delete |
+| `config` | 自动暂存开关、动作类型、确认人；触发方式控件在但没接处理；名称、说明、级别、输出、去重、冷却、绑定动作类型界面上都不能改 | **`-`** | update | `Rules.vue` L368（开关）、L373 + L140（动作类型）、L375–376（确认人）、L331（触发方式 segmented 无 @change）、L335（「修改触发方式」无 @click）；其余字段无编辑控件 |
+
+- `conds` 用 `-` 的理由：前端没有单条条件的增删，改阈值和口径都按下标，不按任何键；`field + op` 只是表格 row-key，前端从不按它查重。若以后支持「添加条件」，再改为 `item_key = field + op`（与 row-key 一致）[推断]。
+- 草稿版本号不是改动项：草稿版本 = 当前版本 + 1（`Rules.vue` L86–87）。前端「保存到草稿」目前只把 CR 的 `changes` + 1（L107–111），改动本身没有提交，接口按上表写 cr_item。
+- 「改阈值」在 R5、「自动暂存」在 R6（见第 6 节）。
+
+**生命周期**：`target_kind = object`，`target_id` = 对象类型前端 id（草稿按 `变更单号:对象类型 id` 存，`ObjBehaviorLifecycle.vue` L46–47、`lifecycle.ts` L197–198）；分段名加 `lc_` 前缀，免得和静态对象的 `properties / links …` 分段撞名（static-api `CR_ITEM.section`）。
+
+| section | 前端能改什么 | item_key | op | 依据 |
+|---|---|---|---|---|
+| `lc_states` | 新增状态；只能删除**草稿里新增的**状态（连带删掉进出它的新增迁移）；已发布的状态不能改、不能删 | 状态 `key`（新增时 = 去掉首尾空格的状态名） | add | `ObjBehaviorLifecycle.vue` L236（查重「状态名已存在」按 `key`）、L251–259（`key: stForm.name.trim()`）、L297–308（删除新增状态及其迁移）、L422（删除按钮只在 `mark === '新增'` 时出现） |
+| `lc_transitions` | 新增迁移；修改迁移的触发方式、来源、守卫、效果（原/新状态不能改）；删除已发布迁移 | 迁移编号 `T{n}`（新增时取已发布 + 草稿里的最大号 + 1） | add / update / delete | L271–274（修改只写 `trigger, by, guard, effect`）、L275–278（编号生成）、L286–294（删除：草稿新增的直接去掉，已发布的进 `removeTransitions`）；`lifecycle.ts` L195（`LcDraft`） |
+
+- 删除**草稿新增**的状态或迁移 = 删掉对应的 `add` 项，不产生 `delete` 项；只有删除已发布的迁移才是 `op=delete`。
+- 前端改动清单的键正好对应上表：`as:{key}` = `lc_states` add、`at:{T}` = `lc_transitions` add、`et:{T}` = update、`rt:{T}` = delete（L315–318）；「撤销」= 删除那条 cr_item。
+- 新增迁移另按 `(from, to)` 查重「这条迁移已存在」（L240，修改时不查）；后台对 `lc_transitions` add 在「已发布 + 草稿」里校验同一对原/新状态不重复，重复返回 `DUPLICATE_KEY`。
+- 生命周期整体字段（`field、owner、ruleId、desc`）界面上不能改，**不设 `-` 段**；以后要改再加 `lc_config`（键 `-`）[推断]。
+
+**种子对应**：
+
+| mock | cr_item |
+|---|---|
+| CR-0011 改动第 4 行「规则 · R-007 商品毛利率越线 · 条件引用口径 · 修改」（`changes.ts` L197） | 1 条：`target_kind=rule, target_id=R-007, section=conds, item_key=-, op=update`，`before` = `RULE_DEFS` R-007 的 `{conds, logic, expr}`，`after` = 合并 `RULE_DRAFTS` 后的同结构（`rules.ts` L122–128），`type_label=规则`；CR-0011 仍是 6 行改动 |
+| CR-0011 的 `touches`（`changes.ts` L217）没有 `rule:R-007`，而 `useDraftView` TARGETS 有（L27） | cr_target 以 TARGETS 为准写入 R-007；`touches` 照 mock 原样返回 [待定：是否给 touches 补上，归静态] |
+| 生命周期草稿：CR-0009（门店）、CR-0012（会员）可编辑（`lifecycle.ts` L5；`useDraftView.ts` L26、L28） | **没有种子**：`LC_DRAFT_EDITS` 初始为空（`lifecycle.ts` L198），这两张单的改动行里也没有生命周期行 |
+| CR-0004（已发布，已发货 → 已出库）对订单生命周期的影响 | 不进 cr_item：已体现在 `lifecycle_version` 的版本记录和 `undo`；它的改动行是枚举值 / 字段映射 / 同义词（`changes.ts` L367–370） |
+
 ## 3. 权限与只读
 
 | 场景 | 规则 |
@@ -485,7 +527,7 @@ stateDiagram-v2
 | `dynamic.ts` `alertTimeline()` + `Alerts.vue` 关联动作行 | alert_log | **455 行** = 派生 `alertTimeline`（450）+ `alertActionLink`（5 行：未关闭且有关联动作的告警）| 两份合并后按每条告警内时间升序排（与 `Alerts.vue` L27 `log.sort` 一致）再入库 |
 | `rules.ts` `RULE_DEFS` | rule（当前版本） | 16 | |
 | `rules.ts` `ruleVersions()` | rule_version（只有元数据） | 每条规则 version 行 | 历史版本的条件内容 mock 没有 [待定] |
-| `rules.ts` `RULE_DRAFTS` + `useDraftView` TARGETS | cr_item / cr_target（R-007 在 CR-0011） | 1 | 与静态共用 CR 表 |
+| `rules.ts` `RULE_DRAFTS` + `useDraftView` TARGETS | cr_item / cr_target（R-007 在 CR-0011） | 1（`section=conds, item_key=-`，见 2.9） | 与静态共用 CR 表 |
 | `rules.ts` `hitsOf(ruleId)` 全部规则 | rule_hit | 1186 | 核心规则命中 = 告警 + 合成的「已去重」；其余为已通知/已去重 |
 | `actions.ts` `ACTIONS`（含 `buildLog`） | action_run、action_run_log | 141（待确认 25、审批中 7、执行中 4、失败 11、结果未知 20、成功 58、已撤回 5、已对账 11；来源 规则 33、问数 72、手动 36） | 幂等键、编号已由 build 算好，原样入库；`RULE_CONFIRMER` 写 confirmer |
 | `actionEvent.ts` `runsOf()`（`RUNS`） | action_run（与上一行合并成同一张表）；日志来自 `ACTION_EVENT_RESOLVERS.action` 的 `timeline` | 1,849（编号 `ACT-…-2001`～`3849`） | **由动态统一 seed** [已定]：`RUNS`、`EVENTS`、`runsOf` 等由 PDE 的派生配置导出到 **`backend/seeds/json/action/derived/`**（`runsOf.json` 等），动态读这里和 ACTIONS 的 JSON 按 id 合并。合并规则见下方约束 5 |
@@ -578,8 +620,8 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | R2 | 新建规则 | 非只读 | `POST /change-requests` | 新 CR 草稿 |
 | R3 | 发起变更（新建 / 加入已有 CR） | 无草稿或只读时显示；非只读 | `POST /change-requests`、`/targets` | 进入草稿视图 |
 | R4 | 已发布 / 草稿视图切换 | 有草稿 | `GET /rules/{id}?view=draft&cr` | — |
-| R5 | 添加条件、改阈值、修改触发方式 | 草稿视图 | CR items | 草稿改动 |
-| R6 | 自动暂存开关、动作类型、确认人、参数映射 | 草稿视图；开关打开 | CR items | 改动作类型清空映射 |
+| R5 | 添加条件、改阈值、修改触发方式 | 草稿视图 | CR items `section=conds`（键 `-`）；触发方式 `config`；「添加条件」「修改触发方式」前端未接处理（2.9） | 草稿改动 |
+| R6 | 自动暂存开关、动作类型、确认人、参数映射 | 草稿视图；开关打开 | CR items：开关 / 动作类型 / 确认人 `config`（键 `-`），映射 `mapping`（键 `param`）（2.9） | 改动作类型清空映射 |
 | R7 | 保存到草稿 | 草稿视图；必填映射齐全 | `PUT /change-requests/{cr}/items` | CR 改动数 +1 |
 | R8 | 命中历史（7/30 天，分页）+ 命中抽屉 | — | `GET /rules/{id}/hits`、`/rule-hits/{id}` | — |
 | R9 | 开始试跑（范围、版本 当前/草稿） | 非只读 | `:replay` | 无 |
@@ -609,9 +651,9 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 |---|---|---|---|---|
 | L1 | 生命周期图 + 迁移定义（一页 6）+ 选中状态/迁移/非法迁移 | — | `GET /lifecycle` | — |
 | L2 | 近期状态变化（一页 6，只看非法） | 非历史版本 | `GET /lifecycle/changes` | — |
-| L3 | 新增状态 | 草稿视图；名称非空不重复 | CR items `section=lc_states` | 草稿新增 |
-| L4 | 新增 / 修改迁移 | 草稿视图；原/新状态、来源必填；不重复 | CR items `section=lc_transitions` | 草稿新增/修改 |
-| L5 | 删除迁移 / 删除新增状态（确认卡） | 草稿视图 | CR items `op=delete` | 草稿删除；连带删除新增迁移 |
+| L3 | 新增状态 | 草稿视图；名称非空不重复 | CR items `section=lc_states`、`item_key` = 状态 key（2.9） | 草稿新增 |
+| L4 | 新增 / 修改迁移 | 草稿视图；原/新状态、来源必填；新增时同一对原/新状态不重复 | CR items `section=lc_transitions`、`item_key` = T 编号（2.9） | 草稿新增/修改 |
+| L5 | 删除迁移 / 删除新增状态（确认卡） | 草稿视图 | 已发布迁移：`lc_transitions` `op=delete`；草稿新增的状态 / 迁移：删掉对应 add 项（2.9） | 草稿删除；连带删除新增迁移 |
 | L6 | 改动清单「撤销」 | 草稿视图 | 删除对应 cr_item | — |
 | L7 | 动作页签：动作类型表 + 抽屉、该对象动作列表（状态/动作筛选，一页 10）、点编号去动作中心 | 只读 | `GET /object-types/{id}/action-types`、`/action-runs` | — |
 | L8 | 自动化页签：规则表、事件类型、近 7 天命中（按规则筛选、分页） | 只读 | `GET /object-types/{id}/rules`、`/rule-hits` | — |
