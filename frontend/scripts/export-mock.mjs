@@ -49,7 +49,7 @@ const OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR);
 
 const MODULES = {
   common: ['stores', 'products', 'orders', 'format', 'paginate'],
-  static: ['metrics', 'links', 'dimensions', 'knowledge', 'objectProps', 'objectViews', 'objectHistory',
+  static: ['metrics', 'metricCatalog', 'links', 'dimensions', 'knowledge', 'objectProps', 'objectViews', 'objectHistory',
     'changes', 'releases', 'quality', 'functions'],
   dynamic: ['dynamic', 'actions', 'rules', 'lifecycle', 'scenarios'],
   action: ['actionEvent'],
