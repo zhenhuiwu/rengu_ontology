@@ -12,7 +12,7 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useRoute, useRouter } from 'vue-router';
 import { GRAY } from '@/theme';
 import {
-  ORDERS, STORES, METRICS, DAILY_GMV_EX, storeById, paginate, fmtMoney, fmtInt, fmtPct, fmtDelta, type Order,
+  ORDERS, STORES, METRICS, DAILY_GMV_EX, exTax, storeById, paginate, fmtMoney, fmtInt, fmtPct, fmtDelta, type Order,
 } from '@/mock';
 
 const route = useRoute();
@@ -71,7 +71,8 @@ const trendOption = {
 // 门店排行（按样本订单实付金额汇总）
 const fullRanking = STORES.map((s) => {
   const os = ORDERS.filter((o) => o.storeId === s.id);
-  return { id: s.id, name: s.name, city: s.city, cnt: os.length, amount: os.reduce((a, o) => a + o.amount, 0) };
+  // 销售额（不含税）= 实付金额 ÷ (1 + 13%)，与指标 gmv 同口径
+  return { id: s.id, name: s.name, city: s.city, cnt: os.length, amount: exTax(os.reduce((a, o) => a + o.amount, 0)) };
 }).sort((a, b) => b.amount - a.amount).map((r, i) => ({ ...r, rank: i + 1 }));
 const ranking = fullRanking.slice(0, 10);
 // “全部”：抽屉里看完整排行（?rank=all，可截图复现），simple 分页
@@ -84,13 +85,13 @@ const rankCols = [
   { title: '#', key: 'idx', width: 40 },
   { title: '门店', key: 'name', ellipsis: true },
   { title: '订单数', key: 'cnt', width: 80, align: 'right' as const },
-  { title: '实付金额（元）', key: 'amount', width: 132, align: 'right' as const },
+  { title: '销售额（元）', key: 'amount', width: 132, align: 'right' as const },
 ];
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
-    <span class="t-12 c-3">数据更新于 2026-10-25 06:00:12</span>
+    <span class="t-12 c-3">数据截至 2026-10-24 23:00</span>
     <a-button>导出</a-button>
   </Teleport>
 
@@ -103,7 +104,7 @@ const rankCols = [
           <span v-if="k.unit" class="t-14 c-2">{{ k.unit }}</span>
         </div>
         <div class="t-12 c-3">
-          较上月同期 <span class="num" :class="k.delta >= 0 ? 'c-success' : 'c-error'">{{ k.deltaText }}</span>
+          10 月 1 日—24 日 · 较上月同期 <span class="num" :class="k.delta >= 0 ? 'c-success' : 'c-error'">{{ k.deltaText }}</span>
         </div>
       </div>
     </div>
@@ -111,7 +112,7 @@ const rankCols = [
     <div class="row">
       <div class="panel orders">
         <div class="panel-head">
-          <span class="t-16 fw-600">最近订单</span>
+          <span class="t-16 fw-600">今日订单</span>
           <a-space>
             <a-select v-model:value="status" size="small" class="w-120"
               :options="['全部', '待支付', '待出库', '拣货中', '已出库', '已签收', '已取消'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
@@ -148,7 +149,7 @@ const rankCols = [
         </div>
         <div class="panel rank">
           <div class="panel-head">
-            <span><span class="t-16 fw-600">门店实付金额排行</span><span class="t-12 c-3 rank-sub">前 10 · 样本订单</span></span>
+            <span><span class="t-16 fw-600">门店销售额排行（不含税）</span><span class="t-12 c-3 rank-sub">前 10 · 10 月 1 日—24 日</span></span>
             <a class="t-14" @click="setRankOpen(true)">全部 {{ fullRanking.length }} 家</a>
           </div>
           <a-table size="small" row-key="id" :pagination="false" :data-source="ranking" :columns="rankCols" class="rank-table">
@@ -164,8 +165,8 @@ const rankCols = [
     </div>
   </div>
 
-  <a-drawer :open="rankOpen" :width="640" title="门店实付金额排行 · 全部" @close="setRankOpen(false)">
-    <div class="t-12 c-3 rank-note">按样本订单实付金额汇总，共 {{ fullRanking.length }} 家门店</div>
+  <a-drawer :open="rankOpen" :width="640" title="门店销售额排行（不含税）· 全部" @close="setRankOpen(false)">
+    <div class="t-12 c-3 rank-note">销售额（不含税）= 实付金额 ÷ 1.13 · 10 月 1 日—24 日 · 数据截至 2026-10-24 23:00 · 共 {{ fullRanking.length }} 家门店</div>
     <a-table size="small" row-key="id" :pagination="false" :data-source="rankPaged.items" :columns="rankCols">
       <template #bodyCell="{ column, record }">
         <span v-if="column.key === 'idx'" class="num c-3">{{ record.rank }}</span>
