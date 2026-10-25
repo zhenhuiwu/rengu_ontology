@@ -22,13 +22,16 @@ import { METRICS } from '@/mock/metrics';
 import { DIM_ITEMS } from '@/mock/dimensions';
 import { draftOf, useDraftView } from './parts/useDraftView';
 import { useAppStore } from '@/stores/app';
-import { CHANGE_REQUESTS, CURRENT_USER, CURRENT_VERSION, NEXT_VERSION } from '@/mock/changes';
+import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import { QUALITY_CHECKS, DATA_CUTOFF } from '@/mock/quality';
 import { RELEASES } from '@/api/releases';
 
 const router = useRouter();
 const { readonly, reason } = useReadonly();
 const app = useAppStore();
+// 当前 / 下一版本号取 app store（mock 模式是 mock 值，versioning 走真接口时是 /releases/current 的 current / next）
+const CURRENT_VERSION = computed(() => app.ontologyVersion);
+const NEXT_VERSION = computed(() => app.ontologyNextVersion);
 /** 查看历史版本（?ver=）：不显示当前待处理，最近发布只列到所选版本；预览模式不算 */
 const histVer = computed(() => (app.viewMode === 'history' ? app.viewVersion : null));
 
@@ -174,7 +177,7 @@ function start(opts: { join?: string; title?: string }) {
     id, title: opts.title || '未命名变更', owner: app.user?.name || CURRENT_USER, reviewer: '待指定', status: '草稿', level: '修订', changes: 0,
     updatedAt: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`, reason: '从本体总览发起，待补充',
   });
-  message.success(`已创建变更单 ${id}，将随 ${NEXT_VERSION} 发布`);
+  message.success(`已创建变更单 ${id}，将随 ${NEXT_VERSION.value} 发布`);
   router.push({ path: '/build/ontology/releases', query: { cr: id } });
 }
 </script>
