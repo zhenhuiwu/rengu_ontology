@@ -216,7 +216,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `EXT_SYSTEM_DISABLED` | 409 | 对已停用的外部系统做测试调用 | “该系统已停用，先在‘编辑’里改为正常再测试” |
 | `EXT_TIMEOUT` | — | 不是 HTTP 错误；submit 返回 `result=结果未知`，`code` 为“超时 N 秒未响应 · 未重试” | — |
 
-`INCOMPATIBLE_PAYLOAD_CHANGE`、`IDEMPOTENCY_CONFLICT` 前端没有对应的拦截，第一期不做，列在 §8.2。
+`INCOMPATIBLE_PAYLOAD_CHANGE` 前端没有对应的拦截，第一期不做，列在 §8.2。`IDEMPOTENCY_CONFLICT`（409）已进公共错误码，由动态在 `action_run` 入口返回（dynamic-api `08dd366`），本模块不另外返回。
 
 ### 3.5 库内值 ↔ 接口值
 
@@ -532,7 +532,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 - **入库脚本**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 都读 `backend/seeds/json/action/` 和 `backend/seeds/json/action/derived/`，`integration` 的 seed 读 `backend/seeds/json/system/EXT_SYSTEMS.json`。幂等写库（`INSERT … ON CONFLICT DO NOTHING`），业务编码原样写进 `code` 列（`ACT-…`、`EV-…`、`EXT-…`），`id` 由库生成，外键在 seed 时按 `code` 查回 `id`。统一的 `seed` 命令在迁移之后执行。
 - **种子顺序**（骨架 `app/seeds/registry.py` 的 `SEED_MODULES`）：integration 分两段。前一段 `integration` 排在 action 之前，只写 `ext_system`（`action_type.sys_id` 按外键查它）；后一段 `integration_runs` 排在 dynamic 之后、qa 之前，写 `writeback_call` 和 `reconcile_task`，`action_run_id` 按 `action_run.code` 查回 `id`。两张表都只由 integration 写种子，动态的种子不碰。已和本体小白定：骨架在 `SEED_MODULES` 的 dynamic 和 qa 之间加 `integration_runs` 一项，归 integration，顺序同时写进 CONVENTIONS。
-- **执行记录由动态 seed**：`action_run` 只由动态写，动态的 seed 读动作中心的 `dynamic/ACTIONS.json` 和本模块的 `action/derived/runsOf.json`（所有调用结果的并集），按 `code`（`ACT-…`）合并（`RUNS` 编号从 2000 起，和 `ACTIONS` 不冲突）；执行时间线写进动态的 `action_run_log`（`ACTIONS` 自带 `log`，`RUNS` 用 `action/derived/ACTION_EVENT_RESOLVERS.action.json`）。本模块的 seed 在动态之后执行，只写自己的表：`writeback_call`、`reconcile_task`、`ext_system`、定义表、事件和投递表。
+- **执行记录由动态 seed**：`action_run` 只由动态写，动态的 seed 读动作中心的 `dynamic/ACTIONS.json` 和本模块的 `action/derived/runsOf.json`（所有调用结果的并集），按 `code`（`ACT-…`）合并（`RUNS` 编号从 2000 起，和 `ACTIONS` 不冲突）；执行时间线写进动态的 `action_run_log`（`ACTIONS` 自带 `log`，`RUNS` 用 `action/derived/ACTION_EVENT_RESOLVERS.action.json`）。各段只写自己的表，顺序见上一条：`ext_system` 由 `integration` 在 action 之前写；定义表、事件和投递表由 action、event 在 dynamic 之前写；`writeback_call`、`reconcile_task` 由 `integration_runs` 在 dynamic 之后写。
 - **seed 保留 mock 原值**：外部幂等键即使重复（如告警生成的 `act-al-…`）也照原样入库。`action_run` 加 `is_seed` 列，`idem_key` 只对非 seed 行唯一：`CREATE UNIQUE INDEX … ON action_run(idem_key) WHERE NOT is_seed`（建议动态这样建）。
 - **`writeback_call`**：执行记录侧的重试次数、耗时看动态的 `action_run`。**一行 = 一次业务调用**（同 `extCalls` 的一行），`attempt` 记这次调用一共试了几次（前端的「第 N 次」），重试不另起行。seed **只取 `system/derived/extCalls.json`**，不从 `RUNS`/`ACTIONS` 展开；带 `runId` 的行写进 `action_run_id`，执行记录这边的重试次数、耗时仍看动态的 `action_run`，两边不合并，所以不会重复。
 - **对账任务**：seed 进来的结果未知记录（`ACTIONS` 20 条、`RUNS` 54 条）都建 `reconcile_task`，**`tries=3, state=manual, manual=true, round=1, next_at=null`**（mock 里没有下次查询时间，时间线已写到“自动查询 3 次仍无法确认 → 转人工”），不会再被调度。种子里对账说明的原文（如“（某人 复核）”）照原样保留，不改写。
@@ -628,7 +628,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 |---|---|---|---|
 | U1 | 审批驳回后进入新终态“已驳回”（库内 `rejected`），关联告警退回“处理中”，要再做就新发起（动态的方案） | 没有这个状态 | 不实现 |
 | U2 | 业务失败码（如 `NC-2071`）不重试，只对网络错误、429、5xx，在超时预算内同键重试 | 明确失败一律按 `maxRetry` 重试 | 按前端 |
-| U3 | 同一幂等键带不同参数时拒绝（`IDEMPOTENCY_CONFLICT`） | 没有这个场景 | 不做 |
+| U3 | 同一幂等键带不同参数时拒绝（`IDEMPOTENCY_CONFLICT`） | 没有这个场景 | 本模块不做；动态在 `action_run` 入口已实现（dynamic-api `08dd366`） |
 | U4 | 载荷不兼容变更（删字段、改类型）必须所有订阅方确认才能发布（`INCOMPATIBLE_PAYLOAD_CHANGE`） | 只提示 | 只警告 |
 | U5 | 动作类型发布校验：业务键模板的占位符都能从参数取到；对外部和本体都没有写操作时警告 | 没有 | 只警告 |
 | U6 | 试运行只给执行人角色、模拟触发只给负责人和管理员 | 不限制 | 不限制 |
