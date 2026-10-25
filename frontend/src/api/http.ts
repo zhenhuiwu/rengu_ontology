@@ -119,6 +119,9 @@ export function apiClient(key: SwitchKey) {
     isReal: () => isReal(key),
     get: async <T>(path: string, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'GET' }); },
     post: async <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'POST', body }); },
+    put: async <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'PUT', body }); },
+    patch: async <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'PATCH', body }); },
+    delete: async <T>(path: string, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'DELETE' }); },
   };
 }
 
