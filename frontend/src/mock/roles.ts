@@ -16,6 +16,8 @@ export interface Role {
   func: Record<string, FuncLevel>;        // 页面 key → 权限
   objs: ObjPerm[];
   scopes: RowScope[];
+  /** 业务查看类角色：没有配置行级范围的对象类型默认不可见（其余角色默认可见全部行） */
+  defaultDeny?: boolean;
 }
 
 /** 对象类型上标为“权限依据”的属性（对象类型页 → 属性 → 权限依据） */
@@ -60,11 +62,11 @@ export const ROLES: Role[] = [
     scopes: [sc('S-41', '订单', '大区', ['华东']), sc('S-42', '商品', '品类', ['生鲜', '乳品烘焙', '粮油调味'])] },
   { id: 'R-05', name: '业务查看', desc: '只读查看问数结果和对象详情，不能执行动作和导出', builtIn: true, updatedAt: '2026-08-30 11:00', updatedBy: '王敏',
     func: funcOf((p) => (p.areaKey === 'use' && p.key !== 'scenarios' ? 'view' : 'none')), objs: objs((o) => [o.name !== '员工', false, []]),
-    scopes: [sc('S-51', '订单', '大区', ['华东']), sc('S-52', '门店', '大区', ['华东']), sc('S-53', '会员', '常去门店所属大区', ['华东'])] },
+    scopes: [sc('S-51', '订单', '大区', ['华东']), sc('S-52', '门店', '大区', ['华东']), sc('S-53', '会员', '常去门店所属大区', ['华东'])], defaultDeny: true },
   { id: 'R-06', name: '门店店长', desc: '只看本店订单和会员，可发放召回券、申请补货', builtIn: false, updatedAt: '2026-10-24 20:16', updatedBy: '陈立军',
     func: funcOf((p) => (['qa-workbench', 'object-search', 'object-detail', 'alerts'].includes(p.key) ? 'manage' : 'none')),
     objs: objs((o) => [['订单', '会员', '门店', '商品', '库存快照', '告警'].includes(o.name), false, o.actions.filter((a) => ['发放复购召回优惠券', '补货申请', '认领告警'].includes(a))]),
-    scopes: [sc('S-61', '订单', '门店', ['上海徐汇店']), sc('S-62', '库存快照', '仓库', ['上海嘉定仓'])] },
+    scopes: [sc('S-61', '订单', '门店', ['上海徐汇店']), sc('S-62', '库存快照', '仓库', ['上海嘉定仓'])], defaultDeny: true },
   { id: 'R-07', name: '会员运营', desc: '会员分层与召回活动，可发券、调整会员等级', builtIn: false, updatedAt: '2026-10-20 14:33', updatedBy: '吴佳',
     func: funcOf((p) => (p.areaKey === 'use' && p.key !== 'scenarios' ? (p.key === 'qa-workbench' ? 'manage' : 'view') : 'none')),
     objs: objs((o) => [['订单', '会员', '门店', '商品'].includes(o.name), o.name === '会员', o.name === '会员' ? o.actions : []]),
@@ -72,7 +74,7 @@ export const ROLES: Role[] = [
   { id: 'R-08', name: '大区经理（华东）', desc: '华东大区经营分析，可指派跟进、调整大区预算', builtIn: false, updatedAt: '2026-10-25 09:48', updatedBy: '刘婷',
     func: funcOf((p) => (p.areaKey === 'use' ? 'manage' : p.key === 'metrics' ? 'view' : 'none')),
     objs: objs((o) => [o.name !== '员工', ['订单', '门店'].includes(o.name), o.name === '大区' || o.name === '告警' ? o.actions : []]),
-    scopes: [sc('S-81', '订单', '大区', ['华东']), sc('S-82', '门店', '大区', ['华东']), sc('S-83', '会员', '常去门店所属大区', ['华东'])] },
+    scopes: [sc('S-81', '订单', '大区', ['华东']), sc('S-82', '门店', '大区', ['华东']), sc('S-83', '会员', '常去门店所属大区', ['华东'])], defaultDeny: true },
 ];
 
 /** 角色成员：内置角色按 ADMIN_USERS.role；其余按用户 ID 固定挑选（一个用户可有多个角色） */
@@ -104,7 +106,8 @@ export function effectiveAccess(u: AdminUser, roles: Role[] = ROLES, membersOf: 
   // 功能：各角色取最高级别
   const func = FUNC_PAGES.map((p) => ({ ...p, lv: rs.reduce<FuncLevel>((m, r) => (rank[r.func[p.key]] > rank[m] ? r.func[p.key] : m), 'none') })).filter((p) => p.lv !== 'none');
   const objs = PERM_OBJECTS.map((o) => {
-    const granted = rs.filter((r) => r.objs.find((x) => x.objType === o.name)?.view);
+    // 业务查看类角色（defaultDeny）对没配范围的对象不授予可见
+    const granted = rs.filter((r) => r.objs.find((x) => x.objType === o.name)?.view && !(r.defaultDeny && !r.scopes.some((s) => s.objType === o.name)));
     if (!granted.length) return null;
     // 多个角色：任一角色对该对象不限范围 → 全部；否则各角色范围取并集
     const unlimited = granted.some((r) => !r.scopes.some((s) => s.objType === o.name));

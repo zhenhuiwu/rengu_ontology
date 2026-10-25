@@ -4,6 +4,7 @@
  * 左侧角色列表，右侧详情页签：功能权限、对象与动作权限、行级范围、成员（full 分页，?mpage=&msize=）。
  * 功能 / 对象权限就地编辑，有修改时底部出现保存条（useUnsavedGuard：切换角色、离开页面要确认）；内置角色和历史版本只读。
  * 行级范围只能基于对象类型里标为“权限依据”的属性（如 订单.大区 = 华东）。
+ * 指标按基础对象的范围过滤，再叠加维度对象的范围；业务查看类角色（defaultDeny）没配范围的对象默认不可见。
  * “以此用户预览”：抽屉里汇总该用户所有角色合并后的有效权限，可进入只读预览。
  * URL：?role=R-04&tab=func|obj|row|members&form=edit|scope|members&preview=U010231
  */
@@ -79,6 +80,9 @@ const ocols = [
   { title: '行级范围', key: 'scope', width: 260 },
 ];
 const scopesOf = (obj: string) => role.value.scopes.filter((s) => s.objType === obj);
+/** 没有配置范围时的默认：业务查看类角色不可见，其余全部行 */
+const noScopeText = computed(() => (role.value.defaultDeny ? '不可见（未配置范围，默认）' : '全部行'));
+const unscopedObjs = computed(() => draft.objs.filter((o) => o.view && !scopesOf(o.objType).length).map((o) => o.objType));
 
 // 行级范围
 const scols = [
@@ -91,7 +95,7 @@ async function removeScope(s: RowScope) {
   const ok = await confirm.ask({
     title: '删除行级范围', target: `${s.objType}：${scopeText(s)}`, okText: '删除', danger: true,
     fields: [{ label: '角色', value: role.value.name }, { label: '影响成员', value: `${members.value[role.value.id].length} 人` }],
-    impact: `删除后，该角色看${s.objType}${scopesOf(s.objType).length > 1 ? '时仍受其余范围限制' : '将不再按范围限制，可见全部行'}。`,
+    impact: `删除后，该角色看${s.objType}${scopesOf(s.objType).length > 1 ? '时仍受其余范围限制' : role.value.defaultDeny ? '将不可见（业务查看类角色未配置范围默认不可见）' : '将不再按范围限制，可见全部行'}。`,
   });
   if (!ok) return;
   role.value.scopes = role.value.scopes.filter((x) => x.id !== s.id);
@@ -127,7 +131,7 @@ const mcols = [
   { title: '最近登录', key: 'lastLogin', width: 150 },
   { title: '操作', key: 'op', width: 170 },
 ];
-const badge = (s: AdminUser['status']) => (s === '待激活' ? 'warning' : 'default');
+const badge = (_s: AdminUser['status']) => 'default'; // 状态灰点 + 文字；橙色只用于 待确认 / 结果未知
 async function removeMember(u: AdminUser) {
   const others = rolesOf(u).filter((r) => r.id !== role.value.id);
   const ok = await confirm.ask({
@@ -285,17 +289,21 @@ async function deleteRole() {
               <span v-if="!objActions(record.objType).length" class="c-3">没有动作</span>
               <a-checkbox-group v-else v-model:value="record.actions" :disabled="locked || !record.view" :options="objActions(record.objType)" />
             </template>
-            <span v-else-if="column.key === 'scope'" class="t-12" :class="scopesOf(record.objType).length ? 'c-1' : 'c-3'">{{ scopesOf(record.objType).map(scopeText).join('；') || (record.view ? '全部行' : EMPTY) }}</span>
+            <span v-else-if="column.key === 'scope'" class="t-12" :class="scopesOf(record.objType).length ? 'c-1' : 'c-3'">{{ scopesOf(record.objType).map(scopeText).join('；') || (record.view ? noScopeText : EMPTY) }}</span>
           </template>
         </a-table>
       </div>
 
       <div v-else-if="tab === 'row'" class="rl-body">
         <div class="rl-rowhead">
-          <span class="t-12 c-2">只能基于对象类型里标为“权限依据”的属性设置。同一对象类型的多条范围取交集；没有范围的对象类型可见全部行。</span>
+          <span class="t-12 c-2">只能基于对象类型里标为“权限依据”的属性设置。同一对象类型的多条范围取交集；没有范围的对象类型{{ role.defaultDeny ? '默认不可见' : '可见全部行' }}。</span>
           <a-tooltip :title="lockReason"><a-button :disabled="locked" @click="openScope">添加范围</a-button></a-tooltip>
         </div>
-        <a-table size="small" row-key="id" :columns="scols" :data-source="role.scopes" :pagination="false" :locale="{ emptyText: '没有行级范围：可见对象的全部行' }">
+        <div class="rl-rule t-12 c-2">
+          <div><span class="c-1 fw-600">未配置范围的对象：</span><template v-if="role.defaultDeny">默认<span class="c-1">不可见</span>（业务查看类角色，需逐个对象配置范围才可见）</template><template v-else>可见全部行</template><template v-if="unscopedObjs.length"> · 本角色：{{ unscopedObjs.join('、') }} → {{ role.defaultDeny ? '不可见' : '全部行' }}</template></div>
+          <div><span class="c-1 fw-600">指标怎么过滤：</span>先按指标基础对象的范围过滤，再叠加所用维度对象的范围，同时满足才计入。例：门店销售额（基础对象 订单，按 门店 拆分）= 订单 按“大区 = 华东”过滤 + 门店 按“大区 = 华东”过滤{{ role.defaultDeny ? '；维度对象没配范围时该维度不可用' : '' }}。</div>
+        </div>
+        <a-table size="small" row-key="id" :columns="scols" :data-source="role.scopes" :pagination="false" :locale="{ emptyText: role.defaultDeny ? '没有行级范围：所有对象默认不可见' : '没有行级范围：可见对象的全部行' }">
           <template #bodyCell="{ column, record }">
             <span v-if="column.key === 'cond'" class="c-1">{{ record.prop }} <span class="num">{{ record.op }}</span> {{ record.values.join('、') }}</span>
             <a-tooltip v-else-if="column.key === 'op'" :title="lockReason"><a :class="{ 'rl-dis': locked }" @click="!locked && removeScope(record)">删除范围</a></a-tooltip>
@@ -425,6 +433,7 @@ async function deleteRole() {
 .rl-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
 .rl-body { flex: 1; min-height: 0; padding: 12px 20px 16px; display: flex; flex-direction: column; gap: 10px; }
 .rl-tip { flex: none; }
+.rl-rule { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; margin-bottom: 12px; background: var(--g2); border-radius: var(--radius); }
 .rl-areas { flex: 1; min-height: 0; display: flex; gap: 16px; }
 .rl-area { flex: 1; min-width: 0; border: var(--border); border-radius: var(--radius); padding: 8px 12px; }
 .rl-ah { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 6px; border-bottom: var(--border); }
