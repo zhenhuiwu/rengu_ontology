@@ -17,7 +17,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import {
-  ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS, OBJ_KIND_LABEL, hasObjRef,
+  ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS, OBJ_KIND_LABEL, hasObjRef, waitingText,
   type ActionRecord, type ActionStatus, type ActionLog,
 } from '@/mock/actions';
 
@@ -164,7 +164,7 @@ async function resubmit() {
       { time: t, text: `重新提交自 ${a.id}（上次失败：${a.failReason ?? '--'}）`, desc: ME },
       { time: t, text: `生成动作「${a.action}」· 动作类型 ${a.typeVersion}`, desc: `发起人 ${ME} · 幂等键 ${newKey}` },
       { time: t, text: `调用 ${a.system}：${ACTION_META[a.action].call}`, desc: `沿用原审批 ${a.approver}` },
-      { time: t, text: `等待 ${a.system} 返回`, desc: '超过 30 分钟未返回将标记为结果未知', status: 'warn' },
+      { time: t, text: `等待 ${a.system} 返回`, desc: waitingText(a.sysId), status: 'warn' },
     ],
   });
   LIST.unshift(rec);
@@ -303,7 +303,7 @@ const terminalText = computed(() => {
         </template>
 
         <span v-else-if="current.status === '审批中'" class="t-14 c-3">等待 {{ current.approver }} 审批</span>
-        <span v-else-if="current.status === '执行中'" class="t-14 c-3">等待 {{ current.system }} 返回，超过 30 分钟将标记为结果未知</span>
+        <span v-else-if="current.status === '执行中'" class="t-14 c-3">等待 {{ current.system }} 返回，{{ waitingText(current.sysId) }}</span>
 
         <template v-else-if="current.status === '失败'">
           <span v-if="current.retriedAs" class="t-14 c-3">已重新提交为 <a class="num" @click="pick(LIST.find((x) => x.id === current!.retriedAs)!)">{{ current.retriedAs }}</a></span>

@@ -24,6 +24,9 @@ import PermissionsTab from './parts/object/PermissionsTab.vue';
 import HistoryTab from './parts/object/HistoryTab.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { crsOf, metricsOf } from './parts/object/objectGov';
+import ObjBehaviorLifecycle from './parts/object/ObjBehaviorLifecycle.vue';
+import ObjBehaviorActions from './parts/object/ObjBehaviorActions.vue';
+import ObjBehaviorAutomation from './parts/object/ObjBehaviorAutomation.vue';
 
 /**
  * 页签配置。新增页签只需在这里加一项，页面其他地方不用动。
@@ -44,9 +47,9 @@ const TABS: ObjTab[] = [
   { key: 'properties', label: '属性', phase: 'def' },
   { key: 'links', label: '关系', phase: 'def' },
   { key: 'mapping', label: '数据源与映射', phase: 'def' },
-  { key: 'lifecycle', label: '生命周期', phase: 'behavior' },
-  { key: 'actions', label: '动作', phase: 'behavior' },
-  { key: 'automation', label: '自动化', phase: 'behavior' },
+  { key: 'lifecycle', label: '生命周期', phase: 'behavior', component: ObjBehaviorLifecycle },
+  { key: 'actions', label: '动作', phase: 'behavior', component: ObjBehaviorActions },
+  { key: 'automation', label: '自动化', phase: 'behavior', component: ObjBehaviorAutomation },
   { key: 'metrics', label: '指标', phase: 'governance', component: MetricsTab },
   { key: 'views', label: '视图', phase: 'governance', component: ViewsTab },
   { key: 'permissions', label: '权限', phase: 'governance', component: PermissionsTab },

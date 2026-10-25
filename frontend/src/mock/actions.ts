@@ -82,6 +82,10 @@ export const ACTION_META = Object.fromEntries((Object.keys(LOCAL) as ActionName[
 export const sysName = (id: SysId) => extSystemById(id)?.name ?? id;
 /** 结果未知：系统每 15 分钟按幂等键查询外部结果，3 次仍无法确认时等人工对账 */
 export const AUTO_QUERY_TEXT = '按幂等键自动查询 3 次（每 15 分钟），仍无法确认';
+/** 外部系统登记的超时时长（秒），超时即标记为结果未知、不重试写入 */
+export const timeoutSec = (id: SysId) => (extSystemById(id)?.timeoutMs ?? 5000) / 1000;
+/** 执行中的提示：超过系统超时时长未返回将标记为结果未知 */
+export const waitingText = (id: SysId) => `超过 ${timeoutSec(id)} 秒未返回将标记为结果未知`;
 export const ACTION_NAMES = Object.keys(ACTION_META) as ActionName[];
 /** 批量示例数据随机取的动作（大区级动作只有下面单独写的两条） */
 const SAMPLE_NAMES: ActionName[] = ['发起调价审批', '补货申请', '发起物流催派', '订单状态修正', '同步会员标签'];
@@ -134,12 +138,12 @@ export function buildLog(x: ActionRecord): ActionLog[] {
   if (x.status === '审批中') { log.push({ time: addMin(t, 2), text: '等待审批', desc: `审批人 ${x.approver}`, status: 'warn' }); return log; }
   log.push({ time: addMin(t, 21), text: '审批通过', desc: `审批人 ${x.approver}` });
   log.push({ time: addMin(t, 22), text: `调用 ${x.system}：${m.call}`, desc: `幂等键 ${x.idemKey}` });
-  if (x.status === '执行中') { log.push({ time: addMin(t, 22), text: `等待 ${x.system} 返回`, desc: '超过 30 分钟未返回将标记为结果未知', status: 'warn' }); return log; }
+  if (x.status === '执行中') { log.push({ time: addMin(t, 22), text: `等待 ${x.system} 返回`, desc: waitingText(x.sysId), status: 'warn' }); return log; }
   if (x.status === '成功') log.push({ time: addMin(t, 23), text: `${x.system} 返回成功，外部单号 ${x.extRef}`, desc: '系统' });
   if (x.status === '失败') log.push({ time: addMin(t, 23), text: `${x.system} 明确返回失败${retries(x) ? `，已自动重试 ${retries(x)} 次仍失败` : ''}`, desc: x.failReason, status: 'error' });
   if (x.status === '结果未知' || x.status === '已对账') {
     // 超时时长取外部系统登记的 timeoutMs（会员 CRM 5 秒、用友 ERP 10 秒……），超时不重试
-    const sec = (extSystemById(m.sysId)?.timeoutMs ?? 5000) / 1000;
+    const sec = timeoutSec(m.sysId);
     log.push({ time: addMin(t, 22), text: `${x.system} ${sec} 秒未返回结果，标记为结果未知（不重试写入）`, desc: x.unknownReason ? `系统 · ${x.unknownReason}` : '系统', status: 'warn' });
     log.push({ time: addMin(t, 67), text: AUTO_QUERY_TEXT, desc: `系统 · 幂等键 ${x.idemKey}`, status: 'unknown' });
     if (x.status === '结果未知') log.push({ time: addMin(t, 67), text: '转人工对账', desc: `对账人 ${owner} · 在 ${x.system} 按幂等键核对后确认结果`, status: 'warn' });
