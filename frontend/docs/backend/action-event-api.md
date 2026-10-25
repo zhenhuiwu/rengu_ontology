@@ -744,7 +744,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `event_subscription.rule_code` | 规则 `R-…` | 同上 |
 | `action_type.target_kind`、`event_type.obj_kind` | 静态的对象类型（前端 id） | 跨模块，静态表结构未定稿 |
 | `action_type_version.release_ver` / `event_type_version.release_ver` | `ontology_release.ver` | mock 版本记录里有发布表没有的版本号（如 `v2026.09.2`、`v2026.08.1`），只能按字符串存 |
-| `action_type.retired_release_id` / `event_type.retired_release_id` | `ontology_release.id` | **暂时**软引用：原先的理由（有外键时 `TRUNCATE` 会失败）已不成立，`ontology_release` 本来就只追加、不能 TRUNCATE，CONVENTIONS「指向 `ontology_release(id)` 的外键允许且推荐」。下一批单独补迁移 `event_0002`，改成外键（`ON DELETE` 默认 NO ACTION），串在当时 master 的 head 后面 |
+
+`action_type.retired_release_id`、`event_type.retired_release_id` → `ontology_release.id` 是**真外键**（迁移 `event_0002`，`ON DELETE` 默认 NO ACTION，CONVENTIONS §6；`event_0001` 时是软引用）。列可空，NULL = 在用。
 
 ### 10.4 `restore_section(session, content, *, release_id)` 的行为
 

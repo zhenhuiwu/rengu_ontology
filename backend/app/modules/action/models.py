@@ -73,7 +73,9 @@ class ActionType(CodeMixin, MutableTableMixin, Base):
         String(255), nullable=False, default="", comment="接口 idemKey"
     )
     retired_release_id: Mapped[int | None] = mapped_column(
-        BigInteger, comment="整版回滚下线于哪一版（ontology_release.id，软引用）"
+        BigInteger,
+        ForeignKey("ontology_release.id"),
+        comment="整版回滚下线于哪一版（ontology_release.id）",
     )
 
     system: Mapped[ExtSystem | None] = relationship(lazy="joined")

@@ -478,10 +478,18 @@ async def _generates(session) -> dict:
     return {(c, r): g for c, r, g in rows.all()}
 
 
-async def test_restore_section_overwrites_and_retires(ae):
+async def _release_ids(session) -> list[int]:
+    """真实的版本行 id（retired_release_id 是指向 ontology_release.id 的外键，event_0002）。"""
+    ids = list((await session.scalars(select(OntologyRelease.id).order_by(OntologyRelease.id))).all())
+    assert len(ids) >= 2
+    return ids
+
+
+async def test_restore_section_overwrites_and_retires(released):
+    ae = released
     acts, evs = await _snap(ae)
     gen0 = await _generates(ae)
-    rel_id = 987654
+    rel_id, rel_id2 = (await _release_ids(ae))[:2]
     # 恢复到「close_alert 名字和参数不同、request_replenish 不存在」的那一版
     old_acts = {k: v for k, v in acts.items() if k != "request_replenish"}
     ca = old_acts["close_alert"]
@@ -501,8 +509,8 @@ async def test_restore_section_overwrites_and_retires(ae):
     assert (await ae.scalar(select(EventType.retention_days).where(EventType.code == first))) == 7
 
     # 再恢复到包含它们的版本（重新发布）→ 清掉下线标记、内容回到原样
-    await action_sections.BUILDER.restore_section(ae, acts, release_id=rel_id + 1)
-    await event_sections.BUILDER.restore_section(ae, evs, release_id=rel_id + 1)
+    await action_sections.BUILDER.restore_section(ae, acts, release_id=rel_id2)
+    await event_sections.BUILDER.restore_section(ae, evs, release_id=rel_id2)
     acts3, evs3 = await _snap(ae)
     assert acts3 == acts and evs3 == evs
     n_ret = select(func.count()).select_from(ActionType).where(ActionType.retired_release_id.is_not(None))
@@ -518,11 +526,13 @@ async def test_restore_section_overwrites_and_retires(ae):
     assert sum(weekly.values()) == want
 
 
-async def test_restore_section_none_leaves_types_untouched(ae):
+async def test_restore_section_none_leaves_types_untouched(released):
     """content=None（那一版快照里没有这一节）：什么都不做，在用的类型不下线、定义不变。"""
+    ae = released
     acts, evs = await _snap(ae)
-    await action_sections.BUILDER.restore_section(ae, None, release_id=987654)
-    await event_sections.BUILDER.restore_section(ae, None, release_id=987654)
+    rel_id = (await _release_ids(ae))[-1]
+    await action_sections.BUILDER.restore_section(ae, None, release_id=rel_id)
+    await event_sections.BUILDER.restore_section(ae, None, release_id=rel_id)
     assert await _snap(ae) == (acts, evs)
     for model in (ActionType, EventType):
         n_ret = select(func.count()).select_from(model).where(model.retired_release_id.is_not(None))
@@ -605,33 +615,44 @@ async def test_fresh_db_default_seed_writes_action_event_sections():
         await _drop(admin, db)
 
 
-async def test_my_migrations_roundtrip_only_my_tables():
-    """降到 integration_0001 的 down_revision（从脚本算，不写死 0003），只断言自己的表消失 / 回来；
-    之后串在我后面的模块迁移不影响这个测试。"""
-    import asyncpg
-    from alembic import command
-    from alembic.script import ScriptDirectory
+EVENT_TABLES = {t for t in MY_TABLES if t.startswith("event_")}
 
-    down = ScriptDirectory.from_config(_alembic()).get_revision("integration_0001").down_revision
-    admin, db, url, plain = await _temp_db()
 
-    async def tables() -> set[str]:
-        conn = await asyncpg.connect(plain)
-        try:
-            rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-            return {r["tablename"] for r in rows}
-        finally:
-            await conn.close()
+async def test_my_migrations_round_trip():
+    """骨架 assert_module_round_trip：从 integration 的父迁移升到 head、降回再升回
+    （ext_system → action → event 都在它之后），
+    表 / 列 / 索引 / 触发器 / 序列 / 视图都回到原样；不写死父迁移 / head。"""
+    from tests.helpers.migrations import assert_module_round_trip
 
-    try:
-        cfg = _alembic(url)
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        assert await tables() >= MY_TABLES
-        await asyncio.to_thread(command.downgrade, cfg, down)
-        left = await tables()
-        assert not (MY_TABLES & left), MY_TABLES & left
-        assert {"ontology_release", "sys_user"} <= left  # 我依赖的表还在
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        assert await tables() >= MY_TABLES
-    finally:
-        await _drop(admin, db)
+    await assert_module_round_trip("integration", MY_TABLES)
+
+
+async def test_event_migrations_round_trip():
+    """event_0001 + event_0002（retired_release_id 外键）往返：
+    降到 action_0001 后 action_type 的列注释等全部复原。"""
+    from tests.helpers.migrations import assert_module_round_trip, module_revisions
+
+    assert [r.revision for r in module_revisions("event")][:2] == ["event_0001", "event_0002"]
+    await assert_module_round_trip("event", EVENT_TABLES)
+
+
+async def test_retired_release_fk_no_action(ae):
+    """retired_release_id → ontology_release.id，ON DELETE NO ACTION（CONVENTIONS §6）；
+    不存在的 id 写不进去。"""
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    rows = (
+        await ae.execute(
+            text(
+                "SELECT c.conrelid::regclass::text, c.confdeltype::text, c.confrelid::regclass::text"
+                " FROM pg_constraint c WHERE c.contype = 'f' AND c.conname LIKE 'fk_%_retired_release_id_%'"
+            )
+        )
+    ).all()
+    assert sorted(rows) == [(t, "a", "ontology_release") for t in ("action_type", "event_type")]
+    missing = (await ae.scalar(select(func.coalesce(func.max(OntologyRelease.id), 0)))) + 1000
+    for model in (ActionType, EventType):
+        with pytest.raises(IntegrityError):
+            async with ae.begin_nested():
+                await ae.execute(update(model).values(retired_release_id=missing))
