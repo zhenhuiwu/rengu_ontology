@@ -6,6 +6,7 @@
 import { computed, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { DRAFTS, type DraftCR } from '@/mock/releases';
+import { CHANGE_REQUESTS } from '@/mock/changes';
 import { useReadonly } from '@/composables/useReadonly';
 
 export type TargetKind = 'object' | 'metric' | 'action' | 'event';
@@ -26,6 +27,12 @@ export function draftOf(kind: TargetKind, id: string): DraftCR | undefined {
   return allDrafts().find((d) => d.id === cr);
 }
 
+/** 新单号 = 变更与发布、草稿、本会话新建的单子里最大单号 + 1，谁加单都不会撞号。 */
+function nextCrId() {
+  const nums = [...CHANGE_REQUESTS, ...DRAFTS, ...created].map((c) => Number(String(c.id).replace(/\D/g, '')) || 0);
+  return `CR-${String(Math.max(0, ...nums) + 1).padStart(4, '0')}`;
+}
+
 export function useDraftView(kind: TargetKind, targetId: () => string) {
   const route = useRoute();
   const router = useRouter();
@@ -41,7 +48,7 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
   function start(opts: { join?: string; title?: string }) {
     let id = opts.join;
     if (!id) {
-      id = `CR-${String(15 + created.length).padStart(4, '0')}`;
+      id = nextCrId();
       created.unshift({ id, title: opts.title || '未命名变更', owner: '王敏', updatedAt: '2026-10-25 16:30', changes: 0 });
     }
     const t = (TARGETS[id] ??= {});

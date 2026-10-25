@@ -168,8 +168,7 @@ async function publish() {
     impact: m.blocked
       ? '合并校验有阻断，不能发布。请把冲突的变更单撤回或合并后再发布。'
       : '发布后新提问按新版本回答；已有答案、页面和告警保留各自的口径版本。可回滚到上一版本。',
-    // 有阻断时用必选项锁住确认按钮（确认卡没有单独的禁用参数）
-    picker: m.blocked ? { label: '发布确认', placeholder: '合并校验有阻断，不能发布', options: [], required: true } : undefined });
+    blocked: m.blocked ? m.rows.filter((r) => r.result === '阻断').map((r) => `${r.note}（${r.code}）`).join('；') : undefined });
   if (ok && !m.blocked) {
     approved.value.forEach((c) => { c.status = '已发布'; c.release = NEXT_VERSION; c.updatedAt = now(); (extraLog[c.id] ??= []).unshift({ time: now(), text: `${me.value} 整版发布为 ${NEXT_VERSION}`, desc: `合并校验：${m.rows.filter((r) => r.result !== '通过').map((r) => r.note).join('；') || '全部通过'}` }); });
     message.success(`已发布 ${NEXT_VERSION}`);
