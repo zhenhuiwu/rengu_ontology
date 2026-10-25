@@ -1,3 +1,141 @@
-"""ORM 模型（继承 app.db.base.Base；表名不加模块前缀，主键 IdMixin / CodeMixin，外键指向 id）。
+"""事件类型定义表（action-event-api §9）。event / event_delivery / event_dedup 等运行表不在本批。
 
-新增模型要在 app/db/models.py 里 import。"""
+- 主键代理键 id bigint，外键指向 id；接口只出业务编码（event_type.code = 前端 id）。
+- 规则引用（event_type.rule_code、event_subscription.rule_code）暂为**软引用**（varchar R-…），
+  动态 rule 合并后改 rule_id → rule.id 外键。
+- weekly（近 7 天事件数 / 订阅方投递数）文档里归统计表 event_daily_stat / event_subscription_weekly_stat，
+  统计表不在本批，暂作为列存在定义表上 [推断]；不进快照。
+新增模型要在 app/db/models.py 里 import。
+"""
+
+from datetime import datetime
+
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.enums import LabelEnum
+from app.db.base import AppendOnlyTableMixin, Base, CodeMixin, IdMixin, MutableTableMixin
+from app.db.types import JsonType, enum_column
+from app.modules.action.models import TypeStatus
+
+
+class EventSource(LabelEnum):
+    """事件来源（§3.5）。成员顺序 = 前端 EVENT_SOURCES 顺序。"""
+
+    sync = "数据同步"
+    rule = "规则"
+    action = "动作"
+    external = "外部系统"
+
+
+class SubscriberKind(LabelEnum):
+    rule = "规则"
+    automation = "自动化"
+    notify = "通知"
+    external = "外部订阅"
+
+
+class SubscriberStatus(LabelEnum):
+    enabled = "启用"
+    disabled = "停用"
+    error = "异常"
+
+
+class EventType(CodeMixin, MutableTableMixin, Base):
+    __tablename__ = "event_type"
+    __table_args__ = (UniqueConstraint("api"), {"comment": "事件类型（当前版本）"})
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    api: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[EventSource] = mapped_column(enum_column(EventSource, 16), nullable=False)
+    source_ref: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    rule_code: Mapped[str | None] = mapped_column(String(32), comment="来源规则 R-…（软引用，接口 ruleId）")
+    object: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    object_api: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    obj_kind: Mapped[str | None] = mapped_column(String(32), comment="对象类型前端 id（软引用）")
+    status: Mapped[TypeStatus] = mapped_column(enum_column(TypeStatus, 16), nullable=False)
+    version: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="接口 desc")
+    dedup_key_rule: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="接口 dedupKey")
+    dedup_window: Mapped[str] = mapped_column(String(64), nullable=False, default="", comment="原文")
+    delivery: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    ordering: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    retention_days: Mapped[int] = mapped_column(Integer, nullable=False, comment="接口 retention = 'N 天'")
+    weekly: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="近 7 天事件数 [推断]")
+    retired_release_id: Mapped[int | None] = mapped_column(
+        BigInteger, comment="整版回滚下线于哪一版（ontology_release.id，软引用）"
+    )
+
+    payload: Mapped[list["EventPayloadField"]] = relationship(
+        lazy="selectin", order_by="EventPayloadField.seq"
+    )
+    subscribers: Mapped[list["EventSubscription"]] = relationship(
+        lazy="selectin", order_by="EventSubscription.seq"
+    )
+
+
+class EventPayloadField(IdMixin, MutableTableMixin, Base):
+    """事件自身载荷字段（EVENT_TYPES[].specific）。"""
+
+    __tablename__ = "event_payload_field"
+    __table_args__ = (UniqueConstraint("event_type_id", "api"), {"comment": "事件载荷字段"})
+
+    event_type_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    api: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="接口 desc")
+    sample: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class EventEnvelopeField(IdMixin, MutableTableMixin, Base):
+    """通用信封字段（全局 10 行，只读；payloadOf 结果的最后 10 项）。"""
+
+    __tablename__ = "event_envelope_field"
+    __table_args__ = (UniqueConstraint("api"), {"comment": "事件信封字段（全局）"})
+
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    api: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sample: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class EventSubscription(IdMixin, MutableTableMixin, Base):
+    __tablename__ = "event_subscription"
+    __table_args__ = (UniqueConstraint("event_type_id", "name"), {"comment": "事件订阅方"})
+
+    event_type_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[SubscriberKind] = mapped_column(enum_column(SubscriberKind, 16), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    rule_code: Mapped[str | None] = mapped_column(String(32), comment="规则 R-…（软引用，接口 ruleId）")
+    filter_text: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="接口 filter")
+    filter_expr: Mapped[dict | None] = mapped_column(JsonType)
+    then_text: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="接口 then")
+    status: Mapped[SubscriberStatus] = mapped_column(enum_column(SubscriberStatus, 16), nullable=False)
+    weekly: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="近 7 天投递数 [推断]")
+
+
+class EventTypeVersion(IdMixin, AppendOnlyTableMixin, Base):
+    """同 action_type_version：只追加、不存状态；release_ver 软引用。"""
+
+    __tablename__ = "event_type_version"
+    __table_args__ = (UniqueConstraint("event_type_id", "ver"), {"comment": "事件类型版本（只追加）"})
+
+    event_type_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("event_type.id"), nullable=False)
+    ver: Mapped[str] = mapped_column(String(16), nullable=False)
+    release_ver: Mapped[str] = mapped_column(String(32), nullable=False, comment="本体发布版本号（软引用）")
+    change_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    by_name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    definition: Mapped[dict | None] = mapped_column(JsonType)

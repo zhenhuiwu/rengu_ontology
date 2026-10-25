@@ -1,0 +1,719 @@
+[
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "issue_recall_coupon"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "新建",
+          "obj": "优惠券发放记录",
+          "field": "大区、会员、活动、券号（CRM 返回）、面额、有效期（每位会员一条）"
+        },
+        {
+          "op": "修改",
+          "obj": "会员",
+          "field": "最近召回时间、召回次数 + 1"
+        },
+        {
+          "op": "关联",
+          "obj": "会员 ↔ 营销活动",
+          "field": "参与记录"
+        },
+        {
+          "op": "修改",
+          "obj": "大区",
+          "field": "会员召回预算已用金额"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 大区内会员常去门店店长",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "sync_member_tags"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "新建",
+          "obj": "标签同步记录",
+          "field": "分群、标签、分群快照日期、覆盖人数、CRM 任务号"
+        },
+        {
+          "op": "修改",
+          "obj": "会员分群",
+          "field": "最近标签同步时间"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 分群所属门店导购",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "assign_region_manager"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "大区",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "adjust_region_budget"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "大区",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "correct_order_status"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "订单",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "request_replenish"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "商品",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "adjust_store_price"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "商品",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "start_price_approval"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "商品",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "close_alert"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "告警",
+          "field": "状态（已解决 / 已忽略）、关闭人、关闭时间"
+        },
+        {
+          "op": "新建",
+          "obj": "告警处理记录",
+          "field": "“关闭为{关闭结果}：{原因}”"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "AlertClosed 告警关闭",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "urge_logistics"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "订单",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "claim_alert"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "告警",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "reassign_alert"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "告警",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "reissue_shipment"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "订单",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "approve_refund"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "订单",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "change_member_level"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "会员",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "change_store_status"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "门店",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "set_safety_stock"
+      }
+    ],
+    "result": {
+      "edits": [
+        {
+          "op": "修改",
+          "obj": "商品",
+          "field": "状态、最近操作人、最近操作时间"
+        },
+        {
+          "op": "新建",
+          "obj": "操作记录",
+          "field": "动作、参数快照、发起人、确认人"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "事件",
+          "target": "ActionExecuted 动作执行完成",
+          "when": "写回成功后",
+          "note": "供规则与自动化订阅"
+        },
+        {
+          "kind": "通知",
+          "target": "企业微信 · 发起人与确认人",
+          "when": "写回成功后",
+          "note": "失败不影响动作结果"
+        },
+        {
+          "kind": "事件",
+          "target": "ActionOutcomeUnknown 动作结果未知",
+          "when": "外部系统超时或无响应（不重试）",
+          "note": "系统按幂等键自动查询，查不到再人工对账"
+        }
+      ]
+    }
+  }
+]

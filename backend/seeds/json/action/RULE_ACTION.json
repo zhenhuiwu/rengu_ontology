@@ -1,0 +1,6 @@
+{
+  "R-007": "start_price_approval",
+  "R-012": "request_replenish",
+  "R-015": "urge_logistics",
+  "SM-ORD": "correct_order_status"
+}

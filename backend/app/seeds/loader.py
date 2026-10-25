@@ -141,6 +141,10 @@ async def run_seeds(
 
     reports: list[SeedReport] = []
     adapter = get_adapter(session)
+    # TEMP（Palantir专家）：骨架自动发现 app/modules/<m>/sections.py 之前，先导入动作 / 事件的快照 section
+    from app.modules.action import sections as _action_sections  # noqa: F401
+    from app.modules.event import sections as _event_sections  # noqa: F401
+
     for module in modules or SEED_MODULES:
         _, specs = module_specs(module)
         s = get_settings()

@@ -1,0 +1,466 @@
+[
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "order_status_changed"
+      }
+    ],
+    "result": [
+      {
+        "kind": "规则",
+        "name": "订单状态非法迁移",
+        "ruleId": "SM-ORD",
+        "filter": "全部",
+        "then": "校验生命周期 v4，非法则产生“订单状态非法迁移”",
+        "status": "启用",
+        "weekly": 48210
+      },
+      {
+        "kind": "自动化",
+        "name": "已出库订单启动签收计时",
+        "filter": "新状态 = 已出库",
+        "then": "写入出库时间，供 R-015 计算",
+        "status": "启用",
+        "weekly": 17630
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS 订单流水",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.order.status",
+        "status": "启用",
+        "weekly": 48210
+      },
+      {
+        "kind": "通知",
+        "name": "大额订单取消提醒",
+        "filter": "新状态 = 已取消 且 金额 ≥ 2,000",
+        "then": "企业微信通知门店店长",
+        "status": "停用",
+        "weekly": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "inventory_changed"
+      }
+    ],
+    "result": [
+      {
+        "kind": "规则",
+        "name": "可用库存低于安全线",
+        "ruleId": "R-012",
+        "filter": "变动后 < 变动前",
+        "then": "计算可用库存 < 安全库存",
+        "status": "启用",
+        "weekly": 61240
+      },
+      {
+        "kind": "外部订阅",
+        "name": "补货模型特征",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.inventory",
+        "status": "启用",
+        "weekly": 126480
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "stock_below_safety"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "生成动作“补货申请”",
+        "filter": "告警级别 ∈ {高, 中}",
+        "then": "生成“补货申请”，待 周晓峰 确认后提交",
+        "status": "启用",
+        "weekly": 232
+      },
+      {
+        "kind": "通知",
+        "name": "告警推送",
+        "filter": "全部",
+        "then": "企业微信通知规则订阅人",
+        "status": "启用",
+        "weekly": 386
+      },
+      {
+        "kind": "外部订阅",
+        "name": "经营分析数据集",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.alerts",
+        "status": "启用",
+        "weekly": 386
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "store_sales_drop"
+      }
+    ],
+    "result": [
+      {
+        "kind": "通知",
+        "name": "告警推送",
+        "filter": "全部",
+        "then": "企业微信通知规则订阅人",
+        "status": "启用",
+        "weekly": 9
+      },
+      {
+        "kind": "外部订阅",
+        "name": "经营分析数据集",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.alerts",
+        "status": "启用",
+        "weekly": 9
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "gross_margin_breach"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "生成动作“发起调价审批”",
+        "filter": "告警级别 ∈ {高, 中}",
+        "then": "生成“发起调价审批”，待 王敏 确认后提交",
+        "status": "启用",
+        "weekly": 32
+      },
+      {
+        "kind": "通知",
+        "name": "告警推送",
+        "filter": "全部",
+        "then": "企业微信通知规则订阅人",
+        "status": "启用",
+        "weekly": 54
+      },
+      {
+        "kind": "规则",
+        "name": "门店销售额环比下降",
+        "ruleId": "R-021",
+        "filter": "同门店当周 ≥ 3 条",
+        "then": "作为辅助信号参与周度复核",
+        "status": "启用",
+        "weekly": 6
+      },
+      {
+        "kind": "外部订阅",
+        "name": "经营分析数据集",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.alerts",
+        "status": "启用",
+        "weekly": 54
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "shipment_overdue"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "生成动作“发起物流催派”",
+        "filter": "告警级别 ∈ {高, 中}",
+        "then": "生成“发起物流催派”，待 陈立军 确认后提交",
+        "status": "启用",
+        "weekly": 127
+      },
+      {
+        "kind": "通知",
+        "name": "告警推送",
+        "filter": "全部",
+        "then": "企业微信通知规则订阅人",
+        "status": "启用",
+        "weekly": 212
+      },
+      {
+        "kind": "外部订阅",
+        "name": "经营分析数据集",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.alerts",
+        "status": "启用",
+        "weekly": 212
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "member_churn_risk"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "会员流失预警后更新会员",
+        "filter": "全部",
+        "then": "回写会员的相关字段",
+        "status": "启用",
+        "weekly": 3120
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.MemberChurnRisk",
+        "status": "启用",
+        "weekly": 3120
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "illegal_transition"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "生成动作“订单状态修正”",
+        "filter": "告警级别 ∈ {高, 中}",
+        "then": "生成“订单状态修正”，待 孙浩然 确认后提交",
+        "status": "启用",
+        "weekly": 19
+      },
+      {
+        "kind": "通知",
+        "name": "告警推送",
+        "filter": "全部",
+        "then": "企业微信通知规则订阅人",
+        "status": "启用",
+        "weekly": 31
+      },
+      {
+        "kind": "外部订阅",
+        "name": "经营分析数据集",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.alerts",
+        "status": "启用",
+        "weekly": 31
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "action_executed"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "动作执行完成后更新动作执行",
+        "filter": "全部",
+        "then": "回写动作执行的相关字段",
+        "status": "启用",
+        "weekly": 1864
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.ActionExecuted",
+        "status": "启用",
+        "weekly": 1864
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "action_outcome_unknown"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "写回对账任务",
+        "filter": "全部",
+        "then": "系统按幂等键自动查询，查不到再人工对账；确认后补发结果",
+        "status": "启用",
+        "weekly": 37
+      },
+      {
+        "kind": "通知",
+        "name": "结果未知提醒",
+        "filter": "等待时长 ≥ 30 分钟",
+        "then": "企业微信通知发起人与确认人",
+        "status": "启用",
+        "weekly": 9
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "coupon_redeemed"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "优惠券核销后更新会员",
+        "filter": "全部",
+        "then": "回写会员的相关字段",
+        "status": "启用",
+        "weekly": 8640
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.CouponRedeemed",
+        "status": "启用",
+        "weekly": 8640
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "refund_created"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "退款单创建后更新订单",
+        "filter": "全部",
+        "then": "回写订单的相关字段",
+        "status": "启用",
+        "weekly": 1420
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.RefundCreated",
+        "status": "启用",
+        "weekly": 1420
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "store_price_changed"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "门店价格变更后更新商品",
+        "filter": "全部",
+        "then": "回写商品的相关字段",
+        "status": "启用",
+        "weekly": 2260
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.StorePriceChanged",
+        "status": "启用",
+        "weekly": 2260
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "waybill_signed"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "运单签收后更新订单",
+        "filter": "全部",
+        "then": "回写订单的相关字段",
+        "status": "启用",
+        "weekly": 31240
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.WaybillSigned",
+        "status": "启用",
+        "weekly": 31240
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "alert_closed"
+      }
+    ],
+    "result": [
+      {
+        "kind": "自动化",
+        "name": "告警关闭后更新告警",
+        "filter": "全部",
+        "then": "回写告警的相关字段",
+        "status": "启用",
+        "weekly": 318
+      },
+      {
+        "kind": "外部订阅",
+        "name": "数据仓库 ODS",
+        "filter": "全部",
+        "then": "投递 Kafka topic ontology.AlertClosed",
+        "status": "启用",
+        "weekly": 318
+      }
+    ]
+  }
+]
