@@ -14,7 +14,8 @@ import { paginate } from '@/mock/paginate';
 import { ACTION_TYPES, EVENT_TYPES, eventTypeById, subscribersOf } from '@/mock/actionEvent';
 import { RULE_DEFS, hitsOf, stagedOf, type Hit, type RuleDef } from '@/mock/rules';
 import { OBJ_TYPE_KIND, OBJ_TYPE_NAME, SINCE_7D } from '@/mock/lifecycle';
-import { useDraftView } from '../useDraftView';
+import { useDraftView, draftOf } from '../useDraftView';
+import { CHANGE_REQUESTS } from '@/mock/changes';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const route = useRoute();
@@ -28,6 +29,13 @@ const events = computed(() => EVENT_TYPES.filter((e) => e.object === objName.val
 const hits7 = (id: string) => hitsOf(id).filter((h) => h.at >= SINCE_7D);
 const actName = (id: string) => ACTION_TYPES.find((a) => a.id === id)?.name ?? id;
 const fmt = (n: number) => n.toLocaleString('zh-CN');
+/** 规则状态按所在变更单推导：审核中 → 橙色“审核中”，只有草稿 → 灰色“草稿中”，其余用规则自身状态（灰） */
+function ruleStatus(r: RuleDef): { text: string; badge: 'warning' | 'default'; cr?: string } {
+  const d = draftOf('rule', r.id);
+  if (!d) return { text: r.status === '变更中' ? '草稿中' : r.status, badge: 'default' };
+  const st = CHANGE_REQUESTS.find((c) => c.id === d.id)?.status;
+  return st === '审核中' ? { text: '审核中', badge: 'warning', cr: d.id } : { text: '草稿中', badge: 'default', cr: d.id };
+}
 const pendingOf = (id: string) => stagedOf(id).filter((a) => a.status === '待确认').length;
 const totals = computed(() => ({
   hits: rules.value.reduce((s, r) => s + hits7(r.id).length, 0),
@@ -91,7 +99,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
                 <RouterLink :to="{ path: '/build/ontology/rules', query: { rule: record.id } }"><span class="num">{{ record.id }}</span> {{ record.name }}</RouterLink>
                 <div class="t-12 c-3">v{{ record.version }} · {{ record.owner }} · {{ record.level }}级</div>
               </template>
-              <template v-else-if="column.key === 'status'"><a-badge status="default" :text="record.status" /></template>
+              <template v-else-if="column.key === 'status'"><a-tooltip :title="ruleStatus(record).cr ? `所在变更单 ${ruleStatus(record).cr}` : undefined"><a-badge :status="ruleStatus(record).badge" :text="ruleStatus(record).text" /></a-tooltip></template>
               <template v-else-if="column.key === 'trigger'">
                 <RouterLink v-if="record.trigger.kind === '事件'" :to="{ path: '/build/ontology/event-types', query: { event: record.trigger.eventId } }">{{ triggerText(record) }}</RouterLink>
                 <span v-else class="c-2">{{ triggerText(record) }}</span>
