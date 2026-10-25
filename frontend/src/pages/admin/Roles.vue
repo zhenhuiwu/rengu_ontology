@@ -13,10 +13,11 @@ import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
+import { usePreviewStore, firstAllowedPage } from '@/stores/preview';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { ADMIN_USERS, paginate, EMPTY, type AdminUser } from '@/mock';
-import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
+import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, effectiveAccess, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
 
 const route = useRoute();
 const router = useRouter();
@@ -24,6 +25,7 @@ const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] a
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 const { readonly, reason } = useReadonly();
 const confirm = useConfirmStore();
+const previewStore = usePreviewStore();
 const nowStr = '2026-10-25 17:10';
 
 // 本页内修改叠加在示例数据上
@@ -76,7 +78,6 @@ const ocols = [
   { title: '可执行的动作', key: 'actions' },
   { title: '行级范围', key: 'scope', width: 260 },
 ];
-const scopeText = (s: RowScope) => `${s.prop} ${s.op} ${s.values.join('、')}`;
 const scopesOf = (obj: string) => role.value.scopes.filter((s) => s.objType === obj);
 
 // 行级范围
@@ -150,27 +151,13 @@ function addMembers() {
   message.success(`已添加 ${add.length} 名成员`);
 }
 
-// 以此用户预览：所有角色合并后的有效权限
+// 以此用户预览：所有角色合并后的有效权限（用本页正在编辑的角色和成员计算，与 roles.ts effectiveAccess 同一套规则）
 const rolesOf = (u: AdminUser) => roles.value.filter((r) => members.value[r.id].some((m) => m.id === u.id));
 const pvUser = computed(() => ADMIN_USERS.find((u) => u.id === q('preview')));
 const pv = computed(() => {
   const u = pvUser.value;
   if (!u) return null;
-  const rs = rolesOf(u);
-  const rank = { none: 0, view: 1, manage: 2 } as const;
-  const func = FUNC_PAGES.map((p) => ({ ...p, lv: rs.reduce<FuncLevel>((m, r) => (rank[r.func[p.key]] > rank[m] ? r.func[p.key] : m), 'none') })).filter((p) => p.lv !== 'none');
-  const objs = PERM_OBJECTS.map((o) => {
-    const granted = rs.filter((r) => r.objs.find((x) => x.objType === o.name)?.view);
-    if (!granted.length) return null;
-    // 多个角色：任一角色对该对象不限范围 → 全部；否则各角色范围取并集
-    const unlimited = granted.some((r) => !r.scopes.some((s) => s.objType === o.name));
-    const scopes = unlimited ? [] : granted.flatMap((r) => r.scopes.filter((s) => s.objType === o.name).map(scopeText));
-    const actions = [...new Set(rs.flatMap((r) => r.objs.find((x) => x.objType === o.name)?.actions ?? []))];
-    const exp = rs.some((r) => r.objs.find((x) => x.objType === o.name)?.export);
-    return { name: o.name, scope: unlimited ? '全部' : [...new Set(scopes)].join('；或 '), actions, exp };
-  }).filter((x): x is NonNullable<typeof x> => !!x);
-  const areasIn = [...new Set(func.map((p) => p.area))];
-  return { u, rs, func, objs, areasIn };
+  return { u, ...effectiveAccess(u, roles.value, (r) => members.value[r.id] ?? []) };
 });
 const openPreview = (u: AdminUser) => setQuery({ preview: u.id });
 async function enterPreview() {
@@ -182,6 +169,11 @@ async function enterPreview() {
     impact: '预览期间界面按该用户的权限显示，所有操作只读、不会执行动作；预览的开始和结束都会记入审计日志。',
   });
   if (!ok) return;
+  // 记住回来的位置（角色页，关掉预览抽屉），进入预览后到该用户第一个有权限的页面
+  const back = router.resolve({ path: route.path, query: { ...route.query, preview: undefined } }).fullPath;
+  previewStore.start(p.u, back, p);
+  const first = firstAllowedPage('use') ?? firstAllowedPage();
+  router.push(first ? { name: first } : '/');
   message.success(`已进入预览：${p.u.name}（只读）`);
 }
 
