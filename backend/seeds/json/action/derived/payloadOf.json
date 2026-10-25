@@ -1,0 +1,1943 @@
+[
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "order_status_changed"
+      }
+    ],
+    "result": [
+      {
+        "name": "订单号",
+        "api": "orderId",
+        "type": "字符串",
+        "required": true,
+        "desc": "订单业务主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "原状态",
+        "api": "fromStatus",
+        "type": "枚举",
+        "required": true,
+        "desc": "迁移前状态",
+        "sample": "拣货中"
+      },
+      {
+        "name": "新状态",
+        "api": "toStatus",
+        "type": "枚举",
+        "required": true,
+        "desc": "迁移后状态",
+        "sample": "已出库"
+      },
+      {
+        "name": "门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": true,
+        "desc": "下单门店",
+        "sample": "SH0031"
+      },
+      {
+        "name": "渠道",
+        "api": "channel",
+        "type": "枚举",
+        "required": true,
+        "desc": "下单渠道",
+        "sample": "美团闪购"
+      },
+      {
+        "name": "操作来源",
+        "api": "operator",
+        "type": "字符串",
+        "required": false,
+        "desc": "源系统操作人或接口",
+        "sample": "wms-sync"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "inventory_changed"
+      }
+    ],
+    "result": [
+      {
+        "name": "SKU",
+        "api": "sku",
+        "type": "字符串",
+        "required": true,
+        "desc": "商品编码",
+        "sample": "1011846"
+      },
+      {
+        "name": "门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": true,
+        "desc": "库存所在门店",
+        "sample": "SH0031"
+      },
+      {
+        "name": "变动前",
+        "api": "before",
+        "type": "整数",
+        "required": true,
+        "desc": "变动前可用库存",
+        "sample": "58"
+      },
+      {
+        "name": "变动后",
+        "api": "after",
+        "type": "整数",
+        "required": true,
+        "desc": "变动后可用库存",
+        "sample": "37"
+      },
+      {
+        "name": "变动原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "desc": "销售 / 调拨 / 盘点 / 报损",
+        "sample": "销售"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "stock_below_safety"
+      }
+    ],
+    "result": [
+      {
+        "name": "SKU",
+        "api": "sku",
+        "type": "字符串",
+        "required": true,
+        "desc": "商品编码",
+        "sample": "1011846"
+      },
+      {
+        "name": "门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": true,
+        "desc": "门店编码",
+        "sample": "SH0031"
+      },
+      {
+        "name": "可用库存",
+        "api": "available",
+        "type": "整数",
+        "required": true,
+        "desc": "命中时可用库存",
+        "sample": "37"
+      },
+      {
+        "name": "安全库存",
+        "api": "safety",
+        "type": "整数",
+        "required": true,
+        "desc": "门店安全库存",
+        "sample": "120"
+      },
+      {
+        "name": "告警",
+        "api": "alertId",
+        "type": "字符串",
+        "required": true,
+        "desc": "生成的告警 ID",
+        "sample": "AL-20261025-0139"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "store_sales_drop"
+      }
+    ],
+    "result": [
+      {
+        "name": "门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": true,
+        "desc": "门店编码",
+        "sample": "HZ0058"
+      },
+      {
+        "name": "本周销售额",
+        "api": "current",
+        "type": "金额",
+        "required": true,
+        "desc": "不含税",
+        "sample": "182,406.30"
+      },
+      {
+        "name": "上周销售额",
+        "api": "previous",
+        "type": "金额",
+        "required": true,
+        "desc": "不含税",
+        "sample": "232,671.88"
+      },
+      {
+        "name": "环比",
+        "api": "delta",
+        "type": "百分比",
+        "required": true,
+        "desc": "周环比",
+        "sample": "−21.6%"
+      },
+      {
+        "name": "告警",
+        "api": "alertId",
+        "type": "字符串",
+        "required": true,
+        "desc": "生成的告警 ID",
+        "sample": "AL-20261020-0074"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "gross_margin_breach"
+      }
+    ],
+    "result": [
+      {
+        "name": "SKU",
+        "api": "sku",
+        "type": "字符串",
+        "required": true,
+        "desc": "商品编码",
+        "sample": "1004512"
+      },
+      {
+        "name": "门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": false,
+        "desc": "为空表示全渠道",
+        "sample": "SH0102"
+      },
+      {
+        "name": "毛利率",
+        "api": "margin",
+        "type": "百分比",
+        "required": true,
+        "desc": "当前毛利率",
+        "sample": "16.42%"
+      },
+      {
+        "name": "阈值",
+        "api": "threshold",
+        "type": "百分比",
+        "required": true,
+        "desc": "规则阈值",
+        "sample": "18.00%"
+      },
+      {
+        "name": "告警",
+        "api": "alertId",
+        "type": "字符串",
+        "required": true,
+        "desc": "生成的告警 ID",
+        "sample": "AL-20261025-0127"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "shipment_overdue"
+      }
+    ],
+    "result": [
+      {
+        "name": "订单号",
+        "api": "orderId",
+        "type": "字符串",
+        "required": true,
+        "desc": "订单业务主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "运单号",
+        "api": "waybill",
+        "type": "字符串",
+        "required": true,
+        "desc": "承运商运单号",
+        "sample": "SF1428xxxxxx"
+      },
+      {
+        "name": "出库时长",
+        "api": "hours",
+        "type": "小数",
+        "required": true,
+        "desc": "小时",
+        "sample": "53.4"
+      },
+      {
+        "name": "承运商",
+        "api": "carrier",
+        "type": "枚举",
+        "required": true,
+        "desc": "承运商",
+        "sample": "顺丰同城"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "member_churn_risk"
+      }
+    ],
+    "result": [
+      {
+        "name": "会员",
+        "api": "memberId",
+        "type": "字符串",
+        "required": true,
+        "desc": "会员 ID",
+        "sample": "M31852207"
+      },
+      {
+        "name": "流失评分",
+        "api": "score",
+        "type": "小数",
+        "required": true,
+        "desc": "0–1",
+        "sample": "0.82"
+      },
+      {
+        "name": "最近购买",
+        "api": "lastPurchase",
+        "type": "日期",
+        "required": true,
+        "desc": "最近一次购买日期",
+        "sample": "2026-08-19"
+      },
+      {
+        "name": "常去门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": false,
+        "desc": "近 90 天消费最多的门店",
+        "sample": "SH0047"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "illegal_transition"
+      }
+    ],
+    "result": [
+      {
+        "name": "订单号",
+        "api": "orderId",
+        "type": "字符串",
+        "required": true,
+        "desc": "订单业务主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "原状态",
+        "api": "fromStatus",
+        "type": "枚举",
+        "required": true,
+        "desc": "迁移前状态",
+        "sample": "已签收"
+      },
+      {
+        "name": "新状态",
+        "api": "toStatus",
+        "type": "枚举",
+        "required": true,
+        "desc": "迁移后状态",
+        "sample": "待支付"
+      },
+      {
+        "name": "原始事件",
+        "api": "causeEventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "触发的订单状态变更事件",
+        "sample": "EV-…"
+      },
+      {
+        "name": "告警",
+        "api": "alertId",
+        "type": "字符串",
+        "required": true,
+        "desc": "生成的告警 ID",
+        "sample": "AL-20261025-0143"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "action_executed"
+      }
+    ],
+    "result": [
+      {
+        "name": "执行记录",
+        "api": "runId",
+        "type": "字符串",
+        "required": true,
+        "desc": "执行记录 ID",
+        "sample": "ACT-20261025-2135"
+      },
+      {
+        "name": "动作类型",
+        "api": "actionType",
+        "type": "字符串",
+        "required": true,
+        "desc": "动作 API 名",
+        "sample": "requestReplenishment"
+      },
+      {
+        "name": "目标对象",
+        "api": "targetId",
+        "type": "字符串",
+        "required": true,
+        "desc": "动作目标对象 ID",
+        "sample": "1011846"
+      },
+      {
+        "name": "发起人",
+        "api": "initiator",
+        "type": "字符串",
+        "required": true,
+        "desc": "人或规则",
+        "sample": "规则 R-012"
+      },
+      {
+        "name": "确认人",
+        "api": "confirmer",
+        "type": "字符串",
+        "required": true,
+        "desc": "确认提交的人",
+        "sample": "周晓峰"
+      },
+      {
+        "name": "写回结果",
+        "api": "writeback",
+        "type": "字符串",
+        "required": false,
+        "desc": "外部系统返回码",
+        "sample": "HTTP 200"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "action_outcome_unknown"
+      }
+    ],
+    "result": [
+      {
+        "name": "执行记录",
+        "api": "runId",
+        "type": "字符串",
+        "required": true,
+        "desc": "执行记录 ID",
+        "sample": "ACT-20261025-2134"
+      },
+      {
+        "name": "动作类型",
+        "api": "actionType",
+        "type": "字符串",
+        "required": true,
+        "desc": "动作 API 名",
+        "sample": "requestReplenishment"
+      },
+      {
+        "name": "外部系统",
+        "api": "system",
+        "type": "字符串",
+        "required": true,
+        "desc": "写回目标（外部系统 ID）",
+        "sample": "EXT-ERP 用友 ERP"
+      },
+      {
+        "name": "幂等键",
+        "api": "idemKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "自动查询与对账用",
+        "sample": "act-al-20261025-0139"
+      },
+      {
+        "name": "等待时长",
+        "api": "waitedMs",
+        "type": "整数",
+        "required": true,
+        "desc": "毫秒（超时即记为结果未知，不重试）",
+        "sample": "10000"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "coupon_redeemed"
+      }
+    ],
+    "result": [
+      {
+        "name": "券号",
+        "api": "couponNo",
+        "type": "字符串",
+        "required": true,
+        "desc": "CRM 券号",
+        "sample": "CP2610250012"
+      },
+      {
+        "name": "会员",
+        "api": "memberId",
+        "type": "字符串",
+        "required": true,
+        "desc": "会员 ID",
+        "sample": "M31852207"
+      },
+      {
+        "name": "订单号",
+        "api": "orderId",
+        "type": "字符串",
+        "required": true,
+        "desc": "核销订单",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "核销门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": true,
+        "desc": "门店编码",
+        "sample": "SH0047"
+      },
+      {
+        "name": "优惠金额",
+        "api": "discount",
+        "type": "金额",
+        "required": true,
+        "desc": "元",
+        "sample": "15.00"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "refund_created"
+      }
+    ],
+    "result": [
+      {
+        "name": "退款单号",
+        "api": "refundId",
+        "type": "字符串",
+        "required": true,
+        "desc": "ERP 退款单号",
+        "sample": "RF2610250031"
+      },
+      {
+        "name": "订单号",
+        "api": "orderId",
+        "type": "字符串",
+        "required": true,
+        "desc": "原订单",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "退款金额",
+        "api": "amount",
+        "type": "金额",
+        "required": true,
+        "desc": "元",
+        "sample": "54.90"
+      },
+      {
+        "name": "退款原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "desc": "售后原因",
+        "sample": "商品破损"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "store_price_changed"
+      }
+    ],
+    "result": [
+      {
+        "name": "SKU",
+        "api": "sku",
+        "type": "字符串",
+        "required": true,
+        "desc": "商品编码",
+        "sample": "1004512"
+      },
+      {
+        "name": "门店",
+        "api": "storeId",
+        "type": "字符串",
+        "required": true,
+        "desc": "门店编码",
+        "sample": "SH0031"
+      },
+      {
+        "name": "原价",
+        "api": "oldPrice",
+        "type": "金额",
+        "required": true,
+        "desc": "元",
+        "sample": "69.90"
+      },
+      {
+        "name": "新价",
+        "api": "newPrice",
+        "type": "金额",
+        "required": true,
+        "desc": "元",
+        "sample": "64.90"
+      },
+      {
+        "name": "生效日期",
+        "api": "effectiveDate",
+        "type": "日期",
+        "required": true,
+        "desc": "新价生效日",
+        "sample": "2026-10-25"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "waybill_signed"
+      }
+    ],
+    "result": [
+      {
+        "name": "运单号",
+        "api": "waybill",
+        "type": "字符串",
+        "required": true,
+        "desc": "承运商运单号",
+        "sample": "SF1428xxxxxx"
+      },
+      {
+        "name": "订单号",
+        "api": "orderId",
+        "type": "字符串",
+        "required": true,
+        "desc": "订单业务主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "签收时间",
+        "api": "signedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "承运商回传",
+        "sample": "2026-10-25 14:08:51"
+      },
+      {
+        "name": "签收人",
+        "api": "signer",
+        "type": "字符串",
+        "required": false,
+        "desc": "脱敏",
+        "sample": "王*"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/EVENT_TYPES",
+        "key": "id",
+        "id": "alert_closed"
+      }
+    ],
+    "result": [
+      {
+        "name": "告警",
+        "api": "alertId",
+        "type": "字符串",
+        "required": true,
+        "desc": "告警 ID",
+        "sample": "AL-20261024-0112"
+      },
+      {
+        "name": "结论",
+        "api": "resolution",
+        "type": "枚举",
+        "required": true,
+        "desc": "已解决 / 已忽略",
+        "sample": "已解决"
+      },
+      {
+        "name": "处理人",
+        "api": "closedBy",
+        "type": "字符串",
+        "required": true,
+        "desc": "关闭人",
+        "sample": "陈立军"
+      },
+      {
+        "name": "说明",
+        "api": "note",
+        "type": "文本",
+        "required": false,
+        "desc": "处理说明",
+        "sample": "承运商已补派"
+      },
+      {
+        "name": "事件 ID",
+        "api": "eventId",
+        "type": "字符串",
+        "required": true,
+        "desc": "全局唯一",
+        "sample": "EV-20261025-0001234"
+      },
+      {
+        "name": "事件类型",
+        "api": "eventType",
+        "type": "字符串",
+        "required": true,
+        "desc": "事件类型 API 名",
+        "sample": "OrderStatusChanged"
+      },
+      {
+        "name": "发生时间",
+        "api": "occurredAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "业务发生时间（源系统）",
+        "sample": "2026-10-25 15:40:58"
+      },
+      {
+        "name": "接收时间",
+        "api": "ingestedAt",
+        "type": "日期时间",
+        "required": true,
+        "desc": "平台接收时间",
+        "sample": "2026-10-25 15:41:02"
+      },
+      {
+        "name": "来源",
+        "api": "source",
+        "type": "字符串",
+        "required": true,
+        "desc": "源系统 / 规则 / 动作",
+        "sample": "erp-cdc"
+      },
+      {
+        "name": "对象类型",
+        "api": "objectType",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象类型",
+        "sample": "SalesOrder"
+      },
+      {
+        "name": "对象 ID",
+        "api": "objectId",
+        "type": "字符串",
+        "required": true,
+        "desc": "本体对象主键",
+        "sample": "SO20261025xxxx"
+      },
+      {
+        "name": "本体版本",
+        "api": "ontologyVersion",
+        "type": "字符串",
+        "required": true,
+        "desc": "产生事件时的本体发布版本",
+        "sample": "v2026.10.3"
+      },
+      {
+        "name": "去重键",
+        "api": "dedupKey",
+        "type": "字符串",
+        "required": true,
+        "desc": "按事件类型规则计算",
+        "sample": "—"
+      },
+      {
+        "name": "追踪 ID",
+        "api": "traceId",
+        "type": "字符串",
+        "required": false,
+        "desc": "跨系统链路追踪",
+        "sample": "7f3a…c21e"
+      }
+    ]
+  }
+]

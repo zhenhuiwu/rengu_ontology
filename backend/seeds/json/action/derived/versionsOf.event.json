@@ -1,0 +1,383 @@
+[
+  {
+    "args": [
+      "v3",
+      "孙浩然",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v3",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v2",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "孙浩然",
+        "at": "2026-09-16 20:05",
+        "change": "去重键加入源系统更新时间，避免乱序重复"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.08.1",
+        "status": "已替代",
+        "by": "孙浩然",
+        "at": "2026-08-05 19:42",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v2",
+      "周晓峰",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v2",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "周晓峰",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "周晓峰",
+        "at": "2026-09-16 20:05",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v2",
+      "周晓峰",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v2",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "周晓峰",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "周晓峰",
+        "at": "2026-09-16 20:05",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v2",
+      "陈立军",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v2",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "陈立军",
+        "at": "2026-09-16 20:05",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v3",
+      "刘婷",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v3",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "刘婷",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v2",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "刘婷",
+        "at": "2026-09-16 20:05",
+        "change": "去重键加入源系统更新时间，避免乱序重复"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.08.1",
+        "status": "已替代",
+        "by": "刘婷",
+        "at": "2026-08-05 19:42",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v1",
+      "陈立军",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v1",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-24 21:17",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v1",
+      "吴佳",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v1",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "吴佳",
+        "at": "2026-10-24 21:17",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v4",
+      "孙浩然",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v4",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v3",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "孙浩然",
+        "at": "2026-09-16 20:05",
+        "change": "去重键加入源系统更新时间，避免乱序重复"
+      },
+      {
+        "ver": "v2",
+        "release": "v2026.08.1",
+        "status": "已替代",
+        "by": "孙浩然",
+        "at": "2026-08-05 19:42",
+        "change": "保留期由 90 天延长到 180 天"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.06.1",
+        "status": "已替代",
+        "by": "孙浩然",
+        "at": "2026-06-11 18:30",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v2",
+      "陈立军",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v2",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "陈立军",
+        "at": "2026-09-16 20:05",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v1",
+      "陈立军",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v1",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-24 21:17",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v1",
+      "吴佳",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v1",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "吴佳",
+        "at": "2026-10-24 21:17",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v1",
+      "孙浩然",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v1",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "孙浩然",
+        "at": "2026-10-24 21:17",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v2",
+      "王敏",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v2",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "王敏",
+        "at": "2026-10-24 21:17",
+        "change": "载荷增加“操作来源”字段"
+      },
+      {
+        "ver": "v1",
+        "release": "v2026.09.2",
+        "status": "已替代",
+        "by": "王敏",
+        "at": "2026-09-16 20:05",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v1",
+      "周晓峰",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v1",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "周晓峰",
+        "at": "2026-10-24 21:17",
+        "change": "首次发布"
+      }
+    ]
+  },
+  {
+    "args": [
+      "v1",
+      "陈立军",
+      {
+        "ref": "action/EVENT_VERSION_NOTES"
+      }
+    ],
+    "result": [
+      {
+        "ver": "v1",
+        "release": "v2026.10.3",
+        "status": "生效中",
+        "by": "陈立军",
+        "at": "2026-10-24 21:17",
+        "change": "首次发布"
+      }
+    ]
+  }
+]

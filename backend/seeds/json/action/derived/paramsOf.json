@@ -1,0 +1,997 @@
+[
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "issue_recall_coupon"
+      }
+    ],
+    "result": [
+      {
+        "name": "大区",
+        "api": "region",
+        "type": "对象引用 · 大区",
+        "required": true,
+        "def": "当前选中大区",
+        "rule": "大区状态 = 正常"
+      },
+      {
+        "name": "召回会员",
+        "api": "members",
+        "type": "对象引用 · 会员分群",
+        "required": true,
+        "def": "大区内 60 天未复购会员",
+        "rule": "人数 > 0；单次 > 500 张需审批"
+      },
+      {
+        "name": "召回活动",
+        "api": "campaign",
+        "type": "对象引用 · 营销活动",
+        "required": true,
+        "def": "—",
+        "rule": "活动状态 = 进行中"
+      },
+      {
+        "name": "券模板",
+        "api": "couponTemplate",
+        "type": "枚举",
+        "required": true,
+        "def": "满 99 减 15",
+        "rule": "取自 CRM 券模板（已启用）"
+      },
+      {
+        "name": "面额（元）",
+        "api": "faceValue",
+        "type": "金额",
+        "required": true,
+        "def": "15.00",
+        "rule": "5.00 ≤ 面额 ≤ 50.00"
+      },
+      {
+        "name": "使用门槛（元）",
+        "api": "threshold",
+        "type": "金额",
+        "required": true,
+        "def": "99.00",
+        "rule": "门槛 ≥ 面额 × 3"
+      },
+      {
+        "name": "有效天数",
+        "api": "validDays",
+        "type": "整数",
+        "required": true,
+        "def": "14",
+        "rule": "1 ≤ 天数 ≤ 30"
+      },
+      {
+        "name": "适用门店",
+        "api": "stores",
+        "type": "对象引用列表 · 门店",
+        "required": false,
+        "def": "会员常去门店",
+        "rule": "最多 20 家"
+      },
+      {
+        "name": "适用品类",
+        "api": "categories",
+        "type": "枚举列表",
+        "required": false,
+        "def": "全品类",
+        "rule": "不含烟酒、奶粉"
+      },
+      {
+        "name": "发放渠道",
+        "api": "channel",
+        "type": "枚举",
+        "required": true,
+        "def": "小程序",
+        "rule": "小程序 / 短信 / 企业微信"
+      },
+      {
+        "name": "推送文案",
+        "api": "pushText",
+        "type": "文本",
+        "required": false,
+        "def": "系统模板",
+        "rule": "≤ 60 字，不含外链"
+      },
+      {
+        "name": "发放时间",
+        "api": "sendAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间，不晚于活动结束"
+      },
+      {
+        "name": "预算科目",
+        "api": "budgetItem",
+        "type": "枚举",
+        "required": true,
+        "def": "会员召回",
+        "rule": "取自大区当月预算科目"
+      },
+      {
+        "name": "召回原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "60 天未复购",
+        "rule": "60 天未复购 / 投诉补偿 / 其他"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "sync_member_tags"
+      }
+    ],
+    "result": [
+      {
+        "name": "会员分群",
+        "api": "segment",
+        "type": "对象引用 · 会员分群",
+        "required": true,
+        "def": "当前选中分群",
+        "rule": "分群状态 = 启用，人数 > 0"
+      },
+      {
+        "name": "会员标签",
+        "api": "tag",
+        "type": "枚举",
+        "required": true,
+        "def": "高价值复购",
+        "rule": "取自 CRM 标签库（状态 = 启用）"
+      },
+      {
+        "name": "门店范围",
+        "api": "stores",
+        "type": "对象引用列表 · 门店",
+        "required": false,
+        "def": "分群全部门店",
+        "rule": "最多 50 家；只同步这些门店的会员"
+      },
+      {
+        "name": "分群快照日期",
+        "api": "snapshotDate",
+        "type": "日期",
+        "required": true,
+        "def": "昨天",
+        "rule": "不晚于今天"
+      },
+      {
+        "name": "预计覆盖会员",
+        "api": "memberCount",
+        "type": "整数",
+        "required": false,
+        "def": "按分群快照计算",
+        "rule": "只读，提交时重新计算"
+      },
+      {
+        "name": "同步方式",
+        "api": "mode",
+        "type": "枚举",
+        "required": true,
+        "def": "增量",
+        "rule": "增量 / 全量覆盖"
+      },
+      {
+        "name": "标签有效期（天）",
+        "api": "ttlDays",
+        "type": "整数",
+        "required": true,
+        "def": "30",
+        "rule": "1 ≤ 天数 ≤ 180"
+      },
+      {
+        "name": "同步渠道",
+        "api": "channels",
+        "type": "枚举列表",
+        "required": false,
+        "def": "小程序会员页、企业微信导购",
+        "rule": "—"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "从告警处理发起时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "assign_region_manager"
+      }
+    ],
+    "result": [
+      {
+        "name": "大区",
+        "api": "region",
+        "type": "对象引用 · 大区",
+        "required": true,
+        "def": "当前选中大区",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "adjust_region_budget"
+      }
+    ],
+    "result": [
+      {
+        "name": "大区",
+        "api": "region",
+        "type": "对象引用 · 大区",
+        "required": true,
+        "def": "当前选中大区",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "correct_order_status"
+      }
+    ],
+    "result": [
+      {
+        "name": "订单",
+        "api": "order",
+        "type": "对象引用 · 订单",
+        "required": true,
+        "def": "当前选中订单",
+        "rule": "—"
+      },
+      {
+        "name": "目标状态",
+        "api": "targetStatus",
+        "type": "枚举",
+        "required": true,
+        "def": "上一个合法状态",
+        "rule": "必须是生命周期 v4 中的合法迁移"
+      },
+      {
+        "name": "修正原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "系统同步乱序",
+        "rule": "系统同步乱序 / 人工误操作 / 其他"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "说明",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "原因选“其他”时必填"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "request_replenish"
+      }
+    ],
+    "result": [
+      {
+        "name": "商品",
+        "api": "product",
+        "type": "对象引用 · 商品",
+        "required": true,
+        "def": "当前选中商品",
+        "rule": "商品状态 = 在售"
+      },
+      {
+        "name": "门店",
+        "api": "store",
+        "type": "对象引用 · 门店",
+        "required": true,
+        "def": "告警所属门店",
+        "rule": "门店状态 = 营业中"
+      },
+      {
+        "name": "补货数量",
+        "api": "qty",
+        "type": "整数",
+        "required": true,
+        "def": "安全库存 × 1.5 − 可用库存",
+        "rule": "> 0，且 ≤ 门店最大陈列量"
+      },
+      {
+        "name": "补货方式",
+        "api": "mode",
+        "type": "枚举",
+        "required": true,
+        "def": "仓库调拨",
+        "rule": "仓库调拨 / 供应商直送"
+      },
+      {
+        "name": "期望到货",
+        "api": "eta",
+        "type": "日期",
+        "required": false,
+        "def": "次日",
+        "rule": "不早于明天"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "adjust_store_price"
+      }
+    ],
+    "result": [
+      {
+        "name": "商品",
+        "api": "product",
+        "type": "对象引用 · 商品",
+        "required": true,
+        "def": "当前选中商品",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "start_price_approval"
+      }
+    ],
+    "result": [
+      {
+        "name": "商品",
+        "api": "product",
+        "type": "对象引用 · 商品",
+        "required": true,
+        "def": "当前选中商品",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "close_alert"
+      }
+    ],
+    "result": [
+      {
+        "name": "告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": true,
+        "def": "当前告警",
+        "rule": "告警状态 = 处理中"
+      },
+      {
+        "name": "关闭结果",
+        "api": "closeAs",
+        "type": "枚举",
+        "required": true,
+        "def": "已解决",
+        "rule": "已解决 / 已忽略"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "文本",
+        "required": true,
+        "def": "—",
+        "rule": "必填，≤ 200 字；写入告警处理记录“关闭为{关闭结果}：{原因}”"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "urge_logistics"
+      }
+    ],
+    "result": [
+      {
+        "name": "订单",
+        "api": "salesOrder",
+        "type": "对象引用 · 订单",
+        "required": true,
+        "def": "当前选中订单",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "claim_alert"
+      }
+    ],
+    "result": [
+      {
+        "name": "告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": true,
+        "def": "当前选中告警",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "reassign_alert"
+      }
+    ],
+    "result": [
+      {
+        "name": "告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": true,
+        "def": "当前选中告警",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "reissue_shipment"
+      }
+    ],
+    "result": [
+      {
+        "name": "订单",
+        "api": "salesOrder",
+        "type": "对象引用 · 订单",
+        "required": true,
+        "def": "当前选中订单",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "approve_refund"
+      }
+    ],
+    "result": [
+      {
+        "name": "订单",
+        "api": "salesOrder",
+        "type": "对象引用 · 订单",
+        "required": true,
+        "def": "当前选中订单",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "change_member_level"
+      }
+    ],
+    "result": [
+      {
+        "name": "会员",
+        "api": "member",
+        "type": "对象引用 · 会员",
+        "required": true,
+        "def": "当前选中会员",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "change_store_status"
+      }
+    ],
+    "result": [
+      {
+        "name": "门店",
+        "api": "store",
+        "type": "对象引用 · 门店",
+        "required": true,
+        "def": "当前选中门店",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "action/ACTION_TYPES",
+        "key": "id",
+        "id": "set_safety_stock"
+      }
+    ],
+    "result": [
+      {
+        "name": "商品",
+        "api": "product",
+        "type": "对象引用 · 商品",
+        "required": true,
+        "def": "当前选中商品",
+        "rule": "—"
+      },
+      {
+        "name": "原因",
+        "api": "reason",
+        "type": "枚举",
+        "required": true,
+        "def": "—",
+        "rule": "取自原因字典"
+      },
+      {
+        "name": "生效时间",
+        "api": "effectiveAt",
+        "type": "日期时间",
+        "required": false,
+        "def": "立即",
+        "rule": "不早于当前时间"
+      },
+      {
+        "name": "关联告警",
+        "api": "alert",
+        "type": "对象引用 · 告警",
+        "required": false,
+        "def": "—",
+        "rule": "来自规则时自动带入"
+      },
+      {
+        "name": "备注",
+        "api": "remark",
+        "type": "文本",
+        "required": false,
+        "def": "—",
+        "rule": "≤ 200 字"
+      }
+    ]
+  }
+]
