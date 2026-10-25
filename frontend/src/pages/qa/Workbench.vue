@@ -99,9 +99,9 @@ async function onApplied(v: { reason: string; duration: string }) {
   } catch (e) { message.error(`提交申请失败：${errText(e)}`); } finally { applying.value = false; }
 }
 
-function setConfirmQuery(on: boolean) {
+function setConfirmQuery(on: boolean, runId?: string) {
   const q = { ...route.query };
-  if (on) q.confirm = '1'; else delete q.confirm;
+  if (on) { q.confirm = '1'; if (runId) q.run = runId; } else { delete q.confirm; delete q.run; }
   router.replace({ query: q });
 }
 
@@ -121,10 +121,17 @@ function actionFields(run?: qaApi.QaActionRun) {
   ];
 }
 const staging = ref(false);
-async function runAction() {
+async function runAction(reuseId?: string) {
   if (readonly.value || staging.value) return;
   let run: qaApi.QaActionRun | undefined;
-  if (qaApi.actionsReal()) {
+  if (qaApi.actionsReal() && reuseId) {
+    // 刷新带 ?confirm=1&run= 的页面：复用已暂存的动作；它已确认 / 撤回就不再弹卡，也不新建（不留孤儿记录）
+    try {
+      const r = await qaApi.getAction(reuseId);
+      if (r.can?.confirm ?? r.status === '待确认') run = r;
+    } catch { /* 取不到就当已失效 */ }
+    if (!run) { setConfirmQuery(false); return; }
+  } else if (qaApi.actionsReal()) {
     // X1：打开确认卡前先暂存，确认卡上显示服务端生成的幂等键
     staging.value = true;
     try {
@@ -132,7 +139,7 @@ async function runAction() {
       run = await qaApi.stageAction({ action: ACTION, source: { type: '问数', session: d?.id, sessionTitle: d?.title }, objKind: ACTION_TARGET.kind, objId: ACTION_TARGET.id, objLabel: ACTION_TARGET.label, params: ACTION_PARAMS });
     } catch (e) { message.error(`发起失败：${errText(e)}`); return; } finally { staging.value = false; }
   }
-  setConfirmQuery(true);
+  setConfirmQuery(true, run?.id);
   const ok = await confirm.ask({
     title: ACTION,
     tag: '待确认',
@@ -157,7 +164,11 @@ async function runAction() {
   } catch (e) { message.error(`${ok ? '提交' : '撤回'}失败：${errText(e)}`); }
 }
 
-onMounted(() => { if (route.query.confirm === '1') runAction(); });
+onMounted(() => {
+  if (route.query.confirm !== '1') return;
+  const r = route.query.run;
+  runAction(typeof r === 'string' && r ? r : undefined);
+});
 </script>
 
 <template>
@@ -180,10 +191,10 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
       <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
-      <QaConversation :applied="applied" :tips="tips" @suggest="runAction" @pin="pin = '1'" @apply="openApply" />
+      <QaConversation :applied="applied" :tips="tips" @suggest="runAction()" @pin="pin = '1'" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
-    <QaObjectPanel :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction" @detail="drawer.open('region', REGION_EC.id)" />
+    <QaObjectPanel :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />
   </div>
   <QaPinModal :open="pin === '1'" card="上个月华东大区复购客户的销售额（按省份）" @close="pin = ''" @done="onPinned" />
   <QaListDrawer :panel="panel" @close="panel = ''" @ask="panel = ''" />

@@ -108,6 +108,8 @@ export const actionsReal = () => dyn.isReal();
 export interface QaActionRun { id: string; action: string; typeVersion: string | null; objLabel: string | null; approver: string | null; system: string | null; status: string; idemKey: string; params: string | null }
 export interface QaStageIn { action: string; source: { type: '问数'; session?: string; sessionTitle?: string }; objKind: string; objId: string; objLabel: string; params?: string }
 export const stageAction = (body: QaStageIn) => dyn.post<QaActionRun>('/action-runs:stage', body);
+/** 刷新带 ?confirm=1&run= 的页面时取回已暂存的动作，不再重复暂存 */
+export const getAction = (code: string) => dyn.get<QaActionRun & { can?: { confirm?: boolean } }>(`/action-runs/${encodeURIComponent(code)}`);
 export const confirmAction = (code: string) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:confirm`, {});
 export const withdrawAction = (code: string, reason = '确认卡取消') => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:withdraw`, { reason });
 

@@ -16,7 +16,7 @@ const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'apply', 
 const { isNew, activeTurns, activeId, draft, real, detail, sending, loading, send } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
-const TURNS = computed<QaRealTurn[]>(() => (real ? detail.value?.turns ?? [] : QA_DEMO_TURNS));
+const TURNS = computed<QaRealTurn[]>(() => (real ? detail.value?.turns ?? [] : activeId.value ? QA_DEMO_TURNS : []));
 /** 真接口：链路新生成的回答（card = table）——沿用新轮次的回答气泡，多行结果在气泡下给出结果表 */
 type ChainTurn = Extract<QaRealTurn, { answer: QaChainAnswer }>;
 const isChain = (t: QaRealTurn): t is ChainTurn => t.kind === 'answer' && (t.answer as { card: string }).card === 'table';
@@ -63,6 +63,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
 <template>
   <div ref="conv" class="qa-conv scroll-area">
     <div v-if="real && loading && !detail" class="qa-empty"><a-spin /></div>
+    <a-empty v-else-if="!activeId" class="qa-empty" description="还没有会话：点左侧「新建会话」开始提问" />
     <a-empty v-if="isNew && !activeTurns.length" class="qa-empty" description="新会话：在下方输入问题，Enter 发送">
       <template #image><MessageOutlined class="qa-empty-ic c-3" /></template>
     </a-empty>

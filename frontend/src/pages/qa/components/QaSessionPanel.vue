@@ -55,11 +55,15 @@ async function doDelete(id: string) {
     try { await qaApi.deleteSession(id); } catch (e) { message.error(`删除失败：${errText(e)}`); return; }
     message.success('会话已删除');
     await load();
-    if (active.value === id) active.value = srv.value.items[0]?.id ?? '';
+    if (active.value === id) {
+      active.value = srv.value.items[0]?.id ?? '';
+      // 删的是最后一个会话：清掉屏上的旧对话，回到空状态
+      if (!active.value) detail.value = null;
+    }
     return;
   }
   list.value = list.value.filter((x) => x.id !== id);
-  if (active.value === id && list.value.length) active.value = list.value[0].id;
+  if (active.value === id) active.value = list.value[0]?.id ?? '';
   message.success('会话已删除');
 }
 async function onNew() {
