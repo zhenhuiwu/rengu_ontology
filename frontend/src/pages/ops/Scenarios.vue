@@ -6,7 +6,7 @@
  * 历史版本 ?ver= 只读：不能运行、修改或转动作。
  */
 import { computed, reactive, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
@@ -56,6 +56,7 @@ async function pick(s: Scenario) {
   if (mode.value !== 'one') { toggleCmp(s); return; }
   if (s.id === current.value?.id) return;
   if (dirty.value && !(await confirmDiscard())) return;
+  passGuard = true;
   setQ({ sc: s.id });
 }
 function toggleCmp(s: Scenario) {
@@ -78,6 +79,13 @@ const cfgDirty = computed(() => !!current.value && (JSON.stringify(form.scope) !
 const nameDirty = computed(() => !!current.value && form.name.trim() !== current.value.name);
 const dirty = computed(() => cfgDirty.value || nameDirty.value);
 useUnsavedGuard(dirty);
+/** 浏览器后退 / 直接改 ?sc= 或 ?mode= 切换方案时同样提示；pick / 新建已确认过的跳过一次 */
+let passGuard = false;
+onBeforeRouteUpdate(async (to, from) => {
+  if (passGuard) { passGuard = false; return true; }
+  if (!dirty.value || (to.query.sc === from.query.sc && to.query.mode === from.query.mode)) return true;
+  return await confirmDiscard();
+});
 const saveName = () => { const s = current.value; if (s && form.name.trim()) { s.name = form.name.trim(); form.name = s.name; message.success('名称已保存'); } };
 /** 别人的方案只读：不能改、运行、转动作，可复制为自己的新方案 */
 const notMine = computed(() => !!current.value && current.value.owner !== CURRENT_USER);
@@ -90,8 +98,16 @@ watch(() => form.drivers.promo, (p) => { if (p === '无') { form.drivers.promoDe
 
 const needRun = computed(() => !!current.value && (current.value.status !== '已完成' || cfgDirty.value));
 const runBlocked = computed(() => lockReason.value || (noDriver.value ? '至少调整一个驱动（价格 / 库存 / 促销）' : ''));
-function run() {
+async function run() {
   const s = current.value; if (!s || runBlocked.value) return;
+  if (s.result) {
+    const ok = await confirm.ask({
+      title: '重新运行推演', target: `${s.id} ${s.name}`, okText: '重新运行',
+      fields: [{ label: '上一次运行', value: s.result.ranAt }],
+      impact: '会用当前配置重新计算，覆盖上一次的结果（指标、影响明细、对比）；已暂存到动作中心的动作不受影响。',
+    });
+    if (!ok || current.value?.id !== s.id) return;
+  }
   s.name = form.name.trim() || s.name; s.scope = { ...form.scope }; s.drivers = { ...form.drivers };
   s.status = '运行中'; s.failReason = undefined; s.result = undefined;
   const id = s.id;
@@ -104,6 +120,7 @@ function run() {
 async function create(from?: Scenario) {
   if (readonly.value) return;
   if (dirty.value && !(await confirmDiscard())) return;
+  passGuard = true;
   const s: Scenario = {
     id: nextScenarioId(), name: from ? `${from.name}（副本）` : '新方案', owner: ME, createdAt: now(), baseVer: 'v2026.10.3', status: '草稿',
     scope: from ? { ...from.scope } : { area: '华东大区全部', category: '全部品类', weeks: 8 }, drivers: from ? { ...from.drivers } : BASE_DRIVERS(), staged: [],
@@ -117,7 +134,6 @@ async function create(from?: Scenario) {
 const kpiDelta = (k: ScKpi) => (k.key === 'promo' || k.base === 0 ? k.value - k.base : (k.value - k.base) / k.base);
 const kpiText = (k: ScKpi) => (k.key === 'promo' || k.base === 0 ? `+${k.value.toFixed(1)} ${k.unit}`
   : k.unit === '%' ? `${k.value >= k.base ? '+' : '−'}${Math.abs(k.value - k.base).toFixed(1)} pt` : fmtPct(kpiDelta(k)));
-const adverse = (k: ScKpi) => { const d = k.value - k.base; return Math.abs(d) > 1e-6 && (k.better === 'up' ? d < 0 : d > 0); };
 const fmtV = (k: ScKpi, v: number) => (k.unit === '%' ? `${v.toFixed(1)}%` : k.unit === '天' ? `${v.toFixed(1)} 天` : `${v.toFixed(1)} 万`);
 
 const lineOpt = computed(() => {
@@ -263,7 +279,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
             <div class="t-12 c-3 sc-item-meta"><span class="num">{{ s.id }}</span> · {{ s.owner }} · <span class="num">{{ s.createdAt.slice(5, 16) }}</span></div>
           </div>
           <div class="sc-item-st t-12">
-            <a-badge :status="badge(s.status)" :text="s.status" />
+            <a-badge :status="badge(s.status)" /><span class="t-12 c-2">{{ s.status }}</span>
             <div v-if="s.staged.length" class="c-3">已暂存 {{ s.staged.length }}</div>
           </div>
         </div>
@@ -278,9 +294,9 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
         <div class="sc-title">
           <span class="t-16 fw-600">{{ current.name }}</span>
           <span class="num c-3 t-12">{{ current.id }}</span>
-          <a-badge :status="badge(current.status)" :text="current.status" class="t-12" />
+          <span><a-badge :status="badge(current.status)" /><span class="t-12 c-2">{{ current.status }}</span></span>
           <span v-if="cfgDirty && current.result" class="t-12 tl-attention"><ExclamationCircleOutlined /> 配置已改动，结果对应上一次运行</span>
-          <span v-else-if="nameDirty" class="t-12 tl-attention"><ExclamationCircleOutlined /> 名称未保存</span>
+          <span v-else-if="nameDirty" class="t-12 c-3">名称未保存</span>
           <span v-if="notMine" class="t-12 c-3">{{ current.owner }} 的方案 · 只读</span>
         </div>
         <div class="sc-btns">
@@ -335,7 +351,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
         <!-- 结果 -->
         <div class="sc-res">
           <template v-if="current.status === '运行中'">
-            <div class="sc-empty"><LoadingOutlined class="c-3 sc-spin" /><div class="c-2">推演运行中：按 {{ current.scope.area }} · {{ current.scope.category }} · {{ current.scope.weeks }} 周计算…</div></div>
+            <div class="sc-empty"><LoadingOutlined class="c-3 t-20" /><div class="c-2">推演运行中：按 {{ current.scope.area }} · {{ current.scope.category }} · {{ current.scope.weeks }} 周计算…</div></div>
           </template>
           <template v-else-if="current.status === '失败'">
             <div class="sc-empty">
@@ -352,7 +368,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
               <div v-for="k in current.result.kpis" :key="k.key" class="sc-kpi">
                 <div class="t-12 c-3">{{ k.label }}</div>
                 <div class="t-20 num fw-600">{{ fmtV(k, k.value) }}</div>
-                <div class="t-12 num" :class="adverse(k) ? 'tl-attention' : 'c-2'">{{ k.key === 'promo' ? '' : `基线 ${fmtV(k, k.base)} · ` }}{{ kpiText(k) }}</div>
+                <div class="t-12 num c-2">{{ k.key === 'promo' ? '' : `基线 ${fmtV(k, k.base)} · ` }}{{ kpiText(k) }}</div>
               </div>
             </div>
             <div v-if="current.staged.length" class="sc-staged t-12">
@@ -367,8 +383,8 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
                   <template v-else-if="column.key === 'store'"><ObjRef kind="store" :id="record.storeId">{{ record.storeName }}</ObjRef></template>
                   <template v-else-if="column.key === 'base'"><span class="num">{{ money(record.baseSales) }}</span></template>
                   <template v-else-if="column.key === 'sales'"><span class="num">{{ money(record.sales) }}</span></template>
-                  <template v-else-if="column.key === 'delta'"><span class="num" :class="record.sales < record.baseSales ? 'tl-attention' : ''">{{ fmtPct(record.sales / record.baseSales - 1) }}</span></template>
-                  <template v-else-if="column.key === 'so'"><span class="num" :class="record.stockout > record.stockoutBase ? 'tl-attention' : ''">{{ record.stockoutBase }}% → {{ record.stockout }}%</span></template>
+                  <template v-else-if="column.key === 'delta'"><span class="num">{{ fmtPct(record.sales / record.baseSales - 1) }}</span></template>
+                  <template v-else-if="column.key === 'so'"><span class="num">{{ record.stockoutBase }}% → {{ record.stockout }}%</span></template>
                   <template v-else-if="column.key === 'suggest'"><span :class="record.suggest === '—' ? 'c-3' : ''">{{ record.suggest }}</span></template>
                 </template>
               </a-table>
@@ -385,7 +401,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
         <div class="sc-title">
           <span class="t-16 fw-600">方案对比</span>
           <span class="t-12 c-3">{{ cmpIds.length }} / 3</span>
-          <span v-if="scopeDiff" class="t-12 tl-attention"><ExclamationCircleOutlined /> 方案范围不同（区域 / 品类 / 周数），基线不同，仅供参考</span>
+          <span v-if="scopeDiff" class="t-12 c-2">方案范围不同（区域 / 品类 / 周数），基线不同，仅供参考</span>
         </div>
         <div class="sc-btns">
           <span v-if="target" class="t-12 c-2">选定：<span class="num">{{ target.id }}</span></span>
@@ -418,7 +434,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
               <td class="c-3">{{ kpiOf(cmpList[0], key).label }}</td>
               <td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }">
                 <span class="num">{{ fmtV(kpiOf(s, key), kpiOf(s, key).value) }}</span>
-                <span class="num t-12 sc-ct-d" :class="adverse(kpiOf(s, key)) ? 'tl-attention' : 'c-3'">{{ kpiText(kpiOf(s, key)) }}</span>
+                <span class="num t-12 sc-ct-d c-3">{{ kpiText(kpiOf(s, key)) }}</span>
               </td>
             </tr>
             <tr><td class="c-3">暂存动作</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12">
@@ -466,11 +482,9 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
 .sc-item-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-item-meta { white-space: nowrap; }
 .sc-item-st { flex: none; text-align: right; }
-.sc-item-st :deep(.ant-badge-status-text) { font-size: var(--fs-12); color: var(--g9); }
 .sc-pager { padding: 4px 16px 8px; }
 .sc-main { flex: 1; }
 .sc-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.sc-title :deep(.ant-badge-status-text) { font-size: var(--fs-12); color: var(--g9); }
 .sc-btns { display: flex; align-items: center; gap: 8px; flex: none; }
 .sc-body { flex: 1; min-height: 0; display: flex; }
 .sc-cfg { width: 360px; flex: none; border-right: var(--border); padding: 8px 16px; display: flex; flex-direction: column; }
@@ -492,7 +506,6 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
 .sc-kpi { border: var(--border); border-radius: var(--radius); padding: 8px 12px; min-width: 0; }
 .sc-kpi > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-staged { margin-top: 8px; white-space: nowrap; }
-.sc-spin { font-size: 20px; }
 .sc-chart { flex: 1 1 200px; min-height: 160px; max-height: 280px; margin-top: 8px; }
 .sc-imp-head { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; flex: none; }
 .sc-imp { flex: none; }

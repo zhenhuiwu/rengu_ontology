@@ -109,7 +109,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
               <template v-else-if="column.key === 'stage'">
                 <template v-if="record.autoStage.enabled">
                   <RouterLink :to="{ path: '/build/ontology/action-types', query: { action: record.autoStage.actionTypeId } }">{{ actName(record.autoStage.actionTypeId) }}</RouterLink>
-                  <div class="t-12 c-3">确认人 {{ record.autoStage.confirmer }}<template v-if="pendingOf(record.id)"> · <RouterLink :to="{ path: '/use/ops/actions' }"><span class="tl-attention">待确认 {{ pendingOf(record.id) }}</span></RouterLink></template></div>
+                  <div class="t-12 c-3">确认人 {{ record.autoStage.confirmer }}<template v-if="pendingOf(record.id)"> · <RouterLink :to="{ path: '/use/ops/actions', query: { tab: 'pending' } }"><span class="tl-attention">待确认 {{ pendingOf(record.id) }}</span></RouterLink></template></div>
                 </template>
                 <span v-else class="c-3">不暂存</span>
               </template>

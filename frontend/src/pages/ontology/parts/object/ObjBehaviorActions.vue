@@ -62,7 +62,8 @@ const pendingN = computed(() => all.value.filter((a) => a.status === '待确认'
 const unknownN = computed(() => all.value.filter((a) => a.status === '结果未知').length);
 const badge = (s: ActionStatus) => (s === '待确认' ? 'warning' : s === '失败' ? 'error' : 'default');
 const actLink = (a: ActionRecord) => ({ path: '/use/ops/actions', query: { tab: a.status === '待确认' ? undefined : a.status === '结果未知' ? 'unknown' : 'records', act: a.id } });
-const sourceText = (a: ActionRecord) => (a.source.type === '规则' ? `规则 ${a.source.ruleId}` : a.source.type === '告警' ? `告警 ${a.source.alertId}` : a.source.type === '问数' ? `问数 ${a.source.session}` : '手动');
+const sourceText = (a: ActionRecord) => (a.source.type === '规则' ? `规则 ${a.source.ruleId}` : a.source.type === '告警' ? `告警 ${a.source.alertId}` : a.source.type === '问数' ? `问数 ${a.source.session}`
+  : a.source.type === '推演' ? `情景推演 · ${a.source.scenarioId}` : '手动');
 const recCols = [
   { title: '编号', key: 'id', width: 170 },
   { title: '动作', dataIndex: 'action', key: 'action', width: 150 },
@@ -183,7 +184,7 @@ const recCols = [
 <style scoped>
 .ba-bar { display: flex; align-items: center; gap: 12px; flex: none; }
 .ba-sp { flex: 1; }
-.ba-types { flex: none; max-height: 40%; overflow: auto; }
+.ba-types { flex: none; }
 .ba-types :deep(.ant-table-row) { cursor: pointer; }
 .ba-rule { margin-right: 8px; }
 .ba-sel { width: 160px; }

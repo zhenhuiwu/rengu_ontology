@@ -8,7 +8,7 @@
  */
 import { computed, reactive, ref, shallowRef, watch, nextTick } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
-import type { Graph } from '@antv/x6';
+import type { Cell, Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -18,6 +18,8 @@ import { useAppStore } from '@/stores/app';
 import { releaseByVer } from '@/mock/releases';
 import { BRAND, GRAY, STATUS } from '@/theme';
 import { useDraftView } from '../useDraftView';
+import { useConfirmStore } from '@/stores/confirm';
+import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import {
   LC_DRAFT_EDITS, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
@@ -28,6 +30,7 @@ const props = defineProps<{ objectId: string; readonly: boolean }>();
 const route = useRoute();
 const router = useRouter();
 const app = useAppStore();
+const confirm = useConfirmStore();
 const { draft, isDraft, editTip, readonly: histRo, reason } = useDraftView('object', () => props.objectId);
 
 const editable = computed(() => !props.readonly && isDraft.value);
@@ -97,12 +100,13 @@ const center = (s: LcState) => ({ x: s.x + NW / 2, y: s.y + NH / 2 });
 function draw(fit: boolean) {
   const g = graph.value;
   if (!g) return;
-  g.clearCells();
+  // 一次性 resetCells：先 clearCells 再按同一 id 逐个 addNode，X6 异步渲染会留下旧节点的 DOM（删状态后画布上还在）
+  const cells: Cell[] = [];
   const sm = new Map(states.value.map((s) => [s.key, s]));
   for (const s of states.value) {
     const on = sel.value === `s:${s.key}`;
     const end = s.kind === '终态';
-    g.addNode({
+    cells.push(g.createNode({
       id: `s:${s.key}`, x: s.x, y: s.y, width: NW, height: NH, zIndex: 2,
       markup: [{ tagName: 'rect', selector: 'body' }, { tagName: 'rect', selector: 'inner' }, { tagName: 'text', selector: 'name' }, { tagName: 'text', selector: 'sub' }],
       attrs: {
@@ -112,7 +116,7 @@ function draw(fit: boolean) {
         name: { text: s.name, refX: 0.5, refY: 22, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 14, fontWeight: 600, fill: on ? BRAND : GRAY.g10, pointerEvents: 'none' },
         sub: { text: s.mark ? `${s.mark} · ${s.kind}` : `${s.kind} · ${fmt(s.count)} 条`, refX: 0.5, refY: 41, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 12, fill: GRAY.g8, pointerEvents: 'none' },
       },
-    });
+    }));
   }
   type E = { id: string; from: string; to: string; text: string; color: string; dash: string; width: number };
   const edges: E[] = transitions.value.map((t) => {
@@ -155,7 +159,7 @@ function draw(fit: boolean) {
         vertices = [{ x: (ca.x + cb.x) / 2 - (dy / len) * off, y: (ca.y + cb.y) / 2 + (dx / len) * off }];
       }
     }
-    g.addEdge({
+    cells.push(g.createEdge({
       id: e.id, source, target, vertices, zIndex: 1,
       connector: { name: 'smooth' },
       attrs: {
@@ -164,8 +168,9 @@ function draw(fit: boolean) {
       },
       labels: [{ position: 0.5, attrs: { label: { text: e.text, fontSize: 12, fill: e.color === GRAY.g8 ? GRAY.g9 : e.color, cursor: 'pointer' },
         body: { fill: GRAY.g2, stroke: 'none', rx: 2, ry: 2, cursor: 'pointer' } } }],
-    });
+    }));
   }
+  g.resetCells(cells);
   if (fit) nextTick(() => { g.zoomToFit({ padding: 48, maxScale: 1 }); g.centerContent(); });
 }
 function onReady(g: Graph) {
@@ -223,7 +228,15 @@ const trErr = computed(() => {
   if (!trEditId.value && transitions.value.some((t) => t.from === trForm.from && t.to === trForm.to)) return '这条迁移已存在';
   return '';
 });
-function openState() { Object.assign(stForm, { name: '', kind: '中间', desc: '', sla: '' }); stOpen.value = true; }
+/* 弹窗未保存保护：表单和打开时不同即视为有改动；关闭（取消 / 遮罩 / Esc）和离开页面时提示 */
+const stInit = ref('');
+const trInit = ref('');
+const stDirty = computed(() => stOpen.value && JSON.stringify(stForm) !== stInit.value);
+const trDirty = computed(() => trOpen.value && JSON.stringify(trForm) !== trInit.value);
+useUnsavedGuard(() => stDirty.value || trDirty.value);
+async function closeSt() { if (stDirty.value && !(await confirmDiscard())) return; stOpen.value = false; }
+async function closeTr() { if (trDirty.value && !(await confirmDiscard())) return; trOpen.value = false; }
+function openState() { Object.assign(stForm, { name: '', kind: '中间', desc: '', sla: '' }); stInit.value = JSON.stringify(stForm); stOpen.value = true; }
 function saveState() {
   if (stErr.value) return;
   const maxY = Math.max(...states.value.map((s) => s.y));
@@ -237,6 +250,7 @@ function openTr(t?: VTr) {
   trEditId.value = t?.id ?? '';
   Object.assign(trForm, t ? { from: t.from, to: t.to, trigger: t.trigger, by: t.by, guard: t.guard, effect: t.effect }
     : { from: selState.value?.key ?? '', to: '', trigger: '事件', by: '', guard: '', effect: '' });
+  trInit.value = JSON.stringify(trForm);
   trOpen.value = true;
 }
 function saveTr() {
@@ -254,14 +268,30 @@ function saveTr() {
   }
   trOpen.value = false;
 }
-function removeTr(t: VTr) {
+async function removeTr(t: VTr) {
+  const added = t.mark === '新增';
+  const ok = await confirm.ask({
+    title: '删除迁移', target: `迁移 ${t.id} ${trName(t)}`, okText: '删除迁移', danger: true,
+    fields: [{ label: '触发', value: `${t.trigger} · ${t.by}` }, ...(added ? [] : [{ label: '近 7 天', value: `${fmt(t.weekly)} 次` }])],
+    impact: added ? '从草稿中移除这条新增的迁移。'
+      : `草稿里删除这条迁移${t.mark === '修改' ? '（连同草稿里对它的修改）' : ''}；发布后“${trName(t)}”不再合法，这类状态变化会被${base.value?.ruleId ? `规则 ${base.value.ruleId} ` : ''}判为非法迁移。发布前可在概要的草稿改动里撤销。`,
+  });
+  if (!ok) return;
   const e = edits.value;
   if (t.mark === '新增') e.addTransitions = e.addTransitions.filter((x) => x.id !== t.id);
   else { delete e.editTransitions[t.id]; e.removeTransitions.push(t.id); }
   setSel('');
 }
-function removeState(s: VState) {
+/** 删除草稿新增的状态；从“撤销”进来且没有连带迁移时不必确认 */
+async function removeState(s: VState, fromUndo = false) {
   const e = edits.value;
+  const gone = e.addTransitions.filter((t) => t.from === s.key || t.to === s.key);
+  const ok = (fromUndo && !gone.length) || await confirm.ask({
+    title: '删除状态', target: `状态“${s.name}”（${s.kind} · 草稿新增）`, okText: '删除状态', danger: true,
+    fields: gone.length ? [{ label: `同时删除迁移 ${gone.length} 条`, value: gone.map((t) => `${t.id} ${trName(t)}`).join('；') }] : [],
+    impact: gone.length ? `删除状态后，进入或离开“${s.name}”的 ${gone.length} 条新增迁移一并从草稿移除。` : `从草稿中移除状态“${s.name}”，没有相关迁移。`,
+  });
+  if (!ok) return;
   e.addStates = e.addStates.filter((x) => x.key !== s.key);
   e.addTransitions = e.addTransitions.filter((t) => t.from !== s.key && t.to !== s.key);
   setSel('');
@@ -270,7 +300,7 @@ const changeList = computed(() => {
   const e = edits.value;
   const bt = (id: string) => base.value?.transitions.find((t) => t.id === id);
   return [
-    ...e.addStates.map((s) => ({ key: `as:${s.key}`, mark: '新增', text: `状态“${s.name}”（${s.kind}）`, undo: () => removeState({ ...s, mark: '新增' }) })),
+    ...e.addStates.map((s) => ({ key: `as:${s.key}`, mark: '新增', text: `状态“${s.name}”（${s.kind}）`, undo: () => removeState({ ...s, mark: '新增' }, true) })),
     ...e.addTransitions.map((t) => ({ key: `at:${t.id}`, mark: '新增', text: `迁移 ${t.id} ${trName(t)}`, undo: () => { e.addTransitions = e.addTransitions.filter((x) => x.id !== t.id); } })),
     ...Object.keys(e.editTransitions).map((id) => ({ key: `et:${id}`, mark: '修改', text: `迁移 ${id} ${bt(id) ? trName(bt(id)!) : ''}`, undo: () => { delete e.editTransitions[id]; } })),
     ...e.removeTransitions.map((id) => ({ key: `rt:${id}`, mark: '删除', text: `迁移 ${id} ${bt(id) ? trName(bt(id)!) : ''}`, undo: () => { e.removeTransitions = e.removeTransitions.filter((x) => x !== id); } })),
@@ -464,7 +494,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
       <div class="t-12 c-3">需要跟踪状态变化时，先在属性里加状态字段，再在草稿里定义状态和迁移。</div>
     </div>
 
-    <a-modal v-model:open="stOpen" title="新增状态" :ok-button-props="{ disabled: !!stErr }" ok-text="加入草稿" @ok="saveState">
+    <a-modal :open="stOpen" title="新增状态" @cancel="closeSt" :ok-button-props="{ disabled: !!stErr }" ok-text="加入草稿" @ok="saveState">
       <a-form layout="vertical">
         <a-form-item label="状态名" required :help="stForm.name ? stErr : ''" :validate-status="stForm.name && stErr ? 'error' : ''"><a-input v-model:value="stForm.name" placeholder="如：装修中" /></a-form-item>
         <a-form-item label="类型"><a-radio-group v-model:value="stForm.kind"><a-radio value="中间">中间状态</a-radio><a-radio value="终态">终态</a-radio></a-radio-group></a-form-item>
@@ -472,7 +502,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
         <a-form-item label="时限（可选）"><a-input v-model:value="stForm.sla" placeholder="如：最长 60 天" /></a-form-item>
       </a-form>
     </a-modal>
-    <a-modal v-model:open="trOpen" :title="trEditId ? `修改迁移 ${trEditId}` : '新增迁移'" :ok-button-props="{ disabled: !!trErr }" ok-text="加入草稿" @ok="saveTr">
+    <a-modal :open="trOpen" @cancel="closeTr" :title="trEditId ? `修改迁移 ${trEditId}` : '新增迁移'" :ok-button-props="{ disabled: !!trErr }" ok-text="加入草稿" @ok="saveTr">
       <a-form layout="vertical">
         <div class="lc-form-row">
           <a-form-item label="原状态" required class="lc-f"><a-select v-model:value="trForm.from" :disabled="!!trEditId" :options="states.filter((s) => s.kind !== '终态').map((s) => ({ value: s.key, label: s.name }))" /></a-form-item>
