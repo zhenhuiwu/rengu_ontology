@@ -226,3 +226,22 @@ src/
 scripts/shot.py         截图 + 验收
 shots/                  截图输出
 ```
+
+## 协作方式：每人一个工作区（git worktree）
+
+`master` 是集成主干，http://localhost:5280 跑的就是它。**不要再直接在 `/workspace/ui-vue` 里改文件。**
+
+| 名字 | 负责人 | 工作区 | 开发端口 |
+|---|---|---|---|
+| pde | PDE工程师 | /workspace/ui-vue-wt/pde | 5291 |
+| static | 静态本体负责人 | /workspace/ui-vue-wt/static | 5292 |
+| dynamic | 动态本体负责人 | /workspace/ui-vue-wt/dynamic | 5293 |
+| qa | 智能问数项目调研员 | /workspace/ui-vue-wt/qa | 5294 |
+| palantir | Palantir专家 | /workspace/ui-vue-wt/palantir | 5295 |
+
+1. 建工作区：`cd /workspace/ui-vue && scripts/wt.sh new <名字>`，会同时在自己的端口启动开发服务器。
+2. 在自己的工作区里改、提交（`git -c user.name="角色名" commit`）。提交前会自动检查 `@/...` 引用的文件是否都存在，缺文件就拒绝提交。
+3. 截图：`SHOT_BASE=http://localhost:<端口> npm run shot -- <路由>`。
+4. 同步别人的改动：`scripts/wt.sh sync`。
+5. 合入主干：`scripts/wt.sh publish`。它会先同步 master、做引用检查和完整构建，都通过才合入；不通过就不会影响别人。
+6. 审核看主干 5280 的页面；还没合入的页面可以看作者自己的端口。
