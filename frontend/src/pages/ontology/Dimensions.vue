@@ -54,11 +54,13 @@ const filtered = computed(() => visible.value.filter((d) =>
   && (!kw.value || d.name.includes(kw.value) || d.api.includes(kw.value) || d.objectName.includes(kw.value)
     || d.values.some((v) => v.name.includes(kw.value) || v.synonyms.includes(kw.value)))));
 const LPAGE = 12;
-const lpage = ref(1);
+const lpage = ref(Number(q('lp')) || 1);
 watch([kw, kind, grp], () => { lpage.value = 1; });
+watch(lpage, (p) => { if (String(p) !== (q('lp') || '1')) setQ({ lp: p > 1 ? String(p) : undefined }); });
 const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
-const cur = computed(() => visible.value.find((d) => d.id === route.query.dim) ?? visible.value[0]);
+const cur = computed(() => visible.value.find((d) => d.id === route.query.dim) ?? filtered.value[0] ?? visible.value[0]);
 watch(() => cur.value?.id, (id) => {
+  if (!route.query.dim) return;
   const i = filtered.value.findIndex((d) => d.id === id);
   if (i >= 0) lpage.value = Math.floor(i / LPAGE) + 1;
 }, { immediate: true });
