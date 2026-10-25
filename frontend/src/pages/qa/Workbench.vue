@@ -89,7 +89,7 @@ function openApply(turnId?: string) { applyTurn.value = turnId ?? ''; apply.valu
 async function onApplied(v: { reason: string; duration: string }) {
   if (!sess.real) { apply.value = ''; applied.value = true; message.success('申请已提交，等待审批'); return; }
   const d = sess.detail.value;
-  const tid = applyTurn.value || [...(d?.turns ?? [])].reverse().find((t) => t.kind === 'denied' && !t.applied)?.id;
+  const tid = applyTurn.value || [...(d?.turns ?? [])].reverse().find((t) => t.kind === 'denied' && !t.applied && (!t.code || t.code === 'NO_PERMISSION'))?.id;
   applying.value = true;
   try {
     await qaApi.createPermissionRequest({ scope: QA_APPLY.scope, object: QA_APPLY.object, reason: v.reason, duration: Number.parseInt(v.duration, 10), sourceTurnId: tid ?? null });

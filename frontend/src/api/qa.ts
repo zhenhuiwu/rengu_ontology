@@ -41,9 +41,14 @@ async function download(path: string, query?: Record<string, string>): Promise<R
 export interface QaChainTable { id: string; title: string; columns: { key: string; title: string; align?: string }[]; items: Record<string, unknown>[]; total: number; summary: string; paged: boolean }
 export interface QaChainAnswer { card: 'table'; text: string; dataAsOf?: string; basis?: Record<string, string>; table: QaChainTable }
 /** applied：越权轮次已提交待审批的申请（W16 之后 W3 返回）；vote：这一轮的赞踩（W12）；主卡 answer.caliber：W9 切过的口径 */
+/** 链路反问（qa-reuse a35d3b6）：kind=answer、card='clarify'，不执行 SQL；选项点了以后前端再问一轮 */
+export interface QaClarifyAnswer { card: 'clarify'; text: string; dataAsOf?: string; clarify: { term: string; chosen: string | null; options: QaOption[] }; suggest?: { followUps: string[] } }
+/** 拒答 code（链路 refuse）：NO_PERMISSION 是权限拦截（带申请入口），其余是「无法回答」 */
+export type QaRefuseCode = 'NOT_SELECT' | 'OUT_OF_SCOPE' | 'NO_PERMISSION' | 'NO_DATA';
 export type QaRealTurn =
-  | (QaDemoTurn & { applied?: boolean; vote?: '' | 'up' | 'down' })
+  | (QaDemoTurn & { applied?: boolean; vote?: '' | 'up' | 'down'; code?: QaRefuseCode })
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaChainAnswer }
+  | { id: string; kind: 'answer'; time?: string; question: string; answer: QaClarifyAnswer }
   | { id: string; kind: 'empty'; time?: string; question: string; lead: string; bold: string; tail: string; tag: string; retry?: undefined };
 export interface QaSessionDetail extends QaSession { scope: string | null; caliber: string; ownerId: string; turns: QaRealTurn[] }
 export interface QaOption { value: string; label: string }

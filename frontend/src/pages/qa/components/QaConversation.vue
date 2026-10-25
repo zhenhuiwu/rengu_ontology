@@ -9,11 +9,11 @@ import { useQaSession } from '../useQaSession';
 import { useAppStore } from '@/stores/app';
 import QaAnswer from './QaAnswer.vue';
 import QaStoreAnswer from './QaStoreAnswer.vue';
-import type { QaRealTurn, QaChainAnswer } from '@/api/qa';
+import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer } from '@/api/qa';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
 const props = defineProps<{ applied: boolean; tips: string[] }>();
 const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'apply', turnId?: string): void }>();
-const { isNew, activeTurns, activeId, draft, real, detail, sending, loading } = useQaSession();
+const { isNew, activeTurns, activeId, draft, real, detail, sending, loading, send } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
 const TURNS = computed<QaRealTurn[]>(() => (real ? detail.value?.turns ?? [] : QA_DEMO_TURNS));
@@ -25,6 +25,29 @@ const tableCols = (t: ChainTurn) => t.answer.table.columns.map((c) => ({ dataInd
 const tableRows = (t: ChainTurn) => t.answer.table.items.map((r, i) => ({ ...r, _k: i }));
 const showTable = (t: ChainTurn) => t.answer.table.items.length > 1 || t.answer.table.columns.length > 1;
 function retry(text: string) { draft.value = text; }
+/**
+ * 链路反问（card='clarify'）：点选项 = 再问一轮。链路不带上下文，追问要自带完整意思 [推断]：
+ * - 短选项、原问题里有那个说法 → 换掉说法（「哪个门店表现最好？」+「销售额最高」→「哪个门店销售额最高？」）；
+ * - 长选项（≥ 8 字，模型给的是整句，如「是，查询华东大区上个月的有效订单数」）→ 去掉开头的「是，」直接问；
+ * - 其他 → 原问题后补「（选项）」。
+ */
+type ClarifyTurn = Extract<QaRealTurn, { answer: QaClarifyAnswer }>;
+function followUp(t: ClarifyTurn, label: string) {
+  const term = t.answer.clarify.term;
+  if (term && t.question.includes(term) && label.length <= term.length + 6) return t.question.replace(term, label);
+  if (label.length >= 8) return label.replace(/^是[，,、\s]*/, '');
+  return `${t.question}（${label}）`;
+}
+function onClarify(t: QaRealTurn, label: string) { if (t.kind === 'answer' && t.answer.card === 'clarify') send(followUp(t as ClarifyTurn, label)); }
+/** 已按哪个选项追问过：后面有一轮的问题正好是那句追问（刷新后也能还原；chosen 不回写后台）[推断] */
+function chosenOf(t: QaRealTurn): string | null {
+  if (t.kind !== 'answer' || t.answer.card !== 'clarify') return null;
+  const ct = t as ClarifyTurn;
+  const asked = new Set(TURNS.value.map((x) => ('question' in x ? x.question : '')));
+  return ct.answer.clarify.options.find((o) => asked.has(followUp(ct, o.label)))?.label ?? ct.answer.clarify.chosen ?? null;
+}
+/** 拒答：只有权限拦截（NO_PERMISSION，或演示数据没有 code）带「申请权限」；超出范围 / 没有数据 / 非查询只显示原因 [推断] */
+const canApply = (t: QaRealTurn) => !('code' in t) || !t.code || t.code === 'NO_PERMISSION';
 const me = useAppStore().user.name.slice(0, 1);
 const route = useRoute();
 const conv = ref<HTMLElement>();
@@ -64,13 +87,13 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
     </template>
     <template v-else-if="t.kind === 'answer'">
     <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="real ? t.id : undefined" />
-    <QaAnswer v-else :card="t.answer" :turn-id="real ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" @suggest="emit('suggest')" @pin="emit('pin')" />
+    <QaAnswer v-else :card="t.answer" :turn-id="real ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @pin="emit('pin')" @clarify="(l: string) => onClarify(t, l)" />
     </template>
     <div v-else-if="t.kind === 'denied'" class="qa-b">
       <LockOutlined class="c-3" />
       <span class="qa-b-txt">{{ t.lead }}<span class="fw-600">{{ t.bold }}</span>{{ t.tail }}</span>
-      <span v-if="real ? t.applied : applied" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
-      <template v-else><a-tag>{{ t.tag }}</a-tag><a-button size="small" @click="emit('apply', t.id)">申请权限</a-button></template>
+      <span v-if="canApply(t) && (real ? t.applied : applied)" class="qa-b-state c-3"><ClockCircleOutlined />已申请 · 待审批</span>
+      <template v-else><a-tag>{{ t.tag }}</a-tag><a-button v-if="canApply(t)" size="small" @click="emit('apply', t.id)">申请权限</a-button></template>
     </div>
     <div v-else class="qa-b">
       <InboxOutlined class="c-3" />

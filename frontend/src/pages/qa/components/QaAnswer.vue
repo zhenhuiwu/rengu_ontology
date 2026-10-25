@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 主回答卡：一行灰色元信息 + 可展开“依据”；澄清；结论；指标 + 趋势；省份（表格/图表切换）；操作 */
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { SearchOutlined, ThunderboltOutlined, PushpinOutlined,
   LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CopyOutlined, DownOutlined, UpOutlined, ApartmentOutlined } from '@ant-design/icons-vue';
@@ -9,13 +9,24 @@ import { GRAY } from '@/theme';
 import { QA_PROVINCES, QA_TREND, QA_TOTAL_SALES, QA_TOTAL_CUSTOMERS, fmtMoney, fmtInt, qaMetricLabel, QA_METRIC, TAX_RATE, type QaDemoMainCard } from '@/mock';
 import { useReadonly } from '@/composables/useReadonly';
 import * as qaApi from '@/api/qa';
-import { errText } from '../useQaSession';
+import { errText, useQaSession } from '../useQaSession';
 
 /** turnId：真接口时这一轮的 id（W9 口径 / W12 赞踩写后台）；没有就是演示数据，只改本地状态 */
-const props = defineProps<{ card: QaDemoMainCard & { caliber?: qaApi.QaCaliberKey }; turnId?: string; vote?: qaApi.QaVote }>();
-const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void }>();
+type MainCard = QaDemoMainCard & { caliber?: qaApi.QaCaliberKey };
+/** card='clarify'：链路反问（answer.clarify），只显示反问和选项；chosen：已按哪个选项追问过（对话区按后续轮次推出） */
+const props = defineProps<{ card: MainCard | qaApi.QaClarifyAnswer; turnId?: string; vote?: qaApi.QaVote; chosen?: string | null }>();
+const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'clarify', label: string): void }>();
+const cq = props.card.card === 'clarify' ? props.card : null;
+const mc = props.card as MainCard;
+/** 选了一个选项：交给对话区按「原问题 + 选项」再问一轮（链路不带上下文，追问要自带完整意思） */
+const picked = ref<string | null>(null);
+const chosenLabel = computed(() => picked.value ?? props.chosen ?? cq?.clarify.chosen ?? null);
+function onPick(label: string) { if (chosenLabel.value) return; picked.value = label; emit('clarify', label); }
+// 追问没发出去（失败时问题回到输入框）就放开选项；发出去以后由 props.chosen 接管
+const { sending } = useQaSession();
+watch(sending, (v) => { if (!v && !props.chosen) picked.value = null; });
 const { readonly, reason } = useReadonly();
-const caliber = ref<qaApi.QaCaliberKey>(props.card.caliber ?? 'ex');
+const caliber = ref<qaApi.QaCaliberKey>(mc.caliber ?? 'ex');
 const calSaving = ref(false);
 async function onCaliber(v: qaApi.QaCaliberKey) {
   const prev = caliber.value; caliber.value = v;
@@ -24,7 +35,7 @@ async function onCaliber(v: qaApi.QaCaliberKey) {
   try { caliber.value = (await qaApi.recalcTurn(props.turnId, v)).caliber; } catch (e) { caliber.value = prev; message.error(`切换口径失败：${errText(e)}`); } finally { calSaving.value = false; }
 }
 /** 按当前口径显示指标完整名称和版本；已回答的消息保留原依据（回答时的本体版本），查看历史版本时不改写 */
-const ANSWERED_VER = props.card.answeredVer;
+const ANSWERED_VER = mc.answeredVer;
 const metricLabel = computed(() => (caliber.value === 'both' ? `${qaMetricLabel('ex')} / ${qaMetricLabel('in')}` : qaMetricLabel(caliber.value)));
 const inTax = (n: number) => n * (1 + TAX_RATE);
 const showBasis = ref(false);
@@ -47,7 +58,7 @@ async function onCopy() {
 const view = ref('表格');
 const f1 = (n: number) => fmtMoney(n, 1);
 /** 环比的绝对值（8.4），正文写「下降 8.4%」 */
-const momAbs = Math.abs(props.card.mom).toFixed(1);
+const momAbs = Math.abs(mc.mom).toFixed(1);
 const columns = computed(() => [
   { title: '省份', dataIndex: 'province', key: 'province', width: '16%' },
   { title: '复购客户销售额（不含税，万元）', dataIndex: 'sales', key: 'sales', align: 'right' as const },
@@ -80,10 +91,29 @@ const barOption = computed(() => ({
 
 <template>
   <div class="qa-ans">
+    <template v-if="cq">
     <div class="qa-ans-head">
       <a-avatar size="small" shape="square" class="qa-ans-av"><template #icon><ApartmentOutlined /></template></a-avatar>
       <span class="fw-600">智能问数</span>
-      <span class="c-3">{{ metricLabel }} · 按 {{ ANSWERED_VER }} 回答 · 数据截至 {{ card.dataAsOf }} ·
+      <span class="c-3">需要确认{{ cq.clarify.term ? `“${cq.clarify.term}”` : '' }}<template v-if="cq.dataAsOf"> · 数据截至 {{ cq.dataAsOf }}</template></span>
+    </div>
+    <a-alert type="info" show-icon class="qa-ans-clarify qa-ans-ask">
+      <template #message>
+        <div class="qa-ans-ask-q">{{ cq.text }}</div>
+        <div v-if="cq.clarify.options.length" class="qa-ans-ask-opts">
+          <a-tooltip v-for="o in cq.clarify.options" :key="o.value" :title="readonly ? reason : chosenLabel && chosenLabel !== o.label ? '已按其他选项追问' : ''">
+            <a-button size="small" :type="chosenLabel === o.label ? 'primary' : 'default'" :disabled="readonly || (!!chosenLabel && chosenLabel !== o.label)" @click="onPick(o.label)">{{ o.label }}</a-button>
+          </a-tooltip>
+        </div>
+        <div v-if="chosenLabel" class="t-12 c-3">已按「{{ chosenLabel }}」追问</div>
+      </template>
+    </a-alert>
+    </template>
+    <template v-else>
+    <div class="qa-ans-head">
+      <a-avatar size="small" shape="square" class="qa-ans-av"><template #icon><ApartmentOutlined /></template></a-avatar>
+      <span class="fw-600">智能问数</span>
+      <span class="c-3">{{ metricLabel }} · 按 {{ ANSWERED_VER }} 回答 · 数据截至 {{ mc.dataAsOf }} ·
         <a-tooltip title="本体版本、筛选、口径校验与权限过滤">
           <a class="qa-ans-basis-link" @click="showBasis = !showBasis">依据 <UpOutlined v-if="showBasis" /><DownOutlined v-else /></a>
         </a-tooltip>
@@ -91,12 +121,12 @@ const barOption = computed(() => ({
     </div>
 
     <a-descriptions v-if="showBasis" bordered size="small" :column="2" class="qa-ans-basis" :label-style="{ width: '96px' }">
-      <a-descriptions-item label="本体版本">{{ card.basis.ontologyVer }}</a-descriptions-item>
+      <a-descriptions-item label="本体版本">{{ mc.basis.ontologyVer }}</a-descriptions-item>
       <a-descriptions-item label="指标">{{ metricLabel }}</a-descriptions-item>
-      <a-descriptions-item label="筛选">{{ card.basis.filter }}</a-descriptions-item>
-      <a-descriptions-item label="维度">{{ card.basis.dim }}</a-descriptions-item>
-      <a-descriptions-item label="口径">{{ card.basis.caliber }}</a-descriptions-item>
-      <a-descriptions-item label="权限">{{ card.basis.perm }}</a-descriptions-item>
+      <a-descriptions-item label="筛选">{{ mc.basis.filter }}</a-descriptions-item>
+      <a-descriptions-item label="维度">{{ mc.basis.dim }}</a-descriptions-item>
+      <a-descriptions-item label="口径">{{ mc.basis.caliber }}</a-descriptions-item>
+      <a-descriptions-item label="权限">{{ mc.basis.perm }}</a-descriptions-item>
     </a-descriptions>
 
     <a-alert type="info" show-icon class="qa-ans-clarify">
@@ -110,9 +140,9 @@ const barOption = computed(() => ({
     </a-alert>
 
     <p class="qa-ans-text">
-      <template v-if="caliber === 'ex'">{{ card.period }}，{{ card.region }}{{ QA_METRIC.ex.name }}为 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>，环比下降 {{ momAbs }}%（8 月 {{ f1(card.lastMonth) }} 万元），占大区销售额 {{ card.regionShare.toFixed(1) }}%。</template>
-      <template v-else-if="caliber === 'in'">{{ card.period }}，{{ card.region }}{{ QA_METRIC.in.name }}为 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比下降 {{ momAbs }}%（8 月 {{ f1(inTax(card.lastMonth)) }} 万元）。下方明细仍按不含税展示。</template>
-      <template v-else>{{ card.period }}，{{ card.region }}复购客户销售额不含税 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>、含税 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比均下降 {{ momAbs }}%。</template>{{ card.insight }}
+      <template v-if="caliber === 'ex'">{{ mc.period }}，{{ mc.region }}{{ QA_METRIC.ex.name }}为 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>，环比下降 {{ momAbs }}%（8 月 {{ f1(mc.lastMonth) }} 万元），占大区销售额 {{ mc.regionShare.toFixed(1) }}%。</template>
+      <template v-else-if="caliber === 'in'">{{ mc.period }}，{{ mc.region }}{{ QA_METRIC.in.name }}为 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比下降 {{ momAbs }}%（8 月 {{ f1(inTax(mc.lastMonth)) }} 万元）。下方明细仍按不含税展示。</template>
+      <template v-else>{{ mc.period }}，{{ mc.region }}复购客户销售额不含税 <span class="fw-600 num">{{ f1(QA_TOTAL_SALES) }} 万元</span>、含税 <span class="fw-600 num">{{ f1(inTax(QA_TOTAL_SALES)) }} 万元</span>，环比均下降 {{ momAbs }}%。</template>{{ mc.insight }}
     </p>
 
     <div class="qa-ans-row">
@@ -121,7 +151,7 @@ const barOption = computed(() => ({
           <a-descriptions-item label="销售额"><span class="fw-600 num">¥{{ f1(QA_TOTAL_SALES) }} 万</span></a-descriptions-item>
           <a-descriptions-item label="环比"><span class="fw-600 num">−{{ momAbs }}%</span></a-descriptions-item>
           <a-descriptions-item label="复购客户"><span class="fw-600 num">{{ fmtInt(QA_TOTAL_CUSTOMERS) }} 人</span></a-descriptions-item>
-          <a-descriptions-item label="占大区"><span class="fw-600 num">{{ card.regionShare.toFixed(1) }}%</span></a-descriptions-item>
+          <a-descriptions-item label="占大区"><span class="fw-600 num">{{ mc.regionShare.toFixed(1) }}%</span></a-descriptions-item>
         </a-descriptions>
         <div class="qa-ans-box qa-ans-trend">
           <div class="qa-ans-box-head"><span>近 6 个月趋势</span><span class="t-12 c-3">万元</span></div>
@@ -154,7 +184,7 @@ const barOption = computed(() => ({
 
     <div class="qa-ans-actions">
       <a-space :size="8">
-        <a-popover trigger="click" placement="topLeft" :title="card.reasonTitle" overlay-class-name="qa-reason-pop">
+        <a-popover trigger="click" placement="topLeft" :title="mc.reasonTitle" overlay-class-name="qa-reason-pop">
           <template #content>
             <div class="qa-reason">
               <div v-for="r in topDrops" :key="r.key" class="qa-reason-row"><span>{{ r.province }}（{{ f1(r.sales) }} 万元）</span><span class="num">{{ sign(r.mom) }}</span></div>
@@ -171,6 +201,7 @@ const barOption = computed(() => ({
         <a-tooltip :title="readonly ? reason : vote === 'down' ? '已标记回答有误，再点取消' : '回答有误'"><a-button type="text" :class="{ 'qa-ans-voted': vote === 'down' }" :disabled="readonly" @click="onVote('down')"><template #icon><DislikeFilled v-if="vote === 'down'" /><DislikeOutlined v-else /></template></a-button></a-tooltip>
       </a-space>
     </div>
+      </template>
   </div>
 </template>
 
@@ -182,6 +213,9 @@ const barOption = computed(() => ({
 .qa-ans-basis-link:hover { color: var(--brand); }
 .qa-ans-basis { margin-bottom: 10px; }
 .qa-ans-clarify { padding: 4px 12px; margin-bottom: 10px; }
+.qa-ans-ask { padding: 8px 12px; margin-bottom: 0; }
+.qa-ans-ask-q { margin-bottom: 8px; }
+.qa-ans-ask-opts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
 .qa-ans-clarify-row { display: flex; align-items: center; gap: 12px; }
 .qa-ans-text { margin: 0 0 10px; }
 .qa-ans-row { display: flex; gap: 12px; margin-bottom: 12px; }
