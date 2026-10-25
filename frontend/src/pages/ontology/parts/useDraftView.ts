@@ -1,9 +1,10 @@
 /**
- * 已发布 / 草稿 两种视图（对象类型、指标口径、动作类型、事件类型、规则、关系类型、维度与码表共用）。
+ * 已发布 / 草稿 两种视图（对象类型、指标口径、动作类型、事件类型、规则、关系类型、维度与码表、业务知识共用）。
  * 用法：useDraftView('rule', () => cur.value.id)；draftOf('rule', 'R-007') 取规则所在草稿单。
  *       useDraftView('link', () => cur.value.id)；draftOf('link', 'member_holds_cards') 取关系所在草稿单；
- *       新建的关系用 start({ ...opts, target: newId }) 登记到所选变更单（传 target 时不切视图，由页面自己跳转）。
+ *       新建的关系 / 知识条目用 start({ ...opts, target: newId }) 登记到所选变更单（传 target 时不切视图，由页面自己跳转）。
  *       useDraftView('dimension', () => cur.value.id)；维度和码表共用 'dimension'，id 不重复（如 format、order_status）。
+ *       useDraftView('knowledge', () => cur.value.id)；draftOf('knowledge', 'K-018') 取业务知识条目所在草稿单。
  * 规则：已发布版只读；改定义只有“发起变更”一个入口，进入变更草稿后编辑按钮才可用；
  * 有草稿的对象默认看已发布版（问数用的就是这一版），?view=draft 切到草稿。
  */
@@ -16,14 +17,14 @@ import { useReadonly } from '@/composables/useReadonly';
 const pad = (n: number) => String(n).padStart(2, '0');
 const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link' | 'dimension';
+export type TargetKind = 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link' | 'dimension' | 'knowledge';
 
-/** 每张草稿改了哪些对象 / 指标 / 动作类型 / 事件类型（示例数据） */
+/** 每张草稿改了哪些对象 / 指标 / 动作类型 / 事件类型 / 关系 / 业务知识（示例数据） */
 const TARGETS = reactive<Record<string, Partial<Record<TargetKind, string[]>>>>({
   'CR-0014': { action: ['adjust_region_budget'] },
   'CR-0013': { event: ['store_price_changed'] },
   'CR-0012': { object: ['member'], link: ['member_holds_cards'] },
-  'CR-0011': { metric: ['gross_margin'], rule: ['R-007'] },
+  'CR-0011': { metric: ['gross_margin'], rule: ['R-007'], knowledge: ['K-018', 'K-024'] },
   'CR-0009': { object: ['store'], dimension: ['format'] },
 });
 const created = reactive<DraftCR[]>([]);

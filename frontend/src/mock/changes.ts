@@ -27,7 +27,7 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
   { id: 'CR-0014', title: '调整大区预算：超 5% 增加二级审批', owner: '刘婷', reviewer: '陈立军', status: '草稿', level: '一般', changes: 3, updatedAt: '2026-10-25 11:26', reason: '预算调整幅度超过 5% 时需要财务 BP 一起审批' },
   { id: 'CR-0013', title: '门店价格变更：增加促销价字段', owner: '王敏', reviewer: '周晓峰', status: '草稿', level: '修订', changes: 2, updatedAt: '2026-10-24 17:52', reason: '用友 ERP 价格档案开始推送促销价，规则要按促销价判断毛利' },
   { id: 'CR-0012', title: '会员对象拆分“储值卡”', owner: '王敏', reviewer: '陈立军', status: '草稿', level: '重大', changes: 7, updatedAt: '2026-10-25 15:02', reason: '储值卡余额和会员积分分开管理，问数需要能单独查储值卡' },
-  { id: 'CR-0011', title: '毛利率口径扣除促销补贴', owner: '何静', reviewer: '刘婷', status: '草稿', level: '重大', changes: 4, updatedAt: '2026-10-24 18:40', reason: '财务要求毛利按扣除平台和品牌促销补贴后计算，与月报一致' },
+  { id: 'CR-0011', title: '毛利率口径扣除促销补贴', owner: '何静', reviewer: '刘婷', status: '草稿', level: '重大', changes: 6, updatedAt: '2026-10-24 18:40', reason: '财务要求毛利按扣除平台和品牌促销补贴后计算，与月报一致' },
   { id: 'CR-0010', title: '退款率改按退款完成时间统计', owner: '刘婷', reviewer: '陈立军', status: '审核中', level: '重大', changes: 5, updatedAt: '2026-10-25 11:20', reason: '按申请时间统计会把后来被拒的退款也算进去，与财务口径不一致' },
   { id: 'CR-0009', title: '门店新增“业态”枚举值“前置仓”', owner: '陈立军', reviewer: '王敏', status: '草稿', level: '一般', changes: 1, updatedAt: '2026-10-21 10:26', reason: '新开 6 家前置仓，需要按业态单独统计' },
   { id: 'CR-0008', title: '出库及时率补充同义词“发货及时率”', owner: '周晓峰', reviewer: '王敏', status: '已通过', level: '修订', changes: 2, updatedAt: '2026-10-24 16:05', reason: '门店运营常说“发货及时率”，问数召回不到' },
@@ -48,7 +48,7 @@ export interface CheckRow { code: string; name: string; result: CheckResult; not
 export interface ImpactItem { kind: string; name: string; note: string; count?: number; hover?: { kind: string; id: string } }
 export interface TrialRow { period: string; before: string; after: string; delta: string }
 /** 编辑草稿时跳到哪个页面的草稿视图 */
-export interface EditTarget { kind: 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link' | 'dimension'; id: string }
+export interface EditTarget { kind: 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link' | 'dimension' | 'knowledge'; id: string }
 
 const CHECK_NAMES: [string, string][] = [
   ['V1', '主键与映射完整'], ['V2', '主键唯一性抽检'], ['V3', '关系两端与类型兼容'], ['V4', '枚举挂取值字典'],
@@ -195,6 +195,8 @@ export const CR_DETAILS: Record<string, CRDetail> = {
       row(2, '指标', '毛利率', '口径版本', '修改', 'v2', 'v3'),
       row(3, '属性', '订单行', '促销补贴 promo_subsidy', '新增', '', 'decimal · 元'),
       row(4, '规则', 'R-007 商品毛利率越线', '条件引用口径', '修改', 'gross_margin@v2（规则 v3）', 'gross_margin@v3（规则 v4）'),
+      row(5, '业务知识', '毛利口径说明', '说明', '修改', '毛利 = 不含税销售额 − 不含税成本', '毛利 = 不含税销售额 − 不含税成本 − 促销补贴；与财务月报一致'),
+      row(6, '业务知识', '促销补贴', '术语', '新增', '', '平台券与品牌补贴之和；毛利、毛利率按扣除后计算'),
     ],
     checks: checks({
       V5: ['阻断', '订单行.促销补贴 还没有字段映射'],
@@ -203,15 +205,16 @@ export const CR_DETAILS: Record<string, CRDetail> = {
       V13: NA('本次未改关系'), V16: NA(''),
     }),
     impact: {
-      direct: [{ kind: '指标', name: '毛利额', note: 'v2 → v3' }, { kind: '属性', name: '订单行.促销补贴', note: '新增' }],
+      direct: [{ kind: '指标', name: '毛利额', note: 'v2 → v3' }, { kind: '属性', name: '订单行.促销补贴', note: '新增' }, { kind: '业务知识', name: '促销补贴', note: '新增术语' }],
       defs: [{ kind: '指标', name: '毛利率', note: '由毛利额派生，跟着升到 v3', hover: { kind: 'metric', id: 'gross_margin' } }],
       usage: [
         { kind: '规则', name: 'R-007 商品毛利率越线', note: '随本单升到 v4，条件改引用毛利率 v3；近 7 天回放命中 3 → 5，阈值 18.00% 不变' },
         { kind: '看板', name: '品类毛利看板', note: '毛利卡片按新口径重算' },
         { kind: '认证问答', name: '各品类毛利率排名', note: '需重新认证' },
+        { kind: '业务知识', name: '毛利口径说明', note: '口径说明同步改为扣除促销补贴' },
       ],
     },
-    touches: ['metric:gross_profit', 'metric:gross_margin', 'property:order_line.promo_subsidy'],
+    touches: ['metric:gross_profit', 'metric:gross_margin', 'property:order_line.promo_subsidy', 'knowledge:K-018', 'knowledge:K-024'],
     edit: { kind: 'metric', id: 'gross_margin' },
     times: { created: '2026-10-24 16:05', checked: '2026-10-24 18:40' },
   },
@@ -494,7 +497,7 @@ export function reviewLog(cr: ChangeRequest): ReviewEvent[] {
 /** 草稿编辑入口：跳到对应页面的草稿视图 */
 export function editRoute(e?: EditTarget) {
   if (!e) return undefined;
-  const map = { object: ['object-types', 'type'], metric: ['metrics', 'metric'], action: ['action-types', 'action'], event: ['event-types', 'event'], rule: ['rules', 'rule'], link: ['link-types', 'link'], dimension: ['dimensions', 'dim'] } as const;
+  const map = { object: ['object-types', 'type'], metric: ['metrics', 'metric'], action: ['action-types', 'action'], event: ['event-types', 'event'], rule: ['rules', 'rule'], link: ['link-types', 'link'], dimension: ['dimensions', 'dim'], knowledge: ['glossary', 'k'] } as const;
   const [page, key] = map[e.kind];
   return { path: `/build/ontology/${page}`, query: { [key]: e.id, view: 'draft' } };
 }
