@@ -68,7 +68,7 @@ const countText = computed(() => (props.scope.single ? '' : `共 ${fmtInt(props.
       </div>
 
       <div class="oa-input">
-        <a-textarea v-model:value="q" :rows="2" :disabled="readonly" :placeholder="readonly ? '正在查看历史版本，只读' : '在这个范围内提问，Enter 发送'" @press-enter.prevent="send()" />
+        <a-textarea v-model:value="q" :rows="2" :disabled="readonly" :placeholder="readonly ? reason : '在这个范围内提问，Enter 发送'" @press-enter.prevent="send()" />
         <a-tooltip :title="readonly ? reason : undefined">
           <a-button type="primary" :disabled="readonly || !q.trim()" @click="send()"><template #icon><SendOutlined /></template>发送</a-button>
         </a-tooltip>

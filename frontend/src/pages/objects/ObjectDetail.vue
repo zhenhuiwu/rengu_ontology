@@ -3,6 +3,7 @@
  * 对象详情（/use/objects/detail?kind=store&id=SH0047&tab=overview）。参考 Object View。
  * 数据全部来自 objectRegistry.resolveObject（与抽屉同一份），补充数据见 mock/objects-qa.ts。
  * 页签：概览 / 关联对象 / 时间线 / 动作记录；右栏：可执行动作（公共确认卡）+ 对它提问（当前页浮层）。
+ * 以此用户预览：标题行显示被预览用户对该类型的数据范围（scopeLabel）；对象不在范围内时整页显示无权查看；动作、提问由 useReadonly 只读。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
@@ -14,10 +15,11 @@ import ObjRef from '@/components/ObjRef.vue';
 import { resolveObject } from '@/components/objectRegistry';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
+import { usePreview } from '@/composables/usePreview';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import {
-  KIND_LABEL, FIELD_GROUPS, OBJ_CUTOFF, caliberOf, storeExtraKpi, relationGroups, extraTimeline, actionRecords, objActions, quickQuestions, objType,
+  KIND_LABEL, FIELD_GROUPS, OBJ_CUTOFF, caliberOf, storeExtraKpi, relationGroups, extraTimeline, actionRecords, objActions, quickQuestions, objType, objRow, inScope,
   type AskScope, type ObjAction,
 } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
@@ -36,6 +38,10 @@ const patch = (p: Record<string, string | null>) => {
 const kind = computed(() => qs('kind') || 'store');
 const id = computed(() => qs('id') || 'SH0047');
 const view = computed(() => resolveObject(kind.value, id.value));
+/* 预览：被预览用户对这类对象的行级范围 */
+const pv = usePreview();
+const pvLabel = computed(() => KIND_LABEL[kind.value] ?? view.value?.kindLabel ?? '');
+const pvOut = computed(() => !!view.value && pv.active.value && !inScope(kind.value, objRow(kind.value, id.value) ?? { name: view.value.title }, pv.scopeOf(pvLabel.value)));
 const TABS = [{ key: 'overview', title: '概览' }, { key: 'related', title: '关联对象' }, { key: 'timeline', title: '时间线' }, { key: 'actions', title: '动作记录' }];
 const tab = computed({ get: () => qs('tab') || 'overview', set: (v: string) => patch({ tab: v === 'overview' ? null : v, apage: null, asize: null }) });
 
@@ -135,6 +141,9 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
   <div v-if="!view" class="panel od-missing">
     <a-empty :description="`没有找到对象 ${kind}:${id}`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
   </div>
+  <div v-else-if="pvOut" class="panel od-missing">
+    <a-empty :description="`${pv.userName.value} 无权查看${pvLabel}「${view.title}」（${pv.scopeLabel(pvLabel)}）`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
+  </div>
   <div v-else class="od">
     <div class="panel od-head">
       <a class="od-back t-12" @click="goBack"><LeftOutlined /> {{ backLabel }}</a>
@@ -143,7 +152,8 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
         <a-tag class="od-kind">{{ view.kindLabel }}</a-tag>
         <span v-if="view.status" class="c-2">{{ view.status.text }}</span>
         <span class="c-3 num">{{ view.code }}</span>
-        <span class="od-cut t-12 c-3">数据截至 <span class="num">{{ OBJ_CUTOFF }}</span></span>
+        <span v-if="pv.active.value" class="od-cut t-12 c-2">{{ pv.userName.value }} 的{{ pv.scopeLabel(pvLabel) }}</span>
+        <span class="t-12 c-3" :class="{ 'od-cut': !pv.active.value }">数据截至 <span class="num">{{ OBJ_CUTOFF }}</span></span>
       </div>
       <div class="od-brief">
         <span v-for="b in view.brief" :key="b.label"><span class="c-3">{{ b.label }}</span> {{ b.value }}</span>

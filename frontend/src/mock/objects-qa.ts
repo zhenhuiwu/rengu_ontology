@@ -128,6 +128,34 @@ export const OBJ_TYPES: ObjType[] = [
 export const objType = (k: string) => OBJ_TYPES.find((t) => t.kind === k) ?? OBJ_TYPES[0];
 /** 当前用户可见范围（王敏：大区 = 华东）。无权限范围只说明“无权限”，不给数量 */
 export const OBJ_SCOPE = { visible: '华东大区（华东一区至五区）', hidden: '其他大区' };
+/** 行级范围里的属性怎么从行上取值（范围值“华东”匹配“华东一区”等子区） */
+const SCOPE_GET: Record<string, Record<string, (r: any) => string>> = {
+  store: { 大区: (s) => s.region, 门店: (s) => s.name },
+  order: { 大区: (o) => storeById(o.storeId)?.region ?? '', 门店: (o) => storeById(o.storeId)?.name ?? '' },
+  product: { 品类: (p) => String(p.category).split('/')[0] },
+  region: { 大区: (g) => g.name },
+};
+/**
+ * 预览期间按被预览用户的行级范围过滤：scope 为 usePreview().scopeOf(...) 的返回值。
+ * null（不在预览）/ '全部' → 都可见；'无权限' → 都不可见；'大区 = 华东'、'大区 ∈ 华东、华南'，多条用“；或 ”连接。
+ * 本页取不到值的属性不做过滤（宁可多给也不报错，范围标签照样显示）。
+ */
+/** 搜索类型（门店 / 商品 / 订单）的原始行，给行级范围判断用；其他类型返回 undefined */
+export function objRow(kind: string, id: string): any {
+  const t = OBJ_TYPES.find((x) => x.kind === kind);
+  return t ? t.rows().find((r) => t.id(r) === id) : undefined;
+}
+export function inScope(kind: string, row: any, scope: string | null): boolean {
+  if (scope === null || scope === '全部') return true;
+  if (scope === '无权限') return false;
+  return scope.split('；或 ').some((cond) => {
+    const m = cond.match(/^(\S+) [=∈] (.+)$/);
+    const get = m && SCOPE_GET[kind]?.[m[1]];
+    if (!m || !get) return true;
+    const v = get(row);
+    return m[2].split('、').some((x) => v.startsWith(x));
+  });
+}
 /** 数据截至：与指标页、问数统一（公共 DATA_CUTOFF） */
 export const OBJ_CUTOFF = DATA_CUTOFF;
 

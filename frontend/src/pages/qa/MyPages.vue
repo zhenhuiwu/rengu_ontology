@@ -13,6 +13,7 @@ import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useReadonly } from '@/composables/useReadonly';
+import { usePreview } from '@/composables/usePreview';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
 import { MY_PAGES, PAGE_TEMPLATES, PAGES_CUTOFF, PAGE_SCOPES, freqLabel, type QaPageFull, type QaTemplate, type TplCreate, type RefreshPlan } from '@/mock/qa-pages';
@@ -25,6 +26,9 @@ const router = useRouter();
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 const { readonly, reason } = useReadonly();
+/* 预览：页面卡片按被预览用户的范围取数 */
+const pv = usePreview();
+const pvText = computed(() => pv.limited.value.map((o) => `${o.name} ${o.scope}`).join('；') || '全部');
 const confirm = useConfirmStore();
 
 const pages = reactive<QaPageFull[]>(MY_PAGES.map((p) => ({ ...p })));
@@ -170,7 +174,8 @@ const fromWb = computed(() => pages.filter((p) => p.sourceKind === '问数工作
         <a-select v-model:value="srcF" allow-clear placeholder="来源" class="mp-sel" :options="['问数工作台', '模板', '手动新建'].map((s) => ({ value: s, label: s }))" />
         <a-select v-model:value="shareF" allow-clear placeholder="共享" class="mp-sel" :options="['已共享', '仅自己'].map((s) => ({ value: s, label: s }))" />
         <a-select v-model:value="statusF" allow-clear placeholder="状态" class="mp-sel" :options="['正常', '口径待更新', '刷新失败'].map((s) => ({ value: s, label: s }))" />
-        <span class="t-12 c-3 mp-hint">{{ fromWb }} 个页面由问数工作台“固定到页面”生成</span>
+        <span v-if="pv.active.value" class="t-12 c-2 mp-hint">{{ pv.userName.value }} 的数据范围：{{ pvText }}，卡片只显示范围内数据</span>
+        <span v-else class="t-12 c-3 mp-hint">{{ fromWb }} 个页面由问数工作台“固定到页面”生成</span>
       </div>
       <div class="mp-table" :class="{ 'paged-scroll': pq.overflow.value }">
         <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">

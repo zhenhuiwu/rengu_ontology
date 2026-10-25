@@ -16,6 +16,7 @@ import { useConfirmStore } from '@/stores/confirm';
 import { REGION_EC } from '@/mock';
 import { useQueryParam } from './useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
+import { usePreview } from '@/composables/usePreview';
 import QaSessionPanel from './components/QaSessionPanel.vue';
 import QaConversation from './components/QaConversation.vue';
 import QaComposer from './components/QaComposer.vue';
@@ -40,6 +41,9 @@ const applied = ref(false);
 // 右栏动作行只在确认卡打开期间高亮；取消/关闭后恢复“发起”，提交后才变“待审批”
 const highlight = pending;
 const { readonly, reason } = useReadonly();
+/* 预览：回答只含被预览用户范围内的数据，会话顶部写明（问数涉及的对象：订单、门店、会员） */
+const pv = usePreview();
+const pvText = computed(() => ['订单', '门店', '会员'].map((o) => pv.scopeLabel(o).replace('数据范围：', '')).join('；'));
 
 // 会话级范围与口径
 const scope = ref('华东');
@@ -93,6 +97,7 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
   <div class="qa-wb">
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
+      <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
       <QaConversation :applied="applied" :tips="tips" @suggest="runAction" @pin="pin = '1'" @apply="apply = '1'" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
@@ -106,4 +111,5 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
 <style scoped>
 .qa-wb { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .qa-center { flex: 1; background: var(--g3); }
+.qa-pv { flex: none; padding: 8px 16px; border-bottom: var(--border); background: var(--g2); }
 </style>
