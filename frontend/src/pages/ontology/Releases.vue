@@ -252,7 +252,7 @@ async function rollback() {
           </a-tooltip>
         </template>
         <template v-else-if="cur.status === '已驳回'">
-          <span class="t-12 c-error rl-why">驳回：{{ cur.rejectReason ?? '暂无原因' }}</span>
+          <span class="t-12 c-1 rl-why" :title="cur.rejectReason ?? ''">驳回：{{ cur.rejectReason ?? '暂无原因' }}</span>
           <a-tooltip :title="canManage ? '' : `只有 ${cur.owner} 或 ${cur.reviewer} 能改回草稿`">
             <a-button :disabled="!canManage" @click="reopen">改回草稿</a-button>
           </a-tooltip>

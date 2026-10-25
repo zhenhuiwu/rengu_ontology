@@ -103,10 +103,10 @@ const VERSIONS = [
   { ver: 'v1', release: 'v2026.03.2', status: '已替代', by: '刘婷', at: '2026-03-18 10:06', change: '首次发布' },
 ];
 const REFS = [
-  { type: '指标', name: '客单价', note: '分子' },
-  { type: '指标', name: '毛利率', note: '分母' },
-  { type: '指标', name: '复购客户销售额', note: '基础口径，加会员过滤' },
-  ...Object.values(RULES).filter((r) => r.metric === 'gmv').map((r) => ({ type: '规则', name: `${r.id} ${r.name}`, note: `条件：${r.condition}；口径升版后需回放试跑` })),
+  { type: '指标', name: '客单价', note: '分子', to: { path: '/build/ontology/metrics', query: { metric: 'atv' } } },
+  { type: '指标', name: '毛利率', note: '分母', to: { path: '/build/ontology/metrics', query: { metric: 'gross_margin' } } },
+  { type: '指标', name: '复购客户销售额', note: '基础口径，加会员过滤', to: { path: '/build/ontology/metrics', query: { metric: 'repeat_sales' } } },
+  ...Object.values(RULES).filter((r) => r.metric === 'gmv').map((r) => ({ type: '规则', name: `${r.id} ${r.name}`, note: `条件：${r.condition}；口径升版后需回放试跑`, to: { path: '/build/ontology/rules', query: { rule: r.id } } })),
   { type: '看板', name: '华东大区经营日报', note: '4 个卡片' },
   { type: '看板', name: '门店经营月报', note: '2 个卡片' },
   { type: '认证问答', name: '上月各大区销售额', note: '已认证' },
@@ -215,7 +215,7 @@ const refCols = [
           </div>
           <div class="mt-formula t-14 num">{{ FORMULA }}</div>
           <a-descriptions :column="2" bordered size="small" class="mt-desc" :label-style="{ width: '96px', whiteSpace: 'nowrap' }">
-            <a-descriptions-item v-for="d in DEF" :key="d.k" :label="d.k">{{ d.v }}</a-descriptions-item>
+            <a-descriptions-item v-for="d in DEF" :key="d.k" :label="d.k"><span class="mt-ell" :title="d.v">{{ d.v }}</span></a-descriptions-item>
           </a-descriptions>
           <div class="mt-sec t-14 fw-600">允许的维度</div>
           <a-table :columns="dimCols" :data-source="DIMS" :pagination="false" size="small" row-key="dim" />
@@ -262,7 +262,7 @@ const refCols = [
       <div v-else class="mt-body">
         <a-table :columns="refCols" :data-source="REFS.slice((refPage - 1) * 10, refPage * 10)" :pagination="false" size="middle" row-key="name">
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'name'"><span class="c-1">{{ record.name }}</span></template>
+            <template v-if="column.key === 'name'"><a v-if="record.to" @click="router.push(record.to)">{{ record.name }}</a><span v-else class="c-1">{{ record.name }}</span></template>
           </template>
         </a-table>
         <AppPagination v-model:page="refPage" variant="full" :total="REFS.length" :size="10" unit="条" :empty="false" />
@@ -300,6 +300,8 @@ const refCols = [
 .mt-formula { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; }
 .mt-chart { height: 200px; }
 .mt-deny { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: var(--border); }
+.mt-desc :deep(table) { table-layout: fixed; }
+.mt-ell { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 100%; }
 .mt-refs { display: flex; flex-direction: column; gap: 4px; }
 .mt-note { margin-top: 4px; }
 
