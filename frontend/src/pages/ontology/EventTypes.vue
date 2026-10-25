@@ -6,8 +6,8 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { InfoCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import EChart from '@/components/EChart.vue';
 import { useDrawer } from '@/composables/useDrawer';
@@ -269,7 +269,7 @@ const verCols = [
             <a-descriptions-item label="近 7 天">{{ fmtInt(cur.weekly) }} 条</a-descriptions-item>
           </a-descriptions>
           <div class="et-sec t-14 fw-600 et-sec-row">
-            <span>订阅方 {{ liveSubs.length }} 个<a-tooltip title="完整列表见“订阅方”页签"><InfoCircleOutlined class="et-tip t-12" /></a-tooltip></span>
+            <span>订阅方 {{ liveSubs.length }} 个<InfoTip text="完整列表见“订阅方”页签" /></span>
           </div>
           <div v-for="s in liveSubs.slice(0, 4)" :key="s._key" class="et-sub">
             <span class="t-12 c-3 et-sub-k">{{ s.kind }}</span>
@@ -279,7 +279,7 @@ const verCols = [
             <span class="t-12" :class="s.status === '异常' ? 'c-warning' : 'c-3'">{{ s.status }}</span>
           </div>
           <div class="et-sec t-14 fw-600 et-sec-row">
-            <span>最近事件<a-tooltip title="完整事件流见“近期事件”页签；点事件编号查看投递过程"><InfoCircleOutlined class="et-tip t-12" /></a-tooltip></span>
+            <span>最近事件<InfoTip text="完整事件流见“近期事件”页签；点事件编号查看投递过程" /></span>
           </div>
           <div v-for="r in recentAll.slice(0, 5)" :key="r.id" class="et-ev">
             <a class="t-14 num" @click="drawer.open('event', r.id)">{{ r.id }}</a>
@@ -307,7 +307,7 @@ const verCols = [
       <!-- 载荷字段 -->
       <div v-else-if="tab === 'payload'" class="et-body">
         <div class="et-tool">
-          <span class="t-14 c-1">载荷字段 {{ fields.total }} 个</span><a-tooltip title="事件自身字段在前，通用信封字段在后（所有事件类型共有，不可修改）"><InfoCircleOutlined class="et-tip t-12" /></a-tooltip>
+          <span class="t-14 c-1">载荷字段 {{ fields.total }} 个</span><InfoTip text="事件自身字段在前，通用信封字段在后（所有事件类型共有，不可修改）" />
           <span class="et-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
@@ -336,7 +336,7 @@ const verCols = [
       <!-- 订阅方 -->
       <div v-else-if="tab === 'subs'" class="et-body">
         <div class="et-tool">
-          <span class="t-14 c-1">订阅方 {{ liveSubs.length }} 个</span><a-tooltip title="规则、自动化、通知和外部订阅都按同一份载荷接收；点规则编号在当前页查看规则"><InfoCircleOutlined class="et-tip t-12" /></a-tooltip>
+          <span class="t-14 c-1">订阅方 {{ liveSubs.length }} 个</span><InfoTip text="规则、自动化、通知和外部订阅都按同一份载荷接收；点规则编号在当前页查看规则" />
           <span class="et-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
@@ -368,7 +368,7 @@ const verCols = [
         <div class="et-tool">
           <a-segmented v-model:value="range" :options="RANGES" size="small" />
           <a-segmented v-model:value="outcome" :options="OUTCOMES" size="small" />
-          <a-tooltip title="事件流按时间倒序，点事件编号查看投递过程"><InfoCircleOutlined class="et-tip t-12" /></a-tooltip>
+          <InfoTip text="事件流按时间倒序，点事件编号查看投递过程" />
         </div>
         <div class="paged-scroll">
           <a-table :columns="recentCols" :data-source="recent.items" :pagination="false" size="middle" row-key="id"
@@ -386,14 +386,14 @@ const verCols = [
           </a-table>
         </div>
         <AppPagination v-model:page="eq.page.value" variant="simple" :total="recent.total" :size="eq.size.value" unit="个事件" :empty="false">
-          <template #extra><span class="t-12 c-2">保留期 {{ cur.retention }}</span><a-tooltip title="事件流不显示总数"><InfoCircleOutlined class="et-tip t-12" /></a-tooltip></template>
+          <template #extra><span class="t-12 c-2">保留期 {{ cur.retention }}</span><InfoTip text="事件流不显示总数" /></template>
         </AppPagination>
       </div>
 
       <!-- 版本历史 -->
       <div v-else class="et-body">
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
-          <template #headerCell="{ column }"><template v-if="column.dataIndex === 'change'">变更说明<a-tooltip title="载荷只能新增可选字段；删除或改类型属于不兼容变更，需要所有订阅方确认后随整版发布"><InfoCircleOutlined class="et-tip t-12" /></a-tooltip></template></template>
+          <template #headerCell="{ column }"><template v-if="column.dataIndex === 'change'">变更说明<InfoTip text="载荷只能新增可选字段；删除或改类型属于不兼容变更，需要所有订阅方确认后随整版发布" /></template></template>
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'"><a-badge status="default" :text="record.status" /></template>
             <template v-else-if="column.key === 'op'">
@@ -429,7 +429,6 @@ const verCols = [
 .et-items li.active { background: var(--brand-bg); }
 .et-items li.active .et-name { color: var(--brand); }
 .et-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.et-tip { margin-left: 4px; color: var(--g8); cursor: help; }
 .et-sub-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .et-pager { flex: 1; min-height: 0; }

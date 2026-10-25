@@ -8,8 +8,9 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { InfoCircleOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue';
+import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import EChart from '@/components/EChart.vue';
 import StatusTimeline from '@/components/StatusTimeline.vue';
@@ -324,7 +325,7 @@ const verCols = [
             <a-descriptions-item label="重试">{{ eff.retry }}</a-descriptions-item>
           </a-descriptions>
           <div class="at-sec t-14 fw-600 at-sec-row">
-            <span>使用该动作的规则与告警<a-tooltip title="点规则编号在当前页查看规则"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip></span>
+            <span>使用该动作的规则与告警<InfoTip text="点规则编号在当前页查看规则" /></span>
           </div>
           <a-table :columns="usedCols" :data-source="usedBy" :pagination="false" size="small" row-key="id"
             :locale="{ emptyText: '暂无规则使用，只能在对象详情里手动执行' }">
@@ -336,7 +337,7 @@ const verCols = [
             </template>
           </a-table>
           <div class="at-sec t-14 fw-600 at-sec-row">
-            <span>提交条件 {{ liveConds.length }} 项<a-tooltip title="表达式见“提交条件”页签"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip></span>
+            <span>提交条件 {{ liveConds.length }} 项<InfoTip text="表达式见“提交条件”页签" /></span>
           </div>
           <div v-for="c in liveConds.slice(0, 5)" :key="c._key" class="at-cond">
             <span class="t-12 c-3">{{ c.kind }}</span><span class="t-14 c-1">{{ c.name }}</span><span class="t-12 c-3 at-cond-f" :title="c.fail">{{ c.fail }}</span>
@@ -368,7 +369,7 @@ const verCols = [
       <!-- 参数 -->
       <div v-else-if="tab === 'params'" class="at-body">
         <div class="at-tool">
-          <span class="t-14 c-1">参数 {{ params.total }} 个</span><a-tooltip title="提交时按顺序校验；对象引用类参数在执行面板里用对象选择器填写"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip>
+          <span class="t-14 c-1">参数 {{ params.total }} 个</span><InfoTip text="提交时按顺序校验；对象引用类参数在执行面板里用对象选择器填写" />
           <span class="at-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
@@ -395,7 +396,7 @@ const verCols = [
       <!-- 提交条件 -->
       <div v-else-if="tab === 'conds'" class="at-body">
         <div class="at-tool">
-          <span class="t-14 c-1">提交条件 {{ liveConds.length }} 项</span><a-tooltip title="全部满足才允许提交；条件模板分三类：当前用户、参数、上下文对象"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip>
+          <span class="t-14 c-1">提交条件 {{ liveConds.length }} 项</span><InfoTip text="全部满足才允许提交；条件模板分三类：当前用户、参数、上下文对象" />
           <span class="at-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
@@ -480,7 +481,7 @@ const verCols = [
       <div v-else-if="tab === 'runs'" class="at-body">
         <div class="at-tool">
           <a-segmented v-model:value="runFilter" :options="RUN_FILTERS" size="small" />
-          <a-tooltip title="规则生成的动作先待确认，确认人确认后才提交；点编号查看过程"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip>
+          <InfoTip text="规则生成的动作先待确认，确认人确认后才提交；点编号查看过程" />
         </div>
         <div class="paged-scroll">
           <a-table :columns="runCols" :data-source="runs.items" :pagination="false" size="middle" row-key="id"
@@ -509,7 +510,7 @@ const verCols = [
       <!-- 版本历史 -->
       <div v-else class="at-body">
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
-          <template #headerCell="{ column }"><template v-if="column.key === 'status'">状态<a-tooltip title="动作类型版本只随本体整版发布生效；进行中的执行按提交时的版本完成，不受新版本影响"><InfoCircleOutlined class="at-tip t-12" /></a-tooltip></template></template>
+          <template #headerCell="{ column }"><template v-if="column.key === 'status'">状态<InfoTip text="动作类型版本只随本体整版发布生效；进行中的执行按提交时的版本完成，不受新版本影响" /></template></template>
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'"><a-badge :status="'default'" :text="record.status" /></template>
             <template v-else-if="column.key === 'op'">
@@ -546,7 +547,6 @@ const verCols = [
 .at-items li.active { background: var(--brand-bg); }
 .at-items li.active .at-name { color: var(--brand); }
 .at-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.at-tip { margin-left: 4px; color: var(--g8); cursor: help; }
 .at-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .at-pager { flex: 1; min-height: 0; }
 .at-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; }
