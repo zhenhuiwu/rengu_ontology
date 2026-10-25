@@ -63,8 +63,8 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
         :pagination="t.answer.table.paged ? { pageSize: 10, size: 'small', showSizeChanger: false } : false" :scroll="{ x: 'max-content' }" />
     </template>
     <template v-else-if="t.kind === 'answer'">
-    <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" />
-    <QaAnswer v-else :card="t.answer" @suggest="emit('suggest')" @pin="emit('pin')" />
+    <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="real ? t.id : undefined" />
+    <QaAnswer v-else :card="t.answer" :turn-id="real ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" @suggest="emit('suggest')" @pin="emit('pin')" />
     </template>
     <div v-else-if="t.kind === 'denied'" class="qa-b">
       <LockOutlined class="c-3" />

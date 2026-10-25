@@ -8,11 +8,21 @@ import EChart from '@/components/EChart.vue';
 import { GRAY } from '@/theme';
 import { QA_PROVINCES, QA_TREND, QA_TOTAL_SALES, QA_TOTAL_CUSTOMERS, fmtMoney, fmtInt, qaMetricLabel, QA_METRIC, TAX_RATE, type QaDemoMainCard } from '@/mock';
 import { useReadonly } from '@/composables/useReadonly';
+import * as qaApi from '@/api/qa';
+import { errText } from '../useQaSession';
 
-const props = defineProps<{ card: QaDemoMainCard }>();
+/** turnId：真接口时这一轮的 id（W9 口径 / W12 赞踩写后台）；没有就是演示数据，只改本地状态 */
+const props = defineProps<{ card: QaDemoMainCard & { caliber?: qaApi.QaCaliberKey }; turnId?: string; vote?: qaApi.QaVote }>();
 const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void }>();
 const { readonly, reason } = useReadonly();
-const caliber = ref<'ex' | 'in' | 'both'>('ex');
+const caliber = ref<qaApi.QaCaliberKey>(props.card.caliber ?? 'ex');
+const calSaving = ref(false);
+async function onCaliber(v: qaApi.QaCaliberKey) {
+  const prev = caliber.value; caliber.value = v;
+  if (!props.turnId) return;
+  calSaving.value = true;
+  try { caliber.value = (await qaApi.recalcTurn(props.turnId, v)).caliber; } catch (e) { caliber.value = prev; message.error(`切换口径失败：${errText(e)}`); } finally { calSaving.value = false; }
+}
 /** 按当前口径显示指标完整名称和版本；已回答的消息保留原依据（回答时的本体版本），查看历史版本时不改写 */
 const ANSWERED_VER = props.card.answeredVer;
 const metricLabel = computed(() => (caliber.value === 'both' ? `${qaMetricLabel('ex')} / ${qaMetricLabel('in')}` : qaMetricLabel(caliber.value)));
@@ -21,8 +31,15 @@ const showBasis = ref(false);
 const topDrops = [...QA_PROVINCES].sort((a, b) => a.mom - b.mom).slice(0, 3);
 const sign = (n: number) => `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(1)}%`;
 /** 赞/踩：二选一，再点一次取消 */
-const vote = ref<'' | 'up' | 'down'>('');
-function onVote(v: 'up' | 'down') { vote.value = vote.value === v ? '' : v; if (vote.value) message.info(v === 'up' ? '已记录：回答正确' : '已记录：回答有误，会进入问数调优的反馈'); }
+const vote = ref<qaApi.QaVote>(props.vote ?? '');
+async function onVote(v: 'up' | 'down') {
+  const next = vote.value === v ? '' : v;
+  if (props.turnId) {
+    try { await qaApi.voteTurn(props.turnId, next); } catch (e) { message.error(`提交失败：${errText(e)}`); return; }
+  }
+  vote.value = next;
+  if (next) message.info(next === 'up' ? '已记录：回答正确' : '已记录：回答有误，会进入问数调优的反馈');
+}
 async function onCopy() {
   const t = document.querySelector('.qa-ans-text')?.textContent?.trim() ?? '';
   try { await navigator.clipboard.writeText(t); message.info('已复制回答'); } catch { message.info('浏览器不允许自动复制，请手动选中复制'); }
@@ -86,7 +103,7 @@ const barOption = computed(() => ({
       <template #message>
         <div class="qa-ans-clarify-row">
           <span>“销售额”有两种口径，已按默认口径 <span class="fw-600">不含税</span> 回答</span>
-          <a-tooltip :title="reason"><a-radio-group v-model:value="caliber" size="small" option-type="button" :disabled="readonly"
+          <a-tooltip :title="reason"><a-radio-group :value="caliber" size="small" option-type="button" :disabled="readonly || calSaving" @update:value="onCaliber"
             :options="[{ label: '不含税', value: 'ex' }, { label: '含税', value: 'in' }, { label: '两者对比', value: 'both' }]" /></a-tooltip>
         </div>
       </template>

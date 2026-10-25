@@ -62,6 +62,36 @@ class PermRequestOut(ApiModel):
     approver: str | None = None
 
 
+class VoteIn(ApiModel):
+    """W12：跟 QaAnswer.vote 一致，'' = 取消。"""
+
+    vote: Literal["up", "down", ""]
+
+
+class VoteOut(ApiModel):
+    id: str
+    vote: str
+
+
+class RecalcIn(ApiModel):
+    """W9：澄清条单选（ex 不含税 / in 含税 / both 两者对比）。"""
+
+    caliber: Literal["ex", "in", "both"]
+
+
+class ResultColumnOut(ApiModel):
+    key: str
+    title: str
+    align: str | None = None
+
+
+class TurnResultOut(Page[dict[str, Any]]):
+    """W10：结果表一页 + 列 + 按全部数据算的合计。"""
+
+    columns: list[ResultColumnOut]
+    summary: dict[str, Any]
+
+
 class FavoriteOut(ApiModel):
     """W13 · QaFavorite。"""
 

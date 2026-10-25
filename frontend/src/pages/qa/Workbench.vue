@@ -33,6 +33,8 @@ const router = useRouter();
 const drawer = useDrawer();
 const confirm = useConfirmStore();
 const submitted = ref(false);
+/** 真接口：本次提交的 action_run，右栏「待审批」可跳动作中心 */
+const submittedRun = ref<{ id: string; approver: string | null }>();
 const pending = computed(() => confirm.open && confirm.req?.title === ACTION);
 const pinQ = useQueryParam('pin', '');
 const pin = computed({ get: () => (readonly.value ? '' : pinQ.value), set: (v: string) => (pinQ.value = v) });
@@ -103,29 +105,56 @@ function setConfirmQuery(on: boolean) {
   router.replace({ query: q });
 }
 
+/** 演示数据里的确认卡字段；真接口（dynamic 开关）时动作类型 / 审批人 / 写回 / 幂等键换成 stage 返回的 action_run */
+const ACTION_PARAMS = '面额 ¥30，满 ¥199 可用，有效期 14 天';
+const ACTION_TARGET = { kind: '客户群', id: 'SEG-EC-60D', label: '华东大区 · 近 60 天未复购' };
+function actionFields(run?: qaApi.QaActionRun) {
+  return [
+    { label: '动作类型', value: run ? `${run.action} ${run.typeVersion ?? ''}`.trim() : '发放复购召回优惠券 v3' },
+    { label: '参数', value: run?.params ?? ACTION_PARAMS },
+    { label: '影响', value: '3,812 位客户（已排除 30 天内已领券 214 人）' },
+    { label: '预算', value: '营销预算 -¥114,360' },
+    { label: '提交条件', value: '已满足：操作人有营销权限、预算余额充足' },
+    { label: '审批人', value: run ? run.approver ?? '无（确认后直接执行）' : '赵磊（营销总监）' },
+    { label: '写回', value: run ? `${run.system ?? '外部系统'}，外部失败则整体不改` : 'CRM 营销系统，外部失败则整体不改' },
+    { label: '幂等键', value: run ? run.idemKey : 'act-20261025-ec-0193' },
+  ];
+}
+const staging = ref(false);
 async function runAction() {
-  if (readonly.value) return;
+  if (readonly.value || staging.value) return;
+  let run: qaApi.QaActionRun | undefined;
+  if (qaApi.actionsReal()) {
+    // X1：打开确认卡前先暂存，确认卡上显示服务端生成的幂等键
+    staging.value = true;
+    try {
+      const d = sess.detail.value;
+      run = await qaApi.stageAction({ action: ACTION, source: { type: '问数', session: d?.id, sessionTitle: d?.title }, objKind: ACTION_TARGET.kind, objId: ACTION_TARGET.id, objLabel: ACTION_TARGET.label, params: ACTION_PARAMS });
+    } catch (e) { message.error(`发起失败：${errText(e)}`); return; } finally { staging.value = false; }
+  }
   setConfirmQuery(true);
   const ok = await confirm.ask({
     title: ACTION,
     tag: '待确认',
-    target: '客户群 · 华东大区 · 近 60 天未复购',
-    fields: [
-      { label: '动作类型', value: '发放复购召回优惠券 v3' },
-      { label: '参数', value: '面额 ¥30，满 ¥199 可用，有效期 14 天' },
-      { label: '影响', value: '3,812 位客户（已排除 30 天内已领券 214 人）' },
-      { label: '预算', value: '营销预算 -¥114,360' },
-      { label: '提交条件', value: '已满足：操作人有营销权限、预算余额充足' },
-      { label: '审批人', value: '赵磊（营销总监）' },
-      { label: '写回', value: 'CRM 营销系统，外部失败则整体不改' },
-      { label: '幂等键', value: 'act-20261025-ec-0193' },
-    ],
+    target: `${ACTION_TARGET.kind} · ${ACTION_TARGET.label}`,
+    fields: actionFields(run),
     impact: '提交后进入审批；外部系统超时会标记为“结果未知”并进入对账，不会自动重试。',
     irreversible: true,
-    okText: '确认提交',
+    okText: run && !run.approver ? '确认执行' : '确认提交',
   });
   setConfirmQuery(false);
-  if (ok) { submitted.value = true; message.success('已提交，等待 赵磊 审批'); }
+  if (!run) { if (ok) { submitted.value = true; message.success('已提交，等待 赵磊 审批'); } return; }
+  try {
+    if (ok) {
+      // X2：有审批人 → 待审批；没有 → 执行中
+      const r = await qaApi.confirmAction(run.id);
+      submitted.value = true; submittedRun.value = { id: r.id, approver: r.approver };
+      message.success(r.approver ? `已提交，等待 ${r.approver} 审批` : `已提交（${r.status}）`);
+    } else {
+      // X2b：确认卡取消 → 已撤回 [推断]
+      await qaApi.withdrawAction(run.id);
+    }
+  } catch (e) { message.error(`${ok ? '提交' : '撤回'}失败：${errText(e)}`); }
 }
 
 onMounted(() => { if (route.query.confirm === '1') runAction(); });
@@ -154,7 +183,7 @@ onMounted(() => { if (route.query.confirm === '1') runAction(); });
       <QaConversation :applied="applied" :tips="tips" @suggest="runAction" @pin="pin = '1'" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
-    <QaObjectPanel :pending="pending" :submitted="submitted" :highlight="highlight" @run="runAction" @detail="drawer.open('region', REGION_EC.id)" />
+    <QaObjectPanel :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction" @detail="drawer.open('region', REGION_EC.id)" />
   </div>
   <QaPinModal :open="pin === '1'" card="上个月华东大区复购客户的销售额（按省份）" @close="pin = ''" @done="onPinned" />
   <QaListDrawer :panel="panel" @close="panel = ''" @ask="panel = ''" />

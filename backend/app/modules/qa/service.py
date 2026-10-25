@@ -1,7 +1,11 @@
 """问数只读服务：ORM → 前端 mock 形状（字段、时间格式按 qa-api §9.3）。"""
 
+import csv
+import io
+import zipfile
 from datetime import datetime, time, timedelta
 from typing import Any
+from xml.sax.saxutils import escape
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -119,6 +123,10 @@ def turn_out(t: QaTurn, applied: bool = False) -> dict[str, Any]:
     if t.question is not None:
         out["question"] = t.question
     out.update(t.snapshot or {})
+    if t.caliber_variant and isinstance(out.get("answer"), dict):
+        out["answer"] = {**out["answer"], "caliber": t.caliber_variant}  # W9 选过的澄清项，刷新后保留
+    if t.vote:
+        out["vote"] = t.vote  # W12 赞踩，刷新后保留
     if applied:
         out["applied"] = True  # [推断] 越权轮次已提交过待审批的申请（W16）→「已申请 · 待审批」
     return out
@@ -404,3 +412,101 @@ def freq_out(x: QaFreqQuestion, rank: int) -> FreqOut:
         cert_id=x.cert.code if x.cert else None,
         cert_status=x.cert.status.value if x.cert else None,
     )
+
+
+# ---------------------------------------------------------------- 工作台结果表（W10 / W11）
+
+# 同 QaStoreAnswer.vue 的列（# 序号前端按页算，不出接口）
+_STORE_COLUMNS = [
+    {"key": "store", "title": "门店"},
+    {"key": "city", "title": "城市"},
+    {"key": "sales", "title": "销售额（万元）", "align": "right"},
+    {"key": "mom", "title": "环比", "align": "right"},
+    {"key": "orders", "title": "订单数", "align": "right"},
+]
+
+
+def turn_result(t: QaTurn) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]] | None:
+    """(columns, 全部行, summary)。
+
+    门店卡 = 种子 QA_EC_STORES（同前端 mock）[推断]；链路表 = 快照里的结果行。
+    """
+    ans = (t.snapshot or {}).get("answer") or {}
+    if ans.get("card") == "store":
+        rows = catalog.load("QA_EC_STORES")
+        total = sum(r["sales"] for r in rows)
+        last = sum(r["sales"] / (1 + r["mom"] / 100) for r in rows)
+        summary = {
+            "count": len(rows),
+            "sales": round(total, 4),
+            "mom": round((total / last - 1) * 100, 4) if last else None,
+            "orders": sum(r["orders"] for r in rows),
+        }
+        return _STORE_COLUMNS, rows, summary
+    if ans.get("card") == "table":
+        tbl = ans.get("table") or {}
+        return tbl.get("columns") or [], tbl.get("items") or [], {"text": tbl.get("summary") or ""}
+    return None
+
+
+def _cell(v: Any) -> str:
+    return "" if v is None else str(v)
+
+
+def export_csv(columns: list[dict[str, Any]], rows: list[dict[str, Any]]) -> bytes:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([c["title"] for c in columns])
+    for row in rows:
+        w.writerow([_cell(row.get(c["key"])) for c in columns])
+    return buf.getvalue().encode("utf-8-sig")  # 带 BOM，Excel 直接打开不乱码
+
+
+def export_xlsx(columns: list[dict[str, Any]], rows: list[dict[str, Any]], sheet: str = "结果") -> bytes:
+    """最小 xlsx（标准库 zipfile 拼 OOXML，不引新依赖）：一张表，表头 + 全部行；数字按数字写。"""
+
+    def col(i: int) -> str:
+        s = ""
+        i += 1
+        while i:
+            i, m = divmod(i - 1, 26)
+            s = chr(65 + m) + s
+        return s
+
+    def cell(ref: str, v: Any) -> str:
+        if isinstance(v, bool) or not isinstance(v, int | float):
+            return f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{escape(_cell(v))}</t></is></c>'
+        return f'<c r="{ref}"><v>{v}</v></c>'
+
+    lines = [[c["title"] for c in columns], *[[r.get(c["key"]) for c in columns] for r in rows]]
+    body = "".join(
+        f'<row r="{ri + 1}">' + "".join(cell(f"{col(ci)}{ri + 1}", v) for ci, v in enumerate(line)) + "</row>"
+        for ri, line in enumerate(lines)
+    )
+    hd = '<?xml version="1.0" encoding="UTF-8"?>'
+    ox = "http://schemas.openxmlformats.org"
+    ns = f'xmlns="{ox}/spreadsheetml/2006/main"'
+    rel = f"{ox}/officeDocument/2006/relationships"
+    rels = f'<Relationships xmlns="{ox}/package/2006/relationships">'
+    ct = "application/vnd.openxmlformats-"
+    sm = f"{ct}officedocument.spreadsheetml."
+    files = {
+        "[Content_Types].xml": f'{hd}<Types xmlns="{ox}/package/2006/content-types">'
+        f'<Default Extension="rels" ContentType="{ct}package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        f'<Override PartName="/xl/workbook.xml" ContentType="{sm}sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        f'ContentType="{sm}worksheet+xml"/></Types>',
+        "_rels/.rels": f'{hd}{rels}<Relationship Id="rId1" Type="{rel}/officeDocument" '
+        'Target="xl/workbook.xml"/></Relationships>',
+        "xl/workbook.xml": f'{hd}<workbook {ns} xmlns:r="{rel}"><sheets>'
+        f'<sheet name="{escape(sheet)}" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": f'{hd}{rels}<Relationship Id="rId1" Type="{rel}/worksheet" '
+        'Target="worksheets/sheet1.xml"/></Relationships>',
+        "xl/worksheets/sheet1.xml": f"{hd}<worksheet {ns}><sheetData>{body}</sheetData></worksheet>",
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, xml in files.items():
+            z.writestr(name, xml)
+    return buf.getvalue()

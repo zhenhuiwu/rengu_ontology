@@ -20,7 +20,7 @@ const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
 const PAGE_SIZE = 12;
-const { sessions: mockList, activeId: active, newSession, real, detail, listTick, newSessionReal } = useQaSession();
+const { sessions: mockList, activeId: active, newSession, real, detail, listTick, favTick, newSessionReal } = useQaSession();
 /* 真接口：当前页由 W1 取（q / range / page / size=12）；mock 照旧本地过滤 */
 const srv = ref<{ items: QaSession[]; total: number }>({ items: [], total: 0 });
 const list = computed<QaSession[]>({ get: () => (real ? srv.value.items : mockList.value), set: (v) => { mockList.value = v; } });
@@ -104,7 +104,7 @@ async function load() {
 }
 if (real) {
   watch([kw, range, page, listTick], load, { immediate: true });
-  qaApi.listFavorites({ page: 1, size: 3 }).then((r) => { favTop.value = r.items.map((x) => x.question); }).catch((e) => message.error(`常用问题加载失败：${errText(e)}`));
+  watch(favTick, () => qaApi.listFavorites({ page: 1, size: 3 }).then((r) => { favTop.value = r.items.map((x) => x.question); }).catch((e) => message.error(`常用问题加载失败：${errText(e)}`)), { immediate: true });
   qaApi.listPagesBrief({ page: 1, size: 2 }).then((r) => { pageTop.value = r.items.map((x) => x.name); }).catch((e) => message.error(`我的页面加载失败：${errText(e)}`));
 }
 const when = (date: string) => (date === QA_TODAY ? '今天' : date.slice(5));

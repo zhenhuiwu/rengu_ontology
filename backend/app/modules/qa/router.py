@@ -6,17 +6,19 @@ qa 只订阅 X4 release.published（qa-api §8 X4、§9.2 qa_object_type_view、
 
 from collections.abc import Callable
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.common.audit import audit
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep, readonly_extra
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
-from app.core.errors import AppError, NotFound
+from app.core.errors import AppError, ExportForbidden, NotFound
 from app.db.session import SessionDep
 from app.modules.qa import catalog, chain
 from app.modules.qa import repo as r
@@ -30,6 +32,7 @@ from app.modules.qa.models import (
     PageSourceKind,
     PageStatus,
     PermRequestStatus,
+    QaFeedback,
     QaPermissionRequest,
     QaQueryLog,
     QaSession,
@@ -58,6 +61,7 @@ from app.modules.qa.schemas import (
     PermRequestIn,
     PermRequestOut,
     PlanOptionsOut,
+    RecalcIn,
     SessionCreateIn,
     SessionDetailOut,
     SessionOptionsOut,
@@ -67,6 +71,9 @@ from app.modules.qa.schemas import (
     TemplateOut,
     TMetricOut,
     TuningSummaryOut,
+    TurnResultOut,
+    VoteIn,
+    VoteOut,
 )
 
 router = APIRouter(tags=["qa"])
@@ -314,6 +321,132 @@ async def delete_favorite(fid: str, session: SessionDep, user: CurrentUserDep, c
     await session.delete(f)
     await session.flush()
     return Response(status_code=204)
+
+
+async def _own_turn(session, pk: int, tid: str) -> QaTurn:
+    """轮次必须在有效用户自己的会话里；否则 404（不暴露存在性）[推断]。"""
+    t = await session.scalar(
+        select(QaTurn)
+        .join(QaSession, QaTurn.session_id == QaSession.id)
+        .where(QaTurn.code == tid, QaSession.owner_id == pk)
+    )
+    if t is None:
+        raise NotFound("轮次不存在", details={"id": tid})
+    return t
+
+
+class TurnNotApplicable(AppError):
+    status_code, code, message = 422, "VALIDATION_FAILED", "这一轮不支持该操作"
+
+
+def _answer(t: QaTurn) -> dict:
+    a = (t.snapshot or {}).get("answer")
+    return a if isinstance(a, dict) else {}
+
+
+@router.post("/turns/{tid}:recalc", dependencies=_WB, summary="W9 切换口径")
+async def recalc_turn(
+    tid: str, body: RecalcIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
+):
+    # [推断] 第一期只有示例主回答卡（card=main）有澄清条：同一份语义计划只换指标，
+    # 数值按前端 QaAnswer 同一公式（含税 = 不含税 × (1+税率)）由前端换算；
+    # 后台记成这一轮的变体并返回该轮 Answer
+    pk, _ = await svc.effective_user(session, user, ctx)
+    t = await _own_turn(session, pk, tid)
+    if t.kind != TurnKind.answer or _answer(t).get("card") != "main":
+        raise TurnNotApplicable(details={"id": tid, "reason": "只有带澄清条的回答能切换口径"})
+    t.caliber_variant = body.caliber
+    await session.flush()
+    return svc.turn_out(t)["answer"]
+
+
+@router.put("/turns/{tid}/vote", dependencies=_WB, response_model=VoteOut, summary="W12 赞踩")
+async def vote_turn(tid: str, body: VoteIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    pk, u = await svc.effective_user(session, user, ctx)
+    t = await _own_turn(session, pk, tid)
+    if t.kind != TurnKind.answer:
+        raise TurnNotApplicable(details={"id": tid, "reason": "只有回答能赞踩"})
+    old, new = t.vote or "", body.vote
+    if old == "down" and new != "down":
+        # [推断] 取消踩：撤掉这一轮还没被处理（待处理）的那条反馈；已处理的保留
+        for f in (
+            await session.scalars(
+                select(QaFeedback).where(QaFeedback.turn_id == t.id, QaFeedback.status == FbStatus.open)
+            )
+        ).all():
+            await session.delete(f)
+    if new == "down" and old != "down":
+        codes = (await session.scalars(select(QaFeedback.code))).all()
+        nums = [int(c[3:]) for c in codes if c.startswith("FB-") and c[3:].isdigit()]
+        a = _answer(t)
+        question = t.question or ""
+        session.add(
+            QaFeedback(
+                code=f"FB-{(max(nums) if nums else 0) + 1}",  # [推断] 接着种子 FB-248 往后编
+                turn_id=t.id,
+                fed_back_at=clock.now(),
+                user_id=pk,
+                user_name=u.name,
+                question=question,
+                # [推断] 回答摘要：链路回答取 text，示例卡取指标名
+                answer=a.get("text")
+                or a.get("metric")
+                or f"{a.get('period', '')} {a.get('region', '')}".strip(),
+                reason="",  # 前端踩没有填原因的入口
+                fix_kind=FixKind.cert,  # [推断] 默认建议转认证问答，调优页可改
+                fix_text=question[:64],
+                status=FbStatus.open,
+            )
+        )
+    t.vote = new
+    await session.flush()
+    return VoteOut(id=t.code, vote=t.vote)
+
+
+@router.get("/turns/{tid}/result", dependencies=_WB, response_model=TurnResultOut, summary="W10 结果表翻页")
+async def turn_result(tid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep, p: P10):
+    pk, _ = await svc.effective_user(session, user, ctx)
+    t = await _own_turn(session, pk, tid)
+    res = svc.turn_result(t)
+    if res is None:
+        raise TurnNotApplicable(details={"id": tid, "reason": "这一轮没有结果表"})
+    cols, rows, summary = res
+    c = p.clamp(len(rows))
+    return TurnResultOut.of(rows[c.offset : c.offset + c.size], len(rows), p, columns=cols, summary=summary)
+
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get("/turns/{tid}/export", dependencies=_WB, summary="W11 导出结果")
+async def export_turn(
+    tid: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    format: Literal["xlsx", "csv"] = "xlsx",
+):
+    if ctx.preview_as:
+        raise ExportForbidden(details={"reason": "预览中不能导出"})  # [推断] 第 12 节 #2
+    pk, _ = await svc.effective_user(session, user, ctx)
+    t = await _own_turn(session, pk, tid)
+    res = svc.turn_result(t)
+    if res is None:
+        raise TurnNotApplicable(details={"id": tid, "reason": "这一轮没有结果表"})
+    cols, rows, _ = res
+    base = (_answer(t).get("exportFile") or f"{t.code}.xlsx").rsplit(".", 1)[0]
+    if format == "csv":
+        data, mime = svc.export_csv(cols, rows), "text/csv; charset=utf-8"
+    else:
+        data, mime = svc.export_xlsx(cols, rows), _XLSX
+    name = f"{base}.{format}"
+    detail = {"format": format, "rows": len(rows)}
+    await audit(session, user, action="qa.turn.export", target=t.code, detail=detail)
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
+    )
 
 
 @router.post(

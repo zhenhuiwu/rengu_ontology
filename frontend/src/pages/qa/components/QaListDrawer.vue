@@ -8,7 +8,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
 import { QA_FAVORITE_LIST, QA_PAGE_LIST } from '@/mock';
 import * as qaApi from '@/api/qa';
-import { errText } from '../useQaSession';
+import { errText, useQaSession } from '../useQaSession';
 
 type Row = { id: string; name: string; c1: string; c2: string; tag?: string };
 const real = qaApi.qaReal();
@@ -54,10 +54,12 @@ async function load() {
   } catch (e) { if (my === reqSeq) message.error(`${title.value}加载失败：${errText(e)}`); }
 }
 if (real) watch([() => props.panel, kw, page], load, { immediate: true });
+const { favTick } = useQaSession();
 async function remove(id: string) {
   if (real) {
     try { await qaApi.deleteFavorite(id); } catch (e) { message.error(`移出失败：${errText(e)}`); return; }
     message.success('已移出常用问题');
+    favTick.value++;
     await load();
     return;
   }

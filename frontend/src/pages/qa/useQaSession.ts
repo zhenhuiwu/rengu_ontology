@@ -21,6 +21,8 @@ const detail = ref<qaApi.QaSessionDetail | null>(null);
 const loading = ref(false);
 const sending = ref(false);
 const listTick = ref(0);
+/** favTick 变了左栏底部「常用问题」前 3 条重取（抽屉里移出后） */
+const favTick = ref(0);
 let loadSeq = 0;
 
 export const errText = (e: unknown) => (isApiError(e) ? `${e.message || e.code}（${e.code}）` : String(e));
@@ -91,5 +93,5 @@ export function useQaSession() {
     draft.value = '';
     return id;
   }
-  return { sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, detail, loading, sending, listTick, loadDetail, newSessionReal };
+  return { sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, detail, loading, sending, listTick, favTick, loadDetail, newSessionReal };
 }
