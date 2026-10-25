@@ -1,6 +1,6 @@
-# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.2 草案）
+# 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.3 草案）
 
-> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.2（v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
+> 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.3（v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `2e5b002` 的前端代码与 mock，只读，没有改源码。涉及的文件：
 > `src/pages/ontology/ActionTypes.vue`、`EventTypes.vue`、`parts/useDraftView.ts`、`parts/StartChangeModal.vue`、`parts/DraftBanner.vue`、`useDraftEdits.ts`、
@@ -50,7 +50,7 @@
 - **数据归属**：
   - 我的表：`writeback_call`（每次外部调用，`integration` 模块；动态原来的 `ext_call` 已并入这张表）、`reconcile_task`（对账次数、轮次、下次查询时间只放在这里）、`ext_system`（放在 `integration` 模块；PDE 的“外部系统”页通过我的接口读写），以及动作类型、事件类型的定义表和事件、投递表。
   - 动态的表：`action_run`（只由动态写，seed 也由动态做，包括动作中心的 `ACTIONS` 和本模块的 `RUNS`）、`action_run_log`（执行时间线）。
-- **seed、dev、test 环境里所有适配器都用 mock 实现**，不连真实外部系统。外部系统页的“测试调用”在 dev/test 也走 mock 适配器；**只有生产环境、经用户授权**才连真实外部系统。seed 进来的“结果未知”执行记录（动作中心 20 条，`RUNS` 里 54 条），mock 适配器的 `query_by_key` 一律返回“仍无法确认”，`next_at` 保留导出原值（mock 里没有，所以是空）。这样对账任务不会改动这些记录，页面和现在一模一样（详见 §7.1）。
+- **seed、dev、test 环境里所有适配器都用 mock 实现**，不连真实外部系统。外部系统页的“测试调用”在 dev/test 也走 mock 适配器；**只有生产环境、经用户授权**才连真实外部系统。seed 进来的“结果未知”执行记录（动作中心 20 条，`RUNS` 里 54 条），mock 适配器的 `query_by_key` 一律返回“查无”，而这些记录 `state=manual`、不会被定时对账扫到，`next_at` 保留导出原值（mock 里没有，所以是空）。这样对账任务不会改动这些记录，页面和现在一模一样（详见 §7.1）。
 - 结果未知超过 30 分钟，由“结果未知提醒”这个订阅方通过企业微信通知发起人和确认人（mock：`actionEvent.ts` 的 `subscribersOf('action_outcome_unknown')`）。
 
 ### 1.2 代码位置（与 PDE 约定）
@@ -155,11 +155,11 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /action-types/{id}/params` | `page`、`size=12`、`ver`、`view`、`cr` | `items[{name,api,type,required,def,rule,mark?}]` | 页码 | `paramsOf()` |
 | `GET /action-types/{id}/submission-criteria` | `ver`、`view`、`cr` | `items[{kind,name,expr,fail,mark?}]` | 不分页 | `condsOf()` |
 | `GET /action-types/{id}/writeback` | `ver`、`view`、`cr` | `config{sysId,endpoint,idemKey,mark?}`、`edits[{op,obj,field,mark?}]`、`effects[{kind,target,when,note,mark?}]`、`flow[{text,desc,status}]` | — | `writebackOf()`、`extsys.ts` `EXT_SYSTEMS` |
-| `GET /action-types/{id}/used-by` | `ver` | `items[{ruleId,ruleName,trigger,mode,alerts,openAlerts}]` | 不分页 | `usedBy`、`dynamic.ts` `RULES`/`ALERTS`、`RULE_ACTION`、`RULE_CONFIRMER` |
-| `GET /action-types/{id}/stats` | `days=30` | `{total,ok,failed,unknown,pending,confirm,rate,avgMs,asOf}` | — | `runStats()` |
+| `GET /action-types/{id}/used-by` | `ver` | `items[{ruleId,ruleName,trigger,mode,alerts,openAlerts}]` | 不分页 | `action_type_rule`（seed 取 `ACTION_TYPES[].usedBy`）；规则名、告警数关联 `dynamic.ts` `RULES`/`ALERTS`、`RULE_CONFIRMER` |
+| `GET /action-types/{id}/stats` | `days=30` | `{total,ok,failed,unknown,pending,confirm,rate,avgMs}` | — | `runStats()`；照前端公式，已对账都算成功（实时统计时 `not_executed` 也会算进去）【推断：是否把 `not_executed` 排除交用户】 |
 | `GET /action-types/{id}/stats/daily` | `days=14` | `items[{date,ok,failed,unknown}]` | — | `runDaily()` |
 | `GET /action-types/{id}/versions` | — | `items[{ver,release,status,by,at,change}]` | 不分页 | `versionsOf()`、`ACTION_VERSION_NOTES` |
-| `POST /action-types/{id}:dry-run` | query `view`、`cr`（草稿视图按草稿内容校验，`checked` = 草稿里未删除的条件数）、`ver`；body `{params?}` | `{passed, checked, failed[{name,fail}]}` | — | `condsOf()`；`ActionTypes.vue` `dryRun()` |
+| `POST /action-types/{id}:dry-run` | query `view`、`cr`（草稿视图按草稿内容校验，`checked` = 草稿里未删除的条件数）、`ver`；body `{params?}` | **一律 200** `{passed, checked, failed[{name,fail}]}`（条件不过也是 200，`passed=false`，前端只显示结果） | — | `condsOf()`；`ActionTypes.vue` `dryRun()` |
 | `GET /api/data/v1/ext-systems?writeback=1`（外部系统接口，前缀不同） | — | `items[{id,name,idemKey,timeoutMs,maxRetry,retry,idempotent,status,env}]` | 不分页 | `extsys.ts` `EXT_SYSTEMS`；过滤同 `writebackSystems()`（生产环境且未停用）。`ext_system` 归本模块 `integration`，外部系统页也调这组接口（见下方“外部系统”） |
 | 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'action',id}`，`section ∈ params\|conds\|edits\|effects\|config` | 静态接口 | — | `useDraftEdits.ts` |
 
@@ -172,8 +172,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /ext-systems` | `writeback=1`（只返回生产环境且未停用的，同 `writebackSystems()`）、`kw` | `items[{id,name,vendor,category,endpoint,auth,authDetail,idempotent,idemKey,timeoutMs,maxRetry,retry,rateLimit,owner,status,env,usage}]` | 不分页 | `EXT_SYSTEMS`；密钥不返回明文 |
 | `GET /ext-systems/{id}` | — | 同上，加关联的动作类型 | — | — |
 | `POST /ext-systems`、`PUT /ext-systems/{id}` | 同上字段 | 保存后的对象 | — | 新建、编辑外部系统；直接生效，不走变更单（和前端一致） |
-| `POST /ext-systems/{id}:test` | `{op?}` | `{http, ms, result, msg}` | — | “测试调用”；系统已停用时返回 `EXT_SYSTEM_DISABLED`（前端文案“该系统已停用，先在‘编辑’里改为正常再测试”）。**dev/test 走 mock 适配器**；只有生产环境、经用户授权才连真实系统 |
-| `GET /ext-systems/{id}/calls` | `result`、`page`、`size` | `{items[...ExtCall], total, page, size}` | 页码 | `writeback_call` 的行（含测试调用） |
+| `POST /ext-systems/{id}:test` | `{op?}` | `{http, ms, result, msg}` | — | “测试调用”；系统已停用时返回 `EXT_SYSTEM_DISABLED`（前端文案“该系统已停用，先在‘编辑’里改为正常再测试”）。**dev/test 走 mock 适配器**（状态「降级」的系统固定返回 502，「停用」的直接拦住）；只有生产环境、经用户授权才连真实系统 |
+| `GET /ext-systems/{id}/calls` | `result`、`page`、`size=10`（前端固定每页 10 条） | `{items[...ExtCall], total, page, size}` | 页码 | `writeback_call` 的行（含测试调用） |
 | `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功` | — | “人工核对 · 确认对方已处理”。前端只对不带 runId 的调用显示这个按钮（`ExternalSystems.vue` L319–323），带 runId 的只跳到动作中心。只改这条调用记录的结果，不碰执行记录 |
 
 ### 3.2 事件类型
@@ -206,8 +206,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | code | HTTP | 什么时候 | message 示例（取自前端文案） |
 |---|---|---|---|
-| `SUBMISSION_CRITERIA_FAILED` | 422 | 试运行或 submit 时有条件不满足 | `details.failed[{name,fail}]`，如“只有会员运营组可以同步会员标签” |
-| `DUPLICATE_KEY` | 409 | 草稿新增参数、条件、字段、订阅方时键重复 | “已存在同名项”；载荷字段为“API 名与已有字段（含信封字段）重复” |
+| `SUBMISSION_CRITERIA_FAILED` | 422 | **只用在 HTTP 入口**（动态的 `:submit`/`:confirm` 等）有条件不满足；试运行不用它（一律 200）。内部 `submit()` 不是 HTTP：条件不过返回 `result=失败`、`code=提交条件未通过：…`，执行记录照 mock 留一条「失败」 | `details.failed[{name,fail}]`，如“只有会员运营组可以同步会员标签” |
+| `DUPLICATE_KEY` | 409 | 草稿新增时键重复，键与前端一致：参数 `api`、条件 `name`、本体编辑 `op`+`obj`、副作用 `target`、订阅方 `name`、载荷字段 `api`（只在新增时校验，编辑不校验） | “已存在同名项”；载荷字段为“API 名与已有字段（含信封字段）重复” |
 | `ENVELOPE_READONLY` | 409 | 试图改信封字段 | “信封字段所有事件类型共有，不可修改” |
 | `WRITEBACK_SYSTEM_INVALID` | 422 | 写回系统不是生产环境，或者已停用（和前端下拉的过滤规则一样） | — |
 | `TYPE_IS_DRAFT` | 409 | 对草稿状态的类型做试运行或模拟触发 | — |
@@ -246,11 +246,11 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 接口字段 | 库内列 | 格式 | 带秒 | mock 出处 |
 |---|---|---|---|---|
 | 执行记录 `at`（动作类型页近期执行，表归动态） | `action_run.submitted_at`（见 dynamic-api.md 1.3） | `YYYY-MM-DD HH:mm:ss` | 是 | `runsOf()` |
-| 执行抽屉时间线 `timeline[].time` | `action_run_log.at`（动态） | `YYYY-MM-DD HH:mm:ss` | 是 | `ACTION_EVENT_RESOLVERS.action` |
+| 执行抽屉时间线 `timeline[].time` | `action_run_log.at`（动态） | 首条 `YYYY-MM-DD HH:mm:ss`，其后 `HH:mm:ss`（与 resolver 一致） | 是 | `ACTION_EVENT_RESOLVERS.action` |
 | 执行日统计 `date` | `action_run_daily_stat.date`（`date` 类型） | `MM-DD` | — | `runDaily()` |
 | 动作/事件类型版本 `at` | `action_type_version.at`、`event_type_version.at` | `YYYY-MM-DD HH:mm` | 否 | `versionsOf()` |
 | 事件 `at` | `event.ingested_at`（`occurred_at` 同格式） | `YYYY-MM-DD HH:mm:ss` | 是 | `eventsOf()` |
-| 事件抽屉时间线 `timeline[].time` | `event_delivery.delivered_at` 等 | `YYYY-MM-DD HH:mm:ss` | 是 | `ACTION_EVENT_RESOLVERS.event` |
+| 事件抽屉时间线 `timeline[].time` | `event_delivery.delivered_at` 等 | 首条 `YYYY-MM-DD HH:mm:ss`，其后 `HH:mm:ss`（与 resolver 一致） | 是 | `ACTION_EVENT_RESOLVERS.event` |
 | 事件日统计 `date` | `event_daily_stat.date`（`date`） | `MM-DD` | — | `eventDaily()` |
 | 外部调用记录 `time` | `writeback_call.at` | `YYYY-MM-DD HH:mm:ss` | 是 | `system/derived/extCalls.json` |
 | 草稿横幅 `draft.updatedAt` | 静态的 `change_request` | 按静态文档 | — | 静态 |
@@ -292,7 +292,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `POST /ext-systems`、`PUT /ext-systems/{id}` | external-systems · manage | 不开放 | 否 | 否 | 否 |
 | `POST /ext-systems/{id}:test` | external-systems · view（前端只按只读置灰；要 manage 是【推断】U13） | 不开放 | 否（前端在只读时置灰） | 否 | 否 |
 | `POST /writeback-calls/{id}:mark-checked` | external-systems · manage | 不开放 | 否 | 否 | 否 |
-| `POST /internal/v1/events` | —（服务间调用，内部凭证） | 外部系统的回调从 `Webhook 回调` scope 的 `POST /api/v1/webhooks/ext/callback` 进来，转成 `emit` | — | — | 否 |
+| `POST /internal/v1/events` | —（服务间调用，内部凭证） | 外部系统的回调从 `Webhook 回调` scope 的 `POST /api/data/v1/webhooks/ext/callback` 进来，转成 `emit` | — | — | 否 |
 
 动态的接口（`/action-runs…`）、静态的接口（变更单、草稿写入）的权限由各自文档定义，不在此表。
 
@@ -353,7 +353,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 ```
 
   - `idemKey` 是**业务键模板**（库列 `biz_key_template`），不是外部幂等键。`payload` 只放事件自身字段（`specific`），10 个信封字段全局共用，不进快照。
-  - `system/timeout/retry/idempotent` 不进快照（从 `ext_system` 关联，外部系统改了不需要发版）；统计类字段（`usedBy`、`weekly`、订阅方 `weekly`）也不进。
+  - `system/timeout/retry/idempotent` 不进快照（从 `ext_system` 关联，外部系统改了不需要发版）；统计类字段（`weekly`、订阅方 `weekly`）也不进。`usedBy`（规则 ID 列表）是定义关系，存 `action_type_rule`，**进快照**（`actionTypes.<id>.usedBy`）；“处理告警时手动执行”等使用方式从 `RULE_ACTION` 推不出来，按 mock 原样存在这张表。
   - **运行数据不进快照**：执行记录（`action_run`）、事件（`event`）、投递（`event_delivery`）、写回调用（`writeback_call`）、对账任务都不在快照里。
   - `?ver=` 读历史版本时，本模块的读接口从这段快照取定义；当前版本读展开表（§9）。
 - 本模块给静态的校验链路提供动作类型自己的校验项（并入静态的 V 系列，见静态待定问题第 12 条）【建议】：
@@ -369,10 +369,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 2. **兼容规则**：载荷建议只新增**可选**字段。删除字段或改类型时，前端只提示“需要所有订阅方确认”，**不拦截**；后台第一期也只警告（是否拦截见 §8.2 U4）。
 3. **产生**：有 4 种来源——数据同步（CDC 或定时增量）、规则命中、动作（写回成功、对账为外部已成功，或结果未知）、外部系统（Webhook 推送或回调）。都调用 `emit`，**`eventId` 由生产方生成**并放在请求里，这样生产方重发时不会产生两条事件。
 4. **去重（消费方）**：先按 `eventId` 去重（重发直接返回原结果）；再按去重键模板算 `dedupKey`，在去重窗口内命中就丢弃，事件结果记为“已去重”，订阅方数为 0。窗口可以是“永久”。去重用 `event_dedup` 表，不引入 Redis。
-5. **投递（至少一次）**：`event` 表兼作 outbox——事件和它的投递记录在同一个事务里写入，procrastinate 任务从未投完的行（部分索引）取出投递。按订阅方的过滤条件匹配，每个启用的订阅方一条 `event_delivery`（`UNIQUE(event_id, subscription_id)`）。失败后按退避重新入队，重试 3 次后进入死信。保证是**至少一次**，订阅方要按 `eventId` 做幂等。
+5. **投递（至少一次）**：`event` 表兼作 outbox——事件和它的投递记录在同一个事务里写入，procrastinate 任务从未投完的行（部分索引）取出投递。按订阅方的过滤条件匹配，每个非停用（启用或异常）的订阅方一条 `event_delivery`（`UNIQUE(event_id, subscription_id)`）。失败后按退避重新入队，重试 3 次后进入死信。保证是**至少一次**，订阅方要按 `eventId` 做幂等。
    - **部分投递只重投失败的订阅方**：已投递的那条不会再发。
    - 整条事件的结果：全部成功为“已投递”（规则来源的为“已生成告警”）；部分成功、其余还在重试为“部分投递”；全部失败为“投递失败”。
-6. **模拟触发**：按当前视图（草稿视图用草稿里的载荷字段和订阅方）只投递到启用订阅方的测试通道，不产生告警，不执行动作，不写下游；前端不写数据，后台也不计入近期事件和统计（U9）。
+6. **模拟触发**：按当前视图（草稿视图用草稿里的载荷字段和订阅方）只投递到非停用订阅方（`status !== '停用'`，异常也算）的测试通道，不产生告警，不执行动作，不写下游；前端不写数据，后台也不计入近期事件和统计（U9）。
 7. **保留期**：第一期 `event` 表**不分区**，procrastinate 每天按事件类型的保留期删除过期的事件和投递记录。
 
 ### 4.4 我负责的 procrastinate 任务
@@ -478,29 +478,29 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 ### 7.1 seed 方案（已定（PDE 汇总团队决定，2026-10-25））
 
-- **导出**：统一用 PDE 的 `npm run export-mock`（`scripts/export-mock.mjs` + `scripts/export-mock.derived.mjs`，PDE `e03a575`，已进 master：`9440e9c` 原样导出、`2e5b002` `OUT_DIR` 必填 + derived 调用清单；Vite `ssrLoadModule` 加载，`TZ=Asia/Shanghai`），把 `src/mock/*` 的每个导出**原样**写成 `${OUT_DIR}/<导出组>/<export>.json`（seed 环境即 `backend/seeds/json/<导出组>/`，导出组 = 脚本 MODULES 的键：action / dynamic / system / static / common / qa），另生成 `manifest.json`。**`OUT_DIR` 必须显式给出**（没有默认值，不给直接报错退出），seed 用 `OUT_DIR=../backend/seeds/json npm run export-mock`。各模块的 Python seed 只从这里读，不再自己写导出步骤。
+- **导出**：统一用 PDE 的 `npm run export-mock`（`scripts/export-mock.mjs` + `scripts/export-mock.derived.mjs`，PDE 的分支提交 `e03a575` 内容相同、master 上是：`9440e9c` 原样导出、`2e5b002` `OUT_DIR` 必填 + derived 调用清单；Vite `ssrLoadModule` 加载，`TZ=Asia/Shanghai`），把 `src/mock/*` 的每个导出**原样**写成 `${OUT_DIR}/<导出组>/<export>.json`（seed 环境即 `backend/seeds/json/<导出组>/`，导出组 = 脚本 MODULES 的键：action / dynamic / system / static / common / qa），另生成 `manifest.json`。**`OUT_DIR` 必须显式给出**（没有默认值，不给直接报错退出），seed 用 `OUT_DIR=../backend/seeds/json npm run export-mock`。各模块的 Python seed 只从这里读，不再自己写导出步骤。
   - 本模块读的目录（真实路径）：
     - `backend/seeds/json/action/`：`actionEvent.ts` 的导出。脚本的 MODULES 里只有 `action: ['actionEvent']`，**没有 `event/` 目录**，事件类型的数据也在这里。
     - `backend/seeds/json/action/derived/<函数名>.json`：函数调用结果（§7.1.1），例如 `runsOf.json`。
     - `backend/seeds/json/dynamic/`：`ACTIONS`、`ALERTS`、`RULES`、`RULE_CONFIRMER`、`AUTO_QUERY_TEXT`（只读，归动态）。
     - `backend/seeds/json/system/`：`EXT_SYSTEMS`（`extsys.ts`）。
   - 时间：字符串时间（如 `2026-10-25 14:28:03`）原样保留，都是北京时间；`Date` 写成带 `+08:00` 的 ISO 字符串。
-  - **seed 的“现在”固定为 2026-10-25 15:42（北京时间）**，取自骨架的设定（mock `NOW = 2026-10-25T15:42:18+08:00`）。统计接口的 `asOf`、近 24 小时 / 7 天 / 30 天的窗口都按这个时间算，seed 环境的页面才和 mock 一样。
+  - **seed 的“现在”固定为 2026-10-25 15:42（北京时间）**，取自骨架的设定（mock `NOW = 2026-10-25T15:42:18+08:00`）。近 24 小时 / 7 天 / 30 天的窗口都按这个时间算，seed 环境的页面才和 mock 一样。
   - **顶层导出是函数的会被跳过**，函数结果由 derived 调用清单在同一进程、常量导出之后逐个调用得到（§7.1.1）。
   - **`RUNS`、`EVENTS` 没有加 `export`**（`actionEvent.ts` 不改），所以**没有** `RUNS.json`、`EVENTS.json`。执行记录 = `action/derived/runsOf.json` 17 次调用结果的并集（1,849 条），事件 = `action/derived/eventsOf.json` 15 次调用结果的并集（1,243 条），按 id 去重后正好还原 `RUNS`、`EVENTS`。下文的 `RUNS`、`EVENTS` 都指这两个并集。
   - 数量参考（本机数过）：17 个动作类型、101 个参数、59 条提交条件、36 条本体编辑、47 条副作用、1,849 条执行记录（其中 54 条结果未知）、15 个事件类型、37 个订阅方、1,243 条事件、10 个外部系统、5 条规则、154 条告警、31 + 27 条版本记录；动作中心 `actions.ts` 141 条执行记录（其中 20 条结果未知）。
 
-#### 7.1.0 2026-10-25 实跑结果（临时 worktree 检出 master `2e5b002`（含 `e03a575`），`OUT_DIR=/tmp/exp-pal-out npm run export-mock`，核完 worktree 和输出都已删除）
+#### 7.1.0 2026-10-25 实跑结果（临时 worktree 检出 master `2e5b002`，`OUT_DIR=/tmp/exp-pal-out npm run export-mock`，核完 worktree 和输出都已删除）
 
 - 输出：`action` 8 个导出 56 行；派生 42 个函数、7,041 次调用、29,913 行（推断参数 11 个）；跳过函数 120 个，失败 0 个。不给 `OUT_DIR` 直接退出。
 - `action/derived/` 实际文件（15 个）：`paramsOf.json`、`condsOf.json`、`writebackOf.json`、`runsOf.json`、`runStats.json`、`runDaily.json`、`versionsOf.action.json`、`writebackSystems.json`、`payloadOf.json`、`subscribersOf.json`、`eventsOf.json`、`eventDaily.json`、`versionsOf.event.json`、`ACTION_EVENT_RESOLVERS.action.json`、`ACTION_EVENT_RESOLVERS.event.json`。每个文件内容都是 `[{args, result}]`。
 - 核数：`runsOf` 17 次调用、1,849 行，按 id 去重 1,849 条（结果未知 54 条）；`eventsOf` 15 次、1,243 条；`ACTION_EVENT_RESOLVERS.action` 1,849 次、`.event` 1,243 次；本模块条目 manifest 里都没有 `guessed`。
 - 当时 `action` 导出的 8 个：`ACTION_GROUPS`(7)、`ACTION_TYPES`(17，已带 `withSystem` 合并的 system/timeout/retry/idempotent)、`ACTION_VERSION_NOTES`(4)、`EVENT_SOURCES`(5)、`EVENT_TYPES`(15，含 `specific`)、`EVENT_VERSION_NOTES`(3)、`RULE_ACTION`(4)、`UNKNOWN_FOLLOWUP`。`RUNS`、`EVENTS` 不导出，从 derived 还原。（更早在 `d9e61c3` 上试跑过一次，结论相同，以本次为准。）
 - 其他模块要用的都已导出：`dynamic/ACTIONS`(141，带 `log`)、`dynamic/RULE_CONFIRMER`、`dynamic/AUTO_QUERY_TEXT`、`dynamic/ALERTS`(154)、`dynamic/RULES`(5)、`system/EXT_SYSTEMS`(10)。
-- 仍然缺的：`ENVELOPE`、`PARAMS`、`CONDS`、`SUBS` 没导出（通过 derived 的函数结果拿到，不必单独导出）；抽屉 resolver `src/components/actionEventResolvers.ts` 不在 `src/mock/` 下，`e03a575` 已在 derived 里加载并导出；草稿目标已在 `6428b87` 挪成 `releases.ts` 的 `DRAFT_TARGETS`（归静态，CR-0013/0014 由静态 seed）。
+- 仍然缺的：`ENVELOPE`、`PARAMS`、`CONDS`、`SUBS` 没导出（通过 derived 的函数结果拿到，不必单独导出）；抽屉 resolver `src/components/actionEventResolvers.ts` 不在 `src/mock/` 下，master `2e5b002` 已在 derived 里加载并导出；草稿目标已在 `6428b87` 挪成 `releases.ts` 的 `DRAFT_TARGETS`（归静态，CR-0013/0014 由静态 seed）。
 - 纯查找函数（`actionTypeById`、`eventTypeById`、`runById`、`eventById`、`ruleById`、`extSystemOf`、`ruleConfirmer`、`withSystem`）不用导出。
 
-#### 7.1.1 derived 调用清单（PDE 已实现，`e03a575` / master `2e5b002`，`scripts/export-mock.derived.mjs`）
+#### 7.1.1 derived 调用清单（PDE 已实现，master `2e5b002`，`scripts/export-mock.derived.mjs`）
 
 每个函数一个文件：`${OUT_DIR}/<模块>/derived/<函数名>.json`，内容是 `[{args, result}]`，每次调用一项；参数里的对象写成引用 `{ref, key, id}`（整份常量如 `ACTION_VERSION_NOTES` 只有 `{ref}`），后台按引用去对应的导出 JSON 找那一行。每次调用的参数、行数、是否 `guessed` 记在 `manifest.json` 的 `derived`。本模块的条目都按本文 §7.1.1 调用，没有 `guessed`。2026-10-25 在 master `2e5b002` 实跑核对过（§7.1.0），文件名就是下表第一列，数量全部和“数量参考”一致。
 
@@ -533,9 +533,9 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 - **入库脚本**：`backend/app/modules/action/seeds/seed.py`、`backend/app/modules/event/seeds/seed.py` 都读 `backend/seeds/json/action/` 和 `backend/seeds/json/action/derived/`，`integration` 的 seed 读 `backend/seeds/json/system/EXT_SYSTEMS.json`。幂等写库（`INSERT … ON CONFLICT DO NOTHING`），ID 保持原样（`ACT-…`、`EV-…`、`EXT-…`）。统一的 `seed` 命令在迁移之后执行。
 - **执行记录由动态 seed**：`action_run` 只由动态写，动态的 seed 读动作中心的 `dynamic/ACTIONS.json` 和本模块的 `action/derived/runsOf.json`（所有调用结果的并集），按 id 合并（`RUNS` 编号从 2000 起，和 `ACTIONS` 不冲突）；执行时间线写进动态的 `action_run_log`（`ACTIONS` 自带 `log`，`RUNS` 用 `action/derived/ACTION_EVENT_RESOLVERS.action.json`）。本模块的 seed 在动态之后执行，只写自己的表：`writeback_call`、`reconcile_task`、`ext_system`、定义表、事件和投递表。
 - **seed 保留 mock 原值**：外部幂等键即使重复（如告警生成的 `act-al-…`）也照原样入库。`action_run` 加 `is_seed` 列，`idem_key` 只对非 seed 行唯一：`CREATE UNIQUE INDEX … ON action_run(idem_key) WHERE NOT is_seed`（建议动态这样建）。
-- **`writeback_call`**：mock 没有逐次调用明细，只有 `retries`、`code`、`ms`。seed 按 `attempt = retries + 1` 展开【推断】；以 `ACTION_EVENT_RESOLVERS.action.json` 的时间线为准。外部系统页的调用记录来自 `system/derived/extCalls.json`，也写这张表。
-- **对账任务**：seed 进来的结果未知记录（`ACTIONS` 20 条、`RUNS` 54 条）都建 `reconcile_task`，**`tries=3, state=manual, manual=true, round=1, next_at=null`**（mock 里没有下次查询时间，时间线已写到“自动查询 3 次仍无法确认 → 转人工”），不会再被调度。
-- **适配器全部用 mock**：seed、dev、test 环境里 `integration/` 下的适配器都是 mock 实现，`query_by_key` 对这些记录一律返回“仍无法确认”。人工对账选“仍无法确认”再开一轮时，mock 也照样返回，页面不变。
+- **`writeback_call`**：mock 没有逐次调用明细，只有 `retries`、`code`、`ms`。**一行 = 一次业务调用**（同 `extCalls` 的一行），`attempt` 记这次调用一共试了几次（前端的「第 N 次」），重试不另起行。seed **只取 `system/derived/extCalls.json`**，不从 `RUNS`/`ACTIONS` 展开；带 `runId` 的行写进 `action_run_id`，执行记录这边的重试次数、耗时仍看动态的 `action_run`，两边不合并，所以不会重复。
+- **对账任务**：seed 进来的结果未知记录（`ACTIONS` 20 条、`RUNS` 54 条）都建 `reconcile_task`，**`tries=3, state=manual, manual=true, round=1, next_at=null`**（mock 里没有下次查询时间，时间线已写到“自动查询 3 次仍无法确认 → 转人工”），不会再被调度。种子里对账说明的原文（如“（某人 复核）”）照原样保留，不改写。
+- **适配器全部用 mock**：seed、dev、test 环境里 `integration/` 下的适配器都是 mock 实现，`query_by_key` 一律返回枚举里的「查无」（计 1 次）。seed 的结果未知记录都是 `state=manual, next_at=null`，定时对账不会扫到，页面不变；只有人工选「仍无法确认」再开一轮时才会真的去查，mock 连续 3 次「查无」后再转人工，这一轮新增的时间线是用户操作产生的，属预期。
 - **统计**：`runDaily`、`eventDaily`、订阅方的 `weekly` 和明细对不上（另一个随机种子），**不处理**——照原样入库，不要求 mock 内部一致。
 - **校验**：seed 之后跑对比脚本，逐个接口请求，和导出的 JSON 比较，必须完全一致（分页、`total`、排序、统计数字、中文枚举值）。
 
@@ -657,7 +657,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `action_type` / `event_type` | 可变（当前版本展开） | `id`（前端 id，如 `request_replenish`） | `api` |
 | `action_param` | 可变（随发布重写） | `id` bigint | `(action_type_id, api)` |
 | `submission_criterion` | 可变（随发布重写） | `id` bigint | `(action_type_id, name)` |
-| `ontology_edit_rule` | 可变（随发布重写） | `id` bigint | `(action_type_id, seq)` |
+| `ontology_edit_rule` | 可变（随发布重写） | `id` bigint | `(action_type_id, op, obj)` |
+| `action_type_rule` | 可变（随发布重写） | `id` bigint | `(action_type_id, rule_id)` |
 | `side_effect` | 可变（随发布重写） | `id` bigint | `(action_type_id, target)` |
 | `action_type_version` / `event_type_version` | 只追加 | `id` bigint | `(action_type_id, ver)` / `(event_type_id, ver)` |
 | `event_payload_field` | 可变（随发布重写） | `id` bigint | `(event_type_id, api)` |
@@ -680,13 +681,14 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | `action_type` | id(pk, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, owner, desc_tpl, runners, approval, sys_id(fk ext_system, 可空), endpoint, biz_key_template, release_id | 当前版本 |
+| `action_type_rule` | id(pk), action_type_id, rule_id, seq, mode_text | 使用该动作的规则（`ACTION_TYPES[].usedBy`）；`(action_type_id, rule_id)` 唯一；进快照 |
 | `action_type_version` | id(pk), action_type_id, ver, release_id(fk ontology_release), status(active/superseded), change_note, by, at, definition jsonb | 每次整版发布写一行 |
 | `action_param` | id(pk), action_type_id, seq, name, api, type, required, default_text, rule_text, rule_expr jsonb(可空) | (action_type_id, api) 唯一 |
 | `submission_criterion` | id(pk), action_type_id, seq, kind(current_user/parameter/context_object), name, expr_text, expr_ast jsonb, fail_msg | (action_type_id, name) 唯一 |
 | `ontology_edit_rule` | id(pk), action_type_id, seq, op(modify/create/link), obj, field | — |
 | `side_effect` | id(pk), action_type_id, seq, kind(notify/event/webhook), target, when_text, note | (action_type_id, target) 唯一 |
-| `ext_system` | id(`EXT-ERP`…), name, vendor, category, endpoint, auth_type, secret_ref(加密), idempotent, idem_header, timeout_ms, max_retry, backoff jsonb, rate_limit, owner, status(ok/degraded/disabled), env, usage | `integration` 模块，归我；PDE 的外部系统页通过我的接口读写 |
-| `writeback_call` | id, action_run_id, sys_id, idem_key, kind(write/query/test), attempt, method, path, http_status, biz_code, elapsed_ms, result(succeeded/failed/unknown), msg, at | `integration` 模块，归我；动态原来的 `ext_call` 已并入；每次 HTTP 调用一行，包括写回重试、对账查询、外部系统页的测试调用（kind 加 `test`） |
+| `ext_system` | id(`EXT-ERP`…), name, vendor, category, endpoint, auth_type, auth_detail（接口 `authDetail`，脱敏原文）, secret_ref(加密), idempotent, idem_header, timeout_ms, max_retry, retry_text（接口 `retry` 原文）, backoff jsonb, rate_limit, owner, status(ok/degraded/disabled), env, usage | `integration` 模块，归我；PDE 的外部系统页通过我的接口读写 |
+| `writeback_call` | id, action_run_id(可空), sys_id, idem_key, kind(write/query/test), op_name（接口 `action`，如“补货申请”）, target_label（接口 `target`）, actor（接口 `actor`，发起人原文）, attempt, method, path, http_status, biz_code, elapsed_ms, result(succeeded/failed/unknown), msg, at | `integration` 模块，归我；动态原来的 `ext_call` 已并入；一行 = 一次业务调用（重试计入 `attempt`，不另起行），包括写回、对账查询、外部系统页的测试调用（kind 加 `test`）；通知类调用没有执行记录，`action_run_id` 为空 |
 | `reconcile_task` | id(pk), action_run_id(unique), idem_key, sys_id, state(querying/resolved/manual), round, tries, next_at, manual(bool，是否已转人工), last_ext_status, resolved_at, reconciler(系统/人名), reconcile_result(succeeded/not_executed) | 归我；**查询次数和下次时间只在这里**。cron 每 15 分钟扫 `next_at`；seed 的结果未知行 `tries=3, state=manual, manual=true, next_at=null` |
 | `action_run` *(动态)* | 见 dynamic-api.md 1.2 | 只由动态写，字段、约束以动态文档为准（含 `biz_key`、`reconcile_result`、`UNIQUE(idem_key) WHERE NOT is_seed`）；本模块只读 |
 | `action_run_log` *(动态)* | 见 dynamic-api.md 1.2 | 只追加，归动态 |
