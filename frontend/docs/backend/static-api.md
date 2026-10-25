@@ -618,7 +618,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 读草稿视图 | `GET /{kind}/{id}?view=draft&cr={crId}` | 每行 `mark`、`base`；`locked`（审核中） | 目标页:view | 元数据读取 | ✓（历史版本下没有草稿视图，返回已发布） | ✓ | 否 |
 | 保存到草稿 | `PUT /change-requests/{id}/items` | 入 `target`、`section`、`rows[{key,op,after}]`、`lockVersion`；锁定返回 `CR_LOCKED` | 目标页:manage | — | ✗ | ✗ | 否 |
 | 放弃本对象草稿 | `DELETE /change-requests/{id}/targets/{kind}/{targetId}` | 丢弃该目标全部 cr_item | 目标页:manage | — | ✗ | ✗ | 否 |
-| 删除草稿单 | `DELETE /change-requests/{id}` | 仅 owner + 草稿；软删。**后台已实现（前端未接）**：硬删 [推断]（`cr_event` 级联删除），非 owner 403、非草稿 409 `CR_STATE`、成功 204；前端 `apiClient` 还没有 DELETE 方法，真接口模式下「删除草稿」按钮置灰 | releases:manage | — | ✗ | ✗ | 否 |
+| 删除草稿单 | `DELETE /change-requests/{id}` | 仅 owner + 草稿；软删。**已实现**：硬删 [推断]（`cr_event` 级联删除），非 owner 403、非草稿 409 `CR_STATE`、成功 204；`Releases.vue` 真接口模式删除后重新载入列表 | releases:manage | — | ✗ | ✗ | 否 |
 | 重新校验 | `POST /change-requests/{id}:validate` | 异步，出 `jobId`，结果写 cr_check；已发布 CR 拒绝。前端只读时置灰（`Releases.vue:312`） | releases:manage | — | ✗ | ✗ | 否 |
 | 提交审核 | `POST /change-requests/{id}:submit` | 规则见 §2.2-2；不限提交人（限 owner 是 [推断]，默认不做）。**已实现**（以下 6 个动作同一套，照 `Releases.vue` `move()` 与按钮显示条件）：草稿 → 审核中；有阻断 409 `CR_BLOCKED`、改动 0 → 409 `CR_EMPTY`；写 `cr_event`「{me} 提交审核」/「审核人 {reviewer}」。状态不对一律 409 `CR_STATE`（`details.status`、`details.action`），人不对 403 `NO_PERMISSION`；成功 200 返回该单详情（同 `GET /change-requests/{id}`）。owner / reviewer 按姓名比对（库里和 mock 都存姓名，不是 sys_user.code）[推断] | releases:manage | — | ✗ | ✗ | 否 |
 | 撤回提交 | `POST /change-requests/{id}:withdraw` | owner（`Releases.vue:250`），审核中 → 草稿。**已实现**：事件「{me} 撤回提交」 | releases:manage + owner | — | ✗ | ✗ | 否 |

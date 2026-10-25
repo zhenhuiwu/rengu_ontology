@@ -19,7 +19,7 @@ import {
   CHANGE_REQUESTS, CURRENT_USER, ONTOLOGY_ADMINS, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, registerChange, reviewLog,
   type ChangeRequest, type CheckResult, type CRStatus, type ReviewEvent,
 } from '@/mock/changes';
-import { crAction, fetchChangeRequests, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease, type CRAction } from '@/api/static';
+import { crAction, deleteCR, fetchChangeRequests, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease, type CRAction } from '@/api/static';
 
 const route = useRoute();
 const router = useRouter();
@@ -157,6 +157,13 @@ async function removeDraft() {
     impact: '删除后草稿里的改动全部丢弃，不能恢复；已发布版本不受影响。' });
   if (!ok) return;
   const id = cur.value.id;
+  if (realMode) {
+    try { await deleteCR(id); } catch (e) { apiErr(e); return; }
+    await loadCRs();
+    message.success(`${id} 已删除`);
+    pick(CRS.find((c) => c.status === '草稿')?.id ?? CRS[0].id);
+    return;
+  }
   CRS.splice(CRS.findIndex((c) => c.id === id), 1);
   message.success(`${id} 已删除`);
   pick(CRS.find((c) => c.status === '草稿')?.id ?? CRS[0].id);
@@ -280,8 +287,8 @@ async function rollback() {
           <span class="t-12 c-3">{{ reason }}</span>
         </template>
         <template v-else-if="cur.status === '草稿'">
-          <a-tooltip :title="realMode ? '真接口模式暂不支持删除（前端请求层还没有 DELETE）' : isOwner ? '' : `只有提交人 ${cur.owner} 能删除`">
-            <a-button danger :disabled="!isOwner || realMode" @click="removeDraft">删除草稿</a-button>
+          <a-tooltip :title="isOwner ? '' : `只有提交人 ${cur.owner} 能删除`">
+            <a-button danger :disabled="!isOwner" @click="removeDraft">删除草稿</a-button>
           </a-tooltip>
           <a-tooltip :title="editTo ? '' : '这张单子没有可跳转的草稿页面'">
             <a-button :disabled="!editTo" @click="edit">编辑</a-button>

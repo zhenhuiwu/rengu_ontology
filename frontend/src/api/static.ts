@@ -151,3 +151,5 @@ export const fetchChangeRequests = () => api.get<CRRow[]>('/change-requests', { 
 /** POST /change-requests/{id}:{action}：状态流转（非法流转 409 CR_STATE、人不对 403、阻断 409 CR_BLOCKED），返回更新后的一行 */
 export const crAction = (id: string, action: CRAction, rejectReason?: string) =>
   api.post<CRRow>(`/change-requests/${encodeURIComponent(id)}:${action}`, action === 'reject' ? { rejectReason } : {});
+/** DELETE /change-requests/{id}：删除草稿（owner + 草稿；非 owner 403、非草稿 409 CR_STATE），成功 204 */
+export const deleteCR = (id: string) => api.delete<void>(`/change-requests/${encodeURIComponent(id)}`);
