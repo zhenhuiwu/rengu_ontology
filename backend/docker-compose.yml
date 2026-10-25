@@ -1,0 +1,34 @@
+# 本地开发：PostgreSQL 17 + pgvector。宿主机端口默认 5440（避免和本机其它 PG 冲突），可用 RENGU_PG_PORT 改。
+# `docker compose --profile api up` 会同时起后台服务。
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: rengu
+      POSTGRES_PASSWORD: rengu
+      POSTGRES_DB: rengu
+      TZ: Asia/Shanghai
+    ports:
+      - "${RENGU_PG_PORT:-5440}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rengu -d rengu"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    profiles: ["api"]
+    build: .
+    environment:
+      RENGU_DATABASE_URL: postgresql+asyncpg://rengu:rengu@postgres:5432/rengu
+      RENGU_FIXED_NOW: "2026-10-25T15:42:00+08:00"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

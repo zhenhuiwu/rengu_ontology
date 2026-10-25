@@ -1,0 +1,62 @@
+[
+  {
+    "id": "CR-0007",
+    "title": "销售额改为不含税口径；新增 gmv_tax",
+    "owner": "王敏",
+    "reviewer": "陈立军",
+    "status": "已发布",
+    "level": "重大",
+    "changes": 6,
+    "updatedAt": "2026-10-24 21:17",
+    "release": "v2026.10.3",
+    "reason": "与财务月报口径统一"
+  },
+  {
+    "id": "CR-0005",
+    "title": "门店新增“大区”关系",
+    "owner": "陈立军",
+    "reviewer": "王敏",
+    "status": "已发布",
+    "level": "一般",
+    "changes": 3,
+    "updatedAt": "2026-10-17 20:45",
+    "release": "v2026.10.2",
+    "reason": "组织调整后按大区考核"
+  },
+  {
+    "id": "CR-0004",
+    "title": "订单状态“已发货”统一为“已出库”",
+    "owner": "王敏",
+    "reviewer": "周晓峰",
+    "status": "已发布",
+    "level": "一般",
+    "changes": 4,
+    "updatedAt": "2026-10-09 22:03",
+    "release": "v2026.10.1",
+    "reason": "ERP 与 WMS 叫法不一致，问数出现两个状态"
+  },
+  {
+    "id": "CR-0003",
+    "title": "商品新增保质期属性",
+    "owner": "刘婷",
+    "reviewer": "周晓峰",
+    "status": "已发布",
+    "level": "修订",
+    "changes": 2,
+    "updatedAt": "2026-09-28 21:30",
+    "release": "v2026.09.4",
+    "reason": "临期商品预警需要保质期"
+  },
+  {
+    "id": "CR-0002",
+    "title": "复购客户定义改为 90 天内 ≥2 单",
+    "owner": "孙浩然",
+    "reviewer": "刘婷",
+    "status": "已发布",
+    "level": "重大",
+    "changes": 3,
+    "updatedAt": "2026-09-19 19:12",
+    "release": "v2026.09.3",
+    "reason": "原定义 30 天过短，复购率波动大"
+  }
+]
