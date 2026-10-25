@@ -131,6 +131,7 @@ function doClose() { if (current.value && closeReason.value.trim()) { pinned.val
 const selectedKeys = ref<string[]>([]);
 /** 只有本人处理中的告警才能关闭、发起动作 */
 const mine = computed(() => current.value?.status === '处理中' && current.value.assignee === ME);
+const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
 const selectedRows = computed(() => LIST.filter((a) => selectedKeys.value.includes(a.id)));
 const closable = computed(() => selectedRows.value.filter((a) => a.status === '处理中' && a.assignee === ME));
 function batchClaim() {
@@ -228,6 +229,7 @@ async function runAction() {
         <a-badge :status="statusBadge(current.status)" :text="current.status" />
       </div>
       <div class="al-body">
+        <div v-if="!inList" class="t-12 c-3 al-out">此告警已移出当前筛选（现为{{ current.status }}）</div>
         <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px' }">
           <a-descriptions-item label="告警编号"><span class="num">{{ current.id }}</span></a-descriptions-item>
           <a-descriptions-item label="对象">
@@ -257,7 +259,6 @@ async function runAction() {
       <div class="al-foot">
         <template v-if="!isClosed(current.status)">
           <span v-if="current.status === '处理中' && current.assignee !== ME" class="t-14 c-3">{{ current.assignee }} 处理中</span>
-          <a-button v-if="current.status === '待处理'" type="primary" @click="claim">认领</a-button>
           <a-popover v-model:open="transferOpen" trigger="click" placement="topRight">
             <template #content>
               <div class="al-pop">
@@ -265,8 +266,9 @@ async function runAction() {
                 <div class="al-pop-foot"><a-button size="small" type="primary" :disabled="!transferTo" @click="doTransfer">转派</a-button></div>
               </div>
             </template>
-            <a-button>转派</a-button>
+            <a-tooltip :title="current.actionRef ? '关联动作待审批，审批结束前不能转派' : undefined"><a-button :disabled="!!current.actionRef">转派</a-button></a-tooltip>
           </a-popover>
+          <a-button v-if="current.status === '待处理'" type="primary" @click="claim">认领</a-button>
           <template v-if="mine">
           <a-popover v-model:open="closeOpen" trigger="click" placement="topRight">
             <template #content>
@@ -276,7 +278,7 @@ async function runAction() {
                 <div class="al-pop-foot"><a-button size="small" type="primary" :disabled="!closeReason.trim()" @click="doClose">关闭告警</a-button></div>
               </div>
             </template>
-            <a-button>关闭</a-button>
+            <a-tooltip :title="current.actionRef ? '关联动作待审批，审批结束前不能关闭' : undefined"><a-button :disabled="!!current.actionRef">关闭</a-button></a-tooltip>
           </a-popover>
           <span v-if="current.actionRef" class="t-14 c-3">{{ rule.action }} · 待审批</span>
           <a-button v-else-if="rule.action" type="primary" @click="runAction">{{ rule.action }}</a-button>
@@ -300,6 +302,7 @@ async function runAction() {
 .al-body { flex: 1; min-height: 0; padding: 12px 16px; }
 .al-sub { margin: 16px 0 12px; }
 .al-tl :deep(.ant-timeline-item) { padding-bottom: 12px; }
+.al-out { margin-bottom: 8px; }
 .al-pop { width: 280px; display: flex; flex-direction: column; gap: 8px; }
 .al-pop-foot { display: flex; justify-content: flex-end; }
 .al-act-state { align-self: center; }
