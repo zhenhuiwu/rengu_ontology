@@ -231,8 +231,12 @@ export const QA_DEMO_TURNS: QaDemoTurn[] = [
       period: '2026 年 9 月', region: '华东大区', mom: -8.4, lastMonth: 1404.0, regionShare: 62.0,
       insight: '7 个省份全部下降，安徽（-12.5%）和江苏（-9.8%）降幅最大。', reasonTitle: '下降原因：7 省全部下降，降幅最大的 3 个' } },
 ];
+/** T-04 主回答卡（示例回答的环比跟它同源） */
+const DEMO_MAIN = (QA_DEMO_TURNS.find((t) => t.id === 'T-04') as Extract<QaDemoTurn, { kind: 'answer' }>).answer as QaDemoMainCard;
+/** 环比显示格式与主回答卡一致：负号用 −，保留 1 位小数 */
+const fmtMom = (n: number) => `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(1)}%`;
 /** 原型：会话里新追加的轮次统一用这条示例回答（数据与主回答卡一致） */
 export const QA_DEMO_CANNED = {
-  text: `2026 年 9 月，华东大区复购客户销售额（不含税）为 ${fmtMoney(QA_TOTAL_SALES, 1)} 万元，环比 −8.4%；7 个省份全部下降，安徽（−12.5%）和江苏（−9.8%）降幅最大。`,
+  text: `2026 年 9 月，华东大区复购客户销售额（不含税）为 ${fmtMoney(QA_TOTAL_SALES, 1)} 万元，环比 ${fmtMom(DEMO_MAIN.mom)}；7 个省份全部下降，安徽（−12.5%）和江苏（−9.8%）降幅最大。`,
   meta: '按 大区 = 华东、口径 = 不含税 回答',
 };
