@@ -9,6 +9,7 @@ import { message } from 'ant-design-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
 import { useConfirmStore } from '@/stores/confirm';
+import { useReadonly } from '@/composables/useReadonly';
 import { ALERTS, RULES, METRICS, alertTimeline, type Alert, type AlertStatus } from '@/mock';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
@@ -24,6 +25,7 @@ const isClosed = (s: AlertStatus) => s === '已解决' || s === '已忽略';
 const route = useRoute();
 const router = useRouter();
 const confirm = useConfirmStore();
+const { readonly, reason: roReason } = useReadonly();
 
 const TABS: { key: string; title: string; match: (s: AlertStatus) => boolean }[] = [
   { key: 'open', title: '待处理', match: (s) => s === '待处理' },
@@ -203,7 +205,7 @@ async function runAction() {
       </div>
       <div class="al-table">
         <a-table :columns="columns" :data-source="rows" row-key="id" size="middle"
-          :row-selection="{ selectedRowKeys: selectedKeys, onChange: (k: (string | number)[]) => (selectedKeys = k as string[]), getCheckboxProps: (r: Row) => ({ disabled: isClosed(r.status) }) }" :scroll="pageSize > 12 ? { y: 572 } : undefined"
+          :row-selection="{ selectedRowKeys: selectedKeys, onChange: (k: (string | number)[]) => (selectedKeys = k as string[]), getCheckboxProps: (r: Row) => ({ disabled: readonly || isClosed(r.status) }) }" :scroll="pageSize > 12 ? { y: 572 } : undefined"
           :pagination="{ current: page, pageSize, total: rows.length, showSizeChanger: true, pageSizeOptions: ['12', '20', '50'], showQuickJumper: rows.length > pageSize * 10, showTotal: (t: number) => `共 ${t.toLocaleString('zh-CN')} 条`, onChange: (p: number, sz: number) => { if (sz !== pageSize) pageSize = sz; else page = p; } }"
           :row-class-name="(r: Row) => (r.id === selectedId ? 'al-row-active' : '')"
           :custom-row="(r: Row) => ({ onClick: () => pick(r) })">
@@ -257,7 +259,8 @@ async function runAction() {
         </a-timeline>
       </div>
       <div class="al-foot">
-        <template v-if="!isClosed(current.status)">
+        <span v-if="readonly" class="t-14 c-3">{{ roReason }}，不能处理告警</span>
+        <template v-else-if="!isClosed(current.status)">
           <span v-if="current.status === '处理中' && current.assignee !== ME" class="t-14 c-3">{{ current.assignee }} 处理中</span>
           <a-popover v-model:open="transferOpen" trigger="click" placement="topRight">
             <template #content>
