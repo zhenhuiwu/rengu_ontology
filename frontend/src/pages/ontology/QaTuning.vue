@@ -9,7 +9,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
-import { CUR_VERSION, EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, TUNING_DIMS, TUNING_TIMES, planText, type SemPlan } from '@/mock/qa-tuning';
+import { useAppStore } from '@/stores/app';
+import { EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, TUNING_DIMS, TUNING_TIMES, planText, type SemPlan } from '@/mock/qa-tuning';
 import { tuning, addCert, startRun } from './qa-tuning/state';
 import CertTab from './qa-tuning/CertTab.vue';
 import EvalTab from './qa-tuning/EvalTab.vue';
@@ -18,9 +19,11 @@ import FreqTab from './qa-tuning/FreqTab.vue';
 
 const route = useRoute();
 const router = useRouter();
+// 当前本体版本取 app store（mock 模式是 mock 值，versioning 走真接口时是 /releases/current 的 current）
+const app = useAppStore();
 const { readonly, reason } = useReadonly();
 const confirm = useConfirmStore();
-const viewVer = computed(() => (route.query.ver as string) || CUR_VERSION);
+const viewVer = computed(() => (route.query.ver as string) || app.ontologyVersion);
 const TABS = ['cert', 'eval', 'feedback', 'freq'];
 const tab = computed({
   get: () => (TABS.includes(route.query.tab as string) ? (route.query.tab as string) : 'cert'),
@@ -58,12 +61,12 @@ async function runEval() {
   const scope = runGroup.value === '全部' ? `全部 ${qs.length} 题` : `${runGroup.value}相关 ${qs.length} 题`;
   const ok = await confirm.ask({
     title: '运行评测', target: scope,
-    fields: [{ label: '本体版本', value: CUR_VERSION }, { label: '题数', value: `${qs.length} 题` }],
+    fields: [{ label: '本体版本', value: app.ontologyVersion }, { label: '题数', value: `${qs.length} 题` }],
     impact: '按当前已发布版本逐题生成语义计划并与期望比对，不改动任何口径；预计 3 分钟完成。',
     okText: '运行',
   });
   if (!ok) return;
-  const r = startRun(scope, qs.length, CUR_VERSION);
+  const r = startRun(scope, qs.length, app.ontologyVersion);
   router.replace({ query: { tab: 'eval', run: r.id } });
   message.success(`已开始运行 ${r.id}（${scope}）`);
 }

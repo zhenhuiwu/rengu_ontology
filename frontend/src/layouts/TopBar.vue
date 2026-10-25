@@ -83,7 +83,7 @@ function onSelect(v: string) {
               <a-menu-item key="start">快速入门</a-menu-item>
               <a-menu-item key="kbd"><span class="tb-help-row">快捷键：搜索<span class="tb-kbd t-12 c-2">Ctrl K</span></span></a-menu-item>
               <a-menu-item key="feedback">反馈问题</a-menu-item>
-              <a-menu-item key="ver" disabled><span class="tb-help-row c-2">版本<span class="num">v2026.10.3</span></span></a-menu-item>
+              <a-menu-item key="ver" disabled><span class="tb-help-row c-2">版本<span class="num">{{ app.ontologyVersion }}</span></span></a-menu-item>
             </a-menu-item-group>
           </a-menu>
         </template>
