@@ -322,7 +322,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 - 所有改动（参数、条件、本体编辑、副作用、写回配置）都写进变更单草稿的 `cr_item`，`target_kind=action`，`section` 和前端一致。审核通过后**随本体整版发布生效**，没有单独发布动作类型这回事。
 - **回滚**：两页的回滚链接现在都置灰（“回滚暂未开放”），第一期不做。开放以后按前端/静态的口径，**生成一个新版本**（调基础层的 `create_version`，内容等于目标版本），不是把当前指针移回去。
-- **整版回滚时恢复本模块定义表**（发布管理页的整版回滚前端已开放，`Releases.vue:183-189`，跟上一条单个类型的回滚不同）：按骨架契约 `app/contracts/versioning.py` 第 4 条，`actionTypes`、`eventTypes` 两个 builder 都实现可选钩子 `restore_section(session, content)`，由版本层在 `create_version` 回滚分支里同一事务内调用，`content` = 被恢复那一版（`rollback_of` 的上一版）快照里这一节。做法与静态 §2.2-6、动态 §2.8 一致：按前端 id upsert，把 `action_type`/`event_type` 及其参数、条件、编辑、副作用、载荷、订阅方等定义行改回快照里的值，并把当前版本指针指回快照里的 `version`；`action_type_version`/`event_type_version` 只追加，不动。快照里没有的类型不删行，置为停用 [推断]。`content=None`（那一版快照里根本没有这一节）时什么都不做 [推断]。
+- **整版回滚时恢复本模块定义表**（发布管理页的整版回滚前端已开放，`Releases.vue:183-189`，跟上一条单个类型的回滚不同）：按骨架契约 `app/contracts/versioning.py` 第 4 条，`actionTypes`、`eventTypes` 两个 builder 都实现可选钩子 `restore_section(session, content)`，由版本层在 `create_version` 回滚分支里同一事务内调用，`content` = 被恢复那一版（`rollback_of` 的上一版）快照里这一节。做法与静态 §2.2-6、动态 §2.8 一致：按前端 id upsert，把 `action_type`/`event_type` 及其参数、条件、编辑、副作用、载荷、订阅方等定义行改回快照里的值，并把当前版本指针指回快照里的 `version`；`action_type_version`/`event_type_version` 只追加，不动。快照里没有的类型不删行，也不加新的 `status` 值（前端类型状态只有已发布/变更中/草稿），而是把该行 `retired_in` 写成这次回滚产生的版本号：当前视图的列表和详情都不返回它（详情按不存在处理），`?ver=` 历史视图按 `retired_in` 是否 ≤ V 判断是否出现；以后再发布到这个类型时把 `retired_in` 清空 [推断]。`content=None`（那一版快照里根本没有这一节）时什么都不做 [推断]。
 - **发布快照里的本模块分段**（PDE 定：每个模块自己组装自己的分段交给基础层 `create_version`；**发布在发布事务里同步展开**，展开失败整次发布回滚）。快照分段 = 静态的各段 + `actionTypes`、`eventTypes`（本模块）+ `rules`、`lifecycles`（动态）。基础层 `create_version` 按分段登记组装函数：**本模块在启动时登记 `actionTypes`、`eventTypes` 两个组装函数**（`action/` 登记 `actionTypes`，`event/` 登记 `eventTypes`），发布时由 `create_version` 在同一事务里依次调用。两段的键用**前端 id**（`ACTION_TYPES[].id`、`EVENT_TYPES[].id`），字段名和取值与前端 mock 一致（中文枚举，库内转换见 §3.5）：
 
 ```json
@@ -683,7 +683,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| `action_type` | id(pk bigint), code(unique, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, owner, desc_tpl, runners, approval, sys_id(fk ext_system.id, 可空), endpoint, biz_key_template, release_id(fk ontology_release.id) | 当前版本 |
+| `action_type` | id(pk bigint), code(unique, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, retired_in(int, 可空, 整版回滚时用), owner, desc_tpl, runners, approval, sys_id(fk ext_system.id, 可空), endpoint, biz_key_template, release_id(fk ontology_release.id) | 当前版本 |
 | `action_type_rule` | id(pk), action_type_id, rule_id(fk 动态 rule.id；seed 按 `R-…` 查回), seq, mode_text | 使用该动作的规则（`ACTION_TYPES[].usedBy`）；`(action_type_id, rule_id)` 唯一；进快照 |
 | `action_type_version` | id(pk), action_type_id, ver, release_id(fk ontology_release.id), change_note, by, at, definition jsonb | 每次整版发布写一行；**只追加，不存状态**：`ver` 等于 `action_type.version` 的那行是生效中，其余是已替代（接口照前端返回「生效中/已替代」） |
 | `action_param` | id(pk), action_type_id, seq, name, api, type, required, default_text, rule_text, rule_expr jsonb(可空) | (action_type_id, api) 唯一 |
@@ -696,7 +696,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `action_run` *(动态)* | 见 dynamic-api.md 1.2 | 只由动态写，字段、约束以动态文档为准（含 `biz_key`、`reconcile_result`、`UNIQUE(idem_key) WHERE NOT is_seed`）；本模块只读 |
 | `action_run_log` *(动态)* | 见 dynamic-api.md 1.2 | 只追加，归动态 |
 | `action_run_daily_stat` | id(pk), action_type_id, date, ok, failed, unknown | seed 用 |
-| `event_type` | id(pk bigint), code(unique, 如 `order_status_changed`), name, api(unique), source, source_ref, rule_id(fk 动态 rule.id，可空), object, object_api, obj_kind, status, version, owner, desc, dedup_key_rule, dedup_window, delivery, ordering, retention_days, release_id(fk ontology_release.id) | — |
+| `event_type` | id(pk bigint), code(unique, 如 `order_status_changed`), name, api(unique), source, source_ref, rule_id(fk 动态 rule.id，可空), object, object_api, obj_kind, status, version, owner, desc, dedup_key_rule, dedup_window, delivery, ordering, retention_days, retired_in(int, 可空, 同 action_type), release_id(fk ontology_release.id) | — |
 | `event_type_version` | 同 action_type_version | — |
 | `event_payload_field` | id(pk), event_type_id, seq, name, api, type, required, desc, sample | (event_type_id, api) 唯一，不能和信封字段重名 |
 | `event_envelope_field` | id(pk), api(unique), name, type, required, desc, sample | 全局 10 行，只读 |
