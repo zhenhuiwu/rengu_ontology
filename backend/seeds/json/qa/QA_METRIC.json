@@ -1,0 +1,12 @@
+{
+  "ex": {
+    "id": "repeat_sales",
+    "name": "复购客户销售额（不含税）",
+    "version": "v3"
+  },
+  "in": {
+    "id": "repeat_sales_tax",
+    "name": "复购客户销售额（含税）",
+    "version": "v1"
+  }
+}

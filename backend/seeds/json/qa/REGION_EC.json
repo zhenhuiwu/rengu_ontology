@@ -1,0 +1,13 @@
+{
+  "id": "REG-EC",
+  "name": "华东大区",
+  "owner": "陈杰",
+  "parent": "华东事业部",
+  "provinces": 7,
+  "stores": 486,
+  "sales": "¥2,074.2 万元",
+  "status": "预警",
+  "since": "10-08",
+  "modifiedBy": "张伟",
+  "modifiedAt": "2026-10-12 14:20"
+}

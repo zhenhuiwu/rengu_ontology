@@ -1,0 +1,539 @@
+[
+  {
+    "id": "HQ-001",
+    "question": "华东大区上周销售额",
+    "hits7": 312,
+    "hits30": 1265,
+    "users": 395,
+    "plan": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "上周",
+      "filter": "大区 = 华东大区"
+    },
+    "consistency": 0.99,
+    "lastAsked": "2026-10-25 16:00",
+    "certId": "CQ-003"
+  },
+  {
+    "id": "HQ-002",
+    "question": "各大区本月销售额及环比",
+    "hits7": 241,
+    "hits30": 986,
+    "users": 274,
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "大区"
+      ],
+      "time": "本月至今",
+      "sort": "环比"
+    },
+    "consistency": 0.98,
+    "lastAsked": "2026-10-25 15:17",
+    "certId": "CQ-004"
+  },
+  {
+    "id": "HQ-003",
+    "question": "昨天销售额最高的 5 家门店",
+    "hits7": 203,
+    "hits30": 845,
+    "users": 211,
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "昨天",
+      "sort": "降序 · 前 5"
+    },
+    "consistency": 0.97,
+    "lastAsked": "2026-10-25 14:34",
+    "certId": "CQ-024"
+  },
+  {
+    "id": "HQ-004",
+    "question": "近 6 个月复购客户销售额趋势",
+    "hits7": 177,
+    "hits30": 744,
+    "users": 169,
+    "plan": {
+      "metric": "repeat",
+      "dims": [
+        "月份"
+      ],
+      "time": "近 6 个月"
+    },
+    "consistency": 0.96,
+    "lastAsked": "2026-10-25 13:51",
+    "certId": "CQ-005"
+  },
+  {
+    "id": "HQ-005",
+    "question": "昨天各仓库出库及时率",
+    "hits7": 160,
+    "hits30": 655,
+    "users": 136,
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "仓库"
+      ],
+      "time": "昨天"
+    },
+    "consistency": 0.97,
+    "lastAsked": "2026-10-25 12:08",
+    "certId": "CQ-008"
+  },
+  {
+    "id": "HQ-006",
+    "question": "上周各门店发货及时率",
+    "hits7": 148,
+    "hits30": 512,
+    "users": 160,
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "门店"
+      ],
+      "time": "上周"
+    },
+    "consistency": 0.41,
+    "lastAsked": "2026-10-25 11:25"
+  },
+  {
+    "id": "HQ-007",
+    "question": "各品类毛利率排名",
+    "hits7": 131,
+    "hits30": 538,
+    "users": 149,
+    "plan": {
+      "metric": "margin",
+      "dims": [
+        "品类"
+      ],
+      "time": "本月至今",
+      "sort": "毛利率降序"
+    },
+    "consistency": 0.88,
+    "lastAsked": "2026-10-25 10:42",
+    "certId": "CQ-002"
+  },
+  {
+    "id": "HQ-008",
+    "question": "本周有效订单数按渠道",
+    "hits7": 126,
+    "hits30": 577,
+    "users": 144,
+    "plan": {
+      "metric": "orders",
+      "dims": [
+        "渠道"
+      ],
+      "time": "本周"
+    },
+    "consistency": 0.99,
+    "lastAsked": "2026-10-25 09:59",
+    "certId": "CQ-010"
+  },
+  {
+    "id": "HQ-009",
+    "question": "上个月 GMV 最高的门店",
+    "hits7": 118,
+    "hits30": 466,
+    "users": 106,
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "降序 · 前 1"
+    },
+    "consistency": 0.52,
+    "lastAsked": "2026-10-25 16:16"
+  },
+  {
+    "id": "HQ-010",
+    "question": "各品类销售额占比",
+    "hits7": 104,
+    "hits30": 433,
+    "users": 90,
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "品类"
+      ],
+      "time": "上个月"
+    },
+    "consistency": 0.97,
+    "lastAsked": "2026-10-25 15:33",
+    "certId": "CQ-029"
+  },
+  {
+    "id": "HQ-011",
+    "question": "上个月各大区的退款率",
+    "hits7": 98,
+    "hits30": 412,
+    "users": 129,
+    "plan": {
+      "metric": "refund",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月"
+    },
+    "consistency": 0.9,
+    "lastAsked": "2026-10-25 14:50",
+    "certId": "CQ-001"
+  },
+  {
+    "id": "HQ-012",
+    "question": "各门店复购客户销售额 Top 10",
+    "hits7": 95,
+    "hits30": 402,
+    "users": 112,
+    "plan": {
+      "metric": "repeat",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "降序 · 前 10"
+    },
+    "consistency": 0.95,
+    "lastAsked": "2026-10-25 13:07",
+    "certId": "CQ-007"
+  },
+  {
+    "id": "HQ-013",
+    "question": "老客销售额走势",
+    "hits7": 91,
+    "hits30": 377,
+    "users": 94,
+    "plan": {
+      "metric": "repeat",
+      "dims": [
+        "月份"
+      ],
+      "time": "近 6 个月"
+    },
+    "consistency": 0.47,
+    "lastAsked": "2026-10-25 12:24"
+  },
+  {
+    "id": "HQ-014",
+    "question": "出库及时率低于 95% 的门店",
+    "hits7": 88,
+    "hits30": 389,
+    "users": 88,
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "门店"
+      ],
+      "time": "近 7 天",
+      "filter": "出库及时率 < 95%"
+    },
+    "consistency": 0.96,
+    "lastAsked": "2026-10-25 11:41",
+    "certId": "CQ-009"
+  },
+  {
+    "id": "HQ-015",
+    "question": "华东一区本周退款率",
+    "hits7": 84,
+    "hits30": 351,
+    "users": 73,
+    "plan": {
+      "metric": "refund",
+      "dims": [],
+      "time": "本周",
+      "filter": "大区 = 华东一区"
+    },
+    "consistency": 0.63,
+    "lastAsked": "2026-10-25 10:58"
+  },
+  {
+    "id": "HQ-016",
+    "question": "华东三区本月销售额",
+    "hits7": 82,
+    "hits30": 352,
+    "users": 110,
+    "plan": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "大区 = 华东三区"
+    },
+    "consistency": 0.99,
+    "lastAsked": "2026-10-25 09:15",
+    "certId": "CQ-017"
+  },
+  {
+    "id": "HQ-017",
+    "question": "取消订单占比",
+    "hits7": 77,
+    "hits30": 318,
+    "users": 88,
+    "plan": {
+      "metric": "orders",
+      "dims": [
+        "订单状态"
+      ],
+      "time": "近 30 天"
+    },
+    "consistency": 0.58,
+    "lastAsked": "2026-10-25 16:32"
+  },
+  {
+    "id": "HQ-018",
+    "question": "上海各区县门店销售额",
+    "hits7": 75,
+    "hits30": 318,
+    "users": 80,
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "区县",
+        "门店"
+      ],
+      "time": "上个月",
+      "filter": "城市 = 上海"
+    },
+    "consistency": 0.94,
+    "lastAsked": "2026-10-25 15:49",
+    "certId": "CQ-011"
+  },
+  {
+    "id": "HQ-019",
+    "question": "各大区出库及时率",
+    "hits7": 72,
+    "hits30": 302,
+    "users": 69,
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "大区"
+      ],
+      "time": "上周"
+    },
+    "consistency": 0.97,
+    "lastAsked": "2026-10-25 14:06",
+    "certId": "CQ-023"
+  },
+  {
+    "id": "HQ-020",
+    "question": "哪个门店毛利最低",
+    "hits7": 69,
+    "hits30": 291,
+    "users": 61,
+    "plan": {
+      "metric": "margin",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "升序 · 前 1"
+    },
+    "consistency": 0.55,
+    "lastAsked": "2026-10-25 13:23"
+  },
+  {
+    "id": "HQ-021",
+    "question": "毛利率低于 18% 的商品",
+    "hits7": 66,
+    "hits30": 284,
+    "users": 89,
+    "plan": {
+      "metric": "margin",
+      "dims": [
+        "商品"
+      ],
+      "time": "近 30 天",
+      "filter": "毛利率 < 18%"
+    },
+    "consistency": 0.93,
+    "lastAsked": "2026-10-25 12:40",
+    "certId": "CQ-015"
+  },
+  {
+    "id": "HQ-022",
+    "question": "双 11 备货期间日销售额",
+    "hits7": 64,
+    "hits30": 271,
+    "users": 75,
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "日期"
+      ],
+      "time": "2026-10-20 至今"
+    },
+    "consistency": 0.92,
+    "lastAsked": "2026-10-25 11:57",
+    "certId": "CQ-012"
+  },
+  {
+    "id": "HQ-023",
+    "question": "昨天一共多少单",
+    "hits7": 61,
+    "hits30": 255,
+    "users": 64,
+    "plan": {
+      "metric": "orders",
+      "dims": [],
+      "time": "昨天"
+    },
+    "consistency": 0.7,
+    "lastAsked": "2026-10-25 10:14"
+  },
+  {
+    "id": "HQ-024",
+    "question": "华东一区复购客户销售额（含税）",
+    "hits7": 55,
+    "hits30": 231,
+    "users": 52,
+    "plan": {
+      "metric": "repeat_tax",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "大区 = 华东一区"
+    },
+    "consistency": 0.95,
+    "lastAsked": "2026-10-25 09:31",
+    "certId": "CQ-006"
+  },
+  {
+    "id": "HQ-025",
+    "question": "各城市有效订单数排名",
+    "hits7": 53,
+    "hits30": 226,
+    "users": 47,
+    "plan": {
+      "metric": "orders",
+      "dims": [
+        "城市"
+      ],
+      "time": "上周",
+      "sort": "降序"
+    },
+    "consistency": 0.98,
+    "lastAsked": "2026-10-25 16:48",
+    "certId": "CQ-020"
+  },
+  {
+    "id": "HQ-026",
+    "question": "昨天出库及时率最差的仓库",
+    "hits7": 50,
+    "hits30": 214,
+    "users": 67,
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "仓库"
+      ],
+      "time": "昨天",
+      "sort": "升序 · 前 1"
+    },
+    "consistency": 0.66,
+    "lastAsked": "2026-10-25 15:05"
+  },
+  {
+    "id": "HQ-027",
+    "question": "各大区销售额（含税）",
+    "hits7": 48,
+    "hits30": 205,
+    "users": 57,
+    "plan": {
+      "metric": "gmv_tax",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月"
+    },
+    "consistency": 0.96,
+    "lastAsked": "2026-10-25 14:22",
+    "certId": "CQ-013"
+  },
+  {
+    "id": "HQ-028",
+    "question": "线上渠道本月有效订单数",
+    "hits7": 47,
+    "hits30": 203,
+    "users": 51,
+    "plan": {
+      "metric": "orders",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "渠道 = 线上"
+    },
+    "consistency": 0.98,
+    "lastAsked": "2026-10-25 13:39",
+    "certId": "CQ-028"
+  },
+  {
+    "id": "HQ-029",
+    "question": "合肥门店上周销售额",
+    "hits7": 44,
+    "hits30": 189,
+    "users": 43,
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上周",
+      "filter": "城市 = 合肥"
+    },
+    "consistency": 0.97,
+    "lastAsked": "2026-10-25 12:56",
+    "certId": "CQ-021"
+  },
+  {
+    "id": "HQ-030",
+    "question": "本月退单率",
+    "hits7": 41,
+    "hits30": 172,
+    "users": 36,
+    "plan": {
+      "metric": "refund",
+      "dims": [],
+      "time": "本月至今"
+    },
+    "consistency": 0.38,
+    "lastAsked": "2026-10-25 11:13"
+  },
+  {
+    "id": "HQ-031",
+    "question": "会员复购客户销售额占比",
+    "hits7": 39,
+    "hits30": 167,
+    "users": 52,
+    "plan": {
+      "metric": "repeat",
+      "dims": [
+        "会员等级"
+      ],
+      "time": "上个月"
+    },
+    "consistency": 0.9,
+    "lastAsked": "2026-10-25 10:30",
+    "certId": "CQ-019"
+  },
+  {
+    "id": "HQ-032",
+    "question": "线上单量",
+    "hits7": 36,
+    "hits30": 150,
+    "users": 42,
+    "plan": {
+      "metric": "orders",
+      "dims": [],
+      "time": "本周",
+      "filter": "渠道 = 线上"
+    },
+    "consistency": 0.44,
+    "lastAsked": "2026-10-25 09:47"
+  }
+]

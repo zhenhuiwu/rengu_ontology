@@ -1,0 +1,93 @@
+[
+  {
+    "id": "P001",
+    "name": "华东大区销售周报",
+    "cards": 4,
+    "updatedAt": "10-25",
+    "shared": true
+  },
+  {
+    "id": "P002",
+    "name": "门店履约看板",
+    "cards": 7,
+    "updatedAt": "10-23",
+    "shared": false
+  },
+  {
+    "id": "P003",
+    "name": "复购客户月度分析",
+    "cards": 10,
+    "updatedAt": "10-21",
+    "shared": false
+  },
+  {
+    "id": "P004",
+    "name": "双 11 备货跟踪",
+    "cards": 6,
+    "updatedAt": "10-19",
+    "shared": true
+  },
+  {
+    "id": "P005",
+    "name": "会员运营周报",
+    "cards": 9,
+    "updatedAt": "10-17",
+    "shared": false
+  },
+  {
+    "id": "P006",
+    "name": "品类毛利看板",
+    "cards": 5,
+    "updatedAt": "10-15",
+    "shared": false
+  },
+  {
+    "id": "P007",
+    "name": "缺货预警看板",
+    "cards": 8,
+    "updatedAt": "10-13",
+    "shared": true
+  },
+  {
+    "id": "P008",
+    "name": "促销效果复盘",
+    "cards": 4,
+    "updatedAt": "10-11",
+    "shared": false
+  },
+  {
+    "id": "P009",
+    "name": "华东一区门店排名",
+    "cards": 7,
+    "updatedAt": "10-09",
+    "shared": false
+  },
+  {
+    "id": "P010",
+    "name": "新店爬坡跟踪",
+    "cards": 10,
+    "updatedAt": "10-07",
+    "shared": true
+  },
+  {
+    "id": "P011",
+    "name": "生鲜损耗日报",
+    "cards": 6,
+    "updatedAt": "10-05",
+    "shared": false
+  },
+  {
+    "id": "P012",
+    "name": "供应商绩效月报",
+    "cards": 9,
+    "updatedAt": "10-03",
+    "shared": false
+  },
+  {
+    "id": "P013",
+    "name": "大区预算执行",
+    "cards": 5,
+    "updatedAt": "10-01",
+    "shared": true
+  }
+]

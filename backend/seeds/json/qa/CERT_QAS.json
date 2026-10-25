@@ -1,0 +1,553 @@
+[
+  {
+    "id": "CQ-001",
+    "question": "上个月各大区的退款率",
+    "variants": [
+      "上月大区退款率",
+      "各大区退款率是多少"
+    ],
+    "plan": {
+      "metric": "refund",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月"
+    },
+    "status": "待重新认证",
+    "cr": "CR-0010",
+    "certifier": "刘婷",
+    "certifiedAt": "2026-09-08 10:12",
+    "hits": 412,
+    "source": "手动新建",
+    "note": "退款率将由 v2（申请时间）改为 v3（退款完成时间），发布后需按 v3 重新认证"
+  },
+  {
+    "id": "CQ-002",
+    "question": "各品类毛利率排名",
+    "variants": [
+      "哪个品类毛利最高",
+      "品类毛利率从高到低"
+    ],
+    "plan": {
+      "metric": "margin",
+      "dims": [
+        "品类"
+      ],
+      "time": "本月至今",
+      "sort": "毛利率降序"
+    },
+    "status": "待重新认证",
+    "cr": "CR-0011",
+    "certifier": "何静",
+    "certifiedAt": "2026-09-15 16:40",
+    "hits": 538,
+    "source": "反馈纠错",
+    "note": "毛利率将扣除促销补贴（v2 → v3），发布后需重新认证"
+  },
+  {
+    "id": "CQ-003",
+    "question": "华东大区上周销售额",
+    "variants": [
+      "华东上周卖了多少",
+      "华东大区上周营业额"
+    ],
+    "plan": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "上周",
+      "filter": "大区 = 华东大区"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-08 09:30",
+    "hits": 1265,
+    "source": "高频问题推荐"
+  },
+  {
+    "id": "CQ-004",
+    "question": "各大区本月销售额及环比",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "大区"
+      ],
+      "time": "本月至今",
+      "sort": "环比"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-08 09:42",
+    "hits": 986,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-005",
+    "question": "近 6 个月复购客户销售额趋势",
+    "variants": [
+      "复购客户销售额走势",
+      "老客销售额趋势"
+    ],
+    "plan": {
+      "metric": "repeat",
+      "dims": [
+        "月份"
+      ],
+      "time": "近 6 个月"
+    },
+    "status": "已认证",
+    "certifier": "孙浩然",
+    "certifiedAt": "2026-10-12 14:05",
+    "hits": 744,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-006",
+    "question": "华东一区复购客户销售额（含税）",
+    "variants": [],
+    "plan": {
+      "metric": "repeat_tax",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "大区 = 华东一区"
+    },
+    "status": "已认证",
+    "certifier": "孙浩然",
+    "certifiedAt": "2026-10-12 14:20",
+    "hits": 231,
+    "source": "反馈纠错"
+  },
+  {
+    "id": "CQ-007",
+    "question": "各门店复购客户销售额 Top 10",
+    "variants": [],
+    "plan": {
+      "metric": "repeat",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "降序 · 前 10"
+    },
+    "status": "已认证",
+    "certifier": "孙浩然",
+    "certifiedAt": "2026-10-13 11:02",
+    "hits": 402,
+    "source": "高频问题推荐"
+  },
+  {
+    "id": "CQ-008",
+    "question": "昨天各仓库出库及时率",
+    "variants": [
+      "昨日仓库出库及时率"
+    ],
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "仓库"
+      ],
+      "time": "昨天"
+    },
+    "status": "已认证",
+    "certifier": "周晓峰",
+    "certifiedAt": "2026-09-26 18:30",
+    "hits": 655,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-009",
+    "question": "出库及时率低于 95% 的门店",
+    "variants": [],
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "门店"
+      ],
+      "time": "近 7 天",
+      "filter": "出库及时率 < 95%"
+    },
+    "status": "已认证",
+    "certifier": "周晓峰",
+    "certifiedAt": "2026-09-26 18:44",
+    "hits": 389,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-010",
+    "question": "本周有效订单数按渠道",
+    "variants": [],
+    "plan": {
+      "metric": "orders",
+      "dims": [
+        "渠道"
+      ],
+      "time": "本周"
+    },
+    "status": "已认证",
+    "certifier": "陈立军",
+    "certifiedAt": "2026-09-20 10:00",
+    "hits": 577,
+    "source": "反馈纠错"
+  },
+  {
+    "id": "CQ-011",
+    "question": "上海各区县门店销售额",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "区县",
+        "门店"
+      ],
+      "time": "上个月",
+      "filter": "城市 = 上海"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-09 15:16",
+    "hits": 318,
+    "source": "高频问题推荐"
+  },
+  {
+    "id": "CQ-012",
+    "question": "双 11 备货期间日销售额",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "日期"
+      ],
+      "time": "2026-10-20 至今"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-20 09:12",
+    "hits": 271,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-013",
+    "question": "各大区销售额（含税）",
+    "variants": [
+      "含税口径大区销售"
+    ],
+    "plan": {
+      "metric": "gmv_tax",
+      "dims": [
+        "大区"
+      ],
+      "time": "上个月"
+    },
+    "status": "已认证",
+    "certifier": "陈立军",
+    "certifiedAt": "2026-10-24 21:30",
+    "hits": 205,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-014",
+    "question": "杭州门店客单价",
+    "variants": [],
+    "plan": {
+      "metric": "atv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "filter": "城市 = 杭州"
+    },
+    "status": "待认证",
+    "certifier": "刘婷",
+    "certifiedAt": "2026-10-18 13:20",
+    "hits": 96,
+    "source": "反馈纠错",
+    "note": "客单价（不含税）仍是草稿口径，发布后再认证"
+  },
+  {
+    "id": "CQ-015",
+    "question": "毛利率低于 18% 的商品",
+    "variants": [],
+    "plan": {
+      "metric": "margin",
+      "dims": [
+        "商品"
+      ],
+      "time": "近 30 天",
+      "filter": "毛利率 < 18%"
+    },
+    "status": "待重新认证",
+    "cr": "CR-0011",
+    "certifier": "何静",
+    "certifiedAt": "2026-09-30 17:05",
+    "hits": 284,
+    "source": "高频问题推荐",
+    "note": "毛利率将扣除促销补贴（v2 → v3），发布后需重新认证"
+  },
+  {
+    "id": "CQ-016",
+    "question": "各渠道退款率",
+    "variants": [],
+    "plan": {
+      "metric": "refund",
+      "dims": [
+        "渠道"
+      ],
+      "time": "近 30 天"
+    },
+    "status": "待重新认证",
+    "cr": "CR-0010",
+    "certifier": "刘婷",
+    "certifiedAt": "2026-09-08 10:30",
+    "hits": 173,
+    "source": "手动新建",
+    "note": "退款率将由 v2（申请时间）改为 v3（退款完成时间），发布后需按 v3 重新认证"
+  },
+  {
+    "id": "CQ-017",
+    "question": "华东三区本月销售额",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "大区 = 华东三区"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-08 10:05",
+    "hits": 352,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-018",
+    "question": "新店开业 30 天销售额",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "开业后 30 天",
+      "filter": "门店状态 = 新开"
+    },
+    "status": "已认证",
+    "certifier": "陈立军",
+    "certifiedAt": "2026-10-02 11:48",
+    "hits": 143,
+    "source": "反馈纠错"
+  },
+  {
+    "id": "CQ-019",
+    "question": "会员复购客户销售额占比",
+    "variants": [],
+    "plan": {
+      "metric": "repeat",
+      "dims": [
+        "会员等级"
+      ],
+      "time": "上个月"
+    },
+    "status": "已认证",
+    "certifier": "孙浩然",
+    "certifiedAt": "2026-10-14 10:10",
+    "hits": 167,
+    "source": "高频问题推荐"
+  },
+  {
+    "id": "CQ-020",
+    "question": "各城市有效订单数排名",
+    "variants": [],
+    "plan": {
+      "metric": "orders",
+      "dims": [
+        "城市"
+      ],
+      "time": "上周",
+      "sort": "降序"
+    },
+    "status": "已认证",
+    "certifier": "陈立军",
+    "certifiedAt": "2026-09-21 09:40",
+    "hits": 226,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-021",
+    "question": "合肥门店上周销售额",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上周",
+      "filter": "城市 = 合肥"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-10 16:22",
+    "hits": 189,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-022",
+    "question": "生鲜品类毛利率趋势",
+    "variants": [],
+    "plan": {
+      "metric": "margin",
+      "dims": [
+        "周"
+      ],
+      "time": "近 12 周",
+      "filter": "品类 = 生鲜"
+    },
+    "status": "待重新认证",
+    "cr": "CR-0011",
+    "certifier": "何静",
+    "certifiedAt": "2026-10-05 15:00",
+    "hits": 121,
+    "source": "反馈纠错",
+    "note": "毛利率将扣除促销补贴（v2 → v3），发布后需重新认证"
+  },
+  {
+    "id": "CQ-023",
+    "question": "各大区出库及时率",
+    "variants": [],
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "大区"
+      ],
+      "time": "上周"
+    },
+    "status": "已认证",
+    "certifier": "周晓峰",
+    "certifiedAt": "2026-09-27 08:50",
+    "hits": 302,
+    "source": "高频问题推荐"
+  },
+  {
+    "id": "CQ-024",
+    "question": "昨天销售额最高的 5 家门店",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "门店"
+      ],
+      "time": "昨天",
+      "sort": "降序 · 前 5"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-11 09:00",
+    "hits": 845,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-025",
+    "question": "复购客户销售额（含税）按月",
+    "variants": [],
+    "plan": {
+      "metric": "repeat_tax",
+      "dims": [
+        "月份"
+      ],
+      "time": "今年"
+    },
+    "status": "已认证",
+    "certifier": "孙浩然",
+    "certifiedAt": "2026-10-15 10:35",
+    "hits": 88,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-026",
+    "question": "上海门店客单价对比",
+    "variants": [],
+    "plan": {
+      "metric": "atv",
+      "dims": [
+        "门店"
+      ],
+      "time": "上周",
+      "filter": "城市 = 上海"
+    },
+    "status": "待认证",
+    "certifier": "刘婷",
+    "certifiedAt": "2026-10-18 13:40",
+    "hits": 74,
+    "source": "反馈纠错",
+    "note": "客单价（不含税）仍是草稿口径，发布后再认证"
+  },
+  {
+    "id": "CQ-027",
+    "question": "退款金额最高的门店",
+    "variants": [],
+    "plan": {
+      "metric": "refund",
+      "dims": [
+        "门店"
+      ],
+      "time": "上个月",
+      "sort": "降序 · 前 10"
+    },
+    "status": "已停用",
+    "certifier": "刘婷",
+    "certifiedAt": "2026-09-09 14:12",
+    "hits": 64,
+    "source": "高频问题推荐",
+    "note": "与“各渠道退款率”重复，已合并"
+  },
+  {
+    "id": "CQ-028",
+    "question": "线上渠道本月有效订单数",
+    "variants": [],
+    "plan": {
+      "metric": "orders",
+      "dims": [],
+      "time": "本月至今",
+      "filter": "渠道 = 线上"
+    },
+    "status": "已认证",
+    "certifier": "陈立军",
+    "certifiedAt": "2026-09-22 10:20",
+    "hits": 203,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-029",
+    "question": "各品类销售额占比",
+    "variants": [],
+    "plan": {
+      "metric": "gmv",
+      "dims": [
+        "品类"
+      ],
+      "time": "上个月"
+    },
+    "status": "已认证",
+    "certifier": "王敏",
+    "certifiedAt": "2026-10-09 11:05",
+    "hits": 433,
+    "source": "手动新建"
+  },
+  {
+    "id": "CQ-030",
+    "question": "南京门店出库及时率",
+    "variants": [],
+    "plan": {
+      "metric": "ship",
+      "dims": [
+        "门店"
+      ],
+      "time": "近 7 天",
+      "filter": "城市 = 南京"
+    },
+    "status": "已认证",
+    "certifier": "周晓峰",
+    "certifiedAt": "2026-09-28 17:15",
+    "hits": 112,
+    "source": "反馈纠错"
+  }
+]
