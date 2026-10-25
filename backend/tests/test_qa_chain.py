@@ -310,3 +310,32 @@ def test_caliber_violations_longest_match_and_time_hint():
         " where o.status = 'shipped' and o.created_at_biz >= 'x'"
     )
     assert chain.caliber_violations("昨天下单的订单，销售额是多少", ok) == []
+
+
+def test_cap_time_upper_to_now():
+    import datetime as dt
+
+    import sqlglot
+
+    t = sqlglot.parse_one(
+        "select 1 from biz_order o where o.shipped_at >= '2026-10-01' and o.shipped_at < '2026-11-01'::date"
+        " and o.created_at_biz <= '2026-10-02'",
+        read="postgres",
+    )
+    assert chain.cap_time_upper(
+        t, dt.datetime(2026, 10, 25, 15, 42, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    )
+    sql = t.sql(dialect="postgres")
+    assert "o.shipped_at < '2026-10-25 15:42:00'" in sql and "<= '2026-10-02'" in sql
+
+
+async def test_value_anchor_in_prompt_and_empty_result_repair(qa):
+    # 门店名写错 → 0 行 → 回喂一次最接近的真实名称；提示词里有值锚定段
+    fake = use_llm("```sql\nselect s.code from store s where s.name = '上海浦东张江店'\n```")
+    r = await qa.post(URL, json={"question": "浦东张江高科店有几个"})
+    assert r.status_code == 202, r.text
+    assert "上海浦东张江高科店" in fake.prompts[0][0]["content"]
+    assert len(fake.prompts) == 2
+    fix = fake.prompts[1][-1]["content"]
+    assert "查出 0 行" in fix and "上海浦东张江高科店" in fix
+    assert r.json()["turn"]["kind"] == "empty"

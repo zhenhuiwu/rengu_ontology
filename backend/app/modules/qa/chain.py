@@ -35,7 +35,7 @@ from functools import cache
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
@@ -501,7 +501,117 @@ def _time_anchor() -> str:
     )
 
 
+# ---- 值锚定 / 值校验（移植 NVIDIA auto-ontology text_to_sql，Apache-2.0）----
+# 思路来自 agents/proactive_value_check.py（执行前查 WHERE 字面量是不是库里真实取值）和
+# agents/empty_result_value_repair.py（0 行时把近似真实值回喂改一次，只一次）；
+# _string_predicates / _like_predicates 改写自 db_probe/literal_check.py 的同名函数（sqlglot 版）。
+# 本项目的取值规模小（门店、商品几百个），不探库做 DISTINCT，直接拿名称列表在 Python 里比。
+_NAME_COLS = {"store": "name", "product": "name"}
+_ANCHOR_MIN = 2  # 至少连续几个字一样才算提到
+
+
+def _lcs(a: str, b: str) -> int:
+    """最长公共子串长度。"""
+    best, prev = 0, [0] * (len(b) + 1)
+    for ca in a:
+        cur = [0]
+        for j, cb in enumerate(b):
+            cur.append(prev[j] + 1 if ca == cb else 0)
+        best = max(best, *cur)
+        prev = cur
+    return best
+
+
+def _strip_suffix(v: str) -> str:
+    return re.sub(r"(店|门店|分店)$", "", v)
+
+
+async def _names(session: AsyncSession) -> dict[str, list[str]]:
+    out = {}
+    for t, c in _NAME_COLS.items():
+        rows = await session.execute(text(f"SELECT DISTINCT {c} FROM {t}"))  # 常量表名
+        out[t] = [r[0] for r in rows if r[0]]
+    return out
+
+
+def nearest_values(lit: str, values: list[str], k: int = 5) -> list[str]:
+    """跟字面量最像的真实值（按最长公共子串，至少 _ANCHOR_MIN 个字）。"""
+    core = _strip_suffix(lit.strip("%"))
+    scored = [(_lcs(core, v), v) for v in values]
+    top = max((n for n, _ in scored), default=0)
+    if top < _ANCHOR_MIN:
+        return []
+    return [v for n, v in scored if n == top][:k]
+
+
+async def value_anchors(session: AsyncSession, question: str) -> list[str]:
+    """问题里提到的门店 / 商品名 → 库里真实名称（auto-ontology value anchor 思路）。"""
+    out = []
+    for t, vals in (await _names(session)).items():
+        q = re.sub(r"\s", "", question)
+        scored = sorted(((_lcs(q, v), v) for v in vals), reverse=True)  # 带“店”比，简称“张江店”也能对上
+        top = scored[0][0] if scored else 0
+        if top >= 3:  # [推断] 2 个字的放宽试过（2 轮均值降 1），不放
+            hits = [v for n, v in scored if n == top][:5]
+            out.append(f"- {t}.{_NAME_COLS[t]} 最像的真实值：{'、'.join(hits)}")
+    return out
+
+
+def _string_predicates(tree: exp.Expression) -> list[tuple[exp.Column, exp.Literal]]:
+    """正向 = / IN / LIKE 的 (列, 字符串字面量)；否定的不算（同 literal_check）。"""
+    out = []
+    for e in tree.find_all(exp.EQ, exp.In, exp.Like):
+        if isinstance(e.parent, exp.Not) or not isinstance(e.this, exp.Column):
+            continue
+        lits = [e.expression] if not isinstance(e, exp.In) else list(e.expressions or [])
+        out += [(e.this, x) for x in lits if isinstance(x, exp.Literal) and x.is_string]
+    return out
+
+
+async def literal_mismatches(session: AsyncSession, tree: exp.Expression) -> list[str]:
+    """名称列上的字面量对不上真实值时给出候选（empty_result_value_repair 的回喂内容）。"""
+    alias = {t.alias_or_name: t.name for t in tree.find_all(exp.Table)}
+    names = None
+    out = []
+    for col, lit in _string_predicates(tree):
+        table = alias.get(col.table) if col.table else None
+        if table not in _NAME_COLS or col.name != _NAME_COLS[table]:
+            continue
+        names = names or await _names(session)
+        v = lit.this
+        pat = re.compile("^" + re.escape(v).replace("%", ".*").replace("_", ".") + "$")
+        if any(pat.match(x) for x in names[table]):
+            continue
+        if near := nearest_values(v, names[table]):
+            out.append(f"{table}.{col.name} = '{v}' 在库里不存在，最接近的真实值：{'、'.join(near)}")
+    return out
+
+
+def cap_time_upper(tree: exp.Expression, now: datetime) -> bool:
+    """时间列 < / <= 字面量 晚于当前时间时改成当前时间（任何窗口上界不超过现在）。返回是否改了。"""
+    cur = f"{now:%Y-%m-%d %H:%M:%S}"
+    changed = False
+    for e in list(tree.find_all(exp.LT, exp.LTE)):
+        if not (isinstance(e.this, exp.Column) and e.this.name in _TIME_COLS):
+            continue
+        lit = e.expression
+        node = lit.this if isinstance(lit, exp.Cast) else lit
+        if not (isinstance(node, exp.Literal) and node.is_string):
+            continue
+        try:
+            v = datetime.fromisoformat(node.this.strip()).replace(tzinfo=None)
+        except ValueError:
+            continue
+        if v > now.replace(tzinfo=None):
+            e.set("expression", exp.Literal.string(cur))
+            if isinstance(e, exp.LTE):
+                e.replace(exp.LT(this=e.this, expression=e.expression))
+            changed = True
+    return changed
+
+
 _DOC_TITLES = {
+    "anchors": "问题里提到的门店 / 商品（库里真实名称：写 WHERE 照抄；只对上一家就直接用，不要反问）",
     "caliber": "口径裁定（qa 裁定，跟“指标口径”冲突时以这里为准）",
     "refuse": "拒答清单（问到这些直接拒答，不写 SQL）",
     "filters": "过滤列（按表）",
@@ -634,9 +744,10 @@ async def answer(
     """
     t0 = time.monotonic()
     ctx = await build_context(session)
+    ctx["anchors"] = await value_anchors(session, question)
     messages = build_prompt(question, ctx)
     limit = ROW_LIMIT
-    attempt, checked = 0, False
+    attempt, checked, repaired = 0, False, False
     while True:
         reply = await llm.generate_sql(messages)
         intent, val = parse_intent(reply)
@@ -661,12 +772,13 @@ async def answer(
                     },
                 ]
                 continue
+        if cap_time_upper(tree, clock.local_now()):
+            sql = tree.sql(dialect=DIALECT)
         try:
             async with conn.begin_nested():  # savepoint：执行报错不弄坏连接上的事务
                 res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
                 keys = list(res.keys())
                 rows = [[_cell(v) for v in r] for r in res.fetchall()]
-            break
         except DBAPIError as e:
             state = getattr(e.orig, "sqlstate", None) or getattr(e.orig, "pgcode", None)
             if state == PG_QUERY_CANCELED:  # statement_timeout：不重试，504
@@ -681,6 +793,23 @@ async def answer(
                 {"role": "assistant", "content": reply},
                 {"role": "user", "content": f"上面的 SQL 执行报错：{err}\n请修正后只输出一条 SQL。"},
             ]
+            continue
+        # 0 行：名称字面量对不上真实值时回喂一次（empty_result_value_repair，只一次；仍为空就照常返回空）
+        if not rows and not repaired:
+            repaired = True
+            if bad := await literal_mismatches(session, tree):
+                messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": "上面的 SQL 查出 0 行："
+                        + "；".join(bad)
+                        + "。请改用真实值后只输出一条 SQL。",
+                    },
+                ]
+                continue
+        break
     truncated = len(rows) > limit
     rows = _label_rows(rows[:limit])
     elapsed = int((time.monotonic() - t0) * 1000)
