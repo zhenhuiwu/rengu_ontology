@@ -66,8 +66,7 @@ class _Base:
 
 
 class ObjectTypesSection(_Base):
-    """objectTypes：{对象 id: 定义}。对象类型没有 since，seed 时各版本内容相同（前端历史模式下不变，§2.7）；
-    发布后按版本各存一份，读 ?ver= 时取该版这一节。"""
+    """objectTypes：{对象 id: 定义}。对象类型没有 since，读历史版本返回当前（§2.7）。"""
 
     section = "objectTypes"
 

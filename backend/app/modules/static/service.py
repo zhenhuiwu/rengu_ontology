@@ -1,15 +1,9 @@
 """静态本体只读接口的取数：按前端页面的筛选 / 分页规则在内存里做（定义数据量小）。
 
 - 列表 / 详情记录 = mock 记录（shapes.py），键名、可选键与 mock 一致。
-- `?ver=`（static-api.md §2.7）：版本不存在 404；对象类型（列表 / 简表 / 详情）、属性、指标（列表 / 详情）、
-  关系、维度、业务知识按该版本快照里的定义返回，排序跟当前表一致（快照独有的排在后面）。
-  运行数据从当前表补（§2.8）：对象记录数 / 截止时间 / 问数统计（cards、qa30、unused）、指标当前值
-  （value / prev / updatedAt）、关系质量 / 使用情况、维度使用情况、知识引用、对象使用情况。
-  快照里没有这一节（例如该版本早于静态登记 section）时按当前表 + §2.7 规则现算（对象、属性、指标的规则是
-  「与当前一致」，即直接用当前表）[推断]。
-  不进快照、看历史版本仍返回当前的 [推断]：字段映射（mapping 列不在 properties 节）、指标的定义行 / 允许维度 /
-  不允许维度（def / dims / disallowed 不在 metrics 节）、指标口径版本列表（前端 Metrics.vue 历史模式下
-  照常显示整张 VERSIONS，不按 ver 裁剪）。
+- `?ver=`（static-api.md §2.7）：版本不存在 404；关系、维度、业务知识按该版本快照里的定义返回，
+  运行数据（关系质量 / 使用情况、维度使用情况、知识引用）从当前表补（§2.8）；对象类型、属性、指标返回当前。
+  快照里没有这一节（例如该版本早于静态登记 section）时按当前表 + §2.7 规则现算 [推断]。
 - `?previewAs=`：定义类数据不按人裁剪，原样返回 [推断]。
 """
 
@@ -112,20 +106,18 @@ class StaticService:
         self.session = session
         self.ctx = ctx
         self.repo = StaticRepo(session)
-        self._snap: Obj | None = None
 
     @property
     def ver(self) -> str | None:
         return self.ctx.ver
 
     async def _section(self, name: str) -> Obj | None:
-        """?ver= 时取该版本快照的一节；版本不存在 404。快照在一次请求内只读一次。"""
+        """?ver= 时取该版本快照的一节；版本不存在 404。"""
         if not self.ver:
             return None
-        if self._snap is None:
-            await ReleaseRepo(self.session).by_ver_or_404(self.ver)
-            self._snap = await VersioningService().get_snapshot(self.session, self.ver) or {}
-        return self._snap.get(name)
+        await ReleaseRepo(self.session).by_ver_or_404(self.ver)
+        snap = await VersioningService().get_snapshot(self.session, self.ver) or {}
+        return snap.get(name)
 
     async def _check_ver(self) -> None:
         if self.ver:
@@ -133,124 +125,34 @@ class StaticService:
 
     # ================================================================ 对象类型
 
-    async def _object_defs(self) -> list[tuple[Obj, Any]] | None:
-        """?ver= 且快照有 objectTypes 节：[(该版本的对象定义, 当前表的行或 None)]，按当前表排序。
-        不带 ver 或快照没有这一节时返回 None，调用方直接用当前表。"""
-        sec = await self._section("objectTypes")
-        if sec is None:
-            return None
-        objs = {o.code: o for o in await self.repo.object_types()}
-        return [(d, objs.get(i)) for i, d in in_order(sec, [{"id": c} for c in objs])]
-
-    async def _object_def(self, oid: str) -> tuple[Obj, Any] | None:
-        defs = await self._object_defs()
-        if defs is None:
-            return None
-        for d, o in defs:
-            if d["id"] == oid:
-                return d, o
-        raise NotFound("对象类型不存在", details={"id": oid, "ver": self.ver})
-
-    async def _snap_props(self, oid: str, o: Any) -> list[Obj] | None:
-        """该版本快照里对象的属性，按当前表属性顺序（快照独有的排在后面）；
-        快照没有 properties 节返回 None。"""
-        sec = await self._section("properties")
-        if sec is None:
-            return None
-        props = sec.get(oid) or {}
-        cur = [{"id": p.api_name} for p in o.properties] if o is not None else []
-        return [p for _, p in in_order(props, cur)]
-
-    @staticmethod
-    def _brief_from_def(d: Obj, o: Any) -> Obj:
-        """Q_OBJECT_TYPES 一项：定义取快照，count / cutoff 是运行数据取当前表。"""
-        return shapes.opt(
-            {"key": d["id"], "name": d["name"], "api": d["api"], "group": d["group"]},
-            source=d.get("source"),
-            count=o.record_count if o is not None else None,
-            owner=d.get("owner"),
-            pk=d.get("pk"),
-            cutoff=shapes.fmt_dt(o.data_cutoff) if o is not None else None,
-        )
-
-    @staticmethod
-    def _link_obj_from_def(d: Obj) -> Obj:
-        return shapes.opt(
-            {"id": d["id"], "name": d["name"], "api": d["api"], "group": d["group"]}, table=d.get("table")
-        )
-
     async def object_list(self, kw: str, page: int, size: int) -> Obj:
         await self._check_ver()
         counts = await self.repo.prop_counts()
-        defs = await self._object_defs()
-        if defs is None:
-            items = [shapes.object_list_item(o, counts.get(o.id, 0)) for o in await self.repo.object_types()]
-        else:
-            psec = await self._section("properties")
-            items = []
-            for d, o in defs:
-                if psec is not None:
-                    n = len(psec.get(d["id"]) or {})
-                else:
-                    n = counts.get(o.id, 0) if o is not None else 0
-                x = self._link_obj_from_def(d)
-                rc = o.record_count if o is not None else None
-                x.update(props=n, count=f"{rc:,}" if rc is not None else "--", status=d["status"])
-                items.append(x)
+        items = [shapes.object_list_item(o, counts.get(o.id, 0)) for o in await self.repo.object_types()]
         if kw:
             items = [x for x in items if kw in x["name"] or kw.lower() in x["api"].lower()]
         return paginate(items, page, size)
 
     async def object_brief(self) -> list[Obj]:
-        await self._check_ver()
-        defs = await self._object_defs()
-        if defs is None:
-            return [shapes.object_brief(o) for o in await self.repo.object_types()]
-        return [self._brief_from_def(d, o) for d, o in defs]
+        return [shapes.object_brief(o) for o in await self.repo.object_types()]
 
     async def object_detail(self, oid: str) -> Obj:
         await self._check_ver()
-        hit = await self._object_def(oid)
-        if hit is None:
-            o = await self.repo.object_type(oid)
-            d = shapes.object_link_obj(o)
-            d.update(
-                status=o.status.value,
-                meta=shapes.object_meta(o),
-                brief=shapes.object_brief(o),
-                props=[shapes.prop(p) for p in o.properties],
-                db=shapes.db_of(o.datasource_name),
-            )
-            return d
-        snap, o = hit
-        meta = {k: snap[k] for k in ("domain", "desc", "conflict", "lifecycle", "sync", "qs")}
-        cur_meta = shapes.object_meta(o) if o is not None else {}
-        meta.update({k: cur_meta.get(k) for k in ("cards", "qa30", "unused")})  # 问数统计：运行数据
-        props = await self._snap_props(oid, o)
-        if props is None:
-            props = [shapes.prop(p) for p in o.properties] if o is not None else []
-        d = self._link_obj_from_def(snap)
+        o = await self.repo.object_type(oid)
+        d = shapes.object_link_obj(o)
         d.update(
-            status=snap["status"],
-            meta=meta,
-            brief=self._brief_from_def(snap, o),
-            props=props,
-            db=shapes.db_of(snap.get("source")),
+            status=o.status.value,
+            meta=shapes.object_meta(o),
+            brief=shapes.object_brief(o),
+            props=[shapes.prop(p) for p in o.properties],
+            db=shapes.db_of(o.datasource_name),
         )
         return d
 
     async def object_properties(self, oid: str, kw: str, page: int, size: int) -> Obj:
         await self._check_ver()
-        hit = await self._object_def(oid)
-        if hit is None:
-            o = await self.repo.object_type(oid)
-        else:
-            o = hit[1]
-        items = await self._snap_props(oid, o) if self.ver else None
-        if items is None:
-            if o is None:
-                raise NotFound("对象类型不存在", details={"id": oid, "ver": self.ver})
-            items = [shapes.prop(p) for p in o.properties]
+        o = await self.repo.object_type(oid)
+        items = [shapes.prop(p) for p in o.properties]
         if kw:
             items = [p for p in items if kw in p["name"] or kw in p["api"]]
         out = paginate(items, page, size)
@@ -259,8 +161,7 @@ class StaticService:
 
     async def object_links(self, oid: str) -> list[Obj]:
         """ObjectTypes.vue:154：当前对象作为源端的已发布关系（历史版本再按 since ≤ V）。"""
-        if await self._object_def(oid) is None:
-            await self.repo.object_type(oid)
+        await self.repo.object_type(oid)
         links = await self._links()
         return [x for x in links if x["from"] == oid and x["status"] == "已发布"]
 
@@ -368,21 +269,9 @@ class StaticService:
 
     # ================================================================ 指标
 
-    async def _metric_defs(self) -> list[tuple[Obj, Any]] | None:
-        """?ver= 且快照有 metrics 节：[(该版本的指标定义, 当前表的行或 None)]，按当前表排序；否则 None。"""
-        sec = await self._section("metrics")
-        if sec is None:
-            return None
-        cur = {m.code: m for m in await self.repo.metrics()}
-        return [(d, cur.get(i)) for i, d in in_order(sec, [{"id": c} for c in cur])]
-
     async def metric_list(self, kw: str, group: str, page: int, size: int) -> Obj:
         await self._check_ver()
-        defs = await self._metric_defs()
-        if defs is None:
-            items = [shapes.metric_list_item(m) for m in await self.repo.metrics()]
-        else:
-            items = [{k: v for k, v in d.items() if k not in ("formula", "dimNames")} for d, _ in defs]
+        items = [shapes.metric_list_item(m) for m in await self.repo.metrics()]
         items = [
             m
             for m in items
@@ -393,31 +282,9 @@ class StaticService:
 
     async def metric_detail(self, mid: str) -> Obj:
         await self._check_ver()
-        defs = await self._metric_defs()
-        if defs is None:
-            return shapes.metric_detail(await self.repo.metric(mid))
-        hit = next(((d, m) for d, m in defs if d["id"] == mid), None)
-        if hit is None:
-            raise NotFound("指标不存在", details={"id": mid, "ver": self.ver})
-        snap, m = hit
-        d = {k: v for k, v in snap.items() if k not in ("formula", "dimNames")}
-        # 定义行 / 允许维度 / 不允许维度不在 metrics 节，取当前表 [推断]
-        d["def"] = list(m.def_rows) if m is not None else []
-        d["dims"] = list(m.dim_rows) if m is not None else []
-        d["disallowed"] = list(m.disallowed_rows) if m is not None else []
-        if "formula" in snap:
-            s = shapes.metric_stat(m) if m is not None and m.formula is not None else {}
-            d.update(
-                formula=snap["formula"],
-                dimNames=snap["dimNames"],
-                value=s.get("value"),
-                prev=s.get("prev"),
-                updatedAt=s.get("updatedAt"),
-            )
-        return d
+        return shapes.metric_detail(await self.repo.metric(mid))
 
     async def metric_versions(self, mid: str, page: int, size: int) -> Obj:
-        """口径版本列表不按 ver 裁剪：前端 Metrics.vue 历史模式下照常显示整张 VERSIONS [推断]。"""
         await self._check_ver()
         return paginate(list((await self.repo.metric(mid)).version_rows), page, size, key="v")
 
