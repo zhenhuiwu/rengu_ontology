@@ -2,6 +2,8 @@
  * API 密钥示例数据（PDE工程师）：46 个密钥，固定种子。
  * 密钥明文只在创建时显示一次；列表里只有前缀 + 后 4 位。
  * 状态：有效 / 即将过期（30 天内）/ 已过期 / 已吊销。今天按 2026-10-25。
+ * 每个密钥都绑定身份 + 数据范围：绑定角色（按角色的行级范围查询），或绑定服务账号 + 显式数据范围。
+ * 用密钥执行动作时，发起人记为“API 密钥 bi-sync-prod（服务账号 svc_bi_sync）”。
  */
 import { seeded } from './format';
 import { ADMIN_USERS } from './admin';
@@ -9,7 +11,27 @@ import { ADMIN_USERS } from './admin';
 export const KEY_SCOPES = ['问数查询', '对象读取', '指标读取', '动作执行', '数据导出', '元数据读取', 'Webhook 回调'] as const;
 export type KeyScope = (typeof KEY_SCOPES)[number];
 export type KeyStatus = '有效' | '即将过期' | '已过期' | '已吊销';
+/** 身份绑定：kind = 角色 时 role 为角色名（mock/roles.ts ROLES），scope 为该角色的行级范围摘要；kind = 服务账号 时 account + scope 必填 */
+export interface KeyBinding { kind: '角色' | '服务账号'; role?: string; account?: string; scope: string }
+export const SERVICE_ACCOUNTS = ['svc_bi_sync', 'svc_report', 'svc_crm_sync', 'svc_wms_cb', 'svc_oms_push', 'svc_bot', 'svc_export', 'svc_ml_feature', 'svc_erp', 'svc_ops_monitor'];
+export const SA_SCOPES = ['大区 = 华东', '大区 = 华南', '大区 = 华东、华南', '大区 = 华东、华中', '门店 = 上海徐汇店', '品类 = 生鲜、乳品烘焙', '仅元数据（不读业务数据）'];
+export const bindingText = (b: KeyBinding) => (b.kind === '角色' ? `以 ${b.role} 角色查询 · ${b.scope}` : `以 服务账号 ${b.account} 查询 · ${b.scope}`);
+export const keyActor = (k: { name: string; binding: KeyBinding }) => `API 密钥 ${k.name}（${k.binding.kind === '角色' ? `角色 ${k.binding.role}` : `服务账号 ${k.binding.account}`}）`;
+const R = (role: string, scope: string): KeyBinding => ({ kind: '角色', role, scope });
+const SA = (account: string, scope: string): KeyBinding => ({ kind: '服务账号', account, scope });
+/** 按调用方系统固定绑定；-v2 / -bak 沿用原系统的绑定 */
+const BINDINGS: Record<string, KeyBinding> = {
+  'bi-sync-prod': SA('svc_bi_sync', '大区 = 华东'), 'fanruan-report': R('数据分析师', '大区 = 华东、华南'), 'crm-member-sync': SA('svc_crm_sync', '大区 = 华东、华中'),
+  'wms-callback': SA('svc_wms_cb', '仅元数据（不读业务数据）'), 'oms-status-push': SA('svc_oms_push', '大区 = 华东'), 'dingtalk-bot': R('业务查看', '大区 = 华东'),
+  'pos-daily-export': SA('svc_export', '大区 = 华东、华南'), 'tableau-extract': R('数据分析师', '大区 = 华东、华南'), 'ml-feature-pull': SA('svc_ml_feature', '大区 = 华东'),
+  'erp-replenish': R('动作审批人', '大区 = 华东'), 'mini-program-qa': R('业务查看', '大区 = 华东'), 'store-dashboard': R('门店店长', '门店 = 上海徐汇店'),
+  'finance-recon': R('数据分析师', '大区 = 华东、华南'), 'supplier-portal': SA('svc_erp', '品类 = 生鲜、乳品烘焙'), 'price-engine': SA('svc_erp', '大区 = 华东'),
+  'coupon-service': R('会员运营', '大区 = 华东、华中'), 'risk-audit': R('数据分析师', '大区 = 华东、华南'), 'data-lake-ingest': SA('svc_bi_sync', '大区 = 华东、华南'),
+  'sms-webhook': SA('svc_bot', '仅元数据（不读业务数据）'), 'wecom-agent': SA('svc_bot', '大区 = 华东'), 'ops-monitor': SA('svc_ops_monitor', '仅元数据（不读业务数据）'),
+  'uat-smoke-test': R('业务查看', '大区 = 华东'),
+};
 export interface ApiKey {
+  binding: KeyBinding;
   id: string; name: string; prefix: string; last4: string; env: '生产' | '测试';
   scopes: KeyScope[]; creator: string; createdAt: string; lastUsed: string | null; lastIp: string | null;
   expiresAt: string | null; status: KeyStatus; calls7d: number; ipAllow: string[]; revokedAt?: string; revokedBy?: string;
@@ -44,7 +66,7 @@ export const API_KEYS: ApiKey[] = (() => {
     const used = active && r() > 0.08 ? TODAY + 17 * 3600000 - Math.floor(r() * 3 * DAY) : status === '有效' ? null : created + Math.floor(r() * 60) * DAY;
     const name = i < NAMES.length ? NAMES[i] : `${NAMES[i % NAMES.length]}-${i < 30 ? 'v2' : 'bak'}`;
     out.push({
-      id: `AK-${pad(1001 + i, 4)}`, name, env,
+      id: `AK-${pad(1001 + i, 4)}`, name, env, binding: { ...BINDINGS[NAMES[i % NAMES.length]] },
       prefix: `sk_${env === '生产' ? 'live' : 'test'}_${hex(4)}`, last4: hex(4),
       scopes: SCOPE_SETS[i % SCOPE_SETS.length], creator: creators[i % creators.length] ?? '王敏',
       createdAt: t2s(created + 9 * 3600000 + Math.floor(r() * 9 * 3600000)),

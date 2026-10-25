@@ -4,6 +4,8 @@
  * 列表（full 分页，一屏 18 行）：名称、掩码密钥（前缀 + 后 4 位）、权限范围、创建人、最近使用、到期、状态；筛选写在 URL。
  * 新建在抽屉里（?form=create，可 &from=AK-xxxx 复制已有密钥的配置）；生成后密钥明文只显示这一次，带复制按钮，确认已保存才能关闭。
  * 详情抽屉（?key=AK-xxxx）：配置和最近调用（simple 分页）。吊销走统一确认卡，不可恢复。
+ * 每个密钥必须绑定身份 + 数据范围（角色，或服务账号 + 数据范围），新建时缺少则不能生成；详情显示“以 xx 角色查询 · 大区 = 华东”。
+ * 颜色：状态码非 200 都是失败（红）；即将过期 灰点 + 文字（橙色只用于 待确认 / 结果未知）。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -15,7 +17,8 @@ import { useReadonly } from '@/composables/useReadonly';
 import { confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate, fmtInt, EMPTY } from '@/mock';
-import { API_KEYS, KEY_SCOPES, keyCalls, newSecret, type ApiKey, type KeyScope, type KeyStatus } from '@/mock/apikeys';
+import { API_KEYS, KEY_SCOPES, SERVICE_ACCOUNTS, SA_SCOPES, bindingText, keyActor, keyCalls, newSecret, type ApiKey, type KeyBinding, type KeyScope, type KeyStatus } from '@/mock/apikeys';
+import { ROLES } from '@/mock/roles';
 
 const route = useRoute();
 const router = useRouter();
@@ -26,7 +29,16 @@ const confirm = useConfirmStore();
 const TODAY = '2026-10-25';
 const nowStr = '2026-10-25 17:20';
 
-const keys = ref<ApiKey[]>(API_KEYS.map((k) => ({ ...k })));
+/** 角色绑定的数据范围取角色的行级范围（mock/roles.ts），只列有行级范围的角色；不限范围的角色不能绑定密钥 */
+const roleScope = (name?: string) => {
+  const role = ROLES.find((r) => r.name === name);
+  if (!role || !role.scopes.length) return '';
+  const seen = new Set<string>();
+  return role.scopes.filter((x) => { const v = x.values.join('、'); if (seen.has(v)) return false; seen.add(v); return true; }).map((x) => `${x.prop} ${x.op} ${x.values.join('、')}`).join('；');
+};
+const BIND_ROLES = ROLES.filter((r) => r.scopes.length).map((r) => r.name);
+const withScope = (b: KeyBinding): KeyBinding => (b.kind === '角色' ? { ...b, scope: roleScope(b.role) || b.scope } : b);
+const keys = ref<ApiKey[]>(API_KEYS.map((k) => ({ ...k, binding: withScope(k.binding) })));
 const mask = (k: ApiKey) => `${k.prefix}****${k.last4}`;
 const daysLeft = (d: string) => Math.round((new Date(d).getTime() - new Date(TODAY).getTime()) / 86400000);
 
@@ -42,12 +54,13 @@ const rows = computed(() => keys.value.filter((k) =>
   && (!kw.value || `${k.name} ${k.prefix} ${k.creator} ${k.id}`.toLowerCase().includes(kw.value.trim().toLowerCase()))));
 const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
 const count = (s: KeyStatus) => keys.value.filter((k) => k.status === s).length;
-// 状态：有效 灰；即将过期 橙；已过期 红；已吊销 灰（文字淡）
-const badge = (s: KeyStatus) => (s === '即将过期' ? 'warning' : s === '已过期' ? 'error' : 'default');
+// 状态：有效 / 即将过期 灰（即将过期另写剩余天数）；已过期 红；已吊销 灰（文字淡）
+const badge = (s: KeyStatus) => (s === '已过期' ? 'error' : 'default');
 const columns = [
   { title: '名称', key: 'name', width: 190, ellipsis: true },
   { title: '密钥', key: 'key', width: 170 },
   { title: '权限范围', key: 'scopes' },
+  { title: '绑定身份', key: 'binding', width: 150, ellipsis: true },
   { title: '创建人', dataIndex: 'creator', key: 'creator', width: 80 },
   { title: '创建时间', key: 'createdAt', width: 140 },
   { title: '最近使用', key: 'lastUsed', width: 140 },
@@ -63,6 +76,7 @@ async function revoke(k: ApiKey) {
     title: '吊销 API 密钥', target: `${k.name}（${mask(k)}）`, okText: '吊销', danger: true, irreversible: true,
     fields: [
       { label: '权限范围', value: k.scopes.join('、') },
+      { label: '绑定身份', value: bindingText(k.binding) },
       { label: '最近使用', value: k.lastUsed ? `${k.lastUsed}（${k.lastIp}）` : '从未使用' },
       { label: '近 7 天调用', value: `${fmtInt(k.calls7d)} 次` },
     ],
@@ -82,32 +96,47 @@ watch(() => q('key'), () => { cpage.value = 1; });
 const cpaged = computed(() => paginate(calls.value, { page: cpage.value, size: CSIZE }));
 
 // 新建抽屉
-interface Form { name: string; env: '生产' | '测试'; scopes: KeyScope[]; life: string; ip: string; note: string }
-const blank = (): Form => ({ name: '', env: '生产', scopes: [], life: '90', ip: '', note: '' });
+interface Form { name: string; env: '生产' | '测试'; scopes: KeyScope[]; bindKind: '角色' | '服务账号'; role?: string; account?: string; saScope?: string; life: string; ip: string; note: string }
+const blank = (): Form => ({ name: '', env: '生产', scopes: [], bindKind: '角色', role: undefined, account: undefined, saScope: undefined, life: '90', ip: '', note: '' });
 const form = reactive<Form>(blank());
 const formSnap = ref('');
 const createOpen = computed(() => q('form') === 'create');
 const secret = ref<{ key: ApiKey; text: string } | null>(null);
 const saved = ref(false);
+const tried = ref(false); // 点过“生成密钥”才显示必填红字
 watch(createOpen, (open) => {
   if (!open) return;
-  secret.value = null; saved.value = false;
+  secret.value = null; saved.value = false; tried.value = false;
   Object.assign(form, blank());
   const src = keys.value.find((k) => k.id === q('from'));
-  if (src) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
+  if (src) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], bindKind: src.binding.kind, role: src.binding.role, account: src.binding.account, saScope: src.binding.kind === '服务账号' ? src.binding.scope : undefined, ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
   formSnap.value = JSON.stringify(blank());
 }, { immediate: true });
 const formDirty = computed(() => createOpen.value && !secret.value && JSON.stringify(form) !== formSnap.value);
 const nameOk = computed(() => /^[a-z0-9][a-z0-9-]{2,39}$/.test(form.name));
 const nameTaken = computed(() => keys.value.some((k) => k.name === form.name && k.status !== '已吊销'));
-const canCreate = computed(() => nameOk.value && !nameTaken.value && form.scopes.length > 0 && !readonly.value);
+const formBinding = computed<KeyBinding | null>(() => (form.bindKind === '角色'
+  ? (form.role ? { kind: '角色', role: form.role, scope: roleScope(form.role) } : null)
+  : (form.account && form.saScope ? { kind: '服务账号', account: form.account, scope: form.saScope } : null)));
+const formErrors = computed(() => {
+  const e: string[] = [];
+  if (!nameOk.value) e.push('请填写名称（小写字母、数字和短横线，3–40 个字符）');
+  else if (nameTaken.value) e.push('已有同名的有效密钥');
+  if (!form.scopes.length) e.push('请至少勾选一项权限范围');
+  if (form.bindKind === '角色' && !form.role) e.push('请绑定角色：密钥按角色的数据范围查询');
+  if (form.bindKind === '服务账号' && !form.account) e.push('请选择服务账号');
+  if (form.bindKind === '服务账号' && !form.saScope) e.push('请为服务账号选择数据范围');
+  return e;
+});
+const canCreate = computed(() => !formErrors.value.length && !readonly.value);
 const LIFE = [{ value: '30', label: '30 天' }, { value: '90', label: '90 天（推荐）' }, { value: '180', label: '180 天' }, { value: '365', label: '1 年' }, { value: '0', label: '永不过期（不推荐）' }];
 const addDays = (n: number) => { const d = new Date(TODAY); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 function create() {
-  if (!canCreate.value) return;
+  tried.value = true;
+  if (!canCreate.value || !formBinding.value) return;
   const text = newSecret(form.env, keys.value.length * 97 + form.name.length);
   const k: ApiKey = {
-    id: `AK-${1001 + keys.value.length}`, name: form.name, env: form.env, prefix: text.slice(0, 12), last4: text.slice(-4),
+    id: `AK-${1001 + keys.value.length}`, name: form.name, env: form.env, binding: formBinding.value, prefix: text.slice(0, 12), last4: text.slice(-4),
     scopes: [...form.scopes], creator: '王敏', createdAt: nowStr, lastUsed: null, lastIp: null,
     expiresAt: form.life === '0' ? null : addDays(Number(form.life)), status: '有效', calls7d: 0,
     ipAllow: form.ip.split(/\s+/).filter(Boolean),
@@ -140,7 +169,7 @@ async function closeCreate() {
     <div class="panel-head">
       <span class="ak-sum">
         <span class="t-16 fw-600">API 密钥</span>
-        <span class="t-12 c-2">有效 <span class="num c-1">{{ count('有效') }}</span> · 即将过期 <span class="num tl-attention">{{ count('即将过期') }}</span> · 已过期 <span class="num c-1">{{ count('已过期') }}</span> · 已吊销 <span class="num c-1">{{ count('已吊销') }}</span></span>
+        <span class="t-12 c-2">有效 <span class="num c-1">{{ count('有效') }}</span> · 即将过期 <span class="num c-1">{{ count('即将过期') }}</span> · 已过期 <span class="num c-1">{{ count('已过期') }}</span> · 已吊销 <span class="num c-1">{{ count('已吊销') }}</span></span>
       </span>
       <a-space>
         <a-select v-model:value="statusF" size="small" class="ak-w120" :options="['全部', '有效', '即将过期', '已过期', '已吊销'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
@@ -154,11 +183,12 @@ async function closeCreate() {
           <span v-if="column.key === 'name'" class="ak-name"><a class="num" @click="setQuery({ key: record.id })">{{ record.name }}</a><a-tag v-if="record.env === '测试'" class="ak-env">测试</a-tag></span>
           <span v-else-if="column.key === 'key'" class="num c-2">{{ mask(record) }}</span>
           <span v-else-if="column.key === 'scopes'" class="ak-scopes"><a-tag v-for="s in record.scopes" :key="s">{{ s }}</a-tag></span>
+          <span v-else-if="column.key === 'binding'" class="c-2">{{ record.binding.kind === '角色' ? record.binding.role : record.binding.account }}</span>
           <span v-else-if="column.key === 'createdAt'" class="num c-2">{{ record.createdAt }}</span>
           <span v-else-if="column.key === 'lastUsed'" class="num" :class="record.lastUsed ? 'c-2' : 'c-3'">{{ record.lastUsed ?? '从未使用' }}</span>
           <span v-else-if="column.key === 'expires'" class="num">
             <template v-if="!record.expiresAt"><span class="c-3">永不过期</span></template>
-            <template v-else>{{ record.expiresAt }}<span v-if="record.status === '即将过期'" class="t-12 tl-attention"> 剩 {{ daysLeft(record.expiresAt) }} 天</span></template>
+            <template v-else>{{ record.expiresAt }}<span v-if="record.status === '即将过期'" class="t-12 c-2"> 剩 {{ daysLeft(record.expiresAt) }} 天</span></template>
           </span>
           <a-badge v-else-if="column.key === 'status'" :status="badge(record.status)" :text="record.status" :class="{ 'ak-off': record.status === '已吊销' }" />
           <span v-else-if="column.key === 'calls'" class="num" :class="record.calls7d ? 'c-1' : 'c-3'">{{ record.calls7d ? fmtInt(record.calls7d) : EMPTY }}</span>
@@ -185,6 +215,8 @@ async function closeCreate() {
         <a-descriptions-item label="环境">{{ detail.env }}</a-descriptions-item>
         <a-descriptions-item label="到期"><span class="num">{{ detail.expiresAt ?? '永不过期' }}</span></a-descriptions-item>
         <a-descriptions-item label="权限范围" :span="2">{{ detail.scopes.join('、') }}</a-descriptions-item>
+        <a-descriptions-item label="身份与数据范围" :span="2">{{ bindingText(detail.binding) }}</a-descriptions-item>
+        <a-descriptions-item v-if="detail.scopes.includes('动作执行')" label="动作发起人" :span="2">{{ keyActor(detail) }}<span class="t-12 c-3"> · 动作中心执行记录的发起人这样显示</span></a-descriptions-item>
         <a-descriptions-item label="IP 白名单" :span="2"><span class="num">{{ detail.ipAllow.join('、') || '不限制' }}</span></a-descriptions-item>
         <a-descriptions-item label="创建"><span class="num">{{ detail.createdAt }}</span> · {{ detail.creator }}</a-descriptions-item>
         <a-descriptions-item label="最近使用"><span class="num">{{ detail.lastUsed ? `${detail.lastUsed} · ${detail.lastIp}` : '从未使用' }}</span></a-descriptions-item>
@@ -195,7 +227,7 @@ async function closeCreate() {
         :columns="[{ title: '时间', key: 'time', width: 170 }, { title: '接口', dataIndex: 'api', key: 'api', ellipsis: true }, { title: '状态码', key: 'code', width: 80 }, { title: '耗时', key: 'ms', width: 80, align: 'right' }]">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'time'" class="num c-2">{{ record.time }}</span>
-          <span v-else-if="column.key === 'code'" class="num" :class="record.code === 200 ? 'tl-normal' : record.code === 429 ? 'tl-attention' : 'tl-failed'">{{ record.code }}</span>
+          <span v-else-if="column.key === 'code'" class="num" :class="record.code === 200 ? 'tl-normal' : 'tl-failed'">{{ record.code }}</span>
           <span v-else-if="column.key === 'ms'" class="num">{{ record.ms }} ms</span>
         </template>
       </a-table>
@@ -221,6 +253,21 @@ async function closeCreate() {
         <a-form-item label="权限范围" required help="按最小权限勾选；“动作执行”还要满足动作类型的提交条件">
           <a-checkbox-group v-model:value="form.scopes" :options="[...KEY_SCOPES]" />
         </a-form-item>
+        <a-form-item label="绑定身份" required class="ak-mb8">
+          <a-radio-group v-model:value="form.bindKind" :options="[{ value: '角色', label: '绑定角色' }, { value: '服务账号', label: '服务账号 + 数据范围' }]" option-type="button" />
+        </a-form-item>
+        <a-form-item v-if="form.bindKind === '角色'" :validate-status="tried && !form.role ? 'error' : undefined"
+          :help="form.role ? `数据范围：${roleScope(form.role)}（取角色的行级范围）` : tried ? '请绑定角色' : '密钥按角色的功能权限和行级数据范围查询；不限范围的角色不能绑定'">
+          <a-select v-model:value="form.role" placeholder="选择角色" :options="BIND_ROLES.map((v) => ({ value: v, label: v }))" />
+        </a-form-item>
+        <template v-else>
+          <a-form-item :validate-status="tried && !form.account ? 'error' : undefined" :help="tried && !form.account ? '请选择服务账号' : undefined" class="ak-mb8">
+            <a-select v-model:value="form.account" placeholder="选择服务账号" class="num" :options="SERVICE_ACCOUNTS.map((v) => ({ value: v, label: v }))" />
+          </a-form-item>
+          <a-form-item :validate-status="tried && !form.saScope ? 'error' : undefined" :help="tried && !form.saScope ? '请选择数据范围' : '服务账号没有角色范围，必须显式指定可查询的数据'">
+            <a-select v-model:value="form.saScope" placeholder="选择数据范围" :options="SA_SCOPES.map((v) => ({ value: v, label: v }))" />
+          </a-form-item>
+        </template>
         <a-form-item label="有效期"><a-select v-model:value="form.life" :options="LIFE" /></a-form-item>
         <a-form-item label="IP 白名单" help="每行一个 IP 或网段；留空表示不限制"><a-textarea v-model:value="form.ip" :rows="3" class="num" placeholder="10.12.0.0/16" /></a-form-item>
         <a-form-item label="备注"><a-input v-model:value="form.note" /></a-form-item>
@@ -228,10 +275,10 @@ async function closeCreate() {
     </template>
     <template v-else>
       <div class="ak-once">
-        <ExclamationCircleOutlined class="tl-attention" />
+        <ExclamationCircleOutlined class="c-2" />
         <span class="t-14 c-1">密钥明文只显示这一次，平台不保存明文。请现在复制并保存到调用方的密钥管理里。</span>
       </div>
-      <div class="t-12 c-2 ak-lbl">{{ secret.key.name }} · {{ secret.key.env }} · {{ secret.key.scopes.join('、') }}</div>
+      <div class="t-12 c-2 ak-lbl">{{ secret.key.name }} · {{ secret.key.env }} · {{ secret.key.scopes.join('、') }} · {{ bindingText(secret.key.binding) }}</div>
       <div class="ak-secret">
         <a-input :value="secret.text" readonly class="num" />
         <a-button type="primary" @click="copySecret"><CopyOutlined />复制</a-button>
@@ -246,8 +293,9 @@ async function closeCreate() {
     <template #footer>
       <div class="ak-foot">
         <template v-if="!secret">
+          <span v-if="tried && formErrors.length" class="t-12 tl-failed ak-err">{{ formErrors[0] }}{{ formErrors.length > 1 ? ` 等 ${formErrors.length} 项` : '' }}</span>
           <a-button @click="closeCreate">取消</a-button>
-          <a-button type="primary" :disabled="!canCreate" @click="create">生成密钥</a-button>
+          <a-button type="primary" :disabled="readonly || (tried && !canCreate)" @click="create">生成密钥</a-button>
         </template>
         <a-button v-else type="primary" @click="closeCreate">完成</a-button>
       </div>
@@ -274,7 +322,9 @@ async function closeCreate() {
 .ak-h { margin: 16px 0 8px; }
 .ak-cpager { margin-top: 8px; }
 .ak-foot { display: flex; justify-content: flex-end; gap: 8px; }
-.ak-once { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid #ffd591; background: var(--warning-bg); border-radius: var(--radius); }
+.ak-once { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: var(--border); background: var(--g2); border-radius: var(--radius); }
+.ak-mb8 { margin-bottom: 8px; }
+.ak-err { margin-right: auto; align-self: center; }
 .ak-lbl { margin: 16px 0 6px; }
 .ak-secret { display: flex; gap: 8px; }
 .ak-mt { margin-top: 16px; }
