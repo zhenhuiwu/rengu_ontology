@@ -13,7 +13,7 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { paginate } from '@/mock';
-import { FUNCTIONS, fnVersions, fnSignature, type OntFunction, type FnVersion } from '@/mock/functions';
+import { FUNCTIONS, FN_PENDING, fnVersions, fnSignature, type OntFunction, type FnVersion } from '@/mock/functions';
 
 const route = useRoute();
 const router = useRouter();
@@ -37,13 +37,15 @@ const LSIZE = 12;
 const lpage = ref(1);
 watch([kw, statusF], () => { lpage.value = 1; });
 const listPaged = computed(() => paginate(listRows.value, { page: lpage.value, size: LSIZE }));
-const statusBadge = (s: OntFunction['status']) => (s === '草稿' ? 'warning' : 'default');
+// 状态一律灰点 + 文字（橙色只用于 待确认 / 结果未知）
+const statusBadge = (_s: OntFunction['status']) => 'default';
 
 const fn = computed(() => fns.value.find((f) => f.id === q('fn')) ?? fns.value[0]);
 const tab = computed({ get: () => q('tab') || 'def', set: (v: string) => setQuery({ tab: v === 'def' ? undefined : v }) });
 
 // 版本历史
-const versions = computed(() => [...(extraVers.value[fn.value.id] ?? []), ...fnVersions(fn.value.id).map((v, i) => ({ ...v, status: (i === 0 && extraVers.value[fn.value.id]?.length ? '历史' : v.status) as FnVersion['status'] }))]);
+const pending = computed(() => FN_PENDING[fn.value.id]);
+const versions = computed<FnVersion[]>(() => [...(pending.value ? [pending.value] : []), ...(extraVers.value[fn.value.id] ?? []), ...fnVersions(fn.value.id).map((v, i) => ({ ...v, status: (i === 0 && extraVers.value[fn.value.id]?.length ? '历史' : v.status) as FnVersion['status'] }))]);
 const VSIZE = 12;
 const vpage = ref(1);
 watch(() => fn.value.id, () => { vpage.value = 1; resetTest(); });
@@ -77,6 +79,7 @@ function addVersion(note: string, extra: Partial<OntFunction> = {}) {
 // 测试运行
 const testInput = ref('');
 const testOut = ref<{ text: string; ms: number; at: string } | null>(null);
+const runCount = ref(0);
 const running = ref(false);
 function resetTest() { testInput.value = JSON.stringify(fn.value.sampleIn, null, 2); testOut.value = null; }
 resetTest();
@@ -85,7 +88,12 @@ function runTest() {
   running.value = true;
   setTimeout(() => {
     running.value = false;
-    testOut.value = { text: JSON.stringify(fn.value.sampleOut, null, 2), ms: Math.max(3, fn.value.avgMs || 26), at: '16:58:12' };
+    // 本次运行：耗时围绕平均耗时浮动，时间取当前时刻（演示数据）
+    runCount.value += 1;
+    const base = Math.max(3, fn.value.avgMs || 26);
+    const now = new Date();
+    const hh = (n: number) => String(n).padStart(2, '0');
+    testOut.value = { text: JSON.stringify(fn.value.sampleOut, null, 2), ms: Math.round(base * (0.8 + ((runCount.value * 37) % 40) / 100)), at: `${hh(now.getHours())}:${hh(now.getMinutes())}:${hh(now.getSeconds())}` };
   }, 400);
 }
 
@@ -114,7 +122,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly">新建函数</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button :type="tab === 'test' ? 'default' : 'primary'" :disabled="readonly">新建函数</a-button></a-tooltip>
   </Teleport>
   <div class="fn">
     <div class="panel fn-list">
@@ -183,7 +191,8 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
           <div v-for="u in fn.usedBy" :key="u.name" class="fn-use">
             <a-tag>{{ u.kind }}</a-tag><span class="c-1">{{ u.name }}</span>
           </div>
-          <div class="t-14 fw-600 c-1 fn-h">运行</div>
+          <div v-if="pending" class="t-12 c-2 fn-pend">变更中：<a @click="router.push({ path: '/build/ontology/releases', query: { cr: pending.cr } })">{{ pending.cr }}</a> · {{ pending.note }}</div>
+          <div class="t-14 fw-600 c-1 fn-h">运行参数</div>
           <a-descriptions :column="1" bordered size="small" class="fn-desc">
             <a-descriptions-item label="运行环境">{{ fn.runtime }}</a-descriptions-item>
             <a-descriptions-item label="超时"><span class="num">{{ fn.timeoutS }} 秒</span></a-descriptions-item>
@@ -204,8 +213,9 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
         </div>
         <div class="fn-tcol">
           <div class="fn-thead">
-            <span class="t-14 fw-600 c-1">{{ testOut ? '运行结果' : '示例输出' }}</span>
-            <span v-if="testOut" class="t-12 c-2 fn-tok"><span class="fn-dot tl-normal" />成功 · <span class="num">{{ testOut.ms }} ms · {{ testOut.at }}</span></span>
+            <span class="t-14 fw-600 c-1">{{ testOut ? '本次运行结果' : '示例输出' }}</span>
+            <span v-if="testOut" class="t-12 c-2 fn-tok"><span class="fn-dot tl-normal" />成功 · 耗时 <span class="num">{{ testOut.ms }} ms</span> · <span class="num">{{ testOut.at }}</span> · 运行于 测试环境 · 不写入数据</span>
+            <span v-else class="t-12 c-3 fn-tok">还没有运行；下面是函数登记的示例输出</span>
           </div>
           <pre class="fn-pre fn-out num">{{ testOut ? testOut.text : JSON.stringify(fn.sampleOut, null, 2) }}</pre>
           <div class="t-12 c-3">出参类型 <span class="num">{{ fn.output.type }}</span> · {{ fn.output.desc }}</div>
@@ -220,7 +230,8 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
               <span v-else-if="column.key === 'time'" class="num c-2">{{ record.time }}</span>
               <a-tag v-else-if="column.key === 'status'" >{{ record.status }}</a-tag>
               <span v-else-if="column.key === 'op'">
-                <a-tooltip v-if="record.status !== '当前'" :title="reason"><a :class="{ 'fn-dis': readonly }" @click="!readonly && rollback(record)">回滚到此版本</a></a-tooltip>
+                <a v-if="record.cr" @click="router.push({ path: '/build/ontology/releases', query: { cr: record.cr } })">查看 {{ record.cr }}</a>
+                <a-tooltip v-else-if="record.status !== '当前'" :title="reason"><a :class="{ 'fn-dis': readonly }" @click="!readonly && rollback(record)">回滚到此版本</a></a-tooltip>
               </span>
             </template>
           </a-table>
@@ -277,6 +288,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 .fn-pre { background: var(--g2); border: var(--border); border-radius: var(--radius); padding: 8px 12px; margin: 0; color: var(--g9); white-space: pre-wrap; }
 .fn-obj { margin-left: 8px; }
 .fn-desc :deep(.ant-descriptions-item-label) { width: 110px; }
+.fn-pend { padding: 6px 0; }
 .fn-use { display: flex; align-items: center; gap: 4px; padding: 6px 0; border-bottom: var(--border); }
 .fn-test { display: flex; gap: 20px; }
 .fn-tcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }

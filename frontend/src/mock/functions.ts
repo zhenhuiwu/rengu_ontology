@@ -2,7 +2,11 @@
 import { seeded } from './format';
 
 export interface FnParam { name: string; type: string; objType?: string; desc: string }
-export interface FnVersion { ver: string; time: string; author: string; note: string; status: '当前' | '历史' }
+export interface FnVersion { ver: string; time: string; author: string; note: string; status: '当前' | '历史' | '变更中'; /** 变更中：所在变更单 */ cr?: string }
+/** 正在变更单里修改、尚未发布的函数（版本历史置顶一行，链到变更单） */
+export const FN_PENDING: Record<string, FnVersion> = {
+  'FN-003': { ver: '草稿', time: '2026-10-24 18:40', author: '何静', note: '随 CR-0011 毛利率口径 v3（扣除促销补贴）调整，发布后生效', status: '变更中', cr: 'CR-0011' },
+};
 export interface FnUse { kind: '动作' | '规则'; name: string }
 export interface OntFunction {
   id: string; name: string; title: string; runtime: string; version: string; status: '已发布' | '草稿' | '已停用';
