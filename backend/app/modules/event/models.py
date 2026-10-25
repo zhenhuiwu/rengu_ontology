@@ -64,7 +64,9 @@ class EventType(CodeMixin, MutableTableMixin, Base):
     retention_days: Mapped[int] = mapped_column(Integer, nullable=False, comment="接口 retention = 'N 天'")
     weekly: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="近 7 天事件数 [推断]")
     retired_release_id: Mapped[int | None] = mapped_column(
-        BigInteger, comment="整版回滚下线于哪一版（ontology_release.id，软引用）"
+        BigInteger,
+        ForeignKey("ontology_release.id"),
+        comment="整版回滚下线于哪一版（ontology_release.id）",
     )
 
     payload: Mapped[list["EventPayloadField"]] = relationship(
