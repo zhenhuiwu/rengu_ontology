@@ -22,7 +22,8 @@ interface M {
 const LIST: M[] = [
   { id: 'gmv', name: '销售额（不含税）', api: 'sales_amount_net', group: '销售', unit: '元', version: 'v3', status: '已发布', owner: '陈立军' },
   { id: 'gmv_tax', name: '销售额（含税）', api: 'sales_amount_gross', group: '销售', unit: '元', version: 'v2', status: '已发布', owner: '陈立军' },
-  { id: 'repeat_sales', name: '复购客户销售额', api: 'repeat_customer_sales', group: '销售', unit: '元', version: 'v3', status: '已发布', owner: '刘婷' },
+  { id: 'repeat_sales', name: '复购客户销售额（不含税）', api: 'repeat_customer_sales_net', group: '销售', unit: '元', version: 'v3', status: '已发布', owner: '刘婷' },
+  { id: 'repeat_sales_tax', name: '复购客户销售额（含税）', api: 'repeat_customer_sales_gross', group: '销售', unit: '元', version: 'v1', status: '已发布', owner: '刘婷' },
   { id: 'order_cnt', name: '有效订单数', api: 'valid_order_count', group: '销售', unit: '单', version: 'v1', status: '已发布', owner: '陈立军' },
   { id: 'atv', name: '客单价（不含税）', api: 'avg_ticket_value', group: '销售', unit: '元', version: 'v1', status: '草稿', owner: '刘婷' },
   { id: 'refund_rate', name: '退款率', api: 'refund_rate', group: '销售', unit: '%', version: 'v2', status: '已发布', owner: '刘婷' },
