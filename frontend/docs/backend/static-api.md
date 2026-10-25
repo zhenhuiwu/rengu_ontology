@@ -422,6 +422,7 @@ erDiagram
 - `role_object_scope.row_filter` 的 jsonb 结构、`from_row_scope({prop, op, values})` 转换、`apply_row_filter` / `to_sql` 注入都由底层负责（CONVENTIONS §10：`{field, op, value|valueFrom}`，`and/or` 组合，`∈` 等同 `in`，字段走白名单、值走绑定参数）。静态不建表、不定义格式。
 - 静态负责两件事：(1) `property` 表提供属性 API 名，`field` 只能是其中标为权限依据的属性，`apply_row_filter` 的白名单按它声明，跨对象的字段同时声明一跳关系路径（如 `order_belongs_to_store.big_region`），底层生成 `EXISTS`；(2) 有行级过滤的接口调底层注入（见第 3 节「行级」列）。
 - 显示文字按前端 `scopeText = "${prop} ${op} ${values.join('、')}"` 生成，另存一列，不参与注入。`defaultDeny` 角色（R-05/R-06/R-08）没配范围时看不到数据，由底层 `row_filter()` 扩展点处理。
+- **多条范围怎么合并**：跨角色按前端 `effectiveAccess`（`roles.ts:112-117`）——任一角色对该对象不限范围就看全部（只算对该对象有查看权限、且不是「`defaultDeny` 但没配范围」的角色，`roles.ts:110`；后者直接不给看，例如 R-06 对会员），否则各角色的范围取**并集**（OR，显示文字用「；或」连接）。同一角色在同一对象上配多条范围（如订单.大区和订单.门店同时配）时取 AND **[推断]**：mock 里没有这种角色，前端也没有定义。
 - 种子时中文名换成 API 名：对象按 `PERM_OBJECTS`（订单→SalesOrder…），属性按 `OBJECT_PROPS`。mock 里 12 条范围、6 种 (对象, 属性)：
 
 | mock (objType, prop) | 静态 property | 说明 |
