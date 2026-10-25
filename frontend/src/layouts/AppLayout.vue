@@ -14,6 +14,8 @@ import DetailDrawer from '@/components/DetailDrawer.vue';
 import ConfirmActionModal from '@/components/ConfirmActionModal.vue';
 import { PAGES } from '@/nav';
 import VersionBanner from '@/components/VersionBanner.vue';
+import PreviewBanner from '@/components/PreviewBanner.vue';
+import PreviewScope from '@/components/PreviewScope.vue';
 
 const route = useRoute();
 const page = computed(() => PAGES.find((p) => p.key === route.meta.navKey));
@@ -29,11 +31,12 @@ const crumbs = computed(() => {
   <div class="app">
     <TopBar />
     <VersionBanner />
+    <PreviewBanner />
     <div class="app-main">
       <SideNav />
       <main class="app-content">
         <PageHeader :crumbs="crumbs" :title="title">
-          <template #extra><div id="page-extra" class="page-extra" /></template>
+          <template #extra><PreviewScope /><div id="page-extra" class="page-extra" /></template>
         </PageHeader>
         <div class="page-body">
           <router-view />

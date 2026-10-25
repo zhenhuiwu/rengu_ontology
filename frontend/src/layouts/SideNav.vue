@@ -5,17 +5,20 @@ import { useRoute, useRouter } from 'vue-router';
 import * as Icons from '@ant-design/icons-vue';
 import { NAV, PAGES, type NavArea } from '@/nav';
 import { useAppStore } from '@/stores/app';
+import { usePreviewStore } from '@/stores/preview';
 
 const route = useRoute();
 const router = useRouter();
 const app = useAppStore();
+const pv = usePreviewStore();
 
 const currentPage = computed(() => PAGES.find((p) => p.key === route.meta.navKey));
 const areaKey = computed<NavArea['key']>(() => currentPage.value?.area.key ?? (route.meta.area as NavArea['key']) ?? 'use');
 const area = computed(() => NAV.find((a) => a.key === areaKey.value)!);
 
+// 以此用户预览：只显示被预览用户有权限的页面，没有页面的模块整个隐藏
 const items = computed(() =>
-  area.value.modules.map((m) => {
+  area.value.modules.map((mod) => ({ ...mod, pages: mod.pages.filter((p) => pv.canPage(p.key)) })).filter((m) => m.pages.length).map((m) => {
     const groups = [...new Set(m.pages.map((p) => p.group).filter(Boolean))] as string[];
     const toItem = (p: (typeof m.pages)[number]) => ({ key: p.key, label: p.title });
     return {
@@ -32,11 +35,12 @@ const openKeys = computed(() => area.value.modules.map((m) => m.key));
 const selectedKeys = computed(() => (currentPage.value ? [currentPage.value.key] : []));
 
 /** 只显示当前用户有权限的区；只剩一个区时整个切换条隐藏 */
-const areaOptions = computed(() => NAV.filter((a) => app.can(a.key)).map((a) => ({ label: a.title, value: a.key })));
+const areaOptions = computed(() => NAV.filter((a) => (pv.active ? pv.canArea(a.key) : app.can(a.key))).map((a) => ({ label: a.title, value: a.key })));
 /** 切换区：回到该区上次访问的路由（Pinia + localStorage），没有则进该区第一页 */
 function switchArea(k: string | number) {
   const a = NAV.find((x) => x.key === k)!;
-  router.push(app.lastRoute[a.key] ?? a.modules[0].pages[0].path);
+  const first = a.modules.flatMap((m) => m.pages).find((p) => pv.canPage(p.key));
+  router.push((!pv.active && app.lastRoute[a.key]) || first?.path || '/');
 }
 </script>
 

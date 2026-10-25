@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { usePreviewStore } from './preview';
 
 export interface ConfirmField { label: string; value: string }
 export interface ConfirmRequest {
@@ -25,6 +26,9 @@ export const useConfirmStore = defineStore('confirm', {
   state: () => ({ open: false, req: null as ConfirmRequest | null, pickValue: undefined as string | undefined, resolver: null as null | ((ok: boolean) => void) }),
   actions: {
     ask(req: ConfirmRequest) {
+      // “以此用户预览”期间只读：所有写操作的确认卡自动带阻断原因
+      const pv = usePreviewStore();
+      if (pv.active && !req.blocked) req = { ...req, blocked: `正在以 ${pv.session!.user.name} 的权限预览，只读，不能执行。退出预览后再操作。` };
       this.req = req;
       this.pickValue = undefined;
       this.open = true;

@@ -87,3 +87,31 @@ export function roleMembers(role: Role): AdminUser[] {
 
 /** 用户的全部角色（用于“以此用户预览”） */
 export const userRoles = (u: AdminUser) => ROLES.filter((r) => roleMembers(r).some((m) => m.id === u.id));
+
+export const scopeText = (s: RowScope) => `${s.prop} ${s.op} ${s.values.join('、')}`;
+
+/** 一个用户的有效权限：所有角色合并（“以此用户预览”的抽屉和预览模式共用） */
+export interface EffectiveObj { name: string; scope: string; actions: string[]; exp: boolean }
+export interface EffectiveAccess {
+  rs: Role[];
+  func: ((typeof FUNC_PAGES)[number] & { lv: FuncLevel })[];   // 只含有权限的页面
+  objs: EffectiveObj[];                                        // 只含能查看的对象类型
+  areasIn: string[];
+}
+export function effectiveAccess(u: AdminUser, roles: Role[] = ROLES, membersOf: (r: Role) => AdminUser[] = roleMembers): EffectiveAccess {
+  const rs = roles.filter((r) => membersOf(r).some((m) => m.id === u.id));
+  const rank = { none: 0, view: 1, manage: 2 } as const;
+  // 功能：各角色取最高级别
+  const func = FUNC_PAGES.map((p) => ({ ...p, lv: rs.reduce<FuncLevel>((m, r) => (rank[r.func[p.key]] > rank[m] ? r.func[p.key] : m), 'none') })).filter((p) => p.lv !== 'none');
+  const objs = PERM_OBJECTS.map((o) => {
+    const granted = rs.filter((r) => r.objs.find((x) => x.objType === o.name)?.view);
+    if (!granted.length) return null;
+    // 多个角色：任一角色对该对象不限范围 → 全部；否则各角色范围取并集
+    const unlimited = granted.some((r) => !r.scopes.some((s) => s.objType === o.name));
+    const scopes = unlimited ? [] : granted.flatMap((r) => r.scopes.filter((s) => s.objType === o.name).map(scopeText));
+    const actions = [...new Set(rs.flatMap((r) => r.objs.find((x) => x.objType === o.name)?.actions ?? []))];
+    const exp = rs.some((r) => r.objs.find((x) => x.objType === o.name)?.export);
+    return { name: o.name, scope: unlimited ? '全部' : [...new Set(scopes)].join('；或 '), actions, exp };
+  }).filter((x): x is EffectiveObj => !!x);
+  return { rs, func, objs, areasIn: [...new Set(func.map((p) => p.area))] };
+}

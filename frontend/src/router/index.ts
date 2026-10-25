@@ -2,6 +2,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw, type RouteComponen
 import AppLayout from '@/layouts/AppLayout.vue';
 import { PAGES } from '@/nav';
 import { PDE_PAGES } from './pdePages';
+import { previewGuard, usePreviewStore } from '@/stores/preview';
 import { useAppStore, PERSONAS, type AreaKey, type PersonaKey } from '@/stores/app';
 
 const Placeholder = () => import('@/pages/PlaceholderPage.vue');
@@ -36,8 +37,11 @@ router.beforeEach((to) => {
   const app = useAppStore();
   const as = to.query.as;
   if (typeof as === 'string' && as in PERSONAS && as !== app.persona) app.setPersona(as as PersonaKey);
+  // 以此用户预览：?previewAs=，以及预览期间没权限的页面（预览时按被预览用户的权限，不按演示身份）
+  const pvTo = previewGuard(to);
+  if (pvTo) return pvTo;
   const area = areaOf(to.meta.navKey, to.meta.area);
-  if (area && !app.can(area) && to.name !== 'home') return { name: 'home', query: as ? { as } : {} };
+  if (area && !usePreviewStore().active && !app.can(area) && to.name !== 'home') return { name: 'home', query: as ? { as } : {} };
   // 历史版本：?ver= 决定 viewMode；在历史版本里切换页面时自动带上 ?ver=，点“返回当前版本”才退出
   const ver = typeof to.query.ver === 'string' ? to.query.ver : null;
   if (ver) app.setViewVersion(ver);
@@ -45,7 +49,7 @@ router.beforeEach((to) => {
 });
 
 /** 记住每个区上次访问的路由（去掉抽屉、确认卡、演示身份参数），切换区时回到这里 */
-const TRANSIENT_QUERY = ['drawer', 'drawer2', 'confirm', 'as', 'ver'];
+const TRANSIENT_QUERY = ['drawer', 'drawer2', 'confirm', 'as', 'ver', 'previewAs'];
 router.afterEach((to) => {
   const area = areaOf(to.meta.navKey, to.meta.area);
   if (area && to.name !== 'not-found') {
