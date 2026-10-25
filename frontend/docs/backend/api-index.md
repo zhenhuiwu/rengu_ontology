@@ -299,8 +299,8 @@
 | GET | /favorites | `q,page,size` | `PageResult<QaFavorite>` | 页码 | 读 | | `qa.ts` `QA_FAVORITE_LIST`（18） |
 | POST | /favorites | `{question}` | `QaFavorite` | — | 写 | 【推断】前端还没有“加入常用”的入口 | — |
 | DELETE | /favorites/{id} | — | 204 | — | 写 | | — |
-| POST | /permission-requests | `{scope,metric,reason,duration,sourceTurnId}` | `{id,status,approver}` | — | 写 | W16；历史版本 `?ver=` 和预览 `?previewAs=` 下都放行（§1.7 白名单，【推断 §8.1-9】）。**存储（已定，qa-api §11-10）**：存问数自己的表 `qa_permission_request`（只有问数有申请入口）；以后可能并入 admin 的统一审批 | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
-| GET | /session-options | — | `{scopes,calibers,metric}` | — | 读 | qa-api.md 里没有单列这个接口，本文补充【待定】 | `qa.ts` `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
+| POST | /permission-requests | `{scope,object,reason,duration,sourceTurnId}` | `{id,status,approver}` | — | 写 | W16；`object` 即 mock `QA_APPLY.object`（指标名 + 版本，如“复购客户销售额（不含税） v3”），不是 `metric`；`duration` 由显示文字 `'90 天'` 转成天数整数 30/90/180（qa-api W16）；历史版本 `?ver=` 和预览 `?previewAs=` 下都放行（§1.7 白名单，【推断 §8.1-9】）。**存储（已定，qa-api §11-10）**：存问数自己的表 `qa_permission_request`（只有问数有申请入口）；以后可能并入 admin 的统一审批 | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
+| GET | /session-options | — | `{scopes,calibers,metric}` | — | 读 | 即 qa-api W17 `GET /api/qa/v1/session-options`：`scopes`/`calibers` 为 `[{value,label}]`（读 `qa_session_option`），`metric` 为 `{ex,in}:{id,name,version}`；工作台输入框的范围、口径下拉用它 | `qa.ts` `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
 
 - 右栏（当前对象、时间线、可执行动作）复用 §2.5 的 O5/O7/O9。“固定到页面”用 §2.3 的 `GET /pages?view=brief` 和 `POST /pages/{pid}/cards`。
 - 发起动作调用动态模块：qa-api.md §8 的 X1/X2，见下面的差异。
@@ -351,7 +351,7 @@
 | GET | /objects/types | — | `[{kind,label,unit,kwPlaceholder,facets,columns}]` | — | 读 | | `objects-qa.ts` `OBJ_TYPES`、`FIELD_GROUPS`、`KIND_LABEL`、`OBJ_SCOPE` |
 | POST | /objects/{kind}/search | `{kw,facets,page,size}` | `{items,total,page,size,facets[{key,label,vals[{v,n}]}],scopeText}` | 页码 | 读 | 按行级范围过滤；业务数据读 `biz` 的表（只有一份） | 业务数据：`stores.ts` `ALL_STORES` + `objects-qa.ts` `OBJ_EXTRA_STORES`/`storeSales`（门店 95）、`products.ts` `PRODUCTS`（12）、`orders.ts` `ORDERS`（1286） |
 | POST | /objects/{kind}/export | `{kw,facets,ids?}` | CSV（UTF-8 BOM） | — | 不落库 | 预览时返回 `EXPORT_FORBIDDEN`；写审计 | 同上 |
-| POST | /scoped-ask | `{scope{kind,label,filter?,ids?,single?},question}` | `AskAnswer` | — | 写（生成回答） | 范围只传筛选条件，不传整批 ID | `objects-qa.ts`（`AskAnswer` 由函数生成） |
+| POST | /scoped-ask | `{scope{kind,label,filter?,ids?,single?},question}` | `AskAnswer` | — | 写（生成回答） | 范围只传筛选条件，不传整批 ID；页面权限 `object-search·view` 或 `object-detail·view`（和 qa-api O4 一致）；预览 `?previewAs=` 下放行（§1.7 白名单），按被预览人的权限回答，**不落会话、不进 `qa_query_log` 和高频统计**；历史版本 `?ver=` 下拒绝（和前端 askOff 一致） | `objects-qa.ts`（`AskAnswer` 由函数生成） |
 
 3. **差异**：本文之前写的 `/object-search/*`、`/object-ask` 作废，以 qa-api.md 为准。搜索用 POST 是因为分面条件比较复杂；分页参数仍统一用 `size`。
 
@@ -418,7 +418,7 @@
 |---|---|---|---|---|---|---|---|
 | GET | /action-runs | `tab, status, actionType, sysId, ruleId, objType, objKind, objId, kw, page,size`（各页参数的并集；`actionType` 取代 v0.2 的 `action`） | `PageResult<ActionRun>` + `counts`（`ActionRun` = mock/actions.ts `ActionRecord` 和 actionEvent.ts `RUNS` 字段的并集） | 页码 | 读 | 按行级范围过滤；`tab` 只在动作中心用 | `actions.ts` `ACTIONS`（141）+ `actionEvent.ts` `runsOf()`（`RUNS` 1849），动态 seed 按 id 合并写入（§6） |
 | GET | /action-runs/{id} | — | `ActionRun` + `timeline[]`（来自 `action_run_log`）+ `calls[]`（`writeback_call`，Palantir 只读提供）+ `related[]`，另外带“能否操作”和原因 | — | 读 | 动作中心抽屉、动作类型执行记录抽屉、公共抽屉 `kind=action` 共用 | 同上；`actionEvent.ts` `runById()` |
-| POST | /action-runs:stage | `StageInput`（mock/actions.ts） | `ActionRun`（待确认） | — | 写 | 规则、推演、问数、对象详情页发起动作都用它；幂等键由服务端生成 `act-<动作号去掉前 4 位>` | — |
+| POST | /action-runs:stage | `StageInput`（mock/actions.ts） | `ActionRun`（待确认） | — | 写 | 规则、推演、问数、对象详情页发起动作都用它；幂等键由服务端生成 `act-<动作号去掉前 4 位>`。**权限**：动作中心按 `action-center·manage`；从问数工作台、对象详情发起（`source` 为问数 / 对象详情）时，只要求该页面 `view` + 对该对象类型的对象权限 `actions` 含此动作【推断】（`:confirm`、`:withdraw` 同此） | — |
 | POST | /action-runs/{id}:confirm | — | `ActionRun` | — | 写 | 不是确认人时返回 `NOT_CONFIRMER` | — |
 | POST | /action-runs/{id}:withdraw | `{reason}` | `ActionRun` | — | 写 | | — |
 | POST | /action-runs/{id}:resubmit | — | `{newAction, old}` | — | 写 | 只能从“失败”且没有重新提交过的记录发起（前端规则）；“已对账（外部未执行）”不能重新提交；已重新提交过返回 `ALREADY_RESUBMITTED`；新记录用 `-rN` 新键 | — |
@@ -1157,11 +1157,11 @@
 | 69 | ontology | GET | `/api/ontology/v1/action-runs` | 读 | 2.5、2.7、3.5、3.7 | object-detail/action-center/object-types/action-types·view | 对象读取 | Y | Y | Y | 同 §2.7 |
 | 70 | ontology | GET | `/api/ontology/v1/action-runs/{id}` | 读 | 2.7、3.7 | action-center/action-types·view | 对象读取 | Y | Y | Y | 同上；`actionEvent.ts` `runById()` |
 | 71 | ontology | POST | `/api/ontology/v1/action-runs/{id}:approve` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
-| 72 | ontology | POST | `/api/ontology/v1/action-runs/{id}:confirm` | 写 | 2.7 | action-center·manage | 动作执行 | N | N | N | — |
+| 72 | ontology | POST | `/api/ontology/v1/action-runs/{id}:confirm` | 写 | 2.7 | action-center·manage；从问数工作台 / 对象详情发起：qa-workbench/object-detail·view + 对象权限 `actions`【推断】 | 动作执行 | N | N | N | — |
 | 73 | ontology | POST | `/api/ontology/v1/action-runs/{id}:reconcile` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
 | 74 | ontology | POST | `/api/ontology/v1/action-runs/{id}:resubmit` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
-| 75 | ontology | POST | `/api/ontology/v1/action-runs/{id}:withdraw` | 写 | 2.7 | action-center·manage | — | N | N | N | — |
-| 76 | ontology | POST | `/api/ontology/v1/action-runs:stage` | 写 | 2.7 | action-center·manage | 动作执行 | N | N | N | — |
+| 75 | ontology | POST | `/api/ontology/v1/action-runs/{id}:withdraw` | 写 | 2.7 | action-center·manage；从问数工作台 / 对象详情发起：qa-workbench/object-detail·view + 对象权限 `actions`【推断】 | — | N | N | N | — |
+| 76 | ontology | POST | `/api/ontology/v1/action-runs:stage` | 写 | 2.7 | action-center·manage；从问数工作台 / 对象详情发起：qa-workbench/object-detail·view + 对象权限 `actions`【推断】 | 动作执行 | N | N | N | — |
 | 77 | ontology | GET | `/api/ontology/v1/action-types` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ACTION_TYPES`（17）、`ACTION_GROUPS` |
 | 78 | ontology | GET | `/api/ontology/v1/action-types/{id}` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `ACTION_TYPES`；`RULE_ACTION` |
 | 79 | ontology | GET | `/api/ontology/v1/action-types/{id}/params` | 读 | 3.7 | action-types·view | 元数据读取 | Y | Y | N | `actionEvent.ts` `paramsOf()`（101） |
@@ -1282,8 +1282,8 @@
 | 194 | ontology | POST | `/api/ontology/v1/scenarios/{id}:stage` | 写 | 2.8 | scenarios·manage | 动作执行 | N | N | N | — |
 | 195 | ontology | GET | `/api/ontology/v1/scenarios:compare` | 读 | 2.8 | scenarios·view | 对象读取 | Y | Y | Y | 同上 |
 | 196 | qa | GET | `/api/qa/v1/favorites` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_FAVORITE_LIST`（18） |
-| 197 | qa | POST | `/api/qa/v1/favorites` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
-| 198 | qa | DELETE | `/api/qa/v1/favorites/{id}` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
+| 197 | qa | POST | `/api/qa/v1/favorites` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
+| 198 | qa | DELETE | `/api/qa/v1/favorites/{id}` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
 | 199 | qa | GET | `/api/qa/v1/objects/types` | 读 | 2.4 | object-search·view | 对象读取 | Y | Y | Y | `objects-qa.ts` `OBJ_TYPES`、`FIELD_GROUPS`、`KIND_LABEL`、`OBJ_SCOPE` |
 | 200 | qa | POST | `/api/qa/v1/objects/{kind}/export` | 不落库 | 2.4 | object-search·view | 数据导出 | Y | N | Y | 同上 |
 | 201 | qa | POST | `/api/qa/v1/objects/{kind}/search` | 读 | 2.4 | object-search·view | 对象读取 | Y | Y | Y | 业务数据：`stores.ts` `ALL_STORES` + `objects-qa.ts` `OBJ_EXTRA_STORES`/`storeSales`（门店 95）、`products.ts` `PRODUCTS`（12）、`orders.ts` `ORDERS`（1286） |
@@ -1302,14 +1302,14 @@
 | 214 | qa | PUT | `/api/qa/v1/pages/{pid}/share` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
 | 215 | qa | POST | `/api/qa/v1/pages/{pid}:refresh` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
 | 216 | qa | POST | `/api/qa/v1/permission-requests` | 写 | 2.2 | qa-workbench·view | — | Y【推断 §8.1-9】 | Y【推断 §8.1-9】 | N | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
-| 217 | qa | POST | `/api/qa/v1/scoped-ask` | 写 | 2.4 | object-search·manage | 问数查询【推断】 | N | Y | Y | `objects-qa.ts`（`AskAnswer` 由函数生成） |
+| 217 | qa | POST | `/api/qa/v1/scoped-ask` | 写 | 2.4、2.5 | object-search/object-detail·view（预览下不落库） | 问数查询【推断】 | N | Y | Y | `objects-qa.ts`（`AskAnswer` 由函数生成） |
 | 218 | qa | GET | `/api/qa/v1/session-options` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
 | 219 | qa | GET | `/api/qa/v1/sessions` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_SESSION_LIST`（103） |
-| 220 | qa | POST | `/api/qa/v1/sessions` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
-| 221 | qa | DELETE | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
+| 220 | qa | POST | `/api/qa/v1/sessions` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
+| 221 | qa | DELETE | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
 | 222 | qa | GET | `/api/qa/v1/sessions/{sid}` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | 现在写死在 `QaConversation.vue` / `QaAnswer.vue` / `QaStoreAnswer.vue`；数据部分来自 `qa.ts` `QA_PROVINCES/QA_TREND/QA_TOTAL_*/QA_EC_STORES`（见差异） |
-| 223 | qa | PATCH | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
-| 224 | qa | POST | `/api/qa/v1/sessions/{sid}/turns` | 写 | 2.2 | qa-workbench·view | 问数查询 | N | N | N | — |
+| 223 | qa | PATCH | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
+| 224 | qa | POST | `/api/qa/v1/sessions/{sid}/turns` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
 | 225 | qa | GET | `/api/qa/v1/templates` | 读 | 2.3 | qa-pages·view | 问数查询 | Y | Y | Y | `qa-pages.ts` `PAGE_TEMPLATES`（22 个模板 / 104 张卡片） |
 | 226 | qa | GET | `/api/qa/v1/templates/{id}` | 读 | 2.3 | qa-pages·view | 问数查询 | Y | Y | Y | 同上 |
 | 227 | qa | GET | `/api/qa/v1/tuning/certs` | 读 | 3.14 | qa-tuning·view | — | Y | Y | N | `qa-tuning.ts` `CERT_QAS`（30） |
@@ -1336,9 +1336,9 @@
 | 248 | qa | GET | `/api/qa/v1/turns/{tid}/export` | 读 | 2.2 | qa-workbench·view | 数据导出 | Y | N | Y | — |
 | 249 | qa | GET | `/api/qa/v1/turns/{tid}/result` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_EC_STORES`（38） |
 | 250 | qa | GET | `/api/qa/v1/turns/{tid}/stream` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | — |
-| 251 | qa | PUT | `/api/qa/v1/turns/{tid}/vote` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
-| 252 | qa | POST | `/api/qa/v1/turns/{tid}:cancel` | 写 | 2.2 | qa-workbench·view | 问数查询 | N | N | N | — |
-| 253 | qa | POST | `/api/qa/v1/turns/{tid}:recalc` | 写 | 2.2 | qa-workbench·view | 问数查询 | N | N | N | — |
+| 251 | qa | PUT | `/api/qa/v1/turns/{tid}/vote` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
+| 252 | qa | POST | `/api/qa/v1/turns/{tid}:cancel` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
+| 253 | qa | POST | `/api/qa/v1/turns/{tid}:recalc` | 写 | 2.2 | qa-workbench·view | 问数查询【推断】 | N | N | N | — |
 
 ---
 
@@ -1368,7 +1368,7 @@
 6. 前端还没有的功能，接口先预留：下载中心（`POST /exports`）、问数“停止生成”（W8）、“加入常用问题”（W13）、规则版本“对比”和“回滚”、指标“编辑定义”、动作审批 `:approve`。
 7. 数据连接被引用时能否删除；角色还有成员时能否删除；停用用户时是否必须转交待办（§3.1、§4.1、§4.2）。
 8. 函数测试的沙箱方案（§3.8）。
-9. 本体图谱节点坐标要不要存（§3.4）；`/session-options` 是否单列（§2.2）；角色草稿能否传给 `effective-access`（§4.2）；用户导入是否也收 Excel（§4.1）。
+9. 本体图谱节点坐标要不要存（§3.4）；角色草稿能否传给 `effective-access`（§4.2）；用户导入是否也收 Excel（§4.1）。
 
 各负责人文档自己的待定问题仍以原文档为准，这里只列和本文、前端或其他文档有交叉的。
 
@@ -1382,6 +1382,7 @@
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- 对齐 qa-api（qa 69725f9）：§2.2 W16 请求体 `metric` 改为 `object`（mock `QA_APPLY.object`）；`/session-options` 即 qa-api W17，删掉 §2.2 和 §8.2-9 的“未单列【待定】”；`POST /scoped-ask` 页面权限改为 `object-search/object-detail·view`，预览下放行且不落会话、不进 `qa_query_log`（§2.4、§7），和 qa O4 一致；`/action-runs:stage`、`/{id}:confirm`、`/{id}:withdraw` 从问数工作台 / 对象详情发起时按页面 `view` + 对象权限 `actions` 放行【推断】（§2.7、§7）；问数工作台 W2–W15 写接口的 API 密钥范围统一为“问数查询【推断】”（W11 导出仍为“数据导出”，W16 仍为“—”，都和 qa-api §1.4 一致）（§7）。
 - W16 申请权限在 `?ver=` 和预览 `?previewAs=` 下都放行（前端两种模式都允许）：§1.7 两份白名单、§1.8、§2.2、§7 说明和该行“预览”列（改为 Y）、§8.1-9 已同步；删除“预览下拒绝”的说法；两个参数都带时 `details.mode='preview'` 不变。
 - 问数用户对自己的会话和页面的写（W2–W16、P2–P10）页面权限改为 `qa-workbench·view` / `qa-pages·view`（原为 manage），和 qa-api 一致，已定（§1.4、§7 说明和 18 行）；qa-api §11-10 已定：权限申请存问数自己的表 `qa_permission_request`（只有问数有入口），以后可能并入 admin 统一审批（§2.2 W16）。
 - 只读拒绝统一为 403 `READONLY` + `details.mode='history'|'preview'`（`READONLY_HISTORY` / `READONLY_PREVIEW` 作废）；§1.7 列出只读白名单，W16 申请权限在 `?ver=` 下放行（【推断 §8.1-9】，可收紧）；按冒号规则 `/pages/{pid}/refresh`、`/turns/{tid}/recalc` 改为 `:refresh`、`:recalc`。
