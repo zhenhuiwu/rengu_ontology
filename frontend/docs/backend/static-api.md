@@ -520,7 +520,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 ### 2.5 发布事务
 
 1. 合并校验（§2.4），有阻断拒绝发布。
-2. 调用版本层 `create_version(change_order_ids, publishedBy, note)`。发布请求里的 `publishedBy` 传 `sys_user.code`（前端 userId，如 `U010001`），库里存外键 `sys_user.id`；code 查不到返回 422 `USER_NOT_FOUND`（骨架错误码，`ad75767`）。发布记录返回时 `by` = 发布人姓名（前端 `VersionPicker.vue:26`、`OntologyOverview.vue:243` 直接显示），`byId` = `sys_user.code`（CONVENTIONS §7，骨架 `7817996`）。版本层加全局锁 `ontology.publish`，**按登记顺序调用各节的组装函数**（`register_section` 登记的 `SnapshotSectionBuilder.build_section(base, change_order_ids)`），拼成整版快照，生成版本号 `vYYYY.MM.N`。
+2. 发布人 = **当前登录用户**（骨架 `CurrentUserDep`，`CurrentUser.id` = `sys_user.code`），**发布请求体不带 `publishedBy`**；调用版本层 `create_version(change_order_ids, 当前用户, note)`，库里存外键 `sys_user.id`。发布记录返回时 `by` = 发布人姓名（前端 `VersionPicker.vue:26`、`OntologyOverview.vue:243` 直接显示），`byId` = `sys_user.code`（CONVENTIONS §7，骨架 `7817996`）。版本层加全局锁 `ontology.publish`，**按登记顺序调用各节的组装函数**（`register_section` 登记的 `SnapshotSectionBuilder.build_section(base, change_order_ids)`），拼成整版快照，生成版本号 `vYYYY.MM.N`。
    - 静态只登记自己的节（§2.8）：内部按 `apply(上一版本节, 各单 cr_item)` 算出新节，同时在同一事务里同步展开到定义表。
    - `actionTypes`、`eventTypes` 由 Palantir 登记（结构见 `action-event-api.md` §4.2 @ `b7ffba4`），`rules`、`lifecycles` 由动态登记；没登记的节原样沿用上一版。**已定。**
 3. 同一事务里静态再：CR 置为已发布并写 `release_id`（vNext 那一行的 `id`）、回填本次 release_check 的 `release_id`、写 cr_event。（发布前 `release_id` 为空，`UNIQUE(release_id, code)` 拦不住重复；靠本事务的回填兜住。）`release.published` outbox 事件由**版本层在 `create_version` 里**（发布和回滚都发）同事务写入，静态不另发。展开在事务内同步完成（不用异步 `release.expand`）。
@@ -531,6 +531,9 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
 - 顶栏选版本 → URL `?ver=v2026.10.1` → 请求同样带 `?ver=v2026.10.1`；「以此用户预览」→ `?previewAs=U…` → 请求同样带 `?previewAs=`。两种都由前端 `useReadonly()` 判定只读（`app.viewMode==='history' || preview.active`），原因分别是「正在查看历史版本 x，只读」「正在以 X 的权限预览，只读」。
 - 读接口按 `ver` 读快照；响应带 `releaseTag`。
+- **静态读接口的 `?ver=`（实现已定）**：所有静态 GET 都先校验版本，版本不存在返回 404 `NOT_FOUND`（对象类型、属性、指标也一样）；关系、维度、业务知识按该版快照的节返回，对象类型、属性、指标按 §2.7「与当前一致」返回当前表（前端 `ObjectTypes.vue`、`Metrics.vue` 不读 `viewVersion`，历史模式只是只读）。
+- **静态读接口的 `?previewAs=`（实现已定）**：定义类数据（对象类型、关系、指标、维度、业务知识）**不按被预览用户裁剪**，原样返回。前端这些页面都不读预览状态（`ObjectTypes.vue`、`LinkTypes.vue`、`Metrics.vue`、`Dimensions.vue`、`Glossary.vue` 都没有 `usePreview` / `scopeOf`）；预览只做两件事：整页可见性（`stores/preview.ts:37` `canPage` 按 `func[页面 key]`，`:103` 路由守卫把没权限的页面转走，`SideNav.vue:21` 隐藏菜单）和只读（`useReadonly.ts:14`）。行级范围 `scopeOf` 只用在对象搜索、对象详情和问数（`ObjectSearch.vue:57`、`:64`）。后端对应：每个静态 GET 挂 `require_func(页面 key, "view")`（api-index 权限表：`object-types`、`link-types`、`metrics`、`dimensions`、`glossary`；`/object-types/brief` 为 `data-quality`），按被预览用户的功能权限判定由骨架 `require_func` / `CurrentUserDep` 的 PDE 实现负责。
+- **鉴权**：所有静态 GET 依赖 `CurrentUserDep`，未知或停用的 `X-Demo-As` 返回 401 `UNAUTHORIZED`。
 
 ### 2.7 历史快照怎么组装（审核意见阻断 3a）
 
@@ -637,7 +640,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 重新采集元数据 | `POST /object-types/{id}/mappings:refresh-metadata` | 异步，出 `jobId`；不改定义，不走 CR [推断]。前端只读时没有置灰（`ObjectTypes.vue:387`），按 api-index 的规则（写接口一律拒绝）处理，**[推断]** 前端应补置灰，请用户确认 | object-types:manage | — | ✗ | ✗ | 否 |
 | 属性列表 | `GET /object-types/{id}/properties?page&size` | 每页 12（`ObjectTypes.vue:135`、`:348`） | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 字段映射 | `GET /object-types/{id}/mappings?page&size` | 每页 12（`ObjectTypes.vue:205`、`:391`） | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
-| 引用：指标 / 视图 / 版本历史 | `GET /object-types/{id}/usage?kind=metric\|view\|cr&page&size` | 分页见 §4.1 | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
+| 引用：指标 / 视图 / 版本历史 | `GET /object-types/{id}/usage?kind=metric\|view\|cr&page&size` | 分页见 §4.1。**TODO（变更单模块）**：`kind=cr`（版本历史）在变更单模块接入前返回 422 `VALIDATION_FAILED`，`details.fields = [{field: "kind", message}]` | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 预览数据、批量编辑、视图「打开」 | — | **[第二期]** | — | — | — | — | — |
 
 ### 3.3 关系类型
@@ -737,7 +740,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
   一次返回数组的：指标允许维度、关系历史/质量、知识历史/适用范围/同义词、维度层级、CR 详情里的 checks/impact/trial/events、对象关系 Tab。
   主列表都支持 `focusId`：返回含该条的那一页（深链 `?cr=` / `?link=` / `?dim=` / `?k=`）。
-- **身份**：只取骨架 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；演示身份请求头 `X-Demo-As` 按骨架处理：值为 `sys_user.code`（前端 userId，如 `U010001` 王敏；HTTP 头只能是 ASCII），骨架 `ad75767` 按 code 查用户；只在 dev/test 生效（默认 `RENGU_DEV_USER`，同样传 code），prod 忽略（`app/common/auth.py`，CONVENTIONS）。变更单、发布和函数的人员字段（变更单的 `owner`/`reviewer`、发布请求的 `publishedBy`、函数的 `owner`/`author`）一律传/返回 `sys_user.code`，库里存 `sys_user.id` 外键，未知 code 返回 422 `USER_NOT_FOUND`。发布记录例外：返回 `by` = 发布人姓名、`byId` = `sys_user.code`（CONVENTIONS §7，骨架 `7817996`）。定义上的人员字段（对象属性、指标、维度、知识、对象视图的 `owner`，`cr_event.actor`）照前端 mock 存人名，是软引用，不做外键（mock 里有「周晓峰」「吴佳」等不在 `sys_user` 里的人），接口原样传/返回人名。
+- **身份**：只取骨架 `CurrentUserDep`（会话 / API 密钥绑定身份 / 校验后的 `?previewAs=`），不读请求体或头里的用户 id；演示身份请求头 `X-Demo-As` 按骨架处理：值为 `sys_user.code`（前端 userId，如 `U010001` 王敏；HTTP 头只能是 ASCII），骨架 `ad75767` 按 code 查用户；只在 dev/test 生效（默认 `RENGU_DEV_USER`，同样传 code），prod 忽略（`app/common/auth.py`，CONVENTIONS）。变更单和函数的人员字段（变更单的 `owner`/`reviewer`、函数的 `owner`/`author`）一律传/返回 `sys_user.code`，库里存 `sys_user.id` 外键，未知 code 返回 422 `USER_NOT_FOUND`。发布人取当前登录用户，发布请求体不带 `publishedBy`；发布记录返回 `by` = 发布人姓名、`byId` = `sys_user.code`（CONVENTIONS §7，骨架 `7817996`，与 §2.5 第 2 步一致）。定义上的人员字段（对象属性、指标、维度、知识、对象视图的 `owner`，`cr_event.actor`）照前端 mock 存人名，是软引用，不做外键（mock 里有「周晓峰」「吴佳」等不在 `sys_user` 里的人），接口原样传/返回人名。
 - **历史版本与预览**：用查询参数，与前端 URL 一致。`?ver=v2026.10.2` 按该版快照读（§2.7）；`?previewAs=<userId>` 按被预览用户的权限和行级范围读。带任一参数的写接口返回 403 `READONLY`，`details.mode = history | preview`；不落库计算接口要放行的列入骨架只读白名单 `@allow_in_readonly`。
 - **错误码**（`READONLY`、`VALIDATION_FAILED`、`EMPTY_INPUT`、`DUPLICATE_KEY`（409）、`VERSION_CONFLICT`、`NO_PERMISSION` 是骨架公共错误码，已确认）：`READONLY`、`NOT_IN_DRAFT`、`CR_LOCKED`、`STATE_INVALID`（409，通用）、`NOT_OWNER`、`NOT_REVIEWER`、`SELF_REVIEW`、`NOT_ONTOLOGY_ADMIN`、`CHECK_BLOCKED`、`MERGE_BLOCKED`、`TARGET_IN_OTHER_CR`、`DUPLICATE_KEY`、`VERSION_CONFLICT`、`ROLLBACK_NOT_LATEST`、`EMPTY_INPUT`、`VALIDATION_FAILED`、`USER_NOT_FOUND`（422，骨架 `ad75767`，人员 code 查不到）、`BAD_ROW_FILTER`（底层）、`NO_PERMISSION`。错误体 `{code, message, details, requestId}`，`message` 可直接给前端用。字段校验不通过统一返回 `VALIDATION_FAILED`，`details.fields = [{field, message}]`（`field` 用接口字段名，如 `title`、`target.id`）。
 - **乐观锁**：可改的表带 `lock_version`，不匹配返回 `VERSION_CONFLICT`。
