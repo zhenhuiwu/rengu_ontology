@@ -1,0 +1,9 @@
+{
+  "store": "门店",
+  "product": "商品",
+  "order": "订单",
+  "region": "大区",
+  "member": "会员",
+  "segment": "会员分群",
+  "alert": "告警"
+}
