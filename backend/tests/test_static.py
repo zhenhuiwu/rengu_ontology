@@ -100,8 +100,24 @@ async def get_all(client, url: str) -> list:
 # ---------------------------------------------------------------- 迁移
 
 
+def static_parent() -> str:
+    """static_0001 的上一个迁移，从 ScriptDirectory 读（合并顺序可能是 0003 或 qa_0001），不写死。"""
+    from alembic.script import ScriptDirectory
+
+    sd = ScriptDirectory.from_config(Config("alembic.ini"))
+    down = sd.get_revision("static_0001").down_revision
+    assert isinstance(down, str)
+    # 确认 head 链是一条线且经过 static_0001
+    chain = [r.revision for r in sd.walk_revisions("base", "heads")]
+    assert "static_0001" in chain and down in chain
+    return down
+
+
 async def test_migration_round_trip():
-    """全新库：upgrade head → downgrade base → upgrade head；static_0001 只建 / 删静态自己的表。"""
+    """全新库：upgrade head → downgrade base → upgrade head；static_0001 只建 / 删静态自己的表。
+
+    不管 static_0001 前后还有哪些模块的迁移：在它的上一个迁移和它自己之间来回，比较表集合。
+    """
     db = f"rengu_mig_{uuid.uuid4().hex[:8]}"
     admin_dsn = make_url(BASE_URL).set(drivername="postgresql").render_as_string(hide_password=False)
     admin = await asyncpg.connect(admin_dsn)
@@ -117,14 +133,20 @@ async def test_migration_round_trip():
         finally:
             await c.close()
 
+    parent = static_parent()
     try:
         cfg = Config("alembic.ini")
         cfg.attributes["database_url"] = url
         await asyncio.to_thread(command.upgrade, cfg, "head")
         head = await tables()
         assert head >= STATIC_TABLES
-        await asyncio.to_thread(command.downgrade, cfg, "0003")
-        assert head - await tables() == STATIC_TABLES  # 只动静态自己的表
+        await asyncio.to_thread(command.downgrade, cfg, parent)
+        before = await tables()
+        assert not before & STATIC_TABLES
+        await asyncio.to_thread(command.upgrade, cfg, "static_0001")
+        assert await tables() - before == STATIC_TABLES  # 只建静态自己的表
+        await asyncio.to_thread(command.downgrade, cfg, parent)
+        assert await tables() == before  # 只删静态自己的表
         await asyncio.to_thread(command.downgrade, cfg, "base")
         assert await tables() <= {"alembic_version"}
         await asyncio.to_thread(command.upgrade, cfg, "head")
@@ -136,12 +158,13 @@ async def test_migration_round_trip():
 
 
 def test_migration_conventions():
-    """static_0001 接 0003，单一 head，无 branch_labels，无 merge。"""
+    """static_0001 接 0003 或 qa_0001（看合并顺序），单一 head，无 branch_labels，无 merge。"""
     from alembic.script import ScriptDirectory
 
     sd = ScriptDirectory.from_config(Config("alembic.ini"))
     rev = sd.get_revision("static_0001")
-    assert rev.down_revision == "0003" and not rev.branch_labels
+    assert rev.down_revision == static_parent() and rev.down_revision in {"0003", "qa_0001"}
+    assert not rev.branch_labels
     assert rev.path.endswith("static_0001_static_definitions.py")
     assert len(sd.get_heads()) == 1
     assert not any(r.is_merge_point for r in sd.walk_revisions())
