@@ -507,7 +507,7 @@ async def test_all_static_gets_require_login(client, static_seeded):
     from app.modules.static.router import router
 
     ids = {"object-types": "order", "link-types": LINKS[0]["id"], "metrics": "gmv"}
-    ids |= {"dimensions": DIMS[0]["id"], "knowledge": KNOWLEDGE[0]["id"]}
+    ids |= {"dimensions": DIMS[0]["id"], "knowledge": KNOWLEDGE[0]["id"], "change-requests": "CR-0016"}
     urls = []
     gets = [r for r in router.routes if "GET" in r.methods]  # 写接口（发布 / 回滚）见 test_static_publish
     for r in gets:
@@ -529,7 +529,7 @@ def test_static_routes_func_permissions():
     from app.modules.static.router import FUNC_OF, router
 
     want = {"object-types": "object-types", "link-types": "link-types", "metrics": "metrics"}
-    want |= {"dimensions": "dimensions", "knowledge": "glossary"}
+    want |= {"dimensions": "dimensions", "knowledge": "glossary", "change-requests": "releases"}
     for r in router.routes:
         if "GET" not in r.methods:
             continue

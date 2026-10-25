@@ -16,6 +16,7 @@ import { OBJECT_PROPS, type ObjProp } from '@/mock/objectProps';
 import { METRIC_LIST, METRIC_DEF, METRIC_DIMS, METRIC_VERSIONS, METRIC_REFS, type MetricListItem } from '@/mock/metricCatalog';
 import { DIM_ITEMS, type DimItem } from '@/mock/dimensions';
 import { KNOWLEDGE, type KEntry } from '@/mock/knowledge';
+import type { ChangeRequest, CRDetail, ReviewEvent } from '@/mock/changes';
 
 const api = apiClient('static');
 export const isStaticReal = (): boolean => api.isReal();
@@ -140,3 +141,13 @@ export const publishRelease = (note?: string) => api.post<ReleaseResult>('/relea
 export const rollbackRelease = (ver: string) => api.post<ReleaseResult>(`/releases/${encodeURIComponent(ver)}:rollback`, {});
 /** 发布 / 回滚成功后刷新顶栏版本号（同一后端前缀；versioning 不在真接口开关里时也能取到） */
 export const fetchCurrentAfterWrite = () => api.get<{ current: string | null; next: string; release: ReleaseResult | null }>('/releases/current');
+
+// ---------------------------------------------------------------- 变更单（Releases.vue 列表 / 详情按钮，static-api.md §3.1）
+/** GET /change-requests?full=true 每行：mock ChangeRequest 原样 + detail（CRDetail）+ events（评审追加记录，新的在前） */
+export type CRRow = ChangeRequest & { detail: Partial<CRDetail>; events: ReviewEvent[] };
+export type CRAction = 'submit' | 'withdraw' | 'approve' | 'reject' | 'unapprove' | 'reopen';
+/** 整表载入（不分页，前端本地筛选），刷新页面后状态以库为准 */
+export const fetchChangeRequests = () => api.get<CRRow[]>('/change-requests', { query: { full: true } });
+/** POST /change-requests/{id}:{action}：状态流转（非法流转 409 CR_STATE、人不对 403、阻断 409 CR_BLOCKED），返回更新后的一行 */
+export const crAction = (id: string, action: CRAction, rejectReason?: string) =>
+  api.post<CRRow>(`/change-requests/${encodeURIComponent(id)}:${action}`, action === 'reject' ? { rejectReason } : {});

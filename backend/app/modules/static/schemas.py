@@ -48,3 +48,9 @@ class RollbackIn(ApiModel):
 class MergeCheckOut(ApiModel):
     rows: list[dict[str, Any]]
     blocked: bool
+
+
+class RejectIn(ApiModel):
+    """POST /change-requests/{id}:reject：驳回原因必填（前端 5 个预设之一，后台不限定取值 [推断]）。"""
+
+    reject_reason: str | None = None

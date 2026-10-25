@@ -205,9 +205,13 @@ async def test_writes_require_login_and_releases_manage(client, seeded):
     from app.modules.static.router import router
 
     posts = {r.path for r in router.routes if "POST" in r.methods}
-    assert posts == {"/releases:merge-check", "/releases", "/releases/{ver}:rollback"}
+    assert {
+        "/releases:merge-check",
+        "/releases",
+        "/releases/{ver}:rollback",
+    } <= posts  # 变更单写接口见 test_static_cr
     for r in router.routes:
-        if "POST" in r.methods:
+        if r.methods & {"POST", "DELETE"}:
             assert len(r.dependencies) == 1, r.path  # require_func("releases", "manage")
     for url in ("/releases:merge-check", "/releases", "/releases/v2026.10.3:rollback"):
         r = await client.post(P + url, json={}, headers={"X-Demo-As": "U999999"})

@@ -618,15 +618,15 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 读草稿视图 | `GET /{kind}/{id}?view=draft&cr={crId}` | 每行 `mark`、`base`；`locked`（审核中） | 目标页:view | 元数据读取 | ✓（历史版本下没有草稿视图，返回已发布） | ✓ | 否 |
 | 保存到草稿 | `PUT /change-requests/{id}/items` | 入 `target`、`section`、`rows[{key,op,after}]`、`lockVersion`；锁定返回 `CR_LOCKED` | 目标页:manage | — | ✗ | ✗ | 否 |
 | 放弃本对象草稿 | `DELETE /change-requests/{id}/targets/{kind}/{targetId}` | 丢弃该目标全部 cr_item | 目标页:manage | — | ✗ | ✗ | 否 |
-| 删除草稿单 | `DELETE /change-requests/{id}` | 仅 owner + 草稿；软删 | releases:manage | — | ✗ | ✗ | 否 |
+| 删除草稿单 | `DELETE /change-requests/{id}` | 仅 owner + 草稿；软删。**后台已实现（前端未接）**：硬删 [推断]（`cr_event` 级联删除），非 owner 403、非草稿 409 `CR_STATE`、成功 204；前端 `apiClient` 还没有 DELETE 方法，真接口模式下「删除草稿」按钮置灰 | releases:manage | — | ✗ | ✗ | 否 |
 | 重新校验 | `POST /change-requests/{id}:validate` | 异步，出 `jobId`，结果写 cr_check；已发布 CR 拒绝。前端只读时置灰（`Releases.vue:312`） | releases:manage | — | ✗ | ✗ | 否 |
-| 提交审核 | `POST /change-requests/{id}:submit` | 规则见 §2.2-2；不限提交人（限 owner 是 [推断]，默认不做） | releases:manage | — | ✗ | ✗ | 否 |
-| 撤回提交 | `POST /change-requests/{id}:withdraw` | owner（`Releases.vue:250`），审核中 → 草稿 | releases:manage + owner | — | ✗ | ✗ | 否 |
-| 审核通过 / 驳回 | `POST /change-requests/{id}:approve` / `:reject` | reject 必填 `rejectReason` | releases:manage + reviewer | — | ✗ | ✗ | 否 |
-| 撤回已通过 | `POST /change-requests/{id}:unapprove` | owner/reviewer，已通过 → 草稿 | releases:manage | — | ✗ | ✗ | 否 |
-| 改回草稿 | `POST /change-requests/{id}:reopen` | owner/reviewer，已驳回 → 草稿 | releases:manage | — | ✗ | ✗ | 否 |
-| 变更单列表 | `GET /change-requests?status&kw&page&size&focusId` | 每页 17（`Releases.vue:42`、`:216`）；`focusId`（深链 `?cr=`）返回含该单的那一页 | releases:view | — | ✓ | ✓ | 否 |
-| 变更单详情 | `GET /change-requests/{id}` | 头部、说明、迁移方式、`times{created,checked,submitted}`，并一次带回 `checks`（V1–V17 全部）、`impact{direct[],defs[],usage[]}`、`trial{rows[],scope}`（没有试跑为 `null`）、`events`（`ReviewEvent[]`）、`touches`（原样）；前端详情一次取整份 `CRDetail`，不设这四个子接口 | releases:view | — | ✓ | ✓ | 否 |
+| 提交审核 | `POST /change-requests/{id}:submit` | 规则见 §2.2-2；不限提交人（限 owner 是 [推断]，默认不做）。**已实现**（以下 6 个动作同一套，照 `Releases.vue` `move()` 与按钮显示条件）：草稿 → 审核中；有阻断 409 `CR_BLOCKED`、改动 0 → 409 `CR_EMPTY`；写 `cr_event`「{me} 提交审核」/「审核人 {reviewer}」。状态不对一律 409 `CR_STATE`（`details.status`、`details.action`），人不对 403 `NO_PERMISSION`；成功 200 返回该单详情（同 `GET /change-requests/{id}`）。owner / reviewer 按姓名比对（库里和 mock 都存姓名，不是 sys_user.code）[推断] | releases:manage | — | ✗ | ✗ | 否 |
+| 撤回提交 | `POST /change-requests/{id}:withdraw` | owner（`Releases.vue:250`），审核中 → 草稿。**已实现**：事件「{me} 撤回提交」 | releases:manage + owner | — | ✗ | ✗ | 否 |
+| 审核通过 / 驳回 | `POST /change-requests/{id}:approve` / `:reject` | reject 必填 `rejectReason`。**已实现**：审核人且不是提交人；approve 有阻断 409 `CR_BLOCKED`，审核中 → 已通过，事件「{me} 审核通过」/「等待整版发布 {下一版本}」；reject 原因为空 422 `VALIDATION_FAILED`（`details.fields[0].field = rejectReason`），审核中 → 已驳回，写 `rejectReason`，事件「{me} 驳回」/「{原因}」(error)。原因不限定为前端 5 个预设 [推断] | releases:manage + reviewer | — | ✗ | ✗ | 否 |
+| 撤回已通过 | `POST /change-requests/{id}:unapprove` | owner/reviewer，已通过 → 草稿。**已实现**：事件「{me} 撤回审核结果」/「不进入 {下一版本}」 | releases:manage | — | ✗ | ✗ | 否 |
+| 改回草稿 | `POST /change-requests/{id}:reopen` | owner/reviewer，已驳回 → 草稿。**已实现**：事件「{me} 改回草稿」/「按驳回意见修改后重新提交」；和 mock 一样不清空 `rejectReason` | releases:manage | — | ✗ | ✗ | 否 |
+| 变更单列表 | `GET /change-requests?status&kw&page&size&focusId` | 每页 17（`Releases.vue:42`、`:216`）；`focusId`（深链 `?cr=`）返回含该单的那一页。**已实现（与上不同）**：不分页，返回 mock `CHANGE_REQUESTS` 同形数组（单号倒序，`release` / `rejectReason` 没有时不出现），只支持 `status`（不认识的值 422）；`full=true` 每行再带 `detail`（整份 CRDetail）和 `events`。`Releases.vue` 真接口模式整表载入后本地筛选、分页，`kw/page/size/focusId` 暂不做 [推断]；不随 `?ver` 变 [推断] | releases:view | — | ✓ | ✓ | 否 |
+| 变更单详情 | `GET /change-requests/{id}` | 头部、说明、迁移方式、`times{created,checked,submitted}`，并一次带回 `checks`（V1–V17 全部）、`impact{direct[],defs[],usage[]}`、`trial{rows[],scope}`（没有试跑为 `null`）、`events`（`ReviewEvent[]`）、`touches`（原样）；前端详情一次取整份 `CRDetail`，不设这四个子接口。**已实现**：一行 + `detail`（`change_request.detail` 原样）+ `events`（`cr_event` 追加记录，新的在前；`times` 推出来的节点前端照 mock `reviewLog` 现算）；不存在 404 | releases:view | — | ✓ | ✓ | 否 |
 | 改动 | `GET /change-requests/{id}/diffs?page&size` | 每页 10（`Releases.vue:83`、`:292`） | releases:view | — | ✓ | ✓ | 否 |
 | 补充迁移方式 | `PATCH /change-requests/{id}` `{migration}` | **[推断：前端只显示迁移方式（`Releases.vue:294-295`），没有编辑入口]**，先不做 | — | — | ✗ | ✗ | 否 |
 | 合并校验预览 | `POST /releases:merge-check` | 不落库；出 `rows[{code,name,result,note}]`、`blocked`。**已实现**：对全部「已通过」单子按 mock `mergeCheck` 原样计算（M1 / V9 / V17 / V1–V17 / 提示，单子按编号倒序，与 mock 列表同序），数据取 `change_request.detail`（mock CR_DETAILS 原样，`seeds/extra/static/CR_DETAILS.json`）[推断]。由「发布」触发，发布按钮在只读时置灰（`Releases.vue:195-196`） | releases:manage | — | ✗ | ✗ | 否 |

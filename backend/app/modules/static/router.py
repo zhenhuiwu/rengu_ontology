@@ -8,6 +8,8 @@
 | /dimensions[/{id},/values,/mappings,/usage,/history] | Dimensions.vue |
 | /knowledge[/synonym-conflicts,/{id},/{id}/refs] | Glossary.vue |
 | POST /releases:merge-check、POST /releases、POST /releases/{ver}:rollback | Releases.vue 发布 / 回滚按钮 |
+| GET /change-requests[/{id}]、DELETE /change-requests/{id} | Releases.vue 变更单列表、删除草稿 |
+| POST /change-requests/{id}:submit/withdraw/approve/reject/unapprove/reopen | Releases.vue 详情按钮 |
 """
 
 from collections.abc import Callable
@@ -19,8 +21,17 @@ from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
+from app.modules.static.crs import ChangeRequestService
 from app.modules.static.publish import PublishService
-from app.modules.static.schemas import MergeCheckOut, PublishIn, Rec, RecPage, RollbackIn, SynonymConflicts
+from app.modules.static.schemas import (
+    MergeCheckOut,
+    PublishIn,
+    Rec,
+    RecPage,
+    RejectIn,
+    RollbackIn,
+    SynonymConflicts,
+)
 from app.modules.static.service import StaticService
 from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.schemas import ReleaseOut
@@ -286,3 +297,73 @@ async def rollback(
     """回滚最近一次发布：生成新版本（内容同上一版），不是最新版 → 409 ROLLBACK_NOT_LATEST。"""
     new_ver = await PublishService(session).rollback(user, ver, body.note)
     return ReleaseOut.model_validate(await ReleaseRepo(session).by_ver_or_404(new_ver))
+
+
+# ---------------------------------------------------------------- 变更单（Releases.vue 列表 / 详情 / 按钮）
+CRStatusQ = Literal["草稿", "审核中", "已通过", "已发布", "已驳回"]
+
+
+@get("/change-requests", "releases")
+async def list_change_requests(
+    session: SessionDep, _: CurrentUserDep, status: CRStatusQ | None = None, full: bool = False
+) -> Any:
+    """mock CHANGE_REQUESTS 原样（单号倒序），不分页：前端整表载入后本地筛选、分页 [推断]。
+    full=true 每行带 detail（CRDetail）和 events（评审追加记录）。
+    不随 ?ver 变（变更单不进版本快照）[推断]。"""
+    return await ChangeRequestService(session).list(status=status, full=full)
+
+
+@get("/change-requests/{id}", "releases")
+async def get_change_request(id: str, session: SessionDep, _: CurrentUserDep) -> Any:
+    """一行 + detail（CRDetail 整份）+ events。"""
+    return await ChangeRequestService(session).detail(id)
+
+
+async def _move(id: str, action: str, session: Any, user: Any, reason: str | None = None) -> Any:
+    svc = ChangeRequestService(session)
+    await svc.transition(id, action, user, reason)
+    return await svc.detail(id)
+
+
+@router.post("/change-requests/{id}:submit", dependencies=_MANAGE)
+async def submit_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
+    """草稿 → 审核中（不限提交人；有阻断 / 没改动 → 409）。返回更新后的详情。"""
+    return await _move(id, "submit", session, user)
+
+
+@router.post("/change-requests/{id}:withdraw", dependencies=_MANAGE)
+async def withdraw_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
+    """审核中 → 草稿（owner）。"""
+    return await _move(id, "withdraw", session, user)
+
+
+@router.post("/change-requests/{id}:approve", dependencies=_MANAGE)
+async def approve_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
+    """审核中 → 已通过（reviewer 且不是 owner；有阻断 → 409）。"""
+    return await _move(id, "approve", session, user)
+
+
+@router.post("/change-requests/{id}:reject", dependencies=_MANAGE)
+async def reject_change_request(
+    id: str, session: SessionDep, user: CurrentUserDep, body: Annotated[RejectIn, Body()] = RejectIn()
+) -> Any:
+    """审核中 → 已驳回（reviewer 且不是 owner；rejectReason 必填）。"""
+    return await _move(id, "reject", session, user, body.reject_reason)
+
+
+@router.post("/change-requests/{id}:unapprove", dependencies=_MANAGE)
+async def unapprove_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
+    """已通过 → 草稿（owner 或 reviewer）。"""
+    return await _move(id, "unapprove", session, user)
+
+
+@router.post("/change-requests/{id}:reopen", dependencies=_MANAGE)
+async def reopen_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
+    """已驳回 → 草稿（owner 或 reviewer）。"""
+    return await _move(id, "reopen", session, user)
+
+
+@router.delete("/change-requests/{id}", dependencies=_MANAGE, status_code=204)
+async def delete_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> None:
+    """删除草稿（owner；硬删 [推断]）。"""
+    await ChangeRequestService(session).delete(id, user)
