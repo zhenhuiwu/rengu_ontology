@@ -9,7 +9,8 @@ PDE 定的规则：
 
 页码越界按前端 mock 收拢（src/mock/paginate.ts:12-13）：
 `page = min(max(1, page), max(1, ceil(total / size)))`。超过最后一页 → 返回最后一页的数据，响应里的
-`page` 也是收拢后的页码；total = 0 → page = 1、items = []。所以必须**先数 total、再算 offset**：
+`page` 也是收拢后的页码；page ≤ 0 → 第 1 页（不报 422）；
+total = 0 → page = 1、items = []。所以必须**先数 total、再算 offset**：
 用 `BaseRepository.list_page`（先 count 再取这一页，两条语句）+ `Page.of(...)`；自己拼 SQL 的用
 `page.clamp(total).offset`。
 """
@@ -18,7 +19,7 @@ from collections.abc import Sequence
 from typing import Annotated, Any, Generic, Self, TypeVar
 
 from fastapi import Depends, Query
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.core.schema import ApiModel
 
@@ -28,8 +29,14 @@ MAX_PAGE_SIZE = 200
 
 
 class PageParams(ApiModel):
-    page: int = Field(1, ge=1)
+    page: int = 1
     size: int = Field(20, ge=1, le=MAX_PAGE_SIZE)
+
+    @field_validator("page")
+    @classmethod
+    def _page_at_least_1(cls, v: int) -> int:
+        """page < 1（0、负数）当第 1 页，不报 422（前端 paginate.ts:13 `Math.max(1, q.page)`）。"""
+        return max(1, v)
 
     @property
     def offset(self) -> int:
@@ -47,9 +54,10 @@ def page_count(total: int, size: int) -> int:
 
 
 def _page_params(
-    page: Annotated[int, Query(ge=1)] = 1,
+    page: Annotated[int, Query()] = 1,
     size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 20,
 ) -> PageParams:
+    # page 不设下限：0、负数在 PageParams 里收成 1。size 照旧校验（前端写死的值，不是用户输入）。
     return PageParams(page=page, size=size)
 
 

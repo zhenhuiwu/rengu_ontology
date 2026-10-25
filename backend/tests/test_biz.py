@@ -126,8 +126,17 @@ async def test_page_beyond_last_is_clamped_like_frontend(client, biz):
     # 没有数据：page=1、items=[]
     body = (await client.get("/api/biz/v1/orders", params={"kw": "不存在的门店", "page": 5})).json()
     assert body == {**body, "items": [], "total": 0, "page": 1, "size": 20}
-    # page < 1 仍是 422（参数校验；前端不会传）
-    assert (await client.get("/api/biz/v1/orders", params={"page": 0})).status_code == 422
+    # page ≤ 0 按第 1 页（前端 Math.max(1, q.page)），不报 422
+    first = (await client.get("/api/biz/v1/orders", params={"size": 20, "page": 1})).json()
+    for p in (0, -3):
+        body = (await client.get("/api/biz/v1/orders", params={"size": 20, "page": p})).json()
+        assert body["page"] == 1 and body["total"] == total, p
+        assert [i["id"] for i in body["items"]] == [i["id"] for i in first["items"]]
+        empty = (await client.get("/api/biz/v1/orders", params={"kw": "不存在的门店", "page": p})).json()
+        assert empty == {**empty, "items": [], "total": 0, "page": 1, "size": 20}, p
+    # size 照旧校验
+    for sz in (0, 201):
+        assert (await client.get("/api/biz/v1/orders", params={"size": sz})).status_code == 422
 
 
 async def test_list_line_count_is_one_query(client, biz, engine):

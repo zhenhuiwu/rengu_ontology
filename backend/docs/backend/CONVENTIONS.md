@@ -59,7 +59,7 @@
 - **页面上有 ‹ 1/N › 或页码的列表**用 `page`/`size`：
   - 参数：`?page=1&size=20`，size 不超过 200。
   - 返回 `{items, total, page, size}`。
-  - **页码越界按前端收拢**（`src/mock/paginate.ts:13`：`page = min(max(1, page), max(1, ceil(total/size)))`）：超过最后一页返回**最后一页**的数据，响应 `page` 是收拢后的页码；`total = 0` → `page = 1`、`items = []`。不返回空页、不报错。
+  - **页码越界按前端收拢**（`src/mock/paginate.ts:13`：`page = min(max(1, page), max(1, ceil(total/size)))`）：超过最后一页返回**最后一页**的数据，响应 `page` 是收拢后的页码；`page` 为 0 或负数按第 1 页处理（`PageParams` 先收到至少 1 再 `clamp(total)`，响应 `page = 1`），不报 422；`size` 照旧校验（1–200，越界 422）；`total = 0` → `page = 1`、`items = []`。不返回空页、不报错。
   - 实现：`PageParamsDep` + `rows, total = await repo.list_page(stmt, page)`（先 count 再按收拢后的 offset 取一页，仍是两条语句）+ `Page.of(rows, total, page, **额外字段)`。不要再写 `page=page.page`。自己拼 SQL / 内存分页的用 `page.clamp(total).offset` 和 `.size`。
 - **页面本来就用游标的**（如审计日志）：
   - 参数：`?cursor=&size=`。
