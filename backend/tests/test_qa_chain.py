@@ -208,7 +208,12 @@ async def test_prompt_guidelines_time_and_samples(qa):
 
 
 async def test_dimension_and_metric_context(users, session):
-    await run_seeds(users, ["static"])
+    # 静态变更单的 release_id 外键要求 ontology_release 先有版本行（versioning seed 只在登记了 section 时写）
+    from app.modules.static.sections import BUILDERS
+    from app.modules.versioning.sections import isolated_sections
+
+    with isolated_sections(*BUILDERS):
+        await run_seeds(users, ["versioning", "static"])
     await users.flush()
     ctx = await chain.build_context(session)
     dims = "\n".join(ctx["dims"])

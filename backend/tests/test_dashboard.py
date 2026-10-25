@@ -38,8 +38,13 @@ def mock_ranking() -> list[dict]:
 
 @pytest.fixture
 async def seeded(session):
-    await run_seeds(session, ["admin", "versioning", "static", "biz"])
-    await session.commit()
+    # versioning seed 只在登记了 section 时才写 ontology_release；静态变更单 release_id 外键要求版本行先写
+    from app.modules.static.sections import BUILDERS
+    from app.modules.versioning.sections import isolated_sections
+
+    with isolated_sections(*BUILDERS):
+        await run_seeds(session, ["admin", "versioning", "static", "biz"])
+        await session.commit()
     return session
 
 
