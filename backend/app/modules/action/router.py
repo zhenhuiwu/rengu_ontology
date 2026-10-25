@@ -12,6 +12,7 @@ from app.common.auth import require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page
 from app.db.session import SessionDep
+from app.modules.action import sections as _sections  # noqa: F401  TEMP：import 即登记快照 section（骨架自动发现前）
 from app.modules.action.schemas import (
     ActionTypeDetailOut,
     ActionTypeListOut,
@@ -84,6 +85,6 @@ async def get_writeback(type_id: str, session: SessionDep, ctx: ViewContextDep) 
 
 
 @router.get("/action-types/{type_id}/versions", response_model=ItemsOut[TypeVersionOut], summary="版本记录")
-async def list_versions(type_id: str, session: SessionDep) -> ItemsOut[TypeVersionOut]:
-    rows = await ActionTypeService(session).versions(type_id)
+async def list_versions(type_id: str, session: SessionDep, ctx: ViewContextDep) -> ItemsOut[TypeVersionOut]:
+    rows = await ActionTypeService(session).versions(ctx, type_id)
     return ItemsOut[TypeVersionOut](items=[TypeVersionOut.model_validate(r) for r in rows])

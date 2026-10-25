@@ -61,7 +61,9 @@ class EventTypeService:
         weekly = {s.name: s.weekly for s in cur.subscribers} if cur else {}
         return [{**s, "weekly": weekly.get(s["name"], 0)} for s in d.get("subscribers") or []]
 
-    async def versions(self, type_id: str) -> list[dict[str, Any]]:
+    async def versions(self, ctx: ViewContext, type_id: str) -> list[dict[str, Any]]:
+        """和详情一样按视图判断可见：已下线（或 ?ver= 那一版里没有）的类型 404。"""
+        await self.one(ctx, type_id)
         et: EventType = await self.repo.get_by_code_or_404(type_id)
         return [
             {

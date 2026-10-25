@@ -1,6 +1,11 @@
 """action / event / integration（Palantir专家）第 1 批：seed 与 mock 一致、只读接口、?ver= 快照、下线过滤。"""
 
+import asyncio
 import json
+import os
+import subprocess
+import sys
+import uuid
 
 import pytest
 from sqlalchemy import func, select, update
@@ -390,6 +395,12 @@ async def test_retired_types_hidden(client, released):
         assert ("close_alert" in ids(body)) is visible, ver
         r = await client.get(f"{ONT}/event-types/order_status_changed", params={"ver": ver})
         assert (r.status_code == 200) is visible, ver
+        for path in ("action-types/close_alert/versions", "event-types/order_status_changed/versions"):
+            r = await client.get(f"{ONT}/{path}", params={"ver": ver})
+            assert (r.status_code == 200) is visible, (path, ver)
+    # 版本记录和详情一样：已下线 404
+    for path in ("action-types/close_alert/versions", "event-types/order_status_changed/versions"):
+        assert (await client.get(f"{ONT}/{path}")).status_code == 404, path
     assert "order_status_changed" not in ids((await client.get(f"{ONT}/event-types")).json())
     # 外部系统详情的关联动作也不含已下线的
     body = (await client.get(f"{DATA}/ext-systems/EXT-OMS")).json()
@@ -405,11 +416,21 @@ async def test_build_section_equals_seed_section(ae):
         assert json.loads(json.dumps(built)) == b.seed_section("v2026.10.3", ctx), b.section
 
 
-async def test_sections_not_registered_on_import():
-    from app.modules.versioning.sections import registered_sections
-
-    assert action_sections.SECTION not in registered_sections()
-    assert event_sections.SECTION not in registered_sections()
+def test_sections_register_on_import_idempotently():
+    """import sections.py 即登记（新进程里验证；测试进程的注册表被 conftest 按测试清空）；重复登记不报错。"""
+    code = (
+        "import json\n"
+        "import app.modules.action.sections as a, app.modules.event.sections as e\n"
+        "from app.modules.versioning.sections import registered_sections as r\n"
+        "assert r()['actionTypes'] is a.BUILDER and r()['eventTypes'] is e.BUILDER\n"
+        "assert a.register() is a.BUILDER and e.register() is e.BUILDER\n"
+        "print(json.dumps(sorted(r())))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-3000:]
+    assert {"actionTypes", "eventTypes"} <= set(json.loads(out.stdout.strip().splitlines()[-1]))
+    for mod in (action_sections, event_sections):
+        assert mod.register() is mod.BUILDER and mod.register() is mod.BUILDER
 
 
 @pytest.mark.parametrize("model", [ActionTypeVersion, EventTypeVersion])
@@ -419,3 +440,175 @@ async def test_version_tables_append_only(ae, model):
     with pytest.raises(DBAPIError, match="只追加"):
         async with ae.begin_nested():
             await ae.execute(update(model).values(change_note="改"))
+
+
+async def test_ext_systems_writeback_invalid_reports_once(client, ae):
+    r = await client.get(f"{DATA}/ext-systems", params={"writeback": 2})
+    assert r.status_code == 422
+    assert json.dumps(r.json(), ensure_ascii=False).count('"writeback"') == 1, r.json()
+
+
+# ---------- restore_section（整版回滚，签名 restore_section(session, content, *, release_id)） ----------
+
+
+async def _snap(session) -> tuple[dict, dict]:
+    a = await action_sections.BUILDER.build_section(session, None, [])
+    e = await event_sections.BUILDER.build_section(session, None, [])
+    return json.loads(json.dumps(a)), json.loads(json.dumps(e))
+
+
+async def _generates(session) -> dict:
+    rows = await session.execute(
+        select(ActionType.code, ActionTypeRule.rule_code, ActionTypeRule.generates).join(
+            ActionTypeRule, ActionTypeRule.action_type_id == ActionType.id
+        )
+    )
+    return {(c, r): g for c, r, g in rows.all()}
+
+
+async def test_restore_section_overwrites_and_retires(ae):
+    acts, evs = await _snap(ae)
+    gen0 = await _generates(ae)
+    rel_id = 987654
+    # 恢复到「close_alert 名字和参数不同、request_replenish 不存在」的那一版
+    old_acts = {k: v for k, v in acts.items() if k != "request_replenish"}
+    ca = old_acts["close_alert"]
+    old_acts["close_alert"] = {**ca, "name": "关闭告警（旧）", "params": ca["params"][:1]}
+    old_evs = {k: v for k, v in evs.items() if k != "order_status_changed"}
+    first = next(iter(old_evs))
+    old_evs[first] = {**old_evs[first], "retention": "7 天", "payload": [], "desc": "旧说明"}
+    await action_sections.BUILDER.restore_section(ae, old_acts, release_id=rel_id)
+    await event_sections.BUILDER.restore_section(ae, old_evs, release_id=rel_id)
+
+    acts2, evs2 = await _snap(ae)
+    assert acts2 == old_acts and evs2 == old_evs  # 定义表 = 被恢复版本的内容
+    retired = dict((await ae.execute(select(ActionType.code, ActionType.retired_release_id))).all())
+    assert retired["request_replenish"] == rel_id and retired["close_alert"] is None
+    ev_retired = dict((await ae.execute(select(EventType.code, EventType.retired_release_id))).all())
+    assert ev_retired["order_status_changed"] == rel_id
+    assert (await ae.scalar(select(EventType.retention_days).where(EventType.code == first))) == 7
+
+    # 再恢复到包含它们的版本（重新发布）→ 清掉下线标记、内容回到原样
+    await action_sections.BUILDER.restore_section(ae, acts, release_id=rel_id + 1)
+    await event_sections.BUILDER.restore_section(ae, evs, release_id=rel_id + 1)
+    acts3, evs3 = await _snap(ae)
+    assert acts3 == acts and evs3 == evs
+    n_ret = select(func.count()).select_from(ActionType).where(ActionType.retired_release_id.is_not(None))
+    assert await ae.scalar(n_ret) == 0
+    n_ret = select(func.count()).select_from(EventType).where(EventType.retired_release_id.is_not(None))
+    assert await ae.scalar(n_ret) == 0
+    # 不进快照的字段沿用：规则「生成」标记（RULE_ACTION）、订阅方 weekly（统计）
+    assert await _generates(ae) == gen0
+    weekly = {
+        (s.event_type_id, s.name): s.weekly for s in (await ae.scalars(select(EventSubscription))).all()
+    }
+    want = sum(s.get("weekly", 0) for c in mock("action/derived/subscribersOf.json") for s in c["result"])
+    assert sum(weekly.values()) == want
+
+
+async def test_restore_section_without_release_id_uses_next_release(released):
+    """骨架改签名前不传 release_id：用 max(ontology_release.id)+1（新回滚记录的 id 不会小于它）。"""
+    top = await released.scalar(select(func.max(OntologyRelease.id)))
+    acts, _ = await _snap(released)
+    acts.pop("close_alert")
+    await action_sections.BUILDER.restore_section(released, acts)
+    got = await released.scalar(select(ActionType.retired_release_id).where(ActionType.code == "close_alert"))
+    assert got == top + 1
+
+
+# ---------- 全新库：默认 seed 写出带 actionTypes / eventTypes 的版本记录；迁移往返只看自己的表 ----------
+
+MY_TABLES = {
+    "ext_system", "action_type", "action_type_rule", "action_param", "submission_criterion",
+    "ontology_edit_rule", "side_effect", "action_type_version", "event_type", "event_payload_field",
+    "event_subscription", "event_type_version", "event_envelope_field",
+}  # fmt: skip
+
+
+async def _temp_db():
+    import asyncpg
+    from sqlalchemy.engine import make_url
+
+    from tests.conftest import BASE_URL
+
+    db = f"rengu_pal_{uuid.uuid4().hex[:8]}"
+    base = make_url(BASE_URL)
+    admin = await asyncpg.connect(base.set(drivername="postgresql").render_as_string(hide_password=False))
+    await admin.execute(f'CREATE DATABASE "{db}"')
+    url = base.set(database=db).render_as_string(hide_password=False)
+    plain = base.set(drivername="postgresql", database=db).render_as_string(hide_password=False)
+    return admin, db, url, plain
+
+
+async def _drop(admin, db) -> None:
+    await admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", db)
+    await admin.execute(f'DROP DATABASE IF EXISTS "{db}"')
+    await admin.close()
+
+
+def _alembic(url: str | None = None):
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    if url:
+        cfg.attributes["database_url"] = url
+    return cfg
+
+
+async def test_fresh_db_default_seed_writes_action_event_sections():
+    import asyncpg
+    from alembic import command
+
+    admin, db, url, plain = await _temp_db()
+    try:
+        await asyncio.to_thread(command.upgrade, _alembic(url), "head")
+        env = {**os.environ, "RENGU_DATABASE_URL": url, "RENGU_ENV": "test"}
+        argv = [sys.executable, "-m", "app.cli", "seed"]
+        r = await asyncio.to_thread(
+            subprocess.run, argv, env=env, capture_output=True, text=True, timeout=300
+        )
+        assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-4000:]
+        conn = await asyncpg.connect(plain)
+        try:
+            rows = await conn.fetch("SELECT ver, snapshot::text AS snap FROM ontology_release ORDER BY id")
+        finally:
+            await conn.close()
+        assert rows
+        for row in rows:
+            snap = json.loads(row["snap"])
+            assert set(snap["actionTypes"]) == {a["id"] for a in ACTIONS}, row["ver"]
+            assert set(snap["eventTypes"]) == {e["id"] for e in EVENTS}, row["ver"]
+    finally:
+        await _drop(admin, db)
+
+
+async def test_my_migrations_roundtrip_only_my_tables():
+    """降到 integration_0001 的 down_revision（从脚本算，不写死 0003），只断言自己的表消失 / 回来；
+    之后串在我后面的模块迁移不影响这个测试。"""
+    import asyncpg
+    from alembic import command
+    from alembic.script import ScriptDirectory
+
+    down = ScriptDirectory.from_config(_alembic()).get_revision("integration_0001").down_revision
+    admin, db, url, plain = await _temp_db()
+
+    async def tables() -> set[str]:
+        conn = await asyncpg.connect(plain)
+        try:
+            rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+            return {r["tablename"] for r in rows}
+        finally:
+            await conn.close()
+
+    try:
+        cfg = _alembic(url)
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+        assert await tables() >= MY_TABLES
+        await asyncio.to_thread(command.downgrade, cfg, down)
+        left = await tables()
+        assert not (MY_TABLES & left), MY_TABLES & left
+        assert {"ontology_release", "sys_user"} <= left  # 我依赖的表还在
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+        assert await tables() >= MY_TABLES
+    finally:
+        await _drop(admin, db)

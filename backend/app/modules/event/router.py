@@ -10,6 +10,7 @@ from app.common.pagination import MAX_PAGE_SIZE
 from app.db.session import SessionDep
 from app.modules.action.schemas import ItemsOut, TypeVersionOut
 from app.modules.action.service import paginate
+from app.modules.event import sections as _sections  # noqa: F401  TEMP：import 即登记快照 section（骨架自动发现前）
 from app.modules.event.schemas import (
     EventTypeDetailOut,
     EventTypeListOut,
@@ -81,6 +82,6 @@ async def list_subscribers(type_id: str, session: SessionDep, ctx: ViewContextDe
 
 
 @router.get("/event-types/{type_id}/versions", response_model=ItemsOut[TypeVersionOut], summary="版本记录")
-async def list_versions(type_id: str, session: SessionDep) -> ItemsOut[TypeVersionOut]:
-    rows = await EventTypeService(session).versions(type_id)
+async def list_versions(type_id: str, session: SessionDep, ctx: ViewContextDep) -> ItemsOut[TypeVersionOut]:
+    rows = await EventTypeService(session).versions(ctx, type_id)
     return ItemsOut[TypeVersionOut](items=[TypeVersionOut.model_validate(r) for r in rows])

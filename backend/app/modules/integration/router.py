@@ -29,22 +29,24 @@ _action_view = require_func("action-types", "view")
 
 
 async def ext_list_access(
-    user: CurrentUserDep, writeback: Annotated[int, Query(ge=0, le=1)] = 0
-) -> CurrentUser:
+    user: CurrentUserDep,
+    writeback: Annotated[int, Query(ge=0, le=1, description="1 = 只要可写回的（生产环境且未停用）")] = 0,
+) -> tuple[CurrentUser, int]:
     """external-systems · view；`writeback=1`（动作类型写回 tab 选系统用）有 action-types · view 也可以。
 
     EXTENSION POINT (PDE)：require_func 现在是桩；落地后这里改成「两者满足其一」。
     """
-    return await (_action_view if writeback else _ext_view)(user)
+    return await (_action_view if writeback else _ext_view)(user), writeback
 
 
 @router.get("/ext-systems", response_model=ExtSystemListOut, summary="外部系统列表（不分页）")
 async def list_ext_systems(
     session: SessionDep,
-    _user: Annotated[CurrentUser, Depends(ext_list_access)],
-    writeback: Annotated[int, Query(ge=0, le=1, description="1 = 只要可写回的（生产环境且未停用）")] = 0,
+    access: Annotated[tuple[CurrentUser, int], Depends(ext_list_access)],
+    # [推断] 前端外部系统页没有搜索框，kw 是后端补的可选过滤（名称 / 编号 / 厂商包含），不传 = 全部
     kw: Annotated[str | None, Query(description="名称 / 编号 / 厂商包含")] = None,
 ) -> ExtSystemListOut:
+    _user, writeback = access  # writeback 只在依赖里声明一次，参数错误只报一条
     rows = await ExtSystemService(session).search(writeback=bool(writeback), kw=kw)
     return ExtSystemListOut(items=[ExtSystemOut.model_validate(r) for r in rows])
 

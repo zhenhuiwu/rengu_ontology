@@ -2,15 +2,27 @@
 
 形状：`{<事件 id>: {id,name,api,source,sourceRef,ruleId,object,objectApi,objKind,status,version,owner,desc,
 dedupKey,dedupWindow,delivery,ordering,retention, payload[]（只含 specific，信封字段全局共用不进快照）,
-subscribers[]（不含 weekly 统计）}}`。登记 / seed 规则同 action.sections。
+subscribers[]（不含 weekly 统计）}}`。登记 / seed / restore 规则同 action.sections；
+restore 时订阅方 weekly 按 name 沿用原值，信封字段全局共用不动。
 """
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.event.models import EventType
+from app.core.enums import from_api
+from app.modules.action.models import TypeStatus
+from app.modules.action.sections import new_release_id, retire_missing
+from app.modules.event.models import (
+    EventPayloadField,
+    EventSource,
+    EventSubscription,
+    EventType,
+    SubscriberKind,
+    SubscriberStatus,
+)
+from app.modules.event.seeds import retention_days
 
 SECTION = "eventTypes"
 GROUP = "action"  # export-mock 把事件也导出在 action/ 下
@@ -96,6 +108,60 @@ async def current_types(session: AsyncSession) -> list[EventType]:
     return list((await session.scalars(stmt)).all())
 
 
+async def restore_event_types(session: AsyncSession, content: dict[str, Any], release_id: int) -> None:
+    existing = {et.code: et for et in (await session.scalars(select(EventType))).all()}
+    weekly = {
+        (s.event_type_id, s.name): s.weekly for s in (await session.scalars(select(EventSubscription))).all()
+    }
+    for code, d in content.items():
+        et = existing.get(code) or EventType(code=code)
+        et.name, et.api = d["name"], d["api"]
+        et.source, et.source_ref, et.rule_code = (
+            from_api(EventSource, d["source"]),
+            d.get("sourceRef") or "",
+            d.get("ruleId"),
+        )
+        et.object, et.object_api, et.obj_kind = (
+            d.get("object") or "",
+            d.get("objectApi") or "",
+            d.get("objKind"),
+        )
+        et.status, et.version = from_api(TypeStatus, d["status"]), d["version"]
+        et.owner, et.description = d.get("owner") or "", d.get("desc") or ""
+        et.dedup_key_rule, et.dedup_window = d.get("dedupKey") or "", d.get("dedupWindow") or ""
+        et.delivery, et.ordering = d.get("delivery") or "", d.get("ordering") or ""
+        et.retention_days = retention_days(d["retention"])
+        et.retired_release_id = None
+        session.add(et)
+        await session.flush()
+        for m in (EventPayloadField, EventSubscription):
+            await session.execute(delete(m).where(m.event_type_id == et.id))
+        seed = et.is_seed
+        session.add_all(
+            [
+                EventPayloadField(
+                    event_type_id=et.id, seq=i, name=f["name"], api=f["api"], type=f["type"],
+                    required=bool(f.get("required")), description=f.get("desc") or "",
+                    sample=f.get("sample") or "", is_seed=seed,
+                )
+                for i, f in enumerate(d.get("payload") or [], 1)
+            ]
+            + [
+                EventSubscription(
+                    event_type_id=et.id, seq=i, kind=from_api(SubscriberKind, s["kind"]), name=s["name"],
+                    rule_code=s.get("ruleId"), filter_text=s.get("filter") or "",
+                    then_text=s.get("then") or "",
+                    status=from_api(SubscriberStatus, s["status"]), weekly=weekly.get((et.id, s["name"]), 0),
+                    is_seed=seed,
+                )
+                for i, s in enumerate(d.get("subscribers") or [], 1)
+            ]
+        )  # fmt: skip
+        await session.flush()
+        await session.refresh(et, ["payload", "subscribers"])
+    await retire_missing(session, EventType, set(content), release_id)
+
+
 class EventTypesSection:
     section = SECTION
 
@@ -107,13 +173,22 @@ class EventTypesSection:
     def seed_section(self, ver: str, ctx: Any) -> Any:
         return {t["id"]: event_def_from_json(t, ctx) for t in ctx.load("EVENT_TYPES.json", group=GROUP)}
 
+    async def restore_section(
+        self, session: AsyncSession, content: Any, *, release_id: int | None = None
+    ) -> None:
+        await restore_event_types(session, content or {}, await new_release_id(session, release_id))
+
+
+BUILDER = EventTypesSection()
+
 
 def register() -> EventTypesSection:
+    """幂等：已登记（本实例或测试替身）就不重复登记。import 本模块时自动调用。"""
     from app.modules.versioning.sections import register_section, registered_sections
 
-    existing = registered_sections().get(SECTION)
-    if isinstance(existing, EventTypesSection):
-        return existing
-    b = EventTypesSection()
-    register_section(b)
-    return b
+    if SECTION not in registered_sections():
+        register_section(BUILDER)
+    return BUILDER
+
+
+register()
