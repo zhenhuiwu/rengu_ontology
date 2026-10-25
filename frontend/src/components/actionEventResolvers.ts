@@ -120,7 +120,7 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
     if (ev.objKind) related.push({ kind: ev.objKind, id: ev.objId, label: ev.objLabel, note: `事件对象（${t.object}）` });
     if (t.ruleId) related.push({ kind: 'rule', id: t.ruleId, label: `${t.ruleId} ${RULES[t.ruleId].name}`, note: '产生该事件的规则' });
     return {
-      kind: 'event', kindLabel: '事件', id: ev.id, title: `${t.name} · ${ev.objLabel}`, code: ev.id,
+      kind: 'event', kindLabel: '事件', id: ev.id, title: t.name, code: ev.id,
       status: { text: ev.outcome, color: evColor(ev.outcome) },
       brief: [{ label: '事件类型', value: t.name }, { label: '时间', value: ev.at }, { label: '对象', value: ev.objLabel }, { label: '结果', value: ev.outcome }],
       fields: [
