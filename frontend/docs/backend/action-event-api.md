@@ -681,9 +681,9 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| `action_type` | id(pk bigint), code(unique, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, owner, desc_tpl, runners, approval, sys_id(fk ext_system.id, 可空), endpoint, biz_key_template, release_id | 当前版本 |
+| `action_type` | id(pk bigint), code(unique, 如 `request_replenish`), name, api(unique), grp, status, version, target, target_api, target_kind, owner, desc_tpl, runners, approval, sys_id(fk ext_system.id, 可空), endpoint, biz_key_template, release_id(fk ontology_release.id) | 当前版本 |
 | `action_type_rule` | id(pk), action_type_id, rule_id(fk 动态 rule.id；seed 按 `R-…` 查回), seq, mode_text | 使用该动作的规则（`ACTION_TYPES[].usedBy`）；`(action_type_id, rule_id)` 唯一；进快照 |
-| `action_type_version` | id(pk), action_type_id, ver, release_id(fk ontology_release), status(active/superseded), change_note, by, at, definition jsonb | 每次整版发布写一行 |
+| `action_type_version` | id(pk), action_type_id, ver, release_id(fk ontology_release.id), status(active/superseded), change_note, by, at, definition jsonb | 每次整版发布写一行 |
 | `action_param` | id(pk), action_type_id, seq, name, api, type, required, default_text, rule_text, rule_expr jsonb(可空) | (action_type_id, api) 唯一 |
 | `submission_criterion` | id(pk), action_type_id, seq, kind(current_user/parameter/context_object), name, expr_text, expr_ast jsonb, fail_msg | (action_type_id, name) 唯一 |
 | `ontology_edit_rule` | id(pk), action_type_id, seq, op(modify/create/link), obj, field | — |
@@ -694,7 +694,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `action_run` *(动态)* | 见 dynamic-api.md 1.2 | 只由动态写，字段、约束以动态文档为准（含 `biz_key`、`reconcile_result`、`UNIQUE(idem_key) WHERE NOT is_seed`）；本模块只读 |
 | `action_run_log` *(动态)* | 见 dynamic-api.md 1.2 | 只追加，归动态 |
 | `action_run_daily_stat` | id(pk), action_type_id, date, ok, failed, unknown | seed 用 |
-| `event_type` | id(pk bigint), code(unique, 如 `order_status_changed`), name, api(unique), source, source_ref, rule_id(fk 动态 rule.id，可空),  object, object_api, obj_kind, status, version, owner, desc, dedup_key_rule, dedup_window, delivery, ordering, retention_days, release_id | — |
+| `event_type` | id(pk bigint), code(unique, 如 `order_status_changed`), name, api(unique), source, source_ref, rule_id(fk 动态 rule.id，可空), object, object_api, obj_kind, status, version, owner, desc, dedup_key_rule, dedup_window, delivery, ordering, retention_days, release_id(fk ontology_release.id) | — |
 | `event_type_version` | 同 action_type_version | — |
 | `event_payload_field` | id(pk), event_type_id, seq, name, api, type, required, desc, sample | (event_type_id, api) 唯一，不能和信封字段重名 |
 | `event_envelope_field` | id(pk), api(unique), name, type, required, desc, sample | 全局 10 行，只读 |
