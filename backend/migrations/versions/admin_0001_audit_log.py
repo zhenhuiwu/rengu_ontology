@@ -7,7 +7,7 @@
 - 合并时：down_revision 改成当时的 head（预计 data_0001，CONVENTIONS §16 线性单 head）。
 
 Revision ID: admin_0001
-Revises: event_0002
+Revises: data_0001
 Create Date: 2026-10-26
 """
 
@@ -19,7 +19,7 @@ from alembic import op
 from app.db.ddl import disable_append_only, enable_append_only
 
 revision: str = "admin_0001"
-down_revision: str | None = "event_0002"
+down_revision: str | None = "data_0001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
