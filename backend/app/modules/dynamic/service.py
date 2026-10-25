@@ -106,20 +106,6 @@ def validation_failed(field: str, message: str) -> AppError:
     )
 
 
-async def fetch_page(session: AsyncSession, stmt: Select, pp: PageParams) -> tuple[list, int, PageParams]:
-    """dynamic 唯一的分页切片处：count + offset/limit，返回 (本页行, total, 实际页码参数)。
-
-    TODO(skeleton): 本分支基线 a70cba2 的骨架还没有收拢 helper。骨架分支 9521968 / 9c3e506（未合并）加了
-    `PageParams.clamp(total)`、`BaseRepository.list_page`（先 count 再按收拢后的页取）和 `Page.of(...)`；
-    合并后删掉本函数，两个 search 改成 `rows, total = await self.repo.list_page(stmt, page)` +
-    `AlertPage.of / ActionRunPage.of(items, total, page, counts=...)`
-    （越界收拢由骨架做，不是 dynamic 的 [推断]）。
-    """
-    total = int(await session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0)
-    rows = list((await session.scalars(stmt.offset(pp.offset).limit(pp.size))).all())
-    return rows, total, pp
-
-
 def approver_for_alert(obj_kind: str) -> str:
     """Alerts.vue L173 写死：商品 → 品类经理 王敏，其他 → 区域运营 陈立军（[推断 P5] 未做）。"""
     return "品类经理 王敏" if obj_kind == "product" else "区域运营 陈立军"
@@ -345,7 +331,7 @@ class ActionService:
         if tab == "unknown":
             order = (case((ActionRun.status == ActionStatus.unknown, 0), else_=1), *order)
         stmt = stmt.order_by(*order)
-        rows, total, pp = await fetch_page(self.session, stmt, page)
+        rows, total = await self.repo.list_page(stmt, page)
 
         tab_counts = dict(
             (
@@ -364,11 +350,10 @@ class ActionService:
         def n(sts: Iterable[ActionStatus], counts: dict[Any, int]) -> int:
             return sum(counts.get(s, 0) for s in sts)
 
-        return ActionRunPage(
-            items=await self.to_out(rows),
-            total=total,
-            page=pp.page,
-            size=pp.size,
+        return ActionRunPage.of(
+            await self.to_out(rows),
+            total,
+            page,
             counts=ActionTabCounts(**{k: n(v, tab_counts) for k, v in ACTION_TABS.items()}),
             status_counts={
                 ActionStatus.staged.value: n([ActionStatus.staged], status_counts),
@@ -881,7 +866,7 @@ class AlertService:
                 or_(Alert.code.contains(k, autoescape=True), Alert.obj_label.contains(k, autoescape=True))
             )
         stmt = stmt.order_by(*seed_first_order(Alert))
-        rows, total, pp = await fetch_page(self.session, stmt, page)
+        rows, total = await self.repo.list_page(stmt, page)
         links = await self._links(rows)
         by_status = dict(
             (await self.session.execute(select(Alert.status, func.count()).group_by(Alert.status))).all()
@@ -890,11 +875,10 @@ class AlertService:
             k: sum(by_status.get(s, 0) for s in (v if v is not None else AlertStatus))
             for k, v in ALERT_TABS.items()
         }
-        return AlertPage(
-            items=[self._out(a, links.get(a.action_run_id) if a.action_run_id else None) for a in rows],
-            total=total,
-            page=pp.page,
-            size=pp.size,
+        return AlertPage.of(
+            [self._out(a, links.get(a.action_run_id) if a.action_run_id else None) for a in rows],
+            total,
+            page,
             counts=AlertCounts(**counts),
         )
 

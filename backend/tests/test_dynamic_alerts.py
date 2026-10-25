@@ -211,14 +211,13 @@ async def test_start_action_errors(dyn, client, fakes):  # noqa: F811
 
 @pytest.mark.parametrize("path", ["/alerts", "/action-runs"])
 async def test_page_params_come_from_skeleton(dyn, client, path):  # noqa: F811
-    """页码交给骨架 PageParams：默认条数照前端（12 / 16），size 照传；page ≤ 0 不由 dynamic 决定——
-    骨架收拢（9c3e506 起）→ 第 1 页；更早的骨架 PageParams 拒绝 → 422 VALIDATION_FAILED。两种都不能是 500。
-    按 path 参数化：每个用例最多一个出错请求。"""
-    default = 12 if path == "/alerts" else 16
-    assert (await client.get(f"{API}{path}")).json()["size"] == default
-    assert (await client.get(f"{API}{path}", params={"size": 5})).json()["size"] == 5
-    r = await client.get(f"{API}{path}", params={"page": 0})
-    if r.status_code == 200:
-        assert r.json()["page"] == 1
-    else:
-        assert err(r, 422, "VALIDATION_FAILED")["details"]["fields"][0]["field"] == "page"
+    """页码交给骨架 PageParams / Page.of（paginate.ts:12-13）：默认条数照前端，page ≤ 0 → 1，
+    越界 → 最后一页（响应 page 同步）。收拢是骨架行为，dynamic 只透传。"""
+    q = {"status": "all"} if path == "/alerts" else {}
+    assert (await client.get(f"{API}{path}")).json()["size"] == (12 if path == "/alerts" else 16)
+    first = (await client.get(f"{API}{path}", params={**q, "size": 5})).json()
+    assert (await client.get(f"{API}{path}", params={**q, "size": 5, "page": 0})).json() == first
+    last = -(-first["total"] // 5) or 1
+    far = (await client.get(f"{API}{path}", params={**q, "size": 5, "page": 999})).json()
+    exact = (await client.get(f"{API}{path}", params={**q, "size": 5, "page": last})).json()
+    assert far["page"] == last and far["items"] == exact["items"] and far["items"]

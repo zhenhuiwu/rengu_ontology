@@ -6,7 +6,6 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from pydantic import ValidationError
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
@@ -31,7 +30,7 @@ from app.modules.dynamic.schemas import (
     TransferIn,
     WithdrawIn,
 )
-from app.modules.dynamic.service import ActionService, AlertService, validation_failed
+from app.modules.dynamic.service import ActionService, AlertService
 
 router = APIRouter(tags=["dynamic"])
 
@@ -39,20 +38,13 @@ CatalogDep = Annotated[JsonRefCatalog, Depends(get_catalog)]
 
 
 def _page_params(default_size: int):
-    """页码参数一律交给骨架 PageParams（page 的下限 / 收拢由骨架定，这里不设 ge）；只有默认条数照前端。
-
-    骨架 9c3e506 起 page ≤ 0 在 PageParams 里收成 1；在它之前的骨架上 PageParams 自己拒绝 page < 1，
-    这里转成 422 VALIDATION_FAILED（和骨架 PageParamsDep 当时的行为一致），不自己收拢。
-    """
+    """页码参数一律交给骨架 PageParams（page ≤ 0 → 1、越界收拢都由骨架做）；只有默认条数照前端。"""
 
     def dep(
         page: Annotated[int, Query()] = 1,
         size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = default_size,
     ) -> PageParams:
-        try:
-            return PageParams(page=page, size=size)
-        except ValidationError as e:
-            raise validation_failed("page", e.errors()[0]["msg"]) from e
+        return PageParams(page=page, size=size)
 
     return dep
 
