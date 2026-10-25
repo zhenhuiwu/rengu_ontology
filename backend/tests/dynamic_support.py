@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+import app.main  # noqa: F401  收集阶段就建好 app：create_app 的 load_sections 先登记真实 section，免得在 sections 替身之后才 import 撞名
 from app.contracts.actions import SubmitResult, SubmitStatus
 from app.modules.admin.models import SysUser
 from app.modules.dynamic import ports

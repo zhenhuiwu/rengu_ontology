@@ -5,6 +5,8 @@ import InfoTip from '@/components/InfoTip.vue';
  * 页签写进 ?tab=（pending 待确认 / records 执行记录 / unknown 结果未知与对账），当前选中写进 ?act=，页码 ?page=&size=。
  * 写外部系统的动作（确认提交、重新提交）一律走公共确认卡。结果未知：系统每 15 分钟按幂等键自动查询外部结果，
  * 仍无法确认时人工发起对账；任何情况下都不自动重试写入。
+ * 开关 dynamic 走真接口时（src/api/dynamic.ts）：列表 / 页签计数 / 详情（执行记录）/ 动作与外部系统下拉都取后台，
+ * 确认提交、撤回、重新提交、对账一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -21,10 +23,20 @@ import {
   ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS, OBJ_KIND_LABEL, hasObjRef, waitingText,
   type ActionRecord, type ActionStatus, type ActionLog,
 } from '@/mock/actions';
+import { useAppStore } from '@/stores/app';
+import { isApiError } from '@/api/http';
+import {
+  dynamicApi, listActionRuns, getActionRun, getActionMeta, confirmActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun,
+  type ActionMetaDto, type ActionRunDetailDto, type ActionRunDto, type ActionTab,
+} from '@/api/dynamic';
 
 /** 页面内的动作状态（模拟后台：确认、撤回、重新提交、对账都会改它并写执行记录） */
 const LIST = ACTIONS;
-const ME = '王敏';
+/** 是否走真接口（开关 dynamic）；构建时确定 */
+const REAL = dynamicApi.isReal();
+const app = useAppStore();
+/** 当前用户：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
+const ME = REAL ? app.user.name : '王敏';
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(40 + tick).padStart(2, '0')}:00`; };
 const TERMINAL: ActionStatus[] = ['成功', '已撤回', '已对账'];
@@ -51,7 +63,19 @@ const kw = ref('');
 watch(tab, () => { status.value = '全部'; pinned.value = undefined; });
 const pq = usePagedQuery({ defaultSize: 16, filters: [actionName, system, status, kw] });
 
+/** 真接口状态：当前页、总数、页签计数、当前详情、动作元数据（动作 / 外部系统下拉、调用接口名） */
+const remote = reactive({
+  items: [] as ActionRecord[], total: 0, counts: { pending: 0, records: 0, unknown: 0 } as Record<string, number>,
+  detail: null as ActionRecord | null, meta: null as ActionMetaDto | null,
+});
+const toRec = (a: ActionRunDto | ActionRunDetailDto): ActionRecord => ({ ...a, log: 'log' in a ? a.log : [] } as ActionRecord);
+const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+const actionNames = computed<string[]>(() => (REAL ? remote.meta?.actionNames ?? [] : ACTION_NAMES));
+const actionSystems = computed<{ id: string; name: string }[]>(() => (REAL ? remote.meta?.actionSystems ?? [] : ACTION_SYSTEMS));
+const callOf = (name: string) => (REAL ? remote.meta?.actionMeta[name]?.call ?? '--' : ACTION_META[name as keyof typeof ACTION_META]?.call ?? '--');
+
 const rows = computed(() => {
+  if (REAL) return remote.items;
   const t = curTab.value;
   const k = kw.value.trim();
   const list = LIST.filter((a) =>
@@ -63,15 +87,44 @@ const rows = computed(() => {
   // 对账页签：待对账的排在前面
   return t.key === 'unknown' ? [...list].sort((a, b) => Number(b.status === '结果未知') - Number(a.status === '结果未知')) : list;
 });
-const count = (key: string) => LIST.filter((a) => TABS.find((t) => t.key === key)!.statuses.includes(a.status)).length;
-const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
+const count = (key: string) => REAL ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.statuses.includes(a.status)).length;
+const paged = computed(() => (REAL ? { items: remote.items, total: remote.total } : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
 
 /** 刚处理过的动作即使离开当前页签也继续显示在右侧，避免详情突然换成别的动作 */
 const pinned = ref<string>();
 const selectedId = computed(() => (route.query.act as string) || pinned.value || paged.value.items[0]?.id);
-const current = computed<ActionRecord | undefined>(() => LIST.find((a) => a.id === selectedId.value) ?? paged.value.items[0]);
+const current = computed<ActionRecord | undefined>(() => REAL ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? paged.value.items[0]);
 const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
-const pick = (a: ActionRecord) => { pinned.value = a.id; router.replace({ query: { ...route.query, act: a.id } }); };
+const pick = (a: Pick<ActionRecord, 'id'>) => { pinned.value = a.id; router.replace({ query: { ...route.query, act: a.id } }); };
+
+// ---- 真接口：取列表 / 详情 / 元数据 ----
+let listSeq = 0; let detailSeq = 0;
+async function loadList() {
+  const seq = ++listSeq;
+  try {
+    const r = await listActionRuns({ tab: tab.value as ActionTab, status: status.value, action: actionName.value, sysId: system.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
+    if (seq !== listSeq) return;
+    remote.items = r.items.map(toRec); remote.total = r.total; remote.counts = r.counts;
+  } catch (e) { if (seq === listSeq) fail(e); }
+}
+async function loadDetail(id = selectedId.value) {
+  const seq = ++detailSeq;
+  if (!id) { remote.detail = null; return; }
+  try {
+    const d = await getActionRun(id);
+    if (seq === detailSeq) remote.detail = toRec(d);
+  } catch (e) { if (seq === detailSeq) { remote.detail = null; fail(e); } }
+}
+/** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
+async function afterWrite(d?: ActionRunDetailDto) {
+  if (d) { ++detailSeq; remote.detail = toRec(d); }
+  await loadList();
+}
+if (REAL) {
+  watch([tab, actionName, system, status, kw, pq.page, pq.size], loadList, { immediate: true });
+  watch(selectedId, (id) => { loadDetail(id); }, { immediate: true });
+  getActionMeta().then((m) => { remote.meta = m; }, fail);
+}
 
 /** 状态点：待确认橙（需要关注）、失败红，其余灰；结果未知单独显示橙色问号 + “结果未知 · 待对账” */
 const badge = (s: ActionStatus) => (s === '待确认' ? 'warning' : s === '失败' ? 'error' : 'default');
@@ -112,7 +165,7 @@ async function submit() {
       { label: '来源', value: a.source.type === '告警' ? `${a.source.alertId}（${a.source.ruleId} ${a.source.ruleVersion}）` : sourceText(a) },
       { label: '确认人', value: confirmerOf(a) },
       { label: '审批人', value: a.approver },
-      { label: '外部系统', value: `${a.system} · ${ACTION_META[a.action].call}` },
+      { label: '外部系统', value: `${a.system} · ${callOf(a.action)}` },
       { label: '幂等键', value: a.idemKey },
     ],
     blocked: notMine(a) ? notMineText(a) : undefined,
@@ -120,6 +173,10 @@ async function submit() {
   });
   if (!ok) return;
   pinned.value = a.id;
+  if (REAL) {
+    try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(`已提交：${d.action}，等待 ${d.approver} 审批`); } catch (e) { fail(e); }
+    return;
+  }
   a.status = '审批中';
   push(a, { time: now(), text: '确认提交', desc: `确认人 ${ME}` });
   push(a, { time: now(), text: '等待审批', desc: `审批人 ${a.approver}`, status: 'warn' });
@@ -129,9 +186,13 @@ async function submit() {
 // 待确认 → 撤回（不写外部系统，只需填原因）
 const withdrawOpen = ref(false);
 const withdrawReason = ref('');
-function doWithdraw() {
+async function doWithdraw() {
   const a = current.value; if (!a || !withdrawReason.value.trim() || notMine(a)) return;
   pinned.value = a.id;
+  if (REAL) {
+    try { await afterWrite(await withdrawActionRun(a.id, withdrawReason.value.trim())); withdrawOpen.value = false; withdrawReason.value = ''; message.success(`已撤回 ${a.id}`); } catch (e) { fail(e); }
+    return;
+  }
   a.status = '已撤回';
   push(a, { time: now(), text: `撤回：${withdrawReason.value.trim()}`, desc: ME });
   withdrawOpen.value = false; withdrawReason.value = '';
@@ -143,19 +204,29 @@ async function resubmit() {
   const a = current.value; if (!a || a.status !== '失败' || a.retriedAs) return;
   const n = (a.idemKey.match(/-r(\d+)$/)?.[1] ?? '0');
   const newKey = `${a.idemKey.replace(/-r\d+$/, '')}-r${Number(n) + 1}`;
-  const newId = `ACT-20261025-${String(Math.max(...LIST.map((x) => Number(x.id.slice(-4)))) + 1).padStart(4, '0')}`;
+  // 真接口时新编号由后台生成，确认卡里不预先显示
+  const newId = REAL ? '' : `ACT-20261025-${String(Math.max(...LIST.map((x) => Number(x.id.slice(-4)))) + 1).padStart(4, '0')}`;
   const ok = await confirm.ask({
     title: `重新提交：${a.action}`, okText: '重新提交', irreversible: true,
     target: `${kindLabel(a.objKind)} ${a.objLabel}`,
     fields: [
       { label: '上次失败', value: a.failReason ?? '--' },
       { label: '参数', value: a.params },
-      { label: '外部系统', value: `${a.system} · ${ACTION_META[a.action].call}` },
+      { label: '外部系统', value: `${a.system} · ${callOf(a.action)}` },
       { label: '新幂等键', value: newKey },
     ],
-    impact: `沿用原审批（${a.approver}），生成新动作 ${newId} 并用新幂等键调用 ${a.system}；原动作 ${a.id} 保留为失败，便于追溯。`,
+    impact: `沿用原审批（${a.approver}），生成新动作${newId ? ` ${newId}` : ''} 并用新幂等键调用 ${a.system}；原动作 ${a.id} 保留为失败，便于追溯。`,
   });
   if (!ok) return;
+  if (REAL) {
+    try {
+      const r = await resubmitActionRun(a.id);
+      pinned.value = a.id;
+      await afterWrite(r.original);
+      message.success(`已重新提交为 ${r.id}`);
+    } catch (e) { fail(e); }
+    return;
+  }
   const t = now();
   const rec: ActionRecord = reactive({
     ...a, id: newId, idemKey: newKey, status: '执行中', submittedAt: t, extRef: null, failReason: undefined,
@@ -178,10 +249,19 @@ async function resubmit() {
 const reconOpen = ref(false);
 const reconAs = ref<'外部已成功' | '外部未执行' | '仍无法确认'>();
 const reconNote = ref('');
-function doReconcile() {
+async function doReconcile() {
   const a = current.value; if (!a || a.status !== '结果未知' || !reconAs.value || !reconNote.value.trim()) return;
   pinned.value = a.id;
   const note = reconNote.value.trim();
+  if (REAL) {
+    try {
+      const as = reconAs.value;
+      await afterWrite(await reconcileActionRun(a.id, as, note));
+      if (as === '仍无法确认') message.info('已记录对账，仍为结果未知'); else message.success(`已对账：${as}`);
+      reconOpen.value = false; reconAs.value = undefined; reconNote.value = '';
+    } catch (e) { fail(e); }
+    return;
+  }
   if (reconAs.value === '仍无法确认') {
     push(a, { time: now(), text: `对账：仍无法确认（${note}）`, desc: `${ME} · 保持结果未知，系统继续每 15 分钟按幂等键查询`, status: 'unknown' });
     message.info('已记录对账，仍为结果未知');
@@ -216,9 +296,9 @@ const terminalText = computed(() => {
         </a-radio-group>
         <div class="ac-filters">
           <a-select v-model:value="actionName" size="small" class="ac-w140"
-            :options="[{ value: '全部', label: '全部动作' }, ...ACTION_NAMES.map((v) => ({ value: v, label: v }))]" />
+            :options="[{ value: '全部', label: '全部动作' }, ...actionNames.map((v) => ({ value: v, label: v }))]" />
           <a-select v-model:value="system" size="small" class="ac-w120"
-            :options="[{ value: '全部', label: '全部外部系统' }, ...ACTION_SYSTEMS.map((v) => ({ value: v.id, label: v.name }))]" />
+            :options="[{ value: '全部', label: '全部外部系统' }, ...actionSystems.map((v) => ({ value: v.id, label: v.name }))]" />
           <a-select v-if="curTab.statuses.length > 1" v-model:value="status" size="small" class="ac-w120"
             :options="[{ value: '全部', label: '全部状态' }, ...curTab.statuses.map((v) => ({ value: v, label: v }))]" />
           <a-input-search v-model:value="kw" size="small" placeholder="编号 / 对象 / 幂等键 / 外部单号" class="ac-w240" />
@@ -306,7 +386,7 @@ const terminalText = computed(() => {
         <span v-else-if="current.status === '执行中'" class="t-14 c-3">等待 {{ current.system }} 返回，{{ waitingText(current.sysId) }}</span>
 
         <template v-else-if="current.status === '失败'">
-          <span v-if="current.retriedAs" class="t-14 c-3">已重新提交为 <a class="num" @click="pick(LIST.find((x) => x.id === current!.retriedAs)!)">{{ current.retriedAs }}</a></span>
+          <span v-if="current.retriedAs" class="t-14 c-3">已重新提交为 <a class="num" @click="pick({ id: current!.retriedAs! })">{{ current.retriedAs }}</a></span>
           <template v-else>
             <a-popover trigger="click" placement="topRight">
               <template #content>
@@ -338,7 +418,7 @@ const terminalText = computed(() => {
       <div class="ca-target t-14 c-2">作用对象：<span class="c-1">{{ kindLabel(current.objKind) }} {{ current.objLabel }}</span></div>
       <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px' }">
         <a-descriptions-item label="动作编号"><span class="num">{{ current.id }}</span></a-descriptions-item>
-        <a-descriptions-item label="外部系统"><span class="num">{{ current.system }} · {{ ACTION_META[current.action].call }}</span></a-descriptions-item>
+        <a-descriptions-item label="外部系统"><span class="num">{{ current.system }} · {{ callOf(current.action) }}</span></a-descriptions-item>
         <a-descriptions-item label="外部单号"><span class="num ac-nowrap">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
         <a-descriptions-item label="幂等键"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
       </a-descriptions>

@@ -32,6 +32,7 @@ from app.modules.dynamic.models import (
     ActionRun,
     ActionStatus,
     Alert,
+    AlertLevel,
     AlertOp,
     AlertStatus,
     ReconcileResult,
@@ -857,7 +858,11 @@ class AlertService:
         if want is not None:
             stmt = stmt.where(Alert.status.in_(want))
         if level and level != "全部":
-            stmt = stmt.where(Alert.level == level)
+            try:
+                lv = AlertLevel(level)
+            except ValueError:
+                raise validation_failed("level", "level 只能是 高 / 中 / 低") from None
+            stmt = stmt.where(Alert.level == lv)
         if rule_id and rule_id != "全部":
             stmt = stmt.where(Alert.rule_code == rule_id)
         k = (kw or "").strip()
