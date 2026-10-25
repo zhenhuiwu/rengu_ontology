@@ -4,7 +4,7 @@
 - 合并时接在当时的 head 后面（CONVENTIONS §16 线性单 head）：合并顺序里应改为 integration_0002。
 
 Revision ID: data_0001
-Revises: event_0002
+Revises: integration_0002
 Create Date: 2026-10-26
 """
 
@@ -15,7 +15,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "data_0001"
-down_revision: str | None = "event_0002"
+down_revision: str | None = "integration_0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
