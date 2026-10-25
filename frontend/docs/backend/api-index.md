@@ -121,7 +121,7 @@
 - **界面登录**：前端没有登录页。演示身份用 `?as=admin|viewer` 切换（`stores/app.ts` 的 `PERSONAS`）。**开发身份（已定）**：开发和测试环境用请求头 **`X-Demo-As: admin|viewer`**（生产关闭），映射：`admin` = 王敏（数据产品经理，可进 use/build/admin 三个区，对应角色“系统管理员”）；`viewer` = 李娜（门店运营（只读），只能进 use 区，对应角色“业务查看”）。两个用户在 `seeds/extra` 里补（`is_seed=true`），`ADMIN_USERS` 是随机生成的，不保证有这两个名字。后台需要一个 `GET /me`，返回当前用户、能进入的区（`use|build|admin`）、各页面的功能级别（`FuncLevel = 'none'|'view'|'manage'`）。登录方式（SSO/账号密码/MFA）【待定】；安全策略页有密码规则、锁定、会话时长、MFA 的配置（§4.5），登录实现要读这些配置。
 - **API 密钥**（外部系统调用，见“API 密钥”页）：`Authorization: Bearer <secret>`。数据库只存哈希，另外存 `prefix` 和 `last4` 用于展示。每个密钥必须绑定身份：`角色` 或 `服务账号 + 数据范围`（`KeyBinding`，mock/apikeys.ts）。按 `scopes`（`KEY_SCOPES`：问数查询、对象读取、指标读取、动作执行、数据导出、元数据读取、Webhook 回调）控制能调用哪些接口，并检查 `ipAllow` 和 `expiresAt`。每次调用记一条 `KeyCall`（时间、接口、IP、状态码、耗时）。
 - **权限模型**（mock/roles.ts，角色页维护）：
-  - 功能权限：`Role.func[pageKey]`，取值 none/view/manage。view 只能读，写接口要求 manage。
+  - 功能权限：`Role.func[pageKey]`，取值 none/view/manage。view 只能读，写接口要求 manage。**例外（已定）**：问数用户对自己的会话和页面的写（工作台 W2–W16，含常用问题、赞踩、停止、重算、申请权限；我的页面 P2–P10，含卡片、刷新、订阅、共享）只要求 `qa-workbench·view` / `qa-pages·view`，和 qa-api 一致；能不能改某一条仍按拥有者 / 可编辑成员校验。问数调优（`qa-tuning`）的写仍要求 manage。
   - 对象权限：`ObjPerm{objType, view, export, actions[]}`，控制能不能看、能不能导出、能执行哪些动作。
   - 行级范围：`RowScope{objType, prop, op:'='|'∈', values[]}`。只能基于对象类型里标为“权限依据”的属性（`SCOPE_PROPS`）。查询时注入谓词（调研文档 §3.7：pycasbin 管功能权限，行级谓词自己生成）。
   - `defaultDeny`：业务查看类角色，没有配置行级范围的对象类型**一行都不可见**。对应“未配置范围”状态。
@@ -299,7 +299,7 @@
 | GET | /favorites | `q,page,size` | `PageResult<QaFavorite>` | 页码 | 读 | | `qa.ts` `QA_FAVORITE_LIST`（18） |
 | POST | /favorites | `{question}` | `QaFavorite` | — | 写 | 【推断】前端还没有“加入常用”的入口 | — |
 | DELETE | /favorites/{id} | — | 204 | — | 写 | | — |
-| POST | /permission-requests | `{scope,metric,reason,duration,sourceTurnId}` | `{id,status,approver}` | — | 写 | W16；历史版本 `?ver=` 下放行（§1.7 白名单，【推断 §8.1-9】），预览下 403 `READONLY` | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
+| POST | /permission-requests | `{scope,metric,reason,duration,sourceTurnId}` | `{id,status,approver}` | — | 写 | W16；历史版本 `?ver=` 下放行（§1.7 白名单，【推断 §8.1-9】），预览下 403 `READONLY`。**存储（已定，qa-api §11-10）**：存问数自己的表 `qa_permission_request`（只有问数有申请入口）；以后可能并入 admin 的统一审批 | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
 | GET | /session-options | — | `{scopes,calibers,metric}` | — | 读 | qa-api.md 里没有单列这个接口，本文补充【待定】 | `qa.ts` `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
 
 - 右栏（当前对象、时间线、可执行动作）复用 §2.5 的 O5/O7/O9。“固定到页面”用 §2.3 的 `GET /pages?view=brief` 和 `POST /pages/{pid}/cards`。
@@ -1079,7 +1079,7 @@
 - 各页接口表共 265 行；按“模块 + 方法 + 路径”去重后共 **253 个接口**：`admin` 43、`biz` 3、`data` 22、`ontology` 127、`qa` 58；读 143，写 101，不落库 9。
 - 不含内部接口（`POST /internal/v1/events`，外部系统适配器的 `submit`/`query_by_key`），也不含 static-api.md 里有、但前端页面没有用到的接口；完整清单以各负责人文档为准。
 - **类型**：`读`、`写`、`不落库`（POST 但不写库：试运行、试算、测试连接、导出、回放、合并校验、导入预览等）。
-- **页面权限**：`pageKey·level`，pageKey 是 `nav.ts` 的页面 key，level 是 `FuncLevel`（`view` 能看，`manage` 能改）；多个页面用 `/` 连接，满足其一即可。“登录即可”= 只要登录。
+- **页面权限**：`pageKey·level`，pageKey 是 `nav.ts` 的页面 key，level 是 `FuncLevel`（`view` 能看，`manage` 能改）；多个页面用 `/` 连接，满足其一即可。“登录即可”= 只要登录。**例外（已定）**：问数用户对自己的会话和页面的写（工作台 W2–W16、我的页面 P2–P10）只要求 `qa-workbench·view` / `qa-pages·view`，和 qa-api 一致；能不能改某一条仍按拥有者 / 可编辑成员校验（§1.4）。
 - **API 密钥范围**：调用方用 API 密钥时需要的 `KEY_SCOPES`（mock/apikeys.ts）；`—` 表示不对 API 密钥开放。这一列是 PDE 的划分建议【推断】，前端没有逐个接口的对应。Webhook 回调只用于内部事件接入，不在本表。
 - **?ver= / 预览**：请求带 `?ver=` 或 `?previewAs=` 时是否允许。按前端行为：前端没有拦的就是 Y；写一律 N（403 `READONLY`），W16 申请权限在 `?ver=` 下例外为 Y（§1.7 白名单），导出在预览下 N（`EXPORT_FORBIDDEN`）。
 - **行级范围**：Y = 返回业务数据，按调用人（或被预览用户、API 密钥绑定身份）的 `RowScope` 过滤；N = 元数据或管理数据，不过滤。写接口另按 §1.4 校验对象权限。
@@ -1282,8 +1282,8 @@
 | 194 | ontology | POST | `/api/ontology/v1/scenarios/{id}:stage` | 写 | 2.8 | scenarios·manage | 动作执行 | N | N | N | — |
 | 195 | ontology | GET | `/api/ontology/v1/scenarios:compare` | 读 | 2.8 | scenarios·view | 对象读取 | Y | Y | Y | 同上 |
 | 196 | qa | GET | `/api/qa/v1/favorites` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_FAVORITE_LIST`（18） |
-| 197 | qa | POST | `/api/qa/v1/favorites` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
-| 198 | qa | DELETE | `/api/qa/v1/favorites/{id}` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
+| 197 | qa | POST | `/api/qa/v1/favorites` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
+| 198 | qa | DELETE | `/api/qa/v1/favorites/{id}` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
 | 199 | qa | GET | `/api/qa/v1/objects/types` | 读 | 2.4 | object-search·view | 对象读取 | Y | Y | Y | `objects-qa.ts` `OBJ_TYPES`、`FIELD_GROUPS`、`KIND_LABEL`、`OBJ_SCOPE` |
 | 200 | qa | POST | `/api/qa/v1/objects/{kind}/export` | 不落库 | 2.4 | object-search·view | 数据导出 | Y | N | Y | 同上 |
 | 201 | qa | POST | `/api/qa/v1/objects/{kind}/search` | 读 | 2.4 | object-search·view | 对象读取 | Y | Y | Y | 业务数据：`stores.ts` `ALL_STORES` + `objects-qa.ts` `OBJ_EXTRA_STORES`/`storeSales`（门店 95）、`products.ts` `PRODUCTS`（12）、`orders.ts` `ORDERS`（1286） |
@@ -1292,24 +1292,24 @@
 | 204 | qa | GET | `/api/qa/v1/objects/{kind}/{id}/related` | 读 | 2.5 | object-detail·view | 对象读取 | Y | Y | Y | `objects-qa.ts` `relationGroups`；`qa.ts` `QA_REGION_RELATED`（38） |
 | 205 | qa | GET | `/api/qa/v1/objects/{kind}/{id}/timeline` | 读 | 2.5 | object-detail·view | 对象读取 | Y | Y | Y | `objects-qa.ts` `extraTimeline`；`qa.ts` `QA_TIMELINE`、`QA_REGION_TIMELINE` |
 | 206 | qa | GET | `/api/qa/v1/pages` | 读 | 2.3 | qa-pages·view | 问数查询 | Y | Y | Y | `qa-pages.ts` `MY_PAGES`、`OTHER_PAGES`、`CARD_LIB`（27+5 个页面 / 197 张卡片） |
-| 207 | qa | POST | `/api/qa/v1/pages` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
-| 208 | qa | DELETE | `/api/qa/v1/pages/{pid}` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
+| 207 | qa | POST | `/api/qa/v1/pages` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
+| 208 | qa | DELETE | `/api/qa/v1/pages/{pid}` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
 | 209 | qa | GET | `/api/qa/v1/pages/{pid}` | 读 | 2.3 | qa-pages·view | 问数查询 | Y | Y | Y | 同 GET /pages |
-| 210 | qa | PATCH | `/api/qa/v1/pages/{pid}` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
-| 211 | qa | POST | `/api/qa/v1/pages/{pid}/cards` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
-| 212 | qa | PUT | `/api/qa/v1/pages/{pid}/cards` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
-| 213 | qa | PUT | `/api/qa/v1/pages/{pid}/schedule` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
-| 214 | qa | PUT | `/api/qa/v1/pages/{pid}/share` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
-| 215 | qa | POST | `/api/qa/v1/pages/{pid}:refresh` | 写 | 2.3 | qa-pages·manage | — | N | N | N | — |
-| 216 | qa | POST | `/api/qa/v1/permission-requests` | 写 | 2.2 | qa-workbench·manage | — | Y【推断 §8.1-9】 | N | N | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
+| 210 | qa | PATCH | `/api/qa/v1/pages/{pid}` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
+| 211 | qa | POST | `/api/qa/v1/pages/{pid}/cards` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
+| 212 | qa | PUT | `/api/qa/v1/pages/{pid}/cards` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
+| 213 | qa | PUT | `/api/qa/v1/pages/{pid}/schedule` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
+| 214 | qa | PUT | `/api/qa/v1/pages/{pid}/share` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
+| 215 | qa | POST | `/api/qa/v1/pages/{pid}:refresh` | 写 | 2.3 | qa-pages·view | — | N | N | N | — |
+| 216 | qa | POST | `/api/qa/v1/permission-requests` | 写 | 2.2 | qa-workbench·view | — | Y【推断 §8.1-9】 | N | N | `qa.ts` `QA_APPLY`（只是预填模板，0 条） |
 | 217 | qa | POST | `/api/qa/v1/scoped-ask` | 写 | 2.4 | object-search·manage | 问数查询【推断】 | N | Y | Y | `objects-qa.ts`（`AskAnswer` 由函数生成） |
 | 218 | qa | GET | `/api/qa/v1/session-options` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
 | 219 | qa | GET | `/api/qa/v1/sessions` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_SESSION_LIST`（103） |
-| 220 | qa | POST | `/api/qa/v1/sessions` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
-| 221 | qa | DELETE | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
+| 220 | qa | POST | `/api/qa/v1/sessions` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
+| 221 | qa | DELETE | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
 | 222 | qa | GET | `/api/qa/v1/sessions/{sid}` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | 现在写死在 `QaConversation.vue` / `QaAnswer.vue` / `QaStoreAnswer.vue`；数据部分来自 `qa.ts` `QA_PROVINCES/QA_TREND/QA_TOTAL_*/QA_EC_STORES`（见差异） |
-| 223 | qa | PATCH | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
-| 224 | qa | POST | `/api/qa/v1/sessions/{sid}/turns` | 写 | 2.2 | qa-workbench·manage | 问数查询 | N | N | N | — |
+| 223 | qa | PATCH | `/api/qa/v1/sessions/{sid}` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
+| 224 | qa | POST | `/api/qa/v1/sessions/{sid}/turns` | 写 | 2.2 | qa-workbench·view | 问数查询 | N | N | N | — |
 | 225 | qa | GET | `/api/qa/v1/templates` | 读 | 2.3 | qa-pages·view | 问数查询 | Y | Y | Y | `qa-pages.ts` `PAGE_TEMPLATES`（22 个模板 / 104 张卡片） |
 | 226 | qa | GET | `/api/qa/v1/templates/{id}` | 读 | 2.3 | qa-pages·view | 问数查询 | Y | Y | Y | 同上 |
 | 227 | qa | GET | `/api/qa/v1/tuning/certs` | 读 | 3.14 | qa-tuning·view | — | Y | Y | N | `qa-tuning.ts` `CERT_QAS`（30） |
@@ -1336,9 +1336,9 @@
 | 248 | qa | GET | `/api/qa/v1/turns/{tid}/export` | 读 | 2.2 | qa-workbench·view | 数据导出 | Y | N | Y | — |
 | 249 | qa | GET | `/api/qa/v1/turns/{tid}/result` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | `qa.ts` `QA_EC_STORES`（38） |
 | 250 | qa | GET | `/api/qa/v1/turns/{tid}/stream` | 读 | 2.2 | qa-workbench·view | 问数查询 | Y | Y | Y | — |
-| 251 | qa | PUT | `/api/qa/v1/turns/{tid}/vote` | 写 | 2.2 | qa-workbench·manage | — | N | N | N | — |
-| 252 | qa | POST | `/api/qa/v1/turns/{tid}:cancel` | 写 | 2.2 | qa-workbench·manage | 问数查询 | N | N | N | — |
-| 253 | qa | POST | `/api/qa/v1/turns/{tid}:recalc` | 写 | 2.2 | qa-workbench·manage | 问数查询 | N | N | N | — |
+| 251 | qa | PUT | `/api/qa/v1/turns/{tid}/vote` | 写 | 2.2 | qa-workbench·view | — | N | N | N | — |
+| 252 | qa | POST | `/api/qa/v1/turns/{tid}:cancel` | 写 | 2.2 | qa-workbench·view | 问数查询 | N | N | N | — |
+| 253 | qa | POST | `/api/qa/v1/turns/{tid}:recalc` | 写 | 2.2 | qa-workbench·view | 问数查询 | N | N | N | — |
 
 ---
 
@@ -1382,6 +1382,7 @@
 - §6 按 pde 分支的 `scripts/export-mock.mjs` 实际行为重写。
 - 删除过时说法：客户端 `Idempotency-Key`、“任何情况下都不重试写入”、`reconAs`、`ext_call`、“不允许改 mock”。
 - 按骨架评审：只读模式改用 query `?ver=`、`?previewAs=`（不用请求头，`release=` 参数作废），只读写请求 403；校验错误 `VALIDATION_FAILED` + `details.fields`；追踪字段 `requestId` + 响应头 `X-Request-ID`；`GET /releases` 返回 `Release[]` + `current`、不分页；表命名和公共列规则（§1.1）；时间格式逐字段同 mock、库存 `timestamptz`；种子目录按 export-mock 分组 `seeds/json/<group>/`；`OBJ_TYPES` 派生行数和 `dsTables` 种子来源说明（§6）。
+- 问数用户对自己的会话和页面的写（W2–W16、P2–P10）页面权限改为 `qa-workbench·view` / `qa-pages·view`（原为 manage），和 qa-api 一致，已定（§1.4、§7 说明和 18 行）；qa-api §11-10 已定：权限申请存问数自己的表 `qa_permission_request`（只有问数有入口），以后可能并入 admin 统一审批（§2.2 W16）。
 - 只读拒绝统一为 403 `READONLY` + `details.mode='history'|'preview'`（`READONLY_HISTORY` / `READONLY_PREVIEW` 作废）；§1.7 列出只读白名单，W16 申请权限在 `?ver=` 下放行（【推断 §8.1-9】，可收紧）；按冒号规则 `/pages/{pid}/refresh`、`/turns/{tid}/recalc` 改为 `:refresh`、`:recalc`。
 - 按团队决定：`/ext-systems*`、`/ext-calls*` 改到 `/api/data/v1`（外部系统归 data 模块，代码仍在 Palantir 的 integration 目录）；动作类型、事件类型、`/action-runs*`、对账仍在 `/api/ontology/v1`。§1、§3.2、§3.7、§7 已同步，§7 计数随之变化。
 - 记录已定事项：动作路径一律冒号写法（`/turns/{tid}/cancel` 改为 `:cancel`）；定义表展开在发布事务里同步执行；版本种子调用静态的 `seed_snapshot(ver)`、静态种子排最前、不写空 `{}` 快照；每版一份快照，按 section 归属模块（含 `actionTypes`、`eventTypes`、`rules`，以及动态组装的 `lifecycles`，静态 `objectTypes` 不含生命周期），按前端 id 分键，不含运行数据，`create_version` 注册各 section 的组装函数；`PEOPLE` 导入 `sys_user` 并标 `alert_assignable`，`GET /people` 按 mock 顺序返回；行级范围 `to_sql` 一期只支持白名单内已声明关系的一跳 `EXISTS`（参数绑定），多跳或未声明的拒绝，会员“常去门店所属大区”仍为【推断】。
