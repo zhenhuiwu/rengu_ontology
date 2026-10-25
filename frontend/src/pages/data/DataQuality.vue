@@ -9,6 +9,7 @@ import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useDrawer } from '@/composables/useDrawer';
 import { useReadonly } from '@/composables/useReadonly';
@@ -67,16 +68,16 @@ const runNow = () => message.success(`已提交运行：${selected.value.id} ${s
     <a-space>
       <span class="t-12 c-3">数据截至 <span class="num">{{ DATA_CUTOFF }}</span></span>
       <a-tooltip :title="reason"><a-button :disabled="readonly">新建检查</a-button></a-tooltip>
-      <a-button type="primary" @click="message.success('已提交全部检查，预计 3 分钟完成')">全部运行</a-button>
+      <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="message.success('已提交全部检查，预计 3 分钟完成')">全部运行</a-button></a-tooltip>
     </a-space>
   </Teleport>
   <div class="dq">
     <div class="dq-sum">
-      <div class="panel dq-kpi"><div class="t-12 c-3">检查项</div><div class="t-24 fw-600 num c-1">{{ QUALITY_CHECKS.length }}</div><div class="t-12 c-3">覆盖 {{ Q_OBJECT_TYPES.length }} 个对象类型</div></div>
-      <div class="panel dq-kpi"><div class="t-12 c-3">通过</div><div class="t-24 fw-600 num c-1">{{ QUALITY_CHECKS.length - failed.length }}</div><div class="t-12 c-3">通过率 {{ (((QUALITY_CHECKS.length - failed.length) / QUALITY_CHECKS.length) * 100).toFixed(1) }}%</div></div>
-      <div class="panel dq-kpi"><div class="t-12 c-3">失败</div><div class="t-24 fw-600 num tl-failed">{{ failed.length }}</div><div class="t-12 c-3">涉及 {{ failedTypes.size }} 个对象类型</div></div>
-      <div class="panel dq-kpi"><div class="t-12 c-3">数据截至</div><div class="t-24 fw-600 num c-1">{{ DATA_CUTOFF.slice(5) }}</div><div class="t-12 c-3">新鲜度检查以此为准</div></div>
-      <div class="panel dq-kpi"><div class="t-12 c-3">最近运行</div><div class="t-24 fw-600 num c-1">{{ lastRun.slice(5) }}</div><div class="t-12 c-3">新鲜度每 2 小时，其余每天 23:30</div></div>
+      <div class="panel dq-kpi"><div class="t-14 c-2">检查项<InfoTip :text="`覆盖 ${Q_OBJECT_TYPES.length} 个对象类型`" /></div><div class="t-24 fw-600 num c-1">{{ QUALITY_CHECKS.length }}</div></div>
+      <div class="panel dq-kpi"><div class="t-14 c-2">通过</div><div class="dq-kv"><span class="t-24 fw-600 num c-1">{{ QUALITY_CHECKS.length - failed.length }}</span><span class="t-14 c-2 num">{{ (((QUALITY_CHECKS.length - failed.length) / QUALITY_CHECKS.length) * 100).toFixed(1) }}%</span></div></div>
+      <div class="panel dq-kpi"><div class="t-14 c-2">失败<InfoTip :text="`涉及 ${failedTypes.size} 个对象类型`" /></div><div class="t-24 fw-600 num tl-failed">{{ failed.length }}</div></div>
+      <div class="panel dq-kpi"><div class="t-14 c-2">数据截至<InfoTip text="新鲜度检查以此为准" /></div><div class="t-24 fw-600 num c-1">{{ DATA_CUTOFF.slice(5) }}</div></div>
+      <div class="panel dq-kpi"><div class="t-14 c-2">最近运行<InfoTip text="新鲜度检查每 2 小时运行一次，其余检查每天 23:30" /></div><div class="t-24 fw-600 num c-1">{{ lastRun.slice(5) }}</div></div>
     </div>
 
     <div class="dq-main">
@@ -107,7 +108,7 @@ const runNow = () => message.success(`已提交运行：${selected.value.id} ${s
       <div class="panel dq-right">
         <div class="panel-head">
           <span class="t-16 fw-600">运行历史</span>
-          <a-button size="small" @click="runNow">立即运行</a-button>
+          <a-tooltip :title="reason"><a-button size="small" :disabled="readonly" @click="runNow">立即运行</a-button></a-tooltip>
         </div>
         <div class="dq-hhead">
           <div class="dq-htitle">
@@ -116,11 +117,8 @@ const runNow = () => message.success(`已提交运行：${selected.value.id} ${s
             <span v-else class="t-14 fw-600 c-1">{{ selected.typeName }}</span>
             <span class="t-14 fw-600 c-1">· {{ selected.kind }}</span>
             <span class="dq-res t-12" :class="tl(selected.result)"><span class="dq-dot" />{{ selected.result }}</span>
-          </div>
-          <div class="t-12 c-2 dq-ellip">{{ selected.rule }} · 阈值 {{ selected.threshold }}</div>
-          <div v-if="selected.note" class="t-12 c-2">说明：{{ selected.note }}</div>
-          <div class="t-12 c-3">
-            近 {{ selected.history.length }} 次运行失败 {{ histFails }} 次<span v-if="selected.failSince">，自 <span class="num">{{ selected.failSince }}</span> 起持续失败</span>
+            <InfoTip :text="`规则：${selected.rule} · 阈值 ${selected.threshold}${selected.note ? '。说明：' + selected.note : ''}。近 ${selected.history.length} 次运行失败 ${histFails} 次${selected.failSince ? '，自 ' + selected.failSince + ' 起持续失败' : ''}`" />
+            <span class="t-14 c-2 dq-hfail">失败 <span class="num">{{ histFails }}/{{ selected.history.length }}</span> 次</span>
           </div>
         </div>
         <div class="dq-hist">
@@ -140,7 +138,9 @@ const runNow = () => message.success(`已提交运行：${selected.value.id} ${s
 <style scoped>
 .dq { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--gap); }
 .dq-sum { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--gap); flex: none; }
-.dq-kpi { padding: 12px 16px; gap: 2px; }
+.dq-kpi { padding: 12px 16px; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+.dq-kv { display: flex; align-items: baseline; gap: 8px; }
+.dq-hfail { margin-left: auto; }
 .dq-main { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .dq-left { flex: 1; min-width: 0; }
 .dq-right { width: 460px; flex: none; }

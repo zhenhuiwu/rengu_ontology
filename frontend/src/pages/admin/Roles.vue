@@ -12,6 +12,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreviewStore, firstAllowedPage } from '@/stores/preview';
@@ -227,15 +228,14 @@ async function deleteRole() {
   </Teleport>
   <div class="rl">
     <div class="panel rl-list">
-      <div class="panel-head"><span class="t-16 fw-600">角色</span><span class="t-12 c-3">共 {{ roles.length }} 个</span></div>
+      <div class="panel-head"><span class="t-16 fw-600">角色</span><span class="t-14 c-2">共 {{ roles.length }} 个</span></div>
       <div class="rl-items">
         <div v-for="r in roles" :key="r.id" class="rl-item" :class="{ on: r.id === role.id }" @click="select(r.id)">
-          <div class="rl-l1">
+          <div class="rl-l1" :title="`${r.name}：${r.desc}`">
             <span class="t-14 fw-600 c-1 rl-ellip">{{ r.name }}</span>
             <a-tag v-if="r.builtIn" class="rl-tag">内置</a-tag>
             <span class="t-12 c-2 rl-n num">{{ members[r.id].length }} 人</span>
           </div>
-          <div class="t-12 c-3 rl-ellip">{{ r.desc }}</div>
         </div>
       </div>
     </div>
@@ -243,7 +243,7 @@ async function deleteRole() {
     <div class="panel rl-detail">
       <div class="rl-head">
         <div class="rl-title">
-          <span class="t-20 fw-600 c-1">{{ role.name }}</span>
+          <span class="t-20 fw-600 c-1">{{ role.name }}<InfoTip :text="role.desc" /></span>
           <a-tag v-if="role.builtIn">内置</a-tag>
           <span class="t-12 c-3 num">{{ role.id }}</span>
         </div>
@@ -253,7 +253,7 @@ async function deleteRole() {
           <a-tooltip :title="lockReason"><a-button danger :disabled="locked" @click="deleteRole">删除</a-button></a-tooltip>
         </a-space>
       </div>
-      <div class="t-12 c-3 rl-sub">{{ role.desc }} · <span class="num">{{ members[role.id].length }}</span> 名成员 · 更新于 <span class="num">{{ role.updatedAt }}</span>（{{ role.updatedBy }}）</div>
+      <div class="t-12 c-2 rl-sub"><span class="num">{{ members[role.id].length }}</span> 名成员 · 更新于 <span class="num">{{ role.updatedAt }}</span>（{{ role.updatedBy }}）</div>
       <a-tabs v-model:active-key="tab" class="rl-tabs">
         <a-tab-pane key="func" tab="功能权限" />
         <a-tab-pane key="obj" tab="对象与动作权限" />

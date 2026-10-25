@@ -9,6 +9,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
@@ -190,14 +191,10 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           v-for="d in listPaged.items" :key="d.id" class="cn-item" :class="{ on: selected?.id === d.id }"
           @click="onSelect(d.id)"
         >
-          <div class="cn-item-l1">
+          <div class="cn-item-l1" :title="`${d.name}（${d.type}${modeText(d) ? ' · ' + modeText(d) : ''}）· 负责人 ${d.owner} · 最近测试 ${d.lastTest ? d.lastTest.time : '未测试'}`">
             <span class="cn-type t-12">{{ typeShort[d.type] }}</span>
             <span class="t-14 fw-600 c-1 cn-ellip">{{ d.name }}</span>
             <a-badge :status="statusBadge(d.status)" :text="d.status" class="cn-badge" />
-          </div>
-          <div class="t-12 c-3 cn-item-l2">
-            <span class="cn-ellip">{{ d.owner }} · 最近测试 <span class="num">{{ d.lastTest ? d.lastTest.time.slice(5) : '未测试' }}</span></span>
-            <span v-if="modeText(d)" class="cn-ellip cn-mode">{{ modeText(d) }}</span>
           </div>
         </div>
       </div>
@@ -212,6 +209,11 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-tag>{{ selected.type }}</a-tag>
           <a-tag v-if="modeText(selected)">{{ modeText(selected) }}</a-tag>
           <a-badge :status="statusBadge(selected.status)" :text="selected.status" />
+          <span v-if="selected.lastTest" class="t-14 cn-ellip" :class="selected.lastTest.ok ? 'c-2' : 'tl-failed'" :title="selected.lastTest.ok ? '' : selected.lastTest.msg">
+            最近测试 <span class="num">{{ selected.lastTest.time }}</span> · {{ selected.lastTest.ok ? `成功，${selected.lastTest.ms} ms` : selected.lastTest.msg }}
+          </span>
+          <span v-else class="t-14 c-2">尚未测试连接</span>
+          <InfoTip :text="`${selected.id} · 负责人 ${selected.owner} · 创建于 ${selected.createdAt} · 映射对象类型 ${selected.objectTypes.length ? selected.objectTypes.join('、') : EMPTY}${selected.note ? '。' + selected.note : ''}`" />
         </div>
         <a-space>
           <a-button :loading="testing" @click="testConn(selected)">测试连接</a-button>
@@ -219,17 +221,6 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-tooltip :title="reason"><a-button danger :disabled="readonly" @click="remove(selected)">删除</a-button></a-tooltip>
         </a-space>
       </div>
-      <div class="cn-meta t-12 c-3">
-        <span class="num">{{ selected.id }}</span>
-        <span>负责人 {{ selected.owner }}</span>
-        <span>创建于 <span class="num">{{ selected.createdAt }}</span></span>
-        <span v-if="selected.lastTest" :class="selected.lastTest.ok ? '' : 'tl-failed'">
-          最近测试 <span class="num">{{ selected.lastTest.time }}</span> · {{ selected.lastTest.ok ? `成功，${selected.lastTest.ms} ms` : selected.lastTest.msg }}
-        </span>
-        <span v-else>尚未测试连接</span>
-        <span>映射对象类型 {{ selected.objectTypes.length ? selected.objectTypes.join('、') : EMPTY }}</span>
-      </div>
-      <div v-if="selected.note" class="cn-note t-12 c-2">{{ selected.note }}</div>
       <a-tabs v-model:activeKey="tab" class="cn-tabs">
         <a-tab-pane key="params" tab="连接参数" />
         <a-tab-pane key="tables" :tab="`库表（${dsTables(selected).length}）`" />
@@ -368,15 +359,13 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
 .cn-item:hover { background: var(--g2); }
 .cn-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
 .cn-item-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.cn-item-l2 { display: flex; justify-content: space-between; gap: 8px; margin-top: 2px; padding-left: 2px; }
 .cn-type { flex: none; min-width: 42px; text-align: center; border: var(--border); border-radius: 4px; color: var(--g8); line-height: 18px; }
 .cn-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .cn-badge { margin-left: auto; flex: none; }
-.cn-mode { flex: none; max-width: 150px; }
 .cn-pager { padding: 6px 16px; }
 .cn-detail { flex: 1; min-width: 0; }
 .cn-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px 6px; }
-.cn-title { display: flex; align-items: center; gap: 10px; }
+.cn-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .cn-meta { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 0 20px; }
 .cn-note { margin: 8px 20px 0; padding: 6px 12px; background: var(--g2); border-radius: var(--radius); }
 .cn-tabs { padding: 0 20px; flex: none; }

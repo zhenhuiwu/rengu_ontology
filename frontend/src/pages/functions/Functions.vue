@@ -9,6 +9,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
@@ -122,7 +123,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button :type="tab === 'test' ? 'default' : 'primary'" :disabled="readonly">新建函数</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly">新建函数</a-button></a-tooltip>
   </Teleport>
   <div class="fn">
     <div class="panel fn-list">
@@ -132,13 +133,9 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
       </div>
       <div class="fn-items">
         <div v-for="f in listPaged.items" :key="f.id" class="fn-item" :class="{ on: f.id === fn.id }" @click="select(f.id)">
-          <div class="fn-l1">
+          <div class="fn-l1" :title="`${f.name} · ${f.title} · ${f.version} · ${f.usedBy.length ? f.usedBy.length + ' 处使用' : '未使用'}`">
             <span class="t-14 fw-600 c-1 num fn-ellip">{{ f.name }}</span>
             <a-badge :status="statusBadge(f.status)" :text="f.status" class="fn-badge" />
-          </div>
-          <div class="t-12 c-3 fn-l2">
-            <span class="fn-ellip">{{ f.title }} · <span class="num">{{ f.version }}</span></span>
-            <span>{{ f.usedBy.length ? `${f.usedBy.length} 处使用` : '未使用' }}</span>
           </div>
         </div>
       </div>
@@ -149,7 +146,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
       <div class="fn-head">
         <div class="fn-title">
           <span class="t-20 fw-600 c-1 num">{{ fn.name }}</span>
-          <span class="t-16 c-2">{{ fn.title }}</span>
+          <span class="t-16 c-2">{{ fn.title }}<InfoTip :text="fn.desc" /></span>
           <a-tag>{{ fn.runtime }}</a-tag>
           <a-tag><span class="num">{{ fn.version }}</span></a-tag>
           <a-badge :status="statusBadge(fn.status)" :text="fn.status" />
@@ -159,7 +156,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="setQuery({ form: 'edit' })">编辑</a-button></a-tooltip>
         </a-space>
       </div>
-      <div class="t-12 c-3 fn-sub">{{ fn.desc }} · 负责人 {{ fn.owner }} · 更新于 <span class="num">{{ fn.updatedAt }}</span></div>
+      <div class="t-12 c-2 fn-sub">负责人 {{ fn.owner }} · 更新于 <span class="num">{{ fn.updatedAt }}</span></div>
       <a-tabs v-model:active-key="tab" class="fn-tabs">
         <a-tab-pane key="def" tab="定义" />
         <a-tab-pane key="test" tab="测试运行" />
@@ -208,7 +205,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
           <a-textarea v-model:value="testInput" class="fn-ta num" :auto-size="false" />
           <div class="fn-trun">
             <span class="t-12 c-3">在测试环境运行，不写入任何数据</span>
-            <a-button type="primary" :loading="running" @click="runTest">运行</a-button>
+            <a-button :loading="running" @click="runTest">运行</a-button>
           </div>
         </div>
         <div class="fn-tcol">
@@ -269,7 +266,6 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 .fn-item:hover { background: var(--g2); }
 .fn-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
 .fn-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.fn-l2 { display: flex; justify-content: space-between; gap: 8px; margin-top: 2px; }
 .fn-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .fn-badge { margin-left: auto; flex: none; }
 .fn-pager { padding: 6px 16px 8px; }

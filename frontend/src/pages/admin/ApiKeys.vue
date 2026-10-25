@@ -55,7 +55,7 @@ const rows = computed(() => keys.value.filter((k) =>
 const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
 const count = (s: KeyStatus) => keys.value.filter((k) => k.status === s).length;
 // 状态：有效 / 即将过期 灰（即将过期另写剩余天数）；已过期 红；已吊销 灰（文字淡）
-const badge = (s: KeyStatus) => (s === '已过期' ? 'error' : 'default');
+const badge = (_s: KeyStatus) => 'default';
 const columns = [
   { title: '名称', key: 'name', width: 190, ellipsis: true },
   { title: '密钥', key: 'key', width: 170 },
@@ -215,7 +215,7 @@ async function closeCreate() {
         <a-descriptions-item label="环境">{{ detail.env }}</a-descriptions-item>
         <a-descriptions-item label="到期"><span class="num">{{ detail.expiresAt ?? '永不过期' }}</span></a-descriptions-item>
         <a-descriptions-item label="权限范围" :span="2">{{ detail.scopes.join('、') }}</a-descriptions-item>
-        <a-descriptions-item label="身份与数据范围" :span="2">{{ bindingText(detail.binding) }}</a-descriptions-item>
+        <a-descriptions-item label="身份与数据范围" :span="2"><a-tooltip :title="bindingText(detail.binding)"><span class="ak-ell">{{ bindingText(detail.binding) }}</span></a-tooltip></a-descriptions-item>
         <a-descriptions-item v-if="detail.scopes.includes('动作执行')" label="动作发起人" :span="2">{{ keyActor(detail) }}<span class="t-12 c-3"> · 动作中心执行记录的发起人这样显示</span></a-descriptions-item>
         <a-descriptions-item label="IP 白名单" :span="2"><span class="num">{{ detail.ipAllow.join('、') || '不限制' }}</span></a-descriptions-item>
         <a-descriptions-item label="创建"><span class="num">{{ detail.createdAt }}</span> · {{ detail.creator }}</a-descriptions-item>
@@ -328,4 +328,5 @@ async function closeCreate() {
 .ak-lbl { margin: 16px 0 6px; }
 .ak-secret { display: flex; gap: 8px; }
 .ak-mt { margin-top: 16px; }
+.ak-ell { display: block; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

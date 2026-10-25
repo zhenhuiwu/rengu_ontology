@@ -218,18 +218,14 @@ async function saveEdit() {
     <div class="panel ex-list">
       <div class="panel-head">
         <span class="t-16 fw-600">外部系统</span>
-        <span class="t-12 c-3">共 {{ systems.length }} 个</span>
+        <span class="t-14 c-2">共 {{ systems.length }} 个</span>
       </div>
       <div class="ex-items">
         <div v-for="s in systems" :key="s.id" class="ex-item" :class="{ on: s.id === selected.id }" @click="setQuery({ sys: s.id, result: undefined, call: undefined })">
-          <div class="ex-l1">
+          <div class="ex-l1" :title="`${s.name} · ${s.vendor} · ${s.env} · ${actionCount(s) ? actionCount(s) + ' 个动作' : '无动作写回'} · ${s.idempotent ? '支持幂等' : '不支持幂等'}`">
             <span class="ex-cat t-12">{{ s.category }}</span>
             <span class="t-14 fw-600 c-1 ex-ellip">{{ s.name }}</span>
             <a-badge :status="statusBadge(s.status)" :text="s.status" class="ex-badge" />
-          </div>
-          <div class="t-12 c-3 ex-l2">
-            <span class="ex-ellip">{{ s.vendor }} · {{ s.env }}</span>
-            <span>{{ actionCount(s) ? `${actionCount(s)} 个动作` : '无动作写回' }} · {{ s.idempotent ? '支持幂等' : '不支持幂等' }}</span>
           </div>
         </div>
       </div>
@@ -300,11 +296,11 @@ async function saveEdit() {
   <a-drawer :open="!!call" :width="560" :title="call ? `调用详情 · ${call.id}` : ''" @close="closeCall">
     <template v-if="call">
       <div class="ex-dr-status" :class="tl(call.result)"><QuestionCircleOutlined v-if="call.result === '结果未知'" /><span v-else class="ex-dot" /><span class="t-16 fw-600">{{ resultText(call.result) }}</span></div>
-      <div class="t-12 c-2 ex-dr-msg">{{ call.msg }}</div>
       <div v-if="call.result === '结果未知'" class="t-12 c-2 ex-dr-note">
         处理方式：调用超时即标记为结果未知，系统不自动重试；{{ selected.idempotent ? '每 15 分钟按幂等键向对方查询一次处理结果，查到即自动更新' : '对方不支持幂等，无法自动查询' }}；仍查不到时，在动作中心“结果未知与对账”中人工对账。
       </div>
       <a-descriptions :column="1" bordered size="small" class="ex-desc">
+        <a-descriptions-item label="返回信息">{{ call.msg }}</a-descriptions-item>
         <a-descriptions-item label="系统">{{ selected.name }}（{{ selected.vendor }}）</a-descriptions-item>
         <a-descriptions-item label="动作">{{ call.action }}</a-descriptions-item>
         <a-descriptions-item label="对象"><span class="num">{{ call.target }}</span></a-descriptions-item>
@@ -377,7 +373,6 @@ async function saveEdit() {
 .ex-item:hover { background: var(--g2); }
 .ex-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
 .ex-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ex-l2 { display: flex; justify-content: space-between; margin-top: 2px; }
 .ex-cat { flex: none; min-width: 36px; text-align: center; border: var(--border); border-radius: 4px; color: var(--g8); line-height: 18px; padding: 0 4px; }
 .ex-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ex-badge { margin-left: auto; flex: none; }

@@ -11,6 +11,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import InfoTip from '@/components/InfoTip.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
@@ -213,10 +214,11 @@ function toggleRoute(ev: string, id: ChannelId, on: boolean) {
   draft.routes[ev] = on ? CHANNEL_ORDER.filter((x) => x === id || r.includes(x)) : r.filter((x) => x !== id);
 }
 const chCols = [
-  { title: '渠道', key: 'name', width: 190 },
+  { title: '渠道', key: 'name', width: 120 },
+  { title: '接入方式', key: 'via', width: 150, ellipsis: true },
   { title: '启用', key: 'enabled', width: 70 },
   { title: '发送目标', key: 'target', ellipsis: true },
-  { title: '接收人', key: 'receivers', width: 260, ellipsis: true },
+  { title: '接收人', key: 'receivers', width: 220, ellipsis: true },
   { title: '最近测试', key: 'test', width: 190 },
   { title: '操作', key: 'op', width: 130 },
 ];
@@ -228,12 +230,14 @@ const evCols = computed(() => [
 
 // 大模型连接
 const llmCols = [
-  { title: '连接', key: 'name', width: 230 },
-  { title: '地址 / 模型', key: 'url', ellipsis: true },
-  { title: '用途', key: 'usages', width: 230 },
+  { title: '连接', key: 'name', width: 150, ellipsis: true },
+  { title: '类型 / 部署', key: 'kind', width: 150, ellipsis: true },
+  { title: '地址', key: 'url', ellipsis: true },
+  { title: '模型', key: 'model', width: 150, ellipsis: true },
+  { title: '用途', key: 'usages', width: 200 },
   { title: '超时 / 并发', key: 'limits', width: 110 },
   { title: '状态', key: 'status', width: 80 },
-  { title: '最近测试', key: 'test', width: 220 },
+  { title: '最近测试', key: 'test', width: 190, ellipsis: true },
   { title: '操作', key: 'op', width: 200 },
 ];
 const defaultsOf = (id: string) => LLM_USAGES.filter((u) => draft.llm.defaults[u.key] === id).map((u) => u.key);
@@ -404,11 +408,10 @@ const fieldDis = computed(() => readonly.value);
     <div class="panel st-nav">
       <div class="panel-head"><span class="t-16 fw-600">配置分组</span></div>
       <div v-for="g in GROUPS" :key="g.key" class="st-item" :class="{ on: g.key === group }" @click="selectGroup(g.key)">
-        <div class="st-l1">
+        <div class="st-l1" :title="g.desc">
           <span class="t-14 c-1" :class="{ 'fw-600': g.key === group }">{{ g.title }}</span>
-          <span v-if="dirtyOf(g.key)" class="t-12 c-3 st-mod">已修改 {{ dirtyOf(g.key) }}</span>
+          <span v-if="dirtyOf(g.key)" class="t-12 c-2 st-mod">已修改 {{ dirtyOf(g.key) }}</span>
         </div>
-        <div class="t-12 c-3">{{ g.desc }}</div>
       </div>
       <div class="st-navfoot t-12 c-3">修改可以跨分组累计，统一在底部保存。<span v-if="reason">（{{ reason }}）</span></div>
     </div>
@@ -440,20 +443,19 @@ const fieldDis = computed(() => readonly.value);
       <!-- 大模型连接 -->
       <div v-else-if="group === 'llm'" class="st-body">
         <div class="st-rowhead">
-          <span class="t-14 fw-600 c-1">模型连接</span>
-          <span class="t-12 c-3">支持 OpenAI 兼容接口；密钥加密保存，只在填写当次可见。停用的连接不会被调用。</span>
+          <span class="t-14 fw-600 c-1">模型连接<InfoTip text="支持 OpenAI 兼容接口；密钥加密保存，只在填写当次可见。停用的连接不会被调用。" /></span>
           <a-tooltip :title="reason"><a-button type="primary" size="small" class="st-add" :disabled="readonly" @click="setQuery({ llm: 'new' })">新建连接</a-button></a-tooltip>
         </div>
         <a-table size="small" row-key="id" :columns="llmCols" :data-source="draft.llm.connections" :pagination="false">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
-              <div :class="record.enabled ? 'c-1' : 'c-3'">{{ record.name }}</div>
-              <div class="t-12 c-3">{{ record.kind }} · {{ record.deploy }}</div>
+              <span :class="record.enabled ? 'c-1' : 'c-3'" :title="record.name">{{ record.name }}</span>
             </template>
+            <span v-else-if="column.key === 'kind'" class="c-2" :title="`${record.kind} · ${record.deploy}`">{{ record.kind }} · {{ record.deploy }}</span>
             <template v-else-if="column.key === 'url'">
-              <div class="num st-ellip" :class="record.enabled ? 'c-1' : 'c-3'">{{ record.baseUrl }}</div>
-              <div class="t-12 c-3 st-ellip"><span class="num">{{ record.model }}</span> · 密钥 <span class="num">{{ record.keyMask || '无需密钥' }}</span></div>
+              <span class="num" :class="record.enabled ? 'c-1' : 'c-3'" :title="`${record.baseUrl} · 密钥 ${record.keyMask || '无需密钥'}`">{{ record.baseUrl }}</span>
             </template>
+            <span v-else-if="column.key === 'model'" class="num c-2" :title="record.model">{{ record.model }}</span>
             <template v-else-if="column.key === 'usages'">
               <span v-for="u in record.usages" :key="u" class="st-use t-12" :class="{ def: draft.llm.defaults[u as LlmUsage] === record.id }">{{ u }}<template v-if="draft.llm.defaults[u as LlmUsage] === record.id"> · 默认</template></span>
             </template>
@@ -461,8 +463,7 @@ const fieldDis = computed(() => readonly.value);
             <a-badge v-else-if="column.key === 'status'" status="default" :text="record.enabled ? '已启用' : '已停用'" />
             <template v-else-if="column.key === 'test'">
               <template v-if="record.lastTest">
-                <div class="num" :class="tlTest(record.lastTest)"><span class="c-2">{{ record.lastTest.at }}</span> · {{ record.lastTest.ok ? `${record.lastTest.latencyMs} ms` : '失败' }}</div>
-                <div class="t-12 c-3 st-ellip">{{ record.lastTest.ok ? record.lastTest.version : record.lastTest.msg }}</div>
+                <span class="num" :class="tlTest(record.lastTest)" :title="record.lastTest.ok ? `模型版本 ${record.lastTest.version}` : record.lastTest.msg"><span class="c-2">{{ record.lastTest.at }}</span> · {{ record.lastTest.ok ? `${record.lastTest.latencyMs} ms` : '失败' }}</span>
               </template>
               <span v-else class="c-3">未测试</span>
             </template>
@@ -477,7 +478,7 @@ const fieldDis = computed(() => readonly.value);
 
         <div class="st-llm2">
           <div class="st-sect">
-            <div class="st-rowhead st-h"><span class="t-14 fw-600 c-1">用途默认连接</span><span class="t-12 c-3">每个用途调用哪个连接；只能选声明了该用途的连接</span></div>
+            <div class="st-rowhead st-h"><span class="t-14 fw-600 c-1">用途默认连接<InfoTip text="每个用途调用哪个连接；只能选声明了该用途的连接" /></span></div>
             <a-form layout="horizontal" :label-col="{ style: { width: '96px' } }" :disabled="fieldDis">
               <a-form-item v-for="u in LLM_USAGES" :key="u.key" :label="u.key" :extra="u.desc"
                 :validate-status="llmErrors.some((x) => x.includes(`「${u.key}」`)) ? 'error' : ''" :help="llmErrors.find((x) => x.includes(`「${u.key}」`))">
@@ -487,12 +488,11 @@ const fieldDis = computed(() => readonly.value);
             </a-form>
           </div>
           <div class="st-sect">
-            <div class="st-rowhead st-h"><span class="t-14 fw-600 c-1">数据出域策略</span><span class="t-12 c-3">发给大模型的内容范围，对所有连接生效</span></div>
+            <div class="st-rowhead st-h"><span class="t-14 fw-600 c-1">数据出域策略<InfoTip text="发给大模型的内容范围，对所有连接生效" /></span></div>
             <a-form layout="vertical" :disabled="fieldDis">
               <a-radio-group :value="draft.llm.egress.policy" class="st-egress" @change="(e: { target: { value: EgressPolicy } }) => pickEgress(e.target.value)">
                 <a-radio v-for="o in EGRESS_OPTIONS" :key="o.value" :value="o.value">
-                  <span class="c-1">{{ o.label }}</span><span v-if="o.value === 'schema'" class="t-12 c-3">（默认）</span>
-                  <div class="t-12 c-3 st-egdesc">{{ o.desc }}</div>
+                  <span class="c-1">{{ o.label }}</span><span v-if="o.value === 'schema'" class="c-2">（默认）</span><InfoTip :text="o.desc" />
                 </a-radio>
               </a-radio-group>
               <div v-if="draft.llm.egress.policy === 'masked'" class="st-mask">
@@ -512,13 +512,12 @@ const fieldDis = computed(() => readonly.value);
         <a-table size="small" row-key="id" :columns="chCols" :data-source="draft.channels" :pagination="false">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
-              <div class="c-1">{{ record.name }}</div>
-              <div class="t-12 c-3"><router-link v-if="record.extId" :to="{ path: '/build/data/external', query: { sys: record.extId } }">{{ record.via }}</router-link><template v-else>{{ record.via }}</template></div>
+              <span class="c-1">{{ record.name }}</span>
             </template>
+            <span v-else-if="column.key === 'via'" class="c-2" :title="record.via"><router-link v-if="record.extId" :to="{ path: '/build/data/external', query: { sys: record.extId } }">{{ record.via }}</router-link><template v-else>{{ record.via }}</template></span>
             <a-tooltip v-else-if="column.key === 'enabled'" :title="record.locked ? record.note : reason"><a-switch v-model:checked="record.enabled" size="small" :disabled="record.locked || readonly" /></a-tooltip>
             <template v-else-if="column.key === 'target'">
-              <div class="num st-ellip" :class="record.enabled ? 'c-1' : 'c-3'">{{ record.target }}</div>
-              <div v-if="record.note && !record.locked" class="t-12 c-3 st-ellip">{{ record.note }}</div>
+              <span class="num" :class="record.enabled ? 'c-1' : 'c-3'" :title="record.note && !record.locked ? `${record.target}：${record.note}` : record.target">{{ record.target }}</span>
             </template>
             <span v-else-if="column.key === 'receivers'" class="c-2">{{ record.receivers }}</span>
             <span v-else-if="column.key === 'test'" class="num">
@@ -695,7 +694,6 @@ const fieldDis = computed(() => readonly.value);
 .st-stale { margin-top: 12px; padding: 8px 12px; background: var(--g2); border-radius: var(--radius); }
 .st-ollama { margin: -8px 0 16px; }
 .st-egress { display: flex; flex-direction: column; gap: 10px; }
-.st-egdesc { margin-top: 2px; }
 .st-mask { margin: 10px 0 0 24px; }
 .st-mask1 { margin-bottom: 8px; }
 .st-frow { display: flex; gap: 12px; }

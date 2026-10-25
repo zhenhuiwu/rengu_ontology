@@ -8,6 +8,7 @@ import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
 import EChart from '@/components/EChart.vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useRoute, useRouter } from 'vue-router';
 import { GRAY } from '@/theme';
@@ -101,13 +102,11 @@ const rankCols = [
   <div class="home">
     <div class="panel kpis">
       <div v-for="k in kpis" :key="k.m.id" class="kpi">
-        <HoverCard kind="metric" :id="k.m.id"><span class="t-14 c-2">{{ k.m.name }}</span></HoverCard>
+        <span class="kpi-title"><HoverCard kind="metric" :id="k.m.id"><span class="t-14 c-2">{{ k.m.name }}</span></HoverCard><InfoTip text="统计区间 10 月 1 日—24 日，与上月同期（9 月 1 日—24 日）比较" /></span>
         <div class="kpi-val">
           <span class="t-kpi fw-600 c-1">{{ k.value }}</span>
           <span v-if="k.unit" class="t-14 c-2">{{ k.unit }}</span>
-        </div>
-        <div class="t-12 c-3">
-          10 月 1 日—24 日 · 较上月同期 <span class="num" :class="k.delta >= 0 ? 'c-2' : 'c-error'">{{ k.deltaText }}</span>
+          <span class="t-14 c-2 kpi-delta">较上月同期 <span class="num" :class="k.delta >= 0 ? 'c-2' : 'c-error'">{{ k.deltaText }}</span></span>
         </div>
       </div>
     </div>
@@ -145,14 +144,13 @@ const rankCols = [
       <div class="side">
         <div class="panel trend">
           <div class="panel-head">
-            <HoverCard kind="metric" id="gmv"><span class="t-16 fw-600">近 30 日销售额</span></HoverCard>
-            <span class="t-12 c-3">不含税 · 单位：元</span>
+            <span><HoverCard kind="metric" id="gmv"><span class="t-16 fw-600">近 30 日销售额（元）</span></HoverCard><InfoTip text="不含税 · 单位：元" /></span>
           </div>
           <div class="trend-chart"><EChart :option="trendOption" /></div>
         </div>
         <div class="panel rank">
           <div class="panel-head">
-            <span><span class="t-16 fw-600">门店销售额排行（不含税）</span><span class="t-12 c-3 rank-sub">前 10 · 10 月 1 日—24 日</span></span>
+            <span><span class="t-16 fw-600">门店销售额排行（不含税）</span><InfoTip text="前 10 家门店 · 10 月 1 日—24 日" /></span>
             <a class="t-14" @click="setRankOpen(true)">全部 {{ fullRanking.length }} 家</a>
           </div>
           <a-table size="small" row-key="id" :pagination="false" :data-source="ranking" :columns="rankCols" class="rank-table">
@@ -168,8 +166,8 @@ const rankCols = [
     </div>
   </div>
 
-  <a-drawer :open="rankOpen" :width="640" title="门店销售额排行（不含税）· 全部" @close="setRankOpen(false)">
-    <div class="t-12 c-3 rank-note">销售额（不含税）= 实付金额 ÷ 1.13 · 10 月 1 日—24 日 · 数据截至 2026-10-24 23:00 · 共 {{ fullRanking.length }} 家门店</div>
+  <a-drawer :open="rankOpen" :width="640" @close="setRankOpen(false)">
+    <template #title>门店销售额排行（不含税）· 全部 {{ fullRanking.length }} 家<InfoTip :text="`销售额（不含税）= 实付金额 ÷ 1.13 · 10 月 1 日—24 日 · 数据截至 2026-10-24 23:00`" /></template>
     <a-table size="small" row-key="id" :pagination="false" :data-source="rankPaged.items" :columns="rankCols">
       <template #bodyCell="{ column, record }">
         <span v-if="column.key === 'idx'" class="num c-3">{{ record.rank }}</span>
@@ -196,8 +194,8 @@ const rankCols = [
 .trend { flex: 1; min-height: 0; }
 .trend-chart { flex: 1; min-height: 0; padding: 4px 8px; }
 .rank { flex: none; }
-.rank-sub { margin-left: 8px; }
-.rank-note { margin-bottom: 8px; }
+.kpi-title { display: inline-flex; align-items: center; }
+.kpi-delta { margin-left: 8px; }
 .rank-pager { padding-top: 8px; }
 .w-120 { width: 120px; }
 .w-200 { width: 200px; }

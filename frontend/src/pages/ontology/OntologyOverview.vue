@@ -12,6 +12,7 @@ import { RightOutlined } from '@ant-design/icons-vue';
 import type { Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
 import AppPagination from '@/components/AppPagination.vue';
+import InfoTip from '@/components/InfoTip.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useReadonly } from '@/composables/useReadonly';
 import { GRAY, STATUS } from '@/theme';
@@ -73,6 +74,8 @@ const cards = computed<Card[]>(() => [
     { n: dimItems.value.filter((d) => d.status === '草稿' || draftOf('dimension', d.id)).length, text: '个变更中', tone: 'normal' },
   ] },
 ]);
+const healthTip = (hs: Health[]) => hs.map((h) => `${h.n} ${h.text}`).join(' · ');
+const alerts = (hs: Health[]) => hs.filter((h) => h.n > 0 && h.tone !== 'normal');
 const toneCls = (h: Health) => (h.n === 0 || h.tone === 'normal' ? 'c-3' : h.tone === 'failed' ? 'tl-failed' : 'tl-attention');
 
 /* ── 待处理：未发布的变更单 + 失败的数据质量检查 ── */
@@ -187,10 +190,10 @@ function start(opts: { join?: string; title?: string }) {
   <div class="oo">
     <div class="oo-cards">
       <div v-for="c in cards" :key="c.key" class="panel oo-card" role="link" @click="router.push(c.path)">
-        <div class="oo-card-top"><span class="t-14 c-2">{{ c.title }}</span><RightOutlined class="t-12 c-3" /></div>
-        <div><span class="t-kpi fw-600 num" :class="c.count ? 'c-1' : 'c-3'">{{ c.count }}</span><span class="t-12 c-3"> {{ c.unit }}</span></div>
-        <div class="oo-health">
-          <span v-for="h in c.health" :key="h.text" class="t-12" :class="toneCls(h)"><span class="num">{{ h.n }}</span> {{ h.text }}</span>
+        <div class="oo-card-top"><span class="t-14 c-2">{{ c.title }}<InfoTip :text="healthTip(c.health)" /></span><RightOutlined class="t-12 c-3" /></div>
+        <div class="oo-count">
+          <span class="t-kpi fw-600 num" :class="c.count ? 'c-1' : 'c-3'">{{ c.count }}</span><span class="t-14 c-2"> {{ c.unit }}</span>
+          <span v-for="h in alerts(c.health)" :key="h.text" class="t-14 oo-alert" :class="toneCls(h)"><span class="num">{{ h.n }}</span> {{ h.text }}</span>
         </div>
       </div>
     </div>
@@ -198,14 +201,14 @@ function start(opts: { join?: string; title?: string }) {
     <div class="oo-main">
       <div class="panel oo-graph">
         <div class="panel-head">
-          <span class="t-16 fw-600 c-1">对象关系</span>
+          <span class="t-16 fw-600 c-1">对象关系</span><span class="oo-grow" />
           <span class="oo-legend t-12 c-3">
             <span>{{ nodeCount }} 个对象 · {{ edgeCount }} 条关系</span>
             <span><i class="lg lg-solid" />已发布</span>
             <span><i class="lg lg-dash" />草稿</span>
             <span><i class="lg lg-fail" />数据质量失败</span>
-            <span>点击对象查看对象类型</span>
           </span>
+          <InfoTip text="点击对象查看对象类型；虚线为草稿，红框为数据质量检查失败" />
         </div>
         <div class="oo-canvas"><GraphCanvas @ready="draw" /></div>
       </div>
@@ -219,11 +222,10 @@ function start(opts: { join?: string; title?: string }) {
           <div v-if="histVer" class="oo-hist"><a-empty :image="Empty.PRESENTED_IMAGE_SIMPLE" description="查看历史版本时不显示待处理" /></div>
           <div v-show="!histVer" ref="listEl" class="oo-list">
             <div v-for="t in pageRows" :key="t.id" class="oo-row" role="link" @click="t.go()">
-              <span class="t-12 c-3 oo-kind">{{ t.kind }}</span>
-              <div class="oo-row-main">
-                <div class="t-14 c-1 oo-ell" :title="`${t.id}　${t.title}`"><span class="num c-2">{{ t.id }}</span>　{{ t.title }}</div>
-                <div class="t-12 c-3 oo-ell" :title="`${t.who} · ${t.time}`">{{ t.who }} · <span class="num">{{ t.time }}</span></div>
-              </div>
+              <span class="t-12 c-2 oo-kind">{{ t.kind }}</span>
+              <span class="t-14 c-1 oo-ell oo-row-main" :title="`${t.id}　${t.title}`"><span class="num c-2">{{ t.id }}</span>　{{ t.title }}</span>
+              <span class="t-14 c-2 oo-ell oo-who" :title="t.who">{{ t.who }}</span>
+              <span class="t-14 c-2 num oo-time" :title="t.time">{{ t.time.slice(5) }}</span>
               <span class="t-12 oo-st" :class="stCls(t.tone)"><i class="oo-dot" />{{ t.status }}</span>
             </div>
           </div>
@@ -238,7 +240,8 @@ function start(opts: { join?: string; title?: string }) {
           <div v-for="r in releases" :key="r.ver" class="oo-rrow" role="link" @click="openRelease(r.ver)">
             <span class="t-14 num c-1 oo-ver">{{ r.ver }}</span>
             <span class="t-14 c-2 oo-ell oo-note" :title="r.note">{{ r.note }}</span>
-            <span class="t-12 c-3 num">{{ r.by }} · {{ r.publishedAt.slice(5) }}</span>
+            <span class="t-14 c-2 oo-ell oo-by" :title="r.by">{{ r.by }}</span>
+            <span class="t-14 c-2 num oo-time" :title="r.publishedAt">{{ r.publishedAt.slice(5) }}</span>
           </div>
         </div>
       </div>
@@ -254,12 +257,14 @@ function start(opts: { join?: string; title?: string }) {
 .oo-card { padding: 12px 16px; gap: 2px; cursor: pointer; }
 .oo-card:hover { border-color: var(--g7); }
 .oo-card-top { display: flex; align-items: center; justify-content: space-between; }
-.oo-health { display: flex; flex-wrap: wrap; column-gap: 12px; }
+.oo-count { display: flex; align-items: baseline; gap: 0; white-space: nowrap; overflow: hidden; }
+.oo-alert { margin-left: 12px; }
+.oo-grow { flex: 1; }
 .oo-main { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .oo-graph { flex: 1; min-width: 0; }
 .oo-hist { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .oo-canvas { flex: 1; min-height: 0; }
-.oo-legend { display: flex; gap: 16px; align-items: center; }
+.oo-legend { margin-left: 16px; display: flex; gap: 16px; align-items: center; }
 .oo-legend > span { display: inline-flex; align-items: center; gap: 6px; }
 .lg { display: inline-block; width: 16px; height: 10px; border-radius: 2px; background: var(--g1); }
 .lg-solid { border: 1px solid var(--g6); }
@@ -271,11 +276,12 @@ function start(opts: { join?: string; title?: string }) {
 .oo-row { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--g4); cursor: pointer; }
 .oo-row:hover, .oo-rrow:hover { background: var(--g2); }
 .oo-kind { width: 48px; flex: none; }
-.oo-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-.oo-row-main .t-14 { line-height: 20px; }
-.oo-row-main .t-12 { line-height: 18px; }
+.oo-row-main { flex: 1; }
+.oo-who { width: 88px; flex: none; }
+.oo-by { width: 64px; flex: none; }
+.oo-time { width: 84px; flex: none; white-space: nowrap; }
 .oo-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.oo-st { flex: none; display: inline-flex; align-items: center; gap: 6px; width: 112px; white-space: nowrap; }
+.oo-st { flex: none; display: inline-flex; align-items: center; gap: 6px; width: 104px; white-space: nowrap; }
 .oo-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .c-3 > .oo-dot { background: var(--g7); }
 .oo-pager { padding: 8px 16px; border-top: var(--border); flex: none; }
