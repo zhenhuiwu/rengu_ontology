@@ -10,7 +10,7 @@ export const Q_OBJECT_TYPES: QObjType[] = [
   { key: 'refund_line', name: '退款行', api: 'RefundLine', group: '交易', source: 'POS 交易库（华东）', count: 52307, owner: '陈立军', pk: 'line_id', cutoff: '2026-10-24 23:00' },
   { key: 'member', name: '会员', api: 'Member', group: '客户', source: '会员中心', count: 863027, owner: '刘婷', pk: 'member_id', cutoff: '2026-10-24 23:00' },
   { key: 'member_level', name: '会员等级', api: 'MemberLevel', group: '客户', source: '会员中心', count: 5, owner: '刘婷', pk: 'level_code', cutoff: '2026-10-24 23:00' },
-  { key: 'store', name: '门店', api: 'Store', group: '组织', source: '门店主数据', count: 486, owner: '陈立军', pk: 'store_code', cutoff: '2026-10-24 23:00' },
+  { key: 'store', name: '门店', api: 'Store', group: '组织', source: '门店主数据', count: 486, owner: '陈立军', pk: 'store_id', cutoff: '2026-10-24 23:00' },
   { key: 'region', name: '大区', api: 'Region', group: '组织', source: '门店主数据', count: 6, owner: '陈立军', pk: 'region_code', cutoff: '2026-10-24 23:00' },
   { key: 'province', name: '省份', api: 'Province', group: '组织', source: '门店主数据', count: 31, owner: '陈立军', pk: 'province_code', cutoff: '2026-10-24 23:00' },
   { key: 'product', name: '商品', api: 'Product', group: '商品', source: '商品主数据', count: 48213, owner: '王敏', pk: 'sku_code', cutoff: '2026-10-24 23:00' },
