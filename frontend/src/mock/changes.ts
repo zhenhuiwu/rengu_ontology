@@ -48,7 +48,7 @@ export interface CheckRow { code: string; name: string; result: CheckResult; not
 export interface ImpactItem { kind: string; name: string; note: string; count?: number; hover?: { kind: string; id: string } }
 export interface TrialRow { period: string; before: string; after: string; delta: string }
 /** 编辑草稿时跳到哪个页面的草稿视图 */
-export interface EditTarget { kind: 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link'; id: string }
+export interface EditTarget { kind: 'object' | 'metric' | 'action' | 'event' | 'rule' | 'link' | 'dimension'; id: string }
 
 const CHECK_NAMES: [string, string][] = [
   ['V1', '主键与映射完整'], ['V2', '主键唯一性抽检'], ['V3', '关系两端与类型兼容'], ['V4', '枚举挂取值字典'],
@@ -494,7 +494,7 @@ export function reviewLog(cr: ChangeRequest): ReviewEvent[] {
 /** 草稿编辑入口：跳到对应页面的草稿视图 */
 export function editRoute(e?: EditTarget) {
   if (!e) return undefined;
-  const map = { object: ['object-types', 'type'], metric: ['metrics', 'metric'], action: ['action-types', 'action'], event: ['event-types', 'event'], rule: ['rules', 'rule'], link: ['link-types', 'link'] } as const;
+  const map = { object: ['object-types', 'type'], metric: ['metrics', 'metric'], action: ['action-types', 'action'], event: ['event-types', 'event'], rule: ['rules', 'rule'], link: ['link-types', 'link'], dimension: ['dimensions', 'dim'] } as const;
   const [page, key] = map[e.kind];
   return { path: `/build/ontology/${page}`, query: { [key]: e.id, view: 'draft' } };
 }
