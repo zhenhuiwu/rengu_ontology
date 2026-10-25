@@ -4,7 +4,7 @@
 卡片、语义计划、轮次快照、刷新计划这些前端整体使用的结构用 dict 原样透传。
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -29,6 +29,21 @@ class SessionDetailOut(SessionOut):
     caliber: str  # 不含税 / 含税
     owner_id: str
     turns: list[dict[str, Any]]
+
+
+class SessionCreateIn(ApiModel):
+    """W2 请求体：{scope, caliber: 不含税|含税}（默认同 Workbench.vue:50-51）。"""
+
+    scope: str | None = Field(default="华东", max_length=60)
+    caliber: Literal["不含税", "含税"] = "不含税"
+
+
+class SessionPatchIn(ApiModel):
+    """W4 请求体：{title?} / {scope?, caliber?}。"""
+
+    title: str | None = Field(default=None, min_length=1, max_length=60)
+    scope: str | None = Field(default=None, max_length=60)
+    caliber: Literal["不含税", "含税"] | None = None
 
 
 class FavoriteOut(ApiModel):

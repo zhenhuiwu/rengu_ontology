@@ -7,7 +7,7 @@
  * 答案里的“建议动作”与右栏动作走同一张确认卡，并高亮右栏那一行；动作状态只在右栏显示。
  * 范围/口径是会话级的：中途修改在对话里插入“从这里开始按 … 回答”，之前的答案保留各自依据。
  */
-import { onMounted, ref, computed, watch } from 'vue';
+import { onMounted, ref, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { ShareAltOutlined, LayoutOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
@@ -17,7 +17,8 @@ import { REGION_EC } from '@/mock';
 import { useQueryParam } from './useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
-import { useQaSession } from './useQaSession';
+import { useQaSession, errText } from './useQaSession';
+import * as qaApi from '@/api/qa';
 import QaSessionPanel from './components/QaSessionPanel.vue';
 import QaConversation from './components/QaConversation.vue';
 import QaComposer from './components/QaComposer.vue';
@@ -50,16 +51,32 @@ const pvText = computed(() => ['订单', '门店', '会员'].map((o) => pv.scope
 const scope = ref('华东');
 const caliber = ref('不含税');
 const tips = ref<string[]>([]);
-watch([scope, caliber], ([s, c]) => { tips.value.push(`从这里开始按 大区 = ${s}、口径 = ${c} 回答`); });
-
 const sess = useQaSession();
+/* 真接口：范围/口径跟着当前会话（W3）；用户改了才 PATCH（W4），系统提示由后台作为 system 轮次追加 */
+let syncing = false;
+watch([scope, caliber], async ([s, c]) => {
+  if (!sess.real) { tips.value.push(`从这里开始按 大区 = ${s}、口径 = ${c} 回答`); return; }
+  const d = sess.detail.value;
+  if (syncing || !d || (d.scope === s && d.caliber === c)) return;
+  try { sess.detail.value = await qaApi.patchSession(d.id, { scope: s, caliber: c }); }
+  catch (e) { message.error(`修改范围口径失败：${errText(e)}`); syncing = true; scope.value = d.scope ?? '华东'; caliber.value = d.caliber; await nextTick(); syncing = false; }
+});
+if (sess.real) {
+  watch(() => sess.detail.value, async (d) => {
+    if (!d) return;
+    syncing = true; scope.value = d.scope ?? '华东'; caliber.value = d.caliber; await nextTick(); syncing = false;
+  });
+  watch(() => sess.activeId.value, (id) => { if (id && sess.detail.value?.id !== id) sess.loadDetail(id); }, { immediate: true });
+  const q = route.query.session;
+  if (typeof q === 'string' && q && !sess.activeId.value) sess.activeId.value = q;
+}
 const shareLink = computed(() => `${location.origin}/use/qa/workbench?session=${sess.activeId.value}`);
 async function copyLink() {
   try { await navigator.clipboard.writeText(shareLink.value); message.info('链接已复制'); } catch { message.info('浏览器不允许自动复制，请手动选中复制'); }
 }
 function toPage() {
   if (readonly.value) return;
-  const title = sess.sessions.value.find((s) => s.id === sess.activeId.value)?.title ?? '';
+  const title = sess.real ? sess.detail.value?.title ?? '' : sess.sessions.value.find((s) => s.id === sess.activeId.value)?.title ?? '';
   router.push({ path: '/use/qa/pages', query: { newName: title } });
 }
 function onPinned(page: string) { pin.value = ''; message.success(`已固定到「${page}」`); }

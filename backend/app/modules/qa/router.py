@@ -7,15 +7,16 @@ qa 只订阅 X4 release.published（qa-api §8 X4、§9.2 qa_object_type_view、
 from collections.abc import Callable
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
-from app.core.errors import NotFound
+from app.core.errors import AppError, NotFound
 from app.db.session import SessionDep
 from app.modules.qa import catalog, chain
 from app.modules.qa import repo as r
@@ -29,8 +30,10 @@ from app.modules.qa.models import (
     PageSourceKind,
     PageStatus,
     QaQueryLog,
+    QaSession,
     QaTemplate,
     QaTurn,
+    SessionCaliber,
     TurnKind,
 )
 from app.modules.qa.schemas import (
@@ -51,9 +54,11 @@ from app.modules.qa.schemas import (
     PageFullOut,
     PageListOut,
     PlanOptionsOut,
+    SessionCreateIn,
     SessionDetailOut,
     SessionOptionsOut,
     SessionOut,
+    SessionPatchIn,
     SynonymOut,
     TemplateOut,
     TMetricOut,
@@ -61,6 +66,15 @@ from app.modules.qa.schemas import (
 )
 
 router = APIRouter(tags=["qa"])
+
+
+class QaSqlFailed(AppError):
+    """[推断] W6：LLM 生成的 SQL 执行失败（库报错 / statement_timeout）。"""
+
+    status_code = 422
+    code = "QA_SQL_FAILED"
+    message = "生成的查询执行失败，请换个问法再试"
+
 
 # 功能权限（qa-api §1.3 权限表；页面 key 同前端 nav.ts:25/26/29/58）。require_func 现在是骨架桩，
 # 挂上不生效，等 PDE 实现后自动生效。调优子路由统一挂在 tuning 上。
@@ -128,6 +142,80 @@ async def get_session(sid: str, session: SessionDep, user: CurrentUserDep, ctx: 
     return svc.session_detail_out(s)
 
 
+async def _own_session(session, pk: int, sid: str) -> QaSession:
+    s = await r.SessionRepo(session).detail(sid)
+    if s is None or s.owner_id != pk:
+        raise NotFound("会话不存在", details={"id": sid})
+    return s
+
+
+def _caliber(label: str) -> SessionCaliber:  # type: ignore[valid-type]
+    return SessionCaliber(label)
+
+
+@router.post(
+    "/sessions", dependencies=_WB, status_code=201, response_model=SessionDetailOut, summary="W2 新建会话"
+)
+async def create_session(
+    body: SessionCreateIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
+):
+    pk, _ = await svc.effective_user(session, user, ctx)
+    codes = (await session.scalars(select(QaSession.code).where(QaSession.code.startswith("S")))).all()
+    nums = [int(c[1:]) for c in codes if c[1:].isdigit()]
+    s = QaSession(
+        code=f"S{(max(nums) if nums else 0) + 1:04d}",  # [推断] 会话号 = S + 最大序号 + 1（同 seed S0001…）
+        owner_id=pk,
+        title="新会话",  # 同 useQaSession.newSession；第一问后改成问题前 20 字（W6）
+        scope=body.scope,
+        caliber=_caliber(body.caliber),
+        last_at=clock.now(),
+    )
+    session.add(s)
+    await session.flush()
+    return svc.session_detail_out(await _own_session(session, pk, s.code))
+
+
+@router.patch(
+    "/sessions/{sid}", dependencies=_WB, response_model=SessionDetailOut, summary="W4 重命名 / 改范围口径"
+)
+async def patch_session(
+    sid: str, body: SessionPatchIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
+):
+    pk, _ = await svc.effective_user(session, user, ctx)
+    s = await _own_session(session, pk, sid)
+    if body.title is not None and body.title.strip():
+        s.title = body.title.strip()  # 同 QaSessionPanel.saveRename：trim 后为空不改
+    scope = body.scope if body.scope is not None else s.scope
+    caliber = _caliber(body.caliber) if body.caliber is not None else s.caliber
+    if scope != s.scope or caliber != s.caliber:
+        s.scope, s.caliber = scope, caliber
+        seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
+        now = clock.now()
+        # 同 Workbench.vue tips：追加系统轮次，之前的答案保留各自依据
+        session.add(
+            QaTurn(
+                code=f"{s.code}-T{seq:03d}",
+                session_id=s.id,
+                seq=seq,
+                kind=TurnKind.system,
+                snapshot={"text": f"从这里开始按 大区 = {scope}、口径 = {caliber.value} 回答"},
+                asked_at=now,
+            )
+        )
+        s.last_at = now
+    await session.flush()
+    session.expire(s)
+    return svc.session_detail_out(await _own_session(session, pk, sid))
+
+
+@router.delete("/sessions/{sid}", dependencies=_WB, status_code=204, summary="W5 删除会话")
+async def delete_session(sid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    pk, _ = await svc.effective_user(session, user, ctx)
+    await session.delete(await _own_session(session, pk, sid))  # 轮次级联删；页面卡片不受影响
+    await session.flush()
+    return Response(status_code=204)
+
+
 @router.post(
     "/sessions/{sid}/turns",
     dependencies=_WB,
@@ -149,7 +237,10 @@ async def ask(
     if s is None or s.owner_id != pk:
         raise NotFound("会话不存在", details={"id": sid})
     question = body.question.strip()
-    kind, snapshot, rows, elapsed, sql = await chain.answer(session, conn, llm, user, question)
+    try:
+        kind, snapshot, rows, elapsed, sql = await chain.answer(session, conn, llm, user, question)
+    except DBAPIError as e:  # 生成的 SQL 过了网关但执行出错（列不存在、超时等）：不落轮次，前端提示换个问法
+        raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
     seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
     now = clock.now()
     turn = QaTurn(
@@ -195,6 +286,17 @@ async def list_favorites(
     repo = r.FavoriteRepo(session)
     rows, total = await repo.list_page(repo.list_query(pk, _kw(q)), p)
     return Page.of([svc.favorite_out(f) for f in rows], total, p)
+
+
+@router.delete("/favorites/{fid}", dependencies=_WB, status_code=204, summary="W15 移出常用问题")
+async def delete_favorite(fid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    pk, _ = await svc.effective_user(session, user, ctx)
+    f = await r.FavoriteRepo(session).get_by_code(fid)
+    if f is None or f.owner_id != pk:
+        raise NotFound("常用问题不存在", details={"id": fid})
+    await session.delete(f)
+    await session.flush()
+    return Response(status_code=204)
 
 
 @router.get(
