@@ -180,3 +180,21 @@ export const listLifecycleIllegal = (objectId: string) => api.get<LcIllegal[]>(`
 /** L3–L6：整份草稿改动（新增状态 / 新增·修改·删除迁移）一起保存 */
 export const saveLifecycleDraft = (objectId: string, cr: string, edits: LcDraft) =>
   write<{ cr: string; edits: LcDraft }>('PUT', `/object-types/${enc(objectId)}/lifecycle/draft`, { cr, ...edits });
+
+/* ───── 情景推演（ops/Scenarios.vue） ───── */
+import type { Scenario, ScResult, ScImpact, ScScope, ScDrivers, StagePlan } from '@/mock/scenarios';
+/** 详情 / 运行 / 改名返回：result 不含 impacts（影响明细走分页接口） */
+export interface ScenarioDto extends Omit<Scenario, 'result'> { result?: Omit<ScResult, 'impacts'> | null; lockReason?: string }
+export interface ScenarioMetaDto { areas: string[]; categories: string[]; promoTypes: string[]; baseDrivers: ScDrivers; statuses: string[] }
+export const listScenarios = (q: { status?: string; kw?: string; page: number; size: number }) =>
+  api.get<PageResult<ScenarioDto>>('/scenarios', { query: { status: opt(q.status), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
+export const getScenariosMeta = () => api.get<ScenarioMetaDto>('/scenarios/meta');
+export const compareScenarios = (ids: string[]) => api.get<{ items: ScenarioDto[]; sameScope: boolean }>('/scenarios:compare', { query: { ids: ids.join(',') } });
+export const createScenario = (from?: string) => api.post<ScenarioDto>('/scenarios', from ? { from } : {});
+export const getScenario = (id: string) => api.get<ScenarioDto>(`/scenarios/${enc(id)}`);
+export const renameScenario = (id: string, name: string) => write<ScenarioDto>('PATCH', `/scenarios/${enc(id)}`, { name });
+export const runScenario = (id: string, body: { name?: string; scope: ScScope; drivers: ScDrivers }) => api.post<ScenarioDto>(`/scenarios/${enc(id)}:run`, body);
+export const getScenarioResult = (id: string) => api.get<Omit<ScResult, 'impacts'>>(`/scenarios/${enc(id)}/result`);
+export const listScenarioImpacts = (id: string, page: number, size: number) => api.get<PageResult<ScImpact>>(`/scenarios/${enc(id)}/impacts`, { query: { page, size } });
+export const getScenarioStagePlan = (id: string) => api.get<StagePlan[]>(`/scenarios/${enc(id)}/stage-plan`);
+export const stageScenario = (id: string, keys: string[]) => api.post<{ staged: string[]; message: string }>(`/scenarios/${enc(id)}:stage`, { keys });
