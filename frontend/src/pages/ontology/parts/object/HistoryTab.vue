@@ -8,7 +8,7 @@ import InfoTip from '@/components/InfoTip.vue';
 import { computed, ref, watch } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
-import { CURRENT_VERSION, NEXT_VERSION } from '@/mock/changes';
+import { useAppStore } from '@/stores/app';
 import { RELEASES } from '@/api/releases';
 import { legacyRevs } from '@/mock/objectHistory';
 import { useVersion } from '@/composables/useVersion';
@@ -17,12 +17,16 @@ import { crsOf, objLabel } from './objectGov';
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const name = computed(() => objLabel(props.objectId));
 const { view } = useVersion();
+// 当前 / 下一版本号取 app store（mock 模式是 mock 值，versioning 走真接口时是 /releases/current 的 current / next）
+const app = useAppStore();
+const CURRENT_VERSION = computed(() => app.ontologyVersion);
+const NEXT_VERSION = computed(() => app.ontologyNextVersion);
 
 interface Row { key: string; version: string; pending: boolean; title: string; status: string; author: string; reviewer: string; time: string; cr?: string; parts: string[] }
 const all = computed<Row[]>(() => [
   ...crsOf(props.objectId).map(({ cr, parts }) => ({
     key: cr.id, cr: cr.id, title: cr.title, status: cr.status, author: cr.owner, reviewer: cr.reviewer, time: cr.updatedAt, parts,
-    version: cr.release ?? (cr.status === '已驳回' || cr.status === '草稿' ? '--' : NEXT_VERSION), pending: !cr.release && cr.status !== '已驳回' && cr.status !== '草稿',
+    version: cr.release ?? (cr.status === '已驳回' || cr.status === '草稿' ? '--' : NEXT_VERSION.value), pending: !cr.release && cr.status !== '已驳回' && cr.status !== '草稿',
   })),
   ...legacyRevs(props.objectId, name.value).map((h) => ({
     key: h.version, version: h.version, pending: false, title: h.title, status: '迁移前记录', author: h.author, reviewer: '--', time: h.time, parts: [] as string[],
@@ -40,7 +44,7 @@ const page = ref(1);
 const size = ref(12);
 watch(filter, () => { page.value = 1; });
 const pageRows = computed(() => paginate(rows.value, { page: page.value, size: size.value }).items);
-const canView = (r: Row) => !r.pending && r.version !== CURRENT_VERSION && RELEASES.some((x) => x.ver === r.version);
+const canView = (r: Row) => !r.pending && r.version !== CURRENT_VERSION.value && RELEASES.some((x) => x.ver === r.version);
 const tone = (s: string) => (s === '审核中' ? 'warning' : 'default');
 const crCount = computed(() => all.value.filter((r) => r.cr).length);
 

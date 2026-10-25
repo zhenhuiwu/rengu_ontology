@@ -20,6 +20,7 @@ from app.core.config import api_prefix
 from app.modules.action.router import router as action_router
 from app.modules.admin.router import router as admin_router
 from app.modules.biz.router import router as biz_router
+from app.modules.dashboard.router import router as dashboard_router
 from app.modules.data.router import router as data_router
 from app.modules.dynamic.router import router as dynamic_router
 from app.modules.event.router import router as event_router
@@ -38,6 +39,7 @@ MOUNTS: list[tuple[str, APIRouter]] = [
     ("data", data_router),
     ("data", integration_router),  # integration 只挂 data（action-event-api.md:140、:168）
     ("biz", biz_router),
+    ("biz", dashboard_router),  # 首页看板 /dashboard/kpis、/stores/ranking（PDE）
     ("admin", admin_router),
 ]
 
