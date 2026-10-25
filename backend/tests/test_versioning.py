@@ -164,24 +164,23 @@ async def test_append_only_holds_with_fk_referencing_releases(seeded):
     """其它模块可以建指向 ontology_release(id) 的外键（retired_release_id、qa 的 release_id…）。
 
     有了外键也照样只追加。"""
+    # 不在 finally 里 DROP TABLE：断言失败时事务已中止，DROP 会报 "transaction aborted" 盖掉原始错误；
+    # 外层测试事务结束时整体回滚，探针表随之消失。
     await seeded.execute(
         text(
             "CREATE TABLE _probe_release_ref (id bigserial PRIMARY KEY,"
             " release_id bigint NOT NULL REFERENCES ontology_release(id))"
         )
     )
-    try:
-        rid = await seeded.scalar(text("SELECT id FROM ontology_release WHERE ver='v2026.10.3'"))
-        await seeded.execute(text("INSERT INTO _probe_release_ref (release_id) VALUES (:r)"), {"r": rid})
-        sp = await seeded.begin_nested()  # 不带 CASCADE：被外键检查拒绝（同样清不掉）
-        with pytest.raises(DBAPIError, match="foreign key"):
-            await seeded.execute(text("TRUNCATE ontology_release"))
-        await sp.rollback()
-        await _assert_append_only(seeded)
-        # 引用方的行也没被 CASCADE 清掉
-        assert await seeded.scalar(text("SELECT count(*) FROM _probe_release_ref")) == 1
-    finally:
-        await seeded.execute(text("DROP TABLE IF EXISTS _probe_release_ref"))
+    rid = await seeded.scalar(text("SELECT id FROM ontology_release WHERE ver='v2026.10.3'"))
+    await seeded.execute(text("INSERT INTO _probe_release_ref (release_id) VALUES (:r)"), {"r": rid})
+    sp = await seeded.begin_nested()  # 不带 CASCADE：被外键检查拒绝（同样清不掉）
+    with pytest.raises(DBAPIError, match="foreign key"):
+        await seeded.execute(text("TRUNCATE ontology_release"))
+    await sp.rollback()
+    await _assert_append_only(seeded)
+    # 引用方的行也没被 CASCADE 清掉
+    assert await seeded.scalar(text("SELECT count(*) FROM _probe_release_ref")) == 1
 
 
 async def test_rollback_creates_new_version_with_target_content(seeded):
@@ -436,3 +435,64 @@ async def test_release_by_is_name_and_by_id_is_user_code(client, seeded):
     assert (cur["by"], cur["byId"]) == ("王敏", "U010001")
     detail = (await client.get("/api/ontology/v1/releases/v2026.09.3")).json()
     assert detail["by"] == "孙浩然" and detail["byId"] == code_of["孙浩然"]
+
+
+async def test_raising_restore_hook_commits_nothing(seeded):
+    """钩子抛错：SAVEPOINT 先撤掉已执行钩子的写入；调用方回滚后，新版本行和 outbox 都不留。
+
+    见 CONVENTIONS §7。"""
+    from app.common.outbox import OutboxEvent
+    from app.modules.versioning.repo import ReleaseRepo
+    from app.modules.versioning.sections import register_section, unregister_section
+
+    class Writes:
+        section = "rules"
+
+        async def build_section(self, session, base, change_order_ids):
+            return {"R-007": {"version": 9}}
+
+        def seed_section(self, ver, ctx):
+            return {}
+
+        async def restore_section(self, session, content, *, release_id):
+            await session.execute(text("UPDATE sys_user SET name = '被改了' WHERE code = 'U010001'"))
+
+    class Boom(Writes):
+        section = "lifecycles"
+
+        async def build_section(self, session, base, change_order_ids):
+            return {"order": {"v": 1}}
+
+        async def restore_section(self, session, content, *, release_id):
+            raise RuntimeError("钩子失败")
+
+    svc = VersioningService()  # 默认 provider：登记的 builder 组装 rules / lifecycles 两节
+    now = datetime(2026, 10, 25, 12, tzinfo=UTC)
+    for b in (Writes(), Boom()):
+        register_section(b)
+    try:
+        v4 = await svc.create_version(seeded, ["CR-0011"], published_by="U010001", note="", now=now)
+        v5 = await svc.create_version(seeded, ["CR-0012"], published_by="U010001", note="", now=now)
+        await seeded.flush()
+        name0 = await seeded.scalar(text("SELECT name FROM sys_user WHERE code = 'U010001'"))
+        n_rel = await seeded.scalar(select(func.count()).select_from(OntologyRelease))
+        n_out = await seeded.scalar(select(func.count()).select_from(OutboxEvent))
+
+        caller = await seeded.begin_nested()  # 调用方事务（测试会话本身在外层事务里）
+        with pytest.raises(RuntimeError, match="钩子失败"):
+            await svc.create_version(
+                seeded, ["CR-0015"], rollback_of=v5, published_by="U010001", note="", now=now
+            )
+        # SAVEPOINT 已撤掉前一个钩子的写入；新版本行还在 → 调用方不能 commit
+        assert await seeded.scalar(text("SELECT name FROM sys_user WHERE code = 'U010001'")) == name0
+        assert await seeded.scalar(select(func.count()).select_from(OntologyRelease)) == n_rel + 1
+        await caller.rollback()
+
+        assert await seeded.scalar(select(func.count()).select_from(OntologyRelease)) == n_rel
+        assert await seeded.scalar(select(func.count()).select_from(OutboxEvent)) == n_out
+        assert (await ReleaseRepo(seeded).latest()).ver == v5
+        assert await seeded.scalar(text("SELECT name FROM sys_user WHERE code = 'U010001'")) == name0
+        assert v4 != v5
+    finally:
+        unregister_section("rules")
+        unregister_section("lifecycles")

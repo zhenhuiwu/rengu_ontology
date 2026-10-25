@@ -25,6 +25,10 @@ _registry: dict[str, SnapshotSectionBuilder] = {}
 log = logging.getLogger(__name__)
 
 
+class ImportOnlySectionsError(RuntimeError):
+    """`<模块>/sections.py` 既没导出 BUILDERS 也没导出 register()（已废弃的「import 时登记」）。"""
+
+
 def register_section(builder: SnapshotSectionBuilder) -> None:
     if builder.section not in SECTION_OWNERS:
         raise ValueError(f"未知的快照 section {builder.section!r}；先在 SECTION_OWNERS 里登记负责模块")
@@ -47,9 +51,11 @@ def load_sections(packages: list[str] | None = None) -> list[str]:
     对 packages（默认 settings.section_packages = ["app.modules"]）下每个子包，若存在 `<子包>.sections`：
     - 有 `BUILDERS`（builder 实例列表）→ 逐个 register_section；
     - 否则有可调用的 `register()` → 调用它（须幂等，例如已登记同类实例就直接返回）；
-    - 都没有 → 只 import（兼容「import 时登记」的旧写法；注意 import 只发生一次）。
+    - 都没有 → 报 ImportOnlySectionsError（「import 时登记」已废弃：import 只发生一次，
+      isolated_sections 恢复后不会再登记，测试和 seed 子进程里行为不一致）。
     幂等：同一个实例重复登记放行；同一 section 换了另一个实例照旧报 ValueError。
-    子包按名字排序扫描，所以登记顺序稳定（同一模块内按 BUILDERS 顺序）。
+    返回前把**整个注册表按包名排序**（同一模块内按 BUILDERS 顺序）：不论之前有没有别的入口先登记过
+    （create_app 里 include_routers 先 import 了模块），app 和 seed CLI 的登记顺序一致。
     """
     from app.core.config import get_settings
 
@@ -66,9 +72,25 @@ def load_sections(packages: list[str] | None = None) -> list[str]:
                     register_section(b)
             elif callable(getattr(mod, "register", None)):
                 mod.register()
+            else:
+                raise ImportOnlySectionsError(
+                    f"{name} 既没有 BUILDERS 也没有 register()：「import 时登记」已废弃（CONVENTIONS §7），"
+                    "请导出模块级 BUILDERS = [...] 或幂等的 register()"
+                )
+    # 按包名排序整个注册表：create_app() 里 include_routers 会先 import 模块（静态 __init__ 的 register_all()
+    # 等 import 时登记），seed CLI 不会，两边登记顺序可能不同；排序后两边一致。同一模块内保持 BUILDERS 顺序。
+    ordered = sorted(_registry.items(), key=lambda kv: _package_of(kv[1]))
+    _registry.clear()
+    _registry.update(ordered)
     names = list(_registry)
     log.info("快照 section 已登记：%s", ", ".join(names) or "（无）")
     return names
+
+
+def _package_of(builder: SnapshotSectionBuilder) -> str:
+    """builder 所在的模块包（`app.modules.static.sections` → `app.modules.static`），排序键。"""
+    mod = type(builder).__module__
+    return mod.rsplit(".", 1)[0] if mod.endswith(".sections") else mod
 
 
 # ---- 测试隔离用的公开接口（模块测试不要直接碰 _registry）----
@@ -124,13 +146,21 @@ async def restore_sections(session: AsyncSession, snapshot: Snapshot, release_id
 
     由 create_version 在**已写入**这次回滚的新版本行之后调用；release_id = 那一行的 ontology_release.id
     （Palantir 用它写 retired_release_id，action-event-api.md:325）。
-    按登记顺序逐节调用，任一节抛错整个发布回滚。
+    按登记顺序逐节调用，整组包在一个 SAVEPOINT（session.begin_nested()）里：任一节抛错 → 已执行的钩子写入
+    一起撤掉，异常原样抛给调用方；这时新版本行（在 SAVEPOINT 之外）还在，**调用方不能 commit**，
+    整个事务回滚（请求里的 get_session 遇异常会 rollback）。
     被恢复版本没有这一节（缺失或 null）→ 不调用钩子、定义表不动（静态裁定，和动态一致）[推断]；
     空内容（{} / []）照样调用，由模块把定义表恢复成「空」（静态全部置失效，动态 version 置空）。
     """
-    for name, builder in _registry.items():
-        content = snapshot.get(name)
-        if isinstance(builder, RestorableSection) and content is not None:
+    hooks = [
+        (b, snapshot.get(name))
+        for name, b in _registry.items()
+        if isinstance(b, RestorableSection) and snapshot.get(name) is not None
+    ]
+    if not hooks:
+        return
+    async with session.begin_nested():
+        for builder, content in hooks:
             await builder.restore_section(session, content, release_id=release_id)
 
 

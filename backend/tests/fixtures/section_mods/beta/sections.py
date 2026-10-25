@@ -1,7 +1,9 @@
-SECTION = "eventTypes"
+from tests.fixtures.section_mods import BETA
+
+SECTION = BETA
 
 
-class EventTypesProbe:
+class BetaProbe:
     section = SECTION
 
     async def build_section(self, session, base, change_order_ids):
@@ -11,12 +13,12 @@ class EventTypesProbe:
         return {"probe_event": {"ver": ver}}
 
 
-def register() -> EventTypesProbe:
+def register() -> BetaProbe:
     from app.modules.versioning.sections import register_section, registered_sections
 
     existing = registered_sections().get(SECTION)
-    if isinstance(existing, EventTypesProbe):
+    if isinstance(existing, BetaProbe):
         return existing
-    b = EventTypesProbe()
+    b = BetaProbe()
     register_section(b)
     return b

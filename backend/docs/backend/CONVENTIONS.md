@@ -160,13 +160,16 @@ enum_map(CrStatus)  # {'draft': '草稿', ...}：给文档和前端对照用
 
     - `content` = 被恢复版本快照里这一节（`snapshot.get(section)`），原样 JSON；
     - `release_id`（keyword-only）= 这次回滚新写入的 `ontology_release.id`（不是版本号；行已 flush，可 `session.get` 读到）。例如 Palantir 把快照里没有的类型 `retired_release_id = release_id`（action-event-api.md:325）。
-    - 由模块把自己的定义表（如动态 `rule` 当前版本、`lifecycle.version`、静态对象/指标）恢复成那一版；不实现钩子的段只回快照。钩子抛错 → 整个发布（含新版本行、outbox）随调用方事务回滚。
+    - 由模块把自己的定义表（如动态 `rule` 当前版本、`lifecycle.version`、静态对象/指标）恢复成那一版；不实现钩子的段只回快照。**钩子抛错 → 调用方不能 commit，整个事务回滚**（含新版本行、outbox、业务写入）：`restore_sections` 把所有钩子包在一个 SAVEPOINT（`session.begin_nested()`）里，任一钩子抛错时已执行的钩子写入先撤掉、异常原样上抛；新版本行在 SAVEPOINT 之外，只有调用方事务回滚才会消失。接口里走 `get_session` 的会在异常时自动 rollback；自己管事务的（脚本、后台任务）要 `except` 后 `rollback()`，不要吞掉异常再 commit。
     - 被恢复版本没有这一节（content 为 None）时**不调用**钩子、定义表不动（静态裁定，和动态一致）【推断】；空内容 `{}` 照样调用。
     - 旧的两参数写法 `restore_section(session, content)` 已废弃（此前没有模块实现）；照旧写会 TypeError、回滚失败。dynamic-api.md「写新版本之前调 restore_sections」的描述以此为准更新。
 - **section 唯一登记点**（骨架负责，模块不用改 main / cli）：
   - 负责 section 的模块在 `app/modules/<模块>/sections.py` 导出模块级 `BUILDERS = [XxxSection(), ...]`（按此顺序登记）；或者导出一个**幂等**的 `register()`（已登记同类实例就直接返回）。模块包的 `__init__` 里不要再登记。
-  - `app.modules.versioning.sections.load_sections()` 按子包名排序扫描 `app.modules.*.sections`（pkgutil）并登记；`create_app()` 和 `python -m app.cli seed` 开头都会调。幂等：同一实例重复登记放行，同一 section 换了另一个实例照旧报 `ValueError`。
+  - **禁止 import 时登记**：只有 `BUILDERS` 或 `register()` 算登记；不要在模块包 `__init__` 或 `sections.py` 顶层调 `register_section` / `register_all()`。
+  - **「import 时登记」已废弃**：`sections.py` 既不导出 `BUILDERS` 也不导出 `register()`（只靠 import 副作用调 `register_section`）时，`load_sections()` 报 `ImportOnlySectionsError`，`create_app()` / seed 起不来。原因：import 只发生一次，`isolated_sections` 恢复后不会再登记，测试和 seed 子进程行为不一致。
+  - `app.modules.versioning.sections.load_sections()` 按子包名排序扫描 `app.modules.*.sections`（pkgutil）并登记；`create_app()` 和 `python -m app.cli seed` 开头都会调。返回前把整个注册表**按包名排序**（同一模块内按 `BUILDERS` 顺序），所以不管之前谁先 import 过模块（`create_app` 里 `include_routers` 在 `load_sections` 之前），app 和 seed CLI 的登记顺序（= build / restore 调用顺序）一致。幂等：同一实例重复登记放行，同一 section 换了另一个实例照旧报 `ValueError`。
   - 直接调 `run_seeds(...)`（测试里）不会自动发现，测试自己登记要用的 builder。
+  - 测试替身的 section 名一律用 `_test_` 前缀（如 `tests/fixtures/section_mods` 的 `_test_alpha` / `_test_beta`），**不要借用真实 section 名**（terms、eventTypes…）：和 `app.modules` 一起扫时会和真实模块冲突（「已经登记过」）。
   - **迁移**：静态现在在 `static/__init__.py` 里 `register_all()`、`sections.py` 已有 `BUILDERS` → 删掉 `__init__` 里的调用即可（留着也不冲突，同一实例）。Palantir `action/sections.py`、`event/sections.py` 已有幂等 `register()` → 不用改；也可以改成导出 `BUILDERS`。
   - **验收**：全新空库 `alembic upgrade head` + `python -m app.cli seed`（默认参数）后，每个 `ontology_release.snapshot` 都含你的 section（`tests/test_seed_fresh_db.py::test_full_seed_on_fresh_db` 会对本分支实际发现的 section 断言这一点）。
 - **只追加，不改不删**：见 §6 的只追加触发器。
@@ -432,7 +435,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
       await assert_module_round_trip("static", STATIC_TABLES, own_types={"..."})  # 只列本模块自己的表 / 类型
   ```
 
-  - 它用 `ScriptDirectory` 查本模块第一个迁移的 `down_revision`（`module_parent("static")`），在临时库上：升到该 revision 记状态 → 升 head（本模块的表都在）→ 降回该 revision（排在后面的模块迁移一起降掉；本模块的表消失，表 / enum 等自定义类型 / 函数和降之前**完全一致**，不留残留）→ 再升 head（和第一次 head 完全一致）。
+  - 它用 `ScriptDirectory` 查本模块第一个迁移的 `down_revision`（`module_parent("static")`），在临时库上：升到该 revision 记状态 → 升 head（本模块的表都在）→ 降回该 revision（排在后面的模块迁移一起降掉；本模块的表消失，表 / 列 / 索引 / 触发器 / 序列 / 视图 / enum 等自定义类型 / 函数和降之前**完全一致**，不留残留）→ 再升 head（和第一次 head 完全一致）。
   - 只比较本模块自己的表和类型，别的模块的表不用列。骨架自己也用它（`module="skeleton"`，父 = base）。
   - 要检查迁移链形状时用 `module_revisions(m)` / `module_parent(m)`，只断言「本模块的迁移在链上连续、第一个的父不属于本模块」这类不随合并变化的性质。
 - **seed**：

@@ -13,7 +13,7 @@
    记下表 / 自定义类型 / 函数；
 2. upgrade head：模块自己的表都在、且之前没有；
 3. downgrade 回第 1 步那个 revision（链上排在模块后面的迁移也一起降掉）：模块自己的表都消失，
-   并且库的状态和第 1 步**完全一致**（不留表、enum / 复合类型 / domain、函数）；
+   并且库的状态和第 1 步**完全一致**（不留表、列、索引、触发器、序列、视图、enum / 复合类型 / domain、函数）；
 4. 再 upgrade head：和第 2 步完全一致。
 """
 
@@ -62,6 +62,28 @@ WHERE n.nspname = 'public'
     SELECT 1 FROM pg_depend d
     WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
   )
+"""
+
+# 列 / 索引 / 触发器 / 序列 / 视图（public，不含 alembic_version）：降回后必须和降之前一致
+COLUMNS_SQL = """
+SELECT table_name, column_name, data_type, is_nullable, coalesce(column_default, '') AS dflt
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name <> 'alembic_version'
+"""
+INDEXES_SQL = """
+SELECT indexname, indexdef FROM pg_indexes
+WHERE schemaname = 'public' AND tablename <> 'alembic_version'
+"""
+TRIGGERS_SQL = """
+SELECT c.relname, t.tgname, pg_get_triggerdef(t.oid) AS def
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND NOT t.tgisinternal
+"""
+SEQUENCES_SQL = "SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = 'public'"
+VIEWS_SQL = """
+SELECT table_name AS name FROM information_schema.views WHERE table_schema = 'public'
+UNION ALL
+SELECT matviewname FROM pg_matviews WHERE schemaname = 'public'
 """
 
 
@@ -118,6 +140,11 @@ class DbState:
     types: frozenset[tuple[str, str]]
     functions: frozenset[str]
     version: str | None
+    columns: frozenset[tuple[str, ...]] = frozenset()
+    indexes: frozenset[tuple[str, str]] = frozenset()
+    triggers: frozenset[tuple[str, str, str]] = frozenset()
+    sequences: frozenset[str] = frozenset()
+    views: frozenset[str] = frozenset()
 
 
 async def db_state(dsn: str) -> DbState:
@@ -137,6 +164,11 @@ async def db_state(dsn: str) -> DbState:
             frozenset((r["typname"], r["typtype"]) for r in await conn.fetch(CUSTOM_TYPES_SQL)),
             frozenset(r[0] for r in await conn.fetch(FUNCTIONS_SQL)),
             ver,
+            frozenset(tuple(r) for r in await conn.fetch(COLUMNS_SQL)),
+            frozenset((r[0], r[1]) for r in await conn.fetch(INDEXES_SQL)),
+            frozenset((r[0], r[1], r[2]) for r in await conn.fetch(TRIGGERS_SQL)),
+            frozenset(r[0] for r in await conn.fetch(SEQUENCES_SQL)),
+            frozenset(r[0] for r in await conn.fetch(VIEWS_SQL)),
         )
     finally:
         await conn.close()
@@ -174,6 +206,9 @@ async def assert_module_round_trip(
         assert after.tables == below.tables, ("downgrade 后表不一致", after.tables ^ below.tables)
         assert after.types == below.types, ("downgrade 留下 / 删掉了类型", after.types ^ below.types)
         assert after.functions == below.functions, ("函数不一致", after.functions ^ below.functions)
+        for f in ("columns", "indexes", "triggers", "sequences", "views"):
+            a, b = getattr(after, f), getattr(below, f)
+            assert a == b, (f"downgrade 后{f}不一致", a ^ b)
         assert after.version == below.version
 
         await up(command.upgrade, cfg, "head")

@@ -91,9 +91,13 @@ async def test_full_seed_on_fresh_db():
 async def test_default_seed_includes_discovered_sections():
     """验收口径：模块把 builder 放进 app/modules/<模块>/sections.py → 新库默认 seed 的每个版本快照里都有它。
 
-    这里用测试替身包 tests/fixtures/section_mods（alpha 导出 BUILDERS、beta 导出 register()）模拟模块。
+    这里用测试替身包 tests/fixtures/section_mods（alpha 导出 BUILDERS、beta 导出 register()）模拟模块；
+    替身用 `_test_` 前缀的 section 名，和真实模块（静态的 terms 等）一起扫也不冲突。
     """
-    pkgs = '["app.modules", "tests.fixtures.section_mods"]'
+    from tests.fixtures.section_mods import ALPHA, BETA
+
+    # 只扫替身包：真实模块（app.modules）的发现交给 test_full_seed_on_fresh_db，这里不受各模块合并进度影响
+    pkgs = '["tests.fixtures.section_mods"]'
 
     async def check(plain):
         assert await _count(plain, "ontology_release") == len(RELEASES)
@@ -104,8 +108,11 @@ async def test_default_seed_includes_discovered_sections():
             await conn.close()
         for r in rows:
             snap = json.loads(r["snapshot"])
-            assert snap["terms"] == {"probe": {"since": r["ver"]}}
-            assert snap["eventTypes"] == {"probe_event": {"ver": r["ver"]}}
+            # 不断言「只有这两节」：seed 导入静态模块时 static/__init__ 的 register_all() 仍会登记真实 section
+            # （import 时登记，§7 已禁止，待静态删掉）；替身名用 _test_ 前缀，所以并存也不冲突。
+            assert {ALPHA, BETA} <= set(snap)
+            assert snap[ALPHA] == {"probe": {"since": r["ver"]}}
+            assert snap[BETA] == {"probe_event": {"ver": r["ver"]}}
 
     await _seed_fresh_db({"RENGU_SECTION_PACKAGES": pkgs}, check)
 

@@ -1,5 +1,8 @@
-class TermsProbe:
-    section = "terms"
+from tests.fixtures.section_mods import ALPHA
+
+
+class AlphaProbe:
+    section = ALPHA
 
     async def build_section(self, session, base, change_order_ids):
         return {**(base or {}), "probe": {"applied": list(change_order_ids)}}
@@ -8,4 +11,4 @@ class TermsProbe:
         return {"probe": {"since": ver}}
 
 
-BUILDERS = [TermsProbe()]
+BUILDERS = [AlphaProbe()]

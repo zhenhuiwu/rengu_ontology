@@ -40,7 +40,13 @@ class PageParams(ApiModel):
 
     @property
     def offset(self) -> int:
-        """按请求的 page 算，不收拢。分页列表先 clamp(total) 再取 offset。"""
+        """按**请求的** page 算，**不收拢**——不要直接拿它切片！
+
+        自己切片 / 拼 SQL 的模块**必须先 `p = page.clamp(total)`**，再用 `p.offset`、`p.size`，响应里的
+        `page` 也用 `p.page`（或直接 `Page.of(rows, total, page)`，它内部会 clamp）。直接用未收拢的
+        offset：越界页返回空列表、响应 page 和数据对不上，和前端 paginate.ts:13 不一致。
+        `BaseRepository.list_page` 已经先 count 再 clamp，用它就不用自己算。
+        """
         return (self.page - 1) * self.size
 
     def clamp(self, total: int) -> "PageParams":
