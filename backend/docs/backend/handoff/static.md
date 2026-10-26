@@ -100,6 +100,8 @@
 18. **对象浏览标记没进变更单 / 快照**：新字段只在定义表和种子里，`shapes.prop` / `sections.py` 的 properties 节没带，改标记暂时只能改种子或直接改库；`/meta` 忽略 `?ver`；指标 `variants` 也只在 meta.metrics 里返回，`GET /metrics` 形状没加。从 `shapes.py` 属性形状加字段 + 快照节测试开始。
 19. **facets 只覆盖 sql_guard 登记过的类型**（门店、订单、商品等）；其他类型 `hasData:false`、空取值。新类型要先在 sql_guard 登记业务表，再在 `explorer_meta.json` 写 `backing`。行级范围 `row_filter` 目前返回 None（本体小白接入后自动生效）。
 20. **long_text、动作 `bulk`** 按设计文档下一轮再做。
+21. **（下一轮）指标 `variants` 是按显示名末尾「（…）」推出来的**（`explorer.metric_variants`）：名字不规范的指标不会成组。应改为在指标定义 / 变更单里显式维护变体，种子只做初值。
+22. **（下一轮）行级范围的分面测试**：现在只用 monkeypatch `auth.row_filter` 证明 facets 调了 `apply_row_filter`（`test_facets_apply_row_filter`）；本体小白接入真实 `row_filter` 后补一条按角色范围的端到端测试（含 DENY_ALL → 全部计数 0）。
 
 ## 代码在哪
 

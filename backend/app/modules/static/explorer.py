@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import ColumnElement, and_, func, select
+from sqlalchemy import ColumnElement, Integer, Numeric, and_, func, select
 from sqlalchemy import Enum as SaEnum
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,6 +78,8 @@ def default_flags(obj: str, p: Obj) -> Obj:
         out["list_visible"] = bool(p.get("pk") or p.get("dim"))
     if out["visibility"] == "hidden":  # 设计稿 §4 约束：hidden 时这三项无效
         out.update(filterable=False, sortable=False, list_visible=False)
+    if p.get("sensitive"):  # 敏感属性不做分面（取值会泄露明文），PDE 定
+        out["filterable"] = False
     return out
 
 
@@ -123,7 +125,7 @@ def prop_meta(p: Property) -> Obj:
         "dataType": p.data_type,
         "group": p.prop_group,
         "searchable": p.searchable,
-        "filterable": p.filterable,
+        "filterable": facetable(p),
         "sortable": p.sortable,
         "listed": p.list_visible,
         "listWidth": p.list_width,
@@ -135,7 +137,7 @@ def prop_meta(p: Property) -> Obj:
         "title": p.is_title,
         "sensitive": p.is_sensitive,
         "enumName": p.enum_name,
-        "facetKind": facet_kind(p) if p.filterable else None,
+        "facetKind": facet_kind(p) if facetable(p) else None,
     }
 
 
@@ -200,9 +202,9 @@ class ExplorerService:
 
     async def facets(self, code: str, filters: Obj, user: Any) -> list[Obj]:
         o = await self._object(code)
-        fprops = [p for p in o.properties if p.filterable and p.visibility != "hidden"]
-        by_key = {p.api_name: p for p in o.properties}
-        unknown = [k for k in filters if k not in by_key or not by_key[k].filterable]
+        fprops = [p for p in o.properties if facetable(p)]
+        by_key = {p.api_name: p for p in fprops}
+        unknown = [k for k in filters if k not in by_key]
         if unknown:
             raise AppError(
                 "筛选属性不存在或不可筛选",
@@ -216,6 +218,8 @@ class ExplorerService:
             for p in fprops:
                 if p.backing_column and p.backing_column in g.table.c:
                     cols[p.api_name] = g.table.c[p.backing_column]
+        # 先整体校验筛选值（不管该属性有没有数据列），任何不合法 → 422，不落到数据库
+        conds_by_key = {k: self._cond(by_key[k], cols.get(k), v, k) for k, v in filters.items()}
         out = []
         for p in fprops:
             kind = facet_kind(p)
@@ -227,7 +231,7 @@ class ExplorerService:
                 out.append(item)
                 continue
             # 计数尊重其它已选筛选，排除本分面自己的条件（多选分面的常规做法）
-            conds = [c for k, v in filters.items() if k != p.api_name for c in self._cond(cols.get(k), v, k)]
+            conds = [c for k, cs in conds_by_key.items() if k != p.api_name for c in cs]
             if kind == "enum":
                 stmt = select(col, func.count()).select_from(g.table).group_by(col)
             else:
@@ -255,36 +259,105 @@ class ExplorerService:
         return sorted(vals, key=lambda x: (-x["count"], str(x["value"])))
 
     @staticmethod
-    def _cond(col: ColumnElement | None, v: Any, key: str) -> list[Any]:
-        if col is None:  # 该属性没有数据列：不参与过滤（宁可多给，不报错）
+    def _cond(p: Property, col: ColumnElement | None, v: Any, key: str) -> list[Any]:
+        """一个筛选 → SQL 条件。按属性 / 列类型严格校验，不合法一律 422（不让数据库报 500）。
+
+        枚举类分面（facetKind=enum）只收标量数组；区间类（数值 / 日期）只收 {min, max}。
+        """
+        if facet_kind(p) == "enum":
+            if not isinstance(v, list) or any(isinstance(x, list | dict) or x is None for x in v):
+                _bad(key, '枚举类筛选应为取值数组，如 ["营业中"]')
+            if col is None:  # 该属性没有数据列：不参与过滤
+                return []
+            return [col.in_([_scalar(col, x, key) for x in v])] if v else []
+        if not isinstance(v, dict) or not v or set(v) - {"min", "max"}:
+            _bad(key, "区间类筛选应为 {min, max}")
+        for b in v.values():
+            if b is not None and (isinstance(b, bool) or not isinstance(b, str | int | float)):
+                _bad(key, "min / max 应为数字或日期字符串")
+        out = []
+        if col is None:  # 该属性没有数据列：不参与过滤
             return []
-        enum_cls = col.type.enum_class if isinstance(col.type, SaEnum) else None
+        bounds = {b: _scalar(col, v[b], key) for b in ("min", "max") if v.get(b) is not None}
+        if "min" in bounds:
+            out.append(col >= bounds["min"])
+        if "max" in bounds:
+            out.append(col <= bounds["max"])
+        return out
 
-        def to_db(x: Any) -> Any:
-            if isinstance(x, str) and enum_cls is None:
-                x = _coerce(col, x, key)
-            if enum_cls is not None:
-                hit = next((m for m in enum_cls if x in (m.value, m.name)), None)
-                return hit if hit is not None else x
-            return x
 
-        if isinstance(v, list):
-            return [col.in_([to_db(x) for x in v])] if v else []
-        if isinstance(v, dict):
-            out = []
-            if v.get("min") is not None:
-                out.append(col >= to_db(v["min"]))
-            if v.get("max") is not None:
-                out.append(col <= to_db(v["max"]))
-            return out
-        if isinstance(v, str | int | float | bool):
-            return [col == to_db(v)]
-        raise AppError(
-            "筛选值格式不对",
-            code="VALIDATION_FAILED",
-            status_code=422,
-            details={"fields": [{"field": f"filters.{key}", "message": "应为数组、{min,max} 或单个值"}]},
-        )
+def facetable(p: Property) -> bool:
+    """可以出分面 / 被筛选：filterable 且不隐藏、不敏感（PDE 定：敏感、隐藏都不返回取值）。"""
+    return bool(p.filterable) and p.visibility != "hidden" and not p.is_sensitive
+
+
+def _bad(key: str, msg: str) -> None:
+    raise AppError(
+        "筛选值格式不对",
+        code="VALIDATION_FAILED",
+        status_code=422,
+        details={"fields": [{"field": f"filters.{key}", "message": msg}]},
+    )
+
+
+def _scalar(col: ColumnElement, x: Any, key: str) -> Any:
+    """单个筛选值按列类型转换并校验：枚举须是已知取值，布尔须是 true/false，数值有限且在列范围内。"""
+    if isinstance(col.type, SaEnum) and col.type.enum_class is not None:
+        hit = next((m for m in col.type.enum_class if isinstance(x, str) and x in (m.value, m.name)), None)
+        if hit is None:
+            _bad(key, f"未知取值 {x!r}")
+        return hit
+    try:
+        py = col.type.python_type
+    except NotImplementedError:
+        py = str
+    if py is bool:
+        if not isinstance(x, bool):
+            _bad(key, "应为 true / false")
+        return x
+    if isinstance(x, bool):
+        _bad(key, "类型不对")
+    if py in (datetime, date):
+        if not isinstance(x, str):
+            _bad(key, "日期应为 ISO 字符串，如 2026-10-01")
+        return _coerce(col, x, key)
+    if py in (Decimal, int, float):
+        if not isinstance(x, str | int | float):
+            _bad(key, "应为数字")
+        if py is int and isinstance(x, float) and not x.is_integer():
+            _bad(key, "应为整数")
+        try:
+            n = _coerce(col, x, key) if isinstance(x, str) else py(x)
+        except (ArithmeticError, ValueError):
+            _bad(key, "数值不合法")
+        _check_range(col, n, key)
+        return n
+    if not isinstance(x, str):
+        _bad(key, "应为字符串")
+    return x
+
+
+_INT_LIMITS = {"SmallInteger": 2**15, "Integer": 2**31, "BigInteger": 2**63}
+
+
+def _check_range(col: ColumnElement, n: Any, key: str) -> None:
+    try:
+        d = Decimal(n) if not isinstance(n, float) else Decimal(repr(n))
+    except (ArithmeticError, ValueError):
+        _bad(key, "数值不合法")
+    if not d.is_finite():
+        _bad(key, "数值超出范围")
+    t = col.type
+    lim = next((v for k, v in _INT_LIMITS.items() if type(t).__name__ == k), None)
+    if lim is None and isinstance(t, Integer):
+        lim = 2**31
+    if lim is not None and not (-lim <= d < lim):
+        _bad(key, "数值超出范围")
+    prec, scale = getattr(t, "precision", None), getattr(t, "scale", None)
+    if isinstance(t, Numeric) and prec and abs(d) >= Decimal(10) ** (prec - (scale or 0)):
+        _bad(key, "数值超出范围")
+    if abs(d) >= Decimal("1e300"):
+        _bad(key, "数值超出范围")
 
 
 def _coerce(col: ColumnElement, x: str, key: str) -> Any:
@@ -293,6 +366,8 @@ def _coerce(col: ColumnElement, x: str, key: str) -> Any:
         py = col.type.python_type
     except NotImplementedError:
         return x
+    if len(x) > 64:
+        _bad(key, "值过长")
     try:
         if py is datetime:
             d = datetime.fromisoformat(x)
@@ -300,7 +375,10 @@ def _coerce(col: ColumnElement, x: str, key: str) -> Any:
         if py is date:
             return date.fromisoformat(x[:10])
         if py in (Decimal, int, float):
-            return py(x)
+            n = py(x)
+            if py is not int and not Decimal(str(n)).is_finite():
+                raise ValueError("非有限数值")
+            return n
     except (ValueError, ArithmeticError) as e:
         raise AppError(
             "筛选值格式不对",

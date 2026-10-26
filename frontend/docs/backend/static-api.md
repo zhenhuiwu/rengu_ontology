@@ -687,8 +687,10 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 }
 ```
 
-**facets**：`filters` 为 JSON 对象（URL 编码），键为属性 key，值三种写法：数组（IN，枚举可写中文标签或英文码）、`{"min":..,"max":..}`（区间，含端点，日期/时间按 `display_tz` 解析）、标量（等于）。
-非对象 JSON / 键不存在 / 属性不可筛选 → 422 `VALIDATION_FAILED`，`details.fields=[{field, message}]`。
+**facets**：`filters` 为 JSON 对象（URL 编码），键为属性 key，值按分面类型**严格校验**：
+- 枚举类（`facetKind=enum`：枚举 / 布尔 / 字符串）：只收**标量数组**（IN）。枚举可写中文标签或英文码，须是已知取值；布尔须为 true/false；字符串属性须为字符串。
+- 区间类（`facetKind=range`：数值 / 日期）：只收 `{"min":..,"max":..}`（含端点，可只给一个，null 视为不限）。日期 / 时间为 ISO 字符串（按 `display_tz`）；数值为数字或数字字符串，须有限、在列范围内（整数列 int32/int64、Numeric 精度）。
+- 以下一律 422 `VALIDATION_FAILED`，`details.fields=[{field:"filters.<key>", message}]`：非对象 JSON；键不存在 / 不可筛选 / 隐藏 / 敏感；单个标量（如 `{"city":5}`、`{"status":"营业中"}`）；数组里有对象 / 数组 / null / 类型不符的值；未知枚举值；给非区间属性 `{min,max}` 或给区间属性数组；min/max 类型不对、超范围或 1e400 之类。
 
 ```jsonc
 [
@@ -699,7 +701,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 ]
 ```
 
-- 只返回 `filterable` 的属性，按 `order`；`kind`：enum/boolean/string → `enum`，数值/日期 → `range`。
+- 只返回 `filterable` 且**不隐藏、不敏感**的属性（敏感属性取值会泄露明文；meta 里这类属性 `filterable:false`），按 `order`；`kind`：enum/boolean/string → `enum`，数值/日期 → `range`。
 - 计数用**其他**已选筛选 + 行级范围，不含本分面自己的条件（选了城市后城市分面仍显示全部城市）。
 - 取值来源：对象类型 → `sql_guard.governed_tables()` 里 `object_type` 相同的表；属性 → `Property.backing_column`（空则用属性 api）且须是该表的列。
   没有业务表或没有对应列的属性：`hasData:false`，`values:[]` 或 `min/max:null`。
@@ -708,7 +710,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 种子按显示名去掉末尾「（…）」分组：如 `gmv` / `gmv_tax` → `[{code:"gmv",label:"不含税",default:true},{code:"gmv_tax",label:"含税",default:false}]`。
 
 **新库字段**（`onto_property`）：`visibility`、`searchable`、`filterable`、`sortable`、`list_visible`、`list_width`、`format`、`unit`、`backing_column`；`onto_metric.variants`(jsonb)。
-种子初值：`app/modules/static/seeds/explorer_meta.json`（门店：区域、城市、业态、状态可筛选；编码、业态、区域、城市、面积、开业日期、状态列表展示，等）；未登记的类型按通用规则（pk/标题可搜索、枚举/布尔可筛选、pk/维度列表展示、数值日期可排序）。`long_text`、动作 `bulk` 本版不做。
+种子初值：`app/modules/static/seeds/explorer_meta.json`（门店：区域、城市、业态、状态可筛选；编码、业态、区域、城市、面积、开业日期、状态列表展示，等）；敏感属性默认不可筛选；未登记的类型按通用规则（pk/标题可搜索、枚举/布尔可筛选、pk/维度列表展示、数值日期可排序）。`long_text`、动作 `bulk` 本版不做。
 
 ### 3.3 关系类型
 
