@@ -59,6 +59,7 @@
    - 迁移依赖：`dynamic_0002` 依赖 `static_0002`。export-mock：前端 mock 改动后需重新导出 `seeds/json/dynamic/*`。
 3. **推演任务队列**：`rules_service.py` `ScenarioService.compute` 的 `EXTENSION POINT (PDE)`：换成真实任务队列，并在启动时把残留的“运行中”标为失败。
 4. **审批界面**：需要设计后再接 `approveActionRun`（`can.approve` 已给出）。
+5. **规则编号撞号**：`RuleService._next_code` 取“当前最大号 + 1”，两人同时新建规则会撞号返回 500；下一轮与问数 P2 / 会话编号一起按 `ER-` 的办法加锁。
 
 ## 通用化（去零售写死）待办
 

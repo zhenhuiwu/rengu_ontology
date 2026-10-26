@@ -211,3 +211,18 @@ async def test_result_running_and_failed(dyn, client, session):  # noqa: F811
     s.status, s.fail_reason = ScenarioStatus.failed, "推演失败：x"
     await session.flush()
     err(await client.get(f"{API}/scenarios/{sid}/result"), 409, "SCENARIO_FAILED")
+
+
+async def test_compute_db_error_marks_failed(dyn, client, monkeypatch):  # noqa: F811
+    from sqlalchemy import text
+
+    from app.modules.dynamic.rules_service import ScenarioService
+
+    async def boom(self, s):
+        await self.session.execute(text("select 1/0"))  # 真实数据库错误
+
+    monkeypatch.setattr(ScenarioService, "_compute", boom)
+    sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).status_code == 202
+    assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "失败"
+    err(await client.get(f"{API}/scenarios/{sid}/result"), 409, "SCENARIO_FAILED")

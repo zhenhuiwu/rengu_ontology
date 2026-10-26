@@ -408,7 +408,8 @@ class RuleService:
             return d
         d = RuleDraft(rule_id=r.id, cr_code=cr, version=(r.version or 0) + 1, patch={}, by=self.user.name)
         self.session.add(d)
-        r.status = RuleStatus.changing
+        if r.status != RuleStatus.disabled:  # 停用规则开草稿不改状态，放弃后仍是停用（不被误启用）
+            r.status = RuleStatus.changing
         await self.session.flush()
         return d
 
@@ -720,9 +721,12 @@ class ScenarioService:
         if s.status != ScenarioStatus.running:
             return
         try:
-            await self._compute(s)
+            # SAVEPOINT：_compute 中途数据库出错只回滚这次计算，会话仍可用来写失败状态
+            async with self.session.begin_nested():
+                await self._compute(s)
         except Exception as e:  # 推演失败落到方案上，前端轮询 /result 拿到失败原因
-            s.status, s.fail_reason = ScenarioStatus.failed, f"推演失败：{e}"
+            s = await self.get(code)
+            s.status, s.fail_reason = ScenarioStatus.failed, f"推演失败：{e}"[:500]
             await self.session.flush()
 
     async def _compute(self, s: Scenario) -> None:

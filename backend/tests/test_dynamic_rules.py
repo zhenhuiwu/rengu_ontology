@@ -145,3 +145,10 @@ async def test_create_open_discard_rule(dyn, client):  # noqa: F811
     rid2 = (await client.post(f"{API}/rules", json={})).json()["id"]
     assert (await client.post(f"{API}/rules/{rid2}/draft", json={"cr": "CR-0101"})).json()["cr"] == "CR-0101"
     err(await client.delete(f"{API}/rules/{rid2}/draft", params={"cr": "CR-0102"}), 404, "NOT_FOUND")
+
+
+async def test_disabled_rule_open_discard_stays_disabled(dyn, client):  # noqa: F811
+    assert (await client.get(f"{API}/rules/R-025")).json()["status"] == "已停用"
+    assert (await client.post(f"{API}/rules/R-025/draft", json={"cr": "CR-0099"})).status_code == 200
+    assert (await client.delete(f"{API}/rules/R-025/draft", params={"cr": "CR-0099"})).status_code == 204
+    assert (await client.get(f"{API}/rules/R-025")).json()["status"] == "已停用"  # 不被误改成已发布
