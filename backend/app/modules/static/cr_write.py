@@ -23,6 +23,7 @@ from app.core import clock
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound, VersionConflict
 from app.core.schema import _fmt_dt
+from app.db.dialects import get_adapter
 from app.modules.static.models import ChangeRequest, CrCheck, CrEvent, CrItem, CRLevel, CRStatus, CrTarget
 from app.modules.static.schemas import CRCreateIn, CRPatchIn, ItemsPutIn, TargetIn
 
@@ -65,6 +66,19 @@ SEVERITY = {"阻断": 4, "警告": 3, "信息": 2, "通过": 1, "不适用": 0}
 API_SECTIONS = {"properties", "links"}  # V7：已发布 API 名所在的段
 DESC_KEYS = ("desc", "definition", "description")
 HOLDING = (S.draft, S.in_review, S.approved, S.rejected)
+
+
+CR_CODE_LOCK = "static.cr_code"
+
+
+async def next_cr_code(session: AsyncSession) -> str:
+    """取下一个 CR-NNNN。先拿事务级互斥锁（PG：pg_advisory_xact_lock），持有到本事务提交 / 回滚，
+    两个人同时发起时后一个等前一个提交后再取最大号，不会撞号（以前会撞唯一键报 500）。
+    其它模块的「最大号 + 1」照抄这三行，锁名各用各的（handoff/static.md「编号加锁」）。"""
+    await get_adapter(session).xact_lock(session, CR_CODE_LOCK)
+    codes = await session.scalars(select(ChangeRequest.code).where(ChangeRequest.code.like("CR-%")))
+    n = max((int(c[3:]) for c in codes if c[3:].isdigit()), default=0)
+    return f"CR-{n + 1:04d}"
 
 
 def text_of(v: Any) -> str:
@@ -249,9 +263,7 @@ class CrWriteService:
         return "" if not name or name == owner else name
 
     async def _next_code(self) -> str:
-        codes = await self.session.scalars(select(ChangeRequest.code).where(ChangeRequest.code.like("CR-%")))
-        n = max((int(c[3:]) for c in codes if c[3:].isdigit()), default=0)
-        return f"CR-{n + 1:04d}"
+        return await next_cr_code(self.session)
 
     # ------------------------------------------------------------ 发起 / 目标
     async def create(self, user: CurrentUser, body: CRCreateIn) -> str:
@@ -552,7 +564,8 @@ class CrWriteService:
         self._touch(cr)
         if event:
             self._event(cr, None, "validate", "完成发布校验")
-        await self.session.flush()
+            await self.session.flush()
+        # event=False（:submit / :approve 里调）不单独 flush：和改状态一起 flush 一次，lockVersion 恰好 +1
         cnt: dict[str, int] = {}
         for r in checks:
             cnt[r["result"]] = cnt.get(r["result"], 0) + 1

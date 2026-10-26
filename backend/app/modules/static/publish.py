@@ -19,9 +19,12 @@ from app.common.auth import CurrentUser
 from app.core import clock
 from app.core.errors import AppError, Forbidden, NotFound
 from app.core.schema import _fmt_dt
+from app.db.dialects import get_adapter
+from app.modules.static.cr_write import next_cr_code
 from app.modules.static.models import ChangeRequest, CrEvent, CRLevel, CRStatus
+from app.modules.static.writeback import DIRTY, apply_crs
 from app.modules.versioning.repo import ReleaseRepo
-from app.modules.versioning.service import VersioningService, next_ver
+from app.modules.versioning.service import PUBLISH_LOCK, VersioningService, next_ver
 
 Row = dict[str, Any]
 
@@ -136,8 +139,11 @@ class PublishService:
         if not user.is_ontology_admin:
             raise Forbidden("需要本体管理员发布")
         now = clock.now()
+        # 先拿整版发布锁（create_version 里再拿一次，同一事务可重入），保证写回用的版本号就是新版本号
+        await get_adapter(self.session).xact_lock(self.session, PUBLISH_LOCK)
         crs = await self._approved(lock=True)
-        rows, blocked = merge_check(crs, await self._next_version(now))
+        next_ver = await self._next_version(now)
+        rows, blocked = merge_check(crs, next_ver)
         if blocked:
             raise AppError(
                 "合并校验有阻断，不能发布。请把冲突的变更单撤回或合并后再发布。",
@@ -146,12 +152,18 @@ class PublishService:
                 details={"rows": rows, "blocked": True},
             )
         codes = [c.code for c in crs]
+        note = note or "；".join(c.title for c in crs)
+        # 同事务写回定义表（writeback.HOOKS）；没登记的段（动作 / 事件 / 规则…）跳过并记进事件
+        skipped = await apply_crs(self.session, crs, next_ver, now, user.id)
         # [推断] note 不传时用变更单标题拼一句（mock 发布不填说明）
         ver = await self.versioning.create_version(
-            self.session, codes, published_by=user.id, note=note or "；".join(c.title for c in crs), now=now
+            self.session, codes, published_by=user.id, note=note, now=now
         )
+        self.session.info.pop(DIRTY, None)
         release = await ReleaseRepo(self.session).by_ver(ver)
         desc = "合并校验：" + ("；".join(r["note"] for r in rows if r["result"] != "通过") or "全部通过")
+        if skipped:
+            desc += "；未写回定义表：" + "、".join(skipped)
         for c in crs:
             c.status = CRStatus.published
             c.release_id = release.id if release else None
@@ -161,9 +173,7 @@ class PublishService:
         return ver
 
     async def _next_cr_code(self) -> str:
-        codes = await self.session.scalars(select(ChangeRequest.code).where(ChangeRequest.code.like("CR-%")))
-        n = max((int(c[3:]) for c in codes if c[3:].isdigit()), default=0)
-        return f"CR-{n + 1:04d}"
+        return await next_cr_code(self.session)
 
     async def rollback(self, user: CurrentUser, ver: str, note: str | None) -> str:
         # 前端不限管理员（static-api.md §2.2-6，限管理员是 [推断]，默认不做）

@@ -1,6 +1,7 @@
 """通用对象浏览：属性标记 seed、指标口径变体、GET /object-types/{id}/meta 与 /facets（static_0004）。"""
 
 import json
+import re
 from collections import Counter
 
 import pytest
@@ -238,6 +239,8 @@ async def test_facets_bad_filter_values_422(client, seeded, flt):
     body = r.json()
     assert body["code"] == "VALIDATION_FAILED"
     assert body["details"]["fields"][0]["field"] == f"filters.{next(iter(flt))}"
+    msg = body["details"]["fields"][0]["message"]
+    assert re.search(r"[\u4e00-\u9fff]", msg) and "Invalid" not in msg and "could not" not in msg, msg
 
 
 async def test_facets_good_filter_values_still_work(client, seeded):

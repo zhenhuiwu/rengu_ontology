@@ -380,11 +380,17 @@ def _coerce(col: ColumnElement, x: str, key: str) -> Any:
                 raise ValueError("非有限数值")
             return n
     except (ValueError, ArithmeticError) as e:
+        # 不把 Python 异常原文给前端，按类型给中文提示
+        hint = {
+            datetime: "应为日期时间，如 2026-10-01T08:00:00",
+            date: "应为日期，如 2026-10-01",
+            int: "应为整数",
+        }
         raise AppError(
             "筛选值格式不对",
             code="VALIDATION_FAILED",
             status_code=422,
-            details={"fields": [{"field": f"filters.{key}", "message": str(e)}]},
+            details={"fields": [{"field": f"filters.{key}", "message": hint.get(py, "应为数值")}]},
         ) from e
     return x
 
