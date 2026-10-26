@@ -1,4 +1,4 @@
-# 静态本体交接（static-integ2 → static-r3）
+# 静态本体交接（static-integ2 → static-r3 → static-r4）
 
 负责人：静态本体负责人。分支：`static-integ`（变基在 pde-integ `215819d` 上）→ `static-integ2`（叠在上面）→ `static-r3`（变基到 master `48a7094`，只做变更单写接口）。
 接口设计细节见 `docs/backend/static-api.md`；本文件只写做到哪、代码在哪、怎么接着做。
@@ -6,6 +6,32 @@
 
 > **没有切换的页面仍然走 mock。** 真接口只在 `VITE_API_REAL_MODULES` 包含 `static`（或 `VITE_API_MODE=real`）时生效；
 > 这个开关只在本地 `.env.local` 设置，不提交。没有开关时所有页面和以前完全一样（不发请求）。
+
+## static-r4（基于 master `b475283`，迁移头仍 static_0003，无新迁移）
+
+### 发布写回钩子（`app/modules/static/writeback.py`）
+- `POST /releases`：拿 `ontology.publish` 锁 → 合并校验 → `apply_crs` 写回定义表 → `create_version` 组快照 → CR 置已发布。全在一个事务里。
+- 钩子登记：`@register(kind, section)`，签名 `async (ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]`；`ctx` 有 `session/cr/ver(vNext)/now/by/is_new`；返回改过的快照节名（如 `{"terms"}`），这些节会按定义表重建（`sections._Base.build_section` 看 `session.info["static_dirty_sections"]`）。出错用 `writeback._bad(...)` 抛 409 `WRITEBACK_FAILED`。
+- 已登记：`knowledge/content`、`knowledge/status`、`object/properties`。没登记的跳过，发布事件说明末尾写「；未写回定义表：kind/section」。**动态 / Palantir 要写回自己的表**：在本模块外登记钩子需要先把 `HOOKS` 暴露成契约（目前只在静态内部用），本轮没做。
+- 回滚：`TermsSection.restore_section` → `writeback.restore_terms`；其余节只回快照。
+
+### 单号加锁（`cr_write.next_cr_code`）
+- 取 CR-NNNN 前先 `get_adapter(session).xact_lock(session, "static.cr_code")`（PG = `pg_advisory_xact_lock`，同事务可重入，提交/回滚自动释放），再取 max+1。新建单、回滚单都走它。
+- 其他模块要「取最大号 +1」照此写：固定锁名 → xact_lock → 查 max → insert，同一事务。没写并发测试（两连接测试成本高），靠锁保证。
+
+### lockVersion 只 +1
+- `CrService.transition` 在 `session.no_autoflush` 里做完状态流转（含 `run_checks(event=False)`，它不再 flush），最后只 flush 一次。测试：`tests/test_static_writeback.py`。
+
+### explorer 422 中文
+- 筛选值转换失败不再返回 Python 异常原文，按列类型给中文提示（日期时间 / 日期 / 整数 / 数值）。
+
+### 前端
+- `Releases.vue`：real 模式变更单载入失败（`crFallback`）→ 顶部警告条，所有写按钮禁用；重新载入成功后恢复。
+
+### 本轮没做
+- 对象类型新建（`object/properties` 遇到不存在的对象 409）、关系 / 指标 / 维度 / 规则 / 动作 / 事件写回；
+- 其余 6 节的 `restore_section`；
+- 对外开放写回钩子登记（契约文件）；单号并发测试。
 
 ## 变更单写接口契约（static-r3，先定形状，供动态 / Palantir 对接）
 
@@ -107,7 +133,7 @@
 
 每条：缺什么 / 为什么 / 从哪开始。
 
-1. **回滚不恢复静态定义表**
+1. **回滚只恢复了 terms**（static-r4 已做 `TermsSection.restore_section`，下面说的其余 6 节仍未做）
    - 缺：静态 section 没有实现 `restore_section`，整版回滚只复制快照、生成新版本，定义表不变，回滚后当前读接口仍是回滚前的定义。
    - 为什么：恢复要把快照节反写回十几张有外键的表（对象→属性→映射、关系→路径→步骤等），风险大，本期先不做 [推断，第二期]。
    - 评估（01:16，本轮决定不做）：版本层已在 `app/modules/versioning/sections.py:144` `restore_sections` 里用 `session.begin_nested()` 包好、按登记顺序调钩子，只差静态这边实现。难点是快照节是**有损**的（`shapes.py` 输出形状，不含运行数据；草稿行仍在定义表里；history 是合并后的数组），要为 7 节各写一个“快照 → 多张子表”的反向映射。以种子为例，回滚 v2026.10.3 时只有 `terms` 不同（K-011 是 v2026.10.3 新建，K-010 的 history 多一条），其余 6 节相同。
