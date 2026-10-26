@@ -250,3 +250,40 @@ class EffectiveAccessOut(ApiModel):
     func: list[EffectiveFuncOut]
     objs: list[EffectiveObjOut]
     areas_in: list[str]
+
+
+# ---- 当前用户行级范围 / 租户与组织 ----
+
+
+class MyScopeCondOut(ApiModel):
+    prop: str
+    op: str
+    values: list[str]
+    text: str
+
+
+class MyObjScopeOut(ApiModel):
+    """某对象类型上当前用户能看到的行：unrestricted=不限；否则 conditions 之间是「或」。"""
+
+    obj_type: str
+    visible: bool
+    unrestricted: bool
+    conditions: list[MyScopeCondOut]
+    text: str
+
+
+class MeRowScopeOut(ApiModel):
+    user_id: str
+    user_name: str
+    items: list[MyObjScopeOut]
+
+
+class TenantOptionOut(ApiModel):
+    """顶栏租户 / 组织下拉（api-index GET /tenants）：value = 组织编号，label = 「租户简称 / 组织名」。"""
+
+    value: str
+    label: str
+    tenant_id: str
+    tenant_name: str
+    org_name: str
+    default: bool

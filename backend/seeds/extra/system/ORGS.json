@@ -1,0 +1,5 @@
+[
+  {"id": "hd", "name": "华东事业部", "isDefault": true},
+  {"id": "hn", "name": "华南事业部", "isDefault": false},
+  {"id": "hq", "name": "集团总部", "isDefault": false}
+]

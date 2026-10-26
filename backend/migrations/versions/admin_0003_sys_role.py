@@ -1,7 +1,7 @@
 """角色与权限：sys_role、sys_role_scope、sys_role_member（admin 模块，前端 Roles.vue，api-index §4.2）。
 
 Revision ID: admin_0003
-Revises: admin_0002
+Revises: qa_0003
 Create Date: 2026-10-26 08:24:18.570715+08:00
 """
 

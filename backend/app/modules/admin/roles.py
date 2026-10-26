@@ -25,7 +25,7 @@ from app.common.repository import BaseRepository
 from app.core.clock import now
 from app.core.config import get_settings
 from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound
-from app.modules.admin.models import SysRole, SysRoleMember, SysRoleScope, SysUser
+from app.modules.admin.models import SysOrg, SysRole, SysRoleMember, SysRoleScope, SysTenant, SysUser
 from app.modules.admin.repo import insert_audit
 
 # ---- 页面常量 ----
@@ -487,6 +487,12 @@ class RoleService:
         rs = await self.bundles(await self.repo.roles_of_user(u.id))
         return rs, compute_effective(rs)
 
+    async def row_scope(self, user_code: str) -> list[dict[str, Any]]:
+        u = await self.session.scalar(select(SysUser).where(SysUser.code == user_code))
+        if u is None:  # 服务账号等不在 sys_user 的身份：没有角色 → 全部不可见
+            return compute_row_scope([])
+        return compute_row_scope(await self.bundles(await self.repo.roles_of_user(u.id)))
+
 
 def compute_effective(rs: list[RoleBundle]) -> dict[str, Any]:
     """逐行照 mock/roles.ts effectiveAccess()。"""
@@ -535,3 +541,64 @@ def compute_effective(rs: list[RoleBundle]) -> dict[str, Any]:
 async def role_names(session: AsyncSession) -> list[str]:
     """用户页的角色下拉 / 校验：sys_role 的角色名（按编号排序）。"""
     return list((await session.scalars(select(SysRole.name).order_by(SysRole.code))).all())
+
+
+def compute_row_scope(rs: list[RoleBundle]) -> list[dict[str, Any]]:
+    """当前用户逐对象类型的行级范围（问数「范围」、对象检索读它）。
+
+    规则与 compute_effective 的 objs 一致：
+    - 有查看权、且不是「defaultDeny 又没配范围」的角色才算授予；
+    - 任一授予角色在该对象上没配范围 → unrestricted（不限）；
+    - 否则 conditions = 各授予角色在该对象上的范围，条件之间是「或」。
+    没有授予的对象也列出来（visible=false），前端可直接显示「无权查看」。
+    """
+    out = []
+    for o in perm_objects():
+        name = o["name"]
+
+        def view(b: RoleBundle, name: str = name) -> bool:
+            return bool(next((x for x in b.role.objs if x["objType"] == name), {}).get("view"))
+
+        def has_scope(b: RoleBundle, name: str = name) -> bool:
+            return any(s.obj_type == name for s in b.scopes)
+
+        granted = [b for b in rs if view(b) and not (b.role.default_deny and not has_scope(b))]
+        unlimited = bool(granted) and any(not has_scope(b) for b in granted)
+        conds: list[dict[str, Any]] = []
+        if granted and not unlimited:
+            seen: set[str] = set()
+            for b in granted:
+                for s in b.scopes:
+                    t = scope_text(s)
+                    if s.obj_type == name and t not in seen:
+                        seen.add(t)
+                        conds.append({"prop": s.prop, "op": s.op, "values": list(s.values), "text": t})
+        text = "无权查看" if not granted else "全部" if unlimited else "；或 ".join(c["text"] for c in conds)
+        out.append(
+            {
+                "obj_type": name,
+                "visible": bool(granted),
+                "unrestricted": unlimited,
+                "conditions": conds,
+                "text": text,
+            }
+        )
+    return out
+
+
+async def tenant_options(session: AsyncSession) -> list[dict[str, Any]]:
+    """顶栏下拉：每个组织一项，label =「租户简称 / 组织名」（一期单租户，取第一行租户）。"""
+    t = await session.scalar(select(SysTenant).order_by(SysTenant.id).limit(1))
+    orgs = (await session.scalars(select(SysOrg).order_by(SysOrg.seq, SysOrg.code))).all()
+    short = t.short_name if t else ""
+    return [
+        {
+            "value": o.code,
+            "label": f"{short} / {o.name}" if short else o.name,
+            "tenant_id": t.code if t else "",
+            "tenant_name": t.name if t else "",
+            "org_name": o.name,
+            "default": o.is_default,
+        }
+        for o in orgs
+    ]

@@ -19,3 +19,8 @@
 - 删除角色时用户主角色名（`sys_user.role`）会悬空，api-index 是【待定】。
 - `/preview-sessions`（§1.11）留给 PDE。
 - 审计日志导出仍是桩（只返回 jobId）；用户页 Excel 导入（现在只认 CSV）和 lockVersion 没做。
+
+## 10-26 追加：当前用户行级范围 + 顶栏租户组织
+
+- 完成：`GET /api/admin/v1/me/row-scope`、`GET /api/admin/v1/tenants`，sys_tenant / sys_org（admin_0004），TopBar 读后台，`src/api/rowScope.ts` 给问数用。文档 `docs/backend/admin-tenants-row-scope-api.md`。
+- 未做：系统配置页租户信息保存；按组织过滤数据（一期单租户）；问数页面接 rowScope.ts 由问数负责。

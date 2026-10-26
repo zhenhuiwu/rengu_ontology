@@ -177,3 +177,41 @@ class SysRoleMember(IdMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
         BigInteger, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=False, index=True
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False, comment="列表顺序（升序）")
+
+
+# ---- 租户与组织（顶栏租户 / 组织切换，api-index §1.11 GET /tenants；admin_0004）----
+
+
+class SysTenant(CodeMixin, MutableTableMixin, Base):
+    """租户（一期单租户，只有一行）。code = 租户 ID（mock SYSTEM_SETTINGS.tenant.tenantId）。
+
+    顶栏显示「简称 / 组织名」，不再写死。
+    seed：extra/system/TENANT.json（照 mock settings.ts，零售只是演示样例）。
+    """
+
+    __tablename__ = "sys_tenant"
+    __table_args__ = ({"comment": "租户"},)
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False, comment="租户全称")
+    short_name: Mapped[str] = mapped_column(String(32), nullable=False, comment="简称（顶栏、导出抬头）")
+    industry: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default="", comment="行业"
+    )
+
+
+class SysOrg(CodeMixin, MutableTableMixin, Base):
+    """顶栏可切换的组织（事业部 / 分公司……任意行业的一级组织）。code = 前端 tenant 选项 value（hd）。
+
+    seed：extra/system/ORGS.json（照 stores/app.ts TENANTS 和 settings.ts defaultOrg）。
+    """
+
+    __tablename__ = "sys_org"
+    __table_args__ = ({"comment": "组织（顶栏切换）"},)
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="组织名")
+    seq: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="显示顺序"
+    )
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", comment="默认组织"
+    )

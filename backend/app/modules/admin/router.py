@@ -20,12 +20,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from app.common.auth import CurrentUser, require_func
+from app.common.auth import CurrentUser, CurrentUserDep, require_func
 from app.common.pagination import MAX_PAGE_SIZE, PageParamsDep
 from app.core.schema import DateTimeSec
 from app.db.session import SessionDep
 from app.modules.admin.models import SysUser
-from app.modules.admin.roles import RoleBundle, RoleService, roles_meta
+from app.modules.admin.roles import RoleBundle, RoleService, roles_meta, tenant_options
 from app.modules.admin.schemas import (
     AdminUserOut,
     AdminUserPage,
@@ -41,6 +41,7 @@ from app.modules.admin.schemas import (
     ImportPreviewOut,
     MembersAddIn,
     MembersAddOut,
+    MeRowScopeOut,
     ObjPermIo,
     ResultFilter,
     RoleCreateIn,
@@ -53,6 +54,7 @@ from app.modules.admin.schemas import (
     RowScopeOut,
     SearchField,
     StatusFilter,
+    TenantOptionOut,
     UserCreateIn,
     UserUpdateIn,
 )
@@ -356,3 +358,14 @@ async def remove_role_member(
 async def get_effective_access(user_id: str, session: SessionDep) -> EffectiveAccessOut:
     rs, eff = await RoleService(session).effective_access(user_id)
     return EffectiveAccessOut.model_validate({**eff, "rs": [role_out(b) for b in rs]})
+
+
+@router.get("/me/row-scope", response_model=MeRowScopeOut, summary="当前用户逐对象类型的行级范围")
+async def get_my_row_scope(user: CurrentUserDep, session: SessionDep) -> MeRowScopeOut:
+    items = await RoleService(session).row_scope(user.id)
+    return MeRowScopeOut.model_validate({"user_id": user.id, "user_name": user.name, "items": items})
+
+
+@router.get("/tenants", response_model=list[TenantOptionOut], summary="顶栏租户 / 组织下拉")
+async def list_tenants(_user: CurrentUserDep, session: SessionDep) -> list[TenantOptionOut]:
+    return [TenantOptionOut.model_validate(x) for x in await tenant_options(session)]

@@ -163,3 +163,36 @@ async def test_users_role_check_reads_table(client, users):
     assert (
         await client.post("/api/admin/v1/users", json=body | {"account": "y@x", "role": "无此角色"})
     ).status_code == 422
+
+
+async def test_my_row_scope_matches_effective_access(client, users):
+    """/me/row-scope 和角色页有效权限预览口径一致（同一 fixture）。"""
+    checked = 0
+    for e in EFF[:60]:
+        r = await client.get("/api/admin/v1/me/row-scope", headers={"X-Demo-As": e["id"]})
+        if r.status_code == 401:  # 停用 / 待激活用户登录不了
+            continue
+        assert r.status_code == 200, r.text
+        checked += 1
+        b = r.json()
+        assert b["userId"] == e["id"]
+        vis = {x["objType"]: x for x in b["items"] if x["visible"]}
+        assert {k: v["text"] for k, v in vis.items()} == {o["name"]: o["scope"] for o in e["objs"]}, e["id"]
+        for x in vis.values():
+            assert x["unrestricted"] == (x["text"] == "全部")
+            assert x["unrestricted"] or x["conditions"]
+            assert all(c["prop"] and c["values"] for c in x["conditions"])
+        for x in b["items"]:
+            if not x["visible"]:
+                assert x["text"] == "无权查看" and not x["conditions"]
+    assert checked >= 20
+
+
+async def test_tenants_from_db(client, users):
+    r = await client.get("/api/admin/v1/tenants")
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert [x["value"] for x in b] == ["hd", "hn", "hq"]
+    assert b[0]["label"] == "鲜邻零售集团 / 华东事业部" and b[0]["default"]
+    assert b[0]["tenantId"] == "TN-XL-000317"
+    assert sum(x["default"] for x in b) == 1

@@ -25,9 +25,11 @@ from app.core.schema import parse_display_dt
 from app.modules.admin.models import (
     AuditLog,
     AuditResult,
+    SysOrg,
     SysRole,
     SysRoleMember,
     SysRoleScope,
+    SysTenant,
     SysUser,
     UserStatus,
 )
@@ -80,6 +82,21 @@ def check_unique_names(by_table: dict[str, list[Row]]) -> None:
     dup = {n: c for n, c in seen.items() if len(c) > 1}
     if dup:
         raise ValueError(f"seed 里 sys_user 姓名重复：{dup}（动态按姓名比较「本人」，姓名必须唯一）")
+
+
+def _tenant(r: Row, _ctx: SeedContext) -> Row:
+    return {
+        "code": r["id"],
+        "name": r["name"],
+        "short_name": r["shortName"],
+        "industry": r.get("industry", ""),
+    }
+
+
+def _org(r: Row, ctx: SeedContext) -> Row:
+    seq = ctx.cache.setdefault("org_seq", [0])
+    seq[0] += 1
+    return {"code": r["id"], "name": r["name"], "seq": seq[0] - 1, "is_default": bool(r.get("isDefault"))}
 
 
 CHECKS = [check_unique_names]
@@ -166,6 +183,8 @@ def _role_member(r: Row, ctx: SeedContext) -> Row:
 _ROLE = Ref(SysRole, "code", nullable=False)
 
 SEEDS += [
+    SeedSpec(SysTenant, "TENANT.json", key=("code",), transform=_tenant, source="extra", description="租户"),
+    SeedSpec(SysOrg, "ORGS.json", key=("code",), transform=_org, source="extra", description="组织"),
     SeedSpec(SysRole, "ROLES.json", key=("code",), transform=_role, description="角色"),
     SeedSpec(
         SysRoleScope,

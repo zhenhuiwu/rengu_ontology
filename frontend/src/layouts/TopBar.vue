@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useAppStore, TENANTS } from '@/stores/app';
+import { loadTenants, type TenantOption } from '@/api/tenants';
 import { PAGES } from '@/nav';
 import VersionPicker from '@/components/VersionPicker.vue';
 import NoticeList from '@/components/NoticeList.vue';
@@ -18,6 +19,14 @@ function onKey(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); inputRef.value?.focus(); }
 }
 onMounted(() => window.addEventListener('keydown', onKey));
+// 租户 / 组织：后台 sys_tenant + sys_org（GET /tenants），mock 模式回退 TENANTS
+const tenants = ref<TenantOption[]>(TENANTS);
+onMounted(async () => {
+  try {
+    tenants.value = await loadTenants();
+    if (!tenants.value.some((t) => t.value === app.tenant)) app.tenant = (tenants.value.find((t) => t.default) ?? tenants.value[0])?.value ?? app.tenant;
+  } catch { /* 拉取失败保留演示数据 */ }
+});
 // 顶栏 ⓘ 使用帮助菜单（原型：快速入门 / 反馈只给提示）
 function onHelp({ key }: { key: string | number }) {
   if (key === 'kbd') setTimeout(() => inputRef.value?.focus(), 0);
@@ -52,7 +61,7 @@ function onSelect(v: string) {
       <span class="t-16 fw-600 c-1">本体智能平台</span>
     </router-link>
 
-    <a-select v-model:value="app.tenant" :options="TENANTS" :bordered="false" class="tb-tenant" popup-class-name="tb-tenant-pop" />
+    <a-select v-model:value="app.tenant" :options="tenants" :bordered="false" class="tb-tenant" popup-class-name="tb-tenant-pop" />
 
     <div class="tb-search">
       <a-auto-complete
