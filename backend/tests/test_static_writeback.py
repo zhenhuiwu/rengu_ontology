@@ -159,7 +159,10 @@ async def test_publish_writes_back(client, seeded):
 
     c = await seeded.scalar(select(ChangeRequest).where(ChangeRequest.code == cr))
     e = await seeded.scalar(select(CrEvent).where(CrEvent.cr_id == c.id, CrEvent.action == "publish"))
-    assert "未写回定义表：rule/conds" in e.desc
+    # 动态合并后 rule/conds 由 dynamic.writeback 登记（import 即登记），就不再记「未写回」
+    from app.modules.static.writeback import HOOKS
+
+    assert ("未写回定义表：rule/conds" in e.desc) == (("rule", "conds") not in HOOKS)
 
 
 async def test_writeback_failure_rolls_back(client, seeded):
@@ -478,11 +481,15 @@ async def test_register_writeback_public(client, seeded):
         seen.append((tid, [r.item_key for r in rows], ctx.ver))
         return set()
 
-    wb.register_writeback("rule", "conds", hook)
+    prev = wb.HOOKS.get(("rule", "conds"))  # 动态合并后已登记 rule/conds：临时替换，结束还原
+    wb.register_writeback("rule", "conds", hook, replace=True)
     try:
         await approved_cr(client)
         r = await client.post(P + "/releases", json={}, headers=WANG)
         assert r.status_code == 201, r.text
         assert seen == [("R-999", ["-"], r.json()["ver"])]
     finally:
-        wb.HOOKS.pop(("rule", "conds"), None)
+        if prev is None:
+            wb.HOOKS.pop(("rule", "conds"), None)
+        else:
+            wb.HOOKS[("rule", "conds")] = prev
