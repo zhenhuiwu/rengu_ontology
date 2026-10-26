@@ -33,6 +33,16 @@
 - 回滚不恢复运行数据（指标当前值、取值计数、关系质量）；重建的对象 / 指标只有快照里的定义字段；
 - 单号并发测试。
 
+### 本轮评审遗留（下一轮做）
+- `writeback.py:773-775` 注释与 `:780` 代码不一致，改注释或代码（PDE）。
+- `restore_metrics`（`writeback.py` ~`:972`）直接物理删除，未查引用；应先查引用，被引用则保留草稿（PDE）。
+- dynamic-r3 合并后补一条规则经 `register_writeback` 写回的联合测试（PDE）。
+- 发布遇到未登记写回的 kind/section 会跳过但仍把单子标成已发布，只在说明里写一句（`writeback.py:133-137`）；发布响应返回 `skipped`，前端给明显提示（Palantir）。
+- qa 引用了 `explorer.py` 私有函数 `_bad` / `_scalar`（及 `facet_kind` / `facetable`）；改为公开，或经 `app/contracts/static.py` 导出（qa-pages 评审）。
+- 枚举类字符串筛选值没有长度上限，日期 / 数值限 64 字符，统一上限（qa）。
+- 指标 `variants` 由显示名后缀推出，改为显式维护；`GET /metrics` 返回 `variants`；`variant_index` 按 status 和 `ver` 过滤。
+- 对象浏览标记（searchable / filterable 等）还不能经变更单 / 快照界面编辑。
+
 ## 变更单写接口契约（static-r3，先定形状，供动态 / Palantir 对接）
 
 > 前缀 `/api/ontology/v1`。**目标通用**：`target.kind` 取 `object | link | metric | dimension | knowledge | action | event | rule`，
