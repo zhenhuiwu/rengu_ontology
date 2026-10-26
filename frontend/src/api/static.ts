@@ -221,8 +221,9 @@ export const fetchCRDiffs = (id: string, page = 1, size = 10) =>
 export const fetchDraftTargets = (status = '草稿') =>
   api.get<Record<string, Partial<Record<TargetKind, string[]>>>>('/change-requests/draft-targets', { query: { status } });
 
-/** 把库里的单子登记进 DRAFTS（useDraftView 的 allDrafts / draftOf 读它；同号替换） */
-function registerDraft(cr: CRFull) {
+/** 把库里的单子登记进 DRAFTS（useDraftView 的 allDrafts / draftOf 读它；同号替换）。
+ *  共享（PDE）：动态 / 动作模块登记变更单也用它，只要单头这 5 个字段（CRFull、CrFullDto 都满足） */
+export function registerDraft(cr: Pick<CRFull, 'id' | 'title' | 'owner' | 'updatedAt' | 'changes'>) {
   const row = { id: cr.id, title: cr.title, owner: cr.owner, updatedAt: cr.updatedAt, changes: cr.changes };
   const i = DRAFTS.findIndex((d) => d.id === cr.id);
   if (i >= 0) DRAFTS.splice(i, 1, row); else DRAFTS.unshift(row);

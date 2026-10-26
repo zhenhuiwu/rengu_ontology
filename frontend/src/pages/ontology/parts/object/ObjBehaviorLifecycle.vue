@@ -15,6 +15,7 @@ import { useRoute, useRouter, RouterLink } from 'vue-router';
 import type { Cell, Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
 import ObjRef from '@/components/ObjRef.vue';
+import { canResolve } from '@/components/objectRegistry';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
@@ -264,8 +265,8 @@ if (live.value) {
   watch(lcKey, () => { remote.lc = null; loadLc(); }, { immediate: true });
   watch(() => [lcKey.value, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true });
 }
-/** 状态变化里的对象可点开：对象类型在本体里（真接口）或 mock 对象类型表里就按对象类型 id 引用 */
-const refKind = computed(() => (objType.value || OBJ_TYPE_KIND[props.objectId] ? props.objectId : ''));
+/** 状态变化里的对象可点开：对象类型在本体里（真接口）或 mock 对象类型表里、且注册表有这个 kind 的解析器，就按对象类型 id 引用 */
+const refKind = computed(() => ((objType.value || OBJ_TYPE_KIND[props.objectId]) && canResolve(props.objectId) ? props.objectId : ''));
 const defCols = [
   { title: '编号', key: 'id', width: 64 },
   { title: '迁移', key: 'tr', width: 170 },

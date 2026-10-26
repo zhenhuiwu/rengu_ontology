@@ -9,6 +9,7 @@ import type { Alert, AlertStatus, AlertDim } from '@/mock/dynamic';
 import type { ActionLog, ActionRecord, ActionStatus, SysId } from '@/mock/actions';
 import { apiClient, isApiError, type PageResult } from './http';
 import { DRAFTS } from '@/mock/releases';
+import { registerDraft } from './static';
 
 export const dynamicApi = apiClient('dynamic');
 const api = dynamicApi;
@@ -176,9 +177,7 @@ function crLocked(cr: string, r: { lockVersion?: number | null; crChanges?: numb
 /** 把库里的单子登记进 DRAFTS（useDraftView 的 allDrafts / draftOf 读它；同号替换） */
 function registerCR(cr: CrFullDto) {
   LOCKS[cr.id] = cr.lockVersion;
-  const row = { id: cr.id, title: cr.title, owner: cr.owner, updatedAt: cr.updatedAt, changes: cr.changes };
-  const i = DRAFTS.findIndex((d) => d.id === cr.id);
-  if (i >= 0) DRAFTS.splice(i, 1, row); else DRAFTS.unshift(row);
+  registerDraft(cr);
 }
 /**
  * 发起变更：新建变更单（带目标）或加入已有单；返回库里的单号。target 省略 = 只建空单（新建规则：规则建好后由 POST /rules 带 cr 登记）。

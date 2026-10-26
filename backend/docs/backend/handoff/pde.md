@@ -61,3 +61,5 @@
 - （评审 palantir-r2，非阻塞）事件类型页“近期事件”在非后台断开类错误时显示空列表且不自动重试，直到切换筛选或翻页。
 
 - qa-tuning（合并审）非阻塞：①评测无并发互斥，且 ER- 编号 max+1 并发可撞号；②进程重启后 run 卡"运行中"（qa.md 已记）；③/feedbacks 列表逐行构建详情（N+1）；④:reopen 不撤销 :to-cert 已加的同问法；⑤后台任务最多轮询 5s 等请求事务提交；⑥qa service 跨模块只读引用 static.ChangeRequest，后续宜走 static 提供的查询函数。
+
+- （合并 dynamic-r3 后，PDE 共享文件）①`src/api/static.ts` 导出 `registerDraft(cr)`（参数只要单头 id/title/owner/updatedAt/changes，CRFull / 动态的 CrFullDto 都能传）；`src/api/dynamic.ts` 的 `registerCR` 改为记 lockVersion 后调 `registerDraft`，不再复制登记逻辑。`src/api/action.ts` 仍有自己的 `registerDraft`（changes 取 DRAFTS 现值、不用响应里的 changes，语义不同），未改，留给 Palantir 决定是否换用。②`objectRegistry` 加 `canResolve(kind)`（只看有没有解析器，不告警）；`ObjBehaviorLifecycle.vue` 的 `refKind` 加了 `canResolve` 判断：注册表解析不了的对象类型（member / promotion / refund 等）显示纯文本，不再在开发环境告警（handoff/dynamic.md 未完成第 8 条、给 PDE 两条可勾掉）。

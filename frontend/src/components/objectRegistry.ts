@@ -191,6 +191,8 @@ export const resolveObject = (kind: string, id: string): ObjView | null => {
   if (!v) warnUnresolved(kind, id);
   return v;
 };
+/** 这个 kind 有没有解析器（不查具体 id、不警告）：页面决定要不要把文字渲染成 ObjRef 时用 */
+export const canResolve = (kind: string): boolean => !!kind && Object.prototype.hasOwnProperty.call(RESOLVERS, kind);
 /** 只检查能否解析（开发环境下解析不到会警告） */
 export const checkObject = (kind: string, id: string, where?: string) => {
   const ok = !!RESOLVERS[kind]?.(id);
