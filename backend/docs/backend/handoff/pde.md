@@ -47,3 +47,13 @@
 1. 静态提供 `/metrics/{id}/daily` 后，在 `Home.vue` 的 `trendOption` 上照 KPI 的写法：`shallowRef` 先放 mock，`isDashboardReal()` 时拉接口替换。
 2. 需要多租户 / 行级范围时，`service.store_ranking` 已经经过 `apply_row_filter`，只需在基础层实现过滤即可，接口不用改。
 3. 订单量变大后，排行可改成 SQL `GROUP BY`（现在 1286 单在 Python 里汇总，为了和前端 JS 浮点口径逐分一致）。
+
+## 本体总览接 `/ontology/graph`（分支 pde-r2）
+
+- 文件：`src/api/overview.ts`（新，开关键 `static`，`fetchGraph` / `mockGraph` 适配成 LINK_OBJECTS / LINKS 形状）、`src/pages/ontology/OntologyOverview.vue`（只改取数和重画，界面不变）。
+- **真接口**（`static` 开关打开时）：对象关系缩略图的节点、边，以及「N 个对象 · M 条关系」；`?ver=` 由 http.ts 自动带上，切换版本时重新拉取重画。后台没起来 → `fallBackIfDown` 回退 mock 并提示一次「后台未启动，暂时显示演示数据」；其他错误保留 mock 并 `console.warn`。
+- **仍是 mock**：
+  - 草稿对象（储值卡）及连到它的边：接口 nodes 只有已发布对象类型，草稿在变更单里（变更单发起接口未做），先保留 mock 草稿节点 / 边 [推断]。
+  - 六张资源卡片的计数和健康度、待处理列表（变更单 + 数据质量）、最近发布列表、数据截至：graph 接口不提供，需各模块的统计接口。
+  - 节点坐标 `POS` 仍是前端常量；新增对象没坐标时落在中心。
+- **接口缺口**（给静态）：handoff/static.md 第 17 条——`?ver=` 不按版本筛节点（只按版本筛边）；nodes 没有 `draft` / 质量失败标记；没有卡片所需的统计字段。
