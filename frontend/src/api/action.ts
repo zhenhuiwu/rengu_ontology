@@ -13,7 +13,9 @@
  * 后台没起来（fallback.ts 的 backend.down）时以下取数函数都回退 mock，loadSnapshot / loadRuns / loadWritebackSystems 不再发请求。
  * 运行数据（action 开关，palantir-r2，文档 §12）：近期事件 GET /event-types/{id}/events、运行健康 + 近 14 天事件数
  * GET /event-types/{id}/stats、动作近 14 天执行量 GET /action-types/{id}/stats/daily；页面按选中类型取，取不到 / 后台没起来用 mock。
- * 不在本文件：草稿写入（PUT /change-requests/…，versioning）。
+ * 变更单写库（palantir-cr，静态 static-r3 handoff/static.md「变更单写接口契约」）：VITE_PALANTIR_CR_WRITE=1 且 action 为真接口时，
+ * 动作 / 事件类型页的“发起变更 / 加入”“保存草稿”“提交审核”“放弃草稿”先写库（目标 kind = action / event，id = 类型编码），
+ * 失败弹错误、页面不变，不回退 mock、不调 fallBackIfDown。开关关着时页面行为同以前（不发请求）。
  */
 import { reactive } from 'vue';
 import {
@@ -24,6 +26,8 @@ import {
   type EventRecord,
 } from '@/mock/actionEvent';
 import type { ExtSystem } from '@/mock/extsys';
+import { DRAFTS, type DraftCR } from '@/mock/releases';
+import type { DraftWriter, SectionChange } from '@/pages/ontology/useDraftEdits';
 import { integrationApi, listExtSystems } from './integration';
 import { apiClient, currentApiContext, type PageResult } from './http';
 import { backend } from './fallback';
@@ -203,3 +207,78 @@ export interface RunDaily { date: string; ok: number; failed: number; unknown: n
 export const getRunDaily = async (typeId: string, days = 14) =>
   (await api.get<{ items: RunDaily[] }>(`/action-types/${enc(typeId)}/stats/daily`, { query: { days } })).items;
 
+
+// ---------------- 变更单写接口（static-r3 契约；VITE_PALANTIR_CR_WRITE=1 才用） ----------------
+
+/** 前端开关：静态 static-r3 合并前保持关闭（src/env.d.ts 的声明由 PDE 补，这里先用类型断言读） */
+export const CR_WRITE_FLAG = (import.meta.env as unknown as Record<string, string | undefined>).VITE_PALANTIR_CR_WRITE === '1';
+/** 写库生效 = 开关开 + action 真接口。后台没起来（backend.down）也照样发请求、照样报错，不假装成功 */
+export const crWriteOn = (): boolean => CR_WRITE_FLAG && api.isReal();
+
+export type CRKind = 'action' | 'event';
+export interface CRTargetIn { kind: CRKind; id: string; isNew?: boolean; name?: string }
+type CROp = 'add' | 'update' | 'delete';
+interface CRItemIn { key: string; op: CROp; before?: unknown; after?: unknown; type?: string; field?: string }
+interface CRItemOut extends CRItemIn { target: { kind: string; id: string }; section: string; updatedBy?: string; updatedAt: string }
+interface CRFull { id: string; title: string; owner: string; updatedAt: string; changes: number; lockVersion: number }
+const crPath = (id: string, rest = '') => `/change-requests/${enc(id)}${rest}`;
+
+/** POST /change-requests：发起（新建草稿，201）；目标在别的单里 409 TARGET_IN_OTHER_CR */
+export const createCR = (body: { title: string; reason?: string; target: CRTargetIn }) => api.post<CRFull>('/change-requests', body);
+/** POST /change-requests/{id}/targets：加入已有（幂等）；不是草稿 409 CR_STATE */
+export const addCRTarget = (id: string, t: CRTargetIn) => api.post<CRFull>(crPath(id, '/targets'), t);
+/** GET /change-requests/{id}/items：读回该目标该段的草稿行 */
+export const fetchCRItems = (id: string, q: { kind: CRKind; targetId: string; section: string }) => api.get<CRItemOut[]>(crPath(id, '/items'), { query: q });
+/** PUT /change-requests/{id}/items：同一 (目标, section) 整段替换；不是草稿 409 CR_LOCKED */
+export const saveCRItems = (id: string, body: { target: CRTargetIn; section: string; rows: CRItemIn[] }) =>
+  api.put<{ id: string; changes: number; lockVersion: number; items: CRItemOut[] }>(crPath(id, '/items'), body);
+/** POST /change-requests/{id}:submit：改动 0 → CR_EMPTY、阻断 → CR_BLOCKED、没有审核人 → CR_NO_REVIEWER */
+export const submitCR = (id: string) => api.post<unknown>(crPath(id, ':submit'), {});
+/** DELETE /change-requests/{id}/targets/{kind}/{targetId}：放弃本对象草稿（204） */
+export const discardCRTarget = (id: string, kind: CRKind, targetId: string) => api.delete<void>(crPath(id, `/targets/${kind}/${enc(targetId)}`));
+
+/** 库里新建 / 加入的单子登记进 DRAFTS（运行时，同 static-r3 的做法；useDraftView 的 allDrafts 读它） */
+function registerDraft(cr: CRFull) {
+  const row: DraftCR = { id: cr.id, title: cr.title, owner: cr.owner, updatedAt: cr.updatedAt, changes: DRAFTS.find((d) => d.id === cr.id)?.changes ?? 0 };
+  const i = DRAFTS.findIndex((d) => d.id === cr.id);
+  if (i >= 0) DRAFTS.splice(i, 1, row); else DRAFTS.unshift(row);
+}
+
+/**
+ * “发起变更”弹窗确认：开关开着时先在库里新建 / 加入，返回交给 useDraftView.start 的参数（单号以库为准，一律 { join }）；
+ * 开关关着原样返回。失败抛 ApiError，页面提示后中止。
+ */
+export async function crStart(target: CRTargetIn, opts: { join?: string; title?: string }): Promise<{ join?: string; title?: string }> {
+  if (!crWriteOn()) return opts;
+  const cr = opts.join ? await addCRTarget(opts.join, target) : await createCR({ title: opts.title || '未命名变更', target });
+  registerDraft(cr);
+  return { join: cr.id };
+}
+
+/** 改动列表「类型」列【推断】：契约只定了 section 名，中文名按页签取 */
+const SECTION_TYPE: Record<string, string> = { params: '参数', conds: '提交条件', edits: '本体修改', effects: '副作用', config: '写回配置', payload: '载荷字段', subs: '订阅方' };
+
+/**
+ * 给 useDraftEdits 的写库实现。保存：每个变了的 section 先 GET 读回库里的行，按 key 合并本次改动（revert 去掉），再整段 PUT
+ * （不读回直接 PUT 会把刷新页面前保存的行冲掉）。
+ */
+export function crWriter(kind: CRKind, target: () => { id: string; name: string }): DraftWriter {
+  const t = (): CRTargetIn => ({ kind, ...target() });
+  return {
+    on: crWriteOn,
+    async save(crId, changes) {
+      for (const c of changes) {
+        const tg = t();
+        const old = await fetchCRItems(crId, { kind, targetId: tg.id, section: c.section });
+        const rows = new Map<string, CRItemIn>(old.map(({ target: _t, section: _s, updatedBy: _u, updatedAt: _a, ...r }) => [r.key, r]));
+        for (const r of c.rows as SectionChange[]) {
+          if (r.op === 'revert') rows.delete(r.key);
+          else rows.set(r.key, { key: r.key, op: r.op, before: r.before, after: r.after, type: SECTION_TYPE[c.section], field: r.key });
+        }
+        await saveCRItems(crId, { target: tg, section: c.section, rows: [...rows.values()] });
+      }
+    },
+    submit: async (crId) => { await submitCR(crId); },
+    discard: (crId) => discardCRTarget(crId, kind, target().id),
+  };
+}

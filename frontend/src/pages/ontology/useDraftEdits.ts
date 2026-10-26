@@ -6,6 +6,8 @@
  *   - 改动先进“未保存”，保存草稿后计入变更单改动数；有未保存改动时切换左侧对象、切回已发布、离开页面都要确认（useUnsavedGuard）；
  *   - 提交审核后草稿锁定，不能再改。
  * 状态按 变更单 + 对象 保存在模块里，切换页签不丢。
+ * 变更单写库（palantir-cr）：传了 writer 且 writer.on() 时，保存草稿 / 提交审核 / 放弃草稿先写库（src/api/action.ts crWriter），
+ *   成功后再改本地状态；失败弹错误、本地状态不变（不回退 mock、不走 fallBackIfDown）。writer.on() 为 false 时行为同以前。
  */
 import { computed, reactive, type Ref } from 'vue';
 import { message } from 'ant-design-vue';
@@ -24,6 +26,15 @@ const submitted = reactive<Record<string, string>>({});
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
+/** 一次保存里某个 section 变了的行（相对上一次保存）；op=revert 表示改回已发布版，要从草稿里去掉 */
+export interface SectionChange { key: string; op: 'add' | 'update' | 'delete' | 'revert'; before?: unknown; after?: unknown }
+export interface DraftWriter {
+  on: () => boolean;
+  save: (crId: string, changes: { section: string; rows: SectionChange[] }[]) => Promise<void>;
+  submit: (crId: string) => Promise<void>;
+  discard: (crId: string) => Promise<void>;
+}
+
 export interface DraftEditsOptions {
   draft: Ref<DraftCR | undefined>;
   isDraft: Ref<boolean>;
@@ -31,6 +42,7 @@ export interface DraftEditsOptions {
   targetId: () => string;
   targetName: () => string;
   reviewer?: string;
+  writer?: DraftWriter;
 }
 
 export function useDraftEdits(o: DraftEditsOptions) {
@@ -41,7 +53,10 @@ export function useDraftEdits(o: DraftEditsOptions) {
   const canEdit = computed(() => o.isDraft.value && !locked.value);
   const editTip = computed(() => (o.isDraft.value && locked.value ? `${o.draft.value!.id} 已提交审核，驳回后才能继续修改` : o.editTip.value));
   const dirty = computed(() => Object.keys(working).some((k) => k.startsWith(prefix())));
-  const sections: { marks: (src: 'saved' | 'all') => number }[] = [];
+  const sections: { name: string; marks: (src: 'saved' | 'all') => number; changes: () => SectionChange[] }[] = [];
+  const writing = () => !!o.writer?.on();
+  const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  let busy = false;
 
   function section<T>(name: string, base: () => T[], keyOf: (t: T) => string) {
     const key = () => prefix() + name;
@@ -61,7 +76,26 @@ export function useDraftEdits(o: DraftEditsOptions) {
       fn(rs);
       working[key()] = rs;
     };
-    sections.push({ marks: (src) => diff(src === 'saved' ? saved[key()] ?? baseRows() : current()).filter((r) => r.mark).length });
+    /** 未保存的行里，相对上一次保存变了的（按与已发布版比较给 op） */
+    const changes = (): SectionChange[] => {
+      const w = working[key()];
+      if (!w) return [];
+      const prev = new Map((saved[key()] ?? baseRows()).map((r) => [r.key, r]));
+      const now = new Map(w.map((r) => [r.key, r]));
+      const b = new Map(baseRows().map((r) => [r.key, r.data]));
+      const out: SectionChange[] = [];
+      for (const k of new Set([...prev.keys(), ...now.keys()])) {
+        const r = now.get(k);
+        if (same(prev.get(k), r)) continue;
+        if (!r) { out.push({ key: k, op: 'revert' }); continue; }
+        if (r.deleted) out.push({ key: k, op: 'delete', before: b.get(k) });
+        else if (!b.has(k)) out.push({ key: k, op: 'add', after: r.data });
+        else if (same(b.get(k), r.data)) out.push({ key: k, op: 'revert' });
+        else out.push({ key: k, op: 'update', before: b.get(k), after: r.data });
+      }
+      return out;
+    };
+    sections.push({ name, changes, marks: (src) => diff(src === 'saved' ? saved[key()] ?? baseRows() : current()).filter((r) => r.mark).length });
     return {
       rows,
       /** 键已存在（未删除）时返回 false */
@@ -88,7 +122,14 @@ export function useDraftEdits(o: DraftEditsOptions) {
   /** 给 DraftBanner 用：改动数 = 变更单原有改动 + 本对象已保存的改动 */
   const bannerDraft = computed<DraftCR | undefined>(() => o.draft.value && { ...o.draft.value, changes: o.draft.value.changes + savedChanges.value, ...(savedChanges.value ? { updatedAt: '2026-10-25 17:10' } : {}) });
 
-  function save() {
+  async function save() {
+    const d = o.draft.value;
+    if (writing() && d) {
+      if (busy) return;
+      const changes = sections.map((x) => ({ section: x.name, rows: x.changes() })).filter((x) => x.rows.length);
+      busy = true;
+      try { if (changes.length) await o.writer!.save(d.id, changes); } catch (e) { message.error(`保存草稿失败：${errText(e)}`); return; } finally { busy = false; }
+    }
     Object.keys(working).filter((k) => k.startsWith(prefix())).forEach((k) => { saved[k] = working[k]; delete working[k]; });
     message.success('已保存到草稿');
   }
@@ -107,7 +148,9 @@ export function useDraftEdits(o: DraftEditsOptions) {
       fields: [{ label: '本对象', value: o.targetName() }, { label: '本对象改动', value: `${savedChanges.value} 处` }, { label: '变更单改动', value: `${d.changes + savedChanges.value} 处` }, ...(o.reviewer ? [{ label: '审核人', value: o.reviewer }] : [])],
       impact: '提交后草稿锁定，审核人驳回后才能继续修改；审核通过后随下一次整版发布生效，发布前问数和规则仍用已发布版本。',
     });
-    if (ok) { submitted[d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交评审`); router.push({ path: '/build/ontology/releases', query: { cr: d.id } }); }
+    if (!ok) return;
+    if (writing()) { try { await o.writer!.submit(d.id); } catch (e) { message.error(`提交审核失败：${errText(e)}`); return; } }
+    submitted[d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交评审`); router.push({ path: '/build/ontology/releases', query: { cr: d.id } });
   }
   async function discard(after: () => void) {
     const d = o.draft.value;
@@ -115,6 +158,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
     const ok = await confirm.ask({ title: '放弃草稿', target: `${d.id} · ${o.targetName()}`, okText: '放弃', danger: true,
       impact: '丢弃本对象在草稿里的全部改动（含已保存的），已发布版本不受影响。' });
     if (!ok) return;
+    if (writing()) { try { await o.writer!.discard(d.id); } catch (e) { message.error(`放弃草稿失败：${errText(e)}`); return; } }
     Object.keys({ ...saved, ...working }).filter((k) => k.startsWith(prefix())).forEach((k) => { delete saved[k]; delete working[k]; });
     after();
   }
