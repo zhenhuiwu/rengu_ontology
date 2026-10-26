@@ -64,7 +64,7 @@ async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
   try {
     await reload();
   } catch (e) {
-    message.warning(`操作已保存，但${e instanceof Error ? e.message : '刷新失败，请稍后刷新页面'}`);
+    message.warning(`已保存，刷新失败：${e instanceof Error ? e.message : '请稍后刷新页面'}`);
   }
   return r;
 }
