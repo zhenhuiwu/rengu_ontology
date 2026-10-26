@@ -34,11 +34,11 @@
 | 事件抽屉 `drawer.open('event', id)` | 抽屉仍读 mock；后台 `GET /events/{id}` 已有（palantir-r3） | **PDE**：在 `src/components/actionEventResolvers.ts` 的 `event(id)` 把 `eventById(id)` 换成 `GET /api/ontology/v1/events/{id}`，接法同动作抽屉（`c5ec3b3`：后台没起来回退 mock）；返回就是 mock `EventRecord`，抽屉其余代码不用改，事件类型仍用 `eventTypeById` 或 `GET /event-types/{id}`。mock 没有逐订阅方投递明细，按“前端为准”不建 `event_delivery`，等页面要显示时再建 |
 | `event_delivery`、`event_dedup` 表 | 没建 | 我负责；近期事件 / 健康已用 `event` 表直接算 |
 | 打开开关 `VITE_PALANTIR_CR_WRITE` | 前置条件都做了、本地联调已走通（palantir-r3），提交的代码里仍默认关 | 是否默认打开由 PDE / 用户定；打开时本地设 `VITE_PALANTIR_CR_WRITE=1` + `VITE_API_REAL_MODULES=action,static`（不提交） |
-| 放弃后留下空变更单 | 放弃只删本对象的目标；`cancel` 只删“本会话新建且已空”的单，刷新后再放弃时空单留在草稿列表里 | 归 PDE 的 `useDraftView.cancel` / 静态：要么 `cancel` 也删库里已空的单，要么静态 `DELETE target` 后自动删空单。【推断】 |
-| 发起时建单成功、加目标失败 | `crStart` 先写库再改页面；建单成功但加目标失败时库里会留一个空单，页面没进草稿所以没东西可撤 | 静态若把“建单 + 首个目标”做成一个事务（`POST /change-requests` 带 `target`）就不会有；否则我这边补删空单 |
+| 放弃后留下空变更单 | 放弃只删本对象的目标；刷新后再放弃时空单留在草稿列表里。**静态评审已定：空草稿单保留**（提交时 `CR_EMPTY` 拦住，用户可自己删），前端不用删单 | 不做；只剩下面“本轮评审遗留”静态 ② 的 404 处理 |
+| 发起时建单成功、加目标失败 | `crStart` 建单成功但加目标失败时库里留一个空单 | 按静态“空草稿单保留”的决定（提交被 `CR_EMPTY` 拦、用户可删）不再补删；前端不做删单 |
 | 动作类型 `bulk`（批量执行）字段 | 没做 | 前端 mock / 页面没有这个字段，按“前端为准”不加；`target_kind` 后台已有。【推断】页面加上后再补列和迁移（`down_revision` 接当时的 head） |
 | 新建动作 / 事件类型 | 两页有“新建动作类型 / 新建事件类型”按钮，但只打开共用的 `StartChangeModal`，变更对象写成“新建…类型”；mock 和页面都没有新类型的表单（没有字段、必填项、布局），页面也只能显示列表里已有的类型 | 核对过（palantir-r3），本轮不做：做表单要自己定字段，违反“前端为准”。要先由页面归属方给出表单设计；约定（PDE 审 static-r3 时提）：新类型 `target{kind,id:调用方给的编码,isNew:true}`，`config` 一个字段一行、`params` / `payload` 一项一行，都是 `op=add`；发布时 `isNew` 目标要静态的按类型写回建定义行 |
-| **发布后生效（动作 / 事件写回）** | 没做。草稿行存进 `cr_item`、改动列表 / 校验能看到；但 master `58ad8d7`（static-r4）起整版发布按 `register_writeback` 登记表写回，动作 / 事件**没登记**，发布时这些段被跳过（`writeback.py` `apply_crs` 里 `hook is None` 那段，master 上约第 133–137 行），只在发布事件说明里记“未写回定义表：action/…、event/…”，变更单照样标“已发布”——**在做完之前，动作 / 事件变更单发布后定义表不变** | 我负责，见 §5【下一轮】 |
+| **发布后生效（动作 / 事件写回）** | 没做。草稿行存进 `cr_item`、改动列表 / 校验能看到；但 master `58ad8d7`（static-r4）起整版发布按 `register_writeback` 登记表写回，动作 / 事件**没登记**，发布时这些段被跳过（`writeback.py` `apply_crs` 里 `hook is None` 那段，master 上约第 133–137 行），只在发布事件说明里记“未写回定义表：action/…、event/…”，变更单照样标“已发布”——**在做完之前，动作 / 事件变更单发布后定义表不变** | 我负责，见 §6【下一轮】 |
 | 变更说明 `reason` | 没传 | 共用 `StartChangeModal` 没把“变更说明”发出来（静态 handoff 已提给 PDE） |
 | 试运行 `POST /action-types/{id}:dry-run`、模拟触发 `POST /event-types/{id}:simulate` | 后台没实现，页面只弹本地提示 | 我负责。规则见 api 文档 §3.1、§3.3（一律 200，带 `?previewAs=` 时返回 403 `READONLY`） |
 | 被规则引用 `GET /action-types/{id}/used-by` | 后台没实现；页面用快照里的 `usedBy` 加 mock `RULES`、`ALERTS` 拼 | 表 `action_type_rule` 已建、已灌种子；规则名和告警数要读动态的规则、告警表（依赖 `dynamic-rules` 合入） |
@@ -65,11 +65,33 @@
 2. 合并后检查：`alembic heads` 只有一个；空库 `upgrade head` + `python -m app.cli seed`（`event` 1,243、`event_daily_stat` 210、`action_run_daily_stat` 238 行）；`alembic check`、全量 pytest、`npm run build`。
 3. 本地联调：前端临时加 `VITE_API_REAL_MODULES=action,integration,dynamic`（不要提交 env 文件）。
 4. **抽屉**：动作抽屉请 `actionEventResolvers.ts` 的归属方（PDE）改读动态 `GET /action-runs/{id}`；事件抽屉的 `GET /events/{id}` 已做（palantir-r3），同样请 PDE 改 `event(id)` 读它；`event_delivery` 因 mock 无每个订阅方的投递数据，故意不做。
-5. **变更单**：草稿保存 / 刷新恢复 / 提交 / 放弃已在 static-r3 之后真后台联调通过（`VITE_PALANTIR_CR_WRITE=1` + `VITE_API_REAL_MODULES=action,static`，都不提交）；默认仍关，**等 §5 发布写回做完再决定默认打开**。【推断】改动列表「类型」列中文名按页签取（参数、提交条件、本体修改、副作用、写回配置、载荷字段、订阅方），`field` = 行 key。
-6. **下一轮先做 §5 发布写回**；然后 `event_delivery` / `event_dedup` / `POST /internal/v1/events` → dry-run / simulate → used-by → 对账任务 → 按角色 403。
+5. **变更单**：草稿保存 / 刷新恢复 / 提交 / 放弃已在 static-r3 之后真后台联调通过（`VITE_PALANTIR_CR_WRITE=1` + `VITE_API_REAL_MODULES=action,static`，都不提交）；默认仍关，**等 §6 发布写回做完再决定默认打开**。【推断】改动列表「类型」列中文名按页签取（参数、提交条件、本体修改、副作用、写回配置、载荷字段、订阅方），`field` = 行 key。
+6. **下一轮先做 §6 发布写回，再做 §5 评审遗留**；然后 `event_delivery` / `event_dedup` / `POST /internal/v1/events` → dry-run / simulate → used-by → 对账任务 → 按角色 403。
 7. 【推断】待定：`range=7d` 现在不设时间下限（mock 口径），上线前是否改成真 7 天，见 api 文档 §12.3。
 
-## 5. 【下一轮】动作 / 事件发布写回（接 static-r4 `register_writeback`，master `58ad8d7` 起可用）
+## 5. 本轮评审遗留（下一轮做）
+
+palantir-r3（`5fb6769`）两方评审都已通过；下面是评审提的、本轮没改的点，都归我。
+
+**静态评审**
+
+| # | 问题 | 怎么改 |
+|---|---|---|
+| 静态 ① | `src/api/action.ts` 的草稿保存（`crWriter.save` → `saveCRItems`，约第 241、299 行）是“读已有行 → 本地合并 → `PUT /change-requests/{id}/items`”，不带 `lockVersion`；同一单在两个标签页里编辑会互相覆盖 | `PUT` 带上读到的 `lockVersion`，冲突（409）时提示“已在别处修改”并重新 `load` 合并，不静默覆盖 |
+| 静态 ② | 放弃时 `DELETE` 目标返回 404（目标已被删 / 单已没了），现在当失败处理，页面卡在“放弃草稿失败”（`useDraftEdits.ts` 约第 201 行） | 404 视为“已经没了”：照常清本地草稿状态（`cancel` / `forgetTarget`），不报错 |
+| 静态 ③ | `GET /events/{id}` 没有行级数据范围，和事件列表一样 | 等事件行级范围（按门店 / 组织）定下来，列表和单条一起加；现在不做 |
+
+静态另外决定：空草稿单保留（提交时 `CR_EMPTY` 拦住，用户可删），前端不需要删单，已更新 §2 两行。
+
+**动态评审**
+
+| # | 问题 | 怎么改 |
+|---|---|---|
+| 动态 ① | 路径参数带 NUL 返回 500：`GET /events/EV-%00x`、`GET /event-types/x%00/stats` | 和静态一样返回 422：路径参数校验拒绝 `\x00`（router 层或共用依赖），各补一条测试 |
+| 动态 ② | `event/repo.py:47` 的 `get_with_type_code` 排除了测试事件（`is_test`），所以 `:simulate` 返回的 `testEventId` 用 `GET /events/{id}` 查是 404 | 单条查询不排除测试事件（列表照旧排除），或明确约定测试事件不可查、`:simulate` 不返回可点的 id；先和动态 / PDE 对齐，【推断】倾向前者 |
+| 动态 ③ | `test_integration_code_lock.py` 靠 `asyncio.sleep(0.5)`（持锁不提交）制造并发窗口，慢机器上可能不稳 | 改成事件同步：第一个事务拿到锁后 set 一个 `asyncio.Event`，第二个等它再开始，并确认第二个在第一个提交前被阻塞（如 `pg_locks` 查等待），去掉固定 sleep |
+
+## 6. 【下一轮】动作 / 事件发布写回（接 static-r4 `register_writeback`，master `58ad8d7` 起可用）
 
 目标：审核通过的动作 / 事件变更单整版发布时，把 `cr_item` 写回 action / event 定义表；现在没登记，发布会静默跳过（见 §2“发布后生效”）。
 
