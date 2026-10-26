@@ -1,316 +1,202 @@
 <script setup lang="ts">
 /**
- * 对象详情（/use/objects/detail?kind=store&id=SH0047&tab=overview）。参考 Object View。
- * 数据全部来自 objectRegistry.resolveObject（与抽屉同一份），补充数据见 mock/objects-qa.ts。
- * 页签：概览 / 关联对象 / 时间线 / 动作记录；右栏：可执行动作（公共确认卡）+ 对它提问（当前页浮层）。
- * 以此用户预览：标题行显示被预览用户对该类型的数据范围（scopeLabel）；对象不在范围内时整页显示无权查看；动作、提问由 useReadonly 只读。
- * 真接口（开关 qa 且后台可用，qaLive）：头部 / 概览走 O5，关联对象 O6（每组服务端分页），时间线 O7，可执行动作 O9，提问 O4；
- * 动作记录（O8）仍是 mock。后台没起来回退 mock 渲染，其余错误照旧提示。
+ * 对象详情（/use/objects/detail?type=&id=&tab=），元数据驱动（backend/docs/backend/generic-object-explorer.md），旧链接 ?kind= 照样认。
+ * 标题行 = 标题属性 + 类型名 + 显著属性（visibility=prominent）；概览按属性分组（prop_group）列出其余属性，hidden 不显示、敏感属性只显示“已脱敏”；
+ * 关联对象 = 本类型的已发布关系，按关系两端的属性取对端对象（对端是主键 → 取单个，否则按对端属性筛选）；
+ * 相关指标 = 维度里含本类型的已发布指标（只给名称，点开在当前页提问，不编造数值）；
+ * 右栏 = 作用对象是本类型的已发布动作 + 对它提问。页面里不写具体对象类型或字段。
+ * 取数：objMeta.ts（元数据 / 关系 / 动作 / 指标）+ objRows.ts（行：真接口 X2/X1，后台没起来回退演示数据）。
+ * 预览：对象不在被预览用户范围内时整页显示无权查看；动作只读，提问照常。动作执行接口还没有：真接口模式下不假装成功（按钮锁住并说明）。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { LeftOutlined, MessageOutlined } from '@ant-design/icons-vue';
-import AppPagination from '@/components/AppPagination.vue';
-import StatusTimeline from '@/components/StatusTimeline.vue';
-import ObjRef from '@/components/ObjRef.vue';
-import { resolveObject } from '@/components/objectRegistry';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
-import { usePagedQuery } from '@/composables/usePagedQuery';
-import { paginate } from '@/mock/paginate';
-import {
-  KIND_LABEL, FIELD_GROUPS, OBJ_CUTOFF, caliberOf, storeExtraKpi, relationGroups, extraTimeline, actionRecords, objActions, quickQuestions, objType, objRow, inScope, previewDenied,
-  type AskScope, type ObjAction,
-} from '@/mock/objects-qa';
+import type { AskScope } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
-import InfoTip from '../qa/InfoTip.vue';
-import * as objApi from '@/api/qaObjects';
-import { isApiError } from '@/api/http';
-import { qaLive, qaFallBackIfDown } from '../qa/qaFallback';
+import type { ExploreRow } from '@/api/qaObjects';
+import { qaLive, qaWriteReal, qaFallBackIfDown } from '../qa/qaFallback';
 import { errText } from '../qa/useQaSession';
+import { listTypes, loadMeta, linksOf, actionsOf, metricsOf, fmtVal, propLabel, type TypeMeta, type LinkMeta, type PropMeta } from './objMeta';
+import { getRow, searchRows, type GetResult, type ScopeFn } from './objRows';
 
 const route = useRoute();
 const router = useRouter();
 const confirm = useConfirmStore();
 const { readonly, reason } = useReadonly();
-const qs = (k: string) => { const v = route.query[k]; return String(Array.isArray(v) ? v[0] ?? '' : v ?? ''); };
-const patch = (p: Record<string, string | null>) => {
-  const q: LocationQueryRaw = { ...route.query };
-  Object.entries(p).forEach(([k, v]) => { if (v == null || v === '') delete q[k]; else q[k] = v; });
-  router.replace({ query: q });
-};
-
-const kind = computed(() => qs('kind') || 'store');
-const id = computed(() => qs('id'));
-const view = computed(() => (id.value ? resolveObject(kind.value, id.value) : undefined));
-
-/* 真接口：O5 详情 / O6 关联 / O7 时间线 / O9 动作 */
-const live = reactive({
-  on: false, loading: false, out: '', detail: null as objApi.ObjDetail | null,
-  rels: [] as objApi.ObjRelGroup[], tl: null as (Awaited<ReturnType<typeof objApi.getTimeline>>) | null, acts: [] as ObjAction[],
-});
-let dseq = 0;
-async function loadLive() {
-  const my = ++dseq;
-  live.on = qaLive.value && !!id.value; live.detail = null; live.out = ''; live.rels = []; live.tl = null; live.acts = [];
-  if (!live.on) { live.loading = false; return; }
-  live.loading = true;
-  const k = kind.value; const i = id.value;
-  try {
-    const [d, rels, acts] = await Promise.all([objApi.getObject(k, i), objApi.getRelated(k, i, { size: REL_SIZE }), objApi.getActions(k, i)]);
-    if (my !== dseq) return;
-    live.detail = d; live.rels = rels; live.acts = acts;
-    await loadTl(my);
-  } catch (e) {
-    if (my !== dseq) return;
-    if (isApiError(e) && e.code === 'OUT_OF_SCOPE') live.out = e.message || '无权查看';
-    else if (isApiError(e) && e.status === 404) { /* 显示“没有找到对象” */ }
-    else if (qaFallBackIfDown(e)) live.on = false;
-    else message.error(`对象加载失败：${errText(e)}`);
-  } finally { if (my === dseq) live.loading = false; }
-}
-async function loadTl(my = dseq) {
-  if (!live.on || !live.detail) return;
-  try {
-    const r = await objApi.getTimeline(kind.value, id.value, { page: tlPage.value, size: TL_SIZE });
-    if (my === dseq) live.tl = r;
-  } catch (e) { if (my === dseq && !qaFallBackIfDown(e)) message.error(`时间线加载失败：${errText(e)}`); }
-}
-async function loadRelPage(key: string, page: number) {
-  const my = dseq;
-  try {
-    const [g] = await objApi.getRelated(kind.value, id.value, { group: key, page, size: REL_SIZE });
-    if (my === dseq && g) live.rels = live.rels.map((x) => (x.key === g.key ? g : x));
-  } catch (e) { if (my === dseq && !qaFallBackIfDown(e)) message.error(`关联对象加载失败：${errText(e)}`); }
-}
-/** 头部 / 是否找到：真接口取 O5，mock 取 resolveObject */
-const hd = computed(() => (live.on ? live.detail : view.value));
-const cutoff = computed(() => (live.on ? live.detail?.cutoff ?? OBJ_CUTOFF : OBJ_CUTOFF));
-/* 预览：被预览用户对这类对象的行级范围 */
 const pv = usePreview();
-const pvLabel = computed(() => KIND_LABEL[kind.value] ?? view.value?.kindLabel ?? '');
-const pvOut = computed(() => (live.on ? !!live.out : !!view.value && pv.active.value && !inScope(kind.value, objRow(kind.value, id.value) ?? { name: view.value.title }, pv.scopeOf(pvLabel.value))));
-const TABS = [{ key: 'overview', title: '概览' }, { key: 'related', title: '关联对象' }, { key: 'timeline', title: '时间线' }, { key: 'actions', title: '动作记录' }];
-const tab = computed({ get: () => qs('tab') || 'overview', set: (v: string) => patch({ tab: v === 'overview' ? null : v, apage: null, asize: null }) });
-/* 切换到另一个对象：页签回到概览 */
-watch(() => `${kind.value}:${id.value}`, (n, o) => { if (o && n !== o && qs('tab')) patch({ tab: null, apage: null, asize: null }); });
-/* 预览：关联对象里无权的对象类 / 范围外的对象 */
-const relDeniedKind = (k: string) => pv.active.value && ['store', 'product', 'order', 'region'].includes(k) && pv.scopeOf(KIND_LABEL[k]) === '无权限';
-const relDenied = (it: { kind: string; id: string; label: string }) => previewDenied(it.kind, it.id, pv.scopeOf, it.label);
-/* 预览：无权对象的侧抽屉（含 URL 直接打开）一律拦下 */
-watch(() => [route.query.drawer, route.query.drawer2, pv.active.value], () => {
-  for (const k of ['drawer2', 'drawer']) {
-    const v = qs(k); const i = v.indexOf(':');
-    if (i > 0 && previewDenied(v.slice(0, i), v.slice(i + 1), pv.scopeOf)) {
-      message.warning(`${pv.userName.value} 无权查看这个${KIND_LABEL[v.slice(0, i)]}，预览中不能打开`);
-      patch(k === 'drawer' ? { drawer: null, drawer2: null } : { drawer2: null });
-      return;
-    }
-  }
+const qs = (k: string) => { const v = route.query[k]; return String(Array.isArray(v) ? v[0] ?? '' : v ?? ''); };
+const typeId = computed(() => qs('type') || qs('kind'));
+const id = computed(() => qs('id'));
+const tab = computed({ get: () => qs('tab') || 'overview', set: (v: string) => router.replace({ query: { ...route.query, tab: v === 'overview' ? undefined : v } }) });
+const scope: ScopeFn = (n) => pv.scopeOf(n);
+
+/* 元数据 + 行（真接口失败且后台没起来时回退演示数据） */
+const meta = ref<TypeMeta | null>(null);
+const got = ref<GetResult | null>(null);
+const loading = ref(false);
+let seq = 0;
+async function withFallback<T>(f: (live: boolean) => Promise<T>): Promise<T> {
+  try { return await f(qaLive.value); } catch (e) { if (qaLive.value && qaFallBackIfDown(e)) return f(false); throw e; }
+}
+watch([typeId, id, qaLive, () => pv.userName.value], async () => {
+  const my = ++seq; got.value = null; meta.value = null;
+  if (!typeId.value || !id.value) return;
+  loading.value = true;
+  try {
+    const m = await loadMeta(typeId.value);
+    if (my !== seq) return;
+    meta.value = m;
+    if (m) { const g = await withFallback((live) => getRow(m, id.value, live, scope)); if (my === seq) got.value = g; }
+  } catch (e) { if (my === seq) message.error(`加载对象失败：${errText(e)}`); } finally { if (my === seq) loading.value = false; }
 }, { immediate: true });
+const row = computed(() => got.value?.row ?? null);
+const props = computed(() => meta.value?.properties ?? []);
+const pmap = computed(() => new Map(props.value.map((p) => [p.key, p])));
+const shown = (p: PropMeta) => p.visibility !== 'hidden' && p.key !== meta.value?.titleProp;
+const val = (p: PropMeta) => (p.sensitive ? '已脱敏' : fmtVal(p, row.value?.values[p.key]));
+const prominent = computed(() => props.value.filter((p) => shown(p) && p.visibility === 'prominent'));
+const groups = computed(() => {
+  const g = new Map<string, PropMeta[]>();
+  props.value.filter((p) => shown(p) && p.visibility !== 'prominent').forEach((p) => g.set(p.group, [...(g.get(p.group) ?? []), p]));
+  return [...g].map(([title, fields]) => ({ title, fields }));
+});
 
-
-/* 面包屑：回到搜索结果，保留筛选 */
-const back = computed(() => {
+/* 面包屑：回到搜索结果，保留筛选（上次搜的是别的类型就回到本类型） */
+const back = computed<LocationQueryRaw>(() => {
   let q: LocationQueryRaw = {};
   try { q = JSON.parse(sessionStorage.getItem('obj-search:last') || '{}'); } catch { q = {}; }
-  const fromType = String(q.type ?? 'store');
-  if (fromType !== kind.value && kind.value in { store: 1, product: 1, order: 1 }) q = kind.value === 'store' ? {} : { type: kind.value };
-  return q;
+  return q.type === typeId.value ? q : { type: typeId.value };
 });
 const backLabel = computed(() => {
-  const n = Object.keys(back.value).filter((k) => !['type', 'page', 'size'].includes(k)).length;
-  // 大区等不在搜索类型里的对象：只显示“对象搜索”，不冒充门店
-  if (!(kind.value in { store: 1, product: 1, order: 1 }) && !sessionStorage.getItem('obj-search:last')) return '对象搜索';
-  return `对象搜索 · ${objType(String(back.value.type ?? 'store')).label}${n ? `（${n} 个筛选）` : ''}`;
+  const f = back.value.f || back.value.kw ? '（带筛选）' : '';
+  return `对象搜索${meta.value ? ` · ${meta.value.name}` : ''}${f}`;
 });
-function goBack() { router.push({ path: '/use/objects/search', query: back.value }); }
+const goBack = () => router.push({ path: '/use/objects/search', query: typeId.value ? back.value : {} });
 
-/* 概览：属性分组 + 关键指标（带口径版本） */
-const groups = computed(() => {
-  if (live.on) return live.detail?.groups ?? [];
-  const v = view.value; if (!v) return [];
-  const defs = FIELD_GROUPS[v.kind] ?? [];
-  const used = new Set<string>();
-  const out = defs.map((g) => ({ title: g.title, fields: g.labels.map((l) => v.fields.find((f) => f.label === l)).filter((f): f is { label: string; value: string } => !!f && !used.has(f.label) && !!used.add(f.label)) }));
-  const rest = v.fields.filter((f) => !used.has(f.label));
-  if (rest.length) out.push({ title: '其他', fields: rest });
-  return out.filter((g) => g.fields.length);
-});
-const kpis = computed(() => {
-  if (live.on) return live.detail?.kpis ?? [];
-  const v = view.value; if (!v) return [];
-  const list = (v.tabs ?? []).flatMap((t) => t.kpis ?? []).map((k) => ({ ...k, caliber: caliberOf(k.label) }));
-  if (v.kind === 'store') list.unshift(storeExtraKpi(v.id));
-  return list.slice(0, 5);
-});
+/* 关联对象：每条关系取前 REL_SIZE 个 */
+const REL_SIZE = 5;
+interface RelGroup { link: LinkMeta; meta: TypeMeta | null; items: ExploreRow[]; total: number; state: 'ok' | 'unbound' | 'nokey' | 'denied' | 'error' }
+const rels = ref<RelGroup[]>([]);
+const typeNames = ref<Record<string, string>>({});
+listTypes().then((ts) => { typeNames.value = Object.fromEntries(ts.map((t) => [t.id, t.name])); });
+watch([row, tab], async () => {
+  if (tab.value !== 'related' || !row.value || !meta.value) return;
+  const my = seq; const r = row.value;
+  const out = await Promise.all(linksOf(meta.value.id).map(async (link): Promise<RelGroup> => {
+    const g: RelGroup = { link, meta: null, items: [], total: 0, state: 'ok' };
+    const v = r.values[link.thisProp];
+    if (v == null) return { ...g, state: 'nokey' };
+    try {
+      const om = await loadMeta(link.other);
+      g.meta = om;
+      if (!om) return { ...g, state: 'unbound' };
+      if (link.otherProp === om.pkProp) {
+        const one = await withFallback((live) => getRow(om, String(v), live, scope));
+        return { ...g, items: one.row ? [one.row] : [], total: one.row ? 1 : 0, state: !one.bound ? 'unbound' : one.denied ? 'denied' : 'ok' };
+      }
+      if (!om.properties.find((p) => p.key === link.otherProp)?.filterable) return { ...g, state: 'nokey' };
+      const res = await withFallback((live) => searchRows(om, { kw: '', filters: { [link.otherProp]: [String(v)] }, sort: '', page: 1, size: REL_SIZE }, live, scope));
+      return { ...g, items: res.items, total: res.total, state: res.bound ? 'ok' : 'unbound' };
+    } catch { return { ...g, state: 'error' }; }
+  }));
+  if (my === seq) rels.value = out;
+}, { immediate: true });
+const relNote: Record<RelGroup['state'], string> = { ok: '暂无', unbound: '对端类型未接入数据', nokey: '没有关联键值，或对端属性不支持按值查找', denied: '范围外，无权查看', error: '加载失败' };
+const openRel = (g: RelGroup, r: ExploreRow) => router.push({ path: '/use/objects/detail', query: { type: g.link.other, id: r.id } });
+const moreRel = (g: RelGroup) => router.push({ path: '/use/objects/search', query: { type: g.link.other, f: JSON.stringify({ [g.link.otherProp]: [String(row.value?.values[g.link.thisProp])] }) } });
 
-/* 关联对象：按关系类型分组，每组各自分页 */
-const rels = computed<objApi.ObjRelGroup[]>(() => (live.on ? live.rels : view.value ? relationGroups(view.value.kind, view.value.id, view.value.related ?? []) : []));
-const relPage = reactive<Record<string, number>>({});
-watch(() => `${kind.value}:${id.value}`, () => { Object.keys(relPage).forEach((k) => delete relPage[k]); });
-const REL_SIZE = 8;
-/* 真接口：组内翻页按组重新取 O6 */
-watch(() => ({ ...relPage }), (n) => {
-  if (!live.on) return;
-  for (const g of live.rels) if (n[g.key] && n[g.key] !== (g.page ?? 1)) loadRelPage(g.key, n[g.key]);
-});
-const relItems = (g: objApi.ObjRelGroup) => (live.on ? g.items : paginate(g.items, { page: relPage[g.key] ?? 1, size: REL_SIZE }).items) as (objApi.ObjRelGroup['items'][number])[];
-const relTotal = (g: objApi.ObjRelGroup) => g.total ?? g.items.length;
-const gDenied = (g: objApi.ObjRelGroup) => (live.on ? !!g.denied : relDeniedKind(g.items[0]?.kind ?? ''));
-const gDeniedLabel = (g: objApi.ObjRelGroup) => (live.on ? g.title : KIND_LABEL[g.items[0]?.kind ?? '']);
-const iDenied = (it: objApi.ObjRelGroup['items'][number]) => (live.on ? !!it.denied : relDenied(it));
-
-/* 时间线 */
-const timeline = computed(() => (view.value ? extraTimeline(view.value.kind, view.value.id, view.value.timeline ?? []) : []));
-const tlPage = ref(1);
-watch(() => `${kind.value}:${id.value}`, () => { tlPage.value = 1; });
-const TL_SIZE = 8;
-const tlItems = computed(() => (live.on ? live.tl?.items ?? [] : paginate(timeline.value, { page: tlPage.value, size: TL_SIZE }).items));
-const tlTotal = computed(() => (live.on ? live.tl?.total ?? 0 : timeline.value.length));
-watch(tlPage, () => { if (live.on) loadTl(); });
-watch([qaLive, () => `${kind.value}:${id.value}`, () => pv.userName.value], loadLive, { immediate: true });
-
-/* 动作记录 */
-const records = computed(() => (view.value ? actionRecords(view.value.kind, view.value.id) : []));
-const apq = usePagedQuery({ defaultSize: 14, prefix: 'a', filters: computed(() => `${kind.value}:${id.value}`) });
-const recPaged = computed(() => paginate(records.value, { page: apq.page.value, size: apq.size.value }));
-const recCols = [
-  { title: '记录号', dataIndex: 'id', key: 'id', width: 180 },
-  { title: '动作', dataIndex: 'action', key: 'action' },
-  { title: '发起', dataIndex: 'by', key: 'by', width: 240 },
-  { title: '审批 / 确认', dataIndex: 'approver', key: 'approver', width: 120 },
-  { title: '时间', dataIndex: 'time', key: 'time', width: 168 },
-  { title: '结果', dataIndex: 'result', key: 'result', width: 150 },
-];
-const resTone = (r: string) => (r === '失败' ? 'tl-failed' : r === '结果未知' || r === '待确认' ? 'tl-attention' : 'c-2');
-
-/* 可执行动作：公共确认卡；确认卡打开时显示“待确认”，取消/关闭恢复“发起”，提交后“待审批/执行中” */
-const actions = computed(() => (live.on ? live.acts : view.value ? objActions(view.value.kind, view.value.id) : []));
-const pending = ref('');
+/* 动作：公共确认卡。演示模式提示“已提交”；真接口模式动作执行接口还没有，不假装成功 */
+const actions = computed(() => (meta.value ? actionsOf(meta.value) : []));
+const metrics = computed(() => (meta.value ? metricsOf(meta.value) : []));
 const done = reactive<Record<string, string>>({});
-watch(() => `${kind.value}:${id.value}`, () => { pending.value = ''; Object.keys(done).forEach((k) => delete done[k]); });
-async function run(a: ObjAction) {
-  const h = hd.value;
-  if (readonly.value || a.blocked || !h) return;
-  pending.value = a.key;
-  const ok = await confirm.ask({
-    title: a.name, target: `${h.kindLabel} ${h.title}（${h.code}）`,
-    fields: a.fields, impact: a.impact, irreversible: a.irreversible, tag: '待确认',
-    okText: a.approver ? '提交审批' : '确认执行',
-  });
-  pending.value = '';
+watch(() => `${typeId.value}:${id.value}`, () => { Object.keys(done).forEach((k) => delete done[k]); });
+const actOff = computed(() => (readonly.value ? reason.value : qaWriteReal.value ? '动作执行接口还没接入，暂时不能从这里发起' : ''));
+async function run(a: { id: string; name: string; desc: string; approval: string }) {
+  if (actOff.value || !meta.value || !row.value) return;
+  const ok = await confirm.ask({ title: a.name, target: `${meta.value.name} ${row.value.title}（${row.value.id}）`, impact: `${a.desc}　审批：${a.approval}`, tag: '待确认', okText: a.approval.startsWith('免审') ? '确认执行' : '提交审批' });
   if (!ok) return;
-  done[a.key] = a.approver ? '待审批' : '执行中';
-  message.success(a.approver ? `已提交，等待 ${a.approver} 审批` : '已开始执行');
+  done[a.id] = '已提交（演示）';
+  message.success('演示数据：已提交，不会真的执行');
 }
-const stateOf = (a: ObjAction) => done[a.key] || (pending.value === a.key ? '待确认' : '');
 
 /* 对它提问：当前页浮层 */
 const askOpen = ref(false);
 const askInitial = ref('');
-const askSugs = computed(() => (live.on ? live.detail?.quickQuestions ?? [] : view.value ? quickQuestions(view.value.kind, view.value.title) : []));
+const askSugs = computed(() => (meta.value && row.value ? [
+  ...metrics.value.slice(0, 3).map((m) => `${row.value!.title}的${m.name}是多少？`),
+  ...meta.value.sampleQuestions.slice(0, 2),
+] : []));
 const askScope = computed<AskScope>(() => ({
-  kind: kind.value, label: `${hd.value?.kindLabel ?? ''} ${hd.value?.title ?? ''}`, conds: [], ids: [id.value],
-  single: { kind: kind.value, id: id.value, title: hd.value?.title ?? '' },
+  kind: typeId.value, label: `${meta.value?.name ?? ''} ${row.value?.title ?? ''}`, conds: [], ids: [id.value],
+  single: { kind: typeId.value, id: id.value, title: row.value?.title ?? '' },
 }));
-/** 提问是只读操作：预览时照常可问（回答只含被预览用户范围内的数据） */
 const askOff = computed(() => readonly.value && !pv.active.value);
 function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 </script>
 
 <template>
-  <div v-if="!id" class="panel od-missing">
+  <div v-if="!typeId || !id" class="panel od-missing">
     <a-empty description="没有指定对象，请从对象搜索里选择一个对象"><a-button type="primary" @click="goBack">去对象搜索</a-button></a-empty>
   </div>
-  <div v-else-if="live.on && live.loading" class="panel od-missing"><a-spin /></div>
-  <div v-else-if="live.on && live.out" class="panel od-missing">
-    <a-empty :description="live.out"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
+  <div v-else-if="loading" class="panel od-missing"><a-spin /></div>
+  <div v-else-if="!meta" class="panel od-missing"><a-empty :description="`没有这个对象类型：${typeId}`"><a-button @click="goBack">返回对象搜索</a-button></a-empty></div>
+  <div v-else-if="got && !got.bound" class="panel od-missing"><a-empty :description="`未接入数据：「${meta.name}」还没有绑定数据表`"><a-button @click="goBack">返回对象搜索</a-button></a-empty></div>
+  <div v-else-if="got?.denied" class="panel od-missing">
+    <a-empty :description="pv.active.value ? `${pv.userName.value} 无权查看这个${meta.name}（${pv.scopeLabel(meta.name)}）` : `这个${meta.name}不在你的数据范围内`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
   </div>
-  <div v-else-if="!hd" class="panel od-missing">
-    <a-empty :description="`没有找到对象 ${kind}:${id}`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
-  </div>
-  <div v-else-if="pvOut" class="panel od-missing">
-    <a-empty :description="`${pv.userName.value} 无权查看${pvLabel}「${hd.title}」（${pv.scopeLabel(pvLabel)}）`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
-  </div>
+  <div v-else-if="!row" class="panel od-missing"><a-empty :description="`没有找到${meta.name} ${id}`"><a-button @click="goBack">返回对象搜索</a-button></a-empty></div>
   <div v-else class="od">
     <div class="panel od-head">
       <a class="od-back t-12" @click="goBack"><LeftOutlined /> {{ backLabel }}</a>
       <div class="od-title">
-        <span class="t-20 fw-600">{{ hd.title }}</span>
-        <a-tag class="od-kind">{{ hd.kindLabel }}</a-tag>
-        <span v-if="hd.status" class="c-2">{{ hd.status.text }}</span>
-        <span class="c-3 num">{{ hd.code }}</span>
-        <span v-if="hd.brief.length" class="od-brief od-ell" :title="hd.brief.map((b) => `${b.label} ${b.value}`).join('　')">
-          <span v-for="b in hd.brief" :key="b.label"><span class="c-2">{{ b.label }}</span> {{ b.value }}</span>
+        <span class="t-20 fw-600">{{ row.title }}</span>
+        <a-tag class="od-kind">{{ meta.name }}</a-tag>
+        <span class="od-brief od-ell" :title="prominent.map((p) => `${p.name} ${val(p)}`).join('　')">
+          <span v-for="p in prominent" :key="p.key"><span class="c-2">{{ p.name }}</span> <span class="num">{{ val(p) }}</span></span>
         </span>
-        <span v-if="pv.active.value" class="od-cut t-12 c-2">{{ pv.userName.value }} 的{{ pv.scopeLabel(pvLabel) }}</span>
-        <span class="t-12 c-3" :class="{ 'od-cut': !pv.active.value }">数据截至 <span class="num">{{ cutoff }}</span></span>
+        <span v-if="pv.active.value" class="od-cut t-12 c-2">{{ pv.userName.value }} 的{{ pv.scopeLabel(meta.name) }}</span>
       </div>
     </div>
 
     <div class="od-row">
       <div class="panel od-main">
         <a-tabs v-model:active-key="tab" class="od-tabs">
-          <a-tab-pane v-for="t in TABS" :key="t.key" :tab="t.title" />
+          <a-tab-pane key="overview" tab="概览" />
+          <a-tab-pane key="related" :tab="`关联对象（${linksOf(meta.id).length}）`" />
         </a-tabs>
         <div class="od-body">
           <template v-if="tab === 'overview'">
-            <div v-if="kpis.length" class="od-sec">
-              <div class="t-16 fw-600 od-sec-title">关键指标</div>
-              <div class="od-kpis">
-                <div v-for="k in kpis" :key="k.label" class="od-kpi">
-                  <div class="od-kpi-label"><span class="c-3 od-ell" :title="k.label">{{ k.label }}</span><InfoTip :title="`口径：${k.caliber || '未登记口径'}`" /></div>
-                  <div class="od-ell" :title="k.compare"><span class="t-20 fw-600 num">{{ k.value }}</span> <span class="c-3">{{ k.unit }}</span> <span v-if="k.compare" class="t-12 num" :class="k.tone === 'down' ? 'c-2' : 'c-3'">{{ k.compare }}</span></div>
-                </div>
+            <div v-if="metrics.length" class="od-sec">
+              <div class="t-16 fw-600 od-sec-title">相关指标</div>
+              <div class="od-mets">
+                <a-tooltip v-for="m in metrics" :key="m.id" :title="askOff ? reason : '在当前页提问，回答带口径'">
+                  <a-button size="small" :disabled="askOff" @click="ask(`${row.title}的${m.name}是多少？`)">{{ m.name }}<span v-if="m.unit" class="c-3">（{{ m.unit }}）</span></a-button>
+                </a-tooltip>
               </div>
             </div>
             <div v-for="g in groups" :key="g.title" class="od-sec">
               <div class="t-16 fw-600 od-sec-title">{{ g.title }}</div>
               <a-descriptions bordered size="small" :column="3" :label-style="{ width: '120px' }">
-                <a-descriptions-item v-for="f in g.fields" :key="f.label" :label="f.label">{{ f.value }}</a-descriptions-item>
+                <a-descriptions-item v-for="p in g.fields" :key="p.key" :label="propLabel(p)">
+                  <a-tooltip v-if="p.desc" :title="p.desc"><span :class="{ 'c-3': p.sensitive }">{{ val(p) }}</span></a-tooltip>
+                  <span v-else :class="{ 'c-3': p.sensitive }">{{ val(p) }}</span>
+                </a-descriptions-item>
               </a-descriptions>
             </div>
           </template>
-
-          <div v-else-if="tab === 'related'" class="od-rels">
-            <a-empty v-if="!rels.length" description="暂无关联对象" />
-            <div v-for="g in rels" :key="g.key" class="od-rel">
-              <div class="od-rel-head"><span class="fw-600">{{ g.title }}</span>
-                <AppPagination v-if="!gDenied(g)" v-model:page="relPage[g.key]" variant="simple" :total="relTotal(g)" :size="REL_SIZE" :empty="false" unit="个" /></div>
-              <div v-if="gDenied(g)" class="od-rel-deny t-12 c-3">{{ pv.userName.value }} 无权查看{{ gDeniedLabel(g) }}，预览中不显示</div>
-              <template v-else>
-                <div v-for="it in relItems(g)" :key="it.kind + it.id" class="od-rel-row">
-                  <span v-if="iDenied(it)" class="c-3">无权查看</span>
-                  <ObjRef v-else :kind="it.kind" :id="it.id">{{ it.label }}</ObjRef>
-                  <span v-if="!iDenied(it)" class="c-1 od-ell" :title="it.note">{{ it.note }}</span>
-                </div>
-              </template>
+          <div v-else class="od-rels">
+            <a-empty v-if="!linksOf(meta.id).length" description="这个类型没有已发布的关系" />
+            <div v-for="g in rels" :key="g.link.id" class="od-rel">
+              <div class="od-rel-head"><span class="fw-600">{{ g.link.label }} <span class="c-3 t-12">{{ typeNames[g.link.other] ?? g.link.other }}</span></span>
+                <a v-if="g.state === 'ok' && g.total > g.items.length" class="t-12" @click="moreRel(g)">全部 {{ g.total }} 个</a></div>
+              <div v-for="r in g.items" :key="r.id" class="od-rel-row"><a class="od-ell" @click="openRel(g, r)">{{ r.title }}</a><span class="c-3 num t-12">{{ r.id }}</span></div>
+              <div v-if="!g.items.length" class="od-rel-deny t-12 c-3">{{ relNote[g.state] }}</div>
             </div>
           </div>
-
-          <template v-else-if="tab === 'timeline'">
-            <div class="od-tl"><StatusTimeline :items="tlItems" /></div>
-            <AppPagination v-model:page="tlPage" variant="simple" :total="tlTotal" :size="TL_SIZE" unit="条" empty-text="暂无记录" />
-          </template>
-
-          <template v-else>
-            <template v-if="records.length">
-              <div class="paged-scroll">
-                <a-table :columns="recCols" :data-source="recPaged.items" row-key="id" size="small" :pagination="false">
-                  <template #bodyCell="{ column, record }">
-                    <span v-if="column.key === 'id' || column.key === 'time'" class="num">{{ record[column.key] }}</span>
-                    <span v-else-if="column.key === 'by' || column.key === 'approver'" class="od-nowrap">{{ record[column.key] }}</span>
-                    <span v-else-if="column.key === 'result'" :class="resTone(record.result)" class="od-nowrap">{{ record.result === '结果未知' ? '结果未知 · 待对账' : record.result }}</span>
-                  </template>
-                </a-table>
-              </div>
-              <AppPagination v-model:page="apq.page.value" v-model:size="apq.size.value" variant="full" :total="records.length" :default-size="apq.defaultSize" />
-            </template>
-            <a-empty v-else description="暂无动作记录" />
-          </template>
         </div>
       </div>
 
@@ -318,14 +204,11 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
         <div class="panel">
           <div class="panel-head"><span class="t-16 fw-600">可执行动作</span></div>
           <div class="od-acts">
-            <div v-for="a in actions" :key="a.key" class="od-act" :class="{ hl: pending === a.key }">
-              <a-tooltip :title="a.blocked || a.desc" placement="left">
-                <span class="od-act-main od-ell" :class="{ 'c-3': !!a.blocked }">{{ a.name }}</span>
-              </a-tooltip>
-              <span v-if="stateOf(a)" class="c-3 od-act-state">{{ stateOf(a) }}</span>
-              <a-tooltip v-else :title="readonly ? reason : a.blocked">
-                <a-button size="small" :disabled="readonly || !!a.blocked" @click="run(a)">发起</a-button>
-              </a-tooltip>
+            <div v-if="!actions.length" class="c-3 t-12 od-act">这个类型没有已发布的动作</div>
+            <div v-for="a in actions" :key="a.id" class="od-act">
+              <a-tooltip :title="a.desc" placement="left"><span class="od-act-main od-ell">{{ a.name }}</span></a-tooltip>
+              <span v-if="done[a.id]" class="c-3 od-act-state">{{ done[a.id] }}</span>
+              <a-tooltip v-else :title="actOff || undefined"><a-button size="small" :disabled="!!actOff" @click="run(a)">发起</a-button></a-tooltip>
             </div>
           </div>
         </div>
@@ -358,31 +241,24 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 .od-brief { flex: 0 1 auto; min-width: 0; white-space: nowrap; }
 .od-brief > span + span { margin-left: 16px; }
 .od-row { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.od-main { flex: 1; }
+.od-main { flex: 1; min-width: 0; }
 .od-tabs { flex: none; padding: 0 16px; }
 .od-tabs :deep(.ant-tabs-nav) { margin: 0; }
-.od-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px; }
+.od-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; padding: 12px 16px; }
 .od-sec + .od-sec { margin-top: 16px; }
 .od-sec-title { margin-bottom: 8px; }
-.od-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: var(--border); border-radius: var(--radius); }
-.od-kpi { padding: 12px 16px; display: flex; flex-direction: column; gap: 2px; }
-.od-kpi + .od-kpi { border-left: var(--border); }
-.od-kpi-label { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.od-kpi-label .od-ell { flex: 0 1 auto; }
+.od-mets { display: flex; flex-wrap: wrap; gap: 8px; }
 .od-rels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
 .od-rel { border: var(--border); border-radius: var(--radius); padding: 4px 12px 8px; }
 .od-rel-head { display: flex; justify-content: space-between; align-items: center; height: 36px; border-bottom: var(--border); }
 .od-rel-deny { padding: 8px 0; }
 .od-rel-row { display: flex; align-items: center; gap: 12px; height: 32px; }
 .od-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.od-tl { flex: 1; min-height: 0; }
 .od-side { width: 340px; flex: none; display: flex; flex-direction: column; gap: var(--gap); }
 .od-acts { padding: 4px 0; }
 .od-act { display: flex; align-items: center; gap: 12px; padding: 8px 16px; }
-.od-act.hl { background: var(--brand-bg); }
 .od-act-main { flex: 1; min-width: 0; }
 .od-act-state { flex: none; }
-.od-nowrap { white-space: nowrap; }
 .od-asks { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
 .od-ask { text-align: left; white-space: normal; height: auto; padding: 4px 12px; }
 .od-ask-free { align-self: flex-start; padding: 0; }
