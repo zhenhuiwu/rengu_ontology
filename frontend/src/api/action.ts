@@ -16,6 +16,8 @@
  * 变更单写库（palantir-cr，静态 static-r3 handoff/static.md「变更单写接口契约」）：VITE_PALANTIR_CR_WRITE=1 且 action 为真接口时，
  * 动作 / 事件类型页的“发起变更 / 加入”“保存草稿”“提交审核”“放弃草稿”先写库（目标 kind = action / event，id = 类型编码），
  * 失败弹错误、页面不变，不回退 mock、不调 fallBackIfDown。开关关着时页面行为同以前（不发请求）。
+ * palantir-r3：改动数以库为准（crChanges，取自 CRFull.changes / PUT items 返回的 changes）；刷新后 crRestore 按
+ * GET /change-requests/draft-targets + GET /change-requests?status=草稿 恢复登记，crWriter.load 读回本对象的草稿行。
  */
 import { reactive } from 'vue';
 import {
@@ -227,8 +229,14 @@ const crPath = (id: string, rest = '') => `/change-requests/${enc(id)}${rest}`;
 export const createCR = (body: { title: string; reason?: string; target: CRTargetIn }) => api.post<CRFull>('/change-requests', body);
 /** POST /change-requests/{id}/targets：加入已有（幂等）；不是草稿 409 CR_STATE */
 export const addCRTarget = (id: string, t: CRTargetIn) => api.post<CRFull>(crPath(id, '/targets'), t);
-/** GET /change-requests/{id}/items：读回该目标该段的草稿行 */
-export const fetchCRItems = (id: string, q: { kind: CRKind; targetId: string; section: string }) => api.get<CRItemOut[]>(crPath(id, '/items'), { query: q });
+/** GET /change-requests/{id}/items：读回该目标（该段）的草稿行；section 省略时取该目标全部段 */
+export const fetchCRItems = (id: string, q: { kind: CRKind; targetId: string; section?: string }) => api.get<CRItemOut[]>(crPath(id, '/items'), { query: q });
+/** GET /change-requests/{id}：单头（这里只用 changes） */
+export const fetchCR = (id: string) => api.get<CRFull>(crPath(id));
+/** GET /change-requests/draft-targets：{单号: {kind: [目标编码]}} */
+export const fetchDraftTargets = () => api.get<Record<string, Partial<Record<string, string[]>>>>('/change-requests/draft-targets');
+/** GET /change-requests?status=草稿：不带分页参数时返回整个数组 */
+export const fetchDraftCRs = () => api.get<CRFull[]>('/change-requests', { query: { status: '草稿' } });
 /** PUT /change-requests/{id}/items：同一 (目标, section) 整段替换；不是草稿 409 CR_LOCKED */
 export const saveCRItems = (id: string, body: { target: CRTargetIn; section: string; rows: CRItemIn[] }) =>
   api.put<{ id: string; changes: number; lockVersion: number; items: CRItemOut[] }>(crPath(id, '/items'), body);
@@ -237,8 +245,12 @@ export const submitCR = (id: string) => api.post<unknown>(crPath(id, ':submit'),
 /** DELETE /change-requests/{id}/targets/{kind}/{targetId}：放弃本对象草稿（204） */
 export const discardCRTarget = (id: string, kind: CRKind, targetId: string) => api.delete<void>(crPath(id, `/targets/${kind}/${enc(targetId)}`));
 
+/** 每张单子库里的改动数（写库模式下横幅 / 提交确认用它，不再按前端计）；没有记录时用 DraftCR.changes + 本对象已保存改动 */
+export const crChanges = reactive<Record<string, number>>({});
+
 /** 库里新建 / 加入的单子登记进 DRAFTS（运行时，同 static-r3 的做法；useDraftView 的 allDrafts 读它） */
 function registerDraft(cr: CRFull) {
+  if (typeof cr.changes === 'number') crChanges[cr.id] = cr.changes;
   const row: DraftCR = { id: cr.id, title: cr.title, owner: cr.owner, updatedAt: cr.updatedAt, changes: DRAFTS.find((d) => d.id === cr.id)?.changes ?? 0 };
   const i = DRAFTS.findIndex((d) => d.id === cr.id);
   if (i >= 0) DRAFTS.splice(i, 1, row); else DRAFTS.unshift(row);
@@ -284,11 +296,35 @@ export function crWriter(kind: CRKind, target: () => { id: string; name: string 
           if (r.op === 'revert') rows.delete(r.key);
           else rows.set(r.key, { key: r.key, op: r.op, before: r.before, after: r.after, type: SECTION_TYPE[c.section], field: r.key });
         }
-        await saveCRItems(crId, { target: tg, section: c.section, rows: [...rows.values()] });
+        const r = await saveCRItems(crId, { target: tg, section: c.section, rows: [...rows.values()] });
+        crChanges[crId] = r.changes;
       }
     },
     submit: async (crId) => { await submitCR(crId); },
-    discard: (crId) => discardCRTarget(crId, kind, target().id),
+    async discard(crId) {
+      await discardCRTarget(crId, kind, target().id);
+      // 放弃后单子的改动数变了：读一次单头；读失败不影响放弃本身（已删库），只是改动数不更新
+      try { crChanges[crId] = (await fetchCR(crId)).changes; } catch { delete crChanges[crId]; }
+    },
+    changes: (crId) => crChanges[crId],
+    load: (crId, targetId) => fetchCRItems(crId, { kind, targetId }),
     errText: crErrText,
   };
+}
+
+/**
+ * 刷新后恢复草稿登记（写库模式，进页面调一次）：库里草稿单的单头进 DRAFTS，返回本种类的 [单号, 目标编码]，页面逐个 start({ join, target }) 登记。
+ * stale：前端登记表（mock DRAFT_TARGETS 复制）里有、库里已没有的（比如上次放弃过），页面用 forgetTarget 去掉。
+ * 失败抛 ApiError（页面提示，不回退 mock 的登记以外的任何东西）。
+ */
+export async function crRestore(kind: CRKind): Promise<{ pairs: [string, string][]; inDb: (cr: string, id: string) => boolean }> {
+  const [map, crs] = await Promise.all([fetchDraftTargets(), fetchDraftCRs()]);
+  const pairs: [string, string][] = [];
+  for (const cr of crs) {
+    const ids = map[cr.id]?.[kind] ?? [];
+    if (!ids.length) continue;
+    registerDraft(cr);
+    ids.forEach((id) => pairs.push([cr.id, id]));
+  }
+  return { pairs, inDb: (cr, id) => !!map[cr]?.[kind]?.includes(id) };
 }

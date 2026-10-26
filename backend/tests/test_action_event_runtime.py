@@ -90,6 +90,22 @@ async def test_events_bad_params_and_404(client, ae):  # noqa: F811
     assert (await client.get(f"{ONT}/event-types/nope/stats")).status_code == 404
 
 
+async def test_event_detail_matches_mock(client, ae):  # noqa: F811
+    """GET /events/{id} = mock eventById(id)（事件抽屉读的那一行），全部种子事件逐条比对。"""
+    rows = [r for v in EV.values() for r in v]
+    assert rows
+    for r in rows:
+        resp = await client.get(f"{ONT}/events/{r['id']}")
+        assert resp.status_code == 200, resp.text
+        assert {k: v for k, v in resp.json().items() if v is not None} == r
+
+
+async def test_event_detail_404(client, ae):  # noqa: F811
+    resp = await client.get(f"{ONT}/events/EV-NOPE")
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "NOT_FOUND"
+
+
 async def test_event_stats_match_mock(client, ae):  # noqa: F811
     for e in EVENTS:
         r = await client.get(f"{ONT}/event-types/{e['id']}/stats")

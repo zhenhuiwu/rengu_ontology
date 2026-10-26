@@ -188,7 +188,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /event-types/{id}/subscribers` | `ver`、`view`、`cr` | `items[{kind,name,ruleId?,filter,then,status,weekly,mark?}]` | 不分页 | `subscribersOf()` |
 | `GET /event-types/{id}/stats` | — | `{weekly,total,dedup,failed,partial,p95,asOf}`；`daily[{date,value}]`（14 天） | — | `eventDaily()`；健康指标同 `EventTypes.vue` 的 `health`（按 `eventsOf()` 算） |
 | `GET /event-types/{id}/events` | `range=24h\|7d`、`outcome`、`page`、`size=14` | `{items[{id,typeId,at,objKind,objId,objLabel,summary,outcome,subscribers,dedupKey,latencyMs}], total, page, size}`（前端只显示 ‹ 1/N ›，不显示总数） | 页码，**无游标** | `EVENTS` |
-| `GET /events/{id}` | — | 抽屉字段 + `timeline[{time,text,desc,status}]` + `related[]` | — | `eventById()`、`actionEventResolvers.ts` `event()` |
+| `GET /events/{id}` | — | 一条 `EventRecord`（同近期事件的一行，= mock `eventById()`）；时间线、关联由前端 `actionEventResolvers.ts` `event()` 按 `outcome` 和事件类型拼（palantir-r3 已实现，见 §12.2） | — | `eventById()`、`actionEventResolvers.ts` `event()` |
 | `GET /event-deliveries` | `eventId`（事件 code，必填），或 `eventType`（事件类型 code）+ `subscription`（订阅方 name）加 `page`、`size`【推断：前端没有按订阅方查投递的入口】 | `items[{subscription,status,attempts,lastError,deliveredAt}]`；按订阅方查时为分页结构 | 按事件查不分页 | mock 里没有逐个订阅方的记录，按 `outcome` 和 `subscribers` 推出来【推断】 |
 | `POST /event-types/{id}:simulate` | query `view`、`cr`（草稿视图按草稿里的载荷字段和订阅方）、`ver`；body `{payload?}`（默认取各字段的 `sample`） | `{testEventId, deliveredTo}`（`deliveredTo` 不含停用的订阅方） | — | `EventTypes.vue` `simulate()`；`subscribersOf()` |
 | `GET /event-types/{id}/versions` | — | 同动作类型 | 不分页 | `versionsOf()`、`EVENT_VERSION_NOTES` |
@@ -781,7 +781,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 |---|---|
 | `GET /event-types/{id}` 加 `specific[{name,api,type,required,desc,sample}]` | 页面草稿编辑（载荷字段 section）和“信封字段”区分都直接读 `EVENT_TYPES[].specific`；值 = `payload-fields` 里 `envelope=false` 的行 |
 | `GET /ext-systems` 每行加 `actionCount` | 页面“关联动作”列；= 指向该系统、未下线的动作类型数（含草稿）。【推断】草稿也算，和 mock 按 `ACTION_TYPES` 数一致 |
-| `POST /ext-systems` 新建 | 编号 `EXT-N` + 两位序号，取现有 `EXT-N*` 最大值 + 1（`EXT-N01`…）。【推断】mock 里新建只在内存，编号规则后台定 |
+| `POST /ext-systems` 新建 | 编号 `EXT-N` + 两位序号，取现有 `EXT-N*` 最大值 + 1（`EXT-N01`…）。取号前在本事务里拿事务级咨询锁 `integration.ext_system.code`（`get_adapter(session).xact_lock`，提交 / 回滚自动释放），两个并发新建不会拿到同一个编号（palantir-r3，`tests/test_integration_code_lock.py`）。【推断】mock 里新建只在内存，编号规则后台定 |
 | 编辑同时接受 `PUT` 和 `POST /ext-systems/{id}` | 前端 `apiClient` 只有 get / post（`http.ts` 共用、不归我改），所以编辑走 POST。【推断】PUT 保留给文档约定 |
 | 路由顺序：`:test` 先于 `{id}` 编辑登记 | 否则 `POST /ext-systems/EXT-X:test` 会被编辑路由吞掉 |
 | 校验文案 = 页面文案 | `请填写系统名称`、`请填写供应商`、`接口地址需以 https:// 开头`、`支持幂等时需填写幂等键`（整体校验，`field` 为 `-`），`timeoutMs` 1000–60000、`maxRetry` 0–5；422 `VALIDATION_FAILED` + `details.fields` |
@@ -831,6 +831,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 |---|---|---|
 | `GET /event-types/{id}/events?range=24h\|7d&outcome=&page=&size=14` | `{items: EventRecord[], total, page, size}` | 按 `at` 倒序（同 mock）；`outcome` 中文、`全部`/不传不过滤；非法 range / outcome 422；类型不存在 404；页码越界收拢到最后一页 |
 | `GET /event-types/{id}/stats` | `{weekly, total, dedup, failed, partial, p95, asOf, daily: [{date: "MM-DD", value}] × 14}` | 健康口径同 `EventTypes.vue` 的 `health`（该类型全部事件；p95 = 升序第 floor(n×0.95) 个，没有事件 0）；`weekly` = event_type.weekly；`asOf` = clock 当前（分钟） |
+| `GET /events/{id}`（palantir-r3） | 一条 `EventRecord` | 事件抽屉用：字段和 `eventById(id)` 完全一样（不加投递明细，mock 没有）；按事件编号（`EV-…`）找，`is_test` 的不算；不存在 404 `NOT_FOUND`（`message`「事件不存在」，`details.id`）；功能权限 event-types · view |
 | `GET /action-types/{id}/stats/daily?days=14` | `{items: [{date: "MM-DD", ok, failed, unknown}]}` | days 1–90，截至今天，缺的天补 0 |
 
 `EventRecord` 字段 = mock：`id, typeId, at("YYYY-MM-DD HH:mm:ss"), objKind?, objId, objLabel, summary, outcome, subscribers, dedupKey, latencyMs`（objKind 为空返回 null，前端 `clean()` 收掉）。
@@ -852,10 +853,23 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 内容 | 原因 |
 |---|---|
-| 动作执行抽屉、事件抽屉（`drawer.open('action' \| 'event', id)`） | 抽屉解析在公共文件 `src/components/actionEventResolvers.ts`（不归我）。动态已有 `GET /action-runs/{id}`；事件详情 `GET /events/{id}`（含逐订阅方投递）需要 `event_delivery` 表，本批没建 |
+| 动作执行抽屉、事件抽屉（`drawer.open('action' \| 'event', id)`） | 抽屉解析在公共文件 `src/components/actionEventResolvers.ts`（不归我）。动态已有 `GET /action-runs/{id}`（动作抽屉 PDE 已接，`c5ec3b3`）；`GET /events/{id}` palantir-r3 已实现，等 PDE 把 `event(id)` 的 `eventById` 换成它 |
 | `event_delivery` / `event_dedup`、`POST /internal/v1/events` | 没建（投递流水、去重窗口、内部接收） |
 | 两页草稿保存 / 提交（变更单） | 静态还没出 create / edit 变更单接口，保持 mock |
 
 ---
 
 *审阅：请 动态本体负责人 核对 §1、§5.1 和 §9 的 `action_run`，静态本体负责人 核对 §4.2 和 §7.2 里的 CR 部分，本体小白 核对 §9。*
+
+## 13. 变更单草稿：前端接法补充（分支 `palantir-r3`，基于 master `b475283`）
+
+只改前端和外部系统编号，后台接口没变；变更单接口契约见 `handoff/static.md`。以下都只在 `VITE_PALANTIR_CR_WRITE=1` 且 `action` 走真接口时生效，开关默认关，关着时行为同以前。
+
+| 场景 | 前端做法 |
+|---|---|
+| 进页面 / 刷新 | `GET /change-requests/draft-targets` + `GET /change-requests?status=草稿`：库里有草稿登记的本页对象，用 `useDraftView().start({join, target})` 重新登记；mock 登记里库中已没有的，用 `forgetTarget` 去掉 |
+| 选中有草稿的对象 | 快照就绪后 `GET /change-requests/{id}/items?kind=&targetId=`，按行叠回草稿视图（`delete` 标删除、`update` 替换、`add` 追加）；每个 变更单+对象 只读一次，之后以本页为准 |
+| 改动数 | 横幅和提交确认里的“变更单改动”取库里的 `changes`（发起 / 加入时的 CR、`PUT items` 返回、放弃后重读 `GET /change-requests/{id}`），取不到时按前端计 |
+| 放弃草稿 | 先弹确认卡；确认后 `DELETE /{id}/targets/{kind}/{targetId}`，成功后调 `useDraftView().cancel(id)` 撤掉登记并切回已发布版 |
+| 提交审核 | `POST /{id}:submit`；没有审核人返回 409 `CR_NO_REVIEWER`，页面弹 `提交审核失败：还没有指定审核人（CR_NO_REVIEWER）`，不跳转 |
+

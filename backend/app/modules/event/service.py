@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.context import ViewContext
 from app.common.pagination import PageParams
 from app.core import clock
+from app.core.errors import NotFound
 from app.modules.action.service import ALL, defs_for_view, find
 from app.modules.event.models import Event, EventOutcome, EventSource, EventType
 from app.modules.event.repo import EventRepo, EventTypeRepo
@@ -130,6 +131,13 @@ class EventRuntimeService:
         p = page.clamp(total)
         rows = await self.repo.page(et.id, since, oc, p.offset, p.size)
         return [event_dict(r, et.code) for r in rows], total, p
+
+    async def event(self, code: str) -> dict[str, Any]:
+        """单条事件（事件抽屉，mock eventById）。字段同近期事件列表的一行；不存在 404。"""
+        got = await self.repo.get_with_type_code(code)
+        if got is None:
+            raise NotFound(self.repo.not_found_message, details={"id": code})
+        return event_dict(*got)
 
     async def stats(self, type_id: str) -> dict[str, Any]:
         """运行健康按该类型全部事件算（同前端 health，口径 = 近期事件页签「近 7 天」）；

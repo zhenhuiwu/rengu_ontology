@@ -39,6 +39,16 @@ class EventRepo(BaseRepository[Event]):
     model = Event
     not_found_message = "事件不存在"
 
+    async def get_with_type_code(self, code: str) -> tuple[Event, str] | None:
+        """按事件编号（EV-…）取一条事件和它的事件类型编码；测试事件不算（同近期事件列表）。"""
+        stmt = (
+            select(Event, EventType.code)
+            .join(EventType, EventType.id == Event.event_type_id)
+            .where(Event.code == code, Event.is_test.is_(False))
+        )
+        row = (await self.session.execute(stmt)).first()
+        return (row[0], row[1]) if row else None
+
     @staticmethod
     def _filter(type_id: int, since: datetime | None, outcome: EventOutcome | None) -> Select[tuple[Event]]:
         stmt = select(Event).where(Event.event_type_id == type_id, Event.is_test.is_(False))
