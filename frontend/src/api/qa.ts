@@ -50,7 +50,7 @@ export type QaRealTurn =
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaChainAnswer }
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaClarifyAnswer }
   | { id: string; kind: 'empty'; time?: string; question: string; lead: string; bold: string; tail: string; tag: string; retry?: undefined };
-export interface QaSessionDetail extends QaSession { scope: string | null; caliber: string; ownerId: string; turns: QaRealTurn[] }
+export interface QaSessionDetail extends QaSession { scope: string | null; caliber: string | null; ownerId: string; turns: QaRealTurn[] }
 export interface QaOption { value: string; label: string }
 export interface QaSessionOptions { scopes: QaOption[]; calibers: QaOption[] }
 export interface QaAskOut { turnId: string; streamUrl: string; turn: QaRealTurn }

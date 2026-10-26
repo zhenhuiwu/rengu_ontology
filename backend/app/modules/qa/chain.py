@@ -613,6 +613,7 @@ def cap_time_upper(tree: exp.Expression, now: datetime) -> bool:
 _DOC_TITLES = {
     "anchors": "问题里提到的门店 / 商品（库里真实名称：写 WHERE 照抄；只对上一家就直接用，不要反问）",
     "caliber": "口径裁定（qa 裁定，跟“指标口径”冲突时以这里为准）",
+    "session_caliber": "会话口径（用户在工作台选的；指标按这里取口径变体）",
     "refuse": "拒答清单（问到这些直接拒答，不写 SQL）",
     "filters": "过滤列（按表）",
     "dims": "维度层级与取值",
@@ -736,7 +737,12 @@ def _label_rows(rows: list[list[Any]]) -> list[list[Any]]:
 
 
 async def answer(
-    session: AsyncSession, conn: AsyncConnection, llm: LLMClient, user: Any, question: str
+    session: AsyncSession,
+    conn: AsyncConnection,
+    llm: LLMClient,
+    user: Any,
+    question: str,
+    caliber_lines: list[str] | None = None,
 ) -> tuple[str, dict[str, Any], int, int, str | None]:
     """返回 (kind, snapshot, row_count, elapsed_ms, sql)。
 
@@ -745,6 +751,7 @@ async def answer(
     t0 = time.monotonic()
     ctx = await build_context(session)
     ctx["anchors"] = await value_anchors(session, question)
+    ctx["session_caliber"] = caliber_lines or []  # 会话口径 → 指标变体（service.caliber_lines）
     messages = build_prompt(question, ctx)
     limit = ROW_LIMIT
     attempt, checked, repaired = 0, False, False

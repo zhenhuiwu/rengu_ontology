@@ -47,7 +47,6 @@ from app.modules.qa.models import (
     QaTemplate,
     QaTurn,
     RunStatus,
-    SessionCaliber,
     TurnKind,
 )
 from app.modules.qa.schemas import (
@@ -188,8 +187,8 @@ async def _own_session(session, pk: int, sid: str) -> QaSession:
     return s
 
 
-def _caliber(label: str) -> SessionCaliber:  # type: ignore[valid-type]
-    return SessionCaliber(label)
+async def _caliber(session: AsyncSession, label: str | None) -> str | None:
+    return svc.check_caliber(label, await svc.variant_index(session))
 
 
 @router.post(
@@ -206,7 +205,7 @@ async def create_session(
         owner_id=pk,
         title="新会话",  # 同 useQaSession.newSession；第一问后改成问题前 20 字（W6）
         scope=body.scope,
-        caliber=_caliber(body.caliber),
+        caliber=await _caliber(session, body.caliber),
         last_at=clock.now(),
     )
     session.add(s)
@@ -225,7 +224,7 @@ async def patch_session(
     if body.title is not None and body.title.strip():
         s.title = body.title.strip()  # 同 QaSessionPanel.saveRename：trim 后为空不改
     scope = body.scope if body.scope is not None else s.scope
-    caliber = _caliber(body.caliber) if body.caliber is not None else s.caliber
+    caliber = await _caliber(session, body.caliber) if "caliber" in body.model_fields_set else s.caliber
     if scope != s.scope or caliber != s.caliber:
         s.scope, s.caliber = scope, caliber
         seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
@@ -237,7 +236,7 @@ async def patch_session(
                 session_id=s.id,
                 seq=seq,
                 kind=TurnKind.system,
-                snapshot={"text": f"从这里开始按 大区 = {scope}、口径 = {caliber.value} 回答"},
+                snapshot={"text": f"从这里开始按 大区 = {scope}、口径 = {caliber or '不限'} 回答"},
                 asked_at=now,
             )
         )
@@ -277,7 +276,10 @@ async def ask(
         raise NotFound("会话不存在", details={"id": sid})
     question = body.question.strip()
     try:
-        kind, snapshot, rows, elapsed, sql = await chain.answer(session, conn, llm, user, question)
+        lines = svc.caliber_lines(s.caliber, await svc.variant_index(session)) if s.caliber else []
+        kind, snapshot, rows, elapsed, sql = await chain.answer(
+            session, conn, llm, user, question, caliber_lines=lines
+        )
     except DBAPIError as e:  # 生成的 SQL 过了网关但执行出错（列不存在、超时等）：不落轮次，前端提示换个问法
         raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
     seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1

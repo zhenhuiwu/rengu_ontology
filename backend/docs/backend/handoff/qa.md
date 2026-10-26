@@ -16,7 +16,7 @@
 | 属性标志 | 已接静态 | E1 `flags()` 读静态 property 列（searchable / sortable、filterable 用 `static.explorer.facetable`），与 meta / facets 同一套；静态 seed 里区间属性（store.opened_at、order.created_at）没开 filterable，所以页面上没有这两项筛选，要的话在静态 `explorer_meta.json` 打开；前端 `metaFromProps` 默认规则只在后台不可达的 mock 兜底用 |
 | 指标口径 | 已接静态 | 口径 = 对象 meta.metrics[].variants[].label 并集（静态按（不含税）/（含税）后缀推断）；真 meta 没有变体时用 W17 选项，后台不可达用 mock |
 | 行级范围 `GET /api/admin/v1/me/row-scopes` | 等本体小白 | 未上 master；返回形状按 `[{dimension?, values[]}]` 或 `{items}` 宽松解析 [推断]；拿不到时默认取预览范围或第一个选项 |
-| 后端 SessionCaliber | 限制 | 只收 不含税 / 含税；口径换成指标 variants 后要放开成自由文本（`schemas.py`）。新会话兜底口径为空时会 422 |
+| 后端 SessionCaliber | 已改 | `qa_session.caliber` 改自由文本 varchar(32) 可空（迁移 `qa_0004`，down_revision `static_0003`：去 CHECK、ex→不含税 / in→含税）；W2/W4 strip、空 → null（W4 不传 = 不改），静态指标有口径变体时只收变体标签（不含税 / 含税 总是收），没有变体时不校验；W6 把会话口径映射成指标变体（点名每个指标用哪个 api）进提示词“会话口径”段，没对上变体的 不含税 / 含税 按旧的金额口径一句话提示 [推断]；评测（T11 / eval run）不带会话口径 |
 | 会话 scope 值 | [推断] | 选项值是维度取值名（如“华东大区”），旧会话的“华东”按同义词归一显示，用户再改时 PATCH 成维度取值名；后台链路按自由文本用 |
 | O4 / mock answerFor | 部分 | 用一批对象提问只支持 store / product / order；其他类型的提问按钮仍可点，回答走兜底 |
 | 动作执行 | 未接 | 对象详情真接口模式下「发起」置灰“动作执行接口还没接入”，不假装成功；演示模式明确写“演示数据” |

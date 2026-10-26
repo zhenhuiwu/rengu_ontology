@@ -53,6 +53,7 @@ from app.db.types import JsonType, StrArray, enum_column
 # ---------------------------------------------------------------- 枚举（库码 = 成员名，接口值 = value）
 
 # 会话口径：库里 ex / in（in 是 Python 关键字，用函数式写法）
+# 旧口径枚举：qa_session.caliber 已改自由文本（qa_0004），只留作 不含税 / 含税 ↔ ex / in 对照
 SessionCaliber = LabelEnum("SessionCaliber", [("ex", "不含税"), ("in", "含税")])  # type: ignore[misc]
 
 
@@ -184,12 +185,8 @@ class QaSession(CodeMixin, MutableTableMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(60), nullable=False)
     scope: Mapped[str | None] = mapped_column(String(60), comment="范围（QA_SCOPE_OPTIONS.value，如 华东）")
-    caliber: Mapped[SessionCaliber] = mapped_column(  # type: ignore[valid-type]
-        enum_column(SessionCaliber, 8),
-        nullable=False,
-        default=SessionCaliber["ex"],
-        server_default="ex",
-        comment="会话口径 ex/in（接口 不含税/含税）",
+    caliber: Mapped[str | None] = mapped_column(
+        String(32), comment="会话口径：指标口径变体标签（如 不含税 / 含税），自由文本，空 = 不限（qa_0004）"
     )
     last_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, comment="最近活动时间（接口 date 只取日期）"

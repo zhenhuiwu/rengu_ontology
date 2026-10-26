@@ -139,7 +139,7 @@
 | 时间线状态 | 对象详情 `TlStatus`：`done`/`warn`/`error`/`unknown`；工作台右栏 `QaTimelineLevel`：`normal`/`warn`/`error`/`unknown`（接口和库都用英文，跟 mock 一致） |
 | 对象类型 `ObjKind` | `store`、`product`、`order`（右栏另有 `region`） |
 | 会话时间筛选 `sessRange` | `all`、`today`、`7d`、`30d`（按 `now()` 算） |
-| 会话口径（W2/W3/W4/W17，`qa_session.caliber`） | 接口值 `不含税`、`含税`（跟 `QA_CALIBER_OPTIONS` 一致，`QaComposer.vue:39` 的下拉，`Workbench.vue:51` 默认 `不含税`）；库里存 `ex`、`in` |
+| 会话口径（W2/W3/W4/W17，`qa_session.caliber`） | 自由文本 ≤32 字 = 指标口径变体标签（静态 `metrics[].variants[].label`，如 `不含税`、`含税`），strip，空 → `null`（不限，W3 不返回该字段）；静态指标有变体时只收变体标签（`不含税` / `含税` 总是收），否则 422 `VALIDATION_FAILED`；静态没有变体时不校验。库里直接存标签（`qa_0004` 把旧 `ex`/`in` 换成 `不含税`/`含税`）。W6 把它映射成每个指标该用的变体（api）写进提示词“会话口径”段；没对上变体的 `不含税`/`含税` 按旧金额口径提示 [推断] |
 | 回答口径（澄清条、W9、SSE `clarify`） | `ex` 不含税、`in` 含税、`both` 两者对比（`QaAnswer.vue:90` 写死的单选；选项由 SSE `clarify.options` 下发，不走 W17） |
 | 回答状态（`QA_DEMO_TURNS[].kind`） | `answer` 正常回答（含澄清）、`denied` 权限拦截、`empty` 结果为空、`system` 系统提示；`failed` 失败 mock 里没有 [推断] |
 
@@ -221,9 +221,9 @@
 | # | 方法 路径 | 入参 | 出参 / 规则 | mock 来源 |
 |---|---|---|---|---|
 | W1 | `GET /sessions` | `q`、`range=all\|today\|7d\|30d`（按 `now()` 算）、`page`、`size=12`（URL `sessQ`/`sessRange`/`sessPage`，size 固定） | `QaSession{id,title,date}`，按时间倒序 | `mock/qa.ts` `QA_SESSION_LIST` |
-| W2 | `POST /sessions` | `{scope, caliber: 不含税\|含税}` | 新会话 `title='新会话'`；第一问发出后，后台把标题设成问题的前 20 个字 | `useQaSession.newSession` |
+| W2 | `POST /sessions` | `{scope, caliber?: 口径变体标签}` | 新会话 `title='新会话'`；第一问发出后，后台把标题设成问题的前 20 个字 | `useQaSession.newSession` |
 | W3 | `GET /sessions/{sid}` | — | `{id,title,date,scope,caliber,ownerId, turns: Turn[]}`；**一次返回全部轮次，不分页、没有游标**（前端对话区没有「加载更早」）；Turn 见 3.3。左栏点会话就是切换当前会话，调这个接口 | `mock/qa.ts` `QA_DEMO_TURNS`（原来写死在 `QaConversation.vue`，已搬进 mock） |
-| W4 | `PATCH /sessions/{sid}` | `{title?}` / `{scope?, caliber?: 不含税\|含税}` | 改范围或口径时，后台追加一条系统轮次「从这里开始按 大区 = X、口径 = Y 回答」，之前的答案保留各自的依据 | `Workbench.vue` `tips`、`QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS` |
+| W4 | `PATCH /sessions/{sid}` | `{title?}` / `{scope?, caliber?: 口径变体标签 \| ""}` | 改范围或口径时，后台追加一条系统轮次「从这里开始按 大区 = X、口径 = Y 回答」，之前的答案保留各自的依据 | `Workbench.vue` `tips`、`QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS` |
 | W5 | `DELETE /sessions/{sid}` | — | 204；已固定到页面的卡片不受影响（卡片存的是自己那份语义计划，不外键级联） | `QaSessionPanel.doDelete` |
 | W6 | `POST /sessions/{sid}/turns` | `{question, refs?: ObjRef[], clientId}`（范围和口径取会话上的值） | 202 `{turnId, streamUrl}`。发送、Enter、追问词走这个接口；「改查 10 月」只把改写填进输入框，用户再发送才调用；常用问题抽屉里的「提问」**现在只关闭抽屉**，不调用（第 10 节） | `useQaSession.send` |
 | W7 | `GET /turns/{tid}/stream` | `Last-Event-ID` | **SSE**，见 3.1 | `QaAnswer.vue`、`QaStoreAnswer.vue` |
@@ -243,7 +243,7 @@
 **分享会话**：前端只复制链接 `?session=sid`。别人打开时用 W3，**按打开人自己的权限重新执行每一轮的语义计划**，超出他范围的轮次返回 `denied`；拥有者自己看时用快照 [推断]。预览期间「分享」置灰。
 
 **联调实现（qa-joint，W2/W4/W5/W9–W12/W15/W16 已落；X1/X2/X2b 前端已接动态）**：
-- W2 返回 201 + 会话详情（同 W3，`turns: []`）；`scope` 缺省 `华东`、`caliber` 缺省 `不含税`（同 `Workbench.vue` 初值）；会话号 = `S` + 现有最大序号 + 1 [推断]。
+- W2 返回 201 + 会话详情（同 W3，`turns: []`）；`scope` 缺省 `华东`、`caliber` 缺省 `不含税`、传空串 = 不限（`null`）；会话号 = `S` + 现有最大序号 + 1 [推断]。
 - W4 返回会话详情（同 W3）。`title` trim 后为空就不改（同 `QaSessionPanel.saveRename`）；`scope`/`caliber` 只有值真变了才追加系统轮次（`kind=system`，`snapshot.text`），并刷新 `last_at` [推断]。
 - W5、W15 返回 204；不是自己的会话 / 常用问题一律 404（不暴露存在性）[推断]。
 - W16 返回 201 `{id, status:'待审批', approver}`；申请号 `AP` + 4 位序号 [推断]；审批人第一期固定取 `QA_APPLY.approver`（按范围路由待 admin 权限审批流）[推断]；`sourceTurnId` 不是有效用户自己会话里的轮次 → 404；`duration` 只收 30/90/180（其他 422）；只读白名单（`?ver=` / `?previewAs=` 都放行，`readonly_extra`）。申请人记有效用户（预览时 = 被预览人，跟轮次归属一致；第 12 节 #4 仍待定）[推断]。W3 里越权轮次若有待审批申请，带 `applied: true`（前端显示「已申请 · 待审批」，刷新后保留）[推断]；`?apply=1` 刷新复现时没有轮次号，按本会话最后一个未申请的越权轮次提交 [推断]。
@@ -427,7 +427,7 @@ O1–O3 是按门店 / 商品 / 订单写死的旧接口；通用版按对象类
 - 物理绑定：`backend/seeds/extra/qa/objects/bindings.json`（对象类型 → 表，属性 → 列，可选 rowFilter）。
 - 属性标志：E1 `flags()` 读静态 property 列（filterable = `static.explorer.facetable`），筛未开 filterable 的属性 422；前端 `objMeta.ts metaFromProps` 的默认规则只在后台不可达的 mock 兜底用。
 - 前端：`src/api/qaObjects.ts exploreSearch / exploreGet / exploreExport`；元数据 `objMeta.ts`（真 `/object-types/{id}/meta` + `/properties` 合并、`/facets`；mock 只在后台不可达时读兜底；带 kw 时 facets 用 E1 过渡 `facets`，静态 `/facets` 不收 kw）；取行 `objRows.ts`（mock 模式按 `MOCK_BINDINGS` 在本地筛）。
-- 工作台范围 / 口径：`src/pages/qa/qaScope.ts`。范围 = 组织层级维度最上层取值，默认当前用户行级范围（`GET /api/admin/v1/me/row-scopes?objectType=`，未上线）；口径 = meta.metrics[].variants[].label 并集，没有就用 W17 选项。会话 `scope` 仍是 ≤60 字的自由文本，`caliber` 后端仍只收 不含税 / 含税。
+- 工作台范围 / 口径：`src/pages/qa/qaScope.ts`。范围 = 组织层级维度最上层取值，默认当前用户行级范围（`GET /api/admin/v1/me/row-scopes?objectType=`，未上线）；口径 = meta.metrics[].variants[].label 并集，没有就用 W17 选项。会话 `scope` 仍是 ≤60 字的自由文本，`caliber` 是 ≤32 字自由文本（口径变体标签，空 = 不限，见下）。
 
 ---
 

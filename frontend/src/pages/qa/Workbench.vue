@@ -60,12 +60,12 @@ const sess = useQaSession();
 /* 真接口：范围/口径跟着当前会话（W3）；用户改了才 PATCH（W4），系统提示由后台作为 system 轮次追加 */
 let syncing = false;
 async function setQuiet(s: string, c: string) { syncing = true; scope.value = s; caliber.value = c; await nextTick(); syncing = false; }
-const fromSession = (d: { scope: string | null; caliber: string }) => setQuiet(sc.normScope(d.scope) || sc.defaultScope(pv.scopeOf), d.caliber);
+const fromSession = (d: { scope: string | null; caliber: string | null }) => setQuiet(sc.normScope(d.scope) || sc.defaultScope(pv.scopeOf), d.caliber ?? '');
 watch([scope, caliber], async ([s, c]) => {
   if (syncing) return;
   if (!sess.real) { tips.value.push(`从这里开始按 ${sc.levelName.value} = ${s}${sc.showCaliber.value ? `、口径 = ${c}` : ''} 回答`); return; }
   const d = sess.detail.value;
-  if (!d || (sc.normScope(d.scope) === s && d.caliber === c)) return;
+  if (!d || (sc.normScope(d.scope) === s && (d.caliber ?? '') === c)) return;
   try { sess.detail.value = await qaApi.patchSession(d.id, { scope: s, caliber: c }); }
   catch (e) { message.error(`修改范围口径失败：${errText(e)}`); await fromSession(d); }
 });
