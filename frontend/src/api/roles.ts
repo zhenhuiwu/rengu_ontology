@@ -2,64 +2,51 @@
  * 系统管理 · 角色与权限（Roles.vue，api-index §4.2；接口见 docs/backend/admin-roles-api.md）。
  * 开关键 admin，前缀 admin（/api/admin/v1/roles…、/users/{id}/effective-access）。
  *
- * 页面保留 mock 的本地数据和逻辑。loadRolesState() 返回 null = 用 mock（开关没切到真接口，或后台没起来）；
+ * loadRolesState() 仅在 mock 模式返回 null；真模式失败直接抛出，页面保持空态并显示错误。
  * 返回数据时页面改用后台的角色、成员和用户，写操作走下面的接口，成功后页面整份重新拉取。
  * 有效权限仍在页面里用 roles.ts effectiveAccess() 算（同一套规则，后台 /effective-access 结果一致），
  * 这样预览抽屉能反映页面上还没保存的成员变化。
  */
 import type { AdminUser } from '@/mock/admin';
 import type { FuncLevel, ObjPerm, Role, RowScope } from '@/mock/roles';
-import { apiClient, isBackendDown, type PageResult } from './http';
+import { apiClient, currentApiContext, type PageResult } from './http';
 
 const api = apiClient('admin');
-const MAX = 200; // 后台 MAX_PAGE_SIZE
 
 export type RemoteRole = Role & { memberCount: number; lockVersion: number };
 export interface RolesState { roles: RemoteRole[]; members: Record<string, AdminUser[]>; users: AdminUser[] }
+export type ObjectPermissionRole = Pick<Role, 'id' | 'name' | 'defaultDeny' | 'objs' | 'scopes'> & { memberCount: number };
+export interface ObjectPermissionPage extends PageResult<ObjectPermissionRole> { object: { id: string; name: string; api: string } }
 
 const enc = encodeURIComponent;
 
-async function allPages<T>(path: string): Promise<T[]> {
-  const out: T[] = [];
-  for (let page = 1; ; page++) {
-    const r = await api.get<PageResult<T>>(path, { query: { page, size: MAX } });
-    out.push(...r.items);
-    if (out.length >= r.total || !r.items.length) return out;
-  }
-}
+const pinned = () => { const ctx = currentApiContext(); return { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } }; };
+export const queryObjectPermissions = (objectId: string, page: number, size: number) => {
+  const options = pinned();
+  return api.get<ObjectPermissionPage>('/roles/object-permissions', { ...options, query: { ...options.query, objectId, page, size } });
+};
+export const queryRoleMembers = (id: string, page: number, size: number, kw: string) => {
+  const options = pinned();
+  return api.get<PageResult<AdminUser>>(`/roles/${enc(id)}/members`, { ...options, query: { ...options.query, page, size, kw: kw || undefined } });
+};
 
 /** 写操作是否走后台：按开关判断（不看加载成败），后台断开时写操作直接报错，不改本地 mock */
 export const rolesApiOn = () => api.isReal();
 
 export async function loadRolesState(): Promise<RolesState | null> {
   if (!api.isReal()) return null;
-  try {
-    const roles = await api.get<RemoteRole[]>('/roles');
-    const [users, ...lists] = await Promise.all([
-      allPages<AdminUser>('/users'),
-      ...roles.map((r) => allPages<AdminUser>(`/roles/${enc(r.id)}/members`)),
-    ]);
-    return { roles, users, members: Object.fromEntries(roles.map((r, i) => [r.id, lists[i]])) };
-  } catch (e) {
-    if (!isBackendDown(e)) throw e;
-    console.warn('[api] 角色后台未启动，回退演示数据', e);
-    return null;
-  }
+  return await api.get<RolesState>('/roles/state', pinned());
 }
 
 export interface PermObject { name: string; api: string; actions: string[] }
+export interface ScopeProp { objType: string; prop: string; values: string[]; displayName?: string | null; dataType?: string }
+export interface RolesMeta { permObjects: PermObject[]; scopeProps: ScopeProp[] }
 
-/** 权限对象清单（/roles/meta perm_objects：读本体对象类型 + 动作类型，本体为空时后台用 mock 清单兜底）。
- * 只读：开关没切或后台没起来返回 null，页面继续用 mock PERM_OBJECTS。 */
-export async function loadPermObjects(): Promise<PermObject[] | null> {
+/** 权限元数据：对象清单和可执行范围属性来自已发布本体，空本体由后台用 mock 兜底。
+ * 仅 mock 模式返回 null；真实请求错误原样抛出，空 scopeProps 不代表加载失败。 */
+export async function loadRolesMeta(): Promise<RolesMeta | null> {
   if (!api.isReal()) return null;
-  try {
-    const m = await api.get<{ permObjects: PermObject[] }>('/roles/meta');
-    return m.permObjects?.length ? m.permObjects : null;
-  } catch (e) {
-    if (!isBackendDown(e)) throw e;
-    return null;
-  }
+  return await api.get<RolesMeta>('/roles/meta');
 }
 
 export const createRole = (b: { name: string; desc?: string; perms?: string[]; copyFrom?: string }) =>

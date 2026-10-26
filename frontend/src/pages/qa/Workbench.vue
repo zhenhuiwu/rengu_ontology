@@ -7,18 +7,19 @@
  * 答案里的“建议动作”与右栏动作走同一张确认卡，并高亮右栏那一行；动作状态只在右栏显示。
  * 范围/口径是会话级的：中途修改在对话里插入“从这里开始按 … 回答”，之前的答案保留各自依据。
  */
-import { onMounted, ref, computed, watch, nextTick } from 'vue';
+import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { ShareAltOutlined, LayoutOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { useConfirmStore } from '@/stores/confirm';
-import { REGION_EC, QA_APPLY } from '@/mock';
+import { REGION_EC } from '@/mock';
 import { useQueryParam } from './useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
 import { useQaSession, errText } from './useQaSession';
 import { ensureScopeOptions, useScopeCaliber } from './qaScope';
+import { metaContextKey } from '@/pages/objects/objMeta';
 import * as qaApi from '@/api/qa';
 import QaSessionPanel from './components/QaSessionPanel.vue';
 import QaConversation from './components/QaConversation.vue';
@@ -58,26 +59,32 @@ const caliber = ref('');
 const tips = ref<string[]>([]);
 const sess = useQaSession();
 /* 真接口：范围/口径跟着当前会话（W3）；用户改了才 PATCH（W4），系统提示由后台作为 system 轮次追加 */
-let syncing = false;
-async function setQuiet(s: string, c: string) { syncing = true; scope.value = s; caliber.value = c; await nextTick(); syncing = false; }
+let syncing = false, quietSeq = 0, scopeSeq = 0;
+onBeforeUnmount(() => { ++scopeSeq; });
+async function setQuiet(s: string, c: string) { const n = ++quietSeq; syncing = true; scope.value = s; caliber.value = c; await nextTick(); if (n === quietSeq) syncing = false; }
 const fromSession = (d: { scope: string | null; caliber: string | null }) => setQuiet(sc.normScope(d.scope) || sc.defaultScope(pv.scopeOf), d.caliber ?? '');
 watch([scope, caliber], async ([s, c]) => {
-  if (syncing) return;
+  if (syncing || readonly.value) return;
   if (!sess.real) { tips.value.push(`从这里开始按 ${sc.levelName.value} = ${s}${sc.showCaliber.value ? `、口径 = ${c}` : ''} 回答`); return; }
   const d = sess.detail.value;
   if (!d || (sc.normScope(d.scope) === s && (d.caliber ?? '') === c)) return;
-  try { sess.detail.value = await qaApi.patchSession(d.id, { scope: s, caliber: c }); }
-  catch (e) { message.error(`修改范围口径失败：${errText(e)}`); await fromSession(d); }
+  const n = ++scopeSeq, key = metaContextKey(), id = sess.activeId.value;
+  const valid = () => n === scopeSeq && key === metaContextKey() && id === sess.activeId.value && scope.value === s && caliber.value === c;
+  try { const result = await qaApi.patchSession(d.id, { scope: s, caliber: c }, qaApi.qaRequestOptions()); if (valid()) sess.detail.value = result; }
+  catch (e) { if (valid()) { message.error(`修改范围口径失败：${errText(e)}`); await fromSession(d); } }
 });
 /* 选项加载完：有会话按会话，否则按默认范围 / 第一个口径（不触发提示和 PATCH） */
-ensureScopeOptions(sess.real).then(() => {
+watch(metaContextKey, async () => {
+  const key = metaContextKey();
+  await ensureScopeOptions(sess.real);
+  if (key !== metaContextKey()) return;
   const d = sess.real ? sess.detail.value : null;
   if (d) return fromSession(d);
   return setQuiet(sc.defaultScope(pv.scopeOf), sc.caliberOpts.value[0]?.value ?? '');
-});
+}, { immediate: true });
 if (sess.real) {
   watch(() => sess.detail.value, (d) => { if (d) fromSession(d); });
-  watch(() => sess.activeId.value, (id) => { if (id && sess.detail.value?.id !== id) sess.loadDetail(id); }, { immediate: true });
+  watch([metaContextKey, () => sess.activeId.value], () => { ++scopeSeq; });
   const q = route.query.session;
   if (typeof q === 'string' && q && !sess.activeId.value) sess.activeId.value = q;
 }
@@ -98,18 +105,21 @@ function openPin(t?: { id: string; title: string }) { pinTurn.value = t; pin.val
 /* 真接口（W16）：申请的是点了「申请权限」的那一轮；刷新后（?apply=1 复现）按本会话最后一个未申请的越权轮次 [推断] */
 const applyTurn = ref('');
 const applying = ref(false);
-function openApply(turnId?: string) { applyTurn.value = turnId ?? ''; apply.value = '1'; }
-async function onApplied(v: { reason: string; duration: string }) {
+function openApply(turnId?: string) { if (readonly.value) return; applyTurn.value = turnId ?? ''; apply.value = '1'; }
+async function onApplied(v: { scope: string; object: string; reason: string; duration: string }) {
+  if (readonly.value || applying.value) return;
   if (!sess.real) { apply.value = ''; applied.value = true; message.success('申请已提交，等待审批'); return; }
   const d = sess.detail.value;
-  const tid = applyTurn.value || [...(d?.turns ?? [])].reverse().find((t) => t.kind === 'denied' && !t.applied && (!t.code || t.code === 'NO_PERMISSION'))?.id;
+  const tid = applyTurn.value || [...(d?.turns ?? [])].reverse().find((t) => t.kind === 'denied' && !t.applied && (!t.code || t.code === 'NO_PERMISSION' || t.code === 'OUT_OF_SCOPE'))?.id;
+  const key = metaContextKey();
   applying.value = true;
   try {
-    await qaApi.createPermissionRequest({ scope: QA_APPLY.scope, object: QA_APPLY.object, reason: v.reason, duration: Number.parseInt(v.duration, 10), sourceTurnId: tid ?? null });
+    await qaApi.createPermissionRequest({ scope: v.scope, object: v.object, reason: v.reason, duration: Number.parseInt(v.duration, 10), sourceTurnId: tid ?? null });
+    if (key !== metaContextKey() || d?.id !== sess.detail.value?.id) return;
     apply.value = ''; applyTurn.value = '';
     message.success('申请已提交，等待审批');
     if (d) await sess.loadDetail(d.id);
-  } catch (e) { message.error(`提交申请失败：${errText(e)}`); } finally { applying.value = false; }
+  } catch (e) { if (key === metaContextKey()) message.error(`提交申请失败：${errText(e)}`); } finally { applying.value = false; }
 }
 
 function setConfirmQuery(on: boolean, runId?: string) {
@@ -122,6 +132,12 @@ function setConfirmQuery(on: boolean, runId?: string) {
 const ACTION_PARAMS = '面额 ¥30，满 ¥199 可用，有效期 14 天';
 const ACTION_TARGET = { kind: '客户群', id: 'SEG-EC-60D', label: '华东大区 · 近 60 天未复购' };
 function actionFields(run?: qaApi.QaActionRun) {
+  if (sess.real && run) return [
+    { label: '动作类型', value: `${run.action} ${run.typeVersion ?? ''}`.trim() },
+    { label: '目标', value: run.objLabel ?? '—' }, { label: '参数', value: run.params ?? '—' },
+    { label: '审批人', value: run.approver ?? '—' }, { label: '写回系统', value: run.system ?? '—' },
+    { label: '幂等键', value: run.idemKey },
+  ];
   return [
     { label: '动作类型', value: run ? `${run.action} ${run.typeVersion ?? ''}`.trim() : '发放复购召回优惠券 v3' },
     { label: '参数', value: run?.params ?? ACTION_PARAMS },
@@ -136,6 +152,7 @@ function actionFields(run?: qaApi.QaActionRun) {
 const staging = ref(false);
 async function runAction(reuseId?: string) {
   if (readonly.value || staging.value) return;
+  if (sess.real && !reuseId) { message.warning('问答动作尚未绑定真实目标，请在动作中心操作'); return; }
   let run: qaApi.QaActionRun | undefined;
   if (qaApi.actionsReal() && reuseId) {
     // 刷新带 ?confirm=1&run= 的页面：复用已暂存的动作；它已确认 / 撤回就不再弹卡，也不新建（不留孤儿记录）
@@ -154,9 +171,9 @@ async function runAction(reuseId?: string) {
   }
   setConfirmQuery(true, run?.id);
   const ok = await confirm.ask({
-    title: ACTION,
+    title: run?.action ?? ACTION,
     tag: '待确认',
-    target: `${ACTION_TARGET.kind} · ${ACTION_TARGET.label}`,
+    target: run?.objLabel ?? (sess.real ? '—' : `${ACTION_TARGET.kind} · ${ACTION_TARGET.label}`),
     fields: actionFields(run),
     impact: '提交后进入审批；外部系统超时会标记为“结果未知”并进入对账，不会自动重试。',
     irreversible: true,
@@ -207,11 +224,11 @@ onMounted(() => {
       <QaConversation :applied="applied" :tips="tips" @suggest="runAction()" @pin="openPin" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
-    <QaObjectPanel :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />
+    <QaObjectPanel v-if="!sess.real" :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />
   </div>
-  <QaPinModal :open="pin === '1'" :card="pinTurn?.title ?? PIN_DEMO_TITLE" :turn-id="pinTurn?.id" @close="pin = ''" @done="onPinned" />
+  <QaPinModal :open="pin === '1'" :card="pinTurn?.title ?? (sess.real ? sess.detail.value?.title ?? '' : PIN_DEMO_TITLE)" :turn-id="pinTurn?.id" @close="pin = ''" @done="onPinned" />
   <QaListDrawer :panel="panel" @close="panel = ''" @ask="panel = ''" />
-  <QaApplyDrawer :open="apply === '1'" :submitting="applying" @close="apply = ''" @submit="onApplied" />
+  <QaApplyDrawer :open="apply === '1'" :submitting="applying" :readonly="readonly" @close="apply = ''" @submit="onApplied" />
 </template>
 
 <style scoped>

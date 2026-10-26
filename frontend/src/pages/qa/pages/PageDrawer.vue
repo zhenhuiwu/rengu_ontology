@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 我的页面抽屉（?page=P001&ptab=preview|schedule|share）
+ * 我的页面抽屉（?page_id=P001&ptab=preview|schedule|share）
  *  预览：数据截至、范围、来源、口径版本、卡片预览（simple 分页，每页 6 张）；“调整卡片”模式可拖拽排序、移除卡片
  *  刷新与订阅：刷新计划 + 订阅推送
  *  共享：共享方式、成员及权限、链接、导出
@@ -8,7 +8,7 @@
  * 未保存保护（公共 useUnsavedGuard）：卡片调整、刷新与订阅、共享有未保存改动时，关闭抽屉 / 切页签 / 离开页面先提醒。
  * 保存顺序时移除了卡片、保存共享时新增了可见人，走公共确认卡写明“将移除 N 张卡片”/“新增可见人：xx”。
  * 真接口（开关 qa，写操作不看后台是否判定未启动，失败只报错不回退）：保存卡片 P8、刷新与订阅 P9、共享 P10，成功后用后台返回值更新并 emit changed（列表重载）；
- * 后台判定未启动则照旧改本地演示数据。
+ * qa 开关关闭时改本地演示数据；开关打开时后台不可达也只报错。
  */
 import { computed, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
@@ -178,7 +178,7 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
   <a-drawer :open="!!page" :width="760" :title="page?.name" @close="close">
     <template #extra>
       <a-space v-if="page">
-        <a-tooltip :title="reason"><a-button size="small" :disabled="readonly" @click="emit('refresh', page)">立即刷新</a-button></a-tooltip>
+        <a-tooltip :title="qaWriteReal ? '页面刷新执行器尚未接入' : reason"><a-button size="small" :disabled="readonly || qaWriteReal" @click="emit('refresh', page)">立即刷新</a-button></a-tooltip>
         <a-popover v-model:open="renameOpen" trigger="click" placement="bottomRight">
           <template #content>
             <div class="pd-pop"><a-input v-model:value="newName" :maxlength="30" show-count @press-enter="doRename" /><a-button type="primary" size="small" :disabled="!newName.trim()" @click="doRename">确定</a-button></div>
@@ -190,9 +190,9 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
     </template>
     <div v-if="page" class="pd">
       <div class="pd-meta">
-        <div><span class="c-3">数据截至</span> <span class="num c-1">{{ page.dataAsOf }}</span><span v-if="page.status === '刷新失败'" class="tl-failed"> · 刷新失败</span> <InfoTip v-if="page.statusNote" :title="page.statusNote" /></div>
+        <div><span class="c-3">数据截至</span> <span class="num c-1">{{ page.dataAsOf || '—' }}</span><span v-if="page.status === '刷新失败'" class="tl-failed"> · 刷新失败</span> <InfoTip v-if="page.statusNote" :title="page.statusNote" /></div>
         <div><span class="c-3">范围</span> <span class="c-1">{{ page.scope }}</span></div>
-        <div><span class="c-3">刷新</span> <span class="c-1">{{ freqLabel(page.refresh) }}</span><span class="c-3"> · 最近 {{ page.lastRefresh.slice(5) }}</span></div>
+        <div><span class="c-3">刷新</span> <span class="c-1">{{ freqLabel(page.refresh) }}</span><span class="c-3"> · 最近 {{ page.lastRefresh?.slice(5) ?? '尚未刷新' }}</span></div>
         <div class="pd-ell" :title="page.source"><span class="c-3">来源</span> <span class="c-1">{{ page.source }}</span></div>
         <div><span class="c-3">共享</span> <span class="c-1">{{ page.share.mode === '仅自己' ? '仅自己' : page.share.mode === '所在部门' ? '所在部门' : `${page.share.members.length} 位成员` }}</span></div>
         <div><span class="c-3">订阅</span> <span class="c-1">{{ page.sub.on ? `${page.sub.channel} · ${page.sub.receivers.length} 人` : '未开启' }}</span></div>

@@ -9,7 +9,6 @@ import InfoTip from '@/components/InfoTip.vue';
  * 确认提交、撤回、重新提交、对账一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
 import { computed, reactive, ref, watch } from 'vue';
-import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
@@ -22,25 +21,26 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import {
   ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS, OBJ_KIND_LABEL, hasObjRef, waitingText,
-  type ActionRecord, type ActionStatus, type ActionLog,
+  type ActionRecord as MockActionRecord, type ActionStatus, type ActionLog,
 } from '@/mock/actions';
 import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, listActionRuns, getActionRun, getActionMeta, confirmActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun,
-  type ActionMetaDto, type ActionRunDetailDto, type ActionRunDto, type ActionTab,
+  dynamicApi, dynamicContextKey, listActionRuns, getActionRun, getActionMeta, confirmActionRun, approveActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun,
+  type ActionMetaDto, type ActionRunDetailDto, type ActionRunDto, type ActionTab, type ActionCan,
 } from '@/api/dynamic';
+
+type ActionRecord = MockActionRecord & { typeId?: string; can?: ActionCan };
 
 /** 页面内的动作状态（模拟后台：确认、撤回、重新提交、对账都会改它并写执行记录） */
 const LIST = ACTIONS;
 /** 是否走真接口（开关 dynamic）；构建时确定 */
 const REAL_API = dynamicApi.isReal();
-/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
-const live = computed(() => REAL_API && !backend.down);
-const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
+const live = computed(() => REAL_API);
+const readFail = (e: unknown) => fail(e);
 const app = useAppStore();
 /** 当前用户：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
-const ME = REAL_API ? app.user.name : '王敏';
+const ME = computed(() => REAL_API ? app.user.name : '王敏');
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(40 + tick).padStart(2, '0')}:00`; };
 const TERMINAL: ActionStatus[] = ['成功', '已撤回', '已对账'];
@@ -65,7 +65,8 @@ const system = ref('全部');
 const status = ref('全部');
 const kw = ref('');
 watch(tab, () => { status.value = '全部'; pinned.value = undefined; });
-const pq = usePagedQuery({ defaultSize: 16, filters: [actionName, system, status, kw] });
+const pq = usePagedQuery({ defaultSize: 10, filters: [actionName, system, status, kw] });
+const listLoading = ref(false);
 
 /** 真接口状态：当前页、总数、页签计数、当前详情、动作元数据（动作 / 外部系统下拉、调用接口名） */
 const remote = reactive({
@@ -73,10 +74,10 @@ const remote = reactive({
   detail: null as ActionRecord | null, meta: null as ActionMetaDto | null,
 });
 const toRec = (a: ActionRunDto | ActionRunDetailDto): ActionRecord => ({ ...a, log: 'log' in a ? a.log : [] } as ActionRecord);
-const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+const fail = (e: unknown) => { if ((e as Error)?.name !== 'DynamicContextChanged') message.error(isApiError(e) ? e.message || e.code : String(e)); };
 const actionNames = computed<string[]>(() => (live.value ? remote.meta?.actionNames ?? [] : ACTION_NAMES));
 const actionSystems = computed<{ id: string; name: string }[]>(() => (live.value ? remote.meta?.actionSystems ?? [] : ACTION_SYSTEMS));
-const callOf = (name: string) => (live.value ? remote.meta?.actionMeta[name]?.call ?? '--' : ACTION_META[name as keyof typeof ACTION_META]?.call ?? '--');
+const callOf = (name: string, typeId?: string) => (live.value ? remote.meta?.actionMeta[typeId || name]?.call ?? '--' : ACTION_META[name as keyof typeof ACTION_META]?.call ?? '--');
 
 const rows = computed(() => {
   if (live.value) return remote.items;
@@ -91,7 +92,6 @@ const rows = computed(() => {
   // 对账页签：待对账的排在前面
   return t.key === 'unknown' ? [...list].sort((a, b) => Number(b.status === '结果未知') - Number(a.status === '结果未知')) : list;
 });
-const count = (key: string) => live.value ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.statuses.includes(a.status)).length;
 const paged = computed(() => (live.value ? { items: remote.items, total: remote.total } : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
 
 /** 刚处理过的动作即使离开当前页签也继续显示在右侧，避免详情突然换成别的动作 */
@@ -104,20 +104,22 @@ const pick = (a: Pick<ActionRecord, 'id'>) => { pinned.value = a.id; router.repl
 // ---- 真接口：取列表 / 详情 / 元数据 ----
 let listSeq = 0; let detailSeq = 0;
 async function loadList() {
-  const seq = ++listSeq;
+  const seq = ++listSeq, ctx = dynamicContextKey();
+  listLoading.value = true;
   try {
     const r = await listActionRuns({ tab: tab.value as ActionTab, status: status.value, action: actionName.value, sysId: system.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
-    if (seq !== listSeq) return;
+    if (seq !== listSeq || ctx !== dynamicContextKey()) return;
     remote.items = r.items.map(toRec); remote.total = r.total; remote.counts = r.counts;
-  } catch (e) { if (seq === listSeq) readFail(e); }
+  } catch (e) { if (seq === listSeq && ctx === dynamicContextKey()) { remote.items = []; remote.total = 0; readFail(e); } }
+  finally { if (seq === listSeq) listLoading.value = false; }
 }
 async function loadDetail(id = selectedId.value) {
-  const seq = ++detailSeq;
+  const seq = ++detailSeq, ctx = dynamicContextKey();
   if (!id) { remote.detail = null; return; }
   try {
     const d = await getActionRun(id);
-    if (seq === detailSeq) remote.detail = toRec(d);
-  } catch (e) { if (seq === detailSeq) { remote.detail = null; readFail(e); } }
+    if (seq === detailSeq && ctx === dynamicContextKey()) remote.detail = toRec(d);
+  } catch (e) { if (seq === detailSeq && ctx === dynamicContextKey()) { remote.detail = null; readFail(e); } }
 }
 /** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
 async function afterWrite(d?: ActionRunDetailDto) {
@@ -125,9 +127,13 @@ async function afterWrite(d?: ActionRunDetailDto) {
   await loadList();
 }
 if (live.value) {
-  watch([tab, actionName, system, status, kw, pq.page, pq.size], loadList, { immediate: true });
-  watch(selectedId, (id) => { loadDetail(id); }, { immediate: true });
-  getActionMeta().then((m) => { remote.meta = m; }, readFail);
+  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = null; pinned.value = undefined; }, { flush: 'sync' });
+  watch([dynamicContextKey, tab, actionName, system, status, kw, pq.page, pq.size], loadList, { immediate: true });
+  watch([dynamicContextKey, selectedId], () => { loadDetail(); }, { immediate: true });
+  watch(dynamicContextKey, async (ctx) => {
+    try { const m = await getActionMeta(); if (ctx === dynamicContextKey()) remote.meta = m; }
+    catch (e) { if (ctx === dynamicContextKey()) readFail(e); }
+  }, { immediate: true });
 }
 
 /** 状态点：待确认橙（需要关注）、失败红，其余灰；结果未知单独显示橙色问号 + “结果未知 · 待对账” */
@@ -142,7 +148,7 @@ const sourceText = (a: ActionRecord) =>
   : a.retryOf ? `重新提交 · ${a.retryOf}` : '手动';
 /** 规则暂存的动作由规则指定的确认人确认 / 撤回；其他人只能查看 */
 const confirmerOf = (a: ActionRecord) => a.source.confirmer ?? a.initiator;
-const notMine = (a: ActionRecord) => !!a.source.confirmer && a.source.confirmer !== ME;
+const notMine = (a: ActionRecord) => !!a.source.confirmer && a.source.confirmer !== ME.value;
 const notMineText = (a: ActionRecord) => `该动作由规则 ${a.source.ruleId} 暂存，指定确认人为 ${a.source.confirmer}，只有确认人可以确认提交或撤回`;
 const timeline = computed(() => (current.value?.log ?? []).map((l: ActionLog) => ({ time: l.desc ? `${l.time} · ${l.desc}` : l.time, text: l.text, status: l.status })));
 
@@ -159,8 +165,20 @@ const columns = [
 
 function push(a: ActionRecord, l: ActionLog) { a.log.push(l); }
 
+async function approve() {
+  const a = current.value;
+  if (!live.value || !a?.can?.approve) return;
+  const ok = await confirm.ask({ title: `审批 ${a.action}`, tag: '审批中', okText: '审批并执行',
+    target: `${kindLabel(a.objKind)} ${a.objLabel}`, fields: [{ label: '参数', value: a.params },
+      { label: '幂等键', value: a.idemKey }], impact: '审批后按已发布定义执行，外部动作进入持久执行队列。' });
+  if (!ok) return;
+  try { await afterWrite(await approveActionRun(a.id)); message.success('审批已处理'); }
+  catch (e) { fail(e); }
+}
+
 // 待确认 → 确认提交（写外部系统前的确认卡）
 async function submit() {
+  const ctx = dynamicContextKey();
   const a = current.value; if (!a || a.status !== '待确认') return;
   const ok = await confirm.ask({
     title: a.action, tag: '待确认', okText: '确认提交',
@@ -170,20 +188,20 @@ async function submit() {
       { label: '来源', value: a.source.type === '告警' ? `${a.source.alertId}（${a.source.ruleId} ${a.source.ruleVersion}）` : sourceText(a) },
       { label: '确认人', value: confirmerOf(a) },
       { label: '审批人', value: a.approver },
-      { label: '外部系统', value: `${a.system} · ${callOf(a.action)}` },
+      { label: '外部系统', value: `${a.system} · ${callOf(a.action, a.typeId)}` },
       { label: '幂等键', value: a.idemKey },
     ],
     blocked: notMine(a) ? notMineText(a) : undefined,
     impact: `确认后进入审批，审批通过后写回 ${a.system}；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时人工对账，不自动重试写入。`,
   });
-  if (!ok) return;
+  if (!ok || ctx !== dynamicContextKey()) return;
   pinned.value = a.id;
   if (REAL_API) {
-    try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(`已提交：${d.action}，等待 ${d.approver} 审批`); } catch (e) { fail(e); }
+    try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(d.status === '审批中' ? `已提交：${d.action}，等待 ${d.approver} 审批` : `已提交：${d.action}，${d.status}`); } catch (e) { fail(e); }
     return;
   }
   a.status = '审批中';
-  push(a, { time: now(), text: '确认提交', desc: `确认人 ${ME}` });
+  push(a, { time: now(), text: '确认提交', desc: `确认人 ${ME.value}` });
   push(a, { time: now(), text: '等待审批', desc: `审批人 ${a.approver}`, status: 'warn' });
   message.success(`已提交：${a.action}，等待 ${a.approver} 审批`);
 }
@@ -199,13 +217,14 @@ async function doWithdraw() {
     return;
   }
   a.status = '已撤回';
-  push(a, { time: now(), text: `撤回：${withdrawReason.value.trim()}`, desc: ME });
+  push(a, { time: now(), text: `撤回：${withdrawReason.value.trim()}`, desc: ME.value });
   withdrawOpen.value = false; withdrawReason.value = '';
   message.success(`已撤回 ${a.id}`);
 }
 
 // 失败 → 重新提交：生成新动作、新幂等键，原记录保留
 async function resubmit() {
+  const ctx = dynamicContextKey();
   const a = current.value; if (!a || a.status !== '失败' || a.retriedAs) return;
   const n = (a.idemKey.match(/-r(\d+)$/)?.[1] ?? '0');
   const newKey = `${a.idemKey.replace(/-r\d+$/, '')}-r${Number(n) + 1}`;
@@ -217,12 +236,12 @@ async function resubmit() {
     fields: [
       { label: '上次失败', value: a.failReason ?? '--' },
       { label: '参数', value: a.params },
-      { label: '外部系统', value: `${a.system} · ${callOf(a.action)}` },
+      { label: '外部系统', value: `${a.system} · ${callOf(a.action, a.typeId)}` },
       { label: '新幂等键', value: newKey },
     ],
     impact: `沿用原审批（${a.approver}），生成新动作${newId ? ` ${newId}` : ''} 并用新幂等键调用 ${a.system}；原动作 ${a.id} 保留为失败，便于追溯。`,
   });
-  if (!ok) return;
+  if (!ok || ctx !== dynamicContextKey()) return;
   if (REAL_API) {
     try {
       const r = await resubmitActionRun(a.id);
@@ -235,17 +254,17 @@ async function resubmit() {
   const t = now();
   const rec: ActionRecord = reactive({
     ...a, id: newId, idemKey: newKey, status: '执行中', submittedAt: t, extRef: null, failReason: undefined,
-    initiator: ME, retryOf: a.id, retriedAs: undefined, source: a.source.type === '告警' || a.source.type === '规则' ? { ...a.source, confirmer: undefined } : { type: '手动' },
+    initiator: ME.value, retryOf: a.id, retriedAs: undefined, source: a.source.type === '告警' || a.source.type === '规则' ? { ...a.source, confirmer: undefined } : { type: '手动' },
     log: [
-      { time: t, text: `重新提交自 ${a.id}（上次失败：${a.failReason ?? '--'}）`, desc: ME },
-      { time: t, text: `生成动作「${a.action}」· 动作类型 ${a.typeVersion}`, desc: `发起人 ${ME} · 幂等键 ${newKey}` },
+      { time: t, text: `重新提交自 ${a.id}（上次失败：${a.failReason ?? '--'}）`, desc: ME.value },
+      { time: t, text: `生成动作「${a.action}」· 动作类型 ${a.typeVersion}`, desc: `发起人 ${ME.value} · 幂等键 ${newKey}` },
       { time: t, text: `调用 ${a.system}：${ACTION_META[a.action].call}`, desc: `沿用原审批 ${a.approver}` },
       { time: t, text: `等待 ${a.system} 返回`, desc: waitingText(a.sysId), status: 'warn' },
     ],
   });
   LIST.unshift(rec);
   a.retriedAs = newId;
-  push(a, { time: t, text: `已重新提交为 ${newId}`, desc: `${ME} · 新幂等键 ${newKey}` });
+  push(a, { time: t, text: `已重新提交为 ${newId}`, desc: `${ME.value} · 新幂等键 ${newKey}` });
   pick({ id: newId });
   message.success(`已重新提交为 ${newId}`);
 }
@@ -268,14 +287,14 @@ async function doReconcile() {
     return;
   }
   if (reconAs.value === '仍无法确认') {
-    push(a, { time: now(), text: `对账：仍无法确认（${note}）`, desc: `${ME} · 保持结果未知，系统继续每 15 分钟按幂等键查询`, status: 'unknown' });
+    push(a, { time: now(), text: `对账：仍无法确认（${note}）`, desc: `${ME.value} · 保持结果未知，系统继续每 15 分钟按幂等键查询`, status: 'unknown' });
     message.info('已记录对账，仍为结果未知');
   } else {
     a.status = '已对账'; a.reconcile = reconAs.value;
     push(a, {
       time: now(),
       text: reconAs.value === '外部已成功' ? `对账：外部已成功（${note}）` : `对账：外部未执行，动作未生效（${note}）`,
-      desc: `${ME} · ${a.system} 外部单号 ${a.extRef ?? '--'}`,
+      desc: `${ME.value} · ${a.system} 外部单号 ${a.extRef ?? '--'}`,
     });
     message.success(`已对账：${reconAs.value}`);
   }
@@ -297,7 +316,7 @@ const terminalText = computed(() => {
     <div class="panel ac-list">
       <div class="panel-head">
         <a-radio-group v-model:value="tab" size="small" button-style="solid">
-          <a-radio-button v-for="t in TABS" :key="t.key" :value="t.key">{{ t.title }} {{ count(t.key) }}</a-radio-button>
+          <a-radio-button v-for="t in TABS" :key="t.key" :value="t.key">{{ t.title }}</a-radio-button>
         </a-radio-group>
         <div class="ac-filters">
           <a-select v-model:value="actionName" size="small" class="ac-w140"
@@ -310,7 +329,7 @@ const terminalText = computed(() => {
         </div>
       </div>
       <div class="ac-table paged-scroll">
-        <a-table :columns="columns" :data-source="paged.items" row-key="id" size="middle" :pagination="false"
+        <a-table :columns="columns" :data-source="paged.items" :loading="listLoading" row-key="id" size="middle" :pagination="false"
           :row-class-name="(r: ActionRecord) => (r.id === current?.id ? 'ac-row-active' : '')"
           :custom-row="(r: ActionRecord) => ({ onClick: () => pick(r) })">
           <template #bodyCell="{ column, record }">
@@ -387,7 +406,10 @@ const terminalText = computed(() => {
           <a-button type="primary" @click="submit">确认提交</a-button>
         </template>
 
-        <span v-else-if="current.status === '审批中'" class="t-14 c-3">等待 {{ current.approver }} 审批</span>
+        <template v-else-if="current.status === '审批中'">
+          <span class="t-14 c-3">等待 {{ current.approver }} 审批</span>
+          <a-button v-if="live && current.can?.approve" type="primary" @click="approve">审批并执行</a-button>
+        </template>
         <span v-else-if="current.status === '执行中'" class="t-14 c-3">等待 {{ current.system }} 返回，{{ waitingText(current.sysId) }}</span>
 
         <template v-else-if="current.status === '失败'">
@@ -423,7 +445,7 @@ const terminalText = computed(() => {
       <div class="ca-target t-14 c-2">作用对象：<span class="c-1">{{ kindLabel(current.objKind) }} {{ current.objLabel }}</span></div>
       <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px' }">
         <a-descriptions-item label="动作编号"><span class="num">{{ current.id }}</span></a-descriptions-item>
-        <a-descriptions-item label="外部系统"><span class="num">{{ current.system }} · {{ callOf(current.action) }}</span></a-descriptions-item>
+        <a-descriptions-item label="外部系统"><span class="num">{{ current.system }} · {{ callOf(current.action, current.typeId) }}</span></a-descriptions-item>
         <a-descriptions-item label="外部单号"><span class="num ac-nowrap">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
         <a-descriptions-item label="幂等键"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
       </a-descriptions>

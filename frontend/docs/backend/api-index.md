@@ -572,8 +572,10 @@
 |---|---|---|---|---|---|---|---|
 | GET | /quality-checks | `typeKey,kind,result,page,size` | `PageResult<QCheck>`（mock/quality.ts）+ `dataCutoff` | 页码 | 读 | | `quality.ts` `QUALITY_CHECKS`、`DATA_CUTOFF` |
 | GET | /quality-checks/{id}/runs | `page,size` | `PageResult<QRun>` | 页码 | 读 | | `quality.ts` `QUALITY_CHECKS`（`runs`） |
-| POST | /quality-checks | `{name,typeKey,kind,threshold,schedule}` | `QCheck` | — | 写 | | — |
-| POST | /quality-checks/{id}:run | — | `{jobId}` | — | 写 | 异步 | — |
+| POST | /quality-checks | `{name,typeKey,kind,threshold,schedule,crId?,lockVersion?}` | `{id,crId,lockVersion,status:'草稿'}` | — | 写 | 仅保存 CR，发布后生效 | — |
+| PUT | /quality-checks/{id} | 同新建字段，带 `crId?,lockVersion?` | `{id,crId,lockVersion,status:'草稿'}` | — | 写 | 仅保存 CR | — |
+| DELETE | /quality-checks/{id} | `{crId?,lockVersion?}` | `{id,crId,lockVersion,status:'草稿'}` | — | 写 | 发布后退休，运行历史保留；也可用 POST `/{id}:retire` | — |
+| POST | /quality-checks/{id}:run | — | `{jobId,completed,run}` | — | 写 | 只执行已发布、未退休定义 | — |
 | POST | /quality-checks:run-all | — | `{jobId, estimate}` | — | 写 | | — |
 | GET | /object-types/brief | — | `QObjType[]`（mock/quality.ts `Q_OBJECT_TYPES`） | — | 读 | 对象类型下拉；多个页面共用；**归 ontology**（`/api/ontology/v1`） | `quality.ts` `Q_OBJECT_TYPES` |
 
@@ -913,7 +915,7 @@
 | GET | /depts | — | `string[]`（`ADMIN_DEPTS`） | — | 读 | | `admin.ts` `ADMIN_DEPTS` |
 | POST | /users | `{name,account,dept,role,status}` | `AdminUser` | — | 写 | account 唯一 | — |
 | PUT | /users/{id} | `{name,dept,role,status}` | `AdminUser` | — | 写 | | — |
-| POST | /users:import-preview | 文件或行数据 | `{rows:{name,account,dept,role,error?}[]}` | — | 不落库 | 只解析和校验，不写库；文件格式按前端模板用 CSV（UTF-8 BOM）；是否也收 Excel【待定】 | — |
+| POST | /users:import-preview | 文件或行数据 | `{rows:{name,account,dept,role,error?}[]}` | — | 不落库 | 只解析和校验，不写库；支持 CSV（UTF-8 BOM）、行数据与 `{xlsxBase64}`（`.xlsx`）；三种输入互斥，最多 500 行，Excel 首表按模板表头解析且拒绝公式，详见 admin-users-api.md | — |
 | POST | /users:import | `{rows}` | `{imported:n}` | — | 写 | | — |
 | POST | /users/{id}:enable | — | `AdminUser` | — | 写 | | — |
 | POST | /users/{id}:disable | `{transferTo?}` | `AdminUser` | — | 写 | 有待办审批时 `transferTo` 必填【待定】 | — |
@@ -991,6 +993,8 @@
    - **行级范围编译 `to_sql`（已定，一期）**：只支持沿**已声明且列入白名单**的关系路径做**一跳**关联，编译成 `EXISTS` 子查询，值一律绑定参数，不拼字符串；多跳或未声明的路径在保存 API 密钥 / 角色时直接拒绝（`VALIDATION_FAILED`）。
 
 ### 4.5 模型与系统配置 `/admin/system/settings`
+
+**当前实现边界（2026-10-26）**：仅新增 `GET /settings/tenant`（settings·view）和 `PUT /settings/tenant`（settings·manage）租户基础信息扩展，不代表下表的全量 `/settings` 已实现。扩展保存 `{name<=40, shortName<=12, defaultOrg: SysOrg.code, lockVersion}`，读回 tenantId / industry / orgOptions / updatedAt；默认组织单改同样推进父租户版本，409 保留输入，保存和真实审计同事务。字段、错误及前端边界见 `admin-tenants-row-scope-api.md`。仅影响租户顶栏显示与无效组织选择的兜底，不改变用户归属、问数范围或导出抬头；时区、财年、日切、安全、通知及 LLM 消费者未接入，真模式不可编辑这些设置。
 
 1. **用途**：租户信息、大模型连接、通知渠道、安全策略。
 2. **操作流程**

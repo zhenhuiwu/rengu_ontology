@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 本体总览：六类资源的数量与健康度、待处理（变更单 + 数据质量失败）、对象关系缩略图、最近发布。
- * 数据全部取自已有 mock（links / actionEvent / metrics / objectProps / changes / quality / releases），本页不维护数据。
+ * static 真接口模式读取总览聚合、待处理、关系图和发布记录；演示模式保留既有 mock。
  * 颜色：灰=正常（含草稿、已发布、已通过待发布），橙=审核中 / 结果未知，红=失败；数量为 0 一律灰。
  * 写操作只有“发起变更”，预览 / 历史版本期间只读（useReadonly）。
  */
@@ -14,6 +14,8 @@ import GraphCanvas from '@/components/GraphCanvas.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
+import BuildGuideDrawer from './parts/BuildGuideDrawer.vue';
+import { createCR, staticContextKey, isStaticReal } from '@/api/static';
 import { useReadonly } from '@/composables/useReadonly';
 import { GRAY, STATUS } from '@/theme';
 import { LINK_OBJECTS, LINKS } from '@/mock/links';
@@ -25,8 +27,9 @@ import { useAppStore } from '@/stores/app';
 import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import { QUALITY_CHECKS, DATA_CUTOFF } from '@/mock/quality';
 import { RELEASES } from '@/api/releases';
-import { fallBackIfDown } from '@/api/fallback';
-import { fetchGraph, isOverviewReal, mockGraph, type OverviewGraph } from '@/api/overview';
+import { backend, fallBackIfDown } from '@/api/fallback';
+import { currentApiContext } from '@/api/http';
+import { fetchGraph, fetchOverview, fetchOverviewTodos, fetchOverviewReleases, isOverviewReal, mockGraph, type GraphEdge, type OverviewGraph, type OverviewSummary, type OverviewTodo } from '@/api/overview';
 
 const router = useRouter();
 const { readonly, reason } = useReadonly();
@@ -36,9 +39,14 @@ const CURRENT_VERSION = computed(() => app.ontologyVersion);
 const NEXT_VERSION = computed(() => app.ontologyNextVersion);
 /** 查看历史版本（?ver=）：不显示当前待处理，最近发布只列到所选版本；预览模式不算 */
 const histVer = computed(() => (app.viewMode === 'history' ? app.viewVersion : null));
+const live = computed(() => isOverviewReal() && !backend.down);
+const summary = ref<OverviewSummary | null>(null);
+const loadError = ref('');
+const recent = ref<(typeof RELEASES)[number][]>([]);
+const contextKey = () => { const { demoAs, previewAs, ver } = currentApiContext(); return JSON.stringify([demoAs, previewAs, ver]); };
 
 /* ── 资源卡片 ── */
-// [推断] 卡片计数 / 健康度仍读 mock：/ontology/graph 只给已发布对象和两端都已发布的关系，没有草稿数、孤儿记录、动作 / 事件 / 指标 / 维度统计
+// 演示模式的卡片；真接口模式由 /ontology/overview 统一返回。
 type Tone = 'normal' | 'attention' | 'failed';
 interface Health { n: number; text: string; tone: Tone }
 interface Card { key: string; title: string; count: number; unit: string; path: string; health: Health[] }
@@ -52,7 +60,7 @@ const events = EVENT_TYPES.flatMap((e) => eventsOf(e.id));
 const dimItems = computed(() => DIM_ITEMS.filter((d) => d.status !== '已驳回' && (!histVer.value || d.since <= histVer.value)));
 const openCrs = CHANGE_REQUESTS.filter((c) => c.status === '草稿' || c.status === '审核中' || c.status === '已通过');
 
-const cards = computed<Card[]>(() => [
+const mockCards = computed<Card[]>(() => [
   { key: 'obj', title: '对象类型', unit: '个', path: '/build/ontology/object-types', count: LINK_OBJECTS.filter((o) => !o.draft).length, health: [
     { n: LINK_OBJECTS.filter((o) => o.draft).length, text: '个草稿', tone: 'normal' },
     { n: failedByType.size, text: '个有质量检查失败', tone: 'failed' },
@@ -80,6 +88,8 @@ const cards = computed<Card[]>(() => [
     { n: dimItems.value.filter((d) => d.status === '草稿' || draftOf('dimension', d.id)).length, text: '个变更中', tone: 'normal' },
   ] },
 ]);
+const paths: Record<string, string> = { obj: 'object-types', link: 'link-types', action: 'action-types', event: 'event-types', metric: 'metrics', dim: 'dimensions' };
+const cards = computed<Card[]>(() => live.value ? (summary.value?.cards ?? []).map((c) => ({ ...c, path: `/build/ontology/${paths[c.key]}` })) : mockCards.value);
 const healthTip = (hs: Health[]) => hs.map((h) => `${h.n} ${h.text}`).join(' · ');
 const alerts = (hs: Health[]) => hs.filter((h) => h.n > 0 && h.tone !== 'normal');
 const toneCls = (h: Health) => (h.n === 0 || h.tone === 'normal' ? 'c-3' : h.tone === 'failed' ? 'tl-failed' : 'tl-attention');
@@ -87,7 +97,7 @@ const toneCls = (h: Health) => (h.n === 0 || h.tone === 'normal' ? 'c-3' : h.ton
 /* ── 待处理：未发布的变更单 + 失败的数据质量检查 ── */
 interface Todo { id: string; kind: '变更' | '数据质量'; title: string; who: string; status: string; tone: Tone; time: string; go: () => void }
 const CR_STATUS: Record<string, string> = { 草稿: '草稿', 审核中: '审核中', 已通过: '已通过 · 待发布' };
-const todos = computed<Todo[]>(() => [
+const mockTodos = computed<Todo[]>(() => [
   ...openCrs.map((c): Todo => ({
     id: c.id, kind: '变更', title: c.title, who: c.status === '审核中' ? `审核人 ${c.reviewer}` : c.owner,
     status: CR_STATUS[c.status], tone: c.status === '审核中' ? 'attention' : 'normal', time: c.updatedAt,
@@ -100,7 +110,7 @@ const todos = computed<Todo[]>(() => [
   })),
 ]);
 const filterKind = ref<'全部' | '变更' | '数据质量'>('全部');
-const shown = computed(() => todos.value.filter((t) => filterKind.value === '全部' || t.kind === filterKind.value));
+const shown = computed(() => mockTodos.value.filter((t) => filterKind.value === '全部' || t.kind === filterKind.value));
 const page = ref(1);
 const ROW_H = 44;
 const listEl = ref<HTMLElement>();
@@ -112,7 +122,24 @@ onMounted(() => {
 });
 onBeforeUnmount(() => ro?.disconnect());
 watch(filterKind, () => { page.value = 1; });
-const pageRows = computed(() => shown.value.slice((page.value - 1) * size.value, page.value * size.value));
+const realTodos = ref<{ items: OverviewTodo[]; total: number }>({ items: [], total: 0 });
+const todoError = ref('');
+const pageRows = computed<Todo[]>(() => live.value ? realTodos.value.items.map((t) => ({ ...t, go: () => router.push(t.kind === '数据质量' ? { path: '/build/data/quality', query: { result: '失败', check: t.id } } : { path: '/build/ontology/releases', query: { cr: t.id } }) })) : shown.value.slice((page.value - 1) * size.value, page.value * size.value));
+const todoTotal = computed(() => live.value ? realTodos.value.total : shown.value.length);
+let todoSeq = 0;
+async function loadTodos() {
+  const my = ++todoSeq;
+  todoError.value = '';
+  realTodos.value = { items: [], total: 0 };
+  if (!live.value || histVer.value) return;
+  try {
+    const r = await fetchOverviewTodos(filterKind.value, page.value, size.value);
+    if (my !== todoSeq) return;
+    if (r.page !== page.value) { page.value = r.page; return; }
+    realTodos.value = r;
+  } catch (e) { if (my === todoSeq && !fallBackIfDown(e)) todoError.value = `待处理加载失败：${String(e)}`; }
+}
+watch([contextKey, live, filterKind, page, size], loadTodos, { immediate: true });
 const stCls = (t: Tone) => (t === 'failed' ? 'tl-failed' : t === 'attention' ? 'tl-attention' : 'c-3');
 
 /* ── 对象关系缩略图（只读；点对象进入对象类型） ── */
@@ -125,63 +152,118 @@ const POS: Record<string, [number, number]> = {
 };
 const VW = 960; const VH = 540; const NW = 96; const NH = 32;
 // 节点 / 边：mock 模式读 LINK_OBJECTS / LINKS；真接口（开关 static）读 GET /ontology/graph（src/api/overview.ts），
-// 后台没起来时回退 mock 并提示一次（fallback.ts）；其他接口错误保留 mock 并 console.warn。坐标 POS 仍由前端写死。
-const graphData = ref<OverviewGraph>(mockGraph());
+// 图谱独立加载，不等待统计与发布列表；坐标 POS 仍由前端定义。
+const graphData = ref<OverviewGraph>(isOverviewReal() ? { nodes: [], edges: [] } : mockGraph());
 const nodeCount = computed(() => graphData.value.nodes.length);
-const edgeCount = computed(() => graphData.value.edges.filter((l) => l.to && POS[l.from] && POS[l.to]).length);
+const edgeCount = computed(() => {
+  const ids = new Set(graphData.value.nodes.map((n) => n.id));
+  return graphData.value.edges.filter((l) => ids.has(l.from) && ids.has(l.to)).length;
+});
 let graphRef: Graph | null = null;
+let overviewSeq = 0;
 async function loadGraph() {
-  if (!isOverviewReal()) return;
-  try {
-    graphData.value = await fetchGraph();
-  } catch (e) {
-    if (!fallBackIfDown(e)) console.warn('[api] /ontology/graph 加载失败，保留演示数据', e);
-    graphData.value = mockGraph();
-  }
-  if (graphRef) { graphRef.clearCells(); addCells(graphRef); }
+  const my = ++overviewSeq;
+  const key = contextKey();
+  summary.value = null; recent.value = []; loadError.value = '';
+  graphData.value = live.value ? { nodes: [], edges: [] } : mockGraph();
+  if (graphRef) graphRef.clearCells();
+  if (!live.value) { if (graphRef) addCells(graphRef); return; }
+  const valid = () => my === overviewSeq && key === contextKey();
+  const failed = (e: unknown) => {
+    if (valid() && !fallBackIfDown(e)) loadError.value = `本体总览加载失败：${String(e)}`;
+  };
+  await Promise.allSettled([
+    fetchGraph().then((g) => {
+      if (!valid()) return;
+      graphData.value = g;
+      if (graphRef) { graphRef.clearCells(); addCells(graphRef); }
+    }).catch(failed),
+    fetchOverview().then((s) => { if (valid()) summary.value = s; }).catch(failed),
+    fetchOverviewReleases().then((r) => { if (valid()) recent.value = r.items; }).catch(failed),
+  ]);
 }
-loadGraph();
-watch(() => app.viewVersion, () => { loadGraph(); });
-onBeforeUnmount(() => { graphRef = null; });
+watch([contextKey, live], loadGraph, { immediate: true });
+onBeforeUnmount(() => { ++overviewSeq; graphRef = null; });
 function draw(g: Graph) {
   graphRef = g;
   (g.options as unknown as { interacting: boolean }).interacting = false;
   addCells(g);
   g.on('node:click', ({ node }) => router.push({ path: '/build/ontology/object-types', query: { type: node.id as string } }));
+  g.on('edge:click', ({ edge }) => router.push({ path: '/build/ontology/link-types', query: { link: String(edge.id) } }));
   g.on('resize', () => { g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent(); });
 }
 /** 画节点和边（首次 @ready 时画；真接口数据到了 / 切换版本后清空重画），画完适配视图 */
 function addCells(g: Graph) {
   const { nodes, edges } = graphData.value;
-  nodes.forEach((o) => {
-    const [fx, fy] = POS[o.id] ?? [0.5, 0.5];
-    const failed = failedByType.has(o.id);
-    g.addNode({
-      id: o.id, shape: 'rect', x: fx * VW - NW / 2, y: fy * VH - NH / 2, width: NW, height: NH, label: o.name,
-      attrs: {
-        body: { fill: GRAY.g1, stroke: failed ? STATUS.error : o.draft ? GRAY.g7 : GRAY.g6, strokeWidth: 1, strokeDasharray: o.draft ? '4 3' : '', rx: 4, ry: 4, cursor: 'pointer' },
-        label: { fill: o.draft ? GRAY.g8 : GRAY.g10, fontSize: 12, cursor: 'pointer' },
-      },
+  const positions = new Map<string, { x: number; y: number }>();
+  let extra = 0;
+  for (const node of nodes) {
+    let position = POS[node.id];
+    if (!position) {
+      position = [1.12 + Math.floor(extra / 5) * 0.2, 0.1 + (extra % 5) * 0.18];
+      extra++;
+    }
+    const [x, y] = position;
+    positions.set(node.id, { x: x * VW, y: y * VH });
+  }
+  g.batchUpdate('overview', () => {
+    nodes.forEach((o) => {
+      const p = positions.get(o.id)!;
+      const failed = !live.value && failedByType.has(o.id);
+      g.addNode({
+        id: o.id, shape: 'rect', x: p.x - NW / 2, y: p.y - NH / 2, width: NW, height: NH, label: o.name,
+        attrs: {
+          body: { fill: GRAY.g1, stroke: failed ? STATUS.error : o.draft ? GRAY.g7 : GRAY.g6, strokeWidth: 1, strokeDasharray: o.draft ? '4 3' : '', rx: 4, ry: 4, cursor: 'pointer' },
+          label: { fill: o.draft ? GRAY.g8 : GRAY.g10, fontSize: 12, cursor: 'pointer' },
+        },
+      });
+    });
+    const pairs = new Map<string, GraphEdge[]>();
+    for (const edge of edges) {
+      if (!positions.has(edge.from) || !positions.has(edge.to)) continue;
+      const key = [edge.from, edge.to].sort().join('|');
+      const group = pairs.get(key) ?? [];
+      group.push(edge); pairs.set(key, group);
+    }
+    edges.forEach((l) => {
+      const a = positions.get(l.from), b = positions.get(l.to);
+      if (!a || !b) return;
+      const label = l.name || l.id;
+      const group = pairs.get([l.from, l.to].sort().join('|'))!;
+      const index = group.indexOf(l);
+      const offset = (index - (group.length - 1) / 2) * 80 * (l.from < l.to ? 1 : -1);
+      const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const self = l.from === l.to;
+      const vertices = self
+        ? [{ x: a.x - 48, y: a.y - 64 - index * 24 }, { x: a.x + 48, y: a.y - 64 - index * 24 }]
+        : offset ? [{ x: (a.x + b.x) / 2 - ((b.y - a.y) / length) * offset, y: (a.y + b.y) / 2 + ((b.x - a.x) / length) * offset }] : [];
+      let labelPosition = group.length > 1 ? 0.4 + index * 0.2 / (group.length - 1) : 0.5;
+      if (!vertices.length) {
+        labelPosition = [0.5, 0.3, 0.7, 0.2, 0.8].find((t) => [...positions.values()].every((p) =>
+          Math.abs(a.x + (b.x - a.x) * t - p.x) > (NW + label.length * 12 + 8) / 2
+          || Math.abs(a.y + (b.y - a.y) * t - p.y) > (NH + 20) / 2)) ?? 0.5;
+      }
+      g.addEdge({
+        id: l.id,
+        source: self ? { cell: l.from, anchor: { name: 'top', args: { dx: -24 } } } : l.from,
+        target: self ? { cell: l.to, anchor: { name: 'top', args: { dx: 24 } } } : l.to,
+        vertices, connector: { name: 'smooth' }, zIndex: 0,
+        attrs: { line: { stroke: GRAY.g7, strokeWidth: 1, strokeDasharray: l.status === '已发布' ? '' : '4 3', targetMarker: { name: 'block', width: 7, height: 5 }, cursor: 'pointer' } },
+        labels: [{ position: labelPosition, attrs: { label: { text: label, fontSize: 12, fill: GRAY.g9, cursor: 'pointer' }, body: { fill: GRAY.g2, stroke: 'none', rx: 2, ry: 2, cursor: 'pointer' } } }],
+      });
     });
   });
-  const seen = new Set<string>();
-  edges.forEach((l) => {
-    if (!l.to || !POS[l.from] || !POS[l.to] || l.from === l.to) return;
-    const k = [l.from, l.to].sort().join('|');
-    if (seen.has(k)) return;
-    seen.add(k);
-    g.addEdge({
-      source: l.from, target: l.to,
-      attrs: { line: { stroke: GRAY.g7, strokeWidth: 1, strokeDasharray: l.status === '已发布' ? '' : '4 3', targetMarker: null } },
-    });
+  if (g.getNodes().length) requestAnimationFrame(() => {
+    if (graphRef !== g) return;
+    g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent();
   });
-  if (g.getNodes().length) requestAnimationFrame(() => { g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent(); });
 }
 
 /* ── 最近发布 ── */
 const releases = computed(() => {
-  const i = histVer.value ? RELEASES.findIndex((r) => r.ver === histVer.value) : 0;
-  return RELEASES.slice(Math.max(0, i));
+  const list = live.value ? recent.value : RELEASES;
+  const i = histVer.value ? list.findIndex((r) => r.ver === histVer.value) : 0;
+  return histVer.value && i < 0 ? [] : list.slice(Math.max(0, i));
 });
 const crOf = (ver: string) => CHANGE_REQUESTS.find((c) => c.release === ver)?.id;
 const openRelease = (ver: string) => {
@@ -191,8 +273,19 @@ const openRelease = (ver: string) => {
 
 /* ── 发起变更 ── */
 const changeOpen = ref(false);
+const guideOpen = ref(false);
 const dv = useDraftView('object', () => '');
-function start(opts: { join?: string; title?: string }) {
+async function start(opts: { join?: string; title?: string; desc?: string }) {
+  if (readonly.value) return;
+  if (isStaticReal()) {
+    const key = staticContextKey();
+    try {
+      const id = opts.join ?? (await createCR({ title: opts.title || '未命名变更', reason: opts.desc })).id;
+      if (key !== staticContextKey()) return;
+      await router.push({ path: '/build/ontology/releases', query: { cr: id } });
+    } catch (e) { message.error(e instanceof Error ? e.message : String(e)); }
+    return;
+  }
   if (opts.join) { router.push({ path: '/build/ontology/releases', query: { cr: opts.join } }); return; }
   // 总览没有具体对象：只建单（不切草稿视图），登记到变更与发布的列表里，再跳过去选中新单
   const id = dv.start({ title: opts.title, target: 'ontology' });
@@ -210,12 +303,16 @@ function start(opts: { join?: string; title?: string }) {
 <template>
   <Teleport defer to="#page-extra">
     <a-space>
-      <span class="t-12 c-3">当前版本 <span class="num">{{ CURRENT_VERSION }}</span> · 数据截至 <span class="num">{{ DATA_CUTOFF }}</span></span>
+      <span class="t-12 c-3">当前版本 <span class="num">{{ CURRENT_VERSION }}</span> · {{ live ? '统计时间' : '数据截至' }} <span class="num">{{ live ? summary?.dataAsOf ?? '—' : DATA_CUTOFF }}</span></span>
+      <a-button @click="guideOpen = true">构建引导</a-button>
       <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="changeOpen = true">发起变更</a-button></a-tooltip>
     </a-space>
   </Teleport>
 
   <div class="oo">
+    <a-alert v-if="loadError || todoError" type="error" :message="loadError || todoError" show-icon>
+      <template #action><a-button size="small" @click="loadGraph(); loadTodos()">重试</a-button></template>
+    </a-alert>
     <div class="oo-cards">
       <div v-for="c in cards" :key="c.key" class="panel oo-card" role="link" @click="router.push(c.path)">
         <div class="oo-card-top"><span class="t-14 c-2">{{ c.title }}<InfoTip :text="healthTip(c.health)" /></span><RightOutlined class="t-12 c-3" /></div>
@@ -234,9 +331,9 @@ function start(opts: { join?: string; title?: string }) {
             <span>{{ nodeCount }} 个对象 · {{ edgeCount }} 条关系</span>
             <span><i class="lg lg-solid" />已发布</span>
             <span><i class="lg lg-dash" />草稿</span>
-            <span><i class="lg lg-fail" />数据质量失败</span>
+            <span v-if="!live"><i class="lg lg-fail" />数据质量失败</span>
           </span>
-          <InfoTip text="点击对象查看对象类型；虚线为草稿，红框为数据质量检查失败" />
+          <InfoTip :text="live ? '点击对象或关系查看定义' : '点击对象查看对象类型；虚线为草稿，红框为数据质量检查失败'" />
         </div>
         <div class="oo-canvas"><GraphCanvas @ready="draw" /></div>
       </div>
@@ -249,6 +346,7 @@ function start(opts: { join?: string; title?: string }) {
           </div>
           <div v-if="histVer" class="oo-hist"><a-empty :image="Empty.PRESENTED_IMAGE_SIMPLE" description="查看历史版本时不显示待处理" /></div>
           <div v-show="!histVer" ref="listEl" class="oo-list">
+            <a-empty v-if="live && !pageRows.length" :image="Empty.PRESENTED_IMAGE_SIMPLE" :description="filterKind === '数据质量' ? '暂无待处理的质量检查' : '暂无待处理事项'" />
             <div v-for="t in pageRows" :key="t.id" class="oo-row" role="link" @click="t.go()">
               <span class="t-12 c-2 oo-kind">{{ t.kind }}</span>
               <span class="t-14 c-1 oo-ell oo-row-main" :title="`${t.id}　${t.title}`"><span class="num c-2">{{ t.id }}</span>　{{ t.title }}</span>
@@ -257,7 +355,7 @@ function start(opts: { join?: string; title?: string }) {
               <span class="t-12 oo-st" :class="stCls(t.tone)"><i class="oo-dot" />{{ t.status }}</span>
             </div>
           </div>
-          <AppPagination v-if="!histVer" v-model:page="page" variant="simple" :total="shown.length" :size="size" unit="项" class="oo-pager" />
+          <AppPagination v-if="!histVer" v-model:page="page" variant="simple" :total="todoTotal" :size="size" unit="项" class="oo-pager" />
         </div>
 
         <div class="panel oo-rel">
@@ -276,6 +374,7 @@ function start(opts: { join?: string; title?: string }) {
     </div>
   </div>
 
+  <BuildGuideDrawer v-model:open="guideOpen" />
   <StartChangeModal v-model:open="changeOpen" target-name="本体（可在草稿中添加任意对象、关系、指标）" title-placeholder="例如：门店新增“业态”枚举值" @ok="start" />
 </template>
 

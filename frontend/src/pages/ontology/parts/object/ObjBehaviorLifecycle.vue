@@ -9,8 +9,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 数据：开关 dynamic 切到真接口（dynamicApi.isReal()）时状态机 / 非法迁移 / 状态变化来自后台 object-types/{id}/lifecycle*，
  * 草稿改动每次改完整份 PUT …/lifecycle/draft（键 = 变更单:对象类型）；否则用 mock/lifecycle（不变）。
  */
-import { computed, reactive, ref, shallowRef, watch, nextTick } from 'vue';
-import { backend, fallBackIfDown } from '@/api/fallback';
+import { computed, reactive, ref, shallowRef, watch, nextTick, onScopeDispose } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
 import type { Cell, Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
@@ -29,13 +28,13 @@ import {
   LC_DRAFT_EDITS, OBJ_TYPE_KIND, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
 } from '@/mock/lifecycle';
-import { actionApi, actionTypes, eventTypes, loadSnapshot } from '@/api/action';
+import { actionApi, actionTypes, eventTypes } from '@/api/action';
 import { message } from 'ant-design-vue';
-import { isApiError } from '@/api/http';
+import { currentApiContext, isApiError, type PageResult } from '@/api/http';
 import {
   dynamicApi, getLifecycle, listLifecycleChanges, listLifecycleIllegal, saveLifecycleDraft, crErrText, type LifecycleDto,
 } from '@/api/dynamic';
-import { OBJECT_TYPE_LIST, isStaticReal, loadStatic } from '@/api/static';
+import { OBJECT_TYPE_LIST, isStaticReal } from '@/api/static';
 import type { LcChange, LcIllegal } from '@/mock/lifecycle';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
@@ -45,19 +44,20 @@ const app = useAppStore();
 const confirm = useConfirmStore();
 const { draft, isDraft, editTip, readonly: histRo, reason } = useDraftView('object', () => props.objectId);
 
-const editable = computed(() => !props.readonly && isDraft.value);
+const editable = computed(() => !props.readonly && isDraft.value && (!REAL_API || (!!remote.lc && !lcLoading.value && !loadError.value)));
 const roTip = computed(() => (histRo.value ? reason.value : editTip.value || '只读'));
 /* 对象类型目录：static 开关切到真接口时取本体对象类型（GET /object-types），否则用 mock 的对象类型表 */
-const otTick = ref(0);
-if (isStaticReal()) loadStatic(['objects']).then(() => { otTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 对象类型目录加载失败', e); });
-const objType = computed(() => { void otTick.value; return OBJECT_TYPE_LIST.find((o) => o.id === props.objectId); });
-const objName = computed(() => objType.value?.name ?? OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
+const objType = computed(() => OBJECT_TYPE_LIST.find((o) => o.id === props.objectId));
+const objName = computed(() => objType.value?.name ?? (isStaticReal() ? props.objectId : OBJ_TYPE_NAME[props.objectId] ?? props.objectId));
 
 /* ───── 生效版本（历史版本取当时发布时间） ───── */
 const histAt = computed(() => (histRo.value && app.viewVersion ? releaseByVer(app.viewVersion)?.publishedAt ?? null : null));
 const REAL_API = dynamicApi.isReal();
-/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
-const live = computed(() => REAL_API && !backend.down);
+const live = computed(() => REAL_API);
+let mounted = true;
+onScopeDispose(() => { mounted = false; });
+const lcLoading = ref(false);
+const loadError = ref('');
 const remote = reactive({
   lc: null as LifecycleDto | null, key: '', illegal: [] as LcIllegal[],
   changes: { items: [] as LcChange[], total: 0 }, edits: {} as Record<string, LcDraft>,
@@ -72,10 +72,13 @@ const edits = computed<LcDraft>(() => (isDraft.value && dkey.value ? (EDIT_STORE
 async function persist() {
   if (!REAL_API || !isDraft.value || !draft.value) return;
   const cr = draft.value.id; const key = dkey.value;
+  const context = lcKey.value;
+  const requestSeq = lcSeq;
   try {
     const r = await saveLifecycleDraft(props.objectId, cr, edits.value);
-    remote.edits[key] = r.edits;
+    if (mounted && requestSeq === lcSeq && context === lcKey.value) remote.edits[key] = r.edits;
   } catch (e) {
+    if (!mounted || requestSeq !== lcSeq || context !== lcKey.value) return;
     message.error(isApiError(e) ? crErrText(e) : String(e));
     await loadLc();
   }
@@ -236,34 +239,45 @@ const view = computed({
   set: (v: string) => router.replace({ query: { ...route.query, lcv: v === 'changes' ? 'changes' : undefined, lcpage: undefined } }),
 });
 const onlyIllegal = ref(false);
-const pq = usePagedQuery({ defaultSize: 6, prefix: 'lc', filters: [() => props.objectId, onlyIllegal] });
+const pq = usePagedQuery({ defaultSize: 10, prefix: 'lc', filters: [() => props.objectId, onlyIllegal] });
 const changes = computed(() => (histAt.value ? [] : changesOf(props.objectId)).filter((c) => !onlyIllegal.value || !c.trId));
 const changePage = computed(() => (live.value ? remote.changes : paginate(changes.value, { page: pq.page.value, size: pq.size.value })));
 
 /* ───── 真接口加载 ───── */
-async function guard<T>(p: Promise<T>, apply: (v: T) => void) {
-  try { apply(await p); } catch (e) { if (!fallBackIfDown(e)) message.error(isApiError(e) ? e.message : String(e)); }
+async function guard<T>(p: Promise<T>, apply: (v: T) => void, current: () => boolean) {
+  try { const value = await p; if (current()) apply(value); }
+  catch (e) { if (current()) { loadError.value = isApiError(e) ? e.message : String(e); message.error(loadError.value); } }
 }
-const lcKey = computed(() => `${props.objectId}|${app.viewVersion ?? ''}|${isDraft.value ? draft.value?.id ?? '' : ''}`);
+const lcKey = computed(() => JSON.stringify([props.objectId, currentApiContext(), isDraft.value ? draft.value?.id ?? '' : '']));
+let lcSeq = 0;
 async function loadLc() {
+  const my = ++lcSeq;
   const k = lcKey.value; const cr = isDraft.value ? draft.value?.id : undefined;
+  const current = () => mounted && my === lcSeq && k === lcKey.value;
+  lcLoading.value = true; loadError.value = '';
+  remote.lc = null; remote.illegal = []; remote.changes = { items: [], total: 0 }; remote.edits = {};
+  if (!mounted || !props.objectId) { lcLoading.value = false; return; }
   await guard(getLifecycle(props.objectId, cr), (r) => {
-    if (k !== lcKey.value) return;
     remote.lc = r; remote.key = k;
     if (cr && r.draft) remote.edits[`${cr}:${props.objectId}`] = r.draft.edits;
-  });
-  await guard(listLifecycleIllegal(props.objectId), (r) => { if (k === lcKey.value) remote.illegal = r; });
+  }, current);
+  if (!current()) return;
+  await guard(listLifecycleIllegal(props.objectId), (r) => { remote.illegal = r; }, current);
+  if (current()) lcLoading.value = false;
 }
+let changesSeq = 0;
 async function loadChanges() {
-  if (view.value !== 'changes') return;
+  const my = ++changesSeq;
+  if (!mounted || !props.objectId || view.value !== 'changes') return;
   const k = `${lcKey.value}|${onlyIllegal.value}|${pq.page.value}|${pq.size.value}`;
   await guard(listLifecycleChanges(props.objectId, onlyIllegal.value, pq.page.value, pq.size.value), (r) => {
-    if (k === `${lcKey.value}|${onlyIllegal.value}|${pq.page.value}|${pq.size.value}`) remote.changes = r;
-  });
+    remote.changes = r;
+    if (r.page && r.page !== pq.page.value) pq.page.value = r.page;
+  }, () => mounted && my === changesSeq && k === `${lcKey.value}|${onlyIllegal.value}|${pq.page.value}|${pq.size.value}`);
 }
 if (live.value) {
-  watch(lcKey, () => { remote.lc = null; loadLc(); }, { immediate: true });
-  watch(() => [lcKey.value, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true });
+  watch(lcKey, loadLc, { immediate: true, flush: 'sync' });
+  watch(() => [lcKey.value, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true, flush: 'sync' });
 }
 /** 状态变化里的对象可点开：对象类型在本体里（真接口）或 mock 对象类型表里、且注册表有这个 kind 的解析器，就按对象类型 id 引用 */
 const refKind = computed(() => ((objType.value || OBJ_TYPE_KIND[props.objectId]) && canResolve(props.objectId) ? props.objectId : ''));
@@ -284,10 +298,23 @@ const chgCols = computed(() => [
   { title: '来源', key: 'by', width: 240 },
 ]);
 /* 动作 / 事件类型目录：action 开关切到真接口时读其接口（只读，src/api/action.ts），否则读 mock */
-const catTick = ref(0);
-if (actionApi.isReal()) loadSnapshot().then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 动作 / 事件类型目录加载失败', e); });
-const actionTypeById = (id: string) => { void catTick.value; return actionTypes().find((a) => a.id === id); };
-const EVENT_NAME = computed(() => { void catTick.value; return Object.fromEntries(eventTypes().map((e) => [e.id, e.name])); });
+const remoteCatalog = ref<{ actions: { id: string; name: string }[]; events: { id: string; name: string }[] }>({ actions: [], events: [] });
+let catalogSeq = 0;
+if (actionApi.isReal()) watch(lcKey, async (key) => {
+  const my = ++catalogSeq;
+  remoteCatalog.value = { actions: [], events: [] };
+  async function list(path: string) {
+    const rows: { id: string; name: string }[] = [];
+    for (let page = 1; ; page++) {
+      const r = await actionApi.get<PageResult<{ id: string; name: string }>>(path, { query: { page, size: 200 } });
+      rows.push(...r.items);
+      if (!r.items.length || rows.length >= r.total) return rows;
+    }
+  }
+  await guard(Promise.all([list('/action-types'), list('/event-types')]), ([actions, events]) => { remoteCatalog.value = { actions, events }; }, () => mounted && my === catalogSeq && key === lcKey.value);
+}, { immediate: true, flush: 'sync' });
+const actionTypeById = (id: string) => (REAL_API ? remoteCatalog.value.actions : actionTypes()).find((a) => a.id === id);
+const EVENT_NAME = computed(() => Object.fromEntries((REAL_API ? remoteCatalog.value.events : eventTypes()).map((e) => [e.id, e.name])));
 const byLink = (t: LcTransition) => (t.actionId ? { path: '/build/ontology/action-types', query: { action: t.actionId } }
   : t.eventId ? { path: '/build/ontology/event-types', query: { event: t.eventId } } : null);
 const byTitle = (t: LcTransition) => (t.actionId ? `动作类型 ${actionTypeById(t.actionId)?.name ?? t.actionId}` : t.eventId ? `事件类型 ${EVENT_NAME.value[t.eventId] ?? t.eventId}` : '');
@@ -393,6 +420,8 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
 
 <template>
   <div class="ot-body lc">
+    <a-alert v-if="loadError" type="error" show-icon :message="loadError"><template #action><a-button size="small" @click="loadLc">重试</a-button></template></a-alert>
+    <a-spin v-if="lcLoading" tip="正在读取生命周期…" />
     <template v-if="base">
       <div class="lc-bar">
         <span class="t-14 c-1 fw-600">{{ objName }}生命周期</span>
@@ -413,7 +442,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
           <div class="lc-graph"><GraphCanvas @ready="onReady" /></div>
           <div class="lc-list">
             <div class="lc-list-bar">
-              <a-segmented v-model:value="view" size="small" :options="[{ label: `迁移定义 ${transitions.length}`, value: 'defs' }, { label: '近期状态变化', value: 'changes' }]" />
+              <a-segmented v-model:value="view" size="small" :options="[{ label: '迁移定义', value: 'defs' }, { label: '近期状态变化', value: 'changes' }]" />
               <span class="lc-sp" />
               <a-checkbox v-if="view === 'changes' && base.ruleId" v-model:checked="onlyIllegal"><span class="t-14">只看非法迁移</span></a-checkbox>
             </div>
@@ -575,7 +604,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
       </div>
     </template>
 
-    <div v-else class="lc-empty">
+    <div v-else-if="!lcLoading && !loadError" class="lc-empty">
       <div class="t-14 c-2">{{ objName }}没有状态属性，未定义生命周期。</div>
       <div class="t-12 c-3">需要跟踪状态变化时，先在属性里加状态字段，再在草稿里定义状态和迁移。</div>
     </div>

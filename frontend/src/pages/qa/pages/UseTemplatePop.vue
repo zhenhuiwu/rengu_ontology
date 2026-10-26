@@ -1,18 +1,21 @@
 <script setup lang="ts">
 /** “用此模板新建”气泡：页面名称、范围、口径、刷新计划；确定后在“我的页面”新增一页并打开它 */
 import { ref, watch } from 'vue';
+import { qaReal } from '@/api/qa';
 import { PAGE_SCOPES, type QaTemplate, type TplCreate } from '@/mock/qa-pages';
 
 const props = defineProps<{ tpl: QaTemplate; disabled?: boolean; reason?: string; size?: 'small' | 'middle'; primary?: boolean }>();
 const emit = defineEmits<{ create: [TplCreate] }>();
+const real = qaReal();
 const open = ref(false);
 const name = ref(''); const scope = ref('华东大区'); const caliber = ref('不含税'); const refresh = ref('每天 08:00');
-watch(open, (o) => { if (o) name.value = `${props.tpl.name}（华东）`; });
-function ok() { emit('create', { tpl: props.tpl, name: name.value.trim(), scope: scope.value, caliber: caliber.value, refresh: refresh.value }); open.value = false; }
+watch(open, (o) => { if (real) { open.value = false; return; } if (o) name.value = `${props.tpl.name}（华东）`; });
+function ok() { if (real || props.disabled || !name.value.trim()) return; emit('create', { tpl: props.tpl, name: name.value.trim(), scope: scope.value, caliber: caliber.value, refresh: refresh.value }); open.value = false; }
 </script>
 
 <template>
-  <a-popover v-model:open="open" trigger="click" placement="leftTop" :title="`用此模板新建 · ${tpl.name}`">
+  <a-tooltip v-if="real" title="模板重算执行器尚未接入"><span><a-button :size="size ?? 'small'" :type="primary ? 'primary' : 'link'" disabled>用此模板新建</a-button></span></a-tooltip>
+  <a-popover v-else v-model:open="open" trigger="click" placement="leftTop" :title="`用此模板新建 · ${tpl.name}`">
     <template #content>
       <div class="ut">
         <div class="ut-f"><span class="c-3 ut-l">页面名称</span><a-input v-model:value="name" :maxlength="30" /></div>

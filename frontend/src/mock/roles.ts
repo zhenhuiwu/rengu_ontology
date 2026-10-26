@@ -100,12 +100,12 @@ export interface EffectiveAccess {
   objs: EffectiveObj[];                                        // 只含能查看的对象类型
   areasIn: string[];
 }
-export function effectiveAccess(u: AdminUser, roles: Role[] = ROLES, membersOf: (r: Role) => AdminUser[] = roleMembers): EffectiveAccess {
+export function effectiveAccess(u: AdminUser, roles: Role[] = ROLES, membersOf: (r: Role) => AdminUser[] = roleMembers, permObjects = PERM_OBJECTS): EffectiveAccess {
   const rs = roles.filter((r) => membersOf(r).some((m) => m.id === u.id));
   const rank = { none: 0, view: 1, manage: 2 } as const;
   // 功能：各角色取最高级别
   const func = FUNC_PAGES.map((p) => ({ ...p, lv: rs.reduce<FuncLevel>((m, r) => (rank[r.func[p.key]] > rank[m] ? r.func[p.key] : m), 'none') })).filter((p) => p.lv !== 'none');
-  const objs = PERM_OBJECTS.map((o) => {
+  const objs = permObjects.map((o) => {
     // 业务查看类角色（defaultDeny）对没配范围的对象不授予可见
     const granted = rs.filter((r) => r.objs.find((x) => x.objType === o.name)?.view && !(r.defaultDeny && !r.scopes.some((s) => s.objType === o.name)));
     if (!granted.length) return null;

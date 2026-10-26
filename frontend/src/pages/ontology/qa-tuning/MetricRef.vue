@@ -2,10 +2,10 @@
 /** 指标 + 版本；公共 METRICS 里有的指标点开指标口径抽屉，其余只显示文字（复购客户销售额、退款率尚未进公共 mock） */
 import { computed } from 'vue';
 import { useDrawer } from '@/composables/useDrawer';
-import { T_METRICS } from '@/mock/qa-tuning';
+import { metricOf } from './catalog';
 
 const props = defineProps<{ k: string }>();
-const m = computed(() => T_METRICS[props.k]);
+const m = computed(() => metricOf(props.k));
 const drawer = useDrawer();
 </script>
 

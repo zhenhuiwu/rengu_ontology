@@ -4,11 +4,11 @@
  * 左侧系统列表，右侧配置（地址、认证、幂等、超时 / 重试）+ 最近调用（simple 分页，按结果筛选）。
  * 调用结果颜色按时间线规则：成功 灰、结果未知 橙、失败 红。点“详情”打开调用抽屉（?call=），结果未知不在本页重试：写回调用到动作中心对账（?tab=unknown&act=），通知类不支持幂等的人工核对。
  * 关联动作：按动作类型的 sysId（mock/actionEvent.ts）过滤得到，点动作名进动作类型；不做写回的集成（短信、企业微信、顺丰、美团）显示用途。
- * 新建 / 编辑系统：配置抽屉（?edit=EXT-WMS / ?edit=new），保存前确认；测试调用：确认后发一次连通性请求，结果记入最近调用。
+ * 新建 / 编辑系统：配置抽屉（?edit=EXT-WMS / ?edit=new），保存前确认；测试执行器未配置，入口明确置灰。
  * URL：?sys=EXT-WMS&result=失败&call=WMS-00012&edit=EXT-WMS
  * 真接口（开关 integration，src/api/integration.ts）：系统列表、关联动作、新建 / 编辑、测试调用、
  * 最近调用（筛选 / 分页 / 详情）、人工核对都走后台（writeback_call 表，见 action-event-api.md §3.1）。
- * 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次，之后的读取不再发请求；写操作照旧调接口、照旧报错。
+ * 真实读取失败由共享错误处理提示，不切演示数据；写操作失败保留当前数据。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -22,9 +22,8 @@ import { paginate, EMPTY } from '@/mock';
 import { EXT_SYSTEMS, extCalls, type CallResult, type ExtCall, type ExtOp, type ExtSample, type ExtSystem } from '@/mock/extsys';
 import { ACTION_TYPES, runsOf, type ActionType, type ActionRun } from '@/mock/actionEvent';
 import { ACTIONS, RULE_CONFIRMER, OBJ_KIND_LABEL, type ActionRecord } from '@/mock/actions';
-import { isApiError } from '@/api/http';
-import { backend, fallBackIfDown } from '@/api/fallback';
-import { integrationApi, listExtSystems, getExtSystem, createExtSystem, updateExtSystem, testExtSystem, listExtCalls, getWritebackCall, markWritebackChecked, type ExtCallPage, type ExtSystemDto, type LinkedActionTypeDto } from '@/api/integration';
+import { currentApiContext, isApiError } from '@/api/http';
+import { integrationApi, queryExtSystems, getExtSystem, createExtSystem, updateExtSystem, testExtSystem, listExtCalls, getWritebackCall, markWritebackChecked, type ExtCallPage, type ExtSystemDto, type LinkedActionTypeDto } from '@/api/integration';
 
 const route = useRoute();
 const router = useRouter();
@@ -36,27 +35,40 @@ const { readonly, reason } = useReadonly();
 // 真接口：列表取后台（不改共享的 mock 数组），加载前用空表单占位
 const real = integrationApi.isReal();
 const systems = real ? reactive<(ExtSystem & Pick<ExtSystemDto, 'actionCount'>)[]>([]) : reactive(EXT_SYSTEMS);
-const apiFail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+const apiFail = (e: unknown) => { message.error(isApiError(e) ? `${e.message}（${e.code}）` : String(e)); };
 /** 后台没起来：页面按 mock 渲染（读取不再发请求） */
-const live = computed(() => real && !backend.down);
-const useMockSystems = () => { systems.splice(0, systems.length, ...EXT_SYSTEMS); };
+const live = computed(() => real);
+const contextKey = () => JSON.stringify(currentApiContext());
+const systemPage = ref(1), systemTotal = ref(0), systemsContext = ref('');
+let systemSeq = 0;
 async function loadSystems() {
-  if (backend.down) { useMockSystems(); return; }
-  try { const rows = await listExtSystems(); systems.splice(0, systems.length, ...rows); } catch (e) { if (fallBackIfDown(e)) useMockSystems(); else apiFail(e); }
+  const seq = ++systemSeq, key = contextKey();
+  if (!real) return;
+  if (systemsContext.value !== key) { systems.splice(0); systemTotal.value = 0; systemsContext.value = key; }
+  try { const result = await queryExtSystems(systemPage.value, 10);
+    if (seq !== systemSeq || key !== contextKey()) return;
+    systems.splice(0, systems.length, ...result.items); systemTotal.value = result.total;
+    if (result.page !== systemPage.value) systemPage.value = result.page;
+  } catch (e) { if (seq === systemSeq && key === contextKey()) apiFail(e); }
 }
-if (real) void loadSystems();
-const LOADING: ExtSystem = { id: '', name: '加载中…', vendor: '', category: '', endpoint: '', auth: '', authDetail: '', idempotent: false, idemKey: '-', timeoutMs: 0, maxRetry: 0, retry: '', rateLimit: '', owner: '', status: '正常', env: '' };
-const selected = computed<ExtSystem>(() => systems.find((s) => s.id === q('sys')) ?? systems[0] ?? LOADING);
-/** 真接口：选中系统的详情（关联动作类型由后台按 action_type.sys_id 查） */
-const realLinked = ref<{ sysId: string; items: LinkedActionTypeDto[] } | null>(null);
+if (real) watch([contextKey, systemPage], loadSystems, { immediate: true });
+const LOADING: ExtSystem = { id: '', name: '', vendor: '', category: '', endpoint: '', auth: '', authDetail: '', idempotent: false, idemKey: '-', timeoutMs: 0, maxRetry: 0, retry: '', rateLimit: '', owner: '', status: '正常', env: '' };
+const realDetail = ref<{ key: string; system: ExtSystem }>();
+const selectedId = computed(() => q('sys') || (systemsContext.value === contextKey() ? systems[0]?.id : ''));
+const selected = computed<ExtSystem>(() => real ? realDetail.value?.key === contextKey() && realDetail.value.system.id === selectedId.value ? realDetail.value.system : LOADING : systems.find((s) => s.id === q('sys')) ?? systems[0] ?? LOADING);
+const realLinked = ref<{ key: string; sysId: string; items: LinkedActionTypeDto[] } | null>(null);
+let linkedSeq = 0;
 async function loadLinked(id: string) {
-  if (!id || backend.down) return;
-  try { const d = await getExtSystem(id); if (d.id === selected.value.id) realLinked.value = { sysId: d.id, items: d.actionTypes }; } catch (e) { if (!fallBackIfDown(e)) apiFail(e); }
+  const seq = ++linkedSeq, key = contextKey(); realLinked.value = null; realDetail.value = undefined;
+  if (!real || !id) return;
+  try { const d = await getExtSystem(id); if (seq !== linkedSeq || key !== contextKey() || selectedId.value !== id) return;
+    realLinked.value = { key, sysId: d.id, items: d.actionTypes }; realDetail.value = { key, system: d };
+  } catch (e) { if (seq === linkedSeq && key === contextKey()) apiFail(e); }
 }
-if (real) watch(() => selected.value.id, loadLinked, { immediate: true });
+if (real) watch([selectedId, contextKey], ([id]) => loadLinked(id ?? ''), { immediate: true });
 /** 关联动作：动作类型里 sysId 指向该系统的（名称与动作类型页完全一致） */
 const linked = computed<{ id: string; name: string }[]>(() => (live.value
-  ? (realLinked.value?.sysId === selected.value.id ? realLinked.value.items : [])
+  ? (realLinked.value?.key === contextKey() && realLinked.value.sysId === selected.value.id ? realLinked.value.items : [])
   : ACTION_TYPES.filter((a) => a.sysId === selected.value.id)));
 const opsOf = (sys: ExtSystem): ExtOp[] => {
   const acts = ACTION_TYPES.filter((a) => a.sysId === sys.id);
@@ -93,11 +105,9 @@ const resultText = (r: CallResult) => (r === '结果未知' ? '结果未知 · �
 
 // 调用记录：本页内可改（重试 / 核对后结果会变）
 const overrides = ref<Record<string, Partial<ExtCall>>>({});
-// 本页“测试调用”产生的记录（会话内），排在最前
-const tests = ref<ExtCall[]>([]);
-const calls = computed(() => [...tests.value.filter((c) => c.sysId === selected.value.id), ...extCalls(selected.value, opsOf(selected.value))].map((c) => ({ ...c, ...overrides.value[c.id] })));
+const calls = computed(() => (real ? [] : extCalls(selected.value, opsOf(selected.value))).map((c) => ({ ...c, ...overrides.value[c.id] })));
 const counts = computed(() => {
-  if (live.value) return realPage.value?.sysId === selected.value.id ? realPage.value.counts : { 全部: 0, 成功: 0, 失败: 0, 结果未知: 0 };
+  if (live.value) return realPage.value?.key === contextKey() && realPage.value.sysId === selected.value.id ? realPage.value.counts : { 全部: 0, 成功: 0, 失败: 0, 结果未知: 0 };
   const m: Record<string, number> = { 全部: calls.value.length, 成功: 0, 失败: 0, 结果未知: 0 };
   calls.value.forEach((c) => { m[c.result] += 1; });
   return m;
@@ -107,22 +117,26 @@ const filtered = computed(() => calls.value.filter((c) => result.value === '全�
 const SIZE = 10;
 const page = ref(1);
 watch([() => selected.value.id, result], () => { page.value = 1; });
-const paged = computed(() => (live.value ? { items: realPage.value?.items ?? [] } : paginate(filtered.value, { page: page.value, size: SIZE })));
-const callTotal = computed(() => (live.value ? realPage.value?.total ?? 0 : filtered.value.length));
+const paged = computed(() => (live.value ? { items: realPage.value?.key === contextKey() && realPage.value.sysId === selected.value.id ? realPage.value.items : [] } : paginate(filtered.value, { page: page.value, size: SIZE })));
+const callTotal = computed(() => (live.value ? realPage.value?.key === contextKey() && realPage.value.sysId === selected.value.id ? realPage.value.total : 0 : filtered.value.length));
 /** 真接口：当前系统 × 结果 × 页 的一页调用（counts 也取后台）；seq 防止切换快时旧响应覆盖新的 */
-const realPage = ref<(ExtCallPage & { sysId: string }) | null>(null);
+const realPage = ref<(ExtCallPage & { sysId: string; key: string }) | null>(null);
+const callsLoading = ref(false);
 const callsTick = ref(0);
 let callsSeq = 0;
 async function loadCalls() {
-  const sysId = selected.value.id;
-  if (!sysId || backend.down) return;
-  const seq = ++callsSeq;
-  try {
-    const r = await listExtCalls(sysId, { result: result.value, page: page.value, size: SIZE });
-    if (seq === callsSeq) realPage.value = { ...r, sysId };
-  } catch (e) { if (!fallBackIfDown(e)) apiFail(e); }
+  const seq = ++callsSeq, sysId = selected.value.id, key = contextKey();
+  if (!real || !sysId) return;
+  callsLoading.value = true;
+  try { const r = await listExtCalls(sysId, { result: result.value, page: page.value, size: SIZE });
+    if (seq !== callsSeq || key !== contextKey() || selected.value.id !== sysId) return;
+    realPage.value = { ...r, sysId, key };
+    if (r.page !== page.value) page.value = r.page;
+  } catch (e) { if (seq === callsSeq && key === contextKey()) apiFail(e); }
+  finally { if (seq === callsSeq && key === contextKey()) callsLoading.value = false; }
 }
-if (real) watch([() => selected.value.id, result, page, callsTick], loadCalls, { immediate: true });
+if (real) watch([() => selected.value.id, contextKey, result, page, callsTick], loadCalls, { immediate: true });
+
 const tl = (r: CallResult) => (r === '成功' ? 'tl-normal' : r === '结果未知' ? 'tl-attention' : 'tl-failed');
 const cols = [
   { title: '时间', key: 'time', width: 160 },
@@ -140,32 +154,38 @@ const cols = [
 // 调用详情抽屉
 /** 真接口：抽屉按 ?call= 取详情（只认当前系统的调用，同 mock） */
 const realCall = ref<ExtCall | null>(null);
+let callSeq = 0; const callContext = ref('');
 async function loadCall(id: string) {
-  realCall.value = null;
-  if (!id || backend.down) return;
-  try { const c = await getWritebackCall(id); if (q('call') === id) realCall.value = c; } catch (e) { if (!fallBackIfDown(e)) apiFail(e); }
+  const seq = ++callSeq, key = contextKey(); realCall.value = null; callContext.value = key;
+  if (!real || !id) return;
+  try { const c = await getWritebackCall(id); if (seq === callSeq && key === contextKey() && q('call') === id) realCall.value = c; }
+  catch (e) { if (seq === callSeq && key === contextKey()) apiFail(e); }
 }
-if (real) watch(() => q('call'), loadCall, { immediate: true });
+if (real) watch([() => q('call'), contextKey], ([id]) => loadCall(id), { immediate: true });
+
 const call = computed(() => (live.value
-  ? (realCall.value && realCall.value.id === q('call') && realCall.value.sysId === selected.value.id ? realCall.value : null)
+  ? (callContext.value === contextKey() && realCall.value && realCall.value.id === q('call') && realCall.value.sysId === selected.value.id ? realCall.value : null)
   : calls.value.find((c) => c.id === q('call')) ?? null));
 const openCall = (id: string) => setQuery({ call: id });
 const closeCall = () => setQuery({ call: undefined });
-const reqBody = (c: ExtCall) => JSON.stringify({ action: c.action, target: c.target, operator: c.actor, ...(c.idemKey ? { [selected.value.idemKey.split('（')[0]]: c.idemKey } : {}) }, null, 2);
-const respBody = (c: ExtCall) => (c.http == null ? `（${selected.value.timeoutMs / 1000} 秒内没有收到响应）` : JSON.stringify(c.http === 200 ? { code: 0, msg: 'success' } : { code: c.http, msg: c.http === 429 ? '请求过于频繁' : c.http === 401 ? '签名校验失败' : '服务暂时不可用' }, null, 2));
+const reqBody = (_c: ExtCall) => '未保存原始请求体';
+const respBody = (_c: ExtCall) => '未保存原始响应体；请查看返回信息和已记录的 HTTP 状态';
 
 const confirm = useConfirmStore();
 /** 写回调用结果未知：不在本页重试，到动作中心按执行记录对账 */
 const reconcileLink = (c: ExtCall) => ({ path: '/use/ops/actions', query: { tab: 'unknown', act: c.runId } });
 async function markChecked(c: ExtCall) {
+  if (readonly.value) return;
+  const key = contextKey(), sysId = selected.value.id;
+  const current = () => !readonly.value && key === contextKey() && sysId === selected.value.id;
   const ok = await confirm.ask({
     title: '人工核对结果', target: `${c.action} · ${c.target}`, okText: '确认对方已处理', tag: '结果未知 · 待对账',
     fields: [{ label: '系统', value: `${selected.value.name}（${selected.value.vendor}）` }, { label: '原调用', value: `${c.id} · ${c.time}` }],
     impact: `${selected.value.name} 不支持幂等，从不重试。请先在对方系统确认这条请求已处理，再标记为成功；没处理的话请重新发起动作。`,
   });
-  if (!ok) return;
+  if (!ok || !current()) return;
   if (real) {
-    try { realCall.value = await markWritebackChecked(c.id); } catch (e) { apiFail(e); return; }
+    try { const saved = await markWritebackChecked(c.id); if (!current()) return; realCall.value = saved; } catch (e) { if (current()) apiFail(e); return; }
     callsTick.value += 1;
     message.success('已标记为成功');
     return;
@@ -174,47 +194,21 @@ async function markChecked(c: ExtCall) {
   message.success('已标记为成功');
 }
 
-// 测试调用：只发连通性探测（不带业务数据、不写回），结果记入最近调用
-const pad = (n: number) => String(n).padStart(2, '0');
-const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+const testUnavailable = '暂不可测试';
 const testing = ref(false);
 async function testCall() {
-  const sys = selected.value;
-  const ok = await confirm.ask({
-    title: '测试调用', target: `${sys.name}（${sys.vendor}）`, okText: '发送测试',
-    fields: [{ label: '接口地址', value: sys.endpoint }, { label: '认证', value: sys.auth }, { label: '超时', value: `${sys.timeoutMs / 1000} 秒` }],
-    impact: '只发送一次连通性探测（鉴权 + 心跳接口），不带业务数据、不会写回；结果记入下方“最近调用”，发起人记为你。',
-    blocked: sys.status === '停用' ? '该系统已停用，先在“编辑”里改为正常再测试' : undefined,
-  });
-  if (!ok) return;
-  if (real) {
-    testing.value = true;
-    let rec: ExtCall;
-    try { rec = await testExtSystem(sys.id); } catch (e) { apiFail(e); return; } finally { testing.value = false; }
-    // 后台已记入 writeback_call（排在最近调用最前），重新拉第一页
-    setQuery({ result: undefined });
-    page.value = 1;
-    callsTick.value += 1;
-    if (rec.result === '成功') message.success(`测试通过：HTTP ${rec.http} · ${rec.ms} ms`);
-    else message.error(`测试失败：HTTP ${rec.http ?? '—'} · ${rec.ms} ms`);
-    return;
-  }
+  if (!real || readonly.value || testing.value || !selected.value.id) return;
+  const key = contextKey(), id = selected.value.id;
+  const ok = await confirm.ask({ title: '测试调用', target: selected.value.name, okText: '开始探测', impact: '仅请求已配置的只读探测接口；结果和耗时会保存到最近调用。未配置真实适配器时返回错误。' });
+  if (!ok || key !== contextKey() || id !== selected.value.id || readonly.value) return;
   testing.value = true;
-  await new Promise((r) => setTimeout(r, 600));
-  testing.value = false;
-  const degraded = sys.status === '降级';
-  const n = tests.value.filter((c) => c.sysId === sys.id).length + 1;
-  const rec: ExtCall = {
-    id: `${sys.id.slice(4)}-T${String(n).padStart(3, '0')}`, sysId: sys.id, time: nowText(), action: '测试调用（连通性）', target: '—',
-    method: 'GET', path: '/health', idemKey: null, ms: degraded ? 3120 : 140 + (sys.timeoutMs % 97), http: degraded ? 502 : 200,
-    result: degraded ? '失败' : '成功', attempt: 1, actor: '王敏（U010001）',
-    msg: degraded ? '对方返回 502（网关错误），系统处于降级状态，请联系负责人' : 'OK · 鉴权通过，心跳正常',
-  };
-  tests.value.unshift(rec);
-  setQuery({ result: undefined });
-  page.value = 1;
-  if (degraded) message.error(`测试失败：HTTP 502 · ${rec.ms} ms`);
-  else message.success(`测试通过：HTTP 200 · ${rec.ms} ms`);
+  try {
+    const result = await testExtSystem(id);
+    if (key === contextKey() && id === selected.value.id) callsTick.value += 1;
+    if (result.result === '成功') message.success(result.msg);
+    else message.error(result.msg);
+  } catch (e) { apiFail(e); }
+  finally { testing.value = false; }
 }
 
 // 新建 / 编辑外部系统（?edit=EXT-WMS / ?edit=new）
@@ -226,14 +220,25 @@ const blank = (): ExtSystem => ({
   timeoutMs: 5000, maxRetry: 3, retry: '', rateLimit: '10 次/秒', owner: '王敏', status: '正常', env: '生产',
 });
 const editKey = computed(() => q('edit'));
-const editing = computed(() => (editKey.value === 'new' ? null : systems.find((s) => s.id === editKey.value) ?? null));
+const editingRecord = ref<{ key: string; item: ExtSystem }>();
+const editing = computed(() => editKey.value === 'new' ? null : real ? editingRecord.value?.key === contextKey() && editingRecord.value.item.id === editKey.value ? editingRecord.value.item : null : systems.find((s) => s.id === editKey.value) ?? null);
 const form = reactive<ExtSystem>(blank());
 const formSnap = ref('');
-watch(editKey, (k) => {
+let editSeq = 0;
+watch([editKey, contextKey], async ([k, key]) => {
+  const seq = ++editSeq; editingRecord.value = undefined;
   if (!k) return;
+  Object.assign(form, blank()); formSnap.value = JSON.stringify(form);
+  if (real && k !== 'new') {
+    try { const item = await getExtSystem(k); if (seq !== editSeq || key !== contextKey() || k !== editKey.value) return;
+      editingRecord.value = { key, item }; Object.assign(form, item); formSnap.value = JSON.stringify(form);
+    } catch (e) { if (seq === editSeq && key === contextKey()) apiFail(e); }
+    return;
+  }
   Object.assign(form, k === 'new' ? blank() : JSON.parse(JSON.stringify(editing.value ?? blank())));
   formSnap.value = JSON.stringify(form);
 }, { immediate: true });
+
 const formDirty = computed(() => !!editKey.value && JSON.stringify(form) !== formSnap.value);
 useUnsavedGuard(formDirty);
 const retryText = (f: ExtSystem) => (f.idempotent && f.maxRetry
@@ -255,14 +260,17 @@ const usedBy = computed<{ name: string }[]>(() => {
   if (live.value) return realLinked.value?.sysId === editing.value.id ? realLinked.value.items : [];
   return ACTION_TYPES.filter((a) => a.sysId === editing.value!.id);
 });
-const openEdit = (id: string) => setQuery({ edit: id, call: undefined });
+const openEdit = (id: string) => setQuery({ edit: id, ...(id !== 'new' ? { sys: id } : {}), call: undefined });
 async function closeEdit() {
   if (formDirty.value && !(await confirmDiscard())) return;
   formSnap.value = JSON.stringify(form);
   setQuery({ edit: undefined });
 }
 async function saveEdit() {
-  const isNew = !editing.value;
+  if (readonly.value || real && editKey.value !== 'new' && !editing.value) return;
+  const key = contextKey(), seq = editSeq;
+  const current = () => !readonly.value && key === contextKey() && seq === editSeq;
+  const isNew = real ? editKey.value === 'new' : !editing.value;
   const before = editing.value;
   const diff = before ? (['name', 'endpoint', 'auth', 'timeoutMs', 'maxRetry', 'rateLimit', 'owner', 'status', 'idempotent'] as const)
     .filter((k) => before[k] !== form[k]).map((k) => ({ label: ({ name: '名称', endpoint: '接口地址', auth: '认证方式', timeoutMs: '超时', maxRetry: '最多重试', rateLimit: '限流', owner: '负责人', status: '状态', idempotent: '幂等' } as Record<string, string>)[k], value: `${String(before[k])} → ${String(form[k])}` })) : [];
@@ -273,12 +281,14 @@ async function saveEdit() {
       : usedBy.value.length ? `影响 ${usedBy.value.length} 个动作类型（${usedBy.value.map((a) => a.name).join('、')}）的写回，保存后对新发起的动作立即生效。` : '没有动作类型写回该系统，保存后立即生效。',
     blocked: formErrors.value[0],
   });
-  if (!ok) return;
+  if (!ok || !current()) return;
   if (real) {
     const { id: _id, ...body } = { ...JSON.parse(JSON.stringify(form)) as ExtSystem, name: form.name.trim(), vendor: form.vendor.trim(), endpoint: form.endpoint.trim(), retry: retryText(form) };
     let saved: ExtSystem;
-    try { saved = isNew ? await createExtSystem(body) : await updateExtSystem(before!.id, body); } catch (e) { apiFail(e); return; }
+    try { saved = isNew ? await createExtSystem(body) : await updateExtSystem(before!.id, body); } catch (e) { if (current()) apiFail(e); return; }
+    if (!current()) return;
     await loadSystems();
+    if (!current()) return;
     formSnap.value = JSON.stringify(form);
     setQuery({ edit: undefined, sys: saved.id });
     await loadLinked(saved.id);
@@ -304,7 +314,7 @@ async function saveEdit() {
     <div class="panel ex-list">
       <div class="panel-head">
         <span class="t-16 fw-600">外部系统</span>
-        <span class="t-14 c-2">共 {{ systems.length }} 个</span>
+        <span class="t-14 c-2">共 {{ real ? systemTotal : systems.length }} 个</span>
       </div>
       <div class="ex-items">
         <div v-for="s in systems" :key="s.id" class="ex-item" :class="{ on: s.id === selected.id }" @click="setQuery({ sys: s.id, result: undefined, call: undefined })">
@@ -315,9 +325,10 @@ async function saveEdit() {
           </div>
         </div>
       </div>
+      <AppPagination v-if="real" v-model:page="systemPage" variant="simple" :total="systemTotal" :size="10" unit="个" />
     </div>
 
-    <div class="panel ex-detail">
+    <div v-if="!real || selected.id" class="panel ex-detail">
       <div class="ex-head">
         <div class="ex-title">
           <span class="t-20 fw-600 c-1">{{ selected.name }}</span>
@@ -327,7 +338,7 @@ async function saveEdit() {
           <span v-if="selected.status === '降级'" class="t-12 c-2">最近 6 次调用有失败 / 结果未知；结果未知不自动重试，需对账</span>
         </div>
         <a-space>
-          <a-tooltip :title="reason"><a-button :disabled="readonly" :loading="testing" @click="testCall">测试调用</a-button></a-tooltip>
+          <a-tooltip :title="readonly ? reason : !real ? testUnavailable : undefined"><a-button :disabled="!real || readonly || !selected.id || selected.status === '停用'" :loading="testing" @click="testCall">测试调用</a-button></a-tooltip>
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openEdit(selected.id)">编辑</a-button></a-tooltip>
         </a-space>
       </div>
@@ -357,11 +368,11 @@ async function saveEdit() {
       <div class="ex-calls-head">
         <span class="t-16 fw-600">最近调用</span>
         <a-radio-group v-model:value="result" size="small" button-style="solid">
-          <a-radio-button v-for="k in ['全部', '成功', '失败', '结果未知']" :key="k" :value="k">{{ k }}（{{ counts[k] }}）</a-radio-button>
+          <a-radio-button v-for="k in ['全部', '成功', '失败', '结果未知']" :key="k" :value="k">{{ k }}</a-radio-button>
         </a-radio-group>
       </div>
       <div class="ex-table paged-scroll">
-        <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false">
+        <a-table size="small" row-key="id" :columns="cols" :loading="callsLoading" :data-source="paged.items" :pagination="false">
           <template #bodyCell="{ column, record }">
             <span v-if="column.key === 'time'" class="num">{{ record.time }}</span>
             <span v-else-if="column.key === 'target'" class="num">{{ record.target }}</span>
@@ -383,7 +394,7 @@ async function saveEdit() {
     <template v-if="call">
       <div class="ex-dr-status" :class="tl(call.result)"><QuestionCircleOutlined v-if="call.result === '结果未知'" /><span v-else class="ex-dot" /><span class="t-16 fw-600">{{ resultText(call.result) }}</span></div>
       <div v-if="call.result === '结果未知'" class="t-12 c-2 ex-dr-note">
-        处理方式：调用超时即标记为结果未知，系统不自动重试；{{ selected.idempotent ? '每 15 分钟按幂等键向对方查询一次处理结果，查到即自动更新' : '对方不支持幂等，无法自动查询' }}；仍查不到时，在动作中心“结果未知与对账”中人工对账。
+        处理方式：结果未知时不自动重试；请先在对方系统核实，再到动作中心人工对账，或按下方入口人工确认。
       </div>
       <a-descriptions :column="1" bordered size="small" class="ex-desc">
         <a-descriptions-item label="返回信息">{{ call.msg }}</a-descriptions-item>

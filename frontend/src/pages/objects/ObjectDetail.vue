@@ -20,7 +20,7 @@ import ObjAskModal from './parts/ObjAskModal.vue';
 import type { ExploreRow } from '@/api/qaObjects';
 import { qaLive, qaWriteReal, qaFallBackIfDown } from '../qa/qaFallback';
 import { errText } from '../qa/useQaSession';
-import { listTypes, loadMeta, linksOf, actionsOf, metricsOf, fmtVal, propLabel, type TypeMeta, type LinkMeta, type PropMeta } from './objMeta';
+import { listTypes, loadMeta, metaContextKey, linksOf, actionsOf, metricsOf, fmtVal, propLabel, type TypeMeta, type LinkMeta, type PropMeta } from './objMeta';
 import { getRow, searchRows, type GetResult, type ScopeFn } from './objRows';
 
 const route = useRoute();
@@ -42,7 +42,7 @@ let seq = 0;
 async function withFallback<T>(f: (live: boolean) => Promise<T>): Promise<T> {
   try { return await f(qaLive.value); } catch (e) { if (qaLive.value && qaFallBackIfDown(e)) return f(false); throw e; }
 }
-watch([typeId, id, qaLive, () => pv.userName.value], async () => {
+watch([typeId, id, qaLive, metaContextKey, () => pv.userName.value], async () => {
   const my = ++seq; got.value = null; meta.value = null;
   if (!typeId.value || !id.value) return;
   loading.value = true;
@@ -82,8 +82,15 @@ const REL_SIZE = 5;
 interface RelGroup { link: LinkMeta; meta: TypeMeta | null; items: ExploreRow[]; total: number; state: 'ok' | 'unbound' | 'nokey' | 'denied' | 'error' }
 const rels = ref<RelGroup[]>([]);
 const typeNames = ref<Record<string, string>>({});
-listTypes().then((ts) => { typeNames.value = Object.fromEntries(ts.map((t) => [t.id, t.name])); });
+let namesSeq = 0;
+watch(metaContextKey, async () => {
+  const my = ++namesSeq;
+  typeNames.value = {};
+  try { const ts = await listTypes(); if (my === namesSeq) typeNames.value = Object.fromEntries(ts.map((t) => [t.id, t.name])); }
+  catch (e) { if (my === namesSeq) message.error(`对象类型加载失败：${errText(e)}`); }
+}, { immediate: true });
 watch([row, tab], async () => {
+  rels.value = [];
   if (tab.value !== 'related' || !row.value || !meta.value) return;
   const my = seq; const r = row.value;
   const out = await Promise.all(linksOf(meta.value.id).map(async (link): Promise<RelGroup> => {

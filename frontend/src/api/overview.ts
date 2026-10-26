@@ -3,42 +3,42 @@
  * 返回 `{nodes: LinkObject[], edges: {from, to, linkId, status}[]}`，`?ver=` 由 http.ts 自动带上。
  * 这里只做形状转换，页面照旧按 LINK_OBJECTS / LINKS 的字段画图；mock 模式不发请求（调用方先判断 isOverviewReal）。
  */
-import { apiClient } from './http';
+import { apiClient, type PageResult } from './http';
 import { LINK_OBJECTS, LINKS, type LinkObject } from '@/mock/links';
 
 const api = apiClient('static');
 export const isOverviewReal = (): boolean => api.isReal();
+export interface OverviewHealth { n: number; text: string; tone: 'normal' | 'attention' | 'failed' }
+export interface OverviewCard { key: string; title: string; count: number; unit: string; health: OverviewHealth[] }
+export interface OverviewSummary { cards: OverviewCard[]; qualityConfigured: boolean; dataAsOf: string }
+export interface OverviewTodo { id: string; kind: '变更' | '数据质量'; title: string; who: string; status: string; tone: OverviewHealth['tone']; time: string }
+export const fetchOverview = () => api.get<OverviewSummary>('/ontology/overview');
+export const fetchOverviewTodos = (kind: string, page: number, size: number) => api.get<PageResult<OverviewTodo> & { qualityConfigured: boolean }>('/ontology/todos', { query: { kind, page, size } });
+export const fetchOverviewReleases = () => api.get<{ items: { ver: string; publishedAt: string; by: string; note: string }[] }>('/releases');
 
-/** 页面画图用的边（mock LINKS 的 from / to / status 三个字段） */
-export interface GraphEdge { from: string; to: string; status: string }
+/** 页面画图用的关系标识、名称及方向。 */
+export interface GraphEdge { id: string; name: string; from: string; to: string; status: string }
 export interface OverviewGraph { nodes: LinkObject[]; edges: GraphEdge[] }
 
 interface GraphDto {
   nodes: { id: string; name: string; api: string; group: string; table?: string | null }[];
-  edges: { from: string; to: string; linkId: string; status?: string | null }[];
+  edges: { from: string; to: string; linkId: string; name: string; status?: string | null }[];
 }
 
 /** mock 版：LINK_OBJECTS + LINKS（页面原来的数据源，mock 模式 / 后台没起来时用） */
 export const mockGraph = (): OverviewGraph => ({
   nodes: [...LINK_OBJECTS],
-  edges: LINKS.map((l) => ({ from: l.from, to: l.to, status: l.status })),
+  edges: LINKS.map((l) => ({ id: l.id, name: l.name, from: l.from, to: l.to, status: l.status })),
 });
 
 /**
- * 真接口版。接口 nodes 只有已发布对象类型：草稿对象（如 CR-0012 的储值卡）只在变更单里，
- * 变更单仍是 mock，先保留 mock 的草稿节点和连到草稿节点的 mock 边（同 static.ts loadObjects）[推断]。
+ * 真接口版只显示后台返回的定义，不混入演示草稿节点或边。
  * 接口 status 为空时按「已发布」画实线 [推断]。
  */
 export async function fetchGraph(): Promise<OverviewGraph> {
   const d = await api.get<GraphDto>('/ontology/graph');
-  const ids = new Set(d.nodes.map((n) => n.id));
-  const drafts = LINK_OBJECTS.filter((o) => o.draft && !ids.has(o.id));
-  const draftIds = new Set(drafts.map((o) => o.id));
   return {
-    nodes: [...d.nodes.map((n): LinkObject => ({ id: n.id, name: n.name, api: n.api, group: n.group, table: n.table ?? '--' })), ...drafts],
-    edges: [
-      ...d.edges.map((e): GraphEdge => ({ from: e.from, to: e.to, status: e.status ?? '已发布' })),
-      ...LINKS.filter((l) => draftIds.has(l.from) || draftIds.has(l.to)).map((l) => ({ from: l.from, to: l.to, status: l.status })),
-    ],
+    nodes: d.nodes.map((n): LinkObject => ({ id: n.id, name: n.name, api: n.api, group: n.group, table: n.table ?? '--' })),
+    edges: d.edges.map((e): GraphEdge => ({ id: e.linkId, name: e.name, from: e.from, to: e.to, status: e.status ?? '已发布' })),
   };
 }

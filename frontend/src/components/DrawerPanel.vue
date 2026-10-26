@@ -14,6 +14,7 @@ import StatusTimeline from './StatusTimeline.vue';
 import AppPagination from './AppPagination.vue';
 import { paginate } from '@/mock/paginate';
 import { orderById, storeById, fmtMoney } from '@/mock';
+import { anyReal } from '@/api/config';
 
 const props = defineProps<{ target: DrawerRef | null; level: DrawerLevel; parentTitle?: string }>();
 provide(DRAWER_LEVEL, props.level);
@@ -43,11 +44,13 @@ const toneClass = (k: ObjKpi) => (k.tone === 'down' ? 'c-error' : k.tone === 'up
 
 // 订单动作“补发出库单”：只在订单抽屉里提供（首页等列表只看不改），仅已出库订单可用
 const resendOrder = computed(() => {
+  if (anyReal()) return null;
   if (view.value?.kind !== 'order') return null;
   const o = orderById(view.value.id);
   return o && o.status === '已出库' ? o : null;
 });
 async function resend() {
+  if (anyReal()) return;
   const o = resendOrder.value; if (!o) return;
   const ok = await confirm.ask({
     title: '补发出库单',

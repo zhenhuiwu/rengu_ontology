@@ -53,9 +53,19 @@
 
 Body（JSON）：`{ from, to, action?, result?, field?, kw? }`，和列表同一套筛选，from/to 必填（422）。
 
-返回 `{ jobId }`。**桩**：不生成文件、没有任务查询接口；`jobId = "EXP-" + 新写入那条审计的 code`。
+返回 `{ jobId }`，`jobId = "EXP-" + 新写入那条审计的 code`。在同一事务保存 `audit_export_job`（真实创建者 ID、规范化筛选）和 `audit_export_row`（job_id / audit_id 唯一成员）。单条 `INSERT SELECT` 固定语句快照中符合条件的 ID，显式排除本次导出自己的审计；创建后新增记录、创建时尚未提交的较低 ID 记录均不会混入，日志只追加使后续下载结果稳定。任一步失败，清单、成员和本次审计一同回滚。`action` / `kw` 的 NUL、不可编码 Unicode → 422，未写入清单或审计。
 按 api-index §4.3「导出本身也写一条审计」：`actor=「姓名（编号）」`、`action=导出`、`target=审计日志（<from> 至 <to>）`、`ip`=X-Forwarded-For 第一个或连接地址、`result=成功`。
 `?ver=` / `?previewAs=` 下是写请求 → 全局守卫 403 `READONLY`（不在 §1.7 白名单）。
+
+## GET /export-jobs/{id}、GET /export-jobs/{id}/download
+
+详情返回 `{jobId, status: "ready", rowCount, downloadUrl}`。`ready` 表示固定成员清单已持久化、可以下载，**没有后台异步生成文件阶段**，没有临时 CSV、文件存储或通用导出队列。重新启动后清单仍可查询、重复下载。
+
+两个 GET 均复用审计页 `require_func("audit", "view")` 依赖，并限定真实当前创建者；其他用户和未知任务统一 404，当前用户已停用仍由认证层返回 401。历史版本 / 身份预览显式检查并返回 403 `READONLY`，GET 不因安全方法而放行下载。该功能权限依赖仍是系统一期放行桩，本功能没有补全全站生产鉴权。
+
+下载按固定成员的 `(time DESC, id DESC)` keyset 分批，每批至多 1000 行。首批在请求 session 内读取、序列化，错误可在 CSV 响应头之前正常返回；请求连接释放后发送首批，后续每批独立 session 且释放连接后才发送，不占两个池连接、不随慢客户端下载持有事务。中途读取异常会中止响应，不能改回 JSON 错误，页面 fetch/blob 失败不会提示成功。服务端内存为一批记录/CSV，不全量加载；浏览器现有下载方式需在内存接收完整 Blob，超大文件仍受浏览器内存与网络时限约束。清单成员存储随导出行数增长，当前无自动清理。
+
+CSV：UTF-8 BOM、标准 CSV writer（逗号 / 引号 / 换行正确转义）、所有列加引号，表头为编号/时间/操作人/动作/对象/来源 IP/结果；公式触发前缀 `= + - @`（含前导空白）及开头制表/回车/换行的单元格加单引号，避免表格公式执行。空清单仍返回表头。页面复用 HTTP 身份与只读参数、显示 busy 和失败信息，只有上下文始终一致才触发下载；切换身份 / 版本后的迟到结果丢弃。演示模式明确提示不生成文件。
 
 ## 写审计的入口
 
@@ -66,5 +76,5 @@ Body（JSON）：`{ from, to, action?, result?, field?, kw? }`，和列表同一
 ## 下一阶段 / 没做
 
 - 用户、角色页接口（权限 JSON、行范围、成员、row_filter）。
-- 真正的导出任务（生成文件、`GET /export-jobs/{id}`）、日志保留 180 天的清理。
+- 后台生成文件任务、日志保留 180 天及导出清单的清理策略（当前不承诺这两项）。
 - `common/audit.py` 接 `insert_audit`（等 PDE 点头）。

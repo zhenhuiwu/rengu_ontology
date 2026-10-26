@@ -3,7 +3,7 @@ import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
 
 /**
  * 分页状态同步到 URL：?page=&size=（第 1 页、默认条数时不写进 URL）。
- * - defaultSize：该容器在 1920×1080 下一屏正好放下的行数（每个页面按自己的容器高度给）。
+ * - 列表默认 10 条/页；defaultSize 保留为该容器无需滚动可容纳的条数。
  * - filters：筛选条件变化时自动回到第 1 页。
  * - prefix：同一页面有多个分页列表时区分参数，例如 prefix: 'u' → ?upage=&usize=。
  * - overflow：用户选了比默认更大的条数时为 true，此时把表格容器加上 .paged-scroll，
@@ -33,9 +33,9 @@ export function usePagedQuery(opts: { defaultSize: number; filters?: WatchSource
     set: (v) => setQuery({ [pk]: v > 1 ? v : null }),
   });
   const size = computed<number>({
-    get: () => num(route.query[sk], opts.defaultSize),
+    get: () => num(route.query[sk], 10),
     // 改条数时一并回到第 1 页（同一次 replace，避免两次导航互相覆盖）
-    set: (v) => setQuery({ [sk]: v === opts.defaultSize ? null : v, [pk]: null }),
+    set: (v) => setQuery({ [sk]: v === 10 ? null : v, [pk]: null }),
   });
   const overflow = computed(() => size.value > opts.defaultSize);
   const reset = () => { if (page.value !== 1) page.value = 1; };

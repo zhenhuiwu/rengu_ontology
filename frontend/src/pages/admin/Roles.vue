@@ -7,8 +7,8 @@
  * 指标按基础对象的范围过滤，再叠加维度对象的范围；业务查看类角色（defaultDeny）没配范围的对象默认不可见。
  * “以此用户预览”：抽屉里汇总该用户所有角色合并后的有效权限，可进入只读预览。
  * URL：?role=R-04&tab=func|obj|row|members&form=edit|scope|members&preview=U010231
- * 数据：开关 admin 切到真接口且后台可用时走 /api/admin/v1/roles（src/api/roles.ts），每次写成功后整份重新拉取；
- * 否则用本地 mock（原逻辑不变）。
+ * 数据：真模式只读取 /api/admin/v1/roles（src/api/roles.ts），每次写成功后重新拉取；失败显示错误和空态。
+ * 本地 mock 仅供显式开发模式使用。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -20,8 +20,8 @@ import { useReadonly } from '@/composables/useReadonly';
 import { usePreviewStore, firstAllowedPage } from '@/stores/preview';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
-import { isApiError } from '@/api/http';
-import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadPermObjects, loadRolesState, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type PermObject, type RemoteRole } from '@/api/roles';
+import { currentApiContext, isApiError } from '@/api/http';
+import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadRolesMeta, loadRolesState, queryRoleMembers, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type PermObject, type ScopeProp, type RemoteRole } from '@/api/roles';
 import { ADMIN_USERS, paginate, EMPTY, type AdminUser } from '@/mock';
 import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, effectiveAccess, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
 
@@ -29,37 +29,49 @@ const route = useRoute();
 const router = useRouter();
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
-const { readonly, reason } = useReadonly();
+const { readonly: viewReadonly, reason: viewReason } = useReadonly();
 const confirm = useConfirmStore();
 const previewStore = usePreviewStore();
 const nowStr = '2026-10-25 17:10';
 
 // 本页内修改叠加在示例数据上
-const roles = ref<Role[]>(JSON.parse(JSON.stringify(ROLES)));
-const members = ref<Record<string, AdminUser[]>>(Object.fromEntries(ROLES.map((r) => [r.id, roleMembers(r)])));
-const allUsers = ref<AdminUser[]>(ADMIN_USERS);
+const realRoles = rolesApiOn();
+const roles = ref<Role[]>(realRoles ? [] : JSON.parse(JSON.stringify(ROLES)));
+const members = ref<Record<string, AdminUser[]>>(realRoles ? {} : Object.fromEntries(ROLES.map((r) => [r.id, roleMembers(r)])));
+const allUsers = ref<AdminUser[]>(realRoles ? [] : ADMIN_USERS);
+const loadError = ref('');
+const loading = ref(false);
 /** true = 写操作走接口（按开关，不看加载成败） */
 const remote = ref(rolesApiOn());
-/** true = 页面数据已来自后台；首次加载失败时显示演示数据，但写操作仍走接口（失败就报错） */
+/** true = 角色和权限元数据都已从后台成功加载。 */
 const loaded = ref(false);
-/** 权限对象清单：后台读本体（/roles/meta），读不到用 mock PERM_OBJECTS */
-const permObjects = ref<PermObject[]>(PERM_OBJECTS);
-/** 首次加载才允许回退 mock；已用后台数据后重拉失败、或写成功后重拉失败（afterWrite）就报错，不悄悄显示演示数据 */
+const readonly = computed(() => viewReadonly.value || (remote.value && !loaded.value));
+const reason = computed(() => viewReason.value || (remote.value && !loaded.value ? '请先成功加载角色和权限元数据，再执行修改' : ''));
+/** 权限对象清单：真模式只读 /roles/meta。 */
+const permObjects = ref<PermObject[]>(realRoles ? [] : PERM_OBJECTS);
+const scopeProps = ref<ScopeProp[]>(realRoles ? [] : SCOPE_PROPS);
+/** 失败清空数据并阻止修改，显式 mock 模式保留本地数据。 */
+let reloadSeq = 0;
 async function reload(afterWrite = false) {
-  const st = await loadRolesState();
-  if (!st) {
-    if (loaded.value || afterWrite) throw new Error('后台暂时连不上，数据未刷新，请稍后刷新页面');
-    return;
-  }
-  const po = await loadPermObjects().catch(() => null);
-  if (po) permObjects.value = po;
-  roles.value = st.roles;
-  members.value = st.members;
-  allUsers.value = st.users;
-  loaded.value = true;
+  const my = ++reloadSeq;
+  if (!remote.value) return;
+  const context = JSON.stringify(currentApiContext());
+  loading.value = true; loaded.value = false; loadError.value = '';
+  roles.value = []; members.value = {}; allUsers.value = []; permObjects.value = []; scopeProps.value = [];
+  try {
+    const [st, meta] = await Promise.all([loadRolesState(), loadRolesMeta()]);
+    if (my !== reloadSeq || context !== JSON.stringify(currentApiContext())) return;
+    if (!st || !meta) throw new Error('角色数据或权限元数据未加载');
+    permObjects.value = meta.permObjects; scopeProps.value = meta.scopeProps;
+    roles.value = st.roles; members.value = st.members; allUsers.value = st.users; loaded.value = true;
+  } catch (e) {
+    if (my === reloadSeq && context === JSON.stringify(currentApiContext())) loadError.value = isApiError(e) ? e.message : String(e);
+    throw e;
+  } finally { if (my === reloadSeq) loading.value = false; }
 }
 /** 后台写操作：成功后重新拉取；失败提示后台的报错（不改本地数据） */
 async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
+  if (remote.value && !loaded.value) { message.error(reason.value); return undefined; }
   let r: T;
   try {
     r = await fn();
@@ -75,10 +87,15 @@ async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
   return r;
 }
 const lockOf = (r: Role) => (r as Partial<RemoteRole>).lockVersion;
-onMounted(async () => { await reload(); if (loaded.value) resetDraft(); });
+async function loadInitial() {
+  try { await reload(); if (loaded.value && !dirty.value) resetDraft(); }
+  catch (e) { message.error(isApiError(e) ? e.message : e instanceof Error ? e.message : '加载失败，请稍后重试'); }
+}
+onMounted(loadInitial);
+watch(() => JSON.stringify(currentApiContext()), () => { loaded.value = false; void loadInitial(); }, { flush: 'sync' });
 const role = computed(() => roles.value.find((r) => r.id === q('role')) ?? roles.value[0]);
-const locked = computed(() => readonly.value || role.value.builtIn);
-const lockReason = computed(() => reason.value || (role.value.builtIn ? '内置角色不能修改，可复制后再改' : ''));
+const locked = computed(() => readonly.value || !role.value || role.value.builtIn);
+const lockReason = computed(() => reason.value || (role.value?.builtIn ? '内置角色不能修改，可复制后再改' : ''));
 const tab = computed({ get: () => q('tab') || 'func', set: (v: string) => setQuery({ tab: v === 'func' ? undefined : v }) });
 
 // 功能 / 对象权限草稿
@@ -91,20 +108,23 @@ const fullObjs = (objs: ObjPerm[]): ObjPerm[] => [
   ...objs.filter((x) => !permObjects.value.some((o) => o.name === x.objType)),
 ];
 const resetDraft = () => {
-  draft.func = { ...role.value.func };
-  draft.objs = JSON.parse(JSON.stringify(fullObjs(role.value.objs)));
+  draft.func = { ...role.value?.func };
+  draft.objs = JSON.parse(JSON.stringify(role.value ? fullObjs(role.value.objs) : []));
   snap.value = JSON.stringify(draft);
 };
-watch(() => role.value.id, resetDraft, { immediate: true });
+watch(() => role.value?.id, resetDraft, { immediate: true });
 const dirty = computed(() => JSON.stringify(draft) !== snap.value);
 const guard = useUnsavedGuard(dirty);
 const changedCount = computed(() => {
+  if (!role.value) return { f: 0, o: 0 };
   const f = FUNC_PAGES.filter((p) => draft.func[p.key] !== role.value.func[p.key]).length;
   const base = fullObjs(role.value.objs);
   const o = draft.objs.filter((x) => JSON.stringify(x) !== JSON.stringify(base.find((b) => b.objType === x.objType))).length;
   return { f, o };
 });
 async function saveDraft() {
+  if (locked.value) { message.error(lockReason.value || '当前角色不可修改'); return; }
+  const savedName = role.value.name;
   const n = members.value[role.value.id].length;
   const ok = await confirm.ask({
     title: '保存权限', target: `角色「${role.value.name}」`, okText: '保存',
@@ -116,7 +136,7 @@ async function saveDraft() {
     const id = role.value.id;
     if (!(await call(() => saveRolePermissions(id, { func: { ...draft.func }, objs: JSON.parse(JSON.stringify(draft.objs)), lockVersion: lockOf(role.value) })))) return;
     resetDraft();
-    message.success(`已保存：${role.value.name}`);
+    message.success(`已保存：${savedName}`);
     return;
   }
   Object.assign(role.value, { func: { ...draft.func }, objs: JSON.parse(JSON.stringify(draft.objs)), updatedAt: nowStr, updatedBy: '王敏' });
@@ -137,9 +157,9 @@ const ocols = [
   { title: '可执行的动作', key: 'actions' },
   { title: '行级范围', key: 'scope', width: 260 },
 ];
-const scopesOf = (obj: string) => role.value.scopes.filter((s) => s.objType === obj);
+const scopesOf = (obj: string) => (role.value?.scopes ?? []).filter((s) => s.objType === obj);
 /** 没有配置范围时的默认：业务查看类角色不可见，其余全部行 */
-const noScopeText = computed(() => (role.value.defaultDeny ? '不可见（未配置范围，默认）' : '全部行'));
+const noScopeText = computed(() => (role.value?.defaultDeny ? '不可见（未配置范围，默认）' : '全部行'));
 const unscopedObjs = computed(() => draft.objs.filter((o) => o.view && !scopesOf(o.objType).length).map((o) => o.objType));
 
 // 行级范围
@@ -166,8 +186,8 @@ async function removeScope(s: RowScope) {
   message.success('已删除行级范围');
 }
 const scopeForm = reactive<{ key?: string; values: string[] }>({ key: undefined, values: [] });
-const scopeOpts = SCOPE_PROPS.map((p) => ({ value: `${p.objType}.${p.prop}`, label: `${p.objType} · ${p.prop}` }));
-const scopeProp = computed(() => SCOPE_PROPS.find((p) => `${p.objType}.${p.prop}` === scopeForm.key));
+const scopeOpts = computed(() => scopeProps.value.map((p) => ({ value: `${p.objType}.${p.prop}`, label: `${p.objType} · ${p.displayName ?? p.prop}`, disabled: !p.values.length })));
+const scopeProp = computed(() => scopeProps.value.find((p) => `${p.objType}.${p.prop}` === scopeForm.key));
 const scopeDirty = computed(() => q('form') === 'scope' && (!!scopeForm.key || scopeForm.values.length > 0));
 watch(() => scopeForm.key, () => { scopeForm.values = []; });
 const openScope = () => { scopeForm.key = undefined; scopeForm.values = []; setQuery({ form: 'scope' }); };
@@ -187,9 +207,27 @@ async function addScope() {
 
 // 成员
 const mkw = ref('');
-const mpq = usePagedQuery({ defaultSize: 15, filters: [mkw, () => role.value.id], prefix: 'm' });
-const mrows = computed(() => members.value[role.value.id].filter((u) => !mkw.value || u.name.includes(mkw.value) || u.account.includes(mkw.value) || u.id.includes(mkw.value)));
-const mpaged = computed(() => paginate(mrows.value, { page: mpq.page.value, size: mpq.size.value }));
+const mpq = usePagedQuery({ defaultSize: realRoles ? 10 : 15, filters: [mkw, () => role.value?.id], prefix: 'm' });
+const mrows = computed(() => (members.value[role.value?.id ?? ''] ?? []).filter((u) => !mkw.value || u.name.includes(mkw.value) || (u.account ?? '').includes(mkw.value) || u.id.includes(mkw.value)));
+const memberPage = ref<{ key: string; items: AdminUser[]; total: number }>({ key: '', items: [], total: 0 });
+const memberLoading = ref(false), memberError = ref('');
+const memberKey = () => JSON.stringify([currentApiContext(), role.value?.id]);
+let memberSeq = 0;
+async function loadMemberPage() {
+  const seq = ++memberSeq, key = memberKey(), id = role.value?.id;
+  if (!realRoles) return;
+  if (memberPage.value.key !== key) memberPage.value = { key, items: [], total: 0 };
+  if (!loaded.value || !id || tab.value !== 'members') return;
+  memberLoading.value = true; memberError.value = '';
+  try { const page = await queryRoleMembers(id, mpq.page.value, mpq.size.value, mkw.value);
+    if (seq !== memberSeq || key !== memberKey()) return;
+    memberPage.value = { key, items: page.items, total: page.total };
+    if (page.page !== mpq.page.value) mpq.page.value = page.page;
+  } catch (e) { if (seq === memberSeq && key === memberKey()) memberError.value = e instanceof Error ? e.message : String(e); }
+  finally { if (seq === memberSeq && key === memberKey()) memberLoading.value = false; }
+}
+watch([memberKey, loaded, tab, mpq.page, mpq.size, mkw], loadMemberPage, { immediate: true });
+const mpaged = computed(() => realRoles ? memberPage.value.key === memberKey() ? memberPage.value : { items: [], total: 0 } : paginate(mrows.value, { page: mpq.page.value, size: mpq.size.value }));
 const mcols = [
   { title: '用户 ID', key: 'id', width: 100 },
   { title: '姓名', dataIndex: 'name', key: 'name', width: 90 },
@@ -215,7 +253,7 @@ async function removeMember(u: AdminUser) {
   message.success(`已将 ${u.name} 移出「${role.value.name}」`);
 }
 const addIds = ref<string[]>([]);
-const addOpts = computed(() => allUsers.value.filter((u) => u.status === '启用' && !members.value[role.value.id].some((m) => m.id === u.id)).map((u) => ({ value: u.id, label: `${u.name} · ${u.dept} · ${u.id}` })));
+const addOpts = computed(() => allUsers.value.filter((u) => u.status === '启用' && !(members.value[role.value?.id ?? ''] ?? []).some((m) => m.id === u.id)).map((u) => ({ value: u.id, label: `${u.name} · ${u.dept} · ${u.id}` })));
 const openAdd = () => { addIds.value = []; setQuery({ form: 'members' }); };
 const closeAdd = async () => { if (q('form') === 'members' && addIds.value.length && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
 async function addMembers() {
@@ -235,7 +273,7 @@ const pvUser = computed(() => allUsers.value.find((u) => u.id === q('preview')))
 const pv = computed(() => {
   const u = pvUser.value;
   if (!u) return null;
-  return { u, ...effectiveAccess(u, roles.value, (r) => members.value[r.id] ?? []) };
+  return { u, ...effectiveAccess(u, roles.value, (r) => members.value[r.id] ?? [], permObjects.value) };
 });
 const openPreview = (u: AdminUser) => setQuery({ preview: u.id });
 async function enterPreview() {
@@ -259,7 +297,7 @@ async function enterPreview() {
 const form = reactive({ name: '', desc: '' });
 const formSnap = ref('');
 const formOpen = computed(() => q('form') === 'edit');
-watch([formOpen, () => role.value.id], () => { if (!formOpen.value) return; Object.assign(form, { name: role.value.name, desc: role.value.desc }); formSnap.value = JSON.stringify(form); }, { immediate: true });
+watch([formOpen, () => role.value?.id], () => { if (!formOpen.value || !role.value) return; Object.assign(form, { name: role.value.name, desc: role.value.desc }); formSnap.value = JSON.stringify(form); }, { immediate: true });
 const formDirty = computed(() => formOpen.value && JSON.stringify(form) !== formSnap.value);
 const closeForm = async () => { if (formDirty.value && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
 async function saveForm() {
@@ -365,13 +403,14 @@ async function saveNewRole() {
     <template #footer>
       <div style="display: flex; justify-content: flex-end; gap: 8px">
         <a-button @click="closeNewRole">取消</a-button>
-        <a-button type="primary" :disabled="!nr.name.trim()" @click="saveNewRole">新建</a-button>
+        <a-button type="primary" :disabled="readonly || !nr.name.trim()" @click="saveNewRole">新建</a-button>
       </div>
     </template>
   </a-drawer>
   <div class="rl">
     <div class="panel rl-list">
       <div class="panel-head"><span class="t-16 fw-600">角色</span><span class="t-14 c-2">共 {{ roles.length }} 个</span></div>
+      <a-alert v-if="loadError" type="error" show-icon :message="loadError"><template #action><a-button size="small" @click="loadInitial">重试</a-button></template></a-alert>
       <div class="rl-items">
         <div v-for="r in roles" :key="r.id" class="rl-item" :class="{ on: r.id === role.id }" @click="select(r.id)">
           <div class="rl-l1" :title="`${r.name}：${r.desc}`">
@@ -383,7 +422,7 @@ async function saveNewRole() {
       </div>
     </div>
 
-    <div class="panel rl-detail">
+    <div v-if="role" class="panel rl-detail">
       <div class="rl-head">
         <div class="rl-title">
           <span class="t-20 fw-600 c-1">{{ role.name }}<InfoTip :text="role.desc" /></span>
@@ -400,8 +439,8 @@ async function saveNewRole() {
       <a-tabs v-model:active-key="tab" class="rl-tabs">
         <a-tab-pane key="func" tab="功能权限" />
         <a-tab-pane key="obj" tab="对象与动作权限" />
-        <a-tab-pane key="row" :tab="`行级范围（${role.scopes.length}）`" />
-        <a-tab-pane key="members" :tab="`成员（${members[role.id].length}）`" />
+        <a-tab-pane key="row" tab="行级范围" />
+        <a-tab-pane key="members" tab="成员" />
       </a-tabs>
 
       <div v-if="tab === 'func'" class="rl-body">
@@ -439,7 +478,7 @@ async function saveNewRole() {
 
       <div v-else-if="tab === 'row'" class="rl-body">
         <div class="rl-rowhead">
-          <span class="t-12 c-2">只能基于对象类型里标为“权限依据”的属性设置。同一对象类型的多条范围取交集；没有范围的对象类型{{ role.defaultDeny ? '默认不可见' : '可见全部行' }}。</span>
+          <span class="t-12 c-2">只能使用已登记为行级依据的可筛选文本或枚举属性。同一对象类型的多条范围取并集；没有范围的对象类型{{ role.defaultDeny ? '默认不可见' : '可见全部行' }}。</span>
           <a-tooltip :title="lockReason"><a-button :disabled="locked" @click="openScope">添加范围</a-button></a-tooltip>
         </div>
         <div class="rl-rule t-12 c-2">
@@ -454,10 +493,11 @@ async function saveNewRole() {
         </a-table>
         <div class="t-14 fw-600 c-1 rl-h">可用的权限依据属性</div>
         <div class="rl-props">
-          <div v-for="p in SCOPE_PROPS" :key="p.objType + p.prop" class="rl-prop">
-            <span class="c-1">{{ p.objType }} · {{ p.prop }}</span>
-            <span class="t-12 c-3 rl-ellip">{{ p.values.join('、') }}</span>
+          <div v-for="p in scopeProps" :key="p.objType + p.prop" class="rl-prop">
+            <span class="c-1">{{ p.objType }} · {{ p.displayName ?? p.prop }}</span>
+            <span class="t-12 c-3 rl-ellip">{{ p.values.join('、') || '暂无可选取值' }}</span>
           </div>
+          <span v-if="!scopeProps.length" class="t-12 c-3">暂无可用的权限依据属性</span>
         </div>
       </div>
 
@@ -466,8 +506,8 @@ async function saveNewRole() {
           <a-input-search v-model:value="mkw" size="small" placeholder="姓名 / 账号 / ID" class="rl-w220" allow-clear />
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openAdd">添加成员</a-button></a-tooltip>
         </div>
-        <div class="rl-mtable" :class="{ 'paged-scroll': mpq.overflow.value }">
-          <a-table size="small" row-key="id" :columns="mcols" :data-source="mpaged.items" :pagination="false">
+        <a-alert v-if="memberError" type="error" :message="memberError" /><div class="rl-mtable" :class="{ 'paged-scroll': mpq.overflow.value }">
+          <a-table size="small" row-key="id" :columns="mcols" :loading="memberLoading" :data-source="mpaged.items" :pagination="false">
             <template #bodyCell="{ column, record }">
               <span v-if="column.key === 'id'" class="num">{{ record.id }}</span>
               <a-badge v-else-if="column.key === 'status'" :status="badge(record.status)" :text="record.status" />
@@ -489,24 +529,25 @@ async function saveNewRole() {
         <span class="t-14 c-1">有未保存的修改：功能权限 <span class="num">{{ changedCount.f }}</span> 处，对象与动作 <span class="num">{{ changedCount.o }}</span> 处</span>
         <a-space>
           <a-button @click="resetDraft">放弃修改</a-button>
-          <a-button type="primary" @click="saveDraft">保存</a-button>
+          <a-button type="primary" :disabled="locked" @click="saveDraft">保存</a-button>
         </a-space>
       </div>
     </div>
+    <div v-else class="panel rl-detail"><a-empty :description="loading ? '正在读取数据库角色…' : loadError ? '角色加载失败，请重试' : '暂无角色，可新建角色'" /></div>
   </div>
 
-  <a-drawer :open="formOpen" :width="520" :title="`编辑角色 · ${role.name}`" @close="closeForm">
+  <a-drawer v-if="role" :open="formOpen" :width="520" :title="`编辑角色 · ${role.name}`" @close="closeForm">
     <a-form layout="vertical" :model="form">
       <a-form-item label="角色名" required><a-input v-model:value="form.name" :maxlength="20" show-count /></a-form-item>
       <a-form-item label="说明"><a-textarea v-model:value="form.desc" :rows="3" :maxlength="80" show-count /></a-form-item>
     </a-form>
     <div class="t-12 c-3">权限在详情页签里修改；角色名变化会同步到动作类型提交条件里的“执行人角色”。</div>
     <template #footer>
-      <div class="rl-foot"><a-button @click="closeForm">取消</a-button><a-button type="primary" :disabled="!formDirty" @click="saveForm">保存</a-button></div>
+      <div class="rl-foot"><a-button @click="closeForm">取消</a-button><a-button type="primary" :disabled="locked || !formDirty" @click="saveForm">保存</a-button></div>
     </template>
   </a-drawer>
 
-  <a-drawer :open="q('form') === 'scope'" :width="520" :title="`添加行级范围 · ${role.name}`" @close="closeScope">
+  <a-drawer v-if="role" :open="q('form') === 'scope'" :width="520" :title="`添加行级范围 · ${role.name}`" @close="closeScope">
     <a-form layout="vertical">
       <a-form-item label="权限依据属性" required><a-select v-model:value="scopeForm.key" :options="scopeOpts" placeholder="对象类型 · 属性" /></a-form-item>
       <a-form-item label="取值" required>
@@ -514,19 +555,19 @@ async function saveNewRole() {
       </a-form-item>
     </a-form>
     <div v-if="scopeProp && scopeForm.values.length" class="rl-preview t-14 c-1">{{ scopeProp.objType }}：{{ scopeProp.prop }} {{ scopeForm.values.length > 1 ? '∈' : '=' }} {{ scopeForm.values.join('、') }}</div>
-    <div class="t-12 c-3">只列出对象类型里标为“权限依据”的属性；要用其他属性，先到 构建 → 对象类型 → 属性 里标记。</div>
+    <div class="t-12 c-3">只列出已发布对象中可执行行级过滤的可筛选文本、枚举属性；空取值属性暂不可选。</div>
     <template #footer>
-      <div class="rl-foot"><a-button @click="closeScope">取消</a-button><a-button type="primary" :disabled="!scopeProp || !scopeForm.values.length" @click="addScope">添加</a-button></div>
+      <div class="rl-foot"><a-button @click="closeScope">取消</a-button><a-button type="primary" :disabled="locked || !scopeProp || !scopeForm.values.length" @click="addScope">添加</a-button></div>
     </template>
   </a-drawer>
 
-  <a-drawer :open="q('form') === 'members'" :width="520" :title="`添加成员 · ${role.name}`" @close="closeAdd">
+  <a-drawer v-if="role" :open="q('form') === 'members'" :width="520" :title="`添加成员 · ${role.name}`" @close="closeAdd">
     <a-form layout="vertical">
       <a-form-item label="用户"><a-select v-model:value="addIds" mode="multiple" show-search option-filter-prop="label" :options="addOpts" placeholder="搜索姓名 / 部门 / ID" /></a-form-item>
     </a-form>
     <div class="t-12 c-3">只能添加“启用”状态的用户。一个用户可以有多个角色，权限取并集。</div>
     <template #footer>
-      <div class="rl-foot"><a-button @click="closeAdd">取消</a-button><a-button type="primary" :disabled="!addIds.length" @click="addMembers">添加 {{ addIds.length || '' }}</a-button></div>
+      <div class="rl-foot"><a-button @click="closeAdd">取消</a-button><a-button type="primary" :disabled="readonly || !addIds.length" @click="addMembers">添加 {{ addIds.length || '' }}</a-button></div>
     </template>
   </a-drawer>
 

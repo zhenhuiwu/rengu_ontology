@@ -2,50 +2,43 @@
 /**
  * 静态本体页的取数闸门（src/api/static.ts）：
  * - mock 模式：直接渲染页面本体，和以前完全一样（不发请求）；
- * - real 模式：后台连不上（isBackendDown）时回退 mock 照常渲染并提示；其他接口错误停在错误页。
- * - real 模式：先按 sets 把整表从静态接口拉下来，再挂载页面本体；切换历史版本（?ver=）时重新拉取并重建页面本体。
+ * - real 模式：任何接口错误停在错误页，不显示演示数据。
+ * - real 模式：paged页面自行取可见页；其余按sets加载所需完整目录；切换历史版本（?ver=）时重新拉取并重建页面本体。
  */
-import { message } from 'ant-design-vue';
 import { computed, ref, watch } from 'vue';
-import { useAppStore } from '@/stores/app';
 import { isApiError, isBackendDown } from '@/api/http';
-import { isStaticReal, loadStatic, type StaticDataset } from '@/api/static';
+import { isStaticReal, loadStatic, staticContextKey, type StaticDataset } from '@/api/static';
 
-const props = defineProps<{ sets: StaticDataset[] }>();
-const app = useAppStore();
-const real = isStaticReal();
-const state = ref<'loading' | 'ready' | 'error'>(real ? 'loading' : 'ready');
+const props = defineProps<{ sets: StaticDataset[]; paged?: boolean }>();
+const state = ref<'loading' | 'ready' | 'error'>(isStaticReal() ? 'loading' : 'ready');
 const error = ref('');
-const loadedVer = ref<string | null>(null);
-const bodyKey = computed(() => loadedVer.value ?? 'current');
+const loadedKey = ref('');
+const bodyKey = computed(() => loadedKey.value);
+const ready = computed(() => state.value === 'ready' && (!isStaticReal() || loadedKey.value === staticContextKey()));
+let seq = 0;
 
 async function load() {
-  if (!real) return;
-  const ver = app.viewVersion ?? null;
-  state.value = 'loading';
+  const my = ++seq;
+  const key = staticContextKey();
+  state.value = isStaticReal() ? 'loading' : 'ready';
+  error.value = '';
   try {
-    await loadStatic(props.sets);
-    loadedVer.value = ver;
+    await loadStatic(props.paged ? [] : props.sets);
+    if (my !== seq || key !== staticContextKey()) return;
+    loadedKey.value = key;
     state.value = 'ready';
   } catch (e) {
+    if (my !== seq || key !== staticContextKey()) return;
     console.error('[api] 静态本体接口加载失败', e);
-    if (isBackendDown(e)) {
-      message.warning('后台未启动，暂时显示演示数据');
-      state.value = 'ready';
-      return;
-    }
     error.value = isBackendDown(e) ? '后台未启动' : `接口加载失败（${isApiError(e) ? `${e.code}：${e.message}` : String(e)}）`;
     state.value = 'error';
   }
 }
-if (real) {
-  load();
-  watch(() => app.viewVersion, (v) => { if ((v ?? null) !== loadedVer.value) load(); });
-}
+watch(staticContextKey, load, { immediate: true });
 </script>
 
 <template>
-  <slot v-if="state === 'ready'" :ver-key="bodyKey" />
+  <slot v-if="ready" :ver-key="bodyKey" />
   <div v-else-if="state === 'loading'" style="padding: 120px 0; text-align: center"><a-spin tip="加载中…" /></div>
   <a-result v-else status="warning" title="静态本体数据加载失败" :sub-title="error">
     <template #extra><a-button type="primary" @click="load">重试</a-button></template>

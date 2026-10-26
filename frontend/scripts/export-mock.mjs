@@ -33,6 +33,9 @@
  *   index.ts 只是汇总再导出，不单独导。新增 mock 文件没写进映射时归到 unmapped，并在终端提示。
  */
 process.env.TZ = 'Asia/Shanghai';
+// 种子导出必须独立于本地真实接口开关，派生抽屉解析器也不能发请求。
+process.env.VITE_API_MODE = 'mock';
+process.env.VITE_API_REAL_MODULES = '';
 
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';

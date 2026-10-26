@@ -22,8 +22,8 @@
 | GET | /users | `dept,status,kw,page,size` | `{items,total,page,size}`，item = `AdminUser & {pendingApprovals}` | 见下 |
 | GET | /depts | — | `string[]` | mock `ADMIN_DEPTS` 原顺序（常量，部门表由 PDE 补） |
 | POST | /users | `{name,account,dept,role,status?}` | `AdminUser & {pendingApprovals}` | account 唯一 → 409 `DUPLICATE_KEY`；status 默认「待激活」 |
-| PUT | /users/{id} | `{name,dept,role,status}` | 同上 | 账号不能改；不存在 / 占位人 → 404 |
-| POST | /users:import-preview | `{rows:[{name,account,dept,role}]}` 或 `{csv:"…"}` | `{rows:[{name,account,dept,role,error}]}` | 只校验不写库 |
+| PUT | /users/{id} | `{name,dept,role,status,lockVersion?}` | 同上 | 账号不能改；版本过期 → 409 `VERSION_CONFLICT`；不存在 / 占位人 → 404 |
+| POST | /users:import-preview | `{rows:[{name,account,dept,role}]}` / `{csv:"…"}` / `{xlsxBase64:"…"}` 三选一 | `{rows:[{name,account,dept,role,error}]}` | 只校验不写库，最多500个非空数据行 |
 | POST | /users:import | `{rows}`（≤500） | `{imported:n}` | 按预览规则逐行校验，有 error 的跳过，其余建为「待激活」 |
 | POST | /users/{id}:enable | — | 用户 | 停用 / 待激活 → 启用 |
 | POST | /users/{id}:disable | `{transferTo?}` | 用户 | 见下 |
@@ -35,13 +35,16 @@
 - 顺序 = mock `ADMIN_USERS` 数组顺序 = 用户编号升序。
 - 分页同 `paginate()`：`page` 越界收拢到最后一页，`page ≤ 0` 当第 1 页；`size` 默认 20（前端传 17），上限 200。
 - `pendingApprovals` = mock `pendingApprovals`：启用 ? (编号数字 × 13) % 5 : 0。[推断] 审批模块接上后改真实计数。
-- 字段：`id,name,account,dept,role,status,lastLogin('YYYY-MM-DD HH:mm'|null),createdAt('YYYY-MM-DD'),pendingApprovals`。
+- 字段：`id,name,account,dept,role,status,lastLogin('YYYY-MM-DD HH:mm'|null),createdAt('YYYY-MM-DD'),pendingApprovals,lockVersion`。
 
 ### import-preview 校验（按顺序取第一条错误）
 
-姓名为空 → 账号不是邮箱（`^\S+@\S+$`，同前端 formOk）→ 部门不存在（不在 ADMIN_DEPTS）→ 角色不存在（不在 mock ROLES 名单）
-→ 账号已存在，导入时跳过 → 文件内账号重复。CSV：UTF-8，可带 BOM，首行表头 `姓名,账号,部门,角色`（顺序不限），空行忽略。
-Excel 不收（api-index【待定】）。
+行字段先 trim，再检查长度（姓名64、账号128、部门128、角色64），超长在预览标行错误，最终提交按同一规则跳过；随后为姓名为空 → 账号不是邮箱（`^\S+@\S+$`，同前端 formOk）→ 部门不存在（不在 ADMIN_DEPTS）→ 角色不存在（查 sys_role）→ 账号已存在，导入时跳过 → 文件内账号重复。最终提交重新校验，不信任客户端 `error`。
+
+- 三种输入必须且只能提供一个；`rows`、文件预览和最终提交统一最多500行，超出422 `VALIDATION_FAILED`，不截断。字段 NUL / 孤立代理字符在预览和提交均为422，不进入数据库查询；CSV原文同样检查，避免解析后500。
+- CSV继续 UTF-8（可带 BOM）、原文最多1,000,000字符，首行表头 `姓名,账号,部门,角色` 可重排，未知列忽略、缺列当空、空行忽略。重复**已知**表头422，避免静默覆盖；其他原有行为保留。
+- 新增 XLSX：严格 base64 编码文件内容（不带 data URL 前缀），解码后最多2 MiB；后端 `openpyxl + defusedxml` 解析，无前端Excel库、multipart或新表。只导入第一个工作表，首个非空行必须包含四个模板表头，可重排，允许未知附加列；空工作簿 / 仅表头返回空预览。数值等非空值转文本，公式单元格直接422，不求值、不取公式缓存；宏、旧xls、模板xltx/xltm、加密/损坏包不支持。CSV中的公式样式字符串仍作普通文本处理，不执行。
+- XLSX ZIP最多128项、总展开20 MiB；检查重复成员、加密及压缩方式、实际有界读取，内存处理且不解压落盘。包类型复用openpyxl清单模型识别，拒绝伪装宏包；defusedxml防实体扩展。使用只读工作簿、关闭外部链接、最后关闭工作簿；重置不可信dimension，最多扫描10000物理行和32列，过界422并提示移除多余格式/空行，不会把超出500人或伪造dimension静默丢掉。文件解析在线程中执行，不阻塞事件循环。
 
 ### disable
 
@@ -55,15 +58,15 @@ Excel 不收（api-index【待定】）。
    mock 是 `U${1000+n}` 插到最前（unshift）。
 2. 部门、角色名是常量（mock 原样）；新建 / 编辑时 role 不在名单里 → 422。
 3. 写操作暂不写审计日志（admin 自己的 insert_audit 可直接接，下一阶段做）。
-4. 编辑不带 lockVersion（契约没有），后写覆盖。
+4. 编辑支持可选正整数 `lockVersion`；不传兼容旧调用。过期时 409 `VERSION_CONFLICT`，不覆盖已保存内容。
 
 ## 前端
 
-Users.vue 已接真接口（`src/api/admin.ts`，apiClient 的 put/patch/delete 由 cherry-pick 215819d 补上），回退规则同审计日志：
-开关 admin 没切到真接口、或后台没起来（网络错 / 5xx）→ 用本地 mock，原逻辑不变；其他错误（409 / 422 等）弹提示。
+Users.vue 已接真接口（`src/api/admin.ts`）。只有显式 mock 模式使用本地数据；真模式网络、5xx 和业务错误全部显示错误，列表与候选保持空态，不切换演示用户。
 
-- 列表：`queryUsers` 按 部门 / 状态 / 关键词 / page / size 查一页；部门下拉来自 `GET /depts`（失败回退 ADMIN_DEPTS）。
+- 列表：`queryUsers` 按 部门 / 状态 / 关键词 / page / size 查一页；部门来自 `GET /depts`，角色来自 `GET /roles`，失败或空列表不回退固定候选。身份或版本切换清空旧数据，并丢弃迟到结果；读取成功前禁止修改。
 - 新建 / 编辑：`POST /users`、`PUT /users/{id}`，成功后重新拉当前页。
-- 批量导入：只收模板 CSV，上传即调 `users:import-preview`，预览表多一列「校验」（error）；确认后 `users:import`，有错的行跳过。
+- 编辑抽屉打开时固定用户的 `lockVersion`；同用户列表刷新不替换编辑内容或版本。409 时保留抽屉、输入和原版本，提示核对最新数据后重新编辑。
+- 批量导入：模板仍下载CSV（示例部门使用有效完整部门），可上传CSV或无宏XLSX，上传即调 `users:import-preview`，预览表显示校验结果。解析时清旧预览、显示busy并禁用确认；提交有busy防重复。文件选择 / 关闭窗口 / 身份及查看上下文变化均使旧结果失效；确认卡返回后再次核对上下文，避免将旧预览以新身份提交。演示模式明确不解析，不再为任意文件伪造SAMPLE用户。确认后 `users:import`，有错的行跳过。
 - 启用 / 停用：`users/{id}:enable`、`users/{id}:disable`；有待办审批时把转交人作为 `transferTo` 传上去。
-- 已知限制：真接口下编辑抽屉、停用转交人候选只在当前页里找（mock 下是全量）；Excel 导入未做。
+- 已知限制：真接口下编辑抽屉、停用转交人候选只在当前页里找（mock 下是全量）；导入仅创建「待激活」记录，没有实现激活邮件发送或多工作表合并。

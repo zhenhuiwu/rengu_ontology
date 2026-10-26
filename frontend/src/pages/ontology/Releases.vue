@@ -16,10 +16,14 @@ import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
 import { useAppStore } from '@/stores/app';
 import {
-  CHANGE_REQUESTS, CURRENT_USER, ONTOLOGY_ADMINS, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, registerChange, reviewLog,
-  type ChangeRequest, type CheckResult, type CRStatus, type ReviewEvent,
+  CHANGE_REQUESTS, CURRENT_USER, ONTOLOGY_ADMINS, checkCounts, checkSummary, crDetail, editRoute, impactSummary, mergeCheck, reviewLog,
+  type ChangeRequest, type CRDetail, type CheckResult, type CRStatus, type ReviewEvent,
 } from '@/mock/changes';
-import { crAction, deleteCR, fetchChangeRequests, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease, type CRAction } from '@/api/static';
+import { loadMyProfile } from '@/api/profile';
+import { currentApiContext } from '@/api/http';
+import { useStaticPage } from './parts/useStaticPage';
+import { invalidateActionSnapshot } from '@/api/action';
+import { crAction, deleteCR, fetchCR, fetchReviewerOptions, patchCR, fetchWorkflowRecords, fetchStaticPage, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease, validateCR, type CRAction } from '@/api/static';
 
 const route = useRoute();
 const router = useRouter();
@@ -29,28 +33,95 @@ const app = useAppStore();
 const CURRENT_VERSION = computed(() => app.ontologyVersion);
 const NEXT_VERSION = computed(() => app.ontologyNextVersion);
 const { readonly, reason } = useReadonly();
-const me = computed(() => app.user?.name || CURRENT_USER);
-const isAdmin = computed(() => ONTOLOGY_ADMINS.includes(me.value));
-
-const CRS = reactive<ChangeRequest[]>(CHANGE_REQUESTS.map((c) => ({ ...c })));
-const extraLog = reactive<Record<string, ReviewEvent[]>>({});
-/** real 模式：变更单整表从 GET /change-requests?full=true 载入（详情经 registerChange 交给 mock 的 crDetail / reviewLog，
- *  评审追加记录 = 库里的 cr_event），每次写操作后重新载入，刷新页面状态不丢；mock 模式不走这里 */
-/** real 模式载入失败 → 页面退回 mock 列表（crFallback）：这些单号库里不一定有，写按钮一律禁用，避免对库误操作 */
-const crFallback = ref(false);
-async function loadCRs() {
-  let rows;
-  try { rows = await fetchChangeRequests(); } catch (e) { crFallback.value = true; message.error(`变更单载入失败：${e instanceof Error ? e.message : String(e)}`); return false; }
-  crFallback.value = false;
-  const list = rows.map(({ detail: d, events, ...c }) => { registerChange({ ...c }, d); return { c, events }; });
-  CRS.splice(0, CRS.length, ...list.map((x) => x.c));
-  for (const k of Object.keys(extraLog)) delete extraLog[k];
-  for (const x of list) extraLog[x.c.id] = x.events;
-  return true;
-}
 const realMode = isStaticReal();
-if (realMode) void loadCRs();
+const realMe = ref(''), realMeId = ref('');
+const releaseCapabilities = ref({ publish: false, rollback: false });
+let meSeq = 0;
+if (realMode) watch(() => JSON.stringify(currentApiContext()), async (key) => {
+  const my = ++meSeq; realMe.value = ''; realMeId.value = ''; releaseCapabilities.value = { publish: false, rollback: false };
+  try { const user = await loadMyProfile(); if (my === meSeq && key === JSON.stringify(currentApiContext())) { realMe.value = user?.name ?? ''; realMeId.value = user?.id ?? ''; releaseCapabilities.value = { publish: user?.capabilities.publish === true, rollback: user?.capabilities.rollback === true }; } }
+  catch { if (my === meSeq && key === JSON.stringify(currentApiContext())) { realMe.value = ''; realMeId.value = ''; releaseCapabilities.value = { publish: false, rollback: false }; } }
+}, { immediate: true });
+const me = computed(() => realMode ? realMe.value : app.user?.name || CURRENT_USER);
+const isAdmin = computed(() => realMode ? releaseCapabilities.value.publish : ONTOLOGY_ADMINS.includes(me.value));
+const canRollback = computed(() => !realMode || releaseCapabilities.value.rollback);
+
+type CRView = ChangeRequest & { ownerId?: string; reviewerId?: string };
+const CRS = reactive<CRView[]>(realMode ? [] : CHANGE_REQUESTS.map((c) => ({ ...c })));
+const emptyCR: CRView = { id: '', title: '', owner: '', reviewer: '', status: '草稿', level: '一般', changes: 0, updatedAt: '', reason: '' };
+let loadSeq = 0;
+const extraLog = reactive<Record<string, ReviewEvent[]>>({});
+type AnalyzedDetail = CRDetail & { analysisScope?: string; trialUnavailable?: string };
+const realDetails = reactive<Record<string, AnalyzedDetail>>({});
+const loadedCRKey = ref('');
+const visibleCRS = computed(() => !realMode || loadedCRKey.value === JSON.stringify(currentApiContext()) ? CRS : []);
+const emptyDetail = (): CRDetail => ({ diffs: [], checks: [], impact: { direct: [], defs: [], usage: [] }, touches: [], times: { created: '' } });
+// 完整摘要用于整版发布批次；列表按页查询，详情和事件只加载当前单。
+const crFallback = ref(false);
+const pageRows = ref<CRView[]>([]), pageTotal = ref(0);
+const pageLoading = ref(false), detailLoading = ref(false), catalogLoading = ref(false);
+let pageSeq = 0, detailSeq = 0;
+let loadedPageQuery = '';
+const pageKey = () => JSON.stringify([currentApiContext(), lpage.value, st.value, kw.value]);
+const fixedOptions = () => {
+  const ctx = currentApiContext();
+  return { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } };
+};
+function keepDetail(head: Awaited<ReturnType<typeof fetchCR>>) {
+  const d = head.detail;
+  realDetails[head.id] = { ...emptyDetail(), ...d, diffs: d.diffs ?? [], checks: d.checks ?? [], impact: { direct: d.impact?.direct ?? [], defs: d.impact?.defs ?? [], usage: d.impact?.usage ?? [] }, touches: d.touches ?? [], times: { created: '', ...d.times } };
+  extraLog[head.id] = head.events;
+}
+async function loadPage(focusId?: string) {
+  const my = ++pageSeq, key = pageKey(), ctx = JSON.stringify(currentApiContext());
+  pageLoading.value = true;
+  try {
+    const result = await fetchStaticPage<CRView>('/change-requests', { page: lpage.value, size: LPAGE, status: st.value === '全部' ? undefined : st.value, kw: kw.value || undefined, focusId });
+    if (my !== pageSeq || key !== pageKey() || ctx !== JSON.stringify(currentApiContext())) return false;
+    pageRows.value = result.items; pageTotal.value = result.total;
+    loadedPageQuery = JSON.stringify([currentApiContext(), result.page, st.value, kw.value]);
+    lpage.value = result.page;
+    return true;
+  } catch (e) {
+    if (my === pageSeq && key === pageKey()) { pageRows.value = []; crFallback.value = true; message.error(`变更单列表加载失败：${e instanceof Error ? e.message : String(e)}`); }
+    return false;
+  } finally { if (my === pageSeq) pageLoading.value = false; }
+}
+async function loadCRs() {
+  const my = ++loadSeq, key = JSON.stringify(currentApiContext());
+  catalogLoading.value = true;
+  try {
+    ++pageSeq; ++detailSeq;
+    CRS.splice(0); loadedCRKey.value = '';
+    pageRows.value = []; pageTotal.value = 0; loadedPageQuery = '';
+    for (const id of Object.keys(realDetails)) delete realDetails[id];
+    for (const id of Object.keys(extraLog)) delete extraLog[id];
+    crFallback.value = true;
+    let rows;
+    try { rows = await fetchWorkflowRecords(fixedOptions()); } catch (e) { if (my !== loadSeq || key !== JSON.stringify(currentApiContext())) return false; crFallback.value = true; message.error(`变更单载入失败：${e instanceof Error ? e.message : String(e)}`); return false; }
+    if (my !== loadSeq || key !== JSON.stringify(currentApiContext())) return false;
+    const requested = String(route.query.cr || 'CR-0010');
+    const id = rows.find((row) => row.id === requested)?.id ?? rows[0]?.id;
+    detailLoading.value = !!id;
+    try {
+      const options = fixedOptions();
+      const [head, ok] = await Promise.all([id ? fetchCR(id, { ...options, query: { ...options.query, includeDiffs: false } }) : Promise.resolve(null), loadPage(id)]);
+      if (my !== loadSeq || key !== JSON.stringify(currentApiContext())) return false;
+      if (!ok) return false;
+      if (head) keepDetail(head);
+    } catch (e) {
+      if (my === loadSeq && key === JSON.stringify(currentApiContext())) message.error(`变更单详情加载失败：${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    } finally { if (my === loadSeq) detailLoading.value = false; }
+    CRS.splice(0, CRS.length, ...rows);
+    loadedCRKey.value = key;
+    crFallback.value = false;
+    return true;
+  } finally { if (my === loadSeq) catalogLoading.value = false; }
+}
+if (realMode) watch(() => JSON.stringify(currentApiContext()), () => { void loadCRs(); }, { immediate: true });
 const rolledBack = ref(false);
+const skippedSections = ref<string[]>([]);
 
 const STATUSES = ['全部', '草稿', '审核中', '已通过', '已发布', '已驳回'];
 const st = computed({
@@ -61,24 +132,55 @@ const kw = ref('');
 const lpage = ref(1);
 const LPAGE = 17;
 watch([st, kw], () => { lpage.value = 1; });
-const filtered = computed(() => CRS.filter((c) => (st.value === '全部' || c.status === st.value) && (!kw.value || c.title.includes(kw.value) || c.id.includes(kw.value.toUpperCase()))));
-const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
+const filtered = computed(() => visibleCRS.value.filter((c) => (st.value === '全部' || c.status === st.value) && (!kw.value || c.title.includes(kw.value) || c.id.includes(kw.value.toUpperCase()))));
+const list = computed(() => realMode ? loadedCRKey.value === JSON.stringify(currentApiContext()) ? pageRows.value : [] : filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
+const totalRows = computed(() => realMode ? pageTotal.value : filtered.value.length);
+if (realMode) watch([() => JSON.stringify(currentApiContext()), lpage, st, kw], ([key], [previous]) => {
+  if (key !== previous || loadedPageQuery === pageKey()) return;
+  if (loadedCRKey.value === key) void loadPage();
+  else if (catalogLoading.value) void loadCRs();
+});
 
-const cur = computed(() => CRS.find((c) => c.id === ((route.query.cr as string) || 'CR-0010')) ?? CRS[0]);
+const cur = computed(() => visibleCRS.value.find((c) => c.id === ((route.query.cr as string) || 'CR-0010')) ?? visibleCRS.value[0] ?? emptyCR);
 const pick = (id: string) => router.replace({ query: { ...route.query, cr: id } });
 // 选中的单子不在当前页时，翻到它所在的页
-watch(() => cur.value.id, (id) => { const i = filtered.value.findIndex((c) => c.id === id); if (i >= 0) lpage.value = Math.floor(i / LPAGE) + 1; }, { immediate: true });
+watch(() => cur.value.id, (id) => { if (realMode) return; const i = filtered.value.findIndex((c) => c.id === id); if (i >= 0) lpage.value = Math.floor(i / LPAGE) + 1; }, { immediate: true });
+if (realMode) watch(() => route.query.cr, async () => {
+  if (loadedCRKey.value !== JSON.stringify(currentApiContext()) || !cur.value.id) return;
+  const my = ++detailSeq, id = cur.value.id, key = JSON.stringify(currentApiContext());
+  detailLoading.value = true; crFallback.value = true;
+  try {
+    const options = fixedOptions();
+    const head = await fetchCR(id, { ...options, query: { ...options.query, includeDiffs: false } });
+    if (my !== detailSeq || id !== cur.value.id || key !== JSON.stringify(currentApiContext())) return;
+    keepDetail(head); crFallback.value = false;
+  } catch (e) {
+    if (my === detailSeq && key === JSON.stringify(currentApiContext())) message.error(`变更单详情加载失败：${e instanceof Error ? e.message : String(e)}`);
+  } finally { if (my === detailSeq) detailLoading.value = false; }
+});
 const tab = computed({
   get: () => (route.query.tab as string) || 'diff',
   set: (v) => router.replace({ query: { ...route.query, tab: v } }),
 });
-const detail = computed(() => crDetail(cur.value.id));
+const detail = computed(() => realMode ? loadedCRKey.value === JSON.stringify(currentApiContext()) ? realDetails[cur.value.id] ?? emptyDetail() : emptyDetail() : crDetail(cur.value.id));
 const rechecking = ref(false);
-function recheck() {
+async function recheck() {
+  if (!cur.value.id || crFallback.value || readonly.value || rechecking.value) return;
   rechecking.value = true;
+  if (realMode) {
+    const id = cur.value.id;
+    const key = JSON.stringify(currentApiContext());
+    try {
+      const result = await validateCR(id);
+      if (key !== JSON.stringify(currentApiContext())) return;
+      if (await loadCRs()) message.success(`${id} 校验完成：${result.summary || '暂无结果'}`);
+    } catch (e) { message.error(`校验失败：${e instanceof Error ? e.message : String(e)}`); }
+    finally { rechecking.value = false; }
+    return;
+  }
   setTimeout(() => { rechecking.value = false; message.success(`${cur.value.id} 校验完成：${checkSummary(detail.value.checks) || '全部通过'}`); }, 800);
 }
-const log = computed(() => [...(extraLog[cur.value.id] ?? []), ...reviewLog(cur.value)]);
+const log = computed(() => realMode ? extraLog[cur.value.id] ?? [] : [...(extraLog[cur.value.id] ?? []), ...reviewLog(cur.value)]);
 
 const statusClass = (s: CRStatus) => (s === '审核中' ? 'c-warning' : 'c-3');
 const tagColor = (s: CRStatus) => ({ 草稿: 'default', 审核中: 'warning', 已通过: 'default', 已发布: 'default', 已驳回: 'default' })[s];
@@ -89,11 +191,49 @@ const blocked = computed(() => counts.value['阻断'] > 0);
 const impactSum = computed(() => impactSummary(detail.value));
 
 // —— 当前用户能做什么 ——
-const isOwner = computed(() => cur.value.owner === me.value);
-const isReviewer = computed(() => cur.value.reviewer === me.value && !isOwner.value);
-const canManage = computed(() => isOwner.value || cur.value.reviewer === me.value);
-const editTo = computed(() => editRoute(detail.value.edit));
-const latestRelease = computed(() => CRS.find((c) => c.status === '已发布')?.release);
+const isOwner = computed(() => realMode && cur.value.ownerId ? cur.value.ownerId === realMeId.value : !!me.value && cur.value.owner === me.value);
+const isReviewer = computed(() => !isOwner.value && (realMode && cur.value.reviewerId ? cur.value.reviewerId === realMeId.value : !!me.value && cur.value.reviewer === me.value));
+const canManage = computed(() => isOwner.value || isReviewer.value);
+const canSetReviewer = computed(() => realMode && !crFallback.value && !readonly.value && !!cur.value.id && cur.value.status === '草稿' && isOwner.value);
+const reviewerOpen = ref(false), reviewerLoading = ref(false), reviewerSaving = ref(false), reviewerError = ref('');
+const reviewerOptions = ref<{ id: string; name: string }[]>([]), reviewerId = ref<string>(), reviewerLock = ref<number>(), storedReviewer = ref('');
+let reviewerSeq = 0;
+const reviewerKey = () => JSON.stringify([currentApiContext(), cur.value.id]);
+watch(reviewerKey, () => { reviewerSeq++; reviewerOpen.value = false; reviewerId.value = undefined; reviewerOptions.value = []; reviewerLock.value = undefined; storedReviewer.value = ''; });
+async function loadReviewers() {
+  if (!canSetReviewer.value) return;
+  const my = ++reviewerSeq, key = reviewerKey(), id = cur.value.id, selection = reviewerId.value;
+  const ctx = currentApiContext();
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  reviewerLoading.value = true; reviewerError.value = ''; reviewerOptions.value = []; reviewerLock.value = undefined;
+  try {
+    const head = await fetchCR(id, options); if (my !== reviewerSeq || key !== reviewerKey()) return;
+    const choices = await fetchReviewerOptions(id, options); if (my !== reviewerSeq || key !== reviewerKey()) return;
+    reviewerOptions.value = choices; reviewerLock.value = head.lockVersion; storedReviewer.value = head.reviewerId ? `${head.reviewer}（${head.reviewerId}）` : head.reviewer;
+    reviewerId.value = choices.some((u) => u.id === selection) ? selection : choices.find((u) => head.reviewerId ? u.id === head.reviewerId : u.id === head.reviewer || u.name === head.reviewer)?.id;
+  } catch (e) { if (my === reviewerSeq && key === reviewerKey()) reviewerError.value = e instanceof Error ? e.message : String(e); }
+  finally { if (my === reviewerSeq && key === reviewerKey()) reviewerLoading.value = false; }
+}
+function openReviewer() { if (!canSetReviewer.value) return; reviewerOpen.value = true; reviewerSaving.value = false; reviewerId.value = undefined; storedReviewer.value = cur.value.reviewer; void loadReviewers(); }
+const canSaveReviewer = computed(() => reviewerOpen.value && canSetReviewer.value && !reviewerLoading.value && !reviewerSaving.value && !reviewerError.value && reviewerLock.value !== undefined && reviewerOptions.value.some((u) => u.id === reviewerId.value));
+async function saveReviewer() {
+  if (!canSaveReviewer.value) return;
+  const my = reviewerSeq, key = reviewerKey(), id = cur.value.id, ctx = currentApiContext();
+  reviewerSaving.value = true;
+  try {
+    await patchCR(id, { reviewer: reviewerId.value, lockVersion: reviewerLock.value }, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } });
+    if (my !== reviewerSeq || key !== reviewerKey()) return;
+    reviewerOpen.value = false; if (await loadCRs()) message.success('审核人已保存');
+  } catch (e) { if (my === reviewerSeq && key === reviewerKey()) reviewerError.value = `${e instanceof Error ? e.message : String(e)}；选择已保留，可重新加载后确认`; }
+  finally { if (my === reviewerSeq && key === reviewerKey()) reviewerSaving.value = false; }
+}
+const editTo = computed(() => {
+  const target = detail.value.edit as { kind?: string; id?: string } | undefined;
+  return realMode && target?.kind === 'quality'
+    ? { path: '/build/data/quality', query: { check: target.id, form: 'edit' } }
+    : editRoute(detail.value.edit);
+});
+const latestRelease = computed(() => visibleCRS.value.find((c) => c.status === '已发布')?.release);
 const isLatest = computed(() => !rolledBack.value && cur.value.release === latestRelease.value && cur.value.release === CURRENT_VERSION.value);
 /** 详情区有没有蓝色主按钮：有就把页头“发布”降为普通按钮，同屏只留一个主按钮 */
 const detailPrimary = computed(() => !readonly.value && (cur.value.status === '草稿' || (cur.value.status === '审核中' && isReviewer.value)));
@@ -102,7 +242,9 @@ const detailPrimary = computed(() => !readonly.value && (cur.value.status === '�
 const dpage = ref(1);
 const DPAGE = 10;
 watch(() => cur.value.id, () => { dpage.value = 1; });
-const drows = computed(() => detail.value.diffs.slice((dpage.value - 1) * DPAGE, dpage.value * DPAGE));
+const diffPage = useStaticPage<CRDetail['diffs'][number]>(() => cur.value.id ? `/change-requests/${encodeURIComponent(cur.value.id)}/diffs` : '', () => ({}), dpage, DPAGE, () => tab.value === 'diff' && !crFallback.value);
+const drows = computed(() => realMode ? diffPage.items.value : detail.value.diffs.slice((dpage.value - 1) * DPAGE, dpage.value * DPAGE));
+watch(() => realDetails[cur.value.id], () => { if (realMode) void diffPage.reload(); });
 const diffCols = [
   { title: '类型', dataIndex: 'type', width: 96 },
   { title: '对象', dataIndex: 'target', width: 200 },
@@ -130,8 +272,9 @@ const now = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.get
 const target = () => `${cur.value.id} ${cur.value.title}`;
 /** real 模式的状态按钮：POST 后按库重新载入；失败提示后页面不变 */
 async function moveReal(action: CRAction, done: string, rejectReason?: string) {
-  const id = cur.value.id;
-  try { await crAction(id, action, rejectReason); } catch (e) { apiErr(e); return; }
+  const id = cur.value.id, key = JSON.stringify(currentApiContext());
+  try { await crAction(id, action, rejectReason); } catch (e) { if (key === JSON.stringify(currentApiContext())) apiErr(e); return; }
+  if (key !== JSON.stringify(currentApiContext())) return;
   await loadCRs();
   message.success(`${id} ${done}`);
 }
@@ -204,7 +347,7 @@ async function reopen() {
   if (ok && isStaticReal()) await moveReal('reopen', '已改回草稿');
   else if (ok) move('草稿', '改回草稿', '按驳回意见修改后重新提交');
 }
-const approved = computed(() => CRS.filter((c) => c.status === '已通过'));
+const approved = computed(() => visibleCRS.value.filter((c) => c.status === '已通过'));
 /** real 模式（VITE_API_REAL_MODULES 含 static）：合并校验、发布、回滚走接口；失败提示后不改页面 */
 const apiErr = (e: unknown) => message.error(e instanceof Error ? e.message : String(e));
 /** 发布 / 回滚成功后按 GET /releases/current 刷新 app store 的当前 / 下一版本号（顶栏、本页按钮跟着变）；刷新失败只提示，不影响已成功的写操作 */
@@ -217,8 +360,14 @@ async function syncVersion() {
   } catch (e) { message.warning(`版本号刷新失败：${e instanceof Error ? e.message : String(e)}`); }
 }
 async function publish() {
+  if (realMode && (readonly.value || crFallback.value || !isAdmin.value || !approved.value.length)) return;
+  const key = JSON.stringify(currentApiContext());
   let m: ReturnType<typeof mergeCheck>;
+  let lockVersion: number | undefined;
   try { m = isStaticReal() ? (await mergeCheckApi()) as ReturnType<typeof mergeCheck> : mergeCheck(approved.value); } catch (e) { apiErr(e); return; }
+  if (realMode && key !== JSON.stringify(currentApiContext())) return;
+  if (isStaticReal()) { try { lockVersion = (await fetchCurrentAfterWrite()).lockVersion; } catch (e) { apiErr(e); return; } }
+  if (realMode && key !== JSON.stringify(currentApiContext())) return;
   const verdict = m.rows.map((r) => ({ label: r.code === '提示' ? '提示' : `${r.code} ${r.result}`, value: `${r.name}：${r.note}` }));
   const ok = await confirm.ask({ title: `整版发布 ${NEXT_VERSION.value}`, target: `本体（当前 ${CURRENT_VERSION.value}）`, okText: '发布',
     tag: m.blocked ? '合并校验有阻断' : '合并校验通过',
@@ -227,25 +376,31 @@ async function publish() {
       ? '合并校验有阻断，不能发布。请把冲突的变更单撤回或合并后再发布。'
       : '发布后新提问按新版本回答；已有答案、页面和告警保留各自的口径版本。可回滚到上一版本。',
     blocked: m.blocked ? m.rows.filter((r) => r.result === '阻断').map((r) => `${r.note}（${r.code}）`).join('；') : undefined });
+  if (realMode && (key !== JSON.stringify(currentApiContext()) || readonly.value || !isAdmin.value)) return;
   if (ok && !m.blocked) {
     let ver = NEXT_VERSION.value;
     if (isStaticReal()) {
-      try { ver = (await publishRelease()).ver; } catch (e) { apiErr(e); return; }
-      await syncVersion(); await loadCRs(); message.success(`已发布 ${ver}`); return;
+      try { const result = await publishRelease(undefined, lockVersion); ver = result.ver; skippedSections.value = result.skipped ?? []; } catch (e) { apiErr(e); return; }
+      if (key !== JSON.stringify(currentApiContext())) return;
+      invalidateActionSnapshot(); await syncVersion(); await loadCRs(); message.success(`已发布 ${ver}`); return;
     }
     approved.value.forEach((c) => { c.status = '已发布'; c.release = ver; c.updatedAt = now(); (extraLog[c.id] ??= []).unshift({ time: now(), text: `${me.value} 整版发布为 ${ver}`, desc: `合并校验：${m.rows.filter((r) => r.result !== '通过').map((r) => r.note).join('；') || '全部通过'}` }); });
     message.success(`已发布 ${ver}`);
   }
 }
 async function rollback() {
-  const prev = CRS.find((c) => c.status === '已发布' && c.release !== cur.value.release)?.release;
+  if (realMode && (readonly.value || crFallback.value || !canRollback.value || !isLatest.value)) return;
+  const key = JSON.stringify(currentApiContext());
+  const prev = visibleCRS.value.find((c) => c.status === '已发布' && c.release !== cur.value.release)?.release;
   const ok = await confirm.ask({ title: `回滚 ${cur.value.release}`, target: `本体 ${cur.value.release}`, okText: '回滚', danger: true,
-    fields: [{ label: '回滚到', value: prev ?? '上一版本' }, { label: '涉及变更单', value: CRS.filter((c) => c.release === cur.value.release).map((c) => c.id).join('、') }],
+    fields: [{ label: '回滚到', value: prev ?? '上一版本' }, { label: '涉及变更单', value: visibleCRS.value.filter((c) => c.release === cur.value.release).map((c) => c.id).join('、') }],
     impact: '回滚会生成一个新版本，内容等于上一版本；只能回滚最近一次发布。' });
+  if (realMode && (key !== JSON.stringify(currentApiContext()) || readonly.value || !canRollback.value)) return;
   if (ok && isStaticReal()) {
     const ver = cur.value.release!;
     try { await rollbackRelease(ver); } catch (e) { apiErr(e); return; }
-    await syncVersion(); await loadCRs(); rolledBack.value = true; message.success(`已回滚 ${ver}`); return;
+    if (key !== JSON.stringify(currentApiContext())) return;
+    invalidateActionSnapshot(); await syncVersion(); await loadCRs(); rolledBack.value = true; message.success(`已回滚 ${ver}`); return;
   }
   if (ok) { rolledBack.value = true; (extraLog[cur.value.id] ??= []).unshift({ time: now(), text: `${me.value} 回滚 ${cur.value.release}`, desc: `生成新版本，内容同 ${prev}`, status: 'warn' }); message.success(`已回滚 ${cur.value.release}`); }
 }
@@ -254,19 +409,20 @@ async function rollback() {
 <template>
   <Teleport defer to="#page-extra">
     <span class="t-12 c-3">待发布 {{ approved.length }} 张</span>
-    <a-tooltip :title="readonly ? reason : !isAdmin ? '需要本体管理员发布' : approved.length ? '' : '没有已通过的变更单'">
+    <a-tooltip :title="readonly ? reason : !isAdmin ? (realMode ? '需要实际本体管理员与发布管理权限' : '需要本体管理员发布') : approved.length ? '' : '没有已通过的变更单'">
       <a-button :type="detailPrimary ? 'default' : 'primary'" :disabled="crFallback || (readonly || !isAdmin || !approved.length)" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
     </a-tooltip>
   </Teleport>
 
-  <a-alert v-if="crFallback" type="warning" show-icon class="rl-fallback" message="变更单没能从服务端载入，当前显示的是示例数据，写操作已禁用；刷新页面重试。" />
+  <a-alert v-if="crFallback && !catalogLoading && !detailLoading && !pageLoading" type="warning" show-icon class="rl-fallback" message="变更单加载失败，请重试"><template #action><a-button size="small" @click="loadCRs">重试</a-button></template></a-alert>
+  <a-alert v-if="skippedSections.length" type="warning" show-icon class="rl-fallback" :message="`以下改动未生效：${skippedSections.join('、')}`" />
   <div class="rl">
     <div class="panel rl-list">
       <div class="rl-filter">
         <a-input-search v-model:value="kw" placeholder="搜索标题或变更单号" class="rl-kw" />
         <a-select v-model:value="st" :options="STATUSES.map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" class="rl-st" />
       </div>
-      <ul class="rl-items">
+      <ul class="rl-items" :class="{ 'rl-loading': pageLoading }" :aria-busy="pageLoading">
         <li v-for="c in list" :key="c.id" :class="{ active: c.id === cur.id }" :title="`${c.title} · ${c.id} · ${c.owner} · ${c.updatedAt} · ${c.release ?? c.level}`" @click="pick(c.id)">
           <div class="rl-row">
             <span class="t-14 rl-name rl-ell">{{ c.title }}</span>
@@ -276,11 +432,13 @@ async function rollback() {
         </li>
       </ul>
       <div class="rl-foot">
-        <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" empty-text="没有符合条件的变更单" />
+        <AppPagination v-model:page="lpage" variant="simple" :total="totalRows" :size="LPAGE" empty-text="没有符合条件的变更单" />
       </div>
     </div>
 
-    <div class="panel rl-detail">
+    <div v-if="catalogLoading && !cur.id" class="panel rl-detail rl-wait"><a-spin /></div>
+    <a-empty v-else-if="!cur.id" description="暂无可显示的变更单" />
+    <div v-else class="panel rl-detail">
       <div class="rl-head">
         <span class="t-16 fw-600 c-1 rl-title">{{ cur.title }}</span>
         <span class="t-14 c-3 num">{{ cur.id }}</span>
@@ -327,32 +485,33 @@ async function rollback() {
         </template>
         <template v-else-if="cur.status === '已发布'">
           <span class="t-12 c-3 num">已发布为 {{ cur.release }}</span>
-          <a-tooltip :title="isLatest ? '' : rolledBack && cur.release === CURRENT_VERSION ? '已回滚' : '只能回滚最近一次发布'"><a-button danger :disabled="crFallback || !isLatest" @click="rollback">回滚</a-button></a-tooltip>
+          <a-tooltip :title="!canRollback ? '需要实际发布管理权限' : isLatest ? '' : rolledBack && cur.release === CURRENT_VERSION ? '已回滚' : '只能回滚最近一次发布'"><a-button danger :disabled="crFallback || !canRollback || !isLatest" @click="rollback">回滚</a-button></a-tooltip>
         </template>
       </div>
       <a-tabs v-model:activeKey="tab" class="rl-tabs">
         <template #rightExtra>
           <span class="rl-meta t-12 c-3 num">
-            <span>{{ cur.owner }} 提交 · {{ cur.reviewer }} 审核 · 改动 {{ cur.changes }} 处 · 更新于 {{ cur.updatedAt }}</span>
+            <span>{{ cur.owner }} 提交 · {{ cur.reviewer || '未设置审核人' }} 审核 · 改动 {{ cur.changes }} 处 · 更新于 {{ cur.updatedAt }}</span><a-button v-if="canSetReviewer" type="link" size="small" @click="openReviewer">设置审核人</a-button>
             <InfoTip :text="`原因：${cur.reason}`" />
           </span>
         </template>
         <a-tab-pane key="diff" tab="改动清单" />
-        <a-tab-pane key="checks" :tab="`发布校验${counts['阻断'] ? ' · 阻断 ' + counts['阻断'] : ''}`" />
+        <a-tab-pane key="checks" tab="发布校验" />
         <a-tab-pane key="impact" tab="影响分析" />
         <a-tab-pane key="log" tab="评审记录" />
       </a-tabs>
 
       <!-- 改动清单 -->
       <div v-if="tab === 'diff'" class="rl-body">
-        <a-table :columns="diffCols" :data-source="drows" :pagination="false" size="small" row-key="key" :locale="{ emptyText: '暂无改动' }">
+        <a-alert v-if="diffPage.error.value" type="error" :message="diffPage.error.value" show-icon />
+        <a-table :columns="diffCols" :data-source="drows" :loading="diffPage.loading.value" :pagination="false" size="small" row-key="key" :locale="{ emptyText: '暂无改动' }">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'kind'"><a-tag>{{ record.kind }}</a-tag></template>
             <template v-else-if="column.key === 'before'"><span v-if="record.before" class="c-3 rl-old">{{ record.before }}</span><span v-else class="c-3">--</span></template>
             <template v-else-if="column.key === 'after'"><span class="c-1">{{ record.after }}</span></template>
           </template>
         </a-table>
-        <AppPagination v-model:page="dpage" variant="simple" :total="detail.diffs.length" :size="DPAGE" :empty="false" class="rl-pager" />
+        <AppPagination v-model:page="dpage" variant="simple" :total="realMode ? diffPage.total.value : detail.diffs.length" :size="DPAGE" :empty="false" class="rl-pager" />
         <div class="rl-note t-14">
           <span class="fw-600 c-1 rl-note-k">迁移方式</span>
           <span :class="detail.migration ? 'c-2' : 'c-3'">{{ detail.migration ?? (cur.level === '重大' ? '暂无，重大改动提交前需要写明' : '暂无，本次改动不涉及迁移') }}</span>
@@ -383,6 +542,7 @@ async function rollback() {
 
       <!-- 影响分析 -->
       <div v-else-if="tab === 'impact'" class="rl-body rl-impact">
+        <div v-if="realMode && (detail as AnalyzedDetail).analysisScope" class="t-12 c-3">{{ (detail as AnalyzedDetail).analysisScope }}</div>
         <div class="rl-cols">
           <div v-for="col in [{ k: 'direct', t: '直接改动' }, { k: 'defs', t: '受影响的定义' }, { k: 'usage', t: '下游使用' }]" :key="col.k" class="rl-col">
             <div class="t-14 fw-600 c-1 rl-col-title">{{ col.t }}</div>
@@ -397,7 +557,8 @@ async function rollback() {
         <div class="rl-trial">
           <div class="t-14 fw-600 c-1 rl-col-title">{{ detail.trial?.title ?? '试跑对比' }}</div>
           <a-table v-if="detail.trial" :columns="trialCols" :data-source="detail.trial.rows" :pagination="false" size="small" row-key="period" />
-          <div v-else class="t-12 c-3">暂无：本次改动不涉及指标口径，没有试跑。</div>
+          <a-alert v-if="realMode && (detail as AnalyzedDetail).trialUnavailable" type="warning" :message="(detail as AnalyzedDetail).trialUnavailable" show-icon />
+          <div v-else-if="!detail.trial" class="t-12 c-3">{{ realMode ? '尚未执行试跑；重新校验后读取真实结果' : '暂无：本次改动不涉及指标口径，没有试跑。' }}</div>
         </div>
       </div>
 
@@ -407,6 +568,12 @@ async function rollback() {
       </div>
     </div>
   </div>
+  <a-modal v-model:open="reviewerOpen" title="设置审核人" :width="520" :closable="!reviewerSaving" :mask-closable="!reviewerSaving" ok-text="保存审核人" :confirm-loading="reviewerSaving" :ok-button-props="{ disabled: !canSaveReviewer }" @ok="saveReviewer">
+    <a-alert v-if="reviewerError" type="error" :message="reviewerError" show-icon><template #action><a-button size="small" @click="loadReviewers">重新加载</a-button></template></a-alert>
+    <p class="t-14 c-3">{{ cur.id }} · 当前审核人：{{ storedReviewer || '未设置' }}。仅可选择具备实际审核权限且非提交人的用户。</p>
+    <a-select v-model:value="reviewerId" :loading="reviewerLoading" :disabled="reviewerSaving || reviewerLoading || !!reviewerError" :options="reviewerOptions.map((u) => ({ value: u.id, label: `${u.name}（${u.id}）` }))" placeholder="选择真实审核人" style="width:100%" />
+    <a-alert v-if="!reviewerLoading && !reviewerError && !reviewerOptions.length" type="info" message="暂无符合条件的审核人，需管理员先为其他实际用户分配审核角色；此处不会自动授权。" show-icon />
+  </a-modal>
 </template>
 
 <style scoped>
@@ -417,6 +584,8 @@ async function rollback() {
 .rl-kw { flex: 1; }
 .rl-st { width: 112px; flex: none; }
 .rl-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; overflow: hidden; }
+.rl-loading { opacity: 0.6; pointer-events: none; }
+.rl-wait { align-items: center; justify-content: center; }
 .rl-items li { padding: 8px; border-radius: var(--radius); cursor: pointer; }
 .rl-items li:hover { background: var(--g3); }
 .rl-items li.active { background: var(--brand-bg); }

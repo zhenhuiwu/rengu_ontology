@@ -3,7 +3,7 @@
  * 开关键 admin。返回 null = 用 mock（页面继续用 mock/objects-qa.ts OBJ_SCOPE 等本地数据）。
  * 每项：visible=false → 无权查看；unrestricted → 全部；否则 conditions 之间是「或」，text 是现成的显示文字。
  */
-import { apiClient, isBackendDown } from './http';
+import { apiClient } from './http';
 
 const api = apiClient('admin');
 
@@ -13,10 +13,5 @@ export interface MyRowScope { userId: string; userName: string; items: ObjRowSco
 
 export async function loadMyRowScope(): Promise<MyRowScope | null> {
   if (!api.isReal()) return null;
-  try {
-    return await api.get<MyRowScope>('/me/row-scope');
-  } catch (e) {
-    if (isBackendDown(e)) return null;
-    throw e;
-  }
+  return await api.get<MyRowScope>('/me/row-scope');
 }

@@ -5,9 +5,12 @@
 import { METRICS, type Metric } from '@/mock/metrics';
 import { CHANGE_REQUESTS, crDetail, type ChangeRequest } from '@/mock/changes';
 import { qObjType } from '@/mock/quality';
+import { LINK_OBJECTS } from '@/mock/links';
+import { isReal } from '@/api/config';
+import type { CRRow } from '@/api/static';
 import { draftOf, allDrafts } from '../useDraftView';
 
-export const objLabel = (id: string) => qObjType(id)?.name ?? id;
+export const objLabel = (id: string) => LINK_OBJECTS.find((o) => o.id === id)?.name ?? (isReal('static') ? id : qObjType(id)?.name ?? id);
 
 /** 指标维度 → 对象类型 id（“日期”不是对象类型；“渠道”是订单上的属性） */
 const DIM_OBJ: Record<string, string> = { 门店: 'store', 区域: 'region', 大区: 'region', 渠道: 'order', 品类: 'category', 仓库: 'warehouse', 商品: 'product', 会员: 'member' };
@@ -31,23 +34,23 @@ export function metricsOf(objectId: string): MetricUse[] {
 
 export interface CrUse { cr: ChangeRequest; parts: string[] }
 /** 涉及这个对象类型的变更单（touches / diffs），按时间倒序；本会话新建的草稿也算 */
-export function crsOf(objectId: string): CrUse[] {
+export function crsOf(objectId: string, records?: CRRow[]): CrUse[] {
   const name = objLabel(objectId);
   const out: CrUse[] = [];
-  for (const cr of CHANGE_REQUESTS) {
-    const d = crDetail(cr.id);
+  for (const cr of records ?? CHANGE_REQUESTS) {
+    const d = records ? (cr as CRRow).detail : crDetail(cr.id);
     const parts = new Set<string>();
-    for (const t of d.touches) {
+    for (const t of d.touches ?? []) {
       if (t === `object:${objectId}`) parts.add('对象类型');
       else if (t.startsWith(`property:${objectId}.`)) parts.add('属性');
       else if (t.startsWith(`relation:${objectId}.`)) parts.add('关系');
     }
-    for (const x of d.diffs) if (x.target === name || x.target.startsWith(`${name}.`)) parts.add(x.type);
-    if (draftOf('object', objectId)?.id === cr.id) parts.add('对象类型');
+    for (const x of d.diffs ?? []) if (x.target === name || x.target.startsWith(`${name}.`)) parts.add(x.type);
+    if (!records && draftOf('object', objectId)?.id === cr.id) parts.add('对象类型');
     if (parts.size) out.push({ cr, parts: [...parts] });
   }
   // 本会话发起的变更单不在 CHANGE_REQUESTS 里
-  const mine = draftOf('object', objectId);
+  const mine = records ? undefined : draftOf('object', objectId);
   if (mine && !out.some((u) => u.cr.id === mine.id)) {
     const d = allDrafts().find((x) => x.id === mine.id)!;
     out.unshift({ cr: { id: d.id, title: d.title, owner: d.owner, reviewer: '--', status: '草稿', level: '一般', changes: d.changes, updatedAt: d.updatedAt, reason: '' }, parts: ['对象类型'] });

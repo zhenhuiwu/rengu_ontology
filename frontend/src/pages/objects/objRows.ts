@@ -32,8 +32,8 @@ const MOCK_BINDINGS: Record<string, MockBinding> = {
   },
 };
 
-export interface RowsQuery { kw: string; filters: Filters; sort: string; page: number; size: number }
-export interface RowsResult { items: ExploreRow[]; total: number; bound: boolean; boundProps: string[]; facets: FacetMeta[] }
+export interface RowsQuery { kw: string; filters: Filters; sort: string; page: number; size: number; withFacets?: boolean }
+export interface RowsResult { items: ExploreRow[]; total: number; page?: number; bound: boolean; boundProps: string[]; facets: FacetMeta[] }
 /** 预览的行级范围（mock 用）：null = 不限 */
 export type ScopeFn = (typeName: string) => string | null;
 
@@ -84,11 +84,16 @@ function sortRows(rows: ExploreRow[], sort: string) {
 /** 搜索一页；live=true 走 X1，出错由调用方处理（qaFallBackIfDown 后可再以 live=false 调） */
 export async function searchRows(m: TypeMeta, q: RowsQuery, live: boolean, scope: ScopeFn): Promise<RowsResult> {
   if (live) {
-    // 分面：静态 /facets（真数据，随其他筛选联动，不带关键词）；有关键词或静态取不到时用 E1 顺带的过渡分面（计数含关键词）[推断]
-    const sf = q.kw.trim() ? Promise.resolve(null) : loadStaticFacets(m.id, q.filters);
-    const r = await exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size });
-    const f = await sf;
-    return { items: r.items, total: r.total, bound: r.bound, boundProps: r.boundProps, facets: f ?? r.facets };
+    const needFacets = q.withFacets !== false;
+    // 普通翻页不重算分面；首次/筛选变化时优先静态分面，避免两边重复聚合。
+    const [r, f] = await Promise.all([
+      exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size, withFacets: needFacets && !!q.kw.trim() }),
+      needFacets && !q.kw.trim() ? loadStaticFacets(m.id, q.filters) : Promise.resolve(null),
+    ]);
+    const result = needFacets && !q.kw.trim() && f === null
+      ? await exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size, withFacets: true })
+      : r;
+    return { items: result.items, total: result.total, page: result.page, bound: result.bound, boundProps: result.boundProps, facets: f ?? result.facets };
   }
   const all = mockAll(m, scope);
   if (!all) return { items: [], total: 0, bound: false, boundProps: [], facets: [] };

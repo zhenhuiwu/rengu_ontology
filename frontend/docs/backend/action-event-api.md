@@ -1,5 +1,9 @@
 # 动作类型与事件类型：页面操作、接口、业务链路与表结构（v0.5.7 草案）
 
+> 分页与性能补充（2026-10-26）：普通列表、参数/载荷、近期事件默认10条，当前定义由SQL COUNT/LIMIT/OFFSET分页；历史只取对应快照，缺少定义节返回空，不借当前定义。前端共享目录仅取轻头，选中类型才加载详情，进入草稿后等完整编辑基线就绪才允许保存。动作执行记录按页请求`/action-runs`，`GET /action-types/{id}/stats`按同一历史执行记录口径提供总体统计（需action-center查看权），不从当前页计算总计。
+
+> 2026-10-26 实现补充：`:simulate`保持不落库，执行真实载荷/过滤校验，返回`{testEventId:null,deliveredTo:[],payloadValid,checks:[{name,matched,message}],message}`；无法执行的过滤条件`matched:null`。没有测试投递器，因此不返回假事件ID或投递目标；`ver/previewAs`均403 READONLY，此处覆盖旧历史白名单。定时对账已持久化，沿既有`action.reconcile`/`reconcile`队列运行；无外部适配配置返回503、不计作查无。外部测试调用只发显式配置的只读GET probe。配置及状态机见`backend/docs/backend/handoff/reconciliation.md`。
+
 > 作者：Palantir专家　　日期：2026-10-25　　版本：v0.5.7（v0.5.7 主键落到每张表：`event_type.code`、各外键标明指向 `id`、统计表补 `id`、按订阅方查投递改用业务编码；v0.5.6 对账状态表去掉旧枚举、`idempotent=false` 人工再开一轮仍停在 manual【推断】；v0.5.5 主键按 PDE 全员统一：代理主键 `id bigint` + `code` 唯一，外键指向 `id`；v0.5.4 `query_by_key` 返回值对齐动态：查到·成功 / 查到·未执行 / 查无；v0.5.3 按 智能问数项目调研员 `b7ffba4` 评审改 10 处：试运行一律 200、重名校验键、`query_by_key` 模拟返回、时间线时间格式、`action_type_rule`、`writeback_call` 一行一次调用、补列、非停用口径、webhook 前缀、master 提交号；v0.5.1 只读错误体加 `details.mode`；v0.5.2 按动态 `b7ffba4` 评审改：执行状态与来源库内码引用动态、`:mark-checked` 不碰执行记录、`writeback_call`/`event_dedup` 改可变表、`TARGETS` 改为 `releases.ts` 的 `DRAFT_TARGETS`、P4 标注、`versionsOf` 引用参数；v0.2 并入 PDE 的 export-mock、调度器、分页、对账结论；v0.3 按 智能问数项目调研员、动态、本体小白 的评审修改：`/api/ontology/v1` 前缀、接口值与前端 mock 一致并加库内值对照、`writeback_call`/`reconcile_task`/`ext_system` 归属、对账结论 succeeded/not_executed、业务键模板、derived 调用清单；v0.4 定下 `writeback_call`/`ext_system` 归 integration、补每个接口的权限（§3.6）、外部系统接口；v0.4.1 按 PDE `e03a575` 改 §7 的导出路径：derived 按函数名分文件，`RUNS`/`EVENTS` 由 runsOf/eventsOf 并集还原；v0.5 按动态的 5 条意见改（§7.1 用实跑核过的 derived 文件名、业务键列 `biz_key`、§9 的 `action_run` 改为引用动态文档、`GET /action-runs` 用 `actionType`、人工对账先查一次改为【推断】）并按 PDE 表规范补 §9.0 和时间字段表 §3.5.1；外部系统接口改前缀 `/api/data/v1`；只读统一 `?ver=`/`?previewAs=` + 403 `READONLY`、`VALIDATION_FAILED`、错误体带 `requestId`；§4.2 补发布快照的 `actionTypes`/`eventTypes` 分段与组装函数登记；尚未发布到 master）
 > **团队规则（PDE）**：文档和前端不一致时**以前端为准**；后台不加前端没有的限制。我补的额外限制一律标【推断】，集中列在 §8.2「待用户确认」。
 > 依据：master `2e5b002` 的前端代码与 mock，只读，没有改源码。涉及的文件：
@@ -148,6 +152,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 ### 3.1 动作类型
 
+2026-10-26 `:dry-run`已实现真实只读条件校验，body.params为结构化JSON（可省略为空，不填sample默认值）。当前读DB，history只读所选release.actionTypes（缺段503不偷当前），view=draft按真实CR未删除行覆盖。响应200 `{passed,checked,failed}`，checked为实际条件数，参数/类型/规则/条件缺失或不支持均failed；不创建ActionRun、不调用外部、不模拟回执。仅本路由允许history，preview仍403，其他真实写接口只读规则不变。
+
+语法支持已声明参数API或唯一完整显示名引用、真实用户code/DB角色、有限数值算术/链式比较、等于/不等于、集合和布尔；对象只读已登记真实非敏感字段，按实际RoleAccess/effective_expr/to_sql约束范围，不借None行级桩或展示范围文字放宽。告警仅真实当前唯一处理人且权限明确时提供上下文。未知AST、CRM/预算查询、自然语言、隐式今天/单位/对象数据不支持即failed；矩阵与预算见backend/docs/backend/handoff/action-checker.md。动态暂存/确认共用同一真实checker，参数摘要须本身为JSON对象，审批与外部503边界保持。
+
 | 方法 路径 | 参数 / 请求体 | 返回（字段名取自 mock） | 分页 | 来源 mock |
 |---|---|---|---|---|
 | `GET /action-types` | `group`、`kw`（匹配名称）、`page`、`size=22`、`ver` | `items[{id,name,api,group,status,version,target,targetApi,targetKind}]`；`groups[]` | 页码 | `actionEvent.ts` `ACTION_TYPES`、`ACTION_GROUPS` |
@@ -163,6 +171,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /api/data/v1/ext-systems?writeback=1`（外部系统接口，前缀不同） | — | `items[{id,name,idemKey,timeoutMs,maxRetry,retry,idempotent,status,env}]` | 不分页 | `extsys.ts` `EXT_SYSTEMS`；过滤同 `writebackSystems()`（生产环境且未停用）。`ext_system` 归本模块 `integration`，外部系统页也调这组接口（见下方“外部系统”） |
 | 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'action',id}`，`section ∈ params\|conds\|edits\|effects\|config` | 静态接口 | — | `useDraftEdits.ts`；前端已接（palantir-cr，开关 `VITE_PALANTIR_CR_WRITE`，默认关）：先 `GET …/items?kind&targetId&section` 读回再整段 PUT |
 
+`used-by` 关系成员及顺序取当前定义或所选发布版 `actionTypes.<id>.usedBy`，历史规则名称、触发和使用方式取同版 `rules` 段；缺失软引用保留并标明定义不可用。当前定义优先使用 `mode_text`，否则按规则 `autoStage` 推导。`alerts` 为当前所有告警记录数，`openAlerts` 仅含“待处理”（不含“处理中”）；两项实时计数不受 `ver` 影响。
+
 动态的接口（只引用，动态唯一的执行记录接口）：`GET /action-runs`（按动作类型过滤的参数是 **`actionType`**（动作类型 id；动态同时收 `action` = 中文动作名）、`status` 可多选、`page`、`size=14`；返回统一响应类型 **`ActionRun`**，字段以 dynamic-api.md 为准，其中含动作类型页要的 `typeId,at,initiator,confirmer,approver,source,objKind,objId,objLabel,summary,status,ms,code,retries,idemKey`）、`GET /action-runs/{id}`（返回 `ActionRun` + `action_run_log` 时间线，执行抽屉用）。“最近异常”= `GET /action-runs?actionType=&status=失败,结果未知&size=4`。
 
 **外部系统（前缀 `/api/data/v1`；代码在 `integration` 模块，归我；PDE 的“外部系统”页和动作类型页共用）**
@@ -172,13 +182,17 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /ext-systems` | `writeback=1`（只返回生产环境且未停用的，同 `writebackSystems()`）、`kw` | `items[{id,name,vendor,category,endpoint,auth,authDetail,idempotent,idemKey,timeoutMs,maxRetry,retry,rateLimit,owner,status,env,usage}]` | 不分页 | `EXT_SYSTEMS`；密钥不返回明文 |
 | `GET /ext-systems/{id}` | — | 同上，加关联的动作类型 | — | — |
 | `POST /ext-systems`、`PUT /ext-systems/{id}`（编辑也接受 `POST /ext-systems/{id}`，见 §11） | 同上字段 | 保存后的对象 | — | 新建、编辑外部系统；直接生效，不走变更单（和前端一致） |
-| `POST /ext-systems/{id}:test` | `{op?}`（可不带请求体） | 一条 `ExtCall`（`id,sysId,time,action,target,method,path,idemKey,ms,http,result,attempt,actor,msg`，见 §11） | — | “测试调用”；系统已停用时返回 `EXT_SYSTEM_DISABLED`（前端文案“该系统已停用，先在‘编辑’里改为正常再测试”）。**dev/test 走 mock 适配器**（状态「降级」的系统固定返回 502，「停用」的直接拦住）；只有生产环境、经用户授权才连真实系统 |
+| `POST /ext-systems/{id}:test` | `{op?}`（可不带请求体） | 当前503 `EXT_SYSTEM_TEST_UNAVAILABLE` | — | 没有配置真实协议/凭据执行器，所有环境明确说明未发送请求，不写虚假调用记录；停用仍409 `EXT_SYSTEM_DISABLED`，不存在404。前端入口置灰并说明未配置，不模拟鉴权通过或HTTP成功。 |
 | `GET /ext-systems/{id}/calls` | `result`（全部 / 成功 / 失败 / 结果未知）、`page`、`size=10`（前端固定每页 10 条） | `{items[...ExtCall, runId], total, page, size, counts}`；`counts` = `{全部,成功,失败,结果未知}`（单选按钮上的数字，不受 `result` 影响）【推断】 | 页码 | `writeback_call` 的行（含测试调用）。顺序：测试调用在最前（新的在上），其余按 `at` 倒序、同时间按 `code` 倒序（同 `extCalls()`）【推断】 |
 | `GET /writeback-calls` | `sysId`（可不传）、`result`、`page`、`size=10` | 同上 | 页码 | 跨系统查调用记录（同一个查询） |
 | `GET /writeback-calls/{id}` | — | 一条 `ExtCall`（无执行记录时 `runId=null`） | — | 调用详情抽屉 `?call=` |
 | `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功`，`msg=人工核对：对方已处理（{姓名} {HH:mm} 标记）` | — | “人工核对 · 确认对方已处理”，要 `external-systems · manage`。不是「结果未知」或带执行记录的 → 409 `CALL_NOT_CHECKABLE`。前端只对不带 runId 的调用显示这个按钮（`ExternalSystems.vue` L319–323），带 runId 的只跳到动作中心。只改这条调用记录的结果，不碰执行记录 |
 
 ### 3.2 事件类型
+
+2026-10-26 内部接收已实现：`POST /internal/v1/events` 仅认证持久接收，不执行投递。必须配置 `RENGU_INTERNAL_EVENT_TOKEN` 并使用 `Authorization: Bearer`；缺配置503、错误401，不使用X-Demo默认身份，history/preview统一403。eventType按真实当前code或api查已发布且未下线，objectType匹配绑定对象，payload校验实际必填/基础类型。HTTP JSON信封最大64 KiB、深度16、总值2048、容器512，NUL/非法Unicode/非有限数/额外信封字段422；大小超限413。
+
+生产eventId按事务锁幂等：同完整信封返回原结果，内容不同409 EVENT_ID_CONFLICT。业务dedup按type+dedupKey咨询锁及持久event_dedup固定窗口/永久状态；命中保留新ID的真实去重记录。缺省dedupKey仅空规则/事件ID规则可用eventId，其他中文说明须生产方显式传键；不可执行窗口409。未命中仅为“待投递”，subscribers=0、latencyMs=null，不声称投递或回执成功。EventType FOR SHARE锁内读取定义和实际发布头，入站保存接收时ontologyVersion；旧seed版本和来源未知时null。事件读接口增加source/producerType/producerObjectType/traceId/ingestedAt/ontologyVersion，stats增加pending，p95无真实时延为null，pending不代表成功。真模式抽屉只展示实际记录，mock模式不变；完整边界见`backend/docs/backend/handoff/event-ingress.md`。
 
 | 方法 路径 | 参数 / 请求体 | 返回 | 分页 | 来源 mock |
 |---|---|---|---|---|
@@ -323,6 +337,9 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 ### 4.2 动作类型的版本与变更
 
 - 所有改动（参数、条件、本体编辑、副作用、写回配置）都写进变更单草稿的 `cr_item`，`target_kind=action`，`section` 和前端一致。审核通过后**随本体整版发布生效**，没有单独发布动作类型这回事。
+- 发布写回已实现 action 的 params / conds / edits / effects / config 和 event 的 payload / subs 七段。行 key 与字段协议见 `backend/docs/backend/handoff/palantir.md §6`；config 固定整体 key=`cfg`。update 以旧 key 定位，支持身份改名并检查唯一；重复 seed key 不允许歧义修改，载荷 api 不得撞全局信封。非法定义发布返回 409 WRITEBACK_FAILED，全部写回与 CR 状态同事务回滚；草稿保存的 NUL 文本先返回 422。
+- 每次整版发布，每个被修改类型只追加一个完整定义版本，版本为当前及历史最大 vN + 1；不修改旧历史，回滚后再发布继续递增。文本未编辑则保留内部 AST，表达式文本改变时清掉旧 AST；订阅 weekly 和规则 generates 不由草稿覆盖。
+- 后台 isNew 支持调用方 code / name 的最低定义骨架（api=code；事件默认外部系统来源、30 天保留；动作默认内部写回）。产品的新建表单尚未设计，不据此添加 UI；仍在线 code 冲突拒绝，回滚下线类型经明确编辑可重新发布，add 不覆盖已有子行。
 - **回滚**：两页的回滚链接现在都置灰（“回滚暂未开放”），第一期不做。开放以后按前端/静态的口径，**生成一个新版本**（调基础层的 `create_version`，内容等于目标版本），不是把当前指针移回去。
 - **整版回滚时恢复本模块定义表**（发布管理页的整版回滚前端已开放，`Releases.vue:183-189`，跟上一条单个类型的回滚不同）：按骨架契约 `app/contracts/versioning.py` 第 4 条，`actionTypes`、`eventTypes` 两个 builder 都实现可选钩子 `restore_section(session, content, *, release_id)`（`release_id` = 这次回滚产生的那一版的 `ontology_release.id`，见 §10.4），由版本层在 `create_version` 回滚分支里同一事务内调用，`content` = 被恢复那一版（`rollback_of` 的上一版）快照里这一节。做法与静态 §2.2-6、动态 §2.8 一致：按前端 id upsert，把 `action_type`/`event_type` 及其参数、条件、编辑、副作用、载荷、订阅方等定义行改回快照里的值，并把当前版本指针指回快照里的 `version`；`action_type_version`/`event_type_version` 只追加，不动。快照里没有的类型不删行，也不加新的 `status` 值（前端类型状态只有已发布/变更中/草稿），而是把该行 `retired_release_id` 写成这次回滚产生的那一版的 `ontology_release.id`：当前视图的列表和详情都不返回它（详情按不存在处理），`?ver=V` 历史视图在「V 那一版的 id ≥ `retired_release_id`」时不出现（版本号是 `v2026.10.N` 字符串，不能按字符串比；按 id 比和骨架取「最新版」的口径一致）；以后再发布到这个类型时把 `retired_release_id` 清空 [推断]。`content=None`（那一版快照里根本没有这一节）时什么都不做 [推断]。
 - **发布快照里的本模块分段**（PDE 定：每个模块自己组装自己的分段交给基础层 `create_version`；**发布在发布事务里同步展开**，展开失败整次发布回滚）。快照分段 = 静态的各段 + `actionTypes`、`eventTypes`（本模块）+ `rules`、`lifecycles`（动态）。基础层 `create_version` 按分段登记组装函数：**本模块在启动时登记 `actionTypes`、`eventTypes` 两个组装函数**（`action/` 登记 `actionTypes`，`event/` 登记 `eventTypes`），发布时由 `create_version` 在同一事务里依次调用。两段的键用**前端 id**（`ACTION_TYPES[].id`、`EVENT_TYPES[].id`），字段名和取值与前端 mock 一致（中文枚举，库内转换见 §3.5）：
@@ -788,7 +805,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 重名 | 名称与其他系统重复 → 409 `DUPLICATE_KEY`“系统名称已存在”（改成自己原来的名字不算） |
 | 不支持幂等时 | 后台把 `idemKey` 存成 `-`、`maxRetry` 存成 0，`retry` 文案由后台按 `idempotent / maxRetry` 生成（同页面 `retryText()`） |
 | `usage` 不传 = 不改 | 编辑表单不含用途说明 |
-| `:test` 返回一条 `ExtCall` 形状 | dev/test 走模拟：「降级」→ 502 / 失败 / 3120 ms，「停用」→ 409 `EXT_SYSTEM_DISABLED`，其余 → 200 / 成功 / `140 + timeoutMs % 97` ms。id = `{编号去掉 EXT-}-T{6 位随机}`。【推断】测试调用**落库**：写一行 `writeback_call`（`kind=test`），页面重新拉“最近调用”，它排在最前（页面文案“结果记入下方最近调用”） |
+| `:test` 不再模拟执行 | 当前没有真实连通性执行器，正常/降级统一503 `EXT_SYSTEM_TEST_UNAVAILABLE`（`details.reason=executor_not_configured`）；未发送HTTP请求，也不创建 `writeback_call`。既有开发库调用记录保留，读列表仍来自DB；停用409/不存在404保留。页面测试按钮说明未配置，不生成临时演示调用。 |
+| 调用详情报文与自动查询 | 当前 `writeback_call` 没有原始请求/响应体列，页面明确显示“未保存”，不再依据 HTTP 200 合成 `{code:0,msg:success}` 或拼造请求体。未知结果说明人工核对，不承诺尚未配置的每15分钟自动查询执行器；不新增外部HTTP调用、凭据或自动worker。 |
 | `writeback_call` 列 | 按前端 `ExtCall` 建：`code`=id、`sys_id`、`at`=time、`op_name`=action、`target_label`=target、`method`、`path`、`idem_key`、`elapsed_ms`=ms、`http_status`=http（超时为空）、`result`、`attempt`、`actor`、`msg`、`action_run_id`=runId。§9.1 设计里的 `biz_code` 前端没有，**没建**。`kind`【推断】：种子里 GET → query，其余 → write；测试调用 → test |
 | 种子 | `integration_runs` 阶段（registry 已登记，dynamic 之后）读 `system/derived/extCalls.json`（PDE `export-mock` 原样输出，756 行，20 行带 runId）；**不用改 `seeds/loader.py`** |
 | 迁移 | `integration_0002`，`down_revision = dynamic_0002`。合并顺序 static_0002（接 event_0002）→ dynamic_0002（接 static_0002）→ integration_0002；改接是本分支最后一个单独提交，单独合时回退它即回到 event_0002 |
@@ -860,6 +878,16 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 ---
 
 *审阅：请 动态本体负责人 核对 §1、§5.1 和 §9 的 `action_run`，静态本体负责人 核对 §4.2 和 §7.2 里的 CR 部分，本体小白 核对 §9。*
+
+## 对象类型“行为 / 动作”真实读取（2026-10-26）
+
+`ObjBehaviorActions.vue` 真模式读取 `/object-types/{id}/behavior/stats` 的轻量动作定义和近30日实际运行聚合；参数只在打开抽屉时请求。动作中心按 `/action-runs?scope=center&objKind={objectId}&page=&size=10` 逐页读取，摘要计数由后台在完整匹配范围聚合。生命周期迁移关联来自现有 `/object-types/{id}/lifecycle`，只有该接口404视为未配置，其他错误直接显示。
+
+所有读取在同一局部结果中更新；身份、预览、版本或对象切换立即清空旧数据，迟到响应丢弃，失败不回演示值。没有动作类型但有历史动作中心记录时仍展示真实记录。本页只读，不提交动作，也不使用固定的对象→动作名映射、运行统计、参数或回退限制。
+
+动作/事件定义列表和参数、载荷、近期运行均默认10条，通过SQL计数和LIMIT/OFFSET分页。轻量目录不预加载全部类型的子表，选中类型后才读取详情；编辑前仍读取该目标完整基线，防止分页保存丢行。历史子段缺失返回空，不借当前定义补齐。
+
+`GET /action-types/{id}/stats?days=30` 从实际执行记录聚合最近30日（允许1—90日），包含下边界并排除未来记录；沿执行历史范围排除动作中心记录。返回 `{total,ok,failed,unknown,pending,confirm,rate,avgMs}`，需要动作类型及动作中心查看权限。该汇总不从当前表格页或旧演示日统计推算。
 
 ## 13. 变更单草稿：前端接法补充（分支 `palantir-r3`，基于 master `b475283`）
 

@@ -44,7 +44,7 @@ function chosenOf(t: QaRealTurn): string | null {
   return ct.answer.clarify.options.find((o) => asked.has(followUp(ct, o.label)))?.label ?? ct.answer.clarify.chosen ?? null;
 }
 /** 拒答：只有权限拦截（NO_PERMISSION，或演示数据没有 code）带「申请权限」；超出范围 / 没有数据 / 非查询只显示原因 [推断] */
-const canApply = (t: QaRealTurn) => !('code' in t) || !t.code || t.code === 'NO_PERMISSION';
+const canApply = (t: QaRealTurn) => !('code' in t) || !t.code || t.code === 'NO_PERMISSION' || t.code === 'OUT_OF_SCOPE';
 const me = useAppStore().user.name.slice(0, 1);
 const route = useRoute();
 const conv = ref<HTMLElement>();

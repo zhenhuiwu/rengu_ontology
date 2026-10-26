@@ -8,7 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5281 --strictPort",
     "typecheck": "vue-tsc --noEmit",
-    "shot": "python3 scripts/shot.py",
+    "shot": "node scripts/shot.mjs",
     "export-mock": "node scripts/export-mock.mjs"
   },
   "dependencies": {

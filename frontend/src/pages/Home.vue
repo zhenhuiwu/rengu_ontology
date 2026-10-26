@@ -4,7 +4,7 @@
  * EChart。首页只看不改：订单动作（补发出库单）在订单抽屉里，用 ConfirmActionModal 确认。整页无滚动，表格分页。
  */
 import { message } from 'ant-design-vue';
-import { computed, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, reactive, ref, shallowRef, watch } from 'vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
 import EChart from '@/components/EChart.vue';
@@ -16,16 +16,26 @@ import { GRAY } from '@/theme';
 import {
   ORDERS, STORES, METRICS, DAILY_GMV_EX, exTax, storeById, paginate, fmtMoney, fmtInt, fmtPct, fmtDelta, type Order,
 } from '@/mock';
-import { fetchKpis, fetchStoreRanking, isDashboardReal, type KpiMetric, type StoreRank } from '@/api/dashboard';
-import { isBackendDown } from '@/api/http';
+import { fetchKpis, fetchStoreRanking, fetchSalesDaily, isDashboardReal, type KpiMetric, type StoreRank } from '@/api/dashboard';
+import { currentApiContext, isBackendDown } from '@/api/http';
 import { listOrderDtos } from '@/api/biz';
 
 const route = useRoute();
 const router = useRouter();
 
+const MOCK_AS_OF = '2026-10-24 23:00';
+const contextKey = () => JSON.stringify(currentApiContext());
+const cutoffContext = ref('');
+const cutoffs = reactive({ kpi: '', rank: '', orders: '' });
+// 三组查询覆盖的共同截止；任一未加载成功时不声明整页已有完整截止。
+const dataAsOf = computed(() => !isDashboardReal() ? MOCK_AS_OF
+  : cutoffContext.value === contextKey() && Object.values(cutoffs).every(Boolean) ? Object.values(cutoffs).sort()[0] : '—');
+
 const KPI_IDS = ['gmv', 'order_cnt', 'gross_margin', 'ship_ontime'];
 // mock 模式现算；真接口（开关 biz）时用 GET /api/biz/v1/dashboard/kpis 的结果替换（值同 mock METRICS）
-const kpiMetrics = shallowRef<KpiMetric[]>(KPI_IDS.map((id) => METRICS.find((x) => x.id === id)!));
+const demoKpis = () => KPI_IDS.map((id) => METRICS.find((x) => x.id === id)!);
+const kpiMetrics = shallowRef<KpiMetric[]>(isDashboardReal() ? [] : demoKpis());
+const homeErrors = reactive({ kpi: '', orders: '', rank: '' });
 const kpis = computed(() => kpiMetrics.value.map((m) => {
   const value = m.unit === '%' ? fmtPct(m.value) : m.unit === '元' ? fmtMoney(m.value) : fmtInt(m.value);
   const delta = m.unit === '%' ? m.value - m.prev : (m.value - m.prev) / m.prev;
@@ -50,27 +60,32 @@ const rows = computed(() =>
   ),
 );
 const mockPaged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
-// 真接口（开关 biz）时订单表改读 GET /api/biz/v1/orders（服务端筛选 + 分页，cutoff 同上）；失败保留 mock
+// 真接口（开关 biz）时订单表改读 GET /api/biz/v1/orders（服务端筛选 + 分页，真实模式不固定 cutoff）；失败显示错误和空数据
 type HomeOrderRow = Pick<Order, 'id' | 'storeId' | 'channel' | 'amount' | 'status' | 'createdAt'> & { lineCnt: number; storeName?: string };
 const realOrders = shallowRef<{ items: HomeOrderRow[]; total: number } | null>(null);
 const paged = computed<{ items: HomeOrderRow[]; total: number }>(() =>
-  realOrders.value ?? { items: mockPaged.value.items.map((o) => ({ ...o, lineCnt: o.lines.length })), total: mockPaged.value.total });
+  isDashboardReal() ? realOrders.value ?? { items: [], total: 0 } : { items: mockPaged.value.items.map((o) => ({ ...o, lineCnt: o.lines.length })), total: mockPaged.value.total });
 let ordersSeq = 0;
 async function loadOrders() {
-  if (!isDashboardReal()) return;
   const seq = ++ordersSeq;
+  const context = contextKey();
+  cutoffs.orders = '';
+  homeErrors.orders = '';
+  realOrders.value = null;
+  if (!isDashboardReal()) return;
   try {
     const r = await listOrderDtos({
       status: status.value === '全部' ? undefined : (status.value as Order['status']),
       channel: channel.value === '全部' ? undefined : channel.value,
-      kw: kw.value || undefined, cutoff: CUTOFF, page: pq.page.value, size: pq.size.value,
+      kw: kw.value || undefined, page: pq.page.value, size: pq.size.value,
     });
-    if (seq !== ordersSeq) return;
+    if (seq !== ordersSeq || context !== contextKey()) return;
+    cutoffs.orders = r.dataAsOf ?? '';
     realOrders.value = {
       total: r.total,
       items: r.items.map((o) => ({ id: o.id, storeId: o.storeId, storeName: o.storeName, channel: o.channel, amount: o.amount, status: o.status, createdAt: o.createdAt, lineCnt: o.lineCount ?? 0 })),
     };
-  } catch (e) { if (seq === ordersSeq) { realOrders.value = null; console.warn(`[home] 订单 接口失败，保留 mock${isBackendDown(e) ? '（后台未启动）' : ''}`, e); } }
+  } catch (e) { if (seq === ordersSeq && context === contextKey()) { realOrders.value = null; homeErrors.orders = errorText(e); } }
 }
 watch([status, channel, kw, pq.page, pq.size], () => { void loadOrders(); });
 const statusBadge = (s: Order['status']) =>
@@ -85,12 +100,28 @@ const columns = [
   { title: '下单时间', dataIndex: 'createdAt', key: 'createdAt', width: 172 },
 ];
 
-// 趋势图
-const trendOption = {
+// 真实模式按数据库订单实付聚合；演示曲线只在显式 mock 模式使用。
+const trend = reactive<{ key: string; loading: boolean; error: string; items: { date: string; value: number }[]; dataAsOf: string }>({ key: '', loading: false, error: '', items: [], dataAsOf: '' });
+let trendSeq = 0;
+async function loadTrend() {
+  const seq = ++trendSeq;
+  const context = contextKey();
+  Object.assign(trend, { key: context, loading: false, error: '', items: [], dataAsOf: '' });
+  if (!isDashboardReal()) return;
+  trend.loading = true;
+  try {
+    const r = await fetchSalesDaily({ days: 30 });
+    if (seq !== trendSeq || context !== contextKey()) return;
+    Object.assign(trend, { items: r.items, dataAsOf: r.dataAsOf });
+  } catch (e) { if (seq === trendSeq && context === contextKey()) trend.error = errorText(e); }
+  finally { if (seq === trendSeq && context === contextKey()) trend.loading = false; }
+}
+const trendPoints = computed(() => isDashboardReal() ? trend.key === contextKey() ? trend.items : [] : DAILY_GMV_EX);
+const trendOption = computed(() => ({
   grid: { left: 56, right: 16, top: 16, bottom: 28 },
   tooltip: { trigger: 'axis', valueFormatter: (v: number) => fmtMoney(v) },
   xAxis: {
-    type: 'category', data: DAILY_GMV_EX.map((d) => d.date),
+    type: 'category', data: trendPoints.value.map((d) => d.date),
     axisLine: { lineStyle: { color: GRAY.g6 } }, axisTick: { show: false },
     axisLabel: { color: GRAY.g8, fontSize: 12, interval: 4 },
   },
@@ -98,8 +129,8 @@ const trendOption = {
     type: 'value', axisLabel: { color: GRAY.g8, fontSize: 12, formatter: (v: number) => `${(v / 10000).toFixed(0)}万` },
     splitLine: { lineStyle: { color: GRAY.g4 } },
   },
-  series: [{ type: 'line', data: DAILY_GMV_EX.map((d) => d.value), symbol: 'none', lineStyle: { width: 1.5 } }],
-};
+  series: [{ type: 'line', data: trendPoints.value.map((d) => d.value), symbol: 'none', lineStyle: { width: 1.5 } }],
+}));
 
 // 门店排行（按样本订单实付金额汇总）
 const fullRanking = STORES.map((s) => {
@@ -107,38 +138,67 @@ const fullRanking = STORES.map((s) => {
   // 销售额（不含税）= 实付金额 ÷ (1 + 13%)，与指标 gmv 同口径
   return { id: s.id, name: s.name, city: s.city, cnt: os.length, amount: exTax(os.reduce((a, o) => a + o.amount, 0)) };
 }).sort((a, b) => b.amount - a.amount).map((r, i) => ({ ...r, rank: i + 1 }));
-// 真接口（开关 biz）时排行改读 GET /api/biz/v1/stores/ranking（服务端分页，口径同上）；失败保留 mock
-const RANK_TO = '2026-10-24 23:00:59';
-const rankTotal = ref(fullRanking.length);
-const ranking = shallowRef<StoreRank[]>(fullRanking.slice(0, 10));
+// 真接口（开关 biz）时排行改读 GET /api/biz/v1/stores/ranking（服务端分页，口径同上）；失败显示错误和空数据
+const rankTotal = ref(isDashboardReal() ? 0 : fullRanking.length);
+const ranking = shallowRef<StoreRank[]>(isDashboardReal() ? [] : fullRanking.slice(0, 10));
 // “全部”：抽屉里看完整排行（?rank=all，可截图复现），simple 分页
 const rankOpen = computed(() => route.query.rank === 'all');
 const setRankOpen = (v: boolean) => router.push({ query: { ...route.query, rank: v ? 'all' : undefined } });
 const RANK_SIZE = 10;
 const rankPage = ref(1);
-const rankPaged = shallowRef<{ items: StoreRank[]; total: number }>(paginate(fullRanking, { page: 1, size: RANK_SIZE }));
-const warnApi = (what: string, e: unknown) =>
-  console.warn(`[home] ${what} 接口失败，保留 mock${isBackendDown(e) ? '（后台未启动）' : ''}`, e);
+const rankPaged = shallowRef<{ items: StoreRank[]; total: number }>(isDashboardReal() ? { items: [], total: 0 } : paginate(fullRanking, { page: 1, size: RANK_SIZE }));
+const errorText = (e: unknown) => isBackendDown(e) ? '后台不可达' : e instanceof Error ? e.message : String(e);
+let rankSeq = 0;
 async function loadRankPage(page: number) {
+  const seq = ++rankSeq;
+  const context = contextKey();
   if (!isDashboardReal()) { rankPaged.value = paginate(fullRanking, { page, size: RANK_SIZE }); return; }
   try {
-    const r = await fetchStoreRanking({ to: RANK_TO, page, size: RANK_SIZE });
+    const r = await fetchStoreRanking({ page, size: RANK_SIZE });
+    if (seq !== rankSeq || context !== contextKey()) return;
     rankPaged.value = r;
     rankTotal.value = r.total;
-  } catch (e) { warnApi('门店排行', e); rankPaged.value = paginate(fullRanking, { page, size: RANK_SIZE }); }
+  } catch (e) { if (seq !== rankSeq || context !== contextKey()) return; homeErrors.rank = errorText(e); rankPaged.value = { items: [], total: 0 }; }
 }
 watch(rankPage, (p) => { void loadRankPage(p); });
-onMounted(async () => {
+let summarySeq = 0;
+async function loadSummary() {
+  const seq = ++summarySeq;
+  const context = contextKey();
+  cutoffContext.value = context;
+  Object.assign(cutoffs, { kpi: '', rank: '', orders: '' });
+  Object.assign(homeErrors, { kpi: '', orders: '', rank: '' });
+  kpiMetrics.value = isDashboardReal() ? [] : demoKpis();
+  ranking.value = isDashboardReal() ? [] : fullRanking.slice(0, 10);
+  rankTotal.value = isDashboardReal() ? 0 : fullRanking.length;
+  rankPaged.value = isDashboardReal() ? { items: [], total: 0 } : paginate(fullRanking, { page: rankPage.value, size: RANK_SIZE });
+  realOrders.value = null;
   if (!isDashboardReal()) return;
   void loadOrders();
   void loadRankPage(rankPage.value);
-  try { kpiMetrics.value = await fetchKpis(KPI_IDS, '2026-10-24 23:00'); } catch (e) { warnApi('KPI', e); }
-  try {
-    const r = await fetchStoreRanking({ to: RANK_TO, page: 1, size: 10 });
-    ranking.value = r.items;
-    rankTotal.value = r.total;
-  } catch (e) { warnApi('门店排行', e); }
-});
+  await Promise.all([
+    (async () => {
+      try {
+        const r = await fetchKpis(KPI_IDS);
+        if (seq !== summarySeq || context !== contextKey()) return;
+        kpiMetrics.value = r.items;
+        cutoffs.kpi = r.dataAsOf;
+      } catch (e) { if (seq === summarySeq && context === contextKey()) homeErrors.kpi = errorText(e); }
+    })(),
+    (async () => {
+      try {
+        const r = await fetchStoreRanking({ page: 1, size: 10 });
+        if (seq !== summarySeq || context !== contextKey()) return;
+        ranking.value = r.items;
+        rankTotal.value = r.total;
+        cutoffs.rank = r.dataAsOf;
+      } catch (e) { if (seq === summarySeq && context === contextKey()) homeErrors.rank = errorText(e); }
+    })(),
+  ]);
+}
+watch(contextKey, loadSummary, { immediate: true });
+watch(contextKey, loadTrend, { immediate: true });
+
 const rankCols = [
   { title: '#', key: 'idx', width: 40 },
   { title: '门店', key: 'name', ellipsis: true },
@@ -153,7 +213,7 @@ function onExport({ key }: { key: string | number }) {
 
 <template>
   <Teleport defer to="#page-extra">
-    <span class="t-12 c-3">数据截至 2026-10-24 23:00</span>
+    <span class="t-12 c-3">数据截至 {{ dataAsOf }}</span>
     <a-dropdown :trigger="['click']">
       <a-button>导出</a-button>
       <template #overlay>
@@ -166,9 +226,10 @@ function onExport({ key }: { key: string | number }) {
   </Teleport>
 
   <div class="home">
+    <div v-if="homeErrors.kpi" role="alert">指标加载失败：{{ homeErrors.kpi }}</div>
     <div class="panel kpis">
       <div v-for="k in kpis" :key="k.m.id" class="kpi">
-        <span class="kpi-title"><HoverCard kind="metric" :id="k.m.id"><span class="t-14 c-2">{{ k.m.name }}</span></HoverCard><InfoTip text="统计区间 10 月 1 日—24 日，与上月同期（9 月 1 日—24 日）比较" /></span>
+        <span class="kpi-title"><HoverCard kind="metric" :id="k.m.id"><span class="t-14 c-2">{{ k.m.name }}</span></HoverCard><InfoTip :text="isDashboardReal() ? '数据库已配置的指标当前值与上期值' : '统计区间 10 月 1 日—24 日，与上月同期（9 月 1 日—24 日）比较'" /></span>
         <div class="kpi-val">
           <span class="t-kpi fw-600 c-1">{{ k.value }}</span>
           <span v-if="k.unit" class="t-14 c-2">{{ k.unit }}</span>
@@ -180,7 +241,7 @@ function onExport({ key }: { key: string | number }) {
     <div class="row">
       <div class="panel orders">
         <div class="panel-head">
-          <span class="t-16 fw-600">最近订单（截至 10 月 24 日 23:00）</span>
+          <span class="t-16 fw-600">最近订单（截至 {{ dataAsOf }}）</span>
           <a-space>
             <a-select v-model:value="status" size="small" class="w-120"
               :options="['全部', '待支付', '待出库', '拣货中', '已出库', '已签收', '已取消'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
@@ -189,11 +250,12 @@ function onExport({ key }: { key: string | number }) {
             <a-input-search v-model:value="kw" size="small" placeholder="订单号 / 门店名称" class="w-200" />
           </a-space>
         </div>
+        <div v-if="homeErrors.orders" role="alert">订单加载失败：{{ homeErrors.orders }}</div>
         <div class="orders-table paged-scroll">
           <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :pagination="false">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'id'"><ObjRef kind="order" :id="record.id"><span class="num">{{ record.id }}</span></ObjRef></template>
-              <template v-else-if="column.key === 'store'"><ObjRef kind="store" :id="record.storeId">{{ record.storeName ?? storeById(record.storeId)?.name }}</ObjRef></template>
+              <template v-else-if="column.key === 'store'"><ObjRef kind="store" :id="record.storeId">{{ record.storeName ?? (isDashboardReal() ? record.storeId : storeById(record.storeId)?.name) }}</ObjRef></template>
               <template v-else-if="column.key === 'lines'"><span class="num">{{ record.lineCnt }}</span></template>
               <template v-else-if="column.key === 'amount'"><span class="num">{{ fmtMoney(record.amount) }}</span></template>
               <template v-else-if="column.key === 'status'"><a-badge :status="statusBadge(record.status)" :text="record.status" /></template>
@@ -210,15 +272,16 @@ function onExport({ key }: { key: string | number }) {
       <div class="side">
         <div class="panel trend">
           <div class="panel-head">
-            <span><HoverCard kind="metric" id="gmv"><span class="t-16 fw-600">近 30 日销售额（元）</span></HoverCard><InfoTip text="不含税 · 单位：元" /></span>
+            <span><HoverCard v-if="!isDashboardReal()" kind="metric" id="gmv"><span class="t-16 fw-600">近 30 日销售额（元）</span></HoverCard><span v-else class="t-16 fw-600">近 30 日订单实付折算（元）</span><InfoTip :text="isDashboardReal() ? `按北京时间下单日汇总订单实付 ÷ 1.13，含所有订单状态，非退款净额 · 数据截至 ${trend.dataAsOf || '—'}` : '不含税 · 单位：元'" /></span>
           </div>
-          <div class="trend-chart"><EChart :option="trendOption" /></div>
+          <div class="trend-chart"><span v-if="trend.loading">加载中…</span><span v-else-if="trend.error" role="alert">趋势加载失败：{{ trend.error }} <a @click="loadTrend">重试</a></span><EChart v-else :option="trendOption" /></div>
         </div>
         <div class="panel rank">
           <div class="panel-head">
-            <span><span class="t-16 fw-600">门店销售额排行（不含税）</span><InfoTip text="前 10 家门店 · 10 月 1 日—24 日" /></span>
+            <span><span class="t-16 fw-600">门店销售额排行（不含税）</span><InfoTip :text="isDashboardReal() ? '前 10 家门店 · 数据库订单实付折算' : '前 10 家门店 · 10 月 1 日—24 日'" /></span>
             <a class="t-14" @click="setRankOpen(true)">全部 {{ rankTotal }} 家</a>
           </div>
+          <div v-if="homeErrors.rank" role="alert">排行加载失败：{{ homeErrors.rank }}</div>
           <a-table size="small" row-key="id" :pagination="false" :data-source="ranking" :columns="rankCols" class="rank-table">
             <template #bodyCell="{ column, record }">
               <span v-if="column.key === 'idx'" class="num c-3">{{ record.rank }}</span>
@@ -233,7 +296,7 @@ function onExport({ key }: { key: string | number }) {
   </div>
 
   <a-drawer :open="rankOpen" :width="640" @close="setRankOpen(false)">
-    <template #title>门店销售额排行（不含税）· 全部 {{ rankTotal }} 家<InfoTip :text="`销售额（不含税）= 实付金额 ÷ 1.13 · 10 月 1 日—24 日 · 数据截至 2026-10-24 23:00`" /></template>
+    <template #title>门店销售额排行（不含税）· 全部 {{ rankTotal }} 家<InfoTip :text="`销售额（不含税）= 实付金额 ÷ 1.13 · 数据截至 ${dataAsOf}`" /></template>
     <a-table size="small" row-key="id" :pagination="false" :data-source="rankPaged.items" :columns="rankCols">
       <template #bodyCell="{ column, record }">
         <span v-if="column.key === 'idx'" class="num c-3">{{ record.rank }}</span>

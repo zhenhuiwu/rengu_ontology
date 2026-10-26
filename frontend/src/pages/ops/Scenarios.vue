@@ -9,7 +9,6 @@ import InfoTip from '@/components/InfoTip.vue';
  * 影响明细服务端分页 / 转动作预览（stage-plan）与暂存（:stage）都走 /scenarios 接口；默认 mock 路径不变。
  */
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue';
@@ -36,7 +35,7 @@ import {
 import { isApiError } from '@/api/http';
 import { getObjectTypeFacets } from '@/api/static';
 import {
-  dynamicApi, listScenarios, getScenariosMeta, compareScenarios, createScenario, getScenario, renameScenario, runScenario,
+  dynamicApi, dynamicContextKey, listScenarios, getScenariosMeta, compareScenarios, createScenario, getScenario, renameScenario, runScenario,
   waitScenarioResult, PollAborted, listScenarioImpacts, getScenarioStagePlan, stageScenario, type ScenarioDto, type ScenarioMetaDto,
 } from '@/api/dynamic';
 
@@ -52,16 +51,17 @@ const now = () => { tick += 1; return `2026-10-25 16:${String(50 + (tick % 10)).
 const q1 = (k: string) => { const v = route.query[k]; return typeof v === 'string' ? v : ''; };
 /* ───── 真接口模式状态（mock 模式下不用） ───── */
 const REAL_API = dynamicApi.isReal();
-/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
-const live = computed(() => REAL_API && !backend.down);
-const readFail = (e: unknown) => { if (!fallBackIfDown(e)) apiFail(e); };
+const live = computed(() => REAL_API);
+const readFail = (e: unknown) => apiFail(e);
 const remote = reactive<{
   meta: ScenarioMetaDto | null; list: { items: Scenario[]; total: number }; rev: number;
   detail: Scenario | null; cmp: Scenario[]; imp: { items: ScImpact[]; total: number }; plans: Record<string, StagePlan[]>;
 }>({ meta: null, list: { items: [], total: 0 }, rev: 0, detail: null, cmp: [], imp: { items: [], total: 0 }, plans: {} });
+const executorUnavailable = computed(() => live.value && remote.meta?.executorConfigured !== true
+  ? remote.meta?.unavailableReason || '真实推演数据集与执行器尚未配置；仅可查看已存历史结果' : '');
 /** 接口的 result 不含 impacts（影响明细走分页接口），这里补空数组以复用页面的 Scenario 类型 */
 const asSc = (d: ScenarioDto): Scenario => ({ ...d, result: d.result ? { ...d.result, impacts: [] } : undefined }) as Scenario;
-const apiFail = (e: unknown) => { message.error(isApiError(e) ? e.message : String((e as Error)?.message ?? e)); };
+const apiFail = (e: unknown) => { if ((e as Error)?.name !== 'DynamicContextChanged') message.error(isApiError(e) ? e.message : String((e as Error)?.message ?? e)); };
 const setQ = (patch: Record<string, string | null>) => {
   const q = { ...route.query } as Record<string, string>;
   Object.entries(patch).forEach(([k, v]) => { if (v == null || v === '') delete q[k]; else q[k] = v; });
@@ -71,7 +71,8 @@ const setQ = (patch: Record<string, string | null>) => {
 /* ───── 列表 ───── */
 const statusF = ref<'全部' | ScStatus>('全部');
 const kw = ref('');
-const pq = usePagedQuery({ defaultSize: 12, filters: [statusF, kw] });
+const pq = usePagedQuery({ defaultSize: 10, filters: [statusF, kw] });
+const listLoading = ref(false);
 const rows = computed(() => SCENARIOS.filter((s) => (statusF.value === '全部' || s.status === statusF.value)
   && (!kw.value || s.name.includes(kw.value) || s.id.includes(kw.value.toUpperCase()))));
 const paged = computed(() => (live.value ? remote.list : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
@@ -87,28 +88,38 @@ const cmpIds = computed<string[]>(() => (live.value ? q1('cmp').split(',').filte
   : q1('cmp').split(',').filter((id) => scenarioById(id)?.status === '已完成').slice(0, 3)));
 const cmpList = computed<Scenario[]>(() => (live.value ? remote.cmp : cmpIds.value.map((id) => scenarioById(id)!)));
 /** 真接口：列表 / 详情 / 对比 / meta 加载；只采用与当前条件一致的最后一次响应 */
-let listSeq = 0;
+let listSeq = 0, detailSeq = 0, cmpSeq = 0;
 async function loadList() {
-  const seq = ++listSeq;
+  const seq = ++listSeq, ctx = dynamicContextKey();
+  listLoading.value = true;
   try {
     const r = await listScenarios({ status: statusF.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
-    if (seq === listSeq) { remote.list = { items: r.items.map(asSc), total: r.total }; if (!defaultId.value) defaultId.value = r.items[0]?.id ?? ''; }
-  } catch (e) { readFail(e); }
+    if (seq === listSeq && ctx === dynamicContextKey()) { remote.list = { items: r.items.map(asSc), total: r.total }; if (!defaultId.value) defaultId.value = r.items[0]?.id ?? ''; }
+  } catch (e) { if (seq === listSeq && ctx === dynamicContextKey()) { remote.list = { items: [], total: 0 }; readFail(e); } }
+  finally { if (seq === listSeq) listLoading.value = false; }
 }
 async function loadDetail() {
+  const seq = ++detailSeq, ctx = dynamicContextKey();
   const id = scId.value; if (!id) { remote.detail = null; return; }
-  try { const d = await getScenario(id); if (id === scId.value) remote.detail = asSc(d); } catch (e) { readFail(e); }
+  try { const d = await getScenario(id); if (seq === detailSeq && ctx === dynamicContextKey() && id === scId.value) remote.detail = asSc(d); }
+  catch (e) { if (seq === detailSeq && ctx === dynamicContextKey()) { remote.detail = null; readFail(e); } }
 }
 async function loadCmp() {
+  const seq = ++cmpSeq, ctx = dynamicContextKey();
   const ids = cmpIds.value; const key = ids.join(',');
   if (mode.value !== 'cmp' || !ids.length) { remote.cmp = []; return; }
-  try { const r = await compareScenarios(ids); if (key === cmpIds.value.join(',')) remote.cmp = r.items.map(asSc); } catch (e) { remote.cmp = []; readFail(e); }
+  try { const r = await compareScenarios(ids); if (seq === cmpSeq && ctx === dynamicContextKey() && key === cmpIds.value.join(',')) remote.cmp = r.items.map(asSc); }
+  catch (e) { if (seq === cmpSeq && ctx === dynamicContextKey()) { remote.cmp = []; readFail(e); } }
 }
 if (live.value) {
-  getScenariosMeta().then((m) => { remote.meta = m; }).catch(readFail);
-  watch([statusF, kw, pq.page, pq.size, () => remote.rev], loadList, { immediate: true });
-  watch(scId, loadDetail, { immediate: true });
-  watch([mode, () => cmpIds.value.join(',')], loadCmp, { immediate: true });
+  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; ++cmpSeq; ++impSeq; remote.meta = null; remote.list = { items: [], total: 0 }; remote.detail = null; remote.cmp = []; remote.imp = { items: [], total: 0 }; remote.plans = {}; defaultId.value = ''; }, { flush: 'sync' });
+  watch(dynamicContextKey, async (ctx) => {
+    try { const m = await getScenariosMeta(); if (ctx === dynamicContextKey()) remote.meta = m; }
+    catch (e) { if (ctx === dynamicContextKey()) readFail(e); }
+  }, { immediate: true });
+  watch([dynamicContextKey, statusF, kw, pq.page, pq.size, () => remote.rev], loadList, { immediate: true });
+  watch([dynamicContextKey, scId], loadDetail, { immediate: true });
+  watch([dynamicContextKey, mode, () => cmpIds.value.join(',')], loadCmp, { immediate: true });
 }
 /* ───── 推演模板（元数据）：范围 / 驱动 / 指标 / 影响明细 / 建议动作都按模板渲染 ───── */
 const tplList = computed<ScTemplate[]>(() => (live.value && remote.meta?.templates?.length ? remote.meta.templates : SC_TEMPLATES));
@@ -137,13 +148,13 @@ const form = reactive<{ name: string; scope: ScCfg; drivers: ScCfg }>({ name: ''
 const tpl = computed(() => tplFor(current.value));
 /** 真接口：范围项 propRef 的可选值取 static /facets（引擎 acceptsFacetValues 且 hasData 才用：allOption + 分面取值）；mock / 无数据用模板 options。与后台 :run 校验同一规则 */
 const facetOpts = ref<Record<string, ScValue[]>>({});
-watch(() => (live.value && SC_ENGINES[tpl.value.engine]?.acceptsFacetValues ? `${tpl.value.code}` : ''), async (code) => {
+watch(() => (live.value && remote.meta?.executorConfigured === true && SC_ENGINES[tpl.value.engine]?.acceptsFacetValues ? `${dynamicContextKey()}|${tpl.value.code}` : ''), async (code) => {
   facetOpts.value = {};
   if (!code) return;
   const t = tpl.value; const out: Record<string, ScValue[]> = {};
   const refs = t.scope.filter((f) => f.propRef).map((f) => ({ f, ot: f.propRef!.split('.')[0], prop: f.propRef!.split('.').slice(1).join('.') }));
   for (const ot of [...new Set(refs.map((r) => r.ot))]) {
-    let fs; try { fs = await getObjectTypeFacets(ot); } catch (e) { if (fallBackIfDown(e)) return; continue; }
+    let fs; try { fs = await getObjectTypeFacets(ot); } catch (e) { readFail(e); continue; }
     for (const r of refs.filter((x) => x.ot === ot)) {
       const fc = fs.find((x) => x.key === r.prop);
       if (fc && fc.hasData && fc.kind === 'enum' && fc.values.length) {
@@ -152,7 +163,7 @@ watch(() => (live.value && SC_ENGINES[tpl.value.engine]?.acceptsFacetValues ? `$
       }
     }
   }
-  if (tpl.value.code === code) facetOpts.value = out;
+  if (`${dynamicContextKey()}|${tpl.value.code}` === code) facetOpts.value = out;
 }, { immediate: true });
 const load = (s?: Scenario) => { if (!s) return; form.name = s.name; form.scope = { ...(s.scope as unknown as ScCfg) }; form.drivers = { ...(s.drivers as unknown as ScCfg) }; };
 watch(() => current.value?.id, () => load(current.value), { immediate: true });
@@ -202,8 +213,9 @@ watch(() => allFields(tpl.value).filter((f) => f.when).map((f) => form.drivers[f
 });
 
 const needRun = computed(() => !!current.value && (current.value.status !== '已完成' || cfgDirty.value));
-const runBlocked = computed(() => lockReason.value || (noDriver.value ? tpl.value.noDriverHint : ''));
+const runBlocked = computed(() => lockReason.value || executorUnavailable.value || (noDriver.value ? tpl.value.noDriverHint : ''));
 async function run() {
+  const ctx = dynamicContextKey();
   const s = current.value; if (!s || runBlocked.value) return;
   if (s.result) {
     const ok = await confirm.ask({
@@ -211,7 +223,7 @@ async function run() {
       fields: [{ label: '上一次运行', value: s.result.ranAt }],
       impact: '会用当前配置重新计算，覆盖上一次的结果（指标、影响明细、对比）；已暂存到动作中心的动作不受影响。',
     });
-    if (!ok || current.value?.id !== s.id) return;
+    if (!ok || ctx !== dynamicContextKey() || current.value?.id !== s.id) return;
   }
   if (REAL_API) {
     const id = s.id;
@@ -242,8 +254,10 @@ async function run() {
 const polls = new AbortController();
 onBeforeUnmount(() => polls.abort());
 async function create(from?: Scenario) {
+  const ctx = dynamicContextKey();
   if (readonly.value) return;
   if (dirty.value && !(await confirmDiscard())) return;
+  if (ctx !== dynamicContextKey()) return;
   passGuard = true;
   if (REAL_API) {
     try {
@@ -290,15 +304,16 @@ const lineOpt = computed(() => {
     ],
   };
 });
-const ipq = usePagedQuery({ defaultSize: 6, prefix: 'im', filters: [() => current.value?.id, () => current.value?.result?.ranAt] });
+const ipq = usePagedQuery({ defaultSize: 10, prefix: 'im', filters: [() => current.value?.id, () => current.value?.result?.ranAt] });
 const impPaged = computed(() => (live.value ? remote.imp : paginate(current.value?.result?.impacts ?? [], { page: ipq.page.value, size: ipq.size.value })));
 let impSeq = 0;
 async function loadImp() {
-  const s = current.value; const seq = ++impSeq;
+  const s = current.value; const seq = ++impSeq, ctx = dynamicContextKey();
   if (!s?.result) { remote.imp = { items: [], total: 0 }; return; }
-  try { const r = await listScenarioImpacts(s.id, ipq.page.value, ipq.size.value); if (seq === impSeq) remote.imp = { items: r.items, total: r.total }; } catch (e) { readFail(e); }
+  try { const r = await listScenarioImpacts(s.id, ipq.page.value, ipq.size.value); if (seq === impSeq && ctx === dynamicContextKey()) remote.imp = { items: r.items, total: r.total }; }
+  catch (e) { if (seq === impSeq && ctx === dynamicContextKey()) { remote.imp = { items: [], total: 0 }; readFail(e); } }
 }
-if (live.value) watch([() => current.value?.id, () => current.value?.result?.ranAt, ipq.page, ipq.size], loadImp, { immediate: true });
+if (live.value) watch([dynamicContextKey, () => current.value?.id, () => current.value?.result?.ranAt, ipq.page, ipq.size], loadImp, { immediate: true });
 /** 影响明细列按模板 impact.columns：obj 对象引用（行对象 / 维度对象）、money、delta、range（基线 → 方案）、text */
 const impCols = computed(() => tpl.value.impact.columns.map((c) => ({ title: c.label, key: c.key, align: c.align, width: c.width, ellipsis: c.kind === 'obj' || undefined, def: c })));
 const impRowKey = (r: Record<string, unknown>) => tpl.value.impact.rowKey.map((k) => r[k]).join('-');
@@ -345,14 +360,17 @@ const target = computed<Scenario | undefined>(() => (mode.value === 'cmp'
 /** 转动作建议：mock 本地算；真接口按方案取 /stage-plan 缓存（运行 / 暂存后作废） */
 const planOf = (s: Scenario): StagePlan[] | undefined => (live.value ? remote.plans[s.id] : SC_ENGINES[tplFor(s).engine].stagePlan(s));
 async function loadPlans() {
+  if (executorUnavailable.value) return;
+  const ctx = dynamicContextKey();
   const ss = (mode.value === 'cmp' ? cmpList.value : current.value ? [current.value] : [])
     .filter((x) => x.status === '已完成' && !x.staged.length && !remote.plans[x.id]);
-  await Promise.all(ss.map(async (x) => { try { remote.plans[x.id] = await getScenarioStagePlan(x.id); } catch (e) { readFail(e); } }));
+  await Promise.all(ss.map(async (x) => { try { const result = await getScenarioStagePlan(x.id); if (ctx === dynamicContextKey()) remote.plans[x.id] = result; } catch (e) { if (ctx === dynamicContextKey()) readFail(e); } }));
 }
 if (live.value) watch([mode, () => current.value?.id, () => current.value?.status, () => current.value?.result?.ranAt, () => cmpList.value.map((x) => x.id).join(',')], loadPlans, { immediate: true });
 const convertBlocked = computed(() => {
   const s = target.value;
   if (readonly.value) return roReason.value;
+  if (executorUnavailable.value) return executorUnavailable.value;
   if (!s) return mode.value === 'cmp' ? '先勾选要对比的方案' : '';
   if (s.status !== '已完成') return '方案推演完成后才能转为动作';
   if (s.owner !== ME.value) return `${s.owner} 的方案，只读；如需转为动作请“复制为新方案”后运行`;
@@ -378,6 +396,8 @@ const planCols = [
   { title: '参数', dataIndex: 'params', ellipsis: true }, { title: '依据', dataIndex: 'reason', width: 190, ellipsis: true },
 ];
 async function doStage() {
+  const ctx = dynamicContextKey();
+  if (executorUnavailable.value) return;
   const s = target.value; if (!s) return;
   const items = plan.value.filter((p) => planKeys.value.includes(p.key));
   if (!items.length) { message.warning('至少选择一条动作'); return; }
@@ -394,6 +414,7 @@ async function doStage() {
     ],
     impact: '只生成“待确认”动作，不提交审批、不写外部系统。需要你在动作中心逐条确认提交后才会进入审批；未确认前可撤回。',
   });
+  if (ctx !== dynamicContextKey()) return;
   if (!ok) { planOpen.value = true; return; } // 取消确认卡：回到预览，勾选保持不变
   if (REAL_API) {
     try {
@@ -440,6 +461,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
         <a-input-search v-model:value="kw" size="small" placeholder="方案名称 / 编号" class="sc-kw" />
       </div>
       <div class="sc-items">
+        <div v-if="listLoading" class="sc-empty"><a-spin size="small" /></div>
         <div v-for="s in paged.items" :key="s.id" class="sc-item"
           :class="{ 'sc-item-on': mode === 'one' ? s.id === current?.id : cmpIds.includes(s.id), 'sc-item-off': mode === 'cmp' && !!cmpTip(s) }"
           :data-id="s.id" @click="pick(s)">
@@ -482,7 +504,6 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
       <div class="sc-body">
         <!-- 配置 -->
         <div class="sc-cfg">
-          <div v-if="lockReason" class="sc-lock t-12 c-2">{{ lockReason }}</div>
           <a-form layout="horizontal" :label-col="{ style: { width: '84px' } }" size="small" :disabled="!!lockReason" class="sc-form">
             <div class="sc-sec t-12 c-3">方案</div>
             <a-form-item label="名称">
@@ -530,7 +551,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
             </div>
           </template>
           <template v-else-if="!current.result">
-            <div class="sc-empty"><div class="c-2">草稿方案尚未运行：在左侧设置范围和驱动后点击“运行推演”</div></div>
+            <div class="sc-empty"><div class="c-2">{{ live ? '暂无推演结果' : '草稿方案尚未运行：在左侧设置范围和驱动后点击“运行推演”' }}</div></div>
           </template>
           <template v-else>
             <div class="sc-kpis">

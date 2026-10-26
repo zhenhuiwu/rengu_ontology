@@ -8,7 +8,7 @@ import { message } from 'ant-design-vue';
 import { QA_SESSION_LIST, QA_TODAY } from '@/mock';
 import type { QaSession } from '@/mock/qa';
 import * as qaApi from '@/api/qa';
-import { isApiError } from '@/api/http';
+import { currentApiContext, isApiError } from '@/api/http';
 import { qaLive, qaFallBackIfDown } from './qaFallback';
 
 /** real：开关 qa（写操作按它走真接口）；live：渲染 / 读接口（后台没起来时回退 mock） */
@@ -20,32 +20,52 @@ export interface QaTurn { id: number; q: string; time: string; }
 const sessions = ref<QaSession[]>([...QA_SESSION_LIST]);
 const activeId = ref<string>(live.value ? '' : QA_SESSION_LIST[0].id);
 /** 真接口：当前会话详情（含全部轮次）；listTick 变了左栏重取当前页 */
-const detail = ref<qaApi.QaSessionDetail | null>(null);
+const storedDetail = ref<qaApi.QaSessionDetail | null>(null);
+const detailContext = ref('');
+const contextKey = () => JSON.stringify(currentApiContext());
+const detail = computed({
+  get: () => !real || (detailContext.value === contextKey() && storedDetail.value?.id === activeId.value) ? storedDetail.value : null,
+  set: (value: qaApi.QaSessionDetail | null) => { detailContext.value = contextKey(); storedDetail.value = value; },
+});
 const loading = ref(false);
 const sending = ref(false);
 const listTick = ref(0);
 /** favTick 变了左栏底部「常用问题」前 3 条重取（抽屉里移出后） */
 const favTick = ref(0);
-let loadSeq = 0;
+let loadSeq = 0, sendSeq = 0, createSeq = 0;
+let detailRequest: AbortController | undefined;
+const creating = ref(false);
 
 export const errText = (e: unknown) => (isApiError(e) ? `${e.message || e.code}（${e.code}）` : String(e));
 
 async function loadDetail(id = activeId.value) {
-  if (!live.value || !id) return;
-  const my = ++loadSeq;
+  if (!live.value || !id || id !== activeId.value) return;
+  detailRequest?.abort();
+  const my = ++loadSeq, key = contextKey();
+  detailRequest = new AbortController();
+  const valid = () => my === loadSeq && key === contextKey() && id === activeId.value && live.value;
   loading.value = true;
   try {
-    const d = await qaApi.getSession(id);
-    if (my === loadSeq) detail.value = d;
+    const d = await qaApi.getSession(id, qaApi.qaRequestOptions(detailRequest.signal));
+    if (valid()) detail.value = d;
   } catch (e) {
-    if (my === loadSeq) { detail.value = null; if (!qaFallBackIfDown(e)) message.error(`会话加载失败：${errText(e)}`); }
-  } finally { if (my === loadSeq) loading.value = false; }
+    if (valid() && (e as Error)?.name !== 'AbortError') { detail.value = null; if (!qaFallBackIfDown(e)) message.error(`会话加载失败：${errText(e)}`); }
+  } finally { if (valid()) loading.value = false; }
 }
 /** 每个会话里本次新追加的轮次（原有历史轮次由 QaConversation 固定渲染，只属于第一个会话） */
 const turns = ref<Record<string, QaTurn[]>>({});
-// 后台没起来 → 回退 mock：当前会话切到示例会话
-watch(live, (on) => { if (!on) { loadSeq++; loading.value = false; detail.value = null; activeId.value = QA_SESSION_LIST[0].id; } });
 const draft = ref('');
+if (real) {
+  watch(contextKey, () => {
+    ++loadSeq; ++sendSeq; ++createSeq; detailRequest?.abort();
+    detail.value = null; activeId.value = ''; draft.value = '';
+    loading.value = false; sending.value = false; creating.value = false;
+  }, { flush: 'sync' });
+  watch(activeId, () => { ++loadSeq; detailRequest?.abort(); loading.value = false; ++sendSeq; sending.value = false; draft.value = ''; }, { flush: 'sync' });
+  watch([activeId, live], ([id, on]) => {
+    if (!on || !id || detail.value?.id !== id) void loadDetail(id);
+  }, { immediate: true });
+}
 let seq = 0;
 let newSeq = 0;
 
@@ -63,21 +83,25 @@ export function useQaSession() {
   const isNew = computed(() => (live.value ? !!detail.value && detail.value.id === activeId.value && !detail.value.turns.length : activeId.value.startsWith('NEW-')));
   const activeTurns = computed(() => turns.value[activeId.value] ?? []);
   async function sendReal(q: string) {
-    const sid = activeId.value;
+    const sid = activeId.value, key = contextKey();
     if (!sid || sending.value) return false;
+    const my = ++sendSeq;
+    const valid = () => my === sendSeq && sid === activeId.value && key === contextKey();
     sending.value = true;
     draft.value = '';
     try {
-      const r = await qaApi.askTurn(sid, q);
-      if (detail.value?.id === sid) detail.value.turns.push(r.turn);
-      if (detail.value?.id === sid && detail.value.title === '新会话') detail.value.title = q.slice(0, 20);
+      const r = await qaApi.askTurn(sid, q, qaApi.qaRequestOptions());
+      if (!valid()) return false;
+      if (detail.value?.id === sid) {
+        if (!detail.value.turns.some((t) => t.id === r.turn.id)) detail.value.turns.push(r.turn);
+        if (detail.value.title === '新会话') detail.value.title = q.slice(0, 20);
+      }
       listTick.value++;
       return true;
     } catch (e) {
-      draft.value = q; // 失败时把问题放回输入框
-      message.error(`提问失败：${errText(e)}`);
+      if (valid()) { draft.value = q; message.error(`提问失败：${errText(e)}`); }
       return false;
-    } finally { sending.value = false; }
+    } finally { if (valid()) sending.value = false; }
   }
   function send(text?: string) {
     const q = (text ?? draft.value).trim();
@@ -91,12 +115,18 @@ export function useQaSession() {
     return true;
   }
   async function newSessionReal(scope: string, caliber: string) {
+    if (creating.value) return '';
+    const my = ++createSeq, key = contextKey(), selected = activeId.value;
+    const valid = () => my === createSeq && key === contextKey() && selected === activeId.value;
+    creating.value = true;
     try {
-      const d = await qaApi.createSession({ scope, caliber });
+      const d = await qaApi.createSession({ scope, caliber }, qaApi.qaRequestOptions());
+      if (!valid()) return '';
       detail.value = d; activeId.value = d.id; draft.value = '';
       listTick.value++;
       return d.id;
-    } catch (e) { message.error(`新建会话失败：${errText(e)}`); return ''; }
+    } catch (e) { if (valid()) message.error(`新建会话失败：${errText(e)}`); return ''; }
+    finally { if (my === createSeq) creating.value = false; }
   }
   function newSession() {
     const id = `NEW-${++newSeq}`;
@@ -105,5 +135,5 @@ export function useQaSession() {
     draft.value = '';
     return id;
   }
-  return { sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, live, detail, loading, sending, listTick, favTick, loadDetail, newSessionReal };
+  return { sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, live, detail, loading, sending, creating, listTick, favTick, loadDetail, newSessionReal };
 }

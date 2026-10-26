@@ -6,7 +6,6 @@
  * 认领、批量认领、转派、关闭、批量关闭、发起动作一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
 import { computed, reactive, ref, watch } from 'vue';
-import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
@@ -22,16 +21,17 @@ import { ACTIONS, ACTION_META, OBJ_KIND_LABEL } from '@/mock/actions';
 import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts,
+  dynamicApi, dynamicContextKey, getAlertMeta, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts,
   startAlertAction, listPeople, type AlertDto, type AlertDetailDto, type AlertRuleDto, type AlertTab,
 } from '@/api/dynamic';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
 /** dims：通用维度值（演示数据里是所属门店）；objKindLabel：对象类型显示名（真接口由后台给，mock 取对象类型目录） */
 type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string; dims: AlertDim[]; objKindLabel?: string };
+const REAL_API = dynamicApi.isReal();
 /** 页面内的告警状态（模拟后台：认领、转派、关闭、发起动作都会改它并写处理记录） */
 /** 关联动作取自动作中心同一份数据（mock/actions.ts，按来源告警匹配最近一条），两页的幂等键和状态一致 */
-const LIST = reactive<Row[]>(ALERTS.map((a) => {
+const LIST = reactive<Row[]>(REAL_API ? [] : ALERTS.map((a) => {
   const act = ACTIONS.find((x) => x.source.alertId === a.id);
   const log = alertTimeline(a);
   if (act && !(a.status === '已解决' || a.status === '已忽略')) log.push({ time: act.submittedAt, text: `发起动作「${act.action}」（${act.idemKey}），现为${act.status}`, who: act.initiator });
@@ -41,13 +41,11 @@ const LIST = reactive<Row[]>(ALERTS.map((a) => {
 /** 关联动作还没有结果时锁定转派和关闭 */
 const IN_FLIGHT = ['待确认', '审批中', '执行中', '结果未知'];
 /** 是否走真接口（开关 dynamic）；构建时确定 */
-const REAL_API = dynamicApi.isReal();
-/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
-const live = computed(() => REAL_API && !backend.down);
-const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
+const live = computed(() => REAL_API);
+const readFail = (e: unknown) => fail(e);
 const app = useAppStore();
 /** 当前处理人：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
-const ME = REAL_API ? app.user.name : '王敏';
+const ME = computed(() => REAL_API ? app.user.name : '王敏');
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(30 + tick).padStart(2, '0')}:00`; };
 const isClosed = (s: AlertStatus) => s === '已解决' || s === '已忽略';
@@ -71,13 +69,15 @@ const level = ref('全部');
 const ruleId = ref('全部');
 const kw = ref('');
 /** 分页进 URL（?page=&size=），一屏 12 条；筛选变化回到第 1 页 */
-const pq = usePagedQuery({ defaultSize: 12, filters: [level, ruleId, kw] });
+const pq = usePagedQuery({ defaultSize: 10, filters: [level, ruleId, kw] });
 const page = pq.page;
 const pageSize = pq.size;
 
 /** 真接口状态：当前页、总数、页签计数、当前详情、处理人下拉；seen 记住看过的行（跨页勾选时批量操作用） */
 const remote = reactive({ items: [] as Row[], total: 0, counts: { open: 0, doing: 0, closed: 0, all: 0 } as Record<string, number>, detail: null as (Row & { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean }) | null, people: [] as string[] });
 const seen = new Map<string, Row>();
+const ruleOptions = ref<{ id: string; name: string }[]>([]);
+const listLoading = ref(false);
 const toRow = (a: AlertDto): Row => ({
   ...a, dims: a.dims ?? [],
   actionRef: a.actionRef ?? undefined, actionStatus: a.actionStatus ?? undefined, log: [],
@@ -86,7 +86,7 @@ const toDetail = (d: AlertDetailDto) => ({
   ...toRow(d), rule: d.rule, approver: d.approver, recent7d: d.recent7d, locked: d.locked,
   log: d.log.map((l) => ({ time: l.time, text: l.text, who: l.who, abnormal: l.abnormal ?? undefined })),
 });
-const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+const fail = (e: unknown) => { if ((e as Error)?.name !== 'DynamicContextChanged') message.error(isApiError(e) ? e.message || e.code : String(e)); };
 
 const rows = computed(() => {
   if (live.value) return remote.items;
@@ -98,7 +98,6 @@ const rows = computed(() => {
     (!kw.value || a.id.includes(kw.value) || a.objLabel.includes(kw.value)),
   );
 });
-const count = (key: string) => live.value ? (remote.counts[key] ?? 0) : LIST.filter((a) => TABS.find((t) => t.key === key)!.match(a.status)).length;
 
 const total = computed(() => (live.value ? remote.total : rows.value.length));
 const pageRows = computed(() => live.value ? remote.items : rows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
@@ -108,7 +107,7 @@ const selectedId = computed(() => (route.query.alert as string) || pinned.value 
 const current = computed<Row | undefined>(() => live.value ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? pageRows.value[0]);
 const rule = computed<AlertRuleDto | null>(() => (live.value ? remote.detail?.rule ?? null : current.value ? RULES[current.value.ruleId] : null));
 const locked = computed(() => live.value ? !!remote.detail?.locked : !!current.value?.actionStatus && IN_FLIGHT.includes(current.value.actionStatus));
-const metric = computed(() => (rule.value?.metric ? METRICS.find((m) => m.id === rule.value!.metric) : undefined));
+const metric = computed(() => (rule.value?.metric ? (live.value ? { id: rule.value.metric, name: rule.value.metric, version: '' } : METRICS.find((m) => m.id === rule.value!.metric)) : undefined));
 /** 同一规则、同一对象近 7 天的触发次数（含本条） */
 const recent = computed(() => {
   const a = current.value; if (!a) return 0;
@@ -120,31 +119,34 @@ const recent = computed(() => {
 });
 const pick = (a: Alert) => (pinned.value = a.id, router.replace({ query: { ...route.query, alert: a.id } }));
 const people = computed(() => (live.value ? remote.people : PEOPLE));
-const ruleName = (id: string) => RULES[id]?.name ?? id;
+const ruleName = (id: string) => live.value ? ruleOptions.value.find((r) => r.id === id)?.name ?? id : RULES[id]?.name ?? id;
+const filterRules = computed(() => live.value ? ruleOptions.value : Object.values(RULES));
 /** 对象类型显示名：真接口取后台 objKindLabel，mock 取对象类型目录，不写死订单 / 商品 / 门店 */
-const kindLabel = (a: Row) => a.objKindLabel ?? (OBJ_KIND_LABEL as Record<string, string>)[a.objKind] ?? a.objKind;
-const dimKind = (d: AlertDim) => d.kindLabel ?? (OBJ_KIND_LABEL as Record<string, string>)[d.objKind] ?? d.objKind;
+const kindLabel = (a: Row) => a.objKindLabel ?? (live.value ? a.objKind : (OBJ_KIND_LABEL as Record<string, string>)[a.objKind] ?? a.objKind);
+const dimKind = (d: AlertDim) => d.kindLabel ?? (live.value ? d.objKind : (OBJ_KIND_LABEL as Record<string, string>)[d.objKind] ?? d.objKind);
 /** 发起动作的审批人：取规则绑定动作类型的审批人配置（真接口后台给 approver，mock 取 ACTION_META） */
 const approverOf = (r: AlertRuleDto | null) => (live.value ? remote.detail?.approver ?? null : r?.action ? (ACTION_META as Record<string, { approver: string }>)[r.action]?.approver ?? null : null);
 
 // ---- 真接口：取列表 / 详情 ----
 let listSeq = 0; let detailSeq = 0;
 async function loadList() {
-  const seq = ++listSeq;
+  const seq = ++listSeq, ctx = dynamicContextKey();
+  listLoading.value = true;
   try {
     const r = await listAlerts({ status: (TABS.some((t) => t.key === tab.value) ? tab.value : 'all') as AlertTab, level: level.value, ruleId: ruleId.value, kw: kw.value, page: page.value, size: pageSize.value });
-    if (seq !== listSeq) return;
+    if (seq !== listSeq || ctx !== dynamicContextKey()) return;
     remote.items = r.items.map(toRow); remote.total = r.total; remote.counts = r.counts;
     remote.items.forEach((a) => seen.set(a.id, a));
-  } catch (e) { if (seq === listSeq) readFail(e); }
+  } catch (e) { if (seq === listSeq && ctx === dynamicContextKey()) { remote.items = []; remote.total = 0; readFail(e); } }
+  finally { if (seq === listSeq) listLoading.value = false; }
 }
 async function loadDetail(id = selectedId.value) {
-  const seq = ++detailSeq;
+  const seq = ++detailSeq, ctx = dynamicContextKey();
   if (!id) { remote.detail = null; return; }
   try {
     const d = await getAlert(id);
-    if (seq === detailSeq) remote.detail = toDetail(d);
-  } catch (e) { if (seq === detailSeq) { remote.detail = null; readFail(e); } }
+    if (seq === detailSeq && ctx === dynamicContextKey()) remote.detail = toDetail(d);
+  } catch (e) { if (seq === detailSeq && ctx === dynamicContextKey()) { remote.detail = null; readFail(e); } }
 }
 /** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
 async function afterWrite(d?: AlertDetailDto) {
@@ -152,9 +154,15 @@ async function afterWrite(d?: AlertDetailDto) {
   await loadList();
 }
 if (live.value) {
-  watch([tab, level, ruleId, kw, page, pageSize], loadList, { immediate: true });
-  watch(selectedId, (id) => { loadDetail(id); }, { immediate: true });
-  listPeople().then((p) => { remote.people = p; }, readFail);
+  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; remote.items = []; remote.total = 0; remote.detail = null; remote.people = []; ruleOptions.value = []; seen.clear(); pinned.value = undefined; selectedKeys.value = []; }, { flush: 'sync' });
+  watch([dynamicContextKey, tab, level, ruleId, kw, page, pageSize], loadList, { immediate: true });
+  watch([dynamicContextKey, selectedId], () => { loadDetail(); }, { immediate: true });
+  watch(dynamicContextKey, async (ctx) => {
+    const results = await Promise.allSettled([listPeople(), getAlertMeta()]);
+    if (ctx !== dynamicContextKey()) return;
+    if (results[0].status === 'fulfilled') remote.people = results[0].value; else readFail(results[0].reason);
+    if (results[1].status === 'fulfilled') ruleOptions.value = results[1].value.rules; else readFail(results[1].reason);
+  }, { immediate: true });
 }
 
 const statusBadge = (s: AlertStatus) =>
@@ -173,7 +181,7 @@ const columns = [
   { title: '处理人', key: 'assignee', width: 88 },
 ];
 
-function claimRow(a: Row, who = ME) {
+function claimRow(a: Row, who = ME.value) {
   if (a.status !== '待处理') return;
   a.status = '处理中'; a.assignee = who;
   a.log.push({ time: now(), text: '认领，状态 待处理 → 处理中', who });
@@ -201,7 +209,7 @@ async function doTransfer() {
   const from = a.assignee ?? '未认领';
   if (a.status === '待处理') a.status = '处理中';
   a.assignee = transferTo.value;
-  a.log.push({ time: now(), text: `转派：${from} → ${transferTo.value}`, who: ME });
+  a.log.push({ time: now(), text: `转派：${from} → ${transferTo.value}`, who: ME.value });
   transferOpen.value = false; transferTo.value = undefined;
   message.success('已转派');
 }
@@ -214,8 +222,8 @@ const closeReason = ref('');
 function closeRows(rowsToClose: Row[]) {
   for (const a of rowsToClose) {
     const from = a.status;
-    a.status = closeAs.value; a.assignee = a.assignee ?? ME;
-    a.log.push({ time: now(), text: `关闭为${closeAs.value}：${closeReason.value}（${from} → ${closeAs.value}）`, who: ME });
+    a.status = closeAs.value; a.assignee = a.assignee ?? ME.value;
+    a.log.push({ time: now(), text: `关闭为${closeAs.value}：${closeReason.value}（${from} → ${closeAs.value}）`, who: ME.value });
   }
   closeOpen.value = false; batchCloseOpen.value = false; closeReason.value = '';
 }
@@ -232,10 +240,10 @@ async function doClose() {
 // 批量
 const selectedKeys = ref<string[]>([]);
 /** 只有本人处理中的告警才能关闭、发起动作 */
-const mine = computed(() => current.value?.status === '处理中' && current.value.assignee === ME);
+const mine = computed(() => current.value?.status === '处理中' && current.value.assignee === ME.value);
 const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
 const selectedRows = computed(() => (live.value ? selectedKeys.value.map((k) => seen.get(k)).filter((a): a is Row => !!a) : LIST.filter((a) => selectedKeys.value.includes(a.id))));
-const closable = computed(() => selectedRows.value.filter((a) => a.status === '处理中' && a.assignee === ME));
+const closable = computed(() => selectedRows.value.filter((a) => a.status === '处理中' && a.assignee === ME.value));
 async function batchClaim() {
   if (REAL_API) {
     try {
@@ -269,6 +277,7 @@ async function doBatchClose() {
 }
 watch(tab, () => { selectedKeys.value = []; pinned.value = undefined; });
 async function runAction() {
+  const ctx = dynamicContextKey();
   const a = current.value; const r = rule.value;
   if (!a || !r?.action) return;
   const ok = await confirm.ask({
@@ -283,7 +292,7 @@ async function runAction() {
     ],
     impact: '提交后写回外部系统；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时在动作中心人工对账，不自动重试写入。',
   });
-  if (!ok) return;
+  if (!ok || ctx !== dynamicContextKey()) return;
   pinned.value = a.id;
   if (REAL_API) {
     try { const res = await startAlertAction(a.id); await afterWrite(res.alert); message.success(`已提交：${res.action.action}`); } catch (e) { fail(e); }
@@ -291,7 +300,7 @@ async function runAction() {
   }
   a.actionRef = `act-${a.id.toLowerCase()}`;
   a.actionStatus = '审批中';
-  a.log.push({ time: now(), text: `发起动作「${r.action}」，待${approverOf(r) ?? '--'}审批；动作成功后告警自动转为已解决`, who: ME });
+  a.log.push({ time: now(), text: `发起动作「${r.action}」，待${approverOf(r) ?? '--'}审批；动作成功后告警自动转为已解决`, who: ME.value });
   message.success(`已提交：${r.action}`);
 }
 </script>
@@ -301,7 +310,7 @@ async function runAction() {
     <div class="panel al-list">
       <div class="panel-head">
         <a-radio-group v-model:value="tab" size="small" button-style="solid">
-          <a-radio-button v-for="t in TABS" :key="t.key" :value="t.key">{{ t.title }} {{ count(t.key) }}</a-radio-button>
+          <a-radio-button v-for="t in TABS" :key="t.key" :value="t.key">{{ t.title }}</a-radio-button>
         </a-radio-group>
         <div v-if="selectedKeys.length" class="al-filters">
           <span class="t-14 c-2">已选 {{ selectedKeys.length }} 条</span>
@@ -322,12 +331,12 @@ async function runAction() {
           <a-select v-model:value="level" size="small" style="width: 104px"
             :options="['全部', '高', '中', '低'].map((v) => ({ value: v, label: v === '全部' ? '全部级别' : `${v}级` }))" />
           <a-select v-model:value="ruleId" size="small" style="width: 180px"
-            :options="[{ value: '全部', label: '全部规则' }, ...Object.values(RULES).map((r) => ({ value: r.id, label: `${r.id} ${r.name}` }))]" />
+            :options="[{ value: '全部', label: '全部规则' }, ...filterRules.map((r) => ({ value: r.id, label: `${r.id} ${r.name}` }))]" />
           <a-input-search v-model:value="kw" size="small" placeholder="告警编号 / 对象" style="width: 200px" />
         </div>
       </div>
       <div class="al-table paged-scroll">
-        <a-table :columns="columns" :data-source="pageRows" row-key="id" size="middle" :pagination="false"
+        <a-table :columns="columns" :data-source="pageRows" :loading="listLoading" row-key="id" size="middle" :pagination="false"
           :row-selection="{ selectedRowKeys: selectedKeys, onChange: (k: (string | number)[]) => (selectedKeys = k as string[]), getCheckboxProps: (r: Row) => ({ disabled: readonly || isClosed(r.status) }) }"
           :row-class-name="(r: Row) => (r.id === selectedId ? 'al-row-active' : '')"
           :custom-row="(r: Row) => ({ onClick: () => pick(r) })">
@@ -367,7 +376,7 @@ async function runAction() {
           <a-descriptions-item label="触发值"><span class="num">{{ current.value }}</span><span class="c-3">，阈值 {{ current.threshold }}</span></a-descriptions-item>
           <a-descriptions-item label="规则">{{ rule.id }} {{ rule.version }} · {{ rule.trigger }}</a-descriptions-item>
           <a-descriptions-item v-if="metric" label="指标">
-            <HoverCard kind="metric" :id="metric.id">{{ metric.name }}</HoverCard><span class="c-3">（口径 {{ metric.version }}）</span>
+            <HoverCard kind="metric" :id="metric.id">{{ metric.name }}</HoverCard><span v-if="metric.version" class="c-3">（口径 {{ metric.version }}）</span>
           </a-descriptions-item>
           <a-descriptions-item label="条件">{{ rule.condition }}</a-descriptions-item>
           <a-descriptions-item label="近 7 天">同一规则、同一对象第 {{ recent }} 次触发</a-descriptions-item>

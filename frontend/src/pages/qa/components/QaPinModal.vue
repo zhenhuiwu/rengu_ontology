@@ -9,55 +9,77 @@ import { message } from 'ant-design-vue';
 import { QA_PAGE_LIST } from '@/mock';
 import { listPagesBrief } from '@/api/qa';
 import * as pagesApi from '@/api/qaPages';
-import { qaLive, qaFallBackIfDown, qaWriteReal, qaWriteFail } from '../qaFallback';
+import { qaWriteReal, qaWriteFail } from '../qaFallback';
+import { currentApiContext } from '@/api/http';
 import { errText } from '../useQaSession';
 
 const props = defineProps<{ open: boolean; card: string; turnId?: string }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'done', page: string): void }>();
 const mode = ref<'exist' | 'new'>('exist');
-const pageId = ref<string>(QA_PAGE_LIST[0].id);
-const newName = ref('华东复购分析');
-const live = computed(() => qaLive.value && !!props.turnId);
-const livePages = ref<{ id: string; name: string; cards: number }[] | null>(null);
-const list = computed(() => (live.value && livePages.value ? livePages.value : QA_PAGE_LIST));
+const pageId = ref<string>(qaWriteReal.value ? '' : QA_PAGE_LIST[0]?.id ?? '');
+const newName = ref(qaWriteReal.value ? '' : '华东复购分析');
+const live = computed(() => qaWriteReal.value && !!props.turnId);
+const livePages = ref<{ id: string; name: string; cards: number }[]>([]);
+const pagesKey = ref('');
+const list = computed(() => qaWriteReal.value ? pagesKey.value === readKey() ? livePages.value : [] : QA_PAGE_LIST);
 const options = computed(() => list.value.map((p) => ({ value: p.id, label: p.name, cards: p.cards })));
-const ok = computed(() => (mode.value === 'exist' ? !!pageId.value : !!newName.value.trim()));
+const loading = ref(false); const loadError = ref('');
+const ok = computed(() => (!qaWriteReal.value || (!!props.turnId && pagesKey.value === readKey())) && !loading.value
+  && (mode.value === 'exist' ? list.value.some((p) => p.id === pageId.value) : !!newName.value.trim()));
 const busy = ref(false);
-watch(() => [props.open, live.value] as const, async ([o, l]) => {
-  if (!o || !l) return;
+const contextKey = () => JSON.stringify(currentApiContext());
+const readKey = () => JSON.stringify([contextKey(), props.open, props.turnId, qaWriteReal.value]);
+let seq = 0; let writeSeq = 0;
+async function loadPages() {
+  const n = ++seq; const key = readKey();
+  ++writeSeq; busy.value = false;
+  pagesKey.value = key;
+  livePages.value = []; pageId.value = qaWriteReal.value ? '' : QA_PAGE_LIST[0]?.id ?? '';
+  loadError.value = ''; loading.value = false; newName.value = qaWriteReal.value ? '' : '华东复购分析';
+  if (!props.open || !live.value) return;
+  loading.value = true;
   try {
-    const r = await listPagesBrief({ page: 1, size: 100 });
-    livePages.value = r.items;
-    if (!r.items.some((p) => p.id === pageId.value)) pageId.value = r.items[0]?.id ?? '';
-  } catch (e) { if (!qaFallBackIfDown(e)) message.error(`页面列表加载失败：${errText(e)}`); }
-}, { immediate: true });
+    const items: { id: string; name: string; cards: number }[] = [];
+    for (let page = 1; ; page++) {
+      const r = await listPagesBrief({ page, size: 200 });
+      if (n !== seq || key !== readKey()) return;
+      items.push(...r.items);
+      if (items.length >= r.total || !r.items.length) break;
+    }
+    livePages.value = items; pageId.value = items[0]?.id ?? '';
+  } catch (e) { if (n === seq && key === readKey()) loadError.value = `页面列表加载失败：${errText(e)}`; }
+  finally { if (n === seq && key === readKey()) loading.value = false; }
+}
+watch(readKey, loadPages, { immediate: true });
 async function submit() {
+  if (busy.value || !ok.value) return;
+  const context = contextKey(); const turnId = props.turnId; const title = pagesApi.pinTitle(props.card);
   const name = mode.value === 'exist' ? list.value.find((p) => p.id === pageId.value)?.name ?? '' : newName.value.trim();
   if (qaWriteReal.value) {
-    if (!props.turnId) { message.error('固定失败：后台未启动，操作没有保存'); return; }
-    busy.value = true;
+    if (!turnId) { message.error('缺少已保存的问答轮次，无法固定'); return; }
+    const n = ++writeSeq; busy.value = true;
     try {
-      // 新建页面：先 P2 再 P7；P7 失败时删掉刚建的空页面，避免留下空页、重试撞同名 409。范围不写死，交给后台默认 [推断]
       const created = mode.value === 'new' ? (await pagesApi.createPage({ name })).id : undefined;
+      if (n !== writeSeq || context !== contextKey()) return;
       const pid = created ?? pageId.value;
-      try {
-        await pagesApi.pinToPage(pid, { turnId: props.turnId, title: pagesApi.pinTitle(props.card) });
-      } catch (e) {
-        if (created) await pagesApi.deletePage(created).catch(() => undefined);
+      try { await pagesApi.pinToPage(pid, { turnId, title }); }
+      catch (e) {
+        if (created && context === contextKey()) await pagesApi.deletePage(created).catch(() => undefined);
         throw e;
       }
-      livePages.value = null;
-    } catch (e) {
-      qaWriteFail('固定', e); return;
-    } finally { busy.value = false; }
+      if (n !== writeSeq || context !== contextKey()) return;
+      livePages.value = [];
+    } catch (e) { if (n === writeSeq && context === contextKey()) qaWriteFail('固定', e); return; }
+    finally { if (n === writeSeq) busy.value = false; }
   }
-  emit('done', name);
+  if (context === contextKey()) emit('done', name);
 }
 </script>
 
 <template>
   <a-modal :open="open" title="固定到页面" :width="440" ok-text="固定" cancel-text="取消"
     :ok-button-props="{ disabled: !ok, loading: busy }" @ok="submit" @cancel="emit('close')">
+    <div v-if="loadError" role="alert">{{ loadError }} <a @click="loadPages">重试</a></div>
     <div class="qa-pin-row"><span class="c-3 qa-pin-label">卡片</span><span>{{ card }}</span></div>
     <div class="qa-pin-row">
       <span class="c-3 qa-pin-label">固定到</span>
@@ -69,12 +91,12 @@ async function submit() {
     <div class="qa-pin-row">
       <span class="qa-pin-label" />
       <a-select v-if="mode === 'exist'" v-model:value="pageId" show-search option-filter-prop="label" placeholder="搜索页面"
-        :options="options" class="qa-pin-ctl">
+        :options="options" :loading="loading" :disabled="qaWriteReal && !turnId" class="qa-pin-ctl">
         <template #option="{ label, cards }"><div class="qa-pin-opt"><span>{{ label }}</span><span class="t-12 c-3">{{ cards }} 张卡片</span></div></template>
       </a-select>
       <a-input v-else v-model:value="newName" placeholder="页面名称" class="qa-pin-ctl" />
     </div>
-    <div class="qa-pin-row"><span class="qa-pin-label" /><span class="t-12 c-3">固定后按当前依据定时刷新，口径和范围不随会话变化。</span></div>
+    <div class="qa-pin-row"><span class="qa-pin-label" /><span class="t-12 c-3">固定后保存当前问答结果及依据；自动重算尚未接入。</span></div>
   </a-modal>
 </template>
 

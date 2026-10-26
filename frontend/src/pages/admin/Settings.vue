@@ -8,7 +8,7 @@
  * 通知渠道的配置在抽屉里改（确定后写进草稿，仍需保存）；发送测试要确认。历史版本只读。
  * URL：?group=tenant|llm|notify|security&channel=email&llm=LLM-01
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import InfoTip from '@/components/InfoTip.vue';
@@ -16,6 +16,8 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { ADMIN_DEPTS } from '@/mock';
+import { isApiError } from '@/api/http';
+import { settingsApi, loadTenantSettings, saveTenantSettings, type TenantSettingsData } from '@/api/settings';
 import {
   SYSTEM_SETTINGS, NOTIFY_EVENTS, CHANNEL_ORDER, SETTINGS_UPDATED, LLM_USAGES, LLM_KINDS, EGRESS_OPTIONS, MASK_FIELDS,
   type SystemSettings, type NotifyChannel, type ChannelId, type LlmConnection, type LlmUsage, type LlmTest, type LlmKind, type LlmDeploy, type EgressPolicy,
@@ -32,7 +34,7 @@ const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 type GroupKey = 'tenant' | 'llm' | 'notify' | 'security';
 const GROUPS: { key: GroupKey; title: string; desc: string }[] = [
-  { key: 'tenant', title: '租户信息', desc: '名称、组织、时区与口径' },
+  { key: 'tenant', title: '租户信息', desc: '名称、简称与组织' },
   { key: 'llm', title: '大模型连接', desc: '模型接口、用途分配与数据出域' },
   { key: 'notify', title: '通知渠道', desc: '渠道配置与事件通知规则' },
   { key: 'security', title: '安全策略', desc: '密码、登录、会话与数据' },
@@ -44,11 +46,45 @@ const groupTitle = computed(() => GROUPS.find((g) => g.key === group.value)!.tit
 const saved = ref<SystemSettings>(clone(SYSTEM_SETTINGS));
 const draft = reactive<SystemSettings>(clone(SYSTEM_SETTINGS));
 const updated = reactive({ ...SETTINGS_UPDATED });
+const realSettings = settingsApi.isReal();
+const tenantBase = ref<TenantSettingsData | null>(null);
+const tenantState = reactive({ loading: realSettings, ready: false, saving: false, error: '' });
+const tenantKeys = ['name', 'shortName', 'defaultOrg'] as const;
+const orgOptions = computed(() => tenantBase.value?.orgOptions ?? []);
+if (realSettings) {
+  const empty = { name: '', shortName: '', tenantId: '', industry: '', defaultOrg: '' };
+  Object.assign(draft.tenant, empty);
+  Object.assign(saved.value.tenant, empty);
+  updated.tenant = '';
+}
+function applyTenant(data: TenantSettingsData) {
+  const fields = { name: data.name, shortName: data.shortName, tenantId: data.tenantId, industry: data.industry, defaultOrg: data.defaultOrg ?? '' };
+  Object.assign(draft.tenant, fields);
+  Object.assign(saved.value.tenant, fields);
+  tenantBase.value = data;
+  tenantState.ready = true;
+  tenantState.error = '';
+  updated.tenant = data.updatedAt;
+}
+const errorText = (e: unknown) => isApiError(e) ? `${e.message}（${e.code}）` : String(e);
+async function loadTenant() {
+  tenantState.loading = true;
+  tenantState.error = '';
+  try { applyTenant(await loadTenantSettings()); }
+  catch (e) { tenantState.error = `租户信息加载失败：${errorText(e)}`; }
+  finally { tenantState.loading = false; }
+}
+onMounted(() => { if (realSettings) void loadTenant(); });
+async function reloadTenant() {
+  if (dirty.value && !(await confirmDiscard())) return;
+  await loadTenant();
+}
 
 const TENANT_LABEL: Record<string, string> = { name: '租户全称', shortName: '简称', defaultOrg: '默认组织', timezone: '时区', fiscalStart: '财年起始月', weekStart: '每周开始于', dataCutoff: '数据截至时间', contact: '运维联系邮箱' };
 const SEC_LABEL: Record<string, string> = { pwdMin: '密码最小长度', pwdRules: '密码必须包含', pwdExpireDays: '密码有效期', lockAfter: '连续失败锁定', lockMinutes: '锁定时长', sessionMinutes: '会话超时', mfa: '双因素认证', ipAllow: '登录 IP 白名单', watermark: '页面水印', exportApproval: '导出需审批', auditKeepDays: '审计日志保留' };
 const chName = (id: ChannelId) => draft.channels.find((c) => c.id === id)!.name;
 const show = (k: string, v: unknown): string => {
+  if (realSettings && k === 'defaultOrg') return orgOptions.value.find((o) => o.value === v)?.label ?? String(v);
   if (typeof v === 'boolean') return v ? '开启' : '关闭';
   if (Array.isArray(v)) return v.join('、') || '无';
   if (k === 'pwdExpireDays') return v ? `${v} 天` : '永不过期';
@@ -64,10 +100,11 @@ interface Change { group: GroupKey; label: string; from: string; to: string }
 const changes = computed<Change[]>(() => {
   const out: Change[] = [];
   const s = saved.value;
-  for (const k of Object.keys(TENANT_LABEL)) {
+  for (const k of realSettings ? tenantKeys : Object.keys(TENANT_LABEL)) {
     const a = (s.tenant as unknown as Record<string, unknown>)[k]; const b = (draft.tenant as unknown as Record<string, unknown>)[k];
     if (JSON.stringify(a) !== JSON.stringify(b)) out.push({ group: 'tenant', label: TENANT_LABEL[k], from: show(k, a), to: show(k, b) });
   }
+  if (realSettings) return out;
   for (const c of draft.llm.connections) {
     const o = s.llm.connections.find((x) => x.id === c.id);
     if (!o) { out.push({ group: 'llm', label: `新建连接 · ${c.name}`, from: '—', to: `${c.kind} · ${c.model}` }); continue; }
@@ -135,6 +172,12 @@ const errors = computed(() => {
   const e: string[] = [];
   if (!draft.tenant.name.trim()) e.push('租户全称不能为空');
   if (!draft.tenant.shortName.trim()) e.push('简称不能为空');
+  if (realSettings) {
+    if (draft.tenant.name.trim().length > 40) e.push('租户全称最多 40 字');
+    if (draft.tenant.shortName.trim().length > 12) e.push('简称最多 12 字');
+    if (!orgOptions.value.some((o) => o.value === draft.tenant.defaultOrg)) e.push('请选择已有组织');
+    return e;
+  }
   if (!EMAIL_RE.test(draft.tenant.contact)) e.push('运维联系邮箱格式不对');
   if (badIps.value.length) e.push(`IP 白名单有 ${badIps.value.length} 条格式不对`);
   if (!draft.security.pwdRules.length) e.push('密码至少要求包含一类字符');
@@ -144,6 +187,7 @@ const errors = computed(() => {
 });
 
 async function save() {
+  if (realSettings) { await saveTenant(); return; }
   const list = changes.value;
   const groups = [...new Set(list.map((c) => c.group))];
   const impact: string[] = [];
@@ -164,6 +208,28 @@ async function save() {
   saved.value = clone(draft as SystemSettings);
   message.success(`已保存 ${list.length} 处修改`);
 }
+async function saveTenant() {
+  if (readonly.value || !tenantState.ready || tenantState.loading || tenantState.saving || !dirty.value) return;
+  if (errors.value.length) { message.error(errors.value.join('；')); return; }
+  const body = { name: draft.tenant.name, shortName: draft.tenant.shortName, defaultOrg: draft.tenant.defaultOrg, lockVersion: tenantBase.value!.lockVersion };
+  const ok = await confirm.ask({
+    title: '保存租户基础信息', target: draft.tenant.shortName, okText: '保存',
+    fields: changes.value.map((c) => ({ label: c.label, value: `${c.from} → ${c.to}` })),
+    impact: '更新租户显示名称与顶栏兜底组织，并记入审计。保留当前有效组织选择；不改变用户归属或问数权限。',
+  });
+  if (!ok) return;
+  tenantState.saving = true;
+  tenantState.error = '';
+  try {
+    applyTenant(await saveTenantSettings(body));
+    message.success('租户基础信息已保存');
+  } catch (e) {
+    tenantState.error = isApiError(e) && e.code === 'VERSION_CONFLICT'
+      ? '租户信息已被其他人修改，当前输入已保留。请重新加载最新配置后再编辑。'
+      : `保存失败，当前输入已保留：${errorText(e)}`;
+    message.error(tenantState.error);
+  } finally { tenantState.saving = false; }
+}
 async function discard() {
   if (!(await confirmDiscard())) return;
   Object.assign(draft, clone(saved.value));
@@ -171,7 +237,7 @@ async function discard() {
 const selectGroup = (g: GroupKey) => setQuery({ group: g === 'tenant' ? undefined : g, channel: undefined, llm: undefined });
 
 // 通知渠道
-const channel = computed(() => draft.channels.find((c) => c.id === q('channel')) ?? null);
+const channel = computed(() => realSettings ? null : draft.channels.find((c) => c.id === q('channel')) ?? null);
 const chForm = reactive({ target: '', receivers: '', secret: '' });
 const chSnap = ref('');
 watch(channel, (c) => {
@@ -317,7 +383,7 @@ async function pickEgress(v: EgressPolicy) {
 }
 
 // 连接抽屉 ?llm=new|LLM-01
-const llmKey = computed(() => (group.value === 'llm' ? q('llm') : ''));
+const llmKey = computed(() => (!realSettings && group.value === 'llm' ? q('llm') : ''));
 const llmConn = computed(() => (llmKey.value && llmKey.value !== 'new' ? draft.llm.connections.find((c) => c.id === llmKey.value) ?? null : null));
 interface LlmForm { name: string; kind: LlmKind; deploy: LlmDeploy; baseUrl: string; model: string; key: string; changeKey: boolean; timeoutSec: number; maxConcurrency: number; usages: LlmUsage[]; enabled: boolean }
 const blankLlm = (): LlmForm => ({ name: '', kind: 'OpenAI 兼容', deploy: '私有化部署', baseUrl: 'http://', model: '', key: '', changeKey: true, timeoutSec: 60, maxConcurrency: 8, usages: ['问数解析'], enabled: true });
@@ -400,7 +466,7 @@ function applyLlm() {
 }
 
 const TZ = ['Asia/Shanghai（UTC+8）', 'Asia/Hong_Kong（UTC+8）', 'Asia/Singapore（UTC+8）', 'Asia/Tokyo（UTC+9）', 'UTC'];
-const fieldDis = computed(() => readonly.value);
+const fieldDis = computed(() => readonly.value || (realSettings && (!tenantState.ready || tenantState.loading || tenantState.saving)));
 </script>
 
 <template>
@@ -413,30 +479,37 @@ const fieldDis = computed(() => readonly.value);
           <span v-if="dirtyOf(g.key)" class="t-12 c-2 st-mod">已修改 {{ dirtyOf(g.key) }}</span>
         </div>
       </div>
-      <div class="st-navfoot t-12 c-3">修改可以跨分组累计，统一在底部保存。<span v-if="reason">（{{ reason }}）</span></div>
+      <div class="st-navfoot t-12 c-3">{{ realSettings ? '当前仅接入租户名称、简称与顶栏兜底组织。' : '修改可以跨分组累计，统一在底部保存。' }}<span v-if="reason">（{{ reason }}）</span></div>
     </div>
 
     <div class="panel st-main">
       <div class="panel-head">
         <span class="t-16 fw-600">{{ groupTitle }}</span>
-        <span class="t-12 c-3">{{ updated[group] ? `最近修改：${updated[group]}` : '尚未配置' }}</span>
+        <span class="t-12 c-3">{{ realSettings && group !== 'tenant' ? '—' : updated[group] ? `最近修改：${updated[group]}` : '尚未配置' }}</span>
       </div>
 
+      <div v-if="realSettings && group !== 'tenant'" class="st-body">
+        <a-empty description="暂无配置" />
+      </div>
       <!-- 租户信息 -->
-      <div v-if="group === 'tenant'" class="st-body">
+      <div v-else-if="group === 'tenant'" class="st-body">
+        <div v-if="realSettings && tenantState.loading" class="t-12 c-3">正在读取租户信息…</div>
+        <a-alert v-if="realSettings && tenantState.error" type="error" show-icon :message="tenantState.error">
+          <template #action><a-button size="small" :disabled="tenantState.loading || tenantState.saving" @click="reloadTenant">重新加载</a-button></template>
+        </a-alert>
         <a-form layout="horizontal" :label-col="{ style: { width: '128px' } }" :disabled="fieldDis" class="st-grid">
           <a-form-item label="租户全称" required :validate-status="draft.tenant.name.trim() ? '' : 'error'" :help="draft.tenant.name.trim() ? '' : '不能为空'"><a-input v-model:value="draft.tenant.name" :maxlength="40" /></a-form-item>
-          <a-form-item label="简称" required extra="顶栏和导出文件抬头使用" :validate-status="draft.tenant.shortName.trim() ? '' : 'error'"><a-input v-model:value="draft.tenant.shortName" :maxlength="12" show-count /></a-form-item>
+          <a-form-item label="简称" required extra="用于顶栏租户名称显示" :validate-status="draft.tenant.shortName.trim() ? '' : 'error'"><a-input v-model:value="draft.tenant.shortName" :maxlength="12" show-count /></a-form-item>
           <a-form-item label="租户 ID" extra="创建后不能修改"><span class="num c-2">{{ draft.tenant.tenantId }}</span></a-form-item>
           <a-form-item label="行业" extra="开通时确定，变更请联系平台运营"><span class="c-2">{{ draft.tenant.industry }}</span></a-form-item>
-          <a-form-item label="默认组织" extra="新用户默认归属；问数默认按此组织取数"><a-select v-model:value="draft.tenant.defaultOrg" :options="['华东事业部', '华南事业部', '集团总部', ...ADMIN_DEPTS].filter((v, i, a) => a.indexOf(v) === i).map((v) => ({ value: v }))" /></a-form-item>
-          <a-form-item label="时区"><a-select v-model:value="draft.tenant.timezone" :options="TZ.map((v) => ({ value: v }))" /></a-form-item>
-          <a-form-item label="本位币" extra="创建后不能修改，金额指标都按本位币计算"><span class="c-2">{{ draft.tenant.currency }}</span></a-form-item>
-          <a-form-item label="财年起始月"><a-select v-model:value="draft.tenant.fiscalStart" :options="Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))" /></a-form-item>
-          <a-form-item label="每周开始于"><a-radio-group v-model:value="draft.tenant.weekStart" :options="['周一', '周日']" /></a-form-item>
-          <a-form-item label="数据截至时间" extra="“今日”“昨日”等口径以此为日切"><a-select v-model:value="draft.tenant.dataCutoff" :options="['每日 00:00', '每日 06:00', '每日 08:00'].map((v) => ({ value: v }))" /></a-form-item>
-          <a-form-item label="租户管理员" extra="在角色与权限里调整"><span class="c-1">{{ draft.tenant.admin }}</span></a-form-item>
-          <a-form-item label="运维联系邮箱" :validate-status="EMAIL_RE.test(draft.tenant.contact) ? '' : 'error'" :help="EMAIL_RE.test(draft.tenant.contact) ? '' : '邮箱格式不对'"><a-input v-model:value="draft.tenant.contact" /></a-form-item>
+          <a-form-item label="默认组织" extra="当前顶栏选择无效时使用；不改变用户归属或问数权限"><a-select v-model:value="draft.tenant.defaultOrg" :options="realSettings ? orgOptions : ['华东事业部', '华南事业部', '集团总部', ...ADMIN_DEPTS].filter((v, i, a) => a.indexOf(v) === i).map((v) => ({ value: v }))" /></a-form-item>
+          <a-form-item label="时区"><span v-if="realSettings" class="c-3">—</span><a-select v-else v-model:value="draft.tenant.timezone" :options="TZ.map((v) => ({ value: v }))" /></a-form-item>
+          <a-form-item label="本位币" :extra="realSettings ? undefined : '创建后不能修改，金额指标都按本位币计算'"><span class="c-2">{{ realSettings ? '—' : draft.tenant.currency }}</span></a-form-item>
+          <a-form-item label="财年起始月"><span v-if="realSettings" class="c-3">—</span><a-select v-else v-model:value="draft.tenant.fiscalStart" :options="Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))" /></a-form-item>
+          <a-form-item label="每周开始于"><span v-if="realSettings" class="c-3">—</span><a-radio-group v-else v-model:value="draft.tenant.weekStart" :options="['周一', '周日']" /></a-form-item>
+          <a-form-item label="数据截至时间" :extra="realSettings ? undefined : '“今日”“昨日”等口径以此为日切'"><span v-if="realSettings" class="c-3">—</span><a-select v-else v-model:value="draft.tenant.dataCutoff" :options="['每日 00:00', '每日 06:00', '每日 08:00'].map((v) => ({ value: v }))" /></a-form-item>
+          <a-form-item label="租户管理员" :extra="realSettings ? undefined : '在角色与权限里调整'"><span class="c-1">{{ realSettings ? '—' : draft.tenant.admin }}</span></a-form-item>
+          <a-form-item label="运维联系邮箱" :validate-status="realSettings || EMAIL_RE.test(draft.tenant.contact) ? '' : 'error'" :help="realSettings || EMAIL_RE.test(draft.tenant.contact) ? '' : '邮箱格式不对'"><span v-if="realSettings" class="c-3">—</span><a-input v-else v-model:value="draft.tenant.contact" /></a-form-item>
         </a-form>
       </div>
 
@@ -584,8 +657,8 @@ const fieldDis = computed(() => readonly.value);
           <span v-if="errors.length" class="t-12 tl-failed st-err">· {{ errors[0] }}<template v-if="errors.length > 1"> 等 {{ errors.length }} 项</template></span>
         </span>
         <a-space>
-          <a-button @click="discard">放弃修改</a-button>
-          <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="save">保存</a-button></a-tooltip>
+          <a-button :disabled="tenantState.saving" @click="discard">放弃修改</a-button>
+          <a-tooltip :title="reason"><a-button type="primary" :loading="tenantState.saving" :disabled="fieldDis" @click="save">保存</a-button></a-tooltip>
         </a-space>
       </div>
     </div>

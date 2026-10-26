@@ -8,6 +8,7 @@ import {
 } from '@/mock';
 import { ACTION_EVENT_RESOLVERS } from './actionEventResolvers';
 import { PDE_RESOLVERS } from './pdeResolvers';
+import { resolveRealObject, usesRealObject } from './realObjectResolver';
 
 export interface ObjField { label: string; value: string }
 /** 时间线状态 → 颜色见 theme.ts timelineTone：done/无=灰，warn/unknown=橙（unknown 带问号），error=红 */
@@ -184,9 +185,11 @@ export function warnUnresolved(kind: string, id: string, where = '') {
   const k = `${kind}:${id}`;
   if (warned.has(k)) return;
   warned.add(k);
-  console.warn(`[objectRegistry] 无法解析对象 ${k}${where ? `（${where}）` : ''}：请在 src/mock 里补数据或在 RESOLVERS 里加 kind`);
+  console.warn(`[objectRegistry] 无法解析对象 ${k}${where ? `（${where}）` : ''}：请核对对象编号、接口和 resolver`);
 }
 export const resolveObject = (kind: string, id: string): ObjView | null => {
+  const real = resolveRealObject(kind, id);
+  if (real !== undefined) return real;
   const v = RESOLVERS[kind]?.(id) ?? null;
   if (!v) warnUnresolved(kind, id);
   return v;
@@ -195,6 +198,7 @@ export const resolveObject = (kind: string, id: string): ObjView | null => {
 export const canResolve = (kind: string): boolean => !!kind && Object.prototype.hasOwnProperty.call(RESOLVERS, kind);
 /** 只检查能否解析（开发环境下解析不到会警告） */
 export const checkObject = (kind: string, id: string, where?: string) => {
+  if (usesRealObject(kind)) return true; // 只在用户打开预览时读取，避免开发检查预取整批关联对象。
   const ok = !!RESOLVERS[kind]?.(id);
   if (!ok) warnUnresolved(kind, id, where);
   return ok;

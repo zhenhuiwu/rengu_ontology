@@ -22,15 +22,18 @@ npm run shot -- "/?drawer=metric:gross_margin"          # 带抽屉状态（含 
 npm run shot -- --all                                   # 首页 + 全部 27 个二级页面
 SHOT_BASE=http://localhost:5281 npm run shot -- /       # 对 preview 截图（也可用 --base）
 npm run shot -- --skip-check /                          # 只截图不验收
-npm run shot -- "/admin/system/users#click=停用"         # 交互状态：点击文字后截图，多步用 > 分隔（一屏/字号检查按点击前的页面）
+npm run shot -- "/admin/system/users#click=停用"         # 交互状态：点击文字后截图，多步用 > 分隔（两个分辨率都在点击后检查）
 ```
 
-- 截图规格：viewport 1920×1080、deviceScaleFactor 1.3333，输出 2560×1440 PNG 到 `shots/`，文件名 = 路由和状态 + `__时分_短提交号`（`/` → `home__1642_e09a371.png`，`/build/ontology/object-types?tab=props` → `build_ontology_object-types__tab-props__1642_e09a371.png`）。写入前会删掉同一路由+状态的旧图，`shots/` 里每个状态只保留最新一张；发图前看文件名里的提交号对不对得上。
+- 截图规格：1920×1080 / deviceScaleFactor 4÷3 和 2560×1440 / deviceScaleFactor 1 两档，均输出 2560×1440 PNG 到 `shots/`；后一档文件名附 `__2560x1440`，文件名 = 路由和状态 + `__时分_短提交号`（`/` → `home__1642_e09a371.png`，`/build/ontology/object-types?tab=props` → `build_ontology_object-types__tab-props__1642_e09a371.png`）。写入前会删掉同一路由+状态的旧图，`shots/` 里每个状态只保留最新一张；发图前看文件名里的提交号对不对得上。
 - 每张截图之前会自动跑两个检查，并打印结果：
-  - `/workspace/ui/check_onescreen.py`：2560×1440、1920×1080 两档下页面不出现滚动条，主区内最多一个滚动区，且不嵌套。
-  - `/workspace/ui/check_fonts.py`：字号只能是 12/14/16/20/24，字重只能是 400/600。
+  - `scripts/shot-checks.mjs` 一屏检查：2560×1440、1920×1080 两档无页面级溢出，主区最多一个实际滚动区且不嵌套；侧导航独立计算，隐藏溢出裁剪不能变为通过。
+  - 字体检查：仅检查实际可见DOM文字及输入框（排除空容器/图标），字号只能是 12/14/16/20/24，字重只能是 400/600。
 - 任一检查不通过、或页面有控制台报错，最后汇总标 FAIL，退出码为 1。图照样会截，方便对照修改。
-- 需要先启动 dev server（或 preview）。
+- 需要先启动 dev server（或 preview）。Node入口跨Windows/macOS/Linux；`shot.py`仅作旧命令兼容，不再依赖Python Playwright或`/workspace/ui`文件。
+- 复用已安装Playwright：先查项目依赖，然后查`SHOT_NODE_MODULES`、`NODE_PATH`或已安装Codex runtime标准目录。不自动安装依赖、下载浏览器；缺少时明确失败。必要时设置`SHOT_NODE_MODULES=<已安装的node_modules>`、`SHOT_BROWSER_EXECUTABLE=<已安装Chromium可执行文件>`。
+- Windows可直接 `npm run shot -- --base http://localhost:5280 /admin/system/users`；`--out <目录>`或`SHOT_OUTPUT`可指定独立输出目录，避免覆盖其他截图。缺省仍为`shots/`。
+- 每批输出JSON检查证据，包含两个分辨率的溢出/滚动/裁剪、字体违规、控制台错误及截图路径。`--skip-check`仅跳过布局/字体，控制台和导航/点击错误仍判失败。开发自检 `node scripts/check-shot.mjs`只使用本机临时HTTP页面验证失败判定；全站使用`npm run shot -- --all`。
 
 ## 新增一个页面
 
@@ -223,7 +226,7 @@ src/
   stores/               app（租户、版本、用户）、confirm（确认卡）
   mock/                 零售数据集
   pages/                Home、PlaceholderPage、NotFound、ontology/*
-scripts/shot.py         截图 + 验收
+scripts/shot.mjs        跨平台截图 + 验收（shot.py兼容旧入口）
 shots/                  截图输出
 ```
 

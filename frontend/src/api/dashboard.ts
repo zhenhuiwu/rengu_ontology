@@ -3,7 +3,7 @@
  * GET /api/biz/v1/dashboard/kpis、GET /api/biz/v1/stores/ranking）。
  *
  * - mock 模式：页面照旧用 src/mock 现算，这里的函数不会被调用（apiClient 把关，直接抛 MOCK_ONLY）；
- * - real 模式：KPI 条和门店排行改读接口；接口失败时页面保留 mock 结果并在控制台提示（isBackendDown 时提示后台没起来）。
+ * - real 模式：KPI 条和门店排行改读接口；接口失败时页面显示错误 / 空数据，不回退演示值。
  */
 import type { Metric } from '@/mock/metrics';
 import { apiClient, type PageResult } from './http';
@@ -21,11 +21,16 @@ export interface StoreRankingDto extends PageResult<StoreRank> { dataAsOf: strin
 
 export const isDashboardReal = () => api.isReal();
 
-export async function fetchKpis(ids: string[], cutoff?: string): Promise<KpiMetric[]> {
+export async function fetchKpis(ids: string[], cutoff?: string): Promise<{ items: KpiMetric[]; dataAsOf: string }> {
   const r = await api.get<KpisDto>('/dashboard/kpis', { query: { ids: ids.join(','), cutoff } });
-  return r.items.map((m) => ({ id: m.id, name: m.name, unit: m.unit, value: m.value ?? 0, prev: m.prev ?? 0 }));
+  return { dataAsOf: r.dataAsOf, items: r.items.map((m) => ({ id: m.id, name: m.name, unit: m.unit, value: m.value ?? 0, prev: m.prev ?? 0 })) };
 }
 
 export function fetchStoreRanking(q: { from?: string; to?: string; page: number; size: number }): Promise<StoreRankingDto> {
   return api.get<StoreRankingDto>('/stores/ranking', { query: { ...q } });
 }
+
+
+export interface SalesDaily { items: { date: string; value: number }[]; dataAsOf: string; taxMode: string; taxRate: number }
+export const fetchSalesDaily = (q: { cutoff?: string; days?: number } = {}): Promise<SalesDaily> =>
+  api.get<SalesDaily>('/dashboard/sales/daily', { query: { ...q } });

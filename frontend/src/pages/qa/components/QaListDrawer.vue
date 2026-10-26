@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /** 左下“常用问题 · 管理”“我的页面 · 全部”的本页抽屉（不跳转）。每页 10 条 simple 分页；状态 ?panel=favorites|pages
  * 真接口（开关 qa）：常用问题 W13（q）、我的页面 P1 view=brief（kw）按页取，移出走 W15 */
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { message } from 'ant-design-vue';
 import { SearchOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
 import { QA_FAVORITE_LIST, QA_PAGE_LIST } from '@/mock';
 import * as qaApi from '@/api/qa';
+import { currentApiContext } from '@/api/http';
 import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import { errText, useQaSession } from '../useQaSession';
 
@@ -33,28 +34,35 @@ const paged = computed<{ items: Row[]; total: number }>(() => (live.value ? srv.
 watch(() => props.panel, () => { page.value = 1; kw.value = ''; });
 watch(kw, () => { page.value = 1; });
 let reqSeq = 0;
+const contextKey = () => JSON.stringify(currentApiContext());
+onBeforeUnmount(() => { ++reqSeq; });
 async function load() {
-  if (!live.value || (props.panel !== 'favorites' && props.panel !== 'pages')) return;
-  const my = ++reqSeq;
+  const my = ++reqSeq, key = contextKey(), panel = props.panel;
+  if (!live.value || (panel !== 'favorites' && panel !== 'pages')) return;
+  const valid = () => my === reqSeq && key === contextKey() && panel === props.panel;
   const k = kw.value.trim() || undefined;
   try {
     const items: Row[] = [];
-    let total = 0;
+    let total = 0, actualPage = page.value;
+    const options = qaApi.qaRequestOptions();
     if (isFav.value) {
-      const r = await qaApi.listFavorites({ q: k, page: page.value, size: SIZE });
+      const r = await qaApi.listFavorites({ q: k, page: page.value, size: SIZE }, options);
       r.items.forEach((f) => items.push({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }));
-      total = r.total;
+      total = r.total; actualPage = r.page;
     } else {
-      const r = await qaApi.listPagesBrief({ kw: k, page: page.value, size: SIZE });
+      const r = await qaApi.listPagesBrief({ kw: k, page: page.value, size: SIZE }, options);
       r.items.forEach((p) => items.push({ id: p.id, name: p.name, c1: `${p.cards} 张卡片`, c2: `${p.updatedAt} 更新`, tag: p.shared ? '已共享' : '' }));
-      total = r.total;
+      total = r.total; actualPage = r.page;
     }
-    if (my !== reqSeq) return;
+    if (!valid()) return;
     srv.value = { items, total };
-    if (!items.length && total && page.value > 1) page.value = Math.ceil(total / SIZE);
-  } catch (e) { if (my === reqSeq && !qaFallBackIfDown(e)) message.error(`${title.value}加载失败：${errText(e)}`); }
+    if (actualPage !== page.value) page.value = actualPage;
+  } catch (e) { if (valid() && !qaFallBackIfDown(e)) message.error(`${title.value}加载失败：${errText(e)}`); }
 }
-if (real) watch([() => props.panel, kw, page], load, { immediate: true });
+if (real) {
+  watch(contextKey, () => { ++reqSeq; srv.value = { items: [], total: 0 }; }, { flush: 'sync' });
+  watch([() => props.panel, kw, page, contextKey], load, { immediate: true });
+}
 const { favTick } = useQaSession();
 async function remove(id: string) {
   if (real) {

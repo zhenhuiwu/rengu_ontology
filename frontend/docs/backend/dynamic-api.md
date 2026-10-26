@@ -1,5 +1,16 @@
 # 动态本体：后台实体、业务链路与接口（v0.1 草案）
 
+> 分页补充（2026-10-26）：规则目录、规则命中、生命周期变化由SQL计数和LIMIT/OFFSET分页，默认10条。`/rules?objKind=`支持按对象筛选；对象行为页新增`/object-types/{id}/behavior/stats`及`/object-types/{id}/automation/hits`提供实际聚合与命中页，不再逐规则拉齐全部历史。完整状态机及未保存草稿仍保留必要编辑缓冲。
+
+## 2026-10-26 当前实现边界（覆盖下文旧演示执行约定）
+
+- `/actions/meta`按当前数据库定义每请求构建。`actionMeta`支持稳定动作code键，中文名只在唯一时兼容；包含`approverId/approver/approvalRequired/approvalConfigured`。只有明确免审或能定位唯一在用用户的审批配置才可新建动作；其余503 `ACTION_APPROVAL_NOT_CONFIGURED`。请求`approver`只能与已发布配置一致，不能自行授予审批权。
+- 新动作的审批/确认软引用保存真实用户code，接口输出真实姓名；存量姓名/角色姓名仅在唯一在用用户匹配时兼容授权，空审批人不能让任意用户批准。默认条件检查已接真实受限DatabaseSubmissionChecker，只有明确支持且有实际参数/身份/受控对象上下文的条件才通过；未知/自然语言/缺上下文failed。默认执行、投递和自动对账通道仍明确503不可用；测试替身仅测试显式注入。免审确认后仍需真实执行通道，失败整请求回滚。
+- 规则/生命周期草稿按真实静态CR登记，目标放弃同事务删除生命周期草稿；发布转正后进入快照，未登记段才列入`skipped`。规则/生命周期回滚后再发布取历史最大版本+1，旧历史不覆盖。生命周期迁移ID受既有DB16字限制，完整版本编号64字，非法保存422、发布防御409。
+- 规则确认人选项来自在用用户和可解析的真实已存配置；映射来源读DB已存规则配置、当前事件载荷字段及受控通用来源。R-012的`固定值：仓库调拨`兼容真实已存配置，不再被旧演示常量拒绝。
+- 规则list/detail/catalog的当前`weekly/hits7d`、生命周期当前迁移`weekly`及默认非法汇总均取真实保存记录的`[now-7天,now]`窗口，排除未来；不会将定义/版本表历史weekly声明值冒充当前滚动统计，历史快照保留原始值。`Alert.recent7d`仍按该告警触发时刻向前7天（原已定合同），并非读取固定“今天”。
+- **真实规则求值器/推演数据集与引擎尚未实现**：`POST /rules/{id}:replay`返回503 `RULE_EVALUATOR_UNAVAILABLE`；情景`POST :run`及有结果的`GET /stage-plan`返回503 `SCENARIO_EXECUTOR_UNAVAILABLE`。不生成随机命中、预测或固定REG-EC建议；已保存的历史结果/影响/对比继续读取DB。情景meta明确`executorConfigured=false`及`unavailableReason`；模板仅配置说明，不代表真实求值已可用。
+
 > 依据：`/workspace/ui-vue` master `5fb26ab`（同 GitHub `zhenhuiwu/rengu_ontology` main 的 `frontend/`），只读，未改源码。草稿目标 `DRAFT_TARGETS` 的行号按 master `6bac4b1` 的 `mock/releases.ts`（`6428b87` 把 `useDraftView.ts` 的 TARGETS 原样挪进 `releases.ts`；`5fb26ab` 里对应的是 `useDraftView.ts` L23–29）。
 > 范围：告警处理 `ops/Alerts.vue`、动作中心 `ops/Actions.vue`、规则与自动化 `ontology/Rules.vue`、情景推演 `ops/Scenarios.vue`、对象类型「行为」页签 `ObjBehaviorLifecycle / ObjBehaviorActions / ObjBehaviorAutomation.vue`；mock：`dynamic.ts`、`actions.ts`、`rules.ts`、`scenarios.ts`、`lifecycle.ts`、`changes.ts`（引用 `actionEvent.ts`、`extsys.ts`、`releases.ts`）；公共：`stageAction`、`useDraftView`、`useReadonly`、`CHANGE_REQUESTS`。
 > **总原则 [已定：PDE、Palantir专家]**：后台**完全照前端实现**；前端没有的功能**默认不实现**，统一列在 7.1「待用户定的 [推断] 项」，正文只引用编号（如 `[推断 P3]`）。
@@ -143,7 +154,7 @@
 
 > `action_run` **只由动态写**。自动查询计数和下次查询时间不在本表，存 integration 模块（Palantir）的 `reconcile_task`（骨架 `app/modules/integration/__init__.py` L6、`app/contracts/actions.py` 第 3–4 条）（`tries`、`round`、`manual`、`next_at`、`state`），详情接口关联读取 [已定：本体小白]。
 > 索引：`(status, source_type, action_type_id, sys_id, submitted_at desc)`；关键词（编号、对象、幂等键、外部单号、告警号、规则号、会话号）用 pg_trgm。
-> 编号（`code`）`ACT-日期-NNNN` **按天计数**：序列按天取当天最大号 + 1，不是全局序列。
+> 编号（`code`）`ACT-日期-NNNN` **按天计数**：按当天已有记录（含 RUNS 历史）和已预留号码的最大号 + 1，不是全局序列。`dynamic_0004` 使用内部日计数表，在独立短事务内预留号码并提交；日锁不跨外部调用。业务事务回滚或取消后不复用已预留号码，因此允许空号；分配事务自身失败则回滚该次预留。
 
 **action_run_log**（合并原 action_log 与 Palantir `action_run_step`）：`id, action_run_id FK（→ action_run.id）, at, actor, text, level（done/warn/error/unknown）`（= `ActionLog{time,text,desc,status}`）。
 
@@ -460,14 +471,15 @@ stateDiagram-v2
 
 | 用途 | 接口 | 要点 |
 |---|---|---|
-| 告警列表 | `GET /alerts?status=open|doing|closed|all&level&ruleId&kw&page&size` | 一屏 12；kw 匹配编号或对象；返回各页签计数；`level` 只收 高/中/低/全部（空或「全部」不过滤），其他值 422 VALIDATION_FAILED |
+| 告警列表 | `GET /alerts?status=open|doing|closed|all&level&ruleId&kw&page&size` | 默认10条；SQL count+LIMIT/OFFSET；kw 匹配编号或对象；保留counts兼容，页签不展示统计后缀；`level` 只收 高/中/低/全部，其他值422 |
+| 告警规则筛选 | `GET /alerts/meta` | alerts:view；返回 `{rules:[{id,name}]}`，只读实际Rule表的编码/名称，不加载规则定义或命中统计 |
 | 告警详情 | `GET /alerts/{id}` | 含规则摘要、指标、去重说明、近 7 天次数、关联动作、log |
 | 认领 / 批量认领 | `POST /alerts/{id}:claim`、`POST /alerts:batch-claim {ids}` | |
 | 转派 | `POST /alerts/{id}:transfer {to}` | 在途锁；`to` ≠ 当前处理人（前端下拉已排除，`Alerts.vue` L278） |
 | 转派选人 | `GET /people` | 返回 `string[]`（用户姓名），**只返回 `sys_user` 中带 `alert_assignable` 标记的用户，按 mock `PEOPLE` 原顺序**，转派下拉与现在完全一样。`sys_user` 归 admin 模块（PDE），动态只读，不读种子 JSON、不建自己的表 [已定：群决定]；种子见 5 |
 | 关闭 / 批量关闭 | `POST /alerts/{id}:close {as, reason}`、`POST /alerts:batch-close {ids, as, reason}` | `as` ∈ 已解决/已忽略；仅本人处理中；批量返回 `{closed}`（`skipped[]` 见 `[推断 P3]`） |
 | 告警发起动作 | `POST /alerts/{id}:start-action` | 生成 action_run（审批中），幂等键 `act-<告警号>` 由动态生成并返回（不需要请求头 `Idempotency-Key`）；提交条件不满足返回 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed[{name, fail}]`（通用码，PDE api-index `10a074e`） |
-| 动作列表 | `GET /action-runs?tab&status&action&actionType&sysId&objKind&objId&alertId&ruleId&kw&page&size`（参数见下方「唯一执行记录接口」） | 一屏 16；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页「执行记录」「最近异常」也用这个接口（`actionType` + `status` 多选，每页 14），同一张表 |
+| 动作列表 | `GET /action-runs?tab&status&action&actionType&sysId&objKind&objId&alertId&ruleId&kw&page&size`（参数见下方「唯一执行记录接口」） | 默认10条；SQL count+LIMIT/OFFSET；kw 匹配编号/对象/幂等键/外部单号/告警号/规则号/会话号；unknown 页签待对账排前。动作类型页同一接口可显式指定size |
 | 筛选下拉 | `GET /actions/meta` | `ACTION_NAMES`、`ACTION_SYSTEMS`、`ACTION_META`（mock/actions.ts） |
 | 动作详情 | `GET /action-runs/{id}` | 返回 `ActionRun` + `log`（时间线 = `action_run_log`）、确认人、能否操作及原因 |
 | 暂存 | `POST /action-runs:stage` | 规则引擎、推演、问数调用；只生成待确认；**幂等键此时由动态生成**并返回 `ActionRecord`（含 `id, idemKey, status:'待确认', source.confirmer`）；业务键冲突拦截见 `[推断 P4]`；提交条件不满足返回 422 `SUBMISSION_CRITERIA_FAILED`，`details.failed[{name, fail}]`（通用码，PDE api-index `10a074e`） |
@@ -483,7 +495,7 @@ stateDiagram-v2
 | 版本历史 | `GET /rules/{id}/versions` | 「对比」「回滚」前端没有点击处理（`Rules.vue` L469），`:rollback` 见 `[推断 P8]` |
 | 方案 CRUD | `GET /scenarios?status&kw&page`、`POST /scenarios {from?}`、`PATCH /scenarios/{id} {name}` | |
 | 运行 | `POST /scenarios/{id}:run {scope, drivers}` | 异步；`GET /scenarios/{id}` 轮询状态；scope / drivers 按方案模板校验（未知键 / 类型 / 选项 / 越界 422）；`/scenarios/meta.templates` 下发模板定义 |
-| 结果 / 影响 | `GET /scenarios/{id}/result`、`/impacts?page&size` | 影响一屏 6 |
+| 结果 / 影响 | `GET /scenarios/{id}/result`、`/impacts?page&size` | 影响默认10条，SQL count+LIMIT/OFFSET，不加载整份影响明细后切片 |
 | 对比 | `GET /scenarios:compare?ids=a,b,c` | ≤3 个已完成 |
 | 转动作 | `GET /scenarios/{id}/stage-plan`、`POST /scenarios/{id}:stage {keys}` | |
 | 生命周期 | `GET /object-types/{id}/lifecycle?view&cr&ver` | 状态、迁移、版本；草稿带 mark |
@@ -520,7 +532,7 @@ stateDiagram-v2
 | `alertId` | 来源告警；告警页、规则命中抽屉取匹配的第一条（`Alerts.vue` L24、`Rules.vue` L165） | 告警处理、规则 |
 | `ruleId` | 来源规则 | 规则（R12） |
 | `kw` | 编号 / 对象 / 幂等键 / 外部单号 / 告警号 / 规则号 / 会话号（`Actions.vue` L62） | 动作中心 |
-| `page`、`size` | 各页自带（动作中心 16、对象类型页 10、动作类型页 14） | 全部 |
+| `page`、`size` | 运行页默认10，其他调用方显式传入size | 全部 |
 
 列表可附带 `counts`（`待确认`、`结果未知` 数，对象类型页 L63–64 用）。动作类型页的 `runStats`/`runDaily`、本体总览的汇总是统计接口，按同一张 `action_run` 聚合。问数对象详情目前代码里没有读执行记录（`QaAnswer.vue`、`ObjectDetail.vue` 未引用 actions mock），以后接入也走这个接口。
 
@@ -670,7 +682,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 
 | # | 按钮 / 操作 | 前端条件 | 接口 | 状态变化 / 副作用 |
 |---|---|---|---|---|
-| S1 | 列表（状态/搜索，一屏 12） | — | `GET /scenarios` | — |
+| S1 | 列表（状态/搜索，默认10；SQL筛选、count、LIMIT/OFFSET） | — | `GET /scenarios` | — |
 | S2 | 新建方案 | 非只读；有未保存改动先确认放弃 | `POST /scenarios` | → 草稿 |
 | S3 | 复制为新方案 | 非只读 | `POST /scenarios {from}` | → 草稿，owner=本人 |
 | S4 | 保存名称 | owner；名称非空 | `PATCH /scenarios/{id}` | — |
@@ -738,3 +750,7 @@ PDE 的 `export-mock` 只导出常量，**跳过函数**。下列数据是函数
 | P10 | 对账为外部已成功后告警自动转已解决 | 对账（`Actions.vue` L177–197）只改动作状态和日志，不动告警；告警页只在动作「成功」时写「动作成功后告警自动转为已解决」（`Alerts.vue` L182） | 对账 `succeeded` 后，关联告警按「动作成功」同样处理：处理中 → 已解决并记 log | Palantir专家 |
 
 已核对、**不是**推断项（前端已有，照做）：转派目标 ≠ 当前处理人（`Alerts.vue` L278 下拉已排除）；已对账·外部未执行不能重新提交（L205 提示重新发起）；确认人只在有 `source.confirmer` 时校验（L87）；重新提交只限失败且未重提（L143），新记录发起人 = 当前操作人、来源按 L162 处理。
+
+## 2026-10-26 对象生命周期读取隔离
+
+`ObjBehaviorLifecycle.vue` 真模式固定读取后台，不受全局 backend.down 切换为 mock。定义、非法迁移和变化记录在身份/预览/版本/对象/草稿切换时清空，分别用请求序号阻止迟到及切走再切回的旧结果；错误可见，未成功读取前禁止编辑。动作/事件名称目录按同一上下文完整分页重读，不复用 setup 时的旧快照。草稿保存返回也核对请求上下文和序号。自检：`node scripts/check-object-behavior.mjs`。

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import type { NavArea } from '@/nav';
 import { NOTICES } from '@/mock';
 import { releaseByVer } from '@/api/releases';
+import { isReal } from '@/api/config';
 import { NEXT_VERSION as MOCK_NEXT_VERSION } from '@/mock/changes';
 
 export const TENANTS = [
@@ -38,15 +39,15 @@ export const useAppStore = defineStore('app', {
     const persona = loadPersona();
     return {
       tenant: 'hd',
-      ontologyVersion: 'v2026.10.3',
-      ontologyPublishedAt: '2026-10-24 21:17',
+      ontologyVersion: isReal('versioning') ? '—' : 'v2026.10.3',
+      ontologyPublishedAt: isReal('versioning') ? '—' : '2026-10-24 21:17',
       /** 下一个待发布版本号：mock 模式取 mock 的 NEXT_VERSION；versioning 走真接口时由 GET /releases/current 的 next 覆盖 */
-      ontologyNextVersion: MOCK_NEXT_VERSION,
+      ontologyNextVersion: isReal('versioning') ? '' : MOCK_NEXT_VERSION,
       /** 正在查看的历史版本（URL ?ver=）；null = 当前版本 */
       viewVersion: null as string | null,
-      notices: NOTICES.map((n) => ({ ...n })),
+      notices: isReal('admin') ? [] : NOTICES.map((n) => ({ ...n })),
       persona,
-      user: { name: PERSONAS[persona].name as string, role: PERSONAS[persona].role as string },
+      user: { name: isReal('admin') ? '' : PERSONAS[persona].name as string, role: isReal('admin') ? '' : PERSONAS[persona].role as string },
       permissions: [...PERSONAS[persona].permissions] as AreaKey[],
       /** 每个区上次访问的完整路由（不含抽屉参数），切换区时回到这里 */
       lastRoute: loadLastRoute(),
@@ -60,7 +61,7 @@ export const useAppStore = defineStore('app', {
   actions: {
     setPersona(p: PersonaKey) {
       this.persona = p;
-      this.user = { name: PERSONAS[p].name, role: PERSONAS[p].role };
+      this.user = isReal('admin') ? { name: '', role: '' } : { name: PERSONAS[p].name, role: PERSONAS[p].role };
       this.permissions = [...PERSONAS[p].permissions];
       try { sessionStorage.setItem(PERSONA_KEY, p); } catch { /* 隐私模式 */ }
     },

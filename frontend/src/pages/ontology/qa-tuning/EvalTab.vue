@@ -10,11 +10,12 @@ import { useRoute, useRouter } from 'vue-router';
 import AppPagination from '@/components/AppPagination.vue';
 import { message } from 'ant-design-vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
-import type { PageResult } from '@/api/http';
-import { qaReal, listEvalRuns, getEvalRun, listEvalQuestions, type QaEvalRun, type QaEvalRunDetail, type QaEvalQList, type QaEvalQ } from '@/api/qa';
+import { currentApiContext, type PageResult } from '@/api/http';
+import { qaReal, qaRequestOptions, listEvalRuns, getEvalRun, listEvalQuestions, type QaEvalRun, type QaEvalRunDetail, type QaEvalQList, type QaEvalQ } from '@/api/qa';
 import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import { paginate } from '@/mock';
-import { EVAL_QS, EVAL_GROUPS, planText, type EvalRun, type EvalQ, type FailKind, type FailCase } from '@/mock/qa-tuning';
+import { EVAL_QS, EVAL_GROUPS, type EvalRun, type EvalQ, type FailKind, type FailCase } from '@/mock/qa-tuning';
+import { planText } from './catalog';
 import { tuning, tuningTick } from './state';
 import CrTag from './CrTag.vue';
 import InfoTip from '../../qa/InfoTip.vue';
@@ -80,31 +81,58 @@ const qRemote = ref<QaEvalQList>({ items: [], total: 0, page: 1, size: 15, group
 const dRemote = ref<QaEvalRunDetail>();
 const poll = ref(0);
 let timer: ReturnType<typeof setTimeout> | undefined;
-const running = () => rRemote.value.items.some((r) => r.status === '运行中') || dRemote.value?.status === '运行中';
+const running = () => rRemote.value.items.some((r) => (r.status === '运行中' || r.awaitingExecution)) || (dRemote.value?.status === '运行中' || dRemote.value?.awaitingExecution);
 const schedulePoll = () => { clearTimeout(timer); if (running()) timer = setTimeout(() => { poll.value++; }, 3000); };
 onBeforeUnmount(() => clearTimeout(timer));
 const loadErr = (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`加载评测失败：${(e as Error).message}`); };
+const contextKey = () => JSON.stringify(currentApiContext());
+let runsSeq = 0, questionsSeq = 0, detailSeq = 0;
+const runsLoading = ref(false), questionsLoading = ref(false);
+onBeforeUnmount(() => { ++runsSeq; ++questionsSeq; ++detailSeq; });
 if (real) {
-  watch([trigF, rq.page, rq.size, tuningTick, poll], async () => {
-    if (!live.value) return;
-    try { rRemote.value = await listEvalRuns({ trigger: trigF.value, page: rq.page.value, size: rq.size.value }); schedulePoll(); } catch (e) { loadErr(e); }
+  watch(contextKey, () => {
+    runsSeq++; questionsSeq++; detailSeq++;
+    rRemote.value = { items: [], total: 0, page: 1, size: 15 };
+    qRemote.value = { items: [], total: 0, page: 1, size: 15, groupCounts: [] };
+    dRemote.value = undefined;
+    clearTimeout(timer);
+  }, { flush: 'sync' });
+  watch([view, trigF, rq.page, rq.size, tuningTick, poll, contextKey], async () => {
+    const n = ++runsSeq, key = contextKey();
+    if (!live.value || view.value !== 'runs') { runsLoading.value = false; return; }
+    runsLoading.value = true;
+    try {
+      const rows = await listEvalRuns({ trigger: trigF.value, page: rq.page.value, size: rq.size.value }, qaRequestOptions());
+      if (n === runsSeq && key === contextKey()) { rRemote.value = rows; if (rows.page !== rq.page.value) rq.page.value = rows.page; schedulePoll(); }
+    } catch (e) { if (n === runsSeq && key === contextKey()) loadErr(e); }
+    finally { if (n === runsSeq) runsLoading.value = false; }
   }, { immediate: true });
-  watch([gF, resF, ekw, qq.page, qq.size, tuningTick], async () => {
-    if (!live.value) return;
-    try { qRemote.value = await listEvalQuestions({ group: gF.value, last: resF.value, kw: ekw.value || undefined, page: qq.page.value, size: qq.size.value }); } catch (e) { loadErr(e); }
+  watch([view, gF, resF, ekw, qq.page, qq.size, tuningTick, contextKey], async () => {
+    const n = ++questionsSeq, key = contextKey();
+    if (!live.value || view.value !== 'questions') { questionsLoading.value = false; return; }
+    questionsLoading.value = true;
+    try {
+      const rows = await listEvalQuestions({ group: gF.value, last: resF.value, kw: ekw.value || undefined, page: qq.page.value, size: qq.size.value }, qaRequestOptions());
+      if (n === questionsSeq && key === contextKey()) { qRemote.value = rows; if (rows.page !== qq.page.value) qq.page.value = rows.page; }
+    } catch (e) { if (n === questionsSeq && key === contextKey()) loadErr(e); }
+    finally { if (n === questionsSeq) questionsLoading.value = false; }
   }, { immediate: true });
-  watch([() => q('run'), fpage, tuningTick, poll], async ([id]) => {
+  watch([() => q('run'), fpage, tuningTick, poll, contextKey], async ([id]) => {
+    const n = ++detailSeq, key = contextKey();
+    if (dRemote.value?.id !== id) dRemote.value = undefined;
     if (!id || !live.value) { dRemote.value = undefined; return; }
-    try { dRemote.value = await getEvalRun(id as string, { page: fpage.value, size: FSIZE }); schedulePoll(); } catch (e) { dRemote.value = undefined; loadErr(e); }
+    try {
+      const detail = await getEvalRun(id as string, { page: fpage.value, size: FSIZE }, qaRequestOptions());
+      if (n === detailSeq && key === contextKey()) { dRemote.value = detail; if (detail.fails.page !== fpage.value) fpage.value = detail.fails.page; schedulePoll(); }
+    } catch (e) { if (n === detailSeq && key === contextKey()) { dRemote.value = undefined; loadErr(e); } }
   }, { immediate: true });
 }
 const rpaged = computed<Rows<Run>>(() => (live.value ? rRemote.value : paginate(runs.value, { page: rq.page.value, size: rq.size.value })));
-const runTotal = computed(() => (live.value ? rRemote.value.total : tuning.runs.length));
 /** [推断] 真接口下“最近整库运行”取当前页里最新一条已完成的整库运行 */
 const latest = computed<Run | undefined>(() => (live.value ? rRemote.value.items : tuning.runs).find((r) => r.status === '已完成' && r.scope.startsWith('全部')));
 const qpaged = computed<Rows<EvalQ | QaEvalQ>>(() => (live.value ? qRemote.value : paginate(qs.value, { page: qq.page.value, size: qq.size.value })));
-const qTotal = computed(() => (live.value ? qRemote.value.groupCounts.reduce((n, g) => n + g.n, 0) : EVAL_QS.length));
 const groupCount = (g: string) => (live.value ? qRemote.value.groupCounts.find((x) => x.group === g)?.n ?? 0 : EVAL_QS.filter((x) => x.group === g).length);
+const groupNames = computed(() => real ? qRemote.value.groupCounts.map((g) => g.group) : EVAL_GROUPS);
 const expText = (x: EvalQ | QaEvalQ) => ('expectText' in x ? x.expectText : planText(x.expect));
 
 const cur = computed<EvalRun | QaEvalRunDetail | undefined>(() => (live.value ? dRemote.value : tuning.runs.find((r) => r.id === q('run'))));
@@ -124,28 +152,23 @@ const kinds = computed<[FailKind, number][]>(() => {
   return [...m.entries()];
 });
 /** 待运行的发布前回放：列出将要回放的题 */
-const crCount = (id: string) => EVAL_QS.filter((x) => x.cr === id).length;
 const crsOf = (r: Run) => r.crs ?? (r.cr ? [r.cr] : []);
 const replayQs = computed<(EvalQ | QaEvalQ)[]>(() => {
   const c = cur.value;
   if (c && 'replayQuestions' in c) return c.replayQuestions;
+  if (real) return [];
   const ids = cur.value?.status === '待运行' ? crsOf(cur.value) : [];
   return EVAL_QS.filter((x) => x.cr && ids.includes(x.cr));
 });
-const REPLAY_HINT: Record<string, string> = {
-  'CR-0010': '按 退款率 v3（退款完成时间）重新比对',
-  'CR-0008': '同义词“发货及时率”生效后应召回 出库及时率 v1',
-  'CR-0015': '同义词“成交单量”生效后应召回 有效订单数 v1',
-};
-const hintOf = (x: EvalQ | QaEvalQ) => (cur.value && 'replayHints' in cur.value ? cur.value.replayHints[x.cr!] : REPLAY_HINT[x.cr!]) ?? '';
+const hintOf = (x: EvalQ | QaEvalQ) => (cur.value && 'replayHints' in cur.value ? cur.value.replayHints[x.cr!] : '') ?? '';
 const trigText = (r: Run) => crsOf(r).reduce((t, id) => t.replace(id + ' ', ''), r.trigger);
 </script>
 
 <template>
   <div class="qt-filters">
     <a-radio-group v-model:value="view" button-style="solid">
-      <a-radio-button value="runs">运行记录（{{ runTotal }}）</a-radio-button>
-      <a-radio-button value="questions">题目（{{ qTotal }}）</a-radio-button>
+      <a-radio-button value="runs">运行记录</a-radio-button>
+      <a-radio-button value="questions">题目</a-radio-button>
     </a-radio-group>
     <template v-if="view === 'runs'">
       <a-select v-model:value="trigF" allow-clear placeholder="触发方式" class="qt-sel" :options="TRIGGERS.map((s) => ({ value: s, label: s }))" />
@@ -153,15 +176,14 @@ const trigText = (r: Run) => crsOf(r).reduce((t, id) => t.replace(id + ' ', ''),
     </template>
     <template v-else>
       <a-input-search v-model:value="ekw" allow-clear placeholder="搜索题目" class="qt-kw" />
-      <a-select v-model:value="gF" allow-clear placeholder="分组" class="qt-sel" :options="EVAL_GROUPS.map((g) => ({ value: g, label: `${g}（${groupCount(g)}）` }))" />
+      <a-select v-model:value="gF" allow-clear placeholder="分组" class="qt-sel" :options="groupNames.map((g) => ({ value: g, label: `${g}（${groupCount(g)}）` }))" />
       <a-select v-model:value="resF" allow-clear placeholder="最近结果" class="qt-sel" :options="['通过', '失败'].map((s) => ({ value: s, label: s }))" />
-      <span class="t-12 c-3 qt-hint">v2026.10.4 发布前回放 5 题（CR-0008 履约 {{ crCount('CR-0008') }} + CR-0015 订单量 {{ crCount('CR-0015') }}）；退款相关 {{ crCount('CR-0010') }} 题待 CR-0010</span>
     </template>
   </div>
 
   <template v-if="view === 'runs'">
     <div class="qt-table" :class="{ 'paged-scroll': rq.overflow.value }">
-      <a-table :locale="{ emptyText: '没有符合条件的运行记录' }" size="small" row-key="id" :columns="rcols" :data-source="rpaged.items" :pagination="false" :custom-row="rowProps">
+      <a-table :locale="{ emptyText: '没有符合条件的运行记录' }" size="small" row-key="id" :columns="rcols" :data-source="rpaged.items" :loading="runsLoading" :pagination="false" :custom-row="rowProps">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'id'" class="num c-3">{{ record.id }}</span>
           <span v-else-if="column.key === 'time'" class="num c-2">{{ record.time }}</span>
@@ -170,10 +192,10 @@ const trigText = (r: Run) => crsOf(r).reduce((t, id) => t.replace(id + ' ', ''),
             <CrTag v-for="id in crsOf(record as Run)" :key="id" :id="id" :text="id" />
           </span>
           <span v-else-if="column.key === 'version'" class="num c-2">{{ record.version }}</span>
-          <span v-else-if="column.key === 'passed'" class="num">{{ record.status === '已完成' ? `${record.passed} / ${record.total}` : `-- / ${record.total}` }}</span>
+          <span v-else-if="column.key === 'passed'" class="num">{{ record.status === '已完成' || record.status === '失败' ? `${record.passed} / ${record.total}` : `-- / ${record.total}` }}</span>
           <span v-else-if="column.key === 'rate'" class="num c-1">{{ record.status === '已完成' ? pct(rate(record)) : '--' }}</span>
           <span v-else-if="column.key === 'fails'" class="num" :class="failN(record as Run) ? 'tl-failed' : 'c-3'">{{ record.status === '已完成' ? failN(record as Run) : '--' }}</span>
-          <span v-else-if="column.key === 'status'" :class="record.status === '已完成' ? 'c-2' : 'c-1'">{{ record.status }}</span>
+          <span v-else-if="column.key === 'status'" :class="record.status === '失败' ? 'tl-failed' : record.status === '已完成' ? 'c-2' : 'c-1'">{{ record.status }}</span>
           <span v-else-if="column.key === 'note'" class="c-3" :title="record.note">{{ record.note ?? '' }}</span>
         </template>
       </a-table>
@@ -182,7 +204,7 @@ const trigText = (r: Run) => crsOf(r).reduce((t, id) => t.replace(id + ' ', ''),
   </template>
   <template v-else>
     <div class="qt-table" :class="{ 'paged-scroll': qq.overflow.value }">
-      <a-table :locale="{ emptyText: '没有符合条件的题目' }" size="small" row-key="id" :columns="qcols" :data-source="qpaged.items" :pagination="false">
+      <a-table :locale="{ emptyText: '没有符合条件的题目' }" size="small" row-key="id" :columns="qcols" :data-source="qpaged.items" :loading="questionsLoading" :pagination="false">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'id'" class="num c-3">{{ record.id }}</span>
           <span v-else-if="column.key === 'question'" class="c-1">{{ record.question }}</span>
@@ -204,7 +226,7 @@ const trigText = (r: Run) => crsOf(r).reduce((t, id) => t.replace(id + ' ', ''),
         <span class="t-12 c-3">范围</span><span class="t-14 c-1">{{ cur.scope }}</span>
         <span class="t-12 c-3">执行人</span><span class="t-14 c-1">{{ cur.operator }}</span>
         <span class="t-12 c-3">通过率</span><span class="t-14 c-1 num">{{ cur.status === '已完成' ? `${pct(rate(cur))}（${cur.passed}/${cur.total}）` : cur.status }}</span>
-        <span class="t-12 c-3">失败</span><span class="t-14 num" :class="curFails ? 'tl-failed' : 'c-1'">{{ cur.status === '已完成' ? `${curFails} 题` : '--' }}</span>
+        <span class="t-12 c-3">失败</span><span class="t-14 num" :class="curFails ? 'tl-failed' : 'c-1'">{{ cur.status === '已完成' ? `${curFails} 题` : cur.status === '失败' ? `${curFails} 题（已完成部分）` : '--' }}</span>
       </div>
       <div v-if="crsOf(cur).length || cur.note" class="qd-note"><CrTag v-for="id in crsOf(cur)" :key="id" :id="id" /><span class="t-12 c-2 qd-ell qd-grow" :title="cur.note">{{ cur.note }}</span></div>
 
@@ -219,7 +241,7 @@ const trigText = (r: Run) => crsOf(r).reduce((t, id) => t.replace(id + ' ', ''),
           </div>
         </div>
       </div>
-      <div v-else-if="cur.status === '运行中'" class="qd-sec"><span class="t-14 c-2">正在运行，预计 3 分钟完成。</span></div>
+      <div v-else-if="cur.status === '运行中' || cur.status === '待运行'" class="qd-sec"><span class="t-14 c-2">{{ cur.status === '待运行' ? '尚未开始执行，请确认专用评测worker已启动。' : '正在运行，完成后自动更新。' }}</span></div>
       <div v-else class="qd-sec">
         <div class="qd-head">
           <span class="t-14 fw-600 c-1">失败用例（{{ curFails }}）</span>

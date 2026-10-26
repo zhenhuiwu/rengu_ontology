@@ -4,9 +4,14 @@
  */
 import type { QaSession, QaFavorite, QaPage, QaDemoTurn } from '@/mock/qa';
 import type { CertQa, FreqQ, SemPlan, EvalRun, EvalQ, FailCase, FailKind, Feedback } from '@/mock/qa-tuning';
-import { apiClient, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult } from './http';
+import { apiClient, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult, type RequestOptions } from './http';
 
 const api = apiClient('qa');
+/** Freeze identity/history/preview for a multi-await UI operation. */
+export function qaRequestOptions(signal?: AbortSignal): Omit<RequestOptions, 'method' | 'body'> {
+  const c = currentApiContext();
+  return { headers: { 'X-Demo-As': c.demoAs ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs }, signal };
+}
 export const qaReal = () => api.isReal();
 
 /**
@@ -55,20 +60,20 @@ export interface QaOption { value: string; label: string }
 export interface QaSessionOptions { scopes: QaOption[]; calibers: QaOption[] }
 export interface QaAskOut { turnId: string; streamUrl: string; turn: QaRealTurn }
 
-export const listSessions = (q: { q?: string; range?: string; page: number; size: number }) =>
-  api.get<PageResult<QaSession>>('/sessions', { query: { ...q, range: q.range === 'all' ? undefined : q.range } });
-export const getSession = (sid: string) => api.get<QaSessionDetail>(`/sessions/${encodeURIComponent(sid)}`);
-export const createSession = (body: { scope: string; caliber: string }) => api.post<QaSessionDetail>('/sessions', body);
-export const patchSession = (sid: string, body: { title?: string; scope?: string; caliber?: string }) =>
-  api.patch<QaSessionDetail>(`/sessions/${encodeURIComponent(sid)}`, body);
-export const deleteSession = (sid: string) => api.delete<void>(`/sessions/${encodeURIComponent(sid)}`);
-export const askTurn = (sid: string, question: string) =>
-  api.post<QaAskOut>(`/sessions/${encodeURIComponent(sid)}/turns`, { question, refs: [] });
-export const listFavorites = (q: { q?: string; page: number; size: number }) => api.get<PageResult<QaFavorite>>('/favorites', { query: q });
+export const listSessions = (q: { q?: string; range?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) =>
+  api.get<PageResult<QaSession>>('/sessions', { ...options, query: { ...options.query, ...q, range: q.range === 'all' ? undefined : q.range } });
+export const getSession = (sid: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<QaSessionDetail>(`/sessions/${encodeURIComponent(sid)}`, options);
+export const createSession = (body: { scope: string; caliber: string }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.post<QaSessionDetail>('/sessions', body, options);
+export const patchSession = (sid: string, body: { title?: string; scope?: string; caliber?: string }, options: Omit<RequestOptions, 'method' | 'body'> = {}) =>
+  api.patch<QaSessionDetail>(`/sessions/${encodeURIComponent(sid)}`, body, options);
+export const deleteSession = (sid: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.delete<void>(`/sessions/${encodeURIComponent(sid)}`, options);
+export const askTurn = (sid: string, question: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) =>
+  api.post<QaAskOut>(`/sessions/${encodeURIComponent(sid)}/turns`, { question, refs: [] }, options);
+export const listFavorites = (q: { q?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<PageResult<QaFavorite>>('/favorites', { ...options, query: { ...options.query, ...q } });
 export const deleteFavorite = (id: string) => api.delete<void>(`/favorites/${encodeURIComponent(id)}`);
 /** P1 简版（左栏贴底、「我的页面 · 全部」抽屉） */
-export const listPagesBrief = (q: { kw?: string; page: number; size: number }) =>
-  api.get<PageResult<QaPage>>('/pages', { query: { ...q, view: 'brief' } });
+export const listPagesBrief = (q: { kw?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) =>
+  api.get<PageResult<QaPage>>('/pages', { ...options, query: { ...options.query, ...q, view: 'brief' } });
 /** W16 申请数据权限；duration 为天数 30 | 90 | 180（前端单选文字转数字） */
 export interface QaPermRequestIn { scope: string; object: string; reason: string; duration: number; sourceTurnId: string | null }
 export const createPermissionRequest = (body: QaPermRequestIn) =>
@@ -118,42 +123,42 @@ export interface QaTuningSummary { version: string; dataAsOf: string; recertCoun
 /** 后端 certifier / certifiedAt 待认证时为空（exclude_none），前端表格按 '--' 显示（同 mock createCert） */
 type CertDto = Omit<CertQa, 'certifier' | 'certifiedAt'> & { certifier?: string; certifiedAt?: string; planText: string };
 const certIn = (c: CertDto): CertQa => ({ ...c, variants: c.variants ?? [], certifier: c.certifier ?? '--', certifiedAt: c.certifiedAt ?? '--' });
-export const getTuningSummary = () => api.get<QaTuningSummary>('/tuning/summary');
-export interface QaPlanOptions { metrics: { key: string; name: string; version: string; cr?: string }[]; dims: string[]; times: string[] }
+export const getTuningSummary = (options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<QaTuningSummary>('/tuning/summary', options);
+export interface QaPlanOptions { metrics: { code: string; key: string; name: string; version: string; cr?: string }[]; dims: string[]; times: string[] }
 /** T2 新建认证问答的指标 / 维度 / 时间选项 */
-export const getPlanOptions = () => api.get<QaPlanOptions>('/tuning/plan-options');
-export async function listCerts(q: { kw?: string; status?: string; metric?: string; page: number; size: number }): Promise<PageResult<CertQa>> {
-  const r = await api.get<PageResult<CertDto>>('/tuning/certs', { query: q });
+export const getPlanOptions = (options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<QaPlanOptions>('/tuning/plan-options', options);
+export async function listCerts(q: { kw?: string; status?: string; metric?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}): Promise<PageResult<CertQa>> {
+  const r = await api.get<PageResult<CertDto>>('/tuning/certs', { ...options, query: { ...options.query, ...q } });
   return { ...r, items: r.items.map(certIn) };
 }
-export const getCert = async (id: string) => certIn(await api.get<CertDto>(`/tuning/certs/${encodeURIComponent(id)}`));
+export const getCert = async (id: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => certIn(await api.get<CertDto>(`/tuning/certs/${encodeURIComponent(id)}`, options));
 export const createCert = async (question: string, plan: SemPlan) => certIn(await api.post<CertDto>('/tuning/certs', { question, plan }));
 export const certifyCert = async (id: string) => certIn(await api.post<CertDto>(`/tuning/certs/${encodeURIComponent(id)}:certify`, {}));
 export const toggleCert = async (id: string, enabled: boolean) => certIn(await api.patch<CertDto>(`/tuning/certs/${encodeURIComponent(id)}`, { enabled }));
 export const putCertVariants = async (id: string, variants: string[]) => certIn(await api.put<CertDto>(`/tuning/certs/${encodeURIComponent(id)}/variants`, { variants }));
 export type QaFreq = FreqQ & { rank: number; certStatus?: string };
-export const listFreq = (q: { period?: string; cert?: string; kw?: string; page: number; size: number }) => api.get<PageResult<QaFreq>>('/tuning/freq', { query: q });
+export const listFreq = (q: { period?: string; cert?: string; kw?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<PageResult<QaFreq>>('/tuning/freq', { ...options, query: { ...options.query, ...q } });
 export const certifyFreq = async (id: string) => certIn(await api.post<CertDto>(`/tuning/freq/${encodeURIComponent(id)}:certify`, {}));
 
 /* ───────── R5 问数调优 · 评测题库 / 反馈与纠错（qa-api §7 T9–T17） ───────── */
 /** T9 运行记录：失败用例不随列表返回，给 failCount；passRate 0–1 */
-export type QaEvalRun = Omit<EvalRun, 'fails' | 'version'> & { version?: string; passRate: number; failCount: number };
+export type QaEvalRun = Omit<EvalRun, 'fails' | 'version' | 'status'> & { status: EvalRun['status'] | '失败'; awaitingExecution?: boolean; version?: string; passRate: number; failCount: number };
 export type QaEvalQ = EvalQ & { expectText: string };
 /** T10 抽屉：失败用例服务端分页（12 条一页），kindStats 是全部失败的原因分布；待运行的回放给题目和提示 */
 export interface QaEvalRunDetail extends QaEvalRun { fails: PageResult<FailCase>; kindStats: { kind: FailKind; n: number }[]; replayQuestions: QaEvalQ[]; replayHints: Record<string, string> }
 export interface QaEvalQList extends PageResult<QaEvalQ> { groupCounts: { group: string; n: number }[] }
-export const listEvalRuns = (q: { trigger?: string; page: number; size: number }) => api.get<PageResult<QaEvalRun>>('/tuning/eval/runs', { query: q });
-export const getEvalRun = (id: string, q: { page: number; size: number }) => api.get<QaEvalRunDetail>(`/tuning/eval/runs/${encodeURIComponent(id)}`, { query: q });
+export const listEvalRuns = (q: { trigger?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<PageResult<QaEvalRun>>('/tuning/eval/runs', { ...options, query: { ...options.query, ...q } });
+export const getEvalRun = (id: string, q: { page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<QaEvalRunDetail>(`/tuning/eval/runs/${encodeURIComponent(id)}`, { ...options, query: { ...options.query, ...q } });
 /** T11 运行评测（202，后台逐题跑；group 'all' = 全部）。轮询 T9 / T10 看进度 */
-export const startEvalRun = (group: string) => api.post<QaEvalRun>('/tuning/eval/runs', { group });
-export const listEvalQuestions = (q: { group?: string; last?: string; kw?: string; page: number; size: number }) => api.get<QaEvalQList>('/tuning/eval/questions', { query: q });
+export const startEvalRun = (group: string, sessionId: string) => api.post<QaEvalRun>('/tuning/eval/runs', { group, sessionId });
+export const listEvalQuestions = (q: { group?: string; last?: string; kw?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<QaEvalQList>('/tuning/eval/questions', { ...options, query: { ...options.query, ...q } });
 /** T13 / T14 反馈：列表和详情同形（行内按钮要 certBlock / coveredBy） */
 export type QaFeedback = Feedback & {
   userId?: string; certBlock: string; existingCert?: string; coveredBy?: string; relatedEvalCount: number;
   existingCertQuestion?: string; existingCertStatus?: string; plan?: SemPlan; planText?: string; coveredCrStatus?: string;
 };
-export const listFeedbacks = (q: { kw?: string; status?: string; fixKind?: string; page: number; size: number }) => api.get<PageResult<QaFeedback>>('/tuning/feedbacks', { query: q });
-export const getFeedback = (id: string) => api.get<QaFeedback>(`/tuning/feedbacks/${encodeURIComponent(id)}`);
+export const listFeedbacks = (q: { kw?: string; status?: string; fixKind?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<PageResult<QaFeedback>>('/tuning/feedbacks', { ...options, query: { ...options.query, ...q } });
+export const getFeedback = (id: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<QaFeedback>(`/tuning/feedbacks/${encodeURIComponent(id)}`, options);
 const fbAct = (id: string, act: string) => `/tuning/feedbacks/${encodeURIComponent(id)}:${act}`;
 /** T15：词已在变更单里 → 关联（同词待处理反馈一起）；不在 → 新建（或 join 加入）草稿变更单，target kind=knowledge；知识被别的单占用 → 409 TARGET_IN_OTHER_CR（details.crId） */
 export const feedbackToSynonym = (id: string, body: { join?: string; title?: string } = {}) =>

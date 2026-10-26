@@ -23,6 +23,10 @@ const clean = <T extends ExtSystemDto>(s: T): T & ExtSystem => ({ ...s, usage: s
 
 export const listExtSystems = async (q: { writeback?: boolean; kw?: string } = {}) =>
   (await api.get<{ items: ExtSystemDto[] }>('/ext-systems', { query: { writeback: q.writeback ? 1 : undefined, kw: q.kw?.trim() || undefined } })).items.map(clean);
+export const queryExtSystems = async (page: number, size: number) => {
+  const result = await api.get<{ items: ExtSystemDto[]; total: number; page: number; size: number }>('/ext-systems', { query: { page, size } });
+  return { ...result, items: result.items.map(clean) };
+};
 export const getExtSystem = async (id: string) => clean(await api.get<ExtSystemDetailDto>(`/ext-systems/${enc(id)}`));
 export const createExtSystem = async (body: ExtSystemInput) => clean(await api.post<ExtSystemDetailDto>('/ext-systems', body));
 /** PUT /ext-systems/{id}（文档 §3.1）；后台另留 POST 同义别名兼容旧前端 */

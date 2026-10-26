@@ -1,5 +1,17 @@
 # 静态本体：后台实体、变更发布链路与接口（v0.3 草案）
 
+## 2026-10-26 功能权限接入（覆盖“require_func暂时放行”说明）
+
+身份仍为现有dev/test `X-Demo-As`/默认开发账号，prod未接登录仍401。每次请求从`sys_role_member → sys_role.func`聚合同一页面最高`none/view/manage`，没有关联/未知级别不授予权限。页面key采用FUNC_PAGES实际plain key（`releases`、`object-types`等），不接受`ontology.*`别名；配置`demo_admin_codes`只保留既有发布管理员附加条件，不是功能权限旁路。
+
+CR目标写入按目标页面manage：object/properties/lifecycle→object-types、link→link-types、metric→metrics、dimension→dimensions、knowledge→glossary、action→action-types、event→event-types、rule→rules。create/add-target/PUT items/discard-target校验相应目标；单头修改、校验、状态流转和整单删除校验全部`cr_target/cr_item`和旧`detail.touches`目标，缺少任一页面管理权即403，写入/校验/评审记录保持不变。无目标单按releases:manage。返回完整CR内容的create/add-target/patch/状态流转还需既有releases:view，避免通过写响应绕过整单读取权限。
+
+发布和回滚的HTTP及服务层均检查releases:manage；发布另外保留本体管理员限制，回滚保留原既有策略；owner/reviewer与状态机规则仍检查。全局READONLY优先，不因权限校验改为可写。权限不足沿用403 NO_PERMISSION及`details:{page,required}`。不会运行时自动关联角色或修改开发库授权。
+
+新表单负责人目录：`GET /api/ontology/v1/build/owners?kind=object|metric|dimension|action|event`，对应目标页manage，返回裸数组`[{id:用户code,name:真实姓名}]`，只含启用用户，按code排序，不返回账号/部门/手机号，也不要求users:view。真实当前用户默认值可取既有`GET /api/admin/v1/me/row-scope`的`userId/userName`。
+
+验证：`test_function_permissions.py`覆盖DB聚合/撤权、八类目标、混合及旧CR、READONLY优先、服务层发布/回滚及负责人目录。测试按需显式写DB角色成员（`tests/function_access_support.py`），不替换权限依赖；旧系统身份种子默认无角色关联，测试/开发初始化需明确授权。
+
 > 依据：`/workspace/ui-vue` 前端代码与 mock（以前端为准）；表结构在 `/workspace/palantir-ontology/静态本体-后台表结构与接口定义-v0.1.md` 基础上按前端补齐。v0.3 按本体小白审核意见（阻断 1–3 + 非阻断建议）和 PDE 对 api-index 的意见修订。
 > 范围：对象类型（定义页签 + 使用与治理页签）、关系类型、指标口径、维度与字典、业务知识、变更与发布。
 > 交接（已完成 / 未完成 / 代码在哪 / 下一步）：见 `backend/docs/backend/handoff/static.md`。
@@ -31,7 +43,7 @@
 | dict_item | 动作模块 | 动作分组、事件来源等系统下拉，不进版本、不走 CR；业务码表一律用 dimension(kind=codelist) |
 | qa_synonym_link、调优同义词（`TUNED_SYNONYMS`） | 问数 | 问数调优页写入；种子由问数负责（按 word+cr upsert），静态不导 |
 | notice、quality_check | PDE / 公共 | `NOTICES`、`QUALITY_CHECKS` 虽从 static 目录导出，表不归静态（见 §4.1） |
-| function、fn_param、fn_version、fn_pending、fn_use | 静态（PDE 已定，骨架契约第 11 条） | 函数页 `/build/ontology/functions`（`pages/functions/Functions.vue`、`mock/functions.ts`），接口见 §3.8 |
+| function、fn_param、fn_version、fn_use | 静态（PDE 已定，骨架契约第 11 条） | 函数页 `/build/ontology/functions`（`pages/functions/Functions.vue`、`mock/functions.ts`），接口见 §3.8 |
 
 ### 1.1 实体与关系
 
@@ -381,7 +393,7 @@ erDiagram
 - **草稿 = 已发布 + cr_item 增量**：静态提供纯函数 `apply(snapshot, items) -> snapshot`，按 `(target_kind, target_id, section, item_key)` 把 cr_item 叠加到快照上；读草稿视图、试跑、合并校验、`create_version` 都调它。读草稿时每行返回 `mark: 新增|修改|删除|''` 和 `base`（已发布值）。删除已发布行只记 `op=delete`；新增后又删除则直接删掉该 cr_item（与 `useDraftEdits.remove` 一致）。
 - **状态由 CR 推出、不落定义表**：页面上「草稿」「已驳回」的关系、知识、指标（如 `LINKS` 里 1 条草稿、1 条已驳回，`KNOWLEDGE` 里 1 条草稿）只存在 cr_item(op=add) 里，接口按所属 CR 状态返回该值。
 - **id 规则**：库内主键一律 `id bigint`，接口只出业务编码（§1.2）。CR 号 `CR-NNNN` 存 `change_request.code`，由后台序列分配（前端 `nextCrId` 只是 mock）；新建知识 `K-xxx`、新建关系/对象 api 在 CR 发布前可改，发布后 api 不能改（V7）。
-- **指标按 `(code, version)` 唯一约束**（主键仍是 `id bigint`，每个口径版本一行）：`code` 用 mock 的 id（`gross_margin`），页面上的 API 名（`gross_margin_rate`，`mock/metricCatalog.ts` `METRIC_LIST[].api`）存 `api_name`。规则 `conds.metric`、问数 `QA_METRIC` 都按 id 引用。改公式或过滤必须升版本（V8，后台规则；前端「编辑定义」按钮没有接编辑逻辑，见 §3.4）。
+- **指标当前定义按 `code` 唯一**（主键仍是 `id bigint`）：API 名存 `api_name`，口径历史完整定义存现有 `version_rows` JSON，并进入新发布的 `metrics.versionRows` 快照；不新增表。规则、问数仍按指标 code 引用。真实定义变更发布时升口径版本，恢复旧口径也追加新版本，见 §3.4。
 - **版本只增不改**：`ontology_release` 不设状态列，不改旧行。某版本「已回滚」= 存在一个新版本的 `rollback_of_id` 指向它，接口按此推出。
 - **敏感属性**：`property.is_sensitive` 走变更单（`PermissionsTab.toggleSens` 写入草稿，发布后生效）；明文授权在底层 `role_object_scope.plain_columns`。
 - **码表**：`ObjProp.enumName` 指向 `dimension(kind=codelist)` 的名称，不另建 ENUM_TYPE。mock 里 24 个 enumName 只有 6 个在 `DIM_ITEMS` 里有码表（订单状态、退款原因、门店状态、支付方式、配送方式、商品状态），其余 18 个没有取值数据。`property.enum_name` 先存名称、做软引用，不加外键，以免种子新增码表、改变维度页的计数。**[待用户定]** 这 18 个是否要补进 `dimensions.ts`。`dict_item`（动作模块）只放系统下拉，不放业务码表。
@@ -539,7 +551,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
 - 顶栏选版本 → URL `?ver=v2026.10.1` → 请求同样带 `?ver=v2026.10.1`；「以此用户预览」→ `?previewAs=U…` → 请求同样带 `?previewAs=`。两种都由前端 `useReadonly()` 判定只读（`app.viewMode==='history' || preview.active`），原因分别是「正在查看历史版本 x，只读」「正在以 X 的权限预览，只读」。
 - 读接口按 `ver` 读快照；响应带 `releaseTag`。
-- **静态读接口的 `?ver=`（实现已定）**：所有静态 GET 都先校验版本，版本不存在返回 404 `NOT_FOUND`（对象类型、属性、指标也一样）；关系、维度、业务知识按该版快照的节返回，对象类型、属性、指标按 §2.7「与当前一致」返回当前表（前端 `ObjectTypes.vue`、`Metrics.vue` 不读 `viewVersion`，历史模式只是只读）。
+- **静态读接口的 `?ver=`（2026-10-26更新）**：版本不存在404；对象/属性/指标/关系/维度/知识均读取该版实际快照，缺资源404、缺节为空，不以当前表补定义。历史列表在后端快照节中筛选分页；单节投影并请求内缓存。显式运行接口的当前refs/usage标记`runtimeFromCurrent:true`，不会连带载入当前定义全集。
 - **静态读接口的 `?previewAs=`（实现已定）**：定义类数据（对象类型、关系、指标、维度、业务知识）**不按被预览用户裁剪**，原样返回。前端这些页面都不读预览状态（`ObjectTypes.vue`、`LinkTypes.vue`、`Metrics.vue`、`Dimensions.vue`、`Glossary.vue` 都没有 `usePreview` / `scopeOf`）；预览只做两件事：整页可见性（`stores/preview.ts:37` `canPage` 按 `func[页面 key]`，`:103` 路由守卫把没权限的页面转走，`SideNav.vue:21` 隐藏菜单）和只读（`useReadonly.ts:14`）。行级范围 `scopeOf` 只用在对象搜索、对象详情和问数（`ObjectSearch.vue:57`、`:64`）。后端对应：每个静态 GET 挂 `require_func(页面 key, "view")`（api-index 权限表：`object-types`、`link-types`、`metrics`、`dimensions`、`glossary`；`/object-types/brief` 为 `data-quality`），按被预览用户的功能权限判定由骨架 `require_func` / `CurrentUserDep` 的 PDE 实现负责。
 - **鉴权**：所有静态 GET 依赖 `CurrentUserDep`，未知或停用的 `X-Demo-As` 返回 401 `UNAUTHORIZED`。
 
@@ -557,7 +569,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 维度层级 | `V < levelsBefore.ver` 时用 `levelsBefore` 的 levels、qa、desc、attr（只有 `org`，ver=v2026.10.2） | `Dimensions.vue:97-107`、`:360` |
 | 版本列表 | `ver ≤ V` 的版本 | `OntologyOverview.vue:155` |
 | 对象版本历史 | `legacyRevs(objectId, objName)` 给出 v2026.06.1–v2026.09.2 的 CR 之前的修订，按 `ver ≤ V` 截取 | `mock/objectHistory.ts` |
-| 对象类型、属性、指标 | 与当前一致（前端历史模式下内容不变，只是只读） | `ObjectTypes.vue`、`Metrics.vue` |
+| 对象类型、属性、指标 | 该版实际快照；不读取当前定义补旧版，保存当时公式/属性/标记 | `ObjectTypesBody.vue`、`MetricsBody.vue` |
 
 - 版本号比较按字符串字典序，与前端 `since <= ver` 一致（格式固定 `vYYYY.MM.N`）。
 - v2026.09.3 之前的版本（v2026.03.2、v2026.08.2、legacyRevs 里的 v2026.06.1–09.2）只作为 `since` 值出现，没有 RELEASES 行，不生成快照；第一次回放 v2026.09.3 时把 `since` 更早的内容一并放进去。
@@ -611,6 +623,17 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
 > 动作类路径一律用冒号形式（`:submit`、`:stage`、`:confirm`、`:rollback`），PDE 已定，CONVENTIONS §1 的子路径写法不用。
 
+### 3.0 真实分页与完整目录（2026-10-26）
+
+- 对象 `kw`、指标 `kw/group`、关系 `q/src/st`、维度 `q/kind/group`、知识 `q/type/st` 主列表均使用SQL COUNT+LIMIT/OFFSET，默认10，支持`focusId`；页码越界仍收拢。属性计数及levels/applies仅按本页批量装载，避免列表触发全对象属性或全维度子表。
+- 对象properties/mappings、维度values/mappings可带`crId`：真实CR目标与页面权限校验后，先合并已保存新增/修改/删除再筛选、计数、排序和分页；支持isNew目标空基线。无CR返回已发布视图；未知CR/目标404、已发布CR409、历史/预览叠CR403；无效草稿行/顺序422，不制造成功空页。未保存编辑缓冲由前端完整保留。
+- 维度mappings仍包含显式映射、启用取值名称/同义词自动行和跨维度冲突。当前使用SQL候选UNION及完整词集判断冲突，再分页；不会只查当前页而漏冲突。values保留pub原值、until和draft边界；CR视图使用该CR实际保存内容。
+- JSON refs/history在单资源字段展开后SQL计数限页，null或非数组安全为空。新增`GET /knowledge/{id}/history`、`GET /link-types/{id}/history`，均为原页面view权限、PageResult默认10。历史定义/历史条目仅取指定快照，不读取当前全库。
+- `GET /link-types/catalog`返回完整轻目录`{objects,links,paths}`，link-types:view，不分页，不携运行质量/usage；历史取对应快照。`/object-types/brief`仍完整。所选对象完整props、维度`full=true`与必要编辑目录保持完整，不被分页截断；默认维度头不拉values/maps。
+- `GET /object-types/{id}/links`附`fromName/toName`，同版本真实名称，缺名称只显示编码。`usage?kind=metric|view|cr&q&filter&page&size`均后端分页：metric base来自实际对象名称/API词边界引用，via来自真实维度绑定/层级/metric_dims；无依据不默认order/order_line。view可带`crId/affectedOnly`，每行`affectedProps`来自该CR保存的properties key；CR `filter=进行中`指草稿/审核中/已通过。
+- 完整轻工作流目录：`GET /change-requests?workflow=true`返回所有状态的摘要数组+`detail:{touches}`+真实`targets`。touches合并旧合法touches与实际CrTarget，仅读JSON子字段，不读diffs/events/items。workflow优先full并忽略page/size/focus以免误截断；显式kw/status仍筛选。旧无分页/full调用保持兼容，发布确认须读全部已通过单，不能只拿当前页。
+- `GET /knowledge/synonym-conflicts?crId=`用完整轻name/synonyms/status词集，叠该CR已保存knowledge内容/状态再检查；不由已访问页缓存推断全局无冲突。
+
 ### 3.1 变更单与草稿（所有静态页共用；动作、事件、规则共用同一套）
 
 | 页面操作 | 接口 | 关键字段 / 规则 | 页面权限 | 密钥 | 历史 | 预览 | 行级 |
@@ -630,9 +653,9 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 审核通过 / 驳回 | `POST /change-requests/{id}:approve` / `:reject` | reject 必填 `rejectReason`。**已实现**：审核人且不是提交人；approve 有阻断 409 `CR_BLOCKED`，审核中 → 已通过，事件「{me} 审核通过」/「等待整版发布 {下一版本}」；reject 原因为空 422 `VALIDATION_FAILED`（`details.fields[0].field = rejectReason`），审核中 → 已驳回，写 `rejectReason`，事件「{me} 驳回」/「{原因}」(error)。原因不限定为前端 5 个预设 [推断] | releases:manage + reviewer | — | ✗ | ✗ | 否 |
 | 撤回已通过 | `POST /change-requests/{id}:unapprove` | owner/reviewer，已通过 → 草稿。**已实现**：事件「{me} 撤回审核结果」/「不进入 {下一版本}」 | releases:manage | — | ✗ | ✗ | 否 |
 | 改回草稿 | `POST /change-requests/{id}:reopen` | owner/reviewer，已驳回 → 草稿。**已实现**：事件「{me} 改回草稿」/「按驳回意见修改后重新提交」；和 mock 一样不清空 `rejectReason` | releases:manage | — | ✗ | ✗ | 否 |
-| 变更单列表 | `GET /change-requests?status&kw&page&size&focusId` | 每页 17（`Releases.vue:42`、`:216`）；`focusId`（深链 `?cr=`）返回含该单的那一页。**已实现**：行为 mock `CHANGE_REQUESTS` 同形（单号倒序，`release` / `rejectReason` 没有时不出现），`status` 不认识的值 422；`kw` 同 `Releases.vue:61`（标题包含或单号包含大写 kw）；带 `page` / `size` / `focusId` 任一个时返回 `{items,total,page,size}`（默认 17，越界收到最后一页，`focusId` 返回所在页），都不带返回整个数组 [推断]；`full=true` 每行再带 `detail`（整份 CRDetail）和 `events`。`Releases.vue` 真接口模式仍整表载入后本地筛选、分页；不随 `?ver` 变 [推断] | releases:view | — | ✓ | ✓ | 否 |
+| 变更单列表 | `GET /change-requests?status&kw&page&size&focusId&full` | SQL筛选/计数/限页，默认10；focus返回筛选内所在页。无page/size/focus时保留完整数组；full=true兼容detail/events且批量装载，仅在需要完整审批资料时使用。普通单页不带detail/events，单选沿GET /change-requests/{id} | releases:view | — | ✓ | ✓ | 否 |
 | 变更单详情 | `GET /change-requests/{id}` | 头部、说明、迁移方式、`times{created,checked,submitted}`，并一次带回 `checks`（V1–V17 全部）、`impact{direct[],defs[],usage[]}`、`trial{rows[],scope}`（没有试跑为 `null`）、`events`（`ReviewEvent[]`）、`touches`（原样）；前端详情一次取整份 `CRDetail`，不设这四个子接口。**已实现**：一行 + `detail`（`change_request.detail` 原样）+ `events`（`cr_event` 追加记录，新的在前；`times` 推出来的节点前端照 mock `reviewLog` 现算）；不存在 404 | releases:view | — | ✓ | ✓ | 否 |
-| 改动 | `GET /change-requests/{id}/diffs?page&size` | 每页 10（`Releases.vue:83`、`:292`）。**已实现（static-r3）**：`{items,total,page,size}`，默认 10；= `detail.diffs`（种子 mock 行）+ cr_item 生成的行（key `i<id>`） | releases:view | — | ✓ | ✓ | 否 |
+| 改动 | `GET /change-requests/{id}/diffs?page&size` | 每页10；旧JSON按ordinality在前、当前CrItem按seq/id在后，SQL UNION/COUNT/LIMIT/OFFSET后只装本页行与目标名，不读取完整detail/events；越界收拢。Releases的dpage真实请求此接口，选单详情用`GET /change-requests/{id}?includeDiffs=false`跳过全量改动；默认true兼容完整编辑调用 | releases:view | — | ✓ | ✓ | 否 |
 | 补充迁移方式 | `PATCH /change-requests/{id}` `{migration}` | **[推断：前端只显示迁移方式（`Releases.vue:294-295`），没有编辑入口]**，先不做。**已实现（static-r3）**：`PATCH /change-requests/{id}` 可改 `title/reason/reviewer/level/migration`（`migration` 存 `detail.migration`），带 `lockVersion` 时校验；仅草稿，否则 409 `CR_LOCKED`。页面仍没有编辑入口 | releases:manage（暂代目标页:manage，`require_func` 是桩）[推断] | — | ✗ | ✗ | 否 |
 | 合并校验预览 | `POST /releases:merge-check` | 不落库；出 `rows[{code,name,result,note}]`、`blocked`。**已实现**：对全部「已通过」单子按 mock `mergeCheck` 原样计算（M1 / V9 / V17 / V1–V17 / 提示，单子按编号倒序，与 mock 列表同序），数据取 `change_request.detail`（mock CR_DETAILS 原样，`seeds/extra/static/CR_DETAILS.json`）[推断]。由「发布」触发，发布按钮在只读时置灰（`Releases.vue:195-196`） | releases:manage | — | ✗ | ✗ | 否 |
 | 版本列表 | `GET /releases` | 不分页：返回 `{items: Release[], current}`（`current` 为当前生效版本号）；顶栏版本选择器对所有页面都显示（`TopBar.vue:70` `VersionPicker`） | 任意已登录用户 | 元数据读取 | ✓ | ✓ | 否 |
@@ -720,7 +743,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 页面操作 | 接口 | 规则 | 页面权限 | 密钥 | 历史 | 预览 | 行级 |
 |---|---|---|---|---|---|---|---|
 | 新建/编辑关系、改默认路径 | CR items，`target.kind=link` | 新建 api 发布前可改；V13 | link-types:manage | — | ✗ | ✗ | 否 |
-| 列表 | `GET /link-types?page&size&focusId` | 每页 18（`LinkTypes.vue:58`、`:308`）；`focusId`（深链 `?link=`） | link-types:view | 元数据读取 | ✓ | ✓ | 否 |
+| 列表 | `GET /link-types?page&size&focusId` | 默认10（`LinkTypes.vue:58`、`:308`）；`focusId`（深链 `?link=`） | link-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 关联质量 | `GET /link-types/{id}/quality` | 每日 06:00 任务写 | link-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 问数路径 | `GET /link-types/paths?from&to` | 不分页 | link-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 引用与影响 | `GET /link-types/{id}/usage?page&size` | 每页 10（`LinkTypes.vue:568`） | link-types:view | 元数据读取 | ✓ | ✓ | 否 |
@@ -729,24 +752,33 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
 | 页面操作 | 接口 | 规则 | 页面权限 | 密钥 | 历史 | 预览 | 行级 |
 |---|---|---|---|---|---|---|---|
-| 试算（近 30 日） | `POST /metrics/{id}:trial` `{crId?, range}` | 不落库；草稿按 CR 口径，否则按已发布；出趋势和 `dataCutoff`。前端只读时不置灰（`Metrics.vue:140`），所以放行 | metrics:view | 指标读取 | ✓ | ✓ | 是 [推断：试算读业务数据] |
+| 试算（近 30 日） | `POST /metrics/{id}:trial` `{crId?, range:"30d"}` | 已实现，不落库；仅按真实已发布定义或指定CR已保存行试算，返回`rows[{date,value:十进制字符串或null}]`、`version/formula/crId/scope/dataCutoff`；单受治理对象的SUM/COUNT/AVG/MIN/MAX及四则运算、显式标量WHERE、定义内时间字段/默认过滤经真实属性列绑定。缺映射、跨对象、自然语言、不完整历史执行快照返回422 `METRIC_TRIAL_UNAVAILABLE`，不猜退款/成本/税率，不回退mock；纯POST在只读上下文放行，preview按被预览者权限/行级范围 | metrics:view | 指标读取 | ✓（完整执行映射缺失时报422） | ✓ | 是 |
 | 口径版本列表 | `GET /metrics/{id}/versions?page&size` | 每页 10（`Metrics.vue:201`）；生效中/已替代 | metrics:view | 指标读取 | ✓ | ✓ | 否 |
-| 回滚口径版本 | `POST /metrics/{id}:rollback` `{toVersion, crId?}` | 生成新 CR 或加入已有草稿单（`Metrics.vue:70-77`）；只读时链接隐藏（`Metrics.vue:197`） | metrics:manage | — | ✗ | ✗ | 否 |
+| 回滚口径版本 | `POST /metrics/{id}:rollback` `{toVersion, crId?, lockVersion?, title?, reason?, reviewer?}` | **已实现**：只生成新 CR 或加入已有草稿单；加入必须带当前 `lockVersion`；审核并整版发布后才生效 | metrics:manage | — | ✗ | ✗ | 否 |
 | 引用 | `GET /metrics/{id}/refs?page&size` | 每页 10（`Metrics.vue:211`）；指标、规则可跳转 | metrics:view | 指标读取 | ✓ | ✓ | 否 |
 | 允许的维度 | 随 `GET /metrics/{id}` 返回 `dims[]`、`disallowed[]` | 前端一次显示全部 | metrics:view | 指标读取 | ✓ | ✓ | 否 |
 | 导入 / 新建指标 | 先建 CR（`Metrics.vue:104-105`） | 只读时置灰 | metrics:manage | — | ✗ | ✗ | 否 |
-| 编辑定义（改公式） | — | **[第二期：「编辑定义」按钮没有接逻辑（`Metrics.vue:157`）]**；V8「改公式须升版本」仍作为后台规则保留 | — | — | — | — | — |
+| 编辑定义（改公式） | CR items，`target.kind=metric, section=def` | 已实现：当前定义在发布时写回，并在同一事务记录完整口径版本 | metrics:manage | — | ✗ | ✗ | 否 |
 | 版本对比 | — | **[第二期]** | — | — | — | — | — |
+
+口径版本扩展（2026-10-26）：
+
+- `GET /metrics/{id}/versions` 保留 `ver/release/status/change/by/at`，附加 `canRollback`、不可恢复时的 `rollbackUnavailable`，以及可选 `baseline`。列表按口径版本数字降序，状态由当前定义的版本判断；`?ver=` 仅读该本体版本实际保存的 `versionRows`；早期快照没有口径账本时为空，不借当前记录推造旧版。
+- 每次实际定义变化在发布事务内保存 `name/api/group/unit/owner/formula/dims/variants/status`；变体只保存用户编辑的 `code/label/default`，派生 API/目标版本在恢复发布时重新取真实定义。省略版本或仍提交当前版本时，后台取当前及全部历史 `vN` 最大值加一；显式新版本必须符合 `v` 加正整数、长度不超过16，且高于全部历史。不改旧记录，无变化不虚增版本。
+- 首次编辑存量指标时，后台可捕获亲眼读取的当前定义基线，标记 `baseline:true`、`release:""`，说明及 `at` 明确是本次记录时间，**不冒充该口径原发布时间**。旧 seed 只有说明而无完整定义的版本保留展示，`canRollback:false`；不能从说明推造公式。相同版本存在不同完整定义时也禁止恢复。
+- 回滚请求体 `toVersion` 必填；新单可带 `title`（最多40）、`reason`（最多4000）、真实审核人 `reviewer`；加入已有单带 `crId/lockVersion`。返回 `{crId,lockVersion,target:{kind:"metric",id,name,isNew:false},items:[ItemOut]}`。生成完整定义差异及一个新的口径版本项，当前指标/本体发布版本均不变化。
+- 任一段已有该指标内容时返回409 `METRIC_DRAFT_NOT_EMPTY`，不会覆盖。缺真实快照为409 `METRIC_VERSION_UNAVAILABLE`，歧义为409 `METRIC_VERSION_AMBIGUOUS`，当前版本为409 `METRIC_ALREADY_CURRENT`；旧锁为409 `VERSION_CONFLICT`。参数边界422、历史/预览写入403 `READONLY`，发布非法定义409 `WRITEBACK_FAILED`，整次事务回滚。
+- 整版本体回滚按原语义恢复定义，保留真实历史账本；新指标不在上一版且无引用时仍物理消失。以后以同 code 重建，可从既有发布快照恢复账本并分配更高版本。不会为保留版本记录而保留本应消失的新指标。
 
 ### 3.5 维度与字典
 
 | 页面操作 | 接口 | 规则 | 页面权限 | 密钥 | 历史 | 预览 | 行级 |
 |---|---|---|---|---|---|---|---|
 | 新增/编辑/停用取值、说法映射 | CR items，`section=values` / `mappings` | 停用的取值不参与匹配；多值映射必须写 `resolve` | dimensions:manage | — | ✗ | ✗ | 否 |
-| 列表 | `GET /dimensions?page&size&focusId` | 每页 18（`Dimensions.vue:56`、`:390`）；`focusId`（深链 `?dim=`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
+| 列表 | `GET /dimensions?page&size&focusId` | 默认10（`Dimensions.vue:56`、`:390`）；`focusId`（深链 `?dim=`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 整条维度（前端整表载入） | `GET /dimensions/{id}?full=true` | **[推断]** 返回完整 DimItem（含 `values` / `mappings` / `usage` / `history`，草稿行原样、不按 `ver` 裁剪）；`Dimensions.vue` 拿 `DIM_ITEMS` 自己算取值 / 映射 / 使用情况 / 历史视图，联调第一版整表载入用。不带 `full` 时同原来（摘要） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 取值 | `GET /dimensions/{id}/values?page&size` | 每页 10（`Dimensions.vue:132`、`:522`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
-| 说法映射 / 只看冲突 | `GET /dimensions/{id}/mappings?conflict&page&size` | 每页 8（`Dimensions.vue:573`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
+| 说法映射 / 只看冲突 | `GET /dimensions/{id}/mappings?conflict&page&size` | 默认10（`Dimensions.vue:573`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 使用情况 | `GET /dimensions/{id}/usage?page&size` | 每页 10（`Dimensions.vue:588`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 变更历史 | `GET /dimensions/{id}/history?page&size` | 每页 10（`Dimensions.vue:605`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
 | 匹配试算（试一试） | `POST /dimensions:match` `{text, dimension?, all, crId?}` | 不落库；出 `exact[]`、`contains[]`、`crossDim`、`groups[]`；空输入 `EMPTY_INPUT`。前端只读时不置灰（`Dimensions.vue:531`） | dimensions:view | 元数据读取 | ✓ | ✓ | 否 |
@@ -756,8 +788,8 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 页面操作 | 接口 | 规则 | 页面权限 | 密钥 | 历史 | 预览 | 行级 |
 |---|---|---|---|---|---|---|---|
 | 新建/编辑/停用知识 | CR items，`target.kind=knowledge` | 只读时置灰（`Glossary.vue:309`、`:352-354`） | glossary:manage | — | ✗ | ✗ | 否 |
-| 列表 | `GET /knowledge?page&size&focusId` | 每页 19（`Glossary.vue:73`、`:332`）；`focusId`（深链 `?k=`） | glossary:view | 元数据读取 | ✓ | ✓ | 否 |
-| 引用 | `GET /knowledge/{id}/refs?page&size` | 每页 8（`Glossary.vue:277`、`:503`） | glossary:view | 元数据读取 | ✓ | ✓ | 否 |
+| 列表 | `GET /knowledge?page&size&focusId` | 默认10（`Glossary.vue:73`、`:332`）；`focusId`（深链 `?k=`） | glossary:view | 元数据读取 | ✓ | ✓ | 否 |
+| 引用 | `GET /knowledge/{id}/refs?page&size` | 默认10（`Glossary.vue:277`、`:503`） | glossary:view | 元数据读取 | ✓ | ✓ | 否 |
 | 同义词冲突 | `GET /knowledge/synonym-conflicts` | 不分页 | glossary:view | 元数据读取 | ✓ | ✓ | 否 |
 | 解析（试一试） | `POST /knowledge:resolve` `{question, crId?}` | 不落库；前端只读时不置灰（`Glossary.vue:473`） | glossary:view | 元数据读取 | ✓ | ✓ | 否 |
 
@@ -767,24 +799,31 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 |---|---|---|---|---|---|---|---|
 | 给本体小白的自动建本体集成读本体词表 | 进程内契约函数 `semantic_map(session, ver=None)`，放在 `app/contracts/static.py`（骨架 `ad75767` 还没有这个文件，写静态模块代码时加上）（对应语义 `semantic-map?ver=`，**不开 HTTP**） | **后台内部**，前端没有入口。只读；带 `ver` 读该版快照，不带读当前生效版。返回 `[{kind, id, api, parent, name, synonyms[]}]`，`kind ∈ object\|property\|link\|metric\|dimension\|dimValue\|term`；`id` = 前端 id（快照节里的键，如 `order`、`gross_margin`、`K-018`）；`api` = `api_name`（对象 `SalesOrder`、指标 `gross_margin_rate`；dimValue 没有 api_name，取它的 `code`；term 取 `code`）；`parent` 也取 `api_name`：property 为所属对象的 api_name、dimValue 为所属维度的 api_name，其余为 `null`。由快照的 `objectTypes`、`properties`、`links`、`metrics`、`dimensions`（含 `values`）、`terms` 节拼出；`synonyms` 取指标 `synonyms`、维度 `mappings`、知识 `synonyms`，其余为 `[]`。不分页 | 进程内调用，不经 HTTP、无服务间凭证；不对页面用户开放（以后真要走 HTTP，用 API 密钥绑定服务账号） | — | ✓ | — | 否 |
 
-### 3.8 函数（`/build/ontology/functions`，归静态，PDE 已定）
+### 3.8 函数（`/build/ontology/functions`）
 
-表：`function`（`code` UK = `FN-003`，`name` UK = Python 函数名，`title`、`runtime`、`status` published/draft/disabled = 已发布/草稿/已停用、`owner_id` FK → sys_user.id、`timeout_s`、`description`、`code_text`、`sample_in`/`sample_out` jsonb、`avg_ms`、`calls_7d`）；`fn_param`（`function_id` FK，`direction` in/out，`seq`，`name`、`type`、`obj_type`、`desc`；UK `(function_id, direction, seq)`）；`fn_use`（`function_id` FK，`kind` 动作/规则，`name`，引用关系，只读展示）；`fn_version`（**只追加，不存 status**：`function_id` FK、`ver` 非空、UK `(function_id, ver)`、`at`、`author_id` FK → sys_user.id、`note`、`snapshot` jsonb）；`fn_pending`（可变，带 `lock_version`：`function_id` FK UK、`cr_id` FK → change_request.id、`at`、`author_id` FK、`note`、`snapshot` jsonb；存 `FN_PENDING` 这种「变更中」草稿）。不进本体快照（CONVENTIONS §11）。
+2026-10-26 按构建清单 F 实现真实数据库接口；以下覆盖原“直接生成版本 / sampleOut 模拟执行”的旧推断，mock 数据和行为不变。
 
-- **版本状态是推出来的**：当前 = 该函数 `ver` 最大的那行（按 `vX.Y.Z` 数字比较）、其余 = 历史；变更中 = `fn_pending` 有行，版本历史接口把它拼成置顶一行（`ver=草稿`、`status=变更中`、`cr`）。草稿不进 `fn_version`，所以 `ver='草稿'` 不会撞 UK。没放进 cr_item：CR-0011 的前端详情（`mock/changes.ts`、`DRAFT_TARGETS`）里没有 FN-003，放进去会让 CR-0011 多一行改动。
-- **`?ver=` / `?previewAs=`**：函数不在快照里，读接口**忽略 `ver`**，一律返回当前函数（前端 `FUNCTIONS` 不随版本变）；按 `fn_version.at` 还原历史不做 [推断]。写接口（新建、编辑保存、回滚）返回 403 `READONLY`，与前端只读时置灰一致（`Functions.vue:140`、`:170`、`:245`、`:267`，`useReadonly` `:23`）；「测试运行」不置灰，进只读白名单。
+- `functions_0008` 接 `palantir_0007`，新增 `function`、`fn_param`、`fn_use`、`fn_version`。定义字段沿原契约，版本表只追加且有 DB 触发器；没有灌入演示函数。变更中由现有 `cr_target/cr_item` 实时读取，不另建 `fn_pending`，因此放弃目标或删除草稿没有第二份残留。函数不进入 `ontology_release.snapshot`。
+- 所有读取需要 `functions:view`；保存/新建/回滚还需 `functions:manage`。全部 POST/PUT 在 `?ver` 或 `?previewAs` 下统一 403 `READONLY`，测试也不例外。读取仍按原约定忽略本体 `ver`，返回当前函数及其独立版本；不把当前定义冒充某个本体历史快照。
+- 定义输出沿原页面字段，另带 `lockVersion`；未发布新函数在列表里为“草稿”，只有 CR 保存成功才出现。已发布函数保持当前内容，`pending={cr,crLockVersion,status,isNew,at,author,note,definition}` 指向真实草稿。版本历史按语义版本数值倒序，当前/历史状态推导；草稿置顶并带真实 `cr`。
 
-| 页面操作 | 接口 | 规则 | 页面权限 | 密钥 | 历史 | 预览 | 行级 |
-|---|---|---|---|---|---|---|---|
-| 列表 | `GET /functions?kw&status&page&size` | 每页 12（`Functions.vue:37`）；`kw` 匹配函数名/中文名，`status` 全部/已发布/草稿/已停用 | functions:view | 元数据读取 | ✓ | ✓ | 否 |
-| 详情 | `GET /functions/{id}` | 定义、入参出参、签名、代码、引用 `usedBy` | functions:view | 元数据读取 | ✓ | ✓ | 否 |
-| 版本历史 | `GET /functions/{id}/versions?page&size` | 每页 12（`Functions.vue:50`）；有变更中的版本（`FN_PENDING`）时置顶一行并带 `cr` | functions:view | 元数据读取 | ✓ | ✓ | 否 |
-| 测试运行 | `POST /functions/{id}:test` `{input}` | 不落库；`input` 不是合法 JSON 返回 `VALIDATION_FAILED`；出 `{output, ms, at}`。前端只读时不置灰（`Functions.vue:169`、`:222`），列入只读白名单。一期按 `sampleOut` 返回 [推断：前端是演示数据，真实沙箱执行见 §5] | functions:view | — | ✓ | ✓ | 否 |
-| 编辑保存 | `PUT /functions/{id}` `{title, desc, timeoutS, code, lockVersion}` | `title` 必填；**直接生成新版本**（补丁号 +1，`note=在线编辑`），不走变更单（与前端一致，`Functions.vue:127-133`）；函数名不能改 | functions:manage | — | ✗ | ✗ | 否 |
-| 回滚到某版本 | `POST /functions/{id}:rollback` `{toVersion}` | 生成新版本（补丁号 +1，内容同目标版，`note=回滚到 vX`）；当前版本不能回滚，返回 409 `STATE_INVALID`（`Functions.vue:64-73`、`:245`） | functions:manage | — | ✗ | ✗ | 否 |
-| 新建函数 | `POST /functions` `{name, title, desc, timeoutS, code}` | `name`、`title` 必填，`name` 重名 `DUPLICATE_KEY`；新建为草稿 v1（确认卡文案「测试通过并发布后才能被动作和规则引用」，`Functions.vue:118-125`）。前端确认后并没有加进列表，草稿怎么发布前端没有入口 [推断] | functions:manage | — | ✗ | ✗ | 否 |
+| 页面操作 | 接口 | 实际行为 |
+|---|---|---|
+| 列表 | `GET /functions?kw&status&page&size` | 默认 10，数据库筛选/COUNT/取页，匹配函数名/中文名，状态为全部/已发布/草稿/已停用；仅选页加载参数/引用，未发布新草稿合入稳定顺序；无记录为空，不回 mock |
+| 详情 | `GET /functions/{id}` | 当前定义、参数、代码、实际 `fn_use` 引用及 pending；未知 404 |
+| 版本 | `GET /functions/{id}/versions?page&size` | 默认 10；只查询当前函数的独立 `fn_version`，按数字语义版本倒序 SQL 分页，最前合入至多一条真实 CR 草稿；越界收拢 |
+| 新建 | `POST /functions` `{name,title,desc,timeoutS,code,...CR参数}` | 201 `{id,crId,crLockVersion,status:'草稿'}`；短事务咨询锁分配 FN 号并保护当前/草稿重名；只保存 CR，不创建生效定义 |
+| 编辑 | `PUT /functions/{id}` `{title,desc,timeoutS,code,lockVersion,...CR参数}` | 函数名不可改，只覆盖本函数 `function/def` 草稿；无当前/CR版本匹配则 409 |
+| 恢复旧版 | `POST /functions/{id}:rollback` `{toVersion,lockVersion,...CR参数}` | 旧版快照进入 CR；当前版不能恢复到自身；发布后才追加新版本，不改旧版本 |
+| 测试 | `POST /functions/{id}:test` `{input:{...}}` | 解释实际代码，返回 `{output,ms,at}`；无任何 DB/网络写入，不累加生产调用统计；绝不返回 sampleOut 代替结果 |
 
-- 前端编辑/回滚不走变更单，后台照此实现；是否改为走变更单（像 FN-003 随 CR-0011 那样）列入 §5 [推断]。
+CR 参数：新建单可带 `changeTitle/reason`；加入/更新单带 `crId/crLockVersion`。前端复用 StartChangeModal，确认保存后写草稿；错误保留表单，身份/版本切换后迟到响应不写入页面。新建默认审核人沿共享 CR 合同；创建者就是默认审核人时留空，提交明确 `CR_NO_REVIEWER`，需要已有独立审核人的单或现有 PATCH CR 接口配置审核人，不自动编造审批人。
+
+整版发布钩子 `function/def` 在发布事务内重新校验全部字段、签名与当前锁版本，写当前表并追加 `v1.0.0` / 补丁号 +1；异常统一 `WRITEBACK_FAILED` 并整版回滚。新函数负责人取真实 CR 创建人，版本作者取真实发布人。现有引用不允许签名不兼容变更。函数独立恢复同样须经过 CR；本体整版回滚不隐式重写函数版本。
+
+安全测试执行只支持一个 `def`、`return`、简单赋值、`if`、JSON 字面量/下标、有限算术（+ - * / // %）、比较和布尔/条件表达式。禁止 import、属性、任何调用、循环、推导式、幂运算、装饰器和可变参数。`...` / 无 return 返回 `FUNCTION_NOT_IMPLEMENTED`；其他不支持代码 `FUNCTION_UNSUPPORTED`；输入或计算错误 `FUNCTION_INPUT_INVALID`。不读取本体对象或外部库，因此旧登记对象名示例不会被伪装为已查询的数据。
+
+资源边界：源码、输入、结果各 64 KiB，源码最多 512 AST 节点/32 入参，容器最多 512 项，JSON 总值最多 2048、嵌套最多 16，整数最多 256 bit，拒绝非有限浮点、NUL和非法 Unicode；执行最多 2048 步及 min(timeoutS,1秒)。这是纯计算解释器预算，不是开放 Python 沙箱；动作/规则生产调用执行器尚未接入，页面明确显示该边界。
 
 ### 3.9 总览图谱（`/build/ontology` 总览页）
 
@@ -869,12 +908,12 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 
 - **touches 与 DRAFT_TARGETS 不对账（已定）**：草稿单的 cr_target 按 `releases.ts` `DRAFT_TARGETS` 写；`touches` 照 mock 原样返回，两者不互相补齐。例：CR-0011 的 `touches`（`changes.ts:217`）没有 `rule:R-007`，而 `DRAFT_TARGETS` 有（`releases.ts:31`），cr_target 写入 R-007，`touches` 仍按原样显示。
 - **静态目录里但不归静态的导出项**：`NOTICES`（公共）；`QUALITY_CHECKS`（51，历史 2325）、`Q_OBJECT_TYPES`、`DATA_CUTOFF`（数据质量页）。静态种子不导入它们。
-- **函数（归静态）**：`FUNCTIONS`（15，入参 29、引用 22）→ function / fn_param / fn_use；derived `fnVersions` → fn_version；`FN_PENDING`（FN-003 在 CR-0011）→ fn_pending（`cr_id` 指向 CR-0011；`fn_version` 不存 status，见 §3.8）。
+- **函数**：真实库由函数 CR 发布生成，不从 `FUNCTIONS/FN_PENDING` 灌入演示函数或历史；mock 模式仍独立使用原数据。当前表和独立版本见 §3.8。
 - **不由静态导入**：`dsTables`（数据连接 data 模块，用 `json/system/derived/dsTables.json`）；`TUNED_SYNONYMS`（问数 QA 负责）；角色和行级范围 `ROLES`（底层，见 §1.5）。
 - **派生配置**：`legacyRevs`（对象历史版本，§2.7 要用）已加进派生配置（18 个对象类型，PDE `6bac4b1` 已进 master）；`fnVersions` 归静态（§3.8），需在派生配置里按 `FUNCTIONS` 的 id 调用；`crDetail` 已被 `CR_DETAILS` 覆盖，不需要。
 - **指标口径版本从哪来**：
   - 当前版本：`METRICS`（7）+ `mock/metricCatalog.ts` `METRIC_LIST`（15，含 API 名）；`metrics.ts` 不改，`METRIC_LIST` 里多出的 `repeat_sales`、`repeat_sales_tax` 放 `extra/static/`。
-  - 历史版本：`mock/metricCatalog.ts` `METRIC_VERSIONS` 对每个指标都显示同样 3 行 gmv 的版本（v3 v2026.10.3 生效中、v2 v2026.08.1、v1 v2026.03.2）——**[待用户定]**：是按指标补数据，还是种子只给 gmv 写这 3 版、其他指标只有当前版。
+  - 历史版本：旧 `METRIC_VERSIONS` 种子说明行保留原记录，不补造真实定义；新发布追加完整定义与真实发布人/时间，见 §3.4。旧说明缺快照时不可回滚。
   - 草稿版本（gross_margin v3、gross_profit v3、refund_rate v3）只存在 cr_item，发布时才生成 metric 行。
   - `CR_DETAILS` diffs 里的「口径版本」前后值、`rules.ts` 的 `metricVer`（gross_margin 2、gmv 3、ship_ontime 1、order_cnt 1）都是当前版本，可直接对上。
   - 指标页的页内常量已挪进 mock（提交 `89462ac`）：`mock/metricCatalog.ts` 的 `METRIC_LIST`、`METRIC_DEF`、`METRIC_DIMS`、`METRIC_VERSIONS`、`METRIC_REFS`；对象类型的 `MAP_ROWS` 挪进 `mock/objectProps.ts` 的 `ORDER_MAP_ROWS`。需要 PDE 在 export-mock 的 static 组里加上 `metricCatalog.ts`。
@@ -895,7 +934,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 10. 校验是保存后自动跑还是只在手动和提交时跑；V2、V14 的超时处理。
 11. 问数反馈「转为同义词」等跨模块生成的变更单由谁创建（单号统一用静态 CR 序列）。
 12. ~~动作、事件、规则是否走同一套 CR 与发布~~ 已定：走同一套，CR 号共用；动态侧校验项是否并入 V 系列由动态定。
-13. [待用户定] 指标历史版本数据（§4.1）。
+13. 指标历史口径已按 §3.4 落地：保留旧说明、不补造历史定义；新发布保存真实完整版本，首次当前基线单独标记，无快照的旧版不可回滚。
 14. [待用户定] 码表 24 个 enumName 里 18 个没有维度数据，补数据还是先建空码表（§1.3）。
 15. [推断] `会员.常去门店所属大区` 没有对应属性，先按「注册门店所属大区」处理，请用户确认（§1.5）。`订单.大区` 已定：一期支持一跳关系路径。
 16. [推断] 「重新采集元数据」在历史/预览下前端没有置灰（`ObjectTypes.vue:387`），后台照常返回 403，前端应补置灰，请用户确认。
@@ -904,8 +943,14 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
     - 只有 owner 能提交审核（前端「提交审核」不看提交人，`Releases.vue:237-238`）。
     - 只有 owner 能编辑草稿；reviewer 现在也能点「编辑」（`Releases.vue:234-236`）。
     - 整版回滚只限本体管理员（前端回滚不看管理员，`Releases.vue:183-189`；发布才限管理员，`:196-197`）。
-    - 函数编辑保存、回滚直接生成新版本，不走变更单（`Functions.vue:127-133`、`:64-73`）；是否改为走变更单。
-    - 函数「测试运行」一期返回示例输出；是否接真实沙箱执行。
-    - 新建函数后草稿 v1 如何发布（前端没有发布入口）。
+    - 已完成：函数新建、编辑、恢复旧版本均先进入 CR，整版发布后追加函数版本（§3.8）。
+    - 已完成受限纯计算解释器，明确拒绝不支持代码；开放 Python/外部对象执行器未接入（§3.8）。
+    - 新建函数由变更单提交审核并整版发布，不在函数页绕过审核直接生效。
 19. ~~骨架 `SECTION_OWNERS` 加 `qaPaths`~~ 已登记（static），见 §2.8。
 20. 已定（本体小白复审 C′ @ 骨架 `6e3b38c`）：`release.published` outbox 事件由版本层在 `create_version` 里写（§2.5）；`X-Demo-As` 按骨架（传 `sys_user.code`、dev/test 生效、prod 忽略，§4）；整版回滚 `rollback_of`=当前最新版、内容=上一版、定义表经 `restore_section` 同事务恢复（§2.2-6）；种子 versioning 先于 static（§2.7）。
+
+### 2026-10-26 指标表单可直接试算的最小配置
+
+复用现有“新建指标”表单：名称“按创建时间计数订单”、API `created_order_count`（须唯一）、分组“销售”、单位“单”、口径v1、选择实际启用负责人、公式 `COUNT(order.created_at) WHERE order.status <> 已取消`、允许维度/变体可空。保存CR后可试算；审核通过整版发布后，可在已发布视图试算。再次编辑为 `COUNT(order.created_at) * 2 WHERE order.status <> 已取消`、版本v2，同流程发布后结果随真实公式改变。此例不修改原7条演示指标。
+
+新指标无时间元数据时，只有公式本身COUNT一个明确日期/时间属性，才使用该唯一属性分日；scope明确显示时间字段。没有从订单多个日期列里默认猜时间，也不覆盖已有时间元数据。`test_static_trials.py::test_existing_metric_form_fields_create_publish_edit_and_trial`证明只写现有表单字段，`def_rows=[]`，完成新建/编辑CR、审核、发布与试算。SUM等缺少明确事件时间、退款/成本对象无映射的旧指标仍明确422；支持更多口径需要真实源列/时间/过滤定义及获批的配置设计。

@@ -9,8 +9,8 @@ import InfoTip from '@/components/InfoTip.vue';
  * 回放试跑 / 版本历史 / 已暂存的动作都取后台，“保存到草稿”调 PUT /rules/{id}/draft；否则保持原 mock 逻辑。
  * 变更单（useDraftView / CHANGE_REQUESTS）、动作类型 / 事件类型 / 指标目录仍由各自模块提供。
  */
-import { computed, reactive, ref, watch } from 'vue';
-import { backend, fallBackIfDown } from '@/api/fallback';
+import { computed, reactive, ref, watch, onScopeDispose } from 'vue';
+import { fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
@@ -26,7 +26,7 @@ import { alertTimeline } from '@/mock/dynamic';
 import { metricById as mockMetricById } from '@/mock/metrics';
 import { METRIC_LIST } from '@/mock/metricCatalog';
 import { ACTIONS } from '@/mock/actions';
-import { actionApi, actionTypes, eventTypes, paramsOf, loadSnapshot } from '@/api/action';
+import { actionApi, actionTypes, eventTypes, paramsOf, loadActionParams, loadSnapshot, actionContextKey } from '@/api/action';
 import { isStaticReal, loadStatic, getObjectTypeMeta, OBJECT_TYPE_LIST } from '@/api/static';
 import {
   RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel, dedupeReason,
@@ -41,7 +41,7 @@ import type { ActionRecord } from '@/mock/actions';
 import type { Alert } from '@/mock/dynamic';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, submitCR, removeCRTarget, CR_WRITE, crOpen, crDropEmpty, crErrText, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
+  dynamicApi, dynamicContextKey, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, submitCR, removeCRTarget, CR_WRITE, crOpen, crDropEmpty, crErrText, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
   type RuleDto, type RuleHitDetailDto, type ReplayDto, type RuleVersionDto, type HitDim, type ReplaySampleDto,
 } from '@/api/dynamic';
 
@@ -49,17 +49,17 @@ import {
 const REAL_API = dynamicApi.isReal();
 /* 目录（动作类型 / 事件类型 / 指标）：action、static 开关各自切到真接口时读它们的接口（只读，src/api/action.ts、static.ts），否则读 mock */
 const catTick = ref(0);
-if (actionApi.isReal()) loadSnapshot().then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 动作 / 事件类型目录加载失败', e); });
-if (isStaticReal()) loadStatic(['metrics', 'objects']).then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); });
+if (actionApi.isReal()) watch(actionContextKey, () => { const key = actionContextKey(); loadSnapshot().then(() => { if (key === actionContextKey()) catTick.value += 1; }, (e) => { if (key === actionContextKey()) console.error('[api] 动作 / 事件类型目录加载失败', e); }); }, { immediate: true });
+if (isStaticReal()) watch(dynamicContextKey, () => { const key = dynamicContextKey(); loadStatic(['metrics', 'objects']).then(() => { if (key === dynamicContextKey()) catTick.value += 1; }, (e) => { if (key === dynamicContextKey() && !fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); }); }, { immediate: true });
 const actionTypeById = (id: string) => { void catTick.value; return actionTypes().find((a) => a.id === id); };
 const eventTypeById = (id: string) => { void catTick.value; return eventTypes().find((e) => e.id === id); };
 const metricById = (id: string): { name: string } | undefined => {
   void catTick.value;
-  return (isStaticReal() && METRIC_LIST.length ? METRIC_LIST.find((m) => m.id === id) : undefined) ?? mockMetricById(id);
+  return isStaticReal() ? METRIC_LIST.find((m) => m.id === id) : mockMetricById(id);
 };
-/** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
-const live = computed(() => REAL_API && !backend.down);
-const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
+/** 真接口失败保留明确错误，不切换为演示规则。 */
+const live = computed(() => REAL_API);
+const readFail = (e: unknown) => fail(e);
 const fail = (e: unknown) => { message.error(isApiError(e) ? crErrText(e) : String(e)); };
 /** 真接口状态：列表页、详情（含 draft）、下拉、命中、命中抽屉、回放结果、版本、已暂存动作 */
 const remote = reactive({
@@ -69,6 +69,9 @@ const remote = reactive({
   replay: null as (ReplayDto & { k: string }) | null, versions: [] as RuleVersionDto[], staged: [] as ActionRecord[],
 });
 const stripDraft = (d: RuleDto): RuleDef => { const { draft: _d, displayStatus: _s, cr: _c, ...r } = d; return r as RuleDef; };
+const EMPTY_RULE: RuleDef = { id: '', name: '', version: 0, status: '已发布', owner: '', desc: '', objKind: '' as RuleDef['objKind'], level: '中', output: '告警', conds: [], logic: '且', expr: '', dedupe: '', cooldown: '', trigger: { kind: '定时', text: '' }, autoStage: { enabled: false, actionTypeId: '', mapping: [], confirmer: '' }, weekly: 0, core: false };
+let mounted = true;
+onScopeDispose(() => { mounted = false; });
 
 /** 新建 / 修改草稿时记当前时间 */
 const nowText = () => {
@@ -102,22 +105,23 @@ const STATUS_OPTS = computed(() => (live.value ? remote.meta.statuses : ['全部
 const filtered = computed(() => RULE_DEFS.filter((r) => (trig.value === '全部' || r.trigger.kind === trig.value)
   && (stf.value === '全部' || ruleStatus(r).text === stf.value)
   && (!kw.value || r.name.includes(kw.value) || r.id.toLowerCase().includes(kw.value.toLowerCase()))));
-const LPAGE = 16;
+const LPAGE = REAL_API ? 10 : 16;
 const lpage = ref(1);
 watch([kw, trig, stf], () => { lpage.value = 1; });
 const list = computed<RuleDef[]>(() => (live.value ? remote.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
 const listTotal = computed(() => (live.value ? remote.total : filtered.value.length));
 /** 真接口：选中项 = ?rule= 或列表第一条；详情回来前先用列表行（同一份定义）占位 */
 /** 列表为空（筛选无结果）时为空串：不请求详情 / 命中 */
-const realId = computed(() => (route.query.rule as string) || remote.items[0]?.id || '');
+const defaultRuleId = ref('');
+const realId = computed(() => (route.query.rule as string) || defaultRuleId.value);
 const base = computed<RuleDef>(() => {
   if (!live.value) return RULE_DEFS.find((r) => r.id === route.query.rule) ?? RULE_DEFS[0];
   if (remote.detail && remote.detail.id === realId.value) return stripDraft(remote.detail);
-  return remote.items.find((r) => r.id === realId.value) ?? RULE_DEFS.find((r) => r.id === realId.value) ?? RULE_DEFS[0];
+  return remote.items.find((r) => r.id === realId.value) ?? EMPTY_RULE;
 });
 // 切换规则时清掉与上一条规则相关的状态，包括抽屉（drawer / drawer2 / hit）
 const RESET = { view: undefined, hpage: undefined, hsize: undefined, hrange: undefined, hit: undefined, rpage: undefined, rsize: undefined,
-  rrange: undefined, rver: undefined, run: undefined, drawer: undefined, drawer2: undefined };
+  rrange: undefined, rver: undefined, rmode: undefined, run: undefined, drawer: undefined, drawer2: undefined };
 const pick = (id: string) => router.replace({ query: { ...route.query, ...RESET, rule: id } });
 
 const TABS = ['cond', 'trigger', 'action', 'hits', 'replay', 'versions'];
@@ -168,7 +172,7 @@ const newForm = reactive({ name: '', objKind: '' });
 const objKindOptions = computed(() => {
   void catTick.value;
   const real = OBJECT_TYPE_LIST.map((o) => ({ value: o.id, label: `${o.name}（${o.id}）` }));
-  return real.length ? real : (['product', 'store', 'order', 'region'] as const).map((k) => ({ value: k, label: `${objKindLabel(k)}（${k}）` }));
+  return isStaticReal() ? real : (['product', 'store', 'order', 'region'] as const).map((k) => ({ value: k, label: `${objKindLabel(k)}（${k}）` }));
 });
 function openNew() {
   if (!REAL_API) { openChange(NEW_RULE); return; }
@@ -263,15 +267,17 @@ const metricBumped = computed(() => {
 });
 async function saveDraft() {
   const cr = draftCR.value!;
+  const id = base.value.id, ctx = dynamicContextKey();
   if (REAL_API) {
     const e = ensureEdits();
     try {
-      const r = await saveRuleDraft(base.value.id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds });
+      const r = await saveRuleDraft(id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds });
+      if (!mounted || ctx !== dynamicContextKey() || id !== base.value.id) return;
       if (remote.detail?.id === base.value.id) remote.detail = { ...remote.detail, draft: r.draft };
       delete edits[base.value.id];
       // 变更单写接口：改动数以库为准（saveRuleDraft 已回写）
       if (r.crChanges == null) cr.changes += 1;
-    } catch (err) { fail(err); return; }
+    } catch (err) { if (mounted && ctx === dynamicContextKey() && id === base.value.id) fail(err); return; }
   } else cr.changes += 1;
   cr.updatedAt = nowText();
   message.success(`已保存到草稿 ${cr.id}，发布前不影响线上规则`);
@@ -297,6 +303,12 @@ const stageEdit = computed(() => (isDraft.value && draftDef.value ? ensureEdits(
 const stageType = computed(() => (stageEdit.value.actionTypeId ? actionTypeById(stageEdit.value.actionTypeId) : undefined));
 const actOptions = computed(() => { void catTick.value; return actionTypes().filter((a) => a.targetKind === rule.value.objKind && a.status !== '草稿').map((a) => ({ value: a.id, label: `${a.name} · ${a.version}` })); });
 const params = computed(() => (stageType.value ? paramsOf(stageType.value) : []));
+if (actionApi.isReal()) watch([actionContextKey, () => stageType.value?.id], async () => {
+  const id = stageType.value?.id, key = actionContextKey();
+  if (!id) return;
+  try { await loadActionParams(id); }
+  catch (e) { if (mounted && key === actionContextKey() && id === stageType.value?.id) fail(e); }
+}, { immediate: true, flush: 'sync' });
 const mappingRows = computed(() => params.value.map((p) => ({ param: p.name, required: p.required, from: stageEdit.value.mapping.find((m) => m.param === p.name)?.from ?? '' })));
 /** 自动暂存开启时，必填参数（*）都要有取值来源才能保存 */
 const missingReq = computed(() => (isDraft.value && stageEdit.value.enabled ? mappingRows.value.filter((r) => r.required && !r.from).map((r) => r.param) : []));
@@ -313,7 +325,7 @@ const stagedPending = computed(() => staged.value.filter((a) => a.status === '�
 /* 命中历史 */
 const HRANGES = [{ label: '近 7 天', value: '7d' }, { label: '近 30 天', value: '30d' }];
 const hrange = computed({ get: () => (q('hrange') === '30d' ? '30d' : '7d'), set: (v) => setQ({ hrange: v === '7d' ? undefined : v, hpage: undefined }) });
-const hq = usePagedQuery({ defaultSize: 12, prefix: 'h' });
+const hq = usePagedQuery({ defaultSize: 10, prefix: 'h' });
 const hits7 = computed(() => (live.value ? remote.hits7 : hitsOf(base.value.id).filter((h) => h.at > '2026-10-18 23:59:59').length));
 const hitsAll = computed(() => hitsOf(base.value.id).filter((h) => h.at > (hrange.value === '7d' ? '2026-10-18 23:59:59' : '2026-09-25')));
 const hits = computed(() => (live.value ? remote.hits : paginate(hitsAll.value, { page: hq.page.value, size: hq.size.value })));
@@ -327,13 +339,15 @@ const DIM_COL = { title: '维度', key: 'dims', width: 220, ellipsis: true };
 const hasDims = (rows: DimRow[]) => rows.some((h) => dimsOf(h).length > 0);
 /** 对象列标题 = 对象类型的标题字段（static GET /object-types/{id}/meta 的 titleProp）；拿不到时用对象类型名 */
 const titleNames = reactive<Record<string, string>>({});
-watch(() => base.value.objKind, (k) => {
+let titleSeq = 0;
+watch([dynamicContextKey, () => base.value.objKind], ([ctx, k]) => {
+  const seq = ++titleSeq;
   if (!k || !isStaticReal() || titleNames[k]) return;
   getObjectTypeMeta(k).then((m) => {
     const p = m.properties.find((x) => x.key === m.titleProp);
-    if (p) titleNames[k] = p.name;
+    if (mounted && seq === titleSeq && ctx === dynamicContextKey() && p) titleNames[k] = p.name;
   }, () => { /* 后台没起来 / 无该对象类型：用对象类型名 */ });
-}, { immediate: true });
+}, { immediate: true, flush: 'sync' });
 const objTitle = computed(() => titleNames[base.value.objKind] ?? objKindLabel(base.value.objKind) ?? '对象');
 const hitCols = computed(() => [
   { title: '命中时间', dataIndex: 'at', width: 172 },
@@ -372,30 +386,43 @@ const rver = computed({ get: () => (q('rver') === 'draft' && draftDef.value ? 'd
 const VER_OPTS = computed(() => [{ label: `当前 v${base.value.version}`, value: 'cur' }, ...(draftDef.value ? [{ label: `草稿 v${draftDef.value.version}`, value: 'draft' }] : [])]);
 const ran = computed(() => q('run') === '1');
 const running = ref(false);
-const replayKey = computed(() => `${base.value.id}|${rrange.value}|${rver.value}`);
+const replayError = ref('');
+const rmode = computed({ get: () => q('rmode') === 'events' ? 'events' : q('rmode') === 'snapshot' ? 'snapshot' : base.value.trigger.kind === '事件' ? 'events' : 'snapshot', set: (v) => setQ({ rmode: v, run: undefined, rpage: undefined }) });
+const rq = usePagedQuery({ defaultSize: 10, prefix: 'r' });
+const replayContextKey = computed(() => `${dynamicContextKey()}|${base.value.id}|${rmode.value}|${rrange.value}|${rver.value}|${JSON.stringify(rver.value === 'draft' ? draftDef.value : base.value)}`);
+const replayAnchor = ref<{ context: string; token: string } | null>(null);
+const replayKey = computed(() => `${replayContextKey.value}|${rq.page.value}|${rq.size.value}`);
+let replaySeq = 0;
 async function fetchReplay() {
-  const k = replayKey.value;
+  const seq = ++replaySeq;
+  if (!mounted || !base.value.id || readonly.value) return;
+  const k = replayKey.value, ctx = dynamicContextKey();
+  const current = () => mounted && seq === replaySeq && ctx === dynamicContextKey() && k === replayKey.value;
+  remote.replay = null; replayError.value = '';
   running.value = true;
   try {
-    const r = await replayRule(base.value.id, rrange.value as '7d' | '30d', rver.value === 'draft' ? 'draft' : 'current');
-    if (k === replayKey.value) remote.replay = { ...r, k };
-  } catch (e) { readFail(e); } finally { running.value = false; }
+    const anchor = replayAnchor.value?.context === replayContextKey.value ? replayAnchor.value.token : undefined;
+    const r = await replayRule(base.value.id, rrange.value as '7d' | '30d', rver.value === 'draft' ? 'draft' : 'current', rmode.value, rq.page.value, rq.size.value, anchor);
+    if (current()) { replayAnchor.value = { context: replayContextKey.value, token: r.anchor }; remote.replay = { ...r, k }; }
+  } catch (e) { if (current()) { replayError.value = isApiError(e) ? crErrText(e) : String(e); readFail(e); } } finally { if (current()) running.value = false; }
 }
 function runReplay() {
-  if (live.value) { if (ran.value) fetchReplay(); else setQ({ run: '1', rpage: undefined }); return; }
+  if (readonly.value) return;
+  if (live.value) { replayAnchor.value = null; if (ran.value && rq.page.value === 1) fetchReplay(); else setQ({ run: '1', rpage: undefined }); return; }
   running.value = true; setTimeout(() => { running.value = false; setQ({ run: '1', rpage: undefined }); }, 400);
 }
 const result = computed(() => (!ran.value ? null : live.value ? (remote.replay?.k === replayKey.value ? remote.replay : null)
   : replay(base.value, rrange.value as '7d' | '30d', rver.value === 'draft')));
-const rq = usePagedQuery({ defaultSize: 9, prefix: 'r' });
-const samples = computed(() => paginate((result.value?.samples ?? []) as (ReplaySampleDto & DimRow)[], { page: rq.page.value, size: rq.size.value }));
+const samples = computed(() => live.value ? { items: (remote.replay?.k === replayKey.value ? remote.replay.samples : []) as (ReplaySampleDto & DimRow)[], total: remote.replay?.k === replayKey.value ? remote.replay.total : 0 } : paginate((result.value?.samples ?? []) as (ReplaySampleDto & DimRow)[], { page: rq.page.value, size: rq.size.value }));
+const realReplay = computed(() => live.value && remote.replay?.k === replayKey.value ? remote.replay : null);
+watch(replayContextKey, () => { replayError.value = ''; replayAnchor.value = null; }, { flush: 'sync' });
 const dedupeText = computed(() => (live.value ? remote.replay?.dedupeReason ?? '' : dedupeReason(base.value)));
 const sampleCols = computed(() => [
-  { title: '时间', dataIndex: 'at', width: 172 },
-  { title: objTitle.value, key: 'obj', ellipsis: true },
+  { title: '时间', dataIndex: 'at', width: 180 },
+  { title: objTitle.value, key: 'obj', width: 240, ellipsis: { showTitle: true } },
   ...(hasDims(result.value?.samples ?? []) ? [DIM_COL] : []),
-  { title: '命中值', dataIndex: 'value', width: 220, ellipsis: { showTitle: true } },
-  { title: '与实际命中对比', key: 'diff', width: 300, ellipsis: true },
+  { title: live.value ? '计算输入' : '命中值', dataIndex: 'value', ellipsis: { showTitle: true } },
+  { title: live.value ? '条件计算结果' : '与实际命中对比', key: 'diff', width: 220, ellipsis: { showTitle: true } },
 ]);
 
 /* 版本历史 */
@@ -406,34 +433,40 @@ const mappingSources = computed(() => (live.value ? remote.meta.mappingSources :
 // ---- 真接口：按当前选中 / 页签 / 筛选取数，失败给提示 ----
 let listSeq = 0;
 async function loadList() {
-  const seq = ++listSeq;
+  const seq = ++listSeq, ctx = dynamicContextKey();
+  if (!mounted) return;
   try {
     const r = await listRules({ trigger: trig.value, status: stf.value, kw: kw.value, page: lpage.value, size: LPAGE });
-    if (seq === listSeq) { remote.items = r.items; remote.total = r.total; }
-  } catch (e) { if (seq === listSeq) readFail(e); }
+    if (mounted && seq === listSeq && ctx === dynamicContextKey()) { remote.items = r.items; remote.total = r.total; if (!defaultRuleId.value) defaultRuleId.value = r.items[0]?.id ?? ''; if (r.page && r.page !== lpage.value) lpage.value = r.page; }
+  } catch (e) { if (mounted && seq === listSeq && ctx === dynamicContextKey()) { remote.items = []; readFail(e); } }
 }
-const guard = <T,>(key: () => string, run: () => Promise<T>, set: (v: T) => void) => {
+const guard = <T,>(key: () => string, run: () => Promise<T>, set: (v: T) => void, clear = () => {}) => {
   let seq = 0;
   return async () => {
-    const s = ++seq; const k = key(); if (!k) return;
-    try { const v = await run(); if (s === seq) set(v); } catch (e) { if (s === seq) readFail(e); }
+    const s = ++seq, ctx = dynamicContextKey(); const k = key();
+    if (!mounted) return;
+    clear(); if (!k) return;
+    const current = () => mounted && s === seq && ctx === dynamicContextKey() && k === key();
+    try { const v = await run(); if (current()) set(v); } catch (e) { if (current()) readFail(e); }
   };
 };
-const loadDetail = guard(() => realId.value, () => getRule(realId.value), (v) => { remote.detail = v; });
+const loadDetail = guard(() => realId.value, () => getRule(realId.value), (v) => { remote.detail = v; }, () => { remote.detail = null; });
 const loadOverview = guard(() => realId.value, async () => {
   const id = realId.value;
   const [h7, rec, vers, st] = await Promise.all([listRuleHits(id, '7d', 1, 1), listRuleHits(id, '30d', 1, 5), listRuleVersions(id), listRuleActionRuns(id)]);
   return { h7: h7.total, rec: rec.items, vers, st: st.items as unknown as ActionRecord[] };
 }, (v) => { remote.hits7 = v.h7; remote.recent = v.rec; remote.versions = v.vers; remote.staged = v.st; });
-const loadHits = guard(() => (tab.value === 'hits' ? realId.value : ''), () => listRuleHits(realId.value, hrange.value as '7d' | '30d', hq.page.value, hq.size.value), (v) => { remote.hits = v; });
-const loadHit = guard(() => q('hit'), () => getRuleHit(q('hit')), (v) => { remote.hit = v as RuleHitDetailDto; });
+const loadHits = guard(() => (tab.value === 'hits' && realId.value ? `${realId.value}|${hrange.value}|${hq.page.value}|${hq.size.value}` : ''), () => listRuleHits(realId.value, hrange.value as '7d' | '30d', hq.page.value, hq.size.value), (v) => { remote.hits = v; if (v.page && v.page !== hq.page.value) hq.page.value = v.page; });
+const loadHit = guard(() => q('hit'), () => getRuleHit(q('hit')), (v) => { remote.hit = v as RuleHitDetailDto; }, () => { remote.hit = null; });
 if (live.value) {
-  getRulesMeta().then((m) => { remote.meta = m; }, readFail);
-  watch([kw, trig, stf, lpage], loadList, { immediate: true });
-  watch(realId, () => { loadDetail(); loadOverview(); }, { immediate: true });
-  watch([realId, tab, hrange, hq.page, hq.size], loadHits, { immediate: true });
-  watch(() => q('hit'), loadHit, { immediate: true });
-  watch([ran, replayKey, () => remote.detail?.id], () => { if (ran.value && remote.detail?.id === realId.value && remote.replay?.k !== replayKey.value) fetchReplay(); }, { immediate: true });
+  watch(dynamicContextKey, () => { ++listSeq; ++replaySeq; for (const id of Object.keys(edits)) delete edits[id]; for (const id of Object.keys(titleNames)) delete titleNames[id]; defaultRuleId.value = ''; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = { confirmers: [], mappingSources: [], statuses: [] }; remote.hits = { items: [], total: 0 }; remote.hits7 = 0; remote.recent = []; remote.hit = null; remote.replay = null; remote.versions = []; remote.staged = []; running.value = false; }, { flush: 'sync' });
+  const loadMeta = guard(() => dynamicContextKey(), getRulesMeta, (m) => { remote.meta = m; });
+  watch(dynamicContextKey, loadMeta, { immediate: true, flush: 'sync' });
+  watch([dynamicContextKey, kw, trig, stf, lpage], loadList, { immediate: true, flush: 'sync' });
+  watch([dynamicContextKey, realId], () => { remote.detail = null; remote.hits = { items: [], total: 0 }; remote.recent = []; remote.hits7 = 0; remote.hit = null; remote.replay = null; ++replaySeq; running.value = false; remote.versions = []; remote.staged = []; loadDetail(); loadOverview(); }, { immediate: true, flush: 'sync' });
+  watch([dynamicContextKey, realId, tab, hrange, hq.page, hq.size], loadHits, { immediate: true, flush: 'sync' });
+  watch([dynamicContextKey, () => q('hit')], loadHit, { immediate: true, flush: 'sync' });
+  watch([dynamicContextKey, ran, replayKey, () => remote.detail?.id], () => { if (ran.value && remote.detail?.id === realId.value && remote.replay?.k !== replayKey.value) fetchReplay(); }, { immediate: true, flush: 'sync' });
 }
 const verCols = [
   { title: '版本', key: 'ver', width: 80 },
@@ -470,7 +503,7 @@ const verCols = [
       </div>
     </div>
 
-    <div class="panel ru-detail">
+    <div v-if="!live || realId" class="panel ru-detail">
       <DraftBanner v-if="isDraft && draftCR" :draft="draftCR"
         @submit="onDraftSubmit" @discard="onDraftDiscard" />
       <div class="ru-head">
@@ -659,16 +692,31 @@ const verCols = [
           <span class="c-warning">草稿把{{ metricBumped.map((m) => `${m.name}口径 v${m.from} → v${m.to}`).join('、') }}：口径升版后需回放试跑，确认命中变化再提交审核</span>
         </div>
         <div class="ru-tool">
-          <span class="t-12 c-3">时间范围</span>
-          <a-segmented v-model:value="rrange" :options="HRANGES" size="small" />
+          <a-segmented v-if="live" v-model:value="rmode" :options="[{ label: '当前数据推演', value: 'snapshot' }, { label: '历史事件回放', value: 'events' }]" size="small" />
+          <template v-if="!live || rmode === 'events'">
+            <span class="t-12 c-3">时间范围</span>
+            <a-segmented v-model:value="rrange" :options="HRANGES" size="small" />
+          </template>
           <span class="t-12 c-3">规则版本</span>
           <a-segmented v-model:value="rver" :options="VER_OPTS" size="small" />
           <a-tooltip :title="reason"><a-button size="small" :loading="running" :disabled="readonly" @click="runReplay">开始试跑</a-button></a-tooltip>
           <span class="ru-sp" />
-          <span class="t-12 c-3">用历史数据重新计算，不生成告警、不暂存动作</span>
+          <span class="t-12 c-3">只计算条件，不生成告警或动作</span>
         </div>
+        <a-alert v-if="replayError" type="error" show-icon :message="replayError" />
         <template v-if="result">
-          <div class="ru-stats">
+          <template v-if="realReplay">
+            <a-alert v-if="realReplay.unknown" type="warning" show-icon :message="`${realReplay.unknown} 个样本缺少有效输入，详见列表`" />
+            <div class="ru-stats">
+              <div><span class="t-12 c-2">可见样本</span><span class="t-16 fw-600 c-1 num">{{ realReplay.candidates }}</span></div>
+              <div><span class="t-12 c-2">已求值</span><span class="t-16 fw-600 c-1 num">{{ realReplay.evaluated }}</span></div>
+              <div><span class="t-12 c-2">条件满足</span><span class="t-16 fw-600 c-1 num">{{ realReplay.would }}</span></div>
+              <div><span class="t-12 c-2">无法求值</span><span class="t-16 fw-600 c-1 num">{{ realReplay.unknown }}</span></div>
+              <div v-if="realReplay.filtered"><span class="t-12 c-2">事件筛选排除</span><span class="t-16 fw-600 c-1 num">{{ realReplay.filtered }}</span></div>
+            </div>
+            <span class="t-12 c-3">计算于 {{ realReplay.ranAt }} · {{ rver === 'draft' ? '已保存草稿' : '当前规则' }} v{{ realReplay.ruleVersion }} <InfoTip :text="`${realReplay.notice} 分页固定本次计算时间，有效期10分钟；输入变化需重新试跑。`" /></span>
+          </template>
+          <div v-else class="ru-stats">
             <div><span class="t-12 c-2">实际命中（v{{ base.version }}）</span><span class="t-16 fw-600 c-1 num">{{ result.actual }}</span></div>
             <div><span class="t-12 c-2">试跑会命中（{{ rver === 'draft' ? `草稿 v${draftDef?.version}` : `当前 v${base.version}` }}）</span><span class="t-16 fw-600 c-1 num">{{ result.would }}</span></div>
             <div><span class="t-12 c-2">新增命中</span><span class="t-16 fw-600 num c-1">{{ result.added }}</span></div>
@@ -676,7 +724,7 @@ const verCols = [
             <div><span class="t-12 c-2">被去重 <InfoTip :text="`命中数只算会生成告警 / 通知的命中；去重键相同、在冷却期（${base.cooldown}）内的样本列为“被去重”，不计入`" /></span><span class="t-16 fw-600 num c-1">{{ result.deduped }}</span></div>
           </div>
           <div class="paged-scroll">
-            <a-table :columns="sampleCols" :data-source="samples.items" :pagination="false" size="middle" row-key="key" :locale="{ emptyText: '该时间范围内没有命中样本' }">
+            <a-table :columns="sampleCols" :data-source="samples.items" :pagination="false" size="middle" row-key="key" :locale="{ emptyText: realReplay?.candidates === 0 ? '没有可见的真实数据样本，无法据此判断规则效果' : '没有条件满足或无法求值的样本' }">
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'obj'"><ObjRef :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef></template>
                 <template v-else-if="column.key === 'dims'"><template v-if="dimsOf(record).length"><template v-for="(dm, i) in dimsOf(record)" :key="`${dm.objKind}:${dm.id}`">{{ i ? '、' : '' }}<ObjRef :kind="dm.objKind" :id="dm.id">{{ dm.label ?? dm.id }}</ObjRef></template></template><span v-else class="c-3">--</span></template>
@@ -693,14 +741,14 @@ const verCols = [
       <div v-else class="ru-body">
         <div class="ru-tool">
           <span class="t-12 c-2">共 {{ versions.length }} 个版本</span>
-          <InfoTip text="规则版本随本体整版发布；回滚会生成一张新的变更单，审核通过后生效。" />
+          <InfoTip text="规则版本随本体整版发布；当前尚未提供单条规则的版本对比和回滚接口。" />
         </div>
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'ver'"><span class="num">v{{ record.ver }}</span></template>
             <template v-else-if="column.key === 'status'"><a-badge :status="record.status === '草稿' ? 'warning' : 'default'" :text="record.status" /></template>
             <template v-else-if="column.key === 'op'">
-              <a-space><a>对比</a><a-tooltip v-if="record.status === '已替代'" :title="reason"><a :class="{ 'ru-dis': readonly }">回滚</a></a-tooltip></a-space>
+              <a-space><a-tooltip title="尚未提供规则版本对比接口"><a-button type="link" size="small" disabled>对比</a-button></a-tooltip><a-tooltip v-if="record.status === '已替代'" title="尚未提供规则版本回滚接口"><a-button type="link" size="small" disabled>回滚</a-button></a-tooltip></a-space>
             </template>
           </template>
         </a-table>

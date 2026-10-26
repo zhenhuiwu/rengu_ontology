@@ -4,18 +4,20 @@
  * 受变更单影响的条目显示“待重新认证 · 受 CR-xxxx 影响”。行点击打开抽屉（?cq=CQ-001）。
  * URL：?ckw=&cst=&cm=&cpage=
  */
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onBeforeUnmount } from 'vue';
+import { useAppStore } from '@/stores/app';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
-import { T_METRICS, certStatusText, metricLabel, planText, crById, type CertQa, type CertStatus } from '@/mock/qa-tuning';
+import { certStatusText, crById, type CertQa, type CertStatus } from '@/mock/qa-tuning';
+import { metricOf, metricLabel, planText, metricOptions } from './catalog';
 import { tuning, tuningTick, NOW, ME } from './state';
-import { qaReal, listCerts, getCert, certifyCert, toggleCert, putCertVariants, getTuningSummary } from '@/api/qa';
+import { qaReal, listCerts, getCert, certifyCert, toggleCert, putCertVariants, qaRequestOptions } from '@/api/qa';
 import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
-import type { PageResult } from '@/api/http';
+import { currentApiContext, type PageResult } from '@/api/http';
 import CrTag from './CrTag.vue';
 import MetricRef from './MetricRef.vue';
 import PlanView from './PlanView.vue';
@@ -38,27 +40,37 @@ const rows = computed(() => tuning.certs
     && (!stF.value || c.status === stF.value) && (!mF.value || c.plan.metric === mF.value))
   .slice().sort((a, b) => rank(a.status) - rank(b.status)));
 const pq = usePagedQuery({ defaultSize: 15, filters: [kw, stF, mF], prefix: 'c' });
-/* 真接口（开关 qa）：T3 列表 / T4 抽屉 / T1 待重新认证计数；写完 tuningTick+1 重拉 */
+/* 真接口（开关 qa）：T3 列表 / T4 抽屉；写完 tuningTick+1 重拉 */
 const real = qaReal();
+const contextKey = () => JSON.stringify(currentApiContext());
+let listSeq = 0;
+let detailSeq = 0;
+const app = useAppStore();
 const remote = ref<PageResult<CertQa>>({ items: [], total: 0, page: 1, size: 15 });
-const remoteRe = ref(0);
+const listLoading = ref(false);
 const remoteCur = ref<CertQa>();
 const loadErr = (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`加载认证问答失败：${(e as Error).message}`); };
 if (real) {
-  watch([kw, stF, mF, pq.page, pq.size, tuningTick], async () => {
+  watch(contextKey, () => { ++listSeq; ++detailSeq; remoteCur.value = undefined; remote.value = { items: [], total: 0, page: 1, size: pq.size.value }; }, { flush: 'sync' });
+  watch([kw, stF, mF, pq.page, pq.size, tuningTick, contextKey], async () => {
     if (!live.value) return;
+    const n = ++listSeq, key = contextKey(); listLoading.value = true; remote.value = { ...remote.value, items: [], page: pq.page.value, size: pq.size.value };
     try {
-      remote.value = await listCerts({ kw: kw.value || undefined, status: stF.value, metric: mF.value, page: pq.page.value, size: pq.size.value });
-      remoteRe.value = (await getTuningSummary()).recertCount;
-    } catch (e) { loadErr(e); }
+      const rows = await listCerts({ kw: kw.value || undefined, status: stF.value, metric: mF.value, page: pq.page.value, size: pq.size.value }, qaRequestOptions());
+      if (n !== listSeq || key !== contextKey() || !live.value) return;
+      remote.value = rows;
+      if (rows.page !== pq.page.value) pq.page.value = rows.page;
+    } catch (e) { if (n === listSeq && key === contextKey()) loadErr(e); }
+    finally { if (n === listSeq) listLoading.value = false; }
   }, { immediate: true });
-  watch([() => q('cq'), tuningTick], async ([id]) => {
-    if (!id || !live.value) { remoteCur.value = undefined; return; }
-    try { remoteCur.value = await getCert(id as string); } catch (e) { remoteCur.value = undefined; loadErr(e); }
-  }, { immediate: true });
+  watch([() => q('cq'), tuningTick, contextKey], async ([id]) => {
+    const n = ++detailSeq, key = contextKey(); remoteCur.value = undefined;
+    if (!id || !live.value) return;
+    try { const c = await getCert(id as string, qaRequestOptions()); if (n === detailSeq && key === contextKey()) remoteCur.value = c; } catch (e) { if (n === detailSeq && key === contextKey()) loadErr(e); }
+  }, { immediate: true, flush: 'sync' });
 }
+onBeforeUnmount(() => { ++listSeq; ++detailSeq; });
 const paged = computed(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
-const reCount = computed(() => (live.value ? remoteRe.value : tuning.certs.filter((c) => c.status === '待重新认证').length));
 const fail = (e: unknown) => message.error((e as Error).message);
 
 const cols = [
@@ -81,35 +93,37 @@ const open = (c: CertQa) => setQuery({ cq: c.id });
 const rowProps = (c: CertQa) => ({ class: c.id === q('cq') ? 'qt-row-on' : '', onClick: () => open(c) });
 
 async function certify(c: CertQa) {
-  const cr = c.cr ? crById(c.cr) : undefined;
-  const pending = cr && cr.status !== '已发布';
+  const context = contextKey();
+  const cr = !real && c.cr ? crById(c.cr) : undefined;
+  const pending = real ? !!metricOf(c.plan.metric).cr : cr && cr.status !== '已发布';
   const ok = await confirm.ask({
     title: c.status === '待认证' ? '认证问答' : '重新认证',
     target: `${c.id} ${c.question}`,
-    fields: [{ label: '绑定指标', value: metricLabel(c.plan.metric) }, { label: '语义计划', value: planText(c.plan) }, { label: '认证人', value: ME }],
-    impact: pending
-      ? `${cr!.id}「${cr!.title}」仍是“${cr!.status}”。现在认证会按当前口径 ${T_METRICS[c.plan.metric].version} 锁定回答；变更发布后仍需再次认证。`
+    fields: [{ label: '绑定指标', value: metricLabel(c.plan.metric) }, { label: '语义计划', value: planText(c.plan) }, { label: '认证人', value: real ? app.user.name : ME }],
+    impact: real ? c.note || (pending ? `指标受 ${metricOf(c.plan.metric).cr} 影响，发布后需重新认证。` : '按当前数据库指标口径认证。') : pending
+      ? `${cr!.id}「${cr!.title}」仍是“${cr!.status}”。现在认证会按当前口径 ${metricOf(c.plan.metric).version} 锁定回答；变更发布后仍需再次认证。`
       : '认证后，相同或相近的问题直接按此语义计划回答，并在回答上标注“已认证”。',
     okText: '认证',
   });
-  if (!ok) return;
+  if (!ok || context !== contextKey()) return;
   if (real) {
     try { const n = await certifyCert(c.id); tuningTick.value++; message.success(n.status === '待重新认证' ? `已按当前口径认证「${c.question}」，${n.cr} 发布后会再次提醒` : `已认证「${c.question}」`); } catch (e) { fail(e); }
     return;
   }
   c.status = '已认证'; c.certifier = ME; c.certifiedAt = NOW;
-  if (!pending) { c.cr = undefined; c.note = undefined; } else c.note = `已按 ${T_METRICS[c.plan.metric].version} 认证；${cr!.id} 发布后需再次认证`;
+  if (!pending) { c.cr = undefined; c.note = undefined; } else c.note = `已按 ${metricOf(c.plan.metric).version} 认证；${cr!.id} 发布后需再次认证`;
   if (pending) c.status = '待重新认证';
   message.success(pending ? `已按当前口径认证「${c.question}」，${cr!.id} 发布后会再次提醒` : `已认证「${c.question}」`);
 }
 async function toggle(c: CertQa) {
+  const context = contextKey();
   const stop = c.status !== '已停用';
   const ok = await confirm.ask({
     title: stop ? '停用认证问答' : '启用认证问答', target: `${c.id} ${c.question}`, danger: stop, okText: stop ? '停用' : '启用',
     fields: [{ label: '近 30 天命中', value: `${c.hits} 次` }],
     impact: stop ? '停用后此问题回到常规理解流程，回答不再标注“已认证”。' : '启用后恢复为已认证。',
   });
-  if (!ok) return;
+  if (!ok || context !== contextKey()) return;
   if (real) {
     try { await toggleCert(c.id, !stop); tuningTick.value++; message.success(`${stop ? '已停用' : '已启用'}「${c.question}」`); } catch (e) { fail(e); }
     return;
@@ -137,11 +151,11 @@ async function removeVariant(c: CertQa, v: string) {
   <div class="qt-filters">
     <a-input-search v-model:value="kw" allow-clear placeholder="搜索问题或同问法" class="qt-kw" />
     <a-select v-model:value="stF" allow-clear placeholder="状态" class="qt-sel" :options="STATUSES.map((s) => ({ value: s, label: s }))" />
-    <a-select v-model:value="mF" allow-clear placeholder="绑定指标" class="qt-sel2" :options="Object.values(T_METRICS).map((m) => ({ value: m.key, label: `${m.name} ${m.version}` }))" />
-    <span class="t-12 c-3 qt-hint">{{ reCount }} 条待重新认证；回答由本体查询模块按语义计划生成，问数不写 SQL</span>
+    <a-select v-model:value="mF" allow-clear placeholder="绑定指标" class="qt-sel2" :options="metricOptions.map((m) => ({ value: m.key, label: `${m.name} ${m.version}` }))" />
+    <span class="t-12 c-3 qt-hint">{{ real ? '已保存认证记录与语义计划，执行链路尚未直接消费认证记录' : '回答由本体查询模块按语义计划生成，问数不写 SQL' }}</span>
   </div>
   <div class="qt-table" :class="{ 'paged-scroll': pq.overflow.value }">
-    <a-table :locale="{ emptyText: '没有符合条件的认证问答' }" size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">
+    <a-table :locale="{ emptyText: '没有符合条件的认证问答' }" size="small" row-key="id" :columns="cols" :data-source="paged.items" :loading="listLoading" :pagination="false" :custom-row="rowProps">
       <template #bodyCell="{ column, record }">
         <span v-if="column.key === 'id'" class="num c-3">{{ record.id }}</span>
         <span v-else-if="column.key === 'question'" class="c-1" :title="record.question">{{ record.question }}</span>

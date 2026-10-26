@@ -5,7 +5,7 @@
  * 草稿逻辑用公共的 useDraftView('link')（已发布只读，唯一入口“发起变更”）；新建关系经公共 start 登记到所选变更单。
  */
 import InfoTip from '@/components/InfoTip.vue';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import ObjRef from '@/components/ObjRef.vue';
@@ -17,14 +17,17 @@ import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useAppStore } from '@/stores/app';
 import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import {
-  LINKS, LINK_OBJECTS, CARD_API, PATH_GROUPS, objById, objName,
+  LINKS, LINK_OBJECTS, CARD_API, PATH_GROUPS, objById as mockObjById, objName as mockObjName,
   type LinkType, type LinkStatus, type Cardinality, type QaPath,
 } from '@/mock/links';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
-import { useStaticCr } from './parts/useStaticCr';
+import { useStaticCr, useRealCrRecords, draftFields, draftRows } from './parts/useStaticCr';
+import { useStaticPage } from './parts/useStaticPage';
+import { isStaticReal, startAllocatedTarget, staticContextKey, fetchStaticDetail } from '@/api/static';
 
+const workflow = useRealCrRecords();
 const route = useRoute();
 const router = useRouter();
 const app = useAppStore();
@@ -33,14 +36,22 @@ const { readonly, reason } = useReadonly();
 const pad = (n: number) => String(n).padStart(2, '0');
 const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-const links = reactive<LinkType[]>(LINKS.map((l) => ({ ...l })));
+const baseline = shallowRef<LinkType[]>(isStaticReal() ? [] : LINKS);
+const links = reactive<LinkType[]>(baseline.value.map((l) => ({ ...l })));
+const firstId = ref('');
+const selectedId = computed(() => typeof route.query.link === 'string' ? route.query.link : firstId.value);
+const catalog = shallowRef<{ objects: typeof LINK_OBJECTS; links: LinkType[]; paths: typeof PATH_GROUPS }>({ objects: [], links: [], paths: [] });
+const objectRows = computed(() => isStaticReal() ? catalog.value.objects : LINK_OBJECTS);
+const pathRows = computed(() => isStaticReal() ? catalog.value.paths : PATH_GROUPS);
+const objName = (id: string) => isStaticReal() ? objectRows.value.find((o) => o.id === id)?.name ?? id : mockObjName(id);
+const objById = (id: string) => isStaticReal() ? objectRows.value.find((o) => o.id === id) : mockObjById(id);
 /** 查看历史版本时只列出该版本已发布的关系 */
 const visible = computed(() => {
   const ver = app.viewVersion;
   if (!readonly.value || !ver) return links;
   return links.filter((l) => l.status === '已发布' && !!l.since && l.since <= ver);
 });
-const visibleIds = computed(() => new Set(visible.value.map((l) => l.id)));
+const visibleIds = computed(() => new Set((isStaticReal() ? catalog.value.links : visible.value).map((l) => l.id)));
 
 // —— 列表筛选（写进 URL）——
 const q = (k: string) => (route.query[k] as string) || '';
@@ -50,7 +61,7 @@ const src = computed({ get: () => q('src'), set: (v) => setQ({ src: v || undefin
 const st = computed({ get: () => q('st'), set: (v) => setQ({ st: v || undefined }) });
 const SRC_OPTIONS = computed(() => [
   { value: '', label: '全部源对象' },
-  ...LINK_OBJECTS.filter((o) => visible.value.some((l) => l.from === o.id)).map((o) => ({ value: o.id, label: o.name })),
+  ...objectRows.value.filter((o) => (isStaticReal() ? catalog.value.links : visible.value).some((l) => l.from === o.id)).map((o) => ({ value: o.id, label: o.name })),
 ]);
 const ST_OPTIONS = [{ value: '', label: '全部状态' }, { value: '已发布', label: '已发布' }, { value: '草稿', label: '草稿' }, { value: '已驳回', label: '已驳回' }];
 const filtered = computed(() => visible.value.filter((l) =>
@@ -59,12 +70,16 @@ const filtered = computed(() => visible.value.filter((l) =>
 const LPAGE = 18;
 const lpage = ref(1);
 watch([kw, src, st], () => { lpage.value = 1; });
-const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
+const linkPage = useStaticPage<LinkType>(() => '/link-types', () => ({ q: kw.value, src: src.value, st: st.value }), lpage, LPAGE);
+watch(linkPage.items, (rows) => { if (isStaticReal() && !firstId.value && rows.length) firstId.value = rows[0].id; });
+const list = computed(() => isStaticReal() ? linkPage.items.value : filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
+const listTotal = computed(() => isStaticReal() ? linkPage.total.value : filtered.value.length);
 
 const apiOf = (l: LinkType) => l.api ?? l.id;
-const cur = computed(() => visible.value.find((l) => l.id === route.query.link) ?? visible.value[0]);
+const cur = computed(() => isStaticReal() ? links.find((l) => l.id === selectedId.value) : visible.value.find((l) => l.id === route.query.link) ?? visible.value[0]);
 // 选中项不在当前页时翻到它所在的页
 watch(() => cur.value?.id, (id) => {
+  if (isStaticReal()) return;
   const i = filtered.value.findIndex((l) => l.id === id);
   if (i >= 0) lpage.value = Math.floor(i / LPAGE) + 1;
 }, { immediate: true });
@@ -84,28 +99,39 @@ const pick = (id: string) => guard(() => {
 });
 
 // —— 草稿（公共 useDraftView，kind = link）——
-const dv = useDraftView('link', () => cur.value?.id ?? '');
+const targetId = () => isStaticReal() ? selectedId.value : cur.value?.id ?? '';
+const dv = useDraftView('link', targetId);
 const { draft, setView } = dv;
 // real 模式先写库（发起 / 加入、保存到草稿、提交、放弃），见 parts/useStaticCr.ts
-const cr = useStaticCr('link', () => ({ id: cur.value?.id ?? '', name: cur.value?.name, isNew: cur.value?.status === '草稿' }), dv);
+const cr = useStaticCr('link', () => ({ id: targetId(), name: cur.value?.name, isNew: cur.value?.status === '草稿' }), dv, workflow.reload);
 /** 只存在于草稿里的关系（新增的），直接看草稿 */
 const draftOnly = computed(() => cur.value?.status === '草稿');
 const isDraft = computed(() => dv.isDraft.value || (!readonly.value && !!draft.value && draftOnly.value));
-const canEdit = computed(() => isDraft.value);
+const canEdit = computed(() => isDraft.value && (!isStaticReal() || cr.head.value?.status === '草稿' && !cr.loading.value && !cr.error.value));
 const editTip = computed(() => (isDraft.value ? '' : !readonly.value && cur.value?.status === '已驳回' ? '变更单已驳回，请重新发起变更' : dv.editTip.value));
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const creating = ref(false);
+const pendingNewCr = ref<string>();
 const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
-async function start(opts: { join?: string; title?: string }) {
+async function start(opts: { join?: string; title?: string; desc?: string }) {
+  if (readonly.value) return;
   if (!creating.value) { await cr.start(opts); return; }
-  const n = links.filter((l) => l.id.startsWith('new_link_')).length + 1;
-  const nid = `new_link_${n}`;
-  const id = await cr.start(opts, { id: nid, isNew: true, name: '未命名关系' });
+  let nid: string, id: string | undefined, by: string, at: string;
+  if (isStaticReal()) {
+    const key = staticContextKey();
+    try {
+      const result = await startAllocatedTarget('link', opts, '未命名关系', pendingNewCr.value);
+      if (key !== staticContextKey()) return;
+      nid = result.target.id; id = result.crId; by = result.owner; at = result.updatedAt;
+      dv.start({ join: id, target: nid }); pendingNewCr.value = undefined; await workflow.reload(); if (key !== staticContextKey()) return;
+    } catch (e) { if (key !== staticContextKey()) return; pendingNewCr.value = (e as { crId?: string }).crId ?? pendingNewCr.value; message.error(`${e instanceof Error ? e.message : String(e)}${pendingNewCr.value ? `（草稿 ${pendingNewCr.value} 已保留，可重试）` : ''}`); return; }
+  } else {
+    const n = links.filter((l) => l.id.startsWith('new_link_')).length + 1;
+    nid = `new_link_${n}`; id = await cr.start(opts, { id: nid, isNew: true, name: '未命名关系' }); by = CURRENT_USER; at = nowText();
+  }
   if (!id) return;
-  const from = src.value || cur.value?.from || 'order';
-  const by = CURRENT_USER;
-  const at = nowText();
+  const from = src.value || cur.value?.from || (isStaticReal() ? '' : 'order');
   const nl: LinkType = {
     id: nid, api: '', name: '未命名关系', from, to: '', card: 'N : 1', key: '', fromProp: '', toProp: '', join: '',
     reverse: '', nullable: false, desc: '', status: '草稿', cr: id, owner: by, usage: [],
@@ -113,9 +139,9 @@ async function start(opts: { join?: string; title?: string }) {
   };
   links.unshift(nl);
   router.replace({ query: { ...route.query, link: nl.id, tab: 'def', mode: undefined, view: 'draft', drawer: undefined, drawer2: undefined, src: undefined, st: undefined, q: undefined } })
-    .then(() => beginEdit());
+    .then(async () => { if (isStaticReal()) { await nextTick(); await cr.reload(); } if (canEdit.value) beginEdit(); });
 }
-const rejectedCR = computed(() => (cur.value?.status === '已驳回' ? CHANGE_REQUESTS.find((c) => c.id === cur.value.cr) : undefined));
+const rejectedCR = computed(() => (cur.value?.status === '已驳回' ? (isStaticReal() ? workflow.rows.value : CHANGE_REQUESTS).find((c) => c.id === cur.value?.cr) : undefined));
 
 // —— 定义：草稿里可编辑 ——
 interface Form { name: string; api: string; to: string; card: Cardinality; fromProp: string; toProp: string; via: string; reverse: string; nullable: boolean; desc: string }
@@ -124,6 +150,7 @@ const form = reactive<Form>({ name: '', api: '', to: '', card: 'N : 1', fromProp
 const snap = ref('');
 function beginEdit() {
   const l = cur.value;
+  if (!l) return;
   Object.assign(form, { name: l.name, api: apiOf(l), to: l.to, card: l.card, fromProp: l.fromProp, toProp: l.toProp, via: l.via ?? '', reverse: l.reverse, nullable: l.nullable, desc: l.desc });
   snap.value = JSON.stringify(form);
   editing.value = true;
@@ -134,6 +161,7 @@ const guard = useUnsavedGuard(dirty);
 const FIELD_LABEL: Record<keyof Form, string> = { name: '名称', api: 'API 名', to: '目标对象', card: '基数', fromProp: '本端属性', toProp: '对端属性', via: '中间表', reverse: '反向名称', nullable: '可为空', desc: '说明' };
 async function save() {
   const l = cur.value;
+  if (!l) return;
   const key = form.card === 'N : M' ? `经 ${form.via || '（未选择）'} 中间表` : form.to ? `${form.fromProp} = ${form.to}.${form.toProp}` : '';
   // real：def 段，一个字段一行（同字段再次保存保留最早的 before，改回原值的行去掉）
   const was = JSON.parse(snap.value) as Form;
@@ -143,27 +171,28 @@ async function save() {
   // 新建关系（草稿）带上源对象一行，发布写回建 link_type 要用（后端 link/def 钩子）
   if (l.status === '草稿' && changes.length && l.from) changes.unshift({ key: 'from' as keyof Form, before: '', after: l.from, type: '关系', field: '源对象' });
   if (!(await cr.save('def', changes))) return;
-  Object.assign(l, { name: form.name, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
-  if (l.status === '草稿') l.api = form.api;
+  if (!isStaticReal()) Object.assign(l, { name: form.name, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
+  if (!isStaticReal() && l.status === '草稿') l.api = form.api;
   editing.value = false;
   message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
 }
 const cancelEdit = () => guard(() => { editing.value = false; });
 const CARDS: Cardinality[] = ['N : 1', '1 : N', '1 : 1', 'N : M'];
 const CARD_OPTIONS = CARDS.map((k) => ({ value: k, label: `${k}（${CARD_API[k]}）` }));
-const OBJ_OPTIONS = LINK_OBJECTS.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）` }));
+const OBJ_OPTIONS = computed(() => objectRows.value.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）` })));
 
 const statusColor = (s: LinkStatus) => (s === '草稿' ? 'default' : s === '已驳回' ? 'error' : 'default');
 const statusClass = (s: LinkStatus) => (s === '草稿' ? 'c-3' : s === '已驳回' ? 'c-error' : 'c-3');
 /** 能解析出抽屉的对象类型（储值卡只在草稿里，没有对象详情） */
-const canRef = (id: string) => !!id && !objById(id)?.draft;
-const groupsOf = (id: string) => PATH_GROUPS
+const canRef = (id: string) => !!id && !(objById(id) as { draft?: boolean } | undefined)?.draft;
+const groupsOf = (id: string) => pathRows.value
   .map((g) => ({ ...g, paths: g.paths.filter((p) => p.links.every((x) => visibleIds.value.has(x))) }))
   .filter((g) => g.paths.length > 1 && g.paths.some((p) => p.links.includes(id)));
 const curGroups = computed(() => (cur.value ? groupsOf(cur.value.id) : []));
 
 const CHECKS = computed(() => {
   const l = cur.value;
+  if (!l) return;
   const rows: { code: string; name: string; result: '通过' | '警告' | '阻断'; note: string }[] = [];
   rows.push(!l.to
     ? { code: 'V3', name: '两端对象', result: '阻断', note: '还没有选择目标对象' }
@@ -182,6 +211,7 @@ const checkClass = (r: string) => (r === '阻断' ? 'c-error' : r === '警告' ?
 
 const DEF_ITEMS = computed(() => {
   const l = cur.value;
+  if (!l) return;
   return [
     { k: '基数', v: `${l.card}（${CARD_API[l.card]}）` },
     { k: '允许为空', v: l.nullable ? '是：源端记录可以没有关联的目标，没有的不参与关联' : '否：源端每条记录都必须关联到目标' },
@@ -198,11 +228,12 @@ const hitWarn = (h: number) => h < 99.5;
 const orphanCols = [{ title: '源端关联键', dataIndex: 'key', width: 200 }, { title: '记录数', key: 'count', width: 120, align: 'right' as const }, { title: '原因', dataIndex: 'reason' }];
 
 // —— 问数路径 ——
-const linkName = (id: string) => links.find((l) => l.id === id)?.name ?? id;
+const linkName = (id: string) => (isStaticReal() ? catalog.value.links : links).find((l) => l.id === id)?.name ?? id;
 const chain = (p: QaPath) => {
   const steps: { obj: string; via?: string }[] = [];
   p.links.forEach((id, i) => {
-    const l = links.find((x) => x.id === id)!;
+    const l = (isStaticReal() ? catalog.value.links : links).find((x) => x.id === id);
+    if (!l) return;
     if (i === 0) steps.push({ obj: l.from });
     steps.push({ obj: l.to, via: l.name });
   });
@@ -211,12 +242,19 @@ const chain = (p: QaPath) => {
 const curPathCount = computed(() => curGroups.value.reduce((n, g) => n + g.paths.length, 0));
 
 // —— 使用情况 / 版本历史 ——
-const up = ref(1);
-watch(() => cur.value?.id, () => { up.value = 1; });
+const up = ref(1), hpage = ref(1);
+watch(() => cur.value?.id, () => { up.value = 1; hpage.value = 1; });
+const historySize = ref(10);
+watch(historySize, () => { hpage.value = 1; });
+const historyPage = useStaticPage<LinkType['history'][number]>(() => targetId() ? `/link-types/${encodeURIComponent(targetId())}/history` : '', () => ({}), hpage, historySize, () => tab.value === 'history' && !draftOnly.value);
 const usageCols = [{ title: '类型', dataIndex: 'type', width: 96 }, { title: '名称', key: 'name', width: 320 }, { title: '使用方式', dataIndex: 'note' }];
+const usageSize = ref(10);
+watch(usageSize, () => { up.value = 1; });
+const usagePage = useStaticPage<LinkType['usage'][number]>(() => targetId() ? `/link-types/${encodeURIComponent(targetId())}/usage` : '', () => ({}), up, usageSize, () => tab.value === 'usage' && !draftOnly.value);
 const usageSummary = computed(() => {
+  if (isStaticReal()) return `共 ${usagePage.total.value} 项使用`;
   const m = new Map<string, number>();
-  cur.value.usage.forEach((u) => m.set(u.type, (m.get(u.type) ?? 0) + 1));
+  (cur.value?.usage ?? []).forEach((u) => m.set(u.type, (m.get(u.type) ?? 0) + 1));
   return [...m].map(([k, v]) => `${k} ${v}`).join(' · ');
 });
 const histCols = [
@@ -249,12 +287,17 @@ onMounted(() => {
 });
 onBeforeUnmount(() => ro?.disconnect());
 const PAD = 40;
-const pt = (id: string) => { const [fx, fy] = POS[id] ?? [0.5, 0.5]; return { x: PAD + fx * (gw.value - PAD * 2), y: PAD / 2 + fy * (gh.value - PAD) }; };
-const graphLinks = computed(() => filtered.value.filter((l) => l.to && POS[l.from] && POS[l.to]));
+const positions = computed<Record<string, [number, number]>>(() => {
+  if (!isStaticReal()) return POS;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(objectRows.value.length))), rows = Math.max(1, Math.ceil(objectRows.value.length / cols));
+  return Object.fromEntries(objectRows.value.map((o, i) => [o.id, [(i % cols + 0.5) / cols, (Math.floor(i / cols) + 0.5) / rows]]));
+});
+const pt = (id: string) => { const [fx, fy] = positions.value[id] ?? [0.5, 0.5]; return { x: PAD + fx * (gw.value - PAD * 2), y: PAD / 2 + fy * (gh.value - PAD) }; };
+const graphLinks = computed(() => (isStaticReal() ? catalog.value.links.filter((l) => (!src.value || l.from === src.value) && (!st.value || l.status === st.value) && (!kw.value || l.name.includes(kw.value) || apiOf(l).includes(kw.value) || objName(l.from).includes(kw.value) || objName(l.to).includes(kw.value))) : filtered.value).filter((l) => l.to && positions.value[l.from] && positions.value[l.to]));
 const graphNodes = computed(() => {
   const used = new Set<string>();
-  visible.value.forEach((l) => { used.add(l.from); if (l.to) used.add(l.to); });
-  return LINK_OBJECTS.filter((o) => used.has(o.id) && POS[o.id]).map((o) => ({ ...o, ...pt(o.id) }));
+  (isStaticReal() ? graphLinks.value : visible.value).forEach((l) => { used.add(l.from); if (l.to) used.add(l.to); });
+  return objectRows.value.filter((o) => used.has(o.id) && positions.value[o.id]).map((o) => ({ ...o, ...pt(o.id) }));
 });
 const trim = (from: { x: number; y: number }, to: { x: number; y: number }) => {
   const dx = to.x - from.x; const dy = to.y - from.y;
@@ -290,6 +333,39 @@ const isEnd = (id: string) => cur.value && (cur.value.from === id || cur.value.t
 const hoverEdge = ref('');
 const clickNode = (id: string) => { if (canRef(id)) openDrawer('object-type', id); };
 const toDetail = () => guard(() => setQ({ mode: undefined }));
+
+// Rebuild from the published baseline on every draft/view transition, never from a previous CR.
+watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
+  if (!isStaticReal()) return;
+  const base = structuredClone(baseline.value);
+  const target = cr.head.value?.targets.find((t) => t.kind === 'link' && t.id === targetId());
+  if (target?.isNew && !base.some((l) => l.id === target.id)) base.push({ id: target.id, api: '', name: target.name ?? '', from: '', to: '', card: 'N : 1', key: '', fromProp: '', toProp: '', join: '', reverse: '', nullable: false, desc: '', status: '草稿', cr: cr.head.value!.id, owner: cr.head.value!.owner, usage: [], history: [] });
+  if (isDraft.value) {
+    const item = base.find((l) => l.id === targetId());
+    if (item) {
+      Object.assign(item, draftFields(cr.items.value, 'def'));
+      item.key = item.card === 'N : M' ? `经 ${item.via ?? ''} 中间表` : item.to ? `${item.fromProp} = ${item.to}.${item.toProp}` : '';
+    }
+  }
+  links.splice(0, links.length, ...base);
+});
+
+let definitionSeq = 0, catalogSeq = 0;
+const definitionError = ref(''), catalogError = ref('');
+watch(staticContextKey, async () => {
+  const n = ++catalogSeq, key = staticContextKey(); catalogError.value = '';
+  if (!isStaticReal()) return;
+  try { const data = await fetchStaticDetail<typeof catalog.value>('/link-types/catalog'); if (n === catalogSeq && key === staticContextKey()) catalog.value = data; }
+  catch (e) { if (n === catalogSeq && key === staticContextKey()) catalogError.value = e instanceof Error ? e.message : String(e); }
+}, { immediate: true });
+watch(() => JSON.stringify([selectedId.value, staticContextKey()]), async () => {
+  const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value; definitionError.value = '';
+  if (!isStaticReal() || !id || cr.head.value?.targets.some((t) => t.kind === 'link' && t.id === id && t.isNew)) return;
+  try { const data = await fetchStaticDetail<LinkType>(`/link-types/${encodeURIComponent(id)}`); if (n === definitionSeq && key === staticContextKey() && id === selectedId.value) baseline.value = [...baseline.value.filter((l) => l.id !== id), data]; }
+  catch (e) { if (n === definitionSeq && key === staticContextKey() && id === selectedId.value && !cr.head.value?.targets.some((t) => t.kind === 'link' && t.id === id && t.isNew)) definitionError.value = e instanceof Error ? e.message : String(e); }
+}, { immediate: true });
+onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
+
 </script>
 
 <template>
@@ -309,7 +385,9 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
           <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="lt-sel" />
         </div>
       </div>
-      <ul class="lt-items">
+      <a-alert v-if="linkPage.error.value || definitionError || catalogError" type="error" :message="linkPage.error.value || definitionError || catalogError" show-icon />
+      <div v-if="linkPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
+      <ul class="lt-items" :aria-busy="linkPage.loading.value">
         <li v-for="l in list" :key="l.id" :class="{ active: l.id === cur?.id }" :title="`${l.name} · ${objName(l.from)} → ${l.to ? objName(l.to) : '未选择'} · ${l.card}`" @click="pick(l.id)">
           <div class="lt-row">
             <span class="t-14 lt-name lt-ell">{{ l.name }}</span>
@@ -319,7 +397,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
         </li>
       </ul>
       <div class="lt-foot">
-        <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" unit="条" class="lt-pager" empty-text="没有匹配的关系" />
+        <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="条" class="lt-pager" empty-text="没有匹配的关系" />
       </div>
     </div>
 
@@ -372,7 +450,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
 
     <!-- 详情 -->
     <div v-else-if="cur" class="panel lt-detail">
-      <DraftBanner v-if="isDraft && draft" :draft="draft"
+      <DraftBanner v-if="isDraft && draft && (!isStaticReal() || cr.head.value?.status === '草稿')" :draft="draft"
         @submit="cr.submit" @discard="draftOnly ? message.info('这条关系只在草稿里，放弃请到变更单处理') : cr.discard()" />
       <div class="lt-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
@@ -570,8 +648,9 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
 
       <!-- 使用情况 -->
       <div v-else-if="tab === 'usage'" class="lt-body">
+        <a-alert v-if="usagePage.error.value" type="error" :message="usagePage.error.value" show-icon />
         <div class="t-14 c-2">{{ cur.usage.length ? `共 ${cur.usage.length} 项依赖本关系：${usageSummary}` : '暂无指标、认证问答、视图或规则依赖本关系' }}</div>
-        <a-table v-if="cur.usage.length" :columns="usageCols" :data-source="cur.usage.slice((up - 1) * 10, up * 10)" :pagination="false" size="middle" row-key="name">
+        <a-table v-if="isStaticReal() ? usagePage.total.value : cur.usage.length" :columns="usageCols" :data-source="isStaticReal() ? usagePage.items.value : cur.usage.slice((up - 1) * usageSize, up * usageSize)" :loading="usagePage.loading.value" :pagination="false" size="middle" row-key="name">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <ObjRef v-if="record.hover" :kind="record.hover.kind" :id="record.hover.id">{{ record.name }}</ObjRef>
@@ -579,13 +658,14 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
             </template>
           </template>
         </a-table>
-        <AppPagination v-model:page="up" variant="full" :total="cur.usage.length" :size="10" unit="条" :empty="false" />
+        <AppPagination v-model:page="up" variant="full" :total="isStaticReal() ? usagePage.total.value : cur.usage.length" v-model:size="usageSize" unit="条" :empty="false" />
         <div class="t-12 c-3">修改或下线本关系时，以上对象会出现在变更单的影响分析里；已发布的 API 名不可删除或改名（V7）。</div>
       </div>
 
       <!-- 版本历史 -->
       <div v-else class="lt-body">
-        <a-table :columns="histCols" :data-source="cur.history" :pagination="false" size="middle" :row-key="(r: any) => r.ver + (r.cr ?? '') + r.at">
+        <a-alert v-if="historyPage.error.value" type="error" :message="historyPage.error.value" show-icon />
+        <a-table :columns="histCols" :data-source="isStaticReal() ? historyPage.items.value : cur.history.slice((hpage - 1) * historySize, hpage * historySize)" :loading="historyPage.loading.value" :pagination="false" size="middle" :row-key="(r: any) => r.ver + (r.cr ?? '') + r.at">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'cr'">
               <a v-if="record.cr" class="num" @click="crLink(record.cr)">{{ record.cr }}</a>
@@ -597,10 +677,11 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
           </template>
         </a-table>
         <div class="t-12 c-3">关系定义只随本体整版发布生效；回滚会生成新的变更单，经审核后随下一次发布生效。</div>
+        <AppPagination v-model:page="hpage" variant="full" :total="isStaticReal() ? historyPage.total.value : cur.history.length" v-model:size="historySize" :empty="false" />
       </div>
     </div>
   </div>
-  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" :title-placeholder="creating ? '例如：会员持有储值卡' : undefined" @ok="start" />
+  <StartChangeModal v-model:open="changeOpen" :target-name="pendingNewCr && creating ? `${changeTarget}（重试保留草稿 ${pendingNewCr}）` : changeTarget" :title-placeholder="creating ? '例如：会员持有储值卡' : undefined" @ok="start" />
 </template>
 
 <style scoped>

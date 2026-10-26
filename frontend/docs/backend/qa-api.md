@@ -1,5 +1,13 @@
 # 智能问数：后台接口、操作流程与种子数据（v0.3 草案）
 
+## 2026-10-26 旧对象API真实数据修订（覆盖下方演示回答/派生数据说明）
+
+- O2/O3业务记录只来自`store/product/biz_order/order_line`及原行级过滤，不再在响应中追加内存`OBJ_EXTRA_STORES`。已由biz种子入库的扩充门店照常保留；未配置的门店sales列为null，CSV为空，不按ID随机生成销售额。
+- O4 `/scoped-ask`仅保留明确的基表汇总请求：订单「合计/实付金额合计/订单汇总」、商品「商品汇总/平均零售价」。返回依据明确为当前可见基表记录汇总、未绑定指标口径；已选ID去重，空ID集合不改成全部。其余范围问答/门店销售比较/排名/历史/预测没有真实分析实现，返回503 `DATA_NOT_CONFIGURED`，不返回演示答案或貌似完成的零结果；单对象先查真实存在及行级范围，范围外仍403。ObjAskModal显示持续错误并保留输入，网络失败也不回演示答案，身份/预览变化及关闭使旧响应失效。
+- O5仅保留真实基表字段和当前可见订单可验证汇总（不是“近7天”或“9月”数据）；`kpis[].caliber=null`、`analyticsConfigured=false`、`analyticsNote`说明未绑定指标/历史/预测，`quickQuestions=[]`，不伪造数据截止。region无真实业务绑定返回503 `DATA_NOT_CONFIGURED`，不当作无权限403。
+- O6保留真实同城门店、订单与订单行商品关系，删除随机“常售商品/销量”及固定“所属华东大区”。O7仅展示订单已有创建/出库时间，不把当前状态推测为支付/取消发生时间；门店/商品历史返回空列表、`configured=false`及未配置说明。O9未接对象级真实发起链，验证对象可见后返回[]，不生成审批人/参数/成功状态。
+- 测试：`test_qa_objects.py`、`test_qa_objects_db_only.py`、`test_qa_explore.py`共37通过；`node scripts/check-object-ask.mjs`与typecheck通过。mock文件及开发库记录均未改。
+
 > 依据：`/workspace/ui-vue` master（`b27758b`）的前端代码与 mock。v0.3 在 v0.2 基础上按 PDE 两轮条件通过意见修订（代理主键 + `code`、只读 403 `READONLY`、会话口径与回答口径分开等），并按本体小白复审 D′ 和骨架 `0c35c1d`（PDE 已过；`app/common/sql_guard.py`、`app/common/auth.py`、`app/common/outbox.py`、`app/db/session.py`、`app/core/errors.py`、`app/modules/biz/`、`app/contracts/versioning.py`、`app/seeds/registry.py`）对齐；行级范围映射按静态 `static-api.md` §1.5（master `443c009`）。v0.2 按 PDE 评审和 `api-index.md`（pde 分支 `97e86e9`）§5.4 修订：分页改 `size`；W3 去掉游标；X1/X2 改成动态模块的 `action-runs:stage` / `:confirm`；字段名和枚举值跟前端 mock 一致；第 10 节补全交互；新增第 12 节 [推断] 清单。
 > 范围：问数工作台、我的页面与模板库、对象搜索、对象详情（含「带范围提问」浮层）、问数调优（4 个页签），共 **5 个路由**。
 > 编号：页面 R1–R5；接口 W(工作台)/P(页面)/O(对象)/T(调优)/X(外部模块)。
@@ -81,7 +89,7 @@
 | O2 `POST /objects/{kind}/search` | 放行 | 放行 | 纯查询 |
 | O3 `POST /objects/{kind}/export` | 放行 | 不放行（`EXPORT_FORBIDDEN`） | 只生成文件，不写业务表（审计照写） |
 | O4 `POST /scoped-ask` | 不放行（跟前端 askOff 一致：历史版本下浮层里拦） | 放行 | 预览下不落会话、不进 `qa_query_log` 和高频统计 |
-| W16 `POST /permission-requests` | 放行 | 放行 | 照前端（申请按钮和抽屉都不判断只读），跟 api-index §8.1-9 一致；写 `qa_permission_request`。预览下申请人记谁见第 12 节 [推断] |
+| W16 `POST /permission-requests` | 拒 | 拒 | 真实持久写入，history/preview统一403 READONLY；OUT_OF_SCOPE允许在可写模式申请 |
 | W6 `POST /sessions/{sid}/turns` | 不放行 | **[待用户定]**：用户定了允许预览提问，就按「不落库」方式加进白名单 | 见下 |
 | W9 `POST /turns/{tid}:recalc` | 不放行 | 不放行 | 会改轮次的口径，落库 |
 
@@ -229,14 +237,14 @@
 | W7 | `GET /turns/{tid}/stream` | `Last-Event-ID` | **SSE**，见 3.1 | `QaAnswer.vue`、`QaStoreAnswer.vue` |
 | W8 | `POST /turns/{tid}:cancel` | — | **[第二期]** 中止生成（前端还没有停止按钮） | — |
 | W9 | `POST /turns/{tid}:recalc` | `{caliber: ex\|in\|both}` | 澄清条里切换「不含税 / 含税 / 两者对比」：用同一份语义计划只换指标，**同步返回** `Answer`（不流式），记成这一轮的一个变体 | `QaAnswer` `caliber` 单选 |
-| W10 | `GET /turns/{tid}/result` | `page`、`size=10`（URL `?tblPage=`） | `{columns, items, total, page, size, summary}`；超过 10 行才分页；`summary` 按**全部数据**算，不是只算当前页 | `QaStoreAnswer`（`QA_EC_STORES` 38 行） |
+| W10 | `GET /turns/{tid}/result` | `page,size` | `{columns,items,total,page,size,summary}`；仅已持久化answer.table，未保存表格422 TURN_NO_RESULT，空表保留表头 | QaTurn.snapshot |
 | W11 | `GET /turns/{tid}/export` | `format=xlsx\|csv` | 文件，导出全部行，写审计；预览时返回 `EXPORT_FORBIDDEN` [推断：前端导出按钮没有判断预览] | `QaStoreAnswer.onExport` |
 | W12 | `PUT /turns/{tid}/vote` | `{vote: 'up'\|'down'\|''}`（跟 `QaAnswer.vote` 一致，`''` = 取消） | 赞和踩只能选一个，再点一次取消（传 `''`）。**踩**会在问数调优生成一条 `open` 反馈，取消踩时如果还没被处理就撤掉这条反馈 [推断] | `QaAnswer.onVote` |
 | W13 | `GET /favorites` | `q`、`page`、`size=10` | `QaFavorite{id,question,uses,lastUsed}`；左栏贴底取前 3 条（贴底条目没有点击动作）。前端抽屉现在是一次拿全部、本地搜索和分页（每页 10），后台按分页接口实现，前端切真接口时改传参 | `QA_FAVORITE_LIST` |
 | W14 | `POST /favorites` | `{question}` | **[第二期]** 前端还没有「加入常用」的入口；第一期 `uses`、`lastUsed` 由提问命中时累加 [推断] | — |
 | W15 | `DELETE /favorites/{id}` | — | 「移出」 | `QaListDrawer.remove` |
-| W16 | `POST /permission-requests` | `{scope, object, reason(≤200, 必填), duration, sourceTurnId}`。**`duration` 转换**：前端单选的值是显示文字 `QA_APPLY.durations` = `'30 天'\|'90 天'\|'180 天'`（默认 `'90 天'`），提交时取数字部分转成天数整数 `30\|90\|180`；后台只收整数，其他值返回 `VALIDATION_FAILED` | `{id, status:'待审批', approver}`；审批人按申请范围路由给数据负责人；这一轮改成「已申请 · 待审批」 | `QA_APPLY`、`QaApplyDrawer` |
-| W17 | `GET /session-options` | — | `{scopes:[{value,label}], calibers:[{value,label}], metric:{ex:{id,name,version}, in:{id,name,version}}}`：`scopes`/`calibers` 读 `qa_session_option`（`kind` = scope / caliber，按 `sort_order`），`metric` 按 `QA_METRIC` 的映射连静态 `metric` 取；输入框的范围、口径下拉用它（澄清条的 ex/in/both 不走这里，见 1.3） | `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
+| W16 | `POST /permission-requests` | `{scope, object, reason, duration:30/90/180, sourceTurnId?}`；文本拒NUL/非法Unicode，必填项去空白，来源必须owned | `{id,status:待审批,approver:null}`；真实审批路由未配，等待分配，不冒称固定审批人；OUT_OF_SCOPE可申请；history/preview拒绝 | QaApplyDrawer |
+| W17 | `GET /session-options` | — | `{scopes:[{value,label}], calibers:[{value,label}], metric:{ex:{id,name,version}, in:{id,name,version}}}`：`scopes`/`calibers` 读 `qa_session_option`（`kind` = scope / caliber，按 `sort_order`），`metric` 按旧ex/in标识映射读取真实 `metric` 名称/版本，缺指标不返回该项；输入框的范围、口径下拉用它（澄清条的 ex/in/both 不走这里，见 1.3） | `QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS`、`QA_METRIC` |
 
 右栏（当前对象摘要、状态时间线、可执行动作）用 R4 的 `O5/O7/O9`（`kind=region`）。右栏「摘要 / 指标 / 关联」页签只切换前端本地状态，内容不变，不调接口；时间线「全部」链接**没有点击处理**，不调接口 [第二期]。抽屉 `?drawer=region:REG-EC` 是公共的 DetailDrawer，内容用 O5 `view=drawer`。「我的页面 · 全部」抽屉和「固定到页面」下拉用 `P1 GET /pages?view=brief`（抽屉里每行的「打开」**没有点击处理**，不调接口）；「固定」用 `P7`；「把会话整理成页面」跳到 `/use/qa/pages?newName=标题`，用 `P2` 新建。
 
@@ -249,7 +257,7 @@
 - W16 返回 201 `{id, status:'待审批', approver}`；申请号 `AP` + 4 位序号 [推断]；审批人第一期固定取 `QA_APPLY.approver`（按范围路由待 admin 权限审批流）[推断]；`sourceTurnId` 不是有效用户自己会话里的轮次 → 404；`duration` 只收 30/90/180（其他 422）；只读白名单（`?ver=` / `?previewAs=` 都放行，`readonly_extra`）。申请人记有效用户（预览时 = 被预览人，跟轮次归属一致；第 12 节 #4 仍待定）[推断]。W3 里越权轮次若有待审批申请，带 `applied: true`（前端显示「已申请 · 待审批」，刷新后保留）[推断]；`?apply=1` 刷新复现时没有轮次号，按本会话最后一个未申请的越权轮次提交 [推断]。
 - W6 生成的 SQL 过了网关但执行报错（列不存在、`statement_timeout`）→ 422 `QA_SQL_FAILED`，不落轮次，前端提示「生成的查询执行失败，请换个问法再试」并把问题放回输入框 [推断]。
 - W9 只对主回答卡（`card=main`）生效，其他卡 422 `VALIDATION_FAILED`；只把口径记成这一轮的变体（`qa_turn.caliber_variant`），返回 W3 同形的 `answer`（带 `caliber`），W3 里主卡的 `answer.caliber` 也带上；含税数值仍由前端按 `TAX_RATE` 同一公式换算（同 `QaAnswer.inTax`）[推断]。不是自己会话里的轮次 → 404。
-- W10 只对门店表那一轮（`card=store`）和链路表格回答（`card=table`）生效，其他 422。门店表的行取种子 `QA_EC_STORES`（38 行，同前端 mock），`summary = {count, sales, mom, orders}` 按全部行算（`mom` = 合计 / 上期合计 − 1，同 `QaStoreAnswer`）[推断]；链路表格取快照里的 `table`，`summary = {text}`。页码越界回落到最后一页（P10）。GET，`?ver` / `?previewAs` 下放行。
+- W10/W11仅读已持久化answer.table的columns/items；旧store/main卡未存表格时422 TURN_NO_RESULT，不从QA_EC_STORES补演示行。summary只回已有快照文本，空表保留表头，页码越界回落最后一页。
 - W11 同 W10 的行，导出全部行；`xlsx`（缺省）用标准库写最小 OOXML（不加依赖）、`csv` 带 BOM（Excel 直接打开不乱码）；文件名取 `exportFile`（如「门店销售额」）加扩展名，`Content-Disposition: attachment; filename*=UTF-8''…`；写审计 `qa.turn.export`；预览中 403 `EXPORT_FORBIDDEN`（第 12 节 #2）[推断]。前端导出按钮不判断预览，预览时点了提示「导出失败：没有导出权限」。
 - W12 返回 `{id, vote}`，W3 里这一轮带 `vote`（没投不带）。新踩 → 生成一条 `open` 反馈（`FB-` + 最大序号 + 1；问题 = 这一轮问题、回答 = `text` / `metric`（主卡用「期间 + 大区」）；修正方式缺省「认证问答」、修正内容缺省 = 问题）[推断]；从踩改成赞或取消 → 撤掉这一轮还是 `open` 的反馈（已处理的保留）[推断]；重复踩不重复生成。
 - X1/X2/X2b（开关 `dynamic`）：工作台「建议动作」/ 右栏「发起」先 `POST /action-runs:stage`（`source = {type:'问数', session, sessionTitle}`，对象 = 客户群 `SEG-EC-60D`「华东大区 · 近 60 天未复购」，参数 = 确认卡上的参数文案）[推断]，确认卡里的动作类型版本、审批人、写回系统、幂等键换成 stage 返回值（影响、预算、提交条件三行动态没有返回，仍是前端文案）；「确认提交」→ `:confirm`，右栏变「待审批」并可点击跳动作中心 `/use/ops/actions?tab=records&act=编号`；「取消」→ `:withdraw {reason:'确认卡取消'}`。`?confirm=1` 刷新复现时会再 stage 一条 [推断]。
@@ -457,8 +465,8 @@ O1–O3 是按门店 / 商品 / 订单写死的旧接口；通用版按对象类
 
 | # | 方法 路径 | 入参 | 出参 / 规则 | mock 来源 |
 |---|---|---|---|---|
-| T1 | `GET /tuning/summary` | `ver?`（查询参数，带了即只读） | `{version, dataAsOf, recertCount, openFeedback, uncertFreq, evalTotal}`，即页签上的计数；`dataAsOf` 按 `now()` | `QaTuning.vue` |
-| T2 | `GET /tuning/plan-options` | — | `{metrics:[{key,name,version,cr?}], dims[], times[]}`；`cr` 是影响该指标的未发布 CR；`key` 是 `T_METRICS` 的键 | `qa-tuning.ts` · `T_METRICS`、`TUNING_DIMS`、`TUNING_TIMES`（原来写死在 `QaTuning.vue`，已搬进 mock） |
+| T1 | `GET /tuning/summary` | `ver?`（查询参数，带了即只读） | `{version, dataAsOf, recertCount, openFeedback, uncertFreq, evalTotal}`；版本读真实发布记录，无发布为空，未知历史版本404；计数读数据库。无统一业务水位，`dataAsOf` 为空、页面显示未知，不用元数据更新时间或当前时间冒充业务截止 | `QaTuning.vue` |
+| T2 | `GET /tuning/plan-options` | — | `{metrics:[{code,key,name,version,cr?}], dims[], times[]}`；当前读真实metric定义，`cr`只引用真实未发布且非驳回CR；`code`为静态指标编号，`key`兼容旧计划别名（如orders→order_cnt），新指标用code。`?ver`仅读对应发布快照metrics/dimensions，缺节为空，未知版本404。维度来自数据库层级/指标允许维度，times为输入快捷词 | `qa-tuning.ts` · `T_METRICS`、`TUNING_DIMS`、`TUNING_TIMES`（原来写死在 `QaTuning.vue`，已搬进 mock） |
 | **认证问答** |||||
 | T3 | `GET /tuning/certs` | `kw`（同时匹配同问法）、`status=已认证\|待重新认证\|待认证\|已停用`、`metric=<T_METRICS 键>`、`page`、`size=15`（URL `ckw`/`cst`/`cm`/`cpage`/`csize`） | `CertQa{id,question,variants,plan,planText,status,cr?,certifier,certifiedAt,hits,source,note?}`；排序：待重新认证 › 待认证 › 已认证 › 已停用 | `CERT_QAS` |
 | T4 | `GET /tuning/certs/{id}` | — | 抽屉内容 | `CertTab` |
@@ -469,8 +477,8 @@ O1–O3 是按门店 / 商品 / 订单写死的旧接口；通用版按对象类
 | **评测题库** |||||
 | T9 | `GET /tuning/eval/runs` | `trigger=每日定时\|手动运行\|发布前回放\|发布后回放\|审核通过后试跑`（按包含匹配）、`page`、`size=15`（URL `etr`/`epage`/`esize`） | `EvalRun{id,time,trigger,version,scope,total,passed,passRate,failCount,status,operator,cr?,crs?,note?}` | `EVAL_RUNS` |
 | T10 | `GET /tuning/eval/runs/{id}` | `page`、`size=12`（前端抽屉本地分页 `FSIZE=12`，不进 URL） | 加上 `fails: {items: FailCase{qid,question,expect,actual,kind}[], total, page, size}`、`kindStats[{kind,n}]`；待运行的回放额外返回 `replayQuestions` 和每张 CR 的提示 | `FailCase`、`REPLAY_HINT` |
-| T11 | `POST /tuning/eval/runs` | `{group: all\|销售\|退款\|履约\|毛利\|复购\|订单}` | 202，返回 `status='运行中'` 的 EvalRun（`trigger='手动运行'`，`time` = `now()`）；后台任务（procrastinate）逐题生成语义计划，跟期望比对，**不改任何口径** | `startRun` |
-| T12 | `GET /tuning/eval/questions` | `group`、`last=通过\|失败`、`kw`、`page`、`size=15`（URL `eg`/`er`/`ekw`/`qpage`/`qsize`） | `EvalQ{id,question,group,expect,expectText,last,cr?}` + `groupCounts` | `EVAL_QS`、`EVAL_GROUPS` |
+| T11 | `POST /tuning/eval/runs` | `{group, sessionId}`，sessionId必须是当前用户拥有的会话 | 202返回真实`待运行`，同事务持久化run和Procrastinate job，冻结会话scope/caliber；全局已有真实活跃任务409 QA_EVAL_BUSY，模型未配503，队列schema未部署503 QA_EVAL_QUEUE_UNAVAILABLE | 专用QA worker执行；失败状态保留已提交进度 |
+| T12 | `GET /tuning/eval/questions` | `group`、`last=通过\|失败`、`kw`、`page`、`size=15`（URL `eg`/`er`/`ekw`/`qpage`/`qsize`） | `EvalQ{id,question,group,expect,expectText,last,cr?}` + `groupCounts`；分组及数量按实际语义题聚合，不补静态空分组 | `qa_eval_question` |
 | **反馈与纠错** |||||
 | T13 | `GET /tuning/feedbacks` | `kw`（问题或用户）、`status=待处理\|已转同义词\|已转认证问答\|待发布生效\|已忽略`、`fixKind=同义词\|认证问答`、`page`、`size=15`（URL `fkw`/`fst`/`fk`/`fpage`/`fsize`） | `Feedback{id,time,user,dept,question,answer,reason,fix:{kind,text,target?},status,resolvedBy?,handler?}`；`待处理` 排在前面 | `FEEDBACKS` |
 | T14 | `GET /tuning/feedbacks/{id}` | — | 加上 `certBlock`（不能转认证问答的原因）、`existingCert?`、`coveredBy?`（已经覆盖这个词的同义词 CR）、`relatedEvalCount` | `certBlock`、`synCovered` |
@@ -492,13 +500,13 @@ O1–O3 是按门店 / 商品 / 订单写死的旧接口；通用版按对象类
 - T19 这条高频问题已经关联了认证问答（不论状态）→ 409 `STATE_INVALID` [推断]；否则按 T5 新建（`source='高频问题推荐'`，`hits` = 近 30 天命中）再按 T6 认证，返回 `CertQa`。
 - 以上写接口都写审计（`qa.cert.create` / `qa.cert.certify` / `qa.cert.toggle` / `qa.cert.variants` / `qa.freq.certify`），都受只读规则约束（`?ver=` / `?previewAs=` 下 403 `READONLY`）。
 - 前端：开关 `qa` 切真接口时，认证问答页签的列表 / 筛选 / 翻页走 T3（服务端分页），抽屉 T4，新建 T5、认证 T6、停用启用 T7、同问法 T8；高频问题页签走 T18（`hp`/`hc`/`hkw`/翻页）、设为认证问答 T19；四个页签计数都取 T1。写完后统一刷新当前列表、抽屉和计数。
-- **T11 运行评测（qa-tuning）**：`group` 不是 `all` / `全部` 也不在 `EVAL_GROUPS` → 422 `VALIDATION_FAILED`；编号 `ER-` + 现有最大序号 + 1（4 位；取号前拿事务级咨询锁 `xact_lock('qa.eval_run.code')`，并发发起不撞号，`code` 唯一约束兜底）；`trigger='手动运行'`、`version` = 当前版本、`scope` =「全部 N 题」/「{分组}相关 N 题」、`operator` = 有效用户名，审计 `qa.eval.run`。要 LLM（`get_llm`），没配密钥 → 503。返回 202 后（经 `BackgroundTasks`，请求事务已提交）由**进程内 asyncio 任务**逐题跑（`app/modules/qa/eval/job.py`）[推断：没走 procrastinate，`app/jobs` 不归 qa；进程重启会丢正在跑的任务，接 procrastinate 时把 `job._background` 包成 task 即可]：每题在只读连接（`statement_timeout` 15s）的事务里调 `chain.answer`、整体回滚，**不改任何数据和口径**；每题后 commit，前端轮询 T9/T10 看进度；跑完 `status='已完成'`，异常中断也置已完成并写 `note`。
-- **T11 判分 [推断]**：链路 B 不产出 SemPlan，按回答形状对期望计划：拒答 / 反问 → `未召回指标`；0 行 → `过滤条件缺失`；列名里找不到期望指标名（去括号）→ `指标选错`；缺期望维度列 → `维度不匹配`；链路报错 / SQL 执行失败记失败（`未召回指标`，actual「执行失败：code」）。`时间解析错误` 目前判不出。每题写 `qa_eval_question.last_result`，失败写 `qa_eval_fail`（actual 截 500 字）。冒烟（真 qwen-flash，履约前 2 题）：1/2 通过，EQ-018 反问 → 未召回指标。
+- **T11 运行评测**：读取真实题库分组，校验来源会话拥有权。请求事务在取号锁内同时保存run/execution_context与Procrastinate job，202返回待运行，主键/活跃任务唯一索引兜底；没有BackgroundTasks/进程内执行。`python -m app.modules.qa.eval.worker`仅消费qa-eval队列，独立加载ORM，worker重新解析当前用户功能权限，scope/caliber带入链路提示，权限仍走SQL守卫（scope显示文本不充当SQL授权）。每题在专用只读连接执行，逐题checkpoint；成功已完成，异常/取消/启动发现孤儿运行则失败，保留已提交结果。queued及活worker不误恢复，终态重复交付不重跑。缺模型Key/队列schema明确503；同一时间只接受一个真实活跃评测，冲突409 QA_EVAL_BUSY。详情awaitingExecution用于识别真实持久待运行任务，历史seed待运行不冒充已入队。
+- **T11 判分 [推断]**：每次运行加载当前数据库指标目录；期望指标缺失直接记“期望指标不可用”失败，不调用LLM、不用seed补答案。链路 B 不产出 SemPlan，仍为列名/维度启发式，**不是数值金标比对**；按回答形状对期望计划：拒答 / 反问 → `未召回指标`；0 行 → `过滤条件缺失`；列名里找不到期望指标名（去括号）→ `指标选错`；缺期望维度列 → `维度不匹配`；链路报错 / SQL 执行失败记失败（`未召回指标`，actual「执行失败：code」）。`时间解析错误` 目前判不出。每题写 `qa_eval_question.last_result`，失败写 `qa_eval_fail`（actual 截 500 字）。冒烟（真 qwen-flash，履约前 2 题）：1/2 通过，EQ-018 反问 → 未召回指标。
 - **T13 列表直接返回 T14 的详情字段** [推断]：行内按钮要 `certBlock` / `coveredBy`。T14 补充字段（前端确认卡 / 抽屉用）：`existingCertQuestion`、`existingCertStatus`、`plan` / `planText`（已有认证问答的计划 → 高频问题 → 评测题）、`coveredCrStatus`。
 - **T15**：只能从 `待处理`（否则 409 `STATE_INVALID`）。词已在某张变更单里（T20 `qa_tuned_synonym`）→ 关联：CR `已通过` → `待发布生效`，否则 `已转同义词`；同词的所有待处理同义词反馈一起改（`resolvedBy` = CR、`handler`），返回 `{crId, affected[], feedback}`，审计 `qa.feedback.to_synonym`。**没覆盖的词 → 调静态 X3**（`router._syn_to_cr`）：`join` 给了就 `add_target` 加入该草稿，否则 `create` 新建草稿（标题默认“补同义词：<词>”）；目标 `{kind:'knowledge'}`，按 fix.target 去版本号后的名称找知识，找不到 `isNew` + id `K-<反馈号>` [推断]；`synonyms` 段在已有行后 add 一行；写 `qa_synonym_link`，同词反馈按“已覆盖”分支改。知识被别的单子占用 → 静态 409 `TARGET_IN_OTHER_CR`（`details.crId`），前端据此 `join` 重试一次。草稿下拉 `GET /change-requests?status=草稿`。
 - **T16**：只能从 `待处理`。已有同题认证问答 → `mode='variant'`；否则用 T14 的 `plan` 新建（`source='反馈纠错'`）并**直接认证**（同 mock `toCert`/`addCert`；指标有未发布 CR → `待重新认证`）[推断：契约原文写新建是 `待认证`，按前端 mock 为准]；没有计划 → 422 `CERT_NO_PLAN`。用户原话 ≤ 40 字、不等于问题、且不是任何认证问答的同问法时加为同问法。反馈 → `已转认证问答`，`resolvedBy` = 认证编号。审计 `qa.feedback.to_cert`。
 - **T17**：`:ignore` 只能从 `待处理`；`:reopen` 从 `已忽略` 或 `已转认证问答`（否则 409）[推断：前端只在 `已忽略` 行给按钮，后端多接受 `已转认证问答` 用来撤销误转]。重开清空 `handler` / `resolvedBy`，并删掉 T16 加上的同问法（`qa_feedback.cert_variant_id`，迁移 `qa_0003`；同问法已被 T8 删掉就跳过）；T16 新建的认证问答保留 [推断：前端 mock `reopen` 只改反馈、不动认证问答]。审计 `qa.feedback.ignore` / `reopen`。T11、T15–T17 都受只读规则约束（`?ver=` / `?previewAs=` 下 403 `READONLY`）。
-- 前端（qa-tuning）：评测页签运行记录 T9（`etr` 筛选、服务端分页）、抽屉 T10（失败用例服务端分页 12 条、原因分布取 `kindStats`、待运行回放题取 `replayQuestions` / `replayHints`），题目 T12（分组计数取 `groupCounts`）；有「运行中」时每 3 秒重拉。页头「运行评测」走 T11 并跳到新运行。反馈页签 T13 / T14 / T15–T17，待处理计数取 T1。连不上后台照旧回退 mock。
+- 前端（qa-tuning）：评测页签运行记录 T9（`etr` 筛选、服务端分页）、抽屉 T10（失败用例服务端分页 12 条、原因分布取 `kindStats`、待运行回放题取 `replayQuestions` / `replayHints`），题目 T12（分组计数取 `groupCounts`）；有「运行中」时每 3 秒重拉。页头「运行评测」走 T11 并跳到新运行。反馈页签 T13 / T14 / T15–T17，待处理计数取 T1。真实接口加载失败提示错误，不替换成前端静态数组。
 
 ### 7.1 状态流转（写的是接口值；库里的码见 1.3）
 

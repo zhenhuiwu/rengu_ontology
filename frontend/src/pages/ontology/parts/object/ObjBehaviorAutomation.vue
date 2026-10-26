@@ -6,7 +6,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 规则在“规则与自动化”页维护、走自己的变更单；这里只读汇总。
  * URL：?aupage= 命中列表页码，?aurule= 命中列表按规则筛选。
  */
-import { computed } from 'vue';
+import { computed, reactive, watch, onScopeDispose } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -17,30 +17,55 @@ import { RULE_DEFS, hitsOf, stagedOf, type Hit, type RuleDef } from '@/mock/rule
 import { OBJ_TYPE_KIND, OBJ_TYPE_NAME, SINCE_7D } from '@/mock/lifecycle';
 import { useDraftView, draftOf } from '../useDraftView';
 import { CHANGE_REQUESTS } from '@/mock/changes';
+import { currentApiContext } from '@/api/http';
+import { actionContextKey } from '@/api/action';
+import { fetchObjectAutomation, fetchAutomationHits, isAutomationReal, type AutomationData } from '@/api/objectAutomation';
+import type { RuleDto } from '@/api/dynamic';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const route = useRoute();
 const router = useRouter();
 const { readonly: histRo, reason } = useDraftView('object', () => props.objectId);
 
-const kind = computed(() => OBJ_TYPE_KIND[props.objectId]);
-const objName = computed(() => OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
-const rules = computed(() => (kind.value ? RULE_DEFS.filter((r) => r.objKind === kind.value) : []));
-const events = computed(() => EVENT_TYPES.filter((e) => e.object === objName.value));
-const hits7 = (id: string) => hitsOf(id).filter((h) => h.at >= SINCE_7D);
-const actName = (id: string) => ACTION_TYPES.find((a) => a.id === id)?.name ?? id;
+const real = isAutomationReal();
+let mounted = true;
+onScopeDispose(() => { mounted = false; });
+const historyUnsupported = computed(() => real && !!currentApiContext().ver);
+const remote = reactive<{ key: string; loading: boolean; error: string; data: AutomationData | null }>({ key: '', loading: false, error: '', data: null });
+const loadKey = () => JSON.stringify([actionContextKey(), props.objectId]);
+let seq = 0;
+async function loadAutomation() {
+  const n = ++seq; const key = loadKey();
+  Object.assign(remote, { key, loading: false, error: '', data: null });
+  if (!mounted || !props.objectId || !real || historyUnsupported.value) return;
+  remote.loading = true;
+  try { const data = await fetchObjectAutomation(props.objectId); if (mounted && n === seq && key === loadKey()) remote.data = data; }
+  catch (e) { if (mounted && n === seq && key === loadKey()) remote.error = e instanceof Error ? e.message : String(e); }
+  finally { if (mounted && n === seq && key === loadKey()) remote.loading = false; }
+}
+watch(loadKey, loadAutomation, { immediate: true, flush: 'sync' });
+const data = computed(() => remote.key === loadKey() ? remote.data : null);
+const kind = computed(() => real ? props.objectId : OBJ_TYPE_KIND[props.objectId]);
+const objName = computed(() => real ? data.value?.objectName ?? props.objectId : OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
+const rules = computed(() => real ? data.value?.rules ?? [] : kind.value ? RULE_DEFS.filter((r) => r.objKind === kind.value) : []);
+const events = computed(() => real ? data.value?.events ?? [] : EVENT_TYPES.filter((e) => e.object === objName.value));
+const hits7 = (id: string) => real ? [] : hitsOf(id).filter((h) => h.at >= SINCE_7D);
+const hitCount = (id: string) => real ? data.value?.hitCounts[id] ?? 0 : hits7(id).length;
+const actName = (id: string) => real ? data.value?.actionNames[id] ?? id : ACTION_TYPES.find((a) => a.id === id)?.name ?? id;
+const subscriberCount = (e: typeof events.value[number]) => real ? data.value?.events.find((x) => x.id === e.id)?.subscriptionCount ?? 0 : subscribersOf(e).length;
 const fmt = (n: number) => n.toLocaleString('zh-CN');
 /** 规则状态按所在变更单推导：审核中 → 橙色“审核中”，只有草稿 → 灰色“草稿中”，其余用规则自身状态（灰） */
 function ruleStatus(r: RuleDef): { text: string; badge: 'warning' | 'default'; cr?: string } {
+  if (real) { const text = (r as RuleDto).displayStatus ?? r.status; return { text, badge: text === '审核中' ? 'warning' : 'default', cr: (r as RuleDto).cr ?? undefined }; }
   const d = draftOf('rule', r.id);
   if (!d) return { text: r.status === '变更中' ? '草稿中' : r.status, badge: 'default' };
   const st = CHANGE_REQUESTS.find((c) => c.id === d.id)?.status;
   return st === '审核中' ? { text: '审核中', badge: 'warning', cr: d.id } : { text: '草稿中', badge: 'default', cr: d.id };
 }
-const pendingOf = (id: string) => stagedOf(id).filter((a) => a.status === '待确认').length;
+const pendingOf = (id: string) => real ? data.value?.pending[id] ?? 0 : stagedOf(id).filter((a) => a.status === '待确认').length;
 const totals = computed(() => ({
-  hits: rules.value.reduce((s, r) => s + hits7(r.id).length, 0),
-  alerts: rules.value.reduce((s, r) => s + hits7(r.id).filter((h) => h.alertId && h.result !== '已去重').length, 0),
+  hits: rules.value.reduce((s, r) => s + hitCount(r.id), 0),
+  alerts: rules.value.reduce((s, r) => s + (real ? data.value?.alertCounts[r.id] ?? 0 : hits7(r.id).filter((h) => h.alertId && h.result !== '已去重').length), 0),
   pending: rules.value.reduce((s, r) => s + pendingOf(r.id), 0),
 }));
 
@@ -69,7 +94,23 @@ const ruleFilter = computed({
 });
 const pq = usePagedQuery({ defaultSize: 10, prefix: 'au', filters: [() => props.objectId] });
 const hitRows = computed(() => (ruleFilter.value === '全部' ? rules.value.flatMap((r) => hits7(r.id)) : hits7(ruleFilter.value)).sort((a, b) => b.at.localeCompare(a.at)));
-const paged = computed(() => paginate(hitRows.value, { page: pq.page.value, size: pq.size.value }));
+const hitPage = reactive({ items: [] as Hit[], total: 0, error: '' });
+let hitSeq = 0, hitScope = '';
+async function loadHits() {
+  const n = ++hitSeq, key = loadKey();
+  const scope = JSON.stringify([key, ruleFilter.value]);
+  if (scope !== hitScope) { hitScope = scope; hitPage.items = []; hitPage.total = 0; }
+  hitPage.error = '';
+  if (!mounted || !real || !props.objectId || historyUnsupported.value) return;
+  try {
+    const r = await fetchAutomationHits(props.objectId, ruleFilter.value, pq.page.value, pq.size.value);
+    if (!mounted || n !== hitSeq || key !== loadKey()) return;
+    hitPage.items = r.items; hitPage.total = r.total;
+    if (r.page && r.page !== pq.page.value) pq.page.value = r.page;
+  } catch (e) { if (mounted && n === hitSeq && key === loadKey()) { hitPage.items = []; hitPage.error = e instanceof Error ? e.message : String(e); } }
+}
+if (real) watch([loadKey, ruleFilter, pq.page, pq.size], loadHits, { immediate: true, flush: 'sync' });
+const paged = computed(() => real ? hitPage : paginate(hitRows.value, { page: pq.page.value, size: pq.size.value }));
 const hitCols = [
   { title: '命中时间', key: 'at', width: 170 },
   { title: '规则', key: 'rule', width: 230 },
@@ -78,14 +119,17 @@ const hitCols = [
   { title: '结果', key: 'result', width: 110 },
   { title: '告警', key: 'alert', width: 170 },
 ];
-const ruleName = (id: string) => RULE_DEFS.find((r) => r.id === id)?.name ?? id;
+const ruleName = (id: string) => rules.value.find((r) => r.id === id)?.name ?? id;
 const resultBadge = (_s: string) => 'default' as const;
-const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${eventTypeById(r.trigger.eventId!)?.name ?? r.trigger.eventId}` : `定时 · ${r.trigger.text}`);
+const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${(real ? data.value?.eventNames[r.trigger.eventId!] : eventTypeById(r.trigger.eventId!)?.name) ?? r.trigger.eventId}` : `定时 · ${r.trigger.text}`);
 </script>
 
 <template>
   <div class="ot-body bu">
-    <template v-if="rules.length || events.length">
+    <div v-if="historyUnsupported" class="bu-empty">暂无历史记录</div>
+    <div v-else-if="remote.loading" class="bu-empty">加载中…</div>
+    <div v-else-if="remote.error" class="bu-empty" role="alert">自动化汇总加载失败：{{ remote.error }} <a @click="loadAutomation">重试</a></div>
+    <template v-else-if="rules.length || events.length">
       <div class="bu-bar">
         <span class="t-14 fw-600 c-1">作用在{{ objName }}上的规则 {{ rules.length }} · 事件类型 {{ events.length }}</span>
         <InfoTip :text="`规则在“规则与自动化”页维护、走自己的变更单，这里只读汇总${histRo ? `（${reason}）` : ''}`" />
@@ -117,7 +161,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
                 <span v-if="record.autoStage.enabled" class="bu-nowrap">{{ record.autoStage.confirmer }}<template v-if="pendingOf(record.id)"> · <RouterLink :to="{ path: '/use/ops/actions', query: { tab: 'pending' } }"><span class="tl-attention">待确认 {{ pendingOf(record.id) }}</span></RouterLink></template></span>
                 <span v-else class="c-3">--</span>
               </template>
-              <template v-else-if="column.key === 'hits'"><span class="num">{{ fmt(hits7(record.id).length) }}</span></template>
+              <template v-else-if="column.key === 'hits'"><span class="num">{{ fmt(hitCount(record.id)) }}</span></template>
             </template>
           </a-table>
         </div>
@@ -128,7 +172,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
                 <RouterLink :to="{ path: '/build/ontology/event-types', query: { event: record.id } }" :title="record.api">{{ record.name }}</RouterLink>
               </template>
               <template v-else-if="column.key === 'source'"><span class="c-2">{{ record.source }}{{ record.ruleId ? ` · ${record.ruleId}` : '' }}</span></template>
-              <template v-else-if="column.key === 'subs'"><span class="num">{{ subscribersOf(record).length }}</span></template>
+              <template v-else-if="column.key === 'subs'"><span class="num">{{ subscriberCount(record) }}</span></template>
               <template v-else-if="column.key === 'weekly'"><span class="num">{{ fmt(record.weekly) }}</span></template>
             </template>
           </a-table>
@@ -142,6 +186,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
         <a-select v-model:value="ruleFilter" size="small" class="bu-sel" :options="[{ value: '全部', label: '全部规则' }, ...rules.map((r) => ({ value: r.id, label: `${r.id} ${r.name}` }))]" />
       </div>
       <div class="bu-hits">
+        <a-alert v-if="hitPage.error" type="error" :message="hitPage.error" show-icon><template #action><a-button size="small" @click="loadHits">重试</a-button></template></a-alert>
         <a-table size="small" :columns="hitCols" :data-source="paged.items" row-key="id" :pagination="false" :locale="{ emptyText: rules.length ? '近 7 天没有命中' : `没有作用在${objName}上的规则，不会产生命中` }">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'at'"><span class="num">{{ record.at }}</span></template>

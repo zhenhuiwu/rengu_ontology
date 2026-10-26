@@ -9,7 +9,7 @@
  * T15 真接口：词已在变更单里 → 关联；不在 → 后台调静态 X3 新建草稿变更单（target kind=knowledge，synonyms 段加一行）；
  * 该知识已在别的单子里（409 TARGET_IN_OTHER_CR）→ 按 details.crId 改为加入那张单子重试一次。不走 mock 弹窗。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -17,12 +17,13 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
 import { paginate } from '@/mock';
 import { useAppStore } from '@/stores/app';
-import { EVAL_QS, T_METRICS, crById, metricLabel, planText, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
+import { EVAL_QS, T_METRICS, crById, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
 import { CHANGE_REQUESTS, CR_DETAILS, changeRow, registerChange } from '@/mock/changes';
+import { metricOf, metricLabel, planText } from './catalog';
 import { tuning, tuningTick, addCert, ME } from './state';
-import type { PageResult } from '@/api/http';
+import { currentApiContext, type PageResult } from '@/api/http';
 import { ApiError } from '@/api/http';
-import { qaReal, listFeedbacks, getFeedback, getTuningSummary, feedbackToSynonym, feedbackToCert, ignoreFeedback, reopenFeedback, type QaFeedback } from '@/api/qa';
+import { qaReal, listFeedbacks, getFeedback, qaRequestOptions, feedbackToSynonym, feedbackToCert, ignoreFeedback, reopenFeedback, type QaFeedback } from '@/api/qa';
 import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import CrTag from './CrTag.vue';
 import InfoTip from '../../qa/InfoTip.vue';
@@ -51,30 +52,39 @@ const rows = computed(() => tuning.feedbacks.filter((f) => (!kw.value || f.quest
   && (!stF.value || f.status === stF.value) && (!kF.value || f.fix.kind === kF.value))
   .slice().sort((a, b) => (a.status === '待处理' ? 0 : 1) - (b.status === '待处理' ? 0 : 1)));
 const pq = usePagedQuery({ defaultSize: 15, filters: [kw, stF, kF], prefix: 'f' });
-/* 真接口：列表 / 抽屉 / 待处理计数（T1 openFeedback） */
+/* 真接口：列表 / 抽屉 */
 const real = qaReal();
+const contextKey = () => JSON.stringify(currentApiContext());
+let listSeq = 0;
+let detailSeq = 0;
 const remote = ref<PageResult<QaFeedback>>({ items: [], total: 0, page: 1, size: 15 });
-const remotePending = ref(0);
+const listLoading = ref(false);
 const remoteCur = ref<QaFeedback>();
 const loadErr = (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`加载反馈失败：${(e as Error).message}`); };
 const fail = (e: unknown) => { if (!qaFallBackIfDown(e)) message.error((e as Error).message); };
 if (real) {
-  watch([kw, stF, kF, pq.page, pq.size, tuningTick], async () => {
+  watch(contextKey, () => { ++listSeq; ++detailSeq; remoteCur.value = undefined; remote.value = { items: [], total: 0, page: 1, size: pq.size.value }; }, { flush: 'sync' });
+  watch([kw, stF, kF, pq.page, pq.size, tuningTick, contextKey], async () => {
     if (!live.value) return;
+    const n = ++listSeq, key = contextKey(); listLoading.value = true; remote.value = { ...remote.value, items: [], page: pq.page.value, size: pq.size.value };
     try {
-      remote.value = await listFeedbacks({ kw: kw.value || undefined, status: stF.value, fixKind: kF.value, page: pq.page.value, size: pq.size.value });
-      remotePending.value = (await getTuningSummary()).openFeedback;
-    } catch (e) { loadErr(e); }
+      const rows = await listFeedbacks({ kw: kw.value || undefined, status: stF.value, fixKind: kF.value, page: pq.page.value, size: pq.size.value }, qaRequestOptions());
+      if (n !== listSeq || key !== contextKey() || !live.value) return;
+      remote.value = rows;
+      if (rows.page !== pq.page.value) pq.page.value = rows.page;
+    } catch (e) { if (n === listSeq && key === contextKey()) loadErr(e); }
+    finally { if (n === listSeq) listLoading.value = false; }
   }, { immediate: true });
-  watch([() => q('fb'), tuningTick], async ([id]) => {
-    if (!id || !live.value) { remoteCur.value = undefined; return; }
-    try { remoteCur.value = await getFeedback(id as string); } catch (e) { remoteCur.value = undefined; loadErr(e); }
-  }, { immediate: true });
+  watch([() => q('fb'), tuningTick, contextKey], async ([id]) => {
+    const n = ++detailSeq, key = contextKey(); remoteCur.value = undefined;
+    if (!id || !live.value) return;
+    try { const f = await getFeedback(id as string, qaRequestOptions()); if (n === detailSeq && key === contextKey()) remoteCur.value = f; } catch (e) { if (n === detailSeq && key === contextKey()) loadErr(e); }
+  }, { immediate: true, flush: 'sync' });
 }
 type Fb = Feedback | QaFeedback;
 const isRemote = (f: Fb): f is QaFeedback => 'certBlock' in f;
+onBeforeUnmount(() => { ++listSeq; ++detailSeq; });
 const paged = computed<Rows<Fb>>(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
-const pending = computed(() => (live.value ? remotePending.value : tuning.feedbacks.filter((f) => f.status === '待处理').length));
 
 const cols = [
   { title: '编号', key: 'id', width: 76 },
@@ -165,21 +175,22 @@ function onStartChange(opts: { join?: string; title?: string }) {
   changeFb.value = undefined;
 }
 async function toCert(f: Fb) {
+  const context = contextKey();
   const ex = existing(f);
   const plan = planFor(f);
   if (!ex && !plan) return;
-  const m = plan ? (T_METRICS[plan.metric] as (typeof T_METRICS)[string] | undefined) : undefined;
-  const cr = m?.cr ? crById(m.cr) : undefined;
+  const m = plan ? metricOf(plan.metric) : undefined;
+  const cr = !isRemote(f) && m?.cr ? crById(m.cr) : undefined;
   const ok = await confirm.ask({
     title: '转为认证问答', target: `${f.id} ${f.question}`,
     fields: ex
       ? [{ label: '已有认证问答', value: `${ex.id} ${ex.question}` }, { label: '状态', value: ex.status }]
-      : [{ label: '问题', value: f.fix.text }, { label: '绑定指标', value: m ? metricLabel(plan!.metric) : plan!.metric }, { label: '语义计划', value: planTextOf(f) }, { label: '认证人', value: ME }],
+      : [{ label: '问题', value: f.fix.text }, { label: '绑定指标', value: m ? metricLabel(plan!.metric) : plan!.metric }, { label: '语义计划', value: planTextOf(f) }, { label: '认证人', value: real ? app.user.name : ME }],
     impact: ex ? `已有相同问题的认证问答，把用户原话“${f.question}”加为它的同问法。`
       : `认证后同类问题直接按此语义计划回答。${cr && cr.status !== '已发布' ? `注意：${cr.id}「${cr.title}」${cr.status}，发布后需重新认证。` : ''}`,
     okText: ex ? '加为同问法' : '认证',
   });
-  if (!ok) return;
+  if (!ok || context !== contextKey()) return;
   if (isRemote(f)) {
     try { const r = await feedbackToCert(f.id); tuningTick.value++; message.success(r.mode === 'variant' ? `已加为 ${r.certId} 的同问法` : `已生成认证问答 ${r.certId}`); } catch (e) { fail(e); }
     return;
@@ -212,10 +223,10 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
     <a-input-search v-model:value="kw" allow-clear placeholder="搜索问题或用户" class="qt-kw" />
     <a-select v-model:value="stF" allow-clear placeholder="状态" class="qt-sel" :options="STATUSES.map((s) => ({ value: s, label: s }))" />
     <a-select v-model:value="kF" allow-clear placeholder="建议修正" class="qt-sel" :options="['同义词', '认证问答'].map((s) => ({ value: s, label: s }))" />
-    <span class="t-12 c-3 qt-hint">{{ pending }} 条待处理；同义词改动生成变更单，随整版发布生效</span>
+    <span class="t-12 c-3 qt-hint">同义词改动生成变更单，随整版发布生效</span>
   </div>
   <div class="qt-table" :class="{ 'paged-scroll': pq.overflow.value }">
-    <a-table :locale="{ emptyText: '没有符合条件的反馈' }" size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">
+    <a-table :locale="{ emptyText: '没有符合条件的反馈' }" size="small" row-key="id" :columns="cols" :data-source="paged.items" :loading="listLoading" :pagination="false" :custom-row="rowProps">
       <template #bodyCell="{ column, record }">
         <span v-if="column.key === 'id'" class="num c-3">{{ record.id }}</span>
         <span v-else-if="column.key === 'time'" class="num c-2">{{ record.time.slice(5) }}</span>

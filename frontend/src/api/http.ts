@@ -84,10 +84,10 @@ async function parseError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, { code: `HTTP_${res.status}`, message: res.statusText || `请求失败（${res.status}）`, requestId: res.headers.get('X-Request-ID') });
 }
 
-async function request<T>(prefix: ApiPrefix, path: string, opts: RequestOptions = {}): Promise<T> {
+async function request<T>(prefix: ApiPrefix, path: string, opts: RequestOptions = {}, blob = false): Promise<T> {
   const ctx = currentApiContext();
   const headers: Record<string, string> = { Accept: 'application/json', ...(opts.headers ?? {}) };
-  if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
+  if (ctx.demoAs && !Object.keys(headers).some((name) => name.toLowerCase() === 'x-demo-as')) headers['X-Demo-As'] = ctx.demoAs;
   let body: BodyInit | undefined;
   if (opts.body !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(opts.body); }
   let res: Response;
@@ -99,6 +99,7 @@ async function request<T>(prefix: ApiPrefix, path: string, opts: RequestOptions 
   }
   if (!res.ok) throw await parseError(res);
   if (res.status === 204) return undefined as T;
+  if (blob) return (await res.blob()) as T;
   return (await res.json()) as T;
 }
 
@@ -118,6 +119,7 @@ export function apiClient(key: SwitchKey) {
     /** 这个开关当前是否走真接口 */
     isReal: () => isReal(key),
     get: async <T>(path: string, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'GET' }); },
+    getBlob: async (path: string, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<Blob>(prefix, path, { ...opts, method: 'GET' }, true); },
     post: async <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'POST', body }); },
     put: async <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'PUT', body }); },
     patch: async <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) => { guard(); return request<T>(prefix, path, { ...opts, method: 'PATCH', body }); },

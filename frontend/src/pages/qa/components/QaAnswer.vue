@@ -115,6 +115,16 @@ const barOption = computed(() => ({
       </template>
     </a-alert>
     </template>
+    <template v-else-if="qaLive">
+      <div class="qa-ans-head"><span class="fw-600">已保存的历史回答</span><span class="c-3">{{ mc.answeredVer }} · {{ mc.dataAsOf || '数据截至未知' }}</span></div>
+      <p>{{ mc.insight || '该历史轮次未保存完整结果数据，请重新提问获取真实结果。' }}</p>
+      <a-descriptions size="small" :column="1">
+        <a-descriptions-item label="范围">{{ mc.region }}</a-descriptions-item>
+        <a-descriptions-item label="期间">{{ mc.period }}</a-descriptions-item>
+        <a-descriptions-item label="筛选">{{ mc.basis?.filter ?? '—' }}</a-descriptions-item>
+        <a-descriptions-item label="口径">{{ mc.basis?.caliber ?? '—' }}</a-descriptions-item>
+      </a-descriptions>
+    </template>
     <template v-else>
     <div class="qa-ans-head">
       <a-avatar size="small" shape="square" class="qa-ans-av"><template #icon><ApartmentOutlined /></template></a-avatar>

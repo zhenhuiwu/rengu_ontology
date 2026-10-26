@@ -21,7 +21,7 @@ import InfoTip from '../qa/InfoTip.vue';
 import * as objApi from '@/api/qaObjects';
 import { qaLive, qaFallBackIfDown } from '../qa/qaFallback';
 import { errText } from '../qa/useQaSession';
-import { listTypes, groupTypes, loadMeta, fmtVal, propLabel, isNumeric, type TypeBrief, type TypeMeta, type Filters, type FacetMeta, type PropMeta } from './objMeta';
+import { listTypes, groupTypes, loadMeta, metaContextKey, fmtVal, propLabel, isNumeric, type TypeBrief, type TypeMeta, type Filters, type FacetMeta, type PropMeta } from './objMeta';
 import { searchRows, mockMatched, type RowsResult } from './objRows';
 
 const route = useRoute();
@@ -36,15 +36,24 @@ const patch = (p: Record<string, string | null>) => {
 
 /* 类型与元数据 */
 const types = ref<TypeBrief[]>([]);
-listTypes().then((t) => { types.value = t; });
+const contextKey = computed(metaContextKey);
+let typesSeq = 0;
+watch(contextKey, async () => {
+  const my = ++typesSeq;
+  types.value = [];
+  try { const t = await listTypes(); if (my === typesSeq) types.value = t; }
+  catch (e) { if (my === typesSeq) message.error(`对象类型加载失败：${errText(e)}`); }
+}, { immediate: true });
 const typeId = computed(() => qs('type') || types.value[0]?.id || '');
 const typeKey = computed({ get: () => typeId.value || undefined, set: (v?: string) => router.replace({ query: v ? { type: v } : {} }) }); // 换类型清空条件
 const meta = ref<TypeMeta | null>(null);
-watch(typeId, async (id) => {
+let metaSeq = 0;
+watch([typeId, contextKey], async ([id]) => {
+  const my = ++metaSeq;
   meta.value = null;
   if (!id) return;
-  const m = await loadMeta(id);
-  if (id === typeId.value) meta.value = m;
+  try { const m = await loadMeta(id, false); if (my === metaSeq) meta.value = m; }
+  catch (e) { if (my === metaSeq) message.error(`对象元数据加载失败：${errText(e)}`); }
 }, { immediate: true });
 const pmap = computed(() => new Map((meta.value?.properties ?? []).map((p) => [p.key, p])));
 const prop = (k: string) => pmap.value.get(k);
@@ -69,18 +78,27 @@ const pq = usePagedQuery({ defaultSize: 16, filters: filterSig });
 const res = ref<RowsResult | null>(null);
 const loading = ref(false);
 let seq = 0;
+let facetsKey = '';
+let lastFacets: FacetMeta[] = [];
 async function load() {
+  const my = ++seq;
+  const ctx = contextKey.value;
   const m = meta.value;
-  if (!m) { res.value = null; return; }
-  const my = ++seq; loading.value = true;
-  const q = { kw: kw.value, filters: filters.value, sort: sort.value, page: pq.page.value, size: pq.size.value };
+  if (!m) { res.value = null; loading.value = false; return; }
+  loading.value = true;
+  const key = JSON.stringify([ctx, m.id, kw.value, filters.value]);
+  const q = { kw: kw.value, filters: filters.value, sort: sort.value, page: pq.page.value, size: pq.size.value, withFacets: key !== facetsKey };
   try {
     let r: RowsResult;
     try { r = await searchRows(m, q, qaLive.value, pv.scopeOf); } catch (e) {
       if (!qaLive.value || !qaFallBackIfDown(e)) throw e;
       r = await searchRows(m, q, false, pv.scopeOf);
     }
-    if (my === seq) res.value = r;
+    if (my === seq && ctx === contextKey.value) {
+      if (q.withFacets) { lastFacets = r.facets; facetsKey = key; }
+      res.value = { ...r, facets: lastFacets };
+      if (r.page && r.page !== pq.page.value) pq.page.value = r.page;
+    }
   } catch (e) { if (my === seq) { res.value = null; message.error(`对象搜索失败：${errText(e)}`); } } finally { if (my === seq) loading.value = false; }
 }
 watch([meta, qaLive, filterSig, pq.page, pq.size, () => pv.userName.value], load, { immediate: true });
@@ -116,9 +134,11 @@ const scopeText = computed(() => (pv.active.value
 const listed = computed<PropMeta[]>(() => (meta.value?.properties ?? []).filter((p) => p.listed && p.key !== meta.value?.titleProp && !p.sensitive));
 const sortOrder = (k: string) => (sort.value === k ? 'ascend' : sort.value === `-${k}` ? 'descend' : null);
 const columns = computed(() => [
-  { title: prop(meta.value?.titleProp ?? '')?.name ?? '名称', key: '__title', ellipsis: true },
+  { title: prop(meta.value?.titleProp ?? '')?.name ?? '名称', key: '__title', width: 240, ellipsis: true },
   ...listed.value.map((p) => ({
-    title: propLabel(p), key: p.key, width: Math.max(96, propLabel(p).length * 14 + 32), align: isNumeric(p) ? ('right' as const) : undefined,
+    title: propLabel(p), key: p.key, ellipsis: true,
+    width: ['date', 'timestamp'].includes(p.dataType) ? 184 : isNumeric(p) ? 140 : undefined,
+    align: isNumeric(p) ? ('right' as const) : undefined,
     sorter: p.sortable, sortOrder: p.sortable ? sortOrder(p.key) : undefined,
   })),
 ]);
@@ -130,7 +150,7 @@ const isUnbound = (k: string) => !!res.value && !res.value.boundProps.includes(k
 
 /* 多选、导出、提问 */
 const selKeys = ref<string[]>([]);
-watch(typeId, () => { selKeys.value = []; });
+watch([typeId, contextKey], () => { selKeys.value = []; });
 const query = computed(() => ({ kw: kw.value, filters: filters.value }));
 async function exportCsv() {
   const m = meta.value; if (!m) return;
@@ -214,7 +234,7 @@ const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/d
       <div class="os-body">
         <template v-if="total">
           <div class="paged-scroll os-tbl">
-            <a-table :columns="columns" :data-source="res!.items" row-key="id" size="middle" :pagination="false" :loading="loading"
+            <a-table :columns="columns" :data-source="res!.items" row-key="id" size="middle" table-layout="fixed" :pagination="false" :loading="loading"
               :row-selection="{ selectedRowKeys: selKeys, preserveSelectedRowKeys: true, onChange: (k: (string | number)[]) => (selKeys = k as string[]) }"
               :custom-row="(r: any) => ({ onClick: () => openDetail(r), class: 'os-row' })" @change="onTable">
               <template #bodyCell="{ column, record }">

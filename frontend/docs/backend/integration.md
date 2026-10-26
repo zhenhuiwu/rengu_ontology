@@ -163,3 +163,8 @@ real 模式下接口为空或失败都不挡启动：保留 mock 数据并提示
 - real + 代理指向没有后台的端口：两条请求得到代理的 500 → 提示“后台未启动，发布记录暂时显示演示数据”，发布记录保持 mock。
 - real + `VITE_API_REAL_MODULES=foo,event`：0 条 /api 请求（照字面，一个都不切），控制台 warn 未知键 foo、event。
 - `npm run typecheck`、`npm run build`、`VITE_API_MODE=real npm run build` 均通过。
+
+
+## 2026-10-26 真实数据模式
+
+默认 `VITE_API_MODE=real`，`.env.example` 同步为 real；只有显式 `mock` 才展示开发样例。真实模式后台连接错误不再自动切回演示数据，空表返回空态。版本、草稿、对象引用、管理候选均应以接口为准。缺少函数、API 密钥鉴权、通用指标执行器、通知执行器等能力时说明未接入，禁止本地假保存/假执行。开发库当前记录按用户要求保留，没有因页面清理删除数据。

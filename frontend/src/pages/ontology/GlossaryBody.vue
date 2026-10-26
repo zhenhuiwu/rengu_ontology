@@ -5,7 +5,7 @@
  * URL：?k= 选中条目，?tab= 页签，?q= / ?type= / ?st= 列表筛选，?view=draft 草稿视图，?ver= 历史版本只读。
  * 草稿逻辑用公共的 useDraftView('knowledge')：已发布只读，唯一入口“发起变更”；新建知识、停用都记入变更单，随整版发布生效。
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, shallowRef, watch, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import ObjRef from '@/components/ObjRef.vue';
@@ -24,7 +24,9 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { allDrafts, draftOf, useDraftView } from './parts/useDraftView';
-import { useStaticCr } from './parts/useStaticCr';
+import { useStaticCr, useRealCrRecords, activeTargetCr, draftFields, draftRows } from './parts/useStaticCr';
+import { useStaticPage } from './parts/useStaticPage';
+import { fetchKnowledgeChoices, fetchKnowledgeConflicts, fetchStaticDetail, fetchStaticPage, resolveKnowledge, staticContextKey, isStaticReal, startAllocatedTarget } from '@/api/static';
 
 const route = useRoute();
 const router = useRouter();
@@ -34,7 +36,10 @@ const { readonly, reason } = useReadonly();
 const pad = (n: number) => String(n).padStart(2, '0');
 const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-const entries = reactive<KEntry[]>(KNOWLEDGE.map((e) => ({ ...e })));
+const baseline = shallowRef<KEntry[]>(isStaticReal() ? [] : KNOWLEDGE);
+const entries = reactive<KEntry[]>(baseline.value.map((e) => ({ ...e })));
+const firstId = ref('');
+const selectedId = computed(() => typeof route.query.k === 'string' ? route.query.k : firstId.value);
 /** 查看历史版本时只列出该版本已发布的条目，状态按该版本算 */
 const visible = computed(() => {
   const ver = app.viewVersion;
@@ -49,11 +54,17 @@ const statusOf = (e: KEntry): KStatus => {
 /** 条目所在的未发布变更单：以 useDraftView 登记为准，没有登记的用条目自带的 cr */
 const crOf = (e: KEntry) => draftOf('knowledge', e.id)?.id ?? (e.status === '草稿' ? e.cr : undefined);
 /** 显示状态：从变更单推出来（与指标口径一致）。变更单审核中 → 橙色“审核中”；只有草稿 → 灰色“草稿中”（问数仍用已发布版）；已发布、已停用灰色。 */
-type Shown = '已发布' | '草稿中' | '审核中' | '已停用';
+type Shown = '已发布' | '草稿中' | '审核中' | '已停用' | '已通过待发布' | '已驳回';
+const workflow = useRealCrRecords();
 const shownStatus = (e: KEntry): Shown => {
   const s = statusOf(e);
   if (readonly.value && app.viewVersion) return s === '已停用' ? '已停用' : '已发布';
   if (s === '已停用') return '已停用';
+  if (isStaticReal()) {
+    const record = activeTargetCr(workflow.rows.value, 'knowledge', e.id);
+    if (record) return record.status === '草稿' ? '草稿中' : record.status === '已通过' ? '已通过待发布' : record.status as Shown;
+    return draftOf('knowledge', e.id) || s === '草稿' ? '草稿中' : '已发布';
+  }
   const cr = crOf(e);
   if (!cr) return s === '草稿' ? '草稿中' : '已发布';
   return CHANGE_REQUESTS.find((c) => c.id === cr)?.status === '审核中' ? '审核中' : '草稿中';
@@ -74,10 +85,14 @@ const filtered = computed(() => visible.value.filter((e) =>
 const LPAGE = 19;
 const lpage = ref(1);
 watch([kw, ktype, st], () => { lpage.value = 1; });
-const list = computed(() => filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
+const knowledgePage = useStaticPage<KEntry>(() => '/knowledge', () => ({ q: kw.value, type: ktype.value, st: st.value }), lpage, LPAGE);
+watch(knowledgePage.items, (rows) => { if (isStaticReal() && !firstId.value && rows.length) firstId.value = rows[0].id; });
+const list = computed(() => isStaticReal() ? knowledgePage.items.value : filtered.value.slice((lpage.value - 1) * LPAGE, lpage.value * LPAGE));
+const listTotal = computed(() => isStaticReal() ? knowledgePage.total.value : filtered.value.length);
 
-const cur = computed(() => visible.value.find((e) => e.id === route.query.k) ?? visible.value[0]);
+const cur = computed(() => isStaticReal() ? entries.find((e) => e.id === selectedId.value) : visible.value.find((e) => e.id === route.query.k) ?? visible.value[0]);
 watch(() => cur.value?.id, (id) => {
+  if (isStaticReal()) return;
   const i = filtered.value.findIndex((e) => e.id === id);
   if (i >= 0) lpage.value = Math.floor(i / LPAGE) + 1;
 }, { immediate: true });
@@ -92,39 +107,51 @@ const pick = (id: string) => guard(() => {
 });
 
 // —— 草稿（公共 useDraftView，kind = knowledge）——
-const dv = useDraftView('knowledge', () => cur.value?.id ?? '');
+const targetId = () => isStaticReal() ? selectedId.value : cur.value?.id ?? '';
+const dv = useDraftView('knowledge', targetId);
 const { draft, setView } = dv;
 // real 模式先写库（发起 / 加入、保存到草稿、停用、提交、放弃），见 parts/useStaticCr.ts
-const cr = useStaticCr('knowledge', () => ({ id: cur.value?.id ?? '', name: cur.value?.name, isNew: cur.value?.status === '草稿' }), dv);
+const cr = useStaticCr('knowledge', () => ({ id: targetId(), name: cur.value?.name, isNew: cur.value?.status === '草稿' }), dv, workflow.reload);
 /** 只存在于草稿里的条目（新增的），直接看草稿 */
 const draftOnly = computed(() => cur.value?.status === '草稿');
 const isDraft = computed(() => dv.isDraft.value || (!readonly.value && !!draft.value && draftOnly.value));
-const canEdit = computed(() => isDraft.value);
+const canEdit = computed(() => isDraft.value && (!isStaticReal() || cr.head.value?.status === '草稿' && !cr.loading.value && !cr.error.value));
 const editTip = computed(() => dv.editTip.value);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const creating = ref(false);
+const pendingNewCr = ref<string>();
 const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
-async function start(opts: { join?: string; title?: string }) {
+async function start(opts: { join?: string; title?: string; desc?: string }) {
+  if (readonly.value) return;
   if (!creating.value) { await cr.start(opts); return; }
-  const n = entries.filter((e) => e.id.startsWith('K-N')).length + 1;
-  const nid = `K-N${String(n).padStart(2, '0')}`;
-  const crId = await cr.start(opts, { id: nid, isNew: true, name: '未命名知识' });
+  let nid: string, crId: string | undefined, at: string, by: string;
+  if (isStaticReal()) {
+    const key = staticContextKey();
+    try {
+      const result = await startAllocatedTarget('knowledge', opts, '未命名知识', pendingNewCr.value);
+      if (key !== staticContextKey()) return;
+      nid = result.target.id; crId = result.crId; at = result.updatedAt; by = result.owner;
+      dv.start({ join: crId, target: nid }); pendingNewCr.value = undefined; await workflow.reload(); if (key !== staticContextKey()) return;
+    } catch (e) { if (key !== staticContextKey()) return; pendingNewCr.value = (e as { crId?: string }).crId ?? pendingNewCr.value; message.error(`${e instanceof Error ? e.message : String(e)}${pendingNewCr.value ? `（草稿 ${pendingNewCr.value} 已保留，可重试）` : ''}`); return; }
+  } else {
+    const n = entries.filter((e) => e.id.startsWith('K-N')).length + 1;
+    nid = `K-N${String(n).padStart(2, '0')}`; crId = await cr.start(opts, { id: nid, isNew: true, name: '未命名知识' }); at = nowText(); by = CURRENT_USER;
+  }
   if (!crId) return;
-  const at = nowText();
   const ne: KEntry = {
-    id: nid, name: '未命名知识', type: (ktype.value as KType) || '术语', status: '草稿', cr: crId, updatedAt: at, owner: CURRENT_USER,
+    id: nid, name: '未命名知识', type: (ktype.value as KType) || '术语', status: '草稿', cr: crId, updatedAt: at, owner: by,
     definition: '', calc: '', synonyms: [], applies: [], period: '随下一次整版发布生效', maps: '', filters: [], tries: [], refs: [],
-    history: [{ ver: '—', cr: crId, status: '草稿', by: CURRENT_USER, at, change: '新增（待填写）' }],
+    history: [{ ver: '—', cr: crId, status: '草稿', by, at, change: '新增（待填写）' }],
   };
   entries.unshift(ne);
   router.replace({ query: { ...route.query, k: nid, tab: 'content', view: 'draft', type: undefined, st: undefined, q: undefined } })
-    .then(() => beginEdit());
+    .then(async () => { if (isStaticReal()) { await nextTick(); await cr.reload(); } if (canEdit.value) beginEdit(); });
 }
 
 /** 当前视图下的字段：草稿视图叠加草稿改动 */
 const view = computed<KFields & { status: KStatus }>(() => {
-  const e = cur.value;
+  const e = cur.value!;
   const base = { name: e.name, type: e.type, definition: e.definition, calc: e.calc, synonyms: e.synonyms, applies: e.applies, period: e.period, owner: e.owner, maps: e.maps, filters: e.filters, status: statusOf(e) };
   return isDraft.value ? { ...base, ...(e.draft ?? {}), status: e.draftStatus ?? base.status } : base;
 });
@@ -132,18 +159,18 @@ const view = computed<KFields & { status: KStatus }>(() => {
 const mark = (k: keyof KFields | 'status'): '' | '修改' | '新增' => {
   if (!isDraft.value) return '';
   if (draftOnly.value) return '新增';
-  if (k === 'status') return cur.value.draftStatus && cur.value.draftStatus !== cur.value.status ? '修改' : '';
-  const d = cur.value.draft;
-  return d && k in d && JSON.stringify(d[k]) !== JSON.stringify(cur.value[k]) ? '修改' : '';
+  if (k === 'status') return cur.value?.draftStatus && cur.value?.draftStatus !== cur.value.status ? '修改' : '';
+  const d = cur.value?.draft;
+  return d && k in d && JSON.stringify(d[k]) !== JSON.stringify(cur.value?.[k]) ? '修改' : '';
 };
 const before = (k: keyof KFields) => {
-  const v = cur.value[k];
+  const v = cur.value?.[k];
   return Array.isArray(v) ? (v as unknown[]).map((x) => (typeof x === 'string' ? x : (x as KApply).name)).join('、') : String(v ?? '');
 };
 const appliesView = computed(() => {
-  const pub = new Set(cur.value.applies.map((a) => a.kind + a.id));
+  const pub = new Set((cur.value?.applies ?? []).map((a) => a.kind + a.id));
   const now = view.value.applies.map((a) => ({ ...a, mark: isDraft.value && (draftOnly.value || !pub.has(a.kind + a.id)) ? '新增' : '' }));
-  const removed = isDraft.value && !draftOnly.value ? cur.value.applies.filter((a) => !view.value.applies.some((b) => b.kind === a.kind && b.id === a.id)).map((a) => ({ ...a, mark: '删除' })) : [];
+  const removed = isDraft.value && !draftOnly.value ? (cur.value?.applies ?? []).filter((a) => !view.value.applies.some((b) => b.kind === a.kind && b.id === a.id)).map((a) => ({ ...a, mark: '删除' })) : [];
   return [...now, ...removed];
 });
 
@@ -152,14 +179,39 @@ interface Form { name: string; type: KType; definition: string; calc: string; sy
 const editing = ref(false);
 const form = reactive<Form>({ name: '', type: '术语', definition: '', calc: '', synonyms: [], applies: [], period: '', owner: '' });
 const snap = ref('');
-const APPLY_ALL: KApply[] = [
+const realCandidates = ref<KApply[]>([]), candidateLoading = ref(false), candidateError = ref('');
+const realConflicts = ref<{ word: string; ids: string[] }[]>([]);
+const realConflictRules = ref<Record<string, string>>({}), ruleError = ref('');
+let candidateSeq = 0, ruleSeq = 0;
+async function loadCandidates() {
+  const my = ++candidateSeq, key = staticContextKey();
+  realCandidates.value = []; candidateError.value = ''; candidateLoading.value = false;
+  if (!isStaticReal()) return;
+  candidateLoading.value = true;
+  try { const rows = await fetchKnowledgeChoices(); if (my === candidateSeq && key === staticContextKey() && rows) realCandidates.value = rows; }
+  catch (e) { if (my === candidateSeq && key === staticContextKey()) candidateError.value = e instanceof Error ? e.message : String(e); }
+  finally { if (my === candidateSeq && key === staticContextKey()) candidateLoading.value = false; }
+}
+async function loadConflictRules() {
+  const my = ++ruleSeq, key = staticContextKey(); realConflictRules.value = {}; realConflicts.value = []; ruleError.value = '';
+  if (!isStaticReal()) return;
+  try { const data = await fetchKnowledgeConflicts(isDraft.value ? draft.value?.id : undefined); if (my === ruleSeq && key === staticContextKey()) { realConflictRules.value = data.rule; realConflicts.value = data.conflicts; } }
+  catch (e) { if (my === ruleSeq && key === staticContextKey()) ruleError.value = e instanceof Error ? e.message : String(e); }
+}
+watch([staticContextKey, editing], () => { if (editing.value) void loadCandidates(); });
+watch(() => JSON.stringify([staticContextKey(), isDraft.value, draft.value?.id, cr.head.value?.lockVersion]), loadConflictRules, { immediate: true });
+const APPLY_ALL = computed<KApply[]>(() => isStaticReal() ? realCandidates.value : [
   ...Q_OBJECT_TYPES.map((t) => ({ kind: 'object-type' as const, id: t.key, name: t.name })),
   ...METRICS.map((m) => ({ kind: 'metric' as const, id: m.id, name: m.name })),
-];
-const APPLY_OPTIONS = [
-  { label: '对象类型', options: Q_OBJECT_TYPES.map((t) => ({ value: `object-type:${t.key}`, label: t.name })) },
-  { label: '指标', options: METRICS.map((m) => ({ value: `metric:${m.id}`, label: m.name })) },
-];
+]);
+const unavailableApplies = computed(() => isStaticReal() ? view.value.applies.filter((a) => !realCandidates.value.some((x) => x.kind === a.kind && x.id === a.id) && form.applies.includes(`${a.kind}:${a.id}`)) : []);
+const APPLY_OPTIONS = computed(() => isStaticReal() ? [
+  ...(['object-type', 'metric'] as const).map((kind) => ({ label: kind === 'metric' ? '指标' : '对象类型', options: realCandidates.value.filter((a) => a.kind === kind).map((a) => ({ value: `${a.kind}:${a.id}`, label: a.name, disabled: false })) })),
+  { label: '已失效或不可见的已存引用（仅可移除）', options: unavailableApplies.value.map((a) => ({ value: `${a.kind}:${a.id}`, label: `${a.name || a.id}（不可选）`, disabled: true })) },
+] : [
+  { label: '对象类型', options: Q_OBJECT_TYPES.map((t) => ({ value: `object-type:${t.key}`, label: t.name, disabled: false })) },
+  { label: '指标', options: METRICS.map((m) => ({ value: `metric:${m.id}`, label: m.name, disabled: false })) },
+]);
 function beginEdit() {
   const v = view.value;
   Object.assign(form, { name: v.name, type: v.type, definition: v.definition, calc: v.calc, synonyms: [...v.synonyms], applies: v.applies.map((a) => `${a.kind}:${a.id}`), period: v.period, owner: v.owner });
@@ -172,23 +224,29 @@ const guard = useUnsavedGuard(dirty);
 const FIELD_LABEL: Record<keyof Form, string> = { name: '名称', type: '类型', definition: '定义', calc: '计算方式', synonyms: '同义词', applies: '适用范围', period: '生效时间', owner: '负责人' };
 async function save() {
   const e = cur.value;
-  const applies = form.applies.map((k) => APPLY_ALL.find((a) => `${a.kind}:${a.id}` === k)!).filter(Boolean);
-  const next: Partial<KFields> = { name: form.name, type: form.type, definition: form.definition, calc: form.calc, synonyms: [...form.synonyms], applies, period: form.period, owner: form.owner };
+  if (!e) return;
+  if (isStaticReal() && (candidateLoading.value || candidateError.value)) { message.error('请先成功加载真实适用对象和指标目录'); return; }
+  const pool = [...APPLY_ALL.value, ...view.value.applies];
+  const applies = form.applies.map((k) => pool.find((a) => `${a.kind}:${a.id}` === k));
+  if (applies.some((a) => !a)) { message.error('存在未识别的引用，输入已保留，请重新选择'); return; }
+  const next: Partial<KFields> = { name: form.name, type: form.type, definition: form.definition, calc: form.calc, synonyms: [...form.synonyms], applies: applies as KApply[], period: form.period, owner: form.owner };
   // real：content 段，一个字段一行（新条目全部 add；已发布条目对比已发布值，改回原值的行去掉）
   const changes = (Object.keys(FIELD_LABEL) as (keyof Form)[])
     .filter((k) => draftOnly.value || JSON.stringify(next[k]) !== JSON.stringify(e[k]) || (e.draft && k in e.draft))
     .map((k) => ({ key: k, before: draftOnly.value ? undefined : e[k], after: next[k], type: '业务知识', field: FIELD_LABEL[k] }));
   if (!(await cr.save('content', changes))) return;
-  if (draftOnly.value) Object.assign(e, next);
-  else {
-    const d: Partial<KFields> = { ...(e.draft ?? {}) };
-    (Object.keys(next) as (keyof KFields)[]).forEach((k) => {
-      if (JSON.stringify(next[k]) === JSON.stringify(e[k])) delete d[k];
-      else (d as Record<string, unknown>)[k] = next[k];
-    });
-    e.draft = d;
+  if (!isStaticReal()) {
+    if (draftOnly.value) Object.assign(e, next);
+    else {
+      const d: Partial<KFields> = { ...(e.draft ?? {}) };
+      (Object.keys(next) as (keyof KFields)[]).forEach((k) => {
+        if (JSON.stringify(next[k]) === JSON.stringify(e[k])) delete d[k];
+        else (d as Record<string, unknown>)[k] = next[k];
+      });
+      e.draft = d;
+    }
+    e.updatedAt = nowText();
   }
-  e.updatedAt = nowText();
   editing.value = false;
   message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
 }
@@ -198,49 +256,74 @@ const cancelEdit = () => guard(() => { editing.value = false; });
 const refCount = (e: KEntry, t: string) => e.refs.filter((r) => r.type === t).length;
 async function stop() {
   const e = cur.value;
+  if (!e) return;
   const words = [e.name, ...e.synonyms];
   const join = draft.value?.id;
+  const context = staticContextKey();
+  let references = 0;
+  if (isStaticReal()) {
+    try { const data = await fetchStaticPage<KEntry['refs'][number]>(`/knowledge/${encodeURIComponent(e.id)}/refs`, { page: 1, size: 1 }); references = data.total; }
+    catch (error) { if (context === staticContextKey()) message.error(error instanceof Error ? error.message : String(error)); return; }
+    if (context !== staticContextKey() || e.id !== cur.value?.id) return;
+  }
   const ok = await confirm.ask({
     title: '停用业务知识', target: `${e.name}（${e.id} · ${e.type}）`, tag: '待确认', danger: true, okText: '记入变更单',
     fields: [
       { label: '识别词', value: words.join('、') },
-      { label: '引用', value: `指标 ${refCount(e, '指标')} · 认证问答 ${refCount(e, '认证问答')} · 规则 ${refCount(e, '规则')} · 看板 ${refCount(e, '看板')}` },
+      { label: '引用', value: isStaticReal() ? `共 ${references} 项` : `指标 ${refCount(e, '指标')} · 认证问答 ${refCount(e, '认证问答')} · 规则 ${refCount(e, '规则')} · 看板 ${refCount(e, '看板')}` },
       { label: '默认过滤', value: e.filters.length ? e.filters.map((f) => `${f.field} ${f.cond}`).join('；') : '无' },
       { label: '生效', value: '审核通过后随整版发布生效' },
     ],
-    impact: `发布后问数不再识别“${words.slice(0, 3).join('”“')}”${e.filters.length ? '，也不再自动加默认过滤' : ''}；引用它的 ${e.refs.length} 项会出现在变更单影响分析里，认证问答需要重新认证。历史版本和已保存的回答不受影响。`,
+    impact: `发布后问数不再识别“${words.slice(0, 3).join('”“')}”${e.filters.length ? '，也不再自动加默认过滤' : ''}；引用它的 ${isStaticReal() ? references : e.refs.length} 项会出现在变更单影响分析里，认证问答需要重新认证。历史版本和已保存的回答不受影响。`,
     picker: join ? undefined : {
       label: '记入变更单', placeholder: '选择变更单', required: true,
       options: [{ value: '__new', label: `新建变更单：停用业务知识“${e.name}”` }, ...allDrafts().map((d) => ({ value: d.id, label: `${d.id}　${d.title}` }))],
     },
   });
-  if (!ok) return;
+  if (!ok || context !== staticContextKey() || e.id !== cur.value?.id || readonly.value) return;
   const pv = confirm.pickValue;
   const id = join ?? (await cr.start(pv && pv !== '__new' ? { join: pv } : { title: `停用业务知识“${e.name}”` }));
-  if (!id) return;
+  if (!id || context !== staticContextKey() || e.id !== cur.value?.id || readonly.value) return;
   // real：status 段一行（已发布条目 → 已停用）
   if (!(await cr.save('status', [{ key: 'status', before: e.status, after: '已停用', type: '业务知识', field: '状态' }], id))) return;
-  e.draftStatus = '已停用';
+  if (!isStaticReal()) e.draftStatus = '已停用';
+  if (context !== staticContextKey() || e.id !== cur.value?.id) return;
   setView('draft');
   message.success(`已记入 ${id}：${e.name} 停用（待审核）`);
 }
 
 // —— 问数中的作用 ——
-const conflicts = computed(() => synonymConflicts(entries.filter((e) => e.status !== '已停用' || e.id === cur.value?.id)));
+const conflicts = computed(() => isStaticReal() ? new Map(realConflicts.value.map((r) => [r.word, r.ids])) : synonymConflicts(entries.filter((e) => e.status !== '已停用' || e.id === cur.value?.id)));
 const words = computed(() => [view.value.name, ...view.value.synonyms]);
-const isConflict = (w: string) => (conflicts.value.get(w)?.length ?? 0) > 1 && conflicts.value.get(w)!.includes(cur.value.id);
+const isConflict = (w: string) => (conflicts.value.get(w)?.length ?? 0) > 1 && conflicts.value.get(w)!.includes(cur.value?.id ?? '');
 const conflictRows = computed(() => words.value.filter(isConflict).map((w) => ({
   word: w,
-  others: conflicts.value.get(w)!.filter((id) => id !== cur.value.id).map((id) => entries.find((x) => x.id === id)!),
-  rule: CONFLICT_RULE[w],
+  others: conflicts.value.get(w)!.filter((id) => id !== cur.value?.id).map((id) => entries.find((x) => x.id === id) ?? { id, name: id }),
+  rule: isStaticReal() ? realConflictRules.value[w] : CONFLICT_RULE[w],
 })));
 const nameOf = (id: string) => entries.find((e) => e.id === id)?.name ?? id;
 const filterCols = [{ title: '字段', dataIndex: 'field', width: 220 }, { title: '条件', dataIndex: 'cond', width: 260 }, { title: '说明', dataIndex: 'note' }];
 
 const tryQ = ref('');
 const tried = ref('');
-watch(() => cur.value?.id, () => { tryQ.value = cur.value?.tries[0] ?? ''; tried.value = tryQ.value; }, { immediate: true });
-const runTry = (s?: string) => { if (s) tryQ.value = s; tried.value = tryQ.value.trim(); };
+watch(() => cur.value?.id, () => { tryQ.value = isStaticReal() ? '' : cur.value?.tries[0] ?? ''; tried.value = tryQ.value; }, { immediate: true });
+const knowledgeTrialKey = computed(() => JSON.stringify([staticContextKey(), cur.value?.id, isDraft.value, draft.value?.id, cr.head.value?.lockVersion, cr.loading.value, cr.error.value]));
+const trialRows = ref<TryRow[]>([]), trialBusy = ref(false), trialError = ref(''), trialLoadedKey = ref('');
+let trialSeq = 0;
+watch(knowledgeTrialKey, () => { ++trialSeq; trialRows.value = []; tried.value = ''; trialError.value = ''; trialBusy.value = false; });
+async function runTry(s?: string) {
+  if (s) tryQ.value = s;
+  if (!isStaticReal()) { tried.value = tryQ.value.trim(); return; }
+  const seq = ++trialSeq, key = knowledgeTrialKey.value, text = tryQ.value.trim();
+  trialRows.value = []; trialError.value = ''; trialBusy.value = false; tried.value = text; trialLoadedKey.value = key;
+  if (!cur.value || (isDraft.value && (!cr.head.value || cr.loading.value || cr.error.value))) { trialError.value = '请先成功加载草稿定义'; return; }
+  trialBusy.value = true;
+  try {
+    const result = await resolveKnowledge({ text, knowledge: cur.value?.id, ...(isDraft.value ? { crId: draft.value?.id } : {}) });
+    if (seq === trialSeq && key === knowledgeTrialKey.value && text === tryQ.value.trim()) trialRows.value = result.rows;
+  } catch (e) { if (seq === trialSeq && key === knowledgeTrialKey.value && text === tryQ.value.trim()) trialError.value = e instanceof Error ? e.message : String(e); }
+  finally { if (seq === trialSeq && key === knowledgeTrialKey.value) trialBusy.value = false; }
+}
 const METRIC_WORDS: [string, string][] = [['含税销售额', 'gmv_tax'], ['销售额', 'gmv'], ['GMV', 'gmv'], ['毛利率', 'gross_margin'], ['毛利', 'gross_margin'], ['客单价', 'atv'], ['出库及时率', 'ship_ontime'], ['订单数', 'order_cnt'], ['有效单', 'order_cnt']];
 const TIME_WORDS: [RegExp, string][] = [
   [/上个?月/, '2026-09-01 至 2026-09-30'], [/上周/, '2026-10-12 至 2026-10-18'], [/本周/, '2026-10-19 至 2026-10-25'], [/昨天/, '2026-10-24'],
@@ -248,14 +331,15 @@ const TIME_WORDS: [RegExp, string][] = [
 ];
 interface TryRow { k: string; v: string; cls?: string; by?: string }
 const tryRows = computed<TryRow[]>(() => {
+  if (isStaticReal()) return trialLoadedKey.value === knowledgeTrialKey.value && tried.value === tryQ.value.trim() ? trialRows.value : [];
   const s = tried.value;
   if (!s) return [];
   const rows: TryRow[] = [];
-  const pool = entries.filter((e) => (e.status === '已发布' || e.id === cur.value.id) && (statusOf(e) !== '已停用' || e.id === cur.value.id));
+  const pool = entries.filter((e) => (e.status === '已发布' || e.id === cur.value?.id) && (statusOf(e) !== '已停用' || e.id === cur.value?.id));
   const hitIds = new Set<string>();
   const seen = new Set<string>();
   pool.forEach((e) => {
-    const f = e.id === cur.value.id ? view.value : e;
+    const f = e.id === cur.value?.id ? view.value : e;
     [f.name, ...f.synonyms].filter((w) => s.includes(w) && !seen.has(w)).forEach((w) => {
       const ids = conflicts.value.get(w);
       if (ids && ids.length > 1) {
@@ -280,10 +364,10 @@ const tryRows = computed<TryRow[]>(() => {
   if (dim) rows.push({ k: '分组', v: `按${dim[1] === '区域' ? '大区' : dim[1] === '仓' ? '仓库' : dim[1]}` });
   const fs = [...hitIds].flatMap((id) => {
     const e = entries.find((x) => x.id === id)!;
-    return (id === cur.value.id ? view.value.filters : e.filters).map((f) => `${f.field} ${f.cond}`);
+    return (id === cur.value?.id ? view.value.filters : e.filters).map((f) => `${f.field} ${f.cond}`);
   });
   rows.push(fs.length ? { k: '默认过滤', v: fs.join('；') } : { k: '默认过滤', v: '无', cls: 'c-3' });
-  if (!hitIds.has(cur.value.id)) rows.push({ k: '本条知识', v: `问题里没有出现“${words.value.slice(0, 3).join('”“')}”，未使用本条`, cls: 'c-3' });
+  if (!hitIds.has(cur.value?.id ?? '')) rows.push({ k: '本条知识', v: `问题里没有出现“${words.value.slice(0, 3).join('”“')}”，未使用本条`, cls: 'c-3' });
   return rows;
 });
 
@@ -291,16 +375,24 @@ const tryRows = computed<TryRow[]>(() => {
 const REF_PAGE = 8;
 const rpage = ref(1);
 watch(() => cur.value?.id, () => { rpage.value = 1; });
-const refRows = computed(() => cur.value.refs.slice((rpage.value - 1) * REF_PAGE, rpage.value * REF_PAGE));
+const refsPage = useStaticPage<KEntry['refs'][number]>(() => targetId() ? `/knowledge/${encodeURIComponent(targetId())}/refs` : '', () => ({}), rpage, REF_PAGE, () => tab.value === 'refs' && !draftOnly.value);
+const hpage = ref(1);
+watch(selectedId, () => { hpage.value = 1; });
+const historySize = ref(10);
+watch(historySize, () => { hpage.value = 1; });
+const historyPage = useStaticPage<KEntry['history'][number]>(() => targetId() ? `/knowledge/${encodeURIComponent(targetId())}/history` : '', () => ({}), hpage, historySize, () => tab.value === 'history' && !draftOnly.value);
+const refRows = computed(() => isStaticReal() ? refsPage.items.value : (cur.value?.refs ?? []).slice((rpage.value - 1) * REF_PAGE, rpage.value * REF_PAGE));
+const refTotal = computed(() => isStaticReal() ? refsPage.total.value : cur.value?.refs.length ?? 0);
 const refCols = [{ title: '类型', dataIndex: 'type', width: 120 }, { title: '名称', key: 'name', width: 360 }, { title: '使用方式', dataIndex: 'note' }];
 const refSummary = computed(() => {
   const m = new Map<string, number>();
-  cur.value.refs.forEach((r) => m.set(r.type, (m.get(r.type) ?? 0) + 1));
+  (cur.value?.refs ?? []).forEach((r) => m.set(r.type, (m.get(r.type) ?? 0) + 1));
   return [...m].map(([k, v]) => `${k} ${v}`).join(' · ');
 });
 const histRows = computed(() => {
   const ver = app.viewVersion;
-  const rows = cur.value.history;
+  if (isStaticReal()) return historyPage.items.value;
+  const rows = cur.value?.history ?? [];
   return readonly.value && ver ? rows.filter((h) => h.ver !== '—' && h.ver <= ver && h.status !== '草稿') : rows;
 });
 const histCols = [
@@ -314,7 +406,35 @@ const histCols = [
 const crLink = (id: string) => router.push({ path: '/build/ontology/releases', query: { cr: id } });
 
 const canStop = computed(() => !readonly.value && view.value.status === '已发布' && !draftOnly.value);
-const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.id === a.id) : Q_OBJECT_TYPES.some((t) => t.key === a.id));
+const canResolve = (a: KApply) => isStaticReal() ? !!a.id : (a.kind === 'metric' ? METRICS.some((m) => m.id === a.id) : Q_OBJECT_TYPES.some((t) => t.key === a.id));
+
+watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
+  if (!isStaticReal()) return;
+  const base = structuredClone(baseline.value);
+  const target = cr.head.value?.targets.find((t) => t.kind === 'knowledge' && t.id === targetId());
+  if (target?.isNew && !base.some((e) => e.id === target.id)) base.push({ id: target.id, name: target.name ?? '', type: '术语', status: '草稿', cr: cr.head.value!.id, updatedAt: cr.head.value!.updatedAt, owner: cr.head.value!.owner, definition: '', calc: '', synonyms: [], applies: [], period: '', maps: '', filters: [], tries: [], refs: [], history: [] });
+  const item = base.find((e) => e.id === targetId());
+  if (item && isDraft.value) {
+    item.draft = draftFields(cr.items.value, 'content');
+    item.draftStatus = draftFields(cr.items.value, 'status').status as KStatus | undefined;
+  }
+  entries.splice(0, entries.length, ...base);
+});
+
+let definitionSeq = 0;
+const definitionError = ref('');
+watch(() => JSON.stringify([selectedId.value, staticContextKey()]), async () => {
+  const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value;
+  definitionError.value = '';
+  if (!isStaticReal() || !id || cr.head.value?.targets.some((t) => t.kind === 'knowledge' && t.id === id && t.isNew)) return;
+  try {
+    const data = await fetchStaticDetail<KEntry>(`/knowledge/${encodeURIComponent(id)}`);
+    if (n !== definitionSeq || key !== staticContextKey() || id !== selectedId.value) return;
+    baseline.value = [...baseline.value.filter((e) => e.id !== id), { ...data, refs: [] }];
+  } catch (e) { if (n === definitionSeq && key === staticContextKey() && id === selectedId.value && !cr.head.value?.targets.some((t) => t.kind === 'knowledge' && t.id === id && t.isNew)) definitionError.value = e instanceof Error ? e.message : String(e); }
+}, { immediate: true });
+onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
+
 </script>
 
 <template>
@@ -333,7 +453,9 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
           <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="gl-sel" />
         </div>
       </div>
-      <ul class="gl-items">
+      <a-alert v-if="knowledgePage.error.value || definitionError" type="error" :message="knowledgePage.error.value || definitionError" show-icon />
+      <div v-if="knowledgePage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
+      <ul class="gl-items" :aria-busy="knowledgePage.loading.value">
         <li v-for="e in list" :key="e.id" :class="{ active: e.id === cur?.id }" :title="`${e.name} · ${e.type}${e.synonyms.length ? ` · ${e.synonyms.slice(0, 3).join('、')}` : ''} · ${e.id}`" @click="pick(e.id)">
           <div class="gl-row">
             <span class="t-14 gl-name gl-ell">{{ e.name }}</span>
@@ -343,12 +465,12 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
         </li>
       </ul>
       <div class="gl-foot">
-        <AppPagination v-model:page="lpage" variant="simple" :total="filtered.length" :size="LPAGE" unit="条" class="gl-pager" empty-text="没有匹配的业务知识" />
+        <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="条" class="gl-pager" empty-text="没有匹配的业务知识" />
       </div>
     </div>
 
     <div v-if="cur" class="panel gl-detail">
-      <DraftBanner v-if="isDraft && draft" :draft="draft"
+      <DraftBanner v-if="isDraft && draft && (!isStaticReal() || cr.head.value?.status === '草稿')" :draft="draft"
         @submit="cr.submit" @discard="draftOnly ? message.info('这条知识只在草稿里，放弃请到变更单处理') : cr.discard()" />
       <div class="gl-head">
         <span class="t-16 fw-600 c-1">{{ view.name }}</span>
@@ -372,7 +494,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
       <a-tabs v-model:activeKey="tab" class="gl-tabs">
         <a-tab-pane key="content" tab="内容" />
         <a-tab-pane key="qa" tab="问数中的作用" />
-        <a-tab-pane key="refs" :tab="`引用 ${cur.refs.length}`" />
+        <a-tab-pane key="refs" tab="引用" />
         <a-tab-pane key="history" tab="版本历史" />
       </a-tabs>
 
@@ -383,7 +505,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
             <span>知识内容</span>
             <a-space v-if="editing">
               <a-button size="small" @click="cancelEdit">取消</a-button>
-              <a-button size="small" :disabled="!dirty" @click="save">保存到草稿</a-button>
+              <a-button size="small" :disabled="!dirty || (isStaticReal() && (candidateLoading || !!candidateError))" @click="save">保存到草稿</a-button>
             </a-space>
             <a-tooltip v-else :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">编辑内容</a-button></a-tooltip>
           </div>
@@ -424,7 +546,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
             <a-form-item label="定义"><a-textarea v-model:value="form.definition" :rows="3" placeholder="用业务语言写清楚是什么、不包括什么；问数会用它理解提问" /></a-form-item>
             <a-form-item label="计算说明"><a-textarea v-model:value="form.calc" :rows="2" placeholder="例如：门店.开业日期 ≤ 统计期起始 − 12 个月" /></a-form-item>
             <a-form-item label="同义词"><a-select v-model:value="form.synonyms" mode="tags" placeholder="输入后回车" /></a-form-item>
-            <a-form-item label="适用于"><a-select v-model:value="form.applies" mode="multiple" :options="APPLY_OPTIONS" option-filter-prop="label" placeholder="选择对象类型或指标" /></a-form-item>
+            <a-form-item label="适用于"><a-alert v-if="candidateError" type="error" :message="candidateError" show-icon><template #action><a-button size="small" @click="loadCandidates">重试</a-button></template></a-alert><a-select v-model:value="form.applies" :loading="candidateLoading" :disabled="candidateLoading || !!candidateError" mode="multiple" :options="APPLY_OPTIONS" option-filter-prop="label" placeholder="选择对象类型或指标" /><div v-for="a in unavailableApplies" :key="`${a.kind}:${a.id}`" class="t-12 c-warning">{{ a.name || a.id }}（已失效或无权限；保留到显式移除）<a-button type="link" size="small" @click="form.applies = form.applies.filter((k) => k !== `${a.kind}:${a.id}`)">移除引用</a-button></div></a-form-item>
             <div class="gl-form-grid">
               <a-form-item label="生效期"><a-input v-model:value="form.period" /></a-form-item>
               <a-form-item label="负责人"><a-input v-model:value="form.owner" /></a-form-item>
@@ -450,7 +572,8 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
           </div>
           <div class="gl-sec t-14 fw-600">问数如何使用</div>
           <div class="t-14 c-2">识别“{{ words.slice(0, 4).join('”“') }}”后映射为 {{ view.maps || '--' }}{{ view.filters.length ? `，并默认加 ${view.filters.length} 个过滤条件` : '' }}。</div>
-          <div class="t-12 c-3">业务知识只随本体整版发布生效；问数始终使用已发布版本 {{ app.ontologyVersion }}。</div>
+          <AppPagination v-model:page="hpage" variant="full" :total="isStaticReal() ? historyPage.total.value : histRows.length" v-model:size="historySize" :empty="false" />
+        <div class="t-12 c-3">业务知识只随本体整版发布生效；问数始终使用已发布版本 {{ app.ontologyVersion }}。</div>
         </div>
       </div>
 
@@ -472,22 +595,25 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
             <span>同义词冲突</span>
             <span class="t-12 fw-400" :class="conflictRows.length ? 'c-1' : 'c-3'">{{ conflictRows.length ? `${conflictRows.length} 个词同时指向其他知识（V9）` : '没有冲突' }}</span>
           </div>
+          <a-alert v-if="ruleError" type="warning" :message="`冲突配置未提供：${ruleError}`" show-icon />
           <div v-for="c in conflictRows" :key="c.word" class="gl-conflict">
             <span class="t-14 c-1 fw-600 gl-cw">“{{ c.word }}”</span>
             <span class="t-14 c-2">同时指向
               <template v-for="(o, i) in c.others" :key="o.id"><a @click="pick(o.id)">{{ o.name }}</a><span class="c-3 num">（{{ o.id }}）</span>{{ i < c.others.length - 1 ? '、' : '' }}</template>
             </span>
             <span class="gl-sp" />
-            <span class="t-12" :class="c.rule ? 'c-3' : 'c-1'">{{ c.rule ?? '未设置默认，问数会先追问用户' }}</span>
+            <span class="t-12" :class="c.rule ? 'c-3' : 'c-1'">{{ c.rule ?? (isStaticReal() ? '未提供冲突处理配置' : '未设置默认，问数会先追问用户') }}</span>
           </div>
         </div>
         <div class="gl-right gl-try">
-          <div class="gl-sec t-14 fw-600 gl-sec-row"><span>试一试</span><span class="t-12 c-3 fw-400">按{{ isDraft ? `草稿 ${draft?.id}` : `已发布版本 ${app.ontologyVersion}` }}解析，不会真的查询</span></div>
+          <div class="gl-sec t-14 fw-600 gl-sec-row"><span>试一试</span><span v-if="!isStaticReal()" class="t-12 c-3 fw-400">按{{ isDraft ? `草稿 ${draft?.id}` : `已发布版本 ${app.ontologyVersion}` }}解析，不会真的查询</span></div>
+          <a-alert v-if="isStaticReal() && trialError" type="error" :message="trialError" />
+          <span v-if="isStaticReal()" class="t-12 c-3">按已保存定义预览词义与时间，不执行数据查询。</span>
           <div class="gl-try-in">
             <a-input v-model:value="tryQ" placeholder="输入一个问题，看问数怎么理解" @press-enter="runTry()" />
-            <a-button @click="runTry()">解析</a-button>
+            <a-button :loading="trialBusy" @click="runTry()">解析</a-button>
           </div>
-          <div class="gl-try-ex">
+          <div v-if="!isStaticReal()" class="gl-try-ex">
             <span class="t-12 c-3">示例</span>
             <a v-for="s in cur.tries" :key="s" class="t-12" @click="runTry(s)">{{ s }}</a>
           </div>
@@ -503,9 +629,10 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
 
       <!-- 引用 -->
       <div v-else-if="tab === 'refs'" class="gl-body">
-        <div class="t-14 c-2">{{ cur.refs.length ? `共 ${cur.refs.length} 项引用本条知识：${refSummary}` : '暂无指标、认证问答或规则引用本条知识' }}</div>
-        <template v-if="cur.refs.length">
-          <a-table :columns="refCols" :data-source="refRows" :pagination="false" size="middle" row-key="name">
+        <a-alert v-if="refsPage.error.value" type="error" :message="refsPage.error.value" show-icon />
+        <div class="t-14 c-2">{{ isStaticReal() ? (refsPage.loading.value ? '加载中…' : refTotal ? `共 ${refTotal} 项引用本条知识` : '暂无引用') : cur.refs.length ? `共 ${cur.refs.length} 项引用本条知识：${refSummary}` : '暂无指标、认证问答或规则引用本条知识' }}</div>
+        <template v-if="refTotal">
+          <a-table :columns="refCols" :data-source="refRows" :loading="refsPage.loading.value" :pagination="false" size="middle" row-key="name">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
                 <ObjRef v-if="record.hover" :kind="record.hover.kind" :id="record.hover.id">{{ record.name }}</ObjRef>
@@ -514,7 +641,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
             </template>
           </a-table>
           <div class="gl-ref-foot">
-            <AppPagination v-model:page="rpage" variant="simple" :total="cur.refs.length" :size="REF_PAGE" unit="项" :empty="false" />
+            <AppPagination v-model:page="rpage" variant="simple" :total="refTotal" :size="REF_PAGE" unit="项" :empty="false" />
           </div>
         </template>
         <div class="t-12 c-3">修改或停用本条知识时，以上各项会出现在变更单的影响分析里；认证问答需要重新认证。</div>
@@ -522,7 +649,8 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
 
       <!-- 版本历史 -->
       <div v-else class="gl-body">
-        <a-table :columns="histCols" :data-source="histRows" :pagination="false" size="middle" :row-key="(r: any) => r.ver + (r.cr ?? '') + r.at">
+        <a-alert v-if="historyPage.error.value" type="error" :message="historyPage.error.value" show-icon />
+        <a-table :columns="histCols" :data-source="isStaticReal() ? histRows : histRows.slice((hpage - 1) * historySize, hpage * historySize)" :loading="historyPage.loading.value" :pagination="false" size="middle" :row-key="(r: any) => r.ver + (r.cr ?? '') + r.at">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'cr'">
               <a v-if="record.cr" class="num" @click="crLink(record.cr)">{{ record.cr }}</a>
@@ -537,7 +665,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
       </div>
     </div>
   </div>
-  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" :title-placeholder="creating ? '例如：新增术语“前置仓”' : undefined" @ok="start" />
+  <StartChangeModal v-model:open="changeOpen" :target-name="pendingNewCr && creating ? `${changeTarget}（重试保留草稿 ${pendingNewCr}）` : changeTarget" :title-placeholder="creating ? '例如：新增术语“前置仓”' : undefined" @ok="start" />
 </template>
 
 <style scoped>

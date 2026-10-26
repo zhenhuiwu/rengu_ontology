@@ -1,15 +1,29 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { useAppStore, TENANTS } from '@/stores/app';
-import { loadTenants, type TenantOption } from '@/api/tenants';
+import { useAppStore } from '@/stores/app';
+import { loadTenants, tenantOptions } from '@/api/tenants';
+import { loadMyProfile } from '@/api/profile';
+import { currentApiContext } from '@/api/http';
+import { adminApiOn } from '@/api/admin';
 import { PAGES } from '@/nav';
 import VersionPicker from '@/components/VersionPicker.vue';
 import NoticeList from '@/components/NoticeList.vue';
 
 const app = useAppStore();
 const router = useRouter();
+const profileLoading = ref(false), profileError = ref('');
+let profileSeq = 0;
+async function reloadProfile() {
+  if (!adminApiOn()) return;
+  const my = ++profileSeq, key = JSON.stringify(currentApiContext());
+  app.user = { name: '', role: '' }; profileLoading.value = true; profileError.value = '';
+  try { const profile = await loadMyProfile(); if (my === profileSeq && key === JSON.stringify(currentApiContext()) && profile) app.user = { name: profile.name, role: profile.roleNames.join('、') || '未分配角色' }; }
+  catch { if (my === profileSeq && key === JSON.stringify(currentApiContext())) profileError.value = '当前身份加载失败'; }
+  finally { if (my === profileSeq && key === JSON.stringify(currentApiContext())) profileLoading.value = false; }
+}
+watch(() => JSON.stringify(currentApiContext()), () => { void reloadProfile(); }, { immediate: true });
 const q = ref('');
 const noticeOpen = ref(false);
 const inputRef = ref<{ focus: () => void } | null>(null);
@@ -20,18 +34,24 @@ function onKey(e: KeyboardEvent) {
 }
 onMounted(() => window.addEventListener('keydown', onKey));
 // 租户 / 组织：后台 sys_tenant + sys_org（GET /tenants），mock 模式回退 TENANTS
-const tenants = ref<TenantOption[]>(TENANTS);
-onMounted(async () => {
+const tenants = tenantOptions;
+const tenantError = ref('');
+watch(tenants, (options) => {
+  if (options.length) tenantError.value = '';
+  if (!options.some((t) => t.value === app.tenant)) app.tenant = (options.find((t) => t.default) ?? options[0])?.value ?? app.tenant;
+}, { immediate: true });
+async function reloadTenants() {
+  tenantError.value = '';
   try {
-    tenants.value = await loadTenants();
-    if (!tenants.value.some((t) => t.value === app.tenant)) app.tenant = (tenants.value.find((t) => t.default) ?? tenants.value[0])?.value ?? app.tenant;
-  } catch { /* 拉取失败保留演示数据 */ }
-});
+    await loadTenants();
+  } catch { tenantError.value = '租户与组织加载失败'; }
+}
+onMounted(reloadTenants);
 // 顶栏 ⓘ 使用帮助菜单（原型：快速入门 / 反馈只给提示）
 function onHelp({ key }: { key: string | number }) {
   if (key === 'kbd') setTimeout(() => inputRef.value?.focus(), 0);
   else if (key === 'start') message.info('快速入门：在顶部搜索框输入对象、指标或直接提问');
-  else if (key === 'feedback') message.info('请把问题和截图发给平台管理员王敏');
+  else if (key === 'feedback') message.info(adminApiOn() ? '请把问题和截图发给平台管理员' : '请把问题和截图发给平台管理员王敏');
 }
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 
@@ -61,7 +81,8 @@ function onSelect(v: string) {
       <span class="t-16 fw-600 c-1">本体智能平台</span>
     </router-link>
 
-    <a-select v-model:value="app.tenant" :options="tenants" :bordered="false" class="tb-tenant" popup-class-name="tb-tenant-pop" />
+    <a-select v-model:value="app.tenant" :options="tenants" :placeholder="tenantError || '暂无组织'" :status="tenantError ? 'error' : undefined" :bordered="false" class="tb-tenant" popup-class-name="tb-tenant-pop" />
+    <span v-if="tenantError" class="t-12 c-3">{{ tenantError }} <a-button type="link" size="small" @click="reloadTenants">重试</a-button></span>
 
     <div class="tb-search">
       <a-auto-complete
@@ -79,7 +100,7 @@ function onSelect(v: string) {
       <VersionPicker />
       <a-divider type="vertical" />
       <a-popover v-model:open="noticeOpen" trigger="click" placement="bottomRight">
-        <template #content><NoticeList @picked="noticeOpen = false" /></template>
+        <template #content><div v-if="adminApiOn()" class="t-12 c-3">通知服务尚未接入</div><NoticeList v-else @picked="noticeOpen = false" /></template>
         <a-badge :count="app.unread" size="small" :number-style="{ backgroundColor: 'var(--g8)', color: '#fff', boxShadow: 'none' }">
           <a-button type="text" size="small" class="tb-icon" aria-label="通知"><BellOutlined /></a-button>
         </a-badge>
@@ -99,8 +120,8 @@ function onSelect(v: string) {
       </a-dropdown>
       <a-dropdown placement="bottomRight">
         <span class="tb-user">
-          <a-avatar :size="24" class="tb-avatar"><span class="t-12">{{ app.user.name.slice(0, 1) }}</span></a-avatar>
-          <span class="t-14 c-1">{{ app.user.name }}</span>
+          <a-avatar :size="24" class="tb-avatar"><span class="t-12">{{ app.user.name.slice(0, 1) || '—' }}</span></a-avatar>
+          <span class="t-14 c-1 tb-user-name" :title="app.user.name">{{ app.user.name || (profileLoading ? '身份加载中' : '用户未提供') }}</span><span v-if="adminApiOn()" class="t-12 c-3 tb-user-role" :title="app.user.role">{{ app.user.role || '角色未提供' }}</span><a-button v-if="profileError" type="link" size="small" :title="profileError" @click.stop="reloadProfile">重试身份</a-button>
         </span>
         <template #overlay>
           <a-menu :items="[{ key: 'profile', label: '个人设置' }, { key: 'logout', label: '退出登录' }]" />
@@ -120,6 +141,8 @@ function onSelect(v: string) {
 .tb-right { display: flex; align-items: center; gap: 8px; }
 .tb-icon { color: var(--g9); }
 .tb-user { display: flex; align-items: center; gap: 8px; cursor: pointer; padding-left: 8px; }
+.tb-user-name { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-user-role { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-avatar { background: var(--brand); }
 .tb-help { min-width: 200px; }
 .tb-help-row { display: flex; justify-content: space-between; gap: 16px; white-space: nowrap; }

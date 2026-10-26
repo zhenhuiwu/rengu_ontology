@@ -7,13 +7,23 @@
  */
 import type { Alert, AlertStatus, AlertDim } from '@/mock/dynamic';
 import type { ActionLog, ActionRecord, ActionStatus, SysId } from '@/mock/actions';
-import { apiClient, isApiError, type PageResult } from './http';
+import { apiClient, currentApiContext, isApiError, type PageResult } from './http';
 import { DRAFTS } from '@/mock/releases';
 import { registerDraft } from './static';
 
 export const dynamicApi = apiClient('dynamic');
+export const dynamicContextKey = () => JSON.stringify(currentApiContext());
 const api = dynamicApi;
 const enc = encodeURIComponent;
+
+async function inContext<T>(request: Promise<T>): Promise<T> {
+  const ctx = dynamicContextKey();
+  try {
+    const value = await request;
+    if (ctx === dynamicContextKey()) return value;
+  } catch (error) { if (ctx === dynamicContextKey()) throw error; }
+  const changed = new Error('操作时上下文已切换'); changed.name = 'DynamicContextChanged'; throw changed;
+}
 
 // ---------------- 告警 ----------------
 
@@ -36,14 +46,15 @@ const opt = (v?: string) => (v && v !== '全部' ? v : undefined);
 export const listAlerts = (q: AlertQuery) =>
   api.get<AlertPageDto>('/alerts', { query: { status: q.status, level: opt(q.level), ruleId: opt(q.ruleId), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
 export const getAlert = (id: string) => api.get<AlertDetailDto>(`/alerts/${enc(id)}`);
-export const claimAlert = (id: string) => api.post<AlertDetailDto>(`/alerts/${enc(id)}:claim`);
-export const batchClaimAlerts = (ids: string[]) => api.post<{ claimed: number; ids: string[] }>('/alerts:batch-claim', { ids });
-export const transferAlert = (id: string, to: string) => api.post<AlertDetailDto>(`/alerts/${enc(id)}:transfer`, { to });
-export const closeAlert = (id: string, as: '已解决' | '已忽略', reason: string) => api.post<AlertDetailDto>(`/alerts/${enc(id)}:close`, { as, reason });
+export const claimAlert = (id: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:claim`));
+export const batchClaimAlerts = (ids: string[]) => inContext(api.post<{ claimed: number; ids: string[] }>('/alerts:batch-claim', { ids }));
+export const transferAlert = (id: string, to: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:transfer`, { to }));
+export const closeAlert = (id: string, as: '已解决' | '已忽略', reason: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:close`, { as, reason }));
 export const batchCloseAlerts = (ids: string[], as: '已解决' | '已忽略', reason: string) =>
-  api.post<{ closed: number; ids: string[] }>('/alerts:batch-close', { ids, as, reason });
-export const startAlertAction = (id: string) => api.post<{ alert: AlertDetailDto; action: ActionRunDetailDto }>(`/alerts/${enc(id)}:start-action`);
+  inContext(api.post<{ closed: number; ids: string[] }>('/alerts:batch-close', { ids, as, reason }));
+export const startAlertAction = (id: string) => inContext(api.post<{ alert: AlertDetailDto; action: ActionRunDetailDto }>(`/alerts/${enc(id)}:start-action`));
 export const listPeople = () => api.get<string[]>('/people');
+export const getAlertMeta = () => api.get<{ rules: { id: string; name: string }[] }>('/alerts/meta');
 
 // ---------------- 动作 ----------------
 
@@ -60,7 +71,7 @@ export interface ActionRunQuery { tab: ActionTab; status?: string; action?: stri
 export interface ActionMetaDto {
   actionNames: string[];
   actionSystems: { id: SysId; name: string }[];
-  actionMeta: Record<string, { sysId: SysId; kind: string; version: string; approver: string; call: string }>;
+  actionMeta: Record<string, { sysId: SysId | null; kind: string; version: string; approver: string | null; approverId?: string | null; approvalRequired?: boolean; approvalConfigured?: boolean; call: string }>;
   /** 对象类型显示名（对象类型目录） */
   objKindLabel?: Record<string, string>;
 }
@@ -86,15 +97,15 @@ export async function listActionRuns(q: ActionRunQuery): Promise<ActionRunPageDt
 }
 export const getActionRun = async (id: string) => clean(await api.get<ActionRunDetailDto>(`/action-runs/${enc(id)}`));
 export const getActionMeta = () => api.get<ActionMetaDto>('/actions/meta');
-export const confirmActionRun = async (id: string) => clean(await api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:confirm`));
-export const withdrawActionRun = async (id: string, reason: string) => clean(await api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:withdraw`, { reason }));
-export const approveActionRun = async (id: string) => clean(await api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:approve`));
+export const confirmActionRun = async (id: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:confirm`)));
+export const withdrawActionRun = async (id: string, reason: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:withdraw`, { reason })));
+export const approveActionRun = async (id: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:approve`)));
 export const resubmitActionRun = async (id: string) => {
-  const r = await api.post<{ id: string; idemKey: string; action: ActionRunDetailDto; original: ActionRunDetailDto }>(`/action-runs/${enc(id)}:resubmit`);
+  const r = await inContext(api.post<{ id: string; idemKey: string; action: ActionRunDetailDto; original: ActionRunDetailDto }>(`/action-runs/${enc(id)}:resubmit`));
   return { ...r, action: clean(r.action), original: clean(r.original) };
 };
 export const reconcileActionRun = async (id: string, result: ReconcileResult, note: string) =>
-  clean(await api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:reconcile`, { result, note }));
+  clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:reconcile`, { result, note })));
 /** 暂存动作（规则 / 问数 / 推演 / 手动入口用；动作中心、告警页本身没有暂存入口） */
 export const stageActionRun = async (body: Record<string, unknown>) => clean(await api.post<ActionRunDetailDto>('/action-runs:stage', body));
 
@@ -114,7 +125,7 @@ export interface RuleHitDetailDto extends Omit<Hit, 'alert'> { alert: AlertDetai
 /** 命中的上下文维度（通用，替代旧的 storeId / storeLabel；后台目前只给 objKind=store 一种） */
 export interface HitDim { objKind: string; id: string; label?: string | null }
 export interface ReplaySampleDto { key: string; at: string; objKind: string; objId: string; objLabel: string; dims?: HitDim[]; value: string; diff: string }
-export interface ReplayDto { actual: number; would: number; added: number; removed: number; deduped: number; dedupeReason: string; samples: ReplaySampleDto[] }
+export interface ReplayDto { actual: number | null; would: number; added: number | null; removed: number | null; deduped: number | null; dedupeReason: string; samples: ReplaySampleDto[]; mode: 'snapshot' | 'events'; anchor: string; ranAt: string; ruleVersion: number; candidates: number; evaluated: number; unknown: number; filtered: number; notice: string; total: number; page: number; size: number }
 
 /** 后台 null → 前端可选字段 undefined（Hit.storeId / alertId 等在 mock 里是 `?:`） */
 const undef = <T extends object>(o: T): T => {
@@ -217,8 +228,8 @@ export function crErrText(e: unknown): string {
   }
 }
 
-export const replayRule = (id: string, range: '7d' | '30d', version: 'current' | 'draft') =>
-  api.post<ReplayDto>(`/rules/${enc(id)}:replay`, { range, version });
+export const replayRule = (id: string, range: '7d' | '30d', version: 'current' | 'draft', mode: 'snapshot' | 'events' = 'snapshot', page = 1, size = 10, anchor?: string) =>
+  api.post<ReplayDto>(`/rules/${enc(id)}:replay`, { range, version, mode, page, size, anchor });
 export const listRuleVersions = (id: string) => api.get<RuleVersionDto[]>(`/rules/${enc(id)}/versions`);
 /** 规则暂存过的动作（动作页“已暂存的动作”）：动作中心全部记录按 ruleId 过滤 */
 export async function listRuleActionRuns(ruleId: string) {
@@ -253,15 +264,15 @@ import type { Scenario, ScResult, ScImpact, StagePlan } from '@/mock/scenarios';
 import type { ScCfg, ScTemplate } from '@/mock/scenarioTemplates';
 /** 详情 / 运行 / 改名返回：result 不含 impacts（影响明细走分页接口） */
 export interface ScenarioDto extends Omit<Scenario, 'result'> { result?: Omit<ScResult, 'impacts'> | null; lockReason?: string }
-export interface ScenarioMetaDto { templates: ScTemplate[]; areas: string[]; categories: string[]; promoTypes: string[]; baseDrivers: ScCfg; statuses: string[] }
+export interface ScenarioMetaDto { templates: ScTemplate[]; areas: string[]; categories: string[]; promoTypes: string[]; baseDrivers: ScCfg; statuses: string[]; executorConfigured?: boolean; unavailableReason?: string }
 export const listScenarios = (q: { status?: string; kw?: string; page: number; size: number }) =>
   api.get<PageResult<ScenarioDto>>('/scenarios', { query: { status: opt(q.status), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
 export const getScenariosMeta = () => api.get<ScenarioMetaDto>('/scenarios/meta');
 export const compareScenarios = (ids: string[]) => api.get<{ items: ScenarioDto[]; sameScope: boolean }>('/scenarios:compare', { query: { ids: ids.join(',') } });
-export const createScenario = (from?: string) => api.post<ScenarioDto>('/scenarios', from ? { from } : {});
+export const createScenario = (from?: string) => inContext(api.post<ScenarioDto>('/scenarios', from ? { from } : {}));
 export const getScenario = (id: string) => api.get<ScenarioDto>(`/scenarios/${enc(id)}`);
-export const renameScenario = (id: string, name: string) => api.patch<ScenarioDto>(`/scenarios/${enc(id)}`, { name });
-export const runScenario = (id: string, body: { name?: string; scope: ScCfg; drivers: ScCfg }) => api.post<ScenarioDto>(`/scenarios/${enc(id)}:run`, body);
+export const renameScenario = (id: string, name: string) => inContext(api.patch<ScenarioDto>(`/scenarios/${enc(id)}`, { name }));
+export const runScenario = (id: string, body: { name?: string; scope: ScCfg; drivers: ScCfg }) => inContext(api.post<ScenarioDto>(`/scenarios/${enc(id)}:run`, body));
 /** 运行中回 202 { status: '运行中' }（继续轮询）；失败回 409 SCENARIO_FAILED；完成回结果 */
 export const getScenarioResult = (id: string) => api.get<Omit<ScResult, 'impacts'> | { status: string }>(`/scenarios/${enc(id)}/result`);
 /** 轮询被页面卸载等中止时抛出，调用方静默忽略 */
@@ -279,4 +290,4 @@ export async function waitScenarioResult(id: string, everyMs = 800, maxTries = 1
 }
 export const listScenarioImpacts = (id: string, page: number, size: number) => api.get<PageResult<ScImpact>>(`/scenarios/${enc(id)}/impacts`, { query: { page, size } });
 export const getScenarioStagePlan = (id: string) => api.get<StagePlan[]>(`/scenarios/${enc(id)}/stage-plan`);
-export const stageScenario = (id: string, keys: string[]) => api.post<{ staged: string[]; message: string }>(`/scenarios/${enc(id)}:stage`, { keys });
+export const stageScenario = (id: string, keys: string[]) => inContext(api.post<{ staged: string[]; message: string }>(`/scenarios/${enc(id)}:stage`, { keys }));

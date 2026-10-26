@@ -4,10 +4,10 @@
  * URL：?event= 选中项，?tab= 页签，?fpage/fsize 载荷字段分页，?range= 时间范围 + ?epage= 近期事件分页，?view=draft 草稿，?ver= 历史版本只读。
  * 真接口（开关 action 打开）：左侧列表（来源 / 关键字 / 分页）走 GET /event-types；详情（含 specific）、载荷字段、订阅方、
  * 版本历史走 api/action.ts 的快照；近期事件（GET /event-types/{id}/events，按时间范围 / 结果 / 页码取）、
- * 概览的最近事件 / 运行健康 / 近 14 天事件数（…/events 第 1 页、…/stats）按选中类型取，取到之前 / 后台没起来读 mock。
+ * 概览的最近事件 / 运行健康 / 近 14 天事件数（…/events 第 1 页、…/stats）按选中类型取，真模式加载或失败为空态。
  * 规则名、草稿写入（versioning）仍读 mock。
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch, onScopeDispose } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -27,15 +27,15 @@ import {
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
+import NewActionEventForm from './parts/NewActionEventForm.vue';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
-import { backend, fallBackIfDown } from '@/api/fallback';
 import {
-  actionApi, snap, loadSnapshot, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
-  listEvents, getEventStats, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore,
+  actionApi, actionContextKey, snapshotReady, loadSnapshot, eventDetailReady, loadEventDetail, listEventPayload, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
+  listEvents, getEventStats, simulateEvent, getEventDeliveries, type EventDeliveryStatus, type EventSimulation, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore,
 } from '@/api/action';
-import type { EventRecord } from '@/mock/actionEvent';
+import type { EventRecord } from '@/api/action';
 
 const route = useRoute();
 const router = useRouter();
@@ -47,36 +47,40 @@ const source = ref('全部');
 const kw = ref('');
 const filtered = computed(() => EVENT_TYPES.filter((e) => (source.value === '全部' || e.source === source.value)
   && (!kw.value || e.name.includes(kw.value))));
-const LPAGE = 22;
+const LPAGE = actionApi.isReal() ? 10 : 22;
 const lpage = ref(1);
 watch([source, kw], () => { lpage.value = 1; });
 
-/* 真接口：列表分页 / 筛选走后台，其余读快照；快照没到之前不渲染主体（cur 先拿 mock 第一条占位，免得各 computed 读空） */
+/* 真接口：列表分页 / 筛选走后台，目录只读轻头，选中类型才读详情；编辑须等完整基线，真模式空数据不借演示类型 */
 const real = actionApi.isReal();
+let mounted = true;
+onScopeDispose(() => { mounted = false; });
 const loadErr = ref('');
-const realList = reactive<{ items: EventTypeRow[]; total: number; sources: string[] }>({ items: [], total: 0, sources: [] });
+const realList = reactive<{ key: string; items: EventTypeRow[]; total: number; sources: string[] }>({ key: '', items: [], total: 0, sources: [] });
 const apiMsg = (e: unknown) => (isApiError(e) ? e.message : String(e));
 if (real) {
-  watch(() => route.query.ver, () => { loadErr.value = ''; loadSnapshot().catch((e) => { if (!fallBackIfDown(e)) loadErr.value = apiMsg(e); }); }, { immediate: true });
+  watch(actionContextKey, () => { const key = actionContextKey(); loadErr.value = ''; loadSnapshot().catch((e) => { if (mounted && key === actionContextKey()) loadErr.value = apiMsg(e); }); }, { immediate: true });
   let seq = 0;
-  watch([source, kw, lpage, () => route.query.ver], async () => {
-    if (backend.down) return;
-    const n = ++seq;
+  watch([source, kw, lpage, actionContextKey], async () => {
+    const n = ++seq; const key = actionContextKey();
+    if (realList.key !== key) Object.assign(realList, { key, items: [], total: 0, sources: [] });
+    realList.items = [];
     try {
       const r = await listEventTypes({ source: source.value, kw: kw.value, page: lpage.value, size: LPAGE });
-      if (n === seq) Object.assign(realList, { items: r.items, total: r.total, sources: r.sources });
-    } catch (e) { if (n === seq && !fallBackIfDown(e)) message.error(`事件类型列表加载失败：${apiMsg(e)}`); }
-  }, { immediate: true });
+      if (mounted && n === seq && key === actionContextKey()) { Object.assign(realList, { items: r.items, total: r.total, sources: r.sources }); if (r.page && r.page !== lpage.value) lpage.value = r.page; }
+    } catch (e) { if (mounted && n === seq && key === actionContextKey()) message.error(`事件类型列表加载失败：${apiMsg(e)}`); }
+  }, { immediate: true, flush: 'sync' });
 }
-/** 后台没起来（backend.down）：整页回退 mock，和开关关着时一样渲染 */
-const live = computed(() => real && !backend.down);
-const ready = computed(() => !live.value || snap.state === 'ready');
-const sources = computed(() => (live.value && realList.sources.length ? realList.sources : EVENT_SOURCES));
-const list = computed<EventTypeRow[]>(() => (live.value ? realList.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
-const listTotal = computed(() => (live.value ? realList.total : filtered.value.length));
+/** 真实模式加载和错误均保持真实空态；演示数据仅用于显式 mock 模式。 */
+const live = computed(() => real);
+const ready = computed(() => !real || snapshotReady() && (!cur.value.id || eventDetailReady(cur.value.id, isDraft.value)));
+const sources = computed(() => (live.value ? realList.key === actionContextKey() ? realList.sources : ['全部'] : EVENT_SOURCES));
+const list = computed<EventTypeRow[]>(() => (live.value ? realList.key === actionContextKey() ? realList.items : [] : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
+const listTotal = computed(() => (live.value ? realList.key === actionContextKey() ? realList.total : 0 : filtered.value.length));
+const emptyEvent: EventType = { id: '', name: '', api: '', source: '数据同步', sourceRef: '', object: '', objectApi: '', status: '已发布', version: '', owner: '', desc: '', dedupKey: '', dedupWindow: '', retention: '', delivery: '', ordering: '', weekly: 0, specific: [] };
 const cur = computed<EventType>(() => {
-  const all = ready.value ? eventTypes() : EVENT_TYPES;
-  return all.find((e) => e.id === route.query.event) ?? all[0] ?? EVENT_TYPES[0];
+  const all = eventTypes();
+  return (route.query.event ? all.find((e) => e.id === route.query.event) : all[0]) ?? (real ? emptyEvent : EVENT_TYPES[0]);
 });
 const RESET = { view: undefined, fpage: undefined, fsize: undefined, epage: undefined };
 const statusColor = (s: EventType['status']) => (s === '变更中' ? 'warning' : 'default');
@@ -89,25 +93,40 @@ const tab = computed({
 
 /* 草稿（公共 useDraftView：CR-0013 → 门店价格变更；增删改与改动标记用本页 useDraftEdits） */
 const { draft, isDraft, editTip: viewTip, readonly, reason, setView, start, cancel } = useDraftView('event', () => cur.value.id);
+if (real) watch([actionContextKey, () => cur.value.id, isDraft], async () => {
+  const key = actionContextKey(), id = cur.value.id;
+  loadErr.value = '';
+  if (!id) return;
+  try { await loadEventDetail(id, isDraft.value); }
+  catch (e) { if (mounted && key === actionContextKey() && id === cur.value.id) loadErr.value = apiMsg(e); }
+}, { immediate: true, flush: 'sync' });
 const crTarget = () => ({ id: cur.value.id, name: `${cur.value.name}（${cur.value.api}）` });
 const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军', writer: crWriter('event', crTarget), ready: () => ready.value });
 /** 放弃草稿（确认卡在 useDraftEdits.discard）：写库模式下删库成功后用 cancel 撤掉本对象在登记表里的登记并切回已发布版；开关关着同以前（mock 登记不动） */
 const onDiscard = () => de.discard(() => { const d = draft.value; if (crWriteOn() && d) cancel(d.id); else setView('published'); });
 /* 刷新后恢复（写库模式）：按库里的草稿登记重新登记本页对象，库里已没有的 mock 登记去掉；本对象的草稿行由 useDraftEdits 读回 */
 if (crWriteOn()) {
+  const key = actionContextKey();
   crRestore('event').then(({ pairs, inDb }) => {
+    if (!mounted || key !== actionContextKey()) return;
     for (const t of EVENT_TYPES) { const d = draftOf('event', t.id); if (d && !inDb(d.id, t.id)) forgetTarget(d.id, 'event', t.id); }
     for (const [cr, id] of pairs) start({ join: cr, target: id });
   }).catch((e) => message.error(`读取变更单草稿失败：${crErrText(e)}`));
 }
 /** 发起变更 / 加入：VITE_PALANTIR_CR_WRITE 开着时先写库（失败弹错，不进草稿），关着同以前 */
-async function onStart(opts: { join?: string; title?: string }) {
+async function onStart(opts: { join?: string; title?: string; desc?: string }) {
+  if (creating.value) { createOptions.value = opts; createOpen.value = true; creating.value = false; return; }
   try { start(await crStart({ kind: 'event', ...crTarget() }, opts)); } catch (e) { message.error(`发起变更失败：${crErrText(e)}`); }
 }
-const { canEdit, editTip, dirty, bannerDraft } = de;
+const creating = ref(false);
+const createOpen = ref(false);
+const createOptions = ref<{ join?: string; title?: string; desc?: string }>({});
+watch(() => route.query.createType, value => { if (real && value) createOpen.value = true; }, { immediate: true });
+const { canEdit: draftCanEdit, editTip, dirty, bannerDraft } = de;
+const canEdit = computed(() => draftCanEdit.value && ready.value);
 const changeOpen = ref(false);
 const changeTarget = ref('');
-const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
+const openChange = (name: string, isNew = false) => { creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
 /** 切换左侧选中项：清掉抽屉与分页；有未保存修改先确认 */
 const pick = (id: string) => de.guard(() => router.replace({ query: { ...route.query, ...RESET, drawer: undefined, drawer2: undefined, event: id } }));
 const onView = (v: 'published' | 'draft') => (v === 'published' ? de.guard(() => setView('published')) : setView(v));
@@ -153,40 +172,69 @@ function saveEditor() {
 const delItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].remove(key);
 const restoreItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].restore(key);
 
+const simulation = ref<EventSimulation | null>(null);
+const testDeliveries = ref<EventDeliveryStatus | null>(null);
+const simulating = ref(false);
+watch([() => cur.value.id, actionContextKey, isDraft], () => { simulation.value = null; testDeliveries.value = null; });
+const deliveryLabel: Record<string, string> = { pending: '待投递', processing: '处理中', delivered: '已投递', skipped: '已跳过', failed: '失败', unknown: '结果未知，需人工核查' };
+async function refreshTestDelivery() {
+  const id = simulation.value?.testEventId;
+  if (!id || simulating.value) return;
+  const key = actionContextKey();
+  simulating.value = true;
+  try {
+    const result = await getEventDeliveries(id);
+    if (key === actionContextKey() && id === simulation.value?.testEventId) testDeliveries.value = result;
+  } catch (e) { message.error(crErrText(e)); }
+  finally { simulating.value = false; }
+}
 async function simulate() {
+  if (real && (readonly.value || dirty.value || simulating.value)) return;
   const e = cur.value;
   const ok = await confirm.ask({
     title: `模拟触发：${e.name}`, target: `${e.object}（使用示例载荷）`, tag: '测试',
     fields: flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').slice(0, 4).map((f) => ({ label: f.name, value: f.sample })),
-    impact: '只投递到订阅方的测试通道，用来验证过滤条件，不会产生告警、执行动作或写入下游。',
-    okText: '发送测试事件',
+    impact: real ? '校验已保存载荷与过滤条件。有已配置测试通道时排队测试事件，仅向测试通道发送；未配置时只校验。' : '只投递到订阅方的测试通道，用来验证过滤条件，不会产生告警、执行动作或写入下游。',
+    okText: real ? '触发测试' : '发送测试事件',
   });
-  if (ok) message.success(`测试事件已投递 ${liveSubs.value.filter((s) => s.status !== '停用').length} 个订阅方的测试通道`);
+  if (!ok) return;
+  if (!real) { message.success(`测试事件已投递 ${liveSubs.value.filter((s) => s.status !== '停用').length} 个订阅方的测试通道`); return; }
+  const key = actionContextKey(); const id = e.id;
+  simulating.value = true;
+  testDeliveries.value = null;
+  try {
+    const result = await simulateEvent(id, isDraft.value ? 'draft' : 'published', isDraft.value ? draft.value?.id : undefined);
+    if (key === actionContextKey() && id === cur.value.id) simulation.value = result;
+    message.info(result.message);
+  } catch (e) { message.error(`模拟校验失败：${crErrText(e)}`); }
+  finally { simulating.value = false; }
 }
 
 /* 概览 */
 const subs = computed(() => flat(subSec.rows.value));
 const liveSubs = computed(() => subs.value.filter((x) => x._mark !== '删除'));
-/* 真接口：选中类型的运行健康 + 趋势、最近 5 条事件；typeId 对不上（切换中 / 草稿新类型 404）时读 mock */
-const rt = reactive<{ typeId: string; stats: EventStats | null; top: EventRecord[]; err: string }>({ typeId: '', stats: null, top: [], err: '' });
+/* 真接口：选中类型的运行健康 + 趋势、最近 5 条事件；类型或上下文对不上时保持空态 */
+const rt = reactive<{ key: string; typeId: string; stats: EventStats | null; top: EventRecord[]; err: string }>({ key: '', typeId: '', stats: null, top: [], err: '' });
 /* 非“后台没起来”的报错：在最近事件 / 统计区显示单行错误 + 重试，不再只给空列表 */
 let rtSeq = 0;
 async function loadRt(id: string) {
-  if (!real || backend.down) return;
-  const k = ++rtSeq;
+  const k = ++rtSeq; const key = actionContextKey();
+  Object.assign(rt, { key, typeId: id, stats: null, top: [], err: '' });
+  if (!mounted || !real || !ready.value || !id) return;
   try {
     const [stats, top] = await Promise.all([getEventStats(id), listEvents(id, { range: '7d', page: 1, size: 5 })]);
-    if (k === rtSeq) Object.assign(rt, { typeId: id, stats, top: top.items, err: '' });
+    if (mounted && k === rtSeq && key === actionContextKey() && id === cur.value.id) Object.assign(rt, { typeId: id, stats, top: top.items, err: '' });
   } catch (e) {
-    if (k !== rtSeq || fallBackIfDown(e)) return;
-    const err = isApiError(e) && e.status === 404 ? '' : apiMsg(e);
+    if (!mounted || k !== rtSeq || key !== actionContextKey() || id !== cur.value.id) return;
+    const err = apiMsg(e);
     Object.assign(rt, { typeId: id, stats: null, top: [], err });
   }
 }
-if (real) watch(() => cur.value.id, (id) => loadRt(id), { immediate: true });
-const rtOn = computed(() => live.value && rt.typeId === cur.value.id);
-const daily = computed(() => (rtOn.value ? rt.stats?.daily ?? [] : eventDaily(cur.value.id, cur.value.weekly)));
-const asOf = computed(() => (rtOn.value && rt.stats ? rt.stats.asOf : '2026-10-25 15:42'));
+if (real) watch([() => cur.value.id, actionContextKey, ready], () => loadRt(cur.value.id), { immediate: true });
+const rtOn = computed(() => live.value && rt.key === actionContextKey() && rt.typeId === cur.value.id);
+const daily = computed(() => (live.value ? (rtOn.value ? rt.stats?.daily ?? [] : []) : eventDaily(cur.value.id, cur.value.weekly)));
+const weekly = computed(() => real ? rtOn.value ? rt.stats?.weekly ?? 0 : 0 : cur.value.weekly);
+const asOf = computed(() => (live.value ? (rtOn.value ? rt.stats?.asOf ?? '—' : '—') : '2026-10-25 15:42'));
 const chartOption = computed(() => ({
   grid: { left: 48, right: 8, top: 12, bottom: 24 },
   tooltip: { trigger: 'axis' },
@@ -195,20 +243,36 @@ const chartOption = computed(() => ({
   series: [{ name: '事件数', type: 'bar', barWidth: 10, data: daily.value.map((d) => d.value), itemStyle: { color: GRAY.g7 } }],
 }));
 const recentAll = computed(() => eventsOf(cur.value.id));
-const recentTop = computed(() => (rtOn.value ? rt.top : recentAll.value.slice(0, 5)));
+const recentTop = computed(() => (live.value ? (rtOn.value ? rt.top : []) : recentAll.value.slice(0, 5)));
 const health = computed(() => {
-  if (rtOn.value) { const s = rt.stats; return { total: s?.total ?? 0, dedup: s?.dedup ?? 0, failed: s?.failed ?? 0, partial: s?.partial ?? 0, p95: s?.p95 ?? 0 }; }
+  if (live.value) { const s = rtOn.value ? rt.stats : null; return { total: s?.total ?? 0, dedup: s?.dedup ?? 0, failed: s?.failed ?? 0, partial: s?.partial ?? 0, pending: s?.pending ?? 0, p95: s?.p95 ?? null }; }
   const rows = recentAll.value;
   const c = (o: EventOutcome) => rows.filter((r) => r.outcome === o).length;
-  return { total: rows.length, dedup: c('已去重'), failed: c('投递失败'), partial: c('部分投递'),
+  return { total: rows.length, dedup: c('已去重'), failed: c('投递失败'), partial: c('部分投递'), pending: 0,
     p95: rows.length ? [...rows].sort((a, b) => a.latencyMs - b.latencyMs)[Math.floor(rows.length * 0.95)]?.latencyMs ?? 0 : 0 };
 });
 
 /* 载荷字段 */
-const fq = usePagedQuery({ defaultSize: 12, prefix: 'f' });
+const fq = usePagedQuery({ defaultSize: real ? 10 : 12, prefix: 'f' });
 const envelope = computed(() => payloadOf(cur.value).filter((f) => !cur.value.specific.some((x) => x.api === f.api)).map((f) => ({ ...f, _key: `env:${f.api}`, _mark: '', _env: true })));
 const fieldRows = computed(() => [...flat(fieldSec.rows.value), ...envelope.value]);
-const fields = computed(() => paginate(fieldRows.value, { page: fq.page.value, size: fq.size.value }));
+const payloadPage = reactive({ items: [] as (PayloadField & { _key: string; _mark: string; _env: boolean })[], total: 0 });
+if (real) {
+  let seq = 0, scope = '';
+  watch([actionContextKey, () => cur.value.id, ready, isDraft, tab, fq.page, fq.size], async () => {
+    const n = ++seq, key = actionContextKey(), id = cur.value.id;
+    const nextScope = JSON.stringify([key, id]);
+    if (scope !== nextScope) { scope = nextScope; payloadPage.items = []; payloadPage.total = 0; }
+    if (!ready.value || !id || isDraft.value || tab.value !== 'payload') return;
+    try {
+      const r = await listEventPayload(id, fq.page.value, fq.size.value);
+      if (!mounted || n !== seq || key !== actionContextKey()) return;
+      payloadPage.items = r.items.map(p => ({ ...p, _key: p.envelope ? `env:${p.api}` : p.api, _mark: '', _env: p.envelope })); payloadPage.total = r.total;
+      if (r.page && r.page !== fq.page.value) fq.page.value = r.page;
+    } catch (e) { if (mounted && n === seq && key === actionContextKey()) { payloadPage.items = []; message.error(`载荷字段加载失败：${apiMsg(e)}`); } }
+  }, { immediate: true, flush: 'sync' });
+}
+const fields = computed(() => real && !isDraft.value ? payloadPage : paginate(fieldRows.value, { page: fq.page.value, size: fq.size.value }));
 const fieldCols = computed(() => editCol([
   { title: '字段', dataIndex: 'name', width: 140 },
   { title: 'API 名', dataIndex: 'api', width: 150 },
@@ -234,37 +298,39 @@ const range = computed({
   get: () => (route.query.range === '24h' ? '24h' : '7d'),
   set: (v) => router.replace({ query: { ...route.query, range: v === '7d' ? undefined : v, epage: undefined } }),
 });
-const OUTCOMES = ['全部', '已投递', '已生成告警', '已去重', '部分投递', '投递失败'];
+const OUTCOMES = ['全部', '已投递', '已生成告警', '已去重', '部分投递', '投递失败', ...(real ? ['待投递'] : [])];
 const outcome = computed({
   get: () => (OUTCOMES.includes(route.query.oc as string) ? (route.query.oc as string) : '全部'),
   set: (v) => router.replace({ query: { ...route.query, oc: v === '全部' ? undefined : v, epage: undefined } }),
 });
-const eq = usePagedQuery({ defaultSize: 14, prefix: 'e' });
+const eq = usePagedQuery({ defaultSize: real ? 10 : 14, prefix: 'e' });
 const CUTOFF_24H = '2026-10-24 15:42:18';
 const recentRows = computed(() => recentAll.value.filter((r) => (range.value === '7d' || r.at >= CUTOFF_24H) && (outcome.value === '全部' || r.outcome === outcome.value)));
 /* 真接口：近期事件页签按 range / 结果 / 页码走后台分页 */
 const realRecent = reactive<{ key: string; items: EventRecord[]; total: number; err: string }>({ key: '', items: [], total: 0, err: '' });
-const recentKey = computed(() => JSON.stringify([cur.value.id, range.value, outcome.value, eq.page.value, eq.size.value]));
-let recentSeq = 0;
+const recentKey = computed(() => JSON.stringify([actionContextKey(), cur.value.id, range.value, outcome.value, eq.page.value, eq.size.value]));
+let recentSeq = 0, recentScope = '';
+const recentScopeKey = () => JSON.stringify([actionContextKey(), cur.value.id, range.value, outcome.value, eq.size.value]);
 async function loadRecent(force = false) {
   const key = recentKey.value;
-  if (!real || backend.down || tab.value !== 'recent' || (!force && realRecent.key === key)) return;
   const k = ++recentSeq;
+  if (!mounted || !real || !ready.value || !cur.value.id || tab.value !== 'recent' || (!force && realRecent.key === key)) return;
+  const scope = recentScopeKey();
+  if (scope !== recentScope) { recentScope = scope; Object.assign(realRecent, { items: [], total: 0 }); }
+  Object.assign(realRecent, { key, err: '' });
   try {
     const r = await listEvents(cur.value.id, { range: range.value as '24h' | '7d', outcome: outcome.value, page: eq.page.value, size: eq.size.value });
-    if (k === recentSeq) Object.assign(realRecent, { key, items: r.items, total: r.total, err: '' });
+    if (mounted && k === recentSeq && key === recentKey.value) { Object.assign(realRecent, { key, items: r.items, total: r.total, err: '' }); if (r.page && r.page !== eq.page.value) eq.page.value = r.page; }
   } catch (e) {
-    if (k !== recentSeq || fallBackIfDown(e)) return;
-    const err = isApiError(e) && e.status === 404 ? '' : apiMsg(e);
+    if (!mounted || k !== recentSeq || key !== recentKey.value) return;
+    const err = apiMsg(e);
     Object.assign(realRecent, { key, items: [], total: 0, err });
   }
 }
-if (real) watch([recentKey, () => tab.value], () => loadRecent(), { immediate: true });
+if (real) watch([recentKey, () => tab.value, ready], () => loadRecent(), { immediate: true, flush: 'sync' });
 const rtErr = computed(() => (rtOn.value ? rt.err : ''));
 const recentErr = computed(() => (live.value && realRecent.key === recentKey.value ? realRecent.err : ''));
-const recent = computed(() => (live.value && realRecent.key === recentKey.value
-  ? { items: realRecent.items, total: realRecent.total }
-  : paginate(recentRows.value, { page: eq.page.value, size: eq.size.value })));
+const recent = computed(() => live.value ? realRecent.key === recentKey.value ? { items: realRecent.items, total: realRecent.total } : { items: [], total: 0 } : paginate(recentRows.value, { page: eq.page.value, size: eq.size.value }));
 const recentCols = [
   { title: '时间', dataIndex: 'at', width: 172 },
   { title: '事件', key: 'id', width: 190 },
@@ -274,7 +340,7 @@ const recentCols = [
   { title: '延迟', key: 'lat', width: 96, align: 'right' as const },
   { title: '结果', key: 'outcome', width: 120 },
 ];
-const outcomeBadge = (o: EventOutcome) => (o === '投递失败' ? 'error' : 'default');
+const outcomeBadge = (o: EventRecord['outcome']) => (o === '投递失败' ? 'error' : o === '待投递' ? 'warning' : 'default');
 
 /* 版本历史 */
 const versions = computed(() => eventVersionsOf(cur.value));
@@ -291,10 +357,11 @@ const verCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange('新建事件类型')">新建事件类型</a-button></a-tooltip>
+    <a-tooltip :title="!real ? '新建事件类型表单尚未接入' : readonly ? reason : !crWriteOn() ? '需开启真实变更单写入' : ''"><a-button :disabled="readonly || !crWriteOn()" @click="openChange('新建事件类型', true)">新建事件类型</a-button></a-tooltip>
   </Teleport>
 
-  <div v-if="!ready" class="panel et-wait">
+  <a-empty v-if="live && ready && !cur.id" description="暂无事件类型或所选类型不存在" />
+  <div v-else-if="!ready" class="panel et-wait">
     <span v-if="loadErr" class="c-3">事件类型加载失败：{{ loadErr }}</span><a-spin v-else />
   </div>
   <div v-else class="et">
@@ -331,7 +398,7 @@ const verCols = [
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => onView(v)" />
         <span class="et-sp" />
-        <a-button :disabled="cur.status === '草稿'" @click="simulate">模拟触发</a-button>
+        <a-tooltip :title="real && readonly ? reason : real && dirty ? '请先保存草稿后校验' : undefined"><span><a-button :loading="simulating" :disabled="cur.status === '草稿' || (real && (readonly || dirty))" @click="simulate">模拟触发</a-button></span></a-tooltip>
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
@@ -357,13 +424,13 @@ const verCols = [
             <a-descriptions-item label="触发对象">{{ cur.object }}（{{ cur.objectApi }}）</a-descriptions-item>
             <a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item>
             <a-descriptions-item label="说明" :span="2"><span class="et-ell" :title="cur.desc">{{ cur.desc }}</span></a-descriptions-item>
-            <a-descriptions-item label="载荷摘要" :span="2">{{ flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').map((f) => f.name).join('、') }}，另含 {{ envelope.length }} 个通用信封字段</a-descriptions-item>
+            <a-descriptions-item label="载荷摘要" :span="2">{{ flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').map((f) => f.name).join('、') }}<template v-if="!real || eventDetailReady(cur.id, true)">，另含 {{ envelope.length }} 个通用信封字段</template></a-descriptions-item>
             <a-descriptions-item label="去重键"><span class="num">{{ cur.dedupKey }}</span></a-descriptions-item>
             <a-descriptions-item label="去重窗口">{{ cur.dedupWindow }}</a-descriptions-item>
             <a-descriptions-item label="投递保证">{{ cur.delivery }}</a-descriptions-item>
             <a-descriptions-item label="顺序">{{ cur.ordering }}</a-descriptions-item>
             <a-descriptions-item label="保留期">{{ cur.retention }}</a-descriptions-item>
-            <a-descriptions-item label="近 7 天">{{ fmtInt(cur.weekly) }} 条</a-descriptions-item>
+            <a-descriptions-item label="近 7 天">{{ fmtInt(weekly) }} 条</a-descriptions-item>
           </a-descriptions>
           <div class="et-sec t-14 fw-600 et-sec-row">
             <span>订阅方 {{ liveSubs.length }} 个<InfoTip text="完整列表见“订阅方”页签" /></span>
@@ -393,8 +460,9 @@ const verCols = [
             <div v-if="rtErr" class="et-err t-12"><span class="c-error et-err-m" :title="rtErr">运行统计加载失败：{{ rtErr }}</span><a-button size="small" @click="loadRt(cur.id)">重试</a-button></div>
             <div class="et-chart"><EChart :option="chartOption" /></div>
             <div class="et-stats">
-              <div><span class="t-12 c-3">近 7 天</span><span class="t-16 fw-600 c-1 num">{{ fmtInt(cur.weekly) }}</span></div>
-              <div><span class="t-12 c-3">处理延迟 P95</span><span class="t-16 fw-600 c-1 num">{{ health.p95 }} 毫秒</span></div>
+              <div><span class="t-12 c-3">近 7 天</span><span class="t-16 fw-600 c-1 num">{{ fmtInt(weekly) }}</span></div>
+              <div><span class="t-12 c-3">处理延迟 P95</span><span class="t-16 fw-600 c-1 num">{{ health.p95 == null ? '未知' : `${health.p95} 毫秒` }}</span></div>
+              <div v-if="live"><span class="t-12 c-3">待投递（尚未投递）</span><span class="t-16 fw-600 c-1 num">{{ health.pending }}</span></div>
               <div><span class="t-12 c-3">去重丢弃（近期样本）</span><span class="t-16 fw-600 c-1 num">{{ health.dedup }}</span></div>
               <div><span class="t-12 c-3">投递失败 / 部分投递</span><span class="t-16 fw-600 num"><span :class="health.failed ? 'c-error' : 'c-1'">{{ health.failed }}</span><span class="c-3"> / </span><span class="c-1">{{ health.partial }}</span></span></div>
             </div>
@@ -411,7 +479,7 @@ const verCols = [
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
             <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
-            <a-button size="small" :disabled="!dirty" @click="de.save()">保存草稿</a-button>
+            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">保存草稿</a-button>
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('payload')">新增字段</a-button></a-tooltip>
         </div>
@@ -440,7 +508,7 @@ const verCols = [
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
             <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
-            <a-button size="small" :disabled="!dirty" @click="de.save()">保存草稿</a-button>
+            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">保存草稿</a-button>
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('subs')">新增订阅</a-button></a-tooltip>
         </div>
@@ -480,7 +548,7 @@ const verCols = [
                 <span v-else class="num">{{ record.objLabel }}</span></span>
               </template>
               <template v-else-if="column.key === 'subs'"><span class="num">{{ record.subscribers }}</span></template>
-              <template v-else-if="column.key === 'lat'"><span class="num">{{ record.latencyMs }} 毫秒</span></template>
+              <template v-else-if="column.key === 'lat'"><span class="num">{{ record.latencyMs == null ? '未知' : `${record.latencyMs} 毫秒` }}</span></template>
               <template v-else-if="column.key === 'outcome'"><a-badge :status="outcomeBadge(record.outcome)" :text="record.outcome" /></template>
             </template>
           </a-table>
@@ -505,6 +573,7 @@ const verCols = [
     </div>
   </div>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onStart" />
+  <NewActionEventForm v-if="real" v-model:open="createOpen" kind="event" :options="createOptions" :row-forms="FORMS" />
   <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="520" @ok="saveEditor">
     <a-form layout="vertical" class="et-form">
       <a-form-item v-for="f in editorDef.fields()" :key="f.k" :label="f.label" :required="f.required">
@@ -514,6 +583,22 @@ const verCols = [
       </a-form-item>
     </a-form>
     <div class="t-12 c-3">{{ editor.sec === 'payload' ? '新增字段建议设为可选；删除或改类型属于不兼容变更，需要所有订阅方确认。' : '' }}改动先保存在本地，点“保存草稿”后计入 {{ draft?.id }} 的改动数。</div>
+  </a-modal>
+  <a-modal :open="!!simulation" title="模拟触发结果" :footer="null" @cancel="simulation = null">
+    <template v-if="simulation">
+      <a-alert type="info" :message="simulation.message" show-icon />
+      <a-list :data-source="simulation.checks" size="small">
+        <template #renderItem="{ item }"><a-list-item><span class="t-14">{{ item.name }}：{{ item.message }}</span></a-list-item></template>
+      </a-list>
+      <template v-if="simulation.testEventId">
+        <div class="t-12 c-3">测试事件：{{ simulation.testEventId }}</div>
+        <a-button size="small" :loading="simulating" @click="refreshTestDelivery">刷新投递状态</a-button>
+        <a-alert v-if="testDeliveries" type="info" :message="testDeliveries.summary" show-icon />
+        <a-list v-if="testDeliveries" :data-source="testDeliveries.items" size="small">
+          <template #renderItem="{ item }"><a-list-item>{{ item.name }}：{{ deliveryLabel[item.state] ?? item.state }}<span v-if="item.error" class="t-12 c-3">（{{ item.error }}）</span></a-list-item></template>
+        </a-list>
+      </template>
+    </template>
   </a-modal>
 </template>
 

@@ -4,13 +4,15 @@
  * URL：?ds=DS-001&tab=params|tables|sync&form=new|edit，刷新可还原。
  * 新建 / 编辑在抽屉表单里（达梦显示兼容模式，金仓显示 database_mode，ERP 显示系统和应用 ID）；删除走 ConfirmActionModal。
  * 历史版本只读（useReadonly）；表单有未保存修改时，关闭抽屉或离开页面要确认（useUnsavedGuard）。
- * 开关 data 切到真接口时数据走 src/api/datasources.ts；后台没起来时回退 mock 并提示。
+ * 开关 data 切到真接口时只显示数据库结果；失败保留真实模式并提示，不切演示分支。
  */
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
+import ObjectMappingModal from '@/pages/ontology/parts/ObjectMappingModal.vue';
+import { fetchDatasourceMappings, type DatasourceMapping } from '@/api/objectImport';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
@@ -19,9 +21,9 @@ import {
   DATASOURCES, DS_TYPES, DS_DEFAULT_PORT, DM_COMPAT, KB_MODES, ERP_SYSTEMS, dsTables,
   type Datasource, type DsType, type DsStatus, type DsTable,
 } from '@/mock/datasources';
-import { isApiError, isBackendDown } from '@/api/http';
+import { currentApiContext, isApiError } from '@/api/http';
 import {
-  isDataReal, listDatasources, listDsTables, createDatasource, updateDatasource, deleteDatasource,
+  isDataReal, queryDatasources, queryDsTables, queryDsRuns, getDatasource, createDatasource, updateDatasource, deleteDatasource,
   testDatasource, testDatasourceParams, type DatasourceWrite,
 } from '@/api/datasources';
 
@@ -32,26 +34,18 @@ const setQuery = (patch: Record<string, string | undefined>) =>
   router.replace({ query: { ...route.query, ...patch } });
 
 const { readonly, reason } = useReadonly();
-const list = ref<Datasource[]>(DATASOURCES.map((d) => ({ ...d })));
-
-// ---------- 真接口（开关 data）；后台没起来时 real = false，页面回退 mock ----------
 const real = ref(isDataReal());
+const list = ref<Datasource[]>(real.value ? [] : DATASOURCES.map((d) => ({ ...d })));
+const contextKey = () => JSON.stringify(currentApiContext());
+let listSeq = 0;
 const apiFail = (what: string, e: unknown) => {
   console.error(`[api] 数据连接：${what}失败`, e);
-  message.error(`${what}失败：${isApiError(e) ? e.message || e.code : '未知错误'}`);
+  message.error(`${what}失败：${isApiError(e) ? e.message || e.code : e instanceof Error ? e.message : '未知错误'}`);
 };
-function fallbackToMock(e: unknown) {
-  console.error('[api] 数据连接接口不可用，显示演示数据', e);
-  real.value = false;
-  message.warning(isBackendDown(e) ? '后台未启动，数据连接暂时显示演示数据' : '数据连接接口加载失败，暂时显示演示数据');
-}
-onMounted(async () => {
-  if (!real.value) return;
-  try { list.value = await listDatasources(); } catch (e) { fallbackToMock(e); }
-});
 
 // ---------- 左侧列表 ----------
-const LIST_SIZE = 12;
+const LIST_SIZE = real.value ? 10 : 12;
+const listTotal = ref(0), listContext = ref(''), listLoading = ref(false);
 const kw = ref('');
 const type = ref<'全部' | DsType>('全部');
 const listPage = ref(1);
@@ -59,11 +53,34 @@ watch([kw, type], () => { listPage.value = 1; });
 const filtered = computed(() => list.value.filter((d) =>
   (type.value === '全部' || d.type === type.value) &&
   (!kw.value || d.name.includes(kw.value) || d.host.includes(kw.value) || d.database.toLowerCase().includes(kw.value.toLowerCase()))));
-const listPaged = computed(() => paginate(filtered.value, { page: listPage.value, size: LIST_SIZE }));
+const listPaged = computed(() => real.value ? { items: listContext.value === contextKey() ? list.value : [], total: listContext.value === contextKey() ? listTotal.value : 0 } : paginate(filtered.value, { page: listPage.value, size: LIST_SIZE }));
+async function loadSources() {
+  const n = ++listSeq, key = contextKey();
+  if (!real.value) return;
+  if (listContext.value !== key) { list.value = []; listTotal.value = 0; listContext.value = key; }
+  listLoading.value = true;
+  try { const result = await queryDatasources({ page: listPage.value, size: LIST_SIZE, kw: kw.value || undefined, type: type.value });
+    if (n !== listSeq || key !== contextKey()) return;
+    list.value = result.items; listTotal.value = result.total;
+    if (result.page !== listPage.value) listPage.value = result.page;
+  } catch (e) { if (n === listSeq && key === contextKey()) apiFail('加载数据连接', e); }
+  finally { if (n === listSeq && key === contextKey()) listLoading.value = false; }
+}
+watch([contextKey, listPage, kw, type], loadSources, { immediate: true });
 
-const selected = computed(() => list.value.find((d) => d.id === q('ds')) ?? filtered.value[0] ?? null);
+const selectedId = computed(() => q('ds') || (listContext.value === contextKey() ? list.value[0]?.id : ''));
+const detail = ref<{ key: string; id: string; item: Datasource }>();
+const selected = computed(() => real.value ? detail.value?.key === contextKey() && detail.value.id === selectedId.value ? detail.value.item : null : list.value.find((d) => d.id === q('ds')) ?? filtered.value[0] ?? null);
+let detailSeq = 0;
+watch([contextKey, selectedId], async ([key, id]) => {
+  const n = ++detailSeq; detail.value = undefined;
+  if (!real.value || !id) return;
+  try { const item = await getDatasource(id); if (n === detailSeq && key === contextKey() && id === selectedId.value) detail.value = { key, id, item }; }
+  catch (e) { if (n === detailSeq && key === contextKey()) apiFail('加载连接详情', e); }
+}, { immediate: true });
 // 选中项不在当前页时，翻到它所在的页
 watch(() => q('ds'), (id) => {
+  if (real.value) return;
   const i = filtered.value.findIndex((d) => d.id === id);
   if (i >= 0) listPage.value = Math.floor(i / LIST_SIZE) + 1;
 }, { immediate: true });
@@ -85,49 +102,87 @@ const jdbc = (d: Datasource) => ({
 }[d.type]);
 
 // ---------- 详情：库表（simple 分页） ----------
-const TABLE_SIZE = 12;
+const TABLE_SIZE = real.value ? 10 : 12;
 const tablePage = ref(1);
 const tableKw = ref('');
 watch([() => selected.value?.id, tableKw], () => { tablePage.value = 1; });
-const realTables = ref<{ id: string; items: DsTable[] } | null>(null);
-watch([() => selected.value?.id, real], async ([id]) => {
+const realTables = ref<{ id: string; key: string; items: DsTable[]; total: number } | null>(null);
+const tableLoading = ref(false);
+const mappings = ref<DatasourceMapping[]>([]);
+const mappingError = ref(''), mappingOpen = ref(false), mappingTable = ref<DsTable>();
+const mappingCr = ref('');
+function mappedObjects(table: DsTable) { return mappings.value.filter((m) => m.schema === table.schema && m.table === table.name); }
+function editMapping(table: DsTable) { if (!real.value || readonly.value) return; mappingTable.value = table; mappingOpen.value = true; }
+let tableSeq = 0;
+async function loadTables() {
+  const n = ++tableSeq, id = selected.value?.id, key = contextKey();
+  if (!real.value || !id || tab.value !== 'tables') return;
+  if (realTables.value?.key !== key || realTables.value.id !== id) realTables.value = { id, key, items: [], total: 0 };
+  tableLoading.value = true;
+  try { const result = await queryDsTables(id, { page: tablePage.value, size: TABLE_SIZE, kw: tableKw.value || undefined });
+    if (n !== tableSeq || key !== contextKey() || selected.value?.id !== id) return;
+    realTables.value = { id, key, items: result.items, total: result.total };
+    if (result.page !== tablePage.value) tablePage.value = result.page;
+  } catch (e) { if (n === tableSeq && key === contextKey()) apiFail('加载库表', e); }
+  finally { if (n === tableSeq && key === contextKey()) tableLoading.value = false; }
+}
+watch([() => selected.value?.id, contextKey, tab, tablePage, tableKw], loadTables, { immediate: true });
+let mappingSeq = 0;
+watch([() => selected.value?.id, contextKey], async ([id]) => {
+  const n = ++mappingSeq, key = contextKey(); mappings.value = []; mappingError.value = ''; mappingOpen.value = false; mappingCr.value = '';
   if (!real.value || !id) return;
-  try {
-    const items = await listDsTables(id);
-    if (selected.value?.id === id) realTables.value = { id, items };
-  } catch (e) { apiFail('加载库表', e); }
+  try { const rows = await fetchDatasourceMappings(id); if (n === mappingSeq && key === contextKey()) mappings.value = rows; }
+  catch (e) { if (n === mappingSeq && key === contextKey()) mappingError.value = `映射加载失败：${e instanceof Error ? e.message : String(e)}`; }
 }, { immediate: true });
-const tableSource = (d: Datasource): DsTable[] =>
-  !real.value ? dsTables(d) : realTables.value?.id === d.id ? realTables.value.items : [];
-const tables = computed(() => (selected.value ? tableSource(selected.value) : []).filter((t) =>
-  !tableKw.value || t.name.toLowerCase().includes(tableKw.value.toLowerCase()) || t.comment.includes(tableKw.value)));
-const tablesPaged = computed(() => paginate(tables.value, { page: tablePage.value, size: TABLE_SIZE }));
+const tableSource = (d: Datasource): DsTable[] => !real.value ? dsTables(d) : realTables.value?.id === d.id && realTables.value.key === contextKey() ? realTables.value.items : [];
+const tables = computed(() => (selected.value ? tableSource(selected.value) : []).filter((t) => real.value || !tableKw.value || t.name.toLowerCase().includes(tableKw.value.toLowerCase()) || t.comment.includes(tableKw.value)));
+const tableTotal = computed(() => real.value ? realTables.value?.key === contextKey() && realTables.value.id === selected.value?.id ? realTables.value.total : 0 : tables.value.length);
+const tablesPaged = computed(() => real.value ? { items: tables.value, total: tableTotal.value } : paginate(tables.value, { page: tablePage.value, size: TABLE_SIZE }));
+const runPage = ref(1), runTotal = ref(0), realRuns = ref<Datasource['runs']>([]);
+const runsKey = () => JSON.stringify([contextKey(), selected.value?.id]);
+const loadedRunsKey = ref(''); let runSeq = 0;
+watch([runsKey, runPage, tab], async () => {
+  const n = ++runSeq, key = runsKey(), id = selected.value?.id;
+  if (loadedRunsKey.value !== key) { runTotal.value = 0; realRuns.value = []; loadedRunsKey.value = key; }
+  if (!real.value || !id || tab.value !== 'sync') return;
+  try { const result = await queryDsRuns(id, runPage.value, 10); if (n !== runSeq || key !== runsKey()) return;
+    realRuns.value = result.items; runTotal.value = result.total; if (runPage.value !== result.page) runPage.value = result.page;
+  } catch (e) { if (n === runSeq && key === runsKey()) apiFail('加载同步记录', e); }
+});
+watch(runsKey, () => { runPage.value = 1; });
+const syncRuns = computed(() => real.value ? loadedRunsKey.value === runsKey() ? realRuns.value : [] : selected.value?.runs ?? []);
+
 const tableCols = [
   { title: 'Schema', dataIndex: 'schema', key: 'schema', width: 110 },
   { title: '表名', dataIndex: 'name', key: 'name', width: 200, ellipsis: true },
   { title: '说明', dataIndex: 'comment', key: 'comment', width: 140, ellipsis: true },
   { title: '行数', key: 'rows', width: 120, align: 'right' as const },
   { title: '字段数', dataIndex: 'cols', key: 'cols', width: 80, align: 'right' as const },
-  { title: '映射对象类型', key: 'objectType', width: 130 },
+  { title: '映射对象类型', key: 'objectType', width: 220 },
   { title: '最近更新', key: 'updatedAt', width: 150 },
 ];
 
 // ---------- 测试连接 ----------
 const testing = ref(false);
 async function testConn(d: Datasource) {
+  if (readonly.value || testing.value) return;
+  const context = contextKey();
+  const n = listSeq;
+  const current = () => context === contextKey() && n === listSeq;
   testing.value = true;
   if (real.value) {
     try {
       const t = await testDatasource(d.id);
-      d.lastTest = t;
+      if (!current()) return;
+      const stored = await getDatasource(d.id);
+      if (!current()) return;
+      Object.assign(d, stored);
       if (t.ok) {
-        d.status = '正常'; message.success(`连接成功，耗时 ${t.ms} ms`);
-        // 后台真连成功时会内省刷新库表清单：重新拉一次清单和库表数（mock 测试器下内容不变）
-        const items = await listDsTables(d.id);
-        d.tableCount = items.length;
-        if (selected.value?.id === d.id) realTables.value = { id: d.id, items };
+        message.success(`连接成功，耗时 ${t.ms} ms`);
+        // 后台真连成功后重新读取持久库表清单。
+        if (selected.value?.id === d.id) await loadTables();
       } else message.error(`连接失败：${t.msg}`);
-    } catch (e) { apiFail('测试连接', e); } finally { testing.value = false; }
+    } catch (e) { if (current()) apiFail('测试连接', e); } finally { testing.value = false; }
     return;
   }
   await new Promise((r) => setTimeout(r, 600));
@@ -143,6 +198,10 @@ async function testConn(d: Datasource) {
 // ---------- 删除 ----------
 const confirm = useConfirmStore();
 async function remove(d: Datasource) {
+  if (readonly.value) return;
+  const context = contextKey();
+  const n = listSeq;
+  const current = () => context === contextKey() && n === listSeq && !readonly.value;
   const ok = await confirm.ask({
     title: '删除数据连接', target: `${d.name}（${d.id}）`, danger: true, okText: '删除',
     fields: [
@@ -154,11 +213,13 @@ async function remove(d: Datasource) {
       ? `删除后同步计划停止，${d.objectTypes.join('、')} 的数据不再更新（已同步的数据保留）。`
       : '没有对象类型使用这个连接，删除后同步计划一起删除。',
   });
-  if (!ok) return;
+  if (!ok || !current()) return;
   if (real.value) {
-    try { await deleteDatasource(d.id); } catch (e) { apiFail('删除', e); return; }
+    try { await deleteDatasource(d.id); } catch (e) { if (current()) apiFail('删除', e); return; }
+    if (!current()) return;
   }
   list.value = list.value.filter((x) => x.id !== d.id);
+  if (real.value) void loadSources();
   setQuery({ ds: undefined, tab: undefined });
   message.success(`已删除：${d.name}`);
 }
@@ -171,7 +232,7 @@ const formInit = ref('');
 const formMode = computed(() => (q('form') === 'new' || q('form') === 'edit' ? q('form') : ''));
 const formDirty = computed(() => !!formMode.value && JSON.stringify(form) !== formInit.value);
 const guard = useUnsavedGuard(formDirty);
-watch([formMode, () => selected.value?.id], ([m]) => {
+watch([formMode, () => formMode.value === 'edit' ? selected.value?.id : '', contextKey], ([m]) => {
   const d = selected.value;
   Object.assign(form, m === 'edit' && d ? {
     name: d.name, type: d.type, host: d.host, port: d.port, database: d.database, user: d.user, password: '',
@@ -185,13 +246,18 @@ const openForm = (m: 'new' | 'edit') => setQuery({ form: m });
 const closeForm = async () => { if (formDirty.value && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
 const formTesting = ref(false);
 async function formTest() {
+  if (formTesting.value) return;
+  const context = contextKey();
+  const n = listSeq;
+  const current = () => context === contextKey() && n === listSeq;
   if (!form.host) { message.warning('请先填写主机'); return; }
   formTesting.value = true;
   if (real.value) {
     try {
       const t = await testDatasourceParams(writeBody());
+      if (!current()) return;
       if (t.ok) message.success(`连接成功：${form.host}:${form.port}，耗时 ${t.ms} ms`); else message.error(`连接失败：${t.msg}`);
-    } catch (e) { apiFail('测试连接', e); } finally { formTesting.value = false; }
+    } catch (e) { if (current()) apiFail('测试连接', e); } finally { formTesting.value = false; }
     return;
   }
   await new Promise((r) => setTimeout(r, 600));
@@ -205,24 +271,33 @@ const writeBody = (): DatasourceWrite => ({
 });
 const saving = ref(false);
 async function saveReal() {
+  const context = contextKey();
+  const n = listSeq;
+  const current = () => context === contextKey() && n === listSeq;
   saving.value = true;
   try {
     if (formMode.value === 'edit' && selected.value) {
       const d = await updateDatasource(selected.value.id, writeBody());
+      if (!current()) return;
       list.value = list.value.map((x) => (x.id === d.id ? d : x));
+      detail.value = { key: context, id: d.id, item: d };
+      void loadSources();
       formInit.value = JSON.stringify(form);
       setQuery({ form: undefined });
       message.success(`已保存：${d.name}`);
     } else {
       const d = await createDatasource(writeBody());
+      if (!current()) return;
       list.value.unshift(d);
+      void loadSources();
       formInit.value = JSON.stringify(form);
       setQuery({ form: undefined, ds: d.id });
       message.success(`已创建：${d.name}`);
     }
-  } catch (e) { apiFail('保存', e); } finally { saving.value = false; }
+  } catch (e) { if (current()) apiFail('保存', e); } finally { saving.value = false; }
 }
 function save() {
+  if (readonly.value || saving.value) return;
   if (!form.name || !form.host || !form.database || !form.user) { message.warning('请填写名称、主机、数据库和用户名'); return; }
   if (formMode.value === 'new' && !form.password) { message.warning('请填写密码'); return; }
   if (real.value) { void saveReal(); return; }
@@ -279,7 +354,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           </div>
         </div>
       </div>
-      <AppPagination v-model:page="listPage" class="cn-pager" variant="simple" :total="filtered.length" :size="LIST_SIZE" unit="个" />
+      <AppPagination v-model:page="listPage" class="cn-pager" variant="simple" :total="real ? listTotal : filtered.length" :size="LIST_SIZE" unit="个" />
     </div>
 
     <!-- 右：详情 -->
@@ -297,14 +372,14 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <InfoTip :text="`${selected.id} · 负责人 ${selected.owner} · 创建于 ${selected.createdAt} · 映射对象类型 ${selected.objectTypes.length ? selected.objectTypes.join('、') : EMPTY}${selected.note ? '。' + selected.note : ''}`" />
         </div>
         <a-space>
-          <a-button :loading="testing" @click="testConn(selected)">测试连接</a-button>
+          <a-tooltip :title="reason"><a-button :disabled="readonly" :loading="testing" @click="testConn(selected)">测试连接</a-button></a-tooltip>
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openForm('edit')">编辑</a-button></a-tooltip>
           <a-tooltip :title="reason"><a-button danger :disabled="readonly" @click="remove(selected)">删除</a-button></a-tooltip>
         </a-space>
       </div>
       <a-tabs v-model:activeKey="tab" class="cn-tabs">
         <a-tab-pane key="params" tab="连接参数" />
-        <a-tab-pane key="tables" :tab="`库表（${real ? tableSource(selected).length : dsTables(selected).length}）`" />
+        <a-tab-pane key="tables" tab="库表" />
         <a-tab-pane key="sync" tab="同步计划" />
       </a-tabs>
 
@@ -321,14 +396,16 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-descriptions-item v-if="selected.type === 'ERP'" label="ERP 系统">{{ selected.erpSystem }}</a-descriptions-item>
           <a-descriptions-item v-if="selected.type === 'ERP'" label="应用 ID"><span class="num">{{ selected.appId }}</span></a-descriptions-item>
           <a-descriptions-item label="连接串" :span="2"><span class="num">{{ jdbc(selected) }}</span></a-descriptions-item>
-          <a-descriptions-item label="连接池">最小 2 · 最大 16 · 空闲 10 分钟回收</a-descriptions-item>
-          <a-descriptions-item label="超时">连接 10 秒 · 查询 300 秒</a-descriptions-item>
+          <a-descriptions-item label="连接池">{{ real ? '—' : '最小 2 · 最大 16 · 空闲 10 分钟回收' }}</a-descriptions-item>
+          <a-descriptions-item label="超时">{{ real ? '—' : '连接 10 秒 · 查询 300 秒' }}</a-descriptions-item>
           <a-descriptions-item label="读写">只读（数据接入只查询，不写回源库）</a-descriptions-item>
-          <a-descriptions-item label="网络">内网直连 · 白名单 10.12.40.0/24</a-descriptions-item>
+          <a-descriptions-item label="网络">{{ real ? '—' : '内网直连 · 白名单 10.12.40.0/24' }}</a-descriptions-item>
         </a-descriptions>
       </div>
 
       <div v-else-if="tab === 'tables'" class="cn-body cn-col">
+        <a-alert v-if="mappingError" type="warning" :message="mappingError" show-icon />
+        <a-alert v-if="mappingCr" type="info" :message="`映射改动在 ${mappingCr} 中，审核发布前此处仍显示已发布映射`" show-icon />
         <div class="cn-tbar">
           <span class="t-12 c-3">已映射到对象类型的表排在前面</span>
           <a-input-search v-model:value="tableKw" size="small" placeholder="表名 / 说明" class="cn-w200" />
@@ -339,15 +416,17 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
               <span v-if="column.key === 'name'" class="num c-1">{{ record.name }}</span>
               <span v-else-if="column.key === 'rows'" class="num">{{ fmtInt(record.rows) }}</span>
               <span v-else-if="column.key === 'objectType'">
-                <a-tag v-if="record.objectType">{{ record.objectType }}</a-tag>
+                <template v-if="real && mappedObjects(record).length"><a-tag v-for="object in mappedObjects(record)" :key="object.objectId">{{ object.name }}</a-tag></template>
+                <a-tag v-else-if="record.objectType">{{ record.objectType }}</a-tag>
                 <a-tooltip v-else-if="record.ref" :title="`只作参考，未映射；以 ${record.ref} 为准`"><span class="c-2">参考 · 未映射</span></a-tooltip>
                 <span v-else class="c-3">未映射</span>
+                <a-tooltip v-if="real" :title="readonly ? reason : '修改对象定义来源，发布后生效'"><a-button type="link" size="small" :disabled="readonly" @click="editMapping(record)">编辑映射</a-button></a-tooltip>
               </span>
               <span v-else-if="column.key === 'updatedAt'" class="num">{{ record.updatedAt }}</span>
             </template>
           </a-table>
         </div>
-        <AppPagination v-model:page="tablePage" variant="simple" :total="tables.length" :size="TABLE_SIZE" unit="张表" class="cn-tpager" />
+        <AppPagination v-model:page="tablePage" variant="simple" :total="tableTotal" :size="TABLE_SIZE" unit="张表" class="cn-tpager" />
       </div>
 
       <div v-else class="cn-body cn-sync">
@@ -357,11 +436,11 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-descriptions-item label="运行时间窗">{{ selected.sync.window }}</a-descriptions-item>
           <a-descriptions-item label="增量字段"><span class="num">{{ selected.sync.cursorField }}</span></a-descriptions-item>
           <a-descriptions-item label="下次运行"><span class="num">{{ selected.sync.nextRun ?? EMPTY }}</span></a-descriptions-item>
-          <a-descriptions-item label="失败重试">3 次，间隔 5 分钟；仍失败通知负责人</a-descriptions-item>
+          <a-descriptions-item label="失败重试">{{ real ? '—' : '3 次，间隔 5 分钟；仍失败通知负责人' }}</a-descriptions-item>
         </a-descriptions>
         <div class="t-14 fw-600 c-1 cn-runs-title">最近同步</div>
-        <div v-if="!selected.runs.length" class="c-3 t-12">还没有同步记录</div>
-        <div v-for="(r, k) in selected.runs" :key="k" class="cn-run">
+        <div v-if="!syncRuns.length" class="c-3 t-12">还没有同步记录</div>
+        <div v-for="(r, k) in syncRuns" :key="k" class="cn-run">
           <span class="cn-dot" :class="runColor(r.result)" />
           <span class="num c-2 cn-run-time">{{ r.time }}</span>
           <span class="cn-run-res" :class="runColor(r.result)">{{ r.result }}</span>
@@ -369,11 +448,13 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <span class="num c-3 cn-run-n">{{ r.secs }} 秒</span>
           <span class="c-3">{{ r.msg }}</span>
         </div>
+        <AppPagination v-if="real" v-model:page="runPage" variant="simple" :total="runTotal" :size="10" unit="次" />
       </div>
     </div>
     <div v-else class="panel cn-detail"><a-empty description="没有数据源" class="cn-empty" /></div>
   </div>
 
+  <ObjectMappingModal v-if="selected && mappingTable" v-model:open="mappingOpen" :datasource-id="selected.id" :datasource-name="selected.name" :schema="mappingTable.schema" :table="mappingTable.name" :current-object-id="mappedObjects(mappingTable)[0]?.objectId" @saved="(id) => mappingCr = id" />
   <a-drawer
     :open="!!formMode" :width="560" :title="formMode === 'edit' ? `编辑连接 · ${selected?.name ?? ''}` : '新建数据连接'"
     :mask-closable="true" @close="closeForm"

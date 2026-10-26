@@ -2,21 +2,22 @@
  * 动作类型 / 事件类型页面用到的抽屉解析（规则、动作执行（kind = action，ACT- 编号）、事件）。
  * 由 objectRegistry.ts 的 RESOLVERS 展开引入；这里只新增 kind，不改已有 kind。
  * 动作执行（kind = action）：dynamic 开关开着时读 GET /api/ontology/v1/action-runs/{id}（dynamic 的接口），按编号缓存；
- * 取到之前 / 404 / 其他错误 / 后台没起来（fallback.ts，只提示一次）时用 mock runById()。规则、事件抽屉仍读 mock（无单条接口）。
+ * 事件：action 开关开着时读 GET /api/ontology/v1/events/{id}，仅后台不可达时回退；加载 / 业务错误显示状态。规则仍读 mock。
  */
 import { reactive } from 'vue';
 import type { ObjView } from './objectRegistry';
-import { dynamicApi } from '@/api/action';
+import { actionApi, dynamicApi, getEvent, eventTypes, type EventRecord } from '@/api/action';
+import { currentApiContext } from '@/api/http';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import type { ActionRun } from '@/mock/actionEvent';
 import { RULES, ALERTS } from '@/mock/dynamic';
-import { runById, actionTypeById, eventById, eventTypeById, ACTION_TYPES, RULE_ACTION, ruleConfirmer, extSystemOf, UNKNOWN_FOLLOWUP, type RunStatus, type EventOutcome } from '@/mock/actionEvent';
+import { runById, actionTypeById, eventById, eventTypeById, ACTION_TYPES, RULE_ACTION, ruleConfirmer, extSystemOf, UNKNOWN_FOLLOWUP, type RunStatus } from '@/mock/actionEvent';
 
 const runColor = (s: RunStatus): NonNullable<ObjView['status']>['color'] =>
   s === '失败' ? 'error' : s === '结果未知' || s === '待确认' ? 'warning' : 'default';
 const runText = (s: RunStatus) => (s === '结果未知' ? '结果未知 · 待对账' : s);
-const evColor = (o: EventOutcome): NonNullable<ObjView['status']>['color'] =>
-  o === '投递失败' ? 'error' : 'default';
+const evColor = (o: EventRecord['outcome']): NonNullable<ObjView['status']>['color'] =>
+  o === '投递失败' ? 'error' : o === '待投递' ? 'warning' : 'default';
 const addSec = (t: string, s: number) => {
   const d = new Date(t.replace(' ', 'T') + '+08:00');
   d.setSeconds(d.getSeconds() + s);
@@ -24,28 +25,48 @@ const addSec = (t: string, s: number) => {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
 
-/* 动作执行单条：真接口结果缓存（null = 后台没有 / 出错，用 mock）；inflight 不做成响应式，避免在 computed 里写响应式状态 */
-const RUN_KEYS = ['id', 'typeId', 'at', 'initiator', 'confirmer', 'approver', 'source', 'objKind', 'objId', 'objLabel', 'summary', 'status', 'ms', 'code', 'retries', 'idemKey', 'ruleId', 'alertId', 'extRef', 'reconcile'];
-const realRuns = reactive<Record<string, ActionRun | null>>({});
+/* inflight 不做成响应式，避免在 computed 里写响应式状态 */
+type RealRun = ActionRun & { action?: string; typeVersion?: string; system?: string; log?: ObjView['timeline'] };
+const RUN_KEYS = ['id', 'typeId', 'action', 'typeVersion', 'system', 'log', 'at', 'initiator', 'confirmer', 'approver', 'source', 'objKind', 'objId', 'objLabel', 'summary', 'status', 'ms', 'code', 'retries', 'idemKey', 'ruleId', 'alertId', 'extRef', 'reconcile'];
+const realRuns = reactive<Record<string, RealRun | { error: string }>>({});
 const inflight = new Set<string>();
-function toRun(r: Record<string, unknown>): ActionRun {
+function toRun(r: Record<string, unknown>): RealRun {
   const o = Object.fromEntries(RUN_KEYS.filter((k) => r[k] !== null && r[k] !== undefined).map((k) => [k, r[k]])) as Record<string, unknown>;
   // 动作中心记录的 source 是对象 {type, …}，动作类型页执行记录是原文字符串
   if (o.source && typeof o.source === 'object') o.source = (o.source as { type?: string }).type ?? '';
-  o.ms ??= 0; o.retries ??= 0; o.code ??= ''; o.confirmer ??= ''; o.summary ??= '';
+  o.ms ??= 0; o.retries ??= 0; o.code ??= ''; o.confirmer ??= ''; o.summary ??= r.params ?? '';
   return o as unknown as ActionRun;
 }
-function runOf(id: string): ActionRun | undefined {
+function runOf(id: string): RealRun | { error: string } | undefined {
   if (!dynamicApi.isReal() || backend.down) return runById(id);
-  if (id in realRuns) return realRuns[id] ?? runById(id);
-  if (!inflight.has(id)) {
-    inflight.add(id);
-    dynamicApi.get<Record<string, unknown>>(`/action-runs/${encodeURIComponent(id)}`).then(
-      (r) => { realRuns[id] = toRun(r); },
-      (e) => { if (!fallBackIfDown(e)) realRuns[id] = null; },
-    ).finally(() => inflight.delete(id));
+  const { demoAs, previewAs, ver } = currentApiContext();
+  const key = JSON.stringify([demoAs, previewAs, ver, id]);
+  if (key in realRuns) return realRuns[key];
+  if (!inflight.has(key)) {
+    inflight.add(key);
+    dynamicApi.get<Record<string, unknown>>(`/action-runs/${encodeURIComponent(id)}`, { readonlyParams: false, query: { ver, previewAs }, headers: { 'X-Demo-As': demoAs ?? '' } }).then(
+      (r) => { realRuns[key] = toRun(r); },
+      (e) => { if (!fallBackIfDown(e)) realRuns[key] = { error: e instanceof Error ? e.message : '读取动作执行失败' }; },
+    ).finally(() => inflight.delete(key));
   }
-  return runById(id);
+  return undefined;
+}
+
+const realEvents = reactive<Record<string, EventRecord | { error: string }>>({});
+const eventInflight = new Set<string>();
+function eventOf(id: string): EventRecord | { error: string } | undefined {
+  if (!actionApi.isReal() || backend.down) return eventById(id);
+  const { demoAs, previewAs, ver } = currentApiContext();
+  const key = JSON.stringify([demoAs, previewAs, ver, id]);
+  if (key in realEvents) return realEvents[key];
+  if (!eventInflight.has(key)) {
+    eventInflight.add(key);
+    getEvent(id).then(
+      (ev) => { realEvents[key] = ev; },
+      (e) => { if (!fallBackIfDown(e)) realEvents[key] = { error: e instanceof Error ? e.message : '读取事件失败' }; },
+    ).finally(() => eventInflight.delete(key));
+  }
+  return undefined;
 }
 
 export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | null> = {
@@ -78,7 +99,33 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
   // 动作执行（ACT-YYYYMMDD-NNNN，与动作中心编号一致）
   action(id) {
     const run = runOf(id);
-    if (!run) return null;
+    if (!run || 'error' in run) {
+      if (!dynamicApi.isReal() || backend.down) return null;
+      const text = run ? run.error : '正在加载动作执行详情';
+      return { kind: 'action', kindLabel: '动作执行', id, title: run ? '动作执行加载失败' : '动作执行加载中', code: id,
+        status: { text: run ? '加载失败' : '加载中', color: run ? 'error' : 'processing' },
+        brief: [{ label: '状态', value: text }], fields: [{ label: '状态', value: text }] };
+    }
+    if (dynamicApi.isReal()) {
+      const related: NonNullable<ObjView['related']> = [];
+      if (run.objKind && run.objId) related.push({ kind: run.objKind, id: run.objId, label: run.objLabel, note: '动作目标' });
+      if (run.ruleId) related.push({ kind: 'rule', id: run.ruleId, label: run.ruleId, note: '发起规则' });
+      return {
+        kind: 'action', kindLabel: '动作执行', id: run.id, title: run.action ?? run.typeId, code: run.id,
+        status: { text: runText(run.status), color: runColor(run.status) },
+        brief: [{ label: '动作', value: run.action ?? run.typeId }, { label: '发起人', value: run.initiator }, { label: '结果', value: runText(run.status) }],
+        fields: [
+          { label: '动作类型', value: run.typeId }, { label: '版本', value: run.typeVersion ?? '—' },
+          { label: '发起人', value: run.initiator }, { label: '确认人', value: run.confirmer || '—' },
+          { label: '来源', value: run.source }, { label: '审批人', value: run.approver || '—' },
+          { label: '目标对象', value: run.objLabel }, { label: '参数摘要', value: run.summary },
+          { label: '外部系统', value: run.system ?? '—' }, { label: '幂等键', value: run.idemKey ?? '—' },
+          { label: '返回', value: run.code || '—' }, { label: '自动重试', value: String(run.retries) },
+          { label: '时间', value: run.at }, { label: '关联告警', value: run.alertId ?? '—' },
+        ],
+        timeline: run.log ?? [], related,
+      };
+    }
     const a = actionTypeById(run.typeId);
     if (!a) return null;
     const sys = extSystemOf(a);
@@ -138,9 +185,32 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
   },
   // 事件（EV-xxx）
   event(id) {
-    const ev = eventById(id);
-    if (!ev) return null;
-    const t = eventTypeById(ev.typeId)!;
+    const ev = eventOf(id);
+    if (!ev || 'error' in ev) {
+      if (!actionApi.isReal() || backend.down) return null;
+      const text = ev ? ev.error : '正在加载事件详情';
+      return { kind: 'event', kindLabel: '事件', id, title: ev ? '事件详情加载失败' : '事件详情加载中', code: id,
+        status: { text: ev ? '加载失败' : '加载中', color: ev ? 'error' : 'processing' },
+        brief: [{ label: '状态', value: text }], fields: [{ label: '状态', value: text }] };
+    }
+    if (actionApi.isReal()) {
+      const type = eventTypes().find((t) => t.id === ev.typeId);
+      const fields = [
+        { label: '事件类型', value: type?.name ?? ev.typeId }, { label: '发生时间', value: ev.at },
+        { label: '对象', value: ev.objLabel }, { label: '载荷摘要', value: ev.summary },
+        { label: '去重键', value: ev.dedupKey }, { label: '投递结果', value: ev.outcome },
+        { label: '处理延迟', value: ev.latencyMs == null ? '未知（尚无处理记录）' : `${ev.latencyMs} 毫秒` },
+        ...(ev.ingestedAt ? [{ label: '接收时间', value: ev.ingestedAt }, { label: '生产来源', value: ev.source ?? '未知' }, { label: '本体版本', value: ev.ontologyVersion ?? '未知' }, { label: '追踪编号', value: ev.traceId ?? '—' }] : []),
+      ];
+      return {
+        kind: 'event', kindLabel: '事件', id: ev.id, title: type?.name ?? ev.typeId, code: ev.id,
+        status: { text: ev.outcome, color: evColor(ev.outcome) }, brief: fields.slice(0, 4), fields,
+        timeline: [{ time: ev.at, text: '事件记录', desc: ev.outcome, status: ev.outcome === '投递失败' ? 'error' : ev.outcome === '待投递' ? 'warn' : 'done' }],
+        related: ev.objKind && ev.objId ? [{ kind: ev.objKind, id: ev.objId, label: ev.objLabel, note: '事件对象' }] : [],
+      };
+    }
+    const t = eventTypeById(ev.typeId);
+    if (!t) return null;
     const tl: ObjView['timeline'] = [
       { time: ev.at, text: `接收（${t.sourceRef}）`, status: 'done' },
       { time: addSec(ev.at, 0), text: ev.outcome === '已去重' ? `去重命中，丢弃（${t.dedupKey}，${t.dedupWindow}）` : '去重检查通过', status: 'done' },

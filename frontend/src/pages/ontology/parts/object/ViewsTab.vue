@@ -12,33 +12,39 @@ import { OBJECT_PROPS, draftPropDiff } from '@/mock/objectProps';
 import { viewsOf, type ObjectView, type ViewKind } from '@/mock/objectViews';
 import { draftOf } from '../useDraftView';
 import { objLabel } from './objectGov';
+import { isStaticReal } from '@/api/static';
+import { useStaticPage } from '../useStaticPage';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const name = computed(() => objLabel(props.objectId));
-const all = computed(() => viewsOf(props.objectId, name.value));
+const kind = ref<'全部' | ViewKind>('全部'), kw = ref(''), onlyHit = ref(false);
+const page = ref(1), size = ref(isStaticReal() ? 10 : 12);
+const draft = computed(() => isStaticReal() && props.readonly ? undefined : draftOf('object', props.objectId));
+watch([kind, kw, onlyHit, () => props.objectId, size], () => { page.value = 1; });
+watch(() => draft.value?.id, () => { onlyHit.value = false; });
+type ViewRow = ObjectView & { affectedProps?: string[] };
+const remote = useStaticPage<ViewRow>(
+  () => props.objectId ? `/object-types/${encodeURIComponent(props.objectId)}/usage` : '',
+  () => ({ kind: 'view', filter: kind.value, q: kw.value || undefined, crId: draft.value?.id, affectedOnly: onlyHit.value && !!draft.value ? 1 : undefined }), page, size,
+);
+const loading = remote.loading, loadError = remote.error, loadViews = remote.reload;
+const all = computed<ViewRow[]>(() => isStaticReal() ? remote.items.value : viewsOf(props.objectId, name.value));
 
 // 草稿改了哪些属性（显示名），用来标出受影响的视图
-const draft = computed(() => draftOf('object', props.objectId));
 const changed = computed(() => {
-  if (!draft.value) return new Set<string>();
+  if (isStaticReal() || !draft.value) return new Set<string>();
   const ps = OBJECT_PROPS[props.objectId] ?? [];
   const { map } = draftPropDiff(draft.value.id, name.value, ps);
   return new Set(Object.keys(map).map((api) => ps.find((p) => p.api === api)?.name ?? api));
 });
-const hit = (v: ObjectView) => v.props.filter((p) => changed.value.has(p));
+const hit = (v: ViewRow) => isStaticReal() ? v.affectedProps ?? [] : v.props.filter((p) => changed.value.has(p));
 
-const kind = ref<'全部' | ViewKind>('全部');
-const kw = ref('');
-const onlyHit = ref(false);
-const rows = computed(() => all.value.filter((v) =>
+const rows = computed(() => isStaticReal() ? all.value : all.value.filter((v) =>
   (kind.value === '全部' || v.kind === kind.value)
   && (!kw.value || v.name.includes(kw.value) || v.owner.includes(kw.value))
   && (!onlyHit.value || hit(v).length)));
-const page = ref(1);
-const size = ref(12);
-watch([kind, kw, onlyHit], () => { page.value = 1; });
-const pageRows = computed(() => paginate(rows.value, { page: page.value, size: size.value }).items);
-const count = (k: ViewKind) => all.value.filter((v) => v.kind === k).length;
+const pageRows = computed(() => isStaticReal() ? rows.value : paginate(rows.value, { page: page.value, size: size.value }).items);
+const total = computed(() => isStaticReal() ? remote.total.value : rows.value.length);
 const hitCount = computed(() => all.value.filter((v) => hit(v).length).length);
 
 const openTo = (v: ObjectView) => (v.kind === '对象列表' ? `/use/objects/search?type=${props.objectId}` : v.kind === '我的页面' ? '/use/qa/pages' : '');
@@ -57,14 +63,15 @@ const cols = [
 
 <template>
   <div class="ot-body">
+    <a-alert v-if="loadError" type="error" :message="loadError" show-icon><template #action><a-button size="small" @click="loadViews">重试</a-button></template></a-alert>
     <div class="vw-tool">
-      <a-segmented v-model:value="kind" :options="[{ label: `全部 ${all.length}`, value: '全部' }, { label: `对象列表 ${count('对象列表')}`, value: '对象列表' }, { label: `我的页面 ${count('我的页面')}`, value: '我的页面' }, { label: `工作台视图 ${count('工作台视图')}`, value: '工作台视图' }]" />
+      <a-segmented v-model:value="kind" :options="['全部', '对象列表', '我的页面', '工作台视图']" />
       <a-input-search v-model:value="kw" placeholder="搜索视图名称或所有者" class="vw-search" allow-clear />
-      <a-checkbox v-if="draft" v-model:checked="onlyHit">只看受草稿 {{ draft.id }} 影响的（{{ hitCount }}）</a-checkbox>
+      <a-checkbox v-if="draft" v-model:checked="onlyHit">只看受草稿 {{ draft.id }} 影响的<template v-if="!isStaticReal()">（{{ hitCount }}）</template></a-checkbox>
       <InfoTip text="视图由使用者在对象搜索、我的页面里保存，这里只读" />
       <span class="vw-sp" />
     </div>
-    <a-table :columns="cols" :data-source="pageRows" :pagination="false" size="small" row-key="id">
+    <a-table :loading="loading" :columns="cols" :data-source="pageRows" :pagination="false" size="small" row-key="id">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'">
           <span class="vw-name">
@@ -80,8 +87,8 @@ const cols = [
         <template v-else-if="column.key === 'vis'">
           {{ record.visibility }}<span v-if="record.visibility !== '仅自己' && record.visibility !== '全员'" class="c-3"> · {{ record.visibleTo }}</span>
         </template>
-        <template v-else-if="column.key === 'uses'"><span class="num">{{ fmtInt(record.uses30d) }}</span></template>
-        <template v-else-if="column.key === 'lastUsed'"><span class="num c-2">{{ record.lastUsed }}</span></template>
+        <template v-else-if="column.key === 'uses'"><span class="num">{{ record.uses30d == null ? '—' : fmtInt(record.uses30d) }}</span></template>
+        <template v-else-if="column.key === 'lastUsed'"><span class="num c-2">{{ record.lastUsed || '—' }}</span></template>
         <template v-else-if="column.key === 'op'">
           <router-link v-if="openTo(record)" :to="openTo(record)">打开</router-link>
           <a-tooltip v-else title="暂未开放"><span class="c-3">打开</span></a-tooltip>
@@ -89,7 +96,7 @@ const cols = [
       </template>
       <template #emptyText><span class="t-14 c-3">没有符合条件的视图</span></template>
     </a-table>
-    <AppPagination v-model:page="page" v-model:size="size" variant="simple" :total="rows.length" unit="个视图" :empty="false" />
+    <AppPagination v-model:page="page" v-model:size="size" :variant="isStaticReal() ? 'full' : 'simple'" :total="total" unit="个视图" :empty="false" />
   </div>
 </template>
 

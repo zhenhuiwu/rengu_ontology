@@ -60,6 +60,6 @@ function switchArea(k: string | number) {
 <style scoped>
 .sn { width: var(--sider-w); flex: none; display: flex; flex-direction: column; background: var(--g1); border-right: var(--border); }
 .sn-area { padding: 12px 12px 8px; flex: none; }
-.sn-menu { border-inline-end: 0 !important; flex: 1; min-height: 0; }
+.sn-menu { border-inline-end: 0 !important; flex: 1; min-height: 0; overflow-y: auto; }
 .sn-menu:first-child { padding-top: 8px; }
 </style>

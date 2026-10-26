@@ -8,7 +8,9 @@
  * 规则：已发布版只读；改定义只有“发起变更”一个入口，进入变更草稿后编辑按钮才可用；
  * 有草稿的对象默认看已发布版（问数用的就是这一版），?view=draft 切到草稿。
  */
-import { computed, reactive } from 'vue';
+import { computed, reactive, watch } from 'vue';
+import { message } from 'ant-design-vue';
+import { apiClient, currentApiContext } from '@/api/http';
 import { useRoute, useRouter } from 'vue-router';
 import { DRAFTS, DRAFT_TARGETS, type DraftCR, type TargetKind } from '@/mock/releases';
 import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
@@ -18,13 +20,45 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const nowText = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
 export type { TargetKind };
+const api = apiClient('static');
+if (api.isReal()) DRAFTS.splice(0);
 
 /** 每张草稿改了哪些定义：数据在 mock/releases.ts 的 DRAFT_TARGETS，这里复制一份，本会话新建/加入的登记不改 mock */
 const TARGETS = reactive<Record<string, Partial<Record<TargetKind, string[]>>>>(
-  Object.fromEntries(Object.entries(DRAFT_TARGETS).map(([cr, t]) => [cr, Object.fromEntries(Object.entries(t).map(([k, ids]) => [k, [...ids]]))])),
+  api.isReal() ? {} : Object.fromEntries(Object.entries(DRAFT_TARGETS).map(([cr, t]) => [cr, Object.fromEntries(Object.entries(t).map(([k, ids]) => [k, [...ids]]))])),
 );
 const created = reactive<DraftCR[]>([]);
 export const allDrafts = () => [...created, ...DRAFTS];
+let contextKey = '';
+let revision = 0;
+let pending: Promise<void> | null = null;
+let loaded = false;
+export function loadDraftState(force = false): Promise<void> {
+  if (!api.isReal()) return Promise.resolve();
+  const ctx = currentApiContext();
+  const key = JSON.stringify(ctx);
+  if (key !== contextKey) {
+    contextKey = key; revision++; loaded = false; pending = null;
+    DRAFTS.splice(0); created.splice(0);
+    for (const cr of Object.keys(TARGETS)) delete TARGETS[cr];
+  }
+  if (pending) return pending;
+  if (loaded && !force) return Promise.resolve();
+  const rev = revision;
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const request = Promise.all([
+    api.get<DraftCR[]>('/change-requests', { ...options, query: { ...options.query, status: '草稿' } }),
+    api.get<Record<string, Partial<Record<TargetKind, string[]>>>>('/change-requests/draft-targets', options),
+  ]).then(([rows, targets]) => {
+    if (rev !== revision || key !== JSON.stringify(currentApiContext())) return;
+    DRAFTS.splice(0, DRAFTS.length, ...rows);
+    for (const cr of Object.keys(TARGETS)) delete TARGETS[cr];
+    for (const row of rows) if (targets[row.id]) TARGETS[row.id] = targets[row.id];
+    loaded = true;
+  }).finally(() => { if (pending === request) pending = null; });
+  pending = request;
+  return request;
+}
 
 export function draftOf(kind: TargetKind, id: string): DraftCR | undefined {
   const cr = Object.entries(TARGETS).find(([, t]) => t[kind]?.includes(id))?.[0];
@@ -39,12 +73,14 @@ function nextCrId() {
 
 /** 去掉一条登记（real 模式“放弃草稿”删库后调用；static-r3 新增，只加不改） */
 export function forgetTarget(cr: string, kind: TargetKind, id: string) {
+  revision++; loaded = false;
   const ids = TARGETS[cr]?.[kind];
   const i = ids ? ids.indexOf(id) : -1;
   if (i >= 0) ids!.splice(i, 1);
 }
 
 export function useDraftView(kind: TargetKind, targetId: () => string) {
+  if (api.isReal()) watch(() => JSON.stringify(currentApiContext()), (key) => { void loadDraftState().catch((e) => { if (key === JSON.stringify(currentApiContext())) message.error(`草稿加载失败：${e instanceof Error ? e.message : String(e)}`); }); }, { immediate: true });
   const route = useRoute();
   const router = useRouter();
   const draft = computed(() => draftOf(kind, targetId()));
@@ -60,6 +96,7 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
    * target：登记的目标（默认当前选中项）；新建的对象传新 id，这时不切视图，由页面自己跳转。
    */
   function start(opts: { join?: string; title?: string; target?: string }) {
+    revision++; loaded = false;
     let id = opts.join;
     if (!id) {
       id = nextCrId();
@@ -76,6 +113,7 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
    * 撤销 start() 的登记（落库失败时用）：把 target 从变更单里拿掉；本会话新建且已无任何登记的单子一并删掉；切回已发布视图。
    */
   function cancel(cr: string, target?: string) {
+    revision++; loaded = false;
     const tid = target ?? targetId();
     const t = TARGETS[cr];
     if (t?.[kind]) {

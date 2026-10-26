@@ -16,6 +16,7 @@ export const searchObjects = (kind: string, b: ObjFilter & { page: number; size:
 
 /** O4 带范围提问：ids 优先；没有 ids 时按 filter 由后台重算范围 */
 export type ScopedAskIn = Omit<AskScope, 'ids'> & { ids?: string[]; filter?: ObjFilter; query?: ExploreQuery };
+/** 当前仅支持明确的订单/商品基表汇总；未配置销售/历史/预测返回503 DATA_NOT_CONFIGURED。 */
 export const scopedAsk = (scope: ScopedAskIn, question: string) => api.post<AskAnswer>('/scoped-ask', { scope, question });
 
 /** O5 详情：full 带关键指标（含口径）、快捷问题、数据范围 */
@@ -23,7 +24,8 @@ export interface ObjDetail {
   kind: string; kindLabel: string; id: string; code: string; title: string;
   status?: { text: string; color?: string }; brief: { label: string; value: string }[];
   groups: { title: string; fields: { label: string; value: string }[] }[]; fields: { label: string; value: string }[];
-  kpis?: { label: string; value: string; unit?: string; compare?: string; tone?: string; caliber: string }[];
+  kpis?: { label: string; value: string; unit?: string; compare?: string; tone?: string; caliber: string | null }[];
+  analyticsConfigured?: boolean; analyticsNote?: string;
   quickQuestions?: string[]; scopeLabel?: string; cutoff?: string;
 }
 export const getObject = (kind: string, id: string, view: 'drawer' | 'full' = 'full') =>

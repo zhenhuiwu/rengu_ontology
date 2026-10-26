@@ -13,6 +13,8 @@ import { RELEASES } from '@/api/releases';
 import { legacyRevs } from '@/mock/objectHistory';
 import { useVersion } from '@/composables/useVersion';
 import { crsOf, objLabel } from './objectGov';
+import { isStaticReal, type CRRow } from '@/api/static';
+import { useStaticPage } from '../useStaticPage';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
 const name = computed(() => objLabel(props.objectId));
@@ -23,30 +25,34 @@ const CURRENT_VERSION = computed(() => app.ontologyVersion);
 const NEXT_VERSION = computed(() => app.ontologyNextVersion);
 
 interface Row { key: string; version: string; pending: boolean; title: string; status: string; author: string; reviewer: string; time: string; cr?: string; parts: string[] }
+const FILTERS = ['全部', '进行中', '已发布', '已驳回'] as const;
+const filter = ref<(typeof FILTERS)[number]>('全部');
+const page = ref(1), size = ref(isStaticReal() ? 10 : 12);
+watch([filter, () => props.objectId, size], () => { page.value = 1; });
+const remote = useStaticPage<{ cr: CRRow; parts: string[] }>(
+  () => props.objectId ? `/object-types/${encodeURIComponent(props.objectId)}/usage` : '',
+  () => ({ kind: 'cr', filter: filter.value }), page, size,
+);
+const loadHistory = remote.reload, loadError = remote.error;
 const all = computed<Row[]>(() => [
-  ...crsOf(props.objectId).map(({ cr, parts }) => ({
+  ...(isStaticReal() ? remote.items.value : crsOf(props.objectId)).map(({ cr, parts }) => ({
     key: cr.id, cr: cr.id, title: cr.title, status: cr.status, author: cr.owner, reviewer: cr.reviewer, time: cr.updatedAt, parts,
     version: cr.release ?? (cr.status === '已驳回' || cr.status === '草稿' ? '--' : NEXT_VERSION.value), pending: !cr.release && cr.status !== '已驳回' && cr.status !== '草稿',
   })),
-  ...legacyRevs(props.objectId, name.value).map((h) => ({
+  ...(isStaticReal() ? [] : legacyRevs(props.objectId, name.value)).map((h) => ({
     key: h.version, version: h.version, pending: false, title: h.title, status: '迁移前记录', author: h.author, reviewer: '--', time: h.time, parts: [] as string[],
   })),
 ]);
-const FILTERS = ['全部', '进行中', '已发布', '已驳回'] as const;
-const filter = ref<(typeof FILTERS)[number]>('全部');
 const match = (r: Row, f: (typeof FILTERS)[number]) => f === '全部'
   || (f === '进行中' && ['草稿', '审核中', '已通过'].includes(r.status))
   || (f === '已发布' && (r.status === '已发布' || r.status === '迁移前记录'))
   || (f === '已驳回' && r.status === '已驳回');
-const rows = computed(() => all.value.filter((r) => match(r, filter.value)));
-const count = (f: (typeof FILTERS)[number]) => all.value.filter((r) => match(r, f)).length;
-const page = ref(1);
-const size = ref(12);
-watch(filter, () => { page.value = 1; });
-const pageRows = computed(() => paginate(rows.value, { page: page.value, size: size.value }).items);
+const rows = computed(() => isStaticReal() ? all.value : all.value.filter((r) => match(r, filter.value)));
+const pageRows = computed(() => isStaticReal() ? rows.value : paginate(rows.value, { page: page.value, size: size.value }).items);
+const total = computed(() => isStaticReal() ? remote.total.value : rows.value.length);
 const canView = (r: Row) => !r.pending && r.version !== CURRENT_VERSION.value && RELEASES.some((x) => x.ver === r.version);
 const tone = (s: string) => (s === '审核中' ? 'warning' : 'default');
-const crCount = computed(() => all.value.filter((r) => r.cr).length);
+const crCount = computed(() => isStaticReal() ? remote.total.value : all.value.filter((r) => r.cr).length);
 
 const cols = [
   { title: '版本', key: 'version', width: 150 },
@@ -63,11 +69,12 @@ const cols = [
 
 <template>
   <div class="ot-body">
+    <a-alert v-if="loadError" type="error" :message="loadError" show-icon><template #action><a-button size="small" @click="loadHistory">重试</a-button></template></a-alert>
     <div class="hs-tool">
-      <a-segmented :value="filter" :options="FILTERS.map((f) => ({ label: `${f} ${count(f)}`, value: f }))" @change="(v: any) => (filter = v)" />
-      <InfoTip :text="`变更单 ${crCount} 张 · 当前生效版本 ${CURRENT_VERSION}，${NEXT_VERSION} 待发布。${RELEASES[RELEASES.length - 1]?.ver ?? ''} 之前的修订没有变更单`" />
+      <a-segmented :value="filter" :options="FILTERS.map((f) => ({ label: f, value: f }))" @change="(v: any) => (filter = v)" />
+      <InfoTip :text="isStaticReal() ? `关联变更单 ${crCount} 张` : `变更单 ${crCount} 张 · 当前生效版本 ${CURRENT_VERSION}，${NEXT_VERSION} 待发布。${RELEASES[RELEASES.length - 1]?.ver ?? ''} 之前的修订没有变更单`" />
     </div>
-    <a-table :columns="cols" :data-source="pageRows" :pagination="false" size="small" row-key="key">
+    <a-table :columns="cols" :loading="remote.loading.value" :data-source="pageRows" :pagination="false" size="small" row-key="key">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'version'">
           <span class="num" :class="record.pending || record.version === '--' ? 'c-3' : 'c-1'">{{ record.version }}</span>
@@ -96,7 +103,7 @@ const cols = [
       </template>
       <template #emptyText><span class="t-14 c-3">没有符合条件的记录</span></template>
     </a-table>
-    <AppPagination v-model:page="page" v-model:size="size" variant="simple" :total="rows.length" unit="条记录" :empty="false" />
+    <AppPagination v-model:page="page" v-model:size="size" :variant="isStaticReal() ? 'full' : 'simple'" :total="total" unit="条记录" :empty="false" />
   </div>
 </template>
 

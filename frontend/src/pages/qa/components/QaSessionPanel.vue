@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * 问数工作台左栏：新建会话、关键词搜索 + 时间筛选、历史会话（每页 12 条，simple 分页贴栏底）；常用问题、我的页面贴底。
+ * 问数工作台左栏：新建会话、关键词搜索 + 时间筛选、历史会话（按可用高度分页，simple 分页贴栏底）；常用问题、我的页面贴底。
  * 翻页、搜索、筛选写在 URL：?sessPage=2&sessQ=库存&sessRange=7d
  * 悬停会话显示“…”菜单：重命名（行内编辑）、删除（Popconfirm 二次确认）。
  * “常用问题 · 管理”“我的页面 · 全部”不跳转，打开本页抽屉（?panel=favorites / ?panel=pages）。
  */
-import { computed, ref, watch, nextTick } from 'vue';
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
 import { QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
@@ -13,6 +13,7 @@ import type { QaSession } from '@/mock/qa';
 import { useQaSession, errText } from '../useQaSession';
 import { qaFallBackIfDown } from '../qaFallback';
 import * as qaApi from '@/api/qa';
+import { currentApiContext } from '@/api/http';
 import AppPagination from '@/components/AppPagination.vue';
 import { useQueryParam, useQueryPage } from '../useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
@@ -22,14 +23,22 @@ import { useScopeCaliber } from '../qaScope';
 const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
-const PAGE_SIZE = 12;
-const { sessions: mockList, activeId: active, newSession, real, live, detail, listTick, favTick, newSessionReal } = useQaSession();
-/* 真接口：当前页由 W1 取（q / range / page / size=12）；mock 照旧本地过滤 */
-const srv = ref<{ items: QaSession[]; total: number }>({ items: [], total: 0 });
-const list = computed<QaSession[]>({ get: () => (live.value ? srv.value.items : mockList.value), set: (v) => { mockList.value = v; } });
+const pageSize = ref(12);
+const listEl = ref<HTMLElement>();
+const { sessions: mockList, activeId: active, newSession, real, live, detail, listTick, favTick, newSessionReal, creating } = useQaSession();
+/* 真接口 W1 与本地分页使用同一可用高度条数。 */
+const contextKey = () => { const c = currentApiContext(); return JSON.stringify([c.demoAs, c.ver, c.previewAs]); };
+const filterKey = () => JSON.stringify([contextKey(), kw.value.trim(), range.value]);
+const listKey = () => JSON.stringify([filterKey(), page.value, pageSize.value]);
+const srv = ref({ items: [] as QaSession[], total: 0, filter: '', key: '' });
+const list = computed<QaSession[]>({ get: () => (live.value ? (srv.value.key === listKey() ? srv.value.items : []) : mockList.value), set: (v) => { mockList.value = v; } });
+function requestContext() {
+  const c = currentApiContext();
+  return { headers: { 'X-Demo-As': c.demoAs ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs } };
+}
 const favTop = ref<string[]>(live.value ? [] : QA_FAVORITES);
 const pageTop = ref<string[]>(live.value ? [] : QA_MY_PAGES);
-// 后台没起来 → 回退 mock（qaFallback.ts）
+// 仅显式 mock 模式使用原演示快捷入口。
 watch(live, (on) => { if (!on) { favTop.value = QA_FAVORITES; pageTop.value = QA_MY_PAGES; } });
 const readErr = (what: string) => (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`${what}加载失败：${errText(e)}`); };
 const editing = ref('');
@@ -49,18 +58,23 @@ async function saveRename() {
   editing.value = '';
   if (!s || !draft.value.trim() || draft.value.trim() === s.title) return;
   if (!real) { s.title = draft.value.trim(); return; }
+  const key = contextKey();
   try {
-    const d = await qaApi.patchSession(id, { title: draft.value.trim() });
+    const d = await qaApi.patchSession(id, { title: draft.value.trim() }, requestContext());
+    if (key !== contextKey() || disposed) return;
     s.title = d.title;
     if (detail.value?.id === id) detail.value.title = d.title;
-  } catch (e) { message.error(`重命名失败：${errText(e)}`); }
+  } catch (e) { if (key === contextKey() && !disposed) message.error(`重命名失败：${errText(e)}`); }
 }
 async function doDelete(id: string) {
   delId.value = '';
   if (real) {
-    try { await qaApi.deleteSession(id); } catch (e) { message.error(`删除失败：${errText(e)}`); return; }
+    const key = contextKey();
+    try { await qaApi.deleteSession(id, requestContext()); } catch (e) { if (key === contextKey() && !disposed) message.error(`删除失败：${errText(e)}`); return; }
+    if (key !== contextKey() || disposed) return;
     message.success('会话已删除');
     await load();
+    if (key !== contextKey() || disposed) return;
     if (active.value === id) {
       active.value = srv.value.items[0]?.id ?? '';
       // 删的是最后一个会话：清掉屏上的旧对话，回到空状态
@@ -98,44 +112,98 @@ const filtered = computed(() => {
   const limit = range.value === 'today' ? 0 : range.value === '7d' ? 6 : range.value === '30d' ? 29 : Infinity;
   return list.value.filter((s) => (!k || s.title.includes(k)) && daysAgo(s.date) <= limit);
 });
-const total = computed(() => (live.value ? srv.value.total : filtered.value.length));
-const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
+const total = computed(() => (live.value ? (srv.value.filter === filterKey() ? srv.value.total : 0) : filtered.value.length));
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 const current = computed(() => Math.min(page.value, pageCount.value));
-const rows = computed(() => (live.value ? srv.value.items : filtered.value.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE)));
+const rows = computed(() => (live.value ? list.value : filtered.value.slice((current.value - 1) * pageSize.value, current.value * pageSize.value)));
 let reqSeq = 0;
+let shortcutSeq = 0;
+let disposed = false;
 async function load() {
-  if (!live.value) return;
   const my = ++reqSeq;
+  if (!live.value) return;
+  const key = listKey(), filter = filterKey(), selected = active.value;
+  const query = { q: kw.value.trim() || undefined, range: range.value, page: page.value, size: pageSize.value };
+  const valid = () => !disposed && live.value && my === reqSeq && key === listKey();
   try {
-    const r = await qaApi.listSessions({ q: kw.value.trim() || undefined, range: range.value, page: page.value, size: PAGE_SIZE });
-    if (my !== reqSeq) return;
-    srv.value = { items: r.items, total: r.total };
-    // 页码超出（比如删掉最后一页唯一一条）回落到最后一页
-    if (!r.items.length && r.total && page.value > 1) { page.value = Math.ceil(r.total / PAGE_SIZE); return; }
-    if (!active.value && r.items.length) active.value = r.items[0].id;
-  } catch (e) { if (my === reqSeq) readErr('会话列表')(e); }
+    const r = await qaApi.listSessions(query, requestContext());
+    if (!valid()) return;
+    srv.value = { items: r.items, total: r.total, filter, key };
+    // 删除末页或总数改变时收敛；不以旧页响应覆盖用户随后选中的会话。
+    const last = Math.max(1, Math.ceil(r.total / query.size));
+    if (query.page > last) { page.value = last; return; }
+    if (!selected && active.value === selected && r.items.length) active.value = r.items[0].id;
+  } catch (e) { if (valid()) { srv.value = { ...srv.value, items: [], key }; readErr('会话列表')(e); } }
+}
+async function loadShortcuts() {
+  const my = ++shortcutSeq, key = contextKey();
+  favTop.value = []; pageTop.value = [];
+  if (!live.value) return;
+  const options = requestContext();
+  const results = await Promise.allSettled([
+    qaApi.listFavorites({ page: 1, size: 3 }, options),
+    qaApi.listPagesBrief({ page: 1, size: 2 }, options),
+  ]);
+  if (disposed || my !== shortcutSeq || key !== contextKey() || !live.value) return;
+  if (results[0].status === 'fulfilled') favTop.value = results[0].value.items.map((x) => x.question);
+  else readErr('常用问题')(results[0].reason);
+  if (results[1].status === 'fulfilled') pageTop.value = results[1].value.items.map((x) => x.name);
+  else readErr('我的页面')(results[1].reason);
 }
 if (real) {
-  watch([kw, range, page, listTick], load, { immediate: true });
-  watch(favTick, () => { if (live.value) qaApi.listFavorites({ page: 1, size: 3 }).then((r) => { favTop.value = r.items.map((x) => x.question); }).catch(readErr('常用问题')); }, { immediate: true });
-  qaApi.listPagesBrief({ page: 1, size: 2 }).then((r) => { pageTop.value = r.items.map((x) => x.name); }).catch(readErr('我的页面'));
+  watch([contextKey, live, kw, range, page, pageSize, listTick], load, { immediate: true });
+  watch([contextKey, live, favTick], loadShortcuts, { immediate: true });
 }
-const when = (date: string) => (date === QA_TODAY ? '今天' : date.slice(5));
+let observer: ResizeObserver | undefined;
+let rowHeight = 0;
+function fitRows() {
+  const el = listEl.value;
+  if (!el) return;
+  const row = el.querySelector<HTMLElement>('.qa-ss-item:not(.edit)');
+  const measured = row?.getBoundingClientRect().height;
+  if (measured && measured > 0) rowHeight = measured;
+  // 无记录时使用现有文字行高 + .qa-ss-item 的上下各4px内边距。
+  const height = rowHeight || parseFloat(getComputedStyle(el).lineHeight) + 8;
+  if (!(height > 0)) return;
+  const size = Math.min(200, Math.max(1, Math.floor(el.getBoundingClientRect().height / height)));
+  if (size === pageSize.value) return;
+  const selected = rows.value.findIndex((s) => s.id === active.value);
+  const anchor = (page.value - 1) * pageSize.value + Math.max(0, selected);
+  pageSize.value = size;
+  page.value = Math.floor(anchor / size) + 1;
+}
+async function observeRows() {
+  await nextTick();
+  if (disposed || !observer || !listEl.value) return;
+  observer.disconnect();
+  observer.observe(listEl.value);
+  const row = listEl.value.querySelector<HTMLElement>('.qa-ss-item:not(.edit)');
+  if (row) observer.observe(row);
+  fitRows();
+}
+onMounted(() => { observer = new ResizeObserver(fitRows); void observeRows(); });
+watch([rows, editing], observeRows);
+onBeforeUnmount(() => { disposed = true; ++reqSeq; ++shortcutSeq; observer?.disconnect(); });
+const when = (date: string) => {
+  const d = new Date();
+  const today = real ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : QA_TODAY;
+  return date === today ? '今天' : date.slice(5);
+};
 // 改关键词或时间范围后回到第 1 页
 watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 </script>
 
 <template>
   <section class="panel qa-sessions">
-    <a-tooltip :title="reason"><a-button block :disabled="readonly" @click="onNew"><template #icon><PlusOutlined /></template>新建会话</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button block :disabled="readonly" :loading="creating" @click="onNew"><template #icon><PlusOutlined /></template>新建会话</a-button></a-tooltip>
     <div class="qa-ss-filter">
       <a-input :value="kw" placeholder="搜索会话" allow-clear @change="(e: Event) => (kw = (e.target as HTMLInputElement).value)">
         <template #prefix><SearchOutlined class="c-3" /></template>
       </a-input>
       <a-select v-model:value="range" :options="RANGES" class="qa-ss-range" />
     </div>
-    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="total <= PAGE_SIZE" class="t-12">共 {{ total }} 条</span></div>
-    <div class="qa-ss-list">
+    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="total <= pageSize" class="t-12">共 {{ total }} 条</span></div>
+    <div ref="listEl" class="qa-ss-list">
       <div v-for="s in rows" :key="s.id" class="qa-ss-item"
         :class="{ on: s.id === active, hold: menuId === s.id || delId === s.id, edit: editing === s.id }" :title="s.title" @click="select(s.id)">
         <a-input v-if="editing === s.id" ref="editInput" v-model:value="draft" size="small" class="qa-ss-edit"
@@ -160,7 +228,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
       </div>
       <div v-if="!rows.length" class="qa-ss-empty c-3">没有匹配的会话</div>
     </div>
-    <AppPagination v-if="total > PAGE_SIZE" v-model:page="pageModel" variant="simple" :total="total" :size="PAGE_SIZE" :empty="false" class="qa-ss-pager" />
+    <div class="qa-ss-pager"><AppPagination v-if="total > pageSize" v-model:page="pageModel" variant="simple" :total="total" :size="pageSize" :empty="false" /></div>
     <div class="qa-ss-bottom">
       <div class="qa-ss-group c-3">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
       <div v-for="s in favTop" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
@@ -176,7 +244,8 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 .qa-ss-filter :deep(.ant-input-affix-wrapper) { flex: 1; min-width: 0; }
 .qa-ss-range { width: 96px; flex: none; }
 .qa-ss-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 4px; }
-.qa-ss-list { flex: none; }
+.qa-ss-list { flex: 1; min-height: 0; overflow: hidden; }
+.qa-sessions > :not(.qa-ss-list) { flex-shrink: 0; }
 .qa-ss-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius); cursor: pointer; }
 .qa-ss-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qa-ss-item:hover { background: var(--g3); }
@@ -188,7 +257,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 .qa-ss-item:hover .qa-ss-more, .qa-ss-item.hold .qa-ss-more { display: inline-flex; align-items: center; justify-content: center; }
 .qa-ss-item:hover .qa-ss-date, .qa-ss-item.hold .qa-ss-date { display: none; }
 .qa-ss-empty { padding: 16px 8px; text-align: center; }
-.qa-ss-pager { padding: 0 8px; min-height: 32px; }
+.qa-ss-pager { padding: 0 8px; height: 40px; }
 .qa-ss-group { display: flex; justify-content: space-between; padding: 8px 8px 4px; }
-.qa-ss-bottom { margin-top: auto; border-top: var(--border); padding-top: 4px; }
+.qa-ss-bottom { flex: none; border-top: var(--border); padding-top: 4px; }
 </style>

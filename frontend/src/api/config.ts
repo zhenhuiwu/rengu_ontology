@@ -4,8 +4,8 @@
  * 开关键 ≠ 接口前缀：开关按「负责的后台模块」切，接口地址按 api-index §1.1 的前缀拼。
  * static / dynamic / action / versioning 都挂在 /api/ontology/v1 下，但各自独立切换。
  *
- * - VITE_API_MODE=mock（默认）：全部走 src/mock，界面和现在完全一样，不发任何 /api 请求。
- * - VITE_API_MODE=real：已接线的模块全部走真接口。
+ * - VITE_API_MODE=mock（仅显式演示）：全部走 src/mock，界面和现在完全一样，不发任何 /api 请求。
+ * - VITE_API_MODE=real（默认）：已接线的模块全部走真接口。
  * - VITE_API_REAL_MODULES=versioning,biz（可选，逗号分隔，取值见 SWITCH_KEYS）：
  *     mock 模式下只把列出的模块切到真接口；real 模式下只有列出的模块走真接口（不写 = 全部）。
  *     变量设了非空值就照字面执行：全是未知键时一个模块都不切（不会退回“全部”）。
@@ -35,7 +35,7 @@ export type SwitchKey = keyof typeof SWITCH_PREFIX;
 export const SWITCH_KEYS = Object.keys(SWITCH_PREFIX) as SwitchKey[];
 const isSwitchKey = (s: string): s is SwitchKey => s in SWITCH_PREFIX;
 
-const mode: 'mock' | 'real' = import.meta.env.VITE_API_MODE === 'real' ? 'real' : 'mock';
+const mode: 'mock' | 'real' = import.meta.env.VITE_API_MODE === 'mock' ? 'mock' : 'real';
 const raw = String(import.meta.env.VITE_API_REAL_MODULES ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const unknown = raw.filter((s) => !isSwitchKey(s));
 if (unknown.length) {

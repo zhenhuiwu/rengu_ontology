@@ -1,104 +1,106 @@
-/**
- * 工作台“范围”“口径”选项（backend/docs/backend/generic-object-explorer.md 工作台一节），不写死某个行业：
- * - 范围 = 组织层级维度（分组“组织”、已发布、层级 ≥ 2 的第一个维度 [推断]）最上层的启用取值；
- *   默认 = 当前用户的行级范围（本体小白的 GET /api/admin/v1/me/row-scopes?objectType=，还没上 master，形状 [推断]，失败就跳过）
- *   → 预览时被预览用户在该维度来源对象上的范围（“大区 = 华东”）→ 第一个选项。取值按名称或同义词匹配。
- *   静态是真接口时维度从静态拉（loadStatic 原地替换 DIM_ITEMS），否则读 mock。
- * - 口径 = 静态 meta.metrics[].variants 并集（组织维度来源对象的 meta）；静态读不到（后台没起来）时：真接口用 W17 /session-options，演示用 mock 选项；
- *   字段存在但全部为空 → 不显示口径选择。
- * 会话里存的 scope 是自由文本（≤60 字），旧会话里的“华东”按同义词归一到维度取值名。
- */
+/** 工作台范围来自已发布组织层级维度的顶层取值；当前用户范围使用真实 singular row-scope 契约。 */
 import { computed, ref } from 'vue';
-import { apiClient } from '@/api/http';
-import { loadMeta } from '@/pages/objects/objMeta';
-import { loadStatic, isStaticReal } from '@/api/static';
-import { getSessionOptions } from '@/api/qa';
+import { loadMyRowScope, type MyRowScope } from '@/api/rowScope';
+import { loadMeta, metaContextKey } from '@/pages/objects/objMeta';
+import { fetchStaticPage, isStaticReal } from '@/api/static';
+import { qaReal, getSessionOptions } from '@/api/qa';
 import { DIM_ITEMS, type DimItem, type DimValue } from '@/mock/dimensions';
 import { QA_SCOPE_OPTIONS, QA_CALIBER_OPTIONS } from '@/mock';
 
 export interface Opt { value: string; label: string }
-const adminApi = apiClient('admin');
-
-const dim = ref<DimItem | null>(null);
-const tops = ref<DimValue[]>([]);
+type ScopeDimension = Pick<DimItem, 'id' | 'kind' | 'group' | 'status' | 'levels' | 'object' | 'objectName'>;
+const dim = ref<ScopeDimension | null>(null), tops = ref<DimValue[]>([]);
+/** null仅表示已确认不限；空数组表示没有可用许可。 */
 const rowScope = ref<string[] | null>(null);
-/** null = 还不知道（用兜底选项）；[] = 指标有 variants 字段但都为空 → 隐藏 */
 const variants = ref<string[] | null>(null);
-const fallbackScopes = ref<Opt[]>(QA_SCOPE_OPTIONS);
-const fallbackCalibers = ref<Opt[]>(QA_CALIBER_OPTIONS);
-let started: Promise<void> | null = null;
+const fallbackScopes = ref<Opt[]>(qaReal() ? [] : QA_SCOPE_OPTIONS);
+const fallbackCalibers = ref<Opt[]>(qaReal() ? [] : QA_CALIBER_OPTIONS);
+let started: Promise<void> | null = null, startedKey = '', generation = 0;
 
-function pickOrgDim(items: DimItem[]): DimItem | null {
-  return items.find((d) => d.kind === '维度' && d.group === '组织' && d.status === '已发布' && d.levels.length > 1) ?? null;
+function pickOrgDim(items: ScopeDimension[]) {
+  return items.find(d => d.kind === '维度' && d.group === '组织' && d.status === '已发布' && d.levels.length > 1) ?? null;
 }
-/** row-scopes 形状 [推断]：数组或 {items}；每项取 values[] / value，只认本维度 */
-function parseRowScopes(r: unknown, dimId: string): string[] | null {
-  const list = Array.isArray(r) ? r : (r as { items?: unknown[] })?.items;
-  if (!Array.isArray(list)) return null;
-  if (list.some((x: any) => x?.unrestricted || x?.scope === '全部')) return null;
-  const vals = list.filter((x: any) => !x?.dimension || x.dimension === dimId)
-    .flatMap((x: any) => (Array.isArray(x?.values) ? x.values : x?.value != null ? [x.value] : [])).map(String);
-  return vals.length ? vals : null;
+function sourceValues(response: MyRowScope | null, objectName: string): string[] | null {
+  // 后端objType是已发布对象显示名；不按行业、API名或无关对象猜范围。
+  const matches = response?.items.filter(item => item.objType === objectName) ?? [];
+  if (matches.length !== 1 || !matches[0].visible) return [];
+  if (matches[0].unrestricted) return null;
+  return [...new Set(matches[0].conditions.flatMap(condition => condition.values))];
 }
-
-export function ensureScopeOptions(qaReal: boolean): Promise<void> {
-  if (started) return started;
+export function ensureScopeOptions(real: boolean): Promise<void> {
+  const key = JSON.stringify([metaContextKey(), real]);
+  if (started && key === startedKey) return started;
+  startedKey = key;
+  const seq = ++generation, current = () => seq === generation && key === startedKey;
+  dim.value = null; tops.value = []; rowScope.value = real ? [] : null; variants.value = null;
+  fallbackScopes.value = real ? [] : QA_SCOPE_OPTIONS; fallbackCalibers.value = real ? [] : QA_CALIBER_OPTIONS;
   started = (async () => {
-    await loadStatic(['dimensions']).catch(() => undefined);
-    const d = pickOrgDim(DIM_ITEMS);
-    dim.value = d;
-    tops.value = d ? d.values.filter((v) => v.level === d.levels[0].name && v.status !== '停用') : [];
-    const jobs: Promise<unknown>[] = [];
-    if (d && d.object && adminApi.isReal()) {
-      jobs.push(adminApi.get<unknown>('/me/row-scopes', { query: { objectType: d.object } })
-        .then((r) => { rowScope.value = parseRowScopes(r, d.id); }).catch(() => undefined));
+    if (!real) {
+      const d = pickOrgDim(DIM_ITEMS); dim.value = d;
+      tops.value = d ? DIM_ITEMS.find(item => item.id === d.id)!.values.filter(v => v.level === d.levels[0].name && v.status !== '停用') : [];
+      return;
     }
-    if (isStaticReal() && d?.object) {
-      // 口径 = 组织维度来源对象（如门店）的静态 meta.metrics[].variants 并集 [推断]；meta 走了 mock 兜底（无 hasData）时不算
-      jobs.push(loadMeta(d.object).then((m) => {
-        if (!m || m.hasData === undefined) return;
-        const s = new Set<string>();
-        m.metrics.forEach((x) => x.variants.forEach((v) => { if (v.label) s.add(v.label); }));
-        variants.value = [...s];
+    let selected: ScopeDimension | null = null;
+    if (isStaticReal()) {
+      try {
+        for (let page = 1; ; page++) {
+          const result = await fetchStaticPage<ScopeDimension>('/dimensions', { kind: '维度', group: '组织', page, size: 200 });
+          if (!current()) return;
+          selected = pickOrgDim(result.items);
+          if (selected || !result.items.length || page * result.size >= result.total) break;
+        }
+        if (selected) {
+          const values: DimValue[] = [];
+          for (let page = 1; ; page++) {
+            const result = await fetchStaticPage<DimValue>(`/dimensions/${encodeURIComponent(selected.id)}/values`, { level: selected.levels[0].name, status: '启用', page, size: 200 });
+            if (!current()) return;
+            values.push(...result.items);
+            if (!result.items.length || values.length >= result.total) break;
+          }
+          dim.value = selected; tops.value = values;
+        }
+      } catch { /* 真实元数据不可用时保留空态。 */ }
+    }
+    if (!current()) return;
+    const d = selected;
+    const jobs: Promise<unknown>[] = [getSessionOptions().then(options => {
+      if (current()) { fallbackScopes.value = options.scopes; fallbackCalibers.value = options.calibers; }
+    }).catch(() => undefined)];
+    if (d?.object) {
+      jobs.push(loadMyRowScope().then(response => { if (current()) rowScope.value = sourceValues(response, d.objectName); }).catch(() => { if (current()) rowScope.value = []; }));
+      jobs.push(loadMeta(d.object).then(meta => {
+        if (!current() || !meta || meta.hasData === undefined) return;
+        variants.value = [...new Set(meta.metrics.flatMap(metric => metric.variants.map(variant => variant.label).filter(Boolean)))];
       }).catch(() => undefined));
-    }
-    if (qaReal) {
-      jobs.push(getSessionOptions().then((o) => { fallbackScopes.value = o.scopes; fallbackCalibers.value = o.calibers; }).catch(() => undefined));
     }
     await Promise.all(jobs);
   })();
   return started;
 }
-
-/** 名称或同义词匹配到维度取值；匹配不到返回原文 */
+function normalize(s: string | null | undefined): string {
+  const text = (s ?? '').trim();
+  const value = tops.value.find(v => v.name === text || v.code === text || v.synonyms.includes(text));
+  return value?.name ?? text;
+}
 export function normScope(s: string | null | undefined): string {
-  const t = (s ?? '').trim();
-  if (!t) return t;
-  const v = tops.value.find((x) => x.name === t || x.code === t || x.synonyms.includes(t));
-  return v ? v.name : t;
+  const value = normalize(s);
+  return rowScope.value !== null && !rowScope.value.some(scope => normalize(scope) === value) ? '' : value;
 }
 export function useScopeCaliber() {
-  /** 维度最上层的名称（“大区”），用于“从这里开始按 X = …”提示 */
   const levelName = computed(() => dim.value?.levels[0].name ?? '范围');
-  const scopeOpts = computed<Opt[]>(() => (tops.value.length
-    ? tops.value.map((v) => ({ value: v.name, label: `范围：${v.name}` }))
-    : fallbackScopes.value));
-  const caliberOpts = computed<Opt[]>(() => (variants.value
-    ? variants.value.map((v) => ({ value: v, label: `口径：${v}` }))
-    : fallbackCalibers.value));
+  const scopeOpts = computed<Opt[]>(() => {
+    const options = tops.value.length ? tops.value.map(v => ({ value: v.name, label: `范围：${v.name}` })) : fallbackScopes.value;
+    return rowScope.value === null ? options : options.filter(option => rowScope.value!.some(value => normalize(value) === normalize(option.value)));
+  });
+  const caliberOpts = computed<Opt[]>(() => variants.value ? variants.value.map(value => ({ value, label: `口径：${value}` })) : fallbackCalibers.value);
   const showCaliber = computed(() => caliberOpts.value.length > 0);
-  /** 默认范围：行级范围 → 预览范围（“层级 = 值”）→ 第一个选项 */
   function defaultScope(previewScope: (objName: string) => string | null): string {
-    const opts = scopeOpts.value.map((o) => o.value);
-    const hit = (xs: string[]) => xs.map(normScope).find((x) => opts.includes(x));
-    const rs = rowScope.value && hit(rowScope.value);
-    if (rs) return rs;
-    const d = dim.value;
-    const pvs = d ? previewScope(d.objectName) : null;
-    const m = pvs && /^(\S+) [=∈] (.+)$/.exec(pvs.split('；或 ')[0]);
-    const ps = m && hit(m[2].split('、'));
-    if (ps) return ps;
-    return opts[0] ?? '';
+    const options = scopeOpts.value.map(option => option.value);
+    const hit = (values: string[]) => values.map(normalize).find(value => options.includes(value));
+    if (rowScope.value !== null) return hit(rowScope.value) ?? '';
+    const preview = dim.value ? previewScope(dim.value.objectName) : null;
+    const match = preview && /^(\S+) [=∈] (.+)$/.exec(preview.split('；或 ')[0]);
+    return (match && hit(match[2].split('、'))) || options[0] || '';
   }
   return { levelName, scopeOpts, caliberOpts, showCaliber, defaultScope, normScope };
 }

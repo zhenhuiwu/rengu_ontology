@@ -2,16 +2,16 @@
  * 对象元数据适配层（backend/docs/backend/generic-object-explorer.md）：对象搜索 / 对象详情 / 工作台只认这里的形状，
  * 不在页面里写死某个行业的对象、字段、筛选项。
  *
- * 取数顺序（静态接口没上线或出错时逐级兜底）：
- * - 类型列表：静态 GET /object-types（已发布）→ mock LINK_OBJECTS（去掉草稿）
- * - 元数据：静态 GET /object-types/{id}/meta → 静态 GET /object-types/{id}/properties（ObjProp）+ 默认标志 → mock OBJECT_PROPS + 默认标志
+ * 真模式类型列表、元数据和属性只读静态 API，错误直接抛出；显式 mock 模式才读本地定义。
+ * - 类型列表：静态 GET /object-types（已发布、未隐藏，完整分页）
+ * - 元数据：静态 GET /object-types/{id}/meta + /properties（完整分页）
  * - 分面：静态 GET /object-types/{id}/facets → 调用方兜底（真接口用 qa 搜索结果里的过渡分面，演示用 objRows 本地算）
- * - 关系 / 动作 / 指标：mock LINKS / ACTION_TYPES / METRICS（静态对应接口的形状还没定，[推断]）
+ * - 关系读已加载的静态定义；真模式未接入动作候选返回 []，建议问句和指标仅取后台返回。
  *
  * 默认标志 [推断]，与后台 explore_api.flags 一致：主键和标题可搜索；enum / boolean / 时间和非主键的维度字符串可筛选；
  * 数值和时间可排序。listed / visibility / format / unit 静态还没有，默认规则见 metaFromProps。
  */
-import { apiClient, isBackendDown, type PageResult } from '@/api/http';
+import { apiClient, currentApiContext, isBackendDown, type PageResult } from '@/api/http';
 import { loadStatic } from '@/api/static';
 import { LINK_OBJECTS, LINKS, type Cardinality } from '@/mock/links';
 import { OBJECT_PROPS, objectMeta, type ObjProp } from '@/mock/objectProps';
@@ -80,7 +80,7 @@ export function metaFromProps(props: ObjProp[]): PropMeta[] {
 function withTitle(t: TypeBrief, props: PropMeta[], sample: string[], extra: Partial<TypeMeta> = {}): TypeMeta {
   const pk = extra.pkProp || props.find((p) => p.pk)?.key || props[0]?.key || 'id';
   const title = extra.titleProp || props.find((p) => p.title)?.key || pk;
-  return { metrics: mockMetrics(t), ...extra, ...t, properties: props, titleProp: title, pkProp: pk, sampleQuestions: sample };
+  return { ...extra, metrics: extra.metrics ?? (staticApi.isReal() ? [] : mockMetrics(t)), ...t, properties: props, titleProp: title, pkProp: pk, sampleQuestions: sample };
 }
 /** mock 兜底：维度里包含本类型的已发布指标 [推断]，没有口径变体 */
 const mockMetrics = (t: TypeBrief): MetricMeta[] =>
@@ -89,19 +89,33 @@ const mockMetrics = (t: TypeBrief): MetricMeta[] =>
 const mockTypes = (): TypeBrief[] => LINK_OBJECTS.filter((o) => !o.draft).map(({ id, name, group }) => ({ id, name, group }));
 const sampleOf = (t: TypeBrief) => objectMeta(t.id, t.name, t.group).qs.map((q) => q.q);
 
-let typesCache: Promise<TypeBrief[]> | null = null;
+export function metaContextKey(): string {
+  const { demoAs, previewAs, ver } = currentApiContext();
+  return JSON.stringify([staticApi.isReal(), demoAs, previewAs, ver]);
+}
+function contextOptions() {
+  const { demoAs, previewAs, ver } = currentApiContext();
+  const headers: Record<string, string> = { 'X-Demo-As': demoAs ?? '' };
+  return { readonlyParams: false, query: { previewAs, ver }, headers };
+}
+const typesCache = new Map<string, Promise<TypeBrief[]>>();
 /** 已发布、未隐藏的对象类型（按分组顺序保持接口给的顺序）。静态 hidden 标志还没有，[推断] 全部视为不隐藏 */
 export function listTypes(): Promise<TypeBrief[]> {
-  if (!typesCache) {
-    typesCache = (async () => {
+  const key = metaContextKey();
+  const opts = contextOptions();
+  if (!typesCache.has(key)) {
+    typesCache.set(key, (async () => {
       if (!staticApi.isReal()) return mockTypes();
-      try {
-        const r = await staticApi.get<PageResult<TypeBrief & { status?: string; hidden?: boolean }>>('/object-types', { query: { size: 200 } });
-        return r.items.filter((t) => (!t.status || t.status === '已发布') && !t.hidden).map(({ id, name, group }) => ({ id, name, group }));
-      } catch (e) { if (isBackendDown(e)) return mockTypes(); typesCache = null; throw e; }
-    })();
+      const rows: (TypeBrief & { status?: string; hidden?: boolean })[] = [];
+      for (let page = 1; ; page++) {
+        const r = await staticApi.get<PageResult<TypeBrief & { status?: string; hidden?: boolean }>>('/object-types', { ...opts, query: { ...opts.query, page, size: 200 } });
+        rows.push(...r.items);
+        if (!r.items.length || typeof r.total !== 'number' || rows.length >= r.total) break;
+      }
+      return rows.filter((t) => (!t.status || t.status === '已发布') && !t.hidden).map(({ id, name, group }) => ({ id, name, group }));
+    })().catch((e) => { typesCache.delete(key); throw e; }));
   }
-  return typesCache;
+  return typesCache.get(key)!;
 }
 export const groupTypes = (ts: TypeBrief[]) => {
   const g = new Map<string, TypeBrief[]>();
@@ -111,49 +125,52 @@ export const groupTypes = (ts: TypeBrief[]) => {
 
 const metaCache = new Map<string, Promise<TypeMeta | null>>();
 /** 某类型的元数据；类型不存在返回 null */
-export function loadMeta(id: string): Promise<TypeMeta | null> {
-  if (!metaCache.has(id)) {
-    metaCache.set(id, (async () => {
-      const t = (await listTypes()).find((x) => x.id === id) ?? mockTypes().find((x) => x.id === id);
+export function loadMeta(id: string, withLinks = true): Promise<TypeMeta | null> {
+  const key = JSON.stringify([metaContextKey(), id, withLinks]);
+  const opts = contextOptions();
+  if (!metaCache.has(key)) {
+    metaCache.set(key, (async () => {
+      const t = (await listTypes()).find((x) => x.id === id);
       if (!t) return null;
-      // 静态真接口：关系类型整表替换进 LINKS（linksOf 读它），失败照旧用 mock
-      await loadStatic(['links']).catch(() => undefined);
+      // 真实关系加载失败同样阻止展示，避免把旧缓存当成当前定义。
+      if (withLinks) await loadStatic(['links']);
       if (staticApi.isReal()) {
-        // 静态 meta 是真接口：只有后台没起来才用 mock（读兜底）；其他错误照常抛给页面
-        try {
-          type RawMeta = { titleProp: string | null; pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean; properties: (Partial<PropMeta> & { key: string })[]; sampleQuestions?: (string | null)[]; metrics?: MetricMeta[] };
-          const [m, sp] = await Promise.all([staticApi.get<RawMeta>(`/object-types/${encodeURIComponent(id)}/meta`), staticProps(id)]);
-          const base = new Map(metaFromProps(sp ?? []).map((p) => [p.key, p]));
-          const props = m.properties.map((p, i) => {
-            const b = base.get(p.key) ?? metaFromProps([{ api: p.key, name: p.name ?? p.key, type: p.dataType ?? 'string', group: '其他', source: '', desc: '' }])[0];
-            const q = Object.fromEntries(Object.entries(p).filter(([, v]) => v !== null && v !== undefined)) as Partial<PropMeta>;
-            return { ...b, order: i, ...q, pk: b.pk || p.key === m.pkProp, title: b.title || p.key === m.titleProp } as PropMeta;
-          });
-          const qs = (m.sampleQuestions ?? []).filter((x): x is string => !!x);
-          return withTitle(t, props.sort((a, b) => a.order - b.order), qs.length ? qs : sampleOf(t), {
-            titleProp: m.titleProp ?? undefined, pkProp: m.pkProp ?? undefined, kwPlaceholder: m.kwPlaceholder, hasData: m.hasData,
-            metrics: (m.metrics ?? []).map((x) => ({ ...x, variants: x.variants ?? [] })),
-          });
-        } catch (e) { if (!isBackendDown(e)) { metaCache.delete(id); throw e; } }
+        type RawMeta = { titleProp: string | null; pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean; properties: (Partial<PropMeta> & { key: string })[]; sampleQuestions?: (string | null)[]; metrics?: MetricMeta[] };
+        const [m, sp] = await Promise.all([staticApi.get<RawMeta>(`/object-types/${encodeURIComponent(id)}/meta`, opts), staticProps(id, opts)]);
+        const base = new Map(metaFromProps(sp).map((p) => [p.key, p]));
+        const props = m.properties.map((p, i) => {
+          const b = base.get(p.key) ?? metaFromProps([{ api: p.key, name: p.name ?? p.key, type: p.dataType ?? 'string', group: '其他', source: '', desc: '' }])[0];
+          const q = Object.fromEntries(Object.entries(p).filter(([, v]) => v !== null && v !== undefined)) as Partial<PropMeta>;
+          return { ...b, order: i, ...q, pk: b.pk || p.key === m.pkProp, title: b.title || p.key === m.titleProp } as PropMeta;
+        });
+        const qs = (m.sampleQuestions ?? []).filter((x): x is string => !!x);
+        return withTitle(t, props.sort((a, b) => a.order - b.order), qs, {
+          titleProp: m.titleProp ?? undefined, pkProp: m.pkProp ?? undefined, kwPlaceholder: m.kwPlaceholder, hasData: m.hasData,
+          metrics: (m.metrics ?? []).map((x) => ({ ...x, variants: x.variants ?? [] })),
+        });
       }
       return withTitle(t, metaFromProps(OBJECT_PROPS[id] ?? []), sampleOf(t));
-    })());
+    })().catch((e) => { metaCache.delete(key); throw e; }));
   }
-  return metaCache.get(id)!;
+  return metaCache.get(key)!;
 }
-/** 属性表只用来补分组 / 说明 / 敏感标志，取不到不影响 meta */
-async function staticProps(id: string): Promise<ObjProp[] | null> {
-  try { return (await staticApi.get<PageResult<ObjProp>>(`/object-types/${encodeURIComponent(id)}/properties`, { query: { size: 200 } })).items; } catch { return null; }
+/** 完整属性表补充分组/说明/敏感标志；失败不能用默认标记掩盖。 */
+async function staticProps(id: string, opts: ReturnType<typeof contextOptions>): Promise<ObjProp[]> {
+  const rows: ObjProp[] = [];
+  for (let page = 1; ; page++) {
+    const r = await staticApi.get<PageResult<ObjProp>>(`/object-types/${encodeURIComponent(id)}/properties`, { ...opts, query: { ...opts.query, page, size: 200 } });
+    rows.push(...r.items);
+    if (!r.items.length || typeof r.total !== 'number' || rows.length >= r.total) return rows;
+  }
 }
 
-/** 静态分面（联动当前筛选）；没上线 / 出错返回 null，由调用方兜底 */
-/** 静态 /facets（按其他已选筛选联动，不带关键词）；取不到返回 null，页面用 E1 顺带的过渡分面 */
+/** 静态 /facets（按其他已选筛选联动，不带关键词）；仅后台不可达时返回 null，业务错误交给页面提示 */
 export async function loadStaticFacets(id: string, filters: Filters): Promise<FacetMeta[] | null> {
   if (!staticApi.isReal()) return null;
   try {
     const r = await staticApi.get<(FacetMeta & { hasData?: boolean; order?: number })[]>(`/object-types/${encodeURIComponent(id)}/facets`, { query: Object.keys(filters).length ? { filters: JSON.stringify(filters) } : {} });
     return r.filter((f) => f.hasData !== false).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  } catch { return null; }
+  } catch (e) { if (isBackendDown(e)) return null; throw e; }
 }
 
 /** 从本类型出发的关系（已发布）：label 用本侧看到的名字（正向 name / 反向 reverse） */
@@ -166,6 +183,7 @@ export function linksOf(id: string): LinkMeta[] {
 }
 /** 作用对象是本类型的已发布动作（target_kind / target 名称匹配） */
 export function actionsOf(t: TypeBrief) {
+  if (staticApi.isReal()) return [];
   return ACTION_TYPES.filter((a) => a.status === '已发布' && (a.targetKind === t.id || a.target === t.name))
     .map((a) => ({ id: a.id, name: a.name, desc: a.desc, approval: a.approval }));
 }

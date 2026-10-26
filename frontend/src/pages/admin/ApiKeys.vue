@@ -19,12 +19,16 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate, fmtInt, EMPTY } from '@/mock';
 import { API_KEYS, KEY_SCOPES, SERVICE_ACCOUNTS, SA_SCOPES, bindingText, keyActor, keyCalls, newSecret, type ApiKey, type KeyBinding, type KeyScope, type KeyStatus } from '@/mock/apikeys';
 import { ROLES } from '@/mock/roles';
+import { adminApiOn } from '@/api/admin';
 
 const route = useRoute();
 const router = useRouter();
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
-const { readonly, reason } = useReadonly();
+const real = adminApiOn();
+const { readonly: viewReadonly, reason: viewReason } = useReadonly();
+const readonly = computed(() => real || viewReadonly.value);
+const reason = computed(() => real ? '暂不可操作' : viewReason.value);
 const confirm = useConfirmStore();
 const TODAY = '2026-10-25';
 const nowStr = '2026-10-25 17:20';
@@ -38,7 +42,7 @@ const roleScope = (name?: string) => {
 };
 const BIND_ROLES = ROLES.filter((r) => r.scopes.length).map((r) => r.name);
 const withScope = (b: KeyBinding): KeyBinding => (b.kind === '角色' ? { ...b, scope: roleScope(b.role) || b.scope } : b);
-const keys = ref<ApiKey[]>(API_KEYS.map((k) => ({ ...k, binding: withScope(k.binding) })));
+const keys = ref<ApiKey[]>(real ? [] : API_KEYS.map((k) => ({ ...k, binding: withScope(k.binding) })));
 const mask = (k: ApiKey) => `${k.prefix}****${k.last4}`;
 const daysLeft = (d: string) => Math.round((new Date(d).getTime() - new Date(TODAY).getTime()) / 86400000);
 
@@ -72,6 +76,7 @@ const columns = [
 
 // 吊销
 async function revoke(k: ApiKey) {
+  if (readonly.value) return;
   const ok = await confirm.ask({
     title: '吊销 API 密钥', target: `${k.name}（${mask(k)}）`, okText: '吊销', danger: true, irreversible: true,
     fields: [
@@ -100,7 +105,7 @@ interface Form { name: string; env: '生产' | '测试'; scopes: KeyScope[]; bin
 const blank = (): Form => ({ name: '', env: '生产', scopes: [], bindKind: '角色', role: undefined, account: undefined, saScope: undefined, life: '90', ip: '', note: '' });
 const form = reactive<Form>(blank());
 const formSnap = ref('');
-const createOpen = computed(() => q('form') === 'create');
+const createOpen = computed(() => !real && q('form') === 'create');
 const secret = ref<{ key: ApiKey; text: string } | null>(null);
 const saved = ref(false);
 const tried = ref(false); // 点过“生成密钥”才显示必填红字
@@ -132,6 +137,7 @@ const canCreate = computed(() => !formErrors.value.length && !readonly.value);
 const LIFE = [{ value: '30', label: '30 天' }, { value: '90', label: '90 天（推荐）' }, { value: '180', label: '180 天' }, { value: '365', label: '1 年' }, { value: '0', label: '永不过期（不推荐）' }];
 const addDays = (n: number) => { const d = new Date(TODAY); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 function create() {
+  if (readonly.value) return;
   tried.value = true;
   if (!canCreate.value || !formBinding.value) return;
   const text = newSecret(form.env, keys.value.length * 97 + form.name.length);
@@ -146,7 +152,7 @@ function create() {
   saved.value = false;
 }
 async function copySecret() {
-  if (!secret.value) return;
+  if (real || !secret.value) return;
   try { await navigator.clipboard.writeText(secret.value.text); message.success('已复制到剪贴板'); } catch { message.warning('浏览器不允许自动复制，请手动选中复制'); }
 }
 async function closeCreate() {
@@ -166,6 +172,7 @@ async function closeCreate() {
     <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="setQuery({ form: 'create', from: undefined })">新建密钥</a-button></a-tooltip>
   </Teleport>
   <div class="panel ak">
+    <a-empty v-if="real" description="暂无密钥" />
     <div class="panel-head">
       <span class="ak-sum">
         <span class="t-16 fw-600">API 密钥</span>

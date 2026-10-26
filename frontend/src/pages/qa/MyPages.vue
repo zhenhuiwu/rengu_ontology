@@ -23,7 +23,8 @@ import PageDrawer from './pages/PageDrawer.vue';
 import TemplateDrawer from './pages/TemplateDrawer.vue';
 import UseTemplatePop from './pages/UseTemplatePop.vue';
 import * as pagesApi from '@/api/qaPages';
-import type { PageResult } from '@/api/http';
+import { currentApiContext, type PageResult } from '@/api/http';
+import { getSessionOptions } from '@/api/qa';
 import { qaLive, qaFallBackIfDown, qaWriteReal, qaWriteFail } from './qaFallback';
 import { errText } from './useQaSession';
 
@@ -37,7 +38,8 @@ const pv = usePreview();
 const pvText = computed(() => pv.limited.value.map((o) => `${o.name} ${o.scope}`).join('；') || '全部');
 const confirm = useConfirmStore();
 
-const pages = reactive<QaPageFull[]>([...MY_PAGES, ...OTHER_PAGES].map((p) => ({ ...p })));
+const pageContextKey = () => JSON.stringify(currentApiContext());
+const pages = reactive<QaPageFull[]>(qaWriteReal.value ? [] : [...MY_PAGES, ...OTHER_PAGES].map((p) => ({ ...p })));
 /** 列表可见：平时是我（王敏）的页面；预览时是被预览用户自己的页面 + 共享给他的 */
 const ME = '王敏';
 const visible = (p: QaPageFull) => {
@@ -65,25 +67,32 @@ const paged = computed(() => (qaLive.value ? { items: live.list?.items ?? [], to
 const live = reactive<{ list: pagesApi.PageList | null; count: number; tpls: PageResult<QaTemplate> | null; cur: QaPageFull | null }>({ list: null, count: 0, tpls: null, cur: null });
 let lseq = 0;
 async function loadList() {
-  if (!qaLive.value) return;
   const my = ++lseq;
+  live.list = null; live.count = 0;
+  if (!qaLive.value) return;
+  const query = { kw: kw.value || undefined, src: srcF.value, share: shareF.value, status: statusF.value, page: pq.page.value, size: pq.size.value };
   try {
     const [r, all] = await Promise.all([
-      pagesApi.listPages({ kw: kw.value || undefined, src: srcF.value, share: shareF.value, status: statusF.value, page: pq.page.value, size: pq.size.value }),
+      pagesApi.listPages(query),
       pagesApi.listPages({ page: 1, size: 1 }),
     ]);
-    if (my === lseq) { live.list = r; live.count = all.total; }
+    if (my !== lseq) return;
+    live.count = all.total;
+    const lastPage = Math.max(1, Math.ceil(r.total / query.size));
+    if (query.page > lastPage) { pq.page.value = lastPage; return; }
+    live.list = r;
   } catch (e) { if (my === lseq && !qaFallBackIfDown(e)) message.error(`页面列表加载失败：${errText(e)}`); }
 }
-watch([qaLive, kw, srcF, shareF, statusF, pq.page, pq.size, () => pv.userName.value], loadList, { immediate: true });
+watch([qaLive, kw, srcF, shareF, statusF, pq.page, pq.size, pageContextKey], loadList, { immediate: true });
 let cseq = 0;
 async function loadCur() {
+  const my = ++cseq;
+  live.cur = null;
   const id = q('page_id');
   if (!qaLive.value || !id) { live.cur = null; return; }
-  const my = ++cseq;
   try { const r = await pagesApi.getPage(id); if (my === cseq) live.cur = r; } catch (e) { if (my === cseq) { live.cur = null; if (!qaFallBackIfDown(e)) message.error(`页面加载失败：${errText(e)}`); } }
 }
-watch([qaLive, () => q('page_id'), () => pv.userName.value], loadCur, { immediate: true });
+watch([qaLive, () => q('page_id'), pageContextKey], loadCur, { immediate: true });
 /** 写操作（开关 qa 为真时，不看后台是否判定未启动）：成功返回结果；失败（含后台未启动）只提示并返回 undefined。
  *  写操作不回退：不改演示数据、不假装成功、不走 qaFallBackIfDown（不把整页切到演示数据） */
 async function call<T>(fn: () => Promise<T>, what: string): Promise<T | undefined> {
@@ -121,12 +130,7 @@ const ptab = computed({ get: () => q('ptab') || 'preview', set: (v: string) => s
 /* 动作 */
 const NOW = '2026-10-25 17:10';
 async function refresh(p0: QaPageFull) {
-  if (qaWriteReal.value) {
-    const r = await call(() => pagesApi.refreshPage(p0.id), '刷新');
-    if (r === undefined) return;
-    patchLive(p0.id, { status: r.status, statusNote: r.statusNote, lastRefresh: r.lastRefresh, dataAsOf: r.dataAsOf });
-    message.success(`已刷新「${p0.name}」，数据截至 ${r.dataAsOf}`); return;
-  }
+  if (qaWriteReal.value) { message.warning('页面刷新执行器尚未接入，原结果保持不变'); return; }
   const p = mockOf(p0); if (!p) return;
   p.lastRefresh = NOW; p.dataAsOf = PAGES_CUTOFF;
   if (p.status === '刷新失败') { p.status = p.cards.some((c) => c.pending) ? '口径待更新' : '正常'; p.statusNote = p.cards.find((c) => c.pending)?.pending; }
@@ -168,7 +172,21 @@ async function remove(p: QaPageFull) {
 /* 从问数工作台“把会话整理成页面”进入时带 ?newName=，直接打开新建并填好名称 */
 const newOpen = ref(!!q('newName'));
 const newName = ref(q('newName'));
-const newScope = ref('华东大区');
+const newScope = ref(qaWriteReal.value ? '' : '华东大区');
+const scopeChoices = ref<string[]>(qaWriteReal.value ? [] : PAGE_SCOPES);
+let scopeSeq = 0;
+async function loadPageOptions() {
+  const my = ++scopeSeq;
+  if (!qaLive.value) return;
+  scopeChoices.value = []; newScope.value = '';
+  try {
+    const result = await getSessionOptions();
+    if (my !== scopeSeq) return;
+    scopeChoices.value = result.scopes.map((s) => s.value);
+    newScope.value = scopeChoices.value[0] ?? '';
+  } catch (e) { if (my === scopeSeq) message.error(`页面范围加载失败：${errText(e)}`); }
+}
+watch([qaLive, pageContextKey], loadPageOptions, { immediate: true });
 async function createBlank() {
   if (qaWriteReal.value) {
     const r = await call(() => pagesApi.createPage({ name: newName.value.trim(), scope: newScope.value }), '新建页面');
@@ -187,17 +205,18 @@ const nextId = () => `P${String(Math.max(...pages.map((p) => Number(p.id.slice(1
 /* ── 模板库 ── */
 const tkw = computed({ get: () => q('tkw'), set: (v: string) => setQuery({ tkw: v || undefined }) });
 const sceneF = computed({ get: () => q('scene') || undefined, set: (v?: string) => setQuery({ scene: v || undefined }) });
-const SCENES = [...new Set(PAGE_TEMPLATES.map((t) => t.scene))];
+const SCENES = computed(() => [...new Set((qaLive.value ? live.tpls?.items ?? [] : PAGE_TEMPLATES).map((t) => t.scene))]);
 const trows = computed(() => PAGE_TEMPLATES.filter((t) => (!tkw.value || t.name.includes(tkw.value)) && (!sceneF.value || t.scene === sceneF.value)));
 const tq = usePagedQuery({ defaultSize: 15, filters: [tkw, sceneF], prefix: 't' });
 const tpaged = computed(() => (qaLive.value ? { items: live.tpls?.items ?? [], total: live.tpls?.total ?? 0 } : paginate(trows.value, { page: tq.page.value, size: tq.size.value })));
 let tseq = 0;
 async function loadTpls() {
-  if (!qaLive.value || tab.value !== 'templates') return;
   const my = ++tseq;
+  live.tpls = null;
+  if (!qaLive.value || tab.value !== 'templates') return;
   try { const r = await pagesApi.listTemplates({ kw: tkw.value || undefined, scene: sceneF.value, page: tq.page.value, size: tq.size.value }); if (my === tseq) live.tpls = r; } catch (e) { if (my === tseq && !qaFallBackIfDown(e)) message.error(`模板库加载失败：${errText(e)}`); }
 }
-watch([qaLive, tab, tkw, sceneF, tq.page, tq.size], loadTpls, { immediate: true });
+watch([qaLive, tab, tkw, sceneF, tq.page, tq.size, pageContextKey], loadTpls, { immediate: true });
 const tcols = [
   { title: '模板名称', key: 'name', width: 200 },
   { title: '场景', dataIndex: 'scene', key: 'scene', width: 96 },
@@ -208,7 +227,7 @@ const tcols = [
   { title: '更新时间', key: 'updatedAt', width: 110 },
   { title: '操作', key: 'op', width: 170 },
 ];
-const tplCur = computed(() => (qaLive.value ? live.tpls?.items.find((t) => t.id === q('tpl')) : undefined) ?? PAGE_TEMPLATES.find((t) => t.id === q('tpl')));
+const tplCur = computed(() => qaLive.value ? live.tpls?.items.find((t) => t.id === q('tpl')) : PAGE_TEMPLATES.find((t) => t.id === q('tpl')));
 const openTpl = (t: QaTemplate) => setQuery({ tpl: t.id, page_id: undefined, ptab: undefined });
 async function fromTemplate(e: TplCreate) {
   if (qaWriteReal.value) {
@@ -229,19 +248,24 @@ const rowProps = (p: QaPageFull) => ({ class: p.id === q('page_id') ? 'mp-row-on
 const trowProps = (t: QaTemplate) => ({ class: t.id === q('tpl') ? 'mp-row-on' : '', onClick: () => openTpl(t) });
 const fromWb = computed(() => (qaLive.value ? live.list?.fromWorkbenchCount ?? 0 : pages.filter((p) => p.sourceKind === '问数工作台').length));
 const pageCount = computed(() => (qaLive.value ? live.count : pages.filter(visible).length));
-const tplCount = computed(() => (qaLive.value && live.tpls ? live.tpls.total : PAGE_TEMPLATES.length));
+const tplCount = computed(() => (qaLive.value ? live.tpls?.total ?? 0 : PAGE_TEMPLATES.length));
+const cutoff = computed(() => {
+  if (!qaLive.value) return PAGES_CUTOFF;
+  const dates = (live.list?.items ?? []).map((p) => p.dataAsOf).filter(Boolean).sort();
+  return dates.length && dates.length === live.list?.items.length ? dates[0] : '—';
+});
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
     <a-space>
-      <span class="t-12 c-3">数据截至 <span class="num">{{ PAGES_CUTOFF }}</span></span>
+      <span class="t-12 c-3">本页卡片数据截至 <span class="num">{{ cutoff }}</span></span>
       <a-button @click="router.push('/use/qa/workbench')">去问数工作台</a-button>
       <a-popover v-model:open="newOpen" trigger="click" placement="bottomRight" title="新建空白页面">
         <template #content>
           <div class="mp-pop">
             <div class="mp-f"><span class="c-3 mp-l">页面名称</span><a-input v-model:value="newName" :maxlength="30" placeholder="例如：华东复购分析" /></div>
-            <div class="mp-f"><span class="c-3 mp-l">范围</span><a-select v-model:value="newScope" class="mp-c" :options="PAGE_SCOPES.map((s) => ({ value: s, label: s }))" /></div>
+            <div class="mp-f"><span class="c-3 mp-l">范围</span><a-select v-model:value="newScope" class="mp-c" :options="scopeChoices.map((s) => ({ value: s, label: s }))" /></div>
             <div class="mp-btns"><a-button size="small" @click="newOpen = false">取消</a-button><a-button size="small" type="primary" :disabled="!newName.trim()" @click="createBlank">新建</a-button></div>
           </div>
         </template>
@@ -286,10 +310,10 @@ const tplCount = computed(() => (qaLive.value && live.tpls ? live.tpls.total : P
             <span v-else-if="column.key === 'refresh'" class="c-2">{{ freqLabel(record.refresh) }}</span>
             <span v-else-if="column.key === 'sub'" class="c-2">{{ record.sub.on ? `${record.sub.channel} · ${record.sub.receivers.length} 人` : '--' }}</span>
             <span v-else-if="column.key === 'share'" class="c-2">{{ shareText(record) }}</span>
-            <span v-else-if="column.key === 'asof'" class="num c-2">{{ record.dataAsOf.slice(5) }}</span>
+            <span v-else-if="column.key === 'asof'" class="num c-2">{{ record.dataAsOf?.slice(5) ?? '—' }}</span>
             <span v-else-if="column.key === 'status'" :class="stCls(record.status)" :title="record.statusNote">{{ record.status }}</span>
             <span v-else-if="column.key === 'op'" class="mp-ops" @click.stop>
-              <a-tooltip :title="reason"><a-button type="link" size="small" :disabled="readonly" @click="refresh(record)">刷新</a-button></a-tooltip>
+              <a-tooltip :title="qaWriteReal ? '页面刷新执行器尚未接入' : reason"><a-button type="link" size="small" :disabled="readonly || qaWriteReal" @click="refresh(record)">刷新</a-button></a-tooltip>
               <a-tooltip :title="reason"><a-button type="link" size="small" :disabled="readonly" @click="openRename(record)">重命名</a-button></a-tooltip>
               <a-button type="link" size="small" @click="openPage(record, 'share')">共享</a-button>
               <a-tooltip :title="reason"><a-button type="link" size="small" class="mp-del" :disabled="readonly" @click="remove(record)">删除</a-button></a-tooltip>

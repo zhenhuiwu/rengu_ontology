@@ -6,6 +6,9 @@
  * URL：?fn=FN-003&tab=def|test|versions&form=edit
  */
 import { computed, reactive, ref, watch } from 'vue';
+import { isReal } from '@/api/config';
+import RealFunctions from './RealFunctions.vue';
+const realMode = isReal('static');
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -136,6 +139,8 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 </script>
 
 <template>
+  <RealFunctions v-if="realMode" />
+  <template v-else>
   <Teleport defer to="#page-extra">
     <a-tooltip :title="reason"><a-button :type="formOpen ? 'default' : 'primary'" :disabled="readonly" @click="guard(() => setQuery({ form: 'new' }))">新建函数</a-button></a-tooltip>
   </Teleport>
@@ -268,6 +273,7 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
       </div>
     </template>
   </a-drawer>
+  </template>
 </template>
 
 <style scoped>

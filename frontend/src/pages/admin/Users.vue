@@ -2,7 +2,7 @@
 /**
  * 用户与组织（示例：full 分页，120 个 mock 用户）。一屏 17 行，页码/条数在 URL ?page=&size=。
  * 停用：确认卡说明会话保留为只读、待办审批需转交，并选择转交人（ConfirmActionModal 的 picker）。
- * 数据：开关 admin 切到真接口且后台可用时走 /api/admin/v1/users（src/api/admin.ts），否则用本地 mock（原逻辑不变）。
+ * 真模式读取数据库，加载失败保留空态；mock 仅由显式开关选择。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -15,37 +15,68 @@ import { pendingApprovals } from '@/mock/admin';
 import { ROLES } from '@/mock/roles';
 import { useReadonly } from '@/composables/useReadonly';
 import { confirmDiscard, useUnsavedGuard } from '@/composables/useUnsavedGuard';
-import { createUser, disableUser, enableUser, fetchDepts, importUsers, previewImport, queryUsers, updateUser, type ImportRow, type UserRow } from '@/api/admin';
-import { isApiError } from '@/api/http';
+import { adminApiOn, createUser, disableUser, enableUser, fetchDepts, fetchUserRoles, importUsers, previewImport, queryUsers, updateUser, type ImportRow, type UserRow } from '@/api/admin';
+import { currentApiContext, isApiError } from '@/api/http';
 
 const dept = ref('全部');
 const status = ref('全部');
 const kw = ref('');
-const pq = usePagedQuery({ defaultSize: 17, filters: [dept, status, kw] });
-const users = ref<(AdminUser & { pending: number })[]>(ADMIN_USERS.map((u) => ({ ...u, pending: pendingApprovals(u) })));
+const realUsers = adminApiOn();
+const loadError = ref('');
+const optionsError = ref('');
+const userReady = ref(!realUsers);
+const optionsReady = ref(!realUsers);
+const loading = ref(false);
+const pq = usePagedQuery({ defaultSize: 10, filters: [dept, status, kw] });
+const users = ref<UserRow[]>(realUsers ? [] : ADMIN_USERS.map((u) => ({ ...u, pending: pendingApprovals(u) })));
 const rows = computed(() => users.value.filter((u) =>
   (dept.value === '全部' || u.dept === dept.value) &&
   (status.value === '全部' || u.status === status.value) &&
   (!kw.value || u.name.includes(kw.value) || u.account.includes(kw.value) || u.id.includes(kw.value))));
-// 真接口的一页；null = 用本地 mock（开关没切、或后台没起来）
-const remote = ref<{ items: UserRow[]; total: number } | null>(null);
-const live = computed(() => remote.value !== null);
-const paged = computed(() => remote.value ?? paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
-const pool = computed(() => (remote.value ? remote.value.items : users.value));
+// 真接口始终是一页数据；仅 mock 模式使用 null。
+const remote = ref<{ items: UserRow[]; total: number } | null>(realUsers ? { items: [], total: 0 } : null);
+const remoteContext = ref('');
+const live = computed(() => realUsers);
+const paged = computed(() => realUsers ? remoteContext.value === JSON.stringify(currentApiContext()) ? remote.value! : { items: [], total: 0 } : paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
+const pool = computed(() => realUsers ? paged.value.items : users.value);
 const errText = (e: unknown, fallback: string) => (isApiError(e) ? e.message || e.code : fallback);
 let seq = 0;
 async function reload() {
   const n = ++seq;
+  const context = JSON.stringify(currentApiContext());
+  if (realUsers) { if (remoteContext.value !== context) { remote.value = { items: [], total: 0 }; remoteContext.value = context; } userReady.value = false; }
+  loading.value = true;
+  loadError.value = '';
   try {
     const r = await queryUsers({ dept: dept.value, status: status.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
-    if (n === seq) remote.value = r;
+    if (n === seq && context === JSON.stringify(currentApiContext())) { remote.value = r; userReady.value = true; }
   } catch (e) {
-    if (n === seq) message.error(`用户加载失败（${errText(e, '未知错误')}）`);
+    if (n === seq && context === JSON.stringify(currentApiContext())) { loadError.value = `用户加载失败（${errText(e, '未知错误')}）`; message.error(loadError.value); }
+  } finally { if (n === seq) loading.value = false; }
+}
+watch([dept, status, kw, pq.page, pq.size, () => JSON.stringify(currentApiContext())], reload, { immediate: true });
+const depts = ref<string[]>(realUsers ? [] : ADMIN_DEPTS);
+const roleOptions = ref<{ name: string }[]>(realUsers ? [] : ROLES);
+let optionsSeq = 0;
+async function loadOptions() {
+  if (!realUsers) return;
+  const n = ++optionsSeq;
+  const context = JSON.stringify(currentApiContext());
+  optionsReady.value = false; optionsError.value = ''; depts.value = []; roleOptions.value = [];
+  try {
+    const [d, r] = await Promise.all([fetchDepts(), fetchUserRoles()]);
+    if (n !== optionsSeq || context !== JSON.stringify(currentApiContext())) return;
+    depts.value = d; roleOptions.value = r; optionsReady.value = true;
+    if (userKey.value === 'new') {
+      const wasDirty = dirty.value;
+      if (!form.dept) form.dept = d[0] ?? '';
+      if (!form.role) form.role = r[0]?.name ?? '';
+      if (!wasDirty) base.value = snap();
+    }
+  } catch (e) {
+    if (n === optionsSeq && context === JSON.stringify(currentApiContext())) optionsError.value = `用户候选加载失败（${errText(e, '未知错误')}）`;
   }
 }
-watch([dept, status, kw, pq.page, pq.size], reload, { immediate: true });
-const depts = ref<string[]>(ADMIN_DEPTS);
-fetchDepts().then((d) => { depts.value = d; }).catch(() => { /* 保持 mock 部门 */ });
 const badge = (_s: AdminUser['status']) => 'default';
 // 每列都给宽度（账号按邮箱长度），剩余宽度按比例分摊，不在某一列后面留大空白
 const columns = [
@@ -62,48 +93,57 @@ const columns = [
 ];
 
 const confirm = useConfirmStore();
-const { readonly, reason } = useReadonly();
+const { readonly: viewReadonly, reason: viewReason } = useReadonly();
+const readonly = computed(() => viewReadonly.value || (realUsers && (!userReady.value || !optionsReady.value)));
+const reason = computed(() => viewReason.value || (readonly.value ? '请先成功加载用户与候选数据' : ''));
 const route = useRoute();
 const router = useRouter();
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 
 // 新建 / 编辑：页面内抽屉 ?user=<id|new>（全局 ?drawer= 留给对象抽屉，user 不是注册对象）
 type Form = { name: string; account: string; dept: string; role: string; status: AdminUser['status'] };
-const ROLE_OPTS = ROLES.map((r) => ({ value: r.name, label: r.name }));
+const ROLE_OPTS = computed(() => roleOptions.value.map((r) => ({ value: r.name, label: r.name })));
 const DEPT_OPTS = computed(() => depts.value.map((v) => ({ value: v, label: v })));
 const STATUS_OPTS = (['启用', '停用', '待激活'] as const).map((v) => ({ value: v, label: v }));
 const userKey = computed(() => (typeof route.query.user === 'string' ? route.query.user : ''));
 const editing = computed(() => (userKey.value && userKey.value !== 'new' ? pool.value.find((u) => u.id === userKey.value) ?? null : null));
-const drawerOpen = computed(() => !readonly.value && (userKey.value === 'new' || !!editing.value));
-const blank = (): Form => ({ name: '', account: '', dept: ADMIN_DEPTS[0], role: ROLE_OPTS[0]?.value ?? '', status: '待激活' });
+const drawerOpen = computed(() => !viewReadonly.value && (userKey.value === 'new' || !!editing.value));
+const blank = (): Form => ({ name: '', account: '', dept: depts.value[0] ?? '', role: ROLE_OPTS.value[0]?.value ?? '', status: '待激活' });
 const form = reactive<Form>(blank());
+const editVersion = ref<number>();
 const base = ref('');
 const snap = () => JSON.stringify(form);
-watch([userKey, editing], () => {
+watch([userKey, () => editing.value?.id, live], () => {
   const u = editing.value;
+  editVersion.value = u?.lockVersion;
   Object.assign(form, u ? { name: u.name, account: u.account, dept: u.dept, role: u.role, status: u.status } : blank());
   base.value = snap();
 }, { immediate: true });
 const dirty = computed(() => drawerOpen.value && snap() !== base.value);
 useUnsavedGuard(dirty);
-const formOk = computed(() => !!form.name.trim() && /^\S+@\S+$/.test(form.account.trim()) && !!form.dept && !!form.role);
+const formOk = computed(() => !readonly.value && !!form.name.trim() && /^\S+@\S+$/.test(form.account.trim()) && !!form.dept && ROLE_OPTS.value.some((r) => r.value === form.role));
+watch([userKey, () => JSON.stringify(currentApiContext())], loadOptions, { immediate: true });
 async function closeDrawer() {
   if (dirty.value && !(await confirmDiscard())) return;
   setQuery({ user: undefined });
 }
 async function saveUser() {
+  if (readonly.value || !formOk.value) return;
   const u = editing.value;
   const ok = await confirm.ask({
     title: u ? '保存用户修改' : '新建用户', target: `${form.name}（${form.account}）`, okText: u ? '保存' : '新建',
     fields: [{ label: '部门', value: form.dept }, { label: '角色', value: form.role }, { label: '状态', value: form.status }],
-    impact: u ? '角色变更在用户下次请求时生效。' : '新用户状态为「待激活」时，会收到激活邮件，激活后才能登录。',
+    impact: u ? '角色变更在用户下次请求时生效。' : live.value ? '新建用户记录，保存后生效。' : '新用户状态为「待激活」时，会收到激活邮件，激活后才能登录。',
   });
   if (!ok) return;
   if (live.value) {
     const f = { ...form, name: form.name.trim(), account: form.account.trim() };
     try {
-      if (u) await updateUser(u.id, f); else await createUser(f);
-    } catch (e) { message.error(errText(e, '保存失败')); return; }
+      if (u) await updateUser(u.id, { ...f, lockVersion: editVersion.value }); else await createUser(f);
+    } catch (e) {
+      message.error(isApiError(e) && e.status === 409 && e.code === 'VERSION_CONFLICT' ? '该用户已被修改，当前编辑已保留；请刷新后核对最新数据' : errText(e, '保存失败'));
+      return;
+    }
     await reload();
   } else if (u) Object.assign(u, { ...form, name: form.name.trim(), account: form.account.trim() });
   else {
@@ -119,11 +159,19 @@ async function saveUser() {
 const importOpen = ref(false);
 const importFile = ref('');
 const preview = ref<(Form & Pick<ImportRow, 'error'>)[]>([]);
-const SAMPLE: Form[] = [
-  { name: '陈思远', account: 'chen.siyuan@freshmart.cn', dept: ADMIN_DEPTS[0], role: ROLE_OPTS[0]?.value ?? '', status: '待激活' },
-  { name: '林晓', account: 'lin.xiao@freshmart.cn', dept: ADMIN_DEPTS[1] ?? ADMIN_DEPTS[0], role: ROLE_OPTS[1]?.value ?? '', status: '待激活' },
-  { name: '周航', account: 'zhou.hang@freshmart.cn', dept: ADMIN_DEPTS[2] ?? ADMIN_DEPTS[0], role: ROLE_OPTS[0]?.value ?? '', status: '待激活' },
-];
+const importLoading = ref(false);
+const importing = ref(false);
+let importSeq = 0;
+let previewContext: string | null = null;
+const importContext = () => JSON.stringify({ ...currentApiContext(), live: live.value });
+function clearImportPreview() {
+  importSeq += 1;
+  preview.value = [];
+  previewContext = null;
+  importLoading.value = false;
+}
+watch([importContext, readonly], clearImportPreview, { flush: 'sync' });
+watch(importOpen, (open) => { if (!open) clearImportPreview(); }, { flush: 'sync' });
 const previewCols = [
   { title: '姓名', dataIndex: 'name', key: 'name', width: 90 },
   { title: '账号', dataIndex: 'account', key: 'account', ellipsis: true },
@@ -131,37 +179,72 @@ const previewCols = [
   { title: '角色', dataIndex: 'role', key: 'role', width: 120, ellipsis: true },
   { title: '校验', dataIndex: 'error', key: 'error', width: 150, ellipsis: true },
 ];
-function openImport() { importFile.value = ''; preview.value = []; importOpen.value = true; }
-function onUpload(file: File) {
+function openImport() {
+  if (readonly.value || importing.value) return;
+  importFile.value = ''; clearImportPreview(); importOpen.value = true;
+}
+function xlsxBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+    reader.onerror = reader.onabort = () => reject(new Error('文件读取失败，请重新选择'));
+    reader.readAsDataURL(file);
+  });
+}
+async function onUpload(file: File) {
+  if (readonly.value || importing.value) return false;
+  clearImportPreview();
   importFile.value = file.name;
-  if (!live.value) { preview.value = SAMPLE.map((x) => ({ ...x })); return false; }
-  if (!/\.csv$/i.test(file.name)) { preview.value = []; message.error('暂只支持 CSV（按模板填写）'); return false; }
-  file.text().then((csv) => previewImport({ csv }))
-    .then((rows) => { preview.value = rows.map((r) => ({ ...r, status: '待激活' as const })); })
-    .catch((e) => { preview.value = []; message.error(errText(e, '预览失败')); });
+  if (!/\.(csv|xlsx)$/i.test(file.name)) { message.error('仅支持模板 CSV 或无宏 XLSX'); return false; }
+  if (!live.value) { message.info('演示模式不解析导入文件，请切换真接口'); return false; }
+  const xlsx = /\.xlsx$/i.test(file.name);
+  if (file.size > (xlsx ? 2 * 1024 * 1024 : 4_000_000)) { message.error('文件过大：XLSX 最多 2 MiB，CSV 最多 100 万字符'); return false; }
+  const n = importSeq;
+  const context = importContext();
+  const current = () => n === importSeq && context === importContext() && !readonly.value && importOpen.value;
+  importLoading.value = true;
+  try {
+    const source = xlsx ? { xlsxBase64: await xlsxBase64(file) } : { csv: await file.text() };
+    if (!current()) return false;
+    const rows = await previewImport(source);
+    if (!current()) return false;
+    preview.value = rows.map((r) => ({ ...r, status: '待激活' as const }));
+    previewContext = context;
+    if (!rows.length) message.info('文件中没有可导入的数据');
+  } catch (e) {
+    if (current()) message.error(errText(e, e instanceof Error ? e.message : '预览失败'));
+  } finally {
+    if (n === importSeq) importLoading.value = false;
+  }
   return false;
 }
 function downloadTpl() {
-  const csv = '姓名,账号,部门,角色\n张三,zhang.san@freshmart.cn,华东事业部,门店店长\n';
+  const csv = `姓名,账号,部门,角色\n张三,zhang.san@freshmart.cn,${ADMIN_DEPTS[0]},门店店长\n`;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' }));
   a.download = '用户导入模板.csv'; a.click(); URL.revokeObjectURL(a.href);
 }
 async function doImport() {
-  const n = preview.value.length;
-  const ok = await confirm.ask({ title: '导入用户', target: `${importFile.value} · ${n} 人`, okText: '导入', impact: `将新建 ${n} 个「待激活」用户并发送激活邮件；账号已存在的行会跳过。` });
-  if (!ok) return;
-  if (live.value) {
-    let done = 0;
-    try { done = await importUsers(preview.value); } catch (e) { message.error(errText(e, '导入失败')); return; }
+  if (readonly.value || importLoading.value || importing.value || !preview.value.length || !live.value) return;
+  const context = importContext();
+  if (previewContext !== context) { clearImportPreview(); return; }
+  const n = importSeq;
+  const selected = preview.value.map((r) => ({ ...r }));
+  const current = () => n === importSeq && context === importContext() && !readonly.value && importOpen.value;
+  importing.value = true;
+  try {
+    const ok = await confirm.ask({ title: '导入用户', target: `${importFile.value} · ${selected.length} 行`, okText: '导入', impact: `将新建最多 ${selected.length} 个「待激活」用户；校验错误和已存在账号会跳过。` });
+    if (!ok || !current()) return;
+    const done = await importUsers(selected);
+    if (!current()) return;
     importOpen.value = false;
     await reload();
-    message.success(`已导入 ${done} 个用户${done < n ? `（跳过 ${n - done} 行）` : ''}`);
-    return;
+    if (context === importContext()) message.success(`已导入 ${done} 个用户${done < selected.length ? `（跳过 ${selected.length - done} 行）` : ''}`);
+  } catch (e) {
+    if (current()) message.error(errText(e, '导入失败'));
+  } finally {
+    importing.value = false;
   }
-  preview.value.forEach((f, i) => users.value.unshift({ id: `U${1000 + users.value.length + i + 1}`, ...f, lastLogin: null, createdAt: '2026-10-25', pending: 0 } as AdminUser & { pending: number }));
-  importOpen.value = false;
-  message.success(`已导入 ${n} 个用户`);
 }
 async function toggle(u: AdminUser & { pending: number }) {
   if (readonly.value) return;
@@ -175,6 +258,7 @@ async function toggle(u: AdminUser & { pending: number }) {
     message.success(`已启用：${u.name}`);
     return;
   }
+  if (live.value && u.pending > 0) { message.warning('请先完成待审批事项后再停用此用户'); return; }
   const candidates = pool.value
     .filter((x) => x.id !== u.id && x.status === '启用')
     .sort((a, b) => Number(b.dept === u.dept) - Number(a.dept === u.dept))
@@ -220,8 +304,11 @@ async function toggle(u: AdminUser & { pending: number }) {
         <a-input-search v-model:value="kw" size="small" placeholder="姓名 / 账号 / ID" class="au-w200" />
       </a-space>
     </div>
+    <a-alert v-if="loadError || optionsError" type="error" show-icon :message="loadError || optionsError">
+      <template #action><a-button size="small" @click="reload(); loadOptions()">重试</a-button></template>
+    </a-alert>
     <div class="au-table paged-scroll">
-      <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :pagination="false">
+      <a-table size="small" row-key="id" :loading="loading" :columns="columns" :data-source="paged.items" :pagination="false">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'id'" class="num">{{ record.id }}</span>
           <a-badge v-else-if="column.key === 'status'" :status="badge(record.status)" :text="record.status" />
@@ -242,9 +329,9 @@ async function toggle(u: AdminUser & { pending: number }) {
   </div>
 
   <a-drawer :open="drawerOpen" :width="480" :title="editing ? `编辑用户 · ${editing.name}` : '新建用户'" @close="closeDrawer">
-    <a-form layout="vertical">
+    <a-form layout="vertical" :disabled="readonly">
       <a-form-item label="姓名" required><a-input v-model:value="form.name" :maxlength="20" placeholder="真实姓名" /></a-form-item>
-      <a-form-item label="账号" required extra="公司邮箱，用于登录和接收激活邮件"><a-input v-model:value="form.account" :disabled="!!editing" placeholder="name@freshmart.cn" /></a-form-item>
+      <a-form-item label="账号" required :extra="live ? '公司邮箱' : '公司邮箱，用于登录和接收激活邮件'"><a-input v-model:value="form.account" :disabled="!!editing" placeholder="name@freshmart.cn" /></a-form-item>
       <a-form-item label="部门" required><a-select v-model:value="form.dept" :options="DEPT_OPTS" /></a-form-item>
       <a-form-item label="角色" required><a-select v-model:value="form.role" :options="ROLE_OPTS" /></a-form-item>
       <a-form-item label="状态"><a-radio-group v-model:value="form.status" :options="STATUS_OPTS" /></a-form-item>
@@ -260,9 +347,9 @@ async function toggle(u: AdminUser & { pending: number }) {
   <a-modal v-model:open="importOpen" title="批量导入用户" :width="640" :footer="null">
     <div class="au-imp">
       <div class="t-14 c-2">第 1 步：<a @click="downloadTpl">下载导入模板（CSV）</a>，按模板填写姓名、账号、部门、角色</div>
-      <a-upload-dragger :before-upload="onUpload" :show-upload-list="false" accept=".csv,.xlsx" :max-count="1">
+      <a-upload-dragger :before-upload="onUpload" :disabled="readonly || importing" :show-upload-list="false" accept=".csv,.xlsx" :max-count="1">
         <div class="t-14 c-1">第 2 步：点击或拖入填好的文件</div>
-        <div class="t-12 c-3">{{ importFile || '支持 .csv / .xlsx，一次最多 500 人' }}</div>
+        <div class="t-12 c-3">{{ importLoading ? '正在解析并校验文件…' : importFile || '支持 .csv / .xlsx，一次最多 500 人；XLSX ≤ 2 MiB' }}</div>
       </a-upload-dragger>
       <template v-if="preview.length">
         <div class="t-14 c-2">第 3 步：预览（{{ preview.length }} 人）</div>
@@ -270,7 +357,7 @@ async function toggle(u: AdminUser & { pending: number }) {
       </template>
       <div class="au-foot">
         <a-button @click="importOpen = false">取消</a-button>
-        <a-button type="primary" :disabled="!preview.length" @click="doImport">导入</a-button>
+        <a-button type="primary" :loading="importing" :disabled="readonly || importLoading || !preview.length" @click="doImport">导入</a-button>
       </div>
     </div>
   </a-modal>
