@@ -13,23 +13,27 @@
   是否限制决定：限制（含 DENY_ALL）时一律不返回（宁严勿宽）[推断]。
 """
 
+import csv
+import io
 import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from functools import lru_cache
 from typing import Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import Field
 from sqlalchemy import Select, String, asc, cast, desc, false, func, or_, select
 
+from app.common.audit import audit
 from app.common.auth import CurrentUser, CurrentUserDep, require_func, row_filter
 from app.common.context import ViewContextDep, readonly_extra
 from app.common.pagination import MAX_PAGE_SIZE
 from app.common.row_filter import apply_row_filter
 from app.core.config import get_settings
-from app.core.errors import AppError, NotFound
+from app.core.errors import AppError, ExportForbidden, NotFound
 from app.core.schema import DATETIME_SEC_FORMAT, ApiModel, _tz
 from app.db.base import Base
 from app.db.session import SessionDep
@@ -318,6 +322,58 @@ async def explore_get(code: str, id: str, session: SessionDep, user: CurrentUser
             raise OutOfScope(details={"objectType": code, "id": id})
         raise NotFound("对象不存在", details={"objectType": code, "id": id})
     return {**_item(bd, r), "titleProp": bd.title, "bound": True, "boundProps": list(bd.cols)}
+
+
+class ExportIn(ExploreIn):
+    ids: list[str] | None = Field(None, description="只导出选中的对象（仍按范围和筛选裁剪）")
+    props: list[str] | None = Field(
+        None, description="导出哪些属性（默认全部已接入属性）；敏感属性一律不导出"
+    )
+
+
+EXPORT_MAX = 10000
+
+
+@explore.post(
+    "/object-types/{code}/export",
+    summary="通用对象导出（CSV，UTF-8 BOM；首列标题属性，敏感属性不导出）",
+    openapi_extra=readonly_extra("history", "preview"),
+)
+async def explore_export(
+    code: str, body: ExportIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
+):
+    t, bd = await _bind(session, code)
+    if ctx.preview_as:
+        raise ExportForbidden(details={"reason": "预览中不能导出"})
+    if bd is None:
+        raise NotFound("该对象类型未接入数据", details={"objectType": code})
+    bd.check(body.filters, "筛选")
+    keys = [k for k in (body.props or list(bd.cols)) if k in bd.cols and not bd.props[k].is_sensitive]
+    keys = [k for k in keys if k != bd.title]
+    _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    stmt = bd.where(await bd.stmt(viewer), body)
+    if body.ids:
+        stmt = stmt.where(bd.id_col.in_(body.ids))
+    rows = (await session.execute(stmt.order_by(bd.id_col).limit(EXPORT_MAX))).mappings().all()
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
+    w.writerow(
+        [
+            bd.props[bd.title].display_name if bd.title in bd.props else "ID",
+            *[bd.props[k].display_name for k in keys],
+        ]
+    )
+    for r in rows:
+        it = _item(bd, r)
+        w.writerow([it["title"], *["" if it["values"][k] is None else it["values"][k] for k in keys]])
+    name = f"{t.display_name}_{len(rows)}.csv"
+    detail = {"objectType": code, "rows": len(rows), "selected": bool(body.ids)}
+    await audit(session, user, action="qa.objects.export", target=code, detail=detail)
+    return Response(
+        content=buf.getvalue().encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
+    )
 
 
 async def explore_ids(

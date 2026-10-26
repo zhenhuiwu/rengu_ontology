@@ -99,3 +99,16 @@ async def test_detail_scope_and_ask(qa, monkeypatch):
     body["scope"]["query"] = {"kw": "不存在的门店名xyz"}
     a = (await qa.post(f"{B}/scoped-ask", json=body)).json()
     assert a["rows"] == [] and "没有" in a["text"]
+
+
+async def test_export_csv(qa):
+    d = await _search(qa, "store", size=2)
+    ids = [x["id"] for x in d["items"]]
+    r = await qa.post(
+        f"{B}/object-types/store/export", json={"ids": ids, "props": ["city", "phone", "store_id"]}
+    )
+    assert r.status_code == 200, r.text
+    lines = r.content.decode("utf-8-sig").strip().split("\n")
+    assert len(lines) == 3 and lines[0].startswith('"门店名称"') and "电话" not in lines[0]
+    pv = await qa.post(f"{B}/object-types/store/export?previewAs=U010763", json={})
+    assert pv.status_code == 403
