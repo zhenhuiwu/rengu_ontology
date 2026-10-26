@@ -5,7 +5,7 @@ import { allDrafts } from './useDraftView';
 
 const props = defineProps<{ targetName: string; titlePlaceholder?: string }>();
 const open = defineModel<boolean>('open', { default: false });
-const emit = defineEmits<{ ok: [opts: { join?: string; title?: string }] }>();
+const emit = defineEmits<{ ok: [opts: { join?: string; title?: string; desc?: string }] }>();
 
 const mode = ref<'new' | 'join'>('new');
 const title = ref('');
@@ -14,7 +14,7 @@ const join = ref<string>();
 const options = computed(() => allDrafts().map((d) => ({ value: d.id, label: `${d.id}　${d.title}（${d.owner}）` })));
 watch(open, (v) => { if (v) { mode.value = 'new'; title.value = props.titlePlaceholder ? '' : `${props.targetName}：`; desc.value = ''; join.value = undefined; } });
 const canOk = computed(() => (mode.value === 'new' ? title.value.trim().length > 0 : !!join.value));
-function ok() { emit('ok', mode.value === 'join' ? { join: join.value } : { title: title.value.trim() }); open.value = false; }
+function ok() { emit('ok', mode.value === 'join' ? { join: join.value } : { title: title.value.trim(), desc: desc.value.trim() || undefined }); open.value = false; }
 </script>
 
 <template>
