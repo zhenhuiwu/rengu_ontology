@@ -1144,3 +1144,8 @@ router.include_router(tuning)
 from app.modules.qa.pages_api import pages as _pages_router  # noqa: E402
 
 router.include_router(_pages_router)
+
+# R3/R4 对象搜索 / 详情 O2–O7、O9（qa-pages 流，独立文件，见 objects_api.py）
+from app.modules.qa.objects_api import objects as _objects_router  # noqa: E402
+
+router.include_router(_objects_router)
