@@ -140,6 +140,8 @@ async function save() {
   const changes = (Object.keys(FIELD_LABEL) as (keyof Form)[])
     .filter((k) => (k !== 'api' || l.status === '草稿') && JSON.stringify(form[k]) !== JSON.stringify(was[k]))
     .map((k) => ({ key: k, before: was[k], after: form[k], type: '关系', field: FIELD_LABEL[k] }));
+  // 新建关系（草稿）带上源对象一行，发布写回建 link_type 要用（后端 link/def 钩子）
+  if (l.status === '草稿' && changes.length && l.from) changes.unshift({ key: 'from' as keyof Form, before: '', after: l.from, type: '关系', field: '源对象' });
   if (!(await cr.save('def', changes))) return;
   Object.assign(l, { name: form.name, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
   if (l.status === '草稿') l.api = form.api;
