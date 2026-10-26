@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 """发布写回（writeback.py）：整版发布时把 cr_item 写回定义表，快照对应节按定义表重组；
 没登记写回的段（规则 / 动作 / 事件…）跳过并记进发布事件。另：:submit / :approve 的 lockVersion 恰好 +1。"""
 
@@ -180,3 +179,22 @@ async def test_writeback_failure_rolls_back(client, seeded):
     r = await client.post(P + "/releases", json={}, headers=WANG)
     assert r.status_code == 409 and r.json()["code"] == "WRITEBACK_FAILED", r.text
     assert r.json()["details"]["key"] == "no_such"
+
+
+async def test_rollback_restores_terms(client, seeded):
+    """回滚刚发布的版本：terms 定义表恢复成上一版（restore_section）。"""
+    k2_def = (await seeded.scalar(select(Knowledge).where(Knowledge.code == "K-002"))).definition
+    await approved_cr(client)
+    r = await client.post(P + "/releases", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    ver = r.json()["ver"]
+    r = await client.post(f"{P}/releases/{ver}:rollback", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    rb = r.json()["ver"]
+    seeded.expire_all()
+    k2 = await seeded.scalar(select(Knowledge).where(Knowledge.code == "K-002"))
+    assert k2.definition == k2_def and k2.history[0]["change"] == "回滚恢复"
+    k3 = await seeded.scalar(select(Knowledge).where(Knowledge.code == "K-003"))
+    assert k3.status == KnowledgeStatus.published and k3.stopped_release is None
+    k9 = await seeded.scalar(select(Knowledge).where(Knowledge.code == "K-900"))
+    assert k9.status == KnowledgeStatus.disabled and k9.stopped_release == rb

@@ -36,9 +36,12 @@ const CRS = reactive<ChangeRequest[]>(CHANGE_REQUESTS.map((c) => ({ ...c })));
 const extraLog = reactive<Record<string, ReviewEvent[]>>({});
 /** real 模式：变更单整表从 GET /change-requests?full=true 载入（详情经 registerChange 交给 mock 的 crDetail / reviewLog，
  *  评审追加记录 = 库里的 cr_event），每次写操作后重新载入，刷新页面状态不丢；mock 模式不走这里 */
+/** real 模式载入失败 → 页面退回 mock 列表（crFallback）：这些单号库里不一定有，写按钮一律禁用，避免对库误操作 */
+const crFallback = ref(false);
 async function loadCRs() {
   let rows;
-  try { rows = await fetchChangeRequests(); } catch (e) { message.error(`变更单载入失败：${e instanceof Error ? e.message : String(e)}`); return false; }
+  try { rows = await fetchChangeRequests(); } catch (e) { crFallback.value = true; message.error(`变更单载入失败：${e instanceof Error ? e.message : String(e)}`); return false; }
+  crFallback.value = false;
   const list = rows.map(({ detail: d, events, ...c }) => { registerChange({ ...c }, d); return { c, events }; });
   CRS.splice(0, CRS.length, ...list.map((x) => x.c));
   for (const k of Object.keys(extraLog)) delete extraLog[k];
@@ -252,10 +255,11 @@ async function rollback() {
   <Teleport defer to="#page-extra">
     <span class="t-12 c-3">待发布 {{ approved.length }} 张</span>
     <a-tooltip :title="readonly ? reason : !isAdmin ? '需要本体管理员发布' : approved.length ? '' : '没有已通过的变更单'">
-      <a-button :type="detailPrimary ? 'default' : 'primary'" :disabled="readonly || !isAdmin || !approved.length" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
+      <a-button :type="detailPrimary ? 'default' : 'primary'" :disabled="crFallback || (readonly || !isAdmin || !approved.length)" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
     </a-tooltip>
   </Teleport>
 
+  <a-alert v-if="crFallback" type="warning" show-icon class="rl-fallback" message="变更单没能从服务端载入，当前显示的是示例数据，写操作已禁用；刷新页面重试。" />
   <div class="rl">
     <div class="panel rl-list">
       <div class="rl-filter">
@@ -288,42 +292,42 @@ async function rollback() {
         </template>
         <template v-else-if="cur.status === '草稿'">
           <a-tooltip :title="isOwner ? '' : `只有提交人 ${cur.owner} 能删除`">
-            <a-button danger :disabled="!isOwner" @click="removeDraft">删除草稿</a-button>
+            <a-button danger :disabled="crFallback || !isOwner" @click="removeDraft">删除草稿</a-button>
           </a-tooltip>
           <a-tooltip :title="editTo ? '' : '这张单子没有可跳转的草稿页面'">
-            <a-button :disabled="!editTo" @click="edit">编辑</a-button>
+            <a-button :disabled="crFallback || !editTo" @click="edit">编辑</a-button>
           </a-tooltip>
           <a-tooltip :title="!cur.changes ? '草稿里还没有改动，无法提交' : blocked ? `有 ${counts['阻断']} 项阻断未通过` : ''">
-            <a-button type="primary" :disabled="blocked || !cur.changes" @click="submit">提交审核</a-button>
+            <a-button type="primary" :disabled="crFallback || (blocked || !cur.changes)" @click="submit">提交审核</a-button>
           </a-tooltip>
         </template>
         <template v-else-if="cur.status === '审核中'">
           <template v-if="isReviewer">
-            <a-button danger @click="reject">驳回</a-button>
+            <a-button :disabled="crFallback" danger @click="reject">驳回</a-button>
             <a-tooltip :title="blocked ? `有 ${counts['阻断']} 项阻断未通过` : ''">
-              <a-button type="primary" :disabled="blocked" @click="approve">审核通过</a-button>
+              <a-button type="primary" :disabled="crFallback || blocked" @click="approve">审核通过</a-button>
             </a-tooltip>
           </template>
           <template v-else>
             <span class="t-12 c-3">等待 {{ cur.reviewer }} 审核</span>
-            <a-button v-if="isOwner" @click="recall">撤回提交</a-button>
+            <a-button :disabled="crFallback" v-if="isOwner" @click="recall">撤回提交</a-button>
           </template>
         </template>
         <template v-else-if="cur.status === '已通过'">
           <span class="t-12 c-3">等待整版发布 {{ NEXT_VERSION }}</span>
           <a-tooltip :title="canManage ? '' : `只有 ${cur.owner} 或 ${cur.reviewer} 能撤回`">
-            <a-button :disabled="!canManage" @click="unapprove">撤回</a-button>
+            <a-button :disabled="crFallback || !canManage" @click="unapprove">撤回</a-button>
           </a-tooltip>
         </template>
         <template v-else-if="cur.status === '已驳回'">
           <span class="t-12 c-1 rl-why" :title="cur.rejectReason ?? ''">驳回：{{ cur.rejectReason ?? '暂无原因' }}</span>
           <a-tooltip :title="canManage ? '' : `只有 ${cur.owner} 或 ${cur.reviewer} 能改回草稿`">
-            <a-button :disabled="!canManage" @click="reopen">改回草稿</a-button>
+            <a-button :disabled="crFallback || !canManage" @click="reopen">改回草稿</a-button>
           </a-tooltip>
         </template>
         <template v-else-if="cur.status === '已发布'">
           <span class="t-12 c-3 num">已发布为 {{ cur.release }}</span>
-          <a-tooltip :title="isLatest ? '' : rolledBack && cur.release === CURRENT_VERSION ? '已回滚' : '只能回滚最近一次发布'"><a-button danger :disabled="!isLatest" @click="rollback">回滚</a-button></a-tooltip>
+          <a-tooltip :title="isLatest ? '' : rolledBack && cur.release === CURRENT_VERSION ? '已回滚' : '只能回滚最近一次发布'"><a-button danger :disabled="crFallback || !isLatest" @click="rollback">回滚</a-button></a-tooltip>
         </template>
       </div>
       <a-tabs v-model:activeKey="tab" class="rl-tabs">
@@ -368,7 +372,7 @@ async function rollback() {
           <span v-if="counts['信息']" class="c-3">信息 {{ counts['信息'] }}</span>
           <span class="c-2">通过 {{ counts['通过'] }}</span><span class="c-3">不适用 {{ counts['不适用'] }}</span>
           <span class="rl-sp" /><span class="t-12 c-3 num">校验于 {{ detail.times.checked ?? '--' }} · 目标库 达梦 DM8、金仓 KES</span>
-          <a-tooltip :title="readonly ? reason : cur.status === '已发布' ? '已发布的变更单不再校验' : ''"><a-button size="small" :loading="rechecking" :disabled="readonly || cur.status === '已发布'" @click="recheck">重新校验</a-button></a-tooltip>
+          <a-tooltip :title="readonly ? reason : cur.status === '已发布' ? '已发布的变更单不再校验' : ''"><a-button size="small" :loading="rechecking" :disabled="crFallback || (readonly || cur.status === '已发布')" @click="recheck">重新校验</a-button></a-tooltip>
         </div>
         <a-table :columns="checkCols" :data-source="detail.checks" :pagination="false" size="small" row-key="code" :locale="{ emptyText: '暂无校验结果' }">
           <template #bodyCell="{ column, record }">
@@ -406,6 +410,7 @@ async function rollback() {
 </template>
 
 <style scoped>
+.rl-fallback { margin-bottom: 12px; }
 .rl { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .rl-list { width: 360px; flex: none; }
 .rl-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }

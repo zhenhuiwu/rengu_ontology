@@ -243,3 +243,59 @@ async def object_properties(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
             by_api[r.item_key] = p
         _set_prop(p, after)
     return {"properties"}
+
+
+# ---------------------------------------------------------------- 整版回滚：terms 写回定义表
+async def restore_terms(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
+    """TermsSection.restore_section：把 knowledge 表恢复成被恢复版本快照里的 terms。
+
+    - 快照里有的条目：内容字段、状态、since / stoppedIn 按快照恢复；history 保留现状再加一行「回滚恢复」。
+    - 快照里没有、表里已发布的条目：置已停用（stoppedIn = 这次回滚的版本）；草稿条目不动。
+    - 快照里有、表里已删除的条目：不重建（知识不支持物理删除，正常不会出现），记 warning。
+    """
+    from app.core import clock
+    from app.modules.versioning.models import OntologyRelease
+
+    rel = await session.get(OntologyRelease, release_id)
+    ver = rel.ver if rel is not None else None
+    now = clock.now()
+    row = {"ver": ver or "—", "cr": "", "by": "系统", "at": _fmt_dt(now)}
+    for k in await session.scalars(select(Knowledge)):
+        e = content.get(k.code)
+        if e is None:
+            if k.status == KnowledgeStatus.published:
+                k.status = KnowledgeStatus.disabled
+                k.stopped_release = ver
+                gone = {**row, "status": "已停用", "change": "回滚到无此条目的版本，停用"}
+                k.history = [gone, *(k.history or [])]
+                k.content_updated_at = now
+            continue
+        for key in ("name", "definition", "calc", "period", "owner"):
+            if key in e:
+                setattr(k, key, "" if e[key] is None else str(e[key]))
+        if "type" in e:
+            k.type = _label(KnowledgeType, e["type"], "类型")
+        if "synonyms" in e:
+            k.synonyms = [str(x) for x in e["synonyms"] or []]
+        if "applies" in e:
+            for a in list(k.applies):
+                k.applies.remove(a)
+                await session.delete(a)
+            await session.flush()
+            for n, a in enumerate(e["applies"] or [], start=1):
+                k.applies.append(
+                    KnowledgeApply(
+                        target_kind=_label(ApplyKind, a.get("kind"), "适用范围"),
+                        target_code=str(a.get("id")),
+                        target_name=str(a.get("name") or a.get("id")),
+                        seq=n,
+                        created_by=k.created_by,
+                    )
+                )
+        k.status = _label(KnowledgeStatus, e.get("status") or "已发布", "状态")
+        k.since_release = e.get("since") or k.since_release
+        k.stopped_release = e.get("stoppedIn")
+        k.cr_code = e.get("cr", k.cr_code)
+        k.content_updated_at = now
+        k.history = [{**row, "status": "生效中", "change": "回滚恢复"}, *(k.history or [])]
+    await session.flush()

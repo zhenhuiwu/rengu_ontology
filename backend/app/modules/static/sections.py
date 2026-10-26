@@ -5,7 +5,7 @@
 - seed_section(ver, ctx)：读导出 JSON，按 §2.7 的版本规则裁出该版本可见的内容。
 - build_section(session, base, crs)：发布时组装。变更单展开不在本次范围 [推断]：
   base 不为空就沿用上一版，否则从当前定义表组装「当前已发布」那一节。
-- restore_section（整版回滚写表）不在本次范围，不实现。
+- restore_section（整版回滚写表）：只有 terms 实现（writeback.restore_terms），其余节只回快照。
 """
 
 from typing import Any
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.static import history, shapes
 from app.modules.static.repo import StaticRepo
-from app.modules.static.writeback import DIRTY
+from app.modules.static.writeback import DIRTY, restore_terms
 
 Obj = dict[str, Any]
 G = "static"  # 导出 JSON 所在组；seed ctx 是 versioning 组的，读静态文件要带 group
@@ -168,6 +168,10 @@ class TermsSection(_Base):
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         items = [history.strip(x, history.TERM_RUNTIME) for x in ctx.load("KNOWLEDGE.json", group=G)]
         return {x["id"]: x for x in history.terms_at(items, ver)}
+
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
+        """整版回滚时把 knowledge 表恢复成 content（writeback.restore_terms）。其余节只回快照。"""
+        await restore_terms(session, content or {}, release_id=release_id)
 
 
 class QaPathsSection(_Base):
