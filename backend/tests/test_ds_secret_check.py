@@ -11,9 +11,13 @@ from app.modules.data.secrets import SecretKeyInvalid, SecretKeyMissing, check_s
 @pytest.fixture(autouse=True)
 def _capture(caplog):
     # app 的日志配置可能不往 root 传，直接把 caplog 的 handler 挂到模块 logger 上
+    # alembic env.py 的 fileConfig 会禁用已导入的 logger，这里恢复
+    was_disabled = log.disabled
+    log.disabled = False
     log.addHandler(caplog.handler)
     yield
     log.removeHandler(caplog.handler)
+    log.disabled = was_disabled
 
 
 def test_real_connect_without_key_fails(monkeypatch, caplog):
