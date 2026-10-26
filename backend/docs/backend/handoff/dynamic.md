@@ -60,6 +60,13 @@
 3. **推演任务队列**：`rules_service.py` `ScenarioService.compute` 的 `EXTENSION POINT (PDE)`：换成真实任务队列，并在启动时把残留的“运行中”标为失败。
 4. **审批界面**：需要设计后再接 `approveActionRun`（`can.approve` 已给出）。
 5. **规则编号撞号**：`RuleService._next_code` 取“当前最大号 + 1”，两人同时新建规则会撞号返回 500；下一轮与问数 P2 / 会话编号一起按 `ER-` 的办法加锁。
+6. **打开 `VITE_DYNAMIC_CR_WRITE` 前必做**
+   - 「放弃草稿」必须加确认卡（现在点了直接放弃）。
+   - 规则 / 生命周期草稿保存时还要登记 cr_item：`PUT /change-requests/{cr}/items`，规则用 section `conds|mapping|config`，生命周期用 `lc_states|lc_transitions`（`kind: "object"`）；不登记的话提交会返回 409 `CR_EMPTY`。
+   - CrTarget 加 `name`（显示名）。
+   - 放弃顺序是先调静态 `DELETE /change-requests/{cr}/targets/...` 再删自己的草稿，第二步失败会留下孤儿草稿；需要改顺序或补偿。
+   - `rule_draft.cr_code` / `lifecycle_draft.cr_code` 外键迁移排在 `static_0003` 之后。
+7. **发起变更失败回滚**：`Rules.vue` 里 `openRuleDraft` 失败时，加入已有单的情况已改为先落库再 `start()`；新建单的情况只切回已发布视图，前端 mock 里的登记（`useDraftView` 的 TARGETS）留着——需要 PDE 在公共 `useDraftView` 加撤销登记（如 `cancel(cr, target)`）。
 
 ## 通用化（去零售写死）待办
 

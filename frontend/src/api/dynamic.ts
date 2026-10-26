@@ -188,10 +188,14 @@ export const renameScenario = (id: string, name: string) => api.patch<ScenarioDt
 export const runScenario = (id: string, body: { name?: string; scope: ScScope; drivers: ScDrivers }) => api.post<ScenarioDto>(`/scenarios/${enc(id)}:run`, body);
 /** 运行中回 202 { status: '运行中' }（继续轮询）；失败回 409 SCENARIO_FAILED；完成回结果 */
 export const getScenarioResult = (id: string) => api.get<Omit<ScResult, 'impacts'> | { status: string }>(`/scenarios/${enc(id)}/result`);
-/** :run 回 202（运行中）后轮询 /result，直到完成（或失败抛错 / 超时） */
-export async function waitScenarioResult(id: string, everyMs = 800, maxTries = 150): Promise<Omit<ScResult, 'impacts'>> {
+/** 轮询被页面卸载等中止时抛出，调用方静默忽略 */
+export class PollAborted extends Error {}
+/** :run 回 202（运行中）后轮询 /result，直到完成（或失败抛错 / 超时 / signal 中止抛 PollAborted） */
+export async function waitScenarioResult(id: string, everyMs = 800, maxTries = 150, signal?: AbortSignal): Promise<Omit<ScResult, 'impacts'>> {
   for (let i = 0; i < maxTries; i += 1) {
+    if (signal?.aborted) throw new PollAborted(id);
     const r = await getScenarioResult(id);
+    if (signal?.aborted) throw new PollAborted(id);
     if (!('status' in r)) return r;
     await new Promise((ok) => window.setTimeout(ok, everyMs));
   }

@@ -8,7 +8,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 真接口模式（dynamicApi.isReal()，开关 VITE_API_REAL_MODULES 含 dynamic）：列表 / meta / 对比 / 新建·复制 / 改名 / 运行后取结果 /
  * 影响明细服务端分页 / 转动作预览（stage-plan）与暂存（:stage）都走 /scenarios 接口；默认 mock 路径不变。
  */
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -32,7 +32,7 @@ import {
 import { isApiError } from '@/api/http';
 import {
   dynamicApi, listScenarios, getScenariosMeta, compareScenarios, createScenario, getScenario, renameScenario, runScenario,
-  waitScenarioResult, listScenarioImpacts, getScenarioStagePlan, stageScenario, type ScenarioDto, type ScenarioMetaDto,
+  waitScenarioResult, PollAborted, listScenarioImpacts, getScenarioStagePlan, stageScenario, type ScenarioDto, type ScenarioMetaDto,
 } from '@/api/dynamic';
 
 const route = useRoute();
@@ -185,13 +185,13 @@ async function run() {
     try {
       const started = asSc(await runScenario(id, body)); // 202：运行中，后台计算
       if (scId.value === id) remote.detail = { ...started, result: undefined };
-      const res = await waitScenarioResult(id); // 轮询 /result
+      const res = await waitScenarioResult(id, undefined, undefined, polls.signal); // 轮询 /result，离开页面即停
       const d = asSc(await getScenario(id));
       delete remote.plans[id];
       if (scId.value === id) { remote.detail = { ...d, result: { ...res, impacts: [] } }; load(remote.detail); }
       remote.rev += 1;
       message.success(`${id} 推演完成`);
-    } catch (e) { apiFail(e); await loadDetail(); }
+    } catch (e) { if (e instanceof PollAborted || polls.signal.aborted) return; apiFail(e); await loadDetail(); }
     return;
   }
   s.name = form.name.trim() || s.name; s.scope = { ...form.scope }; s.drivers = { ...form.drivers };
@@ -203,6 +203,9 @@ async function run() {
     message.success(`${x.id} 推演完成`);
   }, 1200);
 }
+/** 离开页面（卸载 / 切路由）：停止 /result 轮询（mock 计时器模拟的是后台计算，不停，否则方案会卡在运行中） */
+const polls = new AbortController();
+onBeforeUnmount(() => polls.abort());
 async function create(from?: Scenario) {
   if (readonly.value) return;
   if (dirty.value && !(await confirmDiscard())) return;

@@ -149,8 +149,15 @@ async function onChangeOk(opts: { join?: string; title?: string }) {
       return;
     }
     const id = base.value.id;
-    const cr = start(opts);
-    await openRuleDraft(id, cr);
+    // openRuleDraft 失败时不能让页面停在草稿视图：加入已有单时先落库再 start()；
+    // 新建单的单号由 start() 生成，失败则切回已发布视图（公共 useDraftView 暂无撤销登记的接口，见 handoff）
+    if (opts.join) {
+      await openRuleDraft(id, opts.join);
+      start(opts);
+    } else {
+      const cr = start(opts);
+      try { await openRuleDraft(id, cr); } catch (e) { setView('published'); throw e; }
+    }
     if (realId.value === id) await loadDetail();
   } catch (e) { fail(e); }
 }
