@@ -25,6 +25,8 @@ import { useAppStore } from '@/stores/app';
 import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
 import { QUALITY_CHECKS, DATA_CUTOFF } from '@/mock/quality';
 import { RELEASES } from '@/api/releases';
+import { fallBackIfDown } from '@/api/fallback';
+import { fetchGraph, isOverviewReal, mockGraph, type OverviewGraph } from '@/api/overview';
 
 const router = useRouter();
 const { readonly, reason } = useReadonly();
@@ -36,6 +38,7 @@ const NEXT_VERSION = computed(() => app.ontologyNextVersion);
 const histVer = computed(() => (app.viewMode === 'history' ? app.viewVersion : null));
 
 /* ── 资源卡片 ── */
+// [推断] 卡片计数 / 健康度仍读 mock：/ontology/graph 只给已发布对象和两端都已发布的关系，没有草稿数、孤儿记录、动作 / 事件 / 指标 / 维度统计
 type Tone = 'normal' | 'attention' | 'failed';
 interface Health { n: number; text: string; tone: Tone }
 interface Card { key: string; title: string; count: number; unit: string; path: string; health: Health[] }
@@ -121,11 +124,36 @@ const POS: Record<string, [number, number]> = {
   store: [0.5, 0.8], employee: [0.86, 0.84], province: [0.3, 0.96], region: [0.7, 0.96],
 };
 const VW = 960; const VH = 540; const NW = 96; const NH = 32;
-const nodeCount = LINK_OBJECTS.length;
-const edgeCount = computed(() => LINKS.filter((l) => l.to && POS[l.from] && POS[l.to]).length);
+// 节点 / 边：mock 模式读 LINK_OBJECTS / LINKS；真接口（开关 static）读 GET /ontology/graph（src/api/overview.ts），
+// 后台没起来时回退 mock 并提示一次（fallback.ts）；其他接口错误保留 mock 并 console.warn。坐标 POS 仍由前端写死。
+const graphData = ref<OverviewGraph>(mockGraph());
+const nodeCount = computed(() => graphData.value.nodes.length);
+const edgeCount = computed(() => graphData.value.edges.filter((l) => l.to && POS[l.from] && POS[l.to]).length);
+let graphRef: Graph | null = null;
+async function loadGraph() {
+  if (!isOverviewReal()) return;
+  try {
+    graphData.value = await fetchGraph();
+  } catch (e) {
+    if (!fallBackIfDown(e)) console.warn('[api] /ontology/graph 加载失败，保留演示数据', e);
+    graphData.value = mockGraph();
+  }
+  if (graphRef) { graphRef.clearCells(); addCells(graphRef); }
+}
+loadGraph();
+watch(() => app.viewVersion, () => { loadGraph(); });
+onBeforeUnmount(() => { graphRef = null; });
 function draw(g: Graph) {
+  graphRef = g;
   (g.options as unknown as { interacting: boolean }).interacting = false;
-  LINK_OBJECTS.forEach((o) => {
+  addCells(g);
+  g.on('node:click', ({ node }) => router.push({ path: '/build/ontology/object-types', query: { type: node.id as string } }));
+  g.on('resize', () => { g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent(); });
+}
+/** 画节点和边（首次 @ready 时画；真接口数据到了 / 切换版本后清空重画），画完适配视图 */
+function addCells(g: Graph) {
+  const { nodes, edges } = graphData.value;
+  nodes.forEach((o) => {
     const [fx, fy] = POS[o.id] ?? [0.5, 0.5];
     const failed = failedByType.has(o.id);
     g.addNode({
@@ -137,7 +165,7 @@ function draw(g: Graph) {
     });
   });
   const seen = new Set<string>();
-  LINKS.forEach((l) => {
+  edges.forEach((l) => {
     if (!l.to || !POS[l.from] || !POS[l.to] || l.from === l.to) return;
     const k = [l.from, l.to].sort().join('|');
     if (seen.has(k)) return;
@@ -147,10 +175,7 @@ function draw(g: Graph) {
       attrs: { line: { stroke: GRAY.g7, strokeWidth: 1, strokeDasharray: l.status === '已发布' ? '' : '4 3', targetMarker: null } },
     });
   });
-  g.on('node:click', ({ node }) => router.push({ path: '/build/ontology/object-types', query: { type: node.id as string } }));
-  const fit = () => { g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent(); };
-  requestAnimationFrame(fit);
-  g.on('resize', fit);
+  if (g.getNodes().length) requestAnimationFrame(() => { g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent(); });
 }
 
 /* ── 最近发布 ── */
