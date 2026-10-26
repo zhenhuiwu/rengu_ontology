@@ -12,7 +12,7 @@ EXPECTED = {
     "qa_session_option": 5,
     "qa_page": 32,
     "qa_page_card": 197,
-    "qa_page_share_member": 16,
+    "qa_page_share_member": 27,  # SYS_USERS 补了分享候选人 U010009–U010015 后不再剔除
     "qa_page_subscription": 32,
     "qa_template": 22,
     "qa_template_card": 104,
@@ -63,7 +63,7 @@ async def test_qa_seed_people_columns(qa_seeded):
         "U010231",
         "U010231",
         "U010763",
-        "U010006",  # 周婷 → 李娜 [推断] §9.2
+        "U010010",  # 周婷（SYS_USERS 补录，不再改派李娜）
     ]
     fb = (
         await qa_seeded.execute(
@@ -73,7 +73,15 @@ async def test_qa_seed_people_columns(qa_seeded):
             )
         )
     ).all()
-    assert sorted(fb) == sorted([("李娜", "U010006"), ("何静", "U010003"), ("冯雪", "U010910")])
+    assert sorted(fb) == sorted(
+        [
+            ("李娜", "U010006"),
+            ("何静", "U010003"),
+            ("冯雪", "U010910"),
+            ("赵磊", "U010009"),  # SYS_USERS 补录的分享候选人，姓名唯一命中
+            ("刘洋", "U010012"),
+        ]
+    )
     owners_s = (await qa_seeded.execute(text("SELECT DISTINCT owner_id FROM qa_session"))).scalars().all()
     assert len(owners_s) == 1
     # 种子不填 release_id

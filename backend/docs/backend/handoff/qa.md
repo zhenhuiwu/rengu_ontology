@@ -47,6 +47,7 @@
 | R1 反问追问 | 部分 | 链路无多轮上下文，追问句由前端启发式拼接 [推断]；所选项不回写 `clarify.chosen` [推断] | `QaConversation.vue` `followUp` / `chosenOf` |
 | R1 第二期 | 未做 | 停止生成、加入常用 | W8 `:cancel`、W14 `POST /favorites` |
 | R5 问数调优 · T15 新建 / 加入变更单 | 部分（等 static-r3） | 词未被任何变更单覆盖时要调静态 X3 写接口建 / 加入变更单草稿，static-r3 未合入，后端返回 409 `CR_API_PENDING`、前端提示；接法：`router.py feedback_to_synonym` 里 `SynonymCrPending` 处改调 X3（格式见 `handoff/static.md`），再写 `qa_tuned_synonym` 并按“已覆盖”分支改同词反馈；前端 `FeedbackTab.vue toSynonym` 的 live 分支改为打开发起变更窗（mock 的 `onStartChange` 已有 UI） | `router.py`、`FeedbackTab.vue` |
+| T15 `CR_API_PENDING` 改接真接口 | 下一轮（PDE 定） | `static-r3` 合入后，把 409 `CR_API_PENDING` 分支改调 `POST /change-requests`，`target{kind:"knowledge"}`；查草稿时 `status=草稿`（传 `draft` 返回 422），用法见 `handoff/static.md` | `router.py feedback_to_synonym`、`FeedbackTab.vue` |
 | R5 · T11 后台任务 | 部分 | 进程内 asyncio，重启丢任务（运行停在「运行中」）；判分是启发式（`时间解析错误` 判不出）[推断]；每日 02:00 定时未接 | `eval/job.py`；接 procrastinate 时包 `_background` |
 | R2 我的页面与模板库 `/use/qa/pages` | 未开始，mock | 前端未接；后端只有读接口 P1 / P3 / P11 / P12，写接口 P2、P4–P10 未实现 | P1–P12；`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*` |
 | R3 对象搜索 `/use/objects/search` | 未开始，mock | 前端未接；后端只有 O1 类型列表，O2–O4 未实现 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
