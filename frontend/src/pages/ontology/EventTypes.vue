@@ -154,22 +154,22 @@ async function simulate() {
 const subs = computed(() => flat(subSec.rows.value));
 const liveSubs = computed(() => subs.value.filter((x) => x._mark !== '删除'));
 /* 真接口：选中类型的运行健康 + 趋势、最近 5 条事件；typeId 对不上（切换中 / 草稿新类型 404）时读 mock */
-const rt = reactive<{ typeId: string; stats: EventStats | null; top: EventRecord[] }>({ typeId: '', stats: null, top: [] });
-if (real) {
-  let n = 0;
-  watch(() => cur.value.id, async (id) => {
-    if (backend.down) return;
-    const k = ++n;
-    try {
-      const [stats, top] = await Promise.all([getEventStats(id), listEvents(id, { range: '7d', page: 1, size: 5 })]);
-      if (k === n) Object.assign(rt, { typeId: id, stats, top: top.items });
-    } catch (e) {
-      if (k !== n || fallBackIfDown(e)) return;
-      Object.assign(rt, { typeId: id, stats: null, top: [] });
-      if (!(isApiError(e) && e.status === 404)) message.error(`事件运行数据加载失败：${apiMsg(e)}`);
-    }
-  }, { immediate: true });
+const rt = reactive<{ typeId: string; stats: EventStats | null; top: EventRecord[]; err: string }>({ typeId: '', stats: null, top: [], err: '' });
+/* 非“后台没起来”的报错：在最近事件 / 统计区显示单行错误 + 重试，不再只给空列表 */
+let rtSeq = 0;
+async function loadRt(id: string) {
+  if (!real || backend.down) return;
+  const k = ++rtSeq;
+  try {
+    const [stats, top] = await Promise.all([getEventStats(id), listEvents(id, { range: '7d', page: 1, size: 5 })]);
+    if (k === rtSeq) Object.assign(rt, { typeId: id, stats, top: top.items, err: '' });
+  } catch (e) {
+    if (k !== rtSeq || fallBackIfDown(e)) return;
+    const err = isApiError(e) && e.status === 404 ? '' : apiMsg(e);
+    Object.assign(rt, { typeId: id, stats: null, top: [], err });
+  }
 }
+if (real) watch(() => cur.value.id, (id) => loadRt(id), { immediate: true });
 const rtOn = computed(() => live.value && rt.typeId === cur.value.id);
 const daily = computed(() => (rtOn.value ? rt.stats?.daily ?? [] : eventDaily(cur.value.id, cur.value.weekly)));
 const asOf = computed(() => (rtOn.value && rt.stats ? rt.stats.asOf : '2026-10-25 15:42'));
@@ -229,23 +229,25 @@ const eq = usePagedQuery({ defaultSize: 14, prefix: 'e' });
 const CUTOFF_24H = '2026-10-24 15:42:18';
 const recentRows = computed(() => recentAll.value.filter((r) => (range.value === '7d' || r.at >= CUTOFF_24H) && (outcome.value === '全部' || r.outcome === outcome.value)));
 /* 真接口：近期事件页签按 range / 结果 / 页码走后台分页 */
-const realRecent = reactive<{ key: string; items: EventRecord[]; total: number }>({ key: '', items: [], total: 0 });
+const realRecent = reactive<{ key: string; items: EventRecord[]; total: number; err: string }>({ key: '', items: [], total: 0, err: '' });
 const recentKey = computed(() => JSON.stringify([cur.value.id, range.value, outcome.value, eq.page.value, eq.size.value]));
-if (real) {
-  let n = 0;
-  watch([recentKey, () => tab.value], async ([key]) => {
-    if (backend.down || tab.value !== 'recent' || realRecent.key === key) return;
-    const k = ++n;
-    try {
-      const r = await listEvents(cur.value.id, { range: range.value as '24h' | '7d', outcome: outcome.value, page: eq.page.value, size: eq.size.value });
-      if (k === n) Object.assign(realRecent, { key, items: r.items, total: r.total });
-    } catch (e) {
-      if (k !== n || fallBackIfDown(e)) return;
-      Object.assign(realRecent, { key, items: [], total: 0 });
-      if (!(isApiError(e) && e.status === 404)) message.error(`近期事件加载失败：${apiMsg(e)}`);
-    }
-  }, { immediate: true });
+let recentSeq = 0;
+async function loadRecent(force = false) {
+  const key = recentKey.value;
+  if (!real || backend.down || tab.value !== 'recent' || (!force && realRecent.key === key)) return;
+  const k = ++recentSeq;
+  try {
+    const r = await listEvents(cur.value.id, { range: range.value as '24h' | '7d', outcome: outcome.value, page: eq.page.value, size: eq.size.value });
+    if (k === recentSeq) Object.assign(realRecent, { key, items: r.items, total: r.total, err: '' });
+  } catch (e) {
+    if (k !== recentSeq || fallBackIfDown(e)) return;
+    const err = isApiError(e) && e.status === 404 ? '' : apiMsg(e);
+    Object.assign(realRecent, { key, items: [], total: 0, err });
+  }
 }
+if (real) watch([recentKey, () => tab.value], () => loadRecent(), { immediate: true });
+const rtErr = computed(() => (rtOn.value ? rt.err : ''));
+const recentErr = computed(() => (live.value && realRecent.key === recentKey.value ? realRecent.err : ''));
 const recent = computed(() => (live.value && realRecent.key === recentKey.value
   ? { items: realRecent.items, total: realRecent.total }
   : paginate(recentRows.value, { page: eq.page.value, size: eq.size.value })));
@@ -362,17 +364,19 @@ const verCols = [
           <div class="et-sec t-14 fw-600 et-sec-row">
             <span>最近事件<InfoTip text="完整事件流见“近期事件”页签；点事件编号查看投递过程" /></span>
           </div>
+          <div v-if="rtErr" class="et-err t-12"><span class="c-error et-err-m" :title="rtErr">最近事件加载失败：{{ rtErr }}</span><a-button size="small" @click="loadRt(cur.id)">重试</a-button></div>
           <div v-for="r in recentTop" :key="r.id" class="et-ev">
             <a class="t-14 num" @click="drawer.open('event', r.id)">{{ r.id }}</a>
             <span class="t-12 c-2 num">{{ r.at }}</span>
             <span class="t-12 c-2 et-ev-s" :title="r.summary">{{ r.summary }}</span>
             <span class="t-12" :class="r.outcome === '投递失败' ? 'c-error' : 'c-3'">{{ r.outcome }}</span>
           </div>
-          <div v-if="!recentTop.length" class="t-12 c-3">草稿未发布，暂无事件</div>
+          <div v-if="!recentTop.length && !rtErr" class="t-12 c-3">草稿未发布，暂无事件</div>
         </div>
         <div class="et-ov-right">
           <div class="et-sec t-14 fw-600"><span>近 14 天事件数</span><span class="fw-400 c-2"> · 截至 {{ asOf }}</span></div>
           <template v-if="cur.status !== '草稿'">
+            <div v-if="rtErr" class="et-err t-12"><span class="c-error et-err-m" :title="rtErr">运行统计加载失败：{{ rtErr }}</span><a-button size="small" @click="loadRt(cur.id)">重试</a-button></div>
             <div class="et-chart"><EChart :option="chartOption" /></div>
             <div class="et-stats">
               <div><span class="t-12 c-3">近 7 天</span><span class="t-16 fw-600 c-1 num">{{ fmtInt(cur.weekly) }}</span></div>
@@ -451,6 +455,7 @@ const verCols = [
           <a-segmented v-model:value="outcome" :options="OUTCOMES" size="small" />
           <InfoTip text="事件流按时间倒序，点事件编号查看投递过程" />
         </div>
+        <div v-if="recentErr" class="et-err t-12"><span class="c-error et-err-m" :title="recentErr">近期事件加载失败：{{ recentErr }}</span><a-button size="small" @click="loadRecent(true)">重试</a-button></div>
         <div class="paged-scroll">
           <a-table :columns="recentCols" :data-source="recent.items" :pagination="false" size="middle" row-key="id"
             :locale="{ emptyText: cur.status === '草稿' ? '草稿未发布，暂无事件' : '该时间范围内没有事件' }">
@@ -528,6 +533,8 @@ const verCols = [
 .et-sec { margin-top: 4px; }
 .et-sec-row { display: flex; justify-content: space-between; align-items: center; }
 .et-chart { height: 200px; }
+.et-err { display: flex; align-items: center; gap: 8px; padding: 6px 0; white-space: nowrap; }
+.et-err-m { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .et-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .et-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 12px; border: var(--border); border-radius: var(--radius); white-space: nowrap; }
 .et-desc.et-desc :deep(.ant-descriptions-view > table) { table-layout: fixed; width: 100%; }
