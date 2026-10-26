@@ -80,7 +80,7 @@
 | hit_id FK | bigint | → rule_hit.id，产生本告警的命中 |
 | level | varchar | `high/medium/low` = 高/中/低（来自规则） |
 | obj_kind, obj_id, obj_label | varchar | `store/product/order`（规则 R-027 为 region，只发通知） |
-| store_id, store_label | varchar | 商品类告警所在门店（R-007/R-012 去重键含门店） |
+| dims | jsonb `[{objKind,id,label}]` | 通用维度值（来自规则去重键；演示数据里是商品类告警所在门店，R-007/R-012）。dynamic_0003 由 store_id / store_label 迁来 |
 | value, threshold | varchar | 触发值 / 阈值展示串 |
 | dedupe_key | varchar | 按规则去重键拼出，见 2.6 |
 | triggered_at, data_cutoff | timestamptz | `triggeredAt`、`cutoff`（数据截至） |

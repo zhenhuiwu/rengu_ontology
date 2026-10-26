@@ -113,3 +113,31 @@
 - `ObjectTypesBody.vue`（static）：可选——放弃 object 目标后通知 dynamic 删 lifecycle_draft。
 - objectRegistry：不告警的 `canResolve(kind)`（见未完成第 8 条）。
 - static / versioning：整版发布时按变更单回调各模块 apply 的钩子（dynamic 用来把规则 / 生命周期草稿升为已发布版本；CR_WRITE 默认开的前提）。
+
+## dynamic-r3b：运行页去零售写死（告警 / 动作中心 / 推演模板设计）
+
+分支 `dynamic-r3b`（基于 master `b475283`）。只动运行页；规则、生命周期、变更单部分归 `dynamic-r3`。
+
+**已做（对应上文「通用化」第 1 条、第 3 条告警部分、第 4 条）**
+- 迁移 `dynamic_0003`（down_revision `static_0003`）：`alert.store_id / store_label` → `alert.dims`（JSONB，`[{objKind,id,label}]`）。升级时原门店值迁成 `{objKind:"store",…}`，降级还原两列。
+- 告警接口：`AlertOut` 去掉 `storeId/storeLabel`，加 `dims[{objKind,id,label,kindLabel}]`、`objKindLabel`（对象类型显示名，取对象类型目录）；`AlertDetail.approver` = 规则绑定动作类型的审批人配置（`ACTION_META.approver`，Palantir 动作类型表接上后换查库），未绑定动作为 null。`:start-action` 的审批人同样取动作类型配置（`approver_for_action`），不再按对象类型写死王敏 / 陈立军。演示值不变（R-007/R-012 → 品类经理 王敏，R-015/SM-ORD → 区域运营 陈立军）。
+- `Alerts.vue`：对象称呼、审批人、处理记录文字都取元数据；列表「对象」列后按 dims 追加维度值，详情按 dims 逐个显示（标签 = 维度对象类型名）。mock 回退用 `mock/dynamic.ts alertDims()` 把演示门店整形成 dims，值不变。
+- `Actions.vue`：对象称呼真接口取 `/actions/meta.objKindLabel`，mock 取 `OBJ_KIND_LABEL`；未登记类型显示编号。
+
+**没做 / 待办**
+- 告警筛选按 `/facets` 生成：告警页现在只有级别 / 规则 / 关键词（流程字段），没有区域 / 门店筛选可替换。要按告警对象类型的可筛选属性筛，后台得 join 业务表（facets 的筛选值落到 alert.obj_id），下一轮和规则命中 dims 一起做：`GET /alerts?filters=<JSON>&objKind=` 复用 static 的 filters 校验（422 规则一致）。
+- `mock/rules.ts` 里命中 / 回放仍读 `Alert.storeId`（`dynamic-r3` 范围）；命中改 dims 时请改用 `alertDims()`。`ObjBehaviorAutomation.vue:151` 的 `storeLabel` 同理。
+- **情景推演模板化本轮没做（整页改不完，未动 Scenarios 任何文件）**，设计如下，下一轮按整页交：
+
+**推演模板设计（scenario_template）**
+- 表 `scenario_template`：`code`、`name`、`object_type_code`（目标对象类型）、`engine`（引擎键，可插拔；演示模板 = `demo_retail`，即现 `rules_sim.simulate` 原样搬进 `engines/demo_retail.py`）、`definition` JSONB；`scenario` 加 `template_code`（存量迁移全部指向演示模板）。
+- `definition`：
+  - `scope: [{key, label, propKey, kind:'enum'|'range'|'int', default, allOption?}]`——取值来自目标对象类型 `/facets`（enum 取 values，range 取 min/max）；`int` 类（如周数）带 `min/max`。演示：`area`（门店.region，全部项「华东大区全部」）、`category`（商品.category 一级，全部项「全部品类」）、`weeks`（1–52，默认 8）。
+  - `drivers: [{key, label, kind:'number'|'enum', unit, min, max, step, default, options?, enabledBy?}]`——演示：pricePct / replenishPct / safetyDays / promo(无/会员券/折扣/满减) / promoDepth / promoWeeks（enabledBy promo≠无），即现 `BASE_DRIVERS`、`PROMO_TYPES`。
+  - `kpis: [{key, label, unit, better, metricId?}]`——演示 6 个（sales/gp/rate/stockout/turn/promo），`metricId` 指向指标目录。
+  - `series: [{key, label, base, value, unit}]`——周序列（销售额、毛利率）。
+  - `impact: { rowObject: {objKind, idKey, labelKey}, dims: [{objKind, idKey, labelKey}], metrics: [{key, label, baseKey, valueKey, unit, better}] }`——演示：行 = 商品（sku/name），维度 = 门店（storeId/storeName）+ 品类，指标 = 销售额、缺货率。表 `scenario_impact` 改成 `obj_kind / obj_id / obj_label / dims JSONB / metrics JSONB / suggest`，唯一键 `(scenario_id, obj_id, dims_key)`。
+  - `suggestions: [{key, actionType, when, objFrom:'row'|'fixed', group?, paramsTpl, reasonTpl}]`——`actionType` 引用动作类型编号（start_price_approval / replenish_request / 复购召回券），审批人照动作类型配置；`when` 由引擎计算（模板不放表达式求值）。
+- 接口：`GET /scenario-templates`、`GET /scenarios/meta?template=` 返回模板 + 各 scope 项的 facets 取值；`:run` body `{scope:{…}, drivers:{…}}` 按模板校验（未知键 / 越界 422）；`/impacts` 返回 `{objKind,objId,objLabel,dims[],metrics{}}`；202 + 轮询、savepoint 失败处理不变。
+- 页面：范围 / 驱动表单、KPI 卡、影响明细列、建议动作全部按模板渲染；mock 回退带同一份演示模板 JSON（`mock/scenarios.ts` 的 simulate 原样作演示引擎，值不变）。
+- 验收：演示模板下 `derived/simulate.json` 逐位一致；代码里（引擎目录之外）不出现区域 / 品类 / 门店 / SKU。

@@ -55,11 +55,11 @@ from app.modules.dynamic.schemas import (
     ActionTabCounts,
     AlertCan,
     AlertCounts,
-    DimOut,
     AlertDetail,
     AlertLogOut,
     AlertOut,
     AlertPage,
+    DimOut,
     StageIn,
 )
 
@@ -115,7 +115,7 @@ def validation_failed(field: str, message: str) -> AppError:
 
 
 def approver_for_action(catalog: Any, action: str | None) -> str | None:
-    """发起动作的审批人：取动作类型的审批人配置（Palantir 动作类型 / ACTION_META.approver），不按对象类型写死。"""
+    """发起动作的审批人：取动作类型的审批人配置（ACTION_META.approver），不按对象类型写死。"""
     meta = catalog.action_meta(action) if action else None
     return (meta or {}).get("approver") or None
 

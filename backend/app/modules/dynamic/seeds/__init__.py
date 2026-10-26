@@ -83,7 +83,9 @@ def _alert(r: Row, ctx: SeedContext) -> Row:
         "obj_kind": r["objKind"],
         "obj_id": r["objId"],
         "obj_label": r["objLabel"],
-        "dims": [{"objKind": "store", "id": r["storeId"], "label": r["storeLabel"]}] if r.get("storeId") else [],
+        "dims": [{"objKind": "store", "id": r["storeId"], "label": r["storeLabel"]}]
+        if r.get("storeId")
+        else [],
         "value": r["value"],
         "threshold": r["threshold"],
         "triggered_at": parse_display_dt(r["triggeredAt"]),
