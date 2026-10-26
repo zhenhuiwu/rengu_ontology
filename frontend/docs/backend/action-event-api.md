@@ -161,7 +161,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /action-types/{id}/versions` | — | `items[{ver,release,status,by,at,change}]` | 不分页 | `versionsOf()`、`ACTION_VERSION_NOTES` |
 | `POST /action-types/{id}:dry-run` | query `view`、`cr`（草稿视图按草稿内容校验，`checked` = 草稿里未删除的条件数）、`ver`；body `{params?}` | **一律 200** `{passed, checked, failed[{name,fail}]}`（条件不过也是 200，`passed=false`，前端只显示结果） | — | `condsOf()`；`ActionTypes.vue` `dryRun()` |
 | `GET /api/data/v1/ext-systems?writeback=1`（外部系统接口，前缀不同） | — | `items[{id,name,idemKey,timeoutMs,maxRetry,retry,idempotent,status,env}]` | 不分页 | `extsys.ts` `EXT_SYSTEMS`；过滤同 `writebackSystems()`（生产环境且未停用）。`ext_system` 归本模块 `integration`，外部系统页也调这组接口（见下方“外部系统”） |
-| 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'action',id}`，`section ∈ params\|conds\|edits\|effects\|config` | 静态接口 | — | `useDraftEdits.ts` |
+| 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'action',id}`，`section ∈ params\|conds\|edits\|effects\|config` | 静态接口 | — | `useDraftEdits.ts`；前端已接（palantir-cr，开关 `VITE_PALANTIR_CR_WRITE`，默认关）：先 `GET …/items?kind&targetId&section` 读回再整段 PUT |
 
 动态的接口（只引用，动态唯一的执行记录接口）：`GET /action-runs`（按动作类型过滤的参数是 **`actionType`**（动作类型 id；动态同时收 `action` = 中文动作名）、`status` 可多选、`page`、`size=14`；返回统一响应类型 **`ActionRun`**，字段以 dynamic-api.md 为准，其中含动作类型页要的 `typeId,at,initiator,confirmer,approver,source,objKind,objId,objLabel,summary,status,ms,code,retries,idemKey`）、`GET /action-runs/{id}`（返回 `ActionRun` + `action_run_log` 时间线，执行抽屉用）。“最近异常”= `GET /action-runs?actionType=&status=失败,结果未知&size=4`。
 
@@ -192,7 +192,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /event-deliveries` | `eventId`（事件 code，必填），或 `eventType`（事件类型 code）+ `subscription`（订阅方 name）加 `page`、`size`【推断：前端没有按订阅方查投递的入口】 | `items[{subscription,status,attempts,lastError,deliveredAt}]`；按订阅方查时为分页结构 | 按事件查不分页 | mock 里没有逐个订阅方的记录，按 `outcome` 和 `subscribers` 推出来【推断】 |
 | `POST /event-types/{id}:simulate` | query `view`、`cr`（草稿视图按草稿里的载荷字段和订阅方）、`ver`；body `{payload?}`（默认取各字段的 `sample`） | `{testEventId, deliveredTo}`（`deliveredTo` 不含停用的订阅方） | — | `EventTypes.vue` `simulate()`；`subscribersOf()` |
 | `GET /event-types/{id}/versions` | — | 同动作类型 | 不分页 | `versionsOf()`、`EVENT_VERSION_NOTES` |
-| 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'event',id}`，`section ∈ payload\|subs` | 静态接口 | — | `useDraftEdits.ts` |
+| 草稿写入 | `PUT /change-requests/{cr}/items`，`target{kind:'event',id}`，`section ∈ payload\|subs` | 静态接口 | — | `useDraftEdits.ts`；同 §3.1（palantir-cr） |
 | 内部：接收事件 | `POST /internal/v1/events` `{eventId, eventType, occurredAt, source, objectType, objectId, payload, dedupKey?, traceId?}`（`eventId` 由生产方生成） | `{eventId, deduped}` | — | 信封字段 `ENVELOPE` |
 
 ### 3.3 只读与权限
@@ -589,7 +589,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | A10 | 编辑写回时的外部系统下拉 | `GET /api/data/v1/ext-systems?writeback=1` | ext_system |
 | A11 | 试运行（含草稿视图） | `POST …:dry-run?view=&cr=` | submission_criterion, cr_item（只读） |
 | A12 | 版本历史 | `GET …/versions` | action_type_version, ontology_release |
-| A13 | 新建动作类型、发起变更（含**变更说明**：StartChangeModal 的“变更说明”文本框）、加入已有变更单 | `POST /change-requests`（`description`）、`…/targets` | change_request, cr_item（静态） |
+| A13 | 新建动作类型、发起变更（含**变更说明**：StartChangeModal 的“变更说明”文本框）、加入已有变更单 | `POST /change-requests`（静态契约字段名是 `reason`，共用弹窗还没发出来，暂不传）、`…/targets` | change_request, cr_item（静态） |
 | A14 | 草稿里新增、编辑、删除、恢复，保存草稿 | `PUT /change-requests/{cr}/items` | cr_item |
 | A15 | **撤销修改**（`de.revert()`，丢弃本地未保存的改动） | 不调接口；之后重新读 `view=draft&cr=` | — |
 | A16 | **草稿视图切换**（页头“已发布 / 草稿 CR-xxxx”分段切换） | 读接口改带 `view=published` 或 `view=draft&cr=` | cr_item |
