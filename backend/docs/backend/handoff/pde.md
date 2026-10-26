@@ -63,3 +63,19 @@
 - qa-tuning（合并审）非阻塞：①评测无并发互斥，且 ER- 编号 max+1 并发可撞号；②进程重启后 run 卡"运行中"（qa.md 已记）；③/feedbacks 列表逐行构建详情（N+1）；④:reopen 不撤销 :to-cert 已加的同问法；⑤后台任务最多轮询 5s 等请求事务提交；⑥qa service 跨模块只读引用 static.ChangeRequest，后续宜走 static 提供的查询函数。
 
 - （合并 dynamic-r3 后，PDE 共享文件）①`src/api/static.ts` 导出 `registerDraft(cr)`（参数只要单头 id/title/owner/updatedAt/changes，CRFull / 动态的 CrFullDto 都能传）；`src/api/dynamic.ts` 的 `registerCR` 改为记 lockVersion 后调 `registerDraft`，不再复制登记逻辑。`src/api/action.ts` 仍有自己的 `registerDraft`（changes 取 DRAFTS 现值、不用响应里的 changes，语义不同），未改，留给 Palantir 决定是否换用。②`objectRegistry` 加 `canResolve(kind)`（只看有没有解析器，不告警）；`ObjBehaviorLifecycle.vue` 的 `refKind` 加了 `canResolve` 判断：注册表解析不了的对象类型（member / promotion / refund 等）显示纯文本，不再在开发环境告警（handoff/dynamic.md 未完成第 8 条、给 PDE 两条可勾掉）。
+
+## 下一轮 PDE 未完成项（2026-10-26，master 合并 palantir-r3 之后）
+
+1. **本体总览**：六张资源卡片（计数 / 健康度）、「待处理」列表、「最近发布」列表仍读 mock，需各模块提供统计接口后再切。
+2. `src/api/action.ts` 仍保留自己的 `registerDraft`（重复登记逻辑），应改为调用 `src/api/static.ts` 的 `registerDraft`（与 dynamic.ts 的 `registerCR` 写法一致）。
+3. 事件抽屉可改为读 `GET /events/{id}`（palantir-r3 已提供），不再从列表行拼详情。
+4. `ObjectTypesBody.vue` 的对象 target 清理（放弃草稿后撤登记 / 清本地）待补，与 `useDraftEdits.ts` 的做法对齐。
+
+## 评审 palantir-r3 非阻塞意见（给 Palantir专家，下一轮处理）
+
+- `src/api/action.ts` 的 `saveCRItems` 做「读→合并→PUT」时没带 `lockVersion`，两个标签页同时保存会互相覆盖。
+- `DELETE …/targets/{kind}/{id}` 返回 404 时应视为库里已没有，直接清本地草稿；现在会一直报「放弃失败」。
+- `GET /events/{id}` 没做行级范围；与事件列表口径一致，等事件行级口径定了再一起补。
+- 路径参数带 NUL 字符（如 `GET /events/EV-%00x`、`/event-types/x%00/stats`）返回 500，应和静态一样统一拦成 422。
+- `event/repo.py:47` 排除了测试事件，所以 `:simulate` 返回的 `testEventId` 拿去查 `GET /events/{id}` 是 404。
+- `test_integration_code_lock.py` 靠 `sleep(0.5)` 制造并发，机器慢时可能误报。
