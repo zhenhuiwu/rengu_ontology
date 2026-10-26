@@ -48,7 +48,7 @@ watch(typeId, async (id) => {
 }, { immediate: true });
 const pmap = computed(() => new Map((meta.value?.properties ?? []).map((p) => [p.key, p])));
 const prop = (k: string) => pmap.value.get(k);
-const kwPlaceholder = computed(() => meta.value?.properties.filter((p) => p.searchable).slice(0, 3).map((p) => p.name).join(' / ') || '关键词');
+const kwPlaceholder = computed(() => meta.value?.kwPlaceholder || meta.value?.properties.filter((p) => p.searchable).slice(0, 3).map((p) => p.name).join(' / ') || '关键词');
 
 /* 条件：关键词 + 筛选（JSON 放 URL 的 f）+ 排序 */
 const kwInput = ref(qs('kw'));

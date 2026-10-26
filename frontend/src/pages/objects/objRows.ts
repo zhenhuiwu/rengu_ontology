@@ -83,17 +83,19 @@ function sortRows(rows: ExploreRow[], sort: string) {
 
 /** 搜索一页；live=true 走 X1，出错由调用方处理（qaFallBackIfDown 后可再以 live=false 调） */
 export async function searchRows(m: TypeMeta, q: RowsQuery, live: boolean, scope: ScopeFn): Promise<RowsResult> {
-  const sf = loadStaticFacets(m.id, q.kw, q.filters);
   if (live) {
+    // 分面：静态 /facets（真数据，随其他筛选联动，不带关键词）；有关键词或静态取不到时用 E1 顺带的过渡分面（计数含关键词）[推断]
+    const sf = q.kw.trim() ? Promise.resolve(null) : loadStaticFacets(m.id, q.filters);
     const r = await exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size });
-    return { items: r.items, total: r.total, bound: r.bound, boundProps: r.boundProps, facets: (await sf) ?? r.facets };
+    const f = await sf;
+    return { items: r.items, total: r.total, bound: r.bound, boundProps: r.boundProps, facets: f ?? r.facets };
   }
   const all = mockAll(m, scope);
   if (!all) return { items: [], total: 0, bound: false, boundProps: [], facets: [] };
   const rows = sortRows(all.filter((r) => hit(m, r, q)), q.sort);
   return {
     items: rows.slice((q.page - 1) * q.size, q.page * q.size), total: rows.length, bound: true,
-    boundProps: Object.keys(MOCK_BINDINGS[m.id].cols), facets: (await sf) ?? mockFacets(m, all, q),
+    boundProps: Object.keys(MOCK_BINDINGS[m.id].cols), facets: mockFacets(m, all, q),
   };
 }
 /** 演示模式下当前筛选的全部行（导出 / 提问用） */
@@ -107,7 +109,7 @@ export async function getRow(m: TypeMeta, id: string, live: boolean, scope: Scop
     try { return { row: await exploreGet(m.id, id), bound: true, denied: false }; } catch (e: any) {
       if (e?.status === 403) return { row: null, bound: true, denied: true };
       if (e?.status === 404) {
-        const probe = await exploreSearch(m.id, { page: 1, size: 1, with_facets: false }).catch(() => null);
+        const probe = await exploreSearch(m.id, { page: 1, size: 1, withFacets: false }).catch(() => null);
         return { row: null, bound: probe ? probe.bound : true, denied: false };
       }
       throw e;

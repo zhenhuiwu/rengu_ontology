@@ -20,13 +20,30 @@ async def qa(users, client):
     return client
 
 
+async def _open(users, obj, *props):
+    """静态 seed 只给登记过的属性开 filterable（store 的 opened_at 等没开）；区间筛选用例自己打开标志。"""
+    from sqlalchemy import select, update
+
+    from app.modules.static.models import ObjectType, Property
+
+    tid = (await users.execute(select(ObjectType.id).where(ObjectType.code == obj))).scalar_one()
+    await users.execute(
+        update(Property)
+        .where(Property.object_type_id == tid, Property.api_name.in_(props))
+        .values(filterable=True)
+    )
+    await users.flush()
+    users.expire_all()
+
+
 async def _search(c, code, **body):
     r = await c.post(f"{B}/object-types/{code}/search", json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
 
-async def test_store_rows_facets_and_scope(qa):
+async def test_store_rows_facets_and_scope(qa, users):
+    await _open(users, "store", "opened_at")
     d = await _search(qa, "store", size=200)
     old = (await qa.post(f"{B}/objects/store/search", json={"size": 200})).json()
     assert d["bound"] and d["titleProp"] == "store_name"
@@ -53,7 +70,9 @@ async def test_store_rows_facets_and_scope(qa):
     assert d4["total"] >= 1 and d4["facets"] == []
 
 
-async def test_order_product_unbound_and_errors(qa):
+async def test_order_product_unbound_and_errors(qa, users):
+    await _open(users, "order", "created_at")
+    await _open(users, "store", "opened_at")
     o = await _search(qa, "order", filters={"created_at": {"min": "2000-01-01", "max": "2100-12-31"}}, size=5)
     assert o["bound"] and o["total"] > 0 and o["items"][0]["values"]["store_id"]
     p = await _search(qa, "product", sort="retail_price", size=5)

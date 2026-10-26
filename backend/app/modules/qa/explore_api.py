@@ -2,9 +2,8 @@
 按对象类型 + 筛选 + 关键词 + 排序 + 分页取行，行按属性 api 名给值。
 挂在 qa router 上（router.py 末尾 include）。
 
-- 元数据只读静态的 object_type / property（不写）。属性标志（searchable / filterable /
-  sortable）静态还没上线，这里用默认规则 [推断]，见 `flags`；静态的标志上线后只改 `flags` 一处。
-  前端 objMeta 的 mock 兜底用同一套规则。
+- 元数据只读静态的 object_type / property（不写）。属性标志（searchable / filterable / sortable）读静态
+  property 列（static_0004），见 `flags`；前端 objMeta 只在静态后台没起来时用 mock + 默认规则 [推断]。
 - 分面归静态 `GET /object-types/{id}/facets`。静态上线前，搜索结果里顺带给一份同形状的
   `facets`（过渡，[推断]），前端优先读静态的；静态上线后删掉这里的 `_facets`。
 - 物理绑定：seeds/extra/qa/objects/bindings.json（对象类型 → 表 + 属性 → 列）。演示数据在 biz 表，不是
@@ -40,6 +39,7 @@ from app.db.session import SessionDep
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS, PRODUCT_COLUMNS, STORE_COLUMNS
 from app.modules.qa import service as svc
 from app.modules.qa.objects_api import OutOfScope
+from app.modules.static.explorer import facetable
 from app.modules.static.models import ObjectType, Property
 
 
@@ -67,14 +67,10 @@ def bindings() -> dict[str, dict]:
 
 
 def flags(p: Property) -> dict[str, bool]:
-    """默认标志 [推断]：主键和标题可搜索；enum / boolean / 时间和非主键的维度字符串可筛选；
-    数值和时间可排序。"""
-    dt = p.data_type
-    return {
-        "searchable": bool(p.is_pk or p.is_title),
-        "filterable": dt in {"enum", "boolean"} | TIME or (dt == "string" and p.is_dimension and not p.is_pk),
-        "sortable": dt in NUMERIC | TIME,
-    }
+    """属性标志读静态 property 上的 searchable / filterable / sortable（static_0004）。
+
+    可筛选口径与静态 meta / facets 一致：facetable 已排除敏感、隐藏属性。"""
+    return {"searchable": bool(p.searchable), "filterable": facetable(p), "sortable": bool(p.sortable)}
 
 
 class RangeIn(ApiModel):

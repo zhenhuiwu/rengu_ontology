@@ -4,12 +4,13 @@
  *   默认 = 当前用户的行级范围（本体小白的 GET /api/admin/v1/me/row-scopes?objectType=，还没上 master，形状 [推断]，失败就跳过）
  *   → 预览时被预览用户在该维度来源对象上的范围（“大区 = 华东”）→ 第一个选项。取值按名称或同义词匹配。
  *   静态是真接口时维度从静态拉（loadStatic 原地替换 DIM_ITEMS），否则读 mock。
- * - 口径 = 已发布指标的 variants 并集（静态 /metrics 上线该字段前：真接口用 W17 /session-options，演示用 mock 选项）；
+ * - 口径 = 静态 meta.metrics[].variants 并集（组织维度来源对象的 meta）；静态读不到（后台没起来）时：真接口用 W17 /session-options，演示用 mock 选项；
  *   字段存在但全部为空 → 不显示口径选择。
  * 会话里存的 scope 是自由文本（≤60 字），旧会话里的“华东”按同义词归一到维度取值名。
  */
 import { computed, ref } from 'vue';
-import { apiClient, type PageResult } from '@/api/http';
+import { apiClient } from '@/api/http';
+import { loadMeta } from '@/pages/objects/objMeta';
 import { loadStatic, isStaticReal } from '@/api/static';
 import { getSessionOptions } from '@/api/qa';
 import { DIM_ITEMS, type DimItem, type DimValue } from '@/mock/dimensions';
@@ -17,7 +18,6 @@ import { QA_SCOPE_OPTIONS, QA_CALIBER_OPTIONS } from '@/mock';
 
 export interface Opt { value: string; label: string }
 const adminApi = apiClient('admin');
-const staticApi = apiClient('static');
 
 const dim = ref<DimItem | null>(null);
 const tops = ref<DimValue[]>([]);
@@ -53,16 +53,14 @@ export function ensureScopeOptions(qaReal: boolean): Promise<void> {
       jobs.push(adminApi.get<unknown>('/me/row-scopes', { query: { objectType: d.object } })
         .then((r) => { rowScope.value = parseRowScopes(r, d.id); }).catch(() => undefined));
     }
-    if (isStaticReal()) {
-      jobs.push(staticApi.get<PageResult<{ status?: string; variants?: (string | { name?: string; label?: string })[] }>>('/metrics', { query: { size: 200 } })
-        .then((r) => {
-          if (!r.items.some((m) => 'variants' in m)) return;
-          const s = new Set<string>();
-          r.items.filter((m) => !m.status || m.status === '已发布').forEach((m) => (m.variants ?? []).forEach((v) => {
-            const n = typeof v === 'string' ? v : v.label ?? v.name; if (n) s.add(n);
-          }));
-          variants.value = [...s];
-        }).catch(() => undefined));
+    if (isStaticReal() && d?.object) {
+      // 口径 = 组织维度来源对象（如门店）的静态 meta.metrics[].variants 并集 [推断]；meta 走了 mock 兜底（无 hasData）时不算
+      jobs.push(loadMeta(d.object).then((m) => {
+        if (!m || m.hasData === undefined) return;
+        const s = new Set<string>();
+        m.metrics.forEach((x) => x.variants.forEach((v) => { if (v.label) s.add(v.label); }));
+        variants.value = [...s];
+      }).catch(() => undefined));
     }
     if (qaReal) {
       jobs.push(getSessionOptions().then((o) => { fallbackScopes.value = o.scopes; fallbackCalibers.value = o.calibers; }).catch(() => undefined));

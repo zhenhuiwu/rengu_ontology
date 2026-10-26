@@ -11,7 +11,7 @@
  * 默认标志 [推断]，与后台 explore_api.flags 一致：主键和标题可搜索；enum / boolean / 时间和非主键的维度字符串可筛选；
  * 数值和时间可排序。listed / visibility / format / unit 静态还没有，默认规则见 metaFromProps。
  */
-import { apiClient, type PageResult } from '@/api/http';
+import { apiClient, isBackendDown, type PageResult } from '@/api/http';
 import { loadStatic } from '@/api/static';
 import { LINK_OBJECTS, LINKS, type Cardinality } from '@/mock/links';
 import { OBJECT_PROPS, objectMeta, type ObjProp } from '@/mock/objectProps';
@@ -29,7 +29,13 @@ export interface PropMeta {
   format: string; unit: string; pk: boolean; title: boolean; sensitive: boolean;
 }
 export interface TypeBrief { id: string; name: string; group: string }
-export interface TypeMeta extends TypeBrief { titleProp: string; pkProp: string; properties: PropMeta[]; sampleQuestions: string[] }
+export interface MetricVariantMeta { code: string; label: string; default?: boolean }
+export interface MetricMeta { id: string; name: string; unit: string | null; variants: MetricVariantMeta[] }
+export interface TypeMeta extends TypeBrief {
+  titleProp: string; pkProp: string; properties: PropMeta[]; sampleQuestions: string[];
+  /** 相关指标（静态 meta.metrics；mock 兜底按指标维度推 [推断]）；variants 给工作台口径 */
+  metrics: MetricMeta[]; kwPlaceholder?: string; hasData?: boolean;
+}
 export type FacetMeta =
   | { key: string; kind: 'enum'; values: { value: string; count: number }[] }
   | { key: string; kind: 'range'; min: string | number | null; max: string | number | null };
@@ -71,10 +77,14 @@ export function metaFromProps(props: ObjProp[]): PropMeta[] {
   return out;
 }
 
-function withTitle(t: TypeBrief, props: PropMeta[], sample: string[], titleProp?: string): TypeMeta {
-  const pk = props.find((p) => p.pk)?.key ?? props[0]?.key ?? 'id';
-  return { ...t, properties: props, titleProp: titleProp ?? props.find((p) => p.title)?.key ?? pk, pkProp: pk, sampleQuestions: sample };
+function withTitle(t: TypeBrief, props: PropMeta[], sample: string[], extra: Partial<TypeMeta> = {}): TypeMeta {
+  const pk = extra.pkProp || props.find((p) => p.pk)?.key || props[0]?.key || 'id';
+  const title = extra.titleProp || props.find((p) => p.title)?.key || pk;
+  return { metrics: mockMetrics(t), ...extra, ...t, properties: props, titleProp: title, pkProp: pk, sampleQuestions: sample };
 }
+/** mock 兜底：维度里包含本类型的已发布指标 [推断]，没有口径变体 */
+const mockMetrics = (t: TypeBrief): MetricMeta[] =>
+  METRICS.filter((m) => m.status === '已发布' && m.dims.includes(t.name)).map((m) => ({ id: m.id, name: m.name, unit: m.unit, variants: [] }));
 
 const mockTypes = (): TypeBrief[] => LINK_OBJECTS.filter((o) => !o.draft).map(({ id, name, group }) => ({ id, name, group }));
 const sampleOf = (t: TypeBrief) => objectMeta(t.id, t.name, t.group).qs.map((q) => q.q);
@@ -88,7 +98,7 @@ export function listTypes(): Promise<TypeBrief[]> {
       try {
         const r = await staticApi.get<PageResult<TypeBrief & { status?: string; hidden?: boolean }>>('/object-types', { query: { size: 200 } });
         return r.items.filter((t) => (!t.status || t.status === '已发布') && !t.hidden).map(({ id, name, group }) => ({ id, name, group }));
-      } catch { return mockTypes(); }
+      } catch (e) { if (isBackendDown(e)) return mockTypes(); typesCache = null; throw e; }
     })();
   }
   return typesCache;
@@ -109,28 +119,41 @@ export function loadMeta(id: string): Promise<TypeMeta | null> {
       // 静态真接口：关系类型整表替换进 LINKS（linksOf 读它），失败照旧用 mock
       await loadStatic(['links']).catch(() => undefined);
       if (staticApi.isReal()) {
+        // 静态 meta 是真接口：只有后台没起来才用 mock（读兜底）；其他错误照常抛给页面
         try {
-          const m = await staticApi.get<{ titleProp: string; properties: (Partial<PropMeta> & { key: string })[]; sampleQuestions?: string[] }>(`/object-types/${encodeURIComponent(id)}/meta`);
-          const base = new Map(metaFromProps((await staticProps(id)) ?? OBJECT_PROPS[id] ?? []).map((p) => [p.key, p]));
-          const props = m.properties.map((p, i) => ({ ...(base.get(p.key) ?? metaFromProps([{ api: p.key, name: p.name ?? p.key, type: p.dataType ?? 'string', group: '其他', source: '', desc: '' }])[0]), order: i, ...p }) as PropMeta);
-          return withTitle(t, props.sort((a, b) => a.order - b.order), m.sampleQuestions ?? sampleOf(t), m.titleProp);
-        } catch { /* 静态 meta 未上线：用属性表 + 默认标志 */ }
-        const sp = await staticProps(id);
-        if (sp) return withTitle(t, metaFromProps(sp), sampleOf(t));
+          type RawMeta = { titleProp: string | null; pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean; properties: (Partial<PropMeta> & { key: string })[]; sampleQuestions?: (string | null)[]; metrics?: MetricMeta[] };
+          const [m, sp] = await Promise.all([staticApi.get<RawMeta>(`/object-types/${encodeURIComponent(id)}/meta`), staticProps(id)]);
+          const base = new Map(metaFromProps(sp ?? []).map((p) => [p.key, p]));
+          const props = m.properties.map((p, i) => {
+            const b = base.get(p.key) ?? metaFromProps([{ api: p.key, name: p.name ?? p.key, type: p.dataType ?? 'string', group: '其他', source: '', desc: '' }])[0];
+            const q = Object.fromEntries(Object.entries(p).filter(([, v]) => v !== null && v !== undefined)) as Partial<PropMeta>;
+            return { ...b, order: i, ...q, pk: b.pk || p.key === m.pkProp, title: b.title || p.key === m.titleProp } as PropMeta;
+          });
+          const qs = (m.sampleQuestions ?? []).filter((x): x is string => !!x);
+          return withTitle(t, props.sort((a, b) => a.order - b.order), qs.length ? qs : sampleOf(t), {
+            titleProp: m.titleProp ?? undefined, pkProp: m.pkProp ?? undefined, kwPlaceholder: m.kwPlaceholder, hasData: m.hasData,
+            metrics: (m.metrics ?? []).map((x) => ({ ...x, variants: x.variants ?? [] })),
+          });
+        } catch (e) { if (!isBackendDown(e)) { metaCache.delete(id); throw e; } }
       }
       return withTitle(t, metaFromProps(OBJECT_PROPS[id] ?? []), sampleOf(t));
     })());
   }
   return metaCache.get(id)!;
 }
+/** 属性表只用来补分组 / 说明 / 敏感标志，取不到不影响 meta */
 async function staticProps(id: string): Promise<ObjProp[] | null> {
   try { return (await staticApi.get<PageResult<ObjProp>>(`/object-types/${encodeURIComponent(id)}/properties`, { query: { size: 200 } })).items; } catch { return null; }
 }
 
 /** 静态分面（联动当前筛选）；没上线 / 出错返回 null，由调用方兜底 */
-export async function loadStaticFacets(id: string, kw: string, filters: Filters): Promise<FacetMeta[] | null> {
+/** 静态 /facets（按其他已选筛选联动，不带关键词）；取不到返回 null，页面用 E1 顺带的过渡分面 */
+export async function loadStaticFacets(id: string, filters: Filters): Promise<FacetMeta[] | null> {
   if (!staticApi.isReal()) return null;
-  try { return await staticApi.get<FacetMeta[]>(`/object-types/${encodeURIComponent(id)}/facets`, { query: { kw, filters: JSON.stringify(filters) } }); } catch { return null; }
+  try {
+    const r = await staticApi.get<(FacetMeta & { hasData?: boolean; order?: number })[]>(`/object-types/${encodeURIComponent(id)}/facets`, { query: Object.keys(filters).length ? { filters: JSON.stringify(filters) } : {} });
+    return r.filter((f) => f.hasData !== false).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  } catch { return null; }
 }
 
 /** 从本类型出发的关系（已发布）：label 用本侧看到的名字（正向 name / 反向 reverse） */
@@ -146,10 +169,8 @@ export function actionsOf(t: TypeBrief) {
   return ACTION_TYPES.filter((a) => a.status === '已发布' && (a.targetKind === t.id || a.target === t.name))
     .map((a) => ({ id: a.id, name: a.name, desc: a.desc, approval: a.approval }));
 }
-/** 维度里包含本类型的已发布指标 [推断]（只给名称和单位，不编造数值） */
-export function metricsOf(t: TypeBrief) {
-  return METRICS.filter((m) => m.status === '已发布' && m.dims.includes(t.name)).map((m) => ({ id: m.id, name: m.name, unit: m.unit }));
-}
+/** 相关指标（只给名称、单位和口径变体，不编造数值） */
+export const metricsOf = (t: TypeMeta): MetricMeta[] => t.metrics;
 
 /** 按属性格式显示值 */
 export function fmtVal(p: PropMeta | undefined, v: unknown): string {

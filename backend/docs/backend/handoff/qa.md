@@ -12,9 +12,9 @@
 **未完成 / 待别人**
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 静态 `GET /object-types/{id}/meta`、`/facets` | 等静态 | 前端已按设计形状对接，未上线时用 `/properties` + 默认标志，再不行用 mock；后端 E1 顺带的过渡 `facets` 在静态上线后删（`explore_api._facets`、`withFacets`） |
-| 属性标志默认规则 | [推断] | searchable = 主键 / 标题；filterable = 枚举 / 布尔 / 时间 / 非主键维度字符串；sortable = 数值 / 时间；listed 配额；后端 `flags()` 与前端 `metaFromProps` 两处要同步，静态给标志后两处都删 |
-| 指标 `variants`（口径） | 等静态 | 静态 `/metrics` 还没有该字段：真接口用 W17 选项，演示用 mock；字段上线后全部为空就隐藏口径框 |
+| 静态 meta / facets 带关键词 | 过渡 | 已接真 `/object-types/{id}/meta`（+`/properties` 合并）和 `/facets`（mock 只在后台不可达时读兜底，写不兜底）；静态 `/facets` 不收 kw，带关键词时用后端 E1 顺带的过渡 `facets`（`explore_api._facets`、`withFacets`）[推断]，静态支持 kw 后删 |
+| 属性标志 | 已接静态 | E1 `flags()` 读静态 property 列（searchable / sortable、filterable 用 `static.explorer.facetable`），与 meta / facets 同一套；静态 seed 里区间属性（store.opened_at、order.created_at）没开 filterable，所以页面上没有这两项筛选，要的话在静态 `explorer_meta.json` 打开；前端 `metaFromProps` 默认规则只在后台不可达的 mock 兜底用 |
+| 指标口径 | 已接静态 | 口径 = 对象 meta.metrics[].variants[].label 并集（静态按（不含税）/（含税）后缀推断）；真 meta 没有变体时用 W17 选项，后台不可达用 mock |
 | 行级范围 `GET /api/admin/v1/me/row-scopes` | 等本体小白 | 未上 master；返回形状按 `[{dimension?, values[]}]` 或 `{items}` 宽松解析 [推断]；拿不到时默认取预览范围或第一个选项 |
 | 后端 SessionCaliber | 限制 | 只收 不含税 / 含税；口径换成指标 variants 后要放开成自由文本（`schemas.py`）。新会话兜底口径为空时会 422 |
 | 会话 scope 值 | [推断] | 选项值是维度取值名（如“华东大区”），旧会话的“华东”按同义词归一显示，用户再改时 PATCH 成维度取值名；后台链路按自由文本用 |
@@ -57,7 +57,7 @@
 - 后端：`backend/app/modules/qa/{router,service,repo,schemas}.py` 对应实现，测试 `backend/tests/test_qa*.py`。最终检查（01:27，变基到 `740a554` 后，RENGU_TEST_DB=rengu_test_qa_joint）：pytest 408 passed / 1 skipped，ruff check + format、alembic check、`npm run build` 通过；页面单查（真后端：反问卡 → 追问条 → 追问、W17 范围下拉、T2 时间选项）无报错。
 
 ### 1.3 R5 问数调优 · 评测题库 / 反馈与纠错（qa-tuning）
-- **后端**：T11 `POST /tuning/eval/runs`（202，进程内 asyncio 后台任务 `app/modules/qa/eval/job.py`，复用 `chain.answer` 在只读回滚事务里逐题跑、按回答形状判分写 `qa_eval_fail` / `last_result`；真 qwen-flash 冒烟 2 题通过链路）；T15 `:to-synonym`（只做“词已被变更单覆盖”的关联分支，没覆盖 → 409 `CR_API_PENDING`）；T16 `:to-cert`（加同问法 / 新建并认证）；T17 `:ignore` / `:reopen`；T13 列表返回 T14 详情字段。规则与 [推断] 见 `qa-api.md` §7「联调实现」。无新依赖、无迁移。测试 `backend/tests/test_qa_tuning_eval.py`（FakeLLM / runner 打桩）。
+- **后端**：T11 `POST /tuning/eval/runs`（202，进程内 asyncio 后台任务 `app/modules/qa/eval/job.py`，复用 `chain.answer` 在只读回滚事务里逐题跑、按回答形状判分写 `qa_eval_fail` / `last_result`；真 qwen-flash 冒烟 2 题通过链路）；T15 `:to-synonym`（已覆盖 → 关联；没覆盖 → qa-pages 起调静态 X3 建 / 加入草稿变更单，target kind=knowledge）；T16 `:to-cert`（加同问法 / 新建并认证）；T17 `:ignore` / `:reopen`；T13 列表返回 T14 详情字段。规则与 [推断] 见 `qa-api.md` §7「联调实现」。无新依赖、无迁移。测试 `backend/tests/test_qa_tuning_eval.py`（FakeLLM / runner 打桩）。
 - **前端**：`EvalTab.vue`（T9 / T10 / T12，有运行中时 3 秒轮询）、`FeedbackTab.vue`（T13–T17）、`QaTuning.vue`（四个计数都取 T1、「运行评测」走 T11 并跳到新运行，未配 LLM 提示 503）；`src/api/qa.ts` 只追加了 `QaEvalRun` / `QaEvalRunDetail` / `QaFeedback` 等类型和 10 个函数。真接口模式下：转同义词遇到未覆盖的词提示「需要新建变更单…」，不弹发起变更窗；连不上后台仍回退 mock。
 
 ### 1.4 qa-tuning-fix（PDE 合并审意见，基线 master `e8d9c1a`）
@@ -84,8 +84,6 @@
 | R1 建议动作对象 | 部分 | 动作卡对象固定为客户群 `SEG-EC-60D`、参数是卡片文案；影响 / 预算 / 提交条件三行仍是前端文案（stage 无返回）[推断] | X1 `action-runs:stage`；`Workbench.vue` `runAction` |
 | R1 反问追问 | 部分 | 链路无多轮上下文，追问句由前端启发式拼接 [推断]；所选项不回写 `clarify.chosen` [推断] | `QaConversation.vue` `followUp` / `chosenOf` |
 | R1 第二期 | 未做 | 停止生成、加入常用 | W8 `:cancel`、W14 `POST /favorites` |
-| R5 问数调优 · T15 新建 / 加入变更单 | 部分（等 static-r3） | 词未被任何变更单覆盖时要调静态 X3 写接口建 / 加入变更单草稿，static-r3 未合入，后端返回 409 `CR_API_PENDING`、前端提示；接法：`router.py feedback_to_synonym` 里 `SynonymCrPending` 处改调 X3（格式见 `handoff/static.md`），再写 `qa_tuned_synonym` 并按“已覆盖”分支改同词反馈；前端 `FeedbackTab.vue toSynonym` 的 live 分支改为打开发起变更窗（mock 的 `onStartChange` 已有 UI） | `router.py`、`FeedbackTab.vue` |
-| T15 `CR_API_PENDING` 改接真接口 | 下一轮（PDE 定） | `static-r3` 合入后，把 409 `CR_API_PENDING` 分支改调 `POST /change-requests`，`target{kind:"knowledge"}`；查草稿时 `status=草稿`（传 `draft` 返回 422），用法见 `handoff/static.md` | `router.py feedback_to_synonym`、`FeedbackTab.vue` |
 | R5 · T11 后台任务 | 部分 | 进程内 asyncio，重启丢任务（运行停在「运行中」）；判分是启发式（`时间解析错误` 判不出）[推断]；每日 02:00 定时未接 | `eval/job.py`；接 procrastinate 时包 `_background` |
 | R2 我的页面与模板库 `/use/qa/pages` | 未开始，mock | 前端未接；后端只有读接口 P1 / P3 / P11 / P12，写接口 P2、P4–P10 未实现 | P1–P12；`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*` |
 | R3 对象搜索 `/use/objects/search` | 未开始，mock | 前端未接；后端只有 O1 类型列表，O2–O4 未实现 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
