@@ -21,7 +21,7 @@ import { usePreviewStore, firstAllowedPage } from '@/stores/preview';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { isApiError } from '@/api/http';
-import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadRolesState, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type RemoteRole } from '@/api/roles';
+import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadPermObjects, loadRolesState, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type PermObject, type RemoteRole } from '@/api/roles';
 import { ADMIN_USERS, paginate, EMPTY, type AdminUser } from '@/mock';
 import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, effectiveAccess, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
 
@@ -42,13 +42,17 @@ const allUsers = ref<AdminUser[]>(ADMIN_USERS);
 const remote = ref(rolesApiOn());
 /** true = 页面数据已来自后台；首次加载失败时显示演示数据，但写操作仍走接口（失败就报错） */
 const loaded = ref(false);
-/** 首次加载才允许回退 mock；已用后台数据后重拉失败就报错，不悄悄切到 mock */
-async function reload() {
+/** 权限对象清单：后台读本体（/roles/meta），读不到用 mock PERM_OBJECTS */
+const permObjects = ref<PermObject[]>(PERM_OBJECTS);
+/** 首次加载才允许回退 mock；已用后台数据后重拉失败、或写成功后重拉失败（afterWrite）就报错，不悄悄显示演示数据 */
+async function reload(afterWrite = false) {
   const st = await loadRolesState();
   if (!st) {
-    if (loaded.value) throw new Error('后台暂时连不上，数据未刷新，请稍后刷新页面');
+    if (loaded.value || afterWrite) throw new Error('后台暂时连不上，数据未刷新，请稍后刷新页面');
     return;
   }
+  const po = await loadPermObjects().catch(() => null);
+  if (po) permObjects.value = po;
   roles.value = st.roles;
   members.value = st.members;
   allUsers.value = st.users;
@@ -64,7 +68,7 @@ async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
     return undefined;
   }
   try {
-    await reload();
+    await reload(true);
   } catch (e) {
     message.warning(`已保存，刷新失败：${e instanceof Error ? e.message : '请稍后刷新页面'}`);
   }
@@ -80,9 +84,15 @@ const tab = computed({ get: () => q('tab') || 'func', set: (v: string) => setQue
 // 功能 / 对象权限草稿
 const draft = reactive<{ func: Record<string, FuncLevel>; objs: ObjPerm[] }>({ func: {}, objs: [] });
 const snap = ref('');
+/** 角色已有配置 + 本体里新增、角色还没配过的对象类型（默认不可查看），按权限对象清单排序 */
+const blankObj = (o: PermObject): ObjPerm => ({ objType: o.name, api: o.api, view: false, export: false, actions: [] });
+const fullObjs = (objs: ObjPerm[]): ObjPerm[] => [
+  ...permObjects.value.map((o) => objs.find((x) => x.objType === o.name) ?? blankObj(o)),
+  ...objs.filter((x) => !permObjects.value.some((o) => o.name === x.objType)),
+];
 const resetDraft = () => {
   draft.func = { ...role.value.func };
-  draft.objs = JSON.parse(JSON.stringify(role.value.objs));
+  draft.objs = JSON.parse(JSON.stringify(fullObjs(role.value.objs)));
   snap.value = JSON.stringify(draft);
 };
 watch(() => role.value.id, resetDraft, { immediate: true });
@@ -90,7 +100,8 @@ const dirty = computed(() => JSON.stringify(draft) !== snap.value);
 const guard = useUnsavedGuard(dirty);
 const changedCount = computed(() => {
   const f = FUNC_PAGES.filter((p) => draft.func[p.key] !== role.value.func[p.key]).length;
-  const o = draft.objs.filter((x, i) => JSON.stringify(x) !== JSON.stringify(role.value.objs[i])).length;
+  const base = fullObjs(role.value.objs);
+  const o = draft.objs.filter((x) => JSON.stringify(x) !== JSON.stringify(base.find((b) => b.objType === x.objType))).length;
   return { f, o };
 });
 async function saveDraft() {
@@ -118,7 +129,7 @@ const select = (id: string) => guard(() => setQuery({ role: id, form: undefined,
 const areas = computed(() => ['使用', '构建', '管理'].map((a) => ({ area: a, pages: FUNC_PAGES.filter((p) => p.area === a) })));
 const funcStat = (lv: FuncLevel) => FUNC_PAGES.filter((p) => draft.func[p.key] === lv).length;
 const LEVELS = [{ value: 'none', label: '无' }, { value: 'view', label: '查看' }, { value: 'manage', label: '管理' }];
-const objActions = (name: string) => PERM_OBJECTS.find((o) => o.name === name)?.actions ?? [];
+const objActions = (name: string) => permObjects.value.find((o) => o.name === name)?.actions ?? [];
 const ocols = [
   { title: '对象类型', key: 'obj', width: 200 },
   { title: '查看', key: 'view', width: 70, align: 'center' as const },
@@ -280,7 +291,21 @@ function copyRole() {
     message.success(`已复制为「${r.name}」，没有成员`);
   });
 }
+/** 删掉这个角色后就没有任何角色的人（成员 + 主角色是它的用户）；后台同一规则，有就 409 ROLE_IN_USE */
+const orphansOf = (r: Role): AdminUser[] => {
+  const ids = new Set([...members.value[r.id].map((u) => u.id), ...allUsers.value.filter((u) => u.role === r.name).map((u) => u.id)]);
+  const inOther = (id: string) => roles.value.some((x) => x.id !== r.id && (members.value[x.id] ?? []).some((m) => m.id === id));
+  return allUsers.value.filter((u) => ids.has(u.id) && !inOther(u.id));
+};
+/** 主角色（用户页显示）是被删角色的用户，改成剩下角色里编号最小的一个（与后台一致） */
+const nextPrimary = (u: AdminUser, r: Role) =>
+  [...roles.value].sort((a, b) => a.id.localeCompare(b.id)).find((x) => x.id !== r.id && (members.value[x.id] ?? []).some((m) => m.id === u.id))?.name ?? u.role;
 async function deleteRole() {
+  const orphans = orphansOf(role.value);
+  if (orphans.length) {
+    message.error(`有 ${orphans.length} 名成员只有这个角色（${orphans.slice(0, 3).map((u) => u.name).join('、')}${orphans.length > 3 ? ' 等' : ''}），请先给他们分配其他角色或移出成员后再删除`);
+    return;
+  }
   const n = members.value[role.value.id].length;
   const ok = await confirm.ask({
     title: '删除角色', target: `角色「${role.value.name}」`, okText: '删除', danger: true, irreversible: true,
@@ -292,7 +317,11 @@ async function deleteRole() {
   if (remote.value) {
     const id = role.value.id;
     if ((await call(() => apiDeleteRole(id))) === undefined) return;
-  } else roles.value = roles.value.filter((r) => r.id !== role.value.id);
+  } else {
+    const r = role.value;
+    allUsers.value = allUsers.value.map((u) => (u.role === r.name ? { ...u, role: nextPrimary(u, r) } : u));
+    roles.value = roles.value.filter((x) => x.id !== r.id);
+  }
   setQuery({ role: undefined, tab: undefined });
   message.success(`已删除角色：${name}`);
 }

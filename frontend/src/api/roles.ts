@@ -47,6 +47,21 @@ export async function loadRolesState(): Promise<RolesState | null> {
   }
 }
 
+export interface PermObject { name: string; api: string; actions: string[] }
+
+/** 权限对象清单（/roles/meta perm_objects：读本体对象类型 + 动作类型，本体为空时后台用 mock 清单兜底）。
+ * 只读：开关没切或后台没起来返回 null，页面继续用 mock PERM_OBJECTS。 */
+export async function loadPermObjects(): Promise<PermObject[] | null> {
+  if (!api.isReal()) return null;
+  try {
+    const m = await api.get<{ permObjects: PermObject[] }>('/roles/meta');
+    return m.permObjects?.length ? m.permObjects : null;
+  } catch (e) {
+    if (!isBackendDown(e)) throw e;
+    return null;
+  }
+}
+
 export const createRole = (b: { name: string; desc?: string; perms?: string[]; copyFrom?: string }) =>
   api.post<RemoteRole>('/roles', b);
 export const updateRole = (id: string, b: { name: string; desc: string; lockVersion?: number }) =>

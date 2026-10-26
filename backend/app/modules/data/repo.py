@@ -6,6 +6,7 @@ from sqlalchemy import Select, case, func, or_, select
 
 from app.common.pagination import PageParams
 from app.common.repository import BaseRepository
+from app.modules.admin.repo import lock_code_seq
 from app.modules.data.models import Datasource, DatasourceRun, DatasourceTable, DsType
 
 
@@ -41,6 +42,8 @@ class DatasourceRepo(BaseRepository[Datasource]):
         )
 
     async def max_code_no(self) -> int:
+        """DS-xxx 编号的最大数字。先加锁（事务内持有到提交），并发新建不撞号。"""
+        await lock_code_seq(self.session, "datasource")
         codes = (
             await self.session.scalars(select(Datasource.code).where(Datasource.code.like("DS-%")))
         ).all()

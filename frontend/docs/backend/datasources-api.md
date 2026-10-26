@@ -64,3 +64,7 @@ runs[{time,result,rows,secs,msg}], tableCount, createdAt, note, refOnly`）。**
 
 `datasource`、`datasource_run`（同步记录，seq 0 = 最新）、`datasource_table`（库表清单）；迁移 `data_0001`。
 枚举（类型 / 状态 / 同步模式 / 运行结果）库里存英文 code，接口输出中文。
+
+## 启动检查（xiaobai-r3）
+
+服务启动时 `check_secret_key()`：prod 或 `RENGU_DS_REAL_CONNECT=1` 下没配 `RENGU_DS_SECRET_KEY` 直接失败（error 日志 + `DS_SECRET_KEY_MISSING`），密钥格式不对 `DS_SECRET_KEY_INVALID`；dev/test 没配只 warning、用开发密钥。新建数据源取号前加 advisory 锁。

@@ -196,3 +196,61 @@ async def test_tenants_from_db(client, users):
     assert b[0]["label"] == "鲜邻零售集团 / 华东事业部" and b[0]["default"]
     assert b[0]["tenantId"] == "TN-XL-000317"
     assert sum(x["default"] for x in b) == 1
+
+
+async def test_delete_role_in_use_and_primary_reassign(client, users):
+    """删角色：有人只有这个角色 → 409 ROLE_IN_USE；都还有别的角色 → 删除，主角色改成剩下编号最小的角色。"""
+    assert (await client.post(URL, json={"name": "新角色乙"})).json()["id"] == "R-09"
+    body = {"name": "乙", "account": "yi@freshmart.cn", "dept": "华东事业部 / 运营中心", "role": "新角色乙"}
+    u = (await client.post("/api/admin/v1/users", json=body)).json()
+    assert (await client.post(f"{URL}/R-09/members", json={"userIds": [u["id"]]})).status_code == 200
+    r = await client.delete(f"{URL}/R-09")
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "ROLE_IN_USE"
+    assert r.json()["details"] == {"count": 1, "users": [{"id": u["id"], "name": "乙"}]}
+    assert (await client.get(f"{URL}/R-09")).status_code == 200  # 没删
+    assert (await client.post(f"{URL}/R-08/members", json={"userIds": [u["id"]]})).status_code == 200
+    assert (await client.post(f"{URL}/R-07/members", json={"userIds": [u["id"]]})).status_code == 200
+    r7 = (await client.get(f"{URL}/R-07")).json()["name"]
+    assert (await client.delete(f"{URL}/R-09")).status_code == 204
+    items = (await client.get("/api/admin/v1/users", params={"size": 200, "kw": "yi@freshmart.cn"})).json()[
+        "items"
+    ]
+    assert [x["role"] for x in items if x["id"] == u["id"]] == [r7]
+
+
+async def test_perm_objects_read_ontology(client, users, session):
+    """权限对象读本体对象类型（已发布，按 seq）；兜底清单里本体没有的接在后面；新对象能保存权限。"""
+    from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectStatus, ObjectType
+
+    def ot(code, api, name, seq, status=ObjectStatus.published):
+        return ObjectType(
+            code=f"t-{code}",
+            api_name=api,
+            display_name=name,
+            obj_group="交易",
+            status=status,
+            seq=seq,
+            conflict_strategy=ConflictStrategy.user_edit_wins,
+            lifecycle=Lifecycle.active,
+        )
+
+    session.add_all(
+        [
+            ot("o", "SalesOrder", "订单", 0),
+            ot("s", "Supplier", "供应商", 1),
+            ot("d", "DraftX", "草稿对象", 2, ObjectStatus.draft),
+        ]
+    )
+    await session.flush()
+    fallback = json.loads((SYS / "PERM_OBJECTS.json").read_text("utf-8"))
+    m = (await client.get(f"{URL}/meta")).json()
+    names = [o["name"] for o in m["permObjects"]]
+    assert names[:2] == ["订单", "供应商"] and "草稿对象" not in names
+    assert names[2:] == [o["name"] for o in fallback if o["name"] != "订单"]
+    assert m["objActions"]["订单"][: len(fallback[0]["actions"])] == fallback[0]["actions"]
+    assert m["objActions"]["供应商"] == []
+    obj = {"objType": "供应商", "api": "Supplier", "view": True, "export": False, "actions": []}
+    r = await client.put(f"{URL}/R-04/permissions", json={"func": ROLES[3]["func"], "objs": [obj]})
+    assert r.status_code == 200, r.text
+    assert [o for o in r.json()["objs"] if o["objType"] == "供应商"] == [obj]
