@@ -7,7 +7,7 @@
  * 历史版本只读：所有修改禁用并提示原因。
  * 未保存保护（公共 useUnsavedGuard）：卡片调整、刷新与订阅、共享有未保存改动时，关闭抽屉 / 切页签 / 离开页面先提醒。
  * 保存顺序时移除了卡片、保存共享时新增了可见人，走公共确认卡写明“将移除 N 张卡片”/“新增可见人：xx”。
- * 真接口（qaLive）：保存卡片 P8、刷新与订阅 P9、共享 P10，成功后用后台返回值更新并 emit changed（列表重载）；
+ * 真接口（开关 qa，写操作不看后台是否判定未启动，失败只报错不回退）：保存卡片 P8、刷新与订阅 P9、共享 P10，成功后用后台返回值更新并 emit changed（列表重载）；
  * 后台判定未启动则照旧改本地演示数据。
  */
 import { computed, ref, watch } from 'vue';
@@ -19,16 +19,16 @@ import { useConfirmStore } from '@/stores/confirm';
 import CardPreview from './CardPreview.vue';
 import InfoTip from '../InfoTip.vue';
 import * as pagesApi from '@/api/qaPages';
-import { qaLive, qaFallBackIfDown } from '../qaFallback';
-import { errText } from '../useQaSession';
+import { qaWriteReal, qaWriteFail } from '../qaFallback';
 import { PEOPLE, PAGE_SCOPES, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
 
 const props = defineProps<{ page?: QaPageFull; tab: string; readonly: boolean; reason: string }>();
 const emit = defineEmits<{ close: []; 'update:tab': [string]; refresh: [QaPageFull]; rename: [QaPageFull, string]; remove: [QaPageFull]; changed: [QaPageFull] }>();
-/** 真接口写：成功返回结果；后台未启动返回 null（走演示逻辑）；其他错误提示并返回 undefined */
+/** 真接口写：开关为假（纯演示）返回 null（走演示逻辑）；开关为真时调真接口，成功返回结果，
+ *  失败（含后台未启动）只提示并返回 undefined——写操作不回退、不改演示数据、不触发整页回退 */
 async function liveCall<T>(fn: () => Promise<T>, what: string): Promise<T | null | undefined> {
-  if (!qaLive.value) return null;
-  try { return await fn(); } catch (e) { if (qaFallBackIfDown(e)) return null; message.error(`${what}失败：${errText(e)}`); return undefined; }
+  if (!qaWriteReal.value) return null;
+  try { return await fn(); } catch (e) { qaWriteFail(what, e); return undefined; }
 }
 
 /* 预览 */

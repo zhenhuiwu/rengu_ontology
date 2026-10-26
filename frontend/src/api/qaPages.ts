@@ -14,17 +14,20 @@ export const listPages = (q: PageListQ) => api.get<PageList>('/pages', { query: 
 /** P3 页面详情 */
 export const getPage = (id: string) => api.get<QaPageFull>(`/pages/${id}`);
 /** P2 新建（空白 / 用模板）；template.refresh 是模板气泡里选的计划 */
-export interface PageCreate { name: string; scope: string; template?: { id: string; caliber?: string; refresh?: Omit<RefreshPlan, 'onFail'> & { onFail?: RefreshPlan['onFail'] } } }
+export interface PageCreate { name: string; scope?: string; template?: { id: string; caliber?: string; refresh?: Omit<RefreshPlan, 'onFail'> & { onFail?: RefreshPlan['onFail'] } } }
 export const createPage = (b: PageCreate) => api.post<QaPageFull>('/pages', b);
 /** P4 重命名 */
 export const renamePage = (id: string, name: string) => api.patch<QaPageFull>(`/pages/${id}`, { name });
 /** P5 删除 */
 export const deletePage = (id: string) => api.delete<void>(`/pages/${id}`);
 /** P6 立即刷新 */
-export interface RefreshResult { id: string; status: QaPageFull['status']; statusNote?: string; lastRefresh: string; dataAsOf: string }
+export interface RefreshResult { status: QaPageFull['status']; statusNote?: string; lastRefresh: string; dataAsOf: string }
 export const refreshPage = (id: string) => api.post<RefreshResult>(`/pages/${id}:refresh`);
 /** P7 固定到页面（工作台） */
 export const pinToPage = (id: string, b: { turnId: string; title: string; tableId?: string; chartId?: string }) => api.post<QaPageFull>(`/pages/${id}/cards`, b);
+/** P7 卡片标题上限（PinIn.title max_length=60，按字符计）：超长截断，末位换成省略号 */
+export const PIN_TITLE_MAX = 60;
+export const pinTitle = (s: string) => { const c = [...s.trim()]; return c.length <= PIN_TITLE_MAX ? c.join('') : `${c.slice(0, PIN_TITLE_MAX - 1).join('')}…`; };
 /** P8 调整卡片（顺序 + 移除） */
 export const saveCardOrder = (id: string, order: string[]) => api.put<{ cards: PageCard[]; removed: string[] }>(`/pages/${id}/cards`, { order });
 /** P9 刷新与订阅 */

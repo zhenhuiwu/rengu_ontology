@@ -423,6 +423,8 @@ def card_from_turn(t: QaTurn, title: str) -> dict[str, Any]:
     summary="P7 固定到页面",
 )
 async def pin_card(pid: str, body: PinIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    if not body.title.strip():
+        raise EmptyInput("卡片标题不能为空", details={"field": "title"})
     pk, p = await _load(session, user, ctx, pid, "edit")
     t = await session.scalar(
         select(QaTurn)

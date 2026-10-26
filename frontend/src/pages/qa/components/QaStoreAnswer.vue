@@ -10,7 +10,7 @@ import { ApartmentOutlined, DownloadOutlined } from '@ant-design/icons-vue';
 import { QA_EC_STORES, fmtMoney, fmtInt, type QaDemoStoreCard, type QaStoreRow } from '@/mock';
 import * as qaApi from '@/api/qa';
 import { errText } from '../useQaSession';
-import { qaLive, qaFallBackIfDown } from '../qaFallback';
+import { qaLive, qaFallBackIfDown, qaWriteReal, qaWriteFail } from '../qaFallback';
 import { useQueryPage } from '../useQueryParam';
 import AppPagination from '@/components/AppPagination.vue';
 
@@ -57,9 +57,11 @@ const pageRows = computed(() => {
 });
 const exporting = ref(false);
 async function onExport() {
-  if (!tid.value) { message.info(`已导出 ${rowCount.value} 行（${props.card.exportFile}）`); return; }
+  // 导出算写操作：开关为真时必须调 W13，失败只报错，不假装导出成功
+  if (!qaWriteReal.value) { message.info(`已导出 ${rowCount.value} 行（${props.card.exportFile}）`); return; }
+  if (!props.turnId) { message.error('导出失败：后台未启动，没有导出'); return; }
   exporting.value = true;
-  try { const name = await qaApi.exportTurn(tid.value, 'xlsx'); message.info(`已导出 ${rowCount.value} 行（${name}）`); } catch (e) { if (qaFallBackIfDown(e)) message.info(`已导出 ${QA_EC_STORES.length} 行（${props.card.exportFile}）`); else message.error(`导出失败：${errText(e)}`); } finally { exporting.value = false; }
+  try { const name = await qaApi.exportTurn(props.turnId, 'xlsx'); message.info(`已导出 ${rowCount.value} 行（${name}）`); } catch (e) { qaWriteFail('导出', e); } finally { exporting.value = false; }
 }
 const pageModel = computed({ get: () => current.value, set: (p: number) => { page.value = p; } });
 </script>

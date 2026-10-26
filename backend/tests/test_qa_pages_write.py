@@ -108,6 +108,8 @@ async def test_pin_card_from_turn(qa):
     bad = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-02", "title": "x"})
     assert bad.status_code == 422 and bad.json()["code"] == "TURN_NOT_PINNABLE"
     assert (await qa.post(f"{B}/pages/P002/cards", json={"turnId": "NOPE", "title": "x"})).status_code == 404
+    blank = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-04", "title": "   "})
+    assert blank.status_code == 409 and blank.json()["code"] == "EMPTY_INPUT"
 
 
 async def test_reorder_and_remove_cards(qa):

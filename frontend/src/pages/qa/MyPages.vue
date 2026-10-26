@@ -7,7 +7,7 @@
  *  模板：预览抽屉（?tpl=T001）+ “用此模板新建”气泡
  * 问数工作台“固定到页面”的页面（华东大区销售周报、门店履约看板……）就是这里的前 13 个页面（同一份 QA_PAGE_LIST）。
  * 真接口（开关 qa 且后台可用，qaLive）：列表 P1、详情 P3、新建 P2、重命名 P4、删除 P5、刷新 P6、模板库 P11（src/api/qaPages.ts）；
- * 后台判定未启动后整页回退演示数据，写操作也改走演示逻辑（同 qaFallback.ts / 回答卡 b515d3f）。
+ * 后台判定未启动后读接口整页回退演示数据；写操作不回退：开关为真时一律调真接口，失败只报错、不改演示数据（qaWriteReal / qaWriteFail，见 qaFallback.ts）。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -24,7 +24,7 @@ import TemplateDrawer from './pages/TemplateDrawer.vue';
 import UseTemplatePop from './pages/UseTemplatePop.vue';
 import * as pagesApi from '@/api/qaPages';
 import type { PageResult } from '@/api/http';
-import { qaLive, qaFallBackIfDown } from './qaFallback';
+import { qaLive, qaFallBackIfDown, qaWriteReal, qaWriteFail } from './qaFallback';
 import { errText } from './useQaSession';
 
 const route = useRoute();
@@ -84,10 +84,10 @@ async function loadCur() {
   try { const r = await pagesApi.getPage(id); if (my === cseq) live.cur = r; } catch (e) { if (my === cseq) { live.cur = null; if (!qaFallBackIfDown(e)) message.error(`页面加载失败：${errText(e)}`); } }
 }
 watch([qaLive, () => q('page_id'), () => pv.userName.value], loadCur, { immediate: true });
-/** 写操作：成功返回结果；后台未启动返回 DOWN（调用方改走演示逻辑）；其他错误提示后返回 undefined */
-const DOWN = Symbol('down');
-async function call<T>(fn: () => Promise<T>, what: string): Promise<T | typeof DOWN | undefined> {
-  try { return await fn(); } catch (e) { if (qaFallBackIfDown(e)) return DOWN; message.error(`${what}失败：${errText(e)}`); return undefined; }
+/** 写操作（开关 qa 为真时，不看后台是否判定未启动）：成功返回结果；失败（含后台未启动）只提示并返回 undefined。
+ *  写操作不回退：不改演示数据、不假装成功、不走 qaFallBackIfDown（不把整页切到演示数据） */
+async function call<T>(fn: () => Promise<T>, what: string): Promise<T | undefined> {
+  try { return await fn(); } catch (e) { qaWriteFail(what, e); return undefined; }
 }
 /** 列表行和抽屉里的同一页面一起更新 */
 function patchLive(id: string, patch: Partial<QaPageFull>) {
@@ -121,16 +121,13 @@ const ptab = computed({ get: () => q('ptab') || 'preview', set: (v: string) => s
 /* 动作 */
 const NOW = '2026-10-25 17:10';
 async function refresh(p0: QaPageFull) {
-  let p: QaPageFull | undefined = p0;
-  if (qaLive.value) {
+  if (qaWriteReal.value) {
     const r = await call(() => pagesApi.refreshPage(p0.id), '刷新');
     if (r === undefined) return;
-    if (r !== DOWN) {
-      patchLive(p0.id, { status: r.status, statusNote: r.statusNote, lastRefresh: r.lastRefresh, dataAsOf: r.dataAsOf });
-      message.success(`已刷新「${p0.name}」，数据截至 ${r.dataAsOf}`); return;
-    }
-    p = mockOf(p0); if (!p) return;
+    patchLive(p0.id, { status: r.status, statusNote: r.statusNote, lastRefresh: r.lastRefresh, dataAsOf: r.dataAsOf });
+    message.success(`已刷新「${p0.name}」，数据截至 ${r.dataAsOf}`); return;
   }
+  const p = mockOf(p0); if (!p) return;
   p.lastRefresh = NOW; p.dataAsOf = PAGES_CUTOFF;
   if (p.status === '刷新失败') { p.status = p.cards.some((c) => c.pending) ? '口径待更新' : '正常'; p.statusNote = p.cards.find((c) => c.pending)?.pending; }
   message.success(`已刷新「${p.name}」，数据截至 ${PAGES_CUTOFF}`);
@@ -139,13 +136,12 @@ const renameId = ref<string>();
 const renameVal = ref('');
 function openRename(p: QaPageFull) { renameId.value = p.id; renameVal.value = p.name; }
 async function rename(p0: QaPageFull, name: string) {
-  let p: QaPageFull | undefined = p0;
-  if (qaLive.value) {
+  if (qaWriteReal.value) {
     const r = await call(() => pagesApi.renamePage(p0.id, name), '重命名');
     if (r === undefined) return;
-    if (r !== DOWN) { const old = p0.name; patchLive(p0.id, { name: r.name, updatedAt: r.updatedAt }); renameId.value = undefined; message.success(`已将「${old}」重命名为「${r.name}」`); return; }
-    p = mockOf(p0); if (!p) return;
+    const old = p0.name; patchLive(p0.id, { name: r.name, updatedAt: r.updatedAt }); renameId.value = undefined; message.success(`已将「${old}」重命名为「${r.name}」`); return;
   }
+  const p = mockOf(p0); if (!p) return;
   if (pages.some((x) => x.id !== p.id && x.name === name)) { message.warning(`已有同名页面「${name}」`); return; }
   const old = p.name; p.name = name; renameId.value = undefined; message.success(`已将「${old}」重命名为「${name}」`);
 }
@@ -158,10 +154,10 @@ async function remove(p: QaPageFull) {
     irreversible: true,
   });
   if (!ok) return;
-  if (qaLive.value) {
+  if (qaWriteReal.value) {
     const r = await call(() => pagesApi.deletePage(p.id).then(() => true), '删除');
     if (r === undefined) return;
-    if (r !== DOWN) { if (q('page_id') === p.id) closePage(); message.success(`已删除「${p.name}」`); await loadList(); return; }
+    if (q('page_id') === p.id) closePage(); message.success(`已删除「${p.name}」`); await loadList(); return;
   }
   const i = pages.findIndex((x) => x.id === p.id); if (i >= 0) pages.splice(i, 1);
   if (q('page_id') === p.id) closePage();
@@ -174,10 +170,10 @@ const newOpen = ref(!!q('newName'));
 const newName = ref(q('newName'));
 const newScope = ref('华东大区');
 async function createBlank() {
-  if (qaLive.value) {
+  if (qaWriteReal.value) {
     const r = await call(() => pagesApi.createPage({ name: newName.value.trim(), scope: newScope.value }), '新建页面');
     if (r === undefined) return;
-    if (r !== DOWN) { newOpen.value = false; newName.value = ''; message.success('已新建空白页面，可在问数工作台把回答卡片固定到这里'); await loadList(); return; }
+    newOpen.value = false; newName.value = ''; message.success('已新建空白页面，可在问数工作台把回答卡片固定到这里'); await loadList(); return;
   }
   const id = nextId();
   pages.unshift({ id, name: newName.value.trim(), owner: '王敏', scope: newScope.value, sourceKind: '手动新建', source: '手动新建', cards: [], dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,
@@ -215,10 +211,10 @@ const tcols = [
 const tplCur = computed(() => (qaLive.value ? live.tpls?.items.find((t) => t.id === q('tpl')) : undefined) ?? PAGE_TEMPLATES.find((t) => t.id === q('tpl')));
 const openTpl = (t: QaTemplate) => setQuery({ tpl: t.id, page_id: undefined, ptab: undefined });
 async function fromTemplate(e: TplCreate) {
-  if (qaLive.value) {
+  if (qaWriteReal.value) {
     const r = await call(() => pagesApi.createPage({ name: e.name, scope: e.scope, template: { id: e.tpl.id, caliber: e.caliber, refresh: pagesApi.planOf(e.refresh) } }), '用模板新建');
     if (r === undefined) return;
-    if (r !== DOWN) { router.replace({ query: { tab: undefined, page_id: r.id } }); message.success(`已用模板「${e.tpl.name}」新建「${r.name}」`); await loadList(); return; }
+    router.replace({ query: { tab: undefined, page_id: r.id } }); message.success(`已用模板「${e.tpl.name}」新建「${r.name}」`); await loadList(); return;
   }
   const id = nextId();
   const refresh: RefreshPlan = e.refresh.startsWith('每小时') ? { freq: '每小时', time: '整点', onFail: '保留上次结果' } : e.refresh.startsWith('每周') ? { freq: '每周', weekday: '周一', time: '08:00', onFail: '保留上次结果' } : e.refresh.startsWith('手动') ? { freq: '手动', time: '--', onFail: '保留上次结果' } : { freq: '每天', time: '08:00', onFail: '保留上次结果' };

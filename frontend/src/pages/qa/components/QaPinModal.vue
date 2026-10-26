@@ -1,14 +1,15 @@
 <script setup lang="ts">
 /**
  * “固定到页面”小弹窗：选已有页面（下拉可搜索）或新建页面。状态 ?pin=1
- * 真接口（qaLive 且带 turnId）：下拉走 P1 brief，固定走 P7；新建页面先 P2 再 P7。没有 turnId 或后台未启动时照旧演示。
+ * 真接口（qaLive 且带 turnId）：下拉走 P1 brief，固定走 P7；新建页面先 P2 再 P7。
+ * 固定是写操作：开关 qa 为真时一律调真接口，没有 turnId（演示卡）或失败（含后台未启动）只报错，不假装固定成功；开关为假才演示。
  */
 import { ref, computed, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { QA_PAGE_LIST } from '@/mock';
 import { listPagesBrief } from '@/api/qa';
 import * as pagesApi from '@/api/qaPages';
-import { qaLive, qaFallBackIfDown } from '../qaFallback';
+import { qaLive, qaFallBackIfDown, qaWriteReal, qaWriteFail } from '../qaFallback';
 import { errText } from '../useQaSession';
 
 const props = defineProps<{ open: boolean; card: string; turnId?: string }>();
@@ -32,14 +33,22 @@ watch(() => [props.open, live.value] as const, async ([o, l]) => {
 }, { immediate: true });
 async function submit() {
   const name = mode.value === 'exist' ? list.value.find((p) => p.id === pageId.value)?.name ?? '' : newName.value.trim();
-  if (live.value && props.turnId) {
+  if (qaWriteReal.value) {
+    if (!props.turnId) { message.error('固定失败：后台未启动，操作没有保存'); return; }
     busy.value = true;
     try {
-      const pid = mode.value === 'exist' ? pageId.value : (await pagesApi.createPage({ name, scope: '华东大区' })).id;
-      await pagesApi.pinToPage(pid, { turnId: props.turnId, title: props.card });
+      // 新建页面：先 P2 再 P7；P7 失败时删掉刚建的空页面，避免留下空页、重试撞同名 409。范围不写死，交给后台默认 [推断]
+      const created = mode.value === 'new' ? (await pagesApi.createPage({ name })).id : undefined;
+      const pid = created ?? pageId.value;
+      try {
+        await pagesApi.pinToPage(pid, { turnId: props.turnId, title: pagesApi.pinTitle(props.card) });
+      } catch (e) {
+        if (created) await pagesApi.deletePage(created).catch(() => undefined);
+        throw e;
+      }
       livePages.value = null;
     } catch (e) {
-      if (!qaFallBackIfDown(e)) { message.error(`固定失败：${errText(e)}`); return; }
+      qaWriteFail('固定', e); return;
     } finally { busy.value = false; }
   }
   emit('done', name);
