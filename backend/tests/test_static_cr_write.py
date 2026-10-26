@@ -424,3 +424,39 @@ async def test_readonly_and_unauth(client, seeded):
     assert r.status_code == 403 and r.json()["code"] == "READONLY"
     r = await client.post(f"{P}/change-requests", json={"title": "a"}, headers={"X-Demo-As": "U999999"})
     assert r.status_code == 401
+
+
+async def test_qa_feedback_to_synonym_knowledge_target(client, seeded):
+    """qa T15 转同义词：建单直接以业务知识为目标，同义词作为 synonyms 段的一行 add；新词用 isNew。"""
+    d = await create(
+        client, title="补同义词：复购", target={"kind": "knowledge", "id": "K-001", "name": "复购率"}
+    )
+    assert d["status"] == "草稿" and d["targets"] == [
+        {"kind": "knowledge", "id": "K-001", "isNew": False, "name": "复购率"}
+    ]
+    r = await put(
+        client,
+        d["id"],
+        {"kind": "knowledge", "id": "K-001"},
+        "synonyms",
+        [{"key": "回头率", "op": "add", "after": "回头率"}],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["changes"] == 1
+    # 新词：目标 isNew，加入已有草稿
+    r = await client.post(
+        f"{P}/change-requests/{d['id']}/targets",
+        json={"kind": "knowledge", "id": "K-NEW1", "isNew": True},
+        headers=LIU,
+    )
+    assert r.status_code == 200, r.text
+    # 别的单子已占用的词（CR-0011 持有 K-018）→ 409，qa 可据 details.crId 改为加入
+    r = await client.post(
+        f"{P}/change-requests",
+        json={"title": "x", "target": {"kind": "knowledge", "id": "K-018"}},
+        headers=LIU,
+    )
+    assert r.status_code == 409 and r.json()["code"] == "TARGET_IN_OTHER_CR"
+    assert r.json()["details"]["crId"] == "CR-0011"
+    # 下拉用中文状态
+    assert (await client.get(f"{P}/change-requests?status=草稿", headers=LIU)).status_code == 200

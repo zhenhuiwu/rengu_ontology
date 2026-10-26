@@ -1,6 +1,6 @@
 # 静态本体交接（static-integ2 → static-r3）
 
-负责人：静态本体负责人。分支：`static-integ`（变基在 pde-integ `215819d` 上）→ `static-integ2`（叠在上面）→ `static-r3`（从 master `bb47a5c` 起，只做变更单写接口）。
+负责人：静态本体负责人。分支：`static-integ`（变基在 pde-integ `215819d` 上）→ `static-integ2`（叠在上面）→ `static-r3`（变基到 master `48a7094`，只做变更单写接口）。
 接口设计细节见 `docs/backend/static-api.md`；本文件只写做到哪、代码在哪、怎么接着做。
 标注沿用 static-api.md：**[推断]** = 前端没有限制或没有体现，按页面行为推出来的。
 
@@ -54,6 +54,7 @@
 - **提交审核** `:submit` 现有规则不变（改动 0 → `CR_EMPTY`、阻断 → `CR_BLOCKED`），另加：`reviewer` 为空 → 409 `CR_NO_REVIEWER`。新建时不传 `reviewer` 默认取本体管理员（演示身份王敏）；当前用户就是王敏时留空，需 PATCH 指定 [推断]。
 - **校验** `:validate` 同步完成（static-api.md 原写异步 `jobId`，改同步 [推断]）。规则（初版，按 cr_item 推）：V7 非新建目标在 `properties|links` 段 `op=delete` → 阻断；V11 `after` 里 `desc|definition|description` 为空串 → 警告；V15 级别重大且没写迁移方式 → 警告；V12 信息（改动数、涉及定义数）；没有对应种类目标的项给「不适用」（V3/V13 关系、V8 指标、V4/V10 维度、V16 对象）；其余通过。种子单子取「种子结果与计算结果」里更严重的一档（不会把 mock 里的阻断洗掉）。
 - 草稿 → 审核中后所有写接口返回 `CR_LOCKED`；驳回后 `:reopen` 回草稿即可继续写。
+- **问数 T15 转同义词（qa → X3）**：新建 `POST /change-requests {title, reason, target:{kind:"knowledge", id:"K-018", name?, isNew?}}`（新词 `isNew:true`、id 由调用方给）或加入 `POST /change-requests/{id}/targets`，再 `PUT items {target, section:"synonyms", rows:[{key:"<同义词>", op:"add", after:"<同义词>"}]}`；词已在别的单子里时 409 `TARGET_IN_OTHER_CR`，按 `details.crId` 改为关联 / 加入；草稿下拉 `GET /change-requests?status=草稿`（中文状态，qa-api.md X3 写的 `status=draft` 会 422）。测试 `test_qa_feedback_to_synonym_knowledge_target`。
 - 删除草稿单（已有 `DELETE /change-requests/{id}`）连同 cr_target / cr_item / cr_check 级联删除。
 - 发布时 `build_section` 还没按 cr_item 展开（见「未完成」），cr_item 目前只用于草稿保存、改动列表、校验和合并校验。
 - 种子单子的种子校验结果第一次 `:validate` 时存成 cr_check `target_db='seed'` 行（只存非通过的），以后每次与计算结果取更严重的一档；计算结果是 `target_db=''` 行，每次整单重写 [推断]。
@@ -76,7 +77,7 @@
 - **变更与发布（Releases.vue）**：真接口模式下载入变更单列表和详情；6 个动作、删除草稿、发布、回滚都写库，成功后重新载入，失败弹错误提示、页面不变；发布 / 回滚后按 `/releases/current` 刷新顶栏版本号。
 
 **static-r3：变更单写接口**（契约见上节，`8b0a27e` 先提交）
-- 后台：迁移 `static_0003`（down = `admin_0002`）建 `cr_target`（种子 = mock DRAFT_TARGETS）、`cr_item`、`cr_check`、`cr_impact`、`cr_trial`（后两张只建表）；`cr_write.py` `CrWriteService`；`crs.py` 详情加 `targets` / `lockVersion`、`detail.diffs` 合入 cr_item 行、`:submit` 加 `CR_NO_REVIEWER`；路由 9 个（上表）。
+- 后台：迁移 `static_0003`（down = `qa_0003`）建 `cr_target`（种子 = mock DRAFT_TARGETS）、`cr_item`、`cr_check`、`cr_impact`、`cr_trial`（后两张只建表）；`cr_write.py` `CrWriteService`；`crs.py` 详情加 `targets` / `lockVersion`、`detail.diffs` 合入 cr_item 行、`:submit` 加 `CR_NO_REVIEWER`；路由 9 个（上表）。
 - 前端：`src/api/static.ts` 加 9 个接口函数和 `crStart` / `crSave` / `crSubmit` / `crDiscard`；新文件 `src/pages/ontology/parts/useStaticCr.ts`；5 个定义页 real 模式下“发起变更 / 加入”“保存到草稿”“停用”“提交审核”“放弃草稿”先写库再改页面（失败弹错、页面不变），mock 模式行为不变、不发请求：
   - 对象类型：发起 / 加入、新增属性（`properties` 段，key = API 名）；
   - 关系类型：发起 / 加入（含新建关系 `isNew`）、定义（`def` 段，一个字段一行）；
@@ -165,7 +166,7 @@
 
 ## 给 PDE（static-r3 合并时注意）
 
-- 迁移 `static_0003` 的 `down_revision = "admin_0002"`（master `bb47a5c` 时的单 head）；若合并前 head 变了，改这一行即可，revision 名不改。
+- 迁移 `static_0003` 的 `down_revision = "qa_0003"`（master `48a7094` 时的单 head）；若合并前 head 变了，改这一行即可，revision 名不改。
 - 动了 PDE 的共用文件：`src/pages/ontology/parts/useDraftView.ts` 只**新增**导出 `forgetTarget(cr, kind, id)`（放弃草稿后从登记表删目标），没改已有函数。
 - 需要 PDE 改的共用文件（我没动）：`StartChangeModal` 把“变更说明”随 `confirm` 发出来；`useDraftView` 加从服务器同步登记表的入口、`DRAFTS` 变 reactive（见未完成第 9 条）；OntologyOverview.vue 按指示没碰。
 - `require_func` 是桩，写接口暂用 `releases:manage`；权限落地时改成目标页功能码。
