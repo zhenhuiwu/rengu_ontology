@@ -391,6 +391,12 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 
 选接收人和成员用 `GET /api/admin/v1/users?kw`（第 8 节 X5）。
 
+**联调实现（qa-pages，`pages_api.py`）**：P2、P4–P10 已实现（P1 / P3 / P11 / P12 原有），测试 `tests/test_qa_pages_write.py`。
+- P1 排序：`created_at` 倒序；dev/test 时钟固定时新建页与种子同一时刻，规则改为「非种子在前、后建的在前，种子按编号」（`repo.py PageRepo` 的 order_by，共用文件，只改这一处）。
+- P2 新页编号接着最大编号（`P906` 起）；`dataAsOf` 取种子截止时间（同 mock `PAGES_CUTOFF`，2026-10-24 23:00）。
+- P7 只接受本人会话里的 `turnId`，卡片冻结这一轮的 `metric@version` 和语义计划。
+- P10 成员按姓名映射 `sys_user`（同名取编号最小 [推断]），查不到返回 422 `USER_NOT_FOUND`（`details.names`）。**缺口**：前端 `PEOPLE` 里大部分候选人不在 `sys_user`，选了就 422，需要 admin 在 `seeds/extra/system/SYS_USERS.json` 补人（qa 不改该文件）。
+
 ---
 
 ## 5. R3 对象搜索 `/use/objects/search`
