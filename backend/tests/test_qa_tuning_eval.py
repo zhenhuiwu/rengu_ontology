@@ -171,3 +171,66 @@ async def test_ignore_reopen(qa):
 async def test_writes_readonly_under_ver(qa):
     r = await qa.post(f"{B}/feedbacks/FB-247:ignore", params={"ver": "v2026.10.2"})
     assert r.status_code == 403 and r.json()["code"] == "READONLY"
+
+
+async def test_run_code_serialized_across_transactions(engine):
+    """两个事务同时取 ER- 号：后到的被咨询锁挡住，等前一个结束才读最大号，不会撞号。"""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core import clock
+    from app.modules.qa.models import RunStatus
+    from app.modules.qa.router import next_run_code
+
+    async with engine.connect() as ca, engine.connect() as cb:
+        await ca.begin()
+        await cb.begin()
+        sa_, sb = AsyncSession(bind=ca), AsyncSession(bind=cb)
+        code_a = await next_run_code(sa_)
+        sa_.add(
+            QaEvalRun(
+                code=code_a,
+                run_at=clock.now(),
+                trigger_label="手动运行",
+                version_label="v",
+                scope="s",
+                total=0,
+                passed=0,
+                status=RunStatus.running,
+                operator="t",
+            )
+        )
+        await sa_.flush()
+        tb = asyncio.create_task(next_run_code(sb))
+        await asyncio.sleep(0.3)
+        assert not tb.done()  # 被 A 的事务锁挡住
+        await ca.commit()  # A 提交（释放锁）后 B 读到 A 的号
+        try:
+            code_b = await asyncio.wait_for(tb, 5)
+            assert int(code_b[3:]) == int(code_a[3:]) + 1
+        finally:
+            await sb.rollback()
+            async with engine.begin() as c:  # 清掉 A 提交的行
+                await c.execute(QaEvalRun.__table__.delete().where(QaEvalRun.code == code_a))
+
+
+async def test_reopen_after_to_cert_removes_variant(qa):
+    items = (await qa.get(f"{B}/feedbacks", params={"status": "待处理", "size": 50})).json()["items"]
+    for f in items:
+        if f["certBlock"]:
+            continue
+        r = await qa.post(f"{B}/feedbacks/{f['id']}:to-cert")
+        assert r.status_code == 200, r.text
+        cid = r.json()["certId"]
+        if f["question"] in (await qa.get(f"{B}/certs/{cid}")).json()["variants"]:
+            break
+    else:
+        pytest.skip("seed 里没有能加同问法的待处理反馈")
+    r = await qa.post(f"{B}/feedbacks/{f['id']}:reopen")
+    assert r.status_code == 200 and r.json()["status"] == "待处理" and "resolvedBy" not in r.json()
+    c = (await qa.get(f"{B}/certs/{cid}")).json()
+    assert f["question"] not in c["variants"]  # 撤销了加上的同问法；认证问答本身保留 [推断]
+    # 再转一次能重新加上
+    assert (await qa.post(f"{B}/feedbacks/{f['id']}:to-cert")).json()["certId"] == cid
+    assert f["question"] in (await qa.get(f"{B}/certs/{cid}")).json()["variants"]

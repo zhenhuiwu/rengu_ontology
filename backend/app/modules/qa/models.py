@@ -568,6 +568,11 @@ class QaFeedback(CodeMixin, MutableTableMixin, Base):
     status: Mapped[FbStatus] = mapped_column(enum_column(FbStatus, 16), nullable=False)
     cr_code: Mapped[str | None] = mapped_column(String(32))
     cert_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("qa_cert.id"))
+    cert_variant_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("qa_cert_variant.id", ondelete="SET NULL"),
+        comment="T16 转认证问答时加上的同问法（T17 重开时撤销）",
+    )
     handler: Mapped[str | None] = mapped_column(String(64), comment="处理人软引用")
     resolved_by: Mapped[str | None] = mapped_column(String(32), comment="CR 编号软引用（不是人）")
 
