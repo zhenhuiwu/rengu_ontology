@@ -30,13 +30,13 @@
 | 页面操作 / 功能 | 现状 | 原因 / 归属 / 依赖 |
 |---|---|---|
 | 动作类型的执行记录抽屉（`drawer.open('action', id)`） | 读 mock | **卡住**：抽屉解析在公共文件 `src/components/actionEventResolvers.ts`（不归我）。动态的 `GET /action-runs/{id}` 已有，需抽屉归属方改解析器 |
-| 事件抽屉 `drawer.open('event', id)` / `GET /events/{id}` | 读 mock | 同上（公共抽屉）；另外逐订阅方投递要 `event_delivery` 表，没建 |
+| 事件抽屉 `drawer.open('event', id)` / `GET /events/{id}` | 读 mock | 核对过（palantir-r3）：mock 没有逐订阅方的投递明细，抽屉只用事件本身的字段（`subscribers` 个数、`outcome`、`latencyMs`、`dedupKey`、`summary`），时间线文字按 `outcome` 拼。按“前端为准”**不建 `event_delivery`**，等页面要显示逐订阅方投递时再建。现有 `event` 表已有抽屉要的全部字段；接法同动作抽屉：请 `src/components/actionEventResolvers.ts` 的归属方（PDE）改读 `GET /events/{id}`，这个接口我可以按抽屉字段补 |
 | `event_delivery`、`event_dedup` 表 | 没建 | 我负责；近期事件 / 健康已用 `event` 表直接算 |
 | 打开开关 `VITE_PALANTIR_CR_WRITE` | 前置条件都做了、本地联调已走通（palantir-r3），提交的代码里仍默认关 | 是否默认打开由 PDE / 用户定；打开时本地设 `VITE_PALANTIR_CR_WRITE=1` + `VITE_API_REAL_MODULES=action,static`（不提交） |
 | 放弃后留下空变更单 | 放弃只删本对象的目标；`cancel` 只删“本会话新建且已空”的单，刷新后再放弃时空单留在草稿列表里 | 归 PDE 的 `useDraftView.cancel` / 静态：要么 `cancel` 也删库里已空的单，要么静态 `DELETE target` 后自动删空单。【推断】 |
 | 发起时建单成功、加目标失败 | `crStart` 先写库再改页面；建单成功但加目标失败时库里会留一个空单，页面没进草稿所以没东西可撤 | 静态若把“建单 + 首个目标”做成一个事务（`POST /change-requests` 带 `target`）就不会有；否则我这边补删空单 |
 | 动作类型 `bulk`（批量执行）字段 | 没做 | 前端 mock / 页面没有这个字段，按“前端为准”不加；`target_kind` 后台已有。【推断】页面加上后再补列和迁移（`down_revision` 接当时的 head） |
-| 新建动作 / 事件类型 | 按钮仍只把当前选中类型登记进变更单（同 mock），没有新类型表单，`isNew` 不用 | 页面没有新建表单，待定。约定（PDE 审 static-r3 时提）：新类型 `target{kind,id:调用方给的编码,isNew:true}`；`config` 一个字段一行、`params` / `payload` 一项一行，都是 `op=add` |
+| 新建动作 / 事件类型 | 两页有“新建动作类型 / 新建事件类型”按钮，但只打开共用的 `StartChangeModal`，变更对象写成“新建…类型”；mock 和页面都没有新类型的表单（没有字段、必填项、布局），页面也只能显示列表里已有的类型 | 核对过（palantir-r3），本轮不做：做表单要自己定字段，违反“前端为准”。要先由页面归属方给出表单设计；约定（PDE 审 static-r3 时提）：新类型 `target{kind,id:调用方给的编码,isNew:true}`，`config` 一个字段一行、`params` / `payload` 一项一行，都是 `op=add`；发布时 `isNew` 目标要静态的按类型写回建定义行 |
 | **发布后生效** | 本轮只到草稿阶段：草稿行存进 `cr_item`、改动列表 / 校验能看到 | 静态发布还不把 `cr_item` 写回定义表（static 未完成第 9 条），审核通过、发布后动作 / 事件定义**不会变**；静态做完后要在 action / event `sections.py` 的 `build_section` 按 `cr_item` 展开（我负责这两节） |
 | 变更说明 `reason` | 没传 | 共用 `StartChangeModal` 没把“变更说明”发出来（静态 handoff 已提给 PDE） |
 | 试运行 `POST /action-types/{id}:dry-run`、模拟触发 `POST /event-types/{id}:simulate` | 后台没实现，页面只弹本地提示 | 我负责。规则见 api 文档 §3.1、§3.3（一律 200，带 `?previewAs=` 时返回 403 `READONLY`） |
