@@ -12,7 +12,7 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useAppStore } from '@/stores/app';
 import { EVAL_QS, EVAL_GROUPS, T_METRICS, TUNING_CUTOFF, TUNING_DIMS, TUNING_TIMES, planText, type SemPlan } from '@/mock/qa-tuning';
 import { tuning, tuningTick, addCert, startRun } from './qa-tuning/state';
-import { qaReal, getTuningSummary, getPlanOptions, createCert as apiCreateCert, type QaTuningSummary } from '@/api/qa';
+import { qaReal, getTuningSummary, getPlanOptions, createCert as apiCreateCert, startEvalRun, type QaTuningSummary } from '@/api/qa';
 import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import { ApiError } from '@/api/http';
 import CertTab from './qa-tuning/CertTab.vue';
@@ -32,12 +32,13 @@ const tab = computed({
   get: () => (TABS.includes(route.query.tab as string) ? (route.query.tab as string) : 'cert'),
   set: (v: string) => router.replace({ query: { ...(v === 'cert' ? {} : { tab: v }), ...(route.query.ver ? { ver: route.query.ver } : {}) } }),
 });
-const pendingFb = computed(() => tuning.feedbacks.filter((f) => f.status === '待处理').length);
-// 真接口（开关 qa）：认证问答、高频问题两个页签的计数取 T1；评测 / 反馈页签仍是 mock，计数照旧
+// 真接口（开关 qa）：四个页签的计数都取 T1（evalTotal / openFeedback / recertCount / uncertFreq）
 const real = qaReal();
 const summary = ref<QaTuningSummary>();
 if (real) watch(tuningTick, async () => { if (!live.value) return; try { summary.value = await getTuningSummary(); } catch (e) { qaFallBackIfDown(e); /* 计数失败不挡页面 */ } }, { immediate: true });
 const recert = computed(() => (live.value ? summary.value?.recertCount ?? 0 : tuning.certs.filter((c) => c.status === '待重新认证').length));
+const pendingFb = computed(() => (live.value ? summary.value?.openFeedback ?? 0 : tuning.feedbacks.filter((f) => f.status === '待处理').length));
+const evalTotal = computed(() => (live.value ? summary.value?.evalTotal ?? 0 : EVAL_QS.length));
 const uncert = computed(() => (live.value ? summary.value?.uncertFreq ?? 0 : tuning.freq.filter((f) => !f.certId).length));
 
 /* 新建认证问答 */
@@ -90,7 +91,7 @@ async function createCert() {
 
 /* 运行评测 */
 const runGroup = ref<string>('全部');
-const runOptions = [{ value: '全部', label: `全部题目（${EVAL_QS.length}）` }, ...EVAL_GROUPS.map((g) => ({ value: g, label: `${g}相关` }))];
+const runOptions = computed(() => [{ value: '全部', label: `全部题目（${evalTotal.value}）` }, ...EVAL_GROUPS.map((g) => ({ value: g, label: `${g}相关` }))]);
 async function runEval() {
   const qs = runGroup.value === '全部' ? EVAL_QS : EVAL_QS.filter((x) => x.group === runGroup.value);
   const scope = runGroup.value === '全部' ? `全部 ${qs.length} 题` : `${runGroup.value}相关 ${qs.length} 题`;
@@ -101,6 +102,19 @@ async function runEval() {
     okText: '运行',
   });
   if (!ok) return;
+  if (real) {
+    // T11：后台逐题跑（202 立即返回运行中），评测页签每 3 秒重拉进度
+    try {
+      const r = await startEvalRun(runGroup.value === '全部' ? 'all' : runGroup.value);
+      tuningTick.value++;
+      router.replace({ query: { tab: 'eval', run: r.id } });
+      message.success(`已开始运行 ${r.id}（${r.scope}）`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 503) message.error('问数模型未配置，暂时无法运行评测');
+      else if (!qaFallBackIfDown(e)) message.error((e as Error).message);
+    }
+    return;
+  }
   const r = startRun(scope, qs.length, app.ontologyVersion);
   router.replace({ query: { tab: 'eval', run: r.id } });
   message.success(`已开始运行 ${r.id}（${scope}）`);
@@ -134,7 +148,7 @@ async function runEval() {
   <div class="panel qt">
     <a-tabs v-model:active-key="tab" class="qt-tabs">
       <a-tab-pane key="cert" :tab="`认证问答（待重新认证 ${recert}）`" />
-      <a-tab-pane key="eval" :tab="`评测题库（${EVAL_QS.length}）`" />
+      <a-tab-pane key="eval" :tab="`评测题库（${evalTotal}）`" />
       <a-tab-pane key="feedback" :tab="`反馈与纠错（待处理 ${pendingFb}）`" />
       <a-tab-pane key="freq" :tab="`高频问题推荐（未认证 ${uncert}）`" />
     </a-tabs>

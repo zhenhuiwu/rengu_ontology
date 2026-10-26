@@ -5,8 +5,10 @@
  * 取消不消耗编号；新单经 changes.ts 的 registerChange 写进公共变更单列表，“变更与发布”里能看到同一张单。
  * “发货及时率”召回不到的反馈已由 CR-0008（同义词“发货及时率”→出库及时率 v1，已通过）解决。
  * 行点击 → 反馈抽屉（?fb=FB-248）。URL：?fkw=&fst=&fk=&fpage=
+ * 真接口（开关 qa）：T13 列表 / T14 抽屉 / T15–T17 写，写完 tuningTick+1 重拉。
+ * T15 只支持“词已在变更单里”的关联；要新建 / 加入变更单的，后台回 409 CR_API_PENDING（静态变更单写接口 static-r3 未合入），这里提示，不走 mock 弹窗。
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -16,11 +18,18 @@ import { paginate } from '@/mock';
 import { useAppStore } from '@/stores/app';
 import { EVAL_QS, T_METRICS, crById, metricLabel, planText, type Feedback, type FbStatus, type SemPlan } from '@/mock/qa-tuning';
 import { CHANGE_REQUESTS, CR_DETAILS, changeRow, registerChange } from '@/mock/changes';
-import { tuning, addCert, ME } from './state';
+import { tuning, tuningTick, addCert, ME } from './state';
+import type { PageResult } from '@/api/http';
+import { ApiError } from '@/api/http';
+import { qaReal, listFeedbacks, getFeedback, getTuningSummary, feedbackToSynonym, feedbackToCert, ignoreFeedback, reopenFeedback, type QaFeedback } from '@/api/qa';
+import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
 import CrTag from './CrTag.vue';
 import InfoTip from '../../qa/InfoTip.vue';
 import StartChangeModal from '../parts/StartChangeModal.vue';
 import { useDraftView, allDrafts } from '../parts/useDraftView';
+
+/** mock paginate 和真接口分页都有 items / total */
+type Rows<T> = { items: T[]; total: number };
 
 defineProps<{ readonly: boolean; reason?: string }>();
 const route = useRoute();
@@ -41,8 +50,30 @@ const rows = computed(() => tuning.feedbacks.filter((f) => (!kw.value || f.quest
   && (!stF.value || f.status === stF.value) && (!kF.value || f.fix.kind === kF.value))
   .slice().sort((a, b) => (a.status === '待处理' ? 0 : 1) - (b.status === '待处理' ? 0 : 1)));
 const pq = usePagedQuery({ defaultSize: 15, filters: [kw, stF, kF], prefix: 'f' });
-const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
-const pending = computed(() => tuning.feedbacks.filter((f) => f.status === '待处理').length);
+/* 真接口：列表 / 抽屉 / 待处理计数（T1 openFeedback） */
+const real = qaReal();
+const remote = ref<PageResult<QaFeedback>>({ items: [], total: 0, page: 1, size: 15 });
+const remotePending = ref(0);
+const remoteCur = ref<QaFeedback>();
+const loadErr = (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`加载反馈失败：${(e as Error).message}`); };
+const fail = (e: unknown) => { if (!qaFallBackIfDown(e)) message.error((e as Error).message); };
+if (real) {
+  watch([kw, stF, kF, pq.page, pq.size, tuningTick], async () => {
+    if (!live.value) return;
+    try {
+      remote.value = await listFeedbacks({ kw: kw.value || undefined, status: stF.value, fixKind: kF.value, page: pq.page.value, size: pq.size.value });
+      remotePending.value = (await getTuningSummary()).openFeedback;
+    } catch (e) { loadErr(e); }
+  }, { immediate: true });
+  watch([() => q('fb'), tuningTick], async ([id]) => {
+    if (!id || !live.value) { remoteCur.value = undefined; return; }
+    try { remoteCur.value = await getFeedback(id as string); } catch (e) { remoteCur.value = undefined; loadErr(e); }
+  }, { immediate: true });
+}
+type Fb = Feedback | QaFeedback;
+const isRemote = (f: Fb): f is QaFeedback => 'certBlock' in f;
+const paged = computed<Rows<Fb>>(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
+const pending = computed(() => (live.value ? remotePending.value : tuning.feedbacks.filter((f) => f.status === '待处理').length));
 
 const cols = [
   { title: '编号', key: 'id', width: 76 },
@@ -61,12 +92,15 @@ const stCls = (s: FbStatus) => (s === '待处理' ? 'tl-normal' : s === '已忽�
 const awaitingRelease = (cr?: string) => !!cr && crById(cr)?.status === '已通过';
 
 /** 转认证问答需要语义计划：按建议的问题在评测题库 / 高频问题里找到已确认的理解 */
-const planFor = (f: Feedback): SemPlan | undefined =>
+const planFor = (f: Fb): SemPlan | undefined => isRemote(f) ? f.plan :
   tuning.freq.find((x) => x.question === f.fix.text)?.plan ?? EVAL_QS.find((x) => x.question === f.fix.text)?.expect ?? tuning.certs.find((c) => c.question === f.fix.text)?.plan;
-const existing = (f: Feedback) => tuning.certs.find((c) => c.question === f.fix.text);
-const certBlock = (f: Feedback) => (existing(f) || planFor(f) ? '' : f.fix.target?.includes('新建') ? '本体里还没有对应指标，需先在指标口径中新建' : '还没有可用的语义计划，请先在评测题库里补一道题');
-const relEvals = computed(() => (cur.value?.resolvedBy ? EVAL_QS.filter((x) => x.cr === cur.value!.resolvedBy).length : 0));
-const synCovered = (f: Feedback) => tuning.synonyms.find((s) => s.word === f.fix.text);
+const existing = (f: Fb): { id: string; question: string; status: string; variants?: string[] } | undefined => (isRemote(f)
+  ? (f.existingCert ? { id: f.existingCert, question: f.existingCertQuestion ?? f.fix.text, status: f.existingCertStatus ?? '' } : undefined)
+  : tuning.certs.find((c) => c.question === f.fix.text));
+const planTextOf = (f: Fb) => (isRemote(f) ? f.planText ?? '' : planFor(f) ? planText(planFor(f)!) : '');
+const certBlock = (f: Fb) => isRemote(f) ? f.certBlock : (existing(f) || planFor(f) ? '' : f.fix.target?.includes('新建') ? '本体里还没有对应指标，需先在指标口径中新建' : '还没有可用的语义计划，请先在评测题库里补一道题');
+const relEvals = computed(() => (cur.value && isRemote(cur.value) ? cur.value.relatedEvalCount : cur.value?.resolvedBy ? EVAL_QS.filter((x) => x.cr === cur.value!.resolvedBy).length : 0));
+const synCovered = (f: Fb) => (isRemote(f) ? (f.coveredBy ? { cr: f.coveredBy } : undefined) : tuning.synonyms.find((s) => s.word === f.fix.text));
 
 /**
  * 同义词指向的对象：指向指标的登记为 kind 'metric'（id 取公共指标 id）；
@@ -82,8 +116,19 @@ const changeOpen = ref(false);
 const changeFb = ref<Feedback>();
 const changeTargetName = computed(() => (changeFb.value ? `同义词“${changeFb.value.fix.text}”→ ${synTarget(changeFb.value).name}` : ''));
 
-function toSynonym(f: Feedback) {
+async function toSynonym(f: Fb) {
   const covered = synCovered(f);
+  if (isRemote(f)) {
+    if (!covered) { message.warning(`「${f.fix.text}」还不在任何变更单里；新建 / 加入变更单的接口（静态模块）尚未接入，请先在“变更与发布”中发起`); return; }
+    try {
+      const r = await feedbackToSynonym(f.id);
+      tuningTick.value++;
+      message.success(`「${f.fix.text}」已在 ${r.crId} 中，已关联${r.affected.length > 1 ? `（同词反馈 ${r.affected.length} 条）` : ''}`);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'CR_API_PENDING') message.warning(e.message); else fail(e);
+    }
+    return;
+  }
   if (covered) { f.status = awaitingRelease(covered.cr) ? '待发布生效' : '已转同义词'; f.resolvedBy = covered.cr; f.handler = ME; message.success(`「${f.fix.text}」已在 ${covered.cr} 中，已关联`); return; }
   changeFb.value = f; changeOpen.value = true;
 }
@@ -115,23 +160,27 @@ function onStartChange(opts: { join?: string; title?: string }) {
   message.success(opts.join ? `已加入变更单 ${cr}：同义词「${f.fix.text}」→ ${t.name}` : `已生成变更单草稿 ${cr}，可在“变更与发布”中查看`);
   changeFb.value = undefined;
 }
-async function toCert(f: Feedback) {
+async function toCert(f: Fb) {
   const ex = existing(f);
   const plan = planFor(f);
   if (!ex && !plan) return;
-  const m = plan ? T_METRICS[plan.metric] : undefined;
+  const m = plan ? (T_METRICS[plan.metric] as (typeof T_METRICS)[string] | undefined) : undefined;
   const cr = m?.cr ? crById(m.cr) : undefined;
   const ok = await confirm.ask({
     title: '转为认证问答', target: `${f.id} ${f.question}`,
     fields: ex
       ? [{ label: '已有认证问答', value: `${ex.id} ${ex.question}` }, { label: '状态', value: ex.status }]
-      : [{ label: '问题', value: f.fix.text }, { label: '绑定指标', value: metricLabel(plan!.metric) }, { label: '语义计划', value: planText(plan!) }, { label: '认证人', value: ME }],
+      : [{ label: '问题', value: f.fix.text }, { label: '绑定指标', value: m ? metricLabel(plan!.metric) : plan!.metric }, { label: '语义计划', value: planTextOf(f) }, { label: '认证人', value: ME }],
     impact: ex ? `已有相同问题的认证问答，把用户原话“${f.question}”加为它的同问法。`
       : `认证后同类问题直接按此语义计划回答。${cr && cr.status !== '已发布' ? `注意：${cr.id}「${cr.title}」${cr.status}，发布后需重新认证。` : ''}`,
     okText: ex ? '加为同问法' : '认证',
   });
   if (!ok) return;
-  if (ex) { if (!ex.variants.includes(f.question) && f.question !== ex.question) ex.variants.push(f.question); f.resolvedBy = ex.id; }
+  if (isRemote(f)) {
+    try { const r = await feedbackToCert(f.id); tuningTick.value++; message.success(r.mode === 'variant' ? `已加为 ${r.certId} 的同问法` : `已生成认证问答 ${r.certId}`); } catch (e) { fail(e); }
+    return;
+  }
+  if (ex) { if (ex.variants && !ex.variants.includes(f.question) && f.question !== ex.question) ex.variants.push(f.question); f.resolvedBy = ex.id; }
   else {
     const c = addCert(f.fix.text, plan!, '反馈纠错', cr && cr.status !== '已发布' ? { status: '待重新认证', cr: cr.id, note: `已按 ${m!.version} 认证；${cr.id} 发布后需再次认证` } : {});
     if (f.question !== c.question) c.variants.push(f.question);
@@ -140,11 +189,17 @@ async function toCert(f: Feedback) {
   f.status = '已转认证问答'; f.handler = ME;
   message.success(ex ? `已加为 ${ex.id} 的同问法` : `已生成认证问答 ${f.resolvedBy}`);
 }
-function ignore(f: Feedback) { f.status = '已忽略'; f.handler = ME; message.success(`已忽略 ${f.id}`); }
-function reopen(f: Feedback) { f.status = '待处理'; f.handler = undefined; f.resolvedBy = undefined; message.success(`已重新打开 ${f.id}`); }
+async function ignore(f: Fb) {
+  if (isRemote(f)) { try { await ignoreFeedback(f.id); tuningTick.value++; message.success(`已忽略 ${f.id}`); } catch (e) { fail(e); } return; }
+  f.status = '已忽略'; f.handler = ME; message.success(`已忽略 ${f.id}`);
+}
+async function reopen(f: Fb) {
+  if (isRemote(f)) { try { await reopenFeedback(f.id); tuningTick.value++; message.success(`已重新打开 ${f.id}`); } catch (e) { fail(e); } return; }
+  f.status = '待处理'; f.handler = undefined; f.resolvedBy = undefined; message.success(`已重新打开 ${f.id}`);
+}
 
-const cur = computed(() => tuning.feedbacks.find((f) => f.id === q('fb')));
-const rowProps = (f: Feedback) => ({ class: f.id === q('fb') ? 'qt-row-on' : '', onClick: () => setQuery({ fb: f.id }) });
+const cur = computed<Fb | undefined>(() => (live.value ? remoteCur.value : tuning.feedbacks.find((f) => f.id === q('fb'))));
+const rowProps = (f: Fb) => ({ class: f.id === q('fb') ? 'qt-row-on' : '', onClick: () => setQuery({ fb: f.id }) });
 const isCr = (s?: string) => !!s && s.startsWith('CR-');
 </script>
 
@@ -210,7 +265,7 @@ const isCr = (s?: string) => !!s && s.startsWith('CR-');
         <div class="qd-head"><span class="t-14 fw-600 c-1">建议修正 · {{ cur.fix.kind }}</span>
           <InfoTip v-if="certBlock(cur) || existing(cur)" :title="[certBlock(cur) ? `转认证问答：${certBlock(cur)}` : '', existing(cur) ? `已有认证问答 ${existing(cur)!.id}，转为认证问答时会把用户原话加为同问法` : ''].filter(Boolean).join('；')" /></div>
         <div class="qd-row"><span class="t-12 c-3 qd-k">修正</span><span class="t-14 c-1">{{ cur.fix.text }} → {{ cur.fix.target }}</span></div>
-        <div v-if="cur.fix.kind === '认证问答' && planFor(cur)" class="qd-row"><span class="t-12 c-3 qd-k">计划</span><span class="t-14 c-1 qd-ell" :title="planText(planFor(cur)!)">{{ planText(planFor(cur)!) }}</span></div>
+        <div v-if="cur.fix.kind === '认证问答' && planFor(cur)" class="qd-row"><span class="t-12 c-3 qd-k">计划</span><span class="t-14 c-1 qd-ell" :title="planTextOf(cur)">{{ planTextOf(cur) }}</span></div>
       </div>
     </div>
   </a-drawer>

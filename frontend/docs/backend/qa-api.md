@@ -461,14 +461,21 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 
 **高频统计 [推断]**：每天从 `qa_query_log` 聚合，周期按 `now()` 往前数 7 / 30 天。问题先归一，再用 pgvector 聚类近义问法。`consistency` = 这一类问题里最常见的那份语义计划占比。只统计正式身份的提问，不统计预览和评测的。
 
-**联调实现（qa-joint，认证问答 T1/T3–T8、高频问题 T18/T19 已落；评测题库 T9–T12、反馈与纠错 T13–T17 前端仍是 mock）**：
+**联调实现（qa-joint：认证问答 T1/T3–T8、高频问题 T18/T19；qa-tuning：评测题库 T9–T12、反馈与纠错 T13–T17，T15 只接了“已覆盖”分支）**：
 - T5 返回 201 + `CertQa`（同 T4），`status='待认证'`、`source='手动新建'`；查重按问题**忽略大小写**比较 [推断]；编号 `CQ-` + 现有最大序号 + 1（3 位）[推断]；`plan.metric` 不是 T2 里的指标 → 422 `VALIDATION_FAILED`；指标有未发布 CR 时带上 `cr`，`note` 同前端 `createCert` 文案；同问题的高频问题（`qa_freq_question`）顺带关联到新认证问答 [推断]。前端撞重名时提示「已有认证问答「…」」（warning，不关弹窗）。
 - T6 只允许从 `待认证` / `待重新认证` 发起，其他状态 409 `STATE_INVALID` [推断]；`certifier` = 有效用户名、`certifiedAt` = `now()`；`cr` 仍未发布 → `待重新认证`，`note` =「已按 {版本} 认证；{CR} 发布后需再次认证」；否则 `已认证`，清掉 `cr` / `note`。
 - T7 按上表照前端：`enabled=false` → `已停用`，`enabled=true` → `已认证`。
 - T8 整体替换同问法列表（后台按差集删 / 加）；列表内重复、或者跟**别的认证问答**的同问法重复 → `DUPLICATE_KEY` [推断：同问法全局唯一，否则命中时不知道按哪条答]。
 - T19 这条高频问题已经关联了认证问答（不论状态）→ 409 `STATE_INVALID` [推断]；否则按 T5 新建（`source='高频问题推荐'`，`hits` = 近 30 天命中）再按 T6 认证，返回 `CertQa`。
 - 以上写接口都写审计（`qa.cert.create` / `qa.cert.certify` / `qa.cert.toggle` / `qa.cert.variants` / `qa.freq.certify`），都受只读规则约束（`?ver=` / `?previewAs=` 下 403 `READONLY`）。
-- 前端：开关 `qa` 切真接口时，认证问答页签的列表 / 筛选 / 翻页走 T3（服务端分页），抽屉 T4，新建 T5、认证 T6、停用启用 T7、同问法 T8；高频问题页签走 T18（`hp`/`hc`/`hkw`/翻页）、设为认证问答 T19；页签计数里「待重新认证」「未认证」取 T1，「评测题库」「反馈与纠错」计数仍取 mock（这两个页签未接）。写完后统一刷新当前列表、抽屉和计数。
+- 前端：开关 `qa` 切真接口时，认证问答页签的列表 / 筛选 / 翻页走 T3（服务端分页），抽屉 T4，新建 T5、认证 T6、停用启用 T7、同问法 T8；高频问题页签走 T18（`hp`/`hc`/`hkw`/翻页）、设为认证问答 T19；四个页签计数都取 T1。写完后统一刷新当前列表、抽屉和计数。
+- **T11 运行评测（qa-tuning）**：`group` 不是 `all` / `全部` 也不在 `EVAL_GROUPS` → 422 `VALIDATION_FAILED`；编号 `ER-` + 现有最大序号 + 1（4 位）；`trigger='手动运行'`、`version` = 当前版本、`scope` =「全部 N 题」/「{分组}相关 N 题」、`operator` = 有效用户名，审计 `qa.eval.run`。要 LLM（`get_llm`），没配密钥 → 503。返回 202 后由**进程内 asyncio 任务**逐题跑（`app/modules/qa/eval/job.py`）[推断：没走 procrastinate，`app/jobs` 不归 qa；进程重启会丢正在跑的任务，接 procrastinate 时把 `job._background` 包成 task 即可]：每题在只读连接（`statement_timeout` 15s）的事务里调 `chain.answer`、整体回滚，**不改任何数据和口径**；每题后 commit，前端轮询 T9/T10 看进度；跑完 `status='已完成'`，异常中断也置已完成并写 `note`。
+- **T11 判分 [推断]**：链路 B 不产出 SemPlan，按回答形状对期望计划：拒答 / 反问 → `未召回指标`；0 行 → `过滤条件缺失`；列名里找不到期望指标名（去括号）→ `指标选错`；缺期望维度列 → `维度不匹配`；链路报错 / SQL 执行失败记失败（`未召回指标`，actual「执行失败：code」）。`时间解析错误` 目前判不出。每题写 `qa_eval_question.last_result`，失败写 `qa_eval_fail`（actual 截 500 字）。冒烟（真 qwen-flash，履约前 2 题）：1/2 通过，EQ-018 反问 → 未召回指标。
+- **T13 列表直接返回 T14 的详情字段** [推断]：行内按钮要 `certBlock` / `coveredBy`。T14 补充字段（前端确认卡 / 抽屉用）：`existingCertQuestion`、`existingCertStatus`、`plan` / `planText`（已有认证问答的计划 → 高频问题 → 评测题）、`coveredCrStatus`。
+- **T15**：只能从 `待处理`（否则 409 `STATE_INVALID`）。词已在某张变更单里（T20 `qa_tuned_synonym`）→ 关联：CR `已通过` → `待发布生效`，否则 `已转同义词`；同词的所有待处理同义词反馈一起改（`resolvedBy` = CR、`handler`），返回 `{crId, affected[], feedback}`，审计 `qa.feedback.to_synonym`。**没覆盖的词 → 409 `CR_API_PENDING`**：新建 / 加入变更单要静态 X3 写接口（static-r3 在做，未合入）；前端真接口模式下提示，不弹发起变更窗。接 X3 后在 `router.py feedback_to_synonym` 的 `SynonymCrPending` 处补。
+- **T16**：只能从 `待处理`。已有同题认证问答 → `mode='variant'`；否则用 T14 的 `plan` 新建（`source='反馈纠错'`）并**直接认证**（同 mock `toCert`/`addCert`；指标有未发布 CR → `待重新认证`）[推断：契约原文写新建是 `待认证`，按前端 mock 为准]；没有计划 → 422 `CERT_NO_PLAN`。用户原话 ≤ 40 字、不等于问题、且不是任何认证问答的同问法时加为同问法。反馈 → `已转认证问答`，`resolvedBy` = 认证编号。审计 `qa.feedback.to_cert`。
+- **T17**：`:ignore` 只能从 `待处理`，`:reopen` 只能从 `已忽略`（否则 409）；重开清空 `handler` / `resolvedBy`。审计 `qa.feedback.ignore` / `reopen`。T11、T15–T17 都受只读规则约束（`?ver=` / `?previewAs=` 下 403 `READONLY`）。
+- 前端（qa-tuning）：评测页签运行记录 T9（`etr` 筛选、服务端分页）、抽屉 T10（失败用例服务端分页 12 条、原因分布取 `kindStats`、待运行回放题取 `replayQuestions` / `replayHints`），题目 T12（分组计数取 `groupCounts`）；有「运行中」时每 3 秒重拉。页头「运行评测」走 T11 并跳到新运行。反馈页签 T13 / T14 / T15–T17，待处理计数取 T1。连不上后台照旧回退 mock。
 
 ### 7.1 状态流转（写的是接口值；库里的码见 1.3）
 

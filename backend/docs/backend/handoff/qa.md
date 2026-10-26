@@ -1,6 +1,7 @@
 # 问数（qa）交接
 
 > 分支 `qa-joint`（本地，未推送）。基线 = merge `80ac80c`（qa-reuse 最终 `740a554` + pde-integ `215819d`，两条链都是原提交，哈希一致）；整段 = `b688d5d..qa-joint`。截至 2026-10-26 01:25（Asia/Shanghai）。
+> **qa-tuning 增量**（分支 `qa-tuning`，基线 master `bb47a5c`，本地未推送，截至 2026-10-26 Asia/Shanghai）：R5 问数调优评测题库 / 反馈与纠错页签接真后端，见 1.3；T15 新建变更单分支等 static-r3。
 > 接口契约：`docs/backend/qa-api.md`（各节「联调实现」段）；评测：`docs/backend/qa-eval.md`。[推断] 标的是前端/文档没写、这里自己定的规则。
 > 前端开关：`VITE_API_REAL_MODULES` 含 `qa`（动作卡还需 `dynamic`）才走真接口，否则全部 mock。没接完的页面 / 页签在真接口模式下也仍走 mock，测试和构建不受影响。
 
@@ -16,6 +17,10 @@
 - **评审跟进（本体小白，01:3x）**：删掉最后一个会话后清空对话区、显示空状态（`QaSessionPanel.vue` / `QaConversation.vue`）；`?confirm=1` 刷新不再重复暂存动作——暂存后把 `run=<编号>` 写进 URL，刷新时 GET `/action-runs/{code}` 复用，已确认 / 撤回就去掉参数不弹卡（`Workbench.vue`，`qa.ts getAction`）。
 - **连不上后台回退 mock**（复用 `src/api/fallback.ts`，同 c988cf5 / 2c6eae4 / StaticGate；问数侧薄封装 `src/pages/qa/qaFallback.ts` 给出 `qaLive`）：开关 qa 为真时，读接口遇到 `isBackendDown(e)` → `backend.down=true`，`qaLive` 变 false，页面改走 mock 渲染，只提示一次 `后台未启动，暂时显示演示数据`；其余错误照旧提示；写操作仍按开关走真接口并照旧报错（不假装成功）。覆盖：工作台会话列表 / 当前会话 / 对话区 / 追问条 / 范围口径选项 / 左栏常用与我的页面 / 常用与我的页面抽屉；问数调优页签计数、T2 选项、认证问答列表与抽屉、高频问题列表。回退在本次会话内保持，后台起来后刷新恢复 [推断]。手工验过：停 8061 后两页都显示演示数据 + 提示一次、无报错；起回后恢复真数据。
 - 后端：`backend/app/modules/qa/{router,service,repo,schemas}.py` 对应实现，测试 `backend/tests/test_qa*.py`。最终检查（01:27，变基到 `740a554` 后，RENGU_TEST_DB=rengu_test_qa_joint）：pytest 408 passed / 1 skipped，ruff check + format、alembic check、`npm run build` 通过；页面单查（真后端：反问卡 → 追问条 → 追问、W17 范围下拉、T2 时间选项）无报错。
+
+### 1.3 R5 问数调优 · 评测题库 / 反馈与纠错（qa-tuning）
+- **后端**：T11 `POST /tuning/eval/runs`（202，进程内 asyncio 后台任务 `app/modules/qa/eval/job.py`，复用 `chain.answer` 在只读回滚事务里逐题跑、按回答形状判分写 `qa_eval_fail` / `last_result`；真 qwen-flash 冒烟 2 题通过链路）；T15 `:to-synonym`（只做“词已被变更单覆盖”的关联分支，没覆盖 → 409 `CR_API_PENDING`）；T16 `:to-cert`（加同问法 / 新建并认证）；T17 `:ignore` / `:reopen`；T13 列表返回 T14 详情字段。规则与 [推断] 见 `qa-api.md` §7「联调实现」。无新依赖、无迁移。测试 `backend/tests/test_qa_tuning_eval.py`（FakeLLM / runner 打桩）。
+- **前端**：`EvalTab.vue`（T9 / T10 / T12，有运行中时 3 秒轮询）、`FeedbackTab.vue`（T13–T17）、`QaTuning.vue`（四个计数都取 T1、「运行评测」走 T11 并跳到新运行，未配 LLM 提示 503）；`src/api/qa.ts` 只追加了 `QaEvalRun` / `QaEvalRunDetail` / `QaFeedback` 等类型和 10 个函数。真接口模式下：转同义词遇到未覆盖的词提示「需要新建变更单…」，不弹发起变更窗；连不上后台仍回退 mock。
 
 ### 1.2 链路（qa-reuse 最终 `740a554`，在 `a39b314` 上；chain.py / llm.py / test_qa_chain.py / eval/ 归 qa-reuse，本分支未改）
 - **LLM 调用**：`llm.py` 用 openai SDK（`openai>=1.50`）的 `AsyncOpenAI` 调 DashScope 兼容接口（qwen-flash）；密钥只从环境变量读（本机 `/home/box/.qa_dashscope.env`，不进仓库）；CI 用 FakeLLM。
@@ -35,16 +40,17 @@
 | R1 建议动作对象 | 部分 | 动作卡对象固定为客户群 `SEG-EC-60D`、参数是卡片文案；影响 / 预算 / 提交条件三行仍是前端文案（stage 无返回）[推断] | X1 `action-runs:stage`；`Workbench.vue` `runAction` |
 | R1 反问追问 | 部分 | 链路无多轮上下文，追问句由前端启发式拼接 [推断]；所选项不回写 `clarify.chosen` [推断] | `QaConversation.vue` `followUp` / `chosenOf` |
 | R1 第二期 | 未做 | 停止生成、加入常用 | W8 `:cancel`、W14 `POST /favorites` |
-| R5 问数调优（整页**不算完成**） | 部分 | 评测题库页签（T9 运行列表、T10 运行详情、T11 发起评测、T12 题目）、反馈与纠错页签（T13 列表、T14 详情、T15 转同义词 → 静态 X3 变更单、T16 转认证问答、T17 忽略 / 重开）全部仍是 mock（后端只有 T9 / T10 / T12 / T13 / T14 / T20 的读接口；T11 发起评测、T16 转认证、T17 忽略 / 重开未实现；T15 转同义词要调静态 X3 变更单，静态模块目前没有 change-requests 路由，**阻塞**）；页头「运行评测」按钮、页签角标里评测和反馈计数也是 mock（列表是 mock 时计数跟着 mock，避免对不上） | `src/pages/ontology/qa-tuning/EvalTab.vue`、`FeedbackTab.vue`、`QaTuning.vue`（计数、`runEval`）；后端 T11、T15–T17 路由 |
+| R5 问数调优 · T15 新建 / 加入变更单 | 部分（等 static-r3） | 词未被任何变更单覆盖时要调静态 X3 写接口建 / 加入变更单草稿，static-r3 未合入，后端返回 409 `CR_API_PENDING`、前端提示；接法：`router.py feedback_to_synonym` 里 `SynonymCrPending` 处改调 X3（格式见 `handoff/static.md`），再写 `qa_tuned_synonym` 并按“已覆盖”分支改同词反馈；前端 `FeedbackTab.vue toSynonym` 的 live 分支改为打开发起变更窗（mock 的 `onStartChange` 已有 UI） | `router.py`、`FeedbackTab.vue` |
+| R5 · T11 后台任务 | 部分 | 进程内 asyncio，重启丢任务（运行停在「运行中」）；判分是启发式（`时间解析错误` 判不出）[推断]；每日 02:00 定时未接 | `eval/job.py`；接 procrastinate 时包 `_background` |
 | R2 我的页面与模板库 `/use/qa/pages` | 未开始，mock | 前端未接；后端只有读接口 P1 / P3 / P11 / P12，写接口 P2、P4–P10 未实现 | P1–P12；`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*` |
 | R3 对象搜索 `/use/objects/search` | 未开始，mock | 前端未接；后端只有 O1 类型列表，O2–O4 未实现 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
 | R4 对象详情 `/use/objects/detail` | 未开始，mock | 前端未接；后端 O5–O7、O9 未实现（动作记录走动态 X7） | O5–O7、O9、O4、X7；`src/pages/objects/ObjectDetail.vue`、`parts/ObjAskModal.vue` |
 | W11 下载 | 临时 | `apiClient` 没有拿 blob 的方法，`src/api/qa.ts` 里留了一个只做 GET 下载的小工具 | 等 PDE 在 `src/api/http.ts` 加下载方法后改回 |
-| 连不上后台回退 mock（剩余） | 部分 | 已覆盖见 1.1。没覆盖：工作台的 W12 投票 / W9 重算 / W10 门店表 / W11 导出等卡片内读接口（`QaAnswer.vue` / `QaStoreAnswer.vue`，回退后卡片本来就是 mock 不再发请求，只有回退前已渲染的真卡片会照旧报错）；问数调优评测 / 反馈页签本来就是 mock。`backend.down` 是全站共用的：别的模块先判定后台没起来，问数页也会直接走 mock。 |
+| 连不上后台回退 mock（剩余） | 部分 | 已覆盖见 1.1。没覆盖：工作台的 W12 投票 / W9 重算 / W10 门店表 / W11 导出等卡片内读接口（`QaAnswer.vue` / `QaStoreAnswer.vue`，回退后卡片本来就是 mock 不再发请求，只有回退前已渲染的真卡片会照旧报错）；问数调优评测 / 反馈页签已接回退（qa-tuning）。`backend.down` 是全站共用的：别的模块先判定后台没起来，问数页也会直接走 mock。 |
 
 ### 2.1 链路未完成 / 待裁定
 - **最近评测分（真 qwen-flash，`740a554`）**：**76 / 100**，见 `backend/seeds/extra/qa/eval/results/summary.json`（作答 62/74、拒答 9/16、反问 5/10；失败 24 题：EV-Q-012、014、016、022、025、026、042、051、052、058、061、063、066、067、069、071、072、078、080、081、082、084、091、095）。
-- **评测工具**：已入库到 `backend/app/modules/qa/eval/`（`/workspace/qa_eval` 是旧的本机副本，可删）。还没接进 T11「运行评测」。
+- **评测工具**：已入库到 `backend/app/modules/qa/eval/`（`/workspace/qa_eval` 是旧的本机副本，可删）。T11 用的是 `eval/job.py`（种子评测题 `qa_eval_question`），离线 100 题工具 `eval/run.py` 不变。
 - **链路行为问题（找 qa-reuse）**：
   1. EV-Q-080「华南大区上个月的有效订单数」有时返回反问（「华南大区不存在…是否查询华东」），有时拒答 `OUT_OF_SCOPE`；题库要求拒答且 `applyEntry: true`，但前端只给 `NO_PERMISSION` 申请入口 —— 契约冲突，待定 `OUT_OF_SCOPE` 是否给申请入口。
   2. EV-Q-066「Show me the sales」不反问，直接答销售额（137009.54）。
@@ -71,7 +77,7 @@
 
 ## 4. 下一步怎么接
 1. **合入**：`qa-joint` 已在 qa-reuse 最终 `740a554` 上（+ pde-integ `215819d`），直接按 `b688d5d..qa-joint` 合；合入前跑 `RENGU_TEST_DB=<独立库> uv run pytest`、`ruff check/format --check`、`alembic check`、`npm run build`。
-2. **问数调优补完**：后端按 `qa-api.md` §7 补 T11、T15–T17（T9/T10/T12/T13/T14/T20 读接口已有；T11 可复用 `app.modules.qa.eval.run` 的判分逻辑，异步跑完写 `qa_eval_run`；T15 走静态 X3 变更单），前端在 `EvalTab.vue` / `FeedbackTab.vue` 按 `CertTab.vue` 的 `qaReal()` 分支模式接，页签计数改读 T1。整页接完再标完成。
+2. **问数调优补完**（qa-tuning 已做完除 T15 新建变更单以外的部分，下面是原计划）：后端按 `qa-api.md` §7 补 T11、T15–T17（T9/T10/T12/T13/T14/T20 读接口已有；T11 可复用 `app.modules.qa.eval.run` 的判分逻辑，异步跑完写 `qa_eval_run`；T15 走静态 X3 变更单），前端在 `EvalTab.vue` / `FeedbackTab.vue` 按 `CertTab.vue` 的 `qaReal()` 分支模式接，页签计数改读 T1。整页接完再标完成。
 3. **SSE W7**：后端把 chain 的阶段产出成事件（§3.1），前端 `sendReal` 改为 W6 拿 `streamUrl` 后订阅；同步 202 保留作降级。
 4. **我的页面 R2、对象页 R3/R4**：按 §4–§6 的接口表逐个接，接口函数加进 `src/api/qa.ts`，页面用 `qaReal()` 切换，未接完的保持 mock。
 5. **链路**：EV-Q-080 的 `OUT_OF_SCOPE` 申请入口与 qa-reuse / PDE 定；若链路加多轮上下文，前端 `followUp` 可直接发选项 + 回写 `clarify.chosen`。评测工具入库后接进 T11。
