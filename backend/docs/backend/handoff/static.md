@@ -1,6 +1,6 @@
-# 静态本体交接（static-integ2）
+# 静态本体交接（static-integ2 → static-r3）
 
-负责人：静态本体负责人。分支：`static-integ`（变基在 pde-integ `215819d` 上）→ `static-integ2`（叠在上面）。
+负责人：静态本体负责人。分支：`static-integ`（变基在 pde-integ `215819d` 上）→ `static-integ2`（叠在上面）→ `static-r3`（从 master `bb47a5c` 起，只做变更单写接口）。
 接口设计细节见 `docs/backend/static-api.md`；本文件只写做到哪、代码在哪、怎么接着做。
 标注沿用 static-api.md：**[推断]** = 前端没有限制或没有体现，按页面行为推出来的。
 
@@ -20,7 +20,8 @@
 
 ```jsonc
 // TargetIn / TargetOut
-{ "kind": "rule", "id": "R-007", "isNew": false }          // isNew 可省，默认 false（本单新建的定义填 true）
+{ "kind": "rule", "id": "R-007", "isNew": false,           // isNew 可省，默认 false（本单新建的定义填 true）
+  "name": "毛利率预警" }                                    // 可省：显示名（≤128，存 cr_target.target_name，改动列表「对象」列用；TargetOut 有才出）
 // ItemIn（PUT items 的 rows[]）
 { "key": "promo_price", "op": "add|update|delete",
   "before": <任意 JSON，可省>, "after": <任意 JSON，delete 时可省>,
@@ -32,7 +33,7 @@
 // CRFull = 现有 GET /change-requests/{id} 的返回（mock ChangeRequest 一行 + detail + events），另加：
 { ..., "targets": [TargetOut], "lockVersion": 3 }
 ```
-- `detail.diffs` = 种子里的改动（mock CR_DETAILS）+ cr_item 生成的改动行（key 形如 `i<序号>`），`changes` = 两者条数之和（种子单子的改动数不变）。
+- `detail.diffs` = 种子里的改动（mock CR_DETAILS）+ cr_item 生成的改动行（key = `i<cr_item.id>`，「对象」列取 `name`，没有时用 id），`changes` = 两者条数之和（种子单子的改动数不变）。
 - `detail.touches` 自动加 `"{kind}:{id}"`（合并校验 M1 用）；`detail.edit` 没有时取第一个目标（Releases.vue「编辑草稿」跳转用）。
 
 | # | 接口 | 请求体 / 参数 | 成功 | 错误 |
@@ -55,6 +56,9 @@
 - 草稿 → 审核中后所有写接口返回 `CR_LOCKED`；驳回后 `:reopen` 回草稿即可继续写。
 - 删除草稿单（已有 `DELETE /change-requests/{id}`）连同 cr_target / cr_item / cr_check 级联删除。
 - 发布时 `build_section` 还没按 cr_item 展开（见「未完成」），cr_item 目前只用于草稿保存、改动列表、校验和合并校验。
+- 种子单子的种子校验结果第一次 `:validate` 时存成 cr_check `target_db='seed'` 行（只存非通过的），以后每次与计算结果取更严重的一档；计算结果是 `target_db=''` 行，每次整单重写 [推断]。
+- `TARGET_IN_OTHER_CR` 的“占用”指别的单子状态是草稿 / 审核中 / 已通过 / 已驳回（已发布不占用）[推断]。
+- 已实现（static-r3，`cr_write.py` + `router.py` 末段），与上表一致；测试 `tests/test_static_cr_write.py`。
 
 ## 已完成
 
@@ -70,6 +74,17 @@
 前端：
 - **5 个页面切真接口**：对象类型、关系类型、指标、维度、业务知识。页面外面包一层 `parts/StaticGate.vue` 整表载入（`src/api/static.ts` `loadStatic`），页面本体移到 `*Body.vue`，mock 模式下渲染不变。
 - **变更与发布（Releases.vue）**：真接口模式下载入变更单列表和详情；6 个动作、删除草稿、发布、回滚都写库，成功后重新载入，失败弹错误提示、页面不变；发布 / 回滚后按 `/releases/current` 刷新顶栏版本号。
+
+**static-r3：变更单写接口**（契约见上节，`8b0a27e` 先提交）
+- 后台：迁移 `static_0003`（down = `admin_0002`）建 `cr_target`（种子 = mock DRAFT_TARGETS）、`cr_item`、`cr_check`、`cr_impact`、`cr_trial`（后两张只建表）；`cr_write.py` `CrWriteService`；`crs.py` 详情加 `targets` / `lockVersion`、`detail.diffs` 合入 cr_item 行、`:submit` 加 `CR_NO_REVIEWER`；路由 9 个（上表）。
+- 前端：`src/api/static.ts` 加 9 个接口函数和 `crStart` / `crSave` / `crSubmit` / `crDiscard`；新文件 `src/pages/ontology/parts/useStaticCr.ts`；5 个定义页 real 模式下“发起变更 / 加入”“保存到草稿”“停用”“提交审核”“放弃草稿”先写库再改页面（失败弹错、页面不变），mock 模式行为不变、不发请求：
+  - 对象类型：发起 / 加入、新增属性（`properties` 段，key = API 名）；
+  - 关系类型：发起 / 加入（含新建关系 `isNew`）、定义（`def` 段，一个字段一行）；
+  - 指标：发起 / 加入（页面没有别的编辑入口）；
+  - 维度与码表：发起 / 加入、取值新增 / 修改 / 停用启用（`values` 段，key = 层级:编码）、新增说法（`mappings` 段）、问数设置（`qa` 段）；
+  - 业务知识：发起 / 加入（含新建条目 `isNew`）、内容（`content` 段）、停用（`status` 段）。
+  - `crSave` 先 `GET items` 读回该段，再合并本次改动整段 PUT：同一 key 保留最早的 `before`，改回原值的 update 行去掉。
+- 验证（static-r3）：pytest 596 passed / 2 skipped（库 `rengu_test_static_r3`，静态 72 个含写接口 18 个）；ruff check / format 通过；alembic 单 head `static_0003`，upgrade 后 check 无差异；vue-tsc、`npm run build` 通过。
 
 验证（`743ec27`）：pytest 399 passed / 1 skipped（库 `rengu_test_static_integ`）；ruff 通过；alembic 单 head `static_0002`；vue-tsc、`npm run build` 通过；浏览器脚本验证真接口删除草稿后刷新仍有效，mock 模式不发请求。
 
@@ -105,12 +120,17 @@
    - 缺：仍读 mock（links / actionEvent / metrics / objectProps / changes / quality / releases）。
    - 为什么：这是共用页，数据跨静态 / 动态 / 质量模块。
    - 从哪开始：graph 接口已有（`/ontology/graph`）；页面里 `LINK_OBJECTS` / `LINKS` 换成接口数据，其余卡片和各模块负责人商定。
-9. **变更单写路径没做**
-   - 缺：发起变更 `POST /change-requests`、加入已有 `/targets`、保存草稿 `PUT /items`、放弃对象草稿、`:validate`、改动分页 `/diffs`、`PATCH migration`。真接口模式下 5 个定义页的编辑仍只改前端本地 mock，不落库。
-   - 为什么：需要 cr_item / cr_target / cr_check / cr_impact / cr_trial 表（§1.3 已设计），static_0002 只建了 `change_request`（CRDetail 整份存 `detail` jsonb）和 `cr_event`。
-   - 从哪开始：新迁移（接在当时的 head 后面）建 cr_* 表；`crs.py` 加写方法；`sections.py` `build_section` 按 CR 展开改动（现在 base 不为空就沿用上一版）。
+9. ~~变更单写路径没做~~ **接口和定义页保存已完成（static-r3）**，剩下：
+   - **发布不展开 cr_item**：`sections.py` `build_section` 仍是 base 不为空就沿用上一版，草稿行发布后不进定义表 / 快照。从 `publish.py` `PublishService.publish` 取本次 CR 的 cr_item，按 kind/section 写回定义表开始。
+   - **影响分析 / 试跑**：`cr_impact`、`cr_trial` 只建表没写，详情仍用 `detail.impact` / `detail.trial`（种子原样）。
+   - **页面读草稿视图仍是前端内存**：刷新后草稿视图里的改动丢失（库里有）；需要按 `GET /change-requests/{id}/items` 把行叠回页面（各页 mark 逻辑不同，逐页做）。
+   - **`useDraftView` 的登记表读 mock `DRAFT_TARGETS`**（PDE 共用文件）：real 模式应在载入时用 `GET /change-requests/draft-targets` 替换；`DRAFTS` 不是 reactive，新建单子后“加入已有”下拉要重开页面才看到（`StartChangeModal` 的 computed 只跟 `created`）。改法：useDraftView 加一个 `syncTargets(map)`、`DRAFTS` 包 reactive（PDE 决定）。
+   - **StartChangeModal 的“变更说明”没传出来**（共用组件），所以 `reason` 目前不落库。
+   - **权限**：写接口暂挂 `releases:manage`，`require_func` 是桩不拦；应改成目标页:manage（按 kind 映射页面）。
+   - 新建关系 / 知识的 id 仍是前端生成（`new_link_N`、`K-NNN`），后台不分配 [推断]。
 10. **定义页其他写接口没做**：指标试算 / 口径回滚、维度匹配试算、知识解析试一试、对象导入预览 / 重新采集元数据、函数全部接口（§3.8）。
-11. **对象历史 `kind=cr` 没接**：`service.py:211` TODO，依赖第 9 条。
+11. **对象历史 `kind=cr` 没接**：`service.py:211` TODO，现在可以从 cr_target 查。
+18. **本轮没做**（PDE 指示单独提）：第 1 条 restore_section、第 15 条 Releases.vue `crFallback`；Releases.vue 的“重新校验”按钮也还没接 `:validate`。
 12. **`semantic_map` 契约没做**：`app/contracts/static.py:7` TODO（static-api.md §3.7，给本体小白）。
 13. **草稿项仍在定义表**：草稿 / 已驳回的关系、知识、取值仍放在定义表里，用 `status` / `draft_cr` 区分（`models.py:12-25`）；按 §1.3 应移到 cr_item，依赖第 9 条。
 14. **种子里已删除的 CR**：开发库 `rengu_static_integ` 里 CR-0013、CR-0012 在测试中被删了，需要的话重新灌种子。
@@ -143,6 +163,13 @@
 - 行级范围：「商品.品类」范围值按名称最接近的一级类目映射（`contracts/static.py`）；「会员.常去门店所属大区」按注册门店所属大区（static-api.md §5-15）。
 - 其余见 static-api.md 正文的 [推断] 标注和 §5 第 18 条。
 
+## 给 PDE（static-r3 合并时注意）
+
+- 迁移 `static_0003` 的 `down_revision = "admin_0002"`（master `bb47a5c` 时的单 head）；若合并前 head 变了，改这一行即可，revision 名不改。
+- 动了 PDE 的共用文件：`src/pages/ontology/parts/useDraftView.ts` 只**新增**导出 `forgetTarget(cr, kind, id)`（放弃草稿后从登记表删目标），没改已有函数。
+- 需要 PDE 改的共用文件（我没动）：`StartChangeModal` 把“变更说明”随 `confirm` 发出来；`useDraftView` 加从服务器同步登记表的入口、`DRAFTS` 变 reactive（见未完成第 9 条）；OntologyOverview.vue 按指示没碰。
+- `require_func` 是桩，写接口暂用 `releases:manage`；权限落地时改成目标页功能码。
+
 ## 代码在哪
 
 | 部分 | 文件 |
@@ -150,20 +177,20 @@
 | 路由 | `backend/app/modules/static/router.py`（只读 GET 用 `get()` 包装；变更单 / 发布写接口在后半段） |
 | 只读取数 | `service.py`（筛选 / 分页 / `?ver=`）、`repo.py`（整表读取）、`shapes.py`（ORM → mock 形状）、`history.py`（§2.7 版本规则） |
 | 快照 section | `sections.py`（7 节）；契约 `app/contracts/versioning.py`、`app/contracts/static.py` |
-| 变更单 | `crs.py`（`ChangeRequestService`：list / detail / transition / delete） |
+| 变更单 | `crs.py`（`ChangeRequestService`：list / detail / transition / delete）；写接口 `cr_write.py`（`CrWriteService`） |
 | 发布 / 回滚 | `publish.py`（`merge_check`、`PublishService.publish / rollback`） |
 | 模型 / 入参 | `models.py`、`schemas.py` |
 | 种子 | `app/modules/static/seeds/__init__.py`；数据 `backend/seeds/json/`（export-mock）+ `backend/seeds/extra/static/CR_DETAILS.json` |
-| 迁移 | `backend/migrations/versions/static_0001_static_definitions.py`、`static_0002_change_request.py` |
-| 测试 | `backend/tests/test_static.py`（读接口）、`test_static_cr.py`（变更单）、`test_static_publish.py`（发布 / 回滚） |
+| 迁移 | `backend/migrations/versions/static_0001_static_definitions.py`、`static_0002_change_request.py`、`static_0003_cr_target_item_check.py` |
+| 测试 | `backend/tests/test_static.py`（读接口）、`test_static_cr.py`（变更单）、`test_static_publish.py`（发布 / 回滚）、`test_static_cr_write.py`（变更单写接口） |
 | 前端 API | `src/api/static.ts`（`loadStatic`、`fetchChangeRequests`、`crAction`、`deleteCR`、发布 / 回滚、`fetchCurrentAfterWrite`） |
-| 前端页面 | `src/pages/ontology/{ObjectTypes,LinkTypes,Metrics,Dimensions,Glossary}.vue`（包 `parts/StaticGate.vue`）+ 对应 `*Body.vue`；`Releases.vue` |
+| 前端页面 | `src/pages/ontology/{ObjectTypes,LinkTypes,Metrics,Dimensions,Glossary}.vue`（包 `parts/StaticGate.vue`）+ 对应 `*Body.vue`；`Releases.vue`；写库接线 `parts/useStaticCr.ts` |
 | 接口文档 | `docs/backend/static-api.md` |
 
 ## 下一步怎么接
 
 1. 本地起服务：开发库 `DATABASE_URL=postgresql+asyncpg://…/rengu_static_integ`，`alembic upgrade head` 后灌种子；前端在 `.env.local` 设 `VITE_API_REAL_MODULES=static`（**不提交**），代理到后台。
 2. 测试：`RENGU_TEST_DB=<自己的测试库> pytest -q`，`ruff check . && ruff format --check .`，`npx vue-tsc --noEmit`，`npm run build`。
-3. 建议顺序：第 1 条（restore_section，在 `begin_nested` 里按外键顺序写，测试：回滚后 GET 返回旧定义）→ 第 9 条（cr_* 表 + 写路径，最大）。
+3. 建议顺序：第 1 条（restore_section，在 `begin_nested` 里按外键顺序写，测试：回滚后 GET 返回旧定义）→ 第 15 条 → 第 9 条剩余（发布展开 cr_item）。
 4. 新迁移接在当时的单 head 后面；不要改 static_0002 的 revision。
 5. 每做完一条，更新本文件「已完成 / 未完成」，并在 static-api.md 对应行写「已实现」。
