@@ -5,7 +5,8 @@
 - seed_section(ver, ctx)：读导出 JSON，按 §2.7 的版本规则裁出该版本可见的内容。
 - build_section(session, base, crs)：发布时组装。变更单展开不在本次范围 [推断]：
   base 不为空就沿用上一版，否则从当前定义表组装「当前已发布」那一节。
-- restore_section（整版回滚写表）：只有 terms 实现（writeback.restore_terms），其余节只回快照。
+- restore_section（整版回滚写表）：terms / properties / links / dimensions 实现（writeback.restore_*），
+  objectTypes / metrics / qaPaths 只回快照。
 """
 
 from typing import Any
@@ -14,7 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.static import history, shapes
 from app.modules.static.repo import StaticRepo
-from app.modules.static.writeback import DIRTY, restore_terms
+from app.modules.static.writeback import (
+    DIRTY,
+    restore_dimensions,
+    restore_links,
+    restore_properties,
+    restore_terms,
+)
 
 Obj = dict[str, Any]
 G = "static"  # 导出 JSON 所在组；seed ctx 是 versioning 组的，读静态文件要带 group
@@ -97,6 +104,10 @@ class PropertiesSection(_Base):
     async def current(self, repo: StaticRepo) -> Obj:
         return {o.code: {p.api_name: shapes.prop(p) for p in o.properties} for o in await repo.object_types()}
 
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
+        """整版回滚时把属性表恢复成 content（writeback.restore_properties）。"""
+        await restore_properties(session, content or {}, release_id=release_id)
+
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         props = ctx.load("OBJECT_PROPS.json", group=G)
         return {k: {p["api"]: p for p in v} for k, v in props.items()}
@@ -110,6 +121,10 @@ class LinksSection(_Base):
     async def current(self, repo: StaticRepo) -> Obj:
         items = [shapes.link(x, with_runtime=False) for x in await repo.links()]
         return {x["id"]: x for x in history.links_at(items, None)}
+
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
+        """整版回滚时把关系表恢复成 content（writeback.restore_links）。"""
+        await restore_links(session, content or {}, release_id=release_id)
 
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         items = [history.strip(x, history.LINK_RUNTIME) for x in ctx.load("LINKS.json", group=G)]
@@ -150,6 +165,10 @@ class DimensionsSection(_Base):
             shapes.dimension(d, values[d.id], maps[d.id], with_runtime=False) for d in await repo.dimensions()
         ]
         return {x["id"]: x for x in history.dimensions_at(items, None)}
+
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
+        """整版回滚时把维度取值 / 说法 / 问数设置恢复成 content（writeback.restore_dimensions）。"""
+        await restore_dimensions(session, content or {}, release_id=release_id)
 
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         items = [history.strip(x, history.DIM_RUNTIME) for x in ctx.load("DIM_ITEMS.json", group=G)]

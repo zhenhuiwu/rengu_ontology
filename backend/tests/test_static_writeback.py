@@ -198,3 +198,212 @@ async def test_rollback_restores_terms(client, seeded):
     assert k3.status == KnowledgeStatus.published and k3.stopped_release is None
     k9 = await seeded.scalar(select(Knowledge).where(Knowledge.code == "K-900"))
     assert k9.status == KnowledgeStatus.disabled and k9.stopped_release == rb
+
+
+async def approved_cr2(client) -> str:
+    """维度取值 / 说法 / 问数设置、关系 def、指标 def、新建对象类型（isNew，全 op=add）。"""
+    r = await client.post(f"{P}/change-requests", json={"title": "写回测试 2"}, headers=LIU)
+    assert r.status_code == 201, r.text
+    cr = r.json()["id"]
+    dim = {"kind": "dimension", "id": "time", "name": "时间"}
+    await put(
+        client,
+        cr,
+        dim,
+        "values",
+        [
+            {
+                "key": "月:2027-01",
+                "op": "add",
+                "after": {
+                    "code": "2027-01",
+                    "name": "2027 年 1 月",
+                    "level": "月",
+                    "synonyms": ["明年一月"],
+                    "status": "启用",
+                },
+            },
+            {
+                "key": "月:2026-12",
+                "op": "update",
+                "before": {},
+                "after": {
+                    "code": "2026-12",
+                    "name": "2026 年 12 月",
+                    "level": "月",
+                    "synonyms": [],
+                    "status": "停用",
+                },
+            },
+        ],
+    )
+    await put(
+        client,
+        cr,
+        dim,
+        "mappings",
+        [
+            {
+                "key": "下月>2026-11",
+                "op": "add",
+                "after": {"phrase": "下月", "targets": ["2026-11"], "match": "精确"},
+            }
+        ],
+    )
+    await put(
+        client,
+        cr,
+        dim,
+        "qa",
+        [
+            {"key": "defaultLevel", "op": "update", "before": "日", "after": "月"},
+            {"key": "desc", "op": "update", "before": "", "after": "时间维度说明"},
+        ],
+    )
+    await put(
+        client,
+        cr,
+        {"kind": "link", "id": "order_belongs_to_store", "name": "x"},
+        "def",
+        [{"key": "reverse", "op": "update", "before": "", "after": "门店的订单"}],
+    )
+    await put(
+        client,
+        cr,
+        {"kind": "link", "id": "new_link_1", "name": "未命名关系", "isNew": True},
+        "def",
+        [
+            {"key": "from", "op": "add", "after": "order"},
+            {"key": "name", "op": "add", "after": "订单属于新对象"},
+            {"key": "to", "op": "add", "after": "x_obj"},
+            {"key": "card", "op": "add", "after": "N : 1"},
+            {"key": "fromProp", "op": "add", "after": "x_id"},
+            {"key": "toProp", "op": "add", "after": "id"},
+        ],
+    )
+    await put(
+        client,
+        cr,
+        {"kind": "metric", "id": "x_metric", "name": "新指标", "isNew": True},
+        "def",
+        [
+            {"key": "name", "op": "add", "after": "新指标"},
+            {"key": "unit", "op": "add", "after": "元"},
+            {"key": "formula", "op": "add", "after": "SUM(x)"},
+            {"key": "dims", "op": "add", "after": ["time"]},
+        ],
+    )
+    obj = {"kind": "object", "id": "x_obj", "name": "新对象", "isNew": True}
+    await put(
+        client,
+        cr,
+        obj,
+        "properties",
+        [
+            {
+                "key": "id",
+                "op": "add",
+                "after": {
+                    "api": "id",
+                    "name": "编号",
+                    "type": "string",
+                    "group": "标识",
+                    "desc": "主键",
+                    "pk": True,
+                },
+            }
+        ],
+    )
+    await put(
+        client,
+        cr,
+        obj,
+        "def",
+        [
+            {"key": "name", "op": "add", "after": "新对象"},
+            {"key": "group", "op": "add", "after": "业务"},
+            {"key": "desc", "op": "add", "after": "发布时新建"},
+        ],
+    )
+    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    r = await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)
+    assert r.status_code == 200, r.text
+    return cr
+
+
+async def test_publish_writes_back_dims_links_metrics_new_object(client, seeded):
+    cr = await approved_cr2(client)
+    r = await client.post(P + "/releases", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    ver = r.json()["ver"]
+    seeded.expire_all()
+    snap = (await seeded.scalar(select(OntologyRelease).where(OntologyRelease.ver == ver))).snapshot
+
+    t = snap["dimensions"]["time"]
+    vals = {v["key"]: v for v in t["values"]}
+    assert vals["月:2027-01"]["since"] == ver and vals["月:2027-01"]["synonyms"] == ["明年一月"]
+    assert vals["月:2026-12"]["status"] == "停用"
+    assert any(m["key"] == "下月>2026-11" and m["source"] == "业务知识" for m in t["mappings"])
+    assert t["qa"]["defaultLevel"] == "月" and t["desc"] == "时间维度说明"
+
+    assert snap["links"]["order_belongs_to_store"]["reverse"] == "门店的订单"
+    assert snap["links"]["order_belongs_to_store"]["cr"] == cr
+    nl = snap["links"]["new_link_1"]
+    assert (nl["from"], nl["to"], nl["name"], nl["since"]) == ("order", "x_obj", "订单属于新对象", ver)
+    assert nl["key"] == "x_id = x_obj.id"
+
+    assert "x_metric" in snap["metrics"]
+    o = await seeded.scalar(select(ObjectType).where(ObjectType.code == "x_obj"))
+    assert (o.display_name, o.obj_group, o.description) == ("新对象", "业务", "发布时新建")
+    assert snap["objectTypes"]["x_obj"]["name"] == "新对象"
+    assert snap["properties"]["x_obj"]["id"]["pk"] is True
+
+
+async def test_rollback_restores_dims_links_properties(client, seeded):
+    await approved_cr(client)
+    await approved_cr2(client)
+    r = await client.post(P + "/releases", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    ver = r.json()["ver"]
+    r = await client.post(f"{P}/releases/{ver}:rollback", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    rb = r.json()["ver"]
+    seeded.expire_all()
+    snap = (await seeded.scalar(select(OntologyRelease).where(OntologyRelease.ver == rb))).snapshot
+    assert "new_link_1" not in snap["links"]
+    assert snap["links"]["order_belongs_to_store"].get("reverse") != "门店的订单"
+    t = snap["dimensions"]["time"]
+    assert "月:2027-01" not in {v["key"] for v in t["values"]}
+    assert t["qa"]["defaultLevel"] == "日"
+    assert "x_note" not in snap["properties"]["order"]
+    # 定义表也回去了：之后再发布，快照按表重组也不会把回滚掉的东西带回来
+    from app.modules.static.models import DimMapping, DimValue, LinkType
+
+    lk = await seeded.scalar(select(LinkType).where(LinkType.code == "order_belongs_to_store"))
+    assert lk.reverse_name != "门店的订单" and lk.history[0]["change"] == "回滚恢复"
+    assert (await seeded.scalar(select(LinkType).where(LinkType.code == "new_link_1"))).status.value == "草稿"
+    v = await seeded.scalar(select(DimValue).where(DimValue.value_key == "月:2027-01"))
+    assert v.until_release == rb
+    v12 = await seeded.scalar(select(DimValue).where(DimValue.value_key == "月:2026-12"))
+    assert v12.status.value == "启用"
+    assert await seeded.scalar(select(DimMapping).where(DimMapping.map_key == "下月>2026-11")) is None
+    order = await seeded.scalar(select(ObjectType).where(ObjectType.code == "order"))
+    assert "x_note" not in {
+        p.api_name for p in await seeded.scalars(select(Property).where(Property.object_type_id == order.id))
+    }
+
+
+async def test_missing_target_without_is_new_is_rejected(client, seeded):
+    r = await client.post(f"{P}/change-requests", json={"title": "关系不存在"}, headers=LIU)
+    cr = r.json()["id"]
+    await put(
+        client,
+        cr,
+        {"kind": "link", "id": "no_such_link"},
+        "def",
+        [{"key": "reverse", "op": "update", "before": "", "after": "x"}],
+    )
+    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
+    r = await client.post(P + "/releases", json={}, headers=WANG)
+    assert r.status_code == 409 and r.json()["code"] == "WRITEBACK_FAILED", r.text
