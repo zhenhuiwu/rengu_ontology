@@ -20,15 +20,24 @@ class AlertLogOut(ApiModel):
     abnormal: bool | None = None
 
 
+class DimOut(ApiModel):
+    """通用维度值：维度所属对象类型 + 对象编号 + 显示名。"""
+
+    obj_kind: str
+    id: str
+    label: str
+    kind_label: str | None = None
+
+
 class AlertOut(ApiModel):
     id: str
     level: str
     rule_id: str
     obj_kind: str
+    obj_kind_label: str
     obj_id: str
     obj_label: str
-    store_id: str | None = None
-    store_label: str | None = None
+    dims: list[DimOut] = Field(default_factory=list)
     value: str
     threshold: str
     triggered_at: DateTimeSec
@@ -64,6 +73,8 @@ class AlertCan(ApiModel):
 
 class AlertDetail(AlertOut):
     rule: dict[str, Any] | None = None
+    # 发起动作时的审批人：取规则绑定的动作类型的审批人配置（无动作或未配置为 null）
+    approver: str | None = None
     recent7d: int = Field(alias="recent7d")
     locked: bool
     log: list[AlertLogOut]

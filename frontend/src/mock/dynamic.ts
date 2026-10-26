@@ -99,5 +99,9 @@ import { STORES } from './stores';
 export const storeOfKey = (key: string) => STORES[key.split('').reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 100003, 7) % STORES.length];
 for (const a of ALERTS) if (a.objKind === 'product' && !a.storeId) { const st = storeOfKey(a.id); a.storeId = st.id; a.storeLabel = st.name; }
 
+/** 通用维度值（后台 alert.dims，来自规则去重键）。演示数据里只有「所属门店」一个维度，页面按 dims 显示，不认门店 */
+export interface AlertDim { objKind: string; id: string; label: string; kindLabel?: string | null }
+export const alertDims = (a: Alert): AlertDim[] => (a.storeId ? [{ objKind: 'store', id: a.storeId, label: a.storeLabel ?? a.storeId }] : []);
+
 /** 告警转派可选的处理人（原在 pages/ops/Alerts.vue；后台 GET /people） */
 export const PEOPLE = ['王敏', '陈立军', '刘婷', '孙浩然', '何静', '赵蕾', '吴佳'];

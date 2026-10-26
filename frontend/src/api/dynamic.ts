@@ -5,7 +5,7 @@
  * 页面（pages/ops/Alerts.vue、Actions.vue）在 dynamicApi.isReal() 时走这里，否则保持原来的 mock 逻辑不变。
  * 字段名已和前端 mock 对齐（Alert / ActionRecord），这里只做类型收窄，不改值。
  */
-import type { Alert, AlertStatus } from '@/mock/dynamic';
+import type { Alert, AlertStatus, AlertDim } from '@/mock/dynamic';
 import type { ActionLog, ActionRecord, ActionStatus, SysId } from '@/mock/actions';
 import { apiClient, isApiError, type PageResult } from './http';
 import { DRAFTS } from '@/mock/releases';
@@ -18,14 +18,15 @@ const enc = encodeURIComponent;
 
 export type AlertTab = 'open' | 'doing' | 'closed' | 'all';
 export interface AlertLogDto { time: string; text: string; who: string; abnormal?: boolean | null }
-/** 后台 AlertOut：Alert + 关联动作（actionRef / actionStatus 同 Alerts.vue Row） */
+/** 后台 AlertOut：Alert + 通用维度 dims + 对象类型显示名 + 关联动作（actionRef / actionStatus 同 Alerts.vue Row） */
 export interface AlertDto extends Omit<Alert, 'storeId' | 'storeLabel'> {
-  storeId?: string | null; storeLabel?: string | null;
+  objKindLabel: string; dims: AlertDim[];
   actionRef?: string | null; actionStatus?: string | null; actionId?: string | null;
 }
 export interface AlertRuleDto { id: string; name: string; version: string; trigger: string; condition: string; schedule: string; dedupe: string; action?: string; metric?: string; confirmer?: string }
 export interface AlertCan { claim: boolean; transfer: boolean; close: boolean; startAction: boolean; reasons: Record<string, string> }
-export interface AlertDetailDto extends AlertDto { rule: AlertRuleDto | null; recent7d: number; locked: boolean; log: AlertLogDto[]; can: AlertCan }
+/** approver：发起动作时的审批人，取规则绑定动作类型的审批人配置（无则 null） */
+export interface AlertDetailDto extends AlertDto { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean; log: AlertLogDto[]; can: AlertCan }
 export interface AlertPageDto extends PageResult<AlertDto> { counts: Record<AlertTab, number> }
 export interface AlertQuery { status: AlertTab; level?: string; ruleId?: string; kw?: string; page: number; size: number }
 
@@ -59,6 +60,8 @@ export interface ActionMetaDto {
   actionNames: string[];
   actionSystems: { id: SysId; name: string }[];
   actionMeta: Record<string, { sysId: SysId; kind: string; version: string; approver: string; call: string }>;
+  /** 对象类型显示名（对象类型目录） */
+  objKindLabel?: Record<string, string>;
 }
 export type ReconcileResult = '外部已成功' | '外部未执行' | '仍无法确认';
 

@@ -132,7 +132,8 @@ if (live.value) {
 
 /** 状态点：待确认橙（需要关注）、失败红，其余灰；结果未知单独显示橙色问号 + “结果未知 · 待对账” */
 const badge = (s: ActionStatus) => (s === '待确认' ? 'warning' : s === '失败' ? 'error' : 'default');
-const kindLabel = (k: ActionRecord['objKind']) => OBJ_KIND_LABEL[k];
+/** 对象类型显示名：真接口取 /actions/meta 的对象类型目录，mock 取 OBJ_KIND_LABEL；未登记的类型显示编号 */
+const kindLabel = (k: ActionRecord['objKind']) => (live.value ? remote.meta?.objKindLabel?.[k] : (OBJ_KIND_LABEL as Record<string, string>)[k]) ?? k;
 const sourceText = (a: ActionRecord) =>
   a.source.type === '规则' ? `规则 ${a.source.ruleId} ${a.source.ruleVersion}${a.source.alertId ? ` · 告警 ${a.source.alertId}` : ''}`
   : a.source.type === '告警' ? `告警 ${a.source.alertId}`

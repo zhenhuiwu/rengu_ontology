@@ -17,8 +17,8 @@ import HoverCard from '@/components/HoverCard.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { ALERTS, RULES, METRICS, alertTimeline, type Alert, type AlertStatus } from '@/mock';
-import { PEOPLE } from '@/mock/dynamic';
-import { ACTIONS } from '@/mock/actions';
+import { PEOPLE, alertDims, type AlertDim } from '@/mock/dynamic';
+import { ACTIONS, ACTION_META, OBJ_KIND_LABEL } from '@/mock/actions';
 import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
@@ -27,7 +27,8 @@ import {
 } from '@/api/dynamic';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
-type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string };
+/** dims：通用维度值（演示数据里是所属门店）；objKindLabel：对象类型显示名（真接口由后台给，mock 取对象类型目录） */
+type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string; dims: AlertDim[]; objKindLabel?: string };
 /** 页面内的告警状态（模拟后台：认领、转派、关闭、发起动作都会改它并写处理记录） */
 /** 关联动作取自动作中心同一份数据（mock/actions.ts，按来源告警匹配最近一条），两页的幂等键和状态一致 */
 const LIST = reactive<Row[]>(ALERTS.map((a) => {
@@ -35,7 +36,7 @@ const LIST = reactive<Row[]>(ALERTS.map((a) => {
   const log = alertTimeline(a);
   if (act && !(a.status === '已解决' || a.status === '已忽略')) log.push({ time: act.submittedAt, text: `发起动作「${act.action}」（${act.idemKey}），现为${act.status}`, who: act.initiator });
   log.sort((x, y) => (x.time < y.time ? -1 : 1));
-  return { ...a, log, actionRef: act?.idemKey, actionStatus: act?.status };
+  return { ...a, log, actionRef: act?.idemKey, actionStatus: act?.status, dims: alertDims(a) };
 }));
 /** 关联动作还没有结果时锁定转派和关闭 */
 const IN_FLIGHT = ['待确认', '审批中', '执行中', '结果未知'];
@@ -75,14 +76,14 @@ const page = pq.page;
 const pageSize = pq.size;
 
 /** 真接口状态：当前页、总数、页签计数、当前详情、处理人下拉；seen 记住看过的行（跨页勾选时批量操作用） */
-const remote = reactive({ items: [] as Row[], total: 0, counts: { open: 0, doing: 0, closed: 0, all: 0 } as Record<string, number>, detail: null as (Row & { rule: AlertRuleDto | null; recent7d: number; locked: boolean }) | null, people: [] as string[] });
+const remote = reactive({ items: [] as Row[], total: 0, counts: { open: 0, doing: 0, closed: 0, all: 0 } as Record<string, number>, detail: null as (Row & { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean }) | null, people: [] as string[] });
 const seen = new Map<string, Row>();
 const toRow = (a: AlertDto): Row => ({
-  ...a, storeId: a.storeId ?? undefined, storeLabel: a.storeLabel ?? undefined,
+  ...a, dims: a.dims ?? [],
   actionRef: a.actionRef ?? undefined, actionStatus: a.actionStatus ?? undefined, log: [],
 });
 const toDetail = (d: AlertDetailDto) => ({
-  ...toRow(d), rule: d.rule, recent7d: d.recent7d, locked: d.locked,
+  ...toRow(d), rule: d.rule, approver: d.approver, recent7d: d.recent7d, locked: d.locked,
   log: d.log.map((l) => ({ time: l.time, text: l.text, who: l.who, abnormal: l.abnormal ?? undefined })),
 });
 const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
@@ -120,6 +121,11 @@ const recent = computed(() => {
 const pick = (a: Alert) => (pinned.value = a.id, router.replace({ query: { ...route.query, alert: a.id } }));
 const people = computed(() => (live.value ? remote.people : PEOPLE));
 const ruleName = (id: string) => RULES[id]?.name ?? id;
+/** 对象类型显示名：真接口取后台 objKindLabel，mock 取对象类型目录，不写死订单 / 商品 / 门店 */
+const kindLabel = (a: Row) => a.objKindLabel ?? (OBJ_KIND_LABEL as Record<string, string>)[a.objKind] ?? a.objKind;
+const dimKind = (d: AlertDim) => d.kindLabel ?? (OBJ_KIND_LABEL as Record<string, string>)[d.objKind] ?? d.objKind;
+/** 发起动作的审批人：取规则绑定动作类型的审批人配置（真接口后台给 approver，mock 取 ACTION_META） */
+const approverOf = (r: AlertRuleDto | null) => (live.value ? remote.detail?.approver ?? null : r?.action ? (ACTION_META as Record<string, { approver: string }>)[r.action]?.approver ?? null : null);
 
 // ---- 真接口：取列表 / 详情 ----
 let listSeq = 0; let detailSeq = 0;
@@ -268,11 +274,11 @@ async function runAction() {
   const ok = await confirm.ask({
     title: r.action,
     tag: '待确认',
-    target: `${a.objKind === 'order' ? '订单' : a.objKind === 'product' ? '商品' : '门店'} ${a.objLabel}`,
+    target: `${kindLabel(a)} ${a.objLabel}`,
     fields: [
       { label: '来源告警', value: `${a.id}（${r.id} ${r.version}）` },
       { label: '触发值', value: `${a.value}，阈值 ${a.threshold}` },
-      { label: '审批人', value: a.objKind === 'product' ? '品类经理 王敏' : '区域运营 陈立军' },
+      { label: '审批人', value: approverOf(r) ?? '--' },
       { label: '幂等键', value: `act-${a.id.toLowerCase()}` },
     ],
     impact: '提交后写回外部系统；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时在动作中心人工对账，不自动重试写入。',
@@ -285,7 +291,7 @@ async function runAction() {
   }
   a.actionRef = `act-${a.id.toLowerCase()}`;
   a.actionStatus = '审批中';
-  a.log.push({ time: now(), text: `发起动作「${r.action}」，待${a.objKind === 'product' ? '品类经理 王敏' : '区域运营 陈立军'}审批；动作成功后告警自动转为已解决`, who: ME });
+  a.log.push({ time: now(), text: `发起动作「${r.action}」，待${approverOf(r) ?? '--'}审批；动作成功后告警自动转为已解决`, who: ME });
   message.success(`已提交：${r.action}`);
 }
 </script>
@@ -331,6 +337,7 @@ async function runAction() {
             <template v-else-if="column.key === 'rule'">{{ ruleName(record.ruleId) }}</template>
             <template v-else-if="column.key === 'obj'">
               <ObjRef :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef>
+              <span v-for="d in record.dims" :key="`${d.objKind}:${d.id}`" class="c-3"> · {{ d.label }}</span>
             </template>
             <template v-else-if="column.key === 'value'"><span class="num">{{ record.value }}</span><span class="c-3"> / {{ record.threshold }}</span></template>
             <template v-else-if="column.key === 'triggeredAt'"><span class="num">{{ record.triggeredAt }}</span></template>
@@ -352,7 +359,10 @@ async function runAction() {
         <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px' }">
           <a-descriptions-item label="告警编号"><span class="num">{{ current.id }}</span></a-descriptions-item>
           <a-descriptions-item label="对象">
-            <ObjRef :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef>
+            <span class="c-3">{{ kindLabel(current) }} </span><ObjRef :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef>
+          </a-descriptions-item>
+          <a-descriptions-item v-for="d in current.dims" :key="`${d.objKind}:${d.id}`" :label="dimKind(d)">
+            <ObjRef :kind="d.objKind" :id="d.id">{{ d.label }}</ObjRef>
           </a-descriptions-item>
           <a-descriptions-item label="触发值"><span class="num">{{ current.value }}</span><span class="c-3">，阈值 {{ current.threshold }}</span></a-descriptions-item>
           <a-descriptions-item label="规则">{{ rule.id }} {{ rule.version }} · {{ rule.trigger }}</a-descriptions-item>
