@@ -18,6 +18,7 @@ import { useQueryParam } from './useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
 import { useQaSession, errText } from './useQaSession';
+import { ensureScopeOptions, useScopeCaliber } from './qaScope';
 import * as qaApi from '@/api/qa';
 import QaSessionPanel from './components/QaSessionPanel.vue';
 import QaConversation from './components/QaConversation.vue';
@@ -45,29 +46,37 @@ const applied = ref(false);
 // 右栏动作行只在确认卡打开期间高亮；取消/关闭后恢复“发起”，提交后才变“待审批”
 const highlight = pending;
 const { readonly, reason } = useReadonly();
-/* 预览：回答只含被预览用户范围内的数据，会话顶部写明（问数涉及的对象：订单、门店、会员） */
+/* 预览：回答只含被预览用户范围内的数据，会话顶部写明（被预览用户有行级限制的对象，不写死对象名） */
 const pv = usePreview();
-const pvText = computed(() => ['订单', '门店', '会员'].map((o) => pv.scopeLabel(o).replace('数据范围：', '')).join('；'));
+const pvText = computed(() => (pv.limited.value.length ? pv.limited.value.map((o) => `${o.name} ${o.scope}`).join('；') : '全部数据'));
 
 // 会话级范围与口径
-const scope = ref('华东');
-const caliber = ref('不含税');
+/* 范围 = 组织层级维度最上层取值，默认当前用户行级范围；口径 = 指标 variants，没有就隐藏（qaScope.ts） */
+const sc = useScopeCaliber();
+const scope = ref('');
+const caliber = ref('');
 const tips = ref<string[]>([]);
 const sess = useQaSession();
 /* 真接口：范围/口径跟着当前会话（W3）；用户改了才 PATCH（W4），系统提示由后台作为 system 轮次追加 */
 let syncing = false;
+async function setQuiet(s: string, c: string) { syncing = true; scope.value = s; caliber.value = c; await nextTick(); syncing = false; }
+const fromSession = (d: { scope: string | null; caliber: string | null }) => setQuiet(sc.normScope(d.scope) || sc.defaultScope(pv.scopeOf), d.caliber ?? '');
 watch([scope, caliber], async ([s, c]) => {
-  if (!sess.real) { tips.value.push(`从这里开始按 大区 = ${s}、口径 = ${c} 回答`); return; }
+  if (syncing) return;
+  if (!sess.real) { tips.value.push(`从这里开始按 ${sc.levelName.value} = ${s}${sc.showCaliber.value ? `、口径 = ${c}` : ''} 回答`); return; }
   const d = sess.detail.value;
-  if (syncing || !d || (d.scope === s && d.caliber === c)) return;
+  if (!d || (sc.normScope(d.scope) === s && (d.caliber ?? '') === c)) return;
   try { sess.detail.value = await qaApi.patchSession(d.id, { scope: s, caliber: c }); }
-  catch (e) { message.error(`修改范围口径失败：${errText(e)}`); syncing = true; scope.value = d.scope ?? '华东'; caliber.value = d.caliber; await nextTick(); syncing = false; }
+  catch (e) { message.error(`修改范围口径失败：${errText(e)}`); await fromSession(d); }
+});
+/* 选项加载完：有会话按会话，否则按默认范围 / 第一个口径（不触发提示和 PATCH） */
+ensureScopeOptions(sess.real).then(() => {
+  const d = sess.real ? sess.detail.value : null;
+  if (d) return fromSession(d);
+  return setQuiet(sc.defaultScope(pv.scopeOf), sc.caliberOpts.value[0]?.value ?? '');
 });
 if (sess.real) {
-  watch(() => sess.detail.value, async (d) => {
-    if (!d) return;
-    syncing = true; scope.value = d.scope ?? '华东'; caliber.value = d.caliber; await nextTick(); syncing = false;
-  });
+  watch(() => sess.detail.value, (d) => { if (d) fromSession(d); });
   watch(() => sess.activeId.value, (id) => { if (id && sess.detail.value?.id !== id) sess.loadDetail(id); }, { immediate: true });
   const q = route.query.session;
   if (typeof q === 'string' && q && !sess.activeId.value) sess.activeId.value = q;

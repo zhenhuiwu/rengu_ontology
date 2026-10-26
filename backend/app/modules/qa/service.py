@@ -14,7 +14,7 @@ from app.common.auth import CurrentUser, resolve_user, row_filter
 from app.common.context import ViewContext
 from app.common.pagination import Page, PageParams
 from app.core import clock
-from app.core.errors import NotFound
+from app.core.errors import AppError, NotFound
 from app.core.schema import _tz
 from app.modules.admin.models import SysUser
 from app.modules.qa import catalog
@@ -113,6 +113,51 @@ async def effective_user(session: AsyncSession, user: CurrentUser, ctx: ViewCont
 # ---------------------------------------------------------------- 工作台
 
 
+TAX_CALIBERS = {"不含税": "ex", "含税": "in"}  # 旧口径（W9 ex/in 同义），静态没有对应变体时按这个走
+
+
+async def variant_index(session: AsyncSession) -> dict[str, list[dict[str, Any]]]:
+    """静态指标口径变体：label → [{code, name, api, version}]（按指标去重）。静态没给变体时为空。"""
+    from app.modules.static.models import Metric
+
+    rows = (await session.execute(select(Metric.code, Metric.display_name, Metric.variants))).all()
+    names = {code: name for code, name, _ in rows}
+    idx: dict[str, dict[str, dict[str, Any]]] = {}
+    for _, _, vs in rows:
+        for v in vs or []:
+            if isinstance(v, dict) and v.get("label") and v.get("code"):
+                one = {"code": v["code"], "name": names.get(v["code"], v["code"]), "api": v.get("api")}
+                idx.setdefault(str(v["label"]), {})[v["code"]] = one | {"version": v.get("version")}
+    return {k: list(d.values()) for k, d in idx.items()}
+
+
+def check_caliber(label: str | None, idx: dict[str, list[dict[str, Any]]]) -> str | None:
+    """静态有变体时只收认识的标签（旧的 不含税 / 含税 总是收）；静态没有变体时不校验。"""
+    if label is None or not idx or label in idx or label in TAX_CALIBERS:
+        return label
+    raise AppError(
+        "口径不在指标口径变体里",
+        code="VALIDATION_FAILED",
+        status_code=422,
+        details={"fields": [{"field": "caliber", "message": f"可选：{'、'.join(sorted(idx))}"}]},
+    )
+
+
+def caliber_lines(label: str | None, idx: dict[str, list[dict[str, Any]]]) -> list[str]:
+    """会话口径 → 提示词里的一段：命中静态变体就点名每个指标该用哪个变体；否则按旧的含税 / 不含税。"""
+    if not label:
+        return []
+    if label in idx:
+        out = [f"- 用户选定口径「{label}」：下列指标只用这个变体，同名的其他口径变体不要用"]
+        out += [
+            f"- {v['name']}：`{v['api']}`（{v['code']} {v['version'] or ''}）".rstrip() for v in idx[label]
+        ]
+        return out
+    if label in TAX_CALIBERS:
+        return [f"- 用户选定口径「{label}」：金额类指标（销售额 / 客单价等）按{label}口径计算 [推断]"]
+    return [f"- 用户选定口径「{label}」（静态指标里没有这个变体，仅供参考）"]
+
+
 def session_out(s: QaSession) -> SessionOut:
     return SessionOut(id=s.code, title=s.title, date=fmt_date(s.last_at) or "")
 
@@ -139,7 +184,7 @@ def session_detail_out(s: QaSession, applied: set[int] | frozenset[int] = frozen
         title=s.title,
         date=fmt_date(s.last_at) or "",
         scope=s.scope,
-        caliber=s.caliber.value,
+        caliber=s.caliber,
         owner_id=s.owner.code,
         turns=[turn_out(t, t.id in applied) for t in s.turns],
     )

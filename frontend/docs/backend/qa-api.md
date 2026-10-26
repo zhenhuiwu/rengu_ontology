@@ -139,7 +139,7 @@
 | 时间线状态 | 对象详情 `TlStatus`：`done`/`warn`/`error`/`unknown`；工作台右栏 `QaTimelineLevel`：`normal`/`warn`/`error`/`unknown`（接口和库都用英文，跟 mock 一致） |
 | 对象类型 `ObjKind` | `store`、`product`、`order`（右栏另有 `region`） |
 | 会话时间筛选 `sessRange` | `all`、`today`、`7d`、`30d`（按 `now()` 算） |
-| 会话口径（W2/W3/W4/W17，`qa_session.caliber`） | 接口值 `不含税`、`含税`（跟 `QA_CALIBER_OPTIONS` 一致，`QaComposer.vue:39` 的下拉，`Workbench.vue:51` 默认 `不含税`）；库里存 `ex`、`in` |
+| 会话口径（W2/W3/W4/W17，`qa_session.caliber`） | 自由文本 ≤32 字 = 指标口径变体标签（静态 `metrics[].variants[].label`，如 `不含税`、`含税`），strip，空 → `null`（不限，W3 不返回该字段）；静态指标有变体时只收变体标签（`不含税` / `含税` 总是收），否则 422 `VALIDATION_FAILED`；静态没有变体时不校验。库里直接存标签（`qa_0004` 把旧 `ex`/`in` 换成 `不含税`/`含税`）。W6 把它映射成每个指标该用的变体（api）写进提示词“会话口径”段；没对上变体的 `不含税`/`含税` 按旧金额口径提示 [推断] |
 | 回答口径（澄清条、W9、SSE `clarify`） | `ex` 不含税、`in` 含税、`both` 两者对比（`QaAnswer.vue:90` 写死的单选；选项由 SSE `clarify.options` 下发，不走 W17） |
 | 回答状态（`QA_DEMO_TURNS[].kind`） | `answer` 正常回答（含澄清）、`denied` 权限拦截、`empty` 结果为空、`system` 系统提示；`failed` 失败 mock 里没有 [推断] |
 
@@ -221,9 +221,9 @@
 | # | 方法 路径 | 入参 | 出参 / 规则 | mock 来源 |
 |---|---|---|---|---|
 | W1 | `GET /sessions` | `q`、`range=all\|today\|7d\|30d`（按 `now()` 算）、`page`、`size=12`（URL `sessQ`/`sessRange`/`sessPage`，size 固定） | `QaSession{id,title,date}`，按时间倒序 | `mock/qa.ts` `QA_SESSION_LIST` |
-| W2 | `POST /sessions` | `{scope, caliber: 不含税\|含税}` | 新会话 `title='新会话'`；第一问发出后，后台把标题设成问题的前 20 个字 | `useQaSession.newSession` |
+| W2 | `POST /sessions` | `{scope, caliber?: 口径变体标签}` | 新会话 `title='新会话'`；第一问发出后，后台把标题设成问题的前 20 个字 | `useQaSession.newSession` |
 | W3 | `GET /sessions/{sid}` | — | `{id,title,date,scope,caliber,ownerId, turns: Turn[]}`；**一次返回全部轮次，不分页、没有游标**（前端对话区没有「加载更早」）；Turn 见 3.3。左栏点会话就是切换当前会话，调这个接口 | `mock/qa.ts` `QA_DEMO_TURNS`（原来写死在 `QaConversation.vue`，已搬进 mock） |
-| W4 | `PATCH /sessions/{sid}` | `{title?}` / `{scope?, caliber?: 不含税\|含税}` | 改范围或口径时，后台追加一条系统轮次「从这里开始按 大区 = X、口径 = Y 回答」，之前的答案保留各自的依据 | `Workbench.vue` `tips`、`QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS` |
+| W4 | `PATCH /sessions/{sid}` | `{title?}` / `{scope?, caliber?: 口径变体标签 \| ""}` | 改范围或口径时，后台追加一条系统轮次「从这里开始按 大区 = X、口径 = Y 回答」，之前的答案保留各自的依据 | `Workbench.vue` `tips`、`QA_SCOPE_OPTIONS`、`QA_CALIBER_OPTIONS` |
 | W5 | `DELETE /sessions/{sid}` | — | 204；已固定到页面的卡片不受影响（卡片存的是自己那份语义计划，不外键级联） | `QaSessionPanel.doDelete` |
 | W6 | `POST /sessions/{sid}/turns` | `{question, refs?: ObjRef[], clientId}`（范围和口径取会话上的值） | 202 `{turnId, streamUrl}`。发送、Enter、追问词走这个接口；「改查 10 月」只把改写填进输入框，用户再发送才调用；常用问题抽屉里的「提问」**现在只关闭抽屉**，不调用（第 10 节） | `useQaSession.send` |
 | W7 | `GET /turns/{tid}/stream` | `Last-Event-ID` | **SSE**，见 3.1 | `QaAnswer.vue`、`QaStoreAnswer.vue` |
@@ -243,7 +243,7 @@
 **分享会话**：前端只复制链接 `?session=sid`。别人打开时用 W3，**按打开人自己的权限重新执行每一轮的语义计划**，超出他范围的轮次返回 `denied`；拥有者自己看时用快照 [推断]。预览期间「分享」置灰。
 
 **联调实现（qa-joint，W2/W4/W5/W9–W12/W15/W16 已落；X1/X2/X2b 前端已接动态）**：
-- W2 返回 201 + 会话详情（同 W3，`turns: []`）；`scope` 缺省 `华东`、`caliber` 缺省 `不含税`（同 `Workbench.vue` 初值）；会话号 = `S` + 现有最大序号 + 1 [推断]。
+- W2 返回 201 + 会话详情（同 W3，`turns: []`）；`scope` 缺省 `华东`、`caliber` 缺省 `不含税`、传空串 = 不限（`null`）；会话号 = `S` + 现有最大序号 + 1 [推断]。
 - W4 返回会话详情（同 W3）。`title` trim 后为空就不改（同 `QaSessionPanel.saveRename`）；`scope`/`caliber` 只有值真变了才追加系统轮次（`kind=system`，`snapshot.text`），并刷新 `last_at` [推断]。
 - W5、W15 返回 204；不是自己的会话 / 常用问题一律 404（不暴露存在性）[推断]。
 - W16 返回 201 `{id, status:'待审批', approver}`；申请号 `AP` + 4 位序号 [推断]；审批人第一期固定取 `QA_APPLY.approver`（按范围路由待 admin 权限审批流）[推断]；`sourceTurnId` 不是有效用户自己会话里的轮次 → 404；`duration` 只收 30/90/180（其他 422）；只读白名单（`?ver=` / `?previewAs=` 都放行，`readonly_extra`）。申请人记有效用户（预览时 = 被预览人，跟轮次归属一致；第 12 节 #4 仍待定）[推断]。W3 里越权轮次若有待审批申请，带 `applied: true`（前端显示「已申请 · 待审批」，刷新后保留）[推断]；`?apply=1` 刷新复现时没有轮次号，按本会话最后一个未申请的越权轮次提交 [推断]。
@@ -412,6 +412,23 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 | O3 | `POST /objects/{kind}/export` | `{kw, facets, ids?}` | CSV（UTF-8 BOM）；传了 `ids` 就导出所选，否则导出当前筛选结果；预览时返回 `EXPORT_FORBIDDEN` | `exportCsv` |
 | O4 | `POST /scoped-ask` | `{scope:{kind,label,filter?:{kw,facets}, ids?, single?:{kind,id,title}}, question}` | `AskAnswer{text, basis, rows:[{id,kind,name,value,note}], rowsTitle?}`。**范围只传筛选条件**，没勾选时不要传全部 id（订单有 1286 条）。预览时也能问，见 1.1。用的是 2.2 同一条流水线，结果是同步 JSON | `answerFor`、`ObjAskModal` |
 
+
+### 5.1 通用对象浏览（元数据驱动，设计见 `backend/docs/backend/generic-object-explorer.md`；qa-pages 分支）
+
+O1–O3 是按门店 / 商品 / 订单写死的旧接口；通用版按对象类型 code + 属性 api 名，任何已发布对象类型都能用，页面不写死行业。代码 `backend/app/modules/qa/explore_api.py`（为免和第 8 节 X1–X3 混淆，这里记作 E1–E3）。
+
+| # | 方法 路径 | 入参 | 出参 / 规则 |
+|---|---|---|---|
+| E1 | `POST /object-types/{code}/search` | `{kw, filters:{prop:[值…] 或 {min,max}}, sort?:"prop" / "-prop", page, size≤200, withFacets=true}` | `{items:[{id,title,values:{prop:值}}], total, page, size, titleProp, bound, boundProps[], facets}`。`filters` / `sort` 只能用可筛选 / 可排序属性，否则 422；没绑定物理表 → `bound=false`、空结果（前端「未接入数据」）；`facets` 是过渡（静态 `/facets` 上线后删）[推断] |
+| E2 | `GET /object-types/{code}/objects/{id}` | — | `{id,title,values,titleProp,boundProps}`；不在行级范围 → 403 `OUT_OF_SCOPE`，不存在 / 未绑定 → 404 |
+| E3 | `POST /object-types/{code}/export` | E1 入参 + `ids?`、`props?` | CSV（UTF-8 BOM，`Content-Disposition: filename*=UTF-8''…`）；首列标题属性；敏感属性不导出；预览 403 `EXPORT_FORBIDDEN`；上限 10000 行；审计 |
+| O4 补充 | `POST /scoped-ask` | `scope.query?: {kw, filters}`（E1 同形） | 没选行时用当前筛选解析对象 id（`explore_ids`，同一套绑定和行级范围）；目前只支持 store / product / order 三类的回答 |
+
+- 物理绑定：`backend/seeds/extra/qa/objects/bindings.json`（对象类型 → 表，属性 → 列，可选 rowFilter）。
+- 属性标志：E1 `flags()` 读静态 property 列（filterable = `static.explorer.facetable`），筛未开 filterable 的属性 422；前端 `objMeta.ts metaFromProps` 的默认规则只在后台不可达的 mock 兜底用。
+- 前端：`src/api/qaObjects.ts exploreSearch / exploreGet / exploreExport`；元数据 `objMeta.ts`（真 `/object-types/{id}/meta` + `/properties` 合并、`/facets`；mock 只在后台不可达时读兜底；带 kw 时 facets 用 E1 过渡 `facets`，静态 `/facets` 不收 kw）；取行 `objRows.ts`（mock 模式按 `MOCK_BINDINGS` 在本地筛）。
+- 工作台范围 / 口径：`src/pages/qa/qaScope.ts`。范围 = 组织层级维度最上层取值，默认当前用户行级范围（`GET /api/admin/v1/me/row-scopes?objectType=`，未上线）；口径 = meta.metrics[].variants[].label 并集，没有就用 W17 选项。会话 `scope` 仍是 ≤60 字的自由文本，`caliber` 是 ≤32 字自由文本（口径变体标签，空 = 不限，见下）。
+
 ---
 
 ## 6. R4 对象详情 `/use/objects/detail?kind&id&tab`
@@ -467,7 +484,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 
 **高频统计 [推断]**：每天从 `qa_query_log` 聚合，周期按 `now()` 往前数 7 / 30 天。问题先归一，再用 pgvector 聚类近义问法。`consistency` = 这一类问题里最常见的那份语义计划占比。只统计正式身份的提问，不统计预览和评测的。
 
-**联调实现（qa-joint：认证问答 T1/T3–T8、高频问题 T18/T19；qa-tuning：评测题库 T9–T12、反馈与纠错 T13–T17，T15 只接了“已覆盖”分支）**：
+**联调实现（qa-joint：认证问答 T1/T3–T8、高频问题 T18/T19；qa-tuning：评测题库 T9–T12、反馈与纠错 T13–T17，T15 两个分支都接了）**：
 - T5 返回 201 + `CertQa`（同 T4），`status='待认证'`、`source='手动新建'`；查重按问题**忽略大小写**比较 [推断]；编号 `CQ-` + 现有最大序号 + 1（3 位）[推断]；`plan.metric` 不是 T2 里的指标 → 422 `VALIDATION_FAILED`；指标有未发布 CR 时带上 `cr`，`note` 同前端 `createCert` 文案；同问题的高频问题（`qa_freq_question`）顺带关联到新认证问答 [推断]。前端撞重名时提示「已有认证问答「…」」（warning，不关弹窗）。
 - T6 只允许从 `待认证` / `待重新认证` 发起，其他状态 409 `STATE_INVALID` [推断]；`certifier` = 有效用户名、`certifiedAt` = `now()`；`cr` 仍未发布 → `待重新认证`，`note` =「已按 {版本} 认证；{CR} 发布后需再次认证」；否则 `已认证`，清掉 `cr` / `note`。
 - T7 按上表照前端：`enabled=false` → `已停用`，`enabled=true` → `已认证`。
@@ -478,7 +495,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 - **T11 运行评测（qa-tuning）**：`group` 不是 `all` / `全部` 也不在 `EVAL_GROUPS` → 422 `VALIDATION_FAILED`；编号 `ER-` + 现有最大序号 + 1（4 位；取号前拿事务级咨询锁 `xact_lock('qa.eval_run.code')`，并发发起不撞号，`code` 唯一约束兜底）；`trigger='手动运行'`、`version` = 当前版本、`scope` =「全部 N 题」/「{分组}相关 N 题」、`operator` = 有效用户名，审计 `qa.eval.run`。要 LLM（`get_llm`），没配密钥 → 503。返回 202 后（经 `BackgroundTasks`，请求事务已提交）由**进程内 asyncio 任务**逐题跑（`app/modules/qa/eval/job.py`）[推断：没走 procrastinate，`app/jobs` 不归 qa；进程重启会丢正在跑的任务，接 procrastinate 时把 `job._background` 包成 task 即可]：每题在只读连接（`statement_timeout` 15s）的事务里调 `chain.answer`、整体回滚，**不改任何数据和口径**；每题后 commit，前端轮询 T9/T10 看进度；跑完 `status='已完成'`，异常中断也置已完成并写 `note`。
 - **T11 判分 [推断]**：链路 B 不产出 SemPlan，按回答形状对期望计划：拒答 / 反问 → `未召回指标`；0 行 → `过滤条件缺失`；列名里找不到期望指标名（去括号）→ `指标选错`；缺期望维度列 → `维度不匹配`；链路报错 / SQL 执行失败记失败（`未召回指标`，actual「执行失败：code」）。`时间解析错误` 目前判不出。每题写 `qa_eval_question.last_result`，失败写 `qa_eval_fail`（actual 截 500 字）。冒烟（真 qwen-flash，履约前 2 题）：1/2 通过，EQ-018 反问 → 未召回指标。
 - **T13 列表直接返回 T14 的详情字段** [推断]：行内按钮要 `certBlock` / `coveredBy`。T14 补充字段（前端确认卡 / 抽屉用）：`existingCertQuestion`、`existingCertStatus`、`plan` / `planText`（已有认证问答的计划 → 高频问题 → 评测题）、`coveredCrStatus`。
-- **T15**：只能从 `待处理`（否则 409 `STATE_INVALID`）。词已在某张变更单里（T20 `qa_tuned_synonym`）→ 关联：CR `已通过` → `待发布生效`，否则 `已转同义词`；同词的所有待处理同义词反馈一起改（`resolvedBy` = CR、`handler`），返回 `{crId, affected[], feedback}`，审计 `qa.feedback.to_synonym`。**没覆盖的词 → 409 `CR_API_PENDING`**：新建 / 加入变更单要静态 X3 写接口（static-r3 在做，未合入）；前端真接口模式下提示，不弹发起变更窗。接 X3 后在 `router.py feedback_to_synonym` 的 `SynonymCrPending` 处补。
+- **T15**：只能从 `待处理`（否则 409 `STATE_INVALID`）。词已在某张变更单里（T20 `qa_tuned_synonym`）→ 关联：CR `已通过` → `待发布生效`，否则 `已转同义词`；同词的所有待处理同义词反馈一起改（`resolvedBy` = CR、`handler`），返回 `{crId, affected[], feedback}`，审计 `qa.feedback.to_synonym`。**没覆盖的词 → 调静态 X3**（`router._syn_to_cr`）：`join` 给了就 `add_target` 加入该草稿，否则 `create` 新建草稿（标题默认“补同义词：<词>”）；目标 `{kind:'knowledge'}`，按 fix.target 去版本号后的名称找知识，找不到 `isNew` + id `K-<反馈号>` [推断]；`synonyms` 段在已有行后 add 一行；写 `qa_synonym_link`，同词反馈按“已覆盖”分支改。知识被别的单子占用 → 静态 409 `TARGET_IN_OTHER_CR`（`details.crId`），前端据此 `join` 重试一次。草稿下拉 `GET /change-requests?status=草稿`。
 - **T16**：只能从 `待处理`。已有同题认证问答 → `mode='variant'`；否则用 T14 的 `plan` 新建（`source='反馈纠错'`）并**直接认证**（同 mock `toCert`/`addCert`；指标有未发布 CR → `待重新认证`）[推断：契约原文写新建是 `待认证`，按前端 mock 为准]；没有计划 → 422 `CERT_NO_PLAN`。用户原话 ≤ 40 字、不等于问题、且不是任何认证问答的同问法时加为同问法。反馈 → `已转认证问答`，`resolvedBy` = 认证编号。审计 `qa.feedback.to_cert`。
 - **T17**：`:ignore` 只能从 `待处理`；`:reopen` 从 `已忽略` 或 `已转认证问答`（否则 409）[推断：前端只在 `已忽略` 行给按钮，后端多接受 `已转认证问答` 用来撤销误转]。重开清空 `handler` / `resolvedBy`，并删掉 T16 加上的同问法（`qa_feedback.cert_variant_id`，迁移 `qa_0003`；同问法已被 T8 删掉就跳过）；T16 新建的认证问答保留 [推断：前端 mock `reopen` 只改反馈、不动认证问答]。审计 `qa.feedback.ignore` / `reopen`。T11、T15–T17 都受只读规则约束（`?ver=` / `?previewAs=` 下 403 `READONLY`）。
 - 前端（qa-tuning）：评测页签运行记录 T9（`etr` 筛选、服务端分页）、抽屉 T10（失败用例服务端分页 12 条、原因分布取 `kindStats`、待运行回放题取 `replayQuestions` / `replayHints`），题目 T12（分组计数取 `groupCounts`）；有「运行中」时每 3 秒重拉。页头「运行评测」走 T11 并跳到新运行。反馈页签 T13 / T14 / T15–T17，待处理计数取 T1。连不上后台照旧回退 mock。
@@ -509,7 +526,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 | X2 | 动态 | `POST /api/ontology/v1/action-runs/{id}:confirm` → `{id, status}`：有审批人 → `approving`（问数显示「待审批」，确认卡按钮「提交审批」）；没有 → `executing`（「执行中」，按钮「确认执行」）。外部系统超时标记成 `unknown`「结果未知」，进对账，不自动重试。 | 确认卡「提交审批 / 确认执行」 |
 | X2b | 动态 | `POST /api/ontology/v1/action-runs/{id}:withdraw` `{reason:'确认卡取消'}` → `withdrawn` [推断：前端取消只是关卡片，见第 12 节第 15 条] | 确认卡「取消」 |
 | X1/X2/X2b 权限 | 动态 | 工作台和对象详情发起的 stage / confirm / withdraw **都按对象权限里的 `actions` 校验**（该对象类型对当前用户授权了这个动作才放行，没有返回 403 `NO_PERMISSION`）；O9 的「发起」是否置灰用同一份授权。只读模式下三者都返回 403 `READONLY` | — |
-| X3 | 静态 | `POST /api/ontology/v1/change-requests`、`POST /api/ontology/v1/change-requests/{id}/targets`、`GET /api/ontology/v1/change-requests?status=draft` | T15 转同义词 |
+| X3 | 静态 | `POST /api/ontology/v1/change-requests`、`POST /api/ontology/v1/change-requests/{id}/targets`、`GET /api/ontology/v1/change-requests?status=草稿` | T15 转同义词 |
 | X4 | 版本层 | 发布事件 `release.published{ver, parentVer, kind: "release"\|"rollback", rollbackOf, changeOrderIds}`（**已定**：版本层 `versioning.create_version` 写，骨架 `0c35c1d` 已实现）：在 `create_version` 内、同一事务里调 `app/common/outbox.emit(session, "release.published", payload, event_id="ontology_release:<ver>:release.published")` 写进 outbox 表 `outbox_event`（`event_id` 唯一，订阅方按它去重），发布和整版回滚都会发（回滚时 `kind="rollback"`、`rollbackOf` = 被回滚的版本，内容 = 它的上一版）；由 `app.jobs.dispatch_outbox` 分发给 `app/common/outbox.subscribe("release.published", handler)` 登记的订阅者（失败 `attempts+1`、记 `last_error`）。**问数只在启动时 `subscribe`，不轮询、不写别的模块的表**。问数不负责任何快照 section，不实现 `build_section` / `restore_section`。收到事件后对 `qa_object_type_view`：`kind="release"` 且 `changeOrderIds` 动到了对象类型 / 属性 / 指标的展示定义时，按新版本快照追加一行 `release_id` = 新版本；没动到就不写，读的时候按 9.2 回退规则取；`kind="rollback"` 不写新行，读的时候按 `rollbackOf` 的上一版取 [推断] | 认证问答改成待重新认证、页面口径待更新、评测回放、反馈变成待发布生效 |
 | X5 | admin | `GET /api/admin/v1/users?kw`、`/api/admin/v1/roles`、`/api/admin/v1/audit-logs`（写审计）、权限审批流、预览会话 | P9/P10 选人，W16，1.1 |
 | X7 | 动态 | `GET /api/ontology/v1/action-runs`（统一列表，按 `objKind`、`objId` / `qaSession` / `status` 过滤，分页 `page,size`）、`GET /api/ontology/v1/action-runs/{id}`（详情 + 时间线，时间线来自 `action_run_log`）。问数页面里所有动作记录列表和详情都调这两个，问数**不定义自己的动作记录接口或表** | 对象详情「动作记录」页签、工作台右栏动作状态（O9 的 `state` 也由最近一条在途 run 推出） |

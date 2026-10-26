@@ -89,14 +89,26 @@ async def _fb(qa, fid):
 
 
 async def test_to_synonym_covered(qa):
-    # FB-242「发货准时率」不在任何变更单 → CR_API_PENDING（待 static-r3）
-    r = await qa.post(f"{B}/feedbacks/FB-242:to-synonym", json={})
-    assert r.status_code == 409 and r.json()["code"] == "CR_API_PENDING"
-    # 造一条「发货及时率」的待处理反馈：CR-0008 已通过 → 待发布生效
     lst = (await qa.get(f"{B}/feedbacks", params={"status": "待处理", "size": 50})).json()
     assert lst["total"] == 15 and all("certBlock" in x for x in lst["items"])
-    summary = (await qa.get(f"{B}/summary")).json()["openFeedback"]
-    assert summary == 15
+    assert (await qa.get(f"{B}/summary")).json()["openFeedback"] == 15
+    # FB-242「发货准时率」不在任何变更单 → 新建草稿变更单（目标 knowledge，synonyms 段 add 一行）
+    r = await qa.post(f"{B}/feedbacks/FB-242:to-synonym", json={})
+    assert r.status_code == 200, r.text
+    b = r.json()
+    cr = b["crId"]
+    assert cr.startswith("CR-") and "FB-242" in b["affected"] and b["feedback"]["resolvedBy"] == cr
+    d = (await qa.get(f"/api/ontology/v1/change-requests/{cr}")).json()
+    assert d["status"] == "草稿" and d["targets"][0]["kind"] == "knowledge"
+    items = (
+        await qa.get(f"/api/ontology/v1/change-requests/{cr}/items", params={"section": "synonyms"})
+    ).json()
+    rows = items["items"] if isinstance(items, dict) else items
+    assert [x["key"] for x in rows if x["section"] == "synonyms"] == ["发货准时率"]
+    # 下拉用中文状态草稿能查到；同一反馈再转 → 409
+    drafts = (await qa.get("/api/ontology/v1/change-requests", params={"status": "草稿"})).json()
+    assert cr in str(drafts)
+    assert (await qa.post(f"{B}/feedbacks/FB-242:to-synonym", json={})).status_code == 409
 
 
 async def test_to_synonym_links_same_word(qa, session):

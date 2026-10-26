@@ -50,7 +50,7 @@ export type QaRealTurn =
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaChainAnswer }
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaClarifyAnswer }
   | { id: string; kind: 'empty'; time?: string; question: string; lead: string; bold: string; tail: string; tag: string; retry?: undefined };
-export interface QaSessionDetail extends QaSession { scope: string | null; caliber: string; ownerId: string; turns: QaRealTurn[] }
+export interface QaSessionDetail extends QaSession { scope: string | null; caliber: string | null; ownerId: string; turns: QaRealTurn[] }
 export interface QaOption { value: string; label: string }
 export interface QaSessionOptions { scopes: QaOption[]; calibers: QaOption[] }
 export interface QaAskOut { turnId: string; streamUrl: string; turn: QaRealTurn }
@@ -155,7 +155,7 @@ export type QaFeedback = Feedback & {
 export const listFeedbacks = (q: { kw?: string; status?: string; fixKind?: string; page: number; size: number }) => api.get<PageResult<QaFeedback>>('/tuning/feedbacks', { query: q });
 export const getFeedback = (id: string) => api.get<QaFeedback>(`/tuning/feedbacks/${encodeURIComponent(id)}`);
 const fbAct = (id: string, act: string) => `/tuning/feedbacks/${encodeURIComponent(id)}:${act}`;
-/** T15：词已在变更单里 → 关联（同词待处理反馈一起）；不在 → 409 CR_API_PENDING（静态变更单写接口未接入） */
+/** T15：词已在变更单里 → 关联（同词待处理反馈一起）；不在 → 新建（或 join 加入）草稿变更单，target kind=knowledge；知识被别的单占用 → 409 TARGET_IN_OTHER_CR（details.crId） */
 export const feedbackToSynonym = (id: string, body: { join?: string; title?: string } = {}) =>
   api.post<{ crId: string; affected: string[]; feedback: QaFeedback }>(fbAct(id, 'to-synonym'), body);
 /** T16：已有同题认证问答 → mode variant（原话加为同问法）；否则新建并认证 → mode new */

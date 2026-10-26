@@ -6,7 +6,8 @@
  * “发货及时率”召回不到的反馈已由 CR-0008（同义词“发货及时率”→出库及时率 v1，已通过）解决。
  * 行点击 → 反馈抽屉（?fb=FB-248）。URL：?fkw=&fst=&fk=&fpage=
  * 真接口（开关 qa）：T13 列表 / T14 抽屉 / T15–T17 写，写完 tuningTick+1 重拉。
- * T15 只支持“词已在变更单里”的关联；要新建 / 加入变更单的，后台回 409 CR_API_PENDING（静态变更单写接口 static-r3 未合入），这里提示，不走 mock 弹窗。
+ * T15 真接口：词已在变更单里 → 关联；不在 → 后台调静态 X3 新建草稿变更单（target kind=knowledge，synonyms 段加一行）；
+ * 该知识已在别的单子里（409 TARGET_IN_OTHER_CR）→ 按 details.crId 改为加入那张单子重试一次。不走 mock 弹窗。
  */
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -119,13 +120,16 @@ const changeTargetName = computed(() => (changeFb.value ? `同义词“${changeF
 async function toSynonym(f: Fb) {
   const covered = synCovered(f);
   if (isRemote(f)) {
-    if (!covered) { message.warning(`「${f.fix.text}」还不在任何变更单里；新建 / 加入变更单的接口（静态模块）尚未接入，请先在“变更与发布”中发起`); return; }
-    try {
-      const r = await feedbackToSynonym(f.id);
+    const done = (r: { crId: string; affected: string[] }, how: string) => {
       tuningTick.value++;
-      message.success(`「${f.fix.text}」已在 ${r.crId} 中，已关联${r.affected.length > 1 ? `（同词反馈 ${r.affected.length} 条）` : ''}`);
+      message.success(`「${f.fix.text}」${how} ${r.crId}${r.affected.length > 1 ? `（同词反馈 ${r.affected.length} 条）` : ''}`);
+    };
+    try {
+      done(await feedbackToSynonym(f.id), covered ? '已关联到' : '已加入草稿变更单');
     } catch (e) {
-      if (e instanceof ApiError && e.code === 'CR_API_PENDING') message.warning(e.message); else fail(e);
+      const other = e instanceof ApiError && e.code === 'TARGET_IN_OTHER_CR' ? (e.details as { crId?: string } | null)?.crId : undefined;
+      if (!other) { fail(e); return; }
+      try { done(await feedbackToSynonym(f.id, { join: other }), '已加入变更单'); } catch (e2) { fail(e2); }
     }
     return;
   }

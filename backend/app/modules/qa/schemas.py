@@ -4,9 +4,9 @@
 卡片、语义计划、轮次快照、刷新计划这些前端整体使用的结构用 dict 原样透传。
 """
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 
 from app.common.pagination import Page
 from app.core.schema import ApiModel
@@ -26,16 +26,28 @@ class SessionDetailOut(SessionOut):
     """W3：会话 + 全部轮次（快照，一次返回）。"""
 
     scope: str | None = None
-    caliber: str  # 不含税 / 含税
+    caliber: str | None = None  # 口径变体标签，null = 不限
     owner_id: str
     turns: list[dict[str, Any]]
 
 
+def _strip_or_none(v: Any) -> Any:
+    if isinstance(v, str):
+        v = v.strip()
+        return v or None
+    return v
+
+
+# 会话口径：指标口径变体标签（静态 metrics[].variants[].label）；strip，空 → null；
+# 是否认识由 router 按静态变体校验
+CaliberLabel = Annotated[Annotated[str, Field(max_length=32)] | None, BeforeValidator(_strip_or_none)]
+
+
 class SessionCreateIn(ApiModel):
-    """W2 请求体：{scope, caliber: 不含税|含税}（默认同 Workbench.vue:50-51）。"""
+    """W2 请求体：{scope, caliber?}；caliber 省略 = 不含税（旧默认），传空 = 不限。"""
 
     scope: str | None = Field(default="华东", max_length=60)
-    caliber: Literal["不含税", "含税"] = "不含税"
+    caliber: CaliberLabel = "不含税"
 
 
 class SessionPatchIn(ApiModel):
@@ -43,7 +55,7 @@ class SessionPatchIn(ApiModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=60)
     scope: str | None = Field(default=None, max_length=60)
-    caliber: Literal["不含税", "含税"] | None = None
+    caliber: CaliberLabel = None  # 不传 = 不改；传空串 = 清空（按 model_fields_set 区分）
 
 
 class PermRequestIn(ApiModel):

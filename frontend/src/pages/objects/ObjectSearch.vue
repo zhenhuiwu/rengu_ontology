@@ -1,27 +1,32 @@
 <script setup lang="ts">
 /**
- * 对象搜索（/use/objects/search）。参考 Object Explorer：类型 + 关键词，左侧按维度属性分面（带计数），右侧结果表。
- * URL：?type=store&kw=&region=华东一区,华东二区&city=&format=&status=&page=&size=&ask=1
- * 行点击打开公共详情抽屉（?drawer=kind:id）；“完整视图”进对象详情；“用这批对象提问”在当前页打开提问浮层。
- * 以此用户预览（?previewAs=U010231）：行和分面计数按 usePreview().scopeOf 过滤，左侧显示被预览用户的数据范围；导出只读，提问照常（回答只含范围内数据）。
+ * 对象搜索（/use/objects/search），元数据驱动（backend/docs/backend/generic-object-explorer.md）：
+ * 类型下拉按分组列出已发布的对象类型；关键词只查可搜索属性；左侧分面 = 可筛选属性（枚举带计数 / 时间和数值给区间）；
+ * 结果表 = 标题列 + listed 属性列，只有 sortable 属性能排序。页面里不写任何具体对象类型、字段或筛选项。
+ * URL：?type=&kw=&f=<筛选 JSON>&sort=&page=&size=&ask=1；行点击进对象详情（?type=&id=）。
+ * 取数见 objMeta.ts（元数据 / 分面）和 objRows.ts（行：真接口 X1，后台没起来回退演示数据）。
+ * 预览（?previewAs=）：行和计数只含被预览用户范围内的数据，导出只读，提问照常。
  */
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { DownloadOutlined, MessageOutlined, LockOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
-import { useDrawer } from '@/composables/useDrawer';
 import { usePreview } from '@/composables/usePreview';
 import { usePagedQuery } from '@/composables/usePagedQuery';
-import { paginate } from '@/mock/paginate';
-import { fmtInt, fmtMoney } from '@/mock/format';
-import { OBJ_TYPES, OBJ_SCOPE, objType, inScope, previewDenied, KIND_LABEL, type AskScope } from '@/mock/objects-qa';
+import { fmtInt } from '@/mock/format';
+import type { AskScope } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
 import InfoTip from '../qa/InfoTip.vue';
+import * as objApi from '@/api/qaObjects';
+import { qaLive, qaFallBackIfDown } from '../qa/qaFallback';
+import { errText } from '../qa/useQaSession';
+import { listTypes, groupTypes, loadMeta, fmtVal, propLabel, isNumeric, type TypeBrief, type TypeMeta, type Filters, type FacetMeta, type PropMeta } from './objMeta';
+import { searchRows, mockMatched, type RowsResult } from './objRows';
 
 const route = useRoute();
 const router = useRouter();
-const drawer = useDrawer();
+const pv = usePreview();
 const qs = (k: string) => { const v = route.query[k]; return String(Array.isArray(v) ? v[0] ?? '' : v ?? ''); };
 const patch = (p: Record<string, string | null>) => {
   const q: LocationQueryRaw = { ...route.query };
@@ -29,120 +34,135 @@ const patch = (p: Record<string, string | null>) => {
   router.replace({ query: q });
 };
 
-const type = computed(() => objType(qs('type') || 'store'));
-const typeKey = computed({
-  get: () => type.value.kind,
-  // 换类型：清掉关键词、分面和页码
-  set: (v: string) => {
-    const q: LocationQueryRaw = {};
-    if (v !== 'store') q.type = v;
-    router.replace({ query: q });
-  },
-});
+/* 类型与元数据 */
+const types = ref<TypeBrief[]>([]);
+listTypes().then((t) => { types.value = t; });
+const typeId = computed(() => qs('type') || types.value[0]?.id || '');
+const typeKey = computed({ get: () => typeId.value || undefined, set: (v?: string) => router.replace({ query: v ? { type: v } : {} }) }); // 换类型清空条件
+const meta = ref<TypeMeta | null>(null);
+watch(typeId, async (id) => {
+  meta.value = null;
+  if (!id) return;
+  const m = await loadMeta(id);
+  if (id === typeId.value) meta.value = m;
+}, { immediate: true });
+const pmap = computed(() => new Map((meta.value?.properties ?? []).map((p) => [p.key, p])));
+const prop = (k: string) => pmap.value.get(k);
+const kwPlaceholder = computed(() => meta.value?.kwPlaceholder || meta.value?.properties.filter((p) => p.searchable).slice(0, 3).map((p) => p.name).join(' / ') || '关键词');
+
+/* 条件：关键词 + 筛选（JSON 放 URL 的 f）+ 排序 */
 const kwInput = ref(qs('kw'));
 watch(() => route.query.kw, () => { kwInput.value = qs('kw'); });
-const kw = computed(() => qs('kw').trim().toLowerCase());
-const sel = (key: string) => qs(key).split(',').filter(Boolean);
-const selected = computed(() => Object.fromEntries(type.value.facets.map((f) => [f.key, sel(f.key)])) as Record<string, string[]>);
-const filterSig = computed(() => JSON.stringify([type.value.kind, kw.value, selected.value]));
-
+const kw = computed(() => qs('kw').trim());
+const filters = computed<Filters>(() => { try { const f = JSON.parse(qs('f') || '{}'); return f && typeof f === 'object' ? f : {}; } catch { return {}; } });
+const setFilter = (k: string, v: Filters[string] | null) => {
+  const f = { ...filters.value };
+  const empty = v == null || (Array.isArray(v) ? !v.length : v.min == null && v.max == null);
+  if (empty) delete f[k]; else f[k] = v;
+  patch({ f: Object.keys(f).length ? JSON.stringify(f) : null, page: null });
+};
+const sort = computed(() => qs('sort'));
+const filterSig = computed(() => JSON.stringify([typeId.value, kw.value, filters.value, sort.value]));
 const pq = usePagedQuery({ defaultSize: 16, filters: filterSig });
 
-/* 预览：被预览用户的行级范围 */
-const pv = usePreview();
-/* 预览：无权对象的侧抽屉（含 URL 直接打开）一律拦下 */
-watch(() => [route.query.drawer, route.query.drawer2, pv.active.value], () => {
-  for (const k of ['drawer2', 'drawer']) {
-    const v = qs(k); const i = v.indexOf(':');
-    if (i > 0 && previewDenied(v.slice(0, i), v.slice(i + 1), pv.scopeOf)) {
-      message.warning(`${pv.userName.value} 无权查看这个${KIND_LABEL[v.slice(0, i)]}，预览中不能打开`);
-      patch(k === 'drawer' ? { drawer: null, drawer2: null } : { drawer2: null });
-      return;
+/* 结果 */
+const res = ref<RowsResult | null>(null);
+const loading = ref(false);
+let seq = 0;
+async function load() {
+  const m = meta.value;
+  if (!m) { res.value = null; return; }
+  const my = ++seq; loading.value = true;
+  const q = { kw: kw.value, filters: filters.value, sort: sort.value, page: pq.page.value, size: pq.size.value };
+  try {
+    let r: RowsResult;
+    try { r = await searchRows(m, q, qaLive.value, pv.scopeOf); } catch (e) {
+      if (!qaLive.value || !qaFallBackIfDown(e)) throw e;
+      r = await searchRows(m, q, false, pv.scopeOf);
     }
-  }
-}, { immediate: true });
-const pvScope = computed(() => pv.scopeOf(type.value.label));
-const scopedRows = computed(() => type.value.rows().filter((r) => inScope(type.value.kind, r, pvScope.value)));
-const pvNoAccess = computed(() => pvScope.value === '无权限');
-/** 可见范围说明放在“筛选”旁的 ⓘ 里，不在标题下另起一行 */
-const scopeText = computed(() => (pv.active.value && pvNoAccess.value
-  ? `${pv.userName.value} ${pv.scopeLabel(type.value.label)}，结果和计数都为空。`
-  : pv.active.value
-    ? `${pv.userName.value} 的${pv.scopeLabel(type.value.label)}。范围外的${type.value.label}结果和计数都不含。`
-    : `可见范围：${OBJ_SCOPE.visible}。${OBJ_SCOPE.hidden}无权限，结果和计数都不含。`));
-
-const byKw = computed(() => scopedRows.value.filter((r) => !kw.value || type.value.kw(r).toLowerCase().includes(kw.value)));
-const match = (r: any, skip?: string) => type.value.facets.every((f) => f.key === skip || !selected.value[f.key].length || selected.value[f.key].includes(f.get(r)));
-const rows = computed(() => byKw.value.filter((r) => match(r)));
-/** 分面计数：其他分面 + 关键词生效后的数量（本分面自己不参与） */
-const facetValues = computed(() => (pvNoAccess.value ? [] : type.value.facets).map((f) => {
-  const base = byKw.value.filter((r) => match(r, f.key));
-  const cnt = new Map<string, number>();
-  base.forEach((r) => cnt.set(f.get(r), (cnt.get(f.get(r)) ?? 0) + 1));
-  const all = new Set<string>(f.order ?? []);
-  scopedRows.value.forEach((r) => all.add(f.get(r)));
-  const vals = [...all].map((v) => ({ v, n: cnt.get(v) ?? 0 }));
-  if (!f.order) vals.sort((a, b) => b.n - a.n || a.v.localeCompare(b.v, 'zh'));
-  return { ...f, vals };
-}));
-function toggle(key: string, v: string, on: boolean) {
-  const cur = new Set(selected.value[key]);
+    if (my === seq) res.value = r;
+  } catch (e) { if (my === seq) { res.value = null; message.error(`对象搜索失败：${errText(e)}`); } } finally { if (my === seq) loading.value = false; }
+}
+watch([meta, qaLive, filterSig, pq.page, pq.size, () => pv.userName.value], load, { immediate: true });
+const total = computed(() => res.value?.total ?? 0);
+const bound = computed(() => res.value?.bound ?? true);
+const facets = computed(() => (res.value?.facets ?? []).filter((f) => prop(f.key)));
+const enumSel = (k: string) => { const f = filters.value[k]; return Array.isArray(f) ? f : []; };
+const rangeSel = (k: string) => { const f = filters.value[k]; return f && !Array.isArray(f) ? f : {}; };
+function toggle(k: string, v: string, on: boolean) {
+  const cur = new Set(enumSel(k));
   if (on) cur.add(v); else cur.delete(v);
-  patch({ [key]: [...cur].join(',') || null, page: null });
+  setFilter(k, [...cur]);
 }
-const conds = computed(() => type.value.facets.filter((f) => selected.value[f.key].length).map((f) => `${f.label} = ${selected.value[f.key].join(' / ')}`)
-  .concat(kw.value ? [`关键词“${qs('kw')}”`] : []));
-function clearAll() { const q: LocationQueryRaw = {}; if (type.value.kind !== 'store') q.type = type.value.kind; router.replace({ query: q }); }
+const showAll = ref<Record<string, boolean>>({});
+const FACET_TOP = 8;
+const facetVals = (f: FacetMeta) => (f.kind === 'enum' ? (showAll.value[f.key] ? f.values : f.values.slice(0, FACET_TOP)) : []);
+const rangeHint = (f: FacetMeta) => (f.kind === 'range' && f.min != null ? `${fmtVal(prop(f.key), f.min)} ~ ${fmtVal(prop(f.key), f.max)}` : '');
+const dateRange = (k: string) => { const r = rangeSel(k); return r.min || r.max ? [r.min ?? null, r.max ?? null] : null; };
+const onDate = (k: string, v: [string, string] | null) => setFilter(k, v ? { min: v[0] || null, max: v[1] || null } : null);
+const onNum = (k: string, side: 'min' | 'max', v: number | null) => setFilter(k, { ...rangeSel(k), [side]: v ?? null });
+
+const conds = computed(() => Object.entries(filters.value).filter(([k]) => prop(k)).map(([k, f]) => {
+  const p = prop(k)!;
+  return Array.isArray(f) ? `${p.name} = ${f.join(' / ')}` : `${p.name} ${f.min != null ? fmtVal(p, f.min) : '…'} ~ ${f.max != null ? fmtVal(p, f.max) : '…'}`;
+}).concat(kw.value ? [`关键词“${kw.value}”`] : []));
+function clearAll() { router.replace({ query: typeId.value ? { type: typeId.value } : {} }); }
 function doSearch() { patch({ kw: kwInput.value.trim() || null, page: null }); }
+const scopeText = computed(() => (pv.active.value
+  ? `${pv.userName.value} 的${pv.scopeLabel(meta.value?.name ?? '')}。范围外的对象结果和计数都不含。`
+  : '结果和分面计数只含你有权限看到的数据。'));
 
-const paged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
+/* 表格：标题列 + listed 属性；只有 sortable 能排序 */
+const listed = computed<PropMeta[]>(() => (meta.value?.properties ?? []).filter((p) => p.listed && p.key !== meta.value?.titleProp && !p.sensitive));
+const sortOrder = (k: string) => (sort.value === k ? 'ascend' : sort.value === `-${k}` ? 'descend' : null);
 const columns = computed(() => [
-  { title: `${type.value.label}${type.value.kind === 'order' ? '号' : '名称'}`, key: '__title', ellipsis: true },
-  ...type.value.columns.map((c) => ({ title: c.title, key: c.key, width: c.width, align: c.num ? ('right' as const) : undefined })),
-  { title: '', key: '__op', width: 88 },
+  { title: prop(meta.value?.titleProp ?? '')?.name ?? '名称', key: '__title', ellipsis: true },
+  ...listed.value.map((p) => ({
+    title: propLabel(p), key: p.key, width: Math.max(96, propLabel(p).length * 14 + 32), align: isNumeric(p) ? ('right' as const) : undefined,
+    sorter: p.sortable, sortOrder: p.sortable ? sortOrder(p.key) : undefined,
+  })),
 ]);
-const cell = (r: any, key: string) => type.value.columns.find((c) => c.key === key)!.get(r);
-const fmtCell = (r: any, key: string) => {
-  const v = cell(r, key);
-  if (v == null) return '--';
-  if (typeof v === 'number') return key === 'area' || key === 'sales' ? fmtMoney(v, 1) : fmtMoney(v);
-  return v;
-};
-const tone = (v: string) => (['已闭店', '已取消'].includes(v) ? 'c-3' : ['装修中', '待支付'].includes(v) ? 'c-2' : '');
-
-/* 多选与导出 */
-const selKeys = ref<string[]>([]);
-watch(() => type.value.kind, () => { selKeys.value = []; });
-function exportCsv() {
-  const list = selKeys.value.length ? rows.value.filter((r) => selKeys.value.includes(type.value.id(r))) : rows.value;
-  const head = [columns.value[0].title, ...type.value.columns.map((c) => c.title)];
-  const body = list.map((r) => [type.value.title(r), ...type.value.columns.map((c) => cell(r, c.key) ?? '')]);
-  const csv = [head, ...body].map((l) => l.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
-  a.download = `${type.value.label}_${list.length}.csv`; a.click();
-  URL.revokeObjectURL(a.href);
-  message.success(`已导出 ${fmtInt(list.length)} 条${selKeys.value.length ? '（已选）' : '（当前筛选）'}`);
+function onTable(_p: unknown, _f: unknown, s: any) {
+  const one = Array.isArray(s) ? s[0] : s;
+  patch({ sort: one?.order ? `${one.order === 'descend' ? '-' : ''}${one.columnKey}` : null, page: null });
 }
+const isUnbound = (k: string) => !!res.value && !res.value.boundProps.includes(k);
 
-/* 用这批对象提问：浮层，不跳转；?ask=1 可复现 */
+/* 多选、导出、提问 */
+const selKeys = ref<string[]>([]);
+watch(typeId, () => { selKeys.value = []; });
+const query = computed(() => ({ kw: kw.value, filters: filters.value }));
+async function exportCsv() {
+  const m = meta.value; if (!m) return;
+  const n = selKeys.value.length || total.value;
+  const done = () => message.success(`已导出 ${fmtInt(n)} 条${selKeys.value.length ? '（已选）' : '（当前筛选）'}`);
+  // 只走后台导出（带行级范围、去敏感 / 隐藏属性）；后台不通时报错，不导出演示数据
+  if (!qaLive.value) { message.error('导出失败：后台未连接，暂不能导出'); return; }
+  try {
+    await objApi.exploreExport(m.id, { ...query.value, ids: selKeys.value.length ? selKeys.value : undefined });
+    done();
+  } catch (e) {
+    message.error(qaFallBackIfDown(e) ? '导出失败：后台未连接，暂不能导出' : `导出失败：${errText(e)}`);
+  }
+}
 const askOpen = computed({ get: () => qs('ask') === '1', set: (v: boolean) => patch({ ask: v ? '1' : null }) });
+const askConds = computed(() => (selKeys.value.length ? [`已选 ${selKeys.value.length} 个`] : conds.value));
 const askScope = computed<AskScope>(() => {
-  const ids = selKeys.value.length ? selKeys.value : rows.value.map((r) => type.value.id(r));
-  return { kind: type.value.kind, label: type.value.label, conds: selKeys.value.length ? [`已选 ${selKeys.value.length} 个`] : conds.value, ids };
+  const m = meta.value;
+  const ids = selKeys.value.length || !m || !askOpen.value ? selKeys.value : mockMatched(m, query.value, pv.scopeOf).map((r) => r.id);
+  return { kind: m?.id ?? '', label: m?.name ?? '', conds: askConds.value, ids };
 });
-const askSugs = computed(() => (type.value.kind === 'store'
-  ? ['这批门店 9 月销售额合计和环比', '哪几家门店销售额最高', '按业态对比客单价']
-  : type.value.kind === 'order' ? ['这批订单实付金额合计', '未出库订单分布在哪些门店'] : ['这批商品的品类分布', '近 30 天销量前 5']));
+/** 真接口：没勾选时把筛选交给后台重算范围（O4 query），不传全部 id */
+const liveAsk = computed<objApi.ScopedAskIn | undefined>(() => (qaLive.value && meta.value
+  ? { kind: meta.value.id, label: meta.value.name, conds: askConds.value, ...(selKeys.value.length ? { ids: selKeys.value } : { query: query.value }) }
+  : undefined));
 
 /* 记住当前搜索条件，详情页面包屑用来返回 */
 watch(() => route.fullPath, () => {
   const q = { ...route.query }; delete q.drawer; delete q.drawer2; delete q.ask;
   sessionStorage.setItem('obj-search:last', JSON.stringify(q));
 }, { immediate: true });
-function openDetail(r: any) {
-  router.push({ path: '/use/objects/detail', query: { kind: type.value.kind, id: type.value.id(r) } });
-}
+const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/detail', query: { type: typeId.value, id: r.id } });
 </script>
 
 <template>
@@ -151,68 +171,86 @@ function openDetail(r: any) {
       <div class="panel-head"><span class="os-side-title"><span class="t-16 fw-600">筛选</span><LockOutlined class="c-3" /><InfoTip :title="scopeText" /></span>
         <a v-if="conds.length" class="t-12" @click="clearAll">清除全部</a></div>
       <div class="os-side-body">
-        <div v-for="f in facetValues" :key="f.key" class="os-facet">
-          <div class="os-facet-head"><span class="fw-600">{{ f.label }}</span>
-            <a v-if="selected[f.key].length" class="t-12" @click="patch({ [f.key]: null, page: null })">清除</a></div>
-          <label v-for="x in f.vals" :key="x.v" class="os-opt" :class="{ off: !x.n && !selected[f.key].includes(x.v) }">
-            <a-checkbox :checked="selected[f.key].includes(x.v)" :disabled="!x.n && !selected[f.key].includes(x.v)"
-              @change="(e: any) => toggle(f.key, x.v, e.target.checked)">{{ x.v }}</a-checkbox>
-            <span class="num c-3">{{ fmtInt(x.n) }}</span>
-          </label>
+        <div v-for="f in facets" :key="f.key" class="os-facet">
+          <div class="os-facet-head"><span class="fw-600">{{ prop(f.key)!.name }}</span>
+            <a v-if="filters[f.key]" class="t-12" @click="setFilter(f.key, null)">清除</a></div>
+          <template v-if="f.kind === 'enum'">
+            <label v-for="x in facetVals(f)" :key="x.value" class="os-opt" :class="{ off: !x.count && !enumSel(f.key).includes(x.value) }">
+              <a-checkbox :checked="enumSel(f.key).includes(x.value)" :disabled="!x.count && !enumSel(f.key).includes(x.value)"
+                @change="(e: any) => toggle(f.key, x.value, e.target.checked)">{{ x.value }}</a-checkbox>
+              <span class="num c-3">{{ fmtInt(x.count) }}</span>
+            </label>
+            <a v-if="f.values.length > FACET_TOP" class="t-12" @click="showAll[f.key] = !showAll[f.key]">{{ showAll[f.key] ? '收起' : `更多（${f.values.length}）` }}</a>
+            <div v-if="!f.values.length" class="c-3 t-12">没有可选值</div>
+          </template>
+          <template v-else>
+            <a-range-picker v-if="!isNumeric(prop(f.key)!)" size="small" value-format="YYYY-MM-DD" :value="dateRange(f.key) as any"
+              :placeholder="['开始', '结束']" @change="(v: any) => onDate(f.key, v)" />
+            <div v-else class="os-num">
+              <a-input-number size="small" :value="rangeSel(f.key).min as any" placeholder="最小" @change="(v: any) => onNum(f.key, 'min', v)" />
+              <span class="c-3">~</span>
+              <a-input-number size="small" :value="rangeSel(f.key).max as any" placeholder="最大" @change="(v: any) => onNum(f.key, 'max', v)" />
+            </div>
+            <div v-if="rangeHint(f)" class="c-3 t-12 num">{{ rangeHint(f) }}</div>
+          </template>
         </div>
+        <div v-if="meta && bound && !facets.length" class="c-3 t-12">这个类型没有可筛选的属性</div>
       </div>
     </div>
 
     <div class="panel os-main">
       <div class="panel-head">
         <div class="os-q">
-          <a-select v-model:value="typeKey" style="width: 96px" :options="OBJ_TYPES.map((t) => ({ value: t.kind, label: t.label }))" />
-          <a-input-search v-model:value="kwInput" allow-clear :placeholder="type.kwPlaceholder" style="width: 280px" @search="doSearch" />
+          <a-select v-model:value="typeKey" style="width: 128px" :options="groupTypes(types)" placeholder="对象类型" show-search option-filter-prop="label" />
+          <a-input-search v-model:value="kwInput" allow-clear :placeholder="kwPlaceholder" style="width: 280px" @search="doSearch" />
           <span v-if="selKeys.length" class="c-2">已选 {{ selKeys.length }} 条 <a class="os-unsel" @click="selKeys = []">取消选择</a></span>
           <span v-else-if="conds.length" class="c-3 os-conds">{{ conds.join('、') }}</span>
         </div>
         <a-space :size="8">
-          <a-tooltip :title="pv.reason.value || undefined"><a-button :disabled="pv.active.value || !rows.length" @click="exportCsv"><template #icon><DownloadOutlined /></template>{{ selKeys.length ? '导出所选' : '导出' }}</a-button></a-tooltip>
-          <a-button type="primary" :disabled="!rows.length" @click="askOpen = true"><template #icon><MessageOutlined /></template>用这批对象提问</a-button>
+          <a-tooltip :title="pv.reason.value || undefined"><a-button :disabled="pv.active.value || !total" @click="exportCsv"><template #icon><DownloadOutlined /></template>{{ selKeys.length ? '导出所选' : '导出' }}</a-button></a-tooltip>
+          <a-button type="primary" :disabled="!total" @click="askOpen = true"><template #icon><MessageOutlined /></template>用这批对象提问</a-button>
         </a-space>
       </div>
       <div class="os-body">
-        <template v-if="rows.length">
+        <template v-if="total">
           <div class="paged-scroll os-tbl">
-            <a-table :columns="columns" :data-source="paged.items" :row-key="type.id" size="middle" :pagination="false"
+            <a-table :columns="columns" :data-source="res!.items" row-key="id" size="middle" :pagination="false" :loading="loading"
               :row-selection="{ selectedRowKeys: selKeys, preserveSelectedRowKeys: true, onChange: (k: (string | number)[]) => (selKeys = k as string[]) }"
-              :custom-row="(r: any) => ({ onClick: () => drawer.open(type.kind, type.id(r)), class: 'os-row' })">
+              :custom-row="(r: any) => ({ onClick: () => openDetail(r), class: 'os-row' })" @change="onTable">
               <template #bodyCell="{ column, record }">
-                <template v-if="column.key === '__title'"><span class="c-1">{{ type.title(record) }}</span></template>
-                <template v-else-if="column.key === '__op'"><a @click.stop="openDetail(record)">完整视图</a></template>
-                <template v-else-if="column.key === 'status' || column.key === 'ostatus'"><span :class="tone(String(cell(record, column.key)))">{{ cell(record, column.key) }}</span></template>
-                <template v-else-if="column.align === 'right'"><span class="num">{{ fmtCell(record, column.key) }}</span></template>
-                <template v-else><span :class="{ num: column.key === 'code' || column.key === 'sku' || column.key === 'createdAt' || column.key === 'openedAt' }">{{ fmtCell(record, column.key) }}</span></template>
+                <template v-if="column.key === '__title'"><span class="c-1">{{ record.title }}</span></template>
+                <template v-else-if="isUnbound(String(column.key))"><a-tooltip title="这个属性还没接入数据"><span class="c-3">--</span></a-tooltip></template>
+                <template v-else><span :class="{ num: column.align === 'right' }">{{ fmtVal(prop(String(column.key)), record.values[column.key]) }}</span></template>
               </template>
             </a-table>
           </div>
-          <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="full" :total="rows.length" :default-size="pq.defaultSize" :unit="'条'" />
+          <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="full" :total="total" :default-size="pq.defaultSize" :unit="'条'" />
         </template>
-        <a-empty v-else-if="pvNoAccess" class="os-empty" :description="`${pv.userName.value} ${pv.scopeLabel(type.label)}，预览中不显示任何${type.label}`" />
+        <a-spin v-else-if="loading || !meta" class="os-empty" />
+        <a-empty v-else-if="!bound" class="os-empty" :description="`未接入数据：「${meta.name}」还没有绑定数据表，暂时搜不到对象`" />
+        <a-empty v-else-if="pv.active.value && pv.scopeOf(meta.name) === '无权限'" class="os-empty" :description="`${pv.userName.value} ${pv.scopeLabel(meta.name)}，预览中不显示任何${meta.name}`" />
         <a-empty v-else class="os-empty" description="没有符合条件的对象">
-          <a-button @click="clearAll">清除筛选</a-button>
+          <a-button v-if="conds.length" @click="clearAll">清除筛选</a-button>
         </a-empty>
       </div>
     </div>
 
-    <ObjAskModal v-model:open="askOpen" :scope="askScope" :suggestions="askSugs" />
+    <ObjAskModal v-if="meta" v-model:open="askOpen" :scope="askScope" :live-scope="liveAsk" :count="selKeys.length || total" :suggestions="meta.sampleQuestions" />
   </div>
 </template>
 
 <style scoped>
 .os { display: flex; gap: var(--gap); height: 100%; min-height: 0; }
-.os-side { width: 248px; flex: none; }
-.os-side-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.os-side { width: 264px; flex: none; }
+.os-side-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; }
 .os-side-title { display: inline-flex; align-items: center; gap: 6px; }
-.os-facet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
+.os-facet { display: flex; flex-direction: column; gap: 4px; }
+.os-facet-head { display: flex; justify-content: space-between; align-items: center; }
 .os-opt { display: flex; justify-content: space-between; align-items: center; height: 28px; cursor: pointer; }
 .os-opt.off { cursor: default; }
-.os-main { flex: 1; }
+.os-num { display: flex; align-items: center; gap: 6px; }
+.os-num :deep(.ant-input-number) { flex: 1; min-width: 0; }
+.os-main { flex: 1; min-width: 0; }
 .os-q { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .os-conds { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 560px; }
 .os-unsel { margin-left: 8px; }

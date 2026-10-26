@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.core.errors import AppError
 from app.seeds.loader import run_seeds
 
 B = "/api/qa/v1"
@@ -24,9 +25,13 @@ async def test_create_session_then_listed_first(qa):
     assert first["id"] == s["id"] and first["title"] == "新会话"
 
 
-async def test_create_session_rejects_bad_caliber(qa):
+async def test_create_session_rejects_bad_caliber(qa, session):
+    from app.modules.qa import service as svc
+
+    idx = await svc.variant_index(session)  # 静态有口径变体才校验标签；超长总是 422
     r = await qa.post(f"{B}/sessions", json={"caliber": "ex"})
-    assert r.status_code == 422
+    assert r.status_code == (422 if idx else 201)
+    assert (await qa.post(f"{B}/sessions", json={"caliber": "长" * 33})).status_code == 422
 
 
 async def test_rename_trims_and_blank_keeps(qa):
@@ -48,6 +53,36 @@ async def test_change_scope_caliber_appends_system_turn(qa):
     # 值没变不再插入
     d2 = (await qa.patch(f"{B}/sessions/S0001", json={"scope": "华东一区"})).json()
     assert len(d2["turns"]) == n
+
+
+async def test_caliber_free_text_by_static_variants(qa, session):
+    from app.modules.qa import chain
+    from app.modules.qa import service as svc
+
+    idx = await svc.variant_index(session)
+    p = f"{B}/sessions/S0001"
+    r = await qa.patch(p, json={"caliber": "  含税 "})  # 旧标签总是收；strip
+    assert r.status_code == 200 and r.json()["caliber"] == "含税"
+    d = (await qa.patch(p, json={"caliber": ""})).json()  # 空 → 不限
+    assert d.get("caliber") is None and d["turns"][-1]["text"].endswith("口径 = 不限 回答")
+    assert (await qa.patch(p, json={"caliber": "x" * 33})).status_code == 422
+    r = await qa.patch(p, json={"caliber": "随便口径"})
+    assert r.status_code == (422 if idx else 200)  # 静态有变体才校验
+    if idx:
+        label = next(iter(idx))
+        assert (await qa.patch(p, json={"caliber": label})).json()["caliber"] == label
+        lines = svc.caliber_lines(label, idx)
+        assert all(v["api"] in "\n".join(lines) for v in idx[label])
+    fake = {"零售价": [{"code": "M1", "name": "销售额（零售价）", "api": "gmv_retail", "version": "v1"}]}
+    assert svc.check_caliber("零售价", fake) == "零售价" and svc.check_caliber("含税", fake) == "含税"
+    with pytest.raises(AppError):
+        svc.check_caliber("随便口径", fake)
+    assert "`gmv_retail`" in "\n".join(svc.caliber_lines("零售价", fake))
+    assert "含税口径" in svc.caliber_lines("含税", {})[0] and svc.caliber_lines(None, idx) == []
+    msgs = chain.build_prompt("销售额", {"session_caliber": ["- 用户选定口径「含税」"]})
+    assert "会话口径" in msgs[0]["content"] and "用户选定口径「含税」" in msgs[0]["content"]
+    s = (await qa.post(f"{B}/sessions", json={"caliber": ""})).json()
+    assert s.get("caliber") is None
 
 
 async def test_delete_session(qa):

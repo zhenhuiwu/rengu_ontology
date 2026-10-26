@@ -111,7 +111,7 @@ def _session(r: Row, _ctx: SeedContext) -> Row:
         "owner_id": DEMO_USER,
         "title": r["title"],
         "scope": "华东",
-        "caliber": "ex",
+        "caliber": "不含税",
         "last_at": _day(r["date"]),
     }
 

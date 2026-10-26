@@ -5,6 +5,24 @@
 > 接口契约：`docs/backend/qa-api.md`（各节「联调实现」段）；评测：`docs/backend/qa-eval.md`。[推断] 标的是前端/文档没写、这里自己定的规则。
 > 前端开关：`VITE_API_REAL_MODULES` 含 `qa`（动作卡还需 `dynamic`）才走真接口，否则全部 mock。没接完的页面 / 页签在真接口模式下也仍走 mock，测试和构建不受影响。
 
+## 0a. qa-pages 分支：通用对象浏览 + 工作台范围口径（2026-10-26，本地未推送，下一轮用）
+> 基于 master `770f6d7`；qa 身份提交。设计 `backend/docs/backend/generic-object-explorer.md`，接口 `qa-api.md` §5.1（E1–E3、O4 `query`）。
+> 页面：`/use/objects/search?type=&kw=&f=&sort=&page=`、`/use/objects/detail?type=&id=&tab=` 整页改成元数据驱动（objMeta.ts / objRows.ts），工作台范围口径改成 qaScope.ts。
+
+**未完成 / 待别人**
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 静态 meta / facets 带关键词 | 过渡 | 已接真 `/object-types/{id}/meta`（+`/properties` 合并）和 `/facets`（mock 只在后台不可达时读兜底，写不兜底）；静态 `/facets` 不收 kw，带关键词时用后端 E1 顺带的过渡 `facets`（`explore_api._facets`、`withFacets`）[推断]，静态支持 kw 后删 |
+| 属性标志 | 已接静态 | E1 `flags()` 读静态 property 列（searchable / sortable、filterable 用 `static.explorer.facetable`），与 meta / facets 同一套；静态 seed 里区间属性（store.opened_at、order.created_at）没开 filterable，所以页面上没有这两项筛选，要的话在静态 `explorer_meta.json` 打开；前端 `metaFromProps` 默认规则只在后台不可达的 mock 兜底用 |
+| 指标口径 | 已接静态 | 口径 = 对象 meta.metrics[].variants[].label 并集（静态按（不含税）/（含税）后缀推断）；真 meta 没有变体时用 W17 选项，后台不可达用 mock |
+| 行级范围 `GET /api/admin/v1/me/row-scopes` | 等本体小白 | 未上 master；返回形状按 `[{dimension?, values[]}]` 或 `{items}` 宽松解析 [推断]；拿不到时默认取预览范围或第一个选项 |
+| 后端 SessionCaliber | 已改 | `qa_session.caliber` 改自由文本 varchar(32) 可空（迁移 `qa_0004`，down_revision `static_0003`：去 CHECK、ex→不含税 / in→含税）；W2/W4 strip、空 → null（W4 不传 = 不改），静态指标有口径变体时只收变体标签（不含税 / 含税 总是收），没有变体时不校验；W6 把会话口径映射成指标变体（点名每个指标用哪个 api）进提示词“会话口径”段，没对上变体的 不含税 / 含税 按旧的金额口径一句话提示 [推断]；评测（T11 / eval run）不带会话口径 |
+| 会话 scope 值 | [推断] | 选项值是维度取值名（如“华东大区”），旧会话的“华东”按同义词归一显示，用户再改时 PATCH 成维度取值名；后台链路按自由文本用 |
+| O4 / mock answerFor | 部分 | 用一批对象提问只支持 store / product / order；其他类型的提问按钮仍可点，回答走兜底 |
+| 动作执行 | 未接 | 对象详情真接口模式下「发起」置灰“动作执行接口还没接入”，不假装成功；演示模式明确写“演示数据” |
+| mock 绑定 | 部分 | `objRows.ts MOCK_BINDINGS` 只有门店 / 商品 / 订单；门店 region_code 在 mock 未绑定（显示 --） |
+| 工作台其他演示文案 | 未改 | 回答卡含税切换、模板弹窗默认范围、右栏动作卡仍是演示数据文案（不在本轮范围） |
+
 ## 0. qa-cardfb 分支（2026-10-26，本地未推送）
 > 分支 `qa-cardfb`，基于 master `3ece2fa`；提交 `3ece2fa..qa-cardfb`（qa 身份）。无新迁移。本节覆盖下面第 1–4 节中 R2 / 回答卡回退几行。对象搜索 / 详情的通用化在 `qa-pages` 分支，下一轮提交。
 
@@ -39,7 +57,7 @@
 - 后端：`backend/app/modules/qa/{router,service,repo,schemas}.py` 对应实现，测试 `backend/tests/test_qa*.py`。最终检查（01:27，变基到 `740a554` 后，RENGU_TEST_DB=rengu_test_qa_joint）：pytest 408 passed / 1 skipped，ruff check + format、alembic check、`npm run build` 通过；页面单查（真后端：反问卡 → 追问条 → 追问、W17 范围下拉、T2 时间选项）无报错。
 
 ### 1.3 R5 问数调优 · 评测题库 / 反馈与纠错（qa-tuning）
-- **后端**：T11 `POST /tuning/eval/runs`（202，进程内 asyncio 后台任务 `app/modules/qa/eval/job.py`，复用 `chain.answer` 在只读回滚事务里逐题跑、按回答形状判分写 `qa_eval_fail` / `last_result`；真 qwen-flash 冒烟 2 题通过链路）；T15 `:to-synonym`（只做“词已被变更单覆盖”的关联分支，没覆盖 → 409 `CR_API_PENDING`）；T16 `:to-cert`（加同问法 / 新建并认证）；T17 `:ignore` / `:reopen`；T13 列表返回 T14 详情字段。规则与 [推断] 见 `qa-api.md` §7「联调实现」。无新依赖、无迁移。测试 `backend/tests/test_qa_tuning_eval.py`（FakeLLM / runner 打桩）。
+- **后端**：T11 `POST /tuning/eval/runs`（202，进程内 asyncio 后台任务 `app/modules/qa/eval/job.py`，复用 `chain.answer` 在只读回滚事务里逐题跑、按回答形状判分写 `qa_eval_fail` / `last_result`；真 qwen-flash 冒烟 2 题通过链路）；T15 `:to-synonym`（已覆盖 → 关联；没覆盖 → qa-pages 起调静态 X3 建 / 加入草稿变更单，target kind=knowledge）；T16 `:to-cert`（加同问法 / 新建并认证）；T17 `:ignore` / `:reopen`；T13 列表返回 T14 详情字段。规则与 [推断] 见 `qa-api.md` §7「联调实现」。无新依赖、无迁移。测试 `backend/tests/test_qa_tuning_eval.py`（FakeLLM / runner 打桩）。
 - **前端**：`EvalTab.vue`（T9 / T10 / T12，有运行中时 3 秒轮询）、`FeedbackTab.vue`（T13–T17）、`QaTuning.vue`（四个计数都取 T1、「运行评测」走 T11 并跳到新运行，未配 LLM 提示 503）；`src/api/qa.ts` 只追加了 `QaEvalRun` / `QaEvalRunDetail` / `QaFeedback` 等类型和 10 个函数。真接口模式下：转同义词遇到未覆盖的词提示「需要新建变更单…」，不弹发起变更窗；连不上后台仍回退 mock。
 
 ### 1.4 qa-tuning-fix（PDE 合并审意见，基线 master `e8d9c1a`）
@@ -59,21 +77,27 @@
 
 ## 2. 未完成
 
-| 范围 | 状态 | 还差什么 | 接口 / 文件 |
-|---|---|---|---|
-| R1 流式回答 | 未做 | 前端 W6 同步等 202 里的 `turn`，没接 SSE；后端 W7 未实现流 | W7 `GET /turns/{tid}/stream`（`qa-api.md` §3）；`src/pages/qa/useQaSession.ts` `sendReal`、`QaAnswer.vue` / `QaStoreAnswer.vue` |
-| R1 固定到页面 | mock | 弹窗 `QaPinModal` 仍写死卡名、页面列表取 mock、不调后端；后端 P2 / P7 未实现；固定后的卡要在「我的页面」显示，而 R2 仍是 mock，所以单接这一步也不算完成 | P2 `POST /pages`、P7 `POST /pages/{pid}/cards`；`src/pages/qa/Workbench.vue`（`QaPinModal`） |
-| R1 建议动作对象 | 部分 | 动作卡对象固定为客户群 `SEG-EC-60D`、参数是卡片文案；影响 / 预算 / 提交条件三行仍是前端文案（stage 无返回）[推断] | X1 `action-runs:stage`；`Workbench.vue` `runAction` |
-| R1 反问追问 | 部分 | 链路无多轮上下文，追问句由前端启发式拼接 [推断]；所选项不回写 `clarify.chosen` [推断] | `QaConversation.vue` `followUp` / `chosenOf` |
-| R1 第二期 | 未做 | 停止生成、加入常用 | W8 `:cancel`、W14 `POST /favorites` |
-| R5 问数调优 · T15 新建 / 加入变更单 | 部分（等 static-r3） | 词未被任何变更单覆盖时要调静态 X3 写接口建 / 加入变更单草稿，static-r3 未合入，后端返回 409 `CR_API_PENDING`、前端提示；接法：`router.py feedback_to_synonym` 里 `SynonymCrPending` 处改调 X3（格式见 `handoff/static.md`），再写 `qa_tuned_synonym` 并按“已覆盖”分支改同词反馈；前端 `FeedbackTab.vue toSynonym` 的 live 分支改为打开发起变更窗（mock 的 `onStartChange` 已有 UI） | `router.py`、`FeedbackTab.vue` |
-| T15 `CR_API_PENDING` 改接真接口 | 下一轮（PDE 定） | `static-r3` 合入后，把 409 `CR_API_PENDING` 分支改调 `POST /change-requests`，`target{kind:"knowledge"}`；查草稿时 `status=草稿`（传 `draft` 返回 422），用法见 `handoff/static.md` | `router.py feedback_to_synonym`、`FeedbackTab.vue` |
-| R5 · T11 后台任务 | 部分 | 进程内 asyncio，重启丢任务（运行停在「运行中」）；判分是启发式（`时间解析错误` 判不出）[推断]；每日 02:00 定时未接 | `eval/job.py`；接 procrastinate 时包 `_background` |
-| R2 我的页面与模板库 `/use/qa/pages` | 未开始，mock | 前端未接；后端只有读接口 P1 / P3 / P11 / P12，写接口 P2、P4–P10 未实现 | P1–P12；`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*` |
-| R3 对象搜索 `/use/objects/search` | 未开始，mock | 前端未接；后端只有 O1 类型列表，O2–O4 未实现 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
-| R4 对象详情 `/use/objects/detail` | 未开始，mock | 前端未接；后端 O5–O7、O9 未实现（动作记录走动态 X7） | O5–O7、O9、O4、X7；`src/pages/objects/ObjectDetail.vue`、`parts/ObjAskModal.vue` |
-| W11 下载 | 临时 | `apiClient` 没有拿 blob 的方法，`src/api/qa.ts` 里留了一个只做 GET 下载的小工具 | 等 PDE 在 `src/api/http.ts` 加下载方法后改回 |
-| 连不上后台回退 mock（剩余） | 部分 | 已覆盖见 1.1。没覆盖：工作台的 W12 投票 / W9 重算 / W10 门店表 / W11 导出等卡片内读接口（`QaAnswer.vue` / `QaStoreAnswer.vue`，回退后卡片本来就是 mock 不再发请求，只有回退前已渲染的真卡片会照旧报错）；问数调优评测 / 反馈页签已接回退（qa-tuning）。`backend.down` 是全站共用的：别的模块先判定后台没起来，问数页也会直接走 mock。 |
+> 截至 qa-pages `c7169d2`（基线 master `b475283`；静态 `58ad8d7` 已在 master）。已做完、不再列：R1 固定到页面（qa-cardfb，P7）、R2 我的页面（P2、P4–P10 + 前端）、R3 对象搜索 / R4 对象详情（通用化，读真 `/meta`、`/facets`）、连不上后台回退 mock。
+
+| 项 | 还差什么 | 接口 / 文件 |
+|---|---|---|
+| 流式回答 | 后端 W7 未实现，前端同步等 W6 的 `turn` | W7 `GET /turns/{tid}/stream`；`useQaSession.ts` `sendReal` |
+| T11 评测任务 | 进程内 asyncio，重启丢任务；每日定时未接；评测不带会话口径 | `eval/job.py` |
+| 行级范围 | row-scopes 接口未上 master：工作台「范围」默认值靠前端推断；`router.py:239` 新建会话话术写死「大区」 | `router.py`、`Workbench.vue` |
+| 按一批对象提问 / 绑定 | O4 和物理绑定只有 store / product / order，其他对象类型 `bound=false` | `seeds/extra/qa/objects/bindings.json`、`objects_api.py` |
+| 动作执行 | 建议动作只到 stage，执行未接 | X1 `action-runs`；`Workbench.vue` `runAction` |
+| 关键词分面 | E1 顺带的过渡分面要保留到静态 `/facets` 支持关键词 | `explore_api.py` `_facets` |
+| 静态分面回落 | `objMeta.ts:156` `loadStaticFacets` 任何错误都回落（含 422），应只在 `isBackendDown` 时回落 | `src/pages/objects/objMeta.ts` |
+| 复用静态私有函数 | qa 直接 import 静态 `_bad` / `_scalar`，等静态公开后改名 | `explore_api.py` |
+| `Bound.check` | 按 `what` 字符串区分筛选 / 排序，应改成显式参数 | `explore_api.py` |
+| 并发 | 页面 P2、会话 S 的 id 生成没锁，并发新建会撞 id 报 500 | `service.py` / `pages` 相关 |
+| 我的页面 | 计数单独多一次请求；删除后停在空的后一页，应回退一页 | `MyPages.vue` |
+| 注释 | `PageDrawer.vue:11` 注释过时 | `src/pages/qa/pages/PageDrawer.vue` |
+| FeedbackTab | `FeedbackTab.vue` 的改动在 qa 允许路径外，待 PDE 确认 | `FeedbackTab.vue` |
+| 评测分 | 76 / 100，拒答 9/16、反问 5/10 偏弱（见 2.1） | `eval/results/summary.json` |
+| 指标口径变体 | 静态按指标名的（…）后缀推出变体，静态会改成显式字段；qa 按标签匹配，届时核对 | `service.py` `variant_index` |
+| 筛选/关键词含 NUL | 值或关键词带 `\u0000` 时 search/export 仍 500（PostgreSQL 拒绝）；应与静态 `_scalar` 一起拦成 422（动态评审非阻塞 ①） | `explore_api.py` |
+| 排序键前缀 | 排序键用 `lstrip("-")`，`--key` 也能过；改成只去一个 `-`（动态评审非阻塞 ②） | `explore_api.py` |
 
 ### 2.1 链路未完成 / 待裁定
 - **最近评测分（真 qwen-flash，`740a554`）**：**76 / 100**，见 `backend/seeds/extra/qa/eval/results/summary.json`（作答 62/74、拒答 9/16、反问 5/10；失败 24 题：EV-Q-012、014、016、022、025、026、042、051、052、058、061、063、066、067、069、071、072、078、080、081、082、084、091、095）。
@@ -109,3 +133,10 @@
 4. **我的页面 R2、对象页 R3/R4**：按 §4–§6 的接口表逐个接，接口函数加进 `src/api/qa.ts`，页面用 `qaReal()` 切换，未接完的保持 mock。
 5. **链路**：EV-Q-080 的 `OUT_OF_SCOPE` 申请入口与 qa-reuse / PDE 定；若链路加多轮上下文，前端 `followUp` 可直接发选项 + 回写 `clarify.chosen`。评测工具入库后接进 T11。
 6. **静态本体**：2.1 节 8 条口径问题找指标负责人 / 本体小白确认后，改 `caliber/notes.json` 和 `qa-eval.md` gold，重跑评测。
+
+## 通用对象搜索评审修复（动态 / 静态，10-26）
+
+- explore_api 筛选值按属性逐个校验，直接复用静态 `explorer._scalar / _bad / facet_kind / facetable`：枚举类只收标量数组（未知枚举值 422），区间类只收 `{min,max}`（数值走列范围检查，timestamp 只给日期上界含当天），不合法一律 422 `VALIDATION_FAILED`，`details.fields[0].field = filters.<key>`（排序是 `sort`）。
+- 敏感 / 隐藏属性后台也拦：筛选键须 facetable，排序键须 sortable 且不敏感不隐藏；搜索结果、详情、`boundProps`、导出都不带；关键词只匹配可搜索且可见的属性，没有就忽略关键词（不再拿第一列兜底）。
+- 前端：后台不通时导出直接报错，不导出演示数据。
+- 未做：`router.py` 新建会话的系统话术写死「按 大区 = …」（应换成范围维度名，待 row-scopes 维度上线再改）[推断]；`objMeta.ts loadStaticFacets` 任何错误都回落过渡分面（422 也回落），可改成只在 `isBackendDown` 时回落。

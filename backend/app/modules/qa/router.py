@@ -43,10 +43,10 @@ from app.modules.qa.models import (
     QaPermissionRequest,
     QaQueryLog,
     QaSession,
+    QaSynonymLink,
     QaTemplate,
     QaTurn,
     RunStatus,
-    SessionCaliber,
     TurnKind,
 )
 from app.modules.qa.schemas import (
@@ -187,8 +187,8 @@ async def _own_session(session, pk: int, sid: str) -> QaSession:
     return s
 
 
-def _caliber(label: str) -> SessionCaliber:  # type: ignore[valid-type]
-    return SessionCaliber(label)
+async def _caliber(session: AsyncSession, label: str | None) -> str | None:
+    return svc.check_caliber(label, await svc.variant_index(session))
 
 
 @router.post(
@@ -205,7 +205,7 @@ async def create_session(
         owner_id=pk,
         title="新会话",  # 同 useQaSession.newSession；第一问后改成问题前 20 字（W6）
         scope=body.scope,
-        caliber=_caliber(body.caliber),
+        caliber=await _caliber(session, body.caliber),
         last_at=clock.now(),
     )
     session.add(s)
@@ -224,7 +224,7 @@ async def patch_session(
     if body.title is not None and body.title.strip():
         s.title = body.title.strip()  # 同 QaSessionPanel.saveRename：trim 后为空不改
     scope = body.scope if body.scope is not None else s.scope
-    caliber = _caliber(body.caliber) if body.caliber is not None else s.caliber
+    caliber = await _caliber(session, body.caliber) if "caliber" in body.model_fields_set else s.caliber
     if scope != s.scope or caliber != s.caliber:
         s.scope, s.caliber = scope, caliber
         seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
@@ -236,7 +236,7 @@ async def patch_session(
                 session_id=s.id,
                 seq=seq,
                 kind=TurnKind.system,
-                snapshot={"text": f"从这里开始按 大区 = {scope}、口径 = {caliber.value} 回答"},
+                snapshot={"text": f"从这里开始按 大区 = {scope}、口径 = {caliber or '不限'} 回答"},
                 asked_at=now,
             )
         )
@@ -276,7 +276,10 @@ async def ask(
         raise NotFound("会话不存在", details={"id": sid})
     question = body.question.strip()
     try:
-        kind, snapshot, rows, elapsed, sql = await chain.answer(session, conn, llm, user, question)
+        lines = svc.caliber_lines(s.caliber, await svc.variant_index(session)) if s.caliber else []
+        kind, snapshot, rows, elapsed, sql = await chain.answer(
+            session, conn, llm, user, question, caliber_lines=lines
+        )
     except DBAPIError as e:  # 生成的 SQL 过了网关但执行出错（列不存在、超时等）：不落轮次，前端提示换个问法
         raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
     seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
@@ -995,14 +998,53 @@ def _need_open(f: QaFeedback, *allowed: FbStatus) -> None:
         raise StateInvalid(details={"id": f.code, "status": f.status.value})
 
 
-class SynonymCrPending(AppError):
-    """[推断] 词还没在任何变更单里：要新建 / 加入变更单，静态 X3 写接口（static-r3）未合入前不支持。"""
+async def _syn_to_cr(session: AsyncSession, user, f: QaFeedback, body: FbSynonymIn):
+    """T15 词还没在变更单里：走静态 X3——新建草稿（或加入 body.join 指定的草稿），目标 {kind:'knowledge'}，
+    同义词作为 synonyms 段的一行 add（保留该段已有行）。目标知识按 fix.target 去掉版本号后的名称找；
+    找不到 → isNew，id 由 qa 给 [推断]。
+    别的单子已占用该知识 → 静态 409 TARGET_IN_OTHER_CR（details.crId）原样返回。"""
+    import re
 
-    status_code, code, message = (
-        409,
-        "CR_API_PENDING",
-        "转为同义词需要新建变更单，静态模块的变更单写接口尚未接入",
+    from app.modules.static.cr_write import CrWriteService
+    from app.modules.static.models import ChangeRequest, CrItem, Knowledge
+    from app.modules.static.schemas import CRCreateIn, ItemIn, ItemsPutIn, TargetIn
+
+    name = re.sub(r"\s*v\d+$", "", (f.fix_target or f.fix_text).strip()) or f.fix_text
+    k = await session.scalar(select(Knowledge).where(Knowledge.name == name).limit(1))
+    t = (
+        TargetIn(kind="knowledge", id=k.code, name=k.name)
+        if k is not None
+        else TargetIn(kind="knowledge", id=f"K-{f.code}"[:64], is_new=True, name=name)
     )
+    w = CrWriteService(session)
+    if body.join:
+        code = await w.add_target(body.join, user, t)
+    else:
+        title = (body.title or f"补同义词：{f.fix_text}")[:40]
+        code = await w.create(
+            user, CRCreateIn(title=title, reason=f"问数反馈 {f.code}：{f.reason}", target=t)
+        )
+    cr_id = await session.scalar(select(ChangeRequest.id).where(ChangeRequest.code == code))
+    old = (
+        await session.scalars(
+            select(CrItem)
+            .where(
+                CrItem.cr_id == cr_id,
+                CrItem.target_kind == "knowledge",
+                CrItem.target_id == t.id,
+                CrItem.section == "synonyms",
+            )
+            .order_by(CrItem.seq, CrItem.id)
+        )
+    ).all()
+    rows = [ItemIn(key=i.item_key, op=i.op, before=i.before, after=i.after) for i in old]
+    if f.fix_text not in {i.key for i in rows}:
+        rows.append(ItemIn(key=f.fix_text, op="add", after=f.fix_text))
+    await w.put_items(code, user, ItemsPutIn(target=t, section="synonyms", rows=rows))
+    syn = QaSynonymLink(word=f.fix_text, target=name, cr_code=code)
+    session.add(syn)
+    await session.flush()
+    return syn
 
 
 @tuning.post(
@@ -1010,7 +1052,7 @@ class SynonymCrPending(AppError):
     dependencies=_TM,
     response_model=FbSynonymOut,
     response_model_exclude_none=True,
-    summary="T15 转为同义词（已在变更单里 → 直接关联）",
+    summary="T15 转为同义词（已在变更单里 → 关联；否则新建 / 加入草稿变更单）",
 )
 async def feedback_to_synonym(
     fid: str, body: FbSynonymIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
@@ -1020,7 +1062,7 @@ async def feedback_to_synonym(
     _need_open(f)
     syn = await r.SynonymRepo(session).by_word(f.fix_text)
     if syn is None or not syn.cr_code:
-        raise SynonymCrPending(details={"id": fid, "word": f.fix_text, "join": body.join})
+        syn = await _syn_to_cr(session, user, f, body)
     st = (
         FbStatus.await_release
         if await svc.cr_status(session, syn.cr_code) == "已通过"
@@ -1144,3 +1186,13 @@ router.include_router(tuning)
 from app.modules.qa.pages_api import pages as _pages_router  # noqa: E402
 
 router.include_router(_pages_router)
+
+# R3/R4 对象搜索 / 详情 O2–O7、O9（qa-pages 流，独立文件，见 objects_api.py）
+from app.modules.qa.objects_api import objects as _objects_router  # noqa: E402
+
+router.include_router(_objects_router)
+
+# 通用对象搜索 / 详情（元数据驱动，独立文件，见 explore_api.py 与 generic-object-explorer.md）
+from app.modules.qa.explore_api import explore as _explore_router  # noqa: E402
+
+router.include_router(_explore_router)
