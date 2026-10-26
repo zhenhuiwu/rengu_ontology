@@ -223,6 +223,24 @@ class Property(IdMixin, MutableTableMixin, Base):
     transform: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="映射页：转换说明")
     map_column: Mapped[str] = mapped_column(String(256), nullable=False, default="", comment="映射页：源字段")
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 通用对象浏览显示标记（generic-object-explorer.md §4，static_0004）；显示顺序沿用 seq，标题沿用 is_title
+    visibility: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="normal",
+        server_default="normal",
+        comment="prominent/normal/hidden",
+    )
+    searchable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    filterable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    sortable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    list_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    list_width: Mapped[int | None] = mapped_column(Integer, comment="列表列宽 px（可选）")
+    format: Mapped[str | None] = mapped_column(String(32), comment="值格式 money:1/pct/int/raw")
+    unit: Mapped[str | None] = mapped_column(String(16), comment="单位（元/㎡）")
+    backing_column: Mapped[str | None] = mapped_column(
+        String(64), comment="分面取值用：受控业务表（sql_guard 登记）里的物理列名"
+    )
 
     object_type: Mapped[ObjectType] = relationship(back_populates="properties")
 
@@ -440,6 +458,13 @@ class Metric(CodeMixin, MutableTableMixin, Base):
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="METRIC_LIST 顺序")
     stat_seq: Mapped[int | None] = mapped_column(Integer, comment="METRICS 顺序（有统计值的 7 个）")
+    variants: Mapped[list[Any]] = mapped_column(
+        JsonType,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+        comment="口径变体 [{code,label,api,version,default}]",
+    )
 
 
 # ---------------------------------------------------------------- 维度
