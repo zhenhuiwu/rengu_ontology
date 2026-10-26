@@ -5,7 +5,8 @@
  * 规则、执行记录在当前页用抽屉打开（useDrawer），不跳转。
  * 草稿：草稿来源与视图切换用公共 parts/useDraftView（与指标口径一致）；草稿里的增删改与改动标记用本页 useDraftEdits。
  * 真接口（开关 action 打开）：左侧列表（分组 / 关键字 / 分页）走 GET /action-types；详情、参数、提交条件、写回、版本历史
- * 走 api/action.ts 的快照；执行记录与统计走 dynamic 的 /action-runs（dynamic 开关，取不到用 mock）。被规则引用、草稿写入（versioning）仍读 mock。
+ * 走 api/action.ts 的快照；执行记录与统计走 dynamic 的 /action-runs（dynamic 开关，取不到用 mock）；近 14 天执行图走
+ * GET /action-types/{id}/stats/daily（取到之前 / 后台没起来用 mock runDaily）。被规则引用、执行记录抽屉、草稿写入（versioning）仍读 mock。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -37,6 +38,7 @@ import { isApiError } from '@/api/http';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import {
   actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, loadRuns, type ActionTypeRow,
+  getRunDaily, type RunDaily,
 } from '@/api/action';
 
 const route = useRoute();
@@ -186,7 +188,24 @@ const usedCols = [
   { title: '使用方式', dataIndex: 'mode', ellipsis: { showTitle: true } },
   { title: '近期告警', key: 'alerts', width: 120, align: 'right' as const },
 ];
-const daily = computed(() => runDaily(cur.value.id));
+/* 近 14 天执行量：真接口按选中类型取；typeId 对不上（切换中 / 草稿新类型 404）时读 mock */
+const rd = reactive<{ typeId: string; items: RunDaily[] }>({ typeId: '', items: [] });
+if (real) {
+  let n = 0;
+  watch(() => cur.value.id, async (id) => {
+    if (backend.down) return;
+    const k = ++n;
+    try {
+      const items = await getRunDaily(id);
+      if (k === n) Object.assign(rd, { typeId: id, items });
+    } catch (e) {
+      if (k !== n || fallBackIfDown(e)) return;
+      Object.assign(rd, { typeId: id, items: [] });
+      if (!(isApiError(e) && e.status === 404)) message.error(`执行趋势加载失败：${apiMsg(e)}`);
+    }
+  }, { immediate: true });
+}
+const daily = computed(() => (live.value && rd.typeId === cur.value.id ? rd.items : runDaily(cur.value.id)));
 const chartOption = computed(() => ({
   grid: { left: 32, right: 8, top: 28, bottom: 24 },
   legend: { top: 0, right: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: GRAY.g8, fontSize: 12 } },

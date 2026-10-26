@@ -97,8 +97,8 @@ async def test_ext_system(
 
 
 # 注意：要排在 :test 之后注册，否则 POST /ext-systems/EXT-X:test 会被 {sys_id} 吃掉。
-# 【推断】文档写的是 PUT；前端 apiClient（src/api/http.ts，公共文件）只有 get / post，
-# 所以同一个处理函数也挂 POST /ext-systems/{id}，前端用 POST。两个方法行为完全一样。
+# 文档写的是 PUT；前端 apiClient 已有 put（palantir-r2 起 src/api/integration.ts 用 PUT）。
+# POST /ext-systems/{id} 保留为同义别名（旧前端兼容），两个方法行为完全一样。
 @router.put("/ext-systems/{sys_id}", response_model=ExtSystemDetailOut, summary="编辑外部系统")
 async def update_ext_system(
     sys_id: str, body: ExtSystemIn, session: SessionDep, user: Annotated[CurrentUser, Depends(_ext_manage)]

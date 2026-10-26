@@ -1,4 +1,7 @@
-"""事件类型定义表（action-event-api §9）。event / event_delivery / event_dedup 等运行表不在本批。
+"""事件类型定义表 + 事件运行表（action-event-api §9）。
+
+- 第 2 轮（palantir-r2）新增 event（近期事件）、event_daily_stat（近 14 天趋势）；
+  event_delivery / event_dedup（逐订阅方投递、去重窗口）仍未建，见 handoff/palantir.md。
 
 - 主键代理键 id bigint，外键指向 id；接口只出业务编码（event_type.code = 前端 id）。
 - 规则引用（event_type.rule_code、event_subscription.rule_code）暂为**软引用**（varchar R-…），
@@ -8,9 +11,20 @@
 新增模型要在 app/db/models.py 里 import。
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import LabelEnum
@@ -141,3 +155,55 @@ class EventTypeVersion(IdMixin, AppendOnlyTableMixin, Base):
     by_name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     definition: Mapped[dict | None] = mapped_column(JsonType)
+
+
+class EventOutcome(LabelEnum):
+    """事件处理结果（mock EventOutcome，5 个取值；成员顺序 = 页面结果筛选顺序）。
+    设计稿里的 pending（待投递，outbox 用）前端没有，本轮不加 [推断]。"""
+
+    delivered = "已投递"
+    alert_created = "已生成告警"
+    deduped = "已去重"
+    partial = "部分投递"
+    failed = "投递失败"
+
+
+class Event(CodeMixin, MutableTableMixin, Base):
+    """一条事件（mock EVENTS 的一行 = eventsOf() 并集，1,243 条）。code = 生产方 eventId（seed 为 EV-…）。
+    第一期不分区；按 (event_type_id, occurred_at desc, id) 索引支持页码分页。"""
+
+    __tablename__ = "event"
+    __table_args__ = (
+        Index("ix_event_event_type_id_occurred_at_id", "event_type_id", "occurred_at", "id"),
+        {"comment": "事件（近期事件流）"},
+    )
+
+    event_type_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="接口 at")
+    obj_kind: Mapped[str | None] = mapped_column(String(16), comment="store/product/order/action，可空")
+    object_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="接口 objId")
+    obj_label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="载荷摘要")
+    outcome: Mapped[EventOutcome] = mapped_column(enum_column(EventOutcome, 16), nullable=False)
+    subscriber_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, comment="接口 subscribers"
+    )
+    dedup_key: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload: Mapped[dict | None] = mapped_column(JsonType, comment="原始载荷（seed 无）")
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
+
+class EventDailyStat(IdMixin, MutableTableMixin, Base):
+    """事件类型按天的事件数（mock eventDaily()，和明细对不上，按 §7.1.2 原样入库）。"""
+
+    __tablename__ = "event_daily_stat"
+    __table_args__ = (UniqueConstraint("event_type_id", "stat_date"), {"comment": "事件类型按天统计"})
+
+    event_type_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
+    )
+    stat_date: Mapped[date] = mapped_column(Date, nullable=False)
+    value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

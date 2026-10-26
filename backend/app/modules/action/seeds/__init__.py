@@ -10,14 +10,21 @@
 - derived/versionsOf.action.json → action_type_version：调用参数是 (version, owner, notes)，不带动作 id，
   第 i 次调用 = ACTION_TYPES[i]（导出顺序，校验 version / owner 一致）。
 
+- derived/runDaily.json → action_run_daily_stat（palantir-r2）：调用参数 (typeId)，结果 14 天
+  {date:"MM-DD", ok, failed, unknown}；日期换算见 mmdd_to_date（event_daily_stat 共用） [推断]。
+
 - desc：前端 DEFS 里的 `{sys}` 模板原文没有导出（导出的是 withSystem 之后的 ACTION_TYPES），
   desc_tpl 只能存替换后的文本 → 读接口再做一次 `{sys}` 替换是空操作。要原文需 PDE 在 export-mock 加导出项。
 """
 
+from datetime import date
+
+from app.core import clock
 from app.core.enums import from_api
 from app.core.schema import parse_display_dt
 from app.modules.action.models import (
     ActionParam,
+    ActionRunDailyStat,
     ActionType,
     ActionTypeRule,
     ActionTypeVersion,
@@ -168,6 +175,24 @@ def _versions(r: Row, ctx: SeedContext) -> list[Row]:
     )
 
 
+def mmdd_to_date(text: str) -> date:
+    """mock 趋势里的 "MM-DD" → 完整日期（mock 的 14 天以 NOW 为终点；年份不在数据里）[推断]。"""
+    t = clock.today()
+    m, d = (int(x) for x in text.split("-"))
+    y = t.year if (m, d) <= (t.month, t.day) else t.year - 1
+    return date(y, m, d)
+
+
+def _run_daily(r: Row, _ctx: SeedContext) -> Row:
+    return {
+        "action_type_id": derived_args(r)[0],
+        "stat_date": mmdd_to_date(r["date"]),
+        "ok": r["ok"],
+        "failed": r["failed"],
+        "unknown": r["unknown"],
+    }
+
+
 SEEDS: list[SeedSpec] = [
     SeedSpec(
         ActionType,
@@ -215,6 +240,14 @@ SEEDS: list[SeedSpec] = [
         key=("action_type_id", "ver"),
         transform=_versions,
         description="动作类型版本（versionsOf）",
+        refs=PARENT,
+    ),
+    SeedSpec(
+        ActionRunDailyStat,
+        "derived/runDaily.json",
+        key=("action_type_id", "stat_date"),
+        transform=_run_daily,
+        description="动作类型近 14 天每日执行量（runDaily）",
         refs=PARENT,
     ),
 ]

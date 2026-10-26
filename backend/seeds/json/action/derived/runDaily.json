@@ -1,0 +1,1549 @@
+[
+  {
+    "args": [
+      "issue_recall_coupon"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 10,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-13",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 9,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 4,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 10,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-19",
+        "ok": 7,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-20",
+        "ok": 15,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 16,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 17,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 16,
+        "failed": 2,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "sync_member_tags"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 15,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-14",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 15,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-18",
+        "ok": 17,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 5,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 15,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 6,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 18,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "assign_region_manager"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 5,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-19",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 16,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-22",
+        "ok": 21,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 12,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 16,
+        "failed": 2,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "adjust_region_budget"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 14,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-13",
+        "ok": 5,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 14,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-15",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-16",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 16,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 21,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-21",
+        "ok": 9,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 11,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 17,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "correct_order_status"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-14",
+        "ok": 16,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 16,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-20",
+        "ok": 6,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 10,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-22",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 13,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "request_replenish"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 6,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 15,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 8,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 16,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 20,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 11,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-20",
+        "ok": 11,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 5,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 10,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 17,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 8,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 7,
+        "failed": 0,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "adjust_store_price"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 6,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 7,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 19,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-16",
+        "ok": 9,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-17",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-18",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 16,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 19,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 21,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "start_price_approval"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 12,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-14",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-15",
+        "ok": 16,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 6,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 14,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-18",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 12,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 19,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 13,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "close_alert"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-13",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 17,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 8,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 17,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-17",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 10,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 11,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 6,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-22",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 10,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 14,
+        "failed": 0,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "urge_logistics"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-13",
+        "ok": 5,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-16",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 8,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 14,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-19",
+        "ok": 20,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-20",
+        "ok": 13,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-21",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 14,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 5,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 13,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 7,
+        "failed": 0,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "claim_alert"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 15,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 16,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-15",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-16",
+        "ok": 20,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 8,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-19",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 6,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-21",
+        "ok": 6,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 7,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 8,
+        "failed": 1,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "reassign_alert"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 7,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-14",
+        "ok": 20,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 15,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-16",
+        "ok": 6,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 5,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 10,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 10,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-22",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 20,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "reissue_shipment"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 15,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-16",
+        "ok": 19,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 8,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-18",
+        "ok": 14,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-19",
+        "ok": 18,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-21",
+        "ok": 13,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 9,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 16,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 11,
+        "failed": 1,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "approve_refund"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 20,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 5,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 18,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 17,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-17",
+        "ok": 18,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-20",
+        "ok": 9,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 19,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 12,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 9,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 10,
+        "failed": 2,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "change_member_level"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 16,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 20,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 7,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 18,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 21,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-17",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 16,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 17,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 14,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 15,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 10,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-23",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-25",
+        "ok": 8,
+        "failed": 1,
+        "unknown": 1
+      }
+    ]
+  },
+  {
+    "args": [
+      "change_store_status"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 20,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 12,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 5,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 16,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 21,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 17,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-18",
+        "ok": 8,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 20,
+        "failed": 2,
+        "unknown": 1
+      },
+      {
+        "date": "10-20",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 11,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-23",
+        "ok": 14,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-24",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 5,
+        "failed": 1,
+        "unknown": 0
+      }
+    ]
+  },
+  {
+    "args": [
+      "set_safety_stock"
+    ],
+    "result": [
+      {
+        "date": "10-12",
+        "ok": 11,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-13",
+        "ok": 14,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-14",
+        "ok": 5,
+        "failed": 1,
+        "unknown": 0
+      },
+      {
+        "date": "10-15",
+        "ok": 6,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-16",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-17",
+        "ok": 5,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-18",
+        "ok": 15,
+        "failed": 2,
+        "unknown": 0
+      },
+      {
+        "date": "10-19",
+        "ok": 4,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-20",
+        "ok": 13,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-21",
+        "ok": 7,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "date": "10-22",
+        "ok": 12,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-23",
+        "ok": 16,
+        "failed": 1,
+        "unknown": 1
+      },
+      {
+        "date": "10-24",
+        "ok": 6,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "date": "10-25",
+        "ok": 16,
+        "failed": 1,
+        "unknown": 0
+      }
+    ]
+  }
+]
