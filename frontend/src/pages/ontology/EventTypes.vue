@@ -27,13 +27,13 @@ import {
 } from '@/mock/actionEvent';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { useDraftView } from './parts/useDraftView';
+import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import {
   actionApi, snap, loadSnapshot, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
-  listEvents, getEventStats, type EventStats, crWriter, crStart, crErrText,
+  listEvents, getEventStats, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore,
 } from '@/api/action';
 import type { EventRecord } from '@/mock/actionEvent';
 
@@ -88,9 +88,18 @@ const tab = computed({
 });
 
 /* 草稿（公共 useDraftView：CR-0013 → 门店价格变更；增删改与改动标记用本页 useDraftEdits） */
-const { draft, isDraft, editTip: viewTip, readonly, reason, setView, start } = useDraftView('event', () => cur.value.id);
+const { draft, isDraft, editTip: viewTip, readonly, reason, setView, start, cancel } = useDraftView('event', () => cur.value.id);
 const crTarget = () => ({ id: cur.value.id, name: `${cur.value.name}（${cur.value.api}）` });
-const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军', writer: crWriter('event', crTarget) });
+const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军', writer: crWriter('event', crTarget), ready: () => ready.value });
+/** 放弃草稿（确认卡在 useDraftEdits.discard）：写库模式下删库成功后用 cancel 撤掉本对象在登记表里的登记并切回已发布版；开关关着同以前（mock 登记不动） */
+const onDiscard = () => de.discard(() => { const d = draft.value; if (crWriteOn() && d) cancel(d.id); else setView('published'); });
+/* 刷新后恢复（写库模式）：按库里的草稿登记重新登记本页对象，库里已没有的 mock 登记去掉；本对象的草稿行由 useDraftEdits 读回 */
+if (crWriteOn()) {
+  crRestore('event').then(({ pairs, inDb }) => {
+    for (const t of EVENT_TYPES) { const d = draftOf('event', t.id); if (d && !inDb(d.id, t.id)) forgetTarget(d.id, 'event', t.id); }
+    for (const [cr, id] of pairs) start({ join: cr, target: id });
+  }).catch((e) => message.error(`读取变更单草稿失败：${crErrText(e)}`));
+}
 /** 发起变更 / 加入：VITE_PALANTIR_CR_WRITE 开着时先写库（失败弹错，不进草稿），关着同以前 */
 async function onStart(opts: { join?: string; title?: string }) {
   try { start(await crStart({ kind: 'event', ...crTarget() }, opts)); } catch (e) { message.error(`发起变更失败：${crErrText(e)}`); }
@@ -311,7 +320,7 @@ const verCols = [
 
     <div class="panel et-detail">
       <DraftBanner v-if="isDraft && bannerDraft" :draft="bannerDraft"
-        @submit="de.submit()" @discard="de.discard(() => setView('published'))" />
+        @submit="de.submit()" @discard="onDiscard()" />
       <div class="et-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
         <span class="t-14 c-3 num">{{ cur.api }}</span>

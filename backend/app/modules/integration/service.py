@@ -14,6 +14,7 @@ from app.common.pagination import PageParams
 from app.core import clock
 from app.core.enums import from_api
 from app.core.errors import Conflict, DuplicateKey, NotFound
+from app.db.dialects import get_adapter
 from app.modules.action.models import ActionType
 from app.modules.dynamic.models import ActionRun
 from app.modules.integration.models import CallKind, CallResult, ExtSystem, ExtSystemStatus, WritebackCall
@@ -21,6 +22,7 @@ from app.modules.integration.repo import ExtSystemRepo, WritebackCallRepo
 from app.modules.integration.schemas import ExtSystemIn
 
 PROD = "生产"
+CODE_LOCK = "integration.ext_system.code"
 _MSG_502 = "对方返回 502（网关错误），系统处于降级状态，请联系负责人"
 
 
@@ -75,7 +77,10 @@ class ExtSystemService:
         """前端 saveEdit：EXT-N + 两位序号（EXT-N01…）。
 
         取已有 EXT-N 最大序号 + 1（前端用个数 + 1，删过就会撞号）。
+        并发：先拿事务级咨询锁（`xact_lock`，PG 上是 pg_advisory_xact_lock，提交 / 回滚时释放），
+        两个请求同时新建时后一个等前一个提交后再取号，不会撞号（原来会撞 code 唯一约束报 500）。
         """
+        await get_adapter(self.session).xact_lock(self.session, CODE_LOCK)
         stmt = select(ExtSystem.code).where(ExtSystem.code.like("EXT-N%"))
         codes = (await self.session.scalars(stmt)).all()
         nums = [int(c[5:]) for c in codes if c[5:].isdigit()]

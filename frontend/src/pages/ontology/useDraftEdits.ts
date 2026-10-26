@@ -8,8 +8,10 @@
  * 状态按 变更单 + 对象 保存在模块里，切换页签不丢。
  * 变更单写库（palantir-cr）：传了 writer 且 writer.on() 时，保存草稿 / 提交审核 / 放弃草稿先写库（src/api/action.ts crWriter），
  *   成功后再改本地状态；失败弹错误、本地状态不变（不回退 mock、不走 fallBackIfDown）。writer.on() 为 false 时行为同以前。
+ * palantir-r3：写库模式下 ① 改动数读 writer.changes（库里整单的改动数）；② 选中对象在草稿单里、本地还没有它的草稿时，
+ *   用 writer.load 读回库里的草稿行叠到 saved（刷新页面后草稿还在）；读失败只提示，不当成“没有草稿”。
  */
-import { computed, reactive, type Ref } from 'vue';
+import { computed, reactive, watch, type Ref } from 'vue';
 import { message } from 'ant-design-vue';
 import { useRouter } from 'vue-router';
 import type { DraftCR } from '@/mock/releases';
@@ -23,6 +25,8 @@ interface Row { key: string; data: unknown; deleted?: boolean }
 const saved = reactive<Record<string, Row[]>>({});
 const working = reactive<Record<string, Row[]>>({});
 const submitted = reactive<Record<string, string>>({});
+/** 已从库里读回过草稿行的 变更单|对象（每个只读一次；本会话保存 / 放弃后以本地为准） */
+const loaded = new Set<string>();
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -33,6 +37,10 @@ export interface DraftWriter {
   save: (crId: string, changes: { section: string; rows: SectionChange[] }[]) => Promise<void>;
   submit: (crId: string) => Promise<void>;
   discard: (crId: string) => Promise<void>;
+  /** 库里整单的改动数（没有记录时 undefined，退回前端计数） */
+  changes?: (crId: string) => number | undefined;
+  /** 读回本对象在该单里的全部草稿行（刷新后恢复） */
+  load?: (crId: string, targetId: string) => Promise<{ section: string; key: string; op: string; after?: unknown }[]>;
   /** 错误提示文字（带错误码、422 的字段） */
   errText?: (e: unknown) => string;
 }
@@ -45,6 +53,8 @@ export interface DraftEditsOptions {
   targetName: () => string;
   reviewer?: string;
   writer?: DraftWriter;
+  /** 已发布版数据已就绪（真接口快照载入完）；读回草稿行要等它，否则叠在 mock 上 */
+  ready?: () => boolean;
 }
 
 export function useDraftEdits(o: DraftEditsOptions) {
@@ -55,7 +65,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
   const canEdit = computed(() => o.isDraft.value && !locked.value);
   const editTip = computed(() => (o.isDraft.value && locked.value ? `${o.draft.value!.id} 已提交审核，驳回后才能继续修改` : o.editTip.value));
   const dirty = computed(() => Object.keys(working).some((k) => k.startsWith(prefix())));
-  const sections: { name: string; marks: (src: 'saved' | 'all') => number; changes: () => SectionChange[] }[] = [];
+  const sections: { name: string; marks: (src: 'saved' | 'all') => number; changes: () => SectionChange[]; hydrate: (items: { key: string; op: string; after?: unknown }[]) => void }[] = [];
   const writing = () => !!o.writer?.on();
   const errText = (e: unknown) => o.writer?.errText?.(e) ?? (e instanceof Error ? e.message : String(e));
   let busy = false;
@@ -97,7 +107,19 @@ export function useDraftEdits(o: DraftEditsOptions) {
       }
       return out;
     };
-    sections.push({ name, changes, marks: (src) => diff(src === 'saved' ? saved[key()] ?? baseRows() : current()).filter((r) => r.mark).length });
+    /** 库里的草稿行叠到已发布版上，作为“已保存”（本地已有草稿时不覆盖） */
+    const hydrate = (items: { key: string; op: string; after?: unknown }[]) => {
+      if (!items.length || saved[key()] || working[key()]) return;
+      const rs = baseRows();
+      for (const it of items) {
+        const i = rs.findIndex((r) => r.key === it.key);
+        if (it.op === 'delete') { if (i >= 0) rs[i] = { ...rs[i], deleted: true }; }
+        else if (i >= 0) rs[i] = { key: it.key, data: it.after };
+        else rs.push({ key: it.key, data: it.after });
+      }
+      saved[key()] = rs;
+    };
+    sections.push({ name, changes, hydrate, marks: (src) => diff(src === 'saved' ? saved[key()] ?? baseRows() : current()).filter((r) => r.mark).length });
     return {
       rows,
       /** 键已存在（未删除）时返回 false */
@@ -122,7 +144,23 @@ export function useDraftEdits(o: DraftEditsOptions) {
   const savedChanges = computed(() => sections.reduce((s, x) => s + x.marks('saved'), 0));
   const allChanges = computed(() => sections.reduce((s, x) => s + x.marks('all'), 0));
   /** 给 DraftBanner 用：改动数 = 变更单原有改动 + 本对象已保存的改动 */
-  const bannerDraft = computed<DraftCR | undefined>(() => o.draft.value && { ...o.draft.value, changes: o.draft.value.changes + savedChanges.value, ...(savedChanges.value ? { updatedAt: '2026-10-25 17:10' } : {}) });
+  /** 整单改动数：写库模式且库里有数时以库为准（已含本对象保存进库的行），否则 = 单子原有改动 + 本对象已保存的改动 */
+  const dbChanges = () => (writing() && o.draft.value ? o.writer!.changes?.(o.draft.value.id) : undefined);
+  const crChangeCount = () => dbChanges() ?? (o.draft.value ? o.draft.value.changes + savedChanges.value : 0);
+  const bannerDraft = computed<DraftCR | undefined>(() => o.draft.value && { ...o.draft.value, changes: crChangeCount(), ...(dbChanges() === undefined && savedChanges.value ? { updatedAt: '2026-10-25 17:10' } : {}) });
+
+  /* 刷新后恢复：选中对象在草稿单里时读回库里的草稿行（每个 单号|对象 一次） */
+  watch(() => [o.draft.value?.id, o.targetId(), o.ready?.() ?? true] as const, async ([crId, tid, rd]) => {
+    if (!crId || !rd || !writing() || !o.writer?.load) return;
+    const p = `${crId}|${tid}|`;
+    if (loaded.has(p)) return;
+    loaded.add(p);
+    try {
+      const items = await o.writer.load(crId, tid);
+      if (prefix() !== p) { loaded.delete(p); return; } // 读回来时已切到别的对象：下次选中再读
+      for (const x of sections) x.hydrate(items.filter((it) => it.section === x.name));
+    } catch (e) { loaded.delete(p); message.error(`读取草稿改动失败：${errText(e)}`); }
+  }, { immediate: true });
 
   async function save() {
     const d = o.draft.value;
@@ -147,7 +185,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
     const ok = await confirm.ask({
       title: '提交审核', target: `${d.id} ${d.title}`, okText: '提交',
       blocked: dirty.value ? '本对象还有未保存的修改，请先保存草稿或撤销修改后再提交' : undefined,
-      fields: [{ label: '本对象', value: o.targetName() }, { label: '本对象改动', value: `${savedChanges.value} 处` }, { label: '变更单改动', value: `${d.changes + savedChanges.value} 处` }, ...(o.reviewer ? [{ label: '审核人', value: o.reviewer }] : [])],
+      fields: [{ label: '本对象', value: o.targetName() }, { label: '本对象改动', value: `${savedChanges.value} 处` }, { label: '变更单改动', value: `${crChangeCount()} 处` }, ...(o.reviewer ? [{ label: '审核人', value: o.reviewer }] : [])],
       impact: '提交后草稿锁定，审核人驳回后才能继续修改；审核通过后随下一次整版发布生效，发布前问数和规则仍用已发布版本。',
     });
     if (!ok) return;

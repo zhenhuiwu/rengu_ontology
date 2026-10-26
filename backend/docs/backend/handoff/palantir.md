@@ -1,7 +1,7 @@
 # Palantir专家 交接（动作类型 / 事件类型 / 外部系统 / 回写调用）
 
-> 截至 2026-10-26（UTC+8）。最新分支 `palantir-cr`，基于 master `770f6d7`（`palantir-r2`、`palantir-r2-fix`、`palantir-generic-fix` 已合入）。
-> 接口细节见 `docs/backend/action-event-api.md`（§3 接口、§11 第 2 批、§12 第 3 批）。本文只记做到哪、怎么接。
+> 截至 2026-10-26（UTC+8）。最新分支 `palantir-r3`，基于 master `b475283`（迁移 head `static_0003`；`palantir-cr` 已合入）。
+> 接口细节见 `docs/backend/action-event-api.md`（§3 接口、§11 第 2 批、§12 第 3 批、§13 变更单草稿前端）。本文只记做到哪、怎么接。
 
 ## 1. 已完成
 
@@ -15,6 +15,8 @@
 | **第 3 批** 动作趋势：表 `action_run_daily_stat`（迁移 `action_0002` 接 `event_0003`），种子 `runDaily.json`；接口 `GET /action-types/{id}/stats/daily?days=14`；动作类型页近 14 天执行图改走真接口（取不到 / 后台没起来用 mock） | palantir-r2 | 17 个类型与 mock `runDaily()` 一致 |
 | **第 3 批** 外部系统编辑 `updateExtSystem` 改 `PUT`（后台 POST 别名保留） | palantir-r2 | typecheck / build |
 | **变更单写库（palantir-cr，默认关）** 两页的发起变更 / 加入、保存草稿、提交审核、放弃草稿接静态 `static-r3` 的变更单写接口（契约 `handoff/static.md`）：`VITE_PALANTIR_CR_WRITE=1` 且 `action` 为真接口时先写库，成功后再改页面；失败（含后台没起来）弹错误（`message（code）`，422 带 `details.fields`）、页面不变，不回退 mock、不调 `fallBackIfDown`。开关关着行为不变、不发请求。目标 `kind` 用契约里的 `action` / `event`，`id` = 类型编码，`section` 同 `de.section(name)`。保存草稿：每个变了的 section 先 `GET items` 读回再合并整段 `PUT`（改回已发布值的行去掉）。代码：`src/api/action.ts` 末段（`crStart`、`crWriter`）、`useDraftEdits.ts`（可选 `writer`）、两页 `onStart` | palantir-cr | vue-tsc / build；静态未合并，没联调 |
+| **变更单草稿（palantir-r3，开关仍默认关）** 打开 `VITE_PALANTIR_CR_WRITE` 的前置条件：放弃草稿先弹确认卡，删库成功后调 PDE 的 `useDraftView().cancel` 撤掉登记；横幅 / 提交确认的改动数读库里的 `changes`；刷新后按 `draft-targets` + `status=草稿` 列表恢复登记，按 `GET items` 把已保存的行叠回页面（等快照就绪后再叠）。代码：`src/api/action.ts`（`crRestore`、`crChanges`、`crWriter.load/changes`）、`useDraftEdits.ts`（`hydrate`、`ready`）、两页 `onDiscard` 和恢复段 | palantir-r3 | vue-tsc；本地真后台（自建库 `rengu_test_palantir_r3`，开关打开）用 Playwright 走通：发起（CR 落库）→ 删一条提交条件 → 保存（库里 `changes=1`）→ 刷新后草稿行、“1 处改动”都在 → 提交（没审核人 409 `CR_NO_REVIEWER` 弹错；补审核人后 200，CR 变“审核中”）；另一个对象 发起 → 保存 → 刷新 → 放弃（确认卡 → `DELETE target` 204 → 切回已发布，`draft-targets` 里没有了）；事件类型页刷新后 CR-0013 草稿和“2 处改动”恢复 |
+| **外部系统编号并发（palantir-r3）** `ExtSystemService._next_code` 取号前拿事务级咨询锁 `integration.ext_system.code`，并发新建不再撞号。动作 / 事件类型没有新建接口，不涉及 | palantir-r3 | `tests/test_integration_code_lock.py`（两个独立事务并发新建，编号连续不重复）；与 `test_action_integration_write.py`、`test_integration_writeback_calls.py` 一起 33 个通过；ruff |
 | **PDE 评审小点（palantir-r2-fix）** 事件类型页：最近事件 / 运行统计 / 近期事件页签在“后台没起来”以外的报错（404 除外）时，原来只给空列表不重试；现改为该区域单行显示错误 + “重试”按钮（重新发请求），布局不变，mock 未改 | palantir-r2-fix | typecheck / build |
 | 迁移改接 `integration_0002.down_revision = dynamic_0002` | 最后一个单独提交 | 在临时分支合入 `static-integ2` 和 `dynamic-rules`：只有一个 head，空库 `upgrade head`、种子、`alembic check` 都通过，回写测试 24 个通过 |
 
@@ -30,9 +32,10 @@
 | 动作类型的执行记录抽屉（`drawer.open('action', id)`） | 读 mock | **卡住**：抽屉解析在公共文件 `src/components/actionEventResolvers.ts`（不归我）。动态的 `GET /action-runs/{id}` 已有，需抽屉归属方改解析器 |
 | 事件抽屉 `drawer.open('event', id)` / `GET /events/{id}` | 读 mock | 同上（公共抽屉）；另外逐订阅方投递要 `event_delivery` 表，没建 |
 | `event_delivery`、`event_dedup` 表 | 没建 | 我负责；近期事件 / 健康已用 `event` 表直接算 |
-| 变更单写库联调 / 打开开关 | 代码已写（palantir-cr），开关 `VITE_PALANTIR_CR_WRITE` 默认关 | 等 `static-r3` 合入 master 后联调再打开；**PDE**：在共用 `src/env.d.ts` 的 `ImportMetaEnv` 补 `VITE_PALANTIR_CR_WRITE?: string`（现在用类型断言读） |
-| 刷新后草稿改动叠回页面 | 草稿视图仍是前端内存，刷新后看不到库里已保存的行 | 要按 `GET /change-requests/{id}/items?kind=&targetId=` 叠回 `useDraftEdits` 的 saved（同静态未完成第 9 条） |
-| 放弃草稿后登记表、改动数 | 放弃后 `useDraftView` 里本对象仍登记在该单（mock 同样）；横幅改动数仍按前端计 | 登记表删目标要静态的 `forgetTarget`（static-r3 新增，未合并）；改动数改读库要 PDE 共用的 `useDraftView` 同步入口 |
+| 打开开关 `VITE_PALANTIR_CR_WRITE` | 前置条件都做了、本地联调已走通（palantir-r3），提交的代码里仍默认关 | 是否默认打开由 PDE / 用户定；打开时本地设 `VITE_PALANTIR_CR_WRITE=1` + `VITE_API_REAL_MODULES=action,static`（不提交） |
+| 放弃后留下空变更单 | 放弃只删本对象的目标；`cancel` 只删“本会话新建且已空”的单，刷新后再放弃时空单留在草稿列表里 | 归 PDE 的 `useDraftView.cancel` / 静态：要么 `cancel` 也删库里已空的单，要么静态 `DELETE target` 后自动删空单。【推断】 |
+| 发起时建单成功、加目标失败 | `crStart` 先写库再改页面；建单成功但加目标失败时库里会留一个空单，页面没进草稿所以没东西可撤 | 静态若把“建单 + 首个目标”做成一个事务（`POST /change-requests` 带 `target`）就不会有；否则我这边补删空单 |
+| 动作类型 `bulk`（批量执行）字段 | 没做 | 前端 mock / 页面没有这个字段，按“前端为准”不加；`target_kind` 后台已有。【推断】页面加上后再补列和迁移（`down_revision` 接当时的 head） |
 | 新建动作 / 事件类型 | 按钮仍只把当前选中类型登记进变更单（同 mock），没有新类型表单，`isNew` 不用 | 页面没有新建表单，待定。约定（PDE 审 static-r3 时提）：新类型 `target{kind,id:调用方给的编码,isNew:true}`；`config` 一个字段一行、`params` / `payload` 一项一行，都是 `op=add` |
 | **发布后生效** | 本轮只到草稿阶段：草稿行存进 `cr_item`、改动列表 / 校验能看到 | 静态发布还不把 `cr_item` 写回定义表（static 未完成第 9 条），审核通过、发布后动作 / 事件定义**不会变**；静态做完后要在 action / event `sections.py` 的 `build_section` 按 `cr_item` 展开（我负责这两节） |
 | 变更说明 `reason` | 没传 | 共用 `StartChangeModal` 没把“变更说明”发出来（静态 handoff 已提给 PDE） |
