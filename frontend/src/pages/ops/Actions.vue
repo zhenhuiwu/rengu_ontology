@@ -225,8 +225,8 @@ async function resubmit() {
   if (REAL_API) {
     try {
       const r = await resubmitActionRun(a.id);
-      pinned.value = a.id;
-      await afterWrite(r.original);
+      await afterWrite(r.action);
+      pick({ id: r.id }); // 选中新生成的动作（原动作保留为失败）
       message.success(`已重新提交为 ${r.id}`);
     } catch (e) { fail(e); }
     return;
@@ -245,7 +245,7 @@ async function resubmit() {
   LIST.unshift(rec);
   a.retriedAs = newId;
   push(a, { time: t, text: `已重新提交为 ${newId}`, desc: `${ME} · 新幂等键 ${newKey}` });
-  pinned.value = a.id;
+  pick({ id: newId });
   message.success(`已重新提交为 ${newId}`);
 }
 

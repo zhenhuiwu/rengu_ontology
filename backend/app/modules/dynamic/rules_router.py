@@ -6,23 +6,26 @@
 写接口的只读（?ver= / ?previewAs=）由全局 ReadonlyGuardDep 拦截。
 """
 
+import contextlib
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response
 from sqlalchemy import select
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core.errors import NotFound
-from app.db.session import SessionDep
+from app.db.session import SessionDep, get_session
 from app.modules.dynamic.catalog import get_catalog
 from app.modules.dynamic.models import ActionRun
 from app.modules.dynamic.ports import PortsDep
 from app.modules.dynamic.rules_schemas import (
     LifecycleDraftIn,
     ReplayIn,
+    RuleCreateIn,
     RuleDraftIn,
+    RuleOpenDraftIn,
     ScenarioCreateIn,
     ScenarioPatchIn,
     ScenarioRunIn,
@@ -97,6 +100,24 @@ async def get_rule(
 ) -> dict[str, Any]:
     """R4：已发布定义 + draft（有草稿时）；view=draft 时 editable。"""
     return await svc.detail(rule_id, view=view)
+
+
+@router.post("/rules", dependencies=RULES_MANAGE, status_code=201)
+async def create_rule(svc: RuleSvc, body: RuleCreateIn) -> dict[str, Any]:
+    """新建规则（Rules.vue「新建规则」）：未发布、状态变更中；带 cr 时同时开草稿。"""
+    return await svc.create(body)
+
+
+@router.post("/rules/{rule_id}/draft", dependencies=RULES_MANAGE)
+async def open_rule_draft(svc: RuleSvc, rule_id: str, body: RuleOpenDraftIn) -> dict[str, Any]:
+    """发起变更 / 加入已有变更单：登记规则草稿（幂等）。"""
+    return await svc.open_draft(rule_id, body.cr)
+
+
+@router.delete("/rules/{rule_id}/draft", dependencies=RULES_MANAGE, status_code=204)
+async def discard_rule_draft(svc: RuleSvc, rule_id: str, cr: str | None = None) -> None:
+    """放弃本规则草稿；从未发布过的新规则一并删除。"""
+    await svc.discard_draft(rule_id, cr)
 
 
 @router.put("/rules/{rule_id}/draft", dependencies=RULES_MANAGE)
@@ -206,15 +227,37 @@ async def rename_scenario(svc: ScSvc, sc_id: str, body: ScenarioPatchIn) -> dict
     return await svc.rename(sc_id, body.name)
 
 
-@router.post("/scenarios/{sc_id}:run", dependencies=SC_MANAGE)
-async def run_scenario(svc: ScSvc, sc_id: str, body: ScenarioRunIn) -> dict[str, Any]:
-    """S5/S6 运行 / 重新运行。"""
-    return await svc.run(sc_id, body)
+async def _compute_bg(request: Request, user: Any, sc_id: str) -> None:
+    """进程内后台任务：新开一个会话（与请求同一个 get_session 依赖，测试里的覆盖同样生效）。"""
+    dep = request.app.dependency_overrides.get(get_session, get_session)
+    agen = dep()
+    session = await anext(agen)
+    try:
+        await ScenarioService(session, user).compute(sc_id)
+    except Exception as e:
+        await agen.athrow(e)
+        return
+    with contextlib.suppress(StopAsyncIteration):
+        await anext(agen)
+
+
+@router.post("/scenarios/{sc_id}:run", dependencies=SC_MANAGE, status_code=202)
+async def run_scenario(
+    svc: ScSvc, sc_id: str, body: ScenarioRunIn, request: Request, background: BackgroundTasks
+) -> dict[str, Any]:
+    """S5/S6 运行 / 重新运行：校验后置“运行中”，202 返回详情；后台计算，前端轮询 /result。"""
+    out = await svc.run(sc_id, body)
+    background.add_task(_compute_bg, request, svc.user, sc_id)
+    return out
 
 
 @router.get("/scenarios/{sc_id}/result", dependencies=SC_VIEW)
-async def scenario_result(svc: ScSvc, sc_id: str) -> dict[str, Any]:
-    return await svc.result(sc_id)
+async def scenario_result(svc: ScSvc, sc_id: str, response: Response) -> dict[str, Any]:
+    """运行中回 202 {status}；失败回 409 SCENARIO_FAILED；完成回结果。"""
+    out = await svc.result(sc_id)
+    if "status" in out:
+        response.status_code = 202
+    return out
 
 
 @router.get("/scenarios/{sc_id}/impacts", dependencies=SC_VIEW, response_model=DictPage)

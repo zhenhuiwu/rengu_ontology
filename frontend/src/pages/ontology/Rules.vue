@@ -23,9 +23,11 @@ import { useReadonly } from '@/composables/useReadonly';
 import { paginate } from '@/mock/paginate';
 import { fmtInt } from '@/mock/format';
 import { alertTimeline } from '@/mock/dynamic';
-import { metricById } from '@/mock/metrics';
+import { metricById as mockMetricById } from '@/mock/metrics';
+import { METRIC_LIST } from '@/mock/metricCatalog';
 import { ACTIONS } from '@/mock/actions';
-import { ACTION_TYPES, actionTypeById, eventTypeById, paramsOf } from '@/mock/actionEvent';
+import { actionApi, actionTypes, eventTypes, paramsOf, loadSnapshot } from '@/api/action';
+import { isStaticReal, loadStatic } from '@/api/static';
 import {
   RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel, dedupeReason,
   type RuleDef, type AutoStage, type Hit,
@@ -38,12 +40,22 @@ import type { ActionRecord } from '@/mock/actions';
 import type { Alert } from '@/mock/dynamic';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, listRules, getRule, getRulesMeta, saveRuleDraft, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
+  dynamicApi, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, submitCR, removeCRTarget, CR_WRITE, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
   type RuleDto, type RuleHitDetailDto, type ReplayDto, type RuleVersionDto,
 } from '@/api/dynamic';
 
 /** 是否走真接口（开关 dynamic）；构建时确定 */
 const REAL_API = dynamicApi.isReal();
+/* 目录（动作类型 / 事件类型 / 指标）：action、static 开关各自切到真接口时读它们的接口（只读，src/api/action.ts、static.ts），否则读 mock */
+const catTick = ref(0);
+if (actionApi.isReal()) loadSnapshot().then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 动作 / 事件类型目录加载失败', e); });
+if (isStaticReal()) loadStatic(['metrics']).then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); });
+const actionTypeById = (id: string) => { void catTick.value; return actionTypes().find((a) => a.id === id); };
+const eventTypeById = (id: string) => { void catTick.value; return eventTypes().find((e) => e.id === id); };
+const metricById = (id: string): { name: string } | undefined => {
+  void catTick.value;
+  return (isStaticReal() && METRIC_LIST.length ? METRIC_LIST.find((m) => m.id === id) : undefined) ?? mockMetricById(id);
+};
 /** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
 const live = computed(() => REAL_API && !backend.down);
 const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
@@ -95,7 +107,8 @@ watch([kw, trig, stf], () => { lpage.value = 1; });
 const list = computed<RuleDef[]>(() => (live.value ? remote.items : paginate(filtered.value, { page: lpage.value, size: LPAGE }).items));
 const listTotal = computed(() => (live.value ? remote.total : filtered.value.length));
 /** 真接口：选中项 = ?rule= 或列表第一条；详情回来前先用列表行（同一份定义）占位 */
-const realId = computed(() => (route.query.rule as string) || remote.items[0]?.id || RULE_DEFS[0].id);
+/** 列表为空（筛选无结果）时为空串：不请求详情 / 命中 */
+const realId = computed(() => (route.query.rule as string) || remote.items[0]?.id || '');
 const base = computed<RuleDef>(() => {
   if (!live.value) return RULE_DEFS.find((r) => r.id === route.query.rule) ?? RULE_DEFS[0];
   if (remote.detail && remote.detail.id === realId.value) return stripDraft(remote.detail);
@@ -117,6 +130,58 @@ const { draft: draftCR, isDraft, editTip, setView, start } = useDraftView('rule'
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
+const NEW_RULE = '新建规则';
+/**
+ * 变更弹窗确认。mock：沿用公共 start()。真接口：
+ * - 新建规则：POST /rules 建规则 → start() 登记到所选 / 新建变更单（变更单仍是前端 mock，静态写接口合并前）→ POST /rules/{id}/draft 落库草稿，跳到新规则草稿视图；
+ * - 发起变更：start() 后 POST /rules/{id}/draft，让“保存到草稿”能落库。
+ */
+async function onChangeOk(opts: { join?: string; title?: string }) {
+  if (!REAL_API) { start(opts); return; }
+  try {
+    if (changeTarget.value === NEW_RULE) {
+      const d = await createRule();
+      const cr = start({ ...opts, target: d.id });
+      await openRuleDraft(d.id, cr);
+      await loadList();
+      router.replace({ query: { ...route.query, ...RESET, rule: d.id, view: 'draft' } });
+      message.success(`已新建规则 ${d.id}，在 ${cr} 的草稿里`);
+      return;
+    }
+    const id = base.value.id;
+    // openRuleDraft 失败时不能让页面停在草稿视图：加入已有单时先落库再 start()；
+    // 新建单的单号由 start() 生成，失败则切回已发布视图（公共 useDraftView 暂无撤销登记的接口，见 handoff）
+    if (opts.join) {
+      await openRuleDraft(id, opts.join);
+      start(opts);
+    } else {
+      const cr = start(opts);
+      try { await openRuleDraft(id, cr); } catch (e) { setView('published'); throw e; }
+    }
+    if (realId.value === id) await loadDetail();
+  } catch (e) { fail(e); }
+}
+/** 草稿横幅：提交审核 / 放弃草稿。静态变更单写接口合并前默认关（CR_WRITE），保持原 mock 行为 */
+async function onDraftSubmit() {
+  const cr = draftCR.value!;
+  if (REAL_API && CR_WRITE) {
+    try { await submitCR(cr.id); } catch (e) { fail(e); return; }
+  }
+  message.success(`${cr.id} 已提交审核，可在“变更与发布”查看`);
+}
+async function onDraftDiscard() {
+  const cr = draftCR.value!;
+  if (REAL_API && CR_WRITE) {
+    const id = base.value.id;
+    try {
+      await removeCRTarget(cr.id, { kind: 'rule', id });
+      await discardRuleDraft(id, cr.id);
+      await loadList();
+      if (realId.value === id) await loadDetail();
+    } catch (e) { fail(e); return; }
+  }
+  setView('published');
+}
 /** 草稿里的改动（自动暂存配置、阈值） */
 const edits = reactive<Record<string, { autoStage: AutoStage; thresholds: string[] }>>({});
 const draftDef = computed<RuleDef | undefined>(() => {
@@ -173,7 +238,7 @@ const actSystem = computed(() => actType.value?.system ?? '--');
 // 真实接口下草稿是异步拿到的：草稿未到之前先显示已发布内容，避免 ensureEdits 读到空草稿
 const stageEdit = computed(() => (isDraft.value && draftDef.value ? ensureEdits().autoStage : rule.value.autoStage));
 const stageType = computed(() => (stageEdit.value.actionTypeId ? actionTypeById(stageEdit.value.actionTypeId) : undefined));
-const actOptions = computed(() => ACTION_TYPES.filter((a) => a.targetKind === rule.value.objKind && a.status !== '草稿').map((a) => ({ value: a.id, label: `${a.name} · ${a.version}` })));
+const actOptions = computed(() => { void catTick.value; return actionTypes().filter((a) => a.targetKind === rule.value.objKind && a.status !== '草稿').map((a) => ({ value: a.id, label: `${a.name} · ${a.version}` })); });
 const params = computed(() => (stageType.value ? paramsOf(stageType.value) : []));
 const mappingRows = computed(() => params.value.map((p) => ({ param: p.name, required: p.required, from: stageEdit.value.mapping.find((m) => m.param === p.name)?.from ?? '' })));
 /** 自动暂存开启时，必填参数（*）都要有取值来源才能保存 */
@@ -309,7 +374,7 @@ const verCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange('新建规则')">新建规则</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange(NEW_RULE)">新建规则</a-button></a-tooltip>
   </Teleport>
 
   <div class="ru">
@@ -334,11 +399,11 @@ const verCols = [
 
     <div class="panel ru-detail">
       <DraftBanner v-if="isDraft && draftCR" :draft="draftCR"
-        @submit="message.success(`${draftCR.id} 已提交审核，可在“变更与发布”查看`)" @discard="setView('published')" />
+        @submit="onDraftSubmit" @discard="onDraftDiscard" />
       <div class="ru-head">
         <span class="t-16 fw-600 c-1">{{ rule.name }}</span>
         <span class="t-14 c-3 num">{{ rule.id }}</span>
-        <span class="t-14 c-3 num">{{ isDraft ? `草稿 v${rule.version}（已发布 v${base.version}）` : `v${rule.version}` }}</span>
+        <span class="t-14 c-3 num">{{ isDraft ? `草稿 v${rule.version}（${base.version == null ? '未发布' : `已发布 v${base.version}`}）` : base.version == null ? '未发布' : `v${base.version}` }}</span>
         <a-tooltip :title="ruleStatus(base).cr ? `所在变更单 ${ruleStatus(base).cr}` : undefined"><a-badge :status="ruleStatus(base).badge" :text="ruleStatus(base).text" /></a-tooltip>
         <a-segmented v-if="draftCR && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draftCR.id}`, value: 'draft' }]"
@@ -593,7 +658,7 @@ const verCols = [
       <StatusTimeline :items="hitTimeline" />
     </template>
   </a-drawer>
-  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="start" />
+  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onChangeOk" />
 </template>
 
 <style scoped>

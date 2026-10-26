@@ -81,12 +81,14 @@ async def test_create_run_rename_stage(dyn, client, fakes):  # noqa: F811
     err(await client.post(f"{API}/scenarios/{sid}:run", json=nod), 422, "SCENARIO_NO_DRIVER")
     bad = {**RUN, "scope": {**RUN["scope"], "area": "火星"}}
     err(await client.post(f"{API}/scenarios/{sid}:run", json=bad), 422, "VALIDATION_FAILED")
-    ran = (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).json()
-    assert ran["status"] == "已完成" and ran["scope"] == RUN["scope"]
+    r = await client.post(f"{API}/scenarios/{sid}:run", json=RUN)
+    # 异步：202 + 运行中；后台任务（测试传输里在响应后同步跑完）算完后为已完成
+    assert r.status_code == 202 and r.json()["status"] == "运行中" and r.json()["scope"] == RUN["scope"]
+    assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "已完成"
     res = (await client.get(f"{API}/scenarios/{sid}/result")).json()
-    again = (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).json()
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).status_code == 202
     assert (await client.get(f"{API}/scenarios/{sid}/result")).json()["kpis"] == res["kpis"]  # 同配置结果确定
-    assert again["status"] == "已完成"
+    assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "已完成"
     assert (await client.patch(f"{API}/scenarios/{sid}", json={"name": "新名"})).json()["name"] == "新名"
     err(await client.patch(f"{API}/scenarios/{sid}", json={"name": "  "}), 422, "VALIDATION_FAILED")
 
@@ -195,3 +197,32 @@ async def test_sections_registered_seeded_and_restorable(dyn, client):  # noqa: 
     await dyn.flush()
     for b in BUILDERS:
         assert await b.build_section(dyn, None, []) == latest.snapshot[b.section], b.section
+
+
+async def test_result_running_and_failed(dyn, client, session):  # noqa: F811
+    from app.modules.dynamic.rules_models import Scenario, ScenarioStatus
+
+    sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
+    s = await session.scalar(select(Scenario).where(Scenario.code == sid))
+    s.status = ScenarioStatus.running
+    await session.flush()
+    r = await client.get(f"{API}/scenarios/{sid}/result")
+    assert r.status_code == 202 and r.json() == {"status": "运行中"}
+    s.status, s.fail_reason = ScenarioStatus.failed, "推演失败：x"
+    await session.flush()
+    err(await client.get(f"{API}/scenarios/{sid}/result"), 409, "SCENARIO_FAILED")
+
+
+async def test_compute_db_error_marks_failed(dyn, client, monkeypatch):  # noqa: F811
+    from sqlalchemy import text
+
+    from app.modules.dynamic.rules_service import ScenarioService
+
+    async def boom(self, s):
+        await self.session.execute(text("select 1/0"))  # 真实数据库错误
+
+    monkeypatch.setattr(ScenarioService, "_compute", boom)
+    sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).status_code == 202
+    assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "失败"
+    err(await client.get(f"{API}/scenarios/{sid}/result"), 409, "SCENARIO_FAILED")

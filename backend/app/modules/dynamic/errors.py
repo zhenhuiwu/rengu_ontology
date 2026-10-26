@@ -15,6 +15,12 @@ class NotAssignee(AppError):
     status_code, code, message = 403, "NOT_ASSIGNEE", "只有处理人可以处理该告警"
 
 
+class NotApprover(AppError):
+    """非审批人审批动作（审批人 = 「角色 姓名」，按姓名比对）。"""
+
+    status_code, code, message = 403, "NOT_APPROVER", "只有审批人可以审批该动作"
+
+
 class AlertLockedByAction(AppError):
     status_code, code, message = 409, "ALERT_LOCKED_BY_ACTION", "关联动作进行中，暂不能转派或关闭"
 

@@ -27,7 +27,13 @@ from app.core.enums import TimelineStatus
 from app.core.errors import AppError, EmptyInput, IdempotencyConflict, NotFound, SubmissionCriteriaFailed
 from app.core.state import InvalidTransition, Transitions, ensure_transition
 from app.modules.dynamic.catalog import JsonRefCatalog
-from app.modules.dynamic.errors import AlertLockedByAction, AlreadyResubmitted, NotAssignee, NotConfirmer
+from app.modules.dynamic.errors import (
+    AlertLockedByAction,
+    AlreadyResubmitted,
+    NotApprover,
+    NotAssignee,
+    NotConfirmer,
+)
 from app.modules.dynamic.models import (
     ActionRun,
     ActionStatus,
@@ -211,6 +217,9 @@ class ActionService:
         """Actions.vue L87：只有 source.confirmer 存在时才限定本人。"""
         return bool(r.in_center and r.confirmer and r.confirmer != self.user.name)
 
+    def is_approver(self, r: ActionRun) -> bool:
+        return not r.approver or r.approver.split()[-1] == self.user.name
+
     def _not_mine_text(self, r: ActionRun) -> str:
         head = f"该动作由规则 {r.rule_code} 暂存，" if r.rule_code else "该动作"
         return f"{head}指定确认人为 {r.confirmer}，只有确认人可以确认提交或撤回"
@@ -225,10 +234,13 @@ class ActionService:
             reasons["resubmit"] = "该动作已重新提交过"
         if r.status == ActionStatus.reconciled and r.reconcile_result == ReconcileResult.not_executed:
             reasons["resubmit"] = "已对账 · 外部未执行，如仍需执行请重新发起"
+        approver = self.is_approver(r)
+        if r.status == ActionStatus.approving and not approver:
+            reasons["approve"] = f"该动作审批人为 {r.approver}，只有审批人可以审批"
         return ActionCan(
             confirm=staged and mine,
             withdraw=staged and mine,
-            approve=r.status == ActionStatus.approving,
+            approve=r.status == ActionStatus.approving and approver,
             resubmit=r.status == ActionStatus.failed and not r.retried_as_id,
             reconcile=r.status == ActionStatus.unknown,
             reasons=reasons,
@@ -635,9 +647,12 @@ class ActionService:
         return r
 
     async def approve(self, code: str) -> ActionRun:
-        """审批中 → 执行中 → submit。审批入口前端没有（[待定]），这里不校验审批人身份 [推断]。"""
+        """审批中 → 执行中 → submit。审批入口前端没有（[待定]）。
+        简单规则（同 mock）：审批人 = 「角色 姓名」，当前用户姓名须与审批人姓名一致；未指定审批人不限。"""
         r = await self.get(code)
         ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.executing)
+        if not self.is_approver(r):
+            raise NotApprover(f"该动作审批人为 {r.approver}，只有审批人可以审批")
         r.status = ActionStatus.executing
         r.approved_at = clock.now()
         await self._log(r, "审批通过", f"审批人 {r.approver}")

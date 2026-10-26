@@ -123,3 +123,32 @@ async def test_save_draft(dyn, client):  # noqa: F811
     assert again["autoStage"]["enabled"] is True  # 已发布定义不动
     # 没有草稿的规则：已发布只读
     err(await client.put(f"{API}/rules/R-012/draft", json=ok), 409, "STATE_INVALID")
+
+
+async def test_create_open_discard_rule(dyn, client):  # noqa: F811
+    r = await client.post(f"{API}/rules", json={"cr": "CR-0099", "name": "新规则 A"})
+    assert r.status_code == 201
+    d = r.json()
+    rid = d["id"]
+    assert d["version"] is None and d["cr"] == "CR-0099"
+    assert d["draft"]["version"] == 1 and d["editable"] is True
+    assert d["displayStatus"] == "草稿中" and d["name"] == "新规则 A"
+    lst = (await client.get(f"{API}/rules", params={"size": 100})).json()
+    assert rid in [x["id"] for x in lst["items"]]  # 未发布但有草稿的新规则也列出
+    # 已在别的草稿单 → 409；同单幂等
+    err(await client.post(f"{API}/rules/{rid}/draft", json={"cr": "CR-0100"}), 409, "TARGET_IN_OTHER_CR")
+    assert (await client.post(f"{API}/rules/{rid}/draft", json={"cr": "CR-0099"})).status_code == 200
+    # 放弃：新规则连同规则删除
+    assert (await client.delete(f"{API}/rules/{rid}/draft", params={"cr": "CR-0099"})).status_code == 204
+    err(await client.get(f"{API}/rules/{rid}"), 404, "NOT_FOUND")
+    # 不带 cr：只建规则，再开草稿
+    rid2 = (await client.post(f"{API}/rules", json={})).json()["id"]
+    assert (await client.post(f"{API}/rules/{rid2}/draft", json={"cr": "CR-0101"})).json()["cr"] == "CR-0101"
+    err(await client.delete(f"{API}/rules/{rid2}/draft", params={"cr": "CR-0102"}), 404, "NOT_FOUND")
+
+
+async def test_disabled_rule_open_discard_stays_disabled(dyn, client):  # noqa: F811
+    assert (await client.get(f"{API}/rules/R-025")).json()["status"] == "已停用"
+    assert (await client.post(f"{API}/rules/R-025/draft", json={"cr": "CR-0099"})).status_code == 200
+    assert (await client.delete(f"{API}/rules/R-025/draft", params={"cr": "CR-0099"})).status_code == 204
+    assert (await client.get(f"{API}/rules/R-025")).json()["status"] == "已停用"  # 不被误改成已发布
