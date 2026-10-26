@@ -290,6 +290,9 @@ async def test_locked_after_submit(client, seeded):
     r = await client.post(
         f"{P}/change-requests/{cr}/targets", json={"kind": "metric", "id": "m_y"}, headers=LIU
     )
+    assert r.status_code == 409 and r.json()["code"] == "CR_LOCKED"
+    # 审核中不能重新校验（只限草稿 / 已驳回）
+    r = await client.post(f"{P}/change-requests/{cr}:validate", headers=LIU)
     assert r.status_code == 409 and r.json()["code"] == "CR_STATE"
     # 审核中的单子仍占用目标
     r = await client.post(f"{P}/change-requests", json={"title": "a", "target": t}, headers=CHEN)
@@ -460,3 +463,98 @@ async def test_qa_feedback_to_synonym_knowledge_target(client, seeded):
     assert r.json()["details"]["crId"] == "CR-0011"
     # 下拉用中文状态
     assert (await client.get(f"{P}/change-requests?status=草稿", headers=LIU)).status_code == 200
+
+
+DEL_ROW = [{"key": "phone", "op": "delete", "before": {"name": "phone"}}]
+
+
+async def test_submit_runs_validation_without_prior_validate(client, seeded):
+    """复现 1：新单子 checks 为空，直接删已发布属性就提交 → 服务端校验，409 CR_BLOCKED（V7）。"""
+    cr = (await create(client, target={"kind": "object", "id": "product"}))["id"]
+    assert (
+        await put(client, cr, {"kind": "object", "id": "product"}, "properties", DEL_ROW)
+    ).status_code == 200
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 409 and r.json()["code"] == "CR_BLOCKED", r.text
+    assert "V7" in r.json()["details"]["blocked"]
+    assert (await one(client, cr))["status"] == "草稿"
+
+
+async def test_put_after_passing_validate_resets_checks(client, seeded):
+    """复现 2：校验通过后再保存一条删除行 → checks 作废（未校验），提交时重算 → 409 CR_BLOCKED。"""
+    t = {"kind": "object", "id": "product"}
+    cr = (await create(client, target=t))["id"]
+    await put(
+        client,
+        cr,
+        t,
+        "properties",
+        [{"key": "price", "op": "update", "after": {"name": "price", "desc": "售价"}}],
+    )
+    r = await client.post(f"{P}/change-requests/{cr}:validate", headers=LIU)
+    assert r.json()["blocked"] is False
+    assert len((await one(client, cr))["detail"]["checks"]) == 17
+    await put(client, cr, t, "properties", DEL_ROW)
+    d = await one(client, cr)
+    assert d["detail"]["checks"] == [] and "checked" not in d["detail"]["times"]
+    assert await seeded.scalar(select(func.count()).select_from(CrCheck).where(CrCheck.target_db == "")) == 0
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 409 and r.json()["code"] == "CR_BLOCKED"
+    # 加入新目标、放弃目标也作废
+    await client.post(f"{P}/change-requests/{cr}:validate", headers=LIU)
+    r = await client.post(
+        f"{P}/change-requests/{cr}/targets", json={"kind": "metric", "id": "m_q"}, headers=LIU
+    )
+    assert r.json()["detail"]["checks"] == []
+    await client.post(f"{P}/change-requests/{cr}:validate", headers=LIU)
+    assert (
+        await client.delete(f"{P}/change-requests/{cr}/targets/metric/m_q", headers=LIU)
+    ).status_code == 204
+    assert (await one(client, cr))["detail"]["checks"] == []
+
+
+async def test_approve_runs_validation(client, seeded):
+    """:approve 同样服务端重算：审核中被塞进删除行（模拟绕过）→ 409 CR_BLOCKED，仍是审核中。"""
+    t = {"kind": "object", "id": "product"}
+    cr = (await create(client, target=t))["id"]
+    await put(
+        client,
+        cr,
+        t,
+        "properties",
+        [{"key": "price", "op": "update", "after": {"name": "price", "desc": "x"}}],
+    )
+    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    row = await seeded.scalar(select(ChangeRequest).where(ChangeRequest.code == cr))
+    seeded.add(
+        CrItem(
+            cr_id=row.id,
+            target_kind="object",
+            target_id="product",
+            section="properties",
+            item_key="phone",
+            op="delete",
+            before={"name": "phone"},
+            after=None,
+            seq=99,
+        )
+    )
+    await seeded.commit()
+    r = await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)
+    assert r.status_code == 409 and r.json()["code"] == "CR_BLOCKED", r.text
+    assert (await one(client, cr))["status"] == "审核中"
+
+
+async def test_lock_version_bumps_once(client, seeded):
+    cr = (await create(client))["id"]
+    lv = (await one(client, cr))["lockVersion"]
+    r = await put(client, cr, {"kind": "object", "id": "product"}, "properties", DEL_ROW, lockVersion=lv)
+    assert r.json()["lockVersion"] == lv + 1  # 新目标 + 写行 + 作废校验：一次
+    r = await client.post(
+        f"{P}/change-requests/{cr}/targets", json={"kind": "metric", "id": "m_q"}, headers=LIU
+    )
+    assert r.json()["lockVersion"] == lv + 2
+    assert (
+        await client.delete(f"{P}/change-requests/{cr}/targets/metric/m_q", headers=LIU)
+    ).status_code == 204
+    assert (await one(client, cr))["lockVersion"] == lv + 3

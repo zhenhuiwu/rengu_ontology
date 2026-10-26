@@ -169,6 +169,9 @@ export interface CRValidateOut { id: string; checkedAt: string; checks: MergeChe
 
 const crPath = (id: string, rest = '') => `/change-requests/${encodeURIComponent(id)}${rest}`;
 /** POST /change-requests → 201 新草稿（默认审核人 = 本体管理员；占用他单目标 409 TARGET_IN_OTHER_CR） */
+/** GET /change-requests/{id}：详情（带 targets、lockVersion） */
+export const fetchCR = (id: string) => api.get<CRFull>(crPath(id));
+
 export const createCR = (body: CRCreateIn) => api.post<CRFull>('/change-requests', body);
 /** PATCH /change-requests/{id}：改单头（仅草稿；lockVersion 不符 409 VERSION_CONFLICT） */
 export const patchCR = (id: string, body: CRPatchIn) => api.patch<CRFull>(crPath(id), body);
@@ -221,7 +224,8 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stri
  */
 export async function crSave(crId: string | undefined, target: CRTargetIn, section: string, changes: DraftChange[]): Promise<void> {
   if (!isStaticReal() || !crId) return;
-  const old = await fetchCRItems(crId, { kind: target.kind, targetId: target.id, section });
+  // 读回时记下 lockVersion，PUT 带上：中间有人改过这张单子就 409 VERSION_CONFLICT，不覆盖
+  const [{ lockVersion }, old] = await Promise.all([fetchCR(crId), fetchCRItems(crId, { kind: target.kind, targetId: target.id, section })]);
   const rows = new Map<string, CRItemIn>(old.map(({ target: _t, section: _s, updatedBy: _u, updatedAt: _a, ...r }) => [r.key, r]));
   for (const c of changes) {
     const prev = rows.get(c.key);
@@ -230,7 +234,7 @@ export async function crSave(crId: string | undefined, target: CRTargetIn, secti
     if (op === 'update' && same(before, c.after)) { rows.delete(c.key); continue; }
     rows.set(c.key, { ...c, op, before });
   }
-  const r = await saveCRItems(crId, { target, section, rows: [...rows.values()] });
+  const r = await saveCRItems(crId, { target, section, rows: [...rows.values()], lockVersion });
   bumpDraft(crId, r.changes);
 }
 

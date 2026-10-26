@@ -44,8 +44,19 @@ def _state(cr: ChangeRequest, *allowed: CRStatus) -> None:
         )
 
 
-def _blocked(cr: ChangeRequest) -> int:
-    return sum(1 for r in cr.detail.get("checks") or [] if r.get("result") == "阻断")
+def _blocked_codes(cr: ChangeRequest) -> list[str]:
+    return [r.get("code") for r in cr.detail.get("checks") or [] if r.get("result") == "阻断"]
+
+
+def _raise_blocked(cr: ChangeRequest) -> None:
+    """服务端重算后仍有阻断：409 CR_BLOCKED，details.blocked 带校验码（事务回滚，结果不落库）。"""
+    if codes := _blocked_codes(cr):
+        raise AppError(
+            f"有 {len(codes)} 项阻断未通过",
+            code="CR_BLOCKED",
+            status_code=409,
+            details={"id": cr.code, "blocked": codes},
+        )
 
 
 class ChangeRequestService:
@@ -180,8 +191,8 @@ class ChangeRequestService:
             _state(cr, S.draft)
             if not cr.changes:
                 raise AppError("草稿里还没有改动，无法提交", code="CR_EMPTY", status_code=409)
-            if n := _blocked(cr):
-                raise AppError(f"有 {n} 项阻断未通过", code="CR_BLOCKED", status_code=409)
+            await CrWriteService(self.session).run_checks(cr, event=False)  # 服务端重算，不信 detail.checks
+            _raise_blocked(cr)
             if not cr.reviewer:
                 raise AppError("还没有指定审核人", code="CR_NO_REVIEWER", status_code=409)
             self._move(cr, user, S.in_review, action, "提交审核", f"审核人 {cr.reviewer}")
@@ -195,8 +206,8 @@ class ChangeRequestService:
             if not is_reviewer:
                 raise Forbidden(f"只有审核人 {cr.reviewer} 能审核，提交人不能审自己的单子")
             if action == "approve":
-                if n := _blocked(cr):
-                    raise AppError(f"有 {n} 项阻断未通过", code="CR_BLOCKED", status_code=409)
+                await CrWriteService(self.session).run_checks(cr, event=False)
+                _raise_blocked(cr)
                 self._move(cr, user, S.approved, action, "审核通过", f"等待整版发布 {await self._next()}")
             else:
                 reason = (reason or "").strip()

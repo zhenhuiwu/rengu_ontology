@@ -165,6 +165,15 @@ class CrWriteService:
         cr.status_at = clock.now()
         flag_modified(cr, "detail")
 
+    async def _reset_checks(self, cr: ChangeRequest) -> None:
+        """改动后旧校验结果作废（`detail.checks=[]` = 未校验）。先存种子基线，免得种子单子的阻断丢失。"""
+        await self._baseline(cr, clock.now())
+        await self.session.execute(delete(CrCheck).where(CrCheck.cr_id == cr.id, CrCheck.target_db == ""))
+        d = dict(cr.detail or {})
+        d["checks"] = []
+        (d.get("times") or {}).pop("checked", None)
+        cr.detail = d
+
     async def _holder(self, kind: str, tid: str, cr_id: int) -> str | None:
         q = (
             select(ChangeRequest.code)
@@ -213,8 +222,8 @@ class CrWriteService:
         d["touches"] = touches
         d.setdefault("edit", {"kind": t.kind, "id": t.id})
         cr.detail = d
+        await self._reset_checks(cr)
         self._touch(cr)
-        await self.session.flush()
         return row
 
     def _event(self, cr: ChangeRequest, user: CurrentUser | None, action: str, text: str) -> None:
@@ -284,14 +293,10 @@ class CrWriteService:
 
     async def add_target(self, code: str, user: CurrentUser, t: TargetIn) -> str:
         cr = await self._cr(code)
-        if cr.status != S.draft:
-            raise AppError(
-                f"{cr.code} 当前是「{cr.status.value}」，草稿才能加入",
-                code="CR_STATE",
-                status_code=409,
-                details={"id": cr.code, "status": cr.status.value},
-            )
-        await self._join(cr, t, user)
+        _locked(cr)
+        with self.session.no_autoflush:
+            await self._join(cr, t, user)
+        await self.session.flush()
         return cr.code
 
     async def discard_target(self, code: str, kind: str, tid: str) -> None:
@@ -304,6 +309,11 @@ class CrWriteService:
         if hit is None:
             raise NotFound("目标不在这张变更单里", details={"id": code, "kind": kind, "targetId": tid})
         _locked(cr)
+        with self.session.no_autoflush:  # lockVersion 恰好 +1
+            await self._discard(cr, hit, kind, tid)
+        await self.session.flush()
+
+    async def _discard(self, cr: ChangeRequest, hit: CrTarget, kind: str, tid: str) -> None:
         n = (
             await self.session.execute(
                 delete(CrItem).where(
@@ -322,8 +332,8 @@ class CrWriteService:
             else:
                 d.pop("edit", None)
         cr.detail = d
+        await self._reset_checks(cr)
         self._touch(cr)
-        await self.session.flush()
 
     # ------------------------------------------------------------ 草稿行
     async def put_items(self, code: str, user: CurrentUser, body: ItemsPutIn) -> Row:
@@ -338,6 +348,10 @@ class CrWriteService:
                 status_code=422,
                 details={"fields": [{"field": "rows", "message": f"key 重复：{'、'.join(dup)}"}]},
             )
+        with self.session.no_autoflush:  # 只在最后 flush 一次：lockVersion 恰好 +1
+            return await self._put_rows(cr, user, body)
+
+    async def _put_rows(self, cr: ChangeRequest, user: CurrentUser, body: ItemsPutIn) -> Row:
         t = body.target
         await self._join(cr, t, user)
         where = (
@@ -371,6 +385,7 @@ class CrWriteService:
                 )
             )
         cr.changes = max(0, cr.changes - old) + len(body.rows)
+        await self._reset_checks(cr)
         self._touch(cr)
         await self.session.flush()
         rows = await self.session.scalars(select(CrItem).where(*where).order_by(CrItem.seq, CrItem.id))
@@ -464,13 +479,17 @@ class CrWriteService:
 
     async def validate(self, code: str) -> Row:
         cr = await self._cr(code)
-        if cr.status == S.published:
+        if cr.status not in (S.draft, S.rejected):
             raise AppError(
-                f"{cr.code} 已发布，不能重新校验",
+                f"{cr.code} 当前是「{cr.status.value}」，草稿或已驳回才能重新校验",
                 code="CR_STATE",
                 status_code=409,
                 details={"id": cr.code, "status": cr.status.value},
             )
+        return await self.run_checks(cr)
+
+    async def run_checks(self, cr: ChangeRequest, *, event: bool = True) -> Row:
+        """算校验并写 cr_check / detail.checks；:submit / :approve 在同一事务里调（event=False）。"""
         now = clock.now()
         targets = await self.targets(cr.id)
         items = await self.items(cr.id)
@@ -531,7 +550,8 @@ class CrWriteService:
         d["times"] = {**(d.get("times") or {}), "checked": _fmt_dt(now)}
         cr.detail = d
         self._touch(cr)
-        self._event(cr, None, "validate", "完成发布校验")
+        if event:
+            self._event(cr, None, "validate", "完成发布校验")
         await self.session.flush()
         cnt: dict[str, int] = {}
         for r in checks:
