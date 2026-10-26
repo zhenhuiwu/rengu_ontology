@@ -4,8 +4,8 @@
   EXTENSION POINT (PDE): 改成 scenario_template 表 / 本体配置后从库里读。
 - 引擎按模板 engine 键插拔（ENGINES）；演示模板 demo_retail = rules_sim.simulate / stage_plan（原样）。
 - 本模块只做通用校验：范围 / 驱动按模板字段校验取值，未知键、越界、不在可选值里一律 422。
-- 范围项可声明 propRef="对象类型.属性"：有数据时（facets hasData）可选值 = allOption + 分面取值 + 模板固定项，
-  否则只用模板固定 options（与前端一致）。
+- 范围项可声明 propRef="对象类型.属性"：且引擎 accepts_facet_values 时，有数据（facets hasData）
+  可选值 = allOption + 分面取值，否则只用模板固定 options（与前端一致）。
 """
 
 import json
@@ -20,7 +20,8 @@ _JSON = Path(__file__).resolve().parents[3] / "seeds" / "json" / "dynamic" / "SC
 DEFAULT_TEMPLATE = "demo_retail"
 
 ENGINES: dict[str, dict[str, Callable[..., Any]]] = {
-    "demo_retail": {"simulate": simulate, "stage_plan": stage_plan},
+    # accepts_facet_values：引擎能否按分面原值计算；False 时范围只用模板固定 options（演示引擎只认固定项）
+    "demo_retail": {"simulate": simulate, "stage_plan": stage_plan, "accepts_facet_values": False},
 }
 
 
@@ -57,6 +58,8 @@ async def scope_options(session: Any, user: Any, t: dict[str, Any]) -> dict[str,
     """范围项按 propRef 取 static 分面取值；分面无数据 / 不可筛选时不覆盖（沿用模板 options）。"""
     from app.modules.static.explorer import ExplorerService
 
+    if not ENGINES[t["engine"]].get("accepts_facet_values"):
+        return {}
     refs = [(f, *f["propRef"].split(".", 1)) for f in t["scope"] if f.get("propRef")]
     out: dict[str, list[Any]] = {}
     cache_: dict[str, list[dict[str, Any]]] = {}
@@ -66,9 +69,7 @@ async def scope_options(session: Any, user: Any, t: dict[str, Any]) -> dict[str,
         fc = next((x for x in cache_[ot] if x["key"] == prop), None)
         if fc and fc.get("hasData") and fc["kind"] == "enum" and fc["values"]:
             head = [f["allOption"]] if f.get("allOption") is not None else []
-            vals = head + [v["value"] for v in fc["values"] if v["value"] not in head]
-            # 模板固定项保留在后（演示引擎按这些取值计算，存量方案仍可重跑）
-            out[f["key"]] = vals + [o for o in f.get("options", []) if o not in vals]
+            out[f["key"]] = head + [v["value"] for v in fc["values"] if v["value"] not in head]
     return out
 
 

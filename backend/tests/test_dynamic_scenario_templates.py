@@ -67,7 +67,8 @@ async def test_run_validates_against_template(dyn, client, fakes):  # noqa: F811
 
 
 async def test_scope_options_from_facets(dyn, client, fakes, monkeypatch):  # noqa: F811
-    """范围项 propRef：分面有数据 → 可选值 = allOption + 分面取值 + 模板固定项；无数据 → 只用模板 options。"""
+    """引擎 accepts_facet_values：分面有数据 → 可选值 = allOption + 分面取值；无数据 → 模板 options。
+    演示引擎为 False：不取分面，只认模板 options。"""
     from app.modules.static.explorer import ExplorerService
 
     facets = {
@@ -81,13 +82,22 @@ async def test_scope_options_from_facets(dyn, client, fakes, monkeypatch):  # no
         return facets[code]
 
     monkeypatch.setattr(ExplorerService, "facets", fake)
+    code = _js("SC_AREAS")[1]
+    ec = {**RUN, "scope": {**RUN["scope"], "area": "EC"}}
+    # 演示引擎：分面值不接受，模板固定项照常
     sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
-    ok = {**RUN, "scope": {**RUN["scope"], "area": "EC"}}
+    err(await client.post(f"{API}/scenarios/{sid}:run", json=ec), 422, "VALIDATION_FAILED")
+    ok = {**RUN, "scope": {**RUN["scope"], "area": code}}
     assert (await client.post(f"{API}/scenarios/{sid}:run", json=ok)).status_code == 202
+    # 能按分面值计算的引擎（替身）：可选值改为分面取值
+    monkeypatch.setitem(
+        st.ENGINES, "demo_retail", {**st.ENGINES["demo_retail"], "accepts_facet_values": True}
+    )
     sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
-    bad = {**RUN, "scope": {**RUN["scope"], "area": "ZZ"}}
-    r = await client.post(f"{API}/scenarios/{sid}:run", json=bad)
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=ec)).status_code == 202
+    sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
+    r = await client.post(f"{API}/scenarios/{sid}:run", json=ok)
     err(r, 422, "VALIDATION_FAILED")
     assert "scope.area" in r.text
-    cat = {**RUN, "scope": {**RUN["scope"], "area": _js("SC_AREAS")[1], "category": _js("SC_CATEGORIES")[1]}}
+    cat = {**RUN, "scope": {**RUN["scope"], "area": "华东大区全部", "category": _js("SC_CATEGORIES")[1]}}
     assert (await client.post(f"{API}/scenarios/{sid}:run", json=cat)).status_code == 202

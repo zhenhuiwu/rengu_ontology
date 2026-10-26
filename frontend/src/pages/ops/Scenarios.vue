@@ -135,9 +135,9 @@ const cmpTip = (s: Scenario) => (s.status !== '已完成' ? `${s.status}的方�
 /* ───── 当前方案：编辑中的配置（与已运行配置比较判断是否改动） ───── */
 const form = reactive<{ name: string; scope: ScCfg; drivers: ScCfg }>({ name: '', scope: {}, drivers: {} });
 const tpl = computed(() => tplFor(current.value));
-/** 真接口：范围项 propRef 的可选值取 static /facets（hasData 才用：allOption + 分面取值 + 模板固定项）；mock / 无数据用模板 options。与后台 :run 校验同一规则 */
+/** 真接口：范围项 propRef 的可选值取 static /facets（引擎 acceptsFacetValues 且 hasData 才用：allOption + 分面取值）；mock / 无数据用模板 options。与后台 :run 校验同一规则 */
 const facetOpts = ref<Record<string, ScValue[]>>({});
-watch(() => (live.value ? `${tpl.value.code}` : ''), async (code) => {
+watch(() => (live.value && SC_ENGINES[tpl.value.engine]?.acceptsFacetValues ? `${tpl.value.code}` : ''), async (code) => {
   facetOpts.value = {};
   if (!code) return;
   const t = tpl.value; const out: Record<string, ScValue[]> = {};
@@ -148,8 +148,7 @@ watch(() => (live.value ? `${tpl.value.code}` : ''), async (code) => {
       const fc = fs.find((x) => x.key === r.prop);
       if (fc && fc.hasData && fc.kind === 'enum' && fc.values.length) {
         const head = r.f.allOption != null ? [r.f.allOption] : [];
-        const vals = [...head, ...fc.values.map((v) => v.value).filter((v) => !head.includes(v))];
-        out[r.f.key] = [...vals, ...(r.f.options ?? []).filter((o) => !vals.includes(o))];
+        out[r.f.key] = [...head, ...fc.values.map((v) => v.value).filter((v) => !head.includes(v))];
       }
     }
   }

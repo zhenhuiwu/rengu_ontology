@@ -103,11 +103,13 @@ export const SC_TEMPLATES: ScTemplate[] = [DEMO_TEMPLATE];
 export const templateOf = (code?: string, list: ScTemplate[] = SC_TEMPLATES) => list.find((t) => t.code === code) ?? list[0];
 
 /** 引擎注册表（按模板 engine 键）：演示引擎的类型化入参在这里收口，页面只见通用 ScCfg */
-export interface ScEngine { simulate: (scope: ScCfg, drivers: ScCfg, ranAt: string) => ScResult; stagePlan: (s: Scenario) => StagePlan[] }
+/** acceptsFacetValues：引擎能否按分面原值计算；false 时范围只用模板固定 options，页面也不取 /facets（与后台 ENGINES 一致） */
+export interface ScEngine { simulate: (scope: ScCfg, drivers: ScCfg, ranAt: string) => ScResult; stagePlan: (s: Scenario) => StagePlan[]; acceptsFacetValues: boolean }
 export const SC_ENGINES: Record<string, ScEngine> = {
   demo_retail: {
     simulate: (scope, drivers, ranAt) => simulate(scope as unknown as ScScope, drivers as unknown as ScDrivers, ranAt),
     stagePlan: stagePlanOf,
+    acceptsFacetValues: false,
   },
 };
 
