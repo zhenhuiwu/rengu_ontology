@@ -37,6 +37,13 @@ function nextCrId() {
   return `CR-${String(Math.max(0, ...nums) + 1).padStart(4, '0')}`;
 }
 
+/** 去掉一条登记（real 模式“放弃草稿”删库后调用；static-r3 新增，只加不改） */
+export function forgetTarget(cr: string, kind: TargetKind, id: string) {
+  const ids = TARGETS[cr]?.[kind];
+  const i = ids ? ids.indexOf(id) : -1;
+  if (i >= 0) ids!.splice(i, 1);
+}
+
 export function useDraftView(kind: TargetKind, targetId: () => string) {
   const route = useRoute();
   const router = useRouter();

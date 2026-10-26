@@ -23,6 +23,7 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
+import { useStaticCr } from './parts/useStaticCr';
 
 const route = useRoute();
 const router = useRouter();
@@ -85,6 +86,8 @@ const pick = (id: string) => guard(() => {
 // —— 草稿（公共 useDraftView，kind = link）——
 const dv = useDraftView('link', () => cur.value?.id ?? '');
 const { draft, setView } = dv;
+// real 模式先写库（发起 / 加入、保存到草稿、提交、放弃），见 parts/useStaticCr.ts
+const cr = useStaticCr('link', () => ({ id: cur.value?.id ?? '', name: cur.value?.name, isNew: cur.value?.status === '草稿' }), dv);
 /** 只存在于草稿里的关系（新增的），直接看草稿 */
 const draftOnly = computed(() => cur.value?.status === '草稿');
 const isDraft = computed(() => dv.isDraft.value || (!readonly.value && !!draft.value && draftOnly.value));
@@ -94,11 +97,12 @@ const changeOpen = ref(false);
 const changeTarget = ref('');
 const creating = ref(false);
 const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
-function start(opts: { join?: string; title?: string }) {
-  if (!creating.value) { dv.start(opts); return; }
+async function start(opts: { join?: string; title?: string }) {
+  if (!creating.value) { await cr.start(opts); return; }
   const n = links.filter((l) => l.id.startsWith('new_link_')).length + 1;
   const nid = `new_link_${n}`;
-  const id = dv.start({ ...opts, target: nid });
+  const id = await cr.start(opts, { id: nid, isNew: true, name: '未命名关系' });
+  if (!id) return;
   const from = src.value || cur.value?.from || 'order';
   const by = CURRENT_USER;
   const at = nowText();
@@ -126,9 +130,17 @@ function beginEdit() {
 }
 const dirty = computed(() => editing.value && JSON.stringify(form) !== snap.value);
 const guard = useUnsavedGuard(dirty);
-function save() {
+/** 定义表单字段 → 改动列表「字段」列 */
+const FIELD_LABEL: Record<keyof Form, string> = { name: '名称', api: 'API 名', to: '目标对象', card: '基数', fromProp: '本端属性', toProp: '对端属性', via: '中间表', reverse: '反向名称', nullable: '可为空', desc: '说明' };
+async function save() {
   const l = cur.value;
   const key = form.card === 'N : M' ? `经 ${form.via || '（未选择）'} 中间表` : form.to ? `${form.fromProp} = ${form.to}.${form.toProp}` : '';
+  // real：def 段，一个字段一行（同字段再次保存保留最早的 before，改回原值的行去掉）
+  const was = JSON.parse(snap.value) as Form;
+  const changes = (Object.keys(FIELD_LABEL) as (keyof Form)[])
+    .filter((k) => (k !== 'api' || l.status === '草稿') && JSON.stringify(form[k]) !== JSON.stringify(was[k]))
+    .map((k) => ({ key: k, before: was[k], after: form[k], type: '关系', field: FIELD_LABEL[k] }));
+  if (!(await cr.save('def', changes))) return;
   Object.assign(l, { name: form.name, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
   if (l.status === '草稿') l.api = form.api;
   editing.value = false;
@@ -359,7 +371,7 @@ const toDetail = () => guard(() => setQ({ mode: undefined }));
     <!-- 详情 -->
     <div v-else-if="cur" class="panel lt-detail">
       <DraftBanner v-if="isDraft && draft" :draft="draft"
-        @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="draftOnly ? message.info('这条关系只在草稿里，放弃请到变更单处理') : setView('published')" />
+        @submit="cr.submit" @discard="draftOnly ? message.info('这条关系只在草稿里，放弃请到变更单处理') : cr.discard()" />
       <div class="lt-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
         <span class="t-14 c-3 num">{{ apiOf(cur) || '（未填写 API 名）' }}</span>

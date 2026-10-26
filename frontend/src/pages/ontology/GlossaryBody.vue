@@ -24,6 +24,7 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { allDrafts, draftOf, useDraftView } from './parts/useDraftView';
+import { useStaticCr } from './parts/useStaticCr';
 
 const route = useRoute();
 const router = useRouter();
@@ -93,6 +94,8 @@ const pick = (id: string) => guard(() => {
 // —— 草稿（公共 useDraftView，kind = knowledge）——
 const dv = useDraftView('knowledge', () => cur.value?.id ?? '');
 const { draft, setView } = dv;
+// real 模式先写库（发起 / 加入、保存到草稿、停用、提交、放弃），见 parts/useStaticCr.ts
+const cr = useStaticCr('knowledge', () => ({ id: cur.value?.id ?? '', name: cur.value?.name, isNew: cur.value?.status === '草稿' }), dv);
 /** 只存在于草稿里的条目（新增的），直接看草稿 */
 const draftOnly = computed(() => cur.value?.status === '草稿');
 const isDraft = computed(() => dv.isDraft.value || (!readonly.value && !!draft.value && draftOnly.value));
@@ -102,11 +105,12 @@ const changeOpen = ref(false);
 const changeTarget = ref('');
 const creating = ref(false);
 const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
-function start(opts: { join?: string; title?: string }) {
-  if (!creating.value) { dv.start(opts); return; }
+async function start(opts: { join?: string; title?: string }) {
+  if (!creating.value) { await cr.start(opts); return; }
   const n = entries.filter((e) => e.id.startsWith('K-N')).length + 1;
   const nid = `K-N${String(n).padStart(2, '0')}`;
-  const crId = dv.start({ ...opts, target: nid });
+  const crId = await cr.start(opts, { id: nid, isNew: true, name: '未命名知识' });
+  if (!crId) return;
   const at = nowText();
   const ne: KEntry = {
     id: nid, name: '未命名知识', type: (ktype.value as KType) || '术语', status: '草稿', cr: crId, updatedAt: at, owner: CURRENT_USER,
@@ -164,10 +168,17 @@ function beginEdit() {
 }
 const dirty = computed(() => editing.value && JSON.stringify(form) !== snap.value);
 const guard = useUnsavedGuard(dirty);
-function save() {
+/** 内容字段 → 改动列表「字段」列 */
+const FIELD_LABEL: Record<keyof Form, string> = { name: '名称', type: '类型', definition: '定义', calc: '计算方式', synonyms: '同义词', applies: '适用范围', period: '生效时间', owner: '负责人' };
+async function save() {
   const e = cur.value;
   const applies = form.applies.map((k) => APPLY_ALL.find((a) => `${a.kind}:${a.id}` === k)!).filter(Boolean);
   const next: Partial<KFields> = { name: form.name, type: form.type, definition: form.definition, calc: form.calc, synonyms: [...form.synonyms], applies, period: form.period, owner: form.owner };
+  // real：content 段，一个字段一行（新条目全部 add；已发布条目对比已发布值，改回原值的行去掉）
+  const changes = (Object.keys(FIELD_LABEL) as (keyof Form)[])
+    .filter((k) => draftOnly.value || JSON.stringify(next[k]) !== JSON.stringify(e[k]) || (e.draft && k in e.draft))
+    .map((k) => ({ key: k, before: draftOnly.value ? undefined : e[k], after: next[k], type: '业务知识', field: FIELD_LABEL[k] }));
+  if (!(await cr.save('content', changes))) return;
   if (draftOnly.value) Object.assign(e, next);
   else {
     const d: Partial<KFields> = { ...(e.draft ?? {}) };
@@ -205,7 +216,10 @@ async function stop() {
   });
   if (!ok) return;
   const pv = confirm.pickValue;
-  const id = join ?? (pv && pv !== '__new' ? dv.start({ join: pv }) : dv.start({ title: `停用业务知识“${e.name}”` }));
+  const id = join ?? (await cr.start(pv && pv !== '__new' ? { join: pv } : { title: `停用业务知识“${e.name}”` }));
+  if (!id) return;
+  // real：status 段一行（已发布条目 → 已停用）
+  if (!(await cr.save('status', [{ key: 'status', before: e.status, after: '已停用', type: '业务知识', field: '状态' }], id))) return;
   e.draftStatus = '已停用';
   setView('draft');
   message.success(`已记入 ${id}：${e.name} 停用（待审核）`);
@@ -335,7 +349,7 @@ const canResolve = (a: KApply) => (a.kind === 'metric' ? METRICS.some((m) => m.i
 
     <div v-if="cur" class="panel gl-detail">
       <DraftBanner v-if="isDraft && draft" :draft="draft"
-        @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="draftOnly ? message.info('这条知识只在草稿里，放弃请到变更单处理') : setView('published')" />
+        @submit="cr.submit" @discard="draftOnly ? message.info('这条知识只在草稿里，放弃请到变更单处理') : cr.discard()" />
       <div class="gl-head">
         <span class="t-16 fw-600 c-1">{{ view.name }}</span>
         <span class="t-14 c-3 num">{{ cur.id }}</span>

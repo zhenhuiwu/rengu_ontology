@@ -12,6 +12,7 @@ import HoverCard from '@/components/HoverCard.vue';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView, draftOf } from './parts/useDraftView';
+import { useStaticCr } from './parts/useStaticCr';
 import { message } from 'ant-design-vue';
 import { LINKS as ALL_LINKS, LINK_OBJECTS, PATH_GROUPS, defaultLabel, objName } from '@/mock/links';
 import { OBJECT_PROPS, draftPropDiff, objectMeta, dbOf, ORDER_MAP_ROWS as MAP_ROWS, type ObjProp, type PropDiff } from '@/mock/objectProps';
@@ -102,7 +103,11 @@ const shownStatus = (t: (typeof TYPES)[number]) => {
 };
 const statusColor = (t: (typeof TYPES)[number]) => (shownStatus(t) === '审核中' ? 'warning' : 'default');
 const pick = (id: string) => router.replace({ query: { ...route.query, type: id, view: undefined, p: undefined, lcpage: undefined, acpage: undefined, aupage: undefined } });
-const { draft, isDraft, canEdit, editTip, readonly, reason, setView, start } = useDraftView('object', () => current.value.id);
+const dv = useDraftView('object', () => current.value.id);
+const { draft, isDraft, canEdit, editTip, readonly, reason, setView } = dv;
+// real 模式先写库（发起 / 加入、新增属性、提交、放弃），见 parts/useStaticCr.ts
+const cr = useStaticCr('object', () => ({ id: current.value.id, name: current.value.name }), dv);
+const start = (opts: { join?: string; title?: string }) => cr.start(opts);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
@@ -124,9 +129,13 @@ const addOpen = ref(false);
 const addForm = reactive({ name: '', api: '', type: 'string', required: false });
 const addErr = computed(() => (!addForm.name.trim() || !addForm.api.trim() ? '请填写名称和 API 名' : !/^[a-z][a-z0-9_]*$/.test(addForm.api.trim()) ? 'API 名只能用小写字母、数字和下划线，字母开头' : PROPS.value.some((p) => p.api === addForm.api.trim()) ? 'API 名已存在' : ''));
 function openAdd() { Object.assign(addForm, { name: '', api: '', type: 'string', required: false }); addOpen.value = true; }
-function saveAdd() {
+async function saveAdd() {
   if (addErr.value) return;
-  (ADDED[current.value.id] ??= []).unshift({ api: addForm.api.trim(), name: addForm.name.trim(), type: addForm.type, group: '其他', source: '--', desc: addForm.required ? '必填' : '选填' });
+  const p: P = { api: addForm.api.trim(), name: addForm.name.trim(), type: addForm.type, group: '其他', source: '--', desc: addForm.required ? '必填' : '选填' };
+  // real：properties 段整段替换，本次新增的属性一行（op=add，key=API 名）
+  const ok = await cr.save('properties', [{ key: p.api, op: 'add', after: { ...p, required: addForm.required }, type: '属性', field: `${p.name} ${p.api}`, afterText: `${p.name}（${p.type}）` }]);
+  if (!ok) return;
+  (ADDED[current.value.id] ??= []).unshift(p);
   addOpen.value = false; ppage.value = 1;
   message.success(`已新增属性“${addForm.name.trim()}”，保存到草稿 ${draft.value?.id ?? ''}`);
 }
@@ -234,7 +243,7 @@ const mrows = computed(() => MAP_ALL.value.slice((mpage.value - 1) * MPAGE, mpag
 
     <div class="panel ot-detail">
       <DraftBanner v-if="isDraft && draft" :draft="draft"
-        @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="setView('published')" />
+        @submit="cr.submit" @discard="cr.discard" />
       <div class="ot-head">
         <span class="t-16 fw-600 c-1">{{ current.name }}</span>
         <span class="t-14 c-3 num">{{ current.api }} · {{ PROPS.length }} 个属性 · {{ current.count }} 条</span>
