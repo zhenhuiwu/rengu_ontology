@@ -325,6 +325,32 @@ async def approved_cr2(client) -> str:
             {"key": "desc", "op": "add", "after": "发布时新建"},
         ],
     )
+    nd = {"kind": "dimension", "id": "x_dim", "name": "新维度", "isNew": True}
+    await put(
+        client,
+        cr,
+        nd,
+        "values",
+        [
+            {
+                "key": "级:A",
+                "op": "add",
+                "after": {"code": "A", "name": "甲", "level": "级", "synonyms": [], "status": "启用"},
+            }
+        ],
+    )
+    await put(
+        client,
+        cr,
+        nd,
+        "def",
+        [
+            {"key": "name", "op": "add", "after": "新维度"},
+            {"key": "object", "op": "add", "after": "x_obj"},
+            {"key": "levels", "op": "add", "after": [{"name": "级", "api": "lv"}]},
+            {"key": "attr", "op": "add", "after": "x_id"},
+        ],
+    )
     assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
     r = await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)
     assert r.status_code == 200, r.text
@@ -357,31 +383,62 @@ async def test_publish_writes_back_dims_links_metrics_new_object(client, seeded)
     assert (o.display_name, o.obj_group, o.description) == ("新对象", "业务", "发布时新建")
     assert snap["objectTypes"]["x_obj"]["name"] == "新对象"
     assert snap["properties"]["x_obj"]["id"]["pk"] is True
+    xd = snap["dimensions"]["x_dim"]
+    assert (xd["name"], xd["object"], xd["attr"], xd["since"]) == ("新维度", "x_obj", "x_id", ver)
+    assert [lv["name"] for lv in xd["levels"]] == ["级"] and [v["key"] for v in xd["values"]] == ["级:A"]
 
 
 async def test_rollback_restores_dims_links_properties(client, seeded):
+    from sqlalchemy import delete
+
+    from app.modules.static.models import Dimension, LinkType, Metric, QaPath, QaPathStep
+
+    prev = (
+        (await seeded.scalars(select(OntologyRelease).order_by(OntologyRelease.id.desc()))).first().snapshot
+    )
     await approved_cr(client)
     await approved_cr2(client)
     r = await client.post(P + "/releases", json={}, headers=WANG)
     assert r.status_code == 201, r.text
     ver = r.json()["ver"]
+    # 发布后物理删一条没被问数路径引用的关系：回滚要按快照重建
+    used = set(await seeded.scalars(select(QaPathStep.link_type_id)))
+    victim = next(
+        x for x in await seeded.scalars(select(LinkType)) if x.id not in used and x.code in prev["links"]
+    )
+    await seeded.execute(delete(LinkType).where(LinkType.id == victim.id))
+    await seeded.commit()
+    n_paths = len(list(await seeded.scalars(select(QaPath))))
     r = await client.post(f"{P}/releases/{ver}:rollback", json={}, headers=WANG)
     assert r.status_code == 201, r.text
     rb = r.json()["ver"]
     seeded.expire_all()
     snap = (await seeded.scalar(select(OntologyRelease).where(OntologyRelease.ver == rb))).snapshot
     assert "new_link_1" not in snap["links"]
+    # 回滚掉的版本里新建的对象 / 指标 / 维度 / 关系：表里删掉
+    for model, code in (
+        (ObjectType, "x_obj"),
+        (Metric, "x_metric"),
+        (Dimension, "x_dim"),
+        (LinkType, "new_link_1"),
+    ):
+        assert await seeded.scalar(select(model).where(model.code == code)) is None, code
+    assert (
+        await seeded.scalar(select(LinkType).where(LinkType.code == victim.code))
+    ).display_name == victim.display_name
+    assert len(list(await seeded.scalars(select(QaPath)))) == n_paths
+    assert "x_obj" not in snap["objectTypes"] and "x_metric" not in snap["metrics"]
+    assert snap["qaPaths"] == prev["qaPaths"]
     assert snap["links"]["order_belongs_to_store"].get("reverse") != "门店的订单"
     t = snap["dimensions"]["time"]
     assert "月:2027-01" not in {v["key"] for v in t["values"]}
     assert t["qa"]["defaultLevel"] == "日"
     assert "x_note" not in snap["properties"]["order"]
     # 定义表也回去了：之后再发布，快照按表重组也不会把回滚掉的东西带回来
-    from app.modules.static.models import DimMapping, DimValue, LinkType
+    from app.modules.static.models import DimMapping, DimValue
 
     lk = await seeded.scalar(select(LinkType).where(LinkType.code == "order_belongs_to_store"))
     assert lk.reverse_name != "门店的订单" and lk.history[0]["change"] == "回滚恢复"
-    assert (await seeded.scalar(select(LinkType).where(LinkType.code == "new_link_1"))).status.value == "草稿"
     v = await seeded.scalar(select(DimValue).where(DimValue.value_key == "月:2027-01"))
     assert v.until_release == rb
     v12 = await seeded.scalar(select(DimValue).where(DimValue.value_key == "月:2026-12"))
@@ -407,3 +464,25 @@ async def test_missing_target_without_is_new_is_rejected(client, seeded):
     assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
     r = await client.post(P + "/releases", json={}, headers=WANG)
     assert r.status_code == 409 and r.json()["code"] == "WRITEBACK_FAILED", r.text
+
+
+async def test_register_writeback_public(client, seeded):
+    """公开登记：别的模块挂自己的 kind/section；重复登记静态钩子报错。"""
+    from app.modules.static import writeback as wb
+
+    with pytest.raises(ValueError):
+        wb.register_writeback("object", "properties", lambda *a: None)
+    seen = []
+
+    async def hook(ctx, tid, rows):
+        seen.append((tid, [r.item_key for r in rows], ctx.ver))
+        return set()
+
+    wb.register_writeback("rule", "conds", hook)
+    try:
+        await approved_cr(client)
+        r = await client.post(P + "/releases", json={}, headers=WANG)
+        assert r.status_code == 201, r.text
+        assert seen == [("R-999", ["-"], r.json()["ver"])]
+    finally:
+        wb.HOOKS.pop(("rule", "conds"), None)

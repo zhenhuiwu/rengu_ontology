@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -28,6 +28,8 @@ from app.modules.static.models import (
     CrTarget,
     DefStatus,
     Dimension,
+    DimKind,
+    DimLevel,
     DimMapping,
     DimValue,
     DimValueStatus,
@@ -44,6 +46,9 @@ from app.modules.static.models import (
     ObjectStatus,
     ObjectType,
     Property,
+    QaPath,
+    QaPathExample,
+    QaPathStep,
 )
 
 log = logging.getLogger(__name__)
@@ -74,6 +79,26 @@ def register(kind: str, section: str) -> Callable[[Hook], Hook]:
         return fn
 
     return deco
+
+
+def register_writeback(kind: str, section: str, fn: Hook, *, replace: bool = False) -> Hook:
+    """公开登记入口：其他模块（动态 / Palantir）在自己的模块里调用，把自己的 kind/section 写回挂进整版发布。
+
+    - fn 签名 `async (ctx: Ctx, target_id: str, rows: list[CrItem]) -> set[str]`，在发布事务里执行，
+      只能改自己模块的表；返回改到的**静态**快照节名（不改静态节返回空集合）。
+    - 出错抛 `writeback_error(msg, **details)`（409 WRITEBACK_FAILED），整个发布回滚。
+    - 同一 (kind, section) 已登记 → ValueError（防止覆盖静态钩子）；确需替换传 replace=True。
+    - 要在 import 时登记（模块加载即生效）；发布按 (kind, section) 查表，登记先后不影响执行顺序。
+    """
+    if (kind, section) in HOOKS and not replace and HOOKS[(kind, section)] is not fn:
+        raise ValueError(f"写回钩子 {kind}/{section} 已登记")
+    HOOKS[(kind, section)] = fn
+    return fn
+
+
+def writeback_error(msg: str, **details: Any) -> AppError:
+    """钩子里报错用：409 WRITEBACK_FAILED，details 原样返回给前端。"""
+    return _bad(msg, **details)
 
 
 def _bad(msg: str, **details: Any) -> AppError:
@@ -445,11 +470,96 @@ async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
 
 
 # ---------------------------------------------------------------- 维度：取值 / 说法 / 问数设置
+D_FIELDS = {
+    "name": "display_name",
+    "api": "api_name",
+    "group": "dim_group",
+    "owner": "owner",
+    "attr": "attr",
+    "column": "source_column",
+    "valueSrc": "value_src",
+    "sync": "sync",
+    "desc": "description",
+}
+
+
 async def _dim(ctx: Ctx, tid: str) -> Dimension:
-    d = await ctx.session.scalar(select(Dimension).where(Dimension.code == tid))
-    if d is None:
-        raise _bad(f"维度 {tid} 不存在，新建维度暂不支持发布写回", kind="dimension", id=tid)
+    """取维度；本单新建（isNew）且库里没有时，按本单 dimension/def 段的行新建（values 先到也能建）。"""
+    s = ctx.session
+    d = await s.scalar(select(Dimension).where(Dimension.code == tid))
+    if d is not None:
+        return d
+    if not ctx.is_new:
+        raise _bad(f"维度 {tid} 不存在（目标没标 isNew），不能写回", kind="dimension", id=tid)
+    q = select(CrItem).where(
+        CrItem.cr_id == ctx.cr.id,
+        CrItem.target_kind == "dimension",
+        CrItem.target_id == tid,
+        CrItem.section.in_(("def", "config")),
+    )
+    v = {r.item_key: r.after for r in await s.scalars(q) if r.op != "delete"}
+    o = await s.scalar(select(ObjectType).where(ObjectType.code == str(v.get("object") or "")))
+    if o is None:
+        raise _bad(f"新建维度 {tid} 缺少所属对象（def 段 object 行）", kind="dimension", id=tid, key="object")
+    levels = [x if isinstance(x, dict) else {"name": str(x)} for x in v.get("levels") or []]
+    seq = max((x.seq for x in await s.scalars(select(Dimension))), default=0) + 1
+    d = Dimension(
+        code=tid,
+        api_name=str(v.get("api") or tid),
+        display_name=str(v.get("name") or ctx.name or tid),
+        kind=_label(DimKind, v.get("kind") or "维度", "类型"),
+        dim_group=str(v.get("group") or "其他"),
+        status=DefStatus.published,
+        owner=str(v.get("owner") or ctx.cr.owner),
+        object=o,
+        object_name=o.display_name,
+        attr="",
+        source_column="",
+        value_src="",
+        sync="",
+        description="",
+        qa={},
+        since_release=ctx.ver,
+        history=[
+            {"ver": ctx.ver, "cr": ctx.cr.code, "by": ctx.cr.owner, "at": _fmt_dt(ctx.now), "change": "新建"}
+        ],
+        levels=[
+            DimLevel(
+                level_no=i + 1,
+                name=str(lv.get("name") or f"层级{i + 1}"),
+                api_name=str(lv.get("api") or lv.get("name") or f"l{i + 1}"),
+                source=str(lv.get("source") or ""),
+                created_by=ctx.by,
+            )
+            for i, lv in enumerate(levels)
+        ],
+        seq=seq,
+        created_by=ctx.by,
+    )
+    s.add(d)
+    await s.flush()
     return d
+
+
+async def _dim_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
+    d = await _dim(ctx, tid)
+    for r in rows:
+        if r.op == "delete":
+            continue
+        if r.item_key in D_FIELDS:
+            setattr(d, D_FIELDS[r.item_key], str(r.after or ""))
+        elif r.item_key == "kind":
+            d.kind = _label(DimKind, r.after, "类型")
+        elif r.item_key == "object":
+            o = await ctx.session.scalar(select(ObjectType).where(ObjectType.code == str(r.after)))
+            if o is None:
+                raise _bad(f"对象类型 {r.after} 不存在", kind="dimension", id=tid, key="object")
+            d.object, d.object_name = o, o.display_name
+    return {"dimensions"}
+
+
+register("dimension", "def")(_dim_def)
+register("dimension", "config")(_dim_def)
 
 
 def _set_value(v: DimValue, a: dict[str, Any]) -> None:
@@ -668,9 +778,29 @@ async def restore_links(session: AsyncSession, content: dict[str, Any], *, relea
     have = {x.code: x for x in await session.scalars(select(LinkType))}
     for code, d in content.items():
         lk = have.get(code)
-        if lk is None:
-            log.warning("restore_links: 关系 %s 表里不存在，跳过", code)
-            continue
+        if lk is None:  # 物理删过：按快照重建
+            lk = LinkType(
+                code=code,
+                display_name=d.get("name", code),
+                from_code=d.get("from", ""),
+                to_code=d.get("to", ""),
+                cardinality=Cardinality.many_to_one,
+                key_expr="",
+                from_prop="",
+                to_prop="",
+                join_sql="",
+                reverse_name="",
+                nullable=False,
+                description="",
+                status=DefStatus.published,
+                owner=d.get("owner", ""),
+                usage=[],
+                history=[],
+                seq=max((x.seq for x in have.values()), default=0) + 1,
+                created_by="系统",
+            )
+            session.add(lk)
+            have[code] = lk
         lk.display_name, lk.api_name = d.get("name", lk.display_name), d.get("api")
         lk.from_code, lk.to_code = d.get("from", lk.from_code), d.get("to", lk.to_code)
         lk.cardinality = Cardinality(d.get("card", lk.cardinality.value))
@@ -680,23 +810,43 @@ async def restore_links(session: AsyncSession, content: dict[str, Any], *, relea
         lk.description, lk.owner = d.get("desc", ""), d.get("owner", lk.owner)
         lk.status, lk.since_release, lk.cr_code = DefStatus.published, d.get("since"), d.get("cr")
         lk.history = [{"ver": ver, "cr": "", "by": "系统", "change": "回滚恢复"}, *(d.get("history") or [])]
+    objs = {o.code: o.id for o in await session.scalars(select(ObjectType))}
+    for lk in have.values():
+        lk.from_object_id, lk.to_object_id = objs.get(lk.from_code), objs.get(lk.to_code)
     for code, lk in have.items():
         if code not in content and lk.status == DefStatus.published:
-            lk.status = DefStatus.draft
+            lk.status = DefStatus.draft  # 先置草稿；qaPaths 恢复完后 _restore_drop 再物理删
+            _drops(session)["links"].add(code)
     await session.flush()
 
 
 async def restore_dimensions(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
-    """DimensionsSection.restore_section：只回写取值 / 说法 / 问数设置 / 描述（维度本身的增删不回滚）。
+    """DimensionsSection.restore_section：回写维度定义字段、取值 / 说法 / 问数设置 / 描述。
+
+    - 表里有、快照没有的维度（回滚掉的版本里新建的）物理删除（层级 / 取值 / 说法外键级联）。
+    - 快照里有、表里没有的维度不重建，记 warning。
 
     - 取值：快照里有的按快照回写并清 until；表里在用、快照没有的置 until = 这次回滚的版本。
     - 说法：按快照覆盖（多的删、少的补）。
     """
     ver = await _restore_ver(session, release_id)
-    for d in await session.scalars(select(Dimension)):
+    dims = list(await session.scalars(select(Dimension)))
+    await _hard_delete(session, Dimension, [d for d in dims if d.code not in content])
+    for code in set(content) - {d.code for d in dims}:
+        log.warning("restore_dimensions: 维度 %s 表里不存在，跳过", code)
+    for d in dims:
         snap = content.get(d.code)
         if not isinstance(snap, dict):
             continue
+        for k, col in D_FIELDS.items():
+            if k in snap and k not in ("desc", "column", "valueSrc"):
+                setattr(d, col, str(snap[k] or ""))
+        d.source_column = str(snap.get("column", d.source_column) or "")
+        d.value_src = str(snap.get("valueSrc", d.value_src) or "")
+        if "status" in snap:
+            d.status = DefStatus(snap["status"])
+        if "history" in snap:
+            d.history = list(snap["history"])
         d.description = snap.get("desc", d.description)
         if isinstance(snap.get("qa"), dict):
             d.qa = dict(snap["qa"])
@@ -757,3 +907,164 @@ async def restore_dimensions(session: AsyncSession, content: dict[str, Any], *, 
             m.resolve, m.conflict = a.get("resolve"), a.get("conflict")
             m.draft_cr, m.diff = None, None
     await session.flush()
+
+
+# ---------------------------------------------------------------- 整版回滚：objectTypes / metrics / qaPaths
+O_SNAP = {**O_FIELDS}
+
+
+def _drops(session: AsyncSession) -> dict[str, set[str]]:
+    """回滚中待物理删的关系 / 对象（要等 qaPaths 重建、维度删完才没有外键引用）。"""
+    return session.info.setdefault("static_restore_drops", {"links": set(), "objects": set()})
+
+
+async def restore_object_types(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
+    """ObjectTypesSection.restore_section：快照里有的对象按快照覆盖定义字段（表里没有的按快照重建）；
+    表里有、快照没有的（回滚掉的版本里新建的）先置草稿，qaPaths 恢复后 _restore_drop 再尝试物理删。"""
+    have = {o.code: o for o in await session.scalars(select(ObjectType))}
+    seq = max((o.seq for o in have.values()), default=0)
+    for code, d in content.items():
+        o = have.get(code)
+        if o is None:
+            seq += 1
+            o = ObjectType(
+                code=code,
+                api_name=d.get("api", code),
+                display_name=d.get("name", code),
+                obj_group=d.get("group", "其他"),
+                description="",
+                conflict_strategy=ConflictStrategy.user_edit_wins,
+                lifecycle=Lifecycle.active,
+                status=ObjectStatus.published,
+                properties=[],
+                seq=seq,
+                created_by="系统",
+            )
+            session.add(o)
+        for k, col in O_SNAP.items():
+            if k in d:
+                setattr(o, col, d[k])
+            elif k in ("domain", "owner", "table", "source", "pk"):
+                setattr(o, col, None)
+        if d.get("conflict"):  # 快照是展示文本「策略（说明）」（shapes.conflict_text）
+            base, _, note = str(d["conflict"]).partition("（")
+            try:
+                o.conflict_strategy = ConflictStrategy(base)
+                o.conflict_note = note.removesuffix("）") or None
+            except ValueError:
+                log.warning(
+                    "restore_object_types: %s 冲突策略「%s」不认识，保留表里的值", code, d["conflict"]
+                )
+        if "qs" in d:
+            o.sample_questions = list(d["qs"] or [])
+        if d.get("status"):
+            o.status = ObjectStatus(d["status"])
+    for code, o in have.items():
+        if code not in content:
+            o.status = ObjectStatus.draft
+            _drops(session)["objects"].add(code)
+    await session.flush()
+
+
+async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
+    """MetricsSection.restore_section：快照里有的指标按快照覆盖（表里没有的重建）；快照没有的物理删（指标无外键）。"""
+    have = {m.code: m for m in await session.scalars(select(Metric))}
+    await _hard_delete(session, Metric, [m for c, m in have.items() if c not in content])
+    seq = max((m.seq for m in have.values()), default=0)
+    for code, d in content.items():
+        m = have.get(code)
+        if m is None:
+            seq += 1
+            m = Metric(code=code, seq=seq, created_by="系统", api_name=code, display_name=code)
+            m.metric_group, m.unit, m.version, m.owner = "其他", "", "v1", ""
+            m.status = MetricStatus.published
+            session.add(m)
+        m.display_name, m.api_name = d.get("name", m.display_name), d.get("api", m.api_name)
+        m.metric_group, m.unit = d.get("group", m.metric_group), d.get("unit", m.unit)
+        m.version, m.owner = d.get("version", m.version), d.get("owner", m.owner)
+        if d.get("status"):
+            m.status = MetricStatus(d["status"])
+        review = d.get("review") or {}
+        m.review_cr, m.review_note = review.get("cr"), review.get("note")
+        if "formula" in d or "dimNames" in d:
+            m.formula, m.dims = d.get("formula"), list(d.get("dimNames") or [])
+        else:
+            m.formula, m.dims = None, None
+    await session.flush()
+
+
+async def restore_qa_paths(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
+    """QaPathsSection.restore_section：问数路径三张表按快照重建（路径 / 步骤 / 试问），再 _restore_drop。
+
+    引用的对象或关系表里没有时跳过该路径 / 组，记 warning。
+    """
+    await session.execute(delete(QaPathExample))
+    await session.execute(delete(QaPathStep))
+    await session.execute(delete(QaPath))
+    objs = {o.code: o for o in await session.scalars(select(ObjectType))}
+    links = {x.code: x for x in await session.scalars(select(LinkType))}
+    for key, g in content.items():
+        fo, to = objs.get(g.get("from")), objs.get(g.get("to"))
+        if fo is None or to is None:
+            log.warning("restore_qa_paths: 组 %s 的对象不存在，跳过", key)
+            continue
+        paths: list[QaPath | None] = []
+        for i, p in enumerate(g.get("paths") or []):
+            steps = [links.get(c) for c in p.get("links") or []]
+            if any(x is None for x in steps):
+                log.warning("restore_qa_paths: 组 %s 路径 %s 引用的关系不存在，跳过", key, i)
+                paths.append(None)
+                continue
+            qp = QaPath(
+                group_key=key,
+                from_object=fo,
+                to_object=to,
+                seq=i,
+                is_default=bool(p.get("isDefault")),
+                hint=p.get("hint"),
+                check_note=g.get("check") if p.get("isDefault") else None,
+                steps=[QaPathStep(step_no=j, link=lk, created_by="系统") for j, lk in enumerate(steps)],
+                created_by="系统",
+            )
+            session.add(qp)
+            paths.append(qp)
+        for i, e in enumerate(g.get("examples") or []):
+            n = e.get("path", -1)
+            session.add(
+                QaPathExample(
+                    from_object=fo,
+                    to_object=to,
+                    seq=i,
+                    question=e.get("q", ""),
+                    how=e.get("how"),
+                    path=paths[n] if 0 <= n < len(paths) else None,
+                    created_by="系统",
+                )
+            )
+    await session.flush()
+    await _restore_drop(session)
+
+
+async def _restore_drop(session: AsyncSession) -> None:
+    """物理删回滚掉的关系 / 对象。仍被引用（如别的模块的表）时保留为草稿，记 warning。"""
+    drops = session.info.pop("static_restore_drops", None) or {}
+    for model, key in ((LinkType, "links"), (ObjectType, "objects")):
+        for code in sorted(drops.get(key, ())):
+            inst = await session.scalar(select(model).where(model.code == code))
+            if inst is None:
+                continue
+            try:
+                async with session.begin_nested():
+                    await _hard_delete(session, model, [inst])
+            except Exception:
+                log.warning("restore: %s %s 仍被引用，保留为草稿", key, code)
+
+
+async def _hard_delete(session: AsyncSession, model: Any, rows: list[Any]) -> None:
+    """按 id 直接 DELETE（子表靠外键级联），再把实例移出 session（免得之后 flush 碰到已删行）。"""
+    if not rows:
+        return
+    await session.flush()
+    await session.execute(delete(model).where(model.id.in_([r.id for r in rows])))
+    for r in rows:
+        session.expunge(r)

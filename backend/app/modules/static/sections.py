@@ -5,8 +5,8 @@
 - seed_section(ver, ctx)：读导出 JSON，按 §2.7 的版本规则裁出该版本可见的内容。
 - build_section(session, base, crs)：发布时组装。变更单展开不在本次范围 [推断]：
   base 不为空就沿用上一版，否则从当前定义表组装「当前已发布」那一节。
-- restore_section（整版回滚写表）：terms / properties / links / dimensions 实现（writeback.restore_*），
-  objectTypes / metrics / qaPaths 只回快照。
+- restore_section（整版回滚写表）：7 节都实现（writeback.restore_*）；
+  qaPaths 最后执行，顺带物理删回滚掉的关系 / 对象。
 """
 
 from typing import Any
@@ -19,7 +19,10 @@ from app.modules.static.writeback import (
     DIRTY,
     restore_dimensions,
     restore_links,
+    restore_metrics,
+    restore_object_types,
     restore_properties,
+    restore_qa_paths,
     restore_terms,
 )
 
@@ -82,6 +85,10 @@ class ObjectTypesSection(_Base):
     async def current(self, repo: StaticRepo) -> Obj:
         return {o.code: object_def(o) for o in await repo.object_types()}
 
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
+        """整版回滚时把对象类型表恢复成 content（writeback.restore_object_types）。"""
+        await restore_object_types(session, content or {}, release_id=release_id)
+
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         from app.modules.static.seeds import OBJECT_STATUS
 
@@ -142,6 +149,10 @@ class MetricsSection(_Base):
             stat = shapes.metric_stat(m) if m.formula is not None else None
             out[m.code] = metric_def_from_json(shapes.metric_list_item(m), stat)
         return out
+
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
+        """整版回滚时把指标表恢复成 content（writeback.restore_metrics）。"""
+        await restore_metrics(session, content or {}, release_id=release_id)
 
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         stats = {x["id"]: x for x in ctx.load("METRICS.json", group=G)}
@@ -224,6 +235,10 @@ class QaPathsSection(_Base):
             g = group(e.from_object.code, e.to_object.code)
             g["examples"].append({"q": e.question, "path": e.path.seq if e.path else -1, "how": e.how})
         return out
+
+    async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
+        """整版回滚时把问数路径三张表按 content 重建（writeback.restore_qa_paths）。"""
+        await restore_qa_paths(session, content or {}, release_id=release_id)
 
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         return {f"{g['from']}→{g['to']}": g for g in ctx.load("PATH_GROUPS.json", group=G)}
