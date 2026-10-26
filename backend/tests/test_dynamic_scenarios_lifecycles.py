@@ -156,7 +156,7 @@ async def test_lifecycle_draft(dyn, client):  # noqa: F811
     edits = {
         **empty,
         "cr": "CR-9001",
-        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终止", "desc": "x"}],
+        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终态", "desc": "x"}],
     }
     r = await client.put(url, json=edits)
     assert r.status_code == 200, r.text
@@ -234,7 +234,7 @@ async def test_lifecycle_draft_registers_cr_items(dyn, client):  # noqa: F811
     edits = {
         **empty,
         "cr": cr,
-        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终止", "desc": ""}],
+        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终态", "desc": ""}],
     }
     r = await client.put(f"{API}/object-types/order/lifecycle/draft", json=edits)
     assert r.status_code == 200, r.text
@@ -297,3 +297,41 @@ def test_apply_edits_rejects_bad_kind():
         bad = {"addStates": [{"key": "x", "name": "x", "kind": "终止"}]}
         apply_edits({"states": [], "transitions": []}, bad)
     assert e.value.code == "WRITEBACK_FAILED"
+
+
+async def test_lifecycle_draft_rejects_bad_shapes(dyn, client):  # noqa: F811
+    url = f"{API}/object-types/order/lifecycle/draft"
+    base = {
+        "cr": "CR-9001",
+        "addStates": [],
+        "addTransitions": [],
+        "editTransitions": {},
+        "removeTransitions": [],
+    }
+    st = {"key": "已退货", "name": "已退货", "kind": "终态", "desc": ""}
+    tr = {"id": "T-x", "from": "待支付", "to": "已退货", "trigger": "人工", "by": "客服"}
+    cases = [
+        ({"addStates": [st], "addTransitions": [{**tr, "from": ["待支付"]}]}, "addTransitions[0].from"),
+        ({"addStates": [st], "addTransitions": [{**tr, "to": {"a": 1}}]}, "addTransitions[0].to"),
+        ({"addStates": [{**st, "key": ["x"]}]}, "addStates[0].key"),
+        ({"addStates": [{**st, "kind": "终止"}]}, "addStates[0].kind"),
+    ]
+    for extra, loc in cases:
+        r = await client.put(url, json={**base, **extra})
+        err(r, 422, "VALIDATION_FAILED")
+        assert loc in r.text, (loc, r.text)
+
+
+def test_apply_edits_missing_key_409():
+    import pytest
+
+    from app.core.errors import AppError
+    from app.modules.dynamic.writeback import apply_edits
+
+    for bad in (
+        {"addStates": [{"name": "x", "kind": "终态"}]},
+        {"addTransitions": [{"from": "a", "to": "a", "trigger": "人工"}]},
+    ):
+        with pytest.raises(AppError) as e:
+            apply_edits({"states": [{"key": "a", "name": "a", "kind": "初始"}], "transitions": []}, bad)
+        assert e.value.code == "WRITEBACK_FAILED" and e.value.status_code == 409

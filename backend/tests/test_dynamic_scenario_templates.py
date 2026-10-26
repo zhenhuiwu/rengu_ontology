@@ -51,11 +51,28 @@ async def test_run_validates_against_template(dyn, client, fakes):  # noqa: F811
         ({**RUN, "scope": {**RUN["scope"], "planet": "火星"}}, "scope.planet"),
         ({**RUN, "drivers": {**RUN["drivers"], "pricePct": "x"}}, "drivers.pricePct"),
         ({**RUN, "drivers": {**RUN["drivers"], "promo": "买一送一"}}, "drivers.promo"),
+        ({**RUN, "drivers": {**RUN["drivers"], "pricePct": float("nan")}}, "drivers.pricePct"),
+        ({**RUN, "drivers": {**RUN["drivers"], "replenishPct": float("inf")}}, "drivers.replenishPct"),
+        ({**RUN, "drivers": {**RUN["drivers"], "safetyDays": True}}, "drivers.safetyDays"),
+        ({**RUN, "scope": {**RUN["scope"], "weeks": float("nan")}}, "scope.weeks"),
+        ({**RUN, "scope": {**RUN["scope"], "weeks": 2.5}}, "scope.weeks"),
+        ({**RUN, "drivers": {**RUN["drivers"], "promoWeeks": 1.5}}, "drivers.promoWeeks"),
     ]
     for body, loc in cases:
-        r = await client.post(f"{API}/scenarios/{sid}:run", json=body)
+        # NaN / Infinity 按非标准 JSON 字面量原样发（json.dumps 默认允许）
+        raw = json.dumps(body)
+        r = await client.post(
+            f"{API}/scenarios/{sid}:run", content=raw, headers={"content-type": "application/json"}
+        )
         err(r, 422, "VALIDATION_FAILED")
         assert loc in r.text
+    # 整数值写成 8.0 视同 8
+    r = await client.post(f"{API}/scenarios/{sid}:run", json={**RUN, "scope": {**RUN["scope"], "weeks": 8.0}})
+    assert (
+        r.status_code == 202
+        and r.json()["scope"]["weeks"] == 8
+        and isinstance(r.json()["scope"]["weeks"], int)
+    )
     # 促销类型为“无”时力度 / 周数按模板 offValue 归零
     body = {**RUN, "drivers": {**RUN["drivers"], "promoDepth": 9, "promoWeeks": 3}}
     r = await client.post(f"{API}/scenarios/{sid}:run", json=body)

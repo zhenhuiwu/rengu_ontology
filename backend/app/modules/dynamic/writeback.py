@@ -86,7 +86,7 @@ def apply_edits(machine: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any
     rm = set(edits.get("removeTransitions") or [])
     ed = edits.get("editTransitions") or {}
     states = [dict(s) for s in machine["states"]] + [dict(s) for s in edits.get("addStates") or []]
-    trs = [{**t, **ed.get(t["id"], {})} for t in machine["transitions"] if t["id"] not in rm]
+    trs = [{**t, **ed.get(t.get("id"), {})} for t in machine["transitions"] if t.get("id") not in rm]
     trs += [dict(t) for t in edits.get("addTransitions") or []]
     for s in states:
         s.setdefault("desc", "")
@@ -94,6 +94,12 @@ def apply_edits(machine: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any
         s.setdefault("x", 0)
         s.setdefault("y", 0)
     kinds, trigs = {k.value for k in LcStateKind}, {t.value for t in LcTrigger}
+    for i, s in enumerate(states):
+        if not isinstance(s.get("key"), str) or not s["key"]:
+            raise _bad(f"第 {i + 1} 个状态缺少编号（key）或编号不是文本", key=f"state#{i}")
+    for i, t in enumerate(trs):
+        if not isinstance(t.get("id"), str) or not t["id"]:
+            raise _bad(f"第 {i + 1} 条迁移缺少编号（id）或编号不是文本", key=f"tr#{i}")
     keys = {s["key"] for s in states}
     for s in states:
         if s.get("kind") not in kinds:

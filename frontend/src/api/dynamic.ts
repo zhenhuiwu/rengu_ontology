@@ -163,7 +163,8 @@ const LOCKS: Record<string, number> = {};
 async function crLock(cr: string): Promise<number | undefined> {
   if (!CR_WRITE) return undefined;
   if (LOCKS[cr] === undefined) {
-    try { LOCKS[cr] = (await api.get<CrFullDto>(`/change-requests/${enc(cr)}`)).lockVersion; } catch { return undefined; }
+    // 读单子失败就把错误抛给调用方（页面按错误码提示），不带 lockVersion 偷偷保存会绕过乐观锁
+    LOCKS[cr] = (await api.get<CrFullDto>(`/change-requests/${enc(cr)}`)).lockVersion;
   }
   return LOCKS[cr];
 }

@@ -9,6 +9,7 @@
 """
 
 import json
+import math
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
@@ -73,6 +74,12 @@ async def scope_options(session: Any, user: Any, t: dict[str, Any]) -> dict[str,
     return out
 
 
+def _is_int(f: dict[str, Any]) -> bool:
+    """整数型数值项：默认值与步长（有的话）都是整数（演示模板的周数 / 价格 / 天数等全是）。"""
+    step = f.get("step")
+    return isinstance(f["default"], int) and (step is None or float(step).is_integer())
+
+
 def _check(
     prefix: str,
     fields: list[dict[str, Any]],
@@ -87,9 +94,14 @@ def _check(
         k, v = f["key"], raw.get(f["key"], f["default"])
         loc = f"{prefix}.{k}"
         num = isinstance(f["default"], (int, float))
-        if num and (isinstance(v, bool) or not isinstance(v, (int, float))):
+        if num and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)):
             errs.append((loc, f"{f['label']}必须是数字"))
             continue
+        if num and _is_int(f) and v != int(v):
+            errs.append((loc, f"{f['label']}必须是整数"))
+            continue
+        if num and _is_int(f):
+            v = int(v)
         if not num and not isinstance(v, str):
             errs.append((loc, f"{f['label']}必须是文本"))
             continue

@@ -26,6 +26,7 @@ from app.modules.dynamic.cr_link import CrLink, lifecycle_sections, rule_section
 from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertLevel
 from app.modules.dynamic.rules_models import (
     HitResult,
+    LcStateKind,
     Lifecycle,
     LifecycleChange,
     LifecycleDraft,
@@ -1059,7 +1060,16 @@ def validate_lc_edits(cur: dict[str, Any], body: LifecycleDraftIn) -> list[tuple
     errs: list[tuple[str, str]] = []
     names = {s["name"] for s in cur["states"]}
     keys = {s["key"] for s in cur["states"]}
+    kinds = {k.value for k in LcStateKind}
     for i, s in enumerate(body.add_states):
+        if "key" in s and not isinstance(s["key"], str):
+            errs.append((f"addStates[{i}].key", "状态编号必须是文本"))
+        if not isinstance(s.get("name"), str):
+            errs.append((f"addStates[{i}].name", "状态名称必须是文本"))
+        if s.get("kind") not in kinds:
+            errs.append((f"addStates[{i}].kind", f"状态类型须为 {' / '.join(sorted(kinds))} 之一"))
+        if errs and errs[-1][0].startswith(f"addStates[{i}]"):
+            continue
         n = str(s.get("name") or "").strip()
         if not n:
             errs.append((f"addStates[{i}].name", "状态名称必填"))
@@ -1071,6 +1081,10 @@ def validate_lc_edits(cur: dict[str, Any], body: LifecycleDraftIn) -> list[tuple
     pairs = {(t["from"], t["to"]) for t in cur["transitions"] if t["id"] not in body.remove_transitions}
     for i, t in enumerate(body.add_transitions):
         f, to, by = t.get("from"), t.get("to"), str(t.get("by") or "").strip()
+        bad = [k for k in ("from", "to") if t.get(k) is not None and not isinstance(t.get(k), str)]
+        errs += [(f"addTransitions[{i}].{k}", "须是状态编号（文本）") for k in bad]
+        if bad:
+            continue
         if not f or f not in keys:
             errs.append((f"addTransitions[{i}].from", "原状态必填且须存在"))
         if not to or to not in keys:
