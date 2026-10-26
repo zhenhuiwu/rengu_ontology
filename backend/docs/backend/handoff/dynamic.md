@@ -29,14 +29,15 @@
   - 后端 `app/modules/dynamic/cr_link.py`：规则 / 生命周期草稿在**同一事务**里调 static `CrWriteService` 登记 cr_target + 写 cr_items（变更单号在 change_request 表里才登记；mock 单号 / 不存在的单号照旧只落 dynamic 草稿表）。规则 kind `rule`，section `conds` / `mapping` / `config`（新规则 config 行全是 add；已发布规则 autoStage.* 为 update）；生命周期 kind `object`（id = 对象类型），section `lc_states` / `lc_transitions`。`PUT …/draft` 可带 `lockVersion`（只校验第一次 PUT），回 `lockVersion` / `crChanges`。`POST /rules` 带库里的 cr 时一并登记 isNew 目标 + config 行，所以提交不会 CR_EMPTY。`DELETE /rules/{id}/draft` 先撤登记再删草稿（CR_LOCKED 时整体回滚，不留孤儿）。
   - 前端 `src/api/dynamic.ts`：`crOpen`（POST /change-requests 带 target / POST …/targets 加入）、`crDropEmpty`、`crErrText`（CR_EMPTY / CR_BLOCKED（列 details.blocked）/ CR_NO_REVIEWER / CR_LOCKED / VERSION_CONFLICT / TARGET_IN_OTHER_CR「已在 CR-xxxx 中」）、lockVersion 缓存；`CrTarget.name`。
   - 规则页：新建规则 / 发起变更走真变更单（CR_WRITE 开时），失败用 `useDraftView.cancel(cr, target)` 撤登记，新建的空单删掉；放弃草稿加确认卡；保存草稿不再把 `{cr,draft}` 当详情覆盖。生命周期页保存草稿同样登记、报错用 crErrText（提交 / 放弃在静态 ObjectTypesBody 的 `useStaticCr('object')` 横幅里）。
-  - **默认仍关**：只用接口测试验证（tests 见下），没有在浏览器里对真后台端到端走一遍新建 → 保存 → 提交 → 放弃；PDE 合并后端到端验证再改默认。
+  - **默认仍关**。2026-10-26 用私有库 + uvicorn 对真后台 curl 走了一遍：新建空单 → `POST /rules`（带 cr、objKind=order）→ 登记 isNew 目标 + 6 条 config 行 → `PUT …/draft` 带 lockVersion（回新 lockVersion）→ `:submit`（默认审核人王敏，成功，不再 CR_EMPTY）→ 王敏 `:approve`（已通过）→ `POST /releases`（变更单已发布）都通。**断点**：整版发布只给变更单打版本快照，不把 dynamic 的 `rule_draft` / `lifecycle_draft` 应用成已发布版本（规则仍是 version=None、“草稿中”）。需要 static / versioning 提供发布钩子（发布时按 cr 回调各模块 apply），dynamic 侧再实现「把该 cr 的规则 / 生命周期草稿升为新版本」；在此之前开 CR_WRITE 会出现“单子已发布、规则没生效”，所以不开。
+  - 新建规则（真接口）先弹「新建规则」框选对象类型（static 真接口取本体对象类型，否则 mock 四类）和名称，再进变更弹窗；`POST /rules` 带 objKind。
 
 ## 未完成
 
 1. **变更单仍是前端 mock（CR_WRITE 关时）**：草稿归属 / 草稿视图来自公共 `useDraftView`（mock `DRAFT_TARGETS` / `CHANGE_REQUESTS`），新建变更单号也是前端生成的；后端 `rule_draft.cr_code` / `lifecycle_draft.cr_code` 是软引用，没有外键。`CR_WRITE` 打开后只有种子里已有的变更单（mock 与库里都有，如 CR-0011）能真正提交 / 放弃。
-2. **生命周期页**：「发起变更」仍走公共 `useDraftView.start()`（mock 单号），草稿第一次保存时才登记到库里的变更单。静态侧放弃整个 object 目标只删 cr_items，不删 `lifecycle_draft`；dynamic 读草稿时忽略「变更单在库里但没登记该 object 目标」的残留草稿（可选：static 放弃 object 目标时回调 dynamic 清理）。
+2. **生命周期页**：「发起变更」按钮在静态的 `ObjectTypesBody.vue`（`useStaticCr('object')`，不归 dynamic），由静态侧建 / 加入变更单；dynamic 保存生命周期草稿时幂等登记 object 目标并写 lc_* 行，所以不另做。静态侧放弃整个 object 目标只删 cr_items，不删 `lifecycle_draft`；dynamic 读草稿时忽略「变更单在库里但没登记该 object 目标」的残留草稿（可选：static 放弃 object 目标时回调 dynamic 清理）。
 6. **废弃列（不加迁移）**：`rule_hit.store_id` / `store_label`（及告警的同名列）保留不删，接口改出通用 `dims: [{objKind,id,label}]`，目前由 store_id 转换；迁移归 dynamic-r3b（dynamic_0003），之后再改存 JSON。
-7. **ObjBehaviorAutomation.vue** 仍是 mock / 门店写死，未改。
+7. **ObjBehaviorAutomation.vue**：命中对象旁的门店改为本地 `dimsOf()` 转换的通用维度（mock storeId → store 维度）；集成 dynamic-r3b 后可换成其公共 `alertDims()` 类转换。数据仍是 mock。
 8. **生命周期对象引用**：ObjRef 现按 objectId 引用任意对象类型；对象注册表（objectRegistry）解析不了的类型（如 member / promotion / refund）在开发环境会有告警，需要 PDE 在注册表加不告警的 `canResolve(kind)` 或补解析器。
 3. **审批界面**：动作中心 mock 没有审批 / 暂存→确认→审批的界面元素，按要求没加；后端接口和权限校验已就绪。注意：种子（mock 导出）里部分审批人（如赵磊、吴佳）不是系统用户，这些动作在库里没人能审批；测试里把 ACT-20261025-0551 的审批人改成王敏再审批。
 4. **推演异步的限制**：进程内后台任务，进程重启时正在算的方案会停在“运行中”（没有恢复 / 超时回收）；`SCENARIO_CONFIG_DIRTY` 仍走不到（`:run` 把配置写回方案）。
@@ -90,7 +91,7 @@
    - 建议动作写死「发起调价审批 / 补货申请 / 发放复购召回优惠券」：`rules_sim.py:195-285`、`Scenarios.vue:342`。
    - 改为元数据定义的「推演模板」：范围 = 某对象类型属性上的筛选；驱动 = 带范围的数值参数（或动作类型参数）；KPI = 指标；影响行 = 通用 `{objRef, dims{}, metrics{}}`；建议 → 动作类型映射。推演引擎按模板可插拔，门店演示是其中一个样例模板。
 6. **（r3 已做）生命周期对象引用**：`src/pages/ontology/parts/object/ObjBehaviorLifecycle.vue:262` 写死 `['order','store','product']`。改为任意对象类型（ObjRef 按 objectId）。`:294` 的触发方式是通用的，保留。
-7. **（r3 部分：默认取本体第一个对象类型，弹窗选对象类型未做）新建规则默认对象类型**：`rules_service.py:387` 默认 `"product"`。改为新建弹窗里必选对象类型。
+7. **（r3 已做：新建弹窗选对象类型，不传时取本体第一个）新建规则默认对象类型**：`rules_service.py:387` 默认 `"product"`。改为新建弹窗里必选对象类型。
 
 **依赖**
 - static：`GET /object-types/{id}/meta`（`{ titleProp, properties: [{ key, name, dataType, searchable, filterable, sortable, listed, order, visibility, format, unit }] }`）和 `GET /object-types/{id}/facets?filters=...`（enum 取值 + 计数 / range 最小最大，随已选筛选联动），以 master 770f6d7 的 `backend/docs/backend/generic-object-explorer.md` 为准。用于第 3、4、5、6 条（列、标题字段、范围筛选取值，替换 `SC_AREAS` / `SC_CATEGORIES` / `PROMO_TYPES`）。
@@ -102,3 +103,4 @@
 - `useDraftView.ts` / `env.d.ts` / router：无需改动。
 - `ObjectTypesBody.vue`（static）：可选——放弃 object 目标后通知 dynamic 删 lifecycle_draft。
 - objectRegistry：不告警的 `canResolve(kind)`（见未完成第 8 条）。
+- static / versioning：整版发布时按变更单回调各模块 apply 的钩子（dynamic 用来把规则 / 生命周期草稿升为已发布版本；CR_WRITE 默认开的前提）。

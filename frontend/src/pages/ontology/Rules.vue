@@ -27,7 +27,7 @@ import { metricById as mockMetricById } from '@/mock/metrics';
 import { METRIC_LIST } from '@/mock/metricCatalog';
 import { ACTIONS } from '@/mock/actions';
 import { actionApi, actionTypes, eventTypes, paramsOf, loadSnapshot } from '@/api/action';
-import { isStaticReal, loadStatic, getObjectTypeMeta } from '@/api/static';
+import { isStaticReal, loadStatic, getObjectTypeMeta, OBJECT_TYPE_LIST } from '@/api/static';
 import {
   RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel, dedupeReason,
   type RuleDef, type AutoStage, type Hit,
@@ -50,7 +50,7 @@ const REAL_API = dynamicApi.isReal();
 /* 目录（动作类型 / 事件类型 / 指标）：action、static 开关各自切到真接口时读它们的接口（只读，src/api/action.ts、static.ts），否则读 mock */
 const catTick = ref(0);
 if (actionApi.isReal()) loadSnapshot().then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 动作 / 事件类型目录加载失败', e); });
-if (isStaticReal()) loadStatic(['metrics']).then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); });
+if (isStaticReal()) loadStatic(['metrics', 'objects']).then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); });
 const actionTypeById = (id: string) => { void catTick.value; return actionTypes().find((a) => a.id === id); };
 const eventTypeById = (id: string) => { void catTick.value; return eventTypes().find((e) => e.id === id); };
 const metricById = (id: string): { name: string } | undefined => {
@@ -162,6 +162,24 @@ async function onChangeOk(opts: { join?: string; title?: string; desc?: string }
   }
 }
 const PENDING = '__new_rule__';
+/* 新建规则（真接口）：先选对象类型和名称，再进变更弹窗。对象类型取本体（static 真接口 GET /object-types），没有时用 mock 对象类型 */
+const newOpen = ref(false);
+const newForm = reactive({ name: '', objKind: '' });
+const objKindOptions = computed(() => {
+  void catTick.value;
+  const real = OBJECT_TYPE_LIST.map((o) => ({ value: o.id, label: `${o.name}（${o.id}）` }));
+  return real.length ? real : (['product', 'store', 'order', 'region'] as const).map((k) => ({ value: k, label: `${objKindLabel(k)}（${k}）` }));
+});
+function openNew() {
+  if (!REAL_API) { openChange(NEW_RULE); return; }
+  newForm.name = ''; newForm.objKind = objKindOptions.value[0]?.value ?? '';
+  newOpen.value = true;
+}
+function onNewOk() {
+  if (!newForm.objKind) { message.warning('请选择对象类型'); return; }
+  newOpen.value = false;
+  openChange(NEW_RULE);
+}
 async function newRule(opts: { join?: string; title?: string; desc?: string }) {
   let cr = '';
   let created = false;
@@ -170,7 +188,7 @@ async function newRule(opts: { join?: string; title?: string; desc?: string }) {
     if (CR_WRITE) { cr = await crOpen(opts); created = !opts.join; }
     else cr = start({ ...opts, target: PENDING }); // mock 单号：先占位登记，规则建好后换成规则编号
     // 默认对象类型由后台取本体里第一个对象类型
-    const d = await createRule({ cr });
+    const d = await createRule({ cr, name: newForm.name.trim() || undefined, objKind: newForm.objKind || undefined });
     rid = d.id;
     start({ join: cr, target: d.id });
     if (!CR_WRITE) cancel(cr, PENDING);
@@ -429,7 +447,7 @@ const verCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange(NEW_RULE)">新建规则</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openNew">新建规则</a-button></a-tooltip>
   </Teleport>
 
   <div class="ru">
@@ -714,6 +732,12 @@ const verCols = [
     </template>
   </a-drawer>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onChangeOk" />
+  <a-modal v-model:open="newOpen" title="新建规则" ok-text="下一步：选择变更单" @ok="onNewOk">
+    <a-form layout="vertical">
+      <a-form-item label="对象类型" required><a-select v-model:value="newForm.objKind" :options="objKindOptions" show-search option-filter-prop="label" /></a-form-item>
+      <a-form-item label="规则名称"><a-input v-model:value="newForm.name" placeholder="未命名规则" :maxlength="60" /></a-form-item>
+    </a-form>
+  </a-modal>
 </template>
 
 <style scoped>

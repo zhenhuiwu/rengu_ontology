@@ -27,6 +27,9 @@ const kind = computed(() => OBJ_TYPE_KIND[props.objectId]);
 const objName = computed(() => OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
 const rules = computed(() => (kind.value ? RULE_DEFS.filter((r) => r.objKind === kind.value) : []));
 const events = computed(() => EVENT_TYPES.filter((e) => e.object === objName.value));
+/** 命中的上下文维度（通用 dims；mock 命中的 storeId 在这里转成 store 维度，同规则页 dimsOf，集成时可换成公共 alertDims 类转换） */
+type HitDim = { objKind: string; id: string; label?: string | null };
+const dimsOf = (h: Hit & { dims?: HitDim[] }): HitDim[] => h.dims ?? (h.storeId ? [{ objKind: 'store', id: h.storeId, label: h.storeLabel }] : []);
 const hits7 = (id: string) => hitsOf(id).filter((h) => h.at >= SINCE_7D);
 const actName = (id: string) => ACTION_TYPES.find((a) => a.id === id)?.name ?? id;
 const fmt = (n: number) => n.toLocaleString('zh-CN');
@@ -148,7 +151,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
             <template v-else-if="column.key === 'rule'"><RouterLink :to="{ path: '/build/ontology/rules', query: { rule: record.ruleId } }"><span class="num">{{ record.ruleId }}</span> {{ ruleName(record.ruleId) }}</RouterLink></template>
             <template v-else-if="column.key === 'obj'">
               <ObjRef :kind="(record as Hit).objKind" :id="record.objId">{{ record.objLabel }}</ObjRef>
-              <span v-if="record.storeLabel && record.objKind !== 'store'" class="c-3"> · {{ record.storeLabel }}</span>
+              <template v-for="dm in dimsOf(record as Hit).filter((x) => x.objKind !== (record as Hit).objKind)" :key="`${dm.objKind}:${dm.id}`"><span class="c-3"> · {{ dm.label ?? dm.id }}</span></template>
             </template>
             <template v-else-if="column.key === 'value'"><span :title="`${record.value} / ${record.threshold}`"><span class="num">{{ record.value }}</span><span class="c-3"> / {{ record.threshold }}</span></span></template>
             <template v-else-if="column.key === 'result'"><a-badge :status="resultBadge(record.result)" :text="record.result" /></template>
