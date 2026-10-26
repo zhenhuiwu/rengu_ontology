@@ -64,3 +64,30 @@ async def test_run_validates_against_template(dyn, client, fakes):  # noqa: F811
         and r.json()["drivers"]["promoDepth"] == 0
         and r.json()["drivers"]["promoWeeks"] == 0
     )
+
+
+async def test_scope_options_from_facets(dyn, client, fakes, monkeypatch):  # noqa: F811
+    """范围项 propRef：分面有数据 → 可选值 = allOption + 分面取值 + 模板固定项；无数据 → 只用模板 options。"""
+    from app.modules.static.explorer import ExplorerService
+
+    facets = {
+        "store": [
+            {"key": "region_code", "kind": "enum", "hasData": True, "values": [{"value": "EC", "count": 3}]}
+        ],
+        "product": [{"key": "category_id", "kind": "enum", "hasData": False, "values": []}],
+    }
+
+    async def fake(self, code, filters, user):
+        return facets[code]
+
+    monkeypatch.setattr(ExplorerService, "facets", fake)
+    sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
+    ok = {**RUN, "scope": {**RUN["scope"], "area": "EC"}}
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=ok)).status_code == 202
+    sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
+    bad = {**RUN, "scope": {**RUN["scope"], "area": "ZZ"}}
+    r = await client.post(f"{API}/scenarios/{sid}:run", json=bad)
+    err(r, 422, "VALIDATION_FAILED")
+    assert "scope.area" in r.text
+    cat = {**RUN, "scope": {**RUN["scope"], "area": _js("SC_AREAS")[1], "category": _js("SC_CATEGORIES")[1]}}
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=cat)).status_code == 202

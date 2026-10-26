@@ -31,9 +31,10 @@ import {
 } from '@/mock/scenarios';
 import {
   SC_TEMPLATES, SC_ENGINES, templateOf, allFields, defaultsOf, noDriver as tplNoDriver, scopeText, fillText, signed,
-  type ScCfg, type ScField, type ScTemplate, type ScImpCol,
+  type ScCfg, type ScValue, type ScField, type ScTemplate, type ScImpCol,
 } from '@/mock/scenarioTemplates';
 import { isApiError } from '@/api/http';
+import { getObjectTypeFacets } from '@/api/static';
 import {
   dynamicApi, listScenarios, getScenariosMeta, compareScenarios, createScenario, getScenario, renameScenario, runScenario,
   waitScenarioResult, PollAborted, listScenarioImpacts, getScenarioStagePlan, stageScenario, type ScenarioDto, type ScenarioMetaDto,
@@ -112,7 +113,7 @@ if (live.value) {
 /* ───── 推演模板（元数据）：范围 / 驱动 / 指标 / 影响明细 / 建议动作都按模板渲染 ───── */
 const tplList = computed<ScTemplate[]>(() => (live.value && remote.meta?.templates?.length ? remote.meta.templates : SC_TEMPLATES));
 const tplFor = (s?: Scenario) => templateOf(s?.templateCode, tplList.value);
-const optsOf = (f: ScField) => (f.options ?? []).map((v) => ({ value: v, label: f.kind === 'radio' && f.unit ? `${v} ${f.unit}` : String(v) }));
+const optsOf = (f: ScField) => (facetOpts.value[f.key] ?? f.options ?? []).map((v) => ({ value: v, label: f.kind === 'radio' && f.unit ? `${v} ${f.unit}` : String(v) }));
 const statusOpts = computed(() => (remote.meta?.statuses ?? ['全部', '草稿', '运行中', '已完成', '失败']).map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v })));
 async function pick(s: Scenario) {
   if (mode.value !== 'one') { toggleCmp(s); return; }
@@ -134,6 +135,26 @@ const cmpTip = (s: Scenario) => (s.status !== '已完成' ? `${s.status}的方�
 /* ───── 当前方案：编辑中的配置（与已运行配置比较判断是否改动） ───── */
 const form = reactive<{ name: string; scope: ScCfg; drivers: ScCfg }>({ name: '', scope: {}, drivers: {} });
 const tpl = computed(() => tplFor(current.value));
+/** 真接口：范围项 propRef 的可选值取 static /facets（hasData 才用：allOption + 分面取值 + 模板固定项）；mock / 无数据用模板 options。与后台 :run 校验同一规则 */
+const facetOpts = ref<Record<string, ScValue[]>>({});
+watch(() => (live.value ? `${tpl.value.code}` : ''), async (code) => {
+  facetOpts.value = {};
+  if (!code) return;
+  const t = tpl.value; const out: Record<string, ScValue[]> = {};
+  const refs = t.scope.filter((f) => f.propRef).map((f) => ({ f, ot: f.propRef!.split('.')[0], prop: f.propRef!.split('.').slice(1).join('.') }));
+  for (const ot of [...new Set(refs.map((r) => r.ot))]) {
+    let fs; try { fs = await getObjectTypeFacets(ot); } catch (e) { if (fallBackIfDown(e)) return; continue; }
+    for (const r of refs.filter((x) => x.ot === ot)) {
+      const fc = fs.find((x) => x.key === r.prop);
+      if (fc && fc.hasData && fc.kind === 'enum' && fc.values.length) {
+        const head = r.f.allOption != null ? [r.f.allOption] : [];
+        const vals = [...head, ...fc.values.map((v) => v.value).filter((v) => !head.includes(v))];
+        out[r.f.key] = [...vals, ...(r.f.options ?? []).filter((o) => !vals.includes(o))];
+      }
+    }
+  }
+  if (tpl.value.code === code) facetOpts.value = out;
+}, { immediate: true });
 const load = (s?: Scenario) => { if (!s) return; form.name = s.name; form.scope = { ...(s.scope as unknown as ScCfg) }; form.drivers = { ...(s.drivers as unknown as ScCfg) }; };
 watch(() => current.value?.id, () => load(current.value), { immediate: true });
 /** cfgDirty：范围 / 驱动改了（结果作废，需重新运行）；dirty：再加上改名（离开 / 切换要确认） */

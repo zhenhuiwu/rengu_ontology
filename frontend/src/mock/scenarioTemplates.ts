@@ -13,8 +13,10 @@ export interface ScField {
   default: ScValue; options?: ScValue[]; min?: number; max?: number; step?: number;
   /** 显示单位（滑块值后缀 / 数字框后缀 / 单选项后缀） */
   unit?: string; signed?: boolean; width?: number;
-  /** 取值来源：目标对象类型的可筛选属性（/object-types/{id}/facets）；演示模板先用固定取值 */
+  /** 取值来源“对象类型.属性”：真接口且 /object-types/{id}/facets 有数据时用分面取值，否则用 options */
   propRef?: string;
+  /** propRef 取到分面值时排在最前的“全部”项 */
+  allOption?: ScValue;
   /** 只有 when.key ≠ when.not 时可填；否则置 offValue；切到可填且为 offValue 时置 onDefault */
   when?: { key: string; not: ScValue }; offValue?: ScValue; onDefault?: ScValue;
   /** 该项不是默认值也不算“调整了驱动”，除非这些项都不为 0（如促销类型要配力度） */
@@ -46,8 +48,8 @@ const f = (x: ScField) => x;
 export const DEMO_TEMPLATE: ScTemplate = {
   code: 'demo_retail', name: '门店商品经营推演', objectType: 'product', engine: 'demo_retail',
   scope: [
-    f({ key: 'area', label: '区域', kind: 'select', default: '华东大区全部', options: [...SC_AREAS], propRef: 'store.region', invalidMsg: '范围不在可选列表里' }),
-    f({ key: 'category', label: '品类', kind: 'select', default: '全部品类', options: [...SC_CATEGORIES], propRef: 'product.category', invalidMsg: '品类不在可选列表里' }),
+    f({ key: 'area', label: '区域', kind: 'select', default: '华东大区全部', options: [...SC_AREAS], propRef: 'store.region_code', allOption: '华东大区全部', invalidMsg: '范围不在可选列表里' }),
+    f({ key: 'category', label: '品类', kind: 'select', default: '全部品类', options: [...SC_CATEGORIES], propRef: 'product.category_id', allOption: '全部品类', invalidMsg: '品类不在可选列表里' }),
     f({ key: 'weeks', label: '推演周数', kind: 'radio', default: 8, options: [4, 8, 12], unit: '周', min: 1, max: 52 }),
   ],
   driverGroups: [

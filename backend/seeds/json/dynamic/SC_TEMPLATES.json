@@ -17,7 +17,8 @@
           "华东三区",
           "华东四区"
         ],
-        "propRef": "store.region",
+        "propRef": "store.region_code",
+        "allOption": "华东大区全部",
         "invalidMsg": "范围不在可选列表里"
       },
       {
@@ -34,7 +35,8 @@
           "休闲食品",
           "生鲜"
         ],
-        "propRef": "product.category",
+        "propRef": "product.category_id",
+        "allOption": "全部品类",
         "invalidMsg": "品类不在可选列表里"
       },
       {

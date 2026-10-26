@@ -53,6 +53,7 @@ from app.modules.dynamic.scenario_templates import (
     defaults,
     driver_fields,
     engine_of,
+    scope_options,
     template_of,
     templates,
 )
@@ -713,7 +714,8 @@ class ScenarioService:
                 409,
             )
         tpl = template_of(s.template_code)
-        scope, drivers, errs = tpl_validate(tpl, body.scope, body.drivers)
+        opts = await scope_options(self.session, self.user, tpl)
+        scope, drivers, errs = tpl_validate(tpl, body.scope, body.drivers, opts)
         if errs:
             raise validation(errs)
         if tpl_no_driver(tpl, drivers):
