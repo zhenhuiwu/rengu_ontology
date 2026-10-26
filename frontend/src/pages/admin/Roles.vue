@@ -21,7 +21,7 @@ import { usePreviewStore, firstAllowedPage } from '@/stores/preview';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { isApiError } from '@/api/http';
-import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadRolesState, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type RemoteRole } from '@/api/roles';
+import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadRolesState, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type RemoteRole } from '@/api/roles';
 import { ADMIN_USERS, paginate, EMPTY, type AdminUser } from '@/mock';
 import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, effectiveAccess, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
 
@@ -38,19 +38,21 @@ const nowStr = '2026-10-25 17:10';
 const roles = ref<Role[]>(JSON.parse(JSON.stringify(ROLES)));
 const members = ref<Record<string, AdminUser[]>>(Object.fromEntries(ROLES.map((r) => [r.id, roleMembers(r)])));
 const allUsers = ref<AdminUser[]>(ADMIN_USERS);
-/** true = 数据来自后台（写操作走接口） */
-const remote = ref(false);
+/** true = 写操作走接口（按开关，不看加载成败） */
+const remote = ref(rolesApiOn());
+/** true = 页面数据已来自后台；首次加载失败时显示演示数据，但写操作仍走接口（失败就报错） */
+const loaded = ref(false);
 /** 首次加载才允许回退 mock；已用后台数据后重拉失败就报错，不悄悄切到 mock */
 async function reload() {
   const st = await loadRolesState();
   if (!st) {
-    if (remote.value) throw new Error('后台暂时连不上，数据未刷新，请稍后刷新页面');
+    if (loaded.value) throw new Error('后台暂时连不上，数据未刷新，请稍后刷新页面');
     return;
   }
   roles.value = st.roles;
   members.value = st.members;
   allUsers.value = st.users;
-  remote.value = true;
+  loaded.value = true;
 }
 /** 后台写操作：成功后重新拉取；失败提示后台的报错（不改本地数据） */
 async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -69,7 +71,7 @@ async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
   return r;
 }
 const lockOf = (r: Role) => (r as Partial<RemoteRole>).lockVersion;
-onMounted(async () => { await reload(); if (remote.value) resetDraft(); });
+onMounted(async () => { await reload(); if (loaded.value) resetDraft(); });
 const role = computed(() => roles.value.find((r) => r.id === q('role')) ?? roles.value[0]);
 const locked = computed(() => readonly.value || role.value.builtIn);
 const lockReason = computed(() => reason.value || (role.value.builtIn ? '内置角色不能修改，可复制后再改' : ''));

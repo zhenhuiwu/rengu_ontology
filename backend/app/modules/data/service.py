@@ -312,6 +312,7 @@ class DatasourceService:
             "port": body.port or DS_DEFAULT_PORT[body.type.value],
             "database": body.database,
             "user": body.user,
+            "password": body.password or "",
             "ssl": body.ssl,
             "mockFail": body.mock_fail,
             **_type_fields(body),

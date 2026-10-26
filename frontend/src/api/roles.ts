@@ -28,6 +28,9 @@ async function allPages<T>(path: string): Promise<T[]> {
   }
 }
 
+/** 写操作是否走后台：按开关判断（不看加载成败），后台断开时写操作直接报错，不改本地 mock */
+export const rolesApiOn = () => api.isReal();
+
 export async function loadRolesState(): Promise<RolesState | null> {
   if (!api.isReal()) return null;
   try {

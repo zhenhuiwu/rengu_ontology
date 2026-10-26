@@ -47,7 +47,7 @@ async def datasource_meta() -> DsMeta:
 
 
 @router.post(
-    "/datasources:test", response_model=DsTest, summary="测试未保存的连接参数（不落库）", dependencies=VIEW
+    "/datasources:test", response_model=DsTest, summary="测试未保存的连接参数（不落库）", dependencies=MANAGE
 )
 async def test_unsaved(body: DsTestIn, session: SessionDep) -> DsTest:
     return await DatasourceService(session).test_unsaved(body)

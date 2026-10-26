@@ -109,6 +109,8 @@ async def test_real_test_and_introspect(client, ds, real):
 
 
 async def test_real_failures(client, ds, real):
+    good = (await client.post(f"{API}/datasources:test", json=_self_db())).json()
+    assert good["ok"] is True, good  # 新建时正确密码能连上
     bad = _self_db(password="wrong-pass-xyz")
     t = (await client.post(f"{API}/datasources:test", json=bad)).json()
     assert t["ok"] is False and "wrong-pass-xyz" not in t["msg"]
