@@ -127,8 +127,14 @@ class PageRepo(BaseRepository[QaPage]):
         stmt = stmt.options(selectinload(QaPage.cards))
         if full:
             stmt = stmt.options(*_PAGE_LOAD)
-        # 新建的在前；种子同一时刻写入，按编号（= mock 数组顺序）
-        return stmt.order_by(QaPage.created_at.desc(), QaPage.code)
+        # 新建的在前；种子同一时刻写入，按编号（= mock 数组顺序）。
+        # dev/test 时钟固定，新建页和种子 created_at 相同 → 非种子排前、后建的在前（P2，qa-pages）
+        return stmt.order_by(
+            QaPage.created_at.desc(),
+            QaPage.is_seed,
+            case((QaPage.is_seed.is_(False), -QaPage.id), else_=0),
+            QaPage.code,
+        )
 
     async def is_visible(self, page_pk: int, visible) -> bool:
         return bool(await self.session.scalar(select(QaPage.id).where(QaPage.id == page_pk, visible)))
