@@ -14,7 +14,7 @@
 | **第 3 批（palantir-r2）** 事件运行数据：表 `event`、`event_daily_stat`（迁移 `event_0003` 接 `admin_0002`），种子 `eventsOf.json`（1,243 条）、`eventDaily.json`；接口 `GET /event-types/{id}/events`、`GET /event-types/{id}/stats`；事件类型页近期事件、最近事件、运行健康、近 14 天趋势改走真接口 | palantir-r2 | `tests/test_action_event_runtime.py`：15 个类型逐条比对 mock（全量 / 24h / 结果筛选 / 分页 / 健康 / 趋势） |
 | **第 3 批** 动作趋势：表 `action_run_daily_stat`（迁移 `action_0002` 接 `event_0003`），种子 `runDaily.json`；接口 `GET /action-types/{id}/stats/daily?days=14`；动作类型页近 14 天执行图改走真接口（取不到 / 后台没起来用 mock） | palantir-r2 | 17 个类型与 mock `runDaily()` 一致 |
 | **第 3 批** 外部系统编辑 `updateExtSystem` 改 `PUT`（后台 POST 别名保留） | palantir-r2 | typecheck / build |
-| **变更单写库（palantir-cr，默认关）** 两页的发起变更 / 加入、保存草稿、提交审核、放弃草稿接静态 `static-r3` 的变更单写接口（契约 `handoff/static.md`）：`VITE_PALANTIR_CR_WRITE=1` 且 `action` 为真接口时先写库，成功后再改页面；失败（含后台没起来）弹错误、页面不变，不回退 mock、不调 `fallBackIfDown`。开关关着行为不变、不发请求。目标 `kind` 用契约里的 `action` / `event`，`id` = 类型编码，`section` 同 `de.section(name)`。保存草稿：每个变了的 section 先 `GET items` 读回再合并整段 `PUT`（改回已发布值的行去掉）。代码：`src/api/action.ts` 末段（`crStart`、`crWriter`）、`useDraftEdits.ts`（可选 `writer`）、两页 `onStart` | palantir-cr | vue-tsc / build；静态未合并，没联调 |
+| **变更单写库（palantir-cr，默认关）** 两页的发起变更 / 加入、保存草稿、提交审核、放弃草稿接静态 `static-r3` 的变更单写接口（契约 `handoff/static.md`）：`VITE_PALANTIR_CR_WRITE=1` 且 `action` 为真接口时先写库，成功后再改页面；失败（含后台没起来）弹错误（`message（code）`，422 带 `details.fields`）、页面不变，不回退 mock、不调 `fallBackIfDown`。开关关着行为不变、不发请求。目标 `kind` 用契约里的 `action` / `event`，`id` = 类型编码，`section` 同 `de.section(name)`。保存草稿：每个变了的 section 先 `GET items` 读回再合并整段 `PUT`（改回已发布值的行去掉）。代码：`src/api/action.ts` 末段（`crStart`、`crWriter`）、`useDraftEdits.ts`（可选 `writer`）、两页 `onStart` | palantir-cr | vue-tsc / build；静态未合并，没联调 |
 | **PDE 评审小点（palantir-r2-fix）** 事件类型页：最近事件 / 运行统计 / 近期事件页签在“后台没起来”以外的报错（404 除外）时，原来只给空列表不重试；现改为该区域单行显示错误 + “重试”按钮（重新发请求），布局不变，mock 未改 | palantir-r2-fix | typecheck / build |
 | 迁移改接 `integration_0002.down_revision = dynamic_0002` | 最后一个单独提交 | 在临时分支合入 `static-integ2` 和 `dynamic-rules`：只有一个 head，空库 `upgrade head`、种子、`alembic check` 都通过，回写测试 24 个通过 |
 
@@ -33,7 +33,8 @@
 | 变更单写库联调 / 打开开关 | 代码已写（palantir-cr），开关 `VITE_PALANTIR_CR_WRITE` 默认关 | 等 `static-r3` 合入 master 后联调再打开；**PDE**：在共用 `src/env.d.ts` 的 `ImportMetaEnv` 补 `VITE_PALANTIR_CR_WRITE?: string`（现在用类型断言读） |
 | 刷新后草稿改动叠回页面 | 草稿视图仍是前端内存，刷新后看不到库里已保存的行 | 要按 `GET /change-requests/{id}/items?kind=&targetId=` 叠回 `useDraftEdits` 的 saved（同静态未完成第 9 条） |
 | 放弃草稿后登记表、改动数 | 放弃后 `useDraftView` 里本对象仍登记在该单（mock 同样）；横幅改动数仍按前端计 | 登记表删目标要静态的 `forgetTarget`（static-r3 新增，未合并）；改动数改读库要 PDE 共用的 `useDraftView` 同步入口 |
-| 新建动作 / 事件类型 | 按钮仍只把当前选中类型登记进变更单（同 mock），没有新类型表单，`isNew` 不用 | 页面没有新建表单，待定 |
+| 新建动作 / 事件类型 | 按钮仍只把当前选中类型登记进变更单（同 mock），没有新类型表单，`isNew` 不用 | 页面没有新建表单，待定。约定（PDE 审 static-r3 时提）：新类型 `target{kind,id:调用方给的编码,isNew:true}`；`config` 一个字段一行、`params` / `payload` 一项一行，都是 `op=add` |
+| **发布后生效** | 本轮只到草稿阶段：草稿行存进 `cr_item`、改动列表 / 校验能看到 | 静态发布还不把 `cr_item` 写回定义表（static 未完成第 9 条），审核通过、发布后动作 / 事件定义**不会变**；静态做完后要在 action / event `sections.py` 的 `build_section` 按 `cr_item` 展开（我负责这两节） |
 | 变更说明 `reason` | 没传 | 共用 `StartChangeModal` 没把“变更说明”发出来（静态 handoff 已提给 PDE） |
 | 试运行 `POST /action-types/{id}:dry-run`、模拟触发 `POST /event-types/{id}:simulate` | 后台没实现，页面只弹本地提示 | 我负责。规则见 api 文档 §3.1、§3.3（一律 200，带 `?previewAs=` 时返回 403 `READONLY`） |
 | 被规则引用 `GET /action-types/{id}/used-by` | 后台没实现；页面用快照里的 `usedBy` 加 mock `RULES`、`ALERTS` 拼 | 表 `action_type_rule` 已建、已灌种子；规则名和告警数要读动态的规则、告警表（依赖 `dynamic-rules` 合入） |

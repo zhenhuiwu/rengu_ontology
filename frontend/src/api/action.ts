@@ -29,7 +29,7 @@ import type { ExtSystem } from '@/mock/extsys';
 import { DRAFTS, type DraftCR } from '@/mock/releases';
 import type { DraftWriter, SectionChange } from '@/pages/ontology/useDraftEdits';
 import { integrationApi, listExtSystems } from './integration';
-import { apiClient, currentApiContext, type PageResult } from './http';
+import { apiClient, currentApiContext, isApiError, type PageResult } from './http';
 import { backend } from './fallback';
 
 export const actionApi = apiClient('action');
@@ -255,6 +255,15 @@ export async function crStart(target: CRTargetIn, opts: { join?: string; title?:
   return { join: cr.id };
 }
 
+/** 变更单写接口的错误提示：message（code），422 VALIDATION_FAILED 时带 details.fields 的字段名 */
+export function crErrText(e: unknown): string {
+  if (!isApiError(e)) return e instanceof Error ? e.message : String(e);
+  const f = (e.details as { fields?: unknown } | null)?.fields;
+  const names = Array.isArray(f) ? f.map((x) => (typeof x === 'string' ? x : (x as { field?: string; loc?: string })?.field ?? (x as { loc?: string })?.loc ?? '')).filter(Boolean)
+    : f && typeof f === 'object' ? Object.keys(f) : [];
+  return `${e.message || e.code}（${e.code}）${names.length ? `：${names.join('、')}` : ''}`;
+}
+
 /** 改动列表「类型」列【推断】：契约只定了 section 名，中文名按页签取 */
 const SECTION_TYPE: Record<string, string> = { params: '参数', conds: '提交条件', edits: '本体修改', effects: '副作用', config: '写回配置', payload: '载荷字段', subs: '订阅方' };
 
@@ -280,5 +289,6 @@ export function crWriter(kind: CRKind, target: () => { id: string; name: string 
     },
     submit: async (crId) => { await submitCR(crId); },
     discard: (crId) => discardCRTarget(crId, kind, target().id),
+    errText: crErrText,
   };
 }

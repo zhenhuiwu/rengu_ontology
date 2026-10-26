@@ -38,7 +38,7 @@ import { isApiError } from '@/api/http';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import {
   actionApi, snap, loadSnapshot, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, loadRuns, type ActionTypeRow,
-  getRunDaily, type RunDaily, crWriter, crStart,
+  getRunDaily, type RunDaily, crWriter, crStart, crErrText,
 } from '@/api/action';
 
 const route = useRoute();
@@ -98,7 +98,7 @@ const crTarget = () => ({ id: cur.value.id, name: `${cur.value.name}（${cur.val
 const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军', writer: crWriter('action', crTarget) });
 /** 发起变更 / 加入：VITE_PALANTIR_CR_WRITE 开着时先写库（失败弹错，不进草稿），关着同以前 */
 async function onStart(opts: { join?: string; title?: string }) {
-  try { start(await crStart({ kind: 'action', ...crTarget() }, opts)); } catch (e) { message.error(`发起变更失败：${e instanceof Error ? e.message : String(e)}`); }
+  try { start(await crStart({ kind: 'action', ...crTarget() }, opts)); } catch (e) { message.error(`发起变更失败：${crErrText(e)}`); }
 }
 const { canEdit, editTip, dirty, bannerDraft } = de;
 const changeOpen = ref(false);

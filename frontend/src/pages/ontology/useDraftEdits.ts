@@ -33,6 +33,8 @@ export interface DraftWriter {
   save: (crId: string, changes: { section: string; rows: SectionChange[] }[]) => Promise<void>;
   submit: (crId: string) => Promise<void>;
   discard: (crId: string) => Promise<void>;
+  /** 错误提示文字（带错误码、422 的字段） */
+  errText?: (e: unknown) => string;
 }
 
 export interface DraftEditsOptions {
@@ -55,7 +57,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
   const dirty = computed(() => Object.keys(working).some((k) => k.startsWith(prefix())));
   const sections: { name: string; marks: (src: 'saved' | 'all') => number; changes: () => SectionChange[] }[] = [];
   const writing = () => !!o.writer?.on();
-  const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  const errText = (e: unknown) => o.writer?.errText?.(e) ?? (e instanceof Error ? e.message : String(e));
   let busy = false;
 
   function section<T>(name: string, base: () => T[], keyOf: (t: T) => string) {
