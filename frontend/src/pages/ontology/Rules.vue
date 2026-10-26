@@ -27,21 +27,22 @@ import { metricById as mockMetricById } from '@/mock/metrics';
 import { METRIC_LIST } from '@/mock/metricCatalog';
 import { ACTIONS } from '@/mock/actions';
 import { actionApi, actionTypes, eventTypes, paramsOf, loadSnapshot } from '@/api/action';
-import { isStaticReal, loadStatic } from '@/api/static';
+import { isStaticReal, loadStatic, getObjectTypeMeta, OBJECT_TYPE_LIST } from '@/api/static';
 import {
   RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel, dedupeReason,
   type RuleDef, type AutoStage, type Hit,
 } from '@/mock/rules';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
-import { useDraftView, draftOf } from './parts/useDraftView';
+import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
+import { useConfirmStore } from '@/stores/confirm';
 import { CHANGE_REQUESTS } from '@/mock/changes';
 import type { ActionRecord } from '@/mock/actions';
 import type { Alert } from '@/mock/dynamic';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, submitCR, removeCRTarget, CR_WRITE, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
-  type RuleDto, type RuleHitDetailDto, type ReplayDto, type RuleVersionDto,
+  dynamicApi, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, submitCR, removeCRTarget, CR_WRITE, crOpen, crDropEmpty, crErrText, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
+  type RuleDto, type RuleHitDetailDto, type ReplayDto, type RuleVersionDto, type HitDim, type ReplaySampleDto,
 } from '@/api/dynamic';
 
 /** 是否走真接口（开关 dynamic）；构建时确定 */
@@ -49,7 +50,7 @@ const REAL_API = dynamicApi.isReal();
 /* 目录（动作类型 / 事件类型 / 指标）：action、static 开关各自切到真接口时读它们的接口（只读，src/api/action.ts、static.ts），否则读 mock */
 const catTick = ref(0);
 if (actionApi.isReal()) loadSnapshot().then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 动作 / 事件类型目录加载失败', e); });
-if (isStaticReal()) loadStatic(['metrics']).then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); });
+if (isStaticReal()) loadStatic(['metrics', 'objects']).then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); });
 const actionTypeById = (id: string) => { void catTick.value; return actionTypes().find((a) => a.id === id); };
 const eventTypeById = (id: string) => { void catTick.value; return eventTypes().find((e) => e.id === id); };
 const metricById = (id: string): { name: string } | undefined => {
@@ -59,7 +60,7 @@ const metricById = (id: string): { name: string } | undefined => {
 /** 后台没起来（api/fallback.ts）：读取回退 mock 并只提示一次；写操作照旧调接口、照旧报错 */
 const live = computed(() => REAL_API && !backend.down);
 const readFail = (e: unknown) => { if (!fallBackIfDown(e)) fail(e); };
-const fail = (e: unknown) => { message.error(isApiError(e) ? e.message || e.code : String(e)); };
+const fail = (e: unknown) => { message.error(isApiError(e) ? crErrText(e) : String(e)); };
 /** 真接口状态：列表页、详情（含 draft）、下拉、命中、命中抽屉、回放结果、版本、已暂存动作 */
 const remote = reactive({
   items: [] as RuleDto[], total: 0, detail: null as RuleDto | null,
@@ -126,42 +127,82 @@ const tab = computed({
 });
 
 /* 草稿：公共 useDraftView('rule')，变更单信息取自变更单本身（R-007 在 CR-0011）；本地只保留规则草稿的改动内容 */
-const { draft: draftCR, isDraft, editTip, setView, start } = useDraftView('rule', () => base.value.id);
+const { draft: draftCR, isDraft, editTip, setView, start, cancel } = useDraftView('rule', () => base.value.id);
+const confirm = useConfirmStore();
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
 const NEW_RULE = '新建规则';
 /**
  * 变更弹窗确认。mock：沿用公共 start()。真接口：
- * - 新建规则：POST /rules 建规则 → start() 登记到所选 / 新建变更单（变更单仍是前端 mock，静态写接口合并前）→ POST /rules/{id}/draft 落库草稿，跳到新规则草稿视图；
- * - 发起变更：start() 后 POST /rules/{id}/draft，让“保存到草稿”能落库。
+ * - CR_WRITE（变更单写接口）：单号以库为准。
+ *   新建规则：新建空单 / 选已有单 → POST /rules 带 cr（后台同一事务开草稿 + 登记 isNew 目标和配置行，提交不会 CR_EMPTY）→ start({ join, target })；
+ *   发起变更：POST /change-requests 带目标 / POST …/targets 加入（占用他单 409 → “已在 CR-xxxx 中”）→ start() → POST /rules/{id}/draft；
+ *   落库失败用 useDraftView.cancel(cr, target) 撤销登记，新建规则失败时删掉刚建的空单。
+ * - 未开 CR_WRITE：变更单仍是前端 mock，start() 生成单号后 POST /rules/{id}/draft 落库规则草稿。
  */
-async function onChangeOk(opts: { join?: string; title?: string }) {
+async function onChangeOk(opts: { join?: string; title?: string; desc?: string }) {
   if (!REAL_API) { start(opts); return; }
+  if (changeTarget.value === NEW_RULE) { await newRule(opts); return; }
+  const id = base.value.id;
+  let cr = '';
   try {
-    if (changeTarget.value === NEW_RULE) {
-      const d = await createRule();
-      const cr = start({ ...opts, target: d.id });
-      await openRuleDraft(d.id, cr);
-      await loadList();
-      router.replace({ query: { ...route.query, ...RESET, rule: d.id, view: 'draft' } });
-      message.success(`已新建规则 ${d.id}，在 ${cr} 的草稿里`);
-      return;
-    }
-    const id = base.value.id;
-    // openRuleDraft 失败时不能让页面停在草稿视图：加入已有单时先落库再 start()；
-    // 新建单的单号由 start() 生成，失败则切回已发布视图（公共 useDraftView 暂无撤销登记的接口，见 handoff）
-    if (opts.join) {
-      await openRuleDraft(id, opts.join);
-      start(opts);
-    } else {
-      const cr = start(opts);
-      try { await openRuleDraft(id, cr); } catch (e) { setView('published'); throw e; }
-    }
+    cr = CR_WRITE ? start({ join: await crOpen(opts, { kind: 'rule', id, name: base.value.name }) }) : start(opts);
+  } catch (e) { fail(e); return; }
+  try {
+    await openRuleDraft(id, cr);
     if (realId.value === id) await loadDetail();
-  } catch (e) { fail(e); }
+  } catch (e) {
+    cancel(cr);
+    if (CR_WRITE) { // 库里的登记一并撤掉（尽力而为）：新建的单子删掉，加入的单子去掉本规则
+      if (opts.join) await removeCRTarget(cr, { kind: 'rule', id }).catch(() => undefined);
+      else await crDropEmpty(cr);
+    }
+    fail(e);
+  }
 }
-/** 草稿横幅：提交审核 / 放弃草稿。静态变更单写接口合并前默认关（CR_WRITE），保持原 mock 行为 */
+const PENDING = '__new_rule__';
+/* 新建规则（真接口）：先选对象类型和名称，再进变更弹窗。对象类型取本体（static 真接口 GET /object-types），没有时用 mock 对象类型 */
+const newOpen = ref(false);
+const newForm = reactive({ name: '', objKind: '' });
+const objKindOptions = computed(() => {
+  void catTick.value;
+  const real = OBJECT_TYPE_LIST.map((o) => ({ value: o.id, label: `${o.name}（${o.id}）` }));
+  return real.length ? real : (['product', 'store', 'order', 'region'] as const).map((k) => ({ value: k, label: `${objKindLabel(k)}（${k}）` }));
+});
+function openNew() {
+  if (!REAL_API) { openChange(NEW_RULE); return; }
+  newForm.name = ''; newForm.objKind = objKindOptions.value[0]?.value ?? '';
+  newOpen.value = true;
+}
+function onNewOk() {
+  if (!newForm.objKind) { message.warning('请选择对象类型'); return; }
+  newOpen.value = false;
+  openChange(NEW_RULE);
+}
+async function newRule(opts: { join?: string; title?: string; desc?: string }) {
+  let cr = '';
+  let created = false;
+  let rid = '';
+  try {
+    if (CR_WRITE) { cr = await crOpen(opts); created = !opts.join; }
+    else cr = start({ ...opts, target: PENDING }); // mock 单号：先占位登记，规则建好后换成规则编号
+    // 默认对象类型由后台取本体里第一个对象类型
+    const d = await createRule({ cr, name: newForm.name.trim() || undefined, objKind: newForm.objKind || undefined });
+    rid = d.id;
+    start({ join: cr, target: d.id });
+    if (!CR_WRITE) cancel(cr, PENDING);
+    await loadList();
+    router.replace({ query: { ...route.query, ...RESET, rule: d.id, view: 'draft' } });
+    message.success(`已新建规则 ${d.id}，在 ${cr} 的草稿里`);
+  } catch (e) {
+    if (rid) cancel(cr, rid);
+    if (!CR_WRITE && cr) cancel(cr, PENDING);
+    if (created) await crDropEmpty(cr);
+    fail(e);
+  }
+}
+/** 草稿横幅：提交审核 / 放弃草稿。CR_WRITE 关时保持原 mock 行为 */
 async function onDraftSubmit() {
   const cr = draftCR.value!;
   if (REAL_API && CR_WRITE) {
@@ -171,14 +212,27 @@ async function onDraftSubmit() {
 }
 async function onDraftDiscard() {
   const cr = draftCR.value!;
+  const id = base.value.id;
+  const isNewRule = live.value && remote.detail?.id === id && remote.detail.version == null;
+  const ok = await confirm.ask({
+    title: '放弃草稿', target: `规则 ${base.value.name}（${id}）`, okText: '放弃草稿', danger: true, irreversible: true,
+    impact: isNewRule ? `这是未发布的新规则，放弃后规则一并删除，并从变更单 ${cr.id} 中移除。`
+      : `本规则在变更单 ${cr.id} 里的改动全部丢弃，已发布版本不受影响。`,
+  });
+  if (!ok) return;
   if (REAL_API && CR_WRITE) {
-    const id = base.value.id;
     try {
-      await removeCRTarget(cr.id, { kind: 'rule', id });
+      // 一个请求、一个事务：后台先删变更单里的登记和草稿行，再删规则草稿（新规则连规则一起删），不会留下孤儿
       await discardRuleDraft(id, cr.id);
-      await loadList();
-      if (realId.value === id) await loadDetail();
     } catch (e) { fail(e); return; }
+    forgetTarget(cr.id, 'rule', id);
+    delete edits[id];
+    setView('published');
+    await loadList();
+    if (isNewRule) router.replace({ query: { ...route.query, ...RESET, rule: undefined } });
+    else if (realId.value === id) await loadDetail();
+    message.success(`已放弃 ${cr.id} 里的本规则草稿`);
+    return;
   }
   setView('published');
 }
@@ -212,11 +266,14 @@ async function saveDraft() {
   if (REAL_API) {
     const e = ensureEdits();
     try {
-      remote.detail = await saveRuleDraft(base.value.id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds });
+      const r = await saveRuleDraft(base.value.id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds });
+      if (remote.detail?.id === base.value.id) remote.detail = { ...remote.detail, draft: r.draft };
       delete edits[base.value.id];
+      // 变更单写接口：改动数以库为准（saveRuleDraft 已回写）
+      if (r.crChanges == null) cr.changes += 1;
     } catch (err) { fail(err); return; }
-  }
-  cr.changes += 1; cr.updatedAt = nowText();
+  } else cr.changes += 1;
+  cr.updatedAt = nowText();
   message.success(`已保存到草稿 ${cr.id}，发布前不影响线上规则`);
 }
 
@@ -260,13 +317,29 @@ const hq = usePagedQuery({ defaultSize: 12, prefix: 'h' });
 const hits7 = computed(() => (live.value ? remote.hits7 : hitsOf(base.value.id).filter((h) => h.at > '2026-10-18 23:59:59').length));
 const hitsAll = computed(() => hitsOf(base.value.id).filter((h) => h.at > (hrange.value === '7d' ? '2026-10-18 23:59:59' : '2026-09-25')));
 const hits = computed(() => (live.value ? remote.hits : paginate(hitsAll.value, { page: hq.page.value, size: hq.size.value })));
-/** 商品类规则（R-007 / R-012）去重键含门店，命中与回放样本单列门店 */
-const STORE_COL = { title: '门店', key: 'store', width: 220, ellipsis: true };
+/**
+ * 命中的上下文维度（通用 dims：后台 hit.dims；mock 命中 / 回放样本由 mock/rules 用公共 alertDims() 给出）。
+ * 有维度的规则（去重键含维度，如商品×门店）单列“维度”。
+ */
+type DimRow = { dims?: HitDim[] };
+const dimsOf = (h: DimRow): HitDim[] => h.dims ?? [];
+const DIM_COL = { title: '维度', key: 'dims', width: 220, ellipsis: true };
+const hasDims = (rows: DimRow[]) => rows.some((h) => dimsOf(h).length > 0);
+/** 对象列标题 = 对象类型的标题字段（static GET /object-types/{id}/meta 的 titleProp）；拿不到时用对象类型名 */
+const titleNames = reactive<Record<string, string>>({});
+watch(() => base.value.objKind, (k) => {
+  if (!k || !isStaticReal() || titleNames[k]) return;
+  getObjectTypeMeta(k).then((m) => {
+    const p = m.properties.find((x) => x.key === m.titleProp);
+    if (p) titleNames[k] = p.name;
+  }, () => { /* 后台没起来 / 无该对象类型：用对象类型名 */ });
+}, { immediate: true });
+const objTitle = computed(() => titleNames[base.value.objKind] ?? objKindLabel(base.value.objKind) ?? '对象');
 const hitCols = computed(() => [
   { title: '命中时间', dataIndex: 'at', width: 172 },
   { title: '告警 / 命中编号', key: 'id', width: 200 },
-  { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
-  ...(base.value.objKind === 'product' ? [STORE_COL] : []),
+  { title: objTitle.value, key: 'obj', ellipsis: true },
+  ...(hasDims(hits.value.items) ? [DIM_COL] : []),
   { title: '命中值', dataIndex: 'value', width: 200, ellipsis: { showTitle: true } },
   { title: '阈值', dataIndex: 'threshold', width: 160, ellipsis: { showTitle: true } },
   { title: '处理状态', key: 'result', width: 110 },
@@ -287,7 +360,7 @@ const recentHits = computed(() => (live.value ? remote.recent : [...hitsOf(base.
 const recentCols = computed(() => [
   { title: '命中时间', dataIndex: 'at', width: 172 },
   { title: '告警 / 命中编号', key: 'id', width: 200 },
-  { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
+  { title: objTitle.value, key: 'obj', ellipsis: true },
   { title: '命中值', dataIndex: 'value', width: 200, ellipsis: { showTitle: true } },
   { title: '处理状态', key: 'result', width: 110 },
 ]);
@@ -315,12 +388,12 @@ function runReplay() {
 const result = computed(() => (!ran.value ? null : live.value ? (remote.replay?.k === replayKey.value ? remote.replay : null)
   : replay(base.value, rrange.value as '7d' | '30d', rver.value === 'draft')));
 const rq = usePagedQuery({ defaultSize: 9, prefix: 'r' });
-const samples = computed(() => paginate(result.value?.samples ?? [], { page: rq.page.value, size: rq.size.value }));
+const samples = computed(() => paginate((result.value?.samples ?? []) as (ReplaySampleDto & DimRow)[], { page: rq.page.value, size: rq.size.value }));
 const dedupeText = computed(() => (live.value ? remote.replay?.dedupeReason ?? '' : dedupeReason(base.value)));
 const sampleCols = computed(() => [
   { title: '时间', dataIndex: 'at', width: 172 },
-  { title: base.value.objKind === 'product' ? '商品' : '对象', key: 'obj', ellipsis: true },
-  ...(base.value.objKind === 'product' ? [STORE_COL] : []),
+  { title: objTitle.value, key: 'obj', ellipsis: true },
+  ...(hasDims(result.value?.samples ?? []) ? [DIM_COL] : []),
   { title: '命中值', dataIndex: 'value', width: 220, ellipsis: { showTitle: true } },
   { title: '与实际命中对比', key: 'diff', width: 300, ellipsis: true },
 ]);
@@ -374,7 +447,7 @@ const verCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openChange(NEW_RULE)">新建规则</a-button></a-tooltip>
+    <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openNew">新建规则</a-button></a-tooltip>
   </Teleport>
 
   <div class="ru">
@@ -572,7 +645,7 @@ const verCols = [
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'id'"><a class="num" @click="openHit(record)">{{ record.id }}</a></template>
               <template v-else-if="column.key === 'obj'"><ObjRef :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef></template>
-              <template v-else-if="column.key === 'store'"><ObjRef v-if="record.storeId" kind="store" :id="record.storeId">{{ record.storeLabel }}</ObjRef><span v-else class="c-3">--</span></template>
+              <template v-else-if="column.key === 'dims'"><template v-if="dimsOf(record).length"><template v-for="(dm, i) in dimsOf(record)" :key="`${dm.objKind}:${dm.id}`">{{ i ? '、' : '' }}<ObjRef :kind="dm.objKind" :id="dm.id">{{ dm.label ?? dm.id }}</ObjRef></template></template><span v-else class="c-3">--</span></template>
               <template v-else-if="column.key === 'result'"><a-badge :status="resultBadge(record.result)" :text="record.result" /></template>
             </template>
           </a-table>
@@ -606,7 +679,7 @@ const verCols = [
             <a-table :columns="sampleCols" :data-source="samples.items" :pagination="false" size="middle" row-key="key" :locale="{ emptyText: '该时间范围内没有命中样本' }">
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'obj'"><ObjRef :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef></template>
-                <template v-else-if="column.key === 'store'"><ObjRef v-if="record.storeId" kind="store" :id="record.storeId">{{ record.storeLabel }}</ObjRef><span v-else class="c-3">--</span></template>
+                <template v-else-if="column.key === 'dims'"><template v-if="dimsOf(record).length"><template v-for="(dm, i) in dimsOf(record)" :key="`${dm.objKind}:${dm.id}`">{{ i ? '、' : '' }}<ObjRef :kind="dm.objKind" :id="dm.id">{{ dm.label ?? dm.id }}</ObjRef></template></template><span v-else class="c-3">--</span></template>
                 <template v-else-if="column.key === 'diff'"><a-badge status="default" :text="record.diff === '被去重' ? `被去重 · ${dedupeText}` : record.diff" /></template>
               </template>
             </a-table>
@@ -640,7 +713,7 @@ const verCols = [
       <a-descriptions :column="1" bordered size="small">
         <a-descriptions-item label="规则">{{ base.id }} {{ base.name }} · v{{ base.version }}</a-descriptions-item>
         <a-descriptions-item label="对象"><ObjRef :kind="hitOpen.objKind" :id="hitOpen.objId">{{ hitOpen.objLabel }}</ObjRef></a-descriptions-item>
-        <a-descriptions-item v-if="hitOpen.storeId" label="门店"><ObjRef kind="store" :id="hitOpen.storeId">{{ hitOpen.storeLabel }}</ObjRef></a-descriptions-item>
+        <a-descriptions-item v-if="dimsOf(hitOpen).length" label="维度"><template v-for="(dm, i) in dimsOf(hitOpen)" :key="`${dm.objKind}:${dm.id}`">{{ i ? '、' : '' }}<ObjRef :kind="dm.objKind" :id="dm.id">{{ dm.label ?? dm.id }}</ObjRef></template></a-descriptions-item>
         <a-descriptions-item label="命中值">{{ hitOpen.value }}，阈值 {{ hitOpen.threshold }}</a-descriptions-item>
         <a-descriptions-item label="命中时间"><span class="num">{{ hitOpen.at }}</span></a-descriptions-item>
         <a-descriptions-item v-if="hitOpen.alert" label="级别 / 处理人">{{ hitOpen.alert.level }} · {{ hitOpen.alert.assignee ?? '未认领' }}</a-descriptions-item>
@@ -659,6 +732,12 @@ const verCols = [
     </template>
   </a-drawer>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onChangeOk" />
+  <a-modal v-model:open="newOpen" title="新建规则" ok-text="下一步：选择变更单" @ok="onNewOk">
+    <a-form layout="vertical">
+      <a-form-item label="对象类型" required><a-select v-model:value="newForm.objKind" :options="objKindOptions" show-search option-filter-prop="label" /></a-form-item>
+      <a-form-item label="规则名称"><a-input v-model:value="newForm.name" placeholder="未命名规则" :maxlength="60" /></a-form-item>
+    </a-form>
+  </a-modal>
 </template>
 
 <style scoped>

@@ -25,15 +25,16 @@ import { useDraftView } from '../useDraftView';
 import { useConfirmStore } from '@/stores/confirm';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import {
-  LC_DRAFT_EDITS, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
+  LC_DRAFT_EDITS, OBJ_TYPE_KIND, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
 } from '@/mock/lifecycle';
 import { actionApi, actionTypes, eventTypes, loadSnapshot } from '@/api/action';
 import { message } from 'ant-design-vue';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, getLifecycle, listLifecycleChanges, listLifecycleIllegal, saveLifecycleDraft, type LifecycleDto,
+  dynamicApi, getLifecycle, listLifecycleChanges, listLifecycleIllegal, saveLifecycleDraft, crErrText, type LifecycleDto,
 } from '@/api/dynamic';
+import { OBJECT_TYPE_LIST, isStaticReal, loadStatic } from '@/api/static';
 import type { LcChange, LcIllegal } from '@/mock/lifecycle';
 
 const props = defineProps<{ objectId: string; readonly: boolean }>();
@@ -45,7 +46,11 @@ const { draft, isDraft, editTip, readonly: histRo, reason } = useDraftView('obje
 
 const editable = computed(() => !props.readonly && isDraft.value);
 const roTip = computed(() => (histRo.value ? reason.value : editTip.value || '只读'));
-const objName = computed(() => OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
+/* 对象类型目录：static 开关切到真接口时取本体对象类型（GET /object-types），否则用 mock 的对象类型表 */
+const otTick = ref(0);
+if (isStaticReal()) loadStatic(['objects']).then(() => { otTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 对象类型目录加载失败', e); });
+const objType = computed(() => { void otTick.value; return OBJECT_TYPE_LIST.find((o) => o.id === props.objectId); });
+const objName = computed(() => objType.value?.name ?? OBJ_TYPE_NAME[props.objectId] ?? props.objectId);
 
 /* ───── 生效版本（历史版本取当时发布时间） ───── */
 const histAt = computed(() => (histRo.value && app.viewVersion ? releaseByVer(app.viewVersion)?.publishedAt ?? null : null));
@@ -70,7 +75,7 @@ async function persist() {
     const r = await saveLifecycleDraft(props.objectId, cr, edits.value);
     remote.edits[key] = r.edits;
   } catch (e) {
-    message.error(isApiError(e) ? e.message : String(e));
+    message.error(isApiError(e) ? crErrText(e) : String(e));
     await loadLc();
   }
 }
@@ -259,7 +264,8 @@ if (live.value) {
   watch(lcKey, () => { remote.lc = null; loadLc(); }, { immediate: true });
   watch(() => [lcKey.value, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true });
 }
-const refKind = computed(() => (['order', 'store', 'product'].includes(props.objectId) ? props.objectId : ''));
+/** 状态变化里的对象可点开：对象类型在本体里（真接口）或 mock 对象类型表里就按对象类型 id 引用 */
+const refKind = computed(() => (objType.value || OBJ_TYPE_KIND[props.objectId] ? props.objectId : ''));
 const defCols = [
   { title: '编号', key: 'id', width: 64 },
   { title: '迁移', key: 'tr', width: 170 },
@@ -269,13 +275,13 @@ const defCols = [
   { title: '结果', key: 'effect', width: 210, ellipsis: true },
   { title: '近 7 天', key: 'weekly', width: 90, align: 'right' as const },
 ];
-const chgCols = [
+const chgCols = computed(() => [
   { title: '时间', key: 'at', width: 170 },
   { title: objName.value, key: 'obj', width: 260 },
   { title: '变化', key: 'tr', width: 170 },
   { title: '依据', key: 'rule' },
   { title: '来源', key: 'by', width: 240 },
-];
+]);
 /* 动作 / 事件类型目录：action 开关切到真接口时读其接口（只读，src/api/action.ts），否则读 mock */
 const catTick = ref(0);
 if (actionApi.isReal()) loadSnapshot().then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 动作 / 事件类型目录加载失败', e); });

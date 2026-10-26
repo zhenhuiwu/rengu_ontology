@@ -12,6 +12,7 @@ from app.modules.dynamic.rules_models import (
     LifecycleTransition,
     LifecycleVersion,
     Rule,
+    RuleDraft,
     RuleHit,
     RuleVersion,
     Scenario,
@@ -152,3 +153,97 @@ async def test_disabled_rule_open_discard_stays_disabled(dyn, client):  # noqa: 
     assert (await client.post(f"{API}/rules/R-025/draft", json={"cr": "CR-0099"})).status_code == 200
     assert (await client.delete(f"{API}/rules/R-025/draft", params={"cr": "CR-0099"})).status_code == 204
     assert (await client.get(f"{API}/rules/R-025")).json()["status"] == "已停用"  # 不被误改成已发布
+
+
+async def _cr(client, title: str) -> str:
+    r = await client.post(f"{API}/change-requests", json={"title": title})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def _items(client, cr: str, kind: str, tid: str):
+    r = await client.get(f"{API}/change-requests/{cr}/items", params={"kind": kind, "targetId": tid})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_rule_draft_registers_cr_items(dyn, client):  # noqa: F811
+    """规则草稿登记到变更单（cr_target + cr_items，同一事务）。
+
+    新建 / 保存（带 lockVersion）/ 提交不再 CR_EMPTY / 放弃不留孤儿。
+    """
+    cr = await _cr(client, "规则闭环")
+    rid = (await client.post(f"{API}/rules", json={"cr": cr, "name": "新规则 B"})).json()["id"]
+    one = (await client.get(f"{API}/change-requests/{cr}")).json()
+    assert {"kind": "rule", "id": rid, "isNew": True, "name": "新规则 B"} in one["targets"]
+    rows = await _items(client, cr, "rule", rid)
+    assert rows and {x["section"] for x in rows} == {"config"} and all(x["op"] == "add" for x in rows)
+    d = (await client.get(f"{API}/rules/{rid}", params={"view": "draft", "cr": cr})).json()
+    lock = (await client.get(f"{API}/change-requests/{cr}")).json()["lockVersion"]
+    body = {"cr": cr, "autoStage": {**d["draft"]["autoStage"], "enabled": False}, "lockVersion": lock}
+    r = await client.put(f"{API}/rules/{rid}/draft", json=body)
+    assert r.status_code == 200, r.text
+    saved = r.json()
+    assert saved["lockVersion"] > lock and saved["crChanges"] >= 1 and saved["draft"]
+    err(await client.put(f"{API}/rules/{rid}/draft", json=body), 409, "VERSION_CONFLICT")  # 旧 lockVersion
+    r = await client.post(f"{API}/change-requests/{cr}:submit")
+    assert r.status_code == 200 or r.json()["code"] != "CR_EMPTY", r.text
+
+    # 已发布规则发起变更：登记目标；保存草稿 → autoStage 改动行；放弃 → 目标与行一并删除，规则草稿删除
+    cr2 = await _cr(client, "规则变更")
+    assert (await client.post(f"{API}/rules/R-015/draft", json={"cr": cr2})).status_code == 200
+    d = (await client.get(f"{API}/rules/R-015", params={"view": "draft", "cr": cr2})).json()
+    chg = {
+        "cr": cr2,
+        "autoStage": {**d["draft"]["autoStage"], "enabled": not d["draft"]["autoStage"]["enabled"]},
+    }
+    r = await client.put(f"{API}/rules/R-015/draft", json=chg)
+    assert r.status_code == 200, r.text
+    rows = await _items(client, cr2, "rule", "R-015")
+    assert [(x["section"], x["key"], x["op"]) for x in rows] == [("config", "autoStage.enabled", "update")]
+    assert (await client.delete(f"{API}/rules/R-015/draft", params={"cr": cr2})).status_code == 204
+    assert await _items(client, cr2, "rule", "R-015") == []
+    tg = (await client.get(f"{API}/change-requests/{cr2}")).json()["targets"]
+    assert all(t["id"] != "R-015" for t in tg)
+
+
+async def test_hits_use_generic_dims(dyn, client):  # noqa: F811
+    items = (await client.get(f"{API}/rules/R-007/hits", params={"range": "30d", "size": 200})).json()[
+        "items"
+    ]
+    assert items and all("dims" in x and "storeId" not in x for x in items)
+    assert any(x["dims"] and x["dims"][0]["objKind"] == "store" for x in items)
+
+
+async def test_apply_cr_promotes_rule_drafts(dyn, client):  # noqa: F811
+    """发布写回 apply_cr：新规则 → v1 已发布；已发布 → version+1；停用规则保持停用；重复调用无副作用。"""
+    from app.modules.dynamic.writeback import apply_cr
+
+    cr = await _cr(client, "发布写回")
+    rid = (await client.post(f"{API}/rules", json={"cr": cr, "name": "新规则 W"})).json()["id"]
+    old15 = (await client.get(f"{API}/rules/R-015")).json()
+    assert (await client.post(f"{API}/rules/R-015/draft", json={"cr": cr})).status_code == 200
+    d = (await client.get(f"{API}/rules/R-015", params={"view": "draft", "cr": cr})).json()["draft"]
+    flip = not d["autoStage"]["enabled"]
+    r = await client.put(
+        f"{API}/rules/R-015/draft", json={"cr": cr, "autoStage": {**d["autoStage"], "enabled": flip}}
+    )
+    assert r.status_code == 200, r.text
+    old25 = (await client.get(f"{API}/rules/R-025")).json()
+    assert (await client.post(f"{API}/rules/R-025/draft", json={"cr": cr})).status_code == 200
+
+    out = await apply_cr(dyn, cr, by="U010001")
+    assert sorted(out["rules"]) == sorted([rid, "R-015", "R-025"]) and out["lifecycles"] == []
+    new = (await client.get(f"{API}/rules/{rid}")).json()
+    assert new["version"] == 1 and new["status"] == "已发布" and new["name"] == "新规则 W"
+    r15 = (await client.get(f"{API}/rules/R-015")).json()
+    assert r15["version"] == old15["version"] + 1 and r15["status"] == "已发布"
+    assert r15["autoStage"]["enabled"] is flip
+    r25 = (await client.get(f"{API}/rules/R-025")).json()
+    assert r25["version"] == old25["version"] + 1 and r25["status"] == "已停用"
+    assert not (await dyn.scalars(select(RuleDraft).where(RuleDraft.cr_code == cr))).all()
+    vers = (await dyn.scalars(select(RuleVersion.by).where(RuleVersion.version == r15["version"]))).all()
+    assert "王敏" in vers
+    # 幂等
+    assert await apply_cr(dyn, cr, by="U010001") == {"rules": [], "lifecycles": []}
+    assert (await client.get(f"{API}/rules/R-015")).json()["version"] == r15["version"]

@@ -139,8 +139,9 @@ class RuleHit(CodeMixin, AppendOnlyTableMixin, Base):
     obj_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     obj_id: Mapped[str] = mapped_column(String(64), nullable=False)
     obj_label: Mapped[str] = mapped_column(String(200), nullable=False)
-    store_id: Mapped[str | None] = mapped_column(String(64))
-    store_label: Mapped[str | None] = mapped_column(String(200))
+    dims: Mapped[list] = mapped_column(
+        JsonType, nullable=False, default=list, comment="通用维度值 [{objKind,id,label}]（同 alert.dims）"
+    )
     value: Mapped[str] = mapped_column(String(200), nullable=False)
     threshold: Mapped[str] = mapped_column(String(200), nullable=False)
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
@@ -165,6 +166,9 @@ class Scenario(CodeMixin, MutableTableMixin, Base):
         enum_column(ScenarioStatus, 16), nullable=False, index=True
     )
     scope: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    template_code: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="demo_retail", comment="推演模板编号（SC_TEMPLATES.code）"
+    )
     drivers: Mapped[dict] = mapped_column(JsonType, nullable=False)
     fail_reason: Mapped[str | None] = mapped_column(Text)
     staged: Mapped[list[str]] = mapped_column(

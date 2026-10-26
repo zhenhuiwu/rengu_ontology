@@ -29,6 +29,8 @@ export interface ScResult { ranAt: string; weeks: string[]; baseSales: number[];
 export interface Scenario {
   id: string; name: string; owner: string; createdAt: string; baseVer: string;
   status: ScStatus; scope: ScScope; drivers: ScDrivers;
+  /** 推演模板编号（mock/scenarioTemplates.ts）；缺省为演示模板 */
+  templateCode?: string;
   result?: ScResult; failReason?: string;
   /** 已转为暂存动作的动作编号（动作中心 待确认） */
   staged: string[];

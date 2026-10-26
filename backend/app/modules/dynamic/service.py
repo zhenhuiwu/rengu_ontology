@@ -59,6 +59,7 @@ from app.modules.dynamic.schemas import (
     AlertLogOut,
     AlertOut,
     AlertPage,
+    DimOut,
     StageIn,
 )
 
@@ -113,9 +114,15 @@ def validation_failed(field: str, message: str) -> AppError:
     )
 
 
-def approver_for_alert(obj_kind: str) -> str:
-    """Alerts.vue L173 写死：商品 → 品类经理 王敏，其他 → 区域运营 陈立军（[推断 P5] 未做）。"""
-    return "品类经理 王敏" if obj_kind == "product" else "区域运营 陈立军"
+def approver_for_action(catalog: Any, action: str | None) -> str | None:
+    """发起动作的审批人：取动作类型的审批人配置（ACTION_META.approver），不按对象类型写死。"""
+    meta = catalog.action_meta(action) if action else None
+    return (meta or {}).get("approver") or None
+
+
+def kind_label(catalog: Any, kind: str) -> str:
+    """对象类型显示名（对象类型目录；未登记的类型原样返回编号）。"""
+    return (catalog.meta().get("objKindLabel") or {}).get(kind) or kind
 
 
 async def _code_map(session: AsyncSession, model: Any, ids: Iterable[int | None]) -> dict[int, str]:
@@ -831,17 +838,24 @@ class AlertService:
         rows = (await self.session.scalars(select(ActionRun).where(ActionRun.id.in_(ids)))).all()
         return {r.id: r for r in rows}
 
-    @staticmethod
-    def _out(a: Alert, run: ActionRun | None) -> AlertOut:
+    def _out(self, a: Alert, run: ActionRun | None) -> AlertOut:
         return AlertOut(
             id=a.code,
             level=a.level.value,
             rule_id=a.rule_code,
             obj_kind=a.obj_kind,
+            obj_kind_label=kind_label(self.catalog, a.obj_kind),
             obj_id=a.obj_id,
             obj_label=a.obj_label,
-            store_id=a.store_id,
-            store_label=a.store_label,
+            dims=[
+                DimOut(
+                    obj_kind=d["objKind"],
+                    id=d["id"],
+                    label=d["label"],
+                    kind_label=kind_label(self.catalog, d["objKind"]),
+                )
+                for d in (a.dims or [])
+            ],
             value=a.value,
             threshold=a.threshold,
             triggered_at=a.triggered_at,
@@ -947,6 +961,7 @@ class AlertService:
         return AlertDetail(
             **self._out(a, run).model_dump(),
             rule=rule,
+            approver=approver_for_action(self.catalog, (rule or {}).get("action")),
             recent7d=await self._recent7d(a),
             locked=self._locked(run),
             log=[AlertLogOut(time=x.at, text=x.text, who=x.actor, abnormal=x.abnormal or None) for x in logs],
@@ -1066,7 +1081,7 @@ class AlertService:
         )
         if old is None:
             await acts._check_criteria(t["id"], {"objKind": a.obj_kind, "objId": a.obj_id, "alertId": a.code})
-            approver = approver_for_alert(a.obj_kind)
+            approver = approver_for_action(self.catalog, rule["action"])
             run = await acts.create_run(
                 type_=t,
                 status=ActionStatus.approving,

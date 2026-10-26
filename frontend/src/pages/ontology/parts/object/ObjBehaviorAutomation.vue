@@ -148,7 +148,7 @@ const triggerText = (r: RuleDef) => (r.trigger.kind === '事件' ? `事件 · ${
             <template v-else-if="column.key === 'rule'"><RouterLink :to="{ path: '/build/ontology/rules', query: { rule: record.ruleId } }"><span class="num">{{ record.ruleId }}</span> {{ ruleName(record.ruleId) }}</RouterLink></template>
             <template v-else-if="column.key === 'obj'">
               <ObjRef :kind="(record as Hit).objKind" :id="record.objId">{{ record.objLabel }}</ObjRef>
-              <span v-if="record.storeLabel && record.objKind !== 'store'" class="c-3"> · {{ record.storeLabel }}</span>
+              <template v-for="dm in ((record as Hit).dims ?? []).filter((x) => x.objKind !== (record as Hit).objKind)" :key="`${dm.objKind}:${dm.id}`"><span class="c-3"> · {{ dm.label ?? dm.id }}</span></template>
             </template>
             <template v-else-if="column.key === 'value'"><span :title="`${record.value} / ${record.threshold}`"><span class="num">{{ record.value }}</span><span class="c-3"> / {{ record.threshold }}</span></span></template>
             <template v-else-if="column.key === 'result'"><a-badge :status="resultBadge(record.result)" :text="record.result" /></template>

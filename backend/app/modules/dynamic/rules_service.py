@@ -22,9 +22,11 @@ from app.core.clock import now
 from app.core.errors import AppError, NotFound
 from app.core.schema import _fmt_dt, _fmt_dt_seconds, parse_display_dt
 from app.modules.action.models import ActionType
+from app.modules.dynamic.cr_link import CrLink, lifecycle_sections, rule_sections
 from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertLevel
 from app.modules.dynamic.rules_models import (
     HitResult,
+    LcStateKind,
     Lifecycle,
     LifecycleChange,
     LifecycleDraft,
@@ -41,16 +43,26 @@ from app.modules.dynamic.rules_models import (
     ScenarioStatus,
 )
 from app.modules.dynamic.rules_schemas import (
-    DriversIn,
     LifecycleDraftIn,
     ReplayIn,
     RuleCreateIn,
     RuleDraftIn,
     ScenarioRunIn,
-    ScopeIn,
 )
-from app.modules.dynamic.rules_sim import _products, _stores, seeded, simulate, stage_plan, to_fixed_str
+from app.modules.dynamic.rules_sim import _products, _stores, seeded, to_fixed_str
+from app.modules.dynamic.scenario_templates import (
+    defaults,
+    driver_fields,
+    engine_of,
+    scope_options,
+    template_of,
+    templates,
+)
+from app.modules.dynamic.scenario_templates import no_driver as tpl_no_driver
+from app.modules.dynamic.scenario_templates import validate as tpl_validate
 from app.modules.dynamic.sections import lifecycle_def, lifecycle_head, rule_def, version_row
+from app.modules.static.models import ObjectType
+from app.modules.static.schemas import TargetIn
 from app.modules.versioning.models import OntologyRelease
 
 # 前端写死的「今天」口径（rules.ts / lifecycle.ts）
@@ -102,6 +114,11 @@ def dedupe_reason(d: dict[str, Any]) -> str:
     skip = {"规则", "日期", "周", "小时", "生效日期", "批次"}
     dims = "".join(x.strip() for x in dd.split("+") if x.strip() not in skip)
     return f"同一{dims}已命中过" if cd == "不重复" else f"同一{dims} {cd}内已命中"
+
+
+def hit_dims(store_id: str | None, store_label: str | None) -> list[dict[str, Any]]:
+    """演示数据的门店 → 通用维度（rule_hit.dims 种子、回放新增样本用；库里 rule_hit 只存 dims）。"""
+    return [{"objKind": "store", "id": store_id, "label": store_label or store_id}] if store_id else []
 
 
 def store_of_key(key: str) -> dict[str, Any]:
@@ -236,8 +253,7 @@ class RuleService:
             "objKind": h.obj_kind,
             "objId": h.obj_id,
             "objLabel": h.obj_label,
-            "storeId": h.store_id,
-            "storeLabel": h.store_label,
+            "dims": list(h.dims or []),
             "value": h.value,
             "threshold": h.threshold,
             "alertId": alert.code if alert else None,
@@ -326,8 +342,7 @@ class RuleService:
                     "objKind": h["objKind"],
                     "objId": h["objId"],
                     "objLabel": h["objLabel"],
-                    "storeId": h["storeId"],
-                    "storeLabel": h["storeLabel"],
+                    "dims": h["dims"],
                     "value": h["value"],
                     "diff": diff,
                 }
@@ -350,8 +365,7 @@ class RuleService:
                         "objKind": h["objKind"],
                         "objId": p["sku"] if p else h["objId"],
                         "objLabel": f"{p['name']} {p['spec']}" if p else h["objLabel"],
-                        "storeId": st["id"] if st else h["storeId"],
-                        "storeLabel": st["name"] if st else h["storeLabel"],
+                        "dims": hit_dims(st["id"], st["name"]) if st else h["dims"],
                         "value": f"{to_fixed_str(17 + rnd(), 2)}%" if is_p else h["value"],
                         "diff": "新增命中",
                     }
@@ -384,7 +398,7 @@ class RuleService:
             owner=self.user.name,
             status=RuleStatus.changing,
             core=False,
-            obj_kind=body.obj_kind or "product",
+            obj_kind=body.obj_kind or await self._first_obj_kind(),
             level=AlertLevel.medium,
             output=RuleOutput.alert,
             conds=[],
@@ -397,7 +411,22 @@ class RuleService:
         await self.session.flush()
         if body.cr:
             await self._open(r, body.cr)
+            cur = await self.draft_def(r, (await self._drafts())[r.id], await self._actions())
+            assert cur is not None
+            await CrLink(self.session, self.user).put(
+                body.cr, self._target(r), {"config": rule_sections(None, cur)["config"]}, None
+            )
         return await self.detail(r.code, view="draft" if body.cr else None)
+
+    async def _first_obj_kind(self) -> str:
+        """新建规则默认对象类型 = 本体里第一个对象类型（表空时退回 product）。"""
+        return (
+            await self.session.scalar(select(ObjectType.code).order_by(ObjectType.id).limit(1)) or "product"
+        )
+
+    @staticmethod
+    def _target(r: Rule) -> TargetIn:
+        return TargetIn(kind="rule", id=r.code, is_new=r.version is None, name=r.name)
 
     async def _open(self, r: Rule, cr: str) -> RuleDraft:
         d = (await self._drafts()).get(r.id)
@@ -417,6 +446,7 @@ class RuleService:
         """发起变更 / 加入已有变更单：登记规则草稿（幂等；已在别的草稿单里 409）。"""
         r = await self.get(code)
         await self._open(r, cr)
+        await CrLink(self.session, self.user).join(cr, self._target(r))
         return await self.detail(code, view="draft")
 
     async def discard_draft(self, code: str, cr: str | None) -> None:
@@ -425,6 +455,8 @@ class RuleService:
         d = (await self._drafts()).get(r.id)
         if d is None or (cr and cr != d.cr_code):
             raise NotFound("该规则没有草稿", details={"id": code, "cr": cr})
+        # 同一事务：先删变更单里的登记和草稿行（单子已提交 → CR_LOCKED，整体回滚，不留孤儿），再删规则草稿
+        await CrLink(self.session, self.user).discard(d.cr_code, "rule", r.code)
         await self.session.delete(d)
         if r.version is None:
             await self.session.flush()
@@ -487,9 +519,17 @@ class RuleService:
         d.patch = {**d.patch, "conds": conds, "autoStage": auto}
         d.by, d.at = self.user.name, now()
         await self.session.flush()
+        draft = await self.draft_def(r, d, actions)
+        assert draft is not None
+        pub = None if r.version is None else self._def(r, actions)
+        lv = await CrLink(self.session, self.user).put(
+            d.cr_code, self._target(r), rule_sections(pub, draft), body.lock_version
+        )
         return {
             "cr": d.cr_code,
-            "draft": await self.draft_def(r, d, actions),
+            "lockVersion": lv and lv["lockVersion"],
+            "crChanges": lv and lv["changes"],
+            "draft": draft,
             "message": f"已保存到草稿 {d.cr_code}，发布前不影响线上规则",
         }
 
@@ -497,23 +537,6 @@ class RuleService:
 # ======================================================================
 # 情景推演
 # ======================================================================
-
-
-def no_driver(d: dict[str, Any]) -> bool:
-    return (
-        d["pricePct"] == 0
-        and d["replenishPct"] == 0
-        and d["safetyDays"] == 7
-        and (d["promo"] == "无" or d["promoDepth"] == 0)
-    )
-
-
-def drivers_dict(d: DriversIn) -> dict[str, Any]:
-    return d.model_dump(by_alias=True)
-
-
-def scope_dict(s: ScopeIn) -> dict[str, Any]:
-    return s.model_dump(by_alias=True)
 
 
 class ScenarioService:
@@ -587,6 +610,7 @@ class ScenarioService:
             "createdAt": sec(s.created_on),
             "baseVer": vers.get(s.base_release_id) if s.base_release_id else None,
             "status": s.status.value,
+            "templateCode": s.template_code,
             "scope": s.scope,
             "drivers": s.drivers,
             "staged": list(s.staged or []),
@@ -643,8 +667,7 @@ class ScenarioService:
         cur = await self.session.scalar(
             select(OntologyRelease).order_by(OntologyRelease.published_at.desc()).limit(1)
         )
-        from app.modules.dynamic.rules_sim import BASE_DRIVERS
-
+        tpl = template_of(src.template_code if src else None)
         s = Scenario(
             code=await self._next_code(),
             name=f"{src.name}（副本）" if src else "新方案",
@@ -652,8 +675,9 @@ class ScenarioService:
             created_on=now(),
             base_release_id=cur.id if cur else None,
             status=ScenarioStatus.draft,
-            scope=dict(src.scope) if src else {"area": "华东大区全部", "category": "全部品类", "weeks": 8},
-            drivers=dict(src.drivers) if src else dict(BASE_DRIVERS),
+            template_code=tpl["code"],
+            scope=dict(src.scope) if src else defaults(tpl["scope"]),
+            drivers=dict(src.drivers) if src else defaults(driver_fields(tpl)),
             staged=[],
             is_seed=False,
         )
@@ -689,17 +713,13 @@ class ScenarioService:
                 f"已转为 {len(s.staged)} 条暂存动作，配置锁定；如需调整请“复制为新方案”",
                 409,
             )
-        scope, drivers = scope_dict(body.scope), drivers_dict(body.drivers)
-        if scope["area"] not in _meta("SC_AREAS"):
-            raise validation([("scope.area", "范围不在可选列表里")])
-        if scope["category"] not in _meta("SC_CATEGORIES"):
-            raise validation([("scope.category", "品类不在可选列表里")])
-        if drivers["promo"] not in _meta("PROMO_TYPES"):
-            raise validation([("drivers.promo", f"促销方式只能是：{'、'.join(_meta('PROMO_TYPES'))}")])
-        if drivers["promo"] == "无":
-            drivers["promoDepth"], drivers["promoWeeks"] = 0, 0
-        if no_driver(drivers):
-            raise fail("SCENARIO_NO_DRIVER", "至少调整一个驱动（价格 / 库存 / 促销）", 422)
+        tpl = template_of(s.template_code)
+        opts = await scope_options(self.session, self.user, tpl)
+        scope, drivers, errs = tpl_validate(tpl, body.scope, body.drivers, opts)
+        if errs:
+            raise validation(errs)
+        if tpl_no_driver(tpl, drivers):
+            raise fail("SCENARIO_NO_DRIVER", tpl["noDriverHint"], 422)
         if body.name and body.name.strip():
             s.name = body.name.strip()
         s.scope, s.drivers, s.status, s.fail_reason = scope, drivers, ScenarioStatus.running, None
@@ -732,7 +752,7 @@ class ScenarioService:
     async def _compute(self, s: Scenario) -> None:
         scope, drivers = s.scope, s.drivers
         at = now()
-        res = simulate(scope, drivers, sec(at))
+        res = engine_of(s.template_code)["simulate"](scope, drivers, sec(at))
         self.session.add(
             ScenarioResult(
                 scenario_id=s.id,
@@ -779,7 +799,7 @@ class ScenarioService:
             if s.status != ScenarioStatus.done:
                 raise fail("COMPARE_LIMIT", f"{s.code} 未完成，只能对比已完成的方案", 422)
             out.append(await self.out(s, vers, full=True))
-        same = len({(o["scope"]["area"], o["scope"]["category"], o["scope"]["weeks"]) for o in out}) == 1
+        same = len({(o["templateCode"], json.dumps(o["scope"], sort_keys=True)) for o in out}) == 1
         return {"items": out, "sameScope": same}
 
     async def _plan(self, s: Scenario) -> list[dict[str, Any]]:
@@ -787,7 +807,7 @@ class ScenarioService:
         if res is None:
             return []
         full = {**self.result_out(res), "impacts": await self._impacts(s)}
-        return stage_plan(res.scope, res.drivers, full)
+        return engine_of(s.template_code)["stage_plan"](res.scope, res.drivers, full)
 
     async def plan(self, code: str) -> list[dict[str, Any]]:
         return await self._plan(await self.get(code))
@@ -835,13 +855,13 @@ class ScenarioService:
         return {"staged": ids, "message": f"已暂存 {len(ids)} 条动作到动作中心（待确认）"}
 
     def meta(self) -> dict[str, Any]:
-        from app.modules.dynamic.rules_sim import BASE_DRIVERS
-
+        tpl = template_of(None)
         return {
+            "templates": templates(),
             "areas": _meta("SC_AREAS"),
             "categories": _meta("SC_CATEGORIES"),
             "promoTypes": _meta("PROMO_TYPES"),
-            "baseDrivers": BASE_DRIVERS,
+            "baseDrivers": defaults(driver_fields(tpl)),
             "statuses": ["全部", *[x.value for x in ScenarioStatus]],
         }
 
@@ -922,6 +942,9 @@ class LifecycleService:
             if cr:
                 q = q.where(LifecycleDraft.cr_code == cr)
             d = await self.session.scalar(q.order_by(LifecycleDraft.id.desc()).limit(1))
+            link = CrLink(self.session, self.user)
+            if d and await link.exists(d.cr_code) and not await link.registered(d.cr_code, "object", lc.code):
+                d = None  # 变更单里已放弃本对象（static DELETE /targets），残留草稿行不再算数
             draft = {"cr": d.cr_code, "edits": d.edits} if d else {"cr": cr, "edits": empty_edits()}
         out["draft"] = draft
         return out
@@ -1017,7 +1040,16 @@ class LifecycleService:
         else:
             d.edits = edits
         await self.session.flush()
-        return {"cr": body.cr, "edits": edits}
+        target = TargetIn(kind="object", id=lc.code, name=lc.object_name)
+        lv = await CrLink(self.session, self.user).put(
+            body.cr, target, lifecycle_sections(cur, edits), body.lock_version
+        )
+        return {
+            "cr": body.cr,
+            "edits": edits,
+            "lockVersion": lv and lv["lockVersion"],
+            "crChanges": lv and lv["changes"],
+        }
 
 
 def empty_edits() -> dict[str, Any]:
@@ -1028,7 +1060,16 @@ def validate_lc_edits(cur: dict[str, Any], body: LifecycleDraftIn) -> list[tuple
     errs: list[tuple[str, str]] = []
     names = {s["name"] for s in cur["states"]}
     keys = {s["key"] for s in cur["states"]}
+    kinds = {k.value for k in LcStateKind}
     for i, s in enumerate(body.add_states):
+        if "key" in s and not isinstance(s["key"], str):
+            errs.append((f"addStates[{i}].key", "状态编号必须是文本"))
+        if not isinstance(s.get("name"), str):
+            errs.append((f"addStates[{i}].name", "状态名称必须是文本"))
+        if s.get("kind") not in kinds:
+            errs.append((f"addStates[{i}].kind", f"状态类型须为 {' / '.join(sorted(kinds))} 之一"))
+        if errs and errs[-1][0].startswith(f"addStates[{i}]"):
+            continue
         n = str(s.get("name") or "").strip()
         if not n:
             errs.append((f"addStates[{i}].name", "状态名称必填"))
@@ -1040,6 +1081,10 @@ def validate_lc_edits(cur: dict[str, Any], body: LifecycleDraftIn) -> list[tuple
     pairs = {(t["from"], t["to"]) for t in cur["transitions"] if t["id"] not in body.remove_transitions}
     for i, t in enumerate(body.add_transitions):
         f, to, by = t.get("from"), t.get("to"), str(t.get("by") or "").strip()
+        bad = [k for k in ("from", "to") if t.get(k) is not None and not isinstance(t.get(k), str)]
+        errs += [(f"addTransitions[{i}].{k}", "须是状态编号（文本）") for k in bad]
+        if bad:
+            continue
         if not f or f not in keys:
             errs.append((f"addTransitions[{i}].from", "原状态必填且须存在"))
         if not to or to not in keys:

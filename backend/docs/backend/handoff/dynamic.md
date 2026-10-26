@@ -25,12 +25,29 @@
 - 目录：规则页、生命周期页的动作类型 / 事件类型 / 参数读 Palantir `src/api/action.ts`（`actionTypes()`、`eventTypes()`、`paramsOf`，action 开关为真接口时先 `loadSnapshot()`）；规则页指标名在 static 开关为真接口时 `loadStatic(['metrics'])` 后读 `METRIC_LIST`，找不到回退 mock。都是只读调用，没改他们的文件。
 - 审批人校验：`POST /action-runs/{id}:approve` 只有审批人能批（审批人 = “角色 姓名”，按姓名比对；未指定审批人不限），否则 403 `NOT_APPROVER`；`can.approve` / `can.reasons.approve` 同步。mock 页面没有审批按钮（只有“等待 X 审批”文字），按要求不新增界面。
 - 推演异步：`:run` 校验后置“运行中”并回 202（详情），进程内后台任务（FastAPI BackgroundTasks，新开会话）计算；`GET /scenarios/{id}/result` 运行中回 202 `{status:"运行中"}`、失败回 409 `SCENARIO_FAILED`、完成回结果。前端 `waitScenarioResult()` 每 0.8s 轮询（最多 2 分钟）。
-- 变更单草稿提交 / 放弃（按 static-r3 `handoff/static.md`「变更单写接口契约」写好，**默认关**）：`VITE_DYNAMIC_CR_WRITE=1` 且 dynamic 为真接口时，规则页草稿横幅“提交审核”调 `POST /change-requests/{cr}:submit`，“放弃草稿”调 `DELETE /change-requests/{cr}/targets/rule/{id}` + `DELETE /rules/{id}/draft`。静态合并前保持关闭（mock 行为）。
+- **变更单闭环（dynamic-r3，`VITE_DYNAMIC_CR_WRITE` 仍默认关）**：
+  - 后端 `app/modules/dynamic/cr_link.py`：规则 / 生命周期草稿在**同一事务**里调 static `CrWriteService` 登记 cr_target + 写 cr_items（变更单号在 change_request 表里才登记；mock 单号 / 不存在的单号照旧只落 dynamic 草稿表）。规则 kind `rule`，section `conds` / `mapping` / `config`（新规则 config 行全是 add；已发布规则 autoStage.* 为 update）；生命周期 kind `object`（id = 对象类型），section `lc_states` / `lc_transitions`。`PUT …/draft` 可带 `lockVersion`（只校验第一次 PUT），回 `lockVersion` / `crChanges`。`POST /rules` 带库里的 cr 时一并登记 isNew 目标 + config 行，所以提交不会 CR_EMPTY。`DELETE /rules/{id}/draft` 先撤登记再删草稿（CR_LOCKED 时整体回滚，不留孤儿）。
+  - 前端 `src/api/dynamic.ts`：`crOpen`（POST /change-requests 带 target / POST …/targets 加入）、`crDropEmpty`、`crErrText`（CR_EMPTY / CR_BLOCKED（列 details.blocked）/ CR_NO_REVIEWER / CR_LOCKED / VERSION_CONFLICT / TARGET_IN_OTHER_CR「已在 CR-xxxx 中」）、lockVersion 缓存；`CrTarget.name`。
+  - 规则页：新建规则 / 发起变更走真变更单（CR_WRITE 开时），失败用 `useDraftView.cancel(cr, target)` 撤登记，新建的空单删掉；放弃草稿加确认卡；保存草稿不再把 `{cr,draft}` 当详情覆盖。生命周期页保存草稿同样登记、报错用 crErrText（提交 / 放弃在静态 ObjectTypesBody 的 `useStaticCr('object')` 横幅里）。
+  - **默认仍关**。2026-10-26 用私有库 + uvicorn 对真后台 curl 走了一遍：新建空单 → `POST /rules`（带 cr、objKind=order）→ 登记 isNew 目标 + 6 条 config 行 → `PUT …/draft` 带 lockVersion（回新 lockVersion）→ `:submit`（默认审核人王敏，成功，不再 CR_EMPTY）→ 王敏 `:approve`（已通过）→ `POST /releases`（变更单已发布）都通。**断点**：整版发布只给变更单打版本快照，不把 dynamic 的 `rule_draft` / `lifecycle_draft` 应用成已发布版本（规则仍是 version=None、“草稿中”）。dynamic 侧已实现 `apply_cr` 并登记到静态 r4 的写回钩子（见下条）；钩子合入 master 前开 CR_WRITE 会出现“单子已发布、规则没生效”，所以不开。
+- **发布写回（dynamic 侧，r3 第三批）** `backend/app/modules/dynamic/writeback.py`
+  - `apply_cr(session, cr_code, *, by, at=None) -> {"rules": [...], "lifecycles": [...]}`：同一事务（只 flush 不 commit）把该单的草稿转正，返回实际转正的 code。
+    - 规则：新规则 → v1；已发布 → version+1，追加 `rule_version`（by 传用户 code 会换成姓名）；状态还原：变更中 → 已发布，**已停用保持已停用**；写 published_by/at、change_note；删 `rule_draft`。
+    - 生命周期：已发布状态机叠加 edits（addStates / addTransitions / editTransitions / removeTransitions，规则同页面）→ 新 `lifecycle_version`（code `{lc}:v{n}`，带 snapshot）+ 状态 / 迁移行，`lifecycle.version` 指向新版；删 `lifecycle_draft`。状态类型 / 触发方式 / 起止状态无效 → 409 `WRITEBACK_FAILED`（与静态同码，整个发布回滚）。
+    - 幂等：本单没有草稿行就什么都不做。单目标入口 `promote_rule(session, cr, rule_code, by=, at=)` / `promote_lifecycle(session, cr, lc_code, by=, at=)`。
+  - **挂静态钩子**：静态 r4 `app/modules/static/writeback.py` 的 `register_writeback(kind, section, fn)`，钩子签名 `async (ctx: Ctx, target_id, rows: list[CrItem]) -> set[str]`（ctx.session / ctx.cr.code / ctx.by / ctx.now）。本模块 import 时 `register_hooks()`：有该函数就登记 `(rule, conds|mapping|config)` → `rule_hook`、`(object, lc_states|lc_transitions)` → `lifecycle_hook`（都调 promote_*，返回空集合 = 不改静态快照节）；master 上没有该模块则 `HOOKED=False`，只暴露 apply_cr。由 `rules_router.py` import 触发登记（app 加载即生效）。已用 static-r4 工作区代码（含未提交改动）只读拷贝验证：5 个 (kind, section) 都登记成功，重复登记幂等。
+  - 测试：`test_apply_cr_promotes_rule_drafts`（新规则 / R-015 改动 / R-025 停用 + 幂等）、`test_apply_cr_promotes_lifecycle_draft`（加状态 + 加迁移 + 删迁移 + 幂等）、`test_apply_edits_rejects_bad_kind`，都直接调函数。
+  - **CR_WRITE 仍关**：master 上没有静态写回钩子，e2e 发布不会转正草稿；static-r4 合并后（钩子生效）再按上面的 e2e 走一遍，规则变 v1 / 已发布即可打开。
+  - 注意：钩子只对「本单有 cr_item 的段」调用；一张单里开了草稿但没登记任何行（例如只点了发起变更没保存）的规则不会被转正，草稿留在单上（与静态“没改就不写回”一致）。需要的话静态可在 apply_crs 末尾对每张单调一次 `apply_cr(session, cr.code, by=by, at=now)` 兜底（幂等，不会重复转正）。
+  - 新建规则（真接口）先弹「新建规则」框选对象类型（static 真接口取本体对象类型，否则 mock 四类）和名称，再进变更弹窗；`POST /rules` 带 objKind。
 
 ## 未完成
 
-1. **变更单仍是前端 mock**：草稿归属 / 草稿视图来自公共 `useDraftView`（mock `DRAFT_TARGETS` / `CHANGE_REQUESTS`），新建变更单号也是前端生成的；后端 `rule_draft.cr_code` / `lifecycle_draft.cr_code` 是软引用，没有外键。`CR_WRITE` 打开后只有种子里已有的变更单（mock 与库里都有，如 CR-0011）能真正提交 / 放弃。
-2. **生命周期页**：「发起变更」还没调后端开草稿（规则页已做），草稿提交 / 放弃仍是 mock；变更单接口合并后同规则页处理。
+1. **变更单仍是前端 mock（CR_WRITE 关时）**：草稿归属 / 草稿视图来自公共 `useDraftView`（mock `DRAFT_TARGETS` / `CHANGE_REQUESTS`），新建变更单号也是前端生成的；后端 `rule_draft.cr_code` / `lifecycle_draft.cr_code` 是软引用，没有外键。`CR_WRITE` 打开后只有种子里已有的变更单（mock 与库里都有，如 CR-0011）能真正提交 / 放弃。
+2. **生命周期页**：「发起变更」按钮在静态的 `ObjectTypesBody.vue`（`useStaticCr('object')`，不归 dynamic），由静态侧建 / 加入变更单；dynamic 保存生命周期草稿时幂等登记 object 目标并写 lc_* 行，所以不另做。静态侧放弃整个 object 目标只删 cr_items，不删 `lifecycle_draft`；dynamic 读草稿时忽略「变更单在库里但没登记该 object 目标」的残留草稿（可选：static 放弃 object 目标时回调 dynamic 清理）。
+6. ~~废弃列~~（集成时已做）：`rule_hit.store_id` / `store_label` 与告警同名列一起在 `dynamic_0003` 换成 `dims` JSONB（升级迁值、降级还原两列）；接口 `dims` 直接读列。
+7. ~~ObjBehaviorAutomation.vue 本地 dimsOf()~~（集成时已做）：mock 命中 / 回放样本由 `mock/rules.ts` 用公共 `alertDims()` 给出 `dims`，页面直接读 `dims`（Rules.vue 的 `dimsOf` 只剩 `h.dims ?? []`）。mock 数据值不变。
+8. **生命周期对象引用**：ObjRef 现按 objectId 引用任意对象类型；对象注册表（objectRegistry）解析不了的类型（如 member / promotion / refund）在开发环境会有告警，需要 PDE 在注册表加不告警的 `canResolve(kind)` 或补解析器。
 3. **审批界面**：动作中心 mock 没有审批 / 暂存→确认→审批的界面元素，按要求没加；后端接口和权限校验已就绪。注意：种子（mock 导出）里部分审批人（如赵磊、吴佳）不是系统用户，这些动作在库里没人能审批；测试里把 ACT-20261025-0551 的审批人改成王敏再审批。
 4. **推演异步的限制**：进程内后台任务，进程重启时正在算的方案会停在“运行中”（没有恢复 / 超时回收）；`SCENARIO_CONFIG_DIRTY` 仍走不到（`:run` 把配置写回方案）。
 5. **新建规则只建空壳**：名称“未命名规则”、对象 product、无条件；草稿里能改的仍只有自动暂存和阈值（与 mock 页面一致），条件 / 触发方式编辑界面 mock 本身也没有。
@@ -74,18 +91,48 @@
 
 1. **告警审批人 / 对象称呼写死**：`src/pages/ops/Alerts.vue:271,275,288`，后端 `backend/app/modules/dynamic/service.py:117-118`——商品 → 「品类经理 王敏」、其他 → 「区域运营 陈立军」，对象称呼写死订单 / 商品 / 门店。改为：审批人取动作类型配置，对象称呼取对象类型显示名。
 2. **级别 / 页签状态**：`Alerts.vue:317`（高 / 中 / 低）、`Alerts.vue:59-63`、`src/pages/ops/Actions.vue:53-56`（页签状态）。属流程枚举、非零售，可保留；可选改由现有 `/meta` 下发。
-3. **门店列 / 门店字段**：`src/pages/ontology/Rules.vue:256-262,283,315,636`（商品类规则加「门店」列、对象列标题写「商品」）；后端 `models.py:106`、`rules_models.py:142`、`schemas.py:30` 的 `store_id` / `store_label`，`rules_service.py:107,343-354` 生成样本时取门店 / 商品。改为：命中 / 告警存通用维度 `dims: [{objKind, id, label}]`（JSON，来自规则去重键），列按该规则的维度生成。
-4. **固定列表列**：`Alerts.vue:159`、`Actions.vue:148`、Rules 各表的列本身是通用的；「对象」列应显示对象类型的标题字段（titleProp），不写死称呼。
+3. **（r3 已做：命中 / 回放样本出 `dims`，规则页“维度”列；存储列未改）门店列 / 门店字段**：`src/pages/ontology/Rules.vue:256-262,283,315,636`（商品类规则加「门店」列、对象列标题写「商品」）；后端 `models.py:106`、`rules_models.py:142`、`schemas.py:30` 的 `store_id` / `store_label`，`rules_service.py:107,343-354` 生成样本时取门店 / 商品。改为：命中 / 告警存通用维度 `dims: [{objKind, id, label}]`（JSON，来自规则去重键），列按该规则的维度生成。
+4. **（r3 已做：规则页对象列标题取 titleProp）固定列表列**：`Alerts.vue:159`、`Actions.vue:148`、Rules 各表的列本身是通用的；「对象」列应显示对象类型的标题字段（titleProp），不写死称呼。
 5. **情景推演模型（最大缺口）**：
    - 范围写死区域 / 品类 / 周数：`src/pages/ops/Scenarios.vue:108-110,223,445-446,524`；`rules_schemas.py:58-59`；`rules_service.py:654,692-697,778,837`。
    - 驱动写死价格 / 补货 / 促销：`Scenarios.vue:170,455-460,486,548-550`；`rules_schemas.py:64-69`；`rules_service.py:504-506,701`。
    - 影响明细列写死商品 / 门店 / 销售额 / 缺货率：`Scenarios.vue:259-262,502`；影响表 `rules_models.py:194-205`（sku / category / store_id）。
    - 建议动作写死「发起调价审批 / 补货申请 / 发放复购召回优惠券」：`rules_sim.py:195-285`、`Scenarios.vue:342`。
    - 改为元数据定义的「推演模板」：范围 = 某对象类型属性上的筛选；驱动 = 带范围的数值参数（或动作类型参数）；KPI = 指标；影响行 = 通用 `{objRef, dims{}, metrics{}}`；建议 → 动作类型映射。推演引擎按模板可插拔，门店演示是其中一个样例模板。
-6. **生命周期对象引用**：`src/pages/ontology/parts/object/ObjBehaviorLifecycle.vue:262` 写死 `['order','store','product']`。改为任意对象类型（ObjRef 按 objectId）。`:294` 的触发方式是通用的，保留。
-7. **新建规则默认对象类型**：`rules_service.py:387` 默认 `"product"`。改为新建弹窗里必选对象类型。
+6. **（r3 已做）生命周期对象引用**：`src/pages/ontology/parts/object/ObjBehaviorLifecycle.vue:262` 写死 `['order','store','product']`。改为任意对象类型（ObjRef 按 objectId）。`:294` 的触发方式是通用的，保留。
+7. **（r3 已做：新建弹窗选对象类型，不传时取本体第一个）新建规则默认对象类型**：`rules_service.py:387` 默认 `"product"`。改为新建弹窗里必选对象类型。
 
 **依赖**
 - static：`GET /object-types/{id}/meta`（`{ titleProp, properties: [{ key, name, dataType, searchable, filterable, sortable, listed, order, visibility, format, unit }] }`）和 `GET /object-types/{id}/facets?filters=...`（enum 取值 + 计数 / range 最小最大，随已选筛选联动），以 master 770f6d7 的 `backend/docs/backend/generic-object-explorer.md` 为准。用于第 3、4、5、6 条（列、标题字段、范围筛选取值，替换 `SC_AREAS` / `SC_CATEGORIES` / `PROMO_TYPES`）。
 - Palantir：动作类型的审批人配置（第 1 条）。
 - 其余（推演模板模型、通用维度、第 7 条）可在 dynamic 内完成。
+
+**PDE 共享文件请求（dynamic-r3）**
+- `src/api/static.ts`：导出 `registerDraft`（dynamic.ts 里暂时复制了同样逻辑 `registerCR`）。
+- `useDraftView.ts` / `env.d.ts` / router：无需改动。
+- `ObjectTypesBody.vue`（static）：可选——放弃 object 目标后通知 dynamic 删 lifecycle_draft。
+- objectRegistry：不告警的 `canResolve(kind)`（见未完成第 8 条）。
+- static / versioning：整版发布时按变更单回调各模块 apply 的钩子（dynamic 用来把规则 / 生命周期草稿升为已发布版本；CR_WRITE 默认开的前提）。
+
+## dynamic-r3b：运行页去零售写死（告警 / 动作中心 / 推演模板）
+
+分支 `dynamic-r3b`（基于 master `b475283`）。只动运行页；规则、生命周期、变更单部分归 `dynamic-r3`。
+
+**已做（对应上文「通用化」第 1 条、第 3 条告警部分、第 4 条）**
+- 迁移 `dynamic_0003`（down_revision `static_0003`）：`alert.store_id / store_label` → `alert.dims`（JSONB，`[{objKind,id,label}]`）。升级时原门店值迁成 `{objKind:"store",…}`，降级还原两列。
+- 告警接口：`AlertOut` 去掉 `storeId/storeLabel`，加 `dims[{objKind,id,label,kindLabel}]`、`objKindLabel`（对象类型显示名，取对象类型目录）；`AlertDetail.approver` = 规则绑定动作类型的审批人配置（`ACTION_META.approver`，Palantir 动作类型表接上后换查库），未绑定动作为 null。`:start-action` 的审批人同样取动作类型配置（`approver_for_action`），不再按对象类型写死王敏 / 陈立军。演示值不变（R-007/R-012 → 品类经理 王敏，R-015/SM-ORD → 区域运营 陈立军）。
+- `Alerts.vue`：对象称呼、审批人、处理记录文字都取元数据；列表「对象」列后按 dims 追加维度值，详情按 dims 逐个显示（标签 = 维度对象类型名）。mock 回退用 `mock/dynamic.ts alertDims()` 把演示门店整形成 dims，值不变。
+- `Actions.vue`：对象称呼真接口取 `/actions/meta.objKindLabel`，mock 取 `OBJ_KIND_LABEL`；未登记类型显示编号。
+
+**没做 / 待办**
+- 告警筛选按 `/facets` 生成：告警页现在只有级别 / 规则 / 关键词（流程字段），没有区域 / 门店筛选可替换。要按告警对象类型的可筛选属性筛，后台得 join 业务表（facets 的筛选值落到 alert.obj_id），下一轮和规则命中 dims 一起做：`GET /alerts?filters=<JSON>&objKind=` 复用 static 的 filters 校验（422 规则一致）。
+- ~~`mock/rules.ts` 命中 / 回放读 `Alert.storeId`~~：集成时已改为 `dims: alertDims(…)`；`rule_hit` 两列并入 `dynamic_0003`。
+**情景推演模板化（已做，dynamic-r3b 第二轮）**
+- 模板定义唯一来源 `src/mock/scenarioTemplates.ts`（`ScTemplate`）；后台读同一份导出 `backend/seeds/json/dynamic/SC_TEMPLATES.json`（改 TS 后重新导出，测试会比对 `/scenarios/meta.templates` 与该 JSON）。演示模板 `demo_retail`（目标对象类型 product）原样复现原页面：范围 area / category / weeks，三组驱动，6 个 KPI，主序列，影响明细列，对比行，建议动作 → 动作名。
+- 引擎按模板 `engine` 键插拔：后台 `app/modules/dynamic/scenario_templates.py` `ENGINES`（`demo_retail` = 原 `rules_sim.simulate / stage_plan`，未改一行）；前端 `SC_ENGINES`（`demo_retail` = `mock/scenarios.ts simulate / stagePlanOf`，值不变）。
+- 迁移并进 `dynamic_0003`：`scenario.template_code`（String 64，存量全部 `demo_retail`），降级删列；仍只有一个 dynamic 迁移。
+- 接口：`ScenarioOut.templateCode`；`/scenarios/meta` 增加 `templates`（原 areas / categories / promoTypes / baseDrivers / statuses 保留，baseDrivers 取模板默认）；`:run` body 改为 `{scope:{…}, drivers:{…}}`（任意键），按模板字段校验：未知键「模板里没有这一项」、类型、可选值（沿用原文案）、min/max → 422 `VALIDATION_FAILED`；依赖项关闭时按 `offValue` 归零；无驱动 → `SCENARIO_NO_DRIVER`（文案取模板 `noDriverHint`）。新建 / 复制按来源方案模板（缺省演示模板）取默认值。对比 sameScope 按 `(templateCode, scope)`。202 + 轮询、savepoint 失败处理不变。
+- `Scenarios.vue`：范围 / 驱动表单、KPI 卡格式与提示、折线序列、影响明细列（obj / money / delta / range / text 通用列类型）、对比行、暂存确认里的动作名都按模板渲染；页面代码里不再有区域 / 品类 / 门店 / 商品 / 促销等字样。
+- 范围取值接 static 分面（第三轮）：范围项声明 `propRef: "对象类型.属性"` + `allOption`（演示：area → `store.region_code`、category → `product.category_id`）。引擎注册表带能力位 `accepts_facet_values`（前端 `SC_ENGINES.acceptsFacetValues`）：为 true 时，真接口下前端调 `GET /object-types/{ot}/facets`，该属性 `hasData` 且有取值 → 可选值 = allOption + 分面取值；mock / `hasData:false` / 属性不可筛选 → 模板固定 options。后台 `:run` 用同一规则（`scenario_templates.scope_options`）校验，前后台 422 一致。演示引擎 `demo_retail` = false（只认固定项，分面原值是编码会算失败），所以演示模板不取分面、只用固定 options。
+- 无头 Playwright 冒烟（mock）：推演 / 告警 / 动作中心渲染、新建方案运行完成、无控制台错误。
+- 没做（与原设计的差距）：模板还是文件元数据，没建 `scenario_template` 表和 `GET /scenario-templates`；分面值直接用属性原值（编码），没取显示名；影响明细表 `scenario_impact` 仍是演示引擎的行结构（模板 `impact.columns` 把行字段映射到通用列），没改成 `{objKind,objId,dims,metrics}`；建议动作仍按动作名映射，没接动作类型编号。

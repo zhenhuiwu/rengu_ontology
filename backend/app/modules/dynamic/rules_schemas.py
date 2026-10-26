@@ -31,6 +31,7 @@ class RuleDraftIn(ApiModel):
     cr: str | None = None
     auto_stage: AutoStageIn
     thresholds: list[str] = []
+    lock_version: int | None = None
 
 
 class RuleCreateIn(ApiModel):
@@ -54,21 +55,6 @@ class ReplayIn(ApiModel):
     version: Literal["current", "draft"] = "current"
 
 
-class ScopeIn(ApiModel):
-    area: str
-    category: str
-    weeks: int = Field(8, ge=1, le=52)
-
-
-class DriversIn(ApiModel):
-    price_pct: int | float = 0
-    replenish_pct: int | float = 0
-    safety_days: int | float = 7
-    promo: str = "无"
-    promo_depth: int | float = 0
-    promo_weeks: int | float = 0
-
-
 class ScenarioCreateIn(ApiModel):
     from_: str | None = Field(None, alias="from")
 
@@ -79,8 +65,9 @@ class ScenarioPatchIn(ApiModel):
 
 class ScenarioRunIn(ApiModel):
     name: str | None = None
-    scope: ScopeIn
-    drivers: DriversIn
+    # 按方案模板校验（scenario_templates.validate）：键 = 模板字段 key
+    scope: dict[str, Any]
+    drivers: dict[str, Any]
 
 
 class ScenarioStageIn(ApiModel):
@@ -95,3 +82,4 @@ class LifecycleDraftIn(ApiModel):
     add_transitions: list[dict[str, Any]] = []
     edit_transitions: dict[str, dict[str, Any]] = {}
     remove_transitions: list[str] = []
+    lock_version: int | None = None

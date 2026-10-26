@@ -142,8 +142,9 @@ def _hit(r: Row, ctx: SeedContext) -> Row:
         "obj_kind": r["objKind"],
         "obj_id": r["objId"],
         "obj_label": r["objLabel"],
-        "store_id": r.get("storeId"),
-        "store_label": r.get("storeLabel"),
+        "dims": [{"objKind": "store", "id": r["storeId"], "label": r.get("storeLabel") or r["storeId"]}]
+        if r.get("storeId")
+        else [],
         "value": r["value"],
         "threshold": r["threshold"],
         "dedupe_key": None,
@@ -160,6 +161,7 @@ def _scenario(r: Row, _ctx: SeedContext) -> Row:
         "created_on": parse_display_dt(r["createdAt"]),
         "base_release_id": r.get("baseVer"),
         "status": ScenarioStatus(r["status"]).name,
+        "template_code": r.get("templateCode") or "demo_retail",
         "scope": r["scope"],
         "drivers": r["drivers"],
         "fail_reason": r.get("failReason"),

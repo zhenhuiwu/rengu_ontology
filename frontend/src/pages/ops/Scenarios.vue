@@ -2,7 +2,7 @@
 import InfoTip from '@/components/InfoTip.vue';
 /**
  * 情景推演：左侧方案列表（分页 ?page=，选中 ?sc=），右侧方案配置（范围 + 驱动）与推演结果。
- * 对比模式 ?mode=cmp：勾选最多 3 个已完成方案（?cmp=a,b,c），并排看 KPI 与周销售；?pick= 为选定方案。
+ * 对比模式 ?mode=cmp：勾选最多 3 个已完成方案（?cmp=a,b,c），并排看模板指标与主序列；?pick= 为选定方案。
  * 选定方案可“转为暂存动作”：生成动作中心“待确认”记录（stageAction），只暂存、不执行；确认人在动作中心确认后才进入审批。
  * 历史版本 ?ver= 只读：不能运行、修改或转动作。
  * 真接口模式（dynamicApi.isReal()，开关 VITE_API_REAL_MODULES 含 dynamic）：列表 / meta / 对比 / 新建·复制 / 改名 / 运行后取结果 /
@@ -25,11 +25,16 @@ import { paginate } from '@/mock/paginate';
 import { BRAND, GRAY } from '@/theme';
 import { stageAction } from '@/mock/actions';
 import {
-  SCENARIOS, SC_AREAS, SC_CATEGORIES, PROMO_TYPES, BASE_DRIVERS, simulate, stagePlanOf, scenarioById, nextScenarioId, fmtPct,
+  SCENARIOS, scenarioById, nextScenarioId, fmtPct,
   type Scenario, type ScStatus, type ScScope, type ScDrivers, type StagePlan, type ScKpi,
   type ScImpact,
 } from '@/mock/scenarios';
+import {
+  SC_TEMPLATES, SC_ENGINES, templateOf, allFields, defaultsOf, noDriver as tplNoDriver, scopeText, fillText, signed,
+  type ScCfg, type ScValue, type ScField, type ScTemplate, type ScImpCol,
+} from '@/mock/scenarioTemplates';
 import { isApiError } from '@/api/http';
+import { getObjectTypeFacets } from '@/api/static';
 import {
   dynamicApi, listScenarios, getScenariosMeta, compareScenarios, createScenario, getScenario, renameScenario, runScenario,
   waitScenarioResult, PollAborted, listScenarioImpacts, getScenarioStagePlan, stageScenario, type ScenarioDto, type ScenarioMetaDto,
@@ -105,9 +110,10 @@ if (live.value) {
   watch(scId, loadDetail, { immediate: true });
   watch([mode, () => cmpIds.value.join(',')], loadCmp, { immediate: true });
 }
-const areaOpts = computed(() => (remote.meta?.areas ?? [...SC_AREAS]).map((v) => ({ value: v, label: v })));
-const catOpts = computed(() => (remote.meta?.categories ?? [...SC_CATEGORIES]).map((v) => ({ value: v, label: v })));
-const promoOpts = computed(() => (remote.meta?.promoTypes ?? [...PROMO_TYPES]).map((v) => ({ value: v, label: v })));
+/* ───── 推演模板（元数据）：范围 / 驱动 / 指标 / 影响明细 / 建议动作都按模板渲染 ───── */
+const tplList = computed<ScTemplate[]>(() => (live.value && remote.meta?.templates?.length ? remote.meta.templates : SC_TEMPLATES));
+const tplFor = (s?: Scenario) => templateOf(s?.templateCode, tplList.value);
+const optsOf = (f: ScField) => (facetOpts.value[f.key] ?? f.options ?? []).map((v) => ({ value: v, label: f.kind === 'radio' && f.unit ? `${v} ${f.unit}` : String(v) }));
 const statusOpts = computed(() => (remote.meta?.statuses ?? ['全部', '草稿', '运行中', '已完成', '失败']).map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v })));
 async function pick(s: Scenario) {
   if (mode.value !== 'one') { toggleCmp(s); return; }
@@ -127,8 +133,28 @@ const cmpTip = (s: Scenario) => (s.status !== '已完成' ? `${s.status}的方�
   : !cmpIds.value.includes(s.id) && cmpIds.value.length >= 3 ? '最多对比 3 个方案' : '');
 
 /* ───── 当前方案：编辑中的配置（与已运行配置比较判断是否改动） ───── */
-const form = reactive<{ name: string; scope: ScScope; drivers: ScDrivers }>({ name: '', scope: { area: '', category: '', weeks: 8 }, drivers: BASE_DRIVERS() });
-const load = (s?: Scenario) => { if (!s) return; form.name = s.name; form.scope = { ...s.scope }; form.drivers = { ...s.drivers }; };
+const form = reactive<{ name: string; scope: ScCfg; drivers: ScCfg }>({ name: '', scope: {}, drivers: {} });
+const tpl = computed(() => tplFor(current.value));
+/** 真接口：范围项 propRef 的可选值取 static /facets（引擎 acceptsFacetValues 且 hasData 才用：allOption + 分面取值）；mock / 无数据用模板 options。与后台 :run 校验同一规则 */
+const facetOpts = ref<Record<string, ScValue[]>>({});
+watch(() => (live.value && SC_ENGINES[tpl.value.engine]?.acceptsFacetValues ? `${tpl.value.code}` : ''), async (code) => {
+  facetOpts.value = {};
+  if (!code) return;
+  const t = tpl.value; const out: Record<string, ScValue[]> = {};
+  const refs = t.scope.filter((f) => f.propRef).map((f) => ({ f, ot: f.propRef!.split('.')[0], prop: f.propRef!.split('.').slice(1).join('.') }));
+  for (const ot of [...new Set(refs.map((r) => r.ot))]) {
+    let fs; try { fs = await getObjectTypeFacets(ot); } catch (e) { if (fallBackIfDown(e)) return; continue; }
+    for (const r of refs.filter((x) => x.ot === ot)) {
+      const fc = fs.find((x) => x.key === r.prop);
+      if (fc && fc.hasData && fc.kind === 'enum' && fc.values.length) {
+        const head = r.f.allOption != null ? [r.f.allOption] : [];
+        out[r.f.key] = [...head, ...fc.values.map((v) => v.value).filter((v) => !head.includes(v))];
+      }
+    }
+  }
+  if (tpl.value.code === code) facetOpts.value = out;
+}, { immediate: true });
+const load = (s?: Scenario) => { if (!s) return; form.name = s.name; form.scope = { ...(s.scope as unknown as ScCfg) }; form.drivers = { ...(s.drivers as unknown as ScCfg) }; };
 watch(() => current.value?.id, () => load(current.value), { immediate: true });
 /** cfgDirty：范围 / 驱动改了（结果作废，需重新运行）；dirty：再加上改名（离开 / 切换要确认） */
 /** 浅比较（与键顺序无关：后端 JSONB 返回的键顺序与 mock 不同） */
@@ -163,11 +189,20 @@ const lockReason = computed(() => readonly.value ? roReason.value
   : notMine.value ? `${current.value!.owner} 的方案，只读（不能修改、运行或转为动作）；如需调整请“复制为新方案”`
   : current.value?.status === '运行中' ? '推演运行中，完成后可修改'
   : current.value?.staged.length ? `已转为 ${current.value.staged.length} 条暂存动作，配置锁定；如需调整请“复制为新方案”` : '');
-const noDriver = computed(() => form.drivers.pricePct === 0 && form.drivers.replenishPct === 0 && form.drivers.safetyDays === 7 && (form.drivers.promo === '无' || form.drivers.promoDepth === 0));
-watch(() => form.drivers.promo, (p) => { if (p === '无') { form.drivers.promoDepth = 0; form.drivers.promoWeeks = 0; } else if (!form.drivers.promoDepth) { form.drivers.promoDepth = 10; form.drivers.promoWeeks = 2; } });
+const noDriver = computed(() => tplNoDriver(tpl.value, form.drivers));
+/** 模板 when：依赖项为关闭值时置 offValue；打开且仍为关闭值时置 onDefault（同一控制项下按首项判断，与演示一致） */
+const offOf = (f: ScField) => !!f.when && form.drivers[f.when.key] === f.when.not;
+watch(() => allFields(tpl.value).filter((f) => f.when).map((f) => form.drivers[f.when!.key]).join('|'), () => {
+  const deps = allFields(tpl.value).filter((f) => f.when);
+  const byCtl = new Map<string, ScField[]>(); deps.forEach((f) => byCtl.set(f.when!.key, [...(byCtl.get(f.when!.key) ?? []), f]));
+  byCtl.forEach((fs) => {
+    if (offOf(fs[0])) fs.forEach((f) => { form.drivers[f.key] = f.offValue ?? f.default; });
+    else if (!form.drivers[fs[0].key]) fs.forEach((f) => { if (f.onDefault != null) form.drivers[f.key] = f.onDefault; });
+  });
+});
 
 const needRun = computed(() => !!current.value && (current.value.status !== '已完成' || cfgDirty.value));
-const runBlocked = computed(() => lockReason.value || (noDriver.value ? '至少调整一个驱动（价格 / 库存 / 促销）' : ''));
+const runBlocked = computed(() => lockReason.value || (noDriver.value ? tpl.value.noDriverHint : ''));
 async function run() {
   const s = current.value; if (!s || runBlocked.value) return;
   if (s.result) {
@@ -194,12 +229,12 @@ async function run() {
     } catch (e) { if (e instanceof PollAborted || polls.signal.aborted) return; apiFail(e); await loadDetail(); }
     return;
   }
-  s.name = form.name.trim() || s.name; s.scope = { ...form.scope }; s.drivers = { ...form.drivers };
+  s.name = form.name.trim() || s.name; s.scope = { ...form.scope } as unknown as ScScope; s.drivers = { ...form.drivers } as unknown as ScDrivers;
   s.status = '运行中'; s.failReason = undefined; s.result = undefined;
   const id = s.id;
   window.setTimeout(() => {
     const x = scenarioById(id); if (!x || x.status !== '运行中') return;
-    x.result = simulate(x.scope, x.drivers, now()); x.status = '已完成';
+    x.result = SC_ENGINES[tplFor(x).engine].simulate(x.scope as unknown as ScCfg, x.drivers as unknown as ScCfg, now()); x.status = '已完成';
     message.success(`${x.id} 推演完成`);
   }, 1200);
 }
@@ -221,9 +256,10 @@ async function create(from?: Scenario) {
     } catch (e) { passGuard = false; apiFail(e); }
     return;
   }
+  const t = tplFor(from);
   const s: Scenario = {
-    id: nextScenarioId(), name: from ? `${from.name}（副本）` : '新方案', owner: ME.value, createdAt: now(), baseVer: 'v2026.10.3', status: '草稿',
-    scope: from ? { ...from.scope } : { area: '华东大区全部', category: '全部品类', weeks: 8 }, drivers: from ? { ...from.drivers } : BASE_DRIVERS(), staged: [],
+    id: nextScenarioId(), name: from ? `${from.name}（副本）` : '新方案', owner: ME.value, createdAt: now(), baseVer: 'v2026.10.3', status: '草稿', templateCode: t.code,
+    scope: (from ? { ...from.scope } : defaultsOf(t.scope)) as unknown as ScScope, drivers: (from ? { ...from.drivers } : defaultsOf(allFields(t))) as unknown as ScDrivers, staged: [],
   };
   SCENARIOS.unshift(s);
   statusF.value = '全部'; kw.value = '';
@@ -231,10 +267,15 @@ async function create(from?: Scenario) {
 }
 
 /* ───── 结果 ───── */
-const kpiDelta = (k: ScKpi) => (k.key === 'promo' || k.base === 0 ? k.value - k.base : (k.value - k.base) / k.base);
-const kpiText = (k: ScKpi) => (k.key === 'promo' || k.base === 0 ? `+${k.value.toFixed(1)} ${k.unit}`
-  : k.unit === '%' ? `${k.value >= k.base ? '+' : '−'}${Math.abs(k.value - k.base).toFixed(1)} pt` : fmtPct(kpiDelta(k)));
-const fmtV = (k: ScKpi, v: number) => (k.unit === '%' ? `${v.toFixed(1)}%` : k.unit === '天' ? `${v.toFixed(1)} 天` : `${v.toFixed(1)} 万`);
+/** 指标展示按模板 kpis：fmt（pct / days / wan）、delta（ratio 相对变化 / pt 百分点 / abs 绝对值） */
+const kdef = (k: ScKpi) => tpl.value.kpis.find((x) => x.key === k.key);
+const kpiDelta = (k: ScKpi) => (kdef(k)?.delta === 'abs' || k.base === 0 ? k.value - k.base : (k.value - k.base) / k.base);
+const kpiText = (k: ScKpi) => (kdef(k)?.delta === 'abs' || k.base === 0 ? `+${k.value.toFixed(1)} ${k.unit}`
+  : kdef(k)?.delta === 'pt' ? `${k.value >= k.base ? '+' : '−'}${Math.abs(k.value - k.base).toFixed(1)} pt` : fmtPct(kpiDelta(k)));
+const fmtV = (k: ScKpi, v: number) => { const f = kdef(k)?.fmt; return f === 'pct' ? `${v.toFixed(1)}%` : f === 'days' ? `${v.toFixed(1)} 天` : `${v.toFixed(1)} 万`; };
+const kpiTip = (k: ScKpi) => kdef(k)?.baseTip ?? `基线 ${fmtV(k, k.base)}`;
+const ser = computed(() => tpl.value.series);
+const serOf = (r: object, key: string) => ((r as Record<string, number[]>)[key] ?? []).map((v) => +(v / ser.value.scale).toFixed(1));
 
 const lineOpt = computed(() => {
   const r = current.value?.result; if (!r) return {};
@@ -242,10 +283,10 @@ const lineOpt = computed(() => {
     tooltip: { trigger: 'axis' }, legend: { top: 0, right: 0, itemWidth: 14 },
     grid: { left: 48, right: 16, top: 28, bottom: 24 },
     xAxis: { type: 'category', data: r.weeks, axisLine: { lineStyle: { color: GRAY.g5 } } },
-    yAxis: { type: 'value', name: '万元', splitLine: { lineStyle: { color: GRAY.g4 } } },
+    yAxis: { type: 'value', name: ser.value.unit, splitLine: { lineStyle: { color: GRAY.g4 } } },
     series: [
-      { name: '基线销售额', type: 'line', data: r.baseSales.map((v) => +(v / 1e4).toFixed(1)), lineStyle: { type: 'dashed', color: GRAY.g7 }, itemStyle: { color: GRAY.g7 }, symbol: 'none' },
-      { name: '方案销售额', type: 'line', data: r.sales.map((v) => +(v / 1e4).toFixed(1)), itemStyle: { color: BRAND }, symbol: 'circle', symbolSize: 5 },
+      { name: `基线${ser.value.label}`, type: 'line', data: serOf(r, ser.value.baseKey), lineStyle: { type: 'dashed', color: GRAY.g7 }, itemStyle: { color: GRAY.g7 }, symbol: 'none' },
+      { name: `方案${ser.value.label}`, type: 'line', data: serOf(r, ser.value.valueKey), itemStyle: { color: BRAND }, symbol: 'circle', symbolSize: 5 },
     ],
   };
 });
@@ -258,27 +299,31 @@ async function loadImp() {
   try { const r = await listScenarioImpacts(s.id, ipq.page.value, ipq.size.value); if (seq === impSeq) remote.imp = { items: r.items, total: r.total }; } catch (e) { readFail(e); }
 }
 if (live.value) watch([() => current.value?.id, () => current.value?.result?.ranAt, ipq.page, ipq.size], loadImp, { immediate: true });
-const impCols = [
-  { title: '商品', key: 'sku', ellipsis: true }, { title: '门店', key: 'store', ellipsis: true },
-  { title: '基线销售额', key: 'base', align: 'right', width: 110 }, { title: '方案销售额', key: 'sales', align: 'right', width: 110 },
-  { title: '变化', key: 'delta', align: 'right', width: 84 }, { title: '缺货率', key: 'so', align: 'right', width: 132 },
-  { title: '建议动作', key: 'suggest', width: 170 },
-];
+/** 影响明细列按模板 impact.columns：obj 对象引用（行对象 / 维度对象）、money、delta、range（基线 → 方案）、text */
+const impCols = computed(() => tpl.value.impact.columns.map((c) => ({ title: c.label, key: c.key, align: c.align, width: c.width, ellipsis: c.kind === 'obj' || undefined, def: c })));
+const impRowKey = (r: Record<string, unknown>) => tpl.value.impact.rowKey.map((k) => r[k]).join('-');
+const cell = <T = never>(r: object, k?: string) => (k ? (r as Record<string, unknown>)[k] : undefined) as T;
+const colOf = (c: unknown) => (c as { def: ScImpCol }).def;
 const money = (v: number) => `${(v / 1e4).toFixed(2)} 万`;
 
 /* ───── 对比 ───── */
 const pickId = computed(() => (cmpIds.value.includes(q1('pick')) ? q1('pick') : cmpIds.value[0] ?? ''));
-const KPI_KEYS = ['sales', 'gp', 'rate', 'stockout', 'turn', 'promo'];
+const KPI_KEYS = computed(() => cmpTpl.value.kpis.map((k) => k.key));
 const kpiOf = (s: Scenario, key: string) => s.result!.kpis.find((k) => k.key === key)!;
-const scopeDiff = computed(() => new Set(cmpList.value.map((s) => `${s.scope.area}|${s.scope.category}|${s.scope.weeks}`)).size > 1);
+const cmpTpl = computed(() => tplFor(cmpList.value[0]));
+const scopeDiff = computed(() => new Set(cmpList.value.map((s) => `${s.templateCode ?? ''}|${JSON.stringify(cmpTpl.value.scope.map((f) => (s.scope as unknown as ScCfg)[f.key]))}`)).size > 1);
+const scopeLabels = computed(() => cmpTpl.value.scope.map((f) => f.label).join(' / '));
+const cfgOf = (s: Scenario) => s.drivers as unknown as ScCfg;
+const cmpRowText = (r: ScTemplate['compareRows'][number], s: Scenario) => (r.offKey && cfgOf(s)[r.offKey] === allFields(cmpTpl.value).find((f) => f.key === r.offKey)?.default
+  ? r.offText ?? '' : fillText(r.text, cfgOf(s)));
 const CMP_COLORS = [BRAND, GRAY.g9, GRAY.g7];
 const barOpt = computed(() => ({
   tooltip: { trigger: 'axis', valueFormatter: (v: number) => `${v}%` }, legend: { top: 0, right: 0, itemWidth: 14 },
   grid: { left: 44, right: 12, top: 28, bottom: 24 },
-  xAxis: { type: 'category', data: ['销售额', '毛利额', '毛利率', '缺货率', '周转天数'] },
+  xAxis: { type: 'category', data: cmpTpl.value.kpis.filter((k) => k.chart).map((k) => k.short ?? k.label) },
   yAxis: { type: 'value', name: '较基线 %', splitLine: { lineStyle: { color: GRAY.g4 } } },
   series: cmpList.value.map((s, i) => ({ name: s.id, type: 'bar', barMaxWidth: 18, itemStyle: { color: CMP_COLORS[i] },
-    data: KPI_KEYS.slice(0, 5).map((k) => { const x = kpiOf(s, k); return +(((x.value - x.base) / x.base) * 100).toFixed(1); }) })),
+    data: cmpTpl.value.kpis.filter((k) => k.chart).map((k) => { const x = kpiOf(s, k.key); return +(((x.value - x.base) / x.base) * 100).toFixed(1); }) })),
 }));
 const cmpLineOpt = computed(() => {
   const longest = cmpList.value.reduce((a, s) => Math.max(a, s.result!.weeks.length), 0);
@@ -286,10 +331,10 @@ const cmpLineOpt = computed(() => {
   return {
     tooltip: { trigger: 'axis' }, legend: { top: 0, right: 0, itemWidth: 14 }, grid: { left: 48, right: 12, top: 28, bottom: 24 },
     xAxis: { type: 'category', data: Array.from({ length: longest }, (_, i) => `W${i + 1}`) },
-    yAxis: { type: 'value', name: '万元', splitLine: { lineStyle: { color: GRAY.g4 } } },
+    yAxis: { type: 'value', name: ser.value.unit, splitLine: { lineStyle: { color: GRAY.g4 } } },
     series: [
-      ...(base && !scopeDiff.value ? [{ name: '基线', type: 'line', symbol: 'none', data: base.baseSales.map((v) => +(v / 1e4).toFixed(1)), lineStyle: { type: 'dashed', color: GRAY.g6 }, itemStyle: { color: GRAY.g6 } }] : []),
-      ...cmpList.value.map((s, i) => ({ name: s.id, type: 'line', symbolSize: 4, itemStyle: { color: CMP_COLORS[i] }, data: s.result!.sales.map((v) => +(v / 1e4).toFixed(1)) })),
+      ...(base && !scopeDiff.value ? [{ name: '基线', type: 'line', symbol: 'none', data: serOf(base, ser.value.baseKey), lineStyle: { type: 'dashed', color: GRAY.g6 }, itemStyle: { color: GRAY.g6 } }] : []),
+      ...cmpList.value.map((s, i) => ({ name: s.id, type: 'line', symbolSize: 4, itemStyle: { color: CMP_COLORS[i] }, data: serOf(s.result!, ser.value.valueKey) })),
     ],
   };
 });
@@ -298,7 +343,7 @@ const cmpLineOpt = computed(() => {
 const target = computed<Scenario | undefined>(() => (mode.value === 'cmp'
   ? (live.value ? cmpList.value.find((x) => x.id === pickId.value) : scenarioById(pickId.value)) : current.value));
 /** 转动作建议：mock 本地算；真接口按方案取 /stage-plan 缓存（运行 / 暂存后作废） */
-const planOf = (s: Scenario): StagePlan[] | undefined => (live.value ? remote.plans[s.id] : stagePlanOf(s));
+const planOf = (s: Scenario): StagePlan[] | undefined => (live.value ? remote.plans[s.id] : SC_ENGINES[tplFor(s).engine].stagePlan(s));
 async function loadPlans() {
   const ss = (mode.value === 'cmp' ? cmpList.value : current.value ? [current.value] : [])
     .filter((x) => x.status === '已完成' && !x.staged.length && !remote.plans[x.id]);
@@ -342,7 +387,7 @@ async function doStage() {
     title: '转为暂存动作', tag: '待确认', okText: `暂存 ${items.length} 条`,
     target: `情景推演 ${s.id}「${s.name}」`,
     fields: [
-      { label: '动作', value: ['发起调价审批', '补货申请', '发放复购召回优惠券'].filter((n) => count(n)).map((n) => `${n} × ${count(n)}`).join('，') },
+      { label: '动作', value: [...new Set(tplFor(s).suggestions.map((x) => x.action))].filter((n) => count(n)).map((n) => `${n} × ${count(n)}`).join('，') },
       { label: '去向', value: '动作中心 · 待确认' },
       { label: '确认人', value: ME.value },
       { label: '推演基于', value: `本体 ${s.baseVer} · 运行于 ${s.result?.ranAt}` },
@@ -420,7 +465,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           <span v-if="cfgDirty && current.result" class="t-12 tl-attention"><ExclamationCircleOutlined /> 配置已改动，结果对应上一次运行</span>
           <span v-else-if="nameDirty" class="t-12 c-3">名称未保存</span>
           <span v-if="notMine" class="t-12 c-3">{{ current.owner }} 的方案 · 只读</span>
-          <InfoTip :text="`${current.id} · ${current.owner} · 创建于 ${current.createdAt.slice(0, 16)}；基于本体 ${current.baseVer} · 价格弹性 −1.6（示意模型）`" />
+          <InfoTip :text="`${current.id} · ${current.owner} · 创建于 ${current.createdAt.slice(0, 16)}；基于本体 ${current.baseVer} · ${tpl.modelNote}`" />
         </div>
         <div class="sc-btns">
           <a-tooltip :title="roReason"><a-button :type="primary === 'copy' ? 'primary' : 'default'" :disabled="readonly" data-act="copy" @click="create(current)"><CopyOutlined />复制为新方案</a-button></a-tooltip>
@@ -445,35 +490,38 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
                 <a-button v-if="nameDirty" size="small" :disabled="!form.name.trim()" data-act="save-name" @click="saveName">保存名称</a-button></div>
             </a-form-item>
             <div class="sc-sec t-12 c-3">范围</div>
-            <a-form-item label="区域"><a-select v-model:value="form.scope.area" :options="areaOpts" /></a-form-item>
-            <a-form-item label="品类"><a-select v-model:value="form.scope.category" :options="catOpts" /></a-form-item>
-            <a-form-item label="推演周数">
-              <a-radio-group v-model:value="form.scope.weeks" size="small"><a-radio-button :value="4">4 周</a-radio-button><a-radio-button :value="8">8 周</a-radio-button><a-radio-button :value="12">12 周</a-radio-button></a-radio-group>
+            <a-form-item v-for="f in tpl.scope" :key="f.key" :label="f.label">
+              <a-radio-group v-if="f.kind === 'radio'" v-model:value="form.scope[f.key]" size="small">
+                <a-radio-button v-for="o in optsOf(f)" :key="String(o.value)" :value="o.value">{{ o.label }}</a-radio-button>
+              </a-radio-group>
+              <a-input-number v-else-if="f.kind === 'number'" v-model:value="form.scope[f.key] as number" :min="f.min" :max="f.max" :step="f.step" :addon-after="f.unit" :style="f.width ? { width: `${f.width}px` } : undefined" />
+              <a-select v-else v-model:value="form.scope[f.key]" :options="optsOf(f)" />
             </a-form-item>
-            <div class="sc-sec t-12 c-3">驱动 · 价格</div>
-            <a-form-item label="价格调整">
-              <div class="sc-slide"><a-slider v-model:value="form.drivers.pricePct" :min="-20" :max="10" :step="1" :disabled="!!lockReason" class="sc-slider" /><span class="num sc-val">{{ form.drivers.pricePct > 0 ? '+' : '' }}{{ form.drivers.pricePct }}%</span></div>
-            </a-form-item>
-            <div class="sc-sec t-12 c-3">驱动 · 库存</div>
-            <a-form-item label="补货量">
-              <div class="sc-slide"><a-slider v-model:value="form.drivers.replenishPct" :min="-30" :max="50" :step="5" :disabled="!!lockReason" class="sc-slider" /><span class="num sc-val">{{ form.drivers.replenishPct > 0 ? '+' : '' }}{{ form.drivers.replenishPct }}%</span></div>
-            </a-form-item>
-            <a-form-item label="安全库存"><a-input-number v-model:value="form.drivers.safetyDays" :min="3" :max="14" addon-after="天" class="sc-w120" /></a-form-item>
-            <div class="sc-sec t-12 c-3">驱动 · 促销</div>
-            <a-form-item label="促销类型"><a-select v-model:value="form.drivers.promo" :options="promoOpts" /></a-form-item>
-            <a-form-item label="力度 / 周数">
-              <div class="sc-pair">
-                <a-input-number v-model:value="form.drivers.promoDepth" :min="0" :max="30" addon-after="%" :disabled="form.drivers.promo === '无' || !!lockReason" class="sc-w110" />
-                <a-input-number v-model:value="form.drivers.promoWeeks" :min="0" :max="4" addon-after="周" :disabled="form.drivers.promo === '无' || !!lockReason" class="sc-w110" />
-              </div>
-            </a-form-item>
+            <template v-for="g in tpl.driverGroups" :key="g.label">
+              <div class="sc-sec t-12 c-3">{{ g.label }}</div>
+              <a-form-item v-for="row in g.rows" :key="row.label" :label="row.label">
+                <div :class="row.fields.length > 1 ? 'sc-pair' : row.fields[0].kind === 'slider' ? 'sc-slide' : undefined">
+                  <template v-for="f in row.fields" :key="f.key">
+                    <template v-if="f.kind === 'slider'">
+                      <a-slider v-model:value="form.drivers[f.key] as number" :min="f.min" :max="f.max" :step="f.step" :disabled="!!lockReason || offOf(f)" class="sc-slider" />
+                      <span class="num sc-val">{{ f.signed ? signed(form.drivers[f.key] as number) : form.drivers[f.key] }}{{ f.unit }}</span>
+                    </template>
+                    <a-input-number v-else-if="f.kind === 'number'" v-model:value="form.drivers[f.key] as number" :min="f.min" :max="f.max" :step="f.step" :addon-after="f.unit" :disabled="!!lockReason || offOf(f)" :style="f.width ? { width: `${f.width}px` } : undefined" />
+                    <a-radio-group v-else-if="f.kind === 'radio'" v-model:value="form.drivers[f.key]" size="small" :disabled="!!lockReason || offOf(f)">
+                      <a-radio-button v-for="o in optsOf(f)" :key="String(o.value)" :value="o.value">{{ o.label }}</a-radio-button>
+                    </a-radio-group>
+                    <a-select v-else v-model:value="form.drivers[f.key]" :options="optsOf(f)" :disabled="!!lockReason || offOf(f)" />
+                  </template>
+                </div>
+              </a-form-item>
+            </template>
           </a-form>
         </div>
 
         <!-- 结果 -->
         <div class="sc-res">
           <template v-if="current.status === '运行中'">
-            <div class="sc-empty"><LoadingOutlined class="c-3 t-20" /><div class="c-2">推演运行中：按 {{ current.scope.area }} · {{ current.scope.category }} · {{ current.scope.weeks }} 周计算…</div></div>
+            <div class="sc-empty"><LoadingOutlined class="c-3 t-20" /><div class="c-2">推演运行中：按 {{ scopeText(tpl, current.scope as unknown as ScCfg) }} 计算…</div></div>
           </template>
           <template v-else-if="current.status === '失败'">
             <div class="sc-empty">
@@ -486,7 +534,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           </template>
           <template v-else>
             <div class="sc-kpis">
-              <a-tooltip v-for="k in current.result.kpis" :key="k.key" :title="k.key === 'promo' ? '基线无促销成本' : `基线 ${fmtV(k, k.base)}`">
+              <a-tooltip v-for="k in current.result.kpis" :key="k.key" :title="kpiTip(k)">
                 <div class="sc-kpi">
                   <div class="t-12 c-2">{{ k.label }}</div>
                   <div class="sc-kpi-v"><span class="t-20 num fw-600">{{ fmtV(k, k.value) }}</span><span class="t-12 num c-2">{{ kpiText(k) }}</span></div>
@@ -497,17 +545,15 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
               <span class="c-2">已暂存 {{ current.staged.length }} 条</span><span class="c-3"> · </span><router-link :to="pendingLink">去动作中心</router-link>
             </div>
             <div class="sc-chart"><EChart :option="lineOpt" /></div>
-            <div class="sc-imp-head"><span class="fw-600">影响明细</span><span class="t-12 c-3">按销售额变化绝对值排序 · 运行于 <span class="num">{{ current.result.ranAt }}</span></span></div>
+            <div class="sc-imp-head"><span class="fw-600">影响明细</span><span class="t-12 c-3">{{ tpl.impact.sortNote }} · 运行于 <span class="num">{{ current.result.ranAt }}</span></span></div>
             <div class="sc-imp">
-              <a-table :columns="impCols" :data-source="impPaged.items" :row-key="(r: any) => `${r.sku}-${r.storeId}`" size="small" :pagination="false">
+              <a-table :columns="impCols" :data-source="impPaged.items" :row-key="(r: any) => impRowKey(r)" size="small" :pagination="false">
                 <template #bodyCell="{ column, record }">
-                  <template v-if="column.key === 'sku'"><ObjRef kind="product" :id="record.sku">{{ record.name }}</ObjRef></template>
-                  <template v-else-if="column.key === 'store'"><ObjRef kind="store" :id="record.storeId">{{ record.storeName }}</ObjRef></template>
-                  <template v-else-if="column.key === 'base'"><span class="num">{{ money(record.baseSales) }}</span></template>
-                  <template v-else-if="column.key === 'sales'"><span class="num">{{ money(record.sales) }}</span></template>
-                  <template v-else-if="column.key === 'delta'"><span class="num">{{ fmtPct(record.sales / record.baseSales - 1) }}</span></template>
-                  <template v-else-if="column.key === 'so'"><span class="num sc-nowrap">{{ record.stockoutBase }}% → {{ record.stockout }}%</span></template>
-                  <template v-else-if="column.key === 'suggest'"><span :class="record.suggest === '—' ? 'c-3' : ''">{{ record.suggest }}</span></template>
+                  <template v-if="colOf(column).kind === 'obj'"><ObjRef :kind="colOf(column).objKind!" :id="cell(record, colOf(column).idKey)">{{ cell(record, colOf(column).labelKey) }}</ObjRef></template>
+                  <template v-else-if="colOf(column).kind === 'money'"><span class="num">{{ money(cell(record, colOf(column).valueKey)) }}</span></template>
+                  <template v-else-if="colOf(column).kind === 'delta'"><span class="num">{{ fmtPct(cell<number>(record, colOf(column).valueKey) / cell<number>(record, colOf(column).baseKey) - 1) }}</span></template>
+                  <template v-else-if="colOf(column).kind === 'range'"><span class="num sc-nowrap">{{ cell(record, colOf(column).baseKey) }}{{ colOf(column).unit }} → {{ cell(record, colOf(column).valueKey) }}{{ colOf(column).unit }}</span></template>
+                  <template v-else><span :class="cell(record, colOf(column).valueKey ?? colOf(column).key) === '—' ? 'c-3' : ''">{{ cell(record, colOf(column).valueKey ?? colOf(column).key) }}</span></template>
                 </template>
               </a-table>
             </div>
@@ -524,7 +570,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
           <span class="t-16 fw-600">方案对比</span>
           <span class="t-12 c-2 num">已选 {{ cmpIds.length }} / 3</span>
           <InfoTip text="在左侧勾选最多 3 个已完成方案对比" />
-          <span v-if="scopeDiff" class="t-12 c-2">方案范围不同（区域 / 品类 / 周数），基线不同，仅供参考</span>
+          <span v-if="scopeDiff" class="t-12 c-2">方案范围不同（{{ scopeLabels }}），基线不同，仅供参考</span>
         </div>
         <div class="sc-btns">
           <span v-if="target" class="t-12 c-2">选定：<span class="num">{{ target.id }}</span></span>
@@ -535,7 +581,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
       <div v-else class="sc-cmp">
         <div class="sc-cmp-charts">
           <div class="sc-cmp-chart"><div class="t-12 fw-600">关键指标较基线变化</div><div class="sc-cmp-ec"><EChart :option="barOpt" /></div></div>
-          <div class="sc-cmp-chart"><div class="t-12 fw-600">周销售额</div><div class="sc-cmp-ec"><EChart :option="cmpLineOpt" /></div></div>
+          <div class="sc-cmp-chart"><div class="t-12 fw-600">周{{ ser.label }}</div><div class="sc-cmp-ec"><EChart :option="cmpLineOpt" /></div></div>
         </div>
         <table class="sc-ct">
           <thead>
@@ -547,11 +593,8 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
             </tr>
           </thead>
           <tbody>
-            <tr><td class="c-3">范围</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12">{{ s.scope.area }} · {{ s.scope.category }} · {{ s.scope.weeks }} 周</td></tr>
-            <tr><td class="c-3">价格 / 补货</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12 num">
-              价格 {{ s.drivers.pricePct > 0 ? '+' : '' }}{{ s.drivers.pricePct }}% · 补货 {{ s.drivers.replenishPct > 0 ? '+' : '' }}{{ s.drivers.replenishPct }}% · 安全库存 {{ s.drivers.safetyDays }} 天</td></tr>
-            <tr><td class="c-3">促销</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12 num">
-              {{ s.drivers.promo === '无' ? '无' : `${s.drivers.promo} ${s.drivers.promoDepth}% × ${s.drivers.promoWeeks} 周` }}</td></tr>
+            <tr><td class="c-3">范围</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12">{{ scopeText(cmpTpl, s.scope as unknown as ScCfg) }}</td></tr>
+            <tr v-for="r in cmpTpl.compareRows" :key="r.label"><td class="c-3">{{ r.label }}</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12 num">{{ cmpRowText(r, s) }}</td></tr>
             <tr v-for="key in KPI_KEYS" :key="key">
               <td class="c-3">{{ kpiOf(cmpList[0], key).label }}</td>
               <td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }">

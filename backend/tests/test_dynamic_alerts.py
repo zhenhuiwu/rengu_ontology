@@ -224,3 +224,19 @@ async def test_page_params_come_from_skeleton(dyn, client, path):  # noqa: F811
     far = (await client.get(f"{API}{path}", params={**q, "size": 5, "page": 999})).json()
     exact = (await client.get(f"{API}{path}", params={**q, "size": 5, "page": last})).json()
     assert far["page"] == last and far["items"] == exact["items"] and far["items"]
+
+
+async def test_generic_dims_and_approver(dyn, client):  # noqa: F811
+    """去零售写死：门店是通用维度 dims；对象称呼取对象类型目录；审批人取动作类型配置。"""
+    o = (await client.get(f"{API}/alerts/{OPEN}")).json()
+    assert "storeId" not in o and "storeLabel" not in o
+    assert o["objKind"] == "product" and o["objKindLabel"] == "商品"
+    assert len(o["dims"]) == 1 and o["dims"][0]["objKind"] == "store" and o["dims"][0]["kindLabel"] == "门店"
+    assert o["dims"][0]["id"] and o["dims"][0]["label"]
+    assert o["approver"] == "品类经理 王敏"  # R-007 → 发起调价审批的审批人配置
+    d = (await client.get(f"{API}/alerts/{OPEN_ORDER}")).json()
+    assert d["dims"] == [] and d["objKindLabel"] == "订单" and d["approver"] == "区域运营 陈立军"
+    r = (await client.get(f"{API}/alerts", params={"status": "all", "ruleId": "R-021", "size": 1})).json()
+    assert r["items"][0]["dims"] == [] and r["items"][0]["objKindLabel"] == "门店"
+    detail = (await client.get(f"{API}/alerts/{r['items'][0]['id']}")).json()
+    assert detail["approver"] is None  # R-021 未绑定动作

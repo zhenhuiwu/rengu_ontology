@@ -156,7 +156,7 @@ async def test_lifecycle_draft(dyn, client):  # noqa: F811
     edits = {
         **empty,
         "cr": "CR-9001",
-        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终止", "desc": "x"}],
+        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终态", "desc": "x"}],
     }
     r = await client.put(url, json=edits)
     assert r.status_code == 200, r.text
@@ -226,3 +226,112 @@ async def test_compute_db_error_marks_failed(dyn, client, monkeypatch):  # noqa:
     assert (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).status_code == 202
     assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "失败"
     err(await client.get(f"{API}/scenarios/{sid}/result"), 409, "SCENARIO_FAILED")
+
+
+async def test_lifecycle_draft_registers_cr_items(dyn, client):  # noqa: F811
+    cr = (await client.post(f"{API}/change-requests", json={"title": "生命周期闭环"})).json()["id"]
+    empty = {"addStates": [], "addTransitions": [], "editTransitions": {}, "removeTransitions": []}
+    edits = {
+        **empty,
+        "cr": cr,
+        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终态", "desc": ""}],
+    }
+    r = await client.put(f"{API}/object-types/order/lifecycle/draft", json=edits)
+    assert r.status_code == 200, r.text
+    assert r.json()["crChanges"] >= 1
+    rows = (
+        await client.get(f"{API}/change-requests/{cr}/items", params={"kind": "object", "targetId": "order"})
+    ).json()
+    assert [(x["section"], x["key"], x["op"]) for x in rows] == [("lc_states", "state.已退货", "add")]
+    # 静态侧放弃整个 object 目标后，残留的生命周期草稿不再显示
+    assert (await client.delete(f"{API}/change-requests/{cr}/targets/object/order")).status_code == 204
+    d = (await client.get(f"{API}/object-types/order/lifecycle", params={"view": "draft", "cr": cr})).json()
+    assert not (d.get("draft") or {}).get("edits", {}).get("addStates")
+
+
+async def test_apply_cr_promotes_lifecycle_draft(dyn, client):  # noqa: F811
+    """发布写回 apply_cr：生命周期草稿 edits 生成下一版状态机；重复调用无副作用。"""
+    from app.modules.dynamic.writeback import apply_cr
+
+    cr = (await client.post(f"{API}/change-requests", json={"title": "生命周期发布"})).json()["id"]
+    old = (await client.get(f"{API}/object-types/order/lifecycle")).json()
+    t0 = old["transitions"][0]
+    edits = {
+        "cr": cr,
+        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终态", "desc": "", "x": 9, "y": 9}],
+        "addTransitions": [
+            {
+                "id": "T99",
+                "from": old["states"][0]["key"],
+                "to": "已退货",
+                "trigger": t0["trigger"],
+                "by": "人工",
+                "guard": "",
+                "effect": "",
+                "weekly": 0,
+            }
+        ],
+        "editTransitions": {},
+        "removeTransitions": [old["transitions"][-1]["id"]],
+    }
+    r = await client.put(f"{API}/object-types/order/lifecycle/draft", json=edits)
+    assert r.status_code == 200, r.text
+    out = await apply_cr(dyn, cr, by="U010001")
+    assert out == {"rules": [], "lifecycles": ["order"]}
+    lc = (await client.get(f"{API}/object-types/order/lifecycle")).json()
+    assert lc["version"] == old["version"] + 1
+    assert [s["key"] for s in lc["states"]] == [s["key"] for s in old["states"]] + ["已退货"]
+    ids = [t["id"] for t in lc["transitions"]]
+    assert "T99" in ids and old["transitions"][-1]["id"] not in ids and len(ids) == len(old["transitions"])
+    assert await apply_cr(dyn, cr, by="U010001") == {"rules": [], "lifecycles": []}
+    assert (await client.get(f"{API}/object-types/order/lifecycle")).json()["version"] == lc["version"]
+
+
+def test_apply_edits_rejects_bad_kind():
+    import pytest
+
+    from app.core.errors import AppError
+    from app.modules.dynamic.writeback import apply_edits
+
+    with pytest.raises(AppError) as e:
+        bad = {"addStates": [{"key": "x", "name": "x", "kind": "终止"}]}
+        apply_edits({"states": [], "transitions": []}, bad)
+    assert e.value.code == "WRITEBACK_FAILED"
+
+
+async def test_lifecycle_draft_rejects_bad_shapes(dyn, client):  # noqa: F811
+    url = f"{API}/object-types/order/lifecycle/draft"
+    base = {
+        "cr": "CR-9001",
+        "addStates": [],
+        "addTransitions": [],
+        "editTransitions": {},
+        "removeTransitions": [],
+    }
+    st = {"key": "已退货", "name": "已退货", "kind": "终态", "desc": ""}
+    tr = {"id": "T-x", "from": "待支付", "to": "已退货", "trigger": "人工", "by": "客服"}
+    cases = [
+        ({"addStates": [st], "addTransitions": [{**tr, "from": ["待支付"]}]}, "addTransitions[0].from"),
+        ({"addStates": [st], "addTransitions": [{**tr, "to": {"a": 1}}]}, "addTransitions[0].to"),
+        ({"addStates": [{**st, "key": ["x"]}]}, "addStates[0].key"),
+        ({"addStates": [{**st, "kind": "终止"}]}, "addStates[0].kind"),
+    ]
+    for extra, loc in cases:
+        r = await client.put(url, json={**base, **extra})
+        err(r, 422, "VALIDATION_FAILED")
+        assert loc in r.text, (loc, r.text)
+
+
+def test_apply_edits_missing_key_409():
+    import pytest
+
+    from app.core.errors import AppError
+    from app.modules.dynamic.writeback import apply_edits
+
+    for bad in (
+        {"addStates": [{"name": "x", "kind": "终态"}]},
+        {"addTransitions": [{"from": "a", "to": "a", "trigger": "人工"}]},
+    ):
+        with pytest.raises(AppError) as e:
+            apply_edits({"states": [{"key": "a", "name": "a", "kind": "初始"}], "transitions": []}, bad)
+        assert e.value.code == "WRITEBACK_FAILED" and e.value.status_code == 409
