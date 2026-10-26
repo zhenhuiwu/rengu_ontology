@@ -116,8 +116,7 @@ def dedupe_reason(d: dict[str, Any]) -> str:
 
 
 def hit_dims(store_id: str | None, store_label: str | None) -> list[dict[str, Any]]:
-    """命中的上下文维度（通用 dims，替代 storeId / storeLabel）。
-    rule_hit.store_id / store_label 两列保留（deprecated，不加迁移），这里映射成一条 objKind=store 的维度。"""
+    """演示数据的门店 → 通用维度（rule_hit.dims 种子、回放新增样本用；库里 rule_hit 只存 dims）。"""
     return [{"objKind": "store", "id": store_id, "label": store_label or store_id}] if store_id else []
 
 
@@ -253,7 +252,7 @@ class RuleService:
             "objKind": h.obj_kind,
             "objId": h.obj_id,
             "objLabel": h.obj_label,
-            "dims": hit_dims(h.store_id, h.store_label),
+            "dims": list(h.dims or []),
             "value": h.value,
             "threshold": h.threshold,
             "alertId": alert.code if alert else None,

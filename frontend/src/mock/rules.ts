@@ -5,7 +5,7 @@
  * 规则版本、指标口径版本都是整数。
  */
 import { seeded } from './format';
-import { RULES, ALERTS, storeOfKey, type Alert } from './dynamic';
+import { RULES, ALERTS, storeOfKey, alertDims, type Alert, type AlertDim } from './dynamic';
 import { REGION_EC } from './qa';
 import { PRODUCTS } from './products';
 import { STORES } from './stores';
@@ -131,6 +131,8 @@ export const RULE_DRAFTS: Record<string, Partial<RuleDef>> = {
 export interface Hit {
   id: string; ruleId: string; at: string; objKind: ObjKind; objId: string; objLabel: string;
   storeId?: string; storeLabel?: string;
+  /** 通用维度（= alertDims(storeId/storeLabel)；页面只读 dims） */
+  dims: AlertDim[];
   value: string; threshold: string; alertId: string | null; result: string; alert?: Alert;
 }
 const SAMPLE_VALUE: Record<string, (r: () => number) => string> = {
@@ -162,7 +164,7 @@ function regionHits(rule: RuleDef): Hit[] {
     const v = SAMPLE_VALUE[rule.id](r);
     if (day !== '2026-08-29' && r() < 0.35) continue;
     out.push({ id: `HIT-${rule.id.replace('-', '')}-${day.slice(5).replace('-', '')}00`, ruleId: rule.id, at: `${day} 22:00:${pad(5 + Math.floor(r() * 40))}`,
-      objKind: 'region', objId: REGION_EC.id, objLabel: REGION_EC.name, value: v, threshold: '< −8.0%', alertId: null, result: '已通知' });
+      objKind: 'region', objId: REGION_EC.id, objLabel: REGION_EC.name, dims: [], value: v, threshold: '< −8.0%', alertId: null, result: '已通知' });
   }
   return out;
 }
@@ -184,7 +186,7 @@ function synthHits(rule: RuleDef): Hit[] {
       const v = SAMPLE_VALUE[rule.id]?.(r) ?? c.field;
       const hid = `HIT-${rule.id.replace('-', '')}-${time.slice(5, 10).replace('-', '')}${pad(k)}`;
       const st = rule.objKind === 'product' ? storeOfKey(hid) : undefined;
-      out.push({ id: hid, ruleId: rule.id, at: time, objKind: rule.objKind, objId, objLabel, storeId: st?.id, storeLabel: st?.name,
+      out.push({ id: hid, ruleId: rule.id, at: time, objKind: rule.objKind, objId, objLabel, storeId: st?.id, storeLabel: st?.name, dims: alertDims({ storeId: st?.id, storeLabel: st?.name }),
         value: v, threshold: `${c.op} ${c.value}`, alertId: null, result: r() < 0.9 ? '已通知' : '已去重' });
     }
   }
@@ -197,7 +199,7 @@ export function hitsOf(ruleId: string): Hit[] {
   // 核心规则：产生告警的命中 + 去重键相同、冷却期内被去重（不再产生告警）的命中
   const hits = rule.core
     ? [...ALERTS.filter((a) => a.ruleId === ruleId).map((a): Hit => ({ id: a.id, ruleId, at: a.triggeredAt, objKind: a.objKind, objId: a.objId, objLabel: a.objLabel,
-      storeId: a.storeId, storeLabel: a.storeLabel, value: a.value, threshold: a.threshold, alertId: a.id, result: a.status, alert: a })),
+      storeId: a.storeId, storeLabel: a.storeLabel, dims: alertDims(a), value: a.value, threshold: a.threshold, alertId: a.id, result: a.status, alert: a })),
     ...synthHits(rule).filter((_, i) => i % 3 === 0).map((h): Hit => ({ ...h, result: '已去重' }))]
       .sort((a, b) => b.at.localeCompare(a.at))
     : synthHits(rule);
@@ -216,7 +218,7 @@ export function dedupeReason(rule: RuleDef) {
   return rule.cooldown === '不重复' ? `同一${dims}已命中过` : `同一${dims} ${rule.cooldown}内已命中`;
 }
 export type ReplayDiff = '一致' | '新增命中' | '不再命中' | '被去重';
-export interface ReplaySample { key: string; at: string; objKind: ObjKind; objId: string; objLabel: string; storeId?: string; storeLabel?: string; value: string; diff: ReplayDiff }
+export interface ReplaySample { key: string; at: string; objKind: ObjKind; objId: string; objLabel: string; storeId?: string; storeLabel?: string; dims: AlertDim[]; value: string; diff: ReplayDiff }
 /**
  * 用历史数据重算规则：逐条列出命中样本。去重键相同、冷却期内的重复命中列为“被去重”，不计入命中数
  * （命中数 = 会产生告警 / 通知的命中，与变更单影响面“近 7 天回放命中 3 → 5”同口径）。
@@ -227,7 +229,7 @@ export function replay(rule: RuleDef, range: '7d' | '30d', useDraft: boolean) {
   const all = hitsOf(rule.id).filter((h) => h.at > cut);
   const counted = all.filter((h) => h.result !== '已去重');
   const r = seeded(all.length * 13 + (useDraft ? 7 : 1) + (range === '7d' ? 3 : 5));
-  const samples: ReplaySample[] = all.map((h) => ({ key: h.id, at: h.at, objKind: h.objKind, objId: h.objId, objLabel: h.objLabel, storeId: h.storeId, storeLabel: h.storeLabel, value: h.value,
+  const samples: ReplaySample[] = all.map((h) => ({ key: h.id, at: h.at, objKind: h.objKind, objId: h.objId, objLabel: h.objLabel, storeId: h.storeId, storeLabel: h.storeLabel, dims: h.dims, value: h.value,
     diff: h.result === '已去重' ? '被去重' : useDraft && !rule.core && r() < 0.18 ? '不再命中' : '一致' }));
   if (useDraft) {
     const extra = Math.max(2, Math.round(counted.length * 0.12));
@@ -239,6 +241,7 @@ export function replay(rule: RuleDef, range: '7d' | '30d', useDraft: boolean) {
       const st = rule.objKind === 'product' ? storeOfKey(`${rule.id}-NEW-${i}`) : undefined;
       samples.push({ key: `NEW-${i}`, at: h.at, objKind: h.objKind, objId: p ? p.sku : h.objId, objLabel: p ? `${p.name} ${p.spec}` : h.objLabel,
         storeId: st?.id ?? h.storeId, storeLabel: st?.name ?? h.storeLabel,
+        dims: alertDims({ storeId: st?.id ?? h.storeId, storeLabel: st?.name ?? h.storeLabel }),
         value: rule.objKind === 'product' ? `${(17 + r()).toFixed(2)}%` : h.value, diff: '新增命中' });
     }
   }

@@ -318,11 +318,11 @@ const hits7 = computed(() => (live.value ? remote.hits7 : hitsOf(base.value.id).
 const hitsAll = computed(() => hitsOf(base.value.id).filter((h) => h.at > (hrange.value === '7d' ? '2026-10-18 23:59:59' : '2026-09-25')));
 const hits = computed(() => (live.value ? remote.hits : paginate(hitsAll.value, { page: hq.page.value, size: hq.size.value })));
 /**
- * 命中的上下文维度（通用 dims：后台 hit.dims；mock 命中的 storeId 在这里转成一条 store 维度，mock 数据不变）。
+ * 命中的上下文维度（通用 dims：后台 hit.dims；mock 命中 / 回放样本由 mock/rules 用公共 alertDims() 给出）。
  * 有维度的规则（去重键含维度，如商品×门店）单列“维度”。
  */
-type DimRow = { dims?: HitDim[]; storeId?: string | null; storeLabel?: string | null };
-const dimsOf = (h: DimRow): HitDim[] => h.dims ?? (h.storeId ? [{ objKind: 'store', id: h.storeId, label: h.storeLabel }] : []);
+type DimRow = { dims?: HitDim[] };
+const dimsOf = (h: DimRow): HitDim[] => h.dims ?? [];
 const DIM_COL = { title: '维度', key: 'dims', width: 220, ellipsis: true };
 const hasDims = (rows: DimRow[]) => rows.some((h) => dimsOf(h).length > 0);
 /** 对象列标题 = 对象类型的标题字段（static GET /object-types/{id}/meta 的 titleProp）；拿不到时用对象类型名 */

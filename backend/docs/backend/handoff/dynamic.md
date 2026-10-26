@@ -45,8 +45,8 @@
 
 1. **变更单仍是前端 mock（CR_WRITE 关时）**：草稿归属 / 草稿视图来自公共 `useDraftView`（mock `DRAFT_TARGETS` / `CHANGE_REQUESTS`），新建变更单号也是前端生成的；后端 `rule_draft.cr_code` / `lifecycle_draft.cr_code` 是软引用，没有外键。`CR_WRITE` 打开后只有种子里已有的变更单（mock 与库里都有，如 CR-0011）能真正提交 / 放弃。
 2. **生命周期页**：「发起变更」按钮在静态的 `ObjectTypesBody.vue`（`useStaticCr('object')`，不归 dynamic），由静态侧建 / 加入变更单；dynamic 保存生命周期草稿时幂等登记 object 目标并写 lc_* 行，所以不另做。静态侧放弃整个 object 目标只删 cr_items，不删 `lifecycle_draft`；dynamic 读草稿时忽略「变更单在库里但没登记该 object 目标」的残留草稿（可选：static 放弃 object 目标时回调 dynamic 清理）。
-6. **废弃列（不加迁移）**：`rule_hit.store_id` / `store_label`（及告警的同名列）保留不删，接口改出通用 `dims: [{objKind,id,label}]`，目前由 store_id 转换；迁移归 dynamic-r3b（dynamic_0003），之后再改存 JSON。
-7. **ObjBehaviorAutomation.vue**：命中对象旁的门店改为本地 `dimsOf()` 转换的通用维度（mock storeId → store 维度）；集成 dynamic-r3b 后可换成其公共 `alertDims()` 类转换。数据仍是 mock。
+6. ~~废弃列~~（集成时已做）：`rule_hit.store_id` / `store_label` 与告警同名列一起在 `dynamic_0003` 换成 `dims` JSONB（升级迁值、降级还原两列）；接口 `dims` 直接读列。
+7. ~~ObjBehaviorAutomation.vue 本地 dimsOf()~~（集成时已做）：mock 命中 / 回放样本由 `mock/rules.ts` 用公共 `alertDims()` 给出 `dims`，页面直接读 `dims`（Rules.vue 的 `dimsOf` 只剩 `h.dims ?? []`）。mock 数据值不变。
 8. **生命周期对象引用**：ObjRef 现按 objectId 引用任意对象类型；对象注册表（objectRegistry）解析不了的类型（如 member / promotion / refund）在开发环境会有告警，需要 PDE 在注册表加不告警的 `canResolve(kind)` 或补解析器。
 3. **审批界面**：动作中心 mock 没有审批 / 暂存→确认→审批的界面元素，按要求没加；后端接口和权限校验已就绪。注意：种子（mock 导出）里部分审批人（如赵磊、吴佳）不是系统用户，这些动作在库里没人能审批；测试里把 ACT-20261025-0551 的审批人改成王敏再审批。
 4. **推演异步的限制**：进程内后台任务，进程重启时正在算的方案会停在“运行中”（没有恢复 / 超时回收）；`SCENARIO_CONFIG_DIRTY` 仍走不到（`:run` 把配置写回方案）。
@@ -126,7 +126,7 @@
 
 **没做 / 待办**
 - 告警筛选按 `/facets` 生成：告警页现在只有级别 / 规则 / 关键词（流程字段），没有区域 / 门店筛选可替换。要按告警对象类型的可筛选属性筛，后台得 join 业务表（facets 的筛选值落到 alert.obj_id），下一轮和规则命中 dims 一起做：`GET /alerts?filters=<JSON>&objKind=` 复用 static 的 filters 校验（422 规则一致）。
-- `mock/rules.ts` 里命中 / 回放仍读 `Alert.storeId`（`dynamic-r3` 范围）；命中改 dims 时请改用 `alertDims()`。`ObjBehaviorAutomation.vue:151` 的 `storeLabel` 同理。
+- ~~`mock/rules.ts` 命中 / 回放读 `Alert.storeId`~~：集成时已改为 `dims: alertDims(…)`；`rule_hit` 两列并入 `dynamic_0003`。
 **情景推演模板化（已做，dynamic-r3b 第二轮）**
 - 模板定义唯一来源 `src/mock/scenarioTemplates.ts`（`ScTemplate`）；后台读同一份导出 `backend/seeds/json/dynamic/SC_TEMPLATES.json`（改 TS 后重新导出，测试会比对 `/scenarios/meta.templates` 与该 JSON）。演示模板 `demo_retail`（目标对象类型 product）原样复现原页面：范围 area / category / weeks，三组驱动，6 个 KPI，主序列，影响明细列，对比行，建议动作 → 动作名。
 - 引擎按模板 `engine` 键插拔：后台 `app/modules/dynamic/scenario_templates.py` `ENGINES`（`demo_retail` = 原 `rules_sim.simulate / stage_plan`，未改一行）；前端 `SC_ENGINES`（`demo_retail` = `mock/scenarios.ts simulate / stagePlanOf`，值不变）。

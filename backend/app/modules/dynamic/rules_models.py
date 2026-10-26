@@ -139,8 +139,9 @@ class RuleHit(CodeMixin, AppendOnlyTableMixin, Base):
     obj_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     obj_id: Mapped[str] = mapped_column(String(64), nullable=False)
     obj_label: Mapped[str] = mapped_column(String(200), nullable=False)
-    store_id: Mapped[str | None] = mapped_column(String(64))
-    store_label: Mapped[str | None] = mapped_column(String(200))
+    dims: Mapped[list] = mapped_column(
+        JsonType, nullable=False, default=list, comment="通用维度值 [{objKind,id,label}]（同 alert.dims）"
+    )
     value: Mapped[str] = mapped_column(String(200), nullable=False)
     threshold: Mapped[str] = mapped_column(String(200), nullable=False)
     dedupe_key: Mapped[str | None] = mapped_column(String(200))

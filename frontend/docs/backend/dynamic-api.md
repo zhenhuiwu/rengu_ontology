@@ -112,7 +112,7 @@
 | release_id FK null | bigint | → ontology_release.id，随哪次本体发布生效；接口返回版本号 `ver`。**mock 没有这个字段**（`RuleDef`、`RuleVersion` 都不带 release，`rules.ts` L20–25、L251），种子全为 null，以后整版发布时写入 |
 | published_by, published_at, change_note | | 版本历史 `ruleVersions()` |
 
-**rule_hit**：`id PK bigint, code UNIQUE（告警编号或 HIT-R003-102500）, rule_id FK（→ rule.id）, rule_version, at, obj_kind, obj_id, obj_label, store_id, store_label, value, threshold, dedupe_key, result（alert/notified/deduped = 产生告警/已通知/已去重）, alert_id FK null（→ alert.id）`。
+**rule_hit**：`id PK bigint, code UNIQUE（告警编号或 HIT-R003-102500）, rule_id FK（→ rule.id）, rule_version, at, obj_kind, obj_id, obj_label, dims（JSONB [{objKind,id,label}]，dynamic_0003 由 store_id/store_label 迁来）, value, threshold, dedupe_key, result（alert/notified/deduped = 产生告警/已通知/已去重）, alert_id FK null（→ alert.id）`。
 
 **action_run**
 
