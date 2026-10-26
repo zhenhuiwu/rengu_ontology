@@ -185,6 +185,14 @@ class ChangeRequestService:
 
     async def transition(self, code: str, action: str, user: CurrentUser, reason: str | None = None) -> str:
         cr = await self._lock(code)
+        with self.session.no_autoflush:  # 只在最后 flush 一次：lockVersion 恰好 +1
+            await self._transition(cr, action, user, reason)
+        await self.session.flush()
+        return cr.code
+
+    async def _transition(
+        self, cr: ChangeRequest, action: str, user: CurrentUser, reason: str | None
+    ) -> None:
         owner, reviewer = cr.owner == user.name, cr.reviewer == user.name
         is_reviewer = reviewer and not owner  # Releases.vue isReviewer
         if action == "submit":
@@ -231,8 +239,6 @@ class ChangeRequestService:
                 self._move(cr, user, S.draft, action, "改回草稿", "按驳回意见修改后重新提交")
         else:  # pragma: no cover - 路由只放行上面几种
             raise NotFound("未知操作")
-        await self.session.flush()
-        return cr.code
 
     async def delete(self, code: str, user: CurrentUser) -> None:
         cr = await self._lock(code)

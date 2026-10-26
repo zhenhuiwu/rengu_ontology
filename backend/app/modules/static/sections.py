@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.static import history, shapes
 from app.modules.static.repo import StaticRepo
+from app.modules.static.writeback import DIRTY
 
 Obj = dict[str, Any]
 G = "static"  # 导出 JSON 所在组；seed ctx 是 versioning 组的，读静态文件要带 group
@@ -54,7 +55,8 @@ class _Base:
     section = ""
 
     async def build_section(self, session: AsyncSession, base: Any, change_order_ids: list[str]) -> Any:
-        if base is not None:
+        # 发布写回改到本节（writeback.DIRTY）就按定义表重组，否则复用上一版
+        if base is not None and self.section not in session.info.get(DIRTY, ()):
             return base
         return await self.current(StaticRepo(session))
 
