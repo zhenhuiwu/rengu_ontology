@@ -4,6 +4,8 @@
  * 数据全部来自 objectRegistry.resolveObject（与抽屉同一份），补充数据见 mock/objects-qa.ts。
  * 页签：概览 / 关联对象 / 时间线 / 动作记录；右栏：可执行动作（公共确认卡）+ 对它提问（当前页浮层）。
  * 以此用户预览：标题行显示被预览用户对该类型的数据范围（scopeLabel）；对象不在范围内时整页显示无权查看；动作、提问由 useReadonly 只读。
+ * 真接口（开关 qa 且后台可用，qaLive）：头部 / 概览走 O5，关联对象 O6（每组服务端分页），时间线 O7，可执行动作 O9，提问 O4；
+ * 动作记录（O8）仍是 mock。后台没起来回退 mock 渲染，其余错误照旧提示。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
@@ -24,6 +26,10 @@ import {
 } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
 import InfoTip from '../qa/InfoTip.vue';
+import * as objApi from '@/api/qaObjects';
+import { isApiError } from '@/api/http';
+import { qaLive, qaFallBackIfDown } from '../qa/qaFallback';
+import { errText } from '../qa/useQaSession';
 
 const route = useRoute();
 const router = useRouter();
@@ -39,10 +45,53 @@ const patch = (p: Record<string, string | null>) => {
 const kind = computed(() => qs('kind') || 'store');
 const id = computed(() => qs('id'));
 const view = computed(() => (id.value ? resolveObject(kind.value, id.value) : undefined));
+
+/* 真接口：O5 详情 / O6 关联 / O7 时间线 / O9 动作 */
+const live = reactive({
+  on: false, loading: false, out: '', detail: null as objApi.ObjDetail | null,
+  rels: [] as objApi.ObjRelGroup[], tl: null as (Awaited<ReturnType<typeof objApi.getTimeline>>) | null, acts: [] as ObjAction[],
+});
+let dseq = 0;
+async function loadLive() {
+  const my = ++dseq;
+  live.on = qaLive.value && !!id.value; live.detail = null; live.out = ''; live.rels = []; live.tl = null; live.acts = [];
+  if (!live.on) { live.loading = false; return; }
+  live.loading = true;
+  const k = kind.value; const i = id.value;
+  try {
+    const [d, rels, acts] = await Promise.all([objApi.getObject(k, i), objApi.getRelated(k, i, { size: REL_SIZE }), objApi.getActions(k, i)]);
+    if (my !== dseq) return;
+    live.detail = d; live.rels = rels; live.acts = acts;
+    await loadTl(my);
+  } catch (e) {
+    if (my !== dseq) return;
+    if (isApiError(e) && e.code === 'OUT_OF_SCOPE') live.out = e.message || '无权查看';
+    else if (isApiError(e) && e.status === 404) { /* 显示“没有找到对象” */ }
+    else if (qaFallBackIfDown(e)) live.on = false;
+    else message.error(`对象加载失败：${errText(e)}`);
+  } finally { if (my === dseq) live.loading = false; }
+}
+async function loadTl(my = dseq) {
+  if (!live.on || !live.detail) return;
+  try {
+    const r = await objApi.getTimeline(kind.value, id.value, { page: tlPage.value, size: TL_SIZE });
+    if (my === dseq) live.tl = r;
+  } catch (e) { if (my === dseq && !qaFallBackIfDown(e)) message.error(`时间线加载失败：${errText(e)}`); }
+}
+async function loadRelPage(key: string, page: number) {
+  const my = dseq;
+  try {
+    const [g] = await objApi.getRelated(kind.value, id.value, { group: key, page, size: REL_SIZE });
+    if (my === dseq && g) live.rels = live.rels.map((x) => (x.key === g.key ? g : x));
+  } catch (e) { if (my === dseq && !qaFallBackIfDown(e)) message.error(`关联对象加载失败：${errText(e)}`); }
+}
+/** 头部 / 是否找到：真接口取 O5，mock 取 resolveObject */
+const hd = computed(() => (live.on ? live.detail : view.value));
+const cutoff = computed(() => (live.on ? live.detail?.cutoff ?? OBJ_CUTOFF : OBJ_CUTOFF));
 /* 预览：被预览用户对这类对象的行级范围 */
 const pv = usePreview();
 const pvLabel = computed(() => KIND_LABEL[kind.value] ?? view.value?.kindLabel ?? '');
-const pvOut = computed(() => !!view.value && pv.active.value && !inScope(kind.value, objRow(kind.value, id.value) ?? { name: view.value.title }, pv.scopeOf(pvLabel.value)));
+const pvOut = computed(() => (live.on ? !!live.out : !!view.value && pv.active.value && !inScope(kind.value, objRow(kind.value, id.value) ?? { name: view.value.title }, pv.scopeOf(pvLabel.value))));
 const TABS = [{ key: 'overview', title: '概览' }, { key: 'related', title: '关联对象' }, { key: 'timeline', title: '时间线' }, { key: 'actions', title: '动作记录' }];
 const tab = computed({ get: () => qs('tab') || 'overview', set: (v: string) => patch({ tab: v === 'overview' ? null : v, apage: null, asize: null }) });
 /* 切换到另一个对象：页签回到概览 */
@@ -81,6 +130,7 @@ function goBack() { router.push({ path: '/use/objects/search', query: back.value
 
 /* 概览：属性分组 + 关键指标（带口径版本） */
 const groups = computed(() => {
+  if (live.on) return live.detail?.groups ?? [];
   const v = view.value; if (!v) return [];
   const defs = FIELD_GROUPS[v.kind] ?? [];
   const used = new Set<string>();
@@ -90,6 +140,7 @@ const groups = computed(() => {
   return out.filter((g) => g.fields.length);
 });
 const kpis = computed(() => {
+  if (live.on) return live.detail?.kpis ?? [];
   const v = view.value; if (!v) return [];
   const list = (v.tabs ?? []).flatMap((t) => t.kpis ?? []).map((k) => ({ ...k, caliber: caliberOf(k.label) }));
   if (v.kind === 'store') list.unshift(storeExtraKpi(v.id));
@@ -97,18 +148,30 @@ const kpis = computed(() => {
 });
 
 /* 关联对象：按关系类型分组，每组各自分页 */
-const rels = computed(() => (view.value ? relationGroups(view.value.kind, view.value.id, view.value.related ?? []) : []));
+const rels = computed<objApi.ObjRelGroup[]>(() => (live.on ? live.rels : view.value ? relationGroups(view.value.kind, view.value.id, view.value.related ?? []) : []));
 const relPage = reactive<Record<string, number>>({});
 watch(() => `${kind.value}:${id.value}`, () => { Object.keys(relPage).forEach((k) => delete relPage[k]); });
 const REL_SIZE = 8;
-const relItems = (key: string, items: unknown[]) => paginate(items, { page: relPage[key] ?? 1, size: REL_SIZE }).items as { kind: string; id: string; label: string; note: string }[];
+/* 真接口：组内翻页按组重新取 O6 */
+watch(() => ({ ...relPage }), (n) => {
+  if (!live.on) return;
+  for (const g of live.rels) if (n[g.key] && n[g.key] !== (g.page ?? 1)) loadRelPage(g.key, n[g.key]);
+});
+const relItems = (g: objApi.ObjRelGroup) => (live.on ? g.items : paginate(g.items, { page: relPage[g.key] ?? 1, size: REL_SIZE }).items) as (objApi.ObjRelGroup['items'][number])[];
+const relTotal = (g: objApi.ObjRelGroup) => g.total ?? g.items.length;
+const gDenied = (g: objApi.ObjRelGroup) => (live.on ? !!g.denied : relDeniedKind(g.items[0]?.kind ?? ''));
+const gDeniedLabel = (g: objApi.ObjRelGroup) => (live.on ? g.title : KIND_LABEL[g.items[0]?.kind ?? '']);
+const iDenied = (it: objApi.ObjRelGroup['items'][number]) => (live.on ? !!it.denied : relDenied(it));
 
 /* 时间线 */
 const timeline = computed(() => (view.value ? extraTimeline(view.value.kind, view.value.id, view.value.timeline ?? []) : []));
 const tlPage = ref(1);
 watch(() => `${kind.value}:${id.value}`, () => { tlPage.value = 1; });
 const TL_SIZE = 8;
-const tlItems = computed(() => paginate(timeline.value, { page: tlPage.value, size: TL_SIZE }).items);
+const tlItems = computed(() => (live.on ? live.tl?.items ?? [] : paginate(timeline.value, { page: tlPage.value, size: TL_SIZE }).items));
+const tlTotal = computed(() => (live.on ? live.tl?.total ?? 0 : timeline.value.length));
+watch(tlPage, () => { if (live.on) loadTl(); });
+watch([qaLive, () => `${kind.value}:${id.value}`, () => pv.userName.value], loadLive, { immediate: true });
 
 /* 动作记录 */
 const records = computed(() => (view.value ? actionRecords(view.value.kind, view.value.id) : []));
@@ -125,15 +188,16 @@ const recCols = [
 const resTone = (r: string) => (r === '失败' ? 'tl-failed' : r === '结果未知' || r === '待确认' ? 'tl-attention' : 'c-2');
 
 /* 可执行动作：公共确认卡；确认卡打开时显示“待确认”，取消/关闭恢复“发起”，提交后“待审批/执行中” */
-const actions = computed(() => (view.value ? objActions(view.value.kind, view.value.id) : []));
+const actions = computed(() => (live.on ? live.acts : view.value ? objActions(view.value.kind, view.value.id) : []));
 const pending = ref('');
 const done = reactive<Record<string, string>>({});
 watch(() => `${kind.value}:${id.value}`, () => { pending.value = ''; Object.keys(done).forEach((k) => delete done[k]); });
 async function run(a: ObjAction) {
-  if (readonly.value || a.blocked || !view.value) return;
+  const h = hd.value;
+  if (readonly.value || a.blocked || !h) return;
   pending.value = a.key;
   const ok = await confirm.ask({
-    title: a.name, target: `${view.value.kindLabel} ${view.value.title}（${view.value.code}）`,
+    title: a.name, target: `${h.kindLabel} ${h.title}（${h.code}）`,
     fields: a.fields, impact: a.impact, irreversible: a.irreversible, tag: '待确认',
     okText: a.approver ? '提交审批' : '确认执行',
   });
@@ -147,10 +211,10 @@ const stateOf = (a: ObjAction) => done[a.key] || (pending.value === a.key ? '待
 /* 对它提问：当前页浮层 */
 const askOpen = ref(false);
 const askInitial = ref('');
-const askSugs = computed(() => (view.value ? quickQuestions(view.value.kind, view.value.title) : []));
+const askSugs = computed(() => (live.on ? live.detail?.quickQuestions ?? [] : view.value ? quickQuestions(view.value.kind, view.value.title) : []));
 const askScope = computed<AskScope>(() => ({
-  kind: kind.value, label: `${view.value?.kindLabel ?? ''} ${view.value?.title ?? ''}`, conds: [], ids: [id.value],
-  single: { kind: kind.value, id: id.value, title: view.value?.title ?? '' },
+  kind: kind.value, label: `${hd.value?.kindLabel ?? ''} ${hd.value?.title ?? ''}`, conds: [], ids: [id.value],
+  single: { kind: kind.value, id: id.value, title: hd.value?.title ?? '' },
 }));
 /** 提问是只读操作：预览时照常可问（回答只含被预览用户范围内的数据） */
 const askOff = computed(() => readonly.value && !pv.active.value);
@@ -161,25 +225,29 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
   <div v-if="!id" class="panel od-missing">
     <a-empty description="没有指定对象，请从对象搜索里选择一个对象"><a-button type="primary" @click="goBack">去对象搜索</a-button></a-empty>
   </div>
-  <div v-else-if="!view" class="panel od-missing">
+  <div v-else-if="live.on && live.loading" class="panel od-missing"><a-spin /></div>
+  <div v-else-if="live.on && live.out" class="panel od-missing">
+    <a-empty :description="live.out"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
+  </div>
+  <div v-else-if="!hd" class="panel od-missing">
     <a-empty :description="`没有找到对象 ${kind}:${id}`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
   </div>
   <div v-else-if="pvOut" class="panel od-missing">
-    <a-empty :description="`${pv.userName.value} 无权查看${pvLabel}「${view.title}」（${pv.scopeLabel(pvLabel)}）`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
+    <a-empty :description="`${pv.userName.value} 无权查看${pvLabel}「${hd.title}」（${pv.scopeLabel(pvLabel)}）`"><a-button @click="goBack">返回对象搜索</a-button></a-empty>
   </div>
   <div v-else class="od">
     <div class="panel od-head">
       <a class="od-back t-12" @click="goBack"><LeftOutlined /> {{ backLabel }}</a>
       <div class="od-title">
-        <span class="t-20 fw-600">{{ view.title }}</span>
-        <a-tag class="od-kind">{{ view.kindLabel }}</a-tag>
-        <span v-if="view.status" class="c-2">{{ view.status.text }}</span>
-        <span class="c-3 num">{{ view.code }}</span>
-        <span v-if="view.brief.length" class="od-brief od-ell" :title="view.brief.map((b) => `${b.label} ${b.value}`).join('　')">
-          <span v-for="b in view.brief" :key="b.label"><span class="c-2">{{ b.label }}</span> {{ b.value }}</span>
+        <span class="t-20 fw-600">{{ hd.title }}</span>
+        <a-tag class="od-kind">{{ hd.kindLabel }}</a-tag>
+        <span v-if="hd.status" class="c-2">{{ hd.status.text }}</span>
+        <span class="c-3 num">{{ hd.code }}</span>
+        <span v-if="hd.brief.length" class="od-brief od-ell" :title="hd.brief.map((b) => `${b.label} ${b.value}`).join('　')">
+          <span v-for="b in hd.brief" :key="b.label"><span class="c-2">{{ b.label }}</span> {{ b.value }}</span>
         </span>
         <span v-if="pv.active.value" class="od-cut t-12 c-2">{{ pv.userName.value }} 的{{ pv.scopeLabel(pvLabel) }}</span>
-        <span class="t-12 c-3" :class="{ 'od-cut': !pv.active.value }">数据截至 <span class="num">{{ OBJ_CUTOFF }}</span></span>
+        <span class="t-12 c-3" :class="{ 'od-cut': !pv.active.value }">数据截至 <span class="num">{{ cutoff }}</span></span>
       </div>
     </div>
 
@@ -211,13 +279,13 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
             <a-empty v-if="!rels.length" description="暂无关联对象" />
             <div v-for="g in rels" :key="g.key" class="od-rel">
               <div class="od-rel-head"><span class="fw-600">{{ g.title }}</span>
-                <AppPagination v-if="!relDeniedKind(g.items[0]?.kind ?? '')" v-model:page="relPage[g.key]" variant="simple" :total="g.items.length" :size="REL_SIZE" :empty="false" unit="个" /></div>
-              <div v-if="relDeniedKind(g.items[0]?.kind ?? '')" class="od-rel-deny t-12 c-3">{{ pv.userName.value }} 无权查看{{ KIND_LABEL[g.items[0]?.kind ?? ''] }}，预览中不显示</div>
+                <AppPagination v-if="!gDenied(g)" v-model:page="relPage[g.key]" variant="simple" :total="relTotal(g)" :size="REL_SIZE" :empty="false" unit="个" /></div>
+              <div v-if="gDenied(g)" class="od-rel-deny t-12 c-3">{{ pv.userName.value }} 无权查看{{ gDeniedLabel(g) }}，预览中不显示</div>
               <template v-else>
-                <div v-for="it in relItems(g.key, g.items)" :key="it.kind + it.id" class="od-rel-row">
-                  <span v-if="relDenied(it)" class="c-3">无权查看</span>
+                <div v-for="it in relItems(g)" :key="it.kind + it.id" class="od-rel-row">
+                  <span v-if="iDenied(it)" class="c-3">无权查看</span>
                   <ObjRef v-else :kind="it.kind" :id="it.id">{{ it.label }}</ObjRef>
-                  <span v-if="!relDenied(it)" class="c-1 od-ell" :title="it.note">{{ it.note }}</span>
+                  <span v-if="!iDenied(it)" class="c-1 od-ell" :title="it.note">{{ it.note }}</span>
                 </div>
               </template>
             </div>
@@ -225,7 +293,7 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 
           <template v-else-if="tab === 'timeline'">
             <div class="od-tl"><StatusTimeline :items="tlItems" /></div>
-            <AppPagination v-model:page="tlPage" variant="simple" :total="timeline.length" :size="TL_SIZE" unit="条" empty-text="暂无记录" />
+            <AppPagination v-model:page="tlPage" variant="simple" :total="tlTotal" :size="TL_SIZE" unit="条" empty-text="暂无记录" />
           </template>
 
           <template v-else>
