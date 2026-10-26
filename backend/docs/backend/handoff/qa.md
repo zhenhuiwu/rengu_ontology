@@ -5,6 +5,24 @@
 > 接口契约：`docs/backend/qa-api.md`（各节「联调实现」段）；评测：`docs/backend/qa-eval.md`。[推断] 标的是前端/文档没写、这里自己定的规则。
 > 前端开关：`VITE_API_REAL_MODULES` 含 `qa`（动作卡还需 `dynamic`）才走真接口，否则全部 mock。没接完的页面 / 页签在真接口模式下也仍走 mock，测试和构建不受影响。
 
+## 0a. qa-pages 分支：通用对象浏览 + 工作台范围口径（2026-10-26，本地未推送，下一轮用）
+> 基于 master `770f6d7`；qa 身份提交。设计 `backend/docs/backend/generic-object-explorer.md`，接口 `qa-api.md` §5.1（E1–E3、O4 `query`）。
+> 页面：`/use/objects/search?type=&kw=&f=&sort=&page=`、`/use/objects/detail?type=&id=&tab=` 整页改成元数据驱动（objMeta.ts / objRows.ts），工作台范围口径改成 qaScope.ts。
+
+**未完成 / 待别人**
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 静态 `GET /object-types/{id}/meta`、`/facets` | 等静态 | 前端已按设计形状对接，未上线时用 `/properties` + 默认标志，再不行用 mock；后端 E1 顺带的过渡 `facets` 在静态上线后删（`explore_api._facets`、`withFacets`） |
+| 属性标志默认规则 | [推断] | searchable = 主键 / 标题；filterable = 枚举 / 布尔 / 时间 / 非主键维度字符串；sortable = 数值 / 时间；listed 配额；后端 `flags()` 与前端 `metaFromProps` 两处要同步，静态给标志后两处都删 |
+| 指标 `variants`（口径） | 等静态 | 静态 `/metrics` 还没有该字段：真接口用 W17 选项，演示用 mock；字段上线后全部为空就隐藏口径框 |
+| 行级范围 `GET /api/admin/v1/me/row-scopes` | 等本体小白 | 未上 master；返回形状按 `[{dimension?, values[]}]` 或 `{items}` 宽松解析 [推断]；拿不到时默认取预览范围或第一个选项 |
+| 后端 SessionCaliber | 限制 | 只收 不含税 / 含税；口径换成指标 variants 后要放开成自由文本（`schemas.py`）。新会话兜底口径为空时会 422 |
+| 会话 scope 值 | [推断] | 选项值是维度取值名（如“华东大区”），旧会话的“华东”按同义词归一显示，用户再改时 PATCH 成维度取值名；后台链路按自由文本用 |
+| O4 / mock answerFor | 部分 | 用一批对象提问只支持 store / product / order；其他类型的提问按钮仍可点，回答走兜底 |
+| 动作执行 | 未接 | 对象详情真接口模式下「发起」置灰“动作执行接口还没接入”，不假装成功；演示模式明确写“演示数据” |
+| mock 绑定 | 部分 | `objRows.ts MOCK_BINDINGS` 只有门店 / 商品 / 订单；门店 region_code 在 mock 未绑定（显示 --） |
+| 工作台其他演示文案 | 未改 | 回答卡含税切换、模板弹窗默认范围、右栏动作卡仍是演示数据文案（不在本轮范围） |
+
 ## 0. qa-cardfb 分支（2026-10-26，本地未推送）
 > 分支 `qa-cardfb`，基于 master `3ece2fa`；提交 `3ece2fa..qa-cardfb`（qa 身份）。无新迁移。本节覆盖下面第 1–4 节中 R2 / 回答卡回退几行。对象搜索 / 详情的通用化在 `qa-pages` 分支，下一轮提交。
 

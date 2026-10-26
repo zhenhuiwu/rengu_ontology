@@ -1,12 +1,9 @@
 <script setup lang="ts">
 /** 输入框。下方“范围”“口径”是整个会话共用的（v-model 由工作台持有），中途修改会在对话里插入系统提示 */
 import { ref, computed } from 'vue';
-import { message } from 'ant-design-vue';
-import { useQaSession, errText, clarifyFollowUp } from '../useQaSession';
-import { qaFallBackIfDown } from '../qaFallback';
-import { getSessionOptions } from '@/api/qa';
+import { useQaSession, clarifyFollowUp } from '../useQaSession';
 import { SendOutlined, PaperClipOutlined } from '@ant-design/icons-vue';
-import { QA_SCOPE_OPTIONS, QA_CALIBER_OPTIONS } from '@/mock';
+import { useScopeCaliber } from '../qaScope';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
 /** 历史版本只读：全部置灰。历史版本里“不含税”口径尚未发布（v2026.10.3 才改），口径框显示“按该版本默认”，不显示当前版本的口径 */
@@ -17,12 +14,12 @@ const HIST_CALIBER = [{ value: '__ver', label: '口径：按该版本默认' }];
 const scope = defineModel<string>('scope', { required: true });
 const caliber = defineModel<string>('caliber', { required: true });
 const { draft: text, send, real, live, sending, activeId, detail } = useQaSession();
-/* 真接口：范围 / 口径选项取 W17 */
-const scopeOpts = ref<{ value: string; label: string }[]>(QA_SCOPE_OPTIONS);
-const caliberOpts = ref<{ value: string; label: string }[]>(QA_CALIBER_OPTIONS);
-if (real) {
-  getSessionOptions().then((o) => { scopeOpts.value = o.scopes; caliberOpts.value = o.calibers; }).catch((e) => { if (!qaFallBackIfDown(e)) message.error(`范围口径选项加载失败：${errText(e)}`); });
-}
+/* 范围 = 组织层级维度取值，口径 = 指标 variants（没有就隐藏口径框），见 ../qaScope.ts；会话里存的值不在选项里时补上，免得显示成空 */
+const sc = useScopeCaliber();
+const withCur = (opts: { value: string; label: string }[], v: string, pre: string) =>
+  (!v || opts.some((o) => o.value === v) ? opts : [...opts, { value: v, label: `${pre}：${v}` }]);
+const scopeOpts = computed(() => withCur(sc.scopeOpts.value, scope.value, '范围'));
+const caliberOpts = computed(() => withCur(sc.caliberOpts.value, caliber.value, '口径'));
 const input = ref<{ focus: () => void }>();
 const canSend = computed(() => !readonly.value && !!text.value.trim() && !(real && (sending.value || !activeId.value)));
 const sendTip = computed(() => reason.value || (real && sending.value ? '正在查询上一问' : text.value.trim() ? '' : '先输入问题'));
@@ -62,7 +59,7 @@ function onChip(f: string) {
         <a-space :size="8">
             <a-select v-model:value="scope" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="scopeOpts" />
             <a-select v-if="readonly && !previewing" value="__ver" :title="reason" disabled size="small" class="qa-cp-sel qa-cp-sel-wide" :options="HIST_CALIBER" />
-            <a-select v-else v-model:value="caliber" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="caliberOpts" />
+            <a-select v-else-if="sc.showCaliber.value" v-model:value="caliber" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="caliberOpts" />
           <a-tooltip :title="reason || '暂未开放：引用对象将在后续版本提供'"><a-button size="small" type="text" disabled><template #icon><PaperClipOutlined /></template>引用对象</a-button></a-tooltip>
           <a-divider v-if="followUps.length" type="vertical" />
           <a-tooltip v-for="f in followUps" :key="f" :title="reason || '点击直接追问'"><a-tag class="qa-cp-chip" :class="{ off: readonly }" @click="onChip(f)">{{ f }}</a-tag></a-tooltip>

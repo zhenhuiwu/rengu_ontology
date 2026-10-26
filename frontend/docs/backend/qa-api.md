@@ -412,6 +412,23 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 | O3 | `POST /objects/{kind}/export` | `{kw, facets, ids?}` | CSV（UTF-8 BOM）；传了 `ids` 就导出所选，否则导出当前筛选结果；预览时返回 `EXPORT_FORBIDDEN` | `exportCsv` |
 | O4 | `POST /scoped-ask` | `{scope:{kind,label,filter?:{kw,facets}, ids?, single?:{kind,id,title}}, question}` | `AskAnswer{text, basis, rows:[{id,kind,name,value,note}], rowsTitle?}`。**范围只传筛选条件**，没勾选时不要传全部 id（订单有 1286 条）。预览时也能问，见 1.1。用的是 2.2 同一条流水线，结果是同步 JSON | `answerFor`、`ObjAskModal` |
 
+
+### 5.1 通用对象浏览（元数据驱动，设计见 `backend/docs/backend/generic-object-explorer.md`；qa-pages 分支）
+
+O1–O3 是按门店 / 商品 / 订单写死的旧接口；通用版按对象类型 code + 属性 api 名，任何已发布对象类型都能用，页面不写死行业。代码 `backend/app/modules/qa/explore_api.py`（为免和第 8 节 X1–X3 混淆，这里记作 E1–E3）。
+
+| # | 方法 路径 | 入参 | 出参 / 规则 |
+|---|---|---|---|
+| E1 | `POST /object-types/{code}/search` | `{kw, filters:{prop:[值…] 或 {min,max}}, sort?:"prop" / "-prop", page, size≤200, withFacets=true}` | `{items:[{id,title,values:{prop:值}}], total, page, size, titleProp, bound, boundProps[], facets}`。`filters` / `sort` 只能用可筛选 / 可排序属性，否则 422；没绑定物理表 → `bound=false`、空结果（前端「未接入数据」）；`facets` 是过渡（静态 `/facets` 上线后删）[推断] |
+| E2 | `GET /object-types/{code}/objects/{id}` | — | `{id,title,values,titleProp,boundProps}`；不在行级范围 → 403 `OUT_OF_SCOPE`，不存在 / 未绑定 → 404 |
+| E3 | `POST /object-types/{code}/export` | E1 入参 + `ids?`、`props?` | CSV（UTF-8 BOM，`Content-Disposition: filename*=UTF-8''…`）；首列标题属性；敏感属性不导出；预览 403 `EXPORT_FORBIDDEN`；上限 10000 行；审计 |
+| O4 补充 | `POST /scoped-ask` | `scope.query?: {kw, filters}`（E1 同形） | 没选行时用当前筛选解析对象 id（`explore_ids`，同一套绑定和行级范围）；目前只支持 store / product / order 三类的回答 |
+
+- 物理绑定：`backend/seeds/extra/qa/objects/bindings.json`（对象类型 → 表，属性 → 列，可选 rowFilter）。
+- 属性标志（searchable / filterable / sortable / listed）静态还没给，后端 `flags()` 和前端 `src/pages/objects/objMeta.ts metaFromProps` 用同一套默认规则 [推断]。
+- 前端：`src/api/qaObjects.ts exploreSearch / exploreGet / exploreExport`；元数据 `objMeta.ts`（静态 `/object-types/{id}/meta`、`/facets` 优先，未上线时用属性表 / mock）；取行 `objRows.ts`（mock 模式按 `MOCK_BINDINGS` 在本地筛）。
+- 工作台范围 / 口径：`src/pages/qa/qaScope.ts`。范围 = 组织层级维度最上层取值，默认当前用户行级范围（`GET /api/admin/v1/me/row-scopes?objectType=`，未上线）；口径 = 指标 `variants` 并集，没有就隐藏。会话 `scope` 仍是 ≤60 字的自由文本，`caliber` 后端仍只收 不含税 / 含税。
+
 ---
 
 ## 6. R4 对象详情 `/use/objects/detail?kind&id&tab`

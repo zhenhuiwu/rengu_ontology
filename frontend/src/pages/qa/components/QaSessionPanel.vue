@@ -16,6 +16,8 @@ import * as qaApi from '@/api/qa';
 import AppPagination from '@/components/AppPagination.vue';
 import { useQueryParam, useQueryPage } from '../useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
+import { usePreview } from '@/composables/usePreview';
+import { useScopeCaliber } from '../qaScope';
 
 const { readonly, reason } = useReadonly();
 
@@ -70,10 +72,13 @@ async function doDelete(id: string) {
   if (active.value === id) active.value = list.value[0]?.id ?? '';
   message.success('会话已删除');
 }
+const sc = useScopeCaliber();
+const pvScope = usePreview().scopeOf;
 async function onNew() {
   if (readonly.value) return;
   kw.value = ''; range.value = 'all'; page.value = 1;
-  if (real) await newSessionReal(detail.value?.scope ?? '华东', detail.value?.caliber ?? '不含税');
+  // 新会话沿用当前会话的范围口径；没有就用默认范围 / 第一个口径（后台口径目前只收 不含税/含税，见 handoff）
+  if (real) await newSessionReal(detail.value?.scope || sc.defaultScope(pvScope), detail.value?.caliber || (sc.caliberOpts.value[0]?.value ?? ''));
   else newSession();
 }
 function select(id: string) { if (editing.value !== id) active.value = id; }
