@@ -1,0 +1,2340 @@
+[
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-01"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010245",
+        "name": "邱桂英",
+        "account": "zhang.005@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-03 19:01",
+        "createdAt": "2026-01-12"
+      },
+      {
+        "id": "U010252",
+        "name": "张娜",
+        "account": "liu.006@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-06 14:21",
+        "createdAt": "2025-03-07"
+      },
+      {
+        "id": "U010294",
+        "name": "贺梓涵",
+        "account": "li.012@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-28 12:17",
+        "createdAt": "2024-10-25"
+      },
+      {
+        "id": "U010322",
+        "name": "付雪",
+        "account": "yang.016@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-09 12:27",
+        "createdAt": "2025-10-10"
+      },
+      {
+        "id": "U010525",
+        "name": "孟婷",
+        "account": "zhang.045@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-29 14:10",
+        "createdAt": "2026-12-20"
+      },
+      {
+        "id": "U010693",
+        "name": "薛静",
+        "account": "zhang.069@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-17 08:27",
+        "createdAt": "2024-01-12"
+      },
+      {
+        "id": "U010721",
+        "name": "姜雪",
+        "account": "zhao.073@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "系统管理员",
+        "status": "停用",
+        "lastLogin": "2026-09-28 08:25",
+        "createdAt": "2024-11-17"
+      },
+      {
+        "id": "U010777",
+        "name": "孙勇",
+        "account": "zhao.081@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-28 13:37",
+        "createdAt": "2026-08-02"
+      },
+      {
+        "id": "U010840",
+        "name": "郭明",
+        "account": "zhou.090@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-03 08:12",
+        "createdAt": "2026-08-12"
+      },
+      {
+        "id": "U010868",
+        "name": "蒋梓涵",
+        "account": "liu.094@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-12 13:22",
+        "createdAt": "2024-01-05"
+      },
+      {
+        "id": "U010910",
+        "name": "冯雪",
+        "account": "li.100@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-27 19:52",
+        "createdAt": "2026-12-22"
+      },
+      {
+        "id": "U011015",
+        "name": "萧刚",
+        "account": "wang.115@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-26 09:21",
+        "createdAt": "2025-06-03"
+      },
+      {
+        "id": "U010420",
+        "name": "陈娜",
+        "account": "liu.030@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-07 10:49",
+        "createdAt": "2024-05-04"
+      },
+      {
+        "id": "U010476",
+        "name": "李洋",
+        "account": "liu.038@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-13 12:42",
+        "createdAt": "2025-11-20"
+      },
+      {
+        "id": "U010532",
+        "name": "崔刚",
+        "account": "liu.046@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-23 19:30",
+        "createdAt": "2024-03-08"
+      },
+      {
+        "id": "U010588",
+        "name": "付浩",
+        "account": "liu.054@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-25 18:32",
+        "createdAt": "2025-05-18"
+      },
+      {
+        "id": "U010644",
+        "name": "邓宇轩",
+        "account": "liu.062@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-28 08:54",
+        "createdAt": "2024-10-18"
+      },
+      {
+        "id": "U010700",
+        "name": "向刚",
+        "account": "liu.070@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-09 15:11",
+        "createdAt": "2024-10-01"
+      },
+      {
+        "id": "U010756",
+        "name": "韩敏",
+        "account": "liu.078@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 11:06",
+        "createdAt": "2024-06-18"
+      },
+      {
+        "id": "U010812",
+        "name": "姚娜",
+        "account": "liu.086@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-18 08:54",
+        "createdAt": "2025-01-16"
+      },
+      {
+        "id": "U010924",
+        "name": "赵宇轩",
+        "account": "liu.102@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-22 11:41",
+        "createdAt": "2024-06-10"
+      },
+      {
+        "id": "U010980",
+        "name": "范海燕",
+        "account": "liu.110@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-29 18:55",
+        "createdAt": "2025-12-04"
+      },
+      {
+        "id": "U011036",
+        "name": "宋浩",
+        "account": "liu.118@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-10 14:26",
+        "createdAt": "2026-02-06"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-02"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010371",
+        "name": "宋超",
+        "account": "chen.023@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "待激活",
+        "lastLogin": null,
+        "createdAt": "2024-08-09"
+      },
+      {
+        "id": "U010490",
+        "name": "赵芳",
+        "account": "yang.040@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-09-28 19:03",
+        "createdAt": "2025-05-18"
+      },
+      {
+        "id": "U010497",
+        "name": "魏涛",
+        "account": "zhao.041@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 16:04",
+        "createdAt": "2025-04-04"
+      },
+      {
+        "id": "U010532",
+        "name": "崔刚",
+        "account": "liu.046@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-23 19:30",
+        "createdAt": "2024-03-08"
+      },
+      {
+        "id": "U010560",
+        "name": "程芳",
+        "account": "zhou.050@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-19 16:57",
+        "createdAt": "2025-06-09"
+      },
+      {
+        "id": "U010567",
+        "name": "雷刚",
+        "account": "wang.051@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 13:29",
+        "createdAt": "2024-04-10"
+      },
+      {
+        "id": "U010574",
+        "name": "金晨",
+        "account": "li.052@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "停用",
+        "lastLogin": "2026-10-22 14:11",
+        "createdAt": "2026-07-01"
+      },
+      {
+        "id": "U010609",
+        "name": "范宇轩",
+        "account": "zhao.057@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 19:45",
+        "createdAt": "2026-09-24"
+      },
+      {
+        "id": "U010658",
+        "name": "石晨",
+        "account": "yang.064@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-09-27 12:09",
+        "createdAt": "2024-12-27"
+      },
+      {
+        "id": "U010917",
+        "name": "侯涛",
+        "account": "zhang.101@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-12 16:07",
+        "createdAt": "2024-12-09"
+      },
+      {
+        "id": "U010973",
+        "name": "杜海燕",
+        "account": "zhang.109@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-07 12:52",
+        "createdAt": "2025-09-05"
+      },
+      {
+        "id": "U010987",
+        "name": "袁梓涵",
+        "account": "chen.111@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 19:28",
+        "createdAt": "2025-03-04"
+      },
+      {
+        "id": "U011036",
+        "name": "宋浩",
+        "account": "liu.118@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-10 14:26",
+        "createdAt": "2026-02-06"
+      },
+      {
+        "id": "U011043",
+        "name": "顾浩",
+        "account": "chen.119@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "本体建模师",
+        "status": "停用",
+        "lastLogin": "2026-10-20 12:13",
+        "createdAt": "2026-12-24"
+      },
+      {
+        "id": "U011064",
+        "name": "唐宇轩",
+        "account": "zhou.122@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-09-28 16:52",
+        "createdAt": "2026-06-22"
+      },
+      {
+        "id": "U010273",
+        "name": "梁卫国",
+        "account": "zhao.009@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 08:28",
+        "createdAt": "2025-05-12"
+      },
+      {
+        "id": "U010329",
+        "name": "林超",
+        "account": "zhao.017@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-09 11:37",
+        "createdAt": "2026-03-09"
+      },
+      {
+        "id": "U010385",
+        "name": "孔霞",
+        "account": "zhao.025@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-07 10:51",
+        "createdAt": "2024-03-10"
+      },
+      {
+        "id": "U010441",
+        "name": "潘立军",
+        "account": "zhao.033@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 19:02",
+        "createdAt": "2024-01-06"
+      },
+      {
+        "id": "U010553",
+        "name": "潘涛",
+        "account": "zhao.049@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-25 13:37",
+        "createdAt": "2025-04-16"
+      },
+      {
+        "id": "U010665",
+        "name": "唐建华",
+        "account": "zhao.065@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:34",
+        "createdAt": "2025-11-18"
+      },
+      {
+        "id": "U010777",
+        "name": "孙勇",
+        "account": "zhao.081@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-28 13:37",
+        "createdAt": "2026-08-02"
+      },
+      {
+        "id": "U010889",
+        "name": "余静",
+        "account": "zhao.097@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-09-28 08:21",
+        "createdAt": "2025-05-08"
+      },
+      {
+        "id": "U010945",
+        "name": "闫艳",
+        "account": "zhao.105@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 13:13",
+        "createdAt": "2025-02-06"
+      },
+      {
+        "id": "U011001",
+        "name": "杜宇轩",
+        "account": "zhao.113@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 19:16",
+        "createdAt": "2025-03-22"
+      },
+      {
+        "id": "U011057",
+        "name": "陆刚",
+        "account": "zhao.121@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-29 12:28",
+        "createdAt": "2024-08-15"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-03"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010259",
+        "name": "任明",
+        "account": "chen.007@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 13:24",
+        "createdAt": "2025-11-01"
+      },
+      {
+        "id": "U010280",
+        "name": "尹娜",
+        "account": "zhou.010@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-23 17:33",
+        "createdAt": "2025-05-12"
+      },
+      {
+        "id": "U010301",
+        "name": "梁静",
+        "account": "zhang.013@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-20 09:03",
+        "createdAt": "2024-02-17"
+      },
+      {
+        "id": "U010315",
+        "name": "史磊",
+        "account": "chen.015@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-17 12:43",
+        "createdAt": "2025-02-07"
+      },
+      {
+        "id": "U010343",
+        "name": "潘平",
+        "account": "wang.019@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-12 17:12",
+        "createdAt": "2026-01-11"
+      },
+      {
+        "id": "U010392",
+        "name": "钱婷",
+        "account": "zhou.026@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-12 14:01",
+        "createdAt": "2026-07-07"
+      },
+      {
+        "id": "U010406",
+        "name": "陶浩",
+        "account": "li.028@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "数据分析师",
+        "status": "待激活",
+        "lastLogin": null,
+        "createdAt": "2026-07-27"
+      },
+      {
+        "id": "U010413",
+        "name": "段晓峰",
+        "account": "zhang.029@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-04 12:50",
+        "createdAt": "2026-07-13"
+      },
+      {
+        "id": "U010420",
+        "name": "陈娜",
+        "account": "liu.030@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-07 10:49",
+        "createdAt": "2024-05-04"
+      },
+      {
+        "id": "U010441",
+        "name": "潘立军",
+        "account": "zhao.033@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 19:02",
+        "createdAt": "2024-01-06"
+      },
+      {
+        "id": "U010448",
+        "name": "万明",
+        "account": "zhou.034@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-11 16:45",
+        "createdAt": "2026-07-10"
+      },
+      {
+        "id": "U010462",
+        "name": "于建华",
+        "account": "li.036@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-29 15:03",
+        "createdAt": "2026-05-13"
+      },
+      {
+        "id": "U010504",
+        "name": "邱志强",
+        "account": "zhou.042@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-01 12:18",
+        "createdAt": "2025-10-26"
+      },
+      {
+        "id": "U010546",
+        "name": "方海燕",
+        "account": "yang.048@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-04 16:17",
+        "createdAt": "2024-12-01"
+      },
+      {
+        "id": "U010553",
+        "name": "潘涛",
+        "account": "zhao.049@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-25 13:37",
+        "createdAt": "2025-04-16"
+      },
+      {
+        "id": "U010581",
+        "name": "邓磊",
+        "account": "zhang.053@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "数据分析师",
+        "status": "待激活",
+        "lastLogin": null,
+        "createdAt": "2025-03-10"
+      },
+      {
+        "id": "U010588",
+        "name": "付浩",
+        "account": "liu.054@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-25 18:32",
+        "createdAt": "2025-05-18"
+      },
+      {
+        "id": "U010602",
+        "name": "邹明",
+        "account": "yang.056@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:41",
+        "createdAt": "2024-06-04"
+      },
+      {
+        "id": "U010623",
+        "name": "毛涛",
+        "account": "wang.059@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-15 16:39",
+        "createdAt": "2026-07-10"
+      },
+      {
+        "id": "U010630",
+        "name": "崔平",
+        "account": "li.060@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-21 18:03",
+        "createdAt": "2026-05-02"
+      },
+      {
+        "id": "U010679",
+        "name": "崔立军",
+        "account": "wang.067@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-17 13:40",
+        "createdAt": "2026-04-07"
+      },
+      {
+        "id": "U010714",
+        "name": "宋敏",
+        "account": "yang.072@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-26 17:41",
+        "createdAt": "2025-11-04"
+      },
+      {
+        "id": "U010742",
+        "name": "熊桂英",
+        "account": "li.076@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-17 14:52",
+        "createdAt": "2025-01-12"
+      },
+      {
+        "id": "U010749",
+        "name": "万晓峰",
+        "account": "zhang.077@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-20 14:51",
+        "createdAt": "2025-10-19"
+      },
+      {
+        "id": "U010756",
+        "name": "韩敏",
+        "account": "liu.078@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 11:06",
+        "createdAt": "2024-06-18"
+      },
+      {
+        "id": "U010770",
+        "name": "唐桂英",
+        "account": "yang.080@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-28 09:10",
+        "createdAt": "2025-02-19"
+      },
+      {
+        "id": "U010798",
+        "name": "江梓涵",
+        "account": "li.084@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-24 10:43",
+        "createdAt": "2026-07-20"
+      },
+      {
+        "id": "U010819",
+        "name": "陶立军",
+        "account": "chen.087@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "停用",
+        "lastLogin": "2026-10-17 17:10",
+        "createdAt": "2025-12-23"
+      },
+      {
+        "id": "U010833",
+        "name": "于志强",
+        "account": "zhao.089@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "待激活",
+        "lastLogin": null,
+        "createdAt": "2026-08-02"
+      },
+      {
+        "id": "U010854",
+        "name": "张晓峰",
+        "account": "li.092@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 14:58",
+        "createdAt": "2026-10-12"
+      },
+      {
+        "id": "U010931",
+        "name": "严芳",
+        "account": "chen.103@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:08",
+        "createdAt": "2024-03-03"
+      },
+      {
+        "id": "U010938",
+        "name": "程伟",
+        "account": "yang.104@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-24 10:09",
+        "createdAt": "2024-03-23"
+      },
+      {
+        "id": "U010945",
+        "name": "闫艳",
+        "account": "zhao.105@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 13:13",
+        "createdAt": "2025-02-06"
+      },
+      {
+        "id": "U010952",
+        "name": "龚磊",
+        "account": "zhou.106@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-09 11:26",
+        "createdAt": "2024-05-07"
+      },
+      {
+        "id": "U010980",
+        "name": "范海燕",
+        "account": "liu.110@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-29 18:55",
+        "createdAt": "2025-12-04"
+      },
+      {
+        "id": "U011001",
+        "name": "杜宇轩",
+        "account": "zhao.113@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 19:16",
+        "createdAt": "2025-03-22"
+      },
+      {
+        "id": "U011022",
+        "name": "彭立军",
+        "account": "li.116@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-24 15:13",
+        "createdAt": "2025-05-27"
+      },
+      {
+        "id": "U011050",
+        "name": "唐浩",
+        "account": "yang.120@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 15:29",
+        "createdAt": "2025-10-17"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-04"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010308",
+        "name": "高伟",
+        "account": "liu.014@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "动作审批人",
+        "status": "停用",
+        "lastLogin": "2026-09-25 10:44",
+        "createdAt": "2024-08-18"
+      },
+      {
+        "id": "U010336",
+        "name": "龙磊",
+        "account": "zhou.018@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "动作审批人",
+        "status": "停用",
+        "lastLogin": "2026-10-05 19:33",
+        "createdAt": "2025-10-04"
+      },
+      {
+        "id": "U010427",
+        "name": "卢静",
+        "account": "chen.031@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "动作审批人",
+        "status": "停用",
+        "lastLogin": "2026-10-23 08:31",
+        "createdAt": "2025-04-19"
+      },
+      {
+        "id": "U010434",
+        "name": "史立军",
+        "account": "yang.032@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-20 08:08",
+        "createdAt": "2024-12-24"
+      },
+      {
+        "id": "U010469",
+        "name": "薛晓峰",
+        "account": "zhang.037@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "动作审批人",
+        "status": "待激活",
+        "lastLogin": null,
+        "createdAt": "2026-03-07"
+      },
+      {
+        "id": "U010539",
+        "name": "夏佳",
+        "account": "chen.047@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-10 16:06",
+        "createdAt": "2024-04-26"
+      },
+      {
+        "id": "U010616",
+        "name": "李霞",
+        "account": "zhou.058@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-20 11:49",
+        "createdAt": "2026-02-01"
+      },
+      {
+        "id": "U010637",
+        "name": "魏敏",
+        "account": "zhang.061@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "动作审批人",
+        "status": "停用",
+        "lastLogin": "2026-10-16 09:17",
+        "createdAt": "2025-11-17"
+      },
+      {
+        "id": "U010700",
+        "name": "向刚",
+        "account": "liu.070@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-09 15:11",
+        "createdAt": "2024-10-01"
+      },
+      {
+        "id": "U010791",
+        "name": "白平",
+        "account": "wang.083@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-24 13:20",
+        "createdAt": "2025-11-11"
+      },
+      {
+        "id": "U010812",
+        "name": "姚娜",
+        "account": "liu.086@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-18 08:54",
+        "createdAt": "2025-01-16"
+      },
+      {
+        "id": "U010889",
+        "name": "余静",
+        "account": "zhao.097@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-09-28 08:21",
+        "createdAt": "2025-05-08"
+      },
+      {
+        "id": "U010259",
+        "name": "任明",
+        "account": "chen.007@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 13:24",
+        "createdAt": "2025-11-01"
+      },
+      {
+        "id": "U010315",
+        "name": "史磊",
+        "account": "chen.015@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-17 12:43",
+        "createdAt": "2025-02-07"
+      },
+      {
+        "id": "U010483",
+        "name": "龙志强",
+        "account": "chen.039@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-17 15:27",
+        "createdAt": "2025-12-25"
+      },
+      {
+        "id": "U010595",
+        "name": "邓涛",
+        "account": "chen.055@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-06 12:48",
+        "createdAt": "2024-08-04"
+      },
+      {
+        "id": "U010651",
+        "name": "熊静",
+        "account": "chen.063@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-09 12:33",
+        "createdAt": "2026-02-17"
+      },
+      {
+        "id": "U010707",
+        "name": "曾晓峰",
+        "account": "chen.071@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-27 11:53",
+        "createdAt": "2026-06-01"
+      },
+      {
+        "id": "U010763",
+        "name": "陈杰",
+        "account": "chen.079@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-28 09:53",
+        "createdAt": "2026-03-20"
+      },
+      {
+        "id": "U010931",
+        "name": "严芳",
+        "account": "chen.103@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:08",
+        "createdAt": "2024-03-03"
+      },
+      {
+        "id": "U010987",
+        "name": "袁梓涵",
+        "account": "chen.111@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 19:28",
+        "createdAt": "2025-03-04"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-05"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010231",
+        "name": "苏刚",
+        "account": "wang.003@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-20 13:42",
+        "createdAt": "2025-12-15"
+      },
+      {
+        "id": "U010238",
+        "name": "谢晓峰",
+        "account": "li.004@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-08 10:35",
+        "createdAt": "2024-03-20"
+      },
+      {
+        "id": "U010266",
+        "name": "邵浩",
+        "account": "yang.008@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-19 12:27",
+        "createdAt": "2025-12-07"
+      },
+      {
+        "id": "U010273",
+        "name": "梁卫国",
+        "account": "zhao.009@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 08:28",
+        "createdAt": "2025-05-12"
+      },
+      {
+        "id": "U010287",
+        "name": "张志强",
+        "account": "wang.011@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-23 14:39",
+        "createdAt": "2025-02-15"
+      },
+      {
+        "id": "U010329",
+        "name": "林超",
+        "account": "zhao.017@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-09 11:37",
+        "createdAt": "2026-03-09"
+      },
+      {
+        "id": "U010350",
+        "name": "邵梓涵",
+        "account": "li.020@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 16:36",
+        "createdAt": "2024-08-04"
+      },
+      {
+        "id": "U010357",
+        "name": "付伟",
+        "account": "zhang.021@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-26 14:29",
+        "createdAt": "2026-06-05"
+      },
+      {
+        "id": "U010364",
+        "name": "向涛",
+        "account": "liu.022@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "待激活",
+        "lastLogin": null,
+        "createdAt": "2025-10-28"
+      },
+      {
+        "id": "U010378",
+        "name": "吕志强",
+        "account": "yang.024@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-06 18:20",
+        "createdAt": "2025-03-22"
+      },
+      {
+        "id": "U010385",
+        "name": "孔霞",
+        "account": "zhao.025@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-07 10:51",
+        "createdAt": "2024-03-10"
+      },
+      {
+        "id": "U010399",
+        "name": "闫桂英",
+        "account": "wang.027@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-19 15:49",
+        "createdAt": "2026-09-02"
+      },
+      {
+        "id": "U010455",
+        "name": "邵杰",
+        "account": "wang.035@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-17 14:01",
+        "createdAt": "2026-08-25"
+      },
+      {
+        "id": "U010476",
+        "name": "李洋",
+        "account": "liu.038@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-13 12:42",
+        "createdAt": "2025-11-20"
+      },
+      {
+        "id": "U010483",
+        "name": "龙志强",
+        "account": "chen.039@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-17 15:27",
+        "createdAt": "2025-12-25"
+      },
+      {
+        "id": "U010511",
+        "name": "向静",
+        "account": "wang.043@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-04 17:32",
+        "createdAt": "2026-01-20"
+      },
+      {
+        "id": "U010518",
+        "name": "谢婷",
+        "account": "li.044@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-25 09:19",
+        "createdAt": "2026-09-22"
+      },
+      {
+        "id": "U010595",
+        "name": "邓涛",
+        "account": "chen.055@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-06 12:48",
+        "createdAt": "2024-08-04"
+      },
+      {
+        "id": "U010644",
+        "name": "邓宇轩",
+        "account": "liu.062@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-28 08:54",
+        "createdAt": "2024-10-18"
+      },
+      {
+        "id": "U010651",
+        "name": "熊静",
+        "account": "chen.063@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-09 12:33",
+        "createdAt": "2026-02-17"
+      },
+      {
+        "id": "U010665",
+        "name": "唐建华",
+        "account": "zhao.065@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:34",
+        "createdAt": "2025-11-18"
+      },
+      {
+        "id": "U010672",
+        "name": "林刚",
+        "account": "zhou.066@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-09 12:51",
+        "createdAt": "2026-08-19"
+      },
+      {
+        "id": "U010686",
+        "name": "谭志强",
+        "account": "li.068@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-15 17:29",
+        "createdAt": "2024-10-15"
+      },
+      {
+        "id": "U010707",
+        "name": "曾晓峰",
+        "account": "chen.071@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-27 11:53",
+        "createdAt": "2026-06-01"
+      },
+      {
+        "id": "U010728",
+        "name": "唐海燕",
+        "account": "zhou.074@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-22 09:10",
+        "createdAt": "2024-08-12"
+      },
+      {
+        "id": "U010735",
+        "name": "方芳",
+        "account": "wang.075@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-15 13:03",
+        "createdAt": "2025-04-07"
+      },
+      {
+        "id": "U010763",
+        "name": "陈杰",
+        "account": "chen.079@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-28 09:53",
+        "createdAt": "2026-03-20"
+      },
+      {
+        "id": "U010784",
+        "name": "黎涛",
+        "account": "zhou.082@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-22 10:54",
+        "createdAt": "2026-10-18"
+      },
+      {
+        "id": "U010805",
+        "name": "闫梓涵",
+        "account": "zhang.085@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-12 15:07",
+        "createdAt": "2025-01-20"
+      },
+      {
+        "id": "U010826",
+        "name": "林明",
+        "account": "yang.088@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-17 10:11",
+        "createdAt": "2025-01-09"
+      },
+      {
+        "id": "U010847",
+        "name": "贺建华",
+        "account": "wang.091@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-18 18:03",
+        "createdAt": "2026-02-02"
+      },
+      {
+        "id": "U010861",
+        "name": "邱婷",
+        "account": "zhang.093@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-04 09:02",
+        "createdAt": "2024-05-20"
+      },
+      {
+        "id": "U010875",
+        "name": "罗立军",
+        "account": "chen.095@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "待激活",
+        "lastLogin": null,
+        "createdAt": "2026-05-12"
+      },
+      {
+        "id": "U010882",
+        "name": "尹晓峰",
+        "account": "yang.096@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-22 17:53",
+        "createdAt": "2026-10-28"
+      },
+      {
+        "id": "U010896",
+        "name": "付卫国",
+        "account": "zhou.098@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-20 08:23",
+        "createdAt": "2024-06-04"
+      },
+      {
+        "id": "U010903",
+        "name": "蒋敏",
+        "account": "wang.099@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-16 16:05",
+        "createdAt": "2025-11-12"
+      },
+      {
+        "id": "U010924",
+        "name": "赵宇轩",
+        "account": "liu.102@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-22 11:41",
+        "createdAt": "2024-06-10"
+      },
+      {
+        "id": "U010959",
+        "name": "邵平",
+        "account": "wang.107@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-23 19:35",
+        "createdAt": "2026-12-11"
+      },
+      {
+        "id": "U010966",
+        "name": "许霞",
+        "account": "li.108@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-19 11:09",
+        "createdAt": "2026-10-14"
+      },
+      {
+        "id": "U010994",
+        "name": "严静",
+        "account": "yang.112@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-25 12:27",
+        "createdAt": "2026-06-08"
+      },
+      {
+        "id": "U011008",
+        "name": "曾静",
+        "account": "zhou.114@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "停用",
+        "lastLogin": "2026-09-27 19:54",
+        "createdAt": "2024-11-28"
+      },
+      {
+        "id": "U011029",
+        "name": "秦伟",
+        "account": "zhang.117@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-02 08:41",
+        "createdAt": "2026-07-16"
+      },
+      {
+        "id": "U011057",
+        "name": "陆刚",
+        "account": "zhao.121@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-29 12:28",
+        "createdAt": "2024-08-15"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-06"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010245",
+        "name": "邱桂英",
+        "account": "zhang.005@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-03 19:01",
+        "createdAt": "2026-01-12"
+      },
+      {
+        "id": "U010273",
+        "name": "梁卫国",
+        "account": "zhao.009@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 08:28",
+        "createdAt": "2025-05-12"
+      },
+      {
+        "id": "U010301",
+        "name": "梁静",
+        "account": "zhang.013@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-20 09:03",
+        "createdAt": "2024-02-17"
+      },
+      {
+        "id": "U010329",
+        "name": "林超",
+        "account": "zhao.017@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-09 11:37",
+        "createdAt": "2026-03-09"
+      },
+      {
+        "id": "U010357",
+        "name": "付伟",
+        "account": "zhang.021@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-26 14:29",
+        "createdAt": "2026-06-05"
+      },
+      {
+        "id": "U010385",
+        "name": "孔霞",
+        "account": "zhao.025@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-07 10:51",
+        "createdAt": "2024-03-10"
+      },
+      {
+        "id": "U010413",
+        "name": "段晓峰",
+        "account": "zhang.029@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-04 12:50",
+        "createdAt": "2026-07-13"
+      },
+      {
+        "id": "U010441",
+        "name": "潘立军",
+        "account": "zhao.033@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 19:02",
+        "createdAt": "2024-01-06"
+      },
+      {
+        "id": "U010497",
+        "name": "魏涛",
+        "account": "zhao.041@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 16:04",
+        "createdAt": "2025-04-04"
+      },
+      {
+        "id": "U010525",
+        "name": "孟婷",
+        "account": "zhang.045@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-29 14:10",
+        "createdAt": "2026-12-20"
+      },
+      {
+        "id": "U010553",
+        "name": "潘涛",
+        "account": "zhao.049@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-25 13:37",
+        "createdAt": "2025-04-16"
+      },
+      {
+        "id": "U010609",
+        "name": "范宇轩",
+        "account": "zhao.057@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 19:45",
+        "createdAt": "2026-09-24"
+      },
+      {
+        "id": "U010637",
+        "name": "魏敏",
+        "account": "zhang.061@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "动作审批人",
+        "status": "停用",
+        "lastLogin": "2026-10-16 09:17",
+        "createdAt": "2025-11-17"
+      },
+      {
+        "id": "U010665",
+        "name": "唐建华",
+        "account": "zhao.065@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:34",
+        "createdAt": "2025-11-18"
+      },
+      {
+        "id": "U010693",
+        "name": "薛静",
+        "account": "zhang.069@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-17 08:27",
+        "createdAt": "2024-01-12"
+      },
+      {
+        "id": "U010721",
+        "name": "姜雪",
+        "account": "zhao.073@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "系统管理员",
+        "status": "停用",
+        "lastLogin": "2026-09-28 08:25",
+        "createdAt": "2024-11-17"
+      },
+      {
+        "id": "U010749",
+        "name": "万晓峰",
+        "account": "zhang.077@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-20 14:51",
+        "createdAt": "2025-10-19"
+      },
+      {
+        "id": "U010777",
+        "name": "孙勇",
+        "account": "zhao.081@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-28 13:37",
+        "createdAt": "2026-08-02"
+      },
+      {
+        "id": "U010805",
+        "name": "闫梓涵",
+        "account": "zhang.085@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-12 15:07",
+        "createdAt": "2025-01-20"
+      },
+      {
+        "id": "U010861",
+        "name": "邱婷",
+        "account": "zhang.093@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-04 09:02",
+        "createdAt": "2024-05-20"
+      },
+      {
+        "id": "U010889",
+        "name": "余静",
+        "account": "zhao.097@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-09-28 08:21",
+        "createdAt": "2025-05-08"
+      },
+      {
+        "id": "U010917",
+        "name": "侯涛",
+        "account": "zhang.101@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-12 16:07",
+        "createdAt": "2024-12-09"
+      },
+      {
+        "id": "U010945",
+        "name": "闫艳",
+        "account": "zhao.105@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 13:13",
+        "createdAt": "2025-02-06"
+      },
+      {
+        "id": "U010973",
+        "name": "杜海燕",
+        "account": "zhang.109@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-07 12:52",
+        "createdAt": "2025-09-05"
+      },
+      {
+        "id": "U011001",
+        "name": "杜宇轩",
+        "account": "zhao.113@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 19:16",
+        "createdAt": "2025-03-22"
+      },
+      {
+        "id": "U011029",
+        "name": "秦伟",
+        "account": "zhang.117@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-02 08:41",
+        "createdAt": "2026-07-16"
+      },
+      {
+        "id": "U011057",
+        "name": "陆刚",
+        "account": "zhao.121@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-29 12:28",
+        "createdAt": "2024-08-15"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-07"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010245",
+        "name": "邱桂英",
+        "account": "zhang.005@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-03 19:01",
+        "createdAt": "2026-01-12"
+      },
+      {
+        "id": "U010280",
+        "name": "尹娜",
+        "account": "zhou.010@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-23 17:33",
+        "createdAt": "2025-05-12"
+      },
+      {
+        "id": "U010315",
+        "name": "史磊",
+        "account": "chen.015@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-17 12:43",
+        "createdAt": "2025-02-07"
+      },
+      {
+        "id": "U010350",
+        "name": "邵梓涵",
+        "account": "li.020@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 16:36",
+        "createdAt": "2024-08-04"
+      },
+      {
+        "id": "U010385",
+        "name": "孔霞",
+        "account": "zhao.025@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-07 10:51",
+        "createdAt": "2024-03-10"
+      },
+      {
+        "id": "U010420",
+        "name": "陈娜",
+        "account": "liu.030@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-07 10:49",
+        "createdAt": "2024-05-04"
+      },
+      {
+        "id": "U010455",
+        "name": "邵杰",
+        "account": "wang.035@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-17 14:01",
+        "createdAt": "2026-08-25"
+      },
+      {
+        "id": "U010490",
+        "name": "赵芳",
+        "account": "yang.040@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-09-28 19:03",
+        "createdAt": "2025-05-18"
+      },
+      {
+        "id": "U010525",
+        "name": "孟婷",
+        "account": "zhang.045@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-29 14:10",
+        "createdAt": "2026-12-20"
+      },
+      {
+        "id": "U010560",
+        "name": "程芳",
+        "account": "zhou.050@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-19 16:57",
+        "createdAt": "2025-06-09"
+      },
+      {
+        "id": "U010595",
+        "name": "邓涛",
+        "account": "chen.055@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-06 12:48",
+        "createdAt": "2024-08-04"
+      },
+      {
+        "id": "U010630",
+        "name": "崔平",
+        "account": "li.060@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-21 18:03",
+        "createdAt": "2026-05-02"
+      },
+      {
+        "id": "U010665",
+        "name": "唐建华",
+        "account": "zhao.065@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:34",
+        "createdAt": "2025-11-18"
+      },
+      {
+        "id": "U010700",
+        "name": "向刚",
+        "account": "liu.070@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-09 15:11",
+        "createdAt": "2024-10-01"
+      },
+      {
+        "id": "U010735",
+        "name": "方芳",
+        "account": "wang.075@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-15 13:03",
+        "createdAt": "2025-04-07"
+      },
+      {
+        "id": "U010770",
+        "name": "唐桂英",
+        "account": "yang.080@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-28 09:10",
+        "createdAt": "2025-02-19"
+      },
+      {
+        "id": "U010805",
+        "name": "闫梓涵",
+        "account": "zhang.085@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-12 15:07",
+        "createdAt": "2025-01-20"
+      },
+      {
+        "id": "U010840",
+        "name": "郭明",
+        "account": "zhou.090@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-03 08:12",
+        "createdAt": "2026-08-12"
+      },
+      {
+        "id": "U010910",
+        "name": "冯雪",
+        "account": "li.100@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-27 19:52",
+        "createdAt": "2026-12-22"
+      },
+      {
+        "id": "U010945",
+        "name": "闫艳",
+        "account": "zhao.105@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 13:13",
+        "createdAt": "2025-02-06"
+      },
+      {
+        "id": "U010980",
+        "name": "范海燕",
+        "account": "liu.110@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-29 18:55",
+        "createdAt": "2025-12-04"
+      },
+      {
+        "id": "U011015",
+        "name": "萧刚",
+        "account": "wang.115@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-26 09:21",
+        "createdAt": "2025-06-03"
+      },
+      {
+        "id": "U011050",
+        "name": "唐浩",
+        "account": "yang.120@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 15:29",
+        "createdAt": "2025-10-17"
+      }
+    ]
+  },
+  {
+    "args": [
+      {
+        "ref": "system/ROLES",
+        "key": "id",
+        "id": "R-08"
+      }
+    ],
+    "result": [
+      {
+        "id": "U010252",
+        "name": "张娜",
+        "account": "liu.006@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-06 14:21",
+        "createdAt": "2025-03-07"
+      },
+      {
+        "id": "U010287",
+        "name": "张志强",
+        "account": "wang.011@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-23 14:39",
+        "createdAt": "2025-02-15"
+      },
+      {
+        "id": "U010322",
+        "name": "付雪",
+        "account": "yang.016@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-10-09 12:27",
+        "createdAt": "2025-10-10"
+      },
+      {
+        "id": "U010357",
+        "name": "付伟",
+        "account": "zhang.021@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-26 14:29",
+        "createdAt": "2026-06-05"
+      },
+      {
+        "id": "U010392",
+        "name": "钱婷",
+        "account": "zhou.026@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-12 14:01",
+        "createdAt": "2026-07-07"
+      },
+      {
+        "id": "U010427",
+        "name": "卢静",
+        "account": "chen.031@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "动作审批人",
+        "status": "停用",
+        "lastLogin": "2026-10-23 08:31",
+        "createdAt": "2025-04-19"
+      },
+      {
+        "id": "U010462",
+        "name": "于建华",
+        "account": "li.036@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-09-29 15:03",
+        "createdAt": "2026-05-13"
+      },
+      {
+        "id": "U010497",
+        "name": "魏涛",
+        "account": "zhao.041@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-02 16:04",
+        "createdAt": "2025-04-04"
+      },
+      {
+        "id": "U010532",
+        "name": "崔刚",
+        "account": "liu.046@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-23 19:30",
+        "createdAt": "2024-03-08"
+      },
+      {
+        "id": "U010567",
+        "name": "雷刚",
+        "account": "wang.051@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 13:29",
+        "createdAt": "2024-04-10"
+      },
+      {
+        "id": "U010602",
+        "name": "邹明",
+        "account": "yang.056@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-03 17:41",
+        "createdAt": "2024-06-04"
+      },
+      {
+        "id": "U010637",
+        "name": "魏敏",
+        "account": "zhang.061@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "动作审批人",
+        "status": "停用",
+        "lastLogin": "2026-10-16 09:17",
+        "createdAt": "2025-11-17"
+      },
+      {
+        "id": "U010672",
+        "name": "林刚",
+        "account": "zhou.066@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-09 12:51",
+        "createdAt": "2026-08-19"
+      },
+      {
+        "id": "U010707",
+        "name": "曾晓峰",
+        "account": "chen.071@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-27 11:53",
+        "createdAt": "2026-06-01"
+      },
+      {
+        "id": "U010742",
+        "name": "熊桂英",
+        "account": "li.076@xianlin-retail.com",
+        "dept": "华南事业部 / 运营中心",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-17 14:52",
+        "createdAt": "2025-01-12"
+      },
+      {
+        "id": "U010777",
+        "name": "孙勇",
+        "account": "zhao.081@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "系统管理员",
+        "status": "启用",
+        "lastLogin": "2026-09-28 13:37",
+        "createdAt": "2026-08-02"
+      },
+      {
+        "id": "U010812",
+        "name": "姚娜",
+        "account": "liu.086@xianlin-retail.com",
+        "dept": "华东事业部 / 供应链",
+        "role": "动作审批人",
+        "status": "启用",
+        "lastLogin": "2026-10-18 08:54",
+        "createdAt": "2025-01-16"
+      },
+      {
+        "id": "U010847",
+        "name": "贺建华",
+        "account": "wang.091@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-18 18:03",
+        "createdAt": "2026-02-02"
+      },
+      {
+        "id": "U010882",
+        "name": "尹晓峰",
+        "account": "yang.096@xianlin-retail.com",
+        "dept": "华东事业部 / 会员中心",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-10-22 17:53",
+        "createdAt": "2026-10-28"
+      },
+      {
+        "id": "U010917",
+        "name": "侯涛",
+        "account": "zhang.101@xianlin-retail.com",
+        "dept": "华东事业部 / 运营中心",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-12 16:07",
+        "createdAt": "2024-12-09"
+      },
+      {
+        "id": "U010952",
+        "name": "龚磊",
+        "account": "zhou.106@xianlin-retail.com",
+        "dept": "集团总部 / 数据平台",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-09 11:26",
+        "createdAt": "2024-05-07"
+      },
+      {
+        "id": "U010987",
+        "name": "袁梓涵",
+        "account": "chen.111@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "本体建模师",
+        "status": "启用",
+        "lastLogin": "2026-10-08 19:28",
+        "createdAt": "2025-03-04"
+      },
+      {
+        "id": "U011022",
+        "name": "彭立军",
+        "account": "li.116@xianlin-retail.com",
+        "dept": "集团总部 / 信息安全",
+        "role": "数据分析师",
+        "status": "启用",
+        "lastLogin": "2026-10-24 15:13",
+        "createdAt": "2025-05-27"
+      },
+      {
+        "id": "U011057",
+        "name": "陆刚",
+        "account": "zhao.121@xianlin-retail.com",
+        "dept": "华东事业部 / 财务数据组",
+        "role": "业务查看",
+        "status": "启用",
+        "lastLogin": "2026-09-29 12:28",
+        "createdAt": "2024-08-15"
+      }
+    ]
+  }
+]

@@ -1,19 +1,21 @@
 """数据连接业务逻辑（api-index §3.1）。不 commit（SessionDep 一个请求一个事务）。
 
-- 密码只写：存 PBKDF2 摘要（EXTENSION POINT：接真实连接时换成可解密的密钥引用 / KMS），任何接口都不返回；
-- 测试连接走 adapters.get_connection_tester()（dev/test = MockConnectionTester），默认 10 秒超时；
+- 密码只写：Fernet 加密存（secrets.py，密钥 RENGU_DS_SECRET_KEY），任何接口都不返回；
+- 测试连接：开了真实连接（connector.real_connect_enabled）且类型有驱动时真连，成功后顺带内省刷新库表清单；
+  否则走 adapters.get_connection_tester()（dev/test = MockConnectionTester）。默认 10 秒超时；
 - 删除：前端删除确认只提示影响、不拦截（Connections.vue remove），这里同样直接删，
   同步记录、库表清单级联删除。api-index「被对象类型映射引用时 409」是【待定】，等静态映射落地再加。
 """
 
 import asyncio
-import hashlib
-import os
 from typing import Any
 
 from app.common.pagination import PageParams
 from app.core import clock
+from app.core.config import get_settings
+from app.core.errors import AppError
 from app.core.schema import DATETIME_FORMAT
+from app.modules.data import connector
 from app.modules.data.adapters import ConnectionTestResult, get_connection_tester
 from app.modules.data.models import Datasource, DatasourceTable, DsStatus, DsType
 from app.modules.data.repo import DatasourceRepo, DatasourceTableRepo
@@ -28,6 +30,7 @@ from app.modules.data.schemas import (
     DsTest,
     DsTestIn,
 )
+from app.modules.data.secrets import decrypt_password, encrypt_password
 
 # 常量与 mock datasources.ts 一致（tests 校验和 seeds/json/system/*.json 相同）
 DS_TYPES = [t.value for t in DsType]
@@ -52,10 +55,22 @@ META = DsMeta(
 TEST_TIMEOUT_S = 10
 
 
-def hash_password(raw: str) -> str:
-    salt = os.urandom(16)
-    dk = hashlib.pbkdf2_hmac("sha256", raw.encode(), salt, 100_000)
-    return f"pbkdf2_sha256$100000${salt.hex()}${dk.hex()}"
+class PasswordRequired(AppError):
+    status_code, code, message = 422, "DS_PASSWORD_REQUIRED", "改了主机、端口或用户名，请重新填写密码"
+
+
+class RealConnectUnavailable(AppError):
+    status_code, code, message = 422, "REAL_CONNECT_UNAVAILABLE", "未开启真实连接，或该类型暂无驱动"
+
+
+class IntrospectFailed(AppError):
+    status_code, code, message = 502, "INTROSPECT_FAILED", "连接源库失败"
+
+
+def _use_real(kind: DsType) -> bool:
+    return connector.real_connect_enabled() and (
+        connector.supports(kind.value) or get_settings().env == "prod"
+    )
 
 
 def to_out(d: Datasource) -> DatasourceOut:
@@ -120,6 +135,8 @@ def _type_fields(body: DatasourceCreate | DatasourceUpdate | DsTestIn) -> dict[s
 
 
 async def run_test(kind: DsType, config: dict[str, Any]) -> ConnectionTestResult:
+    if _use_real(kind):
+        return await connector.test_real(kind.value, config)
     tester = get_connection_tester()
     try:
         return await asyncio.wait_for(tester.test(kind.value, config), timeout=TEST_TIMEOUT_S)
@@ -157,7 +174,7 @@ class DatasourceService:
             port=body.port or DS_DEFAULT_PORT[body.type.value],
             database=body.database,
             username=body.user,
-            password_enc=hash_password(body.password),
+            password_enc=encrypt_password(body.password),
             ssl=body.ssl,
             owner=body.owner,
             status=DsStatus.untested,
@@ -192,8 +209,13 @@ class DatasourceService:
             "sync_cron": body.cron,  # 前端编辑只改 sync.mode / sync.cron，cronText 等保持
             **_type_fields(body),
         }
+        moved = (ds.host, ds.username) != (values["host"], values["username"]) or (
+            body.port is not None and body.port != ds.port
+        )
         if body.password:  # 留空 = 不修改
-            values["password_enc"] = hash_password(body.password)
+            values["password_enc"] = encrypt_password(body.password)
+        elif moved and ds.password_enc:  # 改了地址 / 账号还沿用旧密码，会把密码发到新地址
+            raise PasswordRequired()
         return await self.repo.update(ds, values)
 
     async def delete(self, code: str) -> None:
@@ -210,17 +232,88 @@ class DatasourceService:
             "database": ds.database,
             "user": ds.username,
             "ssl": ds.ssl,
+            "password": decrypt_password(ds.password_enc),
             # dev/test：异常状态的连接继续演示失败（同前端 mock）；prod 由真实适配器决定
             "mockFail": ds.status == DsStatus.error,
         }
-        res = await run_test(ds.type, config)
-        prev_msg = (ds.last_test or {}).get("msg") if not res.ok else None
+        if _use_real(ds.type) and not config["password"]:
+            res = ConnectionTestResult(False, 0, "未保存密码（或密钥已更换），请编辑连接重新填写密码")
+        else:
+            res = await run_test(ds.type, config)
+        # mock 演示：失败沿用上次信息（同前端）；真连时用真实原因
+        prev_msg = (ds.last_test or {}).get("msg") if not res.ok and not _use_real(ds.type) else None
         test = DsTest(time=_now_text(), ok=res.ok, ms=res.latency_ms, msg=prev_msg or res.message)
         values: dict[str, Any] = {"last_test": test.model_dump()}
         if res.ok:
             values["status"] = DsStatus.ok
         await self.repo.update(ds, values)
+        if res.ok and _use_real(ds.type):
+            try:
+                async with self.session.begin_nested():  # 内省出错只回滚这一步，会话还能写测试结果
+                    await self.refresh_tables(code, config=config)
+            except Exception as e:
+                test.msg = f"{test.msg}；库表清单刷新失败：{connector.err_text(e, config.get('password'))}"
+                await self.repo.update(ds, {"last_test": test.model_dump()})
         return test
+
+    async def refresh_tables(self, code: str, *, config: dict[str, Any] | None = None) -> int:
+        """连上源库内省，同步 datasource_table：
+
+        - 按 (schema, 表名) 对齐；已有行保留映射（object_type / ref），更新说明、字段数、行数、最近更新；
+        - 源库新出现的表加进来（未映射）；源库没了的表：未映射的删掉，已映射的保留（映射要人处理）；
+        - seq 重排 = 已映射在前，再按 schema + 表名（同 mock dsTables）；table_count 同步。
+        返回内省到的表数。
+        """
+        ds = await self.get(code)
+        if not _use_real(ds.type) or not connector.supports(ds.type.value):
+            raise RealConnectUnavailable(details={"type": ds.type.value})
+        if config is None:
+            config = {
+                "host": ds.host,
+                "port": ds.port,
+                "database": ds.database,
+                "user": ds.username,
+                "ssl": ds.ssl,
+                "password": decrypt_password(ds.password_enc),
+            }
+        try:
+            found = await connector.list_tables(ds.type.value, config)
+        except Exception as e:
+            raise IntrospectFailed(f"连接源库失败：{connector.err_text(e, config.get('password'))}") from None
+        now = clock.now()
+        rows = list(await self.tables.all_for(ds.id))
+        by_key = {(t.schema_name, t.name): t for t in rows}
+        seen: set[tuple[str, str]] = set()
+        for info in found:
+            key = (info.schema, info.name)
+            seen.add(key)
+            t = by_key.get(key)
+            if t is None:
+                t = DatasourceTable(
+                    datasource_id=ds.id,
+                    seq=0,
+                    schema_name=info.schema,
+                    name=info.name,
+                    object_type=None,
+                    ref=None,
+                    comment="",
+                    row_count=0,
+                    col_count=0,
+                    meta_updated_at=now,
+                )
+                self.session.add(t)
+                by_key[key] = t
+            t.comment, t.col_count, t.row_count, t.meta_updated_at = info.comment, info.cols, info.rows, now
+        for key, t in list(by_key.items()):
+            if key not in seen and not t.object_type:
+                await self.session.delete(t)
+                del by_key[key]
+        ordered = sorted(by_key.values(), key=lambda t: (t.object_type is None, t.schema_name, t.name))
+        for i, t in enumerate(ordered):
+            t.seq = i
+        ds.table_count = len(ordered)
+        await self.session.flush()
+        return len(found)
 
     async def test_unsaved(self, body: DsTestIn) -> DsTest:
         config: dict[str, Any] = {
@@ -228,6 +321,7 @@ class DatasourceService:
             "port": body.port or DS_DEFAULT_PORT[body.type.value],
             "database": body.database,
             "user": body.user,
+            "password": body.password or "",
             "ssl": body.ssl,
             "mockFail": body.mock_fail,
             **_type_fields(body),

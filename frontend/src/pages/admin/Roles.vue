@@ -7,8 +7,10 @@
  * 指标按基础对象的范围过滤，再叠加维度对象的范围；业务查看类角色（defaultDeny）没配范围的对象默认不可见。
  * “以此用户预览”：抽屉里汇总该用户所有角色合并后的有效权限，可进入只读预览。
  * URL：?role=R-04&tab=func|obj|row|members&form=edit|scope|members&preview=U010231
+ * 数据：开关 admin 切到真接口且后台可用时走 /api/admin/v1/roles（src/api/roles.ts），每次写成功后整份重新拉取；
+ * 否则用本地 mock（原逻辑不变）。
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -18,6 +20,8 @@ import { useReadonly } from '@/composables/useReadonly';
 import { usePreviewStore, firstAllowedPage } from '@/stores/preview';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
+import { isApiError } from '@/api/http';
+import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadRolesState, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type RemoteRole } from '@/api/roles';
 import { ADMIN_USERS, paginate, EMPTY, type AdminUser } from '@/mock';
 import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, effectiveAccess, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
 
@@ -33,6 +37,41 @@ const nowStr = '2026-10-25 17:10';
 // 本页内修改叠加在示例数据上
 const roles = ref<Role[]>(JSON.parse(JSON.stringify(ROLES)));
 const members = ref<Record<string, AdminUser[]>>(Object.fromEntries(ROLES.map((r) => [r.id, roleMembers(r)])));
+const allUsers = ref<AdminUser[]>(ADMIN_USERS);
+/** true = 写操作走接口（按开关，不看加载成败） */
+const remote = ref(rolesApiOn());
+/** true = 页面数据已来自后台；首次加载失败时显示演示数据，但写操作仍走接口（失败就报错） */
+const loaded = ref(false);
+/** 首次加载才允许回退 mock；已用后台数据后重拉失败就报错，不悄悄切到 mock */
+async function reload() {
+  const st = await loadRolesState();
+  if (!st) {
+    if (loaded.value) throw new Error('后台暂时连不上，数据未刷新，请稍后刷新页面');
+    return;
+  }
+  roles.value = st.roles;
+  members.value = st.members;
+  allUsers.value = st.users;
+  loaded.value = true;
+}
+/** 后台写操作：成功后重新拉取；失败提示后台的报错（不改本地数据） */
+async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
+  let r: T;
+  try {
+    r = await fn();
+  } catch (e) {
+    message.error(isApiError(e) ? e.message : '操作失败，请稍后重试');
+    return undefined;
+  }
+  try {
+    await reload();
+  } catch (e) {
+    message.warning(`已保存，刷新失败：${e instanceof Error ? e.message : '请稍后刷新页面'}`);
+  }
+  return r;
+}
+const lockOf = (r: Role) => (r as Partial<RemoteRole>).lockVersion;
+onMounted(async () => { await reload(); if (loaded.value) resetDraft(); });
 const role = computed(() => roles.value.find((r) => r.id === q('role')) ?? roles.value[0]);
 const locked = computed(() => readonly.value || role.value.builtIn);
 const lockReason = computed(() => reason.value || (role.value.builtIn ? '内置角色不能修改，可复制后再改' : ''));
@@ -62,6 +101,13 @@ async function saveDraft() {
     impact: `保存后立即对 ${n} 名成员生效；已登录的成员在下次操作时按新权限校验。修改会记入审计日志。`,
   });
   if (!ok) return;
+  if (remote.value) {
+    const id = role.value.id;
+    if (!(await call(() => saveRolePermissions(id, { func: { ...draft.func }, objs: JSON.parse(JSON.stringify(draft.objs)), lockVersion: lockOf(role.value) })))) return;
+    resetDraft();
+    message.success(`已保存：${role.value.name}`);
+    return;
+  }
   Object.assign(role.value, { func: { ...draft.func }, objs: JSON.parse(JSON.stringify(draft.objs)), updatedAt: nowStr, updatedBy: '王敏' });
   snap.value = JSON.stringify(draft);
   message.success(`已保存：${role.value.name}`);
@@ -99,6 +145,12 @@ async function removeScope(s: RowScope) {
     impact: `删除后，该角色看${s.objType}${scopesOf(s.objType).length > 1 ? '时仍受其余范围限制' : role.value.defaultDeny ? '将不可见（业务查看类角色未配置范围默认不可见）' : '将不再按范围限制，可见全部行'}。`,
   });
   if (!ok) return;
+  if (remote.value) {
+    const id = role.value.id;
+    if ((await call(() => removeRoleScope(id, s.id))) === undefined) return;
+    message.success('已删除行级范围');
+    return;
+  }
   role.value.scopes = role.value.scopes.filter((x) => x.id !== s.id);
   message.success('已删除行级范围');
 }
@@ -109,10 +161,14 @@ const scopeDirty = computed(() => q('form') === 'scope' && (!!scopeForm.key || s
 watch(() => scopeForm.key, () => { scopeForm.values = []; });
 const openScope = () => { scopeForm.key = undefined; scopeForm.values = []; setQuery({ form: 'scope' }); };
 const closeScope = async () => { if (scopeDirty.value && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
-function addScope() {
+async function addScope() {
   const p = scopeProp.value;
   if (!p || !scopeForm.values.length) { message.warning('请选择属性和取值'); return; }
-  role.value.scopes.push({ id: `S-${Date.now() % 100000}`, objType: p.objType, prop: p.prop, op: scopeForm.values.length > 1 ? '∈' : '=', values: [...scopeForm.values] });
+  if (remote.value) {
+    const id = role.value.id;
+    const body = { objType: p.objType, prop: p.prop, op: (scopeForm.values.length > 1 ? '∈' : '=') as RowScope['op'], values: [...scopeForm.values] };
+    if (!(await call(() => addRoleScope(id, body)))) return;
+  } else role.value.scopes.push({ id: `S-${Date.now() % 100000}`, objType: p.objType, prop: p.prop, op: scopeForm.values.length > 1 ? '∈' : '=', values: [...scopeForm.values] });
   scopeForm.key = undefined; scopeForm.values = [];
   setQuery({ form: undefined });
   message.success('已添加行级范围');
@@ -141,16 +197,22 @@ async function removeMember(u: AdminUser) {
     impact: others.length ? `移出后按其余角色（${others.map((r) => r.name).join('、')}）合并计算权限。` : '移出后该用户没有任何角色，只能登录，看不到任何页面。',
   });
   if (!ok) return;
-  members.value[role.value.id] = members.value[role.value.id].filter((x) => x.id !== u.id);
+  if (remote.value) {
+    const id = role.value.id;
+    if ((await call(() => removeRoleMember(id, u.id))) === undefined) return;
+  } else members.value[role.value.id] = members.value[role.value.id].filter((x) => x.id !== u.id);
   message.success(`已将 ${u.name} 移出「${role.value.name}」`);
 }
 const addIds = ref<string[]>([]);
-const addOpts = computed(() => ADMIN_USERS.filter((u) => u.status === '启用' && !members.value[role.value.id].some((m) => m.id === u.id)).map((u) => ({ value: u.id, label: `${u.name} · ${u.dept} · ${u.id}` })));
+const addOpts = computed(() => allUsers.value.filter((u) => u.status === '启用' && !members.value[role.value.id].some((m) => m.id === u.id)).map((u) => ({ value: u.id, label: `${u.name} · ${u.dept} · ${u.id}` })));
 const openAdd = () => { addIds.value = []; setQuery({ form: 'members' }); };
 const closeAdd = async () => { if (q('form') === 'members' && addIds.value.length && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
-function addMembers() {
-  const add = ADMIN_USERS.filter((u) => addIds.value.includes(u.id));
-  members.value[role.value.id] = [...add, ...members.value[role.value.id]];
+async function addMembers() {
+  const add = allUsers.value.filter((u) => addIds.value.includes(u.id));
+  if (remote.value) {
+    const id = role.value.id;
+    if ((await call(() => addRoleMembers(id, add.map((u) => u.id)))) === undefined) return;
+  } else members.value[role.value.id] = [...add, ...members.value[role.value.id]];
   addIds.value = [];
   setQuery({ form: undefined });
   message.success(`已添加 ${add.length} 名成员`);
@@ -158,7 +220,7 @@ function addMembers() {
 
 // 以此用户预览：所有角色合并后的有效权限（用本页正在编辑的角色和成员计算，与 roles.ts effectiveAccess 同一套规则）
 const rolesOf = (u: AdminUser) => roles.value.filter((r) => members.value[r.id].some((m) => m.id === u.id));
-const pvUser = computed(() => ADMIN_USERS.find((u) => u.id === q('preview')));
+const pvUser = computed(() => allUsers.value.find((u) => u.id === q('preview')));
 const pv = computed(() => {
   const u = pvUser.value;
   if (!u) return null;
@@ -189,16 +251,27 @@ const formOpen = computed(() => q('form') === 'edit');
 watch([formOpen, () => role.value.id], () => { if (!formOpen.value) return; Object.assign(form, { name: role.value.name, desc: role.value.desc }); formSnap.value = JSON.stringify(form); }, { immediate: true });
 const formDirty = computed(() => formOpen.value && JSON.stringify(form) !== formSnap.value);
 const closeForm = async () => { if (formDirty.value && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
-function saveForm() {
+async function saveForm() {
   if (!form.name.trim()) { message.warning('请填写角色名'); return; }
   if (roles.value.some((r) => r.id !== role.value.id && r.name === form.name.trim())) { message.warning('角色名已存在'); return; }
-  Object.assign(role.value, { name: form.name.trim(), desc: form.desc, updatedAt: nowStr, updatedBy: '王敏' });
+  if (remote.value) {
+    const id = role.value.id;
+    if (!(await call(() => updateRole(id, { name: form.name.trim(), desc: form.desc, lockVersion: lockOf(role.value) })))) return;
+  } else Object.assign(role.value, { name: form.name.trim(), desc: form.desc, updatedAt: nowStr, updatedBy: '王敏' });
   formSnap.value = JSON.stringify(form);
   setQuery({ form: undefined });
   message.success('已保存');
 }
 function copyRole() {
-  guard(() => {
+  guard(async () => {
+    if (remote.value) {
+      const src = role.value;
+      const r = await call(() => createRole({ name: `${src.name}（副本）`, desc: src.desc, copyFrom: src.id }));
+      if (!r) return;
+      setQuery({ role: r.id, form: 'edit', tab: undefined });
+      message.success(`已复制为「${r.name}」，没有成员`);
+      return;
+    }
     const id = `R-${String(roles.value.length + 1).padStart(2, '0')}`;
     const r: Role = { ...JSON.parse(JSON.stringify(role.value)), id, name: `${role.value.name}（副本）`, builtIn: false, updatedAt: nowStr, updatedBy: '王敏' };
     roles.value.push(r);
@@ -216,7 +289,10 @@ async function deleteRole() {
   });
   if (!ok) return;
   const name = role.value.name;
-  roles.value = roles.value.filter((r) => r.id !== role.value.id);
+  if (remote.value) {
+    const id = role.value.id;
+    if ((await call(() => apiDeleteRole(id))) === undefined) return;
+  } else roles.value = roles.value.filter((r) => r.id !== role.value.id);
   setQuery({ role: undefined, tab: undefined });
   message.success(`已删除角色：${name}`);
 }
@@ -234,6 +310,14 @@ async function closeNewRole() { if (nrDirty.value && !(await confirmDiscard())) 
 async function saveNewRole() {
   const ok = await useConfirmStore().ask({ title: '新建角色', target: nr.name.trim(), okText: '新建', fields: [{ label: '权限', value: nr.perms.join('、') || '无' }], impact: '新角色暂无成员；在「成员」页签添加用户后生效。' });
   if (!ok) return;
+  if (remote.value) {
+    const r = await call(() => createRole({ name: nr.name.trim(), desc: nr.desc, perms: [...nr.perms] }));
+    if (!r) return;
+    nrBase.value = JSON.stringify(nr); nrOpen.value = false;
+    setQuery({ role: r.id, tab: undefined, form: undefined });
+    message.success(`已新建角色：${r.name}`);
+    return;
+  }
   nrBase.value = JSON.stringify(nr); nrOpen.value = false;
   message.success(`已新建角色：${nr.name.trim()}`);
 }

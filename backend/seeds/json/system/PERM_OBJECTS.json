@@ -1,0 +1,64 @@
+[
+  {
+    "name": "订单",
+    "api": "SalesOrder",
+    "actions": [
+      "订单状态修正",
+      "发起物流催派",
+      "补发出库单",
+      "退款审核"
+    ]
+  },
+  {
+    "name": "会员",
+    "api": "Member",
+    "actions": [
+      "发放复购召回优惠券",
+      "调整会员等级"
+    ]
+  },
+  {
+    "name": "门店",
+    "api": "Store",
+    "actions": [
+      "变更门店状态"
+    ]
+  },
+  {
+    "name": "大区",
+    "api": "Region",
+    "actions": [
+      "指派大区经理跟进",
+      "调整大区预算"
+    ]
+  },
+  {
+    "name": "商品",
+    "api": "Product",
+    "actions": [
+      "补货申请",
+      "门店调价",
+      "发起调价审批",
+      "调整安全库存"
+    ]
+  },
+  {
+    "name": "库存快照",
+    "api": "InventorySnapshot",
+    "actions": []
+  },
+  {
+    "name": "告警",
+    "api": "Alert",
+    "actions": [
+      "认领告警",
+      "转派告警",
+      "关闭告警"
+    ]
+  },
+  {
+    "name": "员工",
+    "api": "Employee",
+    "actions": []
+  }
+]

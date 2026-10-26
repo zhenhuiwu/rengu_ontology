@@ -11,12 +11,32 @@ admin 的 seed 不写，由动态的 seed 按姓名回填（所以 seed 里姓�
 
 from datetime import date, datetime
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Index, SmallInteger, String
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import LabelEnum
-from app.db.base import AppendOnlyTableMixin, Base, CodeMixin, MutableTableMixin
-from app.db.types import enum_column
+from app.db.base import (
+    AppendOnlyTableMixin,
+    Base,
+    CodeMixin,
+    CreatedColumnsMixin,
+    IdMixin,
+    MutableTableMixin,
+    SeedMarkMixin,
+)
+from app.db.types import JsonType, enum_column
 
 
 class UserStatus(LabelEnum):
@@ -84,4 +104,114 @@ class AuditLog(CodeMixin, AppendOnlyTableMixin, Base):
     ip: Mapped[str] = mapped_column(String(64), nullable=False, comment="来源 IP")
     result: Mapped[AuditResult] = mapped_column(
         enum_column(AuditResult, 16), nullable=False, default=AuditResult.success, server_default="success"
+    )
+
+
+# ---- 角色与权限（Roles.vue，api-index §4.2；admin_0003）----
+
+
+class SysRole(CodeMixin, MutableTableMixin, Base):
+    """角色。code = 前端 Role.id（R-01）。
+
+    func：页面 key → none|view|manage（mock Role.func，FUNC_PAGES 全量）；
+    objs：ObjPerm[]（mock Role.objs，PERM_OBJECTS 顺序）。两者整体读写，存 JSON。
+    changed_at / changed_by：前端 updatedAt / updatedBy（人名展示串），只在业务修改时写，seed 照 mock。
+    """
+
+    __tablename__ = "sys_role"
+    __table_args__ = ({"comment": "角色"},)
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, comment="角色名（唯一）")
+    description: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default="", comment="说明"
+    )
+    built_in: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", comment="内置角色（只读、不能删）"
+    )
+    default_deny: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", comment="未配范围的对象类型默认不可见"
+    )
+    func: Mapped[dict] = mapped_column(
+        JsonType, nullable=False, comment="功能权限 {pageKey: none|view|manage}"
+    )
+    objs: Mapped[list] = mapped_column(JsonType, nullable=False, comment="对象与动作权限 ObjPerm[]")
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="前端 updatedAt"
+    )
+    changed_by: Mapped[str] = mapped_column(String(64), nullable=False, comment="前端 updatedBy（姓名）")
+
+
+class SysRoleScope(CodeMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
+    """角色的行级范围 RowScope{id,objType,prop,op,values}。code = 前端 scope id（S-31）。"""
+
+    __tablename__ = "sys_role_scope"
+    __table_args__ = ({"comment": "角色行级范围"},)
+
+    role_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sys_role.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, comment="角色内顺序")
+    obj_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="对象类型中文名（订单）")
+    prop: Mapped[str] = mapped_column(String(64), nullable=False, comment="权限依据属性（大区）")
+    op: Mapped[str] = mapped_column(String(4), nullable=False, comment="= 或 ∈")
+    values: Mapped[list] = mapped_column(JsonType, nullable=False, comment="取值 string[]")
+
+
+class SysRoleMember(IdMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
+    """角色成员（一个用户可以有多个角色；sys_user.role 只是用户页显示的主角色）。
+
+    seq：列表顺序，升序。seed 照 mock roleMembers() 的顺序 0..n-1；新添加的成员排最前（min-1），
+    与 Roles.vue addMembers `[...add, ...members]` 一致。
+    """
+
+    __tablename__ = "sys_role_member"
+    __table_args__ = (
+        UniqueConstraint("role_id", "user_id", name="uq_sys_role_member_role_user"),
+        {"comment": "角色成员"},
+    )
+
+    role_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sys_role.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, comment="列表顺序（升序）")
+
+
+# ---- 租户与组织（顶栏租户 / 组织切换，api-index §1.11 GET /tenants；admin_0004）----
+
+
+class SysTenant(CodeMixin, MutableTableMixin, Base):
+    """租户（一期单租户，只有一行）。code = 租户 ID（mock SYSTEM_SETTINGS.tenant.tenantId）。
+
+    顶栏显示「简称 / 组织名」，不再写死。
+    seed：extra/system/TENANT.json（照 mock settings.ts，零售只是演示样例）。
+    """
+
+    __tablename__ = "sys_tenant"
+    __table_args__ = ({"comment": "租户"},)
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False, comment="租户全称")
+    short_name: Mapped[str] = mapped_column(String(32), nullable=False, comment="简称（顶栏、导出抬头）")
+    industry: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default="", comment="行业"
+    )
+
+
+class SysOrg(CodeMixin, MutableTableMixin, Base):
+    """顶栏可切换的组织（事业部 / 分公司……任意行业的一级组织）。code = 前端 tenant 选项 value（hd）。
+
+    seed：extra/system/ORGS.json（照 stores/app.ts TENANTS 和 settings.ts defaultOrg）。
+    """
+
+    __tablename__ = "sys_org"
+    __table_args__ = ({"comment": "组织（顶栏切换）"},)
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="组织名")
+    seq: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="显示顺序"
+    )
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", comment="默认组织"
     )

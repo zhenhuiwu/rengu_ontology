@@ -1,0 +1,191 @@
+[
+  {
+    "area": "使用",
+    "areaKey": "use",
+    "module": "智能问数",
+    "key": "qa-workbench",
+    "title": "问数工作台"
+  },
+  {
+    "area": "使用",
+    "areaKey": "use",
+    "module": "智能问数",
+    "key": "qa-pages",
+    "title": "我的页面与模板库"
+  },
+  {
+    "area": "使用",
+    "areaKey": "use",
+    "module": "对象",
+    "key": "object-search",
+    "title": "对象搜索"
+  },
+  {
+    "area": "使用",
+    "areaKey": "use",
+    "module": "对象",
+    "key": "object-detail",
+    "title": "对象详情"
+  },
+  {
+    "area": "使用",
+    "areaKey": "use",
+    "module": "运行",
+    "key": "alerts",
+    "title": "告警处理"
+  },
+  {
+    "area": "使用",
+    "areaKey": "use",
+    "module": "运行",
+    "key": "action-center",
+    "title": "动作中心"
+  },
+  {
+    "area": "使用",
+    "areaKey": "use",
+    "module": "运行",
+    "key": "scenarios",
+    "title": "情景推演"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "数据接入",
+    "key": "connections",
+    "title": "数据连接"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "数据接入",
+    "key": "external-systems",
+    "title": "外部系统"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "数据接入",
+    "key": "data-quality",
+    "title": "数据质量"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "ontology-overview",
+    "title": "本体总览"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "object-types",
+    "title": "对象类型"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "link-types",
+    "title": "关系类型"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "action-types",
+    "title": "动作类型"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "functions",
+    "title": "函数"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "metrics",
+    "title": "指标口径"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "dimensions",
+    "title": "维度与字典"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "glossary",
+    "title": "业务知识"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "event-types",
+    "title": "事件类型"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "rules",
+    "title": "规则与自动化"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "qa-tuning",
+    "title": "问数调优"
+  },
+  {
+    "area": "构建",
+    "areaKey": "build",
+    "module": "本体",
+    "key": "releases",
+    "title": "变更与发布"
+  },
+  {
+    "area": "管理",
+    "areaKey": "admin",
+    "module": "系统管理",
+    "key": "users",
+    "title": "用户与组织"
+  },
+  {
+    "area": "管理",
+    "areaKey": "admin",
+    "module": "系统管理",
+    "key": "roles",
+    "title": "角色与权限"
+  },
+  {
+    "area": "管理",
+    "areaKey": "admin",
+    "module": "系统管理",
+    "key": "audit",
+    "title": "审计日志"
+  },
+  {
+    "area": "管理",
+    "areaKey": "admin",
+    "module": "系统管理",
+    "key": "api-keys",
+    "title": "API 密钥"
+  },
+  {
+    "area": "管理",
+    "areaKey": "admin",
+    "module": "系统管理",
+    "key": "settings",
+    "title": "模型与系统配置"
+  }
+]

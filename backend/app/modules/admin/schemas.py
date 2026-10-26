@@ -116,3 +116,174 @@ class ImportOut(ApiModel):
 
 class DisableIn(ApiModel):
     transfer_to: str | None = None
+
+
+# ---- 角色与权限（Roles.vue，api-index §4.2）----
+
+FuncLevel = Literal["none", "view", "manage"]
+ScopeOp = Literal["=", "∈"]
+
+
+class ObjPermIo(ApiModel):
+    """mock/roles.ts ObjPerm{objType,api,view,export,actions}。"""
+
+    obj_type: str
+    api: str
+    view: bool
+    export: bool
+    actions: list[str] = Field(default_factory=list)
+
+
+class RowScopeOut(ApiModel):
+    """RowScope{id,objType,prop,op,values}。"""
+
+    id: CodeId
+    obj_type: str
+    prop: str
+    op: ScopeOp
+    values: list[str]
+
+
+class RowScopeIn(ApiModel):
+    """新增范围：不含 id；op 不传时按取值个数推（一个 =，多个 ∈），与 Roles.vue addScope 一致。"""
+
+    obj_type: str = Field(min_length=1, max_length=64)
+    prop: str = Field(min_length=1, max_length=64)
+    op: ScopeOp | None = None
+    values: list[str] = Field(min_length=1, max_length=200)
+
+
+class RoleOut(ApiModel):
+    """Role（mock/roles.ts）+ memberCount。"""
+
+    id: CodeId
+    name: str
+    desc: str = Field(validation_alias=AliasChoices("description", "desc"))
+    built_in: bool
+    updated_at: DateTimeMin = Field(validation_alias=AliasChoices("changed_at", "updatedAt"))
+    updated_by: str = Field(validation_alias=AliasChoices("changed_by", "updatedBy"))
+    func: dict[str, FuncLevel]
+    objs: list[ObjPermIo]
+    scopes: list[RowScopeOut] = Field(default_factory=list)
+    default_deny: bool = False
+    member_count: int = 0
+    lock_version: int = 1
+
+
+class FuncPageOut(ApiModel):
+    area: str
+    area_key: str
+    module: str
+    key: str
+    title: str
+
+
+class PermObjectOut(ApiModel):
+    name: str
+    api: str
+    actions: list[str]
+
+
+class ScopePropOut(ApiModel):
+    obj_type: str
+    prop: str
+    values: list[str]
+
+
+class RolesMetaOut(ApiModel):
+    """页面常量：FUNC_PAGES、PERM_OBJECTS、SCOPE_PROPS；objActions = {对象类型名: 动作[]}。"""
+
+    func_pages: list[FuncPageOut]
+    perm_objects: list[PermObjectOut]
+    scope_props: list[ScopePropOut]
+    obj_actions: dict[str, list[str]]
+
+
+class RoleCreateIn(ApiModel):
+    """新建：copyFrom = 复制某角色（权限、范围照抄，没有成员）；perms = 新建抽屉的权限模板 NR_PERMS。"""
+
+    name: str = Field(min_length=1, max_length=20)
+    desc: str = Field("", max_length=512)
+    perms: list[str] = Field(default_factory=list)
+    copy_from: str | None = None
+
+
+class RoleUpdateIn(ApiModel):
+    name: str = Field(min_length=1, max_length=20)
+    desc: str = Field("", max_length=512)
+    lock_version: int | None = None
+
+
+class RolePermissionsIn(ApiModel):
+    func: dict[str, FuncLevel]
+    objs: list[ObjPermIo]
+    lock_version: int | None = None
+
+
+class MembersAddIn(ApiModel):
+    user_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class MembersAddOut(ApiModel):
+    added: int
+
+
+class RoleMemberPage(Page[AdminUserOut]):
+    """PageResult<AdminUser>。"""
+
+
+class EffectiveFuncOut(FuncPageOut):
+    lv: FuncLevel
+
+
+class EffectiveObjOut(ApiModel):
+    name: str
+    scope: str
+    actions: list[str]
+    exp: bool
+
+
+class EffectiveAccessOut(ApiModel):
+    """mock/roles.ts EffectiveAccess{rs,func,objs,areasIn}：用户所有角色合并后的有效权限。"""
+
+    rs: list[RoleOut]
+    func: list[EffectiveFuncOut]
+    objs: list[EffectiveObjOut]
+    areas_in: list[str]
+
+
+# ---- 当前用户行级范围 / 租户与组织 ----
+
+
+class MyScopeCondOut(ApiModel):
+    prop: str
+    op: str
+    values: list[str]
+    text: str
+
+
+class MyObjScopeOut(ApiModel):
+    """某对象类型上当前用户能看到的行：unrestricted=不限；否则 conditions 之间是「或」。"""
+
+    obj_type: str
+    visible: bool
+    unrestricted: bool
+    conditions: list[MyScopeCondOut]
+    text: str
+
+
+class MeRowScopeOut(ApiModel):
+    user_id: str
+    user_name: str
+    items: list[MyObjScopeOut]
+
+
+class TenantOptionOut(ApiModel):
+    """顶栏租户 / 组织下拉（api-index GET /tenants）：value = 组织编号，label = 「租户简称 / 组织名」。"""
+
+    value: str
+    label: str
+    tenant_id: str
+    tenant_name: str
+    org_name: str
+    default: bool
