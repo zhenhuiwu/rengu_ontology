@@ -168,7 +168,7 @@ export interface ObjectTypeMeta {
   pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean;
   metrics?: { id: string; name: string; unit: string | null; variants: MetricVariant[] }[];
 }
-export type FacetFilterValue = string[] | { min?: string | number; max?: string | number } | string | number | boolean;
+export type FacetFilterValue = (string | number | boolean)[] | { min?: string | number | null; max?: string | number | null };
 export type Facet =
   | { key: string; name: string; kind: 'enum'; order: number; hasData: boolean; values: { value: string; count: number }[] }
   | { key: string; name: string; kind: 'range'; order: number; hasData: boolean; min: number | string | null; max: number | string | null };
