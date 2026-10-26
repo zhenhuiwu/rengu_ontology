@@ -26,7 +26,7 @@ from app.core.clock import now
 from app.core.config import get_settings
 from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound
 from app.modules.admin.models import SysOrg, SysRole, SysRoleMember, SysRoleScope, SysTenant, SysUser
-from app.modules.admin.repo import insert_audit
+from app.modules.admin.repo import insert_audit, lock_code_seq
 
 # ---- 页面常量 ----
 
@@ -41,19 +41,65 @@ def func_pages() -> list[dict[str, Any]]:
 
 
 def perm_objects() -> list[dict[str, Any]]:
+    """兜底清单（mock PERM_OBJECTS 原样）。业务逻辑用 load_perm_objects() 读本体。"""
     return _meta_json("PERM_OBJECTS")
+
+
+async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
+    """权限对象清单改读本体（只读静态 object_type、Palantir action_type，不改它们的文件）。
+
+    - 对象 = 已发布的对象类型（display_name / api_name，按 seq）；本体里一个都没有 → 用兜底清单。
+    - 动作 = 指向该对象 api 的动作类型（草稿除外）∪ 兜底清单里同 api 的动作（去重，保证老角色配置仍合法）。
+    - 兜底清单里本体没有的对象（如 告警、员工 这类运行时对象）接在后面，不丢已有配置。
+    """
+    from app.modules.action.models import ActionType, TypeStatus
+    from app.modules.static.models import ObjectStatus, ObjectType
+
+    fallback = perm_objects()
+    ots = (
+        await session.execute(
+            select(ObjectType.display_name, ObjectType.api_name)
+            .where(ObjectType.status == ObjectStatus.published)
+            .order_by(ObjectType.seq, ObjectType.code)
+        )
+    ).all()
+    if not ots:
+        return fallback
+    acts = (
+        await session.execute(
+            select(ActionType.target_api, ActionType.name)
+            .where(ActionType.status != TypeStatus.draft)
+            .order_by(ActionType.code)
+        )
+    ).all()
+    by_api: dict[str, list[str]] = {}
+    for api, name in acts:
+        by_api.setdefault(api, []).append(name)
+    fb = {o["api"]: o for o in fallback}
+    out = [
+        {
+            "name": n,
+            "api": a,
+            "actions": list(dict.fromkeys([*fb.get(a, {}).get("actions", []), *by_api.get(a, [])])),
+        }
+        for n, a in ots
+    ]
+    apis, names = {o["api"] for o in out}, {o["name"] for o in out}
+    out += [dict(o) for o in fallback if o["api"] not in apis and o["name"] not in names]
+    return out
 
 
 def scope_props() -> list[dict[str, Any]]:
     return _meta_json("SCOPE_PROPS")
 
 
-def roles_meta() -> dict[str, Any]:
+async def roles_meta(session: AsyncSession) -> dict[str, Any]:
+    po = await load_perm_objects(session)
     return {
         "func_pages": func_pages(),
-        "perm_objects": perm_objects(),
+        "perm_objects": po,
         "scope_props": scope_props(),
-        "obj_actions": {o["name"]: o["actions"] for o in perm_objects()},
+        "obj_actions": {o["name"]: o["actions"] for o in po},
     }
 
 
@@ -66,7 +112,9 @@ NR_PERMS = ["查看对象", "导出数据", "执行动作", "发起变更", "审
 _RANK = {"none": 0, "view": 1, "manage": 2}
 
 
-def template_perms(perms: list[str]) -> tuple[dict[str, str], list[dict[str, Any]]]:
+def template_perms(
+    perms: list[str], po: list[dict[str, Any]] | None = None
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
     p = set(perms)
     fn = {pg["key"]: "none" for pg in func_pages()}
 
@@ -96,7 +144,7 @@ def template_perms(perms: list[str]) -> tuple[dict[str, str], list[dict[str, Any
             "export": view and "导出数据" in p,
             "actions": list(o["actions"]) if view and "执行动作" in p else [],
         }
-        for o in perm_objects()
+        for o in (po if po is not None else perm_objects())
     ]
     return fn, objs
 
@@ -151,7 +199,8 @@ class SysRoleRepository(BaseRepository[SysRole]):
         return (await self.session.scalar(stmt)) is not None
 
     async def _next_num(self, col: Any, prefix: str) -> int:
-        """编号数字部分的最大值 + 1（R-01 / S-31；表很小，取出来算）。"""
+        """编号数字部分的最大值 + 1（R-01 / S-31；表很小，取出来算）。先按表加锁，并发新建不撞号。"""
+        await lock_code_seq(self.session, col.table.name)
         codes = (await self.session.scalars(select(col).where(col.op("~")(rf"^{prefix}[0-9]+$")))).all()
         return max((int(c[len(prefix) :]) for c in codes), default=0) + 1
 
@@ -204,6 +253,10 @@ class SysRoleRepository(BaseRepository[SysRole]):
 
 class BuiltInRoleReadonly(Forbidden):
     code, message = "BUILT_IN_ROLE", "内置角色不能修改，可复制后再改"
+
+
+class RoleInUse(AppError):
+    status_code, code, message = 409, "ROLE_IN_USE", "有成员只有这个角色，不能删除"
 
 
 class RoleValidation(AppError):
@@ -267,7 +320,7 @@ class RoleService:
             for p in perms:
                 if p not in NR_PERMS:
                     raise RoleValidation(f"未知的权限模板：{p}", details={"perm": p, "allowed": NR_PERMS})
-            (fn, objs), deny = template_perms(perms), False
+            (fn, objs), deny = template_perms(perms, await load_perm_objects(self.session)), False
         r = SysRole(
             code=await self.repo.next_role_code(),
             name=name,
@@ -334,7 +387,8 @@ class RoleService:
         if unknown:
             raise RoleValidation("未知的页面", details={"pages": unknown})
         full = {k: fn.get(k, "none") for k in [p["key"] for p in func_pages()]}
-        by_name = {o["name"]: o for o in perm_objects()}
+        po = await load_perm_objects(self.session)
+        by_name = {o["name"]: o for o in po}
         out = []
         for o in objs:
             meta = by_name.get(o["objType"])
@@ -357,13 +411,13 @@ class RoleService:
                 }
             )
         given = {o["objType"] for o in out}
-        for m in perm_objects():  # 没传的对象类型保留原值
+        for m in po:  # 没传的对象类型保留原值
             if m["name"] not in given:
                 out.append(
                     next((x for x in r.objs if x["objType"] == m["name"]), None)
                     or {"objType": m["name"], "api": m["api"], "view": False, "export": False, "actions": []}
                 )
-        order = {m["name"]: i for i, m in enumerate(perm_objects())}
+        order = {m["name"]: i for i, m in enumerate(po)}
         out.sort(key=lambda x: order[x["objType"]])
         self._touch(r, user)
         await self.repo.update(r, {"func": full, "objs": out}, actor=user.id, lock_version=lock_version)
@@ -371,9 +425,42 @@ class RoleService:
         return await self.get(code)
 
     async def delete(self, code: str, user: CurrentUser, ip: str) -> None:
-        """有成员也允许删（api-index【待定】，按页面确认卡：成员失去这个角色，其他角色不受影响）。成员、范围级联删除。"""
+        """删除角色（Roles.vue deleteRole 同一套规则）。成员、范围级联删除。
+
+        - 有成员也允许删：成员失去这个角色，其他角色不受影响；
+        - 但有人「只有这一个角色」时 409 ROLE_IN_USE（details.count / details.users），删了他就没有角色了；
+        - 用户页显示的主角色（sys_user.role）是这个角色名的，改成他剩下角色里编号最小的一个。
+        """
         r = await self._editable(code)
         name = r.name
+        member_ids = await self.repo.member_user_ids(r.id)
+        primary = set((await self.session.scalars(select(SysUser.id).where(SysUser.role == name))).all())
+        affected = member_ids | primary
+        others: dict[int, str] = {}
+        if affected:
+            rows = await self.session.execute(
+                select(SysRoleMember.user_id, SysRole.name)
+                .join(SysRole, SysRole.id == SysRoleMember.role_id)
+                .where(SysRoleMember.user_id.in_(affected), SysRole.id != r.id)
+                .order_by(SysRole.code)
+            )
+            for uid, rname in rows.all():
+                others.setdefault(uid, rname)
+        orphan_ids = sorted(affected - set(others))
+        if orphan_ids:
+            orphans = (
+                await self.session.execute(
+                    select(SysUser.code, SysUser.name)
+                    .where(SysUser.id.in_(orphan_ids))
+                    .order_by(SysUser.code)
+                )
+            ).all()
+            raise RoleInUse(
+                f"有 {len(orphans)} 名成员只有这个角色，请先给他们分配其他角色或移出成员后再删除",
+                details={"count": len(orphans), "users": [{"id": c, "name": n} for c, n in orphans]},
+            )
+        for uid in sorted(primary):
+            await self.session.execute(update(SysUser).where(SysUser.id == uid).values(role=others[uid]))
         await self.session.delete(r)
         await self.session.flush()
         await self._audit(user, ip, "删除角色", f"角色「{name}」")
@@ -485,16 +572,17 @@ class RoleService:
         if u is None:
             raise NotFound("用户不存在", details={"id": user_code})
         rs = await self.bundles(await self.repo.roles_of_user(u.id))
-        return rs, compute_effective(rs)
+        return rs, compute_effective(rs, await load_perm_objects(self.session))
 
     async def row_scope(self, user_code: str) -> list[dict[str, Any]]:
         u = await self.session.scalar(select(SysUser).where(SysUser.code == user_code))
         if u is None:  # 服务账号等不在 sys_user 的身份：没有角色 → 全部不可见
-            return compute_row_scope([])
-        return compute_row_scope(await self.bundles(await self.repo.roles_of_user(u.id)))
+            return compute_row_scope([], await load_perm_objects(self.session))
+        rs = await self.bundles(await self.repo.roles_of_user(u.id))
+        return compute_row_scope(rs, await load_perm_objects(self.session))
 
 
-def compute_effective(rs: list[RoleBundle]) -> dict[str, Any]:
+def compute_effective(rs: list[RoleBundle], po: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """逐行照 mock/roles.ts effectiveAccess()。"""
 
     def obj_of(b: RoleBundle, name: str) -> dict[str, Any] | None:
@@ -510,7 +598,7 @@ def compute_effective(rs: list[RoleBundle]) -> dict[str, Any]:
         if lv != "none":
             fn.append({**p, "lv": lv})
     objs = []
-    for o in perm_objects():
+    for o in po if po is not None else perm_objects():
         name = o["name"]
 
         def has_scope(b: RoleBundle, name: str = name) -> bool:
@@ -543,7 +631,7 @@ async def role_names(session: AsyncSession) -> list[str]:
     return list((await session.scalars(select(SysRole.name).order_by(SysRole.code))).all())
 
 
-def compute_row_scope(rs: list[RoleBundle]) -> list[dict[str, Any]]:
+def compute_row_scope(rs: list[RoleBundle], po: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """当前用户逐对象类型的行级范围（问数「范围」、对象检索读它）。
 
     规则与 compute_effective 的 objs 一致：
@@ -553,7 +641,7 @@ def compute_row_scope(rs: list[RoleBundle]) -> list[dict[str, Any]]:
     没有授予的对象也列出来（visible=false），前端可直接显示「无权查看」。
     """
     out = []
-    for o in perm_objects():
+    for o in po if po is not None else perm_objects():
         name = o["name"]
 
         def view(b: RoleBundle, name: str = name) -> bool:

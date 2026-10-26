@@ -227,8 +227,9 @@ async def list_roles(session: SessionDep) -> list[RoleOut]:
 @router.get(
     "/roles/meta", response_model=RolesMetaOut, summary="页面常量", dependencies=[Depends(_roles_view)]
 )
-async def get_roles_meta() -> RolesMetaOut:
-    return RolesMetaOut.model_validate(roles_meta())
+async def get_roles_meta(session: SessionDep) -> RolesMetaOut:
+    """perm_objects 读本体对象类型 + 动作类型（本体为空时用 mock 清单兜底）。"""
+    return RolesMetaOut.model_validate(await roles_meta(session))
 
 
 @router.get(

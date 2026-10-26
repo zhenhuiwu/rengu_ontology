@@ -51,3 +51,9 @@ node scripts/export-effective-access.mjs /tmp/eff.json   # 再按测试里的格
 
 `loadRolesState()` 一次拉角色、全部用户（/users 分页拉完）和每个角色的成员；返回 null 表示用 mock。
 写操作成功后整份重新拉取；失败弹后台 message，本地不改。预览抽屉的有效权限仍在页面算（规则同后台）。
+
+## xiaobai-r3 变更
+
+- `GET /roles/meta`：`permObjects` / `objActions` 读本体（已发布 ObjectType 按 seq；动作 = 兜底动作 ∪ 非草稿 ActionType 名），与 `PERM_OBJECTS.json` 兜底取并集；本体为空时整份用兜底。
+- `DELETE /roles/{id}`：有用户删完后没有任何角色（成员或 `sys_user.role` 指向该角色）→ 409 `ROLE_IN_USE`，details `{count, users:[{id,name}]}`；否则主角色指向它的用户改为剩余角色里编号最小的一个。
+- 新建角色 / 范围取号前加 `pg_advisory_xact_lock`，并发不撞号。

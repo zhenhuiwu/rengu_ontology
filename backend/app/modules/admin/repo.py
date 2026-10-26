@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import BigInteger as BigIntegerType
-from sqlalchemy import Select, func, or_, select, tuple_
+from sqlalchemy import Select, func, or_, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.repository import BaseRepository
@@ -23,6 +23,15 @@ from app.modules.admin.models import AuditLog, AuditResult, SysUser, UserStatus
 def _new_code(at: datetime) -> str:
     # mock 的 id 是 AL<毫秒>；新写入同毫秒可能多条，再加 4 位随机十六进制避免撞唯一键
     return f"AL{int(at.timestamp() * 1000)}{secrets.token_hex(2)}"
+
+
+async def lock_code_seq(session: AsyncSession, key: str) -> None:
+    """编号「最大值 + 1」串行化：按表取事务级 advisory lock，提交 / 回滚时自动释放。
+
+    两个请求同时新建时，后来的一个等前一个提交后再取最大值，不会撞号（不用计数表，不需要迁移）。
+    key 用表名（sys_role / sys_role_scope / sys_user / datasource）。
+    """
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"rengu:code:{key}"})
 
 
 async def insert_audit(
@@ -182,7 +191,8 @@ class SysUserRepository(BaseRepository[SysUser]):
         return {a for a in rows if a}
 
     async def next_code(self) -> int:
-        """下一个用户编号的数字部分：现有 U+数字 编号的最大值 + 1。"""
+        """下一个用户编号的数字部分：现有 U+数字 编号的最大值 + 1（先加锁，并发不撞号）。"""
+        await lock_code_seq(self.session, "sys_user")
         mx = await self.session.scalar(
             select(func.max(func.substring(SysUser.code, 2).cast(BigIntegerType))).where(
                 SysUser.code.op("~")(r"^U[0-9]+$")

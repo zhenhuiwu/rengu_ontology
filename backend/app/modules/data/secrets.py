@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+
+log = logging.getLogger(__name__)
 
 PREFIX = "fernet$"
 _DEV_SEED = b"rengu-ontology-dev-only-datasource-key"
@@ -26,12 +29,42 @@ class SecretKeyMissing(AppError):
     status_code, code, message = 500, "DS_SECRET_KEY_MISSING", "未配置数据源密码密钥 RENGU_DS_SECRET_KEY"
 
 
+class SecretKeyInvalid(AppError):
+    status_code, code, message = 500, "DS_SECRET_KEY_INVALID", "数据源密码密钥 RENGU_DS_SECRET_KEY 格式不对"
+
+
+def _strict() -> bool:
+    return get_settings().env == "prod" or os.environ.get("RENGU_DS_REAL_CONNECT") == "1"
+
+
+def check_secret_key() -> None:
+    """启动检查（app.main lifespan 调用）：
+
+    - prod 或 RENGU_DS_REAL_CONNECT=1：没配密钥 → 抛 SecretKeyMissing，服务起不来；
+      密钥格式不对 → SecretKeyInvalid；
+    - dev / test：没配只打 warning（用开发密钥），格式不对同样直接失败（否则第一次存密码才报 500）。
+    不打印密钥内容。
+    """
+    raw = os.environ.get("RENGU_DS_SECRET_KEY", "").strip()
+    if not raw:
+        if _strict():
+            log.error("未配置 RENGU_DS_SECRET_KEY：prod / 真实连接下必须配置数据源密码密钥，服务停止启动")
+            raise SecretKeyMissing()
+        log.warning("未配置 RENGU_DS_SECRET_KEY，数据源密码用开发密钥加密（仅限 dev / test，不能用于生产）")
+        return
+    try:
+        _fernet()
+    except (ValueError, TypeError) as e:
+        log.error("RENGU_DS_SECRET_KEY 格式不对（应为 Fernet.generate_key() 生成的值，多把用逗号分隔）")
+        raise SecretKeyInvalid() from e
+
+
 def _fernet() -> MultiFernet:
     raw = os.environ.get("RENGU_DS_SECRET_KEY", "").strip()
     if raw:
         return MultiFernet([Fernet(k.strip().encode()) for k in raw.split(",") if k.strip()])
     # prod，或开了真实连接（RENGU_DS_REAL_CONNECT=1，存的是真库密码）时必须配密钥，不用仓库里的开发密钥
-    if get_settings().env == "prod" or os.environ.get("RENGU_DS_REAL_CONNECT") == "1":
+    if _strict():
         raise SecretKeyMissing()
     return MultiFernet([Fernet(base64.urlsafe_b64encode(hashlib.sha256(_DEV_SEED).digest()))])
 
