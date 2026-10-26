@@ -38,6 +38,8 @@
   - **挂静态钩子**：静态 r4 `app/modules/static/writeback.py` 的 `register_writeback(kind, section, fn)`，钩子签名 `async (ctx: Ctx, target_id, rows: list[CrItem]) -> set[str]`（ctx.session / ctx.cr.code / ctx.by / ctx.now）。本模块 import 时 `register_hooks()`：有该函数就登记 `(rule, conds|mapping|config)` → `rule_hook`、`(object, lc_states|lc_transitions)` → `lifecycle_hook`（都调 promote_*，返回空集合 = 不改静态快照节）；master 上没有该模块则 `HOOKED=False`，只暴露 apply_cr。由 `rules_router.py` import 触发登记（app 加载即生效）。已用 static-r4 工作区代码（含未提交改动）只读拷贝验证：5 个 (kind, section) 都登记成功，重复登记幂等。
   - 测试：`test_apply_cr_promotes_rule_drafts`（新规则 / R-015 改动 / R-025 停用 + 幂等）、`test_apply_cr_promotes_lifecycle_draft`（加状态 + 加迁移 + 删迁移 + 幂等）、`test_apply_edits_rejects_bad_kind`，都直接调函数。
   - **CR_WRITE 仍关**：master 上没有静态写回钩子，e2e 发布不会转正草稿；static-r4 合并后（钩子生效）再按上面的 e2e 走一遍，规则变 v1 / 已发布即可打开。
+  - 2026-10-26 更新：static-r4 已合入 master `58ad8d7`（`register_writeback` 生效，本分支合并后 `HOOKED=True`）。下一轮：合并后按 `/tmp/e2e.sh` 重跑 e2e，并按 PDE 意见补一条“规则发布写回”的联合测试；通过后再打开 `VITE_DYNAMIC_CR_WRITE`。未登记的 kind/section 会被跳过但单子仍标已发布（Palantir 非阻塞意见），前端需给出提示。
+  - 告警审批人目前取 `ACTION_META.approver`，下一轮改为查动作类型表的 `approval` 配置（Palantir 意见①）。
   - 注意：钩子只对「本单有 cr_item 的段」调用；一张单里开了草稿但没登记任何行（例如只点了发起变更没保存）的规则不会被转正，草稿留在单上（与静态“没改就不写回”一致）。需要的话静态可在 apply_crs 末尾对每张单调一次 `apply_cr(session, cr.code, by=by, at=now)` 兜底（幂等，不会重复转正）。
   - 新建规则（真接口）先弹「新建规则」框选对象类型（static 真接口取本体对象类型，否则 mock 四类）和名称，再进变更弹窗；`POST /rules` 带 objKind。
 
