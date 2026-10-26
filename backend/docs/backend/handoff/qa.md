@@ -77,19 +77,25 @@
 
 ## 2. 未完成
 
-| 范围 | 状态 | 还差什么 | 接口 / 文件 |
-|---|---|---|---|
-| R1 流式回答 | 未做 | 前端 W6 同步等 202 里的 `turn`，没接 SSE；后端 W7 未实现流 | W7 `GET /turns/{tid}/stream`（`qa-api.md` §3）；`src/pages/qa/useQaSession.ts` `sendReal`、`QaAnswer.vue` / `QaStoreAnswer.vue` |
-| R1 固定到页面 | mock | 弹窗 `QaPinModal` 仍写死卡名、页面列表取 mock、不调后端；后端 P2 / P7 未实现；固定后的卡要在「我的页面」显示，而 R2 仍是 mock，所以单接这一步也不算完成 | P2 `POST /pages`、P7 `POST /pages/{pid}/cards`；`src/pages/qa/Workbench.vue`（`QaPinModal`） |
-| R1 建议动作对象 | 部分 | 动作卡对象固定为客户群 `SEG-EC-60D`、参数是卡片文案；影响 / 预算 / 提交条件三行仍是前端文案（stage 无返回）[推断] | X1 `action-runs:stage`；`Workbench.vue` `runAction` |
-| R1 反问追问 | 部分 | 链路无多轮上下文，追问句由前端启发式拼接 [推断]；所选项不回写 `clarify.chosen` [推断] | `QaConversation.vue` `followUp` / `chosenOf` |
-| R1 第二期 | 未做 | 停止生成、加入常用 | W8 `:cancel`、W14 `POST /favorites` |
-| R5 · T11 后台任务 | 部分 | 进程内 asyncio，重启丢任务（运行停在「运行中」）；判分是启发式（`时间解析错误` 判不出）[推断]；每日 02:00 定时未接 | `eval/job.py`；接 procrastinate 时包 `_background` |
-| R2 我的页面与模板库 `/use/qa/pages` | 未开始，mock | 前端未接；后端只有读接口 P1 / P3 / P11 / P12，写接口 P2、P4–P10 未实现 | P1–P12；`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*` |
-| R3 对象搜索 `/use/objects/search` | 未开始，mock | 前端未接；后端只有 O1 类型列表，O2–O4 未实现 | O1–O4；`src/pages/objects/ObjectSearch.vue` |
-| R4 对象详情 `/use/objects/detail` | 未开始，mock | 前端未接；后端 O5–O7、O9 未实现（动作记录走动态 X7） | O5–O7、O9、O4、X7；`src/pages/objects/ObjectDetail.vue`、`parts/ObjAskModal.vue` |
-| W11 下载 | 临时 | `apiClient` 没有拿 blob 的方法，`src/api/qa.ts` 里留了一个只做 GET 下载的小工具 | 等 PDE 在 `src/api/http.ts` 加下载方法后改回 |
-| 连不上后台回退 mock（剩余） | 部分 | 已覆盖见 1.1。没覆盖：工作台的 W12 投票 / W9 重算 / W10 门店表 / W11 导出等卡片内读接口（`QaAnswer.vue` / `QaStoreAnswer.vue`，回退后卡片本来就是 mock 不再发请求，只有回退前已渲染的真卡片会照旧报错）；问数调优评测 / 反馈页签已接回退（qa-tuning）。`backend.down` 是全站共用的：别的模块先判定后台没起来，问数页也会直接走 mock。 |
+> 截至 qa-pages `c7169d2`（基线 master `b475283`；静态 `58ad8d7` 已在 master）。已做完、不再列：R1 固定到页面（qa-cardfb，P7）、R2 我的页面（P2、P4–P10 + 前端）、R3 对象搜索 / R4 对象详情（通用化，读真 `/meta`、`/facets`）、连不上后台回退 mock。
+
+| 项 | 还差什么 | 接口 / 文件 |
+|---|---|---|
+| 流式回答 | 后端 W7 未实现，前端同步等 W6 的 `turn` | W7 `GET /turns/{tid}/stream`；`useQaSession.ts` `sendReal` |
+| T11 评测任务 | 进程内 asyncio，重启丢任务；每日定时未接；评测不带会话口径 | `eval/job.py` |
+| 行级范围 | row-scopes 接口未上 master：工作台「范围」默认值靠前端推断；`router.py:239` 新建会话话术写死「大区」 | `router.py`、`Workbench.vue` |
+| 按一批对象提问 / 绑定 | O4 和物理绑定只有 store / product / order，其他对象类型 `bound=false` | `seeds/extra/qa/objects/bindings.json`、`objects_api.py` |
+| 动作执行 | 建议动作只到 stage，执行未接 | X1 `action-runs`；`Workbench.vue` `runAction` |
+| 关键词分面 | E1 顺带的过渡分面要保留到静态 `/facets` 支持关键词 | `explore_api.py` `_facets` |
+| 静态分面回落 | `objMeta.ts:156` `loadStaticFacets` 任何错误都回落（含 422），应只在 `isBackendDown` 时回落 | `src/pages/objects/objMeta.ts` |
+| 复用静态私有函数 | qa 直接 import 静态 `_bad` / `_scalar`，等静态公开后改名 | `explore_api.py` |
+| `Bound.check` | 按 `what` 字符串区分筛选 / 排序，应改成显式参数 | `explore_api.py` |
+| 并发 | 页面 P2、会话 S 的 id 生成没锁，并发新建会撞 id 报 500 | `service.py` / `pages` 相关 |
+| 我的页面 | 计数单独多一次请求；删除后停在空的后一页，应回退一页 | `MyPages.vue` |
+| 注释 | `PageDrawer.vue:11` 注释过时 | `src/pages/qa/pages/PageDrawer.vue` |
+| FeedbackTab | `FeedbackTab.vue` 的改动在 qa 允许路径外，待 PDE 确认 | `FeedbackTab.vue` |
+| 评测分 | 76 / 100，拒答 9/16、反问 5/10 偏弱（见 2.1） | `eval/results/summary.json` |
+| 指标口径变体 | 静态按指标名的（…）后缀推出变体，静态会改成显式字段；qa 按标签匹配，届时核对 | `service.py` `variant_index` |
 
 ### 2.1 链路未完成 / 待裁定
 - **最近评测分（真 qwen-flash，`740a554`）**：**76 / 100**，见 `backend/seeds/extra/qa/eval/results/summary.json`（作答 62/74、拒答 9/16、反问 5/10；失败 24 题：EV-Q-012、014、016、022、025、026、042、051、052、058、061、063、066、067、069、071、072、078、080、081、082、084、091、095）。
