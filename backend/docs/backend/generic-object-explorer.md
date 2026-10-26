@@ -40,41 +40,45 @@
 
 **UI 约定：** 不要用「主行 + 下方灰色说明行」的叠排。说明放进 ⓘ 提示或同一行的弱化尾注；现有的「可见范围放在筛选旁的 ⓘ 里」继续沿用。
 
-## 4. 属性标记：已有 vs 需静态补
+## 4. 属性标记（本版必需 vs 下一轮可选）
 
-| 标记 | 作用 | 现状（`static.models.Property` / `ObjProp`） | 处理 |
+`meta` 里每个属性的 `key, name, dataType, searchable, filterable, sortable, listed, order, visibility, format, unit` 本版**全部必需**；只有 `long_text` 和动作类型 `bulk` 是「下一轮可选」。
+
+| 标记（接口字段） | 作用 | 现状（`static.models.Property` / `ObjProp`） | 本版处理 |
 |---|---|---|---|
 | 主键 | 对象 id | ✅ `is_pk` / `pk` | 沿用 |
-| 标题字段 | 结果表第一列、详情标题、悬停卡 | ✅ `is_title` / `title` | 沿用；每个类型必须恰好一个，在校验里加检查 |
-| 维度 | 问数拆分 | ✅ `is_dimension` / `dim` | 沿用，**不等于可筛选** |
-| 敏感 | 打码 | ✅ `is_sensitive` | 沿用 |
-| 枚举 | 分面取值和顺序 | ✅ `enum_name` | 沿用 |
-| 分组 / 顺序 | 详情分组、列和分面的顺序 | ✅ `prop_group`、`seq` | 沿用 `seq` 作为显示顺序 |
-| **可见性** | prominent / normal / hidden | ❌ 缺 | 静态补 `visibility` 枚举，默认 normal |
-| **可搜索** | 关键词匹配和占位符 | ❌ 缺 | 静态补 `searchable` |
-| **可筛选** | 生成左栏分面（相当于 Selectable + Low cardinality） | ❌ 缺 | 静态补 `filterable` |
-| **可排序** | 表头排序 | ❌ 缺 | 静态补 `sortable`（数值和日期默认 true） |
-| **列表展示** | 默认结果列 | ❌ 缺 | 静态补 `list_visible`，加可选列宽 `list_width` |
-| **值格式** | 金额、百分比、单位、千分位 | ❌ 缺（现在在前端按 key 判断） | 静态补 `format`（如 `money:1` / `pct` / `int` / `raw`）和 `unit`【推断】 |
-| 长文本 | 详情单独成区 | ❌ 缺 | 可选，补 `long_text` |
+| 标题字段 → `titleProp` | 结果表第一列、详情标题 | ✅ `is_title` / `title` | 沿用；每个类型恰好一个，校验里检查 |
+| 维度 / 敏感 / 枚举 / 分组 | 问数拆分、打码、分面取值、详情分组 | ✅ `is_dimension`、`is_sensitive`、`enum_name`、`prop_group` | 沿用；维度**不等于**可筛选 |
+| 显示顺序 `order` | 列和分面顺序 | ✅ `seq` | 沿用 `seq`，接口里叫 `order` |
+| **可见性** `visibility` | prominent / normal / hidden | ❌ 缺 | 静态补，默认 normal（必需） |
+| **可搜索** `searchable` | 关键词匹配和占位符 | ❌ 缺 | 静态补（必需） |
+| **可筛选** `filterable` | 生成左栏分面（相当于 Selectable + Low cardinality） | ❌ 缺 | 静态补（必需） |
+| **可排序** `sortable` | 表头排序 | ❌ 缺 | 静态补，数值和日期默认 true（必需） |
+| **列表展示** `listed` | 默认结果列 | ❌ 缺 | 静态补（必需） |
+| **值格式** `format` / `unit` | 金额、百分比、单位、千分位 | ❌ 缺（现在在前端按 key 判断） | 静态补，如 `money:1` / `pct` / `int` / `raw`【推断】（必需） |
+| **指标口径变体** `variants`（指标上） | 问数「口径」选项，如含税/不含税 | ❌ 缺（只有 `version`、`def_rows`） | 静态补（必需）【推断】 |
+| 长文本 `long_text` | 详情单独成区 | ❌ 缺 | 下一轮可选 |
+| 动作类型 `bulk` | 结果页批量动作 | ❌ 缺 | 下一轮可选【推断】 |
 
-- 【推断】约束：`filterable`、`sortable` 和 `list_visible` 只在 `visibility ≠ hidden` 时有效；`filterable` 只建议用在枚举、布尔、日期和少量取值的字符串上，保存时给出提示，不强制。
-- 新字段走变更单和发布快照，迁移 `down_revision` 指向当前 head `qa_0003`。演示类型（门店、商品、订单）的初始值写在种子数据里，取值照现有前端的 facets/columns 来定（门店：区域、城市、业态、状态可筛选；编码、店长、营业面积等列表展示），**不动 mock 文件**。
+- 【推断】约束：`filterable`、`sortable`、`listed` 只在 `visibility ≠ hidden` 时有效；`filterable` 建议只用在枚举、布尔、日期和少量取值的字符串上，保存时提示，不强制。
+- 新字段走变更单和发布快照，迁移 `down_revision` 指向当前 head `qa_0003`。演示类型的初始值写在种子数据里（门店：区域、城市、业态、状态可筛选；编码、店长、营业面积等列表展示），**不动 mock 文件**。
 
-## 5. 接口需求
+## 5. 接口需求（PDE 定稿）
 
-| 接口 | 负责 | 说明 |
+| 接口 | 负责 | 返回 / 说明 |
 |---|---|---|
-| `GET /api/ontology/v1/object-types/{id}/explorer-meta` | 静态 | 一次性返回标题属性、可搜索/可筛选/列表展示的属性（含顺序、格式、枚举值顺序）和关系类型列表 |
-| `GET /api/ontology/v1/action-types?targetKind=&bulk=` | Palantir | 在现有列表接口上加过滤参数；动作类型要能标明支持单个还是批量【推断：新增 `bulk` 字段，下一轮做】 |
-| `POST /api/data/v1/objects/{type}:search` | 问数（对象页） | 参数是关键词、各属性筛选、排序和分页；返回行和分面计数。服务端按行级范围过滤。路径前缀【推断】，由 PDE 定 |
-| `GET /api/admin/v1/me/row-scopes?objectType=` | 本体小白 | 当前用户（或预览用户）在某对象类型上的行级范围，供搜索过滤和问数范围使用 |
-| `GET /api/qa/v1/session-options` | 问数 | 改造：**范围**取用户行级范围里的维度值，再加该维度的层级（如大区→区）；**口径**取所选指标定义里的口径变体（静态需在指标上提供结构化的 `variants`，比如含税/不含税；现在只有 `version` 和 `def_rows`）【推断】 |
+| `GET /object-types/{id}/meta` | 静态 | `{ titleProp, properties: [{ key, name, dataType, searchable, filterable, sortable, listed, order, visibility, format, unit }] }`，字段全部必需 |
+| `GET /object-types/{id}/facets?filters=...` | 静态 | `[{ key, kind: 'enum', values: [{ value, count }] } \| { key, kind: 'range', min, max }]`。取值和计数由后台按实际数据算，并随已选筛选联动；页面不写任何取值（如「华东一区…五区」） |
+| 指标 `variants` | 静态 | 指标定义上的口径变体，问数「口径」从这里取 |
+| `GET /api/admin/v1/me/row-scopes?objectType=` | 本体小白 | 当前用户的行级范围，供搜索过滤和问数「范围」默认值，取代写死的「华东二区」 |
+| 租户 / 组织 | 本体小白 | 顶栏改读租户和组织，取代 `src/stores/app.ts` `TENANTS` 里写死的「鲜邻零售集团 / 华东事业部」 |
+
+字段细节见 `handoff/static.md`。接口没出来前，页面先用前端 mock 里的元数据写成通用的。
 
 ## 6. 分工
 
-- **问数：** 对象搜索、对象详情改成读元数据（去掉 `OBJ_TYPES` 里的手写 facets/columns，mock 只当后台断开时的回退）；问数输入框的范围和口径改读上面的接口。
-- **静态：** 第 4 节的 6 个新标记（可见性、可搜索、可筛选、可排序、列表展示、值格式）加迁移、变更单字段和 `explorer-meta` 接口；指标口径变体 `variants`。
-- **本体小白：** 行级范围接口 `me/row-scopes`，并支持预览用户。
-- **动态：** 自查「运行」区（告警、动作中心、推演）里写死的零售概念，列清单，记进 `handoff/dynamic.md`。
-- **Palantir专家：** 动作类型加 `targetKind` / `bulk` 过滤；对照本文交叉评审以上改动。
+- **静态本体负责人：** 第 4 节全部必需标记 + `meta` + `facets` + 指标 `variants`，排在变更单写接口之后。
+- **本体小白：** 行级范围接口；顶栏租户/组织去掉写死的「鲜邻零售集团 / 华东事业部」。不做筛选项接口。
+- **智能问数项目调研员：** 对象搜索、对象详情、问数工作台三页改成本体驱动（范围读行级范围，口径读 `variants`）。
+- **动态本体负责人：** 「运行」下告警、动作中心、推演三页去掉写死的零售概念。
+- **Palantir专家：** 对照本文交叉评审以上改动。
