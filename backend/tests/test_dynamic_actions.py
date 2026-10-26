@@ -28,6 +28,18 @@ def texts(d):
     return [x["text"] for x in d["log"]]
 
 
+async def approver_h(client, db) -> dict[str, str]:
+    """审批只能由审批人做（「角色 姓名」按姓名比对）。种子里 APPROVING 的审批人（赵磊）不是系统用户，
+    这里把审批人改成系统用户王敏，并以王敏身份请求。"""
+    from sqlalchemy import update
+
+    from app.modules.dynamic.models import ActionRun
+
+    await db.execute(update(ActionRun).where(ActionRun.code == APPROVING).values(approver="品类经理 王敏"))
+    await db.commit()
+    return await as_(db, "王敏")
+
+
 async def test_list_filters(dyn, client):  # noqa: F811
     g = lambda **p: client.get(f"{API}/action-runs", params=p)  # noqa: E731
     r = (await g(tab="pending", status="待确认", size=50)).json()
@@ -142,7 +154,8 @@ async def test_confirm_withdraw(dyn, client, fakes):  # noqa: F811
 
 
 async def test_approve_success(dyn, client, fakes):  # noqa: F811
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve")).json()
+    h = await approver_h(client, dyn)
+    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
     assert d["status"] == "成功" and d["extRef"] == "OA-1"
     assert texts(d)[-3] == "审批通过" and texts(d)[-1].endswith("返回成功，外部单号 OA-1")
     (eid, typ, payload) = fakes.emitter.events[0]
@@ -151,15 +164,16 @@ async def test_approve_success(dyn, client, fakes):  # noqa: F811
         and payload["actionRunId"] == APPROVING
         and eid.startswith("dynamic:action_run:")
     )
-    err(await client.post(f"{API}/action-runs/{APPROVING}:approve"), 409, "STATE_INVALID")
-    err(await client.post(f"{API}/action-runs/{STAGED_MINE}:approve"), 409, "STATE_INVALID")
+    err(await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h), 409, "STATE_INVALID")
+    err(await client.post(f"{API}/action-runs/{STAGED_MINE}:approve", headers=h), 409, "STATE_INVALID")
 
 
 async def test_approve_failed_then_resubmit(dyn, client, fakes):  # noqa: F811
+    h = await approver_h(client, dyn)
     fakes.submitter = FakeSubmitter(
         SubmitResult(status=SubmitStatus.FAILED, reason="HTTP 422 价格越界", code="422", retries=2)
     )
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve")).json()
+    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
     assert d["status"] == "失败" and d["failReason"] == "HTTP 422 价格越界" and d["retries"] == 2
     assert texts(d)[-1].endswith("明确返回失败，已自动重试 2 次仍失败")
     assert fakes.emitter.events == []
@@ -186,8 +200,9 @@ async def test_resubmit_seed_failed_and_alert(dyn, client, fakes):  # noqa: F811
 
 
 async def test_approve_unknown_and_reconcile(dyn, client, fakes):  # noqa: F811
+    h = await approver_h(client, dyn)
     fakes.submitter = FakeSubmitter(SubmitResult(status=SubmitStatus.UNKNOWN, reason="读超时"))
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve")).json()
+    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
     assert d["status"] == "结果未知" and d["unknownReason"] == "读超时"
     assert "秒未返回结果，标记为结果未知（不重试写入）" in texts(d)[-1]
     assert [e[1] for e in fakes.emitter.events] == ["ActionOutcomeUnknown"]
@@ -265,6 +280,7 @@ async def test_on_reconciled_listener(dyn):  # noqa: F811
 
 
 async def test_readonly_and_stubs(dyn, client):  # noqa: F811
+    h = await approver_h(client, dyn)
     for path, body in [
         (f"{API}/action-runs:stage", MANUAL),
         (f"{API}/action-runs/{STAGED_MINE}:confirm", None),
@@ -275,7 +291,7 @@ async def test_readonly_and_stubs(dyn, client):  # noqa: F811
     ]:
         err(await client.post(path, params={"ver": "v2026.10.1"}, json=body), 403, "READONLY")
     # 默认 StubSubmitter：审批后真实走成功分支
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve")).json()
+    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
     assert d["status"] == "成功" and d["extRef"]
 
 
@@ -300,3 +316,12 @@ async def test_history_keeps_runs_with_retired_or_missing_action_type(dyn, clien
         assert code in {x["id"] for x in after["items"]}
     d = await client.get(f"{API}/action-runs/{code}")
     assert d.status_code == 200, d.text
+
+
+async def test_approve_only_approver(dyn, client, session):  # noqa: F811
+    d = (await client.get(f"{API}/action-runs/{APPROVING}")).json()
+    other = "陈立军" if not d["approver"].endswith("陈立军") else "王敏"
+    h = await as_(session, other)
+    o = (await client.get(f"{API}/action-runs/{APPROVING}", headers=h)).json()
+    assert o["can"]["approve"] is False and "只有审批人可以审批" in o["can"]["reasons"]["approve"]
+    err(await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h), 403, "NOT_APPROVER")

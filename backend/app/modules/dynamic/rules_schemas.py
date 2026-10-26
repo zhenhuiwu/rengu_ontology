@@ -33,6 +33,22 @@ class RuleDraftIn(ApiModel):
     thresholds: list[str] = []
 
 
+class RuleCreateIn(ApiModel):
+    """POST /rules：新建规则（草稿，登记到变更单 cr）。
+
+    不传 cr 时只建规则，随后 POST /rules/{id}/draft 登记。"""
+
+    cr: str | None = Field(None, max_length=32)
+    name: str | None = Field(None, max_length=200)
+    obj_kind: str | None = Field(None, max_length=32)
+
+
+class RuleOpenDraftIn(ApiModel):
+    """POST /rules/{id}/draft：把规则登记到变更单 cr（开草稿，幂等）。"""
+
+    cr: str = Field(..., min_length=1, max_length=32)
+
+
 class ReplayIn(ApiModel):
     range: Literal["7d", "30d"] = "7d"
     version: Literal["current", "draft"] = "current"

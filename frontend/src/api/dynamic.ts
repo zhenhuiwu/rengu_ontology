@@ -7,7 +7,7 @@
  */
 import type { Alert, AlertStatus } from '@/mock/dynamic';
 import type { ActionLog, ActionRecord, ActionStatus, SysId } from '@/mock/actions';
-import { apiClient, currentApiContext, ApiError, API_BASE, type PageResult } from './http';
+import { apiClient, type PageResult } from './http';
 
 export const dynamicApi = apiClient('dynamic');
 const api = dynamicApi;
@@ -116,37 +116,13 @@ const undef = <T extends object>(o: T): T => {
   return r as T;
 };
 
-/**
- * PUT / PATCH：apiClient（http.ts，共享核心）目前只有 get / post，这里按 request() 同样的约定补一个最小实现：
- * 同样受开关约束、带 X-Demo-As / ?ver / ?previewAs、错误体转 ApiError。PDE 给 apiClient 加 put / patch 后换成 api.put / api.patch。
- */
-async function write<T>(method: 'PUT' | 'PATCH', path: string, body: unknown): Promise<T> {
-  if (!api.isReal()) throw new ApiError(0, { code: 'MOCK_ONLY', message: '开关 dynamic 未切到真接口', details: { key: 'dynamic' } });
-  const ctx = currentApiContext();
-  const headers: Record<string, string> = { Accept: 'application/json', 'Content-Type': 'application/json' };
-  if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
-  const qs = new URLSearchParams();
-  if (ctx.ver) qs.set('ver', ctx.ver);
-  if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
-  const url = `${API_BASE}/${api.prefix}/v1${path}${qs.toString() ? `?${qs}` : ''}`;
-  let res: Response;
-  try { res = await fetch(url, { method, headers, body: JSON.stringify(body) }); } catch (e) {
-    throw new ApiError(0, { code: 'NETWORK_ERROR', message: `无法连接后台：${(e as Error)?.message ?? e}` });
-  }
-  if (!res.ok) {
-    let b: { code?: string; message?: string; details?: unknown; requestId?: string | null } | null = null;
-    try { b = await res.json(); } catch { /* 非 JSON */ }
-    throw new ApiError(res.status, { code: b?.code ?? `HTTP_${res.status}`, message: String(b?.message ?? res.statusText), details: b?.details, requestId: b?.requestId ?? res.headers.get('X-Request-ID') });
-  }
-  return (await res.json()) as T;
-}
 
 export const listRules = (q: RuleQuery) =>
   api.get<PageResult<RuleDto>>('/rules', { query: { trigger: opt(q.trigger), status: opt(q.status), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
 export const getRulesMeta = () => api.get<RuleMetaDto>('/rules/meta');
 export const getRule = (id: string) => api.get<RuleDto>(`/rules/${enc(id)}`);
 export const saveRuleDraft = (id: string, body: { cr?: string; autoStage: AutoStage; thresholds: string[] }) =>
-  write<RuleDto>('PUT', `/rules/${enc(id)}/draft`, body);
+  api.put<RuleDto>(`/rules/${enc(id)}/draft`, body);
 export async function listRuleHits(id: string, range: '7d' | '30d', page: number, size: number) {
   const r = await api.get<PageResult<Hit>>(`/rules/${enc(id)}/hits`, { query: { range, page, size } });
   return { ...r, items: r.items.map(undef) };
@@ -155,6 +131,22 @@ export async function getRuleHit(id: string) {
   const r = await api.get<RuleHitDetailDto>(`/rule-hits/${enc(id)}`);
   return { ...undef(r), linkedAction: r.linkedAction ? clean(r.linkedAction) : null, alert: r.alert, timeline: r.timeline };
 }
+/** 新建规则（未发布、变更中）；带 cr 时同时开草稿 */
+export const createRule = (body: { cr?: string; name?: string; objKind?: string } = {}) => api.post<RuleDto>('/rules', body);
+/** 发起变更 / 加入已有变更单：登记规则草稿（幂等；已在别的草稿单 409 TARGET_IN_OTHER_CR） */
+export const openRuleDraft = (id: string, cr: string) => api.post<RuleDto>(`/rules/${enc(id)}/draft`, { cr });
+/** 放弃本规则草稿（从未发布的新规则一并删除） */
+export const discardRuleDraft = (id: string, cr?: string) => api.delete<void>(`/rules/${enc(id)}/draft`, { query: cr ? { cr } : {} });
+
+/**
+ * 变更单写接口（静态 static-r3 契约，handoff/static.md「变更单写接口契约」）。静态合并前默认关闭：
+ * VITE_DYNAMIC_CR_WRITE=1 才走真接口（草稿提交 / 放弃），否则草稿横幅保持 mock 行为。
+ */
+export const CR_WRITE = (import.meta.env as unknown as Record<string, string | undefined>).VITE_DYNAMIC_CR_WRITE === '1';
+export interface CrTarget { kind: 'rule' | 'object'; id: string; isNew?: boolean }
+export const submitCR = (cr: string) => api.post<{ id: string; status: string }>(`/change-requests/${enc(cr)}:submit`, {});
+export const removeCRTarget = (cr: string, t: CrTarget) => api.delete<void>(`/change-requests/${enc(cr)}/targets/${t.kind}/${enc(t.id)}`);
+
 export const replayRule = (id: string, range: '7d' | '30d', version: 'current' | 'draft') =>
   api.post<ReplayDto>(`/rules/${enc(id)}:replay`, { range, version });
 export const listRuleVersions = (id: string) => api.get<RuleVersionDto[]>(`/rules/${enc(id)}/versions`);
@@ -179,7 +171,7 @@ export function listLifecycleChanges(objectId: string, illegal: boolean, page: n
 export const listLifecycleIllegal = (objectId: string) => api.get<LcIllegal[]>(`/object-types/${enc(objectId)}/lifecycle/illegal`);
 /** L3–L6：整份草稿改动（新增状态 / 新增·修改·删除迁移）一起保存 */
 export const saveLifecycleDraft = (objectId: string, cr: string, edits: LcDraft) =>
-  write<{ cr: string; edits: LcDraft }>('PUT', `/object-types/${enc(objectId)}/lifecycle/draft`, { cr, ...edits });
+  api.put<{ cr: string; edits: LcDraft }>(`/object-types/${enc(objectId)}/lifecycle/draft`, { cr, ...edits });
 
 /* ───── 情景推演（ops/Scenarios.vue） ───── */
 import type { Scenario, ScResult, ScImpact, ScScope, ScDrivers, StagePlan } from '@/mock/scenarios';
@@ -192,9 +184,19 @@ export const getScenariosMeta = () => api.get<ScenarioMetaDto>('/scenarios/meta'
 export const compareScenarios = (ids: string[]) => api.get<{ items: ScenarioDto[]; sameScope: boolean }>('/scenarios:compare', { query: { ids: ids.join(',') } });
 export const createScenario = (from?: string) => api.post<ScenarioDto>('/scenarios', from ? { from } : {});
 export const getScenario = (id: string) => api.get<ScenarioDto>(`/scenarios/${enc(id)}`);
-export const renameScenario = (id: string, name: string) => write<ScenarioDto>('PATCH', `/scenarios/${enc(id)}`, { name });
+export const renameScenario = (id: string, name: string) => api.patch<ScenarioDto>(`/scenarios/${enc(id)}`, { name });
 export const runScenario = (id: string, body: { name?: string; scope: ScScope; drivers: ScDrivers }) => api.post<ScenarioDto>(`/scenarios/${enc(id)}:run`, body);
-export const getScenarioResult = (id: string) => api.get<Omit<ScResult, 'impacts'>>(`/scenarios/${enc(id)}/result`);
+/** 运行中回 202 { status: '运行中' }（继续轮询）；失败回 409 SCENARIO_FAILED；完成回结果 */
+export const getScenarioResult = (id: string) => api.get<Omit<ScResult, 'impacts'> | { status: string }>(`/scenarios/${enc(id)}/result`);
+/** :run 回 202（运行中）后轮询 /result，直到完成（或失败抛错 / 超时） */
+export async function waitScenarioResult(id: string, everyMs = 800, maxTries = 150): Promise<Omit<ScResult, 'impacts'>> {
+  for (let i = 0; i < maxTries; i += 1) {
+    const r = await getScenarioResult(id);
+    if (!('status' in r)) return r;
+    await new Promise((ok) => window.setTimeout(ok, everyMs));
+  }
+  throw new Error(`${id} 推演超时，请稍后刷新查看`);
+}
 export const listScenarioImpacts = (id: string, page: number, size: number) => api.get<PageResult<ScImpact>>(`/scenarios/${enc(id)}/impacts`, { query: { page, size } });
 export const getScenarioStagePlan = (id: string) => api.get<StagePlan[]>(`/scenarios/${enc(id)}/stage-plan`);
 export const stageScenario = (id: string, keys: string[]) => api.post<{ staged: string[]; message: string }>(`/scenarios/${enc(id)}:stage`, { keys });

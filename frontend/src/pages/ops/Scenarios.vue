@@ -14,7 +14,7 @@ import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, CopyOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
-import { CURRENT_USER } from '@/mock/changes';
+import { useAppStore } from '@/stores/app';
 import EChart from '@/components/EChart.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -32,14 +32,16 @@ import {
 import { isApiError } from '@/api/http';
 import {
   dynamicApi, listScenarios, getScenariosMeta, compareScenarios, createScenario, getScenario, renameScenario, runScenario,
-  getScenarioResult, listScenarioImpacts, getScenarioStagePlan, stageScenario, type ScenarioDto, type ScenarioMetaDto,
+  waitScenarioResult, listScenarioImpacts, getScenarioStagePlan, stageScenario, type ScenarioDto, type ScenarioMetaDto,
 } from '@/api/dynamic';
 
 const route = useRoute();
 const router = useRouter();
 const confirm = useConfirmStore();
 const { readonly, reason: roReason } = useReadonly();
-const ME = CURRENT_USER;
+const app = useAppStore();
+/** 当前用户（同告警页：取 app.user，演示身份切换后跟着变） */
+const ME = computed(() => app.user.name);
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(50 + (tick % 10)).padStart(2, '0')}:${String(tick * 7 % 60).padStart(2, '0')}`; };
 const q1 = (k: string) => { const v = route.query[k]; return typeof v === 'string' ? v : ''; };
@@ -156,7 +158,7 @@ const saveName = async () => {
   s.name = form.name.trim(); form.name = s.name; message.success('名称已保存');
 };
 /** 别人的方案只读：不能改、运行、转动作，可复制为自己的新方案 */
-const notMine = computed(() => !!current.value && current.value.owner !== CURRENT_USER);
+const notMine = computed(() => !!current.value && current.value.owner !== ME.value);
 const lockReason = computed(() => readonly.value ? roReason.value
   : notMine.value ? `${current.value!.owner} 的方案，只读（不能修改、运行或转为动作）；如需调整请“复制为新方案”`
   : current.value?.status === '运行中' ? '推演运行中，完成后可修改'
@@ -181,8 +183,10 @@ async function run() {
     const body = { name: form.name.trim() || undefined, scope: { ...form.scope }, drivers: { ...form.drivers } };
     remote.detail = { ...s, status: '运行中', failReason: undefined, result: undefined };
     try {
-      const d = asSc(await runScenario(id, body));
-      const res = await getScenarioResult(id); // 运行后单独取结果（推演引擎改异步后这里改为轮询）
+      const started = asSc(await runScenario(id, body)); // 202：运行中，后台计算
+      if (scId.value === id) remote.detail = { ...started, result: undefined };
+      const res = await waitScenarioResult(id); // 轮询 /result
+      const d = asSc(await getScenario(id));
       delete remote.plans[id];
       if (scId.value === id) { remote.detail = { ...d, result: { ...res, impacts: [] } }; load(remote.detail); }
       remote.rev += 1;
@@ -215,7 +219,7 @@ async function create(from?: Scenario) {
     return;
   }
   const s: Scenario = {
-    id: nextScenarioId(), name: from ? `${from.name}（副本）` : '新方案', owner: ME, createdAt: now(), baseVer: 'v2026.10.3', status: '草稿',
+    id: nextScenarioId(), name: from ? `${from.name}（副本）` : '新方案', owner: ME.value, createdAt: now(), baseVer: 'v2026.10.3', status: '草稿',
     scope: from ? { ...from.scope } : { area: '华东大区全部', category: '全部品类', weeks: 8 }, drivers: from ? { ...from.drivers } : BASE_DRIVERS(), staged: [],
   };
   SCENARIOS.unshift(s);
@@ -303,7 +307,7 @@ const convertBlocked = computed(() => {
   if (readonly.value) return roReason.value;
   if (!s) return mode.value === 'cmp' ? '先勾选要对比的方案' : '';
   if (s.status !== '已完成') return '方案推演完成后才能转为动作';
-  if (s.owner !== CURRENT_USER) return `${s.owner} 的方案，只读；如需转为动作请“复制为新方案”后运行`;
+  if (s.owner !== ME.value) return `${s.owner} 的方案，只读；如需转为动作请“复制为新方案”后运行`;
   if (mode.value === 'one' && cfgDirty.value) return '配置已改动，请先重新运行';
   if (s.staged.length) return `已转为 ${s.staged.length} 条暂存动作，请到动作中心确认`;
   const pl = planOf(s);
@@ -337,7 +341,7 @@ async function doStage() {
     fields: [
       { label: '动作', value: ['发起调价审批', '补货申请', '发放复购召回优惠券'].filter((n) => count(n)).map((n) => `${n} × ${count(n)}`).join('，') },
       { label: '去向', value: '动作中心 · 待确认' },
-      { label: '确认人', value: ME },
+      { label: '确认人', value: ME.value },
       { label: '推演基于', value: `本体 ${s.baseVer} · 运行于 ${s.result?.ranAt}` },
     ],
     impact: '只生成“待确认”动作，不提交审批、不写外部系统。需要你在动作中心逐条确认提交后才会进入审批；未确认前可撤回。',
@@ -355,8 +359,8 @@ async function doStage() {
   }
   const at = now();
   const ids = items.map((p) => stageAction({
-    action: p.action, objKind: p.objKind, objId: p.objId, objLabel: p.objLabel, params: p.params, initiator: ME, at,
-    source: { type: '推演', scenarioId: s.id, scenarioName: s.name, confirmer: ME },
+    action: p.action, objKind: p.objKind, objId: p.objId, objLabel: p.objLabel, params: p.params, initiator: ME.value, at,
+    source: { type: '推演', scenarioId: s.id, scenarioName: s.name, confirmer: ME.value },
   }).id);
   s.staged = ids; planFor.value = ''; plan.value = [];
   message.success(`已暂存 ${ids.length} 条动作到动作中心（待确认）`);
@@ -554,7 +558,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
             </tr>
             <tr><td class="c-3">暂存动作</td><td v-for="s in cmpList" :key="s.id" :class="{ 'sc-ct-on': s.id === pickId }" class="t-12">
               <template v-if="s.staged.length">已暂存 {{ s.staged.length }} 条 · <router-link :to="pendingLink">去动作中心</router-link></template>
-              <span v-else-if="s.owner !== CURRENT_USER" class="c-3">{{ s.owner }} 的方案 · 只读</span>
+              <span v-else-if="s.owner !== ME" class="c-3">{{ s.owner }} 的方案 · 只读</span>
               <span v-else class="c-3">可生成 {{ planOf(s)?.length ?? '…' }} 条</span>
             </td></tr>
           </tbody>

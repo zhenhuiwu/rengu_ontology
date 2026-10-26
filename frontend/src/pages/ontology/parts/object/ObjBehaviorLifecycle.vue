@@ -28,7 +28,7 @@ import {
   LC_DRAFT_EDITS, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
 } from '@/mock/lifecycle';
-import { actionTypeById, EVENT_TYPES } from '@/mock/actionEvent';
+import { actionApi, actionTypes, eventTypes, loadSnapshot } from '@/api/action';
 import { message } from 'ant-design-vue';
 import { isApiError } from '@/api/http';
 import {
@@ -276,10 +276,14 @@ const chgCols = [
   { title: '依据', key: 'rule' },
   { title: '来源', key: 'by', width: 240 },
 ];
-const EVENT_NAME = Object.fromEntries(EVENT_TYPES.map((e) => [e.id, e.name]));
+/* 动作 / 事件类型目录：action 开关切到真接口时读其接口（只读，src/api/action.ts），否则读 mock */
+const catTick = ref(0);
+if (actionApi.isReal()) loadSnapshot().then(() => { catTick.value += 1; }, (e) => { if (!fallBackIfDown(e)) console.error('[api] 动作 / 事件类型目录加载失败', e); });
+const actionTypeById = (id: string) => { void catTick.value; return actionTypes().find((a) => a.id === id); };
+const EVENT_NAME = computed(() => { void catTick.value; return Object.fromEntries(eventTypes().map((e) => [e.id, e.name])); });
 const byLink = (t: LcTransition) => (t.actionId ? { path: '/build/ontology/action-types', query: { action: t.actionId } }
   : t.eventId ? { path: '/build/ontology/event-types', query: { event: t.eventId } } : null);
-const byTitle = (t: LcTransition) => (t.actionId ? `动作类型 ${actionTypeById(t.actionId)?.name ?? t.actionId}` : t.eventId ? `事件类型 ${EVENT_NAME[t.eventId] ?? t.eventId}` : '');
+const byTitle = (t: LcTransition) => (t.actionId ? `动作类型 ${actionTypeById(t.actionId)?.name ?? t.actionId}` : t.eventId ? `事件类型 ${EVENT_NAME.value[t.eventId] ?? t.eventId}` : '');
 
 /* ───── 草稿编辑 ───── */
 const stOpen = ref(false);

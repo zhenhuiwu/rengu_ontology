@@ -13,7 +13,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
@@ -22,7 +22,7 @@ from app.core.clock import now
 from app.core.errors import AppError, NotFound
 from app.core.schema import _fmt_dt, _fmt_dt_seconds, parse_display_dt
 from app.modules.action.models import ActionType
-from app.modules.dynamic.models import ActionRun, ActionStatus, Alert
+from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertLevel
 from app.modules.dynamic.rules_models import (
     HitResult,
     Lifecycle,
@@ -33,6 +33,7 @@ from app.modules.dynamic.rules_models import (
     Rule,
     RuleDraft,
     RuleHit,
+    RuleOutput,
     RuleStatus,
     Scenario,
     ScenarioImpact,
@@ -43,6 +44,7 @@ from app.modules.dynamic.rules_schemas import (
     DriversIn,
     LifecycleDraftIn,
     ReplayIn,
+    RuleCreateIn,
     RuleDraftIn,
     ScenarioRunIn,
     ScopeIn,
@@ -144,7 +146,11 @@ class RuleService:
     ) -> Page[dict[str, Any]]:
         actions, drafts = await self._actions(), await self._drafts()
         rows = (
-            await self.session.scalars(select(Rule).where(Rule.version.is_not(None)).order_by(Rule.id))
+            await self.session.scalars(
+                select(Rule)
+                .where(or_(Rule.version.is_not(None), Rule.id.in_(list(drafts))))
+                .order_by(Rule.id)
+            )
         ).all()
         out = []
         for r in rows:
@@ -362,6 +368,70 @@ class RuleService:
             "samples": samples,
         }
 
+    async def _next_code(self) -> str:
+        codes = (await self.session.scalars(select(Rule.code))).all()
+        n = max((int(c[2:]) for c in codes if c.startswith("R-") and c[2:].isdigit()), default=0)
+        return f"R-{n + 1:03d}"
+
+    async def create(self, body: RuleCreateIn) -> dict[str, Any]:
+        """新建规则：未发布（version=null，不进快照），状态变更中；传 cr 时同时开草稿（v1，改动为空）。"""
+        name = (body.name or "").strip() or "未命名规则"
+        r = Rule(
+            code=await self._next_code(),
+            version=None,
+            name=name,
+            desc="",
+            owner=self.user.name,
+            status=RuleStatus.changing,
+            core=False,
+            obj_kind=body.obj_kind or "product",
+            level=AlertLevel.medium,
+            output=RuleOutput.alert,
+            conds=[],
+            logic="且",
+            trigger={"kind": "定时", "cron": "0 8 * * *", "text": "每天 08:00"},
+            auto_stage={"enabled": False, "actionTypeId": "", "mapping": [], "confirmer": ""},
+            is_seed=False,
+        )
+        self.session.add(r)
+        await self.session.flush()
+        if body.cr:
+            await self._open(r, body.cr)
+        return await self.detail(r.code, view="draft" if body.cr else None)
+
+    async def _open(self, r: Rule, cr: str) -> RuleDraft:
+        d = (await self._drafts()).get(r.id)
+        if d is not None:
+            if d.cr_code != cr:
+                msg = f"该规则已在变更单 {d.cr_code} 的草稿里"
+                raise fail("TARGET_IN_OTHER_CR", msg, 409, crId=d.cr_code)
+            return d
+        d = RuleDraft(rule_id=r.id, cr_code=cr, version=(r.version or 0) + 1, patch={}, by=self.user.name)
+        self.session.add(d)
+        r.status = RuleStatus.changing
+        await self.session.flush()
+        return d
+
+    async def open_draft(self, code: str, cr: str) -> dict[str, Any]:
+        """发起变更 / 加入已有变更单：登记规则草稿（幂等；已在别的草稿单里 409）。"""
+        r = await self.get(code)
+        await self._open(r, cr)
+        return await self.detail(code, view="draft")
+
+    async def discard_draft(self, code: str, cr: str | None) -> None:
+        """放弃本规则草稿：删草稿行；从未发布过的新规则连同规则一起删。"""
+        r = await self.get(code)
+        d = (await self._drafts()).get(r.id)
+        if d is None or (cr and cr != d.cr_code):
+            raise NotFound("该规则没有草稿", details={"id": code, "cr": cr})
+        await self.session.delete(d)
+        if r.version is None:
+            await self.session.flush()
+            await self.session.delete(r)
+        elif r.status == RuleStatus.changing:
+            r.status = RuleStatus.published
+        await self.session.flush()
+
     async def save_draft(self, code: str, body: RuleDraftIn) -> dict[str, Any]:
         """R7 保存到草稿：只有在变更单里的规则能改；自动暂存开启时必填参数都要有取值来源。"""
         r = await self.get(code)
@@ -550,6 +620,10 @@ class ScenarioService:
 
     async def result(self, code: str) -> dict[str, Any]:
         s = await self.get(code)
+        if s.status == ScenarioStatus.running:
+            return {"status": s.status.value}  # 路由据此回 202，前端继续轮询
+        if s.status == ScenarioStatus.failed:
+            raise fail("SCENARIO_FAILED", s.fail_reason or "推演失败", 409)
         res = await self._result(s)
         if res is None:
             raise NotFound("方案还没有推演结果", details={"id": code})
@@ -636,7 +710,23 @@ class ScenarioService:
         ).all():
             await self.session.delete(x)
         await self.session.flush()
-        # EXTENSION POINT (PDE): 真实推演引擎改异步任务；示意模型在请求内同步算完 [推断]
+        return await self.out(s, await self._vers(), full=True)
+
+    async def compute(self, code: str) -> None:
+        """后台任务：按 start 时写入的 scope / drivers 计算并落库（运行中 → 已完成 / 失败）。
+        EXTENSION POINT (PDE): 真实推演引擎接任务队列时替换这里；
+        当前为进程内后台任务，进程重启会留下“运行中” [推断]"""
+        s = await self.get(code)
+        if s.status != ScenarioStatus.running:
+            return
+        try:
+            await self._compute(s)
+        except Exception as e:  # 推演失败落到方案上，前端轮询 /result 拿到失败原因
+            s.status, s.fail_reason = ScenarioStatus.failed, f"推演失败：{e}"
+            await self.session.flush()
+
+    async def _compute(self, s: Scenario) -> None:
+        scope, drivers = s.scope, s.drivers
         at = now()
         res = simulate(scope, drivers, sec(at))
         self.session.add(
@@ -674,7 +764,6 @@ class ScenarioService:
             )
         s.status = ScenarioStatus.done
         await self.session.flush()
-        return await self.out(s, await self._vers(), full=True)
 
     async def compare(self, ids: list[str]) -> dict[str, Any]:
         if not ids or len(ids) > 3:
