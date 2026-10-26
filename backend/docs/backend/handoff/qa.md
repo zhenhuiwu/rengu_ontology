@@ -22,6 +22,12 @@
 - **后端**：T11 `POST /tuning/eval/runs`（202，进程内 asyncio 后台任务 `app/modules/qa/eval/job.py`，复用 `chain.answer` 在只读回滚事务里逐题跑、按回答形状判分写 `qa_eval_fail` / `last_result`；真 qwen-flash 冒烟 2 题通过链路）；T15 `:to-synonym`（只做“词已被变更单覆盖”的关联分支，没覆盖 → 409 `CR_API_PENDING`）；T16 `:to-cert`（加同问法 / 新建并认证）；T17 `:ignore` / `:reopen`；T13 列表返回 T14 详情字段。规则与 [推断] 见 `qa-api.md` §7「联调实现」。无新依赖、无迁移。测试 `backend/tests/test_qa_tuning_eval.py`（FakeLLM / runner 打桩）。
 - **前端**：`EvalTab.vue`（T9 / T10 / T12，有运行中时 3 秒轮询）、`FeedbackTab.vue`（T13–T17）、`QaTuning.vue`（四个计数都取 T1、「运行评测」走 T11 并跳到新运行，未配 LLM 提示 503）；`src/api/qa.ts` 只追加了 `QaEvalRun` / `QaEvalRunDetail` / `QaFeedback` 等类型和 10 个函数。真接口模式下：转同义词遇到未覆盖的词提示「需要新建变更单…」，不弹发起变更窗；连不上后台仍回退 mock。
 
+### 1.4 qa-tuning-fix（PDE 合并审意见，基线 master `e8d9c1a`）
+- ① ER- 编号：取号前拿事务级咨询锁（`router.next_run_code`），并发不撞号。并发互斥（同时只能有一个运行中）**未做**，待产品定。
+- ④ `:reopen` 撤销 `:to-cert` 加的同问法（新列 `qa_feedback.cert_variant_id`，迁移 `qa_0003` → `action_0002`）；也接受从 `已转认证问答` 重开 [推断]；新建的认证问答保留 [推断]。
+- ⑤ T11 改经 `BackgroundTasks` 调度（请求事务提交后才起任务），去掉后台任务里 5 秒轮询。
+- 未改：② 重启后运行卡「运行中」（见第 2 节）；③ `/feedbacks` 列表逐行构建详情（N+1，每页 ≤ 200 行，后续按批预取 CR / 认证 / 计划）；⑥ service 跨模块只读引用 `static.ChangeRequest`，等 static 提供查询函数再换。
+
 ### 1.2 链路（qa-reuse 最终 `740a554`，在 `a39b314` 上；chain.py / llm.py / test_qa_chain.py / eval/ 归 qa-reuse，本分支未改）
 - **LLM 调用**：`llm.py` 用 openai SDK（`openai>=1.50`）的 `AsyncOpenAI` 调 DashScope 兼容接口（qwen-flash）；密钥只从环境变量读（本机 `/home/box/.qa_dashscope.env`，不进仓库）；CI 用 FakeLLM。
 - **Prompt**：`chain.py` 照 Vanna `get_sql_prompt` 结构（初始说明 + ===Tables + ===Additional Context + ===Response Guidelines）和 `extract_sql` 围栏规则（MIT）；DDL 用 SQLAlchemy 把 ORM 编译成 CREATE TABLE + COMMENT，只给业务列；PG 方言规则、Style 段、样例值、「Today's date」摘自 NVIDIA auto-ontology（Apache-2.0，本地 `/workspace/tmp/auto-ontology`，未入库）。

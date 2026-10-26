@@ -8,10 +8,10 @@ from collections.abc import Callable
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.common.audit import audit
 from app.common.auth import CurrentUserDep, require_func
@@ -20,6 +20,7 @@ from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
 from app.core.errors import AppError, DuplicateKey, EmptyInput, ExportForbidden, NotFound
 from app.core.state import InvalidTransition as StateInvalid
+from app.db.dialects import get_adapter
 from app.db.session import SessionDep
 from app.modules.qa import catalog, chain
 from app.modules.qa import repo as r
@@ -924,6 +925,15 @@ class EvalGroupInvalid(AppError):
     status_code, code, message = 422, "VALIDATION_FAILED", "评测分组不存在"
 
 
+async def next_run_code(session: AsyncSession) -> str:
+    """ER-最大号+1（同前端 startRun）。并发安全：先拿事务级咨询锁串行取号，锁持有到本事务结束，
+    后到的请求要等前一个提交（或回滚）后才读最大号；`code` 唯一约束兜底。"""
+    await get_adapter(session).xact_lock(session, "qa.eval_run.code")
+    codes = (await session.scalars(select(QaEvalRun.code))).all()
+    nums = [int(c[3:]) for c in codes if c.startswith("ER-") and c[3:].isdigit()]
+    return f"ER-{(max(nums) if nums else 0) + 1:04d}"
+
+
 @tuning.post(
     "/eval/runs",
     status_code=202,
@@ -939,6 +949,7 @@ async def start_run(
     ctx: ViewContextDep,
     llm: Annotated[LLMClient, Depends(get_llm)],
     runner: Annotated[Callable, Depends(eval_job.get_runner)],
+    tasks: BackgroundTasks,
 ):
     _, u = await svc.effective_user(session, user, ctx)
     group = None if body.group in eval_job.ALL else body.group
@@ -948,10 +959,8 @@ async def start_run(
         await session.scalar(select(func.count()).select_from(eval_job.questions_query(group).subquery()))
         or 0
     )
-    codes = (await session.scalars(select(QaEvalRun.code))).all()
-    nums = [int(c[3:]) for c in codes if c.startswith("ER-") and c[3:].isdigit()]
     run = QaEvalRun(
-        code=f"ER-{(max(nums) if nums else 0) + 1:04d}",  # 同前端 startRun：ER-最大号+1
+        code=await next_run_code(session),
         run_at=clock.now(),
         trigger_label="手动运行",
         version_label=catalog.load("CUR_VERSION"),
@@ -964,7 +973,11 @@ async def start_run(
     session.add(run)
     await session.flush()
     await audit(session, user, action="qa.eval.run", target=run.code, detail={"group": body.group})
-    runner(run.code, group, llm, user)
+
+    async def _go() -> None:  # 响应前 get_session 已提交，后台任务一定读得到这条运行
+        runner(run.code, group, llm, user)
+
+    tasks.add_task(_go)
     return svc.run_out(run, 0)
 
 
@@ -1063,15 +1076,18 @@ async def feedback_to_cert(fid: str, session: SessionDep, user: CurrentUserDep, 
         mode = "new"
     else:
         raise CertNoPlan(details={"id": fid, "question": f.fix_text})
+    added: QaCertVariant | None = None
     have = {v.question.lower() for v in c.variants}
     if f.question != c.question and f.question.lower() not in have and len(f.question) <= 40:
         taken = await session.scalar(
             select(QaCertVariant.id).where(func.lower(QaCertVariant.question) == f.question.lower())
         )
         if taken is None:  # 同问法全局唯一：已挂在别处就不加
-            c.variants.append(QaCertVariant(question=f.question))
+            added = QaCertVariant(question=f.question)
+            c.variants.append(added)
     f.status, f.cert_id, f.resolved_by, f.handler = FbStatus.to_cert, c.id, c.code, u.name
     await session.flush()
+    f.cert_variant_id = added.id if added is not None else None  # 记下来，T17 重开时撤销
     await audit(
         session, user, action="qa.feedback.to_cert", target=f.code, detail={"cert": c.code, "mode": mode}
     )
@@ -1103,8 +1119,19 @@ async def feedback_ignore(fid: str, session: SessionDep, user: CurrentUserDep, c
     summary="T17 重新打开",
 )
 async def feedback_reopen(fid: str, session: SessionDep, user: CurrentUserDep):
+    """`已忽略` / `已转认证问答` → `待处理`。
+
+    [推断] 前端只在 `已忽略` 行给「重新打开」；后端也接受 `已转认证问答`，用来撤销误转：
+    删掉 T16 加上的同问法（`cert_variant_id`，被 T8 删过就跳过）。T16 新建的认证问答**保留**，
+    同前端 mock `reopen` 只改反馈、不动认证问答（mock 没写这种情况）。
+    """
     f = await _fb(session, fid)
-    _need_open(f, FbStatus.ignored)
+    _need_open(f, FbStatus.ignored, FbStatus.to_cert)
+    if f.cert_variant_id is not None:
+        v = await session.get(QaCertVariant, f.cert_variant_id)
+        f.cert_variant_id = None
+        if v is not None:
+            await session.delete(v)
     f.status, f.handler, f.resolved_by, f.cr_code, f.cert_id = FbStatus.open, None, None, None, None
     await session.flush()
     await audit(session, user, action="qa.feedback.reopen", target=f.code)

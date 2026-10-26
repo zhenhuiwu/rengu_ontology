@@ -111,12 +111,8 @@ async def _background(run_code: str, group: str | None, llm: LLMClient, user: An
     from app.db.session import get_qa_readonly_engine, get_sessionmaker
 
     async with get_sessionmaker()() as s:
-        run = None
-        for _ in range(20):  # 等请求事务提交（POST 返回 202 前才 commit）
-            run = await s.scalar(select(QaEvalRun).where(QaEvalRun.code == run_code))
-            if run is not None:
-                break
-            await asyncio.sleep(0.25)
+        # T11 经 BackgroundTasks 调度：请求事务（get_session，scope="function"）已提交，不用轮询等
+        run = await s.scalar(select(QaEvalRun).where(QaEvalRun.code == run_code))
         if run is None:
             log.warning("eval run %s not found", run_code)
             return
