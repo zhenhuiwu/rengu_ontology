@@ -160,6 +160,7 @@ def _scenario(r: Row, _ctx: SeedContext) -> Row:
         "created_on": parse_display_dt(r["createdAt"]),
         "base_release_id": r.get("baseVer"),
         "status": ScenarioStatus(r["status"]).name,
+        "template_code": r.get("templateCode") or "demo_retail",
         "scope": r["scope"],
         "drivers": r["drivers"],
         "fail_reason": r.get("failReason"),

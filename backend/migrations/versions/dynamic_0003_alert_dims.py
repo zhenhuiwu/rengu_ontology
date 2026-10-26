@@ -1,6 +1,7 @@
 """动态本体：告警去零售写死——alert.store_id / store_label 换成通用维度 dims（JSON 数组 [{objKind,id,label}]）。
 
 原有门店维度原样迁成 dims=[{objKind:"store", id, label}]；降级时把 store 维度还原回两列。
+情景推演模板化：scenario.template_code（推演模板编号，存量方案全部指向演示模板 demo_retail）。
 
 Revision ID: dynamic_0003
 Revises: static_0003
@@ -38,9 +39,21 @@ def upgrade() -> None:
     op.alter_column("alert", "dims", server_default=None)
     op.drop_column("alert", "store_label")
     op.drop_column("alert", "store_id")
+    op.add_column(
+        "scenario",
+        sa.Column(
+            "template_code",
+            sa.String(length=64),
+            nullable=False,
+            server_default="demo_retail",
+            comment="推演模板编号（SC_TEMPLATES.code）",
+        ),
+    )
+    op.alter_column("scenario", "template_code", server_default=None)
 
 
 def downgrade() -> None:
+    op.drop_column("scenario", "template_code")
     op.add_column("alert", sa.Column("store_id", sa.String(length=64), nullable=True))
     op.add_column("alert", sa.Column("store_label", sa.String(length=200), nullable=True))
     op.execute(

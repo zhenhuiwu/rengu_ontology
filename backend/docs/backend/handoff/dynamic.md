@@ -114,7 +114,7 @@
 - objectRegistry：不告警的 `canResolve(kind)`（见未完成第 8 条）。
 - static / versioning：整版发布时按变更单回调各模块 apply 的钩子（dynamic 用来把规则 / 生命周期草稿升为已发布版本；CR_WRITE 默认开的前提）。
 
-## dynamic-r3b：运行页去零售写死（告警 / 动作中心 / 推演模板设计）
+## dynamic-r3b：运行页去零售写死（告警 / 动作中心 / 推演模板）
 
 分支 `dynamic-r3b`（基于 master `b475283`）。只动运行页；规则、生命周期、变更单部分归 `dynamic-r3`。
 
@@ -127,17 +127,10 @@
 **没做 / 待办**
 - 告警筛选按 `/facets` 生成：告警页现在只有级别 / 规则 / 关键词（流程字段），没有区域 / 门店筛选可替换。要按告警对象类型的可筛选属性筛，后台得 join 业务表（facets 的筛选值落到 alert.obj_id），下一轮和规则命中 dims 一起做：`GET /alerts?filters=<JSON>&objKind=` 复用 static 的 filters 校验（422 规则一致）。
 - `mock/rules.ts` 里命中 / 回放仍读 `Alert.storeId`（`dynamic-r3` 范围）；命中改 dims 时请改用 `alertDims()`。`ObjBehaviorAutomation.vue:151` 的 `storeLabel` 同理。
-- **情景推演模板化本轮没做（整页改不完，未动 Scenarios 任何文件）**，设计如下，下一轮按整页交：
-
-**推演模板设计（scenario_template）**
-- 表 `scenario_template`：`code`、`name`、`object_type_code`（目标对象类型）、`engine`（引擎键，可插拔；演示模板 = `demo_retail`，即现 `rules_sim.simulate` 原样搬进 `engines/demo_retail.py`）、`definition` JSONB；`scenario` 加 `template_code`（存量迁移全部指向演示模板）。
-- `definition`：
-  - `scope: [{key, label, propKey, kind:'enum'|'range'|'int', default, allOption?}]`——取值来自目标对象类型 `/facets`（enum 取 values，range 取 min/max）；`int` 类（如周数）带 `min/max`。演示：`area`（门店.region，全部项「华东大区全部」）、`category`（商品.category 一级，全部项「全部品类」）、`weeks`（1–52，默认 8）。
-  - `drivers: [{key, label, kind:'number'|'enum', unit, min, max, step, default, options?, enabledBy?}]`——演示：pricePct / replenishPct / safetyDays / promo(无/会员券/折扣/满减) / promoDepth / promoWeeks（enabledBy promo≠无），即现 `BASE_DRIVERS`、`PROMO_TYPES`。
-  - `kpis: [{key, label, unit, better, metricId?}]`——演示 6 个（sales/gp/rate/stockout/turn/promo），`metricId` 指向指标目录。
-  - `series: [{key, label, base, value, unit}]`——周序列（销售额、毛利率）。
-  - `impact: { rowObject: {objKind, idKey, labelKey}, dims: [{objKind, idKey, labelKey}], metrics: [{key, label, baseKey, valueKey, unit, better}] }`——演示：行 = 商品（sku/name），维度 = 门店（storeId/storeName）+ 品类，指标 = 销售额、缺货率。表 `scenario_impact` 改成 `obj_kind / obj_id / obj_label / dims JSONB / metrics JSONB / suggest`，唯一键 `(scenario_id, obj_id, dims_key)`。
-  - `suggestions: [{key, actionType, when, objFrom:'row'|'fixed', group?, paramsTpl, reasonTpl}]`——`actionType` 引用动作类型编号（start_price_approval / replenish_request / 复购召回券），审批人照动作类型配置；`when` 由引擎计算（模板不放表达式求值）。
-- 接口：`GET /scenario-templates`、`GET /scenarios/meta?template=` 返回模板 + 各 scope 项的 facets 取值；`:run` body `{scope:{…}, drivers:{…}}` 按模板校验（未知键 / 越界 422）；`/impacts` 返回 `{objKind,objId,objLabel,dims[],metrics{}}`；202 + 轮询、savepoint 失败处理不变。
-- 页面：范围 / 驱动表单、KPI 卡、影响明细列、建议动作全部按模板渲染；mock 回退带同一份演示模板 JSON（`mock/scenarios.ts` 的 simulate 原样作演示引擎，值不变）。
-- 验收：演示模板下 `derived/simulate.json` 逐位一致；代码里（引擎目录之外）不出现区域 / 品类 / 门店 / SKU。
+**情景推演模板化（已做，dynamic-r3b 第二轮）**
+- 模板定义唯一来源 `src/mock/scenarioTemplates.ts`（`ScTemplate`）；后台读同一份导出 `backend/seeds/json/dynamic/SC_TEMPLATES.json`（改 TS 后重新导出，测试会比对 `/scenarios/meta.templates` 与该 JSON）。演示模板 `demo_retail`（目标对象类型 product）原样复现原页面：范围 area / category / weeks，三组驱动，6 个 KPI，主序列，影响明细列，对比行，建议动作 → 动作名。
+- 引擎按模板 `engine` 键插拔：后台 `app/modules/dynamic/scenario_templates.py` `ENGINES`（`demo_retail` = 原 `rules_sim.simulate / stage_plan`，未改一行）；前端 `SC_ENGINES`（`demo_retail` = `mock/scenarios.ts simulate / stagePlanOf`，值不变）。
+- 迁移并进 `dynamic_0003`：`scenario.template_code`（String 64，存量全部 `demo_retail`），降级删列；仍只有一个 dynamic 迁移。
+- 接口：`ScenarioOut.templateCode`；`/scenarios/meta` 增加 `templates`（原 areas / categories / promoTypes / baseDrivers / statuses 保留，baseDrivers 取模板默认）；`:run` body 改为 `{scope:{…}, drivers:{…}}`（任意键），按模板字段校验：未知键「模板里没有这一项」、类型、可选值（沿用原文案）、min/max → 422 `VALIDATION_FAILED`；依赖项关闭时按 `offValue` 归零；无驱动 → `SCENARIO_NO_DRIVER`（文案取模板 `noDriverHint`）。新建 / 复制按来源方案模板（缺省演示模板）取默认值。对比 sameScope 按 `(templateCode, scope)`。202 + 轮询、savepoint 失败处理不变。
+- `Scenarios.vue`：范围 / 驱动表单、KPI 卡格式与提示、折线序列、影响明细列（obj / money / delta / range / text 通用列类型）、对比行、暂存确认里的动作名都按模板渲染；页面代码里不再有区域 / 品类 / 门店 / 商品 / 促销等字样。
+- 没做（与原设计的差距）：模板还是文件元数据，没建 `scenario_template` 表和 `GET /scenario-templates`；范围取值是模板里的固定选项，没接对象类型 `/facets`；影响明细表 `scenario_impact` 仍是演示引擎的行结构（模板 `impact.columns` 把行字段映射到通用列），没改成 `{objKind,objId,dims,metrics}`；建议动作仍按动作名映射，没接动作类型编号。

@@ -147,7 +147,7 @@
 
 **action_run_log**（合并原 action_log 与 Palantir `action_run_step`）：`id, action_run_id FK（→ action_run.id）, at, actor, text, level（done/warn/error/unknown）`（= `ActionLog{time,text,desc,status}`）。
 
-**scenario**：`id PK bigint, code UNIQUE（SCN-0018）, name, owner, created_at, base_release_id FK（→ ontology_release.id；接口 `baseVer` 返回版本号；种子 18 条全是 `v2026.10.3`，`scenarios.ts` L132，在 `RELEASES` 里，按 `ver` 查回 `id`）, status（draft/running/done/failed = 草稿/运行中/已完成/失败）, scope jsonb {area, category, weeks∈4|8|12}, drivers jsonb {pricePct −20~+10, replenishPct −30~+50, safetyDays 3~14, promo 无/满减/折扣/会员券, promoDepth 0~30, promoWeeks 0~4}, fail_reason, staged_action_ids bigint[]（→ action_run.id，数组不建外键约束）`。
+**scenario**：`id PK bigint, code UNIQUE（SCN-0018）, name, owner, created_at, base_release_id FK（→ ontology_release.id；接口 `baseVer` 返回版本号；种子 18 条全是 `v2026.10.3`，`scenarios.ts` L132，在 `RELEASES` 里，按 `ver` 查回 `id`）, status（draft/running/done/failed = 草稿/运行中/已完成/失败）, scope jsonb {area, category, weeks∈4|8|12}, drivers jsonb {pricePct −20~+10, replenishPct −30~+50, safetyDays 3~14, promo 无/满减/折扣/会员券, promoDepth 0~30, promoWeeks 0~4}, template_code（推演模板编号，默认 demo_retail；scope / drivers 的键与取值范围由模板 `SC_TEMPLATES.json` 定义，上面是演示模板）, fail_reason, staged_action_ids bigint[]（→ action_run.id，数组不建外键约束）`。
 
 **scenario_result**：`id PK, scenario_id FK UNIQUE（→ scenario.id）, ran_at, scope_snapshot, drivers_snapshot, weeks[], base_sales[], sales[], base_margin[], margin[], kpis jsonb[{key,label,unit,base,value,better}]`；**scenario_impact**：`id PK, scenario_id FK（→ scenario.id）, sku, name, category, store_id, store_name, base_sales, sales, stockout_base, stockout, suggest`（分页读）。
 
@@ -482,7 +482,7 @@ stateDiagram-v2
 | 回放试跑 | `POST /rules/{id}:replay {range, version}` | 不落业务数据 |
 | 版本历史 | `GET /rules/{id}/versions` | 「对比」「回滚」前端没有点击处理（`Rules.vue` L469），`:rollback` 见 `[推断 P8]` |
 | 方案 CRUD | `GET /scenarios?status&kw&page`、`POST /scenarios {from?}`、`PATCH /scenarios/{id} {name}` | |
-| 运行 | `POST /scenarios/{id}:run {scope, drivers}` | 异步；`GET /scenarios/{id}` 轮询状态 |
+| 运行 | `POST /scenarios/{id}:run {scope, drivers}` | 异步；`GET /scenarios/{id}` 轮询状态；scope / drivers 按方案模板校验（未知键 / 类型 / 选项 / 越界 422）；`/scenarios/meta.templates` 下发模板定义 |
 | 结果 / 影响 | `GET /scenarios/{id}/result`、`/impacts?page&size` | 影响一屏 6 |
 | 对比 | `GET /scenarios:compare?ids=a,b,c` | ≤3 个已完成 |
 | 转动作 | `GET /scenarios/{id}/stage-plan`、`POST /scenarios/{id}:stage {keys}` | |

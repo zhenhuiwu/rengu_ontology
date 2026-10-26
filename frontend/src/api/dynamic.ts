@@ -249,10 +249,11 @@ export async function saveLifecycleDraft(objectId: string, cr: string, edits: Lc
 }
 
 /* ───── 情景推演（ops/Scenarios.vue） ───── */
-import type { Scenario, ScResult, ScImpact, ScScope, ScDrivers, StagePlan } from '@/mock/scenarios';
+import type { Scenario, ScResult, ScImpact, StagePlan } from '@/mock/scenarios';
+import type { ScCfg, ScTemplate } from '@/mock/scenarioTemplates';
 /** 详情 / 运行 / 改名返回：result 不含 impacts（影响明细走分页接口） */
 export interface ScenarioDto extends Omit<Scenario, 'result'> { result?: Omit<ScResult, 'impacts'> | null; lockReason?: string }
-export interface ScenarioMetaDto { areas: string[]; categories: string[]; promoTypes: string[]; baseDrivers: ScDrivers; statuses: string[] }
+export interface ScenarioMetaDto { templates: ScTemplate[]; areas: string[]; categories: string[]; promoTypes: string[]; baseDrivers: ScCfg; statuses: string[] }
 export const listScenarios = (q: { status?: string; kw?: string; page: number; size: number }) =>
   api.get<PageResult<ScenarioDto>>('/scenarios', { query: { status: opt(q.status), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
 export const getScenariosMeta = () => api.get<ScenarioMetaDto>('/scenarios/meta');
@@ -260,7 +261,7 @@ export const compareScenarios = (ids: string[]) => api.get<{ items: ScenarioDto[
 export const createScenario = (from?: string) => api.post<ScenarioDto>('/scenarios', from ? { from } : {});
 export const getScenario = (id: string) => api.get<ScenarioDto>(`/scenarios/${enc(id)}`);
 export const renameScenario = (id: string, name: string) => api.patch<ScenarioDto>(`/scenarios/${enc(id)}`, { name });
-export const runScenario = (id: string, body: { name?: string; scope: ScScope; drivers: ScDrivers }) => api.post<ScenarioDto>(`/scenarios/${enc(id)}:run`, body);
+export const runScenario = (id: string, body: { name?: string; scope: ScCfg; drivers: ScCfg }) => api.post<ScenarioDto>(`/scenarios/${enc(id)}:run`, body);
 /** 运行中回 202 { status: '运行中' }（继续轮询）；失败回 409 SCENARIO_FAILED；完成回结果 */
 export const getScenarioResult = (id: string) => api.get<Omit<ScResult, 'impacts'> | { status: string }>(`/scenarios/${enc(id)}/result`);
 /** 轮询被页面卸载等中止时抛出，调用方静默忽略 */

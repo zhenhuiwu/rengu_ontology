@@ -1,0 +1,328 @@
+[
+  {
+    "code": "demo_retail",
+    "name": "门店商品经营推演",
+    "objectType": "product",
+    "engine": "demo_retail",
+    "scope": [
+      {
+        "key": "area",
+        "label": "区域",
+        "kind": "select",
+        "default": "华东大区全部",
+        "options": [
+          "华东大区全部",
+          "华东一区",
+          "华东二区",
+          "华东三区",
+          "华东四区"
+        ],
+        "propRef": "store.region",
+        "invalidMsg": "范围不在可选列表里"
+      },
+      {
+        "key": "category",
+        "label": "品类",
+        "kind": "select",
+        "default": "全部品类",
+        "options": [
+          "全部品类",
+          "乳品",
+          "粮油调味",
+          "酒水饮料",
+          "日化家清",
+          "休闲食品",
+          "生鲜"
+        ],
+        "propRef": "product.category",
+        "invalidMsg": "品类不在可选列表里"
+      },
+      {
+        "key": "weeks",
+        "label": "推演周数",
+        "kind": "radio",
+        "default": 8,
+        "options": [
+          4,
+          8,
+          12
+        ],
+        "unit": "周",
+        "min": 1,
+        "max": 52
+      }
+    ],
+    "driverGroups": [
+      {
+        "label": "驱动 · 价格",
+        "rows": [
+          {
+            "label": "价格调整",
+            "fields": [
+              {
+                "key": "pricePct",
+                "label": "价格调整",
+                "kind": "slider",
+                "default": 0,
+                "min": -20,
+                "max": 10,
+                "step": 1,
+                "unit": "%",
+                "signed": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "label": "驱动 · 库存",
+        "rows": [
+          {
+            "label": "补货量",
+            "fields": [
+              {
+                "key": "replenishPct",
+                "label": "补货量",
+                "kind": "slider",
+                "default": 0,
+                "min": -30,
+                "max": 50,
+                "step": 5,
+                "unit": "%",
+                "signed": true
+              }
+            ]
+          },
+          {
+            "label": "安全库存",
+            "fields": [
+              {
+                "key": "safetyDays",
+                "label": "安全库存",
+                "kind": "number",
+                "default": 7,
+                "min": 3,
+                "max": 14,
+                "unit": "天",
+                "width": 120
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "label": "驱动 · 促销",
+        "rows": [
+          {
+            "label": "促销类型",
+            "fields": [
+              {
+                "key": "promo",
+                "label": "促销类型",
+                "kind": "select",
+                "default": "无",
+                "options": [
+                  "无",
+                  "满减",
+                  "折扣",
+                  "会员券"
+                ],
+                "effectNeeds": [
+                  "promoDepth"
+                ],
+                "invalidMsg": "促销方式只能是：无、满减、折扣、会员券"
+              }
+            ]
+          },
+          {
+            "label": "力度 / 周数",
+            "fields": [
+              {
+                "key": "promoDepth",
+                "label": "促销力度",
+                "kind": "number",
+                "default": 0,
+                "min": 0,
+                "max": 30,
+                "unit": "%",
+                "width": 110,
+                "when": {
+                  "key": "promo",
+                  "not": "无"
+                },
+                "offValue": 0,
+                "onDefault": 10
+              },
+              {
+                "key": "promoWeeks",
+                "label": "促销周数",
+                "kind": "number",
+                "default": 0,
+                "min": 0,
+                "max": 4,
+                "unit": "周",
+                "width": 110,
+                "when": {
+                  "key": "promo",
+                  "not": "无"
+                },
+                "offValue": 0,
+                "onDefault": 2
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "noDriverHint": "至少调整一个驱动（价格 / 库存 / 促销）",
+    "modelNote": "价格弹性 −1.6（示意模型）",
+    "kpis": [
+      {
+        "key": "sales",
+        "label": "销售额",
+        "fmt": "wan",
+        "delta": "ratio",
+        "chart": true
+      },
+      {
+        "key": "gp",
+        "label": "毛利额",
+        "fmt": "wan",
+        "delta": "ratio",
+        "chart": true
+      },
+      {
+        "key": "rate",
+        "label": "毛利率",
+        "fmt": "pct",
+        "delta": "pt",
+        "chart": true
+      },
+      {
+        "key": "stockout",
+        "label": "缺货率",
+        "fmt": "pct",
+        "delta": "pt",
+        "chart": true
+      },
+      {
+        "key": "turn",
+        "label": "库存周转天数",
+        "short": "周转天数",
+        "fmt": "days",
+        "delta": "ratio",
+        "chart": true
+      },
+      {
+        "key": "promo",
+        "label": "促销成本",
+        "fmt": "wan",
+        "delta": "abs",
+        "baseTip": "基线无促销成本"
+      }
+    ],
+    "series": {
+      "label": "销售额",
+      "unit": "万元",
+      "scale": 10000,
+      "baseKey": "baseSales",
+      "valueKey": "sales"
+    },
+    "impact": {
+      "rowKey": [
+        "sku",
+        "storeId"
+      ],
+      "sortNote": "按销售额变化绝对值排序",
+      "dims": [
+        "store"
+      ],
+      "columns": [
+        {
+          "key": "sku",
+          "label": "商品",
+          "kind": "obj",
+          "objKind": "product",
+          "idKey": "sku",
+          "labelKey": "name"
+        },
+        {
+          "key": "store",
+          "label": "门店",
+          "kind": "obj",
+          "objKind": "store",
+          "idKey": "storeId",
+          "labelKey": "storeName"
+        },
+        {
+          "key": "base",
+          "label": "基线销售额",
+          "kind": "money",
+          "valueKey": "baseSales",
+          "align": "right",
+          "width": 110
+        },
+        {
+          "key": "sales",
+          "label": "方案销售额",
+          "kind": "money",
+          "valueKey": "sales",
+          "align": "right",
+          "width": 110
+        },
+        {
+          "key": "delta",
+          "label": "变化",
+          "kind": "delta",
+          "valueKey": "sales",
+          "baseKey": "baseSales",
+          "align": "right",
+          "width": 84
+        },
+        {
+          "key": "so",
+          "label": "缺货率",
+          "kind": "range",
+          "valueKey": "stockout",
+          "baseKey": "stockoutBase",
+          "unit": "%",
+          "align": "right",
+          "width": 132
+        },
+        {
+          "key": "suggest",
+          "label": "建议动作",
+          "kind": "text",
+          "valueKey": "suggest",
+          "width": 170
+        }
+      ]
+    },
+    "compareRows": [
+      {
+        "label": "价格 / 补货",
+        "text": "价格 {pricePct:signed}% · 补货 {replenishPct:signed}% · 安全库存 {safetyDays} 天"
+      },
+      {
+        "label": "促销",
+        "text": "{promo} {promoDepth}% × {promoWeeks} 周",
+        "offKey": "promo",
+        "offText": "无"
+      }
+    ],
+    "suggestions": [
+      {
+        "key": "price",
+        "action": "发起调价审批"
+      },
+      {
+        "key": "stock",
+        "action": "补货申请"
+      },
+      {
+        "key": "promo",
+        "action": "发放复购召回优惠券"
+      }
+    ]
+  }
+]

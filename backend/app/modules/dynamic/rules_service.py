@@ -42,15 +42,22 @@ from app.modules.dynamic.rules_models import (
     ScenarioStatus,
 )
 from app.modules.dynamic.rules_schemas import (
-    DriversIn,
     LifecycleDraftIn,
     ReplayIn,
     RuleCreateIn,
     RuleDraftIn,
     ScenarioRunIn,
-    ScopeIn,
 )
-from app.modules.dynamic.rules_sim import _products, _stores, seeded, simulate, stage_plan, to_fixed_str
+from app.modules.dynamic.rules_sim import _products, _stores, seeded, to_fixed_str
+from app.modules.dynamic.scenario_templates import (
+    defaults,
+    driver_fields,
+    engine_of,
+    template_of,
+    templates,
+)
+from app.modules.dynamic.scenario_templates import no_driver as tpl_no_driver
+from app.modules.dynamic.scenario_templates import validate as tpl_validate
 from app.modules.dynamic.sections import lifecycle_def, lifecycle_head, rule_def, version_row
 from app.modules.static.models import ObjectType
 from app.modules.static.schemas import TargetIn
@@ -531,23 +538,6 @@ class RuleService:
 # ======================================================================
 
 
-def no_driver(d: dict[str, Any]) -> bool:
-    return (
-        d["pricePct"] == 0
-        and d["replenishPct"] == 0
-        and d["safetyDays"] == 7
-        and (d["promo"] == "无" or d["promoDepth"] == 0)
-    )
-
-
-def drivers_dict(d: DriversIn) -> dict[str, Any]:
-    return d.model_dump(by_alias=True)
-
-
-def scope_dict(s: ScopeIn) -> dict[str, Any]:
-    return s.model_dump(by_alias=True)
-
-
 class ScenarioService:
     def __init__(self, session: AsyncSession, user: CurrentUser) -> None:
         self.session = session
@@ -619,6 +609,7 @@ class ScenarioService:
             "createdAt": sec(s.created_on),
             "baseVer": vers.get(s.base_release_id) if s.base_release_id else None,
             "status": s.status.value,
+            "templateCode": s.template_code,
             "scope": s.scope,
             "drivers": s.drivers,
             "staged": list(s.staged or []),
@@ -675,8 +666,7 @@ class ScenarioService:
         cur = await self.session.scalar(
             select(OntologyRelease).order_by(OntologyRelease.published_at.desc()).limit(1)
         )
-        from app.modules.dynamic.rules_sim import BASE_DRIVERS
-
+        tpl = template_of(src.template_code if src else None)
         s = Scenario(
             code=await self._next_code(),
             name=f"{src.name}（副本）" if src else "新方案",
@@ -684,8 +674,9 @@ class ScenarioService:
             created_on=now(),
             base_release_id=cur.id if cur else None,
             status=ScenarioStatus.draft,
-            scope=dict(src.scope) if src else {"area": "华东大区全部", "category": "全部品类", "weeks": 8},
-            drivers=dict(src.drivers) if src else dict(BASE_DRIVERS),
+            template_code=tpl["code"],
+            scope=dict(src.scope) if src else defaults(tpl["scope"]),
+            drivers=dict(src.drivers) if src else defaults(driver_fields(tpl)),
             staged=[],
             is_seed=False,
         )
@@ -721,17 +712,12 @@ class ScenarioService:
                 f"已转为 {len(s.staged)} 条暂存动作，配置锁定；如需调整请“复制为新方案”",
                 409,
             )
-        scope, drivers = scope_dict(body.scope), drivers_dict(body.drivers)
-        if scope["area"] not in _meta("SC_AREAS"):
-            raise validation([("scope.area", "范围不在可选列表里")])
-        if scope["category"] not in _meta("SC_CATEGORIES"):
-            raise validation([("scope.category", "品类不在可选列表里")])
-        if drivers["promo"] not in _meta("PROMO_TYPES"):
-            raise validation([("drivers.promo", f"促销方式只能是：{'、'.join(_meta('PROMO_TYPES'))}")])
-        if drivers["promo"] == "无":
-            drivers["promoDepth"], drivers["promoWeeks"] = 0, 0
-        if no_driver(drivers):
-            raise fail("SCENARIO_NO_DRIVER", "至少调整一个驱动（价格 / 库存 / 促销）", 422)
+        tpl = template_of(s.template_code)
+        scope, drivers, errs = tpl_validate(tpl, body.scope, body.drivers)
+        if errs:
+            raise validation(errs)
+        if tpl_no_driver(tpl, drivers):
+            raise fail("SCENARIO_NO_DRIVER", tpl["noDriverHint"], 422)
         if body.name and body.name.strip():
             s.name = body.name.strip()
         s.scope, s.drivers, s.status, s.fail_reason = scope, drivers, ScenarioStatus.running, None
@@ -764,7 +750,7 @@ class ScenarioService:
     async def _compute(self, s: Scenario) -> None:
         scope, drivers = s.scope, s.drivers
         at = now()
-        res = simulate(scope, drivers, sec(at))
+        res = engine_of(s.template_code)["simulate"](scope, drivers, sec(at))
         self.session.add(
             ScenarioResult(
                 scenario_id=s.id,
@@ -811,7 +797,7 @@ class ScenarioService:
             if s.status != ScenarioStatus.done:
                 raise fail("COMPARE_LIMIT", f"{s.code} 未完成，只能对比已完成的方案", 422)
             out.append(await self.out(s, vers, full=True))
-        same = len({(o["scope"]["area"], o["scope"]["category"], o["scope"]["weeks"]) for o in out}) == 1
+        same = len({(o["templateCode"], json.dumps(o["scope"], sort_keys=True)) for o in out}) == 1
         return {"items": out, "sameScope": same}
 
     async def _plan(self, s: Scenario) -> list[dict[str, Any]]:
@@ -819,7 +805,7 @@ class ScenarioService:
         if res is None:
             return []
         full = {**self.result_out(res), "impacts": await self._impacts(s)}
-        return stage_plan(res.scope, res.drivers, full)
+        return engine_of(s.template_code)["stage_plan"](res.scope, res.drivers, full)
 
     async def plan(self, code: str) -> list[dict[str, Any]]:
         return await self._plan(await self.get(code))
@@ -867,13 +853,13 @@ class ScenarioService:
         return {"staged": ids, "message": f"已暂存 {len(ids)} 条动作到动作中心（待确认）"}
 
     def meta(self) -> dict[str, Any]:
-        from app.modules.dynamic.rules_sim import BASE_DRIVERS
-
+        tpl = template_of(None)
         return {
+            "templates": templates(),
             "areas": _meta("SC_AREAS"),
             "categories": _meta("SC_CATEGORIES"),
             "promoTypes": _meta("PROMO_TYPES"),
-            "baseDrivers": BASE_DRIVERS,
+            "baseDrivers": defaults(driver_fields(tpl)),
             "statuses": ["全部", *[x.value for x in ScenarioStatus]],
         }
 

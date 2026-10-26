@@ -165,6 +165,9 @@ class Scenario(CodeMixin, MutableTableMixin, Base):
         enum_column(ScenarioStatus, 16), nullable=False, index=True
     )
     scope: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    template_code: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="demo_retail", comment="推演模板编号（SC_TEMPLATES.code）"
+    )
     drivers: Mapped[dict] = mapped_column(JsonType, nullable=False)
     fail_reason: Mapped[str | None] = mapped_column(Text)
     staged: Mapped[list[str]] = mapped_column(
