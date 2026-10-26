@@ -64,5 +64,23 @@ export function useDraftView(kind: TargetKind, targetId: () => string) {
     if (!opts.target) setView('draft');
     return id;
   }
-  return { draft, isDraft, canEdit, editTip, readonly, reason, setView, start };
+
+  /**
+   * 撤销 start() 的登记（落库失败时用）：把 target 从变更单里拿掉；本会话新建且已无任何登记的单子一并删掉；切回已发布视图。
+   */
+  function cancel(cr: string, target?: string) {
+    const tid = target ?? targetId();
+    const t = TARGETS[cr];
+    if (t?.[kind]) {
+      t[kind] = t[kind]!.filter((x) => x !== tid);
+      if (!t[kind]!.length) delete t[kind];
+    }
+    const i = created.findIndex((d) => d.id === cr);
+    if (i >= 0 && !Object.keys(TARGETS[cr] ?? {}).length) {
+      created.splice(i, 1);
+      delete TARGETS[cr];
+    }
+    if (!target) setView('published');
+  }
+  return { draft, isDraft, canEdit, editTip, readonly, reason, setView, start, cancel };
 }
