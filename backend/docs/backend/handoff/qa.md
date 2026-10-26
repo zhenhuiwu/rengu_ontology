@@ -5,6 +5,26 @@
 > 接口契约：`docs/backend/qa-api.md`（各节「联调实现」段）；评测：`docs/backend/qa-eval.md`。[推断] 标的是前端/文档没写、这里自己定的规则。
 > 前端开关：`VITE_API_REAL_MODULES` 含 `qa`（动作卡还需 `dynamic`）才走真接口，否则全部 mock。没接完的页面 / 页签在真接口模式下也仍走 mock，测试和构建不受影响。
 
+## 0. qa-cardfb 分支（2026-10-26，本地未推送）
+> 分支 `qa-cardfb`，基于 master `3ece2fa`；提交 `3ece2fa..qa-cardfb`（qa 身份）。无新迁移。本节覆盖下面第 1–4 节中 R2 / 回答卡回退几行。对象搜索 / 详情的通用化在 `qa-pages` 分支，下一轮提交。
+
+**已完成**
+- 回答卡回退（`e4b02ef`）：口径重算 / 门店表翻页在后台没起来时回退 mock（`src/pages/qa/qaFallback.ts`、`QaAnswer.vue`、`QaStoreAnswer.vue`）。
+- 写操作不回退（PDE 阻塞修复）：赞踩、导出、我的页面新建 / 重命名 / 删除 / 刷新、卡片调整 / 刷新订阅 / 共享、固定到页面在开关 qa 为真时一律调真接口，失败（含后台未启动）只报错，不改演示数据、不假装成功，也不走 `fallBackIfDown`（`qaWriteReal` / `qaWriteFail`）。开关为假（纯演示）时照旧走 mock。
+- R2 我的页面（`4f8df2f` 后端、`b3fb3f9` 前端）：后端 P2、P4–P10（`pages_api.py`，含 P7 固定到页面），前端 `src/api/qaPages.ts` + `MyPages.vue`、`pages/PageDrawer.vue`、`components/QaPinModal.vue`（Workbench / QaConversation 传 `turnId`）。实现细节和 [推断] 见 `qa-api.md` §4「联调实现（qa-pages）」。
+- 测试：`tests/test_qa_pages_write.py`。
+
+**未完成**
+- P10 共享成员：前端候选人大多不在 `sys_user` → 422 `USER_NOT_FOUND`；要 admin 在 `seeds/extra/system/SYS_USERS.json` 补人。
+- P3 卡片 `denied` 前端没有分支（`CardPreview.vue`）。
+
+**代码在哪**：后端 `backend/app/modules/qa/pages_api.py`（`router.py` 末尾一处 include；`repo.py PageRepo` 列表排序一处）；前端 `src/api/qaPages.ts`、`src/pages/qa/MyPages.vue`、`src/pages/qa/pages/*`。
+
+- 固定到页面（Palantir 评审修复）：卡片标题按 P7 上限截到 60 字（`pinTitle`，超长末位换「…」）；「新建页面」路径 P7 失败时删掉刚建的空页面（避免空页和重试 409 同名）；新建不再写死范围「华东大区」，交给后台默认 [推断]；P7 全空白标题返回 409 `EMPTY_INPUT`（同 P2 / P4）；`RefreshResult` 去掉 P6 不返回的 `id`。
+- 下一轮：P2 / 共享的 id 锁定（并发新建取号）；`MyPages` 删除后计数和回到上一页（删掉最后一页唯一一条时）。
+
+**下一步**：admin 补用户种子；`CardPreview` 补 denied 分支；上面两条下一轮项。
+
 ## 1. 已完成
 
 ### 1.1 页面联调（真后端 + 真 qwen-flash 端到端验过，Playwright 脚本见第 3 节）

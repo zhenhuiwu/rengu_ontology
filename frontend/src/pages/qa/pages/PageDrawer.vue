@@ -7,6 +7,8 @@
  * 历史版本只读：所有修改禁用并提示原因。
  * 未保存保护（公共 useUnsavedGuard）：卡片调整、刷新与订阅、共享有未保存改动时，关闭抽屉 / 切页签 / 离开页面先提醒。
  * 保存顺序时移除了卡片、保存共享时新增了可见人，走公共确认卡写明“将移除 N 张卡片”/“新增可见人：xx”。
+ * 真接口（开关 qa，写操作不看后台是否判定未启动，失败只报错不回退）：保存卡片 P8、刷新与订阅 P9、共享 P10，成功后用后台返回值更新并 emit changed（列表重载）；
+ * 后台判定未启动则照旧改本地演示数据。
  */
 import { computed, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
@@ -16,10 +18,18 @@ import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { useConfirmStore } from '@/stores/confirm';
 import CardPreview from './CardPreview.vue';
 import InfoTip from '../InfoTip.vue';
+import * as pagesApi from '@/api/qaPages';
+import { qaWriteReal, qaWriteFail } from '../qaFallback';
 import { PEOPLE, PAGE_SCOPES, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
 
 const props = defineProps<{ page?: QaPageFull; tab: string; readonly: boolean; reason: string }>();
-const emit = defineEmits<{ close: []; 'update:tab': [string]; refresh: [QaPageFull]; rename: [QaPageFull, string]; remove: [QaPageFull] }>();
+const emit = defineEmits<{ close: []; 'update:tab': [string]; refresh: [QaPageFull]; rename: [QaPageFull, string]; remove: [QaPageFull]; changed: [QaPageFull] }>();
+/** 真接口写：开关为假（纯演示）返回 null（走演示逻辑）；开关为真时调真接口，成功返回结果，
+ *  失败（含后台未启动）只提示并返回 undefined——写操作不回退、不改演示数据、不触发整页回退 */
+async function liveCall<T>(fn: () => Promise<T>, what: string): Promise<T | null | undefined> {
+  if (!qaWriteReal.value) return null;
+  try { return await fn(); } catch (e) { qaWriteFail(what, e); return undefined; }
+}
 
 /* 预览 */
 const CSIZE = 6;
@@ -54,7 +64,10 @@ async function saveCards() {
     });
     if (!ok) return;
   }
-  pg.cards = draftCards.value; editing.value = false;
+  const r = await liveCall(() => pagesApi.saveCardOrder(pg.id, draftCards.value.map((c) => c.key)), '保存卡片');
+  if (r === undefined) return;
+  pg.cards = r ? r.cards : draftCards.value; editing.value = false;
+  if (r) emit('changed', pg);
   message.success(removed.length ? `已保存，移除 ${removed.length} 张，剩 ${pg.cards.length} 张` : `已保存卡片顺序，共 ${pg.cards.length} 张`);
 }
 
@@ -80,10 +93,13 @@ const nextRun = computed(() => {
   if (p.freq === '每周') return `${p.weekday ?? '周一'} ${p.time}（2026-10-26 起）`;
   return `2026-11-${String(p.monthday ?? 1).padStart(2, '0')} ${p.time}`;
 });
-function saveSchedule() {
-  if (!props.page) return;
+async function saveSchedule() {
+  const pg = props.page; if (!pg) return;
   if (sub.value.on && !sub.value.receivers.length) { message.warning('请至少选择一位接收人'); return; }
-  props.page.refresh = { ...plan.value }; props.page.sub = { ...sub.value, receivers: [...sub.value.receivers] };
+  const r = await liveCall(() => pagesApi.saveSchedule(pg.id, plan.value, sub.value), '保存刷新与订阅');
+  if (r === undefined) return;
+  pg.refresh = r ? r.refresh : { ...plan.value }; pg.sub = r ? r.sub : { ...sub.value, receivers: [...sub.value.receivers] };
+  if (r) { resetDrafts(); emit('changed', pg); }
   message.success(`已保存：${freqLabel(plan.value)}${sub.value.on ? `，订阅推送给 ${sub.value.receivers.length} 人` : ''}`);
 }
 
@@ -130,8 +146,12 @@ async function saveShare() {
     });
     if (!ok) return;
   }
-  props.page.share = { ...share.value, members: share.value.mode === '仅自己' ? [] : share.value.members.map((m) => ({ ...m })) };
-  message.success(share.value.mode === '仅自己' ? '已取消共享' : `已共享：${share.value.mode === '所在部门' ? '华东事业部 / 运营中心' : `${props.page.share.members.length} 位成员`}`);
+  const pg = props.page;
+  const r = await liveCall(() => pagesApi.saveShare(pg.id, share.value), '保存共享');
+  if (r === undefined) return;
+  pg.share = r ? { mode: r.mode, members: r.members, link: r.link, allowExport: r.allowExport } : { ...share.value, members: share.value.mode === '仅自己' ? [] : share.value.members.map((m) => ({ ...m })) };
+  if (r) { resetDrafts(); emit('changed', pg); }
+  message.success(share.value.mode === '仅自己' ? '已取消共享' : `已共享：${share.value.mode === '所在部门' ? '华东事业部 / 运营中心' : `${pg.share.members.length} 位成员`}`);
 }
 /* 未保存保护 */
 const json = (x: unknown) => JSON.stringify(x);

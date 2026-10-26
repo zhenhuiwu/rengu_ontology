@@ -1139,3 +1139,8 @@ async def feedback_reopen(fid: str, session: SessionDep, user: CurrentUserDep):
 
 
 router.include_router(tuning)
+
+# R2 我的页面写接口 P2、P4–P10（qa-pages 流，独立文件，见 pages_api.py）
+from app.modules.qa.pages_api import pages as _pages_router  # noqa: E402
+
+router.include_router(_pages_router)

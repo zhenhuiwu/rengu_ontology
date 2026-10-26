@@ -10,6 +10,7 @@ import { QA_PROVINCES, QA_TREND, QA_TOTAL_SALES, QA_TOTAL_CUSTOMERS, fmtMoney, f
 import { useReadonly } from '@/composables/useReadonly';
 import * as qaApi from '@/api/qa';
 import { errText, useQaSession } from '../useQaSession';
+import { qaLive, qaFallBackIfDown, qaWriteReal, qaWriteFail } from '../qaFallback';
 
 /** turnId：真接口时这一轮的 id（W9 口径 / W12 赞踩写后台）；没有就是演示数据，只改本地状态 */
 type MainCard = QaDemoMainCard & { caliber?: qaApi.QaCaliberKey };
@@ -28,11 +29,14 @@ watch(sending, (v) => { if (!v && !props.chosen) picked.value = null; });
 const { readonly, reason } = useReadonly();
 const caliber = ref<qaApi.QaCaliberKey>(mc.caliber ?? 'ex');
 const calSaving = ref(false);
+/** 真接口且后台可用时才调 W9 / W12；后台判定未启动后按演示卡处理（同 qaFallback.ts） */
+const liveTurn = computed(() => (qaLive.value ? props.turnId : undefined));
 async function onCaliber(v: qaApi.QaCaliberKey) {
   const prev = caliber.value; caliber.value = v;
-  if (!props.turnId) return;
+  if (!liveTurn.value) return;
   calSaving.value = true;
-  try { caliber.value = (await qaApi.recalcTurn(props.turnId, v)).caliber; } catch (e) { caliber.value = prev; message.error(`切换口径失败：${errText(e)}`); } finally { calSaving.value = false; }
+  // 后台没起来：回退演示（数值本来就由前端按口径换算），保留所选口径
+  try { caliber.value = (await qaApi.recalcTurn(liveTurn.value, v)).caliber; } catch (e) { if (!qaFallBackIfDown(e)) { caliber.value = prev; message.error(`切换口径失败：${errText(e)}`); } } finally { calSaving.value = false; }
 }
 /** 按当前口径显示指标完整名称和版本；已回答的消息保留原依据（回答时的本体版本），查看历史版本时不改写 */
 const ANSWERED_VER = mc.answeredVer;
@@ -45,8 +49,10 @@ const sign = (n: number) => `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(1)}%`;
 const vote = ref<qaApi.QaVote>(props.vote ?? '');
 async function onVote(v: 'up' | 'down') {
   const next = vote.value === v ? '' : v;
-  if (props.turnId) {
-    try { await qaApi.voteTurn(props.turnId, next); } catch (e) { message.error(`提交失败：${errText(e)}`); return; }
+  // 写操作不回退：开关为真时必须调到 W12，没有真实轮次（演示卡）或调用失败都只报错、不改状态
+  if (qaWriteReal.value) {
+    if (!props.turnId) { message.error('提交失败：后台未启动，操作没有保存'); return; }
+    try { await qaApi.voteTurn(props.turnId, next); } catch (e) { qaWriteFail('提交', e); return; }
   }
   vote.value = next;
   if (next) message.info(next === 'up' ? '已记录：回答正确' : '已记录：回答有误，会进入问数调优的反馈');
