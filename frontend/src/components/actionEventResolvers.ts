@@ -1,8 +1,14 @@
 /**
  * 动作类型 / 事件类型页面用到的抽屉解析（规则、动作执行（kind = action，ACT- 编号）、事件）。
  * 由 objectRegistry.ts 的 RESOLVERS 展开引入；这里只新增 kind，不改已有 kind。
+ * 动作执行（kind = action）：dynamic 开关开着时读 GET /api/ontology/v1/action-runs/{id}（dynamic 的接口），按编号缓存；
+ * 取到之前 / 404 / 其他错误 / 后台没起来（fallback.ts，只提示一次）时用 mock runById()。规则、事件抽屉仍读 mock（无单条接口）。
  */
+import { reactive } from 'vue';
 import type { ObjView } from './objectRegistry';
+import { dynamicApi } from '@/api/action';
+import { backend, fallBackIfDown } from '@/api/fallback';
+import type { ActionRun } from '@/mock/actionEvent';
 import { RULES, ALERTS } from '@/mock/dynamic';
 import { runById, actionTypeById, eventById, eventTypeById, ACTION_TYPES, RULE_ACTION, ruleConfirmer, extSystemOf, UNKNOWN_FOLLOWUP, type RunStatus, type EventOutcome } from '@/mock/actionEvent';
 
@@ -17,6 +23,30 @@ const addSec = (t: string, s: number) => {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
+
+/* 动作执行单条：真接口结果缓存（null = 后台没有 / 出错，用 mock）；inflight 不做成响应式，避免在 computed 里写响应式状态 */
+const RUN_KEYS = ['id', 'typeId', 'at', 'initiator', 'confirmer', 'approver', 'source', 'objKind', 'objId', 'objLabel', 'summary', 'status', 'ms', 'code', 'retries', 'idemKey', 'ruleId', 'alertId', 'extRef', 'reconcile'];
+const realRuns = reactive<Record<string, ActionRun | null>>({});
+const inflight = new Set<string>();
+function toRun(r: Record<string, unknown>): ActionRun {
+  const o = Object.fromEntries(RUN_KEYS.filter((k) => r[k] !== null && r[k] !== undefined).map((k) => [k, r[k]])) as Record<string, unknown>;
+  // 动作中心记录的 source 是对象 {type, …}，动作类型页执行记录是原文字符串
+  if (o.source && typeof o.source === 'object') o.source = (o.source as { type?: string }).type ?? '';
+  o.ms ??= 0; o.retries ??= 0; o.code ??= ''; o.confirmer ??= ''; o.summary ??= '';
+  return o as unknown as ActionRun;
+}
+function runOf(id: string): ActionRun | undefined {
+  if (!dynamicApi.isReal() || backend.down) return runById(id);
+  if (id in realRuns) return realRuns[id] ?? runById(id);
+  if (!inflight.has(id)) {
+    inflight.add(id);
+    dynamicApi.get<Record<string, unknown>>(`/action-runs/${encodeURIComponent(id)}`).then(
+      (r) => { realRuns[id] = toRun(r); },
+      (e) => { if (!fallBackIfDown(e)) realRuns[id] = null; },
+    ).finally(() => inflight.delete(id));
+  }
+  return runById(id);
+}
 
 export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | null> = {
   // 规则（R-xxx / SM-ORD）
@@ -47,9 +77,10 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
   },
   // 动作执行（ACT-YYYYMMDD-NNNN，与动作中心编号一致）
   action(id) {
-    const run = runById(id);
+    const run = runOf(id);
     if (!run) return null;
-    const a = actionTypeById(run.typeId)!;
+    const a = actionTypeById(run.typeId);
+    if (!a) return null;
     const sys = extSystemOf(a);
     const st = run.status;
     const tl: ObjView['timeline'] = [];
@@ -87,7 +118,7 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
     }
     const related: NonNullable<ObjView['related']> = [];
     if (run.objKind) related.push({ kind: run.objKind, id: run.objId, label: run.objLabel, note: `动作目标（${a.target}）` });
-    if (run.ruleId) related.push({ kind: 'rule', id: run.ruleId, label: `${run.ruleId} ${RULES[run.ruleId].name}`, note: '发起规则' });
+    if (run.ruleId) related.push({ kind: 'rule', id: run.ruleId, label: `${run.ruleId} ${RULES[run.ruleId]?.name ?? ''}`.trim(), note: '发起规则' });
     return {
       kind: 'action', kindLabel: '动作执行', id: run.id, title: `${a.name} · ${run.objLabel}`, code: run.id,
       status: { text: runText(st), color: runColor(st) },
