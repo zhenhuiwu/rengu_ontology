@@ -39,19 +39,20 @@
 | # | 接口 | 请求体 / 参数 | 成功 | 错误 |
 |---|---|---|---|---|
 | 1 | `POST /change-requests` 发起变更（新建） | `{title(1–40), reason?="", target?: TargetIn, level?="一般", reviewer?}` | 201 CRFull；`status=草稿`、owner = 当前用户、单号用 CR 序列；写事件「{me} 创建变更单」 | 422 `VALIDATION_FAILED`；409 `TARGET_IN_OTHER_CR`（`details{crId,kind,id}`，目标已在别的草稿里） |
-| 2 | `POST /change-requests/{id}/targets` 加入已有 | `TargetIn` | 200 CRFull；已在本单里时幂等 | 404；409 `CR_STATE`（不是草稿）；409 `TARGET_IN_OTHER_CR` |
+| 2 | `POST /change-requests/{id}/targets` 加入已有 | `TargetIn` | 200 CRFull；已在本单里时幂等 | 404；409 `CR_LOCKED`（不是草稿，同其他写接口）；409 `TARGET_IN_OTHER_CR` |
 | 3 | `DELETE /change-requests/{id}/targets/{kind}/{targetId}` 放弃本对象草稿 | — | 204；删掉该目标的全部 cr_item 和登记 | 404（单子或目标不在单里）；409 `CR_LOCKED`（不是草稿） |
 | 4 | `PUT /change-requests/{id}/items` 保存到草稿 | `{target: TargetIn, section, rows: ItemIn[], lockVersion?}` | 200 `{id, changes, lockVersion, items: ItemOut[]}`（items = 该目标该 section 保存后的全部行）| 404；409 `CR_LOCKED`（不是草稿，`details.status`）；409 `VERSION_CONFLICT`（`lockVersion` 不等于当前）；409 `TARGET_IN_OTHER_CR`；422（op 不认识 / 同一 section 内 key 重复） |
 | 5 | `GET /change-requests/{id}/items?kind&targetId&section` 读回草稿 | 三个筛选都可省 | 200 `ItemOut[]`（不分页，按保存顺序） | 404 |
-| 6 | `POST /change-requests/{id}:validate` 重新校验 | — | 200 `{id, checkedAt, checks: CheckRow[17], summary:"阻断 1 · 通过 16", blocked}`；写 cr_check、`detail.checks`、`detail.times.checked`，事件「系统 完成发布校验」 | 404；409 `CR_STATE`（已发布） |
+| 6 | `POST /change-requests/{id}:validate` 重新校验 | — | 200 `{id, checkedAt, checks: CheckRow[17], summary:"阻断 1 · 通过 16", blocked}`；写 cr_check、`detail.checks`、`detail.times.checked`，事件「系统 完成发布校验」 | 404；409 `CR_STATE`（只允许草稿 / 已驳回） |
 | 7 | `GET /change-requests/{id}/diffs?page&size` 改动 | 每页默认 10（`Releases.vue:83`） | 200 骨架 Page `{items: DiffRow[], total, page, size}`，`DiffRow{key,type,target,field,kind(新增/修改/删除),before,after}` | 404 |
 | 8 | `PATCH /change-requests/{id}` 改单头 | `{title?, reason?, reviewer?, level?, migration?, lockVersion?}` | 200 CRFull | 404；409 `CR_LOCKED`；409 `VERSION_CONFLICT` |
 | 9 | `GET /change-requests/draft-targets?status=草稿` 草稿登记 | `status` 可省（默认草稿） | 200 `{"CR-0011": {"metric": ["gross_margin"], "rule": ["R-007"], ...}}`，同 mock `DRAFT_TARGETS` 形状 | — |
 
 规则（[推断] 的都按前端没限制处理）：
 - **PUT items 是整段替换**：同一 `(target, section)` 的旧行全部换成 `rows`（对应 `useDraftEdits.save()` 把整段 working 存进 saved）；`rows=[]` 清空这一段。只传有改动标记的行（mark ≠ ''），没改的行不要传。目标没登记时自动登记（`isNew` 取请求里的）。
-- 每次 PUT / targets / PATCH 成功后 `lockVersion + 1`；`lockVersion` 不传就不校验。
-- **提交审核** `:submit` 现有规则不变（改动 0 → `CR_EMPTY`、阻断 → `CR_BLOCKED`），另加：`reviewer` 为空 → 409 `CR_NO_REVIEWER`。新建时不传 `reviewer` 默认取本体管理员（演示身份王敏）；当前用户就是王敏时留空，需 PATCH 指定 [推断]。
+- 每次 PUT / targets / DELETE targets / PATCH 成功后 `lockVersion` **恰好 +1**（PUT 顺带登记新目标也只 +1）；`lockVersion` 不传就不校验。前端 `crSave` 读回时取 `lockVersion` 并在 PUT 里带上。
+- **改动后校验作废**：PUT items、加入新目标、放弃目标后 `detail.checks=[]`（= 未校验，`times.checked` 去掉，cr_check 计算行删除；种子基线先保存）。
+- **提交审核** `:submit` / **审核通过** `:approve` 在同一事务里**服务端重算校验**（不信 `detail.checks`），有阻断 → 409 `CR_BLOCKED`（`details{id, blocked:[校验码]}`，事务回滚、状态不变）；改动 0 → `CR_EMPTY`；`reviewer` 为空 → 409 `CR_NO_REVIEWER`（顺序：CR_EMPTY → CR_BLOCKED → CR_NO_REVIEWER）。新建时不传 `reviewer` 默认取本体管理员（演示身份王敏）；当前用户就是王敏时留空，需 PATCH 指定 [推断]。
 - **校验** `:validate` 同步完成（static-api.md 原写异步 `jobId`，改同步 [推断]）。规则（初版，按 cr_item 推）：V7 非新建目标在 `properties|links` 段 `op=delete` → 阻断；V11 `after` 里 `desc|definition|description` 为空串 → 警告；V15 级别重大且没写迁移方式 → 警告；V12 信息（改动数、涉及定义数）；没有对应种类目标的项给「不适用」（V3/V13 关系、V8 指标、V4/V10 维度、V16 对象）；其余通过。种子单子取「种子结果与计算结果」里更严重的一档（不会把 mock 里的阻断洗掉）。
 - 草稿 → 审核中后所有写接口返回 `CR_LOCKED`；驳回后 `:reopen` 回草稿即可继续写。
 - **问数 T15 转同义词（qa → X3）**：新建 `POST /change-requests {title, reason, target:{kind:"knowledge", id:"K-018", name?, isNew?}}`（新词 `isNew:true`、id 由调用方给）或加入 `POST /change-requests/{id}/targets`，再 `PUT items {target, section:"synonyms", rows:[{key:"<同义词>", op:"add", after:"<同义词>"}]}`；词已在别的单子里时 409 `TARGET_IN_OTHER_CR`，按 `details.crId` 改为关联 / 加入；草稿下拉 `GET /change-requests?status=草稿`（中文状态，qa-api.md X3 写的 `status=draft` 会 422）。测试 `test_qa_feedback_to_synonym_knowledge_target`。
@@ -60,6 +61,15 @@
 - 种子单子的种子校验结果第一次 `:validate` 时存成 cr_check `target_db='seed'` 行（只存非通过的），以后每次与计算结果取更严重的一档；计算结果是 `target_db=''` 行，每次整单重写 [推断]。
 - `TARGET_IN_OTHER_CR` 的“占用”指别的单子状态是草稿 / 审核中 / 已通过 / 已驳回（已发布不占用）[推断]。
 - 已实现（static-r3，`cr_write.py` + `router.py` 末段），与上表一致；测试 `tests/test_static_cr_write.py`。
+
+## 下一轮契约：其他种类（动作 / 事件 / 规则 / 生命周期）接入变更单
+
+本轮只有静态种类真正接线；下一轮按下面的钩子扩展，形状与上面的写接口不变。
+- **发布写回钩子（每种 kind 一个）**：`async def apply_cr_items(session, kind, target_id, items: list[CrItem], *, release_id)`，由 `PublishService.publish` 在**发布事务内**对本次所有已通过 CR 的 cr_item 按 kind 分组调用，写回各自定义表；失败整次发布回滚。静态 kind 由静态实现（本轮还没做，见未完成第 9 条）；`action` / `event` 由 Palantir 实现，`rule` / 生命周期由动态实现。登记方式建议同 `SECTION_OWNERS`（模块启动时注册 kind → 钩子）[推断]。
+- **校验钩子（每种 kind 一个）**：`async def validate_cr_items(session, kind, targets, items) -> dict[校验码, (结果, 说明)]`，由 `run_checks` 合并（取更严重的一档），`:validate` / `:submit` / `:approve` 都会调。现在 V7 只看 `properties|links` 段的删除；动作参数、事件 payload、规则条件的“已发布字段不能删”等由各自钩子给出。
+- **新建对象的行约定**：目标 `isNew:true`，所有行 `op=add`；配置类（`config` / `def` / `content`）**一个字段一行**（key = 字段名，after = 值）；列表类（`params` / `payload` / `conds` / `properties`）**一个条目一行**（key = 条目的业务键，after = 整条）。改已有对象时同样按此粒度出 update / delete 行，`before` 填原值。
+- **前端读真实变更单**（PDE 的 `useDraftView`）：real 模式启动时用 `GET /change-requests/draft-targets` 和 `GET /change-requests?status=草稿` 替换 mock `DRAFT_TARGETS` / `DRAFTS`，草稿视图用 `GET /change-requests/{id}/items` 叠加；各页只调 `useStaticCr` 风格的 start / save / submit / discard。
+- 本轮留下：`_next_code` 取最大号 +1 没加锁，并发新建可能撞号（单号唯一约束冲突）[推断]；下一轮用 advisory lock 或序列。
 
 ## 已完成
 
@@ -85,7 +95,8 @@
   - 维度与码表：发起 / 加入、取值新增 / 修改 / 停用启用（`values` 段，key = 层级:编码）、新增说法（`mappings` 段）、问数设置（`qa` 段）；
   - 业务知识：发起 / 加入（含新建条目 `isNew`）、内容（`content` 段）、停用（`status` 段）。
   - `crSave` 先 `GET items` 读回该段，再合并本次改动整段 PUT：同一 key 保留最早的 `before`，改回原值的 update 行去掉。
-- 验证（static-r3）：pytest 596 passed / 2 skipped（库 `rengu_test_static_r3`，静态 72 个含写接口 18 个）；ruff check / format 通过；alembic 单 head `static_0003`，upgrade 后 check 无差异；vue-tsc、`npm run build` 通过。
+- 审查修正（Palantir）：`:submit` / `:approve` 服务端重算校验；PUT / 目标增删作废旧校验；`/targets` 非草稿改 `CR_LOCKED`；lockVersion 每次写恰好 +1、前端 PUT 带 lockVersion；`:validate` 只限草稿 / 已驳回。
+- 验证（static-r3，审查前）：pytest 596 passed / 2 skipped（库 `rengu_test_static_r3`，静态 72 个含写接口 18 个）；ruff check / format 通过；alembic 单 head `static_0003`，upgrade 后 check 无差异；vue-tsc、`npm run build` 通过。
 
 验证（`743ec27`）：pytest 399 passed / 1 skipped（库 `rengu_test_static_integ`）；ruff 通过；alembic 单 head `static_0002`；vue-tsc、`npm run build` 通过；浏览器脚本验证真接口删除草稿后刷新仍有效，mock 模式不发请求。
 
