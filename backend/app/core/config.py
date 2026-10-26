@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +22,22 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://rengu:rengu@127.0.0.1:5440/rengu"
     db_echo: bool = False
     db_pool_size: int = 10
+    # 兼容现有模型环境变量，也可从本项目被忽略的 .env 读取。
+    llm_api_key: SecretStr | None = Field(None, validation_alias="DASHSCOPE_API_KEY")
+    qa_llm_model: str | None = Field(None, validation_alias="QA_LLM_MODEL")
+    qa_llm_base_url: str | None = Field(None, validation_alias="QA_LLM_BASE_URL")
+    qa_llm_timeout_s: float | None = Field(None, validation_alias="QA_LLM_TIMEOUT_S")
+    auto_llm_model: str | None = Field(None, validation_alias="AUTO_ONTOLOGY_LLM_MODEL")
+    auto_llm_base_url: str | None = Field(None, validation_alias="AUTO_ONTOLOGY_LLM_BASE_URL")
+    auto_llm_timeout_s: float | None = Field(None, validation_alias="AUTO_ONTOLOGY_LLM_TIMEOUT_S")
+    # 内部事件接收凭证；缺配置时端点不可用，绝不使用开发期默认用户放行。
+    internal_event_token: SecretStr | None = None
+    rule_replay_signing_key: SecretStr | None = None
+    # Explicit opt-in plus per-system HTTP paths/credentials; only put real values in ignored .env.
+    integration_real_connect: bool = False
+    integration_adapters: SecretStr | None = None
+    event_delivery_http_enabled: bool = False
+    event_delivery_routes: SecretStr | None = None
     # 问数 NL2SQL 执行用的只读库账号（api-index §1.4 硬规则；库层 default_transaction_read_only=on、
     # 只授权业务表）。不配置时网关拒绝执行，不回退到 database_url。
     qa_readonly_database_url: str | None = None
@@ -32,7 +48,7 @@ class Settings(BaseSettings):
     data_cutoff: str = "2026-10-24 23:00"
     # 业务时区：所有对外展示的时间都按这个时区格式化
     display_tz: str = "Asia/Shanghai"
-    # 固定“现在”（见 app/core/clock.py）。非 prod 环境不配置时默认用 DEV_FIXED_NOW；prod 不配置 = 真实时间
+    # 仅 test 默认固定时间；开发服务默认真实时间，种子重放可显式冻结。
     fixed_now: datetime | None = None
 
     # 开发期身份桩：PDE 的鉴权实现上线前，没有身份时按这个用户处理（仅 dev/test 生效）
@@ -57,7 +73,7 @@ class Settings(BaseSettings):
     def effective_fixed_now(self) -> datetime | None:
         if self.fixed_now is not None:
             return self.fixed_now
-        return None if self.env == "prod" else DEV_FIXED_NOW
+        return DEV_FIXED_NOW if self.env == "test" else None
 
 
 # 前端 mock 的“现在”：2026-10-25 15:42 北京时间

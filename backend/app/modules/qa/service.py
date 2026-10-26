@@ -7,7 +7,7 @@ from datetime import datetime, time, timedelta
 from typing import Any
 from xml.sax.saxutils import escape
 
-from sqlalchemy import select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser, resolve_user, row_filter
@@ -27,6 +27,7 @@ from app.modules.qa.models import (
     QaFreqQuestion,
     QaPage,
     QaSession,
+    QaSynonymLink,
     QaTemplate,
     QaTurn,
     RunStatus,
@@ -116,19 +117,11 @@ async def effective_user(session: AsyncSession, user: CurrentUser, ctx: ViewCont
 TAX_CALIBERS = {"不含税": "ex", "含税": "in"}  # 旧口径（W9 ex/in 同义），静态没有对应变体时按这个走
 
 
-async def variant_index(session: AsyncSession) -> dict[str, list[dict[str, Any]]]:
-    """静态指标口径变体：label → [{code, name, api, version}]（按指标去重）。静态没给变体时为空。"""
-    from app.modules.static.models import Metric
+async def variant_index(session: AsyncSession, ver: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    """兼容QA调用方；同版本已发布的显式指标变体由静态公开查询维护。"""
+    from app.modules.static.explorer import metric_variant_index
 
-    rows = (await session.execute(select(Metric.code, Metric.display_name, Metric.variants))).all()
-    names = {code: name for code, name, _ in rows}
-    idx: dict[str, dict[str, dict[str, Any]]] = {}
-    for _, _, vs in rows:
-        for v in vs or []:
-            if isinstance(v, dict) and v.get("label") and v.get("code"):
-                one = {"code": v["code"], "name": names.get(v["code"], v["code"]), "api": v.get("api")}
-                idx.setdefault(str(v["label"]), {})[v["code"]] = one | {"version": v.get("version")}
-    return {k: list(d.values()) for k, d in idx.items()}
+    return await metric_variant_index(session, ver)
 
 
 def check_caliber(label: str | None, idx: dict[str, list[dict[str, Any]]]) -> str | None:
@@ -316,13 +309,13 @@ def template_out(t: QaTemplate) -> dict[str, Any]:
 # ---------------------------------------------------------------- 调优
 
 
-def cert_out(c: QaCert) -> CertOut:
+def cert_out(c: QaCert, metrics: catalog.Metrics) -> CertOut:
     return CertOut(
         id=c.code,
         question=c.question,
         variants=[v.question for v in c.variants],
         plan=c.sem_plan,
-        plan_text=catalog.plan_text(c.sem_plan),
+        plan_text=catalog.plan_text(c.sem_plan, metrics),
         status=c.status.value,
         cr=c.cr_code,
         certifier=c.certifier,
@@ -344,6 +337,7 @@ def run_fields(x: QaEvalRun, fail_count: int) -> dict[str, Any]:
         "passed": x.passed,
         "pass_rate": (x.passed / x.total) if x.total else 0,
         "fail_count": fail_count,
+        "awaiting_execution": x.queue_job_id is not None and x.status == RunStatus.queued,
         "status": x.status.value,
         "operator": x.operator,
         "cr": x.cr_code,
@@ -356,19 +350,22 @@ def run_out(x: QaEvalRun, fail_count: int) -> EvalRunOut:
     return EvalRunOut(**run_fields(x, fail_count))
 
 
-def eval_q_out(q: QaEvalQuestion) -> EvalQOut:
+def eval_q_out(q: QaEvalQuestion, metrics: catalog.Metrics) -> EvalQOut:
     return EvalQOut(
         id=q.code,
         question=q.question,
         group=q.group_name,
         expect=q.expect,
-        expect_text=catalog.plan_text(q.expect),
+        expect_text=catalog.plan_text(q.expect, metrics),
         last=q.last_result.value if q.last_result else None,
         cr=q.cr_code,
     )
 
 
-async def run_detail(session: AsyncSession, x: QaEvalRun, page: PageParams) -> EvalRunDetailOut:
+async def run_detail(
+    session: AsyncSession, x: QaEvalRun, page: PageParams, ver: str | None = None
+) -> EvalRunDetailOut:
+    metrics, _ = await catalog.directory(session, ver, include_dims=False)
     rr = r.EvalRunRepo(session)
     rows, total = await rr.list_page(rr.fails_query(x.id), page)
     fails = Page[FailCaseOut].of(
@@ -376,7 +373,7 @@ async def run_detail(session: AsyncSession, x: QaEvalRun, page: PageParams) -> E
             FailCaseOut(
                 qid=f.question.code,
                 question=f.question.question,
-                expect=catalog.plan_text(f.question.expect),
+                expect=catalog.plan_text(f.question.expect, metrics),
                 actual=f.actual,
                 kind=f.kind.value,
             )
@@ -390,8 +387,8 @@ async def run_detail(session: AsyncSession, x: QaEvalRun, page: PageParams) -> E
     hints: dict[str, str] = {}
     if x.status == RunStatus.queued:
         crs = list(x.crs or ([x.cr_code] if x.cr_code else []))
-        replay = [eval_q_out(q) for q in await r.EvalQuestionRepo(session).by_crs(crs)]
-        hints = {c: catalog.REPLAY_HINT[c] for c in crs if c in catalog.REPLAY_HINT}
+        replay = [eval_q_out(q, metrics) for q in await r.EvalQuestionRepo(session).by_crs(crs)]
+        # 没有持久化回放说明，不能把写死的示例 CR 文案当作真实执行信息。
     return EvalRunDetailOut(
         **run_fields(x, total), fails=fails, kind_stats=stats, replay_questions=replay, replay_hints=hints
     )
@@ -422,10 +419,9 @@ async def cr_status(session: AsyncSession, code: str | None) -> str | None:
     """变更单状态（中文）；静态的 change_request 里没有这张单 → None。"""
     if not code:
         return None
-    from app.modules.static.models import ChangeRequest
+    from app.modules.static.repo import change_request_statuses
 
-    st = await session.scalar(select(ChangeRequest.status).where(ChangeRequest.code == code))
-    return st.value if st is not None else None
+    return (await change_request_statuses(session, [code])).get(code)
 
 
 async def feedback_plan(session: AsyncSession, f: QaFeedback) -> tuple[Any, dict | None]:
@@ -438,32 +434,100 @@ async def feedback_plan(session: AsyncSession, f: QaFeedback) -> tuple[Any, dict
     return None, (fq.sem_plan if fq else None) or (eq.expect if eq else None)
 
 
-async def feedback_detail(session: AsyncSession, f: QaFeedback, user_code: str | None) -> FeedbackDetailOut:
-    """同 FeedbackTab.vue：existing / planFor / certBlock / synCovered / relEvals。"""
-    existing, plan = await feedback_plan(session, f)
-    if existing or plan:
-        block = ""
-    elif f.fix_target and "新建" in f.fix_target:
-        block = "本体里还没有对应指标，需先在指标口径中新建"
-    else:
-        block = "还没有可用的语义计划，请先在评测题库里补一道题"
-    syn = await r.SynonymRepo(session).by_word(f.fix_text)
-    rel = await r.EvalQuestionRepo(session).count_cr(f.resolved_by) if f.resolved_by else 0
-    return FeedbackDetailOut(
-        **feedback_fields(f, user_code),
-        cert_block=block,
-        existing_cert=existing.code if existing else None,
-        covered_by=syn.cr_code if syn else None,
-        related_eval_count=rel,
-        existing_cert_question=existing.question if existing else None,
-        existing_cert_status=existing.status.value if existing else None,
-        plan=plan,
-        plan_text=catalog.plan_text(plan) if plan else None,
-        covered_cr_status=await cr_status(session, syn.cr_code) if syn else None,
-    )
+async def feedback_details(
+    session: AsyncSession,
+    rows: list[QaFeedback],
+    user_codes: dict[int, str | None],
+    metrics: catalog.Metrics | None = None,
+) -> list[FeedbackDetailOut]:
+    """固定批次查询，反馈条数增加不增加计划/同义词/CR/评测数查询次数。"""
+    from app.modules.static.repo import change_request_statuses
+
+    if not rows:
+        return []
+    if metrics is None:
+        metrics, _ = await catalog.directory(session, include_dims=False)
+    texts = {f.fix_text for f in rows}
+    certs = {
+        x.question: x
+        for x in await session.execute(
+            select(QaCert.question, QaCert.code, QaCert.status, QaCert.sem_plan).where(
+                QaCert.question.in_(texts)
+            )
+        )
+    }
+    freqs = {
+        question: plan
+        for question, plan in await session.execute(
+            select(QaFreqQuestion.question, QaFreqQuestion.sem_plan).where(QaFreqQuestion.question.in_(texts))
+        )
+    }
+    evals = {
+        question: plan
+        for question, plan in await session.execute(
+            select(QaEvalQuestion.question, QaEvalQuestion.expect).where(QaEvalQuestion.question.in_(texts))
+        )
+    }
+    synonyms = {}
+    for word, cr in await session.execute(
+        select(QaSynonymLink.word, QaSynonymLink.cr_code)
+        .where(QaSynonymLink.word.in_(texts))
+        .order_by(QaSynonymLink.id)
+    ):
+        synonyms.setdefault(word, cr)  # 保持原by_word取最早记录的规则。
+    counts = {
+        cr: n
+        for cr, n in await session.execute(
+            select(QaEvalQuestion.cr_code, func.count())
+            .where(QaEvalQuestion.cr_code.in_({f.resolved_by for f in rows if f.resolved_by}))
+            .group_by(QaEvalQuestion.cr_code)
+        )
+    }
+    statuses = await change_request_statuses(session, [cr for cr in synonyms.values() if cr])
+    result = []
+    for f in rows:
+        existing = certs.get(f.fix_text)
+        plan = (
+            existing.sem_plan
+            if existing
+            else (freqs[f.fix_text] or None)
+            if f.fix_text in freqs
+            else evals.get(f.fix_text)
+        )
+        block = (
+            ""
+            if existing or plan
+            else (
+                "本体里还没有对应指标，需先在指标口径中新建"
+                if f.fix_target and "新建" in f.fix_target
+                else "还没有可用的语义计划，请先在评测题库里补一道题"
+            )
+        )
+        cr = synonyms.get(f.fix_text)
+        result.append(
+            FeedbackDetailOut(
+                **feedback_fields(f, user_codes.get(f.user_id)),
+                cert_block=block,
+                existing_cert=existing.code if existing else None,
+                covered_by=cr,
+                related_eval_count=counts.get(f.resolved_by, 0),
+                existing_cert_question=existing.question if existing else None,
+                existing_cert_status=existing.status.value if existing else None,
+                plan=plan,
+                plan_text=catalog.plan_text(plan, metrics) if plan else None,
+                covered_cr_status=statuses.get(cr),
+            )
+        )
+    return result
 
 
-def freq_out(x: QaFreqQuestion, rank: int) -> FreqOut:
+async def feedback_detail(
+    session: AsyncSession, f: QaFeedback, user_code: str | None, metrics: catalog.Metrics | None = None
+) -> FeedbackDetailOut:
+    return (await feedback_details(session, [f], {f.user_id: user_code}, metrics))[0]
+
+
+def freq_out(x: QaFreqQuestion, rank: int, metrics: catalog.Metrics) -> FreqOut:
     return FreqOut(
         id=x.code,
         rank=rank,
@@ -472,7 +536,7 @@ def freq_out(x: QaFreqQuestion, rank: int) -> FreqOut:
         hits30=x.hits30,
         users=x.users,
         plan=x.sem_plan,
-        plan_text=catalog.plan_text(x.sem_plan),
+        plan_text=catalog.plan_text(x.sem_plan, metrics),
         consistency=float(x.consistency),
         last_asked=fmt_min(x.last_asked),
         cert_id=x.cert.code if x.cert else None,
@@ -482,37 +546,47 @@ def freq_out(x: QaFreqQuestion, rank: int) -> FreqOut:
 
 # ---------------------------------------------------------------- 工作台结果表（W10 / W11）
 
-# 同 QaStoreAnswer.vue 的列（# 序号前端按页算，不出接口）
-_STORE_COLUMNS = [
-    {"key": "store", "title": "门店"},
-    {"key": "city", "title": "城市"},
-    {"key": "sales", "title": "销售额（万元）", "align": "right"},
-    {"key": "mom", "title": "环比", "align": "right"},
-    {"key": "orders", "title": "订单数", "align": "right"},
-]
-
 
 def turn_result(t: QaTurn) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]] | None:
-    """(columns, 全部行, summary)。
-
-    门店卡 = 种子 QA_EC_STORES（同前端 mock）[推断]；链路表 = 快照里的结果行。
-    """
+    """只读已持久化的 answer.table；旧卡片未存结果时不可导出，不补演示行。"""
     ans = (t.snapshot or {}).get("answer") or {}
-    if ans.get("card") == "store":
-        rows = catalog.load("QA_EC_STORES")
-        total = sum(r["sales"] for r in rows)
-        last = sum(r["sales"] / (1 + r["mom"] / 100) for r in rows)
-        summary = {
-            "count": len(rows),
-            "sales": round(total, 4),
-            "mom": round((total / last - 1) * 100, 4) if last else None,
-            "orders": sum(r["orders"] for r in rows),
-        }
-        return _STORE_COLUMNS, rows, summary
-    if ans.get("card") == "table":
-        tbl = ans.get("table") or {}
-        return tbl.get("columns") or [], tbl.get("items") or [], {"text": tbl.get("summary") or ""}
-    return None
+    tbl = ans.get("table") if isinstance(ans, dict) else None
+    if not isinstance(tbl, dict):
+        return None
+    cols, rows = tbl.get("columns"), tbl.get("items")
+    if not isinstance(cols, list) or not cols or not isinstance(rows, list):
+        return None
+    if any(
+        not isinstance(c, dict) or not isinstance(c.get("key"), str) or not isinstance(c.get("title"), str)
+        for c in cols
+    ):
+        return None
+    if any(not isinstance(row, dict) for row in rows):
+        return None
+    return cols, rows, {"text": tbl.get("summary") or ""}
+
+
+async def has_metric_references(session: AsyncSession, code: str) -> bool:
+    """静态回滚用：是否存在QA指标软引用（含停用/历史记录，不检查自然语言或SQL文本）。"""
+    from app.modules.qa.models import QaPageCard, QaQueryLog, QaTemplateCard
+
+    canonical = catalog.METRIC_CODES.get(code, code)
+    keys = {canonical, catalog.metric_key(canonical)}
+    checks = []
+    for model, plan_field in (
+        (QaTurn, "sem_plan"),
+        (QaPageCard, "sem_plan"),
+        (QaTemplateCard, "sem_plan"),
+        (QaCert, "sem_plan"),
+        (QaQueryLog, "sem_plan"),
+        (QaEvalQuestion, "expect"),
+        (QaFreqQuestion, "sem_plan"),
+    ):
+        clauses = [getattr(model, plan_field)["metric"].as_string().in_(keys)]
+        if hasattr(model, "metric_code"):
+            clauses.append(model.metric_code.in_(keys))
+        checks.append(exists(select(model.id).where(or_(*clauses))))
+    return bool(await session.scalar(select(or_(*checks))))
 
 
 def _cell(v: Any) -> str:

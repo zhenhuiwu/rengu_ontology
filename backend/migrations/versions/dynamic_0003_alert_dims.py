@@ -1,4 +1,6 @@
-"""动态本体：告警去零售写死——alert.store_id / store_label 换成通用维度 dims（JSON 数组 [{objKind,id,label}]）。
+"""动态本体：告警去零售写死——alert.store_id / store_label 换成通用维度 dims。
+
+dims 是 JSON 数组 [{objKind,id,label}]。
 
 原有门店维度原样迁成 dims=[{objKind:"store", id, label}]；降级时把 store 维度还原回两列。
 rule_hit 同样处理（store_id / store_label → dims）。
@@ -14,6 +16,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from app.db.ddl import disable_append_only, enable_append_only
 
 revision: str = "dynamic_0003"
 down_revision: str | None = "static_0003"
@@ -59,7 +63,12 @@ def _from_dims(table: str) -> None:
 
 def upgrade() -> None:
     _to_dims("alert", _DIMS_COMMENT)
+    # Backfill protected history only within this transactional migration.
+    for sql in disable_append_only("rule_hit"):
+        op.execute(sql)
     _to_dims("rule_hit", "通用维度值 [{objKind,id,label}]（同 alert.dims）")
+    for sql in enable_append_only("rule_hit"):
+        op.execute(sql)
     op.add_column(
         "scenario",
         sa.Column(
@@ -75,5 +84,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column("scenario", "template_code")
+    for sql in disable_append_only("rule_hit"):
+        op.execute(sql)
     _from_dims("rule_hit")
+    for sql in enable_append_only("rule_hit"):
+        op.execute(sql)
     _from_dims("alert")

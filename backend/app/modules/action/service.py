@@ -10,14 +10,20 @@ from collections.abc import Callable, Sequence
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import raiseload
 
 from app.common.context import ViewContext
+from app.common.pagination import Page, PageParams
 from app.core import clock
-from app.core.errors import NotFound
-from app.modules.action.models import ActionType
+from app.core.errors import AppError, NotFound
+from app.core.schema import _fmt_dt
+from app.modules.action.models import ActionParam, ActionType, ActionTypeRule
 from app.modules.action.repo import ActionTypeRepo
 from app.modules.action.sections import SECTION, action_def
+from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertStatus
+from app.modules.dynamic.rules_models import Rule
 from app.modules.integration.models import ExtSystem
 from app.modules.versioning.repo import ReleaseRepo
 
@@ -42,7 +48,7 @@ async def defs_for_view(
 
     - 当前视图：定义表里 retired_release_id 为空的行；
     - `?ver=V`：V 不存在 → 404；取 V 快照的 section；V 快照里没有这一段（骨架阶段 / 早于本模块上线的版本）
-      → 退回当前定义表 [推断：和前端一致，前端历史视图显示的就是当前 mock]；
+      → 返回空，不借用当前定义；
       下线过滤：V.id ≥ retired_release_id 的类型不出现（§4.2）。
     """
     order = {r.code: i for i, r in enumerate(rows)}
@@ -51,7 +57,7 @@ async def defs_for_view(
     rel = await ReleaseRepo(session).by_ver_or_404(ctx.ver)
     hidden = {r.code for r in rows if r.retired_release_id is not None and rel.id >= r.retired_release_id}
     snap = (rel.snapshot or {}).get(section)
-    defs: dict[str, dict[str, Any]] = snap if isinstance(snap, dict) else {r.code: to_def(r) for r in rows}
+    defs: dict[str, dict[str, Any]] = snap if isinstance(snap, dict) else {}
     out = [d for code, d in defs.items() if code not in hidden]
     return sorted(out, key=lambda d: (order.get(d["id"], len(order)), d["id"]))
 
@@ -114,10 +120,131 @@ class ActionTypeService:
         self.repo = ActionTypeRepo(session)
 
     async def defs(self, ctx: ViewContext) -> list[dict[str, Any]]:
-        return await defs_for_view(self.session, ctx, await self.repo.all_ordered(), SECTION, action_def)
+        rows = (
+            (
+                await self.session.execute(
+                    select(ActionType.code, ActionType.retired_release_id).order_by(ActionType.id)
+                )
+            ).all()
+            if ctx.ver
+            else await self.repo.all_ordered()
+        )
+        return await defs_for_view(self.session, ctx, rows, SECTION, action_def)
 
     async def one(self, ctx: ViewContext, type_id: str) -> dict[str, Any]:
-        return find(await self.defs(ctx), type_id, "动作类型不存在")
+        if ctx.ver:
+            return find(await self.defs(ctx), type_id, "动作类型不存在")
+        row = await self.repo.get_by_code_or_404(type_id)
+        if row.retired_release_id is not None:
+            raise NotFound("动作类型不存在", details={"id": type_id})
+        return action_def(row)
+
+    async def search_page(self, ctx: ViewContext, page: PageParams, group: str | None, kw: str | None):
+        if ctx.ver:
+            rows, groups = await self.search(ctx, group, kw)
+            p = page.clamp(len(rows))
+            return Page.of(rows[p.offset : p.offset + p.size], len(rows), page), groups
+        if any(value and ("\x00" in value or len(value) > 200) for value in (kw, group)):
+            raise AppError("搜索文字不能超过200字或包含空字符", code="VALIDATION_FAILED", status_code=422)
+        statement = select(ActionType).options(raiseload("*")).where(ActionType.retired_release_id.is_(None))
+        if group and group != ALL:
+            statement = statement.where(ActionType.grp == group)
+        if kw:
+            statement = statement.where(ActionType.name.contains(kw, autoescape=True))
+        rows, total = await self.repo.list_page(statement.order_by(ActionType.id), page)
+        groups = [
+            ALL,
+            *list(
+                await self.session.scalars(
+                    select(ActionType.grp)
+                    .where(ActionType.retired_release_id.is_(None))
+                    .group_by(ActionType.grp)
+                    .order_by(func.min(ActionType.id))
+                )
+            ),
+        ]
+        items = [
+            {
+                "id": r.code,
+                "name": r.name,
+                "api": r.api,
+                "group": r.grp,
+                "status": r.status.value,
+                "version": r.version,
+                "target": r.target,
+                "targetApi": r.target_api,
+                "targetKind": r.target_kind,
+            }
+            for r in rows
+        ]
+        return Page.of(items, total, page), groups
+
+    async def params_page(self, ctx: ViewContext, type_id: str, page: PageParams):
+        if ctx.ver:
+            rows = (await self.one(ctx, type_id)).get("params") or []
+            p = page.clamp(len(rows))
+            return Page.of(rows[p.offset : p.offset + p.size], len(rows), page)
+        parent = await self.session.scalar(
+            select(ActionType.id).where(ActionType.code == type_id, ActionType.retired_release_id.is_(None))
+        )
+        if parent is None:
+            raise NotFound("动作类型不存在", details={"id": type_id})
+        statement = select(ActionParam).where(ActionParam.action_type_id == parent)
+        total = int(await self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        p = page.clamp(total)
+        rows = await self.session.scalars(
+            statement.order_by(ActionParam.seq, ActionParam.id).limit(p.size).offset(p.offset)
+        )
+        return Page.of(
+            [
+                {
+                    "name": r.name,
+                    "api": r.api,
+                    "type": r.type,
+                    "required": r.required,
+                    "def": r.default_text,
+                    "rule": r.rule_text,
+                }
+                for r in rows
+            ],
+            total,
+            page,
+        )
+
+    async def stats(self, type_id: str, days: int = 30) -> dict[str, Any]:
+        if await self.session.scalar(select(ActionType.id).where(ActionType.code == type_id)) is None:
+            raise NotFound("动作类型不存在", details={"id": type_id})
+        until = clock.now()
+        groups = (
+            await self.session.execute(
+                select(ActionRun.status, func.count(), func.sum(func.coalesce(ActionRun.elapsed_ms, 0)))
+                .where(
+                    ActionRun.action_type_code == type_id,
+                    ActionRun.in_center.is_(False),
+                    ActionRun.submitted_at >= until - timedelta(days=days),
+                    ActionRun.submitted_at <= until,
+                )
+                .group_by(ActionRun.status)
+            )
+        ).all()
+        counts = {status: count for status, count, _ in groups}
+        total = sum(counts.values())
+        ok = counts.get(ActionStatus.succeeded, 0) + counts.get(ActionStatus.reconciled, 0)
+        pending = sum(
+            counts.get(s, 0) for s in (ActionStatus.staged, ActionStatus.approving, ActionStatus.executing)
+        )
+        done = total - pending - counts.get(ActionStatus.withdrawn, 0)
+        return {
+            "asOf": _fmt_dt(until),
+            "total": total,
+            "ok": ok,
+            "failed": counts.get(ActionStatus.failed, 0),
+            "unknown": counts.get(ActionStatus.unknown, 0),
+            "pending": pending,
+            "confirm": counts.get(ActionStatus.staged, 0),
+            "rate": ok / done if done else 0,
+            "avgMs": int(sum(elapsed or 0 for _, _, elapsed in groups) / total + 0.5) if total else 0,
+        }
 
     async def groups(self, defs: list[dict[str, Any]]) -> list[str]:
         """['全部'] + 分组（按首次出现顺序）；前端 ACTION_GROUPS 是常量，mock 里与此一致 [推断]。"""
@@ -141,6 +268,59 @@ class ActionTypeService:
 
     async def detail(self, ctx: ViewContext, type_id: str) -> dict[str, Any]:
         return with_system(await self.one(ctx, type_id), await self.repo.systems())
+
+    async def used_by(self, ctx: ViewContext, type_id: str) -> list[dict[str, Any]]:
+        """关系成员随定义版本；告警总数 / 待处理数始终取当前记录。"""
+        ids = (await self.one(ctx, type_id)).get("usedBy") or []
+        if not ids:
+            return []
+        modes: dict[str, str] = {}
+        if ctx.ver:
+            release = await ReleaseRepo(self.session).by_ver_or_404(ctx.ver)
+            rules = (release.snapshot or {}).get("rules") or {}
+        else:
+            rows = (await self.session.scalars(select(Rule).where(Rule.code.in_(ids)))).all()
+            rules = {r.code: {"name": r.name, "trigger": r.trigger, "autoStage": r.auto_stage} for r in rows}
+            links = (
+                await self.session.scalars(
+                    select(ActionTypeRule).join(ActionType).where(ActionType.code == type_id)
+                )
+            ).all()
+            modes = {r.rule_code: r.mode_text for r in links if r.mode_text}
+        counts: dict[str, dict[str, int]] = {}
+        for code, status, count in (
+            await self.session.execute(
+                select(Alert.rule_code, Alert.status, func.count())
+                .where(Alert.rule_code.in_(ids))
+                .group_by(Alert.rule_code, Alert.status)
+            )
+        ).all():
+            c = counts.setdefault(code, {"alerts": 0, "openAlerts": 0})
+            c["alerts"] += count
+            if status == AlertStatus.open:
+                c["openAlerts"] += count
+        out = []
+        for code in ids:
+            rule = rules.get(code)
+            mode = "规则定义不可用"
+            trigger = "—"
+            if rule:
+                trigger = (rule.get("trigger") or {}).get("kind") or "—"
+                stage = rule.get("autoStage") or {}
+                mode = "处理告警时手动执行"
+                if stage.get("enabled") and stage.get("actionTypeId") == type_id:
+                    confirmer = stage.get("confirmer") or "确认人"
+                    mode = f"命中后生成动作 · 待 {confirmer} 确认后提交"
+            out.append(
+                {
+                    "ruleId": code,
+                    "ruleName": rule.get("name") if rule else f"{code}（定义不可用）",
+                    "trigger": trigger,
+                    "mode": modes.get(code) or mode,
+                    **counts.get(code, {"alerts": 0, "openAlerts": 0}),
+                }
+            )
+        return out
 
     async def writeback(self, ctx: ViewContext, type_id: str) -> dict[str, Any]:
         systems = await self.repo.systems()

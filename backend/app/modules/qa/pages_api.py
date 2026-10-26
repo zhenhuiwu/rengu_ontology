@@ -18,10 +18,10 @@ from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.core import clock
 from app.core.errors import AppError, DuplicateKey, EmptyInput, Forbidden, NotFound
-from app.core.schema import ApiModel, _tz, parse_display_dt
+from app.core.schema import ApiModel, _tz
+from app.db.dialects import get_adapter
 from app.db.session import SessionDep
 from app.modules.admin.models import SysUser
-from app.modules.qa import catalog
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
 from app.modules.qa.models import (
@@ -44,7 +44,7 @@ from app.modules.qa.schemas import PageFullOut, ShareOut, SubOut
 
 pages = APIRouter(dependencies=[Depends(require_func("qa-pages", "view"))])
 
-DEFAULT_REFRESH = {"freq": "每天", "time": "08:00", "onFail": "保留上次结果"}
+DEFAULT_REFRESH = {"freq": "手动", "time": "--", "onFail": "保留上次结果"}
 LINK_BASE = "https://bi.example.com/p/"  # 同 PageDrawer.copyLink [推断]
 
 # ---------------------------------------------------------------- 入参 / 出参
@@ -147,10 +147,6 @@ class ShareSaveOut(ShareOut):
 # ---------------------------------------------------------------- 小工具
 
 
-def _cutoff() -> datetime:
-    return parse_display_dt(catalog.load("PAGES_CUTOFF"))
-
-
 async def _load(session, user, ctx, pid: str, need: Literal["edit", "owner"]) -> tuple[int, QaPage]:
     pk, u, _ = await svc.effective_viewer(session, user, ctx)
     repo = r.PageRepo(session)
@@ -224,21 +220,6 @@ def _next_code(codes: list[str]) -> str:
     return f"P{(max(nums) if nums else 0) + 1:03d}"
 
 
-def _clone_card(c, key: str, i: int) -> QaPageCard:
-    return QaPageCard(
-        card_key=key,
-        sort_order=i,
-        title=c.title,
-        viz=c.viz,
-        sem_plan=c.sem_plan,
-        metric_name=c.metric_name,
-        metric_code=c.metric_code,
-        metric_version=c.metric_version,
-        pending_cr=c.pending_cr,
-        result_cache=dict(c.result_cache or {}),
-    )
-
-
 # ---------------------------------------------------------------- P2
 
 
@@ -254,6 +235,7 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
     name = body.name.strip()
     if not name:
         raise EmptyInput("页面名称不能为空", details={"field": "name"})
+    await get_adapter(session).xact_lock(session, "qa.page.code")
     await _check_name(session, pk, name)
     code = _next_code(list((await session.scalars(select(QaPage.code))).all()))
     now = clock.now()
@@ -266,8 +248,8 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
         source_ref="手动新建",
         status=PageStatus.ok,
         refresh=dict(DEFAULT_REFRESH),
-        last_refresh=now,
-        data_as_of=_cutoff(),
+        last_refresh=None,
+        data_as_of=None,
         share_mode=ShareMode.private,
         share_link=False,
         allow_export=True,
@@ -280,13 +262,9 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
         ).first()
         if t is None:
             raise NotFound(repo.not_found_message, details={"id": body.template.id})
-        p.source_kind = PageSourceKind.template
-        p.source_ref = f"模板「{t.name}」· {body.template.caliber}"[:200]
-        if body.template.refresh is not None:
-            p.refresh = body.template.refresh.plan()
-        p.cards = [_clone_card(c, f"{code}-C{i}", i) for i, c in enumerate(t.cards, start=1)]
-        p.status, p.status_note = _status_of(p.cards)
-        t.uses = (t.uses or 0) + 1  # [推断] 用一次模板计一次「使用次数」
+        raise AppError(
+            "模板重算执行器尚未接入，未创建页面", code="PAGE_EXECUTION_UNAVAILABLE", status_code=503
+        )
     p.next_run = next_run(p.refresh, now)
     p.subscription = QaPageSubscription(
         enabled=False,
@@ -342,20 +320,10 @@ async def delete_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: 
     "/pages/{pid}:refresh", response_model=RefreshOut, response_model_exclude_none=True, summary="P6 立即刷新"
 )
 async def refresh_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
-    """[推断] 卡片值是冻结的快照（seed / 固定时算好），刷新只更新时间和状态（同 MyPages.refresh）；
-    真实按语义计划重算、超 30 秒返回 202 {jobId} 留给后续（handoff qa.md）。"""
-    _, p = await _load(session, user, ctx, pid, "edit")
-    p.last_refresh = clock.now()
-    p.data_as_of = _cutoff()
-    if p.status == PageStatus.refresh_failed:
-        p.status, p.status_note = _status_of(p.cards)
-    p.next_run = next_run(p.refresh)
-    await session.flush()
-    return RefreshOut(
-        last_refresh=svc.fmt_min(p.last_refresh),
-        data_as_of=svc.fmt_min(p.data_as_of),
-        status=p.status.value,
-        status_note=p.status_note,
+    """缺少按语义计划重算的执行器，不修改已有结果或时间戳。"""
+    await _load(session, user, ctx, pid, "edit")
+    raise AppError(
+        "页面刷新执行器尚未接入，原结果保持不变", code="PAGE_EXECUTION_UNAVAILABLE", status_code=503
     )
 
 
@@ -371,7 +339,7 @@ def _metric_of(label: str | None) -> tuple[str, int | None]:
 
 
 def card_from_turn(t: QaTurn, title: str) -> dict[str, Any]:
-    """把一轮回答冻结成卡片字段 [推断]：主卡（复购按省份）→ 柱状图；门店卡 / 链路结果表 → 表格（前 5 行）。"""
+    """把回答中持久化的结果表冻结为卡片（前 5 行）。"""
     ans = (t.snapshot or {}).get("answer") or {}
     card = ans.get("card")
     plan = {
@@ -380,18 +348,13 @@ def card_from_turn(t: QaTurn, title: str) -> dict[str, Any]:
         "period": ans.get("period"),
         "region": ans.get("region"),
     }
-    if card == "main":
-        variant = t.caliber_variant if t.caliber_variant in ("ex", "in") else "ex"
-        m = catalog.load("QA_METRIC")[variant]
-        provs = catalog.load("QA_PROVINCES")
-        return {
-            "viz": CardViz.bar,
-            "metric_name": m["name"],
-            "metric_code": m["id"],
-            "metric_version": catalog.version_int(m["version"]),
-            "sem_plan": {**plan, "caliber": variant, "dims": ["省份"]},
-            "result_cache": {"labels": [x["province"] for x in provs], "series": [x["sales"] for x in provs]},
-        }
+    if card in {"main", "store"} and not ans.get("table"):
+        raise AppError(
+            "这一轮未保存真实结果表，请重新提问后固定",
+            code="TURN_NOT_PINNABLE",
+            status_code=422,
+            details={"turnId": t.code},
+        )
     res = svc.turn_result(t)
     if res is None:
         raise AppError(
@@ -425,6 +388,7 @@ def card_from_turn(t: QaTurn, title: str) -> dict[str, Any]:
 async def pin_card(pid: str, body: PinIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
     if not body.title.strip():
         raise EmptyInput("卡片标题不能为空", details={"field": "title"})
+    await get_adapter(session).xact_lock(session, f"qa.page.cards.{pid}")
     pk, p = await _load(session, user, ctx, pid, "edit")
     t = await session.scalar(
         select(QaTurn)

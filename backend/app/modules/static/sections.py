@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.static import history, shapes
+from app.modules.static.explorer import DISPLAY_FIELDS, snapshot_flags
 from app.modules.static.repo import StaticRepo
 from app.modules.static.writeback import (
     DIRTY,
@@ -111,12 +112,23 @@ class PropertiesSection(_Base):
     async def current(self, repo: StaticRepo) -> Obj:
         return {o.code: {p.api_name: shapes.prop(p) for p in o.properties} for o in await repo.object_types()}
 
+    async def build_section(self, session: AsyncSession, base: Any, change_order_ids: list[str]) -> Obj:
+        content = await super().build_section(session, base, change_order_ids)
+        out = {}
+        for obj, rows in content.items():
+            out[obj] = {}
+            for n, (api, p) in enumerate(rows.items()):
+                flags = snapshot_flags(obj, p, n)
+                out[obj][api] = {**p, **{key: flags[col] for key, col in DISPLAY_FIELDS.items()}}
+        return out
+
     async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:
         """整版回滚时把属性表恢复成 content（writeback.restore_properties）。"""
         await restore_properties(session, content or {}, release_id=release_id)
 
     def seed_section(self, ver: str, ctx: Any) -> Obj:
         props = ctx.load("OBJECT_PROPS.json", group=G)
+        # 既有发布记录只追加；种子保持旧形状，读历史 / 新发布时再补齐显示默认。
         return {k: {p["api"]: p for p in v} for k, v in props.items()}
 
 
@@ -144,10 +156,16 @@ class MetricsSection(_Base):
     section = "metrics"
 
     async def current(self, repo: StaticRepo) -> Obj:
+        from app.modules.static.metric_versions import real_rows
+
         out = {}
         for m in await repo.metrics():
             stat = shapes.metric_stat(m) if m.formula is not None else None
             out[m.code] = metric_def_from_json(shapes.metric_list_item(m), stat)
+            versions = real_rows(m.version_rows or [])
+            if versions:
+                out[m.code].update(formula=m.formula, dimNames=list(m.dims or []))
+                out[m.code]["versionRows"] = versions
         return out
 
     async def restore_section(self, session: AsyncSession, content: Any, *, release_id: int) -> None:

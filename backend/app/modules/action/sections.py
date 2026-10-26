@@ -4,7 +4,7 @@
 sysId,endpoint,idemKey, params[], conds[], writeback{edits[],effects[]}, usedBy[]}}`。
 system / timeout / retry / idempotent（随 ext_system）和统计字段不进快照。
 
-- build_section：发布时把当前定义表（未下线的）整段导出；本批没有草稿写入，不看变更单 [推断]。
+- build_section：七段草稿写回后，改到的类型各追加一版完整定义，再导出当前未下线定义。
 - seed_section：mock 只有当前定义，历史各版都用当前定义组装 [推断]（前端 ?ver= 显示的也是当前 mock）。
 - restore_section(session, content, *, release_id)（整版回滚，团队约定的签名）：同一事务里把定义表
   改回 content；content 里没有的类型置 retired_release_id = release_id（必填：骨架 restore_sections
@@ -24,6 +24,7 @@ from app.modules.action.models import (
     ActionParam,
     ActionType,
     ActionTypeRule,
+    ActionTypeVersion,
     CriterionKind,
     EditOp,
     EffectKind,
@@ -108,7 +109,7 @@ def action_def_from_json(t: dict[str, Any], ctx: Any) -> dict[str, Any]:
 
 async def current_types(session: AsyncSession) -> list[ActionType]:
     stmt = select(ActionType).where(ActionType.retired_release_id.is_(None)).order_by(ActionType.id)
-    return list((await session.scalars(stmt)).all())
+    return list((await session.scalars(stmt.execution_options(populate_existing=True))).all())
 
 
 class ActionTypesSection:
@@ -117,7 +118,13 @@ class ActionTypesSection:
     async def build_section(
         self, session: AsyncSession, base: Any | None, change_order_ids: list[str]
     ) -> Any:
-        return {at.code: action_def(at) for at in await current_types(session)}
+        from app.modules.action.writeback import finish_versions
+
+        types = await current_types(session)
+        await finish_versions(
+            session, "action", types, change_order_ids, ActionTypeVersion, "action_type_id", action_def
+        )
+        return {at.code: action_def(at) for at in types}
 
     def seed_section(self, ver: str, ctx: Any) -> Any:
         return {t["id"]: action_def_from_json(t, ctx) for t in ctx.load("ACTION_TYPES.json", group=GROUP)}
@@ -220,8 +227,10 @@ BUILDER = ActionTypesSection()
 
 def register() -> ActionTypesSection:
     """幂等：已登记（本实例或测试替身）就不重复登记。由骨架 load_sections() 调用，import 时不登记。"""
+    from app.modules.action.writeback import register as register_writebacks
     from app.modules.versioning.sections import register_section, registered_sections
 
+    register_writebacks()
     if SECTION not in registered_sections():
         register_section(BUILDER)
     return BUILDER

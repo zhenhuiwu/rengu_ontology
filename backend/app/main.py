@@ -10,14 +10,18 @@ from app.core.logging import setup_logging
 from app.core.request_id import RequestIdMiddleware
 from app.db.session import dispose_engine, get_sessionmaker
 from app.modules.data.secrets import check_secret_key
+from app.modules.qa.eval.job import recover_interrupted_runs
 from app.modules.versioning.sections import load_sections
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     check_secret_key()  # 数据源密码密钥：prod / 真实连接没配就不启动（app/modules/data/secrets.py）
-    yield
-    await dispose_engine()
+    try:
+        await recover_interrupted_runs()
+        yield
+    finally:
+        await dispose_engine()
 
 
 def create_app() -> FastAPI:

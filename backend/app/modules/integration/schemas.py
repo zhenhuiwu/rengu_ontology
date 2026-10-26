@@ -49,6 +49,9 @@ class ExtSystemDetailOut(ExtSystemOut):
 
 class ExtSystemListOut(ApiModel):
     items: list[ExtSystemOut]
+    total: int = 0
+    page: int = 1
+    size: int = 10
 
 
 _HTTPS = re.compile(r"^https://[^\s/]+\.\S+$")  # 同前端 formErrors

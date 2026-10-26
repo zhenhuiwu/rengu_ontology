@@ -2,15 +2,15 @@
 
 import pytest
 
-from app.modules.qa.objects_api import fmt_money, fmt_pct, js_hash, seeded, store_sales, v8_random_sort
-from app.seeds.loader import run_seeds
+from app.modules.qa.objects_api import fmt_money, fmt_pct
+from tests.qa_access_support import seed_qa_access
 
 B = "/api/qa/v1"
 
 
 @pytest.fixture
 async def qa(users, client):
-    await run_seeds(users, ["biz", "qa"])
+    await seed_qa_access(users)
     await users.flush()
     return client
 
@@ -18,10 +18,6 @@ async def qa(users, client):
 def test_js_ports():
     assert fmt_money(1234.5) == "1,234.50" and fmt_money(0.125) == "0.13" and fmt_money(None) == "--"
     assert fmt_pct(0.857142) == "85.71%"
-    # 与 node 下 [...12].sort(() => r() - 0.5) 的结果一致（V8 二分插入排序）
-    r = seeded(js_hash("SH0031") + 3)
-    assert v8_random_sort(list(range(12)), r)[:8] == [0, 1, 10, 5, 7, 3, 4, 8]
-    assert store_sales("FZ0011") == (16, -13.7)  # 问数结果表里的原值
 
 
 async def test_search_store_facets_and_paging(qa):
@@ -29,7 +25,7 @@ async def test_search_store_facets_and_paging(qa):
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["total"] == 95 and len(d["items"]) == 16 and d["page"] == 1
-    assert d["scopeText"].startswith("可见范围：华东大区")
+    assert d["scopeText"] == "数据范围：全部门店"
     it = d["items"][0]
     assert set(it) == {"id", "title", "cells"} and "sales" in it["cells"] and "code" in it["cells"]
     region = next(f for f in d["facets"] if f["key"] == "region")
@@ -92,11 +88,9 @@ async def test_scoped_ask(qa):
         "question": "合计",
     }
     r = await qa.post(f"{B}/scoped-ask", json=body)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 503, r.text
     a = r.json()
-    assert a["text"].startswith("这 ") and "销售额（不含税） v3" in a["text"]
-    assert "区域 = 华东四区" in a["basis"] and "数据截至 2026-10-24 23:00" in a["basis"]
-    assert 0 < len(a["rows"]) <= 5
+    assert a["code"] == "DATA_NOT_CONFIGURED"
     single = {
         "scope": {
             "kind": "store",
@@ -105,14 +99,20 @@ async def test_scoped_ask(qa):
         }
     }
     s = (await qa.post(f"{B}/scoped-ask", json=single | {"question": "排第几"})).json()
-    assert "排第" in s["text"] and any(x["note"] == "当前门店" for x in s["rows"])
+    assert s["code"] == "DATA_NOT_CONFIGURED"
     o = await qa.post(
         f"{B}/scoped-ask",
-        json={"scope": {"kind": "order", "label": "订单", "ids": ["SO202610250794580"]}, "question": "q"},
+        json={
+            "scope": {"kind": "order", "label": "订单", "ids": ["SO202610250794580"]},
+            "question": "实付金额合计",
+        },
     )
-    assert o.json()["text"].startswith("这 1 单实付金额合计 274.50 元") and "已选 1 个" in o.json()["basis"]
+    assert (
+        o.json()["text"].startswith("当前可见的 1 单实付金额合计 274.50 元")
+        and "已选 1 个" in o.json()["basis"]
+    )
     # 预览可问，历史版本只读
-    assert (await qa.post(f"{B}/scoped-ask?previewAs=U010763", json=body)).status_code == 200
+    assert (await qa.post(f"{B}/scoped-ask?previewAs=U010763", json=body)).status_code == 503
     ro = await qa.post(f"{B}/scoped-ask?ver=v1", json=body)
     assert ro.status_code == 403 and ro.json()["code"] == "READONLY"
 
@@ -123,20 +123,17 @@ async def test_detail_store_and_drawer(qa):
     d = r.json()
     assert d["kindLabel"] == "门店" and d["id"] == "SH0031"
     assert [g["title"] for g in d["groups"]][:2] == ["基本信息", "经营"]
-    assert (
-        d["kpis"][0]["label"] == "9 月销售额（不含税）" and d["kpis"][0]["caliber"] == "销售额（不含税） v3"
-    )
-    assert any(k["caliber"] == "销售额（含税） v2" for k in d["kpis"]) and len(d["kpis"]) == 5
-    assert len(d["quickQuestions"]) == 3 and d["scopeLabel"] == "数据范围：全部门店"
+    assert d["kpis"][0]["label"] == "实付金额" and d["kpis"][0]["caliber"] is None
+    assert all(k["caliber"] is None for k in d["kpis"]) and len(d["kpis"]) == 4
+    assert d["quickQuestions"] == [] and d["scopeLabel"] == "数据范围：全部门店"
+    assert not d["analyticsConfigured"] and "尚未配置" in d["analyticsNote"]
     dr = (await qa.get(f"{B}/objects/store/SH0031?view=drawer")).json()
     assert "kpis" not in dr and dr["groups"] == d["groups"]
-    # 扩充门店也能打开
+    # 已灌入数据库的扩充种子记录继续保留；不再从内存补记录。
     assert (await qa.get(f"{B}/objects/store/SH0201")).status_code == 200
     assert (await qa.get(f"{B}/objects/store/NOPE")).status_code == 404
-    reg = (await qa.get(f"{B}/objects/region/REG-EC")).json()
-    assert (
-        reg["owner"] == "陈杰" and reg["repeatShare"] == "62.0%" and reg["kpis"][1]["caliber"].endswith("v3")
-    )
+    reg = await qa.get(f"{B}/objects/region/REG-EC")
+    assert reg.status_code == 503 and reg.json()["code"] == "DATA_NOT_CONFIGURED"
     order = (await qa.get(f"{B}/objects/order/SO202610250794580")).json()
     assert order["code"] == "饿了么" and order["status"]["text"] == "已签收"
     prod = (await qa.get(f"{B}/objects/product/1002387")).json()
@@ -146,20 +143,18 @@ async def test_detail_store_and_drawer(qa):
 async def test_related_timeline_actions(qa):
     rel = (await qa.get(f"{B}/objects/store/SH0031/related")).json()
     keys = [g["key"] for g in rel]
-    assert keys[:3] == ["region", "peer", "product"]
-    prod = next(g for g in rel if g["key"] == "product")
-    assert prod["total"] == 8 and prod["size"] == 8
-    reg = (await qa.get(f"{B}/objects/region/REG-EC/related?group=rel-store&page=2")).json()
-    assert len(reg) == 1 and reg[0]["title"] == "下属门店" and reg[0]["page"] == 2 and reg[0]["total"] > 8
+    assert "peer" in keys and "region" not in keys and "product" not in keys
+    reg = await qa.get(f"{B}/objects/region/REG-EC/related?group=rel-store&page=2")
+    assert reg.status_code == 503 and reg.json()["code"] == "DATA_NOT_CONFIGURED"
     tl = (await qa.get(f"{B}/objects/store/SH0031/timeline")).json()
-    assert tl["total"] == 21 and len(tl["items"]) == 8 and tl["unknownLabel"] == "结果未知 · 待对账"
+    assert tl["total"] == 0 and tl["items"] == [] and not tl["configured"]
     times = [x["time"] for x in tl["items"]]
     assert times == sorted(times, reverse=True)
-    rtl = (await qa.get(f"{B}/objects/region/REG-EC/timeline?size=6")).json()
-    assert rtl["total"] == 26 and len(rtl["items"]) == 6
+    rtl = await qa.get(f"{B}/objects/region/REG-EC/timeline?size=6")
+    assert rtl.status_code == 503 and rtl.json()["code"] == "DATA_NOT_CONFIGURED"
     ptl = (await qa.get(f"{B}/objects/product/1002387/timeline?size=50")).json()
-    assert sum(1 for x in ptl["items"] if x.get("status") == "unknown") <= 1
+    assert ptl["items"] == [] and not ptl["configured"]
     acts = (await qa.get(f"{B}/objects/order/SO202610250794580/actions")).json()
-    assert acts[0]["blocked"] == "订单已出库，不能补发" and acts[1]["approver"] == "赵磊"
-    racts = (await qa.get(f"{B}/objects/region/REG-EC/actions")).json()
-    assert [a["key"] for a in racts] == ["coupon", "follow", "budget"]
+    assert acts == []
+    racts = await qa.get(f"{B}/objects/region/REG-EC/actions")
+    assert racts.status_code == 503 and racts.json()["code"] == "DATA_NOT_CONFIGURED"

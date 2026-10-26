@@ -135,6 +135,10 @@ class ReconcileScheduler(Protocol):
 
     async def reopen_reconcile(self, action_run_id: str) -> None: ...
 
+    async def resolve_reconcile(self, action_run_id: str, outcome: ReconcileOutcome, reconciler: str) -> None:
+        """人工对账完成时，同事务将持久任务收敛为resolved；不发起外部请求。"""
+        ...
+
 
 @runtime_checkable
 class EventEmitter(Protocol):
@@ -187,3 +191,58 @@ def new_resubmit_key(previous_key: str) -> str:
     """
     base, n = split_retry_suffix(previous_key)
     return f"{base}-r{n + 1}"
+
+
+async def stage_event_action(session, user, *, action_type_code: str, event_id: str,
+                             params: dict, obj_kind: str | None = None,
+                             obj_id: str | None = None) -> dict:
+    """Stage one real pending-confirmation action per event/type; never execute or commit.
+
+    `user` must be resolved from an authorized subscription, not from event payload.
+    Simulation must use the read-only checker instead of this entry point.
+    """
+    import hashlib
+    import json
+
+    from sqlalchemy import select
+
+    from app.common.auth import check_func
+    from app.core.errors import Conflict
+    from app.db.dialects import get_adapter
+    from app.modules.action.checker import structured_params
+    from app.modules.dynamic.catalog import get_catalog
+    from app.modules.dynamic.models import ActionRun
+    from app.modules.dynamic.ports import get_checker, get_emitter, get_scheduler, get_submitter, Ports
+    from app.modules.dynamic.schemas import SourceIn, StageIn
+    from app.modules.dynamic.service import ActionService
+
+    check_func(user, "action-center", "manage")
+    normalized = structured_params(params)
+    key = "evt-" + hashlib.sha256(json.dumps([event_id, action_type_code]).encode()).hexdigest()
+    await get_adapter(session).xact_lock(session, key)
+    previous = await session.scalar(select(ActionRun).where(ActionRun.idem_key == key))
+    if previous:
+        if (previous.action_type_code != action_type_code or previous.obj_kind != obj_kind
+                or previous.obj_id != (obj_id or "") or previous.params != normalized
+                or previous.created_by != user.id):
+            raise Conflict("同一事件动作的参数或执行身份已改变", code="IDEMPOTENCY_CONFLICT")
+        return {"id": previous.code, "status": previous.status.value, "idemKey": previous.idem_key}
+    catalog = await get_catalog(session)
+    target = (catalog.action_meta(action_type_code) or {}).get("kind")
+    if target != obj_kind or (target and not obj_id):
+        from app.core.errors import AppError
+
+        raise AppError("事件对象与动作目标不匹配，不能暂存待确认动作", code="ACTION_TARGET_MISMATCH", status_code=422)
+    from types import SimpleNamespace
+    from app.modules.integration.action_edits import target_access
+
+    await target_access(session, user, SimpleNamespace(obj_kind=obj_kind, obj_id=obj_id), {"targetKind": target})
+    ports = Ports(get_submitter(session, user), get_emitter(session), get_scheduler(session), get_checker(session, user))
+    service = ActionService(session, user, catalog, ports)
+    run, _ = await service.stage(StageIn(type_id=action_type_code, source=SourceIn(type="手动", confirmer=user.id),
+        obj_kind=obj_kind, obj_id=obj_id or "", obj_label=obj_id or action_type_code,
+        params=json.dumps(normalized, ensure_ascii=False)))
+    run.idem_key, run.params = key, normalized
+    await service._log(run, f"事件订阅暂存 · {event_id}", user.id)
+    await session.flush()
+    return {"id": run.code, "status": run.status.value, "idemKey": run.idem_key}

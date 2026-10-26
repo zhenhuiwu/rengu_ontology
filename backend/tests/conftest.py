@@ -6,6 +6,7 @@
 
 import asyncio
 import os
+import sys
 from collections.abc import AsyncIterator
 
 import asyncpg
@@ -17,6 +18,8 @@ TEST_URL = make_url(BASE_URL).set(database=os.environ.get("RENGU_TEST_DB", "reng
 os.environ["RENGU_DATABASE_URL"] = TEST_URL.render_as_string(hide_password=False)
 os.environ["RENGU_ENV"] = "test"
 os.environ.setdefault("RENGU_FIXED_NOW", "2026-10-25T15:42:00+08:00")
+# 本地 .env 的真实密钥不能隐式启用测试请求；实连需在启动测试时显式传入。
+os.environ.setdefault("DASHSCOPE_API_KEY", "")
 
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
@@ -31,6 +34,16 @@ get_settings.cache_clear()
 # 若首次导入发生在某个测试的 client fixture 里（隔离注册表内），真实 objectTypes 会占位，
 # 随后 sections fixture 登记 FakeObjectTypesSection 就报「已经登记过」（单独跑某个测试文件时复现）。
 import app.main  # noqa: E402, F401
+
+
+@pytest.fixture(scope="session")
+def event_loop_policy():
+    # psycopg 的异步队列连接在 Windows 需要 Selector；整个测试会话共用同一循环。
+    return (
+        asyncio.WindowsSelectorEventLoopPolicy()
+        if sys.platform == "win32"
+        else asyncio.DefaultEventLoopPolicy()
+    )
 
 
 async def _ensure_db() -> None:

@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.modules.integration.models import CallKind, WritebackCall
+from app.modules.integration.models import WritebackCall
 from app.modules.versioning.sections import load_sections
 from app.seeds.loader import run_seeds
 from app.seeds.registry import SEED_MODULES
+from tests.function_access_support import grant_fixture_roles
 
 DATA = "/api/data/v1"
 ADMIN = {"X-Demo-As": "U010001"}
@@ -30,6 +31,7 @@ async def wb(session, _isolated_sections):
     # 版本种子要真实 section 才能写快照（同 tests/dynamic_support.py 的 dyn）
     load_sections()
     await run_seeds(session, SEED_MODULES[: SEED_MODULES.index("integration_runs") + 1])
+    await grant_fixture_roles(session)
     await session.commit()
     return session
 
@@ -98,13 +100,12 @@ async def test_mark_checked(client, wb):
     assert counts["结果未知"] == sum(1 for c in MOCK[sys_id] if c["result"] == "结果未知") - 1
 
 
-async def test_test_call_persisted_first(client, wb):
-    a = (await client.post(f"{DATA}/ext-systems/EXT-CRM:test", headers=ADMIN)).json()
-    b = (await client.post(f"{DATA}/ext-systems/EXT-CRM:test", headers=ADMIN)).json()
+async def test_unconfigured_test_does_not_fabricate_calls(client, wb):
+    before = await wb.scalar(select(func.count()).select_from(WritebackCall))
+    for _ in range(2):
+        response = await client.post(f"{DATA}/ext-systems/EXT-CRM:test", headers=ADMIN)
+        assert response.status_code == 503 and response.json()["code"] == "EXT_SYSTEM_TEST_UNAVAILABLE"
     body = (await client.get(f"{DATA}/ext-systems/EXT-CRM/calls", headers=ADMIN)).json()
-    assert [c["id"] for c in body["items"][:2]] == [b["id"], a["id"]]  # 测试调用排最前，新的在上
-    assert _clean(body["items"][0]) == b and body["total"] == len(MOCK["EXT-CRM"]) + 2
-    assert [_clean(c) for c in body["items"][2:]] == MOCK["EXT-CRM"][:8]
-    kinds = (await wb.scalars(select(WritebackCall.kind).where(WritebackCall.code == a["id"]))).all()
-    assert kinds == [CallKind.test]
-    assert _clean((await client.get(f"{DATA}/writeback-calls/{a['id']}", headers=ADMIN)).json()) == a
+    assert body["total"] == len(MOCK["EXT-CRM"])
+    assert [_clean(c) for c in body["items"]] == MOCK["EXT-CRM"][:10]
+    assert await wb.scalar(select(func.count()).select_from(WritebackCall)) == before

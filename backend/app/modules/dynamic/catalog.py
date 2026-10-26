@@ -1,19 +1,14 @@
-"""[桩] 规则 / 动作类型 / 外部系统的只读目录。
+"""动作中心的请求级真实定义目录，不读取种子文件。"""
 
-STUB — 这些表还不在骨架里：
-- rule（本模块下一迭代）、action_type、ext_system（Palantir专家模块）；
-在它们合并之前，用 export-mock 导出的 JSON（seeds/json/...）提供同样的信息：
-  dynamic/RULES.json、dynamic/RULE_CONFIRMER.json、dynamic/ACTION_META.json、dynamic/ACTION_NAMES.json、
-  dynamic/ACTION_SYSTEMS.json、dynamic/OBJ_KIND_LABEL.json、action/ACTION_TYPES.json、system/EXT_SYSTEMS.json。
-表合并后换成查库的实现（同一个 Protocol），调用方不用改。
-"""
+import re
+from collections import Counter
+from typing import Annotated, Any, Protocol
 
-import json
-from functools import lru_cache
-from pathlib import Path
-from typing import Any, Protocol
+from fastapi import Path
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload, raiseload
 
-from app.core.config import get_settings
+from app.db.session import SessionDep
 
 
 class RefCatalog(Protocol):
@@ -21,28 +16,21 @@ class RefCatalog(Protocol):
     def action_type(self, code: str) -> dict[str, Any] | None: ...
     def action_type_by_name(self, name: str) -> dict[str, Any] | None: ...
     def action_meta(self, name: str) -> dict[str, Any] | None: ...
+    def person(self, text: str | None) -> dict[str, str] | None: ...
     def ext_system(self, code: str | None) -> dict[str, Any] | None: ...
     def meta(self) -> dict[str, Any]: ...
 
 
-class JsonRefCatalog:
-    """STUB：读 seeds/json 里的前端 mock 导出。"""
-
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self._cache: dict[str, Any] = {}
-
-    def _load(self, rel: str) -> Any:
-        return json.loads((self.root / rel).read_text(encoding="utf-8"))
+class DatabaseRefCatalog:
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.data = data
 
     @property
     def _rules(self) -> dict[str, dict[str, Any]]:
         return self._cached("dynamic/RULES.json")
 
     def _cached(self, rel: str) -> Any:
-        if rel not in self._cache:
-            self._cache[rel] = self._load(rel)
-        return self._cache[rel]
+        return self.data[rel]
 
     def rule(self, code: str) -> dict[str, Any] | None:
         r = self._rules.get(code)
@@ -54,10 +42,25 @@ class JsonRefCatalog:
         return next((t for t in self._cached("action/ACTION_TYPES.json") if t["id"] == code), None)
 
     def action_type_by_name(self, name: str) -> dict[str, Any] | None:
-        return next((t for t in self._cached("action/ACTION_TYPES.json") if t["name"] == name), None)
+        matches = [row for row in self._cached("action/ACTION_TYPES.json") if row["name"] == name]
+        return matches[0] if len(matches) == 1 else None
 
     def action_meta(self, name: str) -> dict[str, Any] | None:
+        by_id = self.data.get("actionMetaById", {})
+        if name in by_id:
+            return by_id[name]
         return self._cached("dynamic/ACTION_META.json").get(name)
+
+    def person(self, text: str | None) -> dict[str, str] | None:
+        """只匹配完整编号/姓名token；同名或一段文字含多个人时不选人。"""
+        if not isinstance(text, str) or not text.strip():
+            return None
+        exact = [p for p in self.data.get("people", []) if p["id"] == text.strip()]
+        if exact:
+            return exact[0]
+        tokens = set(re.findall(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+", text))
+        people = [p for p in self.data.get("people", []) if p["id"] in tokens or p["name"] in tokens]
+        return people[0] if len(people) == 1 else None
 
     def ext_system(self, code: str | None) -> dict[str, Any] | None:
         if not code:
@@ -69,7 +72,7 @@ class JsonRefCatalog:
         return {
             "actionNames": self._cached("dynamic/ACTION_NAMES.json"),
             "actionSystems": self._cached("dynamic/ACTION_SYSTEMS.json"),
-            "actionMeta": self._cached("dynamic/ACTION_META.json"),
+            "actionMeta": {**self._cached("dynamic/ACTION_META.json"), **self.data.get("actionMetaById", {})},
             "objKindLabel": self._cached("dynamic/OBJ_KIND_LABEL.json"),
         }
 
@@ -90,6 +93,125 @@ class JsonRefCatalog:
         return str(int(v)) if v == int(v) else str(v)
 
 
-@lru_cache
-def get_catalog() -> JsonRefCatalog:
-    return JsonRefCatalog(get_settings().seeds_json_dir)
+async def get_catalog(session: SessionDep) -> DatabaseRefCatalog:
+    return await _load_catalog(session, "full")
+
+
+async def get_list_catalog(session: SessionDep) -> DatabaseRefCatalog:
+    """运行列表仅需姓名/系统/对象标签，不装载动作子定义、规则和全库命中统计。"""
+    return await _load_catalog(session, "list")
+
+
+async def get_meta_catalog(session: SessionDep) -> DatabaseRefCatalog:
+    return await _load_catalog(session, "meta")
+
+
+async def get_alert_catalog(
+    code: Annotated[str, Path(pattern=r"^[^\x00]+$")], session: SessionDep
+) -> DatabaseRefCatalog:
+    from app.modules.dynamic.models import Alert
+
+    rule_code = await session.scalar(select(Alert.rule_code).where(Alert.code == code))
+    return await _load_catalog(session, "alert", rule_code=rule_code)
+
+
+async def _load_catalog(session, mode: str, *, rule_code: str | None = None) -> DatabaseRefCatalog:
+    from app.modules.action.models import ActionType, TypeStatus
+    from app.modules.action.sections import action_def
+    from app.modules.admin.models import SysUser, UserStatus
+    from app.modules.dynamic.repo import recent_rule_hits
+    from app.modules.dynamic.rules_models import Rule
+    from app.modules.dynamic.sections import rule_def
+    from app.modules.integration.models import ExtSystem
+    from app.modules.static.models import ObjectStatus, ObjectType
+
+    types = []
+    if mode != "list":
+        statement = (
+            select(ActionType)
+            .where(ActionType.retired_release_id.is_(None), ActionType.status != TypeStatus.draft)
+            .order_by(ActionType.code)
+        )
+        if mode == "alert":
+            statement = statement.where(
+                ActionType.id.in_(select(Rule.action_type_id).where(Rule.code == rule_code))
+            )
+        if mode != "full":
+            statement = statement.options(raiseload("*"), joinedload(ActionType.system))
+        types = list(await session.scalars(statement))
+    actions = [action_def(row) if mode == "full" else {"id": row.code, "name": row.name} for row in types]
+    by_id = {row.id: row for row in types}
+    rules = {}
+    if mode in ("full", "alert"):
+        statement = select(Rule).where(Rule.version.is_not(None)).order_by(Rule.code)
+        if mode == "alert":
+            statement = statement.where(Rule.code == rule_code)
+        rule_rows = list(await session.scalars(statement))
+        weekly = await recent_rule_hits(session, rule_ids={row.id for row in rule_rows})
+        for row in rule_rows:
+            action = by_id.get(row.action_type_id)
+            rules[row.code] = {
+                **rule_def(row, action.code if action else None),
+                "action": action.name if action else None,
+                "confirmer": row.confirmer,
+                "weekly": weekly.get(row.id, 0),
+            }
+    people = [
+        {"id": code, "name": name}
+        for code, name in await session.execute(
+            select(SysUser.code, SysUser.name)
+            .where(SysUser.status == UserStatus.active)
+            .order_by(SysUser.code)
+        )
+    ]
+    catalog = DatabaseRefCatalog({"people": people})
+    counts = Counter(row.name for row in types)
+    meta, by_code = {}, {}
+    for row in types:
+        approval = row.approval.strip()
+        exempt = approval == "免审"
+        person = catalog.person(approval) if not exempt else None
+        item = {
+            "sysId": row.system.code if row.system else None,
+            "kind": row.target_kind,
+            "version": row.version,
+            "approver": person["name"] if person else None,
+            "approverId": person["id"] if person else None,
+            "approval": row.approval,
+            "approvalRequired": not exempt,
+            "approvalConfigured": exempt or person is not None,
+            "call": row.endpoint,
+        }
+        by_code[row.code] = item
+        if counts[row.name] == 1:
+            meta[row.name] = item
+    systems = [
+        {
+            "id": row.code,
+            "name": row.name,
+            "timeoutMs": row.timeout_ms,
+            "maxRetry": row.max_retry,
+            "retry": row.retry_text,
+            "idempotent": row.idempotent,
+            "env": row.env,
+            "status": row.status.value,
+        }
+        for row in await session.scalars(select(ExtSystem).order_by(ExtSystem.code))
+    ]
+    objects = await session.execute(
+        select(ObjectType.code, ObjectType.display_name).where(ObjectType.status == ObjectStatus.published)
+    )
+    return DatabaseRefCatalog(
+        {
+            "dynamic/RULES.json": rules,
+            "dynamic/RULE_CONFIRMER.json": {code: row["confirmer"] for code, row in rules.items()},
+            "action/ACTION_TYPES.json": actions,
+            "dynamic/ACTION_META.json": meta,
+            "actionMetaById": by_code,
+            "people": people,
+            "system/EXT_SYSTEMS.json": systems,
+            "dynamic/ACTION_NAMES.json": [row["name"] for row in actions if counts[row["name"]] == 1],
+            "dynamic/ACTION_SYSTEMS.json": [{"id": row["id"], "name": row["name"]} for row in systems],
+            "dynamic/OBJ_KIND_LABEL.json": dict(objects.all()),
+        }
+    )

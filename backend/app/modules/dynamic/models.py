@@ -138,6 +138,15 @@ class AlertLog(IdMixin, AppendOnlyTableMixin, Base):
     abnormal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
 
+class ActionRunDailyCounter(IdMixin, MutableTableMixin, Base):
+    """内部日计数：独立短事务发号，业务回滚不复用已发给外部的编号。"""
+
+    __tablename__ = "action_run_daily_counter"
+
+    day: Mapped[str] = mapped_column(String(8), nullable=False, unique=True)
+    last_value: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class ActionRun(CodeMixin, MutableTableMixin, Base):
     """动作执行记录：动作中心 ACTIONS + 动作类型页 RUNS 合并成一张表。"""
 

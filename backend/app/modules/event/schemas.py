@@ -87,7 +87,13 @@ class EventOut(ApiModel):
     outcome: EventOutcome
     subscribers: int
     dedup_key: str
-    latency_ms: int
+    latency_ms: int | None
+    source: str | None = None
+    producer_type: str | None = None
+    producer_object_type: str | None = None
+    trace_id: str | None = None
+    ingested_at: DateTimeSec | None = None
+    ontology_version: str | None = None
 
 
 class EventPageOut(ApiModel):
@@ -110,6 +116,7 @@ class EventStatsOut(ApiModel):
     dedup: int
     failed: int
     partial: int
-    p95: int
+    pending: int = 0
+    p95: int | None
     as_of: DateTimeMin
     daily: list[DailyValueOut]

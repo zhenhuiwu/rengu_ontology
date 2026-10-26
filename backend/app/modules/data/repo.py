@@ -2,7 +2,8 @@
 
 from collections.abc import Sequence
 
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, and_, case, func, or_, select
+from sqlalchemy.orm import raiseload
 
 from app.common.pagination import PageParams
 from app.common.repository import BaseRepository
@@ -17,6 +18,9 @@ def _like(kw: str) -> str:
 class DatasourceRepo(BaseRepository[Datasource]):
     model = Datasource
     not_found_message = "数据连接不存在"
+
+    def base_query(self):
+        return super().base_query().options(raiseload(Datasource.runs))
 
     def search_query(self, *, type_: DsType | None, kw: str | None) -> Select[tuple[Datasource]]:
         """前端 Connections.vue filtered：类型相等；kw = 名称 / 主机包含（区分大小写）或库名包含（不区分）。
@@ -58,7 +62,7 @@ class DatasourceTableRepo(BaseRepository[DatasourceTable]):
     model = DatasourceTable
 
     async def page_for(
-        self, datasource_id: int, kw: str | None, page: PageParams
+        self, datasource_id: int, kw: str | None, page: PageParams, mapped_sources: list[str] | None = None
     ) -> tuple[Sequence[DatasourceTable], int]:
         """前端 tables：表名包含（不区分大小写）或说明包含（区分）；顺序 = mock dsTables（seq）。"""
         stmt = self.base_query().where(DatasourceTable.datasource_id == datasource_id)
@@ -70,7 +74,19 @@ class DatasourceTableRepo(BaseRepository[DatasourceTable]):
                     DatasourceTable.comment.like(pat, escape="\\"),
                 )
             )
-        return await self.list_page(stmt.order_by(DatasourceTable.seq, DatasourceTable.id), page)
+        if mapped_sources is not None:
+            mapped = or_(
+                (DatasourceTable.schema_name + "." + DatasourceTable.name).in_(mapped_sources),
+                and_(DatasourceTable.schema_name == "public", DatasourceTable.name.in_(mapped_sources)),
+            )
+            stmt = stmt.order_by(
+                case((mapped, 0), else_=1),
+                DatasourceTable.schema_name.collate("C"),
+                DatasourceTable.name.collate("C"),
+            )
+        else:
+            stmt = stmt.order_by(DatasourceTable.seq, DatasourceTable.id)
+        return await self.list_page(stmt, page)
 
     async def all_for(self, datasource_id: int) -> Sequence[DatasourceTable]:
         stmt = self.base_query().where(DatasourceTable.datasource_id == datasource_id)

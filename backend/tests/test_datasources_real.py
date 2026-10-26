@@ -8,7 +8,9 @@ from sqlalchemy import make_url, select
 
 from app.modules.data.models import Datasource, DatasourceTable
 from app.modules.data.secrets import decrypt_password, encrypt_password
+from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectType
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 API = "/api/data/v1"
 URL = make_url(os.environ["RENGU_DATABASE_URL"])
@@ -17,6 +19,7 @@ URL = make_url(os.environ["RENGU_DATABASE_URL"])
 @pytest.fixture
 async def ds(users):
     await run_seeds(users, ["data"])
+    await grant_fixture_roles(users)
     await users.flush()
     return users
 
@@ -99,6 +102,23 @@ async def test_real_test_and_introspect(client, ds, real):
     }
     ds.add(DatasourceTable(seq=999, name="gone_mapped", object_type="旧对象", **ghost))
     ds.add(DatasourceTable(seq=998, name="gone_plain", **ghost))
+    for table, name in (("sys_role", "角色"), ("gone_mapped", "旧对象")):
+        ds.add(
+            ObjectType(
+                code="map_" + table,
+                api_name="Map" + table,
+                display_name=name,
+                obj_group="测试",
+                description="",
+                conflict_strategy=ConflictStrategy.user_edit_wins,
+                lifecycle=Lifecycle.active,
+                source_table="public." + table,
+                datasource_name=code,
+                owner="王敏",
+                properties=[],
+                seq=0,
+            )
+        )
     await ds.flush()
     r = await client.post(f"{API}/datasources/{code}/tables:refresh")
     assert r.status_code == 200 and r.json()["count"] == len(items)
@@ -120,11 +140,36 @@ async def test_real_failures(client, ds, real):
     assert (await client.get(f"{API}/datasources/{code}")).json()["status"] == "未测试"
     r = await client.post(f"{API}/datasources/{code}/tables:refresh")
     assert r.status_code == 502 and "wrong-pass-xyz" not in r.text
-    # seed 行没有密码：真连时直接提示重新填写
+    # seed 行没有密码：没有真正发起测试，也不能改写已有历史结果。
+    before = (await client.get(f"{API}/datasources/DS-001")).json()
     t = (await client.post(f"{API}/datasources/DS-001:test")).json()
     assert t["ok"] is False and "未保存密码" in t["msg"]
-    # 没驱动的类型（达梦）在 dev 仍走 mock
-    assert (await client.post(f"{API}/datasources/DS-015:test")).json()["ok"] is True
+    after = (await client.get(f"{API}/datasources/DS-001")).json()
+    assert after["status"] == before["status"] and after["lastTest"] == before["lastTest"]
+    # ERP 仍无数据库驱动；可选数据库驱动缺失另用无网络测试覆盖。
+    r = await client.post(f"{API}/datasources:test", json=_self_db(type="ERP"))
+    assert r.status_code == 422 and r.json()["code"] == "REAL_CONNECT_UNAVAILABLE"
+
+
+async def test_optional_driver_missing_fails_without_connecting(monkeypatch):
+    from app.modules.data import connector
+
+    def missing(*_args, **_kwargs):
+        raise ModuleNotFoundError("fixture missing driver")
+
+    monkeypatch.setattr(connector, "_engine", missing)
+    for kind in ("达梦 DM8", "MySQL", "人大金仓 KingbaseES"):
+        assert connector.supports(kind)
+        result = await connector.test_real(kind, {})
+        assert not result.ok and "驱动未安装" in result.message
+        with pytest.raises(RuntimeError, match="驱动未安装"):
+            await connector.inspect_tables(kind, {}, "public", ["orders"])
+
+
+async def test_legacy_mock_flag_does_not_change_real_result(client, ds, real):
+    response = await client.post(f"{API}/datasources:test", json=_self_db(mockFail=True))
+    assert response.status_code == 200 and response.json()["ok"] is True
+    assert response.json()["msg"] == "连接成功"  # 真实独立测试库，不是旧flag控制的演示结果。
 
 
 async def test_refresh_needs_real(client, ds):

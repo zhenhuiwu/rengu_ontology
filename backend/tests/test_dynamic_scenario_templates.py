@@ -37,7 +37,9 @@ def test_demo_template_matches_catalog():
 
 async def test_meta_and_template_code(dyn, client):  # noqa: F811
     meta = (await client.get(f"{API}/scenarios/meta")).json()
-    assert meta["templates"] == _tpl()
+    assert [t["code"] for t in meta["templates"]] == [t["code"] for t in _tpl()]
+    assert meta["executorConfigured"] is False
+    assert next(f for f in meta["templates"][0]["scope"] if f["key"] == "area")["options"] == meta["areas"]
     d = (await client.get(f"{API}/scenarios/SCN-0018")).json()
     assert d["templateCode"] == "demo_retail"
     new = (await client.post(f"{API}/scenarios", json={})).json()
@@ -66,21 +68,11 @@ async def test_run_validates_against_template(dyn, client, fakes):  # noqa: F811
         )
         err(r, 422, "VALIDATION_FAILED")
         assert loc in r.text
-    # 整数值写成 8.0 视同 8
+    # 合法配置仍不能伪造真实推演：缺执行器503，原配置保持。
+    before = (await client.get(f"{API}/scenarios/{sid}")).json()
     r = await client.post(f"{API}/scenarios/{sid}:run", json={**RUN, "scope": {**RUN["scope"], "weeks": 8.0}})
-    assert (
-        r.status_code == 202
-        and r.json()["scope"]["weeks"] == 8
-        and isinstance(r.json()["scope"]["weeks"], int)
-    )
-    # 促销类型为“无”时力度 / 周数按模板 offValue 归零
-    body = {**RUN, "drivers": {**RUN["drivers"], "promoDepth": 9, "promoWeeks": 3}}
-    r = await client.post(f"{API}/scenarios/{sid}:run", json=body)
-    assert (
-        r.status_code == 202
-        and r.json()["drivers"]["promoDepth"] == 0
-        and r.json()["drivers"]["promoWeeks"] == 0
-    )
+    err(r, 503, "SCENARIO_EXECUTOR_UNAVAILABLE")
+    assert (await client.get(f"{API}/scenarios/{sid}")).json() == before
 
 
 async def test_scope_options_from_facets(dyn, client, fakes, monkeypatch):  # noqa: F811
@@ -105,16 +97,16 @@ async def test_scope_options_from_facets(dyn, client, fakes, monkeypatch):  # no
     sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
     err(await client.post(f"{API}/scenarios/{sid}:run", json=ec), 422, "VALIDATION_FAILED")
     ok = {**RUN, "scope": {**RUN["scope"], "area": code}}
-    assert (await client.post(f"{API}/scenarios/{sid}:run", json=ok)).status_code == 202
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=ok)).status_code == 503
     # 能按分面值计算的引擎（替身）：可选值改为分面取值
     monkeypatch.setitem(
         st.ENGINES, "demo_retail", {**st.ENGINES["demo_retail"], "accepts_facet_values": True}
     )
     sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
-    assert (await client.post(f"{API}/scenarios/{sid}:run", json=ec)).status_code == 202
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=ec)).status_code == 503
     sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
     r = await client.post(f"{API}/scenarios/{sid}:run", json=ok)
     err(r, 422, "VALIDATION_FAILED")
     assert "scope.area" in r.text
     cat = {**RUN, "scope": {**RUN["scope"], "area": "华东大区全部", "category": _js("SC_CATEGORIES")[1]}}
-    assert (await client.post(f"{API}/scenarios/{sid}:run", json=cat)).status_code == 202
+    assert (await client.post(f"{API}/scenarios/{sid}:run", json=cat)).status_code == 503

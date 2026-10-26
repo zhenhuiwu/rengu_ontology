@@ -29,6 +29,9 @@ BODY = {
 
 @pytest.fixture
 async def ae(users):
+    from tests.function_access_support import grant_fixture_roles
+
+    await grant_fixture_roles(users)
     await run_seeds(users, ["integration", "action", "event"])
     await users.commit()
     return users
@@ -42,7 +45,7 @@ async def test_create_ext_system(client, ae):
     assert body["name"] == "测试短信网关" and body["status"] == "正常" and body["env"] == "生产"
     assert body["retry"] == retry_text(True, 2)
     # 列表能查到，actionCount = 0；第二个新建编号递增
-    items = (await client.get(f"{DATA}/ext-systems", headers=ADMIN)).json()["items"]
+    items = (await client.get(f"{DATA}/ext-systems", params={"size": 200}, headers=ADMIN)).json()["items"]
     new = next(s for s in items if s["id"] == "EXT-N01")
     assert new["actionCount"] == 0
     r = await client.post(f"{DATA}/ext-systems", json={**BODY, "name": "测试短信网关2"}, headers=ADMIN)
@@ -50,7 +53,7 @@ async def test_create_ext_system(client, ae):
 
 
 async def test_action_count_matches_linked(client, ae):
-    items = (await client.get(f"{DATA}/ext-systems", headers=ADMIN)).json()["items"]
+    items = (await client.get(f"{DATA}/ext-systems", params={"size": 200}, headers=ADMIN)).json()["items"]
     erp = next(s for s in items if s["id"] == "EXT-ERP")
     assert erp["actionCount"] >= 1
     acts = (await client.get(f"{ONT}/action-types", params={"size": 200}, headers=ADMIN)).json()["items"]
@@ -109,16 +112,12 @@ async def test_write_rejected_in_readonly(client, ae):
 
 
 async def test_test_call(client, ae):
-    items = (await client.get(f"{DATA}/ext-systems", headers=ADMIN)).json()["items"]
+    items = (await client.get(f"{DATA}/ext-systems", params={"size": 200}, headers=ADMIN)).json()["items"]
     by_status = {s["status"]: s["id"] for s in items}
-    r = await client.post(f"{DATA}/ext-systems/EXT-CRM:test", headers=ADMIN)
-    assert r.status_code == 200, r.text
-    c = r.json()
-    assert c["sysId"] == "EXT-CRM" and c["http"] == 200 and c["result"] == "成功"
-    assert c["action"].startswith("测试调用")
-    assert c["id"].startswith("CRM-T")
-    c = (await client.post(f"{DATA}/ext-systems/{by_status['降级']}:test", json={}, headers=ADMIN)).json()
-    assert c["http"] == 502 and c["result"] == "失败"
+    for code in ("EXT-CRM", by_status["降级"]):
+        r = await client.post(f"{DATA}/ext-systems/{code}:test", headers=ADMIN)
+        assert r.status_code == 503 and r.json()["code"] == "EXT_SYSTEM_TEST_UNAVAILABLE"
+        assert r.json()["details"] == {"systemId": code, "reason": "executor_not_configured"}
     r = await client.post(f"{DATA}/ext-systems/{by_status['停用']}:test", headers=ADMIN)
     assert r.status_code == 409 and r.json()["code"] == "EXT_SYSTEM_DISABLED"
     assert (await client.post(f"{DATA}/ext-systems/EXT-NOPE:test", headers=ADMIN)).status_code == 404

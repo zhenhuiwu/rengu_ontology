@@ -10,7 +10,7 @@
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query, Request
 
 from app.common.auth import CurrentUser, CurrentUserDep, require_func
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
@@ -46,21 +46,30 @@ async def ext_list_access(
     return await (_action_view if writeback else _ext_view)(user), writeback
 
 
-@router.get("/ext-systems", response_model=ExtSystemListOut, summary="外部系统列表（不分页）")
+@router.get("/ext-systems", response_model=ExtSystemListOut, summary="外部系统列表")
 async def list_ext_systems(
+    request: Request,
     session: SessionDep,
     access: Annotated[tuple[CurrentUser, int], Depends(ext_list_access)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
     # [推断] 前端外部系统页没有搜索框，kw 是后端补的可选过滤（名称 / 编号 / 厂商包含），不传 = 全部
     kw: Annotated[str | None, Query(description="名称 / 编号 / 厂商包含")] = None,
 ) -> ExtSystemListOut:
     _user, writeback = access  # writeback 只在依赖里声明一次，参数错误只报一条
     svc = ExtSystemService(session)
-    rows = await svc.search(writeback=bool(writeback), kw=kw)
-    counts = await svc.action_counts()
+    if writeback and "page" not in request.query_params and "size" not in request.query_params:
+        rows = await svc.search(writeback=True, kw=kw)
+        total, current_page, current_size = len(rows), 1, max(1, len(rows))
+    else:
+        params = PageParams(page=page, size=size)
+        rows, total = await svc.page(writeback=bool(writeback), kw=kw, page=params)
+        current_page, current_size = params.clamp(total).page, params.size
+    counts = await svc.action_counts([row.id for row in rows])
     items = [
         ExtSystemOut.model_validate(r).model_copy(update={"action_count": counts.get(r.id, 0)}) for r in rows
     ]
-    return ExtSystemListOut(items=items)
+    return ExtSystemListOut(items=items, total=total, page=current_page, size=current_size)
 
 
 @router.get(

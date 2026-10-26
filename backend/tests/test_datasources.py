@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from app.core.config import get_settings
 from app.modules.data.models import Datasource, DatasourceRun, DatasourceTable
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 _DIR = get_settings().seeds_json_dir / "system"
 DATASOURCES = json.loads((_DIR / "DATASOURCES.json").read_text("utf-8"))
@@ -25,6 +26,7 @@ def _load(name: str):
 @pytest.fixture
 async def ds(users):
     await run_seeds(users, ["data"])
+    await grant_fixture_roles(users)
     await users.flush()
     return users
 
@@ -55,7 +57,11 @@ async def test_list_matches_mock_exactly(client, ds):
     assert body["total"] == 16 and body["page"] == 1
     got = [_strip_none(x) for x in body["items"]]
     for g, m in zip(got, DATASOURCES, strict=True):
-        assert {k: v for k, v in g.items() if k != "sync"} == {k: v for k, v in m.items() if k != "sync"}
+        assert {k: v for k, v in g.items() if k not in ("sync", "objectTypes", "runs")} == {
+            k: v for k, v in m.items() if k not in ("sync", "objectTypes", "runs")
+        }
+        assert g["runs"] == []  # 列表不加载运行历史，使用独立分页读取。
+        assert g["objectTypes"] == []  # 没灌静态定义，不能用连接seed的演示映射列表代替定义。
         assert g["sync"] == m["sync"]
     assert "password" not in r.text.lower()
 
@@ -73,6 +79,7 @@ async def test_list_filter_and_paging_like_frontend(client, ds):
 
 
 async def test_meta_matches_mock(client, users):
+    await grant_fixture_roles(users)
     r = (await client.get(f"{API}/datasources/meta")).json()
     assert r == {
         "types": _load("DS_TYPES"),
@@ -85,7 +92,7 @@ async def test_meta_matches_mock(client, users):
 
 async def test_detail_and_404(client, ds):
     r = await client.get(f"{API}/datasources/DS-002")
-    assert _strip_none(r.json()) == DATASOURCES[1]
+    assert _strip_none(r.json()) == {**DATASOURCES[1], "objectTypes": []}
     r = await client.get(f"{API}/datasources/DS-999")
     assert r.status_code == 404 and r.json()["code"] == "NOT_FOUND"
 
@@ -95,7 +102,10 @@ async def test_tables_match_mock_sort_and_ref(client, ds):
         code = entry["args"][0]["id"]
         r = (await client.get(f"{API}/datasources/{code}/tables", params={"size": 200})).json()
         got = [{k: v for k, v in t.items() if not (k == "ref" and v is None)} for t in r["items"]]
-        assert got == entry["result"], code
+        want = sorted(
+            [{**t, "objectType": None} for t in entry["result"]], key=lambda t: (t["schema"], t["name"])
+        )
+        assert got == want, code
         assert r["total"] == next(d["tableCount"] for d in DATASOURCES if d["id"] == code)
     # 财务总账：门店 / 大区只作参考（参考 · 未映射）
     r = (await client.get(f"{API}/datasources/DS-002/tables", params={"kw": "store"})).json()
@@ -104,7 +114,7 @@ async def test_tables_match_mock_sort_and_ref(client, ds):
     # 已映射的排在前面
     items = (await client.get(f"{API}/datasources/DS-001/tables", params={"size": 200})).json()["items"]
     flags = [t["objectType"] is not None for t in items]
-    assert flags == sorted(flags, reverse=True) and flags[0]
+    assert flags == [False] * len(flags)
 
 
 async def test_tables_kw_comment_and_paging(client, ds):
@@ -185,26 +195,24 @@ async def test_create_validation(client, ds):
     assert r.status_code == 404
 
 
-async def test_test_saved_updates_status(client, ds):
-    r = await client.post(f"{API}/datasources/DS-015:test")  # 未测试 → 正常
-    assert r.status_code == 200
-    t = r.json()
-    assert t["ok"] is True and t["ms"] == 42 and t["time"] == "2026-10-25 15:42"
-    d = (await client.get(f"{API}/datasources/DS-015")).json()
-    assert d["status"] == "正常" and d["lastTest"] == t
-    # 异常的连接继续失败（同前端），状态不变，沿用上次的失败信息
-    t = (await client.post(f"{API}/datasources/DS-005:test")).json()
-    assert t["ok"] is False and t["msg"] == DATASOURCES[4]["lastTest"]["msg"]
-    assert (await client.get(f"{API}/datasources/DS-005")).json()["status"] == "异常"
+async def test_disabled_saved_test_preserves_database_history(client, ds, monkeypatch):
+    monkeypatch.delenv("RENGU_DS_REAL_CONNECT", raising=False)
+    for code in ("DS-015", "DS-005"):
+        before = (await client.get(f"{API}/datasources/{code}")).json()
+        r = await client.post(f"{API}/datasources/{code}:test")
+        assert r.status_code == 422 and r.json()["code"] == "REAL_CONNECT_UNAVAILABLE"
+        assert r.json()["details"]["reason"] == "disabled"
+        after = (await client.get(f"{API}/datasources/{code}")).json()
+        assert (after["status"], after["lastTest"]) == (before["status"], before["lastTest"])
     assert (await client.post(f"{API}/datasources/DS-404:test")).status_code == 404
 
 
-async def test_test_unsaved_no_write(client, ds):
+async def test_disabled_unsaved_no_write_or_fake_success(client, ds, monkeypatch):
+    monkeypatch.delenv("RENGU_DS_REAL_CONNECT", raising=False)
     before = await _count(ds, Datasource)
-    r = await client.post(f"{API}/datasources:test", json={"type": "MySQL", "host": "1.2.3.4"})
-    assert r.status_code == 200 and r.json()["ok"] is True
-    r = await client.post(f"{API}/datasources:test", json={"host": "1.2.3.4", "mockFail": True})
-    assert r.json()["ok"] is False
+    for body in ({"type": "MySQL", "host": "1.2.3.4"}, {"host": "1.2.3.4", "mockFail": True}):
+        r = await client.post(f"{API}/datasources:test", json=body)
+        assert r.status_code == 422 and r.json()["code"] == "REAL_CONNECT_UNAVAILABLE"
     assert (await client.post(f"{API}/datasources:test", json={"type": "MySQL"})).status_code == 422
     assert await _count(ds, Datasource) == before
 

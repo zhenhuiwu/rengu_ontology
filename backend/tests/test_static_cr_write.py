@@ -4,11 +4,14 @@
 目标通用 kind + 业务编码（静态、动态、Palantir 共用）；种子 cr_target = mock DRAFT_TARGETS。
 """
 
+import json
+
 import pytest
 from sqlalchemy import func, select
 
 from app.modules.static.models import ChangeRequest, CrCheck, CrItem, CrTarget
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 P = "/api/ontology/v1"
 WANG = {"X-Demo-As": "U010001"}  # 王敏（本体管理员）
@@ -32,6 +35,7 @@ async def seeded(session):
 
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
+        await grant_fixture_roles(session)
         await session.commit()
         yield session
 
@@ -219,6 +223,30 @@ async def test_put_items_validation(client, seeded):
     r = await put(client, cr, t, "conds", [{"key": "1", "op": "add", "after": {"expr": "x > 1"}}])
     assert r.status_code == 200
     assert (await one(client, cr))["targets"] == [{"kind": "rule", "id": "R-099", "isNew": True}]
+
+
+async def test_jsonb_text_validation_preserves_saved_draft(client, seeded):
+    cr = (await create(client))["id"]
+    target = {"kind": "rule", "id": "R-099", "isNew": True}
+    saved = {"key": "1", "op": "add", "after": {"expr": "x > 1"}}
+    assert (await put(client, cr, target, "conds", [saved])).status_code == 200
+    head = await one(client, cr)
+    url = f"{P}/change-requests/{cr}/items"
+    before = (await client.get(url, headers=WANG)).json()
+    invalid = ["x\x00y", ["x\x00y"], {"x": [{"y": "\x00"}]}, {"x\x00": "y"}, "\ud800"]
+    for field in ("before", "after"):
+        for value in invalid:
+            body = {"target": target, "section": "conds", "rows": [{**saved, field: value}]}
+            response = await client.put(
+                url,
+                content=json.dumps(body),
+                headers={**LIU, "Content-Type": "application/json"},
+            )
+            assert response.status_code == 422, response.text
+            assert response.json()["code"] == "VALIDATION_FAILED"
+            assert response.json()["details"]["fields"][0]["field"] == f"rows.0.{field}"
+    assert await one(client, cr) == head
+    assert (await client.get(url, headers=WANG)).json() == before
 
 
 async def test_seed_cr_keeps_mock_diffs(client, seeded):

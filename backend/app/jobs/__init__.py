@@ -60,9 +60,16 @@ async def reconcile_due() -> int:
     """周期 */15：扫 reconcile_task 里 next_at <= clock.now() 的任务，按幂等键查外部结果
     （contracts.actions.ReconcileQuery）。每轮最多 EXTRA_RECONCILE_ROUNDS 次尝试，用完 next_at=null 转人工，
     人工「再对账一轮」走 contracts.actions.ReconcileScheduler.reopen_reconcile。返回本轮处理条数。"""
-    _due_before = clock.now()
-    # EXTENSION POINT (integration / Palantir专家)
-    return 0
+    from app.modules.integration.worker import sweep
+
+    return await sweep()
+
+
+async def dispatch_actions() -> int:
+    """Dispatch only explicitly queued new actions; claimed writes are never replayed."""
+    from app.modules.integration.execution import dispatch_queued
+
+    return await dispatch_queued()
 
 
 async def export_job(export_id: str) -> None:
@@ -97,6 +104,7 @@ JOBS: list[JobSpec] = [
         "*/15 * * * *",
         f"结果未知定时对账（扫 reconcile_task.next_at，每轮 {EXTRA_RECONCILE_ROUNDS} 次）",
     ),
+    JobSpec("action.dispatch", "reconcile", "integration", dispatch_actions, "* * * * *", "持久动作执行队列"),
     JobSpec("export.run", "export", "各模块", export_job, description="导出"),
     JobSpec("admin.expire_api_keys", "maintenance", "admin", expire_api_keys, "0 * * * *", "API Key 过期"),
     JobSpec(

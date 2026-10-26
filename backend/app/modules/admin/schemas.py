@@ -1,8 +1,8 @@
 """Pydantic 输入输出（继承 app.core.schema.ApiModel，字段对齐前端 mock 的 TS interface）。"""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AfterValidator, AliasChoices, Field, field_validator, model_validator
 
 from app.common.pagination import Page
 from app.core.schema import ApiModel, CodeId, DateTimeMin, DateTimeSec, DisplayDate
@@ -10,6 +10,19 @@ from app.modules.admin.models import AuditResult, UserStatus
 
 ResultFilter = Literal["全部", "成功", "失败", "拒绝"]
 SearchField = Literal["actor", "target"]
+
+
+def export_text(value: str) -> str:
+    if "\x00" in value:
+        raise ValueError("不能包含 NUL 字符")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("不能包含无效 Unicode 字符") from exc
+    return value
+
+
+AuditExportId = Annotated[str, AfterValidator(export_text)]
 
 
 class AuditRowOut(ApiModel):
@@ -41,9 +54,22 @@ class AuditExportIn(ApiModel):
     field: SearchField = "actor"
     kw: str | None = None
 
+    @field_validator("action", "kw")
+    @classmethod
+    def valid_text(cls, value: str | None) -> str | None:
+        return export_text(value) if value is not None else None
+
 
 class AuditExportOut(ApiModel):
     job_id: str
+
+
+class AuditExportJobOut(AuditExportOut):
+    """ready = 固定成员已持久化、可以下载；没有后台生成文件阶段。"""
+
+    status: Literal["ready"] = "ready"
+    row_count: int
+    download_url: str
 
 
 # ---- 用户（Users.vue，api-index §4.1）----
@@ -64,6 +90,7 @@ class AdminUserOut(ApiModel):
     last_login: DateTimeMin | None = Field(None, validation_alias=AliasChoices("last_login_at", "lastLogin"))
     created_at: DisplayDate | None = Field(None, validation_alias=AliasChoices("joined_on", "createdAt"))
     pending_approvals: int = 0
+    lock_version: int
 
 
 class AdminUserPage(Page[AdminUserOut]):
@@ -75,6 +102,7 @@ class UserUpdateIn(ApiModel):
     dept: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=64)
     status: UserStatus
+    lock_version: int | None = Field(None, ge=1)
 
 
 class UserCreateIn(UserUpdateIn):
@@ -90,12 +118,33 @@ class ImportRowIn(ApiModel):
     dept: str = ""
     role: str = ""
 
+    @field_validator("name", "account", "dept", "role")
+    @classmethod
+    def valid_text(cls, value: str) -> str:
+        return export_text(value)
+
+
+IMPORT_MAX_ROWS = 500
+IMPORT_XLSX_MAX_BYTES = 2 * 1024 * 1024
+
 
 class ImportPreviewIn(ApiModel):
-    """二选一：rows（前端已解析好的行）或 csv（模板 CSV 原文，UTF-8，可带 BOM，首行表头）。"""
+    """rows / UTF-8 CSV / XLSX base64 三选一；只预览，不写库。"""
 
-    rows: list[ImportRowIn] | None = None
+    rows: list[ImportRowIn] | None = Field(None, max_length=IMPORT_MAX_ROWS)
     csv: str | None = Field(None, max_length=1_000_000)
+    xlsx_base64: str | None = Field(None, max_length=((IMPORT_XLSX_MAX_BYTES + 2) // 3) * 4)
+
+    @field_validator("csv")
+    @classmethod
+    def valid_csv(cls, value: str | None) -> str | None:
+        return export_text(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def one_source(self) -> "ImportPreviewIn":
+        if sum(v is not None for v in (self.rows, self.csv, self.xlsx_base64)) != 1:
+            raise ValueError("rows、csv、xlsxBase64 必须且只能提供一个")
+        return self
 
 
 class ImportRowOut(ImportRowIn):
@@ -107,7 +156,7 @@ class ImportPreviewOut(ApiModel):
 
 
 class ImportIn(ApiModel):
-    rows: list[ImportRowIn] = Field(max_length=500)
+    rows: list[ImportRowIn] = Field(max_length=IMPORT_MAX_ROWS)
 
 
 class ImportOut(ApiModel):
@@ -188,10 +237,12 @@ class ScopePropOut(ApiModel):
     obj_type: str
     prop: str
     values: list[str]
+    display_name: str | None = None
+    data_type: str = "string"
 
 
 class RolesMetaOut(ApiModel):
-    """页面常量：FUNC_PAGES、PERM_OBJECTS、SCOPE_PROPS；objActions = {对象类型名: 动作[]}。"""
+    """页面、权限对象和可执行范围属性；空本体时使用 mock 元数据。"""
 
     func_pages: list[FuncPageOut]
     perm_objects: list[PermObjectOut]

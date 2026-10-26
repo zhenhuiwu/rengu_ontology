@@ -3,7 +3,8 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.admin.models import SysRole, SysRoleMember, SysRoleScope
+from app.core.errors import AppError
+from app.modules.admin.models import SysRole, SysRoleMember, SysRoleScope, SysUser, UserStatus
 
 
 async def function_access(session: AsyncSession, user_id: int) -> tuple[dict[str, str], tuple[str, ...]]:
@@ -99,3 +100,64 @@ async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, di
             access.append(RoleAccess(view=True, default_deny=role.default_deny, scopes=tuple(scoped)))
         output[obj.code] = effective_expr(obj.code, access)
     return output
+
+
+async def active_user_names(session: AsyncSession) -> list[dict[str, str]]:
+    """构建负责人小目录；不返回账号、部门或角色信息。调用者检查对应构建页面管理权。"""
+    rows = await session.execute(
+        select(SysUser.code, SysUser.name).where(SysUser.status == UserStatus.active).order_by(SysUser.code)
+    )
+    return [{"id": code, "name": name} for code, name in rows]
+
+
+async def users_with_function_access(session: AsyncSession, required: dict[str, str]) -> list[dict[str, str]]:
+    """批量合并启用用户的真实角色，返回满足全部页面要求的小目录。"""
+    rows = await session.execute(
+        select(SysUser.code, SysUser.name, SysRole.func)
+        .join(SysRoleMember, SysRoleMember.user_id == SysUser.id)
+        .join(SysRole, SysRole.id == SysRoleMember.role_id)
+        .where(SysUser.status == UserStatus.active)
+        .order_by(SysUser.code)
+    )
+    rank = {"none": 0, "view": 1, "manage": 2}
+    users: dict[str, tuple[str, dict[str, int]]] = {}
+    for code, name, permissions in rows:
+        _, access = users.setdefault(code, (name, {}))
+        if isinstance(permissions, dict):
+            for page, level in permissions.items():
+                if isinstance(level, str):
+                    access[page] = max(access.get(page, 0), rank.get(level, 0))
+    return [
+        {"id": code, "name": name}
+        for code, (name, access) in users.items()
+        if all(access.get(page, 0) >= rank[level] for page, level in required.items())
+    ]
+
+
+async def resolve_owner_name(session: AsyncSession, code_or_name: str) -> str:
+    """新表单传用户编号；存量唯一姓名兼容。必须在调用方写事务里再校验一次。"""
+
+    def invalid(message: str) -> AppError:
+        return AppError(
+            message,
+            code="VALIDATION_FAILED",
+            status_code=422,
+            details={"fields": [{"field": "owner", "message": message}]},
+        )
+
+    if not isinstance(code_or_name, str) or not code_or_name.strip() or len(code_or_name) > 64:
+        raise invalid("请选择有效负责人")
+    value = code_or_name.strip()
+    if any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in value):
+        raise invalid("负责人包含无效字符")
+    user = await session.scalar(select(SysUser).where(SysUser.code == value))
+    if user is None:
+        matches = list(await session.scalars(select(SysUser).where(SysUser.name == value)))
+        if len(matches) > 1:
+            raise invalid("负责人姓名不唯一，请使用用户编号重新选择")
+        if not matches:
+            raise invalid("负责人不存在，请重新选择")
+        user = matches[0]
+    if user.status != UserStatus.active:
+        raise invalid("负责人已停用，请重新选择")
+    return user.name

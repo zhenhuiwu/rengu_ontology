@@ -1,15 +1,100 @@
-"""问数用到、但属于静态模块（指标目录 / 版本）的常量。
-
-[推断] 静态的 metric / ontology_release 读取接口尚未合入骨架：先直接读 export-mock 导出的
-seeds/json/qa/ 下的常量文件（T_METRICS、TUNING_DIMS、TUNING_TIMES、QA_METRIC、CUR_VERSION、
-TUNING_CUTOFF …），只读、进程内缓存。静态模块合入后改成通过 app/contracts 的 Protocol 取。
-"""
+"""QA 元数据：运行时读数据库；旧 JSON 读取仅供种子与尚未转换的旧接口。"""
 
 import json
 from functools import lru_cache
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import get_settings
+
+# 旧语义计划的传输键，只转换标识，不包含名称、版本或答案。
+METRIC_CODES = {
+    "margin": "gross_margin",
+    "orders": "order_cnt",
+    "ship": "ship_ontime",
+    "refund": "refund_rate",
+    "repeat": "repeat_sales",
+    "repeat_tax": "repeat_sales_tax",
+}
+METRIC_KEYS = {v: k for k, v in METRIC_CODES.items()}
+Metrics = dict[str, dict[str, Any]]
+TIMES = ["昨天", "本周", "上周", "本月至今", "上个月", "近 7 天", "近 30 天", "近 6 个月", "今年"]
+
+
+def metric_key(key: str) -> str:
+    return METRIC_KEYS.get(key, key)
+
+
+def metric_of(metrics: Metrics, key: str | None) -> dict[str, Any] | None:
+    return metrics.get(metric_key(key or ""))
+
+
+async def directory(
+    session: AsyncSession, ver: str | None = None, *, include_dims: bool = True
+) -> tuple[Metrics, list[str]]:
+    """一次加载请求/运行所需目录；历史缺节返回空，不能借用当前定义。"""
+    from app.modules.static.models import DefStatus, Dimension, DimLevel, Metric
+    from app.modules.static.repo import pending_change_codes
+    from app.modules.versioning.repo import ReleaseRepo
+
+    if ver:
+        release = await ReleaseRepo(session).by_ver_or_404(ver)
+        snap = release.snapshot or {}
+        rows = list((snap.get("metrics") or {}).values())
+        dimensions = list((snap.get("dimensions") or {}).values()) if include_dims else []
+    else:
+        pending = await pending_change_codes(session)
+        rows = [
+            {
+                "id": m.code,
+                "name": m.display_name,
+                "version": m.version,
+                "dimNames": m.dims or [],
+                "cr": m.review_cr if m.review_cr in pending else None,
+            }
+            for m in await session.execute(
+                select(
+                    Metric.code, Metric.display_name, Metric.version, Metric.dims, Metric.review_cr
+                ).order_by(Metric.seq, Metric.code)
+            )
+        ]
+        # T2只需层级名，不通过Dimension.object加载整棵对象/属性图。
+        levels = (
+            (
+                await session.scalars(
+                    select(DimLevel.name)
+                    .join(Dimension, Dimension.id == DimLevel.dimension_id)
+                    .where(Dimension.status == DefStatus.published)
+                    .order_by(Dimension.seq, Dimension.code, DimLevel.level_no)
+                )
+            ).all()
+            if include_dims
+            else []
+        )
+        dimensions = [{"status": "已发布", "levels": [{"name": name} for name in levels]}]
+    metrics = {
+        metric_key(m["id"]): {
+            "key": metric_key(m["id"]),
+            "code": m["id"],
+            "name": m["name"],
+            "version": m.get("version") or "",
+            "cr": m.get("cr") if not ver else (m.get("review") or {}).get("cr"),
+        }
+        for m in rows
+        if m.get("id") and m.get("name")
+    }
+    dims = [
+        x["name"]
+        for d in dimensions
+        if d.get("status") == "已发布"
+        for x in d.get("levels") or []
+        if x.get("name")
+    ]
+    if include_dims:
+        dims += [name for m in rows for name in m.get("dimNames") or [] if isinstance(name, str)]
+    return metrics, list(dict.fromkeys(dims))
 
 
 @lru_cache
@@ -53,29 +138,21 @@ def version_int(ver: str | None) -> int | None:
     return None
 
 
-def metric_label(key: str | None) -> str:
-    m = t_metrics().get(key or "")
-    return f"{m['name']} {m['version']}" if m else (key or "")
+def metric_label(key: str | None, metrics: Metrics) -> str:
+    m = metric_of(metrics, key)
+    return f"{m['name']} {m['version']}".strip() if m else f"{key or '--'}（指标不可用）"
 
 
-def plan_text(plan: dict[str, Any] | None) -> str:
+def plan_text(plan: dict[str, Any] | None, metrics: Metrics) -> str:
     """跟前端 QaTuning planText 一致：「指标 vN · 按 维度、… · 时间 · 过滤 · 排序」。"""
     if not plan:
         return ""
     dims = plan.get("dims") or []
     parts = [
-        metric_label(plan.get("metric")),
+        metric_label(plan.get("metric"), metrics),
         ("按 " + "、".join(dims)) if dims else "汇总",
         plan.get("time"),
         plan.get("filter"),
         plan.get("sort"),
     ]
     return " · ".join(p for p in parts if p)
-
-
-# [推断] 前端 EvalTab.vue 里写死的回放提示（未导出到 mock），T10 待运行回放用。
-REPLAY_HINT = {
-    "CR-0010": "按 退款率 v3（退款完成时间）重新比对",
-    "CR-0008": "同义词“发货及时率”生效后应召回 出库及时率 v1",
-    "CR-0015": "同义词“成交单量”生效后应召回 有效订单数 v1",
-}

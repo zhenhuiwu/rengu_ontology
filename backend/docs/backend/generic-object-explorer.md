@@ -1,5 +1,13 @@
 # 「使用」区通用化设计：对象搜索 / 对象详情 / 问数范围口径
 
+## 2026-10-26 真实共享预览接线
+
+- HoverCard/DrawerPanel 的 order/store/product/region 复用 `objMeta.loadMeta` 与 `objRows.getRow(live=true)`，按静态元数据展示真实字段；hidden 不显示、sensitive 显示已脱敏，敏感/隐藏标题也不显示。403/404、未绑定和网络错误显示明确状态，不回退演示对象或旧身份数据。
+- metric/object-type/rule 分别读取现有 `/metrics/{id}`、`/object-types/{id}`、`/rules/{id}` 定义；只显示真实定义字段，不编造 KPI、时间线、告警计数或质量结果。读取缓存按身份/预览/版本隔离，切换及切回均使旧请求失效。
+- 元数据真模式不再使用 mockTypes/OBJECT_PROPS/sampleOf 兜底；类型和属性完整分页，属性加载失败直接报错。后台没有返回的建议问句、指标及尚未接入的对象动作候选保持空数组。显式 mock 开发模式保留。
+- 订单共享抽屉的“补发出库单”尚无真实提交接线，真模式不显示该操作且直接调用函数也被阻止，不再提示假成功。
+- 自检：`node scripts/check-real-object-resolver.mjs`；对象行为读取另见 `check-object-behavior.mjs`。
+
 > 作者：Palantir专家 ｜ 基于 master `69daf37` ｜ 状态：待 PDE 定稿
 > 标记：【官方】Palantir 文档原文（附链接）；【笔者归纳】据官方文档整理；【推断】本项目自定，未经官方确认。
 > 原则：页面不写任何业务字段，全部由本体定义驱动；mock 数据一条不改，门店只是一套演示类型。

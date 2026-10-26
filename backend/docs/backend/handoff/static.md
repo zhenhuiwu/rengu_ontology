@@ -1,5 +1,22 @@
 # 静态本体交接（static-integ2 → static-r3 → static-r4）
 
+## 2026-10-26 静态后端真分页与轻工作流目录
+
+- 当前5类列表、属性/取值/说法、对象usage、CR列表及JSON refs/history均后端筛选分页，默认10；保留完整brief/catalog、所选编辑基线和无参数CR数组。目录必须显式完整，不以当前页冒充选项全集。
+- 新只读SQL在read_pages.py、mapping_pages.py、object_usage_pages.py；repo.page共用count/限页/focus排名，adapter隔离安全JSON展开、合并、聚合和文本匹配。无新迁移、无开发库写入；历史只投影对应快照节并请求内缓存，缺节不回当前全表。
+- properties/values/mappings先叠真实CR再筛选计数，isNew空基线有真实目标校验；说法派生和多维冲突使用完整词集，值停用/pub/草稿边界保留。历史定义与当前运行引用分开，必要运行接口标runtimeFromCurrent。
+- GET /change-requests?workflow=true为完整轻目录：摘要+detail.touches+targets，不加载diffs/events/items；忽略页参数避免截断。普通CR page与full旧调用均兼容，full按本页批量补子表。新增knowledge/link history及link-types/catalog，详见static-api §3.0。
+- 专项test_static_pagination.py覆盖SQL限页/focus、CR保存后过滤/计数、自动映射跨维冲突、JSON边界、历史不读当前定义、完整workflow与usage；另复核既有静态读、对象真实历史及指标版本窄测。前端分页由QA/PDE负责，未改mock值或删除库记录。
+
+## 2026-10-26 指标真实口径版本与回滚
+
+- 已实现 `POST /metrics/{id}:rollback`，只创建/加入真实草稿 CR，审核并随整版发布后生效；复用当前确认卡与 StartChangeModal，不新增字段表单。接口的可选 CR 参数、返回和错误详见 static-api.md §3.4。
+- `metric/def` 发布事务保存完整定义：名称/API/分组/单位/真实负责人、公式、维度、显式变体和状态。真实发布人/时间/CR/本体发布版本记入现有 `version_rows` JSON，新 metrics 快照归档这些真实版本；无迁移。新口径版本取全部历史最大值加一，显式版本须更大，无变化不虚增。
+- 首次编辑只能捕获当前可见定义基线，标记 `baseline:true`、空 release，明确记录时间并非原发布时间；旧 seed 说明行仍保留，无快照则 `canRollback:false`，不推造历史口径。版本歧义禁止恢复。
+- 回滚 CR 写完整差异和新的口径版本行；加入必须带 lockVersion，任意段已有该指标内容则409，当前定义不动。非法字段或发布失败整次事务回滚，版本账本也不留下半条。
+- 整版本体回滚恢复定义但不删除真实账本；没有引用的新指标仍按原语义物理消失，重建可从既有发布快照取回账本并继续递增，避免撞旧口径版本。旧 seed 快照保持原形，不改 append-only 记录。
+- 专项：`tests/test_metric_versions.py`；兼容 `test_metric_variants.py`、`test_static_writeback.py` 与静态 seed/GET 读取相关窄测。前端 MetricsBody/static.ts 由前端 agent 接线，后端没有改 mock 数据。
+
 负责人：静态本体负责人。分支：`static-integ`（变基在 pde-integ `215819d` 上）→ `static-integ2`（叠在上面）→ `static-r3`（变基到 master `48a7094`，只做变更单写接口）。
 接口设计细节见 `docs/backend/static-api.md`；本文件只写做到哪、代码在哪、怎么接着做。
 标注沿用 static-api.md：**[推断]** = 前端没有限制或没有体现，按页面行为推出来的。
@@ -41,7 +58,7 @@
 - qa 引用了 `explorer.py` 私有函数 `_bad` / `_scalar`（及 `facet_kind` / `facetable`）；改为公开，或经 `app/contracts/static.py` 导出（qa-pages 评审）。
 - 枚举类字符串筛选值没有长度上限，日期 / 数值限 64 字符，统一上限（qa）。
 - 指标 `variants` 由显示名后缀推出，改为显式维护；`GET /metrics` 返回 `variants`；`variant_index` 按 status 和 `ver` 过滤。
-- 对象浏览标记（searchable / filterable 等）还不能经变更单 / 快照界面编辑。
+- 对象浏览标记的后端变更单 / 快照 / 历史读取 / 回滚已补齐（见第 18 条），本轮未新增前端编辑界面。
 
 ## 变更单写接口契约（static-r3，先定形状，供动态 / Palantir 对接）
 
@@ -179,7 +196,7 @@
    - **StartChangeModal 的“变更说明”没传出来**（共用组件），所以 `reason` 目前不落库。
    - **权限**：写接口暂挂 `releases:manage`，`require_func` 是桩不拦；应改成目标页:manage（按 kind 映射页面）。
    - 新建关系 / 知识的 id 仍是前端生成（`new_link_N`、`K-NNN`），后台不分配 [推断]。
-10. **定义页其他写接口没做**：指标试算 / 口径回滚、维度匹配试算、知识解析试一试、对象导入预览 / 重新采集元数据、函数全部接口（§3.8）。
+10. **早期定义页写接口待办（历史记录）**：指标口径回滚已于2026-10-26实现，见本文顶部；其余列举的接口由各专项交接记录当前完成度（早期名单曾含指标试算、维度匹配试算、知识解析、对象导入和函数接口）。
 11. **对象历史 `kind=cr` 没接**：`service.py:211` TODO，现在可以从 cr_target 查。
 18. **本轮没做**（PDE 指示单独提）：第 1 条 restore_section、第 15 条 Releases.vue `crFallback`；Releases.vue 的“重新校验”按钮也还没接 `:validate`。
 12. **`semantic_map` 契约没做**：`app/contracts/static.py:7` TODO（static-api.md §3.7，给本体小白）。
@@ -214,7 +231,7 @@
 - 行级范围：「商品.品类」范围值按名称最接近的一级类目映射（`contracts/static.py`）；「会员.常去门店所属大区」按注册门店所属大区（static-api.md §5-15）。
 - 其余见 static-api.md 正文的 [推断] 标注和 §5 第 18 条。
 
-18. **对象浏览标记没进变更单 / 快照**：新字段只在定义表和种子里，`shapes.prop` / `sections.py` 的 properties 节没带，改标记暂时只能改种子或直接改库；`/meta` 忽略 `?ver`；指标 `variants` 也只在 meta.metrics 里返回，`GET /metrics` 形状没加。从 `shapes.py` 属性形状加字段 + 快照节测试开始。
+18. **对象浏览属性标记生命周期已补齐（2026-10-26）**：`searchable/filterable/sortable/listed/listWidth/visibility/format/unit/order` 经对象 properties 变更单写回、属性接口、当前快照、新发布快照、整版回滚和 `/meta?ver=` 全链路保存。布尔/可见性/整数范围/可空格式与单位按定义类型校验；hidden 不可筛选/排序/列表展示，敏感属性不可分面，受控 `backing_column` 不开放变更。既有种子版本快照保持旧形状以兼容 append-only 发布表；旧快照读取/恢复只由静态初值和原始种子顺序补齐标记，不借用当前修改。新发布复用旧节时也会补齐字段。验证见 `test_static_explorer.py`、`test_static_writeback.py`。**仍待后续**：指标 `variants` 仅在 meta.metrics 返回，`GET /metrics` 未加显式变体字段（同第 21 条）。
 19. **facets 只覆盖 sql_guard 登记过的类型**（门店、订单、商品等）；其他类型 `hasData:false`、空取值。新类型要先在 sql_guard 登记业务表，再在 `explorer_meta.json` 写 `backing`。行级范围 `row_filter` 目前返回 None（本体小白接入后自动生效）。
 20. **long_text、动作 `bulk`** 按设计文档下一轮再做。
 21. **（下一轮）指标 `variants` 是按显示名末尾「（…）」推出来的**（`explorer.metric_variants`）：名字不规范的指标不会成组。应改为在指标定义 / 变更单里显式维护变体，种子只做初值。
@@ -255,3 +272,29 @@
 3. 建议顺序：第 1 条（restore_section，在 `begin_nested` 里按外键顺序写，测试：回滚后 GET 返回旧定义）→ 第 15 条 → 第 9 条剩余（发布展开 cr_item）。
 4. 新迁移接在当时的单 head 后面；不要改 static_0002 的 revision。
 5. 每做完一条，更新本文件「已完成 / 未完成」，并在 static-api.md 对应行写「已实现」。
+
+## 2026-10-26 静态试算与轻工作流补充
+
+- 5个Body与Releases的工作流摘要统一使用`GET /change-requests?workflow=true`；完整轻目录不受page/size/focus截断，不载入items/events/整份detail。列表保持真实SQL分页，单选详情单独读取。
+- 指标现有“试算”按钮接`POST /metrics/{id}:trial {crId?,range:"30d"}`，不落库、不回退mock。按指定变更单已保存行覆盖公式/版本，当前公式不改；前端按身份/版本/选中指标/草稿与lockVersion隔离异步结果。mock原行为不改。
+- 公开`app.contracts.static.evaluate_metric(session,user,code,*,ver=None,cr_id=None,days=30,period="day")`；days限定1..93，period为day/month；结果rows.value是十进制字符串或null，空数据不补日期/零值，dataCutoff是实际可见数据最大时间。只执行单受治理对象的SUM/COUNT/AVG/MIN/MAX、四则、明确属性标量比较；经sql_guard注入继承行级范围。
+- 当前演示指标存在缺退款/成本实体、自然语言公式、共用的时间定义不匹配等，真实试算明确422 `METRIC_TRIAL_UNAVAILABLE`；不推造税率、默认业务过滤或缺失历史映射。没有新增时间字段表单，完整执行定义的设计仍待用户决定。历史快照没有完整执行映射时不借用当前映射。纯POST允许ver/preview；真正写操作仍统一403。
+- 现有“重新校验”及提交/通过前校验同事务生成真实静态影响引用，写cr_impact并刷新detail.impact；覆盖关系端点、维度归属、公式明确提及、允许维度、显式variants及知识适用范围。detail.analysisScope明确当前仅静态结构，运行模块未连接的下游计数不推测。
+- 单指标已保存formula/version改动，可执行时按近90日真实数据重聚合为月，分别执行旧/新口径，写cr_trial与detail.trial；缺执行语义时无虚假对比，detail.trialUnavailable说明原因、V14警告。多个指标不能混合不同单位，按现有cr_trial每月唯一模型明确未执行；如需同时对比须先设计指标分组。
+- 试跑值带trialActor；CR详情/full列表仅原试算用户可见业务数值，preview按预览用户判断；其他人保留不可见原因。再保存/放弃目标会清除生成的旧分析与试跑，防止展示过期值。
+- semantic_map未发现前端入口/调用者，遵照“无按钮不做”保留契约待办，没有发明HTTP或表单。
+- 窄验证：独立库`rengu_static_finish_test`的`test_static_trials.py`、`test_static_cr_write.py`及workflow轻目录专项通过；`vue-tsc --noEmit`通过。全量统一验收由主任务完成。
+
+### 2026-10-26 后续补齐
+
+- 真实行级权限已接数据库角色成员/对象授权/范围，未知或无授权默认拒绝，不再使用“登录即全量”的row_filter桩；详情见`backend/docs/backend/row-access.md`。新测试包含真实业务API、分面、继承、撤权与错误映射；开发角色与业务记录未改。
+- 指标现有表单可用最小公式：新指标填写`COUNT(order.created_at) WHERE order.status <> 已取消`、单位单、v1、真实负责人。公式明确COUNT唯一日期属性、且没有既有时间配置时，直接按该明确事件时间试算；不加新表单、不选默认业务日期。闭环测试创建→保存CR→审核→发布→试算→编辑公式*2/v2→发布→试算通过，实际新指标`def_rows=[]`。原演示指标不改，错误/缺失执行定义继续明确422。
+- 影响分析通过公开`app.contracts.dynamic.definition_usages`合并真实已发布规则和当前生命周期引用，可由静态结构影响扩展到下游；不读演示命中计数。试跑记录权限摘要，当前身份/数据权限变化后隐藏旧业务数值。
+- Releases改动清单dpage接既有`/change-requests/{id}/diffs`真实SQL分页；后端旧JSON按ordinality在前、CrItem按seq/id在后，SQL UNION/COUNT/LIMIT/OFFSET后仅装本页行/目标名，默认10并越界收拢，不加载events/完整detail。选单GET支持`includeDiffs=false`省去全量CrItem；默认true不影响完整编辑缓冲。专项验证30条混合旧/新改动、页2/末页、轻详情、完整兼容均通过。
+
+### 2026-10-26 完整维度回滚与遗留快照校验
+
+- 完整恢复先校验全部目标维度的层级格式、取值键唯一性及有效取值的层级引用，校验失败不删除/修改现有定义。层级与取值按目标快照在同一事务恢复；仅编辑层级时，当前有效取值的删层防护继续保留。
+- 快照外的当前取值仍保留为失效历史，不物理丢失；恢复后所有有效取值须引用目标层级。`restore_sections`任一节失败时，先前节的写回一并回滚。
+- 原始`v2026.09.3`的`org`快照只有“省份/门店”层级，却含6条有效“大区”取值，属于已有不一致历史数据。本轮不改mock、seed、开发库或猜造历史省份数据；对此快照明确`WRITEBACK_FAILED`，不能宣称已成功回滚。动态section单测仅登记其自身builders；静态专项单独证明坏旧快照拒绝和全事务原子性。
+- 专项：`test_dimension_levels.py`与动态section历史恢复节点通过；测试库为独立`rengu_reg_roles_test`。

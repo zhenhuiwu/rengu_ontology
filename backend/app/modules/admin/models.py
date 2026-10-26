@@ -110,6 +110,23 @@ class AuditLog(CodeMixin, AppendOnlyTableMixin, Base):
 # ---- 角色与权限（Roles.vue，api-index §4.2；admin_0003）----
 
 
+class AuditExportJob(CodeMixin, AppendOnlyTableMixin, Base):
+    """可下载的固定成员清单；不代表后台已生成 CSV 文件。"""
+
+    __tablename__ = "audit_export_job"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=False)
+    filters: Mapped[dict] = mapped_column(JsonType, nullable=False)
+
+
+class AuditExportRow(IdMixin, Base):
+    __tablename__ = "audit_export_row"
+    __table_args__ = (UniqueConstraint("job_id", "audit_id"),)
+
+    job_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("audit_export_job.id"), nullable=False)
+    audit_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("audit_log.id"), nullable=False)
+
+
 class SysRole(CodeMixin, MutableTableMixin, Base):
     """角色。code = 前端 Role.id（R-01）。
 

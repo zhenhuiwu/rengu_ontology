@@ -237,8 +237,9 @@ async def test_append_only_holds_with_fk_referencing_releases(seeded):
     rid = await seeded.scalar(text("SELECT id FROM ontology_release WHERE ver='v2026.10.3'"))
     await seeded.execute(text("INSERT INTO _probe_release_ref (release_id) VALUES (:r)"), {"r": rid})
     sp = await seeded.begin_nested()  # 不带 CASCADE：被外键检查拒绝（同样清不掉）
-    with pytest.raises(DBAPIError, match="foreign key"):
+    with pytest.raises(DBAPIError) as fk:
         await seeded.execute(text("TRUNCATE ontology_release"))
+    assert fk.value.orig.sqlstate == "0A000"
     await sp.rollback()
     await _assert_append_only(seeded)
     # 引用方的行也没被 CASCADE 清掉

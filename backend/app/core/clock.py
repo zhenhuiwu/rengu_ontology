@@ -1,7 +1,7 @@
 """统一时钟。**所有“现在”都从这里取**，不要直接调用 datetime.now() / date.today() / SQL now()。
 
-- 生产（RENGU_ENV=prod）：真实时间；
-- dev / test / seed：固定在 RENGU_FIXED_NOW（默认 2026-10-25T15:42:00+08:00，和前端 mock 的“现在”一致），
+- 开发 / 生产（RENGU_ENV=dev/prod）：默认真实时间；
+- test（以及显式冻结的种子重放）：固定在 RENGU_FIXED_NOW（默认 2026-10-25T15:42:00+08:00），
   这样“今天 / 近 7 天 / 昨天 21:17 / 超时 30 分钟”等逻辑和页面上看到的完全一样。
 - 后台任务（procrastinate 等）里的到期、对账间隔、“今天”判断同样用 now() / today()。
 - 测试里临时改时间：`with clock.frozen(datetime(...)):`。

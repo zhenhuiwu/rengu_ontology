@@ -16,6 +16,13 @@ from sqlalchemy.engine import make_url
 from tests.conftest import BASE_URL
 
 SKELETON = {"0001", "0002", "0003"}
+# 既有子功能/跨模块revision归属；保留已应用的revision，不为目录名重写迁移历史。
+REVISION_OWNERS = {
+    "data_quality_0006": ("data",),
+    "quality_cr_0011": ("data",),
+    "palantir_0007": ("action", "event"),
+}
+BARE_FILENAMES = {"data_quality_0006.py", "functions_0008.py", "quality_cr_0011.py"}
 
 # public 下用户定义的类型：enum(e) / 复合(c，只算 CREATE TYPE … AS，不算表的行类型) /
 # domain(d) / range(r, m)。
@@ -52,9 +59,13 @@ def test_single_head_and_module_revision_names():
         if r.revision in SKELETON:
             continue
         assert MODULE_REV.match(r.revision), r.revision
-        assert Path(r.path).name.startswith(f"{r.revision}_"), (r.revision, r.path)
+        assert Path(r.path).name in BARE_FILENAMES or Path(r.path).name.startswith(f"{r.revision}_"), (
+            r.revision,
+            r.path,
+        )
         module = r.revision.rsplit("_", 1)[0]
-        assert (Path("app/modules") / module).is_dir(), f"{r.revision}：app/modules/{module} 不存在"
+        for owner in REVISION_OWNERS.get(r.revision, (module,)):
+            assert (Path("app/modules") / owner).is_dir(), f"{r.revision}：app/modules/{owner} 不存在"
 
 
 async def test_upgrade_downgrade_base_upgrade_on_temp_db():

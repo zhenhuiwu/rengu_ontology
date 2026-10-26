@@ -183,3 +183,40 @@ async def test_unknown_user_has_no_role_bypass_and_unknown_identity_is_401(clien
     response = await client.get(P + "/object-types", headers=headers)
     assert response.status_code == 403
     assert (await client.get(P + "/object-types", headers={"X-Demo-As": "NO-SUCH-USER"})).status_code == 401
+
+
+async def test_build_owner_directory_is_db_active_and_target_authorized(client, authorized):
+    headers, user, role = await actor(authorized, "owners", {"object-types": "manage"})
+    authorized.add_all(
+        [
+            SysUser(code="U-A-disabled", name="停用负责人", status=UserStatus.disabled),
+            SysUser(code="U-A-pending", name="待激活负责人", status=UserStatus.pending),
+        ]
+    )
+    await authorized.flush()
+    for kind in ["object", "metric", "dimension", "action", "event"]:
+        role.func = {TARGET_PAGE[kind]: "manage"}
+        await authorized.flush()
+        response = await client.get(P + "/build/owners", params={"kind": kind}, headers=headers)
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        expected = (
+            await authorized.execute(
+                select(SysUser.code, SysUser.name)
+                .where(SysUser.status == UserStatus.active)
+                .order_by(SysUser.code)
+            )
+        ).all()
+        assert rows == [{"id": code, "name": name} for code, name in expected]
+        assert all(set(row) == {"id", "name"} for row in rows)
+        assert {"U-A-disabled", "U-A-pending"}.isdisjoint(row["id"] for row in rows)
+        role.func = {TARGET_PAGE[kind]: "view"}
+        await authorized.flush()
+        assert (
+            await client.get(P + "/build/owners", params={"kind": kind}, headers=headers)
+        ).status_code == 403
+    current = await client.get("/api/admin/v1/me/row-scope", headers=headers)
+    assert current.status_code == 200 and current.json()["userName"] == user.name
+    assert (
+        await client.get(P + "/build/owners", params={"kind": "arbitrary"}, headers=headers)
+    ).status_code == 422

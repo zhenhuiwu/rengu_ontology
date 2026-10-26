@@ -10,13 +10,15 @@
 
 import math
 from collections.abc import Sequence
-from datetime import datetime
-from decimal import Decimal
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import Date, Float, and_, case, cast, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.pagination import PageParams
 from app.common.row_filter import apply_row_filter
+from app.core.config import get_settings
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS
 from app.modules.biz.models import BizOrder, Store
 from app.modules.static.models import Metric
@@ -42,29 +44,69 @@ async def store_ranking(
     created_from: datetime | None,
     created_until: datetime | None,
     created_before: datetime | None,
-) -> list[dict]:
+    page: PageParams,
+) -> tuple[list[dict], int]:
     stmt = select(BizOrder.store_id, BizOrder.amount, BizOrder.created_at_biz)
     stmt = await apply_row_filter(stmt, user, "order", ORDER_COLUMNS, ORDER_LINKS)
-    orders = (await session.execute(stmt)).all()
-    store_ids = {o.store_id for o in orders}
-    if not store_ids:
-        return []
-    stores = (await session.scalars(select(Store).where(Store.id.in_(store_ids)).order_by(Store.id))).all()
-    sums: dict[int, Decimal] = {sid: Decimal(0) for sid in store_ids}
-    cnts: dict[int, int] = {sid: 0 for sid in store_ids}
-    for o in orders:
-        t = o.created_at_biz
-        if created_from is not None and t < created_from:
-            continue
-        if created_until is not None and t > created_until:
-            continue
-        if created_before is not None and t >= created_before:
-            continue
-        sums[o.store_id] += o.amount
-        cnts[o.store_id] += 1
-    rows = [
-        {"id": s.code, "name": s.name, "city": s.city, "cnt": cnts[s.id], "amount": ex_tax(float(sums[s.id]))}
-        for s in stores
+    visible = stmt.subquery()
+    conditions = []
+    if created_from is not None:
+        conditions.append(visible.c.created_at_biz >= created_from)
+    if created_until is not None:
+        conditions.append(visible.c.created_at_biz <= created_until)
+    if created_before is not None:
+        conditions.append(visible.c.created_at_biz < created_before)
+    inside = and_(*conditions) if conditions else true()
+    grouped = (
+        select(
+            visible.c.store_id,
+            func.sum(case((inside, visible.c.amount), else_=0)).label("amount"),
+            func.count().filter(inside).label("cnt"),
+        )
+        .group_by(visible.c.store_id)
+        .subquery()
+    )
+    total = int(await session.scalar(select(func.count()).select_from(grouped)) or 0)
+    p = page.clamp(total)
+    # Match the displayed JS rounding before ordering; equal rounded amounts retain store.id order.
+    net = func.floor(cast(grouped.c.amount, Float) / (1 + TAX_RATE) * 100 + 0.5) / 100
+    statement = (
+        select(Store.code, Store.name, Store.city, grouped.c.cnt, grouped.c.amount)
+        .join(grouped, grouped.c.store_id == Store.id)
+        .order_by(net.desc(), Store.id)
+        .limit(p.size)
+        .offset(p.offset)
+    )
+    rows = (await session.execute(statement)).all()
+    return [
+        {
+            "id": row.code,
+            "name": row.name,
+            "city": row.city,
+            "cnt": row.cnt,
+            "amount": ex_tax(float(row.amount)),
+            "rank": p.offset + i + 1,
+        }
+        for i, row in enumerate(rows)
+    ], total
+
+
+async def sales_daily(session: AsyncSession, user: object, *, cutoff: datetime, days: int) -> list[dict]:
+    """按业务时区下单日汇总实付，复用排行的统一 13% 折算；不是含退款的通用指标求值。"""
+    tz = get_settings().display_tz
+    last = cutoff.astimezone(ZoneInfo(tz)).date()
+    first = last - timedelta(days=days - 1)
+    start = datetime.combine(first, datetime.min.time(), tzinfo=ZoneInfo(tz))
+    day = cast(func.timezone(tz, BizOrder.created_at_biz), Date)
+    stmt = (
+        select(day.label("day"), func.sum(BizOrder.amount).label("amount"))
+        .where(BizOrder.created_at_biz >= start, BizOrder.created_at_biz <= cutoff)
+        .group_by(day)
+        .order_by(day)
+    )
+    stmt = await apply_row_filter(stmt, user, "order", ORDER_COLUMNS, ORDER_LINKS)
+    amounts = {r.day: ex_tax(float(r.amount)) for r in (await session.execute(stmt)).all()}
+    return [
+        {"date": (d := first + timedelta(days=i)).isoformat(), "value": amounts.get(d, 0.0)}
+        for i in range(days)
     ]
-    rows.sort(key=lambda r: -r["amount"])  # Python 排序稳定：同额保持 store.id 顺序
-    return [{**r, "rank": i + 1} for i, r in enumerate(rows)]

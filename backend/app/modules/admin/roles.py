@@ -1,8 +1,7 @@
 """角色与权限（Roles.vue，api-index §4.2）：数据访问 + 业务逻辑。不 commit。
 
 - 角色、行级范围、成员三张表（admin_0003）。
-- 页面常量 FUNC_PAGES / PERM_OBJECTS / SCOPE_PROPS 读 seeds/json/system 下 export-mock 导出的同名 JSON
-  （与前端 mock 逐字节一致），不入库。
+- 功能页面读 seeds/json/system；对象和范围属性读已发布本体，空本体用同名 mock JSON 兜底。
 - 内置角色：改名、改权限、增删范围、删除一律 403（Roles.vue locked = readonly || builtIn）；成员可以改。
 - 有效权限逐行照 mock/roles.ts effectiveAccess()：功能取各角色最高级别；
   对象可见 = 任一角色可查看（defaultDeny 角色没配该对象范围时不算授予）；
@@ -25,7 +24,15 @@ from app.common.repository import BaseRepository
 from app.core.clock import now
 from app.core.config import get_settings
 from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound
-from app.modules.admin.models import SysOrg, SysRole, SysRoleMember, SysRoleScope, SysTenant, SysUser
+from app.modules.admin.models import (
+    SysOrg,
+    SysRole,
+    SysRoleMember,
+    SysRoleScope,
+    SysTenant,
+    SysUser,
+    UserStatus,
+)
 from app.modules.admin.repo import insert_audit, lock_code_seq
 
 # ---- 页面常量 ----
@@ -89,16 +96,84 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
     return out
 
 
-def scope_props() -> list[dict[str, Any]]:
-    return _meta_json("SCOPE_PROPS")
+async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dict[str, Any]]:
+    """可筛选的离散属性 ∩ 已登记的行级依据；取值与实际执行范围使用同一受控列。
+
+    当前没有独立 permissionBasis 标记，不能把所有 filterable 属性都当作可执行权限依据。
+    RowScope 只存字符串且支持 = / ∈，所以不开放数值、时间、布尔和复合类型。
+    """
+    from app.common.row_filter import apply_row_filter
+    from app.common.sql_guard import governed_tables
+    from app.modules.static.explorer import facetable
+    from app.modules.static.models import ObjectStatus, ObjectType
+
+    objects = list(
+        (
+            await session.scalars(
+                select(ObjectType)
+                .where(ObjectType.status == ObjectStatus.published)
+                .order_by(ObjectType.seq, ObjectType.code)
+            )
+        ).all()
+    )
+    if not objects:
+        return _meta_json("SCOPE_PROPS")
+    tables = {g.object_type: g for g in governed_tables().values() if not g.inherit}
+    out = []
+    for obj in objects:
+        g = tables.get(obj.code)
+        if g is None:
+            continue
+        for p in obj.properties:
+            if not facetable(p) or p.data_type not in {"string", "enum"}:
+                continue
+            # 兼容本体显示名与历史权限名不同（如 所属大区 / 区域），仅按同一受控列匹配。
+            basis = next(
+                (
+                    (name, field)
+                    for name, field in g.field_of_prop.items()
+                    if name == p.display_name or (p.backing_column and field == p.backing_column)
+                ),
+                None,
+            )
+            if basis is None:
+                continue
+            name, field = basis
+            source = g.table
+            if "." in field:
+                link_id, key = field.split(".", 1)
+                link = g.links.get(link_id)
+                col = link.target_columns.get(key) if link else None
+                if link is not None:
+                    source = source.join(link.target, link.target_key == link.local)
+            else:
+                col = g.columns.get(field)
+            if col is None:
+                continue
+            stmt = select(col).select_from(source).where(col.is_not(None)).distinct()
+            stmt = await apply_row_filter(stmt, user, obj.code, g.columns, g.links)
+            vals = (await session.scalars(stmt)).all()
+            values = {str(getattr(v, "value", v)) for v in vals}
+            aliases = g.value_alias.get(name, {})
+            out.append(
+                {
+                    "objType": obj.display_name,
+                    "prop": name,
+                    "displayName": p.display_name,
+                    "dataType": p.data_type,
+                    # 真实值不能经旧范围别名变成另一取值；旧角色仍由执行器兼容。
+                    "values": sorted(v for v in values if aliases.get(v, v) == v),
+                }
+            )
+    return out
 
 
-async def roles_meta(session: AsyncSession) -> dict[str, Any]:
+async def roles_meta(session: AsyncSession, user: CurrentUser) -> dict[str, Any]:
     po = await load_perm_objects(session)
     return {
         "func_pages": func_pages(),
         "perm_objects": po,
-        "scope_props": scope_props(),
+        "scope_props": await load_scope_props(session, user),
         "obj_actions": {o["name"]: o["actions"] for o in po},
     }
 
@@ -277,6 +352,72 @@ class RoleService:
 
     async def list_all(self) -> list[RoleBundle]:
         return await self.bundles(await self.repo.all_roles())
+
+    async def object_permissions(self, object_id: str, page: PageParams):
+        """对象页的只读角色投影：SQL取一页角色，不加载用户或成员明细。"""
+        from app.modules.static.models import ObjectStatus, ObjectType
+
+        obj = (
+            await self.session.execute(
+                select(ObjectType.code, ObjectType.display_name, ObjectType.api_name).where(
+                    ObjectType.code == object_id, ObjectType.status == ObjectStatus.published
+                )
+            )
+        ).one_or_none()
+        if obj is None:
+            raise NotFound("已发布对象类型不存在")
+        roles, total = await self.repo.list_page(select(SysRole).order_by(SysRole.code), page)
+        items = []
+        for bundle in await self.bundles(list(roles)):
+            matches = [p for p in bundle.role.objs if p.get("api") == obj.api_name]
+            # 与实际鉴权一致：同API配置歧义时，不展示为授予权限。
+            perm = matches[0] if len(matches) == 1 else None
+            labels = {obj.code, obj.api_name, obj.display_name}
+            if perm and perm.get("objType"):
+                labels.add(perm["objType"])
+            items.append(
+                {
+                    "id": bundle.role.code,
+                    "name": bundle.role.name,
+                    "defaultDeny": bundle.role.default_deny,
+                    "objs": [
+                        {
+                            "objType": perm.get("objType", ""),
+                            "api": obj.api_name,
+                            "view": perm.get("view") is True,
+                            "export": perm.get("export") is True,
+                            "actions": perm.get("actions") or [],
+                        }
+                    ]
+                    if perm
+                    else [],
+                    "scopes": [s for s in bundle.scopes if perm and s.obj_type in labels],
+                    "memberCount": bundle.member_count,
+                }
+            )
+        return {"id": obj.code, "name": obj.display_name, "api": obj.api_name}, items, total
+
+    async def state(self):
+        """Complete edit baseline in bulk; display-only member tables use members() SQL pages."""
+        roles = await self.list_all()
+        users = list(
+            await self.session.scalars(
+                select(SysUser).where(SysUser.role.is_not(None)).order_by(SysUser.code)
+            )
+        )
+        pairs = (
+            await self.session.execute(
+                select(SysRole.code, SysUser)
+                .select_from(SysRole)
+                .join(SysRoleMember, SysRoleMember.role_id == SysRole.id)
+                .join(SysUser, SysUser.id == SysRoleMember.user_id)
+                .order_by(SysRole.code, SysRoleMember.seq, SysRoleMember.id)
+            )
+        ).all()
+        members = {r.role.code: [] for r in roles}
+        for code, user in pairs:
+            members[code].append(user)
+        return roles, members, users
 
     async def _get(self, code: str) -> SysRole:
         return await self.repo.get_by_code_or_404(code)
@@ -478,7 +619,8 @@ class RoleService:
         ip: str,
     ) -> SysRoleScope:
         r = await self._editable(code)
-        meta = next((p for p in scope_props() if p["objType"] == obj_type and p["prop"] == prop), None)
+        props = await load_scope_props(self.session, user)
+        meta = next((p for p in props if p["objType"] == obj_type and p["prop"] == prop), None)
         if meta is None:
             raise RoleValidation("属性不是权限依据", details={"objType": obj_type, "prop": prop})
         vals = list(dict.fromkeys(values))
@@ -533,7 +675,11 @@ class RoleService:
             u.code: u
             for u in (
                 await self.session.scalars(
-                    select(SysUser).where(SysUser.code.in_(codes), SysUser.role.is_not(None))
+                    select(SysUser)
+                    .where(SysUser.code.in_(codes), SysUser.role.is_not(None))
+                    .order_by(SysUser.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
             ).all()
         }
@@ -541,6 +687,11 @@ class RoleService:
         if missing:
             raise NotFound("用户不存在", details={"ids": missing})
         have = await self.repo.member_user_ids(r.id)
+        inactive = [c for c in codes if users[c].id not in have and users[c].status != UserStatus.active]
+        if inactive:
+            raise AppError(
+                "只能添加启用用户", code="VALIDATION_FAILED", status_code=422, details={"ids": inactive}
+            )
         add = [users[c] for c in codes if users[c].id not in have]
         start = await self.repo.min_member_seq(r.id) - len(add)
         for i, u in enumerate(add):

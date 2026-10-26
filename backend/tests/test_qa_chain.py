@@ -8,13 +8,14 @@ from app.modules.qa import chain
 from app.modules.qa.llm import FakeLLM, get_llm
 from app.modules.qa.models import QaQueryLog, QaTurn
 from app.seeds.loader import run_seeds
+from tests.qa_access_support import seed_qa_access
 
 URL = "/api/qa/v1/sessions/S0001/turns"
 
 
 @pytest.fixture
 async def qa(users, client, session):
-    await run_seeds(users, ["qa", "biz"])
+    await seed_qa_access(users)
     await users.flush()
 
     async def _conn():
@@ -84,7 +85,7 @@ async def test_guard_rejects_non_whitelisted_table(qa):
 
 
 async def test_no_key_503(qa, monkeypatch):
-    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "")
     r = await qa.post(URL, json={"question": "华东大区有多少家门店？"})
     assert r.status_code == 503, r.text
     assert r.json()["code"] == "QA_LLM_UNAVAILABLE"

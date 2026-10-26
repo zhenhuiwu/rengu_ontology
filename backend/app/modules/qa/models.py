@@ -138,6 +138,7 @@ class RunStatus(LabelEnum):
     queued = "待运行"
     running = "运行中"
     done = "已完成"
+    failed = "失败"
 
 
 class FailKind(LabelEnum):
@@ -509,7 +510,16 @@ class QaEvalQuestion(CodeMixin, MutableTableMixin, Base):
 
 class QaEvalRun(CodeMixin, OntologyVersionMixin, MutableTableMixin, Base):
     __tablename__ = "qa_eval_run"
-    __table_args__ = (Index("ix_qa_eval_run_run_at", "run_at"), {"comment": "评测运行"})
+    __table_args__ = (
+        Index("ix_qa_eval_run_run_at", "run_at"),
+        Index(
+            "uq_qa_eval_run_active_job",
+            text("(1)"),
+            unique=True,
+            postgresql_where=text("queue_job_id IS NOT NULL AND status IN ('queued', 'running')"),
+        ),
+        {"comment": "评测运行"},
+    )
 
     run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     time_label: Mapped[str | None] = mapped_column(String(16))
@@ -525,6 +535,9 @@ class QaEvalRun(CodeMixin, OntologyVersionMixin, MutableTableMixin, Base):
     note: Mapped[str | None] = mapped_column(Text)
 
     fails: Mapped[list["QaEvalFail"]] = relationship(order_by="QaEvalFail.id")
+    worker_id: Mapped[str | None] = mapped_column(String(32))
+    queue_job_id: Mapped[int | None] = mapped_column(BigInteger)
+    execution_context: Mapped[dict | None] = mapped_column(JsonType)
 
 
 class QaEvalFail(IdMixin, AppendOnlyTableMixin, Base):

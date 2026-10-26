@@ -1,10 +1,11 @@
 import zlib
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from typing import Any
 
-from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Text, case, cast, column, func, literal, text
+from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by, insert
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
 PG_MAX_PARAMS = 32767
@@ -27,6 +28,40 @@ def dedupe_by_key(rows: Sequence[dict[str, Any]], key: Sequence[str]) -> list[di
 
 class PostgresAdapter:
     name = "postgresql"
+
+    def json_array_rows(self, expression: Any, *, as_text: bool = False) -> Any:
+        value = cast(expression, JSONB)
+        safe = case((func.jsonb_typeof(value) == "array", value), else_=cast(literal("[]"), JSONB))
+        expand = func.jsonb_array_elements_text if as_text else func.jsonb_array_elements
+        return (
+            expand(safe)
+            .table_valued(column("value", Text if as_text else JSONB), with_ordinality="ordinality")
+            .render_derived()
+            .lateral()
+        )
+
+    def json_object(self, **values: Any) -> Any:
+        pairs = [item for key, value in values.items() for item in (key, value)]
+        return func.jsonb_build_object(*pairs, type_=JSONB)
+
+    def json_array(self, *values: Any) -> Any:
+        return func.jsonb_build_array(*values, type_=JSONB)
+
+    def text_aggregate(self, value: Any, separator: str, order: Any) -> Any:
+        return func.string_agg(value, aggregate_order_by(literal(separator), *order))
+
+    def text_matches(self, value: Any, pattern: str) -> Any:
+        return value.op("~")(pattern)
+
+    def json_merge(self, *values: Any) -> Any:
+        def safe(value):
+            value = cast(value, JSONB)
+            return case((func.jsonb_typeof(value) == "object", value), else_=cast(literal("{}"), JSONB))
+
+        result = safe(values[0])
+        for value in values[1:]:
+            result = result.op("||")(safe(value))
+        return result
 
     async def upsert(
         self,
@@ -54,3 +89,26 @@ class PostgresAdapter:
 
     async def xact_lock(self, session: AsyncSession, name: str) -> None:
         await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": zlib.crc32(name.encode())})
+
+    async def try_xact_lock(self, session: AsyncSession, name: str) -> bool:
+        return bool(
+            await session.scalar(
+                text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": zlib.crc32(name.encode())}
+            )
+        )
+
+    @asynccontextmanager
+    async def session_lock(self, connection: AsyncConnection, name: str) -> AsyncIterator[None]:
+        params = {"k": zlib.crc32(name.encode())}
+        try:
+            await connection.execute(text("SELECT pg_advisory_lock(:k)"), params)
+            await connection.commit()
+            yield
+        finally:
+            try:
+                await connection.rollback()
+                await connection.execute(text("SELECT pg_advisory_unlock(:k)"), params)
+                await connection.commit()
+            except BaseException:
+                await connection.invalidate()  # 解锁失败的连接不能带着会话锁回池。
+                raise

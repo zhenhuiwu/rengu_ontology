@@ -225,7 +225,7 @@ def test_parse_and_merge_units():
 
 
 def test_get_llm_without_key_and_repr_hides_key(monkeypatch):
-    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "")
     assert get_llm() is None
     assert "sk-secret" not in repr(
         DashScopeLLM(api_key="sk-secret", model="m", base_url="http://x", timeout_s=1)

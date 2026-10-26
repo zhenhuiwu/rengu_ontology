@@ -264,10 +264,10 @@ async def test_e2e_one_hop_exists_filters_orders(biz, conn, monkeypatch):
     assert filters["store"] == ("store.big_region = CAST($1 AS VARCHAR)", ["华东"])
 
 
-async def test_e2e_minimal_stub_allows_non_admin(biz, conn):
-    _gov()  # 初版最简 row_filter：非管理员也不裁剪
-    assert (await run_guarded(conn, "select count(*) from store", _U(admin=False))).scalar() == 95
-    assert (await run_guarded(conn, "select count(*) from store", _U(admin=True))).scalar() == 95
+async def test_e2e_missing_role_grants_deny_without_admin_bypass(biz, conn):
+    _gov()
+    assert (await run_guarded(conn, "select count(*) from store", _U(admin=False))).scalar() == 0
+    assert (await run_guarded(conn, "select count(*) from store", _U(admin=True))).scalar() == 0
 
 
 # ---- PDE must-fix 4：只读引擎 ----
@@ -297,11 +297,13 @@ async def test_qa_readonly_engine_settings(monkeypatch):
         async with eng.connect() as c:
             assert await c.scalar(text("SHOW statement_timeout")) == "1234ms"
             assert await c.scalar(text("SHOW default_transaction_read_only")) == "on"
-            with pytest.raises(DBAPIError, match="read-only"):
+            with pytest.raises(DBAPIError) as readonly:
                 await c.execute(text("CREATE TEMP TABLE qa_w (x int)"))
+            assert readonly.value.orig.sqlstate == "25006"
             await c.rollback()
-            with pytest.raises(DBAPIError, match="statement timeout"):
+            with pytest.raises(DBAPIError) as timeout:
                 await c.execute(text("SELECT pg_sleep(3)"))
+            assert timeout.value.orig.sqlstate == "57014"
     finally:
         await eng.dispose()
         monkeypatch.setattr(dbs, "_qa_engine", None)
@@ -430,10 +432,9 @@ async def test_e2e_order_line_inherits_region(biz, conn, monkeypatch):
     # 没有属性 / 桩实现的非管理员 → 看不到
     assert await q("select count(*) from order_line", _U()) == 0
     monkeypatch.undo()
-    # 初版最简 row_filter：非管理员不裁剪 → 和管理员一样看全量
-    assert await q("select round(sum(qty * price), 2) from order_line", _U()) == total
-    # 管理员看全量
-    assert await q("select round(sum(qty * price), 2) from order_line", _U(admin=True)) == total
+    # Directly constructed users have no resolved role grants, including an admin flag.
+    assert await q("select round(sum(qty * price), 2) from order_line", _U()) is None
+    assert await q("select round(sum(qty * price), 2) from order_line", _U(admin=True)) is None
 
 
 # ---- static-api.md §1.5（团队 master 443c009）：订单.门店、商品.品类 ----

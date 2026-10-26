@@ -11,6 +11,7 @@ from app.modules.static.models import ChangeRequest, CrEvent, CRStatus
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import next_ver
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 P = "/api/ontology/v1"
 ADMIN = {"X-Demo-As": "U010001"}  # 王敏：本体管理员
@@ -24,6 +25,7 @@ async def seeded(session):
 
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
+        await grant_fixture_roles(session)
         await session.commit()
         yield session
 
@@ -58,7 +60,7 @@ def expected_rows(next_version: str) -> list[dict]:
             "code": "提示",
             "name": "评测回放",
             "result": "信息",
-            "note": f"已按 {next_version} 草稿回放 5 道评测题，通过 5 题，失败 0 题",
+            "note": f"{next_version} 草稿涉及 5 道评测题，尚未执行回放",
         },
     ]
 
@@ -211,8 +213,48 @@ async def test_writes_require_login_and_releases_manage(client, seeded):
         "/releases/{ver}:rollback",
     } <= posts  # 变更单写接口见 test_static_cr
     for r in router.routes:
-        if r.methods & {"POST", "DELETE"}:
-            assert len(r.dependencies) == 1, r.path  # require_func("releases", "manage")
+        if r.path in posts and r.path.startswith("/releases"):
+            assert len(r.dependencies) == 1, r.path
     for url in ("/releases:merge-check", "/releases", "/releases/v2026.10.3:rollback"):
         r = await client.post(P + url, json={}, headers={"X-Demo-As": "U999999"})
         assert r.status_code == 401 and r.json()["code"] == "UNAUTHORIZED", url
+
+
+async def test_publish_lock_version_rejects_stale_head(client, seeded):
+    head = (await client.get(P + "/releases/current", headers=ADMIN)).json()
+    token = head["lockVersion"]
+    before = await release_count(seeded)
+    stale = await client.post(P + "/releases", json={"lockVersion": token + 1}, headers=ADMIN)
+    assert stale.status_code == 409 and stale.json()["code"] == "VERSION_CONFLICT"
+    assert await release_count(seeded) == before
+    assert (await cr(seeded, "CR-0015")).status == CRStatus.approved
+    good = await client.post(P + "/releases", json={"lockVersion": token}, headers=ADMIN)
+    assert good.status_code == 201, good.text
+    assert good.json()["skipped"] == []
+    retry = await client.post(P + "/releases", json={"lockVersion": token}, headers=ADMIN)
+    assert retry.status_code == 409 and retry.json()["code"] == "VERSION_CONFLICT"
+    assert await release_count(seeded) == before + 1
+
+
+async def test_publish_response_lists_unregistered_sections(client, seeded):
+    from app.modules.static.models import CrItem
+
+    approved = await cr(seeded, "CR-0015")
+    seeded.add(
+        CrItem(
+            cr_id=approved.id,
+            target_kind="metric",
+            target_id="gmv",
+            section="future",
+            item_key="definition",
+            op="update",
+            before={"example": "old"},
+            after={"example": "unchanged"},
+            seq=1,
+        )
+    )
+    await seeded.commit()
+    response = await client.post(P + "/releases", json={}, headers=ADMIN)
+    assert response.status_code == 201, response.text
+    assert response.json()["skipped"] == ["metric/future"]
+    assert any("未写回定义表：metric/future" in (e.desc or "") for e in await events(seeded, approved.code))

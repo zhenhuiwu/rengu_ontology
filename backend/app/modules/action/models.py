@@ -66,7 +66,7 @@ class ActionType(CodeMixin, MutableTableMixin, Base):
     target: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     target_api: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     target_kind: Mapped[str | None] = mapped_column(
-        String(32), comment="对象类型前端 id（软引用，静态合并后改外键）"
+        String(64), comment="对象类型前端 id（软引用，静态合并后改外键）"
     )
     owner: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     desc_tpl: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="说明模板（{sys} 占位）")

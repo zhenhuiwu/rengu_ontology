@@ -61,6 +61,9 @@ MODULES = ["admin", "integration", "action", "event"]
 
 @pytest.fixture
 async def ae(users):
+    from tests.function_access_support import grant_fixture_roles
+
+    await grant_fixture_roles(users)
     await run_seeds(users, MODULES[1:])
     await (
         users.commit()
@@ -142,8 +145,8 @@ async def test_action_types_list(client, ae):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["groups"] == mock("action/ACTION_GROUPS.json")
-    assert body["total"] == len(ACTIONS) and body["size"] == 22
-    assert body["items"] == [{k: a.get(k) for k in LIST_KEYS} for a in ACTIONS[:22]]
+    assert body["total"] == len(ACTIONS) and body["size"] == 10
+    assert body["items"] == [{k: a.get(k) for k in LIST_KEYS} for a in ACTIONS[:10]]
 
     r = await client.get(f"{ONT}/action-types", params={"group": "告警"})
     assert [i["id"] for i in r.json()["items"]] == [a["id"] for a in ACTIONS if a["group"] == "告警"]
@@ -174,8 +177,8 @@ async def test_action_subresources_match_mock(client, ae):
         params = derived("paramsOf", a["id"])
         r = await client.get(f"{ONT}/action-types/{a['id']}/params")
         body = r.json()
-        assert body["total"] == len(params) and body["size"] == 12
-        assert body["items"] == params[:12]
+        assert body["total"] == len(params) and body["size"] == 10
+        assert body["items"] == params[:10]
         r = await client.get(f"{ONT}/action-types/{a['id']}/submission-criteria")
         assert r.json()["items"] == derived("condsOf", a["id"])
         wb = derived("writebackOf", a["id"])
@@ -254,7 +257,8 @@ async def test_event_types_list(client, ae):
     body = (await client.get(f"{ONT}/event-types")).json()
     assert body["sources"] == mock("action/EVENT_SOURCES.json")
     assert body["total"] == len(EVENTS)
-    assert body["items"] == [{k: e[k] for k in EVENT_LIST_KEYS} for e in EVENTS[:22]]
+    assert body["size"] == 10
+    assert body["items"] == [{k: e[k] for k in EVENT_LIST_KEYS} for e in EVENTS[:10]]
     body = (await client.get(f"{ONT}/event-types", params={"source": "规则", "kw": "告警"})).json()
     assert [i["id"] for i in body["items"]] == [
         e["id"] for e in EVENTS if e["source"] == "规则" and "告警" in e["name"]
@@ -272,7 +276,7 @@ async def test_event_detail_and_subresources(client, ae):
         assert body["envelopeCount"] == 10 and body["total"] == len(payload)
         assert body["items"] == [{**f, "envelope": f["api"] not in spec} for f in payload]
         body = (await client.get(f"{ONT}/event-types/{e['id']}/payload-fields")).json()
-        assert body["size"] == 12 and len(body["items"]) == min(12, len(payload))
+        assert body["size"] == 10 and len(body["items"]) == min(10, len(payload))
 
         r = await client.get(f"{ONT}/event-types/{e['id']}/subscribers")
         assert [drop_none(s) for s in r.json()["items"]] == derived("subscribersOf", e["id"])
@@ -292,7 +296,7 @@ async def test_ext_systems(client, ae):
     def rows(b):
         return [drop_none({k: v for k, v in s.items() if k != "actionCount"}) for s in b["items"]]
 
-    body = (await client.get(f"{DATA}/ext-systems")).json()
+    body = (await client.get(f"{DATA}/ext-systems", params={"size": 200})).json()
     assert rows(body) == SYSTEMS
     body = (await client.get(f"{DATA}/ext-systems", params={"writeback": 1})).json()
     assert rows(body) == mock("action/derived/writebackSystems.json")[0]["result"]
@@ -370,18 +374,18 @@ async def test_ver_reads_changed_snapshot(client, ae):
     body = (await client.get(f"{ONT}/event-types/order_status_changed/payload-fields", params=v)).json()
     assert body["total"] == 10 and all(f["envelope"] for f in body["items"])
     # 列表顺序仍按定义表 id（jsonb 不保序）
-    items = (await client.get(f"{ONT}/action-types", params=v)).json()["items"]
+    items = (await client.get(f"{ONT}/action-types", params={**v, "size": 200})).json()["items"]
     assert [i["id"] for i in items] == [a["id"] for a in ACTIONS]
 
 
-async def test_ver_without_section_falls_back_to_tables(client, ae, sections):
-    """快照里没有 actionTypes 段 → 退回当前定义表【推断】。"""
+async def test_ver_without_section_never_uses_current_tables(client, ae, sections):
+    """历史快照缺少定义段时不能混入当前定义。"""
     await run_seeds(ae, ["versioning"])
     await ae.flush()
     r = await client.get(f"{ONT}/action-types", params={"ver": "v2026.10.1"})
-    assert r.status_code == 200 and r.json()["total"] == len(ACTIONS)
+    assert r.status_code == 200 and r.json()["total"] == 0
     r = await client.get(f"{ONT}/event-types", params={"ver": "v2026.10.1", "previewAs": "U001"})
-    assert r.status_code == 200 and r.json()["total"] == len(EVENTS)
+    assert r.status_code == 200 and r.json()["total"] == 0
 
 
 async def test_retired_types_hidden(client, released):

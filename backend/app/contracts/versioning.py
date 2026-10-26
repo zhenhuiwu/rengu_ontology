@@ -59,6 +59,7 @@ SECTION_OWNERS: dict[str, str] = {
     "lifecycles": "dynamic",
     "actionTypes": "action",  # Palantir 负责（action 模块）
     "eventTypes": "event",  # Palantir 负责（event 模块）
+    "qualityChecks": "data",
 }
 
 

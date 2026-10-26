@@ -5,7 +5,7 @@
 
 import asyncio
 
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.integration.models import ExtSystem
@@ -29,26 +29,40 @@ BODY = {
 NAMES = ["并发测试网关A", "并发测试网关B"]
 
 
-async def _create(engine, name: str, hold: float, started: asyncio.Event | None = None) -> str:
-    async with AsyncSession(engine, expire_on_commit=False) as s, s.begin():
-        body = ExtSystemIn.model_validate({**BODY, "name": name})
-        obj = await ExtSystemService(s).create(body, actor="test")
-        if started:
-            started.set()
-        await asyncio.sleep(hold)  # 拿着锁不提交：没有锁时另一个事务此时读到的最大号相同
-        return obj.code
-
-
 async def test_concurrent_create_gets_distinct_codes(engine):
     try:
-        started = asyncio.Event()
-        a = asyncio.create_task(_create(engine, NAMES[0], 0.5, started))
-        await started.wait()
-        b = asyncio.create_task(_create(engine, NAMES[1], 0))
-        codes = await asyncio.gather(a, b)
-        assert codes[0] != codes[1]
-        n = [int(c[5:]) for c in codes]
-        assert n[1] == n[0] + 1, codes
+        async with (
+            AsyncSession(engine, expire_on_commit=False) as first,
+            AsyncSession(engine, expire_on_commit=False) as second,
+        ):
+            pid = await second.scalar(text("SELECT pg_backend_pid()"))
+
+            def body(name):
+                return ExtSystemIn.model_validate({**BODY, "name": name})
+
+            a = await ExtSystemService(first).create(body(NAMES[0]), actor="test")
+            task = asyncio.create_task(ExtSystemService(second).create(body(NAMES[1]), actor="test"))
+            try:
+                # 确认确实等待取号锁后才提交，不靠 sleep 猜测调度时机。
+                async with asyncio.timeout(5):
+                    while not await first.scalar(
+                        text(
+                            "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                            "WHERE pid=:pid AND locktype='advisory' AND NOT granted)"
+                        ),
+                        {"pid": pid},
+                    ):
+                        if task.done():
+                            await task
+                            raise AssertionError("第二个事务没有等待取号锁")
+                await first.commit()
+                b = await asyncio.wait_for(task, 5)
+                await second.commit()
+                assert int(b.code[5:]) == int(a.code[5:]) + 1
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
     finally:
         async with AsyncSession(engine) as s, s.begin():
             await s.execute(delete(ExtSystem).where(ExtSystem.name.in_(NAMES)))

@@ -9,6 +9,7 @@ from app.modules.static.models import ChangeRequest, CrEvent, Knowledge, Knowled
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import next_ver
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 P = "/api/ontology/v1"
 WANG = {"X-Demo-As": "U010001"}  # 王敏（本体管理员，默认审核人）
@@ -22,6 +23,7 @@ async def seeded(session):
 
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
+        await grant_fixture_roles(session)
         await session.commit()
         yield session
 
@@ -201,6 +203,145 @@ async def test_rollback_restores_terms(client, seeded):
     assert k3.status == KnowledgeStatus.published and k3.stopped_release is None
     k9 = await seeded.scalar(select(Knowledge).where(Knowledge.code == "K-900"))
     assert k9.status == KnowledgeStatus.disabled and k9.stopped_release == rb
+
+
+async def test_explorer_flags_publish_snapshot_history_and_rollback(client, seeded):
+    from app.modules.static.explorer import DISPLAY_FIELDS
+
+    baseline = (await client.get(f"{P}/object-types/store/meta")).json()
+    city_before = next(p for p in baseline["properties"] if p["key"] == "city")
+    cr = "CR-0009"  # 门店已由这张种子草稿占用，按真实规则加入原单。
+    flags = dict(
+        visibility="prominent",
+        searchable=True,
+        filterable=True,
+        sortable=True,
+        listed=True,
+        listWidth=180,
+        format="raw",
+        unit="区",
+        order=99,
+    )
+    await put(
+        client,
+        cr,
+        {"kind": "object", "id": "store"},
+        "properties",
+        [
+            {"key": "city", "op": "update", "after": {**flags, "backingColumn": "phone"}},
+            {"key": "area_sqm", "op": "update", "after": {"visibility": "hidden", "filterable": True}},
+            {"key": "store_name", "op": "update", "after": {"sensitive": True, "filterable": True}},
+        ],
+    )
+    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
+    r = await client.post(P + "/releases", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    ver = r.json()["ver"]
+    release = await seeded.scalar(select(OntologyRelease).where(OntologyRelease.ver == ver))
+    snapshot = release.snapshot["properties"]["store"]
+    assert {key: snapshot["city"][key] for key in DISPLAY_FIELDS} == flags
+    assert snapshot["area_sqm"]["filterable"] is False and snapshot["store_name"]["filterable"] is False
+    city = await seeded.scalar(
+        select(Property).join(ObjectType).where(ObjectType.code == "store", Property.api_name == "city")
+    )
+    assert city.backing_column == "city"  # 用户草稿不能改受控物理绑定。
+    city.unit = "后来改动"
+    await seeded.commit()
+    old = await client.get(f"{P}/object-types/store/meta", params={"ver": ver})
+    assert old.status_code == 200, old.text
+    old_props = {p["key"]: p for p in old.json()["properties"]}
+    assert {key: old_props["city"][key] for key in DISPLAY_FIELDS} == flags
+    assert "area_sqm" not in old_props and old_props["store_name"]["filterable"] is False
+    # 历史 meta 不会让敏感属性穿过真实分面查询的当前安全规则。
+    facets = await client.get(f"{P}/object-types/store/facets", params={"ver": ver})
+    assert facets.status_code == 200, facets.text
+    assert "store_name" not in {f["key"] for f in facets.json()}
+    blocked = await client.get(
+        f"{P}/object-types/store/facets", params={"filters": '{"store_name":["x"]}', "ver": ver}
+    )
+    assert blocked.status_code == 422
+    r = await client.post(f"{P}/releases/{ver}:rollback", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    seeded.expire_all()
+    current = (await client.get(f"{P}/object-types/store/meta")).json()
+    restored = next(p for p in current["properties"] if p["key"] == "city")
+    assert restored == city_before
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("searchable", "false"),
+        ("filterable", 1),
+        ("sortable", None),
+        ("listed", []),
+        ("visibility", "public"),
+        ("listWidth", True),
+        ("listWidth", -1),
+        ("order", -1),
+        ("order", 2**32),
+        ("format", {}),
+        ("unit", "x\x00y"),
+    ],
+)
+def test_explorer_flag_validation(field, value):
+    from app.core.errors import AppError
+    from app.modules.static.writeback import _set_prop
+
+    prop = Property(api_name="x", visibility="normal", is_sensitive=False)
+    with pytest.raises(AppError) as exc:
+        _set_prop(prop, {field: value})
+    assert exc.value.status_code == 409 and exc.value.details["field"] == field
+
+
+def test_property_type_validation_preserves_existing_types():
+    from app.core.errors import AppError
+    from app.modules.static.writeback import _set_prop
+
+    prop = Property(api_name="x", visibility="normal", is_sensitive=False)
+    for typ in ("string", "int", "integer", "decimal", "date", "timestamp", "boolean", "enum", "json"):
+        _set_prop(prop, {"type": typ})
+        assert prop.data_type == typ
+    for invalid in (["string"], {"bad": "string"}, None, "", "unknown", True, 1):
+        with pytest.raises(AppError) as exc:
+            _set_prop(prop, {"type": invalid})
+        assert exc.value.code == "WRITEBACK_FAILED" and exc.value.details["field"] == "type"
+
+
+@pytest.mark.parametrize("op,invalid", [("add", ["string"]), ("update", {"bad": "string"})])
+async def test_invalid_property_type_rolls_back_publish_and_keeps_draft(client, seeded, op, invalid):
+    cr = "CR-0009"
+    key = "invalid_new" if op == "add" else "region_code"
+    await put(
+        client,
+        cr,
+        {"kind": "object", "id": "store"},
+        "properties",
+        [
+            {"key": "city", "op": "update", "after": {"desc": "发布失败不应写入"}},
+            {"key": key, "op": op, "after": {"name": "非法类型", "type": invalid}},
+        ],
+    )
+    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
+    draft_before = (await client.get(f"{P}/change-requests/{cr}", headers=WANG)).json()
+    versions_before = list(
+        (await seeded.scalars(select(OntologyRelease.ver).order_by(OntologyRelease.id))).all()
+    )
+    props_before = (await client.get(f"{P}/object-types/store/properties?size=200")).json()
+    items_before = (await client.get(f"{P}/change-requests/{cr}/items", headers=LIU)).json()
+    response = await client.post(P + "/releases", json={}, headers=WANG)
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "WRITEBACK_FAILED"
+    assert response.json()["details"]["field"] == "type"
+    assert (await client.get(f"{P}/change-requests/{cr}", headers=WANG)).json() == draft_before
+    assert (await client.get(f"{P}/change-requests/{cr}/items", headers=LIU)).json() == items_before
+    assert (await client.get(f"{P}/object-types/store/properties?size=200")).json() == props_before
+    assert (
+        list((await seeded.scalars(select(OntologyRelease.ver).order_by(OntologyRelease.id))).all())
+        == versions_before
+    )
 
 
 async def approved_cr2(client) -> str:

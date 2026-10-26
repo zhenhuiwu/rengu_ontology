@@ -23,7 +23,9 @@ from app.modules.biz.router import router as biz_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.data.router import router as data_router
 from app.modules.dynamic.router import router as dynamic_router
+from app.modules.event.ingress import router as internal_event_router
 from app.modules.event.router import router as event_router
+from app.modules.functions.router import router as functions_router
 from app.modules.integration.router import router as integration_router
 from app.modules.qa.router import router as qa_router
 from app.modules.static.router import router as static_router
@@ -35,6 +37,7 @@ MOUNTS: list[tuple[str, APIRouter]] = [
     ("ontology", dynamic_router),
     ("ontology", action_router),
     ("ontology", event_router),
+    ("ontology", functions_router),
     ("qa", qa_router),
     ("data", data_router),
     ("data", integration_router),  # integration 只挂 data（action-event-api.md:140、:168）
@@ -47,3 +50,4 @@ MOUNTS: list[tuple[str, APIRouter]] = [
 def include_routers(app: FastAPI) -> None:
     for module, router in MOUNTS:
         app.include_router(router, prefix=api_prefix(module), dependencies=[ReadonlyGuardDep])
+    app.include_router(internal_event_router, prefix="/internal/v1", dependencies=[ReadonlyGuardDep])

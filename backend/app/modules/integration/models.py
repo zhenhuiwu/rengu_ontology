@@ -1,6 +1,6 @@
 """ORM 模型（表名 writeback_call / ext_system / reconcile_task，不加前缀；主键 id bigint，外键指向 id）。
 
-ext_system（integration_0001）、writeback_call（integration_0002）；reconcile_task 在后面的批次建。
+ext_system（integration_0001）、writeback_call（integration_0002）、reconcile_task（integration_0013）。
 新增模型要在 app/db/models.py 里 import。
 """
 
@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import LabelEnum
-from app.db.base import Base, CodeMixin, MutableTableMixin
+from app.db.base import Base, CodeMixin, IdMixin, MutableTableMixin
 from app.db.types import JsonType, enum_column
 
 
@@ -114,3 +114,33 @@ class WritebackCall(CodeMixin, MutableTableMixin, Base):
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     actor: Mapped[str] = mapped_column(String(128), nullable=False, comment="发起人原文")
     msg: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class ReconcileState(LabelEnum):
+    querying = "查询中"
+    resolved = "已有结论"
+    manual = "转人工"
+
+
+class ReconcileTask(IdMixin, MutableTableMixin, Base):
+    """One durable reconciliation cycle per execution; retries never resubmit a write."""
+
+    __tablename__ = "reconcile_task"
+    __table_args__ = (
+        UniqueConstraint("action_run_id"),
+        Index("ix_reconcile_task_state_next_at", "state", "next_at"),
+    )
+
+    action_run_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("action_run.id"), nullable=False)
+    sys_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("ext_system.id"), nullable=False)
+    idem_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    state: Mapped[ReconcileState] = mapped_column(enum_column(ReconcileState, 16), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    tries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_ext_status: Mapped[str | None] = mapped_column(String(32))
+    last_error: Mapped[str | None] = mapped_column(String(128))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconciler: Mapped[str | None] = mapped_column(String(64))
+    reconcile_result: Mapped[str | None] = mapped_column(String(16))

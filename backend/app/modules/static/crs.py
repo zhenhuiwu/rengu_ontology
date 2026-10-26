@@ -18,16 +18,22 @@
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import BigInteger, literal, or_, select, true, tuple_, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.common.auth import CurrentUser
+from app.common.pagination import Page, PageParams
 from app.core import clock
 from app.core.errors import AppError, Forbidden, NotFound
 from app.core.schema import _fmt_dt
-from app.modules.static.cr_write import CrWriteService, target_out
-from app.modules.static.models import ChangeRequest, CrEvent, CRStatus
-from app.modules.static.permissions import check_cr
+from app.db.dialects import get_adapter
+from app.db.types import JsonType
+from app.modules.static.cr_analysis import visible_analysis
+from app.modules.static.cr_write import CrWriteService, diff_row, target_out
+from app.modules.static.models import ChangeRequest, CrEvent, CrItem, CRStatus, CrTarget
+from app.modules.static.permissions import check_cr, cr_owner_id, is_cr_owner
+from app.modules.static.repo import StaticRepo
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import VersioningService, next_ver
 
@@ -66,7 +72,7 @@ class ChangeRequestService:
 
     # ------------------------------------------------------------ 读
     @staticmethod
-    def _row(cr: ChangeRequest, ver: str | None) -> Row:
+    def row(cr: ChangeRequest, ver: str | None, metadata: Row | None = None) -> Row:
         """mock ChangeRequest 原样：可选键（release / rejectReason）没有就不给。"""
         r: Row = {
             "id": cr.code,
@@ -81,9 +87,58 @@ class ChangeRequestService:
         }
         if ver:
             r["release"] = ver
+        if owner_id := cr_owner_id(cr):
+            r["ownerId"] = owner_id
+        if reviewer_id := ((cr.detail if metadata is None else metadata) or {}).get("reviewerCode"):
+            r["reviewerId"] = reviewer_id
         if cr.reject_reason:
             r["rejectReason"] = cr.reject_reason
         return r
+
+    async def workflow(self, *, status: str | None = None, kw: str = "") -> list[Row]:
+        """完整轻工作流目录：不读取整份detail、items或events，不受页码影响。"""
+        q = (
+            select(
+                ChangeRequest,
+                OntologyRelease.ver,
+                ChangeRequest.detail["touches"],
+                ChangeRequest.detail["reviewerCode"].as_string(),
+            )
+            .options(defer(ChangeRequest.detail, raiseload=True))
+            .outerjoin(OntologyRelease, OntologyRelease.id == ChangeRequest.release_id)
+            .order_by(ChangeRequest.code.desc())
+        )
+        if status:
+            q = q.where(ChangeRequest.status == CRStatus(status))
+        if kw:
+            q = q.where(
+                or_(
+                    ChangeRequest.title.contains(kw, autoescape=True),
+                    ChangeRequest.code.contains(kw.upper(), autoescape=True),
+                )
+            )
+        records = list(await self.session.execute(q))
+        ids = [record[0].id for record in records]
+        targets = {key: [] for key in ids}
+        if ids:
+            for target in await self.session.scalars(
+                select(CrTarget).where(CrTarget.cr_id.in_(ids)).order_by(CrTarget.seq, CrTarget.id)
+            ):
+                targets[target.cr_id].append(target_out(target))
+        out = []
+        for cr, ver, legacy, reviewer in records:
+            touches = (
+                [value for value in legacy if isinstance(value, str)] if isinstance(legacy, list) else []
+            )
+            touches = list(dict.fromkeys([*touches, *(f"{t['kind']}:{t['id']}" for t in targets[cr.id])]))
+            out.append(
+                {
+                    **self.row(cr, ver, {"reviewerCode": reviewer}),
+                    "detail": {"touches": touches},
+                    "targets": targets[cr.id],
+                }
+            )
+        return out
 
     async def _events(self, ids: list[int]) -> dict[int, list[Row]]:
         out: dict[int, list[Row]] = {i: [] for i in ids}
@@ -99,7 +154,16 @@ class ChangeRequestService:
             out[e.cr_id].append(ev)
         return out
 
-    async def list(self, *, status: str | None = None, full: bool = False) -> list[Row]:
+    async def list(
+        self,
+        *,
+        status: str | None = None,
+        full: bool = False,
+        kw: str = "",
+        params: PageParams | None = None,
+        focus_id: str | None = None,
+        actor: CurrentUser | None = None,
+    ) -> list[Row] | Row:
         """mock CHANGE_REQUESTS 顺序（单号倒序）。full=true 时每行再带 detail（CRDetail）
         和 events（评审追加记录，新的在前；mock reviewLog 按 detail.times 现算的节点由前端照旧算）。"""
         q = (
@@ -109,23 +173,58 @@ class ChangeRequestService:
         )
         if status:
             q = q.where(ChangeRequest.status == CRStatus(status))
-        rows = (await self.session.execute(q)).all()
-        out = [self._row(cr, ver) for cr, ver in rows]
+        if kw:
+            q = q.where(
+                or_(
+                    ChangeRequest.title.contains(kw, autoescape=True),
+                    ChangeRequest.code.contains(kw.upper(), autoescape=True),
+                )
+            )
+        if params is not None:
+            rows, total, actual = await StaticRepo(self.session).page(
+                q,
+                params,
+                scalar=False,
+                focus_id=focus_id,
+                key=ChangeRequest.code,
+                order=(ChangeRequest.code.desc(),),
+            )
+        else:
+            rows = (await self.session.execute(q)).all()
+        out = [self.row(cr, ver) for cr, ver in rows]
         if full:
-            evs = await self._events([cr.id for cr, _ in rows])
+            ids = [cr.id for cr, _ in rows]
+            evs = await self._events(ids)
+            names, changes = {}, {i: [] for i in ids}
+            if ids:
+                for target in await self.session.scalars(select(CrTarget).where(CrTarget.cr_id.in_(ids))):
+                    names.setdefault(target.cr_id, {})[(target.target_kind, target.target_id)] = (
+                        target.target_name
+                    )
+                for item in await self.session.scalars(
+                    select(CrItem).where(CrItem.cr_id.in_(ids)).order_by(CrItem.seq, CrItem.id)
+                ):
+                    changes[item.cr_id].append(diff_row(item, names.get(item.cr_id, {})))
             for r, (cr, _) in zip(out, rows, strict=True):
-                r["detail"] = await self._detail(cr)
+                r["detail"] = (
+                    {**cr.detail, "diffs": [*(cr.detail.get("diffs") or []), *changes[cr.id]]}
+                    if changes[cr.id]
+                    else cr.detail
+                )
                 r["events"] = evs[cr.id]
-        return out
+                r["detail"] = visible_analysis(r["detail"], actor)
+        return Page.of(out, total, actual).model_dump() if params is not None else out
 
-    async def _detail(self, cr: ChangeRequest) -> dict[str, Any]:
+    async def _detail(self, cr: ChangeRequest, include_diffs: bool = True) -> dict[str, Any]:
         """CRDetail：种子 detail 原样 + cr_item 生成的改动行（接在 detail.diffs 后面，没有草稿行时不动）。"""
+        if not include_diffs:
+            return {**cr.detail, "diffs": []}
         extra = await CrWriteService(self.session).item_diffs(cr.id)
         if not extra:
             return cr.detail
         return {**cr.detail, "diffs": [*(cr.detail.get("diffs") or []), *extra]}
 
-    async def detail(self, code: str) -> Row:
+    async def detail(self, code: str, actor: CurrentUser | None = None, *, include_diffs: bool = True) -> Row:
         q = (
             select(ChangeRequest, OntologyRelease.ver)
             .outerjoin(OntologyRelease, OntologyRelease.id == ChangeRequest.release_id)
@@ -137,12 +236,62 @@ class ChangeRequestService:
         cr, ver = hit
         targets = await CrWriteService(self.session).targets(cr.id)
         return {
-            **self._row(cr, ver),
-            "detail": await self._detail(cr),
+            **self.row(cr, ver),
+            "detail": visible_analysis(await self._detail(cr, include_diffs), actor),
             "events": (await self._events([cr.id]))[cr.id],
             "targets": [target_out(t) for t in targets],
             "lockVersion": cr.lock_version,
         }
+
+    async def diffs(self, code: str, params: PageParams) -> Row:
+        """Page legacy JSON ordinality before current CR seq/id, without reading the full CR or events."""
+        cr_id = await self.session.scalar(select(ChangeRequest.id).where(ChangeRequest.code == code))
+        if cr_id is None:
+            raise NotFound("变更单不存在", details={"id": code})
+        legacy = get_adapter(self.session).json_array_rows(ChangeRequest.detail["diffs"])
+        old = (
+            select(
+                literal(0).label("source"),
+                legacy.c.ordinality.label("seq"),
+                literal(None, type_=BigInteger).label("item_id"),
+                legacy.c.value.label("data"),
+            )
+            .select_from(ChangeRequest.__table__.join(legacy, true()))
+            .where(ChangeRequest.id == cr_id)
+        )
+        current = select(
+            literal(1).label("source"),
+            CrItem.seq.label("seq"),
+            CrItem.id.label("item_id"),
+            literal(None, type_=JsonType).label("data"),
+        ).where(CrItem.cr_id == cr_id)
+        candidates = union_all(old, current).subquery()
+        records, total, actual = await StaticRepo(self.session).page(
+            select(candidates).order_by(candidates.c.source, candidates.c.seq, candidates.c.item_id),
+            params,
+            scalar=False,
+        )
+        ids = [row.item_id for row in records if row.item_id is not None]
+        items = (
+            {item.id: item for item in await self.session.scalars(select(CrItem).where(CrItem.id.in_(ids)))}
+            if ids
+            else {}
+        )
+        pairs = {(item.target_kind, item.target_id) for item in items.values()}
+        names = {}
+        if pairs:
+            names = {
+                (row.target_kind, row.target_id): row.target_name
+                for row in await self.session.execute(
+                    select(CrTarget.target_kind, CrTarget.target_id, CrTarget.target_name).where(
+                        CrTarget.cr_id == cr_id, tuple_(CrTarget.target_kind, CrTarget.target_id).in_(pairs)
+                    )
+                )
+            }
+        rows = [
+            diff_row(items[row.item_id], names) if row.item_id is not None else row.data for row in records
+        ]
+        return Page.of(rows, total, actual).model_dump()
 
     # ------------------------------------------------------------ 写
     async def _lock(self, code: str) -> ChangeRequest:
@@ -195,13 +344,17 @@ class ChangeRequestService:
     async def _transition(
         self, cr: ChangeRequest, action: str, user: CurrentUser, reason: str | None
     ) -> None:
-        owner, reviewer = cr.owner == user.name, cr.reviewer == user.name
+        owner = is_cr_owner(cr, user)
+        reviewer_id = (cr.detail or {}).get("reviewerCode")
+        reviewer = user.id == reviewer_id if reviewer_id else cr.reviewer == user.name
         is_reviewer = reviewer and not owner  # Releases.vue isReviewer
         if action == "submit":
             _state(cr, S.draft)
             if not cr.changes:
                 raise AppError("草稿里还没有改动，无法提交", code="CR_EMPTY", status_code=409)
-            await CrWriteService(self.session).run_checks(cr, event=False)  # 服务端重算，不信 detail.checks
+            await CrWriteService(self.session).run_checks(
+                cr, event=False, user=user
+            )  # 服务端重算，不信 detail.checks
             _raise_blocked(cr)
             if not cr.reviewer:
                 raise AppError("还没有指定审核人", code="CR_NO_REVIEWER", status_code=409)
@@ -216,7 +369,7 @@ class ChangeRequestService:
             if not is_reviewer:
                 raise Forbidden(f"只有审核人 {cr.reviewer} 能审核，提交人不能审自己的单子")
             if action == "approve":
-                await CrWriteService(self.session).run_checks(cr, event=False)
+                await CrWriteService(self.session).run_checks(cr, event=False, user=user)
                 _raise_blocked(cr)
                 self._move(cr, user, S.approved, action, "审核通过", f"等待整版发布 {await self._next()}")
             else:
@@ -246,7 +399,7 @@ class ChangeRequestService:
         cr = await self._lock(code)
         await check_cr(self.session, cr, user)
         _state(cr, S.draft)
-        if cr.owner != user.name:
+        if not is_cr_owner(cr, user):
             raise Forbidden(f"只有提交人 {cr.owner} 能删除")
         await self.session.delete(cr)
         await self.session.flush()

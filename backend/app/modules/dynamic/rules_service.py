@@ -1,16 +1,13 @@
 """规则与自动化 / 情景推演 / 生命周期的业务逻辑（dynamic-api.md §2.3–2.5、§4、§6.3–6.5）。
 
 - 出参是前端 mock 形状的 dict（RuleDef、Hit、Scenario、Lifecycle…）；分页用骨架 Page.of；
-- 回放试跑照搬 rules.ts replay()（同一伪随机序列），不写任何业务表；
-- 推演计算 = rules_sim.simulate（示意模型，逐位等于 mock）；运行在请求内同步算完 [推断]；
-- 变更单表 master 上还没有：规则 / 生命周期草稿暂存在 rule_draft / lifecycle_draft（cr_code 软引用）[推断]。
+- 规则 / 生命周期草稿与静态 CR 同事务登记并发布写回；
+- 规则有限条件推演/保留事件回放只读真实DB；没有执行口径明确422；预测推演未接入时503。
 """
 
 import json
-import math
-from datetime import datetime
-from functools import cache
-from pathlib import Path
+from copy import deepcopy
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -21,9 +18,11 @@ from app.common.pagination import Page, PageParams
 from app.core.clock import now
 from app.core.errors import AppError, NotFound
 from app.core.schema import _fmt_dt, _fmt_dt_seconds, parse_display_dt
+from app.db.dialects import get_adapter
 from app.modules.action.models import ActionType
 from app.modules.dynamic.cr_link import CrLink, lifecycle_sections, rule_sections
 from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertLevel
+from app.modules.dynamic.repo import ScenarioImpactRepo, ScenarioRepo, recent_rule_hits
 from app.modules.dynamic.rules_models import (
     HitResult,
     LcStateKind,
@@ -49,11 +48,9 @@ from app.modules.dynamic.rules_schemas import (
     RuleDraftIn,
     ScenarioRunIn,
 )
-from app.modules.dynamic.rules_sim import _products, _stores, seeded, to_fixed_str
 from app.modules.dynamic.scenario_templates import (
     defaults,
     driver_fields,
-    engine_of,
     scope_options,
     template_of,
     templates,
@@ -61,22 +58,14 @@ from app.modules.dynamic.scenario_templates import (
 from app.modules.dynamic.scenario_templates import no_driver as tpl_no_driver
 from app.modules.dynamic.scenario_templates import validate as tpl_validate
 from app.modules.dynamic.sections import lifecycle_def, lifecycle_head, rule_def, version_row
-from app.modules.static.models import ObjectType
+from app.modules.static.models import ChangeRequest, CRStatus, ObjectStatus, ObjectType
 from app.modules.static.schemas import TargetIn
 from app.modules.versioning.models import OntologyRelease
 
-# 前端写死的「今天」口径（rules.ts / lifecycle.ts）
+# 仅兼容旧测试/历史说明；真实查询使用now()滚动窗口，不使用这些历史常量。
 CUT_7D = "2026-10-18 23:59:59"
 CUT_30D = "2026-09-25 00:00:00"
 SINCE_7D = "2026-10-19"
-_JSON = Path(__file__).resolve().parents[3] / "seeds" / "json" / "dynamic"
-
-
-@cache
-def _meta(name: str) -> Any:
-    """页面下拉选项（mock 常量 CONFIRMERS / MAPPING_SOURCES / SC_AREAS / SC_CATEGORIES / PROMO_TYPES）。
-    EXTENSION POINT (PDE): 改成字典表后从库里读。"""
-    return json.loads((_JSON / f"{name}.json").read_text(encoding="utf-8"))
 
 
 def fail(code: str, message: str, status: int, **details: Any) -> AppError:
@@ -90,11 +79,6 @@ def validation(fields: list[tuple[str, str]]) -> AppError:
         status_code=422,
         details={"fields": [{"field": f, "message": m} for f, m in fields]},
     )
-
-
-def paginate(items: list[Any], params: PageParams) -> Page[dict[str, Any]]:
-    p = params.clamp(len(items))
-    return Page[dict[str, Any]].of(items[p.offset : p.offset + p.size], len(items), params)
 
 
 def sec(dt: datetime) -> str:
@@ -116,80 +100,174 @@ def dedupe_reason(d: dict[str, Any]) -> str:
     return f"同一{dims}已命中过" if cd == "不重复" else f"同一{dims} {cd}内已命中"
 
 
-def hit_dims(store_id: str | None, store_label: str | None) -> list[dict[str, Any]]:
-    """演示数据的门店 → 通用维度（rule_hit.dims 种子、回放新增样本用；库里 rule_hit 只存 dims）。"""
-    return [{"objKind": "store", "id": store_id, "label": store_label or store_id}] if store_id else []
-
-
-def store_of_key(key: str) -> dict[str, Any]:
-    h = 7
-    for c in key:
-        h = (h * 31 + ord(c)) % 100003
-    stores = _stores()
-    return stores[h % len(stores)]
-
-
 class RuleService:
     def __init__(self, session: AsyncSession, user: CurrentUser) -> None:
         self.session = session
         self.user = user
+        self.cr_states: dict[str, CRStatus] = {}
 
     # ---------- 读 ----------
     async def _actions(self) -> dict[int, str]:
         return {i: c for i, c in (await self.session.execute(select(ActionType.id, ActionType.code))).all()}
 
     async def get(self, code: str) -> Rule:
-        r = await self.session.scalar(select(Rule).where(Rule.code == code))
+        r = await self.session.scalar(
+            select(Rule).where(Rule.code == code).execution_options(populate_existing=True)
+        )
         if r is None:
             raise NotFound("规则不存在", details={"id": code})
         return r
 
-    async def _drafts(self) -> dict[int, RuleDraft]:
-        rows = (await self.session.scalars(select(RuleDraft).order_by(RuleDraft.id))).all()
+    async def _drafts(self, rule_ids: set[int] | None = None) -> dict[int, RuleDraft]:
+        if rule_ids is not None and not rule_ids:
+            return {}
+        statement = select(RuleDraft).order_by(RuleDraft.id)
+        if rule_ids is not None:
+            statement = statement.where(RuleDraft.rule_id.in_(rule_ids))
+        rows = (await self.session.scalars(statement)).all()
+        codes = {d.cr_code for d in rows}
+        if codes:
+            self.cr_states.update(
+                dict(
+                    (
+                        await self.session.execute(
+                            select(ChangeRequest.code, ChangeRequest.status).where(
+                                ChangeRequest.code.in_(codes)
+                            )
+                        )
+                    ).all()
+                )
+            )
         return {d.rule_id: d for d in rows}
 
     @staticmethod
-    def display_status(r: Rule, d: RuleDraft | None) -> dict[str, Any]:
-        """规则状态取自所在变更单：CR 草稿 → 草稿中；审核中 → 审核中（CR 表接入前一律草稿中 [推断]）。"""
+    def display_status(r: Rule, d: RuleDraft | None, cr_status: CRStatus | None = None) -> dict[str, Any]:
+        """有真实变更单时使用其审核状态；旧孤立草稿仍显示草稿中。"""
         if d is None:
             return {"text": "草稿中" if r.status == RuleStatus.changing else r.status.value, "cr": None}
-        return {"text": "草稿中", "cr": d.cr_code}
+        return {"text": "审核中" if cr_status == CRStatus.in_review else "草稿中", "cr": d.cr_code}
 
     def _def(self, r: Rule, actions: dict[int, str]) -> dict[str, Any]:
         return rule_def(r, actions.get(r.action_type_id) if r.action_type_id else None)
 
     async def list_rules(
-        self, params: PageParams, *, trigger: str | None, status: str | None, kw: str | None
+        self,
+        params: PageParams,
+        *,
+        trigger: str | None,
+        status: str | None,
+        kw: str | None,
+        obj_kind: str | None = None,
     ) -> Page[dict[str, Any]]:
-        actions, drafts = await self._actions(), await self._drafts()
-        rows = (
-            await self.session.scalars(
-                select(Rule)
-                .where(or_(Rule.version.is_not(None), Rule.id.in_(list(drafts))))
-                .order_by(Rule.id)
+        has_draft = select(RuleDraft.id).where(RuleDraft.rule_id == Rule.id).exists()
+        statement = select(Rule).where(or_(Rule.version.is_not(None), has_draft))
+        if obj_kind:
+            if "\x00" in obj_kind or len(obj_kind) > 64:
+                raise validation([("objKind", "对象类型编号无效")])
+            statement = statement.where(Rule.obj_kind == obj_kind)
+        if trigger and trigger != "全部":
+            if trigger not in ("定时", "事件"):
+                return Page.of([], 0, params)
+            statement = statement.where(Rule.trigger["kind"].as_string() == trigger)
+        if status and status != "全部":
+            cr_state = (
+                select(ChangeRequest.status)
+                .select_from(RuleDraft)
+                .outerjoin(ChangeRequest, ChangeRequest.code == RuleDraft.cr_code)
+                .where(RuleDraft.rule_id == Rule.id)
+                .order_by(RuleDraft.id.desc())
+                .limit(1)
+                .scalar_subquery()
             )
-        ).all()
+            if status == "草稿中":
+                statement = statement.where(
+                    or_(
+                        has_draft & or_(cr_state.is_(None), cr_state != CRStatus.in_review),
+                        ~has_draft & (Rule.status == RuleStatus.changing),
+                    )
+                )
+            elif status == "审核中":
+                statement = statement.where(has_draft, cr_state == CRStatus.in_review)
+            else:
+                stored_status = next((s for s in RuleStatus if s.value == status), None)
+                if stored_status is None:
+                    return Page.of([], 0, params)
+                statement = statement.where(~has_draft, Rule.status == stored_status)
+        if kw:
+            if "\x00" in kw or len(kw) > 200:
+                raise validation([("kw", "搜索文字不能超过200字或包含空字符")])
+            statement = statement.where(
+                or_(Rule.name.contains(kw, autoescape=True), Rule.code.icontains(kw, autoescape=True))
+            )
+        total = int(await self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        page = params.clamp(total)
+        rows = list(
+            await self.session.scalars(statement.order_by(Rule.id).limit(page.size).offset(page.offset))
+        )
+        ids = {r.id for r in rows}
+        drafts = await self._drafts(ids)
+        action_ids = {r.action_type_id for r in rows if r.action_type_id is not None}
+        actions = (
+            dict(
+                (
+                    await self.session.execute(
+                        select(ActionType.id, ActionType.code).where(ActionType.id.in_(action_ids))
+                    )
+                ).all()
+            )
+            if action_ids
+            else {}
+        )
         out = []
+        weekly = await recent_rule_hits(self.session, until=now(), rule_ids=ids)
         for r in rows:
-            st = self.display_status(r, drafts.get(r.id))
-            if trigger and trigger != "全部" and r.trigger.get("kind") != trigger:
-                continue
-            if status and status != "全部" and st["text"] != status:
-                continue
-            if kw and kw not in r.name and kw.lower() not in r.code.lower():
-                continue
-            out.append({**self._def(r, actions), "displayStatus": st["text"], "cr": st["cr"]})
-        return paginate(out, params)
+            draft = drafts.get(r.id)
+            st = self.display_status(r, draft, self.cr_states.get(draft.cr_code) if draft else None)
+            out.append(
+                {
+                    **self._def(r, actions),
+                    "weekly": weekly.get(r.id, 0),
+                    "displayStatus": st["text"],
+                    "cr": st["cr"],
+                }
+            )
+        return Page.of(out, total, params)
 
     async def meta(self) -> dict[str, Any]:
+        from app.modules.action.models import TypeStatus
+        from app.modules.dynamic.catalog import get_catalog
+        from app.modules.event.models import EventPayloadField, EventType
+
         rows = (
             await self.session.scalars(select(Rule).where(Rule.version.is_not(None)).order_by(Rule.id))
         ).all()
         drafts = await self._drafts()
-        statuses = list(dict.fromkeys(self.display_status(r, drafts.get(r.id))["text"] for r in rows))
+        statuses = list(
+            dict.fromkeys(
+                self.display_status(
+                    r, drafts.get(r.id), self.cr_states.get(drafts[r.id].cr_code) if r.id in drafts else None
+                )["text"]
+                for r in rows
+            )
+        )
+        catalog = await get_catalog(self.session)
+        confirmers = [p["name"] for p in catalog.data["people"] if catalog.person(p["name"])]
+        sources = {"告警.对象", "告警.ID", "命中.对象", "规则.命中说明", "固定值"}
+        for r in rows:
+            stage = r.auto_stage or {}
+            legacy = stage.get("confirmer")
+            if legacy and catalog.person(legacy):
+                confirmers.append(legacy)
+            sources.update(m["from"] for m in stage.get("mapping", []) if isinstance(m.get("from"), str))
+        for field in await self.session.scalars(
+            select(EventPayloadField)
+            .join(EventType, EventType.id == EventPayloadField.event_type_id)
+            .where(EventType.status != TypeStatus.draft, EventType.retired_release_id.is_(None))
+        ):
+            sources.update([f"事件.{field.api}", f"事件.{field.name}"])
         return {
-            "confirmers": _meta("CONFIRMERS"),
-            "mappingSources": _meta("MAPPING_SOURCES"),
+            "confirmers": list(dict.fromkeys(confirmers)),
+            "mappingSources": sorted(sources),
             "triggers": ["全部", "定时", "事件"],
             "statuses": ["全部", *statuses],
         }
@@ -202,15 +280,14 @@ class RuleService:
     async def detail(self, code: str, *, view: str | None) -> dict[str, Any]:
         r = await self.get(code)
         actions = await self._actions()
-        d = (await self._drafts()).get(r.id)
+        d = (await self._drafts({r.id})).get(r.id)
         base = self._def(r, actions)
         draft = await self.draft_def(r, d, actions)
-        st = self.display_status(r, d)
-        hits7 = await self.session.scalar(
-            select(func.count())
-            .select_from(RuleHit)
-            .where(RuleHit.rule_id == r.id, RuleHit.at > parse_display_dt(CUT_7D))
-        )
+        st = self.display_status(r, d, self.cr_states.get(d.cr_code) if d else None)
+        hits7 = (await recent_rule_hits(self.session, until=now(), rule_ids={r.id})).get(r.id, 0)
+        base["weekly"] = hits7
+        if draft is not None:
+            draft["weekly"] = hits7
         pending = await self.session.scalar(
             select(func.count())
             .select_from(ActionRun)
@@ -267,8 +344,22 @@ class RuleService:
 
     async def hits(self, code: str, params: PageParams, *, range_: str) -> Page[dict[str, Any]]:
         r = await self.get(code)
-        cut = CUT_7D if range_ == "7d" else "2026-09-25"
-        return paginate([h for h in await self.hit_dicts(r) if h["at"] > cut], params)
+        until = now()
+        since = until - timedelta(days=7 if range_ == "7d" else 30)
+        statement = select(RuleHit).where(RuleHit.rule_id == r.id, RuleHit.at >= since, RuleHit.at <= until)
+        total = int(await self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        page = params.clamp(total)
+        hits = list(
+            await self.session.scalars(
+                statement.order_by(RuleHit.seq, RuleHit.id).limit(page.size).offset(page.offset)
+            )
+        )
+        alerts = await self._alerts({h.alert_id for h in hits if h.alert_id})
+        return Page.of(
+            [self.hit_out(h, r.code, alerts.get(h.alert_id) if h.alert_id else None) for h in hits],
+            total,
+            params,
+        )
 
     async def hit(self, code: str) -> tuple[Rule, RuleHit, dict[str, Any], Alert | None]:
         h = await self.session.scalar(select(RuleHit).where(RuleHit.code == code))
@@ -314,75 +405,27 @@ class RuleService:
         return out
 
     async def replay(self, code: str, body: ReplayIn) -> dict[str, Any]:
-        """rules.ts replay()：不落业务数据。"""
+        from app.modules.dynamic.rule_runtime import run_rule
+        from app.modules.static.permissions import check_cr
+
         r = await self.get(code)
-        actions = await self._actions()
-        d = (await self._drafts()).get(r.id)
-        use_draft = body.version == "draft"
-        if use_draft and d is None:
-            raise validation([("version", "这条规则没有草稿，不能按草稿试跑")])
-        rule = (await self.draft_def(r, d, actions)) if use_draft else self._def(r, actions)
-        assert rule is not None
-        cut = CUT_7D if body.range == "7d" else CUT_30D
-        all_ = [h for h in await self.hit_dicts(r) if h["at"] > cut]
-        counted = [h for h in all_ if h["result"] != "已去重"]
-        rnd = seeded(len(all_) * 13 + (7 if use_draft else 1) + (3 if body.range == "7d" else 5))
-        samples = []
-        for h in all_:
-            if h["result"] == "已去重":
-                diff = "被去重"
-            elif use_draft and not rule["core"] and rnd() < 0.18:
-                diff = "不再命中"
-            else:
-                diff = "一致"
-            samples.append(
-                {
-                    "key": h["id"],
-                    "at": h["at"],
-                    "objKind": h["objKind"],
-                    "objId": h["objId"],
-                    "objLabel": h["objLabel"],
-                    "dims": h["dims"],
-                    "value": h["value"],
-                    "diff": diff,
-                }
-            )
-        if use_draft:
-            extra = max(2, math.floor(len(counted) * 0.12 + 0.5))
-            products = _products()
-            for i in range(extra):
-                if not counted:
-                    break
-                h = counted[math.floor(rnd() * max(1, len(counted)))]
-                used = {x["objId"] for x in samples}
-                is_p = rule["objKind"] == "product"
-                p = next((x for x in products if x["sku"] not in used), products[0]) if is_p else None
-                st = store_of_key(f"{rule['id']}-NEW-{i}") if is_p else None
-                samples.append(
-                    {
-                        "key": f"NEW-{i}",
-                        "at": h["at"],
-                        "objKind": h["objKind"],
-                        "objId": p["sku"] if p else h["objId"],
-                        "objLabel": f"{p['name']} {p['spec']}" if p else h["objLabel"],
-                        "dims": hit_dims(st["id"], st["name"]) if st else h["dims"],
-                        "value": f"{to_fixed_str(17 + rnd(), 2)}%" if is_p else h["value"],
-                        "diff": "新增命中",
-                    }
-                )
-        samples.sort(key=lambda s: s["at"], reverse=True)
-        n = {k: sum(1 for s in samples if s["diff"] == k) for k in ("一致", "新增命中", "不再命中", "被去重")}
-        return {
-            "actual": len(counted),
-            "would": n["一致"] + n["新增命中"],
-            "added": n["新增命中"],
-            "removed": n["不再命中"],
-            "deduped": n["被去重"],
-            "dedupeReason": dedupe_reason(rule),
-            "samples": samples,
-        }
+        base = self._def(r, await self._actions())
+        definition = base
+        if body.version == "draft":
+            draft = (await self._drafts({r.id})).get(r.id)
+            if draft is None:
+                raise fail("RULE_DRAFT_MISSING", "规则没有已保存草稿", 422)
+            cr = await self.session.scalar(select(ChangeRequest).where(ChangeRequest.code == draft.cr_code))
+            if cr is None or cr.status == CRStatus.published:
+                raise fail("RULE_DRAFT_UNAVAILABLE", "草稿缺少有效变更单，不能执行", 422)
+            await check_cr(self.session, cr, self.user)
+            definition = {**base, **deepcopy(draft.patch), "version": draft.version}
+        elif r.version is None:
+            raise fail("RULE_NOT_PUBLISHED", "规则没有当前已发布版本，请选择已保存草稿", 422)
+        return await run_rule(self.session, self.user, base, definition, body)
 
     async def _next_code(self) -> str:
+        await get_adapter(self.session).xact_lock(self.session, "dynamic.rule.code")
         codes = (await self.session.scalars(select(Rule.code))).all()
         n = max((int(c[2:]) for c in codes if c.startswith("R-") and c[2:].isdigit()), default=0)
         return f"R-{n + 1:03d}"
@@ -390,6 +433,11 @@ class RuleService:
     async def create(self, body: RuleCreateIn) -> dict[str, Any]:
         """新建规则：未发布（version=null，不进快照），状态变更中；传 cr 时同时开草稿（v1，改动为空）。"""
         name = (body.name or "").strip() or "未命名规则"
+        kind = body.obj_kind or await self._first_obj_kind()
+        if not kind or not await self.session.scalar(
+            select(ObjectType.id).where(ObjectType.code == kind, ObjectType.status == ObjectStatus.published)
+        ):
+            raise validation([("objKind", "请选择已发布的真实对象类型（当前规则模型编号上限32字）")])
         r = Rule(
             code=await self._next_code(),
             version=None,
@@ -398,7 +446,7 @@ class RuleService:
             owner=self.user.name,
             status=RuleStatus.changing,
             core=False,
-            obj_kind=body.obj_kind or await self._first_obj_kind(),
+            obj_kind=kind,
             level=AlertLevel.medium,
             output=RuleOutput.alert,
             conds=[],
@@ -418,10 +466,13 @@ class RuleService:
             )
         return await self.detail(r.code, view="draft" if body.cr else None)
 
-    async def _first_obj_kind(self) -> str:
-        """新建规则默认对象类型 = 本体里第一个对象类型（表空时退回 product）。"""
-        return (
-            await self.session.scalar(select(ObjectType.code).order_by(ObjectType.id).limit(1)) or "product"
+    async def _first_obj_kind(self) -> str | None:
+        """仅使用当前规则模型能存储的真实已发布类型；空库不能凭空退回product。"""
+        return await self.session.scalar(
+            select(ObjectType.code)
+            .where(ObjectType.status == ObjectStatus.published, func.length(ObjectType.code) <= 32)
+            .order_by(ObjectType.id)
+            .limit(1)
         )
 
     @staticmethod
@@ -435,7 +486,18 @@ class RuleService:
                 msg = f"该规则已在变更单 {d.cr_code} 的草稿里"
                 raise fail("TARGET_IN_OTHER_CR", msg, 409, crId=d.cr_code)
             return d
-        d = RuleDraft(rule_id=r.id, cr_code=cr, version=(r.version or 0) + 1, patch={}, by=self.user.name)
+        from app.modules.dynamic.rules_models import RuleVersion
+
+        historical = await self.session.scalar(
+            select(func.max(RuleVersion.version)).where(RuleVersion.rule_id == r.id)
+        )
+        d = RuleDraft(
+            rule_id=r.id,
+            cr_code=cr,
+            version=max(historical or 0, r.version or 0) + 1,
+            patch={},
+            by=self.user.name,
+        )
         self.session.add(d)
         if r.status != RuleStatus.disabled:  # 停用规则开草稿不改状态，放弃后仍是停用（不被误启用）
             r.status = RuleStatus.changing
@@ -459,8 +521,14 @@ class RuleService:
         await CrLink(self.session, self.user).discard(d.cr_code, "rule", r.code)
         await self.session.delete(d)
         if r.version is None:
-            await self.session.flush()
-            await self.session.delete(r)
+            from app.modules.dynamic.rules_models import RuleVersion
+
+            has_history = await self.session.scalar(
+                select(RuleVersion.id).where(RuleVersion.rule_id == r.id).limit(1)
+            )
+            if has_history is None:
+                await self.session.flush()
+                await self.session.delete(r)
         elif r.status == RuleStatus.changing:
             r.status = RuleStatus.published
         await self.session.flush()
@@ -485,14 +553,25 @@ class RuleService:
         at: ActionType | None = None
         if st.action_type_id:
             at = await self.session.scalar(select(ActionType).where(ActionType.code == st.action_type_id))
-            if at is None or at.target_kind != r.obj_kind or at.status.value == "草稿":
+            if (
+                at is None
+                or at.target_kind != r.obj_kind
+                or at.status.value == "草稿"
+                or at.retired_release_id is not None
+            ):
                 errs.append(("autoStage.actionTypeId", "只能选目标对象为规则对象、且不是草稿的动作类型"))
         if st.enabled and not st.action_type_id:
             errs.append(("autoStage.actionTypeId", "开启自动暂存需选择动作类型"))
-        if st.confirmer and st.confirmer not in _meta("CONFIRMERS"):
-            errs.append(("autoStage.confirmer", "确认人不在可选列表里"))
+        if st.enabled and not st.confirmer:
+            errs.append(("autoStage.confirmer", "开启自动暂存需指定在用确认人"))
+        from app.modules.dynamic.catalog import get_catalog
+
+        catalog = await get_catalog(self.session)
+        if st.confirmer and catalog.person(st.confirmer) is None:
+            errs.append(("autoStage.confirmer", "确认人不能定位唯一在用用户，请重新选择"))
+        sources = (await self.meta())["mappingSources"]
         for i, m in enumerate(st.mapping):
-            if m.from_ and m.from_ not in _meta("MAPPING_SOURCES"):
+            if m.from_ and m.from_ not in sources and not m.from_.startswith("固定值："):
                 errs.append((f"autoStage.mapping[{i}].from", "取值来源不在可选列表里"))
         if errs:
             raise validation(errs)
@@ -550,21 +629,19 @@ class ScenarioService:
             raise NotFound("方案不存在", details={"id": code})
         return s
 
-    async def _vers(self) -> dict[int, str]:
-        return {
-            i: v
-            for i, v in (await self.session.execute(select(OntologyRelease.id, OntologyRelease.ver))).all()
-        }
+    async def _vers(self, ids: set[int] | None = None) -> dict[int, str]:
+        stmt = select(OntologyRelease.id, OntologyRelease.ver)
+        if ids is not None:
+            if not ids:
+                return {}
+            stmt = stmt.where(OntologyRelease.id.in_(ids))
+        return {i: v for i, v in (await self.session.execute(stmt)).all()}
 
     async def _result(self, s: Scenario) -> ScenarioResult | None:
         return await self.session.scalar(select(ScenarioResult).where(ScenarioResult.scenario_id == s.id))
 
-    async def _impacts(self, s: Scenario) -> list[dict[str, Any]]:
-        rows = (
-            await self.session.scalars(
-                select(ScenarioImpact).where(ScenarioImpact.scenario_id == s.id).order_by(ScenarioImpact.seq)
-            )
-        ).all()
+    @staticmethod
+    def _impacts(rows: list[ScenarioImpact]) -> list[dict[str, Any]]:
         return [
             {
                 "sku": x.sku,
@@ -626,19 +703,22 @@ class ScenarioService:
     async def list_scenarios(
         self, params: PageParams, *, status: str | None, kw: str | None
     ) -> Page[dict[str, Any]]:
-        vers = await self._vers()
-        rows = (
-            await self.session.scalars(
-                select(Scenario).order_by(Scenario.created_on.desc(), Scenario.id.desc())
+        stmt = select(Scenario)
+        if status and status != "全部":
+            try:
+                wanted = ScenarioStatus(status)
+            except ValueError:
+                raise validation([("status", "未知方案状态")]) from None
+            stmt = stmt.where(Scenario.status == wanted)
+        if k := (kw or "").strip():
+            stmt = stmt.where(
+                or_(Scenario.name.contains(k, autoescape=True), Scenario.code.icontains(k, autoescape=True))
             )
-        ).all()
-        out = [
-            await self.out(s, vers)
-            for s in rows
-            if (not status or status == "全部" or s.status.value == status)
-            and (not kw or kw in s.name or kw.lower() in s.code.lower())
-        ]
-        return paginate(out, params)
+        rows, total = await ScenarioRepo(self.session).list_page(
+            stmt.order_by(Scenario.created_on.desc(), Scenario.id.desc()), params
+        )
+        vers = await self._vers({s.base_release_id for s in rows if s.base_release_id is not None})
+        return Page.of([await self.out(s, vers) for s in rows], total, params)
 
     async def detail(self, code: str) -> dict[str, Any]:
         return await self.out(await self.get(code), await self._vers(), full=True)
@@ -655,9 +735,17 @@ class ScenarioService:
         return self.result_out(res)
 
     async def impacts(self, code: str, params: PageParams) -> Page[dict[str, Any]]:
-        return paginate(await self._impacts(await self.get(code)), params)
+        scenario = await self.get(code)
+        rows, total = await ScenarioImpactRepo(self.session).list_page(
+            select(ScenarioImpact)
+            .where(ScenarioImpact.scenario_id == scenario.id)
+            .order_by(ScenarioImpact.seq, ScenarioImpact.id),
+            params,
+        )
+        return Page.of(self._impacts(rows), total, params)
 
     async def _next_code(self) -> str:
+        await get_adapter(self.session).xact_lock(self.session, "dynamic.scenario.code")
         codes = (await self.session.scalars(select(Scenario.code))).all()
         n = max((int(c.split("-")[1]) for c in codes if c.startswith("SCN-") and c[4:].isdigit()), default=0)
         return f"SCN-{n + 1:04d}"
@@ -715,23 +803,12 @@ class ScenarioService:
             )
         tpl = template_of(s.template_code)
         opts = await scope_options(self.session, self.user, tpl)
-        scope, drivers, errs = tpl_validate(tpl, body.scope, body.drivers, opts)
+        _scope, drivers, errs = tpl_validate(tpl, body.scope, body.drivers, opts)
         if errs:
             raise validation(errs)
         if tpl_no_driver(tpl, drivers):
             raise fail("SCENARIO_NO_DRIVER", tpl["noDriverHint"], 422)
-        if body.name and body.name.strip():
-            s.name = body.name.strip()
-        s.scope, s.drivers, s.status, s.fail_reason = scope, drivers, ScenarioStatus.running, None
-        old = await self._result(s)
-        if old is not None:
-            await self.session.delete(old)
-        for x in (
-            await self.session.scalars(select(ScenarioImpact).where(ScenarioImpact.scenario_id == s.id))
-        ).all():
-            await self.session.delete(x)
-        await self.session.flush()
-        return await self.out(s, await self._vers(), full=True)
+        raise fail("SCENARIO_EXECUTOR_UNAVAILABLE", "真实推演数据集与执行器尚未配置，未运行方案", 503)
 
     async def compute(self, code: str) -> None:
         """后台任务：按 start 时写入的 scope / drivers 计算并落库（运行中 → 已完成 / 失败）。
@@ -750,44 +827,7 @@ class ScenarioService:
             await self.session.flush()
 
     async def _compute(self, s: Scenario) -> None:
-        scope, drivers = s.scope, s.drivers
-        at = now()
-        res = engine_of(s.template_code)["simulate"](scope, drivers, sec(at))
-        self.session.add(
-            ScenarioResult(
-                scenario_id=s.id,
-                ran_at=at,
-                scope=scope,
-                drivers=drivers,
-                weeks=res["weeks"],
-                base_sales=res["baseSales"],
-                sales=res["sales"],
-                base_margin=res["baseMargin"],
-                margin=res["margin"],
-                kpis=res["kpis"],
-                is_seed=False,
-            )
-        )
-        for i, x in enumerate(res["impacts"], 1):
-            self.session.add(
-                ScenarioImpact(
-                    scenario_id=s.id,
-                    seq=i,
-                    sku=x["sku"],
-                    name=x["name"],
-                    category=x["category"],
-                    store_id=x["storeId"],
-                    store_name=x["storeName"],
-                    base_sales=x["baseSales"],
-                    sales=x["sales"],
-                    stockout_base=x["stockoutBase"],
-                    stockout=x["stockout"],
-                    suggest=x["suggest"],
-                    is_seed=False,
-                )
-            )
-        s.status = ScenarioStatus.done
-        await self.session.flush()
+        raise fail("SCENARIO_EXECUTOR_UNAVAILABLE", "真实推演数据集与执行器尚未配置", 503)
 
     async def compare(self, ids: list[str]) -> dict[str, Any]:
         if not ids or len(ids) > 3:
@@ -806,8 +846,7 @@ class ScenarioService:
         res = await self._result(s)
         if res is None:
             return []
-        full = {**self.result_out(res), "impacts": await self._impacts(s)}
-        return engine_of(s.template_code)["stage_plan"](res.scope, res.drivers, full)
+        raise fail("SCENARIO_EXECUTOR_UNAVAILABLE", "真实推演建议执行器尚未配置，未生成动作建议", 503)
 
     async def plan(self, code: str) -> list[dict[str, Any]]:
         return await self._plan(await self.get(code))
@@ -854,13 +893,29 @@ class ScenarioService:
         await self.session.flush()
         return {"staged": ids, "message": f"已暂存 {len(ids)} 条动作到动作中心（待确认）"}
 
-    def meta(self) -> dict[str, Any]:
+    async def meta(self) -> dict[str, Any]:
         tpl = template_of(None)
+
+        async def values(column):
+            return sorted(
+                v for v in await self.session.scalars(select(column).distinct()) if isinstance(v, str)
+            )
+
+        areas = await values(Scenario.scope["area"].as_string())
+        categories = await values(Scenario.scope["category"].as_string())
+        promos = await values(Scenario.drivers["promo"].as_string())
+        definitions = deepcopy(templates())
+        for definition in definitions:
+            for field in definition["scope"]:
+                if field["key"] in ("area", "category"):
+                    field["options"] = areas if field["key"] == "area" else categories
         return {
-            "templates": templates(),
-            "areas": _meta("SC_AREAS"),
-            "categories": _meta("SC_CATEGORIES"),
-            "promoTypes": _meta("PROMO_TYPES"),
+            "executorConfigured": False,
+            "unavailableReason": "真实推演数据集与执行器尚未配置；仅可查看已存历史结果",
+            "templates": definitions,
+            "areas": areas,
+            "categories": categories,
+            "promoTypes": promos,
             "baseDrivers": defaults(driver_fields(tpl)),
             "statuses": ["全部", *[x.value for x in ScenarioStatus]],
         }
@@ -936,6 +991,22 @@ class LifecycleService:
                 "readonly": True,
             }
         out = {**(await lifecycle_def(self.session, lc)), "versions": await self._versions(lc)}
+        until = now()
+        counts = dict(
+            (
+                await self.session.execute(
+                    select(LifecycleTransition.tr_code, func.count())
+                    .join(LifecycleChange, LifecycleChange.transition_id == LifecycleTransition.id)
+                    .where(
+                        LifecycleChange.lifecycle_id == lc.id,
+                        LifecycleChange.at >= until - timedelta(days=7),
+                        LifecycleChange.at <= until,
+                    )
+                    .group_by(LifecycleTransition.tr_code)
+                )
+            ).all()
+        )
+        out["transitions"] = [{**t, "weekly": counts.get(t["id"], 0)} for t in out["transitions"]]
         draft = None
         if view == "draft":
             q = select(LifecycleDraft).where(LifecycleDraft.lifecycle_id == lc.id)
@@ -950,15 +1021,39 @@ class LifecycleService:
         return out
 
     async def changes(self, object_id: str, params: PageParams, *, illegal: bool) -> Page[dict[str, Any]]:
-        return paginate(await self._changes(await self.get(object_id), illegal=illegal), params)
+        lc = await self.get(object_id)
+        statement = select(LifecycleChange).where(LifecycleChange.lifecycle_id == lc.id)
+        if illegal:
+            statement = statement.where(LifecycleChange.transition_id.is_(None))
+        total = int(await self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        page = params.clamp(total)
+        rows = list(
+            await self.session.scalars(
+                statement.order_by(LifecycleChange.at.desc(), LifecycleChange.code.desc())
+                .limit(page.size)
+                .offset(page.offset)
+            )
+        )
+        return Page.of(await self.change_rows(rows), total, params)
 
-    async def _changes(self, lc: Lifecycle, *, illegal: bool) -> list[dict[str, Any]]:
+    async def _changes(
+        self, lc: Lifecycle, *, illegal: bool, since: datetime | None = None, until: datetime | None = None
+    ) -> list[dict[str, Any]]:
         q = select(LifecycleChange).where(LifecycleChange.lifecycle_id == lc.id)
         if illegal:
             q = q.where(LifecycleChange.transition_id.is_(None))
+        if since is not None:
+            q = q.where(LifecycleChange.at >= since)
+        if until is not None:
+            q = q.where(LifecycleChange.at <= until)
         rows = (
             await self.session.scalars(q.order_by(LifecycleChange.at.desc(), LifecycleChange.code.desc()))
         ).all()
+        return await self.change_rows(rows)
+
+    async def change_rows(self, rows: list[LifecycleChange]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
         trs = {
             i: c
             for i, c in (
@@ -998,11 +1093,13 @@ class LifecycleService:
         lc = await self.get(object_id)
         if not lc.rule_code:
             return []
-        cut = SINCE_7D if since in (None, "", "7d") else since
+        until = now()
+        try:
+            cut = until - timedelta(days=7) if since in (None, "", "7d") else parse_display_dt(since)
+        except (ValueError, TypeError):
+            raise validation([("since", "须为7d或有效日期时间")]) from None
         groups: dict[str, dict[str, Any]] = {}
-        for c in await self._changes(lc, illegal=True):
-            if c["at"] < cut:
-                continue
+        for c in await self._changes(lc, illegal=True, since=cut, until=until):
             g = groups.setdefault(
                 f"{c['from']} → {c['to']}",
                 {"from": c["from"], "to": c["to"], "count": 0, "alertId": None, "lastAt": c["at"]},
@@ -1024,11 +1121,26 @@ class LifecycleService:
         if errs:
             raise validation(errs)
         edits = {
-            "addStates": body.add_states,
+            "addStates": [{**s, "key": s.get("key") or s["name"]} for s in body.add_states],
             "addTransitions": body.add_transitions,
             "editTransitions": body.edit_transitions,
             "removeTransitions": body.remove_transitions,
         }
+        from app.modules.dynamic.writeback import apply_edits, validate_transition_refs
+
+        historical = await self.session.scalar(
+            select(func.max(LifecycleVersion.version)).where(LifecycleVersion.lifecycle_id == lc.id)
+        )
+        try:
+            await validate_transition_refs(self.session, edits)
+            apply_edits(
+                {"states": cur["states"], "transitions": cur["transitions"]},
+                edits,
+                code=lc.code,
+                version=max(historical or 0, lc.version or 0) + 1,
+            )
+        except AppError as error:
+            raise validation([("edits", error.message)]) from None
         d = await self.session.scalar(
             select(LifecycleDraft).where(
                 LifecycleDraft.lifecycle_id == lc.id, LifecycleDraft.cr_code == body.cr
@@ -1066,7 +1178,7 @@ def validate_lc_edits(cur: dict[str, Any], body: LifecycleDraftIn) -> list[tuple
             errs.append((f"addStates[{i}].key", "状态编号必须是文本"))
         if not isinstance(s.get("name"), str):
             errs.append((f"addStates[{i}].name", "状态名称必须是文本"))
-        if s.get("kind") not in kinds:
+        if not isinstance(s.get("kind"), str) or s["kind"] not in kinds:
             errs.append((f"addStates[{i}].kind", f"状态类型须为 {' / '.join(sorted(kinds))} 之一"))
         if errs and errs[-1][0].startswith(f"addStates[{i}]"):
             continue

@@ -26,7 +26,7 @@ from app.core import clock
 from app.core.enums import TimelineStatus
 from app.core.errors import AppError, EmptyInput, IdempotencyConflict, NotFound, SubmissionCriteriaFailed
 from app.core.state import InvalidTransition, Transitions, ensure_transition
-from app.modules.dynamic.catalog import JsonRefCatalog
+from app.modules.dynamic.catalog import DatabaseRefCatalog
 from app.modules.dynamic.errors import (
     AlertLockedByAction,
     AlreadyResubmitted,
@@ -115,7 +115,7 @@ def validation_failed(field: str, message: str) -> AppError:
 
 
 def approver_for_action(catalog: Any, action: str | None) -> str | None:
-    """发起动作的审批人：取动作类型的审批人配置（ACTION_META.approver），不按对象类型写死。"""
+    """审批人取已发布动作配置解析的真实用户；不使用演示审批路由。"""
     meta = catalog.action_meta(action) if action else None
     return (meta or {}).get("approver") or None
 
@@ -146,7 +146,7 @@ def seed_first_order(model: Any) -> tuple[Any, ...]:
 
 class ActionService:
     def __init__(
-        self, session: AsyncSession, user: CurrentUser, catalog: JsonRefCatalog, ports: Ports
+        self, session: AsyncSession, user: CurrentUser, catalog: DatabaseRefCatalog, ports: Ports
     ) -> None:
         self.session = session
         self.user = user
@@ -154,6 +154,10 @@ class ActionService:
         self.ports = ports
         self.repo = ActionRunRepo(session)
         self.alerts = AlertRepo(session)
+
+    def person_label(self, value: str | None) -> str | None:
+        person = self.catalog.person(value)
+        return person["name"] if person and person["id"] == value else value
 
     # ---------- 输出 ----------
     async def to_out(self, runs: Sequence[ActionRun]) -> list[ActionRunOut]:
@@ -172,7 +176,7 @@ class ActionService:
                 "alertId": alert_code,
                 "ruleId": r.rule_code,
                 "ruleVersion": r.rule_version,
-                "confirmer": r.confirmer,
+                "confirmer": self.person_label(r.confirmer),
                 "session": r.qa_session,
                 "sessionTitle": r.qa_session_title,
                 "scenarioId": r.scenario_code,
@@ -197,8 +201,8 @@ class ActionService:
             obj_id=r.obj_id,
             obj_label=r.obj_label,
             initiator=r.initiator,
-            confirmer=r.confirmer,
-            approver=r.approver,
+            confirmer=self.person_label(r.confirmer),
+            approver=self.person_label(r.approver),
             status=r.status.value,
             submitted_at=r.submitted_at,
             at=r.submitted_at,
@@ -222,14 +226,18 @@ class ActionService:
 
     def _not_mine(self, r: ActionRun) -> bool:
         """Actions.vue L87：只有 source.confirmer 存在时才限定本人。"""
-        return bool(r.in_center and r.confirmer and r.confirmer != self.user.name)
+        if not r.in_center or not r.confirmer:
+            return False
+        actor = self.catalog.person(r.confirmer)
+        return actor is None or actor["id"] != self.user.id
 
     def is_approver(self, r: ActionRun) -> bool:
-        return not r.approver or r.approver.split()[-1] == self.user.name
+        actor = self.catalog.person(r.approver)
+        return actor is not None and actor["id"] == self.user.id
 
     def _not_mine_text(self, r: ActionRun) -> str:
         head = f"该动作由规则 {r.rule_code} 暂存，" if r.rule_code else "该动作"
-        return f"{head}指定确认人为 {r.confirmer}，只有确认人可以确认提交或撤回"
+        return f"{head}指定确认人为 {self.person_label(r.confirmer)}，只有确认人可以确认提交或撤回"
 
     def can(self, r: ActionRun) -> ActionCan:
         reasons: dict[str, str] = {}
@@ -413,7 +421,7 @@ class ActionService:
     async def _succeeded_side_effects(self, r: ActionRun, seq: int) -> None:
         """动作成功：发 ActionExecuted；关联告警 处理中 → 已解决（Alerts.vue L182 的承诺）。
 
-        本体对象属性的修改（写回后的本体变更）依赖动作类型的 effects 定义（Palantir 模块，未合并）—— STUB。
+        事件发射器在同一事务按执行版本应用受控业务属性，再持久化成功事件。
         """
         await self._emit(r, EVENT_ACTION_EXECUTED, seq)
         linked = (
@@ -462,7 +470,7 @@ class ActionService:
             sec = self.catalog.timeout_sec(r.sys_code)
             seq = await self._log(
                 r,
-                f"{system} {sec} 秒未返回结果，标记为结果未知（不重试写入）",
+                "已持久排队，等待执行器调用外部系统" if res.code == "QUEUED" else f"{system} {sec} 秒未返回结果，标记为结果未知（不重试写入）",
                 f"系统 · {res.reason}" if res.reason else SYSTEM,
                 TimelineStatus.warn,
             )
@@ -473,6 +481,10 @@ class ActionService:
         t = self.catalog.action_type(code) if code else self.catalog.action_type_by_name(name or "")
         if t is None or (name and code and t["name"] != name):
             raise validation_failed("typeId" if code else "action", f"未知动作：{code or name}")
+        if (self.catalog.action_meta(t["id"]) or {}).get("approvalConfigured") is False:
+            raise AppError(
+                "动作审批配置未指定可用审批人", code="ACTION_APPROVAL_NOT_CONFIGURED", status_code=503
+            )
         return t
 
     async def _replay_or_conflict(
@@ -516,7 +528,12 @@ class ActionService:
     ) -> ActionRun:
         now = clock.now()
         code = await self.repo.next_code(clock.today().strftime("%Y%m%d"))
-        meta = self.catalog.action_meta(type_["name"]) or {}
+        meta = self.catalog.action_meta(type_["id"]) or {}
+        if confirmer:
+            actor = self.catalog.person(confirmer)
+            if actor is None:
+                raise validation_failed("source.confirmer", "确认人不能定位唯一在用用户，请重新选择")
+            confirmer = actor["id"]
         run = ActionRun(
             code=code,
             action_type_code=type_["id"],
@@ -538,7 +555,9 @@ class ActionService:
             params_text=params,
             initiator=initiator,
             confirmer=confirmer,
-            approver=approver or meta.get("approver"),
+            approver=(meta.get("approverId") or approver or meta.get("approver"))
+            if not approver or approver == meta.get("approver")
+            else approver,
             idem_key=idem_key or idempotency_key_for(code),
             status=status,
             sys_code=meta.get("sysId") or type_.get("sysId"),
@@ -550,13 +569,16 @@ class ActionService:
         return await self.repo.create(run, actor=self.user.id)
 
     def _call_text(self, r: ActionRun) -> str:
-        meta = self.catalog.action_meta(r.action_name) or {}
+        meta = self.catalog.action_meta(r.action_type_code) or {}
         return f"调用 {self.catalog.system_name(r.sys_code) or r.sys_code}：{meta.get('call', r.action_name)}"
 
     # ---------- 写：接口 ----------
     async def stage(self, body: StageIn) -> tuple[ActionRun, bool]:
         """POST /action-runs:stage → (记录, 是否新建)。只生成待确认，不调外部系统。"""
         t = self._type_of(name=body.action, code=body.type_id)
+        meta = self.catalog.action_meta(t["id"]) or {}
+        if body.approver and body.approver not in (meta.get("approver"), meta.get("approverId")):
+            raise validation_failed("approver", "审批人必须使用已发布动作配置，不能由请求覆盖")
         src = body.source
         alert: Alert | None = None
         if src.alert_id:
@@ -589,7 +611,7 @@ class ActionService:
             initiator=initiator,
             confirmer=confirmer,
             approver=body.approver,
-            obj_kind=body.obj_kind or (self.catalog.action_meta(t["name"]) or {}).get("kind"),
+            obj_kind=body.obj_kind or (self.catalog.action_meta(t["id"]) or {}).get("kind"),
             obj_id=body.obj_id,
             obj_label=body.obj_label,
             params=body.params,
@@ -623,12 +645,19 @@ class ActionService:
         )
         owner = confirmer or initiator
         await self._log(
-            run, "等待确认提交", f"确认人 {owner}，确认后进入 {run.approver} 审批", TimelineStatus.warn
+            run,
+            "等待确认提交",
+            f"确认人 {owner}，确认后按已发布配置免审提交"
+            if meta.get("approvalRequired") is False
+            else f"确认人 {owner}，确认后进入 {run.approver} 审批",
+            TimelineStatus.warn,
         )
         return run, True
 
     async def confirm(self, code: str) -> ActionRun:
-        r = await self.get(code)
+        from app.modules.integration.reconcile import lock_run
+
+        r = await lock_run(self.session, code)
         ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.approving)
         if self._not_mine(r):
             raise NotConfirmer(self._not_mine_text(r))
@@ -638,8 +667,16 @@ class ActionService:
         )
         r.status = ActionStatus.approving
         r.confirmed_at = clock.now()
+        r.confirmer = r.confirmer or self.user.id
         await self._log(r, "确认提交", f"确认人 {self.user.name}")
-        await self._log(r, "等待审批", f"审批人 {r.approver}", TimelineStatus.warn)
+        meta = self.catalog.action_meta(r.action_type_code) or {}
+        if meta.get("approvalConfigured") and meta.get("approvalRequired") is False:
+            r.status = ActionStatus.executing
+            r.approved_at = clock.now()
+            await self._log(r, "按动作配置免审", self.user.name)
+            await self._submit(r)
+            return r
+        await self._log(r, "等待审批", f"审批人 {self.person_label(r.approver)}", TimelineStatus.warn)
         return r
 
     async def withdraw(self, code: str, reason: str) -> ActionRun:
@@ -655,14 +692,16 @@ class ActionService:
 
     async def approve(self, code: str) -> ActionRun:
         """审批中 → 执行中 → submit。审批入口前端没有（[待定]）。
-        简单规则（同 mock）：审批人 = 「角色 姓名」，当前用户姓名须与审批人姓名一致；未指定审批人不限。"""
-        r = await self.get(code)
+        审批人必须对应当前真实用户编号；旧姓名仅在能定位唯一在用用户时兼容。"""
+        from app.modules.integration.reconcile import lock_run
+
+        r = await lock_run(self.session, code)
         ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.executing)
         if not self.is_approver(r):
             raise NotApprover(f"该动作审批人为 {r.approver}，只有审批人可以审批")
         r.status = ActionStatus.executing
         r.approved_at = clock.now()
-        await self._log(r, "审批通过", f"审批人 {r.approver}")
+        await self._log(r, "审批通过", f"审批人 {self.person_label(r.approver)}")
         await self._log(r, self._call_text(r), f"幂等键 {r.idem_key}")
         await self.session.flush()
         await self._submit(r)
@@ -670,7 +709,9 @@ class ActionService:
 
     async def resubmit(self, code: str) -> tuple[ActionRun, ActionRun]:
         """失败 → 新动作（执行中，新幂等键 -rN，沿用原审批）→ submit；原记录写 retried_as。"""
-        a = await self.get(code)
+        from app.modules.integration.reconcile import lock_run
+
+        a = await lock_run(self.session, code)
         if a.status != ActionStatus.failed:
             raise InvalidTransition(
                 "已对账 · 外部未执行，如仍需执行请重新发起"
@@ -714,6 +755,9 @@ class ActionService:
         rec.params = a.params
         rec.biz_key = a.biz_key
         rec.in_center = a.in_center
+        await self._check_criteria(rec.action_type_code, {
+            "objKind": rec.obj_kind, "objId": rec.obj_id, "params": rec.params_text,
+        })
         system = self.catalog.system_name(rec.sys_code) or rec.sys_code
         me = self.user.name
         await self._log(rec, f"重新提交自 {a.code}（上次失败：{a.fail_reason or '--'}）", me)
@@ -736,9 +780,20 @@ class ActionService:
         return rec, a
 
     async def reconcile(self, code: str, result: str, note: str) -> ActionRun:
-        r = await self.get(code)
+        r = await self.session.scalar(
+            select(ActionRun)
+            .where(ActionRun.code == code)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if r is None:
+            raise NotFound("动作不存在", details={"id": code})
         if r.status != ActionStatus.unknown:
             raise InvalidTransition(details={"from": r.status.value, "to": ActionStatus.reconciled.value})
+        from app.modules.integration.execution import queued_call
+
+        if await queued_call(self.session, r.id):
+            raise AppError("动作尚在待执行队列，不能提前标记外部对账结果", code="ACTION_STILL_QUEUED", status_code=409)
         me = self.user.name
         system = self.catalog.system_name(r.sys_code) or r.sys_code
         if result == "仍无法确认":
@@ -765,6 +820,7 @@ class ActionService:
         if rr == ReconcileResult.succeeded:
             # 只发 ActionExecuted；告警不自动转已解决（[推断 P10] 未做，照前端）
             await self._emit(r, EVENT_ACTION_EXECUTED, seq)
+        await self.ports.scheduler.resolve_reconcile(r.code, ReconcileOutcome(rr.name), me)
         return r
 
 
@@ -773,16 +829,28 @@ class DynamicReconciliationListener:
 
     查到也转「已对账」，不转「成功」。"""
 
-    def __init__(self, session: AsyncSession, catalog: JsonRefCatalog, ports: Ports) -> None:
+    def __init__(self, session: AsyncSession, catalog: DatabaseRefCatalog, ports: Ports) -> None:
         self.session = session
         self.catalog = catalog
         self.ports = ports
         self.repo = ActionRunRepo(session)
 
     async def on_reconciled(self, action_run_id: str, result: ContractReconcileResult) -> None:
-        r = await self.repo.get_by_code(action_run_id)
+        r = await self.session.scalar(
+            select(ActionRun)
+            .where(ActionRun.code == action_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if r is None:
             raise NotFound("动作不存在", details={"id": action_run_id})
+        if (
+            r.status == ActionStatus.reconciled
+            and r.reconcile_result is not None
+            and r.reconcile_result.name == result.outcome.value
+            and (not result.receipt_id or r.ext_ref == result.receipt_id)
+        ):
+            return
         if r.status != ActionStatus.unknown:
             raise InvalidTransition(details={"from": r.status.value, "to": ActionStatus.reconciled.value})
         ok = result.outcome == ReconcileOutcome.succeeded
@@ -822,7 +890,7 @@ class DynamicReconciliationListener:
 
 class AlertService:
     def __init__(
-        self, session: AsyncSession, user: CurrentUser, catalog: JsonRefCatalog, ports: Ports
+        self, session: AsyncSession, user: CurrentUser, catalog: DatabaseRefCatalog, ports: Ports
     ) -> None:
         self.session = session
         self.user = user
@@ -944,13 +1012,17 @@ class AlertService:
             reasons["startAction"] = NotAssignee.message
         if mine_doing and not (rule and rule.get("action")):
             reasons["startAction"] = "规则未绑定动作"
+        meta = self.catalog.action_meta((rule or {}).get("actionTypeId") or "")
+        approval_ready = bool(meta and meta.get("approvalConfigured"))
+        if mine_doing and rule and rule.get("action") and not approval_ready:
+            reasons["startAction"] = "动作审批配置未指定可用审批人"
         if mine_doing and run is not None:
             reasons["startAction"] = "已有关联动作"
         return AlertCan(
             claim=a.status == AlertStatus.open,
             transfer=not closed and not locked,
             close=mine_doing and not locked,
-            start_action=mine_doing and bool(rule and rule.get("action")) and run is None,
+            start_action=mine_doing and bool(rule and rule.get("action")) and approval_ready and run is None,
             reasons=reasons,
         )
 
@@ -961,7 +1033,7 @@ class AlertService:
         return AlertDetail(
             **self._out(a, run).model_dump(),
             rule=rule,
-            approver=approver_for_action(self.catalog, (rule or {}).get("action")),
+            approver=approver_for_action(self.catalog, (rule or {}).get("actionTypeId")),
             recent7d=await self._recent7d(a),
             locked=self._locked(run),
             log=[AlertLogOut(time=x.at, text=x.text, who=x.actor, abnormal=x.abnormal or None) for x in logs],
@@ -1073,7 +1145,7 @@ class AlertService:
         if a.action_run_id:
             raise InvalidTransition("该告警已有关联动作", details={"actionId": (await self._run_of(a)).code})  # type: ignore[union-attr]
         acts = ActionService(self.session, self.user, self.catalog, self.ports)
-        t = acts._type_of(name=rule["action"], code=None)
+        t = acts._type_of(name=rule["action"], code=rule.get("actionTypeId"))
         key = f"act-{a.code.lower()}"
         params = f"{a.value}，阈值 {a.threshold}"  # [推断] 确认卡「触发值」字段
         old = await acts._replay_or_conflict(
@@ -1081,7 +1153,7 @@ class AlertService:
         )
         if old is None:
             await acts._check_criteria(t["id"], {"objKind": a.obj_kind, "objId": a.obj_id, "alertId": a.code})
-            approver = approver_for_action(self.catalog, rule["action"])
+            approver = approver_for_action(self.catalog, t["id"])
             run = await acts.create_run(
                 type_=t,
                 status=ActionStatus.approving,
@@ -1108,14 +1180,25 @@ class AlertService:
                 f"发起人 {me} · 确认人 {me} · 幂等键 {key}",
             )
             await acts._log(run, "确认提交", f"确认人 {me}")
-            await acts._log(run, "等待审批", f"审批人 {approver}", TimelineStatus.warn)
+            meta = self.catalog.action_meta(t["id"]) or {}
+            if meta.get("approvalConfigured") and meta.get("approvalRequired") is False:
+                run.status, run.approved_at = ActionStatus.executing, clock.now()
+                await acts._log(run, "按动作配置免审", me)
+                await acts._submit(run)
+            else:
+                await acts._log(run, "等待审批", f"审批人 {approver}", TimelineStatus.warn)
         else:
             run = old
         a.action_run_id = run.id
+        outcome = (
+            f"待{acts.person_label(run.approver)}审批"
+            if run.status == ActionStatus.approving
+            else f"现为{run.status.value}"
+        )
         await self._log(
             a,
             AlertOp.start_action,
-            f"发起动作「{run.action_name}」，待{run.approver}审批；动作成功后告警自动转为已解决",
+            f"发起动作「{run.action_name}」，{outcome}；动作成功后告警自动转为已解决",
         )
         await self.session.flush()
         return a, run

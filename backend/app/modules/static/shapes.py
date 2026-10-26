@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.core.config import get_settings
+from app.modules.static.explorer import DISPLAY_FIELDS
 from app.modules.static.models import (
     Dimension,
     Knowledge,
@@ -127,6 +128,7 @@ def prop(p: Property) -> Obj:
         "group": p.prop_group,
         "source": p.source_column,
         "desc": p.description,
+        **{key: getattr(p, col) for key, col in DISPLAY_FIELDS.items()},
     }
     for flag, v in (
         ("pk", p.is_pk),
@@ -141,7 +143,12 @@ def prop(p: Property) -> Obj:
 
 def mapping(p: Property) -> Obj:
     """字段映射页一行（ObjectTypes.vue MAP_ALL）。"""
-    return {"prop": p.display_name, "col": p.map_column, "srcType": p.src_type, "transform": p.transform}
+    return {
+        "prop": p.display_name,
+        "col": p.map_column or p.source_column,
+        "srcType": p.src_type or p.data_type,
+        "transform": p.transform,
+    }
 
 
 def view(v: ObjectView, object_code: str) -> Obj:
@@ -219,6 +226,7 @@ def metric_list_item(m: Metric) -> Obj:
         "version": m.version,
         "status": m.status.value,
         "owner": m.owner,
+        "variants": list(m.variants or []),
     }
     if m.review_cr:
         d["review"] = {"cr": m.review_cr, "note": m.review_note or ""}

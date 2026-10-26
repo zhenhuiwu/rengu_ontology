@@ -9,7 +9,9 @@ from sqlalchemy import func, select
 from app.core.config import get_settings
 from app.modules.biz.models import BizOrder, OrderLine, Product, Store
 from app.modules.biz.seeds import big_region_of
+from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectType
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 _DIR = get_settings().seeds_json_dir / "common"
 ORDERS = json.loads((_DIR / "ORDERS.json").read_text("utf-8"))
@@ -20,6 +22,22 @@ DUPS = sorted(k for k, n in Counter(o["id"] for o in ORDERS).items() if n > 1)
 @pytest.fixture
 async def biz(users):
     await run_seeds(users, ["biz"])
+    for code, api, name in (
+        ("order", "SalesOrder", "订单"),
+        ("store", "Store", "门店"),
+        ("product", "Product", "商品"),
+    ):
+        users.add(
+            ObjectType(
+                code=code,
+                api_name=api,
+                display_name=name,
+                obj_group="业务测试",
+                conflict_strategy=ConflictStrategy.user_edit_wins,
+                lifecycle=Lifecycle.active,
+            )
+        )
+    await grant_fixture_roles(users, {"U010001": "R-01", "U010006": "R-05"})
     await users.flush()
     return users
 
@@ -75,12 +93,17 @@ async def test_order_detail_first_duplicate_by_id(client, biz):
     assert (await client.get("/api/biz/v1/orders/SO0")).status_code == 404
 
 
-async def test_viewer_sees_all_with_minimal_row_filter(client, biz):
-    h = {"X-Demo-As": "U010006"}  # 李娜：非管理员；初版最简 row_filter → 不裁剪，和管理员一样
+async def test_viewer_obeys_real_role_scope(client, biz):
+    h = {"X-Demo-As": "U010006"}
+    store = await biz.scalar(select(Store).where(Store.code == "SH0133"))
+    store.big_region = "华南"
+    await biz.flush()
     r = await client.get("/api/biz/v1/orders", headers=h)
     admin = await client.get("/api/biz/v1/orders")
-    assert r.status_code == 200 and r.json()["total"] == admin.json()["total"] > 0
-    assert (await client.get("/api/biz/v1/orders/SO202610240889017", headers=h)).status_code == 200
+    assert r.status_code == 200 and 0 < r.json()["total"] < admin.json()["total"]
+    assert all(row["storeId"] != "SH0133" for row in r.json()["items"])
+    hidden = next(o["id"] for o in ORDERS if o["storeId"] == "SH0133" and o["id"] not in DUPS)
+    assert (await client.get(f"/api/biz/v1/orders/{hidden}", headers=h)).status_code == 404
 
 
 # ---- M7 lineCount / M9 kw、cutoff、dataAsOf（首页 Home.vue:32-46、:54、:103） ----

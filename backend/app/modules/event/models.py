@@ -1,7 +1,7 @@
 """事件类型定义表 + 事件运行表（action-event-api §9）。
 
-- 第 2 轮（palantir-r2）新增 event（近期事件）、event_daily_stat（近 14 天趋势）；
-  event_delivery / event_dedup（逐订阅方投递、去重窗口）仍未建，见 handoff/palantir.md。
+- event（近期事件）、event_daily_stat（趋势）、event_dedup（持久去重）与
+  event_delivery（逐订阅方投递）；新入站同时保存不可变定义快照。
 
 - 主键代理键 id bigint，外键指向 id；接口只出业务编码（event_type.code = 前端 id）。
 - 规则引用（event_type.rule_code、event_subscription.rule_code）暂为**软引用**（varchar R-…），
@@ -28,9 +28,17 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import LabelEnum
-from app.db.base import AppendOnlyTableMixin, Base, CodeMixin, IdMixin, MutableTableMixin
+from app.db.base import (
+    AppendOnlyTableMixin,
+    Base,
+    CodeMixin,
+    IdMixin,
+    MutableTableMixin,
+    OntologyVersionMixin,
+)
 from app.db.types import JsonType, enum_column
 from app.modules.action.models import TypeStatus
+from app.modules.versioning.models import OntologyRelease
 
 
 class EventSource(LabelEnum):
@@ -66,7 +74,7 @@ class EventType(CodeMixin, MutableTableMixin, Base):
     rule_code: Mapped[str | None] = mapped_column(String(32), comment="来源规则 R-…（软引用，接口 ruleId）")
     object: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     object_api: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    obj_kind: Mapped[str | None] = mapped_column(String(32), comment="对象类型前端 id（软引用）")
+    obj_kind: Mapped[str | None] = mapped_column(String(64), comment="对象类型前端 id（软引用）")
     status: Mapped[TypeStatus] = mapped_column(enum_column(TypeStatus, 16), nullable=False)
     version: Mapped[str] = mapped_column(String(16), nullable=False)
     owner: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -158,17 +166,17 @@ class EventTypeVersion(IdMixin, AppendOnlyTableMixin, Base):
 
 
 class EventOutcome(LabelEnum):
-    """事件处理结果（mock EventOutcome，5 个取值；成员顺序 = 页面结果筛选顺序）。
-    设计稿里的 pending（待投递，outbox 用）前端没有，本轮不加 [推断]。"""
+    """运行结果；pending仅用于真实入站，尚未调用任何订阅方。"""
 
     delivered = "已投递"
     alert_created = "已生成告警"
     deduped = "已去重"
     partial = "部分投递"
     failed = "投递失败"
+    pending = "待投递"
 
 
-class Event(CodeMixin, MutableTableMixin, Base):
+class Event(CodeMixin, MutableTableMixin, OntologyVersionMixin, Base):
     """一条事件（mock EVENTS 的一行 = eventsOf() 并集，1,243 条）。code = 生产方 eventId（seed 为 EV-…）。
     第一期不分区；按 (event_type_id, occurred_at desc, id) 索引支持页码分页。"""
 
@@ -182,7 +190,7 @@ class Event(CodeMixin, MutableTableMixin, Base):
         BigInteger, ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
     )
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="接口 at")
-    obj_kind: Mapped[str | None] = mapped_column(String(16), comment="store/product/order/action，可空")
+    obj_kind: Mapped[str | None] = mapped_column(String(64), comment="store/product/order/action，可空")
     object_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="接口 objId")
     obj_label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="载荷摘要")
@@ -191,9 +199,50 @@ class Event(CodeMixin, MutableTableMixin, Base):
         Integer, nullable=False, default=0, comment="接口 subscribers"
     )
     dedup_key: Mapped[str] = mapped_column(String(200), nullable=False, default="")
-    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payload: Mapped[dict | None] = mapped_column(JsonType, comment="原始载荷（seed 无）")
     is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    source: Mapped[str | None] = mapped_column(String(128))
+    producer_type: Mapped[str | None] = mapped_column(String(64))
+    producer_object_type: Mapped[str | None] = mapped_column(String(64))
+    trace_id: Mapped[str | None] = mapped_column(String(128))
+    envelope_hash: Mapped[str | None] = mapped_column(String(64))
+    ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    definition_snapshot: Mapped[dict | None] = mapped_column(JsonType)
+    release: Mapped["OntologyRelease | None"] = relationship(lazy="joined")
+
+
+class EventDelivery(IdMixin, MutableTableMixin, Base):
+    """One durable delivery per immutable event/subscriber; configuration never lives here."""
+
+    __tablename__ = "event_delivery"
+    __table_args__ = (
+        UniqueConstraint("event_id", "subscriber_name"),
+        Index("ix_event_delivery_state_next_at", "state", "next_at"),
+    )
+    event_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("event.id"), nullable=False)
+    subscriber_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    subscription: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(String(128))
+    result: Mapped[dict | None] = mapped_column(JsonType)
+
+
+class EventDedup(IdMixin, MutableTableMixin, Base):
+    """每种类型/去重键的最近接受时间；不随事件保留期清除，因此永久窗口不会失效。"""
+
+    __tablename__ = "event_dedup"
+    __table_args__ = (UniqueConstraint("event_type_id", "dedup_key"),)
+
+    event_type_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
+    )
+    dedup_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    last_accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class EventDailyStat(IdMixin, MutableTableMixin, Base):

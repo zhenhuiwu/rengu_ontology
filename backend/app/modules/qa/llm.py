@@ -4,9 +4,8 @@
   的 AsyncOpenAI 调 DashScope compatible-mode，不再手写 httpx 请求 / 重试 / 响应解析。
 
 - 路由用 `Depends(get_llm)` 取客户端，测试 `app.dependency_overrides[get_llm] = lambda: FakeLLM(...)`。
-- key 只读环境变量 DASHSCOPE_API_KEY，不硬编码、不打印；模型 QA_LLM_MODEL（默认 qwen-flash）、
-  QA_LLM_BASE_URL、QA_LLM_TIMEOUT_S 也走环境变量。
-  [推断] 不进 app/core/config（共享骨架锁定），后续可迁入 Settings。
+- key 从环境变量或本地 .env 的 DASHSCOPE_API_KEY 读取，环境优先且空串可显式禁用。
+  模型 QA_LLM_MODEL、QA_LLM_BASE_URL、QA_LLM_TIMEOUT_S 同样支持 .env，不打印密钥。
 - 没配 key → 503 QA_LLM_UNAVAILABLE（不在启动时报错，其它接口照常可用）。
 """
 
@@ -17,6 +16,7 @@ from typing import Protocol
 
 from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
 
+from app.core.config import get_settings
 from app.core.errors import AppError
 
 
@@ -83,12 +83,14 @@ DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 def get_llm() -> LLMClient:
-    key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    settings = get_settings()
+    file_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
+    key = os.environ.get("DASHSCOPE_API_KEY", file_key).strip()
     if not key:
         raise QaLlmUnavailable()
     return DashScopeLLM(
         key,
-        os.environ.get("QA_LLM_MODEL") or DEFAULT_MODEL,
-        os.environ.get("QA_LLM_BASE_URL") or DEFAULT_BASE_URL,
-        float(os.environ.get("QA_LLM_TIMEOUT_S") or 30),
+        os.environ.get("QA_LLM_MODEL") or settings.qa_llm_model or DEFAULT_MODEL,
+        os.environ.get("QA_LLM_BASE_URL") or settings.qa_llm_base_url or DEFAULT_BASE_URL,
+        float(os.environ.get("QA_LLM_TIMEOUT_S") or settings.qa_llm_timeout_s or 30),
     )

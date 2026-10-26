@@ -1,5 +1,29 @@
 # 问数（qa）交接
 
+- 10-26 QA性能/真分页收尾：W1/T3/T9/T12/T13/T18均保留SQL count+LIMIT/OFFSET；前端直接请求page/size/filter并接收后端收拢页码。修复列表加载先清total=0导致公共分页自动跳回第一页；Cert/Feedback/Freq不再串行等待额外T1统计，评测仅加载当前可见列表，页签/视图切换标签不展示统计数字，分页total保留。列表指标目录仅读轻量字段且跳过维度图（独立库实测5条SQL降至2条），T2维度层级直接投影查询，不加载对象/属性关系。共享会话详情GET可取消，身份/版本/预览及选中会话改变后立即隐藏旧详情，迟到详情/提问/创建/范围PATCH不得覆写当前会话或恢复旧输入；不自动新建，不调用模型。侧栏按实际可用高度/行高自适应1..200条，simple分页与底部入口保留。验证见test_qa_pagination_cost.py、check-qa-session-context.mjs、check-qa-session-layout.mjs、check-qa-eval-real.mjs。
+
+
+- 正式清单F持久评测：`qa_0006`增加内部queue_job_id、execution_context及失败状态/活跃任务唯一约束。T11同请求事务经Procrastinate版本化SQL函数原子入队，202真实待运行；只接受拥有的sessionId，冻结group/scope/caliber，worker重新解析用户功能权限，保留原有SQL守卫。scope是提示上下文，本组未把自由文本当作SQL权限谓词，也未补全全局row_filter。无模型Key/队列schema明确503，全局活跃任务409。独立入口`python -m app.modules.qa.eval.worker`（先`--install-schema`），完整ORM注册、Windows Selector loop、仅QA业务队列/无其他空桩。中断/关闭恢复为失败，保留已提交进度与失败行；queued不误判，旧终态交付noop，不自动重跑。
+- 权限申请W16：history/preview一律403 READONLY，owned来源可为OUT_OF_SCOPE；无真实审批路由时approver=null，保留待审批记录等待分配。scope/object/reason/sourceTurnId拒NUL及非法Unicode，空白必填项422。W10/W11仅读已保存answer.table，旧store卡无表不再从QA_EC_STORES拼行，422 TURN_NO_RESULT；空表保留真实表头。
+- 静态回滚引用公开查询`app.contracts.qa.has_metric_references(session, code)`：7表metric_code与sem_plan/expect.metric精确匹配（含旧code别名、停用/历史行），不猜自然语言/SQL。QA variant_index(session,ver=None)现转发static.explorer.metric_variant_index，来源/目标同版已发布且显式variants，历史缺字段为空。
+
+- 旧对象 O2–O7/O9 真实化收尾：业务列表只读 biz 表，不再在响应时追加 OBJ_EXTRA_STORES；已落库的 95 家种子门店继续保留，sales 无真实指标来源为 null/导出空单元格。去掉随机销售、常售商品、假区域对象、伪历史和推测支付/取消时间。O5门店只保留当前可见订单的可验证汇总（caliber=null、analyticsConfigured=false，明确未绑定指标）；O7仅订单创建/出库已有时间，其他历史空且configured=false。region未绑定返回503 DATA_NOT_CONFIGURED，O9无真实发起接线返回[]。保留原行级SQL过滤，存在但范围外仍403，不存在404。
+- O4 scoped-ask 仅保留明确的基表汇总：订单问题「合计/实付金额合计/订单汇总」、商品问题「商品汇总/平均零售价」；去重已选ID、空ID集合不回落为全量。其他销售比较、历史、排名、预测/范围问答返回503 DATA_NOT_CONFIGURED，不生成答案或零结果，不新增LLM/指标引擎。ObjAskModal持续显示该错误、保留输入，并阻止身份/预览切换和关闭后的迟到答案。
+- 验证：独立测试库 test_qa_objects.py + test_qa_objects_db_only.py + test_qa_explore.py 共37 passed；前端check-object-ask.mjs及typecheck通过。未删开发库数据、未改mock值。
+
+- T2/catalog 真实目录：当前指标名称/版本/CR来自 `metric` 与真实未发布且非驳回 `change_request`；维度来自已发布 `dimension` 层级及指标 `dims`。`?ver` 仅取该发布快照的 metrics/dimensions 节，未知版本404、缺节为空，不借当前。保留9个旧plan键及6个code别名，T2增量返回code供真实指标抽屉；新指标（如M01）无需迁移/改种子。非vN版本保持文本显示，原整型metric_version为空。T3/T4/T10/T12–T14/T18解释使用同请求目录，新建/认证绑定真实code/版本；缺指标读时标不可用、认证422。
+- T11判分每次运行加载当前DB目录一次，缺指标直接记“期望指标不可用”失败且不调用LLM，不从旧catalog补答案。仍是列名/维度启发式，**不是金标结果比对**，不能验证时间范围/数值正确性；现有SQL金标题库离线工具另行使用，不在此组扩建判分器。`metric.def_rows`原种子模板不被推定为可靠SQL事实。
+- W17的scopes/calibers沿用真实qa_session_option记录，metric从真实复购指标读取，缺记录为空；前端qaScope真实模式初始/失败为空、静态失败不pick残留DIM_ITEMS。调优页所有指标引用/确认/计划显示走请求上下文T2目录，未知键不崩、不回演示名版本；真实CR标签没有已加载详情时只显示编号，不伪称草稿或用mock详情。固定时间快捷词/状态枚举/格式函数是输入与显示规则，保留。
+
+## 2026-10-26 本地开发补充
+
+- 评测元数据真实化：T1版本和T11运行版本标签读取数据库发布记录，无发布记录为空；无统一业务水位，T1 `dataAsOf` 为空、页面显示未知。T12分组/题数取实际题库聚合，T11只接受实际有题的允许分组，前端运行确认题数来自API，不再取固定EVAL_QS。去除固定CR回放提示和预计3分钟文案；选项加载失败不显示默认演示指标，评测列表/详情加上下文与请求序号防迟到覆盖。T2指标目录/语义计划解释已按下述目录改为DB读取。
+
+- 评测启动恢复已实现（`qa_0005`）：内部 `worker_id` 和 lifespan 进程会话锁保护已提交但尚未后台调度的任务；每次执行再持有运行锁，兼容旧的无归属记录。孤儿运行保留已提交进度并标记中断，活 worker 的任务跳过；正常关闭取消任务、释放进程锁后收尾。每个 API worker 固定占用 1 条主库连接，部署须运行 lifespan。中断任务仍需手动重跑，每日调度和持久队列未接。
+- 会话、页面、反馈、申请、认证问答编号已加事务锁；轮次和卡片使用会话/页面局部锁，避免并发生成重复编号。
+- 分面只在后台不可达时回退，业务错误保留；搜索/导出拒绝 NUL，排序只接受一个倒序前缀。
+- 我的页面末页删除后收拢页码，并防止旧列表请求覆盖新筛选。当前进展和验证结果见仓库 `docs/development-progress.md`。
+
 > 分支 `qa-joint`（本地，未推送）。基线 = merge `80ac80c`（qa-reuse 最终 `740a554` + pde-integ `215819d`，两条链都是原提交，哈希一致）；整段 = `b688d5d..qa-joint`。截至 2026-10-26 01:25（Asia/Shanghai）。
 > **qa-tuning 增量**（分支 `qa-tuning`，基线 master `bb47a5c`，本地未推送，截至 2026-10-26 Asia/Shanghai）：R5 问数调优评测题库 / 反馈与纠错页签接真后端，见 1.3；T15 新建变更单分支等 static-r3。
 > 接口契约：`docs/backend/qa-api.md`（各节「联调实现」段）；评测：`docs/backend/qa-eval.md`。[推断] 标的是前端/文档没写、这里自己定的规则。

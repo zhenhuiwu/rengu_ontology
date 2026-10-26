@@ -6,8 +6,8 @@
   反问 / 拒答 / 执行失败 → 未召回指标；0 行 → 过滤条件缺失；
   回答的列名里找不到期望指标名（去掉括号注释）→ 指标选错；
   期望维度在列名里找不到 → 维度不匹配；其余算通过。时间范围不判。
-- [推断] 调度：app/jobs（procrastinate）是共享文件，这一轮用进程内 asyncio 任务（schedule_run），
-  进程重启会丢正在跑的任务（run 停在「运行中」）；接 procrastinate 见 handoff/qa.md。
+- Procrastinate持久队列，独立QA worker执行；每次运行持有全局与单run会话锁。
+  启动只把无人执行的运行中任务标失败，保留已提交结果；不重跑已经完成的题。
 """
 
 from __future__ import annotations
@@ -15,14 +15,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.core.errors import AppError
+from app.db.dialects import get_adapter
 from app.modules.qa import catalog, chain
 from app.modules.qa.llm import LLMClient
 from app.modules.qa.models import EvalLast, FailKind, QaEvalFail, QaEvalQuestion, QaEvalRun, RunStatus
@@ -43,8 +46,13 @@ def _stem(name: str) -> str:
     return re.sub(r"[（(].*?[）)]", "", name).strip()
 
 
-def judge(q: QaEvalQuestion, kind: str, snap: dict[str, Any]) -> tuple[FailKind, str] | None:
+def judge(
+    q: QaEvalQuestion, kind: str, snap: dict[str, Any], metrics: catalog.Metrics
+) -> tuple[FailKind, str] | None:
     """返回 None = 通过；否则 (失败类型, 实际结果文字)。"""
+    m = catalog.metric_of(metrics, (q.expect or {}).get("metric"))
+    if m is None or not _stem(m["name"]):
+        return FailKind.metric_not_recalled, "期望指标不可用：数据库目录中不存在该指标"
     ans = snap.get("answer") or {}
     if kind == "denied":
         return FailKind.metric_not_recalled, f"拒答（{snap.get('tag', '')}）：{snap.get('bold', '')}"
@@ -56,8 +64,7 @@ def judge(q: QaEvalQuestion, kind: str, snap: dict[str, Any]) -> tuple[FailKind,
     cols = [str(c.get("title") or c.get("key") or "") for c in table.get("columns") or []]
     hay = " ".join(cols)  # 只看列名：table.title 是问题原文，text 由列名拼出
     exp = q.expect or {}
-    m = catalog.t_metrics().get(exp.get("metric") or "")
-    if m and _stem(m["name"]) not in hay:
+    if _stem(m["name"]) not in hay:
         return FailKind.wrong_metric, f"按 {'、'.join(cols) or '--'} 回答，未出现「{m['name']}」"
     miss = [d for d in exp.get("dims") or [] if not any(d in c or c in d for c in cols if c)]
     if miss:
@@ -81,11 +88,22 @@ async def execute(
     checkpoint 每题后调用（后台任务里 commit 让前端看到进度）。
     """
     qs = list((await session.scalars(questions_query(group))).all())[:limit]
+    metrics, _ = await catalog.directory(session)
+    from app.modules.qa import service as qa_service
+
+    context = run.execution_context or {}
+    lines = qa_service.caliber_lines(context.get("caliber"), await qa_service.variant_index(session))
+    answer_context = {}
+    if lines or context.get("scope"):
+        answer_context = {"caliber_lines": lines, "session_scope": context.get("scope")}
     run.total, run.passed = len(qs), 0
     for q in qs:
         try:
-            kind, snap, *_ = await chain.answer(session, conn, llm, user, q.question)
-            res = judge(q, kind, snap)
+            if catalog.metric_of(metrics, (q.expect or {}).get("metric")) is None:
+                kind, snap = "unavailable", {}
+            else:
+                kind, snap, *_ = await chain.answer(session, conn, llm, user, q.question, **answer_context)
+            res = judge(q, kind, snap, metrics)
         except (AppError, DBAPIError) as e:  # SQL 被拒 / 超时 / 大模型失败：记失败，不中断整轮
             code = getattr(e, "code", None) or type(e).__name__
             res = FailKind.metric_not_recalled, f"执行失败：{code}"
@@ -103,43 +121,135 @@ async def execute(
     return run
 
 
-# ---------------------------------------------------------------- 进程内调度
-_TASKS: set[asyncio.Task] = set()
+# ---------------------------------------------------------------- 持久队列执行与孤儿恢复
+_WORKER_ID: str | None = None
 
 
-async def _background(run_code: str, group: str | None, llm: LLMClient, user: Any) -> None:
-    from app.db.session import get_qa_readonly_engine, get_sessionmaker
+def current_worker_id() -> str | None:
+    return _WORKER_ID
 
-    async with get_sessionmaker()() as s:
-        # T11 经 BackgroundTasks 调度：请求事务（get_session，scope="function"）已提交，不用轮询等
-        run = await s.scalar(select(QaEvalRun).where(QaEvalRun.code == run_code))
-        if run is None:
-            log.warning("eval run %s not found", run_code)
+
+@asynccontextmanager
+async def worker_lifespan() -> AsyncIterator[None]:
+    """专用QA worker寿命内登记进程归属；不占用API进程连接。"""
+    from app.db.session import get_engine
+
+    global _WORKER_ID
+    worker_id = uuid4().hex  # lifespan 内生成，防止 pre-fork 部署继承同一个标识。
+    async with get_engine().connect() as connection:
+        session = AsyncSession(bind=connection)
+        async with get_adapter(session).session_lock(connection, f"qa.eval_worker.{worker_id}"), session:
+            _WORKER_ID = worker_id
+            try:
+                yield
+            finally:
+                _WORKER_ID = None
+
+
+async def _background(
+    run_code: str, group: str | None = None, llm: LLMClient | None = None, user: Any = None
+) -> None:
+    from app.db.session import get_engine
+
+    # 同一连接跨逐题commit持有全局和单run锁；Procrastinate本身也使用全局lock。
+    async with get_engine().connect() as connection:
+        session = AsyncSession(bind=connection, expire_on_commit=False)
+        status = await session.scalar(select(QaEvalRun.status).where(QaEvalRun.code == run_code))
+        await session.rollback()
+        if status not in (RunStatus.queued, RunStatus.running):
+            await session.close()
             return
-        try:
-            async with get_qa_readonly_engine().connect() as conn:
-                tr = await conn.begin()
-                await conn.execute(text("set local statement_timeout = 15000"))
-                try:
-                    await execute(s, conn, llm, user, run, group, checkpoint=s.commit)
-                finally:
-                    await tr.rollback()
-        except Exception as e:  # 只读库未配置等：标已完成并写说明，不留在「运行中」
-            log.exception("eval run %s failed", run_code)
-            await s.rollback()
-            run = await s.scalar(select(QaEvalRun).where(QaEvalRun.code == run_code))
-            if run is not None:
-                run.status = RunStatus.done
-                run.note = f"运行中断：{getattr(e, 'code', None) or type(e).__name__}"
+        adapter = get_adapter(session)
+        async with (
+            adapter.session_lock(connection, "qa.eval.execution"),
+            adapter.session_lock(connection, f"qa.eval_run.{run_code}"),
+            session,
+        ):
+            await _execute_background(session, run_code, group, llm, user)
+
+
+async def _mark_failed(session: AsyncSession, run_code: str, owner: str | None, reason: str) -> None:
+    await session.rollback()
+    run = await session.scalar(
+        select(QaEvalRun).where(QaEvalRun.code == run_code).execution_options(populate_existing=True)
+    )
+    if run is not None and run.status == RunStatus.running and run.worker_id == owner:
+        run.status = RunStatus.failed
+        run.note = f"运行中断：{reason}；已保留完成题目的结果，请重新运行评测"
+        await session.commit()
+
+
+async def _execute_background(
+    s: AsyncSession, run_code: str, group: str | None, llm: LLMClient | None, user: Any
+) -> None:
+    from app.common.auth import check_func, resolve_user
+    from app.db.session import get_qa_readonly_engine
+    from app.modules.qa.llm import get_llm
+
+    run = await s.scalar(select(QaEvalRun).where(QaEvalRun.code == run_code))
+    if run is None or run.status not in (RunStatus.queued, RunStatus.running):
+        return  # 重复交付/迟到任务不能覆盖恢复后的终态。
+    owner = current_worker_id()
+    run.worker_id, run.status = owner, RunStatus.running
+    await s.commit()
+    try:
+        context = run.execution_context or {}
+        if context:
+            user = await resolve_user(s, context["userId"], context.get("tenantId"))
+            check_func(user, "qa-tuning", "manage")
+            group = context.get("group")
+        if llm is None:
+            llm = get_llm()  # 仅在worker内读取密钥，不持久化客户端或凭据。
+        async with get_qa_readonly_engine().connect() as conn:
+            tr = await conn.begin()
+            await conn.execute(text("set local statement_timeout = 15000"))
+            try:
+                await execute(s, conn, llm, user, run, group, checkpoint=s.commit)
+            finally:
+                await tr.rollback()
         await s.commit()
+    except asyncio.CancelledError:
+        await _mark_failed(s, run_code, owner, "worker关闭或任务取消")
+        raise
+    except Exception as exc:
+        log.exception("eval run %s failed", run_code)
+        await _mark_failed(s, run_code, owner, str(getattr(exc, "code", None) or type(exc).__name__))
+        raise  # Procrastinate job也记失败，不把执行失败当队列成功。
 
 
-def schedule_run(run_code: str, group: str | None, llm: LLMClient, user: Any) -> None:
-    t = asyncio.get_running_loop().create_task(_background(run_code, group, llm, user))
-    _TASKS.add(t)
-    t.add_done_callback(_TASKS.discard)
+async def recover_interrupted_runs() -> int:
+    """启动恢复：保留已提交的逐题进度，不碰仍由其他进程执行的任务。"""
+    from app.db.session import get_sessionmaker
+
+    async with get_sessionmaker()() as session:
+        runs = (await session.scalars(select(QaEvalRun).where(QaEvalRun.status == RunStatus.running))).all()
+        recovered = 0
+        for run in runs:
+            if run.worker_id and not await get_adapter(session).try_xact_lock(
+                session, f"qa.eval_worker.{run.worker_id}"
+            ):
+                continue
+            if not await get_adapter(session).try_xact_lock(session, f"qa.eval_run.{run.code}"):
+                continue
+            # 枚举后任务可能刚好完成；拿锁后再读，不能覆盖它的最终状态。
+            await session.refresh(run)
+            if run.status == RunStatus.running:
+                run.status = RunStatus.failed
+                if run.queue_job_id is not None:
+                    from app.modules.qa.eval.queue import fail_interrupted
+
+                    await fail_interrupted(session, run.queue_job_id)
+                note = "运行中断：服务重启，已保留完成题目的结果，请重新运行评测"
+                run.note = f"{run.note}\n{note}" if run.note else note
+                recovered += 1
+        await session.commit()
+        if recovered:
+            log.warning("recovered %d interrupted eval runs", recovered)
+        return recovered
 
 
-def get_runner() -> Callable[[str, str | None, LLMClient, Any], None]:
-    """依赖：测试覆盖成记录参数、再直接调 execute。"""
-    return schedule_run
+def get_runner() -> Callable:
+    """保留路由依赖名，执行已改为同事务Procrastinate入队。"""
+    from app.modules.qa.eval.queue import defer
+
+    return defer

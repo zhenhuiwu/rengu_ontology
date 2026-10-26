@@ -5,8 +5,11 @@ import io
 import zipfile
 
 import pytest
+from sqlalchemy import select
 
-from app.seeds.loader import run_seeds
+from app.modules.qa.models import QaTurn
+from tests.function_access_support import grant_fixture_roles
+from tests.qa_access_support import seed_qa_access
 
 B = "/api/qa/v1"
 STORE, MAIN = "T-01", "T-04"
@@ -14,7 +17,8 @@ STORE, MAIN = "T-01", "T-04"
 
 @pytest.fixture
 async def qa(users, client):
-    await run_seeds(users, ["qa"])
+    await seed_qa_access(users)
+    await grant_fixture_roles(users, {"U010001": "R-01", "U010006": "R-05"})
     await users.flush()
     return client
 
@@ -68,40 +72,74 @@ async def test_turn_writes_readonly_and_owner(qa):
     assert (await qa.get(f"{B}/turns/{STORE}/result", headers={"X-Demo-As": "U010006"})).status_code == 404
 
 
-async def test_store_result_pages_and_summary_over_all_rows(qa):
+async def _save_table(session, items=None):
+    table = {
+        "columns": [
+            {"key": "store", "title": "数据库门店", "align": "left"},
+            {"key": "sales", "title": "已存销售额", "align": "right"},
+        ],
+        "items": items
+        if items is not None
+        else [{"store": f"库中门店{i}", "sales": i * 3} for i in range(13)],
+        "summary": "数据库已存结果",
+    }
+    turn = await session.scalar(select(QaTurn).where(QaTurn.code == STORE))
+    turn.snapshot = {"answer": {"card": "table", "table": table}}
+    await session.flush()
+    return table
+
+
+async def test_legacy_store_without_saved_table_cannot_read_or_export(qa):
+    for suffix in ("result", "export?format=csv", "export?format=xlsx"):
+        response = await qa.get(f"{B}/turns/{STORE}/{suffix}")
+        assert response.status_code == 422
+        assert response.json()["code"] == "TURN_NO_RESULT"
+
+
+async def test_store_result_pages_and_summary_over_all_rows(qa, session):
+    table = await _save_table(session)
     r = await qa.get(f"{B}/turns/{STORE}/result?page=2&size=10")
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["total"] == 38 and d["page"] == 2 and len(d["items"]) == 10
-    assert [c["key"] for c in d["columns"]] == ["store", "city", "sales", "mom", "orders"]
-    s = d["summary"]
-    assert s["count"] == 38
-    p4 = (await qa.get(f"{B}/turns/{STORE}/result?page=4&size=10")).json()
-    assert len(p4["items"]) == 8 and p4["summary"] == s
-    # 越界页码回落到最后一页
-    assert (await qa.get(f"{B}/turns/{STORE}/result?page=9&size=10")).json()["page"] == 4
-    sales = 0.0
-    for p in (1, 2, 3, 4):
-        sales += sum(x["sales"] for x in (await qa.get(f"{B}/turns/{STORE}/result?page={p}")).json()["items"])
-    assert abs(sales - s["sales"]) < 0.01
-    # 历史版本下读也放行
+    assert d["total"] == 13 and d["page"] == 2
+    assert d["items"] == table["items"][10:] and d["columns"] == table["columns"]
+    assert d["summary"] == {"text": "数据库已存结果"}
+    assert (await qa.get(f"{B}/turns/{STORE}/result?page=9&size=10")).json()["page"] == 2
     assert (await qa.get(f"{B}/turns/{STORE}/result?ver=v2026.10.2")).status_code == 200
     assert (await qa.get(f"{B}/turns/{MAIN}/result")).status_code == 422
 
 
-async def test_export_csv_and_xlsx(qa):
+async def test_export_csv_and_xlsx(qa, session):
+    table = await _save_table(session)
     r = await qa.get(f"{B}/turns/{STORE}/export?format=csv")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
     assert "filename*=UTF-8''" in r.headers["content-disposition"] and r.headers[
         "content-disposition"
     ].endswith(".csv")
     rows = list(csv.reader(io.StringIO(r.content.decode("utf-8-sig"))))
-    assert rows[0] == ["门店", "城市", "销售额（万元）", "环比", "订单数"] and len(rows) == 39
+    assert rows[0] == [c["title"] for c in table["columns"]] and len(rows) == 14
+    assert rows[1] == ["库中门店0", "0"]
     r = await qa.get(f"{B}/turns/{STORE}/export")
     assert r.status_code == 200 and r.headers["content-disposition"].endswith(".xlsx")
     z = zipfile.ZipFile(io.BytesIO(r.content))
     assert "xl/worksheets/sheet1.xml" in z.namelist()
-    assert z.read("xl/worksheets/sheet1.xml").decode().count("<row ") == 39
+    assert z.read("xl/worksheets/sheet1.xml").decode().count("<row ") == 14
+
+
+async def test_saved_empty_result_keeps_header_and_malformed_table_is_unavailable(qa, session):
+    await _save_table(session, [])
+    response = await qa.get(f"{B}/turns/{STORE}/result")
+    assert response.status_code == 200 and response.json()["total"] == 0
+    response = await qa.get(f"{B}/turns/{STORE}/export?format=csv")
+    assert list(csv.reader(io.StringIO(response.content.decode("utf-8-sig")))) == [
+        ["数据库门店", "已存销售额"]
+    ]
+    turn = await session.scalar(select(QaTurn).where(QaTurn.code == STORE))
+    turn.snapshot = {"answer": {"card": "table", "table": {"columns": [{"key": "broken"}], "items": [{}]}}}
+    await session.flush()
+    for suffix in ("result", "export"):
+        response = await qa.get(f"{B}/turns/{STORE}/{suffix}")
+        assert response.status_code == 422 and response.json()["code"] == "TURN_NO_RESULT"
 
 
 async def test_export_forbidden_in_preview(qa):

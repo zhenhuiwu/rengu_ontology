@@ -2,21 +2,18 @@
 
 - 密码只写：Fernet 加密存（secrets.py，密钥 RENGU_DS_SECRET_KEY），任何接口都不返回；
 - 测试连接：开了真实连接（connector.real_connect_enabled）且类型有驱动时真连，成功后顺带内省刷新库表清单；
-  否则走 adapters.get_connection_tester()（dev/test = MockConnectionTester）。默认 10 秒超时；
-- 删除：前端删除确认只提示影响、不拦截（Connections.vue remove），这里同样直接删，
-  同步记录、库表清单级联删除。api-index「被对象类型映射引用时 409」是【待定】，等静态映射落地再加。
+  没有开关或驱动时明确拒绝，不回退演示测试结果。默认 10 秒超时；
+- 删除：已发布定义或未发布变更单映射引用时 409；无引用的同步记录、库表清单级联删除。
 """
 
-import asyncio
 from typing import Any
 
 from app.common.pagination import PageParams
 from app.core import clock
-from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.schema import DATETIME_FORMAT
 from app.modules.data import connector
-from app.modules.data.adapters import ConnectionTestResult, get_connection_tester
+from app.modules.data.adapters import ConnectionTestResult
 from app.modules.data.models import Datasource, DatasourceTable, DsStatus, DsType
 from app.modules.data.repo import DatasourceRepo, DatasourceTableRepo
 from app.modules.data.schemas import (
@@ -52,8 +49,6 @@ META = DsMeta(
     erp_systems=ERP_SYSTEMS,
 )
 
-TEST_TIMEOUT_S = 10
-
 
 class PasswordRequired(AppError):
     status_code, code, message = 422, "DS_PASSWORD_REQUIRED", "改了主机、端口或用户名，请重新填写密码"
@@ -68,12 +63,20 @@ class IntrospectFailed(AppError):
 
 
 def _use_real(kind: DsType) -> bool:
-    return connector.real_connect_enabled() and (
-        connector.supports(kind.value) or get_settings().env == "prod"
-    )
+    return connector.real_connect_enabled() and connector.supports(kind.value)
 
 
-def to_out(d: Datasource) -> DatasourceOut:
+def _require_real(kind: DsType) -> None:
+    if not connector.real_connect_enabled():
+        raise RealConnectUnavailable("未开启真实连接，未执行测试", details={"reason": "disabled"})
+    if not connector.supports(kind.value):
+        raise RealConnectUnavailable(
+            f"暂不支持真实连接 {kind.value}（缺驱动），未执行测试",
+            details={"reason": "unsupported", "type": kind.value},
+        )
+
+
+def to_out(d: Datasource, runs=None) -> DatasourceOut:
     return DatasourceOut(
         id=d.code,
         name=d.name,
@@ -101,7 +104,7 @@ def to_out(d: Datasource) -> DatasourceOut:
         ),
         runs=[
             DsRun(time=r.run_at, result=r.result, rows=r.rows, secs=r.secs, msg=r.msg)
-            for r in sorted(d.runs, key=lambda x: x.seq)
+            for r in sorted(d.runs if runs is None else runs, key=lambda x: x.seq)
         ],
         table_count=d.table_count,
         created_at=d.created_on,
@@ -135,13 +138,8 @@ def _type_fields(body: DatasourceCreate | DatasourceUpdate | DsTestIn) -> dict[s
 
 
 async def run_test(kind: DsType, config: dict[str, Any]) -> ConnectionTestResult:
-    if _use_real(kind):
-        return await connector.test_real(kind.value, config)
-    tester = get_connection_tester()
-    try:
-        return await asyncio.wait_for(tester.test(kind.value, config), timeout=TEST_TIMEOUT_S)
-    except TimeoutError:
-        return ConnectionTestResult(False, TEST_TIMEOUT_S * 1000, f"连接超时（{TEST_TIMEOUT_S} 秒）")
+    _require_real(kind)
+    return await connector.test_real(kind.value, config)
 
 
 def _now_text() -> str:
@@ -196,6 +194,17 @@ class DatasourceService:
 
     async def update(self, code: str, body: DatasourceUpdate) -> Datasource:
         ds = await self.get(code)
+        if body.name != ds.name:
+            from sqlalchemy import select
+
+            from app.modules.static.models import ObjectType
+
+            if await self.session.scalar(
+                select(ObjectType.id).where(ObjectType.datasource_name == ds.name).limit(1)
+            ):
+                raise AppError(
+                    "旧名称映射尚在使用，请先通过变更单将来源改为连接编号", code="DS_IN_USE", status_code=409
+                )
         values: dict[str, Any] = {
             "name": body.name,
             "type": body.type,
@@ -219,13 +228,20 @@ class DatasourceService:
         return await self.repo.update(ds, values)
 
     async def delete(self, code: str) -> None:
+        from sqlalchemy import select
+
+        from app.modules.data.mappings import guard_delete
+
         ds = await self.get(code)
+        await self.session.scalar(select(Datasource).where(Datasource.id == ds.id).with_for_update())
+        await guard_delete(self.session, ds)
         await self.session.delete(ds)
         await self.session.flush()
 
     async def test_saved(self, code: str) -> DsTest:
         """用已保存的配置测试，更新 status / lastTest（前端 testConn：失败不改状态，成功 → 正常）。"""
         ds = await self.get(code)
+        _require_real(ds.type)
         config: dict[str, Any] = {
             "host": ds.host,
             "port": ds.port,
@@ -233,21 +249,18 @@ class DatasourceService:
             "user": ds.username,
             "ssl": ds.ssl,
             "password": decrypt_password(ds.password_enc),
-            # dev/test：异常状态的连接继续演示失败（同前端 mock）；prod 由真实适配器决定
-            "mockFail": ds.status == DsStatus.error,
         }
-        if _use_real(ds.type) and not config["password"]:
-            res = ConnectionTestResult(False, 0, "未保存密码（或密钥已更换），请编辑连接重新填写密码")
-        else:
-            res = await run_test(ds.type, config)
-        # mock 演示：失败沿用上次信息（同前端）；真连时用真实原因
-        prev_msg = (ds.last_test or {}).get("msg") if not res.ok and not _use_real(ds.type) else None
-        test = DsTest(time=_now_text(), ok=res.ok, ms=res.latency_ms, msg=prev_msg or res.message)
+        if not config["password"]:
+            return DsTest(
+                time=_now_text(), ok=False, ms=0, msg="未保存密码（或密钥已更换），未执行测试；请重新填写密码"
+            )
+        res = await run_test(ds.type, config)
+        test = DsTest(time=_now_text(), ok=res.ok, ms=res.latency_ms, msg=res.message)
         values: dict[str, Any] = {"last_test": test.model_dump()}
         if res.ok:
             values["status"] = DsStatus.ok
         await self.repo.update(ds, values)
-        if res.ok and _use_real(ds.type):
+        if res.ok:
             try:
                 async with self.session.begin_nested():  # 内省出错只回滚这一步，会话还能写测试结果
                     await self.refresh_tables(code, config=config)
@@ -282,6 +295,10 @@ class DatasourceService:
             raise IntrospectFailed(f"连接源库失败：{connector.err_text(e, config.get('password'))}") from None
         now = clock.now()
         rows = list(await self.tables.all_for(ds.id))
+        from app.modules.data.mappings import mapped_objects
+
+        mapped = await mapped_objects(self.session, ds)
+        mapped_tables = {o.source_table for o in mapped}
         by_key = {(t.schema_name, t.name): t for t in rows}
         seen: set[tuple[str, str]] = set()
         for info in found:
@@ -305,7 +322,14 @@ class DatasourceService:
                 by_key[key] = t
             t.comment, t.col_count, t.row_count, t.meta_updated_at = info.comment, info.cols, info.rows, now
         for key, t in list(by_key.items()):
-            if key not in seen and not t.object_type:
+            if (
+                key not in seen
+                and not t.object_type
+                and (
+                    f"{t.schema_name}.{t.name}" not in mapped_tables
+                    and (t.schema_name != "public" or t.name not in mapped_tables)
+                )
+            ):
                 await self.session.delete(t)
                 del by_key[key]
         ordered = sorted(by_key.values(), key=lambda t: (t.object_type is None, t.schema_name, t.name))
@@ -323,7 +347,6 @@ class DatasourceService:
             "user": body.user,
             "password": body.password or "",
             "ssl": body.ssl,
-            "mockFail": body.mock_fail,
             **_type_fields(body),
         }
         res = await run_test(body.type, config)

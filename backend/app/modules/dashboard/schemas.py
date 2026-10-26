@@ -42,3 +42,15 @@ class StoreRankOut(ApiModel):
 
 class StoreRankingPage(Page[StoreRankOut]):
     data_as_of: DateTimeMin
+
+
+class SalesDailyPoint(ApiModel):
+    date: str
+    value: float
+
+
+class SalesDailyOut(ApiModel):
+    items: list[SalesDailyPoint]
+    data_as_of: DateTimeMin
+    tax_mode: str = "excl"
+    tax_rate: float = 0.13

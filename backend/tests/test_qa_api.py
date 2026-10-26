@@ -6,7 +6,8 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
+from tests.qa_access_support import seed_qa_access
 
 API = "/api/qa/v1"
 
@@ -17,7 +18,16 @@ def mock(name: str):
 
 @pytest.fixture
 async def qa(users, client):
-    await run_seeds(users, ["qa"])
+    await seed_qa_access(users)
+    # 拥有者/共享成员仍需真实页面功能权；R-05 保留华南范围，不能读取他人保存的全量卡片。
+    codes = await users.scalars(
+        text(
+            "SELECT u.code FROM sys_user u WHERE u.id IN ("
+            "SELECT owner_id FROM qa_page UNION SELECT user_id FROM qa_page_share_member)"
+        )
+    )
+    await grant_fixture_roles(users, {code: "R-05" for code in codes})
+    await grant_fixture_roles(users, {"U010006": "R-05"})
     await users.flush()
     return client
 
@@ -61,6 +71,8 @@ async def test_session_other_owner_hidden(qa, session):
             text("SELECT code FROM sys_user WHERE code <> :c LIMIT 1"), {"c": get_settings().dev_user}
         )
     ).scalar_one()
+    # 先满足功能权限，再独立验证会话拥有者边界。
+    await grant_fixture_roles(session, {other: "R-01"})
     r = await qa.get(API + "/sessions/S0001", headers={"X-Demo-As": other})
     assert r.status_code == 404
 
@@ -149,14 +161,15 @@ async def test_tuning_summary(qa):
     s = await get(qa, "/tuning/summary")
     certs, fbs, fq = mock("CERT_QAS"), mock("FEEDBACKS"), mock("FREQ_QS")
     assert s == {
-        "version": mock("CUR_VERSION"),
-        "dataAsOf": mock("TUNING_CUTOFF"),
+        "version": "v2026.10.3",  # 静态定义与发布记录均来自实际种子表。
+        "dataAsOf": "",  # 无统一业务水位，不再复用演示时间。
         "recertCount": sum(c["status"] == "待重新认证" for c in certs),
         "openFeedback": sum(f["status"] == "待处理" for f in fbs),
         "uncertFreq": sum(not f.get("certId") for f in fq),
         "evalTotal": len(mock("EVAL_QS")),
     }
-    assert (await get(qa, "/tuning/summary", ver="v2026.10.1"))["version"] == "v2026.10.1"
+    response = await qa.get(API + "/tuning/summary", params={"ver": "missing"})
+    assert response.status_code == 404
 
 
 async def test_certs_order_and_filter(qa):
@@ -188,7 +201,7 @@ async def test_eval_runs_match_mock(qa):
     d = await get(qa, "/tuning/eval/runs/ER-0023")
     assert d["fails"]["size"] == 12
     q = await get(qa, "/tuning/eval/runs/ER-0025")
-    assert q["replayHints"].keys() == {"CR-0008", "CR-0015"}
+    assert q["replayHints"] == {}  # 未存储回放提示，不能拿固定演示 CR 文案补齐。
     assert {e["cr"] for e in q["replayQuestions"]} <= {"CR-0008", "CR-0015"} and q["replayQuestions"]
     trig = (await get(qa, "/tuning/eval/runs", trigger="回放", size=200))["items"]
     assert trig and all("回放" in x["trigger"] for x in trig)
@@ -230,10 +243,11 @@ async def test_freq_rank(qa):
 async def test_synonyms_and_plan_options(qa):
     assert await get(qa, "/tuning/synonyms") == mock("TUNED_SYNONYMS")
     po = await get(qa, "/tuning/plan-options")
-    assert po["dims"] == mock("TUNING_DIMS") and len(po["metrics"]) == len(mock("T_METRICS"))
+    assert "大区" in po["dims"] and len(po["metrics"]) == 15
+    assert next(m for m in po["metrics"] if m["key"] == "orders")["code"] == "order_cnt"
 
 
-# ---------------------------------------------------------------- 卡片判权（P1/P3，row_filter 桩）
+# ---------------------------------------------------------------- 卡片判权（P1/P3，真实角色与行范围）
 
 _DATA_KEYS = {"value", "unit", "sub", "series", "labels", "rows"}
 
@@ -247,21 +261,7 @@ def _assert_denied(cards, want):
         assert {k: v for k, v in got.items() if k != "denied"} == frame
 
 
-def _old_deny_stub(monkeypatch):
-    """权限初版最简后 row_filter 对已登录用户一律 None；这两条测「非管理员 DENY」路径，换回旧桩。"""
-    import app.common.auth as auth
-    import app.modules.qa.service as qa_service
-    from app.common.row_filter import DENY_ALL
-
-    async def stub(user, _object_type):
-        return None if user.is_ontology_admin else dict(DENY_ALL)
-
-    monkeypatch.setattr(auth, "row_filter", stub)
-    monkeypatch.setattr(qa_service, "row_filter", stub)
-
-
-async def test_shared_member_gets_denied_cards(qa, monkeypatch):
-    _old_deny_stub(monkeypatch)
+async def test_shared_member_gets_denied_cards(qa):
     want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
     got = await get(qa, "/pages/P905", user="U010231")  # 苏刚：P905（周婷）的共享成员，非本体管理员
     _assert_denied(got["cards"], want)
@@ -279,10 +279,9 @@ async def test_owner_still_gets_values(qa, session):
     assert got["cards"] == want
 
 
-async def test_preview_follows_row_filter(qa, monkeypatch):
-    _old_deny_stub(monkeypatch)
+async def test_preview_follows_row_filter(qa):
     want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
-    # 管理员预览苏刚：数据身份 = 苏刚，row_filter 桩 = DENY_ALL → 共享页卡片无权限（详情和列表一致）
+    # 管理员预览苏刚：真实 R-05 范围限制 → 共享页卡片无权限（详情和列表一致）。
     _assert_denied((await get(qa, "/pages/P905", previewAs="U010231"))["cards"], want)
     items = (await get(qa, "/pages", previewAs="U010231", size=200))["items"]
     p905 = next(p for p in items if p["id"] == "P905")

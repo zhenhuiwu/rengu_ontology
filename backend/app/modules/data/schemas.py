@@ -136,4 +136,4 @@ class DsTestIn(ApiModel):
     erp_system: Str | None = None
     app_id: Str | None = None
     ssl: bool = True
-    mock_fail: bool = Field(False, description="仅 dev/test：MockConnectionTester 返回失败，演示失败态")
+    mock_fail: bool = Field(False, description="兼容旧调用保留；真实测试忽略，不影响连接结果")

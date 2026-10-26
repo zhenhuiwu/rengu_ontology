@@ -35,6 +35,7 @@ class CurrentVersionOut(ApiModel):
     current: str | None
     next: str
     release: ReleaseOut | None
+    lock_version: int = 0
 
 
 class ReleaseListOut(ApiModel):

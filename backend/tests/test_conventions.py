@@ -273,9 +273,11 @@ async def test_seed_marks_and_partial_unique(repo, session, tmp_path, monkeypatc
         {"id": "W-1", "name": "甲", "key": "k1"},
         {"id": "W-2", "name": "乙", "key": "k1"},
     ]  # mock 自带重复键
-    (tmp_path / "json" / "common" / "w.json").write_text(json.dumps(mock, ensure_ascii=False))
+    (tmp_path / "json" / "common" / "w.json").write_text(
+        json.dumps(mock, ensure_ascii=False), encoding="utf-8"
+    )
     (tmp_path / "extra" / "common" / "w.json").write_text(
-        json.dumps([{"id": "W-9", "name": "补", "key": None}])
+        json.dumps([{"id": "W-9", "name": "补", "key": None}]), encoding="utf-8"
     )
     t = lambda r, _: {"code": r["id"], "name": r["name"], "idem_key": r["key"]}  # noqa: E731
     mod = types.ModuleType("app.modules.tstmod.seeds")

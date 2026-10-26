@@ -32,7 +32,7 @@ from typing import Any
 
 from app.core.enums import from_api
 from app.core.schema import parse_display_dt
-from app.modules.static.explorer import default_flags, metric_variants
+from app.modules.static.explorer import default_flags
 from app.modules.static.models import (
     ApplyKind,
     Cardinality,
@@ -287,6 +287,27 @@ def _link_quality(r: Row, _ctx: SeedContext) -> Row | None:
 # ---------------------------------------------------------------- 指标
 
 
+def seed_metric_variants(metrics: list[Row]) -> dict[str, list[Row]]:
+    """初始口径显式登记，保持原有种子值，不从显示名推断。"""
+    by_code = {m["id"]: m for m in metrics}
+    out = {}
+    for codes in (("gmv", "gmv_tax"), ("repeat_sales", "repeat_sales_tax")):
+        variants = [
+            {
+                "code": code,
+                "label": label,
+                "default": i == 0,
+                "api": by_code[code]["api"],
+                "version": by_code[code]["version"],
+            }
+            for i, (code, label) in enumerate(zip(codes, ("不含税", "含税"), strict=True))
+            if code in by_code
+        ]
+        for code in codes:
+            out[code] = variants
+    return out
+
+
 def _metric(r: Row, ctx: SeedContext) -> Row:
     ids = [x["id"] for x in ctx.load("METRIC_LIST.json")]
     stat_ids = [x["id"] for x in ctx.load("METRICS.json")]
@@ -315,7 +336,7 @@ def _metric(r: Row, ctx: SeedContext) -> Row:
         "disallowed_rows": METRIC_DENY,
         "seq": ids.index(r["id"]),
         "stat_seq": stat_ids.index(r["id"]) if r["id"] in stat_ids else None,
-        "variants": metric_variants(ctx.load("METRIC_LIST.json")).get(r["id"], []),  # 口径变体（static_0004）
+        "variants": seed_metric_variants(ctx.load("METRIC_LIST.json")).get(r["id"], []),
     }
 
 

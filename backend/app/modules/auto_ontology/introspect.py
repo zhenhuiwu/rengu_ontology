@@ -93,7 +93,8 @@ def column_kind(t: types.TypeEngine[Any]) -> str:
     return "string"
 
 
-def _inspect(conn: Connection, schema: str, only: list[str] | None) -> list[Table]:
+def inspect_tables(conn: Connection, schema: str, only: list[str] | None) -> list[Table]:
+    """公开的结构内省入口；只使用 inspector，不拼接或执行调用方 SQL。"""
     insp = inspect(conn)
     if schema not in insp.get_schema_names():
         raise SchemaNotFound(details={"schema": schema})
@@ -131,4 +132,4 @@ def _inspect(conn: Connection, schema: str, only: list[str] | None) -> list[Tabl
 async def introspect(session: AsyncSession, schema: str, tables: list[str] | None = None) -> list[Table]:
     """读应用自己的库（当前会话连接）。EXTENSION POINT (data)：数据连接模块就绪后按 datasource 取连接。"""
     conn = await session.connection()
-    return await conn.run_sync(_inspect, schema, tables)
+    return await conn.run_sync(inspect_tables, schema, tables)

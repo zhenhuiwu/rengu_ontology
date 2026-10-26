@@ -1,7 +1,7 @@
 """用户与组织（admin，前端 src/pages/admin/Users.vue，api-index §4.1）。
 
 对照方法：用 export-mock 导出的 ADMIN_USERS.json 在 Python 里按 Users.vue 的 rows 过滤 + paginate() 算出期望，
-逐页逐字段比对（含 pendingApprovals = mock/admin.ts pendingApprovals）。
+逐页逐字段比对；待审批计数只读真实记录，无记录为0。
 """
 
 import json
@@ -25,9 +25,16 @@ DEPTS = [
 ]
 
 
+@pytest.fixture(autouse=True)
+async def permission_roles(users):
+    from tests.function_access_support import grant_fixture_roles
+
+    await grant_fixture_roles(users)
+
+
 def pending(u):
-    """mock/admin.ts pendingApprovals，一字不差。"""
-    return (int(u["id"][1:]) * 13) % 5 if u["status"] == "启用" else 0
+    """这些测试只seed用户，没有待审批业务记录。"""
+    return 0
 
 
 def expect(dept="全部", status="全部", kw=""):
@@ -158,6 +165,28 @@ async def test_update_user(client, users):
     assert (await client.put(f"{URL}/{m['id']}", json={**body, "role": "x"})).status_code == 422
 
 
+async def test_update_user_version_conflict_preserves_saved_values(client, users):
+    code = MOCK[3]["id"]
+    before = (await client.get(URL, params={"kw": code})).json()["items"][0]
+    version = before["lockVersion"]
+    body = {k: before[k] for k in ("name", "dept", "role", "status")}
+    first = await client.put(f"{URL}/{code}", json={**body, "name": "先保存", "lockVersion": version})
+    assert first.status_code == 200, first.text
+    assert first.json()["lockVersion"] == version + 1
+    second = await client.put(f"{URL}/{code}", json={**body, "name": "过期编辑", "lockVersion": version})
+    assert second.status_code == 409 and second.json()["code"] == "VERSION_CONFLICT"
+    assert second.json()["details"] == {"expected": version, "actual": version + 1}
+    current = (await client.get(URL, params={"kw": code})).json()["items"][0]
+    assert current["name"] == "先保存" and current["lockVersion"] == version + 1
+    # 不带版本的旧调用仍可用；下一次带最新版本的编辑正常保存。
+    old_client = await client.put(f"{URL}/{code}", json={**body, "name": "兼容旧调用"})
+    assert old_client.status_code == 200 and old_client.json()["lockVersion"] == version + 2
+    latest = await client.put(
+        f"{URL}/{code}", json={**body, "name": "重新编辑", "lockVersion": old_client.json()["lockVersion"]}
+    )
+    assert latest.status_code == 200 and latest.json()["lockVersion"] == version + 3
+
+
 CSV = (
     "\ufeff姓名,账号,部门,角色\n"
     "陈思远,chen.siyuan@freshmart.cn,华东事业部 / 运营中心,业务查看\n"
@@ -216,22 +245,42 @@ async def test_enable_disable(client, users):
     off = first(lambda u: u["status"] == "停用")
     r = await client.post(f"{URL}/{off['id']}:enable")
     assert r.status_code == 200 and r.json()["status"] == "启用"
-    assert r.json()["pendingApprovals"] == (int(off["id"][1:]) * 13) % 5
+    assert r.json()["pendingApprovals"] == 0
 
-    free = first(lambda u: u["status"] == "启用" and pending(u) == 0)
+    free = first(lambda u: u["status"] == "启用" and u["id"] != "U010001")
     r = await client.post(f"{URL}/{free['id']}:disable")
     assert r.status_code == 200 and r.json()["status"] == "停用"
     # 已停用再停用：幂等
     assert (await client.post(f"{URL}/{free['id']}:disable", json={})).json()["status"] == "停用"
 
-    busy = first(lambda u: u["status"] == "启用" and pending(u) > 0)
+    busy = first(lambda u: u["status"] == "启用" and u["id"] not in ("U010001", free["id"]))
+    from app.core import clock
+    from app.modules.static.models import ChangeRequest, CRLevel, CRStatus
+
+    users.add(
+        ChangeRequest(
+            code="CR-REAL-PENDING",
+            title="实际待审",
+            owner="创建人",
+            reviewer=busy["name"],
+            status=CRStatus.in_review,
+            level=CRLevel.minor,
+            changes=1,
+            detail={"reviewerCode": busy["id"]},
+            status_at=clock.now(),
+            created_by="U010001",
+        )
+    )
+    await users.flush()
     other = first(lambda u: u["status"] == "启用" and u["id"] != busy["id"])
     r = await client.post(f"{URL}/{busy['id']}:disable", json={})
     assert r.status_code == 422 and r.json()["code"] == "TRANSFER_REQUIRED"
     for bad in (busy["id"], free["id"], "U999999"):
-        assert (await client.post(f"{URL}/{busy['id']}:disable", json={"transferTo": bad})).status_code == 422
+        assert (await client.post(f"{URL}/{busy['id']}:disable", json={"transferTo": bad})).status_code == 409
     r = await client.post(f"{URL}/{busy['id']}:disable", json={"transferTo": other["id"]})
-    assert r.status_code == 200 and r.json()["status"] == "停用" and r.json()["pendingApprovals"] == 0
+    assert r.status_code == 409 and r.json()["code"] == "TRANSFER_UNAVAILABLE"
+    actual = await users.scalar(select(SysUser).where(SysUser.code == busy["id"]))
+    assert actual.status == UserStatus.active
     assert (await client.post(f"{URL}/U999999:enable")).status_code == 404
 
 

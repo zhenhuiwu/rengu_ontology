@@ -34,9 +34,21 @@ make check     # 提交前必跑：ruff 检查 + 格式检查 + alembic check + 
   | U010231 | 苏刚 | 非管理员（业务查看） | 已在 `seeds/json/system/ADMIN_USERS.json`（mock 部门成员），不在 SYS_USERS.json 重复；前端 `?previewAs=` 的默认预览对象（`src/stores/preview.ts:14`） |
 
   seed 的 sys_user 姓名必须唯一（ADMIN_USERS.json + SYS_USERS.json 合起来校验；动态按姓名比较「本人」，重名 seed 报错）；`sys_user.alert_assignable`（1..7 = 动态 PEOPLE 顺序，null = 不可指派）由动态的 seed 按姓名回填，admin seed 不写。
-- 时钟：dev/test 环境固定在 `2026-10-25T15:42:00+08:00`（`RENGU_FIXED_NOW`）；prod 用真实时间。
+- 时钟：dev/prod 默认使用真实时间；test 默认固定在 `2026-10-25T15:42:00+08:00`。显式 `RENGU_FIXED_NOW` 仅用于复现。
 - 测试使用独立的 `rengu_test` 库，测试会自动建库和迁移。每个用例在事务里运行，跑完回滚。
+- 问数评测（`qa_0006`）：使用Procrastinate持久队列，API请求内同一连接原子提交run/queue job；全局仅允许一个待执行或运行中的真实任务，重复请求409 `QA_EVAL_BUSY`。必须提供拥有的会话`sessionId`，冻结其scope/caliber，worker重新解析当前身份权限。scope是查询提示上下文，不充当SQL权限；行级控制经真实角色/范围与SQL守卫生效，详见 [行级权限执行](docs/backend/row-access.md)。
+- 单独部署QA worker：先`uv run alembic upgrade head`，再`uv run python -m app.modules.qa.eval.worker --install-schema`；启动`uv run python -m app.modules.qa.eval.worker`。此入口只消费`qa-eval`，不登记其他模块空桩/周期任务，独立加载全部ORM模型；Windows自动选择psycopg支持的Selector loop。队列schema由Procrastinate管理（Alembic已排除`procrastinate_*`），后续升级需按该包schema迁移流程处理。
+- 专用worker寿命内持有**1条主库连接**登记归属，执行时另占1条主库连接跨checkpoint持全局/单run锁（主库池至少留2条，另有只读查询连接）。API不再常驻进程锁连接。Ctrl+C/停止时等待5秒后取消，任务标失败、保留已提交结果并释放锁；硬退出由下一API/worker启动恢复孤儿running为失败，不误动真实queued或活worker。中断后手动重跑，不自动续跑；缺`DASHSCOPE_API_KEY`返回503，不生成假成绩。
 - 也可以用容器跑 API：`docker compose -p rengu-backend --profile api up`。
+
+模型配置写在被忽略的 `backend/.env`：`DASHSCOPE_API_KEY` 为问数和本体生成共用凭据，
+`QA_LLM_MODEL` / `QA_LLM_BASE_URL` 及 `AUTO_ONTOLOGY_LLM_MODEL` / `AUTO_ONTOLOGY_LLM_BASE_URL`
+分别指定两处使用的模型和 OpenAI 兼容接口。环境变量优先，空的 `DASHSCOPE_API_KEY` 可显式禁用；
+测试默认禁用本地文件中的真实密钥，实连测试需显式传入。修改配置后重启 API 和 QA worker；不要提交或打印真实密钥。
+
+真实数据源连接使用 `RENGU_DS_REAL_CONNECT=1`，并必须配置 `RENGU_DS_SECRET_KEY`。
+生产环境或启用真实连接时，缺少有效加密密钥会阻止应用启动；该密钥用于加密已保存的数据源密码，
+需要稳定保存，不能在已有密文时随意更换。部署前先配置密钥，再运行迁移和启动服务。
 
 ## 目录
 
@@ -94,3 +106,5 @@ auto-ontology（问数引擎）**作为独立服务部署在我们的网关后�
 
 - 具体字段以 `qa-api.md` 为准，由问数调研员维护。
 - 插件边界：qa 模块内部定义 `AutoOntologyClient` 接口，测试时可替换成 mock，不依赖 auto-ontology 服务在线。
+
+定时对账使用既有 `action.reconcile` / `reconcile` 队列，每15分钟检查持久任务。部署先运行 `uv run python -m app.modules.integration.worker --install-schema`，再启动 `uv run python -m app.modules.integration.worker`（仅消费对账）。默认不连接外部系统；获得授权后在ignored `.env`配置 `RENGU_INTEGRATION_REAL_CONNECT` 与 `RENGU_INTEGRATION_ADAPTERS`，详细路径/响应/失败行为见 [持久对账交接](docs/backend/handoff/reconciliation.md)。

@@ -20,6 +20,7 @@ from app.db.session import SessionDep, get_session
 from app.modules.dynamic import writeback as _writeback  # noqa: F401  import 即登记静态发布写回钩子（有钩子时）
 from app.modules.dynamic.catalog import get_catalog
 from app.modules.dynamic.models import ActionRun
+from app.modules.dynamic.object_behavior import automation_hits, behavior_stats
 from app.modules.dynamic.ports import PortsDep
 from app.modules.dynamic.rules_schemas import (
     LifecycleDraftIn,
@@ -80,13 +81,39 @@ LcSvc = Annotated[LifecycleService, Depends(_lifecycles)]
 @router.get("/rules", dependencies=RULES_VIEW, response_model=DictPage)
 async def list_rules(
     svc: RuleSvc,
-    params: Annotated[PageParams, Depends(_page(16))],
+    params: Annotated[PageParams, Depends(_page(10))],
     trigger: str | None = None,
     status: str | None = None,
     kw: str | None = None,
+    obj_kind: Annotated[str | None, Query(alias="objKind", max_length=64)] = None,
 ) -> DictPage:
     """R1 左侧列表：trigger = 全部 / 定时 / 事件；status = 显示状态（已发布 / 草稿中 / 审核中 / 已停用）。"""
-    return await svc.list_rules(params, trigger=trigger, status=status, kw=kw)
+    return await svc.list_rules(params, trigger=trigger, status=status, kw=kw, obj_kind=obj_kind)
+
+
+@router.get(
+    "/object-types/{object_id}/behavior/stats",
+    dependencies=[
+        *OT_VIEW,
+        *RULES_VIEW,
+        Depends(require_func("action-types", "view")),
+        Depends(require_func("action-center", "view")),
+    ],
+)
+async def object_behavior_stats(object_id: str, session: SessionDep, ctx: ViewContextDep) -> dict[str, Any]:
+    return await behavior_stats(session, object_id, ctx)
+
+
+@router.get(
+    "/object-types/{object_id}/automation/hits", dependencies=[*OT_VIEW, *RULES_VIEW], response_model=DictPage
+)
+async def object_automation_hits(
+    object_id: str,
+    session: SessionDep,
+    params: Annotated[PageParams, Depends(_page(10))],
+    rule_id: Annotated[str | None, Query(alias="ruleId", max_length=64, pattern=r"^[^\x00]+$")] = None,
+) -> DictPage:
+    return await automation_hits(session, object_id, rule_id, params)
 
 
 @router.get("/rules/meta", dependencies=RULES_VIEW)
@@ -131,7 +158,7 @@ async def save_rule_draft(svc: RuleSvc, rule_id: str, body: RuleDraftIn) -> dict
 async def rule_hits(
     svc: RuleSvc,
     rule_id: str,
-    params: Annotated[PageParams, Depends(_page(12))],
+    params: Annotated[PageParams, Depends(_page(10))],
     range: Literal["7d", "30d"] = "7d",
 ) -> DictPage:
     return await svc.hits(rule_id, params, range_=range)
@@ -143,7 +170,7 @@ async def rule_hit(
 ) -> dict[str, Any]:
     """R8 命中抽屉：命中 + 告警详情（时间线）+ 关联动作（该告警的第一条动作）。"""
     r, _hit, out, alert = await svc.hit(hit_id)
-    catalog = get_catalog()
+    catalog = await get_catalog(session)
     timeline: list[dict[str, Any]]
     alert_detail = linked = None
     if alert is not None:
@@ -179,7 +206,7 @@ async def rule_hit(
 
 @router.post("/rules/{rule_id}:replay", dependencies=RULES_MANAGE)
 async def replay_rule(svc: RuleSvc, rule_id: str, body: ReplayIn) -> dict[str, Any]:
-    """R9 回放试跑：不生成告警、不暂存动作、不写命中表（samples 前端按 9 条分页）。"""
+    """R9 真实只读条件推演/事件回放：不生成告警、动作或命中，结果默认每页10条。"""
     return await svc.replay(rule_id, body)
 
 
@@ -194,7 +221,7 @@ async def rule_versions(svc: RuleSvc, rule_id: str) -> list[dict[str, Any]]:
 @router.get("/scenarios", dependencies=SC_VIEW, response_model=DictPage)
 async def list_scenarios(
     svc: ScSvc,
-    params: Annotated[PageParams, Depends(_page(12))],
+    params: Annotated[PageParams, Depends(_page(10))],
     status: str | None = None,
     kw: str | None = None,
 ) -> DictPage:
@@ -203,7 +230,7 @@ async def list_scenarios(
 
 @router.get("/scenarios/meta", dependencies=SC_VIEW)
 async def scenarios_meta(svc: ScSvc) -> dict[str, Any]:
-    return svc.meta()
+    return await svc.meta()
 
 
 @router.get("/scenarios:compare", dependencies=SC_VIEW)
@@ -263,7 +290,7 @@ async def scenario_result(svc: ScSvc, sc_id: str, response: Response) -> dict[st
 
 @router.get("/scenarios/{sc_id}/impacts", dependencies=SC_VIEW, response_model=DictPage)
 async def scenario_impacts(
-    svc: ScSvc, sc_id: str, params: Annotated[PageParams, Depends(_page(6))]
+    svc: ScSvc, sc_id: str, params: Annotated[PageParams, Depends(_page(10))]
 ) -> DictPage:
     return await svc.impacts(sc_id, params)
 
@@ -278,7 +305,7 @@ async def stage_scenario(
     svc: ScSvc, session: SessionDep, user: CurrentUserDep, ports: PortsDep, sc_id: str, body: ScenarioStageIn
 ) -> dict[str, Any]:
     """S9：勾选的建议逐条暂存为待确认动作（source.type=推演，confirmer=本人）。"""
-    return await svc.stage(sc_id, body.keys, ActionService(session, user, get_catalog(), ports))
+    return await svc.stage(sc_id, body.keys, ActionService(session, user, await get_catalog(session), ports))
 
 
 # ---------------- 生命周期（L1–L6） ----------------
@@ -309,7 +336,7 @@ async def get_lifecycle(
 async def lifecycle_changes(
     svc: LcSvc,
     object_id: str,
-    params: Annotated[PageParams, Depends(_page(6))],
+    params: Annotated[PageParams, Depends(_page(10))],
     release: Annotated[OntologyRelease | None, Depends(_release)],
     illegal: int = 0,
 ) -> DictPage:

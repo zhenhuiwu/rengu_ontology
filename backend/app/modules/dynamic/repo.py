@@ -1,14 +1,54 @@
 """数据访问（继承 app.common.repository.BaseRepository）。"""
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.common.repository import BaseRepository
+from app.core import clock
 from app.core.enums import TimelineStatus
+from app.db.dialects import get_adapter
 from app.modules.admin.models import SysUser
-from app.modules.dynamic.models import ActionRun, ActionRunLog, Alert, AlertLog, AlertOp
+from app.modules.dynamic.models import (
+    ActionRun,
+    ActionRunDailyCounter,
+    ActionRunLog,
+    Alert,
+    AlertLog,
+    AlertOp,
+)
+from app.modules.dynamic.rules_models import Scenario, ScenarioImpact
+
+
+class ScenarioRepo(BaseRepository[Scenario]):
+    model = Scenario
+
+
+class ScenarioImpactRepo(BaseRepository[ScenarioImpact]):
+    model = ScenarioImpact
+
+
+async def recent_rule_hits(
+    session: AsyncSession, *, until: datetime | None = None, rule_ids: set[int] | None = None
+) -> dict[int, int]:
+    """当前近7天实际保存的命中数；不把定义里的历史weekly快照当成滚动统计。"""
+    from app.modules.dynamic.rules_models import RuleHit
+
+    until = until or clock.now()
+    if rule_ids is not None and not rule_ids:
+        return {}
+    statement = (
+        select(RuleHit.rule_id, func.count())
+        .where(RuleHit.at >= until - timedelta(days=7), RuleHit.at <= until)
+        .group_by(RuleHit.rule_id)
+    )
+    if rule_ids is not None:
+        statement = statement.where(RuleHit.rule_id.in_(rule_ids))
+    rows = await session.execute(statement)
+    return dict(rows.all())
 
 
 class AlertRepo(BaseRepository[Alert]):
@@ -79,6 +119,7 @@ class ActionRunRepo(BaseRepository[ActionRun]):
         actor: str | None = None,
         level: TimelineStatus | None = None,
     ) -> ActionRunLog:
+        await self.session.execute(select(ActionRun.id).where(ActionRun.id == run.id).with_for_update())
         seq = await self.session.scalar(
             select(func.coalesce(func.max(ActionRunLog.seq), 0)).where(ActionRunLog.action_run_id == run.id)
         )
@@ -94,10 +135,27 @@ class ActionRunRepo(BaseRepository[ActionRun]):
         return list((await self.session.scalars(stmt)).all())
 
     async def next_code(self, day: str) -> str:
-        """ACT-YYYYMMDD-NNNN：同日已有编号（含执行记录）的最大序号 + 1（前端 Actions.vue L145 的口径）。"""
+        """按日预留编号；含历史最大号，已发号不随业务回滚复用，日锁不跨外部调用。"""
         prefix = f"ACT-{day}-"
         codes = (
             await self.session.scalars(select(ActionRun.code).where(ActionRun.code.startswith(prefix)))
         ).all()
         nums = [int(c[len(prefix) :]) for c in codes if c[len(prefix) :].isdigit()]
-        return f"{prefix}{(max(nums) if nums else 0) + 1:04d}"
+        floor = max(nums, default=0)
+        # 请求已占主池连接；独立无池连接避免并发请求互等第二条主池连接。
+        engine = create_async_engine(self.session.get_bind().engine.url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine) as allocation, allocation.begin():
+                await get_adapter(allocation).xact_lock(allocation, f"dynamic.action_run.code.{day}")
+                counter = await allocation.scalar(
+                    select(ActionRunDailyCounter).where(ActionRunDailyCounter.day == day)
+                )
+                if counter is None:
+                    counter = ActionRunDailyCounter(day=day, last_value=floor)
+                    allocation.add(counter)
+                counter.last_value = max(counter.last_value, floor) + 1
+                await allocation.flush()
+                number = counter.last_value
+        finally:
+            await engine.dispose()
+        return f"{prefix}{number:04d}"

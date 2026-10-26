@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core.config import get_settings
-from app.modules.admin.models import AuditLog
+from app.modules.admin.models import AuditLog, SysRole, SysRoleMember, SysUser, UserStatus
 
 SYS = get_settings().seeds_json_dir / "system"
 ROLES = json.loads((SYS / "ROLES.json").read_text("utf-8"))
@@ -25,6 +25,21 @@ EFF = json.loads(
     )
 )
 URL = "/api/admin/v1/roles"
+
+
+@pytest.fixture(autouse=True)
+async def role_actor(client, users):
+    # Use a real enabled seeded role member without changing the member/count compatibility fixtures.
+    actor = await users.scalar(
+        select(SysUser.code)
+        .join(SysRoleMember, SysRoleMember.user_id == SysUser.id)
+        .join(SysRole, SysRole.id == SysRoleMember.role_id)
+        .where(SysRole.code == "R-01", SysUser.status == UserStatus.active)
+        .order_by(SysUser.code.desc())
+        .limit(1)
+    )
+    assert actor is not None
+    client.headers["X-Demo-As"] = actor
 
 
 def role_fields(r):
@@ -48,7 +63,9 @@ async def test_meta(client, users):
     m = (await client.get(f"{URL}/meta")).json()
     assert m["funcPages"] == json.loads((SYS / "FUNC_PAGES.json").read_text("utf-8"))
     assert m["permObjects"] == json.loads((SYS / "PERM_OBJECTS.json").read_text("utf-8"))
-    assert m["scopeProps"] == json.loads((SYS / "SCOPE_PROPS.json").read_text("utf-8"))
+    assert [{k: p[k] for k in ("objType", "prop", "values")} for p in m["scopeProps"]] == json.loads(
+        (SYS / "SCOPE_PROPS.json").read_text("utf-8")
+    )
     assert m["objActions"]["门店"] == ["变更门店状态"]
 
 
@@ -201,7 +218,13 @@ async def test_tenants_from_db(client, users):
 async def test_delete_role_in_use_and_primary_reassign(client, users):
     """删角色：有人只有这个角色 → 409 ROLE_IN_USE；都还有别的角色 → 删除，主角色改成剩下编号最小的角色。"""
     assert (await client.post(URL, json={"name": "新角色乙"})).json()["id"] == "R-09"
-    body = {"name": "乙", "account": "yi@freshmart.cn", "dept": "华东事业部 / 运营中心", "role": "新角色乙"}
+    body = {
+        "name": "乙",
+        "account": "yi@freshmart.cn",
+        "dept": "华东事业部 / 运营中心",
+        "role": "新角色乙",
+        "status": "启用",
+    }
     u = (await client.post("/api/admin/v1/users", json=body)).json()
     assert (await client.post(f"{URL}/R-09/members", json={"userIds": [u["id"]]})).status_code == 200
     r = await client.delete(f"{URL}/R-09")
@@ -254,3 +277,221 @@ async def test_perm_objects_read_ontology(client, users, session):
     r = await client.put(f"{URL}/R-04/permissions", json={"func": ROLES[3]["func"], "objs": [obj]})
     assert r.status_code == 200, r.text
     assert [o for o in r.json()["objs"] if o["objType"] == "供应商"] == [obj]
+
+
+@pytest.mark.parametrize("data_type", ["string", "enum"])
+async def test_scope_props_follow_filter_flags_and_executable_basis(
+    client, users, session, monkeypatch, data_type
+):
+    """本体属性、执行白名单、可见取值同源；不支持的类型/隐藏/敏感/未登记字段不能保存。"""
+    from datetime import date
+
+    from app.common import auth
+    from app.modules.biz.models import Store, StoreStatus
+    from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectStatus, ObjectType, Property
+
+    obj = ObjectType(
+        code="store",
+        api_name="Store",
+        display_name="门店",
+        obj_group="组织",
+        status=ObjectStatus.published,
+        seq=0,
+        conflict_strategy=ConflictStrategy.user_edit_wins,
+        lifecycle=Lifecycle.active,
+    )
+    session.add(obj)
+    await session.flush()
+    prop = Property(
+        object_type_id=obj.id,
+        api_name="area",
+        display_name="所属区域",
+        data_type=data_type,
+        prop_group="组织",
+        source_column="region",
+        backing_column="region",
+        filterable=True,
+    )
+    session.add(prop)
+    for i, flags in enumerate(
+        [{"data_type": typ} for typ in ("integer", "decimal", "date", "timestamp", "boolean", "array")]
+        + [{"visibility": "hidden"}, {"is_sensitive": True}, {"filterable": False}, {"backing_column": None}]
+    ):
+        session.add(
+            Property(
+                **{
+                    "object_type_id": obj.id,
+                    "api_name": f"excluded_{i}",
+                    "display_name": f"排除属性{i}",
+                    "data_type": "string",
+                    "prop_group": "组织",
+                    "source_column": "region",
+                    "backing_column": "region",
+                    "filterable": True,
+                    **flags,
+                }
+            )
+        )
+    for i, region in enumerate(["允许区", "不可见区"]):
+        session.add(
+            Store(
+                code=f"scope-store-{i}",
+                store_no=f"scope-store-{i}",
+                name=f"范围门店{i}",
+                city="测试市",
+                region=region,
+                big_region="华东",
+                format="社区店",
+                opened_at=date(2026, 1, 1),
+                status=StoreStatus.open,
+            )
+        )
+    await session.flush()
+
+    async def restricted(user, object_type):
+        return {"field": "region", "op": "=", "value": "允许区"}
+
+    monkeypatch.setattr(auth, "row_filter", restricted)
+    response = await client.get(f"{URL}/meta")
+    assert response.status_code == 200, response.text
+    assert response.json()["scopeProps"] == [
+        {
+            "objType": "门店",
+            "prop": "区域",
+            "displayName": "所属区域",
+            "dataType": data_type,
+            "values": ["允许区"],
+        }
+    ]
+    body = {"objType": "门店", "prop": "区域", "values": ["允许区"]}
+    ok = await client.post(f"{URL}/R-04/scopes", json=body)
+    assert ok.status_code == 200, ok.text
+    assert (await client.post(f"{URL}/R-04/scopes", json={**body, "values": ["不可见区"]})).status_code == 422
+    assert (await client.post(f"{URL}/R-04/scopes", json={**body, "prop": "排除属性0"})).status_code == 422
+
+    async def denied(user, object_type):
+        return {"deny": True}
+
+    monkeypatch.setattr(auth, "row_filter", denied)
+    assert (await client.get(f"{URL}/meta")).json()["scopeProps"][0]["values"] == []
+    assert (await client.post(f"{URL}/R-04/scopes", json=body)).status_code == 422
+    monkeypatch.setattr(auth, "row_filter", restricted)
+    prop.filterable = False
+    await session.flush()
+    assert (await client.get(f"{URL}/meta")).json()["scopeProps"] == []  # 不拿旧 JSON 填回已移除的属性
+    assert (await client.post(f"{URL}/R-04/scopes", json=body)).status_code == 422
+
+
+async def test_scope_props_use_registered_link_values_and_propagate_errors(
+    client, users, session, monkeypatch
+):
+    from app.common import auth
+    from app.core.errors import AppError
+    from app.modules.biz.models import BizOrder, Store
+    from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectStatus, ObjectType, Property
+    from app.seeds.loader import run_seeds
+
+    await run_seeds(session, ["biz"])
+    obj = ObjectType(
+        code="order",
+        api_name="SalesOrder",
+        display_name="订单",
+        obj_group="交易",
+        status=ObjectStatus.published,
+        seq=0,
+        conflict_strategy=ConflictStrategy.user_edit_wins,
+        lifecycle=Lifecycle.active,
+    )
+    session.add(obj)
+    await session.flush()
+    session.add(
+        Property(
+            object_type_id=obj.id,
+            api_name="store_id",
+            display_name="门店",
+            data_type="string",
+            prop_group="交易",
+            source_column="store_id",
+            filterable=True,
+        )
+    )
+    await session.flush()
+    expected = sorted(set((await session.scalars(select(Store.name).join(BizOrder))).all()))
+    response = await client.get(f"{URL}/meta")
+    assert response.status_code == 200, response.text
+    assert response.json()["scopeProps"][0]["values"] == expected
+    assert expected
+
+    region = await session.scalar(select(Store.region).join(BizOrder).limit(1))
+
+    async def scoped_orders(user, object_type):
+        if object_type == "order":
+            return {"field": "order_belongs_to_store.region", "op": "=", "value": region}
+        return None
+
+    monkeypatch.setattr(auth, "row_filter", scoped_orders)
+    restricted = sorted(
+        set((await session.scalars(select(Store.name).join(BizOrder).where(Store.region == region))).all())
+    )
+    response = await client.get(f"{URL}/meta")
+    assert response.status_code == 200, response.text
+    assert response.json()["scopeProps"][0]["values"] == restricted
+    assert restricted and set(restricted) < set(expected)
+
+    async def bad_filter(user, object_type):
+        raise AppError("筛选属性已失效", code="BAD_ROW_FILTER", status_code=422)
+
+    monkeypatch.setattr(auth, "row_filter", bad_filter)
+    response = await client.get(f"{URL}/meta")
+    assert response.status_code == 422
+    assert response.json()["code"] == "BAD_ROW_FILTER"
+
+
+async def test_scope_props_reject_real_values_that_legacy_aliases_would_rewrite(client, users, session):
+    from app.common.sql_guard import scope_expr
+    from app.modules.biz.governance import PRODUCT_GOV
+    from app.modules.biz.models import Product
+    from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectStatus, ObjectType, Property
+
+    obj = ObjectType(
+        code="product",
+        api_name="Product",
+        display_name="商品",
+        obj_group="商品",
+        status=ObjectStatus.published,
+        conflict_strategy=ConflictStrategy.user_edit_wins,
+        lifecycle=Lifecycle.active,
+    )
+    session.add(obj)
+    await session.flush()
+    session.add(
+        Property(
+            object_type_id=obj.id,
+            api_name="category",
+            display_name="品类",
+            data_type="string",
+            prop_group="商品",
+            source_column="category",
+            filterable=True,
+        )
+    )
+    for n, category in enumerate(["休闲零食/自定义", "休闲食品/标准"]):
+        session.add(
+            Product(
+                code=f"alias-{n}", barcode=f"alias-{n}", name=category, category=category, price=1, unit="个"
+            )
+        )
+    await session.flush()
+    response = await client.get(f"{URL}/meta")
+    assert response.status_code == 200, response.text
+    assert response.json()["scopeProps"][0]["values"] == ["休闲食品"]
+    body = {"objType": "商品", "prop": "品类", "values": ["休闲零食"]}
+    response = await client.post(f"{URL}/R-04/scopes", json=body)
+    assert response.status_code == 422, response.text
+    assert (await client.post(f"{URL}/R-04/scopes", json={**body, "values": ["休闲食品"]})).status_code == 200
+    # 既有角色的演示别名仍按原契约执行，不把旧配置改成新含义。
+    assert scope_expr(PRODUCT_GOV, [{"prop": "品类", "op": "=", "values": ["休闲零食"]}]) == {
+        "field": "category_l1",
+        "op": "=",
+        "value": "休闲食品",
+    }

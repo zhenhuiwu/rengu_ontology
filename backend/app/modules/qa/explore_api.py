@@ -39,7 +39,7 @@ from app.db.session import SessionDep
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS, PRODUCT_COLUMNS, STORE_COLUMNS
 from app.modules.qa import service as svc
 from app.modules.qa.objects_api import OutOfScope
-from app.modules.static.explorer import _bad, _scalar, facet_kind, facetable
+from app.modules.static.explorer import bad_filter, facet_kind, facetable, scalar_filter
 from app.modules.static.models import ObjectType, Property
 
 
@@ -83,7 +83,7 @@ def flags(p: Property) -> dict[str, bool]:
 
 
 class ExploreIn(ApiModel):
-    kw: str = Field("", max_length=100)
+    kw: str = Field("", max_length=100, pattern=r"^[^\x00]*$")
     # 属性 api 名 → 取值列表（enum / 字符串 / 布尔）或 {min,max}（数值 / 时间，闭区间；只给日期时含当天）
     # 值的形状按属性逐个校验（Bound.cond，同静态 /facets）：不合法一律 422，不让数据库报 500
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -112,7 +112,7 @@ def _bound(v: Any, dt: str, upper: bool, key: str = "") -> tuple[Any, bool]:
         return None, False
     s = str(v)
     if dt in TIME and (not isinstance(v, str) or len(s) > 64):
-        _bad(key, "日期应为 ISO 字符串，如 2026-10-01")
+        bad_filter(key, "日期应为 ISO 字符串，如 2026-10-01")
     try:
         if dt == "date":
             return date.fromisoformat(s[:10]), False
@@ -125,7 +125,7 @@ def _bound(v: Any, dt: str, upper: bool, key: str = "") -> tuple[Any, bool]:
         if dt in NUMERIC:
             return Decimal(s), False
     except (ValueError, InvalidOperation, OverflowError):
-        _bad(key, "日期 / 数值格式不对")
+        bad_filter(key, "日期 / 数值格式不对")
     return v, False
 
 
@@ -195,13 +195,13 @@ class Bound:
         p, c = self.props[k], self.cols[k]
         if facet_kind(p) == "enum":
             if not isinstance(v, list) or any(isinstance(x, list | dict) or x is None for x in v):
-                _bad(k, '枚举类筛选应为取值数组，如 ["营业中"]')
-            return [c.in_([_scalar(c, x, k) for x in v])] if v else []
+                bad_filter(k, '枚举类筛选应为取值数组，如 ["营业中"]')
+            return [c.in_([scalar_filter(c, x, k) for x in v])] if v else []
         if not isinstance(v, dict) or not v or set(v) - {"min", "max"}:
-            _bad(k, "区间类筛选应为 {min, max}")
+            bad_filter(k, "区间类筛选应为 {min, max}")
         for x in v.values():
             if x is not None and (isinstance(x, bool) or not isinstance(x, str | int | float)):
-                _bad(k, "min / max 应为数字或日期字符串")
+                bad_filter(k, "min / max 应为数字或日期字符串")
         out: list[Any] = []
         for end in ("min", "max"):
             x = v.get(end)
@@ -210,7 +210,7 @@ class Bound:
             if p.data_type in TIME:
                 val, open_hi = _bound(x, p.data_type, end == "max", k)
             else:
-                val, open_hi = _scalar(c, x, k), False
+                val, open_hi = scalar_filter(c, x, k), False
             out.append(c >= val if end == "min" else (c < val if open_hi else c <= val))
         return out
 
@@ -295,13 +295,13 @@ async def explore_search(
         return empty
     bd.check(body.filters, "筛选")
     if body.sort:
-        bd.check([body.sort.lstrip("-")], "排序")
+        bd.check([body.sort.removeprefix("-")], "排序")
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
     base = await bd.stmt(viewer)
     stmt = bd.where(base, body)
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     if body.sort:
-        c = bd.cols[body.sort.lstrip("-")]
+        c = bd.cols[body.sort.removeprefix("-")]
         stmt = stmt.order_by((desc if body.sort.startswith("-") else asc)(c).nulls_last(), bd.id_col)
     else:
         stmt = stmt.order_by(bd.id_col)

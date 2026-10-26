@@ -9,7 +9,7 @@
 
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
@@ -21,6 +21,18 @@ from app.modules.static.schemas import ItemIn, ItemsPutIn, TargetIn
 Row = dict[str, Any]
 RULE_CONFIG_NEW = ("name", "objKind", "level", "output", "logic", "trigger")
 STAGE_FIELDS = (("enabled", "自动暂存"), ("actionTypeId", "暂存动作"), ("confirmer", "确认人"))
+
+
+async def discard_lifecycle_draft(session: AsyncSession, cr: str, object_id: str) -> None:
+    """静态放弃对象目标时，同事务删除生命周期编辑，避免重新加入后复活旧草稿。"""
+    from app.modules.dynamic.rules_models import Lifecycle, LifecycleDraft
+
+    await session.execute(
+        delete(LifecycleDraft).where(
+            LifecycleDraft.cr_code == cr,
+            LifecycleDraft.lifecycle_id.in_(select(Lifecycle.id).where(Lifecycle.code == object_id)),
+        )
+    )
 
 
 class CrLink:

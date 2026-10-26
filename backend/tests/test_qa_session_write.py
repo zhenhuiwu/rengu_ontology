@@ -1,16 +1,22 @@
 """W2 新建 / W4 重命名、改范围口径 / W5 删除会话 / W15 移出常用问题（工作台联调）。"""
 
+import json
+
 import pytest
+from sqlalchemy import func, select
 
 from app.core.errors import AppError
-from app.seeds.loader import run_seeds
+from app.modules.qa.models import QaPermissionRequest, QaTurn
+from tests.function_access_support import grant_fixture_roles
+from tests.qa_access_support import seed_qa_access
 
 B = "/api/qa/v1"
 
 
 @pytest.fixture
 async def qa(users, client):
-    await run_seeds(users, ["qa"])
+    await seed_qa_access(users)
+    await grant_fixture_roles(users, {"U010001": "R-01", "U010006": "R-05"})
     await users.flush()
     return client
 
@@ -137,8 +143,11 @@ async def _denied_turn(qa) -> str:
     return next(t["id"] for t in turns if t["kind"] == "denied")
 
 
-async def test_permission_request_marks_turn_applied(qa):
+async def test_permission_request_marks_turn_applied(qa, session):
     tid = await _denied_turn(qa)
+    denied = await session.scalar(select(QaTurn).where(QaTurn.code == tid))
+    denied.snapshot = {**denied.snapshot, "code": "OUT_OF_SCOPE"}
+    await session.flush()
     body = {
         "scope": "大区 = 华南",
         "object": "复购客户销售额（不含税） v3",
@@ -148,12 +157,17 @@ async def test_permission_request_marks_turn_applied(qa):
     }
     r = await qa.post(f"{B}/permission-requests", json=body)
     assert r.status_code == 201, r.text
-    assert r.json() == {"id": "AP0001", "status": "待审批", "approver": "刘洋（数据权限管理员）"}
+    assert r.json() == {"id": "AP0001", "status": "待审批", "approver": None}
     turn = next(t for t in (await qa.get(f"{B}/sessions/S0001")).json()["turns"] if t["id"] == tid)
     assert turn["applied"] is True
-    # 只读白名单：历史版本下也能提交
-    r = await qa.post(f"{B}/permission-requests?ver=v2026.10.2", json={**body, "sourceTurnId": None})
-    assert r.status_code == 201 and r.json()["id"] == "AP0002"
+    before = await session.scalar(select(func.count()).select_from(QaPermissionRequest))
+    for query in ("ver=v2026.10.2", "previewAs=U010006"):
+        r = await qa.post(f"{B}/permission-requests?{query}", json=body)
+        assert r.status_code == 403 and r.json()["code"] == "READONLY"
+    assert await session.scalar(select(func.count()).select_from(QaPermissionRequest)) == before
+    stored = await session.scalar(select(QaPermissionRequest).where(QaPermissionRequest.code == "AP0001"))
+    assert stored.approver is None and stored.reason == "Q4 复购对比"
+    assert stored.source_turn_id == denied.id
 
 
 async def test_permission_request_validation(qa):
@@ -167,3 +181,77 @@ async def test_permission_request_validation(qa):
         f"{B}/permission-requests", json={**base, "duration": 30}, headers={"X-Demo-As": "U010006"}
     )
     assert r.status_code == 404
+
+
+async def test_permission_request_rejects_unencodable_and_blank_text(qa, session):
+    body = {"scope": "请求范围", "object": "请求对象", "reason": "业务原因", "duration": 30}
+    before = await session.scalar(select(func.count()).select_from(QaPermissionRequest))
+    for field in ("scope", "object", "reason", "sourceTurnId"):
+        for value in ("bad\x00text", "bad\ud800text"):
+            response = await qa.post(
+                f"{B}/permission-requests",
+                content=json.dumps({**body, field: value}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert response.status_code == 422, (field, response.text)
+            assert response.json()["code"] == "VALIDATION_FAILED"
+    for field in ("scope", "object", "reason"):
+        response = await qa.post(f"{B}/permission-requests", json={**body, field: "  "})
+        assert response.status_code == 422
+    assert await session.scalar(select(func.count()).select_from(QaPermissionRequest)) == before
+
+
+async def test_caliber_index_uses_published_explicit_variants_and_historical_definition(users):
+    from app.core import clock
+    from app.modules.admin.models import SysUser
+    from app.modules.qa import service as svc
+    from app.modules.static.models import Metric, MetricStatus
+    from app.modules.versioning.models import OntologyRelease
+
+    def metric(code, name):
+        return Metric(
+            code=code,
+            api_name=code,
+            display_name=name,
+            metric_group="测试",
+            unit="元",
+            version="v2",
+            status=MetricStatus.published,
+            owner="测试",
+        )
+
+    source = metric("M-variant-source", "来源指标")
+    target = metric("M-variant-target", "真实目标指标")
+    source.variants = [{"code": target.code, "label": "实际口径", "api": "STALE", "version": "v99"}]
+    users.add_all([source, target])
+    await users.flush()
+    idx = await svc.variant_index(users)
+    assert idx["实际口径"][0]["api"] == target.api_name
+    assert idx["实际口径"][0]["version"] == "v2" and idx["实际口径"][0]["name"] == target.display_name
+    with pytest.raises(AppError):
+        svc.check_caliber("不存在口径", idx)
+    target.status = MetricStatus.draft
+    await users.flush()
+    assert await svc.variant_index(users) == {}
+    publisher = await users.scalar(select(SysUser.id).limit(1))
+    users.add(
+        OntologyRelease(
+            ver="v2099.12.1",
+            published_by_id=publisher,
+            published_at=clock.now(),
+            snapshot={
+                "metrics": {
+                    source.code: {
+                        "id": source.code,
+                        "api": source.api_name,
+                        "name": "旧定义（含税）",
+                        "version": "v1",
+                        "status": "已发布",
+                    }
+                }
+            },
+            snapshot_sha256="0" * 64,
+        )
+    )
+    await users.flush()
+    assert await svc.variant_index(users, "v2099.12.1") == {}

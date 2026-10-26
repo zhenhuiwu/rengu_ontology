@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.core.schema import _fmt_dt
+from app.modules.admin.permissions import resolve_owner_name
+from app.modules.static.explorer import DISPLAY_FIELDS, VISIBILITY, snapshot_flags
 from app.modules.static.models import (
     ApplyKind,
     Cardinality,
@@ -103,6 +105,13 @@ def writeback_error(msg: str, **details: Any) -> AppError:
 
 def _bad(msg: str, **details: Any) -> AppError:
     return AppError(msg, code="WRITEBACK_FAILED", status_code=409, details=details)
+
+
+async def owner_name(ctx: Ctx, value: Any) -> str:
+    try:
+        return await resolve_owner_name(ctx.session, value)
+    except AppError as error:
+        raise _bad(error.message, field="owner") from error
 
 
 def _label(enum: Any, v: Any, field: str) -> Any:
@@ -243,15 +252,50 @@ P_FIELDS = {
     "enumName": "enum_name",
 }
 P_FLAGS = {"pk": "is_pk", "title": "is_title", "dim": "is_dimension", "sensitive": "is_sensitive"}
+P_TYPES = {"string", "int", "integer", "decimal", "date", "timestamp", "boolean", "enum", "json"}
+
+
+def _prop_type(value: Any, api: str) -> str:
+    if not isinstance(value, str) or value not in P_TYPES:
+        raise _bad("属性类型不合法", key=api, field="type")
+    return value
 
 
 def _set_prop(p: Property, after: dict[str, Any]) -> None:
+    if "type" in after:
+        _prop_type(after["type"], p.api_name)
     for k, col in P_FIELDS.items():
         if k in after:
             setattr(p, col, after[k] if k == "enumName" else str(after[k] or ""))
     for k, col in P_FLAGS.items():
         if k in after:
             setattr(p, col, bool(after[k]))
+    for key, col in DISPLAY_FIELDS.items():
+        if key not in after:
+            continue
+        value = after[key]
+        valid = True
+        if key in ("searchable", "filterable", "sortable", "listed"):
+            valid = isinstance(value, bool)
+        elif key == "visibility":
+            valid = value in VISIBILITY
+        elif key in ("order", "listWidth"):
+            valid = (key == "listWidth" and value is None) or (
+                type(value) is int and (0 if key == "order" else 1) <= value <= 2147483647
+            )
+        elif key in ("format", "unit"):
+            valid = value is None or (
+                isinstance(value, str)
+                and len(value) <= (32 if key == "format" else 16)
+                and "\x00" not in value
+            )
+        if not valid:
+            raise _bad(f"属性显示标记 {key} 不合法", key=p.api_name, field=key)
+        setattr(p, col, value)
+    if p.visibility == "hidden":
+        p.filterable = p.sortable = p.list_visible = False
+    if p.is_sensitive:
+        p.filterable = False
 
 
 @register("object", "properties")
@@ -270,14 +314,19 @@ async def object_properties(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
         if p is None:
             if r.op != "add":
                 raise _bad(f"属性 {tid}.{r.item_key} 不存在，不能修改", kind="object", id=tid, key=r.item_key)
+            typ = _prop_type(after.get("type", "string"), r.item_key)
             p = Property(
                 api_name=r.item_key,
                 display_name=str(after.get("name") or r.item_key),
-                data_type=str(after.get("type") or "string"),
+                data_type=typ,
                 prop_group=str(after.get("group") or "其他"),
                 source_column=str(after.get("source") or ""),
                 description=str(after.get("desc") or ""),
-                seq=max((x.seq for x in o.properties), default=0) + 1,
+                **snapshot_flags(
+                    tid,
+                    {**after, "api": r.item_key, "type": typ},
+                    max((x.seq for x in o.properties), default=0) + 1,
+                ),
                 created_by=ctx.by,
             )
             o.properties.append(p)
@@ -330,11 +379,26 @@ async def _object(ctx: Ctx, tid: str) -> ObjectType:
 
 async def _object_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
     o = await _object(ctx, tid)
+    if any(r.item_key in ("source", "table") and r.op != "delete" for r in rows):
+        from app.modules.data.mappings import lock_source
+
+        source = next(
+            (r.after for r in reversed(rows) if r.item_key == "source" and r.op != "delete"),
+            o.datasource_name,
+        )
+        await lock_source(ctx.session, source)
     for r in rows:
         if r.op == "delete":
             continue
         if r.item_key == "conflict":
             o.conflict_strategy = _label(ConflictStrategy, r.after, "冲突策略")
+        elif r.item_key == "owner":
+            from app.modules.admin.permissions import resolve_owner_name
+
+            try:
+                o.owner = await resolve_owner_name(ctx.session, r.after)
+            except AppError as e:
+                raise _bad(e.message, kind="object", id=tid, field="owner") from None
         elif r.item_key in O_FIELDS:
             setattr(o, O_FIELDS[r.item_key], None if r.after is None else str(r.after))
     o.status = ObjectStatus.published
@@ -433,8 +497,17 @@ M_FIELDS = {
 
 @register("metric", "def")
 async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
+    from app.modules.static.metric_versions import definition, record_publish
+
     s = ctx.session
     m = await s.scalar(select(Metric).where(Metric.code == tid))
+    before, previous = (definition(m), m.version) if m is not None else (None, None)
+    requested = next((r.after for r in reversed(rows) if r.item_key == "version" and r.op != "delete"), None)
+    if any(r.item_key == "version" and r.op != "delete" for r in rows):
+        from app.modules.static.metric_versions import VERSION
+
+        if not isinstance(requested, str) or VERSION.fullmatch(requested) is None:
+            raise _bad("口径版本须为v加正整数，且不超过16字", kind="metric", id=tid)
     if m is None:
         if not ctx.is_new:
             raise _bad(f"指标 {tid} 不存在（目标没标 isNew），不能写回", kind="metric", id=tid)
@@ -454,17 +527,81 @@ async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
         s.add(m)
     for r in rows:
         k, val = r.item_key, r.after
-        if r.op == "delete" and k in ("formula", "dims"):
+        if k == "variants":
+            val = [] if r.op == "delete" else val
+            if not isinstance(val, list) or len(val) > 32:
+                raise _bad("指标变体必须是至多 32 行的列表", id=tid)
+            variants = []
+            codes, labels = set(), set()
+            targets = {x.code: x for x in await s.scalars(select(Metric))}
+            for v in val:
+                if not isinstance(v, dict):
+                    raise _bad("指标变体行必须是对象", id=tid)
+                code, label = v.get("code"), v.get("label")
+                if (
+                    not isinstance(code, str)
+                    or not 1 <= len(code) <= 64
+                    or not isinstance(label, str)
+                    or not 1 <= len(label.strip()) <= 64
+                    or not isinstance(v.get("default"), bool)
+                    or code in codes
+                    or label.strip() in labels
+                ):
+                    raise _bad("指标变体编码、标签或默认标记不合法，且编码和标签不能重复", id=tid)
+                target = targets.get(code)
+                if target is None:
+                    raise _bad("指标变体引用的指标不存在", id=tid, metric=code)
+                codes.add(code)
+                labels.add(label.strip())
+                variants.append(
+                    {
+                        "code": code,
+                        "label": label.strip(),
+                        "default": v["default"],
+                        "api": target.api_name,
+                        "version": target.version,
+                    }
+                )
+            if variants and sum(v["default"] for v in variants) != 1:
+                raise _bad("指标变体必须且只能有一个默认项", id=tid)
+            m.variants = variants
+        elif r.op == "delete" and k in ("formula", "dims"):
             setattr(m, k, None)
         elif r.op == "delete":
             continue
+        elif k == "owner":
+            m.owner = await owner_name(ctx, val)
+        elif k == "version":
+            continue  # 先验证和分配，不把非法/超长版本提前flush进数据库。
         elif k in M_FIELDS:
+            maximum = {"name": 64, "api": 64, "group": 32, "unit": 16}.get(k)
+            if not (k == "formula" and val is None) and (
+                not isinstance(val, str) or (maximum is not None and len(val) > maximum)
+            ):
+                raise _bad("指标字段类型或长度不合法", kind="metric", id=tid, field=k)
+            if k in ("name", "api") and not val.strip():
+                raise _bad("指标名称和API名不能为空", kind="metric", id=tid, field=k)
+            if k == "api":
+                with s.no_autoflush:
+                    duplicate = await s.scalar(
+                        select(Metric.code).where(Metric.api_name == val, Metric.code != tid).limit(1)
+                    )
+                if duplicate:
+                    raise _bad("指标API名已被其他指标使用", kind="metric", id=tid, field=k)
             setattr(m, M_FIELDS[k], None if val is None and k == "formula" else str(val or ""))
         elif k == "dims":
+            if val is not None and (
+                not isinstance(val, list) or any(not isinstance(v, str) or len(v) > 64 for v in val)
+            ):
+                raise _bad("允许维度须为文本列表，每项不超过64字", kind="metric", id=tid, field=k)
             m.dims = [str(x) for x in val or []]
         elif k == "status":
             m.status = _label(MetricStatus, val, "状态")
     m.review_cr = None if m.review_cr == ctx.cr.code else m.review_cr
+    try:
+        await record_publish(ctx, m, before, previous, requested)
+    except AppError as error:
+        raise _bad(error.message, kind="metric", id=tid, cause=error.code) from None
     await s.flush()
     return {"metrics"}
 
@@ -541,12 +678,98 @@ async def _dim(ctx: Ctx, tid: str) -> Dimension:
     return d
 
 
+def _dim_level_rows(code: str, value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) > 32:
+        raise _bad("维度层级须为至多 32 行的列表", id=code)
+    desired = []
+    apis, names = set(), set()
+    for item in value:
+        item = {"name": item, "api": item} if isinstance(item, str) else item
+        if not isinstance(item, dict):
+            raise _bad("维度层级行不合法", id=code)
+        row = {
+            "name": item.get("name"),
+            "api": item.get("api") or item.get("name"),
+            "source": item.get("source") or "",
+            "note": item.get("note"),
+        }
+        for key, limit in (("name", 64), ("api", 64), ("source", 256), ("note", 4000)):
+            v = row[key]
+            if key == "note" and v is None:
+                continue
+            if not isinstance(v, str) or len(v) > limit or (key in {"name", "api"} and not v.strip()):
+                raise _bad("维度层级字段不合法", id=code, field=key)
+        if row["api"] in apis or row["name"] in names:
+            raise _bad("维度层级 API 名和名称不能重复", id=code)
+        apis.add(row["api"])
+        names.add(row["name"])
+        desired.append(row)
+    return desired
+
+
+def _check_restored_value_levels(code: str, levels: list[dict[str, Any]], values: Any) -> None:
+    if not isinstance(values, list) or any(not isinstance(row, dict) for row in values):
+        raise _bad("恢复快照的维度取值须为对象列表", id=code)
+    keys = [row.get("key") for row in values]
+    if any(not isinstance(key, str) or not key for key in keys) or len(set(keys)) != len(keys):
+        raise _bad("恢复快照的取值键为空或重复", id=code)
+    names = {row["name"] for row in levels}
+    invalid = [
+        row["key"]
+        for row in values
+        if not row.get("until") and (not isinstance(row.get("level"), str) or row["level"] not in names)
+    ]
+    if invalid:
+        raise _bad("恢复快照的有效取值引用了不存在的层级", id=code, values=invalid)
+
+
+async def _set_dim_levels(
+    session: AsyncSession, d: Dimension, value: Any, by: str, *, replacement_values: list[dict] | None = None
+) -> None:
+    desired = _dim_level_rows(d.code, value)
+    apis = {row["api"] for row in desired}
+    old = {level.api_name: level for level in d.levels}
+    names_by_api = {row["api"]: row["name"] for row in desired}
+    removed = [level.name for api, level in old.items() if names_by_api.get(api) != level.name]
+    if replacement_values is not None:
+        _check_restored_value_levels(d.code, desired, replacement_values)
+    elif removed and await session.scalar(
+        select(DimValue.id)
+        .where(
+            DimValue.dimension_id == d.id, DimValue.level_name.in_(removed), DimValue.until_release.is_(None)
+        )
+        .limit(1)
+    ):
+        raise _bad("层级仍有有效取值，请先移除或迁移取值", id=d.code)
+    for i, (api, level) in enumerate(old.items(), 1):
+        if api not in apis:
+            await session.delete(level)
+        else:
+            level.level_no = -i
+    await session.flush()
+    levels = []
+    for no, row in enumerate(desired, 1):
+        level = old.get(row["api"])
+        if level is None:
+            level = DimLevel(dimension_id=d.id, api_name=row["api"], value_count=0, created_by=by)
+        level.level_no, level.name = no, row["name"]
+        level.source, level.note = row["source"], row["note"]
+        levels.append(level)
+    d.levels = levels
+    await session.flush()
+
+
 async def _dim_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
     d = await _dim(ctx, tid)
     for r in rows:
+        if r.item_key == "levels":
+            await _set_dim_levels(ctx.session, d, [] if r.op == "delete" else r.after, ctx.by)
+            continue
         if r.op == "delete":
             continue
-        if r.item_key in D_FIELDS:
+        if r.item_key == "owner":
+            d.owner = await owner_name(ctx, r.after)
+        elif r.item_key in D_FIELDS:
             setattr(d, D_FIELDS[r.item_key], str(r.after or ""))
         elif r.item_key == "kind":
             d.kind = _label(DimKind, r.after, "类型")
@@ -738,7 +961,7 @@ async def _restore_ver(session: AsyncSession, release_id: int) -> str:
 async def restore_properties(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
     """PropertiesSection.restore_section：快照里有的对象，属性按快照覆盖（多的删、少的补、字段回写）。
 
-    快照里没有的对象（之后新建的）不动——对象类型节不回滚表。
+    快照里没有的对象交由对象类型节标记，并在关系恢复后尝试删除；有引用时保留草稿。
     """
     for o in await session.scalars(select(ObjectType)):
         snap = content.get(o.code)
@@ -750,7 +973,8 @@ async def restore_properties(session: AsyncSession, content: dict[str, Any], *, 
                 o.properties.remove(p)
                 await session.delete(p)
         seq = max((x.seq for x in o.properties), default=0)
-        for api, after in snap.items():
+        for n, (api, after) in enumerate(snap.items()):
+            flags = snapshot_flags(o.code, after, n)
             p = by_api.get(api)
             if p is None:
                 seq += 1
@@ -761,11 +985,20 @@ async def restore_properties(session: AsyncSession, content: dict[str, Any], *, 
                     prop_group=str(after.get("group") or "其他"),
                     source_column=str(after.get("source") or ""),
                     description=str(after.get("desc") or ""),
+                    backing_column=flags["backing_column"],
                     seq=seq,
                     created_by="系统",
                 )
                 o.properties.append(p)
-            _set_prop(p, {**dict.fromkeys(P_FLAGS, False), "enumName": None, **after})
+            _set_prop(
+                p,
+                {
+                    **dict.fromkeys(P_FLAGS, False),
+                    "enumName": None,
+                    **after,
+                    **{key: flags[col] for key, col in DISPLAY_FIELDS.items()},
+                },
+            )
     await session.flush()
 
 
@@ -829,6 +1062,12 @@ async def restore_dimensions(session: AsyncSession, content: dict[str, Any], *, 
     - 取值：快照里有的按快照回写并清 until；表里在用、快照没有的置 until = 这次回滚的版本。
     - 说法：按快照覆盖（多的删、少的补）。
     """
+    # Validate the entire replacement before deleting dimensions or changing any current definition.
+    for code, snap in content.items():
+        if isinstance(snap, dict) and "levels" in snap:
+            _check_restored_value_levels(
+                code, _dim_level_rows(code, snap["levels"]), snap.get("values") or []
+            )
     ver = await _restore_ver(session, release_id)
     dims = list(await session.scalars(select(Dimension)))
     await _hard_delete(session, Dimension, [d for d in dims if d.code not in content])
@@ -906,6 +1145,10 @@ async def restore_dimensions(session: AsyncSession, content: dict[str, Any], *, 
             m.source = MappingSource(a.get("source", m.source.value))
             m.resolve, m.conflict = a.get("resolve"), a.get("conflict")
             m.draft_cr, m.diff = None, None
+        if "levels" in snap:
+            await _set_dim_levels(
+                session, d, snap["levels"], "系统", replacement_values=snap.get("values") or []
+            )
     await session.flush()
 
 
@@ -967,9 +1210,35 @@ async def restore_object_types(session: AsyncSession, content: dict[str, Any], *
 
 
 async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
-    """MetricsSection.restore_section：快照里有的指标按快照覆盖（表里没有的重建）；快照没有的物理删（指标无外键）。"""
+    """按快照恢复指标；快照外仍被已存定义或问数引用的指标保留为草稿。"""
+    from app.contracts.qa import has_metric_references
+    from app.modules.static.metric_versions import ledger
+
     have = {m.code: m for m in await session.scalars(select(Metric))}
-    await _hard_delete(session, Metric, [m for c, m in have.items() if c not in content])
+    unused = []
+    for code, m in have.items():
+        if code in content:
+            continue
+        used = bool(m.ref_rows) or any(
+            v.get("code") == code
+            for other in have.values()
+            if other.code != code
+            for v in other.variants or []
+            if isinstance(v, dict)
+        )
+        used = used or bool(
+            await session.scalar(
+                select(KnowledgeApply.id)
+                .where(KnowledgeApply.target_kind == ApplyKind.metric, KnowledgeApply.target_code == code)
+                .limit(1)
+            )
+        )
+        if used or await has_metric_references(session, code):
+            m.status = MetricStatus.draft
+            log.warning("restore_metrics: %s 仍被引用，保留为草稿", code)
+        else:
+            unused.append(m)
+    await _hard_delete(session, Metric, unused)
     seq = max((m.seq for m in have.values()), default=0)
     for code, d in content.items():
         m = have.get(code)
@@ -982,6 +1251,7 @@ async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, rel
         m.display_name, m.api_name = d.get("name", m.display_name), d.get("api", m.api_name)
         m.metric_group, m.unit = d.get("group", m.metric_group), d.get("unit", m.unit)
         m.version, m.owner = d.get("version", m.version), d.get("owner", m.owner)
+        m.variants = list(d.get("variants") or [])
         if d.get("status"):
             m.status = MetricStatus(d["status"])
         review = d.get("review") or {}
@@ -990,6 +1260,7 @@ async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, rel
             m.formula, m.dims = d.get("formula"), list(d.get("dimNames") or [])
         else:
             m.formula, m.dims = None, None
+        m.version_rows = await ledger(session, code, m)
     await session.flush()
 
 

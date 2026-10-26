@@ -122,6 +122,14 @@ async def test_stage_idempotency(dyn, client, fakes):  # noqa: F811
 
 
 async def test_confirm_withdraw(dyn, client, fakes):  # noqa: F811
+    # 本例覆盖“确认后进入审批”；真实种子该动作免审，因此显式配置本例审批路由。
+    from sqlalchemy import select
+
+    from app.modules.action.models import ActionType
+
+    action_type = await dyn.scalar(select(ActionType).where(ActionType.name == "发起物流催派"))
+    action_type.approval = "王敏"
+    await dyn.flush()
     b = err(await client.post(f"{API}/action-runs/{STAGED_OTHER}:confirm"), 403, "NOT_CONFIRMER")
     assert "周晓峰" in b["message"]
     err(
@@ -254,7 +262,7 @@ async def test_approve_unknown_and_reconcile(dyn, client, fakes):  # noqa: F811
 async def test_on_reconciled_listener(dyn):  # noqa: F811
     em = ports.RecordingEmitter()
     p = ports.Ports(ports.StubSubmitter(), em, ports.RecordingScheduler(), ports.StubSubmissionChecker())
-    lis = DynamicReconciliationListener(dyn, get_catalog(), p)
+    lis = DynamicReconciliationListener(dyn, await get_catalog(dyn), p)
     await lis.on_reconciled(UNKNOWN, ReconcileResult(outcome=ReconcileOutcome.succeeded, receipt_id="OA-9"))
     await lis.on_reconciled(UNKNOWN2, ReconcileResult(outcome=ReconcileOutcome.not_executed))
     from sqlalchemy import select
@@ -270,9 +278,13 @@ async def test_on_reconciled_listener(dyn):  # noqa: F811
     assert [e[1] for e in em.events] == ["ActionExecuted"] and em.events[0][2]["extRef"] == "OA-9"
     from app.core.errors import AppError
 
+    await lis.on_reconciled(UNKNOWN, ReconcileResult(outcome=ReconcileOutcome.succeeded, receipt_id="OA-9"))
+    assert len(em.events) == 1
     for code in (UNKNOWN, "ACT-NOPE"):
         try:
-            await lis.on_reconciled(code, ReconcileResult(outcome=ReconcileOutcome.succeeded))
+            await lis.on_reconciled(
+                code, ReconcileResult(outcome=ReconcileOutcome.succeeded, receipt_id="conflicting-receipt")
+            )
         except AppError as e:
             assert e.code in ("STATE_INVALID", "NOT_FOUND")
         else:
@@ -290,9 +302,13 @@ async def test_readonly_and_stubs(dyn, client):  # noqa: F811
         (f"{API}/action-runs/{UNKNOWN}:reconcile", {"result": "外部已成功", "note": "x"}),
     ]:
         err(await client.post(path, params={"ver": "v2026.10.1"}, json=body), 403, "READONLY")
-    # 默认 StubSubmitter：审批后真实走成功分支
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
-    assert d["status"] == "成功" and d["extRef"]
+    # 未显式注入的默认通道不可返回测试成功；审批状态也随请求回滚。
+    err(
+        await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h),
+        503,
+        "ACTION_EXECUTOR_UNAVAILABLE",
+    )
+    assert (await client.get(f"{API}/action-runs/{APPROVING}", headers=h)).json()["status"] == "审批中"
 
 
 async def test_history_keeps_runs_with_retired_or_missing_action_type(dyn, client):  # noqa: F811

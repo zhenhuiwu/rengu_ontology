@@ -126,7 +126,7 @@ async def main(sel: str) -> None:
     summary = {
         "sel": sel,
         "tag": tag,
-        "model": os.environ.get("QA_LLM_MODEL") or "qwen-flash",
+        "model": llm.model,
         "fixedNow": os.environ.get("RENGU_FIXED_NOW"),
         "ok": sum(r["ok"] for r in res),
         "total": len(res),

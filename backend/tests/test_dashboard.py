@@ -4,9 +4,11 @@ import json
 import math
 
 import pytest
+from sqlalchemy import event
 
 from app.core.config import get_settings
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 _J = get_settings().seeds_json_dir
 ORDERS = json.loads((_J / "common" / "ORDERS.json").read_text("utf-8"))
@@ -44,6 +46,7 @@ async def seeded(session):
 
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static", "biz"])
+        await grant_fixture_roles(session, {"U010001": "R-01", "U010006": "R-05"})
         await session.commit()
     return session
 
@@ -109,3 +112,25 @@ async def test_viewer_ok(client, seeded):
     h = {"X-Demo-As": "U010006"}
     assert (await client.get(P + "/dashboard/kpis", headers=h)).status_code == 200
     assert (await client.get(P + "/stores/ranking", headers=h)).json()["total"] == 12
+
+
+async def test_ranking_fetches_only_sql_page(client, seeded, engine):
+    statements = []
+
+    def captured(_conn, _cursor, sql, _parameters, _context, _many):
+        statements.append(sql)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", captured)
+    try:
+        response = await client.get(P + "/stores/ranking", params={"page": 2, "size": 2})
+        assert response.status_code == 200, response.text
+        assert len(response.json()["items"]) == 2 and response.json()["items"][0]["rank"] == 3
+        assert any("FROM store JOIN" in sql and "LIMIT" in sql and "OFFSET" in sql for sql in statements)
+        assert not any(
+            sql.startswith(
+                "SELECT biz_order.store_id, biz_order.amount, biz_order.created_at_biz \nFROM biz_order"
+            )
+            for sql in statements
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", captured)

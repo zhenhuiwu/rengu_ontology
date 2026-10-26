@@ -1,13 +1,34 @@
 """对外 Schema（字段名 = 前端 mock：ACTION_TYPES / paramsOf / condsOf / writebackOf / versionsOf）。"""
 
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.core.schema import ApiModel, DateTimeMin
+from app.modules.action.condition_expr import Unavailable
 from app.modules.action.models import CriterionKind, EditOp, EffectKind, TypeStatus
 
 T = TypeVar("T")
+
+
+class DryRunIn(ApiModel):
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def bounded_params(cls, value: dict) -> dict:
+        from app.modules.action.checker import structured_params
+
+        try:
+            return structured_params(value)
+        except Unavailable as exc:
+            raise ValueError(str(exc)) from None
+
+
+class DryRunOut(ApiModel):
+    passed: bool
+    checked: int
+    failed: list[dict[str, str]]
 
 
 class ActionTypeOut(ApiModel):
@@ -114,3 +135,12 @@ class RunDailyOut(ApiModel):
     ok: int
     failed: int
     unknown: int
+
+
+class UsedByOut(ApiModel):
+    rule_id: str
+    rule_name: str
+    trigger: str
+    mode: str
+    alerts: int
+    open_alerts: int

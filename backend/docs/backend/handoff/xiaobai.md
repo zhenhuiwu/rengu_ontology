@@ -1,6 +1,21 @@
 # 本体小白 交接文档（分支 xiaobai-r2，基于 master bb47a5c）
 
+## 2026-10-26 真实管理数据追加（覆盖下方旧回退说明）
+
+- 真模式 admin/roles/rowScope/tenants 网络失败不再回退演示数据；Users/Roles/AuditLog/TopBar 初始空态，错误可见，角色/部门候选读库；切换身份或版本防迟到结果。开发库已有种子记录保留，显式 mock 开发模式保留。
+- 角色添加成员：按固定顺序锁定用户，整批验证真正新增成员必须启用，失败 422 且无成员或审计变化；已有成员继续幂等跳过（即使后来停用），不产生新授权。
+- 对象权限页的角色/成员/权限对象来自数据库 API；不再用固定 R-07/R-04 作敏感列授权。当前后端 ObjPerm 没有 plain 契约，明文授权和该入口敏感标记草稿保存明确未接入并禁用。
+- API 密钥没有可用后台管理/鉴权合同，真模式显示空态并禁用创建/复制/吊销和深链生成；通知没有后台服务，顶栏真实通知空态并说明未接入。未新增伪服务或删除开发库记录。
+- 验证：`tests/test_admin_role_members_active.py`；前端 `node scripts/check-admin-db.mjs`，并兼容既有 audit-export/user-import/tenant-settings/qa-integration 状态自检。
+
 ## 1. 本轮完成
+
+### 2026-10-26 数据连接 → 静态CR（覆盖旧待办第4项）
+
+- 新增`data/ontology_import.py`、`ontology_schemas.py`、`mappings.py`。preview读取真实连接列/主外键，复用规则生成，无模型可用；import-to-cr确认重内省及指纹，受控对象命名/负责人、逐条关系选择，创建或加入带lockVersion的静态草稿。只生成定义，不复制源数据或扩大SQL执行白名单，不写auto_ontology系统草稿，无新增迁移。
+- 映射编辑生成对象config的source/table CR，发布后从定义反查连接映射。新来源使用稳定DS编号，物理表使用schema.table；旧名称兼容。当前定义/未发布草稿引用连接时删除409，发布也验证连接存在并与删除取相同父行/每DS锁。字段映射仅回退实际DB来源列/类型。
+- 公共`admin.permissions.resolve_owner_name`：用户编号优先，唯一存量姓名兼容；不存在/停用/歧义拒绝。草稿存用户code，发布重验后定义存真实姓名，失败回滚。
+- 接口详见`frontend/docs/backend/datasources-api.md`；专项`test_datasource_ontology_import.py`实际PG内省+发布+删除保护+原子回滚，`test_owner_resolution.py`验证负责人边界；不删除开发库seed记录。
 
 | 内容 | 代码 | 文档 / 测试 |
 |---|---|---|

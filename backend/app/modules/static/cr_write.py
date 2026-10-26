@@ -21,11 +21,28 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.common.auth import CurrentUser, check_func
 from app.core import clock
 from app.core.config import get_settings
-from app.core.errors import AppError, NotFound, VersionConflict
+from app.core.errors import AppError, Forbidden, NotFound, VersionConflict
 from app.core.schema import _fmt_dt
 from app.db.dialects import get_adapter
-from app.modules.static.models import ChangeRequest, CrCheck, CrEvent, CrItem, CRLevel, CRStatus, CrTarget
-from app.modules.static.permissions import check_cr, check_target
+from app.modules.static.models import (
+    ChangeRequest,
+    CrCheck,
+    CrEvent,
+    CrItem,
+    CRLevel,
+    CRStatus,
+    CrTarget,
+    Knowledge,
+    LinkType,
+)
+from app.modules.static.permissions import (
+    TARGET_PAGE,
+    check_cr,
+    check_target,
+    cr_owner_id,
+    cr_target_kinds,
+    is_cr_owner,
+)
 from app.modules.static.schemas import CRCreateIn, CRPatchIn, ItemsPutIn, TargetIn
 
 Row = dict[str, Any]
@@ -37,6 +54,7 @@ KIND_LABEL = {
     "metric": "指标",
     "dimension": "维度",
     "knowledge": "业务知识",
+    "quality": "质量检查",
     "action": "动作类型",
     "event": "事件类型",
     "rule": "规则",
@@ -164,6 +182,16 @@ class CrWriteService:
         q = select(CrTarget).where(CrTarget.cr_id == cr_id).order_by(CrTarget.seq, CrTarget.id)
         return list(await self.session.scalars(q))
 
+    async def lock_draft(
+        self, code: str, user: CurrentUser, lock_version: int | None = None
+    ) -> ChangeRequest:
+        """公开的跨模块草稿入口；具体目标写权限仍由 add_target/put_items 检查。"""
+        check_func(user, "releases", "view")
+        cr = await self._cr(code)
+        _locked(cr)
+        _check_version(cr, lock_version)
+        return cr
+
     async def items(self, cr_id: int) -> list[CrItem]:
         q = select(CrItem).where(CrItem.cr_id == cr_id).order_by(CrItem.seq, CrItem.id)
         return list(await self.session.scalars(q))
@@ -186,6 +214,14 @@ class CrWriteService:
         await self.session.execute(delete(CrCheck).where(CrCheck.cr_id == cr.id, CrCheck.target_db == ""))
         d = dict(cr.detail or {})
         d["checks"] = []
+        if "analysisScope" in d:
+            from app.modules.static.models import CrImpact, CrTrial
+
+            await self.session.execute(delete(CrImpact).where(CrImpact.cr_id == cr.id))
+            await self.session.execute(delete(CrTrial).where(CrTrial.cr_id == cr.id))
+            d["impact"] = {"direct": [], "defs": [], "usage": []}
+            for key in ("trial", "trialActor", "trialAccess", "trialUnavailable", "analysisScope"):
+                d.pop(key, None)
         (d.get("times") or {}).pop("checked", None)
         cr.detail = d
 
@@ -203,6 +239,7 @@ class CrWriteService:
         return await self.session.scalar(q.limit(1))
 
     async def _join(self, cr: ChangeRequest, t: TargetIn, user: CurrentUser) -> CrTarget:
+        await get_adapter(self.session).xact_lock(self.session, f"static.cr.target.{t.kind}:{t.id}")
         hit = await self.session.scalar(
             select(CrTarget).where(
                 CrTarget.cr_id == cr.id, CrTarget.target_kind == t.kind, CrTarget.target_id == t.id
@@ -305,6 +342,14 @@ class CrWriteService:
         self._event(cr, user, "create", "创建变更单")
         if body.target is not None:
             await self._join(cr, body.target, user)
+        chosen = None
+        if body.reviewer:
+            chosen = await self._reviewer(cr, body.reviewer)
+        elif cr.reviewer:
+            matches = [u for u in await self._reviewer_candidates(cr) if u["name"] == cr.reviewer]
+            chosen = matches[0] if len(matches) == 1 else None
+        cr.reviewer = chosen["name"] if chosen else ""
+        cr.detail = {**cr.detail, "reviewerCode": chosen["id"] if chosen else None}
         await self.session.flush()
         return cr.code
 
@@ -316,6 +361,34 @@ class CrWriteService:
             await self._join(cr, t, user)
         await self.session.flush()
         return cr.code
+
+    async def allocate_target(self, code: str, user: CurrentUser, kind: str, name: str | None) -> CrTarget:
+        check_target(user, kind)
+        cr = await self._cr(code)
+        _locked(cr)
+        await get_adapter(self.session).xact_lock(self.session, f"static.definition-number.{kind}")
+        model, prefix, width = {"link": (LinkType, "L-", 4), "knowledge": (Knowledge, "K-", 3)}[kind]
+        codes = list(await self.session.scalars(select(model.code)))
+        codes.extend(
+            await self.session.scalars(select(CrTarget.target_id).where(CrTarget.target_kind == kind))
+        )
+        last = max(
+            (
+                int(value[len(prefix) :])
+                for value in codes
+                if value.startswith(prefix)
+                and value[len(prefix) :].isascii()
+                and value[len(prefix) :].isdigit()
+            ),
+            default=0,
+        )
+        allocated = f"{prefix}{last + 1:0{width}d}"
+        if len(allocated) > 64:
+            raise AppError("定义编号已达上限", code="VALIDATION_FAILED", status_code=409)
+        target = TargetIn(kind=kind, id=allocated, name=name, is_new=True)
+        row = await self._join(cr, target, user)
+        await self.session.flush()
+        return row
 
     async def discard_target(self, code: str, kind: str, tid: str, user: CurrentUser) -> None:
         check_target(user, kind)
@@ -333,6 +406,10 @@ class CrWriteService:
         await self.session.flush()
 
     async def _discard(self, cr: ChangeRequest, hit: CrTarget, kind: str, tid: str) -> None:
+        if kind == "object":
+            from app.modules.dynamic.cr_link import discard_lifecycle_draft
+
+            await discard_lifecycle_draft(self.session, cr.code, tid)
         n = (
             await self.session.execute(
                 delete(CrItem).where(
@@ -446,21 +523,62 @@ class CrWriteService:
         await check_cr(self.session, cr, user)
         _locked(cr)
         _check_version(cr, body.lock_version)
+        reviewer = None
+        if body.reviewer is not None:
+            if not is_cr_owner(cr, user):
+                raise Forbidden("只有变更单提交人可以设置审核人")
+            reviewer = await self._reviewer(cr, body.reviewer) if body.reviewer else None
         if body.title is not None:
             cr.title = body.title.strip()
         if body.reason is not None:
             cr.reason = body.reason
         if body.reviewer is not None:
-            cr.reviewer = body.reviewer
+            cr.reviewer = reviewer["name"] if reviewer else ""
         if body.level is not None:
             cr.level = CRLevel(body.level)
         d = dict(cr.detail or {})
+        if body.reviewer is not None:
+            d["reviewerCode"] = reviewer["id"] if reviewer else None
         if body.migration is not None:
             d["migration"] = body.migration
         cr.detail = d
         self._touch(cr)
         await self.session.flush()
         return cr.code
+
+    async def _reviewer_candidates(self, cr: ChangeRequest) -> list[dict[str, str]]:
+        from app.modules.admin.permissions import users_with_function_access
+
+        kinds = await cr_target_kinds(self.session, cr)
+        if any(kind not in TARGET_PAGE for kind in kinds):
+            raise Forbidden("无法确认变更目标的审核权限")
+        required = {TARGET_PAGE[kind]: "manage" for kind in kinds}
+        required["releases"] = "view" if kinds else "manage"
+        owner_id = cr_owner_id(cr)
+        return [
+            u
+            for u in await users_with_function_access(self.session, required)
+            if (u["id"] != owner_id if owner_id else u["name"] != cr.owner)
+        ]
+
+    async def reviewer_options(self, code: str, user: CurrentUser) -> list[dict[str, str]]:
+        cr = await self._cr(code, lock=False)
+        await check_cr(self.session, cr, user)
+        return await self._reviewer_candidates(cr)
+
+    async def _reviewer(self, cr: ChangeRequest, value: str) -> dict[str, str]:
+        from app.modules.admin.models import SysUser
+        from app.modules.admin.permissions import resolve_owner_name
+
+        candidates = await self._reviewer_candidates(cr)
+        if chosen := next((u for u in candidates if u["id"] == value), None):
+            return chosen
+        if await self.session.scalar(select(SysUser.id).where(SysUser.code == value)):
+            raise Forbidden("审核人须为其他具有全部变更目标管理权的启用用户")
+        name = await resolve_owner_name(self.session, value)
+        if chosen := next((u for u in candidates if u["name"] == name), None):
+            return chosen
+        raise Forbidden("审核人须为其他具有全部变更目标管理权的启用用户")
 
     # ------------------------------------------------------------ 校验
     async def _baseline(self, cr: ChangeRequest, now: Any) -> dict[str, Row]:
@@ -508,16 +626,23 @@ class CrWriteService:
                 status_code=409,
                 details={"id": cr.code, "status": cr.status.value},
             )
-        return await self.run_checks(cr)
+        return await self.run_checks(cr, user=user)
 
-    async def run_checks(self, cr: ChangeRequest, *, event: bool = True) -> Row:
+    async def run_checks(
+        self, cr: ChangeRequest, *, event: bool = True, user: CurrentUser | None = None
+    ) -> Row:
         """算校验并写 cr_check / detail.checks；:submit / :approve 在同一事务里调（event=False）。"""
         now = clock.now()
         targets = await self.targets(cr.id)
         items = await self.items(cr.id)
         is_new = {(t.target_kind, t.target_id): t.is_new for t in targets}
         kinds = {t.target_kind for t in targets}
+        from app.modules.static.cr_analysis import refresh_analysis
+
+        trial_unavailable = await refresh_analysis(self.session, cr, targets, items, user)
         calc: dict[str, tuple[str, str]] = {}
+        if trial_unavailable:
+            calc["V14"] = ("警告", trial_unavailable)
         dels = [
             f"{i.target_id}.{i.item_key}"
             for i in items

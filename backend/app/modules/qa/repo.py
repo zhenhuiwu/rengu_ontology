@@ -272,6 +272,7 @@ class EvalQuestionRepo(BaseRepository[QaEvalQuestion]):
             select(QaEvalQuestion.group_name, func.count())
             .where(QaEvalQuestion.kind == "semplan")
             .group_by(QaEvalQuestion.group_name)
+            .order_by(QaEvalQuestion.group_name)
         )
         return {g: int(n) for g, n in (await self.session.execute(stmt)).all() if g}
 

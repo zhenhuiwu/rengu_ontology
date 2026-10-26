@@ -6,7 +6,7 @@
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, field_validator
 
 from app.common.pagination import Page
 from app.core.schema import ApiModel
@@ -66,6 +66,19 @@ class PermRequestIn(ApiModel):
     reason: str = Field(min_length=1, max_length=200)
     duration: Literal[30, 90, 180]
     source_turn_id: str | None = None
+
+    @field_validator("scope", "object", "reason", "source_turn_id", mode="before")
+    @classmethod
+    def valid_text(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            if "\x00" in value:
+                raise ValueError("文本不能包含NUL字符")
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("文本包含无效Unicode字符") from exc
+            return value.strip()
+        return value
 
 
 class PermRequestOut(ApiModel):
@@ -238,6 +251,7 @@ class TuningSummaryOut(ApiModel):
 
 
 class TMetricOut(ApiModel):
+    code: str
     key: str
     name: str
     version: str
@@ -275,6 +289,7 @@ class EvalRunOut(ApiModel):
     passed: int
     pass_rate: float  # passed / total（0–1），total=0 时 0，跟 mock passRate 一致
     fail_count: int
+    awaiting_execution: bool = False
     status: str
     operator: str
     cr: str | None = None
@@ -424,6 +439,12 @@ class CertVariantsIn(ApiModel):
 
 class EvalRunIn(ApiModel):
     group: str = "all"  # all | 全部 | 销售 | 退款 | 履约 | 毛利 | 复购 | 订单
+    session_id: str = Field(min_length=1, max_length=64)
+
+    @field_validator("session_id", mode="before")
+    @classmethod
+    def valid_session(cls, value: Any) -> Any:
+        return PermRequestIn.valid_text(value)
 
 
 class FbSynonymIn(ApiModel):

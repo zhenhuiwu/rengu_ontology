@@ -3,19 +3,14 @@
 import pytest
 from sqlalchemy import false
 
-from app.seeds.loader import run_seeds
+from tests.qa_access_support import seed_qa_access
 
 B = "/api/qa/v1"
 
 
 @pytest.fixture
 async def qa(users, client):
-    # 元数据读静态 object_type / property，要 static seed（versioning 先登记 section，同 test_qa_tuning_eval）
-    from app.modules.static.sections import BUILDERS
-    from app.modules.versioning.sections import isolated_sections
-
-    with isolated_sections(*BUILDERS):
-        await run_seeds(users, ["versioning", "static", "qa", "biz"])
+    await seed_qa_access(users)
     await users.flush()
     return client
 
@@ -112,12 +107,12 @@ async def test_detail_scope_and_ask(qa, monkeypatch):
         "question": "销售额怎么样",
     }
     r = await qa.post(f"{B}/scoped-ask", json=body)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 503, r.text
     a = r.json()
-    assert f"这 {fmt['count']} 家门店" in a["text"]
+    assert a["code"] == "DATA_NOT_CONFIGURED" and a["details"]["visibleCount"] == fmt["count"]
     body["scope"]["query"] = {"kw": "不存在的门店名xyz"}
     a = (await qa.post(f"{B}/scoped-ask", json=body)).json()
-    assert a["rows"] == [] and "没有" in a["text"]
+    assert a["code"] == "DATA_NOT_CONFIGURED" and a["details"]["visibleCount"] == 0
 
 
 async def test_export_csv(qa):
@@ -207,3 +202,22 @@ async def test_keyword_without_searchable_props_is_ignored(qa, users, monkeypatc
     )
     # 不拿第一列兜底匹配：关键词被忽略
     assert (await _search(qa, "store", kw="不会命中的词xyz", size=1))["total"] == total
+
+
+@pytest.mark.parametrize("operation", ["search", "export"])
+@pytest.mark.parametrize("body", [{"kw": "bad\x00keyword"}, {"filters": {"city": ["bad\x00city"]}}])
+async def test_nul_input_is_validation_error(qa, users, operation, body):
+    await _open(users, "store", "city")
+    r = await qa.post(f"{B}/object-types/store/{operation}", json=body)
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "VALIDATION_FAILED"
+    field = "kw" if "kw" in body else "filters.city"
+    assert r.json()["details"]["fields"][0]["field"] == field
+
+
+async def test_sort_accepts_only_one_descending_prefix(qa, users):
+    await _set(users, "store", "city", sortable=True)
+    assert (await qa.post(f"{B}/object-types/store/search", json={"sort": "-city"})).status_code == 200
+    r = await qa.post(f"{B}/object-types/store/search", json={"sort": "--city"})
+    assert r.status_code == 422, r.text
+    assert r.json()["details"]["fields"][0]["field"] == "sort"

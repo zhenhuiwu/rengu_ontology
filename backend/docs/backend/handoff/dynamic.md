@@ -1,9 +1,30 @@
 # 动态本体交接说明（dynamic）
 
+## 2026-10-26 运行页分页与卡顿清理
+
+- 告警/动作已有SQL分页，原每次翻页却重建完整动作子定义、全部规则和命中汇总；改用只含姓名/系统/对象标签的轻目录，`actions/meta`只读动作头，不加载参数、条件、写回及规则。动作详情也走轻目录；告警详情仅读取所选告警关联的一条规则/动作头及该规则命中计数。
+- 情景列表原全表ORM→Python筛选切片，影响明细同样全量切片；现均在DB做过滤、count和LIMIT/OFFSET，列表只解析本页引用的本体版本。情景meta的已存范围取值用SQL DISTINCT投影，不加载所有方案配置。没有引入执行器、外部请求或迁移。
+- 三页及影响明细默认10；前端每次page/size/filters变化请求后台。加载下一页保留真实total，避免分页器先收到0而退回第1页。身份/版本/预览切换清空旧上下文，迟到页/详情/元数据/影响响应不能覆盖当前；真模式错误不回演示数据。
+- 告警规则筛选新增`GET /alerts/meta`（alerts:view，真实`{rules:[{id,name}]}`）。标签统计后缀已移除；情景页不再展示长篇“他人方案只读”及“执行器未配置”说明段，真实禁写及必要按钮原因仍保留，历史结果仍读DB。
+- 量测：同独立DB、page=2/size=10，修改前告警18 SELECT、动作19 SELECT；去掉全定义目录后分别9/10 SELECT。单次耗时有冷启动波动，不作为提速SLA。SQL专项断言无动作子表/全量命中读取且数据查询带LIMIT/OFFSET；前端Vue VM专项验证翻页请求、total不归零、筛选及上下文迟到隔离，见`test_dynamic_pagination_perf.py`、`check-dynamic-pagination.mjs`。
+
 分支 `dynamic-rules`（基于 master b688d5d，线性包含 dynamic-impl ee06847）。负责人：动态本体负责人。
 合并顺序：static 分支（含 `static_0002`）先合，dynamic 后合。
 
+## 2026-10-26 C组真实写链收尾（覆盖下方历史演示执行说明）
+
+- 动作目录每请求读取真实Rule/ActionType/ExtSystem/ObjectType及在用用户，元数据按稳定动作code索引，中文名仅唯一时兼容；不从JSON补审批人。真实系统env是字符串，按实际模型输出。审批文字必须能定位唯一在用用户，空配置/角色泛称/人名子串/歧义均`approvalConfigured=false`，新动作503 `ACTION_APPROVAL_NOT_CONFIGURED`；明确免审才走免审。
+- 请求不能覆盖已发布审批人。新动作软引用approver/confirmer列存真实userCode，接口联查真实姓名；旧“角色 姓名”仅在能定位唯一在用用户时兼容授权。未指定审批人不能让任意用户批准；免审确认后进入执行器，缺通道整请求503回滚。默认条件检查已接真实受限DatabaseSubmissionChecker（支持矩阵见action-checker.md），未知/自然语言/缺上下文明确failed；默认提交、事件投递、自动对账仍为UnconfiguredAdapters，测试替身只能显式注入，不返回伪成功回执。
+- 规则条件阈值/自动暂存草稿与静态CR同事务；R-012既有`固定值：仓库调拨`原被旧JSON白名单误拒，现候选读实际DB配置/事件载荷字段，确认人解析真实在用用户，固定值按受控前缀兼容。发布同步action_type_id/confirmer，避免改autoStage后运行目录仍引用旧动作。
+- `rule/conds|mapping|config`、`object/lc_states|lc_transitions`已登记真实发布钩子。作者U010004创建CR→POST规则→保存→提交→U010001审批→整版发布联合验收，rule v1已发布、生命周期快照变化且skipped为空；静态放弃对象目标同事务删除LifecycleDraft，重新加入不复活旧编辑。
+- 生命周期草稿保存验证实际列长度、状态/迁移唯一键和类型；迁移id最多16字，完整版本编号最多64字。保存非法422，发布内部防御409，整版回滚。规则/生命周期回滚后再发布取历史最大版本+1，append-only旧版本保留，不撞旧vN。
+- **尚未实现真实执行引擎**：规则回放503 `RULE_EVALUATOR_UNAVAILABLE`；情景run/stage-plan503 `SCENARIO_EXECUTOR_UNAVAILABLE`。不再随机生成新增命中或用示意模型生成预测/固定REG-EC建议；已存DB历史result/impacts/compare保留。推演meta标`executorConfigured=false`，业务范围/促销候选来自已存Scenario的scope/drivers，模板只作参数配置说明，不能当成已接入真实数据集/引擎。
+- 无新增迁移，编号锁沿用既有实现；不改mock、不删开发库数据。专项：`test_dynamic_cr_acceptance.py`、`test_dynamic_catalog_db.py`、`test_dynamic_unconfigured.py`及必要既有动态测试。通过正式联合验收后仅在ignored的`frontend/.env.local`开启`VITE_DYNAMIC_CR_WRITE=1`。
+- 同C组近7天读链已改滚动时钟：规则list/detail/catalog的weekly及hits7d按实际RuleHit计数；生命周期当前迁移weekly按实际LifecycleChange计数（同逻辑迁移跨版本），非法迁移默认窗口`[now-7天, now]`并排除未来。定义/历史快照的weekly仍保留，不将历史声明值当当前统计；Alert.recent7d按该告警触发时刻回看7天的已定口径不改。专项用边界/过期/未来行及推进时钟90天验证归零。
+
 ## 已完成
+
+- **2026-10-26 动作日编号与纯日志并发**：`dynamic_0004`（接 `qa_0005`）增加内部 `action_run_daily_counter`，所有 `create_run` 调用共享 `ActionRunRepo.next_code` 的独立短事务按日预留；主池占满仍能分配，日锁不跨业务事务或外部调用。编号包含历史最大号；业务回滚/取消不复用已预留号，允许空号；分配事务失败则回滚预留。`ActionRunRepo.add_log` 以父行锁保护 `max(seq)+1`，覆盖不修改父状态的「仍无法确认」追加日志；未扩展尚无纯追加入口证据的告警日志。测试 `test_dynamic_action_numbers.py`（临时独立库）、原动作/告警流程与迁移往返。
 
 **后端（5 个模块全部落库、接口齐全、有测试）**
 - 告警 alerts、动作中心 action-runs（dynamic_0001）。
@@ -138,3 +159,8 @@
 - 范围取值接 static 分面（第三轮）：范围项声明 `propRef: "对象类型.属性"` + `allOption`（演示：area → `store.region_code`、category → `product.category_id`）。引擎注册表带能力位 `accepts_facet_values`（前端 `SC_ENGINES.acceptsFacetValues`）：为 true 时，真接口下前端调 `GET /object-types/{ot}/facets`，该属性 `hasData` 且有取值 → 可选值 = allOption + 分面取值；mock / `hasData:false` / 属性不可筛选 → 模板固定 options。后台 `:run` 用同一规则（`scenario_templates.scope_options`）校验，前后台 422 一致。演示引擎 `demo_retail` = false（只认固定项，分面原值是编码会算失败），所以演示模板不取分面、只用固定 options。
 - 无头 Playwright 冒烟（mock）：推演 / 告警 / 动作中心渲染、新建方案运行完成、无控制台错误。
 - 没做（与原设计的差距）：模板还是文件元数据，没建 `scenario_template` 表和 `GET /scenario-templates`；分面值直接用属性原值（编码），没取显示名；影响明细表 `scenario_impact` 仍是演示引擎的行结构（模板 `impact.columns` 把行字段映射到通用列），没改成 `{objKind,objId,dims,metrics}`；建议动作仍按动作名映射，没接动作类型编号。
+
+
+### 动态路径编号 NUL 边界修复（2026-10-26）
+
+本地只读 GET `/alerts/bad%00id`、`/action-runs/bad%00id` 已复现驱动 500。`dynamic/router.py` 的全部 11 个 `{code}` 路径统一使用模块内 `DynamicPathCode`（Annotated Path，排除 NUL），非法编号在路由边界返回 422 VALIDATION_FAILED。`tests/test_dynamic_path_validation.py` 仅用 users 基础夹具、有效请求体逐路由验证 `details.fields=[{field: "code", ...}]`（统一错误合同去掉 path 前缀），正常缺失编号仍为 404；未改仓储、模型、规则路由或全站中间件。

@@ -361,7 +361,6 @@ class QaPath(IdMixin, MutableTableMixin, Base):
     __tablename__ = "onto_qa_path"
     __table_args__ = (
         UniqueConstraint("from_object_id", "to_object_id", "seq"),
-        UniqueConstraint("group_key", "seq"),
         Index(
             "uq_onto_qa_path_default",
             "from_object_id",
@@ -718,7 +717,7 @@ class CrEvent(IdMixin, AppendOnlyTableMixin, Base):
 # static-api.md §1.2 / §1.3：cr_target（单子涉及的定义）、cr_item（逐行改动，before/after jsonb）、
 # cr_check（校验 V1–V17）、cr_impact（影响面）、cr_trial（试算）。目标是通用的 kind + 业务编码，
 # 动态 / 动作 / 事件模块的草稿也写这里（不做跨模块外键，同 §1.2）。
-# cr_impact / cr_trial 本批只建表（种子 CR 的影响面 / 试算仍在 change_request.detail 里），见 handoff。
+# cr_impact / cr_trial 由重新校验记录真实分析；旧种子结果仍保留原始 detail，见 handoff。
 
 
 class CrTarget(IdMixin, AppendOnlyTableMixin, Base):
@@ -797,7 +796,7 @@ class CrCheck(IdMixin, Base):
 
 
 class CrImpact(IdMixin, Base):
-    """影响面（Releases.vue 影响面三组）。[推断] 本批只建表，未写入。"""
+    """重新校验生成的影响面（Releases.vue 三组），与 detail 同事务刷新。"""
 
     __tablename__ = "cr_impact"
     __table_args__ = ({"comment": "变更单影响面"},)
@@ -815,7 +814,7 @@ class CrImpact(IdMixin, Base):
 
 
 class CrTrial(IdMixin, Base):
-    """试算（指标口径变更前后对比）。[推断] 本批只建表，未写入。"""
+    """可执行的单指标口径变更前后对比，按当前用户范围生成，不补造缺失值。"""
 
     __tablename__ = "cr_trial"
     __table_args__ = (UniqueConstraint("cr_id", "period"), {"comment": "变更单试算"})

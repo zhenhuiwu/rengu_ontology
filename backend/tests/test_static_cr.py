@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 
 from app.modules.static.models import ChangeRequest, CrEvent
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 P = "/api/ontology/v1"
 WANG = {"X-Demo-As": "U010001"}  # 王敏
@@ -22,7 +23,7 @@ LIU = {"X-Demo-As": "U010004"}  # 刘婷
 SUN = {"X-Demo-As": "U010005"}  # 孙浩然
 DETAILS = {
     d["id"]: {k: v for k, v in d.items() if k != "id"}
-    for d in json.loads((Path(__file__).parents[1] / "seeds/extra/static/CR_DETAILS.json").read_text())
+    for d in json.loads((Path(__file__).parents[1] / "seeds/extra/static/CR_DETAILS.json").read_text("utf-8"))
 }
 
 # mock/changes.ts CHANGE_REQUESTS 前 3 行（原样，含可选键缺省）
@@ -43,6 +44,10 @@ async def seeded(session):
 
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
+        await grant_fixture_roles(
+            session,
+            {"U010001": "R-01", "U010002": "R-02", "U010003": "R-02", "U010004": "R-02", "U010005": "R-02"},
+        )
         await session.commit()
         yield session
 
@@ -76,7 +81,7 @@ async def test_list_paged(client, seeded):
     """kw / page / size / focusId（同 Releases.vue filtered、LPAGE=17、选中单子所在页）。"""
     allr = (await client.get(P + "/change-requests", headers=WANG)).json()
     r = (await client.get(P + "/change-requests?page=1", headers=WANG)).json()
-    assert (r["total"], r["page"], r["size"]) == (16, 1, 17) and r["items"] == allr
+    assert (r["total"], r["page"], r["size"]) == (16, 1, 10) and r["items"] == allr[:10]
     r = (await client.get(P + "/change-requests?size=5&page=9", headers=WANG)).json()
     assert (r["page"], [x["id"] for x in r["items"]]) == (4, ["CR-0001"])  # 越界收到最后一页
     r = (await client.get(P + "/change-requests?size=5&focusId=CR-0008", headers=WANG)).json()

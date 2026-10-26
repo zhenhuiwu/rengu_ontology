@@ -26,6 +26,7 @@ from app.modules.static.models import (
     QaPathStep,
 )
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 P = "/api/ontology/v1"
 JSON = get_settings().seeds_json_dir / "static"
@@ -87,6 +88,7 @@ def static_sections():
 @pytest.fixture
 async def static_seeded(session, static_sections):
     await run_seeds(session, ["admin", "versioning", "static"])
+    await grant_fixture_roles(session)
     await session.commit()  # 释放 savepoint：接口报错回滚时不会把种子一起回滚（外层事务结束时仍整体回滚）
     return session
 
@@ -241,6 +243,9 @@ async def test_build_section_from_tables(static_seeded):
     ctx = SeedContext(JSON, root=JSON.parent)
     for cls in (ObjectTypesSection, MetricsSection):
         built = await cls().build_section(static_seeded, None, ["CR-0011"])
+        if cls is MetricsSection:
+            assert all("versionRows" not in row for row in built.values()), "旧seed没有真实定义版本"
+            built = {code: without(row, "variants") for code, row in built.items()}
         assert built == cls().seed_section("v2026.10.3", ctx), cls.section
     base = {"x": {"keep": True}}
     assert await ObjectTypesSection().build_section(static_seeded, base, []) == base
@@ -292,7 +297,7 @@ async def test_qa_paths_examples_without_paths(static_seeded):
 
 async def test_object_types(client, static_seeded):
     body = await get(client, "/object-types")
-    assert set(body) == {"items", "total", "page", "size"} and body["size"] == 22 and body["total"] == 18
+    assert set(body) == {"items", "total", "page", "size"} and body["size"] == 10 and body["total"] == 18
     first = body["items"][0]
     lo = load("LINK_OBJECTS.json")[0]
     assert first == {
@@ -306,31 +311,44 @@ async def test_object_types(client, static_seeded):
 
 
 async def test_object_type_detail_and_tabs(client, static_seeded):
+    from app.modules.static.explorer import DISPLAY_FIELDS
+
+    def legacy_props(rows):
+        return [{k: v for k, v in row.items() if k not in DISPLAY_FIELDS} for row in rows]
+
     meta = {v["args"][0]: v["result"] for v in load("derived/objectMeta.json")}
     d = await get(client, "/object-types/order")
     assert {"meta", "brief", "props", "db", "status"} <= set(d)
-    assert d["brief"] == Q_OBJ[0] and d["meta"] == meta["order"] and d["props"] == PROPS["order"]
+    assert d["brief"] == Q_OBJ[0] and d["meta"] == meta["order"]
+    assert legacy_props(d["props"]) == PROPS["order"]
 
     props = await get(client, "/object-types/order/properties")
-    assert props["size"] == 12 and props["total"] == len(PROPS["order"]) and props["diff"] == []
-    assert props["items"] == PROPS["order"][:12]
+    assert props["size"] == 10 and props["total"] == len(PROPS["order"]) and props["diff"] == []
+    assert legacy_props(props["items"]) == PROPS["order"][:10]
     kw = await get(client, "/object-types/order/properties?kw=金额")
-    assert kw["items"] == [p for p in PROPS["order"] if "金额" in p["name"] or "金额" in p["api"]][:12]
+    assert (
+        legacy_props(kw["items"])
+        == [p for p in PROPS["order"] if "金额" in p["name"] or "金额" in p["api"]][:10]
+    )
 
     maps = await get(client, "/object-types/order/mappings")
-    assert maps["size"] == 12 and set(maps["items"][0]) == {"prop", "col", "srcType", "transform"}
+    assert maps["size"] == 10 and set(maps["items"][0]) == {"prop", "col", "srcType", "transform"}
 
     links = await get(client, "/object-types/order/links")
-    assert links == [x for x in LINKS if x["from"] == "order" and x["status"] == "已发布"]
+    assert [without(row, "fromName", "toName") for row in links] == [
+        x for x in LINKS if x["from"] == "order" and x["status"] == "已发布"
+    ]
 
     views = await get_all(client, "/object-types/order/usage?kind=view")
-    assert views == next(v["result"] for v in VIEWS if v["args"][0] == "order")
+    assert [without(row, "affectedProps") for row in views] == next(
+        v["result"] for v in VIEWS if v["args"][0] == "order"
+    )
     metrics = await get_all(client, "/object-types/order/usage?kind=metric")
     assert metrics and all("base" in m and "via" in m for m in metrics)
-    err = await get(client, "/object-types/order/usage?kind=cr", 422)
-    assert err["code"] == "VALIDATION_FAILED"
-    fields = err["details"]["fields"]
-    assert [f["field"] for f in fields] == ["kind"] and fields[0]["message"]
+    history = await get(client, "/object-types/order/usage?kind=cr")
+    assert history["items"] and all(
+        row["cr"]["id"].startswith("CR-") and row["parts"] for row in history["items"]
+    )
     await get(client, "/object-types/nope", 404)
 
 
@@ -339,9 +357,9 @@ async def test_object_type_detail_and_tabs(client, static_seeded):
 
 async def test_link_types(client, static_seeded):
     body = await get(client, "/link-types")
-    assert body["size"] == 18 and body["total"] == len(LINKS) and body["items"] == LINKS[:18]
+    assert body["size"] == 10 and body["total"] == len(LINKS) and body["items"] == LINKS[:10]
     focus = await get(client, f"/link-types?focusId={LINKS[20]['id']}")
-    assert focus["page"] == 2 and LINKS[20] in focus["items"]
+    assert focus["page"] == 3 and LINKS[20] in focus["items"]
     src = await get_all(client, "/link-types?src=order&st=已发布")
     assert src == [x for x in LINKS if x["from"] == "order" and x["status"] == "已发布"]
 
@@ -380,14 +398,14 @@ def test_paginate_clamps_like_frontend():
 
 async def test_list_pagination_clamps(client, static_seeded):
     """page=0 / page=-3 → 第 1 页（不报 422）；越界 → 最后一页且 page 为收拢后的值；total=0 → page 1、空。"""
-    last = -(-len(LINKS) // 18)
+    last = -(-len(LINKS) // 10)
     for page, want in ((0, 1), (-3, 1), (999, last), (last + 1, last)):
         body = await get(client, f"/link-types?page={page}")
-        assert body == mock_paginate(LINKS, page, 18), page
+        assert body == mock_paginate(LINKS, page, 10), page
         assert body["page"] == want
     assert (await get(client, "/link-types?page=999&size=5"))["page"] == -(-len(LINKS) // 5)
     empty = await get(client, "/link-types?q=__no_such_link__&page=7")
-    assert empty == {"items": [], "total": 0, "page": 1, "size": 18}
+    assert empty == {"items": [], "total": 0, "page": 1, "size": 10}
     usage = await get(client, f"/link-types/{LINKS[0]['id']}/usage?page=-1")
     assert usage["page"] == 1
     for bad in ("size=0", "size=201", "page=x"):
@@ -398,21 +416,29 @@ async def test_list_pagination_clamps(client, static_seeded):
 
 
 async def test_metrics(client, static_seeded):
+    from app.modules.static.seeds import seed_metric_variants
+
+    variants = seed_metric_variants(METRIC_LIST)
+    expected = [{**m, "variants": variants.get(m["id"], [])} for m in METRIC_LIST]
     body = await get(client, "/metrics")
-    assert body["size"] == 18 and body["items"] == METRIC_LIST[:18]
-    assert await get_all(client, "/metrics?group=销售") == [m for m in METRIC_LIST if m["group"] == "销售"]
+    assert body["size"] == 10 and body["items"] == expected[:10]
+    assert await get_all(client, "/metrics?group=销售") == [m for m in expected if m["group"] == "销售"]
 
     d = await get(client, "/metrics/gmv")
     assert (
         without(d, "def", "dims", "disallowed", "formula", "dimNames", "value", "prev", "updatedAt")
-        == (METRIC_LIST[0])
+        == expected[0]
     )
     assert d["def"] == load("METRIC_DEF.json") and d["dims"] == load("METRIC_DIMS.json")
     stat = next(m for m in load("METRICS.json") if m["id"] == "gmv")
     assert d["formula"] == stat["formula"] and d["dimNames"] == stat["dims"] and d["value"] == stat["value"]
 
     v = await get(client, "/metrics/gmv/versions")
-    assert v["size"] == 10 and v["items"] == load("METRIC_VERSIONS.json")[:10]
+    assert v["size"] == 10
+    assert [without(row, "canRollback", "rollbackUnavailable") for row in v["items"]] == load(
+        "METRIC_VERSIONS.json"
+    )[:10]
+    assert all(row["canRollback"] is False for row in v["items"])
     r = await get(client, "/metrics/gmv/refs")
     assert r["items"] == load("METRIC_REFS.json")[:10]
 
@@ -422,7 +448,7 @@ async def test_metrics(client, static_seeded):
 
 async def test_dimensions(client, static_seeded):
     body = await get(client, "/dimensions")
-    assert body["size"] == 18 and body["total"] == len(DIMS)
+    assert body["size"] == 10 and body["total"] == len(DIMS)
     assert body["groups"] == list(dict.fromkeys(d["group"] for d in DIMS))
     first = body["items"][0]
     assert without(first, "valueCount") == without(DIMS[0], "values", "mappings", "usage", "history")
@@ -444,10 +470,10 @@ async def test_dimensions(client, static_seeded):
     assert (await get(client, "/dimensions/format/values"))["summary"].startswith(f"共 {len(pub)} 个取值")
 
     maps = await get(client, "/dimensions/format/mappings")
-    assert maps["size"] == 8
+    assert maps["size"] == 10
     for m in fmt["mappings"]:
         if not m.get("draft"):
-            assert any(r["phrase"] == m["phrase"] for r in maps["items"]) or maps["total"] > 8
+            assert any(r["phrase"] == m["phrase"] for r in maps["items"]) or maps["total"] > 10
     conf = await get_all(client, "/dimensions/format/mappings?conflict=true")
     assert all(r["conflictText"] for r in conf)
 
@@ -460,21 +486,23 @@ async def test_dimensions(client, static_seeded):
 
 async def test_knowledge(client, static_seeded):
     body = await get(client, "/knowledge")
-    assert body["size"] == 19 and body["total"] == len(KNOWLEDGE)
+    assert body["size"] == 10 and body["total"] == len(KNOWLEDGE)
     shown = {x["id"]: x.pop("shownStatus") for x in body["items"]}
-    assert body["items"] == [without(k, "refs") for k in KNOWLEDGE[:19]]
+    assert body["items"] == [without(k, "refs") for k in KNOWLEDGE[:10]]
     assert shown["K-001"] == "已发布"
     k18 = await get(client, "/knowledge/K-018")
     assert k18["shownStatus"] == "草稿中"  # CR-0011 草稿里改了 K-018
     assert without(k18, "shownStatus") == without(next(k for k in KNOWLEDGE if k["id"] == "K-018"), "refs")
     refs = await get(client, "/knowledge/K-018/refs")
-    assert refs["size"] == 8 and refs["items"] == next(k for k in KNOWLEDGE if k["id"] == "K-018")["refs"][:8]
+    assert (
+        refs["size"] == 10 and refs["items"] == next(k for k in KNOWLEDGE if k["id"] == "K-018")["refs"][:10]
+    )
 
     stopped = await get_all(client, "/knowledge?st=已停用")
     assert {x["id"] for x in stopped} == {k["id"] for k in KNOWLEDGE if k["status"] == "已停用"}
 
     sc = await get(client, "/knowledge/synonym-conflicts")
-    assert sc["rule"] == load("CONFLICT_RULE.json")
+    assert sc["rule"] == {}, "未配置真实冲突策略时不能返回演示词路由"
     assert {c["word"] for c in sc["conflicts"]} == {"老客", "大促", "到家"}
     await get(client, "/knowledge/K-999", 404)
 
@@ -488,7 +516,7 @@ async def test_ontology_graph(client, static_seeded):
     assert sorted(g["nodes"], key=lambda x: x["id"]) == sorted(want, key=lambda x: x["id"])
     ids = {x["id"] for x in want}
     assert g["edges"] == [
-        {"from": x["from"], "to": x["to"], "linkId": x["id"], "status": x["status"]}
+        {"from": x["from"], "to": x["to"], "linkId": x["id"], "name": x["name"], "status": x["status"]}
         for x in LINKS
         if x["from"] in ids and x.get("to") in ids
     ]
@@ -506,15 +534,15 @@ async def test_history_version_reads(client, static_seeded):
 
     links = await get_all(client, f"/link-types?ver={ver}")
     expect = history.links_at(LINKS, ver)
-    assert [x["id"] for x in links] == [x["id"] for x in expect]
-    assert all("usage" in x for x in links)  # 运行数据从当前表补
+    assert {x["id"] for x in links} == {x["id"] for x in expect}
+    assert all("usage" not in x for x in links)  # 历史定义列表不混入当前运行数据。
 
     terms = await get_all(client, f"/knowledge?ver={ver}")
-    assert [x["id"] for x in terms] == [k["id"] for k in KNOWLEDGE if k.get("since") and k["since"] <= ver]
+    assert {x["id"] for x in terms} == {k["id"] for k in KNOWLEDGE if k.get("since") and k["since"] <= ver}
     assert all(x["shownStatus"] in ("已发布", "已停用") for x in terms)
 
     dims = await get_all(client, f"/dimensions?ver={ver}")
-    assert [x["id"] for x in dims] == [d["id"] for d in DIMS if d["since"] <= ver]
+    assert {x["id"] for x in dims} == {d["id"] for d in DIMS if d["since"] <= ver}
     for d in DIMS:
         if d["since"] <= ver:
             hist = await get_all(client, f"/dimensions/{d['id']}/history?ver={ver}")
@@ -536,9 +564,16 @@ async def test_all_static_gets_require_login(client, static_seeded):
         path = r.path
         if "{id}" in path:
             path = path.replace("{id}", ids[path.split("/")[1]])
-        urls.append(path + ("?kind=view" if path.endswith("/usage") and "object-types" in path else ""))
+        query = (
+            "?kind=object"
+            if path == "/build/owners"
+            else "?kind=view"
+            if path.endswith("/usage") and "object-types" in path
+            else ""
+        )
+        urls.append(path + query)
     assert len(urls) == len(gets) >= 25
-    for who, status in (("U999999", 401), ("U010308", 401), ("U010006", 200)):  # 不存在 / 高伟停用 / 李娜
+    for who, status in (("U999999", 401), ("U010308", 401), ("U010006", 403), ("U010001", 200)):
         for url in urls:
             r = await client.get(P + url, headers={"X-Demo-As": who})
             assert r.status_code == status, (who, url, r.text[:300])
@@ -556,6 +591,8 @@ def test_static_routes_func_permissions():
     for r in router.routes:
         if "GET" not in r.methods:
             continue
+        if r.path == "/build/owners":
+            continue  # kind决定manage页面，由test_function_permissions覆盖各kind的200/403。
         key = "data-quality" if r.path == "/object-types/brief" else want[r.path.split("/")[1]]
         assert FUNC_OF[r.path] == key, r.path
         assert len(r.dependencies) == 1, r.path

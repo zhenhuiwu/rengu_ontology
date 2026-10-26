@@ -3,6 +3,14 @@
 > 截至 2026-10-26（UTC+8）。最新分支 `palantir-r3`，最初基于 master `b475283`，2026-10-26 11:02（UTC+8）已变基到 master `0086eab`（含 static-r4 `58ad8d7`、dynamic-r3；迁移 head `dynamic_0003`；`palantir-cr` 已合入）。
 > 接口细节见 `docs/backend/action-event-api.md`（§3 接口、§11 第 2 批、§12 第 3 批、§13 变更单草稿前端）。本文只记做到哪、怎么接。
 
+## 2026-10-26 内部接收增量
+
+内部 `POST /internal/v1/events` 已完成凭证认证、持久信封、ID幂等冲突、业务键窗口/永久去重、pending与真实发布版本绑定；没有配置投递器，因此不发HTTP、不建假回执，待投递/已去重延迟未知。迁移event_0009→event_0010，旧seed未改。当前实现、安全边界和必要专项见 [event-ingress.md](event-ingress.md)；下文原“内部接收未建”表格仅为历史交接。
+
+## 2026-10-26 模拟与持久对账增量
+
+`:simulate`已实现真实纯校验，返回`testEventId:null/deliveredTo:[]/checks`，明确未落库、未投递；历史与预览均403。`integration_0013`新增持久`reconcile_task`，既有`action.reconcile`任务已接真实每15分钟查询/三次上限/人工介入/重开；缺真实外部配置503且不伪装查无。动态默认事件发射器持久化真实pending事件；未实现订阅方投递。外部系统测试按钮已接只读probe，实际请求才记调用。部署与配置、状态机、准确边界见 [reconciliation.md](reconciliation.md)，本增量取代下方旧“未建/未实现”说明。
+
 ## 1. 已完成
 
 | 内容 | 提交 | 验证 |
@@ -37,16 +45,16 @@
 | 放弃后留下空变更单 | 放弃只删本对象的目标；刷新后再放弃时空单留在草稿列表里。**静态评审已定：空草稿单保留**（提交时 `CR_EMPTY` 拦住，用户可自己删），前端不用删单 | 不做；只剩下面“本轮评审遗留”静态 ② 的 404 处理 |
 | 发起时建单成功、加目标失败 | `crStart` 建单成功但加目标失败时库里留一个空单 | 按静态“空草稿单保留”的决定（提交被 `CR_EMPTY` 拦、用户可删）不再补删；前端不做删单 |
 | 动作类型 `bulk`（批量执行）字段 | 没做 | 前端 mock / 页面没有这个字段，按“前端为准”不加；`target_kind` 后台已有。【推断】页面加上后再补列和迁移（`down_revision` 接当时的 head） |
-| 新建动作 / 事件类型 | 两页有“新建动作类型 / 新建事件类型”按钮，但只打开共用的 `StartChangeModal`，变更对象写成“新建…类型”；mock 和页面都没有新类型的表单（没有字段、必填项、布局），页面也只能显示列表里已有的类型 | 核对过（palantir-r3），本轮不做：做表单要自己定字段，违反“前端为准”。要先由页面归属方给出表单设计；约定（PDE 审 static-r3 时提）：新类型 `target{kind,id:调用方给的编码,isNew:true}`，`config` 一个字段一行、`params` / `payload` 一项一行，都是 `op=add`；发布时 `isNew` 目标要静态的按类型写回建定义行 |
-| **发布后生效（动作 / 事件写回）** | 没做。草稿行存进 `cr_item`、改动列表 / 校验能看到；但 master `58ad8d7`（static-r4）起整版发布按 `register_writeback` 登记表写回，动作 / 事件**没登记**，发布时这些段被跳过（`writeback.py` `apply_crs` 里 `hook is None` 那段，master 上约第 133–137 行），只在发布事件说明里记“未写回定义表：action/…、event/…”，变更单照样标“已发布”——**在做完之前，动作 / 事件变更单发布后定义表不变** | 我负责，见 §6【下一轮】 |
+| 新建动作 / 事件类型 | 两页有“新建动作类型 / 新建事件类型”按钮，但只打开共用的 `StartChangeModal`，变更对象写成“新建…类型”；mock 和页面都没有新类型的表单（没有字段、必填项、布局），页面也只能显示列表里已有的类型 | 核对过（palantir-r3），本轮不做：做表单要自己定字段，违反“前端为准”。要先由页面归属方给出表单设计；约定（PDE 审 static-r3 时提）：新类型 `target{kind,id:调用方给的编码,isNew:true}`，`config` 整体一行（key=`cfg`）、`params` / `payload` 一项一行，都是 `op=add`；发布时 `isNew` 目标要静态的按类型写回建定义行 |
+| **发布后生效（动作 / 事件写回）** | 已实现七段 add / update / delete；发布事务同时写定义、新快照和类型版本历史，失败整次回滚 | 见 §6；新建 UI 仍未设计 |
 | 变更说明 `reason` | 没传 | 共用 `StartChangeModal` 没把“变更说明”发出来（静态 handoff 已提给 PDE） |
 | 试运行 `POST /action-types/{id}:dry-run`、模拟触发 `POST /event-types/{id}:simulate` | 后台没实现，页面只弹本地提示 | 我负责。规则见 api 文档 §3.1、§3.3（一律 200，带 `?previewAs=` 时返回 403 `READONLY`） |
-| 被规则引用 `GET /action-types/{id}/used-by` | 后台没实现；页面用快照里的 `usedBy` 加 mock `RULES`、`ALERTS` 拼 | 表 `action_type_rule` 已建、已灌种子；规则名和告警数要读动态的规则、告警表（依赖 `dynamic-rules` 合入） |
+| 被规则引用 `GET /action-types/{id}/used-by` | 已接真实 Rule / Alert；前端独立加载和业务错误提示，按上下文丢弃迟到响应 | 关系顺序随 actionTypes.usedBy 快照；历史规则信息读 rules 段，缺失显示定义不可用。告警总数及待处理数始终是当前记录，待处理仅含“待处理”，不含“处理中”。当前 mode_text 优先；历史按快照 autoStage 推导，不借用当前定义 |
 | 定时对账（`reconcile_task` 表、procrastinate cron、`query_by_key`、`on_reconciled` 回调） | 没建 | 我负责；依赖动态的 `:reconcile`（`dynamic/router.py` 已有）和调度器。外部系统页的“人工核对”已经可用（只改 `writeback_call`，不碰执行记录） |
 | 内部接收事件 `POST /internal/v1/events` 和投递 | 没建 | 同“近期事件”，依赖事件表 |
 | 按角色返回 403（功能权限） | 测不了 | `app/common/auth.py` 的 `require_func` 目前一律放行（PDE 的扩展点）。路由上已挂 `view` / `manage` 依赖，PDE 实现后补测试 |
 | 删除外部系统 | 不做 | 页面没有删除操作 |
-| 编号咨询锁测试的反证 | `test_integration_code_lock.py` 通过，但没在去掉锁的代码上跑过确认它会失败 | 下一轮顺手验一次 |
+| 编号咨询锁测试的反证 | 10-26 本地已完成：测试观测 `pg_locks` 等待后才放行第一事务，不再依赖固定 sleep | 正常测试通过；独立进程移除锁的受控反证按预期失败，正常进程重新通过 |
 | 合入 master | 本分支已变基到 `0086eab`；本分支没有新迁移，合入时不用改 `down_revision`；变基后本分支改过的测试 / ruff / vue-tsc 还没重跑 | 合入后 `alembic heads` 单 head、空库 `upgrade head` + 种子、全量 pytest（团队统一跑）、vue-tsc / build |
 
 ## 3. 代码在哪
@@ -89,29 +97,52 @@ palantir-r3（`5fb6769`）两方评审都已通过；下面是评审提的、本
 |---|---|---|
 | 动态 ① | 路径参数带 NUL 返回 500：`GET /events/EV-%00x`、`GET /event-types/x%00/stats` | 和静态一样返回 422：路径参数校验拒绝 `\x00`（router 层或共用依赖），各补一条测试 |
 | 动态 ② | `event/repo.py:47` 的 `get_with_type_code` 排除了测试事件（`is_test`），所以 `:simulate` 返回的 `testEventId` 用 `GET /events/{id}` 查是 404 | 单条查询不排除测试事件（列表照旧排除），或明确约定测试事件不可查、`:simulate` 不返回可点的 id；先和动态 / PDE 对齐，【推断】倾向前者 |
-| 动态 ③ | `test_integration_code_lock.py` 靠 `asyncio.sleep(0.5)`（持锁不提交）制造并发窗口，慢机器上可能不稳 | 改成事件同步：第一个事务拿到锁后 set 一个 `asyncio.Event`，第二个等它再开始，并确认第二个在第一个提交前被阻塞（如 `pg_locks` 查等待），去掉固定 sleep |
+| 动态 ③ | 10-26 本地已修：`test_integration_code_lock.py` 不再靠固定 sleep 猜测并发窗口 | 双事务通过 `pg_locks` 确认真正等待咨询锁，再提交第一事务；正常与移除锁反证均已验证 |
 
-## 6. 【下一轮】动作 / 事件发布写回（接 static-r4 `register_writeback`，master `58ad8d7` 起可用）
+## 6. 已实现：动作 / 事件发布写回
 
-目标：审核通过的动作 / 事件变更单整版发布时，把 `cr_item` 写回 action / event 定义表；现在没登记，发布会静默跳过（见 §2“发布后生效”）。
+审核通过的变更单在整版发布事务中写回定义表，不再静默跳过动作 / 事件段。实现位于 `action/writeback.py`、`event/writeback.py`，由各自 `sections.register()` 显式幂等登记（`load_sections()` 调用；import sections 本身不登记），不修改 main / CLI。
 
-1. **登记位置**：在 `app/modules/action/sections.py`、`app/modules/event/sections.py` 模块级登记（`load_sections()` 会 import 各模块 `sections.py`，import 即登记；`main.py` 和 `cli.py` 都调它）。
-   ```python
-   from app.modules.static.writeback import Ctx, register_writeback, writeback_error
-   for seg in ("params", "conds", "edits", "effects", "config"):
-       register_writeback("action", seg, _ACTION_HOOKS[seg])
-   for seg in ("payload", "subs"):
-       register_writeback("event", seg, _EVENT_HOOKS[seg])
-   ```
-   段名和前端 `de.section(name)` 一致：动作 `params`（key = 参数 `api`）、`conds`（key = 条件 `name`）、`edits`（key = `${op}:${obj}`）、`effects`（key = `target`）、`config`（单行 key = `cfg`，`after` = `{sysId, endpoint, idemKey}`）；事件 `payload`（key = 字段 `api`）、`subs`（key = 订阅方 `name`）。同一 (kind, section) 重复登记会抛 `ValueError`（模块重复 import 是同一个函数对象，不会触发）。
-2. **函数签名**：`async def fn(ctx: Ctx, target_id: str, rows: list[CrItem]) -> set[str]`。
-   - `rows`：同一目标、同一段的 `cr_item`，按 `seq` 排好；每行用 `item_key`、`op`（add / update / delete）、`before`、`after`。
-   - `ctx`：`session`、`cr`、`ver`、`now`、`by`、`is_new`、`name`（`cr_target.target_name`，新建定义的名称兜底）。
-   - 在发布事务里执行，只改 action / event 自己的表。
-   - **返回 `set()`**：返回值是要重组的**静态**快照节名（`DIRTY`）；我们的 `ActionTypesSection` / `EventTypesSection.build_section` 每次都按定义表重组，不需要标脏。
-   - 出错（目标不存在且不是新建、key 对不上、取值不认识、外部系统不存在等）`raise writeback_error(msg, **details)` → 409 `WRITEBACK_FAILED`，整个发布回滚。
-3. **新建定义**：共用 `_ensure_action(ctx, tid)` / `_ensure_event(ctx, tid)`：按编码取定义行；没有且 `ctx.is_new` 时建一行（名称用 `ctx.name`），没有又不是新建时 `writeback_error`。**各段执行先后没有保证**（`apply_crs` 按 `cr_item` 分组顺序调），所以每个段函数开头都调它，不能假设 `config` 先跑。新建类型的表单本身还没有（见 §2）。
-4. **不改**：现有 `restore_section`（整版回滚）保持原样；`build_section` 保持原样。
-5. **测试**（写在 `tests/test_action_event_writeback.py`）：每段 add / update / delete 各一条，发布后定义表和新版快照都变；`is_new` 新建；不存在目标 → 409 且发布回滚（版本号、CR 状态都不变）；同一单里动作和事件各一个目标；发布事件说明里不再出现“未写回定义表：action/…”。只跑这个文件 + ruff。
-6. **前端**：不用改；发布后 `?ver=` 新版本的快照按定义表重组，两页读快照即可看到。
+| kind | section | 行 key | after 字段 |
+|---|---|---|---|
+| action | params | api | name、api、type、required、def、rule |
+| action | conds | name | kind、name、expr、fail |
+| action | edits | `${op}:${obj}` | op、obj、field |
+| action | effects | target | kind、target、when、note |
+| action | config | cfg | 整体 `{sysId, endpoint, idemKey}` |
+| event | payload | api | name、api、type、required、desc、sample |
+| event | subs | name | kind、name、ruleId（可空）、filter、then、status；weekly 只读、忽略草稿值 |
 
+- 支持 add / update / delete。update 按旧 key 定位唯一原行，after 可只含修改字段；身份字段改名先查重，再原位更新。add 的 key 必须与 after 身份字段一致，且必填字段齐全；delete 必须有原行。新 identity 也须满足 CrItem.item_key 的 128 字符上限，保证发布后还能编辑。config 删除表示恢复本体内部默认配置（sysId=null、endpoint=“—”、idemKey=""）。不存在的目标（非 isNew）、歧义 / 重复 key、信封字段冲突、未知字段 / 枚举、非布尔 required、NUL / 超长字符串、sysId 不存在或系统不符合生产且未停用条件，返回 409 WRITEBACK_FAILED，整次发布不生成版本、不改 CR 状态。NUL 通常在通用草稿保存边界先返回 422，hook 保留内部调用防御。
+- 旧 seed 中 api=alert 的重复参数继续保留；针对这个歧义 key 的 update / delete / add 拒绝，不用 dict 选中其中一条。payload 不得新增 / 改名成全局 EventEnvelopeField.api。
+- 原位修改保留未编辑内部字段：ActionParam.rule_expr、SubmissionCriterion.expr_ast、EventSubscription.filter_expr、订阅方 weekly、ActionTypeRule.generates 等。对应 rule / expr / filter 文本真正改变时清空其旧 AST，未改文本则保留；现有执行器尚未读取这些 AST，不凭空解析文本。
+- isNew 后台骨架：调用方提供 code，name 使用 target.name（缺省 code），api=code；动作默认空分组、无外部系统，事件默认外部系统来源、保留 30 天，其余现有可空 / 空字符串默认值。每段独立确保父行存在，不依赖 config 先执行。仍在线的 code / api 冲突拒绝；回滚下线类型可经明确 update 等操作再次发布恢复，保留旧子行，add 不覆盖已有 key。这只是后台最低有效定义，新建 UI / 目标对象等产品必需字段表单仍待页面方设计。
+- 所有七段完成后，builder 对本次 touched 目标各追加且只追加一行 ActionTypeVersion / EventTypeVersion，definition 存完整新定义，版本取当前指针与全部历史 vN 的最大值 + 1。一个目标多段 / 多 CR 只升一次；回滚后再次发布不复用旧版本号。旧 seed 历史行和旧发布快照不变，重复 seed 不覆盖非 seed 新版本。整版 restore_section 沿用现有逻辑，只恢复当前定义和指针，不修改只追加历史。
+- `tests/test_action_event_writeback.py` 覆盖七段 CRUD / rename、新建、旧 AST 与 weekly / generates 保留、文本变更清 AST、非法输入整次发布回滚、重复 seed 与信封冲突、同目标两 CR 只追加一版、回滚再发布版本号不冲突。兼容回归另跑原有 action/event 快照、restore、seed 和静态发布测试。
+- 验证：独立 `rengu_agent_admin_test`，`uv run pytest tests/test_action_event_writeback.py tests/test_static_writeback.py tests/test_action_event.py -k 'not fresh_db and not migrations_round_trip' -q`，84 passed / 3 deselected；随后新增的下线类型重新发布用例单跑 1 passed（当前写回文件共 21 个用例）。ruff check / format 与 git diff --check 通过；迁移和全量测试由协调者独立执行。
+
+## 7. 只读核对（历史记录；simulate现状见下方补充）
+
+2026-10-26 核对 `frontend/docs/backend/action-event-api.md`、`frontend/docs/backend/api-index.md`、前端按钮和后台 contracts / ports。**本轮未实现这两个接口，没有新增求值器或测试通道；保持已定的不落库合同，不将现有前端本地成功提示视为后台能力。**
+
+### 已有合同与冲突
+
+- `POST /action-types/{id}:dry-run`：专章 §3.1（约第 162 行）入参为 query `view/cr/ver`、body `{params?}`，返回 `200 {passed, checked, failed[{name,fail}]}`；条件不满足也是 200，`checked` 为当前视图未删除条件数。专章 §3.4 明确 `SUBMISSION_CRITERIA_FAILED` 422 只用于真实提交，不用于 dry-run。api-index §3.7（约第 664 行）仍把条件失败列为 `SUBMISSION_CRITERIA_FAILED`，两者冲突；后续对齐应以专章明确的 200 结果体为依据，不在此次记录中修改正文合同。
+- `POST /event-types/{id}:simulate`：专章 §3.2（约第 193 行）入参为 query `view/cr/ver`、body `{payload?}`，缺省载荷取字段 sample，返回 `{testEventId, deliveredTo}`。只面向非停用订阅方（异常状态仍包括），不产生告警、不执行动作、不写下游。两接口均按各页面 `view` 权限开放；类型为草稿返回 409 `TYPE_IS_DRAFT`，不存在返回 404；历史 `?ver=` 允许并使用所查看定义，`?previewAs=` 返回 403 `READONLY`，历史与预览同时存在按预览阻断。
+- **模拟存储冲突**：专章 §3 的只读白名单、§7 覆盖项 E8，以及 api-index §3.12、§7 和变更记录，均明确 simulate **不落库、不写 event**；专章后补 §12.3-5 却写“模拟触发的测试事件以后写 true”（`is_test`）。本轮保持前者这一已定合同。现有 `EventRepo.get_with_type_code` 允许查看测试事件，列表和统计排除 `is_test=true`，只说明读取能力，不代表 simulate 已落库，也不授权改变不落库合同。若以后选择测试事件留痕，须显式同步接口索引、只读白名单的落库说明及历史版本行为，不能凭后补注释直接写 event。
+
+### 已核实的实现缺口
+
+- `ActionTypes.vue.dryRun()` / `EventTypes.vue.simulate()` 仅在确认后显示本地成功；`api/action.ts` 尚无对应请求。确认卡 fields 只展示默认值 / sample，不收集结构化参数或实际目标对象。
+- `ActionTypeService` / `EventTypeService` 当前按 `ctx.ver` 读取定义，未消费 `view/cr`。实现草稿试验需纯内存叠加本 CR 改动，不可调用发布写回、临时改定义表再回滚来冒充只读计算。
+- `dynamic.ports.SubmissionChecker` 仍为一律通过的桩；`ActionSubmitter` 也仍为一律成功的桩。`contracts.actions` 有真实提交 / 事件 emit 等接口，没有 dry-run 或隔离测试投递端口，不可用这些桩声称真实校验或投递成功。
+- 种子有 37 种中文提交表达式，涉及角色、对象状态、集合 / 日期、CRM 标签、会员分群、预算和发放记录等；没有现成求值器或已填充的语义 AST，部分业务表不存在，`CurrentUser.roles` 也未解析。动态动作 `params` 仍是文本，不能未经合同设计就按展示名称猜数据库字段、挑一个示例对象，或直接 eval 中文文本。
+- 订阅过滤有 7 种原文，包含“同门店当周 ≥ 3 条”等统计语义。`EventSubscription` 目前只有名称、过滤 / 后续处理原文和可选规则编码，没有测试 topic / URL、transport 或收件确认。`then_text` 中出现的 Kafka topic 是展示原文，不是已配置的隔离测试通道。只数非停用订阅方就返回 deliveredTo，或生成 UUID 并放入本地列表，都不能证明那些订阅方已收件。
+
+### 后续最小真实实现前的三个决定
+
+1. **结果存储语义**：本轮已定保持不落库。若后续确需 `is_test=true` 的可查询测试事件，先明确并修改上述冲突合同、历史只读说明和统计隔离要求。
+2. **测试通道及成功语义**：明确隔离目的地、可使用的 transport 和何种确认才算 delivered。若产品只要过滤预览，须将接口 / 文案改成 matched 或 wouldDeliver，不能继续声称已投递；也不能触发生产通知、真实动作或外部写入。
+3. **条件语言与数据上下文**：确定最小支持的表达式、结构化 params / payload 格式、目标对象和用户角色来源，以及缺少的数据源边界。可以先支持有真实数据的有限比较 / 集合条件；未知表达式或缺上下文必须明确“未能验证”，不可算通过或凭空给成功结果。
+
+前端真模式下两个伪成功入口的处理由前端归属方另行完成；此次仅补交接记录，不修改页面或既定接口合同。

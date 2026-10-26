@@ -143,7 +143,18 @@ async def test_every_mounted_write_route_is_guarded(monkeypatch):
     from fastapi import APIRouter
 
     import app.api as api
+    import app.common.context as view_context
     from app.main import create_app
+
+    checked_modes = []
+    policy = view_context.allowed_readonly_modes
+
+    def record_modes(endpoint, route=None):
+        modes = policy(endpoint, route)
+        checked_modes.append(modes)
+        return modes
+
+    monkeypatch.setattr(view_context, "allowed_readonly_modes", record_modes)
 
     probe = APIRouter()
 
@@ -161,11 +172,13 @@ async def test_every_mounted_write_route_is_guarded(monkeypatch):
     ]
     assert any(p == "/api/ontology/v1/__probe" for _, p, _ in ops)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        for m, path, op in ops:
-            if "history" in (op.get("x-allow-in-readonly") or ()):
-                continue
+        for m, path, _op in ops:
+            checked_modes.clear()
             url = path.replace("{", "").replace("}", "")
             r = await c.request(m, f"{url}?ver=v2026.10.1")
+            assert checked_modes, (m, path, "mounted route did not invoke the readonly guard")
+            if "history" in checked_modes[-1]:
+                continue  # Both decorator and OpenAPI whitelist forms use the actual guard policy.
             assert r.status_code == 403 and r.json()["code"] == "READONLY", (m, path)
 
 

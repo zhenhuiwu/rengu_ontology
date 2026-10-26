@@ -11,6 +11,7 @@ from app.modules.biz.models import BizOrder, Store
 from app.modules.static.explorer import default_flags, metric_variants
 from app.modules.static.models import Metric, ObjectType, Property
 from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
 
 P = "/api/ontology/v1"
 REQUIRED = {"key", "name", "dataType", "searchable", "filterable", "sortable", "listed", "order"}
@@ -29,6 +30,7 @@ def static_sections():
 @pytest.fixture
 async def seeded(session, static_sections):
     await run_seeds(session, ["admin", "versioning", "static", "biz"])
+    await grant_fixture_roles(session)
     await session.commit()
     return session
 
@@ -62,17 +64,23 @@ def test_default_flags_generic_for_unseeded_type():
     assert f["sortable"] and not f["filterable"]
 
 
-def test_metric_variants_by_name_structure():
+def test_metric_variants_require_explicit_fields_and_published_targets():
     ms = [
-        {"id": "a", "api": "a_net", "name": "金额（口径一）", "version": "v1"},
-        {"id": "b", "api": "a_gross", "name": "金额（口径二）", "version": "v2"},
-        {"id": "c", "api": "c", "name": "比率（%）", "version": "v1"},
-        {"id": "d", "api": "d", "name": "计数", "version": "v1"},
+        {"id": "a", "api": "a_net", "name": "金额（口径一）", "version": "v1", "status": "已发布"},
+        {"id": "b", "api": "a_gross", "name": "金额（口径二）", "version": "v2", "status": "已发布"},
+        {"id": "c", "api": "c", "name": "草稿", "version": "v1", "status": "草稿"},
+    ]
+    assert metric_variants(ms) == {"a": [], "b": []}
+    ms[0]["variants"] = [
+        {"code": "a", "label": "实际一", "default": True, "api": "STALE", "version": "v99"},
+        {"code": "b", "label": "实际二", "default": False},
+        {"code": "c", "label": "未发布", "default": False},
+        {"code": "missing", "label": "已删除", "default": False},
     ]
     v = metric_variants(ms)
-    assert set(v) == {"a", "b"}
     got = [(x["code"], x["label"], x["default"]) for x in v["a"]]
-    assert got == [("a", "口径一", True), ("b", "口径二", False)]
+    assert got == [("a", "实际一", True), ("b", "实际二", False)]
+    assert v["a"][0]["api"] == "a_net" and v["a"][0]["version"] == "v1"
 
 
 # ---------------------------------------------------------------- seed
@@ -120,6 +128,44 @@ async def test_meta_other_types(client, seeded):
 async def test_meta_unknown_type_404(client, seeded):
     r = await client.get(f"{P}/object-types/nope/meta")
     assert r.status_code == 404
+
+
+async def test_legacy_meta_defaults_and_seed_snapshots_remain_immutable(client, seeded):
+    from app.modules.versioning.repo import ReleaseRepo
+
+    repo = ReleaseRepo(seeded)
+    release = await repo.by_ver_or_404("v2026.10.3")
+    original = release.snapshot
+    assert "searchable" not in original["properties"]["store"]["city"]
+    before = await meta(client, "store")
+    city = await seeded.scalar(
+        select(Property).join(ObjectType).where(ObjectType.code == "store", Property.api_name == "city")
+    )
+    city.visibility, city.searchable, city.filterable = "hidden", True, False
+    city.seq, city.unit = 999, "当前值"
+    await seeded.commit()
+    response = await client.get(f"{P}/object-types/store/meta", params={"ver": "v2026.10.3"})
+    assert response.status_code == 200, response.text
+    old = response.json()
+    assert old["properties"] == before["properties"]
+    assert "city" not in by_key((await meta(client, "store"))["properties"])
+    assert (await client.get(f"{P}/object-types/store/meta", params={"ver": "missing"})).status_code == 404
+    # 模拟旧形状发布记录已存在，再灌版本种子不能触发 append-only UPDATE。
+    await run_seeds(seeded, ["versioning"])
+    await seeded.flush()
+    await seeded.refresh(release)
+    assert release.snapshot == original
+
+
+@pytest.mark.parametrize("value", [["a\x00b"], {"min": "a\x00b"}])
+def test_unbound_filters_reject_nul(value):
+    from app.core.errors import AppError
+    from app.modules.static.explorer import ExplorerService
+
+    prop = Property(api_name="x", data_type="string" if isinstance(value, list) else "date")
+    with pytest.raises(AppError) as exc:
+        ExplorerService._cond(prop, None, value, "x")
+    assert exc.value.status_code == 422
 
 
 # ---------------------------------------------------------------- /facets
@@ -277,13 +323,13 @@ async def test_huge_int_on_integer_column_422(client, seeded):
     from sqlalchemy import Column, Integer
 
     from app.core.errors import AppError
-    from app.modules.static.explorer import _scalar
+    from app.modules.static.explorer import scalar_filter
 
     col = Column("n", Integer)
-    assert _scalar(col, 5, "n") == 5
+    assert scalar_filter(col, 5, "n") == 5
     for bad in (2**31, -(2**31) - 1, 1.5, "x", True):
         with pytest.raises(AppError):
-            _scalar(col, bad, "n")
+            scalar_filter(col, bad, "n")
 
 
 # ---------------------------------------------------------------- 敏感 / 隐藏属性不出分面
@@ -334,3 +380,17 @@ async def test_facets_apply_row_filter(client, seeded, monkeypatch):
     f = by_key(await facets(client, "store"))
     assert [v["value"] for v in f["city"]["values"]] == [city]
     assert sum(v["count"] for v in f["status"]["values"]) == sum(1 for s in stores if s.city == city)
+
+
+@pytest.mark.parametrize("text", ["x" * 65, "\ud800", "x\x00y"])
+def test_scalar_filter_shared_text_boundary(text):
+    from sqlalchemy import Column, String
+
+    from app.core.errors import AppError
+    from app.modules.static.explorer import scalar_filter
+
+    with pytest.raises(AppError) as error:
+        scalar_filter(Column("name", String(128)), text, "name")
+    assert error.value.status_code == 422
+    assert error.value.details["fields"][0]["field"] == "filters.name"
+    assert scalar_filter(Column("name", String(128)), "x" * 64, "name") == "x" * 64

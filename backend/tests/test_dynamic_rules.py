@@ -52,15 +52,15 @@ async def test_seed_counts(dyn):  # noqa: F811
 
 async def test_list_and_filters(dyn, client):  # noqa: F811
     r = (await client.get(f"{API}/rules")).json()
-    assert r["total"] == 16 and len(r["items"]) == 16
-    assert [x["id"] for x in r["items"]] == [x["id"] for x in _json("dynamic/RULE_DEFS.json")]
+    assert r["total"] == 16 and r["size"] == 10 and len(r["items"]) == 10
+    assert [x["id"] for x in r["items"]] == [x["id"] for x in _json("dynamic/RULE_DEFS.json")][:10]
     ev = (await client.get(f"{API}/rules", params={"trigger": "事件"})).json()
     assert ev["total"] > 0 and all(x["trigger"]["kind"] == "事件" for x in ev["items"])
     kw = (await client.get(f"{API}/rules", params={"kw": "毛利率"})).json()
     assert "R-007" in [x["id"] for x in kw["items"]]
     meta = (await client.get(f"{API}/rules/meta")).json()
-    assert meta["confirmers"] == _json("dynamic/CONFIRMERS.json")
-    assert meta["mappingSources"] == _json("dynamic/MAPPING_SOURCES.json")
+    assert "王敏" in meta["confirmers"] and "定价委员会" not in meta["confirmers"]
+    assert "固定值：仓库调拨" in meta["mappingSources"]  # 真实已存R-012配置，不能被旧常量误拒绝。
     err(await client.get(f"{API}/rules/R-NOPE"), 404, "NOT_FOUND")
 
 
@@ -78,7 +78,7 @@ async def test_detail_draft_versions(dyn, client):  # noqa: F811
 async def test_hits_paging_and_detail(dyn, client):  # noqa: F811
     want = _derived("hitsOf", "R-007")
     p1 = (await client.get(f"{API}/rules/R-007/hits", params={"range": "30d"})).json()
-    assert p1["size"] == 12 and len(p1["items"]) == 12
+    assert p1["size"] == 10 and len(p1["items"]) == 10
     all_ = (await client.get(f"{API}/rules/R-007/hits", params={"range": "30d", "size": 200})).json()
     assert [x["id"] for x in all_["items"]] == [x["id"] for x in want if x["at"] >= CUT_30D]
     assert all_["total"] == p1["total"]
@@ -96,12 +96,14 @@ async def test_hits_paging_and_detail(dyn, client):  # noqa: F811
 async def test_replay_is_deterministic_and_writes_nothing(dyn, client):  # noqa: F811
     before = await dyn.scalar(select(func.count()).select_from(RuleHit))
     body = {"range": "7d", "version": "draft"}
-    a = (await client.post(f"{API}/rules/R-007:replay", json=body)).json()
-    b = (await client.post(f"{API}/rules/R-007:replay", json=body)).json()
-    assert a == b and a["actual"] == 3 and a["would"] == 5 and a["added"] == 2
+    err(await client.post(f"{API}/rules/R-007:replay", json=body), 503, "RULE_EVALUATOR_UNAVAILABLE")
+    err(await client.post(f"{API}/rules/R-007:replay", json=body), 503, "RULE_EVALUATOR_UNAVAILABLE")
     assert await dyn.scalar(select(func.count()).select_from(RuleHit)) == before
-    cur = (await client.post(f"{API}/rules/R-012:replay", json={"range": "30d", "version": "current"})).json()
-    assert cur["added"] == 0 and cur["removed"] == 0
+    err(
+        await client.post(f"{API}/rules/R-012:replay", json={"range": "30d", "version": "current"}),
+        503,
+        "RULE_EVALUATOR_UNAVAILABLE",
+    )
     err(await client.post(f"{API}/rules/R-007:replay", json={"range": "1y"}), 422, "VALIDATION_FAILED")
 
 

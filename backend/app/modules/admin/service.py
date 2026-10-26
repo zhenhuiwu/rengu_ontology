@@ -1,11 +1,10 @@
 """业务逻辑。不 commit；跨模块只通过 app/contracts 的 Protocol 调用。"""
 
-import csv
-import io
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
@@ -14,6 +13,8 @@ from app.core.clock import now
 from app.core.config import get_settings
 from app.core.errors import AppError, DuplicateKey, NotFound
 from app.core.schema import DATETIME_SEC_FORMAT
+from app.modules.admin.imports import parse_import_csv as parse_import_csv
+from app.modules.admin.imports import row_length_error
 from app.modules.admin.models import AuditLog, AuditResult, SysUser, UserStatus
 from app.modules.admin.repo import (
     AuditFilter,
@@ -63,7 +64,9 @@ class AuditLogService:
         return await self.repo.distinct_actions()
 
     async def export(self, f: AuditFilter, user: CurrentUser, ip: str) -> str:
-        """桩：不真正生成文件，只返回 jobId，并按 api-index §4.3「导出本身也写一条审计」。"""
+        """冻结可下载成员，与导出审计在同一事务中提交。"""
+        from app.modules.admin.exports import create_manifest
+
         fmt = DATETIME_SEC_FORMAT
         tz = ZoneInfo(get_settings().display_tz)
         span = f"{f.start.astimezone(tz).strftime(fmt)} 至 {f.end.astimezone(tz).strftime(fmt)}"
@@ -75,7 +78,8 @@ class AuditLogService:
             ip=ip,
             created_by=user.id,
         )
-        return f"EXP-{row.code}"
+        job = await create_manifest(self.session, f, user, row)
+        return job.code
 
 
 # ---- 用户（Users.vue，api-index §4.1）----
@@ -103,17 +107,24 @@ ROLE_NAMES = [
     "大区经理（华东）",
 ]
 _EMAIL = re.compile(r"^\S+@\S+$")
-IMPORT_HEADER = {"姓名": "name", "账号": "account", "部门": "dept", "角色": "role"}
 
 
-def pending_approvals(u: SysUser) -> int:
-    """名下待办审批数，与 mock/admin.ts pendingApprovals 一致：启用 ? (编号数字 × 13) % 5 : 0。
+async def pending_approvals(session: AsyncSession, users: list[SysUser]) -> dict[str, int]:
+    from app.modules.dynamic.approvals import pending_approval_counts as action_counts
+    from app.modules.static.approvals import pending_approval_counts as cr_counts
 
-    [推断] 动作审批、口径评审接上后改成真实计数。"""
-    if u.status != UserStatus.active:
-        return 0
-    digits = u.code[1:]
-    return (int(digits) * 13) % 5 if digits.isdigit() else 0
+    codes = {u.code for u in users if u.status == UserStatus.active}
+    if not codes:
+        return {}
+    names = {u.name for u in users if u.code in codes}
+    rows = await session.execute(
+        select(SysUser.name, func.min(SysUser.code), func.count())
+        .where(SysUser.status == UserStatus.active, SysUser.name.in_(names))
+        .group_by(SysUser.name)
+    )
+    unique_names = {name: code for name, code, count in rows if count == 1}
+    cr, actions = await cr_counts(session, codes, unique_names), await action_counts(session, codes)
+    return {code: cr.get(code, 0) + actions.get(code, 0) for code in codes}
 
 
 def make_user_filter(dept: str | None, status: str | None, kw: str | None) -> UserFilter:
@@ -133,22 +144,6 @@ async def _check_role(session: AsyncSession, role: str) -> None:
     names = await role_names(session)
     if role not in names:
         raise ValidationError422(f"角色不存在：{role}", details={"role": role, "allowed": names})
-
-
-def parse_import_csv(text: str) -> list[ImportRowIn]:
-    """模板 CSV（UTF-8，可带 BOM）：首行表头 姓名,账号,部门,角色（顺序不限，缺列当空）。"""
-    reader = csv.reader(io.StringIO(text.lstrip("\ufeff")))
-    header = next(reader, None)
-    if not header:
-        return []
-    keys = [IMPORT_HEADER.get(h.strip()) for h in header]
-    out = []
-    for line in reader:
-        if not any(c.strip() for c in line):
-            continue
-        vals = {k: (line[i].strip() if i < len(line) else "") for i, k in enumerate(keys) if k}
-        out.append(ImportRowIn(**vals))
-    return out
 
 
 class UserService:
@@ -199,11 +194,13 @@ class UserService:
         await _check_role(self.session, body.role)
         u = await self._get(code)
         values = {"name": body.name.strip(), "dept": body.dept, "role": body.role, "status": body.status}
-        return await self.repo.update(u, values, actor=user.id)
+        return await self.repo.update(u, values, actor=user.id, lock_version=body.lock_version)
 
     async def preview(self, rows: list[ImportRowIn]) -> list[ImportRowOut]:
         """只校验不写库：必填、邮箱格式、部门 / 角色在下拉里、账号已存在、文件内账号重复。"""
-        taken = await self.repo.existing_accounts([r.account.strip() for r in rows if r.account.strip()])
+        taken = await self.repo.existing_accounts(
+            [r.account.strip() for r in rows if r.account.strip() and len(r.account.strip()) <= 128]
+        )
         seen: set[str] = set()
         names = set(await role_names(self.session))
         out = []
@@ -211,8 +208,10 @@ class UserService:
             r = ImportRowIn(
                 name=r.name.strip(), account=r.account.strip(), dept=r.dept.strip(), role=r.role.strip()
             )
-            err = None
-            if not r.name:
+            err = row_length_error(r)
+            if err:
+                pass
+            elif not r.name:
                 err = "姓名为空"
             elif not _EMAIL.match(r.account):
                 err = "账号不是邮箱"
@@ -252,16 +251,19 @@ class UserService:
     async def disable(self, code: str, transfer_to: str | None, user: CurrentUser) -> SysUser:
         """停用。名下有待办审批时 transferTo 必填（api-index【待定】，本分支按必填做），且须是另一个启用用户。
 
-        转交本身是桩：审批数据在动作 / 变更单模块，接上后在这里调契约转交。"""
+        待办来自真实CR和动作指派；未实现安全转交时拒绝停用，不改审批归属。"""
         u = await self._get(code)
         if u.status == UserStatus.disabled:
             return u
-        if pending_approvals(u) > 0 and not transfer_to:
+        pending = (await pending_approvals(self.session, [u])).get(u.code, 0)
+        if pending > 0 and not transfer_to:
             raise ValidationError422(
                 "名下有待办审批，需要选择转交人",
                 code="TRANSFER_REQUIRED",
-                details={"pending": pending_approvals(u)},
+                details={"pending": pending},
             )
+        if pending > 0:
+            raise AppError("请先完成待审批事项后再停用此用户", code="TRANSFER_UNAVAILABLE", status_code=409)
         if transfer_to:
             t = await self.repo.get_listed(transfer_to)
             if t is None or t.code == u.code or t.status != UserStatus.active:

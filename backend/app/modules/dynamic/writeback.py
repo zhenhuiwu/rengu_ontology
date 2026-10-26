@@ -13,7 +13,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import now as _now
@@ -69,7 +69,24 @@ async def promote_rule(
     for k, col in _RULE_FIELDS.items():
         if k in d.patch:
             setattr(r, col, d.patch[k])
-    ver = (r.version or 0) + 1
+    historical = await session.scalar(
+        select(func.max(RuleVersion.version)).where(RuleVersion.rule_id == r.id)
+    )
+    ver = max(historical or 0, r.version or 0) + 1
+    if "autoStage" in d.patch:
+        from app.modules.action.models import ActionType, TypeStatus
+
+        stage = r.auto_stage or {}
+        action = await session.scalar(select(ActionType).where(ActionType.code == stage.get("actionTypeId")))
+        if stage.get("actionTypeId") and (
+            action is None
+            or action.retired_release_id is not None
+            or action.status == TypeStatus.draft
+            or action.target_kind != r.obj_kind
+        ):
+            raise _bad("规则动作配置已失效，请重新选择", field="autoStage.actionTypeId")
+        r.action_type_id = action.id if action else None
+        r.confirmer = stage.get("confirmer") or None
     r.version = ver
     if r.status != RuleStatus.disabled:
         r.status = RuleStatus.published
@@ -81,7 +98,9 @@ async def promote_rule(
     return True
 
 
-def apply_edits(machine: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any]:
+def apply_edits(
+    machine: dict[str, Any], edits: dict[str, Any], *, code: str = "", version: int = 0
+) -> dict[str, Any]:
     """已发布状态机 + 草稿 edits → 新状态机（与页面 ObjBehaviorLifecycle 的叠加规则一致）。"""
     rm = set(edits.get("removeTransitions") or [])
     ed = edits.get("editTransitions") or {}
@@ -97,15 +116,47 @@ def apply_edits(machine: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any
     for i, s in enumerate(states):
         if not isinstance(s.get("key"), str) or not s["key"]:
             raise _bad(f"第 {i + 1} 个状态缺少编号（key）或编号不是文本", key=f"state#{i}")
+        if len(s["key"]) > 64 or len(f"{code}:v{version}:{s['key']}") > 64:
+            raise _bad("状态编号超过当前模型长度限制", key=s["key"])
+        if not isinstance(s.get("name"), str) or not s["name"].strip() or len(s["name"]) > 64:
+            raise _bad("状态名称须为1至64字文本", key=s["key"])
+        if s.get("sla") is not None and (not isinstance(s["sla"], str) or len(s["sla"]) > 200):
+            raise _bad("状态SLA须为不超过200字文本", key=s["key"])
+        if s.get("desc") is None:
+            s["desc"] = ""
+        elif not isinstance(s["desc"], str):
+            raise _bad("状态说明须为文本", key=s["key"])
+        for field in ("x", "y", "count"):
+            limit = 9223372036854775807 if field == "count" else 2147483647
+            if type(s.get(field)) is not int or not -limit <= s[field] <= limit:
+                raise _bad("状态数值字段类型或范围无效", key=s["key"], field=field)
     for i, t in enumerate(trs):
         if not isinstance(t.get("id"), str) or not t["id"]:
             raise _bad(f"第 {i + 1} 条迁移缺少编号（id）或编号不是文本", key=f"tr#{i}")
+        if len(t["id"]) > 16 or len(f"{code}:v{version}:{t['id']}") > 64:
+            raise _bad("迁移编号不能超过16字，且完整版本编号不能超过64字", key=t["id"])
+        if not isinstance(t.get("by"), str) or not t["by"].strip() or len(t["by"]) > 200:
+            raise _bad("迁移触发来源须为1至200字文本", key=t["id"])
+        if any(
+            t.get(field) is not None and not isinstance(t[field], str)
+            for field in ("guard", "effect", "eventId", "actionId")
+        ):
+            raise _bad("迁移引用/条件须为文本", key=t["id"])
+        if type(t.get("weekly", 0)) is not int or not 0 <= t.get("weekly", 0) <= 2147483647:
+            raise _bad("迁移次数类型或范围无效", key=t["id"])
+        for field in ("guard", "effect"):
+            if t.get(field) is None:
+                t[field] = ""
     keys = {s["key"] for s in states}
+    if len(keys) != len(states) or len({t["id"] for t in trs}) != len(trs):
+        raise _bad("状态或迁移编号重复")
     for s in states:
-        if s.get("kind") not in kinds:
+        if not isinstance(s.get("kind"), str) or s["kind"] not in kinds:
             raise _bad(f"状态“{s['key']}”的类型“{s.get('kind')}”不认识", key=f"state.{s['key']}")
     for t in trs:
-        if t.get("trigger") not in trigs or t.get("from") not in keys or t.get("to") not in keys:
+        if any(not isinstance(t.get(field), str) for field in ("trigger", "from", "to")) or (
+            t["trigger"] not in trigs or t["from"] not in keys or t["to"] not in keys
+        ):
             raise _bad(f"迁移 {t.get('id')} 的触发方式或起止状态无效", key=f"tr.{t.get('id')}")
     return {"states": states, "transitions": trs}
 
@@ -113,6 +164,32 @@ def apply_edits(machine: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any
 def _bad(msg: str, **details: Any) -> AppError:
     """与静态 writeback_error 同码：409 WRITEBACK_FAILED，整个发布回滚。"""
     return AppError(msg, code="WRITEBACK_FAILED", status_code=409, details={"kind": "object", **details})
+
+
+async def validate_transition_refs(session: AsyncSession, edits: dict[str, Any]) -> None:
+    """新建/修改的显式引用必须存在；不能发布时悄悄把失效编号落成NULL。"""
+    from app.modules.action.models import ActionType, TypeStatus
+    from app.modules.event.models import EventType
+
+    changed = [*(edits.get("addTransitions") or []), *(edits.get("editTransitions") or {}).values()]
+    for field, model in (("actionId", ActionType), ("eventId", EventType)):
+        values = [t[field] for t in changed if t.get(field) is not None and t.get(field) != ""]
+        if any(not isinstance(value, str) for value in values):
+            raise _bad("迁移引用编号必须是文本", field=field)
+        wanted = set(values)
+        if not wanted:
+            continue
+        current = set(
+            await session.scalars(
+                select(model.code).where(
+                    model.code.in_(wanted),
+                    model.retired_release_id.is_(None),
+                    model.status != TypeStatus.draft,
+                )
+            )
+        )
+        if missing := wanted - current:
+            raise _bad("迁移引用的动作/事件不存在、未发布或已下线", field=field, ids=sorted(missing))
 
 
 async def promote_lifecycle(
@@ -129,8 +206,14 @@ async def promote_lifecycle(
         return False
     at, who = at or _now(), await _who(session, by)
     cur = await lifecycle_def(session, lc)
-    m = apply_edits({"states": cur["states"], "transitions": cur["transitions"]}, d.edits or {})
-    ver = (lc.version or 0) + 1
+    await validate_transition_refs(session, d.edits or {})
+    historical = await session.scalar(
+        select(func.max(LifecycleVersion.version)).where(LifecycleVersion.lifecycle_id == lc.id)
+    )
+    ver = max(historical or 0, lc.version or 0) + 1
+    m = apply_edits(
+        {"states": cur["states"], "transitions": cur["transitions"]}, d.edits or {}, code=lc.code, version=ver
+    )
     session.add(
         LifecycleVersion(
             code=f"{lc.code}:v{ver}",

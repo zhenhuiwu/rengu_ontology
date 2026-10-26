@@ -4,16 +4,17 @@
 动作类型本来就外键到 ext_system。）
 """
 
+import time
+import uuid
 from collections.abc import Sequence
-from uuid import uuid4
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PageParams
 from app.core import clock
 from app.core.enums import from_api
-from app.core.errors import Conflict, DuplicateKey, NotFound
+from app.core.errors import AppError, Conflict, DuplicateKey, NotFound
 from app.db.dialects import get_adapter
 from app.modules.action.models import ActionType
 from app.modules.dynamic.models import ActionRun
@@ -23,7 +24,6 @@ from app.modules.integration.schemas import ExtSystemIn
 
 PROD = "生产"
 CODE_LOCK = "integration.ext_system.code"
-_MSG_502 = "对方返回 502（网关错误），系统处于降级状态，请联系负责人"
 
 
 def is_writeback_target(s: ExtSystem) -> bool:
@@ -36,22 +36,36 @@ class ExtSystemService:
         self.session = session
         self.repo = ExtSystemRepo(session)
 
-    async def search(self, *, writeback: bool, kw: str | None) -> list[ExtSystem]:
-        """kw 匹配名称 / 编号 / 厂商（前端外部系统页没有搜索框，匹配哪些字段是【推断】）。"""
-        rows = list(await self.repo.all_ordered())
+    def search_query(self, *, writeback: bool, kw: str | None):
+        stmt = select(ExtSystem)
         if writeback:
-            rows = [s for s in rows if is_writeback_target(s)]
+            stmt = stmt.where(ExtSystem.env == PROD, ExtSystem.status != ExtSystemStatus.disabled)
         if kw:
-            rows = [s for s in rows if kw in s.name or kw in s.code or kw in s.vendor]
-        return rows
+            term = "%" + kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            stmt = stmt.where(
+                or_(
+                    ExtSystem.name.like(term, escape="\\"),
+                    ExtSystem.code.like(term, escape="\\"),
+                    ExtSystem.vendor.like(term, escape="\\"),
+                )
+            )
+        return stmt.order_by(ExtSystem.id)
 
-    async def action_counts(self) -> dict[int, int]:
+    async def search(self, *, writeback: bool, kw: str | None) -> list[ExtSystem]:
+        return list(await self.session.scalars(self.search_query(writeback=writeback, kw=kw)))
+
+    async def page(self, *, writeback: bool, kw: str | None, page: PageParams):
+        return await self.repo.list_page(self.search_query(writeback=writeback, kw=kw), page)
+
+    async def action_counts(self, ids: list[int] | None = None) -> dict[int, int]:
         """每个系统被多少个（未下线的）动作类型写回：列表悬停文字「N 个动作 / 无动作写回」。"""
         stmt = (
             select(ActionType.sys_id, func.count())
             .where(ActionType.sys_id.is_not(None), ActionType.retired_release_id.is_(None))
             .group_by(ActionType.sys_id)
         )
+        if ids is not None:
+            stmt = stmt.where(ActionType.sys_id.in_(ids))
         return {sid: n for sid, n in (await self.session.execute(stmt)).all()}
 
     async def get(self, code: str) -> tuple[ExtSystem, Sequence[ActionType]]:
@@ -100,35 +114,46 @@ class ExtSystemService:
         return await self.repo.update(obj, values, actor=actor)
 
     async def test_call(self, code: str, user_label: str) -> dict:
-        """测试调用（文档 §3.1）：dev / test 走 mock 适配器，不连真实系统。
+        """Only an explicitly configured read-only probe can create a test-call result."""
+        from app.modules.integration.adapters import get_adapter as configured_adapter
 
-        停用 → 409 EXT_SYSTEM_DISABLED；降级 → 502 失败；其余 200 成功。数值照抄前端 testCall()。
-        【推断】结果写一行 writeback_call（kind = test）：页面文案“结果记入下方最近调用”，刷新后仍在。
-        编号 = 系统编号去掉 EXT- + -T + 6 位随机（dev 时钟固定，不能用时间做编号）。
-        """
         s = await self.repo.get_by_code_or_404(code)
         if s.status == ExtSystemStatus.disabled:
             raise Conflict("该系统已停用，先在“编辑”里改为正常再测试", code="EXT_SYSTEM_DISABLED")
-        degraded = s.status == ExtSystemStatus.degraded
-        row = WritebackCall(
-            code=f"{s.code[4:]}-T{uuid4().hex[:6].upper()}",
+        try:
+            adapter = configured_adapter(s, "probe")
+        except AppError:
+            raise AppError(
+                "未配置真实连通性测试执行器，未发送请求，也未生成调用记录",
+                code="EXT_SYSTEM_TEST_UNAVAILABLE",
+                status_code=503,
+                details={"systemId": s.code, "reason": "executor_not_configured"},
+            ) from None
+        started = time.perf_counter()
+        result, msg = CallResult.succeeded, "只读连通性探测收到成功状态；不代表业务写回已执行"
+        try:
+            await adapter.request("probe")
+        except AppError as exc:
+            result, msg = CallResult.failed, f"{exc.message}（{exc.code}）"
+        call = WritebackCall(
+            code=f"PROBE-{uuid.uuid4().hex}",
             sys_id=s.id,
             kind=CallKind.test,
-            at=clock.local_now().replace(microsecond=0),
-            op_name="测试调用（连通性）",
-            target_label="—",
+            at=clock.now(),
+            op_name="连通性探测",
+            target_label=s.name,
             method="GET",
-            path="/health",
-            idem_key=None,
-            elapsed_ms=3120 if degraded else 140 + (s.timeout_ms % 97),
-            http_status=502 if degraded else 200,
-            result=CallResult.failed if degraded else CallResult.succeeded,
+            path=adapter.path("probe"),
+            elapsed_ms=round((time.perf_counter() - started) * 1000),
+            http_status=adapter.last_http,
+            result=result,
             attempt=1,
             actor=user_label,
-            msg=_MSG_502 if degraded else "OK · 鉴权通过，心跳正常",
+            msg=msg,
         )
-        await WritebackCallRepo(self.session).create(row, actor=user_label)
-        return call_dict(row, s.code, None)
+        self.session.add(call)
+        await self.session.flush()
+        return call_dict(call, s.code, None)
 
 
 _CALLS = (

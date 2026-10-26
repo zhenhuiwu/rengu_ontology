@@ -4,28 +4,38 @@
 统一用 `Page[dict]` 分页；字段清单见 docs/backend/dynamic-rules-impl-notes.md。
 """
 
+import json
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.core.schema import ApiModel
+from app.modules.static.schemas import ItemIn
 
 NonBlank = Field(min_length=1)
 
 
+class JsonInput(ApiModel):
+    @model_validator(mode="after")
+    def json_text(self):
+        json.dumps(self.model_dump(mode="json"), allow_nan=False)
+        ItemIn.jsonb_text(self.model_dump())
+        return self
+
+
 class MappingIn(ApiModel):
-    param: str
+    param: str = Field(max_length=64)
     from_: str = Field("", alias="from")
 
 
 class AutoStageIn(ApiModel):
     enabled: bool
-    action_type_id: str | None = None
-    confirmer: str | None = None
+    action_type_id: str | None = Field(None, max_length=64)
+    confirmer: str | None = Field(None, max_length=64)
     mapping: list[MappingIn] = []
 
 
-class RuleDraftIn(ApiModel):
+class RuleDraftIn(JsonInput):
     """PUT /rules/{id}/draft：保存到草稿（R7）。前端只改自动暂存配置和阈值。"""
 
     cr: str | None = None
@@ -34,7 +44,7 @@ class RuleDraftIn(ApiModel):
     lock_version: int | None = None
 
 
-class RuleCreateIn(ApiModel):
+class RuleCreateIn(JsonInput):
     """POST /rules：新建规则（草稿，登记到变更单 cr）。
 
     不传 cr 时只建规则，随后 POST /rules/{id}/draft 登记。"""
@@ -53,6 +63,10 @@ class RuleOpenDraftIn(ApiModel):
 class ReplayIn(ApiModel):
     range: Literal["7d", "30d"] = "7d"
     version: Literal["current", "draft"] = "current"
+    mode: Literal["snapshot", "events"] = "snapshot"
+    page: int = Field(1, ge=1)
+    size: int = Field(10, ge=1, le=100)
+    anchor: str | None = Field(None, max_length=200, pattern=r"^[0-9]{10}\.[0-9a-f]{64}\.[0-9a-f]{64}$")
 
 
 class ScenarioCreateIn(ApiModel):
@@ -74,7 +88,7 @@ class ScenarioStageIn(ApiModel):
     keys: list[str]
 
 
-class LifecycleDraftIn(ApiModel):
+class LifecycleDraftIn(JsonInput):
     """PUT /object-types/{id}/lifecycle/draft：整份草稿改动（L3–L6，前端 LcEdits 形状）。"""
 
     cr: str | None = None

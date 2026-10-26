@@ -37,6 +37,7 @@ async def current_release(session: SessionDep, _: CurrentUserDep) -> CurrentVers
         current=cur,
         next=_next_from(cur) if cur else next_ver(None, clock.now()),
         release=ReleaseOut.model_validate(latest) if latest else None,
+        lock_version=latest.id if latest else 0,
     )
 
 

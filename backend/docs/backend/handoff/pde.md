@@ -1,5 +1,12 @@
 # PDE工程师 交接文档（分支 pde-integ，基于 master b688d5d）
 
+## 2026-10-26 A项功能权限收尾
+
+- `auth.resolve_user`只聚合DB实际角色func，`require_func/check_func`按view/manage真实403；缺角色默认拒绝，`demo_admin_codes`不授func，prod身份入口仍401未接入。未扩展行级权限或生产登录。
+- CR目标按八类定义页面manage；整单检查包括旧touches，发布/回滚服务内再验releases:manage，保留既有管理员/owner/reviewer和全局READONLY。create等返回整单接口仍需releases:view。
+- 构建表单负责人候选`GET /build/owners?kind=object|metric|dimension|action|event`只返回启用用户{id,name}，对应目标页manage；不依赖管理用户页权限。当前用户真实姓名用已有`/api/admin/v1/me/row-scope`。
+- 默认开发账号原始SYS_USERS无DB角色关系。root已仅为开发库U010001→R-01作显式幂等关联及同事务审计；代码没有运行时bootstrap/姓名旁路。测试使用显式DB成员夹具`tests/function_access_support.py`；其余老测试需按调用角色补充夹具，最终全量由root统一。
+
 ## 1. 已完成
 
 | 提交 | 内容 |
@@ -31,9 +38,9 @@
 
 ## 2. 未完成
 
-- **近 30 日销售额趋势图**仍读 mock `DAILY_GMV_EX`。api-index 把它放在 ontology 的 `/metrics/{id}/daily`（静态模块负责），首页等静态提供后再切。
+- **首页订单实付折算趋势已接数据库**：`GET /api/biz/v1/dashboard/sales/daily`，按下单日汇总实付÷1.13，缺日补0；真实模式不回演示。它不冒充含退款/逐行税率的通用 `/metrics/{id}/daily`，该指标执行能力仍待实现。确切时间/金额口径见 `dashboard-api.md`。
 - 「导出 CSV / Excel」按钮仍是前端提示，没有后台导出接口（一期未排）。
-- 页头「数据截至 2026-10-24 23:00」仍是前端常量；接口已返回 `dataAsOf`，需要时可改读。
+- 已完成：首页真实模式的页头、订单标题及排行说明读取 KPI / 订单 / 排行响应 `dataAsOf` 的共同截止（取最早值，任一未成功则显示“—”）；mock 保留原日期。请求 cutoff 及指标口径不变，切身份 / 预览 / 历史版本重拉并丢弃迟到响应，不从 KPI 更新时间推断。
 - 合并到 master 时 `api-index.md` #44 / #46 可补一句「已实现：app/modules/dashboard」（需和 `/workspace/api-spec/后台接口需求.md` 保持一致）。
 
 ## 3. 代码在哪
@@ -74,3 +81,32 @@
 ## 评审 palantir-r3 非阻塞意见
 
 - 静态 ①–③、动态 ①–③ 共 6 条已记在 `handoff/palantir.md` §5（归 Palantir专家，下一轮处理），此处不重复。
+
+## 总览真实聚合接线（2026-10-26）
+
+- 新增 `GET /api/ontology/v1/ontology/overview`、`/ontology/todos`（api-index §3.4）：六类真实资源计数、已有运行健康、未发布变更单待处理分页。历史定义取对应 section，历史待处理为空；事件健康排除测试事件。最近发布复用真实 `/releases`，真图谱不再混入演示草稿，历史节点取 objectTypes 快照。
+- 当前没有持久化数据质量检查模型，返回 `qualityConfigured=false`，页面明确“尚未配置”，不把演示质量检查或健康 0 当真实结果。
+- 历史记录（已由下文2026-10-26真实订单趋势接线替代）：原合同是 `/metrics/{id}/daily?from=&to=&taxMode=`，返回原 `DAILY_GMV`/`DAILY_GMV_EX`。这两组数据仅在前端生成，没有对应种子、表或运行统计；现有订单按日聚合会得到另一套数值，不能冒充原指标日统计。本轮未新增迁移或公式种子，待明确真实日指标数据来源再接。
+
+## 源表内省 → 新对象定义草稿：只读审查，二期未实现
+
+- `Connections.vue` 已有库表清单，但 `DsTable.cols` / `DsTableOut.cols` 只是字段数量。`data/connector.py::_list` 虽读取 `get_multi_columns`，目前只保留数量，没有列名、类型、可空性、主键信息的前端接口。
+- 新对象实际入口在 `ObjectTypesBody.vue` 顶栏“从数据源导入 / 新建对象类型”。两按钮此前只更改 `StartChangeModal` 的目标文案，确认仍调用 `cr.start(opts)`，目标取当前对象 `current.id`；动作 / 事件页顶部“新建”同样仍取 `cur.id`。这四个未接入入口现统一禁用并加提示（真 / 演示模式均如此），避免将新建操作误写成修改当前类型；已有类型的“发起变更”保留。
+- 已有后端能力：`static-api.md` §2.5 / `writeback.py` 支持 `target {kind:object,id,isNew:true,name}`，`def` 段一个字段一行，`properties` 段一个属性一行，全部 `op=add`；审核发布前只存 CR，发布时新建定义。`static-api.md` 的 `POST /object-types:import-preview` 仍明确是二期，尚无完整请求 / 响应及新类型表单。
+- 最小后续范围：在现有库表行增加“导入为对象草稿”，复用 `StartChangeModal` 选择新建 / 加入 CR；按已保存数据源 ID 只读获取所选 schema/table 完整列元数据，生成定义与属性草稿，再跳变更单审阅。必须补稳定编码与冲突校验、受支持类型和主键映射规则；真实内省目前只支持 PostgreSQL / PG 兼容金仓，不能对其他连接类型假装成功。手工新建对象没有现成名称 / API / 主键表单，不能随导入接线声称已实现。
+- 权限边界：表名、`source_column` 仅记录定义来源；不自动登记 `governed_tables()`、不改属性 `backing_column`、不改 QA `bindings.json`，不授予任意源表可执行 SQL 权限。新对象即使发布，未受控绑定前仍应为 `bound=false / 未接入数据`。本轮未实现导入接口、表单、向导或迁移。
+
+
+### 首页真实模式数据边界更新（2026-10-26）
+
+用户已要求全部使用数据库数据，覆盖此前保留演示销售曲线的决定。Home 真模式订单 / 排行 / KPI 不再传固定演示 cutoff，趋势默认后台当前时间近30日，不漏固定日期后的新订单；原共同 dataAsOf 最早截止算法不变。KPI仍为数据库已配置指标值，文案不再伪称固定日期同期实时聚合。接口错误 / 空数据不会回演示值，显式 mock 模式保留原示例。详见 `dashboard-api.md`。
+
+
+### 我的质量检查真实接线（2026-10-26）
+
+`data_quality_0006` 新建空 quality_check / quality_run 表，不导入演示检查或随机历史。DataQuality.vue 真实模式全程使用当前创建者的数据库检查定义及真实运行，空库显示未配置，接口失败不回演示；显式mock模式保留演示。4种检查按固定4类业务对象映射执行，未映射组合明确不可用；本轮同步完成并返回completed，自动调度未接入且UI禁用。质量结果有通过/失败/无数据，定义新建未运行不算通过，检测快照与业务源时间分开。完整接口、字段、阈值语法及总览查询helper见 `data-quality-api.md`。此前“没有质量表”记录已由本节替代，总览由root接最新可见真实运行。
+
+
+### 质量定义CR闭环（2026-10-26，替代上节直接新建定义）
+
+质量规则已补创建/编辑/删除草稿，复用既有字段与StartChangeModal；`quality/def`发布写回，审核发布才生效。删除仅发布后退休，保留历史运行，pending可从实际CR恢复；未发布或退休不可运行。稳定创建者、preview有效权限、历史快照与发布时间边界均隔离；快照qualityChecks只存定义，整版回滚不删运行。quality_cr_0011只新增可空retired_at，ROOT已应用开发库；后续ROOT static_0012继续单head，禁止重seed已有数据。列表及历史改SQL真实分页，full默认10；不显示技术实现说明。接口完整契约与窄测见data-quality-api.md，最终全量/截图由ROOT统一。

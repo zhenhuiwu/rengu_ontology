@@ -18,23 +18,32 @@
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Path, Query
 
-from app.common.auth import CurrentUserDep, require_func
-from app.common.context import ViewContextDep
+from app.common.auth import CurrentUserDep, require_func, resolve_user
+from app.common.context import ViewContextDep, allow_in_readonly
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
+from app.modules.admin.permissions import active_user_names
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.crs import ChangeRequestService
+from app.modules.static.knowledge_trial import KnowledgeResolveIn, resolve_knowledge
+from app.modules.static.metric_trial import MetricTrialIn, trial_metric
+from app.modules.static.metric_versions import MetricRollbackIn
+from app.modules.static.metric_versions import rollback as rollback_metric
 from app.modules.static.models import CRStatus
+from app.modules.static.overview import overview, todos
+from app.modules.static.permissions import check_target
 from app.modules.static.publish import PublishService
 from app.modules.static.schemas import (
+    AllocateTargetIn,
     CRCreateIn,
     CRPatchIn,
     ItemsPutIn,
     ItemsPutOut,
     MergeCheckOut,
     PublishIn,
+    PublishOut,
     Rec,
     RecPage,
     RejectIn,
@@ -44,16 +53,55 @@ from app.modules.static.schemas import (
     TargetKind,
     ValidateOut,
 )
-from app.modules.static.service import StaticService, paginate
+from app.modules.static.service import StaticService
+from app.modules.static.trials import DimensionMatchIn, match_dimension
 from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.schemas import ReleaseOut
 
 router = APIRouter(tags=["static"])
 
 
-async def _svc(session: SessionDep, ctx: ViewContextDep, _: CurrentUserDep) -> StaticService:
+@router.post("/metrics/{id}:trial", dependencies=[Depends(require_func("metrics", "view"))])
+@allow_in_readonly
+async def metric_trial(
+    id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[^\x00]+$")],
+    body: MetricTrialIn,
+    session: SessionDep,
+    ctx: ViewContextDep,
+    user: CurrentUserDep,
+) -> Any:
+    return await trial_metric(session, ctx, user, id, body)
+
+
+@router.post("/knowledge:resolve", dependencies=[Depends(require_func("glossary", "view"))])
+@allow_in_readonly
+async def knowledge_resolve(
+    body: KnowledgeResolveIn, session: SessionDep, ctx: ViewContextDep, user: CurrentUserDep
+) -> Any:
+    return await resolve_knowledge(session, ctx, user, body)
+
+
+@router.post("/dimensions:match", dependencies=[Depends(require_func("dimensions", "view"))])
+@allow_in_readonly
+async def dimension_match(
+    body: DimensionMatchIn, session: SessionDep, ctx: ViewContextDep, user: CurrentUserDep
+) -> Any:
+    return await match_dimension(session, ctx, user, body)
+
+
+@router.get("/build/owners", summary="新建构建资源的负责人候选，仅启用用户的编号和姓名")
+async def build_owners(
+    kind: Literal["object", "metric", "dimension", "action", "event"],
+    session: SessionDep,
+    user: CurrentUserDep,
+) -> list[dict[str, str]]:
+    check_target(user, kind)
+    return await active_user_names(session)
+
+
+async def _svc(session: SessionDep, ctx: ViewContextDep, user: CurrentUserDep) -> StaticService:
     """所有静态 GET 都要登录：未知 / 停用的 X-Demo-As → 401（app.common.auth）。"""
-    return StaticService(session, ctx)
+    return StaticService(session, ctx, user)
 
 
 # 功能权限（api-index 权限表）：页面 key·view；
@@ -69,6 +117,7 @@ def get(path: str, func: str, **kw: Any) -> Any:
 Svc = Annotated[StaticService, Depends(_svc)]
 Kw = Annotated[str, Query()]
 Focus = Annotated[str | None, Query(alias="focusId")]
+DraftId = Annotated[str | None, Query(alias="crId", max_length=64, pattern=r"^[^\x00]+$")]
 
 
 def page_dep(default: int) -> Callable[..., PageParams]:
@@ -96,8 +145,8 @@ P22 = Annotated[PageParams, Depends(page_dep(22))]
 
 
 @get("/object-types", "object-types", response_model=RecPage)
-async def list_object_types(svc: Svc, p: P22, kw: Kw = "") -> Any:
-    return await svc.object_list(kw, p)
+async def list_object_types(svc: Svc, p: P10, kw: Kw = "", focus_id: Focus = None) -> Any:
+    return await svc.object_list(kw, p, focus_id)
 
 
 @get("/object-types/brief", "data-quality", response_model=list[Rec])
@@ -111,8 +160,8 @@ async def get_object_type(id: str, svc: Svc) -> Any:
 
 
 @get("/object-types/{id}/properties", "object-types", response_model=RecPage)
-async def object_properties(id: str, svc: Svc, p: P12, kw: Kw = "") -> Any:
-    return await svc.object_properties(id, kw, p)
+async def object_properties(id: str, svc: Svc, p: P10, kw: Kw = "", cr_id: DraftId = None) -> Any:
+    return await svc.object_properties(id, kw, p, cr_id)
 
 
 @get("/object-types/{id}/links", "object-types", response_model=list[Rec])
@@ -121,23 +170,37 @@ async def object_links(id: str, svc: Svc) -> Any:
 
 
 @get("/object-types/{id}/mappings", "object-types", response_model=RecPage)
-async def object_mappings(id: str, svc: Svc, p: P12) -> Any:
-    return await svc.object_mappings(id, p)
+async def object_mappings(id: str, svc: Svc, p: P10, cr_id: DraftId = None) -> Any:
+    return await svc.object_mappings(id, p, cr_id)
 
 
 @get("/object-types/{id}/usage", "object-types", response_model=RecPage)
 async def object_usage(
     id: str,
     svc: Svc,
-    p: P12,
+    p: P10,
     kind: Literal["metric", "view", "cr"],
     q: Kw = "",
     filter: Kw = "",
+    cr_id: DraftId = None,
+    affected_only: Annotated[bool, Query(alias="affectedOnly")] = False,
 ) -> Any:
-    return await svc.object_usage(id, kind, q, filter, p)
+    return await svc.object_usage(id, kind, q, filter, p, cr_id, affected_only)
 
 
 # ---------------------------------------------------------------- 总览（OntologyOverview.vue）
+
+
+@get("/ontology/overview", "ontology-overview")
+async def ontology_overview(svc: Svc, user: CurrentUserDep) -> Any:
+    return await overview(svc, user)
+
+
+@get("/ontology/todos", "ontology-overview")
+async def ontology_todos(
+    svc: Svc, user: CurrentUserDep, p: P8, kind: Literal["全部", "变更", "数据质量"] = "全部"
+) -> Any:
+    return await todos(svc, kind, p, user)
 
 
 @get("/ontology/graph", "ontology-overview")
@@ -152,7 +215,7 @@ async def ontology_graph(svc: Svc) -> Any:
 @get("/link-types", "link-types", response_model=RecPage)
 async def list_link_types(
     svc: Svc,
-    p: P18,
+    p: P10,
     q: Kw = "",
     src: Kw = "",
     st: Kw = "",
@@ -166,6 +229,13 @@ async def link_paths(
     svc: Svc, from_: Annotated[str | None, Query(alias="from")] = None, to: str | None = None
 ) -> Any:
     return await svc.link_paths(from_, to)
+
+
+@get("/link-types/catalog", "link-types")
+async def link_catalog(svc: Svc) -> Any:
+    from app.modules.static.read_pages import catalog
+
+    return await catalog(svc)
 
 
 @get("/link-types/{id}", "link-types", response_model=Rec)
@@ -183,12 +253,19 @@ async def link_usage(id: str, svc: Svc, p: P10) -> Any:
     return await svc.link_usage(id, p)
 
 
+@get("/link-types/{id}/history", "link-types", response_model=RecPage)
+async def link_history(id: str, svc: Svc, p: P10) -> Any:
+    from app.modules.static.read_pages import link_history
+
+    return await link_history(svc, id, p)
+
+
 # ---------------------------------------------------------------- 指标（Metrics.vue）
 
 
 @get("/metrics", "metrics", response_model=RecPage)
-async def list_metrics(svc: Svc, p: P18, kw: Kw = "", group: Kw = "") -> Any:
-    return await svc.metric_list(kw, group, p)
+async def list_metrics(svc: Svc, p: P10, kw: Kw = "", group: Kw = "", focus_id: Focus = None) -> Any:
+    return await svc.metric_list(kw, group, p, focus_id)
 
 
 @get("/metrics/{id}", "metrics", response_model=Rec)
@@ -206,13 +283,23 @@ async def metric_refs(id: str, svc: Svc, p: P10) -> Any:
     return await svc.metric_refs(id, p)
 
 
+@router.post("/metrics/{id}:rollback", dependencies=[Depends(require_func("metrics", "manage"))])
+async def metric_rollback(
+    id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[^\x00]+$")],
+    body: MetricRollbackIn,
+    session: SessionDep,
+    user: CurrentUserDep,
+) -> Any:
+    return await rollback_metric(session, user, id, body)
+
+
 # ---------------------------------------------------------------- 维度与码表（Dimensions.vue）
 
 
 @get("/dimensions", "dimensions", response_model=RecPage)
 async def list_dimensions(
     svc: Svc,
-    p: P18,
+    p: P10,
     q: Kw = "",
     kind: Kw = "all",
     group: Kw = "",
@@ -236,18 +323,20 @@ async def dimension_values(
     level: Kw = "",
     q: Kw = "",
     status: Kw = "",
+    cr_id: DraftId = None,
 ) -> Any:
-    return await svc.dim_values(id, level, q, status, p)
+    return await svc.dim_values(id, level, q, status, p, cr_id)
 
 
 @get("/dimensions/{id}/mappings", "dimensions", response_model=RecPage)
 async def dimension_mappings(
     id: str,
     svc: Svc,
-    p: P8,
+    p: P10,
     conflict: bool = False,
+    cr_id: DraftId = None,
 ) -> Any:
-    return await svc.dim_mappings(id, conflict, p)
+    return await svc.dim_mappings(id, conflict, p, cr_id)
 
 
 @get("/dimensions/{id}/usage", "dimensions", response_model=RecPage)
@@ -266,7 +355,7 @@ async def dimension_history(id: str, svc: Svc, p: P10) -> Any:
 @get("/knowledge", "glossary", response_model=RecPage)
 async def list_knowledge(
     svc: Svc,
-    p: P19,
+    p: P10,
     q: Kw = "",
     type: Kw = "",
     st: Kw = "",
@@ -276,8 +365,10 @@ async def list_knowledge(
 
 
 @get("/knowledge/synonym-conflicts", "glossary", response_model=SynonymConflicts)
-async def synonym_conflicts(svc: Svc) -> Any:
-    return await svc.synonym_conflicts()
+async def synonym_conflicts(svc: Svc, cr_id: DraftId = None) -> Any:
+    from app.modules.static.read_pages import synonym_conflicts
+
+    return await synonym_conflicts(svc, cr_id)
 
 
 @get("/knowledge/{id}", "glossary", response_model=Rec)
@@ -286,8 +377,13 @@ async def get_knowledge(id: str, svc: Svc) -> Any:
 
 
 @get("/knowledge/{id}/refs", "glossary", response_model=RecPage)
-async def knowledge_refs(id: str, svc: Svc, p: P8) -> Any:
+async def knowledge_refs(id: str, svc: Svc, p: P10) -> Any:
     return await svc.knowledge_refs(id, p)
+
+
+@get("/knowledge/{id}/history", "glossary", response_model=RecPage)
+async def knowledge_history(id: str, svc: Svc, p: P10) -> Any:
+    return await svc.knowledge_history(id, p)
 
 
 # ---------------------------------------------------------------- 整版发布 / 回滚
@@ -302,14 +398,17 @@ async def merge_check(session: SessionDep, _: CurrentUserDep) -> Any:
     return await PublishService(session).merge_check()
 
 
-@router.post("/releases", dependencies=_MANAGE, response_model=ReleaseOut, status_code=201)
+@router.post("/releases", dependencies=_MANAGE, response_model=PublishOut, status_code=201)
 async def publish(
     session: SessionDep, user: CurrentUserDep, body: Annotated[PublishIn, Body()] = PublishIn()
 ) -> Any:
     """整版发布：本体管理员。合并校验有阻断 → 409 MERGE_BLOCKED（details.rows）；
     没有已通过的单子 → 409 EMPTY_RELEASE。"""
-    ver = await PublishService(session).publish(user, body.note)
-    return ReleaseOut.model_validate(await ReleaseRepo(session).by_ver_or_404(ver))
+    service = PublishService(session)
+    ver = await service.publish(user, body.note, lock_version=body.lock_version)
+    result = PublishOut.model_validate(await ReleaseRepo(session).by_ver_or_404(ver))
+    result.skipped = service.skipped
+    return result
 
 
 @router.post("/releases/{ver}:rollback", dependencies=_MANAGE, response_model=ReleaseOut, status_code=201)
@@ -328,9 +427,11 @@ CRStatusQ = Literal["草稿", "审核中", "已通过", "已发布", "已驳回"
 @get("/change-requests", "releases")
 async def list_change_requests(
     session: SessionDep,
-    _: CurrentUserDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
     status: CRStatusQ | None = None,
     full: bool = False,
+    workflow: bool = False,
     kw: str = "",
     page: Annotated[int | None, Query()] = None,
     size: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
@@ -344,13 +445,21 @@ async def list_change_requests(
       （同 `Releases.vue:67`），越界页收到最后一页。
     - 都不带 → 返回整个数组（Releases.vue 真接口模式整表载入后本地筛选、分页，保持兼容）[推断]。
     不随 ?ver 变（变更单不进版本快照）[推断]。"""
-    rows = await ChangeRequestService(session).list(status=status, full=full)
-    if kw:
-        up = kw.upper()
-        rows = [r for r in rows if kw in r["title"] or up in r["id"]]
-    if page is None and size is None and focus is None:
-        return rows
-    return paginate(rows, PageParams(page=page or 1, size=size or 17), focus)
+    if workflow:
+        return await ChangeRequestService(session).workflow(status=status, kw=kw)
+    params = (
+        None
+        if page is None and size is None and focus is None
+        else PageParams(page=page or 1, size=size or 10)
+    )
+    return await ChangeRequestService(session).list(
+        status=status,
+        full=full,
+        kw=kw,
+        params=params,
+        focus_id=focus,
+        actor=(await resolve_user(session, ctx.preview_as)) if ctx.preview_as else user,
+    )
 
 
 @get("/change-requests/draft-targets", "releases")
@@ -360,15 +469,22 @@ async def draft_targets(session: SessionDep, _: CurrentUserDep, status: CRStatus
 
 
 @get("/change-requests/{id}", "releases")
-async def get_change_request(id: str, session: SessionDep, _: CurrentUserDep) -> Any:
+async def get_change_request(
+    id: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    include_diffs: Annotated[bool, Query(alias="includeDiffs")] = True,
+) -> Any:
     """一行 + detail（CRDetail 整份）+ events。"""
-    return await ChangeRequestService(session).detail(id)
+    actor = await resolve_user(session, ctx.preview_as) if ctx.preview_as else user
+    return await ChangeRequestService(session).detail(id, actor, include_diffs=include_diffs)
 
 
 async def _move(id: str, action: str, session: Any, user: Any, reason: str | None = None) -> Any:
     svc = ChangeRequestService(session)
     await svc.transition(id, action, user, reason)
-    return await svc.detail(id)
+    return await svc.detail(id, user)
 
 
 @router.post("/change-requests/{id}:submit", dependencies=_CR_VIEW)
@@ -420,8 +536,8 @@ from app.modules.static.explorer import ExplorerService, parse_filters  # noqa: 
 
 
 @get("/object-types/{id}/meta", "object-types", response_model=Rec)
-async def object_explorer_meta(id: str, session: SessionDep, _: CurrentUserDep) -> Any:
-    return await ExplorerService(session).meta(id)
+async def object_explorer_meta(id: str, session: SessionDep, _: CurrentUserDep, ctx: ViewContextDep) -> Any:
+    return await ExplorerService(session).meta(id, ctx.ver)
 
 
 @get("/object-types/{id}/facets", "object-types", response_model=list[Rec])
@@ -432,21 +548,26 @@ async def object_facets(
 
 
 # ---------------------------------------------------------------- 变更单写接口（handoff 写接口契约）
-# 目标通用 kind + 业务编码；权限先挂 releases:manage（require_func 桩，PDE 接权限时改成目标页:manage）。
+# 目标写权限在服务层按 kind 校验；返回完整单头/内容的接口还需 releases:view。
 
 
 @router.post("/change-requests", dependencies=_CR_VIEW, status_code=201)
 async def create_change_request(session: SessionDep, user: CurrentUserDep, body: CRCreateIn) -> Any:
     """发起变更：新建草稿单（owner = 当前用户），可同时登记第一个目标。返回详情。"""
     code = await CrWriteService(session).create(user, body)
-    return await ChangeRequestService(session).detail(code)
+    return await ChangeRequestService(session).detail(code, user)
 
 
 @router.patch("/change-requests/{id}", dependencies=_CR_VIEW)
 async def patch_change_request(id: str, session: SessionDep, user: CurrentUserDep, body: CRPatchIn) -> Any:
     """改单头（标题 / 原因 / 审核人 / 级别 / 迁移方式），草稿才能改。"""
     await CrWriteService(session).patch(id, body, user)
-    return await ChangeRequestService(session).detail(id)
+    return await ChangeRequestService(session).detail(id, user)
+
+
+@get("/change-requests/{id}/reviewer-options", "releases")
+async def change_request_reviewer_options(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
+    return await CrWriteService(session).reviewer_options(id, user)
 
 
 @router.post("/change-requests/{id}/targets", dependencies=_CR_VIEW)
@@ -455,10 +576,26 @@ async def add_change_request_target(
 ) -> Any:
     """加入已有变更单（幂等）。"""
     await CrWriteService(session).add_target(id, user, body)
-    return await ChangeRequestService(session).detail(id)
+    return await ChangeRequestService(session).detail(id, user)
 
 
-@router.delete("/change-requests/{id}/targets/{kind}/{target_id}", dependencies=_CR_VIEW, status_code=204)
+@router.post("/change-requests/{id}/targets:allocate", dependencies=_CR_VIEW, status_code=201)
+async def allocate_change_request_target(
+    id: str, session: SessionDep, user: CurrentUserDep, body: AllocateTargetIn
+) -> Any:
+    target = await CrWriteService(session).allocate_target(id, user, body.kind, body.name)
+    return {
+        "id": id,
+        "target": {
+            "kind": target.target_kind,
+            "id": target.target_id,
+            "isNew": True,
+            "name": target.target_name,
+        },
+    }
+
+
+@router.delete("/change-requests/{id}/targets/{kind}/{target_id}", status_code=204)
 async def discard_change_request_target(
     id: str, kind: TargetKind, target_id: str, session: SessionDep, user: CurrentUserDep
 ) -> None:
@@ -466,7 +603,7 @@ async def discard_change_request_target(
     await CrWriteService(session).discard_target(id, kind, target_id, user)
 
 
-@router.put("/change-requests/{id}/items", dependencies=_CR_VIEW, response_model=ItemsPutOut)
+@router.put("/change-requests/{id}/items", response_model=ItemsPutOut)
 async def put_change_request_items(
     id: str, session: SessionDep, user: CurrentUserDep, body: ItemsPutIn
 ) -> Any:
@@ -496,5 +633,4 @@ async def validate_change_request(id: str, session: SessionDep, user: CurrentUse
 @get("/change-requests/{id}/diffs", "releases")
 async def change_request_diffs(id: str, session: SessionDep, _: CurrentUserDep, p: P10) -> Any:
     """改动列表（种子改动 + 草稿行），每页 10（Releases.vue:83）。"""
-    d = await ChangeRequestService(session).detail(id)
-    return paginate(d["detail"].get("diffs") or [], p, key="key")
+    return await ChangeRequestService(session).diffs(id, p)

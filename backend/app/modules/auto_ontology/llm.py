@@ -1,7 +1,7 @@
 """大模型润色：qwen-flash（百炼 DashScope OpenAI 兼容接口），写法同 app/modules/qa/llm.py。
 
-- key 只读环境变量 DASHSCOPE_API_KEY（不打印、不入库）；模型 AUTO_ONTOLOGY_LLM_MODEL（默认 qwen-flash），
-  AUTO_ONTOLOGY_LLM_BASE_URL、AUTO_ONTOLOGY_LLM_TIMEOUT_S 也走环境变量。
+- key 从环境变量或本地 .env 的 DASHSCOPE_API_KEY 读取（不打印、不入库），环境空串可显式禁用。
+  AUTO_ONTOLOGY_LLM_MODEL、AUTO_ONTOLOGY_LLM_BASE_URL、AUTO_ONTOLOGY_LLM_TIMEOUT_S 同样支持 .env。
 - 没配 key：get_llm() 返回 None，生成走规则结果（不报 503：规则结果本身就是可审核的草稿）。
 - 大模型只能改「显示名 / 分组 / 说明 / 反向名」；返回里的未知 id、结构字段一律忽略
   （主键、类型、外键、基数以内省为准，同 NVIDIA auto-ontology 的「结构确定、描述交给模型」）。
@@ -15,6 +15,8 @@ import re
 from typing import Any, Protocol
 
 import httpx
+
+from app.core.config import get_settings
 
 DEFAULT_MODEL = "qwen-flash"
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -80,14 +82,16 @@ class FakeLLM:
 
 
 def get_llm() -> LLMClient | None:
-    key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    settings = get_settings()
+    file_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
+    key = os.environ.get("DASHSCOPE_API_KEY", file_key).strip()
     if not key:
         return None
     return DashScopeLLM(
         key,
-        os.environ.get("AUTO_ONTOLOGY_LLM_MODEL") or DEFAULT_MODEL,
-        os.environ.get("AUTO_ONTOLOGY_LLM_BASE_URL") or DEFAULT_BASE_URL,
-        float(os.environ.get("AUTO_ONTOLOGY_LLM_TIMEOUT_S") or 60),
+        os.environ.get("AUTO_ONTOLOGY_LLM_MODEL") or settings.auto_llm_model or DEFAULT_MODEL,
+        os.environ.get("AUTO_ONTOLOGY_LLM_BASE_URL") or settings.auto_llm_base_url or DEFAULT_BASE_URL,
+        float(os.environ.get("AUTO_ONTOLOGY_LLM_TIMEOUT_S") or settings.auto_llm_timeout_s or 60),
     )
 
 

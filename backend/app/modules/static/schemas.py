@@ -7,10 +7,11 @@
 
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 
 from app.common.pagination import Page
 from app.core.schema import ApiModel
+from app.modules.versioning.schemas import ReleaseOut
 
 Rec = dict[str, Any]
 
@@ -34,11 +35,14 @@ class SynonymConflicts(ApiModel):
 
 
 class PublishIn(ApiModel):
-    """POST /releases：mock 发布不填说明 → note 可省 [推断]；lockVersion 先收下不校验（发布串行由版本层的
-    事务锁保证）[推断]。"""
+    """lockVersion 为 /releases/current 返回的当前发布头令牌；省略兼容旧客户端。"""
 
     note: str | None = None
-    lock_version: int | None = None
+    lock_version: int | None = Field(None, ge=0)
+
+
+class PublishOut(ReleaseOut):
+    skipped: list[str] = Field(default_factory=list)
 
 
 class RollbackIn(ApiModel):
@@ -58,7 +62,9 @@ class RejectIn(ApiModel):
 
 # ---------------------------------------------------------------- 变更单写接口（handoff 写接口契约）
 
-TargetKind = Literal["object", "link", "metric", "dimension", "knowledge", "action", "event", "rule"]
+TargetKind = Literal[
+    "object", "link", "metric", "dimension", "knowledge", "action", "event", "rule", "function", "quality"
+]
 ItemOp = Literal["add", "update", "delete"]
 
 
@@ -69,6 +75,23 @@ class TargetIn(ApiModel):
     id: str = Field(min_length=1, max_length=64)
     is_new: bool = False
     name: str | None = Field(None, max_length=128)
+
+
+class AllocateTargetIn(ApiModel):
+    kind: Literal["link", "knowledge"]
+    name: str | None = Field(None, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def pg_text(cls, value: str | None) -> str | None:
+        if value is not None:
+            if "\x00" in value:
+                raise ValueError("名称不能包含 NUL 字符")
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as error:
+                raise ValueError("名称包含无效 Unicode 字符") from error
+        return value
 
 
 class CRCreateIn(ApiModel):
@@ -97,6 +120,26 @@ class ItemIn(ApiModel):
     field: str | None = Field(None, max_length=128)
     before_text: str | None = None
     after_text: str | None = None
+
+    @field_validator("before", "after")
+    @classmethod
+    def jsonb_text(cls, value: Any) -> Any:
+        pending = [value]
+        while pending:
+            item = pending.pop()
+            if isinstance(item, str):
+                if "\x00" in item:
+                    raise ValueError("变更内容不能包含空字符")
+                try:
+                    item.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise ValueError("变更内容含无效 Unicode 字符") from None
+            elif isinstance(item, dict):
+                pending.extend(item.keys())
+                pending.extend(item.values())
+            elif isinstance(item, list):
+                pending.extend(item)
+        return value
 
 
 class ItemsPutIn(ApiModel):

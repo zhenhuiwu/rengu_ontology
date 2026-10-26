@@ -6,7 +6,8 @@ import pytest
 
 from app.core.schema import _tz
 from app.modules.qa.pages_api import next_run
-from app.seeds.loader import run_seeds
+from tests.function_access_support import grant_fixture_roles
+from tests.qa_access_support import seed_qa_access
 
 B = "/api/qa/v1"
 CHEN = {"X-Demo-As": "U010763"}  # 陈杰：P001 可编辑成员
@@ -15,7 +16,8 @@ LIU = {"X-Demo-As": "U010004"}  # 刘婷：P004 可查看成员
 
 @pytest.fixture
 async def qa(users, client):
-    await run_seeds(users, ["qa"])
+    await seed_qa_access(users)
+    await grant_fixture_roles(users, {"U010004": "R-05"})
     await users.flush()
     return client
 
@@ -25,8 +27,9 @@ async def test_create_blank_page_defaults(qa):
     assert r.status_code == 201, r.text
     p = r.json()
     assert p["id"] == "P906" and p["name"] == "华东复购分析" and p["sourceKind"] == "手动新建"
-    assert p["cards"] == [] and p["status"] == "正常" and p["dataAsOf"] == "2026-10-24 23:00"
-    assert p["refresh"] == {"freq": "每天", "time": "08:00", "onFail": "保留上次结果"}
+    assert p["cards"] == [] and p["status"] == "正常"
+    assert p.get("dataAsOf") is None and p.get("lastRefresh") is None
+    assert p["refresh"] == {"freq": "手动", "time": "--", "onFail": "保留上次结果"}
     assert p["share"] == {"mode": "仅自己", "members": [], "link": False, "allowExport": True}
     assert p["sub"]["on"] is False and p["sub"]["channel"] == "邮件"
     first = (await qa.get(f"{B}/pages")).json()["items"][0]
@@ -45,14 +48,12 @@ async def test_create_from_template(qa):
             "refresh": {"freq": "每周", "weekday": "周一", "time": "08:00"},
         },
     }
+    before = (await qa.get(f"{B}/pages")).json()["total"]
+    template = (await qa.get(f"{B}/templates/T001")).json()
     r = await qa.post(f"{B}/pages", json=body)
-    assert r.status_code == 201, r.text
-    p = r.json()
-    assert p["sourceKind"] == "模板" and p["source"] == "模板「大区经营周报」· 不含税"
-    assert [c["key"] for c in p["cards"]] == [f"{p['id']}-C{i}" for i in range(1, 5)]
-    assert p["status"] == "口径待更新" and p["statusNote"]
-    assert p["refresh"] == {"freq": "每周", "time": "08:00", "weekday": "周一", "onFail": "保留上次结果"}
-    assert (await qa.get(f"{B}/templates/T001")).json()["uses"] >= 1
+    assert r.status_code == 503 and r.json()["code"] == "PAGE_EXECUTION_UNAVAILABLE"
+    assert (await qa.get(f"{B}/pages")).json()["total"] == before
+    assert (await qa.get(f"{B}/templates/T001")).json()["uses"] == template["uses"]
     assert (await qa.post(f"{B}/pages", json={"name": "x", "template": {"id": "T999"}})).status_code == 404
 
 
@@ -83,32 +84,55 @@ async def test_delete_page(qa):
     assert (await qa.get(f"{B}/pages/P004", headers=LIU)).status_code == 404
 
 
-async def test_refresh_recovers_failed(qa):
-    r = await qa.post(f"{B}/pages/P005:refresh")
-    assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["dataAsOf"] == "2026-10-24 23:00" and d["status"] in ("正常", "口径待更新") and d["lastRefresh"]
-    assert (await qa.get(f"{B}/pages/P005")).json()["status"] == d["status"]
+async def test_refresh_unavailable_preserves_snapshot(qa):
+    before = (await qa.get(f"{B}/pages/P005")).json()
+    response = await qa.post(f"{B}/pages/P005:refresh")
+    assert response.status_code == 503 and response.json()["code"] == "PAGE_EXECUTION_UNAVAILABLE"
+    after = (await qa.get(f"{B}/pages/P005")).json()
+    for key in ("dataAsOf", "lastRefresh", "status", "statusNote", "cards"):
+        assert after.get(key) == before.get(key)
 
 
-async def test_pin_card_from_turn(qa):
-    r = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-04", "title": "复购客户销售额（按省份）"})
-    assert r.status_code == 201, r.text
-    c = r.json()["cards"][-1]
-    assert c["key"] == "P002-C8" and c["viz"] == "柱状图" and c["metric"] == "复购客户销售额（不含税）"
-    assert c["version"] == "v3" and len(c["labels"]) == len(c["series"]) == 7
-    r = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-01", "title": "重点门店销售额"})
-    c = r.json()["cards"][-1]
-    assert (
-        c["viz"] == "表格"
-        and c["metric"] == "门店销售额（含税）"
-        and c["version"] == "v2"
-        and len(c["rows"]) == 5
+async def test_pin_card_from_saved_result(qa, users):
+    from sqlalchemy import func, select
+
+    from app.modules.qa.models import QaTurn, TurnKind
+
+    source = await users.scalar(select(QaTurn).where(QaTurn.code == "T-01"))
+    seq = await users.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == source.session_id))
+    users.add(
+        QaTurn(
+            code="T-DB-TABLE",
+            session_id=source.session_id,
+            seq=seq + 1,
+            kind=TurnKind.answer,
+            question="数据库已保存结果",
+            snapshot={
+                "answer": {
+                    "card": "table",
+                    "metric": "已保存金额 v7",
+                    "table": {
+                        "columns": [
+                            {"key": "store", "title": "门店"},
+                            {"key": "amount", "title": "金额", "align": "right"},
+                        ],
+                        "items": [{"store": "真实结果", "amount": 23}],
+                    },
+                }
+            },
+        )
     )
-    bad = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-02", "title": "x"})
-    assert bad.status_code == 422 and bad.json()["code"] == "TURN_NOT_PINNABLE"
+    await users.flush()
+    response = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-DB-TABLE", "title": "已保存结果"})
+    assert response.status_code == 201, response.text
+    card = response.json()["cards"][-1]
+    assert card["viz"] == "表格" and card["rows"] == [["真实结果", "23"]]
+    assert card["metric"] == "已保存金额" and card["version"] == "v7"
+    for turn in ("T-04", "T-01", "T-02"):
+        bad = await qa.post(f"{B}/pages/P002/cards", json={"turnId": turn, "title": "x"})
+        assert bad.status_code == 422 and bad.json()["code"] == "TURN_NOT_PINNABLE"
     assert (await qa.post(f"{B}/pages/P002/cards", json={"turnId": "NOPE", "title": "x"})).status_code == 404
-    blank = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-04", "title": "   "})
+    blank = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-DB-TABLE", "title": "   "})
     assert blank.status_code == 409 and blank.json()["code"] == "EMPTY_INPUT"
 
 

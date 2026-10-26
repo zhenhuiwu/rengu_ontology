@@ -8,14 +8,14 @@ from collections.abc import Callable
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.common.audit import audit
 from app.common.auth import CurrentUserDep, require_func
-from app.common.context import ViewContextDep, readonly_extra
+from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
 from app.core.errors import AppError, DuplicateKey, EmptyInput, ExportForbidden, NotFound
@@ -89,6 +89,7 @@ from app.modules.qa.schemas import (
     VoteIn,
     VoteOut,
 )
+from app.modules.versioning.service import VersioningService
 
 router = APIRouter(tags=["qa"])
 
@@ -187,8 +188,8 @@ async def _own_session(session, pk: int, sid: str) -> QaSession:
     return s
 
 
-async def _caliber(session: AsyncSession, label: str | None) -> str | None:
-    return svc.check_caliber(label, await svc.variant_index(session))
+async def _caliber(session: AsyncSession, label: str | None, ver: str | None = None) -> str | None:
+    return svc.check_caliber(label, await svc.variant_index(session, ver))
 
 
 @router.post(
@@ -198,6 +199,7 @@ async def create_session(
     body: SessionCreateIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
     pk, _ = await svc.effective_user(session, user, ctx)
+    await get_adapter(session).xact_lock(session, "qa.session.code")
     codes = (await session.scalars(select(QaSession.code).where(QaSession.code.startswith("S")))).all()
     nums = [int(c[1:]) for c in codes if c[1:].isdigit()]
     s = QaSession(
@@ -205,7 +207,7 @@ async def create_session(
         owner_id=pk,
         title="新会话",  # 同 useQaSession.newSession；第一问后改成问题前 20 字（W6）
         scope=body.scope,
-        caliber=await _caliber(session, body.caliber),
+        caliber=await _caliber(session, body.caliber, ctx.ver),
         last_at=clock.now(),
     )
     session.add(s)
@@ -220,11 +222,14 @@ async def patch_session(
     sid: str, body: SessionPatchIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
     pk, _ = await svc.effective_user(session, user, ctx)
+    await get_adapter(session).xact_lock(session, f"qa.session.turn.{sid}")
     s = await _own_session(session, pk, sid)
     if body.title is not None and body.title.strip():
         s.title = body.title.strip()  # 同 QaSessionPanel.saveRename：trim 后为空不改
     scope = body.scope if body.scope is not None else s.scope
-    caliber = await _caliber(session, body.caliber) if "caliber" in body.model_fields_set else s.caliber
+    caliber = (
+        await _caliber(session, body.caliber, ctx.ver) if "caliber" in body.model_fields_set else s.caliber
+    )
     if scope != s.scope or caliber != s.caliber:
         s.scope, s.caliber = scope, caliber
         seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
@@ -276,12 +281,21 @@ async def ask(
         raise NotFound("会话不存在", details={"id": sid})
     question = body.question.strip()
     try:
-        lines = svc.caliber_lines(s.caliber, await svc.variant_index(session)) if s.caliber else []
+        lines = svc.caliber_lines(s.caliber, await svc.variant_index(session, ctx.ver)) if s.caliber else []
         kind, snapshot, rows, elapsed, sql = await chain.answer(
             session, conn, llm, user, question, caliber_lines=lines
         )
     except DBAPIError as e:  # 生成的 SQL 过了网关但执行出错（列不存在、超时等）：不落轮次，前端提示换个问法
         raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
+    await get_adapter(session).xact_lock(session, f"qa.session.turn.{sid}")
+    # 等锁期间会话可能被更新或删除，不能沿用调用 LLM 前的 lock_version。
+    s = await session.scalar(
+        select(QaSession)
+        .where(QaSession.code == sid, QaSession.owner_id == pk)
+        .execution_options(populate_existing=True)
+    )
+    if s is None:
+        raise NotFound("会话不存在", details={"id": sid})
     seq = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
     now = clock.now()
     turn = QaTurn(
@@ -356,6 +370,10 @@ class TurnNotApplicable(AppError):
     status_code, code, message = 422, "VALIDATION_FAILED", "这一轮不支持该操作"
 
 
+class TurnNoResult(AppError):
+    status_code, code, message = 422, "TURN_NO_RESULT", "这一轮没有已保存的结果表"
+
+
 def _answer(t: QaTurn) -> dict:
     a = (t.snapshot or {}).get("answer")
     return a if isinstance(a, dict) else {}
@@ -380,6 +398,7 @@ async def recalc_turn(
 @router.put("/turns/{tid}/vote", dependencies=_WB, response_model=VoteOut, summary="W12 赞踩")
 async def vote_turn(tid: str, body: VoteIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
     pk, u = await svc.effective_user(session, user, ctx)
+    await get_adapter(session).xact_lock(session, f"qa.turn.vote.{tid}")
     t = await _own_turn(session, pk, tid)
     if t.kind != TurnKind.answer:
         raise TurnNotApplicable(details={"id": tid, "reason": "只有回答能赞踩"})
@@ -393,6 +412,7 @@ async def vote_turn(tid: str, body: VoteIn, session: SessionDep, user: CurrentUs
         ).all():
             await session.delete(f)
     if new == "down" and old != "down":
+        await get_adapter(session).xact_lock(session, "qa.feedback.code")
         codes = (await session.scalars(select(QaFeedback.code))).all()
         nums = [int(c[3:]) for c in codes if c.startswith("FB-") and c[3:].isdigit()]
         a = _answer(t)
@@ -426,7 +446,7 @@ async def turn_result(tid: str, session: SessionDep, user: CurrentUserDep, ctx: 
     t = await _own_turn(session, pk, tid)
     res = svc.turn_result(t)
     if res is None:
-        raise TurnNotApplicable(details={"id": tid, "reason": "这一轮没有结果表"})
+        raise TurnNoResult(details={"id": tid})
     cols, rows, summary = res
     c = p.clamp(len(rows))
     return TurnResultOut.of(rows[c.offset : c.offset + c.size], len(rows), p, columns=cols, summary=summary)
@@ -449,7 +469,7 @@ async def export_turn(
     t = await _own_turn(session, pk, tid)
     res = svc.turn_result(t)
     if res is None:
-        raise TurnNotApplicable(details={"id": tid, "reason": "这一轮没有结果表"})
+        raise TurnNoResult(details={"id": tid})
     cols, rows, _ = res
     base = (_answer(t).get("exportFile") or f"{t.code}.xlsx").rsplit(".", 1)[0]
     if format == "csv":
@@ -472,12 +492,11 @@ async def export_turn(
     status_code=201,
     response_model=PermRequestOut,
     summary="W16 申请数据权限",
-    openapi_extra=readonly_extra("history", "preview"),  # 只读白名单（1.1）
 )
 async def create_permission_request(
     body: PermRequestIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
-    # [推断] 申请人记有效用户（预览时 = 被预览人，跟轮次归属一致）；第 12 节 #4 待定
+    # 历史/预览由全局只读守卫拒绝；来源只接受申请人自己会话内的轮次。
     pk, _ = await svc.effective_user(session, user, ctx)
     turn_pk = None
     if body.source_turn_id:
@@ -489,6 +508,7 @@ async def create_permission_request(
         if t is None:
             raise NotFound("轮次不存在", details={"id": body.source_turn_id})
         turn_pk = t.id
+    await get_adapter(session).xact_lock(session, "qa.permission_request.code")
     codes = (await session.scalars(select(QaPermissionRequest.code))).all()
     nums = [int(c[2:]) for c in codes if c.startswith("AP") and c[2:].isdigit()]
     req = QaPermissionRequest(
@@ -499,7 +519,7 @@ async def create_permission_request(
         reason=body.reason.strip(),
         duration_days=body.duration,
         source_turn_id=turn_pk,
-        approver=catalog.load("QA_APPLY").get("approver"),  # [推断] 第一期固定路由给 QA_APPLY.approver
+        approver=None,  # 尚未配置审批路由，持久化待审批申请并等待实际分配。
         status=PermRequestStatus.pending,
     )
     session.add(req)
@@ -510,13 +530,18 @@ async def create_permission_request(
 @router.get(
     "/session-options", dependencies=_WB, response_model=SessionOptionsOut, summary="W17 范围 / 口径下拉"
 )
-async def session_options(session: SessionDep, user: CurrentUserDep):
+async def session_options(session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    metrics, _ = await catalog.directory(session, ctx.ver)
     repo = r.OptionRepo(session)
     opts = lambda rows: [OptionOut(value=o.option_value, label=o.label) for o in rows]  # noqa: E731
     return SessionOptionsOut(
         scopes=opts(await repo.by_kind("scope")),
         calibers=opts(await repo.by_kind("caliber")),
-        metric={k: MetricRefOut(**v) for k, v in catalog.load("QA_METRIC").items()},
+        metric={
+            variant: MetricRefOut(id=m["code"], name=m["name"], version=m["version"])
+            for variant, key in (("ex", "repeat"), ("in", "repeat_tax"))
+            if (m := catalog.metric_of(metrics, key)) is not None
+        },
     )
 
 
@@ -626,9 +651,17 @@ async def object_types(session: SessionDep, user: CurrentUserDep, ctx: ViewConte
 
 @tuning.get("/summary", response_model=TuningSummaryOut, summary="T1 调优页签计数")
 async def tuning_summary(session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    versions = VersioningService()
+    if ctx.ver:
+        release = await versions.get_release(session, ctx.ver)
+        if release is None:
+            raise NotFound("本体版本不存在", details={"ver": ctx.ver})
+        version = release.ver
+    else:
+        version = await versions.current_version(session)
     return TuningSummaryOut(
-        version=ctx.ver or catalog.load("CUR_VERSION"),
-        data_as_of=catalog.load("TUNING_CUTOFF"),  # [推断] 跟前端 TUNING_CUTOFF 一致（文档写 now()）
+        version=version or "",
+        data_as_of="",  # 题库/反馈等表没有统一业务截止时间，不能冒充数据源水位。
         recert_count=await r.CertRepo(session).count_status(CertStatus.recert),
         open_feedback=await r.FeedbackRepo(session).count_open(),
         uncert_freq=await r.FreqRepo(session).count_uncert(),
@@ -637,14 +670,12 @@ async def tuning_summary(session: SessionDep, user: CurrentUserDep, ctx: ViewCon
 
 
 @tuning.get("/plan-options", response_model=PlanOptionsOut, response_model_exclude_none=True, summary="T2")
-async def plan_options(user: CurrentUserDep):
+async def plan_options(session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    metrics, dims = await catalog.directory(session, ctx.ver)
     return PlanOptionsOut(
-        metrics=[
-            TMetricOut(key=m["key"], name=m["name"], version=m["version"], cr=m.get("cr"))
-            for m in catalog.t_metrics().values()
-        ],
-        dims=catalog.load("TUNING_DIMS"),
-        times=catalog.load("TUNING_TIMES"),
+        metrics=[TMetricOut(**m) for m in metrics.values()],
+        dims=dims,
+        times=catalog.TIMES,
     )
 
 
@@ -652,28 +683,28 @@ async def plan_options(user: CurrentUserDep):
 async def list_certs(
     session: SessionDep,
     user: CurrentUserDep,
+    ctx: ViewContextDep,
     p: P15,
     kw: str | None = None,
     status: CertStatus | None = None,
     metric: str | None = None,
 ):
+    metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
     repo = r.CertRepo(session)
-    rows, total = await repo.list_page(repo.list_query(_kw(kw), status, metric), p)
-    return Page.of([svc.cert_out(c) for c in rows], total, p)
+    rows, total = await repo.list_page(
+        repo.list_query(_kw(kw), status, catalog.metric_key(metric) if metric else None), p
+    )
+    return Page.of([svc.cert_out(c, metrics) for c in rows], total, p)
 
 
 @tuning.get("/certs/{cid}", response_model=CertOut, response_model_exclude_none=True, summary="T4")
-async def get_cert(cid: str, session: SessionDep, user: CurrentUserDep):
-    return svc.cert_out(await r.CertRepo(session).get_by_code_or_404(cid))
+async def get_cert(cid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
+    return svc.cert_out(await r.CertRepo(session).get_by_code_or_404(cid), metrics)
 
 
-def _pending_crs() -> set[str]:
-    # T_METRICS 里的 cr 就是影响该指标、还没发布的变更单（同 T2）
-    return {m["cr"] for m in catalog.t_metrics().values() if m.get("cr")}
-
-
-def _metric_of(key: str) -> dict:
-    m = catalog.t_metrics().get(key)
+def _metric_of(key: str | None, metrics: catalog.Metrics) -> dict:
+    m = catalog.metric_of(metrics, key)
     if m is None:
         raise CertBadPlan(details={"metric": key})
     return m
@@ -683,18 +714,22 @@ class CertBadPlan(AppError):
     status_code, code, message = 422, "VALIDATION_FAILED", "语义计划里的指标不存在"
 
 
-async def _new_cert(session, question: str, plan: dict, source: str, **kw) -> QaCert:
+async def _new_cert(
+    session, question: str, plan: dict, source: str, metrics: catalog.Metrics, **kw
+) -> QaCert:
+    await get_adapter(session).xact_lock(session, "qa.cert.code")
     if await session.scalar(select(QaCert.id).where(func.lower(QaCert.question) == question.lower())):
         raise DuplicateKey(f"已有认证问答「{question}」", details={"question": question})
-    m = _metric_of(plan["metric"])
+    m = _metric_of(plan["metric"], metrics)
+    plan = {**plan, "metric": m["key"]}
     codes = (await session.scalars(select(QaCert.code))).all()
     nums = [int(c[3:]) for c in codes if c.startswith("CQ-") and c[3:].isdigit()]
     c = QaCert(
         code=f"CQ-{(max(nums) if nums else 0) + 1:03d}",  # 同前端 addCert：CQ-最大号+1
         question=question,
         sem_plan=plan,
-        metric_code=catalog.metric_code_of_key(plan["metric"]),
-        metric_version=int(m["version"].lstrip("v") or 0),
+        metric_code=m["code"],
+        metric_version=catalog.version_int(m["version"]),
         source=source,
         variants=[],
         **kw,
@@ -714,17 +749,19 @@ _CERT = {"response_model": CertOut, "response_model_exclude_none": True}
 
 @tuning.post("/certs", status_code=201, **_CERT, summary="T5 新建认证问答")
 async def create_cert(body: CertCreateIn, session: SessionDep, user: CurrentUserDep):
+    metrics, _ = await catalog.directory(session)
     q = body.question.strip()
     if not q:
         raise EmptyInput("问题不能为空")
     plan = body.plan.model_dump(exclude_none=True)
-    m = _metric_of(plan["metric"])
-    cr = m.get("cr") if m.get("cr") in _pending_crs() else None
+    m = _metric_of(plan["metric"], metrics)
+    cr = m.get("cr")
     c = await _new_cert(
         session,
         q,
         plan,
         "手动新建",
+        metrics,
         status=CertStatus.pending,  # 新建只登记，复核后点「认证」才生效
         cr_code=cr,
         note=f"{m['name']}受 {cr} 影响（未发布），认证后发布还需按新口径重新认证"
@@ -732,12 +769,14 @@ async def create_cert(body: CertCreateIn, session: SessionDep, user: CurrentUser
         else "新建问答，复核语义计划后点“认证”",
     )
     await audit(session, user, action="qa.cert.create", target=c.code)
-    return svc.cert_out(c)
+    return svc.cert_out(c, metrics)
 
 
-def _certify(c: QaCert, name: str) -> None:
-    m = catalog.t_metrics().get(c.sem_plan.get("metric"), {})
-    pending = c.cr_code if c.cr_code in _pending_crs() else None
+def _certify(c: QaCert, name: str, metrics: catalog.Metrics) -> None:
+    m = _metric_of(c.sem_plan.get("metric"), metrics)
+    pending = m.get("cr")
+    c.metric_code, c.metric_version = m["code"], catalog.version_int(m["version"])
+    c.cr_code = pending
     c.certifier, c.certified_at = name, clock.now()
     if pending:
         c.status = CertStatus.recert
@@ -748,14 +787,15 @@ def _certify(c: QaCert, name: str) -> None:
 
 @tuning.post("/certs/{cid}:certify", **_CERT, summary="T6 认证")
 async def certify_cert(cid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    metrics, _ = await catalog.directory(session)
     _, u = await svc.effective_user(session, user, ctx)
     c = await r.CertRepo(session).get_by_code_or_404(cid)
     if c.status not in (CertStatus.pending, CertStatus.recert):
         raise StateInvalid(details={"id": cid, "status": c.status.value})
-    _certify(c, u.name)
+    _certify(c, u.name, metrics)
     await session.flush()
     await audit(session, user, action="qa.cert.certify", target=c.code)
-    return svc.cert_out(c)
+    return svc.cert_out(c, metrics)
 
 
 @tuning.patch("/certs/{cid}", **_CERT, summary="T7 停用 / 启用")
@@ -765,7 +805,7 @@ async def toggle_cert(cid: str, body: CertToggleIn, session: SessionDep, user: C
     c.status = CertStatus.certified if body.enabled else CertStatus.disabled
     await session.flush()
     await audit(session, user, action="qa.cert.toggle", target=c.code, detail={"enabled": body.enabled})
-    return svc.cert_out(c)
+    return svc.cert_out(c, (await catalog.directory(session))[0])
 
 
 @tuning.put("/certs/{cid}/variants", **_CERT, summary="T8 同问法")
@@ -796,7 +836,7 @@ async def put_variants(cid: str, body: CertVariantsIn, session: SessionDep, user
     await session.flush()
     await session.refresh(c, ["variants"])
     await audit(session, user, action="qa.cert.variants", target=c.code)
-    return svc.cert_out(c)
+    return svc.cert_out(c, (await catalog.directory(session))[0])
 
 
 @tuning.get(
@@ -818,9 +858,9 @@ async def list_runs(session: SessionDep, user: CurrentUserDep, p: P15, trigger: 
     response_model_exclude_none=True,
     summary="T10",
 )
-async def get_run(rid: str, session: SessionDep, user: CurrentUserDep, p: P12):
+async def get_run(rid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep, p: P12):
     x = await r.EvalRunRepo(session).get_by_code_or_404(rid)
-    return await svc.run_detail(session, x, p)
+    return await svc.run_detail(session, x, p, ctx.ver)
 
 
 @tuning.get(
@@ -832,16 +872,18 @@ async def get_run(rid: str, session: SessionDep, user: CurrentUserDep, p: P12):
 async def list_eval_questions(
     session: SessionDep,
     user: CurrentUserDep,
+    ctx: ViewContextDep,
     p: P15,
     group: str | None = None,
     last: EvalLast | None = None,  # type: ignore[valid-type]
     kw: str | None = None,
 ):
+    metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
     repo = r.EvalQuestionRepo(session)
     rows, total = await repo.list_page(repo.list_query(group, last, _kw(kw)), p)
     counts = await repo.group_counts()
-    groups = [GroupCountOut(group=g, n=counts.get(g, 0)) for g in catalog.load("EVAL_GROUPS")]
-    return EvalQListOut.of([svc.eval_q_out(q) for q in rows], total, p, group_counts=groups)
+    groups = [GroupCountOut(group=g, n=n) for g, n in counts.items()]
+    return EvalQListOut.of([svc.eval_q_out(q, metrics) for q in rows], total, p, group_counts=groups)
 
 
 @tuning.get(
@@ -853,15 +895,17 @@ async def list_eval_questions(
 async def list_feedbacks(
     session: SessionDep,
     user: CurrentUserDep,
+    ctx: ViewContextDep,
     p: P15,
     kw: str | None = None,
     status: FbStatus | None = None,
     fix_kind: Annotated[FixKind | None, Query(alias="fixKind")] = None,
 ):
+    metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
     repo = r.FeedbackRepo(session)
     rows, total = await repo.list_page(repo.list_query(_kw(kw), status, fix_kind), p)
     codes = await repo.user_codes([f.user_id for f in rows if f.user_id])
-    return Page.of([await svc.feedback_detail(session, f, codes.get(f.user_id)) for f in rows], total, p)
+    return Page.of(await svc.feedback_details(session, list(rows), codes, metrics), total, p)
 
 
 @tuning.get(
@@ -870,46 +914,57 @@ async def list_feedbacks(
     response_model_exclude_none=True,
     summary="T14",
 )
-async def get_feedback(fid: str, session: SessionDep, user: CurrentUserDep):
+async def get_feedback(fid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
     repo = r.FeedbackRepo(session)
     f = await repo.get_by_code_or_404(fid)
     codes = await repo.user_codes([f.user_id] if f.user_id else [])
-    return await svc.feedback_detail(session, f, codes.get(f.user_id))
+    return await svc.feedback_detail(session, f, codes.get(f.user_id), metrics)
 
 
 @tuning.get("/freq", response_model=Page[FreqOut], response_model_exclude_none=True, summary="T18 高频问题")
 async def list_freq(
     session: SessionDep,
     user: CurrentUserDep,
+    ctx: ViewContextDep,
     p: P15,
     period: Literal["7", "30"] = "30",
     cert: Literal["未认证", "已认证"] | None = None,
     kw: str | None = None,
 ):
+    metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
     repo = r.FreqRepo(session)
     certified = None if cert is None else cert == "已认证"
     stmt, _ = repo.list_query(int(period), certified, _kw(kw))
     total = await r.count_of(session, stmt)
     c = p.clamp(total)  # 先数 total 再按收拢后的页码取（越界 → 最后一页，CONVENTIONS §3）
     rows = (await session.execute(stmt.offset(c.offset).limit(c.size))).all()
-    return Page.of([svc.freq_out(x, rank) for x, rank in rows], total, p)
+    return Page.of([svc.freq_out(x, rank, metrics) for x, rank in rows], total, p)
 
 
 @tuning.post("/freq/{fid}:certify", **_CERT, summary="T19 高频问题设为认证问答")
 async def certify_freq(fid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    metrics, _ = await catalog.directory(session)
     _, u = await svc.effective_user(session, user, ctx)
     f = await r.FreqRepo(session).get_by_code_or_404(fid)
     if f.cert_id is not None:
         raise StateInvalid(details={"id": fid, "cert": f.cert.code if f.cert else None})
-    m = _metric_of(f.sem_plan.get("metric"))
-    cr = m.get("cr") if m.get("cr") in _pending_crs() else None
+    m = _metric_of(f.sem_plan.get("metric"), metrics)
+    cr = m.get("cr")
     c = await _new_cert(
-        session, f.question, f.sem_plan, "高频问题推荐", hits=f.hits30, cr_code=cr, status=CertStatus.pending
+        session,
+        f.question,
+        f.sem_plan,
+        "高频问题推荐",
+        metrics,
+        hits=f.hits30,
+        cr_code=cr,
+        status=CertStatus.pending,
     )
-    _certify(c, u.name)  # 同 T6：有未发布 CR → 待重新认证
+    _certify(c, u.name, metrics)  # 同 T6：有未发布 CR → 待重新认证
     await session.flush()
     await audit(session, user, action="qa.freq.certify", target=c.code, detail={"freq": fid})
-    return svc.cert_out(c)
+    return svc.cert_out(c, metrics)
 
 
 @tuning.get("/synonyms", response_model=list[SynonymOut], response_model_exclude_none=True, summary="T20")
@@ -952,35 +1007,59 @@ async def start_run(
     ctx: ViewContextDep,
     llm: Annotated[LLMClient, Depends(get_llm)],
     runner: Annotated[Callable, Depends(eval_job.get_runner)],
-    tasks: BackgroundTasks,
 ):
-    _, u = await svc.effective_user(session, user, ctx)
+    pk, u = await svc.effective_user(session, user, ctx)
+    source = await _own_session(session, pk, body.session_id)
     group = None if body.group in eval_job.ALL else body.group
-    if group is not None and group not in catalog.load("EVAL_GROUPS"):
+    if group is not None and group not in await r.EvalQuestionRepo(session).group_counts():
         raise EvalGroupInvalid(details={"group": body.group})
     n = int(
         await session.scalar(select(func.count()).select_from(eval_job.questions_query(group).subquery()))
         or 0
     )
+    code = await next_run_code(session)
+    active = await session.scalar(
+        select(QaEvalRun.code)
+        .where(
+            (QaEvalRun.status == RunStatus.running)
+            | ((QaEvalRun.status == RunStatus.queued) & QaEvalRun.queue_job_id.is_not(None))
+        )
+        .limit(1)
+    )
+    if active:
+        raise AppError(
+            "已有评测正在运行或等待执行", code="QA_EVAL_BUSY", status_code=409, details={"id": active}
+        )
     run = QaEvalRun(
-        code=await next_run_code(session),
+        code=code,
         run_at=clock.now(),
         trigger_label="手动运行",
-        version_label=catalog.load("CUR_VERSION"),
+        version_label=await VersioningService().current_version(session),
         scope=f"全部 {n} 题" if group is None else f"{group}相关 {n} 题",
         total=n,
         passed=0,
-        status=RunStatus.running,
+        status=RunStatus.queued,
         operator=u.name,
+        execution_context={
+            "userId": user.id,
+            "tenantId": user.tenant_id,
+            "sessionId": source.code,
+            "group": group,
+            "scope": source.scope,
+            "caliber": source.caliber,
+        },
     )
     session.add(run)
     await session.flush()
-    await audit(session, user, action="qa.eval.run", target=run.code, detail={"group": body.group})
-
-    async def _go() -> None:  # 响应前 get_session 已提交，后台任务一定读得到这条运行
-        runner(run.code, group, llm, user)
-
-    tasks.add_task(_go)
+    run.queue_job_id = await runner(session, run.code, group, llm, user)
+    await session.flush()
+    await audit(
+        session,
+        user,
+        action="qa.eval.run",
+        target=run.code,
+        detail={"group": body.group, "sessionId": source.code},
+    )
     return svc.run_out(run, 0)
 
 
@@ -1104,6 +1183,7 @@ class CertNoPlan(AppError):
     summary="T16 转为认证问答（已有 → 加同问法；否则按语义计划新建并认证）",
 )
 async def feedback_to_cert(fid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    metrics, _ = await catalog.directory(session)
     _, u = await svc.effective_user(session, user, ctx)
     f = await _fb(session, fid)
     _need_open(f)
@@ -1111,10 +1191,14 @@ async def feedback_to_cert(fid: str, session: SessionDep, user: CurrentUserDep, 
     if existing is not None:
         c, mode = existing, "variant"
     elif plan:
-        m = _metric_of(plan.get("metric"))
-        cr = m.get("cr") if m.get("cr") in _pending_crs() else None
-        c = await _new_cert(session, f.fix_text, plan, "反馈纠错", cr_code=cr, status=CertStatus.pending)
-        _certify(c, u.name)  # [推断] 同前端 toCert / T19：确认卡「认证」即认证；有未发布 CR → 待重新认证
+        m = _metric_of(plan.get("metric"), metrics)
+        cr = m.get("cr")
+        c = await _new_cert(
+            session, f.fix_text, plan, "反馈纠错", metrics, cr_code=cr, status=CertStatus.pending
+        )
+        _certify(
+            c, u.name, metrics
+        )  # [推断] 同前端 toCert / T19：确认卡「认证」即认证；有未发布 CR → 待重新认证
         mode = "new"
     else:
         raise CertNoPlan(details={"id": fid, "question": f.fix_text})

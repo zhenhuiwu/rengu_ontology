@@ -1,14 +1,15 @@
 """数据访问（事件类型 + 事件运行表）。"""
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, func, select
 
 from app.common.repository import BaseRepository
+from app.core.config import get_settings
 from app.modules.event.models import (
     Event,
-    EventDailyStat,
     EventEnvelopeField,
     EventOutcome,
     EventType,
@@ -40,54 +41,72 @@ class EventRepo(BaseRepository[Event]):
     not_found_message = "事件不存在"
 
     async def get_with_type_code(self, code: str) -> tuple[Event, str] | None:
-        """按事件编号（EV-…）取一条事件和它的事件类型编码；测试事件不算（同近期事件列表）。"""
+        """按事件编号（EV-…）取一条事件和它的事件类型编码，含可直接查看的测试事件。"""
         stmt = (
             select(Event, EventType.code)
             .join(EventType, EventType.id == Event.event_type_id)
-            .where(Event.code == code, Event.is_test.is_(False))
+            .where(Event.code == code)
         )
         row = (await self.session.execute(stmt)).first()
         return (row[0], row[1]) if row else None
 
     @staticmethod
-    def _filter(type_id: int, since: datetime | None, outcome: EventOutcome | None) -> Select[tuple[Event]]:
+    def _filter(
+        type_id: int, since: datetime | None, outcome: EventOutcome | None, until: datetime | None = None
+    ) -> Select[tuple[Event]]:
         stmt = select(Event).where(Event.event_type_id == type_id, Event.is_test.is_(False))
         if since is not None:
             stmt = stmt.where(Event.occurred_at >= since)
+        if until is not None:
+            stmt = stmt.where(Event.occurred_at <= until)
         if outcome is not None:
             stmt = stmt.where(Event.outcome == outcome)
         return stmt.order_by(Event.occurred_at.desc(), Event.id.desc())
 
-    async def count(self, type_id: int, since: datetime | None, outcome: EventOutcome | None) -> int:
-        stmt = self._filter(type_id, since, outcome).order_by(None)
+    async def count(
+        self,
+        type_id: int,
+        since: datetime | None,
+        outcome: EventOutcome | None,
+        until: datetime | None = None,
+    ) -> int:
+        stmt = self._filter(type_id, since, outcome, until).order_by(None)
         return int(await self.session.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
 
     async def page(
-        self, type_id: int, since: datetime | None, outcome: EventOutcome | None, offset: int, limit: int
+        self,
+        type_id: int,
+        since: datetime | None,
+        outcome: EventOutcome | None,
+        offset: int,
+        limit: int,
+        until: datetime | None = None,
     ) -> Sequence[Event]:
-        stmt = self._filter(type_id, since, outcome).offset(offset).limit(limit)
+        stmt = self._filter(type_id, since, outcome, until).offset(offset).limit(limit)
         return (await self.session.scalars(stmt)).all()
 
-    async def outcome_counts(self, type_id: int) -> dict[EventOutcome, int]:
-        stmt = (
-            select(Event.outcome, func.count())
-            .where(Event.event_type_id == type_id, Event.is_test.is_(False))
-            .group_by(Event.outcome)
-        )
+    async def outcome_counts(
+        self, type_id: int, since: datetime | None = None, until: datetime | None = None
+    ) -> dict[EventOutcome, int]:
+        rows = self._filter(type_id, since, None, until).order_by(None).subquery()
+        stmt = select(rows.c.outcome, func.count()).group_by(rows.c.outcome)
         return {o: int(n) for o, n in (await self.session.execute(stmt)).all()}
 
-    async def latencies(self, type_id: int) -> list[int]:
+    async def latencies(
+        self, type_id: int, since: datetime | None = None, until: datetime | None = None
+    ) -> list[int]:
+        rows = self._filter(type_id, since, None, until).order_by(None).subquery()
         stmt = (
-            select(Event.latency_ms)
-            .where(Event.event_type_id == type_id, Event.is_test.is_(False))
-            .order_by(Event.latency_ms)
+            select(rows.c.latency_ms)
+            .where(rows.c.latency_ms.is_not(None), rows.c.outcome != EventOutcome.pending)
+            .order_by(rows.c.latency_ms)
         )
         return list((await self.session.scalars(stmt)).all())
 
-    async def daily(self, type_id: int, start: date, end: date) -> dict[date, int]:
-        stmt = select(EventDailyStat.stat_date, EventDailyStat.value).where(
-            EventDailyStat.event_type_id == type_id,
-            EventDailyStat.stat_date >= start,
-            EventDailyStat.stat_date <= end,
-        )
+    async def daily(self, type_id: int, start: date, end: date, until: datetime) -> dict[date, int]:
+        zone = get_settings().display_tz
+        since = datetime.combine(start, time.min, ZoneInfo(zone))
+        rows = self._filter(type_id, since, None, until).order_by(None).subquery()
+        day = func.date(func.timezone(zone, rows.c.occurred_at))
+        stmt = select(day, func.count()).where(day <= end).group_by(day)
         return {d: int(v) for d, v in (await self.session.execute(stmt)).all()}

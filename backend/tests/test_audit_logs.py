@@ -14,8 +14,10 @@ from sqlalchemy.exc import DBAPIError
 from app.core.config import get_settings
 from app.modules.admin.models import AuditLog, AuditResult
 from app.modules.admin.repo import AuditCursor, insert_audit
+from tests.function_access_support import grant_fixture_roles
 
 MOCK = json.loads((get_settings().seeds_json_dir / "system" / "AUDIT_LOGS.json").read_text("utf-8"))
+
 URL = "/api/admin/v1/audit-logs"
 FMT = "%Y-%m-%d %H:%M:%S"
 NOW = datetime(2026, 10, 25, 16, 12, 41)  # noqa: DTZ001 AuditLog.vue 的 mock「现在」
@@ -34,6 +36,11 @@ def expect(frm, to, action="全部", result="全部", field="actor", kw=""):
         and (result == "全部" or r["result"] == result)
         and (not k or k in r[field])
     ]
+
+
+@pytest.fixture
+async def authorized(users):
+    await grant_fixture_roles(users)
 
 
 async def page_all(client, size=20, **params):
@@ -70,7 +77,7 @@ async def test_seed_count_and_idempotent(users):
     assert row.action == "发布本体" and row.is_seed and row.result is AuditResult.success
 
 
-async def test_default_24h_first_page_matches_mock(client, users):
+async def test_default_24h_first_page_matches_mock(client, users, authorized):
     r = await client.get(URL, params={"from": H24[0], "to": H24[1]})
     assert r.status_code == 200
     body = r.json()
@@ -79,13 +86,13 @@ async def test_default_24h_first_page_matches_mock(client, users):
     assert body["nextCursor"] and len(exp) > 20
 
 
-async def test_page_through_all_no_dup_no_gap(client, users):
+async def test_page_through_all_no_dup_no_gap(client, users, authorized):
     got, pages = await page_all(client, size=37, **{"from": D30[0], "to": D30[1]})
     assert got == MOCK and pages == -(-521 // 37)
     assert len({r["id"] for r in got}) == 521
 
 
-async def test_exact_multiple_has_no_trailing_empty_page(client, users):
+async def test_exact_multiple_has_no_trailing_empty_page(client, users, authorized):
     """前端 paginateCursor：end < rows.length 才给 nextCursor → 刚好满页时最后一页 nextCursor=null。"""
     n = len(expect(*H24, action="导出"))
     assert 0 < n <= 200
@@ -107,12 +114,12 @@ async def test_exact_multiple_has_no_trailing_empty_page(client, users):
         {"action": "不存在的动作"},
     ],
 )
-async def test_filters_match_frontend(client, users, flt):
+async def test_filters_match_frontend(client, users, authorized, flt):
     got, _ = await page_all(client, size=20, **{"from": D30[0], "to": D30[1]}, **flt)
     assert got == expect(*D30, **flt)
 
 
-async def test_time_window_inclusive_and_inverted(client, users):
+async def test_time_window_inclusive_and_inverted(client, users, authorized):
     t = MOCK[5]["time"]
     r = await client.get(URL, params={"from": t, "to": t})
     assert [x["id"] for x in r.json()["items"]] == [MOCK[5]["id"]]
@@ -122,7 +129,7 @@ async def test_time_window_inclusive_and_inverted(client, users):
     assert r.json()["items"] == expect("2026-10-25 15:00:00", "2026-10-25 16:00:00")[:20]
 
 
-async def test_from_to_required_and_validation(client, users):
+async def test_from_to_required_and_validation(client, users, authorized):
     for params in ({}, {"from": H24[0]}, {"to": H24[1]}):
         r = await client.get(URL, params=params)
         assert r.status_code == 422 and r.json()["code"] == "VALIDATION_FAILED"
@@ -134,7 +141,7 @@ async def test_from_to_required_and_validation(client, users):
     assert r.status_code == 422
 
 
-async def test_bad_cursor_falls_back_to_first_page(client, users):
+async def test_bad_cursor_falls_back_to_first_page(client, users, authorized):
     first = (await client.get(URL, params={"from": H24[0], "to": H24[1]})).json()
     for bad in ("garbage", "c14", "k!!!", "kAAAA"):
         r = await client.get(URL, params={"from": H24[0], "to": H24[1], "cursor": bad})
@@ -147,13 +154,13 @@ def test_cursor_roundtrip():
     assert AuditCursor.decode(None) is None and AuditCursor.decode("") is None
 
 
-async def test_actions_match_frontend(client, users):
+async def test_actions_match_frontend(client, users, authorized):
     r = await client.get(URL + "/actions")
     assert r.status_code == 200
     assert r.json() == list(dict.fromkeys(x["action"] for x in MOCK))
 
 
-async def test_export_returns_job_and_writes_audit(client, users):
+async def test_export_returns_job_and_writes_audit(client, users, authorized):
     body = {"from": H24[0], "to": H24[1], "action": "导出", "result": "全部"}
     r = await client.post(URL + "/export", json=body, headers={"X-Forwarded-For": "10.12.40.8, 10.0.0.1"})
     assert r.status_code == 200, r.text
@@ -170,7 +177,7 @@ async def test_export_returns_job_and_writes_audit(client, users):
     assert len(acts) == len(set(acts))
 
 
-async def test_export_validation_and_readonly(client, users):
+async def test_export_validation_and_readonly(client, users, authorized):
     r = await client.post(URL + "/export", json={"to": H24[1]})
     assert r.status_code == 422
     r = await client.post(URL + "/export", params={"ver": "v2026.10.2"}, json={"from": H24[0], "to": H24[1]})
@@ -192,6 +199,6 @@ async def test_insert_audit_and_append_only(users):
             await users.execute(text("DELETE FROM audit_log WHERE id = :i"), {"i": row.id})
 
 
-async def test_requires_login(client, users):
+async def test_requires_login(client, users, authorized):
     r = await client.get(URL, params={"from": H24[0], "to": H24[1]}, headers={"X-Demo-As": "U999999"})
     assert r.status_code == 401

@@ -42,7 +42,7 @@ def _row(code: str, name: str, result: str, note: str) -> Row:
 
 
 def merge_check(crs: list[ChangeRequest], next_version: str) -> tuple[list[Row], bool]:
-    """mock/changes.ts `mergeCheck`（行顺序、文案一致）。"""
+    """合并定义校验；评测影响数量不代表实际执行过回放。"""
     rows: list[Row] = []
     owner: dict[str, list[str]] = defaultdict(list)
     for c in crs:
@@ -91,7 +91,7 @@ def merge_check(crs: list[ChangeRequest], next_version: str) -> tuple[list[Row],
         rows.append({"code": "提示", "name": "同义词索引", "result": "信息", "note": note})
     evals = sum(_impact_evals(c.detail) for c in crs)
     if evals:
-        note = f"已按 {next_version} 草稿回放 {evals} 道评测题，通过 {evals} 题，失败 0 题"
+        note = f"{next_version} 草稿涉及 {evals} 道评测题，尚未执行回放"
         rows.append({"code": "提示", "name": "评测回放", "result": "信息", "note": note})
     return rows, any(r["result"] == "阻断" for r in rows)
 
@@ -100,6 +100,7 @@ class PublishService:
     def __init__(self, session: AsyncSession, versioning: VersioningService | None = None) -> None:
         self.session = session
         self.versioning = versioning or VersioningService()
+        self.skipped: list[str] = []
 
     async def _approved(self, *, lock: bool = False) -> list[ChangeRequest]:
         q = (
@@ -135,13 +136,22 @@ class PublishService:
             )
         )
 
-    async def publish(self, user: CurrentUser, note: str | None) -> str:
+    async def publish(self, user: CurrentUser, note: str | None, *, lock_version: int | None = None) -> str:
         check_func(user, "releases", "manage")
         if not user.is_ontology_admin:
             raise Forbidden("需要本体管理员发布")
         now = clock.now()
         # 先拿整版发布锁（create_version 里再拿一次，同一事务可重入），保证写回用的版本号就是新版本号
         await get_adapter(self.session).xact_lock(self.session, PUBLISH_LOCK)
+        head = await ReleaseRepo(self.session).latest()
+        current_lock = head.id if head else 0
+        if lock_version is not None and lock_version != current_lock:
+            raise AppError(
+                "本体已在别处发布，请刷新后重新确认",
+                code="VERSION_CONFLICT",
+                status_code=409,
+                details={"lockVersion": lock_version, "currentLockVersion": current_lock},
+            )
         crs = await self._approved(lock=True)
         next_ver = await self._next_version(now)
         rows, blocked = merge_check(crs, next_ver)
@@ -156,6 +166,7 @@ class PublishService:
         note = note or "；".join(c.title for c in crs)
         # 同事务写回定义表（writeback.HOOKS）；没登记的段（动作 / 事件 / 规则…）跳过并记进事件
         skipped = await apply_crs(self.session, crs, next_ver, now, user.id)
+        self.skipped = skipped
         # [推断] note 不传时用变更单标题拼一句（mock 发布不填说明）
         ver = await self.versioning.create_version(
             self.session, codes, published_by=user.id, note=note, now=now
@@ -178,6 +189,7 @@ class PublishService:
 
     async def rollback(self, user: CurrentUser, ver: str, note: str | None) -> str:
         check_func(user, "releases", "manage")
+        await get_adapter(self.session).xact_lock(self.session, PUBLISH_LOCK)
         # 前端不限管理员（static-api.md §2.2-6，限管理员是 [推断]，默认不做）
         now = clock.now()
         target = await ReleaseRepo(self.session).by_ver(ver)

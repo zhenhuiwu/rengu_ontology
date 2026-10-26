@@ -6,21 +6,25 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Path, Query
 
-from app.common.auth import require_func
-from app.common.context import ViewContextDep
+from app.common.auth import CurrentUserDep, require_func
+from app.common.context import ViewContextDep, readonly_extra
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.db.session import SessionDep
+from app.modules.action.checker import DatabaseSubmissionChecker, definition
 from app.modules.action.schemas import (
     ActionTypeDetailOut,
     ActionTypeListOut,
     ActionTypeOut,
     CriterionOut,
+    DryRunIn,
+    DryRunOut,
     ItemsOut,
     ParamOut,
     RunDailyOut,
     TypeVersionOut,
+    UsedByOut,
     WritebackOut,
 )
 from app.modules.action.service import ActionTypeService, run_daily
@@ -28,19 +32,42 @@ from app.modules.action.service import ActionTypeService, run_daily
 router = APIRouter(tags=["action"], dependencies=[Depends(require_func("action-types", "view"))])
 
 
+@router.post(
+    "/action-types/{type_id}:dry-run",
+    response_model=DryRunOut,
+    openapi_extra=readonly_extra("history"),
+    summary="只读校验真实提交条件，不调用外部或创建动作",
+)
+async def dry_run(
+    type_id: Annotated[str, Path(pattern=r"^[^\x00]+$", max_length=64)],
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    body: DryRunIn = Body(default_factory=DryRunIn),
+    view: str = "published",
+    cr: str | None = Query(None, max_length=64),
+) -> dict:
+    if cr is not None and "\x00" in cr:
+        from app.core.errors import AppError
+
+        raise AppError("变更单编号无效", code="VALIDATION_FAILED", status_code=422)
+    value = await definition(session, type_id, ctx, view, cr)
+    return await DatabaseSubmissionChecker(session, user).run(value, {"params": body.params})
+
+
 def _list_page(
     page: Annotated[int, Query()] = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 22,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
 ) -> PageParams:
-    """前端动作列表默认 size=22；page ≤ 0 收成 1（不报 422）。"""
+    """默认10条；page ≤ 0 收成 1。"""
     return PageParams(page=page, size=size)
 
 
 def _nested_page(
     page: Annotated[int, Query()] = 1,
-    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 12,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
 ) -> PageParams:
-    """前端参数默认 size=12。"""
+    """参数默认10条。"""
     return PageParams(page=page, size=size)
 
 
@@ -54,14 +81,13 @@ async def list_action_types(
     group: Annotated[str | None, Query(description="分组（中文）；全部 / 不传 = 不过滤")] = None,
     kw: Annotated[str | None, Query(description="名称包含")] = None,
 ) -> ActionTypeListOut:
-    rows, groups = await ActionTypeService(session).search(ctx, group, kw)
-    p = page.clamp(len(rows))
+    result, groups = await ActionTypeService(session).search_page(ctx, page, group, kw)
     return ActionTypeListOut(
-        items=[ActionTypeOut.model_validate(r) for r in rows[p.offset : p.offset + p.size]],
+        items=[ActionTypeOut.model_validate(r) for r in result.items],
         groups=groups,
-        total=len(rows),
-        page=p.page,
-        size=p.size,
+        total=result.total,
+        page=result.page,
+        size=result.size,
     )
 
 
@@ -77,9 +103,19 @@ async def list_params(
     ctx: ViewContextDep,
     page: Annotated[PageParams, Depends(_nested_page)],
 ) -> Page[ParamOut]:
-    rows = (await ActionTypeService(session).one(ctx, type_id)).get("params") or []
-    p = page.clamp(len(rows))
-    return Page.of([ParamOut.model_validate(r) for r in rows[p.offset : p.offset + p.size]], len(rows), page)
+    result = await ActionTypeService(session).params_page(ctx, type_id, page)
+    return Page.of([ParamOut.model_validate(r) for r in result.items], result.total, page)
+
+
+@router.get(
+    "/action-types/{type_id}/stats",
+    summary="当前类型近N日执行记录的真实聚合",
+    dependencies=[Depends(require_func("action-center", "view"))],
+)
+async def action_stats(
+    type_id: str, session: SessionDep, days: Annotated[int, Query(ge=1, le=90)] = 30
+) -> dict:
+    return await ActionTypeService(session).stats(type_id, days)
 
 
 @router.get(
@@ -115,3 +151,15 @@ async def get_run_daily(
 ) -> ItemsOut[RunDailyOut]:
     rows = await run_daily(session, type_id, days)
     return ItemsOut[RunDailyOut](items=[RunDailyOut.model_validate(r) for r in rows])
+
+
+@router.get(
+    "/action-types/{type_id}/used-by", response_model=ItemsOut[UsedByOut], summary="引用规则与实时告警统计"
+)
+async def used_by(
+    type_id: Annotated[str, Path(pattern=r"^[^\x00]+$")],
+    session: SessionDep,
+    ctx: ViewContextDep,
+) -> ItemsOut[UsedByOut]:
+    rows = await ActionTypeService(session).used_by(ctx, type_id)
+    return ItemsOut[UsedByOut](items=[UsedByOut.model_validate(r) for r in rows])

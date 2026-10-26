@@ -77,6 +77,8 @@ async def list_orders(
         else:
             until = at
         as_of = min(at, as_of)
+    else:
+        until = as_of  # 默认查询与响应的当前数据截止一致，排除未来时间记录。
     repo = OrderRepo(session)
     stmt = repo.list_query(
         store=store_id, status=status, channel=channel, kw=kw, created_until=until, created_before=before

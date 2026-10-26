@@ -5,10 +5,9 @@ import json
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.modules.dynamic.models import ActionRun
 from app.modules.dynamic.sections import BUILDERS
 from app.modules.versioning.models import OntologyRelease
-from app.modules.versioning.sections import registered_sections, restore_sections
+from app.modules.versioning.sections import isolated_sections, registered_sections, restore_sections
 from tests.dynamic_support import API, as_, dyn, err, fakes  # noqa: F401
 
 RUN = {
@@ -38,21 +37,23 @@ def _derived(name: str, sid: str):
 
 async def test_scenario_list_detail_result(dyn, client):  # noqa: F811
     r = (await client.get(f"{API}/scenarios")).json()
-    assert r["total"] == 18 and r["size"] == 12
-    assert [x["id"] for x in r["items"]] == [x["id"] for x in _json("dynamic/SCENARIOS.json")][:12]
+    assert r["total"] == 18 and r["size"] == 10
+    assert [x["id"] for x in r["items"]] == [x["id"] for x in _json("dynamic/SCENARIOS.json")][:10]
     f = (await client.get(f"{API}/scenarios", params={"status": "草稿"})).json()
     assert {x["id"] for x in f["items"]} == {"SCN-0005", "SCN-0001"}
     res = (await client.get(f"{API}/scenarios/SCN-0018/result")).json()
     want = next(x for x in _json("dynamic/SCENARIOS.json") if x["id"] == "SCN-0018")["result"]
     assert res == {k: v for k, v in want.items() if k != "impacts"}  # impacts 走分页接口
     imp = (await client.get(f"{API}/scenarios/SCN-0018/impacts")).json()
-    assert imp["size"] == 6 and imp["total"] == len(want["impacts"]) and imp["items"] == want["impacts"][:6]
-    plan = (await client.get(f"{API}/scenarios/SCN-0018/stage-plan")).json()
-    assert plan == _derived("stagePlanOf", "SCN-0018")
+    assert imp["size"] == 10 and imp["total"] == len(want["impacts"]) and imp["items"] == want["impacts"][:10]
+    err(await client.get(f"{API}/scenarios/SCN-0018/stage-plan"), 503, "SCENARIO_EXECUTOR_UNAVAILABLE")
     failed = (await client.get(f"{API}/scenarios/SCN-0013")).json()
     assert failed["status"] == "失败" and failed["failReason"]
     meta = (await client.get(f"{API}/scenarios/meta")).json()
-    assert meta["areas"] == _json("dynamic/SC_AREAS.json")
+    from app.modules.dynamic.rules_models import Scenario
+
+    assert meta["areas"] == sorted({s.scope["area"] for s in await dyn.scalars(select(Scenario))})
+    assert meta["executorConfigured"] is False
     err(await client.get(f"{API}/scenarios/SCN-NOPE"), 404, "NOT_FOUND")
 
 
@@ -81,29 +82,13 @@ async def test_create_run_rename_stage(dyn, client, fakes):  # noqa: F811
     err(await client.post(f"{API}/scenarios/{sid}:run", json=nod), 422, "SCENARIO_NO_DRIVER")
     bad = {**RUN, "scope": {**RUN["scope"], "area": "火星"}}
     err(await client.post(f"{API}/scenarios/{sid}:run", json=bad), 422, "VALIDATION_FAILED")
-    r = await client.post(f"{API}/scenarios/{sid}:run", json=RUN)
-    # 异步：202 + 运行中；后台任务（测试传输里在响应后同步跑完）算完后为已完成
-    assert r.status_code == 202 and r.json()["status"] == "运行中" and r.json()["scope"] == RUN["scope"]
-    assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "已完成"
-    res = (await client.get(f"{API}/scenarios/{sid}/result")).json()
-    assert (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).status_code == 202
-    assert (await client.get(f"{API}/scenarios/{sid}/result")).json()["kpis"] == res["kpis"]  # 同配置结果确定
-    assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "已完成"
+    before = (await client.get(f"{API}/scenarios/{sid}")).json()
+    err(await client.post(f"{API}/scenarios/{sid}:run", json=RUN), 503, "SCENARIO_EXECUTOR_UNAVAILABLE")
+    assert (await client.get(f"{API}/scenarios/{sid}")).json() == before
     assert (await client.patch(f"{API}/scenarios/{sid}", json={"name": "新名"})).json()["name"] == "新名"
     err(await client.patch(f"{API}/scenarios/{sid}", json={"name": "  "}), 422, "VALIDATION_FAILED")
-
-    keys = [p["key"] for p in (await client.get(f"{API}/scenarios/{sid}/stage-plan")).json()][:2]
-    assert keys
-    err(await client.post(f"{API}/scenarios/{sid}:stage", json={"keys": ["nope"]}), 422, "VALIDATION_FAILED")
-    st = (await client.post(f"{API}/scenarios/{sid}:stage", json={"keys": keys})).json()
-    assert len(st["staged"]) == 2
-    runs = (await dyn.scalars(select(ActionRun).where(ActionRun.code.in_(st["staged"])))).all()
-    assert len(runs) == 2 and all(x.status.value == "待确认" for x in runs)
+    err(await client.post(f"{API}/scenarios/{sid}:stage", json={"keys": ["none"]}), 409, "STATE_INVALID")
     assert fakes.submitter.calls == []
-    locked = (await client.get(f"{API}/scenarios/{sid}")).json()
-    assert locked["staged"] == st["staged"]
-    err(await client.post(f"{API}/scenarios/{sid}:stage", json={"keys": keys}), 409, "SCENARIO_STAGED_LOCKED")
-    err(await client.post(f"{API}/scenarios/{sid}:run", json=RUN), 409, "SCENARIO_STAGED_LOCKED")
 
 
 async def test_not_owner(dyn, client):  # noqa: F811
@@ -130,9 +115,31 @@ async def test_lifecycle_detail_changes_illegal(dyn, client):  # noqa: F811
     assert [t["id"] for t in lc["transitions"]] == [t["id"] for t in want["transitions"]]
     assert [v["ver"] for v in lc["versions"]] == [v["ver"] for v in want["versions"]]
     ill = (await client.get(f"{API}/object-types/order/lifecycle/illegal", params={"since": "7d"})).json()
-    assert ill == _derived("illegalOf", "order")
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from app.core.clock import now
+    from app.modules.dynamic.rules_models import Lifecycle, LifecycleChange
+
+    lifecycle_id = await dyn.scalar(select(Lifecycle.id).where(Lifecycle.code == "order"))
+    since = now() - timedelta(days=7)
+    recent = await dyn.scalar(
+        select(func.count()).where(
+            LifecycleChange.lifecycle_id == lifecycle_id,
+            LifecycleChange.transition_id.is_(None),
+            LifecycleChange.at >= since,
+            LifecycleChange.at <= now(),
+        )
+    )
+    assert sum(x["count"] for x in ill) == recent
     ch = (await client.get(f"{API}/object-types/order/lifecycle/changes", params={"illegal": 1})).json()
-    assert ch["size"] == 6 and ch["total"] == sum(x["count"] for x in ill)
+    history_total = await dyn.scalar(
+        select(func.count()).where(
+            LifecycleChange.lifecycle_id == lifecycle_id, LifecycleChange.transition_id.is_(None)
+        )
+    )
+    assert ch["size"] == 10 and ch["total"] == history_total
     assert all(x["trId"] is None for x in ch["items"])
     all_ = (await client.get(f"{API}/object-types/order/lifecycle/changes", params={"size": 200})).json()
     assert [x["id"] for x in all_["items"]] == [x["id"] for x in _derived("changesOf", "order")][:200]
@@ -186,14 +193,17 @@ async def test_sections_registered_seeded_and_restorable(dyn, client):  # noqa: 
         assert built == latest.snapshot[b.section], b.section
     # 整版回滚到 v2026.09.3：生命周期回到当时的版本，规则回到当时的定义
     old = rels["v2026.09.3"]
-    await restore_sections(dyn, old.snapshot, latest.id)
+    # Isolate dynamic restore; static tests cover rejection of invalid legacy level/value references.
+    with isolated_sections(*BUILDERS):
+        await restore_sections(dyn, old.snapshot, latest.id)
     await dyn.flush()
     for b in BUILDERS:
         assert await b.build_section(dyn, None, []) == old.snapshot[b.section], b.section
     lc = (await client.get(f"{API}/object-types/order/lifecycle")).json()
     assert lc["version"] == old.snapshot["lifecycles"]["order"]["version"]
     # 再回到最新
-    await restore_sections(dyn, latest.snapshot, latest.id)
+    with isolated_sections(*BUILDERS):
+        await restore_sections(dyn, latest.snapshot, latest.id)
     await dyn.flush()
     for b in BUILDERS:
         assert await b.build_section(dyn, None, []) == latest.snapshot[b.section], b.section
@@ -223,7 +233,13 @@ async def test_compute_db_error_marks_failed(dyn, client, monkeypatch):  # noqa:
 
     monkeypatch.setattr(ScenarioService, "_compute", boom)
     sid = (await client.post(f"{API}/scenarios", json={})).json()["id"]
-    assert (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).status_code == 202
+    from app.common.auth import CurrentUser
+    from app.modules.dynamic.rules_models import Scenario, ScenarioStatus
+
+    row = await dyn.scalar(select(Scenario).where(Scenario.code == sid))
+    row.status = ScenarioStatus.running
+    await dyn.flush()
+    await ScenarioService(dyn, CurrentUser(id="U010001", name="王敏")).compute(sid)
     assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "失败"
     err(await client.get(f"{API}/scenarios/{sid}/result"), 409, "SCENARIO_FAILED")
 

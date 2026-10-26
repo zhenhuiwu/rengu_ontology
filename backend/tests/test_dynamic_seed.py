@@ -38,7 +38,11 @@ async def test_people_and_meta(dyn, client):  # noqa: F811
     assert r.status_code == 200
     assert r.json() == _json("dynamic/PEOPLE.json")
     m = (await client.get(f"{API}/actions/meta")).json()
-    assert m["actionNames"] == _json("dynamic/ACTION_NAMES.json")
+    from app.modules.dynamic.catalog import get_catalog
+
+    catalog = await get_catalog(dyn)
+    assert m["actionNames"] == catalog.meta()["actionNames"] and m["actionNames"]
+    assert m["actionMeta"]["request_replenish"]["approvalConfigured"] is False
     assert set(m) == {"actionNames", "actionSystems", "actionMeta", "objKindLabel"}
 
 
@@ -61,9 +65,9 @@ async def test_alert_list_matches_mock(dyn, client):  # noqa: F811
         "status",
     ):
         assert first[k] == src[k], k
-    # 默认：待处理，一屏 12
+    # 默认：待处理，10条/页
     d = (await client.get(f"{API}/alerts")).json()
-    assert d["size"] == 12 and d["total"] == 4 and all(x["status"] == "待处理" for x in d["items"])
+    assert d["size"] == 10 and d["total"] == 4 and all(x["status"] == "待处理" for x in d["items"])
 
 
 async def test_action_center_matches_mock(dyn, client):  # noqa: F811
@@ -72,7 +76,7 @@ async def test_action_center_matches_mock(dyn, client):  # noqa: F811
     assert r["total"] == 141
     assert [x["id"] for x in r["items"]] == [x["id"] for x in mock]
     pend = (await client.get(f"{API}/action-runs", params={"tab": "pending"})).json()
-    assert pend["size"] == 16
+    assert pend["size"] == 10
     assert pend["counts"] == {"pending": 25, "records": 116, "unknown": 31}
     unk = (await client.get(f"{API}/action-runs", params={"tab": "unknown", "size": 40})).json()
     sts = [x["status"] for x in unk["items"]]

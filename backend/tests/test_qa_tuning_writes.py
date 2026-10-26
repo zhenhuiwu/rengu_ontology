@@ -2,14 +2,14 @@
 
 import pytest
 
-from app.seeds.loader import run_seeds
+from tests.qa_access_support import seed_qa_access
 
 B = "/api/qa/v1/tuning"
 
 
 @pytest.fixture
 async def qa(users, client):
-    await run_seeds(users, ["qa"])
+    await seed_qa_access(users)
     await users.flush()
     return client
 
@@ -41,12 +41,12 @@ async def test_create_then_certify(qa):
 
 
 async def test_certify_with_pending_cr_goes_recert(qa):
-    plan = {"metric": "margin", "dims": [], "time": "上个月"}
-    c = (await qa.post(f"{B}/certs", json={"question": "上个月整体毛利率", "plan": plan})).json()
-    assert c["cr"] == "CR-0011"
+    plan = {"metric": "refund", "dims": [], "time": "上个月"}
+    c = (await qa.post(f"{B}/certs", json={"question": "上个月整体退款率", "plan": plan})).json()
+    assert c["cr"] == "CR-0010"
     before = (await _summary(qa))["recertCount"]
     r = (await qa.post(f"{B}/certs/{c['id']}:certify")).json()
-    assert r["status"] == "待重新认证" and "CR-0011 发布后需再次认证" in r["note"]
+    assert r["status"] == "待重新认证" and "CR-0010 发布后需再次认证" in r["note"]
     assert (await _summary(qa))["recertCount"] == before + 1
 
 

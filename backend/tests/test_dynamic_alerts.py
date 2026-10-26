@@ -168,9 +168,7 @@ async def test_start_action_full_flow(dyn, client, fakes):  # noqa: F811
     out = r.json()
     a, act = out["alert"], out["action"]
     assert a["actionRef"] == "act-al-20261025-0126" and a["actionStatus"] == "审批中" and a["locked"] is True
-    assert (
-        a["log"][-1]["text"] == "发起动作「发起调价审批」，待品类经理 王敏审批；动作成功后告警自动转为已解决"
-    )
+    assert a["log"][-1]["text"] == "发起动作「发起调价审批」，待王敏审批；动作成功后告警自动转为已解决"
     assert act["status"] == "审批中" and act["idemKey"] == "act-al-20261025-0126"
     assert act["source"]["type"] == "告警" and act["source"]["alertId"] == OPEN
     assert act["id"] == "ACT-20261025-3850" and act["confirmer"] == "王敏"  # 当天最大号 +1（含 RUNS 历史）
@@ -191,7 +189,8 @@ async def test_start_action_full_flow(dyn, client, fakes):  # noqa: F811
 async def test_start_action_order_approver(dyn, client, fakes):  # noqa: F811
     await client.post(f"{API}/alerts/{OPEN_ORDER}:claim")
     act = (await client.post(f"{API}/alerts/{OPEN_ORDER}:start-action")).json()["action"]
-    assert act["approver"] == "区域运营 陈立军" and act["action"] == "发起物流催派"
+    assert act["approver"] is None and act["action"] == "发起物流催派"  # DB明确免审，不能补假审批人。
+    assert act["status"] == "成功" and fakes.submitter.calls
 
 
 async def test_start_action_errors(dyn, client, fakes):  # noqa: F811
@@ -217,7 +216,7 @@ async def test_page_params_come_from_skeleton(dyn, client, path):  # noqa: F811
     """页码交给骨架 PageParams / Page.of（paginate.ts:12-13）：默认条数照前端，page ≤ 0 → 1，
     越界 → 最后一页（响应 page 同步）。收拢是骨架行为，dynamic 只透传。"""
     q = {"status": "all"} if path == "/alerts" else {}
-    assert (await client.get(f"{API}{path}")).json()["size"] == (12 if path == "/alerts" else 16)
+    assert (await client.get(f"{API}{path}")).json()["size"] == 10
     first = (await client.get(f"{API}{path}", params={**q, "size": 5})).json()
     assert (await client.get(f"{API}{path}", params={**q, "size": 5, "page": 0})).json() == first
     last = -(-first["total"] // 5) or 1
@@ -233,9 +232,15 @@ async def test_generic_dims_and_approver(dyn, client):  # noqa: F811
     assert o["objKind"] == "product" and o["objKindLabel"] == "商品"
     assert len(o["dims"]) == 1 and o["dims"][0]["objKind"] == "store" and o["dims"][0]["kindLabel"] == "门店"
     assert o["dims"][0]["id"] and o["dims"][0]["label"]
-    assert o["approver"] == "品类经理 王敏"  # R-007 → 发起调价审批的审批人配置
+    assert o["approver"] is None  # 现有文字未定位真实单个审批人，不能读JSON补审批路由。
+    claimed = await client.post(f"{API}/alerts/{OPEN}:claim")
+    assert claimed.status_code == 200
+    unconfigured = (await client.get(f"{API}/alerts/{OPEN}")).json()
+    assert unconfigured["can"]["startAction"] is False
+    assert "审批配置" in unconfigured["can"]["reasons"]["startAction"]
+    err(await client.post(f"{API}/alerts/{OPEN}:start-action"), 503, "ACTION_APPROVAL_NOT_CONFIGURED")
     d = (await client.get(f"{API}/alerts/{OPEN_ORDER}")).json()
-    assert d["dims"] == [] and d["objKindLabel"] == "订单" and d["approver"] == "区域运营 陈立军"
+    assert d["dims"] == [] and d["objKindLabel"] == "订单" and d["approver"] is None
     r = (await client.get(f"{API}/alerts", params={"status": "all", "ruleId": "R-021", "size": 1})).json()
     assert r["items"][0]["dims"] == [] and r["items"][0]["objKindLabel"] == "门店"
     detail = (await client.get(f"{API}/alerts/{r['items'][0]['id']}")).json()

@@ -12,10 +12,10 @@
 """
 
 import json
-import re
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum as PyEnum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.row_filter import apply_row_filter
 from app.common.sql_guard import GovernedTable, governed_tables
 from app.core.config import get_settings
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFound
 from app.modules.static.models import Metric, ObjectType, Property
 
 Obj = dict[str, Any]
@@ -36,6 +36,17 @@ NUMERIC = {"decimal", "integer"}
 TEMPORAL = {"date", "timestamp"}
 RANGE_TYPES = NUMERIC | TEMPORAL
 VISIBILITY = ("prominent", "normal", "hidden")
+DISPLAY_FIELDS = {
+    "visibility": "visibility",
+    "searchable": "searchable",
+    "filterable": "filterable",
+    "sortable": "sortable",
+    "listed": "list_visible",
+    "listWidth": "list_width",
+    "format": "format",
+    "unit": "unit",
+    "order": "seq",
+}
 
 SEED_FILE = Path(__file__).parent / "seeds" / "explorer_meta.json"
 
@@ -83,36 +94,65 @@ def default_flags(obj: str, p: Obj) -> Obj:
     return out
 
 
-_SUFFIX = re.compile(r"^(.*?)（([^（）]+)）$")
+@lru_cache
+def _seed_orders(path: Path) -> dict[str, dict[str, int]]:
+    props = json.loads(path.read_text("utf-8")) if path.is_file() else {}
+    return {obj: {p["api"]: n for n, p in enumerate(rows)} for obj, rows in props.items()}
+
+
+def snapshot_flags(obj: str, p: Obj, order: int) -> Obj:
+    """旧快照缺少显示标记时只用初始定义补齐，不能借用当前表的标记。"""
+    initial_order = _seed_orders(get_settings().seeds_json_dir / "static" / "OBJECT_PROPS.json")
+    out = {**default_flags(obj, p), "seq": initial_order.get(obj, {}).get(p["api"], order)}
+    out.update({col: p[key] for key, col in DISPLAY_FIELDS.items() if key in p})
+    if out["visibility"] == "hidden":
+        out.update(filterable=False, sortable=False, list_visible=False)
+    if p.get("sensitive"):
+        out["filterable"] = False
+    return out
 
 
 def metric_variants(metrics: list[Obj]) -> dict[str, list[Obj]]:
-    """口径变体：显示名去掉末尾括号后同名的指标互为变体（销售额（不含税）/ 销售额（含税））。
-
-    按名字结构推，不写任何具体口径词；组内第一个（METRIC_LIST 顺序）为默认。只有一个的指标 → []。
-    """
-    groups: dict[str, list[Obj]] = {}
-    for m in metrics:
-        hit = _SUFFIX.match(m["name"])
-        if hit:
-            groups.setdefault(hit.group(1), []).append({**m, "_label": hit.group(2)})
+    """只读显式变体；来源和目标都必须在同一版本中已发布，元数据取目标定义。"""
+    published = {m["id"]: m for m in metrics if m.get("status") == "已发布"}
     out: dict[str, list[Obj]] = {}
-    for items in groups.values():
-        if len(items) < 2:
+    for m in metrics:
+        if m.get("id") not in published:
             continue
-        vs = [
-            {
-                "code": x["id"],
-                "label": x["_label"],
-                "api": x["api"],
-                "version": x["version"],
-                "default": i == 0,
-            }
-            for i, x in enumerate(items)
-        ]
-        for x in items:
-            out[x["id"]] = vs
+        out[m["id"]] = []
+        for v in m.get("variants") or []:
+            if not isinstance(v, dict) or not v.get("label"):
+                continue
+            target = published.get(v.get("code"))
+            if target is not None:
+                out[m["id"]].append(
+                    {
+                        "code": target["id"],
+                        "label": v["label"],
+                        "default": bool(v.get("default")),
+                        "api": target["api"],
+                        "version": target["version"],
+                    }
+                )
     return out
+
+
+async def metric_variant_index(session: AsyncSession, ver: str | None = None) -> dict[str, list[Obj]]:
+    """公开口径索引；历史快照缺字段时返回空，不借用当前定义。"""
+    from app.modules.static.shapes import metric_list_item
+    from app.modules.versioning.repo import ReleaseRepo
+
+    if ver:
+        release = await ReleaseRepo(session).by_ver_or_404(ver)
+        metrics = list(((release.snapshot or {}).get("metrics") or {}).values())
+    else:
+        metrics = [metric_list_item(m) for m in await session.scalars(select(Metric).order_by(Metric.seq))]
+    names = {m["id"]: m["name"] for m in metrics}
+    idx: dict[str, dict[str, Obj]] = {}
+    for variants in metric_variants(metrics).values():
+        for v in variants:
+            idx.setdefault(v["label"], {})[v["code"]] = {**v, "name": names[v["code"]]}
+    return {label: list(items.values()) for label, items in idx.items()}
 
 
 # ---------------------------------------------------------------- 输出形状
@@ -174,17 +214,23 @@ class ExplorerService:
             )
         return await StaticRepo(self.session).object_type(code)
 
-    async def meta(self, code: str) -> Obj:
+    async def meta(self, code: str, ver: str | None = None) -> Obj:
+        from app.modules.static.shapes import metric_list_item
+
+        if ver:
+            return await self._historical_meta(code, ver)
         o = await self._object(code)
         props = [p for p in o.properties]
         title = next((p.api_name for p in props if p.is_title), None)
         visible = [p for p in props if p.visibility != "hidden"]
         searchable = [p.display_name for p in visible if p.searchable][:3]
         dim_names = {p.display_name for p in props if p.is_dimension}
+        all_metrics = list(await self.session.scalars(select(Metric).order_by(Metric.seq)))
+        variants = metric_variants([metric_list_item(m) for m in all_metrics])
         metrics = [
             m
-            for m in (await self.session.scalars(select(Metric).order_by(Metric.seq))).all()
-            if dim_names & set(m.dims or []) or o.display_name in (m.dims or [])
+            for m in all_metrics
+            if m.code in variants and (dim_names & set(m.dims or []) or o.display_name in (m.dims or []))
         ]
         return {
             "id": o.code,
@@ -198,8 +244,60 @@ class ExplorerService:
             "sampleQuestions": [q.get("q") for q in (o.sample_questions or []) if isinstance(q, dict)],
             "hasData": self._table(o.code) is not None,
             "metrics": [
-                {"id": m.code, "name": m.display_name, "unit": m.unit, "variants": m.variants or []}
+                {"id": m.code, "name": m.display_name, "unit": m.unit, "variants": variants.get(m.code, [])}
                 for m in metrics
+            ],
+        }
+
+    async def _historical_meta(self, code: str, ver: str) -> Obj:
+        from app.modules.versioning.repo import ReleaseRepo
+
+        release = await ReleaseRepo(self.session).by_ver_or_404(ver)
+        snapshot = release.snapshot or {}
+        obj = (snapshot.get("objectTypes") or {}).get(code)
+        if obj is None:
+            raise NotFound("该版本中对象类型不存在", details={"id": code, "ver": ver})
+        props = [
+            Property(
+                api_name=api,
+                display_name=p["name"],
+                data_type=p["type"],
+                prop_group=p["group"],
+                is_pk=bool(p.get("pk")),
+                is_title=bool(p.get("title")),
+                is_dimension=bool(p.get("dim")),
+                is_sensitive=bool(p.get("sensitive")),
+                enum_name=p.get("enumName"),
+                **snapshot_flags(code, p, n),
+            )
+            for n, (api, p) in enumerate((snapshot.get("properties", {}).get(code) or {}).items())
+        ]
+        props.sort(key=lambda p: (p.seq, p.api_name))
+        visible = [p for p in props if p.visibility != "hidden"]
+        dim_names = {p.display_name for p in props if p.is_dimension}
+        metrics = list((snapshot.get("metrics") or {}).values())
+        variants = metric_variants(metrics)
+        return {
+            "id": code,
+            "api": obj["api"],
+            "name": obj["name"],
+            "titleProp": next((p.api_name for p in props if p.is_title), None),
+            "pkProp": next((p.api_name for p in props if p.is_pk), None),
+            "kwPlaceholder": " / ".join([p.display_name for p in visible if p.searchable][:3]),
+            "properties": [prop_meta(p) for p in visible],
+            "hiddenCount": len(props) - len(visible),
+            "sampleQuestions": [q.get("q") for q in obj.get("qs", []) if isinstance(q, dict)],
+            "hasData": self._table(code) is not None,
+            "metrics": [
+                {
+                    "id": m["id"],
+                    "name": m["name"],
+                    "unit": m.get("unit"),
+                    "variants": variants.get(m["id"], []),
+                }
+                for m in metrics
+                if m.get("status") == "已发布"
+                and (dim_names & set(m.get("dimNames") or []) or obj["name"] in (m.get("dimNames") or []))
             ],
         }
 
@@ -271,21 +369,24 @@ class ExplorerService:
 
         枚举类分面（facetKind=enum）只收标量数组；区间类（数值 / 日期）只收 {min, max}。
         """
+        values = v.values() if isinstance(v, dict) else v if isinstance(v, list) else [v]
+        if any(isinstance(x, str) and "\x00" in x for x in values):
+            bad_filter(key, "不能包含 NUL 字符")
         if facet_kind(p) == "enum":
             if not isinstance(v, list) or any(isinstance(x, list | dict) or x is None for x in v):
-                _bad(key, '枚举类筛选应为取值数组，如 ["营业中"]')
+                bad_filter(key, '枚举类筛选应为取值数组，如 ["营业中"]')
             if col is None:  # 该属性没有数据列：不参与过滤
                 return []
-            return [col.in_([_scalar(col, x, key) for x in v])] if v else []
+            return [col.in_([scalar_filter(col, x, key) for x in v])] if v else []
         if not isinstance(v, dict) or not v or set(v) - {"min", "max"}:
-            _bad(key, "区间类筛选应为 {min, max}")
+            bad_filter(key, "区间类筛选应为 {min, max}")
         for b in v.values():
             if b is not None and (isinstance(b, bool) or not isinstance(b, str | int | float)):
-                _bad(key, "min / max 应为数字或日期字符串")
+                bad_filter(key, "min / max 应为数字或日期字符串")
         out = []
         if col is None:  # 该属性没有数据列：不参与过滤
             return []
-        bounds = {b: _scalar(col, v[b], key) for b in ("min", "max") if v.get(b) is not None}
+        bounds = {b: scalar_filter(col, v[b], key) for b in ("min", "max") if v.get(b) is not None}
         if "min" in bounds:
             out.append(col >= bounds["min"])
         if "max" in bounds:
@@ -298,7 +399,7 @@ def facetable(p: Property) -> bool:
     return bool(p.filterable) and p.visibility != "hidden" and not p.is_sensitive
 
 
-def _bad(key: str, msg: str) -> None:
+def bad_filter(key: str, msg: str) -> None:
     raise AppError(
         "筛选值格式不对",
         code="VALIDATION_FAILED",
@@ -307,14 +408,24 @@ def _bad(key: str, msg: str) -> None:
     )
 
 
-def _scalar(col: ColumnElement, x: Any, key: str) -> Any:
+FILTER_TEXT_MAX = 64
+
+
+def scalar_filter(col: ColumnElement, x: Any, key: str) -> Any:
     """单个筛选值按列类型转换并校验：枚举须是已知取值，布尔须是 true/false，数值有限且在列范围内。"""
-    if isinstance(x, str) and "\x00" in x:  # PG 文本不收 NUL，进库会 500
-        _bad(key, "不能包含 NUL 字符")
+    if isinstance(x, str):
+        if len(x) > FILTER_TEXT_MAX:
+            bad_filter(key, "值过长（最多 64 字符）")
+        if "\x00" in x:
+            bad_filter(key, "不能包含 NUL 字符")
+        try:
+            x.encode("utf-8")
+        except UnicodeEncodeError:
+            bad_filter(key, "含无效 Unicode 字符")
     if isinstance(col.type, SaEnum) and col.type.enum_class is not None:
         hit = next((m for m in col.type.enum_class if isinstance(x, str) and x in (m.value, m.name)), None)
         if hit is None:
-            _bad(key, f"未知取值 {x!r}")
+            bad_filter(key, f"未知取值 {x!r}")
         return hit
     try:
         py = col.type.python_type
@@ -322,27 +433,27 @@ def _scalar(col: ColumnElement, x: Any, key: str) -> Any:
         py = str
     if py is bool:
         if not isinstance(x, bool):
-            _bad(key, "应为 true / false")
+            bad_filter(key, "应为 true / false")
         return x
     if isinstance(x, bool):
-        _bad(key, "类型不对")
+        bad_filter(key, "类型不对")
     if py in (datetime, date):
         if not isinstance(x, str):
-            _bad(key, "日期应为 ISO 字符串，如 2026-10-01")
+            bad_filter(key, "日期应为 ISO 字符串，如 2026-10-01")
         return _coerce(col, x, key)
     if py in (Decimal, int, float):
         if not isinstance(x, str | int | float):
-            _bad(key, "应为数字")
+            bad_filter(key, "应为数字")
         if py is int and isinstance(x, float) and not x.is_integer():
-            _bad(key, "应为整数")
+            bad_filter(key, "应为整数")
         try:
             n = _coerce(col, x, key) if isinstance(x, str) else py(x)
         except (ArithmeticError, ValueError):
-            _bad(key, "数值不合法")
+            bad_filter(key, "数值不合法")
         _check_range(col, n, key)
         return n
     if not isinstance(x, str):
-        _bad(key, "应为字符串")
+        bad_filter(key, "应为字符串")
     return x
 
 
@@ -353,20 +464,20 @@ def _check_range(col: ColumnElement, n: Any, key: str) -> None:
     try:
         d = Decimal(n) if not isinstance(n, float) else Decimal(repr(n))
     except (ArithmeticError, ValueError):
-        _bad(key, "数值不合法")
+        bad_filter(key, "数值不合法")
     if not d.is_finite():
-        _bad(key, "数值超出范围")
+        bad_filter(key, "数值超出范围")
     t = col.type
     lim = next((v for k, v in _INT_LIMITS.items() if type(t).__name__ == k), None)
     if lim is None and isinstance(t, Integer):
         lim = 2**31
     if lim is not None and not (-lim <= d < lim):
-        _bad(key, "数值超出范围")
+        bad_filter(key, "数值超出范围")
     prec, scale = getattr(t, "precision", None), getattr(t, "scale", None)
     if isinstance(t, Numeric) and prec and abs(d) >= Decimal(10) ** (prec - (scale or 0)):
-        _bad(key, "数值超出范围")
+        bad_filter(key, "数值超出范围")
     if abs(d) >= Decimal("1e300"):
-        _bad(key, "数值超出范围")
+        bad_filter(key, "数值超出范围")
 
 
 def _coerce(col: ColumnElement, x: str, key: str) -> Any:
@@ -376,7 +487,7 @@ def _coerce(col: ColumnElement, x: str, key: str) -> Any:
     except NotImplementedError:
         return x
     if len(x) > 64:
-        _bad(key, "值过长")
+        bad_filter(key, "值过长")
     try:
         if py is datetime:
             d = datetime.fromisoformat(x)

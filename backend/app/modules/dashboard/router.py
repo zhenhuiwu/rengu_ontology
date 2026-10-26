@@ -21,7 +21,7 @@ from app.core import clock
 from app.core.schema import parse_display_dt
 from app.db.session import SessionDep
 from app.modules.dashboard import service
-from app.modules.dashboard.schemas import KpiMetricOut, KpisOut, StoreRankingPage, StoreRankOut
+from app.modules.dashboard.schemas import KpiMetricOut, KpisOut, SalesDailyOut, StoreRankingPage, StoreRankOut
 
 router = APIRouter(tags=["dashboard"])
 
@@ -85,13 +85,30 @@ async def stores_ranking(
     to: To = None,
 ) -> StoreRankingPage:
     until, before = _upper(to)
-    rows = await service.store_ranking(
+    if to is None:
+        until = clock.now()
+    rows, total = await service.store_ranking(
         session,
         user,
         created_from=parse_display_dt(from_) if from_ else None,
         created_until=until,
         created_before=before,
+        page=page,
     )
-    p = page.clamp(len(rows))
-    items = [StoreRankOut(**r) for r in rows[p.offset : p.offset + p.size]]
-    return StoreRankingPage.of(items, len(rows), page, data_as_of=_as_of(to))
+    return StoreRankingPage.of([StoreRankOut(**r) for r in rows], total, page, data_as_of=_as_of(to))
+
+
+@router.get("/dashboard/sales/daily", response_model=SalesDailyOut, summary="按下单日汇总实付折算金额")
+async def sales_daily(
+    session: SessionDep,
+    user: CurrentUserDep,
+    cutoff: Cutoff = None,
+    days: Annotated[int, Query(ge=1, le=90)] = 30,
+) -> SalesDailyOut:
+    now = clock.now()
+    at = parse_display_dt(cutoff) if cutoff else now
+    if cutoff and len(cutoff) == 16:
+        at += timedelta(minutes=1, microseconds=-1)
+    at = min(at, now)
+    rows = await service.sales_daily(session, user, cutoff=at, days=days)
+    return SalesDailyOut(items=rows, data_as_of=at)

@@ -5,12 +5,18 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
-from app.modules.dynamic.catalog import JsonRefCatalog, get_catalog
+from app.modules.dynamic.catalog import (
+    DatabaseRefCatalog,
+    get_alert_catalog,
+    get_catalog,
+    get_list_catalog,
+    get_meta_catalog,
+)
 from app.modules.dynamic.ports import PortsDep
 from app.modules.dynamic.repo import AlertRepo
 from app.modules.dynamic.schemas import (
@@ -34,7 +40,8 @@ from app.modules.dynamic.service import ActionService, AlertService
 
 router = APIRouter(tags=["dynamic"])
 
-CatalogDep = Annotated[JsonRefCatalog, Depends(get_catalog)]
+CatalogDep = Annotated[DatabaseRefCatalog, Depends(get_catalog)]
+DynamicPathCode = Annotated[str, Path(pattern=r"^[^\x00]+$")]
 
 
 def _page_params(default_size: int):
@@ -49,10 +56,10 @@ def _page_params(default_size: int):
     return dep
 
 
-AlertPageQ = Annotated[PageParams, Depends(_page_params(12))]  # Alerts.vue 每页 12
-ActionPageQ = Annotated[PageParams, Depends(_page_params(16))]  # Actions.vue 每页 16
+AlertPageQ = Annotated[PageParams, Depends(_page_params(10))]
+ActionPageQ = Annotated[PageParams, Depends(_page_params(10))]
 
-# 功能权限（require_func 目前是桩，PDE 接入后生效）。
+# 功能权限按真实数据库角色聚合校验。
 # 页面 key 与级别照前端 nav / roles.ts（FuncLevel = view / manage）：
 # 告警处理页 key = "alerts"，动作中心 key = "action-center"；读 = view，写 = manage。
 # 告警「发起动作」虽然新建动作，但操作入口在告警页，按 alerts manage 校验 [推断]。
@@ -76,13 +83,40 @@ AlertSvc = Annotated[AlertService, Depends(_alerts)]
 ActionSvc = Annotated[ActionService, Depends(_actions)]
 
 
+def _alert_list(
+    session: SessionDep,
+    user: CurrentUserDep,
+    catalog: Annotated[DatabaseRefCatalog, Depends(get_list_catalog)],
+    ports: PortsDep,
+) -> AlertService:
+    return AlertService(session, user, catalog, ports)
+
+
+def _action_list(
+    session: SessionDep,
+    user: CurrentUserDep,
+    catalog: Annotated[DatabaseRefCatalog, Depends(get_list_catalog)],
+    ports: PortsDep,
+) -> ActionService:
+    return ActionService(session, user, catalog, ports)
+
+
+def _alert_detail(
+    session: SessionDep,
+    user: CurrentUserDep,
+    catalog: Annotated[DatabaseRefCatalog, Depends(get_alert_catalog)],
+    ports: PortsDep,
+) -> AlertService:
+    return AlertService(session, user, catalog, ports)
+
+
 # ---------------- 告警 ----------------
 
 
 @router.get("/alerts", response_model=AlertPage, dependencies=ALERTS_VIEW)
 async def list_alerts(
     page: AlertPageQ,
-    svc: AlertSvc,
+    svc: Annotated[AlertService, Depends(_alert_list)],
     status_: Annotated[str, Query(alias="status")] = "open",
     level: str | None = None,
     rule_id: Annotated[str | None, Query(alias="ruleId")] = None,
@@ -91,13 +125,28 @@ async def list_alerts(
     return await svc.search(status=status_, level=level, rule_id=rule_id, kw=kw, page=page)
 
 
+@router.get("/alerts/meta", dependencies=ALERTS_VIEW)
+async def alerts_meta(session: SessionDep) -> dict[str, Any]:
+    from sqlalchemy import select
+
+    from app.modules.dynamic.rules_models import Rule
+
+    return {
+        "rules": [
+            {"id": code, "name": name}
+            for code, name in await session.execute(select(Rule.code, Rule.name).order_by(Rule.code))
+        ]
+    }
+
+
 @router.get("/alerts/{code}", response_model=AlertDetail, dependencies=ALERTS_VIEW)
-async def get_alert(code: str, svc: AlertSvc) -> AlertDetail:
+async def get_alert(code: str, svc: Annotated[AlertService, Depends(_alert_detail)]) -> AlertDetail:
+    # The catalog dependency validates code before its first database lookup.
     return await svc.detail(await svc.get(code))
 
 
 @router.post("/alerts/{code}:claim", response_model=AlertDetail, dependencies=ALERTS_MANAGE)
-async def claim_alert(code: str, svc: AlertSvc) -> AlertDetail:
+async def claim_alert(code: DynamicPathCode, svc: AlertSvc) -> AlertDetail:
     return await svc.detail(await svc.claim(code))
 
 
@@ -108,12 +157,12 @@ async def batch_claim(body: IdsIn, svc: AlertSvc) -> BatchClaimOut:
 
 
 @router.post("/alerts/{code}:transfer", response_model=AlertDetail, dependencies=ALERTS_MANAGE)
-async def transfer_alert(code: str, body: TransferIn, svc: AlertSvc) -> AlertDetail:
+async def transfer_alert(code: DynamicPathCode, body: TransferIn, svc: AlertSvc) -> AlertDetail:
     return await svc.detail(await svc.transfer(code, body.to))
 
 
 @router.post("/alerts/{code}:close", response_model=AlertDetail, dependencies=ALERTS_MANAGE)
-async def close_alert(code: str, body: CloseIn, svc: AlertSvc) -> AlertDetail:
+async def close_alert(code: DynamicPathCode, body: CloseIn, svc: AlertSvc) -> AlertDetail:
     return await svc.detail(await svc.close(code, body.as_, body.reason))
 
 
@@ -124,7 +173,7 @@ async def batch_close(body: BatchCloseIn, svc: AlertSvc) -> BatchCloseOut:
 
 
 @router.post("/alerts/{code}:start-action", response_model=StartActionOut, dependencies=ALERTS_MANAGE)
-async def start_action(code: str, svc: AlertSvc, acts: ActionSvc) -> StartActionOut:
+async def start_action(code: DynamicPathCode, svc: AlertSvc, acts: ActionSvc) -> StartActionOut:
     alert, run = await svc.start_action(code)
     return StartActionOut(alert=await svc.detail(alert), action=await acts.detail(run))
 
@@ -140,7 +189,7 @@ async def people(session: SessionDep, _user: CurrentUserDep) -> list[str]:
 @router.get("/action-runs", response_model=ActionRunPage, dependencies=ACTIONS_VIEW)
 async def list_action_runs(
     page: ActionPageQ,
-    svc: ActionSvc,
+    svc: Annotated[ActionService, Depends(_action_list)],
     tab: str | None = None,
     status_: Annotated[str | None, Query(alias="status")] = None,
     action: str | None = None,
@@ -172,7 +221,9 @@ async def list_action_runs(
 
 
 @router.get("/actions/meta", dependencies=ACTIONS_VIEW)
-async def actions_meta(catalog: CatalogDep, _user: CurrentUserDep) -> dict[str, Any]:
+async def actions_meta(
+    catalog: Annotated[DatabaseRefCatalog, Depends(get_meta_catalog)], _user: CurrentUserDep
+) -> dict[str, Any]:
     return catalog.meta()
 
 
@@ -190,27 +241,29 @@ async def stage_action(body: StageIn, svc: ActionSvc, response: Response) -> Act
 
 
 @router.get("/action-runs/{code}", response_model=ActionRunDetail, dependencies=ACTIONS_VIEW)
-async def get_action_run(code: str, svc: ActionSvc) -> ActionRunDetail:
+async def get_action_run(
+    code: DynamicPathCode, svc: Annotated[ActionService, Depends(_action_list)]
+) -> ActionRunDetail:
     return await svc.detail(await svc.get(code))
 
 
 @router.post("/action-runs/{code}:confirm", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
-async def confirm_action(code: str, svc: ActionSvc) -> ActionRunDetail:
+async def confirm_action(code: DynamicPathCode, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.confirm(code))
 
 
 @router.post("/action-runs/{code}:withdraw", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
-async def withdraw_action(code: str, body: WithdrawIn, svc: ActionSvc) -> ActionRunDetail:
+async def withdraw_action(code: DynamicPathCode, body: WithdrawIn, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.withdraw(code, body.reason))
 
 
 @router.post("/action-runs/{code}:approve", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
-async def approve_action(code: str, svc: ActionSvc) -> ActionRunDetail:
+async def approve_action(code: DynamicPathCode, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.approve(code))
 
 
 @router.post("/action-runs/{code}:resubmit", response_model=ResubmitOut, dependencies=ACTIONS_MANAGE)
-async def resubmit_action(code: str, svc: ActionSvc) -> ResubmitOut:
+async def resubmit_action(code: DynamicPathCode, svc: ActionSvc) -> ResubmitOut:
     new, old = await svc.resubmit(code)
     return ResubmitOut(
         id=new.code, idem_key=new.idem_key, action=await svc.detail(new), original=await svc.detail(old)
@@ -218,7 +271,7 @@ async def resubmit_action(code: str, svc: ActionSvc) -> ResubmitOut:
 
 
 @router.post("/action-runs/{code}:reconcile", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
-async def reconcile_action(code: str, body: ReconcileIn, svc: ActionSvc) -> ActionRunDetail:
+async def reconcile_action(code: DynamicPathCode, body: ReconcileIn, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.reconcile(code, body.result, body.note))
 
 

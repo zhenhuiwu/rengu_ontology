@@ -19,6 +19,7 @@ from app.modules.event.models import (
     EventSource,
     EventSubscription,
     EventType,
+    EventTypeVersion,
     SubscriberKind,
     SubscriberStatus,
 )
@@ -105,7 +106,7 @@ def event_def_from_json(t: dict[str, Any], ctx: Any) -> dict[str, Any]:
 
 async def current_types(session: AsyncSession) -> list[EventType]:
     stmt = select(EventType).where(EventType.retired_release_id.is_(None)).order_by(EventType.id)
-    return list((await session.scalars(stmt)).all())
+    return list((await session.scalars(stmt.execution_options(populate_existing=True))).all())
 
 
 async def restore_event_types(session: AsyncSession, content: dict[str, Any], release_id: int) -> None:
@@ -168,7 +169,13 @@ class EventTypesSection:
     async def build_section(
         self, session: AsyncSession, base: Any | None, change_order_ids: list[str]
     ) -> Any:
-        return {et.code: event_def(et) for et in await current_types(session)}
+        from app.modules.action.writeback import finish_versions
+
+        types = await current_types(session)
+        await finish_versions(
+            session, "event", types, change_order_ids, EventTypeVersion, "event_type_id", event_def
+        )
+        return {et.code: event_def(et) for et in types}
 
     def seed_section(self, ver: str, ctx: Any) -> Any:
         return {t["id"]: event_def_from_json(t, ctx) for t in ctx.load("EVENT_TYPES.json", group=GROUP)}
@@ -184,8 +191,10 @@ BUILDER = EventTypesSection()
 
 def register() -> EventTypesSection:
     """幂等：已登记（本实例或测试替身）就不重复登记。由骨架 load_sections() 调用，import 时不登记。"""
+    from app.modules.event.writeback import register as register_writebacks
     from app.modules.versioning.sections import register_section, registered_sections
 
+    register_writebacks()
     if SECTION not in registered_sections():
         register_section(BUILDER)
     return BUILDER

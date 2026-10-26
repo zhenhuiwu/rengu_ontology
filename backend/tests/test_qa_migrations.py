@@ -80,12 +80,14 @@ async def test_release_fk_enforced(seeded):
     for t in ("qa_eval_run", "qa_turn"):
         sql = f"UPDATE {t} SET release_id = :r WHERE id = (SELECT min(id) FROM {t})"
         sp = await seeded.begin_nested()
-        with pytest.raises(IntegrityError, match="foreign key"):
+        with pytest.raises(IntegrityError) as fk:
             await seeded.execute(text(sql), {"r": rid + 1000})
+        assert fk.value.orig.sqlstate == "23503"
         await sp.rollback()
         await seeded.execute(text(sql), {"r": rid})  # 指向真实版本可以
     sp = await seeded.begin_nested()
-    with pytest.raises(IntegrityError, match="foreign key"):
+    with pytest.raises(IntegrityError) as fk:
         await _copy_view_row(seeded, rid + 1000)
+    assert fk.value.orig.sqlstate == "23503"
     await sp.rollback()
     await _copy_view_row(seeded, rid)
