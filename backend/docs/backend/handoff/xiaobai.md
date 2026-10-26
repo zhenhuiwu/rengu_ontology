@@ -16,7 +16,7 @@
 
 - 内省接到「新建对象类型」流程：等静态的变更单发起接口（`handoff/static.md`），再把库表 → 对象类型草稿接上。
 - 达梦 / MySQL 的真实连接：缺驱动（dmPython / aiomysql），在 `connector.DRIVERS` 加一行即可。
-- 删除角色时用户主角色名（`sys_user.role`）会悬空，api-index 是【待定】。
+- ~~删除角色时 `sys_user.role` 悬空~~：xiaobai-r3 已做（409 `ROLE_IN_USE` / 改派主角色）。
 - `/preview-sessions`（§1.11）留给 PDE。
 - 审计日志导出仍是桩（只返回 jobId）；用户页 Excel 导入（现在只认 CSV）和 lockVersion 没做。
 
@@ -34,3 +34,14 @@
 - 编号加锁：`admin.repo.lock_code_seq()` = `pg_advisory_xact_lock(hashtext('rengu:code:<表>'))`，`sys_role` / `sys_role_scope`（`_next_num`）、`sys_user`（`next_code`）、`datasource`（`max_code_no`）取号前加锁，事务结束自动释放；无迁移。测试 `tests/test_code_lock.py`。
 - Roles.vue：首次加载失败后写入成功、刷新失败也提示「已保存，刷新失败：…」。
 - 遗留：`main.py` 加了一行（PDE 文件）；mock 模式 `effectiveAccess` 预览仍用 mock 常量；`SCOPE_PROPS` 未读 `/meta`；`/me/row-scope` 现在会列出本体里的对象类型（无权查看），qa 期望可能要跟着变。
+
+## 下一轮待办（10-26 11:00 汇总）
+
+1. `SCOPE_PROPS`（行级范围可选属性）改读 `/meta` 的属性标记，去掉写死列表。
+2. mock 模式下 `effectiveAccess` 预览改用 `loadPermObjects()` 同一份对象列表。
+3. `/me/row-scope` 现在列出全部本体对象类型（无权查看），和问数确认期望后再定是否只列已授权的。
+4. 内省 → 新建对象类型草稿：静态变更单接口已在 master，下一轮接上。
+5. 达梦 / MySQL 真实连接驱动（需用户授权后才连外部库）。
+6. 审计日志真实导出；用户页 Excel 导入、lockVersion。
+7. 系统配置页租户信息保存；按组织过滤数据（一期单租户）。
+8. auto-ontology 搁置（前端无页面，用户决定）。
