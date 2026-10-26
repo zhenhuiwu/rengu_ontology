@@ -18,6 +18,9 @@
 - **合并校验 / 整版发布 / 回滚**：`POST /releases:merge-check`、`POST /releases`、`POST /releases/{ver}:rollback`（`publish.py`，经版本层 `create_version`）。
 - **变更单**：`GET /change-requests`（`?status`、`full=true`、`kw`；带 `page`/`size`/`focusId` 任一时按骨架 `PageParams.clamp` / `Page.of` 分页，每页默认 17，`focusId` 返回所在页；都不带返回整个数组，Releases.vue 现在仍整表载入）、`GET /change-requests/{id}`；6 个状态动作 `:submit` / `:withdraw` / `:approve` / `:reject` / `:unapprove` / `:reopen`；`DELETE /change-requests/{id}`（`crs.py`）。
 
+- **通用对象浏览元数据**（static_0004，分支 `static-meta`）：属性显示标记（visibility/searchable/filterable/sortable/list_visible/list_width/format/unit/backing_column）+ 指标 `variants`；`GET /object-types/{id}/meta`、`GET /object-types/{id}/facets?filters=`（`explorer.py`）。形状见 static-api.md §3.2.1。
+  - **迁移 `static_0004_explorer_meta.py` 现在 `down_revision='qa_0003'`；叠到 static-r3 上时由 PDE/静态改成 `'static_0003'`**（static-r3 新增 static_0003 并改 models.py；本次 models.py 只在 Property / Metric 末尾加列，冲突应只是相邻行）。
+
 前端：
 - **5 个页面切真接口**：对象类型、关系类型、指标、维度、业务知识。页面外面包一层 `parts/StaticGate.vue` 整表载入（`src/api/static.ts` `loadStatic`），页面本体移到 `*Body.vue`，mock 模式下渲染不变。
 - **变更与发布（Releases.vue）**：真接口模式下载入变更单列表和详情；6 个动作、删除草稿、发布、回滚都写库，成功后重新载入，失败弹错误提示、页面不变；发布 / 回滚后按 `/releases/current` 刷新顶栏版本号。
@@ -94,6 +97,12 @@
 - 行级范围：「商品.品类」范围值按名称最接近的一级类目映射（`contracts/static.py`）；「会员.常去门店所属大区」按注册门店所属大区（static-api.md §5-15）。
 - 其余见 static-api.md 正文的 [推断] 标注和 §5 第 18 条。
 
+18. **对象浏览标记没进变更单 / 快照**：新字段只在定义表和种子里，`shapes.prop` / `sections.py` 的 properties 节没带，改标记暂时只能改种子或直接改库；`/meta` 忽略 `?ver`；指标 `variants` 也只在 meta.metrics 里返回，`GET /metrics` 形状没加。从 `shapes.py` 属性形状加字段 + 快照节测试开始。
+19. **facets 只覆盖 sql_guard 登记过的类型**（门店、订单、商品等）；其他类型 `hasData:false`、空取值。新类型要先在 sql_guard 登记业务表，再在 `explorer_meta.json` 写 `backing`。行级范围 `row_filter` 目前返回 None（本体小白接入后自动生效）。
+20. **long_text、动作 `bulk`** 按设计文档下一轮再做。
+21. **（下一轮）指标 `variants` 是按显示名末尾「（…）」推出来的**（`explorer.metric_variants`）：名字不规范的指标不会成组。应改为在指标定义 / 变更单里显式维护变体，种子只做初值。
+22. **（下一轮）行级范围的分面测试**：现在只用 monkeypatch `auth.row_filter` 证明 facets 调了 `apply_row_filter`（`test_facets_apply_row_filter`）；本体小白接入真实 `row_filter` 后补一条按角色范围的端到端测试（含 DENY_ALL → 全部计数 0）。
+
 ## 代码在哪
 
 | 部分 | 文件 |
@@ -106,6 +115,7 @@
 | 模型 / 入参 | `models.py`、`schemas.py` |
 | 种子 | `app/modules/static/seeds/__init__.py`；数据 `backend/seeds/json/`（export-mock）+ `backend/seeds/extra/static/CR_DETAILS.json` |
 | 迁移 | `backend/migrations/versions/static_0001_static_definitions.py`、`static_0002_change_request.py` |
+| 对象浏览 | `explorer.py`（标记默认值、variants 分组、meta / facets）、`seeds/explorer_meta.json`、`static_0004_explorer_meta.py`、`tests/test_static_explorer.py` |
 | 测试 | `backend/tests/test_static.py`（读接口）、`test_static_cr.py`（变更单）、`test_static_publish.py`（发布 / 回滚） |
 | 前端 API | `src/api/static.ts`（`loadStatic`、`fetchChangeRequests`、`crAction`、`deleteCR`、发布 / 回滚、`fetchCurrentAfterWrite`） |
 | 前端页面 | `src/pages/ontology/{ObjectTypes,LinkTypes,Metrics,Dimensions,Glossary}.vue`（包 `parts/StaticGate.vue`）+ 对应 `*Body.vue`；`Releases.vue` |

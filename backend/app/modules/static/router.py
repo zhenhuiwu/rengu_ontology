@@ -394,3 +394,19 @@ async def reopen_change_request(id: str, session: SessionDep, user: CurrentUserD
 async def delete_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> None:
     """删除草稿（owner；硬删 [推断]）。"""
     await ChangeRequestService(session).delete(id, user)
+
+
+# ---------------------------------------------------------------- 通用对象浏览（static_0004，explorer.py）
+from app.modules.static.explorer import ExplorerService, parse_filters  # noqa: E402
+
+
+@get("/object-types/{id}/meta", "object-types", response_model=Rec)
+async def object_explorer_meta(id: str, session: SessionDep, _: CurrentUserDep) -> Any:
+    return await ExplorerService(session).meta(id)
+
+
+@get("/object-types/{id}/facets", "object-types", response_model=list[Rec])
+async def object_facets(
+    id: str, session: SessionDep, user: CurrentUserDep, filters: Annotated[str | None, Query()] = None
+) -> Any:
+    return await ExplorerService(session).facets(id, parse_filters(filters), user)

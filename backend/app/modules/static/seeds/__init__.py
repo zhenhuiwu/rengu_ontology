@@ -32,6 +32,7 @@ from typing import Any
 
 from app.core.enums import from_api
 from app.core.schema import parse_display_dt
+from app.modules.static.explorer import default_flags, metric_variants
 from app.modules.static.models import (
     ApplyKind,
     Cardinality,
@@ -208,6 +209,7 @@ def _properties(r: Row, ctx: SeedContext) -> list[Row]:
                 "transform": m["transform"],
                 "map_column": m["col"],
                 "seq": i,
+                **default_flags(r["key"], p),  # 通用对象浏览标记（explorer.py，static_0004）
             }
         )
     return out
@@ -312,6 +314,7 @@ def _metric(r: Row, ctx: SeedContext) -> Row:
         "disallowed_rows": METRIC_DENY,
         "seq": ids.index(r["id"]),
         "stat_seq": stat_ids.index(r["id"]) if r["id"] in stat_ids else None,
+        "variants": metric_variants(ctx.load("METRIC_LIST.json")).get(r["id"], []),  # 口径变体（static_0004）
     }
 
 

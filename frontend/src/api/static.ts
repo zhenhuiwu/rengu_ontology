@@ -153,3 +153,29 @@ export const crAction = (id: string, action: CRAction, rejectReason?: string) =>
   api.post<CRRow>(`/change-requests/${encodeURIComponent(id)}:${action}`, action === 'reject' ? { rejectReason } : {});
 /** DELETE /change-requests/{id}：删除草稿（owner + 草稿；非 owner 403、非草稿 409 CR_STATE），成功 204 */
 export const deleteCR = (id: string) => api.delete<void>(`/change-requests/${encodeURIComponent(id)}`);
+
+/** 通用对象浏览：GET /object-types/{id}/meta 的属性项（static-api.md §3.2.1） */
+export interface ExplorerPropMeta {
+  key: string; name: string; dataType: string;
+  searchable: boolean; filterable: boolean; sortable: boolean; listed: boolean;
+  order: number; visibility: 'prominent' | 'normal' | 'hidden';
+  format: string | null; unit: string | null;
+  listWidth?: number | null; facetKind?: 'enum' | 'range' | null;
+}
+export interface MetricVariant { code: string; label: string; api: string; version: string; default: boolean }
+export interface ObjectTypeMeta {
+  titleProp: string | null; properties: ExplorerPropMeta[];
+  pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean;
+  metrics?: { id: string; name: string; unit: string | null; variants: MetricVariant[] }[];
+}
+export type FacetFilterValue = (string | number | boolean)[] | { min?: string | number | null; max?: string | number | null };
+export type Facet =
+  | { key: string; name: string; kind: 'enum'; order: number; hasData: boolean; values: { value: string; count: number }[] }
+  | { key: string; name: string; kind: 'range'; order: number; hasData: boolean; min: number | string | null; max: number | string | null };
+/** GET /object-types/{id}/meta：结果列、分面、搜索字段的元数据 */
+export const getObjectTypeMeta = (id: string) => api.get<ObjectTypeMeta>(`/object-types/${encodeURIComponent(id)}/meta`);
+/** GET /object-types/{id}/facets：按实际数据算的分面取值 / 区间，随其他已选筛选联动 */
+export const getObjectTypeFacets = (id: string, filters: Record<string, FacetFilterValue> = {}) =>
+  api.get<Facet[]>(`/object-types/${encodeURIComponent(id)}/facets`, {
+    query: Object.keys(filters).length ? { filters: JSON.stringify(filters) } : {},
+  });

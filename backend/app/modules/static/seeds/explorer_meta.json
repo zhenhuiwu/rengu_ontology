@@ -1,0 +1,38 @@
+{
+  "_doc": "通用对象浏览的属性标记初始值（generic-object-explorer.md §4）。取值照前端 src/mock/objects-qa.ts OBJ_TYPES 的 facets/columns/kw 定：facets → filterable，columns → list_visible(+width)，kw → searchable；backing 是分面取值用的受控业务表物理列（表由 sql_guard.governed_tables() 按对象类型找）。没列到的属性走 explorer.default_flags 的通用默认。",
+  "properties": {
+    "store": {
+      "store_id":   {"searchable": true, "list_visible": true, "list_width": 120, "backing": "store_no"},
+      "store_name": {"searchable": true, "backing": "name"},
+      "region_code": {"filterable": true, "list_visible": true, "list_width": 96, "backing": "region"},
+      "city":       {"filterable": true, "list_visible": true, "list_width": 72, "backing": "city"},
+      "format":     {"filterable": true, "list_visible": true, "list_width": 96, "backing": "format"},
+      "area_sqm":   {"list_visible": true, "list_width": 128, "format": "raw", "unit": "㎡", "backing": "area"},
+      "opened_at":  {"list_visible": true, "list_width": 112, "backing": "opened_at"},
+      "status":     {"filterable": true, "list_visible": true, "list_width": 88, "backing": "status"}
+    },
+    "product": {
+      "sku":         {"searchable": true, "list_visible": true, "list_width": 100, "backing": "code"},
+      "sku_name":    {"searchable": true, "backing": "name"},
+      "barcode":     {"searchable": true, "backing": "barcode"},
+      "spec":        {"list_visible": true, "list_width": 160, "backing": "spec"},
+      "category_id": {"filterable": true, "list_visible": true, "list_width": 160, "backing": "category"},
+      "brand":       {"filterable": true, "list_visible": true, "list_width": 120, "backing": "brand"},
+      "retail_price": {"list_visible": true, "list_width": 120, "format": "money:2", "unit": "元", "backing": "price"},
+      "unit":        {"backing": "unit"}
+    },
+    "order": {
+      "order_id":    {"searchable": true, "backing": "code"},
+      "order_no_display": {"searchable": true},
+      "store_id":    {"list_visible": true, "list_width": 220},
+      "channel":     {"filterable": true, "list_visible": true, "list_width": 112, "backing": "channel"},
+      "status":      {"filterable": true, "list_visible": true, "list_width": 88, "backing": "status"},
+      "warehouse_id": {"backing": "warehouse"},
+      "created_at":  {"list_visible": true, "list_width": 168, "backing": "created_at_biz"},
+      "shipped_at":  {"backing": "shipped_at"},
+      "paid_amount": {"list_visible": true, "list_width": 160, "format": "money:2", "unit": "元", "backing": "amount"},
+      "discount_amount": {"format": "money:2", "unit": "元", "backing": "discount"},
+      "is_test":     {"backing": "is_test"}
+    }
+  }
+}

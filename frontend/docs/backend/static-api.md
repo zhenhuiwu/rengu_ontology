@@ -650,6 +650,68 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 引用：指标 / 视图 / 版本历史 | `GET /object-types/{id}/usage?kind=metric\|view\|cr&page&size` | 分页见 §4.1。**TODO（变更单模块）**：`kind=cr`（版本历史）在变更单模块接入前返回 422 `VALIDATION_FAILED`，`details.fields = [{field: "kind", message}]` | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 预览数据、批量编辑、视图「打开」 | — | **[第二期]** | — | — | — | — | — |
 
+#### 3.2.1 通用对象浏览元数据（`generic-object-explorer.md` §4–§5，static_0004，已实现）
+
+| 接口 | 权限 | 历史 / 预览 | 行级 |
+|---|---|---|---|
+| `GET /object-types/{id}/meta` | object-types:view | ✗（读当前定义表，忽略 `?ver`） | 否 |
+| `GET /object-types/{id}/facets?filters=<JSON>` | object-types:view | ✗（读实时业务表） | 是（`apply_row_filter`） |
+
+`{id}` = 对象类型 code（`store` / `product` / `order` …），不存在 404 `NOT_FOUND`。
+
+**meta 响应**（PDE 定稿字段全部必给；带 * 的是附加字段，前端可不用）：
+
+```jsonc
+{
+  "titleProp": "store_name",            // is_title 的属性 key；每类型一个
+  "properties": [{                       // visibility=hidden 的不返回；按 order 升序
+    "key": "region_code",               // 属性 api
+    "name": "区域",
+    "dataType": "enum",                 // string/enum/decimal/integer/date/timestamp/boolean…
+    "searchable": false,                // 关键词匹配 + 占位符
+    "filterable": true,                 // 左栏分面
+    "sortable": false,                  // 数值/日期默认 true
+    "listed": true,                     // 默认结果列（库列 list_visible）
+    "order": 3,                         // = Property.seq
+    "visibility": "normal",             // prominent / normal（hidden 不出现）
+    "format": null,                     // money:2 / pct / int / raw / null
+    "unit": null,                       // 元 / ㎡ / null
+    "listWidth": 96, "group": "...", "pk": false, "title": false,
+    "sensitive": false, "enumName": "...", "facetKind": "enum"   // * facetKind: enum/range/null
+  }],
+  "id": "store", "api": "Store", "name": "门店", "pkProp": "store_id",       // *
+  "kwPlaceholder": "门店编码 / 门店名称",   // * 前 3 个 searchable 的 name
+  "hiddenCount": 0, "sampleQuestions": [], // *
+  "hasData": true,                          // * 有受控业务表（sql_guard 登记）才 true
+  "metrics": [{"id": "gmv", "name": "GMV（不含税）", "unit": "元", "variants": [...]}]  // * 维度与本类型相关的指标
+}
+```
+
+**facets**：`filters` 为 JSON 对象（URL 编码），键为属性 key，值按分面类型**严格校验**：
+- 枚举类（`facetKind=enum`：枚举 / 布尔 / 字符串）：只收**标量数组**（IN）。枚举可写中文标签或英文码，须是已知取值；布尔须为 true/false；字符串属性须为字符串。
+- 区间类（`facetKind=range`：数值 / 日期）：只收 `{"min":..,"max":..}`（含端点，可只给一个，null 视为不限）。日期 / 时间为 ISO 字符串（按 `display_tz`）；数值为数字或数字字符串，须有限、在列范围内（整数列 int32/int64、Numeric 精度）。
+- 以下一律 422 `VALIDATION_FAILED`，`details.fields=[{field:"filters.<key>", message}]`：非对象 JSON；键不存在 / 不可筛选 / 隐藏 / 敏感；单个标量（如 `{"city":5}`、`{"status":"营业中"}`）；数组里有对象 / 数组 / null / 类型不符的值；未知枚举值；给非区间属性 `{min,max}` 或给区间属性数组；min/max 类型不对、超范围或 1e400 之类。
+
+```jsonc
+[
+  {"key": "region_code", "name": "区域", "kind": "enum", "order": 3, "hasData": true,
+   "values": [{"value": "华东一区", "count": 12}]},      // 枚举类按枚举定义顺序，其余按 count 降序
+  {"key": "area_sqm", "name": "营业面积", "kind": "range", "order": 6, "hasData": true,
+   "min": 80.0, "max": 1200.0}                            // 日期为 ISO 字符串
+]
+```
+
+- 只返回 `filterable` 且**不隐藏、不敏感**的属性（敏感属性取值会泄露明文；meta 里这类属性 `filterable:false`），按 `order`；`kind`：enum/boolean/string → `enum`，数值/日期 → `range`。
+- 计数用**其他**已选筛选 + 行级范围，不含本分面自己的条件（选了城市后城市分面仍显示全部城市）。
+- 取值来源：对象类型 → `sql_guard.governed_tables()` 里 `object_type` 相同的表；属性 → `Property.backing_column`（空则用属性 api）且须是该表的列。
+  没有业务表或没有对应列的属性：`hasData:false`，`values:[]` 或 `min/max:null`。
+
+**指标 `variants`**（库字段 `onto_metric.variants`；目前通过 meta.metrics 返回，`GET /metrics` 形状还没加，见 handoff 第 18 条）：`[{code, label, api, version, default}]`，没有变体为 `[]`。
+种子按显示名去掉末尾「（…）」分组：如 `gmv` / `gmv_tax` → `[{code:"gmv",label:"不含税",default:true},{code:"gmv_tax",label:"含税",default:false}]`。
+
+**新库字段**（`onto_property`）：`visibility`、`searchable`、`filterable`、`sortable`、`list_visible`、`list_width`、`format`、`unit`、`backing_column`；`onto_metric.variants`(jsonb)。
+种子初值：`app/modules/static/seeds/explorer_meta.json`（门店：区域、城市、业态、状态可筛选；编码、业态、区域、城市、面积、开业日期、状态列表展示，等）；敏感属性默认不可筛选；未登记的类型按通用规则（pk/标题可搜索、枚举/布尔可筛选、pk/维度列表展示、数值日期可排序）。`long_text`、动作 `bulk` 本版不做。
+
 ### 3.3 关系类型
 
 | 页面操作 | 接口 | 规则 | 页面权限 | 密钥 | 历史 | 预览 | 行级 |
