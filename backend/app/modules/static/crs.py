@@ -25,6 +25,7 @@ from app.common.auth import CurrentUser
 from app.core import clock
 from app.core.errors import AppError, Forbidden, NotFound
 from app.core.schema import _fmt_dt
+from app.modules.static.cr_write import CrWriteService, target_out
 from app.modules.static.models import ChangeRequest, CrEvent, CRStatus
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import VersioningService, next_ver
@@ -101,9 +102,16 @@ class ChangeRequestService:
         if full:
             evs = await self._events([cr.id for cr, _ in rows])
             for r, (cr, _) in zip(out, rows, strict=True):
-                r["detail"] = cr.detail
+                r["detail"] = await self._detail(cr)
                 r["events"] = evs[cr.id]
         return out
+
+    async def _detail(self, cr: ChangeRequest) -> dict[str, Any]:
+        """CRDetail：种子 detail 原样 + cr_item 生成的改动行（接在 detail.diffs 后面，没有草稿行时不动）。"""
+        extra = await CrWriteService(self.session).item_diffs(cr.id)
+        if not extra:
+            return cr.detail
+        return {**cr.detail, "diffs": [*(cr.detail.get("diffs") or []), *extra]}
 
     async def detail(self, code: str) -> Row:
         q = (
@@ -115,7 +123,14 @@ class ChangeRequestService:
         if hit is None:
             raise NotFound("变更单不存在", details={"id": code})
         cr, ver = hit
-        return {**self._row(cr, ver), "detail": cr.detail, "events": (await self._events([cr.id]))[cr.id]}
+        targets = await CrWriteService(self.session).targets(cr.id)
+        return {
+            **self._row(cr, ver),
+            "detail": await self._detail(cr),
+            "events": (await self._events([cr.id]))[cr.id],
+            "targets": [target_out(t) for t in targets],
+            "lockVersion": cr.lock_version,
+        }
 
     # ------------------------------------------------------------ 写
     async def _lock(self, code: str) -> ChangeRequest:
@@ -167,6 +182,8 @@ class ChangeRequestService:
                 raise AppError("草稿里还没有改动，无法提交", code="CR_EMPTY", status_code=409)
             if n := _blocked(cr):
                 raise AppError(f"有 {n} 项阻断未通过", code="CR_BLOCKED", status_code=409)
+            if not cr.reviewer:
+                raise AppError("还没有指定审核人", code="CR_NO_REVIEWER", status_code=409)
             self._move(cr, user, S.in_review, action, "提交审核", f"审核人 {cr.reviewer}")
         elif action == "withdraw":
             _state(cr, S.in_review)
