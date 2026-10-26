@@ -7,6 +7,55 @@
 > **没有切换的页面仍然走 mock。** 真接口只在 `VITE_API_REAL_MODULES` 包含 `static`（或 `VITE_API_MODE=real`）时生效；
 > 这个开关只在本地 `.env.local` 设置，不提交。没有开关时所有页面和以前完全一样（不发请求）。
 
+## 变更单写接口契约（static-r3，先定形状，供动态 / Palantir 对接）
+
+> 前缀 `/api/ontology/v1`。**目标通用**：`target.kind` 取 `object | link | metric | dimension | knowledge | action | event | rule`，
+> `target.id` = 该定义的业务编码（`member`、`K-018`、`R-007`、`adjust_region_budget`…），后台不校验目标是否存在（跨模块不做外键，同 §1.2）。
+> `section` / `key` 由各页面自定（静态：`properties|links|mapping|values|mappings|def`；动作：`params|conds|edits|effects|config`；
+> 事件：`payload|subs`；规则：`conds|mapping|config`；生命周期：`lc_states|lc_transitions`，同 static-api.md §1.2 CR_ITEM 注释）。
+> 写接口一律带 `releases:manage`（权限桩，目前不拦）；带 `?ver=` / `?previewAs=` 时骨架统一 403 `READONLY`。
+> 所有错误体照骨架：`{code, message, details}`。
+
+**公共形状**
+
+```jsonc
+// TargetIn / TargetOut
+{ "kind": "rule", "id": "R-007", "isNew": false }          // isNew 可省，默认 false（本单新建的定义填 true）
+// ItemIn（PUT items 的 rows[]）
+{ "key": "promo_price", "op": "add|update|delete",
+  "before": <任意 JSON，可省>, "after": <任意 JSON，delete 时可省>,
+  "type": "属性", "field": "促销价",                       // 可省：改动列表的「类型」「字段」列；省略时 type 按 kind 取中文名、field = section
+  "beforeText": "", "afterText": "¥12.80" }                // 可省：改动列表显示的文字；省略时由 before/after 转成字符串
+// ItemOut
+{ "target": {"kind","id"}, "section": "properties", "key": "promo_price", "op": "add",
+  "before": null, "after": {...}, "type": "属性", "field": "促销价", "updatedBy": "王敏", "updatedAt": "2026-10-26 09:10" }
+// CRFull = 现有 GET /change-requests/{id} 的返回（mock ChangeRequest 一行 + detail + events），另加：
+{ ..., "targets": [TargetOut], "lockVersion": 3 }
+```
+- `detail.diffs` = 种子里的改动（mock CR_DETAILS）+ cr_item 生成的改动行（key 形如 `i<序号>`），`changes` = 两者条数之和（种子单子的改动数不变）。
+- `detail.touches` 自动加 `"{kind}:{id}"`（合并校验 M1 用）；`detail.edit` 没有时取第一个目标（Releases.vue「编辑草稿」跳转用）。
+
+| # | 接口 | 请求体 / 参数 | 成功 | 错误 |
+|---|---|---|---|---|
+| 1 | `POST /change-requests` 发起变更（新建） | `{title(1–40), reason?="", target?: TargetIn, level?="一般", reviewer?}` | 201 CRFull；`status=草稿`、owner = 当前用户、单号用 CR 序列；写事件「{me} 创建变更单」 | 422 `VALIDATION_FAILED`；409 `TARGET_IN_OTHER_CR`（`details{crId,kind,id}`，目标已在别的草稿里） |
+| 2 | `POST /change-requests/{id}/targets` 加入已有 | `TargetIn` | 200 CRFull；已在本单里时幂等 | 404；409 `CR_STATE`（不是草稿）；409 `TARGET_IN_OTHER_CR` |
+| 3 | `DELETE /change-requests/{id}/targets/{kind}/{targetId}` 放弃本对象草稿 | — | 204；删掉该目标的全部 cr_item 和登记 | 404（单子或目标不在单里）；409 `CR_LOCKED`（不是草稿） |
+| 4 | `PUT /change-requests/{id}/items` 保存到草稿 | `{target: TargetIn, section, rows: ItemIn[], lockVersion?}` | 200 `{id, changes, lockVersion, items: ItemOut[]}`（items = 该目标该 section 保存后的全部行）| 404；409 `CR_LOCKED`（不是草稿，`details.status`）；409 `VERSION_CONFLICT`（`lockVersion` 不等于当前）；409 `TARGET_IN_OTHER_CR`；422（op 不认识 / 同一 section 内 key 重复） |
+| 5 | `GET /change-requests/{id}/items?kind&targetId&section` 读回草稿 | 三个筛选都可省 | 200 `ItemOut[]`（不分页，按保存顺序） | 404 |
+| 6 | `POST /change-requests/{id}:validate` 重新校验 | — | 200 `{id, checkedAt, checks: CheckRow[17], summary:"阻断 1 · 通过 16", blocked}`；写 cr_check、`detail.checks`、`detail.times.checked`，事件「系统 完成发布校验」 | 404；409 `CR_STATE`（已发布） |
+| 7 | `GET /change-requests/{id}/diffs?page&size` 改动 | 每页默认 10（`Releases.vue:83`） | 200 骨架 Page `{items: DiffRow[], total, page, size}`，`DiffRow{key,type,target,field,kind(新增/修改/删除),before,after}` | 404 |
+| 8 | `PATCH /change-requests/{id}` 改单头 | `{title?, reason?, reviewer?, level?, migration?, lockVersion?}` | 200 CRFull | 404；409 `CR_LOCKED`；409 `VERSION_CONFLICT` |
+| 9 | `GET /change-requests/draft-targets?status=草稿` 草稿登记 | `status` 可省（默认草稿） | 200 `{"CR-0011": {"metric": ["gross_margin"], "rule": ["R-007"], ...}}`，同 mock `DRAFT_TARGETS` 形状 | — |
+
+规则（[推断] 的都按前端没限制处理）：
+- **PUT items 是整段替换**：同一 `(target, section)` 的旧行全部换成 `rows`（对应 `useDraftEdits.save()` 把整段 working 存进 saved）；`rows=[]` 清空这一段。只传有改动标记的行（mark ≠ ''），没改的行不要传。目标没登记时自动登记（`isNew` 取请求里的）。
+- 每次 PUT / targets / PATCH 成功后 `lockVersion + 1`；`lockVersion` 不传就不校验。
+- **提交审核** `:submit` 现有规则不变（改动 0 → `CR_EMPTY`、阻断 → `CR_BLOCKED`），另加：`reviewer` 为空 → 409 `CR_NO_REVIEWER`。新建时不传 `reviewer` 默认取本体管理员（演示身份王敏）；当前用户就是王敏时留空，需 PATCH 指定 [推断]。
+- **校验** `:validate` 同步完成（static-api.md 原写异步 `jobId`，改同步 [推断]）。规则（初版，按 cr_item 推）：V7 非新建目标在 `properties|links` 段 `op=delete` → 阻断；V11 `after` 里 `desc|definition|description` 为空串 → 警告；V15 级别重大且没写迁移方式 → 警告；V12 信息（改动数、涉及定义数）；没有对应种类目标的项给「不适用」（V3/V13 关系、V8 指标、V4/V10 维度、V16 对象）；其余通过。种子单子取「种子结果与计算结果」里更严重的一档（不会把 mock 里的阻断洗掉）。
+- 草稿 → 审核中后所有写接口返回 `CR_LOCKED`；驳回后 `:reopen` 回草稿即可继续写。
+- 删除草稿单（已有 `DELETE /change-requests/{id}`）连同 cr_target / cr_item / cr_check 级联删除。
+- 发布时 `build_section` 还没按 cr_item 展开（见「未完成」），cr_item 目前只用于草稿保存、改动列表、校验和合并校验。
+
 ## 已完成
 
 后台（`backend/app/modules/static/`，前缀 `/api/ontology/v1`）：
