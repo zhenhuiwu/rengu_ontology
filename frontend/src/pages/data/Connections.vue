@@ -120,7 +120,13 @@ async function testConn(d: Datasource) {
     try {
       const t = await testDatasource(d.id);
       d.lastTest = t;
-      if (t.ok) { d.status = '正常'; message.success(`连接成功，耗时 ${t.ms} ms`); } else message.error(`连接失败：${t.msg}`);
+      if (t.ok) {
+        d.status = '正常'; message.success(`连接成功，耗时 ${t.ms} ms`);
+        // 后台真连成功时会内省刷新库表清单：重新拉一次清单和库表数（mock 测试器下内容不变）
+        const items = await listDsTables(d.id);
+        d.tableCount = items.length;
+        if (selected.value?.id === d.id) realTables.value = { id: d.id, items };
+      } else message.error(`连接失败：${t.msg}`);
     } catch (e) { apiFail('测试连接', e); } finally { testing.value = false; }
     return;
   }
@@ -298,7 +304,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
       </div>
       <a-tabs v-model:activeKey="tab" class="cn-tabs">
         <a-tab-pane key="params" tab="连接参数" />
-        <a-tab-pane key="tables" :tab="`库表（${dsTables(selected).length}）`" />
+        <a-tab-pane key="tables" :tab="`库表（${real ? tableSource(selected).length : dsTables(selected).length}）`" />
         <a-tab-pane key="sync" tab="同步计划" />
       </a-tabs>
 

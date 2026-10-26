@@ -1,0 +1,920 @@
+[
+  {
+    "id": "R-01",
+    "name": "系统管理员",
+    "desc": "管理用户、角色、密钥和系统配置；不默认拥有业务数据导出",
+    "builtIn": true,
+    "updatedAt": "2026-09-02 10:12",
+    "updatedBy": "王敏",
+    "func": {
+      "qa-workbench": "manage",
+      "qa-pages": "manage",
+      "object-search": "manage",
+      "object-detail": "manage",
+      "alerts": "manage",
+      "action-center": "manage",
+      "scenarios": "manage",
+      "connections": "manage",
+      "external-systems": "manage",
+      "data-quality": "manage",
+      "ontology-overview": "manage",
+      "object-types": "manage",
+      "link-types": "manage",
+      "action-types": "manage",
+      "functions": "manage",
+      "metrics": "manage",
+      "dimensions": "manage",
+      "glossary": "manage",
+      "event-types": "manage",
+      "rules": "manage",
+      "qa-tuning": "manage",
+      "releases": "manage",
+      "users": "manage",
+      "roles": "manage",
+      "audit": "manage",
+      "api-keys": "manage",
+      "settings": "manage"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": true,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": []
+  },
+  {
+    "id": "R-02",
+    "name": "本体建模师",
+    "desc": "维护对象类型、关系、动作、函数和指标口径，发布需评审",
+    "builtIn": true,
+    "updatedAt": "2026-10-11 15:40",
+    "updatedBy": "王敏",
+    "func": {
+      "qa-workbench": "view",
+      "qa-pages": "view",
+      "object-search": "view",
+      "object-detail": "view",
+      "alerts": "view",
+      "action-center": "view",
+      "scenarios": "view",
+      "connections": "manage",
+      "external-systems": "manage",
+      "data-quality": "manage",
+      "ontology-overview": "manage",
+      "object-types": "manage",
+      "link-types": "manage",
+      "action-types": "manage",
+      "functions": "manage",
+      "metrics": "manage",
+      "dimensions": "manage",
+      "glossary": "manage",
+      "event-types": "manage",
+      "rules": "manage",
+      "qa-tuning": "manage",
+      "releases": "manage",
+      "users": "none",
+      "roles": "none",
+      "audit": "none",
+      "api-keys": "none",
+      "settings": "none"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": true,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": []
+  },
+  {
+    "id": "R-03",
+    "name": "数据分析师",
+    "desc": "问数、看板和对象查询，可导出明细",
+    "builtIn": true,
+    "updatedAt": "2026-10-18 09:27",
+    "updatedBy": "陈立军",
+    "func": {
+      "qa-workbench": "manage",
+      "qa-pages": "manage",
+      "object-search": "manage",
+      "object-detail": "manage",
+      "alerts": "manage",
+      "action-center": "manage",
+      "scenarios": "manage",
+      "connections": "none",
+      "external-systems": "none",
+      "data-quality": "none",
+      "ontology-overview": "view",
+      "object-types": "none",
+      "link-types": "none",
+      "action-types": "none",
+      "functions": "none",
+      "metrics": "view",
+      "dimensions": "view",
+      "glossary": "view",
+      "event-types": "none",
+      "rules": "none",
+      "qa-tuning": "none",
+      "releases": "none",
+      "users": "none",
+      "roles": "none",
+      "audit": "none",
+      "api-keys": "none",
+      "settings": "none"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": true,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": [
+      {
+        "id": "S-31",
+        "objType": "订单",
+        "prop": "大区",
+        "op": "∈",
+        "values": [
+          "华东",
+          "华南"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "R-04",
+    "name": "动作审批人",
+    "desc": "审批需要确认的动作，可执行订单与库存类动作",
+    "builtIn": false,
+    "updatedAt": "2026-10-22 18:05",
+    "updatedBy": "孙浩然",
+    "func": {
+      "qa-workbench": "view",
+      "qa-pages": "view",
+      "object-search": "view",
+      "object-detail": "view",
+      "alerts": "manage",
+      "action-center": "manage",
+      "scenarios": "view",
+      "connections": "none",
+      "external-systems": "none",
+      "data-quality": "none",
+      "ontology-overview": "none",
+      "object-types": "none",
+      "link-types": "none",
+      "action-types": "none",
+      "functions": "none",
+      "metrics": "none",
+      "dimensions": "none",
+      "glossary": "none",
+      "event-types": "none",
+      "rules": "none",
+      "qa-tuning": "none",
+      "releases": "none",
+      "users": "none",
+      "roles": "none",
+      "audit": "none",
+      "api-keys": "none",
+      "settings": "none"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": false,
+        "actions": [
+          "订单状态修正",
+          "发起物流催派",
+          "补发出库单",
+          "退款审核"
+        ]
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": false,
+        "actions": [
+          "补货申请",
+          "门店调价",
+          "发起调价审批"
+        ]
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": true,
+        "export": false,
+        "actions": [
+          "认领告警",
+          "转派告警",
+          "关闭告警"
+        ]
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": false,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": [
+      {
+        "id": "S-41",
+        "objType": "订单",
+        "prop": "大区",
+        "op": "=",
+        "values": [
+          "华东"
+        ]
+      },
+      {
+        "id": "S-42",
+        "objType": "商品",
+        "prop": "品类",
+        "op": "∈",
+        "values": [
+          "生鲜",
+          "乳品烘焙",
+          "粮油调味"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "R-05",
+    "name": "业务查看",
+    "desc": "只读查看问数结果和对象详情，不能执行动作和导出",
+    "builtIn": true,
+    "updatedAt": "2026-08-30 11:00",
+    "updatedBy": "王敏",
+    "func": {
+      "qa-workbench": "view",
+      "qa-pages": "view",
+      "object-search": "view",
+      "object-detail": "view",
+      "alerts": "view",
+      "action-center": "view",
+      "scenarios": "none",
+      "connections": "none",
+      "external-systems": "none",
+      "data-quality": "none",
+      "ontology-overview": "none",
+      "object-types": "none",
+      "link-types": "none",
+      "action-types": "none",
+      "functions": "none",
+      "metrics": "none",
+      "dimensions": "none",
+      "glossary": "none",
+      "event-types": "none",
+      "rules": "none",
+      "qa-tuning": "none",
+      "releases": "none",
+      "users": "none",
+      "roles": "none",
+      "audit": "none",
+      "api-keys": "none",
+      "settings": "none"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": false,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": [
+      {
+        "id": "S-51",
+        "objType": "订单",
+        "prop": "大区",
+        "op": "=",
+        "values": [
+          "华东"
+        ]
+      },
+      {
+        "id": "S-52",
+        "objType": "门店",
+        "prop": "大区",
+        "op": "=",
+        "values": [
+          "华东"
+        ]
+      },
+      {
+        "id": "S-53",
+        "objType": "会员",
+        "prop": "常去门店所属大区",
+        "op": "=",
+        "values": [
+          "华东"
+        ]
+      }
+    ],
+    "defaultDeny": true
+  },
+  {
+    "id": "R-06",
+    "name": "门店店长",
+    "desc": "只看本店订单和会员，可发放召回券、申请补货",
+    "builtIn": false,
+    "updatedAt": "2026-10-24 20:16",
+    "updatedBy": "陈立军",
+    "func": {
+      "qa-workbench": "manage",
+      "qa-pages": "none",
+      "object-search": "manage",
+      "object-detail": "manage",
+      "alerts": "manage",
+      "action-center": "none",
+      "scenarios": "none",
+      "connections": "none",
+      "external-systems": "none",
+      "data-quality": "none",
+      "ontology-overview": "none",
+      "object-types": "none",
+      "link-types": "none",
+      "action-types": "none",
+      "functions": "none",
+      "metrics": "none",
+      "dimensions": "none",
+      "glossary": "none",
+      "event-types": "none",
+      "rules": "none",
+      "qa-tuning": "none",
+      "releases": "none",
+      "users": "none",
+      "roles": "none",
+      "audit": "none",
+      "api-keys": "none",
+      "settings": "none"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": false,
+        "actions": [
+          "发放复购召回优惠券"
+        ]
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": false,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": false,
+        "actions": [
+          "补货申请"
+        ]
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": true,
+        "export": false,
+        "actions": [
+          "认领告警"
+        ]
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": false,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": [
+      {
+        "id": "S-61",
+        "objType": "订单",
+        "prop": "门店",
+        "op": "=",
+        "values": [
+          "上海徐汇店"
+        ]
+      },
+      {
+        "id": "S-62",
+        "objType": "库存快照",
+        "prop": "仓库",
+        "op": "=",
+        "values": [
+          "上海嘉定仓"
+        ]
+      }
+    ],
+    "defaultDeny": true
+  },
+  {
+    "id": "R-07",
+    "name": "会员运营",
+    "desc": "会员分层与召回活动，可发券、调整会员等级",
+    "builtIn": false,
+    "updatedAt": "2026-10-20 14:33",
+    "updatedBy": "吴佳",
+    "func": {
+      "qa-workbench": "manage",
+      "qa-pages": "view",
+      "object-search": "view",
+      "object-detail": "view",
+      "alerts": "view",
+      "action-center": "view",
+      "scenarios": "none",
+      "connections": "none",
+      "external-systems": "none",
+      "data-quality": "none",
+      "ontology-overview": "none",
+      "object-types": "none",
+      "link-types": "none",
+      "action-types": "none",
+      "functions": "none",
+      "metrics": "none",
+      "dimensions": "none",
+      "glossary": "none",
+      "event-types": "none",
+      "rules": "none",
+      "qa-tuning": "none",
+      "releases": "none",
+      "users": "none",
+      "roles": "none",
+      "audit": "none",
+      "api-keys": "none",
+      "settings": "none"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": true,
+        "actions": [
+          "发放复购召回优惠券",
+          "调整会员等级"
+        ]
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": false,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": false,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": false,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": false,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": [
+      {
+        "id": "S-71",
+        "objType": "会员",
+        "prop": "常去门店所属大区",
+        "op": "∈",
+        "values": [
+          "华东",
+          "华中"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "R-08",
+    "name": "大区经理（华东）",
+    "desc": "华东大区经营分析，可指派跟进、调整大区预算",
+    "builtIn": false,
+    "updatedAt": "2026-10-25 09:48",
+    "updatedBy": "刘婷",
+    "func": {
+      "qa-workbench": "manage",
+      "qa-pages": "manage",
+      "object-search": "manage",
+      "object-detail": "manage",
+      "alerts": "manage",
+      "action-center": "manage",
+      "scenarios": "manage",
+      "connections": "none",
+      "external-systems": "none",
+      "data-quality": "none",
+      "ontology-overview": "none",
+      "object-types": "none",
+      "link-types": "none",
+      "action-types": "none",
+      "functions": "none",
+      "metrics": "view",
+      "dimensions": "none",
+      "glossary": "none",
+      "event-types": "none",
+      "rules": "none",
+      "qa-tuning": "none",
+      "releases": "none",
+      "users": "none",
+      "roles": "none",
+      "audit": "none",
+      "api-keys": "none",
+      "settings": "none"
+    },
+    "objs": [
+      {
+        "objType": "订单",
+        "api": "SalesOrder",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "会员",
+        "api": "Member",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "门店",
+        "api": "Store",
+        "view": true,
+        "export": true,
+        "actions": []
+      },
+      {
+        "objType": "大区",
+        "api": "Region",
+        "view": true,
+        "export": false,
+        "actions": [
+          "指派大区经理跟进",
+          "调整大区预算"
+        ]
+      },
+      {
+        "objType": "商品",
+        "api": "Product",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "库存快照",
+        "api": "InventorySnapshot",
+        "view": true,
+        "export": false,
+        "actions": []
+      },
+      {
+        "objType": "告警",
+        "api": "Alert",
+        "view": true,
+        "export": false,
+        "actions": [
+          "认领告警",
+          "转派告警",
+          "关闭告警"
+        ]
+      },
+      {
+        "objType": "员工",
+        "api": "Employee",
+        "view": false,
+        "export": false,
+        "actions": []
+      }
+    ],
+    "scopes": [
+      {
+        "id": "S-81",
+        "objType": "订单",
+        "prop": "大区",
+        "op": "=",
+        "values": [
+          "华东"
+        ]
+      },
+      {
+        "id": "S-82",
+        "objType": "门店",
+        "prop": "大区",
+        "op": "=",
+        "values": [
+          "华东"
+        ]
+      },
+      {
+        "id": "S-83",
+        "objType": "会员",
+        "prop": "常去门店所属大区",
+        "op": "=",
+        "values": [
+          "华东"
+        ]
+      }
+    ],
+    "defaultDeny": true
+  }
+]

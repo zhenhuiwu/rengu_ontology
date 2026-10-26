@@ -22,6 +22,7 @@ from app.modules.admin.repo import (
     UserFilter,
     insert_audit,
 )
+from app.modules.admin.roles import role_names
 from app.modules.admin.schemas import ImportRowIn, ImportRowOut, UserCreateIn, UserUpdateIn
 
 
@@ -89,7 +90,8 @@ ADMIN_DEPTS = [
     "集团总部 / 信息安全",
     "华南事业部 / 运营中心",
 ]
-# 角色名 = mock/roles.ts ROLES[].name（Users.vue 的 ROLE_OPTS）；sys_role 由 PDE 建，届时改查表
+# 角色名 = mock/roles.ts ROLES[].name（Users.vue 的 ROLE_OPTS）。校验已改查 sys_role（roles.role_names）；
+# 这个常量只留给测试对照 seed。
 ROLE_NAMES = [
     "系统管理员",
     "本体建模师",
@@ -127,9 +129,10 @@ class ValidationError422(AppError):
     status_code, code, message = 422, "VALIDATION_FAILED", "参数校验失败"
 
 
-def _check_role(role: str) -> None:
-    if role not in ROLE_NAMES:
-        raise ValidationError422(f"角色不存在：{role}", details={"role": role, "allowed": ROLE_NAMES})
+async def _check_role(session: AsyncSession, role: str) -> None:
+    names = await role_names(session)
+    if role not in names:
+        raise ValidationError422(f"角色不存在：{role}", details={"role": role, "allowed": names})
 
 
 def parse_import_csv(text: str) -> list[ImportRowIn]:
@@ -179,7 +182,7 @@ class UserService:
         return await self.repo.create(u, actor=actor)
 
     async def create(self, body: UserCreateIn, user: CurrentUser) -> SysUser:
-        _check_role(body.role)
+        await _check_role(self.session, body.role)
         account = body.account.strip()
         if await self.repo.existing_accounts([account]):
             raise DuplicateKey("账号已存在", details={"account": account})
@@ -193,7 +196,7 @@ class UserService:
         )
 
     async def update(self, code: str, body: UserUpdateIn, user: CurrentUser) -> SysUser:
-        _check_role(body.role)
+        await _check_role(self.session, body.role)
         u = await self._get(code)
         values = {"name": body.name.strip(), "dept": body.dept, "role": body.role, "status": body.status}
         return await self.repo.update(u, values, actor=user.id)
@@ -202,6 +205,7 @@ class UserService:
         """只校验不写库：必填、邮箱格式、部门 / 角色在下拉里、账号已存在、文件内账号重复。"""
         taken = await self.repo.existing_accounts([r.account.strip() for r in rows if r.account.strip()])
         seen: set[str] = set()
+        names = set(await role_names(self.session))
         out = []
         for r in rows:
             r = ImportRowIn(
@@ -214,7 +218,7 @@ class UserService:
                 err = "账号不是邮箱"
             elif r.dept not in ADMIN_DEPTS:
                 err = "部门不存在"
-            elif r.role not in ROLE_NAMES:
+            elif r.role not in names:
                 err = "角色不存在"
             elif r.account in taken:
                 err = "账号已存在，导入时跳过"

@@ -68,3 +68,7 @@ class DatasourceTableRepo(BaseRepository[DatasourceTable]):
                 )
             )
         return await self.list_page(stmt.order_by(DatasourceTable.seq, DatasourceTable.id), page)
+
+    async def all_for(self, datasource_id: int) -> Sequence[DatasourceTable]:
+        stmt = self.base_query().where(DatasourceTable.datasource_id == datasource_id)
+        return (await self.session.scalars(stmt.order_by(DatasourceTable.seq, DatasourceTable.id))).all()

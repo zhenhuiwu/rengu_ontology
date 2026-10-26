@@ -98,3 +98,12 @@ async def delete_datasource(ds_id: str, session: SessionDep) -> Response:
 )
 async def test_saved(ds_id: str, session: SessionDep) -> DsTest:
     return await DatasourceService(session).test_saved(ds_id)
+
+
+@router.post(
+    "/datasources/{ds_id}/tables:refresh",
+    summary="连上源库内省，刷新库表清单（需开启真实连接；测试连接成功时也会自动刷新）",
+    dependencies=MANAGE,
+)
+async def refresh_tables(ds_id: str, session: SessionDep) -> dict[str, int]:
+    return {"count": await DatasourceService(session).refresh_tables(ds_id)}

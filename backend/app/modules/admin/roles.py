@@ -1,0 +1,537 @@
+"""角色与权限（Roles.vue，api-index §4.2）：数据访问 + 业务逻辑。不 commit。
+
+- 角色、行级范围、成员三张表（admin_0003）。
+- 页面常量 FUNC_PAGES / PERM_OBJECTS / SCOPE_PROPS 读 seeds/json/system 下 export-mock 导出的同名 JSON
+  （与前端 mock 逐字节一致），不入库。
+- 内置角色：改名、改权限、增删范围、删除一律 403（Roles.vue locked = readonly || builtIn）；成员可以改。
+- 有效权限逐行照 mock/roles.ts effectiveAccess()：功能取各角色最高级别；
+  对象可见 = 任一角色可查看（defaultDeny 角色没配该对象范围时不算授予）；
+  任一授予角色对该对象不限范围 → 「全部」，否则范围并集，用「；或 」连接。
+- 每次写操作记一条审计（insert_audit，与业务同一事务）。
+- 本文件不改 app/common/auth.py：鉴权仍走 PDE 的 require_func 桩，角色表接入鉴权留到下一阶段。
+"""
+
+import json
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any
+
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.common.auth import CurrentUser
+from app.common.pagination import PageParams
+from app.common.repository import BaseRepository
+from app.core.clock import now
+from app.core.config import get_settings
+from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound
+from app.modules.admin.models import SysRole, SysRoleMember, SysRoleScope, SysUser
+from app.modules.admin.repo import insert_audit
+
+# ---- 页面常量 ----
+
+
+@lru_cache
+def _meta_json(name: str) -> list[dict[str, Any]]:
+    return json.loads((get_settings().seeds_json_dir / "system" / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def func_pages() -> list[dict[str, Any]]:
+    return _meta_json("FUNC_PAGES")
+
+
+def perm_objects() -> list[dict[str, Any]]:
+    return _meta_json("PERM_OBJECTS")
+
+
+def scope_props() -> list[dict[str, Any]]:
+    return _meta_json("SCOPE_PROPS")
+
+
+def roles_meta() -> dict[str, Any]:
+    return {
+        "func_pages": func_pages(),
+        "perm_objects": perm_objects(),
+        "scope_props": scope_props(),
+        "obj_actions": {o["name"]: o["actions"] for o in perm_objects()},
+    }
+
+
+# 新建抽屉的权限模板（Roles.vue NR_PERMS）→ 初始 func / objs。
+# [推断] 前端只是勾选框、没有落地规则，按名字的字面意思映射：
+#   查看对象：对象类型全部可查看，对象搜索 / 详情 = 查看；导出数据：可查看的对象可导出；
+#   执行动作：可查看的对象授予全部动作，动作中心 = 管理；发起变更：构建区全部页面 = 管理；
+#   审批变更：变更与发布 = 管理；管理用户：用户与组织 = 管理。没勾的一律 none / 不可见。
+NR_PERMS = ["查看对象", "导出数据", "执行动作", "发起变更", "审批变更", "管理用户"]
+_RANK = {"none": 0, "view": 1, "manage": 2}
+
+
+def template_perms(perms: list[str]) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    p = set(perms)
+    fn = {pg["key"]: "none" for pg in func_pages()}
+
+    def bump(key: str, lv: str) -> None:
+        if _RANK[lv] > _RANK[fn.get(key, "none")]:
+            fn[key] = lv
+
+    if "查看对象" in p:
+        bump("object-search", "view")
+        bump("object-detail", "view")
+    if "执行动作" in p:
+        bump("action-center", "manage")
+    if "发起变更" in p:
+        for pg in func_pages():
+            if pg["areaKey"] == "build":
+                bump(pg["key"], "manage")
+    if "审批变更" in p:
+        bump("releases", "manage")
+    if "管理用户" in p:
+        bump("users", "manage")
+    view = "查看对象" in p
+    objs = [
+        {
+            "objType": o["name"],
+            "api": o["api"],
+            "view": view,
+            "export": view and "导出数据" in p,
+            "actions": list(o["actions"]) if view and "执行动作" in p else [],
+        }
+        for o in perm_objects()
+    ]
+    return fn, objs
+
+
+def scope_text(s: SysRoleScope) -> str:
+    return f"{s.prop} {s.op} {'、'.join(s.values)}"
+
+
+# ---- 数据访问 ----
+
+
+@dataclass
+class RoleBundle:
+    role: SysRole
+    scopes: list[SysRoleScope]
+    member_count: int
+
+
+class SysRoleRepository(BaseRepository[SysRole]):
+    model = SysRole
+    not_found_message = "角色不存在"
+
+    async def all_roles(self) -> list[SysRole]:
+        return list((await self.session.scalars(select(SysRole).order_by(SysRole.code))).all())
+
+    async def scopes_of(self, role_ids: list[int]) -> dict[int, list[SysRoleScope]]:
+        out: dict[int, list[SysRoleScope]] = {i: [] for i in role_ids}
+        if role_ids:
+            rows = await self.session.scalars(
+                select(SysRoleScope)
+                .where(SysRoleScope.role_id.in_(role_ids))
+                .order_by(SysRoleScope.role_id, SysRoleScope.seq, SysRoleScope.id)
+            )
+            for s in rows:
+                out[s.role_id].append(s)
+        return out
+
+    async def member_counts(self, role_ids: list[int]) -> dict[int, int]:
+        if not role_ids:
+            return {}
+        rows = await self.session.execute(
+            select(SysRoleMember.role_id, func.count())
+            .where(SysRoleMember.role_id.in_(role_ids))
+            .group_by(SysRoleMember.role_id)
+        )
+        return {r: int(n) for r, n in rows.all()}
+
+    async def name_taken(self, name: str, except_id: int | None = None) -> bool:
+        stmt = select(SysRole.id).where(SysRole.name == name)
+        if except_id is not None:
+            stmt = stmt.where(SysRole.id != except_id)
+        return (await self.session.scalar(stmt)) is not None
+
+    async def _next_num(self, col: Any, prefix: str) -> int:
+        """编号数字部分的最大值 + 1（R-01 / S-31；表很小，取出来算）。"""
+        codes = (await self.session.scalars(select(col).where(col.op("~")(rf"^{prefix}[0-9]+$")))).all()
+        return max((int(c[len(prefix) :]) for c in codes), default=0) + 1
+
+    async def next_role_code(self) -> str:
+        return f"R-{await self._next_num(SysRole.code, 'R-'):02d}"
+
+    async def next_scope_code(self) -> str:
+        return f"S-{await self._next_num(SysRoleScope.code, 'S-')}"
+
+    def members_stmt(self, role_id: int, kw: str | None):
+        stmt = (
+            select(SysUser)
+            .join(SysRoleMember, SysRoleMember.user_id == SysUser.id)
+            .where(SysRoleMember.role_id == role_id)
+        )
+        if kw:
+            stmt = stmt.where(
+                or_(
+                    func.strpos(SysUser.name, kw) > 0,
+                    func.strpos(func.coalesce(SysUser.account, ""), kw) > 0,
+                    func.strpos(SysUser.code, kw) > 0,
+                )
+            )
+        return stmt.order_by(SysRoleMember.seq, SysRoleMember.id)
+
+    async def member_user_ids(self, role_id: int) -> set[int]:
+        rows = await self.session.scalars(
+            select(SysRoleMember.user_id).where(SysRoleMember.role_id == role_id)
+        )
+        return set(rows.all())
+
+    async def min_member_seq(self, role_id: int) -> int:
+        v = await self.session.scalar(
+            select(func.min(SysRoleMember.seq)).where(SysRoleMember.role_id == role_id)
+        )
+        return int(v) if v is not None else 0
+
+    async def roles_of_user(self, user_id: int) -> list[SysRole]:
+        rows = await self.session.scalars(
+            select(SysRole)
+            .join(SysRoleMember, SysRoleMember.role_id == SysRole.id)
+            .where(SysRoleMember.user_id == user_id)
+            .order_by(SysRole.code)
+        )
+        return list(rows.all())
+
+
+# ---- 业务逻辑 ----
+
+
+class BuiltInRoleReadonly(Forbidden):
+    code, message = "BUILT_IN_ROLE", "内置角色不能修改，可复制后再改"
+
+
+class RoleValidation(AppError):
+    status_code, code, message = 422, "VALIDATION_FAILED", "参数校验失败"
+
+
+class RoleService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.repo = SysRoleRepository(session)
+
+    # 读
+    async def bundles(self, roles: list[SysRole]) -> list[RoleBundle]:
+        ids = [r.id for r in roles]
+        scopes = await self.repo.scopes_of(ids)
+        counts = await self.repo.member_counts(ids)
+        return [RoleBundle(r, scopes.get(r.id, []), counts.get(r.id, 0)) for r in roles]
+
+    async def list_all(self) -> list[RoleBundle]:
+        return await self.bundles(await self.repo.all_roles())
+
+    async def _get(self, code: str) -> SysRole:
+        return await self.repo.get_by_code_or_404(code)
+
+    async def get(self, code: str) -> RoleBundle:
+        return (await self.bundles([await self._get(code)]))[0]
+
+    async def _editable(self, code: str) -> SysRole:
+        r = await self._get(code)
+        if r.built_in:
+            raise BuiltInRoleReadonly(details={"id": code})
+        return r
+
+    async def _audit(self, user: CurrentUser, ip: str, action: str, target: str) -> None:
+        await insert_audit(
+            self.session,
+            actor=f"{user.name}（{user.id}）",
+            action=action,
+            target=target,
+            ip=ip,
+            created_by=user.id,
+        )
+
+    def _touch(self, r: SysRole, user: CurrentUser) -> None:
+        r.changed_at = now()
+        r.changed_by = user.name
+
+    # 写：角色本身
+    async def create(
+        self, *, name: str, desc: str, perms: list[str], copy_from: str | None, user: CurrentUser, ip: str
+    ) -> RoleBundle:
+        name = name.strip()
+        if await self.repo.name_taken(name):
+            raise DuplicateKey("角色名已存在", details={"name": name})
+        src_scopes: list[SysRoleScope] = []
+        if copy_from:
+            src = await self._get(copy_from)
+            fn, objs, deny = dict(src.func), json.loads(json.dumps(src.objs)), src.default_deny
+            src_scopes = (await self.repo.scopes_of([src.id]))[src.id]
+        else:
+            for p in perms:
+                if p not in NR_PERMS:
+                    raise RoleValidation(f"未知的权限模板：{p}", details={"perm": p, "allowed": NR_PERMS})
+            (fn, objs), deny = template_perms(perms), False
+        r = SysRole(
+            code=await self.repo.next_role_code(),
+            name=name,
+            description=desc,
+            built_in=False,
+            default_deny=deny,
+            func=fn,
+            objs=objs,
+            changed_at=now(),
+            changed_by=user.name,
+        )
+        await self.repo.create(r, actor=user.id)
+        for i, s in enumerate(src_scopes):
+            self.session.add(
+                SysRoleScope(
+                    code=await self._new_scope_code(),
+                    role_id=r.id,
+                    seq=i,
+                    obj_type=s.obj_type,
+                    prop=s.prop,
+                    op=s.op,
+                    values=list(s.values),
+                    created_by=user.id,
+                )
+            )
+            await self.session.flush()
+        await self._audit(user, ip, "复制角色" if copy_from else "新建角色", f"角色「{name}」")
+        return await self.get(r.code)
+
+    async def _new_scope_code(self) -> str:
+        return await self.repo.next_scope_code()
+
+    async def update(
+        self, code: str, *, name: str, desc: str, lock_version: int | None, user: CurrentUser, ip: str
+    ) -> RoleBundle:
+        r = await self._editable(code)
+        name = name.strip()
+        if await self.repo.name_taken(name, except_id=r.id):
+            raise DuplicateKey("角色名已存在", details={"name": name})
+        old = r.name
+        self._touch(r, user)
+        await self.repo.update(
+            r, {"name": name, "description": desc}, actor=user.id, lock_version=lock_version
+        )
+        if old != name:
+            # 用户页显示的主角色是角色名字符串（sys_user.role），改名时同步
+            await self.session.execute(update(SysUser).where(SysUser.role == old).values(role=name))
+        await self._audit(user, ip, "编辑角色", f"角色「{name}」")
+        return await self.get(code)
+
+    async def set_permissions(
+        self,
+        code: str,
+        *,
+        fn: dict[str, str],
+        objs: list[dict[str, Any]],
+        lock_version: int | None,
+        user: CurrentUser,
+        ip: str,
+    ) -> RoleBundle:
+        r = await self._editable(code)
+        keys = {p["key"] for p in func_pages()}
+        unknown = sorted(set(fn) - keys)
+        if unknown:
+            raise RoleValidation("未知的页面", details={"pages": unknown})
+        full = {k: fn.get(k, "none") for k in [p["key"] for p in func_pages()]}
+        by_name = {o["name"]: o for o in perm_objects()}
+        out = []
+        for o in objs:
+            meta = by_name.get(o["objType"])
+            if meta is None:
+                raise RoleValidation("未知的对象类型", details={"objType": o["objType"]})
+            bad = [a for a in o["actions"] if a not in meta["actions"]]
+            if bad:
+                raise RoleValidation(
+                    "动作不属于该对象类型", details={"objType": o["objType"], "actions": bad}
+                )
+            # 与 Roles.vue 一致：取消查看时清空导出和动作
+            view = bool(o["view"])
+            out.append(
+                {
+                    "objType": meta["name"],
+                    "api": meta["api"],
+                    "view": view,
+                    "export": view and bool(o["export"]),
+                    "actions": list(o["actions"]) if view else [],
+                }
+            )
+        given = {o["objType"] for o in out}
+        for m in perm_objects():  # 没传的对象类型保留原值
+            if m["name"] not in given:
+                out.append(
+                    next((x for x in r.objs if x["objType"] == m["name"]), None)
+                    or {"objType": m["name"], "api": m["api"], "view": False, "export": False, "actions": []}
+                )
+        order = {m["name"]: i for i, m in enumerate(perm_objects())}
+        out.sort(key=lambda x: order[x["objType"]])
+        self._touch(r, user)
+        await self.repo.update(r, {"func": full, "objs": out}, actor=user.id, lock_version=lock_version)
+        await self._audit(user, ip, "修改角色权限", f"角色「{r.name}」")
+        return await self.get(code)
+
+    async def delete(self, code: str, user: CurrentUser, ip: str) -> None:
+        """有成员也允许删（api-index【待定】，按页面确认卡：成员失去这个角色，其他角色不受影响）。成员、范围级联删除。"""
+        r = await self._editable(code)
+        name = r.name
+        await self.session.delete(r)
+        await self.session.flush()
+        await self._audit(user, ip, "删除角色", f"角色「{name}」")
+
+    # 写：行级范围
+    async def add_scope(
+        self,
+        code: str,
+        *,
+        obj_type: str,
+        prop: str,
+        op: str | None,
+        values: list[str],
+        user: CurrentUser,
+        ip: str,
+    ) -> SysRoleScope:
+        r = await self._editable(code)
+        meta = next((p for p in scope_props() if p["objType"] == obj_type and p["prop"] == prop), None)
+        if meta is None:
+            raise RoleValidation("属性不是权限依据", details={"objType": obj_type, "prop": prop})
+        vals = list(dict.fromkeys(values))
+        bad = [v for v in vals if v not in meta["values"]]
+        if bad:
+            raise RoleValidation("取值不在可选范围内", details={"values": bad})
+        op = op or ("∈" if len(vals) > 1 else "=")
+        if op == "=" and len(vals) != 1:
+            raise RoleValidation("「=」只能选一个取值", details={"values": vals})
+        seq = len((await self.repo.scopes_of([r.id]))[r.id])
+        s = SysRoleScope(
+            code=await self._new_scope_code(),
+            role_id=r.id,
+            seq=seq,
+            obj_type=obj_type,
+            prop=prop,
+            op=op,
+            values=vals,
+            created_by=user.id,
+        )
+        self.session.add(s)
+        await self.session.flush()
+        self._touch(r, user)
+        await self.session.flush()
+        await self._audit(user, ip, "添加行级范围", f"角色「{r.name}」{obj_type}：{scope_text(s)}")
+        return s
+
+    async def remove_scope(self, code: str, scope_code: str, user: CurrentUser, ip: str) -> None:
+        r = await self._editable(code)
+        s = await self.session.scalar(
+            select(SysRoleScope).where(SysRoleScope.role_id == r.id, SysRoleScope.code == scope_code)
+        )
+        if s is None:
+            raise NotFound("行级范围不存在", details={"id": scope_code})
+        text = f"角色「{r.name}」{s.obj_type}：{scope_text(s)}"
+        await self.session.delete(s)
+        self._touch(r, user)
+        await self.session.flush()
+        await self._audit(user, ip, "删除行级范围", text)
+
+    # 成员
+    async def members(self, code: str, kw: str | None, page: PageParams) -> tuple[list[SysUser], int]:
+        r = await self._get(code)
+        rows, total = await self.repo.list_page(self.repo.members_stmt(r.id, kw or None), page)  # type: ignore[arg-type]
+        return list(rows), total
+
+    async def add_members(self, code: str, user_ids: list[str], user: CurrentUser, ip: str) -> int:
+        """新成员排在最前面（Roles.vue addMembers：[...add, ...members]），按传入顺序；已是成员的跳过。"""
+        r = await self._get(code)
+        codes = list(dict.fromkeys(user_ids))
+        users = {
+            u.code: u
+            for u in (
+                await self.session.scalars(
+                    select(SysUser).where(SysUser.code.in_(codes), SysUser.role.is_not(None))
+                )
+            ).all()
+        }
+        missing = [c for c in codes if c not in users]
+        if missing:
+            raise NotFound("用户不存在", details={"ids": missing})
+        have = await self.repo.member_user_ids(r.id)
+        add = [users[c] for c in codes if users[c].id not in have]
+        start = await self.repo.min_member_seq(r.id) - len(add)
+        for i, u in enumerate(add):
+            self.session.add(SysRoleMember(role_id=r.id, user_id=u.id, seq=start + i, created_by=user.id))
+        await self.session.flush()
+        if add:
+            await self._audit(user, ip, "添加角色成员", f"角色「{r.name}」：{'、'.join(u.name for u in add)}")
+        return len(add)
+
+    async def remove_member(self, code: str, user_code: str, user: CurrentUser, ip: str) -> None:
+        r = await self._get(code)
+        u = await self.session.scalar(select(SysUser).where(SysUser.code == user_code))
+        m = (
+            await self.session.scalar(
+                select(SysRoleMember).where(SysRoleMember.role_id == r.id, SysRoleMember.user_id == u.id)
+            )
+            if u
+            else None
+        )
+        if m is None:
+            raise NotFound("该用户不是这个角色的成员", details={"id": user_code})
+        await self.session.delete(m)
+        await self.session.flush()
+        await self._audit(user, ip, "移出角色成员", f"角色「{r.name}」：{u.name}（{u.code}）")
+
+    # 有效权限
+    async def effective_access(self, user_code: str) -> tuple[list[RoleBundle], dict[str, Any]]:
+        u = await self.session.scalar(select(SysUser).where(SysUser.code == user_code))
+        if u is None:
+            raise NotFound("用户不存在", details={"id": user_code})
+        rs = await self.bundles(await self.repo.roles_of_user(u.id))
+        return rs, compute_effective(rs)
+
+
+def compute_effective(rs: list[RoleBundle]) -> dict[str, Any]:
+    """逐行照 mock/roles.ts effectiveAccess()。"""
+
+    def obj_of(b: RoleBundle, name: str) -> dict[str, Any] | None:
+        return next((x for x in b.role.objs if x["objType"] == name), None)
+
+    fn = []
+    for p in func_pages():
+        lv = "none"
+        for b in rs:
+            v = b.role.func.get(p["key"], "none")
+            if _RANK[v] > _RANK[lv]:
+                lv = v
+        if lv != "none":
+            fn.append({**p, "lv": lv})
+    objs = []
+    for o in perm_objects():
+        name = o["name"]
+
+        def has_scope(b: RoleBundle, name: str = name) -> bool:
+            return any(s.obj_type == name for s in b.scopes)
+
+        granted = [
+            b
+            for b in rs
+            if (obj_of(b, name) or {}).get("view") and not (b.role.default_deny and not has_scope(b))
+        ]
+        if not granted:
+            continue
+        unlimited = any(not has_scope(b) for b in granted)
+        scopes = [] if unlimited else [scope_text(s) for b in granted for s in b.scopes if s.obj_type == name]
+        actions = list(dict.fromkeys(a for b in rs for a in (obj_of(b, name) or {}).get("actions", [])))
+        exp = any((obj_of(b, name) or {}).get("export") for b in rs)
+        objs.append(
+            {
+                "name": name,
+                "scope": "全部" if unlimited else "；或 ".join(dict.fromkeys(scopes)),
+                "actions": actions,
+                "exp": exp,
+            }
+        )
+    return {"func": fn, "objs": objs, "areas_in": list(dict.fromkeys(p["area"] for p in fn))}
+
+
+async def role_names(session: AsyncSession) -> list[str]:
+    """用户页的角色下拉 / 校验：sys_role 的角色名（按编号排序）。"""
+    return list((await session.scalars(select(SysRole.name).order_by(SysRole.code))).all())

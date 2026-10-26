@@ -16,6 +16,7 @@
 | DELETE | `/datasources/{id}` | connections:manage | 204；同步记录、库表一起删（前端只提示影响，不拦） |
 | POST | `/datasources/{id}:test` | connections:manage | 测试已保存的连接，写 `lastTest`；成功 → 状态「正常」 |
 | POST | `/datasources:test` | connections:view | 测试表单里未保存的参数，不落库 |
+| POST | `/datasources/{id}/tables:refresh` | connections:manage | 真连源库内省，刷新库表清单，返回 `{count}`；没开真实连接 / 类型没驱动 → 422 `REAL_CONNECT_UNAVAILABLE`，连不上 → 502 `INTROSPECT_FAILED` |
 
 分页：`{items, total, page, size}`，越界页码收拢到最后一页（同 paginate.ts）；`size` ≤ 200。
 错误：统一错误体，查不到 404 `NOT_FOUND`，参数错 422。
@@ -24,15 +25,32 @@
 
 列表项 / 详情与 mock `Datasource` 一一对应（`id, name, type, host, port, database, user, compatMode, databaseMode,
 erpSystem, appId, ssl, status, lastTest, owner, objectTypes, sync{mode,cron,cronText,window,cursorField,nextRun},
-runs[{time,result,rows,secs,msg}], tableCount, createdAt, note, refOnly`）。**密码从不返回**，库里只存 PBKDF2 摘要。
+runs[{time,result,rows,secs,msg}], tableCount, createdAt, note, refOnly`）。**密码从不返回**。库里 `password_enc` 存 Fernet 密文（`fernet$…`，`app/modules/data/secrets.py`），真连时解密使用。
 
 写入体：`name, type, host, port?, database, user, password, compatMode?, databaseMode?, erpSystem?, appId?, ssl, owner, mode, cron`。
 `port` 不填取类型默认端口；与类型无关的字段（如 PG 的 compatMode）丢弃。
 
+## 密码加密
+
+- 密钥：环境变量 `RENGU_DS_SECRET_KEY`，用 `python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"` 生成。
+  可写多把（逗号分隔）做轮换：第一把加密，全部能解密。prod 没配 → 500 `DS_SECRET_KEY_MISSING`；dev / test 没配用内置开发密钥。
+- 上一版存的 PBKDF2 摘要解不开，按「没有密码」处理（真连时提示重新填写）；seed 行本来就没有密码。
+- 测试连接失败的原因里如果带了密码原文，会打码成 `***`。
+
 ## 测试连接
 
-目前是 Mock 测试器（真实探测未接）：成功 `{ok:true, ms:42, msg:"连接成功（mock）"}`；状态为「异常」的连接继续失败（同前端），
-沿用上次的失败信息，状态不变。超时 10 秒按失败处理。dev/test 下 `POST /datasources:test` 可传 `mockFail: true` 模拟失败。
+- 默认（dev / test）：Mock 测试器，成功 `{ok:true, ms:42, msg:"连接成功（mock）"}`；状态为「异常」的连接继续失败（同前端），
+  沿用上次的失败信息，状态不变。dev/test 下 `POST /datasources:test` 可传 `mockFail: true` 模拟失败。
+- 真实连接：`RENGU_DS_REAL_CONNECT=1` 或 env = prod 时开启（`app/modules/data/connector.py`）。
+  - 有驱动的类型：PostgreSQL、人大金仓 KingbaseES（PG 协议，asyncpg）。达梦 / MySQL / ERP 还没驱动：dev 继续 mock，prod 返回「暂不支持」。
+  - 已保存连接测试成功后，**顺带内省刷新库表清单**（失败只在 msg 后追加说明，不影响测试结果）。前端测试成功后会重新拉清单和库表数。
+  - 超时 10 秒按失败处理；失败时用真实原因，不沿用上次信息。
+
+## 内省刷新库表
+
+按 (schema, 表名) 对齐 `datasource_table`：已有行保留映射（objectType / ref），更新说明、字段数、行数（PG 用 `pg_class.reltuples` 估算，
+不 count）、最近更新；新表加进来（未映射）；源库没了的表，未映射的删，已映射的保留（等人处理映射）。排序 = 已映射在前，再按 schema + 表名。
+跳过系统 schema（pg_*、information_schema）和 alembic_version 等框架表；最多 2000 张。
 
 ## 与 mock 的差异
 

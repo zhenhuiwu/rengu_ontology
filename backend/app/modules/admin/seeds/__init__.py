@@ -22,8 +22,16 @@ from functools import lru_cache
 
 from app.core.config import get_settings
 from app.core.schema import parse_display_dt
-from app.modules.admin.models import AuditLog, AuditResult, SysUser, UserStatus
-from app.seeds import Row, SeedContext, SeedSpec
+from app.modules.admin.models import (
+    AuditLog,
+    AuditResult,
+    SysRole,
+    SysRoleMember,
+    SysRoleScope,
+    SysUser,
+    UserStatus,
+)
+from app.seeds import Ref, Row, SeedContext, SeedSpec, derived_args
 
 JSON_MODULE = "system"
 
@@ -110,3 +118,69 @@ SEEDS.append(
         description="审计日志（512 条生成 + 9 条变更单固定行 = 521）",
     )
 )
+
+
+# ---- 角色（mock/roles.ts）----
+# ROLES.json → sys_role；每个角色的 scopes → sys_role_scope；derived/roleMembers.json → sys_role_member
+# （roleMembers(role) 的返回顺序即成员列表顺序）。FUNC_PAGES / PERM_OBJECTS / SCOPE_PROPS 是页面常量，
+# GET /roles/meta 直接读 seeds/json/system 下的同名 JSON（与 mock 逐字节一致），不入库。
+
+
+def _role(r: Row, _ctx: SeedContext) -> Row:
+    return {
+        "code": r["id"],
+        "name": r["name"],
+        "description": r.get("desc") or "",
+        "built_in": bool(r.get("builtIn")),
+        "default_deny": bool(r.get("defaultDeny")),
+        "func": r["func"],
+        "objs": r["objs"],
+        "changed_at": parse_display_dt(r["updatedAt"]),
+        "changed_by": r["updatedBy"],
+    }
+
+
+def _role_scopes(r: Row, _ctx: SeedContext) -> list[Row]:
+    return [
+        {
+            "code": s["id"],
+            "role_id": r["id"],
+            "seq": i,
+            "obj_type": s["objType"],
+            "prop": s["prop"],
+            "op": s["op"],
+            "values": s["values"],
+        }
+        for i, s in enumerate(r.get("scopes") or [])
+    ]
+
+
+def _role_member(r: Row, ctx: SeedContext) -> Row:
+    role = str(derived_args(r)[0])
+    counter: dict[str, int] = ctx.cache.setdefault("__role_member_seq__", {})
+    seq = counter.get(role, 0)
+    counter[role] = seq + 1
+    return {"role_id": role, "user_id": r["id"], "seq": seq}
+
+
+_ROLE = Ref(SysRole, "code", nullable=False)
+
+SEEDS += [
+    SeedSpec(SysRole, "ROLES.json", key=("code",), transform=_role, description="角色"),
+    SeedSpec(
+        SysRoleScope,
+        "ROLES.json",
+        key=("code",),
+        transform=_role_scopes,
+        refs={"role_id": _ROLE},
+        description="角色行级范围",
+    ),
+    SeedSpec(
+        SysRoleMember,
+        "derived/roleMembers.json",
+        key=("role_id", "user_id"),
+        transform=_role_member,
+        refs={"role_id": _ROLE, "user_id": Ref(SysUser, "code", nullable=False)},
+        description="角色成员（mock roleMembers()）",
+    ),
+]
