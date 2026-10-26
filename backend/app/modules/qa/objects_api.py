@@ -535,6 +535,8 @@ class AskScopeIn(ApiModel):
     ids: list[str] | None = None
     single: AskSingle | None = None
     conds: list[str] | None = None  # [推断] 前端已算好的条件文字（可不传，后台按 filter 生成）
+    # 通用搜索页的筛选（explore_api.ExploreIn 形状）：给了且没给 ids 时，按它在范围内取 id 再走 ids 分支
+    query: dict[str, Any] | None = None
 
 
 class ScopedAskIn(ApiModel):
@@ -561,6 +563,17 @@ async def scoped_ask(body: ScopedAskIn, session: SessionDep, user: CurrentUserDe
     _, viewer = await _viewer(session, user, ctx)
     data = Data(session, viewer)
     kind = sc.single.kind if sc.single else sc.kind
+    if not sc.single and not sc.ids and sc.query is not None:
+        from app.modules.qa.explore_api import ExploreIn, explore_ids  # 互相引用，延迟导入
+
+        ids = await explore_ids(session, viewer, kind, ExploreIn(**sc.query))
+        if not ids:
+            return {
+                "text": "当前筛选条件下没有你可见的对象，换个条件再问。",
+                "basis": f"范围：{sc.label}",
+                "rows": [],
+            }
+        sc = sc.model_copy(update={"ids": ids, "conds": sc.conds if sc.conds is not None else []})
     gmv = _cal("gmv") or "销售额（不含税）"
     cutoff = catalog.load("OBJ_CUTOFF")
     if sc.single:

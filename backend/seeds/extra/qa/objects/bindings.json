@@ -1,0 +1,54 @@
+{
+  "_doc": "qa 通用对象搜索的物理绑定：对象类型 code → 物理表 + 属性 api 名 → 列。只读；静态的元数据（属性、标志）不在这里。列写 'col' 或 '别名.col'（别名来自 joins）。没写到的属性值为 null，没写到的对象类型返回未接入（bound=false）。演示数据在 biz 表里，所以这里绑的是 biz 表而不是 object_type.source_table（ORG.T_STORE 等不存在）[推断]。",
+  "store": {
+    "table": "store",
+    "id": "code",
+    "where": { "is_test": false },
+    "rowFilter": "store",
+    "columns": {
+      "store_id": "code",
+      "store_name": "name",
+      "format": "format",
+      "region_code": "big_region",
+      "city": "city",
+      "area_sqm": "area",
+      "opened_at": "opened_at",
+      "status": "status"
+    }
+  },
+  "product": {
+    "table": "product",
+    "id": "code",
+    "rowFilter": "product",
+    "columns": {
+      "sku": "code",
+      "sku_name": "name",
+      "barcode": "barcode",
+      "category_id": "category",
+      "brand": "brand",
+      "spec": "spec",
+      "unit": "unit",
+      "retail_price": "price"
+    }
+  },
+  "order": {
+    "table": "biz_order",
+    "id": "code",
+    "where": { "is_test": false },
+    "rowFilter": "order",
+    "joins": [{ "alias": "s", "table": "store", "on": ["store_id", "id"] }],
+    "columns": {
+      "order_id": "code",
+      "order_no_display": "code",
+      "channel": "channel",
+      "status": "status",
+      "store_id": "s.code",
+      "member_id": "member_phone",
+      "warehouse_id": "warehouse",
+      "created_at": "created_at_biz",
+      "shipped_at": "shipped_at",
+      "discount_amount": "discount",
+      "paid_amount": "amount"
+    }
+  }
+}

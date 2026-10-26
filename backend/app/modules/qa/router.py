@@ -1149,3 +1149,8 @@ router.include_router(_pages_router)
 from app.modules.qa.objects_api import objects as _objects_router  # noqa: E402
 
 router.include_router(_objects_router)
+
+# 通用对象搜索 / 详情（元数据驱动，独立文件，见 explore_api.py 与 generic-object-explorer.md）
+from app.modules.qa.explore_api import explore as _explore_router  # noqa: E402
+
+router.include_router(_explore_router)
