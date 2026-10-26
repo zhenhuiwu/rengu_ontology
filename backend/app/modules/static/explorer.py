@@ -165,6 +165,13 @@ class ExplorerService:
     async def _object(self, code: str) -> ObjectType:
         from app.modules.static.repo import StaticRepo
 
+        if "\x00" in code:  # PG 文本不收 NUL，进库会 500
+            raise AppError(
+                "对象类型编码不合法",
+                code="VALIDATION_FAILED",
+                status_code=422,
+                details={"fields": [{"field": "code", "message": "不能包含 NUL 字符"}]},
+            )
         return await StaticRepo(self.session).object_type(code)
 
     async def meta(self, code: str) -> Obj:
@@ -302,6 +309,8 @@ def _bad(key: str, msg: str) -> None:
 
 def _scalar(col: ColumnElement, x: Any, key: str) -> Any:
     """单个筛选值按列类型转换并校验：枚举须是已知取值，布尔须是 true/false，数值有限且在列范围内。"""
+    if isinstance(x, str) and "\x00" in x:  # PG 文本不收 NUL，进库会 500
+        _bad(key, "不能包含 NUL 字符")
     if isinstance(col.type, SaEnum) and col.type.enum_class is not None:
         hit = next((m for m in col.type.enum_class if isinstance(x, str) and x in (m.value, m.name)), None)
         if hit is None:
