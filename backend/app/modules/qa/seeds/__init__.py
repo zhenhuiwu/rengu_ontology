@@ -8,14 +8,16 @@
 | QA_FAVORITE_LIST | qa_favorite | 18 条；lastUsed "MM-DD" → 2026-MM-DD 00:00 [推断] |
 | QA_SCOPE_OPTIONS / QA_CALIBER_OPTIONS | qa_session_option | 3 + 2 |
 | MY_PAGES + OTHER_PAGES | qa_page / qa_page_card / qa_page_share_member / qa_page_subscription | 32 页；
-  owner 按姓名 → sys_user（周婷不在 sys_user → 李娜 U010006 [推断]，qa-api §9.2）；
-  共享成员不在 sys_user 的剔除（§9.2） |
+  owner 按姓名 → sys_user（姓名唯一命中；不在 sys_user 的走 OWNER_REASSIGN 改派，qa-api §9.2）；
+  共享成员不在 sys_user 的剔除（§9.2）。SYS_USERS 补了分享候选人（U010009–U010015）后，
+  周婷 = U010010 直接命中，不再改派李娜 |
 | PAGE_TEMPLATES | qa_template / qa_template_card | 22 个模板 |
 | CERT_QAS | qa_cert / qa_cert_variant | 30 条 |
 | EVAL_QS | qa_eval_question | 40 道 semplan 题
   （extra/qa/eval/questions.json 是评测题集文件，不登记为 seed） |
 | EVAL_RUNS | qa_eval_run / qa_eval_fail | 21 次运行、222 条失败 |
-| FEEDBACKS | qa_feedback | 26 条；user_id 只在姓名能在 sys_user 唯一找到时填（§9.2：李娜/何静/冯雪） |
+| FEEDBACKS | qa_feedback | 26 条；user_id 只在姓名能在 sys_user 唯一找到时填
+  （§9.2：李娜/何静/冯雪/赵磊/刘洋） |
 | FREQ_QS | qa_freq_question | 32 条 |
 | TUNED_SYNONYMS | qa_synonym_link | 2 条 |
 | OBJ_TYPES + FIELD_GROUPS | qa_object_type_view | 4 行（region 只有 field_groups）；release_id 不填 |
@@ -74,8 +76,9 @@ JSON_MODULE = "qa"
 
 DEMO_USER = "U010001"  # 演示身份王敏（当前登录用户）
 DEMO_SESSION = "S0001"  # [推断] QA_DEMO_TURNS 所属会话
-# §9.2：mock 里出现、但 sys_user 里没有的页面拥有者 → 改派
-OWNER_REASSIGN = {"周婷": "U010006"}
+# §9.2：mock 里出现、但 sys_user 里没有的页面拥有者 → 改派（只在姓名查不到时用；
+# 周婷已由 SYS_USERS 补成 U010010，不再需要改派）
+OWNER_REASSIGN: dict[str, str] = {}
 SEED_YEAR = 2026
 
 
@@ -167,7 +170,7 @@ def _all_pages(ctx: SeedContext) -> list[Row]:
 
 
 def page_owner_code(name: str) -> str:
-    code = OWNER_REASSIGN.get(name) or user_code(name)
+    code = user_code(name) or OWNER_REASSIGN.get(name)
     if code is None:
         raise ValueError(f"qa seed：页面拥有者 {name!r} 不在 sys_user")
     return code
