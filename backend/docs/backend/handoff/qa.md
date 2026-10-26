@@ -96,6 +96,8 @@
 | FeedbackTab | `FeedbackTab.vue` 的改动在 qa 允许路径外，待 PDE 确认 | `FeedbackTab.vue` |
 | 评测分 | 76 / 100，拒答 9/16、反问 5/10 偏弱（见 2.1） | `eval/results/summary.json` |
 | 指标口径变体 | 静态按指标名的（…）后缀推出变体，静态会改成显式字段；qa 按标签匹配，届时核对 | `service.py` `variant_index` |
+| 筛选/关键词含 NUL | 值或关键词带 `\u0000` 时 search/export 仍 500（PostgreSQL 拒绝）；应与静态 `_scalar` 一起拦成 422（动态评审非阻塞 ①） | `explore_api.py` |
+| 排序键前缀 | 排序键用 `lstrip("-")`，`--key` 也能过；改成只去一个 `-`（动态评审非阻塞 ②） | `explore_api.py` |
 
 ### 2.1 链路未完成 / 待裁定
 - **最近评测分（真 qwen-flash，`740a554`）**：**76 / 100**，见 `backend/seeds/extra/qa/eval/results/summary.json`（作答 62/74、拒答 9/16、反问 5/10；失败 24 题：EV-Q-012、014、016、022、025、026、042、051、052、058、061、063、066、067、069、071、072、078、080、081、082、084、091、095）。
