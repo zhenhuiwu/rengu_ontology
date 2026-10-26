@@ -247,3 +247,53 @@ async def test_lifecycle_draft_registers_cr_items(dyn, client):  # noqa: F811
     assert (await client.delete(f"{API}/change-requests/{cr}/targets/object/order")).status_code == 204
     d = (await client.get(f"{API}/object-types/order/lifecycle", params={"view": "draft", "cr": cr})).json()
     assert not (d.get("draft") or {}).get("edits", {}).get("addStates")
+
+
+async def test_apply_cr_promotes_lifecycle_draft(dyn, client):  # noqa: F811
+    """发布写回 apply_cr：生命周期草稿 edits 生成下一版状态机；重复调用无副作用。"""
+    from app.modules.dynamic.writeback import apply_cr
+
+    cr = (await client.post(f"{API}/change-requests", json={"title": "生命周期发布"})).json()["id"]
+    old = (await client.get(f"{API}/object-types/order/lifecycle")).json()
+    t0 = old["transitions"][0]
+    edits = {
+        "cr": cr,
+        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终态", "desc": "", "x": 9, "y": 9}],
+        "addTransitions": [
+            {
+                "id": "T99",
+                "from": old["states"][0]["key"],
+                "to": "已退货",
+                "trigger": t0["trigger"],
+                "by": "人工",
+                "guard": "",
+                "effect": "",
+                "weekly": 0,
+            }
+        ],
+        "editTransitions": {},
+        "removeTransitions": [old["transitions"][-1]["id"]],
+    }
+    r = await client.put(f"{API}/object-types/order/lifecycle/draft", json=edits)
+    assert r.status_code == 200, r.text
+    out = await apply_cr(dyn, cr, by="U010001")
+    assert out == {"rules": [], "lifecycles": ["order"]}
+    lc = (await client.get(f"{API}/object-types/order/lifecycle")).json()
+    assert lc["version"] == old["version"] + 1
+    assert [s["key"] for s in lc["states"]] == [s["key"] for s in old["states"]] + ["已退货"]
+    ids = [t["id"] for t in lc["transitions"]]
+    assert "T99" in ids and old["transitions"][-1]["id"] not in ids and len(ids) == len(old["transitions"])
+    assert await apply_cr(dyn, cr, by="U010001") == {"rules": [], "lifecycles": []}
+    assert (await client.get(f"{API}/object-types/order/lifecycle")).json()["version"] == lc["version"]
+
+
+def test_apply_edits_rejects_bad_kind():
+    import pytest
+
+    from app.core.errors import AppError
+    from app.modules.dynamic.writeback import apply_edits
+
+    with pytest.raises(AppError) as e:
+        bad = {"addStates": [{"key": "x", "name": "x", "kind": "终止"}]}
+        apply_edits({"states": [], "transitions": []}, bad)
+    assert e.value.code == "WRITEBACK_FAILED"

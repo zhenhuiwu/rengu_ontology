@@ -17,6 +17,7 @@ from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core.errors import NotFound
 from app.db.session import SessionDep, get_session
+from app.modules.dynamic import writeback as _writeback  # noqa: F401  import 即登记静态发布写回钩子（有钩子时）
 from app.modules.dynamic.catalog import get_catalog
 from app.modules.dynamic.models import ActionRun
 from app.modules.dynamic.ports import PortsDep
