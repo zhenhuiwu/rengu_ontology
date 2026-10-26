@@ -71,11 +71,6 @@
 3. 事件抽屉可改为读 `GET /events/{id}`（palantir-r3 已提供），不再从列表行拼详情。
 4. `ObjectTypesBody.vue` 的对象 target 清理（放弃草稿后撤登记 / 清本地）待补，与 `useDraftEdits.ts` 的做法对齐。
 
-## 评审 palantir-r3 非阻塞意见（给 Palantir专家，下一轮处理）
+## 评审 palantir-r3 非阻塞意见
 
-- `src/api/action.ts` 的 `saveCRItems` 做「读→合并→PUT」时没带 `lockVersion`，两个标签页同时保存会互相覆盖。
-- `DELETE …/targets/{kind}/{id}` 返回 404 时应视为库里已没有，直接清本地草稿；现在会一直报「放弃失败」。
-- `GET /events/{id}` 没做行级范围；与事件列表口径一致，等事件行级口径定了再一起补。
-- 路径参数带 NUL 字符（如 `GET /events/EV-%00x`、`/event-types/x%00/stats`）返回 500，应和静态一样统一拦成 422。
-- `event/repo.py:47` 排除了测试事件，所以 `:simulate` 返回的 `testEventId` 拿去查 `GET /events/{id}` 是 404。
-- `test_integration_code_lock.py` 靠 `sleep(0.5)` 制造并发，机器慢时可能误报。
+- 静态 ①–③、动态 ①–③ 共 6 条已记在 `handoff/palantir.md` §5（归 Palantir专家，下一轮处理），此处不重复。
