@@ -10,6 +10,7 @@ import { ApartmentOutlined, DownloadOutlined } from '@ant-design/icons-vue';
 import { QA_EC_STORES, fmtMoney, fmtInt, type QaDemoStoreCard, type QaStoreRow } from '@/mock';
 import * as qaApi from '@/api/qa';
 import { errText } from '../useQaSession';
+import { qaLive, qaFallBackIfDown } from '../qaFallback';
 import { useQueryPage } from '../useQueryParam';
 import AppPagination from '@/components/AppPagination.vue';
 
@@ -23,23 +24,25 @@ const demoTotal = QA_EC_STORES.reduce((a, r) => a + r.sales, 0);
 const demoLast = QA_EC_STORES.reduce((a, r) => a + r.sales / (1 + r.mom / 100), 0);
 const demoSum = { count: QA_EC_STORES.length, sales: demoTotal, mom: (demoTotal / demoLast - 1) * 100, orders: QA_EC_STORES.reduce((a, r) => a + r.orders, 0) };
 /** 真接口：当前页 + 后台按全部数据算的合计 */
+/** 真接口且后台可用时才走 W10 / W11；后台判定未启动后整卡回退演示数据（同 qaFallback.ts） */
+const tid = computed(() => (qaLive.value ? props.turnId : undefined));
 const remote = ref<{ items: QaStoreRow[]; total: number; page: number; summary: typeof demoSum } | null>(null);
 const loading = ref(false);
 let seq = 0;
 async function load() {
-  if (!props.turnId) return;
+  if (!tid.value) return;
   const my = ++seq; loading.value = true;
   try {
-    const r = await qaApi.getTurnResult<QaStoreRow>(props.turnId, { page: page.value, size: PAGE_SIZE });
+    const r = await qaApi.getTurnResult<QaStoreRow>(tid.value, { page: page.value, size: PAGE_SIZE });
     if (my === seq) remote.value = { items: r.items, total: r.total, page: r.page, summary: r.summary as unknown as typeof demoSum };
-  } catch (e) { if (my === seq) message.error(`结果表加载失败：${errText(e)}`); } finally { if (my === seq) loading.value = false; }
+  } catch (e) { if (my === seq && !qaFallBackIfDown(e)) message.error(`结果表加载失败：${errText(e)}`); } finally { if (my === seq) loading.value = false; }
 }
-watch([() => props.turnId, page], load, { immediate: true });
-const rowCount = computed(() => (props.turnId ? remote.value?.total ?? 0 : QA_EC_STORES.length));
-const sum = computed(() => (props.turnId ? remote.value?.summary ?? { count: 0, sales: 0, mom: 0, orders: 0 } : demoSum));
+watch([tid, page], load, { immediate: true });
+const rowCount = computed(() => (tid.value ? remote.value?.total ?? 0 : QA_EC_STORES.length));
+const sum = computed(() => (tid.value ? remote.value?.summary ?? { count: 0, sales: 0, mom: 0, orders: 0 } : demoSum));
 const paged = computed(() => rowCount.value > PAGE_SIZE);
 const pageCount = computed(() => Math.max(1, Math.ceil(rowCount.value / PAGE_SIZE)));
-const current = computed(() => (props.turnId ? remote.value?.page ?? 1 : Math.min(page.value, pageCount.value)));
+const current = computed(() => (tid.value ? remote.value?.page ?? 1 : Math.min(page.value, pageCount.value)));
 const columns = [
   { title: '#', key: 'rank', width: 48 },
   { title: '门店', dataIndex: 'store', key: 'store' },
@@ -49,14 +52,14 @@ const columns = [
   { title: '订单数', dataIndex: 'orders', key: 'orders', align: 'right' as const },
 ];
 const pageRows = computed(() => {
-  if (props.turnId) return remote.value?.items ?? [];
+  if (tid.value) return remote.value?.items ?? [];
   return paged.value ? QA_EC_STORES.slice((current.value - 1) * PAGE_SIZE, current.value * PAGE_SIZE) : QA_EC_STORES;
 });
 const exporting = ref(false);
 async function onExport() {
-  if (!props.turnId) { message.info(`已导出 ${rowCount.value} 行（${props.card.exportFile}）`); return; }
+  if (!tid.value) { message.info(`已导出 ${rowCount.value} 行（${props.card.exportFile}）`); return; }
   exporting.value = true;
-  try { const name = await qaApi.exportTurn(props.turnId, 'xlsx'); message.info(`已导出 ${rowCount.value} 行（${name}）`); } catch (e) { message.error(`导出失败：${errText(e)}`); } finally { exporting.value = false; }
+  try { const name = await qaApi.exportTurn(tid.value, 'xlsx'); message.info(`已导出 ${rowCount.value} 行（${name}）`); } catch (e) { if (qaFallBackIfDown(e)) message.info(`已导出 ${QA_EC_STORES.length} 行（${props.card.exportFile}）`); else message.error(`导出失败：${errText(e)}`); } finally { exporting.value = false; }
 }
 const pageModel = computed({ get: () => current.value, set: (p: number) => { page.value = p; } });
 </script>
