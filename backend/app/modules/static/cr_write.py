@@ -18,13 +18,14 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.common.auth import CurrentUser
+from app.common.auth import CurrentUser, check_func
 from app.core import clock
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound, VersionConflict
 from app.core.schema import _fmt_dt
 from app.db.dialects import get_adapter
 from app.modules.static.models import ChangeRequest, CrCheck, CrEvent, CrItem, CRLevel, CRStatus, CrTarget
+from app.modules.static.permissions import check_cr, check_target
 from app.modules.static.schemas import CRCreateIn, CRPatchIn, ItemsPutIn, TargetIn
 
 Row = dict[str, Any]
@@ -267,6 +268,10 @@ class CrWriteService:
 
     # ------------------------------------------------------------ 发起 / 目标
     async def create(self, user: CurrentUser, body: CRCreateIn) -> str:
+        if body.target is None:
+            check_func(user, "releases", "manage")
+        else:
+            check_target(user, body.target.kind)
         now = clock.now()
         if body.target is not None and (other := await self._holder(body.target.kind, body.target.id, -1)):
             raise AppError(
@@ -304,6 +309,7 @@ class CrWriteService:
         return cr.code
 
     async def add_target(self, code: str, user: CurrentUser, t: TargetIn) -> str:
+        check_target(user, t.kind)
         cr = await self._cr(code)
         _locked(cr)
         with self.session.no_autoflush:
@@ -311,7 +317,8 @@ class CrWriteService:
         await self.session.flush()
         return cr.code
 
-    async def discard_target(self, code: str, kind: str, tid: str) -> None:
+    async def discard_target(self, code: str, kind: str, tid: str, user: CurrentUser) -> None:
+        check_target(user, kind)
         cr = await self._cr(code)
         hit = await self.session.scalar(
             select(CrTarget).where(
@@ -349,6 +356,7 @@ class CrWriteService:
 
     # ------------------------------------------------------------ 草稿行
     async def put_items(self, code: str, user: CurrentUser, body: ItemsPutIn) -> Row:
+        check_target(user, body.target.kind)
         cr = await self._cr(code)
         _locked(cr)
         _check_version(cr, body.lock_version)
@@ -433,8 +441,9 @@ class CrWriteService:
             out.setdefault(code, {}).setdefault(kind, []).append(tid)
         return out
 
-    async def patch(self, code: str, body: CRPatchIn) -> str:
+    async def patch(self, code: str, body: CRPatchIn, user: CurrentUser) -> str:
         cr = await self._cr(code)
+        await check_cr(self.session, cr, user)
         _locked(cr)
         _check_version(cr, body.lock_version)
         if body.title is not None:
@@ -489,8 +498,9 @@ class CrWriteService:
             )
         return base
 
-    async def validate(self, code: str) -> Row:
+    async def validate(self, code: str, user: CurrentUser) -> Row:
         cr = await self._cr(code)
+        await check_cr(self.session, cr, user)
         if cr.status not in (S.draft, S.rejected):
             raise AppError(
                 f"{cr.code} 当前是「{cr.status.value}」，草稿或已驳回才能重新校验",

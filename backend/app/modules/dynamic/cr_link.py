@@ -52,7 +52,7 @@ class CrLink:
         if not await self.exists(cr):
             return
         try:
-            await self.svc.discard_target(cr, kind, tid)  # type: ignore[arg-type]
+            await self.svc.discard_target(cr, kind, tid, self.user)  # type: ignore[arg-type]
         except NotFound:
             return
 

@@ -27,6 +27,7 @@ from app.core.errors import AppError, Forbidden, NotFound
 from app.core.schema import _fmt_dt
 from app.modules.static.cr_write import CrWriteService, target_out
 from app.modules.static.models import ChangeRequest, CrEvent, CRStatus
+from app.modules.static.permissions import check_cr
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import VersioningService, next_ver
 
@@ -185,6 +186,7 @@ class ChangeRequestService:
 
     async def transition(self, code: str, action: str, user: CurrentUser, reason: str | None = None) -> str:
         cr = await self._lock(code)
+        await check_cr(self.session, cr, user)
         with self.session.no_autoflush:  # 只在最后 flush 一次：lockVersion 恰好 +1
             await self._transition(cr, action, user, reason)
         await self.session.flush()
@@ -242,6 +244,7 @@ class ChangeRequestService:
 
     async def delete(self, code: str, user: CurrentUser) -> None:
         cr = await self._lock(code)
+        await check_cr(self.session, cr, user)
         _state(cr, S.draft)
         if cr.owner != user.name:
             raise Forbidden(f"只有提交人 {cr.owner} 能删除")

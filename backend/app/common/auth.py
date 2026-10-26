@@ -8,12 +8,13 @@
     # 查业务对象时加行级条件（表达式结构和转 SQL 见 app/common/row_filter.py）
     flt = await row_filter(user, "store")   # None = 不限制
 
-现在的桩实现：
+身份入口（功能权限已按实际数据库角色生效）：
 - dev/test 环境：读请求头 `X-Demo-As`（只在 dev/test 生效的演示身份），没有就用配置里的 RENGU_DEV_USER；
   **值是用户编号 sys_user.code（前端 userId，如 U010001），不是姓名**。按编号查 sys_user：
   CurrentUser.id = 编号，name = 姓名；查不到或已停用 → 401。
   演示身份：王敏 U010001（admin，mock 审计日志里的编号）、李娜 U010006（viewer，[推断] mock 没有编号）；
   本体管理员 = 配置 RENGU_DEMO_ADMIN_CODES（默认 ["U010001"]）。
+  此标志只用于已有发布管理员限制，不授予功能权限；缺少DB角色关联时功能权限为空。
 - prod 环境：`X-Demo-As` 一律忽略；鉴权未接入前直接 401（防止桩实现被带上生产）。
 
 租户（一期单租户）：接受 `X-Tenant-Id` 请求头并放进 CurrentUser.tenant_id，**不按租户过滤，表里也没有
@@ -28,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.errors import Unauthorized
+from app.core.errors import Forbidden, Unauthorized
 from app.db.session import SessionDep
 
 
@@ -47,17 +48,31 @@ class CurrentUser:
     attrs: dict[str, Any] = field(default_factory=dict)
     # 一期单租户：只透传（日志/审计用），不参与过滤
     tenant_id: str | None = None
+    # Loaded once per identity from real role membership; absent objects are denied.
+    row_filters: dict[str, dict | None] = field(default_factory=dict)
 
 
 async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None = None) -> CurrentUser:
     """用户编号（sys_user.code）→ CurrentUser。查不到 / 停用 → 401。"""
     from app.modules.admin.models import SysUser, UserStatus
+    from app.modules.admin.permissions import function_access, object_row_access
 
-    u = await session.scalar(select(SysUser).where(SysUser.code == code))
+    u = await session.scalar(
+        select(SysUser).where(SysUser.code == code).execution_options(populate_existing=True)
+    )
     if u is None or u.status != UserStatus.active:
         raise Unauthorized("用户不存在或已停用", details={"userId": code})
     admin = code in get_settings().demo_admin_codes
-    return CurrentUser(id=u.code, name=u.name, is_ontology_admin=admin, tenant_id=tenant_id)
+    permissions, roles = await function_access(session, u.id)
+    return CurrentUser(
+        id=u.code,
+        name=u.name,
+        func=permissions,
+        roles=roles,
+        row_filters=await object_row_access(session, u.id),
+        is_ontology_admin=admin,
+        tenant_id=tenant_id,
+    )
 
 
 async def get_current_user(
@@ -80,24 +95,30 @@ CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 async def row_filter(user: CurrentUser, object_type: str) -> dict | None:
     """返回该用户对某对象类型的行级过滤表达式（jsonb 结构见 app/common/row_filter.py）。
 
-    None = 不限制。初版最简：所有已登录用户一律 None（不做行级裁剪）；
-    接入真实范围后：没有任何角色范围 → combine_or([]) = DENY_ALL（拒绝）。
+    None = 实际角色授予且不限制；无角色/无对象授权/未知身份映射一律 DENY_ALL。
 
     查询层：`stmt.where(to_sql(await row_filter(user, "store"), {"region": Store.region, ...}, user.attrs))`
     """
-    # EXTENSION POINT (PDE): 把该用户每个角色在该对象上的 {查看权, defaultDeny, RowScope 列表} 组成
-    # sql_guard.RoleAccess，交给 sql_guard.effective_expr(object_type, roles) 合并（照 roles.ts:110-117
-    # effectiveAccess：跨角色 OR、任一 granted 角色没配范围即不限制、defaultDeny 没配范围的角色不算；
-    # 同一角色多条也 OR [推断]；没映射的属性 / 不支持的 op / 没建表的对象 → 那条范围 DENY，不贡献行）。
-    # 初版最简（用户 / PDE 定）：任何已登录用户都不做行级裁剪，联调先看到数据；未登录由 CurrentUserDep 401。
-    return None
+    from app.common.row_filter import DENY_ALL
+
+    return getattr(user, "row_filters", {}).get(object_type, dict(DENY_ALL))
+
+
+def check_func(user: CurrentUser, page_key: str, level: str = "view") -> None:
+    """请求身份已从DB聚合权限；缺失/未知级别按无权限，管理员标志不是功能授权旁路。"""
+    ranks = {"none": 0, "view": 1, "manage": 2}
+    if level not in ("view", "manage"):
+        raise ValueError("功能权限只能检查 view/manage")
+    actual = user.func.get(page_key, "none")
+    if not isinstance(actual, str) or ranks.get(actual, 0) < ranks[level]:
+        raise Forbidden("没有此页面的操作权限", details={"page": page_key, "required": level})
 
 
 def require_func(page_key: str, level: str = "view"):
-    """功能权限依赖：`dependencies=[Depends(require_func("ontology.releases", "manage"))]`。"""
+    """功能权限依赖：`dependencies=[Depends(require_func("releases", "manage"))]`。"""
 
     async def _dep(user: CurrentUserDep) -> CurrentUser:
-        # EXTENSION POINT (PDE): 校验 user.func[page_key] >= level，不满足抛 Forbidden。
+        check_func(user, page_key, level)
         return user
 
     return _dep

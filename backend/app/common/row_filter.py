@@ -182,7 +182,12 @@ def to_sql(
         if col is None:
             raise _bad(expr.field, "不在目标对象的白名单")
         inner = _cond(expr, col, user_attrs)
-        return exists(select(1).select_from(link.target).where(link.target_key == link.local, inner))
+        return exists(
+            select(1)
+            .select_from(link.target)
+            .where(link.target_key == link.local, inner)
+            .correlate_except(link.target)
+        )
     col = columns.get(expr.field)
     if col is None:
         raise _bad(expr.field, "不在白名单")

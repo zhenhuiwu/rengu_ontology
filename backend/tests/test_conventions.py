@@ -667,17 +667,22 @@ def test_procrastinate_worker_registers_all_jobs():
 
 
 async def test_apply_row_filter_injection(monkeypatch, users):
+    from dataclasses import replace
+
     from sqlalchemy.dialects import postgresql
 
     import app.common.auth as auth
-    from app.common.row_filter import apply_row_filter
+    from app.common.row_filter import DENY_ALL, apply_row_filter
 
     user = await auth.get_current_user(users)  # 王敏，本体管理员
     stmt = select(Widget)
-    assert await apply_row_filter(stmt, user, "widget", {}) is stmt  # 桩：管理员不限制
     viewer = await auth.get_current_user(users, x_demo_as="U010006")  # 李娜
-    assert await auth.row_filter(viewer, "widget") is None  # 初版最简：已登录一律不裁剪
-    assert await apply_row_filter(stmt, viewer, "widget", {}) is stmt
+    for actor in (user, viewer):
+        assert await auth.row_filter(actor, "widget") == DENY_ALL
+        denied = await apply_row_filter(stmt, actor, "widget", {})
+        assert "WHERE false" in str(denied.compile(dialect=postgresql.dialect()))
+    granted = replace(user, row_filters={"widget": None})
+    assert await apply_row_filter(stmt, granted, "widget", {}) is stmt
 
     async def none_roles(_user, _obj):
         from app.common.row_filter import combine_or

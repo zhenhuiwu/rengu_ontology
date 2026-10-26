@@ -293,6 +293,7 @@ async def knowledge_refs(id: str, svc: Svc, p: P8) -> Any:
 # ---------------------------------------------------------------- 整版发布 / 回滚
 # 写接口：只读模式（?ver / previewAs）下骨架统一 403 READONLY
 _MANAGE = [Depends(require_func("releases", "manage"))]
+_CR_VIEW = [Depends(require_func("releases", "view"))]
 
 
 @router.post("/releases:merge-check", dependencies=_MANAGE, response_model=MergeCheckOut)
@@ -370,25 +371,25 @@ async def _move(id: str, action: str, session: Any, user: Any, reason: str | Non
     return await svc.detail(id)
 
 
-@router.post("/change-requests/{id}:submit", dependencies=_MANAGE)
+@router.post("/change-requests/{id}:submit", dependencies=_CR_VIEW)
 async def submit_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
     """草稿 → 审核中（不限提交人；有阻断 / 没改动 → 409）。返回更新后的详情。"""
     return await _move(id, "submit", session, user)
 
 
-@router.post("/change-requests/{id}:withdraw", dependencies=_MANAGE)
+@router.post("/change-requests/{id}:withdraw", dependencies=_CR_VIEW)
 async def withdraw_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
     """审核中 → 草稿（owner）。"""
     return await _move(id, "withdraw", session, user)
 
 
-@router.post("/change-requests/{id}:approve", dependencies=_MANAGE)
+@router.post("/change-requests/{id}:approve", dependencies=_CR_VIEW)
 async def approve_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
     """审核中 → 已通过（reviewer 且不是 owner；有阻断 → 409）。"""
     return await _move(id, "approve", session, user)
 
 
-@router.post("/change-requests/{id}:reject", dependencies=_MANAGE)
+@router.post("/change-requests/{id}:reject", dependencies=_CR_VIEW)
 async def reject_change_request(
     id: str, session: SessionDep, user: CurrentUserDep, body: Annotated[RejectIn, Body()] = RejectIn()
 ) -> Any:
@@ -396,19 +397,19 @@ async def reject_change_request(
     return await _move(id, "reject", session, user, body.reject_reason)
 
 
-@router.post("/change-requests/{id}:unapprove", dependencies=_MANAGE)
+@router.post("/change-requests/{id}:unapprove", dependencies=_CR_VIEW)
 async def unapprove_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
     """已通过 → 草稿（owner 或 reviewer）。"""
     return await _move(id, "unapprove", session, user)
 
 
-@router.post("/change-requests/{id}:reopen", dependencies=_MANAGE)
+@router.post("/change-requests/{id}:reopen", dependencies=_CR_VIEW)
 async def reopen_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
     """已驳回 → 草稿（owner 或 reviewer）。"""
     return await _move(id, "reopen", session, user)
 
 
-@router.delete("/change-requests/{id}", dependencies=_MANAGE, status_code=204)
+@router.delete("/change-requests/{id}", dependencies=_CR_VIEW, status_code=204)
 async def delete_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> None:
     """删除草稿（owner；硬删 [推断]）。"""
     await ChangeRequestService(session).delete(id, user)
@@ -434,21 +435,21 @@ async def object_facets(
 # 目标通用 kind + 业务编码；权限先挂 releases:manage（require_func 桩，PDE 接权限时改成目标页:manage）。
 
 
-@router.post("/change-requests", dependencies=_MANAGE, status_code=201)
+@router.post("/change-requests", dependencies=_CR_VIEW, status_code=201)
 async def create_change_request(session: SessionDep, user: CurrentUserDep, body: CRCreateIn) -> Any:
     """发起变更：新建草稿单（owner = 当前用户），可同时登记第一个目标。返回详情。"""
     code = await CrWriteService(session).create(user, body)
     return await ChangeRequestService(session).detail(code)
 
 
-@router.patch("/change-requests/{id}", dependencies=_MANAGE)
-async def patch_change_request(id: str, session: SessionDep, _: CurrentUserDep, body: CRPatchIn) -> Any:
+@router.patch("/change-requests/{id}", dependencies=_CR_VIEW)
+async def patch_change_request(id: str, session: SessionDep, user: CurrentUserDep, body: CRPatchIn) -> Any:
     """改单头（标题 / 原因 / 审核人 / 级别 / 迁移方式），草稿才能改。"""
-    await CrWriteService(session).patch(id, body)
+    await CrWriteService(session).patch(id, body, user)
     return await ChangeRequestService(session).detail(id)
 
 
-@router.post("/change-requests/{id}/targets", dependencies=_MANAGE)
+@router.post("/change-requests/{id}/targets", dependencies=_CR_VIEW)
 async def add_change_request_target(
     id: str, session: SessionDep, user: CurrentUserDep, body: TargetIn
 ) -> Any:
@@ -457,15 +458,15 @@ async def add_change_request_target(
     return await ChangeRequestService(session).detail(id)
 
 
-@router.delete("/change-requests/{id}/targets/{kind}/{target_id}", dependencies=_MANAGE, status_code=204)
+@router.delete("/change-requests/{id}/targets/{kind}/{target_id}", dependencies=_CR_VIEW, status_code=204)
 async def discard_change_request_target(
-    id: str, kind: TargetKind, target_id: str, session: SessionDep
+    id: str, kind: TargetKind, target_id: str, session: SessionDep, user: CurrentUserDep
 ) -> None:
     """放弃本对象草稿：删掉该目标的全部草稿行和登记。"""
-    await CrWriteService(session).discard_target(id, kind, target_id)
+    await CrWriteService(session).discard_target(id, kind, target_id, user)
 
 
-@router.put("/change-requests/{id}/items", dependencies=_MANAGE, response_model=ItemsPutOut)
+@router.put("/change-requests/{id}/items", dependencies=_CR_VIEW, response_model=ItemsPutOut)
 async def put_change_request_items(
     id: str, session: SessionDep, user: CurrentUserDep, body: ItemsPutIn
 ) -> Any:
@@ -486,10 +487,10 @@ async def list_change_request_items(
     return await CrWriteService(session).list_items(id, kind, target_id, section)
 
 
-@router.post("/change-requests/{id}:validate", dependencies=_MANAGE, response_model=ValidateOut)
-async def validate_change_request(id: str, session: SessionDep, _: CurrentUserDep) -> Any:
+@router.post("/change-requests/{id}:validate", dependencies=_CR_VIEW, response_model=ValidateOut)
+async def validate_change_request(id: str, session: SessionDep, user: CurrentUserDep) -> Any:
     """重新校验（同步）：V1–V17 写 cr_check 和 detail.checks。"""
-    return await CrWriteService(session).validate(id)
+    return await CrWriteService(session).validate(id, user)
 
 
 @get("/change-requests/{id}/diffs", "releases")

@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.auth import CurrentUser
+from app.common.auth import CurrentUser, check_func
 from app.core import clock
 from app.core.errors import AppError, Forbidden, NotFound
 from app.core.schema import _fmt_dt
@@ -136,6 +136,7 @@ class PublishService:
         )
 
     async def publish(self, user: CurrentUser, note: str | None) -> str:
+        check_func(user, "releases", "manage")
         if not user.is_ontology_admin:
             raise Forbidden("需要本体管理员发布")
         now = clock.now()
@@ -176,6 +177,7 @@ class PublishService:
         return await next_cr_code(self.session)
 
     async def rollback(self, user: CurrentUser, ver: str, note: str | None) -> str:
+        check_func(user, "releases", "manage")
         # 前端不限管理员（static-api.md §2.2-6，限管理员是 [推断]，默认不做）
         now = clock.now()
         target = await ReleaseRepo(self.session).by_ver(ver)
