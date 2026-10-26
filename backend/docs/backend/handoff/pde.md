@@ -59,3 +59,5 @@
 - **接口缺口**（给静态）：handoff/static.md 第 17 条——`?ver=` 不按版本筛节点（只按版本筛边）；nodes 没有 `draft` / 质量失败标记；没有卡片所需的统计字段。
 
 - （评审 palantir-r2，非阻塞）事件类型页“近期事件”在非后台断开类错误时显示空列表且不自动重试，直到切换筛选或翻页。
+
+- qa-tuning（合并审）非阻塞：①评测无并发互斥，且 ER- 编号 max+1 并发可撞号；②进程重启后 run 卡"运行中"（qa.md 已记）；③/feedbacks 列表逐行构建详情（N+1）；④:reopen 不撤销 :to-cert 已加的同问法；⑤后台任务最多轮询 5s 等请求事务提交；⑥qa service 跨模块只读引用 static.ChangeRequest，后续宜走 static 提供的查询函数。
