@@ -6,5 +6,12 @@
   {"id": "U010005", "name": "孙浩然", "note": "[推断] 版本发布人；mock 里没有编号，后端补"},
   {"id": "U010006", "name": "李娜", "note": "[推断] 演示身份 viewer；mock 里没有编号，后端补"},
   {"id": "U010007", "name": "赵蕾", "note": "[推断] 演示人物（非管理员）；mock 里没有编号，后端补"},
-  {"id": "U010008", "name": "吴佳", "note": "[推断] 演示人物（非管理员）；mock 里没有编号，后端补"}
+  {"id": "U010008", "name": "吴佳", "note": "[推断] 演示人物（非管理员）；mock 里没有编号，后端补"},
+  {"id": "U010009", "name": "赵磊", "dept": "华东事业部 / 运营中心", "note": "[推断] 我的页面分享候选人（mock qa-pages.ts PEOPLE）；mock 里没有编号，后端补"},
+  {"id": "U010010", "name": "周婷", "dept": "华东事业部 / 会员中心", "note": "[推断] 我的页面分享候选人（mock qa-pages.ts PEOPLE）；mock 里没有编号，后端补"},
+  {"id": "U010011", "name": "周晓峰", "dept": "华东事业部 / 供应链", "note": "[推断] 我的页面分享候选人（mock qa-pages.ts PEOPLE）；mock 里没有编号，后端补"},
+  {"id": "U010012", "name": "刘洋", "dept": "集团总部 / 数据平台", "note": "[推断] 我的页面分享候选人（mock qa-pages.ts PEOPLE）；mock 里没有编号，后端补"},
+  {"id": "U010013", "name": "张伟", "dept": "华东事业部 / 运营中心", "note": "[推断] 我的页面分享候选人（mock qa-pages.ts PEOPLE）；mock 里没有编号，后端补"},
+  {"id": "U010014", "name": "钱一鸣", "dept": "华东事业部 / 供应链", "note": "[推断] 我的页面分享候选人（mock qa-pages.ts PEOPLE）；mock 里没有编号，后端补"},
+  {"id": "U010015", "name": "马晨", "dept": "华东事业部 / 会员中心", "note": "[推断] 我的页面分享候选人（mock qa-pages.ts PEOPLE）；mock 里没有编号，后端补"}
 ]
