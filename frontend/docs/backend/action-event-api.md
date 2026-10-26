@@ -188,7 +188,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /event-types/{id}/subscribers` | `ver`、`view`、`cr` | `items[{kind,name,ruleId?,filter,then,status,weekly,mark?}]` | 不分页 | `subscribersOf()` |
 | `GET /event-types/{id}/stats` | — | `{weekly,total,dedup,failed,partial,p95,asOf}`；`daily[{date,value}]`（14 天） | — | `eventDaily()`；健康指标同 `EventTypes.vue` 的 `health`（按 `eventsOf()` 算） |
 | `GET /event-types/{id}/events` | `range=24h\|7d`、`outcome`、`page`、`size=14` | `{items[{id,typeId,at,objKind,objId,objLabel,summary,outcome,subscribers,dedupKey,latencyMs}], total, page, size}`（前端只显示 ‹ 1/N ›，不显示总数） | 页码，**无游标** | `EVENTS` |
-| `GET /events/{id}` | — | 抽屉字段 + `timeline[{time,text,desc,status}]` + `related[]` | — | `eventById()`、`actionEventResolvers.ts` `event()` |
+| `GET /events/{id}` | — | 一条 `EventRecord`（同近期事件的一行，= mock `eventById()`）；时间线、关联由前端 `actionEventResolvers.ts` `event()` 按 `outcome` 和事件类型拼（palantir-r3 已实现，见 §12.2） | — | `eventById()`、`actionEventResolvers.ts` `event()` |
 | `GET /event-deliveries` | `eventId`（事件 code，必填），或 `eventType`（事件类型 code）+ `subscription`（订阅方 name）加 `page`、`size`【推断：前端没有按订阅方查投递的入口】 | `items[{subscription,status,attempts,lastError,deliveredAt}]`；按订阅方查时为分页结构 | 按事件查不分页 | mock 里没有逐个订阅方的记录，按 `outcome` 和 `subscribers` 推出来【推断】 |
 | `POST /event-types/{id}:simulate` | query `view`、`cr`（草稿视图按草稿里的载荷字段和订阅方）、`ver`；body `{payload?}`（默认取各字段的 `sample`） | `{testEventId, deliveredTo}`（`deliveredTo` 不含停用的订阅方） | — | `EventTypes.vue` `simulate()`；`subscribersOf()` |
 | `GET /event-types/{id}/versions` | — | 同动作类型 | 不分页 | `versionsOf()`、`EVENT_VERSION_NOTES` |
@@ -831,6 +831,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 |---|---|---|
 | `GET /event-types/{id}/events?range=24h\|7d&outcome=&page=&size=14` | `{items: EventRecord[], total, page, size}` | 按 `at` 倒序（同 mock）；`outcome` 中文、`全部`/不传不过滤；非法 range / outcome 422；类型不存在 404；页码越界收拢到最后一页 |
 | `GET /event-types/{id}/stats` | `{weekly, total, dedup, failed, partial, p95, asOf, daily: [{date: "MM-DD", value}] × 14}` | 健康口径同 `EventTypes.vue` 的 `health`（该类型全部事件；p95 = 升序第 floor(n×0.95) 个，没有事件 0）；`weekly` = event_type.weekly；`asOf` = clock 当前（分钟） |
+| `GET /events/{id}`（palantir-r3） | 一条 `EventRecord` | 事件抽屉用：字段和 `eventById(id)` 完全一样（不加投递明细，mock 没有）；按事件编号（`EV-…`）找，`is_test` 的不算；不存在 404 `NOT_FOUND`（`message`「事件不存在」，`details.id`）；功能权限 event-types · view |
 | `GET /action-types/{id}/stats/daily?days=14` | `{items: [{date: "MM-DD", ok, failed, unknown}]}` | days 1–90，截至今天，缺的天补 0 |
 
 `EventRecord` 字段 = mock：`id, typeId, at("YYYY-MM-DD HH:mm:ss"), objKind?, objId, objLabel, summary, outcome, subscribers, dedupKey, latencyMs`（objKind 为空返回 null，前端 `clean()` 收掉）。
@@ -852,7 +853,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 内容 | 原因 |
 |---|---|
-| 动作执行抽屉、事件抽屉（`drawer.open('action' \| 'event', id)`） | 抽屉解析在公共文件 `src/components/actionEventResolvers.ts`（不归我）。动态已有 `GET /action-runs/{id}`；事件详情 `GET /events/{id}`（含逐订阅方投递）需要 `event_delivery` 表，本批没建 |
+| 动作执行抽屉、事件抽屉（`drawer.open('action' \| 'event', id)`） | 抽屉解析在公共文件 `src/components/actionEventResolvers.ts`（不归我）。动态已有 `GET /action-runs/{id}`（动作抽屉 PDE 已接，`c5ec3b3`）；`GET /events/{id}` palantir-r3 已实现，等 PDE 把 `event(id)` 的 `eventById` 换成它 |
 | `event_delivery` / `event_dedup`、`POST /internal/v1/events` | 没建（投递流水、去重窗口、内部接收） |
 | 两页草稿保存 / 提交（变更单） | 静态还没出 create / edit 变更单接口，保持 mock |
 

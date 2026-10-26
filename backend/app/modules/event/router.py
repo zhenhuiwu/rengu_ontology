@@ -136,3 +136,8 @@ async def list_events(
 @router.get("/event-types/{type_id}/stats", response_model=EventStatsOut, summary="运行健康 + 近 14 天事件数")
 async def get_event_stats(type_id: str, session: SessionDep) -> EventStatsOut:
     return EventStatsOut.model_validate(await EventRuntimeService(session).stats(type_id))
+
+
+@router.get("/events/{event_id}", response_model=EventOut, summary="单条事件（事件抽屉）")
+async def get_event(event_id: str, session: SessionDep) -> EventOut:
+    return EventOut.model_validate(await EventRuntimeService(session).event(event_id))
