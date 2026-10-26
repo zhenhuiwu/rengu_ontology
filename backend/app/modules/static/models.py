@@ -42,7 +42,16 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import LabelEnum
-from app.db.base import AppendOnlyTableMixin, Base, CodeMixin, IdMixin, MutableTableMixin, unique_except_seed
+from app.db.base import (
+    AppendOnlyTableMixin,
+    Base,
+    CodeMixin,
+    CreatedColumnsMixin,
+    IdMixin,
+    MutableTableMixin,
+    UpdatedAtMixin,
+    unique_except_seed,
+)
 from app.db.types import JsonType, enum_column
 
 # ---------------------------------------------------------------- 枚举（static-api.md §1.3）
@@ -703,3 +712,119 @@ class CrEvent(IdMixin, AppendOnlyTableMixin, Base):
     desc: Mapped[str | None] = mapped_column(Text)
     level: Mapped[str | None] = mapped_column(String(16), comment="前端 ReviewEvent.status：warn / error")
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ---------------------------------------------------------------- 变更单拆表（static_0003）
+# static-api.md §1.2 / §1.3：cr_target（单子涉及的定义）、cr_item（逐行改动，before/after jsonb）、
+# cr_check（校验 V1–V17）、cr_impact（影响面）、cr_trial（试算）。目标是通用的 kind + 业务编码，
+# 动态 / 动作 / 事件模块的草稿也写这里（不做跨模块外键，同 §1.2）。
+# cr_impact / cr_trial 本批只建表（种子 CR 的影响面 / 试算仍在 change_request.detail 里），见 handoff。
+
+
+class CrTarget(IdMixin, AppendOnlyTableMixin, Base):
+    """变更单涉及的定义（mock DRAFT_TARGETS）。一个定义同时只能在一张未发布的单子里（服务层校验）。"""
+
+    __tablename__ = "cr_target"
+    __table_args__ = (
+        UniqueConstraint("cr_id", "target_kind", "target_id"),
+        Index("ix_cr_target_kind_id", "target_kind", "target_id"),
+        {"comment": "变更单涉及的定义"},
+    )
+
+    cr_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("change_request.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="object|link|metric|dimension|knowledge|action|event|rule"
+    )
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="定义业务编码（前端 id）")
+    target_name: Mapped[str | None] = mapped_column(String(128), comment="显示名（改动列表「对象」列）")
+    is_new: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="本单新建的定义")
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CrItem(IdMixin, CreatedColumnsMixin, UpdatedAtMixin, Base):
+    """变更单逐行改动（useDraftEdits saved 的一行）。PUT items 按 (目标, section) 整段替换。"""
+
+    __tablename__ = "cr_item"
+    __table_args__ = (
+        UniqueConstraint("cr_id", "target_kind", "target_id", "section", "item_key"),
+        {"comment": "变更单改动行"},
+    )
+
+    cr_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("change_request.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    section: Mapped[str] = mapped_column(String(32), nullable=False, comment="properties|links|params|conds…")
+    item_key: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="行键（属性名、取值、条件号…）"
+    )
+    op: Mapped[str] = mapped_column(String(8), nullable=False, comment="add|update|delete")
+    before: Mapped[Any] = mapped_column(JsonType)
+    after: Mapped[Any] = mapped_column(JsonType)
+    type_label: Mapped[str | None] = mapped_column(String(32), comment="改动列表「类型」列")
+    field_label: Mapped[str | None] = mapped_column(String(128), comment="改动列表「字段」列")
+    before_text: Mapped[str | None] = mapped_column(
+        Text, comment="改动列表显示文字（可空，空时由 before 生成）"
+    )
+    after_text: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[str | None] = mapped_column(String(64), comment="保存人姓名")
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CrCheck(IdMixin, Base):
+    """发布校验结果（V1–V17；target_db 预留 dm8 / kes 分库结果）。:validate 整单重写。"""
+
+    __tablename__ = "cr_check"
+    __table_args__ = (
+        UniqueConstraint("cr_id", "code", "target_db"),
+        {"comment": "变更单校验结果"},
+    )
+
+    cr_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("change_request.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(8), nullable=False, comment="V1..V17")
+    target_db: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="", comment="'' | seed（种子基线）| dm8 | kes"
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[str] = mapped_column(String(8), nullable=False, comment="block|warn|info|pass|na")
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CrImpact(IdMixin, Base):
+    """影响面（Releases.vue 影响面三组）。[推断] 本批只建表，未写入。"""
+
+    __tablename__ = "cr_impact"
+    __table_args__ = ({"comment": "变更单影响面"},)
+
+    cr_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("change_request.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    grp: Mapped[str] = mapped_column(String(8), nullable=False, comment="direct|defs|usage")
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cnt: Mapped[int | None] = mapped_column(Integer)
+    ref_kind: Mapped[str | None] = mapped_column(String(16))
+    ref_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class CrTrial(IdMixin, Base):
+    """试算（指标口径变更前后对比）。[推断] 本批只建表，未写入。"""
+
+    __tablename__ = "cr_trial"
+    __table_args__ = (UniqueConstraint("cr_id", "period"), {"comment": "变更单试算"})
+
+    cr_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("change_request.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    period: Mapped[str] = mapped_column(String(32), nullable=False)
+    before_val: Mapped[str | None] = mapped_column(String(64))
+    after_val: Mapped[str | None] = mapped_column(String(64))
+    delta: Mapped[str | None] = mapped_column(String(32))
+    scope: Mapped[str | None] = mapped_column(String(128))

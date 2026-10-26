@@ -10,6 +10,9 @@
 | POST /releases:merge-check、POST /releases、POST /releases/{ver}:rollback | Releases.vue 发布 / 回滚按钮 |
 | GET /change-requests[/{id}]、DELETE /change-requests/{id} | Releases.vue 变更单列表、删除草稿 |
 | POST /change-requests/{id}:submit/withdraw/approve/reject/unapprove/reopen | Releases.vue 详情按钮 |
+| POST /change-requests、PATCH /change-requests/{id}、POST/DELETE /change-requests/{id}/targets、
+  PUT/GET /change-requests/{id}/items、POST /change-requests/{id}:validate、GET /change-requests/{id}/diffs、
+  GET /change-requests/draft-targets | 定义页发起变更 / 加入 / 保存草稿 / 放弃、Releases.vue 校验 |
 """
 
 from collections.abc import Callable
@@ -21,9 +24,15 @@ from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
+from app.modules.static.cr_write import CrWriteService
 from app.modules.static.crs import ChangeRequestService
+from app.modules.static.models import CRStatus
 from app.modules.static.publish import PublishService
 from app.modules.static.schemas import (
+    CRCreateIn,
+    CRPatchIn,
+    ItemsPutIn,
+    ItemsPutOut,
     MergeCheckOut,
     PublishIn,
     Rec,
@@ -31,6 +40,9 @@ from app.modules.static.schemas import (
     RejectIn,
     RollbackIn,
     SynonymConflicts,
+    TargetIn,
+    TargetKind,
+    ValidateOut,
 )
 from app.modules.static.service import StaticService, paginate
 from app.modules.versioning.repo import ReleaseRepo
@@ -340,6 +352,12 @@ async def list_change_requests(
     return paginate(rows, PageParams(page=page or 1, size=size or 17), focus)
 
 
+@get("/change-requests/draft-targets", "releases")
+async def draft_targets(session: SessionDep, _: CurrentUserDep, status: CRStatusQ = "草稿") -> Any:
+    """{单号: {kind: [目标编码]}}，同 mock DRAFT_TARGETS（前端 draftOf 用）。必须在 /{id} 之前声明。"""
+    return await CrWriteService(session).draft_targets(CRStatus(status))
+
+
 @get("/change-requests/{id}", "releases")
 async def get_change_request(id: str, session: SessionDep, _: CurrentUserDep) -> Any:
     """一行 + detail（CRDetail 整份）+ events。"""
@@ -410,3 +428,72 @@ async def object_facets(
     id: str, session: SessionDep, user: CurrentUserDep, filters: Annotated[str | None, Query()] = None
 ) -> Any:
     return await ExplorerService(session).facets(id, parse_filters(filters), user)
+
+
+# ---------------------------------------------------------------- 变更单写接口（handoff 写接口契约）
+# 目标通用 kind + 业务编码；权限先挂 releases:manage（require_func 桩，PDE 接权限时改成目标页:manage）。
+
+
+@router.post("/change-requests", dependencies=_MANAGE, status_code=201)
+async def create_change_request(session: SessionDep, user: CurrentUserDep, body: CRCreateIn) -> Any:
+    """发起变更：新建草稿单（owner = 当前用户），可同时登记第一个目标。返回详情。"""
+    code = await CrWriteService(session).create(user, body)
+    return await ChangeRequestService(session).detail(code)
+
+
+@router.patch("/change-requests/{id}", dependencies=_MANAGE)
+async def patch_change_request(id: str, session: SessionDep, _: CurrentUserDep, body: CRPatchIn) -> Any:
+    """改单头（标题 / 原因 / 审核人 / 级别 / 迁移方式），草稿才能改。"""
+    await CrWriteService(session).patch(id, body)
+    return await ChangeRequestService(session).detail(id)
+
+
+@router.post("/change-requests/{id}/targets", dependencies=_MANAGE)
+async def add_change_request_target(
+    id: str, session: SessionDep, user: CurrentUserDep, body: TargetIn
+) -> Any:
+    """加入已有变更单（幂等）。"""
+    await CrWriteService(session).add_target(id, user, body)
+    return await ChangeRequestService(session).detail(id)
+
+
+@router.delete("/change-requests/{id}/targets/{kind}/{target_id}", dependencies=_MANAGE, status_code=204)
+async def discard_change_request_target(
+    id: str, kind: TargetKind, target_id: str, session: SessionDep
+) -> None:
+    """放弃本对象草稿：删掉该目标的全部草稿行和登记。"""
+    await CrWriteService(session).discard_target(id, kind, target_id)
+
+
+@router.put("/change-requests/{id}/items", dependencies=_MANAGE, response_model=ItemsPutOut)
+async def put_change_request_items(
+    id: str, session: SessionDep, user: CurrentUserDep, body: ItemsPutIn
+) -> Any:
+    """保存到草稿：同一 (目标, section) 整段替换。"""
+    return await CrWriteService(session).put_items(id, user, body)
+
+
+@get("/change-requests/{id}/items", "releases")
+async def list_change_request_items(
+    id: str,
+    session: SessionDep,
+    _: CurrentUserDep,
+    kind: TargetKind | None = None,
+    target_id: Annotated[str | None, Query(alias="targetId")] = None,
+    section: str | None = None,
+) -> Any:
+    """读回草稿行（不分页，按保存顺序）。"""
+    return await CrWriteService(session).list_items(id, kind, target_id, section)
+
+
+@router.post("/change-requests/{id}:validate", dependencies=_MANAGE, response_model=ValidateOut)
+async def validate_change_request(id: str, session: SessionDep, _: CurrentUserDep) -> Any:
+    """重新校验（同步）：V1–V17 写 cr_check 和 detail.checks。"""
+    return await CrWriteService(session).validate(id)
+
+
+@get("/change-requests/{id}/diffs", "releases")
+async def change_request_diffs(id: str, session: SessionDep, _: CurrentUserDep, p: P10) -> Any:
+    """改动列表（种子改动 + 草稿行），每页 10（Releases.vue:83）。"""
+    d = await ChangeRequestService(session).detail(id)
+    return paginate(d["detail"].get("diffs") or [], p, key="key")

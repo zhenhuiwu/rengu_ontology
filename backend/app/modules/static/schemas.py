@@ -5,9 +5,9 @@
 页面要的附加键（diff / summary / levels / groups / conflictCount）。
 """
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from app.common.pagination import Page
 from app.core.schema import ApiModel
@@ -54,3 +54,68 @@ class RejectIn(ApiModel):
     """POST /change-requests/{id}:reject：驳回原因必填（前端 5 个预设之一，后台不限定取值 [推断]）。"""
 
     reject_reason: str | None = None
+
+
+# ---------------------------------------------------------------- 变更单写接口（handoff 写接口契约）
+
+TargetKind = Literal["object", "link", "metric", "dimension", "knowledge", "action", "event", "rule"]
+ItemOp = Literal["add", "update", "delete"]
+
+
+class TargetIn(ApiModel):
+    """变更目标（通用 kind + 业务编码）。name 只用于改动列表显示，可省。"""
+
+    kind: TargetKind
+    id: str = Field(min_length=1, max_length=64)
+    is_new: bool = False
+    name: str | None = Field(None, max_length=128)
+
+
+class CRCreateIn(ApiModel):
+    title: str = Field(min_length=1, max_length=40)
+    reason: str = ""
+    target: TargetIn | None = None
+    level: Literal["重大", "一般", "修订"] = "一般"
+    reviewer: str | None = Field(None, max_length=64)
+
+
+class CRPatchIn(ApiModel):
+    title: str | None = Field(None, min_length=1, max_length=40)
+    reason: str | None = None
+    reviewer: str | None = Field(None, max_length=64)
+    level: Literal["重大", "一般", "修订"] | None = None
+    migration: str | None = None
+    lock_version: int | None = None
+
+
+class ItemIn(ApiModel):
+    key: str = Field(min_length=1, max_length=128)
+    op: ItemOp
+    before: Any = None
+    after: Any = None
+    type: str | None = Field(None, max_length=32)
+    field: str | None = Field(None, max_length=128)
+    before_text: str | None = None
+    after_text: str | None = None
+
+
+class ItemsPutIn(ApiModel):
+    target: TargetIn
+    section: str = Field(min_length=1, max_length=32)
+    rows: list[ItemIn]
+    lock_version: int | None = None
+
+
+class ItemsPutOut(ApiModel):
+    id: str
+    changes: int
+    lock_version: int
+    items: list[dict[str, Any]]
+
+
+class ValidateOut(ApiModel):
+    id: str
+    checked_at: str
+    checks: list[dict[str, Any]]
+    summary: str
+    blocked: bool

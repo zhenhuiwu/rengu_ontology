@@ -15,6 +15,7 @@ import { isStaticReal, loadMetricDetail } from '@/api/static';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView, draftOf } from './parts/useDraftView';
+import { useStaticCr } from './parts/useStaticCr';
 import { CHANGE_REQUESTS } from '@/mock/changes';
 import { message } from 'ant-design-vue';
 import { useConfirmStore } from '@/stores/confirm';
@@ -34,7 +35,11 @@ const tab = computed({
   set: (v) => router.replace({ query: { ...route.query, tab: v } }),
 });
 const pick = (id: string) => router.replace({ query: { ...route.query, metric: id, view: undefined } });
-const { draft, isDraft, canEdit, editTip, readonly, reason, setView, start } = useDraftView('metric', () => cur.value.id);
+const dv = useDraftView('metric', () => cur.value.id);
+const { draft, isDraft, canEdit, editTip, readonly, reason, setView } = dv;
+// real 模式先写库（发起 / 加入、提交、放弃），见 parts/useStaticCr.ts
+const cr = useStaticCr('metric', () => ({ id: cur.value.id, name: cur.value.name }), dv);
+const start = (opts: { join?: string; title?: string }) => cr.start(opts);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
@@ -145,7 +150,7 @@ const refCols = [
 
     <div class="panel mt-detail">
       <DraftBanner v-if="isDraft && draft" :draft="draft"
-        @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="setView('published')" />
+        @submit="cr.submit" @discard="cr.discard" />
       <div class="mt-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
         <span class="t-14 c-3 num">{{ cur.api }} · {{ cur.unit }}</span>

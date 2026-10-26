@@ -16,7 +16,8 @@ import { OBJECT_PROPS, type ObjProp } from '@/mock/objectProps';
 import { METRIC_LIST, METRIC_DEF, METRIC_DIMS, METRIC_VERSIONS, METRIC_REFS, type MetricListItem } from '@/mock/metricCatalog';
 import { DIM_ITEMS, type DimItem } from '@/mock/dimensions';
 import { KNOWLEDGE, type KEntry } from '@/mock/knowledge';
-import type { ChangeRequest, CRDetail, ReviewEvent } from '@/mock/changes';
+import type { ChangeRequest, CRDetail, CRLevel, ReviewEvent } from '@/mock/changes';
+import { DRAFTS, type TargetKind } from '@/mock/releases';
 
 const api = apiClient('static');
 export const isStaticReal = (): boolean => api.isReal();
@@ -179,3 +180,101 @@ export const getObjectTypeFacets = (id: string, filters: Record<string, FacetFil
   api.get<Facet[]>(`/object-types/${encodeURIComponent(id)}/facets`, {
     query: Object.keys(filters).length ? { filters: JSON.stringify(filters) } : {},
   });
+
+// ---------------------------------------------------------------- 变更单写接口（handoff/static.md「变更单写接口契约」，static-r3）
+/** 目标通用：kind + 业务编码（静态 / 动态 / Palantir 共用） */
+export interface CRTargetIn { kind: TargetKind; id: string; isNew?: boolean; name?: string }
+export type CRItemOp = 'add' | 'update' | 'delete';
+export interface CRItemIn { key: string; op: CRItemOp; before?: unknown; after?: unknown; type?: string; field?: string; beforeText?: string; afterText?: string }
+export interface CRItemOut extends CRItemIn { target: { kind: TargetKind; id: string }; section: string; updatedBy?: string; updatedAt: string }
+/** 详情 = GET 列表一行 + 登记的目标 + 乐观锁版本号 */
+export type CRFull = CRRow & { targets: CRTargetIn[]; lockVersion: number };
+export interface CRCreateIn { title: string; reason?: string; target?: CRTargetIn; level?: CRLevel; reviewer?: string }
+export interface CRPatchIn { title?: string; reason?: string; reviewer?: string; level?: CRLevel; migration?: string; lockVersion?: number }
+export interface CRValidateOut { id: string; checkedAt: string; checks: MergeCheckRow[]; summary: string; blocked: boolean }
+
+const crPath = (id: string, rest = '') => `/change-requests/${encodeURIComponent(id)}${rest}`;
+/** POST /change-requests → 201 新草稿（默认审核人 = 本体管理员；占用他单目标 409 TARGET_IN_OTHER_CR） */
+/** GET /change-requests/{id}：详情（带 targets、lockVersion） */
+export const fetchCR = (id: string) => api.get<CRFull>(crPath(id));
+
+export const createCR = (body: CRCreateIn) => api.post<CRFull>('/change-requests', body);
+/** PATCH /change-requests/{id}：改单头（仅草稿；lockVersion 不符 409 VERSION_CONFLICT） */
+export const patchCR = (id: string, body: CRPatchIn) => api.patch<CRFull>(crPath(id), body);
+/** POST /change-requests/{id}/targets：加入已有变更单（幂等） */
+export const addCRTarget = (id: string, target: CRTargetIn) => api.post<CRFull>(crPath(id, '/targets'), target);
+/** DELETE /change-requests/{id}/targets/{kind}/{targetId}：放弃本对象草稿（删草稿行 + 登记），204 */
+export const discardCRTarget = (id: string, kind: TargetKind, targetId: string) =>
+  api.delete<void>(crPath(id, `/targets/${kind}/${encodeURIComponent(targetId)}`));
+/** PUT /change-requests/{id}/items：同一 (目标, section) 整段替换 */
+export const saveCRItems = (id: string, body: { target: CRTargetIn; section: string; rows: CRItemIn[]; lockVersion?: number }) =>
+  api.put<{ id: string; changes: number; lockVersion: number; items: CRItemOut[] }>(crPath(id, '/items'), body);
+/** GET /change-requests/{id}/items：读回草稿行（可按目标 / section 筛） */
+export const fetchCRItems = (id: string, q: { kind?: TargetKind; targetId?: string; section?: string } = {}) =>
+  api.get<CRItemOut[]>(crPath(id, '/items'), { query: q });
+/** POST /change-requests/{id}:validate：同步重新校验，整单重写 V1–V17 */
+export const validateCR = (id: string) => api.post<CRValidateOut>(crPath(id, ':validate'), {});
+/** GET /change-requests/{id}/diffs：改动列表分页（默认 10 条一页） */
+export const fetchCRDiffs = (id: string, page = 1, size = 10) =>
+  api.get<PageResult<CRDetail['diffs'][number]>>(crPath(id, '/diffs'), { query: { page, size } });
+/** GET /change-requests/draft-targets：{ 单号: { kind: [id…] } }（= mock DRAFT_TARGETS 结构） */
+export const fetchDraftTargets = (status = '草稿') =>
+  api.get<Record<string, Partial<Record<TargetKind, string[]>>>>('/change-requests/draft-targets', { query: { status } });
+
+/** 把库里的单子登记进 DRAFTS（useDraftView 的 allDrafts / draftOf 读它；同号替换） */
+function registerDraft(cr: CRFull) {
+  const row = { id: cr.id, title: cr.title, owner: cr.owner, updatedAt: cr.updatedAt, changes: cr.changes };
+  const i = DRAFTS.findIndex((d) => d.id === cr.id);
+  if (i >= 0) DRAFTS.splice(i, 1, row); else DRAFTS.unshift(row);
+}
+const bumpDraft = (id: string, changes: number) => { const d = DRAFTS.find((x) => x.id === id); if (d) d.changes = changes; };
+
+/**
+ * 定义页“发起变更”：real 模式先在库里新建 / 加入（失败抛 ApiError，页面提示后中止），
+ * 返回交给 useDraftView.start 的参数（real 一律 { join: 库里单号 }，单号以库为准）；mock 原样返回。
+ */
+export async function crStart(target: CRTargetIn, opts: { join?: string; title?: string }): Promise<{ join?: string; title?: string }> {
+  if (!isStaticReal()) return opts;
+  const cr = opts.join ? await addCRTarget(opts.join, target) : await createCR({ title: opts.title || '未命名变更', target });
+  registerDraft(cr);
+  return { join: cr.id };
+}
+
+/** 页面一次保存里的改动（同一 key 再次保存时保留最早的 before，改回原值的行去掉） */
+export interface DraftChange { key: string; before?: unknown; after?: unknown; op?: CRItemOp; type?: string; field?: string; beforeText?: string; afterText?: string }
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/**
+ * 定义页“保存到草稿”：real 模式读回该 (目标, section) 已有的草稿行，合并本次改动后整段 PUT；mock 什么都不做。
+ * 失败抛 ApiError（CR_LOCKED / TARGET_IN_OTHER_CR / VERSION_CONFLICT…），页面提示。
+ */
+export async function crSave(crId: string | undefined, target: CRTargetIn, section: string, changes: DraftChange[]): Promise<void> {
+  if (!isStaticReal() || !crId) return;
+  // 读回时记下 lockVersion，PUT 带上：中间有人改过这张单子就 409 VERSION_CONFLICT，不覆盖
+  const [{ lockVersion }, old] = await Promise.all([fetchCR(crId), fetchCRItems(crId, { kind: target.kind, targetId: target.id, section })]);
+  const rows = new Map<string, CRItemIn>(old.map(({ target: _t, section: _s, updatedBy: _u, updatedAt: _a, ...r }) => [r.key, r]));
+  for (const c of changes) {
+    const prev = rows.get(c.key);
+    const op: CRItemOp = c.op ?? (prev?.op === 'add' || target.isNew ? 'add' : 'update');
+    const before = prev && prev.op !== 'add' ? prev.before : op === 'add' ? undefined : c.before;
+    if (op === 'update' && same(before, c.after)) { rows.delete(c.key); continue; }
+    rows.set(c.key, { ...c, op, before });
+  }
+  const r = await saveCRItems(crId, { target, section, rows: [...rows.values()], lockVersion });
+  bumpDraft(crId, r.changes);
+}
+
+/** DraftBanner“提交审核”：real 模式走 :submit（无审核人 409 CR_NO_REVIEWER、阻断 409 CR_BLOCKED）；mock 什么都不做 */
+export async function crSubmit(crId: string): Promise<void> {
+  if (isStaticReal()) await crAction(crId, 'submit');
+}
+
+/** DraftBanner“放弃草稿”：real 模式删掉本对象在该单里的草稿行和登记；mock 什么都不做。返回是否动了库 */
+export async function crDiscard(crId: string, kind: TargetKind, targetId: string): Promise<boolean> {
+  if (!isStaticReal()) return false;
+  await discardCRTarget(crId, kind, targetId);
+  return true;
+}
+
+/** 错误提示文字 */
+export const crErr = (e: unknown) => (e instanceof Error ? e.message : String(e));

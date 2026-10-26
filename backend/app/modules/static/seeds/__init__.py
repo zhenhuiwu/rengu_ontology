@@ -40,6 +40,7 @@ from app.modules.static.models import (
     ConflictStrategy,
     CRLevel,
     CRStatus,
+    CrTarget,
     DefStatus,
     Dimension,
     DimKind,
@@ -529,6 +530,24 @@ def _change_request(r: Row, ctx: SeedContext) -> Row:
     }
 
 
+# mock/releases.ts DRAFT_TARGETS（导出脚本没导这个常量，照抄；改 mock 时同步）
+DRAFT_TARGETS: dict[str, dict[str, list[str]]] = {
+    "CR-0014": {"action": ["adjust_region_budget"]},
+    "CR-0013": {"event": ["store_price_changed"]},
+    "CR-0012": {"object": ["member"], "link": ["member_holds_cards"]},
+    "CR-0011": {"metric": ["gross_margin"], "rule": ["R-007"], "knowledge": ["K-018", "K-024"]},
+    "CR-0009": {"object": ["store"], "dimension": ["format"]},
+}
+
+
+def _cr_targets(r: Row, ctx: SeedContext) -> list[Row]:
+    pairs = [(k, i) for k, ids in DRAFT_TARGETS.get(r["id"], {}).items() for i in ids]
+    return [
+        {"cr_id": r["id"], "target_kind": k, "target_id": i, "is_new": False, "seq": n}
+        for n, (k, i) in enumerate(pairs)
+    ]
+
+
 _OBJ = Ref(ObjectType, "code", nullable=False)
 _QA_PATH = Ref(QaPath, ("group_key", "seq"))
 
@@ -638,5 +657,13 @@ SEEDS = [
         transform=_change_request,
         refs={"release_id": Ref(OntologyRelease, "ver")},
         description="变更单",
+    ),
+    SeedSpec(
+        CrTarget,
+        "CHANGE_REQUESTS.json",
+        key=("cr_id", "target_kind", "target_id"),
+        transform=_cr_targets,
+        refs={"cr_id": Ref(ChangeRequest, "code", nullable=False)},
+        description="变更单涉及的定义（DRAFT_TARGETS）",
     ),
 ]

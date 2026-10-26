@@ -3,7 +3,7 @@
 只加列，全部带默认值，已有行不用回填；演示类型的初始值由 static seed 写（seeds/explorer_meta.json）。
 
 Revision ID: static_0004
-Revises: qa_0003（叠在 static-r3 之上时由 PDE / 静态改成 static_0003）
+Revises: qa_0003
 """
 
 from collections.abc import Sequence
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "static_0004"
-down_revision: str | None = "qa_0003"  # 合并方按当时的 head 再改（static-r3 合入后指向 static_0003）
+down_revision: str | None = "qa_0003"  # 链：qa_0003 → static_0004 → admin_0003 → admin_0004 → static_0003（PDE 合并定）
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

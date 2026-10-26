@@ -47,6 +47,11 @@ STATIC_TABLES = {
     "onto_qa_path_example",
     "change_request",
     "cr_event",
+    "cr_target",
+    "cr_item",
+    "cr_check",
+    "cr_impact",
+    "cr_trial",
 }
 
 

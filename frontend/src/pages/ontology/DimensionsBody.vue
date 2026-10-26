@@ -22,6 +22,7 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
+import { useStaticCr } from './parts/useStaticCr';
 
 const route = useRoute();
 const router = useRouter();
@@ -80,8 +81,11 @@ const { draft, isDraft, canEdit, setView } = dv;
 const editTip = computed(() => dv.editTip.value);
 const changeOpen = ref(false);
 const openChange = () => { if (!readonly.value) changeOpen.value = true; };
-function start(opts: { join?: string; title?: string }) {
-  const id = dv.start(opts);
+// real 模式先写库（发起 / 加入、取值 / 说法 / 问数设置保存、提交、放弃），见 parts/useStaticCr.ts
+const cr = useStaticCr('dimension', () => ({ id: cur.value?.id ?? '', name: cur.value?.name }), dv);
+async function start(opts: { join?: string; title?: string }) {
+  const id = await cr.start(opts);
+  if (!id) return;
   cur.value.history.unshift({ ver: '—', cr: id, status: '草稿', by: CURRENT_USER, at: nowText(), change: '发起变更（待填写）' });
 }
 /** 草稿里改动的计数写回变更单 */
@@ -161,10 +165,14 @@ function openValue(v?: Row) {
   Object.assign(vForm, { code: src?.code ?? '', name: src?.name ?? '', level: lvl, parent: src?.parent ?? '', synonyms: [...(src?.synonyms ?? [])], status: src?.status ?? '启用', note: src?.note ?? '' });
   vOpen.value = true;
 }
-function saveValue() {
+async function saveValue() {
   if (vErr.value) return;
   const f = { code: vForm.code.trim(), name: vForm.name.trim(), level: vForm.level, parent: vForm.parent || undefined, synonyms: [...vForm.synonyms], status: vForm.status, note: vForm.note || undefined };
   const v = vEdit.value;
+  // real：values 段，一个取值一行（key = 层级:编码；已发布取值 before = 发布时的值）
+  const pub = v ? (v.diff ? v.pub : { name: v.name, parent: v.parent, synonyms: [...v.synonyms], status: v.status, note: v.note }) : undefined;
+  const vrow = { key: v?.key ?? `${f.level}:${f.code}`, op: (!v || v.diff === '新增' ? 'add' : 'update') as 'add' | 'update', before: pub, after: f, type: '取值', field: `${f.name}（${f.code}）` };
+  if (!(await cr.save('values', [vrow]))) return;
   if (!v) {
     cur.value.values.push({ key: `${f.level}:${f.code}`, ...f, count: 0, draft: draft.value?.id, diff: '新增' });
     touch(`新增取值“${f.name}”（${f.code}）`);
@@ -190,6 +198,9 @@ async function toggleValue(r: Row) {
     okText: off ? '停用' : '启用', danger: off,
   });
   if (!ok) return;
+  const next = off ? '停用' : '启用';
+  const vrow = { key: v.key, op: (v.diff === '新增' ? 'add' : 'update') as 'add' | 'update', before: v.diff ? v.pub : { status: v.status }, after: { code: v.code, name: v.name, level: v.level, parent: v.parent, synonyms: [...v.synonyms], status: next, note: v.note }, type: '取值', field: `${v.name}（${v.code}）` };
+  if (!(await cr.save('values', [vrow]))) return;
   if (!v.diff) v.pub = { status: v.status };
   v.status = off ? '停用' : '启用';
   v.diff = v.diff ?? '修改';
@@ -280,10 +291,13 @@ const mForm = reactive<{ phrase: string; targets: string[]; match: MapMatch; res
 const TARGET_OPTIONS = computed(() => valueRows.value.filter((v) => v.status === '启用').map((v) => ({ value: v.name, label: `${v.name}（${v.code}）` })));
 const mHits = computed(() => (mForm.phrase.trim() ? hitsOf(mForm.phrase.trim()).filter((h) => !(h.item === cur.value.id && mForm.targets.includes(h.value))) : []));
 const openMap = () => { Object.assign(mForm, { phrase: '', targets: [], match: '精确', resolve: '' }); mOpen.value = true; };
-function saveMap() {
+async function saveMap() {
   const p = mForm.phrase.trim();
   if (!p || !mForm.targets.length) return;
   const others = mHits.value.map((h) => `${h.itemName} · ${h.value}`).join('、');
+  // real：mappings 段，新增说法一行（key = 说法>取值）
+  const after = { phrase: p, targets: [...mForm.targets], match: mForm.targets.length > 1 ? '多值' : mForm.match, resolve: mForm.resolve || undefined };
+  if (!(await cr.save('mappings', [{ key: `${p}>${mForm.targets.join('|')}`, op: 'add', after, type: '说法', field: p, afterText: mForm.targets.join('、') }]))) return;
   cur.value.mappings.unshift({
     key: `${p}>${mForm.targets.join('|')}`, phrase: p, targets: [...mForm.targets], match: mForm.targets.length > 1 ? '多值' : mForm.match, source: '业务知识', hits: 0,
     conflict: others ? `与 ${others} 同名` : undefined, resolve: mForm.resolve || undefined, draft: draft.value?.id, diff: '新增',
@@ -300,7 +314,14 @@ const snap = ref('');
 function beginEdit() { Object.assign(form, { ...cur.value.qa, desc: cur.value.desc }); snap.value = JSON.stringify(form); editing.value = true; }
 const dirty = computed(() => editing.value && JSON.stringify(form) !== snap.value);
 const guard = useUnsavedGuard(dirty);
-function save() {
+/** 问数设置字段 → 改动列表「字段」列 */
+const QA_LABEL: Record<keyof typeof form, string> = { defaultLevel: '默认层级', unspecified: '未指定时', nullAs: '空值显示为', sort: '排序', note: '问数说明', desc: '说明' };
+async function save() {
+  const was = JSON.parse(snap.value) as typeof form;
+  const changes = (Object.keys(QA_LABEL) as (keyof typeof form)[])
+    .filter((k) => form[k] !== was[k])
+    .map((k) => ({ key: k, before: was[k], after: form[k], type: '问数设置', field: QA_LABEL[k] }));
+  if (!(await cr.save('qa', changes))) return;
   const { desc, ...rest } = form;
   Object.assign(cur.value.qa, rest);
   cur.value.desc = desc;
@@ -393,7 +414,7 @@ const hasDraft = (d: DimItem) => !readonly.value && d.values.some((v) => v.draft
 
     <div v-if="cur" class="panel dm-detail">
       <DraftBanner v-if="isDraft && draft" :draft="draft"
-        @submit="message.success(`${draft.id} 已提交审核，可在“变更与发布”查看`)" @discard="setView('published')" />
+        @submit="cr.submit" @discard="cr.discard" />
       <div class="dm-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
         <span class="t-14 c-3 num">{{ cur.api }}</span>
