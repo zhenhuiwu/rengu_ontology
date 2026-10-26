@@ -808,10 +808,53 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 | 页面操作 | 原因 |
 |---|---|
-| 动作类型的执行抽屉、近 14 天趋势图 | 抽屉接动态 `GET /action-runs/{id}`；趋势图 mock 是随机数，等动态出按天统计 |
-| 事件类型“近期事件”和趋势（`/event-types/{id}/events`、`/stats`） | 还没实现（依赖事件表的数据） |
+| 动作类型的执行抽屉 | 抽屉接动态 `GET /action-runs/{id}`（抽屉是公共组件，见 §12.5） |
+| ~~近 14 天趋势图、事件类型“近期事件”和趋势~~ | 第 3 批已接（§12） |
 | 两页的草稿保存 / 提交 | 走变更单（versioning，不归我） |
 | 删除外部系统 | 页面没有删除操作 |
+
+## 12. 第 3 批：事件运行数据 + 动作趋势（分支 `palantir-r2`，基于 master `bb47a5c`）
+
+### 12.1 新表 / 迁移 / 种子
+
+| 表 | 模块 / 迁移 | 种子（export-mock 原样输出，不手改） | 行数 |
+|---|---|---|---|
+| `event`（code = EV-…，event_type_id、occurred_at、obj_kind、object_id、obj_label、summary、outcome、subscriber_count、dedup_key、latency_ms、payload、is_test；索引 `(event_type_id, occurred_at, id)`） | event · `event_0003`（接 `admin_0002`） | `action/derived/eventsOf.json`（15 次调用的并集） | 1,243 |
+| `event_daily_stat`（event_type_id、stat_date、value；唯一 `(event_type_id, stat_date)`） | event · `event_0003` | `action/derived/eventDaily.json` | 15 × 14 |
+| `action_run_daily_stat`（action_type_id、stat_date、ok、failed、unknown；唯一 `(action_type_id, stat_date)`） | action · `action_0002`（接 `event_0003`） | `action/derived/runDaily.json` | 17 × 14 |
+
+`event.outcome` 枚举 `EventOutcome`：delivered=已投递、alert_created=已生成告警、deduped=已去重、partial=部分投递、failed=投递失败（只有前端这 5 个）。
+
+### 12.2 接口（挂 `/api/ontology/v1`，功能权限同所属类型的 view）
+
+| 接口 | 返回 | 说明 |
+|---|---|---|
+| `GET /event-types/{id}/events?range=24h\|7d&outcome=&page=&size=14` | `{items: EventRecord[], total, page, size}` | 按 `at` 倒序（同 mock）；`outcome` 中文、`全部`/不传不过滤；非法 range / outcome 422；类型不存在 404；页码越界收拢到最后一页 |
+| `GET /event-types/{id}/stats` | `{weekly, total, dedup, failed, partial, p95, asOf, daily: [{date: "MM-DD", value}] × 14}` | 健康口径同 `EventTypes.vue` 的 `health`（该类型全部事件；p95 = 升序第 floor(n×0.95) 个，没有事件 0）；`weekly` = event_type.weekly；`asOf` = clock 当前（分钟） |
+| `GET /action-types/{id}/stats/daily?days=14` | `{items: [{date: "MM-DD", ok, failed, unknown}]}` | days 1–90，截至今天，缺的天补 0 |
+
+`EventRecord` 字段 = mock：`id, typeId, at("YYYY-MM-DD HH:mm:ss"), objKind?, objId, objLabel, summary, outcome, subscribers, dedupKey, latencyMs`（objKind 为空返回 null，前端 `clean()` 收掉）。
+
+### 12.3 【推断】
+
+1. **`range=7d` 不设时间下限**：mock「近 7 天」不按时间过滤（`eventsOf()` 全部样本，低频类型有 7 天前的，最早 2026-08-26），前端为准；`range=24h` = `clock.now() − 24h` 起（和前端 `CUTOFF_24H = 10-24 15:42:18` 之间 18 秒内没有事件，结果一致）。真实上线后 7d 是否改成真 7 天，需 PDE / 用户定。
+2. **趋势和明细对不上**：`eventDaily` / `runDaily` 是 mock 另一套随机数，按 §7.1.2 原样入库成统计表，不从 `event` / `action_run` 汇总；以后由统计任务刷新。
+3. **"MM-DD" → 日期**：年份取 `clock.today()` 的年，月日在今天之后算去年。
+4. **运行数据不分版本**：`?ver=` 不影响这三个接口，按当前类型表找类型；已下线类型照样能查。
+5. `is_test` 默认 false，列表 / 统计只算 false（模拟触发的测试事件以后写 true）。设计稿的 `pending`（outbox 待投递）前端没有，枚举不加。
+6. 前端：`EventTypes.vue` 近期事件页签按 range / 结果 / 页码走后台分页；概览「最近事件」= `…/events?range=7d&size=5`；健康和趋势 = `…/stats`；「截至」改用 `asOf`。typeId 对不上（切换中、草稿新类型 404）或后台没起来时读 mock。
+
+### 12.4 外部系统编辑改 PUT
+
+`src/api/integration.ts` 的 `updateExtSystem` 改用 `api.put`（`apiClient` 已有 put）。后台 `POST /ext-systems/{id}` 保留为同义别名。
+
+### 12.5 仍未接
+
+| 内容 | 原因 |
+|---|---|
+| 动作执行抽屉、事件抽屉（`drawer.open('action' \| 'event', id)`） | 抽屉解析在公共文件 `src/components/actionEventResolvers.ts`（不归我）。动态已有 `GET /action-runs/{id}`；事件详情 `GET /events/{id}`（含逐订阅方投递）需要 `event_delivery` 表，本批没建 |
+| `event_delivery` / `event_dedup`、`POST /internal/v1/events` | 没建（投递流水、去重窗口、内部接收） |
+| 两页草稿保存 / 提交（变更单） | 静态还没出 create / edit 变更单接口，保持 mock |
 
 ---
 

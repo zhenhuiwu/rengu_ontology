@@ -1,11 +1,12 @@
 """数据访问（动作类型）。"""
 
 from collections.abc import Sequence
+from datetime import date
 
 from sqlalchemy import select
 
 from app.common.repository import BaseRepository
-from app.modules.action.models import ActionType, ActionTypeRule, ActionTypeVersion
+from app.modules.action.models import ActionRunDailyStat, ActionType, ActionTypeRule, ActionTypeVersion
 from app.modules.integration.models import ExtSystem
 
 
@@ -36,3 +37,11 @@ class ActionTypeRepo(BaseRepository[ActionType]):
             .order_by(ActionTypeVersion.at.desc(), ActionTypeVersion.id.desc())
         )
         return (await self.session.scalars(stmt)).all()
+
+    async def run_daily(self, type_id: int, start: date, end: date) -> dict[date, ActionRunDailyStat]:
+        stmt = select(ActionRunDailyStat).where(
+            ActionRunDailyStat.action_type_id == type_id,
+            ActionRunDailyStat.stat_date >= start,
+            ActionRunDailyStat.stat_date <= end,
+        )
+        return {r.stat_date: r for r in (await self.session.scalars(stmt)).all()}

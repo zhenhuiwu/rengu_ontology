@@ -3,7 +3,9 @@
  * 事件类型：左侧事件列表，右侧详情。页签：概览 / 载荷字段 / 订阅方 / 近期事件 / 版本历史。
  * URL：?event= 选中项，?tab= 页签，?fpage/fsize 载荷字段分页，?range= 时间范围 + ?epage= 近期事件分页，?view=draft 草稿，?ver= 历史版本只读。
  * 真接口（开关 action 打开）：左侧列表（来源 / 关键字 / 分页）走 GET /event-types；详情（含 specific）、载荷字段、订阅方、
- * 版本历史走 api/action.ts 的快照。近期事件与趋势（/events 未实现）、规则名、草稿写入（versioning）仍读 mock。
+ * 版本历史走 api/action.ts 的快照；近期事件（GET /event-types/{id}/events，按时间范围 / 结果 / 页码取）、
+ * 概览的最近事件 / 运行健康 / 近 14 天事件数（…/events 第 1 页、…/stats）按选中类型取，取到之前 / 后台没起来读 mock。
+ * 规则名、草稿写入（versioning）仍读 mock。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -31,7 +33,9 @@ import { isApiError } from '@/api/http';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import {
   actionApi, snap, loadSnapshot, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
+  listEvents, getEventStats, type EventStats,
 } from '@/api/action';
+import type { EventRecord } from '@/mock/actionEvent';
 
 const route = useRoute();
 const router = useRouter();
@@ -149,7 +153,26 @@ async function simulate() {
 /* 概览 */
 const subs = computed(() => flat(subSec.rows.value));
 const liveSubs = computed(() => subs.value.filter((x) => x._mark !== '删除'));
-const daily = computed(() => eventDaily(cur.value.id, cur.value.weekly));
+/* 真接口：选中类型的运行健康 + 趋势、最近 5 条事件；typeId 对不上（切换中 / 草稿新类型 404）时读 mock */
+const rt = reactive<{ typeId: string; stats: EventStats | null; top: EventRecord[] }>({ typeId: '', stats: null, top: [] });
+if (real) {
+  let n = 0;
+  watch(() => cur.value.id, async (id) => {
+    if (backend.down) return;
+    const k = ++n;
+    try {
+      const [stats, top] = await Promise.all([getEventStats(id), listEvents(id, { range: '7d', page: 1, size: 5 })]);
+      if (k === n) Object.assign(rt, { typeId: id, stats, top: top.items });
+    } catch (e) {
+      if (k !== n || fallBackIfDown(e)) return;
+      Object.assign(rt, { typeId: id, stats: null, top: [] });
+      if (!(isApiError(e) && e.status === 404)) message.error(`事件运行数据加载失败：${apiMsg(e)}`);
+    }
+  }, { immediate: true });
+}
+const rtOn = computed(() => live.value && rt.typeId === cur.value.id);
+const daily = computed(() => (rtOn.value ? rt.stats?.daily ?? [] : eventDaily(cur.value.id, cur.value.weekly)));
+const asOf = computed(() => (rtOn.value && rt.stats ? rt.stats.asOf : '2026-10-25 15:42'));
 const chartOption = computed(() => ({
   grid: { left: 48, right: 8, top: 12, bottom: 24 },
   tooltip: { trigger: 'axis' },
@@ -158,7 +181,9 @@ const chartOption = computed(() => ({
   series: [{ name: '事件数', type: 'bar', barWidth: 10, data: daily.value.map((d) => d.value), itemStyle: { color: GRAY.g7 } }],
 }));
 const recentAll = computed(() => eventsOf(cur.value.id));
+const recentTop = computed(() => (rtOn.value ? rt.top : recentAll.value.slice(0, 5)));
 const health = computed(() => {
+  if (rtOn.value) { const s = rt.stats; return { total: s?.total ?? 0, dedup: s?.dedup ?? 0, failed: s?.failed ?? 0, partial: s?.partial ?? 0, p95: s?.p95 ?? 0 }; }
   const rows = recentAll.value;
   const c = (o: EventOutcome) => rows.filter((r) => r.outcome === o).length;
   return { total: rows.length, dedup: c('已去重'), failed: c('投递失败'), partial: c('部分投递'),
@@ -203,7 +228,27 @@ const outcome = computed({
 const eq = usePagedQuery({ defaultSize: 14, prefix: 'e' });
 const CUTOFF_24H = '2026-10-24 15:42:18';
 const recentRows = computed(() => recentAll.value.filter((r) => (range.value === '7d' || r.at >= CUTOFF_24H) && (outcome.value === '全部' || r.outcome === outcome.value)));
-const recent = computed(() => paginate(recentRows.value, { page: eq.page.value, size: eq.size.value }));
+/* 真接口：近期事件页签按 range / 结果 / 页码走后台分页 */
+const realRecent = reactive<{ key: string; items: EventRecord[]; total: number }>({ key: '', items: [], total: 0 });
+const recentKey = computed(() => JSON.stringify([cur.value.id, range.value, outcome.value, eq.page.value, eq.size.value]));
+if (real) {
+  let n = 0;
+  watch([recentKey, () => tab.value], async ([key]) => {
+    if (backend.down || tab.value !== 'recent' || realRecent.key === key) return;
+    const k = ++n;
+    try {
+      const r = await listEvents(cur.value.id, { range: range.value as '24h' | '7d', outcome: outcome.value, page: eq.page.value, size: eq.size.value });
+      if (k === n) Object.assign(realRecent, { key, items: r.items, total: r.total });
+    } catch (e) {
+      if (k !== n || fallBackIfDown(e)) return;
+      Object.assign(realRecent, { key, items: [], total: 0 });
+      if (!(isApiError(e) && e.status === 404)) message.error(`近期事件加载失败：${apiMsg(e)}`);
+    }
+  }, { immediate: true });
+}
+const recent = computed(() => (live.value && realRecent.key === recentKey.value
+  ? { items: realRecent.items, total: realRecent.total }
+  : paginate(recentRows.value, { page: eq.page.value, size: eq.size.value })));
 const recentCols = [
   { title: '时间', dataIndex: 'at', width: 172 },
   { title: '事件', key: 'id', width: 190 },
@@ -317,16 +362,16 @@ const verCols = [
           <div class="et-sec t-14 fw-600 et-sec-row">
             <span>最近事件<InfoTip text="完整事件流见“近期事件”页签；点事件编号查看投递过程" /></span>
           </div>
-          <div v-for="r in recentAll.slice(0, 5)" :key="r.id" class="et-ev">
+          <div v-for="r in recentTop" :key="r.id" class="et-ev">
             <a class="t-14 num" @click="drawer.open('event', r.id)">{{ r.id }}</a>
             <span class="t-12 c-2 num">{{ r.at }}</span>
             <span class="t-12 c-2 et-ev-s" :title="r.summary">{{ r.summary }}</span>
             <span class="t-12" :class="r.outcome === '投递失败' ? 'c-error' : 'c-3'">{{ r.outcome }}</span>
           </div>
-          <div v-if="!recentAll.length" class="t-12 c-3">草稿未发布，暂无事件</div>
+          <div v-if="!recentTop.length" class="t-12 c-3">草稿未发布，暂无事件</div>
         </div>
         <div class="et-ov-right">
-          <div class="et-sec t-14 fw-600"><span>近 14 天事件数</span><span class="fw-400 c-2"> · 截至 2026-10-25 15:42</span></div>
+          <div class="et-sec t-14 fw-600"><span>近 14 天事件数</span><span class="fw-400 c-2"> · 截至 {{ asOf }}</span></div>
           <template v-if="cur.status !== '草稿'">
             <div class="et-chart"><EChart :option="chartOption" /></div>
             <div class="et-stats">

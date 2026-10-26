@@ -7,11 +7,13 @@
 
 import re
 from collections.abc import Callable, Sequence
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.context import ViewContext
+from app.core import clock
 from app.core.errors import NotFound
 from app.modules.action.models import ActionType
 from app.modules.action.repo import ActionTypeRepo
@@ -166,3 +168,25 @@ class ActionTypeService:
             }
             for v in await self.repo.versions(at.id)
         ]
+
+
+async def run_daily(session: AsyncSession, type_id: str, days: int) -> list[dict[str, Any]]:
+    """近 N 天每日执行量（palantir-r2，读 action_run_daily_stat）：截至今天，缺的天补 0。
+    运行数据不分版本，`?ver=` 不影响，按当前 action_type 表找类型（不存在 404）[推断]。"""
+    repo = ActionTypeRepo(session)
+    at = await repo.get_by_code_or_404(type_id)
+    start, end = clock.last_days(days)
+    rows = await repo.run_daily(at.id, start, end)
+    out = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        r = rows.get(d)
+        out.append(
+            {
+                "date": d.strftime("%m-%d"),
+                "ok": r.ok if r else 0,
+                "failed": r.failed if r else 0,
+                "unknown": r.unknown if r else 0,
+            }
+        )
+    return out

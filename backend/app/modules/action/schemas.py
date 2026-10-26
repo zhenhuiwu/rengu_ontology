@@ -105,3 +105,12 @@ class TypeVersionOut(ApiModel):
     by: str
     at: DateTimeMin
     change: str
+
+
+class RunDailyOut(ApiModel):
+    """mock runDaily() 一项（palantir-r2）。date = "MM-DD"。"""
+
+    date: str
+    ok: int
+    failed: int
+    unknown: int

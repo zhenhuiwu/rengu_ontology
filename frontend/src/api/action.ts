@@ -11,7 +11,9 @@
  * 执行记录 / 统计：dynamic 开关开着时取 GET /api/ontology/v1/action-runs?actionType=&scope=runs（dynamic 的接口），按动作类型整份缓存，
  * 统计按 mock runStats() 同样的口径在前端算；取不到 / 开关关着时用 mock runsOf()。
  * 后台没起来（fallback.ts 的 backend.down）时以下取数函数都回退 mock，loadSnapshot / loadRuns / loadWritebackSystems 不再发请求。
- * 不在本文件：近期事件（/events）、草稿写入（PUT /change-requests/…，versioning）。
+ * 运行数据（action 开关，palantir-r2，文档 §12）：近期事件 GET /event-types/{id}/events、运行健康 + 近 14 天事件数
+ * GET /event-types/{id}/stats、动作近 14 天执行量 GET /action-types/{id}/stats/daily；页面按选中类型取，取不到 / 后台没起来用 mock。
+ * 不在本文件：草稿写入（PUT /change-requests/…，versioning）。
  */
 import { reactive } from 'vue';
 import {
@@ -19,6 +21,7 @@ import {
   writebackOf as mockWriteback, payloadOf as mockPayload, subscribersOf as mockSubs, versionsOf as mockVersions,
   type ActionType, type ActionParam, type SubmitCond, type OntologyEdit, type SideEffect, type EventType, type PayloadField,
   type Subscriber, type TypeVersion, writebackSystems as mockWbSystems, runsOf as mockRuns, type ActionRun, type RunStatus,
+  type EventRecord,
 } from '@/mock/actionEvent';
 import type { ExtSystem } from '@/mock/extsys';
 import { integrationApi, listExtSystems } from './integration';
@@ -182,3 +185,21 @@ export function runStats(typeId: string) {
   return { total: rows.length, ok, failed: c('失败'), unknown: c('结果未知'), pending, confirm: c('待确认'), rate: done ? ok / done : 0,
     avgMs: rows.length ? Math.round(rows.reduce((s, r) => s + r.ms, 0) / rows.length) : 0 };
 }
+
+// ---------------- 运行数据（action 模块：近期事件 / 运行健康 / 趋势 / 动作每日执行量） ----------------
+
+export interface EventQuery { range: '24h' | '7d'; outcome?: string; page: number; size: number }
+/** 近期事件一页（range=7d 后台不设时间下限，同 mock「近 7 天」= 全部样本） */
+export const listEvents = async (typeId: string, q: EventQuery) =>
+  clean(await api.get<PageResult<EventRecord>>(`/event-types/${enc(typeId)}/events`, { query: { range: q.range, outcome: opt(q.outcome), page: q.page, size: q.size } }));
+
+export interface EventStats {
+  weekly: number; total: number; dedup: number; failed: number; partial: number; p95: number; asOf: string;
+  daily: { date: string; value: number }[];
+}
+export const getEventStats = (typeId: string) => api.get<EventStats>(`/event-types/${enc(typeId)}/stats`);
+
+export interface RunDaily { date: string; ok: number; failed: number; unknown: number }
+export const getRunDaily = async (typeId: string, days = 14) =>
+  (await api.get<{ items: RunDaily[] }>(`/action-types/${enc(typeId)}/stats/daily`, { query: { days } })).items;
+

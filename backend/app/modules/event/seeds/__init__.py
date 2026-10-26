@@ -6,15 +6,22 @@
   去掉 specific 后的部分，全局 10 行，键 api。
 - derived/subscribersOf.json → event_subscription：键 (event_type_id, name)。
 - derived/versionsOf.event.json → event_type_version：第 i 次调用 = EVENT_TYPES[i]（同动作）。
+- derived/eventsOf.json → event（palantir-r2）：code = id（EV-…），at 按北京时间解析，typeId → event_type.id。
+- derived/eventDaily.json → event_daily_stat（palantir-r2）：调用参数 (typeId, weekly)，结果 14 天
+  {date:"MM-DD", value}；年份取 clock.today() 的年，月日在今天之后则算去年 [推断]。
 """
 
 import re
 
 from app.core.enums import from_api
+from app.core.schema import parse_display_dt
 from app.modules.action.models import TypeStatus
-from app.modules.action.seeds import versions_rows
+from app.modules.action.seeds import mmdd_to_date, versions_rows
 from app.modules.event.models import (
+    Event,
+    EventDailyStat,
     EventEnvelopeField,
+    EventOutcome,
     EventPayloadField,
     EventSource,
     EventSubscription,
@@ -113,6 +120,26 @@ def _versions(r: Row, ctx: SeedContext) -> list[Row]:
     )
 
 
+def _event(r: Row, _ctx: SeedContext) -> Row:
+    return {
+        "code": r["id"],
+        "event_type_id": r["typeId"],
+        "occurred_at": parse_display_dt(r["at"]),
+        "obj_kind": r.get("objKind"),
+        "object_id": r["objId"],
+        "obj_label": r["objLabel"],
+        "summary": r["summary"],
+        "outcome": from_api(EventOutcome, r["outcome"]).name,
+        "subscriber_count": r["subscribers"],
+        "dedup_key": r["dedupKey"],
+        "latency_ms": r["latencyMs"],
+    }
+
+
+def _daily(r: Row, _ctx: SeedContext) -> Row:
+    return {"event_type_id": derived_args(r)[0], "stat_date": mmdd_to_date(r["date"]), "value": r["value"]}
+
+
 SEEDS: list[SeedSpec] = [
     SeedSpec(EventType, "EVENT_TYPES.json", key=("code",), transform=_type, description="事件类型"),
     SeedSpec(
@@ -132,6 +159,22 @@ SEEDS: list[SeedSpec] = [
         key=("event_type_id", "ver"),
         transform=_versions,
         description="事件类型版本（versionsOf）",
+        refs=PARENT,
+    ),
+    SeedSpec(
+        Event,
+        "derived/eventsOf.json",
+        key=("code",),
+        transform=_event,
+        description="事件（eventsOf，近期事件）",
+        refs=PARENT,
+    ),
+    SeedSpec(
+        EventDailyStat,
+        "derived/eventDaily.json",
+        key=("event_type_id", "stat_date"),
+        transform=_daily,
+        description="事件类型近 14 天趋势（eventDaily）",
         refs=PARENT,
     ),
 ]

@@ -25,8 +25,8 @@ export const listExtSystems = async (q: { writeback?: boolean; kw?: string } = {
   (await api.get<{ items: ExtSystemDto[] }>('/ext-systems', { query: { writeback: q.writeback ? 1 : undefined, kw: q.kw?.trim() || undefined } })).items.map(clean);
 export const getExtSystem = async (id: string) => clean(await api.get<ExtSystemDetailDto>(`/ext-systems/${enc(id)}`));
 export const createExtSystem = async (body: ExtSystemInput) => clean(await api.post<ExtSystemDetailDto>('/ext-systems', body));
-/** 文档是 PUT；apiClient 只有 get / post，后台同一路由也收 POST（【推断】，见文档 §3.1） */
-export const updateExtSystem = async (id: string, body: ExtSystemInput) => clean(await api.post<ExtSystemDetailDto>(`/ext-systems/${enc(id)}`, body));
+/** PUT /ext-systems/{id}（文档 §3.1）；后台另留 POST 同义别名兼容旧前端 */
+export const updateExtSystem = async (id: string, body: ExtSystemInput) => clean(await api.put<ExtSystemDetailDto>(`/ext-systems/${enc(id)}`, body));
 /** 测试调用：返回一条 ExtCall（后台同时记入 writeback_call，页面重新拉「最近调用」）；停用 → 409 EXT_SYSTEM_DISABLED */
 export const testExtSystem = (id: string) => api.post<ExtCall>(`/ext-systems/${enc(id)}:test`, {});
 

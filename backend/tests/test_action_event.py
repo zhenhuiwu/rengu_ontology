@@ -559,6 +559,7 @@ MY_TABLES = {
     "ext_system", "action_type", "action_type_rule", "action_param", "submission_criterion",
     "ontology_edit_rule", "side_effect", "action_type_version", "event_type", "event_payload_field",
     "event_subscription", "event_type_version", "event_envelope_field",
+    "event", "event_daily_stat", "action_run_daily_stat",  # palantir-r2：event_0003 / action_0002
 }  # fmt: skip
 
 
@@ -619,7 +620,7 @@ async def test_fresh_db_default_seed_writes_action_event_sections():
         await _drop(admin, db)
 
 
-EVENT_TABLES = {t for t in MY_TABLES if t.startswith("event_")}
+EVENT_TABLES = {t for t in MY_TABLES if t == "event" or t.startswith("event_")}
 
 
 async def test_my_migrations_round_trip():

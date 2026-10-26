@@ -19,10 +19,11 @@ from app.modules.action.schemas import (
     CriterionOut,
     ItemsOut,
     ParamOut,
+    RunDailyOut,
     TypeVersionOut,
     WritebackOut,
 )
-from app.modules.action.service import ActionTypeService
+from app.modules.action.service import ActionTypeService, run_daily
 
 router = APIRouter(tags=["action"], dependencies=[Depends(require_func("action-types", "view"))])
 
@@ -100,3 +101,17 @@ async def get_writeback(type_id: str, session: SessionDep, ctx: ViewContextDep) 
 async def list_versions(type_id: str, session: SessionDep, ctx: ViewContextDep) -> ItemsOut[TypeVersionOut]:
     rows = await ActionTypeService(session).versions(ctx, type_id)
     return ItemsOut[TypeVersionOut](items=[TypeVersionOut.model_validate(r) for r in rows])
+
+
+@router.get(
+    "/action-types/{type_id}/stats/daily",
+    response_model=ItemsOut[RunDailyOut],
+    summary="近 N 天每日执行量（成功 / 失败 / 结果未知）",
+)
+async def get_run_daily(
+    type_id: str,
+    session: SessionDep,
+    days: Annotated[int, Query(ge=1, le=90, description="天数，默认 14（前端图表）")] = 14,
+) -> ItemsOut[RunDailyOut]:
+    rows = await run_daily(session, type_id, days)
+    return ItemsOut[RunDailyOut](items=[RunDailyOut.model_validate(r) for r in rows])

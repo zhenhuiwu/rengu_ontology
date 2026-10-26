@@ -7,9 +7,19 @@
 新增模型要在 app/db/models.py 里 import。
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import LabelEnum
@@ -184,3 +194,19 @@ class ActionTypeVersion(IdMixin, AppendOnlyTableMixin, Base):
     )
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     definition: Mapped[dict | None] = mapped_column(JsonType, comment="该版定义（seed 没有，留空）")
+
+
+class ActionRunDailyStat(IdMixin, MutableTableMixin, Base):
+    """动作类型近 14 天每日执行量（mock runDaily()）。和执行明细 action_run 对不上（mock 另一个随机种子），
+    按 §7.1.2 原样入库；以后可由统计任务从 action_run 重算 [推断]。"""
+
+    __tablename__ = "action_run_daily_stat"
+    __table_args__ = (UniqueConstraint("action_type_id", "stat_date"), {"comment": "动作类型每日执行量"})
+
+    action_type_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("action_type.id", ondelete="CASCADE"), nullable=False
+    )
+    stat_date: Mapped[date] = mapped_column(Date, nullable=False)
+    ok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unknown: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
