@@ -240,7 +240,8 @@ class DatasourceService:
         await self.repo.update(ds, values)
         if res.ok and _use_real(ds.type):
             try:
-                await self.refresh_tables(code, config=config)
+                async with self.session.begin_nested():  # 内省出错只回滚这一步，会话还能写测试结果
+                    await self.refresh_tables(code, config=config)
             except Exception as e:
                 test.msg = f"{test.msg}；库表清单刷新失败：{connector.err_text(e, config.get('password'))}"
                 await self.repo.update(ds, {"last_test": test.model_dump()})

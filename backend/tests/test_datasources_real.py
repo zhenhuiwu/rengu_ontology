@@ -24,6 +24,7 @@ async def ds(users):
 @pytest.fixture
 def real(monkeypatch):
     monkeypatch.setenv("RENGU_DS_REAL_CONNECT", "1")
+    monkeypatch.setenv("RENGU_DS_SECRET_KEY", Fernet.generate_key().decode())  # 真连必须配密钥
 
 
 def _self_db(**over):
@@ -53,6 +54,13 @@ def test_encrypt_roundtrip_and_rotation(monkeypatch):
     assert decrypt_password(enc) is None  # 换了密钥，dev 密钥加的解不开
     monkeypatch.setenv("RENGU_DS_SECRET_KEY", f"{k2},{k1}")  # 轮换：新钥在前，旧钥仍能解
     assert decrypt_password(old) == "x"
+
+
+def test_real_connect_requires_key(monkeypatch):
+    monkeypatch.setenv("RENGU_DS_REAL_CONNECT", "1")
+    monkeypatch.delenv("RENGU_DS_SECRET_KEY", raising=False)
+    with pytest.raises(Exception, match="RENGU_DS_SECRET_KEY"):
+        encrypt_password("x")
 
 
 async def test_password_stored_encrypted(client, ds):

@@ -30,7 +30,8 @@ def _fernet() -> MultiFernet:
     raw = os.environ.get("RENGU_DS_SECRET_KEY", "").strip()
     if raw:
         return MultiFernet([Fernet(k.strip().encode()) for k in raw.split(",") if k.strip()])
-    if get_settings().env == "prod":
+    # prod，或开了真实连接（RENGU_DS_REAL_CONNECT=1，存的是真库密码）时必须配密钥，不用仓库里的开发密钥
+    if get_settings().env == "prod" or os.environ.get("RENGU_DS_REAL_CONNECT") == "1":
         raise SecretKeyMissing()
     return MultiFernet([Fernet(base64.urlsafe_b64encode(hashlib.sha256(_DEV_SEED).digest()))])
 

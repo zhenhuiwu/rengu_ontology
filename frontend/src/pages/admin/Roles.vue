@@ -40,9 +40,13 @@ const members = ref<Record<string, AdminUser[]>>(Object.fromEntries(ROLES.map((r
 const allUsers = ref<AdminUser[]>(ADMIN_USERS);
 /** true = 数据来自后台（写操作走接口） */
 const remote = ref(false);
+/** 首次加载才允许回退 mock；已用后台数据后重拉失败就报错，不悄悄切到 mock */
 async function reload() {
   const st = await loadRolesState();
-  if (!st) { remote.value = false; return; }
+  if (!st) {
+    if (remote.value) throw new Error('后台暂时连不上，数据未刷新，请稍后刷新页面');
+    return;
+  }
   roles.value = st.roles;
   members.value = st.members;
   allUsers.value = st.users;
@@ -50,14 +54,19 @@ async function reload() {
 }
 /** 后台写操作：成功后重新拉取；失败提示后台的报错（不改本地数据） */
 async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
+  let r: T;
   try {
-    const r = await fn();
-    await reload();
-    return r;
+    r = await fn();
   } catch (e) {
     message.error(isApiError(e) ? e.message : '操作失败，请稍后重试');
     return undefined;
   }
+  try {
+    await reload();
+  } catch (e) {
+    message.warning(`操作已保存，但${e instanceof Error ? e.message : '刷新失败，请稍后刷新页面'}`);
+  }
+  return r;
 }
 const lockOf = (r: Role) => (r as Partial<RemoteRole>).lockVersion;
 onMounted(async () => { await reload(); if (remote.value) resetDraft(); });
