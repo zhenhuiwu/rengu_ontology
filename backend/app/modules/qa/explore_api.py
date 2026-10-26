@@ -39,7 +39,7 @@ from app.db.session import SessionDep
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS, PRODUCT_COLUMNS, STORE_COLUMNS
 from app.modules.qa import service as svc
 from app.modules.qa.objects_api import OutOfScope
-from app.modules.static.explorer import facetable
+from app.modules.static.explorer import _bad, _scalar, facet_kind, facetable
 from app.modules.static.models import ObjectType, Property
 
 
@@ -66,22 +66,27 @@ def bindings() -> dict[str, dict]:
     return {k: v for k, v in json.loads(path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
 
+def visible(p: Property) -> bool:
+    """能对外给值：不敏感、不隐藏（搜索结果 / 详情 / 导出 / 排序都按这个裁）。"""
+    return not p.is_sensitive and p.visibility != "hidden"
+
+
 def flags(p: Property) -> dict[str, bool]:
     """属性标志读静态 property 上的 searchable / filterable / sortable（static_0004）。
 
     可筛选口径与静态 meta / facets 一致：facetable 已排除敏感、隐藏属性。"""
-    return {"searchable": bool(p.searchable), "filterable": facetable(p), "sortable": bool(p.sortable)}
-
-
-class RangeIn(ApiModel):
-    min: Any = None
-    max: Any = None
+    return {
+        "searchable": bool(p.searchable) and visible(p),
+        "filterable": facetable(p),
+        "sortable": bool(p.sortable) and visible(p),
+    }
 
 
 class ExploreIn(ApiModel):
     kw: str = Field("", max_length=100)
     # 属性 api 名 → 取值列表（enum / 字符串 / 布尔）或 {min,max}（数值 / 时间，闭区间；只给日期时含当天）
-    filters: dict[str, list[Any] | RangeIn] = Field(default_factory=dict)
+    # 值的形状按属性逐个校验（Bound.cond，同静态 /facets）：不合法一律 422，不让数据库报 500
+    filters: dict[str, Any] = Field(default_factory=dict)
     sort: str | None = Field(None, description="属性 api 名，前缀 - 表示倒序")
     page: int = Field(1, ge=1)
     size: int = Field(20, ge=1, le=MAX_PAGE_SIZE)
@@ -100,12 +105,14 @@ def _out(v: Any) -> Any:
     return v
 
 
-def _bound(v: Any, dt: str, upper: bool) -> tuple[Any, bool]:
+def _bound(v: Any, dt: str, upper: bool, key: str = "") -> tuple[Any, bool]:
     """区间端点 → (值, 是否开区间)。空 = 不限；timestamp 只给日期时，下界取当天 0 点，
     上界取次日 0 点（开）。"""
     if v is None or v == "":
         return None, False
     s = str(v)
+    if dt in TIME and (not isinstance(v, str) or len(s) > 64):
+        _bad(key, "日期应为 ISO 字符串，如 2026-10-01")
     try:
         if dt == "date":
             return date.fromisoformat(s[:10]), False
@@ -117,23 +124,9 @@ def _bound(v: Any, dt: str, upper: bool) -> tuple[Any, bool]:
             return (d if d.tzinfo else d.replace(tzinfo=_tz())), False
         if dt in NUMERIC:
             return Decimal(s), False
-    except (ValueError, InvalidOperation) as e:
-        raise ValidationFailed("筛选区间格式不对", details={"value": v, "type": dt}) from e
+    except (ValueError, InvalidOperation, OverflowError):
+        _bad(key, "日期 / 数值格式不对")
     return v, False
-
-
-def _member(x: Any, c: Any) -> Any:
-    """请求给的是显示值（营业中 / true）：enum 列换成枚举成员（库里存成员名），布尔列换成 bool。"""
-    enum_cls = getattr(c.type, "enum_class", None)
-    if enum_cls is not None:
-        return next((m for m in enum_cls if m.value == x or m.name == x), None)
-    try:
-        py = c.type.python_type
-    except NotImplementedError:
-        py = None
-    if py is bool:
-        return x if isinstance(x, bool) else str(x).lower() in {"true", "1", "是"}
-    return x
 
 
 def _esc(s: str) -> str:
@@ -167,6 +160,8 @@ class Bound:
         self.props = {p.api_name: p for p in t.properties}
         self.title = next((p.api_name for p in t.properties if p.is_title), t.pk_property)
         self.cols = {k: col(v) for k, v in b["columns"].items() if k in self.props}  # 只认静态里有的属性
+        # 对外给值的属性：敏感 / 隐藏的只在后台用（行级范围、id），不出现在结果、详情、导出里
+        self.out = [k for k in self.cols if visible(self.props[k])]
         self.id_col = col(b["id"])
         self.frm, self.base, self.b, self.code = frm, base, b, t.code
 
@@ -183,29 +178,55 @@ class Bound:
         return stmt
 
     def check(self, keys: Any, what: str) -> None:
+        """筛选键须可筛选（facetable：filterable 且不敏感、不隐藏）；排序键须 sortable 且不敏感、不隐藏。"""
+        flag = "filterable" if what == "筛选" else "sortable"
+        field = "filters" if what == "筛选" else "sort"
         for k in keys:
-            if k not in self.cols:
-                raise ValidationFailed(f"{what}属性不存在或未接入数据", details={"property": k})
+            if k not in self.cols or not flags(self.props[k])[flag]:
+                f_ = f"filters.{k}" if field == "filters" else "sort"
+                msg = f"属性 {k} 不存在、未接入数据或不可{what}"
+                raise ValidationFailed(
+                    f"{what}属性不合法", details={"fields": [{"field": f_, "message": msg}]}
+                )
+
+    def cond(self, k: str, v: Any) -> list[Any]:
+        """一个筛选 → SQL 条件，校验同静态 explorer._cond：枚举类只收标量数组（未知枚举值 422），
+        区间类只收 {min, max}；timestamp 只给日期时上界含当天。"""
+        p, c = self.props[k], self.cols[k]
+        if facet_kind(p) == "enum":
+            if not isinstance(v, list) or any(isinstance(x, list | dict) or x is None for x in v):
+                _bad(k, '枚举类筛选应为取值数组，如 ["营业中"]')
+            return [c.in_([_scalar(c, x, k) for x in v])] if v else []
+        if not isinstance(v, dict) or not v or set(v) - {"min", "max"}:
+            _bad(k, "区间类筛选应为 {min, max}")
+        for x in v.values():
+            if x is not None and (isinstance(x, bool) or not isinstance(x, str | int | float)):
+                _bad(k, "min / max 应为数字或日期字符串")
+        out: list[Any] = []
+        for end in ("min", "max"):
+            x = v.get(end)
+            if x is None or x == "":
+                continue
+            if p.data_type in TIME:
+                val, open_hi = _bound(x, p.data_type, end == "max", k)
+            else:
+                val, open_hi = _scalar(c, x, k), False
+            out.append(c >= val if end == "min" else (c < val if open_hi else c <= val))
+        return out
 
     def where(self, stmt: Select, body: ExploreIn, skip: str | None = None) -> Select:
         kw = body.kw.strip()
         if kw:
-            keys = [k for k in self.cols if flags(self.props[k])["searchable"]] or list(self.cols)[:1]
+            # 没有可搜索属性就忽略关键词（不拿别的列兜底匹配，免得按敏感 / 隐藏列命中）
+            keys = [k for k in self.out if flags(self.props[k])["searchable"]]
             pat = f"%{_esc(kw)}%"
+        if kw and keys:
             stmt = stmt.where(or_(*[cast(self.cols[k], String).ilike(pat, escape="\\") for k in keys]))
         for k, v in body.filters.items():
             if k == skip:
                 continue
-            c, dt = self.cols[k], self.props[k].data_type
-            if isinstance(v, RangeIn):
-                lo, _ = _bound(v.min, dt, False)
-                hi, open_hi = _bound(v.max, dt, True)
-                if lo is not None:
-                    stmt = stmt.where(c >= lo)
-                if hi is not None:
-                    stmt = stmt.where(c < hi if open_hi else c <= hi)
-            elif v:
-                stmt = stmt.where(c.in_([_member(x, c) for x in v]))
+            for w in self.cond(k, v):
+                stmt = stmt.where(w)
         return stmt
 
 
@@ -242,11 +263,11 @@ async def _facets(session: Any, bd: Bound, base: Select, body: ExploreIn) -> lis
 
 
 def _item(bd: Bound, r: Any) -> dict:
-    title = r[bd.title] if bd.title in bd.cols else None
+    title = r[bd.title] if bd.title in bd.out else None
     return {
         "id": r["__id"],
         "title": _out(title) if title is not None else r["__id"],
-        "values": {k: _out(r[k]) for k in bd.cols},
+        "values": {k: _out(r[k]) for k in bd.out},
     }
 
 
@@ -292,7 +313,7 @@ async def explore_search(
         "total": total,
         "page": page,
         "bound": True,
-        "boundProps": list(bd.cols),
+        "boundProps": bd.out,
         "facets": await _facets(session, bd, base, body) if body.with_facets else [],
     }
 
@@ -317,7 +338,7 @@ async def explore_get(code: str, id: str, session: SessionDep, user: CurrentUser
         if hit is not None:
             raise OutOfScope(details={"objectType": code, "id": id})
         raise NotFound("对象不存在", details={"objectType": code, "id": id})
-    return {**_item(bd, r), "titleProp": bd.title, "bound": True, "boundProps": list(bd.cols)}
+    return {**_item(bd, r), "titleProp": bd.title, "bound": True, "boundProps": bd.out}
 
 
 class ExportIn(ExploreIn):
@@ -344,7 +365,7 @@ async def explore_export(
     if bd is None:
         raise NotFound("该对象类型未接入数据", details={"objectType": code})
     bd.check(body.filters, "筛选")
-    keys = [k for k in (body.props or list(bd.cols)) if k in bd.cols and not bd.props[k].is_sensitive]
+    keys = [k for k in (body.props or bd.out) if k in bd.out]  # 敏感、隐藏属性一律不导出
     keys = [k for k in keys if k != bd.title]
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
     stmt = bd.where(await bd.stmt(viewer), body)
@@ -355,7 +376,7 @@ async def explore_export(
     w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
     w.writerow(
         [
-            bd.props[bd.title].display_name if bd.title in bd.props else "ID",
+            bd.props[bd.title].display_name if bd.title in bd.out else "ID",
             *[bd.props[k].display_name for k in keys],
         ]
     )

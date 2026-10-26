@@ -136,20 +136,14 @@ async function exportCsv() {
   const m = meta.value; if (!m) return;
   const n = selKeys.value.length || total.value;
   const done = () => message.success(`已导出 ${fmtInt(n)} 条${selKeys.value.length ? '（已选）' : '（当前筛选）'}`);
-  if (qaLive.value) {
-    try { await objApi.exploreExport(m.id, { ...query.value, ids: selKeys.value.length ? selKeys.value : undefined }); done(); return; } catch (e) { if (!qaFallBackIfDown(e)) { message.error(`导出失败：${errText(e)}`); return; } }
+  // 只走后台导出（带行级范围、去敏感 / 隐藏属性）；后台不通时报错，不导出演示数据
+  if (!qaLive.value) { message.error('导出失败：后台未连接，暂不能导出'); return; }
+  try {
+    await objApi.exploreExport(m.id, { ...query.value, ids: selKeys.value.length ? selKeys.value : undefined });
+    done();
+  } catch (e) {
+    message.error(qaFallBackIfDown(e) ? '导出失败：后台未连接，暂不能导出' : `导出失败：${errText(e)}`);
   }
-  const sel = new Set(selKeys.value);
-  const list = mockMatched(m, query.value, pv.scopeOf).filter((r) => !sel.size || sel.has(r.id));
-  const ps = m.properties.filter((p) => !p.sensitive && p.key !== m.titleProp && !isUnbound(p.key));
-  const head = [prop(m.titleProp)?.name ?? '名称', ...ps.map(propLabel)];
-  const body = list.map((r) => [r.title, ...ps.map((p) => r.values[p.key] ?? '')]);
-  const csv = [head, ...body].map((l) => l.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
-  a.download = `${m.name}_${list.length}.csv`; a.click();
-  URL.revokeObjectURL(a.href);
-  done();
 }
 const askOpen = computed({ get: () => qs('ask') === '1', set: (v: boolean) => patch({ ask: v ? '1' : null }) });
 const askConds = computed(() => (selKeys.value.length ? [`已选 ${selKeys.value.length} 个`] : conds.value));

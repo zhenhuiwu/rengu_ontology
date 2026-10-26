@@ -131,3 +131,79 @@ async def test_export_csv(qa):
     assert len(lines) == 3 and lines[0].startswith('"门店名称"') and "电话" not in lines[0]
     pv = await qa.post(f"{B}/object-types/store/export?previewAs=U010763", json={})
     assert pv.status_code == 403
+
+
+async def _set(users, obj, prop, **vals):
+    """改一个属性的标志（敏感 / 隐藏 / 可排序等），用例内生效。"""
+    from sqlalchemy import select, update
+
+    from app.modules.static.models import ObjectType, Property
+
+    tid = (await users.execute(select(ObjectType.id).where(ObjectType.code == obj))).scalar_one()
+    await users.execute(
+        update(Property).where(Property.object_type_id == tid, Property.api_name == prop).values(**vals)
+    )
+    await users.flush()
+    users.expire_all()
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"area_sqm": ["abc"]},
+        {"area_sqm": {"min": "abc"}},
+        {"area_sqm": {"min": True}},
+        {"area_sqm": {"lo": 1}},
+        {"city": [{"a": 1}]},
+        {"city": [5]},
+        {"city": [None]},
+        {"city": "上海"},
+        {"store_name": {"min": 1}},
+        {"status": ["不存在的状态"]},
+        {"opened_at": {"min": 20260101}},
+    ],
+)
+async def test_filter_values_type_checked(qa, users, filters):
+    await _open(users, "store", "area_sqm", "city", "store_name", "status", "opened_at")
+    r = await qa.post(f"{B}/object-types/store/search", json={"filters": filters})
+    assert r.status_code == 422, r.text
+    j = r.json()
+    key = next(iter(filters))
+    assert j["code"] == "VALIDATION_FAILED" and j["details"]["fields"][0]["field"] == f"filters.{key}"
+
+
+@pytest.mark.parametrize("flag", [{"is_sensitive": True}, {"visibility": "hidden"}])
+async def test_sensitive_hidden_blocked_in_backend(qa, users, flag):
+    await _open(users, "store", "city")
+    await _set(users, "store", "city", sortable=True)
+    assert (await _search(qa, "store", sort="city", size=1))["total"] > 0  # 打开标志前可排序
+    d0 = await _search(qa, "store", size=1)
+    city0 = d0["items"][0]["values"]["city"]
+    await _set(users, "store", "city", **flag)
+    # 筛选 / 排序：422，字段格式同静态
+    r = await qa.post(f"{B}/object-types/store/search", json={"filters": {"city": [city0]}})
+    assert r.status_code == 422 and r.json()["details"]["fields"][0]["field"] == "filters.city"
+    r = await qa.post(f"{B}/object-types/store/search", json={"sort": "-city"})
+    assert r.status_code == 422 and r.json()["details"]["fields"][0]["field"] == "sort"
+    r = await qa.post(f"{B}/object-types/store/export", json={"filters": {"city": [city0]}})
+    assert r.status_code == 422
+    # 结果 / 详情 / boundProps / 分面 / 导出都不带
+    d = await _search(qa, "store", size=1)
+    assert "city" not in d["items"][0]["values"] and "city" not in d["boundProps"]
+    assert all(f["key"] != "city" for f in d["facets"])
+    det = (await qa.get(f"{B}/object-types/store/objects/{d['items'][0]['id']}")).json()
+    assert "city" not in det["values"] and "city" not in det["boundProps"]
+    r = await qa.post(f"{B}/object-types/store/export", json={"props": ["city", "store_id"]})
+    assert r.status_code == 200 and "城市" not in r.content.decode("utf-8-sig").split("\n")[0]
+    r = await qa.post(f"{B}/object-types/store/export", json={})
+    assert "城市" not in r.content.decode("utf-8-sig").split("\n")[0]
+
+
+async def test_keyword_without_searchable_props_is_ignored(qa, users, monkeypatch):
+    total = (await _search(qa, "store", size=1))["total"]
+    monkeypatch.setattr(
+        "app.modules.qa.explore_api.flags",
+        lambda p: {"searchable": False, "filterable": False, "sortable": False},
+    )
+    # 不拿第一列兜底匹配：关键词被忽略
+    assert (await _search(qa, "store", kw="不会命中的词xyz", size=1))["total"] == total

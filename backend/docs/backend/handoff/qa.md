@@ -125,3 +125,10 @@
 4. **我的页面 R2、对象页 R3/R4**：按 §4–§6 的接口表逐个接，接口函数加进 `src/api/qa.ts`，页面用 `qaReal()` 切换，未接完的保持 mock。
 5. **链路**：EV-Q-080 的 `OUT_OF_SCOPE` 申请入口与 qa-reuse / PDE 定；若链路加多轮上下文，前端 `followUp` 可直接发选项 + 回写 `clarify.chosen`。评测工具入库后接进 T11。
 6. **静态本体**：2.1 节 8 条口径问题找指标负责人 / 本体小白确认后，改 `caliber/notes.json` 和 `qa-eval.md` gold，重跑评测。
+
+## 通用对象搜索评审修复（动态 / 静态，10-26）
+
+- explore_api 筛选值按属性逐个校验，直接复用静态 `explorer._scalar / _bad / facet_kind / facetable`：枚举类只收标量数组（未知枚举值 422），区间类只收 `{min,max}`（数值走列范围检查，timestamp 只给日期上界含当天），不合法一律 422 `VALIDATION_FAILED`，`details.fields[0].field = filters.<key>`（排序是 `sort`）。
+- 敏感 / 隐藏属性后台也拦：筛选键须 facetable，排序键须 sortable 且不敏感不隐藏；搜索结果、详情、`boundProps`、导出都不带；关键词只匹配可搜索且可见的属性，没有就忽略关键词（不再拿第一列兜底）。
+- 前端：后台不通时导出直接报错，不导出演示数据。
+- 未做：`router.py` 新建会话的系统话术写死「按 大区 = …」（应换成范围维度名，待 row-scopes 维度上线再改）[推断]；`objMeta.ts loadStaticFacets` 任何错误都回落过渡分面（422 也回落），可改成只在 `isBackendDown` 时回落。
