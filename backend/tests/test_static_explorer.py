@@ -243,6 +243,24 @@ async def test_facets_bad_filter_values_422(client, seeded, flt):
     assert re.search(r"[\u4e00-\u9fff]", msg) and "Invalid" not in msg and "could not" not in msg, msg
 
 
+NUL_FILTERS = [
+    {"status": ["营业\x00中"]},  # 枚举
+    {"city": ["上\x00海"]},  # 字符串枚举
+    {"opened_at": {"min": "2026-01-01\x00"}},  # 日期区间
+    {"area_sqm": {"min": "1\x000"}},  # 数值区间（字符串）
+]
+
+
+@pytest.mark.parametrize("flt", NUL_FILTERS, ids=["enum", "str", "date", "num"])
+async def test_facets_nul_in_filter_value_422(client, seeded, flt):
+    await _make_filterable(seeded, "store", "area_sqm", "opened_at")
+    r = await client.get(f"{P}/object-types/store/facets", params={"filters": json.dumps(flt)})
+    assert r.status_code == 422, r.text
+    f = r.json()["details"]["fields"][0]
+    assert r.json()["code"] == "VALIDATION_FAILED" and f["field"] == f"filters.{next(iter(flt))}"
+    assert "NUL" in f["message"]
+
+
 async def test_facets_good_filter_values_still_work(client, seeded):
     await _make_filterable(seeded, "store", "area_sqm", "opened_at")
     for flt in (
