@@ -226,3 +226,24 @@ async def test_compute_db_error_marks_failed(dyn, client, monkeypatch):  # noqa:
     assert (await client.post(f"{API}/scenarios/{sid}:run", json=RUN)).status_code == 202
     assert (await client.get(f"{API}/scenarios/{sid}")).json()["status"] == "失败"
     err(await client.get(f"{API}/scenarios/{sid}/result"), 409, "SCENARIO_FAILED")
+
+
+async def test_lifecycle_draft_registers_cr_items(dyn, client):  # noqa: F811
+    cr = (await client.post(f"{API}/change-requests", json={"title": "生命周期闭环"})).json()["id"]
+    empty = {"addStates": [], "addTransitions": [], "editTransitions": {}, "removeTransitions": []}
+    edits = {
+        **empty,
+        "cr": cr,
+        "addStates": [{"key": "已退货", "name": "已退货", "kind": "终止", "desc": ""}],
+    }
+    r = await client.put(f"{API}/object-types/order/lifecycle/draft", json=edits)
+    assert r.status_code == 200, r.text
+    assert r.json()["crChanges"] >= 1
+    rows = (
+        await client.get(f"{API}/change-requests/{cr}/items", params={"kind": "object", "targetId": "order"})
+    ).json()
+    assert [(x["section"], x["key"], x["op"]) for x in rows] == [("lc_states", "state.已退货", "add")]
+    # 静态侧放弃整个 object 目标后，残留的生命周期草稿不再显示
+    assert (await client.delete(f"{API}/change-requests/{cr}/targets/object/order")).status_code == 204
+    d = (await client.get(f"{API}/object-types/order/lifecycle", params={"view": "draft", "cr": cr})).json()
+    assert not (d.get("draft") or {}).get("edits", {}).get("addStates")

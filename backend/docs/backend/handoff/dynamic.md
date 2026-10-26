@@ -25,12 +25,19 @@
 - 目录：规则页、生命周期页的动作类型 / 事件类型 / 参数读 Palantir `src/api/action.ts`（`actionTypes()`、`eventTypes()`、`paramsOf`，action 开关为真接口时先 `loadSnapshot()`）；规则页指标名在 static 开关为真接口时 `loadStatic(['metrics'])` 后读 `METRIC_LIST`，找不到回退 mock。都是只读调用，没改他们的文件。
 - 审批人校验：`POST /action-runs/{id}:approve` 只有审批人能批（审批人 = “角色 姓名”，按姓名比对；未指定审批人不限），否则 403 `NOT_APPROVER`；`can.approve` / `can.reasons.approve` 同步。mock 页面没有审批按钮（只有“等待 X 审批”文字），按要求不新增界面。
 - 推演异步：`:run` 校验后置“运行中”并回 202（详情），进程内后台任务（FastAPI BackgroundTasks，新开会话）计算；`GET /scenarios/{id}/result` 运行中回 202 `{status:"运行中"}`、失败回 409 `SCENARIO_FAILED`、完成回结果。前端 `waitScenarioResult()` 每 0.8s 轮询（最多 2 分钟）。
-- 变更单草稿提交 / 放弃（按 static-r3 `handoff/static.md`「变更单写接口契约」写好，**默认关**）：`VITE_DYNAMIC_CR_WRITE=1` 且 dynamic 为真接口时，规则页草稿横幅“提交审核”调 `POST /change-requests/{cr}:submit`，“放弃草稿”调 `DELETE /change-requests/{cr}/targets/rule/{id}` + `DELETE /rules/{id}/draft`。静态合并前保持关闭（mock 行为）。
+- **变更单闭环（dynamic-r3，`VITE_DYNAMIC_CR_WRITE` 仍默认关）**：
+  - 后端 `app/modules/dynamic/cr_link.py`：规则 / 生命周期草稿在**同一事务**里调 static `CrWriteService` 登记 cr_target + 写 cr_items（变更单号在 change_request 表里才登记；mock 单号 / 不存在的单号照旧只落 dynamic 草稿表）。规则 kind `rule`，section `conds` / `mapping` / `config`（新规则 config 行全是 add；已发布规则 autoStage.* 为 update）；生命周期 kind `object`（id = 对象类型），section `lc_states` / `lc_transitions`。`PUT …/draft` 可带 `lockVersion`（只校验第一次 PUT），回 `lockVersion` / `crChanges`。`POST /rules` 带库里的 cr 时一并登记 isNew 目标 + config 行，所以提交不会 CR_EMPTY。`DELETE /rules/{id}/draft` 先撤登记再删草稿（CR_LOCKED 时整体回滚，不留孤儿）。
+  - 前端 `src/api/dynamic.ts`：`crOpen`（POST /change-requests 带 target / POST …/targets 加入）、`crDropEmpty`、`crErrText`（CR_EMPTY / CR_BLOCKED（列 details.blocked）/ CR_NO_REVIEWER / CR_LOCKED / VERSION_CONFLICT / TARGET_IN_OTHER_CR「已在 CR-xxxx 中」）、lockVersion 缓存；`CrTarget.name`。
+  - 规则页：新建规则 / 发起变更走真变更单（CR_WRITE 开时），失败用 `useDraftView.cancel(cr, target)` 撤登记，新建的空单删掉；放弃草稿加确认卡；保存草稿不再把 `{cr,draft}` 当详情覆盖。生命周期页保存草稿同样登记、报错用 crErrText（提交 / 放弃在静态 ObjectTypesBody 的 `useStaticCr('object')` 横幅里）。
+  - **默认仍关**：只用接口测试验证（tests 见下），没有在浏览器里对真后台端到端走一遍新建 → 保存 → 提交 → 放弃；PDE 合并后端到端验证再改默认。
 
 ## 未完成
 
-1. **变更单仍是前端 mock**：草稿归属 / 草稿视图来自公共 `useDraftView`（mock `DRAFT_TARGETS` / `CHANGE_REQUESTS`），新建变更单号也是前端生成的；后端 `rule_draft.cr_code` / `lifecycle_draft.cr_code` 是软引用，没有外键。`CR_WRITE` 打开后只有种子里已有的变更单（mock 与库里都有，如 CR-0011）能真正提交 / 放弃。
-2. **生命周期页**：「发起变更」还没调后端开草稿（规则页已做），草稿提交 / 放弃仍是 mock；变更单接口合并后同规则页处理。
+1. **变更单仍是前端 mock（CR_WRITE 关时）**：草稿归属 / 草稿视图来自公共 `useDraftView`（mock `DRAFT_TARGETS` / `CHANGE_REQUESTS`），新建变更单号也是前端生成的；后端 `rule_draft.cr_code` / `lifecycle_draft.cr_code` 是软引用，没有外键。`CR_WRITE` 打开后只有种子里已有的变更单（mock 与库里都有，如 CR-0011）能真正提交 / 放弃。
+2. **生命周期页**：「发起变更」仍走公共 `useDraftView.start()`（mock 单号），草稿第一次保存时才登记到库里的变更单。静态侧放弃整个 object 目标只删 cr_items，不删 `lifecycle_draft`；dynamic 读草稿时忽略「变更单在库里但没登记该 object 目标」的残留草稿（可选：static 放弃 object 目标时回调 dynamic 清理）。
+6. **废弃列（不加迁移）**：`rule_hit.store_id` / `store_label`（及告警的同名列）保留不删，接口改出通用 `dims: [{objKind,id,label}]`，目前由 store_id 转换；迁移归 dynamic-r3b（dynamic_0003），之后再改存 JSON。
+7. **ObjBehaviorAutomation.vue** 仍是 mock / 门店写死，未改。
+8. **生命周期对象引用**：ObjRef 现按 objectId 引用任意对象类型；对象注册表（objectRegistry）解析不了的类型（如 member / promotion / refund）在开发环境会有告警，需要 PDE 在注册表加不告警的 `canResolve(kind)` 或补解析器。
 3. **审批界面**：动作中心 mock 没有审批 / 暂存→确认→审批的界面元素，按要求没加；后端接口和权限校验已就绪。注意：种子（mock 导出）里部分审批人（如赵磊、吴佳）不是系统用户，这些动作在库里没人能审批；测试里把 ACT-20261025-0551 的审批人改成王敏再审批。
 4. **推演异步的限制**：进程内后台任务，进程重启时正在算的方案会停在“运行中”（没有恢复 / 超时回收）；`SCENARIO_CONFIG_DIRTY` 仍走不到（`:run` 把配置写回方案）。
 5. **新建规则只建空壳**：名称“未命名规则”、对象 product、无条件；草稿里能改的仍只有自动暂存和阈值（与 mock 页面一致），条件 / 触发方式编辑界面 mock 本身也没有。
@@ -74,18 +81,24 @@
 
 1. **告警审批人 / 对象称呼写死**：`src/pages/ops/Alerts.vue:271,275,288`，后端 `backend/app/modules/dynamic/service.py:117-118`——商品 → 「品类经理 王敏」、其他 → 「区域运营 陈立军」，对象称呼写死订单 / 商品 / 门店。改为：审批人取动作类型配置，对象称呼取对象类型显示名。
 2. **级别 / 页签状态**：`Alerts.vue:317`（高 / 中 / 低）、`Alerts.vue:59-63`、`src/pages/ops/Actions.vue:53-56`（页签状态）。属流程枚举、非零售，可保留；可选改由现有 `/meta` 下发。
-3. **门店列 / 门店字段**：`src/pages/ontology/Rules.vue:256-262,283,315,636`（商品类规则加「门店」列、对象列标题写「商品」）；后端 `models.py:106`、`rules_models.py:142`、`schemas.py:30` 的 `store_id` / `store_label`，`rules_service.py:107,343-354` 生成样本时取门店 / 商品。改为：命中 / 告警存通用维度 `dims: [{objKind, id, label}]`（JSON，来自规则去重键），列按该规则的维度生成。
-4. **固定列表列**：`Alerts.vue:159`、`Actions.vue:148`、Rules 各表的列本身是通用的；「对象」列应显示对象类型的标题字段（titleProp），不写死称呼。
+3. **（r3 已做：命中 / 回放样本出 `dims`，规则页“维度”列；存储列未改）门店列 / 门店字段**：`src/pages/ontology/Rules.vue:256-262,283,315,636`（商品类规则加「门店」列、对象列标题写「商品」）；后端 `models.py:106`、`rules_models.py:142`、`schemas.py:30` 的 `store_id` / `store_label`，`rules_service.py:107,343-354` 生成样本时取门店 / 商品。改为：命中 / 告警存通用维度 `dims: [{objKind, id, label}]`（JSON，来自规则去重键），列按该规则的维度生成。
+4. **（r3 已做：规则页对象列标题取 titleProp）固定列表列**：`Alerts.vue:159`、`Actions.vue:148`、Rules 各表的列本身是通用的；「对象」列应显示对象类型的标题字段（titleProp），不写死称呼。
 5. **情景推演模型（最大缺口）**：
    - 范围写死区域 / 品类 / 周数：`src/pages/ops/Scenarios.vue:108-110,223,445-446,524`；`rules_schemas.py:58-59`；`rules_service.py:654,692-697,778,837`。
    - 驱动写死价格 / 补货 / 促销：`Scenarios.vue:170,455-460,486,548-550`；`rules_schemas.py:64-69`；`rules_service.py:504-506,701`。
    - 影响明细列写死商品 / 门店 / 销售额 / 缺货率：`Scenarios.vue:259-262,502`；影响表 `rules_models.py:194-205`（sku / category / store_id）。
    - 建议动作写死「发起调价审批 / 补货申请 / 发放复购召回优惠券」：`rules_sim.py:195-285`、`Scenarios.vue:342`。
    - 改为元数据定义的「推演模板」：范围 = 某对象类型属性上的筛选；驱动 = 带范围的数值参数（或动作类型参数）；KPI = 指标；影响行 = 通用 `{objRef, dims{}, metrics{}}`；建议 → 动作类型映射。推演引擎按模板可插拔，门店演示是其中一个样例模板。
-6. **生命周期对象引用**：`src/pages/ontology/parts/object/ObjBehaviorLifecycle.vue:262` 写死 `['order','store','product']`。改为任意对象类型（ObjRef 按 objectId）。`:294` 的触发方式是通用的，保留。
-7. **新建规则默认对象类型**：`rules_service.py:387` 默认 `"product"`。改为新建弹窗里必选对象类型。
+6. **（r3 已做）生命周期对象引用**：`src/pages/ontology/parts/object/ObjBehaviorLifecycle.vue:262` 写死 `['order','store','product']`。改为任意对象类型（ObjRef 按 objectId）。`:294` 的触发方式是通用的，保留。
+7. **（r3 部分：默认取本体第一个对象类型，弹窗选对象类型未做）新建规则默认对象类型**：`rules_service.py:387` 默认 `"product"`。改为新建弹窗里必选对象类型。
 
 **依赖**
 - static：`GET /object-types/{id}/meta`（`{ titleProp, properties: [{ key, name, dataType, searchable, filterable, sortable, listed, order, visibility, format, unit }] }`）和 `GET /object-types/{id}/facets?filters=...`（enum 取值 + 计数 / range 最小最大，随已选筛选联动），以 master 770f6d7 的 `backend/docs/backend/generic-object-explorer.md` 为准。用于第 3、4、5、6 条（列、标题字段、范围筛选取值，替换 `SC_AREAS` / `SC_CATEGORIES` / `PROMO_TYPES`）。
 - Palantir：动作类型的审批人配置（第 1 条）。
 - 其余（推演模板模型、通用维度、第 7 条）可在 dynamic 内完成。
+
+**PDE 共享文件请求（dynamic-r3）**
+- `src/api/static.ts`：导出 `registerDraft`（dynamic.ts 里暂时复制了同样逻辑 `registerCR`）。
+- `useDraftView.ts` / `env.d.ts` / router：无需改动。
+- `ObjectTypesBody.vue`（static）：可选——放弃 object 目标后通知 dynamic 删 lifecycle_draft。
+- objectRegistry：不告警的 `canResolve(kind)`（见未完成第 8 条）。

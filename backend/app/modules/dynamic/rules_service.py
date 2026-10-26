@@ -22,6 +22,7 @@ from app.core.clock import now
 from app.core.errors import AppError, NotFound
 from app.core.schema import _fmt_dt, _fmt_dt_seconds, parse_display_dt
 from app.modules.action.models import ActionType
+from app.modules.dynamic.cr_link import CrLink, lifecycle_sections, rule_sections
 from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertLevel
 from app.modules.dynamic.rules_models import (
     HitResult,
@@ -51,6 +52,8 @@ from app.modules.dynamic.rules_schemas import (
 )
 from app.modules.dynamic.rules_sim import _products, _stores, seeded, simulate, stage_plan, to_fixed_str
 from app.modules.dynamic.sections import lifecycle_def, lifecycle_head, rule_def, version_row
+from app.modules.static.models import ObjectType
+from app.modules.static.schemas import TargetIn
 from app.modules.versioning.models import OntologyRelease
 
 # 前端写死的「今天」口径（rules.ts / lifecycle.ts）
@@ -102,6 +105,12 @@ def dedupe_reason(d: dict[str, Any]) -> str:
     skip = {"规则", "日期", "周", "小时", "生效日期", "批次"}
     dims = "".join(x.strip() for x in dd.split("+") if x.strip() not in skip)
     return f"同一{dims}已命中过" if cd == "不重复" else f"同一{dims} {cd}内已命中"
+
+
+def hit_dims(store_id: str | None, store_label: str | None) -> list[dict[str, Any]]:
+    """命中的上下文维度（通用 dims，替代 storeId / storeLabel）。
+    rule_hit.store_id / store_label 两列保留（deprecated，不加迁移），这里映射成一条 objKind=store 的维度。"""
+    return [{"objKind": "store", "id": store_id, "label": store_label or store_id}] if store_id else []
 
 
 def store_of_key(key: str) -> dict[str, Any]:
@@ -236,8 +245,7 @@ class RuleService:
             "objKind": h.obj_kind,
             "objId": h.obj_id,
             "objLabel": h.obj_label,
-            "storeId": h.store_id,
-            "storeLabel": h.store_label,
+            "dims": hit_dims(h.store_id, h.store_label),
             "value": h.value,
             "threshold": h.threshold,
             "alertId": alert.code if alert else None,
@@ -326,8 +334,7 @@ class RuleService:
                     "objKind": h["objKind"],
                     "objId": h["objId"],
                     "objLabel": h["objLabel"],
-                    "storeId": h["storeId"],
-                    "storeLabel": h["storeLabel"],
+                    "dims": h["dims"],
                     "value": h["value"],
                     "diff": diff,
                 }
@@ -350,8 +357,7 @@ class RuleService:
                         "objKind": h["objKind"],
                         "objId": p["sku"] if p else h["objId"],
                         "objLabel": f"{p['name']} {p['spec']}" if p else h["objLabel"],
-                        "storeId": st["id"] if st else h["storeId"],
-                        "storeLabel": st["name"] if st else h["storeLabel"],
+                        "dims": hit_dims(st["id"], st["name"]) if st else h["dims"],
                         "value": f"{to_fixed_str(17 + rnd(), 2)}%" if is_p else h["value"],
                         "diff": "新增命中",
                     }
@@ -384,7 +390,7 @@ class RuleService:
             owner=self.user.name,
             status=RuleStatus.changing,
             core=False,
-            obj_kind=body.obj_kind or "product",
+            obj_kind=body.obj_kind or await self._first_obj_kind(),
             level=AlertLevel.medium,
             output=RuleOutput.alert,
             conds=[],
@@ -397,7 +403,22 @@ class RuleService:
         await self.session.flush()
         if body.cr:
             await self._open(r, body.cr)
+            cur = await self.draft_def(r, (await self._drafts())[r.id], await self._actions())
+            assert cur is not None
+            await CrLink(self.session, self.user).put(
+                body.cr, self._target(r), {"config": rule_sections(None, cur)["config"]}, None
+            )
         return await self.detail(r.code, view="draft" if body.cr else None)
+
+    async def _first_obj_kind(self) -> str:
+        """新建规则默认对象类型 = 本体里第一个对象类型（表空时退回 product）。"""
+        return (
+            await self.session.scalar(select(ObjectType.code).order_by(ObjectType.id).limit(1)) or "product"
+        )
+
+    @staticmethod
+    def _target(r: Rule) -> TargetIn:
+        return TargetIn(kind="rule", id=r.code, is_new=r.version is None, name=r.name)
 
     async def _open(self, r: Rule, cr: str) -> RuleDraft:
         d = (await self._drafts()).get(r.id)
@@ -417,6 +438,7 @@ class RuleService:
         """发起变更 / 加入已有变更单：登记规则草稿（幂等；已在别的草稿单里 409）。"""
         r = await self.get(code)
         await self._open(r, cr)
+        await CrLink(self.session, self.user).join(cr, self._target(r))
         return await self.detail(code, view="draft")
 
     async def discard_draft(self, code: str, cr: str | None) -> None:
@@ -425,6 +447,8 @@ class RuleService:
         d = (await self._drafts()).get(r.id)
         if d is None or (cr and cr != d.cr_code):
             raise NotFound("该规则没有草稿", details={"id": code, "cr": cr})
+        # 同一事务：先删变更单里的登记和草稿行（单子已提交 → CR_LOCKED，整体回滚，不留孤儿），再删规则草稿
+        await CrLink(self.session, self.user).discard(d.cr_code, "rule", r.code)
         await self.session.delete(d)
         if r.version is None:
             await self.session.flush()
@@ -487,9 +511,17 @@ class RuleService:
         d.patch = {**d.patch, "conds": conds, "autoStage": auto}
         d.by, d.at = self.user.name, now()
         await self.session.flush()
+        draft = await self.draft_def(r, d, actions)
+        assert draft is not None
+        pub = None if r.version is None else self._def(r, actions)
+        lv = await CrLink(self.session, self.user).put(
+            d.cr_code, self._target(r), rule_sections(pub, draft), body.lock_version
+        )
         return {
             "cr": d.cr_code,
-            "draft": await self.draft_def(r, d, actions),
+            "lockVersion": lv and lv["lockVersion"],
+            "crChanges": lv and lv["changes"],
+            "draft": draft,
             "message": f"已保存到草稿 {d.cr_code}，发布前不影响线上规则",
         }
 
@@ -922,6 +954,9 @@ class LifecycleService:
             if cr:
                 q = q.where(LifecycleDraft.cr_code == cr)
             d = await self.session.scalar(q.order_by(LifecycleDraft.id.desc()).limit(1))
+            link = CrLink(self.session, self.user)
+            if d and await link.exists(d.cr_code) and not await link.registered(d.cr_code, "object", lc.code):
+                d = None  # 变更单里已放弃本对象（static DELETE /targets），残留草稿行不再算数
             draft = {"cr": d.cr_code, "edits": d.edits} if d else {"cr": cr, "edits": empty_edits()}
         out["draft"] = draft
         return out
@@ -1017,7 +1052,16 @@ class LifecycleService:
         else:
             d.edits = edits
         await self.session.flush()
-        return {"cr": body.cr, "edits": edits}
+        target = TargetIn(kind="object", id=lc.code, name=lc.object_name)
+        lv = await CrLink(self.session, self.user).put(
+            body.cr, target, lifecycle_sections(cur, edits), body.lock_version
+        )
+        return {
+            "cr": body.cr,
+            "edits": edits,
+            "lockVersion": lv and lv["lockVersion"],
+            "crChanges": lv and lv["changes"],
+        }
 
 
 def empty_edits() -> dict[str, Any]:

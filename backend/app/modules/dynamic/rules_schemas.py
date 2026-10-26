@@ -31,6 +31,7 @@ class RuleDraftIn(ApiModel):
     cr: str | None = None
     auto_stage: AutoStageIn
     thresholds: list[str] = []
+    lock_version: int | None = None
 
 
 class RuleCreateIn(ApiModel):
@@ -95,3 +96,4 @@ class LifecycleDraftIn(ApiModel):
     add_transitions: list[dict[str, Any]] = []
     edit_transitions: dict[str, dict[str, Any]] = {}
     remove_transitions: list[str] = []
+    lock_version: int | None = None

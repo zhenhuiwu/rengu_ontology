@@ -7,7 +7,8 @@
  */
 import type { Alert, AlertStatus } from '@/mock/dynamic';
 import type { ActionLog, ActionRecord, ActionStatus, SysId } from '@/mock/actions';
-import { apiClient, type PageResult } from './http';
+import { apiClient, isApiError, type PageResult } from './http';
+import { DRAFTS } from '@/mock/releases';
 
 export const dynamicApi = apiClient('dynamic');
 const api = dynamicApi;
@@ -106,7 +107,9 @@ export interface RuleMetaDto { confirmers: string[]; mappingSources: string[]; t
 export interface RuleVersionDto { ver: number; status: string; by: string; at: string; change: string; cr?: string | null }
 export interface TimelineDto { time: string; text: string; desc: string; status: string }
 export interface RuleHitDetailDto extends Omit<Hit, 'alert'> { alert: AlertDetailDto | null; linkedAction: ActionRunDto | null; timeline: TimelineDto[] }
-export interface ReplaySampleDto { key: string; at: string; objKind: string; objId: string; objLabel: string; storeId?: string | null; storeLabel?: string | null; value: string; diff: string }
+/** 命中的上下文维度（通用，替代旧的 storeId / storeLabel；后台目前只给 objKind=store 一种） */
+export interface HitDim { objKind: string; id: string; label?: string | null }
+export interface ReplaySampleDto { key: string; at: string; objKind: string; objId: string; objLabel: string; dims?: HitDim[]; value: string; diff: string }
 export interface ReplayDto { actual: number; would: number; added: number; removed: number; deduped: number; dedupeReason: string; samples: ReplaySampleDto[] }
 
 /** 后台 null → 前端可选字段 undefined（Hit.storeId / alertId 等在 mock 里是 `?:`） */
@@ -121,10 +124,15 @@ export const listRules = (q: RuleQuery) =>
   api.get<PageResult<RuleDto>>('/rules', { query: { trigger: opt(q.trigger), status: opt(q.status), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
 export const getRulesMeta = () => api.get<RuleMetaDto>('/rules/meta');
 export const getRule = (id: string) => api.get<RuleDto>(`/rules/${enc(id)}`);
-export const saveRuleDraft = (id: string, body: { cr?: string; autoStage: AutoStage; thresholds: string[] }) =>
-  api.put<RuleDto>(`/rules/${enc(id)}/draft`, body);
+/** 保存到草稿：后台同一事务把改动登记成变更单 conds / mapping / config 三段（单子在库里时）；带 lockVersion 乐观锁 */
+export interface RuleDraftSaved { cr: string; draft: RuleDef; message: string; lockVersion?: number | null; crChanges?: number | null }
+export async function saveRuleDraft(id: string, body: { cr: string; autoStage: AutoStage; thresholds: string[] }) {
+  const r = await api.put<RuleDraftSaved>(`/rules/${enc(id)}/draft`, { ...body, lockVersion: await crLock(body.cr) });
+  crLocked(body.cr, r);
+  return r;
+}
 export async function listRuleHits(id: string, range: '7d' | '30d', page: number, size: number) {
-  const r = await api.get<PageResult<Hit>>(`/rules/${enc(id)}/hits`, { query: { range, page, size } });
+  const r = await api.get<PageResult<Hit & { dims?: HitDim[] }>>(`/rules/${enc(id)}/hits`, { query: { range, page, size } });
   return { ...r, items: r.items.map(undef) };
 }
 export async function getRuleHit(id: string) {
@@ -135,17 +143,76 @@ export async function getRuleHit(id: string) {
 export const createRule = (body: { cr?: string; name?: string; objKind?: string } = {}) => api.post<RuleDto>('/rules', body);
 /** 发起变更 / 加入已有变更单：登记规则草稿（幂等；已在别的草稿单 409 TARGET_IN_OTHER_CR） */
 export const openRuleDraft = (id: string, cr: string) => api.post<RuleDto>(`/rules/${enc(id)}/draft`, { cr });
-/** 放弃本规则草稿（从未发布的新规则一并删除） */
+/** 放弃本规则草稿（从未发布的新规则一并删除）；后台同一事务删变更单里本规则的登记和草稿行，不留孤儿 */
 export const discardRuleDraft = (id: string, cr?: string) => api.delete<void>(`/rules/${enc(id)}/draft`, { query: cr ? { cr } : {} });
 
 /**
- * 变更单写接口（静态 static-r3 契约，handoff/static.md「变更单写接口契约」）。静态合并前默认关闭：
- * VITE_DYNAMIC_CR_WRITE=1 才走真接口（草稿提交 / 放弃），否则草稿横幅保持 mock 行为。
+ * 变更单写接口（静态 static-r3 契约，handoff/static.md「变更单写接口契约」）。
+ * VITE_DYNAMIC_CR_WRITE=1 才走真接口（发起 / 加入变更单、提交、放弃），否则草稿横幅保持 mock 行为。
  */
-export const CR_WRITE = (import.meta.env as unknown as Record<string, string | undefined>).VITE_DYNAMIC_CR_WRITE === '1';
-export interface CrTarget { kind: 'rule' | 'object'; id: string; isNew?: boolean }
+export const CR_WRITE = import.meta.env.VITE_DYNAMIC_CR_WRITE === '1';
+export interface CrTarget { kind: 'rule' | 'object'; id: string; isNew?: boolean; name?: string }
 export const submitCR = (cr: string) => api.post<{ id: string; status: string }>(`/change-requests/${enc(cr)}:submit`, {});
 export const removeCRTarget = (cr: string, t: CrTarget) => api.delete<void>(`/change-requests/${enc(cr)}/targets/${t.kind}/${enc(t.id)}`);
+interface CrFullDto { id: string; title: string; owner: string; updatedAt: string; changes: number; lockVersion: number }
+/** 各单子最近一次看到的 lockVersion（保存时带上；VERSION_CONFLICT 后清掉，下次重新读） */
+const LOCKS: Record<string, number> = {};
+async function crLock(cr: string): Promise<number | undefined> {
+  if (!CR_WRITE) return undefined;
+  if (LOCKS[cr] === undefined) {
+    try { LOCKS[cr] = (await api.get<CrFullDto>(`/change-requests/${enc(cr)}`)).lockVersion; } catch { return undefined; }
+  }
+  return LOCKS[cr];
+}
+function crLocked(cr: string, r: { lockVersion?: number | null; crChanges?: number | null }) {
+  if (r.lockVersion != null) LOCKS[cr] = r.lockVersion;
+  const d = DRAFTS.find((x) => x.id === cr);
+  if (d && r.crChanges != null) d.changes = r.crChanges;
+}
+/** 把库里的单子登记进 DRAFTS（useDraftView 的 allDrafts / draftOf 读它；同号替换） */
+function registerCR(cr: CrFullDto) {
+  LOCKS[cr.id] = cr.lockVersion;
+  const row = { id: cr.id, title: cr.title, owner: cr.owner, updatedAt: cr.updatedAt, changes: cr.changes };
+  const i = DRAFTS.findIndex((d) => d.id === cr.id);
+  if (i >= 0) DRAFTS.splice(i, 1, row); else DRAFTS.unshift(row);
+}
+/**
+ * 发起变更：新建变更单（带目标）或加入已有单；返回库里的单号。target 省略 = 只建空单（新建规则：规则建好后由 POST /rules 带 cr 登记）。
+ * 占用他单 409 TARGET_IN_OTHER_CR，由 crErrText 提示“已在 CR-xxxx 中”。
+ */
+export async function crOpen(opts: { join?: string; title?: string; desc?: string }, target?: CrTarget): Promise<string> {
+  const cr = opts.join
+    ? (target ? await api.post<CrFullDto>(`/change-requests/${enc(opts.join)}/targets`, target) : await api.get<CrFullDto>(`/change-requests/${enc(opts.join)}`))
+    : await api.post<CrFullDto>('/change-requests', { title: opts.title || '未命名变更', reason: opts.desc, target });
+  registerCR(cr);
+  return cr.id;
+}
+/** 撤销 crOpen 新建的空单（新建规则失败时；尽力而为） */
+export async function crDropEmpty(cr: string) {
+  try { await api.delete<void>(`/change-requests/${enc(cr)}`); } catch { /* 留一张空草稿单不影响业务 */ }
+  const i = DRAFTS.findIndex((d) => d.id === cr);
+  if (i >= 0) DRAFTS.splice(i, 1);
+  delete LOCKS[cr];
+}
+/** 变更单相关错误的中文提示（其余错误用后台 message） */
+export function crErrText(e: unknown): string {
+  if (!isApiError(e)) return e instanceof Error ? e.message : String(e);
+  const d = (e.details ?? {}) as Record<string, unknown>;
+  switch (e.code) {
+    case 'CR_EMPTY': return '变更单里还没有改动，先保存到草稿再提交审核';
+    case 'CR_BLOCKED': {
+      const b = Array.isArray(d.blocked) ? (d.blocked as unknown[]).map((x) => (typeof x === 'string' ? x : (x as { name?: string; id?: string }).name ?? (x as { id?: string }).id ?? '')).filter(Boolean) : [];
+      return `合并校验有阻断项，不能提交审核${b.length ? `：${b.join('、')}` : ''}`;
+    }
+    case 'CR_NO_REVIEWER': return '变更单还没有指定审核人，请先在“变更与发布”里指定审核人';
+    case 'CR_LOCKED': return `变更单当前是“${String(d.status ?? '非草稿')}”，只有草稿状态才能修改`;
+    case 'VERSION_CONFLICT':
+      if (typeof d.id === 'string') delete LOCKS[d.id];
+      return '变更单刚被其他人修改过，请刷新后重试';
+    case 'TARGET_IN_OTHER_CR': return `已在 ${String(d.crId ?? '其他变更单')} 中，请到该变更单里修改`;
+    default: return e.message || e.code;
+  }
+}
 
 export const replayRule = (id: string, range: '7d' | '30d', version: 'current' | 'draft') =>
   api.post<ReplayDto>(`/rules/${enc(id)}:replay`, { range, version });
@@ -170,8 +237,13 @@ export function listLifecycleChanges(objectId: string, illegal: boolean, page: n
 }
 export const listLifecycleIllegal = (objectId: string) => api.get<LcIllegal[]>(`/object-types/${enc(objectId)}/lifecycle/illegal`);
 /** L3–L6：整份草稿改动（新增状态 / 新增·修改·删除迁移）一起保存 */
-export const saveLifecycleDraft = (objectId: string, cr: string, edits: LcDraft) =>
-  api.put<{ cr: string; edits: LcDraft }>(`/object-types/${enc(objectId)}/lifecycle/draft`, { cr, ...edits });
+export async function saveLifecycleDraft(objectId: string, cr: string, edits: LcDraft) {
+  // 后台同一事务登记到变更单（目标 kind=object，section lc_states / lc_transitions）
+  const r = await api.put<{ cr: string; edits: LcDraft; lockVersion?: number | null; crChanges?: number | null }>(
+    `/object-types/${enc(objectId)}/lifecycle/draft`, { cr, ...edits, lockVersion: await crLock(cr) });
+  crLocked(cr, r);
+  return r;
+}
 
 /* ───── 情景推演（ops/Scenarios.vue） ───── */
 import type { Scenario, ScResult, ScImpact, ScScope, ScDrivers, StagePlan } from '@/mock/scenarios';
