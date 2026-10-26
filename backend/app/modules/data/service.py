@@ -55,6 +55,10 @@ META = DsMeta(
 TEST_TIMEOUT_S = 10
 
 
+class PasswordRequired(AppError):
+    status_code, code, message = 422, "DS_PASSWORD_REQUIRED", "改了主机、端口或用户名，请重新填写密码"
+
+
 class RealConnectUnavailable(AppError):
     status_code, code, message = 422, "REAL_CONNECT_UNAVAILABLE", "未开启真实连接，或该类型暂无驱动"
 
@@ -205,8 +209,13 @@ class DatasourceService:
             "sync_cron": body.cron,  # 前端编辑只改 sync.mode / sync.cron，cronText 等保持
             **_type_fields(body),
         }
+        moved = (ds.host, ds.username) != (values["host"], values["username"]) or (
+            body.port is not None and body.port != ds.port
+        )
         if body.password:  # 留空 = 不修改
             values["password_enc"] = encrypt_password(body.password)
+        elif moved and ds.password_enc:  # 改了地址 / 账号还沿用旧密码，会把密码发到新地址
+            raise PasswordRequired()
         return await self.repo.update(ds, values)
 
     async def delete(self, code: str) -> None:

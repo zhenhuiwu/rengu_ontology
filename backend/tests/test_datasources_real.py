@@ -130,3 +130,11 @@ async def test_real_failures(client, ds, real):
 async def test_refresh_needs_real(client, ds):
     r = await client.post(f"{API}/datasources/DS-001/tables:refresh")
     assert r.status_code == 422 and r.json()["code"] == "REAL_CONNECT_UNAVAILABLE"
+
+
+async def test_change_host_requires_password(client, ds):
+    code = (await client.post(f"{API}/datasources", json=_self_db())).json()["id"]
+    moved = _self_db(host="10.0.0.9", password=None)
+    r = await client.put(f"{API}/datasources/{code}", json=moved)
+    assert r.status_code == 422 and r.json()["code"] == "DS_PASSWORD_REQUIRED"
+    assert (await client.put(f"{API}/datasources/{code}", json=_self_db(password=None))).status_code == 200
