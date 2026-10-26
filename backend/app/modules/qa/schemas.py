@@ -335,6 +335,12 @@ class FeedbackDetailOut(FeedbackOut):
     existing_cert: str | None = None
     covered_by: str | None = None
     related_eval_count: int
+    # [推断] 联调补充（前端确认卡 / 抽屉要用，mock 里是前端自己查 tuning.*）
+    existing_cert_question: str | None = None
+    existing_cert_status: str | None = None
+    plan: dict[str, Any] | None = None  # 转认证问答用的语义计划（高频问题 / 评测题 / 已有认证问答）
+    plan_text: str | None = None
+    covered_cr_status: str | None = None  # covered_by 那张变更单的状态（已通过 → 关联后「待发布生效」）
 
 
 class FreqOut(ApiModel):
@@ -399,3 +405,27 @@ class CertVariantsIn(ApiModel):
     """T8：整组替换同问法。"""
 
     variants: list[str]
+
+
+# ---------------------------------------------------------------- T11 / T15–T17 写接口
+
+
+class EvalRunIn(ApiModel):
+    group: str = "all"  # all | 全部 | 销售 | 退款 | 履约 | 毛利 | 复购 | 订单
+
+
+class FbSynonymIn(ApiModel):
+    join: str | None = None
+    title: str | None = None
+
+
+class FbSynonymOut(ApiModel):
+    cr_id: str
+    affected: list[str]
+    feedback: FeedbackDetailOut
+
+
+class FbCertOut(ApiModel):
+    cert_id: str
+    mode: Literal["new", "variant"]
+    feedback: FeedbackDetailOut

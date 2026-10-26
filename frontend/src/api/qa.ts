@@ -3,7 +3,7 @@
  * 开关没切到真接口时页面照旧走 src/mock，这里的函数不会被调用。
  */
 import type { QaSession, QaFavorite, QaPage, QaDemoTurn } from '@/mock/qa';
-import type { CertQa, FreqQ, SemPlan } from '@/mock/qa-tuning';
+import type { CertQa, FreqQ, SemPlan, EvalRun, EvalQ, FailCase, FailKind, Feedback } from '@/mock/qa-tuning';
 import { apiClient, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult } from './http';
 
 const api = apiClient('qa');
@@ -134,3 +134,31 @@ export const putCertVariants = async (id: string, variants: string[]) => certIn(
 export type QaFreq = FreqQ & { rank: number; certStatus?: string };
 export const listFreq = (q: { period?: string; cert?: string; kw?: string; page: number; size: number }) => api.get<PageResult<QaFreq>>('/tuning/freq', { query: q });
 export const certifyFreq = async (id: string) => certIn(await api.post<CertDto>(`/tuning/freq/${encodeURIComponent(id)}:certify`, {}));
+
+/* ───────── R5 问数调优 · 评测题库 / 反馈与纠错（qa-api §7 T9–T17） ───────── */
+/** T9 运行记录：失败用例不随列表返回，给 failCount；passRate 0–1 */
+export type QaEvalRun = Omit<EvalRun, 'fails' | 'version'> & { version?: string; passRate: number; failCount: number };
+export type QaEvalQ = EvalQ & { expectText: string };
+/** T10 抽屉：失败用例服务端分页（12 条一页），kindStats 是全部失败的原因分布；待运行的回放给题目和提示 */
+export interface QaEvalRunDetail extends QaEvalRun { fails: PageResult<FailCase>; kindStats: { kind: FailKind; n: number }[]; replayQuestions: QaEvalQ[]; replayHints: Record<string, string> }
+export interface QaEvalQList extends PageResult<QaEvalQ> { groupCounts: { group: string; n: number }[] }
+export const listEvalRuns = (q: { trigger?: string; page: number; size: number }) => api.get<PageResult<QaEvalRun>>('/tuning/eval/runs', { query: q });
+export const getEvalRun = (id: string, q: { page: number; size: number }) => api.get<QaEvalRunDetail>(`/tuning/eval/runs/${encodeURIComponent(id)}`, { query: q });
+/** T11 运行评测（202，后台逐题跑；group 'all' = 全部）。轮询 T9 / T10 看进度 */
+export const startEvalRun = (group: string) => api.post<QaEvalRun>('/tuning/eval/runs', { group });
+export const listEvalQuestions = (q: { group?: string; last?: string; kw?: string; page: number; size: number }) => api.get<QaEvalQList>('/tuning/eval/questions', { query: q });
+/** T13 / T14 反馈：列表和详情同形（行内按钮要 certBlock / coveredBy） */
+export type QaFeedback = Feedback & {
+  userId?: string; certBlock: string; existingCert?: string; coveredBy?: string; relatedEvalCount: number;
+  existingCertQuestion?: string; existingCertStatus?: string; plan?: SemPlan; planText?: string; coveredCrStatus?: string;
+};
+export const listFeedbacks = (q: { kw?: string; status?: string; fixKind?: string; page: number; size: number }) => api.get<PageResult<QaFeedback>>('/tuning/feedbacks', { query: q });
+export const getFeedback = (id: string) => api.get<QaFeedback>(`/tuning/feedbacks/${encodeURIComponent(id)}`);
+const fbAct = (id: string, act: string) => `/tuning/feedbacks/${encodeURIComponent(id)}:${act}`;
+/** T15：词已在变更单里 → 关联（同词待处理反馈一起）；不在 → 409 CR_API_PENDING（静态变更单写接口未接入） */
+export const feedbackToSynonym = (id: string, body: { join?: string; title?: string } = {}) =>
+  api.post<{ crId: string; affected: string[]; feedback: QaFeedback }>(fbAct(id, 'to-synonym'), body);
+/** T16：已有同题认证问答 → mode variant（原话加为同问法）；否则新建并认证 → mode new */
+export const feedbackToCert = (id: string) => api.post<{ certId: string; mode: 'new' | 'variant'; feedback: QaFeedback }>(fbAct(id, 'to-cert'), {});
+export const ignoreFeedback = (id: string) => api.post<QaFeedback>(fbAct(id, 'ignore'), {});
+export const reopenFeedback = (id: string) => api.post<QaFeedback>(fbAct(id, 'reopen'), {});

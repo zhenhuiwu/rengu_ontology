@@ -24,6 +24,7 @@ from app.db.session import SessionDep
 from app.modules.qa import catalog, chain
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
+from app.modules.qa.eval import job as eval_job
 from app.modules.qa.llm import LLMClient, get_llm
 from app.modules.qa.models import (
     CertStatus,
@@ -35,6 +36,7 @@ from app.modules.qa.models import (
     PermRequestStatus,
     QaCert,
     QaCertVariant,
+    QaEvalRun,
     QaFeedback,
     QaFreqQuestion,
     QaPermissionRequest,
@@ -42,6 +44,7 @@ from app.modules.qa.models import (
     QaSession,
     QaTemplate,
     QaTurn,
+    RunStatus,
     SessionCaliber,
     TurnKind,
 )
@@ -54,10 +57,13 @@ from app.modules.qa.schemas import (
     CertVariantsIn,
     EvalQListOut,
     EvalRunDetailOut,
+    EvalRunIn,
     EvalRunOut,
     FavoriteOut,
+    FbCertOut,
+    FbSynonymIn,
+    FbSynonymOut,
     FeedbackDetailOut,
-    FeedbackOut,
     FreqOut,
     GroupCountOut,
     MetricRefOut,
@@ -836,7 +842,7 @@ async def list_eval_questions(
 
 @tuning.get(
     "/feedbacks",
-    response_model=Page[FeedbackOut],
+    response_model=Page[FeedbackDetailOut],  # [推断] 行内按钮要 certBlock / coveredBy，列表直接给详情字段
     response_model_exclude_none=True,
     summary="T13 用户反馈",
 )
@@ -851,7 +857,7 @@ async def list_feedbacks(
     repo = r.FeedbackRepo(session)
     rows, total = await repo.list_page(repo.list_query(_kw(kw), status, fix_kind), p)
     codes = await repo.user_codes([f.user_id for f in rows if f.user_id])
-    return Page.of([svc.feedback_out(f, codes.get(f.user_id)) for f in rows], total, p)
+    return Page.of([await svc.feedback_detail(session, f, codes.get(f.user_id)) for f in rows], total, p)
 
 
 @tuning.get(
@@ -907,6 +913,202 @@ async def list_synonyms(session: SessionDep, user: CurrentUserDep):
     return [
         SynonymOut(word=s.word, target=s.target, cr=s.cr_code) for s in await r.SynonymRepo(session).all()
     ]
+
+
+# ---------------------------------------------------------------- T11 运行评测 / T15–T17 反馈处理（写）
+
+_TM = [Depends(require_func("qa-tuning", "manage"))]
+
+
+class EvalGroupInvalid(AppError):
+    status_code, code, message = 422, "VALIDATION_FAILED", "评测分组不存在"
+
+
+@tuning.post(
+    "/eval/runs",
+    status_code=202,
+    dependencies=_TM,
+    response_model=EvalRunOut,
+    response_model_exclude_none=True,
+    summary="T11 运行评测（后台逐题比对，不改口径）",
+)
+async def start_run(
+    body: EvalRunIn,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    llm: Annotated[LLMClient, Depends(get_llm)],
+    runner: Annotated[Callable, Depends(eval_job.get_runner)],
+):
+    _, u = await svc.effective_user(session, user, ctx)
+    group = None if body.group in eval_job.ALL else body.group
+    if group is not None and group not in catalog.load("EVAL_GROUPS"):
+        raise EvalGroupInvalid(details={"group": body.group})
+    n = int(
+        await session.scalar(select(func.count()).select_from(eval_job.questions_query(group).subquery()))
+        or 0
+    )
+    codes = (await session.scalars(select(QaEvalRun.code))).all()
+    nums = [int(c[3:]) for c in codes if c.startswith("ER-") and c[3:].isdigit()]
+    run = QaEvalRun(
+        code=f"ER-{(max(nums) if nums else 0) + 1:04d}",  # 同前端 startRun：ER-最大号+1
+        run_at=clock.now(),
+        trigger_label="手动运行",
+        version_label=catalog.load("CUR_VERSION"),
+        scope=f"全部 {n} 题" if group is None else f"{group}相关 {n} 题",
+        total=n,
+        passed=0,
+        status=RunStatus.running,
+        operator=u.name,
+    )
+    session.add(run)
+    await session.flush()
+    await audit(session, user, action="qa.eval.run", target=run.code, detail={"group": body.group})
+    runner(run.code, group, llm, user)
+    return svc.run_out(run, 0)
+
+
+async def _fb(session, fid: str) -> QaFeedback:
+    return await r.FeedbackRepo(session).get_by_code_or_404(fid)
+
+
+async def _fb_out(session, f: QaFeedback) -> FeedbackDetailOut:
+    codes = await r.FeedbackRepo(session).user_codes([f.user_id] if f.user_id else [])
+    return await svc.feedback_detail(session, f, codes.get(f.user_id))
+
+
+def _need_open(f: QaFeedback, *allowed: FbStatus) -> None:
+    if f.status not in (allowed or (FbStatus.open,)):
+        raise StateInvalid(details={"id": f.code, "status": f.status.value})
+
+
+class SynonymCrPending(AppError):
+    """[推断] 词还没在任何变更单里：要新建 / 加入变更单，静态 X3 写接口（static-r3）未合入前不支持。"""
+
+    status_code, code, message = (
+        409,
+        "CR_API_PENDING",
+        "转为同义词需要新建变更单，静态模块的变更单写接口尚未接入",
+    )
+
+
+@tuning.post(
+    "/feedbacks/{fid}:to-synonym",
+    dependencies=_TM,
+    response_model=FbSynonymOut,
+    response_model_exclude_none=True,
+    summary="T15 转为同义词（已在变更单里 → 直接关联）",
+)
+async def feedback_to_synonym(
+    fid: str, body: FbSynonymIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
+):
+    _, u = await svc.effective_user(session, user, ctx)
+    f = await _fb(session, fid)
+    _need_open(f)
+    syn = await r.SynonymRepo(session).by_word(f.fix_text)
+    if syn is None or not syn.cr_code:
+        raise SynonymCrPending(details={"id": fid, "word": f.fix_text, "join": body.join})
+    st = (
+        FbStatus.await_release
+        if await svc.cr_status(session, syn.cr_code) == "已通过"
+        else FbStatus.to_synonym
+    )
+    same = (
+        await session.scalars(
+            select(QaFeedback).where(
+                QaFeedback.status == FbStatus.open,
+                QaFeedback.fix_kind == FixKind.synonym,
+                QaFeedback.fix_text == f.fix_text,
+            )
+        )
+    ).all()
+    targets = {x.id: x for x in [f, *same]}.values()  # 同一个词的待处理反馈一起改
+    for x in targets:
+        x.status, x.resolved_by, x.cr_code, x.handler = st, syn.cr_code, syn.cr_code, u.name
+    await session.flush()
+    affected = sorted(x.code for x in targets)
+    await audit(
+        session,
+        user,
+        action="qa.feedback.to_synonym",
+        target=f.code,
+        detail={"cr": syn.cr_code, "affected": affected},
+    )
+    return FbSynonymOut(cr_id=syn.cr_code, affected=affected, feedback=await _fb_out(session, f))
+
+
+class CertNoPlan(AppError):
+    status_code, code, message = 422, "CERT_NO_PLAN", "还没有可用的语义计划"
+
+
+@tuning.post(
+    "/feedbacks/{fid}:to-cert",
+    dependencies=_TM,
+    response_model=FbCertOut,
+    response_model_exclude_none=True,
+    summary="T16 转为认证问答（已有 → 加同问法；否则按语义计划新建并认证）",
+)
+async def feedback_to_cert(fid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    _, u = await svc.effective_user(session, user, ctx)
+    f = await _fb(session, fid)
+    _need_open(f)
+    existing, plan = await svc.feedback_plan(session, f)
+    if existing is not None:
+        c, mode = existing, "variant"
+    elif plan:
+        m = _metric_of(plan.get("metric"))
+        cr = m.get("cr") if m.get("cr") in _pending_crs() else None
+        c = await _new_cert(session, f.fix_text, plan, "反馈纠错", cr_code=cr, status=CertStatus.pending)
+        _certify(c, u.name)  # [推断] 同前端 toCert / T19：确认卡「认证」即认证；有未发布 CR → 待重新认证
+        mode = "new"
+    else:
+        raise CertNoPlan(details={"id": fid, "question": f.fix_text})
+    have = {v.question.lower() for v in c.variants}
+    if f.question != c.question and f.question.lower() not in have and len(f.question) <= 40:
+        taken = await session.scalar(
+            select(QaCertVariant.id).where(func.lower(QaCertVariant.question) == f.question.lower())
+        )
+        if taken is None:  # 同问法全局唯一：已挂在别处就不加
+            c.variants.append(QaCertVariant(question=f.question))
+    f.status, f.cert_id, f.resolved_by, f.handler = FbStatus.to_cert, c.id, c.code, u.name
+    await session.flush()
+    await audit(
+        session, user, action="qa.feedback.to_cert", target=f.code, detail={"cert": c.code, "mode": mode}
+    )
+    return FbCertOut(cert_id=c.code, mode=mode, feedback=await _fb_out(session, f))
+
+
+@tuning.post(
+    "/feedbacks/{fid}:ignore",
+    dependencies=_TM,
+    response_model=FeedbackDetailOut,
+    response_model_exclude_none=True,
+    summary="T17 忽略",
+)
+async def feedback_ignore(fid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    _, u = await svc.effective_user(session, user, ctx)
+    f = await _fb(session, fid)
+    _need_open(f)
+    f.status, f.handler = FbStatus.ignored, u.name
+    await session.flush()
+    await audit(session, user, action="qa.feedback.ignore", target=f.code)
+    return await _fb_out(session, f)
+
+
+@tuning.post(
+    "/feedbacks/{fid}:reopen",
+    dependencies=_TM,
+    response_model=FeedbackDetailOut,
+    response_model_exclude_none=True,
+    summary="T17 重新打开",
+)
+async def feedback_reopen(fid: str, session: SessionDep, user: CurrentUserDep):
+    f = await _fb(session, fid)
+    _need_open(f, FbStatus.ignored)
+    f.status, f.handler, f.resolved_by, f.cr_code, f.cert_id = FbStatus.open, None, None, None, None
+    await session.flush()
+    await audit(session, user, action="qa.feedback.reopen", target=f.code)
+    return await _fb_out(session, f)
 
 
 router.include_router(tuning)

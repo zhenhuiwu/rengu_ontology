@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta
 from typing import Any
 from xml.sax.saxutils import escape
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser, resolve_user, row_filter
@@ -372,14 +373,29 @@ def feedback_out(f: QaFeedback, user_code: str | None) -> FeedbackOut:
     return FeedbackOut(**feedback_fields(f, user_code))
 
 
+async def cr_status(session: AsyncSession, code: str | None) -> str | None:
+    """变更单状态（中文）；静态的 change_request 里没有这张单 → None。"""
+    if not code:
+        return None
+    from app.modules.static.models import ChangeRequest
+
+    st = await session.scalar(select(ChangeRequest.status).where(ChangeRequest.code == code))
+    return st.value if st is not None else None
+
+
+async def feedback_plan(session: AsyncSession, f: QaFeedback) -> tuple[Any, dict | None]:
+    """同 FeedbackTab.vue existing / planFor：(已有认证问答, 语义计划)。"""
+    existing = await r.CertRepo(session).by_question(f.fix_text)
+    if existing is not None:
+        return existing, existing.sem_plan
+    fq = await r.FreqRepo(session).by_question(f.fix_text)
+    eq = await r.EvalQuestionRepo(session).by_question(f.fix_text) if fq is None else None
+    return None, (fq.sem_plan if fq else None) or (eq.expect if eq else None)
+
+
 async def feedback_detail(session: AsyncSession, f: QaFeedback, user_code: str | None) -> FeedbackDetailOut:
     """同 FeedbackTab.vue：existing / planFor / certBlock / synCovered / relEvals。"""
-    existing = await r.CertRepo(session).by_question(f.fix_text)
-    plan = None
-    if existing is None:
-        fq = await r.FreqRepo(session).by_question(f.fix_text)
-        eq = await r.EvalQuestionRepo(session).by_question(f.fix_text) if fq is None else None
-        plan = (fq.sem_plan if fq else None) or (eq.expect if eq else None)
+    existing, plan = await feedback_plan(session, f)
     if existing or plan:
         block = ""
     elif f.fix_target and "新建" in f.fix_target:
@@ -394,6 +410,11 @@ async def feedback_detail(session: AsyncSession, f: QaFeedback, user_code: str |
         existing_cert=existing.code if existing else None,
         covered_by=syn.cr_code if syn else None,
         related_eval_count=rel,
+        existing_cert_question=existing.question if existing else None,
+        existing_cert_status=existing.status.value if existing else None,
+        plan=plan,
+        plan_text=catalog.plan_text(plan) if plan else None,
+        covered_cr_status=await cr_status(session, syn.cr_code) if syn else None,
     )
 
 
