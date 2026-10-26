@@ -24,3 +24,4 @@
 
 - 完成：`GET /api/admin/v1/me/row-scope`、`GET /api/admin/v1/tenants`，sys_tenant / sys_org（admin_0004），TopBar 读后台，`src/api/rowScope.ts` 给问数用。文档 `docs/backend/admin-tenants-row-scope-api.md`。
 - 未做：系统配置页租户信息保存；按组织过滤数据（一期单租户）；问数页面接 rowScope.ts 由问数负责。
+- 审核遗留（下一轮）：开发密钥启动时检查、只允许 dev/test；`PERM_OBJECTS` / `SCOPE_PROPS` 改读本体对象类型和 `/meta` 属性标记；删除角色后 `sys_user.role` 仍指向旧名；`_next_num` 并发撞号加锁；编辑连接改了 host/port/user 时要求重填密码。
