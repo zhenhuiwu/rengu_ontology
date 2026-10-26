@@ -12,7 +12,8 @@ import QaStoreAnswer from './QaStoreAnswer.vue';
 import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer } from '@/api/qa';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
 const props = defineProps<{ applied: boolean; tips: string[] }>();
-const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'apply', turnId?: string): void }>();
+/** pin：真接口时带这一轮的 id 和问题（固定到页面 P7 用） */
+const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin', turn?: { id: string; title: string }): void; (e: 'apply', turnId?: string): void }>();
 const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
@@ -83,7 +84,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
     </template>
     <template v-else-if="t.kind === 'answer'">
     <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="live ? t.id : undefined" />
-    <QaAnswer v-else :card="t.answer" :turn-id="live ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @pin="emit('pin')" @clarify="(l: string) => onClarify(t, l)" />
+    <QaAnswer v-else :card="t.answer" :turn-id="live ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @pin="emit('pin', live ? { id: t.id, title: t.question } : undefined)" @clarify="(l: string) => onClarify(t, l)" />
     </template>
     <div v-else-if="t.kind === 'denied'" class="qa-b">
       <LockOutlined class="c-3" />

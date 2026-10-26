@@ -82,6 +82,10 @@ function toPage() {
   router.push({ path: '/use/qa/pages', query: { newName: title } });
 }
 function onPinned(page: string) { pin.value = ''; message.success(`已固定到「${page}」`); }
+/** 固定到页面：真接口时记下是哪一轮（P7 用）；演示数据固定第一个会话的主回答卡 */
+const PIN_DEMO_TITLE = '上个月华东大区复购客户的销售额（按省份）';
+const pinTurn = ref<{ id: string; title: string }>();
+function openPin(t?: { id: string; title: string }) { pinTurn.value = t; pin.value = '1'; }
 /* 真接口（W16）：申请的是点了「申请权限」的那一轮；刷新后（?apply=1 复现）按本会话最后一个未申请的越权轮次 [推断] */
 const applyTurn = ref('');
 const applying = ref(false);
@@ -191,12 +195,12 @@ onMounted(() => {
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
       <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
-      <QaConversation :applied="applied" :tips="tips" @suggest="runAction()" @pin="pin = '1'" @apply="openApply" />
+      <QaConversation :applied="applied" :tips="tips" @suggest="runAction()" @pin="openPin" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
     <QaObjectPanel :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />
   </div>
-  <QaPinModal :open="pin === '1'" card="上个月华东大区复购客户的销售额（按省份）" @close="pin = ''" @done="onPinned" />
+  <QaPinModal :open="pin === '1'" :card="pinTurn?.title ?? PIN_DEMO_TITLE" :turn-id="pinTurn?.id" @close="pin = ''" @done="onPinned" />
   <QaListDrawer :panel="panel" @close="panel = ''" @ask="panel = ''" />
   <QaApplyDrawer :open="apply === '1'" :submitting="applying" @close="apply = ''" @submit="onApplied" />
 </template>
