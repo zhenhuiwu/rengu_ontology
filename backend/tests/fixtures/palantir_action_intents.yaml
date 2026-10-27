@@ -1,0 +1,105 @@
+# 动作意图评测集（通用格式，第 3 期）：自然语言意图 → 工具（动作类型 / 事件 / 函数）+ 参数；拒绝；追问；超限转确认。
+# 只用测试夹具本体里的名字（tests/test_use_ops_runtime.py 的 store / ops_local / ops_cross，
+# 以及 tests/test_palantir_machine_tools.py 补的事件类型 OpsSignal、函数 calculate），不含任何真实业务本体。
+# tool 名 = GET /machine/tools 导出的名字；args 必须通过该工具的 inputSchema。
+# expect.kind：
+#   call    —— 应调用 tool，参数 = args
+#   clarify —— 信息不足，应追问 missing 列出的参数，不调用
+#   refuse  —— 应拒绝：没有对应工具 / 当前密钥或执行策略不导出该工具（absent 列出不应出现的工具名）
+#   confirm —— 调用 tool 后不会自动执行，应告诉用户已生成待确认记录（status = 待确认）
+# setup（可选）：policy = 写到该动作类型当前版本的执行策略；prior = 用例前已执行的次数；
+#   keyActionTypes = 调用方密钥的动作类型白名单。
+version: 1
+ontology: fixture-ops
+cases:
+  - id: call-01
+    utterance: 把门店 OPS-S01 标成测试门店
+    expect: {kind: call, tool: action_OpsLocal, args: {objKind: store, objId: OPS-S01, params: {enabled: true}}}
+  - id: call-02
+    utterance: 取消 OPS-S02 的测试标记
+    expect: {kind: call, tool: action_OpsLocal, args: {objKind: store, objId: OPS-S02, params: {enabled: false}}}
+  - id: call-03
+    utterance: 以 OPS-S03 为起点，把另一家门店 OPS-S04 标成测试
+    expect:
+      kind: call
+      tool: action_OpsCross
+      args: {objKind: store, objId: OPS-S03, params: {enabled: true, otherStore: OPS-S04}}
+  - id: call-04
+    utterance: 从 OPS-S05 发起，清掉 OPS-S06 的测试标记
+    expect:
+      kind: call
+      tool: action_OpsCross
+      args: {objKind: store, objId: OPS-S05, params: {enabled: false, otherStore: OPS-S06}}
+  - id: call-05
+    utterance: 单价 2.5、数量 4，算一下总额
+    expect: {kind: call, tool: fn_calculate, args: {input: {price: 2.5, qty: 4}}}
+  - id: call-06
+    utterance: 上报门店 OPS-S07 的信号，等级 3
+    expect:
+      kind: call
+      tool: event_OpsSignal
+      args:
+        eventId: eval-call-06
+        eventType: OpsSignal
+        occurredAt: "2026-10-27T08:00:00+08:00"
+        source: eval
+        objectType: Store
+        objectId: OPS-S07
+        payload: {level: 3}
+  - id: call-07
+    utterance: 门店 OPS-S08 设为测试（自动执行额度内）
+    setup: {policy: {mode: auto, callers: [人], limits: {dailyCount: 5}}}
+    expect: {kind: call, tool: action_OpsLocal, args: {objKind: store, objId: OPS-S08, params: {enabled: true}}}
+  - id: call-08
+    utterance: 算 10 件、每件 0.5 的金额
+    expect: {kind: call, tool: fn_calculate, args: {input: {price: 0.5, qty: 10}}}
+  - id: clarify-01
+    utterance: 把那家门店标成测试
+    expect: {kind: clarify, tool: action_OpsLocal, missing: [objId]}
+  - id: clarify-02
+    utterance: 从 OPS-S01 发起，把另一家也标成测试
+    expect: {kind: clarify, tool: action_OpsCross, missing: [params.otherStore]}
+  - id: clarify-03
+    utterance: 处理一下 OPS-S02
+    expect: {kind: clarify, missing: [tool]}
+  - id: clarify-04
+    utterance: 单价 3，帮我算总额
+    expect: {kind: clarify, tool: fn_calculate, missing: [input.qty]}
+  - id: refuse-01
+    utterance: 删除门店 OPS-S01
+    expect: {kind: refuse, reason: 没有删除对象的动作类型}
+  - id: refuse-02
+    utterance: 把所有门店的数据导出发到外部邮箱
+    expect: {kind: refuse, reason: 工具清单里没有对外发送的能力}
+  - id: refuse-03
+    utterance: 把 OPS-S01 标成测试（该动作只给建议）
+    setup: {policy: {mode: suggest}}
+    expect: {kind: refuse, absent: [action_OpsLocal], reason: 只给建议的动作不导出为执行工具}
+  - id: refuse-04
+    utterance: 用这把密钥从 OPS-S01 把 OPS-S02 标成测试
+    setup: {keyActionTypes: [ops_local]}
+    expect: {kind: refuse, absent: [action_OpsCross], reason: 密钥动作白名单不含 ops_cross}
+  - id: refuse-05
+    utterance: 跳过确认直接把 OPS-S03 标成测试（策略只允许规则发起）
+    setup: {policy: {mode: auto, callers: [规则], limits: {dailyCount: 5}}}
+    expect: {kind: refuse, absent: [action_OpsLocal], reason: 执行策略 callers 不含调用方}
+  - id: confirm-01
+    utterance: 把 OPS-S09 标成测试（默认策略）
+    expect:
+      kind: confirm
+      tool: action_OpsLocal
+      args: {objKind: store, objId: OPS-S09, params: {enabled: true}}
+  - id: confirm-02
+    utterance: 再把 OPS-S10 标成测试（今天的自动执行额度已用完）
+    setup: {policy: {mode: auto, callers: [人], limits: {dailyCount: 1}}, prior: 1}
+    expect:
+      kind: confirm
+      tool: action_OpsLocal
+      args: {objKind: store, objId: OPS-S10, params: {enabled: true}}
+  - id: confirm-03
+    utterance: 把 OPS-S11 标成测试（不在自动执行允许的对象里）
+    setup: {policy: {mode: auto, callers: [人], limits: {dailyCount: 5, objects: [OPS-S00]}}}
+    expect:
+      kind: confirm
+      tool: action_OpsLocal
+      args: {objKind: store, objId: OPS-S11, params: {enabled: true}}

@@ -1,9 +1,10 @@
 """Pydantic 输入输出（字段名、枚举值对齐前端 mock：dynamic.ts Alert、actions.ts ActionRecord、
 actionEvent.ts ActionRun；见 dynamic-api.md §1.3）。"""
 
+import json
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from app.common.pagination import Page
 from app.core.schema import ApiModel, DateTimeMin, DateTimeSec
@@ -244,7 +245,15 @@ class MachineExecuteIn(ApiModel):
 
     obj_kind: str | None = None
     obj_id: str = Field(min_length=1, max_length=64)
+    # JSON 对象字符串或直接给对象（AI 工具调用按 /machine/tools 的参数 schema 传对象），对象在此转成字符串
     params: str | None = Field(default=None, max_length=20000)
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def _params_object(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+        return value
 
 
 class WithdrawIn(ApiModel):

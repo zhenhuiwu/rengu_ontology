@@ -2,7 +2,8 @@
 
 > 2026-10-27（UTC+8）重写。分支 `palantir-t1`（基于 `283bd89`，先 cherry-pick PDE 的测试夹具修复 `5e3282e` → `98d127a`）。
 > 2026-10-27（UTC+8）追加：分支 `palantir-t2`（基于 `bc32ce6`）= 执行策略 + 机器接口 + 入站服务账号，见 §0。
-> 接口细节见 `frontend/docs/backend/action-event-api.md`（§14 = Webhook 签名/重试合同；§15 = 执行策略/机器接口/入站）；设计见 `backend/docs/backend/palantir-tier1-design.md`。
+> 2026-10-27（UTC+8）追加：分支 `palantir-t3`（基于 `c55f370`）= 机器接口第 3 期（对象查询 / 函数调用 / AI 工具清单 / 评测集），见 §0.1。
+> 接口细节见 `frontend/docs/backend/action-event-api.md`（§14 = Webhook 签名/重试合同；§15 = 执行策略/机器接口/入站；§16 = 机器接口第 3 期）；设计见 `backend/docs/backend/palantir-tier1-design.md`。
 > 用户已定：**不接 ERP、Kafka，不做外部定时对账**；Web 系统对接走 Webhook。标注：【仓库】代码现状，【推断】我的取舍。
 
 ## 0. palantir-t2：执行策略 / 机器接口 / 入站服务账号（无迁移）
@@ -17,6 +18,22 @@
 | 测试 | `tests/test_palantir_policy.py`（20）、`tests/test_palantir_machine.py`（4） | 跑法须带 `-p tests.use_ops_support` |
 
 取舍【推断】：策略存版本定义 JSON、额度按时间线日志计数，避免迁移；服务账号调用在额度内也转人工（执行链按在用用户解析执行人，代执行需 runAs 设计）；服务账号发起的记录不指定确认人。
+
+## 0.1 palantir-t3：机器接口第 3 期（无迁移）
+
+| 项 | 状态 | 位置 |
+|---|---|---|
+| `POST /machine/objects:query`（`objects:read`），复用问数检索与行级范围 | 完成 | `machine/router.py`（用 `qa/explore_api.py` 的 `_bind` / `_facets` / `_item`） |
+| `POST /machine/functions/{id}:invoke`（`functions:invoke`），只允许已发布 | 完成 | `machine/router.py` → `functions/runtime.py` |
+| `GET /machine/tools?format=mcp\|openai`（`meta:read`） | 完成，静态能力目录的薄转换 + 密钥白名单 | `machine/tools.py` → `static/capabilities.py`（未改） |
+| 执行响应 `checks` / `edits` / `retryable`；`params` 可传对象 | 完成 | `dynamic/router.py` `_machine_out`、`dynamic/schemas.py` |
+| 动作意图评测集（20 条） | 完成 | `tests/fixtures/palantir_action_intents.yaml` |
+| 文档 | §16 | `frontend/docs/backend/action-event-api.md` |
+| 测试 | `tests/test_palantir_machine_tools.py` | 跑法须带 `-p tests.use_ops_support` |
+
+取舍【推断】：对象查询没直接调 `explore_search`，因为它按 `effective_viewer` 解析会话用户，服务账号过不去，所以复刻其核心（同一 `bd.stmt(user)` 行范围）；`checks` 只能表达“全部通过”（不通过在暂存时就 422）；`edits` 是声明不是实际值。
+
+需要静态能力目录（`static/capabilities.py`，未改）补的钩子：① 事件类型段（现由 `machine/tools.py` 自己读）；② 动作参数的规则 / 枚举选项与描述模板（现枚举参数导出为字符串）；③ 按段计算（现在工具清单也要付指标就绪度、规则、行范围的计算成本）。
 
 ## 1. 第一档 Webhook 出站（palantir-t1，已合入）
 
@@ -65,7 +82,7 @@
 5. 签名头名、签名串、5 分钟时间窗需与接入方确认【推断】。
 6. 旧遗留：静态①两标签页并发编辑提示（部分）、静态③事件行级范围（等定义）、编号锁去锁反证、`VITE_PALANTIR_CR_WRITE` 默认打开（等决定）。
 7. 执行策略缺口（t2）：评测门槛 `evalPassedAt` 未接；`objects` 只是 ID 列表（非行范围）；规则/告警/问数/推演来源不自动执行；服务账号不自动执行（缺 runAs）；`suggest` 未在试运行/选项接口展示；无前端策略编辑器。
-8. 机器接口缺口（t2）：`/machine/objects:query`、函数调用别名、AI 工具导出、响应 `checks`/`edits`/`retryable` 未做；动作意图评测未做。
+8. 机器接口缺口（t3 后）：函数无按密钥白名单；`suggest` 动作不导出、无试运行工具；清单无对象查询工具；只读角色用户的密钥不能调 `/machine` POST（`auth.py` 纯读判定未改）；对象查询依赖问数模块私有函数；静态能力目录钩子见 §0.1。
 
 ## 6. 划掉的项（不再做）
 
