@@ -42,24 +42,35 @@ async def test_object_dynamic_summary(dyn, client):  # noqa: F811
 
 
 async def test_object_dynamic_summary_api_key(dyn, client):  # noqa: F811
-    """服务账号 / API 密钥：objects:read 能调摘要；没有该 scope 的密钥 403。"""
+    """API 密钥：objects:read 能调摘要但动态段 missing-scope；objects:read + dynamic:read 看到各段；
+    没有 objects:read 的密钥 403；dynamic:read 也放行告警列表等只读接口。"""
     changes = await client.get(f"{API}/object-types/order/lifecycle/changes", params={"size": 1})
     obj = changes.json()["items"][0]
     url = f"{API}/object-types/order/objects/{obj['objId']}/dynamic-summary"
     admin = {"X-Demo-As": "U010245"}
     tokens = {}
-    for scope in ("objects:read", "meta:read"):
+    for name, scopes in {
+        "obj": ["objects:read"],
+        "dyn": ["objects:read", "dynamic:read"],
+        "meta": ["meta:read"],
+    }.items():
         body = {
-            "name": "k-summary-" + scope.split(":")[0],
+            "name": "k-summary-" + name,
             "env": "测试",
-            "scopes": [scope],
+            "scopes": scopes,
             "binding": {"kind": "用户", "userId": "U010245"},
         }
         r = await client.post("/api/admin/v1/api-keys", json=body, headers=admin)
         assert r.status_code == 201, r.text
-        tokens[scope] = r.json()["secret"]
-    ok = await client.get(url, headers={"Authorization": f"Bearer {tokens['objects:read']}"})
-    assert ok.status_code == 200, ok.text
-    assert ok.json()["id"] == obj["objId"]
-    denied = await client.get(url, headers={"Authorization": f"Bearer {tokens['meta:read']}"})
-    assert denied.status_code == 403, denied.text
+        tokens[name] = {"Authorization": f"Bearer {r.json()['secret']}"}
+    sections = ("alerts", "ruleHits", "lifecycle", "actionRuns")
+    only_obj = await client.get(url, headers=tokens["obj"])
+    assert only_obj.status_code == 200, only_obj.text
+    assert only_obj.json()["id"] == obj["objId"]
+    assert all(only_obj.json()[k]["reason"] == "missing-scope" for k in sections)
+    full = await client.get(url, headers=tokens["dyn"])
+    assert full.status_code == 200, full.text
+    assert all(full.json()[k]["available"] is True for k in sections), full.json()
+    assert (await client.get(url, headers=tokens["meta"])).status_code == 403
+    assert (await client.get(f"{API}/alerts", headers=tokens["dyn"])).status_code == 200
+    assert (await client.get(f"{API}/alerts", headers=tokens["obj"])).status_code == 403

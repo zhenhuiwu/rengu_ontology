@@ -5,7 +5,10 @@
 - 每一段再各自走 scoped_instances（告警 / 命中 / 动作沿用各自列表的实现；生命周期变化按对象类型 + objId）；
 - 路由入口要求对象读取（同对象详情；API 密钥 objects:read）；告警 / 命中 / 生命周期 / 动作段另需
   alerts / rules / object-types / action-center view，
-  缺权限的段返回 {"available": false, "reason": "no-permission"}。
+  缺权限的段返回 {"available": false, "reason": "no-permission"}；
+- API 密钥调用时各段另需 dynamic:read 范围（本体小白的范围约定），缺范围的段返回
+  {"available": false, "reason": "missing-scope", "required": "dynamic:read"}。不在路由上声明
+  require_api_scope("dynamic:read")：路由级声明的范围要求全部具备，会把只有 objects:read 的密钥整体 403。
 全部按元数据（对象类型目录、生命周期定义、数据绑定）取值，不写死任何业务对象。"""
 
 import re
@@ -26,6 +29,8 @@ from app.modules.dynamic.service import ALERT_TABS, ActionService, AlertService,
 
 SUMMARY_MAX_LIMIT = 50
 NO_PERMISSION = {"available": False, "reason": "no-permission"}
+SECTION_SCOPE = "dynamic:read"
+MISSING_SCOPE = {"available": False, "reason": "missing-scope", "required": SECTION_SCOPE}
 
 
 def _state_key(bound: Any, field: str) -> str | None:
@@ -42,8 +47,18 @@ def _dump(model: Any) -> Any:
 
 
 class ObjectDynamicSummary:
-    def __init__(self, session: AsyncSession, user: CurrentUser, catalog: Any, ports: Any) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        catalog: Any,
+        ports: Any,
+        *,
+        api_scopes: tuple[str, ...] | None = None,
+    ) -> None:
+        """api_scopes：API 密钥调用时为密钥范围（request.state.api_key.scopes），人工会话为 None。"""
         self.session = session
+        self.api_scopes = api_scopes
         self.user = user
         self.catalog = catalog
         self.alerts = AlertService(session, user, catalog, ports)
@@ -66,6 +81,7 @@ class ObjectDynamicSummary:
             "lifecycle": ("object-types", self._lifecycle),
             "actionRuns": ("action-center", self._actions),
         }
+        scoped = self.api_scopes is None or SECTION_SCOPE in self.api_scopes
         allowed = {name: self._can(page) for name, (page, _) in sections.items()}
         out: dict[str, Any] = {
             "objKind": kind,
@@ -74,7 +90,10 @@ class ObjectDynamicSummary:
             "limit": limit,
         }
         for name, (_, load) in sections.items():
-            out[name] = await load(kind, obj_id, limit) if allowed[name] else dict(NO_PERMISSION)
+            if not scoped:
+                out[name] = dict(MISSING_SCOPE)
+            else:
+                out[name] = await load(kind, obj_id, limit) if allowed[name] else dict(NO_PERMISSION)
         labels = [
             x.get("objLabel")
             for key in ("alerts", "ruleHits", "actionRuns")

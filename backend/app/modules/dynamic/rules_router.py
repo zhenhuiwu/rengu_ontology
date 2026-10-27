@@ -48,6 +48,10 @@ SC_VIEW = [Depends(require_func("scenarios", "view"))]
 SC_MANAGE = [Depends(require_func("scenarios", "manage"))]
 OT_VIEW = [Depends(require_func("object-types", "view"))]
 OT_MANAGE = [Depends(require_func("object-types", "manage"))]
+# 只读的命中 / 生命周期接口另放行 API 密钥 dynamic:read（行级数据另需 objects:read）
+DYNAMIC_READ = Depends(require_api_scope("dynamic:read"))
+RULES_READ = [DYNAMIC_READ, *RULES_VIEW]
+OT_READ = [DYNAMIC_READ, *OT_VIEW]
 DictPage = Page[dict[str, Any]]
 
 
@@ -124,12 +128,14 @@ async def object_automation_hits(
 
 @router.get(
     "/object-types/{object_id}/objects/{obj_id}/dynamic-summary",
-    # API 密钥（服务账号）凭 objects:read 可调；入口与对象详情同一读取门槛（object-search / object-detail）
+    # API 密钥（服务账号）凭 objects:read 可调；入口与对象详情同一读取门槛（object-search / object-detail）。
+    # 四个动态段另需 dynamic:read（在 ObjectDynamicSummary 里按段判断，不在路由上要求）
     dependencies=[Depends(require_api_scope("objects:read")), Depends(require_object_read)],
 )
 async def object_dynamic_summary(
     object_id: Annotated[str, Path(max_length=64, pattern=r"^[^\x00]+$")],
     obj_id: Annotated[str, Path(max_length=64, pattern=r"^[^\x00]+$")],
+    request: Request,
     session: SessionDep,
     user: CurrentUserDep,
     catalog: Annotated[DatabaseRefCatalog, Depends(get_list_catalog)],
@@ -139,8 +145,11 @@ async def object_dynamic_summary(
     """单个对象实例的动态摘要（问数 / AI 只读）：未关闭告警、近期规则命中、生命周期当前状态与变化、近期动作。
     入口要求对象读取（object-search / object-detail view，同对象详情；API 密钥需 objects:read）；
     行级可见性与各列表接口一致；告警 / 规则命中 / 生命周期 / 动作段另按
-    alerts / rules / object-types / action-center view 给出，缺权限的段 available=false。"""
-    return await ObjectDynamicSummary(session, user, catalog, ports).get(object_id, obj_id, limit=limit)
+    alerts / rules / object-types / action-center view 给出，缺权限的段 available=false；
+    API 密钥另需 dynamic:read，缺范围的段 reason=missing-scope。"""
+    key = getattr(request.state, "api_key", None)
+    summary = ObjectDynamicSummary(session, user, catalog, ports, api_scopes=key.scopes if key else None)
+    return await summary.get(object_id, obj_id, limit=limit)
 
 
 @router.get("/rules/meta", dependencies=RULES_VIEW)
@@ -181,7 +190,7 @@ async def save_rule_draft(svc: RuleSvc, rule_id: str, body: RuleDraftIn) -> dict
     return await svc.save_draft(rule_id, body)
 
 
-@router.get("/rules/{rule_id}/hits", dependencies=RULES_VIEW, response_model=DictPage)
+@router.get("/rules/{rule_id}/hits", dependencies=RULES_READ, response_model=DictPage)
 async def rule_hits(
     svc: RuleSvc,
     rule_id: str,
@@ -198,7 +207,7 @@ async def rule_runs(
     return await svc.schedule_runs(rule_id, params)
 
 
-@router.get("/rule-hits/{hit_id}", dependencies=RULES_VIEW)
+@router.get("/rule-hits/{hit_id}", dependencies=RULES_READ)
 async def rule_hit(
     svc: RuleSvc, session: SessionDep, user: CurrentUserDep, ports: PortsDep, hit_id: str
 ) -> dict[str, Any]:
@@ -362,7 +371,7 @@ async def _release(session: SessionDep, ctx: ViewContextDep) -> OntologyRelease 
     return rel
 
 
-@router.get("/object-types/{object_id}/lifecycle", dependencies=OT_VIEW)
+@router.get("/object-types/{object_id}/lifecycle", dependencies=OT_READ)
 async def get_lifecycle(
     svc: LcSvc,
     object_id: str,
@@ -374,7 +383,7 @@ async def get_lifecycle(
     return await svc.detail(object_id, view=view, cr=cr, release=release)
 
 
-@router.get("/object-types/{object_id}/lifecycle/changes", dependencies=OT_VIEW, response_model=DictPage)
+@router.get("/object-types/{object_id}/lifecycle/changes", dependencies=OT_READ, response_model=DictPage)
 async def lifecycle_changes(
     svc: LcSvc,
     object_id: str,
@@ -388,7 +397,7 @@ async def lifecycle_changes(
     return await svc.changes(object_id, params, illegal=bool(illegal))
 
 
-@router.get("/object-types/{object_id}/lifecycle/illegal", dependencies=OT_VIEW)
+@router.get("/object-types/{object_id}/lifecycle/illegal", dependencies=OT_READ)
 async def lifecycle_illegal(
     svc: LcSvc,
     object_id: str,

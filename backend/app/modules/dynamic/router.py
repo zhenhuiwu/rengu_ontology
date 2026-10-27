@@ -71,6 +71,11 @@ ALERTS_VIEW = [Depends(require_func("alerts", "view"))]
 ALERTS_MANAGE = [Depends(require_func("alerts", "manage"))]
 ACTIONS_VIEW = [Depends(require_func("action-center", "view"))]
 ACTIONS_MANAGE = [Depends(require_func("action-center", "manage"))]
+# 只读接口另放行 API 密钥 dynamic:read（本体小白的 require_api_scope；人工会话不受影响）。
+# 注意：行级数据只随 objects:read 下发，只有 dynamic:read 的密钥看到的是空列表 / 404。
+DYNAMIC_READ = Depends(require_api_scope("dynamic:read"))
+ALERTS_READ = [DYNAMIC_READ, *ALERTS_VIEW]
+ACTIONS_READ = [DYNAMIC_READ, *ACTIONS_VIEW]
 
 
 def _alerts(session: SessionDep, user: CurrentUserDep, catalog: CatalogDep, ports: PortsDep) -> AlertService:
@@ -122,7 +127,7 @@ FILTERS_DOC = (
 )
 
 
-@router.get("/alerts", response_model=AlertPage, dependencies=ALERTS_VIEW)
+@router.get("/alerts", response_model=AlertPage, dependencies=ALERTS_READ)
 async def list_alerts(
     page: AlertPageQ,
     svc: Annotated[AlertService, Depends(_alert_list)],
@@ -146,7 +151,7 @@ async def list_alerts(
     )
 
 
-@router.get("/alerts/facets", dependencies=ALERTS_VIEW)
+@router.get("/alerts/facets", dependencies=ALERTS_READ)
 async def alert_facets(
     svc: Annotated[AlertService, Depends(_alert_list)],
     status_: Annotated[str, Query(alias="status")] = "open",
@@ -169,7 +174,7 @@ async def alert_facets(
     )
 
 
-@router.get("/alerts/meta", dependencies=ALERTS_VIEW)
+@router.get("/alerts/meta", dependencies=ALERTS_READ)
 async def alerts_meta(session: SessionDep) -> dict[str, Any]:
     from sqlalchemy import select
 
@@ -183,7 +188,7 @@ async def alerts_meta(session: SessionDep) -> dict[str, Any]:
     }
 
 
-@router.get("/alerts/{code}", response_model=AlertDetail, dependencies=ALERTS_VIEW)
+@router.get("/alerts/{code}", response_model=AlertDetail, dependencies=ALERTS_READ)
 async def get_alert(code: str, svc: Annotated[AlertService, Depends(_alert_detail)]) -> AlertDetail:
     # The catalog dependency validates code before its first database lookup.
     return await svc.detail(await svc.get(code))
@@ -224,7 +229,7 @@ async def start_action(
     return StartActionOut(alert=await svc.detail(alert), action=await acts.detail(run))
 
 
-@router.get("/people", dependencies=ALERTS_VIEW)
+@router.get("/people", dependencies=ALERTS_READ)
 async def people(alert_id: Annotated[str, Query(alias="alertId")], svc: AlertSvc) -> list[dict[str, str]]:
     return await svc.people(alert_id)
 
@@ -232,7 +237,7 @@ async def people(alert_id: Annotated[str, Query(alias="alertId")], svc: AlertSvc
 # ---------------- 动作 ----------------
 
 
-@router.get("/action-runs", response_model=ActionRunPage, dependencies=ACTIONS_VIEW)
+@router.get("/action-runs", response_model=ActionRunPage, dependencies=ACTIONS_READ)
 async def list_action_runs(
     page: ActionPageQ,
     svc: Annotated[ActionService, Depends(_action_list)],
@@ -266,7 +271,7 @@ async def list_action_runs(
     )
 
 
-@router.get("/actions/meta", dependencies=ACTIONS_VIEW)
+@router.get("/actions/meta", dependencies=ACTIONS_READ)
 async def actions_meta(
     catalog: Annotated[DatabaseRefCatalog, Depends(get_meta_catalog)], _user: CurrentUserDep
 ) -> dict[str, Any]:
@@ -391,7 +396,7 @@ async def validate_launch(code: DynamicPathCode, body: LaunchValidateIn, svc: Ac
     return {"passed": True, "message": "参数和提交条件通过"}
 
 
-@router.get("/action-runs/{code}", response_model=ActionRunDetail, dependencies=ACTIONS_VIEW)
+@router.get("/action-runs/{code}", response_model=ActionRunDetail, dependencies=ACTIONS_READ)
 async def get_action_run(
     code: DynamicPathCode, svc: Annotated[ActionService, Depends(_action_list)]
 ) -> ActionRunDetail:
