@@ -11,7 +11,7 @@ function load(path, imports, expose = '') {
   if (path.endsWith('.vue')) source = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
   const exports = {};
   const { outputText } = ts.transpileModule(`${source}\n${expose}`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } });
-  runInNewContext(outputText, { exports, require: (name) => {
+  runInNewContext(outputText, { exports, sessionStorage: imports.sessionStorage, require: (name) => {
     if (name in imports) return imports[name];
     if (name === 'vue') return vue;
     if (name.endsWith('.vue')) return {};
@@ -85,6 +85,7 @@ assert.equal(runSummary(), 'mock');
 real = true;
 
 const watchers = [];
+const rememberedSearch = new Map();
 const route = vue.reactive({ query: { type: 'store', id: '1' } });
 const metaPending = [];
 const pageImports = {
@@ -98,8 +99,9 @@ const pageImports = {
   '../qa/qaFallback': { qaLive: vue.ref(true) }, '../qa/useQaSession': {},
   './objMeta': { metaContextKey: metaApi.metaContextKey, listTypes: async () => [type], loadMeta: () => { const pending = defer(); metaPending.push(pending); return pending.promise; } },
   './objRows': {},
+  sessionStorage: { setItem: (key, value) => rememberedSearch.set(key, value) },
 };
-const search = load('pages/objects/ObjectSearch.vue', pageImports, 'export { meta };');
+const search = load('pages/objects/ObjectSearch.vue', pageImports, 'export { meta, selKeys, types };');
 const loadSearchMeta = watchers[1].callback;
 const firstSearch = loadSearchMeta(['store']);
 context = { demoAs: 'new', ver: 'v4' };
@@ -108,6 +110,28 @@ metaPending[1].resolve({ id: 'store', name: 'new' }); await secondSearch;
 metaPending[0].resolve({ id: 'store', name: 'old' }); await firstSearch;
 assert.equal(search.meta.value.name, 'new', 'same-type context changes must discard late metadata');
 assert.equal(watchers[1].sources[1].value, metaApi.metaContextKey(), 'search must watch the context as well as the type');
+const selectionWatch = watchers.find(({ sources }) => Array.isArray(sources) && sources.length === 4);
+assert.ok(selectionWatch, 'selection must watch type, context, keyword and filters');
+search.selKeys.value = ['old-store'];
+route.query.kw = 'Shanghai';
+assert.equal(selectionWatch.sources[2].value, 'Shanghai');
+selectionWatch.callback();
+assert.equal(search.selKeys.value.length, 0, 'new search scopes cannot retain hidden selections');
+search.selKeys.value = ['store-on-another-page'];
+const originalScope = selectionWatch.sources.map((s) => typeof s === 'function' ? s() : s.value);
+route.query.page = '2'; route.query.sort = '-code';
+assert.deepEqual(selectionWatch.sources.map((s) => typeof s === 'function' ? s() : s.value), originalScope,
+  'page and sort must not invalidate selections within the same search scope');
+assert.equal(search.selKeys.value.length, 1);
+route.query.f = '{"city":["Shanghai"]}';
+assert.notEqual(selectionWatch.sources[3](), originalScope[3]);
+selectionWatch.callback();
+assert.equal(search.selKeys.value.length, 0, 'facet changes must clear old selections');
+search.types.value = [type]; delete route.query.type;
+watchers.at(-1).callback();
+assert.equal(JSON.parse([...rememberedSearch.values()].at(-1)).type, 'store', 'remember the resolved default type so detail returns preserve filters');
+assert.equal(JSON.parse([...rememberedSearch.values()].at(-1)).kw, 'Shanghai');
+route.query.type = 'store';
 watchers.length = 0;
 metaPending.length = 0;
 const detail = load('pages/objects/ObjectDetail.vue', {

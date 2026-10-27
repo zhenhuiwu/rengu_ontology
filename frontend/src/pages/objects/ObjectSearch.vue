@@ -154,7 +154,7 @@ const isUnbound = (k: string) => !!res.value && !res.value.boundProps.includes(k
 
 /* 多选、导出、提问 */
 const selKeys = ref<string[]>([]);
-watch([typeId, contextKey], () => { selKeys.value = []; });
+watch([typeId, contextKey, kw, () => JSON.stringify(filters.value)], () => { selKeys.value = []; }, { flush: 'sync' });
 const query = computed(() => ({ kw: kw.value, filters: filters.value }));
 async function exportCsv() {
   const m = meta.value; if (!m) return;
@@ -182,8 +182,8 @@ const liveAsk = computed<objApi.ScopedAskIn | undefined>(() => (qaLive.value && 
 const askSuggestions = computed(() => meta.value ? qaLive.value ? meta.value.scopeQuestions ?? [] : meta.value.sampleQuestions : []);
 
 /* 记住当前搜索条件，详情页面包屑用来返回 */
-watch(() => route.fullPath, () => {
-  const q = { ...route.query }; delete q.drawer; delete q.drawer2; delete q.ask;
+watch([() => route.fullPath, typeId], () => {
+  const q: LocationQueryRaw = { ...route.query, ...(typeId.value ? { type: typeId.value } : {}) }; delete q.drawer; delete q.drawer2; delete q.ask;
   try { sessionStorage.setItem(`obj-search:last:${currentApiContext().ontologyId}`, JSON.stringify(q)); } catch { /* private mode */ }
 }, { immediate: true });
 const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/detail', query: { ...contextQuery(), type: typeId.value, id: r.id } });
