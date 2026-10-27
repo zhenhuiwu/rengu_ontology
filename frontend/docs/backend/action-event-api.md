@@ -901,3 +901,44 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 放弃草稿 | 先弹确认卡；确认后 `DELETE /{id}/targets/{kind}/{targetId}`，成功后调 `useDraftView().cancel(id)` 撤掉登记并切回已发布版 |
 | 提交审核 | `POST /{id}:submit`；没有审核人返回 409 `CR_NO_REVIEWER`，页面弹 `提交审核失败：还没有指定审核人（CR_NO_REVIEWER）`，不跳转 |
 
+
+## 14. Webhook 出站：签名与自动重试（分支 `palantir-t1`，2026-10-27）
+
+> 设计与取舍见 `backend/docs/backend/palantir-tier1-design.md`。头名与签名串格式为本仓库自定【推断】，接入方需按此实现验签。
+
+### 14.1 适用范围
+
+| 出站 | 签名 | 自动重试 |
+|---|---|---|
+| 动作副作用 通知/Webhook（`action.effect` outbox） | 是 | 是 |
+| 事件 HTTP 投递（`event_delivery`） | 是 | 是 |
+| 动作写回提交（外部执行器，`writeback_call`） | 是 | **否**（结果未知转对账，不重发业务写入【仓库】；与 §2 表“明确失败自动重试”的描述不一致，以代码为准） |
+| 适配器 GET 查询/探测 | 否 | 否 |
+
+### 14.2 请求头【推断】
+
+| 头 | 值 | 说明 |
+|---|---|---|
+| `Idempotency-Key` | 副作用 = outbox `event_id`；投递 = `event-<sha256>`；提交 = `action_run.idem_key` | 同一条业务的所有尝试**不变**，接收方按它去重 |
+| `X-Signature-Timestamp` | Unix 秒 | 每次尝试重新生成；仅配置了签名密钥时出现 |
+| `X-Signature-256` | `sha256=` + hex(HMAC-SHA256(密钥, `"<timestamp>."` + 原始请求体字节)) | 仅配置了签名密钥时出现 |
+| `Content-Type` | `application/json` | 请求体为紧凑 JSON（UTF-8，不转义中文） |
+| `X-Ontology-Id`、`Authorization: Bearer …` | 同前 | 不变 |
+
+接收方：取原始字节验签（常量时间比较），并拒绝与本地时间相差超过 5 分钟的时间戳【推断】；再按 `Idempotency-Key` 去重。
+
+### 14.3 密钥配置
+
+- 适配器（`RENGU_INTEGRATION_ADAPTERS` 每个系统的配置）：`"signing_secret": "…"`。
+- 事件路由（`RENGU_EVENT_DELIVERY_ROUTES` 每条路由）：`"signing_secret"`、`"test_signing_secret"`。
+- 值为明文或 `fernet$…`（`app.modules.data.secrets.encrypt_password` 加密，`RENGU_DS_SECRET_KEY`）。至少 16 字节。
+- 未配置 = 不签名（与旧行为一致）；配置了但无效 = 不发送，错误码 `SIGNING_SECRET_INVALID` / `SIGNING_SECRET_UNDECRYPTABLE`。
+
+### 14.4 重试与结果【推断】
+
+- 可重试：超时、网络错误、HTTP 429、5xx。其它非 2xx 立即失败、不重试。
+- 退避：`30s × 2^(n-1)`，上限 15 分钟；`Retry-After`（秒）取较大值。由 worker 定时扫描执行，不在请求内等待。
+- 次数（不含首发）：副作用 = 外部系统 `maxRetry`（0–5，0 不重试）；事件路由 = 路由 `max_retries`（默认 3，上限 5）。
+- 用尽：429/5xx → 失败（副作用 `EXTERNAL_HTTP_<code>`；投递 `HTTP_SUBSCRIBER_REJECTED`）；超时/网络错误 → 结果未知（投递 `HTTP_RESULT_UNKNOWN_REQUIRES_REVIEW`）。
+- 重试排队中：副作用 `payload.state = "retrying"`、`last_error = EFFECT_RETRY_SCHEDULED`；投递 `state = 待处理(pending)`、`error = HTTP_RETRY_SCHEDULED`、`nextAt` 为下次时间（会出现在投递异常收件箱的“待处理”里）。
+- 记录：副作用逐次写入 outbox `payload.attempts[]`（`attempt, at, httpStatus, error, retryable, signed, elapsedMs`）；投递逐次写 `event_delivery_record`（`attempt_started` / `attempt_finished`）。无新表、无新迁移。

@@ -20,6 +20,7 @@ from app.modules.dynamic.models import ActionRun, ActionStatus
 from app.modules.integration.action_edits import business_edits, execution_definition, target_access
 from app.modules.integration.adapters import get_adapter
 from app.modules.integration.models import CallKind, CallResult, ExtSystem, WritebackCall
+from app.modules.integration.signing import SigningSecretInvalid, encode_body, resolve_secret, signed_headers
 from app.modules.integration.reconcile import DatabaseReconcileScheduler, lock_run, resolved, to_manual
 
 QUEUED = "ACTION_DISPATCH_QUEUED"
@@ -132,6 +133,10 @@ async def dispatch_one(call_id, ontology_id: int):
             adapter = submit_adapter(system, definition)
             if call.path != f"{adapter.origin}{adapter.path('submit')}" or call.idem_key != run.idem_key:
                 raise Conflict("排队后的执行配置已变更", code="ACTION_DISPATCH_CONFIG_CHANGED")
+            try:
+                secret = resolve_secret(adapter.config.signing_secret)
+            except SigningSecretInvalid as exc:
+                raise AppError("外部执行签名密钥不可用", code=str(exc), status_code=503) from None
         except AppError as exc:
             call.msg, call.result = exc.code, CallResult.failed
             run.status, run.fail_reason, run.finished_at = ActionStatus.failed, exc.message, clock.now()
@@ -148,10 +153,13 @@ async def dispatch_one(call_id, ontology_id: int):
     headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
     if adapter.config.token:
         headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
+    # Signed like Webhooks; deliberately no automatic resend here: unknown outcomes go to reconcile_task.
+    body = encode_body(payload)
+    headers = signed_headers(headers, body, secret)
     try:
         async with httpx.AsyncClient(timeout=max(.1, min(system.timeout_ms / 1000, 60)),
                                      follow_redirects=False, trust_env=False) as client:
-            response = await client.post(call.path, json=payload, headers=headers)
+            response = await client.post(call.path, content=body, headers=headers)
         status = response.status_code
         if not 200 <= status < 300 or len(response.content) > 65_536:
             raise ValueError

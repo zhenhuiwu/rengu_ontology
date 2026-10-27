@@ -1,10 +1,16 @@
-"""Transactional side effects; external sends are claimed once after commit."""
+"""Transactional side effects; each external send is claimed and committed before the POST.
+
+Retryable outcomes (transport error/timeout, 429, 5xx) are rescheduled on the same outbox row via
+`available_at` with exponential backoff, bounded by the system's `max_retry` (≤5), reusing the same
+Idempotency-Key. Every send is appended to `payload.attempts`. A crash after the claim never resends.
+"""
 
 import hashlib
 import logging
+import time
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.common.auth import resolve_user
 from app.common.outbox import OutboxEvent, emit
@@ -27,8 +33,19 @@ from app.modules.integration.action_edits import (
 )
 from app.modules.integration.adapters import get_adapter
 from app.modules.integration.models import ExtSystem
+from app.modules.integration.signing import (
+    SigningSecretInvalid,
+    backoff,
+    encode_body,
+    resolve_secret,
+    retry_budget,
+    retryable_status,
+    signed_headers,
+)
 
 TOPIC = "action.effect"
+RETRY_SCHEDULED = "EFFECT_RETRY_SCHEDULED"
+CLAIMED = "CLAIMED_OUTCOME_UNKNOWN"
 STANDARD = {"ActionExecuted", "ActionOutcomeUnknown"}
 logger = logging.getLogger(__name__)
 
@@ -121,57 +138,94 @@ async def retain_effects(session, user, run, definition, event_type):
                 "actor": user.id, "effect": effect, "data": data, "state": "queued"}, event_id=identity)
 
 
+async def recheck_effect(session, data: dict):
+    """Recheck current authority and payload before every send; never replace retained values."""
+    from app.modules.integration.action_edits import execution_definition, target_access
+    run = await session.scalar(select(ActionRun).where(ActionRun.code == data["runId"]).with_for_update())
+    user = await resolve_user(session, data["actor"])
+    definition = await execution_definition(session, run)
+    await target_access(session, user, run, definition)
+    if run.type_version != data["typeVersion"] or data["effect"] not in definition["writeback"]["effects"]:
+        raise unavailable("副作用绑定定义已变化")
+    system, adapter, url = await external_binding(session, definition, data["effect"]["target"])
+    if url != data["data"]["url"]:
+        raise unavailable("排队后的副作用地址配置已变化")
+    prepared = await prepare_effect(session, user, run, definition, data["effect"])
+    if prepared != data["data"]:
+        raise unavailable("副作用映射或授权上下文已变化")
+    return run, system, adapter, url
+
+
 async def dispatch_effect(effect_id, ontology_id: int):
     sessions = scoped_sessions(ontology_id)
     async with sessions() as session, session.begin():
         row = await session.get(OutboxEvent, effect_id, with_for_update=True)
-        if row is None or row.topic != TOPIC or row.attempts or row.dispatched_at is not None:
+        if row is None or row.topic != TOPIC or row.dispatched_at is not None:
+            return
+        if (row.attempts and row.last_error != RETRY_SCHEDULED) or row.available_at > clock.now():
             return
         data = row.payload
         try:
-            from app.modules.integration.action_edits import execution_definition, target_access
-            run = await session.scalar(select(ActionRun).where(ActionRun.code == data["runId"]).with_for_update())
-            user = await resolve_user(session, data["actor"])
-            definition = await execution_definition(session, run)
-            await target_access(session, user, run, definition)
-            if run.type_version != data["typeVersion"] or data["effect"] not in definition["writeback"]["effects"]:
-                raise unavailable("副作用绑定定义已变化")
-            system, adapter, url = await external_binding(session, definition, data["effect"]["target"])
-            if url != data["data"]["url"]:
-                raise unavailable("排队后的副作用地址配置已变化")
-            # Recheck current authority and payload; never replace retained values after enqueue.
-            prepared = await prepare_effect(session, user, run, definition, data["effect"])
-            if prepared != data["data"]:
-                raise unavailable("副作用映射或授权上下文已变化")
+            run, system, adapter, url = await recheck_effect(session, data)
+            try:
+                secret = resolve_secret(adapter.config.signing_secret)
+            except SigningSecretInvalid as exc:
+                raise AppError("副作用签名密钥不可用", code=str(exc), status_code=503) from None
         except AppError as exc:
-            row.attempts, row.last_error = 1, exc.code
-            row.payload = {**data, "state": "rejected"}
+            # After an earlier send the receiver may already hold the request: never report "rejected".
+            row.last_error = exc.code
+            row.attempts = row.attempts or 1
+            row.payload = {**data, "state": "unknown" if data.get("attempts") else "rejected"}
             return
-        row.attempts, row.last_error = 1, "CLAIMED_OUTCOME_UNKNOWN"
+        attempt = row.attempts + 1
+        row.attempts, row.last_error = attempt, CLAIMED
         row.payload = {**data, "state": "unknown"}
-        key, payload = row.event_id, {"ontologyId": ontology_id, "actionRunId": run.code, "effectId": row.event_id,
-                                     "kind": data["effect"]["kind"], "payload": data["data"]["payload"]}
+        retries = retry_budget(system.max_retry)
+        key, payload = row.event_id, {"ontologyId": ontology_id, "actionRunId": run.code,
+                                      "effectId": row.event_id, "kind": data["effect"]["kind"],
+                                      "payload": data["data"]["payload"]}
+    body = encode_body(payload)
     headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
     if adapter.config.token:
         headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
-    state, error, receipt, status = "unknown", "EXTERNAL_OUTCOME_UNKNOWN", None, None
+    headers = signed_headers(headers, body, secret)
+    state, error, receipt, status, retry_after = "unknown", "EXTERNAL_OUTCOME_UNKNOWN", None, None, None
+    retryable, started, timer = False, clock.now(), time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=max(.1, min(system.timeout_ms / 1000, 60)),
                                      follow_redirects=False, trust_env=False) as client:
-            response = await client.post(url, json=payload, headers=headers)
+            response = await client.post(url, content=body, headers=headers)
         status = response.status_code
-        if 200 <= status < 300 and len(response.content) <= 65_536:
+        if retryable_status(status):
+            retryable, state, error = True, "failed", f"EXTERNAL_HTTP_{status}"
+            retry_after = response.headers.get("Retry-After")
+        elif not 200 <= status < 300:
+            state, error = "failed", f"EXTERNAL_HTTP_{status}"
+        elif len(response.content) <= 65_536:
             from app.modules.integration.execution import ExecutionResponse
             result = ExecutionResponse.model_validate(response.json())
             if result.status.value == "SUCCESS" and result.receipt_id and result.receipt_id.strip():
                 state, error, receipt = "succeeded", None, result.receipt_id
             elif result.status.value == "FAILED":
                 state, error = "failed", result.code or "EXTERNAL_REJECTED"
+    except httpx.TransportError:
+        retryable = True
     except (httpx.HTTPError, ValueError):
         pass
+    elapsed = round((time.perf_counter() - timer) * 1000)
     async with sessions() as session, session.begin():
         row = await session.get(OutboxEvent, effect_id, with_for_update=True)
-        row.payload = {**row.payload, "state": state, "httpStatus": status, "receiptId": receipt}
+        history = [*row.payload.get("attempts", []), {
+            "attempt": attempt, "at": started.isoformat(), "httpStatus": status, "error": error,
+            "retryable": retryable, "signed": secret is not None, "elapsedMs": elapsed}]
+        if retryable and attempt <= retries:
+            row.payload = {**row.payload, "state": "retrying", "httpStatus": status, "receiptId": None,
+                           "attempts": history}
+            row.last_error = RETRY_SCHEDULED
+            row.available_at = clock.now() + backoff(attempt, retry_after)
+            return
+        row.payload = {**row.payload, "state": state, "httpStatus": status, "receiptId": receipt,
+                       "attempts": history}
         row.last_error = error
         if state == "succeeded":
             row.dispatched_at = clock.now()
@@ -180,7 +234,8 @@ async def dispatch_effect(effect_id, ontology_id: int):
 async def dispatch_effects(ontology_id: int):
     async with scoped_sessions(ontology_id)() as session:
         ids = list(await session.scalars(select(OutboxEvent.id).where(OutboxEvent.topic == TOPIC,
-            OutboxEvent.attempts == 0, OutboxEvent.dispatched_at.is_(None), OutboxEvent.available_at <= clock.now())
+            or_(OutboxEvent.attempts == 0, OutboxEvent.last_error == RETRY_SCHEDULED),
+            OutboxEvent.dispatched_at.is_(None), OutboxEvent.available_at <= clock.now())
             .order_by(OutboxEvent.id).limit(100)))
     for identity in ids:
         try:
