@@ -156,7 +156,7 @@ async function saveDefinition(opts: { join?: string; title?: string; desc?: stri
     let lockVersion = selectedCheck?.pending?.lockVersion;
     if (opts.join && opts.join !== selectedCheck?.pending?.crId) {
       const ctx = currentApiContext();
-      const head = await fetchCR(opts.join, { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } });
+      const head = await fetchCR(opts.join, { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } });
       if (!current() || readonly.value) return;
       lockVersion = head.lockVersion;
     }

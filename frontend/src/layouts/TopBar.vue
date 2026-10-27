@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useAppStore } from '@/stores/app';
 import { loadTenants, tenantOptions } from '@/api/tenants';
 import { loadMyProfile } from '@/api/profile';
+import { workspaceCatalog, type OntologyWorkspace } from '@/api/workspaces';
+import { anyReal } from '@/api/config';
 import { currentApiContext } from '@/api/http';
 import { adminApiOn } from '@/api/admin';
 import { PAGES } from '@/nav';
@@ -13,17 +15,31 @@ import NoticeList from '@/components/NoticeList.vue';
 
 const app = useAppStore();
 const router = useRouter();
+const workspaces = ref<OntologyWorkspace[]>([]), workspaceListError = ref('');
+let workspaceListSeq = 0;
+const workspaceOptions = computed(() => workspaces.value.map(workspace => ({ value: String(workspace.id), label: workspace.name })));
+async function reloadWorkspaces() {
+  if (!anyReal()) return;
+  const seq = ++workspaceListSeq;
+  try { const result = await workspaceCatalog(); if (seq === workspaceListSeq) { workspaces.value = result.items; workspaceListError.value = ''; } }
+  catch { if (seq === workspaceListSeq) { workspaces.value = []; workspaceListError.value = '本体列表加载失败'; } }
+}
+watch([() => app.persona, () => app.workspaceEpoch], () => void reloadWorkspaces(), { immediate: true });
+function switchWorkspace(id: string) {
+  if (id === app.ontologyId && !app.workspaceError) return;
+  void router.push({ name: 'ontology-overview', query: { ontology: id } });
+}
 const profileLoading = ref(false), profileError = ref('');
 let profileSeq = 0;
 async function reloadProfile() {
   if (!adminApiOn()) return;
-  const my = ++profileSeq, key = JSON.stringify(currentApiContext());
+  const my = ++profileSeq, key = currentApiContext().demoAs;
   app.user = { name: '', role: '' }; profileLoading.value = true; profileError.value = '';
-  try { const profile = await loadMyProfile(); if (my === profileSeq && key === JSON.stringify(currentApiContext()) && profile) app.user = { name: profile.name, role: profile.roleNames.join('、') || '未分配角色' }; }
-  catch { if (my === profileSeq && key === JSON.stringify(currentApiContext())) profileError.value = '当前身份加载失败'; }
-  finally { if (my === profileSeq && key === JSON.stringify(currentApiContext())) profileLoading.value = false; }
+  try { const profile = await loadMyProfile(); if (my === profileSeq && key === currentApiContext().demoAs && profile) app.user = { name: profile.name, role: profile.roleNames.join('、') || '未分配角色' }; }
+  catch { if (my === profileSeq && key === currentApiContext().demoAs) profileError.value = '当前身份加载失败'; }
+  finally { if (my === profileSeq && key === currentApiContext().demoAs) profileLoading.value = false; }
 }
-watch(() => JSON.stringify(currentApiContext()), () => { void reloadProfile(); }, { immediate: true });
+watch(() => currentApiContext().demoAs, () => { void reloadProfile(); }, { immediate: true });
 const q = ref('');
 const noticeOpen = ref(false);
 const inputRef = ref<{ focus: () => void } | null>(null);
@@ -41,12 +57,14 @@ watch(tenants, (options) => {
   if (!options.some((t) => t.value === app.tenant)) app.tenant = (options.find((t) => t.default) ?? options[0])?.value ?? app.tenant;
 }, { immediate: true });
 async function reloadTenants() {
+  const identity = currentApiContext().demoAs;
   tenantError.value = '';
   try {
     await loadTenants();
-  } catch { tenantError.value = '租户与组织加载失败'; }
+  } catch { if (identity === currentApiContext().demoAs) tenantError.value = '租户与组织加载失败'; }
 }
-onMounted(reloadTenants);
+watch(() => currentApiContext().demoAs, () => void reloadTenants(), { immediate: true });
+watch(() => router.currentRoute.value.name, (name) => { if (name === 'workspaces') { void reloadProfile(); void reloadTenants(); } });
 // 顶栏 ⓘ 使用帮助菜单（原型：快速入门 / 反馈只给提示）
 function onHelp({ key }: { key: string | number }) {
   if (key === 'kbd') setTimeout(() => inputRef.value?.focus(), 0);
@@ -81,6 +99,12 @@ function onSelect(v: string) {
       <span class="t-16 fw-600 c-1">本体智能平台</span>
     </router-link>
 
+    <div v-if="anyReal()" class="tb-workspace">
+      <span class="t-12 c-3">本体</span>
+      <a-select :value="app.workspace ? app.ontologyId : undefined" :options="workspaceOptions" :loading="app.workspaceLoading" :placeholder="workspaceListError || '选择本体工作空间'" :bordered="false" class="tb-workspace-select" aria-label="本体工作空间" @change="switchWorkspace" />
+      <a-button type="text" size="small" @click="router.push({ name: 'workspaces' })">管理</a-button>
+    </div>
+    <span class="tb-org-label t-12 c-3">组织</span>
     <a-select v-model:value="app.tenant" :options="tenants" :placeholder="tenantError || '暂无组织'" :status="tenantError ? 'error' : undefined" :bordered="false" class="tb-tenant" popup-class-name="tb-tenant-pop" />
     <span v-if="tenantError" class="t-12 c-3">{{ tenantError }} <a-button type="link" size="small" @click="reloadTenants">重试</a-button></span>
 
@@ -97,7 +121,7 @@ function onSelect(v: string) {
     </div>
 
     <div class="tb-right">
-      <VersionPicker />
+      <VersionPicker v-if="!app.workspaceError && router.currentRoute.value.name !== 'workspaces'" />
       <a-divider type="vertical" />
       <a-popover v-model:open="noticeOpen" trigger="click" placement="bottomRight">
         <template #content><div v-if="adminApiOn()" class="t-12 c-3">通知服务尚未接入</div><NoticeList v-else @picked="noticeOpen = false" /></template>
@@ -133,10 +157,13 @@ function onSelect(v: string) {
 
 <style scoped>
 .tb { height: var(--topbar-h); flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--g1); border-bottom: var(--border); }
-.tb-brand { display: flex; align-items: center; gap: 8px; width: calc(var(--sider-w) - 16px); text-decoration: none; }
-.tb-tenant { width: 236px; }
-.tb-search { flex: 1; display: flex; justify-content: center; }
-.tb-ac { width: min(560px, 36vw); }
+.tb-brand { flex: none; display: flex; align-items: center; gap: 8px; width: calc(var(--sider-w) - 16px); text-decoration: none; }
+.tb-tenant { width: 210px; flex: none; }
+.tb-org-label { margin-right: -12px; }
+.tb-workspace { display: flex; align-items: center; gap: 4px; flex: none; }
+.tb-workspace-select { width: 184px; }
+.tb-search { min-width: 120px; flex: 1; display: flex; justify-content: center; }
+.tb-ac { width: min(100%, 560px); }
 .tb-kbd { border: var(--border); border-radius: 2px; padding: 0 4px; line-height: 18px; }
 .tb-right { display: flex; align-items: center; gap: 8px; }
 .tb-icon { color: var(--g9); }
@@ -144,6 +171,7 @@ function onSelect(v: string) {
 .tb-user-name { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-user-role { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-avatar { background: var(--brand); }
+@media (max-width: 1400px) { .tb-tenant { width: 170px; } .tb-user-role, .tb-org-label { display: none; } .tb-workspace-select { width: 152px; } .tb { gap: 8px; } }
 .tb-help { min-width: 200px; }
 .tb-help-row { display: flex; justify-content: space-between; gap: 16px; white-space: nowrap; }
 </style>

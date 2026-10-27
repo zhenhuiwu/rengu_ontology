@@ -16,6 +16,7 @@ import { DRAFTS, type TargetKind } from '@/mock/releases';
 
 const api = apiClient('static');
 export const isStaticReal = (): boolean => api.isReal();
+export const fetchMetricGroups = () => api.get<string[]>('/metrics/groups');
 export const fetchDimensionUsage = (id: string) => all<import('@/mock/dimensions').DimUsage>(loadContext(), `/dimensions/${encodeURIComponent(id)}/usage`);
 export interface DimensionMatchResult { exact: { item: string; itemName: string; value: string }[]; contains: { item: string; itemName: string; value: string }[]; more: number; rule: { resolve?: string } | null; groups: string[]; crossDim: boolean }
 export interface KnowledgeTryRow { k: string; v: string; cls?: string; by?: string }
@@ -53,8 +54,8 @@ export async function fetchObjectMetrics(id: string) {
   return rows.map(({ base, via, ...m }) => ({ m, base, via }));
 }
 export function staticContextKey(): string {
-  const { demoAs, previewAs, ver } = currentApiContext();
-  return JSON.stringify([isStaticReal(), demoAs, previewAs, ver]);
+  const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
+  return JSON.stringify([isStaticReal(), ontologyId, demoAs, previewAs, ver]);
 }
 interface LoadContext { key: string; generation: number; options: RequestOptions }
 let activeKey = '';
@@ -171,7 +172,7 @@ const DEPS: Partial<Record<StaticDataset, StaticDataset[]>> = { objectProps: ['o
 
 const cache = new Map<string, Promise<void>>();
 function loadContext(): LoadContext {
-  const { demoAs, previewAs, ver } = currentApiContext();
+  const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
   const key = staticContextKey();
   if (key !== activeKey) {
     activeKey = key; generation++; cache.clear();
@@ -181,7 +182,7 @@ function loadContext(): LoadContext {
     replace(METRIC_DEF, demo ? initial.def : []); replace(METRIC_DIMS, demo ? initial.dims : []); replace(METRIC_VERSIONS, demo ? initial.versions : []); replace(METRIC_REFS, demo ? initial.refs : []);
     replace(DIM_ITEMS, demo ? initial.dimensions : []); replace(KNOWLEDGE, demo ? initial.knowledge : []);
   }
-  return { key, generation, options: { readonlyParams: false, query: { previewAs, ver }, headers: { 'X-Demo-As': demoAs ?? '' } } };
+  return { key, generation, options: { readonlyParams: false, query: { previewAs, ver }, headers: { 'X-Demo-As': demoAs ?? '', 'X-Ontology-Id': ontologyId ?? '' } } };
 }
 function loadOne(ds: StaticDataset, ctx: LoadContext): Promise<void> {
   const key = JSON.stringify([ctx.key, ds]);
@@ -294,7 +295,7 @@ export const allocateCRTarget = (id: string, kind: 'link' | 'knowledge', name?: 
 /** Allocate and register together in the CR transaction; failed allocation retains the real CR for retry. */
 export async function startAllocatedTarget(kind: 'link' | 'knowledge', opts: { join?: string; title?: string; desc?: string }, name: string, resume?: string) {
   const key = staticContextKey(), ctx = currentApiContext();
-  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
   const check = () => { if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新打开新建'); };
   const existing = opts.join ?? resume;
   const header = existing ? await fetchCR(existing, options) : await createCR({ title: opts.title || `新建${kind === 'link' ? '关系' : '业务知识'}`, reason: opts.desc }, options);
@@ -343,7 +344,7 @@ const bumpDraft = (id: string, changes: number) => { const d = DRAFTS.find((x) =
 export async function crStart(target: CRTargetIn, opts: { join?: string; title?: string; desc?: string }): Promise<{ join?: string; title?: string }> {
   if (!isStaticReal()) return opts;
   const key = staticContextKey(), ctx = currentApiContext();
-  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
   const cr = opts.join ? await addCRTarget(opts.join, target, options) : await createCR({ title: opts.title || '未命名变更', reason: opts.desc, target }, options);
   if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新发起变更');
   registerDraft(cr);
@@ -362,7 +363,7 @@ export async function crSave(crId: string | undefined, target: CRTargetIn, secti
   if (!isStaticReal() || !crId) return;
   // 读回时记下 lockVersion，PUT 带上：中间有人改过这张单子就 409 VERSION_CONFLICT，不覆盖
   const key = staticContextKey(), ctx = currentApiContext();
-  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
   const checkContext = () => { if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新加载草稿'); };
   const { lockVersion } = await fetchCR(crId, options);
   checkContext();

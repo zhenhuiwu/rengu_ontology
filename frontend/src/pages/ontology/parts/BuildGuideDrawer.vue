@@ -26,7 +26,7 @@ async function load() {
   if (!open.value || !isStaticReal()) { loading.value = false; return; }
   loading.value = true;
   const ctx = currentApiContext();
-  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs, page: 1, size: 1 }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs, page: 1, size: 1 }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
   const ontology = apiClient('static');
   const count = async (module: 'static' | 'action' | 'dynamic' | 'data', path: string) => {
     const api = apiClient(module);

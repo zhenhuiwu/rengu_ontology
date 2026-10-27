@@ -27,14 +27,14 @@ const pageSize = ref(12);
 const listEl = ref<HTMLElement>();
 const { sessions: mockList, activeId: active, newSession, real, live, detail, listTick, favTick, newSessionReal, creating } = useQaSession();
 /* 真接口 W1 与本地分页使用同一可用高度条数。 */
-const contextKey = () => { const c = currentApiContext(); return JSON.stringify([c.demoAs, c.ver, c.previewAs]); };
+const contextKey = () => { const c = currentApiContext(); return JSON.stringify([c.ontologyId, c.demoAs, c.ver, c.previewAs]); };
 const filterKey = () => JSON.stringify([contextKey(), kw.value.trim(), range.value]);
 const listKey = () => JSON.stringify([filterKey(), page.value, pageSize.value]);
 const srv = ref({ items: [] as QaSession[], total: 0, filter: '', key: '' });
 const list = computed<QaSession[]>({ get: () => (live.value ? (srv.value.key === listKey() ? srv.value.items : []) : mockList.value), set: (v) => { mockList.value = v; } });
 function requestContext() {
   const c = currentApiContext();
-  return { headers: { 'X-Demo-As': c.demoAs ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs } };
+  return { headers: { 'X-Demo-As': c.demoAs ?? '', 'X-Ontology-Id': c.ontologyId ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs } };
 }
 const favTop = ref<string[]>(live.value ? [] : QA_FAVORITES);
 const pageTop = ref<string[]>(live.value ? [] : QA_MY_PAGES);

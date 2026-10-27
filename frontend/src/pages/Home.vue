@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 首页（示例页）：演示公共组件的用法——KPI 条（.t-kpi）、分页表格、ObjRef（悬停卡 + 抽屉）、
+ * 零售本体适配看板（仅 ontology=1）：演示公共组件的用法——KPI 条（.t-kpi）、分页表格、ObjRef（悬停卡 + 抽屉）、
  * EChart。首页只看不改：订单动作（补发出库单）在订单抽屉里，用 ConfirmActionModal 确认。整页无滚动，表格分页。
  */
 import { message } from 'ant-design-vue';

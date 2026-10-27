@@ -14,6 +14,7 @@ import { useAppStore } from './app';
  * URL：?previewAs=U010231 直接进入（截图和分享用），?previewAs=off 退出。状态存 sessionStorage，只影响当前标签页。
  */
 export interface PreviewSession {
+  ontologyId?: string;
   user: Pick<AdminUser, 'id' | 'name' | 'account' | 'dept'>;
   roles: string[];
   func: Record<string, FuncLevel>;   // 页面 key → 级别（没有的就是无权限）
@@ -24,7 +25,7 @@ export interface PreviewSession {
 
 const KEY = 'ui-vue:preview';
 const load = (): PreviewSession | null => {
-  try { return JSON.parse(sessionStorage.getItem(KEY) || 'null'); } catch { return null; }
+  try { const session = JSON.parse(sessionStorage.getItem(KEY) || 'null') as PreviewSession | null; return session?.ontologyId === useAppStore().ontologyId ? session : null; } catch { return null; }
 };
 const pad = (n: number) => String(n).padStart(2, '0');
 const now = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
@@ -50,6 +51,7 @@ export const usePreviewStore = defineStore('preview', {
     start(u: AdminUser, returnTo: string, access?: EffectiveAccess) {
       const a = access ?? effectiveAccess(u);
       this.session = {
+        ontologyId: useAppStore().ontologyId,
         user: { id: u.id, name: u.name, account: u.account, dept: u.dept },
         roles: a.rs.map((r) => r.name),
         func: Object.fromEntries(a.func.map((p) => [p.key, p.lv])),

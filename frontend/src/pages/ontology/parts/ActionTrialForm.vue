@@ -45,7 +45,7 @@ async function loadDefinition() {
     let kind: string = props.action.targetKind ?? '', name = props.action.target;
     if (props.cr) {
       const ctx = currentApiContext();
-      const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+      const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
       await fetchCR(props.cr, options);
       if (!current() || n !== definitionSeq) return;
       const items = await fetchCRItems(props.cr, { kind: 'action', targetId: props.action.id }, options);
@@ -145,7 +145,7 @@ async function submit() {
   resultInputs.value = [...(context.objId ? [{ label: `目标对象 · ${target.name}`, value: context.objId }] : []), ...(context.alertId ? [{ label: '上下文告警', value: context.alertId }] : []), ...params.value.filter(p => p.api in payload).map(p => ({ label: `${p.name} · ${p.api}`, value: JSON.stringify(payload[p.api]) }))];
   try {
     const r = await dryRunAction(props.action.id, payload, props.cr ? 'draft' : 'published', props.cr,
-      { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } }, context);
+      { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } }, context);
     if (current()) { result.value = r; emit('result'); }
   } catch (e) { if (current()) { resultError.value = errText(e); emit('result'); } }
   finally { if (current()) busy.value = false; }

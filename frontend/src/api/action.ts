@@ -37,8 +37,8 @@ export const actionApi = apiClient('action');
 const api = actionApi;
 const enc = encodeURIComponent;
 const ALL = 200; // 后台每页上限；轻目录及选中草稿基线按此上限完整翻页。
-export const actionContextKey = (ctx: ApiContext = currentApiContext()) => JSON.stringify([ctx.demoAs ?? '', ctx.previewAs ?? '', ctx.ver ?? '']);
-const fixed = (ctx: ApiContext, query: Record<string, QueryValue> = {}) => ({ headers: { 'X-Demo-As': ctx.demoAs ?? '' }, readonlyParams: false, query: { ...query, ver: ctx.ver ?? undefined, previewAs: ctx.previewAs ?? undefined } });
+export const actionContextKey = (ctx: ApiContext = currentApiContext()) => JSON.stringify([ctx.ontologyId ?? '', ctx.demoAs ?? '', ctx.previewAs ?? '', ctx.ver ?? '']);
+const fixed = (ctx: ApiContext, query: Record<string, QueryValue> = {}) => ({ headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, readonlyParams: false, query: { ...query, ver: ctx.ver ?? undefined, previewAs: ctx.previewAs ?? undefined } });
 
 /** 后台 null → 前端可选字段 undefined */
 const clean = <T>(o: T): T => {

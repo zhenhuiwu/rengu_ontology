@@ -90,12 +90,12 @@ const mockTypes = (): TypeBrief[] => LINK_OBJECTS.filter((o) => !o.draft).map(({
 const sampleOf = (t: TypeBrief) => objectMeta(t.id, t.name, t.group).qs.map((q) => q.q);
 
 export function metaContextKey(): string {
-  const { demoAs, previewAs, ver } = currentApiContext();
-  return JSON.stringify([staticApi.isReal(), demoAs, previewAs, ver]);
+  const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
+  return JSON.stringify([staticApi.isReal(), ontologyId, demoAs, previewAs, ver]);
 }
 function contextOptions() {
-  const { demoAs, previewAs, ver } = currentApiContext();
-  const headers: Record<string, string> = { 'X-Demo-As': demoAs ?? '' };
+  const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
+  const headers: Record<string, string> = { 'X-Demo-As': demoAs ?? '', 'X-Ontology-Id': ontologyId ?? '' };
   return { readonlyParams: false, query: { previewAs, ver }, headers };
 }
 const typesCache = new Map<string, Promise<TypeBrief[]>>();

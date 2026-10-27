@@ -12,12 +12,15 @@ import SideNav from './SideNav.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import DetailDrawer from '@/components/DetailDrawer.vue';
 import ConfirmActionModal from '@/components/ConfirmActionModal.vue';
+import { useAppStore } from '@/stores/app';
 import { PAGES } from '@/nav';
 import VersionBanner from '@/components/VersionBanner.vue';
 import PreviewBanner from '@/components/PreviewBanner.vue';
 import PreviewScope from '@/components/PreviewScope.vue';
 
 const route = useRoute();
+const app = useAppStore();
+const workspaceKey = computed(() => app.workspaceEpoch);
 const page = computed(() => PAGES.find((p) => p.key === route.meta.navKey));
 const title = computed(() => (route.meta.title as string) ?? page.value?.title ?? '');
 const crumbs = computed(() => {
@@ -30,8 +33,8 @@ const crumbs = computed(() => {
 <template>
   <div class="app">
     <TopBar />
-    <VersionBanner />
-    <PreviewBanner />
+    <VersionBanner v-if="!app.workspaceError && route.name !== 'workspaces'" />
+    <PreviewBanner v-if="!app.workspaceError && route.name !== 'workspaces'" />
     <div class="app-main">
       <SideNav />
       <main class="app-content">
@@ -39,19 +42,24 @@ const crumbs = computed(() => {
           <template #extra><PreviewScope /><div id="page-extra" class="page-extra" /></template>
         </PageHeader>
         <div class="page-body">
-          <router-view />
+          <a-spin v-if="app.workspaceLoading" class="workspace-loading" tip="正在加载本体工作空间" />
+          <a-result v-else-if="app.workspaceError && route.name !== 'workspaces'" status="error" title="无法进入本体工作空间" :sub-title="app.workspaceError">
+            <template #extra><a-button type="primary" @click="$router.push({ name: 'workspaces' })">选择本体工作空间</a-button></template>
+          </a-result>
+          <router-view v-else :key="workspaceKey" />
         </div>
       </main>
     </div>
-    <DetailDrawer />
-    <ConfirmActionModal />
+    <DetailDrawer v-if="!app.workspaceLoading && !app.workspaceError" :key="workspaceKey" />
+    <ConfirmActionModal v-if="!app.workspaceLoading" :key="workspaceKey" />
   </div>
 </template>
 
 <style scoped>
-.app { height: 100vh; display: flex; flex-direction: column; }
+.app { height: 100dvh; display: flex; flex-direction: column; }
 .app-main { flex: 1; min-height: 0; display: flex; }
 .app-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.workspace-loading { margin: auto; }
 .page-extra { display: flex; gap: 8px; }
 .page-body { flex: 1; min-height: 0; padding: var(--gap); display: flex; flex-direction: column; }
 </style>

@@ -9,11 +9,13 @@
  */
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
+import { currentApiContext } from '@/api/http';
 import { message } from 'ant-design-vue';
 import { DownloadOutlined, MessageOutlined, LockOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePreview } from '@/composables/usePreview';
 import { usePagedQuery } from '@/composables/usePagedQuery';
+import { isStaticReal } from '@/api/static';
 import { fmtInt } from '@/mock/format';
 import type { AskScope } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
@@ -36,12 +38,13 @@ const patch = (p: Record<string, string | null>) => {
 
 /* 类型与元数据 */
 const types = ref<TypeBrief[]>([]);
+const typesLoaded = ref(false);
 const contextKey = computed(metaContextKey);
 let typesSeq = 0;
 watch(contextKey, async () => {
   const my = ++typesSeq;
-  types.value = [];
-  try { const t = await listTypes(); if (my === typesSeq) types.value = t; }
+  types.value = []; typesLoaded.value = false;
+  try { const t = await listTypes(); if (my === typesSeq) { types.value = t; typesLoaded.value = true; } }
   catch (e) { if (my === typesSeq) message.error(`对象类型加载失败：${errText(e)}`); }
 }, { immediate: true });
 const typeId = computed(() => qs('type') || types.value[0]?.id || '');
@@ -180,7 +183,7 @@ const liveAsk = computed<objApi.ScopedAskIn | undefined>(() => (qaLive.value && 
 /* 记住当前搜索条件，详情页面包屑用来返回 */
 watch(() => route.fullPath, () => {
   const q = { ...route.query }; delete q.drawer; delete q.drawer2; delete q.ask;
-  sessionStorage.setItem('obj-search:last', JSON.stringify(q));
+  try { sessionStorage.setItem(`obj-search:last:${currentApiContext().ontologyId}`, JSON.stringify(q)); } catch { /* private mode */ }
 }, { immediate: true });
 const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/detail', query: { type: typeId.value, id: r.id } });
 </script>
@@ -246,6 +249,7 @@ const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/d
           </div>
           <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="full" :total="total" :default-size="pq.defaultSize" :unit="'条'" />
         </template>
+        <a-empty v-else-if="isStaticReal() && typesLoaded && !types.length" class="os-empty" description="当前本体暂无可查询对象" />
         <a-spin v-else-if="loading || !meta" class="os-empty" />
         <a-empty v-else-if="!bound" class="os-empty" :description="`未接入数据：「${meta.name}」还没有绑定数据表，暂时搜不到对象`" />
         <a-empty v-else-if="pv.active.value && pv.scopeOf(meta.name) === '无权限'" class="os-empty" :description="`${pv.userName.value} ${pv.scopeLabel(meta.name)}，预览中不显示任何${meta.name}`" />

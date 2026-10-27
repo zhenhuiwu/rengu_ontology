@@ -3,6 +3,7 @@ import type { NavArea } from '@/nav';
 import { NOTICES } from '@/mock';
 import { releaseByVer } from '@/api/releases';
 import { isReal } from '@/api/config';
+import type { OntologyWorkspace } from '@/api/workspaces';
 import { NEXT_VERSION as MOCK_NEXT_VERSION } from '@/mock/changes';
 
 export const TENANTS = [
@@ -25,19 +26,28 @@ export const PERSONAS = {
 export type PersonaKey = keyof typeof PERSONAS;
 
 const PERSONA_KEY = 'ui-vue:persona';     // sessionStorage：只在当前标签页生效，不影响其他标签页和截图
-const LAST_ROUTE_KEY = 'ui-vue:lastRoute'; // localStorage：每个区上次访问的路由
+const WORKSPACE_KEY = 'ui-vue:ontology';
+const workspaceId = () => { try { return new URLSearchParams(location.search).get('ontology') ?? sessionStorage.getItem(WORKSPACE_KEY) ?? '1'; } catch { return '1'; } };
+const hasSavedWorkspace = () => { try { return !!sessionStorage.getItem(WORKSPACE_KEY); } catch { return false; } };
+const lastRouteKey = (id: string) => `ui-vue:lastRoute:${id}`;
 
 const loadPersona = (): PersonaKey => {
   try { const v = sessionStorage.getItem(PERSONA_KEY); return v && v in PERSONAS ? (v as PersonaKey) : 'admin'; } catch { return 'admin'; }
 };
-const loadLastRoute = (): Partial<Record<AreaKey, string>> => {
-  try { return JSON.parse(localStorage.getItem(LAST_ROUTE_KEY) || '{}'); } catch { return {}; }
+const loadLastRoute = (id: string): Partial<Record<AreaKey, string>> => {
+  try { return JSON.parse(localStorage.getItem(lastRouteKey(id)) || '{}'); } catch { return {}; }
 };
 
 export const useAppStore = defineStore('app', {
   state: () => {
     const persona = loadPersona();
     return {
+      ontologyId: workspaceId(),
+      workspaceSelectionSaved: hasSavedWorkspace(),
+      workspace: null as OntologyWorkspace | null,
+      workspaceLoading: false,
+      workspaceError: '',
+      workspaceEpoch: 0,
       tenant: 'hd',
       ontologyVersion: isReal('versioning') ? '—' : 'v2026.10.3',
       ontologyPublishedAt: isReal('versioning') ? '—' : '2026-10-24 21:17',
@@ -50,7 +60,7 @@ export const useAppStore = defineStore('app', {
       user: { name: isReal('admin') ? '' : PERSONAS[persona].name as string, role: isReal('admin') ? '' : PERSONAS[persona].role as string },
       permissions: [...PERSONAS[persona].permissions] as AreaKey[],
       /** 每个区上次访问的完整路由（不含抽屉参数），切换区时回到这里 */
-      lastRoute: loadLastRoute(),
+      lastRoute: loadLastRoute(workspaceId()),
     };
   },
   getters: {
@@ -59,6 +69,12 @@ export const useAppStore = defineStore('app', {
     unread: (s) => s.notices.filter((n) => !n.read).length,
   },
   actions: {
+    enterWorkspace(id: string, workspace: OntologyWorkspace | null, error = '') {
+      this.ontologyId = id; this.workspace = workspace; this.workspaceError = error;
+      this.viewVersion = null; this.ontologyVersion = '—'; this.ontologyPublishedAt = '—'; this.ontologyNextVersion = '';
+      this.lastRoute = loadLastRoute(id); this.workspaceEpoch++;
+      if (workspace) { this.workspaceSelectionSaved = true; try { sessionStorage.setItem(WORKSPACE_KEY, id); } catch { /* private mode */ } }
+    },
     setPersona(p: PersonaKey) {
       this.persona = p;
       this.user = isReal('admin') ? { name: '', role: '' } : { name: PERSONAS[p].name, role: PERSONAS[p].role };
@@ -71,7 +87,7 @@ export const useAppStore = defineStore('app', {
     },
     rememberRoute(area: AreaKey, fullPath: string) {
       this.lastRoute[area] = fullPath;
-      try { localStorage.setItem(LAST_ROUTE_KEY, JSON.stringify(this.lastRoute)); } catch { /* 隐私模式 */ }
+      try { localStorage.setItem(lastRouteKey(this.ontologyId), JSON.stringify(this.lastRoute)); } catch { /* 隐私模式 */ }
     },
   },
 });

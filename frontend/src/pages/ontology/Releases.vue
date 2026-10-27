@@ -65,7 +65,7 @@ let loadedPageQuery = '';
 const pageKey = () => JSON.stringify([currentApiContext(), lpage.value, st.value, kw.value]);
 const fixedOptions = () => {
   const ctx = currentApiContext();
-  return { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } };
+  return { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } };
 };
 function keepDetail(head: Awaited<ReturnType<typeof fetchCR>>) {
   const d = head.detail;
@@ -204,7 +204,7 @@ async function loadReviewers() {
   if (!canSetReviewer.value) return;
   const my = ++reviewerSeq, key = reviewerKey(), id = cur.value.id, selection = reviewerId.value;
   const ctx = currentApiContext();
-  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
   reviewerLoading.value = true; reviewerError.value = ''; reviewerOptions.value = []; reviewerLock.value = undefined;
   try {
     const head = await fetchCR(id, options); if (my !== reviewerSeq || key !== reviewerKey()) return;
@@ -221,7 +221,7 @@ async function saveReviewer() {
   const my = reviewerSeq, key = reviewerKey(), id = cur.value.id, ctx = currentApiContext();
   reviewerSaving.value = true;
   try {
-    await patchCR(id, { reviewer: reviewerId.value, lockVersion: reviewerLock.value }, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } });
+    await patchCR(id, { reviewer: reviewerId.value, lockVersion: reviewerLock.value }, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } });
     if (my !== reviewerSeq || key !== reviewerKey()) return;
     reviewerOpen.value = false; if (await loadCRs()) message.success('审核人已保存');
   } catch (e) { if (my === reviewerSeq && key === reviewerKey()) reviewerError.value = `${e instanceof Error ? e.message : String(e)}；选择已保留，可重新加载后确认`; }

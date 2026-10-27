@@ -1,5 +1,5 @@
 import { onBeforeUnmount, onMounted, unref, type Ref } from 'vue';
-import { onBeforeRouteLeave } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import { Modal } from 'ant-design-vue';
 
 /** 弹出“有未保存的修改”确认，放弃修改返回 true */
@@ -27,6 +27,7 @@ export function confirmDiscard(): Promise<boolean> {
 export function useUnsavedGuard(dirty: Ref<boolean> | (() => boolean)) {
   const isDirty = () => (typeof dirty === 'function' ? dirty() : unref(dirty));
   onBeforeRouteLeave(async () => (isDirty() ? await confirmDiscard() : true));
+  onBeforeRouteUpdate(async (to, from) => to.query.ontology !== from.query.ontology && isDirty() ? await confirmDiscard() : true);
   const onUnload = (e: BeforeUnloadEvent) => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } };
   onMounted(() => window.addEventListener('beforeunload', onUnload));
   onBeforeUnmount(() => window.removeEventListener('beforeunload', onUnload));

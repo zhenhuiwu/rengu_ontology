@@ -17,7 +17,7 @@ export const fetchQualityChecks = (query: Record<string, string | number | undef
   api.get<PageResult<QualityCheck> & { dataCutoff: string; summary: QualitySummary }>('/quality-checks', { query });
 export const fetchQualityRuns = (id: string, page: number, size: number) =>
   api.get<PageResult<QualityRun>>(`/quality-checks/${encodeURIComponent(id)}/runs`, { query: { page, size } });
-const pinned = () => { const ctx = currentApiContext(); return { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } }; };
+const pinned = () => { const ctx = currentApiContext(); return { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } }; };
 export const createQualityCheck = (body: QualityDefinition & QualityChangeOptions) => api.post<QualityChange>('/quality-checks', body, pinned());
 export const updateQualityCheck = (id: string, body: QualityDefinition & QualityChangeOptions) => api.put<QualityChange>(`/quality-checks/${encodeURIComponent(id)}`, body, pinned());
 export const retireQualityCheck = (id: string, options: QualityChangeOptions) => api.post<QualityChange>(`/quality-checks/${encodeURIComponent(id)}:retire`, options, pinned());

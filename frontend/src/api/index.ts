@@ -1,15 +1,14 @@
 /**
  * 前后端联调入口（docs/backend/integration.md）。
  * - setupApi(pinia)：注册请求上下文（演示身份 → X-Demo-As，历史版本 → ?ver=，预览 → ?previewAs=）；
- * - bootstrapApi(pinia)：real 模式下启动前先拉需要同步的数据（发布记录 / 当前版本）。
+ * - bootstrapApi(pinia)：启动前初始化演示身份；路由确认工作空间后再读取其发布记录。
  * mock 模式下 main.ts 不调用 bootstrapApi，启动流程和现在一样。
  */
 import type { Pinia } from 'pinia';
 import { useAppStore, PERSONAS, type PersonaKey } from '@/stores/app';
 import { usePreviewStore } from '@/stores/preview';
-import { isApiError, isBackendDown, setApiContext } from './http';
+import { setApiContext } from './http';
 import { anyReal, realModules, API_MODE } from './config';
-import { loadReleases } from './releases';
 
 export * from './config';
 export * from './http';
@@ -21,7 +20,7 @@ export function setupApi(pinia: Pinia) {
   setApiContext(() => {
     const app = useAppStore(pinia);
     const pv = usePreviewStore(pinia);
-    return { demoAs: DEMO_USER_CODES[app.persona], ver: app.viewVersion, previewAs: pv.session?.user.id ?? null };
+    return { ontologyId: app.ontologyId, demoAs: DEMO_USER_CODES[app.persona], ver: app.viewVersion, previewAs: pv.session?.user.id ?? null };
   });
 }
 
@@ -36,22 +35,5 @@ export async function bootstrapApi(pinia: Pinia): Promise<string[]> {
   const as = new URLSearchParams(window.location.search).get('as');
   const app = useAppStore(pinia);
   if (as && as in PERSONAS && as !== app.persona) app.setPersona(as as PersonaKey);
-  try {
-    const r = await loadReleases();
-    if (r.kind === 'ok') {
-      app.ontologyVersion = r.current;
-      app.ontologyPublishedAt = r.publishedAt;
-      app.ontologyNextVersion = r.next;
-    } else if (r.kind === 'empty') {
-      console.warn('[api] 发布记录接口返回空列表');
-      warnings.push('发布记录为空，尚无已发布版本');
-    }
-  } catch (e) {
-    // 接口失败不挡启动：发布记录保持空态，控制台报错（联调时看这里）
-    console.error('[api] 发布记录加载失败', e);
-    warnings.push(isBackendDown(e)
-      ? '后台未启动，无法加载发布记录'
-      : `发布记录接口加载失败（${isApiError(e) ? e.code : '未知错误'}）`);
-  }
   return warnings;
 }

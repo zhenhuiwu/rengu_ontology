@@ -11,8 +11,8 @@ import { usePreviewStore } from '@/stores/preview';
 export function useReadonly() {
   const app = useAppStore();
   const pv = usePreviewStore();
-  const readonly = computed(() => app.viewMode === 'history' || pv.active);
+  const readonly = computed(() => app.viewMode === 'history' || pv.active || app.workspace?.role === 'viewer' || !!app.workspaceError);
   const reason = computed(() =>
-    pv.active ? `正在以 ${pv.session!.user.name} 的权限预览，只读` : app.viewMode === 'history' ? `正在查看历史版本 ${app.viewVersion}，只读` : '');
+    app.workspaceError ? app.workspaceError : app.workspace?.role === 'viewer' ? '当前本体工作空间为只读权限' : pv.active ? `正在以 ${pv.session!.user.name} 的权限预览，只读` : app.viewMode === 'history' ? `正在查看历史版本 ${app.viewVersion}，只读` : '');
   return { readonly, reason };
 }

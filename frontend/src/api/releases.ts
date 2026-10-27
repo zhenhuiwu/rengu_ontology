@@ -8,7 +8,7 @@
  */
 import { shallowReactive } from 'vue';
 import { RELEASES as MOCK_RELEASES, type Release } from '@/mock/releases';
-import { apiClient } from './http';
+import { apiClient, currentApiContext } from './http';
 
 const api = apiClient('versioning');
 
@@ -33,16 +33,18 @@ export const fetchCurrentRelease = () => api.get<CurrentVersionDto>('/releases/c
 
 export type LoadReleasesResult =
   | { kind: 'mock' }
-  | { kind: 'empty' }
+  | { kind: 'empty'; next?: string }
   | { kind: 'ok'; current: string; publishedAt: string; next: string };
 
 /** real 模式下拉取发布记录。mock 模式什么都不做；接口为空或失败时清空列表。失败抛 ApiError。 */
 export async function loadReleases(): Promise<LoadReleasesResult> {
   if (!api.isReal()) return { kind: 'mock' };
+  const key = JSON.stringify(currentApiContext());
   RELEASES.splice(0);
   const [list, cur] = await Promise.all([fetchReleases(), fetchCurrentRelease()]);
+  if (key !== JSON.stringify(currentApiContext())) return { kind: 'empty' };
   const head = list.items.find((r) => r.ver === list.current);
-  if (!list.items.length || !list.current || !cur.current || !head) return { kind: 'empty' };
+  if (!list.items.length || !list.current || !cur.current || !head) return { kind: 'empty', next: cur.next };
   RELEASES.splice(0, RELEASES.length, ...list.items.map(toRelease));
   return { kind: 'ok', current: cur.current, publishedAt: head.publishedAt, next: cur.next };
 }

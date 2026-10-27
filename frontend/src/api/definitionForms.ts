@@ -1,5 +1,5 @@
 import { apiClient, currentApiContext, type PageResult } from './http';
-import { crSave, crStart, fetchCR, fetchCRItems, staticContextKey, type CRItemOut, type DraftChange } from './static';
+import { crSave, crStart, fetchCR, fetchCRItems, staticContextKey, fetchMetricGroups, type CRItemOut, type DraftChange } from './static';
 export type DefinitionKind = 'object' | 'metric' | 'dimension';
 export interface DefinitionValues { id?: string; name: string; api: string; group: string; owner: string; [key: string]: unknown }
 export interface DefinitionOption { id: string; name: string; api?: string; status?: string; version?: string; [key: string]: unknown }
@@ -8,7 +8,7 @@ const api = apiClient('static');
 const paths = { object: 'object-types', metric: 'metrics', dimension: 'dimensions' };
 export function definitionContext() {
   const ctx = currentApiContext();
-  return { key: staticContextKey(), options: { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } } };
+  return { key: staticContextKey(), options: { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } } };
 }
 const check = (ctx: ReturnType<typeof definitionContext>) => { if (ctx.key !== staticContextKey()) throw new Error('身份或版本已切换，请重新打开表单'); };
 async function all(ctx: ReturnType<typeof definitionContext>, path: string) {
@@ -21,13 +21,14 @@ async function all(ctx: ReturnType<typeof definitionContext>, path: string) {
 }
 export async function definitionChoices(kind: DefinitionKind) {
   const ctx = definitionContext();
-  const [owners, objects, metrics, dimensions] = await Promise.all([
+  const [owners, objects, metrics, dimensions, metricGroups] = await Promise.all([
     api.get<DefinitionOption[]>('/build/owners', { ...ctx.options, query: { ...ctx.options.query, kind } }),
     kind !== 'metric' ? all(ctx, '/object-types') : [],
     kind === 'metric' ? all(ctx, '/metrics') : [],
     kind !== 'object' ? all(ctx, '/dimensions') : [],
+    kind === 'metric' ? fetchMetricGroups() : [],
   ]);
-  check(ctx); return { owners, objects, metrics, dimensions };
+  check(ctx); return { owners, objects, metrics, dimensions, metricGroups };
 }
 export async function definitionProperties(id: string) {
   const ctx = definitionContext();

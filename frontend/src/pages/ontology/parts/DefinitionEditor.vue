@@ -28,7 +28,7 @@ let lockedProperties = new WeakSet<object>();
 const previousProperties = ref<DefinitionProperty[]>([]);
 const propertyPage = ref(1);
 const properties = ref<DefinitionProperty[]>([]), sourceProperties = ref<DefinitionProperty[]>([]);
-const choices = reactive<{ owners: DefinitionOption[]; objects: DefinitionOption[]; metrics: DefinitionOption[]; dimensions: DefinitionOption[] }>({ owners: [], objects: [], metrics: [], dimensions: [] });
+const choices = reactive<{ owners: DefinitionOption[]; objects: DefinitionOption[]; metrics: DefinitionOption[]; dimensions: DefinitionOption[]; metricGroups: string[] }>({ owners: [], objects: [], metrics: [], dimensions: [], metricGroups: [] });
 interface Level { name: string; api: string; source: string; note?: string }
 interface Variant { code: string; label: string; default: boolean; api?: string; version?: string }
 const previousLevels = ref<Level[]>([]);
@@ -46,7 +46,7 @@ async function load() {
   const my = ++seq, key = contextKey();
   if (!visible.value) return;
   if (!isStaticReal()) { error.value = '定义表单仅用于真实接口模式'; loading.value = false; return; }
-  loading.value = true; error.value = ''; sourceProperties.value = []; initialSnapshot.value = '';
+  loading.value = true; error.value = ''; choices.metricGroups = []; sourceProperties.value = []; initialSnapshot.value = '';
   const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
   Object.keys(values).forEach((k) => delete values[k]); Object.assign(values, defaults);
   properties.value = []; propertyPage.value = 1; variants.value = []; levels.value = []; original.value = undefined; originalProperties.value = [];
@@ -93,6 +93,7 @@ async function loadSourceProperties() {
 }
 watch(() => values.object, loadSourceProperties);
 watch(contextKey, () => { if (open.value) { open.value = false; message.info('身份或版本已切换，请重新打开定义表单'); } });
+const metricGroupOptions = computed(() => choices.metricGroups.map(value => ({ value })));
 const ownerOptions = computed(() => choices.owners.map((o) => ({ value: o.id, label: o.name })));
 const objectOptions = computed(() => choices.objects.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）` })));
 const propertyOptions = computed(() => sourceProperties.value.map((p) => ({ value: p.api, label: `${p.name}（${p.api}）` })));
@@ -161,7 +162,7 @@ async function save() {
         <div class="definition-grid">
           <a-form-item label="名称" required><a-input v-model:value="values.name" :maxlength="64" /></a-form-item>
           <a-form-item label="API名" required><a-input v-model:value="values.api" :disabled="!!targetId || !!resume" :maxlength="64" /></a-form-item>
-          <a-form-item label="分组"><a-input v-model:value="values.group" :maxlength="32" /></a-form-item>
+          <a-form-item label="分组"><a-auto-complete v-if="kind === 'metric'" v-model:value="values.group" :options="metricGroupOptions" :filter-option="(input: string, option: { value: string }) => option.value.toLowerCase().includes(input.toLowerCase())" placeholder="选择已有分类或输入新分类"><a-input :maxlength="32" /></a-auto-complete><a-input v-else v-model:value="values.group" :maxlength="32" /></a-form-item>
           <a-form-item label="负责人" required><a-select v-model:value="values.owner" :options="ownerOptions" placeholder="选择真实用户" /></a-form-item>
         </div>
         <template v-if="kind === 'object'">

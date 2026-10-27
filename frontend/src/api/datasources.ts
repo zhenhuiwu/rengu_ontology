@@ -44,7 +44,7 @@ async function allPages<T>(path: string): Promise<T[]> {
   for (let page = 1; ; page++) {
     const r = await api.get<PageResult<T>>(path, {
       query: { page, size: ALL, ver: ctx.ver, previewAs: ctx.previewAs },
-      headers: { 'X-Demo-As': ctx.demoAs ?? '' }, readonlyParams: false,
+      headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, readonlyParams: false,
     });
     if (r.page !== page) throw new Error('数据列表已变化，请刷新后重试');
     items.push(...r.items);

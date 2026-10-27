@@ -12,6 +12,7 @@
  *   用 writer.load 读回库里的草稿行叠到 saved（刷新页面后草稿还在）；读失败只提示，不当成“没有草稿”。
  */
 import { computed, reactive, watch, type Ref } from 'vue';
+import { currentApiContext } from '@/api/http';
 import { message } from 'ant-design-vue';
 import { useRouter } from 'vue-router';
 import type { DraftCR } from '@/mock/releases';
@@ -27,6 +28,11 @@ const working = reactive<Record<string, Row[]>>({});
 const submitted = reactive<Record<string, string>>({});
 /** 已从库里读回过草稿行的 变更单|对象（每个只读一次；本会话保存 / 放弃后以本地为准） */
 const loaded = new Set<string>();
+
+export function resetDraftEdits() {
+  for (const state of [saved, working, submitted]) for (const key of Object.keys(state)) delete state[key];
+  loaded.clear();
+}
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -60,8 +66,9 @@ export interface DraftEditsOptions {
 export function useDraftEdits(o: DraftEditsOptions) {
   const confirm = useConfirmStore();
   const router = useRouter();
-  const prefix = () => `${o.draft.value?.id ?? '-'}|${o.targetId()}|`;
-  const locked = computed(() => !!o.draft.value && !!submitted[o.draft.value.id]);
+  const workspacePrefix = `${currentApiContext().ontologyId}|`;
+  const prefix = () => `${workspacePrefix}${o.draft.value?.id ?? '-'}|${o.targetId()}|`;
+  const locked = computed(() => !!o.draft.value && !!submitted[workspacePrefix + o.draft.value.id]);
   const canEdit = computed(() => o.isDraft.value && !locked.value);
   const editTip = computed(() => (o.isDraft.value && locked.value ? `${o.draft.value!.id} 已提交审核，驳回后才能继续修改` : o.editTip.value));
   const dirty = computed(() => Object.keys(working).some((k) => k.startsWith(prefix())));
@@ -152,7 +159,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
   /* 刷新后恢复：选中对象在草稿单里时读回库里的草稿行（每个 单号|对象 一次） */
   watch(() => [o.draft.value?.id, o.targetId(), o.ready?.() ?? true] as const, async ([crId, tid, rd]) => {
     if (!crId || !rd || !writing() || !o.writer?.load) return;
-    const p = `${crId}|${tid}|`;
+    const p = `${workspacePrefix}${crId}|${tid}|`;
     if (loaded.has(p)) return;
     loaded.add(p);
     try {
@@ -190,7 +197,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
     });
     if (!ok) return;
     if (writing()) { try { await o.writer!.submit(d.id); } catch (e) { message.error(`提交审核失败：${errText(e)}`); return; } }
-    submitted[d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交评审`); router.push({ path: '/build/ontology/releases', query: { cr: d.id } });
+    submitted[workspacePrefix + d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交评审`); router.push({ path: '/build/ontology/releases', query: { cr: d.id } });
   }
   async function discard(after: () => void) {
     const d = o.draft.value;

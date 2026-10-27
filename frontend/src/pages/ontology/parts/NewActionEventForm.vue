@@ -76,7 +76,7 @@ async function load() {
   for (const k of Object.keys(form)) delete form[k];
   Object.assign(form, { name: '', api: '', group: '', targetKind: null, objKind: null, owner: '', desc: '', source: '外部系统', sourceRef: '', ruleId: null, retention: '30 天', runners: '', approval: '', dedupKey: '', dedupWindow: '', delivery: '', ordering: '' });
   for (const section of Object.keys(props.rowForms)) rows[section] = [];
-  const options = { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } };
+  const options = { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } };
   try {
     const [people, first] = await Promise.all([
       api.get<{ id: string; name: string }[]>('/build/owners', { ...options, query: { ...options.query, kind: props.kind } }),

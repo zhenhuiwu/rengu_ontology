@@ -44,7 +44,7 @@ const live = computed(() => isOverviewReal() && !backend.down);
 const summary = ref<OverviewSummary | null>(null);
 const loadError = ref('');
 const recent = ref<(typeof RELEASES)[number][]>([]);
-const contextKey = () => { const { demoAs, previewAs, ver } = currentApiContext(); return JSON.stringify([demoAs, previewAs, ver]); };
+const contextKey = () => { const { ontologyId, demoAs, previewAs, ver } = currentApiContext(); return JSON.stringify([ontologyId, demoAs, previewAs, ver]); };
 
 /* ── 资源卡片 ── */
 // 演示模式的卡片；真接口模式由 /ontology/overview 统一返回。
@@ -122,8 +122,11 @@ onMounted(() => {
   if (listEl.value) ro.observe(listEl.value);
 });
 onBeforeUnmount(() => ro?.disconnect());
-watch(filterKind, () => { page.value = 1; });
 const realTodos = ref<{ items: OverviewTodo[]; total: number }>({ items: [], total: 0 });
+watch([contextKey, filterKind], () => {
+  page.value = 1;
+  realTodos.value = { items: [], total: 0 };
+});
 const todoError = ref('');
 const pageRows = computed<Todo[]>(() => live.value ? realTodos.value.items.map((t) => ({ ...t, go: () => router.push(t.kind === '数据质量' ? { path: '/build/data/quality', query: { result: '失败', check: t.id } } : { path: '/build/ontology/releases', query: { cr: t.id } }) })) : shown.value.slice((page.value - 1) * size.value, page.value * size.value));
 const todoTotal = computed(() => live.value ? realTodos.value.total : shown.value.length);
@@ -131,7 +134,7 @@ let todoSeq = 0;
 async function loadTodos() {
   const my = ++todoSeq;
   todoError.value = '';
-  realTodos.value = { items: [], total: 0 };
+  // Keep current rows during a size refresh so ResizeObserver cannot alternate the available height.
   if (!live.value || histVer.value) return;
   try {
     const r = await fetchOverviewTodos(filterKind.value, page.value, size.value);
@@ -155,6 +158,7 @@ const VW = 960; const VH = 540; const NW = 96; const NH = 32;
 // 节点 / 边：mock 模式读 LINK_OBJECTS / LINKS；真接口（开关 static）读 GET /ontology/graph（src/api/overview.ts），
 // 图谱独立加载，不等待统计与发布列表；坐标 POS 仍由前端定义。
 const graphData = ref<OverviewGraph>(isOverviewReal() ? { nodes: [], edges: [] } : mockGraph());
+const graphLoaded = ref(false);
 const nodeCount = computed(() => graphData.value.nodes.length);
 const edgeCount = computed(() => {
   const ids = new Set(graphData.value.nodes.map((n) => n.id));
@@ -165,7 +169,7 @@ let overviewSeq = 0;
 async function loadGraph() {
   const my = ++overviewSeq;
   const key = contextKey();
-  summary.value = null; recent.value = []; loadError.value = '';
+  summary.value = null; recent.value = []; loadError.value = ''; graphLoaded.value = false;
   graphData.value = live.value ? { nodes: [], edges: [] } : mockGraph();
   if (graphRef) graphRef.clearCells();
   if (!live.value) { if (graphRef) addCells(graphRef); return; }
@@ -176,7 +180,7 @@ async function loadGraph() {
   await Promise.allSettled([
     fetchGraph().then((g) => {
       if (!valid()) return;
-      graphData.value = g;
+      graphData.value = g; graphLoaded.value = true;
       if (graphRef) { graphRef.clearCells(); addCells(graphRef); }
     }).catch(failed),
     fetchOverview().then((s) => { if (valid()) summary.value = s; }).catch(failed),
@@ -315,7 +319,7 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
           </span>
           <InfoTip :text="live ? '点击对象或关系查看定义' : '点击对象查看对象类型；虚线为草稿，红框为数据质量检查失败'" />
         </div>
-        <div class="oo-canvas"><GraphCanvas @ready="draw" /></div>
+        <div class="oo-canvas"><GraphCanvas @ready="draw" /><div v-if="live && graphLoaded && !nodeCount" class="oo-empty"><a-empty :image="Empty.PRESENTED_IMAGE_SIMPLE" description="尚未定义对象类型" /></div></div>
       </div>
 
       <div class="oo-side">
@@ -335,7 +339,7 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
               <span class="t-12 oo-st" :class="stCls(t.tone)"><i class="oo-dot" />{{ t.status }}</span>
             </div>
           </div>
-          <AppPagination v-if="!histVer" v-model:page="page" variant="simple" :total="todoTotal" :size="size" unit="项" class="oo-pager" />
+          <AppPagination v-if="!histVer" v-model:page="page" variant="simple" :total="todoTotal" :size="size" :empty="false" unit="项" class="oo-pager" />
         </div>
 
         <div class="panel oo-rel">
@@ -370,7 +374,8 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
 .oo-main { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .oo-graph { flex: 1; min-width: 0; }
 .oo-hist { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
-.oo-canvas { flex: 1; min-height: 0; }
+.oo-canvas { flex: 1; min-height: 0; position: relative; }
+.oo-empty { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .oo-legend { margin-left: 16px; display: flex; gap: 16px; align-items: center; }
 .oo-legend > span { display: inline-flex; align-items: center; gap: 6px; }
 .lg { display: inline-block; width: 16px; height: 10px; border-radius: 2px; background: var(--g1); }

@@ -3,7 +3,7 @@
  * 单独成文件，不动工作台 / 调优共用的 qa.ts。形状同 src/mock/objects-qa.ts（AskAnswer / RelItem / TlItem / ObjAction）。
  */
 import type { AskAnswer, AskScope, ObjAction, RelItem, TlItem } from '@/mock/objects-qa';
-import { apiClient, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult } from './http';
+import { apiClient, workspaceFetch, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult } from './http';
 
 const api = apiClient('qa');
 
@@ -72,11 +72,13 @@ async function download(path: string, b: unknown, fallbackName: string): Promise
   if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
+  if (ctx.ontologyId) headers['X-Ontology-Id'] = ctx.ontologyId;
   const url = `${API_BASE}/${api.prefix}/v1${path}${qs.size ? `?${qs}` : ''}`;
   let res: Response;
   try {
-    res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(b) });
+    res = await workspaceFetch(url, { method: 'POST', headers, body: JSON.stringify(b) });
   } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e;
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: `无法连接后台：${(e as Error)?.message ?? e}` });
   }
   if (!res.ok) {

@@ -28,11 +28,10 @@ function start() {
     .forEach(([n, c]) => app.component(n, c));
   app.mount('#app');
 }
-// 全 mock（默认）：和原来一样同步启动；有模块走真接口：先拉发布记录等启动数据再装路由（?ver= 校验要用）
-// 接口失败时回退 mock，并在挂载后提示（只在 real 模式，mock 模式不会走到这里）
+// 启动先确定身份，工作空间与发布记录由路由守卫验证；真实失败保留错误态。
 if (anyReal()) {
   bootstrapApi(pinia)
-    .catch((e: unknown) => { console.error('[api] 启动数据加载异常', e); return ['接口启动数据加载失败，暂时显示演示数据']; })
+    .catch((e: unknown) => { console.error('[api] 启动数据加载异常', e); return ['接口启动失败，请刷新后重试']; })
     .then((warnings) => { start(); warnings.forEach((t) => message.warning(t)); });
 }
 else start();

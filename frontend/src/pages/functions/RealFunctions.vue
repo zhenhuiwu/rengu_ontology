@@ -21,7 +21,7 @@ const setQuery = (patch: Record<string, string | undefined>) => router.replace({
 const context = () => JSON.stringify(currentApiContext());
 function captured() {
   const ctx = { ...currentApiContext() }, key = JSON.stringify(ctx);
-  const options: RequestOptions = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const options: RequestOptions = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
   return { key, options, current: () => alive && key === context() };
 }
 const fail = (e: unknown) => isApiError(e) ? `${e.message}（${e.code}）` : e instanceof Error ? e.message : String(e);

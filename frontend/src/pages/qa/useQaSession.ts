@@ -17,7 +17,7 @@ const live = qaLive;
 
 export interface QaTurn { id: number; q: string; time: string; }
 
-const sessions = ref<QaSession[]>([...QA_SESSION_LIST]);
+const sessions = ref<QaSession[]>(real ? [] : [...QA_SESSION_LIST]);
 const activeId = ref<string>(live.value ? '' : QA_SESSION_LIST[0].id);
 /** 真接口：当前会话详情（含全部轮次）；listTick 变了左栏重取当前页 */
 const storedDetail = ref<qaApi.QaSessionDetail | null>(null);
@@ -58,7 +58,7 @@ const draft = ref('');
 if (real) {
   watch(contextKey, () => {
     ++loadSeq; ++sendSeq; ++createSeq; detailRequest?.abort();
-    detail.value = null; activeId.value = ''; draft.value = '';
+    detail.value = null; activeId.value = ''; draft.value = ''; sessions.value = []; turns.value = {}; listTick.value++; favTick.value++;
     loading.value = false; sending.value = false; creating.value = false;
   }, { flush: 'sync' });
   watch(activeId, () => { ++loadSeq; detailRequest?.abort(); loading.value = false; ++sendSeq; sending.value = false; draft.value = ''; }, { flush: 'sync' });

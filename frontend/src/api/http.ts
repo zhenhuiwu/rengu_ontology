@@ -12,6 +12,7 @@ import { isReal, SWITCH_PREFIX, type ApiPrefix, type SwitchKey } from './config'
 export const API_BASE = '/api';
 
 export interface ApiContext {
+  ontologyId?: string | null;
   /** sys_user.code，例如 U010001 */
   demoAs?: string | null;
   /** 正在查看的历史版本（?ver=），null = 当前版本 */
@@ -23,6 +24,35 @@ export interface ApiContext {
 let ctxProvider: () => ApiContext = () => ({});
 export function setApiContext(fn: () => ApiContext) { ctxProvider = fn; }
 export const currentApiContext = (): ApiContext => ctxProvider();
+let workspaceEpoch = 0;
+const workspaceRequests = new Set<AbortController>();
+export function invalidateWorkspaceRequests() {
+  workspaceEpoch++;
+  for (const controller of workspaceRequests) controller.abort();
+  workspaceRequests.clear();
+}
+/** Downloads use the same cancellation and stale-response boundary as JSON requests. */
+export async function workspaceFetch(url: string, init: RequestInit = {}, scoped = true): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const ontologyId = currentApiContext().ontologyId;
+  if (scoped && headers.has('X-Ontology-Id') && headers.get('X-Ontology-Id') !== ontologyId) throw new DOMException('本体工作空间已切换', 'AbortError');
+  if (scoped && ontologyId) headers.set('X-Ontology-Id', ontologyId);
+  const epoch = workspaceEpoch, controller = new AbortController();
+  const abort = () => controller.abort();
+  if (init.signal?.aborted) controller.abort();
+  init.signal?.addEventListener('abort', abort, { once: true });
+  if (scoped) workspaceRequests.add(controller);
+  try {
+    const response = await fetch(url, { ...init, headers, signal: controller.signal });
+    // Read the body before releasing cancellation; JSON/blob readers below consume the buffered response.
+    const body = await response.arrayBuffer();
+    if (scoped && epoch !== workspaceEpoch) throw new DOMException('本体工作空间已切换', 'AbortError');
+    return new Response(response.status === 204 || response.status === 205 || response.status === 304 ? null : body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  } finally {
+    workspaceRequests.delete(controller);
+    init.signal?.removeEventListener('abort', abort);
+  }
+}
 
 /** 后台错误体（app/core/errors.py error_body） */
 export interface ApiErrorBody { code: string; message: string; details?: unknown; requestId?: string | null }
@@ -59,6 +89,8 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** 是否带上当前的 ?ver= / ?previewAs=（默认带，api-index：只读模式下所有请求都带） */
   readonlyParams?: boolean;
+  /** Platform discovery/current validation is independent of the active workspace. */
+  ontologyScope?: boolean;
 }
 
 function buildUrl(prefix: ApiPrefix, path: string, opts: Pick<RequestOptions, 'query' | 'readonlyParams'> = {}): string {
@@ -88,11 +120,12 @@ async function request<T>(prefix: ApiPrefix, path: string, opts: RequestOptions 
   const ctx = currentApiContext();
   const headers: Record<string, string> = { Accept: 'application/json', ...(opts.headers ?? {}) };
   if (ctx.demoAs && !Object.keys(headers).some((name) => name.toLowerCase() === 'x-demo-as')) headers['X-Demo-As'] = ctx.demoAs;
+  if (opts.ontologyScope !== false && ctx.ontologyId && !Object.keys(headers).some((name) => name.toLowerCase() === 'x-ontology-id')) headers['X-Ontology-Id'] = ctx.ontologyId;
   let body: BodyInit | undefined;
   if (opts.body !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(opts.body); }
   let res: Response;
   try {
-    res = await fetch(buildUrl(prefix, path, opts), { method: opts.method ?? 'GET', headers, body, signal: opts.signal });
+    res = await workspaceFetch(buildUrl(prefix, path, opts), { method: opts.method ?? 'GET', headers, body, signal: opts.signal }, opts.ontologyScope !== false);
   } catch (e) {
     if ((e as { name?: string })?.name === 'AbortError') throw e;
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: `无法连接后台：${(e as Error)?.message ?? e}` });

@@ -5,5 +5,5 @@ const api = apiClient('admin');
 export async function loadMyProfile(): Promise<CurrentProfile | null> {
   if (!api.isReal()) return null;
   const ctx = { ...currentApiContext() };
-  return await api.get<CurrentProfile>('/me', { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } });
+  return await api.get<CurrentProfile>('/me', { ontologyScope: false, readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '' } });
 }

@@ -10,6 +10,7 @@
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
+import { currentApiContext } from '@/api/http';
 import { message } from 'ant-design-vue';
 import { LeftOutlined, MessageOutlined } from '@ant-design/icons-vue';
 import { useConfirmStore } from '@/stores/confirm';
@@ -68,7 +69,7 @@ const groups = computed(() => {
 /* 面包屑：回到搜索结果，保留筛选（上次搜的是别的类型就回到本类型） */
 const back = computed<LocationQueryRaw>(() => {
   let q: LocationQueryRaw = {};
-  try { q = JSON.parse(sessionStorage.getItem('obj-search:last') || '{}'); } catch { q = {}; }
+  try { q = JSON.parse(sessionStorage.getItem(`obj-search:last:${currentApiContext().ontologyId}`) || '{}'); } catch { q = {}; }
   return q.type === typeId.value ? q : { type: typeId.value };
 });
 const backLabel = computed(() => {

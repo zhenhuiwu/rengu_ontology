@@ -7,7 +7,7 @@ import type { Hit } from '@/mock/rules';
 
 const staticApi = apiClient('static');
 export const isAutomationReal = () => staticApi.isReal() || dynamicApi.isReal() || actionApi.isReal();
-const fixed = (ctx: ApiContext, query: Record<string, QueryValue> = {}) => ({ headers: { 'X-Demo-As': ctx.demoAs ?? '' }, readonlyParams: false, query: { ...query, ver: ctx.ver ?? undefined, previewAs: ctx.previewAs ?? undefined } });
+const fixed = (ctx: ApiContext, query: Record<string, QueryValue> = {}) => ({ headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, readonlyParams: false, query: { ...query, ver: ctx.ver ?? undefined, previewAs: ctx.previewAs ?? undefined } });
 async function pages<T>(path: string, ctx: ApiContext, query: Record<string, QueryValue> = {}): Promise<T[]> {
   const items: T[] = [];
   for (let page = 1; ; page++) {

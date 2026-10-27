@@ -8,7 +8,7 @@ import { RELEASES } from '@/api/releases';
 const app = useAppStore();
 const { view } = useVersion();
 const visible = ref(false);
-const shown = () => app.viewVersion ?? app.ontologyVersion;
+const shown = () => app.viewVersion ?? (app.ontologyVersion === '—' ? '未发布' : app.ontologyVersion);
 function pick(v: string) { visible.value = false; view(v); }
 </script>
 
@@ -17,6 +17,7 @@ function pick(v: string) { visible.value = false; view(v); }
     <template #content>
       <div class="vp">
         <div class="vp-head fw-600">发布记录</div>
+        <div v-if="!RELEASES.length" class="vp-empty t-12 c-3">暂无发布记录</div>
         <ul class="vp-list">
           <li v-for="r in RELEASES" :key="r.ver" class="vp-item" :class="{ on: r.ver === shown() }" :title="r.note" @click="pick(r.ver)">
             <div class="vp-row">
@@ -38,6 +39,7 @@ function pick(v: string) { visible.value = false; view(v); }
 
 <style scoped>
 .vp { width: 360px; }
+.vp-empty { padding: 16px 0; text-align: center; }
 .vp-head { padding-bottom: 8px; border-bottom: var(--border); }
 .vp-list { list-style: none; margin: 0; padding: 0; }
 .vp-item { padding: 8px; border-bottom: var(--border); cursor: pointer; }

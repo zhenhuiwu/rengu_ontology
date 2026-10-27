@@ -34,7 +34,7 @@ export function useStaticCr(
     state.value = undefined; error.value = ''; loading.value = false;
     if (!isStaticReal() || !id || !tid) return;
     const ctx = currentApiContext();
-    const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+    const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
     const current = () => sequence === seq && captured === key();
     loading.value = true;
     try {
@@ -119,7 +119,7 @@ export function useRealCrRecords() {
     if (!isStaticReal() || ctx.ver) return;
     loading.value = true;
     try {
-      const result = await fetchWorkflowRecords({ readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } });
+      const result = await fetchWorkflowRecords({ readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } });
       if (my === seq && key === staticContextKey()) state.value = { key, rows: result };
     } catch (e) { if (my === seq && key === staticContextKey()) error.value = crErr(e); }
     finally { if (my === seq && key === staticContextKey()) loading.value = false; }

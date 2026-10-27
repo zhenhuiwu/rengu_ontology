@@ -33,6 +33,11 @@ let contextKey = '';
 let revision = 0;
 let pending: Promise<void> | null = null;
 let loaded = false;
+export function resetDraftState() {
+  revision++; loaded = false; pending = null; contextKey = '';
+  DRAFTS.splice(0); created.splice(0);
+  for (const cr of Object.keys(TARGETS)) delete TARGETS[cr];
+}
 export function loadDraftState(force = false): Promise<void> {
   if (!api.isReal()) return Promise.resolve();
   const ctx = currentApiContext();
@@ -45,7 +50,7 @@ export function loadDraftState(force = false): Promise<void> {
   if (pending) return pending;
   if (loaded && !force) return Promise.resolve();
   const rev = revision;
-  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } };
+  const options = { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };
   const request = Promise.all([
     api.get<DraftCR[]>('/change-requests', { ...options, query: { ...options.query, status: '草稿' } }),
     api.get<Record<string, Partial<Record<TargetKind, string[]>>>>('/change-requests/draft-targets', options),

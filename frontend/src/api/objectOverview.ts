@@ -12,7 +12,7 @@ export async function fetchObjectOverviewRuntime(id: string, name: string, apiNa
     const result: T[] = [], api = apiClient(module);
     if (!api.isReal()) throw new Error('相关模块尚未启用真实接口');
     for (let page = 1; ; page++) {
-      const response = await api.get<PageResult<T>>(path, { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '' }, query: { ...query, ver: ctx.ver, previewAs: ctx.previewAs, page, size: 200 } });
+      const response = await api.get<PageResult<T>>(path, { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, query: { ...query, ver: ctx.ver, previewAs: ctx.previewAs, page, size: 200 } });
       if (key !== staticContextKey()) throw new Error('读取上下文已变化');
       result.push(...response.items);
       if (result.length >= response.total || !response.items.length) return result;

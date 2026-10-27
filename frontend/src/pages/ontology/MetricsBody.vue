@@ -12,7 +12,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { GRAY, BRAND } from '@/theme';
 import { DAILY_GMV, fmtMoney } from '@/mock';
 import { METRIC_LIST as MOCK_LIST, METRIC_DEF, METRIC_DIMS, METRIC_VERSIONS, METRIC_REFS, type MetricListItem as M } from '@/mock/metricCatalog';
-import { isStaticReal, staticContextKey, fetchStaticDetail, rollbackMetric, trialMetric, crErr, type MetricTrialResult } from '@/api/static';
+import { isStaticReal, fetchMetricGroups, staticContextKey, fetchStaticDetail, rollbackMetric, trialMetric, crErr, type MetricTrialResult } from '@/api/static';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import DefinitionEditor from './parts/DefinitionEditor.vue';
@@ -26,7 +26,9 @@ import { useConfirmStore } from '@/stores/confirm';
 
 const LIST: M[] = isStaticReal() ? reactive<M[]>([]) : MOCK_LIST;
 const firstId = ref('');
-const GROUPS = ['全部', '销售', '利润', '履约', '库存', '会员'];
+const MOCK_GROUPS = ['全部', '销售', '利润', '履约', '库存', '会员'];
+const metricGroups = ref<string[]>([]), groupsError = ref('');
+const GROUPS = computed(() => isStaticReal() ? ['全部', ...metricGroups.value.filter(value => value !== '全部')] : MOCK_GROUPS);
 /** 审核中的变更单号：按变更单状态判断（只有“审核中”才算，草稿、已驳回不算） */
 const workflow = useRealCrRecords();
 const reviewCr = (m: M) => isStaticReal() ? workflow.rows.value.find((c) => c.id === m.review?.cr && c.status === '审核中')?.id : (m.review && CHANGE_REQUESTS.find((c) => c.id === m.review!.cr)?.status === '审核中' ? m.review.cr : undefined);
@@ -82,6 +84,20 @@ const changeTarget = ref('');
 const openChange = (name: string) => { rollbackPending.value = undefined; changeTarget.value = name; changeOpen.value = true; };
 watch(() => JSON.stringify([staticContextKey(), selected.value]), () => { changeOpen.value = false; rollbackPending.value = undefined; rollbackBusy.value = false; });
 const group = ref('全部');
+let groupsSeq = 0;
+async function loadGroups() {
+  if (!isStaticReal()) return;
+  const my = ++groupsSeq, key = staticContextKey();
+  metricGroups.value = []; groupsError.value = '';
+  try {
+    const groups = await fetchMetricGroups();
+    if (my !== groupsSeq || key !== staticContextKey()) return;
+    metricGroups.value = groups;
+    if (!GROUPS.value.includes(group.value)) group.value = '全部';
+  } catch (e) { if (my === groupsSeq && key === staticContextKey()) groupsError.value = e instanceof Error ? e.message : '指标分类加载失败'; }
+}
+watch(staticContextKey, () => { group.value = '全部'; void loadGroups(); }, { immediate: true });
+onBeforeUnmount(() => { groupsSeq++; });
 const kw = ref('');
 const visibleMetrics = computed(() => {
   const target = cr.head.value?.targets.find((t) => t.kind === 'metric' && t.id === selected.value);
@@ -154,7 +170,7 @@ async function runTrial() {
   const seq = ++trialSeq, key = trialKey(), ctx = currentApiContext(), id = selected.value;
   trialBusy.value = true; trialError.value = '';
   try {
-    const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } });
+    const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } });
     if (seq !== trialSeq || key !== trialKey()) return;
     trialResult.value = result;
     void router.replace({ query: { ...route.query, tab: 'def' } });
@@ -231,6 +247,7 @@ const refCols = [
         <a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" />
         <a-segmented v-model:value="group" :options="GROUPS" block size="small" />
       </div>
+      <a-alert v-if="groupsError" type="error" :message="groupsError" show-icon><template #action><a-button size="small" @click="loadGroups">重试分类</a-button></template></a-alert>
       <a-alert v-if="metricPage.error.value || metricDetailError" type="error" :message="metricPage.error.value || metricDetailError" show-icon />
       <div v-if="metricPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
       <ul class="mt-items" :aria-busy="metricPage.loading.value">

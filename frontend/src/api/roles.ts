@@ -20,7 +20,7 @@ export interface ObjectPermissionPage extends PageResult<ObjectPermissionRole> {
 
 const enc = encodeURIComponent;
 
-const pinned = () => { const ctx = currentApiContext(); return { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } }; };
+const pinned = () => { const ctx = currentApiContext(); return { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } }; };
 export const queryObjectPermissions = (objectId: string, page: number, size: number) => {
   const options = pinned();
   return api.get<ObjectPermissionPage>('/roles/object-permissions', { ...options, query: { ...options.query, objectId, page, size } });

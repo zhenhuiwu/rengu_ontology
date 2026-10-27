@@ -54,7 +54,7 @@ const runStats = (id: string) => real ? remoteStats.value[id] ?? { total: 0, rat
 async function allPages<T>(client: typeof actionApi, path: string, query: Record<string, string> = {}) {
   const rows: T[] = [], ctx = { ...currentApiContext() };
   for (let page = 1; ; page++) {
-    const result = await client.get<PageResult<T>>(path, { headers: { 'X-Demo-As': ctx.demoAs ?? '' }, readonlyParams: false, query: { ...query, page, size: 200, ver: ctx.ver, previewAs: ctx.previewAs } });
+    const result = await client.get<PageResult<T>>(path, { headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, readonlyParams: false, query: { ...query, page, size: 200, ver: ctx.ver, previewAs: ctx.previewAs } });
     rows.push(...result.items);
     if (!result.items.length || rows.length >= result.total) return rows;
   }

@@ -4,13 +4,13 @@
  */
 import type { QaSession, QaFavorite, QaPage, QaDemoTurn } from '@/mock/qa';
 import type { CertQa, FreqQ, SemPlan, EvalRun, EvalQ, FailCase, FailKind, Feedback } from '@/mock/qa-tuning';
-import { apiClient, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult, type RequestOptions } from './http';
+import { apiClient, workspaceFetch, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult, type RequestOptions } from './http';
 
 const api = apiClient('qa');
 /** Freeze identity/history/preview for a multi-await UI operation. */
 export function qaRequestOptions(signal?: AbortSignal): Omit<RequestOptions, 'method' | 'body'> {
   const c = currentApiContext();
-  return { headers: { 'X-Demo-As': c.demoAs ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs }, signal };
+  return { headers: { 'X-Demo-As': c.demoAs ?? '', 'X-Ontology-Id': c.ontologyId ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs }, signal };
 }
 export const qaReal = () => api.isReal();
 
@@ -27,11 +27,13 @@ async function download(path: string, query?: Record<string, string>): Promise<R
   if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
   const headers: Record<string, string> = {};
   if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
+  if (ctx.ontologyId) headers['X-Ontology-Id'] = ctx.ontologyId;
   const url = `${API_BASE}/${api.prefix}/v1${path}${qs.size ? `?${qs}` : ''}`;
   let res: Response;
   try {
-    res = await fetch(url, { headers });
+    res = await workspaceFetch(url, { headers });
   } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e;
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: `无法连接后台：${(e as Error)?.message ?? e}` });
   }
   if (!res.ok) {

@@ -39,12 +39,12 @@ function toRun(r: Record<string, unknown>): RealRun {
 }
 function runOf(id: string): RealRun | { error: string } | undefined {
   if (!dynamicApi.isReal() || backend.down) return runById(id);
-  const { demoAs, previewAs, ver } = currentApiContext();
-  const key = JSON.stringify([demoAs, previewAs, ver, id]);
+  const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
+  const key = JSON.stringify([ontologyId, demoAs, previewAs, ver, id]);
   if (key in realRuns) return realRuns[key];
   if (!inflight.has(key)) {
     inflight.add(key);
-    dynamicApi.get<Record<string, unknown>>(`/action-runs/${encodeURIComponent(id)}`, { readonlyParams: false, query: { ver, previewAs }, headers: { 'X-Demo-As': demoAs ?? '' } }).then(
+    dynamicApi.get<Record<string, unknown>>(`/action-runs/${encodeURIComponent(id)}`, { readonlyParams: false, query: { ver, previewAs }, headers: { 'X-Demo-As': demoAs ?? '', 'X-Ontology-Id': ontologyId ?? '' } }).then(
       (r) => { realRuns[key] = toRun(r); },
       (e) => { if (!fallBackIfDown(e)) realRuns[key] = { error: e instanceof Error ? e.message : '读取动作执行失败' }; },
     ).finally(() => inflight.delete(key));
@@ -56,8 +56,8 @@ const realEvents = reactive<Record<string, EventRecord | { error: string }>>({})
 const eventInflight = new Set<string>();
 function eventOf(id: string): EventRecord | { error: string } | undefined {
   if (!actionApi.isReal() || backend.down) return eventById(id);
-  const { demoAs, previewAs, ver } = currentApiContext();
-  const key = JSON.stringify([demoAs, previewAs, ver, id]);
+  const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
+  const key = JSON.stringify([ontologyId, demoAs, previewAs, ver, id]);
   if (key in realEvents) return realEvents[key];
   if (!eventInflight.has(key)) {
     eventInflight.add(key);

@@ -21,7 +21,7 @@ export async function loadTenants(): Promise<TenantOption[]> {
   if (!api.isReal()) return TENANTS;
   const seq = ++loadSeq;
   try {
-    const list = await api.get<TenantOption[]>('/tenants');
+    const list = await api.get<TenantOption[]>('/tenants', { ontologyScope: false, readonlyParams: false });
     if (seq === loadSeq) tenantOptions.value = list;
     return tenantOptions.value;
   } catch (e) {
