@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
@@ -112,7 +113,16 @@ async def _qa_ask(c: Ctx, args: dict[str, Any]) -> dict[str, Any]:
 
     try:
         async with c.opener(c.user.ontology_id) as conn:
-            kind, snap, rows, elapsed, _sql = await chain.answer(c.session, conn, c.llm, c.user, question)
+            kind, snap, rows, elapsed, _sql = await chain.answer(
+                c.session,
+                conn,
+                c.llm,
+                c.user,
+                question,
+                request=c.request,
+                # 决策评估的调用方：AI（MCP 问数）；没有会话轮次，轮次号用一次性编号
+                caller={"aiSessionId": "mcp", "aiRoundId": f"MCP-{uuid.uuid4().hex[:12]}", "agent": "qa-mcp"},
+            )
     except DBAPIError as e:  # 同工作台：生成的 SQL 执行出错 → 换个问法（SQL 本身不出接口）
         raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
     out = dict(snap)
@@ -121,8 +131,8 @@ async def _qa_ask(c: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     if isinstance(answer, dict) and answer.get("card") == "action":
         answer = out["answer"] = _action_for_machine(answer, scopes, c.request)
     if isinstance(answer, dict) and scopes is not None and "dynamic:read" not in scopes:
-        # 告警 / 规则命中属于动态层：密钥要有 dynamic:read（链路本身也按 alerts 页权限取，这里兜底）
-        out["answer"] = {k: v for k, v in answer.items() if k != "alerts"}
+        # 告警 / 规则命中 / 动态摘要属于动态层：密钥要有 dynamic:read（链路本身也按页面权限取，这里兜底）
+        out["answer"] = {k: v for k, v in answer.items() if k not in ("alerts", "dynamicSummary")}
     return {"kind": kind, "rowCount": rows, "elapsedMs": elapsed, **out}
 
 
@@ -139,6 +149,14 @@ def _action_for_machine(answer: dict[str, Any], scopes: tuple[str, ...] | None, 
     if not allowed:
         action.pop("dryRun", None)
         action["dryRunHidden"] = "需要 actions:dry-run 权限"
+    if isinstance(action.get("decision"), dict):  # 决策评估候选：同样按密钥收窄试运行明细，去掉暂存入口
+        recs = []
+        for rec in action["decision"].get("recommendations") or []:
+            rec = {k: v for k, v in rec.items() if k != "handoff"}
+            if scopes is not None and "actions:dry-run" not in scopes:
+                rec.pop("dryRun", None)
+            recs.append(rec)
+        action["decision"] = {**action["decision"], "recommendations": recs}
     action["canStage"] = False  # MCP 只建议；暂存 / 确认只在问数工作台或动作中心由人完成
     out["action"] = action
     return out

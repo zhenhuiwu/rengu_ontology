@@ -217,6 +217,17 @@ v0.2 → v0.3：EV-Q-067（GMV 是多少？）由 clarify 改为 synonym 类作�
 
   qa-api.md 同一提交里已对齐骨架 `0c35c1d`。
 
+### 8.1 按本体自动出题（qa-p3，`app/modules/qa/eval_gen.py`）
+
+- 与本文 100 道 SQL 级题无关，写的是 T11（`qa_eval_question`，kind = semplan）的题库。
+- 每日周期任务 `qa.eval.generate`（cron `30 2 * * *`，挂在问数评测 worker `python -m app.modules.qa.eval.worker` 的 `qa-eval` 队列上，独立锁），逐工作空间生成；也可以直接调用 `eval_gen.generate(session, user)`。
+- 题目全部由本体元数据拼出，不写业务词：
+  - 已发布指标（最多 30 个）→「<指标名>」，期望 `{metric, dims: []}`；指标允许拆分的前两个维度 →「按<维度>看<指标名>」，期望 `{metric, dims:[维度]}`。判定沿用 `job.judge`。
+  - 能力目录里的动作（最多 10 个；身份 = 本空间最近一次评测发起人，要有 qa-tuning 管理权，没有就不出）→「给一个<目标对象>发起<动作名>」，期望 `{action, actionName}`。判定：回答是这个动作的建议卡（`card=action` 且 `action.type` 相同）算通过；拒答 / 不是动作卡 →「未召回指标」；建议了别的动作 →「指标选错」。调优页 `expectText` 显示「动作建议 · <动作名>」。
+- 写入：`code = EQA-<本体>-<哈希>`、`group = null`、`meta = {auto: true, ontologyId, source: "metric:<键>" | "action:<编码>"}`；按题目原文去重；不改、不删人工题和旧自动题。
+- `qa_eval_question` 按本体 RLS 隔离（唯一键 = 本体 + 题目），去重也在本空间内；评测运行（T11）另按 `meta.ontologyId` 兜底过滤（`job.own_question`）。
+- 只出题，不自动跑评测（每日自动跑要先定发起身份和模型额度）。
+
 ## 9. 模型
 
 - 第一轮用百炼的 qwen-flash，对照组用 qwen3-coder-flash，跟试跑一致。用 `temperature=0` 跑 3 遍，看结果稳不稳定。

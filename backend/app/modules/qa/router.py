@@ -5,9 +5,11 @@ qa 只订阅 X4 release.published（qa-api §8 X4、§9.2 qa_object_type_view、
 """
 
 import asyncio
+import json
 import logging
+import re
 from collections.abc import Callable
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, Query, Response
@@ -22,7 +24,14 @@ from app.common.context import ViewContextDep
 from app.common.ontology import require_ontology_id, set_ontology_scope
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
-from app.core.errors import AppError, DuplicateKey, EmptyInput, ExportForbidden, NotFound
+from app.core.errors import (
+    AppError,
+    DuplicateKey,
+    EmptyInput,
+    ExportForbidden,
+    IdempotencyConflict,
+    NotFound,
+)
 from app.core.state import InvalidTransition as StateInvalid
 from app.db.dialects import get_adapter
 from app.db.session import SessionDep
@@ -305,6 +314,9 @@ async def _ask_once(session, conn, llm, user, ctx, pk: int, sid: str, body: AskI
     from app.modules.versioning.repo import ReleaseRepo
 
     release = await ReleaseRepo(session).latest()
+    # 决策评估记 AI 调用方：会话号 + 预计轮次号（[推断] 落库前按当前最大序号 +1 推算，并发提问时可能差一位）
+    guess = (await session.scalar(select(func.max(QaTurn.seq)).where(QaTurn.session_id == s.id)) or 0) + 1
+    caller = {"aiSessionId": s.code, "aiRoundId": f"{s.code}-T{guess:03d}", "agent": "qa"}
     try:
         lines = svc.caliber_lines(s.caliber, await svc.variant_index(session, ctx.ver)) if s.caliber else []
         kind, snapshot, rows, elapsed, sql = await chain.answer(
@@ -316,6 +328,7 @@ async def _ask_once(session, conn, llm, user, ctx, pk: int, sid: str, body: AskI
             caliber_lines=lines,
             session_scope=s.scope,
             on_status=on_status,
+            caller=caller,
         )
     except DBAPIError as e:  # 生成的 SQL 过了网关但执行出错（列不存在、超时等）：不落轮次，前端提示换个问法
         raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
@@ -475,6 +488,40 @@ class ActionNotStageable(AppError):
     status_code, code, message = 409, "ACTION_POLICY_SUGGEST_ONLY", "该动作只给建议，不能从问数发起"
 
 
+def _stage_params(value: Any) -> str | None:
+    """动作卡参数 / 前端补的参数 → 动作中心要的 JSON 对象字符串（空 → None）。
+
+    接受 dict、JSON 对象串，或卡片上的摘要串「k=v，k2=v2」（值能按 JSON 解析的按 JSON，如数字）。
+    """
+    if value is None or value == "" or value == {}:
+        return None
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    text_value = str(value).strip()
+    try:
+        parsed = json.loads(text_value)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return json.dumps(parsed, ensure_ascii=False) if parsed else None
+    out: dict[str, Any] = {}
+    for part in re.split(r"[，,；;\n]+", text_value):
+        k, sep, v = part.partition("=")
+        if not sep or not k.strip():
+            raise AppError(
+                "参数格式应为 JSON 对象或「参数=值」",
+                code="VALIDATION_FAILED",
+                status_code=422,
+                details={"fields": [{"field": "params", "message": "参数格式应为 JSON 对象或「参数=值」"}]},
+            )
+        v = v.strip()
+        try:
+            out[k.strip()] = json.loads(v)
+        except ValueError:
+            out[k.strip()] = v
+    return json.dumps(out, ensure_ascii=False) if out else None
+
+
 def _action_svc(
     session: SessionDep, user: CurrentUserDep, catalog: ActionCatalogDep, ports: PortsDep
 ) -> ActionService:
@@ -530,7 +577,8 @@ async def stage_turn_action(
             details={"fields": [{"field": "objId", "message": "请指定目标对象"}]},
         )
     obj_label = b.obj_label or (st.get("objLabel") if obj_id == st.get("objId") else None) or obj_id
-    params = b.params if b.params is not None else st.get("params")
+    # 动作中心按 JSON 对象校验参数（参数摘要「k=v」不能当实际值），这里统一转成 JSON 字符串
+    params = _stage_params(b.params) if b.params is not None else _stage_params(card.get("params"))
     old = await session.scalar(
         select(ActionRun)
         .where(
@@ -545,16 +593,39 @@ async def stage_turn_action(
     if old is not None:
         response.status_code = 200
         return await actions.detail(old)
-    run, _created = await actions.stage(
-        StageIn(
-            type_id=st["typeId"],
-            source=SourceIn(type="问数", session=s.code, session_title=s.title[:60], confirmer=user.id),
-            obj_kind=st.get("objKind"),
-            obj_id=obj_id,
-            obj_label=obj_label[:200],
-            params=params,
+    alert_id = (card.get("decision") or {}).get("alertId")
+    try:
+        run, _created = await actions.stage(
+            StageIn(
+                type_id=st["typeId"],
+                source=SourceIn(
+                    type="问数",
+                    session=s.code,
+                    session_title=s.title[:60],
+                    confirmer=user.id,
+                    # 决策评估卡（由告警评估）：带上告警，动作中心按告警上下文校验 / 关联告警（同告警去重）
+                    alert_id=alert_id,
+                ),
+                obj_kind=st.get("objKind"),
+                obj_id=obj_id,
+                obj_label=obj_label[:200],
+                params=params,
+            )
         )
-    )
+    except IdempotencyConflict as conflict:
+        # 同一告警已有动作记录（如规则自动暂存的那条）：同一动作 → 返回那条让人去确认；否则说明清楚
+        existing = await session.scalar(
+            select(ActionRun).where(ActionRun.code == (conflict.details or {}).get("id"))
+        )
+        if existing is not None and existing.action_type_code == st["typeId"]:
+            response.status_code = 200
+            return await actions.detail(existing)
+        raise AppError(
+            f"告警 {alert_id} 已有动作记录 {existing.code if existing else ''}，请到动作中心处理",
+            code="IDEMPOTENCY_CONFLICT",
+            status_code=409,
+            details={"alertId": alert_id, "id": existing.code if existing else None},
+        ) from None
     await audit(
         session,
         user,

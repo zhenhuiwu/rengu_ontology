@@ -4,7 +4,8 @@
   答成澄清只在题目 checks 带 orClarify 时算对。
 - clarify：answer 轮带 clarify 且没执行 SQL。
 - refuse：denied 且 code == refuseCode；SQL_REJECTED 只在 refuseCode = NOT_SELECT 时算对。
-- 每题一个只读事务，跑完回滚；用户 U010001（admin）；asScope 题把 asScope 当本轮会话范围传入
+- 每题一个只读事务，跑完回滚；用户 = QA_EVAL_USER，
+  未设时取「无行级范围限制的角色」里编号最小的成员（seed 里的管理员）；asScope 题把 asScope 当本轮会话范围传入
   （p1 起；之前的基线没传，这几题与 76/100 基线不完全可比）。
 结果：seeds/extra/qa/eval/results/result_{sel}{TAG}.json（逐题明细）+ summary{TAG}.json（按类型统计）。
 """
@@ -45,6 +46,26 @@ def match(gold, pred) -> bool:
     return True
 
 
+async def eval_user_code(s) -> str:
+    """评测身份：QA_EVAL_USER，或无 sys_role_scope 限制的角色里编号最小的成员（全量数据视角）。"""
+    if os.environ.get("QA_EVAL_USER"):
+        return os.environ["QA_EVAL_USER"]
+    from sqlalchemy import text
+
+    code = await s.scalar(
+        text("""
+        SELECT u.code FROM sys_user u JOIN sys_role_member m ON m.user_id = u.id
+        JOIN sys_role r ON r.id = m.role_id
+        WHERE u.status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM sys_role_scope sc WHERE sc.role_id = r.id)
+        ORDER BY r.id, u.code LIMIT 1
+    """)
+    )
+    if code is None:
+        raise RuntimeError("评测库里没有不受行级范围限制的用户，请设置 QA_EVAL_USER")
+    return code
+
+
 async def one(eng, llm, q, sem):
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,7 +80,7 @@ async def one(eng, llm, q, sem):
         await conn.execute(text("set local statement_timeout = 15000"))
         s = AsyncSession(bind=conn)
         await set_ontology_scope(s, DEFAULT_ONTOLOGY_ID)
-        user = await resolve_user(s, "U010001")
+        user = await resolve_user(s, await eval_user_code(s))
         exp_t = q["expectedType"]
         r = {"code": q["code"], "exp": exp_t, "q": q["question"]}
         t0 = time.monotonic()

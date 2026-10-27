@@ -45,6 +45,12 @@ def questions_query(group: str | None):
     return stmt
 
 
+def own_question(q: QaEvalQuestion, ontology_id: int) -> bool:
+    """自动题（eval_gen）只在生成它的工作空间里跑（表已按本体 RLS 隔离，这里兜底）；人工题照旧。"""
+    meta = q.meta or {}
+    return not meta.get("auto") or meta.get("ontologyId") == ontology_id
+
+
 def _stem(name: str) -> str:
     return re.sub(r"[（(].*?[）)]", "", name).strip()
 
@@ -53,6 +59,8 @@ def judge(
     q: QaEvalQuestion, kind: str, snap: dict[str, Any], metrics: catalog.Metrics
 ) -> tuple[FailKind, str] | None:
     """返回 None = 通过；否则 (失败类型, 实际结果文字)。"""
+    if (q.expect or {}).get("action"):
+        return judge_action(q, kind, snap)
     m = catalog.metric_of(metrics, (q.expect or {}).get("metric"))
     if m is None or not _stem(m["name"]):
         return FailKind.metric_not_recalled, "期望指标不可用：数据库目录中不存在该指标"
@@ -75,6 +83,20 @@ def judge(
     return None
 
 
+def judge_action(q: QaEvalQuestion, kind: str, snap: dict[str, Any]) -> tuple[FailKind, str] | None:
+    """动作题（eval_gen）：回答是期望动作的建议卡就算通过（只建议，从不执行）。"""
+    want = (q.expect or {})["action"]
+    ans = snap.get("answer") or {}
+    if kind == "denied":
+        return FailKind.metric_not_recalled, f"拒答（{snap.get('tag', '')}）：{snap.get('bold', '')}"
+    action = ans.get("action") if ans.get("card") == "action" else None
+    if not isinstance(action, dict):
+        return FailKind.metric_not_recalled, f"未给出动作建议（{ans.get('card') or kind}）"
+    if action.get("type") != want:
+        return FailKind.wrong_metric, f"建议了动作 {action.get('type') or '--'}，期望 {want}"
+    return None
+
+
 async def execute(
     session: AsyncSession,
     conn: AsyncConnection,
@@ -90,7 +112,8 @@ async def execute(
 
     checkpoint 每题后调用（后台任务里 commit 让前端看到进度）。
     """
-    qs = list((await session.scalars(questions_query(group))).all())[:limit]
+    oid = require_ontology_id(session)
+    qs = [q for q in (await session.scalars(questions_query(group))).all() if own_question(q, oid)][:limit]
     metrics, _ = await catalog.directory(session)
     from app.modules.qa import service as qa_service
 
@@ -102,7 +125,8 @@ async def execute(
     run.total, run.passed = len(qs), 0
     for q in qs:
         try:
-            if catalog.metric_of(metrics, (q.expect or {}).get("metric")) is None:
+            exp = q.expect or {}
+            if not exp.get("action") and catalog.metric_of(metrics, exp.get("metric")) is None:
                 kind, snap = "unavailable", {}
             else:
                 kind, snap, *_ = await chain.answer(session, conn, llm, user, q.question, **answer_context)

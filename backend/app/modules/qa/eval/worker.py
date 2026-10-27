@@ -9,6 +9,7 @@ import procrastinate
 from app.core.config import get_settings
 from app.db import models as _models  # noqa: F401  独立进程也必须完整登记ORM关联模型。
 from app.db.session import dispose_engine
+from app.modules.qa import eval_gen
 from app.modules.qa.eval import job
 from app.modules.qa.eval.queue import LOCK, QUEUE, TASK
 
@@ -17,6 +18,7 @@ def build_app() -> procrastinate.App:
     url = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     worker = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=url))
     worker.task(name=TASK, queue=QUEUE, lock=LOCK)(run)
+    eval_gen.register(worker, QUEUE)  # 每日按本体自动出评测题（同队列，独立锁）
     return worker
 
 
@@ -24,7 +26,7 @@ async def run(run_code: str, ontology_id: int | None = None) -> None:
     await job._background(run_code, ontology_id=ontology_id)
 
 
-app = build_app()  # schema CLI使用此入口，不登记任何其他空桩或周期任务。
+app = build_app()  # schema CLI使用此入口；只登记评测运行与每日自动出题，不登记其他模块任务。
 
 
 async def main(install_schema: bool = False) -> None:

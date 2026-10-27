@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 ACTION_LIMIT = 30  # prompt 里最多列多少个动作类型
 ALERT_LIMIT = 8
+_ID_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{1,6}-?[0-9]{3,}(?:-[0-9]+)*(?![A-Za-z0-9])")
 _ALERT_WORDS = ("告警", "预警", "报警", "异常", "命中", "规则", "alert", "warning", "anomal")
 
 
@@ -252,7 +254,9 @@ async def related_alerts(
 
     names = [n for n in dict.fromkeys(names or []) if n]
     broad = wants_alerts(question)
-    if not broad and not names:
+    # 问题里点名的编号（如告警编号）：最近 N 条里未必有，单独按关键字查
+    ids = list(dict.fromkeys(_ID_TOKEN.findall(question)))[:3]
+    if not broad and not names and not ids:
         return []
     try:
         check_func(user, "alerts", "view")
@@ -262,7 +266,7 @@ async def related_alerts(
     try:
         async with session.begin_nested():  # savepoint：读失败不弄坏请求事务
             svc = AlertService(session, user, await get_list_catalog(session), None)  # 只读：不用 ports
-            for kw in [None] if broad else names[:5]:
+            for kw in [*ids, *([None] if broad else names[:5])]:
                 for status in ("open", "doing"):
                     res = await svc.search(
                         status=status,
@@ -275,7 +279,10 @@ async def related_alerts(
                         out.setdefault(x.id, _alert_ref(x))
     except Exception:
         return []
-    return sorted(out.values(), key=lambda a: a["triggeredAt"] or "", reverse=True)[:ALERT_LIMIT]
+    named = {i.lower() for i in ids}
+    ordered = sorted(out.values(), key=lambda a: a["triggeredAt"] or "", reverse=True)
+    ordered.sort(key=lambda a: str(a.get("id") or "").lower() not in named)  # 点名的排前面（稳定排序）
+    return ordered[:ALERT_LIMIT]
 
 
 def _alert_ref(x: Any) -> dict[str, Any]:

@@ -414,12 +414,17 @@ def _status_ok(tree: exp.Expression, check: dict[str, Any]) -> bool:
 
 
 def _col_owner(tree: exp.Expression, name: str, src: QaSource) -> str:
-    """SQL 里某列名所属的表（按别名还原；找不到就在可问表里按列名找第一张）。"""
+    """SQL 里某列名所属的表：先按别名还原；SQL 没写这列时取 SQL 用到的、有这列的第一张表；
+    都没有再在可问表里按列名找第一张（不会把条件指到 SQL 没用的同名列上）。"""
     alias = {t.alias_or_name: t.name for t in tree.find_all(exp.Table)}
     for c in tree.find_all(exp.Column):
         if c.name == name and c.table and alias.get(c.table):
             return alias[c.table]
-    return next((t.name for t in src.tables if name in t.columns), "")
+    used = list(dict.fromkeys(alias.values()))
+    cols = {t.name: t.columns for t in src.tables}
+    return next((t for t in used if name in cols.get(t, ())), "") or next(
+        (t.name for t in src.tables if name in t.columns), ""
+    )
 
 
 def caliber_violations(question: str, tree: exp.Expression, ontology_id: int) -> list[str]:
@@ -764,6 +769,8 @@ _DOC_TITLES = {
     "session_caliber": "会话口径（用户在工作台选的；指标按这里取口径变体）",
     "refuse": "拒答清单（问到这些直接拒答，不写 SQL）",
     "alerts": "相关告警 / 规则命中（动态模块，只读；回答时可以引用，不要编造）",
+    "dynamic": "问题点名对象的动态摘要（动态模块，只读；回答时可以引用，不要编造）",
+    "semantic": "指标层（已发布、可试算的指标；问到这些指标优先输出指标查询，见第 5 条）",
     "actions": "可用动作（只能建议，确认后由动作中心执行）",
     "filters": "过滤列（按表）",
     "dims": "维度层级与取值",
@@ -789,6 +796,10 @@ def build_prompt(question: str, ctx: dict[str, list[str]]) -> list[dict[str, str
         from app.modules.qa.intent import ACTION_GUIDE
 
         prompt += ACTION_GUIDE
+    if ctx.get("semantic"):
+        from app.modules.qa.semantic import METRIC_GUIDE
+
+        prompt += METRIC_GUIDE
     return [{"role": "system", "content": prompt}, {"role": "user", "content": question}]
 
 
@@ -811,9 +822,10 @@ _FENCE_JSON = re.compile(r"```json\s*\n?(.*?)```", re.S | re.I)
 
 
 def parse_intent(text: str) -> tuple[str, Any]:
-    """模型回复 → ("sql", sql) | ("clarify", {...}) | ("refuse", {...}) | ("action", 原 JSON)。
+    """模型回复 → ("sql", sql) | ("clarify", {...}) | ("refuse", {...}) | ("action" / "metric", 原 JSON)。
 
-    只认 ```json 块或整段就是 JSON 对象的回复，且键是 clarify / refuse；别的都当 SQL 交给 sql_guard。
+    只认 ```json 块或整段就是 JSON 对象的回复，且键是 clarify / refuse / action / metric；
+    别的都当 SQL 交给 sql_guard。
     """
     raw = text or ""
     m = _FENCE_JSON.findall(raw)
@@ -827,6 +839,8 @@ def parse_intent(text: str) -> tuple[str, Any]:
             c, r = obj.get("clarify"), obj.get("refuse")
             if isinstance(obj.get("action"), dict):
                 return "action", obj
+            if isinstance(obj.get("metric"), dict):
+                return "metric", obj
             if isinstance(c, dict):
                 opts = [str(o) for o in (c.get("options") or []) if str(o).strip()][:6]
                 return "clarify", {
@@ -976,13 +990,20 @@ async def answer(
     caliber_lines: list[str] | None = None,
     session_scope: str | None = None,
     on_status: Callable[[str, str], None] | None = None,
+    *,
+    request: Any = None,
+    caller: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any], int, int, str | None]:
     """返回 (kind, snapshot, row_count, elapsed_ms, sql)。
 
     SQL 只进 qa_turn.sql_text，不出接口；SQL 被拒抛 SqlRejected（403 SQL_REJECTED）。
     `on_status(stage, text)`：W7 流式时推 `status` 事件（同步回调，不能抛错）。
+    `request`：API 密钥调用时带上（动态摘要 / 决策评估按密钥范围收窄）；
+    `caller`：{aiSessionId, aiRoundId, agent}，决策评估据此在 decision_log 记成 AI 调用。
     """
+    from app.modules.qa import dynamic_ctx as dyn
     from app.modules.qa import intent as act
+    from app.modules.qa import semantic as sem
 
     def stage(name: str, text: str) -> None:
         if on_status is not None:
@@ -1006,11 +1027,28 @@ async def answer(
     ctx["actions"] = act.action_lines(catalog)
     alerts = await act.related_alerts(session, user, question, anchor_names(ctx["anchors"]))
     ctx["alerts"] = act.alert_lines(alerts)
+    obj = await dyn.single_object(session, question, names)
+    dsum = await dyn.object_summary(session, user, obj, request)
+    ctx["dynamic"] = dyn.summary_lines(dsum)
+
+    def done(kind: str, snap: dict[str, Any], rows: int = 0, sql: str | None = None):
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return kind, _with_context(snap, alerts, dsum), rows, elapsed, sql
+
+    # 问“某告警 / 某对象该怎么处理” → 动态决策评估的排序建议（不调模型）；没有建议再交给模型
+    if dyn.wants_advice(question) and (target := dyn.decision_target(question, alerts, obj)):
+        stage("permission", "正在评估处理建议")
+        if decision := await dyn.evaluate(session, user, target, caller, request):
+            return done("answer", dyn.decision_snapshot(decision))
+    manifest = await sem.metric_layer(session, user)
+    ctx["semantic"] = sem.semantic_lines(manifest)
     ctx["session_scope"] = [session_scope] if session_scope else []
     ctx["session_caliber"] = caliber_lines or []  # 会话口径 → 指标变体（service.caliber_lines）
     messages = build_prompt(question, ctx)
     limit = ROW_LIMIT
     attempt, checked, repaired = 0, False, False
+    mplan: sem.MetricPlan | None = None
+    metric_failed = False
     while True:
         stage("compiling", "正在生成查询")
         reply = await llm.generate_sql(messages)
@@ -1019,17 +1057,53 @@ async def answer(
             proposal = act.parse_action(val, catalog)
             if proposal is not None:
                 stage("permission", "正在校验动作提交条件")
+                # 有告警 / 对象可评估且模型选的动作在候选里 → 决策评估的排序建议；否则能力目录 + dry-run
+                target = dyn.decision_target(question, alerts, obj, proposal)
+                decision = await dyn.evaluate(session, user, target, caller, request)
+                if dyn.has_type(decision, proposal["type"]):
+                    chosen, _, filled = dyn.decision_choice(decision, proposal)
+                    # 模型补了决策没填的参数（如数量）→ 按补全后的参数重新试运行
+                    check = await act.dry_run(session, user, dict(chosen)) if filled else None
+                    return done("answer", dyn.decision_snapshot(decision, proposal, check))
                 check = await act.dry_run(session, user, proposal)
                 policy = next(c["policy"] for c in catalog if c["id"] == proposal["type"])
-                card = act.action_snapshot(proposal, check, policy)
-                elapsed = int((time.monotonic() - t0) * 1000)
-                return "answer", _with_alerts(card, alerts), 0, elapsed, None
+                return done("answer", act.action_snapshot(proposal, check, policy))
             intent, val = "refuse", {"code": "NOT_SELECT", "reason": "没有可用的动作，问数只读"}
+        if intent == "metric":  # 指标查询：编译器生成 SQL；编不出 / 执行报错回喂一次，改走 SQL
+            stage("executing", "正在按指标层查询")
+            try:
+                if manifest is None:
+                    raise sem.MetricPlanInvalid("当前没有可用的指标层")
+                mplan = sem.plan(val, manifest, clock.local_now())
+                sql = sem.compile_plan(manifest, mplan)
+                tree = assert_single_select(sql)
+                async with conn.begin_nested():
+                    res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
+                    keys = list(res.keys())
+                    rows = [[_cell(v) for v in r] for r in res.fetchall()]
+                break
+            except (sem.MetricQueryInvalid, DBAPIError) as e:
+                mplan = None
+                if isinstance(e, DBAPIError):
+                    state = getattr(e.orig, "sqlstate", None) or getattr(e.orig, "pgcode", None)
+                    if state == PG_QUERY_CANCELED:
+                        raise QaQueryTimeout() from None
+                    e = sem.MetricPlanInvalid(
+                        "执行报错：" + (str(e.orig).splitlines()[0][:300] if e.orig else type(e).__name__)
+                    )
+                if metric_failed:
+                    raise e from None
+                metric_failed = True
+                messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {"role": "user", "content": sem.fallback_message(e)},
+                ]
+                continue
         if intent != "sql":  # 反问 / 拒答：不执行 SQL
-            elapsed = int((time.monotonic() - t0) * 1000)
             if intent == "clarify":
-                return "answer", clarify_snapshot(val), 0, elapsed, None
-            return "denied", refuse_snapshot(val), 0, elapsed, None
+                return done("answer", clarify_snapshot(val))
+            return done("denied", refuse_snapshot(val))
         sql = val
         tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
         if not checked:  # 口径校验不过，回喂改一次（只一次，改完不再查）
@@ -1088,7 +1162,8 @@ async def answer(
     stage("explaining", "正在整理结果")
     truncated = len(rows) > limit
     rows = _label_rows(rows[:limit], ontology_id)
-    elapsed = int((time.monotonic() - t0) * 1000)
+    if mplan is not None:  # 指标层输出列（指标名 / 模型__维度 / metric_time）→ 中文标题
+        keys = [mplan.labels.get(k, k) for k in keys]
     if not rows:
         snap = {
             "lead": "没有查到符合条件的数据",
@@ -1096,7 +1171,7 @@ async def answer(
             "tail": "，可以换个时间范围或条件再问。",
             "tag": "无数据",
         }
-        return "empty", snap, 0, elapsed, sql
+        return done("empty", snap, 0, sql)
     columns = []
     for i, k in enumerate(keys):
         col: dict[str, Any] = {"key": f"c{i}", "title": k}
@@ -1111,7 +1186,10 @@ async def answer(
     ans = {
         "card": "table",  # [推断] 本期只出表格卡
         "dataAsOf": s.data_cutoff,
-        "basis": {"caliber": "LLM 生成 SQL [推断]，未走 SemPlan 校验", "perm": "已按行级权限过滤"},
+        "basis": {
+            "caliber": sem.CALIBER if mplan is not None else "LLM 生成 SQL [推断]，未走 SemPlan 校验",
+            "perm": "已按行级权限过滤",
+        },
         "text": text,
         "table": {
             "id": "result",
@@ -1123,13 +1201,26 @@ async def answer(
             "paged": len(rows) > TABLE_PAGE,
         },
     }
-    return "answer", _with_alerts({"answer": ans}, alerts), len(rows), elapsed, sql
+    if mplan is not None:
+        ans["metricQuery"] = mplan.echo
+    return done("answer", {"answer": ans}, len(rows), sql)
 
 
-def _with_alerts(snap: dict[str, Any], alerts: list[dict[str, Any]]) -> dict[str, Any]:
-    """回答带上相关告警引用（只读，W7 `citations.alerts`）。"""
-    if alerts and isinstance(snap.get("answer"), dict):
-        snap["answer"]["alerts"] = alerts
+def _with_context(
+    snap: dict[str, Any], alerts: list[dict[str, Any]], summary: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """回答带上相关告警引用和点名对象的动态摘要（只读，W7 citations 的 alerts / dynamicSummary）。"""
+    from app.modules.qa.dynamic_ctx import summary_text
+
+    ans = snap.get("answer")
+    if not isinstance(ans, dict):
+        return snap
+    if alerts:
+        ans["alerts"] = alerts
+    if summary:
+        ans["dynamicSummary"] = summary
+        if ans.get("card") == "table" and (line := summary_text(summary)):
+            ans["text"] = f"{ans['text']}\n{line}"
     return snap
 
 
