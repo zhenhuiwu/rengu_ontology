@@ -55,8 +55,21 @@ async def durable(engine, monkeypatch):
     monkeypatch.setattr(db_session, "get_engine", lambda: engine)
     monkeypatch.setattr(db_session, "get_sessionmaker", lambda: factory)
     monkeypatch.setattr(db_session, "get_qa_readonly_engine", lambda: engine)
+    from app.jobs import scope as job_scope  # 启动恢复按空间枚举，自己开会话（不带默认空间）
+
+    plain = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(job_scope, "get_sessionmaker", lambda: plain)
     fake = FakeLLM('select 1 as "持久队列指标"')
-    monkeypatch.setattr(llm_module, "get_llm", lambda: fake)
+    monkeypatch.setattr(llm_module, "get_llm", lambda *_a, **_k: fake)
+    from app.modules.qa import chain
+
+    async def answer(_s, _conn, llm, _user, question, **ctx):
+        # 这里只测队列 / 事务 / worker；问数链路本身（要受治理的数据源）在 test_qa_chain 测。
+        # 把执行上下文原样交给模型，验证 worker 带上了会话范围和口径。
+        await llm.generate_sql([{"role": "user", "content": f"{question}\n{ctx}"}])
+        return "ok", {"answer": {"table": {"columns": [{"title": "持久队列指标"}]}}}
+
+    monkeypatch.setattr(chain, "answer", answer)
     app = procrastinate.App(
         connector=procrastinate.PsycopgConnector(
             conninfo=engine.url.set(drivername="postgresql").render_as_string(hide_password=False)

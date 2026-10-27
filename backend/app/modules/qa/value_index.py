@@ -8,8 +8,10 @@
 数据来源（本体驱动，不写死任何业务词）：
 1. 主来源：静态本体已发布快照的语义映射 `semantic_map`（维度取值 + 同义词 + 维度映射短语）；
 2. 兜底：受治理物理表里低基数文本列 / 名称列 / 枚举列的 distinct 值（语义映射没覆盖到的列）；
-3. 物理列和维度的绑定由取值重合度推出（哪个维度的取值在这列里出现得最多、最专一），
-   不靠列名 / 表名；绑定到的“层级”取重合最多的层级名（维度取值 id 的前缀 “层级:编码”）。
+3. 物理列和维度的绑定：先用语义映射给的物理绑定（static-t7：维度 `levels[].table/column`、
+   `binding.table/column`，层级有序、`defaultLevel` 给默认层级，取值带 `level/levelNo/parentValue`）；
+   本体没有这些字段（旧快照 / 没绑定的列）时退回取值重合度（哪个维度的取值在这列里出现得最多、最专一），
+   层级名退回维度取值 id 的前缀 “层级:编码”。
 
 结果三类：
 - hits：题目说法 → (表, 列, 物理值, 路径段号)；同一说法对上多列时都给；
@@ -55,7 +57,8 @@ class Col:
     dim: str | None = None  # 绑定的本体维度 api
     dim_name: str = ""
     level: str | None = None  # 绑定的层级名
-    levels: list[str] = field(default_factory=list)  # 该维度出现过的层级（按出现顺序）
+    levels: list[str] = field(default_factory=list)  # 该维度的层级（有序：本体给的顺序，否则按出现顺序）
+    default_seg: int | None = None  # 路径列：本体默认层级对应第几段（没有为 None）
 
     @property
     def key(self) -> str:
@@ -80,6 +83,27 @@ class SemVal:
     level: str | None
     name: str
     words: tuple[str, ...]  # 名称 + 同义词 + 映射短语（已去掉概念词）
+    level_no: int | None = None  # 层级序号（1 = 最高层；本体没给为 None）
+    parent: str | None = None  # 上级取值 id（本体没给为 None）
+
+
+@dataclass(frozen=True)
+class DimLevel:
+    no: int
+    name: str
+    table: str | None = None
+    column: str | None = None
+    api: str | None = None
+
+
+@dataclass
+class DimMeta:
+    """维度的层级 / 物理绑定（semantic_map static-t7 字段；旧快照为空）。"""
+
+    levels: list[DimLevel] = field(default_factory=list)
+    default_no: int | None = None
+    table: str | None = None
+    column: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,14 +154,18 @@ class ValueIndex:
     concepts: set[str] = field(default_factory=set)
     dims: dict[str, str] = field(default_factory=dict)  # 维度 api → 名称
     level_names: set[str] = field(default_factory=set)
+    meta: dict[str, DimMeta] = field(default_factory=dict)  # 维度 api → 层级 / 物理绑定
 
     def col(self, table: str, column: str) -> Col | None:
         return next((c for c in self.cols if c.table == table and c.column == column), None)
 
     # ------------------------------------------------------------------ 绑定
     def bind(self) -> None:
-        """每列绑定到取值重合度最高的维度：Σ 1 / (该维度里对上这个值的取值个数)。"""
+        """每列绑定维度：本体给了物理绑定就用它；否则取值重合度最高的维度
+        （Σ 1 / 该维度里对上这个值的取值个数）。"""
         for c in self.cols:
+            if self._bind_physical(c):
+                continue
             vals = {norm(v) for v in c.values} | ({norm(s) for s in c.segments(1)} if c.path else set())
             score: Counter[str] = Counter()
             lv: dict[str, Counter[str]] = {}
@@ -157,7 +185,37 @@ class ValueIndex:
                 continue
             c.dim, c.dim_name = d, self.dims.get(d, d)
             c.level = lv[d].most_common(1)[0][0] or None
-            c.levels = list(dict.fromkeys(s.level for s in self.sem if s.dim == d and s.level))
+            self._fill_levels(c)
+
+    def _bind_physical(self, c: Col) -> bool:
+        for d, m in self.meta.items():
+            lv = next((x for x in m.levels if _same_col(x.table, x.column, c)), None)
+            if lv is None and not _same_col(m.table, m.column, c):
+                continue
+            c.dim, c.dim_name = d, self.dims.get(d, d)
+            if lv is not None:
+                c.level = lv.name
+            else:  # 维度整体绑这列：层级取这列取值在本体里最多的那层
+                got = Counter(
+                    s.level for s in self.sem if s.dim == d and s.level and set(s.words) & self._vals(c)
+                )
+                c.level = got.most_common(1)[0][0] if got else None
+            self._fill_levels(c)
+            return True
+        return False
+
+    def _vals(self, c: Col) -> set[str]:
+        return {norm(v) for v in c.values} | ({norm(s) for s in c.segments(1)} if c.path else set())
+
+    def _fill_levels(self, c: Col) -> None:
+        m = self.meta.get(c.dim or "")
+        if m and m.levels:
+            c.levels = [x.name for x in m.levels]
+            own = next((x.no for x in m.levels if x.name == c.level), None)
+            if c.path and m.default_no and own and m.default_no >= own:
+                c.default_seg = m.default_no - own + 1  # 第 1 段 = 这列绑定的层级
+        else:
+            c.levels = list(dict.fromkeys(s.level for s in self.sem if s.dim == c.dim and s.level))
 
     # ------------------------------------------------------------------ 解析
     def terms(self) -> dict[str, list[tuple[str, Any]]]:
@@ -251,13 +309,22 @@ def semantic_entries(rows: list[dict[str, Any]]) -> tuple[list[SemVal], dict[str
         for x in [r.get("name") or ""]
         if x
     }
-    levels = set()
+    levels = {
+        str(lv["name"])
+        for r in rows
+        if r.get("kind") == "dimension"
+        for lv in r.get("levels") or []
+        if isinstance(lv, dict) and lv.get("name")
+    }
     vals = []
     for r in rows:
         if r.get("kind") != "dimValue":
             continue
-        rid = str(r.get("id") or "")
-        level = rid.split(":", 1)[0] if ":" in rid else None
+        if "level" in r:  # static-t7：层级名直接给
+            level = r.get("level") or None
+        else:  # 旧快照：取值 id 前缀“层级:编码”
+            rid = str(r.get("id") or "")
+            level = rid.split(":", 1)[0] if ":" in rid else None
         if level:
             levels.add(level)
         vals.append((r, level))
@@ -273,8 +340,58 @@ def semantic_entries(rows: list[dict[str, Any]]) -> tuple[list[SemVal], dict[str
         )
         if words:
             d = r.get("parent") or ""
-            out.append(SemVal(d, dims.get(d, d), level, r.get("name") or "", words))
+            no = r.get("levelNo")
+            out.append(
+                SemVal(
+                    d,
+                    dims.get(d, d),
+                    level,
+                    r.get("name") or "",
+                    words,
+                    no if isinstance(no, int) else None,
+                    r.get("parentValue"),
+                )
+            )
     return out, dims, concepts, levels
+
+
+def _bare(table: str | None) -> str:
+    return (table or "").rsplit(".", 1)[-1].strip('"').lower()
+
+
+def _same_col(table: str | None, column: str | None, c: Col) -> bool:
+    return bool(table and column) and _bare(table) == _bare(c.table) and column.lower() == c.column.lower()
+
+
+def dim_meta(rows: list[dict[str, Any]]) -> dict[str, DimMeta]:
+    """semantic_map 的 dimension 行 → 层级 / 物理绑定（static-t7 字段；没有就是空的，调用方退回推断）。"""
+    out = {}
+    for r in rows:
+        if r.get("kind") != "dimension" or not r.get("api"):
+            continue
+        levels = sorted(
+            (
+                DimLevel(
+                    int(lv.get("no") or i), str(lv["name"]), lv.get("table"), lv.get("column"), lv.get("api")
+                )
+                for i, lv in enumerate(r.get("levels") or [], 1)
+                if isinstance(lv, dict) and lv.get("name")
+            ),
+            key=lambda x: x.no,
+        )
+        default = r.get("defaultLevel") or {}
+        dno = next(
+            (
+                x.no
+                for x in levels
+                if default and {x.name, x.api} & {default.get("name"), default.get("api")} - {None}
+            ),
+            None,
+        )
+        b = r.get("binding") or {}
+        if levels or b.get("column"):
+            out[r["api"]] = DimMeta(levels, dno, b.get("table"), b.get("column"))
+    return out
 
 
 def build(
@@ -286,7 +403,7 @@ def build(
     for c in cols:
         vs = [v for v in c.values if not is_placeholder(v)]
         c.path = len(vs) >= 2 and sum(SEP in v for v in vs) >= PATH_RATIO * len(vs)
-    idx = ValueIndex(cols=cols, sem=sem, dims=dims, level_names=levels)
+    idx = ValueIndex(cols=cols, sem=sem, dims=dims, level_names=levels, meta=dim_meta(semantic_rows or []))
     idx.concepts = concepts | {norm(x) for x in extra_concepts if x}
     idx.bind()
     return idx
@@ -315,12 +432,17 @@ def prompt_lines(res: Resolution) -> list[str]:
     return out
 
 
+def default_seg(c: Col, levels_cfg: dict[str, int]) -> int:
+    """路径列默认按第几段汇总：每本体配置（hierarchyLevel）> 本体维度默认层级 > 第 1 段。"""
+    return int(levels_cfg.get(c.key) or c.default_seg or 1)
+
+
 def hierarchy_lines(idx: ValueIndex, levels_cfg: dict[str, int], self_refs: list[str]) -> list[str]:
     out = []
     for c in idx.cols:
         if not c.path:
             continue
-        n = int(levels_cfg.get(c.key, 1))
+        n = default_seg(c, levels_cfg)
         names = f"（层级 {' > '.join(c.levels)}）" if c.levels else ""
         out.append(
             f"- {c.key} 是层级路径列，值形如“上层{SEP}下层”{names}：题目没指明层级时按第 {n} 级"

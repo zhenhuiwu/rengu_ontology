@@ -170,7 +170,8 @@ def test_preaggregate_children_rewrites_fanout():
     assert sqlfix.preaggregate_children(t, ch) and not sqlfix.fanout_violations(t, ch)
     # CTE 里的扇出也改
     t = _t(
-        "with x as (select sum(t.fee) a, sum(l.km * l.rate) b from trip t join trip_leg l on t.id = l.trip_id) "
+        "with x as (select sum(t.fee) a, sum(l.km * l.rate) b "
+        "from trip t join trip_leg l on t.id = l.trip_id) "
         "select a, b from x"
     )
     assert sqlfix.preaggregate_children(t, ch) and not sqlfix.fanout_violations(t, ch)
@@ -214,3 +215,89 @@ def test_overrule_model_clarify_with_defaults():
     cal = {"里程": ["里程", "行驶里程"], "计费里程": ["计费里程"]}
     assert guards.overrule_clarify({"options": ["行驶里程", "计费里程"]}, idx, [], cal)
     assert guards.overrule_clarify({"options": ["调度台", "司机端"]}, idx, [], cal) is None
+
+
+def _sem_rows_t7():
+    """static-t7 字段：取值 id 没有“层级:”前缀，层级 / 上级 / 物理绑定直接给。"""
+    levels = [
+        {"no": 1, "api": "class", "name": "大类", "table": "FLEET.VEHICLE", "column": "kind"},
+        {"no": 2, "api": "model", "name": "车系", "table": None, "column": None},
+    ]
+    return [
+        {"kind": "dimension", "api": "dim_org", "name": "组织", "levels": [], "binding": {}},
+        {
+            "kind": "dimension",
+            "api": "dim_kind",
+            "name": "车型",
+            "levels": levels,
+            "defaultLevel": {"api": "model", "name": "车系"},
+            "binding": {"table": "FLEET.VEHICLE", "column": "kind"},
+        },
+        {
+            "kind": "dimValue",
+            "id": "k1",
+            "parent": "dim_kind",
+            "name": "货车",
+            "synonyms": ["卡车"],
+            "level": "大类",
+            "levelNo": 1,
+            "parentValue": None,
+        },
+        {
+            "kind": "dimValue",
+            "id": "k2",
+            "parent": "dim_kind",
+            "name": "重卡",
+            "synonyms": [],
+            "level": "车系",
+            "levelNo": 2,
+            "parentValue": "k1",
+        },
+        {
+            "kind": "dimValue",
+            "id": "z1",
+            "parent": "dim_org",
+            "name": "北片区",
+            "synonyms": ["北区"],
+            "level": "片区",
+            "levelNo": None,
+            "parentValue": None,
+        },
+        {"kind": "metric", "id": "trip_km", "api": "trip_km", "name": "里程", "synonyms": ["公里数"]},
+    ]
+
+
+def test_semantic_map_t7_fields_bind_without_id_prefix():
+    cols = [
+        vi.Col("depot", "zone", "片区", values=["北片区", "南片区"]),
+        # 取值和本体完全对不上，也按本体给的物理绑定挂到车型维度
+        vi.Col("vehicle", "kind", "车型", values=["客车/大巴", "客车/中巴"]),
+        vi.Col("trip", "source", "来源", values=["货车", "调度台"]),  # 取值重合但本体没绑：不抢绑定
+    ]
+    idx = vi.build(cols, _sem_rows_t7())
+    kind = idx.col("vehicle", "kind")
+    assert kind.dim == "dim_kind" and kind.level == "大类" and kind.levels == ["大类", "车系"]
+    assert kind.default_seg == 2 and vi.default_seg(kind, {}) == 2  # 本体默认层级 = 第 2 段
+    assert vi.default_seg(kind, {"vehicle.kind": 1}) == 1  # 每本体配置优先
+    assert "split_part(kind, '/', 2)" in vi.hierarchy_lines(idx, {}, [])[0]
+    zone = idx.col("depot", "zone")  # 没有物理绑定 → 退回取值重合度，层级名取 level 字段
+    assert zone.dim == "dim_org" and zone.level == "片区"
+    assert {"大类", "车系", "片区"} <= idx.level_names
+    k2 = next(s for s in idx.sem if s.name == "重卡")
+    assert k2.level == "车系" and k2.level_no == 2 and k2.parent == "k1"
+    tree = sqlglot.parse_one("SELECT kind, COUNT(*) FROM vehicle GROUP BY kind", dialect="postgres")
+    sqlfix.path_top_level(tree, idx, [], {})
+    assert "SPLIT_PART(kind, '/', 2)" in tree.sql(dialect="postgres")
+
+
+def test_semantic_props_match_physical_column():
+    from app.modules.qa.chain import _semantic_props
+
+    rows = [
+        {"kind": "object", "id": "veh", "api": "Vehicle"},
+        {"kind": "property", "parent": "Vehicle", "api": "vehicleKind", "column": "kind_cd", "name": "车型"},
+        {"kind": "property", "parent": "Vehicle", "api": "plate", "name": "车牌"},  # 旧快照：没有 column
+    ]
+    props = _semantic_props(rows)
+    assert props[("veh", "kind_cd")] == props[("veh", "vehicleKind")] == "车型"
+    assert props[("veh", "plate")] == "车牌"

@@ -20,7 +20,7 @@ from collections.abc import Iterable
 
 from sqlglot import exp
 
-from app.modules.qa.value_index import SEP, Col, Hit, ValueIndex, is_placeholder
+from app.modules.qa.value_index import SEP, Col, Hit, ValueIndex, default_seg, is_placeholder
 
 _DATE_LIT = re.compile(r"^\s*\d{4}-\d{2}-\d{2}")
 
@@ -130,7 +130,7 @@ def path_top_level(
             c = idx.col(tab or "", g.name)
             if not c or not c.path or c.key in deep:
                 continue
-            n = int(levels_cfg.get(c.key, 1))
+            n = default_seg(c, levels_cfg)
 
             def top(col: exp.Column, n: int = n) -> exp.Expression:
                 return exp.func("split_part", col.copy(), exp.Literal.string(SEP), exp.Literal.number(n))
