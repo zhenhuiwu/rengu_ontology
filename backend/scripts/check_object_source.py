@@ -1,7 +1,7 @@
-"""Optional in-memory object reader boundaries; deliberately not executed during delivery.
+"""Optional in-memory object reader boundaries.
 
 No source connections, database sessions, HTTP, or persisted records.
-Run later from backend: PYTHONPATH=. python scripts/check_object_source.py.
+Run from backend: python -m scripts.check_object_source.
 """
 
 from types import SimpleNamespace as Row
@@ -24,8 +24,15 @@ def main():
     assert not identifier("asset.id")
     assert not identifier("id;DROP TABLE asset")
     assert not identifier("../asset")
-    prop = Row(api_name="id", source_column="asset_id", is_pk=True, is_sensitive=False,
-               visibility="normal", data_type="integer", display_name="编号")
+    prop = Row(
+        api_name="id",
+        source_column="asset_id",
+        is_pk=True,
+        is_sensitive=False,
+        visibility="normal",
+        data_type="integer",
+        display_name="编号",
+    )
     assert primary_property(Row(pk_property="id", properties=[prop])) is prop
     assert primary_property(Row(pk_property="asset_id", properties=[prop])) is prop
     assert primary_property(Row(pk_property="unmapped", properties=[prop])) is None

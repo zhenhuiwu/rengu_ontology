@@ -218,7 +218,7 @@ class ExplorerService:
         return await StaticRepo(self.session).object_type(code)
 
     async def meta(self, code: str, ver: str | None = None) -> Obj:
-        from app.modules.qa.explore_api import _bind
+        from app.modules.qa.explore_api import _bind, scoped_questions
         from app.modules.static.shapes import metric_list_item
 
         if ver:
@@ -247,6 +247,7 @@ class ExplorerService:
             "properties": [prop_meta(p) for p in visible],
             "hiddenCount": len(props) - len(visible),
             "sampleQuestions": [q.get("q") for q in (o.sample_questions or []) if isinstance(q, dict)],
+            "scopeQuestions": scoped_questions(binding, props),
             "hasData": binding is not None,
             "dataVersion": "current",
             "metrics": [
@@ -256,7 +257,7 @@ class ExplorerService:
         }
 
     async def _historical_meta(self, code: str, ver: str) -> Obj:
-        from app.modules.qa.explore_api import _bind
+        from app.modules.qa.explore_api import _bind, scoped_questions
         from app.modules.versioning.repo import ReleaseRepo
 
         release = await ReleaseRepo(self.session).by_ver_or_404(ver)
@@ -296,6 +297,7 @@ class ExplorerService:
             "properties": [prop_meta(p) for p in visible],
             "hiddenCount": len(props) - len(visible),
             "sampleQuestions": [q.get("q") for q in obj.get("qs", []) if isinstance(q, dict)],
+            "scopeQuestions": scoped_questions(binding, props),
             "hasData": binding is not None,
             "dataVersion": "current",
             "metrics": [
@@ -332,7 +334,9 @@ class ExplorerService:
         if binding is None:
             for key, value in filters.items():
                 self._cond(by_key[key], None, value, key)
-            return []
+            return [{"key": prop.api_name, "name": prop.display_name, "kind": facet_kind(prop), "order": prop.seq,
+                     "hasData": False, **({"values": []} if facet_kind(prop) == "enum" else {"min": None, "max": None})}
+                    for prop in fprops]
         binding.check(filters, "筛选")
         body = ExploreIn(filters=filters)
         base = await binding.stmt(user)

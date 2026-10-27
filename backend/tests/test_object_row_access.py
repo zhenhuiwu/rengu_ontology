@@ -13,6 +13,7 @@ from app.common.sql_guard import run_guarded
 from app.core import clock
 from app.modules.admin.models import SysRole, SysRoleMember, SysRoleScope, SysUser
 from app.modules.biz.models import BizOrder, OrderLine, OrderStatus, Product, Store, StoreStatus
+from app.modules.ontology.models import OntologyRoleBinding
 from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectType, Property
 
 VIEWER = {"X-Demo-As": "U010006"}
@@ -27,6 +28,7 @@ async def facts(users):
         ("store", "Store", "门店"),
         ("product", "Product", "商品"),
     ):
+        primary = {"order": "order_id", "store": "store_id", "product": "sku"}[code]
         users.add(
             ObjectType(
                 code=code,
@@ -35,6 +37,9 @@ async def facts(users):
                 obj_group="范围专项",
                 conflict_strategy=ConflictStrategy.user_edit_wins,
                 lifecycle=Lifecycle.active,
+                pk_property=primary,
+                properties=[Property(api_name=primary, display_name="编号", data_type="string", prop_group="标识",
+                    source_column=primary, description="", is_pk=True, visibility="normal")],
             )
         )
     product = Product(
@@ -104,6 +109,7 @@ async def grant(facts, code, scopes=(), default_deny=False, view=True):
     session.add(role)
     await session.flush()
     session.add(SysRoleMember(role_id=role.id, user_id=user.id, seq=0))
+    session.add(OntologyRoleBinding(ontology_id=1, role_id=role.id))
     for n, (obj, prop, values) in enumerate(scopes):
         session.add(
             SysRoleScope(
@@ -135,7 +141,7 @@ async def test_real_scope_api_sql_inheritance_and_membership_revocation(client, 
     store_type = await session.scalar(select(ObjectType).where(ObjectType.code == "store"))
     store_type.properties.append(
         Property(
-            api_name="big_region",
+            api_name="region_code",
             display_name="大区",
             data_type="enum",
             prop_group="范围",

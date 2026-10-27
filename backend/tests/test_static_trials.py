@@ -13,7 +13,7 @@ from app.core.errors import AppError
 from app.modules.admin.models import SysRole
 from app.modules.biz.models import BizOrder, OrderStatus, Store, StoreStatus
 from app.modules.static.metric_trial import parse_formula
-from app.modules.static.models import ChangeRequest, CrImpact, CRStatus, CrTrial, Metric
+from app.modules.static.models import ChangeRequest, CrImpact, CRStatus, CrTrial, Metric, ObjectType
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
 
@@ -209,6 +209,67 @@ async def test_metric_sum_default_filter_empty_results_and_unavailable_cr(client
     assert "trial" not in detail and "METRIC_TRIAL_UNAVAILABLE" in detail["trialUnavailable"]
     assert await facts.scalar(select(func.count()).select_from(CrTrial)) == 0
     assert any(row["code"] == "V14" and row["result"] == "警告" for row in validated.json()["checks"])
+
+
+async def test_gmv_readiness_reports_exact_missing_references_and_no_trial_writes(client, facts):
+    metric = await facts.scalar(select(Metric).where(Metric.code == "gmv"))
+    before = metric.formula
+    count = await facts.scalar(select(func.count()).select_from(CrTrial))
+    response = await client.get(P + "/metrics/gmv/trial-readiness", headers=ADMIN)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["ready"] is False
+    issues = data["issues"]
+    missing = next(i for i in issues if i.get("reference") == "order_line.不含税金额")
+    assert missing["reason"] == "PROPERTY_NOT_FOUND"
+    candidate = next(p for p in missing["candidates"] if p["reference"] == "order_line.amount_ex_tax")
+    assert candidate["name"] == "行金额（不含税）" and candidate["mapped"] is False
+    assert any(i.get("reference") == "refund_line.不含税退款金额" for i in issues)
+    assert any(i["reason"] == "OBJECT_UNBOUND" and i["reference"] == "refund_line" for i in issues)
+    assert any(i["reason"] == "CROSS_OBJECT_UNSUPPORTED" for i in issues)
+    attempted = await client.post(P + "/metrics/gmv:trial", headers=ADMIN, json={})
+    assert attempted.status_code == 422 and attempted.json()["details"]["issues"] == issues
+    assert metric.formula == before
+    assert await facts.scalar(select(func.count()).select_from(CrTrial)) == count
+    for code, state in (("atv", "草稿"), ("turnover", "已下线")):
+        blocked = (await client.get(P + f"/metrics/{code}/trial-readiness", headers=ADMIN)).json()
+        assert blocked["ready"] is False and blocked["issues"][0]["reason"] == "METRIC_NOT_PUBLISHED"
+        assert state in blocked["issues"][0]["message"]
+
+
+async def test_readiness_and_actual_sql_share_exact_property_mapping_and_ambiguity_rules(client, facts):
+    metric = await facts.scalar(select(Metric).where(Metric.code == "order_cnt"))
+    metric.formula = "SUM(SalesOrder.paid_amount)"
+    metric.def_rows = [
+        {"k": "时间字段", "v": "SalesOrder.created_at"},
+        {"k": "默认过滤", "v": "SalesOrder.status <> 已取消；SalesOrder.channel = '线上'"},
+    ]
+    await facts.flush()
+    assert (await client.get(P + "/metrics/order_cnt/trial-readiness", headers=ADMIN)).json()["ready"] is True
+    response = await client.post(P + "/metrics/order_cnt:trial", headers=ADMIN, json={})
+    assert response.status_code == 200, response.text
+    assert [Decimal(row["value"]) for row in response.json()["rows"]] == [Decimal("10.20"), Decimal("30.40")]
+    obj = await facts.scalar(select(ObjectType).where(ObjectType.code == "order"))
+    paid = next(p for p in obj.properties if p.api_name == "paid_amount")
+    metric.formula = f'SUM("订单"."{paid.display_name}")'
+    await facts.flush()
+    assert (await client.post(P + "/metrics/order_cnt:trial", headers=ADMIN, json={})).status_code == 200
+    other = next(p for p in obj.properties if p.api_name == "channel")
+    other.display_name = paid.display_name
+    await facts.flush()
+    duplicate = (await client.get(P + "/metrics/order_cnt/trial-readiness", headers=ADMIN)).json()
+    assert duplicate["ready"] is False and any(
+        i["reason"] == "PROPERTY_AMBIGUOUS" for i in duplicate["issues"]
+    )
+    metric.formula = "SUM(order.paid_amount)"
+    paid.backing_column = None
+    await facts.flush()
+    unmapped = (await client.get(P + "/metrics/order_cnt/trial-readiness", headers=ADMIN)).json()
+    assert any(
+        i["reason"] == "PROPERTY_UNBOUND" and i["reference"] == "order.paid_amount"
+        for i in unmapped["issues"]
+    )
+    assert (await client.post(P + "/metrics/order_cnt:trial", headers=ADMIN, json={})).status_code == 422
 
 
 async def test_existing_metric_form_fields_create_publish_edit_and_trial(client, facts):

@@ -12,7 +12,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { GRAY, BRAND } from '@/theme';
 import { DAILY_GMV, fmtMoney } from '@/mock';
 import { METRIC_LIST as MOCK_LIST, METRIC_DEF, METRIC_DIMS, METRIC_VERSIONS, METRIC_REFS, type MetricListItem as M } from '@/mock/metricCatalog';
-import { isStaticReal, fetchMetricGroups, staticContextKey, fetchStaticDetail, rollbackMetric, trialMetric, crErr, type MetricTrialResult } from '@/api/static';
+import { isStaticReal, fetchMetricGroups, staticContextKey, fetchStaticDetail, rollbackMetric, trialMetric, fetchMetricReadiness, crErr, type MetricTrialResult, type MetricTrialReadiness } from '@/api/static';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import DefinitionEditor from './parts/DefinitionEditor.vue';
@@ -156,10 +156,21 @@ const DENY = [
 const trend = (isStaticReal() ? [] : DAILY_GMV).map((d) => ({ date: d.date, value: Math.round((d.value / 1.13) * 100) / 100 }));
 const trialResult = shallowRef<MetricTrialResult>();
 const trialBusy = ref(false), trialError = ref('');
+const trialReadiness = shallowRef<MetricTrialReadiness>(), readinessError = ref('');
 let trialSeq = 0;
+let readinessSeq = 0;
 const trialKey = () => JSON.stringify([staticContextKey(), selected.value, isDraft.value, draft.value?.id, cr.head.value?.lockVersion]);
-watch(trialKey, () => { ++trialSeq; trialResult.value = undefined; trialError.value = ''; trialBusy.value = false; });
-onBeforeUnmount(() => { ++trialSeq; });
+watch(trialKey, () => { ++trialSeq; trialResult.value = undefined; trialError.value = ''; trialBusy.value = false; void loadReadiness(); }, { immediate: true });
+onBeforeUnmount(() => { ++trialSeq; ++readinessSeq; });
+async function loadReadiness() {
+  const seq = ++readinessSeq, key = trialKey();
+  trialReadiness.value = undefined; readinessError.value = '';
+  if (!isStaticReal() || !selected.value || (isDraft.value && (!cr.head.value || cr.loading.value || cr.error.value))) return;
+  try {
+    const result = await fetchMetricReadiness(selected.value, isDraft.value ? draft.value?.id : undefined);
+    if (seq === readinessSeq && key === trialKey()) trialReadiness.value = result;
+  } catch (e) { if (seq === readinessSeq && key === trialKey()) readinessError.value = crErr(e); }
+}
 async function runTrial() {
   if (!isStaticReal()) {
     void router.replace({ query: { ...route.query, tab: 'def' } });
@@ -168,7 +179,7 @@ async function runTrial() {
   }
   if (trialBusy.value || !selected.value || (isDraft.value && (!cr.head.value || cr.loading.value || cr.error.value))) return;
   const seq = ++trialSeq, key = trialKey(), ctx = currentApiContext(), id = selected.value;
-  trialBusy.value = true; trialError.value = '';
+  trialBusy.value = true; trialError.value = ''; trialResult.value = undefined;
   try {
     const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } });
     if (seq !== trialSeq || key !== trialKey()) return;
@@ -180,11 +191,15 @@ async function runTrial() {
   finally { if (seq === trialSeq && key === trialKey()) trialBusy.value = false; }
 }
 const trialTrend = computed(() => isStaticReal() ? (trialResult.value?.rows ?? []).map((row) => ({ date: row.date, value: row.value === null ? null : Number(row.value) })) : trend);
+const trialAxisFormat = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumSignificantDigits: 4 });
 const trendOption = computed(() => ({
-  grid: { left: 52, right: 12, top: 12, bottom: 24 },
-  tooltip: { trigger: 'axis', valueFormatter: (v: number) => fmtMoney(v) },
-  xAxis: { type: 'category', data: trialTrend.value.map((d) => d.date), axisLine: { lineStyle: { color: GRAY.g6 } }, axisTick: { show: false }, axisLabel: { color: GRAY.g8, fontSize: 12, interval: 6 } },
-  yAxis: { type: 'value', axisLabel: { color: GRAY.g8, fontSize: 12, formatter: (v: number) => `${(v / 10000).toFixed(0)}万` }, splitLine: { lineStyle: { color: GRAY.g4 } } },
+  grid: { left: isStaticReal() ? 12 : 52, right: 12, top: isStaticReal() ? 28 : 12, bottom: 24, containLabel: isStaticReal() },
+  tooltip: isStaticReal() ? { trigger: 'axis', renderMode: 'richText', formatter: (points: { dataIndex: number }[]) => {
+    const row = trialResult.value?.rows[points[0]?.dataIndex];
+    return row ? `${row.date}\n${row.value ?? '--'}${cur.value.unit ? ` ${cur.value.unit}` : ''}` : '--';
+  } } : { trigger: 'axis', valueFormatter: (v: number) => fmtMoney(v) },
+  xAxis: { type: 'category', data: trialTrend.value.map((d) => d.date), axisLine: { lineStyle: { color: GRAY.g6 } }, axisTick: { show: false }, axisLabel: { color: GRAY.g8, fontSize: 12, interval: isStaticReal() ? 'auto' : 6 } },
+  yAxis: { type: 'value', name: isStaticReal() ? cur.value.unit : '', nameTextStyle: { color: GRAY.g8, fontSize: 12 }, axisLabel: { color: GRAY.g8, fontSize: 12, formatter: (v: number) => isStaticReal() ? trialAxisFormat.format(v) : `${(v / 10000).toFixed(0)}万` }, splitLine: { lineStyle: { color: GRAY.g4 } } },
   series: [{ type: 'line', data: trialTrend.value.map((d) => d.value), symbol: 'none', lineStyle: { width: 1.5, color: BRAND } }],
 }));
 
@@ -276,7 +291,7 @@ const refCols = [
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="mt-sp" />
-        <a-button :loading="trialBusy" :disabled="isStaticReal() && isDraft && (!cr.head.value || cr.loading.value || !!cr.error.value)" @click="runTrial">试算</a-button>
+        <a-button :loading="trialBusy" :disabled="isStaticReal() && (trialReadiness?.ready === false || isDraft && (!cr.head.value || cr.loading.value || !!cr.error.value))" @click="runTrial">试算</a-button>
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-tooltip v-else-if="reviewCr(cur)" :title="`${reviewCr(cur)} 审核中`"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
@@ -309,6 +324,10 @@ const refCols = [
             <span>近 30 日试算</span><span v-if="!isStaticReal()" class="t-12 c-3 fw-400">按口径 v3 计算 · 数据截至 2026-10-24 23:00</span>
           </div>
           <a-alert v-if="trialError" type="error" :message="trialError" show-icon />
+          <a-alert v-else-if="readinessError" type="error" :message="readinessError" show-icon><template #action><a-button size="small" @click="loadReadiness">重试</a-button></template></a-alert>
+          <a-alert v-else-if="isStaticReal() && trialReadiness?.ready === false" type="warning" message="当前口径暂不可试算" show-icon>
+            <template #description><ul class="mt-readiness"><li v-for="(issue, index) in trialReadiness.issues" :key="index">{{ issue.message }}<a-collapse v-if="issue.candidates?.length" ghost><a-collapse-panel key="properties" header="查看已定义属性"><div v-for="p in issue.candidates" :key="p.reference" class="t-12 c-3">{{ p.reference }} · {{ p.name }} · {{ p.mapped ? '已绑定' : '未绑定' }}</div></a-collapse-panel></a-collapse></li></ul></template>
+          </a-alert>
           <div v-if="isStaticReal() && trialResult" class="t-12 c-3">{{ trialResult.scope }} · {{ trialResult.crId ? `已保存草稿 ${trialResult.crId}` : `口径 ${trialResult.version}` }} · 数据截至 {{ trialResult.dataCutoff ?? '无可见数据' }}</div>
           <div class="mt-chart"><a-empty v-if="isStaticReal() && !trialResult?.rows.length" :description="trialResult ? '所选范围内没有可见数据' : '暂无试算结果'" /><EChart v-else :option="trendOption" /></div>
           <div v-if="!isStaticReal()" class="mt-sec t-14 fw-600">不允许的维度</div>
@@ -389,8 +408,13 @@ const refCols = [
 .mt-sec-row { display: flex; justify-content: space-between; align-items: baseline; }
 .mt-formula { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; }
 .mt-chart { height: 200px; }
+.mt-readiness { margin: 0; padding-left: 18px; max-height: 224px; overflow: auto; overflow-wrap: anywhere; }
+.mt-readiness li + li { margin-top: 8px; }
 .mt-deny { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: var(--border); }
-.mt-desc :deep(table) { table-layout: fixed; }
+.mt-desc { min-width: 0; max-width: 100%; }
+.mt-desc.ant-descriptions :deep(.ant-descriptions-view > table) { width: 100%; table-layout: fixed; }
+.mt-desc :deep(.ant-descriptions-item-content) { min-width: 0; overflow: hidden; }
+.mt-desc .mt-ell { white-space: normal; overflow-wrap: anywhere; }
 .mt-ell { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 100%; }
 .mt-refs { display: flex; flex-direction: column; gap: 4px; }
 .mt-note { margin-top: 4px; }

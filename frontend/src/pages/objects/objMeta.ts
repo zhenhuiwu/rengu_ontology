@@ -36,7 +36,7 @@ export interface MetricMeta { id: string; name: string; unit: string | null; var
 export interface TypeMeta extends TypeBrief {
   titleProp: string; pkProp: string; properties: PropMeta[]; sampleQuestions: string[];
   /** 相关指标（静态 meta.metrics；mock 兜底按指标维度推 [推断]）；variants 给工作台口径 */
-  metrics: MetricMeta[]; kwPlaceholder?: string; hasData?: boolean;
+  metrics: MetricMeta[]; kwPlaceholder?: string; hasData?: boolean; scopeQuestions?: string[];
 }
 export type FacetMeta =
   | { key: string; kind: 'enum'; values: { value: string; count: number }[] }
@@ -138,7 +138,7 @@ export function loadMeta(id: string, withLinks = true): Promise<TypeMeta | null>
       // 真实关系加载失败同样阻止展示，避免把旧缓存当成当前定义。
       if (withLinks && !objectApi.isReal()) await loadStatic(['links']);
       if (realMetadata()) {
-        type RawMeta = { titleProp: string | null; pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean; properties: (Partial<PropMeta> & { key: string })[]; sampleQuestions?: (string | null)[]; metrics?: MetricMeta[] };
+        type RawMeta = { titleProp: string | null; pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean; properties: (Partial<PropMeta> & { key: string })[]; sampleQuestions?: (string | null)[]; scopeQuestions?: string[]; metrics?: MetricMeta[] };
         const api = objectApi.isReal() ? objectApi : staticApi;
         const [m, sp] = await Promise.all([api.get<RawMeta>(`/object-types/${encodeURIComponent(id)}/meta`, opts), objectApi.isReal() ? Promise.resolve([] as ObjProp[]) : staticProps(id, opts)]);
         const base = new Map(metaFromProps(sp).map((p) => [p.key, p]));
@@ -150,6 +150,7 @@ export function loadMeta(id: string, withLinks = true): Promise<TypeMeta | null>
         const qs = (m.sampleQuestions ?? []).filter((x): x is string => !!x);
         return withTitle(t, props.sort((a, b) => a.order - b.order), qs, {
           titleProp: m.titleProp ?? undefined, pkProp: m.pkProp ?? undefined, kwPlaceholder: m.kwPlaceholder, hasData: m.hasData,
+          scopeQuestions: m.scopeQuestions ?? [],
           metrics: (m.metrics ?? []).map((x) => ({ ...x, variants: x.variants ?? [] })),
         });
       }

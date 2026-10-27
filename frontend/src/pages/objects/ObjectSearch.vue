@@ -179,7 +179,7 @@ const askScope = computed<AskScope>(() => {
 const liveAsk = computed<objApi.ScopedAskIn | undefined>(() => (qaLive.value && meta.value
   ? { kind: meta.value.id, label: meta.value.name, conds: askConds.value, ...(selKeys.value.length ? { ids: selKeys.value } : { query: query.value }) }
   : undefined));
-const askSuggestions = computed(() => meta.value ? [...new Set([...(qaLive.value ? ['对象数量'] : []), ...meta.value.sampleQuestions])] : []);
+const askSuggestions = computed(() => meta.value ? qaLive.value ? meta.value.scopeQuestions ?? [] : meta.value.sampleQuestions : []);
 
 /* 记住当前搜索条件，详情页面包屑用来返回 */
 watch(() => route.fullPath, () => {
@@ -241,6 +241,7 @@ const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/d
         <template v-else-if="total">
           <div class="paged-scroll os-tbl">
             <a-table :columns="columns" :data-source="res!.items" row-key="id" size="middle" table-layout="fixed" :pagination="false" :loading="loading"
+              :show-sorter-tooltip="false"
               :row-selection="{ selectedRowKeys: selKeys, preserveSelectedRowKeys: true, onChange: (k: (string | number)[]) => (selKeys = k as string[]) }"
               :custom-row="(r: any) => ({ onClick: () => openDetail(r), class: 'os-row' })" @change="onTable">
               <template #bodyCell="{ column, record }">

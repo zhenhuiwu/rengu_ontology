@@ -28,7 +28,7 @@ from app.modules.admin.permissions import active_user_names
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.crs import ChangeRequestService
 from app.modules.static.knowledge_trial import KnowledgeResolveIn, resolve_knowledge
-from app.modules.static.metric_trial import MetricTrialIn, trial_metric
+from app.modules.static.metric_trial import MetricTrialIn, metric_readiness, trial_metric
 from app.modules.static.metric_versions import MetricRollbackIn
 from app.modules.static.metric_versions import rollback as rollback_metric
 from app.modules.static.models import CRStatus
@@ -59,6 +59,17 @@ from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.schemas import ReleaseOut
 
 router = APIRouter(tags=["static"])
+
+
+@router.get("/metrics/{id}/trial-readiness", dependencies=[Depends(require_func("metrics", "view"))])
+async def metric_trial_readiness(
+    id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[^\x00]+$")],
+    session: SessionDep,
+    ctx: ViewContextDep,
+    user: CurrentUserDep,
+    cr_id: Annotated[str | None, Query(alias="crId", min_length=1, max_length=64)] = None,
+) -> Any:
+    return await metric_readiness(session, user, id, ver=ctx.ver, cr_id=cr_id)
 
 
 @router.post("/metrics/{id}:trial", dependencies=[Depends(require_func("metrics", "view"))])

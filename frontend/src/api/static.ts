@@ -223,6 +223,14 @@ export interface MetricTrialResult {
   rows: { date: string; value: string | null }[];
   dataCutoff: string | null; scope: string;
 }
+export interface MetricTrialReadiness {
+  id: string; ready: boolean;
+  issues: { reason: string; message: string; reference?: string; candidates?: { reference: string; name: string; mapped: boolean }[] }[];
+}
+export const fetchMetricReadiness = (id: string, crId?: string) => {
+  const ctx = loadContext();
+  return api.get<MetricTrialReadiness>(`/metrics/${encodeURIComponent(id)}/trial-readiness`, { ...ctx.options, query: { ...ctx.options.query, crId } });
+};
 /** Pure trial: persisted definition and governed real rows; errors never fall back to mock. */
 export const trialMetric = (id: string, crId?: string, options?: RequestOptions) =>
   api.post<MetricTrialResult>(`/metrics/${encodeURIComponent(id)}:trial`, { crId, range: '30d' }, options);

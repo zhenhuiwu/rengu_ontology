@@ -161,8 +161,7 @@ async function run(a: { id: string; name: string; desc: string; approval: string
 /* 对它提问：当前页浮层 */
 const askOpen = ref(false);
 const askInitial = ref('');
-const askSugs = computed(() => (meta.value && row.value ? [
-  ...(qaLive.value ? ['对象数量'] : []),
+const askSugs = computed(() => (meta.value && row.value ? qaLive.value ? meta.value.scopeQuestions ?? [] : [
   ...metrics.value.slice(0, 3).map((m) => `${row.value!.title}的${m.name}是多少？`),
   ...meta.value.sampleQuestions.slice(0, 2),
 ] : []));
@@ -211,9 +210,12 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
             <div v-if="metrics.length" class="od-sec">
               <div class="t-16 fw-600 od-sec-title">相关指标</div>
               <div class="od-mets">
-                <a-tooltip v-for="m in metrics" :key="m.id" :title="askOff ? reason : '在当前页提问，回答带口径'">
-                  <a-button size="small" :disabled="askOff" @click="ask(`${row.title}的${m.name}是多少？`)">{{ m.name }}<span v-if="m.unit" class="c-3">（{{ m.unit }}）</span></a-button>
-                </a-tooltip>
+                <template v-for="m in metrics" :key="m.id">
+                  <a-tag v-if="qaLive">{{ m.name }}<span v-if="m.unit">（{{ m.unit }}）</span></a-tag>
+                  <a-tooltip v-else :title="askOff ? reason : '在当前页提问，回答带口径'">
+                    <a-button size="small" :disabled="askOff" @click="ask(`${row.title}的${m.name}是多少？`)">{{ m.name }}<span v-if="m.unit" class="c-3">（{{ m.unit }}）</span></a-button>
+                  </a-tooltip>
+                </template>
               </div>
             </div>
             <div v-for="g in groups" :key="g.title" class="od-sec">

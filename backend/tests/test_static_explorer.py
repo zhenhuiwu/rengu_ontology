@@ -176,7 +176,7 @@ async def test_facets_store_counts_from_data(client, seeded):
     f = by_key(await facets(client, "store"))
     assert list(f) == ["format", "region_code", "city", "status"]
     region = {v["value"]: v["count"] for v in f["region_code"]["values"]}
-    assert region == dict(Counter(s.region for s in stores))
+    assert region == dict(Counter(s.big_region for s in stores))
     present = {s.status.value for s in stores}
     expect = [x for x in ["营业中", "装修中", "已闭店"] if x in present]
     assert [v["value"] for v in f["status"]["values"]] == expect
@@ -188,7 +188,7 @@ async def test_facets_respect_other_filters_not_own(client, seeded):
     city = Counter(s.city for s in stores).most_common(1)[0][0]
     f = by_key(await facets(client, "store", {"city": [city]}))
     assert {v["value"]: v["count"] for v in f["region_code"]["values"]} == dict(
-        Counter(s.region for s in stores if s.city == city)
+        Counter(s.big_region for s in stores if s.city == city)
     )
     assert sum(v["count"] for v in f["city"]["values"]) == len(stores)  # 自己的条件不影响自己
     f = by_key(await facets(client, "store", {"status": ["营业中"]}))  # 枚举按中文标签过滤

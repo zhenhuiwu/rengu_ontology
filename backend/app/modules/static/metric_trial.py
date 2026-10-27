@@ -37,8 +37,8 @@ class MetricTrialIn(ApiModel):
         return self
 
 
-def unavailable(note: str) -> AppError:
-    return AppError(note, code="METRIC_TRIAL_UNAVAILABLE", status_code=422)
+def unavailable(note: str, **details) -> AppError:
+    return AppError(note, code="METRIC_TRIAL_UNAVAILABLE", status_code=422, details=details or None)
 
 
 async def metric_definition(session, code: str, user: CurrentUser, ver=None, cr_id=None) -> dict:
@@ -63,7 +63,11 @@ async def metric_definition(session, code: str, user: CurrentUser, ver=None, cr_
         if metric is None:
             raise NotFound("指标不存在于所选版本")
         if metric.get("status") != "已发布":
-            raise unavailable("指标尚未发布，请在已保存的变更单草稿中试算")
+            raise unavailable(
+                f"指标当前为{metric.get('status') or '未发布'}，请在已保存的变更单草稿中试算",
+                reason="METRIC_NOT_PUBLISHED",
+                reference=code,
+            )
         return metric
     if ver:
         raise unavailable("历史版本不能叠加当前变更单")
@@ -111,36 +115,96 @@ class BoundFormula:
         self.aggregates = 0
         self.count_times = {}
 
-    def bind_object(self, name):
+    def resolve_object(self, name):
         matches = [o for o in self.objects if name in (o.code, o.api_name, o.display_name)]
-        if len(matches) != 1:
-            raise unavailable(f"对象「{name}」不存在或含义不唯一")
+        if not matches:
+            raise unavailable(
+                f"对象「{name}」未在当前本体中定义，请使用已定义对象的编号或 API 名",
+                reason="OBJECT_NOT_FOUND",
+                reference=name,
+            )
+        if len(matches) > 1:
+            raise unavailable(
+                f"对象「{name}」对应多个定义，请使用唯一对象 API 名",
+                reason="OBJECT_AMBIGUOUS",
+                reference=name,
+            )
         obj = matches[0]
         if obj.status.value != "已发布":
             raise unavailable(f"对象「{name}」尚未发布")
+        return obj
+
+    def property(self, obj, name):
+        props = [p for p in obj.properties if name in (p.api_name, p.display_name)]
+        reference = f"{obj.code}.{name}"
+        if not props:
+            gov = next(
+                (g for g in governed_tables(self.ontology_id).values() if g.object_type == obj.code), None
+            )
+            candidates = [
+                {
+                    "reference": f"{obj.code}.{p.api_name}",
+                    "name": p.display_name,
+                    "type": p.data_type,
+                    "mapped": bool(gov is not None and p.backing_column and p.backing_column in gov.table.c),
+                }
+                for p in obj.properties
+                if not p.is_sensitive
+                and p.visibility != "hidden"
+                and sum(p.api_name in (q.api_name, q.display_name) for q in obj.properties) == 1
+            ]
+            raise unavailable(
+                f"属性「{obj.display_name}.{name}」未在已发布对象中定义；"
+                "请在指标变更单中使用已定义属性的 API 名或完整名称",
+                reason="PROPERTY_NOT_FOUND",
+                reference=reference,
+                candidates=candidates,
+            )
+        if len(props) > 1:
+            raise unavailable(
+                f"属性「{obj.display_name}.{name}」对应多个定义，请使用唯一属性 API 名",
+                reason="PROPERTY_AMBIGUOUS",
+                reference=reference,
+            )
+        prop = props[0]
+        if prop.is_sensitive or prop.visibility == "hidden":
+            raise unavailable(
+                f"属性「{reference}」不能用于试算", reason="PROPERTY_RESTRICTED", reference=reference
+            )
+        return prop
+
+    def bind_object(self, name):
+        obj = self.resolve_object(name)
         if self.object is not None and self.object.id != obj.id:
-            raise unavailable("当前试算只支持单个受治理对象，跨对象口径尚无可执行连接定义")
+            raise unavailable(
+                "当前试算引擎仅支持单个受治理对象，暂不支持跨对象聚合或过滤",
+                reason="CROSS_OBJECT_UNSUPPORTED",
+            )
         gov = next((g for g in governed_tables(self.ontology_id).values() if g.object_type == obj.code), None)
         if gov is None:
-            raise unavailable(f"对象「{name}」尚未绑定受治理业务表")
+            raise unavailable(
+                f"对象「{name}」尚未绑定受治理业务表，当前不能试算",
+                reason="OBJECT_UNBOUND",
+                reference=obj.code,
+            )
         self.object, self.governed = obj, gov
         return gov
 
     def column(self, node):
         if not isinstance(node, exp.Column) or node.db or node.catalog:
             raise unavailable("公式中的属性引用不合法")
+        obj = self.resolve_object(node.table) if node.table else self.object
+        if obj is None:
+            raise unavailable("属性引用必须明确所属对象")
+        prop = self.property(obj, node.name)
         if node.table:
             self.bind_object(node.table)
-        if self.object is None:
-            raise unavailable("属性引用必须明确所属对象")
-        props = [p for p in self.object.properties if node.name in (p.api_name, p.display_name)]
-        if len(props) != 1:
-            raise unavailable(f"属性「{node.name}」不存在或含义不唯一")
-        prop = props[0]
-        if prop.is_sensitive or prop.visibility == "hidden":
-            raise unavailable(f"属性「{node.name}」不能用于试算")
         if not prop.backing_column or prop.backing_column not in self.governed.table.c:
-            raise unavailable(f"属性「{node.name}」尚未绑定真实业务列")
+            raise unavailable(
+                f"属性「{obj.code}.{prop.api_name}」尚未绑定真实业务列，当前不能试算",
+                reason="PROPERTY_UNBOUND",
+                reference=f"{obj.code}.{prop.api_name}",
+            )
         return self.governed.table.c[prop.backing_column]
 
     def expression(self, node):
@@ -249,31 +313,103 @@ def parse_formula(value, *, normalize_separators=False):
     return trees[0]
 
 
-async def evaluate_metric(
-    session,
-    user: CurrentUser,
-    code: str,
-    *,
-    ver=None,
-    cr_id=None,
-    days=30,
-    period="day",
-    at=None,
-    timezone=None,
-    object_kind=None,
-) -> dict:
-    """Public evaluator: exact saved definition + governed live rows, inclusive local calendar days."""
-    check_func(user, "metrics", "view")
-    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 93:
-        raise unavailable("试算范围须为1至93天")
-    if period not in ("day", "week", "month"):
-        raise unavailable("试算分组仅支持日、周或月")
-    metric = await metric_definition(session, code, user, ver, cr_id)
-    # Older snapshots omit execution metadata. Do not borrow today's mappings/metadata for history.
-    if ver:
-        raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
-    objects = list(await session.scalars(select(ObjectType)))
-    bound = BoundFormula(objects, require_ontology_id(session))
+def definition_issues(metric, objects, ontology_id):
+    """Validate all explicit references; candidates describe definitions, never alias substitutions."""
+    issues, references, object_codes = [], [], set()
+    metadata = {r.get("k"): r.get("v") for r in metric.get("def", []) if isinstance(r, dict)}
+    tree = parse_formula(metric.get("formula"))
+    trees = [("formula", tree)]
+    if metadata.get("时间字段"):
+        try:
+            trees.append(("time", sqlglot.parse_one(metadata["时间字段"], read="postgres")))
+        except (sqlglot.errors.ParseError, sqlglot.errors.TokenError, TypeError):
+            issues.append({"reason": "TIME_FIELD_INVALID", "message": "指标时间字段不是明确的对象属性"})
+    if metadata.get("默认过滤"):
+        try:
+            trees.append(
+                ("filter", parse_formula("1 WHERE " + metadata["默认过滤"], normalize_separators=True))
+            )
+        except (AppError, TypeError) as error:
+            issues.append({"reason": "FILTER_INVALID", "message": str(error)})
+    resolver = BoundFormula(objects, ontology_id)
+    base = None
+    for area, part in trees:
+        for node in part.find_all(exp.Column):
+            # Bare right-hand identifiers are existing scalar filter values, not property references.
+            if (
+                isinstance(node.parent, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE))
+                and node is node.parent.expression
+            ):
+                continue
+            references.append((area, node))
+            name = node.name if isinstance(node.parent, exp.Count) and not node.table else node.table
+            if name:
+                try:
+                    obj = resolver.resolve_object(name)
+                    object_codes.add(obj.code)
+                    if not any(g.object_type == obj.code for g in governed_tables(ontology_id).values()):
+                        issue = {
+                            "reason": "OBJECT_UNBOUND",
+                            "reference": obj.code,
+                            "message": f"对象「{obj.display_name}」尚未绑定受治理业务表，当前不能试算",
+                        }
+                        if not any(
+                            old.get("reference") == obj.code and old["reason"] == issue["reason"]
+                            for old in issues
+                        ):
+                            issues.append(issue)
+                    if area == "formula" and base is None:
+                        base = obj
+                except AppError:
+                    pass
+    for area, node in references:
+        bound = BoundFormula(objects, ontology_id)
+        try:
+            if isinstance(node.parent, exp.Count) and not node.table:
+                bound.bind_object(node.name)
+            else:
+                if not node.table and base is not None:
+                    bound.bind_object(base.code)
+                bound.column(node)
+        except AppError as error:
+            issue = {
+                "reason": error.details.get("reason", error.code) if error.details else error.code,
+                "message": error.message,
+                **(error.details or {}),
+            }
+            if issue.get("candidates"):
+                kinds = (
+                    {"timestamp", "date"}
+                    if area == "time"
+                    else (
+                        {"int", "integer", "decimal"}
+                        if isinstance(node.parent, (exp.Sum, exp.Avg, exp.Min, exp.Max))
+                        else None
+                    )
+                )
+                if kinds:
+                    issue["candidates"] = [p for p in issue["candidates"] if p["type"] in kinds]
+            if not any(
+                (old["reason"], old.get("reference")) == (issue["reason"], issue.get("reference"))
+                for old in issues
+            ):
+                issues.append(issue)
+    if len(object_codes) > 1:
+        issues.append(
+            {
+                "reason": "CROSS_OBJECT_UNSUPPORTED",
+                "objects": sorted(object_codes),
+                "message": "当前试算引擎暂不支持跨对象聚合或过滤；可拆分为单对象口径，不能省略原有跨对象条件",
+            }
+        )
+    return issues
+
+
+def compile_metric(metric, objects, ontology_id):
+    issues = definition_issues(metric, objects, ontology_id)
+    if issues:
+        raise unavailable("；".join(issue["message"] for issue in issues), issues=issues)
+    bound = BoundFormula(objects, ontology_id)
     tree = parse_formula(metric.get("formula"))
     expression = bound.expression(tree.expressions[0])
     if not bound.aggregates or bound.object is None:
@@ -304,6 +440,53 @@ async def evaluate_metric(
             raise unavailable("默认过滤不是明确的文本表达式")
         filters = parse_formula("1 WHERE " + default_filter, normalize_separators=True)
         conds.append(bound.predicate(filters.args["where"].this))
+    return bound, expression, temporal, time_field, conds
+
+
+async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, cr_id=None):
+    check_func(user, "metrics", "view")
+    try:
+        metric = await metric_definition(session, code, user, ver, cr_id)
+        if ver:
+            raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
+        compile_metric(metric, list(await session.scalars(select(ObjectType))), require_ontology_id(session))
+    except AppError as error:
+        if error.code != "METRIC_TRIAL_UNAVAILABLE":
+            raise
+        return {
+            "id": code,
+            "ready": False,
+            "issues": (error.details or {}).get("issues")
+            or [{"reason": (error.details or {}).get("reason", error.code), "message": error.message}],
+        }
+    return {"id": code, "ready": True, "issues": []}
+
+
+async def evaluate_metric(
+    session,
+    user: CurrentUser,
+    code: str,
+    *,
+    ver=None,
+    cr_id=None,
+    days=30,
+    period="day",
+    at=None,
+    timezone=None,
+    object_kind=None,
+) -> dict:
+    """Public evaluator: exact saved definition + governed live rows, inclusive local calendar days."""
+    check_func(user, "metrics", "view")
+    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 93:
+        raise unavailable("试算范围须为1至93天")
+    if period not in ("day", "week", "month"):
+        raise unavailable("试算分组仅支持日、周或月")
+    metric = await metric_definition(session, code, user, ver, cr_id)
+    if ver:
+        raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
+    bound, expression, temporal, time_field, conds = compile_metric(
+        metric, list(await session.scalars(select(ObjectType))), require_ontology_id(session)
+    )
     tz = ZoneInfo(timezone or get_settings().display_tz)
     cutoff_at = at or clock.now()
     if cutoff_at.tzinfo is None:
