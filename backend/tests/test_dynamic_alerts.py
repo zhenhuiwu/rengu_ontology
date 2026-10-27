@@ -9,7 +9,6 @@ from tests.test_use_ops_runtime import alert_runtime, runtime  # noqa: F401
 
 OPEN = "AL-20261025-0126"  # R-007 商品，待处理，无关联动作
 OPEN_ORDER = "AL-20261025-0131"  # R-015 订单，待处理
-OPEN_LINKED = "AL-20261025-0139"  # 待处理，关联动作待确认（在途）
 MINE_LOCKED = "AL-20261025-0127"  # 王敏处理中，关联动作待确认（在途）
 OTHERS = "AL-20261025-0136"  # 陈立军处理中，关联动作执行中
 FAILED_LINK = "AL-20261024-0118"  # 刘婷处理中，关联动作失败（不在途）
@@ -82,7 +81,7 @@ async def test_transfer(dyn, client):  # noqa: F811
     err(await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": "路人甲"}), 422, "VALIDATION_FAILED")
     err(await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": " "}), 422, "VALIDATION_FAILED")
     err(
-        await client.post(f"{API}/alerts/{OPEN_LINKED}:transfer", json={"to": first["id"]}),
+        await client.post(f"{API}/alerts/{MINE_LOCKED}:transfer", json={"to": first["id"]}),
         409,
         "ALERT_LOCKED_BY_ACTION",
     )
