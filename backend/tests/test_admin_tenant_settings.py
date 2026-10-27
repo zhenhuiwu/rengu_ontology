@@ -14,6 +14,7 @@ from app.modules.admin.models import AuditLog, SysOrg, SysTenant
 from app.modules.admin.tenant_settings import TenantSettingsIn, update_tenant
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/admin/v1/settings/tenant"
 AUTHOR = {"X-Demo-As": "U010001", "X-Forwarded-For": "10.1.2.3"}
@@ -23,6 +24,7 @@ AUTHOR = {"X-Demo-As": "U010001", "X-Forwarded-For": "10.1.2.3"}
 async def tenant(session):
     await run_seeds(session, ["admin"])
     await grant_fixture_roles(session)
+    await bind_workspace_members(session)  # 测试会话预绑定空间 1：操作人须是空间成员
     await session.commit()
     return session
 

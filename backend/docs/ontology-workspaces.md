@@ -46,8 +46,8 @@
 
 ## MetricFlow 引擎适配（骨架）
 
-- `app/common/metricflow_engine.py`：`query_metrics(session, user, metrics, group_by, where)` = 进程内 `export_metricflow(session, user)`（静态，JSON 形状，含 metrics view 校验）→ `compile_query` → `run_guarded(await session.connection(), sql, user)`（行级过滤 + 本体边界）。编译结果不能绕过 run_guarded 执行。
-- 依赖：`metricflow` 库未安装、未写入依赖锁；`metricflow_available()` 只探测。内置最小编译器支持 simple 指标（含导出 filter，编成 `AGG(CASE WHEN … THEN expr END)`）和同一 semantic model 上的 derived 指标；group_by 支持 `<entity>__<dim>` 与 `metric_time`（默认时间维度按天）；where 只接受 `{{ Dimension('e__d') }} <比较符> <标量>`。跨模型 join、cumulative / conversion 指标、非 day 粒度暂不支持（422 `METRIC_QUERY_INVALID`）。`backend="metricflow"` 明确返回“尚未接入”。不用 PyYAML。
+- `app/common/metricflow_engine.py`：`metric_query(session, user, metrics=, dimensions=, filters=, backend="auto")`（智能问数入口）/ `query_metrics(...)` = 进程内 `export_metricflow(session, user)`（静态，JSON 形状，含 metrics view 校验）→ `compile_metrics`（MetricFlow 引擎或内置编译器）→ `run_guarded(await session.connection(), sql, user)`（行级过滤 + 本体边界）。编译结果不能绕过 run_guarded 执行。
+- 依赖：`metricflow` 是可选 extra（`uv sync --extra metricflow`，0.213，带 sqlglot>=30.25）；未安装时 auto / metricflow 回退内置编译器。详见 `docs/backend/metricflow-engine.md`。
 - 尚未开放 HTTP 路由；指标口径与数值由静态负责，本模块不转换定义。
 
 ## 外部集成接入点（Palantir）

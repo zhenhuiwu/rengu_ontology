@@ -15,6 +15,7 @@ from app.modules.versioning.models import OntologyRelease
 from app.seeds.loader import run_seeds
 from tests.conftest import TEST_URL
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/data/v1/datasources"
 S = "/api/ontology/v1"
@@ -51,6 +52,8 @@ async def imp(session, source, monkeypatch):
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
         await grant_fixture_roles(session)
+        # 预览/导入路由按本体工作空间成员校验：把夹具用户挂到空间 1。
+        await bind_workspace_members(session)
         ds = await DatasourceService(session).create(
             DatasourceCreate(
                 name="真实导入测试库",

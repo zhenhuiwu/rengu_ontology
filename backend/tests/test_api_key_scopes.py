@@ -201,5 +201,6 @@ async def test_dynamic_read_scope_carries_dynamic_page_reads_only(client, seeded
         ).status_code == 403
         denied = await client.get(dynamic_probe.format(page, "view"), headers=bearer(without))
         assert denied.status_code == 403 and denied.json()["details"]["required"] == ["dynamic:read"]
-    # dynamic:read does not reach routes that never declared it (e.g. the alert list today).
-    assert (await client.get("/api/ontology/v1/alerts", headers=bearer(with_scope))).status_code == 403
+    # dynamic-r6 wired dynamic:read into the alert list: the scope reaches it, other scopes do not.
+    assert (await client.get("/api/ontology/v1/alerts", headers=bearer(with_scope))).status_code == 200
+    assert (await client.get("/api/ontology/v1/alerts", headers=bearer(without))).status_code == 403

@@ -1,4 +1,60 @@
-# 本体小白 交接文档（分支 xiaobai-p1）
+# 本体小白 交接文档（分支 xiaobai-p1 / xiaobai-p2）
+
+## 2026-10-27 batch 3（分支 xiaobai-p2）
+
+### 1. 已知遗留（已修）
+
+- **admin 路由识别**：FastAPI 0.162 的 `scope["route"].path` 是路由器相对路径，旧判断 `"/api/admin/" in route` 一直为假。现在 `auth.full_route_path(request)` 还原前缀，`auth.is_admin_request(request)` 按实际路径 + `api_prefix("admin")` 判断。admin 路由 X-Ontology-Id 不可用（999999 / abc / 0）时不再报 403 / 404，按会话已有范围（没有则不绑定）处理，也不受 viewer 只读拦截；非 admin 路由行为不变。工作空间绑定抽成 `auth.bind_workspace(session, request, user)`。测试 `tests/test_admin_route_discovery.py`。
+- **审计导出 403**：根因就是上一条，已随之修复。
+- **数据连接导入夹具**：`tests/test_datasource_ontology_import.py` 补本体成员（`bind_workspace_members`），25 个用例通过；`test_admin_tenant_settings.py` / `test_admin_users.py` 夹具同样补成员。
+
+### 2. 服务账号身份（只做鉴权侧）
+
+- 公开函数 `app.modules.admin.api_keys.build_service_account_principal(session, service_account_or_code, *, tenant_id=None, bind_ontology=True) -> CurrentUser`：
+  - 不依赖请求，可以在 worker / 机器调用里用；按 code 重新读库（传实例也重读）。
+  - 不存在或已吊销 → `Unauthorized("服务账号已吊销或不存在")`（details.principal = `api:{code}`）；绑定的角色不存在 → Unauthorized。
+  - `roles=(role.code,)`、`func=role.func`、`is_service_account=True`、`service_account_id`。
+  - `bind_ontology=True`（默认）时要求会话已绑定本体（`set_ontology_scope`）且角色已绑定该本体（`role_bound`），否则 Unauthorized；返回 `ontology_role="service"` 和角色的行级范围。
+  - 旧私有名 `_service_account_user` 保留为别名（batch 2 是在 authenticate_key 里内联构造的，此前没有这个私有函数）。
+- `CurrentUser` 新字段（人类调用方都是 None）：`service_account_id`、`api_key_prefix`、`api_scopes`、`action_allowlist`、`event_allowlist`（tuple，None 表示不限）、`quota = {"minute": {"limit", "used"}, "day": {...}}`（本次请求扣减后的状态，未配置窗口为 None）。`is_service_account` 已有。
+- 无迁移，没有 run-as 字段。测试 `tests/test_service_account_principal.py`（含吊销、未绑定、不存在、请求内字段）。
+- **Palantir 可替换的复制代码**：`app/modules/machine/principal.py` 的 `resolve_actor` 约 27-48 行（role_bound / ServiceAccount / SysRole / role_row_access 的导入，按 code 查账号 + 吊销判断，取角色，role_bound 校验，构造 CurrentUser）可以整段换成 `return await build_service_account_principal(session, code)`。错误语义一致（都是 Unauthorized），只是消息文字不同。我没有改他们的文件。
+
+### 3. MetricFlow 引擎
+
+- 见 [metricflow-engine.md](../metricflow-engine.md)。服务函数 `metric_query(session, user, metrics=, dimensions=, filters=, limit=, backend="auto") -> {sql, backend, columns, rows}`，执行一律走 run_guarded。
+- 可选 extra `metricflow`（0.213，Apache-2.0，不含 dbt-core），没装时回退内置编译器。`uv lock` 联网成功，锁文件已更新。**影响基础环境**：sqlglot 30.24.0 → 30.25.0，python-dateutil 3.0.0 → 2.9.0.post0（metricflow 的上限）。合并后要 `uv sync`。
+- time spine 默认 `public.metricflow_time_spine(date_day)`，本批次没有建表；需要读 spine 的查询（累计、补零、偏移）在建表并登记为受控表之前会被 run_guarded 拒绝。
+- derived 指标 `a / b` 在 Postgres 里两边都是整数时做整除（MetricFlow 原样输出）；口径需要小数时，在导出的 expr 里写 `1.0 * a / b`。
+
+### 4. 种子修复方案（只是方案，未改 seed / mock）
+
+目标链路：库存告警（R-012）→ 补货建议（`request_replenish` 排第 1）→ 人工确认 → Webhook 投递 → decision_log。依据 `handoff/dynamic.md` 的「种子缺口」。
+
+| # | 改什么 | 为什么 |
+|---|---|---|
+| 1 | 新增角色 **供应链计划员**（非内置，func：alerts view + action-center use/manage + action-types view；行级范围 门店.大区 = 华东），并绑定到本体 1（`ontology_role_binding`） | `request_replenish` 条件「执行人角色 ∈ {门店店长, 供应链计划员, 规则 R-012}」里这个角色没登记，试运行一直「未登记角色」 |
+| 2 | **周晓峰 U010011**（华东事业部 / 供应链，已在 SYS_USERS）：主角色设为供应链计划员；加入本体 1 成员（editor） | R-012 autoStage.confirmer 写的是「供应链计划员 周晓峰」，需要能定位到唯一在用用户；他同时作为演示告警的处理人和确认人 |
+| 3 | 新增角色 **区域供应链经理**（func：action-center approve/manage + alerts view，行级范围 华东），选一个在用用户担任，例如 **姚娜 U010812**（华东 / 供应链，现为动作审批人，启用）或 白平 U010791；本体 1 成员（editor） | `request_replenish.approval` =「≤ 2 万元免审；超过需区域供应链经理审批」，只有角色泛称，被判 `approvalConfigured=false`，所以所有动作都「未配置可用审批人」。审批人配置改成 userCode，例如 `U010812`（「区域供应链经理 姚娜」能唯一定位） |
+| 4 | 门店店长（R-06）绑定本体 1，并设一个在用的演示店长（例如华东的 林超 U010329，主角色改为门店店长，行级范围 本店） | 条件列表里另一类执行人，用来演示行级范围收窄后的候选 |
+| 5 | 演示告警 AL-20261025-0139：`assignee` = U010011 | 条件「关联告警：当前用户必须是告警处理人」，现在 assignee 为 null，试运行不过 |
+| 6 | 动作参数（Palantir / 动态负责，不是用户种子）：给 request_replenish 加「原因」参数或去掉「原因必填」条件；商品 / 门店参数规则改成可校验的条件；qty 映射要么接求值器，要么在演示里由确认人手填 | 剩下的试运行失败原因，和用户 / 角色无关，列出来方便一起排期 |
+| 7 | Webhook：新增一个外部系统（类别 Webhook，测试环境指向本地回执端点 / 测试替身，带签名密钥引用，不写明文），并把 request_replenish 的执行通道配到它（或者另加一个「补货申请通知」事件订阅） | 现在默认提交 / 事件投递是 UnconfiguredAdapters，人工确认后整请求 503；没有通道就走不到 Webhook，也走不到 decision_log 的执行结果 |
+| 8 | 服务账号（可选，演示机器调用）：新增 SA「补货助手」，绑定供应链计划员角色，密钥范围 dynamic:read + actions:dry-run，动作白名单只有 request_replenish | 验证 `caller_kind=service_account` 和 key-allowlist；用 `build_service_account_principal` 构造身份 |
+| 9 | 审批人改真实用户：mock 里的赵磊、吴佳等非系统审批人，改成已在 sys_user 里的在用用户编号 | dynamic.md 第 74 行：这些动作在库里没人能审批 |
+
+注意：
+- 只改 `seeds/json`、`seeds/extra` 和对应的 seed 加载代码，开发库 `rengu` 不手工写。新增角色走 seed 后重跑，不需要迁移。
+- 姓名比较是按唯一在用用户来的（seed CHECKS 不允许重名），所以选人时要避开重名和停用 / 待激活的用户（例如高伟、卢静是停用的）。
+- 改完要重新导出 mock（`seeds/json/dynamic/*`），前端演示值（王敏 / 陈立军）不受影响。
+
+### 5. 既有失败（master 上同样失败，本批次没改）
+
+- `test_admin_audit_export::test_export_migration_roundtrip_and_metadata`：注释漂移（`api_key.code`、`platform_setting.code` 是我的；`decision_log.code`、`rule_schedule_run.release_id` 是动态的）。
+- `test_audit_logs` 9 个用例：返回多了 `ontologyId: None`，和 mock 不一致。
+- `test_admin_roles::test_list_and_get_match_mock`。
+- `test_admin_users`：`test_depts`（部门路径名）、`test_import_preview_csv_and_rows`（「部门不存在」的期望）、`test_enable_disable`（期望 422 TRANSFER_REQUIRED，实际 200）。
+- `test_api_key_dynamic_capabilities::test_meta_read_plus_dynamic_read_sees_rules_section`：夹具报错，`grant_fixture_roles` 找不到 U010001（动态的夹具）。
 
 ## 2026-10-27 batch 2（基于 master e97bc61）
 
@@ -7,7 +63,7 @@
 - 第 7 个范围 `dynamic:read`：alerts / rules / object-types / action-center view。接入写法 `Depends(require_api_scope("dynamic:read"))`。测试在 `tests/test_api_key_scopes.py`；meta:read + dynamic:read 看到 `/meta/capabilities` rules 分节：`tests/test_api_key_dynamic_capabilities.py`（`-p tests.use_ops_support`）。
 - C1 组织规则：`app/modules/admin/org_scope.py`，`@org` 范围 + 每本体组织列配置 + gaps；`/roles/meta.scopeProps` 现在真的返回 `objectTypeCode`（之前 schema 丢了）。测试 `tests/test_org_scope.py`。
 - C2 导入草稿取值提示：`app/modules/data/ontology_import.py` 的 `sample_distinct` / `value_hints`，入参 `sampleValues`（默认关），响应 `llm: false` / `sampled`；纯规则，无行业词表。测试 `tests/test_ontology_import_value_hints.py`。
-- C3 MetricFlow 适配骨架：`app/common/metricflow_engine.py`（导出 → 内置编译 → run_guarded），`metricflow` 为可选依赖、未装、未改锁。测试 `tests/test_metricflow_engine.py`（导出形状夹具）。
+- C3 MetricFlow 适配骨架：`app/common/metricflow_engine.py`（导出 → 内置编译 → run_guarded），`metricflow` 为可选依赖、未装、未改锁（batch 3 已接入，见上）。测试 `tests/test_metricflow_engine.py`（导出形状夹具）。
 - 规则与契约见 [ontology-workspaces.md](../../ontology-workspaces.md) “API 密钥权限范围与服务账号”“行级范围按本体”。
 
 ### 已知问题（未在本轮修复）

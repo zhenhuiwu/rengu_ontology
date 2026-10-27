@@ -23,6 +23,14 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+# MetricFlow 引擎（app/common/metricflow_engine.py 的 metricflow 后端；Apache-2.0，不含 dbt-core）。
+# 未安装时自动回退内置编译器。0.213 需要 sqlglot>=30.25。安装：uv sync --extra metricflow
+metricflow = [
+    "metricflow>=0.213,<0.214",
+    "sqlglot>=30.25.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",
