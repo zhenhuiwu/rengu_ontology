@@ -103,7 +103,8 @@ def snapshot_flags(obj: str, p: Obj, order: int, ontology_id: int | None = None)
     """旧快照缺少显示标记时只用初始定义补齐，不能借用当前表的标记。"""
     initial_order = (
         _seed_orders(get_settings().seeds_json_dir / "static" / "OBJECT_PROPS.json")
-        if ontology_id == 1 else {}
+        if ontology_id == 1
+        else {}
     )
     out = {**default_flags(obj, p, ontology_id), "seq": initial_order.get(obj, {}).get(p["api"], order)}
     out.update({col: p[key] for key, col in DISPLAY_FIELDS.items() if key in p})
@@ -293,7 +294,9 @@ class ExplorerService:
             "name": obj["name"],
             "titleProp": next((p.api_name for p in props if p.is_title), None),
             "pkProp": next((p.api_name for p in props if p.is_pk), None),
-            "kwPlaceholder": " / ".join([p.display_name for p in visible if p.searchable and not p.is_sensitive][:3]),
+            "kwPlaceholder": " / ".join(
+                [p.display_name for p in visible if p.searchable and not p.is_sensitive][:3]
+            ),
             "properties": [prop_meta(p) for p in visible],
             "hiddenCount": len(props) - len(visible),
             "sampleQuestions": [q.get("q") for q in obj.get("qs", []) if isinstance(q, dict)],
@@ -314,7 +317,10 @@ class ExplorerService:
         }
 
     def _table(self, code: str) -> GovernedTable | None:
-        return next((g for g in governed_tables(require_ontology_id(self.session)).values() if g.object_type == code), None)
+        return next(
+            (g for g in governed_tables(require_ontology_id(self.session)).values() if g.object_type == code),
+            None,
+        )
 
     async def facets(self, code: str, filters: Obj, user: Any, ver: str | None = None) -> list[Obj]:
         from app.modules.qa.explore_api import ExploreIn, _bind, _facets
@@ -334,16 +340,26 @@ class ExplorerService:
         if binding is None:
             for key, value in filters.items():
                 self._cond(by_key[key], None, value, key)
-            return [{"key": prop.api_name, "name": prop.display_name, "kind": facet_kind(prop), "order": prop.seq,
-                     "hasData": False, **({"values": []} if facet_kind(prop) == "enum" else {"min": None, "max": None})}
-                    for prop in fprops]
+            return [
+                {
+                    "key": prop.api_name,
+                    "name": prop.display_name,
+                    "kind": facet_kind(prop),
+                    "order": prop.seq,
+                    "hasData": False,
+                    **({"values": []} if facet_kind(prop) == "enum" else {"min": None, "max": None}),
+                }
+                for prop in fprops
+            ]
         binding.check(filters, "筛选")
         body = ExploreIn(filters=filters)
         base = await binding.stmt(user)
         async with binding.read(self.session) as reader:
             rows = await _facets(reader, binding, base, body)
-        return [{**row, "name": by_key[row["key"]].display_name, "order": by_key[row["key"]].seq, "hasData": True}
-                for row in rows]
+        return [
+            {**row, "name": by_key[row["key"]].display_name, "order": by_key[row["key"]].seq, "hasData": True}
+            for row in rows
+        ]
 
     @staticmethod
     def _enum_values(col: ColumnElement, rows: list[Any]) -> list[Obj]:

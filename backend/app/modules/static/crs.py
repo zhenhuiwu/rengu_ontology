@@ -320,15 +320,15 @@ class ChangeRequestService:
         cr.status = to
         cr.status_at = now
         event = CrEvent(
-                cr_id=cr.id,
-                action=action,
-                actor=user.name,
-                actor_code=user.id,
-                created_by=user.id,
-                text=f"{user.name} {text}",
-                desc=desc,
-                level=level,
-                at=now,
+            cr_id=cr.id,
+            action=action,
+            actor=user.name,
+            actor_code=user.id,
+            created_by=user.id,
+            text=f"{user.name} {text}",
+            desc=desc,
+            level=level,
+            at=now,
         )
         self.session.add(event)
         return event

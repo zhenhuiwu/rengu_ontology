@@ -298,3 +298,49 @@
 - 快照外的当前取值仍保留为失效历史，不物理丢失；恢复后所有有效取值须引用目标层级。`restore_sections`任一节失败时，先前节的写回一并回滚。
 - 原始`v2026.09.3`的`org`快照只有“省份/门店”层级，却含6条有效“大区”取值，属于已有不一致历史数据。本轮不改mock、seed、开发库或猜造历史省份数据；对此快照明确`WRITEBACK_FAILED`，不能宣称已成功回滚。动态section单测仅登记其自身builders；静态专项单独证明坏旧快照拒绝和全事务原子性。
 - 专项：`test_dimension_levels.py`与动态section历史恢复节点通过；测试库为独立`rengu_reg_roles_test`。
+
+## 2026-10-27 新基线（4a1293b → f3b8119）逐条复核
+
+| 原条目 | 状态 | 依据 |
+|---|---|---|
+| 未完成1 回滚恢复定义表 | 完成 | writeback.restore_*；维度整版恢复先校验（handoff 末节） |
+| 2 onto_qa_path 冗余唯一约束 | 完成 | migrations/static_0012_qa_path_unique.py；models.py 已无 group_key 唯一约束 |
+| 5 POST /releases lockVersion | 完成 | publish.py:148-153 不一致 409 |
+| 6 CR_DETAILS.json 一次性导出 | 未做（PDE） | seeds/extra/static/CR_DETAILS.json 仍在；seeds/__init__.py:529 |
+| 7 启动时读 /releases/current | 未做（PDE） | 仅 api/releases.ts（versioning 开关）+ static.ts fetchCurrentAfterWrite |
+| 8 总览页切真接口 | 部分 | OntologyOverview 图谱/概览/待办/发布走 api/overview.ts；仍 import mock links/actionEvent/metrics/dimensions/changes/quality（:22-29，mock 分支） |
+| 9a 发布展开 cr_item | 完成 | writeback.apply_crs（publish.py:168） |
+| 9b cr_impact / cr_trial | 完成 | handoff「试算与轻工作流补充」 |
+| 9c 页面刷新恢复草稿视图 | 完成 | build-definition-forms.md「刷新与并发」 |
+| 9d useDraftView 登记表读 mock | 完成 | useDraftView.ts:27 real 模式不读 DRAFT_TARGETS |
+| 9e StartChangeModal 说明不传 | 完成 | StartChangeModal.vue:29 emit desc |
+| 9f 写接口权限 | 部分 | require_func 已真实校验（common/auth.py:227），但 CR 写仍统一 releases:manage，未按目标页映射 |
+| 9g 新建关系/知识 id 前端生成 | 完成 | targets:allocate（build-definition-forms.md） |
+| 11 对象历史 kind=cr | 完成 | object_usage_pages.py:47 |
+| 12 semantic_map 契约 | 未做 | contracts/static.py:7 仍 TODO（checklist 写“已实现”与代码不符） |
+| 13 草稿项仍在定义表 | 未做 | models.py:15-17、559、584 draft_cr |
+| 15 Releases crFallback | 完成 | static-r4 |
+| 16 发布/回滚后端权限 | 完成 | releases manage 真实校验 + /admin/v1/me 能力 |
+| 17 graph ?ver= | 完成 | service.py graph 按快照 |
+| 19 facets 仅 sql_guard 登记类型 | 未变（设计限制） | explorer.py |
+| 20 long_text / 动作 bulk | 未做 | — |
+| 21 指标 variants 显式维护 | 完成 | build-completion-checklist B；shapes.py:229 GET /metrics 返回 variants |
+| 22 行级范围分面端到端测试 | 部分 | 真实 row_filter 已接（row-access.md），分面 DENY_ALL 端到端用例未见 |
+| 评审：writeback 注释与代码不一致 | 待核（行号已漂移） | writeback.py |
+| 评审：restore_metrics 查引用 | 完成 | writeback.py:1242-1267 |
+| 评审：发布 skipped 提示 | 完成（后端） | router.py:426 返回 skipped |
+| 评审：qa 引用 explorer 私有函数 | 完成 | 已公开 bad_filter/scalar_filter/facet_kind/facetable |
+| 评审：筛选值长度上限 | 完成 | explorer.py:402 FILTER_TEXT_MAX=64 |
+| 新：引导式构建 / 新建表单 / 函数页 | 已存在 | BuildGuideDrawer.vue；build-definition-forms.md；pages/functions（checklist F:63） |
+| 新：多本体同名发布/回滚 | 完成（static-t0） | tests/test_static_build_writes.py：空间 1/2 同编码对象各自发布、回滚互不影响 |
+
+### static-t0 本轮改动（2026-10-27）
+
+- **测试夹具**：静态测试文件各自的 `seeded/facts` 夹具在 `grant_fixture_roles` 后补 `bind_workspace_members`（tests/helpers/workspace.py），修掉 136 条「用户没有此本体工作空间的访问权限」403。
+- **陈旧用例按现行规则改**：提交前校验已拦新建关系缺 API 名/源端属性不存在（V3）、新建维度缺来源（V4）；种子 R-02（陈立军）已含 releases·manage，非管理员 403 改用任明（U010259）。
+- **路由权限表**：`/metrics/{id}/trial-readiness` 改走 `get()` 登记进 `FUNC_OF`（原来漏登记，test_static_routes_func_permissions KeyError）。
+- **指标执行口径可经 CR 编辑**：metric/def 新增 `timeField`/`defaultFilter` 两个 key（契约见 static-api.md「编辑定义」行）。之前这两行只能直接改库，CR 写回静默忽略，导致 15 个已有指标都无法经正规流程变为可试算。快照 metrics 节加 `execDef`，整版回滚与口径版本回滚一并恢复；口径版本 definition 加 `execDef`（FIELDS 不变，旧账本行不受影响）。测试：test_static_trials.py::test_metric_time_field_and_filter_via_cr_publish_and_rollback。
+- **两空间发布/回滚**：tests/test_static_build_writes.py。注意新空间首版没有上一版，不能回滚（versioning/service.py:89 `latest.parent is None` → ROLLBACK_NOT_LATEST，设计如此，提示文案可改进）。
+- **ruff**：app/modules/static 与 tests/test_static*.py 已 format + check 全过。
+- **非静态问题（只报告）**：test_static.py::test_migration_round_trip 降级穿过 migrations/versions/notify_0022_inbox.py:67 时被有意阻断（RuntimeError），静态模块往返测试因此必然失败，需 notify/PDE 决定是否让 round-trip 只到 notify_0022 之上或给测试豁免。
+- 15 个指标的口径修正计划见 /workspace/scratch/static-t0/metrics-plan.md（未改演示数据）。

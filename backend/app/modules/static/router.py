@@ -61,7 +61,17 @@ from app.modules.versioning.schemas import ReleaseOut
 router = APIRouter(tags=["static"])
 
 
-@router.get("/metrics/{id}/trial-readiness", dependencies=[Depends(require_func("metrics", "view"))])
+# 功能权限（api-index 权限表）：页面 key·view；
+# /object-types/brief 是多页共用的对象下拉，表里记 data-quality·view
+FUNC_OF: dict[str, str] = {}
+
+
+def get(path: str, func: str, **kw: Any) -> Any:
+    FUNC_OF[path] = func
+    return router.get(path, dependencies=[Depends(require_func(func, "view"))], **kw)
+
+
+@get("/metrics/{id}/trial-readiness", "metrics")
 async def metric_trial_readiness(
     id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[^\x00]+$")],
     session: SessionDep,
@@ -113,16 +123,6 @@ async def build_owners(
 async def _svc(session: SessionDep, ctx: ViewContextDep, user: CurrentUserDep) -> StaticService:
     """所有静态 GET 都要登录：未知 / 停用的 X-Demo-As → 401（app.common.auth）。"""
     return StaticService(session, ctx, user)
-
-
-# 功能权限（api-index 权限表）：页面 key·view；
-# /object-types/brief 是多页共用的对象下拉，表里记 data-quality·view
-FUNC_OF: dict[str, str] = {}
-
-
-def get(path: str, func: str, **kw: Any) -> Any:
-    FUNC_OF[path] = func
-    return router.get(path, dependencies=[Depends(require_func(func, "view"))], **kw)
 
 
 Svc = Annotated[StaticService, Depends(_svc)]
@@ -243,7 +243,11 @@ async def link_paths(
 
 
 @get("/link-types/catalog", "link-types")
-async def link_catalog(svc: Svc, cr_id: DraftId = None, link_id: Annotated[str | None, Query(alias="linkId", max_length=64)] = None) -> Any:
+async def link_catalog(
+    svc: Svc,
+    cr_id: DraftId = None,
+    link_id: Annotated[str | None, Query(alias="linkId", max_length=64)] = None,
+) -> Any:
     from app.modules.static.read_pages import catalog
 
     return await catalog(svc, cr_id, link_id)
@@ -558,8 +562,11 @@ async def object_explorer_meta(id: str, session: SessionDep, _: CurrentUserDep, 
 
 @get("/object-types/{id}/facets", "object-types", response_model=list[Rec])
 async def object_facets(
-    id: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep,
-    filters: Annotated[str | None, Query()] = None
+    id: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    filters: Annotated[str | None, Query()] = None,
 ) -> Any:
     if ctx.preview_as:
         from app.common.auth import check_func

@@ -187,7 +187,7 @@ async def refresh_analysis(session, cr, targets, items, user):
             for item in items
             if item.target_kind == "metric"
             and item.section == "def"
-            and item.item_key in ("formula", "version")
+            and item.item_key in ("formula", "version", "timeField", "defaultFilter")
         )
     )
     if not metric_codes:

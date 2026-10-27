@@ -27,6 +27,7 @@ from app.modules.static.models import (
 )
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 JSON = get_settings().seeds_json_dir / "static"
@@ -89,6 +90,7 @@ def static_sections():
 async def static_seeded(session, static_sections):
     await run_seeds(session, ["admin", "versioning", "static"])
     await grant_fixture_roles(session)
+    await bind_workspace_members(session)
     await session.commit()  # 释放 savepoint：接口报错回滚时不会把种子一起回滚（外层事务结束时仍整体回滚）
     return session
 

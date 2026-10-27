@@ -18,12 +18,19 @@ def dimension_source_error(kind, object_code, objects, *, attr="", column=""):
 
 def query_dimension_names(dimensions, metrics):
     """Unbound code tables remain metadata, never SQL grouping/filter candidates."""
+
     def aliases(d):
         return [d.get("name"), *(level.get("name") for level in d.get("levels") or [])]
 
     bound = {name for d in dimensions if d.get("object") for name in aliases(d) if name}
     unbound = {name for d in dimensions if not d.get("object") for name in aliases(d) if name} - bound
-    names = [level.get("name") for d in dimensions if d.get("object") and d.get("status") == "已发布"
-             for level in d.get("levels") or []]
+    names = [
+        level.get("name")
+        for d in dimensions
+        if d.get("object") and d.get("status") == "已发布"
+        for level in d.get("levels") or []
+    ]
     names += [name for metric in metrics for name in metric.get("dimNames") or []]
-    return list(dict.fromkeys(name for name in names if isinstance(name, str) and name and name not in unbound))
+    return list(
+        dict.fromkeys(name for name in names if isinstance(name, str) and name and name not in unbound)
+    )

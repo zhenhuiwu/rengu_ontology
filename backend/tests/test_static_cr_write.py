@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from app.modules.static.models import ChangeRequest, CrCheck, CrItem, CrTarget
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 WANG = {"X-Demo-As": "U010001"}  # 王敏（本体管理员）
@@ -36,6 +37,7 @@ async def seeded(session):
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
         await grant_fixture_roles(session)
+        await bind_workspace_members(session)
         await session.commit()
         yield session
 
@@ -332,12 +334,13 @@ async def test_locked_after_submit(client, seeded):
 
 async def test_submit_needs_reviewer_and_patch(client, seeded):
     cr = (await create(client, who=WANG, title="王敏自己的单子"))["id"]
+    # 改动须能过提交前校验（新建维度缺来源会先被 V4 阻断），才能验到「缺审核人」。
     await put(
         client,
         cr,
-        {"kind": "dimension", "id": "d_x", "isNew": True},
-        "values",
-        [{"key": "a", "op": "add", "after": "A"}],
+        {"kind": "dimension", "id": "time", "name": "时间"},
+        "qa",
+        [{"key": "desc", "op": "update", "before": "", "after": "时间维度说明"}],
         who=WANG,
     )
     r = await client.post(f"{P}/change-requests/{cr}:submit", headers=WANG)

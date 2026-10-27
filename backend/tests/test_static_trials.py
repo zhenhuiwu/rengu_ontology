@@ -16,6 +16,7 @@ from app.modules.static.metric_trial import parse_formula
 from app.modules.static.models import ChangeRequest, CrImpact, CRStatus, CrTrial, Metric, ObjectType
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 AUTHOR = {"X-Demo-As": "U010004"}
@@ -35,6 +36,7 @@ def real_sections(_isolated_sections):
 async def facts(session, real_sections):
     await run_seeds(session, ["admin", "versioning", "static"])
     await grant_fixture_roles(session)
+    await bind_workspace_members(session)
     metric = await session.scalar(select(Metric).where(Metric.code == "order_cnt"))
     # Test facts are truthful and local to the test transaction; exported demo data stays untouched.
     metric.formula = "COUNT(order) WHERE status <> 已取消"
@@ -376,3 +378,75 @@ def test_formula_normalization_preserves_sql_literals_and_quoted_identifiers():
     assert {node.this for node in filters.find_all(exp.Literal) if node.is_string} == {value, "x", "已取消"}
     assert len(list(filters.find_all(exp.And))) == 2
     assert filters.find(exp.NEQ).this.name == "channel−≠;；"
+
+
+async def test_metric_time_field_and_filter_via_cr_publish_and_rollback(client, facts):
+    """时间字段/默认过滤走变更单 metric/def（timeField/defaultFilter）。
+
+    草稿试算即生效，发布写 def_rows，整版回滚恢复。"""
+    for existing in await facts.scalars(
+        select(ChangeRequest).where(ChangeRequest.status == CRStatus.approved)
+    ):
+        existing.status = CRStatus.draft
+    await facts.flush()
+    code = "order_cnt"
+    target = {"kind": "metric", "id": code, "name": "订单量"}
+
+    async def publish(rows):
+        r = await client.post(
+            P + "/change-requests",
+            headers=AUTHOR,
+            json={
+                "title": "执行口径",
+                "reason": "补时间字段与默认过滤",
+                "reviewer": "U010001",
+                "target": target,
+            },
+        )
+        assert r.status_code == 201, r.text
+        cr = r.json()
+        r = await client.put(
+            P + f"/change-requests/{cr['id']}/items",
+            headers=AUTHOR,
+            json={"target": target, "section": "def", "lockVersion": cr["lockVersion"], "rows": rows},
+        )
+        assert r.status_code == 200, r.text
+        draft = await client.post(P + f"/metrics/{code}:trial", headers=AUTHOR, json={"crId": cr["id"]})
+        assert draft.status_code == 200, draft.text
+        for action, headers in (("submit", AUTHOR), ("approve", ADMIN)):
+            r = await client.post(P + f"/change-requests/{cr['id']}:{action}", headers=headers, json={})
+            assert r.status_code == 200, r.text
+        r = await client.post(P + "/releases", headers=ADMIN, json={})
+        assert r.status_code == 201 and r.json()["skipped"] == [], r.text
+        return draft.json(), r.json()["ver"]
+
+    def exec_rows():
+        return {r["k"]: r["v"] for r in metric.def_rows if r["k"] in ("时间字段", "默认过滤")}
+
+    first, _ = await publish(
+        [
+            {"key": "timeField", "op": "update", "before": "order.created_at", "after": "order.shipped_at"},
+            {"key": "defaultFilter", "op": "add", "after": "order.channel = 线上"},
+        ]
+    )
+    assert "order.shipped_at" in first["scope"]
+    metric = await facts.scalar(
+        select(Metric).where(Metric.code == code).execution_options(populate_existing=True)
+    )
+    assert exec_rows() == {"时间字段": "order.shipped_at", "默认过滤": "order.channel = 线上"}
+    published = await client.post(P + f"/metrics/{code}:trial", headers=AUTHOR, json={})
+    assert published.status_code == 200 and published.json()["rows"] == first["rows"], published.text
+
+    _, ver = await publish(
+        [
+            {"key": "timeField", "op": "update", "before": "order.shipped_at", "after": "order.created_at"},
+            {"key": "defaultFilter", "op": "delete", "before": "order.channel = 线上"},
+        ]
+    )
+    await facts.refresh(metric)
+    assert exec_rows() == {"时间字段": "order.created_at"}
+
+    r = await client.post(P + f"/releases/{ver}:rollback", headers=ADMIN, json={})
+    assert r.status_code == 201, r.text
+    await facts.refresh(metric)
+    assert exec_rows() == {"时间字段": "order.shipped_at", "默认过滤": "order.channel = 线上"}

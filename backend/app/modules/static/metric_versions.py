@@ -19,6 +19,35 @@ from app.modules.versioning.models import OntologyRelease
 FIELDS = ("name", "api", "group", "unit", "owner", "formula", "dims", "variants", "status")
 VERSION = re.compile(r"^v([1-9][0-9]{0,14})$")
 Obj = dict[str, Any]
+# 执行口径（def_rows 里的 k/v 行）可经变更单 metric/def 写：项 key → 行标签。
+EXEC_KEYS = {"timeField": "时间字段", "defaultFilter": "默认过滤"}
+EXEC_MAX = 256
+
+
+def exec_def(rows: Any) -> Obj:
+    """def_rows 中已保存的执行口径 {timeField, defaultFilter}；没有的键不出现，不推断默认值。"""
+    labels = {v: k for k, v in EXEC_KEYS.items()}
+    return {
+        labels[r["k"]]: r["v"]
+        for r in rows or []
+        if isinstance(r, dict) and r.get("k") in labels and isinstance(r.get("v"), str)
+    }
+
+
+def with_exec(rows: Any, key: str, value: str | None) -> list[Any]:
+    """返回新的 def_rows：原位替换（或追加）该执行口径行；value=None 删除该行，其他展示行原样保留。"""
+    label = EXEC_KEYS[key]
+    out, done = [], False
+    for r in rows or []:
+        if isinstance(r, dict) and r.get("k") == label:
+            if value is not None and not done:
+                out.append({**r, "v": value})
+            done = True
+            continue
+        out.append(deepcopy(r))
+    if value is not None and not done:
+        out.append({"k": label, "v": value})
+    return out
 
 
 def conflict(message: str, code: str = "METRIC_VERSION_INVALID", **details) -> AppError:
@@ -40,6 +69,7 @@ def definition(metric: Metric) -> Obj:
             if isinstance(v, dict)
         ],
         "status": metric.status.value,
+        "execDef": exec_def(metric.def_rows),
     }
 
 
@@ -235,6 +265,16 @@ async def rollback(session, user: CurrentUser, code: str, body: MetricRollbackIn
         for key in FIELDS
         if before[key] != wanted[key]
     ]
+    # 旧账本行没有 execDef：不知道当时的执行口径，保持当前值，不当作「无」删除。
+    if isinstance(wanted.get("execDef"), dict):
+        old, new = before["execDef"], wanted["execDef"]
+        rows.extend(
+            ItemIn(key=key, op="delete", before=old[key])
+            if key not in new
+            else ItemIn(key=key, op="update", before=old.get(key), after=new[key])
+            for key in EXEC_KEYS
+            if old.get(key) != new.get(key)
+        )
     rows.append(
         ItemIn(key="version", op="update", before=metric.version, after=next_version(metric.version, history))
     )

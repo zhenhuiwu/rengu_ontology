@@ -10,6 +10,7 @@ from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import next_ver
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 WANG = {"X-Demo-As": "U010001"}  # 王敏（本体管理员，默认审核人）
@@ -24,6 +25,7 @@ async def seeded(session):
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
         await grant_fixture_roles(session)
+        await bind_workspace_members(session)
         await session.commit()
         yield session
 
@@ -179,7 +181,8 @@ async def test_writeback_failure_rolls_back(client, seeded):
             {"key": "no_such", "op": "update", "before": {"name": "x"}, "after": {"name": "y"}},
         ],
     )
-    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 200, r.text
     assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
     r = await client.post(P + "/releases", json={}, headers=WANG)
     assert r.status_code == 409 and r.json()["code"] == "WRITEBACK_FAILED", r.text
@@ -233,7 +236,8 @@ async def test_explorer_flags_publish_snapshot_history_and_rollback(client, seed
             {"key": "store_name", "op": "update", "after": {"sensitive": True, "filterable": True}},
         ],
     )
-    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 200, r.text
     assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
     r = await client.post(P + "/releases", json={}, headers=WANG)
     assert r.status_code == 201, r.text
@@ -323,7 +327,8 @@ async def test_invalid_property_type_rolls_back_publish_and_keeps_draft(client, 
             {"key": key, "op": op, "after": {"name": "非法类型", "type": invalid}},
         ],
     )
-    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 200, r.text
     assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
     draft_before = (await client.get(f"{P}/change-requests/{cr}", headers=WANG)).json()
     versions_before = list(
@@ -419,9 +424,10 @@ async def approved_cr2(client) -> str:
         [
             {"key": "from", "op": "add", "after": "order"},
             {"key": "name", "op": "add", "after": "订单属于新对象"},
+            {"key": "api", "op": "add", "after": "orderBelongsToXObj"},
             {"key": "to", "op": "add", "after": "x_obj"},
             {"key": "card", "op": "add", "after": "N : 1"},
-            {"key": "fromProp", "op": "add", "after": "x_id"},
+            {"key": "fromProp", "op": "add", "after": "order_id"},  # 源端须是 order 已有属性（V3）
             {"key": "toProp", "op": "add", "after": "id"},
         ],
     )
@@ -495,7 +501,8 @@ async def approved_cr2(client) -> str:
             {"key": "attr", "op": "add", "after": "x_id"},
         ],
     )
-    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 200, r.text
     r = await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)
     assert r.status_code == 200, r.text
     return cr
@@ -520,7 +527,7 @@ async def test_publish_writes_back_dims_links_metrics_new_object(client, seeded)
     assert snap["links"]["order_belongs_to_store"]["cr"] == cr
     nl = snap["links"]["new_link_1"]
     assert (nl["from"], nl["to"], nl["name"], nl["since"]) == ("order", "x_obj", "订单属于新对象", ver)
-    assert nl["key"] == "x_id = x_obj.id"
+    assert nl["key"] == "order_id = x_obj.id"
 
     assert "x_metric" in snap["metrics"]
     o = await seeded.scalar(select(ObjectType).where(ObjectType.code == "x_obj"))
@@ -604,10 +611,10 @@ async def test_missing_target_without_is_new_is_rejected(client, seeded):
         "def",
         [{"key": "reverse", "op": "update", "before": "", "after": "x"}],
     )
-    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
-    assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
-    r = await client.post(P + "/releases", json={}, headers=WANG)
-    assert r.status_code == 409 and r.json()["code"] == "WRITEBACK_FAILED", r.text
+    # 关系不存在且非新建：提交时 V3 即阻断（早于发布写回），不会进入发布。
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 409 and r.json()["code"] == "CR_BLOCKED", r.text
+    assert r.json()["details"]["blocked"] == ["V3"]
 
 
 async def test_register_writeback_public(client, seeded):
