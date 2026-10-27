@@ -72,7 +72,12 @@ class PostgresAdapter:
     ) -> int:
         """分批：每批行数 = PG_MAX_PARAMS // 列数（asyncpg 一条语句最多 32767 个绑定参数）；
         批内按 key 去重（同一条 INSERT … ON CONFLICT 里同一个键出现两次会报错），后出现的覆盖先出现的。"""
-        if "ontology_id" in model.__table__.c:
+        # Match Base's domain boundary: shared audit/member tables may also carry ontology references.
+        scoped = (
+            model.__module__.startswith("app.modules.")
+            and not model.__module__.startswith(("app.modules.admin.", "app.modules.ontology."))
+        ) or model.__module__ == "app.common.outbox"
+        if scoped and "ontology_id" in model.__table__.c:
             from app.common.ontology import require_ontology_id
 
             ontology_id = require_ontology_id(session)
