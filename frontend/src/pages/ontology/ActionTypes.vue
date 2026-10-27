@@ -484,6 +484,7 @@ const verCols = [
 
       <!-- 概览 -->
       <div v-if="tab === 'overview'" class="at-body at-ov">
+        <div class="at-ov-content">
         <div class="at-ov-left">
           <div class="at-sec t-14 fw-600">基本信息</div>
           <a-descriptions :column="2" bordered size="small" class="at-desc">
@@ -539,6 +540,7 @@ const verCols = [
           </template>
           <a-empty v-else class="at-empty" description="草稿未发布，暂无执行记录" />
         </div>
+        </div>
       </div>
 
       <!-- 参数 -->
@@ -580,6 +582,7 @@ const verCols = [
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('conds')">新增条件</a-button></a-tooltip>
         </div>
+        <div class="paged-scroll">
         <a-table :columns="condCols" :data-source="conds" :pagination="false" size="middle" row-key="_key" :row-class-name="delRow">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'expr'"><span class="at-code t-12" :title="record.expr">{{ record.expr }}</span></template>
@@ -590,10 +593,12 @@ const verCols = [
               </template>
           </template>
         </a-table>
+        </div>
       </div>
 
       <!-- 写回与副作用 -->
       <div v-else-if="tab === 'writeback'" class="at-body at-ov">
+        <div class="at-ov-content">
         <div class="at-ov-left">
           <div class="at-sec t-14 fw-600 at-sec-row">
             <span>写回（同步，决定动作结果）<a-tag v-if="cfgMark" class="at-mark">{{ cfgMark }}</a-tag></span>
@@ -650,6 +655,7 @@ const verCols = [
           <div class="at-sec t-14 fw-600">执行顺序</div>
           <StatusTimeline :items="flow" />
         </div>
+        </div>
       </div>
 
       <!-- 执行记录 -->
@@ -684,6 +690,7 @@ const verCols = [
 
       <!-- 版本历史 -->
       <div v-else class="at-body">
+        <div class="paged-scroll">
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
           <template #headerCell="{ column }"><template v-if="column.key === 'status'">状态<InfoTip text="动作类型版本只随本体整版发布生效；进行中的执行按提交时的版本完成，不受新版本影响" /></template></template>
           <template #bodyCell="{ column, record }">
@@ -693,6 +700,7 @@ const verCols = [
             </template>
           </template>
         </a-table>
+        </div>
       </div>
     </div>
   </div>
@@ -722,7 +730,7 @@ const verCols = [
 .at-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
 .at-kw { flex: 1; min-width: 0; }
 .at-sel { width: 108px; flex: none; }
-.at-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
+.at-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; overflow: auto; }
 .at-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .at-items li:hover { background: var(--g3); }
 .at-items li.active { background: var(--brand-bg); }
@@ -738,7 +746,8 @@ const verCols = [
 .at-tabs { padding: 0 16px; flex: none; }
 .at-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
 .at-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-.at-ov { flex-direction: row; gap: 16px; }
+.at-ov { overflow: auto; }
+.at-ov-content { display: flex; gap: 16px; flex: none; min-height: 100%; }
 .at-ov-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .at-ov-right { width: 400px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }
 .at-sec { margin-top: 4px; }

@@ -402,6 +402,7 @@ const verCols = [
 
       <!-- 概览 -->
       <div v-if="tab === 'overview'" class="et-body et-ov">
+        <div class="et-ov-content">
         <div class="et-ov-left">
           <div class="et-sec t-14 fw-600">基本信息</div>
           <a-descriptions :column="2" bordered size="small" class="et-desc">
@@ -458,6 +459,7 @@ const verCols = [
           </template>
           <a-empty v-else class="et-empty" description="草稿未发布，暂无事件" />
         </div>
+        </div>
       </div>
 
       <!-- 载荷字段 -->
@@ -501,6 +503,7 @@ const verCols = [
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('subs')">新增订阅</a-button></a-tooltip>
         </div>
+        <div class="paged-scroll">
         <a-table :columns="subCols" :data-source="subs" :pagination="false" size="middle" row-key="_key" :row-class-name="delRow">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
@@ -517,6 +520,7 @@ const verCols = [
               </template>
           </template>
         </a-table>
+        </div>
       </div>
 
       <!-- 近期事件 -->
@@ -553,6 +557,7 @@ const verCols = [
 
       <!-- 版本历史 -->
       <div v-else class="et-body">
+        <div class="paged-scroll">
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
           <template #headerCell="{ column }"><template v-if="column.dataIndex === 'change'">变更说明<InfoTip text="载荷只能新增可选字段；删除或改类型属于不兼容变更，需要所有订阅方确认后随整版发布" /></template></template>
           <template #bodyCell="{ column, record }">
@@ -562,6 +567,7 @@ const verCols = [
             </template>
           </template>
         </a-table>
+        </div>
       </div>
     </div>
   </div>
@@ -598,7 +604,7 @@ const verCols = [
 .et-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
 .et-kw { flex: 1; min-width: 0; }
 .et-sel { width: 108px; flex: none; }
-.et-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
+.et-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; overflow: auto; }
 .et-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .et-items li:hover { background: var(--g3); }
 .et-items li.active { background: var(--brand-bg); }
@@ -615,7 +621,8 @@ const verCols = [
 .et-tabs { padding: 0 16px; flex: none; }
 .et-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
 .et-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-.et-ov { flex-direction: row; gap: 16px; }
+.et-ov { overflow: auto; }
+.et-ov-content { display: flex; gap: 16px; flex: none; min-height: 100%; }
 .et-ov-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .et-ov-right { width: 400px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }
 .et-sec { margin-top: 4px; }
