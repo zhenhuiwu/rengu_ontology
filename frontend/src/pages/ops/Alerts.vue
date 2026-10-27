@@ -20,8 +20,8 @@ import { ACTIONS, ACTION_META, OBJ_KIND_LABEL } from '@/mock/actions';
 import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, dynamicContextKey, getAlertMeta, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts,
-  startAlertAction, listPeople, type AlertDto, type AlertDetailDto, type AlertRuleDto, type AlertTab, type AlertCan,
+  dynamicApi, dynamicContextKey, getAlertMeta, getAlertFacets, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts,
+  startAlertAction, listPeople, type AlertDto, type AlertDetailDto, type AlertRuleDto, type AlertTab, type AlertFacetsDto, type AlertCan,
 } from '@/api/dynamic';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
@@ -67,8 +67,11 @@ const tab = computed({
 const level = ref('全部');
 const ruleId = ref('全部');
 const kw = ref('');
+/** 真接口分面筛选：对象类型、维度值（objKind:id 多选），选项和计数来自 GET /alerts/facets */
+const objKind = ref('全部');
+const dimSel = ref<string[]>([]);
 /** 分页进 URL（?page=&size=），一屏 12 条；筛选变化回到第 1 页 */
-const pq = usePagedQuery({ defaultSize: 10, filters: [level, ruleId, kw] });
+const pq = usePagedQuery({ defaultSize: 10, filters: [level, ruleId, kw, objKind, dimSel] });
 const page = pq.page;
 const pageSize = pq.size;
 
@@ -76,6 +79,7 @@ const pageSize = pq.size;
 const remote = reactive({ items: [] as Row[], total: 0, counts: { open: 0, doing: 0, closed: 0, all: 0 } as Record<string, number>, detail: null as (Row & { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean; actionParams: AlertDetailDto['actionParams'] }) | null, people: [] as { id: string; name: string }[] });
 const seen = new Map<string, Row>();
 const ruleOptions = ref<{ id: string; name: string }[]>([]);
+const facets = ref<AlertFacetsDto | null>(null);
 const listLoading = ref(false);
 const toRow = (a: AlertDto): Row => ({
   ...a, dims: a.dims ?? [],
@@ -128,6 +132,17 @@ const pick = (a: Alert) => (pinned.value = a.id, router.replace({ query: { ...ro
 const people = computed(() => (live.value ? remote.people : PEOPLE.map((name) => ({ id: name, name }))));
 const ruleName = (id: string) => live.value ? ruleOptions.value.find((r) => r.id === id)?.name ?? id : RULES[id]?.name ?? id;
 const filterRules = computed(() => live.value ? ruleOptions.value : Object.values(RULES));
+/** 下拉选项带分面计数（真接口）；mock 不变 */
+const facetCount = (key: 'level' | 'ruleId' | 'objKind', v: string) => {
+  const n = facets.value?.[key].find((x) => x.value === v)?.count;
+  return n == null ? '' : ` (${n})`;
+};
+const levelOptions = computed(() => ['全部', '高', '中', '低'].map((v) => ({ value: v, label: v === '全部' ? '全部级别' : `${v}级${live.value ? facetCount('level', v) : ''}` })));
+const ruleSelectOptions = computed(() => [{ value: '全部', label: '全部规则' }, ...filterRules.value.map((r) => ({ value: r.id, label: `${r.id} ${r.name}${live.value ? facetCount('ruleId', r.id) : ''}` }))]);
+const kindOptions = computed(() => [{ value: '全部', label: '全部对象类型' }, ...(facets.value?.objKind ?? []).map((k) => ({ value: k.value, label: `${k.label ?? k.value} (${k.count})` }))]);
+const dimOptions = computed(() => (facets.value?.dims ?? []).map((d) => ({
+  label: d.label, options: d.values.map((v) => ({ value: `${d.objKind}:${v.id}`, label: `${v.label} (${v.count})` })),
+})));
 /** 对象类型显示名：真接口取后台 objKindLabel，mock 取对象类型目录，不写死订单 / 商品 / 门店 */
 const kindLabel = (a: Row) => a.objKindLabel ?? (live.value ? a.objKind : (OBJ_KIND_LABEL as Record<string, string>)[a.objKind] ?? a.objKind);
 const dimKind = (d: AlertDim) => d.kindLabel ?? (live.value ? d.objKind : (OBJ_KIND_LABEL as Record<string, string>)[d.objKind] ?? d.objKind);
@@ -135,18 +150,30 @@ const dimKind = (d: AlertDim) => d.kindLabel ?? (live.value ? d.objKind : (OBJ_K
 const approverOf = (r: AlertRuleDto | null) => (live.value ? remote.detail?.approver ?? null : r?.action ? (ACTION_META as Record<string, { approver: string }>)[r.action]?.approver ?? null : null);
 
 // ---- 真接口：取列表 / 详情 ----
+const alertQuery = () => ({
+  status: (TABS.some((t) => t.key === tab.value) ? tab.value : 'all') as AlertTab,
+  level: level.value, ruleId: ruleId.value, kw: kw.value, objKind: objKind.value, dim: dimSel.value,
+});
 let listSeq = 0; let detailSeq = 0;
 async function loadList() {
   const seq = ++listSeq, ctx = dynamicContextKey();
   listLoading.value = true;
   try {
-    const r = await listAlerts({ status: (TABS.some((t) => t.key === tab.value) ? tab.value : 'all') as AlertTab, level: level.value, ruleId: ruleId.value, kw: kw.value, page: page.value, size: pageSize.value });
+    const r = await listAlerts({ ...alertQuery(), page: page.value, size: pageSize.value });
     if (seq !== listSeq || ctx !== dynamicContextKey()) return;
     remote.items = r.items.map(toRow); remote.total = r.total; remote.counts = r.counts;
     if (r.page !== page.value) page.value = r.page;
     remote.items.forEach((a) => seen.set(a.id, a));
   } catch (e) { if (seq === listSeq && ctx === dynamicContextKey()) { remote.items = []; remote.total = 0; readFail(e); } }
   finally { if (seq === listSeq) listLoading.value = false; }
+}
+let facetSeq = 0;
+async function loadFacets() {
+  const seq = ++facetSeq, ctx = dynamicContextKey();
+  try {
+    const f = await getAlertFacets(alertQuery());
+    if (seq === facetSeq && ctx === dynamicContextKey()) facets.value = f;
+  } catch (e) { if (seq === facetSeq && ctx === dynamicContextKey()) { facets.value = null; readFail(e); } }
 }
 async function loadDetail(id = selectedId.value) {
   const seq = ++detailSeq, ctx = dynamicContextKey();
@@ -164,8 +191,9 @@ async function afterWrite(d?: AlertDetailDto) {
   if (ctx !== dynamicContextKey()) { const changed = new Error('操作时上下文已切换'); changed.name = 'DynamicContextChanged'; throw changed; }
 }
 if (live.value) {
-  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; remote.items = []; remote.total = 0; remote.detail = null; remote.people = []; ruleOptions.value = []; seen.clear(); pinned.value = undefined; selectedKeys.value = []; }, { flush: 'sync' });
-  watch([dynamicContextKey, tab, level, ruleId, kw, page, pageSize], loadList, { immediate: true });
+  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; remote.items = []; remote.total = 0; remote.detail = null; remote.people = []; ruleOptions.value = []; facets.value = null; objKind.value = '全部'; dimSel.value = []; seen.clear(); pinned.value = undefined; selectedKeys.value = []; }, { flush: 'sync' });
+  watch([dynamicContextKey, tab, level, ruleId, kw, objKind, dimSel, page, pageSize], loadList, { immediate: true, deep: true });
+  watch([dynamicContextKey, tab, level, ruleId, kw, objKind, dimSel], loadFacets, { immediate: true, deep: true });
   watch([dynamicContextKey, selectedId], () => { loadDetail(); }, { immediate: true });
   watch(dynamicContextKey, async (ctx) => {
     const results = await Promise.allSettled([getAlertMeta()]);
@@ -356,10 +384,11 @@ watch([dynamicContextKey, selectedId], async () => {
           <a-button size="small" type="text" @click="selectedKeys = []">取消选择</a-button>
         </div>
         <div v-else class="al-filters">
-          <a-select v-model:value="level" size="small" style="width: 104px"
-            :options="['全部', '高', '中', '低'].map((v) => ({ value: v, label: v === '全部' ? '全部级别' : `${v}级` }))" />
-          <a-select v-model:value="ruleId" size="small" style="width: 180px"
-            :options="[{ value: '全部', label: '全部规则' }, ...filterRules.map((r) => ({ value: r.id, label: `${r.id} ${r.name}` }))]" />
+          <a-select v-model:value="level" size="small" style="width: 112px" :options="levelOptions" />
+          <a-select v-model:value="ruleId" size="small" style="width: 180px" :options="ruleSelectOptions" />
+          <a-select v-if="live && (facets?.objKind.length ?? 0) > 1" v-model:value="objKind" size="small" style="width: 140px" :options="kindOptions" />
+          <a-select v-if="live && facets?.dims.length" v-model:value="dimSel" mode="multiple" size="small" allow-clear
+            :max-tag-count="1" placeholder="按维度筛选" style="width: 200px" :options="dimOptions" />
           <a-input-search v-model:value="kw" size="small" placeholder="告警编号 / 对象" style="width: 200px" />
         </div>
       </div>

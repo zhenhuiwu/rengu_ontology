@@ -9,7 +9,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, case, column, func, or_, select, true, type_coerce
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser, check_func, resolve_user
@@ -126,6 +127,15 @@ def approver_for_action(catalog: Any, action: str | None) -> str | None:
 def kind_label(catalog: Any, kind: str) -> str:
     """对象类型显示名（对象类型目录；未登记的类型原样返回编号）。"""
     return (catalog.meta().get("objKindLabel") or {}).get(kind) or kind
+
+
+async def _rule_names(session: AsyncSession, codes: Iterable[str | None]) -> dict[str, str]:
+    from app.modules.dynamic.rules_models import Rule
+
+    want = {c for c in codes if c}
+    if not want:
+        return {}
+    return dict((await session.execute(select(Rule.code, Rule.name).where(Rule.code.in_(want)))).all())
 
 
 async def _code_map(session: AsyncSession, model: Any, ids: Iterable[int | None]) -> dict[int, str]:
@@ -1180,28 +1190,88 @@ class AlertService:
     def _locked(run: ActionRun | None) -> bool:
         return run is not None and run.status in IN_FLIGHT
 
-    async def search(
-        self, *, status: str, level: str | None, rule_id: str | None, kw: str | None, page: PageParams
-    ) -> AlertPage:
+    @staticmethod
+    def _multi(raw: str | None) -> list[str]:
+        """逗号分隔多选；"全部" / 空 = 不筛选。"""
+        items = (x.strip() for x in (raw or "").split(","))
+        return list(dict.fromkeys(x for x in items if x and x != "全部"))
+
+    @staticmethod
+    def _dims(raw: Sequence[str] | None) -> list[tuple[str, str]]:
+        """dim=objKind:id（可重复）：告警 dims 含该维度值才命中。
+        同一 objKind 多值为或，不同 objKind 为且。"""
+        out = []
+        for item in raw or []:
+            kind, sep, ident = item.partition(":")
+            if not sep or not kind.strip() or not ident.strip():
+                raise validation_failed("dim", f"维度筛选格式应为 对象类型:编号：{item}")
+            out.append((kind.strip(), ident.strip()))
+        return out
+
+    async def _filtered(
+        self,
+        stmt: Select,
+        *,
+        status: str,
+        level: str | None,
+        rule_id: str | None,
+        obj_kind: str | None = None,
+        dim: Sequence[str] | None = None,
+        kw: str | None,
+        skip: str | None = None,
+    ) -> Select:
+        """告警列表 / 分面共用的筛选；skip = 分面自身那一项（分面计数不受自己的选择影响）。"""
         if status not in ALERT_TABS:
             raise validation_failed("status", "status 只能是 open / doing / closed / all")
-        stmt = await scoped_instances(select(Alert), self.user, Alert.obj_kind, Alert.obj_id)
+        stmt = await scoped_instances(stmt, self.user, Alert.obj_kind, Alert.obj_id)
         want = ALERT_TABS[status]
-        if want is not None:
+        if want is not None and skip != "status":
             stmt = stmt.where(Alert.status.in_(want))
-        if level and level != "全部":
+        levels = []
+        for lv in self._multi(level):
             try:
-                lv = AlertLevel(level)
+                levels.append(AlertLevel(lv))
             except ValueError:
                 raise validation_failed("level", "level 只能是 高 / 中 / 低") from None
-            stmt = stmt.where(Alert.level == lv)
-        if rule_id and rule_id != "全部":
-            stmt = stmt.where(Alert.rule_code == rule_id)
+        if levels and skip != "level":
+            stmt = stmt.where(Alert.level.in_(levels))
+        rules = self._multi(rule_id)
+        if rules and skip != "ruleId":
+            stmt = stmt.where(Alert.rule_code.in_(rules))
+        kinds = self._multi(obj_kind)
+        if kinds and skip != "objKind":
+            stmt = stmt.where(Alert.obj_kind.in_(kinds))
+        by_kind: dict[str, list[str]] = {}
+        for kind, ident in self._dims(dim):
+            by_kind.setdefault(kind, []).append(ident)
+        dims = type_coerce(Alert.dims, JSONB)
+        for kind, idents in by_kind.items():
+            if skip == f"dim:{kind}":
+                continue
+            stmt = stmt.where(
+                or_(*[dims.contains([{"objKind": kind, "id": i}]) for i in dict.fromkeys(idents)])
+            )
         k = (kw or "").strip()
         if k:
             stmt = stmt.where(
                 or_(Alert.code.contains(k, autoescape=True), Alert.obj_label.contains(k, autoescape=True))
             )
+        return stmt
+
+    async def search(
+        self,
+        *,
+        status: str,
+        level: str | None,
+        rule_id: str | None,
+        kw: str | None,
+        page: PageParams,
+        obj_kind: str | None = None,
+        dim: Sequence[str] | None = None,
+    ) -> AlertPage:
+        stmt = await self._filtered(
+            select(Alert), status=status, level=level, rule_id=rule_id, obj_kind=obj_kind, dim=dim, kw=kw
+        )
         stmt = stmt.order_by(*seed_first_order(Alert))
         rows, total = await self.repo.list_page(stmt, page)
         links = await self._links(rows)
@@ -1219,6 +1289,61 @@ class AlertService:
             page,
             counts=AlertCounts(**counts),
         )
+
+    async def facets(
+        self,
+        *,
+        status: str,
+        level: str | None,
+        rule_id: str | None,
+        kw: str | None,
+        obj_kind: str | None = None,
+        dim: Sequence[str] | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """告警分面：等级 / 规则 / 对象类型 / 各维度值的计数，按其余已选条件过滤（不含自身那一项）。
+        只统计当前用户行级可见的告警；维度值每个对象类型取计数最高的 limit 个。"""
+        f = {"status": status, "level": level, "rule_id": rule_id, "obj_kind": obj_kind, "dim": dim, "kw": kw}
+
+        async def count(column, skip: str) -> list[tuple[Any, int]]:
+            stmt = await self._filtered(select(column, func.count()), skip=skip, **f)
+            rows = await self.session.execute(stmt.group_by(column).order_by(func.count().desc(), column))
+            return [(v, n) for v, n in rows.all()]
+
+        levels = dict(await count(Alert.level, "level"))
+        rule_rows = await count(Alert.rule_code, "ruleId")
+        names = await _rule_names(self.session, [c for c, _ in rule_rows])
+        kinds = await count(Alert.obj_kind, "objKind")
+
+        elem = func.jsonb_array_elements(Alert.dims).table_valued(column("value", JSONB)).alias("d")
+        dim_kind, dim_id = elem.c.value["objKind"].astext, elem.c.value["id"].astext
+        dim_label = func.max(elem.c.value["label"].astext)
+        selected = {k for k, _ in self._dims(dim)}
+        dim_out: dict[str, list[dict[str, Any]]] = {}
+        for skip in [None, *[f"dim:{k}" for k in sorted(selected)]]:
+            stmt = await self._filtered(
+                select(dim_kind, dim_id, dim_label, func.count()).select_from(Alert).join(elem, true()),
+                skip=skip,
+                **f,
+            )
+            if skip:
+                stmt = stmt.where(dim_kind == skip[4:])
+            elif selected:
+                stmt = stmt.where(dim_kind.not_in(selected))
+            stmt = stmt.group_by(dim_kind, dim_id).order_by(dim_kind, func.count().desc(), dim_id)
+            for kind, ident, label, n in (await self.session.execute(stmt)).all():
+                vals = dim_out.setdefault(kind, [])
+                if len(vals) < limit:
+                    vals.append({"id": ident, "label": label or ident, "count": n})
+        return {
+            "level": [{"value": lv.value, "count": levels.get(lv, 0)} for lv in AlertLevel],
+            "ruleId": [{"value": c, "label": names.get(c) or c, "count": n} for c, n in rule_rows],
+            "objKind": [{"value": k, "label": kind_label(self.catalog, k), "count": n} for k, n in kinds],
+            "dims": [
+                {"objKind": k, "label": kind_label(self.catalog, k), "values": dim_out[k]}
+                for k in sorted(dim_out)
+            ],
+        }
 
     async def _recent7d(self, a: Alert) -> int:
         """近 7 天同一规则、同一对象的触发次数（含本条），
