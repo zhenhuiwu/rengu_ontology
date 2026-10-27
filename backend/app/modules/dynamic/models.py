@@ -231,7 +231,9 @@ class ActionRunLog(IdMixin, AppendOnlyTableMixin, Base):
 class DecisionLog(CodeMixin, AppendOnlyTableMixin, Base):
     """机器 / AI 决策评估记录（POST /decisions:evaluate，dynamic_0027）：只追加，只给建议、不暂存不执行。
 
-    调用方审计：caller_kind = user / service_account / ai（ai = 人或服务账号身份 + 调用方声明的 AI 会话），
+    调用方审计：caller_kind = user / service_account / ai / system
+    （ai = 人或服务账号身份 + 调用方声明的 AI 会话；
+    system = 告警产生后规则运行身份自动评估，dynamic-r7），
     caller_id = 身份编号，api_key_prefix = API 密钥前缀（人工会话为空）。"""
 
     __tablename__ = "decision_log"

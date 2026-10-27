@@ -6,7 +6,10 @@
 照 recommendation.handoff 走 POST /action-runs:stage（人工确认）。
 
 没有任何零售硬编码：参数预填只认三种元数据——规则 autoStage.mapping（告警.ID / 告警.对象 /
-命中.对象 / 固定值：X / 告警.<维度类型名>）、参数类型「对象引用 · <类型名>」、枚举参数的默认值。
+命中.对象 / 固定值：X / 告警.<维度类型名> / 算术表达式）、参数类型「对象引用 · <类型名>」、枚举参数的默认值。
+数值参数的算术表达式（如「安全库存 × 1.5 − 可用库存」，映射里写的或参数默认值里写的）由 param_expr 安全
+求值：名字先找告警触发时的取值（触发值「名：数」对、规则比较条件两侧对应的触发值 / 阈值），再找告警对象
+及其维度对象的属性（显示名 / API 名，可写「类型名.属性」）；取不到、为空或不是数值时不填并给出原因。
 """
 
 import json
@@ -27,6 +30,7 @@ from app.core.errors import AppError, Forbidden, NotFound
 from app.core.schema import ApiModel
 from app.modules.action import policy as action_policy
 from app.modules.action.models import ActionType, TypeStatus
+from app.modules.dynamic import param_expr
 from app.modules.dynamic.models import DecisionLog
 from app.modules.dynamic.row_scope import scoped_instances
 from app.modules.dynamic.rules_models import Rule
@@ -41,6 +45,38 @@ STAGE_PATH = "/api/ontology/v1/action-runs:stage"
 # 必填参数没填上每个 −5；执行策略不允许当前调用方 −40。
 REASON_WEIGHT = {"alert": 100, "openAlert": 60, "ruleHit": 30, "lifecycle": 20, "objectType": 5}
 LEVEL_BONUS = {"高": 10, "中": 5}
+NUMERIC_TYPES = ("整数", "小数", "数值", "数字", "金额", "number", "integer", "decimal", "float")
+ORDER_OPS = ("<", ">", "<=", ">=", "≤", "≥")
+_NUM = re.compile(r"-?\d+(?:\.\d+)?")
+_PAIR = re.compile(r"([^\s·：:]+)\s*[：:]\s*(-?\d+(?:\.\d+)?)(?![\d.])")
+
+
+def _single_number(text: str | None) -> float | None:
+    found = _NUM.findall(text or "")
+    return float(found[0]) if len(found) == 1 else None
+
+
+def alert_facts(alert: Any, conds: list | None) -> dict[str, dict[str, Any]]:
+    """告警触发时的数值：触发值里的「名：数」对；规则只有一个比较条件时，
+    条件左侧字段 ← 触发值里唯一的数、右侧（不是数字的名字）← 阈值里唯一的数。"""
+    facts: dict[str, dict[str, Any]] = {}
+    for label, num in _PAIR.findall(alert.value or ""):
+        for name in {label, label.rsplit(".", 1)[-1]}:
+            facts.setdefault(name, {"value": float(num), "from": f"告警触发值（{label}）"})
+    ordering = [
+        c
+        for c in conds or []
+        if isinstance(c, dict) and str(c.get("op") or "").strip() in ORDER_OPS and c.get("field")
+    ]
+    if len(ordering) == 1:
+        cond = ordering[0]
+        value, threshold = _single_number(alert.value), _single_number(alert.threshold)
+        if value is not None:
+            facts.setdefault(str(cond["field"]).strip(), {"value": value, "from": "告警触发值"})
+        right = str(cond.get("value") or "").strip()
+        if threshold is not None and right and _single_number(right) is None:
+            facts.setdefault(right, {"value": threshold, "from": "告警阈值"})
+    return facts
 
 
 class DecisionCallerIn(ApiModel):
@@ -78,12 +114,23 @@ def _can(user: CurrentUser, page: str, level: str) -> bool:
 
 
 class DecisionService:
-    def __init__(self, session: AsyncSession, user: CurrentUser, catalog: Any, ports: Any, request: Request):
+    def __init__(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        catalog: Any,
+        ports: Any,
+        request: Request | None,
+        *,
+        system: dict[str, Any] | None = None,
+    ):
         self.session = session
         self.user = user
         self.catalog = catalog
         self.ports = ports
-        self.key = getattr(request.state, "api_key", None)
+        self.key = getattr(getattr(request, "state", None), "api_key", None)
+        # 系统自动评估（告警产生后）：{"trigger": "rule", "ruleId": ...}；身份 user = 规则运行身份
+        self.system = system
 
     # ---------------- 评估 ----------------
 
@@ -108,6 +155,7 @@ class DecisionService:
             api_scopes=self.key.scopes if self.key else None,
         ).get(kind, obj_id, limit=10)
         ctx = self._context(kind, obj_id, alert, summary)
+        ctx["facts"] = alert_facts(alert, await self._conds(alert.rule_code)) if alert else {}
         triggers = self._triggers(alert, summary)
         notes: list[dict[str, Any]] = []
         candidates = await self._candidates(kind, triggers, summary, notes)
@@ -144,6 +192,10 @@ class DecisionService:
                 if isinstance(d, dict)
             ],
         }
+
+    async def _conds(self, rule_code: str) -> list:
+        conds = await self.session.scalar(select(Rule.conds).where(Rule.code == rule_code))
+        return conds if conds is not None else (self.catalog.rule(rule_code) or {}).get("conds") or []
 
     def _triggers(self, alert: Any, summary: dict) -> list[tuple[str, dict[str, Any]]]:
         """(规则编号, 理由)：当前告警、对象其余未关闭告警、近期规则命中。"""
@@ -300,7 +352,7 @@ class DecisionService:
             notes.append({"kind": "actionUnavailable", "actionTypeId": action.code, "text": exc.message})
             return None
         same_kind = (defn.get("targetKind") or action.target_kind) == ctx["objKind"]
-        params, sources, unfilled = self._prefill(defn.get("params") or [], mapping, ctx, same_kind)
+        params, sources, unfilled = await self._prefill(defn.get("params") or [], mapping, ctx, same_kind)
         dry = (
             await self._dry_run(action.code, defn, params, ctx, same_kind)
             if dry_run
@@ -308,7 +360,9 @@ class DecisionService:
         )
         availability = await self._availability(action.code)
         pol = await action_policy.load(self.session, action.code, action.version)
-        caller_type = action_policy.caller_of("问数" if is_ai else "手动", self.user)
+        caller_type = action_policy.caller_of(
+            "规则" if self.system else "问数" if is_ai else "手动", self.user
+        )
         caller_allowed = pol.callers is None or caller_type in pol.callers
         policy = {
             "mode": pol.mode,
@@ -377,7 +431,9 @@ class DecisionService:
             return ctx["alertId"]
         return next((d["id"] for d in ctx["dims"] if label in (d["kindLabel"], d["objKind"])), None)
 
-    def _prefill(self, params: list, mapping: list, ctx: dict, same_kind: bool) -> tuple[dict, dict, list]:
+    async def _prefill(
+        self, params: list, mapping: list, ctx: dict, same_kind: bool
+    ) -> tuple[dict, dict, list]:
         by_name = {m.get("param"): m.get("from") for m in mapping if m.get("param") and m.get("from")}
         values: dict[str, Any] = {}
         sources: dict[str, str] = {}
@@ -387,9 +443,23 @@ class DecisionService:
             if not api:
                 continue
             mapped = by_name.get(name) or by_name.get(api)
-            value, source = None, None
+            value, source, reason = None, None, None
             if mapped:
                 value, source = self._source(str(mapped), ctx), f"规则映射：{mapped}"
+            numeric = any(t in ptype.lower() for t in NUMERIC_TYPES)
+            if value is None and numeric:
+                for text, label in ((mapped, "规则映射"), (p.get("def"), "参数默认值")):
+                    if not text or value is not None:
+                        continue
+                    res = await self._expression(str(text), ctx)
+                    if res["ok"]:
+                        value = param_expr.coerce(res["value"], ptype)
+                        inputs = "，".join(
+                            f"{x['name']}={x['value']:g}（{x['from']}）" for x in res["inputs"]
+                        )
+                        source = f"{label}表达式：{text}" + (f"；{inputs}" if inputs else "")
+                    elif res.get("expression") and (reason is None or text == mapped):
+                        reason = f"{label}表达式「{text}」未求值：{res['reason']}"
             ref = re.match(r"对象引用\s*[·•]\s*(.+)$", ptype)
             if value is None and ref:
                 value, source = self._ref(ref.group(1), ctx), f"参数类型：{ptype}"
@@ -400,10 +470,59 @@ class DecisionService:
             if value is not None:
                 values[api], sources[api] = value, source
             elif p.get("required"):
-                unfilled.append(
-                    {"api": api, "name": name, "type": ptype, "default": p.get("def"), "mapping": mapped}
-                )
+                row = {"api": api, "name": name, "type": ptype, "default": p.get("def"), "mapping": mapped}
+                if reason:
+                    row["reason"] = reason
+                unfilled.append(row)
         return values, sources, unfilled
+
+    async def _expression(self, text: str, ctx: dict) -> dict[str, Any]:
+        """表达式里的名字：告警触发时的取值 → 告警对象属性 → 维度对象属性（可写「类型名.属性」）。"""
+        targets = [(ctx["objKind"], ctx["objKindLabel"], ctx["objId"])] + [
+            (d["objKind"], d["kindLabel"], d["id"]) for d in ctx["dims"] if d.get("objKind") and d.get("id")
+        ]
+        rows = {}
+        for kind, _, oid in targets:
+            if (kind, oid) not in rows:
+                rows[(kind, oid)] = await self._object_values(kind, oid)
+
+        def resolve(name: str) -> tuple[bool, Any, str | None]:
+            fact = (ctx.get("facts") or {}).get(name)
+            if fact is not None:
+                return True, fact["value"], fact["from"]
+            prefix, _, prop = name.rpartition(".")
+            for kind, label, oid in targets:
+                if prefix and prefix not in (kind, label):
+                    continue
+                values = rows.get((kind, oid)) or {}
+                if prop in values:
+                    return True, values[prop], f"{label} {oid}.{prop}"
+            return False, None, None
+
+        return param_expr.evaluate(text, resolve)
+
+    async def _object_values(self, kind: str, obj_id: str) -> dict[str, Any]:
+        """对象当前属性值，键同时含 API 名与显示名；未接入 / 无权限 / 数据源不可用 → 空。"""
+        from app.modules.qa.explore_api import _bind
+
+        try:
+            _, bound = await _bind(self.session, kind)
+            if bound is None:
+                return {}
+            stmt = (await bound.stmt(self.user)).where(bound.id_col == bound.id_value(obj_id))
+            async with bound.read(self.session) as reader:
+                row = (await reader.execute(stmt.limit(1))).mappings().first()
+        except AppError:
+            return {}
+        if row is None:
+            return {}
+        out: dict[str, Any] = {}
+        for api, value in row.items():
+            out[api] = value
+            label = getattr(bound.props.get(api), "display_name", None)
+            if label:
+                out.setdefault(label, value)
+        return out
 
     async def _isolated(self, run):
         """保存点内执行、一律回滚：试运行 / 发起检查都不在库里留下任何东西。"""
@@ -452,8 +571,15 @@ class DecisionService:
 
     def _caller(self, body: DecisionEvaluateIn, is_ai: bool) -> dict[str, Any]:
         c = body.caller
+        if self.system:
+            kind = "system"
+        elif is_ai:
+            kind = "ai"
+        else:
+            kind = "service_account" if self.user.is_service_account else "user"
         return {
-            "kind": "ai" if is_ai else ("service_account" if self.user.is_service_account else "user"),
+            "kind": kind,
+            "system": self.system,
             "id": self.user.id,
             "name": self.user.name,
             "principalKind": self.key.principal_kind if self.key else "user",
@@ -479,7 +605,9 @@ class DecisionService:
             code=f"DEC-{now:%Y%m%d%H%M%S}-{secrets.token_hex(3)}",
             caller_kind=caller["kind"],
             caller_id=caller["id"],
-            caller_name=caller["name"],
+            caller_name=(f"规则 {self.system.get('ruleId')} 自动评估" if self.system else caller["name"])[
+                :64
+            ],
             api_key_prefix=caller["apiKeyPrefix"],
             ai_session_id=caller["aiSessionId"],
             ai_round_id=caller["aiRoundId"],
@@ -514,6 +642,7 @@ class DecisionService:
             "objId": row.obj_id,
             "alertId": row.alert_code,
             "suggestOnly": True,
+            "error": (row.output or {}).get("error"),
         }
         if not full:
             top = recs[0]["actionType"] if recs else None
@@ -558,6 +687,16 @@ class DecisionService:
             stmt.order_by(DecisionLog.created_at.desc(), DecisionLog.id.desc()).offset(p.offset).limit(p.size)
         )
         return Page[dict[str, Any]].of([self.out(r, full=False) for r in rows], total, params)
+
+    async def latest_for_alert(self, code: str) -> dict[str, Any] | None:
+        """告警可见才返回（AlertService.get 做行级可见性）；没有决策记录 → None。"""
+        await AlertService(self.session, self.user, self.catalog, self.ports).get(code)
+        row = await self.session.scalar(
+            (await self._scoped(select(DecisionLog).where(DecisionLog.alert_code == code)))
+            .order_by(DecisionLog.created_at.desc(), DecisionLog.id.desc())
+            .limit(1)
+        )
+        return self.out(row) if row is not None else None
 
     async def get(self, code: str) -> dict[str, Any]:
         row = await self.session.scalar(
