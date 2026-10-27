@@ -5,10 +5,10 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response, status
 
 from app.common.auth import CurrentUserDep, require_func
-from app.common.pagination import MAX_PAGE_SIZE, PageParams
+from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.db.session import SessionDep
 from app.modules.admin.api_keys import require_api_scope
 from app.modules.dynamic.catalog import (
@@ -18,6 +18,7 @@ from app.modules.dynamic.catalog import (
     get_list_catalog,
     get_meta_catalog,
 )
+from app.modules.dynamic.decisions import DecisionEvaluateIn, DecisionService
 from app.modules.dynamic.ports import PortsDep
 from app.modules.dynamic.schemas import (
     ActionRunDetail,
@@ -429,6 +430,60 @@ async def resubmit_action(code: DynamicPathCode, svc: ActionSvc) -> ResubmitOut:
 @router.post("/action-runs/{code}:reconcile", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
 async def reconcile_action(code: DynamicPathCode, body: ReconcileIn, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.reconcile(code, body.result, body.note))
+
+
+# ---------------- 决策评估（只给建议，不暂存不执行）----------------
+# 权限：人 = alerts view（「动态页面可读」）；API 密钥另需 dynamic:read，dryRun=true 时再要 actions:dry-run
+# （在 DecisionService.evaluate 里判断，dryRun=false 不需要）。调用方写进 decision_log。
+
+DecisionPageQ = Annotated[PageParams, Depends(_page_params(20))]
+
+
+def _decisions(
+    request: Request,
+    session: SessionDep,
+    user: CurrentUserDep,
+    catalog: Annotated[DatabaseRefCatalog, Depends(get_catalog)],
+    ports: PortsDep,
+) -> DecisionService:
+    return DecisionService(session, user, catalog, ports, request)
+
+
+@router.post("/decisions:evaluate", dependencies=ALERTS_READ)
+async def evaluate_decision(
+    body: DecisionEvaluateIn, svc: Annotated[DecisionService, Depends(_decisions)]
+) -> dict[str, Any]:
+    """按告警或对象给出排序后的建议动作（预填参数、试运行、执行策略），并写一条只追加的决策记录。"""
+    return await svc.evaluate(body)
+
+
+@router.get("/decisions", dependencies=ALERTS_READ)
+async def list_decisions(
+    page: DecisionPageQ,
+    svc: Annotated[DecisionService, Depends(_decisions)],
+    obj_kind: Annotated[str | None, Query(alias="objKind", max_length=64)] = None,
+    obj_id: Annotated[str | None, Query(alias="objId", max_length=64)] = None,
+    alert_id: Annotated[str | None, Query(alias="alertId", max_length=64)] = None,
+    caller_kind: Annotated[str | None, Query(alias="callerKind", max_length=16)] = None,
+    ai_session_id: Annotated[str | None, Query(alias="aiSessionId", max_length=64)] = None,
+) -> Page[dict[str, Any]]:
+    """决策记录列表（行级范围同告警：只列可见对象的记录）。"""
+    return await svc.list(
+        page,
+        obj_kind=obj_kind,
+        obj_id=obj_id,
+        alert_id=alert_id,
+        caller_kind=caller_kind,
+        ai_session_id=ai_session_id,
+    )
+
+
+@router.get("/decisions/{code}", dependencies=ALERTS_READ)
+async def get_decision(
+    code: Annotated[str, Path(max_length=64, pattern=r"^[^\x00]+$")],
+    svc: Annotated[DecisionService, Depends(_decisions)],
+) -> dict[str, Any]:
+    return await svc.get(code)
 
 
 from app.modules.dynamic.rules_router import router as _rules_router  # noqa: E402  第二部分：规则 / 推演 / 生命周期
