@@ -239,6 +239,14 @@ class StageIn(ApiModel):
         return self
 
 
+class MachineExecuteIn(ApiModel):
+    """POST /machine/actions/{typeId}:execute。幂等键走 `Idempotency-Key` 请求头。"""
+
+    obj_kind: str | None = None
+    obj_id: str = Field(min_length=1, max_length=64)
+    params: str | None = Field(default=None, max_length=20000)
+
+
 class WithdrawIn(ApiModel):
     reason: NonBlank
 

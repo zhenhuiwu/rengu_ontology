@@ -61,16 +61,19 @@
 
 ## 4. 为什么写回提交（execution.py）只签名不重发
 
-`dispatch_one` 是业务写入：结果未知时转 `reconcile_task`，设计明确“只对账，不重发业务写入”【仓库】。所以这里只加签名（密钥不可用时按配置错误失败，不发送），不加自动重试。注意 `frontend/docs/backend/action-event-api.md` §2 表里写的“明确失败用同一幂等键自动重试 maxRetry 次”与现有代码不符（代码只发 1 次）——本次未改，作为已知差异记录。
+`dispatch_one` 是业务写入：结果未知时转 `reconcile_task`，设计明确“只对账，不重发业务写入”【仓库】。所以这里只加签名（密钥不可用时按配置错误失败，不发送），不加自动重试。该差异已由 PDE 于 2026-10-27 定案：写回提交只发一次（带签名），不重发，只对账；接口文档 §2 / §14.1 已改【仓库】。
 
 ## 5. 手工处置
 
 - 事件投递：已有 `POST /event-deliveries/{id}:dispose`（received/skip/retry/supplement）【仓库】，自动重试用尽后照常进入异常收件箱。
 - 动作副作用：**没有**人工处置/重试入口。要做需新增权限点、版本号/审计列（outbox 行没有）和页面，超出“小改”，记为缺口。
 
-## 6. 入站（不改）
+## 6. 入站
 
-`POST /internal/v1/events` 仍用按本体的静态 Bearer 令牌（`RENGU_INTERNAL_EVENT_TOKEN(S)`）【仓库】。后续由本体小白改为 `require_api_scope("events:ingest")`（服务账号 + 授权范围，审计记调用方），过渡期保留静态令牌。
+`POST /internal/v1/events` 现在接受两种凭证（`palantir-t2` 实现）【仓库】：
+
+- API 密钥 `Bearer rg_live_…/rg_test_…`：路由声明 scope `events:ingest`，鉴权、工作空间绑定、IP、配额全部走本体小白的 `authenticate_key`；密钥的“事件类型白名单”按事件类型编码或 API 名匹配（配置驱动，不写死类型）；`event.created_by = "api:{服务账号编号或密钥前缀}"`。
+- 按本体的静态令牌（`RENGU_INTERNAL_EVENT_TOKEN(S)`）：过渡期保留，行为不变（`created_by = "internal:event"`）。确认接入方全部切换后再下线【推断】。
 
 ## 7. 缺口 / 未做
 
@@ -127,6 +130,13 @@
    - `auto`：在同一事务里检查 `limits`（计数用 `pg_advisory_xact_lock` + 新计数表，按 Asia/Shanghai 自然日）；未超限 → `stage` 后由系统身份 `confirm`，时间线记“按执行策略自动执行（调用方 X，额度 n/N）”；**超限 / 不在允许对象内 → 照常 stage 成待确认**，返回 `status=待确认, overflowReason`。
 4. 所有分支写审计：调用方类型、服务账号编号、策略版本（动作类型版本号）、额度快照。
 
+#### 8.1.2a 已实现（`palantir-t2`，无迁移）【仓库】
+
+- 存储：`policy` 写进动作类型版本定义 `action_type_version.definition.policy`（JSON），经变更单 `policy` 段发布；额度从时间线日志计数（文本 = “按执行策略自动执行”），同一动作类型用事务级咨询锁串行。没有新增计数表。
+- 与上文设计的差异【推断】：默认 `callers` 不限制（= 现有行为，未采用 `["人"]`）；`objects` 是对象 ID 列表，不是行范围表达式；`evalPassedAt` 评测门槛未接；`suggest` 只在暂存时拒绝（409 `ACTION_POLICY_SUGGEST_ONLY`），试运行照常可用。
+- 自动执行只发生在人工暂存接口和机器执行接口；规则 / 告警 / 问数 / 推演来源仍一律暂存待确认。
+- 服务账号调用方：允许范围照常校验；但执行链（外部提交、事件、副作用）按在用用户解析执行人，服务账号即使在额度内也转人工确认（“服务账号调用暂不自动执行”），代执行身份（runAs）另行设计。
+
 #### 8.1.3 参考【官方】
 
 - Palantir 动作类型自带“提交条件（Submission criteria）”，执行前校验，失败不执行。
@@ -145,7 +155,9 @@
 | `POST /machine/actions/{code}:execute` | 按 §1.2 分流；必须带 `Idempotency-Key` | `dynamic` 的 `stage/confirm` |
 | `GET  /machine/action-runs/{id}` | 查执行结果 | `dynamic/router.py:279` |
 
-统一响应：
+实现情况（`palantir-t2`）【仓库】：已做 `:execute`（scope `actions:execute`，密钥动作类型白名单按路径 `{typeId}`）与 `GET /machine/action-runs/{id}`；试运行直接用已有 `POST /action-types/{id}:dry-run`（已声明 `actions:dry-run`），不另开别名；`objects:query`、`functions:call` 未做。实际响应字段见接口文档 §15（`checks`/`edits`/`policyVersion`/`retryable` 未实现）。
+
+统一响应（设计稿）：
 ```json
 {"ok": true, "status": "建议|待确认|执行中|成功|失败|结果未知",
  "runId": "AR-…", "checks": [{"name": "库存低于安全线", "passed": true, "value": 12}],

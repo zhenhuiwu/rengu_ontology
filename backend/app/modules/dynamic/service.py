@@ -701,10 +701,17 @@ class ActionService:
         if body.approver and body.approver not in (meta.get("approver"), meta.get("approverId")):
             raise validation_failed("approver", "审批人必须使用已发布动作配置，不能由请求覆盖")
         src = body.source
+        from app.modules.action import policy as action_policy
+
+        action_policy.gate(
+            await action_policy.load(self.session, t["id"], meta.get("version") or t.get("version")),
+            action_policy.caller_of(src.type, self.user),
+        )
         if src.type == "手动":
             await self.validate_launch(t["id"], body.obj_kind, body.obj_id, body.params)
             body.obj_label = body.obj_id
-            src.confirmer = self.user.id
+            # 服务账号（机器接口）不是在用用户：不指定确认人，超限转人工后由有权限的人确认。
+            src.confirmer = None if self.user.is_service_account else self.user.id
             if not body.idempotency_key:
                 raise validation_failed("idempotencyKey", "手动发起须提供请求幂等键")
         alert: Alert | None = None
@@ -790,6 +797,42 @@ class ActionService:
             TimelineStatus.warn,
         )
         return run, True
+
+    async def apply_policy(self, r: ActionRun) -> ActionRun:
+        """刚暂存的记录按执行策略分流：auto 且在上限内 → 系统代为确认并免审执行；否则保持待确认。"""
+        from app.modules.action import policy as action_policy
+
+        self.policy_mode, self.policy_overflow = None, None
+        policy = await action_policy.load(self.session, r.action_type_code, r.type_version)
+        self.policy_mode = policy.mode
+        if policy.mode != "auto" or r.status != ActionStatus.staged:
+            return r
+        caller = action_policy.caller_of(r.source_type.value, self.user)
+        caller_id = r.rule_code if caller == "规则" and r.rule_code else self.user.id
+        meta = self.catalog.action_meta(r.action_type_code) or {}
+        free = bool(meta.get("approvalConfigured") and meta.get("approvalRequired") is False)
+        ok, reason, note = await action_policy.auto_decision(self.session, r, policy, caller, caller_id, free)
+        if ok and self.user.is_service_account:
+            # 执行链（外部提交 / 事件 / 效果）按在用用户解析执行人；服务账号代执行需单独的 runAs 设计。
+            ok, reason = False, action_policy.SERVICE_ACCOUNT_TEXT
+        if not ok:
+            self.policy_overflow = reason
+            await self._log(
+                r, f"{action_policy.OVERFLOW_TEXT}：{reason}", f"执行策略 · 动作类型 {r.type_version}",
+                TimelineStatus.warn,
+            )
+            return r
+        await self._operation_access(r)
+        ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.approving)
+        r.status = ActionStatus.approving
+        r.confirmed_at = clock.now()
+        r.confirmer = r.confirmer or self.user.id
+        await self._log(r, action_policy.AUTO_TEXT, note)
+        r.status = ActionStatus.executing
+        r.approved_at = clock.now()
+        await self._log(r, "按动作配置免审", f"执行策略 · 动作类型 {r.type_version}")
+        await self._submit(r)
+        return r
 
     async def confirm(self, code: str) -> ActionRun:
         from app.modules.integration.reconcile import lock_run

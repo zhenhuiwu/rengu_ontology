@@ -5,11 +5,12 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Path, Query, Response, status
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
+from app.modules.admin.api_keys import require_api_scope
 from app.modules.dynamic.catalog import (
     DatabaseRefCatalog,
     get_alert_catalog,
@@ -30,6 +31,7 @@ from app.modules.dynamic.schemas import (
     CloseIn,
     IdsIn,
     LaunchValidateIn,
+    MachineExecuteIn,
     ReconcileIn,
     ResubmitOut,
     StageIn,
@@ -308,7 +310,68 @@ async def stage_action(body: StageIn, svc: ActionSvc, response: Response) -> Act
     run, created = await svc.stage(body)
     if not created:
         response.status_code = status.HTTP_200_OK  # 同一幂等键、内容相同：返回已有记录
+    else:
+        run = await svc.apply_policy(run)  # 执行策略：auto 且在上限内才自动执行，否则保持待确认
     return await svc.detail(run)
+
+
+# ---- 机器接口（程序 / AI / 服务账号；API 密钥按 scope + 动作类型白名单放行，人工会话同样可用）----
+def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict:
+    return {
+        "ok": True,
+        "status": detail.status,
+        "runId": run.code,
+        "policyMode": getattr(svc, "policy_mode", None),
+        "overflowReason": getattr(svc, "policy_overflow", None),
+        "typeVersion": run.type_version,
+    }
+
+
+@router.post(
+    "/machine/actions/{type_id}:execute",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(require_api_scope("actions:execute", action_type="{type_id}")),
+        *ACTIONS_MANAGE,
+    ],
+    summary="按动作类型执行策略分流：auto 且在上限内自动执行，否则暂存待确认",
+)
+async def machine_execute(
+    type_id: DynamicPathCode,
+    body: MachineExecuteIn,
+    svc: ActionSvc,
+    response: Response,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> dict:
+    stage = StageIn.model_validate(
+        {
+            "typeId": type_id,
+            "source": {"type": "手动"},
+            "objKind": body.obj_kind,
+            "objId": body.obj_id,
+            "objLabel": body.obj_id,
+            "params": body.params,
+            "idempotencyKey": idempotency_key,
+        }
+    )
+    run, created = await svc.stage(stage)
+    if created:
+        run = await svc.apply_policy(run)
+    else:
+        response.status_code = status.HTTP_200_OK
+    return _machine_out(run, await svc.detail(run), svc)
+
+
+@router.get(
+    "/machine/action-runs/{code}",
+    dependencies=[Depends(require_api_scope("actions:execute")), *ACTIONS_VIEW],
+    summary="机器接口：查执行结果",
+)
+async def machine_action_run(
+    code: DynamicPathCode, svc: Annotated[ActionService, Depends(_action_list)]
+) -> dict:
+    run = await svc.get(code)
+    return _machine_out(run, await svc.detail(run), svc)
 
 
 @router.post("/actions/{code}:validate", dependencies=ACTIONS_MANAGE)

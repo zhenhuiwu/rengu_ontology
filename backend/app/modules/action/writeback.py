@@ -406,6 +406,22 @@ async def definition(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
     return set()
 
 
+async def policy(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
+    """执行策略段：key 固定 policy；删除 = 回到默认（人工确认）。发布时并进该版完整定义。"""
+    from app.modules.action.policy import parse
+
+    at = await _action(ctx, tid)
+    for item in rows:
+        if item.item_key != "policy" or item.op not in {"add", "update", "delete"}:
+            raise writeback_error("执行策略须使用 policy key", field="policy")
+        try:
+            value = None if item.op == "delete" else parse(item.after).dump()
+        except ValueError as exc:
+            raise writeback_error(f"执行策略无效：{exc}", field="policy") from None
+        ctx.session.info.setdefault(PENDING, {}).setdefault("policy", {})[at.code] = value
+    return set()
+
+
 def register() -> None:
     for section, hook in {
         "def": definition,
@@ -414,5 +430,6 @@ def register() -> None:
         "edits": edits,
         "effects": effects,
         "config": config,
+        "policy": policy,
     }.items():
         register_writeback("action", section, hook)
