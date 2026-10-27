@@ -66,7 +66,7 @@ from app.modules.dynamic.schemas import (
     DimOut,
     StageIn,
 )
-from app.modules.machine.principal import actor_of
+from app.modules.machine.principal import SERVICE_PREFIX, actor_of
 
 SYSTEM = "系统"
 
@@ -168,13 +168,36 @@ class ActionService:
         self.ports = ports
         self.repo = ActionRunRepo(session)
         self.alerts = AlertRepo(session)
+        self._service_names: dict[str, str] = {}
 
     def person_label(self, value: str | None) -> str | None:
+        if value and value.startswith(SERVICE_PREFIX):
+            # 服务账号执行主体 `api:{编号}` → 「服务账号 {名称或编号}」，不把原始主体串给人看
+            code = value[len(SERVICE_PREFIX) :]
+            name = self._service_names.get(code)
+            if name is None and self.user.is_service_account and self.user.id == code:
+                name = self.user.name
+            return f"服务账号 {name or code}"
         person = self.catalog.person(value)
         return person["name"] if person and person["id"] == value else value
 
+    async def load_service_names(self, values: Iterable[str | None]) -> None:
+        """预取 `api:{编号}` 的服务账号名称（只读本体小白的 ServiceAccount）；查不到就显示编号。"""
+        codes = {
+            v[len(SERVICE_PREFIX) :] for v in values if v and v.startswith(SERVICE_PREFIX)
+        } - self._service_names.keys()
+        if not codes:
+            return
+        from app.modules.admin.models import ServiceAccount
+
+        rows = await self.session.execute(
+            select(ServiceAccount.code, ServiceAccount.name).where(ServiceAccount.code.in_(codes))
+        )
+        self._service_names.update({code: name for code, name in rows.all()})
+
     # ---------- 输出 ----------
     async def to_out(self, runs: Sequence[ActionRun]) -> list[ActionRunOut]:
+        await self.load_service_names(x for r in runs for x in (r.initiator, r.confirmer, r.approver))
         alert_codes = await _code_map(self.session, Alert, (r.alert_id for r in runs))
         run_codes = await _code_map(
             self.session, ActionRun, [x for r in runs for x in (r.retry_of_id, r.retried_as_id)]
@@ -246,7 +269,7 @@ class ActionService:
             obj_kind=r.obj_kind,
             obj_id=r.obj_id,
             obj_label=r.obj_label,
-            initiator=r.initiator,
+            initiator=self.person_label(r.initiator),
             confirmer=self.person_label(r.confirmer),
             approver=self.person_label(r.approver),
             status=r.status.value,
@@ -331,7 +354,12 @@ class ActionService:
         return ActionRunDetail(
             **{**out.model_dump(), "dispatch_phase": dispatch_phase},
             log=[
-                ActionLogOut(time=x.at, text=x.text, desc=x.actor, status=x.level.value if x.level else None)
+                ActionLogOut(
+                    time=x.at,
+                    text=x.text,
+                    desc=self.person_label(x.actor),
+                    status=x.level.value if x.level else None,
+                )
                 for x in logs
             ],
             can=can,
@@ -827,7 +855,7 @@ class ActionService:
         if self.user.is_service_account:
             # 服务账号不是在用用户：确认人留空；执行主体 `api:{编号}` 记入 created_by / 日志，
             # 后台执行链（machine.principal.resolve_actor）按它重建身份。
-            note = f"{note} · 执行主体 {actor_of(self.user)}"
+            note = f"{note} · 执行主体 {self.person_label(actor_of(self.user))}"
         else:
             r.confirmer = r.confirmer or self.user.id
         await self._log(r, action_policy.AUTO_TEXT, note)

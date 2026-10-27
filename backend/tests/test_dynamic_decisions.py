@@ -119,3 +119,18 @@ async def test_alert_decision_auto_and_panel(dyn, client):  # noqa: F811
     assert manual.status_code == 200, manual.text
     assert (await client.get(url)).json()["decision"]["decisionId"] == manual.json()["decision"]["decisionId"]
     err(await client.get(f"{API}/alerts/AL-NOPE/decision"), 404, "NOT_FOUND")
+
+
+def test_person_label_service_principal():
+    from types import SimpleNamespace
+
+    from app.modules.dynamic.service import ActionService
+
+    catalog = SimpleNamespace(person=lambda v: {"id": "U1", "name": "张三"} if v == "U1" else None)
+    me = SimpleNamespace(id="SA-1", name="补货机器人", is_service_account=True)
+    svc = ActionService(None, me, catalog, None)
+    svc._service_names["SA-2"] = "对账服务"
+    assert svc.person_label("api:SA-1") == "服务账号 补货机器人"
+    assert svc.person_label("api:SA-2") == "服务账号 对账服务"
+    assert svc.person_label("api:SA-9") == "服务账号 SA-9"
+    assert svc.person_label("U1") == "张三" and svc.person_label("规则 R-012") == "规则 R-012"
