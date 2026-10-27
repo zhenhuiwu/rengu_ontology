@@ -26,7 +26,7 @@
 ## API 密钥权限范围与服务账号（admin_0025 / admin_0026）
 
 - 权限范围是对外契约编码（中文名仅显示）：`meta:read` 元数据读取、`objects:read` 对象读取、`functions:invoke` 函数调用、`actions:dry-run` 动作试运行、`actions:execute` 动作执行、`events:ingest` 事件写入、`dynamic:read` 动态读取。旧标签“元数据读取”输入仍接受并存为 `meta:read`。`GET /api/admin/v1/api-keys/meta` 的 `scopeOptions[{value,label,pages}]` 给出每个范围可携带的功能页。
-- 运行时权限 = 签发快照 ∩ 主体当前授权 ∩ 范围可携带页面（`SCOPE_PAGES`，永不高于主体）。`dynamic:read` 只携带 `alerts`、`rules`、`object-types`（生命周期接口按 object-types view 校验）、`action-center` 的 view，不带 manage。
+- 运行时权限 = 签发快照 ∩ 主体当前授权 ∩ 范围可携带页面（`SCOPE_PAGES`，永不高于主体）。`dynamic:read` 只携带 `alerts`、`rules`、`object-types`（生命周期接口按 object-types view 校验）、`action-center` 的 view，不带 manage。`meta:read` + `dynamic:read` 的密钥能看到 `GET /meta/capabilities` 的 rules 分节（dynamic:read 单独到不了该路由）。
 - 令牌只能到达声明了 `Depends(require_api_scope("<scope>"))` 的路由（元数据白名单除外）；未声明的路由一律 403。机器路由写法：`dependencies=[Depends(require_api_scope("dynamic:read")), Depends(require_func("alerts", "view"))]`。
 - 白名单：`actionTypes` / `eventTypes`（null = 不限制，[] = 全拒），需要对应范围（否则 422）；路径参数用 `action_type="{type_id}"`，请求体内的类型在解析后调用 `enforce_api_allowlist(request, event_type=...)`。
 - 限流配额：`ratePerMinute` / `quotaPerDay`，请求事务内原子计数（被拒或回滚的请求不计数），超出 429 `RATE_LIMITED`。PATCH `/api-keys/{id}` 只能收窄范围（扩大 403），可改白名单与配额。
