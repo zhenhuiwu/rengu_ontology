@@ -1,4 +1,21 @@
-# 本体小白 交接文档（分支 xiaobai-r2，基于 master bb47a5c）
+# 本体小白 交接文档（分支 xiaobai-p1）
+
+## 2026-10-27 batch 2（基于 master e97bc61）
+
+- 前端 ApiKeys.vue（真模式）：范围按编码 + 中文名、服务账号绑定、动作/事件白名单、限流配额、详情“调整授权与配额”（PATCH，只收窄）、服务账号抽屉（列表/新建/吊销）；写操作不回退 mock。Roles.vue 添加行级范围发送 `objectTypeCode`。
+- 角色删除 500 修复：admin_0026 将 `ontology_role_binding.role_id` FK 改为 ON DELETE CASCADE（参照动作绕过 RLS，其他本体的绑定也删）；服务账号引用 → 409 ROLE_IN_USE。测试 `tests/test_role_delete_bindings.py`。
+- 第 7 个范围 `dynamic:read`：alerts / rules / object-types / action-center view。接入写法 `Depends(require_api_scope("dynamic:read"))`。测试在 `tests/test_api_key_scopes.py`。
+- 规则与契约见 [ontology-workspaces.md](../../ontology-workspaces.md) “API 密钥权限范围与服务账号”“行级范围按本体”。
+
+### 已知问题（未在本轮修复）
+
+- `tests/test_admin_roles.py::test_list_and_get_match_mock` 在 master 上即失败（与 mock 对比不一致），非本轮引入。
+- `test_audit_logs` ontologyId 与 mock 不一致；`test_admin_audit_export` 工作空间 403。
+- 元数据注释漂移：`api_key.code`、`platform_setting.code`、`rule_schedule_run.release_id`。
+- 7 个 test_sql_guard e2e 用例的夹具在空间 1 没有对象类型（per-ontology governed_tables 后解析为空即拒绝）。
+- `app/common/auth.py` 用 `"/api/admin/" in route` 判断，FastAPI 0.162 的 route.path 为路由器相对路径，判断失效（api_keys 用 `full_route_path` 自行还原）。
+- 前端构建复用 /workspace/rengu/frontend/node_modules（worktree 内软链，已被 .gitignore 忽略）。
+
 
 ## 2026-10-27 API 密钥当前规则
 

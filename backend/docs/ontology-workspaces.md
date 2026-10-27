@@ -23,6 +23,26 @@
 
 平台审计仍以真实 audit 功能权限全局查询。新领域审计记录本体 ID，旧日志保持 NULL，不猜造来源；可用 `ontologyId` 过滤或导出，CSV 包含本体列。平台操作没有领域上下文时来源为空。
 
+## API 密钥权限范围与服务账号（admin_0025 / admin_0026）
+
+- 权限范围是对外契约编码（中文名仅显示）：`meta:read` 元数据读取、`objects:read` 对象读取、`functions:invoke` 函数调用、`actions:dry-run` 动作试运行、`actions:execute` 动作执行、`events:ingest` 事件写入、`dynamic:read` 动态读取。旧标签“元数据读取”输入仍接受并存为 `meta:read`。`GET /api/admin/v1/api-keys/meta` 的 `scopeOptions[{value,label,pages}]` 给出每个范围可携带的功能页。
+- 运行时权限 = 签发快照 ∩ 主体当前授权 ∩ 范围可携带页面（`SCOPE_PAGES`，永不高于主体）。`dynamic:read` 只携带 `alerts`、`rules`、`object-types`（生命周期接口按 object-types view 校验）、`action-center` 的 view，不带 manage。
+- 令牌只能到达声明了 `Depends(require_api_scope("<scope>"))` 的路由（元数据白名单除外）；未声明的路由一律 403。机器路由写法：`dependencies=[Depends(require_api_scope("dynamic:read")), Depends(require_func("alerts", "view"))]`。
+- 白名单：`actionTypes` / `eventTypes`（null = 不限制，[] = 全拒），需要对应范围（否则 422）；路径参数用 `action_type="{type_id}"`，请求体内的类型在解析后调用 `enforce_api_allowlist(request, event_type=...)`。
+- 限流配额：`ratePerMinute` / `quotaPerDay`，请求事务内原子计数（被拒或回滚的请求不计数），超出 429 `RATE_LIMITED`。PATCH `/api-keys/{id}` 只能收窄范围（扩大 403），可改白名单与配额。
+- 服务账号（平台共享身份）：`/api-keys/service-accounts` 增改吊销，需 api-keys + roles manage；绑定一个服务角色（sys_role），密钥权限 = 该角色在当前本体的功能/对象/行级权限 ∩ 密钥范围；角色必须经 `ontology_role_binding` 绑定到当前本体才有行级授权。吊销服务账号同时吊销其全部密钥。审计记录 `principal_kind / service_account_code / api_key_prefix`。
+- 删除角色：成员、行级范围、本体绑定（所有本体，FK ON DELETE CASCADE，admin_0026）一并删除；仍有成员只有这个角色或有服务账号以它为服务角色时 409 `ROLE_IN_USE`（`details.users` / `details.serviceAccounts`）。
+
+## 行级范围按本体（admin_0025）
+
+- `sys_role_scope` 是本体领域表（FORCE RLS），同一角色在不同本体各有范围；存量记录归空间 1。范围以 `object_type_id`（稳定引用）+ `object_type_code`（快照）定位对象，`obj_type` 仅显示；引用的对象类型被删除时该范围拒绝全部行（fail-closed）。前端添加范围时发送 `objectTypeCode`。
+- `sql_guard.governed_tables(ontology_id)` 按当前本体的对象类型绑定解析受控表：事务开始与 `set_ontology_scope` 时加载，对象类型增删改 flush 后重载，30s TTL；继承表跟随父表。未加载的本体回退旧规则（1 → 全部、其他 → 无）；解析为空时 `row_filters_for` 抛 SqlRejected，不放行。
+
+## 外部集成接入点（Palantir）
+
+- `POST /internal/v1/events` 由 palantir-t2 接入 `events:ingest` 密钥 + 事件类型白名单（e97bc61），本模块只提供 `require_api_scope` / `enforce_api_allowlist` / 调用方审计字段。
+- 机器动作执行使用 `actions:execute` + 动作类型白名单；动态摘要使用 `dynamic:read`（由动态模块接入）。
+
 ## 部署和核对
 
 由具备创建角色权限的迁移连接执行 `alembic upgrade head`，再启动新后端。迁移不清库、不重置种子，不支持有损 downgrade；后续新增表需同步授予运行角色权限。零售 seed 命令仅显式绑定空间 1，不用于初始化新空间。
