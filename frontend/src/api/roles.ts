@@ -38,7 +38,8 @@ export async function loadRolesState(): Promise<RolesState | null> {
   return await api.get<RolesState>('/roles/state', pinned());
 }
 
-export interface PermObject { name: string; api: string; actions: string[] }
+export interface ActionPermissionRef { id: string; api: string; name: string }
+export interface PermObject { name: string; api: string; actions: string[]; actionRefs?: ActionPermissionRef[] }
 export interface ScopeProp { objType: string; objectTypeCode?: string; prop: string; values: string[]; displayName?: string | null; dataType?: string }
 export interface RolesMeta { permObjects: PermObject[]; scopeProps: ScopeProp[] }
 

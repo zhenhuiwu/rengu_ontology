@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { parse } from '@vue/compiler-sfc';
+import { computed, ref } from 'vue';
+import ts from 'typescript';
+
+const { descriptor, errors } = parse(readFileSync(new URL('../src/pages/admin/Roles.vue', import.meta.url), 'utf8'));
+assert.equal(errors.length, 0);
+const source = descriptor.scriptSetup.content;
+const parsed = ts.createSourceFile('Roles.ts', source, ts.ScriptTarget.Latest, true);
+const statement = parsed.statements.find((s) => ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => d.name.getText(parsed) === 'pvUser'));
+assert.ok(statement);
+const primary = { id: 'primary', name: 'Primary' };
+const member = { id: 'member-only', name: 'Member without primary role' };
+const allUsers = ref([primary]);
+const members = ref({ role: [primary, member] });
+let selected = member.id;
+const output = {};
+const code = `${statement.getText(parsed)}\nexports.pvUser = pvUser;`;
+runInNewContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText,
+  { computed, allUsers, members, q: () => selected, exports: output });
+assert.equal(output.pvUser.value.id, member.id);
+selected = primary.id;
+allUsers.value = [...allUsers.value];
+assert.equal(output.pvUser.value.id, primary.id);
+selected = 'missing';
+allUsers.value = [];
+assert.equal(output.pvUser.value, undefined);
+console.log('Role preview resolves directory users and member-only profiles; unknown users stay closed.');

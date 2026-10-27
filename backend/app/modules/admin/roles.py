@@ -24,7 +24,7 @@ from app.common.pagination import PageParams
 from app.common.repository import BaseRepository
 from app.core.clock import now
 from app.core.config import get_settings
-from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound
+from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound, VersionConflict
 from app.modules.admin.models import (
     ServiceAccount,
     SysOrg,
@@ -78,25 +78,31 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
         return fallback
     acts = await session.scalars(
         select(ActionType)
-        .where(ActionType.status != TypeStatus.draft, ActionType.retired_release_id.is_(None))
+        .where(ActionType.ontology_id == require_ontology_id(session),
+               ActionType.status != TypeStatus.draft, ActionType.retired_release_id.is_(None))
         .order_by(ActionType.code)
     )
     by_api: dict[str, list[str]] = {}
+    action_refs: dict[str, dict[str, dict[str, str]]] = {}
     for action in acts:
-        by_api.setdefault(action.target_api, []).append(action.name)
-        for obj in await action_operation_objects(session, action_def(action)):
-            by_api.setdefault(obj.api_name, []).append(action.name)
+        apis = {action.target_api}
+        apis.update(obj.api_name for obj in await action_operation_objects(session, action_def(action)))
+        for api in apis:
+            by_api.setdefault(api, []).append(action.name)
+            action_refs.setdefault(api, {})[action.code] = {"id": action.code, "api": action.api, "name": action.name}
     fb = {o["api"]: o for o in fallback}
     out = [
         {
             "name": n,
             "api": a,
             "actions": list(dict.fromkeys([*fb.get(a, {}).get("actions", []), *by_api.get(a, [])])),
+            "actionRefs": list(action_refs.get(a, {}).values()),
         }
         for n, a in ots
     ]
     apis, names = {o["api"] for o in out}, {o["name"] for o in out}
-    out += [dict(o) for o in fallback if o["api"] not in apis and o["name"] not in names]
+    out += [dict(o, actionRefs=list(action_refs.get(o["api"], {}).values()))
+            for o in fallback if o["api"] not in apis and o["name"] not in names]
     return out
 
 
@@ -585,6 +591,9 @@ class RoleService:
         ip: str,
     ) -> RoleBundle:
         r = await self._editable(code)
+        await self.session.refresh(r, with_for_update=True)
+        if lock_version is not None and r.lock_version != lock_version:
+            raise VersionConflict(details={"expected": lock_version, "actual": r.lock_version})
         keys = {p["key"] for p in func_pages()}
         unknown = sorted(set(fn) - keys)
         if unknown:
@@ -592,25 +601,53 @@ class RoleService:
         full = {k: fn.get(k, "none") for k in [p["key"] for p in func_pages()]}
         po = await load_perm_objects(self.session)
         by_name = {o["name"]: o for o in po}
+        from app.modules.action.execution_options import action_operation_objects
+        from app.modules.action.models import ActionType, TypeStatus
+        from app.modules.action.sections import action_def
+        from app.modules.ontology.models import OntologyRoleBinding
+
+        bound = await self.session.scalar(select(OntologyRoleBinding.role_id).where(
+            OntologyRoleBinding.role_id == r.id,
+            OntologyRoleBinding.ontology_id == require_ontology_id(self.session)))
+        allowed_actions: dict[str, set[str]] = {}
+        actions = await self.session.scalars(select(ActionType).where(
+            ActionType.ontology_id == require_ontology_id(self.session),
+            ActionType.status.in_((TypeStatus.published, TypeStatus.changing)),
+            ActionType.retired_release_id.is_(None)))
+        for action in actions:
+            apis = {action.target_api}
+            apis.update(obj.api_name for obj in await action_operation_objects(self.session, action_def(action)))
+            for api in apis:
+                allowed_actions.setdefault(api, set()).update((action.code, action.api, action.name))
         out = []
         for o in objs:
             meta = by_name.get(o["objType"])
             if meta is None:
                 raise RoleValidation("未知的对象类型", details={"objType": o["objType"]})
-            bad = [a for a in o["actions"] if a not in meta["actions"]]
+            previous = [entry for entry in r.objs if entry.get("api") == meta["api"]]
+            # Keep exact stored strings on this locked role/object; aliases still need a real grant.
+            retained = (set(previous[0].get("actions", []))
+                        if bound is not None and lock_version is not None and len(previous) == 1
+                        and user.ontology_id == require_ontology_id(self.session)
+                        and previous[0].get("view") is o["view"]
+                        and o.get("api") == meta["api"] else set())
+            bad = [a for a in o["actions"] if a not in allowed_actions.get(meta["api"], set()) and a not in retained]
             if bad:
                 raise RoleValidation(
                     "动作不属于该对象类型", details={"objType": o["objType"], "actions": bad}
                 )
             # 与 Roles.vue 一致：取消查看时清空导出和动作
             view = bool(o["view"])
+            saved_actions = list(o["actions"]) if view else []
+            if not view and len(previous) == 1 and previous[0].get("view") is False:
+                saved_actions = [action for action in o["actions"] if action in retained]
             out.append(
                 {
                     "objType": meta["name"],
                     "api": meta["api"],
                     "view": view,
                     "export": view and bool(o["export"]),
-                    "actions": list(o["actions"]) if view else [],
+                    "actions": saved_actions,
                 }
             )
         given = {o["objType"] for o in out}

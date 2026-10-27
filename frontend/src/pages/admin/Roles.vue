@@ -150,6 +150,27 @@ const areas = computed(() => ['使用', '构建', '管理'].map((a) => ({ area: 
 const funcStat = (lv: FuncLevel) => FUNC_PAGES.filter((p) => draft.func[p.key] === lv).length;
 const LEVELS = [{ value: 'none', label: '无' }, { value: 'view', label: '查看' }, { value: 'manage', label: '管理' }];
 const objActions = (name: string) => permObjects.value.find((o) => o.name === name)?.actions ?? [];
+const actionRefs = (name: string) => realRoles ? permObjects.value.find((o) => o.name === name)?.actionRefs ?? [] : objActions(name).map((value) => ({ id: value, api: value, name: value }));
+function actionKey(name: string, value: string) {
+  const matches = actionRefs(name).filter((action) => [action.id, action.api, action.name].includes(value));
+  return matches.length === 1 ? matches[0]!.id : `legacy:${value}`;
+}
+const selectedActions = (record: ObjPerm) => [...new Set(record.actions.map((value) => actionKey(record.objType, value)))];
+function actionOptions(record: ObjPerm) {
+  const refs = actionRefs(record.objType);
+  const options = refs.map((action) => ({ value: action.id, label: action.name, disabled: false }));
+  for (const value of record.actions) {
+    const key = actionKey(record.objType, value);
+    if (!options.some((option) => option.value === key)) options.push({ value: key, label: `${value}（原授权，定义不可用）`, disabled: false });
+  }
+  return options;
+}
+function updateActions(record: ObjPerm, selected: (string | number | boolean)[]) {
+  const keys = selected.map(String);
+  const kept = record.actions.filter((value) => keys.includes(actionKey(record.objType, value)));
+  const existing = new Set(kept.map((value) => actionKey(record.objType, value)));
+  record.actions = [...kept, ...keys.filter((value) => !existing.has(value))];
+}
 const ocols = [
   { title: '对象类型', key: 'obj', width: 200 },
   { title: '查看', key: 'view', width: 70, align: 'center' as const },
@@ -207,7 +228,8 @@ async function addScope() {
 
 // 成员
 const mkw = ref('');
-const mpq = usePagedQuery({ defaultSize: realRoles ? 10 : 15, filters: [mkw, () => role.value?.id], prefix: 'm' });
+const mpq = usePagedQuery({ defaultSize: realRoles ? 10 : 15, filters: [mkw], prefix: 'm' });
+watch(() => role.value?.id, (next, previous) => { if (next && previous) mpq.reset(); });
 const mrows = computed(() => (members.value[role.value?.id ?? ''] ?? []).filter((u) => !mkw.value || u.name.includes(mkw.value) || (u.account ?? '').includes(mkw.value) || u.id.includes(mkw.value)));
 const memberPage = ref<{ key: string; items: AdminUser[]; total: number }>({ key: '', items: [], total: 0 });
 const memberLoading = ref(false), memberError = ref('');
@@ -269,7 +291,7 @@ async function addMembers() {
 
 // 以此用户预览：所有角色合并后的有效权限（用本页正在编辑的角色和成员计算，与 roles.ts effectiveAccess 同一套规则）
 const rolesOf = (u: AdminUser) => roles.value.filter((r) => members.value[r.id].some((m) => m.id === u.id));
-const pvUser = computed(() => allUsers.value.find((u) => u.id === q('preview')));
+const pvUser = computed(() => allUsers.value.find((u) => u.id === q('preview')) ?? Object.values(members.value).flat().find((u) => u.id === q('preview')));
 const pv = computed(() => {
   const u = pvUser.value;
   if (!u) return null;
@@ -468,8 +490,8 @@ async function saveNewRole() {
             <a-checkbox v-else-if="column.key === 'view'" v-model:checked="record.view" :disabled="locked" @change="!record.view && ((record.actions = []), (record.export = false))" />
             <a-checkbox v-else-if="column.key === 'export'" v-model:checked="record.export" :disabled="locked || !record.view" />
             <template v-else-if="column.key === 'actions'">
-              <span v-if="!objActions(record.objType).length" class="c-3">没有动作</span>
-              <a-checkbox-group v-else v-model:value="record.actions" :disabled="locked || !record.view" :options="objActions(record.objType)" />
+              <span v-if="!actionOptions(record).length" class="c-3">没有动作</span>
+              <a-checkbox-group v-else :value="selectedActions(record)" :disabled="locked || !record.view" :options="actionOptions(record)" @update:value="updateActions(record, $event)" />
             </template>
             <span v-else-if="column.key === 'scope'" class="t-12" :class="scopesOf(record.objType).length ? 'c-1' : 'c-3'">{{ scopesOf(record.objType).map(scopeText).join('；') || (record.view ? noScopeText : EMPTY) }}</span>
           </template>
@@ -506,8 +528,8 @@ async function saveNewRole() {
           <a-input-search v-model:value="mkw" size="small" placeholder="姓名 / 账号 / ID" class="rl-w220" allow-clear />
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openAdd">添加成员</a-button></a-tooltip>
         </div>
-        <a-alert v-if="memberError" type="error" :message="memberError" /><div class="rl-mtable" :class="{ 'paged-scroll': mpq.overflow.value }">
-          <a-table size="small" row-key="id" :columns="mcols" :loading="memberLoading" :data-source="mpaged.items" :pagination="false">
+        <a-alert v-if="memberError" type="error" :message="memberError" /><div class="rl-mtable paged-scroll">
+          <a-table size="small" row-key="id" :columns="mcols" :loading="memberLoading" :data-source="mpaged.items" :pagination="false" :scroll="{ x: 1050 }">
             <template #bodyCell="{ column, record }">
               <span v-if="column.key === 'id'" class="num">{{ record.id }}</span>
               <a-badge v-else-if="column.key === 'status'" :status="badge(record.status)" :text="record.status" />
@@ -575,7 +597,7 @@ async function saveNewRole() {
     <template v-if="pv">
       <a-descriptions :column="2" bordered size="small" class="rl-desc">
         <a-descriptions-item label="用户"><span>{{ pv.u.name }}</span> <span class="t-12 c-3 num">{{ pv.u.id }}</span></a-descriptions-item>
-        <a-descriptions-item label="部门">{{ pv.u.dept }}</a-descriptions-item>
+        <a-descriptions-item label="部门">{{ pv.u.dept || EMPTY }}</a-descriptions-item>
         <a-descriptions-item label="角色" :span="2">{{ pv.rs.map((r) => r.name).join('、') || '无' }}</a-descriptions-item>
         <a-descriptions-item label="可进入" :span="2">{{ pv.areasIn.join(' / ') || '无' }} · <span class="num">{{ pv.func.length }}</span> 个页面（管理 <span class="num">{{ pv.func.filter((p) => p.lv === 'manage').length }}</span>）</a-descriptions-item>
       </a-descriptions>

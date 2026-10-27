@@ -250,10 +250,17 @@ class FuncPageOut(ApiModel):
     title: str
 
 
+class ActionPermissionRefOut(ApiModel):
+    id: str
+    api: str
+    name: str
+
+
 class PermObjectOut(ApiModel):
     name: str
     api: str
     actions: list[str]
+    action_refs: list[ActionPermissionRefOut] = Field(default_factory=list)
 
 
 class ScopePropOut(ApiModel):
