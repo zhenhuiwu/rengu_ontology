@@ -47,6 +47,8 @@ export type Filters = Record<string, FilterVal>;
 const NUMERIC = new Set(['decimal', 'integer', 'int']);
 const TIME = new Set(['date', 'timestamp']);
 export const isNumeric = (p: PropMeta) => NUMERIC.has(p.dataType);
+/** 长文本（static long_text）：详情页单独成区，不进列表默认列、不筛选/排序（generic-object-explorer.md §3） */
+export const isLongText = (p: PropMeta) => p.dataType === 'long_text';
 export const isRange = (p: PropMeta) => NUMERIC.has(p.dataType) || TIME.has(p.dataType);
 /** 列表里默认最多几列（标题列之外）[推断] */
 const MAX_LISTED = 7;
@@ -68,7 +70,7 @@ export function metaFromProps(props: ObjProp[]): PropMeta[] {
     };
   });
   // 默认列 [推断]：主键 + 最多 3 个枚举/布尔 + 2 个数值 + 1 个时间，余下用维度字符串补到 MAX_LISTED
-  const cand = out.filter((p) => p.visibility !== 'hidden' && !p.sensitive && !p.title && p.dataType !== 'json');
+  const cand = out.filter((p) => p.visibility !== 'hidden' && !p.sensitive && !p.title && p.dataType !== 'json' && p.dataType !== 'long_text');
   const quota: [(p: PropMeta) => boolean, number][] = [
     [(p) => p.pk, 1], [(p) => p.dataType === 'enum' || p.dataType === 'boolean', 3], [isNumeric, 2],
     [(p) => TIME.has(p.dataType), 1], [(p) => p.filterable, MAX_LISTED],

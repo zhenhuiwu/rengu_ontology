@@ -409,3 +409,8 @@
 - **long_text 详情单独分区**：对象使用页 `frontend/src/pages/objects/objMeta.ts:71` 只排除 json，long_text 会按普通属性渲染；设计文档（generic-object-explorer.md §3）要求详情页单独分区，由对象使用页负责（`ObjectDetail.vue`）。
 - **动作 `bulk`**（结果页批量动作）：`app/modules/action/models.py` ActionType 无 bulk 字段，`frontend/src/pages/objects/ObjectSearch.vue` 无多选入口；属动作模块与对象使用页。
 - **`frontend/scripts/check-static-pages.mjs`** 在 master `343ba5f` 上即失败：静态 Body 断言通过后，`MetricsBody.vue:15/172` 引入的 `crErr`（`b93c610`）未在脚本的 `staticApi` 桩（`check-static-pages.mjs:27`）里提供，报 `crErr is not a function`。补桩一行即可，脚本非静态本轮所有，未改。
+
+## static-t6（基于 master `4f0d3b6`，仅前端 UI，PDE 指派）
+
+- **long_text 详情单独成区**：`frontend/src/pages/objects/ObjectDetail.vue` 概览里 long_text 属性不进标题行和分组表格，每个属性单独一区（区标题 = 属性名，有说明时给提示；正文保留换行、超长滚动；敏感仍显示“已脱敏”，hidden 不显示）。`objMeta.ts` 新增 `isLongText`，mock 兜底的默认列表列排除 long_text（真接口由静态 meta 给 `listed=false`）。设计文档 generic-object-explorer.md 对照表更新为已做。
+- **检查**：`vue-tsc --noEmit` 通过；`check-permission-apply`、`check-qa-eval-real`、`check-object-usage-pages`、`check-object-automation` 通过；`check-context-integration`、`check-qa-integration`、`check-qa-session-context`、`check-real-object-resolver`、`check-object-ask`、`check-object-behavior`、`check-real-data` 在 master 上原本就失败，改动前后报错一致（缺桩依赖 / 过时断言，非静态所有，未改）。
