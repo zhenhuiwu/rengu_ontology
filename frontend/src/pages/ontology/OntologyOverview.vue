@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 本体总览：六类资源的数量与健康度、待处理（变更单 + 数据质量失败）、对象关系缩略图、最近发布。
- * static 真接口模式读取总览聚合、待处理、关系图和发布记录；演示模式保留既有 mock。
+ * static 真接口模式读取总览聚合、待处理、关系图和发布记录；演示模式只经 api/overview.ts 的 demo* 入口读写演示数据。
  * 颜色：灰=正常（含草稿、已发布、已通过待发布），橙=审核中 / 结果未知，红=失败；数量为 0 一律灰。
  * 写操作只有“发起变更”，预览 / 历史版本期间只读（useReadonly）。
  */
@@ -19,18 +19,16 @@ import BuildGuideDrawer from './parts/BuildGuideDrawer.vue';
 import { createCR, staticContextKey, isStaticReal } from '@/api/static';
 import { useReadonly } from '@/composables/useReadonly';
 import { GRAY, STATUS } from '@/theme';
-import { LINK_OBJECTS, LINKS } from '@/mock/links';
-import { ACTION_TYPES, EVENT_TYPES, runsOf, eventsOf } from '@/mock/actionEvent';
-import { METRICS } from '@/mock/metrics';
-import { DIM_ITEMS } from '@/mock/dimensions';
 import { draftOf, useDraftView } from './parts/useDraftView';
 import { useAppStore } from '@/stores/app';
-import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
-import { QUALITY_CHECKS, DATA_CUTOFF } from '@/mock/quality';
 import { RELEASES } from '@/api/releases';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import { currentApiContext } from '@/api/http';
-import { fetchGraph, fetchOverview, fetchOverviewTodos, fetchOverviewReleases, isOverviewReal, mockGraph, type OverviewGraph, type OverviewSummary, type OverviewTodo } from '@/api/overview';
+import {
+  DEMO_DATA_AS_OF, demoAddChange, demoCards, demoCrOfRelease, demoFailedTypes, demoTodos,
+  fetchGraph, fetchOverview, fetchOverviewTodos, fetchOverviewReleases, isOverviewReal, mockGraph,
+  type OverviewGraph, type OverviewSummary, type OverviewTodo,
+} from '@/api/overview';
 
 const router = useRouter();
 const { readonly, reason } = useReadonly();
@@ -52,44 +50,10 @@ type Tone = 'normal' | 'attention' | 'failed';
 interface Health { n: number; text: string; tone: Tone }
 interface Card { key: string; title: string; count: number; unit: string; path: string; health: Health[] }
 
-const failedChecks = QUALITY_CHECKS.filter((c) => c.result === '失败');
-const failedByType = new Map<string, number>();
-failedChecks.forEach((c) => failedByType.set(c.typeKey, (failedByType.get(c.typeKey) ?? 0) + 1));
-const runs = ACTION_TYPES.flatMap((a) => runsOf(a.id));
-const events = EVENT_TYPES.flatMap((e) => eventsOf(e.id));
-// 维度与字典：与“维度与字典”页同一份数据（dimensions.ts），历史版本只算当时已有的
-const dimItems = computed(() => DIM_ITEMS.filter((d) => d.status !== '已驳回' && (!histVer.value || d.since <= histVer.value)));
-const openCrs = CHANGE_REQUESTS.filter((c) => c.status === '草稿' || c.status === '审核中' || c.status === '已通过');
-
-const mockCards = computed<Card[]>(() => [
-  { key: 'obj', title: '对象类型', unit: '个', path: '/build/ontology/object-types', count: LINK_OBJECTS.filter((o) => !o.draft).length, health: [
-    { n: LINK_OBJECTS.filter((o) => o.draft).length, text: '个草稿', tone: 'normal' },
-    { n: failedByType.size, text: '个有质量检查失败', tone: 'failed' },
-  ] },
-  { key: 'link', title: '关系类型', unit: '条', path: '/build/ontology/link-types', count: LINKS.filter((l) => l.status === '已发布').length, health: [
-    { n: LINKS.filter((l) => l.status === '草稿').length, text: '条草稿', tone: 'normal' },
-    { n: LINKS.filter((l) => (l.quality?.orphans ?? 0) > 0).length, text: '条有孤儿记录', tone: 'normal' },
-  ] },
-  { key: 'action', title: '动作类型', unit: '个', path: '/build/ontology/action-types', count: ACTION_TYPES.length, health: [
-    { n: ACTION_TYPES.filter((a) => a.status !== '已发布').length, text: '个变更中 / 草稿', tone: 'normal' },
-    { n: runs.filter((r) => r.status === '结果未知').length, text: '次结果未知', tone: 'attention' },
-    { n: runs.filter((r) => r.status === '失败').length, text: '次执行失败', tone: 'failed' },
-  ] },
-  { key: 'event', title: '事件类型', unit: '个', path: '/build/ontology/event-types', count: EVENT_TYPES.length, health: [
-    { n: EVENT_TYPES.filter((e) => e.status !== '已发布').length, text: '个变更中 / 草稿', tone: 'normal' },
-    { n: events.filter((e) => e.outcome === '投递失败').length, text: '次投递失败', tone: 'failed' },
-  ] },
-  { key: 'metric', title: '指标', unit: '个', path: '/build/ontology/metrics', count: METRICS.filter((m) => m.status === '已发布').length, health: [
-    { n: METRICS.filter((m) => m.status === '草稿').length, text: '个草稿', tone: 'normal' },
-    { n: METRICS.filter((m) => m.status === '已下线').length, text: '个已下线', tone: 'normal' },
-  ] },
-  { key: 'dim', title: '维度与字典', unit: '个', path: '/build/ontology/dimensions', count: dimItems.value.length, health: [
-    { n: dimItems.value.filter((d) => d.kind === '维度').length, text: '个维度', tone: 'normal' },
-    { n: dimItems.value.filter((d) => d.kind === '码表').length, text: '个码表', tone: 'normal' },
-    { n: dimItems.value.filter((d) => d.status === '草稿' || draftOf('dimension', d.id)).length, text: '个变更中', tone: 'normal' },
-  ] },
-]);
+const failedByType = demoFailedTypes();
 const paths: Record<string, string> = { obj: 'object-types', link: 'link-types', action: 'action-types', event: 'event-types', metric: 'metrics', dim: 'dimensions' };
+// 演示卡片：维度与字典与“维度与字典”页同一份数据，历史版本只算当时已有的
+const mockCards = computed<Card[]>(() => demoCards(histVer.value, (id) => draftOf('dimension', id)).map((c) => ({ ...c, path: `/build/ontology/${paths[c.key]}` })));
 const cards = computed<Card[]>(() => live.value ? (summary.value?.cards ?? []).map((c) => ({ ...c, path: `/build/ontology/${paths[c.key]}` })) : mockCards.value);
 const healthTip = (hs: Health[]) => hs.map((h) => `${h.n} ${h.text}`).join(' · ');
 const alerts = (hs: Health[]) => hs.filter((h) => h.n > 0 && h.tone !== 'normal');
@@ -97,19 +61,8 @@ const toneCls = (h: Health) => (h.n === 0 || h.tone === 'normal' ? 'c-3' : h.ton
 
 /* ── 待处理：未发布的变更单 + 失败的数据质量检查 ── */
 interface Todo { id: string; kind: '变更' | '数据质量'; title: string; who: string; status: string; tone: Tone; time: string; go: () => void }
-const CR_STATUS: Record<string, string> = { 草稿: '草稿', 审核中: '审核中', 已通过: '已通过 · 待发布' };
-const mockTodos = computed<Todo[]>(() => [
-  ...openCrs.map((c): Todo => ({
-    id: c.id, kind: '变更', title: c.title, who: c.status === '审核中' ? `审核人 ${c.reviewer}` : c.owner,
-    status: CR_STATUS[c.status], tone: c.status === '审核中' ? 'attention' : 'normal', time: c.updatedAt,
-    go: () => router.push({ path: '/build/ontology/releases', query: { cr: c.id } }),
-  })),
-  ...failedChecks.map((c): Todo => ({
-    id: c.id, kind: '数据质量', title: `${c.typeName} · ${c.kind}：${c.rule}`, who: `实际 ${c.actual}`,
-    status: '失败', tone: 'failed', time: c.failSince ?? c.lastRun,
-    go: () => router.push({ path: '/build/data/quality', query: { result: '失败', check: c.id } }),
-  })),
-]);
+const goTodo = (t: OverviewTodo) => () => router.push(t.kind === '数据质量' ? { path: '/build/data/quality', query: { result: '失败', check: t.id } } : { path: '/build/ontology/releases', query: { cr: t.id } });
+const mockTodos = computed<Todo[]>(() => demoTodos().map((t) => ({ ...t, go: goTodo(t) })));
 const filterKind = ref<'全部' | '变更' | '数据质量'>('全部');
 const shown = computed(() => mockTodos.value.filter((t) => filterKind.value === '全部' || t.kind === filterKind.value));
 const page = ref(1);
@@ -128,7 +81,7 @@ watch([contextKey, filterKind], () => {
   realTodos.value = { items: [], total: 0 };
 });
 const todoError = ref('');
-const pageRows = computed<Todo[]>(() => live.value ? realTodos.value.items.map((t) => ({ ...t, go: () => router.push(t.kind === '数据质量' ? { path: '/build/data/quality', query: { result: '失败', check: t.id } } : { path: '/build/ontology/releases', query: { cr: t.id } }) })) : shown.value.slice((page.value - 1) * size.value, page.value * size.value));
+const pageRows = computed<Todo[]>(() => live.value ? realTodos.value.items.map((t) => ({ ...t, go: goTodo(t) })) : shown.value.slice((page.value - 1) * size.value, page.value * size.value));
 const todoTotal = computed(() => live.value ? realTodos.value.total : shown.value.length);
 let todoSeq = 0;
 async function loadTodos() {
@@ -141,7 +94,10 @@ async function loadTodos() {
     if (my !== todoSeq) return;
     if (r.page !== page.value) { page.value = r.page; return; }
     realTodos.value = r;
-  } catch (e) { if (my === todoSeq && !fallBackIfDown(e)) todoError.value = `待处理加载失败：${String(e)}`; }
+  } catch (e) {
+    // 业务错误（如 403）不能继续显示上一次的待处理行
+    if (my === todoSeq && !fallBackIfDown(e)) { todoError.value = `待处理加载失败：${String(e)}`; realTodos.value = { items: [], total: 0 }; }
+  }
 }
 watch([contextKey, live, filterKind, page, size], loadTodos, { immediate: true });
 const stCls = (t: Tone) => (t === 'failed' ? 'tl-failed' : t === 'attention' ? 'tl-attention' : 'c-3');
@@ -155,7 +111,7 @@ const POS: Record<string, [number, number]> = {
   store: [0.5, 0.8], employee: [0.86, 0.84], province: [0.3, 0.96], region: [0.7, 0.96],
 };
 const VW = 960; const VH = 540; const NW = 96; const NH = 32;
-// 节点 / 边：mock 模式读 LINK_OBJECTS / LINKS；真接口（开关 static）读 GET /ontology/graph（src/api/overview.ts），
+// 节点 / 边：演示模式读 mockGraph()；真接口（开关 static）读 GET /ontology/graph（src/api/overview.ts），
 // 图谱独立加载，不等待统计与发布列表；坐标 POS 仍由前端定义。
 const graphData = ref<OverviewGraph>(isOverviewReal() ? { nodes: [], edges: [] } : mockGraph());
 const graphLoaded = ref(false);
@@ -249,7 +205,7 @@ const releases = computed(() => {
   const i = histVer.value ? list.findIndex((r) => r.ver === histVer.value) : 0;
   return histVer.value && i < 0 ? [] : list.slice(Math.max(0, i));
 });
-const crOf = (ver: string) => CHANGE_REQUESTS.find((c) => c.release === ver)?.id;
+const crOf = (ver: string) => (live.value ? undefined : demoCrOfRelease(ver));
 const openRelease = (ver: string) => {
   const cr = crOf(ver);
   router.push({ path: '/build/ontology/releases', query: cr ? { st: '已发布', cr } : { st: '已发布' } });
@@ -273,12 +229,7 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
   if (opts.join) { router.push({ path: '/build/ontology/releases', query: { cr: opts.join } }); return; }
   // 总览没有具体对象：只建单（不切草稿视图），登记到变更与发布的列表里，再跳过去选中新单
   const id = dv.start({ title: opts.title, target: 'ontology' });
-  const at = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  CHANGE_REQUESTS.unshift({
-    id, title: opts.title || '未命名变更', owner: app.user?.name || CURRENT_USER, reviewer: '待指定', status: '草稿', level: '修订', changes: 0,
-    updatedAt: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`, reason: '从本体总览发起，待补充',
-  });
+  demoAddChange(id, opts.title || '未命名变更', app.user?.name);
   message.success(`已创建变更单 ${id}，将随 ${NEXT_VERSION.value} 发布`);
   router.push({ path: '/build/ontology/releases', query: { cr: id } });
 }
@@ -287,7 +238,7 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
 <template>
   <Teleport defer to="#page-extra">
     <a-space>
-      <span class="t-12 c-3">当前版本 <span class="num">{{ CURRENT_VERSION }}</span> · {{ live ? '统计时间' : '数据截至' }} <span class="num">{{ live ? summary?.dataAsOf ?? '—' : DATA_CUTOFF }}</span></span>
+      <span class="t-12 c-3">当前版本 <span class="num">{{ CURRENT_VERSION }}</span> · {{ live ? '统计时间' : '数据截至' }} <span class="num">{{ live ? summary?.dataAsOf ?? '—' : DEMO_DATA_AS_OF }}</span></span>
       <a-button @click="guideOpen = true">构建引导</a-button>
       <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="changeOpen = true">发起变更</a-button></a-tooltip>
     </a-space>

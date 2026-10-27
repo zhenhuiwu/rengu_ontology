@@ -52,7 +52,7 @@ let isReal = false, guideCalls = 0;
 const guide = load('pages/ontology/parts/BuildGuideDrawer.vue', {
   'vue-router': { useRouter: () => ({ push() {} }) }, '@/api/static': { isStaticReal: () => isReal }, '@/api/http': { currentApiContext: () => ctx, isApiError: () => false, apiClient: () => ({ isReal: () => true, get: async (path) => { guideCalls++; return path === '/ontology/overview' ? { cards: [{ key: 'obj', count: 2, unit: '个', title: '对象类型' }, { key: 'link', count: 1, unit: '条', title: '关系类型' }] } : { total: 0, items: [] }; } }) },
 }, 'load,steps', { defineModel: () => vue.ref(true) });
-await guide.load(); assert.equal(guideCalls, 0); assert.equal(guide.steps.value[0].state, '演示模式'); isReal = true; await guide.load(); assert.equal(guide.steps.value[1].state, '已配置'); assert.match(guide.steps.value[1].detail, /2 个对象类型/); assert.equal(guide.steps.value[0].state, '未配置');
+await guide.load(); assert.equal(guideCalls, 0); assert.equal(guide.steps.value[0].state, '演示模式'); isReal = true; await guide.load(); assert.equal(guide.steps.value[1].state, '已配置'); assert.match(guide.steps.value[1].detail, /2 个对象类型/); const fnStep = guide.steps.value.find((s) => s.title === '函数'); assert.equal(fnStep.state, '未配置'); assert.match(fnStep.detail, /0 个函数/); assert.equal(fnStep.paths.map((p) => p.path).join(), '/build/ontology/functions'); assert.equal(guide.steps.value[0].state, '未配置');
 
 // Actual import contract: stable ids, whitelisted relationship selection and lock join; no property/SQL payload.
 const importPosts = [];

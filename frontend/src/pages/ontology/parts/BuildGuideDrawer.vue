@@ -11,6 +11,7 @@ const definitions = [
   { title: '数据连接', purpose: '登记只读连接并完成连通性检查，查看可内省的库表。', paths: [{ label: '数据连接', path: '/build/data/connections' }] },
   { title: '对象与关系', purpose: '配置对象属性、主键、来源映射与对象关系；导入只生成定义草稿。', paths: [{ label: '对象类型', path: '/build/ontology/object-types' }, { label: '关系类型', path: '/build/ontology/link-types' }] },
   { title: '指标、维度与知识', purpose: '配置口径、显式变体、分析层级和业务说明。公式定义不能替代执行器。', paths: [{ label: '指标', path: '/build/ontology/metrics' }, { label: '维度与字典', path: '/build/ontology/dimensions' }, { label: '业务知识', path: '/build/ontology/glossary' }] },
+  { title: '函数', purpose: '按需登记受限纯计算函数，供规则、动作等引用；函数版本独立于本体发布快照，无需函数时可跳过此步。', paths: [{ label: '函数', path: '/build/ontology/functions' }] },
   { title: '动作与事件', purpose: '配置动作提交条件、事件载荷和订阅方；外部投递通道需单独验收。', paths: [{ label: '动作类型', path: '/build/ontology/action-types' }, { label: '事件类型', path: '/build/ontology/event-types' }] },
   { title: '规则与生命周期', purpose: '按需配置规则与状态流转；无需自动化时可跳过此步。', paths: [{ label: '规则', path: '/build/ontology/rules' }, { label: '对象生命周期', path: '/build/ontology/object-types?tab=lifecycle' }] },
   { title: '校验、审核与发布', purpose: '在变更单校验、提交审核并整版发布；发布前已发布定义继续生效。', paths: [{ label: '变更与发布', path: '/build/ontology/releases' }] },
@@ -43,6 +44,8 @@ async function load() {
     count('data', '/datasources').then((n) => ({ count: n, detail: `${n} 个已登记连接；登记不代表连通性检查通过` })),
     ontology.get<OverviewSummary>('/ontology/overview', options).then((summary) => ({ count: summary.cards.filter((c) => ['obj', 'link'].includes(c.key)).reduce((n,c) => n+c.count,0), detail: summary.cards.filter((c) => ['obj','link'].includes(c.key)).map((c) => `${c.count} ${c.unit}${c.title}`).join(' · ') })),
     Promise.all([count('static', '/metrics'), count('static', '/dimensions'), count('static', '/knowledge'), readiness()]).then(([m,d,k,r]) => ({ count: m+d+k, detail: `${m} 个指标${r} · ${d} 个维度/码表 · ${k} 条知识` })),
+    // 函数列表不按 ?ver= 区分版本，历史版本下不借用当前数量。
+    ctx.ver ? Promise.resolve({ count: -1, detail: '函数列表不区分历史版本，请在函数页查看。' }) : count('static', '/functions').then((n) => ({ count: n, detail: `${n} 个函数（全部状态）` })),
     Promise.all([count('action', '/action-types'), count('action', '/event-types')]).then(([a,e]) => ({ count: a+e, detail: `${a} 个动作类型 · ${e} 个事件类型` })),
     ctx.ver ? Promise.resolve({ count: -1, detail: '请在对象页查看生命周期。' }) : count('dynamic', '/rules').then((n) => ({ count: n, detail: `${n} 条规则；生命周期请在对象页按需查看。` })),
     count('static', '/change-requests').then((n) => ({ count: n, detail: `${n} 张变更单；请进入后查看校验、审核和发布状态。` })),

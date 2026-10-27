@@ -11,25 +11,31 @@ const pending = [];
 let failure;
 const context = vue.reactive({ ver: 'v1' });
 const navigations = [];
+const edgeSource = readFileSync(new URL('../src/components/graphEdges.ts', import.meta.url), 'utf8');
+const edgeModule = ts.transpileModule(edgeSource, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } }).outputText;
+const graphEdges = await import(`data:text/javascript;base64,${Buffer.from(edgeModule).toString('base64')}`);
 const imports = {
+  '@/components/graphEdges': graphEdges,
   vue: { ...vue, watch() {}, onMounted() {}, onBeforeUnmount() {} },
   'vue-router': { useRouter: () => ({ push(to) { navigations.push(to); } }) }, 'ant-design-vue': {}, '@ant-design/icons-vue': {},
   '@/composables/useReadonly': { useReadonly: () => ({}) }, '@/theme': { GRAY: {}, STATUS: {} },
-  '@/mock/links': { LINK_OBJECTS: [], LINKS: [] }, '@/mock/actionEvent': { ACTION_TYPES: [], EVENT_TYPES: [] },
-  '@/mock/metrics': { METRICS: [] }, '@/mock/dimensions': { DIM_ITEMS: [] },
-  './parts/useDraftView': { useDraftView: () => ({}) }, '@/stores/app': { useAppStore: () => ({}) },
-  '@/mock/changes': { CHANGE_REQUESTS: [{ id: 'DEMO', status: '草稿' }] }, '@/mock/quality': { QUALITY_CHECKS: [] },
+  './parts/useDraftView': { useDraftView: () => ({}), draftOf: () => undefined }, '@/stores/app': { useAppStore: () => ({}) },
   '@/api/releases': { RELEASES: [{ ver: 'demo' }] }, '@/api/http': { currentApiContext: () => context },
   '@/api/static': {},
   '@/api/fallback': { backend, fallBackIfDown: () => false },
   '@/api/overview': {
     isOverviewReal: () => real.value, mockGraph: () => ({ nodes: [{ id: 'demo' }], edges: [] }),
+    DEMO_DATA_AS_OF: 'demo', demoFailedTypes: () => new Set(), demoCrOfRelease: () => 'DEMO-CR', demoAddChange() {},
+    demoCards: () => ['obj', 'link', 'action', 'event', 'metric', 'dim'].map((key) => ({ key, title: key, count: 0, unit: '个', health: [] })),
+    demoTodos: () => [{ id: 'DEMO', kind: '变更' }],
     fetchOverview: () => { if (failure) return Promise.reject(failure); const p = defer(); pending.push(p); return p.promise; },
     fetchGraph: async () => ({ nodes: [{ id: context.ver }], edges: [] }),
     fetchOverviewReleases: async () => ({ items: [{ ver: context.ver }] }),
     fetchOverviewTodos: async () => { if (failure) throw failure; return { items: [{ id: 'REAL', kind: '变更' }], total: 1, page: 1 }; },
   },
 };
+const sfc = readFileSync(new URL('../src/pages/ontology/OntologyOverview.vue', import.meta.url), 'utf8');
+assert.doesNotMatch(sfc, /from '@\/mock\//, 'overview page must reach demo data only through api/overview.ts');
 const source = readFileSync(new URL('../src/pages/ontology/OntologyOverview.vue', import.meta.url), 'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
 const { outputText } = ts.transpileModule(`${source}\nexport { loadGraph, loadTodos, cards, pageRows, releases, graphData, loadError, todoError, draw, edgeCount };`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } });
 const page = {};
@@ -76,7 +82,8 @@ assert.equal(edges.length, 5, 'parallel, self and newly published object relatio
 assert.equal(page.edgeCount.value, 5);
 assert.equal(edges[0].labels[0].attrs.label.text, '下单门店');
 assert.equal(edges[0].attrs.line.targetMarker.name, 'block');
-assert.notEqual(JSON.stringify(edges[0].vertices), JSON.stringify(edges[1].vertices));
+// graphEdges 2b13369 起平行关系靠不同锚点分开（不再靠折点）
+assert.notEqual(JSON.stringify(edges[0].source), JSON.stringify(edges[1].source));
 assert.notEqual(edges[0].labels[0].position, edges[1].labels[0].position);
 assert.equal(edges[2].source.cell, 'store');
 assert.notEqual(edges[4].labels[0].position, 0.5, 'a relation label must avoid an intermediate node');
@@ -85,4 +92,7 @@ assert.equal(navigations.at(-1).query.link, 'parallel-b');
 real.value = false;
 assert.equal(page.cards.value.length, 6, 'mock mode must retain all six original resource cards');
 assert.equal(page.pageRows.value[0].id, 'DEMO');
+assert.equal(page.cards.value[5].path, '/build/ontology/dimensions');
+page.pageRows.value[0].go();
+assert.equal(navigations.at(-1).query.cr, 'DEMO');
 console.log('Overview integration checks passed (real summary/todos/releases, late versions, forbidden errors, mock mode).');
