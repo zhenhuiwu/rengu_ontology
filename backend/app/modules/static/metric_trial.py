@@ -469,6 +469,39 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
     return {"id": code, "ready": True, "issues": []}
 
 
+READINESS_BATCH_MAX = 200
+
+
+async def metrics_readiness(session, user: CurrentUser, codes=None, *, ver=None, cr_id=None) -> dict:
+    """批量只读就绪检查：codes 为空时检查当前空间全部指标（按 code 排序，至多 200 个）。
+
+    逐个复用 metric_readiness 的口径；不存在的指标记 NOT_FOUND，不中断整批。
+    """
+    check_func(user, "metrics", "view")
+    if not codes:
+        codes = list(await session.scalars(select(Metric.code).order_by(Metric.code)))
+    codes = list(dict.fromkeys(codes))
+    if len(codes) > READINESS_BATCH_MAX:
+        raise unavailable(f"一次至多检查{READINESS_BATCH_MAX}个指标")
+    items = []
+    for code in codes:
+        try:
+            try:
+                items.append(await metric_readiness(session, user, code, ver=ver, cr_id=cr_id))
+            except NotFound as error:
+                # 变更单没登记的指标按基线检查；变更单本身不存在则整批报错。
+                if not cr_id or error.message != "变更单未登记该指标":
+                    raise
+                items.append(await metric_readiness(session, user, code, ver=ver))
+        except NotFound as error:
+            if error.message == "变更单不存在":
+                raise
+            items.append(
+                {"id": code, "ready": False, "issues": [{"reason": "NOT_FOUND", "message": error.message}]}
+            )
+    return {"total": len(items), "ready": sum(1 for x in items if x["ready"]), "items": items}
+
+
 async def evaluate_metric(
     session,
     user: CurrentUser,
