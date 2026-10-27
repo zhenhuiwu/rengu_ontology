@@ -17,7 +17,7 @@ from app.db.session import SessionDep
 from app.modules.action.models import TypeStatus
 from app.modules.event.delivery import object_order_lock
 from app.modules.event.ingress_schema import IngressIn, authenticate, bad, read_envelope
-from app.modules.event.models import Event, EventDedup, EventOutcome, EventType
+from app.modules.event.models import Event, EventDedup, EventOutcome, EventSource, EventType
 from app.modules.event.sections import event_def
 from app.modules.versioning.repo import ReleaseRepo
 
@@ -121,6 +121,9 @@ async def receive(session, body: IngressIn, request=None) -> dict:
     )
     if event_type is None or body.event_type not in (event_type.code, event_type.api):
         raise bad("事件类型已变化，请重新提交", "EVENT_TYPE_CHANGED", 409)
+    # HTTP 入站（静态令牌 / API 密钥）只收外部来源；平台内部发射（request=None）照旧。
+    if request is not None and event_type.source != EventSource.external:
+        raise bad("只接受来源为外部的事件类型", "EVENT_SOURCE_NOT_EXTERNAL", 403)
     check_allowlist(request, event_type)
     created_by = getattr(getattr(request, "state", None), "event_caller", None) or "internal:event"
     if event_type.status != TypeStatus.published or event_type.retired_release_id is not None:

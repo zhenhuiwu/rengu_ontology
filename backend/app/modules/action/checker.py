@@ -447,9 +447,10 @@ class DatabaseSubmissionChecker:
             try:
                 if p.get("_ast") is not None:
                     raise Unavailable("参数AST格式尚未定义，不能按通过处理")
-                choices = literal_enum_choices(rule) if p["type"] == "枚举" else None
+                choices = literal_enum_choices(rule) if p["type"] in ("枚举", "枚举列表") else None
                 if choices is not None:
-                    if params[p["api"]] not in choices:
+                    value = params[p["api"]]
+                    if any(v not in choices for v in (value if isinstance(value, list) else [value])):
                         failed.append({"name": name, "fail": "参数值不在已声明枚举集合：" + " / ".join(choices)})
                     continue
                 lifecycle = re.fullmatch(r"必须是生命周期 v([1-9]\d{0,5}) 中的合法迁移", rule) if isinstance(rule, str) else None

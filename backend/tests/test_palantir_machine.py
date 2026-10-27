@@ -6,8 +6,9 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.modules.action import policy as action_policy
+from app.modules.action.models import ActionParam
 from app.modules.admin.models import SysRole
-from app.modules.event.models import Event
+from app.modules.event.models import Event, EventSource
 from tests.test_event_ingress import URL, body, ingress  # noqa: F401
 from tests.test_palantir_policy import set_policy
 from tests.test_use_ops_runtime import API, headers, runtime  # noqa: F401
@@ -112,3 +113,29 @@ async def test_event_ingress_service_key_scope_allowlist_and_caller(ingress, cli
     assert static.status_code == 200, static.text  # 过渡期静态令牌仍可用
     legacy = await session.scalar(select(Event).where(Event.code == "producer-4"))
     assert legacy.created_by == "internal:event"
+
+
+# ---------- 第 4 期：入站只收外部来源、枚举列表参数校验 ----------
+async def test_event_ingress_accepts_only_external_source(ingress, client):  # noqa: F811
+    session, et = ingress
+    _, auth = await service_key(client, ["events:ingest"], eventTypes=[et.code])
+    static_auth = {"Authorization": "Bearer isolated-test-token"}
+    for n, source in enumerate((EventSource.sync, EventSource.action, EventSource.rule)):
+        et.source = source
+        await session.flush()
+        for m, who in enumerate((auth, static_auth)):
+            res = await client.post(URL, json=body(eventId=f"src-{n}-{m}"), headers=who)
+            assert res.status_code == 403 and res.json()["code"] == "EVENT_SOURCE_NOT_EXTERNAL", res.text
+    assert await session.scalar(select(Event).where(Event.code.like("src-%"))) is None
+
+
+async def test_enum_list_param_items_checked_on_submit(runtime, client):  # noqa: F811
+    session, action, _ = runtime
+    action.params.append(ActionParam(seq=1, name="标签", api="tags", type="枚举列表", rule_text="red / blue"))
+    await session.flush()
+    auth = await key(client, ["actions:execute", "objects:read"])
+    bad = await execute(client, auth, params=json.dumps({"enabled": True, "tags": ["red", "green"]}))
+    assert bad.status_code == 422 and bad.json()["code"] == "SUBMISSION_CRITERIA_FAILED", bad.text
+    assert any("枚举集合" in f["fail"] for f in bad.json()["details"]["failed"]), bad.text
+    ok = await execute(client, auth, params=json.dumps({"enabled": True, "tags": ["red", "blue"]}))
+    assert ok.status_code == 201, ok.text
