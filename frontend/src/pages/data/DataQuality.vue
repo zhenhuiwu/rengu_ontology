@@ -31,6 +31,7 @@ const resultF = computed({ get: () => q('result') || '全部', set: (v: string) 
 const pq = usePagedQuery({ defaultSize: 10, filters: [typeF, kindF, resultF] });
 const state = reactive<{ key: string; items: QualityCheck[]; objects: QualityObject[]; total: number; cutoff: string; summary: QualitySummary; error: string; loading: boolean }>({ key: '', items: [], objects: [], total: 0, cutoff: '', summary: { total: 0, passed: 0, failed: 0, unrun: 0, lastRun: '' }, error: '', loading: false });
 const metaContext = ref('');
+const automaticScheduling = ref(false), schedulingTimezone = ref('');
 const checks = computed<QualityCheck[]>(() => real ? state.key === listKey() ? state.items : [] : QUALITY_CHECKS);
 const objects = computed(() => real ? metaContext.value === contextKey() ? state.objects : [] : Q_OBJECT_TYPES.map((t) => ({ ...t, kinds: KINDS })));
 const dataCutoff = computed(() => real ? state.key === listKey() ? state.cutoff || '—' : '—' : DATA_CUTOFF);
@@ -55,6 +56,7 @@ async function loadList() {
     const [meta, result] = await Promise.all([fetchQualityMeta(), fetchQualityChecks({ typeKey: typeF.value, kind: kindF.value, result: resultF.value, page: pq.page.value, size: pq.size.value })]);
     if (seq !== listSeq || key !== listKey() || context !== contextKey()) return;
     metaContext.value = context;
+    automaticScheduling.value = meta.automaticScheduling; schedulingTimezone.value = meta.schedulingTimezone;
     Object.assign(state, { objects: meta.objects, items: result.items, total: result.total, cutoff: result.dataCutoff, summary: result.summary });
   } catch (e) { if (seq === listSeq && key === listKey()) state.error = errorText(e); }
   finally { if (seq === listSeq && key === listKey()) state.loading = false; }
@@ -64,10 +66,10 @@ const cols = [
   { title: '检查', dataIndex: 'kind', key: 'kind', width: 90 }, { title: '规则', dataIndex: 'rule', key: 'rule', ellipsis: true },
   { title: '阈值', dataIndex: 'threshold', key: 'threshold', width: 110 }, { title: '最近结果', key: 'actual', width: 260, ellipsis: true },
   { title: '结果', key: 'result', width: 80 },
-  ...(real ? [{ title: '定义状态', key: 'definition', width: 150 }, { title: '操作', key: 'edit', width: 100 }] : []), { title: '最近运行', key: 'lastRun', width: 140 },
+  ...(real ? [{ title: '调度', key: 'schedule', width: 170 }, { title: '定义状态', key: 'definition', width: 150 }, { title: '操作', key: 'edit', width: 100 }] : []), { title: '最近运行', key: 'lastRun', width: 140 },
 ];
 const selected = computed(() => checks.value.find((c) => c.id === q('check')) ?? rows.value[0]);
-const HSIZE = 15; const hpage = ref(1);
+const HSIZE = 10; const hpage = ref(1);
 const history = reactive<{ key: string; items: QualityRun[]; total: number; error: string }>({ key: '', items: [], total: 0, error: '' });
 const historyKey = () => JSON.stringify([contextKey(), selected.value?.id, hpage.value]);
 const hist = computed(() => real ? history.key === historyKey() ? history : { items: [], total: 0 } : paginate(selected.value?.history ?? [], { page: hpage.value, size: HSIZE }));
@@ -178,7 +180,7 @@ async function saveDefinition(opts: { join?: string; title?: string; desc?: stri
       <span v-if="real" class="t-12 c-3">我的质量检查</span>
       <span class="t-12 c-3">检测数据快照 <span class="num">{{ dataCutoff }}</span></span>
       <a-tooltip :title="reason"><a-button :disabled="readonly || busy" @click="openNew">新建检查</a-button></a-tooltip>
-      <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || busy" @click="runNow(true)">全部运行</a-button></a-tooltip>
+      <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || busy || (real && !totalCount)" @click="runNow(true)">全部运行</a-button></a-tooltip>
     </a-space>
   </Teleport>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeName" :close-on-ok="false" :busy="busy" @ok="saveDefinition" />
@@ -188,7 +190,7 @@ async function saveDefinition(opts: { join?: string; title?: string; desc?: stri
       <a-form-item label="对象" required><a-select v-model:value="nc.obj" :options="objects.map((t) => ({ value: t.key, label: `${t.name}${t.kinds.length ? '' : '（不可用）'}`, disabled: !t.kinds.length }))" /></a-form-item>
       <a-form-item label="规则类型"><a-radio-group v-model:value="nc.kind" :options="KINDS.map((v) => ({ value: v, label: v, disabled: !availableKinds.includes(v) }))" /></a-form-item>
       <a-form-item label="阈值" required extra="格式：≤ 2 小时、≤ 1%、重复 0 条、找不到 0 条"><a-input v-model:value="nc.threshold" /></a-form-item>
-      <a-form-item label="调度"><a-select :disabled="real" v-model:value="nc.schedule" :options="['手动', '每 2 小时', '每天 23:30', '每周一 06:00'].map((v) => ({ value: v, label: v }))" /></a-form-item>
+      <a-form-item label="调度" :extra="real ? `整版发布后启用（${schedulingTimezone || '业务时区'}）；错过的时段只合并检查当前数据，不补造历史结果。` : undefined"><a-select :disabled="busy || (real && !automaticScheduling)" v-model:value="nc.schedule" :options="['手动', '每 2 小时', '每天 23:30', '每周一 06:00'].map((v) => ({ value: v, label: v }))" /></a-form-item>
     </a-form>
     <template #footer>
       <div style="display: flex; justify-content: flex-end; gap: 8px">
@@ -220,7 +222,12 @@ async function saveDefinition(opts: { join?: string; title?: string; desc?: stri
         <div class="dq-table" :class="{ 'paged-scroll': pq.overflow.value }">
           <a-table size="small" row-key="id" :loading="state.loading" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">
             <template #bodyCell="{ column, record }">
-              <template v-if="real && column.key === 'definition'">
+              <template v-if="real && column.key === 'schedule'">
+                <div>{{ record.schedule }} · {{ record.scheduleStatus }}</div>
+                <div v-if="record.nextRun" class="t-12 c-3 num">下次 {{ record.nextRun }}</div>
+                <a-tooltip v-if="record.scheduleError" :title="record.scheduleError"><span class="t-12 tl-attention">{{ record.scheduleError }}</span></a-tooltip>
+              </template>
+              <template v-else-if="real && column.key === 'definition'">
                 <span v-if="record.retired" class="c-3">已退休</span>
                 <router-link v-else-if="record.pending" :to="`/build/ontology/releases?cr=${record.pending.crId}`" @click.stop>{{ record.pending.retire ? '删除草稿' : record.pending.status }} · {{ record.pending.crId }}</router-link>
                 <span v-else>已发布</span>
@@ -239,7 +246,7 @@ async function saveDefinition(opts: { join?: string; title?: string; desc?: stri
             </template>
           </a-table>
         </div>
-        <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="full" :total="paged.total" :default-size="pq.defaultSize" unit="项" class="dq-pager" />
+        <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="full" :total="paged.total" :default-size="pq.defaultSize" :empty="false" unit="项" class="dq-pager" />
       </div>
 
       <div v-if="selected" class="panel dq-right">
@@ -262,12 +269,13 @@ async function saveDefinition(opts: { join?: string; title?: string; desc?: stri
         <div class="dq-hist">
           <div v-for="r in hist.items" :key="r.id ?? r.time" class="dq-hrow">
             <span class="num c-2 dq-htime">{{ r.time }}</span>
+            <a-tooltip v-if="r.trigger === 'scheduled'" :title="`计划时点：${r.scheduledAt ?? '—'}`"><span class="t-12 c-3">定时</span></a-tooltip>
             <span class="dq-res dq-hres" :class="tl(r.result)"><span class="dq-dot" />{{ r.result }}</span>
             <span class="dq-ellip" :class="r.result === '失败' ? 'tl-failed' : 'c-2'">{{ r.actual }}</span>
             <span class="num c-3 dq-hms">{{ (r.ms / 1000).toFixed(1) }} 秒</span>
           </div>
         </div>
-        <AppPagination v-model:page="hpage" variant="simple" :total="hist.total" :size="HSIZE" unit="次运行" class="dq-pager" />
+        <AppPagination v-model:page="hpage" variant="simple" :total="hist.total" :size="HSIZE" :empty="false" unit="次运行" class="dq-pager" />
       </div>
     </div>
   </div>

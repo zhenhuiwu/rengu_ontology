@@ -12,6 +12,7 @@ export interface TenantSettingsData {
   orgOptions: { value: string; label: string }[];
   lockVersion: number;
   updatedAt: string;
+  canManage: boolean;
 }
 export type TenantSettingsSave = Pick<TenantSettingsData, 'name' | 'shortName' | 'lockVersion'> & { defaultOrg: string };
 
@@ -24,3 +25,13 @@ function refreshTenants(data: TenantSettingsData) {
 }
 export const loadTenantSettings = async () => refreshTenants(await settingsApi.get<TenantSettingsData>('/settings/tenant'));
 export const saveTenantSettings = async (body: TenantSettingsSave) => refreshTenants(await settingsApi.put<TenantSettingsData>('/settings/tenant', body));
+
+export interface ModelSettingsData {
+  usage: 'qa' | 'ontology'; label: string; model: string; baseUrl: string; timeoutSec: number;
+  enabled: boolean; hasKey: boolean; source: 'environment' | 'database';
+  keySource: 'environment' | 'database' | 'none'; lockVersion: number; updatedAt: string | null;
+}
+export interface ModelsSettingsData { items: ModelSettingsData[]; canManage: boolean; trustedOrigins: string[] }
+export type ModelSettingsSave = Pick<ModelSettingsData, 'model' | 'baseUrl' | 'timeoutSec' | 'enabled' | 'lockVersion'> & { apiKey?: string };
+export const loadModelSettings = () => settingsApi.get<ModelsSettingsData>('/settings/models', { ontologyScope: false });
+export const saveModelSettings = (usage: ModelSettingsData['usage'], body: ModelSettingsSave) => settingsApi.put<ModelSettingsData>(`/settings/models/${usage}`, body, { ontologyScope: false });

@@ -91,11 +91,11 @@ export async function queryUsers(q: UserQuery): Promise<{ items: UserRow[]; tota
 
 export async function fetchDepts(): Promise<string[]> {
   if (!api.isReal()) return ADMIN_DEPTS;
-  return await api.get<string[]>('/depts');
+  return await api.get<string[]>('/depts', { ontologyScope: false, readonlyParams: false });
 }
 
-/** 真模式用户编辑角色候选来自 sys_role；空列表和失败都不能回退固定角色。 */
-export const fetchUserRoles = async (): Promise<{ name: string }[]> => api.get('/roles');
+/** User-specific metadata follows user management permissions, independent of the role editor. */
+export const fetchUserOptions = () => api.get<{ depts: string[]; roles: { name: string }[]; canAssignRole: boolean }>('/users/options', { ontologyScope: false, readonlyParams: false });
 
 export const createUser = async (f: UserForm) => toRow(await api.post<WireUser>('/users', f));
 export const updateUser = async (id: string, f: Omit<UserForm, 'account'> & { lockVersion?: number }) =>

@@ -12,8 +12,11 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import InfoTip from '@/components/InfoTip.vue';
+import ModelSettings from './ModelSettings.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
+import { useAppStore } from '@/stores/app';
+import { usePreviewStore } from '@/stores/preview';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { ADMIN_DEPTS } from '@/mock';
 import { isApiError } from '@/api/http';
@@ -27,7 +30,10 @@ const route = useRoute();
 const router = useRouter();
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
-const { readonly, reason } = useReadonly();
+const realSettings = settingsApi.isReal();
+const app = useAppStore(), preview = usePreviewStore(), contextReadonly = useReadonly();
+const readonly = computed(() => realSettings ? app.viewMode === 'history' || preview.active : contextReadonly.readonly.value);
+const reason = computed(() => realSettings ? preview.active ? '身份预览期间只读' : app.viewMode === 'history' ? '历史版本只读' : '' : contextReadonly.reason.value);
 const confirm = useConfirmStore();
 const nowStr = '2026-10-25 17:20';
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -46,7 +52,6 @@ const groupTitle = computed(() => GROUPS.find((g) => g.key === group.value)!.tit
 const saved = ref<SystemSettings>(clone(SYSTEM_SETTINGS));
 const draft = reactive<SystemSettings>(clone(SYSTEM_SETTINGS));
 const updated = reactive({ ...SETTINGS_UPDATED });
-const realSettings = settingsApi.isReal();
 const tenantBase = ref<TenantSettingsData | null>(null);
 const tenantState = reactive({ loading: realSettings, ready: false, saving: false, error: '' });
 const tenantKeys = ['name', 'shortName', 'defaultOrg'] as const;
@@ -141,8 +146,9 @@ function connName(id: string, list: LlmConnection[] = draft.llm.connections) { r
 const egressLabel = (v: string) => EGRESS_OPTIONS.find((o) => o.value === v)?.label ?? v;
 const routeText = (ids: ChannelId[]) => CHANNEL_ORDER.filter((id) => ids.includes(id)).map(chName).join('、') || '不通知';
 const dirty = computed(() => changes.value.length > 0);
+const modelDirty = ref(false);
 const dirtyOf = (g: GroupKey) => changes.value.filter((c) => c.group === g).length;
-const guard = useUnsavedGuard(dirty);
+const guard = useUnsavedGuard(() => dirty.value || modelDirty.value);
 
 // 校验
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -209,7 +215,7 @@ async function save() {
   message.success(`已保存 ${list.length} 处修改`);
 }
 async function saveTenant() {
-  if (readonly.value || !tenantState.ready || tenantState.loading || tenantState.saving || !dirty.value) return;
+  if (readonly.value || !tenantBase.value?.canManage || !tenantState.ready || tenantState.loading || tenantState.saving || !dirty.value) return;
   if (errors.value.length) { message.error(errors.value.join('；')); return; }
   const body = { name: draft.tenant.name, shortName: draft.tenant.shortName, defaultOrg: draft.tenant.defaultOrg, lockVersion: tenantBase.value!.lockVersion };
   const ok = await confirm.ask({
@@ -466,7 +472,7 @@ function applyLlm() {
 }
 
 const TZ = ['Asia/Shanghai（UTC+8）', 'Asia/Hong_Kong（UTC+8）', 'Asia/Singapore（UTC+8）', 'Asia/Tokyo（UTC+9）', 'UTC'];
-const fieldDis = computed(() => readonly.value || (realSettings && (!tenantState.ready || tenantState.loading || tenantState.saving)));
+const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.value?.canManage || !tenantState.ready || tenantState.loading || tenantState.saving)));
 </script>
 
 <template>
@@ -479,7 +485,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantState
           <span v-if="dirtyOf(g.key)" class="t-12 c-2 st-mod">已修改 {{ dirtyOf(g.key) }}</span>
         </div>
       </div>
-      <div class="st-navfoot t-12 c-3">{{ realSettings ? '当前仅接入租户名称、简称与顶栏兜底组织。' : '修改可以跨分组累计，统一在底部保存。' }}<span v-if="reason">（{{ reason }}）</span></div>
+      <div v-if="!realSettings || reason" class="st-navfoot t-12 c-3"><template v-if="!realSettings">修改可以跨分组累计，统一在底部保存。</template><span v-if="reason">（{{ reason }}）</span></div>
     </div>
 
     <div class="panel st-main">
@@ -488,8 +494,9 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantState
         <span class="t-12 c-3">{{ realSettings && group !== 'tenant' ? '—' : updated[group] ? `最近修改：${updated[group]}` : '尚未配置' }}</span>
       </div>
 
-      <div v-if="realSettings && group !== 'tenant'" class="st-body">
-        <a-empty description="暂无配置" />
+      <ModelSettings v-if="realSettings" v-show="group === 'llm'" :readonly="readonly" :reason="reason" @dirty="modelDirty = $event" />
+      <div v-if="realSettings && (group === 'notify' || group === 'security')" class="st-body">
+        <a-empty :description="group === 'notify' ? '通知渠道暂不可用' : '登录安全策略暂不可用'" />
       </div>
       <!-- 租户信息 -->
       <div v-else-if="group === 'tenant'" class="st-body">
@@ -497,7 +504,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantState
         <a-alert v-if="realSettings && tenantState.error" type="error" show-icon :message="tenantState.error">
           <template #action><a-button size="small" :disabled="tenantState.loading || tenantState.saving" @click="reloadTenant">重新加载</a-button></template>
         </a-alert>
-        <a-form layout="horizontal" :label-col="{ style: { width: '128px' } }" :disabled="fieldDis" class="st-grid">
+        <a-form v-if="!realSettings || tenantState.ready" layout="horizontal" :label-col="{ style: { width: '128px' } }" :disabled="fieldDis" class="st-grid">
           <a-form-item label="租户全称" required :validate-status="draft.tenant.name.trim() ? '' : 'error'" :help="draft.tenant.name.trim() ? '' : '不能为空'"><a-input v-model:value="draft.tenant.name" :maxlength="40" /></a-form-item>
           <a-form-item label="简称" required extra="用于顶栏租户名称显示" :validate-status="draft.tenant.shortName.trim() ? '' : 'error'"><a-input v-model:value="draft.tenant.shortName" :maxlength="12" show-count /></a-form-item>
           <a-form-item label="租户 ID" extra="创建后不能修改"><span class="num c-2">{{ draft.tenant.tenantId }}</span></a-form-item>
@@ -514,7 +521,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantState
       </div>
 
       <!-- 大模型连接 -->
-      <div v-else-if="group === 'llm'" class="st-body">
+      <div v-else-if="group === 'llm' && !realSettings" class="st-body">
         <div class="st-rowhead">
           <span class="t-14 fw-600 c-1">模型连接<InfoTip text="支持 OpenAI 兼容接口；密钥加密保存，只在填写当次可见。停用的连接不会被调用。" /></span>
           <a-tooltip :title="reason"><a-button type="primary" size="small" class="st-add" :disabled="readonly" @click="setQuery({ llm: 'new' })">新建连接</a-button></a-tooltip>
@@ -621,7 +628,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantState
       </div>
 
       <!-- 安全策略 -->
-      <div v-else class="st-body">
+      <div v-else-if="group === 'security' && !realSettings" class="st-body">
         <a-form layout="horizontal" :label-col="{ style: { width: '128px' } }" :disabled="fieldDis" class="st-sec">
           <div class="st-sect">
             <div class="t-14 fw-600 c-1 st-h">密码</div>

@@ -40,7 +40,9 @@ const baseline = shallowRef<LinkType[]>(isStaticReal() ? [] : LINKS);
 const links = reactive<LinkType[]>(baseline.value.map((l) => ({ ...l })));
 const firstId = ref('');
 const selectedId = computed(() => typeof route.query.link === 'string' ? route.query.link : firstId.value);
-const catalog = shallowRef<{ objects: typeof LINK_OBJECTS; links: LinkType[]; paths: typeof PATH_GROUPS }>({ objects: [], links: [], paths: [] });
+interface LinkProperty { api: string; name: string; type: string }
+const catalog = shallowRef<{ objects: typeof LINK_OBJECTS; properties: Record<string, LinkProperty[]>; links: LinkType[]; paths: typeof PATH_GROUPS }>({ objects: [], properties: {}, links: [], paths: [] });
+const catalogLoading = ref(false);
 const objectRows = computed(() => isStaticReal() ? catalog.value.objects : LINK_OBJECTS);
 const pathRows = computed(() => isStaticReal() ? catalog.value.paths : PATH_GROUPS);
 const objName = (id: string) => isStaticReal() ? objectRows.value.find((o) => o.id === id)?.name ?? id : mockObjName(id);
@@ -67,7 +69,7 @@ const ST_OPTIONS = [{ value: '', label: '全部状态' }, { value: '已发布', 
 const filtered = computed(() => visible.value.filter((l) =>
   (!src.value || l.from === src.value) && (!st.value || l.status === st.value)
   && (!kw.value || l.name.includes(kw.value) || apiOf(l).includes(kw.value) || objName(l.from).includes(kw.value) || objName(l.to).includes(kw.value))));
-const LPAGE = 18;
+const LPAGE = isStaticReal() ? 10 : 18;
 const lpage = ref(1);
 watch([kw, src, st], () => { lpage.value = 1; });
 const linkPage = useStaticPage<LinkType>(() => '/link-types', () => ({ q: kw.value, src: src.value, st: st.value }), lpage, LPAGE);
@@ -144,34 +146,37 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
 const rejectedCR = computed(() => (cur.value?.status === '已驳回' ? (isStaticReal() ? workflow.rows.value : CHANGE_REQUESTS).find((c) => c.id === cur.value?.cr) : undefined));
 
 // —— 定义：草稿里可编辑 ——
-interface Form { name: string; api: string; to: string; card: Cardinality; fromProp: string; toProp: string; via: string; reverse: string; nullable: boolean; desc: string }
+interface Form { name: string; api: string; from: string; to: string; card: Cardinality; fromProp: string; toProp: string; via: string; reverse: string; nullable: boolean; desc: string }
 const editing = ref(false);
-const form = reactive<Form>({ name: '', api: '', to: '', card: 'N : 1', fromProp: '', toProp: '', via: '', reverse: '', nullable: false, desc: '' });
+const form = reactive<Form>({ name: '', api: '', from: '', to: '', card: 'N : 1', fromProp: '', toProp: '', via: '', reverse: '', nullable: false, desc: '' });
 const snap = ref('');
 function beginEdit() {
   const l = cur.value;
   if (!l) return;
-  Object.assign(form, { name: l.name, api: apiOf(l), to: l.to, card: l.card, fromProp: l.fromProp, toProp: l.toProp, via: l.via ?? '', reverse: l.reverse, nullable: l.nullable, desc: l.desc });
+  Object.assign(form, { name: l.name, api: apiOf(l), from: l.from, to: l.to, card: l.card, fromProp: l.fromProp, toProp: l.toProp, via: l.via ?? '', reverse: l.reverse, nullable: l.nullable, desc: l.desc });
   snap.value = JSON.stringify(form);
   editing.value = true;
 }
 const dirty = computed(() => editing.value && JSON.stringify(form) !== snap.value);
 const guard = useUnsavedGuard(dirty);
 /** 定义表单字段 → 改动列表「字段」列 */
-const FIELD_LABEL: Record<keyof Form, string> = { name: '名称', api: 'API 名', to: '目标对象', card: '基数', fromProp: '本端属性', toProp: '对端属性', via: '中间表', reverse: '反向名称', nullable: '可为空', desc: '说明' };
+const FIELD_LABEL: Record<keyof Form, string> = { name: '名称', api: 'API 名', from: '源对象', to: '目标对象', card: '基数', fromProp: '本端属性', toProp: '对端属性', via: '中间表', reverse: '反向名称', nullable: '可为空', desc: '说明' };
+const saving = ref(false);
 async function save() {
   const l = cur.value;
-  if (!l) return;
+  if (!l || !canEdit.value || saving.value || formError.value) return;
   const key = form.card === 'N : M' ? `经 ${form.via || '（未选择）'} 中间表` : form.to ? `${form.fromProp} = ${form.to}.${form.toProp}` : '';
   // real：def 段，一个字段一行（同字段再次保存保留最早的 before，改回原值的行去掉）
   const was = JSON.parse(snap.value) as Form;
   const changes = (Object.keys(FIELD_LABEL) as (keyof Form)[])
-    .filter((k) => (k !== 'api' || l.status === '草稿') && JSON.stringify(form[k]) !== JSON.stringify(was[k]))
+    .filter((k) => l.status === '草稿' || (k !== 'api' && JSON.stringify(form[k]) !== JSON.stringify(was[k])))
     .map((k) => ({ key: k, before: was[k], after: form[k], type: '关系', field: FIELD_LABEL[k] }));
-  // 新建关系（草稿）带上源对象一行，发布写回建 link_type 要用（后端 link/def 钩子）
-  if (l.status === '草稿' && changes.length && l.from) changes.unshift({ key: 'from' as keyof Form, before: '', after: l.from, type: '关系', field: '源对象' });
-  if (!(await cr.save('def', changes))) return;
-  if (!isStaticReal()) Object.assign(l, { name: form.name, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
+  const context = staticContextKey();
+  saving.value = true;
+  let saved = false;
+  try { saved = await cr.save('def', changes); } finally { saving.value = false; }
+  if (!saved || context !== staticContextKey() || l.id !== cur.value?.id) return;
+  if (!isStaticReal()) Object.assign(l, { name: form.name, from: form.from, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
   if (!isStaticReal() && l.status === '草稿') l.api = form.api;
   editing.value = false;
   message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
@@ -179,7 +184,29 @@ async function save() {
 const cancelEdit = () => guard(() => { editing.value = false; });
 const CARDS: Cardinality[] = ['N : 1', '1 : N', '1 : 1', 'N : M'];
 const CARD_OPTIONS = CARDS.map((k) => ({ value: k, label: `${k}（${CARD_API[k]}）` }));
-const OBJ_OPTIONS = computed(() => objectRows.value.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）` })));
+const OBJ_OPTIONS = computed(() => objectRows.value.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）${o.draft ? ' · 同单草稿' : ''}` })));
+const VIA_OPTIONS = computed(() => {
+  const options = [...OBJ_OPTIONS.value];
+  const previous = cur.value?.via;
+  if (previous && !options.some(option => option.value === previous)) options.push({ value: previous, label: `${previous} · 原有中间表` });
+  return options;
+});
+const propertyOptions = (objectId: string) => (catalog.value.properties[objectId] ?? []).map(property => ({ value: property.api, label: `${property.name}（${property.api} · ${property.type}）` }));
+function validateRelation(value: Form, isNew = false) {
+  if (!isStaticReal()) return '';
+  if (catalogLoading.value) return '对象与属性目录正在加载';
+  if (catalogError.value) return '对象与属性目录加载失败，请重试';
+  if (!value.name.trim()) return '请填写关系名称';
+  if (isNew && !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value.api)) return 'API名需字母开头，仅含字母、数字和下划线，最多64位';
+  if (!objectRows.value.some(object => object.id === value.from) || !objectRows.value.some(object => object.id === value.to)) return '请选择关系两端的对象类型';
+  if (value.card === 'N : M') return value.via && VIA_OPTIONS.value.some(option => option.value === value.via) ? '' : '请选择中间对象';
+  const source = catalog.value.properties[value.from]?.find(property => property.api === value.fromProp);
+  const target = catalog.value.properties[value.to]?.find(property => property.api === value.toProp);
+  if (!source || !target) return '请选择关系两端的真实属性';
+  const type = (value: string) => value === 'int' ? 'integer' : value;
+  return type(source.type) === type(target.type) ? '' : '关系两端属性类型须一致';
+}
+const formError = computed(() => validateRelation(form, cur.value?.status === '草稿'));
 
 const statusColor = (s: LinkStatus) => (s === '草稿' ? 'default' : s === '已驳回' ? 'error' : 'default');
 const statusClass = (s: LinkStatus) => (s === '草稿' ? 'c-3' : s === '已驳回' ? 'c-error' : 'c-3');
@@ -194,7 +221,8 @@ const CHECKS = computed(() => {
   const l = cur.value;
   if (!l) return;
   const rows: { code: string; name: string; result: '通过' | '警告' | '阻断'; note: string }[] = [];
-  rows.push(!l.to
+  const error = isStaticReal() ? validateRelation({ ...l, api: apiOf(l), via: l.via ?? '' }, l.status === '草稿') : '';
+  rows.push(error ? { code: 'V3', name: '两端对象', result: catalogLoading.value ? '警告' : '阻断', note: error } : !l.to
     ? { code: 'V3', name: '两端对象', result: '阻断', note: '还没有选择目标对象' }
     : l.card === 'N : M' && !l.via
       ? { code: 'V3', name: '两端对象', result: '阻断', note: '多对多需要指定中间对象' }
@@ -352,12 +380,20 @@ watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
 
 let definitionSeq = 0, catalogSeq = 0;
 const definitionError = ref(''), catalogError = ref('');
-watch(staticContextKey, async () => {
-  const n = ++catalogSeq, key = staticContextKey(); catalogError.value = '';
+const catalogKey = () => JSON.stringify([staticContextKey(), isDraft.value ? cr.head.value?.id : '', isDraft.value ? cr.head.value?.lockVersion : 0, selectedId.value]);
+async function loadCatalog() {
+  const n = ++catalogSeq, key = catalogKey(); catalogError.value = '';
   if (!isStaticReal()) return;
-  try { const data = await fetchStaticDetail<typeof catalog.value>('/link-types/catalog'); if (n === catalogSeq && key === staticContextKey()) catalog.value = data; }
-  catch (e) { if (n === catalogSeq && key === staticContextKey()) catalogError.value = e instanceof Error ? e.message : String(e); }
-}, { immediate: true });
+  catalogLoading.value = true;
+  catalog.value = { objects: [], properties: {}, links: [], paths: [] };
+  const crId = isDraft.value && cr.head.value?.targets.some(target => target.kind === 'link' && target.id === selectedId.value) ? cr.head.value.id : undefined;
+  try {
+    const data = await fetchStaticDetail<typeof catalog.value>('/link-types/catalog', crId ? { crId, linkId: selectedId.value } : {});
+    if (n === catalogSeq && key === catalogKey()) catalog.value = data;
+  } catch (e) { if (n === catalogSeq && key === catalogKey()) catalogError.value = e instanceof Error ? e.message : String(e); }
+  finally { if (n === catalogSeq && key === catalogKey()) catalogLoading.value = false; }
+}
+watch(catalogKey, () => void loadCatalog(), { immediate: true });
 watch(() => JSON.stringify([selectedId.value, staticContextKey()]), async () => {
   const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value; definitionError.value = '';
   if (!isStaticReal() || !id || cr.head.value?.targets.some((t) => t.kind === 'link' && t.id === id && t.isNew)) return;
@@ -385,7 +421,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
           <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="lt-sel" />
         </div>
       </div>
-      <a-alert v-if="linkPage.error.value || definitionError || catalogError" type="error" :message="linkPage.error.value || definitionError || catalogError" show-icon />
+      <a-alert v-if="linkPage.error.value || definitionError || catalogError" type="error" :message="linkPage.error.value || definitionError || catalogError" show-icon><template v-if="catalogError" #action><a-button size="small" @click="loadCatalog">重试目录</a-button></template></a-alert>
       <div v-if="linkPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
       <ul class="lt-items" :aria-busy="linkPage.loading.value">
         <li v-for="l in list" :key="l.id" :class="{ active: l.id === cur?.id }" :title="`${l.name} · ${objName(l.from)} → ${l.to ? objName(l.to) : '未选择'} · ${l.card}`" @click="pick(l.id)">
@@ -490,7 +526,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
             <span>关系定义</span>
             <a-space v-if="editing">
               <a-button size="small" @click="cancelEdit">取消</a-button>
-              <a-button size="small" :disabled="!dirty" @click="save">保存到草稿</a-button>
+              <a-tooltip :title="formError || undefined"><a-button size="small" :disabled="!dirty || !!formError || saving" :loading="saving" @click="save">保存到草稿</a-button></a-tooltip>
             </a-space>
             <a-tooltip v-else :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">编辑定义</a-button></a-tooltip>
           </div>
@@ -514,20 +550,20 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
           </a-descriptions>
           <a-form v-else layout="horizontal" :label-col="{ style: { width: '96px' } }" class="lt-form">
             <div class="lt-form-grid">
-              <a-form-item label="显示名"><a-input v-model:value="form.name" /></a-form-item>
+              <a-form-item label="显示名"><a-input v-model:value="form.name" :maxlength="64" /></a-form-item>
               <a-form-item label="API 名">
-                <a-tooltip :title="cur.status === '草稿' ? '' : '已发布的 API 名不可改名（V7）'"><a-input v-model:value="form.api" :disabled="cur.status !== '草稿'" placeholder="例如 order_belongs_to_store" /></a-tooltip>
+                <a-tooltip :title="cur.status === '草稿' ? '' : '已发布的 API 名不可改名（V7）'"><a-input v-model:value="form.api" :maxlength="64" :disabled="cur.status !== '草稿'" placeholder="例如 order_belongs_to_store" /></a-tooltip>
               </a-form-item>
-              <a-form-item label="源对象"><a-input :value="objName(cur.from)" disabled /></a-form-item>
-              <a-form-item label="目标对象"><a-select v-model:value="form.to" :options="OBJ_OPTIONS" show-search option-filter-prop="label" placeholder="选择对象类型" /></a-form-item>
+              <a-form-item label="源对象"><a-select v-if="isStaticReal()" v-model:value="form.from" :options="OBJ_OPTIONS" :loading="catalogLoading" :disabled="catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择对象类型" @change="form.fromProp = ''" /><a-input v-else :value="objName(cur.from)" disabled /></a-form-item>
+              <a-form-item label="目标对象"><a-select v-model:value="form.to" :options="OBJ_OPTIONS" :loading="catalogLoading" :disabled="isStaticReal() && (catalogLoading || !!catalogError || saving)" @change="form.toProp = ''" show-search option-filter-prop="label" placeholder="选择对象类型" /></a-form-item>
               <a-form-item label="基数"><a-select v-model:value="form.card" :options="CARD_OPTIONS" /></a-form-item>
               <a-form-item label="允许为空"><a-switch v-model:checked="form.nullable" size="small" /></a-form-item>
-              <a-form-item v-if="form.card === 'N : M'" label="中间对象"><a-input v-model:value="form.via" placeholder="中间表或中间对象" /></a-form-item>
+              <a-form-item v-if="form.card === 'N : M'" label="中间对象"><a-select v-if="isStaticReal()" v-model:value="form.via" :options="VIA_OPTIONS" show-search option-filter-prop="label" placeholder="选择当前本体的中间对象" :disabled="catalogLoading || !!catalogError || saving" /><a-input v-else v-model:value="form.via" placeholder="中间表或中间对象" /></a-form-item>
               <template v-else>
-                <a-form-item label="源端属性"><a-input v-model:value="form.fromProp" /></a-form-item>
-                <a-form-item label="目标端属性"><a-input v-model:value="form.toProp" /></a-form-item>
+                <a-form-item label="源端属性"><a-select v-if="isStaticReal()" v-model:value="form.fromProp" :options="propertyOptions(form.from)" :disabled="!form.from || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择源端属性" /><a-input v-else v-model:value="form.fromProp" /></a-form-item>
+                <a-form-item label="目标端属性"><a-select v-if="isStaticReal()" v-model:value="form.toProp" :options="propertyOptions(form.to)" :disabled="!form.to || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择目标端属性" /><a-input v-else v-model:value="form.toProp" /></a-form-item>
               </template>
-              <a-form-item label="反向名称"><a-input v-model:value="form.reverse" /></a-form-item>
+              <a-form-item label="反向名称"><a-input v-model:value="form.reverse" :maxlength="64" /></a-form-item>
             </div>
             <a-form-item label="说明"><a-textarea v-model:value="form.desc" :rows="2" placeholder="问数会用这段描述理解这条关系（V11）" /></a-form-item>
           </a-form>
