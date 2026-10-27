@@ -593,7 +593,12 @@ def test_static_routes_func_permissions():
     from app.modules.static.router import FUNC_OF, router
 
     want = {"object-types": "object-types", "link-types": "link-types", "metrics": "metrics"}
-    want |= {"dimensions": "dimensions", "knowledge": "glossary", "change-requests": "releases"}
+    want |= {
+        "dimensions": "dimensions",
+        "knowledge": "glossary",
+        "change-requests": "releases",
+        "exports": "metrics",
+    }
     want["ontology"] = "ontology-overview"
     for r in router.routes:
         if "GET" not in r.methods:
