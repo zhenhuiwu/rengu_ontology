@@ -48,8 +48,9 @@ def turn_events(turn: QaTurn, turn_payload: dict[str, Any]) -> list[tuple[str, A
             ev.append(("text", {"full": ans["text"]}))
         if ans.get("table"):
             ev.append(("table", ans["table"]))
-        if ans.get("alerts"):
-            ev.append(("citations", {"alerts": ans["alerts"]}))
+        cites = {k: ans[k] for k in ("alerts", "dynamicSummary", "metricQuery") if ans.get(k)}
+        if cites:  # 只读引用：相关告警 / 点名对象的动态摘要 / 指标层查询（不含 SQL）
+            ev.append(("citations", cites))
         if ans.get("action"):
             ev.append(("suggest", {"followUps": [], "actions": [ans["action"]]}))
     elif kind == "denied":

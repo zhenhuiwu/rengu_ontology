@@ -345,6 +345,18 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
   - 参数错 → `-32602`；业务错（AppError，如没配模型 / SQL 执行失败）→ `result.isError=true`；问数工具在 savepoint 里跑。
 - **动作意图离线核对**：`tests/test_qa_intent_eval.py` 用 palantir 20 题评测集（`tests/fixtures/palantir_action_intents.yaml`）核对 `parse_intent → parse_action → policy_view / action_snapshot`（8 道动作 call / confirm 题解析到期望动作 + 参数；无对应动作不成意图；suggest / callers 不含 AI → `canStage=false`；任何策略都只出建议卡）。不调真模型。
 
+### 2.5 qa-p3 新增（基线 master `343ba5f`）
+
+- **动作意图接决策评估**：问题是「某告警 / 某对象该怎么处理」或模型给出动作意图，且能定位到告警（点名编号优先，其次本人 / 最近的相关告警）或单个对象时，进程内调 `DecisionService.evaluate`（同 `POST /decisions:evaluate`），`caller = {kind: AI, sessionId, roundId}`（roundId = 本轮编号，[推断] 预测值；MCP 为 `MCP-<hex>`），动态侧写 `decision_log`。模型选的动作在建议里 → 动作卡用决策的排序结果：`answer.action.decision = {decisionId, alertId, objKind, objId, recommendations:[{rank, score, actionType, params, paramSources, unfilledParams, dryRun, policy:{mode, aiAllowed}, rationale[], handoff}]}`，`basis.caliber` 写「决策评估…」；卡片主建议 = 模型选的那条，模型补的参数只填决策没填的（如数量），补了就重新 dry-run；决策没填且模型也没给的参数可为空（`dryRun.failed` 里列出）。没建议 / 读失败 → 退回 2.4 的能力目录 + dry-run。
+- **W7a `POST /turns/{tid}/action:stage` 变化**：
+  - `params` 入参可以是对象、JSON 对象字符串或「k=v，k2=v2」文本；不传就用卡上的参数。一律转成 **JSON 对象字符串**交给动态 stage（动态 checker 只认结构化参数）；空 → 不带；格式不对 → 422 `VALIDATION_FAILED`。
+  - `source = {type:'问数', session, sessionTitle, confirmer, alert_id}`：卡上有 `decision.alertId` 就带上，提交条件按告警上下文评估。
+  - 幂等：带告警时动态的幂等键是 `act-<告警编号小写>`。该告警已有**同类型**动作记录（含种子 / 规则暂存的）→ **200 返回已有那条**，不新建；**不同类型** → 409「告警 X 已有动作记录 Y，请到动作中心处理」。
+  - 仍然只暂存，从不执行。
+- **指标层（MetricFlow）**：可试算的已发布指标（同 static `GET /exports/metricflow`）进 prompt，模型可只输出 `{"metric": {metrics, dimensions, where, time…}}`，SQL 由内置编译器生成，再过 sql_guard；编不出回喂一次退回 SQL。回答带 `answer.metricQuery`（指标 / 维度 / 过滤 / 时间，不含 SQL）→ SSE `citations.metricQuery`；`basis.caliber` = 「指标层（MetricFlow 导出 + 内置编译器生成 SQL）」。
+- **单对象动态摘要**：问题只点名一个对象实例时取 `ObjectDynamicSummary`（同 `GET /object-types/{id}/objects/{objId}/dynamic-summary`），进 prompt，`answer.dynamicSummary` → SSE `citations.dynamicSummary`。门槛同告警引用（对象读取权限；API 密钥要 `dynamic:read`）。
+- **我的页面定时刷新**：后台任务 `qa.page.sweep`（队列 `qa_pages`，每分钟），挂在动态 worker 上（动态 `worker.py` 调 `app.modules.qa.page_schedule.register(app)`）。到点页面按 P6 同样的方式、以页面所有者身份刷新，排下次；「刷新后」订阅只记审计事件 `qa.page.subscription.due`，推送未做。
+
 ## 3. 流式回答（SSE）
 
 ### 3.1 事件

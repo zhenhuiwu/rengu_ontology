@@ -338,7 +338,7 @@ async def test_stage_turn_action_never_auto_executes(qa, monkeypatch):
     assert r.json() == {"id": "AR-QA-1", "status": "待确认"}
     (body,) = seen
     assert body.type_id == "ACT01" and body.obj_id == "S1" and body.obj_label == "上海一店"
-    assert body.params == "amount=5"
+    assert json.loads(body.params) == {"amount": 5}  # 动作中心只认 JSON 对象参数
     assert body.source.type == "问数" and body.source.session == SID and body.source.confirmer
 
 

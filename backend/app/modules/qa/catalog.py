@@ -150,6 +150,8 @@ def plan_text(plan: dict[str, Any] | None, metrics: Metrics) -> str:
     """跟前端 QaTuning planText 一致：「指标 vN · 按 维度、… · 时间 · 过滤 · 排序」。"""
     if not plan:
         return ""
+    if plan.get("action"):  # eval_gen 的动作题
+        return f"动作建议 · {plan.get('actionName') or plan['action']}"
     dims = plan.get("dims") or []
     parts = [
         metric_label(plan.get("metric"), metrics),

@@ -93,7 +93,8 @@ async def test_no_key_503(qa, monkeypatch):
     r = await qa.post(URL, json={"question": "华东大区有多少家门店？"})
     assert r.status_code == 503, r.text
     assert r.json()["code"] == "QA_LLM_UNAVAILABLE"
-    assert "DASHSCOPE_API_KEY" in r.json()["message"]
+    # 模型走平台模型设置（admin model:qa，没有库里配置时退回环境变量）：提示不点名具体环境变量
+    assert "密钥" in r.json()["message"] and "sk-" not in r.json()["message"]
 
 
 async def test_other_owner_session_404(qa):
