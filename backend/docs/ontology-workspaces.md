@@ -55,6 +55,15 @@
 - `POST /internal/v1/events` 由 palantir-t2 接入 `events:ingest` 密钥 + 事件类型白名单（e97bc61），本模块只提供 `require_api_scope` / `enforce_api_allowlist` / 调用方审计字段。
 - 机器动作执行使用 `actions:execute` + 动作类型白名单；动态摘要使用 `dynamic:read`（由动态模块接入）。
 
+## 数据源导入草稿（通用规则）
+
+`POST /api/data/v1/datasources/{code}/import-preview` 只用通用规则生成草稿：列名、注释、主外键生成对象类型、属性和关系，大模型默认关闭（响应里 `generator: "规则"`，`llm: false`）。可选 `sampleValues: true` 会对文本列（非主键 / 外键，每表最多 40 列）做只读的 `SELECT DISTINCT … LIMIT 21`：
+- 去重值不超过 20 个的列标为维度和可筛选，描述里附取值样本；
+- 只有两个像真假的取值时只给提示，不改类型；
+- 没有非空取值的列，以及名字像时间但存的是文本的列，都给出复核提示。
+
+指纹只覆盖结构，开不开采样都一样。结果只写成静态变更单草稿，由静态审核后发布。实现里没有任何行业词表，零售风格的名字只出现在测试夹具里。
+
 ## 部署和核对
 
 由具备创建角色权限的迁移连接执行 `alembic upgrade head`，再启动新后端。迁移不清库、不重置种子，不支持有损 downgrade；后续新增表需同步授予运行角色权限。零售 seed 命令仅显式绑定空间 1，不用于初始化新空间。

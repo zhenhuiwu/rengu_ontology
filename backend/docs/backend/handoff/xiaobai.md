@@ -4,8 +4,9 @@
 
 - 前端 ApiKeys.vue（真模式）：范围按编码 + 中文名、服务账号绑定、动作/事件白名单、限流配额、详情“调整授权与配额”（PATCH，只收窄）、服务账号抽屉（列表/新建/吊销）；写操作不回退 mock。Roles.vue 添加行级范围发送 `objectTypeCode`。
 - 角色删除 500 修复：admin_0026 将 `ontology_role_binding.role_id` FK 改为 ON DELETE CASCADE（参照动作绕过 RLS，其他本体的绑定也删）；服务账号引用 → 409 ROLE_IN_USE。测试 `tests/test_role_delete_bindings.py`。
-- 第 7 个范围 `dynamic:read`：alerts / rules / object-types / action-center view。接入写法 `Depends(require_api_scope("dynamic:read"))`。测试在 `tests/test_api_key_scopes.py`。
+- 第 7 个范围 `dynamic:read`：alerts / rules / object-types / action-center view。接入写法 `Depends(require_api_scope("dynamic:read"))`。测试在 `tests/test_api_key_scopes.py`；meta:read + dynamic:read 看到 `/meta/capabilities` rules 分节：`tests/test_api_key_dynamic_capabilities.py`（`-p tests.use_ops_support`）。
 - C1 组织规则：`app/modules/admin/org_scope.py`，`@org` 范围 + 每本体组织列配置 + gaps；`/roles/meta.scopeProps` 现在真的返回 `objectTypeCode`（之前 schema 丢了）。测试 `tests/test_org_scope.py`。
+- C2 导入草稿取值提示：`app/modules/data/ontology_import.py` 的 `sample_distinct` / `value_hints`，入参 `sampleValues`（默认关），响应 `llm: false` / `sampled`；纯规则，无行业词表。测试 `tests/test_ontology_import_value_hints.py`。
 - C3 MetricFlow 适配骨架：`app/common/metricflow_engine.py`（导出 → 内置编译 → run_guarded），`metricflow` 为可选依赖、未装、未改锁。测试 `tests/test_metricflow_engine.py`（导出形状夹具）。
 - 规则与契约见 [ontology-workspaces.md](../../ontology-workspaces.md) “API 密钥权限范围与服务账号”“行级范围按本体”。
 
@@ -16,6 +17,7 @@
 - 元数据注释漂移：`api_key.code`、`platform_setting.code`、`rule_schedule_run.release_id`。
 - 7 个 test_sql_guard e2e 用例的夹具在空间 1 没有对象类型（per-ontology governed_tables 后解析为空即拒绝）。
 - `app/common/auth.py` 用 `"/api/admin/" in route` 判断，FastAPI 0.162 的 route.path 为路由器相对路径，判断失效（api_keys 用 `full_route_path` 自行还原）。
+- `tests/test_datasource_ontology_import.py` 在本分支与 master 上整体失败：夹具未建本体成员，预览 403（C2 测试自行用 `bind_objects_workspace` 补成员，未改该文件）。
 - 前端构建复用 /workspace/rengu/frontend/node_modules（worktree 内软链，已被 .gitignore 忽略）。
 
 
