@@ -11,6 +11,7 @@ from app.core import clock
 from app.modules.dynamic.models import ActionRun, ActionRunDailyCounter, ActionStatus, SourceType
 from app.modules.dynamic.repo import ActionRunRepo
 from app.modules.ontology.models import OntologyWorkspace
+from tests.helpers.workspace import TEST_DB
 
 DAY = "21000101"
 NUMBER_SCOPE = None
@@ -20,7 +21,7 @@ NUMBER_SCOPE = None
 async def number_engine(engine):
     # Real commits/logs stay inside this group's only test DB, in a fresh workspace per case.
     # Never delete or truncate any baseline or append-only rows; independent workspace IDs avoid reuse.
-    assert engine.url.database == "rengu_test_use_ops_20261027"
+    assert engine.url.database == TEST_DB
     global NUMBER_SCOPE
     async with engine.begin() as connection:
         NUMBER_SCOPE = await connection.scalar(

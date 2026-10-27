@@ -4,10 +4,12 @@ import httpx
 import pytest
 from sqlalchemy import text
 
+from tests.helpers.workspace import TEST_DB
+
 
 async def bind_fixture_members(session):
     """Mirror the migration's existing-user mapping after test users/roles have been seeded."""
-    assert session.get_bind().engine.url.database == "rengu_test_use_ops_20261027"
+    assert session.get_bind().engine.url.database == TEST_DB
     await session.execute(
         text("""
         INSERT INTO ontology_member (ontology_id,user_id,role)
@@ -40,7 +42,7 @@ async def _ops_workspace(session):
     from app.common.ontology import set_ontology_scope
     from app.seeds.loader import run_seeds
 
-    assert session.get_bind().engine.url.database == "rengu_test_use_ops_20261027"
+    assert session.get_bind().engine.url.database == TEST_DB
     await set_ontology_scope(session, 1)
     await run_seeds(session, ["admin"])
     await bind_fixture_members(session)

@@ -31,11 +31,12 @@ from app.modules.static.models import (
     ObjectType,
     Property,
 )
+from tests.helpers.workspace import TEST_DB
 from tests.qa_access_support import seed_qa_access
 from tests.use_objects_support import enable_fixture_export
 
 B = "/api/qa/v1"
-DB = "rengu_test_use_objects_20261027"
+DB = TEST_DB
 
 
 @pytest.fixture(scope="session")

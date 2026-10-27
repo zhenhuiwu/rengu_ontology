@@ -77,7 +77,11 @@ async def conn(engine) -> AsyncIterator[AsyncConnection]:
 
 @pytest.fixture
 async def session(conn) -> AsyncIterator[AsyncSession]:
+    from app.common.ontology import DEFAULT_ONTOLOGY_ID, set_ontology_scope
+
     s = AsyncSession(bind=conn, join_transaction_mode="create_savepoint", expire_on_commit=False)
+    # ontology_0018 起领域表强制 RLS：测试会话默认落在零售空间 1（与旧接口省略请求头时一致）。
+    await set_ontology_scope(s, DEFAULT_ONTOLOGY_ID)
     yield s
     await s.close()
 
@@ -136,8 +140,11 @@ def sections(_isolated_sections):  # 依赖隔离 fixture：保证先清空再�
 @pytest.fixture
 async def seeded(session, sections) -> AsyncSession:
     from app.seeds.loader import run_seeds
+    from tests.helpers.workspace import bind_workspace_members
 
-    await run_seeds(session, ["admin", "versioning"])
+    await run_seeds(session, ["admin"])
+    await bind_workspace_members(session)
+    await run_seeds(session, ["versioning"])
     await session.flush()
     return session
 
@@ -146,7 +153,9 @@ async def seeded(session, sections) -> AsyncSession:
 async def users(session) -> AsyncSession:
     """只灌 sys_user（X-Demo-As / 发布人按用户编号解析要用）。"""
     from app.seeds.loader import run_seeds
+    from tests.helpers.workspace import bind_workspace_members
 
     await run_seeds(session, ["admin"])
+    await bind_workspace_members(session)
     await session.flush()
     return session
