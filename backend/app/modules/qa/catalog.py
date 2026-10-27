@@ -45,6 +45,7 @@ async def directory(
 ) -> tuple[Metrics, list[str]]:
     """一次加载请求/运行所需目录；历史缺节返回空，不能借用当前定义。"""
     from app.modules.static.dimension_validation import query_dimension_names
+    from app.modules.static.metric_versions import exec_def
     from app.modules.static.models import Dimension, DimLevel, Metric
     from app.modules.static.repo import pending_change_codes
     from app.modules.versioning.repo import ReleaseRepo
@@ -64,10 +65,11 @@ async def directory(
                 "version": m.version,
                 "dimNames": m.dims or [],
                 "cr": m.review_cr if m.review_cr in pending else None,
+                "defaultRange": exec_def(m.def_rows)["defaultRange"],
             }
             for m in await session.execute(
                 select(
-                    Metric.code, Metric.display_name, Metric.version, Metric.dims, Metric.review_cr
+                    Metric.code, Metric.display_name, Metric.version, Metric.dims, Metric.review_cr, Metric.def_rows
                 ).order_by(Metric.seq, Metric.code)
             )
         ]
@@ -93,6 +95,7 @@ async def directory(
             "name": m["name"],
             "version": m.get("version") or "",
             "cr": m.get("cr") if not ver else (m.get("review") or {}).get("cr"),
+            "defaultRange": (m.get("execDef") or {}).get("defaultRange", m.get("defaultRange")),
         }
         for m in rows
         if m.get("id") and m.get("name")

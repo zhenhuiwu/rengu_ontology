@@ -20,7 +20,7 @@ FIELDS = ("name", "api", "group", "unit", "owner", "formula", "dims", "variants"
 VERSION = re.compile(r"^v([1-9][0-9]{0,14})$")
 Obj = dict[str, Any]
 # 执行口径（def_rows 里的 k/v 行）可经变更单 metric/def 写：项 key → 行标签。
-EXEC_KEYS = {"timeField": "时间字段", "defaultFilter": "默认过滤"}
+EXEC_KEYS = {"timeField": "时间字段", "defaultFilter": "默认过滤", "defaultRange": "默认时间范围"}
 EXEC_MAX = 256
 # 问数元数据（同样是 def_rows 的 k/v 行，可经 metric/def 写、随快照保存与回滚；不影响执行口径与版本号）。
 META_KEYS = {"synonyms": "同义词", "desc": "说明"}
@@ -31,11 +31,15 @@ SYN_MAX, SYN_WORD_MAX, DESC_MAX = 32, 64, 1000
 def exec_def(rows: Any) -> Obj:
     """def_rows 中已保存的执行口径 {timeField, defaultFilter}；没有的键不出现，不推断默认值。"""
     labels = {v: k for k, v in EXEC_KEYS.items()}
-    return {
+    values = {
         labels[r["k"]]: r["v"]
         for r in rows or []
-        if isinstance(r, dict) and r.get("k") in labels and isinstance(r.get("v"), str)
+        if isinstance(r, dict) and r.get("k") in labels
+        and (isinstance(r.get("v"), str) or r.get("k") == EXEC_KEYS["defaultRange"])
     }
+    # New snapshots distinguish explicitly unconfigured defaults from old unknown snapshots.
+    values.setdefault("defaultRange", None)
+    return values
 
 
 def split_words(text: Any) -> list[str]:
@@ -59,12 +63,12 @@ def with_meta(rows: Any, key: str, value: Any) -> list[Any]:
     return _with_row(rows, META_KEYS[key], text or None)
 
 
-def with_exec(rows: Any, key: str, value: str | None) -> list[Any]:
+def with_exec(rows: Any, key: str, value: Any) -> list[Any]:
     """返回新的 def_rows：原位替换（或追加）该执行口径行；value=None 删除该行，其他展示行原样保留。"""
     return _with_row(rows, EXEC_KEYS[key], value)
 
 
-def _with_row(rows: Any, label: str, value: str | None) -> list[Any]:
+def _with_row(rows: Any, label: str, value: Any) -> list[Any]:
     out, done = [], False
     for r in rows or []:
         if isinstance(r, dict) and r.get("k") == label:
@@ -307,7 +311,7 @@ async def rollback(session, user: CurrentUser, code: str, body: MetricRollbackIn
             if key not in new
             else ItemIn(key=key, op="update", before=old.get(key), after=new[key])
             for key in EXEC_KEYS
-            if old.get(key) != new.get(key)
+            if old.get(key) != new.get(key) and (key != "defaultRange" or key in new)
         )
     rows.append(
         ItemIn(key="version", op="update", before=metric.version, after=next_version(metric.version, history))

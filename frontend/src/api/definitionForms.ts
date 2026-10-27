@@ -2,6 +2,7 @@ import { apiClient, currentApiContext, type PageResult } from './http';
 import { crSave, crStart, fetchCR, fetchCRItems, staticContextKey, fetchMetricGroups, type CRItemOut, type DraftChange } from './static';
 export type DefinitionKind = 'object' | 'metric' | 'dimension';
 export interface DefinitionValues { id?: string; name: string; api: string; group: string; owner: string; [key: string]: unknown }
+export interface MetricDefaultRange { kind: 'rolling_days'; days: number }
 export interface DefinitionOption { id: string; name: string; api?: string; status?: string; version?: string; object?: string; [key: string]: unknown }
 export interface DefinitionProperty { api: string; name: string; type: string; group: string; source: string; desc: string; pk?: boolean; title?: boolean; dim?: boolean; sensitive?: boolean; enumName?: string; visibility?: 'prominent' | 'normal' | 'hidden'; searchable?: boolean; filterable?: boolean; sortable?: boolean; listed?: boolean; order?: number; listWidth?: number | null; format?: string | null; unit?: string | null }
 const api = apiClient('static');
@@ -49,15 +50,16 @@ export async function definitionDetail(kind: DefinitionKind, id: string, crId?: 
   if (kind === 'metric') {
     fields.dims = dto.dimNames ?? [];
     // 执行口径：后端 execDef 只含已保存的键，表单空串表示“未设置”。
-    const exec = (dto.execDef ?? {}) as { timeField?: string; defaultFilter?: string };
+    const exec = (dto.execDef ?? {}) as { timeField?: string; defaultFilter?: string; defaultRange?: MetricDefaultRange | null };
     fields.timeField = exec.timeField ?? ''; fields.defaultFilter = exec.defaultFilter ?? '';
+    fields.defaultRange = exec.defaultRange ?? null;
   }
   return { fields, properties: dto.props ?? [], items };
 }
 export const METRIC_EXEC_KEYS = { timeField: '时间字段', defaultFilter: '默认过滤' } as const;
 /** 时间字段/默认过滤：后端只收非空文本，清空走 delete，未改不发（crSave 会丢掉前后相同的 update）。 */
 export function execChanges(values: DefinitionValues, original?: DefinitionValues, resumed = false): DraftChange[] {
-  return (Object.keys(METRIC_EXEC_KEYS) as (keyof typeof METRIC_EXEC_KEYS)[]).flatMap((key): DraftChange[] => {
+  const changes = (Object.keys(METRIC_EXEC_KEYS) as (keyof typeof METRIC_EXEC_KEYS)[]).flatMap((key): DraftChange[] => {
     const after = String(values[key] ?? '').trim(), before = String(original?.[key] ?? '').trim();
     const base = { key, type: '指标', field: METRIC_EXEC_KEYS[key] };
     // 新指标：清空时只在续写草稿里发 delete（crSave 会直接移除之前的 add 行）。
@@ -65,6 +67,12 @@ export function execChanges(values: DefinitionValues, original?: DefinitionValue
     if (!after && before) return [{ ...base, before, after: undefined, op: 'delete' as const }];
     return [{ ...base, before, after: after || before, op: 'update' as const }];
   });
+  const after = values.defaultRange ?? null, before = original?.defaultRange ?? null;
+  if (JSON.stringify(after) !== JSON.stringify(before) || (!original && resumed)) {
+    changes.push({ key: 'defaultRange', type: '指标', field: '默认时间范围', before,
+      after: after ?? undefined, op: after == null ? 'delete' : original ? 'update' : 'add' });
+  }
+  return changes;
 }
 export async function saveDefinition(kind: DefinitionKind, values: DefinitionValues, properties: DefinitionProperty[], original: DefinitionValues | undefined, originalProperties: DefinitionProperty[], opts: { join?: string; title?: string; desc?: string }, resume?: string, previousProperties: DefinitionProperty[] = originalProperties) {
   const ctx = definitionContext(), id = original?.id ?? values.api;

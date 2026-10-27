@@ -634,13 +634,14 @@ def fix_sql(
     res: vi.Resolution,
     scope: list[vi.Hit],
     required: set[str],
+    *, has_default: bool = False,
 ) -> list[str]:
     """确定性修正（sqlfix），返回给用户看的说明。"""
     src = qa_source(ontology_id)
     levels = _qa_config(ontology_id).get("hierarchyLevel") or {}
     notes: list[str] = []
     sqlfix.like_to_eq(tree, res.unique())
-    if not guards.time_expressed(question) and sqlfix.strip_time_window(tree, src.time_cols):
+    if not has_default and not guards.time_expressed(question) and sqlfix.strip_time_window(tree, src.time_cols):
         notes.append("题目没给时间，按全部数据统计")
     # 时间说法若只是口径名 / 枚举标签的一部分（“出库及时率”“已出库”）不算点名时间列
     masked = question
@@ -977,6 +978,7 @@ def cap_time_upper(tree: exp.Expression, now: datetime, time_cols: frozenset[str
 
 
 _DOC_TITLES = {
+    "metric_default_range": "本轮已发布指标默认时间（用户未给时间，必须应用；不要再追问时间，不得自行另选范围）",
     "values": "取值匹配（题目说法 → 库里的精确取值，写 WHERE 照抄；不要改成 LIKE）",
     "hierarchy": "层级列（题目没指明层级时的默认汇总层级）",
     "anchors": "问题里提到的对象名称（库里真实名称：写 WHERE 照抄；只对上一个就直接用，不要反问）",
@@ -1200,7 +1202,7 @@ def _label_rows(rows: list[list[Any]], ontology_id: int) -> list[list[Any]]:
 
 
 def precheck_clarify(
-    question: str, ontology_id: int, idx: vi.ValueIndex, res: vi.Resolution
+    question: str, ontology_id: int, idx: vi.ValueIndex, res: vi.Resolution, *, has_default: bool = False
 ) -> dict[str, Any] | None:
     """取值索引上的确定性反问（guards）：时间口径冲突 / 不认识的取值 / 有歧义的维度 / 只有指标。"""
     src = qa_source(ontology_id)
@@ -1215,7 +1217,7 @@ def precheck_clarify(
         or guards.unknown_value_clarify(question, idx, res, col_labels(idx), hints)
         or guards.ambiguous_dim_clarify(question, idx, res, dim_words(idx))
         or guards.bare_metric_clarify(
-            question, res, metric_words, ["今天", "昨天", "本周", "本月", *opts][:6]
+            question, res, metric_words, ["今天", "昨天", "本周", "本月", *opts][:6], has_default=has_default
         )
     )
 
@@ -1243,6 +1245,7 @@ async def answer(
     from app.modules.qa import dynamic_ctx as dyn
     from app.modules.qa import intent as act
     from app.modules.qa import semantic as sem
+    from app.modules.qa.metric_defaults import resolve_default
 
     def stage(name: str, text: str) -> None:
         if on_status is not None:
@@ -1253,6 +1256,30 @@ async def answer(
         raise AppError("问数身份与工作空间不匹配", code="ONTOLOGY_SCOPE_CONFLICT", status_code=403)
     t0 = time.monotonic()
     stage("understanding", "正在理解问题")
+    if (early := refuse_precheck(question, ontology_id)) and sql_like(question):
+        return "denied", refuse_snapshot(early), 0, int((time.monotonic() - t0) * 1000), None
+    published_range, default_problem = await resolve_default(session, user, question)
+    if default_problem:
+        if default_problem.get("code"):
+            return "denied", refuse_snapshot(default_problem), 0, int((time.monotonic() - t0) * 1000), None
+        return "answer", clarify_snapshot(default_problem), 0, int((time.monotonic() - t0) * 1000), None
+    if published_range and published_range.direct_source:
+        from app.modules.static.metric_trial import evaluate_metric
+
+        if session_scope or caliber_lines:
+            problem = {"code": "NO_DATA", "reason": "该来源的指标默认汇总暂不能叠加会话范围或口径，请使用明确已发布定义"}
+            return "denied", refuse_snapshot(problem), 0, int((time.monotonic() - t0) * 1000), None
+        stage("executing", "正在按已发布指标默认范围查询")
+        result = await evaluate_metric(session, user, published_range.code, days=published_range.days, period="none")
+        value = result["rows"][0]["value"] if result["rows"] else None
+        if value is None:
+            return "empty", {"lead": "没有查到符合条件的数据", "bold": "", "tail": "。" + published_range.note, "tag": "无数据"}, 0, int((time.monotonic() - t0) * 1000), None
+        value = _cell(Decimal(value))
+        answer = {"card": "table", "dataAsOf": result["dataCutoff"], "canPin": False,
+            "basis": {"caliber": f"已发布指标{published_range.name} {result['version']}", "perm": "已按行级权限过滤", "defaultRange": published_range.note},
+            "text": f"{published_range.name}：{value}。{published_range.note}。此来源汇总暂不支持固定到页面。",
+            "table": {"id": "result", "title": published_range.name, "columns": [{"key": "c0", "title": published_range.name, "align": "right"}], "items": [{"c0": value}], "total": 1, "summary": "共1行", "paged": False}}
+        return "answer", {"answer": answer}, 1, int((time.monotonic() - t0) * 1000), None
     ctx = await build_context(session)
     catalog = await act.action_catalog(session, user)
     hit = refuse_precheck(question, ontology_id)
@@ -1267,8 +1294,12 @@ async def answer(
     scope_hits = idx.resolve(session_scope).unique() if session_scope else []
     if r := guards.missing_value_refuse(vres) or guards.scope_conflict_refuse(scope_hits, vres):
         return "denied", refuse_snapshot(r), 0, int((time.monotonic() - t0) * 1000), None
-    if c := precheck_clarify(question, ontology_id, idx, vres):
+    if c := precheck_clarify(question, ontology_id, idx, vres, has_default=published_range is not None):
         return "answer", clarify_snapshot(c), 0, int((time.monotonic() - t0) * 1000), None
+    default_applied = False
+    if published_range:
+        ctx["metric_default_range"] = [published_range.note,
+            f"时间字段 {published_range.table}.{published_range.column}，下界 {published_range.lower}，上界 {published_range.upper}（不含）。"]
     ctx["values"] = vi.prompt_lines(vres)
     ctx["hierarchy"] = vi.hierarchy_lines(
         idx, _qa_config(ontology_id).get("hierarchyLevel") or {}, _self_refs(ontology_id)
@@ -1284,6 +1315,11 @@ async def answer(
     ctx["dynamic"] = dyn.summary_lines(dsum) or dyn.multi_lines(dmulti)
 
     def done(kind: str, snap: dict[str, Any], rows: int = 0, sql: str | None = None):
+        if published_range and default_applied and kind in ("answer", "empty"):
+            target = snap.get("answer", snap)
+            target.setdefault("basis", {})["defaultRange"] = published_range.note
+            key = "tail" if kind == "empty" else "text"
+            target[key] = (target.get(key) or "") + "。" + published_range.note
         elapsed = int((time.monotonic() - t0) * 1000)
         return kind, _with_context(snap, alerts, dsum, dmulti), rows, elapsed, sql
 
@@ -1303,6 +1339,7 @@ async def answer(
     mplan: sem.MetricPlan | None = None
     metric_failed = False
     while True:
+        default_applied = False
         stage("compiling", "正在生成查询")
         reply = await llm.generate_sql(messages)
         intent, val = parse_intent(reply)
@@ -1333,6 +1370,10 @@ async def answer(
                 mplan = sem.plan(val, manifest, clock.local_now())
                 sql = sem.compile_plan(manifest, mplan)
                 tree = assert_single_select(sql)
+                if published_range:
+                    published_range.apply(tree)
+                    sql = tree.sql(dialect=DIALECT)
+                    default_applied = True
                 async with conn.begin_nested():
                     res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
                     keys = list(res.keys())
@@ -1361,7 +1402,12 @@ async def answer(
                 # 口径说法只在题目本身点了某个口径时才算“已有默认”
                 said = matched_calibers(question, ontology_id)
                 calib = {t: list(n) for t, n, _ in _caliber_checks(ontology_id)} if said else {}
-                if not overruled and (msg := guards.overrule_clarify(val, idx, scope_hits, calib)):
+                default_time_question = published_range and (
+                    "时间" in str(val.get("question", ""))
+                    or sum(guards.time_expressed(str(option)) for option in val.get("options", [])) >= 2
+                )
+                msg = (published_range.note + "；时间范围已确定，请直接生成查询，不要再反问时间。") if default_time_question else guards.overrule_clarify(val, idx, scope_hits, calib)
+                if not overruled and msg:
                     overruled = True  # 反问的事已有默认（层级 / 会话范围 / 口径裁定）→ 回喂一次
                     messages = [
                         *messages,
@@ -1394,8 +1440,13 @@ async def answer(
                 continue
         codes = {code for c in idx.cols for code in c.labels.values()}
         required = _required_codes(ontology_id, ctx, codes)
-        fix_notes = fan_notes + fix_sql(tree, question, ontology_id, idx, vres, scope_hits, required)
-        cap_time_upper(tree, clock.local_now(), qa_source(ontology_id).time_cols)
+        fix_notes = fan_notes + fix_sql(tree, question, ontology_id, idx, vres, scope_hits, required,
+            has_default=published_range is not None)
+        if published_range:
+            published_range.apply(tree)
+            default_applied = True
+        if not published_range:
+            cap_time_upper(tree, clock.local_now(), qa_source(ontology_id).time_cols)
         if tree.sql(dialect=DIALECT) != before:
             sql = tree.sql(dialect=DIALECT)
         stage("executing", "正在查询数据")

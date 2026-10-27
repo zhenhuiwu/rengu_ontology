@@ -117,7 +117,7 @@ const list = computed(() => isStaticReal() ? metricPage.items.value : filtered.v
 const listTotal = computed(() => isStaticReal() ? metricPage.total.value : filtered.value.length);
 // 定义 / 允许的维度 / 口径版本 / 引用：mock 只有一份（所有指标共用）；真接口按选中指标取（GET /metrics/{id}、/versions、/refs）
 const metricDetailError = ref('');
-const rawDefinition = shallowRef<{ formula?: string; variants?: { code: string; label: string; default: boolean; api?: string; version?: string }[] }>({});
+const rawDefinition = shallowRef<{ formula?: string; execDef?: { defaultRange?: { kind: string; days: number } | null }; variants?: { code: string; label: string; default: boolean; api?: string; version?: string }[] }>({});
 const DEF = shallowRef([...METRIC_DEF]);
 const DIMS = shallowRef([...METRIC_DIMS]);
 type MetricVersion = (typeof METRIC_VERSIONS)[number] & { canRollback?: boolean; rollbackUnavailable?: string; baseline?: boolean };
@@ -152,17 +152,25 @@ const FORMULA = computed(() => {
   return formula == null || formula === '' ? '尚未配置公式' : String(formula);
 });
 const DISPLAY_DEF = computed(() => {
-  if (!isStaticReal() || !isDraft.value) return DEF.value;
+  if (!isStaticReal()) return DEF.value;
   const rows = DEF.value.map(row => ({ ...row }));
-  const labels: Record<string, string> = { timeField: '时间字段', defaultFilter: '默认过滤' };
+  const rangeText = (value: unknown) => {
+    if (value == null) return '未设置';
+    const range = value as { kind?: string; days?: number };
+    return range.kind === 'rolling_days' && Number.isInteger(range.days) && Number(range.days) >= 1 && Number(range.days) <= 93 ? `最近${range.days}天（含今天）` : '默认时间范围不可用';
+  };
+  if (rawDefinition.value.execDef && 'defaultRange' in rawDefinition.value.execDef && !rows.some(row => row.k === '默认时间范围')) rows.push({ k: '默认时间范围', v: rangeText(rawDefinition.value.execDef.defaultRange) });
+  if (!isDraft.value) return rows;
+  const labels: Record<string, string> = { timeField: '时间字段', defaultFilter: '默认过滤', defaultRange: '默认时间范围' };
   for (const item of cr.items.value) {
     const label = labels[item.key];
     if (item.section !== 'def' || !label) continue;
     const index = rows.findIndex(row => row.k === label);
     if (item.op === 'delete') { if (index >= 0) rows.splice(index, 1); }
-    else if (typeof item.after === 'string') {
-      if (index >= 0) rows[index] = { ...rows[index], v: item.after };
-      else rows.push({ k: label, v: item.after });
+    else if (typeof item.after === 'string' || item.key === 'defaultRange') {
+      const value = item.key === 'defaultRange' ? rangeText(item.after) : String(item.after);
+      if (index >= 0) rows[index] = { ...rows[index], v: value };
+      else rows.push({ k: label, v: value });
     }
   }
   return rows;
@@ -180,9 +188,21 @@ const trend = (isStaticReal() ? [] : DAILY_GMV).map((d) => ({ date: d.date, valu
 const trialResult = shallowRef<MetricTrialResult>();
 const trialBusy = ref(false), trialError = ref('');
 const trialReadiness = shallowRef<MetricTrialReadiness>(), readinessError = ref('');
+const manualTrialDays = ref<number | null>();
+const trialDays = computed({
+  get: () => {
+    if (manualTrialDays.value !== undefined) return manualTrialDays.value;
+    const fields = isDraft.value ? draftFields(cr.items.value, 'def') : {};
+    const range = ('defaultRange' in fields ? fields.defaultRange : rawDefinition.value.execDef?.defaultRange) as { kind?: string; days?: number } | null | undefined;
+    return range?.kind === 'rolling_days' && Number.isInteger(range.days) && Number(range.days) >= 1 && Number(range.days) <= 93 ? Number(range.days) : 30;
+  },
+  set: (value: number | null | undefined) => { manualTrialDays.value = value ?? null; },
+});
+const validTrialDays = computed(() => typeof trialDays.value === 'number' && Number.isInteger(trialDays.value) && trialDays.value >= 1 && trialDays.value <= 93);
+watch(() => JSON.stringify([staticContextKey(), selected.value, route.query.view]), () => { manualTrialDays.value = undefined; }, { flush: 'sync' });
 let trialSeq = 0;
 let readinessSeq = 0;
-const trialKey = () => JSON.stringify([staticContextKey(), selected.value, isDraft.value, draft.value?.id, cr.head.value?.lockVersion]);
+const trialKey = () => JSON.stringify([staticContextKey(), selected.value, isDraft.value, draft.value?.id, cr.head.value?.lockVersion, trialDays.value]);
 watch(trialKey, () => { ++trialSeq; trialResult.value = undefined; trialError.value = ''; trialBusy.value = false; void loadReadiness(); }, { immediate: true });
 onBeforeUnmount(() => { ++trialSeq; ++readinessSeq; });
 async function loadReadiness() {
@@ -200,11 +220,12 @@ async function runTrial() {
     message.success(`已按${isDraft.value ? `草稿 ${draft.value?.id}` : '已发布口径'}试算近 30 日，结果见“近 30 日试算”`);
     return;
   }
-  if (trialBusy.value || !selected.value || (isDraft.value && (!cr.head.value || cr.loading.value || cr.error.value))) return;
+  const days = trialDays.value;
+  if (typeof days !== 'number' || !validTrialDays.value || trialBusy.value || !selected.value || (isDraft.value && (!cr.head.value || cr.loading.value || cr.error.value))) return;
   const seq = ++trialSeq, key = trialKey(), ctx = currentApiContext(), id = selected.value;
   trialBusy.value = true; trialError.value = ''; trialResult.value = undefined;
   try {
-    const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } });
+    const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } }, days);
     if (seq !== trialSeq || key !== trialKey()) return;
     trialResult.value = result;
     void router.replace({ query: { ...route.query, tab: 'def' } });
@@ -314,7 +335,7 @@ const refCols = [
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="mt-sp" />
-        <a-button :loading="trialBusy" :disabled="isStaticReal() && (trialReadiness?.ready === false || isDraft && (!cr.head.value || cr.loading.value || !!cr.error.value))" @click="runTrial">试算</a-button>
+        <a-button :loading="trialBusy" :disabled="isStaticReal() && (!validTrialDays || trialReadiness?.ready === false || isDraft && (!cr.head.value || cr.loading.value || !!cr.error.value))" @click="runTrial">试算</a-button>
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-tooltip v-else-if="reviewCr(cur)" :title="`${reviewCr(cur)} 审核中`"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
@@ -344,7 +365,7 @@ const refCols = [
         </div>
         <div class="mt-def-right">
           <div class="mt-sec t-14 fw-600 mt-sec-row">
-            <span>近 30 日试算</span><span v-if="!isStaticReal()" class="t-12 c-3 fw-400">按口径 v3 计算 · 数据截至 2026-10-24 23:00</span>
+            <span>{{ isStaticReal() ? validTrialDays ? `近 ${trialDays} 日试算` : '选择试算范围' : '近 30 日试算' }}</span><span v-if="isStaticReal()" class="t-12 c-3 fw-400"><a-input-number v-model:value="trialDays" aria-label="试算天数" :min="1" :max="93" :precision="0" size="small" style="width:76px" /> 天</span><span v-else class="t-12 c-3 fw-400">按口径 v3 计算 · 数据截至 2026-10-24 23:00</span>
           </div>
           <a-alert v-if="trialError" type="error" :message="trialError" show-icon />
           <a-alert v-else-if="readinessError" type="error" :message="readinessError" show-icon><template #action><a-button size="small" @click="loadReadiness">重试</a-button></template></a-alert>
@@ -417,20 +438,20 @@ const refCols = [
 .mt-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .mt-pager { flex: 1; min-height: 0; }
 .mt-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
-.mt-detail { flex: 1; }
+.mt-detail { flex: 1; min-width: 0; }
 .mt-diff { margin-inline: 8px 0; font-weight: var(--fw-regular); }
-.mt-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
+.mt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 52px; padding: 8px 16px; flex: none; }
 .mt-sp { flex: 1; }
 .mt-tabs { padding: 0 16px; flex: none; }
 .mt-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
 .mt-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-.mt-def { flex-direction: row; gap: 16px; }
+.mt-def { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; align-content: start; align-items: start; }
 .mt-def-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.mt-def-right { width: 440px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }
+.mt-def-right { min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: var(--border); overflow: hidden; }
 .mt-sec { margin-top: 4px; }
-.mt-sec-row { display: flex; justify-content: space-between; align-items: baseline; }
-.mt-formula { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; }
-.mt-chart { height: 200px; }
+.mt-sec-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: baseline; }
+.mt-formula { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; overflow-wrap: anywhere; }
+.mt-chart { height: 200px; width: 100%; min-width: 0; overflow: hidden; }
 .mt-readiness { margin: 0; padding-left: 18px; max-height: 224px; overflow: auto; overflow-wrap: anywhere; }
 .mt-readiness li + li { margin-top: 8px; }
 .mt-deny { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: var(--border); }

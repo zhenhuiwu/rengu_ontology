@@ -41,8 +41,20 @@ const editor = load('pages/ontology/parts/DefinitionEditor.vue', {
   '@/composables/useUnsavedGuard': { useUnsavedGuard: () => (fn) => fn(), confirmDiscard: async () => true }, 'ant-design-vue': { message: { error() {}, success() {}, info() {} } }, '@/stores/confirm': { useConfirmStore: () => ({ ask: async () => true }) }, '@/composables/useReadonly': { useReadonly: () => ({ readonly, reason: vue.ref('read-only') }) }, '@/api/http': { currentApiContext: () => ctx },
   '@/api/definitionForms': { definitionChoices: async () => ({ owners: [{ id: 'U-1', name: 'DB User' }], objects: [], dimensions: [{ id: 'D1', name: 'Region', api: 'region' }], metrics: [{ id: 'gmv', name: 'GMV', api: 'gmv_api', version: 'v3', status: '已发布' }] }), definitionDetail: async () => ({ fields: { id: 'gmv', name: 'Database metric', api: 'gmv_api', owner: 'U-1', group: 'Sales', dims: ['Region'], formula: 'DB formula', variants: [{ code: 'gmv', label: 'Net', default: true, api: 'gmv_api', version: 'v3' }] }, properties: [], items: [] }), definitionProperties: async () => [], definitionContext: () => ({ options: {} }), saveDefinition: async () => { saves++; if (failSave) throw Object.assign(Error('409'), { crId: 'CR-1' }); return { id: 'gmv', crId: 'CR-1' }; } },
   '@/api/static': { isStaticReal: () => true, fetchCR: async () => ({}), fetchCRItems: async () => [] }, './useStaticCr': { draftFields: () => ({}), draftRows: (rows) => rows },
-}, 'load,values,variants,validation,save,resume', { defineProps: () => props, defineModel: () => open, defineEmits: () => (...args) => emits.push(args) });
+}, 'load,values,variants,validation,save,resume,defaultRangeMode,defaultRangeDays', { defineProps: () => props, defineModel: () => open, defineEmits: () => (...args) => emits.push(args) });
 await editor.load(); assert.equal(editor.values.formula, 'DB formula'); assert.equal(editor.variants.value[0].code, 'gmv'); assert.equal(editor.validation.value, '');
+assert.equal(editor.defaultRangeMode.value, 'none', 'new/old definitions do not invent a default window');
+editor.defaultRangeMode.value = 'rolling_days'; assert.match(editor.validation.value, /1至93天/);
+editor.defaultRangeDays.value = 7; assert.equal(editor.validation.value, '');
+assert.equal(editor.values.defaultRange.days, 7);
+editor.defaultRangeDays.value = 94; assert.match(editor.validation.value, /1至93天/);
+editor.defaultRangeMode.value = 'none'; assert.equal(editor.values.defaultRange, null);
+const setDefault = forms.execChanges({ ...values, defaultRange: { kind: 'rolling_days', days: 7 } });
+assert.equal(setDefault.find(row => row.key === 'defaultRange').after.days, 7);
+assert.equal(setDefault.find(row => row.key === 'defaultRange').op, 'add');
+const clearDefault = forms.execChanges({ ...values, defaultRange: null }, { ...values, defaultRange: { kind: 'rolling_days', days: 7 } });
+assert.equal(clearDefault.find(row => row.key === 'defaultRange').op, 'delete');
+assert.ok(!forms.execChanges({ ...values }, { ...values }).some(row => row.key === 'defaultRange'), 'ordinary edits cannot create a default window');
 editor.values.name = 'Unsaved name'; await editor.save(); assert.equal(editor.values.name, 'Unsaved name'); assert.equal(editor.resume.value, 'CR-1'); assert.equal(emits.length, 0);
 readonly.value = true; await editor.save(); assert.equal(saves, 1); readonly.value = false;
 editor.variants.value.push({ code: 'gmv', label: 'Duplicate', default: false }); assert.match(editor.validation.value, /不能重复/); editor.variants.value.pop();

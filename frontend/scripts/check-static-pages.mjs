@@ -23,10 +23,16 @@ const knowledge = { ...head('K', 1), definition: 'saved DB definition', calc: ''
 const link = i => ({ id: `L${i}`, name: `DB link ${i}`, api: `link_${i}`, from: `O${i}`, to: `O${i+1}`, card: 'N : 1', key: 'id = id', fromProp: 'id', toProp: 'id', join: '', reverse: '', nullable: false, desc: '', status: '已发布', owner: 'DB owner', usage: [], history: [], since: 'v1' });
 const lists = { '/object-types': 'O', '/metrics': 'M', '/dimensions': 'D', '/knowledge': 'K', '/link-types': 'L' };
 const calls = [], details = [];
-let held, empty = false;
+let held, heldTrial, empty = false;
+const trialCalls = [];
 const staticApi = {
   isStaticReal: () => true, staticContextKey: key,
   crErr: e => e instanceof Error ? e.message : String(e),
+  trialMetric: async (id, crId, options, days) => {
+    trialCalls.push({ id, crId, options, days });
+    if (heldTrial) { const pending = heldTrial; heldTrial = undefined; return pending.promise; }
+    return { id, rows: [{ date: '2026-10-25', value: '1' }], scope: `range ${days}`, version: 'v1' };
+  },
   fetchMetricGroups: async () => ['DB group'],
   fetchMetricReadiness: async id => ({ id, ready: true, issues: [] }),
   fetchStaticPage: (path, query, signal) => {
@@ -50,7 +56,7 @@ const staticApi = {
     if (path.startsWith('/dimensions/')) return structuredClone(dim);
     if (path.startsWith('/knowledge/')) return structuredClone(knowledge);
     if (path.startsWith('/link-types/')) return link(Number(path.split('/').at(-1).slice(1)));
-    if (path.startsWith('/metrics/')) return { ...head('M', 1), formula: 'actual', def: [{ k: '时间字段', v: context.ver ? 'Historical.created_at' : 'Published.created_at' }, { k: '默认过滤', v: 'Published.status = active' }], dims: [] };
+    if (path.startsWith('/metrics/')) return { ...head('M', 1), formula: 'actual', execDef: { defaultRange: context.ver ? { kind: 'rolling_days', days: 3 } : null }, def: [{ k: '时间字段', v: context.ver ? 'Historical.created_at' : 'Published.created_at' }, { k: '默认过滤', v: 'Published.status = active' }], dims: [] };
     return [];
   },
   fetchKnowledgeChoices: async () => [], fetchKnowledgeConflicts: async () => ({ conflicts: [], rule: {} }),
@@ -81,7 +87,7 @@ const bodyImports = (route, selected, kind, draftFlag, cr) => ({
 });
 for (const [file, param, id, kind, listPath, expose] of [
   ['ObjectTypesBody', 'type', 'O1', 'object', '/object-types', 'current, addForm, addOpen, ppage, propPage, realProps, recollectMetadata, metadataOpen, metadataDiff'],
-  ['MetricsBody', 'metric', 'M1', 'metric', '/metrics', 'cur, definitionOpen, verPage, versionRows, verSize, FORMULA, DEF, DISPLAY_DEF'],
+  ['MetricsBody', 'metric', 'M1', 'metric', '/metrics', 'cur, definitionOpen, verPage, versionRows, verSize, FORMULA, DEF, DISPLAY_DEF, trialDays, validTrialDays, runTrial, trialResult, rawDefinition'],
   ['DimensionsBody', 'dim', 'D1', 'dimension', '/dimensions', 'cur, form, editing, vEdit, vp, valuesPage, valueSize'],
   ['GlossaryBody', 'k', 'K1', 'knowledge', '/knowledge', 'cur, form, editing, beginEdit, rpage, refsPage'],
   ['LinkTypesBody', 'link', 'L1', 'link', '/link-types', 'cur, form, editing, beginEdit, graphNodes, graphLinks, positions'],
@@ -113,25 +119,44 @@ for (const [file, param, id, kind, listPath, expose] of [
   }
   if (file === 'MetricsBody') {
     page.tab.value = 'versions'; await tick(); page.verSize.value = 20; await tick(); assert.equal(calls.filter(c => c.path.endsWith('/versions')).at(-1).query.size, 20);
+    assert.equal(page.trialDays.value, 30, 'no configured default retains the old explicit 30-day trial');
+    page.rawDefinition.value = { ...page.rawDefinition.value, execDef: { defaultRange: { kind: 'rolling_days', days: 7 } } }; await tick();
+    assert.equal(page.trialDays.value, 7, 'initial trial inherits the saved definition default');
+    page.trialDays.value = 90;
+    page.rawDefinition.value = { ...page.rawDefinition.value, execDef: { defaultRange: { kind: 'rolling_days', days: 3 } } }; await tick();
+    assert.equal(page.trialDays.value, 90, 'late metadata cannot overwrite manual selection');
+    cr.head.value = { ...cr.head.value, lockVersion: 2 }; await tick();
+    assert.equal(page.trialDays.value, 90, 'late CR metadata does not reset a manual range');
+    await page.runTrial(); assert.equal(trialCalls.at(-1).days, 90); assert.equal(page.trialResult.value.scope, 'range 90');
+    const beforeInvalid = trialCalls.length; page.trialDays.value = null; await tick(); await page.runTrial();
+    assert.equal(page.validTrialDays.value, false); assert.equal(trialCalls.length, beforeInvalid); assert.equal(page.trialResult.value, undefined);
+    let finishTrial; heldTrial = { promise: new Promise(resolve => { finishTrial = resolve; }) };
+    page.trialDays.value = 7; await tick(); const oldTrial = page.runTrial(); page.trialDays.value = 30; await tick();
+    finishTrial({ rows: [{ date: 'old', value: '99' }], scope: 'old-seven-day-result' }); await oldTrial;
+    assert.equal(page.trialResult.value, undefined, 'late result of another chosen range cannot appear under a new title');
     const baseline = JSON.stringify(page.DEF.value);
     cr.items.value = [
       { section: 'def', key: 'timeField', op: 'update', after: 'Saved.created_at' },
       { section: 'def', key: 'defaultFilter', op: 'update', after: 'Saved.status = active' },
       { section: 'def', key: 'formula', op: 'update', after: 'COUNT(Saved)' },
+      { section: 'def', key: 'defaultRange', op: 'add', after: { kind: 'rolling_days', days: 7 } },
     ];
-    draftFlag.value = true; await tick();
+    route.query.view = 'draft'; draftFlag.value = true; await tick();
     assert.equal(page.FORMULA.value, 'COUNT(Saved)');
+    assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '默认时间范围').v, '最近7天（含今天）');
     assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Saved.created_at', 'saved draft time field must match the trial definition');
     assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '默认过滤').v, 'Saved.status = active');
     cr.items.value = cr.items.value.map(item => ({ ...item, op: 'delete', after: undefined })); await tick();
     assert.equal(page.FORMULA.value, '尚未配置公式', 'explicit formula deletion must not resurrect the published formula');
     assert.equal(page.DISPLAY_DEF.value.length, 0, 'cleared execution metadata must not fall back to published values');
     assert.equal(JSON.stringify(page.DEF.value), baseline, 'draft projection cannot mutate its published baseline');
-    draftFlag.value = false; await tick();
+    route.query.view = undefined; draftFlag.value = false; await tick();
     assert.equal(page.FORMULA.value, 'actual');
     assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Published.created_at');
     context.ver = 'historical'; await tick();
     assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Historical.created_at', 'history must render its own definition rather than the saved draft');
+    assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '默认时间范围').v, '最近3天（含今天）', 'history displays its own saved default rather than the draft seven days');
+    assert.equal(page.trialDays.value, 3, 'history resets manual selection and inherits only its own default');
     context.ver = ''; await tick();
     assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Published.created_at');
   }

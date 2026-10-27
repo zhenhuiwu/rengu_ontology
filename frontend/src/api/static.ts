@@ -232,8 +232,8 @@ export const fetchMetricReadiness = (id: string, crId?: string) => {
   return api.get<MetricTrialReadiness>(`/metrics/${encodeURIComponent(id)}/trial-readiness`, { ...ctx.options, query: { ...ctx.options.query, crId } });
 };
 /** Pure trial: persisted definition and governed real rows; errors never fall back to mock. */
-export const trialMetric = (id: string, crId?: string, options?: RequestOptions) =>
-  api.post<MetricTrialResult>(`/metrics/${encodeURIComponent(id)}:trial`, { crId, range: '30d' }, options);
+export const trialMetric = (id: string, crId?: string, options?: RequestOptions, days = 30) =>
+  api.post<MetricTrialResult>(`/metrics/${encodeURIComponent(id)}:trial`, { crId, days }, options);
 /** 发布 / 回滚成功后刷新顶栏版本号（同一后端前缀；versioning 不在真接口开关里时也能取到） */
 export const fetchCurrentAfterWrite = () => api.get<{ current: string | null; next: string; lockVersion: number; release: ReleaseResult | null }>('/releases/current');
 

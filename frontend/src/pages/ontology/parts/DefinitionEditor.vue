@@ -24,6 +24,11 @@ const resumeApi = ref('');
 const loading = ref(false), busy = ref(false), error = ref(''), sourceError = ref('');
 const original = ref<DefinitionValues>(), originalProperties = ref<DefinitionProperty[]>([]), resume = ref<string>();
 const values = reactive<DefinitionValues>({ name: '', api: '', group: '', owner: '' });
+const defaultRange = computed(() => values.defaultRange as { kind?: string; days?: number } | null | undefined);
+const defaultRangeMode = computed({ get: () => defaultRange.value == null ? 'none' : 'rolling_days',
+  set: (mode: string) => { values.defaultRange = mode === 'none' ? null : { kind: 'rolling_days' }; } });
+const defaultRangeDays = computed({ get: () => defaultRange.value?.days,
+  set: (days: number | null | undefined) => { values.defaultRange = { kind: 'rolling_days', ...(days == null ? {} : { days }) }; } });
 let lockedProperties = new WeakSet<object>();
 const previousProperties = ref<DefinitionProperty[]>([]);
 const propertyPage = ref(1);
@@ -47,7 +52,7 @@ async function load() {
   if (!visible.value) return;
   if (!isStaticReal()) { error.value = '定义表单仅用于真实接口模式'; loading.value = false; return; }
   loading.value = true; error.value = ''; choices.metricGroups = []; sourceProperties.value = []; initialSnapshot.value = '';
-  const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', timeField: '', defaultFilter: '', dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
+  const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', timeField: '', defaultFilter: '', defaultRange: null, dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
   Object.keys(values).forEach((k) => delete values[k]); Object.assign(values, defaults);
   properties.value = []; propertyPage.value = 1; variants.value = []; levels.value = []; original.value = undefined; originalProperties.value = [];
   try {
@@ -120,6 +125,8 @@ const validation = computed(() => {
     if (new Set(levels.value.map((l) => l.api)).size !== levels.value.length || new Set(levels.value.map((l) => l.name)).size !== levels.value.length) return '层级API名和名称分别不能重复';
   }
   if (props.kind === 'metric') {
+    const range = defaultRange.value;
+    if (range != null && (range.kind !== 'rolling_days' || !Number.isInteger(range.days) || Number(range.days) < 1 || Number(range.days) > 93 || Object.keys(range).some(key => !['kind', 'days'].includes(key)))) return '默认时间范围须明确填写1至93天';
     if ([values.timeField, values.defaultFilter].some((v) => String(v ?? '').length > 256 || String(v ?? '').includes('\u0000'))) return '时间字段和默认过滤最多256字';
     if (variants.value.length > 32) return '口径变体至多32行';
     if (variants.value.some((v) => !v.code || !v.label.trim() || !choices.metrics.some((m) => m.id === v.code && m.status === '已发布'))) return '口径变体须选择已发布指标并填写标签';
@@ -193,6 +200,7 @@ async function save() {
           <div class="definition-grid"><a-form-item label="单位"><a-input v-model:value="values.unit" :maxlength="16" /></a-form-item><a-form-item label="口径版本"><a-input v-model:value="values.version" :maxlength="16" /></a-form-item></div>
           <a-form-item label="公式（口径定义）"><a-textarea v-model:value="values.formula" :rows="3" placeholder="填写指标计算公式" /></a-form-item>
           <div class="definition-grid"><a-form-item label="时间字段" extra="试算按此字段取时间范围；格式 对象API.属性API"><a-input v-model:value="values.timeField" :maxlength="256" placeholder="对象API.属性API" allow-clear /></a-form-item><a-form-item label="默认过滤" extra="问题里没写时自动加上；多个条件用；分隔"><a-input v-model:value="values.defaultFilter" :maxlength="256" placeholder="对象API.属性API = 值" allow-clear /></a-form-item></div>
+          <div class="definition-grid"><a-form-item label="缺少时间时" extra="发布后，提问未指定时间时使用；未设置则追问"><a-select v-model:value="defaultRangeMode" :options="[{ value: 'none', label: '未设置' }, { value: 'rolling_days', label: '最近若干天（含今天）' }]" /></a-form-item><a-form-item v-if="defaultRangeMode === 'rolling_days'" label="天数" required><a-input-number v-model:value="defaultRangeDays" :min="1" :max="93" :precision="0" placeholder="填写天数" /></a-form-item></div>
           <a-alert v-if="props.targetId" type="info" message="是否可试算以「草稿试算」检查为准：保存后在指标页查看就绪原因。" />
           <a-form-item label="允许维度"><a-select v-model:value="values.dims" mode="multiple" :options="dimensionOptions" /></a-form-item>
           <div class="definition-heading"><span class="t-14 fw-600">口径变体</span><a-button size="small" :disabled="variants.length >= 32" @click="variants.push({ code: '', label: '', default: !variants.length })">新增变体</a-button></div>

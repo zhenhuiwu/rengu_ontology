@@ -31,6 +31,7 @@ from app.modules.versioning.repo import ReleaseRepo
 class MetricTrialIn(ApiModel):
     cr_id: str | None = Field(None, min_length=1, max_length=64)
     range: Literal["30d"] = "30d"
+    days: int | None = Field(None, strict=True, ge=1, le=93)
 
     @model_validator(mode="after")
     def valid(self):
@@ -107,7 +108,8 @@ async def metric_definition(session, code: str, user: CurrentUser, ver=None, cr_
         elif item.item_key in EXEC_KEYS:
             value = None if item.op == "delete" else item.after
             metric["def"] = with_exec(
-                metric.get("def"), item.item_key, value if isinstance(value, str) else None
+                metric.get("def"), item.item_key,
+                value if item.item_key == "defaultRange" or isinstance(value, str) else None
             )
     return metric
 
@@ -553,6 +555,19 @@ async def metrics_readiness(session, user: CurrentUser, codes=None, *, ver=None,
     return {"total": len(items), "ready": sum(1 for x in items if x["ready"]), "items": items}
 
 
+def metric_window(days, *, at=None, timezone=None):
+    """The same inclusive local-calendar window used by trial and QA published defaults."""
+    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 93:
+        raise unavailable("试算范围须为1至93天")
+    tz = ZoneInfo(timezone or get_settings().display_tz)
+    cutoff_at = at or clock.now()
+    if cutoff_at.tzinfo is None:
+        raise unavailable("指标计算时间必须带时区")
+    end = cutoff_at.astimezone(tz).date()
+    start = end - timedelta(days=days - 1)
+    return start, end, datetime.combine(start, time.min, tz), datetime.combine(end + timedelta(days=1), time.min, tz)
+
+
 async def evaluate_metric(
     session,
     user: CurrentUser,
@@ -570,8 +585,8 @@ async def evaluate_metric(
     check_func(user, "metrics", "view")
     if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 93:
         raise unavailable("试算范围须为1至93天")
-    if period not in ("day", "week", "month"):
-        raise unavailable("试算分组仅支持日、周或月")
+    if period not in ("day", "week", "month", "none"):
+        raise unavailable("试算分组仅支持整体、日、周或月")
     metric = await metric_definition(session, code, user, ver, cr_id)
     if ver:
         raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
@@ -579,18 +594,11 @@ async def evaluate_metric(
     bound, expression, temporal, time_field, conds = compile_metric(
         metric, objects, require_ontology_id(session), await execution_bindings(session, objects, metric)
     )
-    tz = ZoneInfo(timezone or get_settings().display_tz)
     cutoff_at = at or clock.now()
-    if cutoff_at.tzinfo is None:
-        raise unavailable("指标计算时间必须带时区")
-    end = cutoff_at.astimezone(tz).date()
-    start = end - timedelta(days=days - 1)
+    start, end, lo, hi = metric_window(days, at=cutoff_at, timezone=timezone)
+    tz = lo.tzinfo
     if isinstance(temporal.type, DateTime):
         day = cast(temporal.op("AT TIME ZONE")(str(tz)), Date)
-        lo, hi = (
-            datetime.combine(start, time.min, tz),
-            datetime.combine(end + timedelta(days=1), time.min, tz),
-        )
     else:
         day, lo, hi = temporal, start, end + timedelta(days=1)
     if period in ("month", "week"):
@@ -603,12 +611,13 @@ async def evaluate_metric(
         grouping = [(binding.id_col if binding is not None else bound.governed.table.c.code).label("code")]
     if at is not None and isinstance(temporal.type, DateTime):
         conds.append(temporal <= cutoff_at)
+    time_group = [] if period == "none" else [day]
     stmt = (
-        select(day.label("date"), expression.label("value"), func.max(temporal).label("cutoff"), *grouping)
+        select((literal(start) if period == "none" else day).label("date"), expression.label("value"), func.max(temporal).label("cutoff"), *grouping)
         .select_from(bound.governed.table)
         .where(temporal >= lo, temporal < hi, *conds)
-        .group_by(day, *grouping)
-        .order_by(day)
+        .group_by(*time_group, *grouping)
+        .order_by(*time_group)
     )
     if binding is not None:
         from app.common.row_filter import apply_row_filter
@@ -651,4 +660,4 @@ async def trial_metric(session, ctx: ViewContext, user: CurrentUser, code: str, 
     effective = await resolve_user(session, ctx.preview_as) if ctx.preview_as else user
     if body.cr_id and effective.id != user.id:
         await metric_definition(session, code, user, ctx.ver, body.cr_id)
-    return await evaluate_metric(session, effective, code, ver=ctx.ver, cr_id=body.cr_id)
+    return await evaluate_metric(session, effective, code, ver=ctx.ver, cr_id=body.cr_id, days=body.days if body.days is not None else 30)

@@ -310,6 +310,22 @@ def _set_prop(p: Property, after: dict[str, Any]) -> None:
         p.filterable = p.sortable = False
 
 
+def _sync_object_pk(o: ObjectType) -> bool:
+    """Property.pk is derived from this object's logical key, not a source table constraint."""
+    from app.modules.qa.object_source import primary_property
+
+    primary = primary_property(o)
+    if primary is None:
+        return False  # An absent/ambiguous legacy key is not permission to invent one.
+    changed = False
+    for prop in o.properties:
+        expected = prop is primary
+        if prop.is_pk != expected:
+            prop.is_pk = expected
+            changed = True
+    return changed
+
+
 @register("object", "properties")
 async def object_properties(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
     o = await _object(ctx, tid)
@@ -345,6 +361,7 @@ async def object_properties(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
             o.properties.append(p)
             by_api[r.item_key] = p
         _set_prop(p, after)
+    _sync_object_pk(o)
     return {"properties"}
 
 
@@ -415,7 +432,7 @@ async def _object_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
         elif r.item_key in O_FIELDS:
             setattr(o, O_FIELDS[r.item_key], None if r.after is None else str(r.after))
     o.status = ObjectStatus.published
-    return {"objectTypes"}
+    return {"objectTypes", "properties"} if _sync_object_pk(o) else {"objectTypes"}
 
 
 register("object", "def")(_object_def)
@@ -604,6 +621,15 @@ async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
                 raise _bad("指标变体必须且只能有一个默认项", id=tid)
             m.variants = variants
         elif k in EXEC_KEYS:
+            if k == "defaultRange":
+                from app.modules.static.metric_defaults import default_range
+
+                try:
+                    value = None if r.op == "delete" else default_range(val)
+                except ValueError:
+                    raise _bad("默认时间范围须为最近1至93天的明确配置", kind="metric", id=tid, field=k) from None
+                m.def_rows = with_exec(m.def_rows, k, value)
+                continue
             # 时间字段 / 默认过滤：只存明确文本，执行含义由试算编译器校验，这里不猜也不改写。
             if r.op != "delete" and (
                 not isinstance(val, str) or not val.strip() or len(val) > EXEC_MAX or "\x00" in val
@@ -1366,8 +1392,10 @@ async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, rel
             # 带 execDef 的快照才知道当时的执行口径；旧快照不带，保持现值。
             rows = m.def_rows or []
             for key in EXEC_KEYS:
+                if key == "defaultRange" and key not in d["execDef"]:
+                    continue  # Old snapshot has no evidence of this setting.
                 value = d["execDef"].get(key)
-                rows = with_exec(rows, key, value if isinstance(value, str) else None)
+                rows = with_exec(rows, key, value if key == "defaultRange" or isinstance(value, str) else None)
             m.def_rows = rows
         for key in META_KEYS:
             # 同义词/说明：快照带该键才恢复（旧快照不带，保持现值）。

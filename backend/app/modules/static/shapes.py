@@ -217,6 +217,8 @@ def link(lt: LinkType, *, with_runtime: bool = True) -> Obj:
 
 def metric_list_item(m: Metric) -> Obj:
     """METRIC_LIST 的一项。"""
+    from app.modules.static.metric_versions import exec_def
+
     d = {
         "id": m.code,
         "name": m.display_name,
@@ -227,6 +229,7 @@ def metric_list_item(m: Metric) -> Obj:
         "status": m.status.value,
         "owner": m.owner,
         "variants": list(m.variants or []),
+        "defaultRange": exec_def(m.def_rows)["defaultRange"],
     }
     if m.review_cr:
         d["review"] = {"cr": m.review_cr, "note": m.review_note or ""}
@@ -257,7 +260,12 @@ def metric_detail(m: Metric) -> Obj:
     `dims` 按 api-index 指允许维度表的行（页面 METRIC_DIMS 原样字段 dim/hier/obj/def/note）。
     """
     d = metric_list_item(m)
-    d["def"] = list(m.def_rows)
+    from app.modules.static.metric_defaults import range_label
+
+    d["def"] = [
+        {**row, "v": range_label(row.get("v"))} if row.get("k") == "默认时间范围" else dict(row)
+        for row in m.def_rows if isinstance(row, dict)
+    ]
     # 执行口径（时间字段 / 默认过滤），定义表单按此回填，不解析展示行。
     from app.modules.static.metric_versions import exec_def
 
