@@ -381,7 +381,9 @@ async function publish() {
   if (realMode && key !== JSON.stringify(currentApiContext())) return;
   if (isStaticReal()) { try { lockVersion = (await fetchCurrentAfterWrite()).lockVersion; } catch (e) { apiErr(e); return; } }
   if (realMode && key !== JSON.stringify(currentApiContext())) return;
-  const verdict = m.rows.map((r) => ({ label: r.code === '提示' ? '提示' : `${r.code} ${r.result}`, value: `${r.name}：${r.note}` }));
+  const verdict = m.rows.map((r) => r.code === 'V1–V17' && r.result === '通过'
+    ? { label: '各单校验', value: '各单无阻断（未执行项见单内校验）' }
+    : { label: r.code === '提示' ? '提示' : `${r.code} ${r.result}`, value: `${r.name}：${r.note}` });
   const ok = await confirm.ask({ title: `整版发布 ${NEXT_VERSION.value}`, target: `本体（当前 ${CURRENT_VERSION.value}）`, okText: '发布',
     tag: m.blocked ? '合并校验有阻断' : '合并校验通过',
     fields: [...approved.value.map((c) => ({ label: c.id, value: c.title })), ...verdict],
@@ -543,7 +545,7 @@ async function rollback() {
           <span :class="counts['阻断'] ? 'c-error' : 'c-3'">阻断 {{ counts['阻断'] }}</span><span :class="counts['警告'] ? 'c-warning' : 'c-3'">警告 {{ counts['警告'] }}</span>
           <span v-if="counts['信息']" class="c-3">信息 {{ counts['信息'] }}</span>
           <span class="c-2">通过 {{ counts['通过'] }}</span><span class="c-3">不适用 {{ counts['不适用'] }}</span>
-          <span class="rl-sp" /><span class="t-12 c-3 num">校验于 {{ detail.times.checked ?? '--' }} · 目标库 达梦 DM8、金仓 KES</span>
+          <span class="rl-sp" /><span class="t-12 c-3 num">校验于 {{ detail.times.checked ?? '--' }} · 检查范围见各项说明</span>
           <a-tooltip :title="readonly ? reason : cur.status === '已发布' ? '已发布的变更单不再校验' : ''"><a-button size="small" :loading="rechecking" :disabled="crFallback || (readonly || cur.status === '已发布')" @click="recheck">重新校验</a-button></a-tooltip>
         </div>
         <a-table :columns="checkCols" :data-source="detail.checks" :pagination="false" size="small" row-key="code" :locale="{ emptyText: '暂无校验结果' }">

@@ -36,6 +36,7 @@ const loadedKey = ref('');
 const activeTab = ref('def');
 const label = computed(() => props.kind === 'action' ? '动作类型' : '事件类型');
 const validContext = computed(() => loadedKey.value === actionContextKey());
+const platformActionEvent = computed(() => props.kind === 'event' && form.api === 'ActionExecuted' && form.source === '动作');
 const fields = computed<Field[]>(() => [
   { k: 'name', label: '名称', required: true }, { k: 'api', label: 'API 名', required: true },
   ...(props.kind === 'action' ? [
@@ -54,7 +55,10 @@ const fields = computed<Field[]>(() => [
   ]) as Field[],
 ]);
 const choices = (field: Field) => field.k === 'owner' ? owners.value.map(u => ({ value: u.id, label: `${u.name}（${u.id}）` }))
-  : ['targetKind', 'objKind'].includes(field.k) ? objects.value.map(o => ({ value: o.id, label: `${o.name}（${o.api}）` }))
+  : ['targetKind', 'objKind'].includes(field.k) ? [
+    ...objects.value.map(o => ({ value: o.id, label: `${o.name}（${o.api}）` })),
+    ...(field.k === 'objKind' && platformActionEvent.value ? [{ value: 'platform:ActionRun', label: '动作执行记录（平台）' }] : []),
+  ]
     : field.k === 'ruleId' ? rules.value.map(r => ({ value: r.id, label: `${r.id} · ${r.name}` })) : field.options;
 const rowKey = (section: string, row: Record<string, any>) => section === 'config' ? 'cfg'
   : section === 'edits' ? `${row.op}:${row.obj}` : String(row.api ?? row.target ?? row.name ?? '');
@@ -115,6 +119,7 @@ async function load() {
   finally { if (key === actionContextKey()) loading.value = false; }
 }
 watch(open, value => { if (value) { activeTab.value = 'def'; void load(); } }, { immediate: true });
+watch(platformActionEvent, enabled => { if (!enabled && form.objKind === 'platform:ActionRun') form.objKind = null; });
 watch(() => actionContextKey(), () => { if (open.value) { open.value = false; owners.value = []; objects.value = []; rules.value = []; } }, { flush: 'sync' });
 watch(() => form.source, async source => {
   if (!open.value || props.kind !== 'event' || source !== '规则') return;

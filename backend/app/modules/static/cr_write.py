@@ -445,6 +445,10 @@ class CrWriteService:
                 status_code=422,
                 details={"fields": [{"field": "rows", "message": f"key 重复：{'、'.join(dup)}"}]},
             )
+        if body.target.kind == "event" and body.section in ("def", "payload"):
+            from app.modules.event.platform_context import validate_draft
+
+            await validate_draft(self.session, body.target.id, cr.id, section=body.section, rows=body.rows)
         with self.session.no_autoflush:  # 只在最后 flush 一次：lockVersion 恰好 +1
             return await self._put_rows(cr, user, body)
 
@@ -639,10 +643,13 @@ class CrWriteService:
         kinds = {t.target_kind for t in targets}
         from app.modules.static.cr_analysis import refresh_analysis
 
-        trial_unavailable = await refresh_analysis(self.session, cr, targets, items, user)
-        calc: dict[str, tuple[str, str]] = {}
-        if trial_unavailable:
-            calc["V14"] = ("警告", trial_unavailable)
+        await refresh_analysis(self.session, cr, targets, items, user)
+        calc: dict[str, tuple[str, str]] = {
+            "V14": ("不适用", "未配置目标数据库 EXPLAIN 执行器，未执行；指标试跑结果另列")
+        }
+        from app.modules.static.release_readiness import release_readiness
+
+        calc.update(await release_readiness(self.session, cr, targets, items, user))
         dels = [
             f"{i.target_id}.{i.item_key}"
             for i in items
@@ -650,6 +657,10 @@ class CrWriteService:
         ]
         if dels:
             calc["V7"] = ("阻断", f"已发布的 {'、'.join(dels)} 不能删除，只能弃用")
+        elif any(i.section in API_SECTIONS for i in items):
+            calc["V7"] = ("通过", "已核对本次属性与关系改动，未发现删除已发布 API 名")
+        else:
+            calc["V7"] = ("不适用", "本次无属性或关系 API 改动")
         empty = [
             f"{i.target_id}.{i.item_key}"
             for i in items
@@ -658,8 +669,15 @@ class CrWriteService:
         ]
         if empty:
             calc["V11"] = ("警告", f"{'、'.join(empty)} 还没有描述")
-        if cr.level == CRLevel.major and not (cr.detail or {}).get("migration"):
-            calc["V15"] = ("警告", "还没写已有页面和告警的迁移方式")
+        elif any(isinstance(i.after, dict) and any(k in i.after for k in DESC_KEYS) for i in items):
+            calc["V11"] = ("通过", "本次提交的描述字段均非空")
+        else:
+            calc["V11"] = ("不适用", "本次无描述字段改动")
+        if cr.level == CRLevel.major:
+            calc["V15"] = (("通过", "已填写迁移方式") if (cr.detail or {}).get("migration")
+                           else ("警告", "还没写已有页面和告警的迁移方式"))
+        else:
+            calc["V15"] = ("不适用", "本次非重大改动")
         calc["V12"] = ("通过", f"改动 {cr.changes} 处，涉及 {len(targets)} 个定义")
         if "link" in kinds:
             from app.modules.static.link_validation import link_error, modeling_objects
@@ -757,11 +775,11 @@ class CrWriteService:
             calc.setdefault("V4", ("不适用", "本次未改维度"))
             calc.setdefault("V10", ("不适用", "本次未改维度"))
         if "object" not in kinds:
-            calc.setdefault("V16", ("不适用", ""))
+            calc.setdefault("V16", ("不适用", "本次未改对象"))
         seed = await self._baseline(cr, now)
         checks: list[Row] = []
         for c, name in CHECK_NAMES:
-            res, note = calc.get(c, ("通过", ""))
+            res, note = calc.get(c, ("不适用", "当前校验器未执行此项，不作为通过依据"))
             s = seed.get(c)
             if s and SEVERITY.get(s.get("result"), 0) > SEVERITY[res]:
                 res, note = s["result"], s.get("note", "")

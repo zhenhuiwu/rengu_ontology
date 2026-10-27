@@ -210,7 +210,8 @@ async def test_metric_sum_default_filter_empty_results_and_unavailable_cr(client
     detail = (await client.get(P + f"/change-requests/{cr['id']}", headers=AUTHOR)).json()["detail"]
     assert "trial" not in detail and "METRIC_TRIAL_UNAVAILABLE" in detail["trialUnavailable"]
     assert await facts.scalar(select(func.count()).select_from(CrTrial)) == 0
-    assert any(row["code"] == "V14" and row["result"] == "警告" for row in validated.json()["checks"])
+    assert any(row["code"] == "V14" and row["result"] == "不适用" and "未执行" in row["note"]
+               for row in validated.json()["checks"])
 
 
 async def test_gmv_readiness_reports_exact_missing_references_and_no_trial_writes(client, facts):
@@ -520,3 +521,18 @@ async def test_metricflow_export_matches_trial_compiler(client, facts):
     assert yaml.safe_load(text)["metrics"] == body["metrics"]
     historical = await client.get(P + "/exports/metricflow?ver=v2026.10.3", headers=ADMIN)
     assert historical.status_code == 422, historical.text
+
+
+async def test_metric_trial_explicit_days_and_legacy_range(client, facts):
+    one = await client.post(P + "/metrics/order_cnt:trial", headers=ADMIN, json={"days": 1})
+    assert one.status_code == 200, one.text
+    assert one.json()["rows"] == [{"date": "2026-10-25", "value": "1"}]
+    assert "2026-10-25 至 2026-10-25" in one.json()["scope"]
+    two = await client.post(P + "/metrics/order_cnt:trial", headers=ADMIN, json={"days": 2})
+    assert two.status_code == 200, two.text
+    assert [row["date"] for row in two.json()["rows"]] == ["2026-10-24", "2026-10-25"]
+    legacy = await client.post(P + "/metrics/order_cnt:trial", headers=ADMIN, json={"range": "30d"})
+    assert legacy.status_code == 200 and "2026-09-26 至 2026-10-25" in legacy.json()["scope"]
+    for invalid in (0, 94, True, "7"):
+        result = await client.post(P + "/metrics/order_cnt:trial", headers=ADMIN, json={"days": invalid})
+        assert result.status_code == 422, result.text

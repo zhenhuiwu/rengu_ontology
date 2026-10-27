@@ -75,6 +75,9 @@ async def _event(ctx: Ctx, tid: str) -> EventType:
 
 
 async def payload(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
+    from app.modules.event.platform_context import validate_draft
+
+    await validate_draft(ctx.session, tid, ctx.cr.id, complete=True)
     et = await _event(ctx, tid)
     envelope = set(await ctx.session.scalars(select(EventEnvelopeField.api)))
     await edit_rows(
@@ -109,6 +112,9 @@ async def subs(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
 
 
 async def definition(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
+    from app.modules.event.platform_context import ACTION_RUN, validate_draft
+
+    platform = await validate_draft(ctx.session, tid, ctx.cr.id, complete=True)
     et = await _event(ctx, tid)
     fields = {
         "name": ("name", string(64, required=True)),
@@ -150,7 +156,11 @@ async def definition(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
         ):
             raise writeback_error("事件 API 名已存在", api=value)
         setattr(et, column, value)
-    if et.obj_kind:
+    if platform:
+        if et.obj_kind not in (None, ACTION_RUN):
+            raise writeback_error("标准动作完成事件不能关联业务对象", field="objKind")
+        et.obj_kind, et.object, et.object_api = None, "动作执行记录", "ActionRun"
+    elif et.obj_kind:
         obj = await ctx.session.scalar(select(ObjectType).where(ObjectType.code == et.obj_kind))
         if obj is None or obj.status.value != "已发布":
             raise writeback_error("事件关联对象须为已发布对象类型", objKind=et.obj_kind)
