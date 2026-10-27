@@ -6,8 +6,9 @@
 
 from sqlalchemy import select
 
-from app.modules.action.models import ActionParam, ActionType
+from app.modules.action.models import ActionParam, ActionType, TypeStatus
 from app.modules.admin.models import SysRole, SysUser
+from app.modules.event.models import EventSource, EventType
 from app.modules.functions.models import FnParam, Function
 from app.modules.static.capabilities import literal_annotation_values
 from app.modules.static.models import Property
@@ -37,6 +38,24 @@ async def add_props(session, action):
                 is_sensitive=sensitive,
                 visibility=visibility,
                 seq=9,
+            )
+        )
+    await session.flush()
+
+
+async def add_event_types(session):
+    """外部来源已发布 → accepting；数据同步来源已发布 → 不接收（palantir-t4 入站只收外部来源）。"""
+    for code, source in (("CapExternal", EventSource.external), ("CapSync", EventSource.sync)):
+        session.add(
+            EventType(
+                code=code,
+                api=code,
+                name=code,
+                source=source,
+                status=TypeStatus.published,
+                version="v1",
+                retention_days=30,
+                object_api="Store",
             )
         )
     await session.flush()
@@ -102,6 +121,7 @@ async def test_capabilities_admin_sees_all_sections(alert_runtime, client):  # n
     session, action, _rule = alert_runtime
     await add_props(session, action)
     await add_enums(session)
+    await add_event_types(session)
     await set_policy(session, action, {"mode": "auto", "callers": ["人"], "limits": {"dailyCount": 3}})
     res = await client.get(URL, headers=headers())
     assert res.status_code == 200, res.text
@@ -149,8 +169,10 @@ async def test_capabilities_admin_sees_all_sections(alert_runtime, client):  # n
         "path": "/internal/v1/events",
         "scope": "events:ingest",
         "eventType": "ActionExecuted",
-        "accepting": True,
+        "accepting": False,  # 来源是动作：已发布也不收外部写入（EVENT_SOURCE_NOT_EXTERNAL）
     }
+    assert events["CapExternal"]["ingest"]["accepting"] is True
+    assert events["CapSync"]["ingest"]["accepting"] is False
     assert "subscribers" not in done
     got = by_id(body["rules"])["OPS-RULE"]
     assert got["actionType"] == "ops_local" and got["trigger"] == "event" and got["rowAccess"] == "all"

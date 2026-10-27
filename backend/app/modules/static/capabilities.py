@@ -8,7 +8,8 @@
 - 函数不暴露代码、样例；动作给出执行策略（action/policy 的公开函数读）和机器执行接口。
 - 参数枚举（enum）：动作参数按提交校验同一个公开函数 checker.literal_enum_choices 解析；
   函数参数按入参注解 Literal[...] 解析（只是声明，解释器不强制）。没有声明的参数不带 enum 字段。
-- 事件类型（static-t3）：已发布 / 变更中、未下线；载荷不带样例；ingest 给出事件接收接口。
+- 事件类型（static-t3）：已发布 / 变更中、未下线；载荷不带样例；ingest 给出事件接收接口，
+  accepting = 已发布且来源为外部（static-t4，与 palantir-t4 入站检查一致）。
 - 形状只增不改：palantir /machine/tools 基于 capabilities() 组装，新增内容一律是新键。
 """
 
@@ -306,13 +307,17 @@ async def _rules(session, user, access) -> list[dict]:
 
 
 def _ingest(et: EventType, key_context) -> dict:
-    # 事件接收挂在 /internal/v1（app/api.py），不在本体前缀下；只接收已发布的类型
+    # 事件接收挂在 /internal/v1（app/api.py），不在本体前缀下；HTTP 入站只收已发布且来源为外部的类型
+    # （event/ingress.py receive：非外部 → 403 EVENT_SOURCE_NOT_EXTERNAL）。复用 palantir-t4 的
+    # machine.tools.INGESTIBLE（=「与入站一致：只接受外部来源」）；tools 顶层导入本模块，故函数内导入防循环。
+    from app.modules.machine.tools import INGESTIBLE
+
     out: dict[str, Any] = {
         "method": "POST",
         "path": "/internal/v1/events",
         "scope": "events:ingest",
         "eventType": et.code,
-        "accepting": et.status == TypeStatus.published,
+        "accepting": et.status == TypeStatus.published and et.source in INGESTIBLE,
     }
     if key_context is not None:
         allow = getattr(key_context, "event_types", None)
