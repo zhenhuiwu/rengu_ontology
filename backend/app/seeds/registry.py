@@ -7,6 +7,8 @@
 - integration 分两段：`integration` 只写 ext_system（被动作 / 数据源引用，排前面）；
   `integration_runs` 写 writeback_call、reconcile_task
   （外键指向 dynamic / action 的执行记录，排在 dynamic 之后）。
+- demo_mainline（admin 负责）：演示主线只增数据的补丁（角色、本体成员 / 角色绑定、Webhook 外部系统、
+  演示告警处理人），要在 dynamic 写完告警之后再覆盖 assignee，所以排在 dynamic 之后。
 
 列表里的是**阶段名**。阶段名就是模块名时读 `app.modules.<模块>.seeds`；
 不是模块名的阶段在 SEED_STAGES 里登记「负责模块 + seeds 包」。
@@ -22,6 +24,7 @@ SEED_MODULES: list[str] = [
     "action",
     "event",
     "dynamic",
+    "demo_mainline",
     "integration_runs",
     "qa",
 ]
@@ -29,6 +32,7 @@ SEED_MODULES: list[str] = [
 # 阶段名 → (负责模块, seeds 包)。只登记阶段名不等于模块名的阶段。
 SEED_STAGES: dict[str, tuple[str, str]] = {
     "integration_runs": ("integration", "app.modules.integration.seeds.runs"),
+    "demo_mainline": ("admin", "app.modules.admin.seeds.demo_mainline"),
 }
 
 

@@ -1,0 +1,285 @@
+{
+  "roles": [
+    {
+      "id": "R-09",
+      "name": "供应链计划员",
+      "desc": "处理库存告警并发起补货申请（演示主线：R-012 → request_replenish）",
+      "builtIn": false,
+      "updatedAt": "2026-10-27 17:30",
+      "updatedBy": "本体小白",
+      "func": {
+        "qa-workbench": "view",
+        "qa-pages": "none",
+        "object-search": "view",
+        "object-detail": "view",
+        "alerts": "manage",
+        "action-center": "manage",
+        "scenarios": "none",
+        "connections": "none",
+        "external-systems": "none",
+        "data-quality": "none",
+        "ontology-overview": "none",
+        "object-types": "none",
+        "link-types": "none",
+        "action-types": "view",
+        "functions": "none",
+        "metrics": "none",
+        "dimensions": "none",
+        "glossary": "none",
+        "event-types": "none",
+        "rules": "none",
+        "qa-tuning": "none",
+        "releases": "none",
+        "users": "none",
+        "roles": "none",
+        "audit": "none",
+        "api-keys": "none",
+        "settings": "none"
+      },
+      "objs": [
+        {
+          "objType": "订单",
+          "api": "SalesOrder",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "会员",
+          "api": "Member",
+          "view": false,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "门店",
+          "api": "Store",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "大区",
+          "api": "Region",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "商品",
+          "api": "Product",
+          "view": true,
+          "export": false,
+          "actions": [
+            "补货申请"
+          ]
+        },
+        {
+          "objType": "库存快照",
+          "api": "InventorySnapshot",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "告警",
+          "api": "Alert",
+          "view": true,
+          "export": false,
+          "actions": [
+            "认领告警",
+            "关闭告警"
+          ]
+        },
+        {
+          "objType": "员工",
+          "api": "Employee",
+          "view": false,
+          "export": false,
+          "actions": []
+        }
+      ],
+      "scopes": [
+        {
+          "id": "S-91",
+          "objType": "门店",
+          "prop": "大区",
+          "op": "=",
+          "values": [
+            "华东"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "R-10",
+      "name": "区域供应链经理",
+      "desc": "审批超过免审额度的补货申请（演示主线审批人）",
+      "builtIn": false,
+      "updatedAt": "2026-10-27 17:30",
+      "updatedBy": "本体小白",
+      "func": {
+        "qa-workbench": "view",
+        "qa-pages": "none",
+        "object-search": "view",
+        "object-detail": "view",
+        "alerts": "view",
+        "action-center": "manage",
+        "scenarios": "none",
+        "connections": "none",
+        "external-systems": "none",
+        "data-quality": "none",
+        "ontology-overview": "none",
+        "object-types": "none",
+        "link-types": "none",
+        "action-types": "none",
+        "functions": "none",
+        "metrics": "none",
+        "dimensions": "none",
+        "glossary": "none",
+        "event-types": "none",
+        "rules": "none",
+        "qa-tuning": "none",
+        "releases": "none",
+        "users": "none",
+        "roles": "none",
+        "audit": "none",
+        "api-keys": "none",
+        "settings": "none"
+      },
+      "objs": [
+        {
+          "objType": "订单",
+          "api": "SalesOrder",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "会员",
+          "api": "Member",
+          "view": false,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "门店",
+          "api": "Store",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "大区",
+          "api": "Region",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "商品",
+          "api": "Product",
+          "view": true,
+          "export": false,
+          "actions": [
+            "补货申请"
+          ]
+        },
+        {
+          "objType": "库存快照",
+          "api": "InventorySnapshot",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "告警",
+          "api": "Alert",
+          "view": true,
+          "export": false,
+          "actions": []
+        },
+        {
+          "objType": "员工",
+          "api": "Employee",
+          "view": false,
+          "export": false,
+          "actions": []
+        }
+      ],
+      "scopes": [
+        {
+          "id": "S-101",
+          "objType": "门店",
+          "prop": "大区",
+          "op": "=",
+          "values": [
+            "华东"
+          ]
+        }
+      ]
+    }
+  ],
+  "roleMembers": [
+    {
+      "role": "R-09",
+      "user": "U010011"
+    },
+    {
+      "role": "R-10",
+      "user": "U010812"
+    }
+  ],
+  "ontologyMembers": [
+    {
+      "ontology": 1,
+      "user": "U010011",
+      "role": "editor"
+    },
+    {
+      "ontology": 1,
+      "user": "U010812",
+      "role": "editor"
+    }
+  ],
+  "ontologyRoleBindings": [
+    {
+      "ontology": 1,
+      "role": "R-06"
+    },
+    {
+      "ontology": 1,
+      "role": "R-09"
+    },
+    {
+      "ontology": 1,
+      "role": "R-10"
+    }
+  ],
+  "extSystems": [
+    {
+      "id": "EXT-WEBHOOK",
+      "name": "本地 Webhook 回执（演示）",
+      "vendor": "本地测试替身",
+      "category": "Webhook",
+      "endpoint": "https://127.0.0.1:8443",
+      "auth": "HMAC-SHA256 签名",
+      "authDetail": "签名密钥不入库：按 RENGU_INTEGRATION_ADAPTERS 的 1/EXT-WEBHOOK 配置（signing_secret 可用 fernet$ 加密）",
+      "idempotent": true,
+      "idemKey": "Idempotency-Key",
+      "timeoutMs": 5000,
+      "maxRetry": 3,
+      "retry": "超时/网络/429/5xx 指数退避最多 3 次，同一幂等键；4xx 不重试",
+      "rateLimit": "10 次/秒",
+      "owner": "周晓峰",
+      "status": "正常",
+      "env": "测试"
+    }
+  ],
+  "alertAssignees": [
+    {
+      "alert": "AL-20261025-0139",
+      "assignee": "U010011"
+    }
+  ]
+}
