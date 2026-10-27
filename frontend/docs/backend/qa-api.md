@@ -318,12 +318,32 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 - **答案里的枚举 code 换标签**：成形前 `_label_rows` 看每一列，非空值全是 QA 表枚举 code（且这个 code 只属于一个枚举）时换成中文标签（`shipped → 已出库`、`open → 营业中`），列、行、形状不变。
 - **查询超时**：只读连接 `statement_timeout` 触发（SQLSTATE 57014）→ 504 `QUERY_TIMEOUT`「查询超时，请缩小时间范围或条件后再问」，不回喂重试。
 - **执行报错回喂一次**：SQL 过了 sql_guard 但执行报错（如列不存在），在 savepoint 里回滚，把数据库报错首行作为新一轮 user 消息回喂 LLM 改一次（`FIX_RETRIES=1`，常见自修正思路，非代码复制）；仍失败照旧 500 `INTERNAL_ERROR`。sql_guard 拒绝不重试，仍 403。[推断]
-- **同步返回**：W6 跑完整条链路后返回 202 `{turnId, streamUrl, turn}`，`turn` 就是 W3 的轮次形状，前端可以直接追加；W7 SSE 未实现，`streamUrl` 先占位。[推断]
+- **同步返回**：W6 跑完整条链路后返回 202 `{turnId, streamUrl, turn}`，`turn` 就是 W3 的轮次形状，前端可以直接追加；`streamUrl` = W7 回放地址（qa-p2 起已实现，见 2.4 / 3.4）。[推断]
 - **答案形状**：`kind=answer`，`answer = {card:'table', dataAsOf, basis:{caliber, perm}, text, table:{id:'result', title, columns:[{key:'c0', title:<SQL 列别名>, align?:'right'}], items:[{c0:…}], total, summary, paged}}`；0 行 → `kind=empty`（`lead/bold/tail/tag`）。最多 200 行，超过 10 行 `paged=true`。[推断] kpis / trend / insight / suggest 本期不出。
 - **落库**：`qa_turn`（`code = {会话号}-T{seq:03d}` [推断]、`kind`、`question`、`refs`、`snapshot`、`sql_text`（不出接口）、`asked_at`、`elapsed_ms`），更新 `qa_session.last_at`，第一问改标题；追加 `qa_query_log`。`qa_turn_event` / `sem_plan` 本期不写。
 - **LLM**：DashScope OpenAI 兼容接口（`openai` SDK，`base_url=https://dashscope.aliyuncs.com/compatible-mode/v1`），`temperature=0`。依赖：`backend/pyproject.toml` 新增 `openai>=1.50`（锁 3.37.0）。环境变量：`DASHSCOPE_API_KEY`（必填，只从环境读，不打日志）、`QA_LLM_MODEL`（默认 `qwen-flash`）、`QA_LLM_BASE_URL`、`QA_LLM_TIMEOUT_S`（默认 30）。[推断] 先不进 `app/core/config`，以后再收进 Settings。
 - **错误**：没配 key → 503 `QA_LLM_UNAVAILABLE`；没配只读库 `RENGU_QA_READONLY_DATABASE_URL` → 503 `QA_EXEC_UNAVAILABLE`；LLM 调用失败 → 502 `QA_LLM_FAILED`；SQL 不是单条 SELECT、写 / DDL、用了白名单外的表 → 403 `SQL_REJECTED`（不落轮次）；会话不是自己的 → 404。
 - **权限**：沿用 `require_func("qa-workbench","view")` + 行级权限（权限初版 auth-min：已登录不裁剪，未登录 401）；预览 / 历史版本由全局 readonly_guard 拒（403 READONLY）。
+
+### 2.4 qa-p2 新增（基线 master `f0a7df3`）
+
+| # | 方法 路径 | 权限 | 说明 |
+|---|---|---|---|
+| W7 | `POST /sessions/{sid}/turns:stream` | qa-workbench:view | 同 W6 入参（`AskIn`），响应 `text/event-stream`：链路阶段实时推 `status`（无 id，不落库）→ 回答事件（先写 `qa_turn_event` 再推，带 id）→ `done`（带完整轮次，同 W3）。出错推 `error{code,message,retryable}` + `done{kind:failed}`；前端流失败时回退 W6 |
+| W7 | `GET /turns/{tid}/stream` | qa-workbench:view | 回放 / 断线续传：`Last-Event-ID` 之后的事件；旧轮次没有事件 → 按快照现拆（不落库，GET 不写）。不是自己会话的轮次 404 |
+| W7a | `POST /turns/{tid}/action:stage` | qa-workbench:view + action-center:manage | 把这一轮的动作卡（`card=action`）暂存成动作中心「待确认」记录（来源 `问数`，确认人 = 当前用户），入参 `{objId?, objLabel?, params?}`（只能补目标对象 / 参数，类型以服务端卡片为准）。现读已发布执行策略：`suggest` → 409 `ACTION_POLICY_SUGGEST_ONLY`；策略不许 AI 调用方 → 403（动作中心 gate）。**从不调 `apply_policy`**：即使策略是 `auto` 也停在待确认，由用户 `POST /action-runs/{code}:confirm`。同会话同动作同对象已有待确认记录 → 200 返回那条。预览中 403；不是动作卡 422 |
+| MCP | `POST /mcp`（`GET` → 405） | meta:read + 各工具 scope | 问数工具 + 平台工具导出，JSON-RPC 2.0 |
+
+- **动作意图（chain）**：候选动作 = 能力目录 `static.capabilities(...)["actions"]`（同 `GET /meta/capabilities`，不自建目录；`rowAccess=none` 的不进，最多 `ACTION_LIMIT` 条），每条带 `policy = {mode: suggest|confirm|auto, aiAllowed}`（`action_policy.stored` → 调用方类型 `AI`）。模型识别到「要执行动作」→ `POST /action-types/{id}:dry-run` 同款只读校验（不建 action_run）→ 回答卡 `answer = {card:'action', text, basis, action:{type, name, reason, params, dryRun:{passed,checked,failed}, stage:{typeId,objKind,objId,objLabel,params}, mode:'suggest', policy, canStage}}`。`canStage = policy≠suggest 且 aiAllowed`；前端「发起动作」只调 W7a。没有动作页权限（能力目录无 actions 节）就不识别动作意图。
+- **告警引用（只读）**：问题含告警类词 → 最近未处理 / 处理中的告警；否则只取点名对象的告警。走 `dynamic.service.AlertService.search`（同 `GET /alerts`，进程内调用，行级范围按它的口径），不读动态表；用户没有 `alerts:view` 就不引用。写进 prompt 的「相关告警」段，并作为 `answer.alerts[]`（`{id, rule, level, objKind, objId, objLabel, value, threshold, status, triggeredAt}`）→ SSE `citations.alerts`。
+- **MCP（`app/modules/qa/mcp_tools.py`）**：最小无状态 JSON-RPC 2.0（POST，协议 `2025-06-18`，也接受 `2025-03-26` / `2024-11-05`）：`initialize` / `ping` / `tools/list` / `tools/call`，通知回 202，支持批量。建在平台工具导出之上：
+  - **问数专属工具**：`qa_ask`（objects:read；问数，不落会话 / 轮次，不返回 SQL）、`metric_query`（meta:read；`evaluate_metric`，days 1..93、period day|week|month）。
+  - **`object_query`**（objects:read）：转发到平台 `POST {ontology}/machine/objects:query`（不另写对象查询；去掉分面）。
+  - **动作 / 事件 / 函数工具**：`tools/list` 追加 `machine.tools.export(..., "mcp")`（= `GET /machine/tools?format=mcp`：能力目录 + 密钥 scope / 白名单 + 执行策略过滤，归 palantir），同名时问数工具优先；`tools/call` 现取导出、按 `bindings[name]` 转发到对应机器接口（进程内 ASGI，带同一调用身份的 `Authorization` / `Cookie` / `X-Ontology-Id` / `X-Demo-As`；动作带 `Idempotency-Key` = hash(调用方, 工具, 参数, JSON-RPC id)，同 id 重试幂等）。鉴权、执行策略（confirm 只生成待确认记录）、配额、审计全由目标接口执行；目标返回 ≥400 → `result.isError=true`、`{status, code, message, …}`。转发会按目标接口再计一次密钥配额。
+  - `tools/list` 的 objectType / metric 枚举取自能力目录（取不到就不带枚举）。`qa_ask` 落成动作卡时 `canStage` 恒为 false，`dryRun` 明细要 `actions:dry-run` 且动作在密钥白名单内——要执行就调导出的 `action_*` 工具。
+  - API 密钥 scope：入口 `require_api_scope("meta:read")`（同 `/machine/tools`）；`qa_ask` / `object_query` 另要 `objects:read`，`metric_query` = `meta:read`，`tools/list` 只列密钥够得着的问数工具，越权调用 → JSON-RPC 错误 `-32001 {required}`。**告警引用需要 `dynamic:read`**：没有就从 `qa_ask` 结果里去掉 `alerts`（链路本身也按 alerts 页权限取，`dynamic:read` 才带 alerts:view）。人工登录调用按页面权限（`qa_ask` 要 qa-workbench:view）。
+  - 参数错 → `-32602`；业务错（AppError，如没配模型 / SQL 执行失败）→ `result.isError=true`；问数工具在 savepoint 里跑。
+- **动作意图离线核对**：`tests/test_qa_intent_eval.py` 用 palantir 20 题评测集（`tests/fixtures/palantir_action_intents.yaml`）核对 `parse_intent → parse_action → policy_view / action_snapshot`（8 道动作 call / confirm 题解析到期望动作 + 参数；无对应动作不成意图；suggest / callers 不含 AI → `canStage=false`；任何策略都只出建议卡）。不调真模型。
 
 ## 3. 流式回答（SSE）
 
@@ -349,6 +369,8 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
 | `empty` | `{reason:"该门店 2026-10-18 开业，9 月尚无订单", rewrite?:"…改查 2026 年 10 月"}` | 「没有符合条件的记录（0 行）」+「结果为空」+「改查 10 月」（把改写填进输入框） |
 | `error` | `{code, message, retryable}` | 失败提示 |
 | `done` | `{turnId, kind: answer\|denied\|empty\|failed, elapsedMs}` | 结束（`kind` 跟 `QA_DEMO_TURNS[].kind` 一致；澄清是 `answer` 里带 `clarify`） |
+
+**qa-p2 实现（3.4 补充）**：实际下发的事件 = `meta{answeredVersion,dataAsOf}`、`basis`、`clarify`、`text{full}`（不做 delta）、`table`、`citations{alerts}`（告警引用）、`suggest{followUps:[], actions:[动作卡 action]}`、`denied`、`empty`、`done{turnId,kind,elapsedMs,turn}`，另有实时 `status{stage,text}` 与失败时的 `error`；`kpi` / `chart` / `insight` / `sql` 本期不出。`id` = `qa_turn_event.seq`（从 1 开始），`data` 为 JSON（多行拆成多条 `data:`）；响应头 `Cache-Control: no-cache`、`X-Accel-Buffering: no`。
 
 ### 3.2 结果状态与界面
 

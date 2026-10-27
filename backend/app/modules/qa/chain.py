@@ -32,7 +32,8 @@ import json
 import re
 import time
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -96,15 +97,27 @@ class QaExecUnavailable(AppError):
     message = "问数只读库未配置（RENGU_QA_READONLY_DATABASE_URL）"
 
 
-async def get_qa_conn(session: SessionDep) -> AsyncIterator[AsyncConnection]:
-    """只读执行连接（依赖，测试可覆盖）。"""
+@asynccontextmanager
+async def open_qa_conn(ontology_id: int) -> AsyncIterator[AsyncConnection]:
+    """只读执行连接：SET LOCAL ROLE + rengu.ontology_id（readonly.scope_readonly_conn）。"""
     try:
         engine = get_qa_readonly_engine()
     except QaReadonlyNotConfigured:
         raise QaExecUnavailable() from None
     async with engine.connect() as conn, conn.begin():
-        await scope_readonly_conn(conn, require_ontology_id(session))  # SET LOCAL ROLE + rengu.ontology_id
+        await scope_readonly_conn(conn, ontology_id)
         yield conn
+
+
+async def get_qa_conn(session: SessionDep) -> AsyncIterator[AsyncConnection]:
+    """只读执行连接（依赖，测试可覆盖）。"""
+    async with open_qa_conn(require_ontology_id(session)) as conn:
+        yield conn
+
+
+def qa_conn_opener() -> Callable[[int], Any]:
+    """W7 流式用：流里自己开连接（响应开始后函数作用域依赖已关闭）。测试覆盖成返回测试连接的 opener。"""
+    return open_qa_conn
 
 
 # ---------------------------------------------------------------- 上下文
@@ -750,6 +763,8 @@ _DOC_TITLES = {
     ),
     "session_caliber": "会话口径（用户在工作台选的；指标按这里取口径变体）",
     "refuse": "拒答清单（问到这些直接拒答，不写 SQL）",
+    "alerts": "相关告警 / 规则命中（动态模块，只读；回答时可以引用，不要编造）",
+    "actions": "可用动作（只能建议，确认后由动作中心执行）",
     "filters": "过滤列（按表）",
     "dims": "维度层级与取值",
     "samples": "列取值（全部）",
@@ -770,6 +785,10 @@ def build_prompt(question: str, ctx: dict[str, list[str]]) -> list[dict[str, str
     docs.append(_time_anchor())
     prompt += "\n===Additional Context \n\n" + "\n\n".join(docs) + "\n\n"
     prompt += _PG_RULES + "\n" + _STYLE_RULES + "\n" + _GUIDELINES
+    if ctx.get("actions"):
+        from app.modules.qa.intent import ACTION_GUIDE
+
+        prompt += ACTION_GUIDE
     return [{"role": "system", "content": prompt}, {"role": "user", "content": question}]
 
 
@@ -792,7 +811,7 @@ _FENCE_JSON = re.compile(r"```json\s*\n?(.*?)```", re.S | re.I)
 
 
 def parse_intent(text: str) -> tuple[str, Any]:
-    """模型回复 → ("sql", sql) | ("clarify", {...}) | ("refuse", {...})。
+    """模型回复 → ("sql", sql) | ("clarify", {...}) | ("refuse", {...}) | ("action", 原 JSON)。
 
     只认 ```json 块或整段就是 JSON 对象的回复，且键是 clarify / refuse；别的都当 SQL 交给 sql_guard。
     """
@@ -806,6 +825,8 @@ def parse_intent(text: str) -> tuple[str, Any]:
             obj = None
         if isinstance(obj, dict):
             c, r = obj.get("clarify"), obj.get("refuse")
+            if isinstance(obj.get("action"), dict):
+                return "action", obj
             if isinstance(c, dict):
                 opts = [str(o) for o in (c.get("options") or []) if str(o).strip()][:6]
                 return "clarify", {
@@ -954,30 +975,56 @@ async def answer(
     question: str,
     caliber_lines: list[str] | None = None,
     session_scope: str | None = None,
+    on_status: Callable[[str, str], None] | None = None,
 ) -> tuple[str, dict[str, Any], int, int, str | None]:
     """返回 (kind, snapshot, row_count, elapsed_ms, sql)。
 
     SQL 只进 qa_turn.sql_text，不出接口；SQL 被拒抛 SqlRejected（403 SQL_REJECTED）。
+    `on_status(stage, text)`：W7 流式时推 `status` 事件（同步回调，不能抛错）。
     """
+    from app.modules.qa import intent as act
+
+    def stage(name: str, text: str) -> None:
+        if on_status is not None:
+            on_status(name, text)
+
     ontology_id = require_ontology_id(session)
     if getattr(user, "ontology_id", None) != ontology_id:
         raise AppError("问数身份与工作空间不匹配", code="ONTOLOGY_SCOPE_CONFLICT", status_code=403)
     t0 = time.monotonic()
+    stage("understanding", "正在理解问题")
     ctx = await build_context(session)
-    if hit := refuse_precheck(question, ontology_id):
+    catalog = await act.action_catalog(session, user)
+    hit = refuse_precheck(question, ontology_id)
+    if hit and not (catalog and hit["code"] == "NOT_SELECT" and not sql_like(question)):
         return "denied", refuse_snapshot(hit), 0, int((time.monotonic() - t0) * 1000), None
+    stage("linking", "正在匹配对象和指标")
     names = await _names(session)
     if c := entity_ambiguity(question, names) or vague_metric(question, ontology_id, ctx):
         return "answer", clarify_snapshot(c), 0, int((time.monotonic() - t0) * 1000), None
     ctx["anchors"] = await value_anchors(session, question, names)
+    ctx["actions"] = act.action_lines(catalog)
+    alerts = await act.related_alerts(session, user, question, anchor_names(ctx["anchors"]))
+    ctx["alerts"] = act.alert_lines(alerts)
     ctx["session_scope"] = [session_scope] if session_scope else []
     ctx["session_caliber"] = caliber_lines or []  # 会话口径 → 指标变体（service.caliber_lines）
     messages = build_prompt(question, ctx)
     limit = ROW_LIMIT
     attempt, checked, repaired = 0, False, False
     while True:
+        stage("compiling", "正在生成查询")
         reply = await llm.generate_sql(messages)
         intent, val = parse_intent(reply)
+        if intent == "action":  # 动作意图：只 dry-run 出建议确认卡，从不执行
+            proposal = act.parse_action(val, catalog)
+            if proposal is not None:
+                stage("permission", "正在校验动作提交条件")
+                check = await act.dry_run(session, user, proposal)
+                policy = next(c["policy"] for c in catalog if c["id"] == proposal["type"])
+                card = act.action_snapshot(proposal, check, policy)
+                elapsed = int((time.monotonic() - t0) * 1000)
+                return "answer", _with_alerts(card, alerts), 0, elapsed, None
+            intent, val = "refuse", {"code": "NOT_SELECT", "reason": "没有可用的动作，问数只读"}
         if intent != "sql":  # 反问 / 拒答：不执行 SQL
             elapsed = int((time.monotonic() - t0) * 1000)
             if intent == "clarify":
@@ -1001,6 +1048,7 @@ async def answer(
                 continue
         if cap_time_upper(tree, clock.local_now(), qa_source(ontology_id).time_cols):
             sql = tree.sql(dialect=DIALECT)
+        stage("executing", "正在查询数据")
         try:
             async with conn.begin_nested():  # savepoint：执行报错不弄坏连接上的事务
                 res = await run_guarded(conn, wrap_limit(tree, limit + 1), user)
@@ -1037,6 +1085,7 @@ async def answer(
                 ]
                 continue
         break
+    stage("explaining", "正在整理结果")
     truncated = len(rows) > limit
     rows = _label_rows(rows[:limit], ontology_id)
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -1074,4 +1123,30 @@ async def answer(
             "paged": len(rows) > TABLE_PAGE,
         },
     }
-    return "answer", {"answer": ans}, len(rows), elapsed, sql
+    return "answer", _with_alerts({"answer": ans}, alerts), len(rows), elapsed, sql
+
+
+def _with_alerts(snap: dict[str, Any], alerts: list[dict[str, Any]]) -> dict[str, Any]:
+    """回答带上相关告警引用（只读，W7 `citations.alerts`）。"""
+    if alerts and isinstance(snap.get("answer"), dict):
+        snap["answer"]["alerts"] = alerts
+    return snap
+
+
+_SQL_LIKE = re.compile(
+    r"\b(drop|delete|insert|update|truncate|alter|create)\b|忽略之前|忽略以上|建表|删表", re.I
+)
+
+
+def sql_like(question: str) -> bool:
+    """像 SQL / 注入的写操作（不是业务动作）→ 仍由 NOT_SELECT 预检直接拒答。"""
+    return bool(_SQL_LIKE.search(question))
+
+
+def anchor_names(anchors: list[str]) -> list[str]:
+    """value_anchors 的行（“- 表.列：值1、值2”）→ 名称列表，用于找相关告警。"""
+    out: list[str] = []
+    for line in anchors:
+        _, _, tail = line.partition("：")
+        out += [v.strip() for v in re.split(r"[、,，]", tail) if v.strip()]
+    return out[:10]

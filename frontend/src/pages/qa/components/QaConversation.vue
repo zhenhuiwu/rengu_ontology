@@ -9,18 +9,22 @@ import { useQaSession, clarifyFollowUp } from '../useQaSession';
 import { useAppStore } from '@/stores/app';
 import QaAnswer from './QaAnswer.vue';
 import QaStoreAnswer from './QaStoreAnswer.vue';
-import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer } from '@/api/qa';
+import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer, QaActionAnswer, QaAlertRef, QaActionSuggest } from '@/api/qa';
 import { pinTitle } from '@/api/qaPages';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
 const props = defineProps<{ applied: boolean; tips: string[] }>();
 /** pin：真接口时带这一轮的 id 和问题（固定到页面 P7 用） */
-const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin', turn?: { id: string; title: string }): void; (e: 'apply', turnId?: string): void }>();
-const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send } = useQaSession();
+const emit = defineEmits<{ (e: 'suggest', action?: QaActionSuggest, turnId?: string): void; (e: 'pin', turn?: { id: string; title: string }): void; (e: 'apply', turnId?: string): void }>();
+const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send, streamStatus } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
 const TURNS = computed<QaRealTurn[]>(() => (live.value ? detail.value?.turns ?? [] : activeId.value ? QA_DEMO_TURNS : []));
 /** 真接口：链路新生成的回答（card = table）——沿用新轮次的回答气泡，多行结果在气泡下给出结果表 */
 type ChainTurn = Extract<QaRealTurn, { answer: QaChainAnswer }>;
+type ActionTurn = Extract<QaRealTurn, { answer: QaActionAnswer }>;
+const isAction = (t: QaRealTurn): t is ActionTurn => t.kind === 'answer' && (t.answer as { card: string }).card === 'action';
+/** 回答带的相关告警（只读引用，动态模块的告警） */
+const alertsOf = (t: QaRealTurn): QaAlertRef[] => (t.kind === 'answer' ? ((t.answer as { alerts?: QaAlertRef[] }).alerts ?? []) : []);
 const isChain = (t: QaRealTurn): t is ChainTurn => t.kind === 'answer' && (t.answer as { card: string }).card === 'table';
 const chainMeta = computed(() => `按 大区 = ${detail.value?.scope ?? '—'}、口径 = ${detail.value?.caliber ?? '—'} 回答`);
 const tableCols = (t: ChainTurn) => t.answer.table.columns.map((c) => ({ dataIndex: c.key, title: c.title, align: (c.align ?? 'left') as 'left' | 'right' }));
@@ -74,7 +78,17 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
     <div v-if="t.kind === 'system'" class="qa-sys t-12 c-3"><span>{{ t.time }} · {{ t.text }}</span></div>
     <template v-else>
     <div :ref="t.kind === 'answer' && t.answer.card === 'store' ? setStoreTurn : undefined" class="qa-u"><span v-if="t.time" class="t-12 c-3">{{ t.time }}</span><span class="qa-bubble">{{ t.question }}</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
-    <template v-if="isChain(t)">
+    <template v-if="isAction(t)">
+      <div class="qa-b qa-b-ans">
+        <ApartmentOutlined class="qa-b-av" />
+        <span class="qa-b-txt">{{ t.answer.text }}</span>
+        <a-tag :color="t.answer.action.dryRun.passed ? 'green' : 'orange'">{{ t.answer.action.dryRun.passed ? '校验通过' : '校验未通过' }}</a-tag>
+        <a-tag v-if="t.answer.action.policy === 'auto'" color="blue">策略：可自动执行 · 问数仍需你确认</a-tag>
+        <a-tooltip v-if="t.answer.action.canStage !== false" :title="reason || '只暂存到动作中心，确认后才提交；问数不会自动执行'"><a-button size="small" :disabled="readonly" @click="emit('suggest', t.answer.action, t.id)">发起动作</a-button></a-tooltip>
+        <a-tag v-else>仅建议</a-tag>
+      </div>
+    </template>
+    <template v-else-if="isChain(t)">
       <div class="qa-b qa-b-ans">
         <ApartmentOutlined class="qa-b-av" />
         <span class="qa-b-txt">{{ t.answer.text }}</span>
@@ -83,6 +97,10 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
       <a-table v-if="showTable(t)" class="qa-chain-tbl" size="small" row-key="_k" :columns="tableCols(t)" :data-source="tableRows(t)"
         :pagination="t.answer.table.paged ? { pageSize: 10, size: 'small', showSizeChanger: false } : false" :scroll="{ x: 'max-content' }" />
     </template>
+    <div v-if="alertsOf(t).length" class="qa-alerts t-12 c-2">
+      相关告警：<a-tag v-for="a in alertsOf(t)" :key="a.id" :color="a.level === '高' ? 'red' : a.level === '中' ? 'orange' : 'default'">{{ a.objLabel || a.objId }} · {{ a.rule }}（{{ a.status }}）</a-tag>
+    </div>
+    <template v-if="isAction(t) || isChain(t)" />
     <template v-else-if="t.kind === 'answer'">
     <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="live ? t.id : undefined" />
     <QaAnswer v-else :card="t.answer" :turn-id="live ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @pin="emit('pin', live ? { id: t.id, title: pinTitle(t.question) } : undefined)" @clarify="(l: string) => onClarify(t, l)" />
@@ -102,7 +120,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
     </template>
     <div v-for="(t, i) in tips" :key="i" class="qa-sys t-12 c-3"><span>{{ t }}</span></div>
     </template>
-    <div v-if="live && sending" class="qa-b qa-b-ans"><ApartmentOutlined class="qa-b-av" /><span class="qa-b-txt c-3">正在查询…</span><a-spin size="small" /></div>
+    <div v-if="live && sending" class="qa-b qa-b-ans"><ApartmentOutlined class="qa-b-av" /><span class="qa-b-txt c-3">{{ streamStatus || '正在查询…' }}</span><a-spin size="small" /></div>
     <template v-for="t in activeTurns" :key="t.id">
       <div class="qa-u"><span class="t-12 c-3">{{ t.time }}</span><span class="qa-bubble">{{ t.q }}</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
       <div class="qa-b qa-b-ans">
@@ -134,4 +152,5 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
 .qa-sys { display: flex; align-items: center; gap: 12px; margin: 0 40px 10px 0; }
 .qa-sys::before, .qa-sys::after { content: ''; flex: 1; border-top: var(--border); }
 .qa-ans + .qa-sys, :deep(.qa-ans) + .qa-sys { margin-top: 10px; }
+.qa-alerts { margin: 4px 0 8px 32px; }
 </style>

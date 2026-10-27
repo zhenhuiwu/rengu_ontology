@@ -401,6 +401,14 @@ class SynonymOut(ApiModel):
     cr: str | None = None
 
 
+class TurnActionStageIn(ApiModel):
+    """W7a 建议动作暂存：可补 / 改目标对象和参数（其余取这一轮回答里的动作卡）。"""
+
+    obj_id: str | None = Field(default=None, max_length=64)
+    obj_label: str | None = Field(default=None, max_length=200)
+    params: str | None = Field(default=None, max_length=2000)
+
+
 class AskIn(ApiModel):
     """W6 请求体：{question, refs?, clientId?}。"""
 

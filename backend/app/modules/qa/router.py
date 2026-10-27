@@ -4,11 +4,14 @@
 qa 只订阅 X4 release.published（qa-api §8 X4、§9.2 qa_object_type_view、§12 #31）。
 """
 
+import asyncio
+import logging
 from collections.abc import Callable
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
@@ -16,14 +19,18 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from app.common.audit import audit
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
-from app.common.ontology import require_ontology_id
+from app.common.ontology import require_ontology_id, set_ontology_scope
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
 from app.core.errors import AppError, DuplicateKey, EmptyInput, ExportForbidden, NotFound
 from app.core.state import InvalidTransition as StateInvalid
 from app.db.dialects import get_adapter
 from app.db.session import SessionDep
-from app.modules.qa import catalog, chain
+from app.db.session import get_session as db_session
+from app.modules.dynamic.catalog import DatabaseRefCatalog, get_catalog
+from app.modules.dynamic.ports import PortsDep
+from app.modules.dynamic.service import ActionService
+from app.modules.qa import catalog, chain, stream
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
 from app.modules.qa.eval import job as eval_job
@@ -86,12 +93,14 @@ from app.modules.qa.schemas import (
     TemplateOut,
     TMetricOut,
     TuningSummaryOut,
+    TurnActionStageIn,
     TurnResultOut,
     VoteIn,
     VoteOut,
 )
 from app.modules.versioning.service import VersioningService
 
+_log = logging.getLogger(__name__)
 router = APIRouter(tags=["qa"])
 
 
@@ -106,6 +115,7 @@ class QaSqlFailed(AppError):
 # 功能权限（qa-api §1.3 权限表；页面 key 同前端 nav.ts:25/26/29/58）。require_func 现在是骨架桩，
 # 挂上不生效，等 PDE 实现后自动生效。调优子路由统一挂在 tuning 上。
 _WB = [Depends(require_func("qa-workbench", "view"))]
+ActionCatalogDep = Annotated[DatabaseRefCatalog, Depends(get_catalog)]
 _PG = [Depends(require_func("qa-pages", "view"))]
 _OBJ = [Depends(require_func("object-search", "view"))]
 tuning = APIRouter(prefix="/tuning", dependencies=[Depends(require_func("qa-tuning", "view"))])
@@ -265,7 +275,7 @@ async def delete_session(sid: str, session: SessionDep, user: CurrentUserDep, ct
     dependencies=_WB,
     status_code=202,
     response_model=AskOut,
-    summary="W6 提问（同步跑最小 NL2SQL 链路）",
+    summary="W6 提问（同步跑最小 NL2SQL 链路；W7 流式见 turns:stream）",
 )
 async def ask(
     sid: str,
@@ -277,6 +287,16 @@ async def ask(
     conn: Annotated[AsyncConnection, Depends(chain.get_qa_conn, scope="function")],
 ):
     pk, _ = await svc.effective_user(session, user, ctx)
+    turn = await _ask_once(session, conn, llm, user, ctx, pk, sid, body)
+    return AskOut(turn_id=turn.code, stream_url=_stream_url(turn.code), turn=svc.turn_out(turn))
+
+
+def _stream_url(code: str) -> str:
+    return f"/api/qa/v1/turns/{code}/stream"
+
+
+async def _ask_once(session, conn, llm, user, ctx, pk: int, sid: str, body: AskIn, on_status=None) -> QaTurn:
+    """W6 / W7 共用：跑链路 → 落 qa_turn + qa_query_log + qa_turn_event（W7 续传 / 回放用）。"""
     s = await r.SessionRepo(session).detail(sid)
     if s is None or s.owner_id != pk:
         raise NotFound("会话不存在", details={"id": sid})
@@ -288,7 +308,14 @@ async def ask(
     try:
         lines = svc.caliber_lines(s.caliber, await svc.variant_index(session, ctx.ver)) if s.caliber else []
         kind, snapshot, rows, elapsed, sql = await chain.answer(
-            session, conn, llm, user, question, caliber_lines=lines, session_scope=s.scope
+            session,
+            conn,
+            llm,
+            user,
+            question,
+            caliber_lines=lines,
+            session_scope=s.scope,
+            on_status=on_status,
         )
     except DBAPIError as e:  # 生成的 SQL 过了网关但执行出错（列不存在、超时等）：不落轮次，前端提示换个问法
         raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
@@ -339,9 +366,203 @@ async def ask(
         )
     )
     await session.flush()
-    return AskOut(
-        turn_id=turn.code, stream_url=f"/api/qa/v1/turns/{turn.code}/stream", turn=svc.turn_out(turn)
+    await stream.write_events(session, turn, stream.turn_events(turn, svc.turn_out(turn)))
+    return turn
+
+
+@router.post(
+    "/sessions/{sid}/turns:stream",
+    dependencies=_WB,
+    summary="W7 提问（SSE 实时推 status 阶段 + 回答事件；失败时前端回退 W6）",
+    response_class=StreamingResponse,
+)
+async def ask_stream(
+    sid: str,
+    body: AskIn,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    llm: Annotated[LLMClient, Depends(get_llm)],
+    session: Annotated[AsyncSession, Depends(db_session, scope="request")],
+    opener: Annotated[Callable, Depends(chain.qa_conn_opener)],
+):
+    """会话依赖用 request 作用域：响应流完之后才提交 / 关闭（流里还要落轮次）；连接在流里自己开。
+
+    事件：`status`（实时，无 id）→ 回答事件（先写 qa_turn_event 再推，带 id）→ `done`；
+    出错推 `error` + `done(failed)`。
+    """
+    await set_ontology_scope(session, user.ontology_id)
+    pk, _ = await svc.effective_user(session, user, ctx)
+    s = await r.SessionRepo(session).detail(sid)
+    if s is None or s.owner_id != pk:
+        raise NotFound("会话不存在", details={"id": sid})
+
+    async def gen():
+        queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+
+        async def work() -> QaTurn:
+            try:
+                async with opener(user.ontology_id) as conn:
+                    return await _ask_once(
+                        session,
+                        conn,
+                        llm,
+                        user,
+                        ctx,
+                        pk,
+                        sid,
+                        body,
+                        on_status=lambda a, b: queue.put_nowait((a, b)),
+                    )
+            finally:
+                queue.put_nowait(None)
+
+        task = asyncio.create_task(work())
+        while (item := await queue.get()) is not None:
+            yield stream.sse("status", {"stage": item[0], "text": item[1]})
+        try:
+            turn = await task
+        except AppError as e:
+            yield stream.sse(
+                "error", {"code": e.code, "message": e.message, "retryable": e.status_code >= 500}
+            )
+            yield stream.sse("done", {"turnId": None, "kind": "failed", "elapsedMs": None})
+            return
+        except Exception:  # 流已经开始，不能再改 HTTP 状态码
+            _log.exception("qa stream failed: %s", sid)
+            yield stream.sse(
+                "error", {"code": "INTERNAL_ERROR", "message": "回答失败，请重试", "retryable": True}
+            )
+            yield stream.sse("done", {"turnId": None, "kind": "failed", "elapsedMs": None})
+            return
+        for eid, name, payload in await stream.stored_events(session, turn):
+            yield stream.sse(name, payload, eid)
+
+    return StreamingResponse(gen(), media_type=stream.MEDIA_TYPE, headers=stream.HEADERS)
+
+
+@router.get(
+    "/turns/{tid}/stream",
+    dependencies=_WB,
+    summary="W7 回答事件回放 / 断线续传（Last-Event-ID）",
+    response_class=StreamingResponse,
+)
+async def turn_stream(
+    tid: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+):
+    pk, _ = await svc.effective_user(session, user, ctx)
+    turn = await session.scalar(select(QaTurn).where(QaTurn.code == tid))
+    owner = await session.get(QaSession, turn.session_id) if turn is not None else None
+    if turn is None or owner is None or owner.owner_id != pk:
+        raise NotFound("轮次不存在", details={"id": tid})
+    after = stream.last_event_id(last_event_id)
+    events = await stream.stored_events(session, turn, after)
+    if not events and after == 0:  # 旧轮次没有事件：按快照现拆，不落库（GET 不写）
+        events = [(i, n, p) for i, (n, p) in enumerate(stream.turn_events(turn, svc.turn_out(turn)), start=1)]
+    chunks = [stream.sse(name, payload, eid) for eid, name, payload in events]
+
+    async def gen():
+        for c in chunks:
+            yield c
+
+    return StreamingResponse(gen(), media_type=stream.MEDIA_TYPE, headers=stream.HEADERS)
+
+
+class ActionNotStageable(AppError):
+    status_code, code, message = 409, "ACTION_POLICY_SUGGEST_ONLY", "该动作只给建议，不能从问数发起"
+
+
+def _action_svc(
+    session: SessionDep, user: CurrentUserDep, catalog: ActionCatalogDep, ports: PortsDep
+) -> ActionService:
+    return ActionService(session, user, catalog, ports)
+
+
+@router.post(
+    "/turns/{tid}/action:stage",
+    dependencies=[*_WB, Depends(require_func("action-center", "manage"))],
+    status_code=201,
+    summary="W7a 建议动作 → 动作中心待确认（不自动执行）",
+)
+async def stage_turn_action(
+    tid: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+    actions: Annotated[ActionService, Depends(_action_svc)],
+    response: Response,
+    body: TurnActionStageIn | None = None,
+):
+    """把这一轮的动作卡暂存成动作中心的待确认记录（来源 问数，确认人 = 当前用户）。
+
+    - 只认服务端保存的动作卡（类型 / 默认对象 / 参数），前端只能补目标对象和参数；
+    - 按动作已发布执行策略：suggest / 不允许 AI 发起 → 409 / 403（动作中心 gate 同款）；
+    - **不调 apply_policy**：即使策略是 auto 也停在“待确认”，由用户 `/action-runs/{code}:confirm`；
+    - 同会话同动作同对象已有待确认记录 → 200 返回那条，不重复暂存。
+    """
+    from app.modules.dynamic.models import ActionRun, ActionStatus
+    from app.modules.dynamic.schemas import SourceIn, StageIn
+    from app.modules.qa import intent as act
+
+    if ctx.preview_as:  # 预览别人时不能替人发起动作
+        raise AppError("预览模式下不能发起动作", code="FORBIDDEN", status_code=403)
+    pk, _ = await svc.effective_user(session, user, ctx)
+    t = await _own_turn(session, pk, tid)
+    a = _answer(t)
+    card = a.get("action") if a.get("card") == "action" else None
+    if t.kind != TurnKind.answer or not isinstance(card, dict) or not isinstance(card.get("stage"), dict):
+        raise TurnNotApplicable(details={"id": tid, "reason": "这一轮没有建议动作"})
+    st = card["stage"]
+    policy = await act.action_policy(session, st["typeId"])
+    if policy["mode"] == "suggest":
+        raise ActionNotStageable(details={"id": tid, "mode": "suggest"})
+    s = await session.get(QaSession, t.session_id)
+    b = body or TurnActionStageIn()
+    obj_id = (b.obj_id or st.get("objId") or "").strip()
+    if not obj_id:
+        raise AppError(
+            "请指定目标对象",
+            code="VALIDATION_FAILED",
+            status_code=422,
+            details={"fields": [{"field": "objId", "message": "请指定目标对象"}]},
+        )
+    obj_label = b.obj_label or (st.get("objLabel") if obj_id == st.get("objId") else None) or obj_id
+    params = b.params if b.params is not None else st.get("params")
+    old = await session.scalar(
+        select(ActionRun)
+        .where(
+            ActionRun.qa_session == s.code,
+            ActionRun.action_type_code == st["typeId"],
+            ActionRun.obj_id == obj_id,
+            ActionRun.status == ActionStatus.staged,
+        )
+        .order_by(ActionRun.id.desc())
+        .limit(1)
     )
+    if old is not None:
+        response.status_code = 200
+        return await actions.detail(old)
+    run, _created = await actions.stage(
+        StageIn(
+            type_id=st["typeId"],
+            source=SourceIn(type="问数", session=s.code, session_title=s.title[:60], confirmer=user.id),
+            obj_kind=st.get("objKind"),
+            obj_id=obj_id,
+            obj_label=obj_label[:200],
+            params=params,
+        )
+    )
+    await audit(
+        session,
+        user,
+        action="qa.action.stage",
+        target=run.code,
+        detail={"turn": tid, "type": st["typeId"], "objId": obj_id, "policy": policy["mode"]},
+    )
+    return await actions.detail(run)
 
 
 @router.get("/favorites", dependencies=_WB, response_model=Page[FavoriteOut], summary="W13 常用问题")
@@ -713,7 +934,10 @@ async def list_certs(
     metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
     repo = r.CertRepo(session)
     rows, total = await repo.list_page(
-        repo.list_query(_kw(kw), status, catalog.metric_key(metric, require_ontology_id(session)) if metric else None), p
+        repo.list_query(
+            _kw(kw), status, catalog.metric_key(metric, require_ontology_id(session)) if metric else None
+        ),
+        p,
     )
     return Page.of([svc.cert_out(c, metrics) for c in rows], total, p)
 
@@ -1302,3 +1526,8 @@ router.include_router(_objects_router)
 from app.modules.qa.explore_api import explore as _explore_router  # noqa: E402
 
 router.include_router(_explore_router)
+
+# M1 问数 MCP（只读工具，API 密钥按工具 scope 鉴权，见 mcp_tools.py）
+from app.modules.qa.mcp_tools import mcp as _mcp_router  # noqa: E402
+
+router.include_router(_mcp_router)

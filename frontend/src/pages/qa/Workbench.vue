@@ -147,9 +147,12 @@ function actionFields(run?: qaApi.QaActionRun) {
   ];
 }
 const staging = ref(false);
-async function runAction(reuseId?: string) {
+/** suggest：链路动作意图（只建议 + dry-run）；确认卡确认后才走动作中心 stage → confirm，问数从不自动执行 */
+async function runAction(reuseId?: string, suggest?: qaApi.QaActionSuggest, turnId?: string) {
   if (readonly.value || staging.value) return;
-  if (sess.real && !reuseId) { message.warning('问答动作尚未绑定真实目标，请在动作中心操作'); return; }
+  if (sess.real && !reuseId && !suggest) { message.warning('问答动作尚未绑定真实目标，请在动作中心操作'); return; }
+  if (suggest && (suggest.canStage === false || !turnId)) { message.warning('该动作执行策略只给建议，不能从问数发起'); return; }
+  if (suggest && !suggest.stage.objId) { message.warning('动作缺少目标对象，请在问题里指明对象后重新提问'); return; }
   let run: qaApi.QaActionRun | undefined;
   if (qaApi.actionsReal() && reuseId) {
     // 刷新带 ?confirm=1&run= 的页面：复用已暂存的动作；它已确认 / 撤回就不再弹卡，也不新建（不留孤儿记录）
@@ -158,12 +161,18 @@ async function runAction(reuseId?: string) {
       if (r.can?.confirm ?? r.status === '待确认') run = r;
     } catch { /* 取不到就当已失效 */ }
     if (!run) { setConfirmQuery(false); return; }
+  } else if (suggest && !qaApi.actionsReal()) {
+    message.warning('动作中心未切到真接口，无法提交');
+    return;
   } else if (qaApi.actionsReal()) {
     // X1：打开确认卡前先暂存，确认卡上显示服务端生成的幂等键
     staging.value = true;
     try {
       const d = sess.detail.value;
-      run = await qaApi.stageAction({ action: ACTION, source: { type: '问数', session: d?.id, sessionTitle: d?.title }, objKind: ACTION_TARGET.kind, objId: ACTION_TARGET.id, objLabel: ACTION_TARGET.label, params: ACTION_PARAMS });
+      const source = { type: '问数' as const, session: d?.id, sessionTitle: d?.title };
+      run = suggest && turnId
+        ? await qaApi.stageTurnAction(turnId)
+        : await qaApi.stageAction({ action: ACTION, source, objKind: ACTION_TARGET.kind, objId: ACTION_TARGET.id, objLabel: ACTION_TARGET.label, params: ACTION_PARAMS });
     } catch (e) { message.error(`发起失败：${errText(e)}`); return; } finally { staging.value = false; }
   }
   setConfirmQuery(true, run?.id);
@@ -208,7 +217,7 @@ onMounted(() => {
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
       <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
-      <QaConversation :applied="applied" :tips="tips" @suggest="runAction()" @pin="openPin" @apply="openApply" />
+      <QaConversation :applied="applied" :tips="tips" @suggest="(a?: qaApi.QaActionSuggest, tid?: string) => runAction(undefined, a, tid)" @pin="openPin" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
     <QaObjectPanel v-if="!sess.real" :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />
