@@ -28,7 +28,7 @@ const setQuery = (patch: Record<string, string | undefined>) => router.replace({
 const real = adminApiOn();
 const { readonly: viewReadonly, reason: viewReason } = useReadonly();
 const readonly = computed(() => real || viewReadonly.value);
-const reason = computed(() => real ? '暂不可操作' : viewReason.value);
+const reason = computed(() => viewReason.value || (real ? '密钥管理暂不可用' : ''));
 const confirm = useConfirmStore();
 const TODAY = '2026-10-25';
 const nowStr = '2026-10-25 17:20';
@@ -172,7 +172,8 @@ async function closeCreate() {
     <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="setQuery({ form: 'create', from: undefined })">新建密钥</a-button></a-tooltip>
   </Teleport>
   <div class="panel ak">
-    <a-empty v-if="real" description="暂无密钥" />
+    <a-empty v-if="real" class="ak-empty" description="密钥管理暂不可用" />
+    <template v-else>
     <div class="panel-head">
       <span class="ak-sum">
         <span class="t-16 fw-600">API 密钥</span>
@@ -211,6 +212,7 @@ async function closeCreate() {
       v-model:page="pq.page.value" v-model:size="pq.size.value" class="ak-pager"
       variant="full" :total="paged.total" unit="个密钥" :default-size="pq.defaultSize" :empty="false"
     />
+    </template>
   </div>
 
   <!-- 详情 -->
@@ -312,6 +314,7 @@ async function closeCreate() {
 
 <style scoped>
 .ak { flex: 1; min-height: 0; }
+.ak-empty { margin: auto; padding: 32px; }
 .ak-sum { display: inline-flex; align-items: baseline; gap: 16px; }
 .ak-table { flex: 1; min-height: 0; padding: 0 16px; }
 .ak-pager { padding: 4px 16px 8px; }
