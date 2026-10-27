@@ -15,6 +15,7 @@ import InfoTip from '@/components/InfoTip.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import EChart from '@/components/EChart.vue';
 import EventDeliveries from '@/components/EventDeliveries.vue';
+import DeliveryExceptions from '@/components/DeliveryExceptions.vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
@@ -86,7 +87,7 @@ const cur = computed<EventType>(() => {
 const RESET = { view: undefined, fpage: undefined, fsize: undefined, epage: undefined };
 const statusColor = (s: EventType['status']) => (s === '变更中' ? 'warning' : 'default');
 
-const TABS = ['overview', 'payload', 'subs', 'recent', 'versions'];
+const TABS = ['overview', 'payload', 'subs', 'recent', 'exceptions', 'versions'];
 const tab = computed({
   get: () => (TABS.includes(route.query.tab as string) ? (route.query.tab as string) : 'overview'),
   set: (v) => router.replace({ query: { ...route.query, ...RESET, view: route.query.view, tab: v === 'overview' ? undefined : v } }),
@@ -395,6 +396,7 @@ const verCols = [
         <a-tab-pane key="payload" tab="载荷字段" />
         <a-tab-pane key="subs" tab="订阅方" />
         <a-tab-pane key="recent" tab="近期事件" />
+        <a-tab-pane v-if="real" key="exceptions" tab="投递异常" />
         <a-tab-pane key="versions" tab="版本历史" />
       </a-tabs>
 
@@ -543,6 +545,10 @@ const verCols = [
         <AppPagination v-model:page="eq.page.value" variant="simple" class="et-pg-nt" :total="recent.total" :size="eq.size.value" unit="个事件" :empty="false">
           <template #extra><span class="t-12 c-2">保留期 {{ cur.retention }}</span><InfoTip text="事件流不显示总数" /></template>
         </AppPagination>
+      </div>
+
+      <div v-else-if="tab === 'exceptions' && real" class="et-body">
+        <DeliveryExceptions :key="cur.id" :type-id="cur.id" />
       </div>
 
       <!-- 版本历史 -->

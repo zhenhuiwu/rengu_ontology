@@ -232,6 +232,20 @@ class EventDelivery(IdMixin, MutableTableMixin, Base):
     result: Mapped[dict | None] = mapped_column(JsonType)
 
 
+class EventDeliveryRecord(IdMixin, AppendOnlyTableMixin, Base):
+    """Immutable attempt and human decision journal; never stores transport secrets."""
+
+    __tablename__ = "event_delivery_record"
+    __table_args__ = (Index("ix_event_delivery_record_delivery_id_id", "delivery_id", "id"),)
+    delivery_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("event_delivery.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str | None] = mapped_column(String(128))
+    result: Mapped[dict | None] = mapped_column(JsonType)
+    detail: Mapped[dict | None] = mapped_column(JsonType)
+
+
 class EventDedup(IdMixin, MutableTableMixin, Base):
     """每种类型/去重键的最近接受时间；不随事件保留期清除，因此永久窗口不会失效。"""
 

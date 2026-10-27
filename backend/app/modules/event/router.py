@@ -9,6 +9,7 @@ from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
 from app.modules.action.schemas import ItemsOut, TypeVersionOut
+from app.modules.event.exceptions import DispositionIn
 from app.modules.event.schemas import (
     EventOut,
     EventPageOut,
@@ -25,6 +26,47 @@ from app.modules.event.simulation import SimulateIn, SimulateOut, simulate
 
 router = APIRouter(tags=["event"], dependencies=[Depends(require_func("event-types", "view"))])
 EventPathId = Annotated[str, Path(pattern=r"^[^\x00]+$")]
+
+
+@router.get("/event-types/{type_id}/delivery-exceptions", summary="按真实对象权限筛选的投递异常")
+async def delivery_exceptions(
+    type_id: EventPathId,
+    session: SessionDep,
+    user: CurrentUserDep,
+    state: Annotated[Literal["unknown", "failed", "quarantined", "pending"] | None, Query()] = None,
+    kw: Annotated[str | None, Query(max_length=128)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
+) -> dict:
+    from app.modules.event.exceptions import inbox
+
+    return await inbox(session, user, type_id, state, kw, page, size)
+
+
+@router.get("/event-deliveries/{delivery_id}", summary="投递及不可变尝试、人工处置记录")
+async def delivery_detail(
+    delivery_id: Annotated[int, Path(ge=1)],
+    session: SessionDep,
+    user: CurrentUserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
+) -> dict:
+    from app.modules.event.exceptions import detail
+
+    return await detail(session, user, delivery_id, page, size)
+
+
+@router.post("/event-deliveries/{delivery_id}:dispose", summary="显式证据与授权的投递人工处置")
+async def dispose_delivery(
+    delivery_id: Annotated[int, Path(ge=1)],
+    body: DispositionIn,
+    session: SessionDep,
+    user: CurrentUserDep,
+    ctx: ViewContextDep,
+) -> dict:
+    from app.modules.event.exceptions import dispose
+
+    return await dispose(session, user, ctx, delivery_id, body)
 
 
 @router.post(
@@ -53,18 +95,14 @@ async def event_deliveries(
 ) -> dict:
     from sqlalchemy import func, select
 
-    from app.core.errors import Forbidden, NotFound
-    from app.modules.event.delivery import authorize_object
+    from app.core.errors import NotFound
+    from app.modules.event.exceptions import authorize, output
     from app.modules.event.models import Event, EventDelivery
 
     event = await session.scalar(select(Event).where(Event.code == event_id))
     if event is None:
         raise NotFound("事件不存在")
-    if event.is_test:
-        if event.created_by != user.id:
-            raise Forbidden("只能查看本人创建的测试投递记录")
-    else:
-        await authorize_object(session, user, event, "view")
+    await authorize(session, user, event)
     query = select(EventDelivery).where(EventDelivery.event_id == event.id)
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     page = min(page, max(1, (total + size - 1) // size))
@@ -76,33 +114,7 @@ async def event_deliveries(
         "total": total,
         "page": page,
         "size": size,
-        "items": [
-            {
-                "name": row.subscriber_name,
-                "state": row.state,
-                "attempts": row.attempts,
-                "error": row.error,
-                "result": {
-                    key: row.result[key]
-                    for key in (
-                        "httpStatus",
-                        "actionId",
-                        "ruleId",
-                        "ruleVersion",
-                        "hitId",
-                        "alertId",
-                        "status",
-                        "actionStatus",
-                        "actionReason",
-                        "blockedByEventId",
-                    )
-                    if key in row.result
-                }
-                if row.result
-                else None,
-            }
-            for row in rows
-        ],
+        "items": [output(row, event) for row in rows],
     }
 
 

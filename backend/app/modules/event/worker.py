@@ -10,6 +10,7 @@ import procrastinate
 from app.core.config import get_settings
 from app.db import models as _models  # noqa: F401
 from app.db.session import dispose_engine, get_sessionmaker
+from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.event.delivery import discover, due, execute, prepare, recover
 
 QUEUE = "event-delivery"

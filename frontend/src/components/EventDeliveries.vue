@@ -3,15 +3,18 @@ import { computed, onScopeDispose, ref, watch } from 'vue';
 import { actionContextKey, getEventDeliveries, type EventDeliveryStatus } from '@/api/action';
 import AppPagination from './AppPagination.vue';
 import ObjRef from './ObjRef.vue';
+import DeliveryReview from './DeliveryReview.vue';
+import { deliveryLabels } from './deliveryPresentation';
 
 const props = defineProps<{ eventId: string }>();
 const rows = ref<EventDeliveryStatus | null>(null);
 const loading = ref(false);
 const error = ref('');
 const page = ref(1);
+const selected = ref<string | null>(null);
 let seq = 0;
 onScopeDispose(() => { ++seq; });
-watch([() => props.eventId, actionContextKey], () => { page.value = 1; }, { flush: 'sync' });
+watch([() => props.eventId, actionContextKey], () => { ++seq; rows.value = null; selected.value = null; page.value = 1; }, { flush: 'sync' });
 async function load() {
   const n = ++seq;
   rows.value = null; error.value = ''; loading.value = true;
@@ -23,10 +26,6 @@ async function load() {
 }
 watch([() => props.eventId, actionContextKey, page], load, { immediate: true });
 type Delivery = EventDeliveryStatus['items'][number];
-const labels: Record<string, string> = {
-  pending: '待投递', processing: '投递中', delivered: '已投递', skipped: '已跳过',
-  failed: '投递失败', unknown: '结果待确认', quarantined: '迟到事件已隔离',
-};
 const reasons: Record<string, string> = {
   ORDERING_PREDECESSOR_UNRESOLVED: '待前序完成',
   ORDERING_LATE_EVENT_QUARANTINED: '更晚事件已开始投递，当前迟到事件已隔离',
@@ -47,11 +46,11 @@ const reasons: Record<string, string> = {
   BUSINESS_TEST_CHANNEL_NOT_CONFIGURED: '测试事件不生成告警或动作',
 };
 function status(row: Delivery) {
-  if (row.error === 'ORDERING_PREDECESSOR_UNRESOLVED') return '待前序完成';
+  if (row.state === 'pending' && row.error === 'ORDERING_PREDECESSOR_UNRESOLVED') return '待前序完成';
   if (row.state === 'delivered' && row.result?.status === 'alert_created' && row.result.alertId) return '已生成告警';
   if (row.state === 'delivered' && row.result?.status === 'not_matched') return '规则已处理，未命中';
   if (row.state === 'delivered' && row.result?.status === 'deduped') return '规则已处理，已去重';
-  return labels[row.state] ?? row.state;
+  return deliveryLabels[row.state] ?? row.state;
 }
 const total = computed(() => rows.value?.total ?? 0);
 </script>
@@ -66,6 +65,7 @@ const total = computed(() => rows.value?.total ?? 0);
           <div class="delivery-row">
             <div class="delivery-title"><span class="fw-500">{{ item.name }}</span><a-tag :color="['failed', 'quarantined'].includes(item.state) ? 'error' : ['pending', 'unknown'].includes(item.state) ? 'warning' : 'default'">{{ status(item) }}</a-tag></div>
             <div v-if="item.error" class="t-12 c-2">{{ reasons[item.error] ?? (item.state === 'pending' ? '暂未满足投递条件' : '请核查投递详情') }}</div>
+            <a-button size="small" type="link" @click="selected = item.id">核查与处置</a-button>
             <a-collapse ghost>
               <a-collapse-panel key="receipt" header="投递详情">
                 <a-descriptions :column="1" size="small">
@@ -86,6 +86,7 @@ const total = computed(() => rows.value?.total ?? 0);
     <a-empty v-else-if="!loading && !error" description="暂无投递记录" />
     <AppPagination v-if="rows && total" v-model:page="page" variant="simple" :total="total" :size="10" :empty="false" />
   </a-spin>
+  <DeliveryReview :delivery-id="selected" @close="selected = null" @changed="load" />
 </template>
 
 <style scoped>

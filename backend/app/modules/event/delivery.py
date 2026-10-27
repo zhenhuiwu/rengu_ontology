@@ -16,7 +16,8 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.dialects import get_adapter
 from app.modules.action.condition_expr import Unavailable
-from app.modules.event.models import Event, EventDelivery, EventOutcome
+from app.modules.event.delivery_history import record, safe_result
+from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, EventOutcome
 from app.modules.event.schemas import FieldOut
 
 INTERVAL = timedelta(minutes=1)
@@ -94,6 +95,12 @@ def route_for(event: Event, delivery: EventDelivery) -> dict:
     return routes().get(f"{definition.get('id', '')}/{delivery.subscriber_name}", {})
 
 
+def route_fingerprint(route: dict) -> str:
+    # Credentials may rotate; recipient, execution identity and mapping must stay bound to the attempt.
+    binding = {key: value for key, value in route.items() if key not in ("token", "test_token")}
+    return hashlib.sha256(json.dumps(binding, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def object_order_lock(event_type_id: int, obj_kind: str, object_id: str) -> str:
     # Shared with ingress: the claim sees every accepted predecessor before advancing the stream.
     return "event.order:" + json.dumps([event_type_id, obj_kind, object_id], ensure_ascii=False)
@@ -141,7 +148,7 @@ async def check_order(session, event: Event, delivery: EventDelivery, route: dic
             position < current,
             or_(
                 EventDelivery.id.is_(None),
-                EventDelivery.state.not_in(("delivered", "skipped", "quarantined")),
+                EventDelivery.state.not_in(("delivered", "confirmed", "skipped", "quarantined")),
             ),
         )
         .order_by(Event.occurred_at, Event.code.collate("C"))
@@ -226,13 +233,17 @@ async def aggregate(session, event: Event) -> None:
             )
             else EventOutcome.delivered
         )
+    elif states & {"confirmed", "skipped"}:
+        event.outcome = EventOutcome.partial
     else:
         event.outcome = EventOutcome.pending
     pending = sum(d.state in ("pending", "processing") for d in deliveries)
     failed = sum(d.state in ("failed", "unknown", "quarantined") for d in deliveries)
     skipped = sum(d.state == "skipped" for d in deliveries)
+    confirmed = sum(d.state == "confirmed" for d in deliveries)
     event.summary = (
-        f"订阅投递：成功 {event.subscriber_count}，待处理 {pending}，失败/未知 {failed}，过滤/停用 {skipped}"
+        f"订阅投递：成功 {event.subscriber_count}，人工确认 {confirmed}，待处理 {pending}，"
+        f"失败/未知 {failed}，跳过 {skipped}"
     )
     if deliveries and not states & {"pending", "processing"} and event.ingested_at:
         event.latency_ms = max(0, round((clock.now() - event.ingested_at).total_seconds() * 1000))
@@ -258,6 +269,8 @@ async def prepare(session, delivery_id: int) -> bool:
     )
     if delivery is None or delivery.state != "pending":
         return False
+    before = (delivery.state, delivery.error, delivery.result)
+    previous = {"previousError": before[1], "previousResult": safe_result(before[2])}
     delivery.result = None
     try:
         definition = event.definition_snapshot
@@ -277,11 +290,13 @@ async def prepare(session, delivery_id: int) -> bool:
         except Unavailable:
             delivery.state, delivery.error = "failed", "FILTER_NOT_EXECUTABLE"
             delivery.finished_at = clock.now()
+            record(session, delivery, "preflight", detail=previous)
             await aggregate(session, event)
             return False
         if not matched:
             delivery.state, delivery.error = "skipped", "FILTER_NOT_MATCHED"
             delivery.finished_at = clock.now()
+            record(session, delivery, "preflight", detail=previous)
             await aggregate(session, event)
             return False
         route = route_for(event, delivery)
@@ -307,6 +322,7 @@ async def prepare(session, delivery_id: int) -> bool:
                 "不保证",
             )
             if ordered and not await check_order(session, event, delivery, route):
+                record(session, delivery, "preflight", detail=previous)
                 await aggregate(session, event)
                 return False
         if not (route.get("action_type") or route.get("rule_code")):
@@ -314,15 +330,27 @@ async def prepare(session, delivery_id: int) -> bool:
         delivery.state, delivery.started_at = "processing", clock.now()
         delivery.attempts += 1
         delivery.error, delivery.result = None, None
+        record(
+            session,
+            delivery,
+            "attempt_started",
+            detail={
+                "routeFingerprint": route_fingerprint(route),
+                **previous,
+            },
+        )
         return True
     except (Unavailable, AppError) as exc:
         delivery.error = exc.code if isinstance(exc, AppError) else str(exc)
         delivery.next_at = clock.now() + INTERVAL
+        if before != (delivery.state, delivery.error, delivery.result):
+            record(session, delivery, "preflight", detail=previous)
         await aggregate(session, event)
         return False
     except (ValueError, TypeError, KeyError):
         delivery.state, delivery.error = "failed", "DELIVERY_DEFINITION_INVALID"
         delivery.finished_at = clock.now()
+        record(session, delivery, "preflight", detail=previous)
         await aggregate(session, event)
         return False
 
@@ -350,6 +378,18 @@ async def execute(session, delivery_id: int) -> None:
     event = await session.scalar(select(Event).where(Event.id == delivery.event_id).with_for_update(of=Event))
     try:
         route = route_for(event, delivery)
+        started = await session.scalar(
+            select(EventDeliveryRecord)
+            .where(
+                EventDeliveryRecord.delivery_id == delivery.id,
+                EventDeliveryRecord.kind == "attempt_started",
+                EventDeliveryRecord.attempt == delivery.attempts,
+            )
+            .order_by(EventDeliveryRecord.id.desc())
+            .limit(1)
+        )
+        if started is None or (started.detail or {}).get("routeFingerprint") != route_fingerprint(route):
+            raise Unavailable("DELIVERY_ROUTE_BINDING_CHANGED")
         if route.get("action_type") and route.get("rule_code"):
             raise Unavailable("DELIVERY_ROUTE_CONFLICT")
         if route.get("rule_code"):
@@ -447,6 +487,7 @@ async def execute(session, delivery_id: int) -> None:
         # Do not log transport/configuration exceptions: their text can contain credentials.
         delivery.state, delivery.error = "unknown", "EXECUTION_INTERRUPTED_REQUIRES_REVIEW"
     delivery.finished_at, delivery.next_at = clock.now(), None
+    record(session, delivery, "attempt_finished")
     await aggregate(session, event)
     await session.flush()
 
@@ -463,6 +504,7 @@ async def recover(session) -> None:
     for delivery in rows:
         delivery.state, delivery.error = "unknown", "WORKER_INTERRUPTED_REQUIRES_REVIEW"
         delivery.finished_at = clock.now()
+        record(session, delivery, "attempt_interrupted")
         await aggregate(session, await session.get(Event, delivery.event_id))
 
 
