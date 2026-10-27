@@ -29,9 +29,7 @@ async def function_access(session: AsyncSession, user_id: int) -> tuple[dict[str
 
 async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, dict | None]:
     """Batch current role grants and scopes; missing/ambiguous identities never grant data access."""
-    from app.common.sql_guard import RoleAccess, effective_expr
     from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
-    from app.modules.static.models import ObjectStatus, ObjectType
 
     ontology_id = session.info.get("ontology_id")
     if ontology_id is None:
@@ -53,29 +51,47 @@ async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, di
             .order_by(SysRole.code)
         )
     )
-    if not roles:
+    return await role_row_access(session, roles)
+
+
+async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict | None]:
+    """Row filters for already ontology-bound roles (rows with id / objs / default_deny).
+
+    Shared by user identities and service accounts. Scopes are read for the current ontology only
+    (explicit predicate + FORCE RLS). A scope with object_type_id matches exactly that object type;
+    a scope whose referenced object type was deleted (code kept, id nulled) is unmapped and denies;
+    legacy rows without either keep the label matching, where ambiguity is also deny.
+    """
+    from app.common.sql_guard import RoleAccess, effective_expr
+    from app.modules.static.models import ObjectStatus, ObjectType
+
+    ontology_id = session.info.get("ontology_id")
+    if ontology_id is None or not roles:
         return {}
     scopes = {role.id: [] for role in roles}
     for scope in await session.execute(
         select(
             SysRoleScope.role_id,
             SysRoleScope.obj_type,
+            SysRoleScope.object_type_id,
+            SysRoleScope.object_type_code,
             SysRoleScope.prop,
             SysRoleScope.op,
             SysRoleScope.values,
         )
-        .where(SysRoleScope.role_id.in_(scopes))
+        .where(SysRoleScope.role_id.in_(scopes), SysRoleScope.ontology_id == ontology_id)
         .order_by(SysRoleScope.role_id, SysRoleScope.seq, SysRoleScope.id)
     ):
         scopes[scope.role_id].append(scope)
     objects = list(
         await session.execute(
-            select(ObjectType.code, ObjectType.api_name, ObjectType.display_name).where(
+            select(ObjectType.id, ObjectType.code, ObjectType.api_name, ObjectType.display_name).where(
                 ObjectType.status == ObjectStatus.published
             )
         )
     )
     identities = {obj.api_name: {obj.code, obj.api_name, obj.display_name} for obj in objects}
+    published_ids = {obj.id for obj in objects}
     output = {}
     for obj in objects:
         access = []
@@ -91,7 +107,15 @@ async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, di
                     labels.add(entry["objType"])
                 for label in labels:
                     by_label.setdefault(label, set()).add(api)
-            unmapped = any(len(by_label.get(scope.obj_type, ())) != 1 for scope in scopes[role.id])
+
+            def unmapped_scope(scope, by_label=by_label) -> bool:
+                if scope.object_type_id is not None:
+                    return scope.object_type_id not in published_ids
+                if scope.object_type_code is not None:
+                    return True
+                return len(by_label.get(scope.obj_type, ())) != 1
+
+            unmapped = any(unmapped_scope(scope) for scope in scopes[role.id])
             matches = [p for p in permissions if p.get("api") == obj.api_name]
             if len(matches) != 1 or matches[0].get("view") is not True:
                 continue
@@ -101,6 +125,11 @@ async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, di
                 names.add(permission["objType"])
             scoped = []
             for scope in scopes[role.id]:
+                if scope.object_type_id is not None or scope.object_type_code is not None:
+                    if scope.object_type_id != obj.id:
+                        continue
+                    scoped.append({"prop": scope.prop, "op": scope.op, "values": scope.values})
+                    continue
                 if scope.obj_type not in names:
                     continue
                 # Duplicated labels must not transfer another object's scope or become unlimited.

@@ -36,18 +36,21 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import sqlglot
-from sqlalchemy import exists, select
+from sqlalchemy import event, exists, select, text
 from sqlalchemy.dialects.postgresql import asyncpg as _pg_asyncpg
+from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement, FromClause
 from sqlalchemy.sql.util import ClauseAdapter
 from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
+from app.common.ontology import DEFAULT_ONTOLOGY_ID  # also registers the RLS after_begin hook first
 from app.core.errors import Forbidden
 
 DIALECT = "postgres"
@@ -322,9 +325,76 @@ def register_unrestricted(*names: str) -> None:
         _UNRESTRICTED.add(n)
 
 
+# ontology_id -> (loaded_at, object type codes defined in that ontology). Physical tables are registered once
+# (they carry ontology_id + RLS); a workspace governs a table only when it defines the table's object type.
+_BOUND: dict[int, tuple[float, frozenset[str]]] = {}
+_BOUND_TTL = 30.0
+_BOUND_SQL = text("SELECT code FROM object_type WHERE ontology_id = :ontology_id")
+
+
+def _valid_ontology(ontology_id: Any) -> bool:
+    return type(ontology_id) is int and ontology_id > 0
+
+
+def _store_bound(ontology_id: int, codes: Any) -> None:
+    _BOUND[ontology_id] = (time.monotonic(), frozenset(codes))
+
+
+def _bound_stale(ontology_id: int) -> bool:
+    hit = _BOUND.get(ontology_id)
+    return hit is None or time.monotonic() - hit[0] > _BOUND_TTL
+
+
+def _resolve(codes: frozenset[str]) -> dict[str, GovernedTable]:
+    def bound(g: GovernedTable) -> bool:
+        # Inherited tables (order_line → biz_order) carry no scope of their own: bound with their parent.
+        return bound(g.inherit.parent) if g.inherit else g.object_type in codes
+
+    return {name: g for name, g in _GOVERNED.items() if bound(g)}
+
+
 def governed_tables(ontology_id: int | None = None) -> dict[str, GovernedTable]:
-    # The registered physical bindings belong to the retained retail workspace only.
-    return dict(_GOVERNED) if type(ontology_id) is int and ontology_id == 1 else {}
+    """Governed tables of one ontology workspace (no argument = the whole physical registry).
+
+    Resolved from the workspace's own object types (loaded per transaction by `load_governed_tables` /
+    the after_begin hook, refreshed on object_type flushes). Before anything is loaded the legacy rule
+    applies (workspace 1 = everything registered, others = none), so the result is never wider than before.
+    """
+    if ontology_id is None:
+        return dict(_GOVERNED)
+    if not _valid_ontology(ontology_id):
+        return {}
+    hit = _BOUND.get(ontology_id)
+    if hit is None:
+        return dict(_GOVERNED) if ontology_id == DEFAULT_ONTOLOGY_ID else {}
+    return _resolve(hit[1])
+
+
+async def load_governed_tables(session: Any, ontology_id: int | None = None) -> dict[str, GovernedTable]:
+    """Reload the current (or given) workspace's object type codes and return its governed tables."""
+    oid = ontology_id if ontology_id is not None else session.info.get("ontology_id")
+    if not _valid_ontology(oid):
+        return {}
+    rows = await session.execute(_BOUND_SQL, {"ontology_id": oid})
+    _store_bound(oid, rows.scalars())
+    return governed_tables(oid)
+
+
+@event.listens_for(Session, "after_begin")
+def _load_bound_on_begin(session, transaction, connection):
+    oid = session.info.get("ontology_id")
+    if _valid_ontology(oid) and _bound_stale(oid):
+        _store_bound(oid, connection.execute(_BOUND_SQL, {"ontology_id": oid}).scalars())
+
+
+@event.listens_for(Session, "after_flush")
+def _reload_bound_on_object_type_change(session, flush_context):
+    oid = session.info.get("ontology_id")
+    if not _valid_ontology(oid):
+        return
+    changed = (*session.new, *session.dirty, *session.deleted)
+    if any(getattr(o, "__tablename__", None) == "object_type" for o in changed):
+        _store_bound(oid, session.connection().execute(_BOUND_SQL, {"ontology_id": oid}).scalars())
 
 
 def unrestricted_tables() -> frozenset[str]:
@@ -445,10 +515,11 @@ async def row_filters_for(user: Any) -> dict[str, Predicate | None]:
     from app.common.auth import row_filter
 
     ontology_id = getattr(user, "ontology_id", None)
-    if type(ontology_id) is not int or ontology_id != 1:
+    governed = governed_tables(ontology_id) if _valid_ontology(ontology_id) else {}
+    if not governed:
         raise SqlRejected("当前本体工作空间尚未绑定可执行的受控数据源")
     out: dict[str, Predicate | None] = {}
-    for name, g in governed_tables(ontology_id).items():
+    for name, g in governed.items():
         pred = compile_predicate(g, await row_filter(user, g.scope_object_type), user.attrs)
         clause, values = pred if pred is not None else ("TRUE", [])
         out[name] = (f"({clause}) AND {name}.ontology_id = ${len(values) + 1}", [*values, ontology_id])

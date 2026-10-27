@@ -47,6 +47,8 @@ async def insert_audit(
 ) -> AuditLog:
     """写一条审计（与业务写入同一事务，不 commit）。result 可传枚举或中文「成功 / 失败 / 拒绝」。"""
     at = time or now()
+    # Machine caller (API key / service account) recorded by authenticate_key; humans → principal_kind "user".
+    caller = session.info.get("api_caller") or {}
     row = AuditLog(
         code=_new_code(at),
         time=at,
@@ -57,6 +59,9 @@ async def insert_audit(
         result=result if isinstance(result, AuditResult) else AuditResult(result),
         created_by=created_by,
         ontology_id=session.info.get("ontology_id"),
+        principal_kind=caller.get("principal_kind", "user"),
+        service_account_code=caller.get("service_account_code"),
+        api_key_prefix=caller.get("api_key_prefix"),
     )
     session.add(row)
     await session.flush()
