@@ -243,6 +243,12 @@ async def scenarios_meta(svc: ScSvc) -> dict[str, Any]:
     return await svc.meta()
 
 
+@router.get("/scenarios/templates", dependencies=SC_VIEW)
+async def scenario_templates(svc: ScSvc) -> dict[str, Any]:
+    """当前本体的推演模板定义（scenario_template 表原样）；未配置时 items 为空。"""
+    return {"items": await svc.templates()}
+
+
 @router.get("/scenarios:compare", dependencies=SC_VIEW)
 async def compare_scenarios(svc: ScSvc, ids: str) -> dict[str, Any]:
     """S8：ids=a,b,c（≤3 个已完成）。"""

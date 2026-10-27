@@ -14,7 +14,6 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
-from app.common.ontology import require_ontology_id
 from app.common.pagination import Page, PageParams
 from app.core.clock import now
 from app.core.errors import AppError, NotFound
@@ -931,7 +930,7 @@ class ScenarioService:
         cur = await self.session.scalar(
             select(OntologyRelease).order_by(OntologyRelease.published_at.desc()).limit(1)
         )
-        tpl = template_of(src.template_code if src else None, require_ontology_id(self.session))
+        tpl = await template_of(self.session, src.template_code if src else None)
         s = Scenario(
             code=await self._next_code(),
             name=f"{src.name}（副本）" if src else "新方案",
@@ -977,7 +976,7 @@ class ScenarioService:
                 f"已转为 {len(s.staged)} 条暂存动作，配置锁定；如需调整请“复制为新方案”",
                 409,
             )
-        tpl = template_of(s.template_code, require_ontology_id(self.session))
+        tpl = await template_of(self.session, s.template_code)
         opts = await scope_options(self.session, self.user, tpl)
         _scope, drivers, errs = tpl_validate(tpl, body.scope, body.drivers, opts)
         if errs:
@@ -1069,12 +1068,24 @@ class ScenarioService:
         await self.session.flush()
         return {"staged": ids, "message": f"已暂存 {len(ids)} 条动作到动作中心（待确认）"}
 
+    async def templates(self) -> list[dict[str, Any]]:
+        return await templates(self.session)
+
     async def meta(self) -> dict[str, Any]:
-        if require_ontology_id(self.session) != 1:
-            return {"executorConfigured": False, "unavailableReason": "当前本体尚未配置推演模板与执行器",
-                    "templates": [], "areas": [], "categories": [], "promoTypes": [],
-                    "baseDrivers": {}, "statuses": ["全部", *[x.value for x in ScenarioStatus]]}
-        tpl = template_of(None, require_ontology_id(self.session))
+        statuses = ["全部", *[x.value for x in ScenarioStatus]]
+        definitions = await templates(self.session)
+        if not definitions:
+            return {
+                "executorConfigured": False,
+                "unavailableReason": "当前本体尚未配置推演模板与执行器",
+                "templates": [],
+                "areas": [],
+                "categories": [],
+                "promoTypes": [],
+                "baseDrivers": {},
+                "statuses": statuses,
+            }
+        tpl = definitions[0]
 
         async def values(column):
             return sorted(
@@ -1084,7 +1095,6 @@ class ScenarioService:
         areas = await values(Scenario.scope["area"].as_string())
         categories = await values(Scenario.scope["category"].as_string())
         promos = await values(Scenario.drivers["promo"].as_string())
-        definitions = deepcopy(templates(require_ontology_id(self.session)))
         for definition in definitions:
             for field in definition["scope"]:
                 if field["key"] in ("area", "category"):
@@ -1097,7 +1107,7 @@ class ScenarioService:
             "categories": categories,
             "promoTypes": promos,
             "baseDrivers": defaults(driver_fields(tpl)),
-            "statuses": ["全部", *[x.value for x in ScenarioStatus]],
+            "statuses": statuses,
         }
 
 

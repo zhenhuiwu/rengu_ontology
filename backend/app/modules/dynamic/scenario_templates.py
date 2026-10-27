@@ -1,24 +1,28 @@
 """情景推演模板（元数据驱动）：目标对象类型、范围筛选、数值驱动、输出指标、影响明细列、建议动作。
 
-- 模板定义：seeds/json/dynamic/SC_TEMPLATES.json（与 src/mock/scenarioTemplates.ts 同一份），
-  EXTENSION POINT (PDE): 改成 scenario_template 表 / 本体配置后从库里读。
+- 模板定义：按本体存在 scenario_template 表（dynamic_0024；RLS 只看到当前空间），definition 为单条模板；
+  ontology 1 的初始配置由迁移从 seeds/json/dynamic/SC_TEMPLATES.json 导入
+  （与 src/mock/scenarioTemplates.ts 同一份）。
+  其他空间没有模板时返回空列表，template_of 抛 503。
 - 引擎按模板 engine 键插拔（ENGINES）；演示模板 demo_retail = rules_sim.simulate / stage_plan（原样）。
 - 本模块只做通用校验：范围 / 驱动按模板字段校验取值，未知键、越界、不在可选值里一律 422。
 - 范围项可声明 propRef="对象类型.属性"：且引擎 accepts_facet_values 时，有数据（facets hasData）
   可选值 = allOption + 分面取值，否则只用模板固定 options（与前端一致）。
 """
 
-import json
 import math
 from collections.abc import Callable
-from functools import cache
-from pathlib import Path
+from copy import deepcopy
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
+from app.modules.dynamic.rules_models import ScenarioTemplate
 from app.modules.dynamic.rules_sim import simulate, stage_plan
 
-_JSON = Path(__file__).resolve().parents[3] / "seeds" / "json" / "dynamic" / "SC_TEMPLATES.json"
 DEFAULT_TEMPLATE = "demo_retail"
 
 ENGINES: dict[str, dict[str, Callable[..., Any]]] = {
@@ -27,22 +31,25 @@ ENGINES: dict[str, dict[str, Callable[..., Any]]] = {
 }
 
 
-@cache
-def templates(ontology_id: int) -> list[dict[str, Any]]:
-    if ontology_id != 1:
-        return []
-    return json.loads(_JSON.read_text(encoding="utf-8"))
+async def templates(session: AsyncSession) -> list[dict[str, Any]]:
+    """当前空间的模板定义（按 sort, id）；返回副本，调用方可以就地改。"""
+    require_ontology_id(session)
+    q = select(ScenarioTemplate).order_by(ScenarioTemplate.sort, ScenarioTemplate.id)
+    rows = await session.scalars(q)
+    return [deepcopy(r.definition) for r in rows]
 
 
-def template_of(code: str | None, ontology_id: int) -> dict[str, Any]:
-    ts = templates(ontology_id)
+async def template_of(session: AsyncSession, code: str | None) -> dict[str, Any]:
+    ts = await templates(session)
     if not ts:
-        raise AppError("当前本体尚未配置推演模板与执行器", code="SCENARIO_EXECUTOR_UNAVAILABLE", status_code=503)
+        raise AppError(
+            "当前本体尚未配置推演模板与执行器", code="SCENARIO_EXECUTOR_UNAVAILABLE", status_code=503
+        )
     return next((t for t in ts if t["code"] == code), ts[0])
 
 
-def engine_of(code: str | None, ontology_id: int) -> dict[str, Callable[..., Any]]:
-    return ENGINES[template_of(code, ontology_id)["engine"]]
+async def engine_of(session: AsyncSession, code: str | None) -> dict[str, Callable[..., Any]]:
+    return ENGINES[(await template_of(session, code))["engine"]]
 
 
 def driver_fields(t: dict[str, Any]) -> list[dict[str, Any]]:

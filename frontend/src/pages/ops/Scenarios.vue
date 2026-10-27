@@ -123,6 +123,8 @@ if (live.value) {
 }
 /* ───── 推演模板（元数据）：范围 / 驱动 / 指标 / 影响明细 / 建议动作都按模板渲染 ───── */
 const tplList = computed<ScTemplate[]>(() => (live.value && remote.meta?.templates?.length ? remote.meta.templates : SC_TEMPLATES));
+/** 真接口且 meta 已返回、模板为空：当前本体未配置推演模板 → 空状态（tplList 的演示回退只为保持计算属性可用，不渲染） */
+const noTemplates = computed(() => live.value && !!remote.meta && !remote.meta.templates?.length);
 const tplFor = (s?: Scenario) => templateOf(s?.templateCode, tplList.value);
 const optsOf = (f: ScField) => (facetOpts.value[f.key] ?? f.options ?? []).map((v) => ({ value: v, label: f.kind === 'radio' && f.unit ? `${v} ${f.unit}` : String(v) }));
 const statusOpts = computed(() => (remote.meta?.statuses ?? ['全部', '草稿', '运行中', '已完成', '失败']).map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v })));
@@ -446,6 +448,11 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
 
 <template>
   <div class="sc">
+    <!-- 当前本体没有推演模板（scenario_template 表按本体配置）：整页空状态，不回落到演示模板 -->
+    <div v-if="noTemplates" class="panel sc-main sc-empty">
+      <a-empty :description="remote.meta?.unavailableReason || '当前本体尚未配置推演模板'" />
+    </div>
+    <template v-else>
     <!-- 方案列表 -->
     <div class="panel sc-list">
       <div class="panel-head">
@@ -646,6 +653,7 @@ const primary = computed<'run' | 'convert' | 'copy' | ''>(() => {
         </template>
       </a-table>
     </a-modal>
+    </template>
   </div>
 </template>
 

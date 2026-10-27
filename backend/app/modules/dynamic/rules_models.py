@@ -177,6 +177,20 @@ class RuleScheduleRun(IdMixin, MutableTableMixin, OntologyVersionMixin, Base):
 # ---------------- 情景推演 ----------------
 
 
+class ScenarioTemplate(CodeMixin, MutableTableMixin, Base):
+    """情景推演模板（按本体配置，dynamic_0024）：definition 是 SC_TEMPLATES 单条定义原样。"""
+
+    __tablename__ = "scenario_template"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    engine: Mapped[str] = mapped_column(String(64), nullable=False, comment="执行器键（ENGINES）")
+    object_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="目标对象类型 api_name")
+    sort: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    definition: Mapped[dict] = mapped_column(
+        JsonType, nullable=False, comment="模板定义（SC_TEMPLATES 单条）"
+    )
+
+
 class Scenario(CodeMixin, MutableTableMixin, Base):
     __tablename__ = "scenario"
     __table_args__ = ({"comment": "情景推演方案"},)

@@ -2,7 +2,10 @@
 
 import json
 
+import pytest
+
 from app.core.config import get_settings
+from app.core.errors import AppError
 from app.modules.dynamic import scenario_templates as st
 from tests.dynamic_support import API, dyn, err, fakes  # noqa: F401
 from tests.test_dynamic_scenarios_lifecycles import RUN
@@ -18,8 +21,8 @@ def _js(name: str):
     return json.loads((get_settings().seeds_json_dir / f"dynamic/{name}.json").read_text(encoding="utf-8"))
 
 
-def test_demo_template_matches_catalog():
-    t = st.template_of(None)
+async def test_demo_template_matches_catalog(dyn):  # noqa: F811
+    t = await st.template_of(dyn, None)
     assert t["code"] == "demo_retail" and t["engine"] in st.ENGINES
     opts = {f["key"]: f.get("options") for f in t["scope"] + st.driver_fields(t)}
     assert opts["area"] == _js("SC_AREAS") and opts["category"] == _js("SC_CATEGORIES")
@@ -33,6 +36,27 @@ def test_demo_template_matches_catalog():
         "promoWeeks": 0,
     }
     assert [s["action"] for s in t["suggestions"]] == ["发起调价审批", "补货申请", "发放复购召回优惠券"]
+
+
+async def test_templates_are_per_ontology(dyn, client, conn):  # noqa: F811
+    """dynamic_0024：模板来自 scenario_template（空间 1 由迁移导入 SC_TEMPLATES）；新空间没有模板、不回落。"""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.common.ontology import set_ontology_scope
+    from app.modules.ontology.models import OntologyWorkspace
+
+    r = (await client.get(f"{API}/scenarios/templates")).json()
+    assert r["items"] == _tpl()
+    assert [t["code"] for t in await st.templates(dyn)] == [t["code"] for t in _tpl()]
+    ws = OntologyWorkspace(code="dyn-tpl-empty", name="dyn tpl empty")
+    dyn.add(ws)
+    await dyn.flush()
+    async with AsyncSession(bind=conn, join_transaction_mode="create_savepoint") as other:
+        await set_ontology_scope(other, ws.id)
+        assert await st.templates(other) == []
+        with pytest.raises(AppError) as e:
+            await st.template_of(other, None)
+        assert e.value.code == "SCENARIO_EXECUTOR_UNAVAILABLE" and e.value.status_code == 503
 
 
 async def test_meta_and_template_code(dyn, client):  # noqa: F811
