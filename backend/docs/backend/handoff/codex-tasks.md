@@ -23,7 +23,7 @@
 
 状态：☐ 未开始 / ◐ 进行中 / ☑ 完成。完成一组就更新这里。
 
-### P0-1 修已知测试失败，跑全量测试和构建　☐
+### P0-1 修已知测试失败，跑全量测试和构建　◐
 
 - 内容（都是 master 上本来就有的失败）：
   - `test_palantir_webhook.py` 在 `use_ops_support` 下有 8 条失败：外网拦截要放行回环地址 127.0.0.1。出处：palantir #2
@@ -50,7 +50,7 @@
 - 涉及：`app/modules/admin/seeds/demo_mainline.py`、`seeds/extra/system/DEMO_MAINLINE.json`、`app/modules/integration/worker.py`、`app/modules/dynamic/worker.py`、`app/modules/qa/readonly.py`；action-event-api §14、§18；palantir.md §2。
 - 验收：`GET /action-runs/ACT-20261025-0552` 显示已撤回；`GET /alerts/AL-20261025-0139` 无关联动作；前端整条主线走通，`GET /decisions` 有记录；问数问一题不再 503；`procrastinate_periodic_defers` 里有 `qa.page.sweep`。把操作步骤和结果写进本文件第 6 节。
 
-### P1-1 写了未测的功能逐项验证　☐
+### P1-1 写了未测的功能逐项验证　◐
 
 每项按出处里写的验证方式补测试或手工核对；发现缺陷就修。
 
@@ -89,3 +89,6 @@
 
 | 日期（UTC+8） | 任务 | 提交 | 结果 / 备注 |
 |---|---|---|---|
+| 2026-10-27 | P0-1 定点修复／P1-1 部分闭环 | 待统一收口 | 三组修复草稿恢复、获准来源指标试算、动作策略／复核、函数密钥限制、页面站内通知及刷新订阅；独立测试库分组验证和实际隔离UI证据见[本轮汇总](../../../../docs/26-10-27-fixes-summary.md)。不是全量pytest，旧423记录未逐条核销，故P0-1仍◐。 |
+| 2026-10-27 | P0-2 部署与主线边界 | 待统一收口 | 主库备份后增量至dynamic_0030，API和四worker已运行；未追加demo_mainline种子，未启用外部通道／真实外写，未跑完整告警到外部对账主线，故保持☐。本轮不得按旧清单再次seed。 |
+| 2026-10-27 | P1-2 模型评测／其余验证 | 未执行 | 未跑真实LLM、自动出题20题或100题评测；旧分数不是本轮结果。迁移往返、全仓格式化及未覆盖功能仍未验收，不因定点绿色改为全完成。 |

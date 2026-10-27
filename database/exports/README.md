@@ -2,6 +2,8 @@
 
 文件：[rengu_ontology-2026-10-27.sql](rengu_ontology-2026-10-27.sql)。这是**去凭据的真实结构与数据快照**，不是 seed，也不是保留凭据的本机完整备份。
 
+**版本边界：此文件仍是 `notify_0022` 时点的快照，并非当前代码的最新 schema。** 下表的时间、版本、大小和校验和保持原导出事实；用于较新代码时，恢复后须继续执行该代码版本的迁移，不能直接启动应用并假定无需升级。
+
 | 项目 | 值 |
 | --- | --- |
 | 源库 | 本机 `localhost:5433/rengu_ontology`，未读取 `auto_ontology` |
@@ -44,7 +46,17 @@
    psql -X -h localhost -p 5433 -U restore_admin -d rengu_ontology_restore_20261027 --set=ON_ERROR_STOP=1 --single-transaction --file=database/exports/rengu_ontology-2026-10-27.sql
    ```
 
-3. 恢复后先保持 worker/调度关闭，重新配置外部凭据并检查待处理任务后再启用；这是保留运行记录的数据快照，不能一导入就触发旧队列或对外写入。不要重新灌 seed 覆盖导入记录。
+3. 恢复后保持应用及 worker/调度关闭。按准备运行的项目版本安装依赖，并把该版本的私有数据库配置明确指向刚恢复的新库，再从 `backend` 执行迁移及版本核对：
+
+   ```powershell
+   uv sync
+   uv run alembic upgrade head
+   uv run alembic current
+   ```
+
+   迁移目标以该代码版本的 `head` 为准，不以本快照的旧 revision 为准；保留恢复记录，不重灌seed，不指向现有开发库或生产库。迁移前先保留恢复库备份，失败则停止启动并处理，不通过改版本号或跳过迁移掩盖差异。
+
+4. 完成迁移核对后，重新配置外部凭据并检查保留的待处理任务，再明确启用应用和所需worker；这是保留运行记录的数据快照，不能一导入就触发旧队列或对外写入。
 
 领域表保留强制 RLS，应用事务须先降权 `SET LOCAL ROLE rengu_ontology_scoped`，再设置受控 `rengu.ontology_id`；直接用 superuser 查询不代表验证了隔离。缺少或非法本体上下文不能用关闭 RLS 解决。该快照不包含本机 ignored `.env`、外部提供者配置或部署密钥。
 
