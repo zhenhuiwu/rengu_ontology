@@ -7,27 +7,6 @@
 > 接口细节见 `frontend/docs/backend/action-event-api.md`（§14 = Webhook 签名/重试合同；§15 = 执行策略/机器接口/入站；§16 = 机器接口第 3 期）；设计见 `backend/docs/backend/palantir-tier1-design.md`。
 > 用户已定：**不接 ERP、Kafka，不做外部定时对账**；Web 系统对接走 Webhook。标注：【仓库】代码现状，【推断】我的取舍。
 
-## 未完成清单（第一档收尾，交 Codex 接手，2026-10-27 UTC+8，基于 master `e657b08`）
-
-**待老板定**
-- 审批触发提交时，提交条件改由确认人复核（palantir-t7 已生效，`action/checker.py`）。若否决，改回按审批人检查并调整 `tests/test_palantir_mainline.py`。
-
-**已知失败（非本人改动引入，master 上就有）**
-- `tests/test_palantir_webhook.py` 在 `-p tests.use_ops_support` 下 8 条失败：外网拦截把 127.0.0.1 本地 mock 接收端也拦了。修法建议：拦截放行回环地址，或该文件不加载 `use_ops_support`。
-- `tests/test_event_delivery_boundary.py::test_explicit_test_endpoint_and_stable_subscription_idempotency`：`delivery_key` 读 `event.ontology_id`，测试的 SimpleNamespace 没给（见 §4）。
-
-**演示环境（不在代码里，需部署时配）**
-- `RENGU_INTEGRATION_ADAPTERS` 加 `1/EXT-WEBHOOK`：`submit_path`、`actions:["request_replenish"]`、`signing_secret`；`RENGU_INTEGRATION_REAL_CONNECT=true`；接收端须 HTTPS 并回 `{"status":"SUCCESS","receiptId":…}`；派发任务 `dispatch_queued` 要在跑。
-- 时间线文字显示种子配置里的 `POST /praybill/save`，仅外观问题。
-
-**前端适配（动态本体负责人已提出）**
-- 人工复核项 `humanChecks` 尚未在建议面板和启动确认框里显示（接口格式见 action-event-api §18）。
-
-**延后功能（按约定本档不做）**
-- 下线旧的入站静态令牌，加入站签名校验（等接入方都换成 API 密钥）。
-- 事件载荷参数 `enum`（等静态在事件类型定义里加上）。
-- 其余缺口见 §5（副作用人工重试入口、调用记录页展示、策略前端编辑器、评测门槛 `evalPassedAt`、函数按密钥白名单等）。
-
 ## 0. palantir-t2：执行策略 / 机器接口 / 入站服务账号（无迁移）
 
 | 项 | 状态 | 位置 |
@@ -152,3 +131,48 @@
 ## 6. 划掉的项（不再做）
 
 ERP 连接器、Kafka、外部定时对账任务扩展（`reconcile_task`/`query_by_key`/`on_reconciled` 保持原样不扩展）、对外部业务系统的真实写回验证。
+
+## 未完成清单（交 Codex）
+
+> 2026-10-27（UTC+8），基于 master `e657b08`。每条：是什么 / 为什么没做 / 涉及文件与接口 / 怎么验证。
+
+1. **提交条件改由确认人复核**
+   - 是什么：审批通过后触发提交时，提交条件按确认人身份复核，不再按审批人。palantir-t7 已生效。
+   - 为什么：行为变更，待老板定。
+   - 文件：`backend/app/modules/action/checker.py`、`tests/test_palantir_mainline.py`。
+   - 验证：老板同意则保持现状，跑 `tests/test_palantir_mainline.py`（4 条通过）；否决则改回按审批人检查，并改该测试的断言。
+2. **`test_palantir_webhook.py` 在 `use_ops_support` 下 8 条失败**
+   - 是什么：外网拦截把 127.0.0.1 本地 mock 接收端也拦了。
+   - 为什么：Codex 修复；master `06a1202` 上就已经失败，不是本人改动引入。
+   - 文件：`tests/use_ops_support`（外网拦截）、`tests/test_palantir_webhook.py`。
+   - 验证：拦截放行回环地址（或该文件不加载这个插件）后，`python -m pytest -p tests.use_ops_support tests/test_palantir_webhook.py` 全部通过。
+3. **`test_event_delivery_boundary::test_explicit_test_endpoint_and_stable_subscription_idempotency` 失败**
+   - 是什么：`delivery_key` 读 `event.ontology_id`，但测试的 SimpleNamespace 没有给这个字段（来自 `ea83447`）。
+   - 为什么：Codex 修复，基线上就失败。
+   - 文件：`backend/app/modules/event/delivery.py`、`tests/test_event_delivery_boundary.py`。
+   - 验证：在测试里补上 `ontology_id` 后单测通过。
+4. **演示环境 Webhook 通道配置**
+   - 是什么：配置 `RENGU_INTEGRATION_ADAPTERS` 的 `1/EXT-WEBHOOK`（`submit_path`、`actions:["request_replenish"]`、`signing_secret`），并设 `RENGU_INTEGRATION_REAL_CONNECT=true`。接收端须为 HTTPS，回 `{"status":"SUCCESS","receiptId":…}`。派发任务 `dispatch_queued` 要在跑。
+   - 为什么：环境问题，由谁配、在哪个环境配待老板定。
+   - 文件和接口：本文 §2，action-event-api §14、§18。
+   - 验证：从前端按主线走一遍：认领 AL-20261025-0139，启动补货动作，审批通过后接收端收到有效签名和 `declaredEdits`，动作变为「已对账」并写入决策日志。
+   - 另有外观小问题：时间线文字显示种子配置里的 `POST /praybill/save`。
+5. **人工复核项 `humanChecks` 前端显示**
+   - 是什么：在建议面板和启动确认框里展示 `humanChecks`。
+   - 为什么：待老板定，由动态负责。
+   - 接口：action-event-api §18。
+   - 验证：外部 Webhook 动作带自然语言提交条件时，确认框能列出待核对项。
+6. **下线入站静态令牌、加入站签名校验**
+   - 是什么：`/internal/v1/events` 只接受 API 密钥，并校验签名。
+   - 为什么：延后，等接入方都换成密钥。
+   - 文件：`backend/app/modules/event/ingress.py`。
+   - 验证：用静态令牌调用返回 401，用密钥调用正常。
+7. **事件载荷参数 `enum`**
+   - 是什么：事件载荷参数支持枚举。
+   - 为什么：延后，要等静态先在事件类型定义里加上。
+   - 文件：`backend/app/modules/machine/tools.py`（工具清单导出）。
+   - 验证：`GET /machine/tools` 的事件参数带 `enum`。
+8. **其余缺口**
+   - 是什么：副作用人工重试入口、调用记录页展示逐次尝试、策略前端编辑器、评测门槛 `evalPassedAt`、函数按密钥白名单等。
+   - 为什么：不在第一档范围。
+   - 细节：见 §5。
