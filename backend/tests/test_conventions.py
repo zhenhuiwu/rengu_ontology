@@ -826,6 +826,7 @@ def test_seed_order():
         "action",
         "event",
         "dynamic",
+        "demo_mainline",
         "integration_runs",
         "qa",
     ]
@@ -833,7 +834,7 @@ def test_seed_order():
     assert order("versioning") < order("static")  # 静态外键 release_id 要先有版本行
     assert order("integration") < order("versioning")  # ext_system 被引用
     assert order("dynamic") < order("integration_runs") < order("qa")
-    assert set(SEED_STAGES) == {"integration_runs"}
+    assert set(SEED_STAGES) == {"integration_runs", "demo_mainline"}
     assert stage_module("integration_runs") == "integration"
     assert stage_package("integration_runs") == "app.modules.integration.seeds.runs"
     assert stage_package("static") == "app.modules.static.seeds"

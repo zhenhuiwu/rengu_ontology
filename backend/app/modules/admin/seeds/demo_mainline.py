@@ -18,12 +18,17 @@ handoff/xiaobai.md §4 经批准的范围，**只新增数据**，不改 seeds/j
 - alertAssignees → alert.assignee：演示告警处理人 = U010011（已批准）；只改 assignee，
   其余列按 ALERTS.json 原值重写（upsert 要整行）。
 
-不在这里做（会改既有取值）：request_replenish.approval 文本（改成能定位到用户编号）、
-sysId 改到 EXT-WEBHOOK、告警状态；也不建服务账号、不绑定 R-019。
+- actionTypeOverrides → action_type（xiaobai-p4，老板批准的两处既有取值改动，仅此两处）：
+  request_replenish.approval 在 ACTION_TYPES.json 原文后追加「（U010812）」，审批人定位到 姚娜；
+  sysId EXT-ERP → EXT-WEBHOOK。整行按 ACTION_TYPES.json 原值重建再覆盖这两列，重复灌不会重复追加。
+
+不在这里做：告警状态、既有动作记录（ACT-20261025-0552 仍记 EXT-ERP）、执行层可写字段 / 对象映射；
+也不建服务账号、不绑定 R-019。
 """
 
 from app.common.ontology import DEFAULT_ONTOLOGY_ID
 from app.core.config import get_settings
+from app.modules.action.models import ActionType
 from app.modules.admin.models import SysRole, SysRoleMember, SysRoleScope, SysUser
 from app.modules.admin.seeds import _role, _role_scopes
 from app.modules.dynamic.models import Alert
@@ -74,6 +79,21 @@ def _alert_assignee(r: Row, ctx: SeedContext) -> Row:
     return {**_alert(dict(src), dyn), "assignee": r["assignee"]}
 
 
+def _action_override(r: Row, ctx: SeedContext) -> Row:
+    from app.modules.action.seeds import _type
+
+    if "__demo_action__" not in ctx.cache:
+        root = get_settings().seeds_json_dir
+        act = SeedContext(root / "action", root=root)
+        ctx.cache["__demo_action__"] = (act, {t["id"]: t for t in act.load("ACTION_TYPES.json")})
+    act, types = ctx.cache["__demo_action__"]
+    src = types.get(r["action"])
+    if src is None:
+        raise ValueError(f"动作不在 ACTION_TYPES.json：{r['action']}")
+    row = _type(dict(src), act)
+    return {**row, "approval": f"{src['approval']}{r['approvalAppend']}", "sys_id": r["sysId"]}
+
+
 def _spec(model, path: str, key: tuple[str, ...], transform, refs=None, description: str = "") -> SeedSpec:
     return SeedSpec(
         model,
@@ -120,4 +140,12 @@ SEEDS: list[SeedSpec] = [
         ExtSystem, "extSystems", ("code",), ext_system_row, description="Webhook 外部系统（本机地址，无密钥）"
     ),
     _spec(Alert, "alertAssignees", ("code",), _alert_assignee, description="演示告警处理人"),
+    _spec(
+        ActionType,
+        "actionTypeOverrides",
+        ("code",),
+        _action_override,
+        {"sys_id": Ref(ExtSystem, "code")},
+        "补货申请审批人 / 执行通道（已批准的改动）",
+    ),
 ]

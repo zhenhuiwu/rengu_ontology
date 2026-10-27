@@ -281,5 +281,13 @@
       "alert": "AL-20261025-0139",
       "assignee": "U010011"
     }
+  ],
+  "actionTypeOverrides": [
+    {
+      "action": "request_replenish",
+      "approvalAppend": "（U010812）",
+      "sysId": "EXT-WEBHOOK",
+      "note": "已批准（2026-10-27）：审批文字追加审批人编号，执行通道 EXT-ERP → EXT-WEBHOOK；其余列取 ACTION_TYPES.json 原值"
+    }
   ]
 }

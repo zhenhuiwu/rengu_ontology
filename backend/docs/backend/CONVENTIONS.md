@@ -252,10 +252,11 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
 | 7 | `action` | action | 动作类型、执行记录 |
 | 8 | `event` | event | 事件类型 |
 | 9 | `dynamic` | dynamic | 规则、告警、生命周期 |
-| 10 | `integration_runs` | integration（Palantir） | writeback_call、reconcile_task：外键指向 dynamic / action 的执行记录，所以排在 dynamic 之后 |
-| 11 | `qa` | qa | 问数会话 |
+| 10 | `demo_mainline` | admin | 演示主线种子补丁（`extra/system/DEMO_MAINLINE.json`）：角色、本体成员 / 角色绑定、Webhook 外部系统、演示告警处理人、补货申请审批人 / 执行通道；引用 dynamic / action 的行，所以排在 dynamic 之后 |
+| 11 | `integration_runs` | integration（Palantir） | writeback_call、reconcile_task：外键指向 dynamic / action 的执行记录，所以排在 dynamic 之后 |
+| 12 | `qa` | qa | 问数会话 |
 
-- 阶段名就是模块名时，读 `app.modules.<模块>.seeds`；不是模块名的阶段（目前只有 `integration_runs`）在 `SEED_STAGES` 登记「负责模块 + seeds 包」（`app.modules.integration.seeds.runs`），默认 export 组跟负责模块一致。
+- 阶段名就是模块名时，读 `app.modules.<模块>.seeds`；不是模块名的阶段（目前有 `integration_runs`、`demo_mainline`）在 `SEED_STAGES` 登记「负责模块 + seeds 包」（`app.modules.integration.seeds.runs`、`app.modules.admin.seeds.demo_mainline`），默认 export 组跟负责模块一致。
 - `uv run python -m app.cli seed -m integration_runs` 可以单跑一个阶段。顺序由 `tests/test_conventions.py::test_seed_order` 固定，改顺序要同时改这张表和测试。
 
 ### 模块负责人迁移 mock 的步骤
