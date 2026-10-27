@@ -12,10 +12,10 @@ export const KEY_SCOPES = ['问数查询', '对象读取', '指标读取', '动�
 export type KeyScope = (typeof KEY_SCOPES)[number];
 export type KeyStatus = '有效' | '即将过期' | '已过期' | '已吊销';
 /** 身份绑定：kind = 角色 时 role 为角色名（mock/roles.ts ROLES），scope 为该角色的行级范围摘要；kind = 服务账号 时 account + scope 必填 */
-export interface KeyBinding { kind: '角色' | '服务账号'; role?: string; account?: string; scope: string }
+export interface KeyBinding { kind: '角色' | '服务账号' | '用户'; role?: string; account?: string; userId?: string; userName?: string; scope: string }
 export const SERVICE_ACCOUNTS = ['svc_bi_sync', 'svc_report', 'svc_crm_sync', 'svc_wms_cb', 'svc_oms_push', 'svc_bot', 'svc_export', 'svc_ml_feature', 'svc_erp', 'svc_ops_monitor'];
 export const SA_SCOPES = ['大区 = 华东', '大区 = 华南', '大区 = 华东、华南', '大区 = 华东、华中', '门店 = 上海徐汇店', '品类 = 生鲜、乳品烘焙', '仅元数据（不读业务数据）'];
-export const bindingText = (b: KeyBinding) => (b.kind === '角色' ? `以 ${b.role} 角色查询 · ${b.scope}` : `以 服务账号 ${b.account} 查询 · ${b.scope}`);
+export const bindingText = (b: KeyBinding) => (b.kind === '用户' ? `以 ${b.userName}（${b.userId}）查询 · ${b.scope}` : b.kind === '角色' ? `以 ${b.role} 角色查询 · ${b.scope}` : `以 服务账号 ${b.account} 查询 · ${b.scope}`);
 export const keyActor = (k: { name: string; binding: KeyBinding }) => `API 密钥 ${k.name}（${k.binding.kind === '角色' ? `角色 ${k.binding.role}` : `服务账号 ${k.binding.account}`}）`;
 const R = (role: string, scope: string): KeyBinding => ({ kind: '角色', role, scope });
 const SA = (account: string, scope: string): KeyBinding => ({ kind: '服务账号', account, scope });

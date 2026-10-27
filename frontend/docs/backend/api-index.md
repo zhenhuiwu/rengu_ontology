@@ -965,6 +965,8 @@
 
 ### 4.4 API 密钥 `/admin/system/api-keys`
 
+**当前真实实现（2026-10-27）**：已实现下表六个管理接口，按真实角色 `api-keys·view/manage` 授权，默认每页 10 条数据库分页并返回真实 `counts`。真实 `/meta` 返回 `{scopes:["元数据读取"], binding:{kind:"用户",userId,userName,scope}, allowedPages, canManage}`（缺对应权限时 scopes 为空）；创建 binding 固定为当前真实用户，不支持下述 mock 的角色/服务账号绑定，也不导入演示密钥。仅明确白名单的元数据 GET 路由接受 Bearer，创建时权限快照与实时角色权限取交集，所有其他 scope、指标运行结果和管理接口默认拒绝。到期使用真实系统时钟即时拒绝，无需 worker 扫描落库。`admin_0017` 仅增空表/索引；完整契约与部署、未验证范围见 `backend/docs/backend/admin-api-keys.md`。以下保留原完整 mock 设计，不表示全部 scope 已实现。
+
 1. **用途**：给外部系统发放 API 密钥。
 2. **操作流程**
    1. 列表：按状态、权限范围筛选，按名称、前缀或创建人搜索，分页（每页 18 条）。

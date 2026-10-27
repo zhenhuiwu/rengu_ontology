@@ -24,7 +24,7 @@ tenant_id 列**。二期多租户时再统一加。
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,11 +77,20 @@ async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None =
 
 async def get_current_user(
     session: SessionDep,
+    request: Request,
     x_demo_as: Annotated[
         str | None, Header(description="dev/test 演示身份：用户编号（U010001）；prod 忽略")
     ] = None,
     x_tenant_id: Annotated[str | None, Header(description="一期单租户：只透传，不过滤")] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> CurrentUser:
+    if authorization is not None:
+        from app.modules.admin.api_keys import authenticate_key
+
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise Unauthorized("请使用 Bearer API 密钥")
+        return await authenticate_key(session, token, request, x_tenant_id)
     # EXTENSION POINT (PDE): 换成真实鉴权（会话 / API Key / 服务账号），解析出有效权限 EffectiveAccess。
     s = get_settings()
     if s.env == "prod":
@@ -90,6 +99,18 @@ async def get_current_user(
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
+
+
+async def api_key_guard(request: Request, session: SessionDep) -> None:
+    """Apply the token allowlist even to API handlers without a CurrentUser dependency."""
+    authorization = request.headers.get("authorization")
+    if authorization is not None:
+        await get_current_user(
+            session, request, x_tenant_id=request.headers.get("x-tenant-id"), authorization=authorization
+        )
+
+
+ApiKeyGuardDep = Depends(api_key_guard)
 
 
 async def row_filter(user: CurrentUser, object_type: str) -> dict | None:

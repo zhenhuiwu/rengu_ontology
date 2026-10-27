@@ -23,6 +23,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -232,3 +233,36 @@ class SysOrg(CodeMixin, MutableTableMixin, Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", comment="默认组织"
     )
+
+
+class ApiKey(CodeMixin, MutableTableMixin, Base):
+    __tablename__ = "api_key"
+    __table_args__ = (
+        Index("uq_api_key_live_name", "name", unique=True, postgresql_where=text("revoked_at IS NULL")),
+    )
+
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    env: Mapped[str] = mapped_column(String(8), nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    last4: Mapped[str] = mapped_column(String(4), nullable=False)
+    scopes: Mapped[list] = mapped_column(JsonType, nullable=False)
+    func_snapshot: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    ip_allow: Mapped[list] = mapped_column(JsonType, nullable=False)
+    note: Mapped[str] = mapped_column(String(512), nullable=False)
+    creator: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(String(128))
+
+
+class ApiKeyCall(IdMixin, AppendOnlyTableMixin, Base):
+    __tablename__ = "api_key_call"
+    __table_args__ = (Index("ix_api_key_call_key_id_created_at_id", "key_id", "created_at", "id"),)
+
+    key_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("api_key.id"), nullable=False)
+    api: Mapped[str] = mapped_column(String(256), nullable=False)
+    ip: Mapped[str] = mapped_column(String(64), nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
