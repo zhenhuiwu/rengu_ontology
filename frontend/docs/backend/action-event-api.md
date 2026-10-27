@@ -1095,3 +1095,51 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 ### 17.4 未做
 
 真人 runAs（需服务账号模型加字段）；后台身份不叠加密钥 scope 收窄（入口已校验）【推断】；其余同 §16.5（事件段与参数枚举两条已解决）。
+
+## 18. 有界 JSON 编辑映射 / 外部 Webhook 声明效果 / 人工核对条件（分支 `palantir-t7`，基于 master `40562d7`，2026-10-27）
+
+### 18.1 有界 JSON 编辑映射（已有，经变更单可用）【仓库】
+
+动作「编辑规则」每行 `{op, obj, field}`，`field` 为 JSON 对象字符串（1–32 个键，≤ 64 KB）。变更单发布时由 `action/writeback.py` `edits` 校验，执行时由 `integration/action_edits.py` `business_edits` 再校验：
+
+| op | `field` 形状 | 说明 |
+|---|---|---|
+| `修改` / `新建` | `{"target"?: 源, "values": {属性api: 源}, "lockVersion"?: 源}`；旧式平铺 `{属性api: 源}` 也接受 | `values` 1–20 项；属性须是已发布、非主键、非敏感、非隐藏，且落在可写白名单（当前仅门店 `name/status/is_test`、订单 `status/warehouse/shipped_at/is_test`）；`lockVersion` 不符 → 409 `VERSION_CONFLICT` |
+| `关联` | `{"from": 源, "to": 源}` | 两端为已发布关系的对象引用 |
+
+「源」三选一：`{"param": "参数api"}`、`{"value": 固定值}`、`{"function": "函数编号", "version": "固定发布版本", "inputs": {...}}`（不能用 `current`）。
+
+示例（变更单 `edits` 行）：`{"op": "修改", "obj": "门店", "field": "{\"values\": {\"status\": {\"param\": \"status\"}}}"}`。
+
+### 18.2 外部 Webhook 动作的声明效果【仓库】
+
+动作执行通道 `sysId` 指向 `category = Webhook` 的外部系统时：
+
+- 自然语言（非 JSON）的编辑规则、通知 / Webhook / 自定义事件副作用 = 声明效果：本地不执行、不报 `ACTION_EDITS_UNAVAILABLE`；标准事件 `ActionExecuted` / `ActionOutcomeUnknown` 照常。
+- 提交载荷（HMAC 签名，见 §14）多一个字段：
+
+```json
+"declaredEdits": [
+  {"kind": "编辑", "op": "修改", "obj": "商品", "field": "状态、最近操作人、最近操作时间", "status": "external/declared"},
+  {"kind": "通知", "target": "企业微信 · 发起人与确认人", "when": "…", "note": "…", "status": "external/declared"}
+]
+```
+
+- 机器接口 `:execute` / 查询响应 `edits[]` 对声明项带 `"status": "external/declared"`。
+- 有界 JSON 编辑仍按 §18.1 严格校验并在外部成功后本地写入。非 Webhook 通道的动作：自然语言编辑仍 503（不变）。
+
+### 18.3 人工核对条件【仓库】
+
+同一类动作（外部 Webhook 通道）里，受限解释器无法判定的参数规则 / 提交条件不再判失败：
+
+- 试运行 `dryRun.humanChecks: [{name, rule, reason}]`，`passed` 只看可判定项；
+- 暂存成功，时间线一条 `需确认人人工核对的提交条件（N 项）`（备注列出规则原文），供确认人核对；
+- 执行策略 `auto` 时不自动执行，转待确认，`overflowReason = "提交条件含需人工核对的自然语言规则，不能自动执行"`；
+- 机器接口响应多 `humanChecks`。
+
+可判定且不通过的（缺必填、类型不符、枚举外、角色不匹配等）照旧 422 `SUBMISSION_CRITERIA_FAILED`。
+
+### 18.4 审批后提交按确认人复核条件【仓库】
+
+审批人审批后触发提交（及排队执行器）时，提交条件按记录的**确认人**身份复核；审批人自身的功能、对象与操作权限仍按审批人校验。确认人无法解析（停用 / 旧姓名）时保持按当前身份复核【推断：与改动前一致，不放宽】。
+

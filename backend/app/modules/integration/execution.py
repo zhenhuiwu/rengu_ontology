@@ -44,6 +44,19 @@ class ExecutionResponse(ApiModel):
         return value
 
 
+async def criteria_user(session, user, run):
+    """提交条件属于提交人：已确认的记录由审批人/执行器推进时，按确认人身份复核条件。
+    审批人自身的功能、对象与操作权限仍由 preflight 的其余步骤按当前身份校验；确认人无法解析时保持当前身份。"""
+    confirmer = getattr(run, "confirmer", None)
+    if not getattr(run, "confirmed_at", None) or not isinstance(confirmer, str) or confirmer in ("", user.id):
+        return user
+    from app.common.auth import resolve_user
+    try:
+        return await resolve_user(session, confirmer)
+    except AppError:
+        return user
+
+
 async def preflight(session, user, run):
     check_func(user, "action-center", "manage")
     definition = await execution_definition(session, run)
@@ -51,7 +64,7 @@ async def preflight(session, user, run):
     run.params = await resolved_params(session, user, definition,
         structured_params(run.params if run.params is not None else run.params_text))
     await target_access(session, user, run, definition)
-    checker = DatabaseSubmissionChecker(session, user)
+    checker = DatabaseSubmissionChecker(session, await criteria_user(session, user, run))
     failed = (await checker.run(definition, {"objKind": run.obj_kind, "objId": run.obj_id,
                   "params": run.params, "actionRunId": run.code}))['failed']
     if failed:
@@ -148,6 +161,10 @@ async def dispatch_one(call_id, ontology_id: int):
         payload = {"ontologyId": ontology_id, "actionRunId": run.code, "actionType": definition["api"],
                    "typeVersion": run.type_version, "idemKey": run.idem_key,
                    "objKind": run.obj_kind, "objId": run.obj_id, "params": run.params}
+        from app.modules.integration.action_edits import declared_writeback
+        declared = await declared_writeback(session, definition)
+        if declared:  # 自然语言编辑/副作用：声明由外部系统承担，本地不执行（status=external/declared）
+            payload["declaredEdits"] = declared
         key = run.idem_key
     started = time.perf_counter()
     status, response_code, result = None, None, None

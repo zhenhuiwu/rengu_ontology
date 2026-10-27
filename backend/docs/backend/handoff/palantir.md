@@ -59,6 +59,26 @@
 - 本体小白：如要“绑定真人代执行”，需在 `ServiceAccount` 加 runAs 用户字段（迁移在其模块）；`admin/api_keys.py` 里服务账号 `CurrentUser` 的构造是私有逻辑，`machine/principal.resolve_actor` 复刻了同样的形状（编号、名称、角色、`is_service_account`），建议抽一个公开函数共用。
 - 静态：`INGESTIBLE` 由能力目录反向引用 `machine.tools`，可考虑挪到 `event` 模块做公共常量；事件载荷字段目前不带 `enum`（工具侧已兼容，有就用）。
 
+## 0.4 palantir-t7：外部 Webhook 动作的声明效果 / 人工核对条件（基于 master `40562d7`，含 xiaobai-p5，无迁移）
+
+| 项 | 状态 | 位置 |
+|---|---|---|
+| 执行通道是外部系统且其 `category = Webhook` 时，自然语言（非有界 JSON）的编辑规则 / 外部副作用 = **声明效果**：本地不执行、不报 503；随签名提交载荷 `declaredEdits`（每项 `status: "external/declared"`）交外部系统承担 | 完成 | `integration/action_edits.py`（`external_webhook` / `declared_text` / `declared_writeback`，`business_edits` 跳过）、`integration/action_effects.py`（`local_effects`）、`integration/execution.py`（载荷） |
+| 同一动作下的自然语言参数规则 / 提交条件（受限解释器无法判定）= **确认人人工核对**：不阻断暂存与试运行，`dryRun.humanChecks` 列出，暂存时间线记“需确认人人工核对的提交条件（N 项）”；能判定为不通过的照旧 422 | 完成 | `action/checker.py` `run()`、`dynamic/service.py` `stage()` |
+| auto 策略下含人工核对项 → 不自动执行，转待确认（`overflowReason`） | 完成 | `dynamic/service.py` `apply_policy()` |
+| 机器接口响应 `edits[].status = external/declared`、`humanChecks` | 完成 | `dynamic/router.py` `_machine_out` |
+| 声明编辑不再要求本地对象绑定（发起可用性、执行记录参数可见性） | 完成 | `dynamic/action_options.py`、`dynamic/run_visibility.py` |
+| 审批后提交复核：提交条件按**确认人**身份复核（原先按审批人，审批人不满足“执行人角色 / 告警处理权限”导致 422）；审批人自身的功能 / 对象 / 操作权限仍按审批人校验；确认人无法解析时保持原行为 | 完成 | `integration/execution.py` `criteria_user()` |
+| 无外部 Webhook 通道的动作：自然语言编辑仍 503、不可校验条件仍失败；有界 JSON 编辑在任何通道上都严格校验（不变） | 不变 | — |
+| 测试 | 新增 `tests/test_palantir_mainline.py`：直接暂存主线、告警发起主线（AL-20261025-0139 → `:start-action` 直接进审批中 → U010812 审批 → 签名 Webhook → 已对账）、严格/声明对照、auto 转确认 | 跑法须带 `-p tests.use_ops_support` |
+
+演示运行所需配置【仓库】：种子与数据**不改**；只需部署环境的 `RENGU_INTEGRATION_ADAPTERS` 含 `1/EXT-WEBHOOK`：`submit_path`、`actions: ["request_replenish"]`、`signing_secret`（可 `fernet$…`），`RENGU_INTEGRATION_REAL_CONNECT=true`，并把 EXT-WEBHOOK 的 `endpoint` 指向真实可达的 HTTPS 接收端（种子值 `https://127.0.0.1:8443`，适配器只接受 HTTPS）；外部接收端须返回 `{"status":"SUCCESS","receiptId":"…"}`。
+
+需要的钩子（未改他人文件）：
+- 本体小白：`tests/test_demo_mainline_e2e.py::test_mainline_stops_before_webhook` 断言“暂存 503、接收端零请求、试运行不通过”，本修复后按设计会失败，需改为走通断言（可参考 `tests/test_palantir_mainline.py`）。
+- 静态：经变更单发布的编辑规则仍须为有界 JSON（`action/writeback.py` `edits` 校验，见 API 文档 §18）；商品等对象如要**本地**执行编辑，需在 `WRITABLE` 白名单登记可写列（当前仅门店 / 订单）。
+- 时间线“调用 …：POST /praybill/save”取自动作配置的 `endpoint` 文字，实际提交路径是适配器 `submit_path`（演示为 `/hook`）；如需一致请改动作配置（种子，未改）。
+
 ## 1. 第一档 Webhook 出站（palantir-t1，已合入）
 
 | 项 | 状态 | 位置 |

@@ -114,13 +114,24 @@ async def prepare_effect(session, user, run, definition, effect):
             "version": event.version}
 
 
+async def local_effects(session, definition):
+    """Effects executed locally; natural-language ones on an external-Webhook action are declared only."""
+    from app.modules.integration.action_edits import declared_text, external_webhook
+    effects = definition["writeback"]["effects"]
+    if not await external_webhook(session, definition):
+        return list(enumerate(effects))
+    return [(i, e) for i, e in enumerate(effects)
+            if (e.get("kind") == "事件" and str(e.get("target") or "").split(" ", 1)[0] in STANDARD)
+            or not declared_text(e.get("note"))]
+
+
 async def preflight_effects(session, user, run, definition):
-    for effect in definition["writeback"]["effects"]:
+    for _, effect in await local_effects(session, definition):
         await prepare_effect(session, user, run, definition, effect)
 
 
 async def retain_effects(session, user, run, definition, event_type):
-    for index, effect in enumerate(definition["writeback"]["effects"]):
+    for index, effect in await local_effects(session, definition):
         data = await prepare_effect(session, user, run, definition, effect)
         if data is None or data["when"] != event_type:
             continue

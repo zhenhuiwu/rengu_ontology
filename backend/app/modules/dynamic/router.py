@@ -323,7 +323,8 @@ async def stage_action(body: StageIn, svc: ActionSvc, response: Response) -> Act
 
 # ---- 机器接口（程序 / AI / 服务账号；API 密钥按 scope + 动作类型白名单放行，人工会话同样可用）----
 async def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict:
-    """checks：暂存时提交条件已全部通过（未通过会 422 SUBMISSION_CRITERIA_FAILED，不会到这里）；
+    """checks：暂存时可机器校验的提交条件已全部通过（未通过会 422 SUBMISSION_CRITERIA_FAILED）；
+    humanChecks：外部 Webhook 动作中需确认人人工核对的自然语言条件；
     edits：该版定义声明的属性编辑（不是实际改动的值）；动作类型版本已变 → 两者为 null。"""
     from sqlalchemy import select
 
@@ -331,6 +332,10 @@ async def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict
 
     at = await svc.session.scalar(select(ActionType).where(ActionType.code == run.action_type_code))
     same = at is not None and bool(run.type_version) and at.version == run.type_version
+    from app.modules.integration.action_edits import DECLARED, WEBHOOK_CATEGORY, declared_text
+
+    # 外部 Webhook 执行通道上的自然语言编辑：声明效果，由外部系统承担。
+    external = same and at.system is not None and at.system.category == WEBHOOK_CATEGORY
     return {
         "ok": True,
         "status": detail.status,
@@ -339,7 +344,12 @@ async def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict
         "overflowReason": getattr(svc, "policy_overflow", None),
         "typeVersion": run.type_version,
         "checks": {"passed": True, "checked": len(at.conds)} if same else None,
-        "edits": [{"op": e.op.value, "obj": e.obj, "field": e.field} for e in at.edits] if same else None,
+        "edits": [
+            {"op": e.op.value, "obj": e.obj, "field": e.field,
+             **({"status": DECLARED} if external and declared_text(e.field) else {})}
+            for e in at.edits
+        ] if same else None,
+        "humanChecks": getattr(svc, "human_checks", None) or [],
         "retryable": detail.can.resubmit,
     }
 

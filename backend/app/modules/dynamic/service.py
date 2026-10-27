@@ -69,6 +69,7 @@ from app.modules.dynamic.schemas import (
 from app.modules.machine.principal import SERVICE_PREFIX, actor_of
 
 SYSTEM = "系统"
+HUMAN_CHECK_TEXT = "需确认人人工核对的提交条件"
 
 # ---------------- 状态表 ----------------
 
@@ -512,6 +513,8 @@ class ActionService:
         failed = await self.ports.checker.check(type_code, ctx)
         if failed:
             raise SubmissionCriteriaFailed(failed)
+        # 外部 Webhook 动作中无法机器校验的自然语言条件：交确认人人工核对（见 checker.run）。
+        self.human_checks = list(getattr(self.ports.checker, "human_checks", None) or [])
 
     def _event_payload(self, r: ActionRun) -> dict[str, object]:
         return {
@@ -817,6 +820,15 @@ class ActionService:
             f"发起人 {initiator}{conf} · 幂等键 {run.idem_key}",
         )
         owner = confirmer or initiator
+        human = getattr(self, "human_checks", None) or []
+        if human:
+            self._human_runs = {*getattr(self, "_human_runs", set()), run.code}
+            await self._log(
+                run,
+                f"{HUMAN_CHECK_TEXT}（{len(human)} 项）",
+                "；".join(f"{h['name']}：{h['rule'] or h['reason']}" for h in human)[:900],
+                TimelineStatus.warn,
+            )
         await self._log(
             run,
             "等待确认提交",
@@ -835,6 +847,13 @@ class ActionService:
         policy = await action_policy.load(self.session, r.action_type_code, r.type_version)
         self.policy_mode = policy.mode
         if policy.mode != "auto" or r.status != ActionStatus.staged:
+            return r
+        if r.code in getattr(self, "_human_runs", set()):
+            self.policy_overflow = "提交条件含需人工核对的自然语言规则，不能自动执行"
+            await self._log(
+                r, f"{action_policy.OVERFLOW_TEXT}：{self.policy_overflow}", f"执行策略 · 动作类型 {r.type_version}",
+                TimelineStatus.warn,
+            )
             return r
         caller = action_policy.caller_of(r.source_type.value, self.user)
         caller_id = r.rule_code if caller == "规则" and r.rule_code else self.user.id
