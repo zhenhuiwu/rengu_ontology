@@ -1,14 +1,15 @@
 """演示主线种子补丁（seed 阶段 demo_mainline）：只新增数据 + 主线的数据前置条件。
 
 整套 seed 在测试外层事务里跑、结束回滚；先跑除 demo_mainline 外的全部阶段拍快照，再跑补丁，
-逐表比对：既有行除演示告警 assignee 外一个值都不变，其余都是新增行。
+逐表比对：既有行只允许三处已批准的改动（演示告警 assignee；补货申请 approval 追加审批人编号、
+执行通道 EXT-ERP → EXT-WEBHOOK），其余一个值都不变，别的都是新增行。
 """
 
 import re
 from urllib.parse import urlsplit
 
 import pytest
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text
 
 from app.core.errors import AppError
 from app.modules.versioning.sections import isolated_sections, load_sections
@@ -24,6 +25,12 @@ TABLES = {
     "ontology_role_binding": "ontology_id::text || '/' || role_id::text",
     "ext_system": "code",
     "alert": "code",
+    "action_type": "code",
+}
+APPROVED = {
+    ("alert", DEMO_ALERT, "assignee"),
+    ("action_type", "request_replenish", "approval"),
+    ("action_type", "request_replenish", "sys_id"),
 }
 VOLATILE = {"id", "created_at", "updated_at", "lock_version"}
 
@@ -58,9 +65,11 @@ async def test_only_adds_rows_and_sets_demo_alert_assignee(seeded):
         for col in row
         if after[table].get(key, {}).get(col) != row[col]
     }
-    assert changed == {("alert", DEMO_ALERT, "assignee")}
+    assert changed == APPROVED
     assert before["alert"][DEMO_ALERT]["assignee"] is None
     assert after["alert"][DEMO_ALERT]["assignee"] == "U010011"
+    old, new = before["action_type"]["request_replenish"], after["action_type"]["request_replenish"]
+    assert new["approval"] == f"{old['approval']}（U010812）"
     added = {t: sorted(set(after[t]) - set(before[t])) for t in TABLES}
     assert added["sys_role"] == ["R-09", "R-10"]
     assert added["sys_role_scope"] == ["S-101", "S-91"]
@@ -69,6 +78,24 @@ async def test_only_adds_rows_and_sets_demo_alert_assignee(seeded):
     assert len(added["ontology_role_binding"]) == 3
     assert added["ext_system"] == ["EXT-WEBHOOK"]
     assert added["alert"] == []
+    assert added["action_type"] == []
+
+
+async def test_replenish_channel_is_webhook(session, seeded):
+    sys_code = (
+        await session.execute(
+            text(
+                "SELECT s.code FROM action_type a JOIN ext_system s ON s.id = a.sys_id "
+                "WHERE a.code = 'request_replenish'"
+            )
+        )
+    ).scalar()
+    assert sys_code == "EXT-WEBHOOK"
+    # 既有动作记录不改：ACT-20261025-0552 仍记着 EXT-ERP（执行层会拒绝执行旧绑定的记录）
+    run_sys = (
+        await session.execute(text("SELECT sys_code FROM action_run WHERE code = 'ACT-20261025-0552'"))
+    ).scalar()
+    assert run_sys == "EXT-ERP"
 
 
 async def test_roles_members_and_bindings(session, seeded):
@@ -128,32 +155,23 @@ async def test_mainline_people_resolve(session, seeded):
     assert catalog.person("区域供应链经理 姚娜")["id"] == "U010812"
 
 
-async def test_replenish_approver_needs_approval_text_change(session, seeded):
-    """未做：request_replenish.approval 只有角色泛称，不改这段既有文本就定位不到人。
-    在本事务里临时把用户编号拼到原文后面，证明只差这一处：审批人随即可解析、通过审批人权限检查。"""
+async def test_replenish_approver_resolves_next_blocker_is_edits(session, seeded):
+    """已批准的 approval 改动生效：审批人定位到 姚娜 U010812。
+    下一个缺口是执行映射（动态/静态在查，不在这里修）。"""
     from app.common.auth import resolve_user
-    from app.modules.action.models import ActionType
     from app.modules.dynamic.action_options import launch_definition
     from app.modules.dynamic.catalog import _load_catalog
 
     planner = await resolve_user(session, "U010011")
-    original = await session.scalar(select(ActionType.approval).where(ActionType.code == "request_replenish"))
-    catalog = await _load_catalog(session, "alert", rule_code="R-012", user=planner)
-    assert catalog.action_meta("request_replenish")["approvalConfigured"] is False
-    with pytest.raises(AppError) as err:
-        await launch_definition(session, planner, catalog, "request_replenish", identity="1011846")
-    assert err.value.code == "ACTION_APPROVAL_NOT_CONFIGURED"
-
-    await session.execute(
-        update(ActionType)
-        .where(ActionType.code == "request_replenish")
-        .values(approval=f"{original}（U010812）")
-    )
     catalog = await _load_catalog(session, "alert", rule_code="R-012", user=planner)
     meta = catalog.action_meta("request_replenish")
     assert meta["approvalConfigured"] is True and meta["approverId"] == "U010812"
-    try:
+    with pytest.raises(AppError) as err:
         await launch_definition(session, planner, catalog, "request_replenish", identity="1011846")
-    except AppError as exc:  # 之后的缺口（执行通道等）不属于审批人
-        assert exc.code != "ACTION_APPROVAL_NOT_CONFIGURED", exc.message
-        print("next blocker:", exc.code, exc.message)
+    assert err.value.code == "ACTION_EDITS_UNAVAILABLE", err.value.message
+    # 裸 session 没装载工作区受控表 → 先报「对象没有唯一的受控业务表映射」；
+    # 接口里（工作区已装载）报「执行映射须为有界 JSON 对象…」（见 e2e 测试）。同属执行映射缺口。
+    assert err.value.message in (
+        "对象没有唯一的受控业务表映射",
+        "执行映射须为有界 JSON 对象，自然语言不能执行",
+    )
