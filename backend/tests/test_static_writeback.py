@@ -271,6 +271,17 @@ async def test_explorer_flags_publish_snapshot_history_and_rollback(client, seed
     current = (await client.get(f"{P}/object-types/store/meta")).json()
     restored = next(p for p in current["properties"] if p["key"] == "city")
     assert restored == city_before
+    # 隐藏 / 敏感标记同样随整版回滚恢复（store_name 敏感、area_sqm 隐藏都回到发布前）。
+    before = {p["key"]: p for p in baseline["properties"]}
+    after = {p["key"]: p for p in current["properties"]}
+    assert after["area_sqm"] == before["area_sqm"] and after["store_name"] == before["store_name"]
+    seeded.expire_all()
+    name = await seeded.scalar(
+        select(Property.is_sensitive)
+        .join(ObjectType)
+        .where(ObjectType.code == "store", Property.api_name == "store_name")
+    )
+    assert name is False
 
 
 @pytest.mark.parametrize(
@@ -304,13 +315,55 @@ def test_property_type_validation_preserves_existing_types():
     from app.modules.static.writeback import _set_prop
 
     prop = Property(api_name="x", visibility="normal", is_sensitive=False)
-    for typ in ("string", "int", "integer", "decimal", "date", "timestamp", "boolean", "enum", "json"):
+    for typ in (
+        "string",
+        "int",
+        "integer",
+        "decimal",
+        "date",
+        "timestamp",
+        "boolean",
+        "enum",
+        "json",
+        "long_text",
+    ):
         _set_prop(prop, {"type": typ})
         assert prop.data_type == typ
     for invalid in (["string"], {"bad": "string"}, None, "", "unknown", True, 1):
         with pytest.raises(AppError) as exc:
             _set_prop(prop, {"type": invalid})
         assert exc.value.code == "WRITEBACK_FAILED" and exc.value.details["field"] == "type"
+
+
+def test_long_text_never_facets_or_sorts():
+    from app.modules.static.explorer import default_flags
+    from app.modules.static.writeback import _set_prop
+
+    prop = Property(api_name="x", visibility="normal", is_sensitive=False, data_type="string")
+    _set_prop(prop, {"type": "long_text", "filterable": True, "sortable": True, "searchable": True})
+    assert (prop.filterable, prop.sortable, prop.searchable) == (False, False, True)
+    flags = default_flags("not_seeded", {"api": "x", "type": "long_text", "dim": True})
+    assert (flags["filterable"], flags["sortable"], flags["list_visible"]) == (False, False, False)
+
+
+async def test_long_text_property_publishes_and_meta(client, seeded):
+    cr = "CR-0009"
+    await put(
+        client,
+        cr,
+        {"kind": "object", "id": "store"},
+        "properties",
+        [{"key": "x_memo", "op": "add", "after": {"name": "备忘", "type": "long_text", "filterable": True}}],
+    )
+    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
+    r = await client.post(P + "/releases", json={}, headers=WANG)
+    assert r.status_code == 201, r.text
+    meta = (await client.get(f"{P}/object-types/store/meta")).json()
+    memo = next(p for p in meta["properties"] if p["key"] == "x_memo")
+    assert memo["dataType"] == "long_text" and not memo["filterable"] and not memo["sortable"]
+    release = await seeded.scalar(select(OntologyRelease).where(OntologyRelease.ver == r.json()["ver"]))
+    assert release.snapshot["properties"]["store"]["x_memo"]["type"] == "long_text"
 
 
 @pytest.mark.parametrize("op,invalid", [("add", ["string"]), ("update", {"bad": "string"})])

@@ -35,6 +35,7 @@ NUMERIC = {"decimal", "integer", "int"}
 TEMPORAL = {"date", "timestamp"}
 RANGE_TYPES = NUMERIC | TEMPORAL
 VISIBILITY = ("prominent", "normal", "hidden")
+LONG_TEXT = "long_text"  # 长文本：详情单独成区，不可筛选 / 排序，默认不进列表
 DISPLAY_FIELDS = {
     "visibility": "visibility",
     "searchable": "searchable",
@@ -90,6 +91,8 @@ def default_flags(obj: str, p: Obj, ontology_id: int | None = None) -> Obj:
         out.update(filterable=False, sortable=False, list_visible=False)
     if p.get("sensitive"):  # 敏感属性不做分面（取值会泄露明文），PDE 定
         out["filterable"] = False
+    if typ == LONG_TEXT:
+        out.update(filterable=False, sortable=False, list_visible=False)
     return out
 
 
@@ -112,6 +115,8 @@ def snapshot_flags(obj: str, p: Obj, order: int, ontology_id: int | None = None)
         out.update(filterable=False, sortable=False, list_visible=False)
     if p.get("sensitive"):
         out["filterable"] = False
+    if p.get("type") == LONG_TEXT:
+        out.update(filterable=False, sortable=False)
     return out
 
 
@@ -169,7 +174,10 @@ def prop_meta(p: Property) -> Obj:
         "group": p.prop_group,
         "searchable": p.searchable and not p.is_sensitive and p.visibility != "hidden",
         "filterable": facetable(p),
-        "sortable": p.sortable and not p.is_sensitive and p.visibility != "hidden",
+        "sortable": p.sortable
+        and not p.is_sensitive
+        and p.visibility != "hidden"
+        and p.data_type != LONG_TEXT,
         "listed": p.list_visible and not p.is_sensitive and p.visibility != "hidden",
         "desc": p.description or "",
         "listWidth": p.list_width,
@@ -403,7 +411,7 @@ class ExplorerService:
 
 def facetable(p: Property) -> bool:
     """可以出分面 / 被筛选：filterable 且不隐藏、不敏感（PDE 定：敏感、隐藏都不返回取值）。"""
-    return bool(p.filterable) and p.visibility != "hidden" and not p.is_sensitive
+    return bool(p.filterable) and p.visibility != "hidden" and not p.is_sensitive and p.data_type != LONG_TEXT
 
 
 def bad_filter(key: str, msg: str) -> None:

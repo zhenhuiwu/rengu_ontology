@@ -58,7 +58,7 @@
 - qa 引用了 `explorer.py` 私有函数 `_bad` / `_scalar`（及 `facet_kind` / `facetable`）；改为公开，或经 `app/contracts/static.py` 导出（qa-pages 评审）。
 - 枚举类字符串筛选值没有长度上限，日期 / 数值限 64 字符，统一上限（qa）。
 - 指标 `variants` 由显示名后缀推出，改为显式维护；`GET /metrics` 返回 `variants`；`variant_index` 按 status 和 `ver` 过滤。
-- 对象浏览标记的后端变更单 / 快照 / 历史读取 / 回滚已补齐（见第 18 条），本轮未新增前端编辑界面。
+- 对象浏览标记的后端变更单 / 快照 / 历史读取 / 回滚已补齐（见第 18 条）；前端编辑入口为 `DefinitionEditor` 属性行的标记勾选，static-t5 另加对象类型页「批量编辑」。
 
 ## 变更单写接口契约（static-r3，先定形状，供动态 / Palantir 对接）
 
@@ -199,7 +199,7 @@
 10. **早期定义页写接口待办（历史记录）**：指标口径回滚已于2026-10-26实现，见本文顶部；其余列举的接口由各专项交接记录当前完成度（早期名单曾含指标试算、维度匹配试算、知识解析、对象导入和函数接口）。
 11. **对象历史 `kind=cr` 没接**：`service.py:211` TODO，现在可以从 cr_target 查。
 18. **本轮没做**（PDE 指示单独提）：第 1 条 restore_section、第 15 条 Releases.vue `crFallback`；Releases.vue 的“重新校验”按钮也还没接 `:validate`。
-12. **`semantic_map` 契约没做**：`app/contracts/static.py:7` TODO（static-api.md §3.7，给本体小白）。
+12. **`semantic_map` 契约已实现（static-t5）**：`app/modules/static/semantic_map.py`，`app/contracts/static.py` 导出（static-api.md §3.7）。
 13. **草稿项仍在定义表**：草稿 / 已驳回的关系、知识、取值仍放在定义表里，用 `status` / `draft_cr` 区分（`models.py:12-25`）；按 §1.3 应移到 cr_item，依赖第 9 条。
 14. **种子里已删除的 CR**：开发库 `rengu_static_integ` 里 CR-0013、CR-0012 在测试中被删了，需要的话重新灌种子。
 15. **Releases.vue 变更单回退 mock 时写按钮仍走真接口**（审核意见，`Releases.vue:39-47`）
@@ -233,7 +233,7 @@
 
 18. **对象浏览属性标记生命周期已补齐（2026-10-26）**：`searchable/filterable/sortable/listed/listWidth/visibility/format/unit/order` 经对象 properties 变更单写回、属性接口、当前快照、新发布快照、整版回滚和 `/meta?ver=` 全链路保存。布尔/可见性/整数范围/可空格式与单位按定义类型校验；hidden 不可筛选/排序/列表展示，敏感属性不可分面，受控 `backing_column` 不开放变更。既有种子版本快照保持旧形状以兼容 append-only 发布表；旧快照读取/恢复只由静态初值和原始种子顺序补齐标记，不借用当前修改。新发布复用旧节时也会补齐字段。验证见 `test_static_explorer.py`、`test_static_writeback.py`。**仍待后续**：指标 `variants` 仅在 meta.metrics 返回，`GET /metrics` 未加显式变体字段（同第 21 条）。
 19. **facets 只覆盖 sql_guard 登记过的类型**（门店、订单、商品等）；其他类型 `hasData:false`、空取值。新类型要先在 sql_guard 登记业务表，再在 `explorer_meta.json` 写 `backing`。行级范围 `row_filter` 目前返回 None（本体小白接入后自动生效）。
-20. **long_text、动作 `bulk`** 按设计文档下一轮再做。
+20. **long_text 已做（static-t5）**；动作 `bulk` 属动作模块（`action/models.py` ActionType 无 bulk 字段）与对象使用页，静态不做，已报告。
 21. **（下一轮）指标 `variants` 是按显示名末尾「（…）」推出来的**（`explorer.metric_variants`）：名字不规范的指标不会成组。应改为在指标定义 / 变更单里显式维护变体，种子只做初值。
 22. **（下一轮）行级范围的分面测试**：现在只用 monkeypatch `auth.row_filter` 证明 facets 调了 `apply_row_filter`（`test_facets_apply_row_filter`）；本体小白接入真实 `row_filter` 后补一条按角色范围的端到端测试（含 DENY_ALL → 全部计数 0）。
 
@@ -282,7 +282,7 @@
 - 现有“重新校验”及提交/通过前校验同事务生成真实静态影响引用，写cr_impact并刷新detail.impact；覆盖关系端点、维度归属、公式明确提及、允许维度、显式variants及知识适用范围。detail.analysisScope明确当前仅静态结构，运行模块未连接的下游计数不推测。
 - 单指标已保存formula/version改动，可执行时按近90日真实数据重聚合为月，分别执行旧/新口径，写cr_trial与detail.trial；缺执行语义时无虚假对比，detail.trialUnavailable说明原因、V14警告。多个指标不能混合不同单位，按现有cr_trial每月唯一模型明确未执行；如需同时对比须先设计指标分组。
 - 试跑值带trialActor；CR详情/full列表仅原试算用户可见业务数值，preview按预览用户判断；其他人保留不可见原因。再保存/放弃目标会清除生成的旧分析与试跑，防止展示过期值。
-- semantic_map未发现前端入口/调用者，遵照“无按钮不做”保留契约待办，没有发明HTTP或表单。
+- semantic_map未发现前端入口/调用者，没有发明HTTP或表单；进程内契约已于 static-t5 实现。
 - 窄验证：独立库`rengu_static_finish_test`的`test_static_trials.py`、`test_static_cr_write.py`及workflow轻目录专项通过；`vue-tsc --noEmit`通过。全量统一验收由主任务完成。
 
 ### 2026-10-26 后续补齐
@@ -317,13 +317,13 @@
 | 9f 写接口权限 | 部分 | require_func 已真实校验（common/auth.py:227），但 CR 写仍统一 releases:manage，未按目标页映射 |
 | 9g 新建关系/知识 id 前端生成 | 完成 | targets:allocate（build-definition-forms.md） |
 | 11 对象历史 kind=cr | 完成 | object_usage_pages.py:47 |
-| 12 semantic_map 契约 | 未做 | contracts/static.py:7 仍 TODO（checklist 写“已实现”与代码不符） |
-| 13 草稿项仍在定义表 | 未做 | models.py:15-17、559、584 draft_cr |
+| 12 semantic_map 契约 | 完成（static-t5） | static/semantic_map.py；contracts/static.py 导出 |
+| 13 草稿项仍在定义表 | 评估后不做（static-t5 设计说明） | models.py:15-17、559、584 draft_cr |
 | 15 Releases crFallback | 完成 | static-r4 |
 | 16 发布/回滚后端权限 | 完成 | releases manage 真实校验 + /admin/v1/me 能力 |
 | 17 graph ?ver= | 完成 | service.py graph 按快照 |
 | 19 facets 仅 sql_guard 登记类型 | 未变（设计限制） | explorer.py |
-| 20 long_text / 动作 bulk | 未做 | — |
+| 20 long_text / 动作 bulk | long_text 完成（static-t5）；bulk 属动作模块 | explorer.LONG_TEXT；static-api.md §3 |
 | 21 指标 variants 显式维护 | 完成 | build-completion-checklist B；shapes.py:229 GET /metrics 返回 variants |
 | 22 行级范围分面端到端测试 | 部分 | 真实 row_filter 已接（row-access.md），分面 DENY_ALL 端到端用例未见 |
 | 评审：writeback 注释与代码不一致 | 待核（行号已漂移） | writeback.py |
@@ -390,3 +390,22 @@
 - `ROLLBACK_FIRST_RELEASE` 新错误码尚未进非静态文档：`frontend/docs/backend/api-index.md:102`、`versioning-api.md:37`、`app/contracts/versioning.py:10,145` 仍只写 `ROLLBACK_NOT_LATEST`。
 - 迁移往返 `notify_0022_inbox.py:67` 仍未解决（同 static-t1）。
 
+## static-t5（基于 master `343ba5f`，本轮无新迁移，迁移头仍为 dynamic_0027）
+
+- **#12 semantic_map**：新增 `app/modules/static/semantic_map.py`（纯函数 `entries_from_snapshot` + `semantic_map(session, ver=None)`），`app/contracts/static.py` 去掉 TODO 并导出。只从快照拼词表，不硬编码业务词；不开 HTTP。[推断] 草稿对象/指标与已停用知识不列；dimValue 的 id 用快照 `key`、api 用 `code`，同义词含命中该取值的维度映射词。`docs/build-completion-checklist.md:29` 原已写“已实现”，现与代码一致，未改。
+- **对象浏览标记经 CR 编辑**：写回 / 发布 / 回滚原已完成（第 18 条），本轮补强 `test_explorer_flags_publish_snapshot_history_and_rollback`：回滚后 hidden（area_sqm）与敏感（store_name）标记恢复为基线，DB `is_sensitive` 复原。
+- **#20 long_text**：`P_TYPES` 增 `long_text`（`data_type` 为 String(32) 无约束，不需迁移）；`explorer.LONG_TEXT`，`default_flags` / `snapshot_flags` / `prop_meta` / `facetable` 与 `_set_prop` 一律不可筛选、不可排序、不分面（默认不列表显示）。前端 `DefinitionEditor` 与对象类型页「新增属性」可选 long_text，勾选框随类型禁用。
+- **静态列表页批量编辑**：`ObjectTypesBody.vue` 属性表「批量编辑」在 real 模式、草稿可编辑时开放：勾选当前页属性 → 弹窗改展示层级与 可搜索/可筛选/可排序/列表显示/敏感（三态）→ `cr.save('properties', rows)` 整行写入变更单；hidden / 敏感 / long_text 约束前端预修正、后端 `_set_prop` 兜底。演示模式保持禁用（提示）。其他静态列表页无批量编辑按钮，未新增。
+- **测试**（独立库 rengu_test_static_t0，只跑改动文件）：`test_static_semantic_map.py`（新，3）、`test_static_writeback.py`（新增 `test_long_text_never_facets_or_sorts`、`test_long_text_property_publishes_and_meta`，类型校验加 long_text）、`test_static_explorer.py`，合计 79 passed；ruff check/format 通过；`vue-tsc --noEmit` 通过；`check-definition-forms`、`check-new-type-form`、`check-static-draft-hydration`、`check-static-loading` 通过；`check-static-pages` 的静态 Body 断言通过，之后在 master 上原本就报错（见下）。
+
+### #13 草稿项仍在定义表 —— 评估结论：不在本批实现（设计说明）
+
+- **现状**：关系（`link_type.status=草稿`）、对象类型（`ObjectStatus.draft`，如储值卡）、指标（`MetricStatus.draft`）、知识（`KnowledgeStatus.draft`）、维度取值与映射（`dim_value.draft_cr` / `dim_mapping.draft_cr`，`models.py:559、584`）的草稿行与已发布行同表，读路径靠 status / draft_cr 过滤（`read_pages.py:69、255、287、592`，`mapping_pages.py:33-117`，`shapes.py:307、322`）；回滚还会把快照外仍被引用的条目**降级为草稿**保留（`writeback.py:1106、1278、1308、1398-1409`），其他模块（动作 / 规则 / 问数 / 自动建本体等）也按定义表 status 读取。
+- **风险**：要迁移的是数据而非只改表结构——需把现存草稿行转成 `cr_item`（缺对应 CR 的历史草稿无处归属）、删列 `draft_cr`、改所有读路径与回滚“保留为草稿”语义，并协调其他模块；对跨模块外键指向草稿对象（如储值卡）尤其危险。属于大重构 + 迁移风险，按指示不做。
+- **建议做法（下一期）**：1) 新写入一律只进 `cr_item`（现状已基本如此：变更单写接口落 cr_item，发布时 `apply_crs` 才写定义表）；2) 加一个只读视图/函数 `published_only(model)` 统一替换散落的 status/draft_cr 过滤；3) 回滚“保留为草稿”改为置 `已停用` 并记 warning，不再产生新草稿行；4) 等定义表里不再新增草稿行后，再出一次数据迁移把残留草稿转成挂在一张“历史草稿”CR 下的 cr_item，最后删 `draft_cr` 列。每一步可单独发布、可回退。
+
+### 给 PDE / 其他模块（只报告）
+
+- **long_text 详情单独分区**：对象使用页 `frontend/src/pages/objects/objMeta.ts:71` 只排除 json，long_text 会按普通属性渲染；设计文档（generic-object-explorer.md §3）要求详情页单独分区，由对象使用页负责（`ObjectDetail.vue`）。
+- **动作 `bulk`**（结果页批量动作）：`app/modules/action/models.py` ActionType 无 bulk 字段，`frontend/src/pages/objects/ObjectSearch.vue` 无多选入口；属动作模块与对象使用页。
+- **`frontend/scripts/check-static-pages.mjs`** 在 master `343ba5f` 上即失败：静态 Body 断言通过后，`MetricsBody.vue:15/172` 引入的 `crErr`（`b93c610`）未在脚本的 `staticApi` 桩（`check-static-pages.mjs:27`）里提供，报 `crErr is not a function`。补桩一行即可，脚本非静态本轮所有，未改。

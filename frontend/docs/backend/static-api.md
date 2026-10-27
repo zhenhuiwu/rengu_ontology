@@ -674,7 +674,8 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 属性列表 | `GET /object-types/{id}/properties?page&size` | 每页 12（`ObjectTypes.vue:135`、`:348`） | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 字段映射 | `GET /object-types/{id}/mappings?page&size` | 每页 12（`ObjectTypes.vue:205`、`:391`） | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
 | 引用：指标 / 视图 / 版本历史 | `GET /object-types/{id}/usage?kind=metric\|view\|cr&page&size` | 分页见 §4.1。**TODO（变更单模块）**：`kind=cr`（版本历史）在变更单模块接入前返回 422 `VALIDATION_FAILED`，`details.fields = [{field: "kind", message}]` | object-types:view | 元数据读取 | ✓ | ✓ | 否 |
-| 预览数据、批量编辑、视图「打开」 | — | **[第二期]** | — | — | — | — | — |
+| 属性批量编辑（static-t5） | 同「新增/改属性」：`PUT /change-requests/{id}/items`，`section=properties`，每个勾选属性一行（op 由前端按已有行推断为 add/update，after 为整行） | 仅 real 模式、草稿可编辑时开放；勾选当前页属性，统一改展示层级与 可搜索/可筛选/可排序/列表显示/敏感（三态：不改/是/否）；前后端都按 hidden / 敏感 / long_text 规则修正 | object-types:manage | — | ✗ | ✗ | 否 |
+| 预览数据、视图「打开」 | — | **[第二期]** | — | — | — | — | — |
 
 #### 3.2.1 通用对象浏览元数据（`generic-object-explorer.md` §4–§5，static_0004，已实现）
 
@@ -736,7 +737,7 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 种子按显示名去掉末尾「（…）」分组：如 `gmv` / `gmv_tax` → `[{code:"gmv",label:"不含税",default:true},{code:"gmv_tax",label:"含税",default:false}]`。
 
 **新库字段**（`onto_property`）：`visibility`、`searchable`、`filterable`、`sortable`、`list_visible`、`list_width`、`format`、`unit`、`backing_column`；`onto_metric.variants`(jsonb)。
-种子初值：`app/modules/static/seeds/explorer_meta.json`（门店：区域、城市、业态、状态可筛选；编码、业态、区域、城市、面积、开业日期、状态列表展示，等）；敏感属性默认不可筛选；未登记的类型按通用规则（pk/标题可搜索、枚举/布尔可筛选、pk/维度列表展示、数值日期可排序）。`long_text`、动作 `bulk` 本版不做。
+种子初值：`app/modules/static/seeds/explorer_meta.json`（门店：区域、城市、业态、状态可筛选；编码、业态、区域、城市、面积、开业日期、状态列表展示，等）；敏感属性默认不可筛选；未登记的类型按通用规则（pk/标题可搜索、枚举/布尔可筛选、pk/维度列表展示、数值日期可排序）。属性类型 `long_text`（static-t5）：可写入 CR / 发布 / 回滚，固定不可筛选、不可排序、不做分面，默认不在列表显示（`explorer.default_flags`、`writeback._set_prop`）；详情页单独分区由对象使用页渲染（不属静态）。动作 `bulk` 属动作模块，静态不做。
 
 ### 3.3 关系类型
 
@@ -797,6 +798,8 @@ PDE 已定口径：发布校验「警告」保留橙色（发布前必须看）�
 | 解析（试一试） | `POST /knowledge:resolve` `{question, crId?}` | 不落库；前端只读时不置灰（`Glossary.vue:473`） | glossary:view | 元数据读取 | ✓ | ✓ | 否 |
 
 ### 3.7 内部接口：语义地图（后台内部，无前端对应）
+
+**已实现（static-t5）**：`app/modules/static/semantic_map.py`，经 `app.contracts.static.semantic_map` 导出。只读快照；草稿对象（及其属性）、草稿指标、已停用知识不列出；dimValue 的 `synonyms` = 取值自身同义词 + 指向该取值（名称或 code）的维度映射词；未知 `ver` 抛 NotFound（404 `NOT_FOUND`）；尚无发布版本时返回 `[]`。
 
 | 用途 | 接口 | 规则 | 权限 | 密钥 | 历史 | 预览 | 行级 |
 |---|---|---|---|---|---|---|---|

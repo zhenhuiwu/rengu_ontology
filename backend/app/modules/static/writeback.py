@@ -22,7 +22,7 @@ from app.core.errors import AppError
 from app.core.schema import _fmt_dt
 from app.modules.admin.permissions import resolve_owner_name
 from app.modules.static.dimension_validation import dimension_source_error
-from app.modules.static.explorer import DISPLAY_FIELDS, VISIBILITY, snapshot_flags
+from app.modules.static.explorer import DISPLAY_FIELDS, LONG_TEXT, VISIBILITY, snapshot_flags
 from app.modules.static.models import (
     ApplyKind,
     Cardinality,
@@ -262,7 +262,7 @@ P_FIELDS = {
     "enumName": "enum_name",
 }
 P_FLAGS = {"pk": "is_pk", "title": "is_title", "dim": "is_dimension", "sensitive": "is_sensitive"}
-P_TYPES = {"string", "int", "integer", "decimal", "date", "timestamp", "boolean", "enum", "json"}
+P_TYPES = {"string", "long_text", "int", "integer", "decimal", "date", "timestamp", "boolean", "enum", "json"}
 
 
 def _prop_type(value: Any, api: str) -> str:
@@ -306,6 +306,8 @@ def _set_prop(p: Property, after: dict[str, Any]) -> None:
         p.filterable = p.sortable = p.list_visible = False
     if p.is_sensitive:
         p.filterable = False
+    if p.data_type == LONG_TEXT:  # 长文本只在详情单独成区，不做分面 / 排序（generic-object-explorer §4）
+        p.filterable = p.sortable = False
 
 
 @register("object", "properties")
