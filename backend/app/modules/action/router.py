@@ -28,6 +28,7 @@ from app.modules.action.schemas import (
     WritebackOut,
 )
 from app.modules.action.service import ActionTypeService, run_daily
+from app.modules.admin.api_keys import require_api_scope
 
 router = APIRouter(tags=["action"], dependencies=[Depends(require_func("action-types", "view"))])
 
@@ -45,6 +46,8 @@ async def get_execution_options(session: SessionDep, ctx: ViewContextDep) -> dic
 @router.post(
     "/action-types/{type_id}:dry-run",
     response_model=DryRunOut,
+    # Machine callers: API key scope actions:dry-run + per-key action type allowlist.
+    dependencies=[Depends(require_api_scope("actions:dry-run", action_type="{type_id}"))],
     openapi_extra=readonly_extra("history"),
     summary="只读校验真实提交条件，不调用外部或创建动作",
 )
@@ -69,7 +72,8 @@ async def dry_run(
 
         raise AppError("目标对象须完整指定且匹配动作定义", code="VALIDATION_FAILED", status_code=422)
     return await DatabaseSubmissionChecker(session, user).run(
-        value, {"params": body.params, "objKind": body.obj_kind, "objId": body.obj_id, "alertId": body.alert_id}
+        value,
+        {"params": body.params, "objKind": body.obj_kind, "objId": body.obj_id, "alertId": body.alert_id},
     )
 
 

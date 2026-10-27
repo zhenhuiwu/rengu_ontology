@@ -20,6 +20,7 @@ import json
 from datetime import date
 from functools import lru_cache
 
+from app.common.ontology import DEFAULT_ONTOLOGY_ID
 from app.core.config import get_settings
 from app.core.schema import parse_display_dt
 from app.modules.admin.models import (
@@ -160,6 +161,8 @@ def _role(r: Row, _ctx: SeedContext) -> Row:
 def _role_scopes(r: Row, _ctx: SeedContext) -> list[Row]:
     return [
         {
+            # admin_0025: row scopes are per ontology; seed scopes belong to the retail workspace 1.
+            "ontology_id": DEFAULT_ONTOLOGY_ID,
             "code": s["id"],
             "role_id": r["id"],
             "seq": i,
@@ -189,7 +192,7 @@ SEEDS += [
     SeedSpec(
         SysRoleScope,
         "ROLES.json",
-        key=("code",),
+        key=("ontology_id", "code"),
         transform=_role_scopes,
         refs={"role_id": _ROLE},
         description="角色行级范围",

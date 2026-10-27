@@ -121,7 +121,8 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
     )
     if not objects:
         return _meta_json("SCOPE_PROPS") if require_ontology_id(session) == 1 else []
-    tables = {g.object_type: g for g in governed_tables(require_ontology_id(session)).values() if not g.inherit}
+    governed = governed_tables(require_ontology_id(session)).values()
+    tables = {g.object_type: g for g in governed if not g.inherit}
     out = []
     for obj in objects:
         g = tables.get(obj.code)
@@ -231,6 +232,19 @@ def scope_text(s: SysRoleScope) -> str:
     return f"{s.prop} {s.op} {'、'.join(s.values)}"
 
 
+def resolve_scope_label(s: SysRoleScope, names: dict[int, str]) -> None:
+    """引用对象类型的范围按对象当前显示名匹配；引用已删除（只剩 code）→ 不匹配任何对象（拒绝）。"""
+    if s.object_type_id is not None:
+        s.__dict__["_label"] = names.get(s.object_type_id, "")
+    elif s.object_type_code is not None:
+        s.__dict__["_label"] = ""
+
+
+def scope_label(s: SysRoleScope) -> str:
+    """范围匹配用的对象名称；历史数据（未映射对象类型）沿用存储的中文名。"""
+    return s.label
+
+
 # ---- 数据访问 ----
 
 
@@ -249,14 +263,31 @@ class SysRoleRepository(BaseRepository[SysRole]):
         return list((await self.session.scalars(select(SysRole).order_by(SysRole.code))).all())
 
     async def scopes_of(self, role_ids: list[int]) -> dict[int, list[SysRoleScope]]:
+        """当前本体工作空间的范围（显式条件 + FORCE RLS）；引用对象类型的范围显示对象当前名称。"""
+        from app.modules.static.models import ObjectType
+
         out: dict[int, list[SysRoleScope]] = {i: [] for i in role_ids}
         if role_ids:
-            rows = await self.session.scalars(
-                select(SysRoleScope)
-                .where(SysRoleScope.role_id.in_(role_ids))
-                .order_by(SysRoleScope.role_id, SysRoleScope.seq, SysRoleScope.id)
+            rows = list(
+                await self.session.scalars(
+                    select(SysRoleScope)
+                    .where(
+                        SysRoleScope.role_id.in_(role_ids),
+                        SysRoleScope.ontology_id == require_ontology_id(self.session),
+                    )
+                    .order_by(SysRoleScope.role_id, SysRoleScope.seq, SysRoleScope.id)
+                )
+            )
+            ids = {s.object_type_id for s in rows if s.object_type_id is not None}
+            names = (
+                dict((await self.session.execute(
+                    select(ObjectType.id, ObjectType.display_name).where(ObjectType.id.in_(ids))
+                )).all())
+                if ids
+                else {}
             )
             for s in rows:
+                resolve_scope_label(s, names)
                 out[s.role_id].append(s)
         return out
 
@@ -394,7 +425,7 @@ class RoleService:
                     ]
                     if perm
                     else [],
-                    "scopes": [s for s in bundle.scopes if perm and s.obj_type in labels],
+                    "scopes": [s for s in bundle.scopes if perm and scope_label(s) in labels],
                     "memberCount": bundle.member_count,
                 }
             )
@@ -484,6 +515,8 @@ class RoleService:
                     role_id=r.id,
                     seq=i,
                     obj_type=s.obj_type,
+                    object_type_id=s.object_type_id,
+                    object_type_code=s.object_type_code,
                     prop=s.prop,
                     op=s.op,
                     values=list(s.values),
@@ -620,8 +653,27 @@ class RoleService:
         values: list[str],
         user: CurrentUser,
         ip: str,
+        object_type_code: str | None = None,
     ) -> SysRoleScope:
+        from app.modules.static.models import ObjectStatus, ObjectType
+
         r = await self._editable(code)
+        # 当前本体里的已发布对象类型：按编号（优先）或显示名唯一定位，写入稳定引用。
+        candidates = list(
+            await self.session.execute(
+                select(ObjectType.id, ObjectType.code, ObjectType.display_name).where(
+                    ObjectType.status == ObjectStatus.published,
+                    ObjectType.code == object_type_code
+                    if object_type_code
+                    else ObjectType.display_name == obj_type,
+                )
+            )
+        )
+        if object_type_code and len(candidates) != 1:
+            raise RoleValidation("对象类型不在当前本体工作空间", details={"objectTypeCode": object_type_code})
+        target = candidates[0] if len(candidates) == 1 else None
+        if target is not None:
+            obj_type = target.display_name
         props = await load_scope_props(self.session, user)
         meta = next((p for p in props if p["objType"] == obj_type and p["prop"] == prop), None)
         if meta is None:
@@ -639,6 +691,8 @@ class RoleService:
             role_id=r.id,
             seq=seq,
             obj_type=obj_type,
+            object_type_id=target.id if target else None,
+            object_type_code=target.code if target else None,
             prop=prop,
             op=op,
             values=vals,
@@ -767,7 +821,7 @@ def compute_effective(rs: list[RoleBundle], po: list[dict[str, Any]] | None = No
         name = o["name"]
 
         def has_scope(b: RoleBundle, name: str = name) -> bool:
-            return any(s.obj_type == name for s in b.scopes)
+            return any(scope_label(s) == name for s in b.scopes)
 
         granted = [
             b
@@ -777,7 +831,9 @@ def compute_effective(rs: list[RoleBundle], po: list[dict[str, Any]] | None = No
         if not granted:
             continue
         unlimited = any(not has_scope(b) for b in granted)
-        scopes = [] if unlimited else [scope_text(s) for b in granted for s in b.scopes if s.obj_type == name]
+        scopes = (
+            [] if unlimited else [scope_text(s) for b in granted for s in b.scopes if scope_label(s) == name]
+        )
         actions = list(dict.fromkeys(a for b in rs for a in (obj_of(b, name) or {}).get("actions", [])))
         exp = any((obj_of(b, name) or {}).get("export") for b in rs)
         objs.append(
@@ -791,7 +847,9 @@ def compute_effective(rs: list[RoleBundle], po: list[dict[str, Any]] | None = No
     return {"func": fn, "objs": objs, "areas_in": list(dict.fromkeys(p["area"] for p in fn))}
 
 
-async def sync_primary_role(session: AsyncSession, user_id: int, previous: str | None, role: SysRole, actor: str) -> None:
+async def sync_primary_role(
+    session: AsyncSession, user_id: int, previous: str | None, role: SysRole, actor: str
+) -> None:
     """Replace only the explicitly changed primary role; separately assigned roles stay intact."""
     if previous == role.name:
         return
@@ -804,7 +862,9 @@ async def sync_primary_role(session: AsyncSession, user_id: int, previous: str |
         if name == previous and member.role_id != role.id:
             await session.delete(member)
     if not any(member.role_id == role.id for member, _ in members):
-        first = await session.scalar(select(func.min(SysRoleMember.seq)).where(SysRoleMember.role_id == role.id))
+        first = await session.scalar(
+            select(func.min(SysRoleMember.seq)).where(SysRoleMember.role_id == role.id)
+        )
         session.add(SysRoleMember(role_id=role.id, user_id=user_id, seq=(first or 0) - 1, created_by=actor))
 
 
@@ -830,7 +890,7 @@ def compute_row_scope(rs: list[RoleBundle], po: list[dict[str, Any]] | None = No
             return bool(next((x for x in b.role.objs if x["objType"] == name), {}).get("view"))
 
         def has_scope(b: RoleBundle, name: str = name) -> bool:
-            return any(s.obj_type == name for s in b.scopes)
+            return any(scope_label(s) == name for s in b.scopes)
 
         granted = [b for b in rs if view(b) and not (b.role.default_deny and not has_scope(b))]
         unlimited = bool(granted) and any(not has_scope(b) for b in granted)
@@ -840,7 +900,7 @@ def compute_row_scope(rs: list[RoleBundle], po: list[dict[str, Any]] | None = No
             for b in granted:
                 for s in b.scopes:
                     t = scope_text(s)
-                    if s.obj_type == name and t not in seen:
+                    if scope_label(s) == name and t not in seen:
                         seen.add(t)
                         conds.append({"prop": s.prop, "op": s.op, "values": list(s.values), "text": t})
         text = "无权查看" if not granted else "全部" if unlimited else "；或 ".join(c["text"] for c in conds)

@@ -10,6 +10,7 @@ from app.core import clock
 from app.core.errors import AppError
 from app.core.schema import _fmt_dt_seconds
 from app.db.session import SessionDep
+from app.modules.admin.api_keys import require_api_scope
 from app.modules.functions import runtime, service
 from app.modules.functions.schemas import CreateIn, RollbackIn, SaveIn, TestIn
 
@@ -49,7 +50,7 @@ async def versions(
     return await service.history(session, path_code(code), PageParams(page=page, size=size))
 
 
-@router.post("/functions/{code}:test")
+@router.post("/functions/{code}:test", dependencies=[Depends(require_api_scope("functions:invoke"))])
 async def test_function(code: str, body: TestIn, session: SessionDep) -> dict:
     fn = await service.detail(session, path_code(code))
     start = time.perf_counter()

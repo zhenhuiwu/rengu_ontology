@@ -70,14 +70,15 @@ from app.modules.admin.schemas import (
     UserUpdateIn,
 )
 from app.modules.admin.service import (
-    department_options,
     AuditLogService,
     UserService,
+    department_options,
     make_filter,
     make_user_filter,
     parse_import_csv,
     pending_approvals,
 )
+from app.modules.admin.workspace_scope import AdminWorkspaceDep
 
 router = APIRouter(tags=["admin"])
 
@@ -243,7 +244,11 @@ async def list_depts(session: SessionDep) -> list[str]:
 async def user_options(session: SessionDep, user: CurrentUserDep) -> dict:
     from app.modules.admin.roles import role_names
 
-    return {"depts": await department_options(session), "roles": [{"name": name} for name in await role_names(session)], "canAssignRole": user.func.get("roles") == "manage"}
+    return {
+        "depts": await department_options(session),
+        "roles": [{"name": name} for name in await role_names(session)],
+        "canAssignRole": user.func.get("roles") == "manage",
+    }
 
 
 @router.post("/users", response_model=AdminUserOut, summary="新建用户（账号唯一）")
@@ -297,8 +302,17 @@ async def disable_user(
 
 # ---- 角色与权限（Roles.vue，api-index §4.2；逻辑在 admin/roles.py）----
 
-_roles_view = require_func("roles", "view")
-_roles_manage = require_func("roles", "manage")
+def _workspace_scoped(dep):
+    """角色页读写行级范围等按本体隔离的数据：先按 X-Ontology-Id 绑定工作空间，再检查功能权限。"""
+
+    async def _dep(_ontology: AdminWorkspaceDep, user: Annotated[CurrentUser, Depends(dep)]) -> CurrentUser:
+        return user
+
+    return _dep
+
+
+_roles_view = _workspace_scoped(require_func("roles", "view"))
+_roles_manage = _workspace_scoped(require_func("roles", "manage"))
 RolesManage = Annotated[CurrentUser, Depends(_roles_manage)]
 
 
@@ -441,6 +455,7 @@ async def add_role_scope(
         values=body.values,
         user=user,
         ip=client_ip(request),
+        object_type_code=body.object_type_code,
     )
     return RowScopeOut.model_validate(s)
 
@@ -497,8 +512,12 @@ async def get_effective_access(user_id: str, session: SessionDep) -> EffectiveAc
     return EffectiveAccessOut.model_validate({**eff, "rs": [role_out(b) for b in rs]})
 
 
-@router.get("/me/row-scope", response_model=MeRowScopeOut, summary="当前用户逐对象类型的行级范围")
-async def get_my_row_scope(user: CurrentUserDep, session: SessionDep) -> MeRowScopeOut:
+@router.get(
+    "/me/row-scope", response_model=MeRowScopeOut, summary="当前用户在当前本体工作空间逐对象类型的行级范围"
+)
+async def get_my_row_scope(
+    user: CurrentUserDep, session: SessionDep, _ontology: AdminWorkspaceDep
+) -> MeRowScopeOut:
     items = await RoleService(session).row_scope(user.id)
     return MeRowScopeOut.model_validate({"user_id": user.id, "user_name": user.name, "items": items})
 

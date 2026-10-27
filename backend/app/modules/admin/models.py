@@ -108,6 +108,10 @@ class AuditLog(CodeMixin, AppendOnlyTableMixin, Base):
     result: Mapped[AuditResult] = mapped_column(
         enum_column(AuditResult, 16), nullable=False, default=AuditResult.success, server_default="success"
     )
+    # admin_0025: machine caller context (API key / service account). Human sessions leave these null.
+    principal_kind: Mapped[str | None] = mapped_column(String(16), comment="user / service（API 密钥调用）")
+    service_account_code: Mapped[str | None] = mapped_column(String(64), comment="服务账号编号（SA-0001）")
+    api_key_prefix: Mapped[str | None] = mapped_column(String(16), comment="调用密钥前缀（不含密钥）")
 
 
 # ---- 角色与权限（Roles.vue，api-index §4.2；admin_0003）----
@@ -161,12 +165,29 @@ class SysRole(CodeMixin, MutableTableMixin, Base):
     changed_by: Mapped[str] = mapped_column(String(64), nullable=False, comment="前端 updatedBy（姓名）")
 
 
-class SysRoleScope(CodeMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
-    """角色的行级范围 RowScope{id,objType,prop,op,values}。code = 前端 scope id（S-31）。"""
+class SysRoleScope(IdMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
+    """角色的行级范围 RowScope{id,objType,prop,op,values}。code = 前端 scope id（S-31）。
+
+    admin_0025：按本体工作空间隔离（ontology_id + FORCE RLS），对象类型用 object_type_id 稳定引用；
+    obj_type 只保留展示名。object_type_id 为空且 object_type_code 也为空 = 历史数据，按名称兼容匹配；
+    object_type_code 有值但 id 为空 = 引用的对象类型已删除，按无法映射处理（拒绝，不放宽）。
+    """
 
     __tablename__ = "sys_role_scope"
-    __table_args__ = ({"comment": "角色行级范围"},)
+    __table_args__ = (UniqueConstraint("ontology_id", "code"), {"comment": "角色行级范围"})
 
+    ontology_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("ontology_workspace.id"),
+        nullable=False,
+        index=True,
+        server_default=text("NULLIF(current_setting('rengu.ontology_id', true), '')::bigint"),
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False, comment="业务编号（前端 id）")
+    object_type_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("object_type.id", ondelete="SET NULL"), comment="对象类型（稳定引用）"
+    )
+    object_type_code: Mapped[str | None] = mapped_column(String(64), comment="对象类型编号（写入时快照）")
     role_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("sys_role.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -175,6 +196,11 @@ class SysRoleScope(CodeMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
     prop: Mapped[str] = mapped_column(String(64), nullable=False, comment="权限依据属性（大区）")
     op: Mapped[str] = mapped_column(String(4), nullable=False, comment="= 或 ∈")
     values: Mapped[list] = mapped_column(JsonType, nullable=False, comment="取值 string[]")
+
+    @property
+    def label(self) -> str:
+        """匹配 / 展示用对象名：roles.scopes_of 按 object_type_id 解析成当前显示名，否则用存储名。"""
+        return self.__dict__.get("_label", self.obj_type)
 
 
 class SysRoleMember(IdMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
@@ -241,11 +267,19 @@ class ApiKey(CodeMixin, MutableTableMixin, Base):
     __tablename__ = "api_key"
     __table_args__ = (
         Index("uq_api_key_live_name", "name", unique=True, postgresql_where=text("revoked_at IS NULL")),
+        CheckConstraint(
+            "(principal_kind = 'user' AND user_id IS NOT NULL AND service_account_id IS NULL) OR "
+            "(principal_kind = 'service' AND service_account_id IS NOT NULL AND user_id IS NULL)",
+            name="principal",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(40), nullable=False)
     env: Mapped[str] = mapped_column(String(8), nullable=False)
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=False)
+    # admin_0025: principal_kind user → user_id；service → service_account_id（二选一，CHECK 约束）
+    principal_kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="user")
+    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("sys_user.id"))
+    service_account_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_account.id"))
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     last4: Mapped[str] = mapped_column(String(4), nullable=False)
@@ -258,6 +292,42 @@ class ApiKey(CodeMixin, MutableTableMixin, Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_by: Mapped[str | None] = mapped_column(String(128))
+    # null = 不限（该 scope 下全部类型）；列表 = 只允许这些动作/事件类型编号
+    action_types: Mapped[list | None] = mapped_column(JsonType)
+    event_types: Mapped[list | None] = mapped_column(JsonType)
+    rate_per_minute: Mapped[int | None] = mapped_column(Integer)
+    quota_per_day: Mapped[int | None] = mapped_column(Integer)
+
+
+class ServiceAccount(CodeMixin, MutableTableMixin, Base):
+    """机器调用方（Palantir 集成等）。
+
+    权限 = 绑定的服务角色（复用 sys_role 的功能/对象/行级范围）∩ 密钥 scope。
+    """
+
+    __tablename__ = "service_account"
+    __table_args__ = ({"comment": "服务账号"},)
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(String(512), nullable=False, server_default="")
+    role_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_role.id"), nullable=False)
+    creator: Mapped[str] = mapped_column(String(128), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(String(128))
+
+
+class ApiKeyUsage(IdMixin, Base):
+    """限流计数：每个密钥每分钟 / 每天一行，同一事务内原子 +1（随请求事务提交 / 回滚）。"""
+
+    __tablename__ = "api_key_usage"
+    __table_args__ = (UniqueConstraint("key_id", "period", "bucket"),)
+
+    key_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("api_key.id", ondelete="CASCADE"), nullable=False
+    )
+    period: Mapped[str] = mapped_column(String(8), nullable=False, comment="minute / day")
+    bucket: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class ApiKeyCall(IdMixin, AppendOnlyTableMixin, Base):

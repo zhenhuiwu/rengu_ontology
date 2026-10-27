@@ -112,6 +112,7 @@ async def get_current_user(
             raise Unauthorized("请使用 Bearer API 密钥")
         user = await authenticate_key(session, token, request, x_tenant_id)
     else:
+        session.info.pop("api_caller", None)  # human caller: never inherit a machine caller context
         s = get_settings()
         if s.env == "prod":
             raise Unauthorized("鉴权尚未接入")
@@ -142,24 +143,37 @@ async def get_current_user(
             from app.core.errors import NotFound
 
             raise NotFound("本体工作空间不存在")
-        member = await session.scalar(
-            select(OntologyMember)
-            .join(SysUser, SysUser.id == OntologyMember.user_id)
-            .where(OntologyMember.ontology_id == ontology_id, SysUser.code == user.id)
-        )
-        if member is None or member.role not in ("owner", "editor", "viewer"):
-            raise Forbidden("没有此本体工作空间的访问权限")
-        if user.ontology_ids is not None and ontology_id not in user.ontology_ids:
-            raise Forbidden("API 密钥没有此本体工作空间的权限")
-        await set_ontology_scope(session, ontology_id)
-        db_user = await session.scalar(select(SysUser).where(SysUser.code == user.id))
-        user = replace(
-            user,
-            ontology_id=ontology_id,
-            ontology_role=member.role,
-            row_filters={} if user.ontology_ids is not None else await object_row_access(session, db_user.id),
-        )
-        if member.role == "viewer" and request.method not in ("GET", "HEAD", "OPTIONS"):
+        if user.ontology_ids is not None:
+            # API key caller: user keys need membership, service-account keys an ontology role binding.
+            from app.modules.admin.api_keys import key_row_filters, key_workspace_role
+
+            role = await key_workspace_role(session, request, user, ontology_id)
+            if role not in ("owner", "editor", "viewer", "service"):
+                raise Forbidden("没有此本体工作空间的访问权限")
+            if ontology_id not in user.ontology_ids:
+                raise Forbidden("API 密钥没有此本体工作空间的权限")
+            await set_ontology_scope(session, ontology_id)
+            user = replace(
+                user, ontology_id=ontology_id, ontology_role=role,
+                row_filters=await key_row_filters(session, request, user),
+            )
+        else:
+            member = await session.scalar(
+                select(OntologyMember)
+                .join(SysUser, SysUser.id == OntologyMember.user_id)
+                .where(OntologyMember.ontology_id == ontology_id, SysUser.code == user.id)
+            )
+            if member is None or member.role not in ("owner", "editor", "viewer"):
+                raise Forbidden("没有此本体工作空间的访问权限")
+            await set_ontology_scope(session, ontology_id)
+            db_user = await session.scalar(select(SysUser).where(SysUser.code == user.id))
+            user = replace(
+                user,
+                ontology_id=ontology_id,
+                ontology_role=member.role,
+                row_filters=await object_row_access(session, db_user.id),
+            )
+        if user.ontology_role == "viewer" and request.method not in ("GET", "HEAD", "OPTIONS"):
             # History/preview exceptions also include writes; only these reviewed pure reads are allowed.
             pure_reads = {
                 "/metrics/{id}:trial",

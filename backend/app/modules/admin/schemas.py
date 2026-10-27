@@ -206,7 +206,9 @@ class RowScopeOut(ApiModel):
     """RowScope{id,objType,prop,op,values}。"""
 
     id: CodeId
-    obj_type: str
+    # 引用对象类型的范围显示对象当前名称（admin_0025）；历史范围显示存储的中文名
+    obj_type: str = Field(validation_alias=AliasChoices("label", "obj_type", "objType"))
+    object_type_code: str | None = None
     prop: str
     op: ScopeOp
     values: list[str]
@@ -216,6 +218,8 @@ class RowScopeIn(ApiModel):
     """新增范围：不含 id；op 不传时按取值个数推（一个 =，多个 ∈），与 Roles.vue addScope 一致。"""
 
     obj_type: str = Field(min_length=1, max_length=64)
+    # 可选：当前本体里对象类型编号（优先于 objType 显示名定位）
+    object_type_code: str | None = Field(default=None, max_length=64)
     prop: str = Field(min_length=1, max_length=64)
     op: ScopeOp | None = None
     values: list[str] = Field(min_length=1, max_length=200)
