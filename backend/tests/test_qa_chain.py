@@ -64,7 +64,8 @@ async def test_multi_rows_and_empty(qa):
     use_llm("select store_no, name from store order by store_no")
     t = (await qa.post(URL, json={"question": "列出门店"})).json()["turn"]
     tb = t["answer"]["table"]
-    assert [c["title"] for c in tb["columns"]] == ["store_no", "name"]
+    # 明细列表带对象名称 → 补业务编号列（sqlfix.ensure_code）
+    assert [c["title"] for c in tb["columns"]] == ["code", "store_no", "name"]
     assert tb["total"] > 10 and tb["paged"] is True
     use_llm("select name from store where 1 = 0")
     t = (await qa.post(URL, json={"question": "空结果"})).json()["turn"]
@@ -240,7 +241,8 @@ async def test_clarify_returns_answer_with_options_no_sql(qa, session):
         '```json\n{"clarify": {"term": "地区", "question": "“地区”指大区、区域还是城市？",'
         ' "options": ["大区", "区域", "城市"]}}\n```'
     )
-    r = await qa.post(URL, json={"question": "按地区看本月销售额"})
+    # 模型给的反问（确定性规则没拦下的题）原样回给用户
+    r = await qa.post(URL, json={"question": "本月各片区销售额"})
     assert r.status_code == 202, r.text
     turn = r.json()["turn"]
     assert turn["kind"] == "answer" and "table" not in turn["answer"]
@@ -249,6 +251,17 @@ async def test_clarify_returns_answer_with_options_no_sql(qa, session):
     assert turn["answer"]["text"].startswith("“地区”")
     t = await session.scalar(select(QaTurn).where(QaTurn.code == r.json()["turnId"]))
     assert t.sql_text is None  # 反问不执行 SQL
+
+
+async def test_deterministic_clarify_from_value_index(qa, session):
+    # “按地区”对不上任何维度 / 层级，但“区”同时出现在多个层级名里 → 不调模型直接反问
+    fake = use_llm("select 1")
+    r = await qa.post(URL, json={"question": "按地区看本月销售额"})
+    assert r.status_code == 202, r.text
+    c = r.json()["turn"]["answer"]["clarify"]
+    assert c["term"] == "地区" and len(c["options"]) >= 2 and not fake.prompts
+    idx = await chain.qa_value_index(session)
+    assert idx.cols and any(col.path for col in idx.cols)
 
 
 async def test_refuse_returns_denied_with_code_no_sql(qa, session):
@@ -380,6 +393,6 @@ def test_entity_and_vague_metric_clarify():
 def test_qa_source_from_governed_tables():
     src = chain.qa_source(1)
     assert src.table_names == {"store", "biz_order", "order_line", "product"}
-    assert src.time_hints["shipped_at"] == ("出库",) and "下单" in src.time_hints["created_at_biz"]
+    assert src.time_hints["shipped_at"] == ("出库", "履约") and "下单" in src.time_hints["created_at_biz"]
     assert src.name_cols == {"store": "name", "product": "name"}
     assert chain.qa_source(999).tables == ()

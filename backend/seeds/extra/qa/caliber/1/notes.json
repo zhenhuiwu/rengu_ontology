@@ -10,7 +10,7 @@
       "净销售额",
       "GMV",
       "gmv",
-      "卖了多少钱"
+      "卖了多少钱", "sales"
     ],
     "caliber": "同名默认 = 不含税 = 订单行含税金额 ÷ 1.13，先汇总后保留 2 位；只算已出库订单（已签收不算），剔除测试单和测试店，时间字段是出库时间；退款按 0",
     "sql": "round(sum(l.qty * l.price) / 1.13, 2) FROM order_line l JOIN biz_order o ON o.id = l.order_id JOIN store s ON s.id = o.store_id WHERE o.status = 'shipped' AND NOT o.is_test AND NOT s.is_test AND o.shipped_at 在时间窗内",
