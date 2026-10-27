@@ -145,7 +145,28 @@ if (isStaticReal()) {
   }, { immediate: true });
 }
 
-const FORMULA = computed(() => isStaticReal() ? (isDraft.value ? String(draftFields(cr.items.value, 'def').formula ?? rawDefinition.value.formula ?? '尚未配置公式') : rawDefinition.value.formula ?? '尚未配置公式') : 'SUM(订单行.不含税金额) − SUM(退款行.不含税退款金额)');
+const FORMULA = computed(() => {
+  if (!isStaticReal()) return 'SUM(订单行.不含税金额) − SUM(退款行.不含税退款金额)';
+  const fields = isDraft.value ? draftFields(cr.items.value, 'def') : {};
+  const formula = 'formula' in fields ? fields.formula : rawDefinition.value.formula;
+  return formula == null || formula === '' ? '尚未配置公式' : String(formula);
+});
+const DISPLAY_DEF = computed(() => {
+  if (!isStaticReal() || !isDraft.value) return DEF.value;
+  const rows = DEF.value.map(row => ({ ...row }));
+  const labels: Record<string, string> = { timeField: '时间字段', defaultFilter: '默认过滤' };
+  for (const item of cr.items.value) {
+    const label = labels[item.key];
+    if (item.section !== 'def' || !label) continue;
+    const index = rows.findIndex(row => row.k === label);
+    if (item.op === 'delete') { if (index >= 0) rows.splice(index, 1); }
+    else if (typeof item.after === 'string') {
+      if (index >= 0) rows[index] = { ...rows[index], v: item.after };
+      else rows.push({ k: label, v: item.after });
+    }
+  }
+  return rows;
+});
 
 const VARIANTS = computed(() => isStaticReal() && isDraft.value ? (draftFields(cr.items.value, 'def').variants ?? rawDefinition.value.variants ?? []) as NonNullable<typeof rawDefinition.value.variants> : rawDefinition.value.variants ?? []);
 const DISPLAY_DIMS = computed(() => isStaticReal() && isDraft.value && Array.isArray(draftFields(cr.items.value, 'def').dims) ? (draftFields(cr.items.value, 'def').dims as string[]).map((name) => DIMS.value.find((d) => d.dim === name) ?? { dim: name, hier: '', obj: '', def: '', note: '' }) : DIMS.value);
@@ -315,7 +336,7 @@ const refCols = [
           <div class="mt-formula t-14 num">{{ FORMULA }}</div>
           <a-descriptions v-if="isStaticReal()" :column="2" bordered size="small"><a-descriptions-item label="分组">{{ cur.group }}</a-descriptions-item><a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item></a-descriptions>
           <a-descriptions :column="2" bordered size="small" class="mt-desc" :label-style="{ width: '96px', whiteSpace: 'nowrap' }">
-            <a-descriptions-item v-for="d in DEF" :key="d.k" :label="d.k"><span class="mt-ell" :title="d.v">{{ d.v }}</span></a-descriptions-item>
+            <a-descriptions-item v-for="d in DISPLAY_DEF" :key="d.k" :label="d.k"><span class="mt-ell" :title="d.v">{{ d.v }}</span></a-descriptions-item>
           </a-descriptions>
           <template v-if="isStaticReal()"><div class="mt-sec t-14 fw-600">口径变体</div><a-empty v-if="!VARIANTS.length" description="未配置口径变体" /><div v-for="v in VARIANTS" :key="v.code" class="t-14">{{ v.label }} · {{ v.code }} · {{ v.api }} · {{ v.version }} {{ v.default ? '· 同名默认' : '' }}</div></template>
           <div class="mt-sec t-14 fw-600">允许的维度</div>

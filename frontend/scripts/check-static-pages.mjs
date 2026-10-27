@@ -50,7 +50,7 @@ const staticApi = {
     if (path.startsWith('/dimensions/')) return structuredClone(dim);
     if (path.startsWith('/knowledge/')) return structuredClone(knowledge);
     if (path.startsWith('/link-types/')) return link(Number(path.split('/').at(-1).slice(1)));
-    if (path.startsWith('/metrics/')) return { ...head('M', 1), formula: 'actual', def: [], dims: [] };
+    if (path.startsWith('/metrics/')) return { ...head('M', 1), formula: 'actual', def: [{ k: '时间字段', v: context.ver ? 'Historical.created_at' : 'Published.created_at' }, { k: '默认过滤', v: 'Published.status = active' }], dims: [] };
     return [];
   },
   fetchKnowledgeChoices: async () => [], fetchKnowledgeConflicts: async () => ({ conflicts: [], rule: {} }),
@@ -81,7 +81,7 @@ const bodyImports = (route, selected, kind, draftFlag, cr) => ({
 });
 for (const [file, param, id, kind, listPath, expose] of [
   ['ObjectTypesBody', 'type', 'O1', 'object', '/object-types', 'current, addForm, addOpen, ppage, propPage, realProps, recollectMetadata, metadataOpen, metadataDiff'],
-  ['MetricsBody', 'metric', 'M1', 'metric', '/metrics', 'cur, definitionOpen, verPage, versionRows, verSize'],
+  ['MetricsBody', 'metric', 'M1', 'metric', '/metrics', 'cur, definitionOpen, verPage, versionRows, verSize, FORMULA, DEF, DISPLAY_DEF'],
   ['DimensionsBody', 'dim', 'D1', 'dimension', '/dimensions', 'cur, form, editing, vEdit, vp, valuesPage, valueSize'],
   ['GlossaryBody', 'k', 'K1', 'knowledge', '/knowledge', 'cur, form, editing, beginEdit, rpage, refsPage'],
   ['LinkTypesBody', 'link', 'L1', 'link', '/link-types', 'cur, form, editing, beginEdit, graphNodes, graphLinks, positions'],
@@ -111,7 +111,30 @@ for (const [file, param, id, kind, listPath, expose] of [
     page.ppage.value = 2; await tick(); assert.equal(page.propPage.items.value[0].api, 'p13');
     draftFlag.value = true; await tick(); assert.equal(calls.filter(c => c.path.endsWith('/properties')).at(-1).query.crId, 'CR-DB');
   }
-  if (file === 'MetricsBody') { page.tab.value = 'versions'; await tick(); page.verSize.value = 20; await tick(); assert.equal(calls.filter(c => c.path.endsWith('/versions')).at(-1).query.size, 20); }
+  if (file === 'MetricsBody') {
+    page.tab.value = 'versions'; await tick(); page.verSize.value = 20; await tick(); assert.equal(calls.filter(c => c.path.endsWith('/versions')).at(-1).query.size, 20);
+    const baseline = JSON.stringify(page.DEF.value);
+    cr.items.value = [
+      { section: 'def', key: 'timeField', op: 'update', after: 'Saved.created_at' },
+      { section: 'def', key: 'defaultFilter', op: 'update', after: 'Saved.status = active' },
+      { section: 'def', key: 'formula', op: 'update', after: 'COUNT(Saved)' },
+    ];
+    draftFlag.value = true; await tick();
+    assert.equal(page.FORMULA.value, 'COUNT(Saved)');
+    assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Saved.created_at', 'saved draft time field must match the trial definition');
+    assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '默认过滤').v, 'Saved.status = active');
+    cr.items.value = cr.items.value.map(item => ({ ...item, op: 'delete', after: undefined })); await tick();
+    assert.equal(page.FORMULA.value, '尚未配置公式', 'explicit formula deletion must not resurrect the published formula');
+    assert.equal(page.DISPLAY_DEF.value.length, 0, 'cleared execution metadata must not fall back to published values');
+    assert.equal(JSON.stringify(page.DEF.value), baseline, 'draft projection cannot mutate its published baseline');
+    draftFlag.value = false; await tick();
+    assert.equal(page.FORMULA.value, 'actual');
+    assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Published.created_at');
+    context.ver = 'historical'; await tick();
+    assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Historical.created_at', 'history must render its own definition rather than the saved draft');
+    context.ver = ''; await tick();
+    assert.equal(page.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'Published.created_at');
+  }
   if (file === 'DimensionsBody') { page.tab.value = 'values'; await tick(); const editRow = selected.value.values[15]; page.vEdit.value = editRow; page.vp.value = 2; await tick(); assert.equal(page.valuesPage.items.value[0].key, 'v11'); assert.equal(page.vEdit.value, editRow); assert.equal(selected.value.values[15], editRow, 'visible values page cannot replace the complete edit row identity'); draftFlag.value = true; await tick(); assert.equal(calls.filter(c => c.path.endsWith('/values')).at(-1).query.crId, 'CR-DB'); }
   if (file === 'GlossaryBody') { page.tab.value = 'refs'; await tick(); page.rpage.value = 2; await tick(); assert.equal(page.refsPage.items.value[0].name, 'DB row 9'); }
   if (file === 'LinkTypesBody') { assert.equal(page.graphLinks.value.length, 40); assert.ok(page.positions.value.O41, 'new DB object IDs get positions without mock layout keys'); }
@@ -150,13 +173,18 @@ const id = `NEW-${kind}`, newScope = vue.effectScope(), newRoute = vue.reactive(
 const newCr = { head: vue.ref(undefined), items: vue.ref([]), loading: vue.ref(true), error: vue.ref('') };
 const newDetailsStart = details.length;
 let newPage;
-newScope.run(() => { newPage = execute(`pages/ontology/${file}.vue`, bodyImports(newRoute, id, kind, vue.ref(true), newCr), `${current}, ${failure}`); });
+newScope.run(() => { newPage = execute(`pages/ontology/${file}.vue`, bodyImports(newRoute, id, kind, vue.ref(true), newCr), `${current}, ${failure}${kind === 'metric' ? ', DISPLAY_DEF, FORMULA' : ''}`); });
 await tick();
 assert.ok(!details.slice(newDetailsStart).includes(path + id), 'wait for CR identity before loading a published definition');
 newCr.head.value = { id: 'CR-DB', status: '草稿', lockVersion: 1, targets: [{ kind, id, isNew: true, name: '新定义' }] };
 newCr.items.value = [{ section: 'def', key: 'name', op: 'add', after: '已保存关系' }]; newCr.loading.value = false;
 await tick();
 if (kind === 'link') assert.equal(newPage.cur.value.name, '已保存关系');
+if (kind === 'metric') {
+  newCr.items.value.push({ section: 'def', key: 'timeField', op: 'add', after: 'NewObject.at' }, { section: 'def', key: 'defaultFilter', op: 'add', after: 'NewObject.status = active' }); await tick();
+  assert.equal(newPage.DISPLAY_DEF.value.find(row => row.k === '时间字段').v, 'NewObject.at', 'a first metric has no published metadata to display');
+  assert.equal(newPage.FORMULA.value, '尚未配置公式', 'new metric must not invent a formula');
+}
 assert.ok(!details.slice(newDetailsStart).includes(path + id), 'a hydrated new target never fetches a nonexistent published detail');
 assert.equal(newPage[failure].value, '');
 newScope.stop(); lifecycle.splice(0).forEach(fn => fn());
