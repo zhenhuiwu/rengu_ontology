@@ -1,0 +1,9 @@
+{
+ "_note": "旧语义计划的传输键 → 指标 code（只转换标识，不含名称、版本或答案）；只对本本体生效",
+ "margin": "gross_margin",
+ "orders": "order_cnt",
+ "ship": "ship_ontime",
+ "refund": "refund_rate",
+ "repeat": "repeat_sales",
+ "repeat_tax": "repeat_sales_tax"
+}

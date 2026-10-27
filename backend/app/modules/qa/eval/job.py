@@ -31,6 +31,7 @@ from app.jobs.scope import scoped_sessions, workspace_ids
 from app.modules.qa import catalog, chain
 from app.modules.qa.llm import LLMClient
 from app.modules.qa.models import EvalLast, FailKind, QaEvalFail, QaEvalQuestion, QaEvalRun, RunStatus
+from app.modules.qa.readonly import scope_readonly_conn
 
 log = logging.getLogger(__name__)
 
@@ -214,10 +215,7 @@ async def _execute_background(
             llm = get_llm(await load_model_runtime(s, "qa"))  # 仅在worker内解密，不持久化客户端或凭据。
         async with get_qa_readonly_engine().connect() as conn:
             tr = await conn.begin()
-            await conn.execute(
-                text("SELECT set_config('rengu.ontology_id', :ontology_id, true)"),
-                {"ontology_id": str(require_ontology_id(s))},
-            )
+            await scope_readonly_conn(conn, require_ontology_id(s))
             await conn.execute(text("set local statement_timeout = 15000"))
             try:
                 await execute(s, conn, llm, user, run, group, checkpoint=s.commit)

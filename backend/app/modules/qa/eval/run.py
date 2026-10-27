@@ -4,7 +4,8 @@
   答成澄清只在题目 checks 带 orClarify 时算对。
 - clarify：answer 轮带 clarify 且没执行 SQL。
 - refuse：denied 且 code == refuseCode；SQL_REJECTED 只在 refuseCode = NOT_SELECT 时算对。
-- 每题一个只读事务，跑完回滚；用户 U010001（admin，asScope 题测不了）。
+- 每题一个只读事务，跑完回滚；用户 U010001（admin）；asScope 题把 asScope 当本轮会话范围传入
+  （p1 起；之前的基线没传，这几题与 76/100 基线不完全可比）。
 结果：seeds/extra/qa/eval/results/result_{sel}{TAG}.json（逐题明细）+ summary{TAG}.json（按类型统计）。
 """
 
@@ -63,7 +64,9 @@ async def one(eng, llm, q, sem):
         r = {"code": q["code"], "exp": exp_t, "q": q["question"]}
         t0 = time.monotonic()
         try:
-            kind, snap, _n, _ms, sql = await chain.answer(s, conn, llm, user, q["question"])
+            kind, snap, _n, _ms, sql = await chain.answer(
+                s, conn, llm, user, q["question"], session_scope=q.get("asScope")
+            )
             r["sql"], r["kind"] = sql, kind
             ans = snap.get("answer") or {}
             items = (ans.get("table") or {}).get("items") or []
@@ -80,7 +83,7 @@ async def one(eng, llm, q, sem):
             elif exp_t == "answer" and q.get("goldSql"):
                 async with conn.begin_nested():
                     rows = (await conn.execute(text(q["goldSql"]))).fetchall()
-                g = chain._label_rows([[chain._cell(v) for v in row] for row in rows])
+                g = chain._label_rows([[chain._cell(v) for v in row] for row in rows], DEFAULT_ONTOLOGY_ID)
                 r["gold"] = g[:5]
                 gnull = all(all(x is None for x in row) for row in g)
                 zero = pred and all(all(x in (None, 0) for x in row) for row in pred)

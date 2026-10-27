@@ -593,7 +593,7 @@ async def has_metric_references(session: AsyncSession, code: str) -> bool:
     from app.modules.qa.models import QaPageCard, QaQueryLog, QaTemplateCard
 
     ontology_id = require_ontology_id(session)
-    canonical = catalog.METRIC_CODES.get(code, code) if ontology_id == 1 else code
+    canonical = catalog.legacy_metric_codes(ontology_id).get(code, code)
     keys = {canonical, catalog.metric_key(canonical, ontology_id)}
     checks = []
     for model, plan_field in (

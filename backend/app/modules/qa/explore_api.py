@@ -6,9 +6,9 @@
   property 列（static_0004），见 `flags`；真实接口失败不回退演示数据。
 - 分面归静态 `GET /object-types/{id}/facets`。静态上线前，搜索结果里顺带给一份同形状的
   `facets`（过渡，[推断]），前端优先读静态的；静态上线后删掉这里的 `_facets`。
-- 物理绑定：seeds/extra/qa/objects/bindings.json（对象类型 → 表 + 属性 → 列）。演示数据在 biz 表，不是
+- 物理绑定：seeds/extra/qa/objects/{本体}/bindings.json（按本体分目录；对象类型 → 表 + 属性 → 列）。演示数据在 biz 表，不是
   object_type.source_table [推断]。没有绑定的对象类型返回 bound=false、空结果，前端显示「未接入数据」。
-- 零售1保留上述适配；其他来源须按object-read-adapter.md显式登记工作空间/对象/源表白名单与专用只读连接。
+- 没有绑定文件的本体一律 bound=false；其他来源须按 object-read-adapter.md 显式登记工作空间/对象/源表白名单与专用只读连接。
 - 行级范围：绑定里写了 rowFilter 的，走骨架 apply_row_filter + biz/governance.py 的登记列；没写的按 row_filter
   是否限制决定：限制（含 DENY_ALL）时一律不返回（宁严勿宽）[推断]。
 """
@@ -74,9 +74,10 @@ FACET_VALUES = 50  # 单个枚举分面最多给多少个取值（按计数降�
 
 @lru_cache
 def bindings(ontology_id: int) -> dict[str, dict]:
-    if ontology_id != 1:
+    """本体的对象物理绑定：seeds/extra/qa/objects/{本体}/bindings.json；没有文件 = 未接入（空）。"""
+    path = get_settings().seeds_extra_dir / "qa" / "objects" / str(ontology_id) / "bindings.json"
+    if type(ontology_id) is not int or ontology_id <= 0 or not path.exists():
         return {}
-    path = get_settings().seeds_extra_dir / "qa" / "objects" / "bindings.json"
     return {k: v for k, v in json.loads(path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
 
@@ -542,7 +543,7 @@ async def explore_related(code: str, id: str, session: SessionDep, user: Current
         if target is None:
             out.append({**group, "state": "unbound"})
             continue
-        same_source = source.source is None and target.source is None or (
+        same_source = (source.source is None and target.source is None) or (
             source.source is not None and target.source is not None and source.source.datasource == target.source.datasource
             and source.source.url == target.source.url)
         if not same_source or remote_key not in target.out:

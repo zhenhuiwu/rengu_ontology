@@ -10,29 +10,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.ontology import require_ontology_id
 from app.core.config import get_settings
 
-# 旧语义计划的传输键，只转换标识，不包含名称、版本或答案。
-METRIC_CODES = {
-    "margin": "gross_margin",
-    "orders": "order_cnt",
-    "ship": "ship_ontime",
-    "refund": "refund_rate",
-    "repeat": "repeat_sales",
-    "repeat_tax": "repeat_sales_tax",
-}
-METRIC_KEYS = {v: k for k, v in METRIC_CODES.items()}
+# 旧语义计划的传输键（短键 → 指标 code）按本体放 seeds/extra/qa/caliber/{本体}/metric_codes.json；
+# 没有文件的本体不做转换。只转换标识，不包含名称、版本或答案。
 Metrics = dict[str, dict[str, Any]]
 TIMES = ["昨天", "本周", "上周", "本月至今", "上个月", "近 7 天", "近 30 天", "近 6 个月", "今年"]
 
 
-def metric_key(key: str, ontology_id: int = 1) -> str:
-    return METRIC_KEYS.get(key, key) if ontology_id == 1 else key
+@lru_cache
+def legacy_metric_codes(ontology_id: int) -> dict[str, str]:
+    """本体的旧传输键 → 指标 code（文件不存在 = 空）。"""
+    f = get_settings().seeds_extra_dir / "qa" / "caliber" / str(ontology_id) / "metric_codes.json"
+    if not f.exists():
+        return {}
+    return {k: v for k, v in json.loads(f.read_text(encoding="utf-8")).items() if not k.startswith("_")}
+
+
+def metric_key(key: str, ontology_id: int) -> str:
+    """指标 code → 对外键（有旧传输键的用旧键，其余原样）。"""
+    inverse = {v: k for k, v in legacy_metric_codes(ontology_id).items()}
+    return inverse.get(key, key)
 
 
 def metric_of(metrics: Metrics, key: str | None) -> dict[str, Any] | None:
+    """按对外键取指标；传的是指标 code 时按 code 找（与本体无关）。"""
+    if not key:
+        return None
     if key in metrics:
         return metrics[key]
-    legacy = metrics.get(metric_key(key or ""))
-    return legacy if legacy and legacy.get("code") == key else None
+    return next((m for m in metrics.values() if m.get("code") == key), None)
 
 
 async def directory(

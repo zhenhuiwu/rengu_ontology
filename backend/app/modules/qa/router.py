@@ -242,7 +242,7 @@ async def patch_session(
                 session_id=s.id,
                 seq=seq,
                 kind=TurnKind.system,
-                snapshot={"text": f"从这里开始按 大区 = {scope}、口径 = {caliber or '不限'} 回答"},
+                snapshot={"text": f"从这里开始按 范围 = {scope}、口径 = {caliber or '不限'} 回答"},
                 asked_at=now,
             )
         )
