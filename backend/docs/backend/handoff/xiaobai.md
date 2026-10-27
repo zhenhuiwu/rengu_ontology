@@ -1,5 +1,36 @@
 # 本体小白 交接文档（分支 xiaobai-p1 / xiaobai-p2）
 
+## 2026-10-27 阶段收尾：未完成清单（交 Codex，基于 main e657b08）
+
+本体小白负责的是 admin（角色、行级范围、用户、租户/组织、`/me/row-scope`、审计、API 密钥/服务账号、版本）和 data（数据源、加密、内省、导入）。第一档功能都已合并（xiaobai-p1 … p6）。下面是还没做或没收尾的部分：
+
+### A. 功能缺口
+
+1. **MetricFlow 时间表**：`public.metricflow_time_spine(date_day)` 没有建，也没登记为受控表。需要它的查询（累计、补零、时间偏移）现在会被 run_guarded 拒绝，普通指标查询不受影响。做法：在 dynamic_0027 之后加一个迁移建表并预填日期（比如 2020–2030），在受控表白名单里登记，然后补一条累计指标测试。是否做由老板定（PDE 汇总第 3 条）。
+2. **演示服务账号**（§4 第 8 条，可选）：「补货助手」服务账号和它的密钥没有进种子。鉴权侧（`build_service_account_principal`）已经可以用。
+3. **外部库驱动**：达梦、人大金仓、MySQL 没装驱动（dmPython、aiomysql 等），按决定属于第二档，不做，也不连外部库。
+4. **第二、三档按决定不做**：正式登录和单点登录、属性级权限、分支、模板等。
+
+### B. 演示环境（不在代码里，要决定在哪个环境由谁配）
+
+1. 开发库 `rengu` 是 Codex 的快照，没有灌 `demo_mainline` 种子（R-09/R-10、U010011/U010812 的角色和本体成员、EXT-WEBHOOK、补货申请审批人和通道、ACT-0552 作废并解除和告警的关联）。补灌：`seed` 跑 `demo_mainline` 阶段（排在 dynamic 之后，可以重复跑）。
+2. Webhook 运行配置：`RENGU_INTEGRATION_ADAPTERS` 加上 `1/EXT-WEBHOOK`（submit_path、actions、signing_secret，可以用 fernet$ 加密），打开 `RENGU_INTEGRATION_REAL_CONNECT=true`；接收端必须是 HTTPS（种子里的地址是 https://127.0.0.1:8443），还要跑 `dispatch_queued`。
+3. 还没在真实环境从前端点过整条演示线。代码层面由 `tests/test_palantir_mainline.py` 覆盖；种子前提由 `tests/test_demo_mainline_seed.py` 和 `tests/test_demo_mainline_e2e.py` 覆盖。
+
+### C. 已知失败（master 上本来就有，留给 Codex）
+
+- `test_migration_round_trip`：`admin_0025` 的 downgrade 故意抛错（保留服务账号、密钥策略和按本体的行级范围，不做破坏性降级）。要么让往返测试只降到 admin_0025 之后，要么给它写非破坏性的降级，需要选一个。
+- `test_admin_users`：`test_depts`（部门路径名）、`test_import_preview_csv_and_rows`（「部门不存在」的期望）、`test_enable_disable`（期望 422 TRANSFER_REQUIRED，实际 200）。
+- `test_audit_logs`：返回多了 `ontologyId: None`，和 mock 对不上。
+- `test_admin_roles::test_list_and_get_match_mock`。
+- `test_admin_audit_export::test_export_migration_roundtrip_and_metadata`：列注释对不上。
+- `test_dynamic_alerts` 里 3 个 start_action 用例（full_flow、order_approver、errors）在准备步骤就报 AssertionError。
+- `test_dynamic_seed` 2 条；`test_conventions::test_job_stubs_registered`；`test_integration_writeback_calls` 里的 TypeError。
+
+### D. 待老板定、跟我这边相关的
+
+- 季度维度值要不要补（改既有种子，静态提的）；以后要改既有种子值，都要先经老板同意。
+
 ## 2026-10-27 batch 3（分支 xiaobai-p2）
 
 ### 1. 已知遗留（已修）
