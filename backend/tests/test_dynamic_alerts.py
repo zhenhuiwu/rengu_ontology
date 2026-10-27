@@ -252,3 +252,41 @@ async def test_generic_dims_and_approver(dyn, client):  # noqa: F811
     assert r["items"][0]["dims"] == [] and r["items"][0]["objKindLabel"] == "门店"
     detail = (await client.get(f"{API}/alerts/{r['items'][0]['id']}")).json()
     assert detail["approver"] is None  # R-021 未绑定动作
+
+
+async def test_facets_and_multi_filters(dyn, client):  # noqa: F811
+    """分面计数与列表 total 一致；多选 / 对象类型 / 维度值筛选；分面不受自身选择影响。"""
+
+    async def total(**params):
+        r = await client.get(f"{API}/alerts", params={"status": "all", "size": 1, **params})
+        assert r.status_code == 200, r.text
+        return r.json()["total"]
+
+    f = (await client.get(f"{API}/alerts/facets", params={"status": "all"})).json()
+    everything = await total()
+    assert sum(x["count"] for x in f["level"]) == everything
+    assert sum(x["count"] for x in f["objKind"]) == everything
+    assert sum(x["count"] for x in f["ruleId"]) == everything
+    for key in ("level", "objKind", "ruleId"):
+        for x in f[key][:2]:
+            assert await total(**{key: x["value"]}) == x["count"], (key, x)
+    two = [x["value"] for x in f["ruleId"][:2]]
+    assert await total(ruleId=",".join(two)) == sum(x["count"] for x in f["ruleId"][:2])
+
+    assert f["dims"], "种子告警应带维度"
+    kind = f["dims"][0]["objKind"]
+    val = f["dims"][0]["values"][0]
+    assert await total(dim=f"{kind}:{val['id']}") == val["count"]
+    picked = {"status": "all", "dim": f"{kind}:{val['id']}"}
+    g = (await client.get(f"{API}/alerts/facets", params=picked)).json()
+    assert sum(x["count"] for x in g["level"]) == val["count"]
+    same = next(d for d in g["dims"] if d["objKind"] == kind)  # 自身维度不按已选值收窄
+    assert {v["id"] for v in same["values"]} == {v["id"] for v in f["dims"][0]["values"]}
+
+    lv = f["level"][0]["value"]
+    h = (await client.get(f"{API}/alerts/facets", params={"status": "all", "level": lv})).json()
+    assert h["level"] == f["level"]  # 等级分面忽略自身选择
+    assert sum(x["count"] for x in h["objKind"]) == await total(level=lv)
+
+    err(await client.get(f"{API}/alerts", params={"dim": "nokind"}), 422, "VALIDATION_FAILED")
+    err(await client.get(f"{API}/alerts/facets", params={"status": "bad"}), 422, "VALIDATION_FAILED")

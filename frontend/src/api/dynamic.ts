@@ -40,12 +40,23 @@ export interface AlertCan { claim: boolean; transfer: boolean; close: boolean; s
 /** approver：发起动作时的审批人，取规则绑定动作类型的审批人配置（无则 null） */
 export interface AlertDetailDto extends AlertDto { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean; log: AlertLogDto[]; can: AlertCan; actionParams: LaunchParam[] }
 export interface AlertPageDto extends PageResult<AlertDto> { counts: Record<AlertTab, number> }
-export interface AlertQuery { status: AlertTab; level?: string; ruleId?: string; kw?: string; page: number; size: number }
+export interface AlertQuery { status: AlertTab; level?: string; ruleId?: string; kw?: string; objKind?: string; dim?: string[]; page: number; size: number }
+/** GET /alerts/facets：每项计数按其余已选条件过滤（不含自身那一项）；dims 每个对象类型取计数最高的若干值 */
+export interface AlertFacetCount { value: string; label?: string; count: number }
+export interface AlertFacetsDto {
+  level: AlertFacetCount[]; ruleId: AlertFacetCount[]; objKind: AlertFacetCount[];
+  dims: { objKind: string; label: string; values: { id: string; label: string; count: number }[] }[];
+}
 
 const opt = (v?: string) => (v && v !== '全部' ? v : undefined);
 
+const alertFilters = (q: Omit<AlertQuery, 'page' | 'size'>) => ({
+  status: q.status, level: opt(q.level), ruleId: opt(q.ruleId), objKind: opt(q.objKind),
+  dim: q.dim?.length ? q.dim : undefined, kw: q.kw?.trim() || undefined,
+});
 export const listAlerts = (q: AlertQuery) =>
-  api.get<AlertPageDto>('/alerts', { query: { status: q.status, level: opt(q.level), ruleId: opt(q.ruleId), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
+  api.get<AlertPageDto>('/alerts', { query: { ...alertFilters(q), page: q.page, size: q.size } });
+export const getAlertFacets = (q: Omit<AlertQuery, 'page' | 'size'>) => api.get<AlertFacetsDto>('/alerts/facets', { query: alertFilters(q) });
 export const getAlert = (id: string) => api.get<AlertDetailDto>(`/alerts/${enc(id)}`);
 export const claimAlert = (id: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:claim`));
 export const batchClaimAlerts = (ids: string[]) => inContext(api.post<{ claimed: number; ids: string[] }>('/alerts:batch-claim', { ids }));

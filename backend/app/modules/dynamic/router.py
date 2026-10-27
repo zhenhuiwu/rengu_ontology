@@ -120,10 +120,28 @@ async def list_alerts(
     svc: Annotated[AlertService, Depends(_alert_list)],
     status_: Annotated[str, Query(alias="status")] = "open",
     level: str | None = None,
+    rule_id: Annotated[str | None, Query(alias="ruleId", description="规则编号，逗号分隔多选")] = None,
+    kw: str | None = None,
+    obj_kind: Annotated[str | None, Query(alias="objKind", description="对象类型，逗号分隔多选")] = None,
+    dim: Annotated[list[str] | None, Query(description="维度值 objKind:id，可重复")] = None,
+) -> AlertPage:
+    return await svc.search(
+        status=status_, level=level, rule_id=rule_id, kw=kw, page=page, obj_kind=obj_kind, dim=dim
+    )
+
+
+@router.get("/alerts/facets", dependencies=ALERTS_VIEW)
+async def alert_facets(
+    svc: Annotated[AlertService, Depends(_alert_list)],
+    status_: Annotated[str, Query(alias="status")] = "open",
+    level: str | None = None,
     rule_id: Annotated[str | None, Query(alias="ruleId")] = None,
     kw: str | None = None,
-) -> AlertPage:
-    return await svc.search(status=status_, level=level, rule_id=rule_id, kw=kw, page=page)
+    obj_kind: Annotated[str | None, Query(alias="objKind")] = None,
+    dim: Annotated[list[str] | None, Query()] = None,
+) -> dict[str, Any]:
+    """告警分面（与 GET /alerts 同一组筛选参数）：每一项的计数按其余已选条件过滤。"""
+    return await svc.facets(status=status_, level=level, rule_id=rule_id, kw=kw, obj_kind=obj_kind, dim=dim)
 
 
 @router.get("/alerts/meta", dependencies=ALERTS_VIEW)
