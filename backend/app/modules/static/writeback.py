@@ -523,7 +523,19 @@ M_FIELDS = {
 
 @register("metric", "def")
 async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
-    from app.modules.static.metric_versions import EXEC_KEYS, EXEC_MAX, definition, record_publish, with_exec
+    from app.modules.static.metric_versions import (
+        DESC_MAX,
+        EXEC_KEYS,
+        EXEC_MAX,
+        META_KEYS,
+        SYN_MAX,
+        SYN_WORD_MAX,
+        definition,
+        record_publish,
+        split_words,
+        with_exec,
+        with_meta,
+    )
 
     s = ctx.session
     m = await s.scalar(select(Metric).where(Metric.code == tid))
@@ -600,6 +612,29 @@ async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
                     f"{EXEC_KEYS[k]}须为非空文本，且不超过{EXEC_MAX}字", kind="metric", id=tid, field=k
                 )
             m.def_rows = with_exec(m.def_rows, k, None if r.op == "delete" else val.strip())
+        elif k in META_KEYS:
+            # 问数元数据：同义词（词列表或「、」分隔文本）/ 说明；delete 或空值删行，不动版本号。
+            val = None if r.op == "delete" else val
+            if k == "synonyms":
+                typed = val is None or isinstance(val, str)
+                typed = typed or (isinstance(val, list) and all(isinstance(w, str) for w in val))
+                words = split_words("、".join(val) if isinstance(val, list) else val) if typed else []
+                if (
+                    not typed
+                    or len(words) > SYN_MAX
+                    or any(len(w) > SYN_WORD_MAX or "\x00" in w for w in words)
+                ):
+                    raise _bad(
+                        f"同义词须为文本列表，至多{SYN_MAX}个，每个不超过{SYN_WORD_MAX}字",
+                        kind="metric",
+                        id=tid,
+                        field=k,
+                    )
+                m.def_rows = with_meta(m.def_rows, k, words)
+            else:
+                if val is not None and (not isinstance(val, str) or len(val) > DESC_MAX or "\x00" in val):
+                    raise _bad(f"说明须为文本，且不超过{DESC_MAX}字", kind="metric", id=tid, field=k)
+                m.def_rows = with_meta(m.def_rows, k, (val or "").strip())
         elif r.op == "delete" and k in ("formula", "dims"):
             setattr(m, k, None)
         elif r.op == "delete":
@@ -1283,7 +1318,7 @@ async def restore_object_types(session: AsyncSession, content: dict[str, Any], *
 async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
     """按快照恢复指标；快照外仍被已存定义或问数引用的指标保留为草稿。"""
     from app.contracts.qa import has_metric_references
-    from app.modules.static.metric_versions import EXEC_KEYS, ledger, with_exec
+    from app.modules.static.metric_versions import EXEC_KEYS, META_KEYS, ledger, with_exec, with_meta
 
     have = {m.code: m for m in await session.scalars(select(Metric))}
     unused = []
@@ -1334,6 +1369,10 @@ async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, rel
                 value = d["execDef"].get(key)
                 rows = with_exec(rows, key, value if isinstance(value, str) else None)
             m.def_rows = rows
+        for key in META_KEYS:
+            # 同义词/说明：快照带该键才恢复（旧快照不带，保持现值）。
+            if key in d:
+                m.def_rows = with_meta(m.def_rows, key, d[key])
         if "formula" in d or "dimNames" in d:
             m.formula, m.dims = d.get("formula"), list(d.get("dimNames") or [])
         else:

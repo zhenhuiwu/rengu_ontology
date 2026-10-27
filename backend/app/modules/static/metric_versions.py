@@ -22,6 +22,10 @@ Obj = dict[str, Any]
 # 执行口径（def_rows 里的 k/v 行）可经变更单 metric/def 写：项 key → 行标签。
 EXEC_KEYS = {"timeField": "时间字段", "defaultFilter": "默认过滤"}
 EXEC_MAX = 256
+# 问数元数据（同样是 def_rows 的 k/v 行，可经 metric/def 写、随快照保存与回滚；不影响执行口径与版本号）。
+META_KEYS = {"synonyms": "同义词", "desc": "说明"}
+SYN_SPLIT = re.compile(r"[、,，;；\n]+")
+SYN_MAX, SYN_WORD_MAX, DESC_MAX = 32, 64, 1000
 
 
 def exec_def(rows: Any) -> Obj:
@@ -34,9 +38,33 @@ def exec_def(rows: Any) -> Obj:
     }
 
 
+def split_words(text: Any) -> list[str]:
+    """同义词行文本（「营业额、销售收入」）→ 去空去重的词列表。"""
+    out: list[str] = []
+    for w in SYN_SPLIT.split(text) if isinstance(text, str) else []:
+        if w.strip() and w.strip() not in out:
+            out.append(w.strip())
+    return out
+
+
+def meta_def(rows: Any) -> Obj:
+    """def_rows 中的问数元数据：{synonyms: [词], desc: 文本}；没有该行时为 [] / ""。"""
+    got = {r["k"]: r["v"] for r in rows or [] if isinstance(r, dict) and isinstance(r.get("v"), str)}
+    return {"synonyms": split_words(got.get(META_KEYS["synonyms"])), "desc": got.get(META_KEYS["desc"], "")}
+
+
+def with_meta(rows: Any, key: str, value: Any) -> list[Any]:
+    """返回新的 def_rows：写同义词（词列表，存成「、」连接的行）或说明；空值删除该行。"""
+    text = "、".join(value) if key == "synonyms" and isinstance(value, list) else value
+    return _with_row(rows, META_KEYS[key], text or None)
+
+
 def with_exec(rows: Any, key: str, value: str | None) -> list[Any]:
     """返回新的 def_rows：原位替换（或追加）该执行口径行；value=None 删除该行，其他展示行原样保留。"""
-    label = EXEC_KEYS[key]
+    return _with_row(rows, EXEC_KEYS[key], value)
+
+
+def _with_row(rows: Any, label: str, value: str | None) -> list[Any]:
     out, done = [], False
     for r in rows or []:
         if isinstance(r, dict) and r.get("k") == label:
@@ -48,6 +76,12 @@ def with_exec(rows: Any, key: str, value: str | None) -> list[Any]:
     if value is not None and not done:
         out.append({"k": label, "v": value})
     return out
+
+
+def seed_def_rows(rows: Any, *, own: bool) -> list[Any]:
+    """种子指标共用 METRIC_DEF.json（METRIC_LIST 首项的示例定义）：同义词/说明只属于首项。"""
+    labels = set(META_KEYS.values())
+    return [deepcopy(r) for r in rows or [] if own or not (isinstance(r, dict) and r.get("k") in labels)]
 
 
 def conflict(message: str, code: str = "METRIC_VERSION_INVALID", **details) -> AppError:
