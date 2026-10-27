@@ -149,6 +149,31 @@ class RuleHit(CodeMixin, AppendOnlyTableMixin, Base):
     alert_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("alert.id"), index=True)
 
 
+class RuleScheduleCursor(IdMixin, MutableTableMixin, Base):
+    __tablename__ = "rule_schedule_cursor"
+    __table_args__ = (UniqueConstraint("rule_id"),)
+
+    rule_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("rule.id"), nullable=False)
+    rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RuleScheduleRun(IdMixin, MutableTableMixin, OntologyVersionMixin, Base):
+    __tablename__ = "rule_schedule_run"
+    __table_args__ = (UniqueConstraint("rule_id", "rule_version", "scheduled_at"),)
+
+    rule_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("rule.id"), nullable=False, index=True)
+    rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    definition: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    permission_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict | None] = mapped_column(JsonType)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
 # ---------------- 情景推演 ----------------
 
 

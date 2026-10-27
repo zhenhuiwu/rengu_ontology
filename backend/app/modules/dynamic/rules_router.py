@@ -167,6 +167,13 @@ async def rule_hits(
     return await svc.hits(rule_id, params, range_=range)
 
 
+@router.get("/rules/{rule_id}/runs", dependencies=RULES_VIEW, response_model=DictPage)
+async def rule_runs(
+    svc: RuleSvc, rule_id: str, params: Annotated[PageParams, Depends(_page(10))]
+) -> DictPage:
+    return await svc.schedule_runs(rule_id, params)
+
+
 @router.get("/rule-hits/{hit_id}", dependencies=RULES_VIEW)
 async def rule_hit(
     svc: RuleSvc, session: SessionDep, user: CurrentUserDep, ports: PortsDep, hit_id: str

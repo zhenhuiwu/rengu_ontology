@@ -34,6 +34,8 @@ import {
 } from '@/mock/rules';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
+import RuleDefinitionEditor from './parts/RuleDefinitionEditor.vue';
+import RuleScheduleRuns from './parts/RuleScheduleRuns.vue';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useConfirmStore } from '@/stores/confirm';
 import { CHANGE_REQUESTS } from '@/mock/changes';
@@ -43,6 +45,7 @@ import { isApiError } from '@/api/http';
 import {
   dynamicApi, dynamicContextKey, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, submitCR, removeCRTarget, CR_WRITE, crOpen, crDropEmpty, crErrText, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
   type RuleDto, type RuleHitDetailDto, type ReplayDto, type RuleVersionDto, type HitDim, type ReplaySampleDto,
+  emptyRuleMeta, type RuleDefinitionPatch,
 } from '@/api/dynamic';
 
 /** 是否走真接口（开关 dynamic）；构建时确定 */
@@ -64,7 +67,7 @@ const fail = (e: unknown) => { message.error(isApiError(e) ? crErrText(e) : Stri
 /** 真接口状态：列表页、详情（含 draft）、下拉、命中、命中抽屉、回放结果、版本、已暂存动作 */
 const remote = reactive({
   items: [] as RuleDto[], total: 0, detail: null as RuleDto | null,
-  meta: { confirmers: [] as string[], mappingSources: [] as string[], statuses: [] as string[] },
+  meta: emptyRuleMeta(),
   hits: { items: [] as Hit[], total: 0 }, hits7: 0, recent: [] as Hit[], hit: null as RuleHitDetailDto | null,
   replay: null as (ReplayDto & { k: string }) | null, versions: [] as RuleVersionDto[], staged: [] as ActionRecord[],
 });
@@ -124,7 +127,7 @@ const RESET = { view: undefined, hpage: undefined, hsize: undefined, hrange: und
   rrange: undefined, rver: undefined, rmode: undefined, run: undefined, drawer: undefined, drawer2: undefined };
 const pick = (id: string) => router.replace({ query: { ...route.query, ...RESET, rule: id } });
 
-const TABS = ['cond', 'trigger', 'action', 'hits', 'replay', 'versions'];
+const TABS = ['cond', 'trigger', 'action', 'hits', 'runs', 'replay', 'versions'];
 const tab = computed({
   get: () => (TABS.includes(q('tab')) ? q('tab') : 'cond'),
   set: (v) => router.replace({ query: { ...route.query, ...RESET, view: route.query.view, tab: v === 'cond' ? undefined : v } }),
@@ -170,6 +173,7 @@ const PENDING = '__new_rule__';
 const newOpen = ref(false);
 const newForm = reactive({ name: '', objKind: '' });
 const objKindOptions = computed(() => {
+  if (REAL_API) return remote.meta.objects.map(o => ({ value: o.id, label: `${o.name}（${o.id}）` }));
   void catTick.value;
   const real = OBJECT_TYPE_LIST.map((o) => ({ value: o.id, label: `${o.name}（${o.id}）` }));
   return isStaticReal() ? real : (['product', 'store', 'order', 'region'] as const).map((k) => ({ value: k, label: `${objKindLabel(k)}（${k}）` }));
@@ -241,7 +245,9 @@ async function onDraftDiscard() {
   setView('published');
 }
 /** 草稿里的改动（自动暂存配置、阈值） */
-const edits = reactive<Record<string, { autoStage: AutoStage; thresholds: string[] }>>({});
+const edits = reactive<Record<string, { autoStage: AutoStage; thresholds: string[]; definition: RuleDefinitionPatch }>>({});
+const savingDraft = ref(false), saveError = ref('');
+let definitionSeq = 0;
 const draftDef = computed<RuleDef | undefined>(() => {
   if (!draftCR.value) return undefined;
   if (live.value) return remote.detail?.id === base.value.id && remote.detail.draft ? remote.detail.draft : undefined;
@@ -250,14 +256,26 @@ const draftDef = computed<RuleDef | undefined>(() => {
 });
 function ensureEdits() {
   const d = draftDef.value!;
-  return (edits[d.id] ??= { autoStage: JSON.parse(JSON.stringify(d.autoStage)), thresholds: d.conds.map((c) => c.value) });
+  return (edits[d.id] ??= { autoStage: JSON.parse(JSON.stringify(d.autoStage)), thresholds: d.conds.map((c) => c.value), definition: {} });
 }
 const rule = computed<RuleDef>(() => {
   if (!isDraft.value || !draftDef.value) return base.value;
   const e = edits[base.value.id];
   if (!e) return draftDef.value;
-  return { ...draftDef.value, autoStage: e.autoStage, conds: draftDef.value.conds.map((c, i) => ({ ...c, value: e.thresholds[i] ?? c.value })) };
+  return { ...draftDef.value, ...e.definition, autoStage: e.autoStage, conds: e.definition.conds ?? draftDef.value.conds.map((c, i) => ({ ...c, value: e.thresholds[i] ?? c.value })) };
 });
+const definitionEditable = computed(() => isDraft.value && !!draftDef.value && !readonly.value && !savingDraft.value && remote.detail?.displayStatus !== '审核中');
+function updateDefinition(patch: RuleDefinitionPatch) {
+  if (!definitionEditable.value) return;
+  const edit = ensureEdits();
+  Object.assign(edit.definition, patch);
+  if (patch.conds) { edit.thresholds = patch.conds.map(c => c.value); delete edit.definition.expr; }
+  if (patch.logic) {
+    if (!edit.definition.conds) edit.definition.conds = rule.value.conds.map(c => ({ ...c }));
+    delete edit.definition.expr;
+  }
+  saveError.value = '';
+}
 const metricBumped = computed(() => {
   const d = draftDef.value; if (!d) return [] as { name: string; from: number; to: number }[];
   return d.conds.flatMap((c, i) => {
@@ -266,18 +284,21 @@ const metricBumped = computed(() => {
   }).filter((x, i, a) => a.findIndex((y) => y.name === x.name) === i);
 });
 async function saveDraft() {
+  if (!isDraft.value || !draftDef.value || readonly.value || savingDraft.value) return;
   const cr = draftCR.value!;
-  const id = base.value.id, ctx = dynamicContextKey();
+  const id = base.value.id, ctx = dynamicContextKey(), seq = definitionSeq;
   if (REAL_API) {
     const e = ensureEdits();
+    savingDraft.value = true; saveError.value = '';
     try {
-      const r = await saveRuleDraft(id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds });
-      if (!mounted || ctx !== dynamicContextKey() || id !== base.value.id) return;
+      const r = await saveRuleDraft(id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds, ...e.definition });
+      if (!mounted || seq !== definitionSeq || ctx !== dynamicContextKey() || id !== base.value.id) return;
       if (remote.detail?.id === base.value.id) remote.detail = { ...remote.detail, draft: r.draft };
       delete edits[base.value.id];
       // 变更单写接口：改动数以库为准（saveRuleDraft 已回写）
       if (r.crChanges == null) cr.changes += 1;
-    } catch (err) { if (mounted && ctx === dynamicContextKey() && id === base.value.id) fail(err); return; }
+    } catch (err) { if (mounted && seq === definitionSeq && ctx === dynamicContextKey() && id === base.value.id) { saveError.value = crErrText(err); fail(err); } return; }
+    finally { if (mounted && seq === definitionSeq && ctx === dynamicContextKey() && id === base.value.id) savingDraft.value = false; }
   } else cr.changes += 1;
   cr.updatedAt = nowText();
   message.success(`已保存到草稿 ${cr.id}，发布前不影响线上规则`);
@@ -459,11 +480,11 @@ const loadOverview = guard(() => realId.value, async () => {
 const loadHits = guard(() => (tab.value === 'hits' && realId.value ? `${realId.value}|${hrange.value}|${hq.page.value}|${hq.size.value}` : ''), () => listRuleHits(realId.value, hrange.value as '7d' | '30d', hq.page.value, hq.size.value), (v) => { remote.hits = v; if (v.page && v.page !== hq.page.value) hq.page.value = v.page; });
 const loadHit = guard(() => q('hit'), () => getRuleHit(q('hit')), (v) => { remote.hit = v as RuleHitDetailDto; }, () => { remote.hit = null; });
 if (live.value) {
-  watch(dynamicContextKey, () => { ++listSeq; ++replaySeq; for (const id of Object.keys(edits)) delete edits[id]; for (const id of Object.keys(titleNames)) delete titleNames[id]; defaultRuleId.value = ''; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = { confirmers: [], mappingSources: [], statuses: [] }; remote.hits = { items: [], total: 0 }; remote.hits7 = 0; remote.recent = []; remote.hit = null; remote.replay = null; remote.versions = []; remote.staged = []; running.value = false; }, { flush: 'sync' });
+  watch(dynamicContextKey, () => { ++listSeq; ++replaySeq; for (const id of Object.keys(edits)) delete edits[id]; for (const id of Object.keys(titleNames)) delete titleNames[id]; defaultRuleId.value = ''; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = emptyRuleMeta(); remote.hits = { items: [], total: 0 }; remote.hits7 = 0; remote.recent = []; remote.hit = null; remote.replay = null; remote.versions = []; remote.staged = []; running.value = false; savingDraft.value = false; saveError.value = ''; }, { flush: 'sync' });
   const loadMeta = guard(() => dynamicContextKey(), getRulesMeta, (m) => { remote.meta = m; });
   watch(dynamicContextKey, loadMeta, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, kw, trig, stf, lpage], loadList, { immediate: true, flush: 'sync' });
-  watch([dynamicContextKey, realId], () => { remote.detail = null; remote.hits = { items: [], total: 0 }; remote.recent = []; remote.hits7 = 0; remote.hit = null; remote.replay = null; ++replaySeq; running.value = false; remote.versions = []; remote.staged = []; loadDetail(); loadOverview(); }, { immediate: true, flush: 'sync' });
+  watch([dynamicContextKey, realId], () => { ++definitionSeq; remote.detail = null; remote.hits = { items: [], total: 0 }; remote.recent = []; remote.hits7 = 0; remote.hit = null; remote.replay = null; ++replaySeq; running.value = false; savingDraft.value = false; saveError.value = ''; remote.versions = []; remote.staged = []; loadDetail(); loadOverview(); }, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, realId, tab, hrange, hq.page, hq.size], loadHits, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, () => q('hit')], loadHit, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, ran, replayKey, () => remote.detail?.id], () => { if (ran.value && remote.detail?.id === realId.value && remote.replay?.k !== replayKey.value) fetchReplay(); }, { immediate: true, flush: 'sync' });
@@ -519,15 +540,17 @@ const verCols = [
         <a-tooltip :title="readonly ? reason : isDraft ? saveTip : ''">
           <a-button v-if="!draftCR || readonly" type="primary" :disabled="readonly" @click="openChange(`${base.name}（${base.id}）`)">发起变更</a-button>
           <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
-          <a-button v-else type="primary" :disabled="missingReq.length > 0" @click="saveDraft">保存到草稿</a-button>
+          <a-button v-else type="primary" :loading="savingDraft" :disabled="missingReq.length > 0 || !draftDef || (live && !definitionEditable)" @click="saveDraft">保存到草稿</a-button>
         </a-tooltip>
         <span v-if="!readonly && missingReq.length" class="t-12 c-warning">缺少必填参数：{{ missingReq.join('、') }}</span>
       </div>
+      <a-alert v-if="saveError" type="error" :message="saveError" show-icon class="ru-save-error" />
       <a-tabs v-model:activeKey="tab" class="ru-tabs">
         <a-tab-pane key="cond" tab="条件" />
         <a-tab-pane key="trigger" tab="触发方式" />
         <a-tab-pane key="action" tab="动作" />
         <a-tab-pane key="hits" tab="命中历史" />
+        <a-tab-pane v-if="live" key="runs" tab="定时运行" />
         <a-tab-pane key="replay" tab="回放试跑" />
         <a-tab-pane key="versions" tab="版本历史" />
       </a-tabs>
@@ -539,6 +562,8 @@ const verCols = [
           <a @click="tab = 'replay'; setQ({ tab: 'replay', rver: 'draft' })">去回放试跑</a>
         </div>
         <div class="ru-sec t-14 fw-600">{{ rule.desc }}</div>
+        <RuleDefinitionEditor v-if="live" :rule="rule" :meta="remote.meta" :editable="definitionEditable" section="conditions" :condition-changed="!!edits[base.id]?.definition.conds && !edits[base.id]?.definition.expr" @update="updateDefinition" />
+        <template v-else>
         <div class="ru-tool">
           <span class="t-12 c-2">以下条件同时满足（{{ rule.logic }}）时命中</span>
           <InfoTip text="指标引用的是本体里发布的口径，口径升版不会自动跟随" />
@@ -570,6 +595,7 @@ const verCols = [
           <pre class="ru-expr num t-12">{{ rule.expr }}<a-tag class="ru-diff">修改</a-tag></pre>
         </template>
         <pre v-else class="ru-expr num t-12">{{ rule.expr }}</pre>
+        </template>
         <a-descriptions :column="3" bordered size="small">
           <a-descriptions-item label="去重键">{{ rule.dedupe }}</a-descriptions-item>
           <a-descriptions-item label="冷却">{{ rule.cooldown }}</a-descriptions-item>
@@ -594,6 +620,8 @@ const verCols = [
 
       <!-- 触发方式 -->
       <div v-else-if="tab === 'trigger'" class="ru-body">
+        <RuleDefinitionEditor v-if="live" :rule="rule" :meta="remote.meta" :editable="definitionEditable" section="trigger" @update="updateDefinition" />
+        <template v-else>
         <div class="ru-tool">
           <a-segmented :value="rule.trigger.kind" :options="['定时', '事件']" size="small" :disabled="!isDraft" />
           <span class="t-12 c-2">{{ rule.trigger.kind === '定时' ? '按计划时间批量计算' : '收到事件后逐条计算，延迟秒级' }}</span>
@@ -617,7 +645,10 @@ const verCols = [
           <a-descriptions-item label="事件去重">{{ evType?.dedupKey }}，窗口 {{ evType?.dedupWindow }}</a-descriptions-item>
           <a-descriptions-item label="近 7 天收到">{{ fmtInt(evType?.weekly) }} 条事件，命中 {{ fmtInt(hits7) }} 次</a-descriptions-item>
         </a-descriptions>
+        </template>
       </div>
+
+      <div v-else-if="tab === 'runs' && live" class="ru-body"><RuleScheduleRuns :key="base.id" :rule-id="base.id" /></div>
 
       <!-- 动作 -->
       <div v-else-if="tab === 'action'" class="ru-body ru-act">
@@ -807,9 +838,10 @@ const verCols = [
 .ru-detail { flex: 1; min-width: 0; }
 .ru-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .ru-sp { flex: 1; }
+.ru-save-error { margin: 0 16px; }
 .ru-tabs { padding: 0 16px; flex: none; }
 .ru-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.ru-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.ru-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
 .ru-sec { margin-top: 4px; }
 .ru-sec-row { display: flex; justify-content: space-between; align-items: center; }
 .ru-tool { display: flex; align-items: center; gap: 8px; flex: none; }

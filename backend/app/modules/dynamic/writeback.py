@@ -69,6 +69,13 @@ async def promote_rule(
     for k, col in _RULE_FIELDS.items():
         if k in d.patch:
             setattr(r, col, d.patch[k])
+    if "trigger" in d.patch or "expr" in d.patch or "objKind" in d.patch:
+        from app.common.auth import resolve_user
+        from app.modules.dynamic.rule_editor import validate_definition
+        from app.modules.dynamic.sections import rule_def
+
+        actor = await resolve_user(session, (r.trigger or {}).get("runAsUserId") or by)
+        await validate_definition(session, actor, rule_def(r, None))
     historical = await session.scalar(
         select(func.max(RuleVersion.version)).where(RuleVersion.rule_id == r.id)
     )
@@ -93,6 +100,9 @@ async def promote_rule(
     r.published_by, r.published_at = who, at
     r.change_note = d.change or f"变更单 {cr_code} 发布"
     session.add(RuleVersion(rule_id=r.id, version=ver, by=who, at=at, change=r.change_note))
+    from app.modules.dynamic.scheduler import reset_cursor
+
+    await reset_cursor(session, r, at)
     await session.delete(d)
     await session.flush()
     return True

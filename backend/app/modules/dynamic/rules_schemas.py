@@ -42,6 +42,13 @@ class RuleDraftIn(JsonInput):
     auto_stage: AutoStageIn
     thresholds: list[str] = []
     lock_version: int | None = None
+    conds: list[dict[str, Any]] | None = Field(None, max_length=40)
+    logic: Literal["且", "或"] | None = None
+    expr: str | None = Field(None, max_length=4096)
+    trigger: dict[str, Any] | None = None
+    obj_kind: str | None = Field(None, max_length=32)
+    dedupe: str | None = Field(None, max_length=200)
+    cooldown: str | None = Field(None, max_length=64)
 
 
 class RuleCreateIn(JsonInput):

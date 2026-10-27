@@ -1,15 +1,15 @@
 """Read-only rule evaluation against governed current rows or retained event payloads."""
 
 import ast
-import io
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
 import tokenize
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 
@@ -60,13 +60,13 @@ def sign_anchor(payload, scope):
 
 def read_anchor(token, scope, current):
     if not token:
-        return current.astimezone(timezone.utc).replace(microsecond=0), None
+        return current.astimezone(UTC).replace(microsecond=0), None
     try:
         stamp, digest, signature = token.split(".")
         payload = f"{stamp}.{digest}"
         if not hmac.compare_digest(signature, sign_anchor(payload, scope)):
             raise ValueError
-        at = datetime.fromtimestamp(int(stamp), timezone.utc)
+        at = datetime.fromtimestamp(int(stamp), UTC)
         if not timedelta(0) <= current - at <= timedelta(minutes=10):
             raise ValueError
         return at, digest
@@ -89,7 +89,9 @@ def parse_expression(text):
                 raise ValueError
             value = token.string
             if token.type == tokenize.NAME:
-                value = {"AND": "and", "OR": "or", "NOT": "not", "IN": "in", "且": "and", "或": "or"}.get(value, value)
+                value = {"AND": "and", "OR": "or", "NOT": "not", "IN": "in", "且": "and", "或": "or"}.get(
+                    value, value
+                )
             elif value == "=":
                 value = "=="
             parts.append((token.type, value))
@@ -255,7 +257,7 @@ class Expression(ast.NodeTransformer):
         return matched, values
 
 
-async def run_rule(session, user, base, definition, body):
+async def run_rule(session, user, base, definition, body, *, internal=False):
     obj = await session.scalar(
         select(ObjectType).where(
             ObjectType.code == definition["objKind"], ObjectType.status == ObjectStatus.published
@@ -276,8 +278,14 @@ async def run_rule(session, user, base, definition, body):
     if body.mode == "snapshot":
         if trigger.get("kind") != "定时":
             raise unavailable("事件规则需要原始事件载荷，请选择历史事件回放")
-        expression = Expression(tree, obj, gov)
+        from app.modules.dynamic.metric_rules import bind_metrics
+
+        expression = await bind_metrics(
+            session, user, tree, obj, gov, at, trigger.get("timezone", get_settings().display_tz)
+        )
         columns = {"id": table.c.id, "code": table.c.code, **expression.columns}
+        unique_codes = select(table.c.code).group_by(table.c.code).having(func.count() == 1)
+        columns["_identity_unique"] = table.c.code.in_(unique_codes).label("_identity_unique")
         title = next(
             (
                 p.backing_column
@@ -296,6 +304,10 @@ async def run_rule(session, user, base, definition, body):
             select(*columns.values()).order_by(table.c.id), user, obj.code, gov.columns, gov.links
         )
         rows = (await session.execute(statement.limit(10001))).mappings().all()
+        rows = [dict(row) for row in rows]
+        for row in rows:
+            for column, values, _label in expression.bindings.values():
+                row[column] = values.get(row["code"])
         candidates = [
             (row["id"], row["code"], str(row[title]) if title else row["code"], at, row) for row in rows
         ]
@@ -316,7 +328,9 @@ async def run_rule(session, user, base, definition, body):
 
         release = await ReleaseRepo(session).latest()
         expression = EventExpression(
-            tree, fields, release.snapshot if release else {},
+            tree,
+            fields,
+            release.snapshot if release else {},
             {"objKind": obj.code, "objectApi": obj.api_name},
         )
         filter_text = trigger.get("filter")
@@ -353,7 +367,10 @@ async def run_rule(session, user, base, definition, body):
             (event.id, event.object_id, event.obj_label or event.object_id, event.occurred_at, event.payload)
             for event in rows
         ]
-        note = "以所选规则重算保留的真实事件载荷；未保留载荷和缺失字段明确列为无法求值，不还原当时对象状态或冷却去重。"
+        note = (
+            "以所选规则重算保留的真实事件载荷；未保留载荷和缺失字段明确列为无法求值，"
+            "不还原当时对象状态或冷却去重。"
+        )
     if len(candidates) > 10000:
         raise unavailable("可见样本超过单次 10000 条上限，请缩小时间或对象权限范围；本次未返回部分结果")
     digest = hashlib.sha256(
@@ -369,15 +386,18 @@ async def run_rule(session, user, base, definition, body):
     if expected_digest and not hmac.compare_digest(expected_digest, digest):
         raise anchor_error("试跑的数据已发生变化，请重新开始试跑；未返回混合分页结果")
     payload = f"{int(at.timestamp())}.{digest}"
-    anchor = f"{payload}.{sign_anchor(payload, scope)}"
+    anchor = None if internal else f"{payload}.{sign_anchor(payload, scope)}"
     matched = unknown = evaluated = filtered = 0
     samples = []
+    matches = []
     for identity, code, label, sample_at, row in candidates:
         try:
             if row is None:
                 raise Unavailable("未保留原始事件载荷，不能从摘要还原")
             if not isinstance(row, Mapping):
                 raise Unavailable("原始载荷不是可读取的字段对象")
+            if body.mode == "snapshot" and not row.get("_identity_unique"):
+                raise Unavailable("业务编号对应多个对象记录，无法唯一定位")
             if body.mode == "events" and event_filter and not event_filter.run(row, sample_at)[0]:
                 filtered += 1
                 continue
@@ -386,6 +406,7 @@ async def run_rule(session, user, base, definition, body):
             matched += int(hit)
             if not hit:
                 continue
+            matches.append({"objId": code, "objLabel": label, "value": values})
             diff = "条件满足（未执行动作）"
         except (Unavailable, AppError) as exc:
             unknown += 1
@@ -423,4 +444,5 @@ async def run_rule(session, user, base, definition, body):
         "total": len(samples),
         "page": body.page,
         "size": body.size,
+        **({"_matches": matches} if internal else {}),
     }

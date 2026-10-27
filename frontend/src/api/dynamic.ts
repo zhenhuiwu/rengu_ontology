@@ -118,7 +118,22 @@ import type { RuleDef, AutoStage, Hit } from '@/mock/rules';
 /** 后台 RuleDef + 显示状态（草稿中 / 审核中 / 已发布 / 已停用）+ 所在变更单；详情多带 draft（有草稿时） */
 export interface RuleDto extends RuleDef { displayStatus: string; cr?: string | null; draft?: RuleDef | null }
 export interface RuleQuery { trigger?: string; status?: string; kw?: string; page: number; size: number }
-export interface RuleMetaDto { confirmers: string[]; mappingSources: string[]; triggers: string[]; statuses: string[] }
+export interface RuleEditorField { api: string; name: string; expression: string; type: string }
+export interface RuleMetaDto {
+  confirmers: string[]; mappingSources: string[]; triggers: string[]; statuses: string[];
+  objects: { id: string; name: string; api: string; fields: RuleEditorField[] }[];
+  metrics: { id: string; name: string; version: string; versions: string[] }[];
+  events: { id: string; name: string; objKind: string; fields: RuleEditorField[] }[];
+  runAsUserId: string;
+}
+export type RuleDefinitionPatch = Partial<Pick<RuleDef, 'conds' | 'logic' | 'expr' | 'objKind' | 'dedupe' | 'cooldown' | 'trigger'>>;
+export const emptyRuleMeta = (): RuleMetaDto => ({ confirmers: [], mappingSources: [], triggers: [], statuses: [], objects: [], metrics: [], events: [], runAsUserId: '' });
+export interface RuleScheduleRun {
+  id: string; ruleId: string; ruleVersion: number; scheduledAt: string; startedAt: string | null; finishedAt: string | null;
+  state: string; error: string | null;
+  result: { candidates?: number; evaluated?: number; unknown?: number; would?: number; alerts?: number; deduped?: number; actionStatus?: string } | null;
+}
+export const listRuleScheduleRuns = (id: string, page = 1) => api.get<PageResult<RuleScheduleRun>>(`/rules/${enc(id)}/runs`, { query: { page, size: 10 } });
 export interface RuleVersionDto { ver: number; status: string; by: string; at: string; change: string; cr?: string | null }
 export interface TimelineDto { time: string; text: string; desc: string; status: string }
 export interface RuleHitDetailDto extends Omit<Hit, 'alert'> { alert: AlertDetailDto | null; linkedAction: ActionRunDto | null; timeline: TimelineDto[] }
@@ -141,7 +156,7 @@ export const getRulesMeta = () => api.get<RuleMetaDto>('/rules/meta');
 export const getRule = (id: string) => api.get<RuleDto>(`/rules/${enc(id)}`);
 /** 保存到草稿：后台同一事务把改动登记成变更单 conds / mapping / config 三段（单子在库里时）；带 lockVersion 乐观锁 */
 export interface RuleDraftSaved { cr: string; draft: RuleDef; message: string; lockVersion?: number | null; crChanges?: number | null }
-export async function saveRuleDraft(id: string, body: { cr: string; autoStage: AutoStage; thresholds: string[] }) {
+export async function saveRuleDraft(id: string, body: { cr: string; autoStage: AutoStage; thresholds: string[] } & RuleDefinitionPatch) {
   const r = await api.put<RuleDraftSaved>(`/rules/${enc(id)}/draft`, { ...body, lockVersion: await crLock(body.cr) });
   crLocked(body.cr, r);
   return r;

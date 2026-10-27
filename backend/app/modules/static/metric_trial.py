@@ -248,14 +248,24 @@ def parse_formula(value, *, normalize_separators=False):
 
 
 async def evaluate_metric(
-    session, user: CurrentUser, code: str, *, ver=None, cr_id=None, days=30, period="day"
+    session,
+    user: CurrentUser,
+    code: str,
+    *,
+    ver=None,
+    cr_id=None,
+    days=30,
+    period="day",
+    at=None,
+    timezone=None,
+    object_kind=None,
 ) -> dict:
     """Public evaluator: exact saved definition + governed live rows, inclusive local calendar days."""
     check_func(user, "metrics", "view")
     if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 93:
         raise unavailable("试算范围须为1至93天")
-    if period not in ("day", "month"):
-        raise unavailable("试算分组仅支持日或月")
+    if period not in ("day", "week", "month"):
+        raise unavailable("试算分组仅支持日、周或月")
     metric = await metric_definition(session, code, user, ver, cr_id)
     # Older snapshots omit execution metadata. Do not borrow today's mappings/metadata for history.
     if ver:
@@ -292,8 +302,12 @@ async def evaluate_metric(
             raise unavailable("默认过滤不是明确的文本表达式")
         filters = parse_formula("1 WHERE " + default_filter, normalize_separators=True)
         conds.append(bound.predicate(filters.args["where"].this))
-    tz = ZoneInfo(get_settings().display_tz)
-    start, end = clock.today() - timedelta(days=days - 1), clock.today()
+    tz = ZoneInfo(timezone or get_settings().display_tz)
+    cutoff_at = at or clock.now()
+    if cutoff_at.tzinfo is None:
+        raise unavailable("指标计算时间必须带时区")
+    end = cutoff_at.astimezone(tz).date()
+    start = end - timedelta(days=days - 1)
     if isinstance(temporal.type, DateTime):
         day = cast(temporal.op("AT TIME ZONE")(str(tz)), Date)
         lo, hi = (
@@ -302,20 +316,31 @@ async def evaluate_metric(
         )
     else:
         day, lo, hi = temporal, start, end + timedelta(days=1)
-    if period == "month":
-        day = cast(func.date_trunc("month", day), Date)
+    if period in ("month", "week"):
+        day = cast(func.date_trunc(period, day), Date)
+    grouping = []
+    if object_kind:
+        if bound.object.code != object_kind or "code" not in bound.governed.table.c:
+            raise unavailable("指标没有明确的规则对象分组映射，不能把汇总值分摊给各对象")
+        grouping = [bound.governed.table.c.code]
+    if at is not None and isinstance(temporal.type, DateTime):
+        conds.append(temporal <= cutoff_at)
     stmt = (
-        select(day.label("date"), expression.label("value"), func.max(temporal).label("cutoff"))
+        select(day.label("date"), expression.label("value"), func.max(temporal).label("cutoff"), *grouping)
         .select_from(bound.governed.table)
         .where(temporal >= lo, temporal < hi, *conds)
-        .group_by(day)
+        .group_by(day, *grouping)
         .order_by(day)
     )
     sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     # Shared SQL guard supplies inherited row scopes, including order_line -> order -> store.
     rows = (await run_guarded(await session.connection(), sql, user)).mappings().all()
     values = [
-        {"date": str(row["date"]), "value": str(row["value"]) if row["value"] is not None else None}
+        {
+            "date": str(row["date"]),
+            "value": str(row["value"]) if row["value"] is not None else None,
+            **({"objectCode": row["code"]} if grouping else {}),
+        }
         for row in rows
     ]
     cutoff = max((row["cutoff"] for row in rows if row["cutoff"] is not None), default=None)

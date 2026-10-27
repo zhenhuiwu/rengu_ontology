@@ -19,7 +19,7 @@ from app.modules.static.models import ChangeRequest, CrItem, CrTarget
 from app.modules.static.schemas import ItemIn, ItemsPutIn, TargetIn
 
 Row = dict[str, Any]
-RULE_CONFIG_NEW = ("name", "objKind", "level", "output", "logic", "trigger")
+RULE_CONFIG_NEW = ("name", "objKind", "level", "output", "logic", "trigger", "expr", "dedupe", "cooldown")
 STAGE_FIELDS = (("enabled", "自动暂存"), ("actionTypeId", "暂存动作"), ("confirmer", "确认人"))
 
 
@@ -142,6 +142,9 @@ def rule_sections(pub: Row | None, cur: Row) -> dict[str, list[Row]]:
         elif old != c:
             r = _row(f"cond{i + 1}", "update", old, c, "规则条件", c.get("field") or "")
             conds.append({**r, "before_text": cond_text(old), "after_text": cond_text(c)})
+    for i in range(len(cur.get("conds") or []), len((pub or {}).get("conds") or [])):
+        old = pub["conds"][i]
+        conds.append(_row(f"cond{i + 1}", "delete", old, None, "规则条件", old.get("field") or ""))
     st_cur = cur.get("autoStage") or {}
     st_pub = {} if new else ((pub or {}).get("autoStage") or {})
     mp_cur = {m["param"]: m.get("from") for m in st_cur.get("mapping") or []}
@@ -159,6 +162,10 @@ def rule_sections(pub: Row | None, cur: Row) -> dict[str, list[Row]]:
     if new:
         for k in RULE_CONFIG_NEW:
             config.append(_row(k, "add", None, cur.get(k), "规则配置", k))
+    else:
+        for k in RULE_CONFIG_NEW:
+            if (pub or {}).get(k) != cur.get(k):
+                config.append(_row(k, "update", pub.get(k), cur.get(k), "规则配置", k))
     for k, label in STAGE_FIELDS:
         a, b = st_pub.get(k), st_cur.get(k)
         if new:

@@ -206,6 +206,13 @@ async def dispatch(session, user, *, rule_code, event_id):
     if not isinstance(bound_event, dict) or bound_event != definition:
         raise unavailable("原始事件定义与入站绑定发布快照不一致，不能执行")
     trigger = bound.get("trigger") or {}
+    if trigger.get("enabled") is False:
+        return {
+            "ruleId": rule.code,
+            "ruleVersion": rule.version,
+            "status": "not_matched",
+            "reason": "规则触发已停用",
+        }
     if (
         trigger.get("kind") != "事件"
         or trigger.get("eventId") != definition.get("id")

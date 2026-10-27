@@ -266,11 +266,94 @@ class RuleService:
             .where(EventType.status != TypeStatus.draft, EventType.retired_release_id.is_(None))
         ):
             sources.update([f"事件.{field.api}", f"事件.{field.name}"])
+        from app.modules.static.models import Metric, MetricStatus
+
+        objects = list(
+            await self.session.scalars(
+                select(ObjectType).where(ObjectType.status == ObjectStatus.published).order_by(ObjectType.id)
+            )
+        )
+        metrics = (
+            list(
+                await self.session.scalars(
+                    select(Metric).where(Metric.status == MetricStatus.published).order_by(Metric.id)
+                )
+            )
+            if self.user.func.get("metrics") in ("view", "manage")
+            else []
+        )
+        events = (
+            list(
+                await self.session.scalars(
+                    select(EventType)
+                    .where(EventType.status != TypeStatus.draft, EventType.retired_release_id.is_(None))
+                    .order_by(EventType.id)
+                )
+            )
+            if self.user.func.get("event-types") in ("view", "manage")
+            else []
+        )
         return {
             "confirmers": list(dict.fromkeys(confirmers)),
             "mappingSources": sorted(sources),
             "triggers": ["全部", "定时", "事件"],
             "statuses": ["全部", *statuses],
+            "objects": [
+                {
+                    "id": obj.code,
+                    "name": obj.display_name,
+                    "api": obj.api_name,
+                    "fields": [
+                        {
+                            "api": prop.api_name,
+                            "name": prop.display_name,
+                            "expression": f"{obj.code}.{prop.api_name}",
+                            "type": prop.data_type,
+                        }
+                        for prop in obj.properties
+                        if not prop.is_sensitive and prop.visibility != "hidden" and prop.backing_column
+                    ],
+                }
+                for obj in objects
+            ],
+            "metrics": [
+                {
+                    "id": metric.code,
+                    "name": metric.display_name,
+                    "version": metric.version,
+                    "versions": list(
+                        dict.fromkeys(
+                            [
+                                metric.version,
+                                *[
+                                    row["ver"]
+                                    for row in metric.version_rows or []
+                                    if isinstance(row, dict) and isinstance(row.get("ver"), str)
+                                ],
+                            ]
+                        )
+                    ),
+                }
+                for metric in metrics
+            ],
+            "events": [
+                {
+                    "id": event.code,
+                    "name": event.name,
+                    "objKind": event.obj_kind,
+                    "fields": [
+                        {
+                            "api": field.api,
+                            "name": field.name,
+                            "expression": f"event.{field.api}",
+                            "type": field.type,
+                        }
+                        for field in event.payload
+                    ],
+                }
+                for event in events
+            ],
+            "runAsUserId": self.user.id,
         }
 
     async def draft_def(self, r: Rule, d: RuleDraft | None, actions: dict[int, str]) -> dict[str, Any] | None:
@@ -285,9 +368,9 @@ class RuleService:
         base = self._def(r, actions)
         draft = await self.draft_def(r, d, actions)
         st = self.display_status(r, d, self.cr_states.get(d.cr_code) if d else None)
-        hits7 = (
-            await recent_rule_hits(self.session, until=now(), rule_ids={r.id}, user=self.user)
-        ).get(r.id, 0)
+        hits7 = (await recent_rule_hits(self.session, until=now(), rule_ids={r.id}, user=self.user)).get(
+            r.id, 0
+        )
         base["weekly"] = hits7
         if draft is not None:
             draft["weekly"] = hits7
@@ -296,7 +379,9 @@ class RuleService:
                 select(func.count())
                 .select_from(ActionRun)
                 .where(ActionRun.rule_code == r.code, ActionRun.status == ActionStatus.staged),
-                self.user, ActionRun.obj_kind, ActionRun.obj_id,
+                self.user,
+                ActionRun.obj_kind,
+                ActionRun.obj_id,
             )
         )
         return {
@@ -318,7 +403,9 @@ class RuleService:
                 await self.session.scalars(
                     await scoped_instances(
                         select(RuleHit).where(RuleHit.rule_id == r.id).order_by(RuleHit.seq),
-                        self.user, RuleHit.obj_kind, RuleHit.obj_id,
+                        self.user,
+                        RuleHit.obj_kind,
+                        RuleHit.obj_id,
                     )
                 )
             ).all()
@@ -374,7 +461,10 @@ class RuleService:
     async def hit(self, code: str) -> tuple[Rule, RuleHit, dict[str, Any], Alert | None]:
         h = await self.session.scalar(
             await scoped_instances(
-                select(RuleHit).where(RuleHit.code == code), self.user, RuleHit.obj_kind, RuleHit.obj_id,
+                select(RuleHit).where(RuleHit.code == code),
+                self.user,
+                RuleHit.obj_kind,
+                RuleHit.obj_id,
             )
         )
         if h is None:
@@ -465,7 +555,14 @@ class RuleService:
             output=RuleOutput.alert,
             conds=[],
             logic="且",
-            trigger={"kind": "定时", "cron": "0 8 * * *", "text": "每天 08:00"},
+            trigger={
+                "kind": "定时",
+                "cron": "0 8 * * *",
+                "text": "每天 08:00",
+                "enabled": False,
+                "timezone": "Asia/Shanghai",
+                "catchupMinutes": 0,
+            },
             auto_stage={"enabled": False, "actionTypeId": "", "mapping": [], "confirmer": ""},
             is_seed=False,
         )
@@ -559,7 +656,7 @@ class RuleService:
         assert cur is not None
         st = body.auto_stage
         errs: list[tuple[str, str]] = []
-        if len(body.thresholds) > len(cur["conds"]):
+        if body.conds is None and len(body.thresholds) > len(cur["conds"]):
             errs.append(("thresholds", "阈值个数超过条件个数"))
         for i, t in enumerate(body.thresholds):
             if not t.strip():
@@ -569,7 +666,7 @@ class RuleService:
             at = await self.session.scalar(select(ActionType).where(ActionType.code == st.action_type_id))
             if (
                 at is None
-                or at.target_kind != r.obj_kind
+                or at.target_kind != (body.obj_kind or cur["objKind"])
                 or at.status.value == "草稿"
                 or at.retired_release_id is not None
             ):
@@ -599,17 +696,44 @@ class RuleService:
                     422,
                     missing=missing,
                 )
-        conds = [
-            {**c, "value": body.thresholds[i]} if i < len(body.thresholds) else c
-            for i, c in enumerate(cur["conds"])
-        ]
+        conds = (
+            body.conds
+            if body.conds is not None
+            else [
+                {**c, "value": body.thresholds[i]} if i < len(body.thresholds) else c
+                for i, c in enumerate(cur["conds"])
+            ]
+        )
         auto = {
             "enabled": st.enabled,
             "actionTypeId": st.action_type_id,
             "confirmer": st.confirmer,
             "mapping": [{"param": m.param, "from": m.from_} for m in st.mapping],
         }
-        d.patch = {**d.patch, "conds": conds, "autoStage": auto}
+        patch = {**d.patch, "conds": conds, "autoStage": auto}
+        for key in ("logic", "obj_kind", "dedupe", "cooldown", "expr"):
+            value = getattr(body, key)
+            if value is not None:
+                patch[{"obj_kind": "objKind"}.get(key, key)] = value
+        if body.trigger is not None:
+            patch["trigger"] = {**body.trigger, "runAsUserId": self.user.id}
+        from app.modules.dynamic.rule_editor import compile_conditions, validate_definition
+
+        if body.conds is not None and body.expr is None:
+            patch["expr"] = compile_conditions(conds, body.logic or cur["logic"])
+        elif body.logic is not None and body.logic != cur["logic"] and body.expr is None:
+            patch["expr"] = compile_conditions(conds, body.logic)
+        elif body.thresholds and conds != cur["conds"] and body.expr is None:
+            import ast
+
+            from app.modules.dynamic.rule_runtime import selected_expression
+
+            patch["expr"] = ast.unparse(selected_expression(cur, {**cur, "conds": conds}))
+        if any(
+            value is not None for value in (body.conds, body.logic, body.expr, body.trigger, body.obj_kind)
+        ):
+            await validate_definition(self.session, self.user, {**cur, **patch})
+        d.patch = patch
         d.by, d.at = self.user.name, now()
         await self.session.flush()
         draft = await self.draft_def(r, d, actions)
@@ -625,6 +749,43 @@ class RuleService:
             "draft": draft,
             "message": f"已保存到草稿 {d.cr_code}，发布前不影响线上规则",
         }
+
+    async def schedule_runs(self, code: str, page: PageParams):
+        from app.modules.dynamic.rules_models import RuleScheduleRun
+        from app.modules.dynamic.scheduler import fingerprint
+
+        rule = await self.get(code)
+        query = select(RuleScheduleRun).where(
+            RuleScheduleRun.rule_id == rule.id,
+            RuleScheduleRun.created_by == self.user.id,
+            RuleScheduleRun.permission_fingerprint == fingerprint(self.user),
+        )
+        total = await self.session.scalar(select(func.count()).select_from(query.subquery())) or 0
+        rows = list(
+            await self.session.scalars(
+                query.order_by(RuleScheduleRun.scheduled_at.desc(), RuleScheduleRun.id.desc())
+                .offset(page.offset)
+                .limit(page.size)
+            )
+        )
+        return Page[dict].of(
+            [
+                {
+                    "id": str(row.id),
+                    "ruleId": code,
+                    "ruleVersion": row.rule_version,
+                    "scheduledAt": sec(row.scheduled_at),
+                    "startedAt": sec(row.started_at) if row.started_at else None,
+                    "finishedAt": sec(row.finished_at) if row.finished_at else None,
+                    "state": row.state,
+                    "result": row.result,
+                    "error": row.error,
+                }
+                for row in rows
+            ],
+            total,
+            page,
+        )
 
 
 # ======================================================================
