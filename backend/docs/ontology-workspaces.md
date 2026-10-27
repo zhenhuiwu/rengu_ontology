@@ -44,6 +44,12 @@
 - 配了组织列的对象类型在 `/roles/meta.scopeProps` 多一条 `prop="@org"`（显示名“所属组织”，取值 = 该列去重值，先经当前用户行级过滤）；角色范围照常 `POST /roles/{id}/scopes`。执行时 `@org` 换成配置字段做 = / IN；继承表跟随上级。
 - 缺口（gaps）：没有组织列或未配置的受控对象类型，GET 返回 `gaps` 列表；这些对象类型上的 `@org` 范围一律拒绝，不会变成“不限制”。尚未支持：按用户属性自动取组织（`user.org`，CurrentUser.attrs 目前没有来源）、组织层级（上级组织看下级）、非受控表。
 
+## MetricFlow 引擎适配（骨架）
+
+- `app/common/metricflow_engine.py`：`query_metrics(session, user, metrics, group_by, where)` = 进程内 `export_metricflow(session, user)`（静态，JSON 形状，含 metrics view 校验）→ `compile_query` → `run_guarded(await session.connection(), sql, user)`（行级过滤 + 本体边界）。编译结果不能绕过 run_guarded 执行。
+- 依赖：`metricflow` 库未安装、未写入依赖锁；`metricflow_available()` 只探测。内置最小编译器支持 simple 指标（含导出 filter，编成 `AGG(CASE WHEN … THEN expr END)`）和同一 semantic model 上的 derived 指标；group_by 支持 `<entity>__<dim>` 与 `metric_time`（默认时间维度按天）；where 只接受 `{{ Dimension('e__d') }} <比较符> <标量>`。跨模型 join、cumulative / conversion 指标、非 day 粒度暂不支持（422 `METRIC_QUERY_INVALID`）。`backend="metricflow"` 明确返回“尚未接入”。不用 PyYAML。
+- 尚未开放 HTTP 路由；指标口径与数值由静态负责，本模块不转换定义。
+
 ## 外部集成接入点（Palantir）
 
 - `POST /internal/v1/events` 由 palantir-t2 接入 `events:ingest` 密钥 + 事件类型白名单（e97bc61），本模块只提供 `require_api_scope` / `enforce_api_allowlist` / 调用方审计字段。

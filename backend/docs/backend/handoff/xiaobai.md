@@ -6,6 +6,7 @@
 - 角色删除 500 修复：admin_0026 将 `ontology_role_binding.role_id` FK 改为 ON DELETE CASCADE（参照动作绕过 RLS，其他本体的绑定也删）；服务账号引用 → 409 ROLE_IN_USE。测试 `tests/test_role_delete_bindings.py`。
 - 第 7 个范围 `dynamic:read`：alerts / rules / object-types / action-center view。接入写法 `Depends(require_api_scope("dynamic:read"))`。测试在 `tests/test_api_key_scopes.py`。
 - C1 组织规则：`app/modules/admin/org_scope.py`，`@org` 范围 + 每本体组织列配置 + gaps；`/roles/meta.scopeProps` 现在真的返回 `objectTypeCode`（之前 schema 丢了）。测试 `tests/test_org_scope.py`。
+- C3 MetricFlow 适配骨架：`app/common/metricflow_engine.py`（导出 → 内置编译 → run_guarded），`metricflow` 为可选依赖、未装、未改锁。测试 `tests/test_metricflow_engine.py`（导出形状夹具）。
 - 规则与契约见 [ontology-workspaces.md](../../ontology-workspaces.md) “API 密钥权限范围与服务账号”“行级范围按本体”。
 
 ### 已知问题（未在本轮修复）
