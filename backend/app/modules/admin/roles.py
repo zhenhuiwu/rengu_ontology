@@ -162,6 +162,7 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
             out.append(
                 {
                     "objType": obj.display_name,
+                    "objectTypeCode": obj.code,  # stable reference sent back on add_scope (admin_0025)
                     "prop": name,
                     "displayName": p.display_name,
                     "dataType": p.data_type,
