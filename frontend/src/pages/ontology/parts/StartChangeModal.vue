@@ -4,7 +4,7 @@ import { computed, ref, watch } from 'vue';
 import { allDrafts, loadDraftState } from './useDraftView';
 import { currentApiContext } from '@/api/http';
 
-const props = defineProps<{ targetName: string; titlePlaceholder?: string; closeOnOk?: boolean; busy?: boolean }>();
+const props = withDefaults(defineProps<{ targetName: string; titlePlaceholder?: string; closeOnOk?: boolean; busy?: boolean }>(), { closeOnOk: true });
 const open = defineModel<boolean>('open', { default: false });
 const emit = defineEmits<{ ok: [opts: { join?: string; title?: string; desc?: string }] }>();
 

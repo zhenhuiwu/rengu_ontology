@@ -34,7 +34,12 @@ const summariesOf = (turn: QaRealTurn) => {
   return answer.dynamicSummaries?.length ? answer.dynamicSummaries : answer.dynamicSummary ? [answer.dynamicSummary] : [];
 };
 const isChain = (t: QaRealTurn): t is ChainTurn => t.kind === 'answer' && (t.answer as { card: string }).card === 'table';
-const chainMeta = computed(() => `按 大区 = ${detail.value?.scope ?? '—'}、口径 = ${detail.value?.caliber ?? '—'} 回答`);
+const chainMeta = computed(() => {
+  const scope = detail.value?.scope?.trim();
+  const caliber = detail.value?.caliber?.trim();
+  const parts = [scope ? `范围 = ${scope}` : '', caliber ? `口径 = ${caliber}` : ''].filter(Boolean);
+  return parts.length ? `按 ${parts.join('、')} 回答` : '';
+});
 const tableCols = (t: ChainTurn) => t.answer.table.columns.map((c) => ({ dataIndex: c.key, title: c.title, align: (c.align ?? 'left') as 'left' | 'right' }));
 const tableRows = (t: ChainTurn) => t.answer.table.items.map((r, i) => ({ ...r, _k: i }));
 const showTable = (t: ChainTurn) => t.answer.table.items.length > 1 || t.answer.table.columns.length > 1;
@@ -101,7 +106,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
       <div class="qa-b qa-b-ans">
         <ApartmentOutlined class="qa-b-av" />
         <span class="qa-b-txt">{{ t.answer.text }}</span>
-        <span class="t-12 c-3 qa-b-meta">{{ chainMeta }}</span>
+        <span v-if="chainMeta" class="t-12 c-3 qa-b-meta">{{ chainMeta }}</span>
       </div>
       <a-table v-if="showTable(t)" class="qa-chain-tbl" size="small" row-key="_k" :columns="tableCols(t)" :data-source="tableRows(t)"
         :pagination="t.answer.table.paged ? { pageSize: 10, size: 'small', showSizeChanger: false } : false" :scroll="{ x: 'max-content' }" />

@@ -177,6 +177,8 @@ async function testConn(d: Datasource) {
       const stored = await getDatasource(d.id);
       if (!current()) return;
       Object.assign(d, stored);
+      const listed = list.value.find((item) => item.id === d.id);
+      if (listed) Object.assign(listed, stored);
       if (t.ok) {
         message.success(`连接成功，耗时 ${t.ms} ms`);
         // 后台真连成功后重新读取持久库表清单。

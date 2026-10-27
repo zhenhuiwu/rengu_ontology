@@ -157,9 +157,10 @@ async function resend() {
 </template>
 
 <style scoped>
-.dd-title { display: flex; align-items: center; gap: 8px; }
+.dd-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.dd-title > :not(.dd-code) { flex-shrink: 0; }
 .dd-back { margin-left: -8px; }
-.dd-code { white-space: nowrap; }
+.dd-code { flex: 1 1 240px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dd-kv { display: flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; }
 .dd-cmp { margin-left: 8px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .dd-desc :deep(table) { table-layout: fixed; width: 100%; }

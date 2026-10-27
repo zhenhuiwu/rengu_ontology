@@ -8,7 +8,7 @@
  * 规则：已发布版只读；改定义只有“发起变更”一个入口，进入变更草稿后编辑按钮才可用；
  * 有草稿的对象默认看已发布版（问数用的就是这一版），?view=draft 切到草稿。
  */
-import { computed, reactive, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { apiClient, currentApiContext } from '@/api/http';
 import { useRoute, useRouter } from 'vue-router';
@@ -33,10 +33,12 @@ let contextKey = '';
 let revision = 0;
 let pending: Promise<void> | null = null;
 let loaded = false;
+const resetEpoch = ref(0);
 export function resetDraftState() {
   revision++; loaded = false; pending = null; contextKey = '';
   DRAFTS.splice(0); created.splice(0);
   for (const cr of Object.keys(TARGETS)) delete TARGETS[cr];
+  resetEpoch.value++;
 }
 export function loadDraftState(force = false): Promise<void> {
   if (!api.isReal()) return Promise.resolve();
@@ -85,7 +87,7 @@ export function forgetTarget(cr: string, kind: TargetKind, id: string) {
 }
 
 export function useDraftView(kind: TargetKind, targetId: () => string) {
-  if (api.isReal()) watch(() => JSON.stringify(currentApiContext()), (key) => { void loadDraftState().catch((e) => { if (key === JSON.stringify(currentApiContext())) message.error(`草稿加载失败：${e instanceof Error ? e.message : String(e)}`); }); }, { immediate: true });
+  if (api.isReal()) watch(() => JSON.stringify([currentApiContext(), resetEpoch.value]), (key) => { void loadDraftState().catch((e) => { if (key === JSON.stringify([currentApiContext(), resetEpoch.value])) message.error(`草稿加载失败：${e instanceof Error ? e.message : String(e)}`); }); }, { immediate: true });
   const route = useRoute();
   const router = useRouter();
   const draft = computed(() => draftOf(kind, targetId()));

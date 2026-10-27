@@ -599,7 +599,10 @@ const terminalText = computed(() => {
 <style scoped>
 .ac { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .ac-list { flex: 1; }
-.ac-filters { display: flex; gap: 8px; }
+.ac-list > .panel-head { height: auto; min-height: 44px; padding-top: 8px; padding-bottom: 8px; flex-wrap: wrap; gap: 8px; }
+.ac-list > .panel-head > :deep(.ant-radio-group) { flex: none; white-space: nowrap; }
+.ac-filters { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.ac-filters > * { flex-shrink: 0; }
 .ac-w120 { width: 132px; }
 .ac-w140 { width: 140px; }
 .ac-w240 { width: 240px; }

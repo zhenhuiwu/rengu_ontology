@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { currentApiContext } from '@/api/http';
 import { listDatasources, listDsTables, isDataReal } from '@/api/datasources';
@@ -12,6 +13,7 @@ import StartChangeModal from './StartChangeModal.vue';
 const open = defineModel<boolean>('open', { default: false });
 const emit = defineEmits<{ saved: [result: { id: string; crId: string }] }>();
 const { readonly, reason } = useReadonly();
+const router = useRouter();
 const sources = ref<Datasource[]>([]), tables = ref<DsTable[]>([]), owners = ref<{ value: string; label: string }[]>([]);
 const datasource = ref<string>(), schema = ref<string>(), selected = ref<string[]>([]);
 const preview = ref<ImportPreview>(), objects = ref<ImportObject[]>([]), selectedLinks = ref<string[]>([]);
@@ -48,6 +50,12 @@ watch(datasource, async (id) => {
 watch(schema, () => { selected.value = []; resetPreview(); });
 watch(selected, resetPreview);
 const schemaOptions = computed(() => [...new Set(tables.value.map((t) => t.schema))].map((value) => ({ value })));
+async function goToSource() {
+  if (!datasource.value || (dirty.value && !await confirmDiscard())) return;
+  const id = datasource.value;
+  open.value = false;
+  await router.push({ path: '/build/data/connections', query: { ...router.currentRoute.value.query, ds: id } });
+}
 const tableOptions = computed(() => tables.value.filter((t) => t.schema === schema.value).map((t) => ({ value: t.name, label: `${t.name}${t.comment ? ` · ${t.comment}` : ''}` })));
 const canPreview = computed(() => isDataReal() && !readonly.value && !loading.value && !busy.value && !!datasource.value && !!schema.value && !!selected.value.length && selected.value.every((name) => tableOptions.value.some((t) => t.value === name)));
 async function buildPreview() {
@@ -92,6 +100,7 @@ async function commit(opts: { join?: string; title?: string; desc?: string }) {
     <a-spin :spinning="loading">
       <a-form layout="vertical" :disabled="readonly || busy || loading" class="import-form">
         <div class="import-grid"><a-form-item label="数据连接" required><a-select v-model:value="datasource" :disabled="!!preview" :options="sources.map((s) => ({ value: s.id, label: s.name }))" placeholder="选择真实数据库连接" /></a-form-item><a-form-item label="Schema" required><a-select v-model:value="schema" :disabled="!!preview" :options="schemaOptions" /></a-form-item></div>
+        <div v-if="datasource && !loading && !tables.length && !error" class="t-12 c-3 import-empty">尚未获取库表，请先测试连接。<a-button type="link" size="small" @click="goToSource">前往数据连接</a-button></div>
         <a-form-item label="库表（同一Schema）" required><a-select v-model:value="selected" :disabled="!!preview" mode="multiple" :options="tableOptions" /></a-form-item>
         <a-button :disabled="!canPreview" :loading="busy" @click="buildPreview">{{ preview ? '重新生成规则预览' : '生成规则映射预览' }}</a-button>
         <a-button v-if="preview" style="margin-left: 12px" @click="guard(resetPreview)">重新选择库表</a-button>
@@ -115,6 +124,7 @@ async function commit(opts: { join?: string; title?: string; desc?: string }) {
 </template>
 <style scoped>
 .import-form { margin-top: 16px; }
+.import-empty { margin-bottom: 12px; }
 .import-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .import-object { border: 1px solid var(--g5); border-radius: 4px; padding: 16px; margin-top: 16px; }
 .import-object > .import-grid { margin-top: 12px; }

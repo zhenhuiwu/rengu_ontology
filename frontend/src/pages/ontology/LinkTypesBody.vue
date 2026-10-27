@@ -557,14 +557,14 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
               <a-form-item label="API 名">
                 <a-tooltip :title="cur.status === '草稿' ? '' : '已发布的 API 名不可改名（V7）'"><a-input v-model:value="form.api" :maxlength="64" :disabled="cur.status !== '草稿'" placeholder="例如 order_belongs_to_store" /></a-tooltip>
               </a-form-item>
-              <a-form-item label="源对象"><a-select v-if="isStaticReal()" v-model:value="form.from" :options="OBJ_OPTIONS" :loading="catalogLoading" :disabled="catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择对象类型" @change="form.fromProp = ''" /><a-input v-else :value="objName(cur.from)" disabled /></a-form-item>
-              <a-form-item label="目标对象"><a-select v-model:value="form.to" :options="OBJ_OPTIONS" :loading="catalogLoading" :disabled="isStaticReal() && (catalogLoading || !!catalogError || saving)" @change="form.toProp = ''" show-search option-filter-prop="label" placeholder="选择对象类型" /></a-form-item>
+              <a-form-item label="源对象" html-for="link-relation-from"><a-select v-if="isStaticReal()" id="link-relation-from" v-model:value="form.from" :options="OBJ_OPTIONS" :loading="catalogLoading" :disabled="catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择对象类型" @change="form.fromProp = ''" /><a-input v-else id="link-relation-from" :value="objName(cur.from)" disabled /></a-form-item>
+              <a-form-item label="目标对象" html-for="link-relation-to"><a-select id="link-relation-to" v-model:value="form.to" :options="OBJ_OPTIONS" :loading="catalogLoading" :disabled="isStaticReal() && (catalogLoading || !!catalogError || saving)" @change="form.toProp = ''" show-search option-filter-prop="label" placeholder="选择对象类型" /></a-form-item>
               <a-form-item label="基数"><a-select v-model:value="form.card" :options="CARD_OPTIONS" /></a-form-item>
               <a-form-item label="允许为空"><a-switch v-model:checked="form.nullable" size="small" /></a-form-item>
               <a-form-item v-if="form.card === 'N : M'" label="中间对象"><a-select v-if="isStaticReal()" v-model:value="form.via" :options="VIA_OPTIONS" show-search option-filter-prop="label" placeholder="选择当前本体的中间对象" :disabled="catalogLoading || !!catalogError || saving" /><a-input v-else v-model:value="form.via" placeholder="中间表或中间对象" /></a-form-item>
               <template v-else>
-                <a-form-item label="源端属性"><a-select v-if="isStaticReal()" v-model:value="form.fromProp" :options="propertyOptions(form.from)" :disabled="!form.from || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择源端属性" /><a-input v-else v-model:value="form.fromProp" /></a-form-item>
-                <a-form-item label="目标端属性"><a-select v-if="isStaticReal()" v-model:value="form.toProp" :options="propertyOptions(form.to)" :disabled="!form.to || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择目标端属性" /><a-input v-else v-model:value="form.toProp" /></a-form-item>
+                <a-form-item label="源端属性" html-for="link-relation-from-prop"><a-select v-if="isStaticReal()" id="link-relation-from-prop" v-model:value="form.fromProp" :options="propertyOptions(form.from)" :disabled="!form.from || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择源端属性" /><a-input v-else id="link-relation-from-prop" v-model:value="form.fromProp" /></a-form-item>
+                <a-form-item label="目标端属性" html-for="link-relation-to-prop"><a-select v-if="isStaticReal()" id="link-relation-to-prop" v-model:value="form.toProp" :options="propertyOptions(form.to)" :disabled="!form.to || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择目标端属性" /><a-input v-else id="link-relation-to-prop" v-model:value="form.toProp" /></a-form-item>
               </template>
               <a-form-item label="反向名称"><a-input v-model:value="form.reverse" :maxlength="64" /></a-form-item>
             </div>
@@ -744,15 +744,17 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
 .lt-tabs { padding: 0 16px; flex: none; }
 .lt-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
 .lt-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-.lt-def { flex-direction: row; gap: 16px; }
+.lt-def { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; align-content: start; align-items: start; overflow: auto; }
 .lt-def-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.lt-def-right { width: 440px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }
+.lt-def-right { min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: var(--border); overflow: hidden; }
 .lt-sec { margin-top: 4px; }
 .lt-sec-row { display: flex; justify-content: space-between; align-items: baseline; }
 .lt-desc :deep(.ant-descriptions-item-label) { width: 112px; }
 .lt-code { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; word-break: break-all; }
-.lt-form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.lt-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); column-gap: 16px; }
 .lt-form :deep(.ant-form-item) { margin-bottom: 12px; }
+.lt-form :deep(.ant-form-item-label) { flex-shrink: 0; }
+.lt-form :deep(.ant-form-item-control), .lt-form :deep(.ant-select) { min-width: 0; }
 .lt-ends { display: flex; align-items: stretch; gap: 8px; }
 .lt-tbl { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lt-end { flex: 1; display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border: var(--border); border-radius: var(--radius); min-width: 0; }
