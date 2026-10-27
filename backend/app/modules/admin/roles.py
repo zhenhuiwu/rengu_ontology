@@ -108,6 +108,7 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
     """
     from app.common.row_filter import apply_row_filter
     from app.common.sql_guard import governed_tables
+    from app.modules.admin.org_scope import ORG_LABEL, ORG_PROP, load_org_fields
     from app.modules.static.explorer import facetable
     from app.modules.static.models import ObjectStatus, ObjectType
 
@@ -171,6 +172,25 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
                     "values": sorted(v for v in values if aliases.get(v, v) == v),
                 }
             )
+    # 组织规则：只给配了组织列（org_scope）的对象类型；取值同样来自受控列且先经当前用户行级过滤。
+    org_fields = await load_org_fields(session)
+    for obj in objects:
+        g = tables.get(obj.code)
+        col = g.columns.get(org_fields.get(obj.code, "")) if g is not None else None
+        if col is None:
+            continue
+        stmt = select(col).select_from(g.table).where(col.is_not(None)).distinct()
+        stmt = await apply_row_filter(stmt, user, obj.code, g.columns, g.links)
+        out.append(
+            {
+                "objType": obj.display_name,
+                "objectTypeCode": obj.code,
+                "prop": ORG_PROP,
+                "displayName": ORG_LABEL,
+                "dataType": "string",
+                "values": sorted({str(getattr(v, "value", v)) for v in (await session.scalars(stmt)).all()}),
+            }
+        )
     return out
 
 

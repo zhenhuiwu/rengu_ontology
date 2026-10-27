@@ -30,13 +30,19 @@
 - 令牌只能到达声明了 `Depends(require_api_scope("<scope>"))` 的路由（元数据白名单除外）；未声明的路由一律 403。机器路由写法：`dependencies=[Depends(require_api_scope("dynamic:read")), Depends(require_func("alerts", "view"))]`。
 - 白名单：`actionTypes` / `eventTypes`（null = 不限制，[] = 全拒），需要对应范围（否则 422）；路径参数用 `action_type="{type_id}"`，请求体内的类型在解析后调用 `enforce_api_allowlist(request, event_type=...)`。
 - 限流配额：`ratePerMinute` / `quotaPerDay`，请求事务内原子计数（被拒或回滚的请求不计数），超出 429 `RATE_LIMITED`。PATCH `/api-keys/{id}` 只能收窄范围（扩大 403），可改白名单与配额。
-- 服务账号（平台共享身份）：`/api-keys/service-accounts` 增改吊销，需 api-keys + roles manage；绑定一个服务角色（sys_role），密钥权限 = 该角色在当前本体的功能/对象/行级权限 ∩ 密钥范围；角色必须经 `ontology_role_binding` 绑定到当前本体才有行级授权。吊销服务账号同时吊销其全部密钥。审计记录 `principal_kind / service_account_code / api_key_prefix`。
+- 服务账号（平台共享身份）：`/api/admin/v1/service-accounts` 增改吊销，需 api-keys + roles manage；绑定一个服务角色（sys_role），密钥权限 = 该角色在当前本体的功能/对象/行级权限 ∩ 密钥范围；角色必须经 `ontology_role_binding` 绑定到当前本体才有行级授权。吊销服务账号同时吊销其全部密钥。审计记录 `principal_kind / service_account_code / api_key_prefix`。
 - 删除角色：成员、行级范围、本体绑定（所有本体，FK ON DELETE CASCADE，admin_0026）一并删除；仍有成员只有这个角色或有服务账号以它为服务角色时 409 `ROLE_IN_USE`（`details.users` / `details.serviceAccounts`）。
 
 ## 行级范围按本体（admin_0025）
 
 - `sys_role_scope` 是本体领域表（FORCE RLS），同一角色在不同本体各有范围；存量记录归空间 1。范围以 `object_type_id`（稳定引用）+ `object_type_code`（快照）定位对象，`obj_type` 仅显示；引用的对象类型被删除时该范围拒绝全部行（fail-closed）。前端添加范围时发送 `objectTypeCode`。
 - `sql_guard.governed_tables(ontology_id)` 按当前本体的对象类型绑定解析受控表：事务开始与 `set_ontology_scope` 时加载，对象类型增删改 flush 后重载，30s TTL；继承表跟随父表。未加载的本体回退旧规则（1 → 全部、其他 → 无）；解析为空时 `row_filters_for` 抛 SqlRejected，不放行。
+
+## 组织（@org）行级规则
+
+- 每个本体按对象类型配置组织列：`GET/PUT /api/admin/v1/row-scope/org-columns`（roles view / manage），body `{"columns": {"<对象类型编号>": "<受控表白名单字段>"}}` 整体替换；存 `platform_setting(code="row-scope:org-columns")`，按本体 id 分键，修改写审计。字段必须是该对象类型受控表（非继承表）的白名单列，否则 422 `ORG_COLUMN_INVALID`。
+- 配了组织列的对象类型在 `/roles/meta.scopeProps` 多一条 `prop="@org"`（显示名“所属组织”，取值 = 该列去重值，先经当前用户行级过滤）；角色范围照常 `POST /roles/{id}/scopes`。执行时 `@org` 换成配置字段做 = / IN；继承表跟随上级。
+- 缺口（gaps）：没有组织列或未配置的受控对象类型，GET 返回 `gaps` 列表；这些对象类型上的 `@org` 范围一律拒绝，不会变成“不限制”。尚未支持：按用户属性自动取组织（`user.org`，CurrentUser.attrs 目前没有来源）、组织层级（上级组织看下级）、非受控表。
 
 ## 外部集成接入点（Palantir）
 

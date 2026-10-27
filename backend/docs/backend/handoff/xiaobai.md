@@ -5,6 +5,7 @@
 - 前端 ApiKeys.vue（真模式）：范围按编码 + 中文名、服务账号绑定、动作/事件白名单、限流配额、详情“调整授权与配额”（PATCH，只收窄）、服务账号抽屉（列表/新建/吊销）；写操作不回退 mock。Roles.vue 添加行级范围发送 `objectTypeCode`。
 - 角色删除 500 修复：admin_0026 将 `ontology_role_binding.role_id` FK 改为 ON DELETE CASCADE（参照动作绕过 RLS，其他本体的绑定也删）；服务账号引用 → 409 ROLE_IN_USE。测试 `tests/test_role_delete_bindings.py`。
 - 第 7 个范围 `dynamic:read`：alerts / rules / object-types / action-center view。接入写法 `Depends(require_api_scope("dynamic:read"))`。测试在 `tests/test_api_key_scopes.py`。
+- C1 组织规则：`app/modules/admin/org_scope.py`，`@org` 范围 + 每本体组织列配置 + gaps；`/roles/meta.scopeProps` 现在真的返回 `objectTypeCode`（之前 schema 丢了）。测试 `tests/test_org_scope.py`。
 - 规则与契约见 [ontology-workspaces.md](../../ontology-workspaces.md) “API 密钥权限范围与服务账号”“行级范围按本体”。
 
 ### 已知问题（未在本轮修复）

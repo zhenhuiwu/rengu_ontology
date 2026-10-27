@@ -302,6 +302,7 @@ async def disable_user(
 
 # ---- 角色与权限（Roles.vue，api-index §4.2；逻辑在 admin/roles.py）----
 
+
 def _workspace_scoped(dep):
     """角色页读写行级范围等按本体隔离的数据：先按 X-Ontology-Id 绑定工作空间，再检查功能权限。"""
 
@@ -534,3 +535,7 @@ router.include_router(tenant_settings_router)
 from app.modules.admin.model_settings import router as model_settings_router  # noqa: E402
 
 router.include_router(model_settings_router)
+
+from app.modules.admin.org_scope import router as org_scope_router  # noqa: E402
+
+router.include_router(org_scope_router)

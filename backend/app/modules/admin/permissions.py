@@ -63,6 +63,7 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
     legacy rows without either keep the label matching, where ambiguity is also deny.
     """
     from app.common.sql_guard import RoleAccess, effective_expr
+    from app.modules.admin.org_scope import ORG_PROP, load_org_fields
     from app.modules.static.models import ObjectStatus, ObjectType
 
     ontology_id = session.info.get("ontology_id")
@@ -90,6 +91,7 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
             )
         )
     )
+    org_fields = await load_org_fields(session)
     identities = {obj.api_name: {obj.code, obj.api_name, obj.display_name} for obj in objects}
     published_ids = {obj.id for obj in objects}
     output = {}
@@ -128,15 +130,19 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
                 if scope.object_type_id is not None or scope.object_type_code is not None:
                     if scope.object_type_id != obj.id:
                         continue
-                    scoped.append({"prop": scope.prop, "op": scope.op, "values": scope.values})
+                    item = {"prop": scope.prop, "op": scope.op, "values": scope.values}
+                    if scope.prop == ORG_PROP:
+                        item["field"] = org_fields.get(obj.code)  # 未配置 → None → scope_expr 拒绝
+                    scoped.append(item)
                     continue
                 if scope.obj_type not in names:
                     continue
                 # Duplicated labels must not transfer another object's scope or become unlimited.
                 ambiguous = len(by_label.get(scope.obj_type, ())) != 1
-                scoped.append(
-                    {"prop": "" if ambiguous else scope.prop, "op": scope.op, "values": scope.values}
-                )
+                item = {"prop": "" if ambiguous else scope.prop, "op": scope.op, "values": scope.values}
+                if item["prop"] == ORG_PROP:
+                    item["field"] = org_fields.get(obj.code)
+                scoped.append(item)
             if not scoped and unmapped:
                 scoped.append({"prop": "", "op": "=", "values": []})
             access.append(RoleAccess(view=True, default_deny=role.default_deny, scopes=tuple(scoped)))
