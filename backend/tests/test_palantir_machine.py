@@ -3,12 +3,16 @@
 import json
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import select
 
-from app.modules.action import policy as action_policy
+from app.core import clock
+from app.core.errors import Unauthorized
 from app.modules.action.models import ActionParam
-from app.modules.admin.models import SysRole
+from app.modules.admin.models import ServiceAccount, SysRole
+from app.modules.dynamic.models import ActionRun
 from app.modules.event.models import Event, EventSource
+from app.modules.machine.principal import actor_of, resolve_actor
 from tests.test_event_ingress import URL, body, ingress  # noqa: F401
 from tests.test_palantir_policy import set_policy
 from tests.test_use_ops_runtime import API, headers, runtime  # noqa: F401
@@ -78,21 +82,42 @@ async def test_machine_execute_scope_and_action_allowlist(runtime, client):  # n
     assert no_idem.status_code in (403, 422)
 
 
-async def test_service_account_caller_is_gated_by_policy(runtime, client):  # noqa: F811
+async def test_service_account_auto_executes_as_api_principal(runtime, client):  # noqa: F811
     session, action, _ = runtime
     role = await session.scalar(select(SysRole).where(SysRole.code == "R-01"))
     assert role is not None
-    _, auth = await service_key(client, ["actions:execute", "objects:read"])
+    code, auth = await service_key(client, ["actions:execute", "objects:read"])
     await set_policy(session, action, {"mode": "auto", "callers": ["人"], "limits": {"dailyCount": 5}})
     denied = await execute(client, auth)
     assert denied.status_code == 403 and denied.json()["code"] == "CALLER_NOT_ALLOWED", denied.text
-    await set_policy(session, action, {"mode": "auto", "callers": ["服务账号"], "limits": {"dailyCount": 5}})
-    staged = await execute(client, auth)
-    assert staged.status_code == 201 and staged.json()["status"] == "待确认", staged.text
-    assert staged.json()["overflowReason"] == action_policy.SERVICE_ACCOUNT_TEXT
-    # 转人工：任一有动作中心管理权限的人可确认（服务账号不是确认人）
-    done = await client.post(f"{API}/action-runs/{staged.json()['runId']}:confirm", headers=headers())
-    assert done.status_code == 200 and done.json()["status"] == "成功", done.text
+    await set_policy(session, action, {"mode": "auto", "callers": ["服务账号"], "limits": {"dailyCount": 1}})
+    done = await execute(client, auth, idem="sa-1")
+    assert done.status_code == 201 and done.json()["status"] == "成功", done.text
+    assert done.json()["overflowReason"] is None
+    run = await session.scalar(select(ActionRun).where(ActionRun.code == done.json()["runId"]))
+    assert run.created_by == f"api:{code}" and run.confirmer is None  # 执行主体是系统主体，不冒充真人
+    replay = await execute(client, auth, idem="sa-1")
+    assert replay.status_code == 200 and replay.json()["runId"] == done.json()["runId"]
+    over = await execute(client, auth)  # 超出上限仍转人工
+    assert over.status_code == 201 and over.json()["status"] == "待确认", over.text
+    assert "上限 1" in over.json()["overflowReason"]
+    confirmed = await client.post(f"{API}/action-runs/{over.json()['runId']}:confirm", headers=headers())
+    assert confirmed.status_code == 200 and confirmed.json()["status"] == "成功", confirmed.text
+
+
+async def test_api_principal_resolves_bound_role_and_rejects_revoked(runtime, client):  # noqa: F811
+    session, _, _ = runtime
+    code, _ = await service_key(client, ["actions:execute"])
+    user = await resolve_actor(session, f"api:{code}")
+    assert user.is_service_account and user.id == code and user.roles == ("R-01",)
+    assert actor_of(user) == f"api:{code}"
+    with pytest.raises(Unauthorized):
+        await resolve_actor(session, "api:SA-NOPE")
+    account = await session.scalar(select(ServiceAccount).where(ServiceAccount.code == code))
+    account.revoked_at = clock.now()
+    await session.flush()
+    with pytest.raises(Unauthorized):
+        await resolve_actor(session, f"api:{code}")
 
 
 # ---------- 入站事件：服务账号密钥 ----------

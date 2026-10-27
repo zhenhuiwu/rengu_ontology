@@ -10,8 +10,9 @@ import pytest
 import yaml
 from sqlalchemy import select
 
+from app.modules.action.models import ActionParam
 from app.modules.admin.models import SysUser
-from app.modules.event.models import EventPayloadField
+from app.modules.event.models import EventPayloadField, EventSource
 from app.modules.functions.models import FnParam, Function
 from tests.qa_access_support import seed_qa_access
 from tests.test_event_ingress import event_type
@@ -188,6 +189,29 @@ async def test_tools_export_formats_and_schemas(extras, client):
     )
     assert openai["action_OpsLocal"]["parameters"] == local
     assert (await client.get(f"{API}/machine/tools?format=xml", headers=headers())).status_code == 422
+
+
+async def test_tools_take_enum_and_events_from_capability_catalog(extras, client):
+    session, action, _ = extras
+    action.params.append(ActionParam(seq=1, name="标签", api="tags", type="枚举列表", rule_text="red / blue"))
+    synced = event_type("ops_synced")
+    synced.api, synced.source = "OpsSynced", EventSource.sync  # 已发布但非外部来源：入站拒收，不导出
+    session.add(synced)
+    await session.flush()
+    catalog = await client.get(f"{API}/meta/capabilities", headers=headers())
+    assert catalog.status_code == 200, catalog.text
+    events = {e["id"]: e["ingest"] for e in catalog.json()["events"]}
+    assert events["ops_signal"]["accepting"] and not events["ops_synced"]["accepting"]
+    body = await tools_of(client, headers())
+    tools = by_name(body)
+    tags = tools["action_OpsLocal"]["inputSchema"]["properties"]["params"]["properties"]["tags"]
+    assert tags["items"]["enum"] == ["red", "blue"]  # 目录 enum，工具侧不再解析参数规则
+    assert "event_OpsSynced" not in tools and "event_OpsSignal" in tools
+    bind = body["bindings"]["event_OpsSignal"]
+    signal = events["ops_signal"]
+    assert [bind[k] for k in ("method", "path", "scope")] == [signal[k] for k in ("method", "path", "scope")]
+    blocked = await key(client, ["meta:read", "events:ingest"], eventTypes=["OpsSynced"])
+    assert not any(n.startswith("event_") for n in by_name(await tools_of(client, blocked)))  # keyAllowed
 
 
 async def test_tools_respect_key_scopes_allowlists_and_policy(extras, client):

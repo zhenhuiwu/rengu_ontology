@@ -8,7 +8,7 @@ import httpx
 from pydantic import ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select
 
-from app.common.auth import check_func, resolve_user
+from app.common.auth import check_func
 from app.contracts.actions import ReconcileOutcome, ReconcileResult, SubmitResult, SubmitStatus
 from app.core import clock
 from app.core.errors import AppError, Conflict
@@ -20,8 +20,9 @@ from app.modules.dynamic.models import ActionRun, ActionStatus
 from app.modules.integration.action_edits import business_edits, execution_definition, target_access
 from app.modules.integration.adapters import get_adapter
 from app.modules.integration.models import CallKind, CallResult, ExtSystem, WritebackCall
-from app.modules.integration.signing import SigningSecretInvalid, encode_body, resolve_secret, signed_headers
 from app.modules.integration.reconcile import DatabaseReconcileScheduler, lock_run, resolved, to_manual
+from app.modules.integration.signing import SigningSecretInvalid, encode_body, resolve_secret, signed_headers
+from app.modules.machine.principal import actor_of, resolve_actor
 
 QUEUED = "ACTION_DISPATCH_QUEUED"
 CLAIMED = "ACTION_DISPATCH_CLAIMED"
@@ -103,7 +104,7 @@ class DatabaseActionSubmitter:
             action_run_id=run.id, kind=CallKind.write, at=clock.now(), op_name=run.action_name,
             target_label=run.obj_label or run.code, method="POST", path=target_url,
             idem_key=run.idem_key, elapsed_ms=0, http_status=None, result=CallResult.unknown,
-            attempt=0, actor=self.user.id, msg=QUEUED))
+            attempt=0, actor=actor_of(self.user), msg=QUEUED))
         await self.session.flush()
         return SubmitResult(SubmitStatus.UNKNOWN, reason="已持久排队，尚未调用外部系统；等待执行器处理",
                             code="QUEUED", elapsed_ms=0)
@@ -127,7 +128,7 @@ async def dispatch_one(call_id, ontology_id: int):
         if call.msg != QUEUED or run.status != ActionStatus.unknown:
             return
         try:
-            user = await resolve_user(session, call.actor)
+            user = await resolve_actor(session, call.actor)
             definition = await preflight(session, user, run)
             system = await session.get(ExtSystem, call.sys_id)
             adapter = submit_adapter(system, definition)
