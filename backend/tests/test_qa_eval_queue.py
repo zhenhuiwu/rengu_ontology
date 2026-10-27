@@ -16,6 +16,7 @@ from app.core import clock
 from app.core.errors import AppError
 from app.db import session as db_session
 from app.modules.admin.models import SysRole, SysRoleMember, SysUser
+from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
 from app.modules.qa.eval import job, queue, worker
 from app.modules.qa.llm import FakeLLM
 from app.modules.qa.models import QaEvalQuestion, QaEvalRun, QaSession, RunStatus
@@ -47,12 +48,28 @@ async def durable(engine, monkeypatch):
     from app.modules.qa import llm as llm_module
 
     token = "durable-" + uuid4().hex[:12]
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.common.ontology import DEFAULT_ONTOLOGY_ID
+
+    # ontology_0018 起领域表强制 RLS：这里自建的会话也落在默认空间（after_begin 按 info 设 rengu.ontology_id）
+    factory = async_sessionmaker(engine, expire_on_commit=False, info={"ontology_id": DEFAULT_ONTOLOGY_ID})
     monkeypatch.setattr(db_session, "get_engine", lambda: engine)
     monkeypatch.setattr(db_session, "get_sessionmaker", lambda: factory)
     monkeypatch.setattr(db_session, "get_qa_readonly_engine", lambda: engine)
+    from app.jobs import scope as job_scope  # 启动恢复按空间枚举，自己开会话（不带默认空间）
+
+    plain = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(job_scope, "get_sessionmaker", lambda: plain)
     fake = FakeLLM('select 1 as "持久队列指标"')
-    monkeypatch.setattr(llm_module, "get_llm", lambda: fake)
+    monkeypatch.setattr(llm_module, "get_llm", lambda *_a, **_k: fake)
+    from app.modules.qa import chain
+
+    async def answer(_s, _conn, llm, _user, question, **ctx):
+        # 这里只测队列 / 事务 / worker；问数链路本身（要受治理的数据源）在 test_qa_chain 测。
+        # 把执行上下文原样交给模型，验证 worker 带上了会话范围和口径。
+        await llm.generate_sql([{"role": "user", "content": f"{question}\n{ctx}"}])
+        return "ok", {"answer": {"table": {"columns": [{"title": "持久队列指标"}]}}}
+
+    monkeypatch.setattr(chain, "answer", answer)
     app = procrastinate.App(
         connector=procrastinate.PsycopgConnector(
             conninfo=engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
@@ -64,6 +81,7 @@ async def durable(engine, monkeypatch):
             installed = await c.scalar(text("SELECT to_regclass('procrastinate_jobs') IS NOT NULL"))
         if not installed:
             await app.schema_manager.apply_schema_async()
+        await app.connector.execute_query_async(query=worker.GRANT_RUNTIME)  # 同 --install-schema
         async with factory() as s:
             user = SysUser(code=token, name=token)
             role = SysRole(
@@ -77,6 +95,8 @@ async def durable(engine, monkeypatch):
             s.add_all([user, role])
             await s.flush()
             s.add(SysRoleMember(role_id=role.id, user_id=user.id, seq=0))
+            s.add(OntologyMember(ontology_id=DEFAULT_ONTOLOGY_ID, user_id=user.id, role="editor"))
+            s.add(OntologyRoleBinding(ontology_id=DEFAULT_ONTOLOGY_ID, role_id=role.id))
             s.add(
                 QaSession(
                     code=token,
@@ -103,7 +123,7 @@ async def durable(engine, monkeypatch):
             s.add(
                 QaEvalQuestion(
                     code=token,
-                    question="持久测试",
+                    question=f"持久测试 {token}",
                     group_name="销售",
                     expect={"metric": token, "dims": [], "time": "上周"},
                 )
@@ -113,7 +133,7 @@ async def durable(engine, monkeypatch):
         try:
             yield factory, app, actor, token, fake
         finally:
-            async with engine.begin() as c:
+            async with factory() as c, c.begin():  # 带空间范围，否则 RLS 下删不到
                 codes = select(QaEvalRun.code).where(QaEvalRun.operator == token)
                 await c.execute(
                     text(
@@ -126,6 +146,8 @@ async def durable(engine, monkeypatch):
                 await c.execute(delete(QaEvalQuestion).where(QaEvalQuestion.code == token))
                 await c.execute(delete(Metric).where(Metric.code == token))
                 await c.execute(delete(QaSession).where(QaSession.code == token))
+                uid = select(SysUser.id).where(SysUser.code == token).scalar_subquery()
+                await c.execute(delete(OntologyMember).where(OntologyMember.user_id == uid))
                 await c.execute(delete(SysUser).where(SysUser.code == token))
                 await c.execute(delete(SysRole).where(SysRole.code == token))
 
@@ -247,8 +269,8 @@ names = {
     name for name in app.tasks
     if not name.removeprefix('builtin:').startswith('procrastinate.builtin_tasks.')
 }
-assert names == {'qa.eval.run'}
-assert not app.periodic_registry.periodic_tasks
+assert names == {'qa.eval.run', 'qa.eval.generate', 'qa.eval.daily'}
+assert {k for k, _ in app.periodic_registry.periodic_tasks} == {'qa.eval.generate', 'qa.eval.daily'}
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 async def main():

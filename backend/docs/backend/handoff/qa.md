@@ -147,14 +147,28 @@
   - 评测后修正按存档 SQL 回放：作答 67/74（020 / 046 / 100 转对、无回退）；加上 006 / 025 / 095 若回喂生效可到 70/74。下一轮真模型评测核实。
 - **静态 `semantic_map` 缺的字段（已列给静态，不在 qa 写死）**：dimValue 显式 `level`（现在只能从 id 前缀猜）、父取值、状态、计数；dimension 的 `levels`（有序 api / name / 来源列）、`qa.defaultLevel`、`qa.unspecified`、`qa.nullAs`、对象 / 属性 / 物理列绑定；metric 的 execDef（timeField、defaultFilter）、公式、状态、描述、同义词（现为空）；property 的 api ≠ 物理列（如 region_code vs big_region），缺物理绑定。
 
+### 2.0d qa-p5（10-27，基线 master `2300d48`，本批无新迁移）已做
+- **扇出确定性改写**（052 类，`sqlfix.preaggregate_children`，sqlglot AST，按外键元数据、不认业务词）：同一 SELECT 里 join 了上层表和它的明细表，且对上层列做 SUM / AVG（或 `FROM 上层` 的 COUNT(*)）时，把叶子明细表换成按 join 键先汇总的派生表，明细侧聚合改成对汇总列再聚合（SUM→SUM、COUNT→COALESCE(SUM)、MIN/MAX 不变、AVG→ΣS/ΣN）；只在改完该 SELECT 不再扇出时生效，做不到原样不动，再由 qa-p4 的扇出检查回喂一次兜底（`chain.py` 先改写、后检查）。没走指标层直出（MetricFlow 缺口见 2.0b）。
+- **订阅摘要推送**（`page_schedule.send_digests`，随每分钟 `qa.page.sweep` 跑）：「每天 09:00 / 每周一 09:00」（`display_tz`）每个时段出一条摘要（标题 / 每张卡的值或前几行 / 数据截至 / 链接），「每次刷新后」订阅在刷新成功后出一条（`only_changed` 时结果没变不出；摘要时段同理按指纹去重）。问数自己没有投递通道，一律写事务性 outbox（`app.common.outbox.emit`，主题 `qa.page.subscription`，`event_id` 带页面 + 订阅 + 时段键，多实例只出一条；时段后 3 小时内补发）。收件人只认页面所有者和共享成员（姓名 → 用户编号，对不上的放 `unresolved`）。**真正投递要通知侧改**，见文末清单第 1 条。
+- **每日自动跑评测**（`eval/daily.py`，周期任务 `qa.eval.daily`，cron `0 3 * * *`，晚于 02:30 出题；登记在评测 worker `python -m app.modules.qa.eval.worker`，队列 `qa-eval`）：逐工作空间建一条 `qa_eval_run`（触发方式「每日自动」）并在同一事务入队，由既有 `qa.eval.run` 执行、结果照常写 `qa_eval_run` / `qa_eval_fail` / 每题 last_result；同一天已有运行或已排队 → 跳过；发起身份 = 本空间最近一次评测发起人（须仍有 qa-tuning 管理权），没有就跳过并记日志。worker 启动时若有 `rengu_ontology_scoped` 角色会补 GRANT（procrastinate 表）。**已登记，未对真模型跑过**。
+- **静态 `semantic_map` 新字段（static-t7）已接**（`value_index.py`、`sqlfix.path_top_level`、`chain._metric_meta / _semantic_props`）：维度先按 `levels[].table/column` / `binding` 物理绑定对上受治理列，层级按 `levels` 顺序，默认层级 = `defaultLevel`（`context.json` 的 `hierarchyLevel` 仍可覆盖）；`dimValue.level / levelNo / parentValue` 直接用，**不再按 id 前缀猜**；`property.column` 对物理列；`metric.synonyms / desc` 进指标提示。快照没有这些字段的本体才退回旧的重合 / id 前缀推断。
+- **多对象动态摘要**（`dynamic_ctx.named_objects / result_objects / objects_summary`）：点名多个对象或表格结果带对象业务编号 → 最多扫 10 个，只留有未关闭告警的，按告警数取前 3，`answer.dynamicSummaries` + citations + 表格文字末尾「动态提示：…」。
+- **palantir-t7 humanChecks / declaredEdits**（`intent.py`、`dynamic_ctx._check_of`、`chain.py`）：动作卡 `dryRun.humanChecks`（不算失败，文字提示「另有 N 项提交条件需确认人人工核对」）、`dryRun.declaredEdits` + `action.declaredSummary`（「由外部系统承担（本地不执行）：…」，进程内调 `integration.action_edits.declared_writeback`）；决策评估建议也带。SSE `suggest` 事件即 `answer.action`，字段同。前端确认卡**未改**（见清单）。
+- **评测（真模型 qwen-flash，一次，私有库 `rengu_test_qa_p5e` 用 `setup_db` 新建，含 static-t7 字段；`summary_p5.json` / `result_all_p5.json`）**：**96 / 100**（qa-p4 90）：作答 **70/74**（64）、拒答 16/16、反问 10/10；相对 p4 无回退。
+  - 核实项：025、095 转对（`overrule_clarify` 生效）；006 不再反问，但只返回「乳品」1 行（gold 乳品 / 粮油调味各 3），仍错；p4 回放的 020 / 046 / 100 真模型也对（67/74 已达成）；052 由扇出改写转对（说明「明细表 order_line 先按关联键汇总再关联」，数值与 gold 一致）。
+  - 仍错 4 题：006（见上）、012（gold 不剔除已取消，与口径裁定冲突，题库问题）、015（模型偶发 SQL_REJECTED）、048（客单价分母口径，见清单第 8 条）。
+  - **自动出题过拟合抽查**（新工具 `eval/auto.py`，按本体元数据现拼题、不写库，确定性抽 20 题：指标 15 / 动作 5，池子 25 / 10；`summary_auto_p5.json`）：**7 / 20**（指标 4/15、动作 3/5）。100 题 96 分而自动题 7/20，说明有过拟合 / 规则冲突，见清单第 10 条。
+- **接口文档**：`frontend/docs/backend/qa-api.md` 补 `dynamicSummaries`、humanChecks / declaredEdits、取值层级来源三条。
+- **测试**（私有库 `rengu_test_qa_p5t`）：新增 / 改 `test_qa_value_index.py`（t7 字段绑定、属性物理列）、`test_qa_eval_gen.py`（每日运行）、`test_qa_eval_queue.py`、`test_qa_page_schedule.py`（摘要时段 / 去重 / 收件人）、`test_qa_dynamic_semantic.py`（多对象摘要、humanChecks / declaredEdits 卡）。结果见本节末与清单「已知测试失败」。
+
 ### 2.0.1 剩余（按优先级）
 | 项 | 说明 |
 |---|---|
-| 订阅推送 | 定时刷新已做（qa-p3，等动态加 hook）；订阅（每天 / 每周）到期只写审计，推送通道 / 摘要内容未做 |
-| 自动评测 | 自动出题已做（qa-p3）；每日自动**跑**评测未接（要定发起身份与模型额度）；101+ 留出题未加 |
+| 订阅推送 | 摘要内容 + outbox 事件已做（qa-p5）；实际投递等通知侧（见文末清单 1） |
+| 自动评测 | 自动出题（qa-p3）+ 每日自动跑（qa-p5，已登记未实跑）；101+ 留出题未加 |
 | MetricFlow 引擎缺口 | 已接链路（qa-p3）；引擎缺口见 2.0b，找小白 |
 | MCP SDK | MCP 现在是自写的最小 JSON-RPC（够 tools 用）；官方 `mcp` Python SDK（MIT）未装，`pyproject.toml` 不归 qa，要换 SDK / 加 streamable-HTTP 会话、SSE 通知时找 PDE 加依赖 |
-| 动态摘要 | 单对象已做（qa-p3）；多对象 / 列表级摘要未做 |
+| 动态摘要 | 单对象（qa-p3）+ 多对象前 3（qa-p5）已做；前端未展示 `dynamicSummaries` |
 | 旧 X1 stageAction 路径 | 前端旧的非建议动作路径 `POST /action-runs:stage` 用 `source.type='问数'`，动态路由只收 `手动` → 被拒（既有问题）；新路径走 W7a |
 | 达梦 / 金仓方言 | sqlglot 方言、DDL 编译与 statement_timeout 适配 |
 | 测试夹具 | 测试用户在本体 1 是 viewer，大量 qa POST 测试 403（基线即如此），要与 auth / ontology owner 对齐夹具 |
@@ -176,13 +190,14 @@
 | 我的页面 | 计数单独多一次请求；删除后停在空的后一页，应回退一页 | `MyPages.vue` |
 | 注释 | `PageDrawer.vue:11` 注释过时 | `src/pages/qa/pages/PageDrawer.vue` |
 | FeedbackTab | `FeedbackTab.vue` 的改动在 qa 允许路径外，待 PDE 确认 | `FeedbackTab.vue` |
-| 评测分 | 90 / 100（qa-p4）：作答 64/74 仍差 3 题到 67、拒答 16/16、反问 10/10；评测后修正待真模型复测（见 2.0c） | `eval/results/summary_p4.json` |
+| 评测分 | 96 / 100（qa-p5）：作答 70/74、拒答 16/16、反问 10/10；自动题抽查 7/20（见 2.0d、清单 10） | `eval/results/summary_p5.json`、`summary_auto_p5.json` |
 | 指标口径变体 | 静态按指标名的（…）后缀推出变体，静态会改成显式字段；qa 按标签匹配，届时核对 | `service.py` `variant_index` |
 | 筛选/关键词含 NUL | 值或关键词带 `\u0000` 时 search/export 仍 500（PostgreSQL 拒绝）；应与静态 `_scalar` 一起拦成 422（动态评审非阻塞 ①） | `explore_api.py` |
 | 排序键前缀 | 排序键用 `lstrip("-")`，`--key` 也能过；改成只去一个 `-`（动态评审非阻塞 ②） | `explore_api.py` |
 
 ### 2.1 链路未完成 / 待裁定
-- **最近评测分（qa-p4，真模型，私有库 `rengu_test_qa_p4`）**：**90 / 100**（作答 64/74、拒答 16/16、反问 10/10），失败题与原因见 2.0c。
+- **最近评测分（qa-p5，真模型，私有库 `rengu_test_qa_p5e`）**：**96 / 100**（作答 70/74、拒答 16/16、反问 10/10），自动题抽查 7/20，见 2.0d。
+- **再上次（qa-p4，私有库 `rengu_test_qa_p4`）**：**90 / 100**（作答 64/74、拒答 16/16、反问 10/10），失败题与原因见 2.0c。
 - **上上次评测分（qa-p3，真模型，私有库 `rengu_test_qa_p3`，master `4277bd2` 之上）**：**77 / 100**，`backend/seeds/extra/qa/eval/results/summary_p3.json`（作答 57/74、拒答 14/16、反问 6/10）。失败 23 题：作答 006、012、014、016、017、022、024、025、034、042、048、052、062、067、085、091、095；反问 058、066、068、070；拒答 080、081。
   - 与 76/100 不完全可比：① 题目 `asScope` 现在当会话范围传入（3 题，过 1；025 / 081 范围没收窄）；② ontology_0018 后 seed 的 U010001 不再挂角色，评测身份改为「无行级范围的角色里编号最小的成员」（现为 U010245，可用 `QA_EVAL_USER` 覆盖）——第一次跑用了无角色身份，作答 3/74，作废重跑；③ `setup_db` 补了 RLS 作用域、`load_sections()` 与空间 1 成员映射（否则灌种子 / resolve_user 失败）。
   - 作答回落主要在：零售组 / 区域名（024、085「华东N区」返回 0，疑似区域维度取值与 dim_value 对不上）、口径（012 优惠、042/067 GMV 已出库、048 客单价、052 含税）、品类层级（006、016 返回「乳品/常温奶」二级而 gold 为一级）。
@@ -226,3 +241,69 @@
 - 敏感 / 隐藏属性后台也拦：筛选键须 facetable，排序键须 sortable 且不敏感不隐藏；搜索结果、详情、`boundProps`、导出都不带；关键词只匹配可搜索且可见的属性，没有就忽略关键词（不再拿第一列兜底）。
 - 前端：后台不通时导出直接报错，不导出演示数据。
 - 未做：`router.py` 新建会话的系统话术写死「按 大区 = …」（应换成范围维度名，待 row-scopes 维度上线再改）[推断]；`objMeta.ts loadStaticFacets` 任何错误都回落过渡分面（422 也回落），可改成只在 `isBackendDown` 时回落。
+
+## 未完成清单（交 Codex）
+
+> 截至 qa-p5（基线 master `df09e5b`）。分类：**待定** = 要老板 / PDE 拍板；**Codex 修复** = 范围清楚、可直接改；**环境问题** = 部署 / 演示库配置，不是代码。
+
+1. **页面订阅摘要的实际投递（通知侧）**
+   - 是什么：问数已按时段把摘要写进 outbox（主题 `qa.page.subscription`，payload 含 `to` 用户编号、`channel` / `channelLabel`、`title` / `text` / `link`、`slot`、`fingerprint`），但没人消费，用户收不到。
+   - 为什么没做：Codex 修复（不在 qa 路径）。需要：① `app.jobs.dispatch_outbox` 现在是空桩（`# EXTENSION POINT (PDE)`，返回 0），要实现扫描 + 投给 `outbox.subscribe` 的订阅者；② 通知侧订阅 `qa.page.subscription`，按 `to` 给每人写站内信；③ `notification.source_event_id`（FK `cr_event`）和 `cr_id`（FK `change_request`）都是 NOT NULL，非变更单来源写不进，要改成可空或加通用来源字段（`source_kind` / `source_ref`）+ 新迁移；④ 邮件 / 企业微信通道（通知模块现在只做站内信）。
+   - 涉及文件和接口：`app/jobs/__init__.py` `dispatch_outbox`；`app/common/outbox.py` `subscribe`；`app/modules/notifications/models.py`、`service.py`；问数侧 `app/modules/qa/page_schedule.py` `TOPIC` / `_payload` / `send_digests`。
+   - 怎么验证：`test_qa_page_schedule.py` 已验 outbox 行；补一条集成测试：建每日订阅的页面 → 推时钟到 09:00 → 跑 `qa.page.sweep` + `outbox.dispatch` → 所有者和共享成员各收到一条通知、同一时段重跑不重复。
+
+2. **问数只读账号 / worker 需要 `rengu_ontology_scoped`**
+   - 是什么：问数只读连接 `SET LOCAL ROLE rengu_ontology_scoped`（qa-p1），账号不是该角色成员就 503；评测 worker 在这个角色下访问 procrastinate 表需要 GRANT（integration / event worker 也有同样缺口）。
+   - 为什么没做：环境问题（部署账号授权，不是 qa 代码）。`eval/worker.py` 启动时如有该角色会补 `GRANT … TO rengu_ontology_scoped`，但给账号授角色仍要 DBA 做。
+   - 涉及文件和接口：`app/modules/qa/readonly.py` `scope_readonly_conn`；`app/modules/qa/eval/worker.py` `GRANT_RUNTIME`；procrastinate 表。
+   - 怎么验证：演示库执行 `GRANT rengu_ontology_scoped TO <qa 只读账号>;` 后问一题不再 503；起评测 worker，`qa.eval.run` 能取到任务。
+
+3. **演示环境：dev 库 `rengu` 缺新演示种子 + worker 未起**
+   - 是什么：dev 库 `rengu` 是 Codex 的真快照，没有 qa-p3 起的演示种子（告警 → 决策 → 确认卡、页面订阅、自动评测题）；带 `qa_pages` 队列的动态 worker、评测 worker（`qa-eval` 队列：`qa.eval.generate` 02:30 / `qa.eval.daily` 03:00 / `qa.eval.run`）都没起。
+   - 为什么没做：环境问题（规定 qa 不往 `rengu` 写、不在其上起后台 worker）。
+   - 涉及文件和接口：`python -m app.cli seed`（或只灌 qa / 动态演示种子）；`app.modules.dynamic.worker`（`queues=[QUEUE, "qa_pages"]`）；`python -m app.modules.qa.eval.worker`。另见 2.0b「演示环境配置」三条（`request_replenish` 审批人、提交条件、已暂存动作）。
+   - 怎么验证：dev 库灌完后 `tests/test_qa_tier1_demo.py` 同样的流程手工走一遍；`procrastinate_periodic_defers` 里出现 `qa.page.sweep` / `qa.eval.daily`。
+
+4. **每日自动评测：已登记，未对真模型跑过**
+   - 是什么：`qa.eval.daily` 每天给每个空间建一条评测运行并入队（2.0d）。
+   - 为什么没做：待定（要定发起身份和模型额度；按要求本批不在真模型上跑后台任务）。
+   - 涉及文件和接口：`app/modules/qa/eval/daily.py`、`eval/worker.py`、`eval/job.py`；表 `qa_eval_run` / `qa_eval_fail` / `qa_eval_question.last_result`；前端 T11 评测页。
+   - 怎么验证：私有库起评测 worker，`RENGU_FIXED_NOW` 设到 03:00 后，`qa_eval_run` 多一条「每日自动」并跑完，同日重复触发不新增。
+
+5. **MetricFlow 没有 time spine，累计 / 补零查询不可用**
+   - 是什么：指标层直出遇到累计、按日补零类问题编不出，退回 SQL 路径（模型自写，准确率不稳）；扇出类（052）也因此没走指标层直出，用的是 sqlglot 改写。
+   - 为什么没做：待定（老板决定，引擎归小白）。
+   - 涉及文件和接口：`app/modules/qa/semantic.py`；小白 `metricflow_engine`（另缺月 / 周粒度、跨语义模型维度、IN / LIKE 过滤、传入只读连接）。
+   - 怎么验证：引擎有 time spine 后，「近 7 天每天的销售额（没单的天记 0）」走 `metricQuery` 且返回 7 行。
+
+6. **动作确认卡的 humanChecks / declaredEdits 怎么展示**
+   - 是什么：后端已在 `answer.action.dryRun.humanChecks`、`action.humanChecks`、`dryRun.declaredEdits`、`action.declaredSummary` 和文字里给出（2.0d），前端确认卡没展示，「人工核对项是否要确认人逐条勾选后才能 stage」也没定。
+   - 为什么没做：待定（老板定展示和是否强制勾选），前端随后 Codex 修复。
+   - 涉及文件和接口：`app/modules/qa/intent.py` `action_snapshot` / `with_declared`；SSE `suggest`；`POST /turns/{tid}/action:stage`；前端 `src/pages/qa/components/QaAnswer.vue`（动作卡）。
+   - 怎么验证：`test_qa_dynamic_semantic.py::test_action_card_shows_human_checks_and_declared_edits` 已验后端；前端用 Webhook 类动作问一题，卡上列出人工核对项与「由外部系统承担」。
+
+7. **前端未展示多对象动态摘要**
+   - 是什么：`answer.dynamicSummaries` / SSE `citations.dynamicSummaries` 已有，前端只渲染了单对象 `dynamicSummary`（表格文字末尾的「动态提示」能看到）。
+   - 为什么没做：Codex 修复（本批只做后端）。
+   - 涉及文件和接口：`QaAnswer.vue` / `QaConversation.vue`、`src/api/qa.ts` 类型；`qa-api.md` 动态摘要两条。
+   - 怎么验证：问「列出告警最多的几个门店」类问题，卡片下方出现最多 3 个对象的告警提示。
+
+8. **048 客单价分母口径**
+   - 是什么：gold = 有效订单数（≠ 已取消），模型常用明细行 COUNT(*)；扇出改写能把行数改对，但「有效」的过滤口径仍可能不对。
+   - 为什么没做：待定（指标定义页「默认过滤 已出库」与公式「≠ 已取消」冲突，见 2.1 静态第 9 条，要静态 owner 定）。
+   - 涉及文件和接口：`seeds/extra/qa/caliber/1/notes.json`；静态指标 `execDef`；`sqlfix.preaggregate_children`。
+   - 怎么验证：口径定后 `eval.run 48-48` 通过。
+
+9. **已知测试失败 / 注意**
+   - 是什么：`test_qa_dynamic_semantic.py::test_single_object_summary_attached` 单独跑会失败（受治理表在第一次请求时才登记，直接调 `dynamic_ctx` 拿不到），整文件跑通过——测试顺序依赖，qa-p3 起就有；另外基线遗留：测试用户在本体 1 是 viewer，部分旧 qa POST 测试 403（见 2.0 / 2.0.1「测试夹具」）。
+   - 为什么没做：Codex 修复（夹具问题，不影响功能）。
+   - 涉及文件和接口：`tests/test_qa_dynamic_semantic.py`、`tests/conftest.py`、`app/common/sql_guard.governed_tables`。
+   - 怎么验证：给该用例加一个先登记受治理表的夹具后，`pytest tests/test_qa_dynamic_semantic.py::test_single_object_summary_attached` 单独通过。本批跑的 10 个 qa 测试文件（tier1_demo、dynamic_semantic、value_index、eval_gen、eval_queue、page_schedule、chain、mcp、stream、intent_eval）在 `2300d48` 上 116 passed（`df09e5b` 只多了文档提交）。
+
+10. **自动出题抽查 7/20：过拟合 / 规则冲突信号**
+    - 是什么：真模型跑 20 道按元数据拼的题，13 题失败：① 只说指标名（「销售额（不含税）」「有效订单数」等 4 题）→ 被 qa-p4 的「只说了指标没时间 / 维度 / 取值 → 反问范围」规则反问，而 `job.judge` 要求直接作答（与早先「只缺时间不问」冲突，规则是按 100 题库调的）；② 没数据的指标（退款率 ×2、毛利率 ×2、新增会员数、退款审核动作）→ 正确拒答，但出题没排除无数据指标，判成失败；③「按仓库看出库及时率」列名是 `warehouse` 没用维度名，判维度缺失；④「平均出库时长」模型 SQL 解析失败（SQL_REJECTED 类，真缺陷）；⑤「给一个 store 发起变更门店状态」反问是哪个门店（合理，判分过严）。
+    - 为什么没做：待定（①要 PDE 定「只给指标名」该反问还是按默认范围直接答，定了再统一提示词 / `guards` 与 `job.judge`）+ Codex 修复（②出题跳过 refuse.json 里无数据的指标、或判分把「无数据拒答」算过；③作答列名用维度显示名；④查 `ship_avg` 的 SQL；⑤动作题允许「反问对象」）。本批按要求不再加功能。
+    - 涉及文件和接口：`app/modules/qa/guards.py`（指标无范围反问）、`chain.py` 提示词、`eval_gen.py`、`eval/job.py` `judge` / `judge_action`、`seeds/extra/qa/caliber/1/refuse.json`；抽查工具 `eval/auto.py`、结果 `seeds/extra/qa/eval/results/result_auto_p5.json`。
+    - 怎么验证：改完重跑 `TAG=_px N=20 python -m app.modules.qa.eval.auto` 与 100 题 `eval.run all`，自动题明显上升且 100 题不低于 96。
+
+11. **其它已列未做（见 2.0.1 表）**：101+ 留出题、MCP 官方 SDK、达梦 / 金仓方言、sql_guard 只认本体 1（归治理）、旧 X1 stageAction 路径、并发 id、`explore_api` NUL / 排序键前缀等。分类以 2.0.1 表为准，验证方式写在各行。

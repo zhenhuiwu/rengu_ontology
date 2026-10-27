@@ -4,6 +4,9 @@
   同一个服务（`ObjectDynamicSummary`），进 prompt、回答（`answer.dynamicSummary`）和 W7 citations。
   门槛同告警引用：对象读取权限（object-search / object-detail，同该接口入口）；各段权限由动态服务按段判；
   API 密钥调用另由 mcp_tools 按 dynamic:read 兜底去掉。读失败 → 不带。
+- 多对象动态摘要：问题点名了多个对象实例，或表格结果里出现了多个对象实例（code 列取值）时，逐个取同一个
+  服务的摘要（最多 MULTI_SCAN 个），只留有未关闭告警的、按未关闭告警数倒序取前 MULTI_TOP 个，
+  进 prompt / 回答（`answer.dynamicSummaries`）/ citations。门槛同单对象。
 - 决策评估：问题是“某告警 / 某对象该怎么处理”或模型给出动作意图时，走 `POST /decisions:evaluate`
   同一个服务（`DecisionService.evaluate`），确认卡上列排序后的建议；caller 带 AI 会话 / 轮次，动态侧写
   decision_log。只建议、不暂存、不执行。读失败 / 没有建议 → 退回能力目录（capabilities）那条路。
@@ -19,6 +22,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 SUMMARY_LIMIT = 5
+MULTI_SCAN = 10  # 多对象：最多取这么多个对象的摘要
+MULTI_TOP = 3  # 多对象：回答里列有告警的前几个
 DECISION_LIMIT = 5
 CODE_COL = "code"  # 对象实例编号列（动态摘要的 objId = 表的 code 列）
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_\-]{2,63}")
@@ -63,42 +68,72 @@ def key_scopes(request: Any) -> tuple[str, ...] | None:
 async def single_object(
     session: AsyncSession, question: str, names: dict[str, list[str]]
 ) -> dict[str, str] | None:
-    """问题只点名一个对象实例 → {kind, id, label}（见 `_single_object`）；读失败 → None。"""
+    """问题只点名一个对象实例 → {kind, id, label}；点名多个 / 一个都没有 / 读失败 → None。"""
+    objs = await named_objects(session, question, names)
+    return objs[0] if len(objs) == 1 else None
+
+
+async def named_objects(
+    session: AsyncSession, question: str, names: dict[str, list[str]]
+) -> list[dict[str, str]]:
+    """问题点名的对象实例 [{kind, id, label}]（最多 MULTI_SCAN 个）；读失败 → []。"""
     try:
         async with session.begin_nested():
-            return await _single_object(session, question, names)
+            return await _named_objects(session, question, names)
     except Exception:
-        return None
+        return []
 
 
-async def _single_object(
-    session: AsyncSession, question: str, names: dict[str, list[str]]
-) -> dict[str, str] | None:
-    """问题只点名一个对象实例 → {kind, id, label}；点名多个 / 一个都没有 → None。
-
-    两种点名（都从数据推，不写死）：问题里出现某张可问表 code 列的取值；或出现名称列的完整取值
-    （去掉通用后缀也算，如“张江”对“张江店”），且该名称只对应一个 code。
-    """
+def _gov(session: AsyncSession) -> dict[str, Any]:
     from app.common.ontology import require_ontology_id
     from app.common.sql_guard import governed_tables
-    from app.modules.qa.chain import _strip_suffix, name_suffix
 
     oid = require_ontology_id(session)
-    gov = {g.table.name: g for g in governed_tables(oid).values() if not getattr(g, "inherit", False)}
+    return {
+        g.table.name: g
+        for g in governed_tables(oid).values()
+        if not getattr(g, "inherit", False) and CODE_COL in g.table.c
+    }
+
+
+def _label_col(t: Any) -> Any:
+    return t.c["name"] if "name" in t.c else t.c[CODE_COL]
+
+
+async def _codes_in(session: AsyncSession, values: list[str]) -> dict[tuple[str, str], str]:
+    """这些取值里哪些是某张可问表 code 列的取值 → {(对象类型, code): 名称}。"""
+    found: dict[tuple[str, str], str] = {}
+    if not values:
+        return found
+    for g in _gov(session).values():
+        t = g.table
+        rows = await session.execute(
+            sa.select(t.c[CODE_COL], _label_col(t)).where(t.c[CODE_COL].in_(values)).limit(MULTI_SCAN)
+        )
+        for code, label in rows:
+            found[(g.object_type, str(code))] = str(label or code)
+        if len(found) >= MULTI_SCAN:
+            break
+    return found
+
+
+def _as_list(found: dict[tuple[str, str], str]) -> list[dict[str, str]]:
+    return [{"kind": k, "id": c, "label": label} for (k, c), label in list(found.items())[:MULTI_SCAN]]
+
+
+async def _named_objects(
+    session: AsyncSession, question: str, names: dict[str, list[str]]
+) -> list[dict[str, str]]:
+    """两种点名（都从数据推，不写死）：问题里出现某张可问表 code 列的取值；或出现名称列的完整取值
+    （去掉通用后缀也算，如“张江”对“张江店”），且该名称只对应一个 code。
+    """
+    from app.modules.qa.chain import _strip_suffix, name_suffix
+
     q = re.sub(r"\s", "", question)
     tokens = list(dict.fromkeys(_TOKEN.findall(question)))[:10]
-    found: dict[tuple[str, str], str] = {}
-    for name, g in gov.items():
+    found = await _codes_in(session, tokens)
+    for name, g in _gov(session).items():
         t = g.table
-        if CODE_COL not in t.c:
-            continue
-        label_col = t.c["name"] if "name" in t.c else t.c[CODE_COL]
-        if tokens:
-            rows = await session.execute(
-                sa.select(t.c[CODE_COL], label_col).where(t.c[CODE_COL].in_(tokens)).limit(3)
-            )
-            for code, label in rows:
-                found[(g.object_type, str(code))] = str(label or code)
         vals = names.get(name) or []
         suffix = name_suffix(vals)
         hits = [
@@ -106,18 +141,32 @@ async def _single_object(
         ]
         # 名字互相包含时（“张江店”与“张江二店”）只认最长的那个
         hits = [v for v in hits if not any(v != w and v in w for w in hits)]
-        if len(hits) == 1:
+        for hit in hits[:MULTI_SCAN]:
             rows = (
-                await session.execute(sa.select(t.c[CODE_COL]).where(label_col == hits[0]).limit(2))
+                await session.execute(sa.select(t.c[CODE_COL]).where(_label_col(t) == hit).limit(2))
             ).all()
             if len(rows) == 1:
-                found[(g.object_type, str(rows[0][0]))] = hits[0]
-        if len(found) > 1:
-            return None
-    if len(found) != 1:
-        return None
-    (kind, code), label = next(iter(found.items()))
-    return {"kind": kind, "id": code, "label": label}
+                found[(g.object_type, str(rows[0][0]))] = hit
+        if len(found) >= MULTI_SCAN:
+            break
+    return _as_list(found)
+
+
+async def result_objects(session: AsyncSession, rows: list[Any]) -> list[dict[str, str]]:
+    """表格结果里出现的对象实例（文本单元格是某张可问表的 code 取值）；读失败 → []。"""
+    vals = list(
+        dict.fromkeys(
+            str(v)
+            for r in rows
+            for v in (r if isinstance(r, list | tuple) else ())
+            if isinstance(v, str) and v
+        )
+    )[:200]
+    try:
+        async with session.begin_nested():
+            return _as_list(await _codes_in(session, vals))
+    except Exception:
+        return []
 
 
 async def object_summary(
@@ -144,6 +193,46 @@ async def object_summary(
     except Exception:
         return None
     return brief(raw)
+
+
+async def objects_summary(
+    session: AsyncSession, user: Any, objs: list[dict[str, str]], request: Any = None
+) -> list[dict[str, Any]]:
+    """多个对象的动态摘要：只留有未关闭告警的，按未关闭告警数倒序取前 MULTI_TOP 个。"""
+    if len(objs) < 2:
+        return []
+    from app.core.errors import AppError
+    from app.modules.qa.object_source import check_object_read
+
+    try:
+        check_object_read(user)
+    except AppError:
+        return []
+    out = []
+    for obj in objs[:MULTI_SCAN]:
+        s = await object_summary(session, user, obj, request)  # 不可见 / 读失败 → None，跳过
+        if s and s["alerts"].get("available") and (s["alerts"].get("openCount") or 0) > 0:
+            out.append(s)
+    out.sort(key=lambda s: -(s["alerts"].get("openCount") or 0))
+    return out[:MULTI_TOP]
+
+
+def multi_text(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return ""
+    parts = [
+        f"{s.get('objLabel') or s.get('id')}（{s.get('objKindLabel') or s.get('objKind')}）"
+        f"未关闭告警 {s['alerts'].get('openCount') or 0} 条"
+        for s in items
+    ]
+    return "动态提示：" + "；".join(parts)
+
+
+def multi_lines(items: list[dict[str, Any]]) -> list[str]:
+    out = []
+    for s in items:
+        out.extend(summary_lines(s))
+    return out
 
 
 def _section(raw: dict[str, Any] | None, keys: tuple[str, ...]) -> dict[str, Any]:
@@ -301,11 +390,14 @@ def _check_of(rec: dict[str, Any]) -> dict[str, Any]:
         err = dry.get("error")
         if err:
             failed.append({"name": "试运行", "msg": str(err.get("message") or err.get("code"))[:200]})
-        return {
+        out = {
             "passed": bool(dry.get("passed")) and not failed,
             "checked": dry.get("checked") or 0,
             "failed": failed,
         }
+        if dry.get("humanChecks"):  # 外部 Webhook 动作：留给确认人人工核对的条件（不算失败）
+            out["humanChecks"] = list(dry["humanChecks"])
+        return out
     why = {"no-permission": "没有动作类型查看权限，未试运行", "key-allowlist": "密钥不允许该动作，未试运行"}
     reason = why.get(dry.get("reason"), "未试运行")
     return {"passed": False, "checked": 0, "failed": [*failed, {"name": "试运行", "msg": reason}]}

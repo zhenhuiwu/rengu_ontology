@@ -478,14 +478,42 @@ ENTITY_MIN_ROWS = 20
 _CODE_HEAD = re.compile(r"编号|编码|单号|订单号|条码|id$", re.I)
 
 
+async def _metric_meta(session: AsyncSession) -> dict[str, str]:
+    """已发布语义映射里指标的同义词 / 说明（static-t7）→ 拼在指标行后；没有快照或旧快照 → 空。"""
+    from app.contracts.static import semantic_map
+
+    try:
+        async with session.begin_nested():
+            rows = await semantic_map(session)
+    except Exception:
+        return {}
+    out = {}
+    for r in rows:
+        if r.get("kind") != "metric":
+            continue
+        syn = [w for w in r.get("synonyms") or [] if w and w != r.get("name")][:8]
+        desc = str(r.get("desc") or "").strip()
+        bits = ([f"又称 {'、'.join(syn)}"] if syn else []) + ([f"说明：{desc[:80]}"] if desc else [])
+        if bits:
+            out[str(r.get("id") or r.get("api"))] = f"（{'；'.join(bits)}）"
+    return out
+
+
 def _semantic_props(rows: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
-    """(对象 code, 属性 api) → 属性名；对象 code 是 semantic_map 里对象的 id。"""
+    """(对象 code, 属性 api 或物理列名) → 属性名；对象 code 是 semantic_map 里对象的 id。
+
+    static-t7 起属性带物理 `column`（api 和列名可以不同），按列名也能对上；旧快照只有 api。
+    """
     api_of = {r["api"]: r["id"] for r in rows if r.get("kind") == "object"}
-    return {
-        (api_of.get(r.get("parent"), ""), r["api"]): r.get("name") or ""
-        for r in rows
-        if r.get("kind") == "property"
-    }
+    out: dict[tuple[str, str], str] = {}
+    for r in rows:
+        if r.get("kind") != "property":
+            continue
+        obj = api_of.get(r.get("parent"), "")
+        for key in (r.get("column"), r.get("api")):
+            if key:
+                out.setdefault((obj, str(key)), r.get("name") or "")
+    return out
 
 
 async def qa_value_index(session: AsyncSession) -> vi.ValueIndex:
@@ -670,6 +698,7 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
             if lk.to_object_id in obj_ids and refs and refs <= src.table_names:
                 links.append(f"- {lk.display_name}：{lk.join_sql}")
     metrics, seen_defs = [], set()
+    meta = await _metric_meta(session)
     for m in (
         await session.scalars(select(Metric).where(Metric.formula.is_not(None)).order_by(Metric.id))
     ).all():
@@ -678,7 +707,10 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
             notes = "（基础对象、时间字段、默认过滤同上一条）"
         seen_defs.add(notes)
         draft = "，草稿口径，回答要提示“草稿口径”" if _is_draft(m.status) else ""
-        metrics.append(f"- {m.display_name}（{m.unit}，{m.version}{draft}）= {m.formula}{notes}")
+        metrics.append(
+            f"- {m.display_name}（{m.unit}，{m.version}{draft}）= {m.formula}{notes}"
+            + meta.get(m.code, meta.get(m.api_name, ""))
+        )
     syn = [f"- {s.word} → {s.target}" for s in (await session.scalars(select(QaSynonymLink))).all()]
     for d in (await session.scalars(select(DimMapping).order_by(DimMapping.seq).limit(40))).all():
         syn.append(f"- {d.phrase} → {'/'.join(d.targets)}")
@@ -1245,19 +1277,21 @@ async def answer(
     ctx["actions"] = act.action_lines(catalog)
     alerts = await act.related_alerts(session, user, question, anchor_names(ctx["anchors"]))
     ctx["alerts"] = act.alert_lines(alerts)
-    obj = await dyn.single_object(session, question, names)
+    objs = await dyn.named_objects(session, question, names)
+    obj = objs[0] if len(objs) == 1 else None
     dsum = await dyn.object_summary(session, user, obj, request)
-    ctx["dynamic"] = dyn.summary_lines(dsum)
+    dmulti = await dyn.objects_summary(session, user, objs, request)  # 点名多个对象：有告警的前几个
+    ctx["dynamic"] = dyn.summary_lines(dsum) or dyn.multi_lines(dmulti)
 
     def done(kind: str, snap: dict[str, Any], rows: int = 0, sql: str | None = None):
         elapsed = int((time.monotonic() - t0) * 1000)
-        return kind, _with_context(snap, alerts, dsum), rows, elapsed, sql
+        return kind, _with_context(snap, alerts, dsum, dmulti), rows, elapsed, sql
 
     # 问“某告警 / 某对象该怎么处理” → 动态决策评估的排序建议（不调模型）；没有建议再交给模型
     if dyn.wants_advice(question) and (target := dyn.decision_target(question, alerts, obj)):
         stage("permission", "正在评估处理建议")
         if decision := await dyn.evaluate(session, user, target, caller, request):
-            return done("answer", dyn.decision_snapshot(decision))
+            return done("answer", await act.with_declared(session, dyn.decision_snapshot(decision)))
     manifest = await sem.metric_layer(session, user)
     ctx["semantic"] = sem.semantic_lines(manifest)
     ctx["session_scope"] = [session_scope] if session_scope else []
@@ -1283,10 +1317,13 @@ async def answer(
                     chosen, _, filled = dyn.decision_choice(decision, proposal)
                     # 模型补了决策没填的参数（如数量）→ 按补全后的参数重新试运行
                     check = await act.dry_run(session, user, dict(chosen)) if filled else None
-                    return done("answer", dyn.decision_snapshot(decision, proposal, check))
+                    snap = dyn.decision_snapshot(decision, proposal, check)
+                    return done("answer", await act.with_declared(session, snap))
                 check = await act.dry_run(session, user, proposal)
                 policy = next(c["policy"] for c in catalog if c["id"] == proposal["type"])
-                return done("answer", act.action_snapshot(proposal, check, policy))
+                return done(
+                    "answer", await act.with_declared(session, act.action_snapshot(proposal, check, policy))
+                )
             intent, val = "refuse", {"code": "NOT_SELECT", "reason": "没有可用的动作，问数只读"}
         if intent == "metric":  # 指标查询：编译器生成 SQL；编不出 / 执行报错回喂一次，改走 SQL
             stage("executing", "正在按指标层查询")
@@ -1336,6 +1373,9 @@ async def answer(
             return done("denied", refuse_snapshot(val))
         sql = val
         tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
+        before = tree.sql(dialect=DIALECT)
+        # 扇出能确定改写就直接改（明细先按外键汇总再关联），改不了的才回喂模型
+        fan_notes = sqlfix.preaggregate_children(tree, _children(ontology_id))
         if not checked:  # 口径校验不过，回喂改一次（只一次，改完不再查）
             checked = True
             bad = caliber_violations(question, tree, ontology_id)
@@ -1352,10 +1392,9 @@ async def answer(
                     },
                 ]
                 continue
-        before = tree.sql(dialect=DIALECT)
         codes = {code for c in idx.cols for code in c.labels.values()}
         required = _required_codes(ontology_id, ctx, codes)
-        fix_notes = fix_sql(tree, question, ontology_id, idx, vres, scope_hits, required)
+        fix_notes = fan_notes + fix_sql(tree, question, ontology_id, idx, vres, scope_hits, required)
         cap_time_upper(tree, clock.local_now(), qa_source(ontology_id).time_cols)
         if tree.sql(dialect=DIALECT) != before:
             sql = tree.sql(dialect=DIALECT)
@@ -1440,6 +1479,9 @@ async def answer(
     }
     if mplan is not None:
         ans["metricQuery"] = mplan.echo
+    if dsum is None and not dmulti:  # 结果里出现多个对象实例 → 有告警的前几个
+        found = await dyn.result_objects(session, rows)
+        dmulti.extend(await dyn.objects_summary(session, user, found, request))
     if notes := fix_notes if mplan is None else []:
         ans["text"] = f"{text}\n说明：{'；'.join(notes)}"
         ans["basis"]["notes"] = notes
@@ -1447,10 +1489,14 @@ async def answer(
 
 
 def _with_context(
-    snap: dict[str, Any], alerts: list[dict[str, Any]], summary: dict[str, Any] | None = None
+    snap: dict[str, Any],
+    alerts: list[dict[str, Any]],
+    summary: dict[str, Any] | None = None,
+    multi: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """回答带上相关告警引用和点名对象的动态摘要（只读，W7 citations 的 alerts / dynamicSummary）。"""
-    from app.modules.qa.dynamic_ctx import summary_text
+    """回答带上相关告警引用和对象动态摘要（只读，W7 citations 的 alerts / dynamicSummary /
+    dynamicSummaries）：点名单个对象 → dynamicSummary；多个对象 → 有未关闭告警的前几个。"""
+    from app.modules.qa.dynamic_ctx import multi_text, summary_text
 
     ans = snap.get("answer")
     if not isinstance(ans, dict):
@@ -1460,6 +1506,10 @@ def _with_context(
     if summary:
         ans["dynamicSummary"] = summary
         if ans.get("card") == "table" and (line := summary_text(summary)):
+            ans["text"] = f"{ans['text']}\n{line}"
+    elif multi:
+        ans["dynamicSummaries"] = multi
+        if ans.get("card") == "table" and (line := multi_text(multi)):
             ans["text"] = f"{ans['text']}\n{line}"
     return snap
 

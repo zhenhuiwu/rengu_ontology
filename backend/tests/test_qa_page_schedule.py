@@ -140,11 +140,76 @@ async def test_subscription_delivery_record(pages, session, monkeypatch, audits)
     out = await page_schedule.refresh_due_pages(session, at=now)
     assert out[0]["delivery"] == {"channel": "站内信", "recipients": ["张三"], "changed": True}
     assert [a["target"] for a in audits if a["action"] == "qa.page.subscription.due"] == [p.code]
+    ev = await _events(session, f"qa.page.refresh:{p.code}:")
+    assert len(ev) == 1 and ev[0].topic == page_schedule.TOPIC and ev[0].payload["kind"] == "afterRefresh"
+    assert ev[0].payload["channel"] == "inbox" and "7" in ev[0].payload["text"]
     # 结果没变 + only_changed → 不投递
     p.next_run = now - timedelta(minutes=1)
     await session.flush()
     out = await page_schedule.refresh_due_pages(session, at=now)
     assert "delivery" not in out[0]
+
+
+async def _events(session, prefix):
+    from app.common.outbox import OutboxEvent
+
+    return list(
+        await session.scalars(
+            select(OutboxEvent).where(OutboxEvent.event_id.like(f"{prefix}%")).order_by(OutboxEvent.id)
+        )
+    )
+
+
+def test_digest_slot_local_time():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Asia/Shanghai")
+    sun = datetime(2026, 10, 25, 8, 59, tzinfo=tz)
+    assert page_schedule.digest_slot(SubWhen.daily_0900, sun)[0] == "D20261024"
+    assert page_schedule.digest_slot(SubWhen.daily_0900, sun + timedelta(minutes=1))[0] == "D20261025"
+    assert page_schedule.digest_slot(SubWhen.weekly_mon_0900, sun)[0] == "W20261019"
+    mon = datetime(2026, 10, 26, 9, 0, tzinfo=tz)
+    assert page_schedule.digest_slot(SubWhen.weekly_mon_0900, mon)[0] == "W20261026"
+    assert page_schedule.digest_slot(SubWhen.weekly_mon_0900, mon - timedelta(seconds=1))[0] == "W20261019"
+    assert page_schedule.digest_slot(SubWhen.after_refresh, mon) is None
+
+
+async def test_daily_digest_once_per_slot_only_changed_and_known_recipients(pages, session):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.modules.admin.models import SysUser
+
+    p = pages[0]
+    owner = await session.scalar(select(SysUser).where(SysUser.id == p.owner_id))
+    await _subscribe(session, p, only_changed=True)
+    p.subscription.send_when, p.subscription.recipients = SubWhen.daily_0900, [owner.name, "不相干的人"]
+    for i, c in enumerate(p.cards):
+        c.result_cache = {"columns": [], "items": [], "rows": [["甲", "x：1"], ["乙", ""]], "total": 5 + i}
+    await session.flush()
+    at = datetime(2026, 10, 25, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    out = await page_schedule.send_digests(session, at=at)
+    mine = [o for o in out if o["page"] == p.code]
+    assert mine == [{"page": p.code, "slot": "D20261025", "channel": "inbox", "to": [owner.code]}]
+    ev = (await _events(session, f"qa.page.digest:{p.code}:"))[-1]
+    assert ev.payload["unresolved"] == ["不相干的人"] and ev.payload["kind"] == "daily"
+    assert "甲：x：1" in ev.payload["text"] and "共 5 行" in ev.payload["text"]
+    assert not [o for o in await page_schedule.send_digests(session, at=at) if o["page"] == p.code]
+    nxt = at + timedelta(days=1)
+    assert not [o for o in await page_schedule.send_digests(session, at=nxt) if o["page"] == p.code]  # 没变
+    p.cards[0].result_cache = {"value": 9, "unit": "件"}
+    await session.flush()
+    out = [o for o in await page_schedule.send_digests(session, at=nxt) if o["page"] == p.code]
+    assert [o["slot"] for o in out] == ["D20261026"]
+    late = nxt + timedelta(days=1, hours=4)  # 过了补发窗口：不补
+    p.cards[0].result_cache = {"value": 10, "unit": "件"}
+    await session.flush()
+    assert not [o for o in await page_schedule.send_digests(session, at=late) if o["page"] == p.code]
+    p.subscription.enabled = False
+    await session.flush()
+    later = nxt + timedelta(days=1)
+    assert not [o for o in await page_schedule.send_digests(session, at=later) if o["page"] == p.code]
 
 
 def test_register_adds_periodic_task():

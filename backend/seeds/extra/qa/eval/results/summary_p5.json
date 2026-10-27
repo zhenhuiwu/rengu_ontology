@@ -1,0 +1,28 @@
+{
+ "sel": "all",
+ "tag": "_p5",
+ "model": "qwen-flash",
+ "fixedNow": "2026-10-25T15:42:00+08:00",
+ "ok": 96,
+ "total": 100,
+ "byType": {
+  "answer": {
+   "ok": 70,
+   "total": 74
+  },
+  "refuse": {
+   "ok": 16,
+   "total": 16
+  },
+  "clarify": {
+   "ok": 10,
+   "total": 10
+  }
+ },
+ "failed": [
+  "EV-Q-006",
+  "EV-Q-012",
+  "EV-Q-015",
+  "EV-Q-048"
+ ]
+}

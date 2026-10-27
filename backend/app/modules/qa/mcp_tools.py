@@ -132,7 +132,9 @@ async def _qa_ask(c: Ctx, args: dict[str, Any]) -> dict[str, Any]:
         answer = out["answer"] = _action_for_machine(answer, scopes, c.request)
     if isinstance(answer, dict) and scopes is not None and "dynamic:read" not in scopes:
         # 告警 / 规则命中 / 动态摘要属于动态层：密钥要有 dynamic:read（链路本身也按页面权限取，这里兜底）
-        out["answer"] = {k: v for k, v in answer.items() if k not in ("alerts", "dynamicSummary")}
+        out["answer"] = {
+            k: v for k, v in answer.items() if k not in ("alerts", "dynamicSummary", "dynamicSummaries")
+        }
     return {"kind": kind, "rowCount": rows, "elapsedMs": elapsed, **out}
 
 
