@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.common.ontology import set_ontology_scope
 from app.modules.admin.models import SysRole, SysUser
 from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
+from tests.helpers.workspace import TEST_DB
 
 
 @pytest.fixture(autouse=True)
@@ -53,7 +54,7 @@ async def committed_qa(engine):
     from app.seeds.loader import run_seeds
     from tests.qa_access_support import seed_qa_access
 
-    assert engine.url.database == "rengu_test_use_qa_20261027"
+    assert engine.url.database == TEST_DB
     local = create_async_engine(engine.url, poolclass=NullPool)
     try:
         async with AsyncSession(local, expire_on_commit=False) as setup:
