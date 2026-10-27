@@ -9,6 +9,7 @@ from sqlalchemy import and_, exists, func, or_, select
 
 from app.common.auth import check_func, resolve_user, row_filter
 from app.common.context import check_writable
+from app.common.object_identity import identity_rows
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import governed_tables
 from app.core import clock
@@ -73,12 +74,14 @@ class DispositionIn(ApiModel):
 async def visible_events(user):
     scopes = [and_(Event.is_test.is_(True), Event.created_by == user.id)]
     for mapping in governed_tables(user.ontology_id).values():
-        if mapping.inherit or "code" not in mapping.table.c:
+        if mapping.inherit or "code" not in mapping.table.c or "id" not in mapping.table.c:
             continue
         expr = await row_filter(user, mapping.object_type)
         if is_deny_all(expr):
             continue
-        query = select(mapping.table.c.code).where(mapping.table.c.code == Event.object_id)
+        references = identity_rows(mapping).subquery()
+        query = select(mapping.table.c.id).where(mapping.table.c.id.in_(
+            select(references.c.row_id).where(references.c.identity == Event.object_id).correlate(Event)))
         if expr is not None:
             query = query.where(to_sql(expr, mapping.columns, user.attrs, mapping.links))
         scopes.append(and_(Event.is_test.is_(False), Event.obj_kind == mapping.object_type, exists(query)))
@@ -91,6 +94,11 @@ async def authorize(session, user, event, level="view"):
         if event.created_by != user.id:
             raise Forbidden("只能处理本人创建的测试投递记录")
     else:
+        if level == "view":
+            from app.modules.event.platform_context import authorize_completion_view
+
+            if await authorize_completion_view(session, user, event):
+                return
         await authorize_object(session, user, event, level)
 
 

@@ -46,7 +46,10 @@ SUBS = {
 
 
 async def _event(ctx: Ctx, tid: str) -> EventType:
+    from app.modules.event.dedup_validation import validate_draft_window
+
     text(tid, "id", 64, required=True)
+    await validate_draft_window(ctx.session, tid, ctx.cr.id, complete=True)
     et = await ctx.session.scalar(select(EventType).where(EventType.code == tid))
     if et is None:
         if not ctx.is_new:

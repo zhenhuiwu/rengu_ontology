@@ -446,8 +446,10 @@ class CrWriteService:
                 details={"fields": [{"field": "rows", "message": f"key 重复：{'、'.join(dup)}"}]},
             )
         if body.target.kind == "event" and body.section in ("def", "payload"):
+            from app.modules.event.dedup_validation import validate_draft_window
             from app.modules.event.platform_context import validate_draft
 
+            await validate_draft_window(self.session, body.target.id, cr.id, section=body.section, rows=body.rows)
             await validate_draft(self.session, body.target.id, cr.id, section=body.section, rows=body.rows)
         with self.session.no_autoflush:  # 只在最后 flush 一次：lockVersion 恰好 +1
             return await self._put_rows(cr, user, body)

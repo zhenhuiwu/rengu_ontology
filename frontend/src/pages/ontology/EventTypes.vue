@@ -18,6 +18,7 @@ import EventDeliveries from '@/components/EventDeliveries.vue';
 import DeliveryExceptions from '@/components/DeliveryExceptions.vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { usePagedQuery } from '@/composables/usePagedQuery';
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useConfirmStore } from '@/stores/confirm';
 import { GRAY } from '@/theme';
 import { paginate } from '@/mock/paginate';
@@ -31,11 +32,12 @@ import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import NewActionEventForm from './parts/NewActionEventForm.vue';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
+import { draftFields, useStaticCr } from './parts/useStaticCr';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
 import {
   actionApi, actionContextKey, snapshotReady, loadSnapshot, eventDetailReady, loadEventDetail, listEventPayload, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
-  listEvents, getEventStats, simulateEvent, type EventSimulation, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore,
+  listEvents, getEventStats, simulateEvent, type EventSimulation, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore, crChanges,
 } from '@/api/action';
 import type { EventRecord } from '@/api/action';
 
@@ -103,6 +105,37 @@ if (real) watch([actionContextKey, () => cur.value.id, isDraft], async () => {
   catch (e) { if (mounted && key === actionContextKey() && id === cur.value.id) loadErr.value = apiMsg(e); }
 }, { immediate: true, flush: 'sync' });
 const crTarget = () => ({ id: cur.value.id, name: `${cur.value.name}（${cur.value.api}）` });
+const dedupCr = useStaticCr('event', crTarget, { draft, start, setView, cancel });
+const dedupValues = computed(() => ({ dedupKey: cur.value.dedupKey, dedupWindow: cur.value.dedupWindow,
+  ...(isDraft.value ? draftFields(dedupCr.items.value, 'def') : {}) }));
+const dedupOpen = ref(false), dedupSaving = ref(false);
+const dedupForm = reactive({ dedupKey: '', dedupWindow: '' });
+const dedupSnapshot = ref('');
+const dedupDirty = computed(() => dedupOpen.value && JSON.stringify(dedupForm) !== dedupSnapshot.value);
+const dedupGuard = useUnsavedGuard(dedupDirty);
+const canEditDedup = computed(() => real && isDraft.value && !readonly.value && ready.value
+  && !dedupCr.loading.value && !dedupCr.error.value && dedupCr.head.value?.status === '草稿');
+function editDedup() {
+  if (!canEditDedup.value) return;
+  Object.assign(dedupForm, { dedupKey: String(dedupValues.value.dedupKey ?? ''), dedupWindow: String(dedupValues.value.dedupWindow ?? '') });
+  dedupSnapshot.value = JSON.stringify(dedupForm); dedupOpen.value = true;
+}
+async function saveDedup() {
+  if (!canEditDedup.value || dedupSaving.value || !dedupDirty.value) return;
+  const key = actionContextKey(), id = cur.value.id;
+  dedupSaving.value = true;
+  try {
+    if (await dedupCr.save('def', (['dedupKey', 'dedupWindow'] as const)
+      .filter(field => dedupForm[field] !== String(dedupValues.value[field] ?? ''))
+      .map(field => ({ key: field, op: 'update', before: cur.value[field], after: dedupForm[field] })))) {
+      if (key === actionContextKey() && id === cur.value.id) {
+        if (dedupCr.head.value) crChanges[dedupCr.head.value.id] = dedupCr.head.value.changes;
+        dedupOpen.value = false; message.success('去重设置已保存到草稿');
+      }
+    }
+  } finally { dedupSaving.value = false; }
+}
+watch([actionContextKey, () => cur.value.id], () => { dedupOpen.value = false; });
 const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军', writer: crWriter('event', crTarget), ready: () => ready.value });
 /** 放弃草稿（确认卡在 useDraftEdits.discard）：写库模式下删库成功后用 cancel 撤掉本对象在登记表里的登记并切回已发布版；开关关着同以前（mock 登记不动） */
 const onDiscard = () => de.discard(() => { const d = draft.value; if (crWriteOn() && d) cancel(d.id); else setView('published'); });
@@ -404,7 +437,7 @@ const verCols = [
       <div v-if="tab === 'overview'" class="et-body et-ov">
         <div class="et-ov-content">
         <div class="et-ov-left">
-          <div class="et-sec t-14 fw-600">基本信息</div>
+          <div class="et-sec t-14 fw-600 et-sec-row"><span>基本信息</span><a-button v-if="real && isDraft" size="small" :disabled="!canEditDedup" @click="editDedup">编辑去重设置</a-button></div>
           <a-descriptions :column="2" bordered size="small" class="et-desc">
             <a-descriptions-item label="来源">{{ cur.source }}</a-descriptions-item>
             <a-descriptions-item label="来源说明">
@@ -415,8 +448,8 @@ const verCols = [
             <a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item>
             <a-descriptions-item label="说明" :span="2"><span class="et-ell" :title="cur.desc">{{ cur.desc }}</span></a-descriptions-item>
             <a-descriptions-item label="载荷摘要" :span="2">{{ flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').map((f) => f.name).join('、') }}<template v-if="!real || eventDetailReady(cur.id, true)">，另含 {{ envelope.length }} 个通用信封字段</template></a-descriptions-item>
-            <a-descriptions-item label="去重键"><span class="num">{{ cur.dedupKey }}</span></a-descriptions-item>
-            <a-descriptions-item label="去重窗口">{{ cur.dedupWindow }}</a-descriptions-item>
+            <a-descriptions-item label="去重键"><span class="num">{{ dedupValues.dedupKey }}</span></a-descriptions-item>
+            <a-descriptions-item label="去重窗口">{{ dedupValues.dedupWindow }}</a-descriptions-item>
             <a-descriptions-item label="投递保证">{{ cur.delivery }}</a-descriptions-item>
             <a-descriptions-item label="顺序">{{ cur.ordering }}</a-descriptions-item>
             <a-descriptions-item label="保留期">{{ cur.retention }}</a-descriptions-item>
@@ -442,7 +475,7 @@ const verCols = [
             <span class="t-12 c-2 et-ev-s" :title="r.summary">{{ r.summary }}</span>
             <span class="t-12" :class="r.outcome === '投递失败' ? 'c-error' : 'c-3'">{{ r.outcome }}</span>
           </div>
-          <div v-if="!recentTop.length && !rtErr" class="t-12 c-3">草稿未发布，暂无事件</div>
+          <div v-if="!recentTop.length && !rtErr" class="t-12 c-3">{{ cur.status === '草稿' ? '草稿未发布，暂无事件' : '所选时间范围内暂无事件' }}</div>
         </div>
         <div class="et-ov-right">
           <div class="et-sec t-14 fw-600"><span>近 14 天事件数</span><span class="fw-400 c-2"> · 截至 {{ asOf }}</span></div>
@@ -573,6 +606,14 @@ const verCols = [
   </div>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onStart" />
   <NewActionEventForm v-if="real" v-model:open="createOpen" kind="event" :options="createOptions" :row-forms="FORMS" />
+  <a-modal :open="dedupOpen" title="编辑去重设置" ok-text="保存到草稿" :confirm-loading="dedupSaving"
+    :closable="!dedupSaving" :mask-closable="false" :ok-button-props="{ disabled: !canEditDedup || !dedupDirty || !dedupForm.dedupWindow.trim() }"
+    @ok="saveDedup" @cancel="dedupGuard(() => { dedupOpen = false; })">
+    <a-form layout="vertical">
+      <a-form-item label="去重键" html-for="event-dedup-key"><a-input id="event-dedup-key" v-model:value="dedupForm.dedupKey" :disabled="dedupSaving" placeholder="留空时按事件 ID 去重" /></a-form-item>
+      <a-form-item label="去重窗口" html-for="event-dedup-window" required><a-input id="event-dedup-window" v-model:value="dedupForm.dedupWindow" :disabled="dedupSaving" placeholder="例如 24 小时" /></a-form-item>
+    </a-form>
+  </a-modal>
   <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="520" @ok="saveEditor">
     <a-form layout="vertical" class="et-form">
       <a-form-item v-for="f in editorDef.fields()" :key="f.k" :label="f.label" :required="f.required">

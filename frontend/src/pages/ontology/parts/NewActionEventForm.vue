@@ -78,7 +78,7 @@ async function load() {
   for (const section of Object.keys(baseline)) delete baseline[section];
   owners.value = []; objects.value = []; rules.value = []; crId.value = ''; version.value = undefined;
   for (const k of Object.keys(form)) delete form[k];
-  Object.assign(form, { name: '', api: '', group: '', targetKind: null, objKind: null, owner: '', desc: '', source: '外部系统', sourceRef: '', ruleId: null, retention: '30 天', runners: '', approval: '', dedupKey: '', dedupWindow: '', delivery: '', ordering: '' });
+  Object.assign(form, { name: '', api: '', group: '', targetKind: null, objKind: null, owner: '', desc: '', source: '外部系统', sourceRef: '', ruleId: null, retention: '30 天', runners: '', approval: '', dedupKey: '', dedupWindow: '24 小时', delivery: '', ordering: '' });
   for (const section of Object.keys(props.rowForms)) rows[section] = [];
   const options = { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' }, query: { ver: ctx.ver, previewAs: ctx.previewAs } };
   try {

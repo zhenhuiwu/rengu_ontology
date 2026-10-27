@@ -10,11 +10,11 @@ const filename = new URL('../src/pages/ontology/parts/NewActionEventForm.vue', i
 const { descriptor } = parse(readFileSync(filename, 'utf8'));
 const compiled = compileTemplate({ source: descriptor.template.content, filename: filename.pathname, id: 'platform-event' });
 assert.deepEqual(compiled.errors, []);
-const source = `${descriptor.scriptSetup.content}\nexports.page={form,choices,platformActionEvent};`;
+const source = `${descriptor.scriptSetup.content}\nexports.page={form,choices,platformActionEvent,load};`;
 const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 const imports = {
   vue, 'vue-router': { useRoute: () => ({ query: {} }), useRouter: () => ({ replace() {} }) },
-  'ant-design-vue': { message: {} }, '@/api/http': { apiClient: () => ({}), currentApiContext: () => ({ ontologyId: '2' }) },
+  'ant-design-vue': { message: {} }, '@/api/http': { apiClient: () => ({ get: async path => path === '/build/owners' ? [] : { items: [], total: 0 } }), currentApiContext: () => ({ ontologyId: '2' }) },
   '@/api/action': { actionContextKey: () => 'scope2', crWriteOn: () => true },
   '@/composables/useReadonly': { useReadonly: () => ({ readonly: vue.ref(false), reason: vue.ref('') }) },
   '@/stores/confirm': { useConfirmStore: () => ({}) },
@@ -25,6 +25,8 @@ scope.run(() => runInNewContext(js, {
   defineProps: () => ({ kind: 'event', options: {}, rowForms: {} }), defineModel: () => vue.ref(false),
 }));
 const { form, choices } = exports.page;
+await exports.page.load();
+assert.equal(form.dedupWindow, '24 小时');
 form.api = 'ActionExecuted'; form.source = '动作';
 await vue.nextTick();
 assert.equal(choices({ k: 'objKind' }).some(item => item.value === 'platform:ActionRun'), true);

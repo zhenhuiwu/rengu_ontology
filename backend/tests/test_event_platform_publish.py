@@ -32,7 +32,8 @@ async def test_real_cr_preserves_bounded_platform_context_without_business_objec
     actor = CurrentUser(id="fixture-owner", name="技术验收", func={"event-types": "manage"}, ontology_id=1, ontology_role="owner")
     service = CrWriteService(session)
     target = {"kind": "event", "id": "WF_STANDARD_COMPLETE", "isNew": True, "name": "动作执行完成"}
-    values = {"name": "动作执行完成", "api": "ActionExecuted", "source": "动作", "objKind": ACTION_RUN}
+    values = {"name": "动作执行完成", "api": "ActionExecuted", "source": "动作", "objKind": ACTION_RUN,
+              "dedupWindow": "24 小时"}
     for section, rows in (("def", [{"key": key, "op": "add", "after": value} for key, value in values.items()]),
                           ("payload", [{"key": "runId", "op": "add", "after": {"api": "runId", "name": "执行记录", "type": "字符串", "required": True}}])):
         await service.put_items(cr.code, actor, ItemsPutIn.model_validate({"target": target, "section": section, "rows": rows}))

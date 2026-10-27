@@ -124,7 +124,10 @@ async def test_new_type_definition_fields_publish_and_rollback(client, wb, targe
     "target,field,value", [(A, "targetKind", "missing"), (E, "retention", "0 天"), (E, "weekly", 99)]
 )
 async def test_invalid_definition_publish_is_atomic(client, wb, target, field, value):
-    cr = await approved(client, [(target, "def", [row(field, value)])])
+    rows = [row(field, value)]
+    if target == E:
+        rows.append(row("dedupWindow", "24 小时"))
+    cr = await approved(client, [(target, "def", rows)])
     before = await wb.scalar(select(func.count()).select_from(OntologyRelease))
     response = await client.post(P + "/releases", json={}, headers=ADMIN)
     assert response.status_code == 409 and response.json()["code"] == "WRITEBACK_FAILED"

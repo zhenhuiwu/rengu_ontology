@@ -11,6 +11,35 @@ ACTION_RUN = "platform:ActionRun"
 ACTION_FIELDS = frozenset({"runId", "actionType", "targetId", "initiator", "confirmer", "writeback"})
 
 
+async def authorize_completion_view(session, user, event):
+    """Read internal completion delivery metadata under the original action-record row scope."""
+    from app.common.auth import check_func
+    from app.common.ontology import require_ontology_id
+    from app.core.errors import Forbidden, NotFound
+    from app.modules.dynamic.models import ActionRun
+    from app.modules.dynamic.row_scope import scoped_instances
+
+    definition = event.definition_snapshot or {}
+    if (definition.get("api") != EVENT_ACTION_EXECUTED or definition.get("source") != "动作"
+            or definition.get("objectApi") != "ActionRun" or definition.get("objKind")
+            or event.obj_kind or event.source != "dynamic" or event.producer_object_type != "ActionRun"
+            or event.producer_type not in (definition.get("id"), EVENT_ACTION_EXECUTED)
+            or (event.payload or {}).get("runId") != event.object_id):
+        return False
+    check_func(user, "action-center", "view")
+    if user.api_scopes is not None and "dynamic:read" not in user.api_scopes:
+        raise Forbidden("平台动作事件需要动作记录读取权限")
+    ontology_id = require_ontology_id(session)
+    if event.ontology_id != ontology_id or user.ontology_id != ontology_id:
+        raise NotFound("事件不存在或无权查看")
+    query = await scoped_instances(select(ActionRun.id).where(
+        ActionRun.ontology_id == ontology_id, ActionRun.code == event.object_id),
+        user, ActionRun.obj_kind, ActionRun.obj_id)
+    if await session.scalar(query.limit(1)) is None:
+        raise NotFound("事件不存在或无权查看")
+    return True
+
+
 def platform_binding(values):
     identity = values.get("objKind")
     if isinstance(identity, str) and identity.startswith("platform:") and identity != ACTION_RUN:

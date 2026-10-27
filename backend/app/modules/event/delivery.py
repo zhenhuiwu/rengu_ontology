@@ -104,9 +104,12 @@ async def authorize_object(session, user, event: Event, level: str = "manage") -
     expr = await row_filter(user, event.obj_kind or "")
     if mapping is None or "code" not in mapping.table.c or "id" not in mapping.table.c or is_deny_all(expr):
         raise AppError("订阅身份无对象行权限", code="EVENT_OBJECT_FORBIDDEN", status_code=403)
+    from app.common.object_identity import identity_rows
+
+    references = identity_rows(mapping).subquery()
     identities = list(
         await session.scalars(
-            select(mapping.table.c.id).where(mapping.table.c.code == event.object_id).limit(2)
+            select(references.c.row_id).where(references.c.identity == event.object_id).limit(2)
         )
     )
     if len(identities) != 1:
