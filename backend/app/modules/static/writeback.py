@@ -21,6 +21,7 @@ from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
 from app.core.schema import _fmt_dt
 from app.modules.admin.permissions import resolve_owner_name
+from app.modules.static.dimension_validation import dimension_source_error
 from app.modules.static.explorer import DISPLAY_FIELDS, VISIBILITY, snapshot_flags
 from app.modules.static.models import (
     ApplyKind,
@@ -632,6 +633,14 @@ D_FIELDS = {
 }
 
 
+async def _dimension_source(session, code, kind, object_code, *, attr="", column=""):
+    obj = await session.scalar(select(ObjectType).where(ObjectType.code == object_code)) if isinstance(object_code, str) and object_code else None
+    error = dimension_source_error(kind, object_code, {obj.code} if obj is not None else set(), attr=attr, column=column)
+    if error:
+        raise _bad(error, kind="dimension", id=code, key="object")
+    return obj
+
+
 async def _dim(ctx: Ctx, tid: str) -> Dimension:
     """取维度；本单新建（isNew）且库里没有时，按本单 dimension/def 段的行新建（values 先到也能建）。"""
     s = ctx.session
@@ -646,22 +655,21 @@ async def _dim(ctx: Ctx, tid: str) -> Dimension:
         CrItem.target_id == tid,
         CrItem.section.in_(("def", "config")),
     )
-    v = {r.item_key: r.after for r in await s.scalars(q) if r.op != "delete"}
-    o = await s.scalar(select(ObjectType).where(ObjectType.code == str(v.get("object") or "")))
-    if o is None:
-        raise _bad(f"新建维度 {tid} 缺少所属对象（def 段 object 行）", kind="dimension", id=tid, key="object")
+    v = {r.item_key: r.after for r in await s.scalars(q.order_by(CrItem.seq, CrItem.id)) if r.op != "delete"}
+    kind = _label(DimKind, v.get("kind") or "维度", "类型")
+    o = await _dimension_source(s, tid, kind.value, v.get("object", ""), attr=v.get("attr", ""), column=v.get("column", ""))
     levels = [x if isinstance(x, dict) else {"name": str(x)} for x in v.get("levels") or []]
     seq = max((x.seq for x in await s.scalars(select(Dimension))), default=0) + 1
     d = Dimension(
         code=tid,
         api_name=str(v.get("api") or tid),
         display_name=str(v.get("name") or ctx.name or tid),
-        kind=_label(DimKind, v.get("kind") or "维度", "类型"),
+        kind=kind,
         dim_group=str(v.get("group") or "其他"),
         status=DefStatus.published,
         owner=str(v.get("owner") or ctx.cr.owner),
         object=o,
-        object_name=o.display_name,
+        object_name=o.display_name if o is not None else "",
         attr="",
         source_column="",
         value_src="",
@@ -773,6 +781,11 @@ async def _set_dim_levels(
 
 async def _dim_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
     d = await _dim(ctx, tid)
+    values = {"kind": d.kind.value, "object": d.object.code if d.object is not None else "", "attr": d.attr, "column": d.source_column}
+    values.update({r.item_key: r.after for r in rows if r.op != "delete" and r.item_key in values})
+    kind = _label(DimKind, values["kind"], "类型")
+    obj = await _dimension_source(ctx.session, tid, kind.value, values["object"], attr=values["attr"], column=values["column"])
+    d.kind, d.object, d.object_name = kind, obj, obj.display_name if obj is not None else ""
     for r in rows:
         if r.item_key == "levels":
             await _set_dim_levels(ctx.session, d, [] if r.op == "delete" else r.after, ctx.by)
@@ -783,13 +796,6 @@ async def _dim_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
             d.owner = await owner_name(ctx, r.after)
         elif r.item_key in D_FIELDS:
             setattr(d, D_FIELDS[r.item_key], str(r.after or ""))
-        elif r.item_key == "kind":
-            d.kind = _label(DimKind, r.after, "类型")
-        elif r.item_key == "object":
-            o = await ctx.session.scalar(select(ObjectType).where(ObjectType.code == str(r.after)))
-            if o is None:
-                raise _bad(f"对象类型 {r.after} 不存在", kind="dimension", id=tid, key="object")
-            d.object, d.object_name = o, o.display_name
     return {"dimensions"}
 
 
@@ -1080,8 +1086,17 @@ async def restore_dimensions(session: AsyncSession, content: dict[str, Any], *, 
             _check_restored_value_levels(
                 code, _dim_level_rows(code, snap["levels"]), snap.get("values") or []
             )
-    ver = await _restore_ver(session, release_id)
     dims = list(await session.scalars(select(Dimension)))
+    sources = {}
+    for d in dims:
+        snap = content.get(d.code)
+        if isinstance(snap, dict):
+            kind = _label(DimKind, snap.get("kind", d.kind.value), "类型")
+            obj = await _dimension_source(session, d.code, kind.value,
+                snap.get("object", d.object.code if d.object is not None else ""),
+                attr=snap.get("attr", d.attr), column=snap.get("column", d.source_column))
+            sources[d.code] = (kind, obj)
+    ver = await _restore_ver(session, release_id)
     await _hard_delete(session, Dimension, [d for d in dims if d.code not in content])
     for code in set(content) - {d.code for d in dims}:
         log.warning("restore_dimensions: 维度 %s 表里不存在，跳过", code)
@@ -1089,6 +1104,8 @@ async def restore_dimensions(session: AsyncSession, content: dict[str, Any], *, 
         snap = content.get(d.code)
         if not isinstance(snap, dict):
             continue
+        d.kind, d.object = sources[d.code]
+        d.object_name = d.object.display_name if d.object is not None else ""
         for k, col in D_FIELDS.items():
             if k in snap and k not in ("desc", "column", "valueSrc"):
                 setattr(d, col, str(snap[k] or ""))

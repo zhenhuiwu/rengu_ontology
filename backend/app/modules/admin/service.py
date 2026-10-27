@@ -5,23 +5,35 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.common.auth import CurrentUser, check_func
+from app.common.ontology import set_ontology_scope
 from app.common.pagination import PageParams
 from app.core.clock import now
 from app.core.config import get_settings
-from app.core.errors import AppError, DuplicateKey, NotFound
+from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound
 from app.core.schema import DATETIME_SEC_FORMAT
+from app.db.session import qa_readonly_engine_kwargs
 from app.modules.admin.imports import parse_import_csv as parse_import_csv
 from app.modules.admin.imports import row_length_error
-from app.modules.admin.models import AuditLog, AuditResult, SysOrg, SysRole, SysUser, UserStatus
+from app.modules.admin.models import (
+    AuditLog,
+    AuditResult,
+    SysOrg,
+    SysRole,
+    SysRoleMember,
+    SysUser,
+    UserStatus,
+)
 from app.modules.admin.repo import (
     AuditFilter,
     AuditLogRepository,
     SysUserRepository,
     UserFilter,
     insert_audit,
+    lock_code_seq,
 )
 from app.modules.admin.roles import role_names, sync_primary_role
 from app.modules.admin.schemas import ImportRowIn, ImportRowOut, UserCreateIn, UserUpdateIn, department_name
@@ -125,8 +137,47 @@ async def pending_approvals(session: AsyncSession, users: list[SysUser]) -> dict
         .group_by(SysUser.name)
     )
     unique_names = {name: code for name, code, count in rows if count == 1}
-    cr, actions = await cr_counts(session, codes, unique_names), await action_counts(session, codes)
-    return {code: cr.get(code, 0) + actions.get(code, 0) for code in codes}
+    from app.modules.ontology.models import OntologyWorkspace
+
+    totals = dict.fromkeys(codes, 0)
+    workspace_ids = list(await session.scalars(select(OntologyWorkspace.id).order_by(OntologyWorkspace.id)))
+    # A separate read-only pool avoids holding every request connection while waiting for another scope.
+    settings = get_settings()
+    engine = create_async_engine(
+        settings.database_url,
+        poolclass=NullPool,
+        **qa_readonly_engine_kwargs(settings.qa_statement_timeout_ms),
+    )
+    try:
+        scoped_sessions = async_sessionmaker(engine, expire_on_commit=False)
+        # shortcut: one read session per workspace; use a dedicated aggregate if workspace scale requires it.
+        for ontology_id in workspace_ids:
+            async with scoped_sessions() as scoped:
+                await set_ontology_scope(scoped, ontology_id)
+                cr = await cr_counts(scoped, codes, unique_names)
+                actions = await action_counts(scoped, codes)
+                for code in codes:
+                    totals[code] += cr.get(code, 0) + actions.get(code, 0)
+    finally:
+        await engine.dispose()
+    return totals
+
+
+async def active_admin_ids(session: AsyncSession) -> set[int]:
+    """Recovery administrators are actual active users with both user and role management grants."""
+    rows = await session.execute(
+        select(SysUser.id, SysRole.func)
+        .join(SysRoleMember, SysRoleMember.user_id == SysUser.id)
+        .join(SysRole, SysRole.id == SysRoleMember.role_id)
+        .where(SysUser.status == UserStatus.active)
+    )
+    grants: dict[int, set[str]] = {}
+    for user_id, permissions in rows:
+        if isinstance(permissions, dict):
+            grants.setdefault(user_id, set()).update(
+                page for page in ("users", "roles") if permissions.get(page) == "manage"
+            )
+    return {user_id for user_id, pages in grants.items() if {"users", "roles"} <= pages}
 
 
 def make_user_filter(dept: str | None, status: str | None, kw: str | None) -> UserFilter:
@@ -144,7 +195,11 @@ class ValidationError422(AppError):
 
 async def department_options(session: AsyncSession) -> list[str]:
     organizations = list(await session.scalars(select(SysOrg.name).order_by(SysOrg.seq, SysOrg.id)))
-    existing = list(await session.scalars(select(SysUser.dept).where(SysUser.dept.is_not(None)).distinct().order_by(SysUser.dept)))
+    existing = list(
+        await session.scalars(
+            select(SysUser.dept).where(SysUser.dept.is_not(None)).distinct().order_by(SysUser.dept)
+        )
+    )
     return list(dict.fromkeys(value for value in [*organizations, *existing] if value and value.strip()))
 
 
@@ -165,7 +220,12 @@ class UserService:
         return list(rows), total
 
     async def _get(self, code: str) -> SysUser:
-        u = await self.session.scalar(self.repo.listed().where(SysUser.code == code).with_for_update().execution_options(populate_existing=True))
+        u = await self.session.scalar(
+            self.repo.listed()
+            .where(SysUser.code == code)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if u is None:
             raise NotFound("用户不存在", details={"id": code})
         return u
@@ -204,9 +264,12 @@ class UserService:
             actor=user,
         )
 
-    async def update(self, code: str, body: UserUpdateIn, user: CurrentUser) -> SysUser:
+    async def update(self, code: str, body: UserUpdateIn, user: CurrentUser, *, ip: str = "") -> SysUser:
         selected = await _check_role(self.session, body.role)
+        await lock_code_seq(self.session, "sys_user.lifecycle")
         u = await self._get(code)
+        previous_status = u.status
+        await self._check_status_change(u, body.status, user)
         previous = u.role
         if previous != body.role:
             check_func(user, "roles", "manage")
@@ -214,6 +277,7 @@ class UserService:
         u = await self.repo.update(u, values, actor=user.id, lock_version=body.lock_version)
         await sync_primary_role(self.session, u.id, previous, selected, user.id)
         await self.session.flush()
+        await self._audit_status(u, previous_status, user, ip)
         return u
 
     async def preview(self, rows: list[ImportRowIn]) -> list[ImportRowOut]:
@@ -268,28 +332,65 @@ class UserService:
             n += 1
         return n
 
-    async def enable(self, code: str, user: CurrentUser) -> SysUser:
-        u = await self._get(code)
-        return await self.repo.update(u, {"status": UserStatus.active}, actor=user.id)
-
-    async def disable(self, code: str, transfer_to: str | None, user: CurrentUser) -> SysUser:
-        """停用。名下有待办审批时 transferTo 必填（api-index【待定】，本分支按必填做），且须是另一个启用用户。
-
-        待办来自真实CR和动作指派；未实现安全转交时拒绝停用，不改审批归属。"""
-        u = await self._get(code)
-        if u.status == UserStatus.disabled:
-            return u
+    async def _check_status_change(
+        self, u: SysUser, status: UserStatus, user: CurrentUser, transfer_to: str | None = None
+    ) -> None:
+        if status == u.status or status == UserStatus.active:
+            return
+        if u.code == user.id:
+            raise Forbidden("不能将当前登录用户改为非启用状态")
+        if u.status == UserStatus.active:
+            admins = await active_admin_ids(self.session)
+            if admins == {u.id}:
+                raise AppError(
+                    "须保留至少一名启用且可管理用户和角色的管理员", code="STATE_INVALID", status_code=409
+                )
         pending = (await pending_approvals(self.session, [u])).get(u.code, 0)
         if pending > 0 and not transfer_to:
             raise ValidationError422(
-                "名下有待办审批，需要选择转交人",
+                "名下有待办审批，需要先完成待办后再更改状态",
                 code="TRANSFER_REQUIRED",
                 details={"pending": pending},
             )
         if pending > 0:
             raise AppError("请先完成待审批事项后再停用此用户", code="TRANSFER_UNAVAILABLE", status_code=409)
         if transfer_to:
-            t = await self.repo.get_listed(transfer_to)
-            if t is None or t.code == u.code or t.status != UserStatus.active:
+            target = await self.repo.get_listed(transfer_to)
+            if target is None or target.code == u.code or target.status != UserStatus.active:
                 raise ValidationError422("转交人须是另一个启用中的用户", details={"transferTo": transfer_to})
-        return await self.repo.update(u, {"status": UserStatus.disabled}, actor=user.id)
+
+    async def _audit_status(self, u: SysUser, previous: UserStatus, user: CurrentUser, ip: str) -> None:
+        if previous == u.status:
+            return
+        await insert_audit(
+            self.session,
+            actor=actor_of(user),
+            action="修改用户状态",
+            target=f"用户「{u.code}」：{previous.value} → {u.status.value}",
+            ip=ip[:64],
+            created_by=user.id,
+        )
+
+    async def enable(self, code: str, user: CurrentUser, *, ip: str = "") -> SysUser:
+        await lock_code_seq(self.session, "sys_user.lifecycle")
+        u = await self._get(code)
+        previous = u.status
+        u = await self.repo.update(u, {"status": UserStatus.active}, actor=user.id)
+        await self._audit_status(u, previous, user, ip)
+        return u
+
+    async def disable(
+        self, code: str, transfer_to: str | None, user: CurrentUser, *, ip: str = ""
+    ) -> SysUser:
+        """停用。名下有待办审批时 transferTo 必填（api-index【待定】，本分支按必填做），且须是另一个启用用户。
+
+        待办来自真实CR和动作指派；未实现安全转交时拒绝停用，不改审批归属。"""
+        await lock_code_seq(self.session, "sys_user.lifecycle")
+        u = await self._get(code)
+        if u.status == UserStatus.disabled:
+            return u
+        await self._check_status_change(u, UserStatus.disabled, user, transfer_to)
+        previous = u.status
+        u = await self.repo.update(u, {"status": UserStatus.disabled}, actor=user.id)
+        await self._audit_status(u, previous, user, ip)
+        return u

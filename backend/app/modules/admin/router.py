@@ -253,9 +253,10 @@ async def create_user(body: UserCreateIn, session: SessionDep, user: UsersManage
 
 @router.put("/users/{user_id}", response_model=AdminUserOut, summary="编辑用户（账号不能改）")
 async def update_user(
-    user_id: str, body: UserUpdateIn, session: SessionDep, user: UsersManage
+    user_id: str, body: UserUpdateIn, session: SessionDep, user: UsersManage, request: Request
 ) -> AdminUserOut:
-    return await user_with_pending(session, await UserService(session).update(user_id, body, user))
+    updated = await UserService(session).update(user_id, body, user, ip=client_ip(request))
+    return await user_with_pending(session, updated)
 
 
 @router.post("/users:import-preview", response_model=ImportPreviewOut, summary="导入预览（只校验，不写库）")
@@ -275,8 +276,9 @@ async def import_users(body: ImportIn, session: SessionDep, user: UsersManage) -
 
 
 @router.post("/users/{user_id}:enable", response_model=AdminUserOut, summary="启用用户")
-async def enable_user(user_id: str, session: SessionDep, user: UsersManage) -> AdminUserOut:
-    return await user_with_pending(session, await UserService(session).enable(user_id, user))
+async def enable_user(user_id: str, session: SessionDep, user: UsersManage, request: Request) -> AdminUserOut:
+    enabled = await UserService(session).enable(user_id, user, ip=client_ip(request))
+    return await user_with_pending(session, enabled)
 
 
 @router.post(
@@ -285,9 +287,12 @@ async def enable_user(user_id: str, session: SessionDep, user: UsersManage) -> A
     summary="停用用户（有待办审批时 transferTo 必填）",
 )
 async def disable_user(
-    user_id: str, session: SessionDep, user: UsersManage, body: DisableIn | None = None
+    user_id: str, session: SessionDep, user: UsersManage, request: Request, body: DisableIn | None = None
 ) -> AdminUserOut:
-    return user_out(await UserService(session).disable(user_id, body.transfer_to if body else None, user))
+    disabled = await UserService(session).disable(
+        user_id, body.transfer_to if body else None, user, ip=client_ip(request)
+    )
+    return user_out(disabled)
 
 
 # ---- 角色与权限（Roles.vue，api-index §4.2；逻辑在 admin/roles.py）----

@@ -27,7 +27,7 @@ from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.core.config import api_prefix, get_settings
 from app.core.errors import Forbidden, Unauthorized
 from app.db.session import SessionDep
 
@@ -170,7 +170,11 @@ async def get_current_user(
                 "/objects/{kind}/search",
                 "/scoped-ask",
             }
-            if request.method != "POST" or route.rsplit("/v1", 1)[-1] not in pure_reads:
+            own_read_markers = {api_prefix("ontology") + path for path in (
+                "/notifications/{notification_id}:read", "/notifications:read-all")}
+            if request.method != "POST" or (
+                route.rsplit("/v1", 1)[-1] not in pure_reads and route not in own_read_markers
+            ):
                 raise Forbidden("当前本体工作空间为只读权限")
     request.state.current_user = user
     return user

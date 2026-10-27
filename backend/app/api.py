@@ -15,12 +15,12 @@
 
 from fastapi import APIRouter, FastAPI
 
-from app.common.context import ReadonlyGuardDep
 from app.common.auth import ApiKeyGuardDep, OntologyGuardDep
+from app.common.context import ReadonlyGuardDep
 from app.core.config import api_prefix
 from app.modules.action.router import router as action_router
-from app.modules.admin.router import router as admin_router
 from app.modules.admin.api_keys import router as api_keys_router
+from app.modules.admin.router import router as admin_router
 from app.modules.biz.router import router as biz_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.data.router import router as data_router
@@ -29,13 +29,16 @@ from app.modules.event.ingress import router as internal_event_router
 from app.modules.event.router import router as event_router
 from app.modules.functions.router import router as functions_router
 from app.modules.integration.router import router as integration_router
+from app.modules.notifications.router import router as notifications_router
+from app.modules.notifications.router import settings_router as notification_settings_router
+from app.modules.ontology.router import router as workspace_router
 from app.modules.qa.router import router as qa_router
 from app.modules.static.router import router as static_router
 from app.modules.versioning.router import router as versioning_router
-from app.modules.ontology.router import router as workspace_router
 
 MOUNTS: list[tuple[str, APIRouter]] = [
     ("ontology", workspace_router),
+    ("ontology", notifications_router),
     ("ontology", versioning_router),
     ("ontology", static_router),
     ("ontology", dynamic_router),
@@ -49,6 +52,7 @@ MOUNTS: list[tuple[str, APIRouter]] = [
     ("biz", dashboard_router),  # 首页看板 /dashboard/kpis、/stores/ranking（PDE）
     ("admin", admin_router),
     ("admin", api_keys_router),
+    ("admin", notification_settings_router),
 ]
 
 

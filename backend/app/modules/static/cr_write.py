@@ -65,7 +65,7 @@ CHECK_NAMES = [
     ("V1", "主键与映射完整"),
     ("V2", "主键唯一性抽检"),
     ("V3", "关系两端与类型兼容"),
-    ("V4", "枚举挂取值字典"),
+    ("V4", "维度与码表来源"),
     ("V5", "指标引用的属性已映射"),
     ("V6", "允许的维度可到达"),
     ("V7", "已发布 API 名不删不改"),
@@ -687,7 +687,33 @@ class CrWriteService:
             calc.setdefault("V13", ("不适用", "本次未改关系"))
         if "metric" not in kinds:
             calc.setdefault("V8", ("不适用", "本次未改指标"))
-        if "dimension" not in kinds:
+        if "dimension" in kinds:
+            from app.modules.static.dimension_validation import dimension_source_error
+            from app.modules.static.link_validation import modeling_objects
+            from app.modules.static.models import Dimension
+
+            objects, _ = await modeling_objects(self.session, cr.id)
+            object_codes = {obj["id"] for obj in objects}
+            errors = []
+            for target in targets:
+                if target.target_kind != "dimension":
+                    continue
+                current = await self.session.scalar(select(Dimension).where(Dimension.code == target.target_id))
+                if current is None and not target.is_new:
+                    errors.append(f"{target.target_id}：维度或码表不存在")
+                    continue
+                values = {"kind": current.kind.value if current else "维度",
+                    "object": current.object.code if current is not None and current.object is not None else "",
+                    "attr": current.attr if current else "", "column": current.source_column if current else ""}
+                values.update({item.item_key: item.after for item in items if item.target_kind == "dimension"
+                    and item.target_id == target.target_id and item.section in ("def", "config")
+                    and item.op != "delete" and item.item_key in values})
+                error = dimension_source_error(values["kind"], values["object"], object_codes,
+                    attr=values["attr"], column=values["column"])
+                if error:
+                    errors.append(f"{target.target_id}：{error}")
+            calc["V4"] = ("阻断", "；".join(errors)) if errors else ("通过", "维度来源有效；独立码表不作为SQL筛选维度")
+        else:
             calc.setdefault("V4", ("不适用", "本次未改维度"))
             calc.setdefault("V10", ("不适用", "本次未改维度"))
         if "object" not in kinds:

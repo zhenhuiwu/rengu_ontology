@@ -315,12 +315,11 @@ class ChangeRequestService:
         text: str,
         desc: str | None = None,
         level: str | None = None,
-    ) -> None:
+    ) -> CrEvent:
         now = clock.now()
         cr.status = to
         cr.status_at = now
-        self.session.add(
-            CrEvent(
+        event = CrEvent(
                 cr_id=cr.id,
                 action=action,
                 actor=user.name,
@@ -330,20 +329,25 @@ class ChangeRequestService:
                 desc=desc,
                 level=level,
                 at=now,
-            )
         )
+        self.session.add(event)
+        return event
 
     async def transition(self, code: str, action: str, user: CurrentUser, reason: str | None = None) -> str:
         cr = await self._lock(code)
         await check_cr(self.session, cr, user)
         with self.session.no_autoflush:  # 只在最后 flush 一次：lockVersion 恰好 +1
-            await self._transition(cr, action, user, reason)
+            event = await self._transition(cr, action, user, reason)
         await self.session.flush()
+        if event is not None:
+            from app.modules.notifications.service import review_submitted
+
+            await review_submitted(self.session, cr, event, user)
         return cr.code
 
     async def _transition(
         self, cr: ChangeRequest, action: str, user: CurrentUser, reason: str | None
-    ) -> None:
+    ) -> CrEvent | None:
         owner = is_cr_owner(cr, user)
         reviewer_id = (cr.detail or {}).get("reviewerCode")
         reviewer = user.id == reviewer_id if reviewer_id else cr.reviewer == user.name
@@ -358,7 +362,7 @@ class ChangeRequestService:
             _raise_blocked(cr)
             if not cr.reviewer:
                 raise AppError("还没有指定审核人", code="CR_NO_REVIEWER", status_code=409)
-            self._move(cr, user, S.in_review, action, "提交审核", f"审核人 {cr.reviewer}")
+            return self._move(cr, user, S.in_review, action, "提交审核", f"审核人 {cr.reviewer}")
         elif action == "withdraw":
             _state(cr, S.in_review)
             if not owner:

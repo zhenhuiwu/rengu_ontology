@@ -490,8 +490,8 @@ class Dimension(CodeMixin, MutableTableMixin, Base):
     dim_group: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[DefStatus] = mapped_column(enum_column(DefStatus, 16), nullable=False)
     owner: Mapped[str] = mapped_column(String(64), nullable=False)
-    object_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("object_type.id"), nullable=False, index=True
+    object_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("object_type.id"), nullable=True, index=True
     )
     object_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="mock objectName（原文）")
     attr: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -513,7 +513,7 @@ class Dimension(CodeMixin, MutableTableMixin, Base):
     draft_note: Mapped[str | None] = mapped_column(Text)
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    object: Mapped[ObjectType] = relationship(lazy="joined")
+    object: Mapped[ObjectType | None] = relationship(lazy="joined")
     levels: Mapped[list["DimLevel"]] = relationship(order_by="DimLevel.level_no", lazy="selectin")
 
 

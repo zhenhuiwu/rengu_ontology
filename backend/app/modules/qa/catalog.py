@@ -39,7 +39,8 @@ async def directory(
     session: AsyncSession, ver: str | None = None, *, include_dims: bool = True
 ) -> tuple[Metrics, list[str]]:
     """一次加载请求/运行所需目录；历史缺节返回空，不能借用当前定义。"""
-    from app.modules.static.models import DefStatus, Dimension, DimLevel, Metric
+    from app.modules.static.dimension_validation import query_dimension_names
+    from app.modules.static.models import Dimension, DimLevel, Metric
     from app.modules.static.repo import pending_change_codes
     from app.modules.versioning.repo import ReleaseRepo
 
@@ -65,20 +66,21 @@ async def directory(
                 ).order_by(Metric.seq, Metric.code)
             )
         ]
-        # T2只需层级名，不通过Dimension.object加载整棵对象/属性图。
-        levels = (
-            (
-                await session.scalars(
-                    select(DimLevel.name)
-                    .join(Dimension, Dimension.id == DimLevel.dimension_id)
-                    .where(Dimension.status == DefStatus.published)
-                    .order_by(Dimension.seq, Dimension.code, DimLevel.level_no)
-                )
-            ).all()
-            if include_dims
-            else []
-        )
-        dimensions = [{"status": "已发布", "levels": [{"name": name} for name in levels]}]
+        # Read source presence, never load the object/property graph. Keep unbound names
+        # so metric dimNames cannot reintroduce a standalone code table as a SQL dimension.
+        dimensions_by_id = {}
+        if include_dims:
+            for did, name, object_id, status, level in await session.execute(
+                select(Dimension.id, Dimension.display_name, Dimension.object_id, Dimension.status, DimLevel.name)
+                .outerjoin(DimLevel, DimLevel.dimension_id == Dimension.id)
+                .order_by(Dimension.seq, Dimension.code, DimLevel.level_no)
+            ):
+                dimension = dimensions_by_id.setdefault(did, {
+                    "name": name, "object": object_id is not None, "status": status.value, "levels": []
+                })
+                if level:
+                    dimension["levels"].append({"name": level})
+        dimensions = list(dimensions_by_id.values())
     metrics = {
         metric_key(m["id"], ontology_id): {
             "key": metric_key(m["id"], ontology_id),
@@ -90,16 +92,7 @@ async def directory(
         for m in rows
         if m.get("id") and m.get("name")
     }
-    dims = [
-        x["name"]
-        for d in dimensions
-        if d.get("status") == "已发布"
-        for x in d.get("levels") or []
-        if x.get("name")
-    ]
-    if include_dims:
-        dims += [name for m in rows for name in m.get("dimNames") or [] if isinstance(name, str)]
-    return metrics, list(dict.fromkeys(dims))
+    return metrics, query_dimension_names(dimensions, rows) if include_dims else []
 
 
 @lru_cache

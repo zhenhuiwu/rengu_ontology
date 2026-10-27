@@ -100,7 +100,8 @@ async def definition_impacts(session, targets):
             dependency(("object", endpoint), ("link", code), "关系端点引用")
     object_codes = {row.id: row.code for row in objects}
     for code, _, object_id in dims:
-        dependency(("object", object_codes.get(object_id)), ("dimension", code), "维度归属对象")
+        if object_id in object_codes:
+            dependency(("object", object_codes[object_id]), ("dimension", code), "维度归属对象")
     for code, _, _, formula, allowed, variants in metrics:
         for key, (_, aliases) in nodes.items():
             if key[0] in ("object", "metric") and formula and re.search(pattern(aliases), formula):
