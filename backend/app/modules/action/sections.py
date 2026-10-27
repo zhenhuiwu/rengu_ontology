@@ -82,6 +82,26 @@ def action_def(at: ActionType) -> dict[str, Any]:
     }
 
 
+def with_policy(definition: dict[str, Any], policy: dict[str, Any] | None) -> dict[str, Any]:
+    """执行策略只在设置过时进定义 / 快照；没有 = 默认人工确认，存量定义形状不变。"""
+    return {**definition, "policy": policy} if policy is not None else definition
+
+
+async def _policies(
+    session: AsyncSession, types: list[ActionType], changed: dict[str, Any]
+) -> dict[str, Any]:
+    """本次改到的取新值，其它沿用当前版本定义里的策略；自动执行要求免审（发布校验，409）。"""
+    from app.modules.action.policy import version_policies
+    from app.modules.static.writeback import writeback_error
+
+    current = await version_policies(session, [(at.id, at.version) for at in types])
+    result = {at.code: changed[at.code] if at.code in changed else current.get(at.id) for at in types}
+    for at in types:
+        if (result[at.code] or {}).get("mode") == "auto" and at.approval.strip() != "免审":
+            raise writeback_error("自动执行的动作必须配置为免审", id=at.code, field="policy")
+    return result
+
+
 def _derived(ctx: Any, file: str, type_id: str) -> Any:
     for call in ctx.load(file, group=GROUP):
         a = call.get("args") or []
@@ -118,13 +138,15 @@ class ActionTypesSection:
     async def build_section(
         self, session: AsyncSession, base: Any | None, change_order_ids: list[str]
     ) -> Any:
-        from app.modules.action.writeback import finish_versions
+        from app.modules.action.writeback import PENDING, finish_versions
 
         types = await current_types(session)
+        policies = await _policies(session, types, session.info.get(PENDING, {}).pop("policy", {}))
         await finish_versions(
-            session, "action", types, change_order_ids, ActionTypeVersion, "action_type_id", action_def
+            session, "action", types, change_order_ids, ActionTypeVersion, "action_type_id",
+            lambda at: with_policy(action_def(at), policies.get(at.code)),
         )
-        return {at.code: action_def(at) for at in types}
+        return {at.code: with_policy(action_def(at), policies.get(at.code)) for at in types}
 
     def seed_section(self, ver: str, ctx: Any) -> Any:
         return {t["id"]: action_def_from_json(t, ctx) for t in ctx.load("ACTION_TYPES.json", group=GROUP)}

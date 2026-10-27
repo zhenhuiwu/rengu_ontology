@@ -84,12 +84,30 @@ class IngressIn(ApiModel):
         return value
 
 
+KEY_PREFIXES = ("rg_live_", "rg_test_")
+
+
 async def authenticate(
     session: SessionDep,
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     x_ontology_id: Annotated[str | None, Header()] = None,
 ) -> None:
+    """两种凭证：API 密钥（scope events:ingest，记调用方）；过渡期仍收按本体的静态令牌。"""
     from app.modules.ontology.models import OntologyWorkspace
+
+    parts = authorization.split(" ", 1) if authorization else []
+    provided = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+    if provided.startswith(KEY_PREFIXES):
+        from app.common.auth import get_current_user
+
+        # 本路由经 api_scope 声明 events:ingest；工作空间绑定、scope、IP、配额都由密钥鉴权统一校验。
+        await get_current_user(session, request, None, None, authorization)
+        context = getattr(request.state, "api_key", None)
+        if context is None or "events:ingest" not in context.scopes:
+            raise bad("API 密钥没有事件写入权限", "NO_PERMISSION", 403)
+        request.state.event_caller = f"api:{context.service_account_code or context.prefix}"[:64]
+        return
 
     if x_ontology_id is not None and (len(x_ontology_id) > 19 or not x_ontology_id.isascii() or not x_ontology_id.isdigit()):
         raise bad("本体工作空间编号无效")
@@ -114,13 +132,14 @@ async def authenticate(
             raise bad("内部事件工作空间凭证配置无效", "EVENT_INGRESS_UNAVAILABLE", 503) from None
     if not secret:
         raise bad("该本体工作空间的内部事件凭证尚未配置", "EVENT_INGRESS_UNAVAILABLE", 503)
-    parts = authorization.split(" ", 1) if authorization else []
-    provided = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
     if not secrets.compare_digest(provided.encode("utf-8"), secret.encode("utf-8")):
         raise bad("内部事件凭证无效", "UNAUTHORIZED", 401)
     if await session.scalar(select(OntologyWorkspace.id).where(OntologyWorkspace.id == ontology_id)) is None:
         raise bad("本体工作空间不存在", "NOT_FOUND", 404)
     await set_ontology_scope(session, ontology_id)
+
+
+authenticate.api_scope = "events:ingest"  # type: ignore[attr-defined]  # 让 API 密钥能到达本路由
 
 
 async def read_envelope(request: Request) -> IngressIn:

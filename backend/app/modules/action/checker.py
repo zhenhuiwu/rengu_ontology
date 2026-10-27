@@ -365,7 +365,11 @@ class DatabaseSubmissionChecker:
             return {"passed": False, "checked": len(conds), "failed": [{"name": "参数计算", "fail": exc.message}]}
         except Unavailable as exc:
             return {"passed": False, "checked": len(conds), "failed": [{"name": "参数", "fail": str(exc)}]}
-        bundles, _ = await RoleService(self.session).effective_access(self.user.id)
+        if self.user.is_service_account:  # 服务账号不是 sys_user：用密钥鉴权解析出的绑定角色
+            roles = list(await self.session.scalars(select(SysRole).where(SysRole.code.in_(self.user.roles))))
+            bundles = await RoleService(self.session).bundles(roles)
+        else:
+            bundles, _ = await RoleService(self.session).effective_access(self.user.id)
         from app.modules.ontology.models import OntologyRoleBinding
 
         bound_role_ids = set(await self.session.scalars(select(OntologyRoleBinding.role_id).where(

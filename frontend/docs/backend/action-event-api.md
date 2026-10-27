@@ -40,7 +40,7 @@
 
 | 接口 | 入参 | 同步返回 | 说明 |
 |---|---|---|---|
-| `submit(actionRunId, idemKey)` | 执行记录号和**外部幂等键**；本模块再按 `actionRunId` 读执行时锁定的动作类型版本和参数快照 | `result: 成功 \| 失败 \| 结果未知`，`extRef`（外部回执号，可空），`code`（返回码或失败原因），`retries`，`ms`，`calls[]`（每次调用：attempt、http、ms） | 先校验提交条件，再调用外部系统。**重试规则（以前端为准，和动态评审一致）**：外部**明确返回失败**（HTTP 4xx/5xx 或业务失败码，如 ERP 的 `NC-2071 供货仓可用库存不足`）时，对方支持幂等就用**同一个幂等键**自动重试，最多 `maxRetry` 次；重试完仍失败，返回失败。对方不支持幂等（`maxRetry=0`）不重试。mock 依据：失败记录 `retries = maxRetry`；成功记录有“第 2 次成功（首次 HTTP 503 明确失败）”。**超时或无响应**记为结果未知，**写操作永不重试**。成功后的本体编辑和 `ActionExecuted` 见 §4.1。 |
+| `submit(actionRunId, idemKey)` | 执行记录号和**外部幂等键**；本模块再按 `actionRunId` 读执行时锁定的动作类型版本和参数快照 | `result: 成功 \| 失败 \| 结果未知`，`extRef`（外部回执号，可空），`code`（返回码或失败原因），`retries`，`ms`，`calls[]`（每次调用：attempt、http、ms） | 先校验提交条件，再调用外部系统。**写回提交只发一次、带签名、永不重发**（PDE 定，2026-10-27，以代码为准【仓库】）：外部**明确返回失败**（HTTP 4xx/5xx 或业务失败码，如 ERP 的 `NC-2071 供货仓可用库存不足`）直接返回失败，不自动重试；**超时或无响应**记为结果未知，转对账（§5.2），也不重发。外部系统的 `maxRetry` 只用于副作用 Webhook 出站（§14）。mock 里“失败记录 `retries = maxRetry`”“第 2 次成功”的演示数据与此不一致，以代码为准。成功后的本体编辑和 `ActionExecuted` 见 §4.1。 |
 | `query_by_key(idemKey)` | 外部幂等键 | `extStatus: 查到·成功 \| 查到·未执行 \| 查无`（与动态口径一致；「仍无法确认」是人工对账的选项、触发 `reopen_reconcile`，不是返回值），`extRef`，`raw` | 定时对账（本模块的 cron）调这个接口。人工对账前是否先调一次给对账人参考，前端没有（对账弹窗只有结论 + 说明），属于【推断】，见 dynamic-api.md `[推断 P7]`。“查无”也算一次查询。对方不支持幂等查询（`ext_system.idempotent=false`，如短信、企业微信）时不调这个接口，对账任务建好即转人工。 |
 | 回调 `on_reconciled(actionRunId, reconcileResult, reconciler)` | 由本模块调用动态 | — | 定时对账有结论时回调。**一律变成“已对账”，不会变成“成功”**；`reconcileResult = succeeded \| not_executed`（界面文案“外部已成功 / 外部未执行”），`reconciler` 为“系统”。`succeeded` 时由**动态**提交本体编辑并发出 `ActionExecuted`（人工对账选“外部已成功”同样处理）。`not_executed` 不提交、不发事件，原记录**不能重新提交**，前端提示“如仍需执行请重新发起”。本模块不写 `action_run`。 |
 | `dry_run(actionTypeId, params, view?, cr?, ver?)` | 动作类型、参数；草稿视图带 `view=draft&cr=` | `passed`，`checked`，`failed[{name, fail}]` | 对应“试运行”。只校验提交条件并模拟调用，不写外部系统，不改本体。 |
@@ -117,8 +117,8 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 2. 校验提交条件（任一不满足即拒绝）
 3. 审批（审批不是“免审”时）
 4. 调用外部系统（同步；超时值和幂等键取外部系统配置）
-5. 外部明确返回失败 ⇒ 自动重试
-6. 超时或无响应 ⇒ 结果未知·待对账，不重试
+5. 外部明确返回失败 ⇒ 失败（写回提交只发一次，不自动重试【仓库】）
+6. 超时或无响应 ⇒ 结果未知·待对账，不重发
 7. 提交本体编辑（写回成功后才提交）
 8. 执行副作用（异步；失败不影响动作结果）
 
@@ -325,7 +325,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 4. **审批**：审批由动态负责。审批条件按 mock 的原文存储（如“单次 > 500 张需审批”），做不做成可求值的表达式见 §8.2 U8。
 5. **写回外部系统（同步，决定动作结果）**：适配器带上外部系统的幂等请求头（如 `X-Request-Id`、`requestNo`），值就是执行记录的外部幂等键。每次调用写一行 `writeback_call`。
    - 返回 2xx：成功，记下 `extRef`（外部回执号）。
-   - 明确失败（4xx/5xx、429，或业务失败码如 `NC-2071`）：对方支持幂等时，用**同一个键**自动重试，最多 `maxRetry` 次，退避按外部系统配置（如“最多 3 次，1s/2s/4s”）；重试完仍失败就返回失败。对方不支持幂等时不重试，直接失败。以前端 mock 为准。“业务失败码不重试”是【推断】备选，见 §8.2 U2。
+   - 明确失败（4xx/5xx、429，或业务失败码如 `NC-2071`）：直接返回失败，**不自动重试**（写回提交只发一次、带签名，见 §14；PDE 定以代码为准【仓库】）。
    - 超时或无响应：**结果未知，不重试**，因为对方可能已经处理，重试可能造成重复写回。
 6. **提交本体编辑**：写回成功后才提交（修改、新建、关联），保证本体和外部系统一致。没有外部系统的动作直接提交，失败就报错，不重试。
 7. **副作用（异步）**：通知、事件、Webhook。成功后发 `ActionExecuted`；结果未知时发 `ActionOutcomeUnknown`。副作用失败不影响动作结果。
@@ -422,7 +422,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 审批中 | 审批通过 | 执行中 | 动态 |
 | 审批中 | 审批人驳回 | 【推断，默认不实现】前端没有“已驳回”，见 §8.2 U1 | 动态 |
 | 执行中 | `submit` 返回成功 | 成功（终态） | 动态（依据本模块的返回） |
-| 执行中 | `submit` 返回失败（提交条件未通过，或外部明确失败且同键重试 `maxRetry` 次后仍失败） | 失败 | 动态 |
+| 执行中 | `submit` 返回失败（提交条件未通过，或外部明确失败；写回提交不自动重试） | 失败 | 动态 |
 | 执行中 | `submit` 返回结果未知（超时，未重试） | 结果未知 | 动态 |
 | 结果未知 | 定时对账查到“查到·成功” → `on_reconciled(succeeded)` | **已对账**（终态，不是成功）；动态提交本体编辑、发 `ActionExecuted` | 本模块回调，动态改状态 |
 | 结果未知 | 定时对账查到“查到·未执行” → `on_reconciled(not_executed)` | **已对账**（终态），`reconcileResult=not_executed`；**不能重新提交**，提示“如仍需执行请重新发起” | 本模块回调，动态改状态 |
@@ -436,9 +436,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 状态 | 触发 | 下一状态 |
 |---|---|---|
 | 调用中 | 2xx | 成功 |
-| 调用中 | 明确失败（HTTP 4xx/5xx 或业务失败码），对方支持幂等，`attempt ≤ maxRetry` | 退避后用**同一个幂等键**重试（attempt + 1） |
-| 调用中 | 429 限流 | 按 `Retry-After`（没有就按外部系统的 `rateLimit` 和退避）等待后同键重试，计入 `maxRetry`；适配器本身按 `rateLimit` 排队，排队不算重试【建议】 |
-| 调用中 | 明确失败，重试次数用完，或对方不支持幂等 | 失败 |
+| 调用中 | 明确失败（HTTP 4xx/5xx、429 或业务失败码） | 失败（只发一次，不重试【仓库】） |
 | 调用中 | 超时或无响应 | 结果未知，**不重试** → 新建 `reconcile_task(state=querying, round=1, tries=0, next_at=+15 分钟)` |
 | querying | `query_by_key` 返回查到·成功 | `resolved`，回调 `on_reconciled(succeeded, 系统)` → 已对账 |
 | querying | 返回查到·未执行 | `resolved`，回调 `on_reconciled(not_executed, 系统)` → 已对账，不能重新提交 |
@@ -481,7 +479,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 规则 | Ontology 规则包括新建、修改、删除对象和关系；Function 规则不能和其他规则混用；另有通知规则和 Webhook 规则。通知在所有改动应用之后发出 | “本体编辑”只有修改、新建、关联三种，**没有删除**；通知放在副作用里，写回成功后发 | 【官方】https://www.palantir.com/docs/foundry/action-types/rules/ ；取舍为【笔者归纳】 |
 | 提交条件 | 三种模板：Current user、Parameter、Execution context（是否在 Scenario 里执行）。**全部满足**才能提交；每个根级条件有自己的失败提示；可以在 Ontology Manager 里试运行 | 模板是 当前用户 / 参数 / 上下文对象。我们的“上下文对象”是**检查对象状态**（如“告警.状态 = 处理中”），Palantir 是用 Parameter 模板检查对象参数的属性；它的 Execution context 指 Scenario。名字相近但含义不同，别混用。“试运行”对应它的 test run | 【官方】https://www.palantir.com/docs/foundry/action-types/submission-criteria/ ；对应关系为【笔者归纳】 |
 | 写回与副作用 | Webhook 分两种：**writeback**（在其他规则之前执行，失败则什么都不改，失败会显示给用户；只能配置一个）；**side effect**（在改动之后执行，可以有多个，顺序不保证，用户可能先看到成功）。官方说明：外部请求成功、但 Ontology 改动失败的情况仍可能发生 | 完全照这个分层：写回同步、只有一个、决定结果；本体编辑在写回成功后提交；副作用异步、失败不影响结果 | 【官方】https://www.palantir.com/docs/foundry/action-types/webhooks/ |
-| 幂等键、超时 → 结果未知 → 对账 | 我读的上面这几页没有讲幂等键、超时和对账 | 我们加的：每次执行一个幂等键；明确失败时用同一个键重试，最多 max_retry 次；超时记结果未知，写操作永不重试；每 15 分钟按键查询，最多 3 次，之后人工对账 | 【笔者归纳】 |
+| 幂等键、超时 → 结果未知 → 对账 | 我读的上面这几页没有讲幂等键、超时和对账 | 我们加的：每次执行一个幂等键；写回提交只发一次、不重发；超时记结果未知，写操作永不重试；每 15 分钟按键查询，最多 3 次，之后人工对账 | 【笔者归纳】 |
 | 执行记录 | Action log 只记录**成功**的提交（失败看 Action metrics）；必记字段包括 Action RID、动作类型版本（每次更新动作类型都会自动加 1）、提交时间、提交人、被编辑的对象，以及调用过的 webhook 和发过的通知 | 我们的执行记录**成功和失败都记**，状态更多（待确认、结果未知、已对账……），相当于 action log 加 action metrics 的合体。版本号随**本体整版发布**变，不是每改一次就加 1 | 【官方】https://www.palantir.com/docs/foundry/action-types/action-log/ ；差异为【笔者归纳】 |
 | 函数支持的动作 | 用 `@OntologyEditFunction()` 写的函数作为唯一一条规则；函数版本要手动升级，也可以开自动升级（只升兼容版本，`0.y.z` 不能自动升级） | 第一期不做函数支持的动作；以后如果要做，动作类型应**锁定函数版本**，随整版发布一起升级 | 【官方】https://www.palantir.com/docs/foundry/action-types/function-actions-getting-started/ ；取舍为【笔者归纳】 |
 | 事件 / 自动化 | Automate 取代 Object Monitoring。条件有时间、对象数据、数据集三类；效果有提交动作、AIP Logic、函数、通知。官方建议：后果重大的改动先**暂存，等人审核** | 规则命中 → 生成“待确认”动作 → 确认人确认后提交，和官方的这条建议一致 | 【官方】https://www.palantir.com/docs/foundry/automate/overview/ |
@@ -634,7 +632,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 3. ~~事件流分页~~ → **已定**：`page`、`size`，响应 `{items,total,page,size}`，不用游标。
 4. ~~统计和明细对不上~~ → **已定，不处理**：不要求 mock 内部一致，照原样入库（2026-10-25 团队决定）。
 5. ~~执行记录由谁 seed~~ → **已定**：`ACTIONS` + `RUNS` 都由动态 seed 进 `action_run`，时间线进动态的 `action_run_log`。
-6. ~~重试规则~~ → **已定，以前端为准**：明确失败同键重试到 `maxRetry`（对方须支持幂等），超时结果未知不重试；“业务失败码不重试”留作 U2。
+6. ~~重试规则~~ → **已改定（PDE，2026-10-27）**：写回提交只发一次、带签名、不重发；明确失败即失败，超时结果未知转对账。原“以前端为准、同键重试到 `maxRetry`”作废，U2 随之不再适用。
 7. **审批条件**现在是一段文字（如“单次 ≤ 500 张免审”）。要做成可求值的表达式的话，放在动作类型定义（本模块）还是动态的审批配置？（U8）
 8. **试运行、模拟触发在 `?ver=` 下按哪个版本执行**：前端不置灰，后台不拦截，默认按当前查看的版本执行【推断】。
 9. **部分投递**剩下的重试成功后，是改成“已投递”还是保留“部分投递”留痕？
@@ -912,7 +910,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 |---|---|---|
 | 动作副作用 通知/Webhook（`action.effect` outbox） | 是 | 是 |
 | 事件 HTTP 投递（`event_delivery`） | 是 | 是 |
-| 动作写回提交（外部执行器，`writeback_call`） | 是 | **否**（结果未知转对账，不重发业务写入【仓库】；与 §2 表“明确失败自动重试”的描述不一致，以代码为准） |
+| 动作写回提交（外部执行器，`writeback_call`） | 是 | **否**（只发一次；明确失败即失败，结果未知转对账，不重发业务写入【仓库】；§1.1/§2/§4/§5 已按此改正） |
 | 适配器 GET 查询/探测 | 否 | 否 |
 
 ### 14.2 请求头【推断】
@@ -942,3 +940,67 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 - 用尽：429/5xx → 失败（副作用 `EXTERNAL_HTTP_<code>`；投递 `HTTP_SUBSCRIBER_REJECTED`）；超时/网络错误 → 结果未知（投递 `HTTP_RESULT_UNKNOWN_REQUIRES_REVIEW`）。
 - 重试排队中：副作用 `payload.state = "retrying"`、`last_error = EFFECT_RETRY_SCHEDULED`；投递 `state = 待处理(pending)`、`error = HTTP_RETRY_SCHEDULED`、`nextAt` 为下次时间（会出现在投递异常收件箱的“待处理”里）。
 - 记录：副作用逐次写入 outbox `payload.attempts[]`（`attempt, at, httpStatus, error, retryable, signed, elapsedMs`）；投递逐次写 `event_delivery_record`（`attempt_started` / `attempt_finished`）。无新表、无新迁移。
+
+## 15. 动作执行策略 / 机器接口 / 入站服务账号（分支 `palantir-t2`，基于 master `bc32ce6`，2026-10-27）
+
+无迁移：策略存在动作类型版本定义（JSON）里，额度从时间线日志计数【仓库】。全部由动作类型 / 事件类型配置和 API 密钥配置驱动，代码不写死业务对象或本体编号。
+
+### 15.1 执行策略字段（变更单 `policy` 段）
+
+变更单写回新增 `section = "policy"`，`itemKey` 固定 `"policy"`，`value` 为整个策略对象；发布后写入新动作类型版本 `definition.policy`，快照同步【仓库】：
+
+```json
+{"mode": "auto", "callers": ["人", "服务账号"], "overflow": "stage",
+ "limits": {"dailyCount": 50, "perCallerDailyCount": 20,
+            "amount": {"param": "qty", "max": 500}, "objects": ["S001", "S002"]}}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `mode` | `suggest` 只给建议（暂存返回 409 `ACTION_POLICY_SUGGEST_ONLY`，请用试运行）/ `confirm` 人工确认（默认，= 现有行为）/ `auto` 在上限内自动执行 |
+| `callers` | 允许的调用方：`人`、`规则`、`AI`、`服务账号`；省略 = 不限制（默认）。不在内 → 403 `CALLER_NOT_ALLOWED`，不建记录 |
+| `limits` | 只有 `auto` 能设，且 `auto` 必须有 `dailyCount`。`perCallerDailyCount` 每个调用方身份每日上限；`amount` 指定数值参数 API 与单次上限；`objects` 允许的对象 ID 列表 |
+| `overflow` | 固定 `stage`（超限转人工确认），写回时自动补上 |
+
+调用方映射【推断】：来源 手动 / 推演 / 告警处理 → 人；问数 → AI；规则 / 告警 → 规则；API 密钥的主体是服务账号时一律算 `服务账号`。
+
+发布校验（409 `WRITEBACK_FAILED`，整单回滚）：格式不合法；`auto` 但动作不是 `免审`（`auto` = 系统代为确认 + 免审）。
+
+### 15.2 分流
+
+`POST /action-runs:stage`（人工）和 `POST /machine/actions/{typeId}:execute` 在新建记录后按策略分流【仓库】：
+
+- `confirm` / 默认：与原来完全一样，返回 `待确认`。
+- `auto`：依次检查 免审 → 对象范围 → 数值上限 → 当日总额度 → 调用方额度（自然日按 `display_tz`，同一动作类型加事务级锁）。全部通过 → 系统代为确认、免审提交，时间线记“按执行策略自动执行”（说明里有调用方和额度 n/N）；任一不满足 → 保持 `待确认`，时间线记“未自动执行，转人工确认：原因”，之后照常人工 `:confirm`。
+- 规则、告警、问数、推演产生的记录目前一律暂存，不自动执行（缺口）。
+- 服务账号调用：允许范围照常校验，但即使在额度内也转人工确认（原因“服务账号调用暂不自动执行（执行链需要在用用户身份）”）；服务账号发起的记录不指定确认人，任一有动作中心管理权限的人可确认【推断】。
+
+### 15.3 机器接口（挂 `/api/ontology/v1`）
+
+鉴权：`Authorization: Bearer rg_…`（本体小白的 API 密钥 / 服务账号，scope 校验与动作类型白名单由 `require_api_scope` 统一处理），人工会话同样可调。
+
+| 接口 | scope | 说明 |
+|---|---|---|
+| `POST /action-types/{typeId}:dry-run` | `actions:dry-run` | 试运行（已有接口，不另开 `/machine` 别名） |
+| `POST /machine/actions/{typeId}:execute` | `actions:execute` + 动作类型白名单 | 请求头 **必须** `Idempotency-Key`（`[A-Za-z0-9_-]{1,80}`）；body `{"objKind"?, "objId", "params"?: "JSON 字符串"}`；首次 201，同键同内容 200 返回原记录，同键不同内容 409 |
+| `GET /machine/action-runs/{id}` | `actions:execute` | 查执行结果 |
+
+响应：
+
+```json
+{"ok": true, "status": "待确认|执行中|成功|失败|结果未知", "runId": "AR-…",
+ "policyMode": "confirm|auto|null", "overflowReason": "今日自动执行已达上限 2", "typeVersion": "v3"}
+```
+
+`policyMode`、`overflowReason` 只在本次执行请求里有值，查询接口为 `null`。错误沿用 `AppError`。服务账号密钥要读对象（参数校验 / 行范围）需同时带 `objects:read`【仓库，按密钥规则】。
+
+### 15.4 入站事件：服务账号密钥
+
+`POST /internal/v1/events` 同时接受【仓库】：
+
+- `Bearer rg_…` API 密钥：须有 scope `events:ingest`，否则 403；密钥设了事件类型白名单时，事件类型编码或 API 名须在其中，否则 403 `NO_PERMISSION`；`X-Ontology-Id` 按密钥工作空间规则校验。事件记录 `created_by = "api:{服务账号编号或密钥前缀}"`，审计调用方由密钥鉴权写入。
+- 原静态令牌：过渡期保留，行为不变（`created_by = "internal:event"`）。
+
+### 15.5 未做
+
+评测门槛（`evalPassedAt`）；`objects` 用行范围表达式；规则 / 问数等来源自动执行；服务账号代执行身份；`suggest` 在试运行 / 选项接口里的展示；前端策略编辑器；`/machine/objects:query`、函数调用别名、AI 工具导出；机器响应里的 `checks` / `edits`。

@@ -7,7 +7,7 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import or_, select
 
 from app.common.ontology import require_ontology_id
@@ -73,7 +73,15 @@ def validate_fields(fields, payload: dict[str, Any]) -> None:
             raise bad(f"载荷字段 {field.api} 须符合类型：{kind}")
 
 
-async def receive(session, body: IngressIn) -> dict:
+def check_allowlist(request, event_type: EventType) -> None:
+    """API 密钥的事件类型白名单（类型编码或 API 名任一命中即可）；静态令牌与内部调用不受限。"""
+    context = getattr(getattr(request, "state", None), "api_key", None) if request is not None else None
+    allowed = getattr(context, "event_types", None)
+    if allowed is not None and event_type.code not in allowed and event_type.api not in allowed:
+        raise bad("API 密钥不允许写入此事件类型", "NO_PERMISSION", 403)
+
+
+async def receive(session, body: IngressIn, request=None) -> dict:
     ontology_id = require_ontology_id(session)
     adapter = get_adapter(session)
     # Consistent lock order: producer ID, parent type row, business dedup key.
@@ -113,6 +121,8 @@ async def receive(session, body: IngressIn) -> dict:
     )
     if event_type is None or body.event_type not in (event_type.code, event_type.api):
         raise bad("事件类型已变化，请重新提交", "EVENT_TYPE_CHANGED", 409)
+    check_allowlist(request, event_type)
+    created_by = getattr(getattr(request, "state", None), "event_caller", None) or "internal:event"
     if event_type.status != TypeStatus.published or event_type.retired_release_id is not None:
         raise bad("事件类型尚未发布或已下线", "EVENT_TYPE_NOT_PUBLISHED", 409)
     if body.object_type not in (event_type.object_api, event_type.obj_kind):
@@ -145,7 +155,7 @@ async def receive(session, body: IngressIn) -> dict:
                     event_type_id=event_type.id,
                     dedup_key=key,
                     last_accepted_at=now,
-                    created_by="internal:event",
+                    created_by=created_by,
                 )
             )
         else:
@@ -173,7 +183,7 @@ async def receive(session, body: IngressIn) -> dict:
             definition_snapshot=event_def(event_type),
             release_id=release.id if release else None,
             is_test=False,
-            created_by="internal:event",
+            created_by=created_by,
         )
     )
     await session.flush()
@@ -181,5 +191,7 @@ async def receive(session, body: IngressIn) -> dict:
 
 
 @router.post("/events", summary="认证接收生产方事件；持久化后由独立订阅投递器处理")
-async def ingest_event(session: SessionDep, body: Annotated[IngressIn, Depends(read_envelope)]) -> dict:
-    return await receive(session, body)
+async def ingest_event(
+    session: SessionDep, request: Request, body: Annotated[IngressIn, Depends(read_envelope)]
+) -> dict:
+    return await receive(session, body, request)

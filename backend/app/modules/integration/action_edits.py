@@ -223,11 +223,15 @@ async def object_operation(session, user, obj, definition):
     from app.modules.admin.models import SysRole, SysRoleMember, SysUser
     from app.modules.ontology.models import OntologyRoleBinding
 
-    permissions = await session.scalars(select(SysRole.objs).join(
-        SysRoleMember, SysRoleMember.role_id == SysRole.id).join(
-        SysUser, SysUser.id == SysRoleMember.user_id).join(
+    if getattr(user, "is_service_account", False):
+        # 服务账号不是 sys_user：按其绑定角色（密钥鉴权时已解析为 user.roles）取对象授权。
+        stmt = select(SysRole.objs).where(SysRole.code.in_(user.roles))
+    else:
+        stmt = select(SysRole.objs).join(SysRoleMember, SysRoleMember.role_id == SysRole.id).join(
+            SysUser, SysUser.id == SysRoleMember.user_id).where(SysUser.code == user.id)
+    permissions = await session.scalars(stmt.join(
         OntologyRoleBinding, OntologyRoleBinding.role_id == SysRole.id).where(
-        SysUser.code == user.id, OntologyRoleBinding.ontology_id == require_ontology_id(session)))
+        OntologyRoleBinding.ontology_id == require_ontology_id(session)))
     names = {definition["id"], definition["api"], definition["name"]}
     for entries in permissions:
         if not isinstance(entries, list):
