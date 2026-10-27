@@ -4,6 +4,8 @@
  * 当前选中写进 ?alert=，状态页签写进 ?status=。对象点开走公共抽屉，不跳转。
  * 开关 dynamic 走真接口时（src/api/dynamic.ts）：列表 / 计数 / 详情 / 处理记录 / 处理人下拉都取后台，
  * 认领、批量认领、转派、关闭、批量关闭、发起动作一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
+ * 「AI 处置建议」（真接口才有）：GET /alerts/{id}/decision 取最近一条决策评估（告警产生后规则身份自动评估，或手动生成），
+ * 只给建议；采用建议 = 预填参数后走原有发起动作 / 动作中心暂存流程，由人确认。
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -21,7 +23,7 @@ import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
   dynamicApi, dynamicContextKey, getAlertMeta, getAlertFacets, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts,
-  startAlertAction, listPeople, type AlertDto, type AlertDetailDto, type AlertRuleDto, type AlertTab, type AlertFacetsDto, type AlertCan,
+  startAlertAction, listPeople, getAlertDecision, evaluateAlertDecision, type DecisionDto, type DecisionRecommendation, type AlertDto, type AlertDetailDto, type AlertRuleDto, type AlertTab, type AlertFacetsDto, type AlertCan,
 } from '@/api/dynamic';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
@@ -349,6 +351,39 @@ async function runAction() {
   a.log.push({ time: now(), text: `发起动作「${r.action}」，待${approverOf(r) ?? '--'}审批；动作成功后告警自动转为已解决`, who: ME.value });
   message.success(`已提交：${r.action}`);
 }
+/** AI 处置建议：只读决策记录；采用 = 规则绑定动作就预填参数走本页发起动作确认，其它动作带参数去动作中心发起 */
+const decision = ref<DecisionDto | null>(null), decisionLoading = ref(false);
+let decisionSeq = 0;
+async function loadDecision(evaluate = false) {
+  const seq = ++decisionSeq, ctx = dynamicContextKey(), id = selectedId.value;
+  if (!evaluate) decision.value = null;
+  if (!live.value || !id) return;
+  decisionLoading.value = true;
+  try {
+    const r = evaluate ? await evaluateAlertDecision(id) : await getAlertDecision(id);
+    if (seq === decisionSeq && ctx === dynamicContextKey()) decision.value = r.decision;
+  } catch (e) { if (seq === decisionSeq && ctx === dynamicContextKey()) { if (!evaluate) decision.value = null; readFail(e); } }
+  finally { if (seq === decisionSeq) decisionLoading.value = false; }
+}
+watch([dynamicContextKey, selectedId], () => { loadDecision(); }, { immediate: true });
+const decisionBy = (d: DecisionDto) => d.caller?.kind === 'system' ? `规则 ${d.caller.system?.ruleId ?? ''} 自动评估` : (d.caller?.name || '手动生成');
+const fmtValue = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v));
+const recState = (r: DecisionRecommendation) => {
+  if (r.availability?.checked && r.availability.available === false) return r.availability.reason || '动作当前不可用';
+  if (r.dryRun?.ran && r.dryRun.passed === false) return r.dryRun.error?.message || '预校验未通过';
+  if (r.unfilledParams.length) return `${r.unfilledParams.length} 个必填参数待补`;
+  return '';
+};
+function adopt(r: DecisionRecommendation) {
+  const a = current.value; if (!a) return;
+  if (rule.value?.action && r.actionType.name === rule.value.action && mine.value && !a.actionRef && a.can?.startAction) {
+    actionParamsText.value = JSON.stringify(r.params, null, 2);
+    actionOpen.value = true;
+    return;
+  }
+  const b = r.handoff.body;
+  router.push({ path: '/use/ops/actions', query: { ontology: app.ontologyId, launch: b.typeId, launchObj: b.objId ?? undefined, launchParams: b.params } });
+}
 let peopleSeq = 0;
 watch([dynamicContextKey, selectedId], async () => {
   transferOpen.value = false; transferTo.value = undefined; closeOpen.value = false; batchCloseOpen.value = false; actionOpen.value = false; actionParamsText.value = '{}'; closeReason.value = '';
@@ -443,6 +478,29 @@ watch([dynamicContextKey, selectedId], async () => {
           <a-descriptions-item v-if="current.actionRef" label="关联动作"><router-link v-if="current.actionId" :to="{ path: '/use/ops/actions', query: { ontology: app.ontologyId, act: current.actionId, tab: current.actionStatus === '结果未知' ? 'unknown' : 'records' } }" class="num">{{ current.actionId }}</router-link><span v-else class="num">{{ current.actionRef }}</span><span class="c-3"> · {{ current.actionStatus }}</span></a-descriptions-item>
         </a-descriptions>
 
+        <template v-if="live">
+          <div class="t-14 fw-600 al-sub al-ai-head">
+            <span>AI 处置建议</span>
+            <a-button size="small" :loading="decisionLoading" @click="loadDecision(true)">{{ decision ? '重新生成' : '生成建议' }}</a-button>
+          </div>
+          <div v-if="!decision" class="t-14 c-3">{{ decisionLoading ? '加载中…' : '暂无建议。规则告警由调度 worker 自动评估，也可手动生成。' }}</div>
+          <template v-else>
+            <div class="t-12 c-3">{{ decisionBy(decision) }} · <span class="num">{{ decision.createdAt.slice(0, 19).replace('T', ' ') }}</span> · 只给建议，执行需人工确认</div>
+            <div v-if="decision.error" class="t-14 c-3">评估失败：{{ decision.error }}</div>
+            <div v-else-if="!decision.recommendations.length" class="t-14 c-3">没有可推荐的动作<span v-if="decision.notes.length">：{{ decision.notes.join('；') }}</span></div>
+            <div v-for="r in decision.recommendations.slice(0, 3)" :key="r.actionType.id" class="al-ai">
+              <div class="al-ai-row"><span class="fw-600">{{ r.actionType.name }}</span><span class="t-12 c-3 num">评分 {{ r.score }}</span></div>
+              <ul class="al-ai-list t-12"><li v-for="(x, i) in r.reasons" :key="i">{{ x.text }}</li></ul>
+              <div v-for="(v, k) in r.params" :key="k" class="t-12"><span class="c-3">{{ k }}</span> = <span class="num">{{ fmtValue(v) }}</span><span v-if="r.paramSources[k]" class="c-3" :title="r.paramSources[k]"> · {{ r.paramSources[k] }}</span></div>
+              <div v-for="u in r.unfilledParams" :key="u.api" class="t-12 c-3">待补 {{ u.name || u.api }}<span v-if="u.reason">：{{ u.reason }}</span></div>
+              <div class="al-ai-row">
+                <span class="t-12 c-3">{{ recState(r) || '预校验通过' }}<template v-if="r.policy?.mode"> · 策略 {{ r.policy.mode }}</template></span>
+                <a-button v-if="!readonly && !isClosed(current.status)" size="small" type="link" @click="adopt(r)">采用建议</a-button>
+              </div>
+            </div>
+          </template>
+        </template>
+
         <div class="t-14 fw-600 al-sub">处理记录</div>
         <a-timeline class="al-tl">
           <a-timeline-item v-for="(t, i) in current.log" :key="i" :color="t.abnormal ? 'var(--tl-attention)' : 'gray'">
@@ -511,4 +569,8 @@ watch([dynamicContextKey, selectedId], async () => {
 .al-tl-row { display: flex; align-items: baseline; gap: 12px; }
 .al-tl-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .al-tl-meta { flex: none; }
+.al-ai-head { display: flex; align-items: center; justify-content: space-between; }
+.al-ai { margin-top: 8px; padding: 8px 12px; border: var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 2px; }
+.al-ai-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.al-ai-list { margin: 2px 0; padding-left: 16px; }
 </style>

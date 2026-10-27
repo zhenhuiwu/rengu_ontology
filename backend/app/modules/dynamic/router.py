@@ -486,6 +486,21 @@ async def get_decision(
     return await svc.get(code)
 
 
+# 告警详情「AI 处置建议」：最近一条关联本告警的决策记录（自动评估 caller.kind = system，或人手动生成）。
+@router.get("/alerts/{code}/decision", dependencies=ALERTS_READ)
+async def alert_decision(
+    code: DynamicPathCode, svc: Annotated[DecisionService, Depends(_decisions)]
+) -> dict[str, Any]:
+    return {"alertId": code, "decision": await svc.latest_for_alert(code)}
+
+
+@router.post("/alerts/{code}/decision:evaluate", dependencies=ALERTS_READ)
+async def alert_decision_evaluate(
+    code: DynamicPathCode, svc: Annotated[DecisionService, Depends(_decisions)]
+) -> dict[str, Any]:
+    return {"alertId": code, "decision": await svc.evaluate(DecisionEvaluateIn(alert_id=code))}
+
+
 from app.modules.dynamic.rules_router import router as _rules_router  # noqa: E402  第二部分：规则 / 推演 / 生命周期
 
 router.include_router(_rules_router)

@@ -337,3 +337,63 @@
 - 规则 `action_type_id` 直接绑定与 autoStage 不一致时的优先级；动作已退役、只在 changing 状态时的 notes。
 - `decision_log` 只追加触发器的 UPDATE / DELETE 拒绝，以及迁移往返（`test_migrations` 现有失败卡在 notify_0022，不是本分支造成的）。
 - dynamic:read 新加到的规则命中、生命周期、动作 GET 路由：密钥有 / 无 dynamic:read 的情况，只测了 `/alerts`。
+
+## dynamic-r7（2026-10-27）：参数表达式求值、告警自动决策建议、QA worker 挂载、服务账号显示
+
+本批没有新迁移，迁移头沿用 master。`decision_log.alert_code` 已经有索引，告警和决策记录靠它关联。情景推演 `:run` 仍然返回 503（用户决定），本批没有动。
+
+### 1. 决策评估：参数映射表达式（`param_expr.py`，`decisions._prefill`）
+
+- 适用范围：数值类参数（类型含 整数 / 小数 / 数值 / 数字 / 金额 / number / integer / decimal / float）。按「规则映射文本 → 参数默认值」的顺序，把它们当表达式求值。
+- 允许的写法只有：`+ − × ÷ * / ( )`（含全角括号和全角加减）、数字、属性名。词法切分后转成带占位符的 Python 表达式，`ast` 白名单只放行 BinOp / UnaryOp / Constant / Name，然后交给 `functions.runtime.Interpreter` 求值（有步数预算）。不用 `eval`，长度上限 200。
+- 名字怎么解析：
+  1. 先查告警时刻的事实（`alert_facts`）：
+     - 告警值里的「标签：数值」对。
+     - 规则只有一个比较条件时：条件字段 ← 告警触发值里唯一的数字；条件值是文本时 ← 告警阈值里唯一的数字。
+  2. 再查对象当前属性：先告警对象，后维度对象。按 api_name 或显示名匹配，可以带「类型名.」前缀。读取走 `qa.explore_api._bind`，有行级范围。
+- 填不上（缺属性、为空、不是数值、除数为 0、超出预算）时，该参数留在 `unfilledParams`，并带上 `reason`。整数参数四舍五入。来源写进 `paramSources`，例如 `规则映射表达式：安全库存 × 1.5 − 可用库存；安全库存=120（告警阈值），可用库存=37（告警触发值）`。
+- 演示：AL-20261025-0139 → `request_replenish.qty = 143`。
+
+### 2. 告警自动决策建议（`auto_decision.py`）
+
+- **时机**：不在建告警的事务里做。动态调度 worker（`python -m app.modules.dynamic.worker`，每分钟跑 `rule.sweep`）在 `_sweep_workspace` 最后、所有运行事务提交之后调用 `decide_pending(ontology_id)`，外面包了 try/except，只记日志。
+- **选哪些告警**：非种子、待处理 / 处理中、24 小时内、还没有任何 decision_log 的，每轮最多 20 条。定时规则的告警当轮就会评估；事件规则（`event_rule_runtime.dispatch`，在事件 worker 的事务里）建的告警在下一次 sweep 补上。没有做同步钩子，避免拖慢或破坏事件事务。
+- **身份**：告警的 `created_by`（规则运行身份）→ 规则 `trigger.runAsUserId` → `published_by`。
+- **调用方式**：`DecisionService(..., system={"trigger":"rule","ruleId":...})` 跑 `evaluate(dryRun=true, limit=5)`。
+  - `caller.kind=system`，`caller_name=「规则 X 自动评估」`。
+  - 执行策略的调用方类型是「规则」。
+  - 只给建议，不暂存。
+- **失败处理**：单条失败写一条 `output.error` 的 decision_log，下一轮就不会反复重试。告警本身不受影响。
+- **接口**（都要 alerts view；告警不可见时 404）：
+  - `GET /alerts/{id}/decision` → `{alertId, decision|null}`：最近一条，返回结构同 `GET /decisions/{id}`，多一个 `error` 字段。
+  - `POST /alerts/{id}/decision:evaluate`：当前用户手动生成一条，caller 是 user 或 service_account。
+- **前端**（`Alerts.vue`，只在真接口模式下显示）：详情里有「AI 处置建议」面板，内容包括来源（自动评估 / 手动）、前三条建议的理由、参数和来源、待补参数及原因、预校验 / 可用性 / 策略，以及「生成建议 / 重新生成」按钮。点「采用建议」时：
+  - 建议的是规则绑定的动作，且我是处理人、可以发起：预填参数，打开本页原有的发起动作弹窗，经确认后提交。
+  - 其他情况：跳到动作中心 `?launch=&launchObj=&launchParams=`，`Actions.vue` 打开发起弹窗并预填，仍由人确认暂存。
+
+### 3. Worker 挂载 QA 页面定时任务
+
+- `dynamic/worker.py` 的 `build_app` 调用 `app.modules.qa.page_schedule.register(app)`，worker 同时监听 `rules` 和 `qa_pages` 两个队列。
+- master 上还没有 `qa.page_schedule`，导入失败时记一条 warning 后跳过，worker 照常启动。任务代码归 QA。
+
+### 4. 服务账号执行主体的显示
+
+- `ActionService.person_label`：`api:{编号}` 显示为「服务账号 {名称或编号}」。名称按批从 `ServiceAccount` 只读预取；当前调用方就是这个服务账号时，直接用它的名字。
+- 用到的地方：确认人、审批人、发起人、动作日志的 desc，以及自动执行日志里的「执行主体 …」。`created_by` 仍然保存原始的 `api:{编号}`（palantir-t5 的行为不变）。
+
+### 测试与未测（交 Codex）
+
+- 已加：`test_dynamic_decisions.py` 增加三项：表达式安全求值的单元测试；auto `decide` 后用 GET / POST `/alerts/{id}/decision` 验证 qty=143、caller system、策略调用方「规则」；`person_label` 单元测试。
+- 未测：
+  - `decide_pending` 和 sweep 收尾的整链（需要 worker 用真 sessionmaker，测试事务里看不到提交）。
+  - 失败记录分支。
+  - 事件规则告警靠下一次 sweep 补评估。
+  - 多比较条件的规则（这时只用「标签：数值」对和对象属性）。
+  - 维度对象属性的解析。
+  - 前端面板和动作中心的 `launch` 预填（只做了 vue-tsc）。
+  - QA 挂载（模块存在时的 `register`）。
+  - `load_service_names` 的数据库查询路径。
+- 本环境里一直存在、和本批无关的失败：
+  - `test_palantir_machine` / `test_dynamic_actions` 的 `grant_fixture_roles` 夹具断言（改动前就失败）。
+  - `test_dynamic_rules::test_hits_paging_and_detail`。
+  - 3 条 `test_migrations`（notify_0022）。

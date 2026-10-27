@@ -72,3 +72,65 @@ async def test_decision_api_key_scopes(dyn, client):  # noqa: F811
     dry = await client.post(url, json={"alertId": alert_id}, headers=tokens["dry"])
     assert dry.status_code == 200, dry.text
     assert dry.json()["recommendations"][0]["dryRun"]["ran"] is True
+
+
+def test_param_expression_safe():
+    from app.modules.dynamic.param_expr import coerce, evaluate
+
+    v = {"安全库存": 120, "可用库存": "37", "空": None, "文": "abc"}
+
+    def r(n):
+        return n in v, v.get(n), "t"
+
+    ok = evaluate("安全库存 × 1.5 − 可用库存", r)
+    assert ok["ok"] and ok["value"] == 143 and coerce(ok["value"], "整数") == 143
+    assert evaluate("（安全库存 + 1） ÷ 0", r)["reason"] == "除数为 0"
+    for bad in ('__import__("os")', "安全库存 ** 2", "安全库存.__class__ - 1"):
+        assert not evaluate(bad, r)["ok"], bad
+    assert "为空" in evaluate("空 + 1", r)["reason"] and "不是数值" in evaluate("文 + 1", r)["reason"]
+    assert "未找到" in evaluate("缺失 × 2", r)["reason"]
+
+
+async def test_alert_decision_auto_and_panel(dyn, client):  # noqa: F811
+    from sqlalchemy import select
+
+    from app.modules.dynamic.auto_decision import decide
+    from app.modules.dynamic.models import Alert
+
+    alerts = await client.get(f"{API}/alerts", params={"status": "all", "ruleId": "R-012", "size": 1})
+    code = alerts.json()["items"][0]["id"]
+    url = f"{API}/alerts/{code}/decision"
+    assert (await client.get(url)).json() == {"alertId": code, "decision": None}
+
+    alert = await dyn.scalar(select(Alert).where(Alert.code == code))
+    alert.created_by = "U010245"  # 种子告警无运行身份；真实规则告警 created_by = 规则运行身份
+    auto = await decide(dyn, alert)
+    assert auto["caller"]["kind"] == "system" and auto["caller"]["system"]["ruleId"] == "R-012"
+    top = auto["recommendations"][0]
+    assert top["actionType"]["id"] == "request_replenish"
+    # 补货数量 = 安全库存 × 1.5 − 可用库存（告警阈值 / 触发值），整数参数
+    assert isinstance(top["params"].get("qty"), int) and top["params"]["qty"] > 0, top
+    assert "表达式" in top["paramSources"]["qty"]
+    assert top["policy"]["callerType"] == "规则"
+
+    got = (await client.get(url)).json()["decision"]
+    assert got["decisionId"] == auto["decisionId"]
+    manual = await client.post(f"{API}/alerts/{code}/decision:evaluate")
+    assert manual.status_code == 200, manual.text
+    assert (await client.get(url)).json()["decision"]["decisionId"] == manual.json()["decision"]["decisionId"]
+    err(await client.get(f"{API}/alerts/AL-NOPE/decision"), 404, "NOT_FOUND")
+
+
+def test_person_label_service_principal():
+    from types import SimpleNamespace
+
+    from app.modules.dynamic.service import ActionService
+
+    catalog = SimpleNamespace(person=lambda v: {"id": "U1", "name": "张三"} if v == "U1" else None)
+    me = SimpleNamespace(id="SA-1", name="补货机器人", is_service_account=True)
+    svc = ActionService(None, me, catalog, None)
+    svc._service_names["SA-2"] = "对账服务"
+    assert svc.person_label("api:SA-1") == "服务账号 补货机器人"
+    assert svc.person_label("api:SA-2") == "服务账号 对账服务"
+    assert svc.person_label("api:SA-9") == "服务账号 SA-9"
+    assert svc.person_label("U1") == "张三" and svc.person_label("规则 R-012") == "规则 R-012"

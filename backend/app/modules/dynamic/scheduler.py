@@ -350,4 +350,11 @@ async def _sweep_workspace(ontology_id: int) -> int:
                         "运行事务失败；未保存部分业务结果",
                         now(),
                     )
+    try:
+        # 告警事务都已提交：为新告警补自动决策建议（尽力而为，失败只记日志）
+        from app.modules.dynamic.auto_decision import decide_pending
+
+        await decide_pending(ontology_id)
+    except Exception:
+        logger.exception("Auto decision sweep failed: ontology %s", ontology_id)
     return len(pending)
