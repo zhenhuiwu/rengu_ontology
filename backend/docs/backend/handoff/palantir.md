@@ -3,6 +3,7 @@
 > 2026-10-27（UTC+8）重写。分支 `palantir-t1`（基于 `283bd89`，先 cherry-pick PDE 的测试夹具修复 `5e3282e` → `98d127a`）。
 > 2026-10-27（UTC+8）追加：分支 `palantir-t2`（基于 `bc32ce6`）= 执行策略 + 机器接口 + 入站服务账号，见 §0。
 > 2026-10-27（UTC+8）追加：分支 `palantir-t3`（基于 `c55f370`）= 机器接口第 3 期（对象查询 / 函数调用 / AI 工具清单 / 评测集），见 §0.1。
+> 2026-10-27（UTC+8）追加：分支 `palantir-t5`（基于 `343ba5f`）= 服务账号自动执行（执行主体 `api:{编号}`）+ 工具清单改用能力目录，见 §0.3。
 > 接口细节见 `frontend/docs/backend/action-event-api.md`（§14 = Webhook 签名/重试合同；§15 = 执行策略/机器接口/入站；§16 = 机器接口第 3 期）；设计见 `backend/docs/backend/palantir-tier1-design.md`。
 > 用户已定：**不接 ERP、Kafka，不做外部定时对账**；Web 系统对接走 Webhook。标注：【仓库】代码现状，【推断】我的取舍。
 
@@ -41,6 +42,22 @@
 - `枚举列表` 参数逐项校验：`action/checker.py`。
 - 未做（延后）：工具清单改用能力目录的参数 `enum` 与事件类型节（static-t3 已提供），`machine/tools.py` 仍自己读事件类型、自己解析枚举。
 - 测试：`tests/test_palantir_machine.py` 新增 2 条。
+
+## 0.3 palantir-t5：服务账号自动执行 / 工具清单改用能力目录（基于 `343ba5f`，无迁移）
+
+| 项 | 状态 | 位置 |
+|---|---|---|
+| 服务账号经 `:execute` 在 auto 策略、调用方允许、上限内**真实执行**；超限仍转暂存（待确认）；幂等不变 | 完成；去掉 t2 的“服务账号一律转人工”分支和 `SERVICE_ACCOUNT_TEXT` | `dynamic/service.py` `apply_policy()`、`action/policy.py` |
+| 执行主体：`ServiceAccount` 没有 runAs 用户字段【仓库，`admin/models.py`】，故用系统主体 `api:{服务账号编号}`：写入 `action_run.created_by`、外部提交调用账本 `writeback_call.actor`、副作用 outbox `actor`；自动执行日志备注带“执行主体 api:…”；确认人留空（不冒充真人） | 完成 | 新增 `machine/principal.py`（`actor_of` / `resolve_actor`） |
+| 后台执行链按主体重建身份：`api:` → 读服务账号（未吊销）+ 绑定且已绑定到本空间的角色（功能权限 = 角色 func，行范围 = 角色行范围）；其余仍走 `resolve_user`（在用用户） | 完成 | `integration/execution.py`（排队写回）、`integration/action_effects.py`（副作用复核）、`integration/emitter.py`（动作事件 / 编辑授权） |
+| 工具清单：动作参数 / 函数入参用能力目录的 `enum`；事件工具取目录 `events` 节，只导出 `ingest.accepting`，密钥看 `ingest.keyAllowed`，接口地址取 `ingest`；删除自读事件类型与自解析枚举 | 完成 | `machine/tools.py` |
+| 测试 | `test_palantir_machine.py` 改写服务账号用例 + 新增主体解析用例；`test_palantir_machine_tools.py` 新增目录 enum / 事件节用例 | 跑法须带 `-p tests.use_ops_support` |
+
+取舍【推断】：后台重建的服务账号身份用**角色**权限，不再叠加密钥的 scope / 功能快照收窄（后台拿不到是哪把密钥；入口处已按密钥校验过）；服务账号吊销或角色解绑后，排队中的执行在后台 401 失败，不会以别人身份继续。`machine.tools.INGESTIBLE` 保留，因为 `static/capabilities.py` `_ingest` 引用它计算 `accepting`。
+
+需要的钩子（未改他人文件）：
+- 本体小白：如要“绑定真人代执行”，需在 `ServiceAccount` 加 runAs 用户字段（迁移在其模块）；`admin/api_keys.py` 里服务账号 `CurrentUser` 的构造是私有逻辑，`machine/principal.resolve_actor` 复刻了同样的形状（编号、名称、角色、`is_service_account`），建议抽一个公开函数共用。
+- 静态：`INGESTIBLE` 由能力目录反向引用 `machine.tools`，可考虑挪到 `event` 模块做公共常量；事件载荷字段目前不带 `enum`（工具侧已兼容，有就用）。
 
 ## 1. 第一档 Webhook 出站（palantir-t1，已合入）
 
@@ -88,8 +105,8 @@
 4. 事件路由 `max_retries`、签名密钥只能改环境配置，页面不展示。
 5. 签名头名、签名串、5 分钟时间窗需与接入方确认【推断】。
 6. 旧遗留：静态①两标签页并发编辑提示（部分）、静态③事件行级范围（等定义）、编号锁去锁反证、`VITE_PALANTIR_CR_WRITE` 默认打开（等决定）。
-7. 执行策略缺口（t2）：评测门槛 `evalPassedAt` 未接；`objects` 只是 ID 列表（非行范围）；规则/告警/问数/推演来源不自动执行；服务账号不自动执行（缺 runAs）；`suggest` 未在试运行/选项接口展示；无前端策略编辑器。
-8. 机器接口缺口（t3 后）：函数无按密钥白名单；`suggest` 动作不导出、无试运行工具；清单无对象查询工具；只读角色用户的密钥不能调 `/machine` POST（`auth.py` 纯读判定未改）；对象查询依赖问数模块私有函数；静态能力目录钩子见 §0.1。
+7. 执行策略缺口（t2）：评测门槛 `evalPassedAt` 未接；`objects` 只是 ID 列表（非行范围）；规则/告警/问数/推演来源不自动执行；服务账号已可自动执行（t5，系统主体 `api:{编号}`，无真人 runAs）；`suggest` 未在试运行/选项接口展示；无前端策略编辑器。
+8. 机器接口缺口（t3 后）：函数无按密钥白名单；`suggest` 动作不导出、无试运行工具；清单无对象查询工具；只读角色用户的密钥不能调 `/machine` POST（`auth.py` 纯读判定未改）；对象查询依赖问数模块私有函数；静态能力目录钩子见 §0.1（事件段、参数 enum 已由 static-t3/t4 提供并在 t5 接上，按段计算仍未做）。
 
 ## 6. 划掉的项（不再做）
 

@@ -66,6 +66,7 @@ from app.modules.dynamic.schemas import (
     DimOut,
     StageIn,
 )
+from app.modules.machine.principal import actor_of
 
 SYSTEM = "系统"
 
@@ -657,7 +658,7 @@ class ActionService:
             in_center=True,
             is_seed=False,
         )
-        return await self.repo.create(run, actor=self.user.id)
+        return await self.repo.create(run, actor=actor_of(self.user))
 
     def _call_text(self, r: ActionRun) -> str:
         if not r.sys_code:
@@ -812,9 +813,6 @@ class ActionService:
         meta = self.catalog.action_meta(r.action_type_code) or {}
         free = bool(meta.get("approvalConfigured") and meta.get("approvalRequired") is False)
         ok, reason, note = await action_policy.auto_decision(self.session, r, policy, caller, caller_id, free)
-        if ok and self.user.is_service_account:
-            # 执行链（外部提交 / 事件 / 效果）按在用用户解析执行人；服务账号代执行需单独的 runAs 设计。
-            ok, reason = False, action_policy.SERVICE_ACCOUNT_TEXT
         if not ok:
             self.policy_overflow = reason
             await self._log(
@@ -826,7 +824,12 @@ class ActionService:
         ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.approving)
         r.status = ActionStatus.approving
         r.confirmed_at = clock.now()
-        r.confirmer = r.confirmer or self.user.id
+        if self.user.is_service_account:
+            # 服务账号不是在用用户：确认人留空；执行主体 `api:{编号}` 记入 created_by / 日志，
+            # 后台执行链（machine.principal.resolve_actor）按它重建身份。
+            note = f"{note} · 执行主体 {actor_of(self.user)}"
+        else:
+            r.confirmer = r.confirmer or self.user.id
         await self._log(r, action_policy.AUTO_TEXT, note)
         r.status = ActionStatus.executing
         r.approved_at = clock.now()

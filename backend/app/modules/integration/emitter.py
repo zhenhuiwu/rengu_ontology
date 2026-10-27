@@ -47,11 +47,11 @@ class DatabaseEventEmitter:
         identity = event_id if run.ontology_id == 1 else f"{run.ontology_id}:{event_id}"
         code = f"dynamic:{hashlib.sha256(identity.encode()).hexdigest()[:56]}"
         previous = await self.session.scalar(select(Event).where(Event.code == code))
-        from app.common.auth import resolve_user
+        from app.modules.machine.principal import resolve_actor
         call = await self.session.scalar(select(WritebackCall).where(
             WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.write))
         actor = call.actor if call else (run.approver or run.confirmer or run.created_by)
-        user = await resolve_user(self.session, actor or "")
+        user = await resolve_actor(self.session, actor or "")
         if event_type == EVENT_ACTION_EXECUTED and not previous and (
                 definition["writeback"]["edits"] or definition["writeback"]["effects"]):
             if run.sys_code:

@@ -12,7 +12,6 @@ import time
 import httpx
 from sqlalchemy import or_, select
 
-from app.common.auth import resolve_user
 from app.common.outbox import OutboxEvent, emit
 from app.core import clock
 from app.core.errors import AppError
@@ -42,6 +41,7 @@ from app.modules.integration.signing import (
     retryable_status,
     signed_headers,
 )
+from app.modules.machine.principal import actor_of, resolve_actor
 
 TOPIC = "action.effect"
 RETRY_SCHEDULED = "EFFECT_RETRY_SCHEDULED"
@@ -134,15 +134,16 @@ async def retain_effects(session, user, run, definition, event_type):
                 occurred_at=previous.occurred_at if previous else clock.now(), source="action.effect",
                 object_type=data["objectType"], object_id=data["objectId"], payload=data["payload"], dedup_key=identity))
         elif not await session.scalar(select(OutboxEvent.id).where(OutboxEvent.event_id == identity)):
-            await emit(session, TOPIC, {"ontologyId": run.ontology_id, "runId": run.code, "typeVersion": run.type_version,
-                "actor": user.id, "effect": effect, "data": data, "state": "queued"}, event_id=identity)
+            await emit(session, TOPIC, {"ontologyId": run.ontology_id, "runId": run.code,
+                "typeVersion": run.type_version, "actor": actor_of(user), "effect": effect, "data": data,
+                "state": "queued"}, event_id=identity)
 
 
 async def recheck_effect(session, data: dict):
     """Recheck current authority and payload before every send; never replace retained values."""
     from app.modules.integration.action_edits import execution_definition, target_access
     run = await session.scalar(select(ActionRun).where(ActionRun.code == data["runId"]).with_for_update())
-    user = await resolve_user(session, data["actor"])
+    user = await resolve_actor(session, data["actor"])
     definition = await execution_definition(session, run)
     await target_access(session, user, run, definition)
     if run.type_version != data["typeVersion"] or data["effect"] not in definition["writeback"]["effects"]:

@@ -973,7 +973,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 - `confirm` / 默认：与原来完全一样，返回 `待确认`。
 - `auto`：依次检查 免审 → 对象范围 → 数值上限 → 当日总额度 → 调用方额度（自然日按 `display_tz`，同一动作类型加事务级锁）。全部通过 → 系统代为确认、免审提交，时间线记“按执行策略自动执行”（说明里有调用方和额度 n/N）；任一不满足 → 保持 `待确认`，时间线记“未自动执行，转人工确认：原因”，之后照常人工 `:confirm`。
 - 规则、告警、问数、推演产生的记录目前一律暂存，不自动执行（缺口）。
-- 服务账号调用：允许范围照常校验，但即使在额度内也转人工确认（原因“服务账号调用暂不自动执行（执行链需要在用用户身份）”）；服务账号发起的记录不指定确认人，任一有动作中心管理权限的人可确认【推断】。
+- 服务账号调用：~~即使在额度内也转人工确认~~（t2 行为，t5 已改，见 §17）；服务账号发起的记录不指定确认人，转人工时任一有动作中心管理权限的人可确认【推断】。
 
 ### 15.3 机器接口（挂 `/api/ontology/v1`）
 
@@ -1026,7 +1026,7 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | 工具 | 名字 | 出现条件 | 参数 schema |
 |---|---|---|---|
 | 动作类型 | `action_{api}` | 目录有 `actions` 段 + 动作中心管理权限 + 密钥有 `actions:execute` 且在动作类型白名单内（目录的 `machine.keyAllowed`）；执行策略 `suggest` 不导出；`callers` 不含本调用方（人 / 服务账号）不导出 | `{objKind: enum[目标对象], objId, params: {参数 API: 类型}}`，必填参数进 `required` |
-| 事件类型 | `event_{api}` | 已发布、未退役、来源为 外部 / 同步；密钥有 `events:ingest` 且在事件类型白名单内（code 或 api）；需事件类型页面权限 | 入站事件信封：`eventId, eventType, occurredAt, source, objectType, objectId, payload{字段}`，`dedupKey` / `traceId` 可选 |
+| 事件类型 | `event_{api}` | 目录 `events` 节（需事件类型页面权限）里 `ingest.accepting = true`（已发布且来源为 外部系统）；密钥看 `ingest.keyAllowed`（`events:ingest` + 事件类型白名单）（t5 起，见 §17） | 入站事件信封：`eventId, eventType, occurredAt, source, objectType, objectId, payload{字段}`，`dedupKey` / `traceId` 可选 |
 | 函数 | `fn_{name}` | 目录有 `functions` 段（已发布）+ 密钥有 `functions:invoke` | `{input: {入参: 类型}}` |
 
 返回：
@@ -1065,3 +1065,33 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 
 - 入站 `POST /internal/v1/events`（静态令牌与 API 密钥一样）**只接受来源为 外部系统 的事件类型**；数据同步 / 动作 / 规则来源返回 403 `EVENT_SOURCE_NOT_EXTERNAL`，不写任何记录。平台内部发射（动作副作用、动作事件）不走 HTTP，不受影响【仓库】。工具清单的事件工具相应只导出外部来源。
 - 提交校验：`枚举列表` 参数的每一项都必须在规则声明的枚举集合内，否则 422 `SUBMISSION_CRITERIA_FAILED`（`details.failed[].fail` = “参数值不在已声明枚举集合：…”，与单值枚举一致；按 `core/errors.py` 约定不另设错误码）【仓库】。
+
+## 17. 服务账号自动执行 / 工具清单改用能力目录（分支 `palantir-t5`，基于 master `343ba5f`，2026-10-27）
+
+### 17.1 服务账号自动执行【仓库】
+
+`POST /machine/actions/{typeId}:execute` 用服务账号密钥调用时，分流规则与人一致：
+
+| 条件 | 结果 |
+|---|---|
+| 策略 `auto` + `callers` 含 `服务账号`（或不限）+ 在 `limits` 内 + 免审 | 系统代为确认并真实执行，响应 `status` 为执行结果（如 `成功`），`overflowReason = null` |
+| 超出上限 / 需审批 / 不在允许对象等 | 照旧转暂存（`待确认`），`overflowReason` 说明原因 |
+| `callers` 不含 `服务账号` | 403 `CALLER_NOT_ALLOWED`，不建记录 |
+
+幂等不变：同一密钥主体 + `Idempotency-Key` 重放返回 200 和同一 `runId`。
+
+### 17.2 执行主体
+
+服务账号模型没有绑定的真人（runAs）字段，所以执行主体是系统主体 **`api:{服务账号编号}`**（如 `api:SA-0001`）：
+
+- 写入执行记录 `created_by`、外部提交调用记录 `actor`、动作副作用 outbox 的 `actor`；自动执行的时间线备注带“执行主体 api:…”。
+- 确认人 `confirmer` 为空（不冒充真人）；用户调用时仍是本人编号。
+- 后台步骤（排队的外部提交、副作用复核、动作事件 / 编辑授权）按主体重建身份：`api:` 开头 → 服务账号须未吊销、角色须绑定当前本体空间，权限 = 角色的功能权限与行范围；否则 401，该次执行失败，不会改用其他人身份【推断】。
+
+### 17.3 工具清单数据来源
+
+`/machine/tools` 三类工具全部来自 `GET /meta/capabilities`：动作参数 / 函数入参的取值用目录的 `enum`（`枚举列表` → `items.enum`）；事件工具来自目录 `events` 节，`binding` 的 `method` / `path` / `scope` 取自该节 `ingest`。工具侧不再读定义表、不再解析参数规则。
+
+### 17.4 未做
+
+真人 runAs（需服务账号模型加字段）；后台身份不叠加密钥 scope 收窄（入口已校验）【推断】；其余同 §16.5（事件段与参数枚举两条已解决）。

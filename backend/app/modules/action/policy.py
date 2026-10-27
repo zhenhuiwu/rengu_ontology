@@ -28,7 +28,6 @@ CALLER_OF_SOURCE = {
 }
 AUTO_TEXT = "按执行策略自动执行"
 OVERFLOW_TEXT = "未自动执行，转人工确认"
-SERVICE_ACCOUNT_TEXT = "服务账号调用暂不自动执行（执行链需要在用用户身份）"
 
 
 class _Strict(BaseModel):
