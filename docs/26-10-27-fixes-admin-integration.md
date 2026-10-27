@@ -96,7 +96,7 @@ ROOT实际effect重试返回503且未发送；首版组件把操作错误并入�
 
 ROOT随后实际保存每天08:00、站内信、本人订阅，toast成功；整页reload仍恢复原配置，列表与Drawer显示一致。测试时钟固定10/25，显示下次10/26 08:00；不是拿真实日历误判过期。之后使用只读事务、降权角色和scope1核验：该页refresh为每天08:00/保留上次结果，next_run为`2026-10-26T00:00:00Z`（Asia/Shanghai `2026-10-26 08:00:00`）；订阅enabled=true、channel=inbox、recipients=[王敏]、send_when=after_refresh、only_changed=false。key仍仅FN-A，notice1仍已读，effect2/3分别failed/unknown且attempts各1、manualRetries各0，空间WritebackCall仍0。没有修改已保存配置。旧email配置列表状态标注另由QA组收尾；不把它算作本组外部邮件投递能力。本轮无测试worker，故配置保存恢复与任务/通知的针对性PG回归分别记录，不声称已经等真实每日到点消费。
 
-最终关闭状态待ROOT通知，测试API暂保持。主5280/8000与四个worker不由本组启动或停止。
+ROOT结束隔离UI核查后，已关闭跟踪的测试API session11333（PID52188），只读端口核验8001监听数为0；测试证据数据保留，未再seed或修改产品。临时5282前端由ROOT关闭，主5280/8000与四个worker未由本组启动或停止。
 
 ## 本组文件清单与冻结范围
 
