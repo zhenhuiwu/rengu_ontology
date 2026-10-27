@@ -3,7 +3,8 @@
 可见性与各列表接口完全一致：
 - 对象本身先过 visible_references（与告警维度同一行级 + 唯一编码谓词），不可见 = 404，不区分“不存在”；
 - 每一段再各自走 scoped_instances（告警 / 命中 / 动作沿用各自列表的实现；生命周期变化按对象类型 + objId）；
-- 路由入口要求 object-types view；告警 / 规则命中 / 动作段另需 alerts / rules / action-center view，
+- 路由入口要求对象读取（同对象详情；API 密钥 objects:read）；告警 / 命中 / 生命周期 / 动作段另需
+  alerts / rules / object-types / action-center view，
   缺权限的段返回 {"available": false, "reason": "no-permission"}。
 全部按元数据（对象类型目录、生命周期定义、数据绑定）取值，不写死任何业务对象。"""
 
@@ -66,8 +67,6 @@ class ObjectDynamicSummary:
             "actionRuns": ("action-center", self._actions),
         }
         allowed = {name: self._can(page) for name, (page, _) in sections.items()}
-        if not any(allowed.values()):
-            raise Forbidden("没有此页面的操作权限", details={"pages": [p for p, _ in sections.values()]})
         out: dict[str, Any] = {
             "objKind": kind,
             "objKindLabel": kind_label(self.catalog, kind),

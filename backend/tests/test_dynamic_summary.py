@@ -39,3 +39,27 @@ async def test_object_dynamic_summary(dyn, client):  # noqa: F811
     err(await client.get(f"{API}/object-types/no_such_type/objects/{obj}/dynamic-summary"), 404, "NOT_FOUND")
     err(await client.get(url, params={"limit": 0}), 422, "VALIDATION_FAILED")
     err(await client.get(url, params={"limit": 51}), 422, "VALIDATION_FAILED")
+
+
+async def test_object_dynamic_summary_api_key(dyn, client):  # noqa: F811
+    """服务账号 / API 密钥：objects:read 能调摘要；没有该 scope 的密钥 403。"""
+    changes = await client.get(f"{API}/object-types/order/lifecycle/changes", params={"size": 1})
+    obj = changes.json()["items"][0]
+    url = f"{API}/object-types/order/objects/{obj['objId']}/dynamic-summary"
+    admin = {"X-Demo-As": "U010245"}
+    tokens = {}
+    for scope in ("objects:read", "meta:read"):
+        body = {
+            "name": "k-summary-" + scope.split(":")[0],
+            "env": "测试",
+            "scopes": [scope],
+            "binding": {"kind": "用户", "userId": "U010245"},
+        }
+        r = await client.post("/api/admin/v1/api-keys", json=body, headers=admin)
+        assert r.status_code == 201, r.text
+        tokens[scope] = r.json()["secret"]
+    ok = await client.get(url, headers={"Authorization": f"Bearer {tokens['objects:read']}"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["id"] == obj["objId"]
+    denied = await client.get(url, headers={"Authorization": f"Bearer {tokens['meta:read']}"})
+    assert denied.status_code == 403, denied.text

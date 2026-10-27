@@ -17,6 +17,7 @@ from app.common.context import ViewContextDep
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core.errors import NotFound
 from app.db.session import SessionDep, get_session
+from app.modules.admin.api_keys import require_api_scope
 from app.modules.dynamic import writeback as _writeback  # noqa: F401  import 即登记静态发布写回钩子（有钩子时）
 from app.modules.dynamic.catalog import DatabaseRefCatalog, get_catalog, get_list_catalog
 from app.modules.dynamic.models import ActionRun
@@ -36,6 +37,7 @@ from app.modules.dynamic.rules_schemas import (
 from app.modules.dynamic.rules_service import LifecycleService, RuleService, ScenarioService
 from app.modules.dynamic.service import ActionService, AlertService
 from app.modules.dynamic.summary import SUMMARY_MAX_LIMIT, ObjectDynamicSummary
+from app.modules.qa.object_source import require_object_read
 from app.modules.versioning.models import OntologyRelease
 
 router = APIRouter(tags=["dynamic-rules"])
@@ -120,7 +122,11 @@ async def object_automation_hits(
     return await automation_hits(session, object_id, rule_id, params, user)
 
 
-@router.get("/object-types/{object_id}/objects/{obj_id}/dynamic-summary", dependencies=OT_VIEW)
+@router.get(
+    "/object-types/{object_id}/objects/{obj_id}/dynamic-summary",
+    # API 密钥（服务账号）凭 objects:read 可调；入口与对象详情同一读取门槛（object-search / object-detail）
+    dependencies=[Depends(require_api_scope("objects:read")), Depends(require_object_read)],
+)
 async def object_dynamic_summary(
     object_id: Annotated[str, Path(max_length=64, pattern=r"^[^\x00]+$")],
     obj_id: Annotated[str, Path(max_length=64, pattern=r"^[^\x00]+$")],
@@ -131,8 +137,9 @@ async def object_dynamic_summary(
     limit: Annotated[int, Query(ge=1, le=SUMMARY_MAX_LIMIT, description="每段最近几条")] = 5,
 ) -> dict[str, Any]:
     """单个对象实例的动态摘要（问数 / AI 只读）：未关闭告警、近期规则命中、生命周期当前状态与变化、近期动作。
-    入口要求 object-types view（同生命周期接口）；行级可见性与各列表接口一致；
-    告警 / 规则命中 / 动作段另按 alerts / rules / action-center view 给出，缺权限的段 available=false。"""
+    入口要求对象读取（object-search / object-detail view，同对象详情；API 密钥需 objects:read）；
+    行级可见性与各列表接口一致；告警 / 规则命中 / 生命周期 / 动作段另按
+    alerts / rules / object-types / action-center view 给出，缺权限的段 available=false。"""
     return await ObjectDynamicSummary(session, user, catalog, ports).get(object_id, obj_id, limit=limit)
 
 
