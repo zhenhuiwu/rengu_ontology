@@ -12,10 +12,13 @@ from dotenv import dotenv_values
 from sqlalchemy.engine import make_url
 
 DATABASES = {f"rengu_test_use_{group}_20261027" for group in ("objects", "qa", "ops")}
+DATABASES.update(f"rengu_fix_{group}_20261027" for group in ("qa", "static", "admin"))
 BACKEND = Path(__file__).resolve().parents[1]
 
 
 async def prepare(source, name):
+    if name not in DATABASES:
+        raise RuntimeError("Only explicitly isolated test databases are allowed")
     admin = await asyncpg.connect(source.set(drivername="postgresql").render_as_string(hide_password=False))
     try:
         if not await admin.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", name):

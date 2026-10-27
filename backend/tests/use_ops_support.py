@@ -49,12 +49,25 @@ async def _ops_workspace(session):
 
 
 @pytest.fixture(autouse=True)
-def _no_external_http(monkeypatch):
-    def denied(*args, **kwargs):
-        raise AssertionError("External HTTP is forbidden in ops tests; use ASGITransport/MockTransport")
+def _no_external_http(monkeypatch, request):
+    """Only the exact endpoint created by this test's receiver fixture may use real HTTP."""
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
 
-    async def denied_async(*args, **kwargs):
-        denied()
+    def allowed(http_request):
+        endpoint = getattr(request.node, "local_webhook_endpoint", None)
+        return (endpoint is not None and str(http_request.url) == endpoint
+                and http_request.url.host == "127.0.0.1" and http_request.method == "POST")
 
-    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", denied)
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", denied_async)
+    def guarded(self, http_request):
+        if not allowed(http_request):
+            raise AssertionError("External HTTP is forbidden; only this test's explicit receiver is allowed")
+        return original_sync(self, http_request)
+
+    async def guarded_async(self, http_request):
+        if not allowed(http_request):
+            raise AssertionError("External HTTP is forbidden; only this test's explicit receiver is allowed")
+        return await original_async(self, http_request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", guarded)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", guarded_async)

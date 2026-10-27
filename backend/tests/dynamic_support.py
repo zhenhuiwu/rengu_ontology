@@ -8,12 +8,24 @@ from sqlalchemy import delete, select, text
 
 import app.main  # noqa: F401  收集阶段就建好 app：create_app 的 load_sections 先登记真实 section，免得在 sections 替身之后才 import 撞名
 from app.contracts.actions import SubmitResult, SubmitStatus
-from app.modules.admin.models import SysUser
+from app.modules.admin.models import SysRole, SysUser
 from app.modules.dynamic import ports
 from tests.helpers.workspace import TEST_DB
-from tests.use_ops_support import grant_ops_roles as grant_fixture_roles
+from tests.use_ops_support import grant_ops_roles
 
 API = "/api/ontology/v1"
+
+
+async def grant_fixture_roles(session, assignments=None):
+    from app.seeds.loader import run_seeds
+
+    database = session.get_bind().engine.url.database
+    assert database == TEST_DB and database.startswith(("rengu_test", "rengu_fix_"))
+    if not await session.scalar(select(SysUser.id).where(SysUser.code == "U010001")) or not await session.scalar(
+        select(SysRole.id).where(SysRole.code == "R-01")
+    ):
+        await run_seeds(session, ["admin"])
+    await grant_ops_roles(session, assignments)
 
 
 @pytest.fixture
