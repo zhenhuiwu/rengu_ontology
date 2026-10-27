@@ -38,6 +38,7 @@ from app.modules.dynamic.schemas import (
     WithdrawIn,
 )
 from app.modules.dynamic.service import ActionService, AlertService, validation_failed
+from app.modules.static.explorer import parse_filters
 
 router = APIRouter(tags=["dynamic"])
 
@@ -113,6 +114,11 @@ def _alert_detail(
 
 # ---------------- 告警 ----------------
 
+FILTERS_DOC = (
+    "告警对象的业务属性筛选，JSON 对象（同 GET /object-types/{id}/facets 的 filters），"
+    + "须同时给且只给一个 objKind"
+)
+
 
 @router.get("/alerts", response_model=AlertPage, dependencies=ALERTS_VIEW)
 async def list_alerts(
@@ -124,9 +130,17 @@ async def list_alerts(
     kw: str | None = None,
     obj_kind: Annotated[str | None, Query(alias="objKind", description="对象类型，逗号分隔多选")] = None,
     dim: Annotated[list[str] | None, Query(description="维度值 objKind:id，可重复")] = None,
+    filters: Annotated[str | None, Query(description=FILTERS_DOC)] = None,
 ) -> AlertPage:
     return await svc.search(
-        status=status_, level=level, rule_id=rule_id, kw=kw, page=page, obj_kind=obj_kind, dim=dim
+        status=status_,
+        level=level,
+        rule_id=rule_id,
+        kw=kw,
+        page=page,
+        obj_kind=obj_kind,
+        dim=dim,
+        filters=parse_filters(filters),
     )
 
 
@@ -139,9 +153,18 @@ async def alert_facets(
     kw: str | None = None,
     obj_kind: Annotated[str | None, Query(alias="objKind")] = None,
     dim: Annotated[list[str] | None, Query()] = None,
+    filters: Annotated[str | None, Query(description=FILTERS_DOC)] = None,
 ) -> dict[str, Any]:
     """告警分面（与 GET /alerts 同一组筛选参数）：每一项的计数按其余已选条件过滤。"""
-    return await svc.facets(status=status_, level=level, rule_id=rule_id, kw=kw, obj_kind=obj_kind, dim=dim)
+    return await svc.facets(
+        status=status_,
+        level=level,
+        rule_id=rule_id,
+        kw=kw,
+        obj_kind=obj_kind,
+        dim=dim,
+        filters=parse_filters(filters),
+    )
 
 
 @router.get("/alerts/meta", dependencies=ALERTS_VIEW)

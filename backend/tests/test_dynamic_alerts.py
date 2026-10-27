@@ -290,3 +290,38 @@ async def test_facets_and_multi_filters(dyn, client):  # noqa: F811
 
     err(await client.get(f"{API}/alerts", params={"dim": "nokind"}), 422, "VALIDATION_FAILED")
     err(await client.get(f"{API}/alerts/facets", params={"status": "bad"}), 422, "VALIDATION_FAILED")
+
+
+async def test_object_property_filters(dyn, client):  # noqa: F811
+    """filters=<JSON> 按告警对象的业务属性筛选：取值来自对象类型分面；列表 / 分面计数一致；422 同 static。"""
+    import json
+
+    kinds = (await client.get(f"{API}/alerts/facets", params={"status": "all"})).json()["objKind"]
+    kind = next(k for k in kinds if k["count"])
+    props = (await client.get(f"{API}/object-types/{kind['value']}/facets")).json()
+    prop = next(p for p in props if p["kind"] == "enum" and p["values"])
+    seen = 0
+    for v in prop["values"]:
+        params = {"status": "all", "size": 100, "objKind": kind["value"]}
+        params["filters"] = json.dumps({prop["key"]: [v["value"]]}, ensure_ascii=False)
+        r = await client.get(f"{API}/alerts", params=params)
+        assert r.status_code == 200, r.text
+        page = r.json()
+        assert all(x["objKind"] == kind["value"] for x in page["items"])
+        seen += page["total"]
+        params.pop("size")
+        f = (await client.get(f"{API}/alerts/facets", params=params)).json()
+        assert sum(x["count"] for x in f["level"]) == page["total"]
+        assert sum(x["count"] for x in f["objKind"]) == page["total"]  # 对象类型分面同样受 filters 约束
+    assert 0 < seen <= kind["count"]
+
+    good = json.dumps({prop["key"]: [prop["values"][0]["value"]]}, ensure_ascii=False)
+    for bad in (
+        {"filters": good},  # 未给 objKind
+        {"filters": good, "objKind": ",".join(k["value"] for k in kinds[:2])},  # 多个对象类型
+        {"filters": "{bad", "objKind": kind["value"]},  # 非 JSON
+        {"filters": json.dumps({"no_such_prop": ["x"]}), "objKind": kind["value"]},  # 不可筛选
+        {"filters": json.dumps({prop["key"]: "scalar"}), "objKind": kind["value"]},  # 枚举须给数组
+    ):
+        for path in ("/alerts", "/alerts/facets"):
+            err(await client.get(f"{API}{path}", params={"status": "all", **bad}), 422, "VALIDATION_FAILED")
