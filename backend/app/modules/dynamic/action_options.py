@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from sqlalchemy import func, select
 
 from app.common.auth import check_func, resolve_user
+from app.common.object_identity import identity_rows, primary_column
 from app.common.pagination import Page
 from app.common.row_filter import apply_row_filter
 from app.core.errors import AppError, NotFound
@@ -120,11 +121,14 @@ async def options(session, user, catalog):
 
 
 async def targets(session, user, catalog, code, kw, page):
-    _, _, governed = await launch_definition(session, user, catalog, code)
+    _, obj, governed = await launch_definition(session, user, catalog, code)
     table = governed.table
-    statement = select(table.c.code).where(
-        table.c.code.in_(select(table.c.code).group_by(table.c.code).having(func.count() == 1))
-    )
+    from sqlalchemy import String, cast
+
+    identity = cast(primary_column(obj, governed), String)
+    identities = identity_rows(governed).subquery()
+    statement = select(identity.label("identity"), table.c.code.label("label")).where(
+        table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == identity)))
     statement = await apply_row_filter(
         statement, user, governed.object_type, governed.columns, governed.links
     )
@@ -135,8 +139,10 @@ async def targets(session, user, catalog, code, kw, page):
             statement, approver, governed.object_type, governed.columns, governed.links
         )
     if kw and kw.strip():
-        statement = statement.where(table.c.code.contains(kw.strip(), autoescape=True))
+        statement = statement.where(identity.contains(kw.strip(), autoescape=True)
+                                    | table.c.code.contains(kw.strip(), autoescape=True))
     total = int(await session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
     p = page.clamp(total)
-    codes = list(await session.scalars(statement.order_by(table.c.code).offset(p.offset).limit(p.size)))
-    return Page[dict].of([{"id": value, "label": value} for value in codes], total, page)
+    rows = (await session.execute(statement.order_by(identity).offset(p.offset).limit(p.size))).all()
+    return Page[dict].of([{"id": value, "label": label if label == value else f"{label}（{value}）"}
+                          for value, label in rows], total, page)

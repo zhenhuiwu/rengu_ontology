@@ -316,21 +316,17 @@ class DatabaseSubmissionChecker:
         expr = effective_expr(kind, roles)
         if is_deny_all(expr):
             return refs
-        props = [
-            p
-            for p in obj.properties
-            if not p.is_sensitive
-            and p.visibility != "hidden"
-            and p.backing_column
-            and p.backing_column in g.table.c
-            and p.backing_column in {getattr(c, "name", None) for c in g.columns.values()}
-        ]
+        from app.common.object_identity import identity_rows, property_column
+
+        columns = {p.api_name: column for p in obj.properties
+                   if (column := property_column(p, g)) is not None}
+        props = [p for p in obj.properties if p.api_name in columns]
         # Only declared, real non-sensitive bindings; no arbitrary table/field from an expression.
         if "code" not in g.table.c or not props:
             return refs
-        stmt = select(*(g.table.c[p.backing_column].label(p.api_name) for p in props)).where(
-            g.table.c.code == code
-        )
+        identities = identity_rows(g).subquery()
+        stmt = select(*(columns[p.api_name].label(p.api_name) for p in props)).where(
+            g.table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == code)))
         if expr is not None:
             stmt = stmt.where(to_sql(expr, g.columns, self.user.attrs, g.links))
         rows = (await self.session.execute(stmt.limit(2))).mappings().all()
@@ -343,7 +339,7 @@ class DatabaseSubmissionChecker:
             if value is None or isinstance(value, str | int | float | bool):
                 fields = {prop.display_name, prop.api_name}
                 # Published conditions use 状态; bind only the governed physical status property.
-                if prop.api_name == "status" and prop.backing_column == "status" and not any(
+                if prop.api_name == "status" and columns[prop.api_name].name == "status" and not any(
                     p.api_name != "status" and "状态" in (p.display_name, p.api_name) for p in props
                 ):
                     fields.add("状态")

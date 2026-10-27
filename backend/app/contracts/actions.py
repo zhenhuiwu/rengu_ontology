@@ -207,9 +207,11 @@ async def stage_event_action(session, user, *, action_type_code: str, event_id: 
     from sqlalchemy import select
 
     from app.common.auth import check_func
+    from app.common.context import ViewContext
     from app.common.ontology import require_ontology_id
     from app.core.errors import Conflict
     from app.db.dialects import get_adapter
+    from app.modules.action.checker import definition as action_definition
     from app.modules.action.checker import structured_params
     from app.modules.dynamic.catalog import get_catalog
     from app.modules.dynamic.models import ActionRun
@@ -224,15 +226,8 @@ async def stage_event_action(session, user, *, action_type_code: str, event_id: 
         identity.insert(0, require_ontology_id(session))
     key = "evt-" + hashlib.sha256(json.dumps(identity).encode()).hexdigest()
     await get_adapter(session).xact_lock(session, key)
-    previous = await session.scalar(select(ActionRun).where(ActionRun.idem_key == key))
-    if previous:
-        if (previous.action_type_code != action_type_code or previous.obj_kind != obj_kind
-                or previous.obj_id != (obj_id or "") or previous.params != normalized
-                or previous.created_by != user.id):
-            raise Conflict("同一事件动作的参数或执行身份已改变", code="IDEMPOTENCY_CONFLICT")
-        return {"id": previous.code, "status": previous.status.value, "idemKey": previous.idem_key}
-    catalog = await get_catalog(session, user)
-    target = (catalog.action_meta(action_type_code) or {}).get("kind")
+    definition = await action_definition(session, action_type_code, ViewContext(), "published", None)
+    target = definition.get("targetKind")
     if target != obj_kind or (target and not obj_id):
         from app.core.errors import AppError
 
@@ -241,12 +236,20 @@ async def stage_event_action(session, user, *, action_type_code: str, event_id: 
 
     from app.modules.integration.action_edits import target_access
 
-    await target_access(session, user, SimpleNamespace(obj_kind=obj_kind, obj_id=obj_id), {"targetKind": target})
+    await target_access(session, user, SimpleNamespace(obj_kind=obj_kind, obj_id=obj_id), definition)
+    previous = await session.scalar(select(ActionRun).where(ActionRun.idem_key == key))
+    if previous:
+        if (previous.action_type_code != action_type_code or previous.obj_kind != obj_kind
+                or previous.obj_id != (obj_id or "") or previous.params != normalized
+                or previous.created_by != user.id):
+            raise Conflict("同一事件动作的参数或执行身份已改变", code="IDEMPOTENCY_CONFLICT")
+        return {"id": previous.code, "status": previous.status.value, "idemKey": previous.idem_key}
+    catalog = await get_catalog(session, user)
     ports = Ports(get_submitter(session, user), get_emitter(session), get_scheduler(session), get_checker(session, user))
     service = ActionService(session, user, catalog, ports)
     run, _ = await service.stage(StageIn(type_id=action_type_code, source=SourceIn(type="手动", confirmer=user.id),
         obj_kind=obj_kind, obj_id=obj_id or "", obj_label=obj_id or action_type_code,
-        params=json.dumps(normalized, ensure_ascii=False)))
+        params=json.dumps(normalized, ensure_ascii=False), idempotency_key=key))
     run.idem_key, run.params = key, normalized
     await service._log(run, f"事件订阅暂存 · {event_id}", user.id)
     await session.flush()

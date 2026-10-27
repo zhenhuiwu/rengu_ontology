@@ -21,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.sql.visitors import replacement_traverse
 
 from app.common.auth import check_func, row_filter
+from app.common.object_identity import identity_rows
 from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import governed_tables
@@ -287,8 +288,9 @@ async def existing_row(session, user, obj, governed, code, *, lock=True):
     if not isinstance(code, str) or not code or len(code) > 64 or "\x00" in code:
         raise unavailable("对象引用须为真实对象编号")
     # Count before row filtering: duplicate historical business codes are never silently selected.
-    ids = list(await session.scalars(select(governed.table.c.id).where(
-        governed.table.c.code == code).limit(2)))
+    identities = identity_rows(governed).subquery()
+    ids = list(await session.scalars(select(identities.c.row_id).where(
+        identities.c.identity == code).limit(2)))
     if len(ids) != 1:
         raise Forbidden("引用对象不存在、不唯一或超出当前用户行权限")
     expr = await row_filter(user, obj.code)
@@ -468,22 +470,6 @@ async def target_access(session, user, run, definition):
         return
     if run.obj_kind != kind or not run.obj_id:
         raise unavailable("动作目标与已发布定义不匹配")
-    obj, _ = await object_binding(session, kind)
+    obj, governed = await object_binding(session, kind)
     await object_operation(session, user, obj, definition)
-    governed = next((g for g in governed_tables(require_ontology_id(session)).values() if g.object_type == kind and not g.inherit), None)
-    if governed is None or "code" not in governed.table.c:
-        raise unavailable("目标对象没有可执行的受控业务映射")
-    identities = (await session.execute(select(governed.table.c.id)
-        .where(governed.table.c.code == run.obj_id).with_for_update().limit(2))).all()
-    if len(identities) != 1:
-        raise Forbidden("目标对象不存在、不唯一或超出当前用户行权限")
-    expr = await row_filter(user, kind)
-    if is_deny_all(expr):
-        raise Forbidden("没有目标对象的行权限")
-    predicate = governed.table.c.code == run.obj_id
-    if expr is not None:
-        predicate &= to_sql(expr, governed.columns, user.attrs, governed.links)
-    rows = (await session.execute(select(governed.table.c.id).where(predicate)
-                                 .with_for_update().limit(2))).all()
-    if len(rows) != 1:
-        raise Forbidden("目标对象不存在、不唯一或超出当前用户行权限")
+    await existing_row(session, user, obj, governed, run.obj_id)
