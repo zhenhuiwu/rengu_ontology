@@ -187,6 +187,9 @@ class ActionCan(ApiModel):
 class ActionRunDetail(ActionRunOut):
     log: list[ActionLogOut]
     can: ActionCan
+    human_checks: list[dict[str, Any]] | None = None
+    declared_edits: list[dict[str, Any]] | None = None
+    review_unavailable: str | None = None
 
 
 class ActionTabCounts(ApiModel):

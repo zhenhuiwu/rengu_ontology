@@ -91,13 +91,13 @@ async def _policies(
     session: AsyncSession, types: list[ActionType], changed: dict[str, Any]
 ) -> dict[str, Any]:
     """本次改到的取新值，其它沿用当前版本定义里的策略；自动执行要求免审（发布校验，409）。"""
-    from app.modules.action.policy import version_policies
+    from app.modules.action.policy import stored, version_policies
     from app.modules.static.writeback import writeback_error
 
     current = await version_policies(session, [(at.id, at.version) for at in types])
     result = {at.code: changed[at.code] if at.code in changed else current.get(at.id) for at in types}
     for at in types:
-        if (result[at.code] or {}).get("mode") == "auto" and at.approval.strip() != "免审":
+        if stored(result[at.code]).mode == "auto" and at.approval.strip() != "免审":
             raise writeback_error("自动执行的动作必须配置为免审", id=at.code, field="policy")
     return result
 

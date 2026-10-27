@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser, check_func, resolve_user
+from app.common.context import ViewContext
 from app.common.pagination import PageParams
 from app.contracts.actions import (
     EVENT_ACTION_EXECUTED,
@@ -337,6 +338,14 @@ class ActionService:
 
     async def detail(self, r: ActionRun) -> ActionRunDetail:
         out = (await self.to_out([r]))[0]
+        review = r.review_snapshot
+        review_reason = out.params_unavailable
+        if not review_reason and (
+            not isinstance(review, dict) or review.get("typeVersion") != r.type_version
+            or not isinstance(review.get("humanChecks"), list)
+            or not isinstance(review.get("declaredEdits"), list)
+        ):
+            review_reason = "该历史记录未保存复核清单，请核对原审批材料"
         logs = await self.repo.logs(r.id)
         if out.params_unavailable:
             logs = []
@@ -364,6 +373,9 @@ class ActionService:
                 for x in logs
             ],
             can=can,
+            human_checks=None if review_reason else review.get("humanChecks", []),
+            declared_edits=None if review_reason else review.get("declaredEdits", []),
+            review_unavailable=review_reason,
         )
 
     async def get(self, code: str) -> ActionRun:
@@ -515,6 +527,7 @@ class ActionService:
             raise SubmissionCriteriaFailed(failed)
         # 外部 Webhook 动作中无法机器校验的自然语言条件：交确认人人工核对（见 checker.run）。
         self.human_checks = list(getattr(self.ports.checker, "human_checks", None) or [])
+        self._review_context = (type_code, ctx.get("objId"), ctx.get("params"))
 
     def _event_payload(self, r: ActionRun) -> dict[str, object]:
         return {
@@ -689,6 +702,18 @@ class ActionService:
             in_center=True,
             is_seed=False,
         )
+        if getattr(self, "_review_context", None) == (run.action_type_code, run.obj_id, run.params_text):
+            from app.modules.action.checker import definition as action_definition
+            from app.modules.integration.action_edits import declared_writeback
+
+            definition = await action_definition(self.session, run.action_type_code, ViewContext(), "published", None)
+            if definition.get("version") == run.type_version:
+                run.review_snapshot = {
+                    "typeVersion": run.type_version,
+                    "humanChecks": self.human_checks,
+                    "declaredEdits": await declared_writeback(self.session, definition),
+                }
+        self._review_context = None
         return await self.repo.create(run, actor=actor_of(self.user))
 
     def _call_text(self, r: ActionRun) -> str:
@@ -722,7 +747,9 @@ class ActionService:
             ontology_id=self.user.ontology_id,
         )
         try:
-            await preflight(self.session, self.user, probe)
+            review = {}
+            await preflight(self.session, self.user, probe, review=review)
+            return review
         except Unavailable as exc:
             raise validation_failed("params", str(exc)) from None
 

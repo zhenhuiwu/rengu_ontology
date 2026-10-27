@@ -403,8 +403,8 @@ async def machine_action_run(
 
 @router.post("/actions/{code}:validate", dependencies=ACTIONS_MANAGE)
 async def validate_launch(code: DynamicPathCode, body: LaunchValidateIn, svc: ActionSvc):
-    await svc.validate_launch(code, body.obj_kind, body.obj_id, body.params)
-    return {"passed": True, "message": "参数和提交条件通过"}
+    review = await svc.validate_launch(code, body.obj_kind, body.obj_id, body.params)
+    return {"passed": True, "message": "参数和提交条件通过", **review}
 
 
 @router.get("/action-runs/{code}", response_model=ActionRunDetail, dependencies=ACTIONS_READ)

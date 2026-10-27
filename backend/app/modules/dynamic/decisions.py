@@ -359,6 +359,9 @@ class DecisionService:
             else {"ran": False, "reason": "not-requested"}
         )
         availability = await self._availability(action.code)
+        from app.modules.integration.action_edits import declared_writeback
+
+        declared = await declared_writeback(self.session, defn) if availability.get("available") else []
         pol = await action_policy.load(self.session, action.code, action.version)
         caller_type = action_policy.caller_of(
             "规则" if self.system else "问数" if is_ai else "手动", self.user
@@ -392,6 +395,7 @@ class DecisionService:
             "paramSources": sources,
             "unfilledParams": unfilled,
             "dryRun": dry,
+            "declaredEdits": declared,
             "availability": availability,
             "policy": policy,
             "handoff": {

@@ -321,8 +321,8 @@ const cutoff = computed(() => {
             <span v-else-if="column.key === 'cards'" class="num">{{ record.cards.length }}</span>
             <span v-else-if="column.key === 'caliber'" class="c-2" :title="caliberText(record).text">{{ caliberText(record).text || '--' }}</span>
             <span v-else-if="column.key === 'source'" class="c-2" :title="record.source">{{ record.source }}</span>
-            <span v-else-if="column.key === 'refresh'" class="c-2">{{ qaWriteReal && record.refresh.freq !== '手动' ? '未启用' : freqLabel(record.refresh) }}</span>
-            <span v-else-if="column.key === 'sub'" class="c-2">{{ qaWriteReal ? '未启用' : record.sub.on ? `${record.sub.channel} · ${record.sub.receivers.length} 人` : '--' }}</span>
+            <span v-else-if="column.key === 'refresh'" class="c-2">{{ freqLabel(record.refresh) }}{{ qaWriteReal && record.refresh.freq !== '手动' && !pagesApi.access(record).scheduleActive ? '（未排定）' : '' }}</span>
+            <span v-else-if="column.key === 'sub'" class="c-2">{{ !record.sub?.on ? '未开启' : qaWriteReal && (record.sub.channel !== '站内信' || !pagesApi.access(record).subscriptionActive) ? `${record.sub.channel}（未启用）` : `${record.sub.channel} · ${record.sub.receivers.length ? `${record.sub.receivers.length} 人` : '页面拥有者'}` }}</span>
             <span v-else-if="column.key === 'share'" class="c-2">{{ shareText(record) }}</span>
             <span v-else-if="column.key === 'asof'" class="num c-2">{{ record.dataAsOf?.slice(5) ?? '—' }}</span>
             <span v-else-if="column.key === 'status'" :class="stCls(record.status)" :title="record.statusNote">{{ record.status }}</span>

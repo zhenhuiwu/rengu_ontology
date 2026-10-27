@@ -55,6 +55,9 @@ class ActionTypeListOut(ApiModel):
 
 
 class ActionTypeDetailOut(ActionTypeOut):
+    policy: dict[str, Any]
+    policy_stored: Any = None
+    policy_status: Literal["unconfigured", "configured", "invalid"]
     owner: str
     desc: str
     runners: str

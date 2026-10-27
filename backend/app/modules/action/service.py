@@ -267,7 +267,30 @@ class ActionTypeService:
         return rows, groups
 
     async def detail(self, ctx: ViewContext, type_id: str) -> dict[str, Any]:
-        return with_system(await self.one(ctx, type_id), await self.repo.systems())
+        from app.modules.action.models import ActionTypeVersion
+        from app.modules.action.policy import parse, stored
+
+        value = await self.one(ctx, type_id)
+        if ctx.ver:
+            raw = value.get("policy")
+        else:
+            definition = await self.session.scalar(
+                select(ActionTypeVersion.definition).join(ActionType).where(
+                    ActionType.code == type_id, ActionTypeVersion.ver == value.get("version")
+                )
+            )
+            raw = (definition or {}).get("policy")
+        status = "unconfigured"
+        if raw is not None:
+            try:
+                parse(raw)
+                status = "configured"
+            except ValueError:
+                status = "invalid"
+        return {
+            **with_system(value, await self.repo.systems()), "policy": stored(raw).dump(),
+            "policyStored": raw, "policyStatus": status,
+        }
 
     async def used_by(self, ctx: ViewContext, type_id: str) -> list[dict[str, Any]]:
         """关系成员随定义版本；告警总数 / 待处理数始终取当前记录。"""

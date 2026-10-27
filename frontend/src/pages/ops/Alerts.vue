@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionReviewPanel from './ActionReview.vue';
+import { reviewFields, type ActionReview } from './actionReview';
+import { validateActionLaunch } from '@/api/dynamic';
 /**
  * 告警处理（动态本体）：左侧告警列表（分页），右侧当前告警详情：触发依据、处理记录、可执行动作。
  * 当前选中写进 ?alert=，状态页签写进 ?status=。对象点开走公共抽屉，不跳转。
@@ -323,9 +326,16 @@ async function runAction() {
   const a = current.value; const r = rule.value;
   if (!a || !r?.action) return;
   let params: Record<string, unknown> = {};
+  let review: ActionReview = {};
   if (live.value) {
     try { const value: unknown = JSON.parse(actionParamsText.value); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); params = value as Record<string, unknown>; }
     catch { message.error('参数须为 JSON 对象'); return; }
+    const ruleDefinition = remote.detail?.rule;
+    const typeId = ruleDefinition && 'actionTypeId' in ruleDefinition ? ruleDefinition.actionTypeId : undefined;
+    if (typeof typeId !== 'string') { message.error('动作定义不可用，请刷新后重试'); return; }
+    try { review = await validateActionLaunch(typeId, { objKind: a.objKind, objId: a.objId, params }); }
+    catch (error) { fail(error); return; }
+    if (ctx !== dynamicContextKey()) return;
   }
   const ok = await confirm.ask({
     title: r.action,
@@ -337,6 +347,7 @@ async function runAction() {
       { label: '参数', value: JSON.stringify(params) },
       { label: '审批人', value: approverOf(r) ?? '--' },
       { label: '幂等键', value: `act-${a.id.toLowerCase()}` },
+      ...reviewFields(review),
     ],
     impact: '按绑定的审批配置处理，执行前重新校验权限、参数和动作版本。执行结果以关联动作记录为准；涉及外部系统且结果未知时按幂等键对账，不自动重发写入。',
   });
@@ -493,6 +504,7 @@ watch([dynamicContextKey, selectedId], async () => {
               <ul class="al-ai-list t-12"><li v-for="(x, i) in r.reasons" :key="i">{{ x.text }}</li></ul>
               <div v-for="(v, k) in r.params" :key="k" class="t-12"><span class="c-3">{{ k }}</span> = <span class="num">{{ fmtValue(v) }}</span><span v-if="r.paramSources[k]" class="c-3" :title="r.paramSources[k]"> · {{ r.paramSources[k] }}</span></div>
               <div v-for="u in r.unfilledParams" :key="u.api" class="t-12 c-3">待补 {{ u.name || u.api }}<span v-if="u.reason">：{{ u.reason }}</span></div>
+              <ActionReviewPanel :human-checks="r.dryRun.humanChecks" :declared-edits="r.declaredEdits" />
               <div class="al-ai-row">
                 <span class="t-12 c-3">{{ recState(r) || '预校验通过' }}<template v-if="r.policy?.mode"> · 策略 {{ r.policy.mode }}</template></span>
                 <a-button v-if="!readonly && !isClosed(current.status)" size="small" type="link" @click="adopt(r)">采用建议</a-button>

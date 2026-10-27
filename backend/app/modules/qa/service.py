@@ -311,6 +311,7 @@ def template_out(t: QaTemplate) -> dict[str, Any]:
 
 
 async def page_view_out(session, page, user, ctx, *, temporary=False, metadata_only=False):
+    from app.core.config import get_settings
     from app.modules.qa.models import SharePerm
     from app.modules.qa.page_execution import projected_cards, template_capability
 
@@ -324,7 +325,10 @@ async def page_view_out(session, page, user, ctx, *, temporary=False, metadata_o
         "can_edit": writable and (owner or member_edit), "can_share": writable and owner,
         "can_refresh": writable and (owner or member_edit) and can_refresh,
         "refresh_unavailable_reason": refresh_reason,
-        "schedule_active": False, "subscription_active": False,
+        "schedule_active": bool(page.next_run and (page.refresh or {}).get("freq") != "手动"),
+        "subscription_active": bool(page.subscription and page.subscription.enabled),
+        "can_schedule": writable and owner,
+        "next_run": fmt_min(page.next_run), "schedule_timezone": get_settings().display_tz,
     })
 
 

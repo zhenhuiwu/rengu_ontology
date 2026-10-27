@@ -214,6 +214,9 @@ class PageFullOut(ApiModel):
     refresh_unavailable_reason: str | None = None
     schedule_active: bool = False
     subscription_active: bool = False
+    can_schedule: bool = False
+    next_run: str | None = None
+    schedule_timezone: str = "Asia/Shanghai"
 
 
 class PageListOut(Page[PageBriefOut | PageFullOut]):

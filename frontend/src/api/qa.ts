@@ -46,7 +46,15 @@ async function download(path: string, query?: Record<string, string>): Promise<R
 
 /** W3 会话详情：轮次快照形状同 QA_DEMO_TURNS；链路新生成的回答是 card='table' + text（后台 chain.py） */
 export interface QaChainTable { id: string; title: string; columns: { key: string; title: string; align?: string }[]; items: Record<string, unknown>[]; total: number; summary: string; paged: boolean }
-export interface QaChainAnswer { card: 'table'; text: string; dataAsOf?: string; basis?: Record<string, string>; table: QaChainTable }
+export interface QaDynamicSummary {
+  objKind: string; objKindLabel?: string; id: string; objLabel?: string;
+  alerts: { available: boolean; openCount?: number; latest?: { id: string; ruleId?: string; level?: string; status?: string }[] };
+  ruleHits: { available: boolean; total?: number };
+  lifecycle: { available: boolean; defined?: boolean; state?: string | null; changeTotal?: number; illegalTotal?: number };
+  actionRuns: { available: boolean; total?: number; statusCounts?: Record<string, number> };
+}
+export interface QaDynamicAnswer { dynamicSummary?: QaDynamicSummary; dynamicSummaries?: QaDynamicSummary[] }
+export interface QaChainAnswer extends QaDynamicAnswer { card: 'table'; text: string; dataAsOf?: string; basis?: Record<string, string>; table: QaChainTable }
 /** applied：越权轮次已提交待审批的申请（W16 之后 W3 返回）；vote：这一轮的赞踩（W12）；主卡 answer.caliber：W9 切过的口径 */
 /** 链路反问（qa-reuse a35d3b6）：kind=answer、card='clarify'，不执行 SQL；选项点了以后前端再问一轮 */
 export interface QaClarifyAnswer { card: 'clarify'; text: string; dataAsOf?: string; clarify: { term: string; chosen: string | null; options: QaOption[] }; suggest?: { followUps: string[] } }
@@ -61,10 +69,10 @@ export interface QaAlertRef { id: string; rule: string; level: string; objKind: 
 export interface QaActionSuggest {
   type: string; name: string; reason: string; params: Record<string, unknown>; mode: 'suggest';
   policy?: 'suggest' | 'confirm' | 'auto'; canStage?: boolean;
-  dryRun: { passed: boolean; checked: number; failed: { name?: string; msg?: string }[] };
+  dryRun: import('@/pages/ops/actionReview').ActionReview & { passed: boolean; checked: number; failed: { name?: string; msg?: string }[] };
   stage: { typeId: string; objKind: string | null; objId: string; objLabel: string; params: string | null };
 }
-export interface QaActionAnswer { card: 'action'; text: string; basis?: Record<string, string>; action: QaActionSuggest; alerts?: QaAlertRef[] }
+export interface QaActionAnswer extends QaDynamicAnswer { card: 'action'; text: string; basis?: Record<string, string>; action: QaActionSuggest; alerts?: QaAlertRef[] }
 export type QaRefuseCode = 'NOT_SELECT' | 'OUT_OF_SCOPE' | 'NO_PERMISSION' | 'NO_DATA';
 export type QaRealTurn =
   | (QaDemoTurn & { applied?: boolean; vote?: '' | 'up' | 'down'; code?: QaRefuseCode })
@@ -190,7 +198,7 @@ export async function exportTurn(tid: string, format: 'xlsx' | 'csv' = 'xlsx'): 
  */
 const dyn = apiClient('dynamic');
 export const actionsReal = () => dyn.isReal();
-export interface QaActionRun { id: string; action: string; typeVersion: string | null; objLabel: string | null; approver: string | null; system: string | null; status: string; idemKey: string; params: string | null }
+export type QaActionRun = import('@/pages/ops/actionReview').ActionReview & { id: string; action: string; typeVersion: string | null; objLabel: string | null; approver: string | null; system: string | null; status: string; idemKey: string; params: string | null };
 export interface QaStageIn { action?: string; typeId?: string; source: { type: '问数'; session?: string; sessionTitle?: string }; objKind?: string | null; objId: string; objLabel: string; params?: string | null }
 export const stageAction = (body: QaStageIn) => dyn.post<QaActionRun>('/action-runs:stage', body);
 /** W7a：这一轮的建议动作 → 动作中心待确认（来源 问数，确认人 = 自己；不自动执行） */

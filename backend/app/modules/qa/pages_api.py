@@ -14,7 +14,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import Field
+from pydantic import Field, model_validator
 from sqlalchemy import func, or_, select
 
 from app.common.audit import audit
@@ -28,7 +28,7 @@ from app.core.schema import ApiModel, _tz
 from app.db.dialects import get_adapter
 from app.db.session import SessionDep
 from app.modules.admin.models import SysRole, SysRoleMember, SysUser, UserStatus
-from app.modules.ontology.models import OntologyMember
+from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
 from app.modules.qa import page_execution as execution
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
@@ -63,9 +63,19 @@ DEFAULT_REFRESH = {"freq": "手动", "time": "--", "onFail": "保留上次结果
 class RefreshPlanIn(ApiModel):
     freq: Literal["每小时", "每天", "每周", "每月", "手动"]
     time: str = Field(max_length=8)
-    weekday: str | None = None
+    weekday: Literal["周一", "周二", "周三", "周四", "周五", "周六", "周日"] | None = None
     monthday: int | None = Field(default=None, ge=1, le=31)
     on_fail: Literal["保留上次结果", "标记失败并通知"] = "保留上次结果"
+
+    @model_validator(mode="after")
+    def valid_time(self):
+        if self.freq not in ("手动", "每小时") and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", self.time):
+            raise ValueError("刷新时间须为有效的 HH:MM")
+        if self.freq == "每周" and self.weekday is None:
+            raise ValueError("每周刷新须选择星期")
+        if self.freq == "每月" and self.monthday is None:
+            raise ValueError("每月刷新须选择日期")
+        return self
 
     def plan(self) -> dict[str, Any]:
         out: dict[str, Any] = {"freq": self.freq, "time": self.time}
@@ -120,7 +130,7 @@ class CardsOut(ApiModel):
 class SubIn(ApiModel):
     on: bool
     channel: Literal["邮件", "企业微信", "站内信"]
-    receivers: list[str] = []
+    receivers: list[str] = Field(default_factory=list, max_length=200)
     when: Literal["每次刷新后", "每周一 09:00", "每天 09:00"]
     only_changed: bool = False
 
@@ -134,6 +144,7 @@ class ScheduleOut(ApiModel):
     refresh: dict[str, Any]
     sub: SubOut
     next_run: str
+    schedule_timezone: str
 
 
 class MemberIn(ApiModel):
@@ -565,11 +576,25 @@ async def reorder_cards(
 async def put_schedule(
     pid: str, body: ScheduleIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
-    _, p = await _load(session, user, ctx, pid, "edit")
-    if body.refresh.freq != "手动" or body.sub.on or body.refresh.on_fail != "保留上次结果":
-        raise execution.unavailable("只能保存手动刷新且关闭订阅的设置")
-    if body.sub.on and not body.sub.receivers:
-        raise EmptyInput("请至少选择一位接收人", details={"field": "sub.receivers"})
+    from app.core.config import get_settings
+
+    _, p = await _load(session, user, ctx, pid, "owner")
+    if body.refresh.on_fail != "保留上次结果":
+        raise execution.unavailable("刷新失败通知尚未配置，请选择保留上次结果")
+    if body.refresh.freq != "手动":
+        available, reason = await execution.template_capability(session, p)
+        if not available:
+            raise execution.unavailable(reason or "页面没有可执行卡片，不能开启自动刷新")
+    if body.sub.on:
+        if body.sub.channel != "站内信":
+            raise execution.unavailable("当前仅支持站内信订阅")
+        allowed_ids = {p.owner_id, *(member.user_id for member in p.members)}
+        candidates = (await session.execute(_share_candidates(session).where(SysUser.id.in_(allowed_ids)))).all()
+        names: dict[str, set[int]] = {}
+        for candidate in candidates:
+            names.setdefault(candidate.name, set()).add(candidate.id)
+        if any(len(names.get(name, set())) != 1 for name in body.sub.receivers):
+            raise execution.unavailable("接收人须为当前有效的页面拥有者或共享成员，姓名必须唯一")
     p.refresh = body.refresh.plan()
     p.next_run = next_run(p.refresh)
     sub = p.subscription or QaPageSubscription(page_id=p.id)
@@ -579,7 +604,7 @@ async def put_schedule(
     sub.send_when = SubWhen(body.sub.when)
     sub.only_changed = body.sub.only_changed
     if p.subscription is None:
-        session.add(sub)
+        p.subscription = sub
     await session.flush()
     await audit(
         session,
@@ -598,6 +623,7 @@ async def put_schedule(
             only_changed=sub.only_changed,
         ),
         next_run=svc.fmt_min(p.next_run) or "不自动刷新",
+        schedule_timezone=get_settings().display_tz,
     )
 
 
@@ -680,9 +706,11 @@ def _share_candidates(session):
         .join(OntologyMember, OntologyMember.user_id == SysUser.id)
         .join(SysRoleMember, SysRoleMember.user_id == SysUser.id)
         .join(SysRole, SysRole.id == SysRoleMember.role_id)
+        .join(OntologyRoleBinding, OntologyRoleBinding.role_id == SysRole.id)
         .where(
             SysUser.status == UserStatus.active,
             OntologyMember.ontology_id == require_ontology_id(session),
+            OntologyRoleBinding.ontology_id == require_ontology_id(session),
             OntologyMember.role.in_(("owner", "editor", "viewer")),
             SysRole.func["qa-pages"].as_string().in_(("view", "manage")),
         )

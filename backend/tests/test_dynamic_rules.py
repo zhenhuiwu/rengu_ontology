@@ -80,7 +80,14 @@ async def test_hits_paging_and_detail(dyn, client):  # noqa: F811
     p1 = (await client.get(f"{API}/rules/R-007/hits", params={"range": "30d"})).json()
     assert p1["size"] == 10 and len(p1["items"]) == 10
     all_ = (await client.get(f"{API}/rules/R-007/hits", params={"range": "30d", "size": 200})).json()
-    assert [x["id"] for x in all_["items"]] == [x["id"] for x in want if x["at"] >= CUT_30D]
+    ids = [x["id"] for x in all_["items"]]
+    # The API orders newest first with a stable tie-breaker, rather than JSON fixture insertion order.
+    assert set(ids) == {x["id"] for x in want if x["at"] >= CUT_30D}
+    assert [x["at"] for x in all_["items"]] == sorted((x["at"] for x in all_["items"]), reverse=True)
+    repeated = (await client.get(f"{API}/rules/R-007/hits", params={"range": "30d", "size": 200})).json()
+    assert ids == [x["id"] for x in repeated["items"]]
+    p2 = (await client.get(f"{API}/rules/R-007/hits", params={"range": "30d", "page": 2})).json()
+    assert [x["id"] for x in p1["items"] + p2["items"]] == ids[:20]
     assert all_["total"] == p1["total"]
     err(await client.get(f"{API}/rules/R-007/hits", params={"range": "1y"}), 422, "VALIDATION_FAILED")
     dedup = next(x for x in want if x["result"] == "已去重")

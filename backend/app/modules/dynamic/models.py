@@ -178,6 +178,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
     obj_label: Mapped[str | None] = mapped_column(String(200))
     params: Mapped[dict | None] = mapped_column(JsonType)
     params_text: Mapped[str | None] = mapped_column(Text, comment="参数摘要（ACTIONS.params / RUNS.summary）")
+    review_snapshot: Mapped[dict | None] = mapped_column(JsonType, comment="暂存时的人工复核项与声明效果；旧记录为空")
     elapsed_ms: Mapped[int | None] = mapped_column(Integer)
     result_code: Mapped[str | None] = mapped_column(String(200))
     retry_count: Mapped[int | None] = mapped_column(Integer)

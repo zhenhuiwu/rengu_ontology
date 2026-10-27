@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { reviewFields } from '@/pages/ops/actionReview';
 /**
  * 问数工作台（/use/qa/workbench）。
  * 布局：会话列表 | 对话（唯一滚动区）+ 输入框 | 当前对象与可执行动作。
@@ -134,6 +135,7 @@ function actionFields(run?: qaApi.QaActionRun) {
     { label: '目标', value: run.objLabel ?? '—' }, { label: '参数', value: run.params ?? '—' },
     { label: '审批人', value: run.approver ?? '—' }, { label: '写回系统', value: run.system ?? '—' },
     { label: '幂等键', value: run.idemKey },
+    ...reviewFields(run),
   ];
   return [
     { label: '动作类型', value: run ? `${run.action} ${run.typeVersion ?? ''}`.trim() : '发放复购召回优惠券 v3' },
@@ -181,7 +183,7 @@ async function runAction(reuseId?: string, suggest?: qaApi.QaActionSuggest, turn
     tag: '待确认',
     target: run?.objLabel ?? (sess.real ? '—' : `${ACTION_TARGET.kind} · ${ACTION_TARGET.label}`),
     fields: actionFields(run),
-    impact: '提交后进入审批；外部系统超时会标记为“结果未知”并进入对账，不会自动重试。',
+    impact: '确认后按已发布的审批和执行配置处理，结果以动作中心记录为准。外部结果未知时先对账，不自动重发写入。',
     irreversible: true,
     okText: run && !run.approver ? '确认执行' : '确认提交',
   });

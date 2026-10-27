@@ -10,6 +10,7 @@ import type { ActionLog, ActionRecord, ActionStatus, SysId } from '@/mock/action
 import { apiClient, currentApiContext, isApiError, type PageResult } from './http';
 import { DRAFTS } from '@/mock/releases';
 import { registerDraft } from './static';
+import type { ActionReview } from '@/pages/ops/actionReview';
 
 export const dynamicApi = apiClient('dynamic');
 export const dynamicContextKey = () => JSON.stringify(currentApiContext());
@@ -74,7 +75,8 @@ export interface DecisionRecommendation {
   rank: number; score: number;
   actionType: { id: string; name: string; version?: number | string | null; targetKind?: string | null };
   reasons: DecisionReason[]; params: Record<string, unknown>; paramSources: Record<string, string>; unfilledParams: DecisionUnfilled[];
-  dryRun: { ran: boolean; passed?: boolean; reason?: string; issues?: unknown[]; error?: { code: string; message: string } };
+  dryRun: ActionReview & { ran: boolean; passed?: boolean; reason?: string; issues?: unknown[]; error?: { code: string; message: string } };
+  declaredEdits?: ActionReview['declaredEdits'];
   availability: { checked: boolean; available?: boolean; reason?: string };
   policy: { mode?: string; callerType?: string; callerAllowed?: boolean; [k: string]: unknown };
   handoff: { method: string; path: string; requiresHumanConfirmation: boolean; body: { typeId: string; objKind?: string | null; objId?: string | null; objLabel?: string | null; params: string } };
@@ -96,7 +98,7 @@ export type ActionRunDto = Omit<ActionRecord, 'log' | 'failReason' | 'unknownRea
   failReason?: string; unknownReason?: string; reconcile?: string; retryOf?: string; retriedAs?: string;
 };
 export interface ActionCan { confirm: boolean; withdraw: boolean; approve: boolean; resubmit: boolean; reconcile: boolean; reasons: Record<string, string> }
-export interface ActionRunDetailDto extends ActionRunDto { log: ActionLog[]; can: ActionCan }
+export interface ActionRunDetailDto extends ActionRunDto, ActionReview { log: ActionLog[]; can: ActionCan }
 export interface ActionRunPageDto extends PageResult<ActionRunDto> { counts: Record<ActionTab, number>; statusCounts: Record<string, number> }
 export interface ActionRunQuery { tab: ActionTab; status?: string; action?: string; sysId?: string; kw?: string; page: number; size: number }
 export interface ActionMetaDto {
@@ -144,7 +146,7 @@ export interface LaunchParam { name: string; api: string; type: string; required
 export interface LaunchAction { id: string; name: string; version: string; kind: string; available: boolean; reason?: string | null; params: LaunchParam[]; approval: string }
 export const listLaunchActions = () => api.get<LaunchAction[]>('/actions/available');
 export const listActionTargets = (code: string, kw: string, page: number) => api.get<PageResult<{ id: string; label: string }>>(`/actions/${enc(code)}/targets`, { query: { kw, page, size: 10 } });
-export const validateActionLaunch = (code: string, body: { objKind: string; objId: string; params: Record<string, unknown> }) => inContext(api.post<{ passed: boolean; message: string }>(`/actions/${enc(code)}:validate`, body));
+export const validateActionLaunch = (code: string, body: { objKind: string; objId: string; params: Record<string, unknown> }) => inContext(api.post<ActionReview & { passed: boolean; message: string }>(`/actions/${enc(code)}:validate`, body));
 
 export type { AlertStatus, ActionStatus };
 

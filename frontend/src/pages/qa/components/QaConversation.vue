@@ -9,6 +9,9 @@ import { useQaSession, clarifyFollowUp } from '../useQaSession';
 import { useAppStore } from '@/stores/app';
 import QaAnswer from './QaAnswer.vue';
 import QaStoreAnswer from './QaStoreAnswer.vue';
+import QaDynamicSummary from './QaDynamicSummary.vue';
+import ActionReviewPanel from '@/pages/ops/ActionReview.vue';
+import type { QaDynamicAnswer } from '@/api/qa';
 import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer, QaActionAnswer, QaAlertRef, QaActionSuggest } from '@/api/qa';
 import { pinTitle } from '@/api/qaPages';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
@@ -25,6 +28,11 @@ type ActionTurn = Extract<QaRealTurn, { answer: QaActionAnswer }>;
 const isAction = (t: QaRealTurn): t is ActionTurn => t.kind === 'answer' && (t.answer as { card: string }).card === 'action';
 /** 回答带的相关告警（只读引用，动态模块的告警） */
 const alertsOf = (t: QaRealTurn): QaAlertRef[] => (t.kind === 'answer' ? ((t.answer as { alerts?: QaAlertRef[] }).alerts ?? []) : []);
+const summariesOf = (turn: QaRealTurn) => {
+  if (turn.kind !== 'answer') return [];
+  const answer = turn.answer as QaDynamicAnswer;
+  return answer.dynamicSummaries?.length ? answer.dynamicSummaries : answer.dynamicSummary ? [answer.dynamicSummary] : [];
+};
 const isChain = (t: QaRealTurn): t is ChainTurn => t.kind === 'answer' && (t.answer as { card: string }).card === 'table';
 const chainMeta = computed(() => `按 大区 = ${detail.value?.scope ?? '—'}、口径 = ${detail.value?.caliber ?? '—'} 回答`);
 const tableCols = (t: ChainTurn) => t.answer.table.columns.map((c) => ({ dataIndex: c.key, title: c.title, align: (c.align ?? 'left') as 'left' | 'right' }));
@@ -87,6 +95,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
         <a-tooltip v-if="t.answer.action.canStage !== false" :title="reason || '只暂存到动作中心，确认后才提交；问数不会自动执行'"><a-button size="small" :disabled="readonly" @click="emit('suggest', t.answer.action, t.id)">发起动作</a-button></a-tooltip>
         <a-tag v-else>仅建议</a-tag>
       </div>
+      <ActionReviewPanel v-bind="t.answer.action.dryRun" />
     </template>
     <template v-else-if="isChain(t)">
       <div class="qa-b qa-b-ans">
@@ -100,6 +109,7 @@ watch(() => [props.tips.length, activeTurns.value.length, activeId.value, TURNS.
     <div v-if="alertsOf(t).length" class="qa-alerts t-12 c-2">
       相关告警：<a-tag v-for="a in alertsOf(t)" :key="a.id" :color="a.level === '高' ? 'red' : a.level === '中' ? 'orange' : 'default'">{{ a.objLabel || a.objId }} · {{ a.rule }}（{{ a.status }}）</a-tag>
     </div>
+    <QaDynamicSummary :items="summariesOf(t)" />
     <template v-if="isAction(t) || isChain(t)" />
     <template v-else-if="t.kind === 'answer'">
     <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="live ? t.id : undefined" />

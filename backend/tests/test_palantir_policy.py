@@ -98,6 +98,10 @@ async def test_policy_publish_versions_snapshot_and_delete(client, pwb):
     )
     assert stored["policy"] == SAVED
     assert (await action_policy.load(pwb, A["id"], at.version)).mode == "auto"
+    released_ver = await pwb.scalar(select(OntologyRelease.ver).order_by(OntologyRelease.id.desc()).limit(1))
+    detail = await client.get(f"{API}/action-types/{A['id']}", headers=ADMIN)
+    assert detail.status_code == 200 and detail.json()["policy"] == SAVED
+    assert detail.json()["policyStored"] == SAVED and detail.json()["policyStatus"] == "configured"
     # 不改策略的后续发布沿用；删除回到默认，快照里不再出现 policy 键
     target = {**A, "isNew": False}
     await approved(client, [(target, "def", [row("desc", "新说明", op="update")])])
@@ -109,6 +113,11 @@ async def test_policy_publish_versions_snapshot_and_delete(client, pwb):
     pwb.expire_all()
     at = await pwb.scalar(select(ActionType).where(ActionType.code == A["id"]))
     assert await action_policy.load(pwb, A["id"], at.version) == action_policy.DEFAULT
+    detail = await client.get(f"{API}/action-types/{A['id']}", headers=ADMIN)
+    assert detail.json()["policy"] == action_policy.DEFAULT.dump()
+    assert detail.json()["policyStored"] is None and detail.json()["policyStatus"] == "unconfigured"
+    history = await client.get(f"{API}/action-types/{A['id']}", headers=ADMIN, params={"ver": released_ver})
+    assert history.status_code == 200 and history.json()["policy"] == SAVED
     assert all("policy" not in d for c, d in snap["actionTypes"].items() if c != A["id"])  # 存量形状不变
 
 
@@ -132,6 +141,18 @@ async def test_invalid_policy_publish_is_409_and_atomic(client, pwb, approval, p
     assert await pwb.scalar(select(ActionType).where(ActionType.code == A["id"])) is None
 
 
+@pytest.mark.parametrize("legacy", [{"mode": "auto", "legacy": "keep"}, "legacy-invalid"])
+async def test_unrelated_publish_preserves_invalid_policy_without_enabling_auto(client, pwb, legacy):
+    await approved(client, [(A, "def", [row(k, v) for k, v in definition("负责人审批").items()])])
+    await publish(client)
+    action = await pwb.scalar(select(ActionType).where(ActionType.code == A["id"]))
+    await set_policy(pwb, action, legacy)
+    await approved(client, [({**A, "isNew": False}, "def", [row("desc", "仅修改说明", op="update")])])
+    snap = await snapshot(pwb, await publish(client))
+    assert snap["actionTypes"][A["id"]]["policy"] == legacy
+    assert action_policy.stored(snap["actionTypes"][A["id"]]["policy"]).mode == "confirm"
+
+
 # ---------- 暂存分流 ----------
 async def set_policy(session, action, value):
     """版本表只追加：每次换一个新版本号写入策略，并把动作类型指到该版本。"""
@@ -147,6 +168,18 @@ async def set_policy(session, action, value):
         )
     )
     await session.flush()
+
+
+async def test_policy_detail_preserves_invalid_legacy_value(runtime):  # noqa: F811
+    from app.common.context import ViewContext
+    from app.modules.action.service import ActionTypeService
+
+    session, action, _ = runtime
+    original = {"mode": "auto", "legacy": "preserve-this-metadata"}
+    await set_policy(session, action, original)
+    detail = await ActionTypeService(session).detail(ViewContext(), action.code)
+    assert detail["policyStatus"] == "invalid" and detail["policyStored"] == original
+    assert detail["policy"] == action_policy.DEFAULT.dump()
 
 
 async def stage(client, **patch):

@@ -63,8 +63,17 @@ LLM_REPLY = {
 
 @pytest.fixture
 async def ao(session):
-    for s in DDL:
-        await session.execute(text(s))
+    database = session.get_bind().engine.url.database
+    assert database.startswith(("rengu_test", "rengu_fix_"))
+    # Only the fixture owner creates this rollback-only source schema; runtime remains scoped/readonly.
+    await session.execute(text("RESET ROLE"))
+    try:
+        for s in DDL:
+            await session.execute(text(s))
+        await session.execute(text("GRANT USAGE ON SCHEMA ao_test TO rengu_ontology_scoped"))
+        await session.execute(text("GRANT SELECT ON ALL TABLES IN SCHEMA ao_test TO rengu_ontology_scoped"))
+    finally:
+        await session.execute(text("SET LOCAL ROLE rengu_ontology_scoped"))
     await session.flush()
     return session
 

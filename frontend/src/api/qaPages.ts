@@ -21,7 +21,7 @@ export const renamePage = (id: string, name: string) => api.patch<QaPageFull>(`/
 /** P5 删除 */
 export const deletePage = (id: string) => api.delete<void>(`/pages/${id}`);
 /** P6 立即刷新 */
-export type PageAccess = QaPageFull & { ownerId?: string; ownerDept?: string | null; lockVersion?: number; canEdit?: boolean; canShare?: boolean; canRefresh?: boolean; refreshUnavailableReason?: string; scheduleActive?: boolean; subscriptionActive?: boolean };
+export type PageAccess = QaPageFull & { ownerId?: string; ownerDept?: string | null; lockVersion?: number; canEdit?: boolean; canShare?: boolean; canRefresh?: boolean; refreshUnavailableReason?: string; scheduleActive?: boolean; subscriptionActive?: boolean; canSchedule?: boolean; nextRun?: string | null; scheduleTimezone?: string };
 export const access = (page: QaPageFull) => page as PageAccess;
 export type RefreshResult = PageAccess;
 export const refreshPage = (id: string) => api.post<RefreshResult>(`/pages/${id}:refresh`);
@@ -34,7 +34,7 @@ export const pinTitle = (s: string) => { const c = [...s.trim()]; return c.lengt
 export const saveCardOrder = (id: string, order: string[]) => api.put<{ cards: PageCard[]; removed: string[] }>(`/pages/${id}/cards`, { order });
 /** P9 刷新与订阅 */
 export const saveSchedule = (id: string, refresh: RefreshPlan, sub: Subscription) =>
-  api.put<{ refresh: RefreshPlan; sub: Subscription; nextRun: string }>(`/pages/${id}/schedule`, { refresh, sub });
+  api.put<{ refresh: RefreshPlan; sub: Subscription; nextRun: string; scheduleTimezone: string }>(`/pages/${id}/schedule`, { refresh, sub });
 /** P10 共享 */
 export const saveShare = (id: string, s: ShareSetting, lockVersion?: number) =>
   api.put<ShareSetting & { linkUrl?: string; newViewers: string[]; newGrants: string[]; lockVersion: number }>(`/pages/${id}/share`, { ...s, lockVersion });
