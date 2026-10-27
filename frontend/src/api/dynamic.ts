@@ -67,6 +67,24 @@ export const batchCloseAlerts = (ids: string[], as: '已解决' | '已忽略', r
 export const startAlertAction = (id: string, params: Record<string, unknown>) => inContext(api.post<{ alert: AlertDetailDto; action: ActionRunDetailDto }>(`/alerts/${enc(id)}:start-action`, { params }));
 export const listPeople = (alertId: string) => api.get<{ id: string; name: string }[]>('/people', { query: { alertId } });
 export const getAlertMeta = () => api.get<{ rules: { id: string; name: string }[] }>('/alerts/meta');
+/** AI 处置建议（决策评估，只建议不暂存；caller.kind = system 为告警产生后规则身份自动评估） */
+export interface DecisionReason { kind: string; text: string; [k: string]: unknown }
+export interface DecisionUnfilled { api: string; name?: string; type?: string; default?: unknown; mapping?: string | null; reason?: string }
+export interface DecisionRecommendation {
+  rank: number; score: number;
+  actionType: { id: string; name: string; version?: number | string | null; targetKind?: string | null };
+  reasons: DecisionReason[]; params: Record<string, unknown>; paramSources: Record<string, string>; unfilledParams: DecisionUnfilled[];
+  dryRun: { ran: boolean; passed?: boolean; reason?: string; issues?: unknown[]; error?: { code: string; message: string } };
+  availability: { checked: boolean; available?: boolean; reason?: string };
+  policy: { mode?: string; callerType?: string; callerAllowed?: boolean; [k: string]: unknown };
+  handoff: { method: string; path: string; requiresHumanConfirmation: boolean; body: { typeId: string; objKind?: string | null; objId?: string | null; objLabel?: string | null; params: string } };
+}
+export interface DecisionDto {
+  decisionId: string; createdAt: string; caller: { kind?: string; name?: string; system?: { trigger?: string; ruleId?: string } | null };
+  alertId?: string | null; error?: string | null; recommendations: DecisionRecommendation[]; notes: string[];
+}
+export const getAlertDecision = (id: string) => api.get<{ alertId: string; decision: DecisionDto | null }>(`/alerts/${enc(id)}/decision`);
+export const evaluateAlertDecision = (id: string) => inContext(api.post<{ alertId: string; decision: DecisionDto }>(`/alerts/${enc(id)}/decision:evaluate`));
 
 // ---------------- 动作 ----------------
 

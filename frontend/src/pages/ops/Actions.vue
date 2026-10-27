@@ -8,7 +8,7 @@ import InfoTip from '@/components/InfoTip.vue';
  * 开关 dynamic 走真接口时（src/api/dynamic.ts）：列表 / 页签计数 / 详情（执行记录）/ 动作与外部系统下拉都取后台，
  * 确认提交、撤回、重新提交、对账一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
@@ -343,6 +343,20 @@ async function openLaunch() {
   catch (e) { if (ctx === dynamicContextKey()) fail(e); }
   finally { if (ctx === dynamicContextKey()) launchLoading.value = false; }
 }
+/** 告警「AI 处置建议」交接：?launch=动作类型&launchObj=对象&launchParams=JSON → 打开发起弹窗并预填，仍由人确认提交 */
+async function launchFromQuery() {
+  const q = route.query;
+  if (!REAL_API || typeof q.launch !== 'string' || readonly.value) return;
+  const type = q.launch, obj = typeof q.launchObj === 'string' ? q.launchObj : undefined, params = typeof q.launchParams === 'string' ? q.launchParams : '{}';
+  router.replace({ query: { ...q, launch: undefined, launchObj: undefined, launchParams: undefined } });
+  await openLaunch();
+  if (!launchOptions.value.some((a) => a.id === type)) { launchErrors.value = [`建议的动作 ${type} 当前不可发起`]; return; }
+  launchType.value = type;
+  await nextTick(); // 等 launchType 的重置 watcher 跑完再填对象和参数
+  launchObject.value = obj;
+  try { launchParams.value = JSON.stringify(JSON.parse(params), null, 2); } catch { launchParams.value = '{}'; }
+}
+watch(() => route.query.launch, () => { launchFromQuery(); }, { immediate: true });
 let targetSeq = 0;
 watch([launchType, targetKw, targetPage], async () => {
   const ctx = dynamicContextKey(), seq = ++targetSeq, code = launchType.value;
