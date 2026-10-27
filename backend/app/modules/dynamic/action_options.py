@@ -10,8 +10,10 @@ from app.common.row_filter import apply_row_filter
 from app.core.errors import AppError, NotFound
 from app.modules.action.models import ActionType, TypeStatus
 from app.modules.integration.action_edits import (
+    declared_text,
     execution_definition,
     existing_row,
+    external_webhook,
     mapping_json,
     object_binding,
     object_operation,
@@ -39,7 +41,10 @@ async def launch_definition(session, user, catalog, code, *, identity=None):
         raise AppError("动作没有明确的目标对象类型", code="ACTION_TARGET_UNAVAILABLE", status_code=503)
     obj, governed = await object_binding(session, definition["targetKind"])
     # Resolve every explicit operation binding, including both endpoints, before advertising availability.
+    declared = await external_webhook(session, definition)
     for edit in definition["writeback"]["edits"]:
+        if declared and declared_text(edit.get("field")):
+            continue  # 外部 Webhook 声明效果：本地不执行，也不绑定本地对象
         mapping_json(edit.get("field"))
         if edit.get("op") == "关联":
             await relation_binding(session, edit.get("obj"))

@@ -11,7 +11,12 @@ from app.modules.action.execution_options import action_operation_objects
 from app.modules.action.models import ActionType
 from app.modules.action.sections import action_def
 from app.modules.dynamic.row_scope import scoped_instances, visible_references
-from app.modules.integration.action_edits import object_binding, relation_binding
+from app.modules.integration.action_edits import (
+    declared_text,
+    external_webhook,
+    object_binding,
+    relation_binding,
+)
 
 HIDDEN = "参数不可用：无法确认全部引用对象的可见性"
 
@@ -56,6 +61,7 @@ async def parameters_visibility(session, user, runs):
                 continue
             operation_key = (
                 definition.get("targetKind"),
+                definition.get("sysId"),
                 tuple((edit.get("op"), edit.get("obj")) for edit in definition["writeback"]["edits"]),
                 tuple(
                     (effect.get("kind"), effect.get("target"))
@@ -63,7 +69,10 @@ async def parameters_visibility(session, user, runs):
                 ),
             )
             if operation_key not in operations:
+                declared = await external_webhook(session, definition)
                 for edit in definition["writeback"]["edits"]:
+                    if declared and declared_text(edit.get("field")):
+                        continue  # 外部 Webhook 声明效果：不绑定本地对象
                     if edit.get("op") == "关联":
                         await relation_binding(session, edit.get("obj"))
                     else:

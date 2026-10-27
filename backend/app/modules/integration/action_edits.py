@@ -121,6 +121,46 @@ def mapping_json(value):
         raise unavailable("执行映射须为有界 JSON 对象，自然语言不能执行") from None
 
 
+# 外部 Webhook 执行通道：自然语言编辑/副作用是“声明效果”，由外部系统承担，本地不执行、不报错。
+WEBHOOK_CATEGORY = "Webhook"
+DECLARED = "external/declared"
+
+
+def declared_text(value):
+    """True when a mapping is natural language (not a bounded JSON object)."""
+    try:
+        mapping_json(value)
+    except AppError:
+        return True
+    return False
+
+
+async def external_webhook(session, definition):
+    """The action executes through a registered external system whose category is Webhook."""
+    code = definition.get("sysId")
+    if not isinstance(code, str) or not code:
+        return False
+    from app.modules.integration.models import ExtSystem
+    category = await session.scalar(select(ExtSystem.category).where(ExtSystem.code == code))
+    return category == WEBHOOK_CATEGORY
+
+
+async def declared_writeback(session, definition):
+    """Natural-language edits/effects of an external-Webhook action, as declared (never executed locally)."""
+    if not await external_webhook(session, definition):
+        return []
+    from app.modules.integration.action_effects import STANDARD
+    writeback = definition.get("writeback") or {}
+    out = [{"kind": "编辑", "op": e.get("op"), "obj": e.get("obj"), "field": e.get("field"), "status": DECLARED}
+           for e in writeback.get("edits", []) if declared_text(e.get("field"))]
+    out += [{"kind": f.get("kind"), "target": f.get("target"), "when": f.get("when"), "note": f.get("note"),
+             "status": DECLARED}
+            for f in writeback.get("effects", [])
+            if not (f.get("kind") == "事件" and str(f.get("target") or "").split(" ", 1)[0] in STANDARD)
+            and declared_text(f.get("note"))]
+    return out
+
+
 def explicit_target_params(definition):
     """Only structured execution targets may intentionally differ from the run context."""
     keys = set()
@@ -328,7 +368,10 @@ async def business_edits(session, user, run, definition, *, apply=False):
     check_func(user, "action-center", "manage")
     params = structured_params(run.params if run.params is not None else run.params_text)
     touched = set()
+    declared = await external_webhook(session, definition)
     for edit in edits:
+        if declared and declared_text(edit["field"]):
+            continue  # 声明效果：由外部 Webhook 系统承担，见 declared_writeback
         spec = mapping_json(edit["field"])
         if edit.get("op") == "关联":
             if set(spec) != {"from", "to"}:

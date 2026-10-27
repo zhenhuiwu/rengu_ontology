@@ -384,7 +384,10 @@ class DatabaseSubmissionChecker:
             if len(values) == 1:
                 context = {**context, "alertId": values.pop()}
         refs = await self.context_references(action, context, bundles)
-        from app.modules.integration.action_edits import explicit_target_params
+        from app.modules.integration.action_edits import explicit_target_params, external_webhook
+        # 外部 Webhook 动作：无法机器校验的自然语言规则/条件转为确认人人工核对，不阻断暂存；
+        # 可机器判定为不通过的仍阻断。其他动作保持“不可校验即失败”。
+        human: list[dict[str, str]] | None = [] if await external_webhook(self.session, action) else None
         cross_targets = explicit_target_params(action)
         name_counts: dict[str, int] = {}
         for p in params_def:
@@ -462,7 +465,10 @@ class DatabaseSubmissionChecker:
                 if not evaluate(rule, refs):
                     failed.append({"name": name, "fail": "参数校验未通过"})
             except Unavailable as exc:
-                failed.append({"name": name, "fail": "参数规则不可校验：" + str(exc)})
+                if human is None:
+                    failed.append({"name": name, "fail": "参数规则不可校验：" + str(exc)})
+                else:
+                    human.append({"name": name, "rule": str(rule or ""), "reason": str(exc)})
         for cond in conds:
             if (
                 not isinstance(cond, dict)
@@ -488,7 +494,10 @@ class DatabaseSubmissionChecker:
                         }
                     )
             except Unavailable as exc:
-                failed.append({"name": cond["name"], "fail": "条件不可校验：" + str(exc)})
+                if human is None:
+                    failed.append({"name": cond["name"], "fail": "条件不可校验：" + str(exc)})
+                else:
+                    human.append({"name": cond["name"], "rule": str(cond.get("expr") or ""), "reason": str(exc)})
         if not failed and action.get("writeback"):
             from types import SimpleNamespace
 
@@ -502,8 +511,13 @@ class DatabaseSubmissionChecker:
                 await preflight_effects(self.session, self.user, run, action)
             except AppError as exc:
                 failed.append({"name": "操作与副作用映射", "fail": exc.message})
-        return {"passed": not failed, "checked": len(conds), "failed": failed}
+        result = {"passed": not failed, "checked": len(conds), "failed": failed}
+        if human:
+            result["humanChecks"] = human
+        return result
 
     async def check(self, action_type_code: str, context: dict[str, Any]) -> list[dict[str, str]]:
         action = await definition(self.session, action_type_code, ViewContext(), "published", None)
-        return (await self.run(action, context))["failed"]
+        result = await self.run(action, context)
+        self.human_checks = result.get("humanChecks", [])
+        return result["failed"]
