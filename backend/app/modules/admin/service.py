@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.auth import CurrentUser
+from app.common.auth import CurrentUser, check_func
 from app.common.pagination import PageParams
 from app.core.clock import now
 from app.core.config import get_settings
@@ -15,7 +15,7 @@ from app.core.errors import AppError, DuplicateKey, NotFound
 from app.core.schema import DATETIME_SEC_FORMAT
 from app.modules.admin.imports import parse_import_csv as parse_import_csv
 from app.modules.admin.imports import row_length_error
-from app.modules.admin.models import AuditLog, AuditResult, SysUser, UserStatus
+from app.modules.admin.models import AuditLog, AuditResult, SysOrg, SysRole, SysUser, UserStatus
 from app.modules.admin.repo import (
     AuditFilter,
     AuditLogRepository,
@@ -23,8 +23,8 @@ from app.modules.admin.repo import (
     UserFilter,
     insert_audit,
 )
-from app.modules.admin.roles import role_names
-from app.modules.admin.schemas import ImportRowIn, ImportRowOut, UserCreateIn, UserUpdateIn
+from app.modules.admin.roles import role_names, sync_primary_role
+from app.modules.admin.schemas import ImportRowIn, ImportRowOut, UserCreateIn, UserUpdateIn, department_name
 
 
 def make_filter(
@@ -86,7 +86,7 @@ class AuditLogService:
 
 # ---- 用户（Users.vue，api-index §4.1）----
 
-# 部门下拉 = mock/admin.ts DEPTS（ADMIN_DEPTS）原样、原顺序；部门表由 PDE 补
+# Legacy seed/test reference only; live department candidates come from department_options().
 ADMIN_DEPTS = [
     "华东事业部 / 运营中心",
     "华东事业部 / 财务数据组",
@@ -142,10 +142,17 @@ class ValidationError422(AppError):
     status_code, code, message = 422, "VALIDATION_FAILED", "参数校验失败"
 
 
-async def _check_role(session: AsyncSession, role: str) -> None:
-    names = await role_names(session)
-    if role not in names:
-        raise ValidationError422(f"角色不存在：{role}", details={"role": role, "allowed": names})
+async def department_options(session: AsyncSession) -> list[str]:
+    organizations = list(await session.scalars(select(SysOrg.name).order_by(SysOrg.seq, SysOrg.id)))
+    existing = list(await session.scalars(select(SysUser.dept).where(SysUser.dept.is_not(None)).distinct().order_by(SysUser.dept)))
+    return list(dict.fromkeys(value for value in [*organizations, *existing] if value and value.strip()))
+
+
+async def _check_role(session: AsyncSession, role: str) -> SysRole:
+    selected = await session.scalar(select(SysRole).where(SysRole.name == role))
+    if selected is None:
+        raise ValidationError422(f"角色不存在：{role}", details={"role": role})
+    return selected
 
 
 class UserService:
@@ -158,14 +165,17 @@ class UserService:
         return list(rows), total
 
     async def _get(self, code: str) -> SysUser:
-        u = await self.repo.get_listed(code)
+        u = await self.session.scalar(self.repo.listed().where(SysUser.code == code).with_for_update().execution_options(populate_existing=True))
         if u is None:
             raise NotFound("用户不存在", details={"id": code})
         return u
 
     async def _new(
-        self, *, name: str, account: str, dept: str, role: str, status: UserStatus, actor: str
+        self, *, name: str, account: str, dept: str, role: str, status: UserStatus, actor: CurrentUser
     ) -> SysUser:
+        check_func(actor, "roles", "manage")
+        selected = await _check_role(self.session, role)
+        dept = department_name(dept)
         n = await self.repo.next_code()
         u = SysUser(
             code=f"U{n:06d}",
@@ -176,10 +186,12 @@ class UserService:
             status=status,
             joined_on=now().astimezone(ZoneInfo(get_settings().display_tz)).date(),
         )
-        return await self.repo.create(u, actor=actor)
+        u = await self.repo.create(u, actor=actor.id)
+        await sync_primary_role(self.session, u.id, None, selected, actor.id)
+        await self.session.flush()
+        return u
 
     async def create(self, body: UserCreateIn, user: CurrentUser) -> SysUser:
-        await _check_role(self.session, body.role)
         account = body.account.strip()
         if await self.repo.existing_accounts([account]):
             raise DuplicateKey("账号已存在", details={"account": account})
@@ -189,17 +201,23 @@ class UserService:
             dept=body.dept,
             role=body.role,
             status=body.status,
-            actor=user.id,
+            actor=user,
         )
 
     async def update(self, code: str, body: UserUpdateIn, user: CurrentUser) -> SysUser:
-        await _check_role(self.session, body.role)
+        selected = await _check_role(self.session, body.role)
         u = await self._get(code)
+        previous = u.role
+        if previous != body.role:
+            check_func(user, "roles", "manage")
         values = {"name": body.name.strip(), "dept": body.dept, "role": body.role, "status": body.status}
-        return await self.repo.update(u, values, actor=user.id, lock_version=body.lock_version)
+        u = await self.repo.update(u, values, actor=user.id, lock_version=body.lock_version)
+        await sync_primary_role(self.session, u.id, previous, selected, user.id)
+        await self.session.flush()
+        return u
 
     async def preview(self, rows: list[ImportRowIn]) -> list[ImportRowOut]:
-        """只校验不写库：必填、邮箱格式、部门 / 角色在下拉里、账号已存在、文件内账号重复。"""
+        """只校验不写库：必填、邮箱格式、部门文本规范、实际角色、账号已存在、文件内账号重复。"""
         taken = await self.repo.existing_accounts(
             [r.account.strip() for r in rows if r.account.strip() and len(r.account.strip()) <= 128]
         )
@@ -211,14 +229,17 @@ class UserService:
                 name=r.name.strip(), account=r.account.strip(), dept=r.dept.strip(), role=r.role.strip()
             )
             err = row_length_error(r)
+            if not err:
+                try:
+                    r.dept = department_name(r.dept)
+                except ValueError as error:
+                    err = str(error)
             if err:
                 pass
             elif not r.name:
                 err = "姓名为空"
             elif not _EMAIL.match(r.account):
                 err = "账号不是邮箱"
-            elif r.dept not in ADMIN_DEPTS:
-                err = "部门不存在"
             elif r.role not in names:
                 err = "角色不存在"
             elif r.account in taken:
@@ -231,6 +252,7 @@ class UserService:
 
     async def import_rows(self, rows: list[ImportRowIn], user: CurrentUser) -> int:
         """按预览规则逐行校验，有 error 的行跳过（账号已存在也跳过），其余新建为「待激活」。"""
+        check_func(user, "roles", "manage")
         n = 0
         for r in await self.preview(rows):
             if r.error:
@@ -241,7 +263,7 @@ class UserService:
                 dept=r.dept,
                 role=r.role,
                 status=UserStatus.pending,
-                actor=user.id,
+                actor=user,
             )
             n += 1
         return n

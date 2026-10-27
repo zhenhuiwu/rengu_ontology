@@ -34,6 +34,7 @@ class TenantSettingsOut(ApiModel):
     org_options: list[OrgOption]
     lock_version: int
     updated_at: DateTimeMin
+    can_manage: bool = False
 
 
 class TenantSettingsIn(ApiModel):
@@ -71,7 +72,7 @@ async def _orgs(session: AsyncSession, *, lock: bool = False) -> list[SysOrg]:
     return list(await session.scalars(stmt.with_for_update() if lock else stmt))
 
 
-def _out(tenant: SysTenant, orgs: list[SysOrg]) -> TenantSettingsOut:
+def _out(tenant: SysTenant, orgs: list[SysOrg], can_manage: bool = False) -> TenantSettingsOut:
     return TenantSettingsOut(
         tenant_id=tenant.code,
         name=tenant.name,
@@ -81,6 +82,7 @@ def _out(tenant: SysTenant, orgs: list[SysOrg]) -> TenantSettingsOut:
         org_options=[OrgOption(value=o.code, label=o.name) for o in orgs],
         lock_version=tenant.lock_version,
         updated_at=tenant.updated_at,
+        can_manage=can_manage,
     )
 
 
@@ -117,12 +119,12 @@ async def update_tenant(
         ip=ip,
         created_by=user.id,
     )
-    return _out(tenant, orgs)
+    return _out(tenant, orgs, True)
 
 
 @router.get("", response_model=TenantSettingsOut, summary="租户基础信息（非全量系统设置）")
 async def get_tenant_settings(session: SessionDep, _user: ViewUser) -> TenantSettingsOut:
-    return _out(await _tenant(session), await _orgs(session))
+    return _out(await _tenant(session), await _orgs(session), _user.func.get("settings") == "manage")
 
 
 @router.put("", response_model=TenantSettingsOut, summary="保存租户名称、简称及默认组织")

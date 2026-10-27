@@ -11,20 +11,21 @@ from app.db.models import Base
 
 def main():
     configure_mappers()
-    migration = Path(__file__).parents[1] / "migrations/versions/ontology_0018_workspaces.py"
-    tree = ast.parse(migration.read_text(encoding="utf-8"))
-    tables = next(
-        ast.literal_eval(node.value)
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "DOMAIN_TABLES" for t in node.targets)
-    )
+    migrations = Path(__file__).parents[1] / "migrations/versions"
+    tables = set()
+    for migration in migrations.glob("*.py"):
+        tree = ast.parse(migration.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "DOMAIN_TABLES" for t in node.targets
+            ):
+                tables.update(ast.literal_eval(node.value))
     domain = {
         t.name
         for t in Base.metadata.tables.values()
         if "ontology_id" in t.c and t.name not in {"ontology_member", "ontology_role_binding", "audit_log"}
     }
-    assert domain == set(tables), (domain - set(tables), set(tables) - domain)
+    assert domain == tables, (domain - tables, tables - domain)
     for name in domain:
         table = Base.metadata.tables[name]
         assert not table.c.ontology_id.nullable, name

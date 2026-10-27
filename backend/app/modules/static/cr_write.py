@@ -661,6 +661,27 @@ class CrWriteService:
         if cr.level == CRLevel.major and not (cr.detail or {}).get("migration"):
             calc["V15"] = ("警告", "还没写已有页面和告警的迁移方式")
         calc["V12"] = ("通过", f"改动 {cr.changes} 处，涉及 {len(targets)} 个定义")
+        if "link" in kinds:
+            from app.modules.static.link_validation import link_error, modeling_objects
+            from app.modules.static.models import LinkType
+            from app.modules.static.shapes import link
+
+            objects, properties = await modeling_objects(self.session, cr.id)
+            errors = []
+            for target in targets:
+                if target.target_kind != "link":
+                    continue
+                current = await self.session.scalar(select(LinkType).where(LinkType.code == target.target_id))
+                if current is None and not target.is_new:
+                    errors.append(f"{target.target_id}：关系类型不存在")
+                    continue
+                values = link(current, with_runtime=False) if current is not None else {}
+                values.update({item.item_key: item.after for item in items if item.target_kind == "link"
+                    and item.target_id == target.target_id and item.section == "def" and item.op != "delete"})
+                error = link_error(values, objects, properties, previous_via=current.via if current else None, is_new=target.is_new)
+                if error:
+                    errors.append(f"{target.target_id}：{error}")
+            calc["V3"] = ("阻断", "；".join(errors)) if errors else ("通过", "关系对象、属性与类型已按当前本体及同单草稿核对")
         if "link" not in kinds:
             calc.setdefault("V3", ("不适用", "本次未改关系"))
             calc.setdefault("V13", ("不适用", "本次未改关系"))

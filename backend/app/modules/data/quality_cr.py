@@ -181,6 +181,9 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
     check.threshold, check.limit_value, check.schedule = body.threshold, limit, body.schedule
     check.retired_at = ctx.now if values["_retire"] else None
     await ctx.session.flush()
+    from app.modules.data.quality_scheduler import reset
+
+    await reset(ctx.session, check, obj, ctx.now)
     return {"qualityChecks"}
 
 

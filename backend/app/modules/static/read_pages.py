@@ -890,13 +890,19 @@ async def synonym_conflicts(svc, cr_code=None):
     return {"conflicts": compare(rows), "rule": {}}
 
 
-async def catalog(svc):
+async def catalog(svc, cr_code=None, link_code=None):
     if svc.ver:
+        if cr_code:
+            await draft(svc, cr_code, "link", link_code)
         objects = list((await snapshot(svc, "objectTypes")).values())
+        properties = {code: list(props.values()) for code, props in (await snapshot(svc, "properties")).items()}
         links = list((await snapshot(svc, "links")).values())
         paths = list((await snapshot(svc, "qaPaths")).values())
     else:
-        objects = [shapes.object_link_obj(row) for row in await svc.repo.object_types(light=True)]
+        from app.modules.static.link_validation import modeling_objects
+
+        saved = await draft(svc, cr_code, "link", link_code)
+        objects, properties = await modeling_objects(svc.session, saved[0].id if saved else None)
         links = [shapes.link(row, with_runtime=False) for row in await svc.repo.links(light=True)]
         paths = list(
             (
@@ -909,6 +915,7 @@ async def catalog(svc):
     names = {row["id"]: row["name"] for row in objects}
     return {
         "objects": objects,
+        "properties": properties,
         "links": [
             {
                 **row,

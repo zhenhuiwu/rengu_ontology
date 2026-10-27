@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     SmallInteger,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -268,3 +269,12 @@ class ApiKeyCall(IdMixin, AppendOnlyTableMixin, Base):
     ip: Mapped[str] = mapped_column(String(64), nullable=False)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class PlatformSetting(CodeMixin, MutableTableMixin, Base):
+    """Shared platform configuration; reversible credentials never leave the server."""
+
+    __tablename__ = "platform_setting"
+
+    value: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    secret_enc: Mapped[str | None] = mapped_column(Text)

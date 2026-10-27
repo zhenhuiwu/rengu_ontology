@@ -1,10 +1,10 @@
 """Quality definition snapshots only; immutable runs are never rolled back."""
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core import clock
 from app.modules.data.quality_cr import definition, register, validate_definition
-from app.modules.data.quality_models import QualityCheck
+from app.modules.data.quality_models import QualityCheck, QualityScheduleCursor
 from app.modules.static.models import ObjectType
 from app.modules.static.writeback import writeback_error
 
@@ -25,6 +25,8 @@ class QualitySection:
         return {}
 
     async def restore_section(self, session, content, *, release_id):
+        # Restoring a historical definition must not silently authorize a previous timer.
+        await session.execute(delete(QualityScheduleCursor))
         rows = {c.code: c for c in await session.scalars(select(QualityCheck).with_for_update())}
         for code, check in rows.items():
             if code not in content:

@@ -7,7 +7,7 @@
 - GET /export-jobs/{id}、/download  创建者查询 / 下载固定清单 CSV
 用户页（src/pages/admin/Users.vue，api-index §4.1）：
 - GET  /users                    页码分页 PageResult<AdminUser & {pendingApprovals}>，顺序 = mock ADMIN_USERS
-- GET  /depts                    部门下拉（mock ADMIN_DEPTS 原顺序）
+- GET  /depts                    部门目录（实际组织与已登记用户部门）
 - POST /users、PUT /users/{id}   新建 / 编辑
 - POST /users:import-preview     解析 + 校验，不写库；POST /users:import 导入
 - POST /users/{id}:enable、POST /users/{id}:disable {transferTo?}
@@ -70,7 +70,7 @@ from app.modules.admin.schemas import (
     UserUpdateIn,
 )
 from app.modules.admin.service import (
-    ADMIN_DEPTS,
+    department_options,
     AuditLogService,
     UserService,
     make_filter,
@@ -235,8 +235,15 @@ async def list_users(
 
 
 @router.get("/depts", response_model=list[str], summary="部门下拉", dependencies=[Depends(_users_view)])
-async def list_depts() -> list[str]:
-    return list(ADMIN_DEPTS)
+async def list_depts(session: SessionDep) -> list[str]:
+    return await department_options(session)
+
+
+@router.get("/users/options", summary="用户部门与主角色候选", dependencies=[Depends(_users_view)])
+async def user_options(session: SessionDep, user: CurrentUserDep) -> dict:
+    from app.modules.admin.roles import role_names
+
+    return {"depts": await department_options(session), "roles": [{"name": name} for name in await role_names(session)], "canAssignRole": user.func.get("roles") == "manage"}
 
 
 @router.post("/users", response_model=AdminUserOut, summary="新建用户（账号唯一）")
@@ -499,3 +506,7 @@ async def list_tenants(_user: CurrentUserDep, session: SessionDep) -> list[Tenan
 from app.modules.admin.tenant_settings import router as tenant_settings_router  # noqa: E402
 
 router.include_router(tenant_settings_router)
+
+from app.modules.admin.model_settings import router as model_settings_router  # noqa: E402
+
+router.include_router(model_settings_router)

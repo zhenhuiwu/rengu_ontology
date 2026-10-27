@@ -17,6 +17,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.config import get_settings
+from app.modules.admin.model_settings import ModelRuntime, load_model_runtime
 
 DEFAULT_MODEL = "qwen-flash"
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -81,7 +82,16 @@ class FakeLLM:
         return self.reply
 
 
-def get_llm() -> LLMClient | None:
+def get_llm(runtime: ModelRuntime | None = None) -> LLMClient | None:
+    if runtime is not None:
+        if not runtime.value.enabled or not runtime.api_key.get_secret_value():
+            return None
+        return DashScopeLLM(
+            runtime.api_key.get_secret_value(),
+            runtime.value.model,
+            runtime.value.base_url,
+            runtime.value.timeout_sec,
+        )
     settings = get_settings()
     file_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
     key = os.environ.get("DASHSCOPE_API_KEY", file_key).strip()
@@ -93,6 +103,10 @@ def get_llm() -> LLMClient | None:
         os.environ.get("AUTO_ONTOLOGY_LLM_BASE_URL") or settings.auto_llm_base_url or DEFAULT_BASE_URL,
         float(os.environ.get("AUTO_ONTOLOGY_LLM_TIMEOUT_S") or settings.auto_llm_timeout_s or 60),
     )
+
+
+async def get_configured_llm(session) -> LLMClient | None:
+    return get_llm(await load_model_runtime(session, "ontology"))
 
 
 SYSTEM_PROMPT = """\

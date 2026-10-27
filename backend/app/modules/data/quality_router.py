@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from app.common.auth import CurrentUserDep, check_func, require_func, resolve_user
 from app.common.context import ViewContextDep
 from app.common.pagination import PageParamsDep
+from app.core.config import get_settings
 from app.core.errors import AppError, EmptyInput
 from app.db.session import SessionDep
 from app.modules.data import quality as service
@@ -31,7 +32,8 @@ async def owner(session, user, ctx):
 @router.get("/quality-checks/meta", dependencies=VIEW)
 async def meta(session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
     await owner(session, user, ctx)
-    return {"objects": await service.meta(session, ctx.ver), "automaticScheduling": False}
+    return {"objects": await service.meta(session, ctx.ver), "automaticScheduling": True,
+            "schedulingTimezone": get_settings().display_tz}
 
 
 @router.get("/quality-checks", dependencies=VIEW)

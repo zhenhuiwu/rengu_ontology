@@ -1,6 +1,7 @@
 """固定受控对象的质量检查；不执行用户 SQL，不生成演示结果。"""
 
 import re
+from datetime import datetime
 from time import perf_counter
 
 from sqlalchemy import case, func, literal, select, union_all
@@ -11,11 +12,12 @@ from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.common.row_filter import apply_row_filter
 from app.core import clock
+from app.core.config import get_settings
 from app.core.errors import AppError, NotFound
 from app.core.schema import _fmt_dt
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS, PRODUCT_COLUMNS, STORE_COLUMNS
 from app.modules.biz.models import BizOrder, OrderLine, Product, Store
-from app.modules.data.quality_models import QualityCheck, QualityRun
+from app.modules.data.quality_models import QualityCheck, QualityRun, QualityScheduleCursor
 from app.modules.static.models import ObjectType
 
 # name, ORM, business key, null field, source time, foreign reference
@@ -136,6 +138,8 @@ def run_out(run: QualityRun) -> dict:
         "dataCutoff": _fmt_dt(run.data_cutoff),
         "sourceTime": _fmt_dt(run.source_time) if run.source_time else None,
         "definition": run.definition,
+        "trigger": (run.definition or {}).get("trigger", "manual"),
+        "scheduledAt": (run.definition or {}).get("scheduledAt"),
     }
 
 
@@ -293,6 +297,10 @@ async def list_checks(session, owner, page: PageParams, type_key=None, kind=None
     }
     historical_names = {row["key"]: row["name"] for row in await meta(session, ver)} if ver else {}
     ids = [c.id for c in checks.values()]
+    schedules = {} if ver else {
+        cursor.check_id: cursor for cursor in await session.scalars(select(QualityScheduleCursor).where(
+            QualityScheduleCursor.check_id.in_(ids)))
+    }
     page_runs = {
         r.check_id: r
         for r in await session.scalars(
@@ -331,6 +339,13 @@ async def list_checks(session, owner, page: PageParams, type_key=None, kind=None
         obj, check = objects.get(value["typeKey"]), checks.get(code)
         run = page_runs.get(check.id) if check else None
         since = failed_starts.get(check.id) if check and run and run.result == "失败" else None
+        cursor = schedules.get(check.id) if check else None
+        schedule_status = (
+            "历史定义" if ver else "已退休" if published and published.get("retired")
+            else "手动" if value["schedule"] == "手动"
+            else "待发布" if published is None else "需重新发布启用" if cursor is None
+            else "已暂停" if cursor.next_at is None else "已启用"
+        )
         rows.append(
             {
                 "id": code,
@@ -352,6 +367,9 @@ async def list_checks(session, owner, page: PageParams, type_key=None, kind=None
                 "hasPublished": published is not None,
                 "note": "",
                 "pending": drafts.get(code),
+                "scheduleStatus": schedule_status,
+                "nextRun": _fmt_dt(cursor.next_at) if cursor and cursor.next_at else None,
+                "scheduleError": cursor.last_error if cursor else None,
             }
         )
     active = select(candidates).where(candidates.c.published, ~candidates.c.retired).subquery()
@@ -436,7 +454,10 @@ async def evaluate(session: AsyncSession, user: CurrentUser, code: str, kind: st
     return "通过" if passed else "失败", actual, latest
 
 
-async def execute_check(session: AsyncSession, user: CurrentUser, code: str, job_id: str) -> QualityRun:
+async def execute_check(
+    session: AsyncSession, user: CurrentUser, code: str, job_id: str, *,
+    scheduled_at: datetime | None = None, coalesced_from: datetime | None = None,
+) -> QualityRun:
     check, obj = await get_check(session, user.id, code, lock=True)
     if check.retired_at:
         raise AppError("已退休检查不可运行", code="STATE_INVALID", status_code=409)
@@ -458,6 +479,9 @@ async def execute_check(session: AsyncSession, user: CurrentUser, code: str, job
             "rule": rule_text(obj.code, check.kind),
             "threshold": check.threshold,
             "schedule": check.schedule,
+            **({"trigger": "scheduled", "scheduledAt": _fmt_dt(scheduled_at),
+                "coalescedFrom": coalesced_from.isoformat() if coalesced_from else None,
+                "timezone": get_settings().display_tz} if scheduled_at else {}),
         },
         created_by=user.id,
     )

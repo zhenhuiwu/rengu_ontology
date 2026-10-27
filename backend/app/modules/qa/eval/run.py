@@ -111,7 +111,12 @@ async def main(sel: str) -> None:
         a, b = map(int, sel.split("-"))
         qs = [q for q in qs if a <= int(q["code"][-3:]) <= b]
     eng = create_async_engine(url, pool_size=8)
-    llm, sem = get_llm(), asyncio.Semaphore(6)
+    from app.db.session import get_sessionmaker
+    from app.modules.admin.model_settings import load_model_runtime
+
+    async with get_sessionmaker()() as settings_session:
+        llm = get_llm(await load_model_runtime(settings_session, "qa"))
+    sem = asyncio.Semaphore(6)
     res = await asyncio.gather(*(one(eng, llm, q, sem) for q in qs))
     await eng.dispose()
     tag = os.environ.get("TAG", "")

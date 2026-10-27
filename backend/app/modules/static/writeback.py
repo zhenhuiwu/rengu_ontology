@@ -139,7 +139,9 @@ async def apply_crs(
         groups: dict[tuple[str, str, str], list[CrItem]] = {}
         for i in items:
             groups.setdefault((i.target_kind, i.target_id, i.section), []).append(i)
-        for (kind, tid, sec), rows in groups.items():
+        # Same-CR relations may reference newly saved objects, regardless of editing order.
+        ordered = sorted(groups.items(), key=lambda item: (item[0][0] != "object", item[0][2] not in ("def", "config") if item[0][0] == "object" else False))
+        for (kind, tid, sec), rows in ordered:
             hook = HOOKS.get((kind, sec))
             if hook is None:
                 if f"{kind}/{sec}" not in skipped:
@@ -428,6 +430,14 @@ async def link_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
     s = ctx.session
     v = {r.item_key: r.after for r in rows if r.op != "delete"}
     lk = await s.scalar(select(LinkType).where(LinkType.code == tid))
+    from app.modules.static.link_validation import link_error, modeling_objects
+    from app.modules.static.shapes import link
+
+    objects, properties = await modeling_objects(s)
+    error = link_error({**(link(lk, with_runtime=False) if lk is not None else {}), **v},
+                       objects, properties, previous_via=lk.via if lk else None, is_new=lk is None)
+    if error:
+        raise _bad(error, kind="link", id=tid)
     if lk is None:
         if not ctx.is_new:
             raise _bad(f"关系类型 {tid} 不存在（目标没标 isNew），不能写回", kind="link", id=tid)

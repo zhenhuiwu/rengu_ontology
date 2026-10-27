@@ -34,3 +34,16 @@ class QualityRun(IdMixin, AppendOnlyTableMixin, Base):
     data_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     definition: Mapped[dict] = mapped_column(JsonType, nullable=False)
+
+
+class QualityScheduleCursor(IdMixin, MutableTableMixin, Base):
+    """Runtime progress is separate from definition lock_version and CR optimistic locking."""
+
+    __tablename__ = "quality_schedule_cursor"
+    __table_args__ = (UniqueConstraint("check_id"),)
+    check_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("quality_check.id"), nullable=False)
+    check_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    permission_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(String(200))

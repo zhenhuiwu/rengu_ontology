@@ -99,12 +99,29 @@ class AdminUserPage(Page[AdminUserOut]):
     """PageResult<AdminUser & {pendingApprovals}>：items、total（多出的 page、size 前端不用）。"""
 
 
+def department_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("部门须为文本")
+    value = value.strip()
+    if not 1 <= len(value) <= 128:
+        raise ValueError("请选择或填写1至128字的部门")
+    export_text(value)
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("部门不能包含控制字符")
+    return value
+
+
 class UserUpdateIn(ApiModel):
     name: str = Field(min_length=1, max_length=64)
     dept: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=64)
     status: UserStatus
     lock_version: int | None = Field(None, ge=1)
+
+    @field_validator("dept", mode="before")
+    @classmethod
+    def valid_department(cls, value: str) -> str:
+        return department_name(value)
 
 
 class UserCreateIn(UserUpdateIn):

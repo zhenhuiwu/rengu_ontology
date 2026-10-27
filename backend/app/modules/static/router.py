@@ -232,10 +232,10 @@ async def link_paths(
 
 
 @get("/link-types/catalog", "link-types")
-async def link_catalog(svc: Svc) -> Any:
+async def link_catalog(svc: Svc, cr_id: DraftId = None, link_id: Annotated[str | None, Query(alias="linkId", max_length=64)] = None) -> Any:
     from app.modules.static.read_pages import catalog
 
-    return await catalog(svc)
+    return await catalog(svc, cr_id, link_id)
 
 
 @get("/link-types/{id}", "link-types", response_model=Rec)

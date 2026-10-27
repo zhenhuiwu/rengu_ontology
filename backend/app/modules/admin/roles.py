@@ -791,6 +791,23 @@ def compute_effective(rs: list[RoleBundle], po: list[dict[str, Any]] | None = No
     return {"func": fn, "objs": objs, "areas_in": list(dict.fromkeys(p["area"] for p in fn))}
 
 
+async def sync_primary_role(session: AsyncSession, user_id: int, previous: str | None, role: SysRole, actor: str) -> None:
+    """Replace only the explicitly changed primary role; separately assigned roles stay intact."""
+    if previous == role.name:
+        return
+    members = list(await session.execute(
+        select(SysRoleMember, SysRole.name)
+        .join(SysRole, SysRole.id == SysRoleMember.role_id)
+        .where(SysRoleMember.user_id == user_id)
+    ))
+    for member, name in members:
+        if name == previous and member.role_id != role.id:
+            await session.delete(member)
+    if not any(member.role_id == role.id for member, _ in members):
+        first = await session.scalar(select(func.min(SysRoleMember.seq)).where(SysRoleMember.role_id == role.id))
+        session.add(SysRoleMember(role_id=role.id, user_id=user_id, seq=(first or 0) - 1, created_by=actor))
+
+
 async def role_names(session: AsyncSession) -> list[str]:
     """用户页的角色下拉 / 校验：sys_role 的角色名（按编号排序）。"""
     return list((await session.scalars(select(SysRole.name).order_by(SysRole.code))).all())

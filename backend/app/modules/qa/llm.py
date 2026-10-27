@@ -12,12 +12,15 @@
 from __future__ import annotations
 
 import os
-from typing import Protocol
+from typing import Annotated, Protocol
 
+from fastapi import Depends
 from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.db.session import SessionDep
+from app.modules.admin.model_settings import ModelRuntime, load_model_runtime
 
 
 class QaLlmUnavailable(AppError):
@@ -82,7 +85,20 @@ DEFAULT_MODEL = "qwen-flash"
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
-def get_llm() -> LLMClient:
+async def configured_runtime(session: SessionDep) -> ModelRuntime:
+    return await load_model_runtime(session, "qa")
+
+
+def get_llm(runtime: Annotated[ModelRuntime | None, Depends(configured_runtime)] = None) -> LLMClient:
+    if runtime is not None:
+        if not runtime.value.enabled or not runtime.api_key.get_secret_value():
+            raise QaLlmUnavailable("问数大模型已停用或未配置密钥")
+        return DashScopeLLM(
+            runtime.api_key.get_secret_value(),
+            runtime.value.model,
+            runtime.value.base_url,
+            runtime.value.timeout_sec,
+        )
     settings = get_settings()
     file_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
     key = os.environ.get("DASHSCOPE_API_KEY", file_key).strip()

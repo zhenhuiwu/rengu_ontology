@@ -209,7 +209,9 @@ async def _execute_background(
             check_func(user, "qa-tuning", "manage")
             group = context.get("group")
         if llm is None:
-            llm = get_llm()  # 仅在worker内读取密钥，不持久化客户端或凭据。
+            from app.modules.admin.model_settings import load_model_runtime
+
+            llm = get_llm(await load_model_runtime(s, "qa"))  # 仅在worker内解密，不持久化客户端或凭据。
         async with get_qa_readonly_engine().connect() as conn:
             tr = await conn.begin()
             await conn.execute(
