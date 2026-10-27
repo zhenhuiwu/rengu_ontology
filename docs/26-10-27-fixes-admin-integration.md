@@ -114,3 +114,17 @@ ROOT结束隔离UI核查后，已关闭跟踪的测试API session11333（PID5218
 ## 明确未扩大范围
 
 入站HMAC/静态token迁移、生产登录/SSO、普通数据库运行账号、外部通知渠道、真实Webhook接收端、国产数据库部署验证、ERP/Kafka、模型调用/预测继续按原约定延期。未跑全仓、迁移往返、生产压力或真实外部链。
+
+## 59acc70后续复核：确认人失效不能切换条件身份
+
+按用户“继续解决未完成问题”的授权，限定复查发现`integration.execution.criteria_user`原先捕获确认人的鉴权AppError并回退当前审批人；确认人停用/撤销本体成员时，可能改用权限不同的审批人检查提交条件，违反既定确认人语义。已最小删除该异常回退，保留原401/403及code，审批人其余功能/对象/操作检查不变；本人和未确认分支保持现行为。
+
+新增`backend/tests/test_confirmation_principal.py`只在`rengu_fix_admin_20261027`真实PG事务中准备测试身份，未mock核心鉴权、未发送HTTP/模型/外部请求。相同命令修前复现2 failed（停用/撤成员未拒绝）/3 passed，修后**5 passed，0 failed，0.44s，1个既有pytest_asyncio弃用warning**：
+
+```powershell
+.venv/Scripts/python.exe scripts/run_use_tests.py --db rengu_fix_admin_20261027 -- tests/test_confirmation_principal.py -q --tb=line --show-capture=no
+```
+
+新增覆盖合法确认人、停用、撤成员、本人、未确认5个分支；不将其与此前92/52/4/1轮次拼成新的全量通过数。新测试Ruff F/I与格式检查通过。无新schema、主库写入或主服务重启；主进程尚需ROOT统一安排加载本次修复。统一业务决策见[下一步清单](26-10-27-decisions-next.md)。
+
+A组随后对唯一调用方preflight及新增回归做限定只读交叉复核，未发现新增确定问题；没有因此改源码或重复执行测试。

@@ -46,15 +46,12 @@ class ExecutionResponse(ApiModel):
 
 async def criteria_user(session, user, run):
     """提交条件属于提交人：已确认的记录由审批人/执行器推进时，按确认人身份复核条件。
-    审批人自身的功能、对象与操作权限仍由 preflight 的其余步骤按当前身份校验；确认人无法解析时保持当前身份。"""
+    审批人自身的功能、对象与操作权限仍由 preflight 的其余步骤按当前身份校验；确认人失效时阻断。"""
     confirmer = getattr(run, "confirmer", None)
     if not getattr(run, "confirmed_at", None) or not isinstance(confirmer, str) or confirmer in ("", user.id):
         return user
     from app.common.auth import resolve_user
-    try:
-        return await resolve_user(session, confirmer)
-    except AppError:
-        return user
+    return await resolve_user(session, confirmer)
 
 
 async def preflight(session, user, run, *, review: dict | None = None):
