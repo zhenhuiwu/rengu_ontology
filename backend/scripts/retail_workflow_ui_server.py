@@ -16,6 +16,77 @@ EMPTY_WORKSPACE = "wf-empty-20261027"
 OWNER = "U010001"
 REVIEWER = "U010002"
 EMPTY_QUESTION = "当前空间有哪些可查询对象？"
+ORDER_ACTION = "uicheck_order_identity_20261028"
+ORDER_EVENT = "uicheck_order_identity_event_20261028"
+
+
+def order_permission_payload(body, role):
+    """One fixed QA grant; existing function and object read/export grants stay identical."""
+    if (not isinstance(body, dict) or set(body) != {"func", "objs", "lockVersion"}
+            or type(body["lockVersion"]) is not int or body["lockVersion"] != role.lock_version
+            or role.lock_version != 1 or not isinstance(body["objs"], list)):
+        return False
+    expected = json.loads(json.dumps(role.objs))
+    if len(expected) != 2 or {entry.get("api") for entry in expected} != {"store", "order"}:
+        return False
+    for entry in expected:
+        if entry.get("actions") != ["wf_record_review"]:
+            return False
+        if entry["api"] == "order":
+            entry["actions"].append(ORDER_ACTION)
+    if any(not isinstance(entry, dict) or not isinstance(entry.get("api"), str) for entry in body["objs"]):
+        return False
+    canonical = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=True)
+    return (canonical(body["func"]) == canonical(role.func)
+            and canonical(sorted(body["objs"], key=lambda entry: entry["api"]))
+            == canonical(sorted(expected, key=lambda entry: entry["api"])))
+
+
+async def order_permission_write(request):
+    from sqlalchemy import select
+
+    from app.common.ontology import set_ontology_scope
+    from app.db.session import get_sessionmaker
+    from app.modules.action.models import ActionType, TypeStatus
+    from app.modules.admin.models import SysRole
+    from app.modules.event.models import EventSource, EventType
+
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return False
+    async with get_sessionmaker()() as session:
+        if session.get_bind().engine.url.database != DATABASE:
+            return False
+        await set_ontology_scope(session, 2)
+        role = await session.scalar(select(SysRole).where(SysRole.code == "WF-RETAIL-ROLE"))
+        if role is None or role.built_in or not order_permission_payload(body, role):
+            return False
+        action = await session.scalar(select(ActionType).where(ActionType.code == ORDER_ACTION))
+        event = await session.scalar(select(EventType).where(EventType.code == ORDER_EVENT))
+        if (action is None or event is None or action.status != TypeStatus.published
+                or action.retired_release_id is not None or action.api != ORDER_ACTION or action.version != "v2"
+                or action.target_kind != "order" or action.target_api != "order"
+                or action.sys_id is not None or action.endpoint not in ("", "—")
+                or action.biz_key_template or action.params or action.conds or action.edits or action.rules
+                or action.runners != "人" or action.approval != "免审" or len(action.effects) != 1
+                or event.status != TypeStatus.published or event.retired_release_id is not None
+                or event.api != ORDER_EVENT or event.source != EventSource.action or event.version != "v2"
+                or event.obj_kind != "order" or event.object_api != "order" or event.subscribers
+                or event.dedup_window != "24 小时" or event.dedup_key_rule != "事件ID"
+                or len(event.payload) != 1):
+            return False
+        field, effect = event.payload[0], action.effects[0]
+        try:
+            note = json.loads(effect.note)
+        except (ValueError, TypeError):
+            return False
+        return (field.api == "checked" and field.type == "布尔" and field.required is True
+                and effect.kind.value == "事件" and effect.target == ORDER_EVENT
+                and effect.when_text == "执行成功后"
+                and json.dumps(note, sort_keys=True) == json.dumps(
+                    {"version": "v2", "object": {"context": "id"},
+                     "payload": {"checked": {"value": True}}}, sort_keys=True))
 
 
 async def empty_history_write(request, scope):
@@ -89,6 +160,9 @@ async def allowed_write(request):
         return method == "POST" and re.fullmatch(r"/api/ontology/v1/change-requests/[^/:]+:(approve|reject)", path) is not None
     if actor != OWNER:
         return False
+    if (scope == "2" and method == "PUT"
+            and path == "/api/admin/v1/roles/WF-RETAIL-ROLE/permissions"):
+        return await order_permission_write(request)
     # Search and scoped aggregation use POST for filters but never mutate business data.
     if method == "POST" and (re.fullmatch(r"/api/qa/v1/(object-types|objects)/(store|order)/search", path)
                              or path == "/api/qa/v1/scoped-ask"):
