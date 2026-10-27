@@ -355,6 +355,10 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
   - 仍然只暂存，从不执行。
 - **指标层（MetricFlow）**：可试算的已发布指标（同 static `GET /exports/metricflow`）进 prompt，模型可只输出 `{"metric": {metrics, dimensions, where, time…}}`，SQL 由内置编译器生成，再过 sql_guard；编不出回喂一次退回 SQL。回答带 `answer.metricQuery`（指标 / 维度 / 过滤 / 时间，不含 SQL）→ SSE `citations.metricQuery`；`basis.caliber` = 「指标层（MetricFlow 导出 + 内置编译器生成 SQL）」。
 - **单对象动态摘要**：问题只点名一个对象实例时取 `ObjectDynamicSummary`（同 `GET /object-types/{id}/objects/{objId}/dynamic-summary`），进 prompt，`answer.dynamicSummary` → SSE `citations.dynamicSummary`。门槛同告警引用（对象读取权限；API 密钥要 `dynamic:read`）。
+- **多对象动态摘要（qa-p5）**：问题点名多个对象实例，或作答表格结果里带受治理对象的业务编号时，逐个取 `ObjectDynamicSummary`（最多扫 10 个，需对象读取权限），只保留 `alerts.available` 且 `alerts.openCount > 0` 的，按 `openCount` 降序取前 3：`answer.dynamicSummaries = [与 answer.dynamicSummary 同结构的摘要, …]` → SSE `citations.dynamicSummaries`；表格回答的 `text` 末尾追加「动态提示：X（类型）未关闭告警 n 条；…」。只点名一个对象时仍走 `dynamicSummary`，两者不同时出现。MCP `qa_ask` 输出不带该字段。
+- **人工核对项 / 声明效果（qa-p5，对齐 action-event-api §18）**：动作卡 `action.dryRun` 可带 `humanChecks: [{name, rule, reason}]`（提交条件里算不了的，留给确认人人工核对；**不算失败**，`passed` 只按可计算项）和 `declaredEdits: [{kind, op, obj, field|target, when, note, status:"external/declared"}]`（Webhook 类外部系统动作的声明效果，本地不执行）。有人工核对项时 `action.humanChecks` 同步给一份，`text` 追加「另有 N 项提交条件需确认人人工核对（名称…）」；有声明效果时 `action.declaredSummary` =「由外部系统承担（本地不执行）：…」并追加到 `text`。决策评估路径的建议 `recommendations[].dryRun` 原样带 `humanChecks`。SSE `suggest` 事件就是 `answer.action`，字段一致。
+- **取值 / 层级来源（qa-p5）**：取值索引改用静态 `semantic_map` 的显式字段（static-t7）：`dimension.levels[]`（有序 no / api / name / table / column）、`defaultLevel`、`binding{table,column}`、`dimValue.level / levelNo / parentValue`、`property.column / table`、`metric.synonyms / desc`。维度先按物理绑定对上受治理列，层级按 `levels` 顺序，默认层级按 `defaultLevel`（`caliber/{本体}/context.json` 的 `hierarchyLevel` 仍可覆盖）；本体快照没有这些字段时退回旧的列取值重合 / id 前缀推断。
+
 - **我的页面定时刷新**：后台任务 `qa.page.sweep`（队列 `qa_pages`，每分钟），挂在动态 worker 上（动态 `worker.py` 调 `app.modules.qa.page_schedule.register(app)`）。到点页面按 P6 同样的方式、以页面所有者身份刷新，排下次；「刷新后」订阅只记审计事件 `qa.page.subscription.due`，推送未做。
 
 ## 3. 流式回答（SSE）

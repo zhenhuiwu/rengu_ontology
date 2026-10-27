@@ -1,0 +1,312 @@
+[
+ {
+  "q": "销售额（不含税）",
+  "expect": {
+   "metric": "gmv",
+   "dims": []
+  },
+  "source": "metric:gmv",
+  "kind": "answer",
+  "sql": null,
+  "card": "clarify",
+  "text": "想看哪个时间范围、按什么维度？",
+  "ok": false,
+  "why": "反问：想看哪个时间范围、按什么维度？",
+  "s": 0.9
+ },
+ {
+  "q": "按门店看销售额（不含税）",
+  "expect": {
+   "metric": "gmv",
+   "dims": [
+    "门店"
+   ]
+  },
+  "source": "metric:gmv",
+  "kind": "answer",
+  "sql": "SELECT s.code AS \"门店编码\", s.name AS \"门店名称\", ROUND(SUM(ol.qty * ol.price) / 1.13, 2) AS \"销售额（不含税）\" FROM biz_order AS o JOIN store AS s ON s.id = o.store_id JOIN order_line AS ol ON ol.order_id = o.id WHERE o.status = 'shipped' AND NOT o.is_test AND NOT s.is_test GROUP BY s.code, s.name ORDER BY \"销售额（不含税）\" DESC",
+  "card": "table",
+  "text": "查询返回 共 12 行。\n说明：题目没给时间，按全部数据统计",
+  "ok": true,
+  "why": "",
+  "s": 4.8
+ },
+ {
+  "q": "销售额（含税）",
+  "expect": {
+   "metric": "gmv_tax",
+   "dims": []
+  },
+  "source": "metric:gmv_tax",
+  "kind": "answer",
+  "sql": null,
+  "card": "clarify",
+  "text": "想看哪个时间范围、按什么维度？",
+  "ok": false,
+  "why": "反问：想看哪个时间范围、按什么维度？",
+  "s": 1.0
+ },
+ {
+  "q": "按大区看销售额（含税）",
+  "expect": {
+   "metric": "gmv_tax",
+   "dims": [
+    "大区"
+   ]
+  },
+  "source": "metric:gmv_tax",
+  "kind": "answer",
+  "sql": "SELECT \n    s.big_region AS \"大区\",\n    SUM(o.amount) AS \"销售额（含税）\"\nFROM \n    biz_order o\nJOIN \n    store s ON s.id = o.store_id\nWHERE \n    NOT o.is_test\n    AND NOT s.is_test\n    AND o.status = 'shipped'\nGROUP BY \n    s.big_region\nORDER BY \n    \"销售额（含税）\" DESC",
+  "card": "table",
+  "text": "查询返回 共 1 行。",
+  "ok": true,
+  "why": "",
+  "s": 5.3
+ },
+ {
+  "q": "复购客户销售额（不含税）",
+  "expect": {
+   "metric": "repeat",
+   "dims": []
+  },
+  "source": "metric:repeat",
+  "kind": "answer",
+  "sql": null,
+  "card": "clarify",
+  "text": "想看哪个时间范围、按什么维度？",
+  "ok": false,
+  "why": "反问：想看哪个时间范围、按什么维度？",
+  "s": 1.0
+ },
+ {
+  "q": "有效订单数",
+  "expect": {
+   "metric": "orders",
+   "dims": []
+  },
+  "source": "metric:orders",
+  "kind": "answer",
+  "sql": null,
+  "card": "clarify",
+  "text": "想看哪个时间范围、按什么维度？",
+  "ok": false,
+  "why": "反问：想看哪个时间范围、按什么维度？",
+  "s": 1.0
+ },
+ {
+  "q": "按大区看有效订单数",
+  "expect": {
+   "metric": "orders",
+   "dims": [
+    "大区"
+   ]
+  },
+  "source": "metric:orders",
+  "kind": "answer",
+  "sql": "SELECT s.big_region AS \"大区\", COUNT(*) AS \"有效订单数\" FROM biz_order AS o JOIN store AS s ON s.id = o.store_id WHERE o.status <> 'cancelled' AND NOT o.is_test AND NOT s.is_test GROUP BY s.big_region ORDER BY \"有效订单数\" DESC",
+  "card": "table",
+  "text": "查询返回 共 1 行。\n说明：题目没给时间，按全部数据统计",
+  "ok": true,
+  "why": "",
+  "s": 2.9
+ },
+ {
+  "q": "退款率",
+  "expect": {
+   "metric": "refund",
+   "dims": []
+  },
+  "source": "metric:refund",
+  "kind": "denied",
+  "sql": null,
+  "card": null,
+  "text": "",
+  "ok": false,
+  "why": "拒答（无法回答）：没有退款单数据",
+  "s": 0.5
+ },
+ {
+  "q": "按大区看退款率",
+  "expect": {
+   "metric": "refund",
+   "dims": [
+    "大区"
+   ]
+  },
+  "source": "metric:refund",
+  "kind": "denied",
+  "sql": null,
+  "card": null,
+  "text": "",
+  "ok": false,
+  "why": "拒答（无法回答）：没有退款单数据",
+  "s": 0.5
+ },
+ {
+  "q": "按门店看毛利率",
+  "expect": {
+   "metric": "margin",
+   "dims": [
+    "门店"
+   ]
+  },
+  "source": "metric:margin",
+  "kind": "denied",
+  "sql": null,
+  "card": null,
+  "text": "",
+  "ok": false,
+  "why": "拒答（无法回答）：订单行没有成本，数据未接入",
+  "s": 0.5
+ },
+ {
+  "q": "按大区看毛利率",
+  "expect": {
+   "metric": "margin",
+   "dims": [
+    "大区"
+   ]
+  },
+  "source": "metric:margin",
+  "kind": "denied",
+  "sql": null,
+  "card": null,
+  "text": "",
+  "ok": false,
+  "why": "拒答（无法回答）：订单行没有成本，数据未接入",
+  "s": 0.3
+ },
+ {
+  "q": "出库及时率",
+  "expect": {
+   "metric": "ship",
+   "dims": []
+  },
+  "source": "metric:ship",
+  "kind": "answer",
+  "sql": "SELECT ROUND(CAST(COUNT(*) FILTER(WHERE o.shipped_at <= o.created_at_biz + INTERVAL '30 MINUTES') AS DECIMAL) / NULLIF(COUNT(*), 0), 4) AS \"出库及时率\" FROM biz_order AS o JOIN store AS s ON s.id = o.store_id WHERE NOT o.status IN ('pending_payment', 'cancelled') AND NOT o.is_test AND NOT s.is_test",
+  "card": "table",
+  "text": "出库及时率：0.1604\n说明：题目没给时间，按全部数据统计",
+  "ok": true,
+  "why": "",
+  "s": 3.5
+ },
+ {
+  "q": "按仓库看出库及时率",
+  "expect": {
+   "metric": "ship",
+   "dims": [
+    "仓库"
+   ]
+  },
+  "source": "metric:ship",
+  "kind": "answer",
+  "sql": "SELECT w.warehouse, ROUND(CAST(COUNT(*) FILTER(WHERE o.shipped_at <= o.created_at_biz + INTERVAL '30 MINUTES') AS DECIMAL) / NULLIF(COUNT(*), 0), 4) AS 出库及时率 FROM biz_order AS o JOIN store AS s ON s.id = o.store_id JOIN order_line AS l ON l.order_id = o.id JOIN (SELECT DISTINCT warehouse FROM biz_order WHERE warehouse IS NOT NULL) AS w ON w.warehouse = o.warehouse WHERE NOT o.status IN ('pending_payment', 'cancelled') AND NOT o.is_test GROUP BY w.warehouse ORDER BY 出库及时率 DESC",
+  "card": "table",
+  "text": "查询返回 共 4 行。\n说明：题目没给时间，按全部数据统计",
+  "ok": false,
+  "why": "缺少维度 仓库（实际列 warehouse、出库及时率）",
+  "s": 3.5
+ },
+ {
+  "q": "平均出库时长",
+  "expect": {
+   "metric": "ship_avg",
+   "dims": []
+  },
+  "source": "metric:ship_avg",
+  "ok": false,
+  "err": "SqlRejected: SQL 解析失败",
+  "s": 3.2
+ },
+ {
+  "q": "新增会员数",
+  "expect": {
+   "metric": "new_member",
+   "dims": []
+  },
+  "source": "metric:new_member",
+  "kind": "denied",
+  "sql": null,
+  "card": null,
+  "text": "",
+  "ok": false,
+  "why": "拒答（无法回答）：没有会员表；member_phone 是脱敏号，不能当会员标识去重或分组",
+  "s": 0.3
+ },
+ {
+  "q": "给一个region发起调整大区预算",
+  "expect": {
+   "action": "adjust_region_budget",
+   "actionName": "调整大区预算"
+  },
+  "source": "action:adjust_region_budget",
+  "kind": "answer",
+  "sql": null,
+  "card": "action",
+  "text": "建议执行「调整大区预算」。提交条件未满足：请指定目标对象。点“发起动作”只会暂存到动作中心，需你确认后才提交，问数不会自动执行。",
+  "ok": true,
+  "why": "",
+  "s": 3.1
+ },
+ {
+  "q": "给一个order发起退款审核",
+  "expect": {
+   "action": "approve_refund",
+   "actionName": "退款审核"
+  },
+  "source": "action:approve_refund",
+  "kind": "denied",
+  "sql": null,
+  "card": null,
+  "text": "",
+  "ok": false,
+  "why": "拒答（无法回答）：没有退款单数据",
+  "s": 0.2
+ },
+ {
+  "q": "给一个store发起变更门店状态",
+  "expect": {
+   "action": "change_store_status",
+   "actionName": "变更门店状态"
+  },
+  "source": "action:change_store_status",
+  "kind": "answer",
+  "sql": null,
+  "card": "clarify",
+  "text": "“变更门店状态”在库里没有对应的取值，请问指的是哪一个？",
+  "ok": false,
+  "why": "未给出动作建议（clarify）",
+  "s": 0.3
+ },
+ {
+  "q": "发起关闭告警",
+  "expect": {
+   "action": "close_alert",
+   "actionName": "关闭告警"
+  },
+  "source": "action:close_alert",
+  "kind": "answer",
+  "sql": null,
+  "card": "action",
+  "text": "建议执行「关闭告警」。提交条件未满足：请指定目标对象。点“发起动作”只会暂存到动作中心，需你确认后才提交，问数不会自动执行。",
+  "ok": true,
+  "why": "",
+  "s": 2.1
+ },
+ {
+  "q": "给一个region发起发放复购召回优惠券",
+  "expect": {
+   "action": "issue_recall_coupon",
+   "actionName": "发放复购召回优惠券"
+  },
+  "source": "action:issue_recall_coupon",
+  "kind": "answer",
+  "sql": null,
+  "card": "action",
+  "text": "建议执行「发放复购召回优惠券」。提交条件未满足：请指定目标对象。点“发起动作”只会暂存到动作中心，需你确认后才提交，问数不会自动执行。",
+  "ok": true,
+  "why": "",
+  "s": 2.2
+ }
+]
