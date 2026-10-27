@@ -21,7 +21,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.auth import CurrentUser, CurrentUserDep, check_func, require_func, resolve_user
+from app.common.auth import (
+    CurrentUser,
+    CurrentUserDep,
+    check_func,
+    full_route_path,
+    require_func,
+    resolve_user,
+)
 from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.core.config import api_prefix, get_settings
@@ -856,20 +863,6 @@ def token_page(method: str, route: str) -> str | None:
     return METADATA_ROUTES.get(route[len(prefix) :]) if route.startswith(prefix + "/") else None
 
 
-def full_route_path(request: Request) -> str:
-    """Prefixed route template. FastAPI 0.162 puts the router-relative route in scope["route"]."""
-    route = request.scope.get("route")
-    path = getattr(route, "path", "")
-    regex = getattr(route, "path_regex", None)
-    actual = request.scope.get("path", "")
-    if regex is None or path.startswith("/api/") or regex.match(actual):
-        return path
-    for cut in range(1, len(actual)):
-        if actual[cut] == "/" and regex.match(actual[cut:]):
-            return actual[:cut] + path
-    return path
-
-
 def route_api_scopes(route) -> set[str]:
     """Scopes declared on the matched route via require_api_scope (route, router or nested deps)."""
     found: set[str] = set()
@@ -885,9 +878,14 @@ def route_api_scopes(route) -> set[str]:
     return found
 
 
-async def consume_quota(session: AsyncSession, key: ApiKey, at: datetime) -> None:
-    """Atomic per-window counter in the request transaction (rolled back requests are not counted)."""
+async def consume_quota(session: AsyncSession, key: ApiKey, at: datetime) -> dict[str, dict[str, int | None]]:
+    """Atomic per-window counter in the request transaction (rolled back requests are not counted).
+
+    Returns the window state after this call: {period: {"limit", "used"}}; unlimited windows are not counted.
+    """
+    state: dict[str, dict[str, int | None]] = {}
     for period, limit in (("minute", key.rate_per_minute), ("day", key.quota_per_day)):
+        state[period] = {"limit": limit, "used": None}
         if limit is None:
             continue
         bucket = window_buckets(at)[period]
@@ -902,6 +900,56 @@ async def consume_quota(session: AsyncSession, key: ApiKey, at: datetime) -> Non
                 "API 密钥每分钟调用次数超出限制" if period == "minute" else "API 密钥当日调用次数超出配额",
                 details={"period": period, "limit": limit},
             )
+        state[period]["used"] = calls
+    return state
+
+
+async def build_service_account_principal(
+    session: AsyncSession,
+    service_account_or_code: ServiceAccount | str,
+    *,
+    tenant_id: str | None = None,
+    bind_ontology: bool = True,
+) -> CurrentUser:
+    """服务账号身份（请求外可用：后台执行 / 队列 / 事件发射按 `api:{编号}` 重建主体）。
+
+    - 按编号加载（传入 ServiceAccount 时也按其编号重新读取，取当前吊销状态）；不存在或已吊销 → Unauthorized。
+    - 角色取绑定角色：roles=(role.code,)，func=role.func；没有 runAs 用户，不借用任何真人身份。
+    - bind_ontology=True（默认）：要求会话已绑定本体范围（set_ontology_scope）且角色绑定了该空间，
+      否则 Unauthorized；返回带 ontology_id / ontology_role="service" / 角色行级范围的身份。
+      bind_ontology=False：只给账号 + 角色（API 密钥鉴权在绑定空间前调用，行级范围随后按密钥计算）。
+    """
+    from app.modules.admin.permissions import role_row_access
+
+    code = (
+        service_account_or_code if isinstance(service_account_or_code, str) else service_account_or_code.code
+    )
+    account = await session.scalar(select(ServiceAccount).where(ServiceAccount.code == code))
+    if account is None or account.revoked_at is not None:
+        raise Unauthorized("服务账号已吊销或不存在", details={"principal": f"api:{code}"})
+    role = await session.get(SysRole, account.role_id)
+    if role is None:
+        raise Unauthorized("服务账号绑定角色不存在", details={"principal": f"api:{code}"})
+    user = CurrentUser(
+        id=account.code,
+        name=account.name,
+        func=role.func if isinstance(role.func, dict) else {},
+        roles=(role.code,),
+        is_service_account=True,
+        tenant_id=tenant_id,
+        service_account_id=account.id,
+    )
+    if not bind_ontology:
+        return user
+    ontology_id = session.info.get("ontology_id")
+    if ontology_id is None or not await role_bound(session, role.id, ontology_id):
+        raise Unauthorized("服务账号角色未绑定此本体工作空间", details={"principal": f"api:{code}"})
+    return replace(
+        user,
+        ontology_id=ontology_id,
+        ontology_role="service",
+        row_filters=await role_row_access(session, [role]),
+    )
 
 
 async def authenticate_key(
@@ -944,15 +992,10 @@ async def authenticate_key(
         account = await session.get(ServiceAccount, key.service_account_id)
         if account is None or account.revoked_at is not None:
             raise Unauthorized("服务账号已吊销")
-        role = await session.get(SysRole, account.role_id)
-        current = role.func if role is not None and isinstance(role.func, dict) else {}
-        user = CurrentUser(
-            id=account.code,
-            name=account.name,
-            roles=(role.code,) if role else (),
-            is_service_account=True,
-            tenant_id=tenant_id,
+        user = await build_service_account_principal(
+            session, account, tenant_id=tenant_id, bind_ontology=False
         )
+        current = user.func
     else:
         bound = await session.get(SysUser, key.user_id) if key.user_id is not None else None
         if bound is None:
@@ -962,7 +1005,7 @@ async def authenticate_key(
     permissions = clamp_permissions(key.func_snapshot, current)
     if page is not None:
         check_func(replace(user, func=permissions), page)
-    await consume_quota(session, key, security_now())
+    quota = await consume_quota(session, key, security_now())
     context = ApiKeyContext(
         key_id=key.id,
         code=key.code,
@@ -991,7 +1034,16 @@ async def authenticate_key(
         row_filters={},
         is_ontology_admin=False,
         ontology_ids=tuple(value for value in key.ontology_ids if type(value) is int and value > 0),
+        api_key_prefix=key.prefix,
+        api_scopes=context.scopes,
+        action_allowlist=context.action_types,
+        event_allowlist=context.event_types,
+        quota=quota,
     )
+
+
+# 私有别名（按 PDE 要求保留；批次 2 为 authenticate_key 内联构造，没有更早的私有函数）。
+_service_account_user = build_service_account_principal
 
 
 async def key_workspace_role(

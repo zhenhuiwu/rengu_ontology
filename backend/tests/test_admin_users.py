@@ -28,8 +28,10 @@ DEPTS = [
 @pytest.fixture(autouse=True)
 async def permission_roles(users):
     from tests.function_access_support import grant_fixture_roles
+    from tests.helpers.workspace import bind_workspace_members
 
     await grant_fixture_roles(users)
+    await bind_workspace_members(users)  # 测试会话预绑定空间 1：操作人须是空间成员
 
 
 def pending(u):
