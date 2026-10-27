@@ -207,18 +207,22 @@ async def stage_event_action(session, user, *, action_type_code: str, event_id: 
     from sqlalchemy import select
 
     from app.common.auth import check_func
+    from app.common.ontology import require_ontology_id
     from app.core.errors import Conflict
     from app.db.dialects import get_adapter
     from app.modules.action.checker import structured_params
     from app.modules.dynamic.catalog import get_catalog
     from app.modules.dynamic.models import ActionRun
-    from app.modules.dynamic.ports import get_checker, get_emitter, get_scheduler, get_submitter, Ports
+    from app.modules.dynamic.ports import Ports, get_checker, get_emitter, get_scheduler, get_submitter
     from app.modules.dynamic.schemas import SourceIn, StageIn
     from app.modules.dynamic.service import ActionService
 
     check_func(user, "action-center", "manage")
     normalized = structured_params(params)
-    key = "evt-" + hashlib.sha256(json.dumps([event_id, action_type_code]).encode()).hexdigest()
+    identity = [event_id, action_type_code]
+    if require_ontology_id(session) != 1:
+        identity.insert(0, require_ontology_id(session))
+    key = "evt-" + hashlib.sha256(json.dumps(identity).encode()).hexdigest()
     await get_adapter(session).xact_lock(session, key)
     previous = await session.scalar(select(ActionRun).where(ActionRun.idem_key == key))
     if previous:
@@ -234,6 +238,7 @@ async def stage_event_action(session, user, *, action_type_code: str, event_id: 
 
         raise AppError("事件对象与动作目标不匹配，不能暂存待确认动作", code="ACTION_TARGET_MISMATCH", status_code=422)
     from types import SimpleNamespace
+
     from app.modules.integration.action_edits import target_access
 
     await target_access(session, user, SimpleNamespace(obj_kind=obj_kind, obj_id=obj_id), {"targetKind": target})

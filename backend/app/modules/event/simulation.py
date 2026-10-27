@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.common.auth import CurrentUser, check_func
 from app.common.context import ViewContext
+from app.common.ontology import require_ontology_id
 from app.core import clock
 from app.core.config import get_settings
 from app.core.errors import AppError
@@ -155,7 +156,12 @@ async def simulate(
     has_test_channel = False
     if get_settings().event_delivery_http_enabled:
         for check in checks:
-            route = configured.get(f"{type_id}/{check.name}", {})
+            ontology_id = require_ontology_id(session)
+            key = f"{type_id}/{check.name}"
+            route = configured.get(f"{ontology_id}/{key}")
+            if route is None and ontology_id == 1:
+                route = configured.get(key)
+            route = route or {}
             if (
                 check.matched is not True
                 or check.name not in enabled

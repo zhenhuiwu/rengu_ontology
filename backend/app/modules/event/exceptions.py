@@ -70,7 +70,7 @@ class DispositionIn(ApiModel):
 
 async def visible_events(user):
     scopes = [and_(Event.is_test.is_(True), Event.created_by == user.id)]
-    for mapping in governed_tables().values():
+    for mapping in governed_tables(user.ontology_id).values():
         if mapping.inherit or "code" not in mapping.table.c:
             continue
         expr = await row_filter(user, mapping.object_type)
@@ -267,12 +267,18 @@ async def validate_requeue(session, user, event, row):
         if route.get("rule_code"):
             from app.modules.dynamic.rules_models import RuleHit
 
-            hit_code = "RH-" + hashlib.sha256(f"{event.code}\0{route['rule_code']}".encode()).hexdigest()[:60]
+            source = f"{event.code}\0{route['rule_code']}"
+            if event.ontology_id != 1:
+                source = f"{event.ontology_id}\0{source}"
+            hit_code = "RH-" + hashlib.sha256(source.encode()).hexdigest()[:60]
             existing = await session.scalar(select(RuleHit.id).where(RuleHit.code == hit_code))
         else:
             from app.modules.dynamic.models import ActionRun
 
-            key = "evt-" + hashlib.sha256(json.dumps([event.code, route["action_type"]]).encode()).hexdigest()
+            identity = [event.code, route["action_type"]]
+            if event.ontology_id != 1:
+                identity.insert(0, event.ontology_id)
+            key = "evt-" + hashlib.sha256(json.dumps(identity).encode()).hexdigest()
             existing = await session.scalar(select(ActionRun.id).where(ActionRun.idem_key == key))
         if existing is not None:
             raise Conflict("已存在原事件的业务结果，请核对后记录人工结论", code="DELIVERY_RESULT_EXISTS")

@@ -42,13 +42,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from sqlalchemy.schema import CreateTable, SetColumnComment, SetTableComment
 from sqlglot import exp
 
+from app.common.ontology import require_ontology_id
 from app.common.sql_guard import DIALECT, assert_single_select, run_guarded
 from app.core import clock
 from app.core.config import get_settings
 from app.core.enums import LabelEnum
 from app.core.errors import AppError
 from app.db.base import Base
-from app.db.session import QaReadonlyNotConfigured, get_qa_readonly_engine
+from app.db.session import QaReadonlyNotConfigured, SessionDep, get_qa_readonly_engine
 from app.modules.qa.llm import LLMClient
 from app.modules.qa.models import QaSynonymLink
 from app.modules.static.models import (
@@ -67,7 +68,7 @@ TABLE_PAGE = 10  # 前端表格首屏行数，超过标 paged
 ROW_LIMIT = 200  # 单次结果最多行数（外包 LIMIT）
 FIX_RETRIES = 1  # 执行报错后回喂 LLM 修正的次数
 # 公共簿记列（MutableTableMixin）：对问数无意义，模型看见会乱加 is_seed = false 之类条件，DDL 里去掉
-SYSTEM_COLS = frozenset({"is_seed", "lock_version", "created_at", "created_by", "updated_at"})
+SYSTEM_COLS = frozenset({"ontology_id", "is_seed", "lock_version", "created_at", "created_by", "updated_at"})
 FILTER_COLS = {"is_test": "剔除测试数据"}  # 业务过滤列 → 说明；只在 DDL 里真有这列的表上提示
 # [推断] 物理表对应的本体对象（本体 source_table 是源系统表名，对不上 biz 物理表）：只取这些对象的维度取值
 QA_DIM_OBJECTS = ("Store", "SalesOrder", "Category", "Product")
@@ -87,13 +88,17 @@ class QaExecUnavailable(AppError):
     message = "问数只读库未配置（RENGU_QA_READONLY_DATABASE_URL）"
 
 
-async def get_qa_conn() -> AsyncIterator[AsyncConnection]:
+async def get_qa_conn(session: SessionDep) -> AsyncIterator[AsyncConnection]:
     """只读执行连接（依赖，测试可覆盖）。"""
     try:
         engine = get_qa_readonly_engine()
     except QaReadonlyNotConfigured:
         raise QaExecUnavailable() from None
-    async with engine.connect() as conn:
+    async with engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("SELECT set_config('rengu.ontology_id', :ontology_id, true)"),
+            {"ontology_id": str(require_ontology_id(session))},
+        )
         yield conn
 
 
@@ -349,6 +354,8 @@ def _refuse_lines() -> list[str]:
 
 async def build_context(session: AsyncSession) -> dict[str, list[str]]:
     """从本体表取：表结构、对象说明、关联 join、指标口径、同义词、默认问数路径。"""
+    if require_ontology_id(session) != 1:
+        raise AppError("当前本体工作空间尚未绑定问数数据源", code="DATA_NOT_CONFIGURED", status_code=503)
     objs = (
         await session.scalars(
             select(ObjectType).where(ObjectType.source_table.in_(QA_TABLES)).order_by(ObjectType.seq)
@@ -527,9 +534,12 @@ def _strip_suffix(v: str) -> str:
 
 
 async def _names(session: AsyncSession) -> dict[str, list[str]]:
+    if require_ontology_id(session) != 1:
+        return {}
     out = {}
     for t, c in _NAME_COLS.items():
-        rows = await session.execute(text(f"SELECT DISTINCT {c} FROM {t}"))  # 常量表名
+        table = Base.metadata.tables[t]
+        rows = await session.execute(select(table.c[c]).distinct())
         out[t] = [r[0] for r in rows if r[0]]
     return out
 
@@ -750,6 +760,9 @@ async def answer(
 
     SQL 只进 qa_turn.sql_text，不出接口；SQL 被拒抛 SqlRejected（403 SQL_REJECTED）。
     """
+    ontology_id = require_ontology_id(session)
+    if getattr(user, "ontology_id", None) != ontology_id:
+        raise AppError("问数身份与工作空间不匹配", code="ONTOLOGY_SCOPE_CONFLICT", status_code=403)
     t0 = time.monotonic()
     ctx = await build_context(session)
     ctx["anchors"] = await value_anchors(session, question)

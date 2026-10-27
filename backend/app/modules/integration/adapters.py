@@ -105,7 +105,7 @@ class HttpAdapter:
     async def request(self, operation: str, key: str | None = None) -> httpx.Response:
         path = self.path(operation)
         url = f"{self.origin}{path}"
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "X-Ontology-Id": str(self.system.ontology_id)}
         if self.config.token:
             headers["Authorization"] = f"Bearer {self.config.token.get_secret_value()}"
         try:
@@ -149,9 +149,14 @@ def get_adapter(system: ExtSystem, operation: str = "query") -> HttpAdapter:
         )
     try:
         mapping = json.loads(settings.integration_adapters.get_secret_value())
-        if not isinstance(mapping, dict) or not isinstance(mapping.get(system.code), dict):
+        if not isinstance(mapping, dict) or type(system.ontology_id) is not int:
             raise ValueError
-        config = AdapterConfig.model_validate(mapping[system.code])
+        binding = mapping.get(f"{system.ontology_id}/{system.code}")
+        if binding is None and system.ontology_id == 1:
+            binding = mapping.get(system.code)
+        if not isinstance(binding, dict):
+            raise ValueError
+        config = AdapterConfig.model_validate(binding)
     except (ValueError, TypeError, ValidationError):
         raise unavailable("该系统的适配器配置缺失或格式无效") from None
     adapter = HttpAdapter(system, config)

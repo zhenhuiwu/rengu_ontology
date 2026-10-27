@@ -29,6 +29,7 @@ from sqlalchemy import Select, String, asc, cast, desc, false, func, or_, select
 from app.common.audit import audit
 from app.common.auth import CurrentUser, CurrentUserDep, require_func, row_filter
 from app.common.context import ViewContextDep, readonly_extra
+from app.common.ontology import require_ontology_id
 from app.common.pagination import MAX_PAGE_SIZE
 from app.common.row_filter import apply_row_filter
 from app.core.config import get_settings
@@ -61,7 +62,9 @@ FACET_VALUES = 50  # 单个枚举分面最多给多少个取值（按计数降�
 
 
 @lru_cache
-def bindings() -> dict[str, dict]:
+def bindings(ontology_id: int) -> dict[str, dict]:
+    if ontology_id != 1:
+        return {}
     path = get_settings().seeds_extra_dir / "qa" / "objects" / "bindings.json"
     return {k: v for k, v in json.loads(path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
@@ -232,7 +235,7 @@ class Bound:
 
 async def _bind(session: Any, code: str) -> tuple[ObjectType, Bound | None]:
     t = await _type(session, code)
-    b = bindings().get(code)
+    b = bindings(require_ontology_id(session)).get(code)
     return t, Bound(t, b) if b else None
 
 

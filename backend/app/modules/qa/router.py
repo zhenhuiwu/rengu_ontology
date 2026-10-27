@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from app.common.audit import audit
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
+from app.common.ontology import require_ontology_id
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.core import clock
 from app.core.errors import AppError, DuplicateKey, EmptyInput, ExportForbidden, NotFound
@@ -273,7 +274,7 @@ async def ask(
     user: CurrentUserDep,
     ctx: ViewContextDep,
     llm: Annotated[LLMClient, Depends(get_llm)],
-    conn: Annotated[AsyncConnection, Depends(chain.get_qa_conn)],
+    conn: Annotated[AsyncConnection, Depends(chain.get_qa_conn, scope="function")],
 ):
     pk, _ = await svc.effective_user(session, user, ctx)
     s = await r.SessionRepo(session).detail(sid)
@@ -692,7 +693,7 @@ async def list_certs(
     metrics, _ = await catalog.directory(session, ctx.ver, include_dims=False)
     repo = r.CertRepo(session)
     rows, total = await repo.list_page(
-        repo.list_query(_kw(kw), status, catalog.metric_key(metric) if metric else None), p
+        repo.list_query(_kw(kw), status, catalog.metric_key(metric, require_ontology_id(session)) if metric else None), p
     )
     return Page.of([svc.cert_out(c, metrics) for c in rows], total, p)
 
@@ -1041,6 +1042,7 @@ async def start_run(
         status=RunStatus.queued,
         operator=u.name,
         execution_context={
+            "ontologyId": require_ontology_id(session),
             "userId": user.id,
             "tenantId": user.tenant_id,
             "sessionId": source.code,

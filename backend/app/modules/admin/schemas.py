@@ -35,6 +35,7 @@ class AuditRowOut(ApiModel):
     target: str
     ip: str
     result: AuditResult
+    ontology_id: int | None = None
 
 
 class AuditCursorOut(ApiModel):
@@ -53,6 +54,7 @@ class AuditExportIn(ApiModel):
     result: ResultFilter | None = None
     field: SearchField = "actor"
     kw: str | None = None
+    ontology_id: int | None = Field(default=None, ge=1)
 
     @field_validator("action", "kw")
     @classmethod

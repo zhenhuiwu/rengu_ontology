@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.common.auth import CurrentUser
+from app.common.ontology import require_ontology_id
 from app.core.errors import AppError, Forbidden, NotFound, VersionConflict
 from app.modules.data import quality
 from app.modules.data.quality_models import QualityCheck
@@ -34,7 +35,7 @@ async def validate_definition(session, value):
     obj = await session.scalar(select(ObjectType).where(ObjectType.code == body.type_key))
     if obj is None:
         raise NotFound("对象类型不存在")
-    if body.kind not in quality.kinds(obj.code):
+    if body.kind not in quality.kinds(obj.code, require_ontology_id(session)):
         raise AppError("该对象的检查类型尚未配置物理字段映射", code="QUALITY_NOT_CONFIGURED", status_code=422)
     return body, obj, quality.limit_value(body.kind, body.threshold)
 

@@ -13,15 +13,14 @@
   **值是用户编号 sys_user.code（前端 userId，如 U010001），不是姓名**。按编号查 sys_user：
   CurrentUser.id = 编号，name = 姓名；查不到或已停用 → 401。
   演示身份：王敏 U010001（admin，mock 审计日志里的编号）、李娜 U010006（viewer，[推断] mock 没有编号）；
-  本体管理员 = 配置 RENGU_DEMO_ADMIN_CODES（默认 ["U010001"]）。
-  此标志只用于已有发布管理员限制，不授予功能权限；缺少DB角色关联时功能权限为空。
+  本体管理能力从实际数据库角色的 releases:manage 派生，不按演示用户编号授予。
 - prod 环境：`X-Demo-As` 一律忽略；鉴权未接入前直接 401（防止桩实现被带上生产）。
 
 租户（一期单租户）：接受 `X-Tenant-Id` 请求头并放进 CurrentUser.tenant_id，**不按租户过滤，表里也没有
 tenant_id 列**。二期多租户时再统一加。
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Any
 
 from fastapi import Depends, Header, Request
@@ -50,6 +49,11 @@ class CurrentUser:
     tenant_id: str | None = None
     # Loaded once per identity from real role membership; absent objects are denied.
     row_filters: dict[str, dict | None] = field(default_factory=dict)
+    ontology_id: int | None = None
+    ontology_role: str | None = None
+    ontology_ids: tuple[int, ...] | None = (
+        None  # API keys: persisted allowlist, then intersect current membership.
+    )
 
 
 async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None = None) -> CurrentUser:
@@ -62,7 +66,18 @@ async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None =
     )
     if u is None or u.status != UserStatus.active:
         raise Unauthorized("用户不存在或已停用", details={"userId": code})
-    admin = code in get_settings().demo_admin_codes
+    ontology_id = session.info.get("ontology_id")
+    ontology_role = None
+    if ontology_id is not None:
+        from app.modules.ontology.models import OntologyMember
+
+        ontology_role = await session.scalar(
+            select(OntologyMember.role).where(
+                OntologyMember.ontology_id == ontology_id, OntologyMember.user_id == u.id
+            )
+        )
+        if ontology_role not in ("owner", "editor", "viewer"):
+            raise Forbidden("用户没有此本体工作空间的访问权限")
     permissions, roles = await function_access(session, u.id)
     return CurrentUser(
         id=u.code,
@@ -70,8 +85,10 @@ async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None =
         func=permissions,
         roles=roles,
         row_filters=await object_row_access(session, u.id),
-        is_ontology_admin=admin,
+        is_ontology_admin=permissions.get("releases") == "manage",
         tenant_id=tenant_id,
+        ontology_id=ontology_id,
+        ontology_role=ontology_role,
     )
 
 
@@ -84,18 +101,79 @@ async def get_current_user(
     x_tenant_id: Annotated[str | None, Header(description="一期单租户：只透传，不过滤")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CurrentUser:
+    cached = getattr(request.state, "current_user", None)
+    if cached is not None:
+        return cached
     if authorization is not None:
         from app.modules.admin.api_keys import authenticate_key
 
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() != "bearer" or not token:
             raise Unauthorized("请使用 Bearer API 密钥")
-        return await authenticate_key(session, token, request, x_tenant_id)
+        user = await authenticate_key(session, token, request, x_tenant_id)
+    else:
+        s = get_settings()
+        if s.env == "prod":
+            raise Unauthorized("鉴权尚未接入")
+        user = await resolve_user(session, x_demo_as or s.dev_user, x_tenant_id)
     # EXTENSION POINT (PDE): 换成真实鉴权（会话 / API Key / 服务账号），解析出有效权限 EffectiveAccess。
-    s = get_settings()
-    if s.env == "prod":
-        raise Unauthorized("鉴权尚未接入")
-    return await resolve_user(session, x_demo_as or s.dev_user, x_tenant_id)
+    from app.common.ontology import DEFAULT_ONTOLOGY_ID, set_ontology_scope
+    from app.modules.admin.models import SysUser
+    from app.modules.admin.permissions import object_row_access
+    from app.modules.ontology.models import OntologyMember, OntologyWorkspace
+
+    route = getattr(request.scope.get("route"), "path", "")
+    discovery = (
+        "/api/admin/" in route
+        or route.endswith("/workspaces")
+        or ("/workspaces/" in route and not route.endswith("/workspaces/current"))
+    )
+    if not discovery:
+        raw = request.headers.get("x-ontology-id")
+        if raw is not None and (
+            len(raw) > 19 or not raw.isascii() or not raw.isdecimal() or int(raw) <= 0 or int(raw) > 2**63 - 1
+        ):
+            from app.core.errors import AppError
+
+            raise AppError("本体工作空间编号无效", code="VALIDATION_FAILED", status_code=422)
+        ontology_id = int(raw) if raw is not None else DEFAULT_ONTOLOGY_ID
+        workspace = await session.get(OntologyWorkspace, ontology_id)
+        if workspace is None:
+            from app.core.errors import NotFound
+
+            raise NotFound("本体工作空间不存在")
+        member = await session.scalar(
+            select(OntologyMember)
+            .join(SysUser, SysUser.id == OntologyMember.user_id)
+            .where(OntologyMember.ontology_id == ontology_id, SysUser.code == user.id)
+        )
+        if member is None or member.role not in ("owner", "editor", "viewer"):
+            raise Forbidden("没有此本体工作空间的访问权限")
+        if user.ontology_ids is not None and ontology_id not in user.ontology_ids:
+            raise Forbidden("API 密钥没有此本体工作空间的权限")
+        await set_ontology_scope(session, ontology_id)
+        db_user = await session.scalar(select(SysUser).where(SysUser.code == user.id))
+        user = replace(
+            user,
+            ontology_id=ontology_id,
+            ontology_role=member.role,
+            row_filters={} if user.ontology_ids is not None else await object_row_access(session, db_user.id),
+        )
+        if member.role == "viewer" and request.method not in ("GET", "HEAD", "OPTIONS"):
+            # History/preview exceptions also include writes; only these reviewed pure reads are allowed.
+            pure_reads = {
+                "/metrics/{id}:trial",
+                "/knowledge:resolve",
+                "/dimensions:match",
+                "/action-types/{type_id}:dry-run",
+                "/object-types/{code}/search",
+                "/objects/{kind}/search",
+                "/scoped-ask",
+            }
+            if request.method != "POST" or route.rsplit("/v1", 1)[-1] not in pure_reads:
+                raise Forbidden("当前本体工作空间为只读权限")
+    request.state.current_user = user
+    return user
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
@@ -111,6 +189,13 @@ async def api_key_guard(request: Request, session: SessionDep) -> None:
 
 
 ApiKeyGuardDep = Depends(api_key_guard)
+
+
+async def ontology_guard(user: CurrentUserDep) -> None:
+    """Resolve workspace authorization even for endpoints without a user parameter."""
+
+
+OntologyGuardDep = Depends(ontology_guard)
 
 
 async def row_filter(user: CurrentUser, object_type: str) -> dict | None:

@@ -14,6 +14,7 @@ from sqlglot import exp
 
 from app.common.auth import CurrentUser, check_func, resolve_user
 from app.common.context import ViewContext
+from app.common.ontology import require_ontology_id
 from app.common.sql_guard import governed_tables, run_guarded
 from app.core import clock
 from app.core.config import get_settings
@@ -102,8 +103,9 @@ async def metric_definition(session, code: str, user: CurrentUser, ver=None, cr_
 class BoundFormula:
     """Small SQL-expression subset compiled to SQLAlchemy, with no user SQL execution."""
 
-    def __init__(self, objects):
+    def __init__(self, objects, ontology_id: int):
         self.objects = objects
+        self.ontology_id = ontology_id
         self.object = None
         self.governed = None
         self.aggregates = 0
@@ -118,7 +120,7 @@ class BoundFormula:
             raise unavailable(f"对象「{name}」尚未发布")
         if self.object is not None and self.object.id != obj.id:
             raise unavailable("当前试算只支持单个受治理对象，跨对象口径尚无可执行连接定义")
-        gov = next((g for g in governed_tables().values() if g.object_type == obj.code), None)
+        gov = next((g for g in governed_tables(self.ontology_id).values() if g.object_type == obj.code), None)
         if gov is None:
             raise unavailable(f"对象「{name}」尚未绑定受治理业务表")
         self.object, self.governed = obj, gov
@@ -271,7 +273,7 @@ async def evaluate_metric(
     if ver:
         raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
     objects = list(await session.scalars(select(ObjectType)))
-    bound = BoundFormula(objects)
+    bound = BoundFormula(objects, require_ontology_id(session))
     tree = parse_formula(metric.get("formula"))
     expression = bound.expression(tree.expressions[0])
     if not bound.aggregates or bound.object is None:

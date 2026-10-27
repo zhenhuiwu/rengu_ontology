@@ -111,6 +111,7 @@ async def key_rows(session: AsyncSession, keys: list[ApiKey], at: datetime) -> l
         state = "已吊销" if key.revoked_at else "已过期" if key.expires_at and key.expires_at <= at else "即将过期" if key.expires_at and key.expires_at <= at + timedelta(days=30) else "有效"
         result.append({
             "id": key.code, "name": key.name, "env": key.env, "prefix": key.prefix, "last4": key.last4,
+            "ontologyIds": key.ontology_ids,
             "scopes": key.scopes, "binding": {"kind": "用户", "userId": bound.code, "userName": bound.name, "scope": "仅元数据；创建时授权与当前真实角色权限的交集"},
             "creator": key.creator, "createdAt": fmt(key.created_at), "expiresAt": fmt(key.expires_at),
             "lastUsed": fmt(last.created_at) if last else None, "lastIp": last.ip if last else None,
@@ -179,11 +180,20 @@ async def create_key(body: KeyCreateIn, session: SessionDep, user: CurrentUserDe
     if not permissions:
         raise Forbidden("当前身份没有可授予的元数据读取权限")
     bound = await session.scalar(select(SysUser).where(SysUser.code == user.id))
+    from app.modules.ontology.models import OntologyMember
+    raw_ontology = request.headers.get("x-ontology-id", "1")
+    if len(raw_ontology) > 19 or not raw_ontology.isascii() or not raw_ontology.isdecimal() or not 0 < int(raw_ontology) < 2**63:
+        raise Forbidden("请选择有效的本体工作空间")
+    ontology_id = int(raw_ontology)
+    membership = await session.scalar(select(OntologyMember.id).where(
+        OntologyMember.ontology_id == ontology_id, OntologyMember.user_id == bound.id))
+    if membership is None:
+        raise Forbidden("没有此本体工作空间的访问权限")
     at = security_now()
     token = ("rg_live_" if body.env == "生产" else "rg_test_") + secrets.token_urlsafe(32)
     key = ApiKey(code="AK-" + secrets.token_hex(12), name=body.name, env=body.env, user_id=bound.id,
                  token_hash=hashlib.sha256(token.encode()).hexdigest(), prefix=token[:12], last4=token[-4:],
-                 scopes=list(body.scopes), func_snapshot=permissions, ip_allow=body.ip_allow, note=body.note,
+                 scopes=list(body.scopes), ontology_ids=[ontology_id], func_snapshot=permissions, ip_allow=body.ip_allow, note=body.note,
                  creator=f"{user.name}（{user.id}）", created_by=user.id, created_at=at, updated_at=at,
                  expires_at=at + timedelta(days=body.life_days) if body.life_days else None)
     session.add(key)
@@ -251,4 +261,5 @@ async def authenticate_key(session: AsyncSession, token: str, request: Request, 
     permissions = {name: "view" for name in key.func_snapshot if user.func.get(name) in ("view", "manage")}
     check_func(replace(user, func=permissions), page)
     # The whitelist is metadata only: no business rows or administrator capabilities travel with a token.
-    return replace(user, func=permissions, row_filters={}, is_ontology_admin=False)
+    return replace(user, func=permissions, row_filters={}, is_ontology_admin=False,
+                   ontology_ids=tuple(value for value in key.ontology_ids if type(value) is int and value > 0))

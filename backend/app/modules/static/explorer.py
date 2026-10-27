@@ -7,7 +7,7 @@
   {key,name,kind:'range',min,max}]
 
 页面不写任何业务字段：本模块也不写——对象类型 → 数据表走 sql_guard 已登记的受控表
-（governed_tables()，按对象类型 code 找），属性 → 列走 property.backing_column（只认表里真有的列）。
+（governed_tables，按工作空间与对象类型 code 找），属性 → 列走 property.backing_column（只认表里真有的列）。
 没有受控表或属性没配 backing_column 的分面：values=[] / min=max=None（数据不在库里，见 handoff/static.md）。
 """
 
@@ -24,6 +24,7 @@ from sqlalchemy import ColumnElement, Integer, Numeric, and_, func, select
 from sqlalchemy import Enum as SaEnum
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import require_ontology_id
 from app.common.row_filter import apply_row_filter
 from app.common.sql_guard import GovernedTable, governed_tables
 from app.core.config import get_settings
@@ -58,14 +59,14 @@ def _seed_props() -> dict[str, dict[str, Obj]]:
     return json.loads(SEED_FILE.read_text("utf-8"))["properties"]
 
 
-def default_flags(obj: str, p: Obj) -> Obj:
+def default_flags(obj: str, p: Obj, ontology_id: int | None = None) -> Obj:
     """一条属性的标记初始值（p 是 OBJECT_PROPS 的一行）。
 
     通用默认：主键 / 标题 prominent 且可搜索；数值和日期可排序（设计稿 §4）；整数 format=int。
     seed 文件里登记过的对象类型只按文件开 filterable / list_visible（和前端现有分面、列一致）；
     没登记的类型给一套能用的默认：枚举 / 布尔可筛选，主键 + 维度属性列表展示。
     """
-    seeded = _seed_props()
+    seeded = _seed_props() if ontology_id == 1 else {}
     typ = p["type"]
     key_prop = bool(p.get("pk") or p.get("title"))
     out: Obj = {
@@ -100,10 +101,13 @@ def _seed_orders(path: Path) -> dict[str, dict[str, int]]:
     return {obj: {p["api"]: n for n, p in enumerate(rows)} for obj, rows in props.items()}
 
 
-def snapshot_flags(obj: str, p: Obj, order: int) -> Obj:
+def snapshot_flags(obj: str, p: Obj, order: int, ontology_id: int | None = None) -> Obj:
     """旧快照缺少显示标记时只用初始定义补齐，不能借用当前表的标记。"""
-    initial_order = _seed_orders(get_settings().seeds_json_dir / "static" / "OBJECT_PROPS.json")
-    out = {**default_flags(obj, p), "seq": initial_order.get(obj, {}).get(p["api"], order)}
+    initial_order = (
+        _seed_orders(get_settings().seeds_json_dir / "static" / "OBJECT_PROPS.json")
+        if ontology_id == 1 else {}
+    )
+    out = {**default_flags(obj, p, ontology_id), "seq": initial_order.get(obj, {}).get(p["api"], order)}
     out.update({col: p[key] for key, col in DISPLAY_FIELDS.items() if key in p})
     if out["visibility"] == "hidden":
         out.update(filterable=False, sortable=False, list_visible=False)
@@ -268,7 +272,7 @@ class ExplorerService:
                 is_dimension=bool(p.get("dim")),
                 is_sensitive=bool(p.get("sensitive")),
                 enum_name=p.get("enumName"),
-                **snapshot_flags(code, p, n),
+                **snapshot_flags(code, p, n, require_ontology_id(self.session)),
             )
             for n, (api, p) in enumerate((snapshot.get("properties", {}).get(code) or {}).items())
         ]
@@ -301,9 +305,8 @@ class ExplorerService:
             ],
         }
 
-    @staticmethod
-    def _table(code: str) -> GovernedTable | None:
-        return next((g for g in governed_tables().values() if g.object_type == code), None)
+    def _table(self, code: str) -> GovernedTable | None:
+        return next((g for g in governed_tables(require_ontology_id(self.session)).values() if g.object_type == code), None)
 
     async def facets(self, code: str, filters: Obj, user: Any) -> list[Obj]:
         o = await self._object(code)

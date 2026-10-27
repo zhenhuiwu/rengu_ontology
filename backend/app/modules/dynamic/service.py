@@ -558,7 +558,7 @@ class ActionService:
             approver=(meta.get("approverId") or approver or meta.get("approver"))
             if not approver or approver == meta.get("approver")
             else approver,
-            idem_key=idem_key or idempotency_key_for(code),
+            idem_key=idem_key or f"ont-{self.user.ontology_id}-{idempotency_key_for(code)}",
             status=status,
             sys_code=meta.get("sysId") or type_.get("sysId"),
             retry_of_id=retry_of.id if retry_of else None,
@@ -591,6 +591,8 @@ class ActionService:
             rule = self.catalog.rule(rule_code)
             confirmer = rule.get("confirmer") if rule else None  # [推断] 规则固定确认人
         key = f"act-{alert.code.lower()}" if alert else None
+        if key and self.user.ontology_id != 1:
+            key = f"ont-{self.user.ontology_id}-{key}"
         if key:
             old = await self._replay_or_conflict(
                 key, {"action_type_code": t["id"], "obj_id": body.obj_id, "params_text": body.params}
@@ -1147,6 +1149,8 @@ class AlertService:
         acts = ActionService(self.session, self.user, self.catalog, self.ports)
         t = acts._type_of(name=rule["action"], code=rule.get("actionTypeId"))
         key = f"act-{a.code.lower()}"
+        if self.user.ontology_id != 1:
+            key = f"ont-{self.user.ontology_id}-{key}"
         params = f"{a.value}，阈值 {a.threshold}"  # [推断] 确认卡「触发值」字段
         old = await acts._replay_or_conflict(
             key, {"action_type_code": t["id"], "obj_id": a.obj_id, "alert_id": a.id}, include_seed=False

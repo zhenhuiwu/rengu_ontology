@@ -16,7 +16,7 @@
 from fastapi import APIRouter, FastAPI
 
 from app.common.context import ReadonlyGuardDep
-from app.common.auth import ApiKeyGuardDep
+from app.common.auth import ApiKeyGuardDep, OntologyGuardDep
 from app.core.config import api_prefix
 from app.modules.action.router import router as action_router
 from app.modules.admin.router import router as admin_router
@@ -32,8 +32,10 @@ from app.modules.integration.router import router as integration_router
 from app.modules.qa.router import router as qa_router
 from app.modules.static.router import router as static_router
 from app.modules.versioning.router import router as versioning_router
+from app.modules.ontology.router import router as workspace_router
 
 MOUNTS: list[tuple[str, APIRouter]] = [
+    ("ontology", workspace_router),
     ("ontology", versioning_router),
     ("ontology", static_router),
     ("ontology", dynamic_router),
@@ -52,5 +54,5 @@ MOUNTS: list[tuple[str, APIRouter]] = [
 
 def include_routers(app: FastAPI) -> None:
     for module, router in MOUNTS:
-        app.include_router(router, prefix=api_prefix(module), dependencies=[ReadonlyGuardDep, ApiKeyGuardDep])
+        app.include_router(router, prefix=api_prefix(module), dependencies=[ReadonlyGuardDep, ApiKeyGuardDep, OntologyGuardDep])
     app.include_router(internal_event_router, prefix="/internal/v1", dependencies=[ReadonlyGuardDep])

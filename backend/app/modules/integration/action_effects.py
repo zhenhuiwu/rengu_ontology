@@ -10,7 +10,7 @@ from app.common.auth import resolve_user
 from app.common.outbox import OutboxEvent, emit
 from app.core import clock
 from app.core.errors import AppError
-from app.db.session import get_sessionmaker
+from app.jobs.scope import scoped_sessions
 from app.modules.action.checker import structured_params
 from app.modules.action.models import TypeStatus
 from app.modules.dynamic.models import ActionRun
@@ -18,7 +18,12 @@ from app.modules.event.ingress import receive, validate_payload
 from app.modules.event.ingress_schema import IngressIn
 from app.modules.event.models import Event, EventType
 from app.modules.integration.action_edits import (
-    existing_row, mapping_json, object_binding, object_operation, value_source, unavailable,
+    existing_row,
+    mapping_json,
+    object_binding,
+    object_operation,
+    unavailable,
+    value_source,
 )
 from app.modules.integration.adapters import get_adapter
 from app.modules.integration.models import ExtSystem
@@ -102,19 +107,22 @@ async def retain_effects(session, user, run, definition, event_type):
         data = await prepare_effect(session, user, run, definition, effect)
         if data is None or data["when"] != event_type:
             continue
-        identity = "effect:" + hashlib.sha256(f"{run.code}:{run.type_version}:{index}".encode()).hexdigest()[:56]
+        source = f"{run.code}:{run.type_version}:{index}"
+        if run.ontology_id != 1:
+            source = f"{run.ontology_id}:{source}"
+        identity = "effect:" + hashlib.sha256(source.encode()).hexdigest()[:56]
         if effect["kind"] == "事件":
             previous = await session.scalar(select(Event).where(Event.code == identity))
             await receive(session, IngressIn(event_id=identity, event_type=effect["target"],
                 occurred_at=previous.occurred_at if previous else clock.now(), source="action.effect",
                 object_type=data["objectType"], object_id=data["objectId"], payload=data["payload"], dedup_key=identity))
         elif not await session.scalar(select(OutboxEvent.id).where(OutboxEvent.event_id == identity)):
-            await emit(session, TOPIC, {"runId": run.code, "typeVersion": run.type_version,
+            await emit(session, TOPIC, {"ontologyId": run.ontology_id, "runId": run.code, "typeVersion": run.type_version,
                 "actor": user.id, "effect": effect, "data": data, "state": "queued"}, event_id=identity)
 
 
-async def dispatch_effect(effect_id):
-    sessions = get_sessionmaker()
+async def dispatch_effect(effect_id, ontology_id: int):
+    sessions = scoped_sessions(ontology_id)
     async with sessions() as session, session.begin():
         row = await session.get(OutboxEvent, effect_id, with_for_update=True)
         if row is None or row.topic != TOPIC or row.attempts or row.dispatched_at is not None:
@@ -141,9 +149,9 @@ async def dispatch_effect(effect_id):
             return
         row.attempts, row.last_error = 1, "CLAIMED_OUTCOME_UNKNOWN"
         row.payload = {**data, "state": "unknown"}
-        key, payload = row.event_id, {"actionRunId": run.code, "effectId": row.event_id,
+        key, payload = row.event_id, {"ontologyId": ontology_id, "actionRunId": run.code, "effectId": row.event_id,
                                      "kind": data["effect"]["kind"], "payload": data["data"]["payload"]}
-    headers = {"Accept": "application/json", "Idempotency-Key": key}
+    headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
     if adapter.config.token:
         headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
     state, error, receipt, status = "unknown", "EXTERNAL_OUTCOME_UNKNOWN", None, None
@@ -169,14 +177,14 @@ async def dispatch_effect(effect_id):
             row.dispatched_at = clock.now()
 
 
-async def dispatch_effects():
-    async with get_sessionmaker()() as session:
+async def dispatch_effects(ontology_id: int):
+    async with scoped_sessions(ontology_id)() as session:
         ids = list(await session.scalars(select(OutboxEvent.id).where(OutboxEvent.topic == TOPIC,
             OutboxEvent.attempts == 0, OutboxEvent.dispatched_at.is_(None), OutboxEvent.available_at <= clock.now())
             .order_by(OutboxEvent.id).limit(100)))
     for identity in ids:
         try:
-            await dispatch_effect(identity)
+            await dispatch_effect(identity, ontology_id)
         except Exception:
             logger.exception("Effect dispatch failed for outbox %s", identity)
     return len(ids)

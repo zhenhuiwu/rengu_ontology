@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import require_ontology_id
 from app.modules.static import history, shapes
 from app.modules.static.explorer import DISPLAY_FIELDS, snapshot_flags
 from app.modules.static.repo import StaticRepo
@@ -118,7 +119,7 @@ class PropertiesSection(_Base):
         for obj, rows in content.items():
             out[obj] = {}
             for n, (api, p) in enumerate(rows.items()):
-                flags = snapshot_flags(obj, p, n)
+                flags = snapshot_flags(obj, p, n, require_ontology_id(session))
                 out[obj][api] = {**p, **{key: flags[col] for key, col in DISPLAY_FIELDS.items()}}
         return out
 

@@ -30,13 +30,26 @@ async def function_access(session: AsyncSession, user_id: int) -> tuple[dict[str
 async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, dict | None]:
     """Batch current role grants and scopes; missing/ambiguous identities never grant data access."""
     from app.common.sql_guard import RoleAccess, effective_expr
+    from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
     from app.modules.static.models import ObjectStatus, ObjectType
+
+    ontology_id = session.info.get("ontology_id")
+    if ontology_id is None:
+        return {}
+    member = await session.scalar(
+        select(OntologyMember.id).where(
+            OntologyMember.ontology_id == ontology_id, OntologyMember.user_id == user_id
+        )
+    )
+    if member is None:
+        return {}
 
     roles = list(
         await session.execute(
             select(SysRole.id, SysRole.objs, SysRole.default_deny)
             .join(SysRoleMember, SysRoleMember.role_id == SysRole.id)
-            .where(SysRoleMember.user_id == user_id)
+            .join(OntologyRoleBinding, OntologyRoleBinding.role_id == SysRole.id)
+            .where(SysRoleMember.user_id == user_id, OntologyRoleBinding.ontology_id == ontology_id)
             .order_by(SysRole.code)
         )
     )

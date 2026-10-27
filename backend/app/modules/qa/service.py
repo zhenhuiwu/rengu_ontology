@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser, resolve_user, row_filter
 from app.common.context import ViewContext
+from app.common.ontology import require_ontology_id
 from app.common.pagination import Page, PageParams
 from app.core import clock
 from app.core.errors import AppError, NotFound
@@ -570,8 +571,9 @@ async def has_metric_references(session: AsyncSession, code: str) -> bool:
     """静态回滚用：是否存在QA指标软引用（含停用/历史记录，不检查自然语言或SQL文本）。"""
     from app.modules.qa.models import QaPageCard, QaQueryLog, QaTemplateCard
 
-    canonical = catalog.METRIC_CODES.get(code, code)
-    keys = {canonical, catalog.metric_key(canonical)}
+    ontology_id = require_ontology_id(session)
+    canonical = catalog.METRIC_CODES.get(code, code) if ontology_id == 1 else code
+    keys = {canonical, catalog.metric_key(canonical, ontology_id)}
     checks = []
     for model, plan_field in (
         (QaTurn, "sem_plan"),

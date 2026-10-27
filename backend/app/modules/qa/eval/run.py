@@ -49,6 +49,7 @@ async def one(eng, llm, q, sem):
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.common.auth import resolve_user
+    from app.common.ontology import DEFAULT_ONTOLOGY_ID, set_ontology_scope
     from app.core.errors import AppError
     from app.modules.qa import chain
 
@@ -56,6 +57,7 @@ async def one(eng, llm, q, sem):
         tr = await conn.begin()
         await conn.execute(text("set local statement_timeout = 15000"))
         s = AsyncSession(bind=conn)
+        await set_ontology_scope(s, DEFAULT_ONTOLOGY_ID)
         user = await resolve_user(s, "U010001")
         exp_t = q["expectedType"]
         r = {"code": q["code"], "exp": exp_t, "q": q["question"]}

@@ -20,10 +20,11 @@ from fastapi import APIRouter, Query
 from pydantic import AfterValidator
 
 from app.common.auth import CurrentUserDep
+from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParamsDep
 from app.common.row_filter import apply_row_filter
 from app.core import clock
-from app.core.errors import NotFound
+from app.core.errors import AppError, NotFound
 from app.core.schema import parse_display_dt
 from app.db.session import SessionDep
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS
@@ -68,6 +69,8 @@ async def list_orders(
     ] = None,
     cutoff: Cutoff = None,
 ) -> OrdersPage:
+    if require_ontology_id(session) != 1:
+        raise AppError("当前本体尚未绑定零售订单数据源", code="DATA_NOT_CONFIGURED", status_code=503)
     until = before = None
     as_of = clock.now()
     if cutoff is not None:
@@ -97,6 +100,8 @@ def _to_minute(t: datetime) -> datetime:
 
 @router.get("/orders/{order_id}", response_model=OrderDetailOut, summary="订单详情（含订单行）")
 async def get_order(order_id: str, session: SessionDep, user: CurrentUserDep) -> OrderDetailOut:
+    if require_ontology_id(session) != 1:
+        raise AppError("当前本体尚未绑定零售订单数据源", code="DATA_NOT_CONFIGURED", status_code=503)
     repo = OrderRepo(session)
     stmt = await apply_row_filter(repo.by_code_query(order_id), user, "order", ORDER_COLUMNS, ORDER_LINKS)
     obj = (await session.scalars(stmt)).first()

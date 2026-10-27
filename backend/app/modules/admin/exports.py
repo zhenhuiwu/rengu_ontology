@@ -14,7 +14,7 @@ from app.modules.admin.repo import AuditCursor, AuditFilter, AuditLogRepository
 from app.modules.admin.schemas import AuditRowOut
 
 BATCH_SIZE = 1000
-HEADERS = ("编号", "时间", "操作人", "动作", "对象", "来源 IP", "结果")
+HEADERS = ("编号", "时间", "操作人", "动作", "对象", "来源 IP", "结果", "本体工作空间")
 
 
 async def create_manifest(
@@ -26,6 +26,8 @@ async def create_manifest(
         user_id=user_id,
         created_by=user.id,
         filters={
+            "scope": "platform",
+            "ontologyId": f.ontology_id,
             "from": f.start.isoformat(),
             "to": f.end.isoformat(),
             "action": f.action,
@@ -97,7 +99,8 @@ def csv_batch(rows: Sequence[AuditLog], *, header: bool = False) -> bytes:
     for row in rows:
         wire = AuditRowOut.model_validate(row).model_dump(mode="json")
         writer.writerow(
-            csv_cell(str(wire[k])) for k in ("id", "time", "actor", "action", "target", "ip", "result")
+            csv_cell(str(wire[k]) if wire[k] is not None else "")
+            for k in ("id", "time", "actor", "action", "target", "ip", "result", "ontology_id")
         )
     return out.getvalue().encode("utf-8")
 

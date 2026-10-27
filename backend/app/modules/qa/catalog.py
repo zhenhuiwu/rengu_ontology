@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import require_ontology_id
 from app.core.config import get_settings
 
 # 旧语义计划的传输键，只转换标识，不包含名称、版本或答案。
@@ -23,12 +24,15 @@ Metrics = dict[str, dict[str, Any]]
 TIMES = ["昨天", "本周", "上周", "本月至今", "上个月", "近 7 天", "近 30 天", "近 6 个月", "今年"]
 
 
-def metric_key(key: str) -> str:
-    return METRIC_KEYS.get(key, key)
+def metric_key(key: str, ontology_id: int = 1) -> str:
+    return METRIC_KEYS.get(key, key) if ontology_id == 1 else key
 
 
 def metric_of(metrics: Metrics, key: str | None) -> dict[str, Any] | None:
-    return metrics.get(metric_key(key or ""))
+    if key in metrics:
+        return metrics[key]
+    legacy = metrics.get(metric_key(key or ""))
+    return legacy if legacy and legacy.get("code") == key else None
 
 
 async def directory(
@@ -39,6 +43,7 @@ async def directory(
     from app.modules.static.repo import pending_change_codes
     from app.modules.versioning.repo import ReleaseRepo
 
+    ontology_id = require_ontology_id(session)
     if ver:
         release = await ReleaseRepo(session).by_ver_or_404(ver)
         snap = release.snapshot or {}
@@ -75,8 +80,8 @@ async def directory(
         )
         dimensions = [{"status": "已发布", "levels": [{"name": name} for name in levels]}]
     metrics = {
-        metric_key(m["id"]): {
-            "key": metric_key(m["id"]),
+        metric_key(m["id"], ontology_id): {
+            "key": metric_key(m["id"], ontology_id),
             "code": m["id"],
             "name": m["name"],
             "version": m.get("version") or "",

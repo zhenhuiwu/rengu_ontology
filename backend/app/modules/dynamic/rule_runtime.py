@@ -15,6 +15,7 @@ from enum import Enum
 
 from sqlalchemy import func, select
 
+from app.common.ontology import require_ontology_id
 from app.common.row_filter import apply_row_filter
 from app.common.sql_guard import governed_tables
 from app.core.clock import now
@@ -32,7 +33,7 @@ def anchor_error(message):
 
 def anchor_scope(user, definition, body):
     return json.dumps(
-        [user.id, user.row_filters, user.attrs, definition, body.mode, body.range],
+        [user.ontology_id, user.id, user.row_filters, user.attrs, definition, body.mode, body.range],
         sort_keys=True,
         default=str,
     )
@@ -264,7 +265,7 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
         )
     )
     gov = next(
-        (g for g in governed_tables().values() if obj and g.object_type == obj.code and g.inherit is None),
+        (g for g in governed_tables(require_ontology_id(session)).values() if obj and g.object_type == obj.code and g.inherit is None),
         None,
     )
     if obj is None or gov is None or "code" not in gov.table.c:

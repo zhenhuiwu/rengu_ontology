@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.common.audit import audit
 from app.common.auth import CurrentUser, CurrentUserDep, require_func, row_filter
 from app.common.context import ViewContextDep, readonly_extra
+from app.common.ontology import require_ontology_id
 from app.common.pagination import MAX_PAGE_SIZE
 from app.common.row_filter import apply_row_filter, is_deny_all
 from app.core.errors import AppError, ExportForbidden, NotFound
@@ -83,6 +84,8 @@ class Data:
     """一次请求内的数据库门店/商品/订单，保持旧API字段并按行级范围裁剪，懒加载。"""
 
     def __init__(self, session: Any, viewer: CurrentUser) -> None:
+        if require_ontology_id(session) != 1:
+            raise DataNotConfigured()
         self.session, self.viewer = session, viewer
         self._c: dict[str, Any] = {}
 

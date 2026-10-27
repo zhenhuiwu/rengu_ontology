@@ -13,9 +13,9 @@ from app.contracts.actions import ReconcileOutcome, ReconcileResult, SubmitResul
 from app.core import clock
 from app.core.errors import AppError, Conflict
 from app.core.schema import ApiModel
-from app.db.session import get_sessionmaker
-from app.modules.biz import governance as _governance  # noqa: F401
+from app.jobs.scope import scoped_sessions, workspace_ids
 from app.modules.action.checker import DatabaseSubmissionChecker, structured_params
+from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.dynamic.models import ActionRun, ActionStatus
 from app.modules.integration.action_edits import business_edits, execution_definition, target_access
 from app.modules.integration.adapters import get_adapter
@@ -110,8 +110,8 @@ async def queued_call(session, run_id):
         WritebackCall.kind == CallKind.write, WritebackCall.msg == QUEUED))
 
 
-async def dispatch_one(call_id):
-    sessions = get_sessionmaker()
+async def dispatch_one(call_id, ontology_id: int):
+    sessions = scoped_sessions(ontology_id)
     # Claim in its own committed transaction. A restart never repeats a claimed POST.
     async with sessions() as session, session.begin():
         code = await session.scalar(select(ActionRun.code).join(WritebackCall,
@@ -136,13 +136,13 @@ async def dispatch_one(call_id):
             resolved(task, ReconcileOutcome.not_executed.value, "系统")
             return
         call.msg, call.attempt, call.at = CLAIMED, 1, clock.now()
-        payload = {"actionRunId": run.code, "actionType": definition["api"],
+        payload = {"ontologyId": ontology_id, "actionRunId": run.code, "actionType": definition["api"],
                    "typeVersion": run.type_version, "idemKey": run.idem_key,
                    "objKind": run.obj_kind, "objId": run.obj_id, "params": run.params}
         key = run.idem_key
     started = time.perf_counter()
     status, response_code, result = None, None, None
-    headers = {"Accept": "application/json", "Idempotency-Key": key}
+    headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
     if adapter.config.token:
         headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
     try:
@@ -194,15 +194,22 @@ async def dispatch_one(call_id):
 
 
 async def dispatch_queued(timestamp=0):
-    sessions = get_sessionmaker()
+    total = 0
+    for ontology_id in await workspace_ids():
+        total += await _dispatch_workspace(ontology_id)
+    return total
+
+
+async def _dispatch_workspace(ontology_id: int):
+    sessions = scoped_sessions(ontology_id)
     async with sessions() as session:
         ids = list(await session.scalars(select(WritebackCall.id).where(
             WritebackCall.kind == CallKind.write, WritebackCall.msg == QUEUED)
             .order_by(WritebackCall.id).limit(100)))
     for call_id in ids:
         try:
-            await dispatch_one(call_id)
+            await dispatch_one(call_id, ontology_id)
         except Exception:
             logger.exception("Action dispatch could not complete for call %s", call_id)
     from app.modules.integration.action_effects import dispatch_effects
-    return len(ids) + await dispatch_effects()
+    return len(ids) + await dispatch_effects(ontology_id)

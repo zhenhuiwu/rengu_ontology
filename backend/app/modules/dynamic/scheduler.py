@@ -14,7 +14,7 @@ from app.common.auth import check_func, resolve_user
 from app.core.clock import now
 from app.core.errors import AppError
 from app.db.dialects import get_adapter
-from app.db.session import get_sessionmaker
+from app.jobs.scope import scoped_sessions, workspace_ids
 from app.modules.dynamic.event_rule_runtime import dedupe_spec
 from app.modules.dynamic.models import Alert, AlertLog, AlertOp, AlertStatus
 from app.modules.dynamic.rule_editor import validate_trigger
@@ -35,11 +35,10 @@ logger = logging.getLogger(__name__)
 
 
 def fingerprint(user):
-    return hashlib.sha256(
-        json.dumps(
-            [user.id, user.func, user.roles, user.row_filters, user.attrs], sort_keys=True, default=str
-        ).encode()
-    ).hexdigest()
+    identity = [user.id, user.func, user.roles, user.row_filters, user.attrs]
+    if user.ontology_id != 1:
+        identity.insert(0, user.ontology_id)
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def next_slot(trigger, after):
@@ -156,7 +155,7 @@ async def create_alerts(session, user, rule, run, matches):
     seq = int(await session.scalar(select(func.max(RuleHit.seq)).where(RuleHit.rule_id == rule.id)) or 0)
     for item in matches:
         identity = hashlib.sha256(
-            f"schedule\0{rule.id}\0{run.rule_version}\0{run.scheduled_at.isoformat()}\0{item['objId']}".encode()
+            f"schedule\0{run.ontology_id}\0{rule.id}\0{run.rule_version}\0{run.scheduled_at.isoformat()}\0{item['objId']}".encode()
         ).hexdigest()[:60]
         event = SimpleNamespace(
             code=f"schedule:{run.id}",
@@ -300,8 +299,15 @@ async def process(session, run_id):
     run.finished_at = now()
 
 
-async def sweep(timestamp=0):
-    sessions = get_sessionmaker()
+async def sweep(timestamp: int = 0) -> int:
+    total = 0
+    for ontology_id in await workspace_ids():
+        total += await _sweep_workspace(ontology_id)
+    return total
+
+
+async def _sweep_workspace(ontology_id: int) -> int:
+    sessions = scoped_sessions(ontology_id)
     async with sessions() as session, session.begin():
         ids = list(
             await session.scalars(

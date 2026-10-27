@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_, select
 
+from app.common.ontology import require_ontology_id
 from app.core import clock
 from app.db.dialects import get_adapter
 from app.db.session import SessionDep
@@ -73,11 +74,14 @@ def validate_fields(fields, payload: dict[str, Any]) -> None:
 
 
 async def receive(session, body: IngressIn) -> dict:
+    ontology_id = require_ontology_id(session)
     adapter = get_adapter(session)
     # Consistent lock order: producer ID, parent type row, business dedup key.
     await adapter.xact_lock(session, f"event.ingress.id:{body.event_id}")
     envelope = body.model_dump(mode="json", by_alias=True)
     envelope["occurredAt"] = body.occurred_at.astimezone(UTC).isoformat()
+    if ontology_id != 1:  # Preserve accepted hashes for retained legacy producer envelopes.
+        envelope["ontologyId"] = ontology_id
     digest = hashlib.sha256(
         json.dumps(
             envelope, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False

@@ -268,6 +268,11 @@ async def list_metrics(svc: Svc, p: P10, kw: Kw = "", group: Kw = "", focus_id: 
     return await svc.metric_list(kw, group, p, focus_id)
 
 
+@get("/metrics/groups", "metrics", response_model=list[str])
+async def metric_groups(svc: Svc) -> list[str]:
+    return await svc.metric_groups()
+
+
 @get("/metrics/{id}", "metrics", response_model=Rec)
 async def get_metric(id: str, svc: Svc) -> Any:
     return await svc.metric_detail(id)

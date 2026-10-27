@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.common.ontology import require_ontology_id, set_ontology_scope
 from app.common.repository import BaseRepository
 from app.core import clock
 from app.core.enums import TimelineStatus
@@ -148,17 +149,19 @@ class ActionRunRepo(BaseRepository[ActionRun]):
         # 请求已占主池连接；独立无池连接避免并发请求互等第二条主池连接。
         engine = create_async_engine(self.session.get_bind().engine.url, poolclass=NullPool)
         try:
-            async with AsyncSession(engine) as allocation, allocation.begin():
-                await get_adapter(allocation).xact_lock(allocation, f"dynamic.action_run.code.{day}")
-                counter = await allocation.scalar(
-                    select(ActionRunDailyCounter).where(ActionRunDailyCounter.day == day)
-                )
-                if counter is None:
-                    counter = ActionRunDailyCounter(day=day, last_value=floor)
-                    allocation.add(counter)
-                counter.last_value = max(counter.last_value, floor) + 1
-                await allocation.flush()
-                number = counter.last_value
+            async with AsyncSession(engine) as allocation:
+                await set_ontology_scope(allocation, require_ontology_id(self.session))
+                async with allocation.begin():
+                    await get_adapter(allocation).xact_lock(allocation, f"dynamic.action_run.code.{day}")
+                    counter = await allocation.scalar(
+                        select(ActionRunDailyCounter).where(ActionRunDailyCounter.day == day)
+                    )
+                    if counter is None:
+                        counter = ActionRunDailyCounter(day=day, last_value=floor)
+                        allocation.add(counter)
+                    counter.last_value = max(counter.last_value, floor) + 1
+                    await allocation.flush()
+                    number = counter.last_value
         finally:
             await engine.dispose()
         return f"{prefix}{number:04d}"

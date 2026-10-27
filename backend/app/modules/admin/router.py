@@ -129,8 +129,9 @@ async def list_audit_logs(
     kw: Annotated[str | None, Query(description="包含（区分大小写，先 trim）")] = None,
     cursor: Annotated[str | None, Query(description="上一页返回的 nextCursor；不传 = 第一页")] = None,
     size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 20,
+    ontology_id: Annotated[int | None, Query(alias="ontologyId", ge=1)] = None,
 ) -> AuditCursorOut:
-    f = make_filter(from_, to, action, result, field, kw)
+    f = make_filter(from_, to, action, result, field, kw, ontology_id)
     rows, nxt = await AuditLogService(session).page(f, cursor or None, size)
     return AuditCursorOut(items=[AuditRowOut.model_validate(r) for r in rows], next_cursor=nxt)
 
@@ -152,7 +153,7 @@ async def export_audit_logs(
     session: SessionDep,
     user: Annotated[CurrentUser, Depends(_audit_view)],
 ) -> AuditExportOut:
-    f = make_filter(body.from_, body.to, body.action, body.result, body.field, body.kw)
+    f = make_filter(body.from_, body.to, body.action, body.result, body.field, body.kw, body.ontology_id)
     job_id = await AuditLogService(session).export(f, user, client_ip(request))
     return AuditExportOut(job_id=job_id)
 

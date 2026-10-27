@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     auto_llm_timeout_s: float | None = Field(None, validation_alias="AUTO_ONTOLOGY_LLM_TIMEOUT_S")
     # 内部事件接收凭证；缺配置时端点不可用，绝不使用开发期默认用户放行。
     internal_event_token: SecretStr | None = None
+    # JSON workspace-id -> token; the legacy token authorizes workspace 1 only.
+    internal_event_tokens: SecretStr | None = None
     rule_replay_signing_key: SecretStr | None = None
     # Explicit opt-in plus per-system HTTP paths/credentials; only put real values in ignored .env.
     integration_real_connect: bool = False

@@ -30,6 +30,9 @@ def seed(
 
     async def _run() -> None:
         async with get_sessionmaker()() as session:
+            from app.common.ontology import DEFAULT_ONTOLOGY_ID, set_ontology_scope
+
+            await set_ontology_scope(session, DEFAULT_ONTOLOGY_ID)
             reports = await run_seeds(session, module or None, dry_run=dry_run)
             if dry_run:
                 await session.rollback()

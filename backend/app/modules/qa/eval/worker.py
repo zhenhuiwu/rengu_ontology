@@ -20,8 +20,8 @@ def build_app() -> procrastinate.App:
     return worker
 
 
-async def run(run_code: str) -> None:
-    await job._background(run_code)
+async def run(run_code: str, ontology_id: int | None = None) -> None:
+    await job._background(run_code, ontology_id=ontology_id)
 
 
 app = build_app()  # schema CLI使用此入口，不登记任何其他空桩或周期任务。

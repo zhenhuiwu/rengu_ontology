@@ -7,10 +7,13 @@ from typing import Annotated, Any
 
 from fastapi import Header, Request
 from pydantic import AwareDatetime, ConfigDict, Field, ValidationError, field_validator
+from sqlalchemy import select
 
+from app.common.ontology import DEFAULT_ONTOLOGY_ID, set_ontology_scope
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.schema import ApiModel
+from app.db.session import SessionDep
 
 MAX_BYTES = 65_536
 
@@ -81,15 +84,43 @@ class IngressIn(ApiModel):
         return value
 
 
-async def authenticate(authorization: Annotated[str | None, Header()] = None) -> None:
-    configured = get_settings().internal_event_token
-    secret = configured.get_secret_value() if configured else ""
+async def authenticate(
+    session: SessionDep,
+    authorization: Annotated[str | None, Header()] = None,
+    x_ontology_id: Annotated[str | None, Header()] = None,
+) -> None:
+    from app.modules.ontology.models import OntologyWorkspace
+
+    if x_ontology_id is not None and (len(x_ontology_id) > 19 or not x_ontology_id.isascii() or not x_ontology_id.isdigit()):
+        raise bad("本体工作空间编号无效")
+    ontology_id = int(x_ontology_id) if x_ontology_id is not None else DEFAULT_ONTOLOGY_ID
+    if ontology_id <= 0 or ontology_id > 2**63 - 1:
+        raise bad("本体工作空间编号无效")
+    settings = get_settings()
+    configured = settings.internal_event_token
+    secret = configured.get_secret_value() if configured and ontology_id == DEFAULT_ONTOLOGY_ID else ""
+    if settings.internal_event_tokens:
+        try:
+            tokens = json.loads(settings.internal_event_tokens.get_secret_value())
+            if not isinstance(tokens, dict) or any(
+                not isinstance(key, str) or len(key) > 19 or not key.isascii() or not key.isdigit()
+                or not 0 < int(key) <= 2**63 - 1 or str(int(key)) != key
+                or not isinstance(value, str) or not value.strip()
+                for key, value in tokens.items()
+            ):
+                raise ValueError
+            secret = tokens.get(str(ontology_id), secret)
+        except (ValueError, TypeError):
+            raise bad("内部事件工作空间凭证配置无效", "EVENT_INGRESS_UNAVAILABLE", 503) from None
     if not secret:
-        raise bad("内部事件凭证尚未配置", "EVENT_INGRESS_UNAVAILABLE", 503)
+        raise bad("该本体工作空间的内部事件凭证尚未配置", "EVENT_INGRESS_UNAVAILABLE", 503)
     parts = authorization.split(" ", 1) if authorization else []
     provided = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
     if not secrets.compare_digest(provided.encode("utf-8"), secret.encode("utf-8")):
         raise bad("内部事件凭证无效", "UNAUTHORIZED", 401)
+    if await session.scalar(select(OntologyWorkspace.id).where(OntologyWorkspace.id == ontology_id)) is None:
+        raise bad("本体工作空间不存在", "NOT_FOUND", 404)
+    await set_ontology_scope(session, ontology_id)
 
 
 async def read_envelope(request: Request) -> IngressIn:

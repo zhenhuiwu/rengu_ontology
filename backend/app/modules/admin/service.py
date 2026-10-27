@@ -34,6 +34,7 @@ def make_filter(
     result: str | None,
     field: str,
     kw: str | None,
+    ontology_id: int | None = None,
 ) -> AuditFilter:
     """「全部」/ 空串 = 不限（前端下拉的默认值就是「全部」）；kw 先 trim（前端 kw.value.trim()）。"""
     k = (kw or "").strip()
@@ -44,6 +45,7 @@ def make_filter(
         result=None if result in (None, "", "全部") else AuditResult(result),
         field=field,
         kw=k or None,
+        ontology_id=ontology_id,
     )
 
 

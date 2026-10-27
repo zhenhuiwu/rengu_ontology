@@ -15,6 +15,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from app.core.errors import AppError
 from app.modules.dynamic.rules_sim import simulate, stage_plan
 
 _JSON = Path(__file__).resolve().parents[3] / "seeds" / "json" / "dynamic" / "SC_TEMPLATES.json"
@@ -27,17 +28,21 @@ ENGINES: dict[str, dict[str, Callable[..., Any]]] = {
 
 
 @cache
-def templates() -> list[dict[str, Any]]:
+def templates(ontology_id: int) -> list[dict[str, Any]]:
+    if ontology_id != 1:
+        return []
     return json.loads(_JSON.read_text(encoding="utf-8"))
 
 
-def template_of(code: str | None) -> dict[str, Any]:
-    ts = templates()
+def template_of(code: str | None, ontology_id: int) -> dict[str, Any]:
+    ts = templates(ontology_id)
+    if not ts:
+        raise AppError("当前本体尚未配置推演模板与执行器", code="SCENARIO_EXECUTOR_UNAVAILABLE", status_code=503)
     return next((t for t in ts if t["code"] == code), ts[0])
 
 
-def engine_of(code: str | None) -> dict[str, Callable[..., Any]]:
-    return ENGINES[template_of(code)["engine"]]
+def engine_of(code: str | None, ontology_id: int) -> dict[str, Callable[..., Any]]:
+    return ENGINES[template_of(code, ontology_id)["engine"]]
 
 
 def driver_fields(t: dict[str, Any]) -> list[dict[str, Any]]:

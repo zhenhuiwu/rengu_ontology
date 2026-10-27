@@ -10,6 +10,7 @@ from sqlalchemy import or_, select
 
 from app.common.auth import CurrentUser
 from app.common.context import ViewContext
+from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import RoleAccess, effective_expr, governed_tables
 from app.contracts.rules import lifecycle_transition_pairs
@@ -17,8 +18,8 @@ from app.core.errors import AppError, NotFound
 from app.modules.action.condition_expr import Unavailable, evaluate
 from app.modules.action.models import ActionType, TypeStatus
 from app.modules.action.sections import action_def
-from app.modules.admin.roles import RoleService
 from app.modules.admin.models import SysRole
+from app.modules.admin.roles import RoleService
 from app.modules.event.ingress_schema import valid_json
 from app.modules.static.repo import StaticRepo, definition_draft_items
 from app.modules.versioning.repo import ReleaseRepo
@@ -290,7 +291,7 @@ class DatabaseSubmissionChecker:
             valid_json([kind, code])
         except ValueError:
             return refs
-        g = next((g for g in governed_tables().values() if g.object_type == kind and not g.inherit), None)
+        g = next((g for g in governed_tables(require_ontology_id(self.session)).values() if g.object_type == kind and not g.inherit), None)
         if g is None:
             return refs
         try:
@@ -365,6 +366,11 @@ class DatabaseSubmissionChecker:
         except Unavailable as exc:
             return {"passed": False, "checked": len(conds), "failed": [{"name": "参数", "fail": str(exc)}]}
         bundles, _ = await RoleService(self.session).effective_access(self.user.id)
+        from app.modules.ontology.models import OntologyRoleBinding
+
+        bound_role_ids = set(await self.session.scalars(select(OntologyRoleBinding.role_id).where(
+            OntologyRoleBinding.ontology_id == require_ontology_id(self.session))))
+        bundles = [bundle for bundle in bundles if bundle.role.id in bound_role_ids]
         # Only a declared alert-reference parameter can supply missing alert context.
         if not context.get("alertId"):
             alert_params = [
@@ -406,7 +412,7 @@ class DatabaseSubmissionChecker:
                         if not isinstance(value, str) or refs.get(("告警", "编号")) != value:
                             raise Unavailable("告警引用不存在、不唯一或无当前处理权限")
                     else:
-                        from app.modules.integration.action_edits import object_binding, existing_row
+                        from app.modules.integration.action_edits import existing_row, object_binding
                         try:
                             obj, governed = await object_binding(self.session, label)
                             for identity in value if isinstance(value, list) else [value]:
@@ -480,6 +486,7 @@ class DatabaseSubmissionChecker:
                 failed.append({"name": cond["name"], "fail": "条件不可校验：" + str(exc)})
         if not failed and action.get("writeback"):
             from types import SimpleNamespace
+
             from app.modules.integration.action_edits import business_edits
             from app.modules.integration.action_effects import preflight_effects
             run = SimpleNamespace(code=context.get("actionRunId", "DRY-RUN"),

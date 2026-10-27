@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from app.common import ontology as _ontology  # noqa: F401
 from app.core.config import get_settings
 
 _engine: AsyncEngine | None = None

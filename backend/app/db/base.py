@@ -26,6 +26,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     String,
+    UniqueConstraint,
     func,
     text,
 )
@@ -44,6 +45,39 @@ NAMING_CONVENTION = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+    def __init_subclass__(cls, **kwargs):
+        # Platform identities/configuration are shared; every domain row, including children, is scoped.
+        scoped = (
+            cls.__module__.startswith("app.modules.")
+            and not cls.__module__.startswith(("app.modules.admin.", "app.modules.ontology."))
+        ) or cls.__module__ == "app.common.outbox"
+        if scoped and "__tablename__" in cls.__dict__:
+            cls.ontology_id = mapped_column(
+                BigInteger,
+                ForeignKey("ontology_workspace.id"),
+                nullable=False,
+                index=True,
+                server_default=text("NULLIF(current_setting('rengu.ontology_id', true), '')::bigint"),
+            )
+        super().__init_subclass__(**kwargs)
+        if scoped and "__table__" in cls.__dict__:
+            table = cls.__table__
+            for constraint in list(table.constraints):
+                if isinstance(constraint, UniqueConstraint) and "ontology_id" not in constraint.columns:
+                    columns = [c.name for c in constraint.columns]
+                    table.constraints.remove(constraint)
+                    table.append_constraint(UniqueConstraint("ontology_id", *columns))
+            for index in list(table.indexes):
+                if index.unique and "ontology_id" not in index.columns:
+                    table.indexes.remove(index)
+                    Index(
+                        index.name,
+                        table.c.ontology_id,
+                        *index.expressions,
+                        unique=True,
+                        **index.dialect_kwargs,
+                    )
 
 
 class IdMixin:

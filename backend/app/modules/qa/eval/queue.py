@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
 
 QUEUE = "qa-eval"
@@ -15,6 +16,7 @@ LOCK = "qa.eval.global"
 
 async def defer(session: AsyncSession, run_code: str, *_unused) -> int:
     """借用同一请求连接；run、审计和queue job一起提交或回滚，无派发间隙。"""
+    ontology_id = require_ontology_id(session)
     try:
         return int(
             await session.scalar(
@@ -27,9 +29,9 @@ async def defer(session: AsyncSession, run_code: str, *_unused) -> int:
                 {
                     "queue": QUEUE,
                     "task": TASK,
-                    "lock": LOCK,
-                    "queue_lock": f"qa.eval.{run_code}",
-                    "args": json.dumps({"run_code": run_code}),
+                    "lock": f"{LOCK}.{ontology_id}",
+                    "queue_lock": f"qa.eval.{ontology_id}.{run_code}",
+                    "args": json.dumps({"run_code": run_code, "ontology_id": ontology_id}),
                 },
             )
         )

@@ -5,10 +5,23 @@ import json
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Integer, Numeric, String, insert, literal, select, update
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    Integer,
+    Numeric,
+    String,
+    insert,
+    literal,
+    select,
+    update,
+)
 from sqlalchemy.sql.visitors import replacement_traverse
 
 from app.common.auth import check_func, row_filter
+from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import governed_tables
 from app.core import clock
@@ -172,7 +185,7 @@ async def validate_source_definition(session, source):
             or len(source["inputs"]) > 32 or not isinstance(source["function"], str)
             or not isinstance(source["version"], str) or not source["version"] or source["version"] == "current"):
         raise unavailable("函数映射须指定编号、固定发布版本和输入")
-    from app.modules.functions.models import Function, FnVersion
+    from app.modules.functions.models import FnVersion, Function
     from app.modules.functions.runtime import signature
     record = (await session.execute(select(Function, FnVersion).join(FnVersion,
         FnVersion.function_id == Function.id).where(Function.code == source["function"],
@@ -199,7 +212,7 @@ async def object_binding(session, identity):
     if len(matches) != 1 or matches[0].status != ObjectStatus.published:
         raise unavailable("编辑对象没有唯一的已发布定义")
     obj = await StaticRepo(session).object_type(matches[0].code, refresh=True)
-    candidates = [g for g in governed_tables().values() if g.object_type == obj.code and not g.inherit]
+    candidates = [g for g in governed_tables(require_ontology_id(session)).values() if g.object_type == obj.code and not g.inherit]
     # source_table names the upstream system; local rows use the registered explorer binding.
     if len(candidates) != 1:
         raise unavailable("对象没有唯一的受控业务表映射")
@@ -208,9 +221,13 @@ async def object_binding(session, identity):
 
 async def object_operation(session, user, obj, definition):
     from app.modules.admin.models import SysRole, SysRoleMember, SysUser
+    from app.modules.ontology.models import OntologyRoleBinding
+
     permissions = await session.scalars(select(SysRole.objs).join(
         SysRoleMember, SysRoleMember.role_id == SysRole.id).join(
-        SysUser, SysUser.id == SysRoleMember.user_id).where(SysUser.code == user.id))
+        SysUser, SysUser.id == SysRoleMember.user_id).join(
+        OntologyRoleBinding, OntologyRoleBinding.role_id == SysRole.id).where(
+        SysUser.code == user.id, OntologyRoleBinding.ontology_id == require_ontology_id(session)))
     names = {definition["id"], definition["api"], definition["name"]}
     for entries in permissions:
         if not isinstance(entries, list):
@@ -363,7 +380,7 @@ async def business_edits(session, user, run, definition, *, apply=False):
             touched.add((obj.code, assignment_target, column))
         await result_scope(session, user, obj, governed, row["id"], values)
         if edit.get("op") == "新建":
-            identity = "NEW-" + hashlib.sha256(f"{run.code}:{obj.code}".encode()).hexdigest()[:24]
+            identity = "NEW-" + hashlib.sha256(f"{run.ontology_id}:{run.code}:{obj.code}".encode()).hexdigest()[:24]
             if await session.scalar(select(governed.table.c.id).where(governed.table.c.code == identity)):
                 raise AppError("新建对象身份已存在", code="IDEMPOTENCY_CONFLICT", status_code=409)
             required = {"code": identity}
@@ -406,7 +423,7 @@ async def target_access(session, user, run, definition):
         raise unavailable("动作目标与已发布定义不匹配")
     obj, _ = await object_binding(session, kind)
     await object_operation(session, user, obj, definition)
-    governed = next((g for g in governed_tables().values() if g.object_type == kind and not g.inherit), None)
+    governed = next((g for g in governed_tables(require_ontology_id(session)).values() if g.object_type == kind and not g.inherit), None)
     if governed is None or "code" not in governed.table.c:
         raise unavailable("目标对象没有可执行的受控业务映射")
     identities = (await session.execute(select(governed.table.c.id)

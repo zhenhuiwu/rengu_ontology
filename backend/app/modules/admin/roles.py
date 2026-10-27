@@ -19,6 +19,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
+from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.common.repository import BaseRepository
 from app.core.clock import now
@@ -64,7 +65,7 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
     from app.modules.action.sections import action_def
     from app.modules.static.models import ObjectStatus, ObjectType
 
-    fallback = perm_objects()
+    fallback = perm_objects() if require_ontology_id(session) == 1 else []
     ots = (
         await session.execute(
             select(ObjectType.display_name, ObjectType.api_name)
@@ -119,8 +120,8 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
         ).all()
     )
     if not objects:
-        return _meta_json("SCOPE_PROPS")
-    tables = {g.object_type: g for g in governed_tables().values() if not g.inherit}
+        return _meta_json("SCOPE_PROPS") if require_ontology_id(session) == 1 else []
+    tables = {g.object_type: g for g in governed_tables(require_ontology_id(session)).values() if not g.inherit}
     out = []
     for obj in objects:
         g = tables.get(obj.code)
@@ -725,14 +726,25 @@ class RoleService:
         if u is None:
             raise NotFound("用户不存在", details={"id": user_code})
         rs = await self.bundles(await self.repo.roles_of_user(u.id))
-        return rs, compute_effective(rs, await load_perm_objects(self.session))
+        objects = await load_perm_objects(self.session)
+        effective = compute_effective(rs, objects)
+        effective["objs"] = compute_effective(await self._bound_bundles(rs), objects)["objs"]
+        return rs, effective
 
     async def row_scope(self, user_code: str) -> list[dict[str, Any]]:
         u = await self.session.scalar(select(SysUser).where(SysUser.code == user_code))
         if u is None:  # 服务账号等不在 sys_user 的身份：没有角色 → 全部不可见
             return compute_row_scope([], await load_perm_objects(self.session))
         rs = await self.bundles(await self.repo.roles_of_user(u.id))
-        return compute_row_scope(rs, await load_perm_objects(self.session))
+        return compute_row_scope(await self._bound_bundles(rs), await load_perm_objects(self.session))
+
+
+    async def _bound_bundles(self, bundles: list[RoleBundle]) -> list[RoleBundle]:
+        from app.modules.ontology.models import OntologyRoleBinding
+
+        ids = set(await self.session.scalars(select(OntologyRoleBinding.role_id).where(
+            OntologyRoleBinding.ontology_id == require_ontology_id(self.session))))
+        return [bundle for bundle in bundles if bundle.role.id in ids]
 
 
 def compute_effective(rs: list[RoleBundle], po: list[dict[str, Any]] | None = None) -> dict[str, Any]:

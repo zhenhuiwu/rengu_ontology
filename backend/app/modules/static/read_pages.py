@@ -145,6 +145,20 @@ async def object_list(svc, kw, p, focus=None):
     ).model_dump()
 
 
+async def metric_groups(svc):
+    if svc.ver:
+        return sorted({
+            row["group"] for row in (await snapshot(svc, "metrics")).values()
+            if isinstance(row.get("group"), str) and row["group"].strip()
+        })
+    return list(await svc.session.scalars(
+        select(Metric.metric_group)
+        .where(func.trim(Metric.metric_group) != "")
+        .group_by(Metric.metric_group)
+        .order_by(func.min(Metric.seq), Metric.metric_group)
+    ))
+
+
 async def metric_list(svc, kw, group, p, focus=None):
     if svc.ver:
         from app.modules.static.service import paginate

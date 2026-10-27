@@ -72,6 +72,12 @@ class PostgresAdapter:
     ) -> int:
         """分批：每批行数 = PG_MAX_PARAMS // 列数（asyncpg 一条语句最多 32767 个绑定参数）；
         批内按 key 去重（同一条 INSERT … ON CONFLICT 里同一个键出现两次会报错），后出现的覆盖先出现的。"""
+        if "ontology_id" in model.__table__.c:
+            from app.common.ontology import require_ontology_id
+
+            ontology_id = require_ontology_id(session)
+            rows = [{**row, "ontology_id": ontology_id} for row in rows]
+            key = ("ontology_id", *key) if "ontology_id" not in key else key
         rows = dedupe_by_key(rows, key)
         if not rows:
             return 0
@@ -88,9 +94,13 @@ class PostgresAdapter:
         return len(rows)
 
     async def xact_lock(self, session: AsyncSession, name: str) -> None:
+        if not name.startswith("qa.eval"):
+            name = f"ontology:{session.info.get('ontology_id', 'platform')}:{name}"
         await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": zlib.crc32(name.encode())})
 
     async def try_xact_lock(self, session: AsyncSession, name: str) -> bool:
+        if not name.startswith("qa.eval"):
+            name = f"ontology:{session.info.get('ontology_id', 'platform')}:{name}"
         return bool(
             await session.scalar(
                 text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": zlib.crc32(name.encode())}

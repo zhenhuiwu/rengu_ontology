@@ -97,6 +97,7 @@ class AuditLog(CodeMixin, AppendOnlyTableMixin, Base):
     )
 
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="发生时间")
+    ontology_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("ontology_workspace.id"))
     actor: Mapped[str] = mapped_column(String(256), nullable=False, comment="操作人展示串「姓名（编号）」")
     action: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True, comment="动作（中文，如「导出」）"
@@ -248,6 +249,7 @@ class ApiKey(CodeMixin, MutableTableMixin, Base):
     prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     last4: Mapped[str] = mapped_column(String(4), nullable=False)
     scopes: Mapped[list] = mapped_column(JsonType, nullable=False)
+    ontology_ids: Mapped[list] = mapped_column(JsonType, nullable=False)
     func_snapshot: Mapped[dict] = mapped_column(JsonType, nullable=False)
     ip_allow: Mapped[list] = mapped_column(JsonType, nullable=False)
     note: Mapped[str] = mapped_column(String(512), nullable=False)

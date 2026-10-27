@@ -58,7 +58,7 @@ async def inspect_source(session, code: str, body: ImportPreviewIn):
     if {t.name for t in found} != set(body.tables):
         raise conflict("源表清单不完整，请刷新后重试", "SCHEMA_CHANGED")
     meta = [dict(t.to_json(), uniqueSets=t.unique_sets) for t in found]
-    signature = {"datasourceId": ds.code, "version": ds.lock_version, "schema": body.schema_, "tables": meta}
+    signature = {"ontologyId": ds.ontology_id, "datasourceId": ds.code, "version": ds.lock_version, "schema": body.schema_, "tables": meta}
     fingerprint = hashlib.sha256(
         json.dumps(signature, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()

@@ -210,7 +210,7 @@ def _properties(r: Row, ctx: SeedContext) -> list[Row]:
                 "transform": m["transform"],
                 "map_column": m["col"],
                 "seq": i,
-                **default_flags(r["key"], p),  # 通用对象浏览标记（explorer.py，static_0004）
+                **default_flags(r["key"], p, 1),  # 通用对象浏览标记（explorer.py，static_0004）
             }
         )
     return out

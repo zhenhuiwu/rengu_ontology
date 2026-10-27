@@ -8,7 +8,7 @@ from app.common.sql_guard import governed_tables
 
 async def scoped_instances(statement, user, kind_column, identity_column):
     clauses = []
-    for mapping in governed_tables().values():
+    for mapping in governed_tables(user.ontology_id).values():
         table = mapping.table
         if mapping.inherit or "code" not in table.c or "id" not in table.c:
             continue

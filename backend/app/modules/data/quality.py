@@ -7,6 +7,7 @@ from sqlalchemy import case, func, literal, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
+from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.common.row_filter import apply_row_filter
 from app.core import clock
@@ -33,8 +34,8 @@ TARGETS = {
 KINDS = ["新鲜度", "空值率", "唯一性", "引用完整性"]
 
 
-def kinds(code: str) -> list[str]:
-    t = TARGETS.get(code)
+def kinds(code: str, ontology_id: int) -> list[str]:
+    t = TARGETS.get(code) if ontology_id == 1 else None
     return [
         k for k in KINDS if t and (k not in {"新鲜度", "引用完整性"} or (t[3] if k == "新鲜度" else t[4]))
     ]
@@ -108,8 +109,8 @@ async def meta(session: AsyncSession, ver: str | None = None) -> list[dict]:
             {
                 "key": code,
                 "name": row.get("name", code),
-                "kinds": kinds(code),
-                "rules": {k: rule_text(code, k) for k in kinds(code)},
+                "kinds": kinds(code, require_ontology_id(session)),
+                "rules": {k: rule_text(code, k) for k in kinds(code, require_ontology_id(session))},
             }
             for code, row in snapshot.get("objectTypes", {}).items()
         ]
@@ -117,8 +118,8 @@ async def meta(session: AsyncSession, ver: str | None = None) -> list[dict]:
         {
             "key": t.code,
             "name": t.display_name,
-            "kinds": kinds(t.code),
-            "rules": {k: rule_text(t.code, k) for k in kinds(t.code)},
+            "kinds": kinds(t.code, require_ontology_id(session)),
+            "rules": {k: rule_text(t.code, k) for k in kinds(t.code, require_ontology_id(session))},
         }
         for t in (await session.scalars(select(ObjectType).order_by(ObjectType.id))).all()
     ]
@@ -340,7 +341,7 @@ async def list_checks(session, owner, page: PageParams, type_key=None, kind=None
                 if obj
                 else value["typeKey"],
                 "rule": rule_text(value["typeKey"], value["kind"])
-                if value["kind"] in kinds(value["typeKey"])
+                if value["kind"] in kinds(value["typeKey"], require_ontology_id(session))
                 else "—",
                 "actual": run.actual if run else "尚未运行",
                 "result": run.result if run else "未运行",
@@ -399,6 +400,8 @@ async def visible_query(user: CurrentUser, code: str):
 
 
 async def evaluate(session: AsyncSession, user: CurrentUser, code: str, kind: str, limit: float):
+    if require_ontology_id(session) != 1:
+        raise AppError("当前本体尚未绑定可执行的数据质量检查数据源", code="DATA_NOT_CONFIGURED", status_code=503)
     t = TARGETS[code]
     source = (await visible_query(user, code)).subquery()
     total = await session.scalar(select(func.count()).select_from(source))

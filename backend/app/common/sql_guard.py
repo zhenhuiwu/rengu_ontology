@@ -322,8 +322,9 @@ def register_unrestricted(*names: str) -> None:
         _UNRESTRICTED.add(n)
 
 
-def governed_tables() -> dict[str, GovernedTable]:
-    return dict(_GOVERNED)
+def governed_tables(ontology_id: int | None = None) -> dict[str, GovernedTable]:
+    # The registered physical bindings belong to the retained retail workspace only.
+    return dict(_GOVERNED) if type(ontology_id) is int and ontology_id == 1 else {}
 
 
 def unrestricted_tables() -> frozenset[str]:
@@ -443,9 +444,14 @@ def _condition(g: GovernedTable, expr: dict, user_attrs: dict[str, Any]) -> Colu
 async def row_filters_for(user: Any) -> dict[str, Predicate | None]:
     from app.common.auth import row_filter
 
+    ontology_id = getattr(user, "ontology_id", None)
+    if type(ontology_id) is not int or ontology_id != 1:
+        raise SqlRejected("当前本体工作空间尚未绑定可执行的受控数据源")
     out: dict[str, Predicate | None] = {}
-    for name, g in _GOVERNED.items():
-        out[name] = compile_predicate(g, await row_filter(user, g.scope_object_type), user.attrs)
+    for name, g in governed_tables(ontology_id).items():
+        pred = compile_predicate(g, await row_filter(user, g.scope_object_type), user.attrs)
+        clause, values = pred if pred is not None else ("TRUE", [])
+        out[name] = (f"({clause}) AND {name}.ontology_id = ${len(values) + 1}", [*values, ontology_id])
     return out
 
 
@@ -454,5 +460,7 @@ async def run_guarded(conn: Any, sql: str, user: Any, allowed: frozenset[str] = 
 
     conn = 只读引擎的 AsyncConnection（`get_qa_readonly_engine().connect()`）。
     """
-    final, params = inject_row_filters(sql, await row_filters_for(user), allowed | unrestricted_tables())
+    if allowed or unrestricted_tables():
+        raise SqlRejected("物理表必须登记工作空间绑定，不能绕过本体边界")
+    final, params = inject_row_filters(sql, await row_filters_for(user))
     return await conn.exec_driver_sql(final, tuple(params))

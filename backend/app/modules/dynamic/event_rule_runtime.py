@@ -136,6 +136,8 @@ def dedupe_spec(rule, event, fields):
         values.append([token, value])
     if not values:
         raise unavailable("规则没有明确去重身份")
+    if rule.ontology_id != 1:
+        values.insert(0, ["ontologyId", rule.ontology_id])
     if rule.cooldown.strip() == "不重复":
         window = None
     else:
@@ -237,7 +239,10 @@ async def dispatch(session, user, *, rule_code, event_id):
     if rule.output != RuleOutput.alert:
         raise unavailable("通知规则缺少真实通知执行通道，不能冒充告警或已通知")
     key, window = dedupe_spec(rule, event, fields)
-    identity = hashlib.sha256(f"{event.code}\0{rule.code}".encode()).hexdigest()[:60]
+    source = f"{event.code}\0{rule.code}"
+    if event.ontology_id != 1:
+        source = f"{event.ontology_id}\0{source}"
+    identity = hashlib.sha256(source.encode()).hexdigest()[:60]
     hit_code = f"RH-{identity}"
     previous = await session.scalar(select(RuleHit).where(RuleHit.code == hit_code))
     action = {"actionStatus": "not_configured"}

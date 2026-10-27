@@ -313,6 +313,11 @@ class StaticService:
 
     # ================================================================ 指标
 
+    async def metric_groups(self) -> list[str]:
+        from app.modules.static.read_pages import metric_groups
+
+        return await metric_groups(self)
+
     async def metric_list(self, kw: str, group: str, p: PageParams, focus_id: str | None = None) -> Obj:
         from app.modules.static.read_pages import metric_list
 

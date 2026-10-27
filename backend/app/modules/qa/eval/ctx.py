@@ -10,10 +10,12 @@ async def main() -> None:
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
     import app.main  # noqa: F401  注册全部模型
+    from app.common.ontology import DEFAULT_ONTOLOGY_ID, set_ontology_scope
     from app.modules.qa import chain
 
     eng = create_async_engine(url)
     async with AsyncSession(eng) as s:
+        await set_ontology_scope(s, DEFAULT_ONTOLOGY_ID)
         ctx = await chain.build_context(s)
         print(chain.build_prompt("Q", ctx)[0]["content"])
     await eng.dispose()

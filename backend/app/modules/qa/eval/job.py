@@ -24,8 +24,10 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from app.common.ontology import DEFAULT_ONTOLOGY_ID, require_ontology_id, set_ontology_scope
 from app.core.errors import AppError
 from app.db.dialects import get_adapter
+from app.jobs.scope import scoped_sessions, workspace_ids
 from app.modules.qa import catalog, chain
 from app.modules.qa.llm import LLMClient
 from app.modules.qa.models import EvalLast, FailKind, QaEvalFail, QaEvalQuestion, QaEvalRun, RunStatus
@@ -147,13 +149,19 @@ async def worker_lifespan() -> AsyncIterator[None]:
 
 
 async def _background(
-    run_code: str, group: str | None = None, llm: LLMClient | None = None, user: Any = None
+    run_code: str, group: str | None = None, llm: LLMClient | None = None, user: Any = None,
+    *, ontology_id: int | None = None
 ) -> None:
     from app.db.session import get_engine
+
+    # Pre-migration queue arguments belong only to the retained retail workspace.
+    if ontology_id is None:
+        ontology_id = DEFAULT_ONTOLOGY_ID
 
     # 同一连接跨逐题commit持有全局和单run锁；Procrastinate本身也使用全局lock。
     async with get_engine().connect() as connection:
         session = AsyncSession(bind=connection, expire_on_commit=False)
+        await set_ontology_scope(session, ontology_id)
         status = await session.scalar(select(QaEvalRun.status).where(QaEvalRun.code == run_code))
         await session.rollback()
         if status not in (RunStatus.queued, RunStatus.running):
@@ -161,8 +169,8 @@ async def _background(
             return
         adapter = get_adapter(session)
         async with (
-            adapter.session_lock(connection, "qa.eval.execution"),
-            adapter.session_lock(connection, f"qa.eval_run.{run_code}"),
+            adapter.session_lock(connection, f"qa.eval.execution.{ontology_id}"),
+            adapter.session_lock(connection, f"qa.eval_run.{ontology_id}.{run_code}"),
             session,
         ):
             await _execute_background(session, run_code, group, llm, user)
@@ -194,6 +202,8 @@ async def _execute_background(
     await s.commit()
     try:
         context = run.execution_context or {}
+        if context.get("ontologyId", run.ontology_id) != require_ontology_id(s):
+            raise AppError("评测工作空间上下文不匹配", code="ONTOLOGY_SCOPE_CONFLICT", status_code=409)
         if context:
             user = await resolve_user(s, context["userId"], context.get("tenantId"))
             check_func(user, "qa-tuning", "manage")
@@ -202,6 +212,10 @@ async def _execute_background(
             llm = get_llm()  # 仅在worker内读取密钥，不持久化客户端或凭据。
         async with get_qa_readonly_engine().connect() as conn:
             tr = await conn.begin()
+            await conn.execute(
+                text("SELECT set_config('rengu.ontology_id', :ontology_id, true)"),
+                {"ontology_id": str(require_ontology_id(s))},
+            )
             await conn.execute(text("set local statement_timeout = 15000"))
             try:
                 await execute(s, conn, llm, user, run, group, checkpoint=s.commit)
@@ -219,9 +233,14 @@ async def _execute_background(
 
 async def recover_interrupted_runs() -> int:
     """启动恢复：保留已提交的逐题进度，不碰仍由其他进程执行的任务。"""
-    from app.db.session import get_sessionmaker
+    recovered = 0
+    for ontology_id in await workspace_ids():
+        recovered += await _recover_workspace(ontology_id)
+    return recovered
 
-    async with get_sessionmaker()() as session:
+
+async def _recover_workspace(ontology_id: int) -> int:
+    async with scoped_sessions(ontology_id)() as session:
         runs = (await session.scalars(select(QaEvalRun).where(QaEvalRun.status == RunStatus.running))).all()
         recovered = 0
         for run in runs:
@@ -229,7 +248,7 @@ async def recover_interrupted_runs() -> int:
                 session, f"qa.eval_worker.{run.worker_id}"
             ):
                 continue
-            if not await get_adapter(session).try_xact_lock(session, f"qa.eval_run.{run.code}"):
+            if not await get_adapter(session).try_xact_lock(session, f"qa.eval_run.{ontology_id}.{run.code}"):
                 continue
             # 枚举后任务可能刚好完成；拿锁后再读，不能覆盖它的最终状态。
             await session.refresh(run)

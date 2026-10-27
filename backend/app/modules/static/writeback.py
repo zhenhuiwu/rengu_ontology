@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
 from app.core.schema import _fmt_dt
 from app.modules.admin.permissions import resolve_owner_name
@@ -326,6 +327,7 @@ async def object_properties(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
                     tid,
                     {**after, "api": r.item_key, "type": typ},
                     max((x.seq for x in o.properties), default=0) + 1,
+                    require_ontology_id(ctx.session),
                 ),
                 created_by=ctx.by,
             )
@@ -974,7 +976,7 @@ async def restore_properties(session: AsyncSession, content: dict[str, Any], *, 
                 await session.delete(p)
         seq = max((x.seq for x in o.properties), default=0)
         for n, (api, after) in enumerate(snap.items()):
-            flags = snapshot_flags(o.code, after, n)
+            flags = snapshot_flags(o.code, after, n, require_ontology_id(session))
             p = by_api.get(api)
             if p is None:
                 seq += 1

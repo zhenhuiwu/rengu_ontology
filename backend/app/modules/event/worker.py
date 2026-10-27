@@ -9,7 +9,8 @@ import procrastinate
 
 from app.core.config import get_settings
 from app.db import models as _models  # noqa: F401
-from app.db.session import dispose_engine, get_sessionmaker
+from app.db.session import dispose_engine
+from app.jobs.scope import scoped_sessions, workspace_ids
 from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.event.delivery import discover, due, execute, prepare, recover
 
@@ -18,7 +19,14 @@ logger = logging.getLogger(__name__)
 
 
 async def sweep(timestamp: int = 0) -> int:
-    sessions = get_sessionmaker()
+    total = 0
+    for ontology_id in await workspace_ids():
+        total += await _sweep_workspace(ontology_id)
+    return total
+
+
+async def _sweep_workspace(ontology_id: int) -> int:
+    sessions = scoped_sessions(ontology_id)
     async with sessions() as session, session.begin():
         await recover(session)
         await discover(session)

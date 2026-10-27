@@ -44,7 +44,8 @@ class DatabaseEventEmitter:
                     status_code=503,
                 )
             values.update(system=system.code, idemKey=run.idem_key, waitedMs=run.elapsed_ms)
-        code = f"dynamic:{hashlib.sha256(event_id.encode()).hexdigest()[:56]}"
+        identity = event_id if run.ontology_id == 1 else f"{run.ontology_id}:{event_id}"
+        code = f"dynamic:{hashlib.sha256(identity.encode()).hexdigest()[:56]}"
         previous = await self.session.scalar(select(Event).where(Event.code == code))
         from app.common.auth import resolve_user
         call = await self.session.scalar(select(WritebackCall).where(

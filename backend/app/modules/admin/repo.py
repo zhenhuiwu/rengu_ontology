@@ -56,6 +56,7 @@ async def insert_audit(
         ip=ip,
         result=result if isinstance(result, AuditResult) else AuditResult(result),
         created_by=created_by,
+        ontology_id=session.info.get("ontology_id"),
     )
     session.add(row)
     await session.flush()
@@ -105,6 +106,7 @@ class AuditFilter:
     result: AuditResult | None = None
     field: str = "actor"
     kw: str | None = None
+    ontology_id: int | None = None
 
 
 class AuditLogRepository(BaseRepository[AuditLog]):
@@ -113,6 +115,8 @@ class AuditLogRepository(BaseRepository[AuditLog]):
 
     def _filtered(self, f: AuditFilter):
         stmt = select(AuditLog).where(AuditLog.time >= f.start, AuditLog.time <= f.end)
+        if f.ontology_id is not None:
+            stmt = stmt.where(AuditLog.ontology_id == f.ontology_id)
         if f.action:
             stmt = stmt.where(AuditLog.action == f.action)
         if f.result is not None:

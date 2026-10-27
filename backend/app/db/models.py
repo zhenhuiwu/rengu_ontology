@@ -12,6 +12,7 @@ from app.modules.dynamic import rules_models as _dynamic_rules  # noqa: F401
 from app.modules.event import models as _event  # noqa: F401
 from app.modules.functions import models as _functions  # noqa: F401
 from app.modules.integration import models as _integration  # noqa: F401
+from app.modules.ontology import models as _ontology  # noqa: F401
 from app.modules.qa import models as _qa  # noqa: F401
 from app.modules.static import models as _static  # noqa: F401
 from app.modules.versioning import models as _versioning  # noqa: F401

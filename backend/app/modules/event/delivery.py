@@ -9,6 +9,7 @@ import httpx
 from sqlalchemy import exists, or_, select, tuple_
 
 from app.common.auth import check_func, resolve_user, row_filter
+from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import governed_tables
 from app.core import clock
@@ -37,7 +38,10 @@ def routes() -> dict:
 
 
 def delivery_key(event: Event, name: str) -> str:
-    digest = hashlib.sha256(f"{event.code}\0{name}".encode()).hexdigest()
+    identity = f"{event.code}\0{name}"
+    if event.ontology_id != 1:  # Existing retail delivery keys remain valid for reconciliation.
+        identity = f"{event.ontology_id}\0{identity}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()
     return f"event-{digest}"
 
 
@@ -71,7 +75,7 @@ async def authorize_object(session, user, event: Event, level: str = "manage") -
     """A production payload leaves the process only for an explicitly granted real object row."""
     check_func(user, "event-types", level)
     mapping = next(
-        (g for g in governed_tables().values() if g.object_type == event.obj_kind and not g.inherit), None
+        (g for g in governed_tables(require_ontology_id(session)).values() if g.object_type == event.obj_kind and not g.inherit), None
     )
     expr = await row_filter(user, event.obj_kind or "")
     if mapping is None or "code" not in mapping.table.c or "id" not in mapping.table.c or is_deny_all(expr):
@@ -92,7 +96,12 @@ async def authorize_object(session, user, event: Event, level: str = "manage") -
 
 def route_for(event: Event, delivery: EventDelivery) -> dict:
     definition = event.definition_snapshot or {}
-    return routes().get(f"{definition.get('id', '')}/{delivery.subscriber_name}", {})
+    key = f"{definition.get('id', '')}/{delivery.subscriber_name}"
+    configured = routes()
+    route = configured.get(f"{event.ontology_id}/{key}")
+    if route is None and event.ontology_id == 1:
+        route = configured.get(key)
+    return route or {}
 
 
 def route_fingerprint(route: dict) -> str:
@@ -454,11 +463,13 @@ async def execute(session, delivery_id: int) -> None:
             endpoint = http_target(route, event.is_test)
             if not event.is_test:
                 await authorize_object(session, await resolve_user(session, route["user"]), event)
-            headers = {"Idempotency-Key": delivery_key(event, delivery.subscriber_name)}
+            headers = {"Idempotency-Key": delivery_key(event, delivery.subscriber_name),
+                       "X-Ontology-Id": str(event.ontology_id)}
             token = route.get("test_token" if event.is_test else "token")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
             envelope = {
+                "ontologyId": event.ontology_id,
                 "eventId": event.code,
                 "eventType": event.definition_snapshot["id"],
                 "occurredAt": event.occurred_at.isoformat(),
