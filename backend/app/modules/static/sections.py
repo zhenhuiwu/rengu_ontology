@@ -157,7 +157,7 @@ class MetricsSection(_Base):
     section = "metrics"
 
     async def current(self, repo: StaticRepo) -> Obj:
-        from app.modules.static.metric_versions import exec_def, real_rows
+        from app.modules.static.metric_versions import exec_def, meta_def, real_rows
 
         out = {}
         for m in await repo.metrics():
@@ -165,6 +165,8 @@ class MetricsSection(_Base):
             out[m.code] = metric_def_from_json(shapes.metric_list_item(m), stat)
             # 执行口径随快照保存，整版回滚才能恢复时间字段/默认过滤（旧快照无此键时回滚不改）。
             out[m.code]["execDef"] = exec_def(m.def_rows)
+            # 问数元数据（同义词/说明）同样随快照保存、整版回滚恢复。
+            out[m.code].update(meta_def(m.def_rows))
             versions = real_rows(m.version_rows or [])
             if versions:
                 out[m.code].update(formula=m.formula, dimNames=list(m.dims or []))
@@ -176,14 +178,19 @@ class MetricsSection(_Base):
         await restore_metrics(session, content or {}, release_id=release_id)
 
     def seed_section(self, ver: str, ctx: Any) -> Obj:
-        from app.modules.static.metric_versions import exec_def
+        from app.modules.static.metric_versions import exec_def, meta_def, seed_def_rows
 
         stats = {x["id"]: x for x in ctx.load("METRICS.json", group=G)}
-        # 与 seeds/__init__ 一致：种子指标共用 METRIC_DEF.json 的定义行。
-        execd = exec_def(ctx.load("METRIC_DEF.json"))
+        # 与 seeds/__init__ 一致：种子指标共用 METRIC_DEF.json 的定义行（同义词/说明只给首项）。
+        rows = ctx.load("METRIC_DEF.json")
+        items = ctx.load("METRIC_LIST.json", group=G)
         return {
-            x["id"]: {**metric_def_from_json(x, stats.get(x["id"])), "execDef": dict(execd)}
-            for x in ctx.load("METRIC_LIST.json", group=G)
+            x["id"]: {
+                **metric_def_from_json(x, stats.get(x["id"])),
+                "execDef": exec_def(rows),
+                **meta_def(seed_def_rows(rows, own=i == 0)),
+            }
+            for i, x in enumerate(items)
         }
 
 

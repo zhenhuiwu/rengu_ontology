@@ -309,6 +309,8 @@ def seed_metric_variants(metrics: list[Row]) -> dict[str, list[Row]]:
 
 
 def _metric(r: Row, ctx: SeedContext) -> Row:
+    from app.modules.static.metric_versions import seed_def_rows
+
     ids = [x["id"] for x in ctx.load("METRIC_LIST.json")]
     stat_ids = [x["id"] for x in ctx.load("METRICS.json")]
     s = _index(ctx, "METRICS.json").get(r["id"], {})
@@ -329,7 +331,7 @@ def _metric(r: Row, ctx: SeedContext) -> Row:
         "value": s.get("value"),
         "prev": s.get("prev"),
         "stat_updated_at": _dt(s.get("updatedAt")),
-        "def_rows": ctx.load("METRIC_DEF.json"),
+        "def_rows": seed_def_rows(ctx.load("METRIC_DEF.json"), own=ids.index(r["id"]) == 0),
         "dim_rows": ctx.load("METRIC_DIMS.json"),
         "version_rows": ctx.load("METRIC_VERSIONS.json"),
         "ref_rows": ctx.load("METRIC_REFS.json"),
