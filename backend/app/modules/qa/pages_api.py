@@ -426,8 +426,12 @@ async def delete_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: 
     summary="P6 立即刷新",
 )
 async def refresh_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    from app.modules.qa.page_schedule import _card_values, emit_refresh_subscription
+
     _, p = await _load(session, user, ctx, pid, "edit")
     actor = await execution.current_viewer(session, user)
+    before, at = _card_values(p), clock.now()
+    ok = False
     try:
         permission = await execution.fingerprint(actor)
         caches, as_of = await execution.execute_cards(session, actor, p.cards)
@@ -437,7 +441,9 @@ async def refresh_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx:
         for card, cache in zip(p.cards, caches, strict=True):
             card.result_cache, card.perm_fingerprint = cache, permission
         p.status, p.status_note = _status_of(p.cards)
-        p.last_refresh, p.data_as_of = clock.now(), as_of
+        p.last_refresh, p.data_as_of = at, as_of
+        ok = True
+    await emit_refresh_subscription(session, p, actor, at, before=before, ok=ok)
     await session.flush()
     await audit(
         session,

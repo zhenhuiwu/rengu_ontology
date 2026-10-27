@@ -36,7 +36,14 @@ from app.common.outbox import OutboxEvent, emit
 from app.core import clock
 from app.core.errors import AppError
 from app.modules.qa import page_execution as execution
-from app.modules.qa.models import PageStatus, QaPage, QaPageShareMember, QaPageSubscription, SubWhen
+from app.modules.qa.models import (
+    PageStatus,
+    QaPage,
+    QaPageShareMember,
+    QaPageSubscription,
+    SubChannel,
+    SubWhen,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +59,24 @@ DIGEST_GRACE = timedelta(hours=3)  # 时段过了多久还补发（worker 短暂
 
 def _card_values(page: QaPage) -> list[Any]:
     return [c.result_cache for c in page.cards]
+
+
+async def emit_refresh_subscription(session, page, actor, at, *, before, ok):
+    """Manual and scheduled refresh share the same successful inbox subscription event."""
+    sub = page.subscription
+    if (not ok or sub is None or not sub.enabled or sub.channel != SubChannel.inbox
+            or sub.send_when != SubWhen.after_refresh):
+        return None
+    changed = _card_values(page) != before
+    if sub.only_changed and not changed:
+        return None
+    delivery = {"channel": sub.channel.value, "recipients": list(sub.recipients or []), "changed": changed}
+    await audit(session, actor, action="qa.page.subscription.due", target=page.code, detail=delivery)
+    await _emit_once(
+        session, f"qa.page.refresh:{page.code}:{at.isoformat()}",
+        await _payload(session, page, sub, "afterRefresh", at.isoformat(), changed),
+    )
+    return delivery
 
 
 async def refresh_page_once(session, page: QaPage, at: datetime) -> dict[str, Any]:
@@ -82,23 +107,9 @@ async def refresh_page_once(session, page: QaPage, at: datetime) -> dict[str, An
         ok = True
     page.next_run = next_run(page.refresh, at)
     out: dict[str, Any] = {"page": page.code, "status": page.status.value, "ok": ok}
-    sub = page.subscription
-    if ok and sub is not None and sub.enabled and sub.send_when == SubWhen.after_refresh:
-        changed = _card_values(page) != before
-        if changed or not sub.only_changed:
-            out["delivery"] = {
-                "channel": sub.channel.value,
-                "recipients": list(sub.recipients or []),
-                "changed": changed,
-            }
-            await audit(
-                session, actor, action="qa.page.subscription.due", target=page.code, detail=out["delivery"]
-            )
-            await _emit_once(
-                session,
-                f"qa.page.refresh:{page.code}:{at.isoformat()}",
-                await _payload(session, page, sub, "afterRefresh", at.isoformat(), changed),
-            )
+    delivery = await emit_refresh_subscription(session, page, actor, at, before=before, ok=ok)
+    if delivery is not None:
+        out["delivery"] = delivery
     await audit(
         session,
         actor,
