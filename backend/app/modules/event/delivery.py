@@ -20,8 +20,31 @@ from app.modules.action.condition_expr import Unavailable
 from app.modules.event.delivery_history import record, safe_result
 from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, EventOutcome
 from app.modules.event.schemas import FieldOut
+from app.modules.integration.signing import (
+    SigningSecretInvalid,
+    backoff,
+    encode_body,
+    resolve_secret,
+    retry_budget,
+    retryable_status,
+    signed_headers,
+)
 
 INTERVAL = timedelta(minutes=1)
+RETRY_SCHEDULED = "HTTP_RETRY_SCHEDULED"
+DEFAULT_HTTP_RETRIES = 3
+SECRET_KEYS = ("token", "test_token", "signing_secret", "test_signing_secret")
+
+
+def signing_secret(route: dict, is_test: bool) -> bytes | None:
+    try:
+        return resolve_secret(route.get("test_signing_secret" if is_test else "signing_secret"))
+    except SigningSecretInvalid as exc:
+        raise Unavailable(str(exc)) from None
+
+
+def http_retries(route: dict) -> int:
+    return retry_budget(route.get("max_retries", DEFAULT_HTTP_RETRIES))
 
 
 def routes() -> dict:
@@ -68,6 +91,7 @@ def http_target(route: dict, is_test: bool) -> str:
         raise Unavailable("HTTP_ROUTE_INVALID")
     if route.get("idempotent") is not True:
         raise Unavailable("HTTP_IDEMPOTENCY_NOT_CONFIRMED")
+    signing_secret(route, is_test)  # a configured but unusable secret keeps the delivery pending
     return endpoint
 
 
@@ -106,7 +130,7 @@ def route_for(event: Event, delivery: EventDelivery) -> dict:
 
 def route_fingerprint(route: dict) -> str:
     # Credentials may rotate; recipient, execution identity and mapping must stay bound to the attempt.
-    binding = {key: value for key, value in route.items() if key not in ("token", "test_token")}
+    binding = {key: value for key, value in route.items() if key not in SECRET_KEYS}
     return hashlib.sha256(json.dumps(binding, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -336,6 +360,19 @@ async def prepare(session, delivery_id: int) -> bool:
                 return False
         if not (route.get("action_type") or route.get("rule_code")):
             http_target(route, event.is_test)
+        auto_attempt = 1
+        if before[1] == RETRY_SCHEDULED:
+            last = await session.scalar(
+                select(EventDeliveryRecord)
+                .where(
+                    EventDeliveryRecord.delivery_id == delivery.id,
+                    EventDeliveryRecord.kind == "attempt_started",
+                    EventDeliveryRecord.attempt == delivery.attempts,
+                )
+                .order_by(EventDeliveryRecord.id.desc())
+                .limit(1)
+            )
+            auto_attempt = int((last.detail or {}).get("autoAttempt", 1)) + 1 if last else 1
         delivery.state, delivery.started_at = "processing", clock.now()
         delivery.attempts += 1
         delivery.error, delivery.result = None, None
@@ -345,6 +382,7 @@ async def prepare(session, delivery_id: int) -> bool:
             "attempt_started",
             detail={
                 "routeFingerprint": route_fingerprint(route),
+                "autoAttempt": auto_attempt,
                 **previous,
             },
         )
@@ -463,11 +501,13 @@ async def execute(session, delivery_id: int) -> None:
             endpoint = http_target(route, event.is_test)
             if not event.is_test:
                 await authorize_object(session, await resolve_user(session, route["user"]), event)
+            secret = signing_secret(route, event.is_test)
             headers = {"Idempotency-Key": delivery_key(event, delivery.subscriber_name),
                        "X-Ontology-Id": str(event.ontology_id)}
             token = route.get("test_token" if event.is_test else "token")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
+            auto_attempt = int((started.detail or {}).get("autoAttempt", 1))
             envelope = {
                 "ontologyId": event.ontology_id,
                 "eventId": event.code,
@@ -481,13 +521,27 @@ async def execute(session, delivery_id: int) -> None:
                 "typeVersion": event.definition_snapshot.get("version"),
                 "traceId": event.trace_id,
             }
-            async with (
-                httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client,
-                client.stream("POST", endpoint, json=envelope, headers=headers) as response,
-            ):
-                delivery.result = {"httpStatus": response.status_code}
-                if not 200 <= response.status_code < 300:
-                    raise Unavailable("HTTP_SUBSCRIBER_REJECTED")
+            body = encode_body(envelope)
+            headers = signed_headers(headers, body, secret)
+            try:
+                async with (
+                    httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client,
+                    client.stream("POST", endpoint, content=body, headers=headers) as response,
+                ):
+                    delivery.result = {"httpStatus": response.status_code}
+                    retry_after = response.headers.get("Retry-After")
+            except httpx.RequestError:
+                if schedule_retry(delivery, auto_attempt, http_retries(route), None):
+                    await finish_retry(session, delivery, event, secret is not None)
+                    return
+                raise
+            status = delivery.result["httpStatus"]
+            retries = http_retries(route)
+            if retryable_status(status) and schedule_retry(delivery, auto_attempt, retries, retry_after):
+                await finish_retry(session, delivery, event, secret is not None)
+                return
+            if not 200 <= status < 300:
+                raise Unavailable("HTTP_SUBSCRIBER_REJECTED")
         delivery.state, delivery.error = "delivered", None
     except httpx.RequestError:
         delivery.state, delivery.error = "unknown", "HTTP_RESULT_UNKNOWN_REQUIRES_REVIEW"
@@ -499,6 +553,22 @@ async def execute(session, delivery_id: int) -> None:
         delivery.state, delivery.error = "unknown", "EXECUTION_INTERRUPTED_REQUIRES_REVIEW"
     delivery.finished_at, delivery.next_at = clock.now(), None
     record(session, delivery, "attempt_finished")
+    await aggregate(session, event)
+    await session.flush()
+
+
+def schedule_retry(delivery: EventDelivery, auto_attempt: int, retries: int, retry_after: str | None) -> bool:
+    """Retry on the same row/Idempotency-Key; the worker picks it up again once next_at is due."""
+    if auto_attempt > retries:
+        return False
+    delivery.state, delivery.error = "pending", RETRY_SCHEDULED
+    delivery.finished_at, delivery.next_at = None, clock.now() + backoff(auto_attempt, retry_after)
+    return True
+
+
+async def finish_retry(session, delivery: EventDelivery, event: Event, signed: bool) -> None:
+    record(session, delivery, "attempt_finished", detail={"retryable": True, "signed": signed,
+                                                          "nextAt": delivery.next_at.isoformat()})
     await aggregate(session, event)
     await session.flush()
 

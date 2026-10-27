@@ -25,6 +25,8 @@ class AdapterConfig(ApiModel):
     actions: list[str] = Field(default_factory=list, max_length=100)
     effect_paths: dict[str, str] = Field(default_factory=dict, max_length=100)
     token: SecretStr | None = None
+    # Optional HMAC-SHA256 Webhook signing secret (plaintext or fernet$…); see integration/signing.py.
+    signing_secret: SecretStr | None = None
 
     @field_validator("token")
     @classmethod
