@@ -21,17 +21,21 @@ handoff/xiaobai.md §4 经批准的范围，**只新增数据**，不改 seeds/j
 - actionTypeOverrides → action_type（xiaobai-p4，老板批准的两处既有取值改动，仅此两处）：
   request_replenish.approval 在 ACTION_TYPES.json 原文后追加「（U010812）」，审批人定位到 姚娜；
   sysId EXT-ERP → EXT-WEBHOOK。整行按 ACTION_TYPES.json 原值重建再覆盖这两列，重复灌不会重复追加。
+- actionRunVoids → action_run / action_run_log（xiaobai-p5，老板批准）：旧的 ACT-20261025-0552
+  （按旧配置暂存，参数是文本、通道 EXT-ERP、审批人 王敏）作废：待确认 → 已撤回，写 withdraw_reason /
+  finished_at，alert_id 置空，时间线追加一条作废记录；alertAssignees 的 actionRun=null 同时清掉
+  告警 AL-20261025-0139 的 action_run_id，让演示能从告警重新发起（种子行 is_seed，幂等键不冲突）。
 
-不在这里做：告警状态、既有动作记录（ACT-20261025-0552 仍记 EXT-ERP）、执行层可写字段 / 对象映射；
-也不建服务账号、不绑定 R-019。
+不在这里做：告警状态、执行层可写字段 / 对象映射；也不建服务账号、不绑定 R-019。
 """
 
 from app.common.ontology import DEFAULT_ONTOLOGY_ID
 from app.core.config import get_settings
+from app.core.schema import parse_display_dt
 from app.modules.action.models import ActionType
 from app.modules.admin.models import SysRole, SysRoleMember, SysRoleScope, SysUser
 from app.modules.admin.seeds import _role, _role_scopes
-from app.modules.dynamic.models import Alert
+from app.modules.dynamic.models import ActionRun, ActionRunLog, ActionStatus, Alert
 from app.modules.integration.models import ExtSystem
 from app.modules.integration.seeds import ext_system_row
 from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
@@ -76,7 +80,56 @@ def _alert_assignee(r: Row, ctx: SeedContext) -> Row:
     src = alerts.get(r["alert"])
     if src is None:
         raise ValueError(f"演示告警不在 ALERTS.json：{r['alert']}")
-    return {**_alert(dict(src), dyn), "assignee": r["assignee"]}
+    row = {**_alert(dict(src), dyn), "assignee": r["assignee"]}
+    if "actionRun" in r:  # 显式给出才覆盖关联动作（null = 解除关联）
+        row["action_run_id"] = r["actionRun"]
+    return row
+
+
+def _dyn_actions(ctx: SeedContext) -> tuple[SeedContext, dict[str, Row]]:
+    if "__demo_actions__" not in ctx.cache:
+        root = get_settings().seeds_json_dir
+        dyn = SeedContext(root / "dynamic", root=root)
+        ctx.cache["__demo_actions__"] = (dyn, {a["id"]: a for a in dyn.load("ACTIONS.json")})
+    return ctx.cache["__demo_actions__"]
+
+
+def _void_src(r: Row, ctx: SeedContext) -> tuple[SeedContext, Row]:
+    dyn, actions = _dyn_actions(ctx)
+    src = actions.get(r["action"])
+    if src is None:
+        raise ValueError(f"动作不在 ACTIONS.json：{r['action']}")
+    if (src.get("source") or {}).get("alertId") != r["alert"]:
+        raise ValueError(f"动作 {r['action']} 不是告警 {r['alert']} 发起的")
+    return dyn, src
+
+
+def _action_void(r: Row, ctx: SeedContext) -> Row:
+    from app.modules.dynamic.seeds import _action
+
+    dyn, src = _void_src(r, ctx)
+    return {
+        **_action(dict(src), dyn),
+        "alert_id": None,
+        "status": ActionStatus.withdrawn.name,
+        "withdraw_reason": r["reason"],
+        "finished_at": parse_display_dt(r["at"]),
+    }
+
+
+def _action_void_log(r: Row, ctx: SeedContext) -> Row:
+    from app.modules.dynamic.seeds import _action_log
+
+    dyn, src = _void_src(r, ctx)
+    seq = len(_action_log(dict(src), dyn)) + 1
+    return {
+        "action_run_id": r["action"],
+        "seq": seq,
+        "at": parse_display_dt(r["at"]),
+        "text": f"作废：{r['reason']}",
+        "actor": r["by"],
+        "level": None,
+    }
 
 
 def _action_override(r: Row, ctx: SeedContext) -> Row:
@@ -139,7 +192,23 @@ SEEDS: list[SeedSpec] = [
     _spec(
         ExtSystem, "extSystems", ("code",), ext_system_row, description="Webhook 外部系统（本机地址，无密钥）"
     ),
-    _spec(Alert, "alertAssignees", ("code",), _alert_assignee, description="演示告警处理人"),
+    _spec(ActionRun, "actionRunVoids", ("code",), _action_void, description="作废旧补货申请（已批准）"),
+    _spec(
+        ActionRunLog,
+        "actionRunVoids",
+        ("action_run_id", "seq"),
+        _action_void_log,
+        {"action_run_id": Ref(ActionRun, nullable=False)},
+        "作废时间线",
+    ),
+    _spec(
+        Alert,
+        "alertAssignees",
+        ("code",),
+        _alert_assignee,
+        {"action_run_id": Ref(ActionRun)},
+        "演示告警处理人 / 解除旧关联动作",
+    ),
     _spec(
         ActionType,
         "actionTypeOverrides",

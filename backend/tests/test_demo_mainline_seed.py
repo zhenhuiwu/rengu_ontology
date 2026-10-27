@@ -1,8 +1,8 @@
 """演示主线种子补丁（seed 阶段 demo_mainline）：只新增数据 + 主线的数据前置条件。
 
 整套 seed 在测试外层事务里跑、结束回滚；先跑除 demo_mainline 外的全部阶段拍快照，再跑补丁，
-逐表比对：既有行只允许三处已批准的改动（演示告警 assignee；补货申请 approval 追加审批人编号、
-执行通道 EXT-ERP → EXT-WEBHOOK），其余一个值都不变，别的都是新增行。
+逐表比对：既有行只允许已批准的改动（演示告警 assignee、解除关联动作；补货申请 approval 追加审批人编号、
+执行通道 EXT-ERP → EXT-WEBHOOK；旧动作 ACT-20261025-0552 作废），其余一个值都不变，别的都是新增行。
 """
 
 import re
@@ -26,11 +26,18 @@ TABLES = {
     "ext_system": "code",
     "alert": "code",
     "action_type": "code",
+    "action_run": "code",
+    "action_run_log": "action_run_id::text || '/' || seq::text",
 }
 APPROVED = {
     ("alert", DEMO_ALERT, "assignee"),
     ("action_type", "request_replenish", "approval"),
     ("action_type", "request_replenish", "sys_id"),
+    ("alert", DEMO_ALERT, "action_run_id"),
+    ("action_run", "ACT-20261025-0552", "alert_id"),
+    ("action_run", "ACT-20261025-0552", "status"),
+    ("action_run", "ACT-20261025-0552", "withdraw_reason"),
+    ("action_run", "ACT-20261025-0552", "finished_at"),
 }
 VOLATILE = {"id", "created_at", "updated_at", "lock_version"}
 
@@ -79,6 +86,13 @@ async def test_only_adds_rows_and_sets_demo_alert_assignee(seeded):
     assert added["ext_system"] == ["EXT-WEBHOOK"]
     assert added["alert"] == []
     assert added["action_type"] == []
+    assert added["action_run"] == []
+    assert len(added["action_run_log"]) == 1
+    assert before["alert"][DEMO_ALERT]["action_run_id"] is not None
+    assert after["alert"][DEMO_ALERT]["action_run_id"] is None
+    void = after["action_run"]["ACT-20261025-0552"]
+    assert before["action_run"]["ACT-20261025-0552"]["status"] == "staged"
+    assert void["status"] == "withdrawn" and void["alert_id"] is None and void["withdraw_reason"]
 
 
 async def test_replenish_channel_is_webhook(session, seeded):
@@ -91,7 +105,7 @@ async def test_replenish_channel_is_webhook(session, seeded):
         )
     ).scalar()
     assert sys_code == "EXT-WEBHOOK"
-    # 既有动作记录不改：ACT-20261025-0552 仍记着 EXT-ERP（执行层会拒绝执行旧绑定的记录）
+    # 作废的 ACT-20261025-0552 只改状态 / 关联，通道仍是当时的 EXT-ERP
     run_sys = (
         await session.execute(text("SELECT sys_code FROM action_run WHERE code = 'ACT-20261025-0552'"))
     ).scalar()

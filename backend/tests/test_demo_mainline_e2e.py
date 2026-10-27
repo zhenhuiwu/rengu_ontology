@@ -91,17 +91,17 @@ async def test_mainline_stops_before_webhook(mainline, session):
     assert definition["sysId"] == "EXT-WEBHOOK"
     assert submit_adapter(system, definition).config.actions == ["request_replenish"]
 
-    # ① 既有暂存记录 ACT-0552：参数是自然语言快照，引用对象可见性无法核验 → 不能确认
+    # ① 旧暂存记录 ACT-0552 已作废（已撤回），不再挂在告警上，也不能再确认
     r = await client.get(f"{API}/action-runs/{RUN}", headers=PLANNER)
     assert r.status_code == 200, r.text
     run = r.json()
-    assert (run["sysId"], run["approver"], run["status"]) == ("EXT-ERP", "品类经理 王敏", "待确认")
-    assert run["paramsUnavailable"] == "参数不可用：无法确认全部引用对象的可见性"
+    assert run["status"] == "已撤回"
     assert run["can"]["confirm"] is False
-    r = await client.post(f"{API}/action-runs/{RUN}:confirm", headers=PLANNER, json={})
-    assert r.status_code == 403 and r.json()["code"] == "ACTION_REFERENCE_UNAVAILABLE", r.text
+    r = await client.get(f"{API}/alerts/{ALERT}", headers=PLANNER)
+    assert r.status_code == 200, r.text
+    assert not r.json().get("action"), r.text
 
-    # ② 告警重新发起：认领后仍被既有关联动作挡住
+    # ② 告警重新发起：认领后不再被旧关联挡住，下一个缺口是执行映射
     r = await client.post(f"{API}/alerts/{ALERT}:claim", headers=PLANNER)
     assert r.status_code == 200 and r.json()["status"] == "处理中", r.text
     r = await client.post(
@@ -109,7 +109,8 @@ async def test_mainline_stops_before_webhook(mainline, session):
         headers=PLANNER,
         json={"params": {"product": "1011846", "qty": 205}},
     )
-    assert r.status_code == 409 and r.json()["message"] == "该告警已有关联动作", r.text
+    assert r.status_code != 409, r.text
+    assert r.json()["code"] == "ACTION_EDITS_UNAVAILABLE", r.text
 
     # ③ 新建手动补货申请：暂存时校验执行映射，ontology_edit_rule.field 是自然语言 → 停在这里
     r = await client.post(

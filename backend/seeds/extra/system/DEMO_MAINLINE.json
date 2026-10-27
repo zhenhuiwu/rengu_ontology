@@ -279,7 +279,8 @@
   "alertAssignees": [
     {
       "alert": "AL-20261025-0139",
-      "assignee": "U010011"
+      "assignee": "U010011",
+      "actionRun": null
     }
   ],
   "actionTypeOverrides": [
@@ -288,6 +289,16 @@
       "approvalAppend": "（U010812）",
       "sysId": "EXT-WEBHOOK",
       "note": "已批准（2026-10-27）：审批文字追加审批人编号，执行通道 EXT-ERP → EXT-WEBHOOK；其余列取 ACTION_TYPES.json 原值"
+    }
+  ],
+  "actionRunVoids": [
+    {
+      "action": "ACT-20261025-0552",
+      "alert": "AL-20261025-0139",
+      "at": "2026-10-27 18:10",
+      "by": "本体小白",
+      "reason": "演示主线按新配置（审批人 U010812、执行通道 EXT-WEBHOOK）重新发起，旧记录作废并解除与告警 AL-20261025-0139 的关联",
+      "note": "已批准（2026-10-27）：状态 待确认 → 已撤回，alert_id 置空，追加一条时间线；其余列取 ACTIONS.json 原值"
     }
   ]
 }
