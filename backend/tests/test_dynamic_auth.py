@@ -37,7 +37,8 @@ def test_every_route_depends_on_current_user_and_require_func():
         calls = _calls(r.dependant)
         assert get_current_user in calls, r.path
         names = {getattr(c, "__qualname__", "") for c in calls}
-        assert any(n.startswith("require_func.") for n in names), r.path
+        # require_object_read = 对象读取门槛（object-search / object-detail，同对象详情）
+        assert any(n.startswith("require_func.") or n == "require_object_read" for n in names), r.path
 
 
 async def test_unknown_or_disabled_user_gets_401_on_every_route(dyn, client):  # noqa: F811

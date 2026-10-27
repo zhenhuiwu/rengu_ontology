@@ -9,7 +9,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import Select, case, column, func, or_, select, true, type_coerce
+from sqlalchemy import Select, String, and_, case, cast, column, func, or_, select, true, type_coerce
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1208,6 +1208,44 @@ class AlertService:
             out.append((kind.strip(), ident.strip()))
         return out
 
+    OBJECT_FILTER_MAX_IDS = 5000
+
+    async def _object_filter(self, kinds: list[str], filters: dict[str, Any]) -> Any:
+        """filters=<JSON>：告警对象的业务属性筛选。复用 static / 通用对象浏览同一套绑定、
+        可筛选校验（Bound.check）、取值校验（Bound.cond，422 规则一致）和对象行级范围（Bound.stmt）。
+        结果条件：Alert.obj_kind = objKind 且 Alert.obj_id ∈ 命中的对象编号。同一请求内缓存。"""
+        key = json.dumps([kinds, filters], sort_keys=True, ensure_ascii=False, default=str)
+        cache = self.__dict__.setdefault("_object_filter_cache", {})
+        if key in cache:
+            return cache[key]
+        if len(kinds) != 1:
+            raise validation_failed("objKind", "按对象属性筛选（filters）时须且只能指定一个对象类型 objKind")
+        from app.modules.qa.explore_api import ExploreIn, _bind
+
+        kind = kinds[0]
+        try:
+            _, bound = await _bind(self.session, kind)
+        except NotFound:
+            raise validation_failed("objKind", f"对象类型不存在：{kind}") from None
+        if bound is None:
+            raise validation_failed("filters", f"对象类型 {kind} 未接入数据，不能按属性筛选")
+        bound.check(filters, "筛选")
+        objects = bound.where(await bound.stmt(self.user), ExploreIn(filters=filters)).subquery()
+        if bound.source is None:
+            ids: Any = select(cast(objects.c["__id"], String))
+        else:  # 外部数据源不能跨库子查询：先取编号（上限保护），再 IN
+            async with bound.read(self.session) as reader:
+                rows = (
+                    await reader.execute(select(objects.c["__id"]).limit(self.OBJECT_FILTER_MAX_IDS + 1))
+                ).all()
+            if len(rows) > self.OBJECT_FILTER_MAX_IDS:
+                raise validation_failed(
+                    "filters", f"命中对象超过 {self.OBJECT_FILTER_MAX_IDS} 个，请收窄筛选条件"
+                )
+            ids = [str(r[0]) for r in rows]
+        cache[key] = and_(Alert.obj_kind == kind, Alert.obj_id.in_(ids))
+        return cache[key]
+
     async def _filtered(
         self,
         stmt: Select,
@@ -1218,6 +1256,7 @@ class AlertService:
         obj_kind: str | None = None,
         dim: Sequence[str] | None = None,
         kw: str | None,
+        filters: dict[str, Any] | None = None,
         skip: str | None = None,
     ) -> Select:
         """告警列表 / 分面共用的筛选；skip = 分面自身那一项（分面计数不受自己的选择影响）。"""
@@ -1241,6 +1280,8 @@ class AlertService:
         kinds = self._multi(obj_kind)
         if kinds and skip != "objKind":
             stmt = stmt.where(Alert.obj_kind.in_(kinds))
+        if filters:  # 按对象属性筛选：总是生效（含对象类型分面），否则计数会混入别的对象类型
+            stmt = stmt.where(await self._object_filter(kinds, filters))
         by_kind: dict[str, list[str]] = {}
         for kind, ident in self._dims(dim):
             by_kind.setdefault(kind, []).append(ident)
@@ -1268,9 +1309,17 @@ class AlertService:
         page: PageParams,
         obj_kind: str | None = None,
         dim: Sequence[str] | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> AlertPage:
         stmt = await self._filtered(
-            select(Alert), status=status, level=level, rule_id=rule_id, obj_kind=obj_kind, dim=dim, kw=kw
+            select(Alert),
+            status=status,
+            level=level,
+            rule_id=rule_id,
+            obj_kind=obj_kind,
+            dim=dim,
+            kw=kw,
+            filters=filters,
         )
         stmt = stmt.order_by(*seed_first_order(Alert))
         rows, total = await self.repo.list_page(stmt, page)
@@ -1299,11 +1348,20 @@ class AlertService:
         kw: str | None,
         obj_kind: str | None = None,
         dim: Sequence[str] | None = None,
+        filters: dict[str, Any] | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
         """告警分面：等级 / 规则 / 对象类型 / 各维度值的计数，按其余已选条件过滤（不含自身那一项）。
         只统计当前用户行级可见的告警；维度值每个对象类型取计数最高的 limit 个。"""
-        f = {"status": status, "level": level, "rule_id": rule_id, "obj_kind": obj_kind, "dim": dim, "kw": kw}
+        f = {
+            "status": status,
+            "level": level,
+            "rule_id": rule_id,
+            "obj_kind": obj_kind,
+            "dim": dim,
+            "kw": kw,
+            "filters": filters,
+        }
 
         async def count(column, skip: str) -> list[tuple[Any, int]]:
             stmt = await self._filtered(select(column, func.count()), skip=skip, **f)
