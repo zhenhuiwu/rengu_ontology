@@ -7,11 +7,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser, resolve_user
-from app.core.errors import Unauthorized
 
 SERVICE_PREFIX = "api:"
 
@@ -25,24 +23,7 @@ async def resolve_actor(session: AsyncSession, actor: str) -> CurrentUser:
     """Rebuild the executor from stored actor text; service principals keep their bound role only."""
     if not actor.startswith(SERVICE_PREFIX):
         return await resolve_user(session, actor)
-    from app.modules.admin.api_keys import role_bound
-    from app.modules.admin.models import ServiceAccount, SysRole
-    from app.modules.admin.permissions import role_row_access
+    from app.modules.admin.api_keys import build_service_account_principal
 
-    code = actor[len(SERVICE_PREFIX):]
-    account = await session.scalar(select(ServiceAccount).where(ServiceAccount.code == code))
-    if account is None or account.revoked_at is not None:
-        raise Unauthorized("服务账号已吊销或不存在", details={"principal": actor})
-    role = await session.get(SysRole, account.role_id)
-    ontology_id = session.info.get("ontology_id")
-    if role is None or ontology_id is None or not await role_bound(session, role.id, ontology_id):
-        raise Unauthorized("服务账号角色未绑定此本体工作空间", details={"principal": actor})
-    return CurrentUser(
-        id=account.code,
-        name=account.name,
-        func=role.func if isinstance(role.func, dict) else {},
-        roles=(role.code,),
-        row_filters=await role_row_access(session, [role]),
-        is_service_account=True,
-        ontology_id=ontology_id,
-    )
+    # 本体小白公开函数：未吊销 + 角色绑定当前本体空间（bind_ontology 默认 True），否则 401
+    return await build_service_account_principal(session, actor[len(SERVICE_PREFIX):])
