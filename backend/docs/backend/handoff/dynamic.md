@@ -229,7 +229,7 @@
 
 ## dynamic-r5（2026-10-27）：告警按对象属性筛选、单对象动态摘要
 
-无新增迁移，alembic 单头仍是 `dynamic_0024`。前端未改（`filters` 目前只有接口能用，告警页没有入口）。
+无新增迁移，已变基到 master c3db490，alembic 单头是 `admin_0025`。前端未改（`filters` 目前只有接口能用，告警页没有入口）。
 
 - **告警 `filters=<JSON>`**（更正 r4 的「没有做」）：`GET /alerts` 和 `GET /alerts/facets` 新增 `filters`，格式与 `GET /object-types/{id}/facets` 的 `filters` 相同（`{"属性编码": ["枚举值", …]}`，区间写 `{"min":…,"max":…}`）。用法：
   - 必须同时给且只给一个 `objKind`；不给或给多个都返回 422（字段 `objKind`）。
@@ -239,23 +239,25 @@
   - 分面接口里，`filters` 对每一项都生效，包括 `objKind` 分面本身（否则计数会混入其他对象类型），这和其余参数「不受自身选择影响」的规则不同。同一请求内的条件有缓存。
   - 代码在 `service.py` 的 `AlertService._object_filter`，接入点是 `_filtered`。
 - **单对象动态摘要**：`GET /object-types/{objectId}/objects/{objId}/dynamic-summary?limit=5`（`limit` 取 1–50，表示每段最近几条），给问数和 AI 只读使用。代码在 `summary.py` 的 `ObjectDynamicSummary`，路由在 `rules_router.py`。
-  - 入口要求 `object-types` view，与生命周期接口相同。对象类型不存在返回 404。对象本身先过 `visible_references`（与告警维度同一行级加唯一编码谓词）：不可见返回 404，不区分「不存在」，没有接入行级映射的对象类型也一律 404。
+  - 入口与对象详情相同：`require_object_read`（`object-search` 或 `object-detail` view），并声明 `require_api_scope("objects:read")`，所以 API 密钥服务账号持 `objects:read` 即可调用，其他 scope 的密钥返回 403。对象类型不存在返回 404。对象本身先过 `visible_references`（与告警维度同一行级加唯一编码谓词）：不可见返回 404，不区分「不存在」，没有接入行级映射的对象类型也一律 404。
   - `alerts`：需要 `alerts` view。返回未关闭（待处理加处理中）告警的 `openCount`、`byStatus` 和最近 `latest`；复用 `AlertService._filtered`、`_visible_list`，输出和 `GET /alerts` 相同。
   - `ruleHits`：需要 `rules` view。返回 `total` 和最近 `latest`，经 `scoped_instances`，输出用 `RuleService.hit_out`。
-  - `lifecycle`：对象类型没有生命周期时为 `defined:false`。有生命周期时返回：
+  - `lifecycle`：需要 `object-types` view（与 `/lifecycle/*` 相同）。对象类型没有生命周期时为 `defined:false`。有生命周期时返回：
     - `current.state`：优先读对象数据里的生命周期字段（`Lifecycle.field` 是展示文本，依次按属性编码、括号里的编码、显示名去匹配已接入属性；读取时使用对象详情同一套绑定和行级范围）；读不到时退回最近一次变化的 `to`，并在 `source` 里标明是 `object` 还是 `lastChange`。
     - `lastChangeTo`：最近一次变化的新状态。
     - `changeTotal`、`changes`、`illegalTotal`、`illegal`（`transition` 为空的那些变化）。变化记录按 `(对象类型, objId)` 走 `scoped_instances`。注意：现有的 `/lifecycle/changes` 不做行级裁剪，摘要比它更严。
   - `actionRuns`：需要 `action-center` view。直接调用 `ActionService.search(scope=all, objKind, objId)`，返回 `total`、`statusCounts`、`latest`。
-  - 缺少某段的页面权限时，该段返回 `{"available": false, "reason": "no-permission"}`，不报 403。
+  - 缺少某段的页面权限时，该段返回 `{"available": false, "reason": "no-permission"}`，不报 403；四段都没有权限时也返回 200（只有对象头）。
+  - **服务账号的限制（待决定）**：`SCOPE_PAGES["objects:read"]` 只给 `object-search` / `object-detail`，所以 `objects:read` 密钥调用时四段全是 `available:false`（已实测）。要让服务账号看到动态段，需要 本体小白 在 `api_keys.py` 给 `objects:read` 加上 `alerts` / `rules` / `object-types` / `action-center` view，或者新增一个 `dynamic:read` scope；也可以由产品决定「对象可读即可看摘要段」。本轮没有自行放宽权限。
   - `objLabel` 取各段记录里的对象名称，取不到时使用 objId。
-- 本轮最小自测：`test_dynamic_alerts.py::test_object_property_filters`（逐个枚举值核对列表 total 和分面计数一致，并覆盖 5 种 422 × 2 个接口）；`test_dynamic_summary.py`（与 `/alerts`、`/action-runs` 交叉核对，检查 limit 截断、生命周期字段、404 / 422）。`test_dynamic_auth.py` 通过（每个路由都有 `require_func`、401）。
+- 本轮最小自测：`test_dynamic_alerts.py::test_object_property_filters`（逐个枚举值核对列表 total 和分面计数一致，并覆盖 5 种 422 × 2 个接口）；`test_dynamic_summary.py`（与 `/alerts`、`/action-runs` 交叉核对，检查 limit 截断、生命周期字段、404 / 422；`objects:read` 密钥 200、`meta:read` 密钥 403）。`test_dynamic_auth.py` 通过（每个路由都有 `require_func` 或 `require_object_read`、401）。
 
 **交给 Codex 测试的部分（本轮未覆盖）**
 1. `filters` 在外部数据源对象类型上的行为（`bd.read` 取编号、5000 上限的 422），以及区间筛选和多键组合。
 2. `filters` 与对象读取权限的组合：对象行级范围比告警范围窄时，被筛掉的告警不应出现。另外，用户没有对象读取权限时，`Bound.stmt` 会抛出的错误码是什么，需要确认后写进断言。
 3. 告警页接入 `filters`（前端未做）。
-4. 摘要的分段权限：缺 `alerts`、`rules` 或 `action-center` view 时对应段为 `available:false`；缺 `object-types` view 时 403。
+4. 摘要的分段权限：缺 `alerts`、`rules`、`object-types` 或 `action-center` view 时对应段为 `available:false`；缺对象读取（object-search / object-detail）时 403。
 5. 摘要的行级可见性：受限角色看不见的对象返回 404；对象可见但部分告警、动作对应的维度不可见时的裁剪；没有行级映射的对象类型返回 404 是否符合预期。
 6. 生命周期 `current`：对象数据和变化记录不一致时（种子里 SO202610250720852 的对象数据是「已签收」，变化记录是非法迁移到「待支付」）该以谁为准，需要产品确认；外部数据源或未接入数据时会退回 `lastChange`。
 7. 摘要 `limit` 边界和性能（大量命中或动作时的 count 开销）。
+8. 摘要的 API 密钥路径：密钥授予与账号授予取交集后的分段结果、密钥的 IP 白名单 / 配额 / 吊销 / 过期对此路由的效果；若 `SCOPE_PAGES` 扩展，需补分段可见断言。
