@@ -421,3 +421,89 @@
 - **唯一新增的定义能力：指标同义词 / 说明**。原先没有结构化来源，只有 def_rows 展示行「同义词」，种子还把它抄给了全部 15 个指标。现在 `metric_versions.META_KEYS = {synonyms: 同义词, desc: 说明}`，变更单 metric/def 项 `synonyms`（词列表或分隔文本）/ `desc` 可写（writeback.metric_def 校验），快照 metrics 节每项带 `synonyms`/`desc`（sections.MetricsSection current 与 seed_section 一致），restore_metrics 整版回滚恢复（旧快照没有该键时不改）。不进 `definition()`，所以不升口径版本、不触发试算。种子 `seed_def_rows`：METRIC_DEF.json 的「同义词」「说明」只给 METRIC_LIST 首项（gmv），其余指标不再继承 gmv 的“营业额、流水…”。没有改种子 JSON，dev 库没有重灌（库里旧行要重灌种子才会变）。
 - **给 qa**：维度默认层级用 `defaultLevel.api`；层级物理列用 `levels[i].table/column`，为 `null` 就是定义里没写物理列，别兜底猜；`parentValue` 指向同一维度另一条 dimValue 的 `id`。time 维度的月取值 parent 是「2026Q4」这类季度编码，但种子没有季度取值，所以 `parentValue=null`、`parentName` 给原文。属性物理列用 `column`，不要用 api。
 - **测试**（独立库 rengu_test_static_t0，只跑改动相关的文件）：`test_static_semantic_map.py` 12 passed（新增 qa 字段、上级/旧快照、同义词 CR 发布 + 整版回滚、非法值 6 例）；`test_static.py`、`test_static_trials.py`、`test_static_build_writes.py`、`test_static_writeback.py`、`test_static_cr_write.py` 85 passed / 1 failed。失败的 `test_static.py::test_migration_round_trip` 在未改动的 06a1202 上同样失败：`migrations/versions/admin_0025_api_scopes_row_scope.py:165` 拒绝破坏性降级，不是静态模块的问题。ruff check/format 通过。
+
+## 未完成清单（交 Codex）
+
+整理时间 2026-10-27（UTC+8），基于 master `e657b08`。每条依次写：是什么 / 为什么没做（待定、Codex 修复或环境问题）/ 涉及文件和接口 / 怎么验证。
+
+### A. 待老板 / PDE 决定（Codex 不要自行开工）
+
+1. **#13 草稿项和定义表分开存**
+   - 是什么：关系、对象类型、指标、知识的草稿行，以及维度取值和映射的草稿行（`draft_cr`），现在和已发布行放在同一张表里，读接口靠 status / draft_cr 过滤。按 §1.3 应该只存在 `cr_item` 里。
+   - 为什么没做：**待定**。这是数据迁移加大重构（历史草稿没有对应的 CR、要删 `draft_cr` 列、要改回滚时“保留为草稿”的语义、其他模块有外键指向草稿对象），static-t5 评估后决定只出设计、不实现。
+   - 涉及文件和接口：设计见上文「### #13 草稿项仍在定义表 —— 评估结论：不在本批实现（设计说明）」（static-t5 节）；`app/modules/static/models.py:12-25、559、584`；读路径 `read_pages.py:69、255、287、592`、`mapping_pages.py:33-117`；`writeback.apply_crs` / `restore_*`。
+   - 怎么验证（批准后）：按设计分 4 步做，每步单独提交。新写入不产生定义表草稿行；`published_only` 替换全部散落的过滤后，`test_static*.py` 全部通过；回滚不再生成新的草稿行；最后一步迁移的 upgrade / downgrade 在独立库里往返通过。
+
+2. **种子缺季度维度取值，月份 dimValue 的 `parentValue` 为 null**
+   - 是什么：`backend/seeds/json/static/DIM_ITEMS.json:65、75、88` 等处，time 维度月份取值的 `parent` 是 `2026Q4`，但种子里没有季度层的取值，所以 `semantic_map` 给出 `parentValue=null`（`parentName` 原样）。
+   - 为什么没做：**待定**。要改现有种子取值（以及与之一致的 mock / 快照），需老板批准；静态规则是不改 mock 数据。
+   - 涉及文件和接口：`DIM_ITEMS.json`；`app/modules/static/semantic_map.py:19-23、147`；`app.contracts.static.semantic_map`。
+   - 怎么验证（批准后）：补季度取值后重灌测试库；`test_static_semantic_map.py` 里加断言，确认月份 dimValue 的 `parentValue` = 该季度取值的 `id`，季度的 `levelNo` 小于月份；`test_static.py` 里 `current()` 和 `seed_section()` 的一致性测试仍通过。
+
+3. **事件载荷字段没有枚举（enum）**
+   - 是什么：事件类型定义的载荷字段只有 `name/api/type/required/description/sample`（`app/modules/event/models.py:102-117` `EventPayloadField`），没有可选取值。能力目录 events 节的 `payload[]`（`app/modules/static/capabilities.py:355-358`）因此给不出 `enum`。Palantir 在等静态补上，之后由 Palantir 在接收端校验。
+   - 为什么没做：**待定**。表属于事件模块，要加列（迁移，接在当前头之后）、改事件类型的编辑、写回和快照（`event/sections.py:148`），需要 PDE 指定由谁改、确定列的形状（建议 `enum: list[str] | null`，规则同动作参数的 `literal_enum_choices`）。
+   - 涉及文件和接口：`event/models.py:102`、`event/sections.py:148`、`event/ingress.py:41-48`（`validate_fields`，由 Palantir 加取值校验）、`static/capabilities.py:355`（只在声明了取值时加 `enum` 键，目录形状只增不改）。
+   - 怎么验证：`test_static_capabilities.py` 断言声明了取值的载荷字段带 `enum`、没声明的不带；事件模块测试覆盖发布、回滚后 enum 恢复；Palantir 侧对不在 enum 里的值返回 422。
+
+### B. 已知失败的测试（不是静态代码的问题，Codex 修复或交对应模块）
+
+4. **`test_static.py::test_migration_round_trip` 失败**
+   - 是什么：降级往返时被有意阻断的 downgrade 打断，在干净的 master 上同样失败。
+   - 为什么没做：**Codex 修复 / 交对应模块决定**。阻断点是 `migrations/versions/admin_0025_api_scopes_row_scope.py:165` 和 `migrations/versions/notify_0022_inbox.py:67`，两处都是 `raise RuntimeError(... destructive downgrade is blocked)`，静态不能改。
+   - 涉及文件和接口：上面两个迁移文件；`backend/tests/test_static.py` 里的 `test_migration_round_trip`。
+   - 怎么验证：二选一。要么由对应模块决定允许降级；要么把往返测试改成只往返到最早的“可降级”版本（或对这些 revision 加白名单跳过）。之后在独立库里跑 `pytest tests/test_static.py -k migration_round_trip` 通过。
+
+5. **前端检查脚本在 master 上就失败**
+   - 是什么：`frontend/scripts/check-static-pages.mjs` 报 `crErr is not a function`，因为 `MetricsBody.vue:15/172` 引入了 `crErr`，脚本的 `staticApi` 桩（`check-static-pages.mjs:27`）没提供，补一行桩即可。另外 `check-context-integration`、`check-qa-integration`、`check-qa-session-context`、`check-real-object-resolver`、`check-object-ask`、`check-object-behavior`、`check-real-data` 在 master 上也原本就失败（缺桩依赖 / 断言过时，static-t6 时确认，改动前后报错一致）。
+   - 为什么没做：**Codex 修复**。这些脚本都不归静态所有。
+   - 涉及文件和接口：`frontend/scripts/check-*.mjs`。
+   - 怎么验证：`cd frontend && node scripts/check-static-pages.mjs` 等逐个执行，退出码为 0；`vue-tsc --noEmit` 仍通过。
+
+### C. 之前各节里仍然没做完的条目（Codex 可做）
+
+6. **按角色范围的分面端到端测试**（原第 22 条，部分完成）
+   - 是什么：真实的 `row_filter` 已经接上，但缺一条用例证明分面按角色范围计数，以及 DENY_ALL 时全部计数为 0。
+   - 为什么没做：**Codex 修复**（只缺测试）。
+   - 涉及文件和接口：`app/modules/static/explorer.py`（facets）、`tests/test_static_explorer.py` 里的 `test_facets_apply_row_filter`、row-access.md。
+   - 怎么验证：新用例用真实角色（不 monkeypatch）请求 facets，范围内计数正确，DENY_ALL 计数全为 0。
+
+7. **writeback 注释与代码不一致**（评审遗留，行号已漂移）
+   - 是什么：原评审指出 `writeback.py:773-775` 的注释和 `:780` 的代码不一致，现在行号已经变了，需要重新定位。
+   - 为什么没做：**待核**（Codex 修复）。
+   - 涉及文件和接口：`app/modules/static/writeback.py`。
+   - 怎么验证：注释和代码一致；`test_static_writeback.py` 通过。
+
+8. **CR 写权限没有按目标页映射**（原 9f，复核结论有出入）
+   - 是什么：2026-10-27 的复核表写的是“仍统一 `releases:manage`”，static-t2 复核写的是已按目标页 manage（`static/permissions.py` `check_target` / `check_cr`）。
+   - 为什么没做：**待核**（Codex 修复）。
+   - 涉及文件和接口：`static/permissions.py`、`cr_write.py`。
+   - 怎么验证：加一条测试：只有 metrics:manage、没有 releases:manage 的用户能写 metric 目标的 CR，但不能写 object 目标的 CR。
+
+9. **其他负责人 / PDE 的遗留**（只列出，静态不改）
+   - `CR_DETAILS.json` 仍是一次性导出的（原第 6 条，`seeds/extra/static/CR_DETAILS.json`、`seeds/__init__.py:529`，等 PDE 改 `scripts/export-mock.mjs`）。
+   - 启动时只在 versioning 切真接口时才读 `/releases/current`（原第 7 条，`src/api/index.ts`、`api/releases.ts`，PDE）。
+   - 对 `ROLLBACK_FIRST_RELEASE` 的非静态文档（api-index.md:102、versioning-api.md:37、`contracts/versioning.py`）已经交给本体小白。
+   - `action/checker.py:450` 不校验「枚举列表」的元素（动作模块）。
+   - 事件接收端不限来源（`event/ingress.py:126`，事件模块）。
+   - 动作工具 schema 不带 enum（`machine/tools.py:128-131`，Palantir）。
+   - 怎么验证：由各负责人在自己的交接里关闭。
+
+10. **设计限制（保持现状，记录在案）**
+    - facets 只覆盖 sql_guard 登记过的类型（原第 19 条），新类型要先登记业务表，再写 `explorer_meta.json` 的 `backing`。
+    - 回滚不恢复运行数据（指标当前值、取值计数、关系质量）。
+    - 层级 source 不是「列 / 对象.属性 / 对象」写法时，`semantic_map` 的物理绑定为 null，不猜（static-t7）。
+
+### D. 明确延后（二、三期，本期不做）
+
+11. **属性级权限**：现在只有页面 / 功能级权限和行级范围，属性只有敏感 / hidden 标记，没有按角色控制属性可见。
+12. **本体分支（branching）**：变更单基于当前版本线性发布，不支持分支并行和合并。
+13. **跨本体复用 / 模板**：多本体（多空间）同编码只能各自定义、各自发布（static-t0 已测互不影响），没有共享定义或从模板创建。
+14. **统一的 synonym 表**：`dim_mapping` 按维度单独建，统一的同义词表以后再做（见「[推断] 决定清单」）。
+
+以上 11-14 条都要先由老板 / PDE 出范围再设计。验收在设计时定。
+
+### E. 演示环境配置
+
+- **没有静态专属的演示环境配置**。静态只用到共用项：前端 `VITE_API_MODE` / `VITE_API_REAL_MODULES` 里的 `static` 开关键（`frontend/.env.example`），后台 `demo_admin_codes`（`cr_write.py:297`，第一个人作为默认审核人，发起人就是他时提交会返回 409 `CR_NO_REVIEWER`），以及 `X-Demo-As` 登录头（未知 / 停用的返回 401）。
+- 怎么验证：演示环境里 `VITE_API_REAL_MODULES` 包含 `static`（或留空 + real 模式），`demo_admin_codes` 第一个人在 sys_user 里存在并且有效。
