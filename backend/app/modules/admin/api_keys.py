@@ -124,10 +124,11 @@ class KeyPolicyFields(ApiModel):
     # null = 该 scope 下全部类型；列表 = 只允许这些类型编号（空列表 = 全部拒绝）
     action_types: list[TypeCode] | None = Field(default=None, max_length=200)
     event_types: list[TypeCode] | None = Field(default=None, max_length=200)
+    function_types: list[TypeCode] | None = Field(default=None, max_length=200)
     rate_per_minute: int | None = Field(default=None, ge=1, le=100_000)
     quota_per_day: int | None = Field(default=None, ge=1, le=100_000_000)
 
-    @field_validator("action_types", "event_types")
+    @field_validator("action_types", "event_types", "function_types")
     @classmethod
     def unique_codes(cls, values: list[str] | None) -> list[str] | None:
         return None if values is None else list(dict.fromkeys(values))
@@ -154,7 +155,7 @@ class KeyCreateIn(KeyPolicyFields):
 
     @model_validator(mode="after")
     def allowlists_need_scope(self):
-        check_allowlist_scopes(self.scopes, self.action_types, self.event_types)
+        check_allowlist_scopes(self.scopes, self.action_types, self.event_types, self.function_types)
         return self
 
 
@@ -169,7 +170,9 @@ class KeyPolicyIn(KeyPolicyFields):
         return None if values is None else normalize_scopes(values)
 
 
-def check_allowlist_scopes(scopes: list[str], action_types, event_types) -> None:
+def check_allowlist_scopes(scopes: list[str], action_types, event_types, function_types=None) -> None:
+    if function_types is not None and "functions:invoke" not in scopes:
+        raise ValueError("函数白名单需要 functions:invoke 权限范围")
     if action_types is not None and not {"actions:dry-run", "actions:execute"} & set(scopes):
         raise ValueError("动作类型白名单需要 actions:dry-run 或 actions:execute")
     if event_types is not None and "events:ingest" not in scopes:
@@ -353,6 +356,7 @@ async def key_rows(session: AsyncSession, keys: list[ApiKey], at: datetime) -> l
                 "binding": binding,
                 "actionTypes": key.action_types,
                 "eventTypes": key.event_types,
+                "functionTypes": key.function_types,
                 "ratePerMinute": key.rate_per_minute,
                 "quotaPerDay": key.quota_per_day,
                 "usage": usage[key.id],
@@ -593,6 +597,7 @@ async def create_key(
         note=body.note,
         action_types=body.action_types,
         event_types=body.event_types,
+        function_types=body.function_types,
         rate_per_minute=body.rate_per_minute,
         quota_per_day=body.quota_per_day,
         creator=f"{user.name}（{user.id}）",
@@ -642,11 +647,14 @@ async def update_key_policy(
         key.func_snapshot = clamp_permissions(
             key.func_snapshot, scope_permissions(scopes, {page: "manage" for page in key.func_snapshot})
         )
-    for name in ("action_types", "event_types", "rate_per_minute", "quota_per_day"):
+    if "function_types" in fields and key.function_types is not None and "functions:invoke" in scopes:
+        if body.function_types is None or not set(body.function_types) <= set(key.function_types):
+            raise Forbidden("只能收窄函数白名单，扩大授权请新建密钥")
+    for name in ("action_types", "event_types", "function_types", "rate_per_minute", "quota_per_day"):
         if name in fields:
             setattr(key, name, getattr(body, name))
     try:
-        check_allowlist_scopes(scopes, key.action_types, key.event_types)
+        check_allowlist_scopes(scopes, key.action_types, key.event_types, key.function_types)
     except ValueError as exc:
         raise AppError(str(exc), code="VALIDATION_FAILED", status_code=422) from exc
     key.updated_at = security_now()
@@ -850,6 +858,7 @@ class ApiKeyContext:
     scopes: tuple[str, ...]
     action_types: tuple[str, ...] | None
     event_types: tuple[str, ...] | None
+    function_types: tuple[str, ...] | None = None
     service_account_id: int | None = None
     service_account_code: str | None = None
     role_id: int | None = None
@@ -1014,6 +1023,7 @@ async def authenticate_key(
         scopes=tuple(scopes),
         action_types=None if key.action_types is None else tuple(key.action_types),
         event_types=None if key.event_types is None else tuple(key.event_types),
+        function_types=None if key.function_types is None else tuple(key.function_types),
         service_account_id=account.id if account else None,
         service_account_code=account.code if account else None,
         role_id=account.role_id if account else None,
@@ -1038,6 +1048,7 @@ async def authenticate_key(
         api_scopes=context.scopes,
         action_allowlist=context.action_types,
         event_allowlist=context.event_types,
+        function_allowlist=context.function_types,
         quota=quota,
     )
 
@@ -1096,7 +1107,11 @@ def _path_value(spec: str | None, request: Request) -> str | None:
 
 
 def enforce_api_allowlist(
-    request: Request, *, action_type: str | None = None, event_type: str | None = None
+    request: Request,
+    *,
+    action_type: str | None = None,
+    event_type: str | None = None,
+    function_type: str | None = None,
 ) -> None:
     """Per-key allowlist check for type codes known only after parsing the body. No-op for humans."""
     context: ApiKeyContext | None = getattr(request.state, "api_key", None)
@@ -1108,12 +1123,23 @@ def enforce_api_allowlist(
         and action_type not in context.action_types
     ):
         raise Forbidden("API 密钥不允许调用此动作类型", details={"actionType": action_type})
+    if (
+        function_type is not None
+        and context.function_types is not None
+        and function_type not in context.function_types
+    ):
+        raise Forbidden("API 密钥不允许调用此函数", details={"functionType": function_type})
     if event_type is not None and context.event_types is not None and event_type not in context.event_types:
         raise Forbidden("API 密钥不允许写入此事件类型", details={"eventType": event_type})
 
 
 def require_api_scope(
-    scope: str, *, action_type: str | None = None, event_type: str | None = None, key_only: bool = False
+    scope: str,
+    *,
+    action_type: str | None = None,
+    event_type: str | None = None,
+    function_type: str | None = None,
+    key_only: bool = False,
 ):
     """FastAPI dependency for machine-callable routes, e.g.
 
@@ -1140,6 +1166,7 @@ def require_api_scope(
             request,
             action_type=_path_value(action_type, request),
             event_type=_path_value(event_type, request),
+            function_type=_path_value(function_type, request),
         )
         return user
 

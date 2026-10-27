@@ -44,4 +44,7 @@ async def read_one(notification_id: Annotated[int, Path(ge=1)], session: Session
 async def channel_status(session: SessionDep):
     # Readiness is backed by the deployed table; no user inbox contents leave this settings endpoint.
     await session.execute(select(Notification.id).limit(0))
-    return {"inbox": {"enabled": True, "sources": ["cr-review"]}, "externalChannelsConfigured": False}
+    return {
+        "inbox": {"enabled": True, "sources": ["cr-review", "page-subscription"]},
+        "externalChannelsConfigured": False,
+    }

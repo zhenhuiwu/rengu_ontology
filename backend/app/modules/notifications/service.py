@@ -1,6 +1,8 @@
 """One real source and one recipient boundary shared by list/count/read operations."""
 
-from sqlalchemy import func, select, update
+from datetime import timedelta
+
+from sqlalchemy import and_, func, or_, select, update
 
 from app.common.auth import check_func, resolve_user
 from app.common.ontology import require_ontology_id
@@ -18,8 +20,8 @@ async def own_scope(session, user):
     ontology_id = require_ontology_id(session)
     if user.ontology_id != ontology_id or user.ontology_ids is not None or user.is_service_account:
         raise Forbidden("站内通知仅供当前本体的本人身份访问")
-    recipient_id = await session.scalar(
-        select(SysUser.id)
+    account = await session.scalar(
+        select(SysUser)
         .join(OntologyMember, OntologyMember.user_id == SysUser.id)
         .where(
             SysUser.code == user.id,
@@ -28,9 +30,23 @@ async def own_scope(session, user):
             OntologyMember.role.in_(("owner", "editor", "viewer")),
         )
     )
-    if recipient_id is None:
+    if account is None:
         raise Forbidden("没有当前本体的站内通知访问权限")
-    return Notification.ontology_id == ontology_id, Notification.recipient_id == recipient_id
+    from app.modules.qa.models import QaPage
+    from app.modules.qa.repo import PageRepo
+
+    visible = select(QaPage.code).where(
+        PageRepo(session).visible_clause(account.id, account.dept, include_shared=True)
+    )
+    page_allowed = user.func.get("qa-pages") in ("view", "manage")
+    return (
+        Notification.ontology_id == ontology_id,
+        Notification.recipient_id == account.id,
+        or_(
+            Notification.source_kind == "cr",
+            and_(Notification.source_kind == "page", Notification.target_code.in_(visible), page_allowed),
+        ),
+    )
 
 
 async def count_unread(session, scope):
@@ -49,7 +65,7 @@ async def inbox(session, user, page: PageParams, unread_only: bool = False):
     p = page.clamp(total)
     rows = await session.execute(
         select(Notification, ChangeRequest.code)
-        .join(ChangeRequest, ChangeRequest.id == Notification.cr_id)
+        .outerjoin(ChangeRequest, ChangeRequest.id == Notification.cr_id)
         .where(*selected)
         .order_by(Notification.created_at.desc(), Notification.id.desc())
         .offset(p.offset)
@@ -59,8 +75,8 @@ async def inbox(session, user, page: PageParams, unread_only: bool = False):
         "items": [
             {
                 "id": str(row.id),
-                "kind": "cr",
-                "objId": code,
+                "kind": row.source_kind,
+                "objId": row.target_code if row.source_kind == "page" else code,
                 "title": row.title,
                 "desc": row.description,
                 "time": _fmt_dt(row.created_at),
@@ -137,3 +153,105 @@ async def review_submitted(session, cr, event, submitter):
         )
     )
     await session.flush()
+
+
+async def page_subscription(session, event):
+    """Notify only current page recipients, without forwarding the owner's cached digest."""
+    from app.modules.qa.models import QaPage, QaPageSubscription, SubChannel
+    from app.modules.qa.page_schedule import _recipients
+    from app.modules.qa.repo import PageRepo
+
+    ontology_id = require_ontology_id(session)
+    payload = event.payload or {}
+    if (
+        payload.get("ontologyId") != ontology_id
+        or not isinstance(payload.get("pageId"), str)
+        or not isinstance(payload.get("to"), list)
+        or any(not isinstance(code, str) for code in payload["to"])
+    ):
+        raise AppError("页面订阅来源无效", code="NOTIFICATION_SOURCE_INVALID", status_code=422)
+    if payload.get("channel") != SubChannel.inbox.name:
+        raise AppError("外部通知渠道尚未配置", code="NOTIFICATION_CHANNEL_UNAVAILABLE", status_code=503)
+    page = await session.scalar(select(QaPage).where(QaPage.code == payload["pageId"]))
+    if page is None:
+        return
+    sub = await session.scalar(select(QaPageSubscription).where(QaPageSubscription.page_id == page.id))
+    if sub is None or not sub.enabled or sub.channel != SubChannel.inbox:
+        return
+    current, _ = await _recipients(session, page, sub)
+    for code in sorted(set(payload["to"]) & set(current)):
+        try:
+            user = await resolve_user(session, code)
+            check_func(user, "qa-pages", "view")
+            scope = await own_scope(session, user)
+        except AppError as error:
+            if error.status_code not in (401, 403):
+                raise
+            continue
+        account = await session.scalar(select(SysUser).where(SysUser.code == code))
+        if not await PageRepo(session).is_visible(
+            page.id, PageRepo(session).visible_clause(account.id, account.dept, include_shared=True)
+        ):
+            continue
+        if await session.scalar(
+            select(Notification.id).where(*scope, Notification.source_outbox_id == event.id)
+        ):
+            continue
+        session.add(
+            Notification(
+                source_kind="page",
+                source_outbox_id=event.id,
+                target_code=page.code,
+                recipient_id=account.id,
+                title=f"页面订阅：{page.name}"[:200],
+                description="订阅页面已更新，请打开页面查看当前权限下的结果。",
+                created_at=event.created_at,
+                created_by="system:page-subscription",
+            )
+        )
+    await session.flush()
+
+
+async def dispatch_workspace(session, *, limit: int = 100):
+    from app.common.outbox import OutboxEvent
+
+    ontology_id = require_ontology_id(session)
+    rows = list(
+        await session.scalars(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.topic == "qa.page.subscription",
+                OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id),
+                OutboxEvent.dispatched_at.is_(None),
+                OutboxEvent.available_at <= clock.now(),
+            )
+            .order_by(OutboxEvent.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+    )
+    for event in rows:
+        try:
+            async with session.begin_nested():
+                await page_subscription(session, event)
+        except Exception as error:
+            # Never persist exception text: drivers/payloads can contain private data or credentials.
+            event.attempts += 1
+            event.last_error = error.code if isinstance(error, AppError) else "NOTIFICATION_DISPATCH_FAILED"
+            event.available_at = clock.now() + timedelta(seconds=min(3600, 30 * 2 ** min(event.attempts, 7)))
+        else:
+            event.attempts += 1
+            event.last_error = None
+            event.dispatched_at = clock.now()
+    await session.flush()
+    return len(rows)
+
+
+async def dispatch_subscriptions():
+    from app.jobs.scope import scoped_sessions, workspace_ids
+
+    count = 0
+    for ontology_id in await workspace_ids():
+        async with scoped_sessions(ontology_id)() as session, session.begin():
+            count += await dispatch_workspace(session)
+    return count

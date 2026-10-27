@@ -176,11 +176,11 @@ watch([() => q('key'), cpage, () => JSON.stringify(currentApiContext())], async 
 interface Form {
   name: string; env: '生产' | '测试'; scopes: KeyScope[]; bindKind: '角色' | '服务账号'; role?: string; account?: string; saScope?: string; life: string; ip: string; note: string;
   // 真模式：主体（当前用户 / 服务账号）、动作与事件类型白名单（null = 不限制）、限流配额（null = 不限制）
-  principal: '用户' | '服务账号'; saId?: string; limitActions: boolean; actionTypes: string[]; limitEvents: boolean; eventTypes: string[];
+  principal: '用户' | '服务账号'; saId?: string; limitActions: boolean; actionTypes: string[]; limitEvents: boolean; eventTypes: string[]; limitFunctions: boolean; functionTypes: string[];
   rate: number | null; quota: number | null;
 }
 const blank = (): Form => ({ name: '', env: '生产', scopes: [], bindKind: '角色', role: undefined, account: undefined, saScope: undefined, life: '90', ip: '', note: '',
-  principal: '用户', saId: undefined, limitActions: false, actionTypes: [], limitEvents: false, eventTypes: [], rate: null, quota: null });
+  principal: '用户', saId: undefined, limitActions: false, actionTypes: [], limitEvents: false, eventTypes: [], limitFunctions: false, functionTypes: [], rate: null, quota: null });
 const form = reactive<Form>(blank());
 const formSnap = ref('');
 const createOpen = computed(() => q('form') === 'create');
@@ -192,7 +192,7 @@ watch(createOpen, (open) => {
   secret.value = null; saved.value = false; tried.value = false;
   Object.assign(form, blank());
   const src = keys.value.find((k) => k.id === q('from')) ?? (remoteDetail.value?.id === q('from') ? remoteDetail.value : null);
-  if (src) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], bindKind: src.binding.kind === '服务账号' ? '服务账号' : '角色', principal: src.binding.kind === '服务账号' ? '服务账号' : '用户', saId: rk(src).binding.serviceAccountId, limitActions: rk(src).actionTypes != null, actionTypes: [...(rk(src).actionTypes ?? [])], limitEvents: rk(src).eventTypes != null, eventTypes: [...(rk(src).eventTypes ?? [])], rate: rk(src).ratePerMinute ?? null, quota: rk(src).quotaPerDay ?? null, role: src.binding.role, account: src.binding.account, saScope: src.binding.kind === '服务账号' ? src.binding.scope : undefined, ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
+  if (src) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], bindKind: src.binding.kind === '服务账号' ? '服务账号' : '角色', principal: src.binding.kind === '服务账号' ? '服务账号' : '用户', saId: rk(src).binding.serviceAccountId, limitActions: rk(src).actionTypes != null, actionTypes: [...(rk(src).actionTypes ?? [])], limitEvents: rk(src).eventTypes != null, eventTypes: [...(rk(src).eventTypes ?? [])], limitFunctions: rk(src).functionTypes != null, functionTypes: [...(rk(src).functionTypes ?? [])], rate: rk(src).ratePerMinute ?? null, quota: rk(src).quotaPerDay ?? null, role: src.binding.role, account: src.binding.account, saScope: src.binding.kind === '服务账号' ? src.binding.scope : undefined, ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
   formSnap.value = JSON.stringify(blank());
 }, { immediate: true });
 const formDirty = computed(() => createOpen.value && !secret.value && JSON.stringify(form) !== formSnap.value);
@@ -241,7 +241,7 @@ async function create() {
     try {
       const result = await createApiKey({
         name: form.name, env: form.env, scopes: [...form.scopes], binding, lifeDays: Number(form.life), note: form.note, ipAllow: form.ip.split(/\s+/).filter(Boolean),
-        actionTypes: form.limitActions ? [...form.actionTypes] : null, eventTypes: form.limitEvents ? [...form.eventTypes] : null,
+        actionTypes: form.limitActions ? [...form.actionTypes] : null, eventTypes: form.limitEvents ? [...form.eventTypes] : null, functionTypes: form.scopes.includes("functions:invoke" as KeyScope) && form.limitFunctions ? [...form.functionTypes] : null,
         ratePerMinute: form.rate || null, quotaPerDay: form.quota || null,
       });
       if (context !== JSON.stringify(currentApiContext())) return;
@@ -280,18 +280,18 @@ async function closeCreate() {
 }
 // 调整授权与配额（PATCH；权限范围只能收窄，白名单 / 限流配额可改）
 const policyKey = ref<RemoteKey | null>(null);
-const policy = reactive({ scopes: [] as string[], limitActions: false, actionTypes: [] as string[], limitEvents: false, eventTypes: [] as string[], rate: null as number | null, quota: null as number | null });
+const policy = reactive({ scopes: [] as string[], limitActions: false, actionTypes: [] as string[], limitEvents: false, eventTypes: [] as string[], limitFunctions: false, functionTypes: [] as string[], rate: null as number | null, quota: null as number | null });
 function openPolicy(k: RemoteKey) {
   policyKey.value = k;
   Object.assign(policy, { scopes: [...k.scopes], limitActions: k.actionTypes != null, actionTypes: [...(k.actionTypes ?? [])], limitEvents: k.eventTypes != null,
-    eventTypes: [...(k.eventTypes ?? [])], rate: k.ratePerMinute ?? null, quota: k.quotaPerDay ?? null });
+    eventTypes: [...(k.eventTypes ?? [])], limitFunctions: k.functionTypes != null, functionTypes: [...(k.functionTypes ?? [])], rate: k.ratePerMinute ?? null, quota: k.quotaPerDay ?? null });
 }
 async function savePolicy() {
   const k = policyKey.value;
   if (!k || readonly.value || busy.value) return;
   if (!policy.scopes.length) { message.error('至少保留一项权限范围'); return; }
   const body: KeyPatch = {
-    scopes: [...policy.scopes], actionTypes: policy.limitActions ? [...policy.actionTypes] : null, eventTypes: policy.limitEvents ? [...policy.eventTypes] : null,
+    scopes: [...policy.scopes], actionTypes: policy.limitActions ? [...policy.actionTypes] : null, eventTypes: policy.limitEvents ? [...policy.eventTypes] : null, functionTypes: policy.scopes.includes("functions:invoke") && policy.limitFunctions ? [...policy.functionTypes] : null,
     ratePerMinute: policy.rate || null, quotaPerDay: policy.quota || null,
   };
   const context = JSON.stringify(currentApiContext());
@@ -426,6 +426,8 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <template v-if="real">
           <a-descriptions-item label="动作白名单" :span="2"><span class="num">{{ listText(rk(detail).actionTypes) }}</span></a-descriptions-item>
           <a-descriptions-item label="事件类型白名单" :span="2"><span class="num">{{ listText(rk(detail).eventTypes) }}</span></a-descriptions-item>
+          <a-descriptions-item label="绑定本体" :span="2"><span class="num">{{ rk(detail).ontologyIds?.join('、') || '—' }}</span></a-descriptions-item>
+          <a-descriptions-item label="函数白名单" :span="2"><span class="num">{{ listText(rk(detail).functionTypes) }}</span></a-descriptions-item>
           <a-descriptions-item label="每分钟限流"><span class="num">{{ limitText(rk(detail).ratePerMinute, '次') }}</span><span class="t-12 c-3"> · 本分钟 {{ rk(detail).usage?.minute ?? 0 }}</span></a-descriptions-item>
           <a-descriptions-item label="每日配额"><span class="num">{{ limitText(rk(detail).quotaPerDay, '次') }}</span><span class="t-12 c-3"> · 今日 {{ rk(detail).usage?.day ?? 0 }}</span></a-descriptions-item>
         </template>
@@ -486,6 +488,10 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
           <a-form-item label="事件类型白名单" help="开启后只允许写入列出的事件类型编号">
             <a-switch v-model:checked="form.limitEvents" size="small" />
             <a-select v-if="form.limitEvents" v-model:value="form.eventTypes" mode="tags" class="num ak-mt8" placeholder="输入事件类型编号后回车" :token-separators="[',', ' ']" />
+          </a-form-item>
+          <a-form-item v-if="form.scopes.includes('functions:invoke' as KeyScope)" label="函数白名单" help="在密钥绑定本体范围内按函数编号授权；空列表全部拒绝">
+            <a-switch v-model:checked="form.limitFunctions" size="small" />
+            <a-select v-if="form.limitFunctions" v-model:value="form.functionTypes" mode="tags" class="num ak-mt8" placeholder="输入函数编号后回车" :token-separators="[',', ' ']" />
           </a-form-item>
           <a-form-item label="限流与配额" help="留空表示不限制；超出返回 429">
             <a-space><a-input-number v-model:value="form.rate" :min="1" :max="100000" placeholder="每分钟" class="num" /><a-input-number v-model:value="form.quota" :min="1" :max="100000000" placeholder="每日" class="num" /></a-space>
@@ -555,6 +561,10 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
       <a-form-item label="事件类型白名单">
         <a-switch v-model:checked="policy.limitEvents" size="small" />
         <a-select v-if="policy.limitEvents" v-model:value="policy.eventTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
+      </a-form-item>
+      <a-form-item v-if="policy.scopes.includes('functions:invoke')" label="函数白名单" help="函数编号适用于密钥绑定本体；已有白名单只可收窄，增加函数请新建密钥">
+        <a-switch v-model:checked="policy.limitFunctions" size="small" :disabled="policyKey.functionTypes != null" />
+        <a-select v-if="policy.limitFunctions" v-model:value="policy.functionTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
       </a-form-item>
       <a-form-item label="限流与配额" help="留空表示不限制">
         <a-space><a-input-number v-model:value="policy.rate" :min="1" :max="100000" placeholder="每分钟" /><a-input-number v-model:value="policy.quota" :min="1" :max="100000000" placeholder="每日" /></a-space>

@@ -171,7 +171,8 @@ async def recheck_effect(session, data: dict):
 async def dispatch_effect(effect_id, ontology_id: int):
     sessions = scoped_sessions(ontology_id)
     async with sessions() as session, session.begin():
-        row = await session.get(OutboxEvent, effect_id, with_for_update=True)
+        row = await session.scalar(select(OutboxEvent).where(OutboxEvent.id == effect_id,
+            OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id)).with_for_update())
         if row is None or row.topic != TOPIC or row.dispatched_at is not None:
             return
         if (row.attempts and row.last_error != RETRY_SCHEDULED) or row.available_at > clock.now():
@@ -246,6 +247,7 @@ async def dispatch_effect(effect_id, ontology_id: int):
 async def dispatch_effects(ontology_id: int):
     async with scoped_sessions(ontology_id)() as session:
         ids = list(await session.scalars(select(OutboxEvent.id).where(OutboxEvent.topic == TOPIC,
+            OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id),
             or_(OutboxEvent.attempts == 0, OutboxEvent.last_error == RETRY_SCHEDULED),
             OutboxEvent.dispatched_at.is_(None), OutboxEvent.available_at <= clock.now())
             .order_by(OutboxEvent.id).limit(100)))

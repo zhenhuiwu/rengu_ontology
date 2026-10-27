@@ -69,8 +69,9 @@ class MockReceiver:
 
 
 @pytest.fixture
-def receiver():
+def receiver(request):
     server = MockReceiver()
+    request.node.local_webhook_endpoint = server.url
     yield server
     server.close()
 
@@ -127,7 +128,7 @@ def scope_of(session):
 
 async def effect_row(session, url):
     row = await emit(session, action_effects.TOPIC, {
-        "runId": "RUN-T1", "actor": 1, "typeVersion": 1,
+        "ontologyId": 1, "runId": "RUN-T1", "actor": 1, "typeVersion": 1,
         "effect": {"kind": "webhook", "target": "sys"},
         "data": {"url": url, "payload": {"orderId": "O-1", "note": "签名"}}, "state": "queued"},
         event_id="effect:tier1-" + url.rsplit(":", 1)[1].replace("/", ""))

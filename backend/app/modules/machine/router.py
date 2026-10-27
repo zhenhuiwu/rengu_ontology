@@ -88,7 +88,10 @@ async def objects_query(body: ObjectsQueryIn, session: SessionDep, user: Current
 
 @router.post(
     "/machine/functions/{code}:invoke",
-    dependencies=[Depends(require_api_scope("functions:invoke")), Depends(require_func("functions", "view"))],
+    dependencies=[
+        Depends(require_api_scope("functions:invoke", function_type="{code}")),
+        Depends(require_func("functions", "view")),
+    ],
     summary="机器接口：调用已发布函数（同函数测试运行）",
 )
 async def function_invoke(code: str, body: TestIn, session: SessionDep) -> dict:

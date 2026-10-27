@@ -49,7 +49,9 @@ async function pick(n: Notice) {
     const result = n.read ? null : await markNotificationRead(n.id);
     if (key !== notificationContextKey() || seq !== mutationSequence) return;
     if (result) { items.value = items.value.map(item => item.id === n.id ? { ...item, read: true } : item); app.setNotificationUnread(key, result.unread); emit('updated'); }
-    await router.push({ path: '/build/ontology/releases', query: { ontology: app.ontologyId, cr: n.objId } });
+    await router.push(n.kind === 'page'
+      ? { path: '/use/qa/pages', query: { ontology: app.ontologyId, page_id: n.objId, ptab: 'preview' } }
+      : { path: '/build/ontology/releases', query: { ontology: app.ontologyId, cr: n.objId } });
     emit('picked');
   } catch (e) { if (key === notificationContextKey() && seq === mutationSequence) error.value = errText(e); }
   finally { if (seq === mutationSequence) busy.value = false; }

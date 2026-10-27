@@ -3,7 +3,7 @@ import { apiClient, currentApiContext, type PageResult } from './http';
 const api = apiClient('notifications');
 export const isNotificationsReal = () => api.isReal();
 export const notificationContextKey = () => { const ctx = currentApiContext(); return JSON.stringify([ctx.ontologyId, ctx.demoAs]); };
-export interface Notification { id: string; kind: 'cr'; objId: string; title: string; desc: string; time: string; read: boolean }
+export interface Notification { id: string; kind: 'cr' | 'page'; objId: string; title: string; desc: string; time: string; read: boolean }
 const ownContext = () => {
   const ctx = currentApiContext();
   return { readonlyParams: false, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } };

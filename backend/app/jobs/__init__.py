@@ -45,10 +45,11 @@ async def redeliver_failed_events() -> int:
     return 0
 
 
-async def dispatch_outbox() -> int:
-    """outbox 表 → 投递（事件 / 回写调用）。返回本轮处理条数。"""
-    # EXTENSION POINT (PDE)
-    return 0
+async def dispatch_outbox(timestamp: int = 0) -> int:
+    """Consume page subscription notifications; action/event workers own their other topics."""
+    from app.modules.notifications.service import dispatch_subscriptions
+
+    return await dispatch_subscriptions()
 
 
 async def after_release_commit(ver: str) -> None:

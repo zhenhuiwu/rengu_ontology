@@ -29,7 +29,7 @@ def expect(frm, to, action="全部", result="全部", field="actor", kw=""):
     """AuditLog.vue 的 rows computed，一字不差。"""
     k = kw.strip()
     return [
-        r
+        {**r, "ontologyId": None}
         for r in MOCK
         if frm <= r["time"] <= to
         and (action == "全部" or r["action"] == action)
@@ -88,7 +88,7 @@ async def test_default_24h_first_page_matches_mock(client, users, authorized):
 
 async def test_page_through_all_no_dup_no_gap(client, users, authorized):
     got, pages = await page_all(client, size=37, **{"from": D30[0], "to": D30[1]})
-    assert got == MOCK and pages == -(-521 // 37)
+    assert got == [{**row, "ontologyId": None} for row in MOCK] and pages == -(-521 // 37)
     assert len({r["id"] for r in got}) == 521
 
 

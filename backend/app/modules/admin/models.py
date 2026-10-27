@@ -295,6 +295,7 @@ class ApiKey(CodeMixin, MutableTableMixin, Base):
     # null = 不限（该 scope 下全部类型）；列表 = 只允许这些动作/事件类型编号
     action_types: Mapped[list | None] = mapped_column(JsonType)
     event_types: Mapped[list | None] = mapped_column(JsonType)
+    function_types: Mapped[list | None] = mapped_column(JsonType)
     rate_per_minute: Mapped[int | None] = mapped_column(Integer)
     quota_per_day: Mapped[int | None] = mapped_column(Integer)
 

@@ -49,6 +49,10 @@ def build_app() -> procrastinate.App:
     worker = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=url))
     task = worker.task(name="event.deliver", queue=QUEUE, lock="event.deliver")(sweep)
     worker.periodic(cron="* * * * *", periodic_id="event.deliver")(task)
+    from app.jobs import dispatch_outbox
+
+    inbox = worker.task(name="outbox.dispatch", queue=QUEUE, lock="outbox.dispatch")(dispatch_outbox)
+    worker.periodic(cron="* * * * *", periodic_id="outbox.dispatch")(inbox)
     return worker
 
 

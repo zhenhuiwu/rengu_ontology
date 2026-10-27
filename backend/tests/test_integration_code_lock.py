@@ -8,6 +8,7 @@ import asyncio
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import set_ontology_scope
 from app.modules.integration.models import ExtSystem
 from app.modules.integration.schemas import ExtSystemIn
 from app.modules.integration.service import ExtSystemService
@@ -30,11 +31,14 @@ NAMES = ["并发测试网关A", "并发测试网关B"]
 
 
 async def test_concurrent_create_gets_distinct_codes(engine):
+    assert engine.url.database == "rengu_fix_admin_20261027"
     try:
         async with (
             AsyncSession(engine, expire_on_commit=False) as first,
             AsyncSession(engine, expire_on_commit=False) as second,
         ):
+            await set_ontology_scope(first, 1)
+            await set_ontology_scope(second, 1)
             pid = await second.scalar(text("SELECT pg_backend_pid()"))
 
             def body(name):
@@ -65,4 +69,5 @@ async def test_concurrent_create_gets_distinct_codes(engine):
                 await asyncio.gather(task, return_exceptions=True)
     finally:
         async with AsyncSession(engine) as s, s.begin():
+            await set_ontology_scope(s, 1)
             await s.execute(delete(ExtSystem).where(ExtSystem.name.in_(NAMES)))

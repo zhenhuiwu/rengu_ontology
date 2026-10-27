@@ -45,14 +45,17 @@ async def role_actor(client, users):
 def role_fields(r):
     return {
         k: r[k] for k in ("id", "name", "desc", "builtIn", "updatedAt", "updatedBy", "func", "objs", "scopes")
-    } | {"defaultDeny": bool(r.get("defaultDeny"))}
+    } | {"defaultDeny": bool(r.get("defaultDeny")), "scopes": [{"objectTypeCode": None, **scope} for scope in r["scopes"]]}
 
 
 async def test_list_and_get_match_mock(client, users):
     r = await client.get(URL)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert [role_fields(x) for x in body] == [role_fields(x) for x in ROLES]
+    assert [x["id"] for x in body] == [x["id"] for x in ROLES]
+    for actual, expected in zip(body, ROLES, strict=True):
+        a, b = role_fields(actual), role_fields(expected)
+        assert a == b, {key: (a[key], b[key]) for key in a if a[key] != b[key]}
     assert [x["memberCount"] for x in body] == [len(MEMBERS[x["id"]]) for x in ROLES]
     one = (await client.get(f"{URL}/R-04")).json()
     assert role_fields(one) == role_fields(ROLES[3])

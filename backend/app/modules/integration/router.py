@@ -11,9 +11,11 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, Request
+from pydantic import Field
 
 from app.common.auth import CurrentUser, CurrentUserDep, require_func
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
+from app.core.schema import ApiModel
 from app.db.session import SessionDep
 from app.modules.integration.schemas import (
     ExtCallOut,
@@ -29,6 +31,45 @@ from app.modules.integration.schemas import (
 from app.modules.integration.service import ExtSystemService, WritebackCallService
 
 router = APIRouter(tags=["integration"])  # /api/data/v1
+
+
+class EffectRetryIn(ApiModel):
+    attempts: int = Field(ge=0)
+    state: Literal["failed", "rejected"]
+
+
+@router.get("/action-runs/{code}/effects", dependencies=[Depends(require_func("external-systems", "view"))])
+async def action_effects(
+    code: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
+):
+    from app.modules.integration.effect_management import list_effects
+
+    return await list_effects(session, user, code, PageParams(page=page, size=size))
+
+
+@router.post(
+    "/action-runs/{code}/effects/{identity}:retry",
+    dependencies=[Depends(require_func("external-systems", "manage"))],
+)
+async def retry_action_effect(
+    code: str, identity: int, body: EffectRetryIn, session: SessionDep, user: CurrentUserDep, request: Request
+):
+    from app.modules.integration.effect_management import retry_effect
+
+    return await retry_effect(
+        session,
+        user,
+        code,
+        identity,
+        body.attempts,
+        body.state,
+        ip=request.client.host if request.client else "",
+    )
+
 
 _ext_view = require_func("external-systems", "view")
 _action_view = require_func("action-types", "view")

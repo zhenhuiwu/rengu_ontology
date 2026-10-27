@@ -50,7 +50,10 @@ async def versions(
     return await service.history(session, path_code(code), PageParams(page=page, size=size))
 
 
-@router.post("/functions/{code}:test", dependencies=[Depends(require_api_scope("functions:invoke"))])
+@router.post(
+    "/functions/{code}:test",
+    dependencies=[Depends(require_api_scope("functions:invoke", function_type="{code}"))],
+)
 async def test_function(code: str, body: TestIn, session: SessionDep) -> dict:
     fn = await service.detail(session, path_code(code))
     start = time.perf_counter()

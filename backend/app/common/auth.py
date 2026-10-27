@@ -60,6 +60,7 @@ class CurrentUser:
     api_scopes: tuple[str, ...] | None = None
     action_allowlist: tuple[str, ...] | None = None  # None = 不限；() = 全部拒绝
     event_allowlist: tuple[str, ...] | None = None
+    function_allowlist: tuple[str, ...] | None = None
     # {"minute": {"limit": int|None, "used": int|None}, "day": {...}}：本次调用计数后的窗口用量
     quota: dict[str, dict[str, int | None]] | None = None
 

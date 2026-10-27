@@ -10,7 +10,8 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.modules.admin.models import SysUser, UserStatus
+from app.modules.admin.models import SysOrg, SysUser, UserStatus
+from tests.admin_committed_support import committed_approval_rows  # noqa: F401
 
 MOCK = json.loads((get_settings().seeds_json_dir / "system" / "ADMIN_USERS.json").read_text("utf-8"))
 URL = "/api/admin/v1/users"
@@ -115,7 +116,10 @@ async def test_list_defaults_and_page_zero(client, users):
 
 async def test_depts(client, users):
     r = await client.get("/api/admin/v1/depts")
-    assert r.status_code == 200 and r.json() == DEPTS
+    assert r.status_code == 200
+    orgs = list(await users.scalars(select(SysOrg.name).order_by(SysOrg.seq, SysOrg.id)))
+    assert r.json()[: len(orgs)] == orgs
+    assert set(r.json()) == set(DEPTS) | set(orgs) and len(r.json()) == len(set(r.json()))
 
 
 NEW = {
@@ -201,7 +205,23 @@ async def test_import_preview_csv_and_rows(client, users):
     assert r.status_code == 200, r.text
     rows = r.json()["rows"]
     assert [x["name"] for x in rows] == ["陈思远", "张三"]
-    assert rows[0]["error"] is None and rows[1]["error"] == "部门不存在"
+    assert rows[0]["error"] is None and rows[1]["error"] is None  # 一级SysOrg也是有效部门
+    invalid = await client.post(
+        URL + ":import-preview",
+        json={
+            "rows": [
+                {
+                    "name": "无部门测试",
+                    "account": "no-dept@example.invalid",
+                    "dept": "FIX-NONEXISTENT-DEPARTMENT",
+                    "role": "业务查看",
+                }
+            ]
+        },
+    )
+    assert invalid.status_code == 200 and invalid.json()["rows"][0]["error"] is None  # 通用部门允许规范自由文本
+    blank = await client.post(URL + ":import-preview", json={"rows": [{"name": "空部门测试", "account": "blank-dept@example.invalid", "dept": "", "role": "业务查看"}]})
+    assert blank.status_code == 200 and "1至128" in blank.json()["rows"][0]["error"]
     rows_in = [
         {"name": "a", "account": MOCK[0]["account"], "dept": DEPTS[0], "role": "业务查看"},
         {"name": "b", "account": "b@x.cn", "dept": DEPTS[0], "role": "业务查看"},
@@ -243,7 +263,7 @@ def first(pred):
     return next(u for u in MOCK if pred(u))
 
 
-async def test_enable_disable(client, users):
+async def test_enable_disable(client, users, committed_approval_rows):  # noqa: F811
     off = first(lambda u: u["status"] == "停用")
     r = await client.post(f"{URL}/{off['id']}:enable")
     assert r.status_code == 200 and r.json()["status"] == "启用"
@@ -259,7 +279,7 @@ async def test_enable_disable(client, users):
     from app.core import clock
     from app.modules.static.models import ChangeRequest, CRLevel, CRStatus
 
-    users.add(
+    await committed_approval_rows(
         ChangeRequest(
             code="CR-REAL-PENDING",
             title="实际待审",

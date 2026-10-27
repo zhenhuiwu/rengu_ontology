@@ -167,8 +167,10 @@ def event_tools(events: list[dict], key: ApiKeyContext | None, taken: set[str]) 
         if not ingest.get("accepting") or (key is not None and not ingest.get("keyAllowed")):
             continue
         fields = e.get("payload") or []
-        payload = {f["api"]: _describe(type_schema(f["type"], f.get("enum")), f["name"], f.get("desc") or "")
-                   for f in fields}
+        payload = {
+            f["api"]: _describe(type_schema(f["type"], f.get("enum")), f["name"], f.get("desc") or "")
+            for f in fields
+        }
         kinds = [k for k in dict.fromkeys([e.get("objectApi"), e.get("object")]) if k]
         props = {
             "eventId": {"type": "string", "minLength": 1, "description": "调用方生成的全局唯一事件编号"},
@@ -202,10 +204,12 @@ def event_tools(events: list[dict], key: ApiKeyContext | None, taken: set[str]) 
     return out
 
 
-def function_tools(functions: list[dict], taken: set[str]) -> list[dict]:
-    """能力目录 functions 节（已发布）→ 工具。没有按函数的密钥白名单（只看 functions:invoke）。"""
+def function_tools(functions: list[dict], taken: set[str], key: ApiKeyContext | None = None) -> list[dict]:
+    """能力目录 functions 节（已发布）→ 工具。按当前密钥函数白名单裁剪。"""
     out = []
     for fn in functions:
+        if key is not None and key.function_types is not None and fn["id"] not in key.function_types:
+            continue
         inputs = {
             p["name"]: _describe(py_schema(p["type"], p.get("enum")), p.get("desc", "")) for p in fn["inputs"]
         }
@@ -237,7 +241,7 @@ async def export(session, user: CurrentUser, request: Request, fmt: str) -> dict
     if "events" in catalog and _has(key, "events:ingest"):
         tools += event_tools(catalog["events"], key, taken)
     if "functions" in catalog and _has(key, "functions:invoke"):
-        tools += function_tools(catalog["functions"], taken)
+        tools += function_tools(catalog["functions"], taken, key)
     return {
         "format": fmt,
         "tools": [render(t, fmt) for t in tools],

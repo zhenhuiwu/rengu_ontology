@@ -57,7 +57,7 @@ async def criteria_user(session, user, run):
         return user
 
 
-async def preflight(session, user, run):
+async def preflight(session, user, run, *, review: dict | None = None):
     check_func(user, "action-center", "manage")
     definition = await execution_definition(session, run)
     from app.modules.integration.action_edits import resolved_params
@@ -65,14 +65,19 @@ async def preflight(session, user, run):
         structured_params(run.params if run.params is not None else run.params_text))
     await target_access(session, user, run, definition)
     checker = DatabaseSubmissionChecker(session, await criteria_user(session, user, run))
-    failed = (await checker.run(definition, {"objKind": run.obj_kind, "objId": run.obj_id,
-                  "params": run.params, "actionRunId": run.code}))['failed']
+    result = await checker.run(definition, {"objKind": run.obj_kind, "objId": run.obj_id,
+                  "params": run.params, "actionRunId": run.code})
+    failed = result['failed']
     if failed:
         raise AppError("动作参数或提交条件未通过", code="SUBMISSION_CRITERIA_FAILED",
                        status_code=422, details={"failed": failed})
     await business_edits(session, user, run, definition)
     from app.modules.integration.action_effects import preflight_effects
     await preflight_effects(session, user, run, definition)
+    if review is not None:
+        from app.modules.integration.action_edits import declared_writeback
+        review.update(humanChecks=result.get("humanChecks", []),
+                      declaredEdits=await declared_writeback(session, definition))
     return definition
 
 

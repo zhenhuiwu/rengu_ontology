@@ -17,8 +17,10 @@ export interface RemoteKey extends Omit<ApiKey, 'scopes' | 'binding'> {
   scopes: string[];
   binding: KeyBinding & { serviceAccountId?: string; serviceAccountName?: string; roleId?: string; roleName?: string };
   principalKind?: 'user' | 'service';
+  ontologyIds?: number[];
   actionTypes?: string[] | null;
   eventTypes?: string[] | null;
+  functionTypes?: string[] | null;
   ratePerMinute?: number | null;
   quotaPerDay?: number | null;
   usage?: KeyUsage;
@@ -38,6 +40,7 @@ export interface KeysMeta {
 export interface KeyPolicy {
   actionTypes?: string[] | null;
   eventTypes?: string[] | null;
+  functionTypes?: string[] | null;
   ratePerMinute?: number | null;
   quotaPerDay?: number | null;
 }

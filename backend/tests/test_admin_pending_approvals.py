@@ -8,11 +8,12 @@ from app.modules.admin.models import SysUser, UserStatus
 from app.modules.admin.service import pending_approvals
 from app.modules.dynamic.models import ActionRun, ActionStatus, SourceType
 from app.modules.static.models import ChangeRequest, CRLevel, CRStatus
+from tests.admin_committed_support import committed_approval_rows  # noqa: F401
 from tests.function_access_support import grant_fixture_roles
 
 
 @pytest.fixture
-async def approvals(users):
+async def approvals(users, committed_approval_rows):  # noqa: F811
     await grant_fixture_roles(users)
     a, b, zero, duplicate = list(
         await users.scalars(
@@ -39,18 +40,16 @@ async def approvals(users):
             created_by=zero.code,
         )
 
-    users.add_all(
-        [
-            cr("CR-PENDING-A", a.name, a.code),
-            cr("CR-PENDING-B", b.name, b.code),
-            cr("CR-PENDING-LEGACY", a.name),
-            cr("CR-PENDING-AMBIGUOUS", b.name),
-            cr("CR-PENDING-UNKNOWN", a.name, "UNKNOWN"),
-            cr("CR-PENDING-DRAFT", a.name, a.code, CRStatus.draft),
-        ]
-    )
+    records = [
+        cr("CR-PENDING-A", a.name, a.code),
+        cr("CR-PENDING-B", b.name, b.code),
+        cr("CR-PENDING-LEGACY", a.name),
+        cr("CR-PENDING-AMBIGUOUS", b.name),
+        cr("CR-PENDING-UNKNOWN", a.name, "UNKNOWN"),
+        cr("CR-PENDING-DRAFT", a.name, a.code, CRStatus.draft),
+    ]
     for index, approver in enumerate((a.code, b.code, a.name, "UNKNOWN")):
-        users.add(
+        records.append(
             ActionRun(
                 code=f"ACT-PENDING-{index}",
                 action_type_code="fixture_action",
@@ -64,6 +63,7 @@ async def approvals(users):
                 submitted_at=clock.now(),
             )
         )
+    await committed_approval_rows(*records)
     await users.flush()
     return users, a, b, zero
 

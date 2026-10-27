@@ -8,7 +8,7 @@ from app.modules.event.delivery import check_order, delivery_key, http_target, o
 
 
 def test_explicit_test_endpoint_and_stable_subscription_idempotency():
-    event = SimpleNamespace(code="event-a")
+    event = SimpleNamespace(code="event-a", ontology_id=1)
     assert delivery_key(event, "subscriber-a") == delivery_key(event, "subscriber-a")
     assert delivery_key(event, "subscriber-a") != delivery_key(event, "subscriber-b")
     settings = SimpleNamespace(event_delivery_http_enabled=True, env="dev")
