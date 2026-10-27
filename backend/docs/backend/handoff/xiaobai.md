@@ -17,7 +17,7 @@
 - 元数据注释漂移：`api_key.code`、`platform_setting.code`、`rule_schedule_run.release_id`。
 - 7 个 test_sql_guard e2e 用例的夹具在空间 1 没有对象类型（per-ontology governed_tables 后解析为空即拒绝）。
 - `app/common/auth.py` 用 `"/api/admin/" in route` 判断，FastAPI 0.162 的 route.path 为路由器相对路径，判断失效（api_keys 用 `full_route_path` 自行还原）。
-- `tests/test_datasource_ontology_import.py` 在本分支与 master 上整体失败：夹具未建本体成员，预览 403（C2 测试自行用 `bind_objects_workspace` 补成员，未改该文件）。
+- `tests/test_datasource_ontology_import.py` 整体失败（本分支未改该文件和预览权限逻辑）：夹具未建本体成员，预览 403（C2 测试自行用 `bind_objects_workspace` 补成员，未改该文件）。
 - 前端构建复用 /workspace/rengu/frontend/node_modules（worktree 内软链，已被 .gitignore 忽略）。
 
 
