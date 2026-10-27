@@ -397,6 +397,51 @@ async def test_single_object_summary_attached(qa, session, monkeypatch):
     assert "动态摘要" in fake.prompts[0][0]["content"]
 
 
+async def test_multi_object_summary_top_with_alerts(qa, session, monkeypatch):
+    rows = (await session.execute(text("select code, name from store order by code limit 3"))).all()
+    codes = [r[0] for r in rows]
+    open_by = {codes[0]: 1, codes[1]: 0, codes[2]: 4}  # 没告警的不列，告警多的在前
+
+    async def fake_summary(_s, _u, obj, request=None):
+        if not obj:
+            return None
+        return dynamic_ctx.brief(
+            {
+                "objKind": obj["kind"],
+                "objKindLabel": "对象",
+                "id": obj["id"],
+                "objLabel": obj["label"],
+                "alerts": {"available": True, "openCount": open_by[obj["id"]], "latest": []},
+                "ruleHits": {"available": False, "reason": "no-permission"},
+                "lifecycle": {"available": False, "reason": "no-permission"},
+                "actionRuns": {"available": False, "reason": "no-permission"},
+            }
+        )
+
+    monkeypatch.setattr(dynamic_ctx, "object_summary", fake_summary)
+    monkeypatch.setattr("app.modules.qa.object_source.check_object_read", lambda _u: None)
+    in_list = ", ".join(f"'{c}'" for c in codes)
+    use_llm(f"select code, name from store where code in ({in_list}) order by code")
+    r = await qa.post(URL, json={"question": "这几家的名称"})
+    assert r.status_code == 202, r.text
+    ans = r.json()["turn"]["answer"]
+    assert [s["id"] for s in ans["dynamicSummaries"]] == [codes[2], codes[0]]
+    assert "dynamicSummary" not in ans and "动态提示" in ans["text"] and "未关闭告警 4 条" in ans["text"]
+    # 可问表在第一次请求时注册（单独跑本用例时也一样）
+    named = await dynamic_ctx.named_objects(session, f"{codes[0]} 和 {codes[1]} 对比", {})
+    assert {o["id"] for o in named} == set(codes[:2])
+    assert await dynamic_ctx.single_object(session, f"{codes[0]} 和 {codes[1]} 对比", {}) is None
+    found = await dynamic_ctx.result_objects(session, [[c, 1] for c in codes] + [["不是编号", 2]])
+    assert [o["id"] for o in found] == codes
+    # 问题点名多个对象：进 prompt
+    fake = use_llm(f"select code, name from store where code in ('{codes[0]}', '{codes[2]}')")
+    r = await qa.post(URL, json={"question": f"{codes[0]} 和 {codes[2]} 的名称"})
+    assert r.status_code == 202, r.text
+    assert len(r.json()["turn"]["answer"]["dynamicSummaries"]) == 2
+    assert "动态摘要" in fake.prompts[0][0]["content"]
+    assert dynamic_ctx.multi_text([]) == ""
+
+
 async def test_object_summary_gated(session):
     class _U:
         func = {}
@@ -438,3 +483,48 @@ async def test_metric_intent_falls_back_to_sql(qa, monkeypatch):
     ans = r.json()["turn"]["answer"]
     assert ans["table"]["items"] == [{"c0": 95}] and "metricQuery" not in ans
     assert "指标层编译不了" in fake.prompts[1][-1]["content"]
+
+
+HUMAN = [{"name": "资料齐全", "rule": "附件需包含签字版", "reason": "自然语言规则"}]
+DECLARED = [
+    {"kind": "编辑", "op": "修改", "obj": "工单", "field": "状态、处理人", "status": "external/declared"},
+    {"kind": "通知", "target": "外部群", "when": "提交后", "note": "通知值班", "status": "external/declared"},
+]
+
+
+def test_action_card_shows_human_checks_and_declared_edits():
+    intent_ = {
+        "type": "ACT9",
+        "name": "外部处理",
+        "objKind": "ticket",
+        "objId": "T1",
+        "objLabel": "T1",
+        "params": {},
+    }
+    check = {"passed": True, "checked": 2, "failed": [], "humanChecks": HUMAN, "declaredEdits": DECLARED}
+    act = intent.action_snapshot(intent_, check)["answer"]
+    a = act["action"]
+    assert a["dryRun"]["humanChecks"] == HUMAN and a["humanChecks"] == HUMAN
+    assert a["dryRun"]["passed"] is True and a["dryRun"]["declaredEdits"] == DECLARED
+    assert "1 项提交条件需确认人人工核对（资料齐全）" in act["text"]
+    assert "由外部系统承担" in act["text"] and "工单 状态、处理人" in a["declaredSummary"]
+    # 决策评估的试运行结果：humanChecks 原样带上，不算失败
+    rec_check = dynamic_ctx._check_of(
+        {"dryRun": {"ran": True, "passed": True, "checked": 1, "humanChecks": HUMAN}}
+    )
+    assert rec_check["passed"] and rec_check["humanChecks"] == HUMAN
+    plain = intent.action_snapshot(intent_, {"passed": True, "checked": 1, "failed": []})["answer"]
+    assert "humanChecks" not in plain["action"] and "declaredSummary" not in plain["action"]
+
+
+async def test_with_declared_fills_decision_cards(monkeypatch):
+    async def fake_declared(_s, type_id):
+        return DECLARED if type_id == "ACT9" else []
+
+    monkeypatch.setattr(intent, "declared_edits", fake_declared)
+    snap = {"answer": {"text": "建议。", "action": {"type": "ACT9", "dryRun": {"passed": True}}}}
+    out = await intent.with_declared(None, snap)
+    assert out["answer"]["action"]["dryRun"]["declaredEdits"] == DECLARED
+    assert out["answer"]["text"].startswith("建议。由外部系统承担")
+    other = {"answer": {"text": "x", "action": {"type": "ACT1", "dryRun": {}}}}
+    assert "declaredEdits" not in (await intent.with_declared(None, other))["answer"]["action"]["dryRun"]

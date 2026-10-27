@@ -390,11 +390,14 @@ def _check_of(rec: dict[str, Any]) -> dict[str, Any]:
         err = dry.get("error")
         if err:
             failed.append({"name": "试运行", "msg": str(err.get("message") or err.get("code"))[:200]})
-        return {
+        out = {
             "passed": bool(dry.get("passed")) and not failed,
             "checked": dry.get("checked") or 0,
             "failed": failed,
         }
+        if dry.get("humanChecks"):  # 外部 Webhook 动作：留给确认人人工核对的条件（不算失败）
+            out["humanChecks"] = list(dry["humanChecks"])
+        return out
     why = {"no-permission": "没有动作类型查看权限，未试运行", "key-allowlist": "密钥不允许该动作，未试运行"}
     reason = why.get(dry.get("reason"), "未试运行")
     return {"passed": False, "checked": 0, "failed": [*failed, {"name": "试运行", "msg": reason}]}

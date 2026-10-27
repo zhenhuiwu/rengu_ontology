@@ -145,10 +145,64 @@ async def dry_run(session: AsyncSession, user: Any, intent: dict[str, Any]) -> d
                     "alertId": None,
                 },
             )
-            return dict(res)
+            out = dict(res)
+            if declared := await _declared(session, value):
+                out["declaredEdits"] = declared
+            return out
     except Exception as e:
         msg = getattr(e, "message", None) or str(e) or type(e).__name__
         return {"passed": False, "checked": 0, "failed": [{"name": "校验", "msg": str(msg)[:200]}]}
+
+
+async def _declared(session: AsyncSession, value: dict[str, Any]) -> list[dict[str, Any]]:
+    """外部 Webhook 通道动作的声明效果（action-event-api §18.2，同执行载荷 declaredEdits）；读失败 → []。"""
+    from app.modules.integration.action_edits import declared_writeback
+
+    try:
+        async with session.begin_nested():
+            return list(await declared_writeback(session, value) or [])
+    except Exception:
+        return []
+
+
+async def declared_edits(session: AsyncSession, type_id: str) -> list[dict[str, Any]]:
+    """按动作类型编号读已发布定义 → 声明效果（决策评估那条路用，试运行结果里没有这一项）。"""
+    from app.common.context import ViewContext
+    from app.modules.action.checker import definition
+
+    try:
+        async with session.begin_nested():
+            value = await definition(session, type_id, ViewContext(), "published", None)
+    except Exception:
+        return []
+    return await _declared(session, value)
+
+
+async def with_declared(session: AsyncSession, snap: dict[str, Any]) -> dict[str, Any]:
+    """动作确认卡补上声明效果（已有就不动）。"""
+    act = (snap.get("answer") or {}).get("action")
+    if not isinstance(act, dict) or not act.get("type") or "declaredEdits" in (act.get("dryRun") or {}):
+        return snap
+    if declared := await declared_edits(session, act["type"]):
+        act.setdefault("dryRun", {})["declaredEdits"] = declared
+        act["declaredSummary"] = declared_summary(declared)
+        snap["answer"]["text"] = f"{snap['answer'].get('text') or ''}{act['declaredSummary']}。"
+    return snap
+
+
+def declared_summary(declared: list[dict[str, Any]]) -> str:
+    """“由外部系统承担：编辑 商品（状态、最近操作人）；通知 企业微信 · 发起人”。"""
+    parts = []
+    for d in declared[:5]:
+        what = " ".join(str(x) for x in (d.get("obj"), d.get("field") or d.get("target")) if x)
+        parts.append(f"{d.get('kind') or '效果'} {what}".strip())
+    more = f" 等 {len(declared)} 项" if len(declared) > 5 else ""
+    return "由外部系统承担（本地不执行）：" + "；".join(parts) + more
+
+
+def human_text(checks: list[dict[str, Any]]) -> str:
+    names = "、".join(str(c.get("name") or c.get("rule") or "") for c in checks[:5])
+    return f"另有 {len(checks)} 项提交条件需确认人人工核对（{names}）"
 
 
 async def action_policy(session: AsyncSession, code: str) -> dict[str, Any]:
@@ -200,23 +254,35 @@ def action_snapshot(
         else "提交条件未满足："
         + "；".join(str(f.get("msg") or f.get("name") or "") for f in check.get("failed") or [])
     )
+    human = list(check.get("humanChecks") or [])  # 外部 Webhook 动作：解释器判不了、留给确认人的条件
+    declared = list(check.get("declaredEdits") or [])
+    if human:
+        tail = f"{tail}；{human_text(human)}"
+    dry_run: dict[str, Any] = {
+        "passed": passed,
+        "checked": int(check.get("checked") or 0),
+        "failed": list(check.get("failed") or []),
+    }
+    if human:
+        dry_run["humanChecks"] = human
+    if declared:
+        dry_run["declaredEdits"] = declared
     return {
         "answer": {
             "card": "action",
             "text": f"建议执行「{intent['name']}」"
             + (f"（{intent['objLabel'] or intent['objId']}）" if intent.get("objId") else "")
-            + f"。{tail}。{how}。",
+            + f"。{tail}。{how}。"
+            + (f"{declared_summary(declared)}。" if declared else ""),
             "basis": {"caliber": "动作意图 → 动作中心 dry-run 校验", "perm": "提交时按动作权限再校验"},
             "action": {
                 "type": intent["type"],
                 "name": intent["name"],
                 "reason": intent.get("reason") or "",
                 "params": intent["params"],
-                "dryRun": {
-                    "passed": passed,
-                    "checked": int(check.get("checked") or 0),
-                    "failed": list(check.get("failed") or []),
-                },
+                "dryRun": dry_run,
+                **({"humanChecks": human} if human else {}),
+                **({"declaredSummary": declared_summary(declared)} if declared else {}),
                 "stage": stage,
                 "mode": "suggest",  # 问数只建议；发起 = 暂存待人工确认
                 "policy": policy.get("mode", "confirm"),  # 动作执行策略 suggest / confirm / auto

@@ -1291,7 +1291,7 @@ async def answer(
     if dyn.wants_advice(question) and (target := dyn.decision_target(question, alerts, obj)):
         stage("permission", "正在评估处理建议")
         if decision := await dyn.evaluate(session, user, target, caller, request):
-            return done("answer", dyn.decision_snapshot(decision))
+            return done("answer", await act.with_declared(session, dyn.decision_snapshot(decision)))
     manifest = await sem.metric_layer(session, user)
     ctx["semantic"] = sem.semantic_lines(manifest)
     ctx["session_scope"] = [session_scope] if session_scope else []
@@ -1317,10 +1317,13 @@ async def answer(
                     chosen, _, filled = dyn.decision_choice(decision, proposal)
                     # 模型补了决策没填的参数（如数量）→ 按补全后的参数重新试运行
                     check = await act.dry_run(session, user, dict(chosen)) if filled else None
-                    return done("answer", dyn.decision_snapshot(decision, proposal, check))
+                    snap = dyn.decision_snapshot(decision, proposal, check)
+                    return done("answer", await act.with_declared(session, snap))
                 check = await act.dry_run(session, user, proposal)
                 policy = next(c["policy"] for c in catalog if c["id"] == proposal["type"])
-                return done("answer", act.action_snapshot(proposal, check, policy))
+                return done(
+                    "answer", await act.with_declared(session, act.action_snapshot(proposal, check, policy))
+                )
             intent, val = "refuse", {"code": "NOT_SELECT", "reason": "没有可用的动作，问数只读"}
         if intent == "metric":  # 指标查询：编译器生成 SQL；编不出 / 执行报错回喂一次，改走 SQL
             stage("executing", "正在按指标层查询")
