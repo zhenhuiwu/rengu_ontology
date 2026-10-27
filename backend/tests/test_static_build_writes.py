@@ -104,8 +104,12 @@ async def test_second_workspace_publish_rollback_isolated(ws2, conn):
     h2 = {"X-Ontology-Id": str(wid)}
     liu2, wang2 = {**LIU, **h2}, {**WANG, **h2}
     cur1 = (await c.get(f"{P}/releases/current", headers=WANG)).json()
-    # 新空间首版没有上一版、不可回滚（versioning/service.py:89 latest.parent 为空），先发一版基线
-    await publish_new_object(c, liu2, wang2, "空间2基线", code="bw_base")
+    # 新空间首版没有上一版、不可回滚：409 ROLLBACK_FIRST_RELEASE；先发一版基线
+    _, base_ver = await publish_new_object(c, liu2, wang2, "空间2基线", code="bw_base")
+    r = await c.post(f"{P}/releases/{base_ver}:rollback", json={}, headers=wang2)
+    assert r.status_code == 409 and r.json()["code"] == "ROLLBACK_FIRST_RELEASE", r.text
+    assert r.json()["message"] == "这是首个发布版本，没有可回滚到的上一版"
+    assert (await c.get(f"{P}/releases/current", headers=wang2)).json()["current"] == base_ver  # 不留新版本
     cur1 = (await c.get(f"{P}/releases/current", headers=WANG)).json()
 
     cr2, ver2 = await publish_new_object(c, liu2, wang2, "空间2")

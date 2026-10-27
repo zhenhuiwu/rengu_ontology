@@ -86,7 +86,15 @@ class VersioningService:
             summary: dict = {"changeOrders": len(cr_ids)}
         else:
             # 前端规则：「只能回滚最近一次发布」
-            if latest is None or latest.ver != rollback_of or latest.parent is None:
+            if latest is not None and latest.ver == rollback_of and latest.parent is None:
+                # 首个发布版本没有上一版可恢复：单独的错误码，前端据此隐藏回滚按钮
+                raise AppError(
+                    "这是首个发布版本，没有可回滚到的上一版",
+                    code="ROLLBACK_FIRST_RELEASE",
+                    status_code=409,
+                    details={"current": base_ver, "rollbackOf": rollback_of},
+                )
+            if latest is None or latest.ver != rollback_of:
                 raise AppError(
                     "只能回滚最近一次发布",
                     code="ROLLBACK_NOT_LATEST",
