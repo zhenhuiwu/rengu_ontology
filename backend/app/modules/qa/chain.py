@@ -56,6 +56,8 @@ from app.core.enums import LabelEnum
 from app.core.errors import AppError
 from app.db.session import QaReadonlyNotConfigured, SessionDep, get_qa_readonly_engine
 from app.modules.ontology.models import OntologyWorkspace
+from app.modules.qa import guards, sqlfix
+from app.modules.qa import value_index as vi
 from app.modules.qa.llm import LLMClient
 from app.modules.qa.models import QaSynonymLink
 from app.modules.qa.readonly import scope_readonly_conn
@@ -464,6 +466,181 @@ def _refuse_lines(ontology_id: int) -> list[str]:
     return [f"- {n['term']} → {n['code']}：{n['reason']}" for n in _refuse_items(ontology_id)]
 
 
+def _is_draft(status: Any) -> bool:
+    v = getattr(status, "value", status)
+    n = getattr(status, "name", "")
+    return "草稿" in str(v) or str(n).lower() == "draft" or str(v).lower() == "draft"
+
+
+# ---------------------------------------------------------------- 取值索引（value_index）
+
+ENTITY_MIN_ROWS = 20
+_CODE_HEAD = re.compile(r"编号|编码|单号|订单号|条码|id$", re.I)
+
+
+def _semantic_props(rows: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """(对象 code, 属性 api) → 属性名；对象 code 是 semantic_map 里对象的 id。"""
+    api_of = {r["api"]: r["id"] for r in rows if r.get("kind") == "object"}
+    return {
+        (api_of.get(r.get("parent"), ""), r["api"]): r.get("name") or ""
+        for r in rows
+        if r.get("kind") == "property"
+    }
+
+
+async def qa_value_index(session: AsyncSession) -> vi.ValueIndex:
+    """受治理表的文本 / 枚举列取值 + 已发布语义映射 → 取值索引（见 value_index 模块说明）。"""
+    from app.contracts.static import semantic_map
+
+    ontology_id = require_ontology_id(session)
+    src = qa_source(ontology_id)
+    skip = set(_qa_config(ontology_id).get("sampleSkip") or ())
+    try:
+        async with session.begin_nested():
+            rows = await semantic_map(session)
+    except Exception:  # 没有已发布快照时只用物理取值兜底
+        rows = []
+    props = _semantic_props(rows)
+    obj_of = {g.name: g.object_type for g in governed_tables(ontology_id).values()}
+    cols: list[vi.Col] = []
+    extra: set[str] = set()
+    for t in src.tables:
+        total = await session.scalar(sa.select(sa.func.count()).select_from(t)) or 0
+        for c in t.columns:
+            head = _comment_head(c)
+            label = props.get((obj_of.get(t.name, ""), c.name)) or head
+            extra |= {head, label}
+            enum = _label_enum(c)
+            is_name = src.name_cols.get(t.name) == c.name
+            if (
+                c.name in SYSTEM_COLS
+                or c.name in skip
+                or "脱敏" in (c.comment or "")
+                or (not enum and not isinstance(c.type, sa.String))
+                or (not is_name and (c.unique or c.name == "code" or _CODE_HEAD.search(head or c.name)))
+            ):
+                continue
+            cap = vi.NAMECARD if is_name else vi.LOWCARD
+            vals = (
+                (await session.execute(sa.select(c).distinct().where(c.is_not(None)).limit(cap + 1)))
+                .scalars()
+                .all()
+            )
+            vals = [getattr(v, "name", v) if enum else v for v in vals]
+            if not vals or len(vals) > cap:
+                continue
+            col = vi.Col(t.name, c.name, label, [str(v) for v in vals], is_name=is_name)
+            # 几乎每行一个值的列（≥ 20 行的表里 90% 以上不同）按它分组 ≈ 按对象分组
+            col.entity = is_name or (total >= ENTITY_MIN_ROWS and len(vals) >= 0.9 * total)
+            if enum:
+                col.labels = {m.value: m.name for m in enum}
+            cols.append(col)
+    return vi.build(cols, rows, extra)
+
+
+def col_labels(idx: vi.ValueIndex) -> dict[str, list[vi.Col]]:
+    """列的各种叫法（列注释词 / 本体属性名 / 绑定维度名 / 层级名）→ 列。"""
+    out: dict[str, list[vi.Col]] = {}
+    for c in idx.cols:
+        for w in {c.label, c.dim_name if c.dim else "", c.level or ""}:
+            w = vi.norm(w)
+            if len(w) >= 2:
+                out.setdefault(w, []).append(c)
+    return out
+
+
+def dim_words(idx: vi.ValueIndex) -> list[str]:
+    """维度名 + 层级名 + 列叫法（反问“按哪个层级”时的候选）。"""
+    words = [*idx.dims.values(), *sorted(idx.level_names), *(c.label for c in idx.cols)]
+    return [w for w in dict.fromkeys(words) if w and len(w) >= 2]
+
+
+def _code_cols(ontology_id: int) -> dict[str, str]:
+    """表 → 业务编号列（列名 code，或注释是“…编号 / 编码”的唯一列）。"""
+    out = {}
+    for t in qa_source(ontology_id).tables:
+        if "code" in t.columns:
+            out[t.name] = "code"
+            continue
+        for c in t.columns:
+            if c.unique and _CODE_HEAD.search(_comment_head(c)):
+                out[t.name] = c.name
+                break
+    return out
+
+
+def _children(ontology_id: int) -> dict[str, set[str]]:
+    """上层表 → 有外键指向它的明细表（扇出检查用）。"""
+    out: dict[str, set[str]] = {}
+    for t in qa_source(ontology_id).tables:
+        for c in t.columns:
+            for fk in c.foreign_keys:
+                out.setdefault(fk.column.table.name, set()).add(t.name)
+    return out
+
+
+def _self_refs(ontology_id: int) -> list[str]:
+    return [
+        f"{t.name}.{c.name}"
+        for t in qa_source(ontology_id).tables
+        for c in t.columns
+        for fk in c.foreign_keys
+        if fk.column.table.name == t.name
+    ]
+
+
+def _required_codes(ontology_id: int, ctx: dict[str, list[str]], codes: set[str]) -> set[str]:
+    """口径裁定、指标定义、会话口径里写到的枚举 code：这些是度量的默认过滤，不能当“题目没提”去掉。"""
+    texts = [json.dumps(n, ensure_ascii=False) for n in _notes(ontology_id)]
+    texts += ctx.get("metrics") or []
+    texts += ctx.get("session_caliber") or []
+    blob = "\n".join(texts)
+    return {c for c in codes if re.search(rf"\b{re.escape(c)}\b", blob)}
+
+
+def fix_sql(
+    tree: exp.Expression,
+    question: str,
+    ontology_id: int,
+    idx: vi.ValueIndex,
+    res: vi.Resolution,
+    scope: list[vi.Hit],
+    required: set[str],
+) -> list[str]:
+    """确定性修正（sqlfix），返回给用户看的说明。"""
+    src = qa_source(ontology_id)
+    levels = _qa_config(ontology_id).get("hierarchyLevel") or {}
+    notes: list[str] = []
+    sqlfix.like_to_eq(tree, res.unique())
+    if not guards.time_expressed(question) and sqlfix.strip_time_window(tree, src.time_cols):
+        notes.append("题目没给时间，按全部数据统计")
+    # 时间说法若只是口径名 / 枚举标签的一部分（“出库及时率”“已出库”）不算点名时间列
+    masked = question
+    words = [n for _, ns, _ in _caliber_checks(ontology_id) for n in ns]
+    words += [lb for c in idx.cols for lb in c.labels]
+    for w in sorted(set(words), key=len, reverse=True):
+        if len(w) >= 2:
+            masked = masked.replace(w, " ")
+    named = [c for c, hs in src.time_hints.items() if any(h in masked for h in hs)]
+    if len(named) == 1:
+        tcols = {t.name: set(t.columns.keys()) for t in src.tables}
+        notes += sqlfix.retarget_time(tree, named[0], src.time_cols, tcols)
+    notes += sqlfix.path_top_level(tree, idx, res.hits, levels)
+    sqlfix.date_buckets(tree)
+    notes += sqlfix.exclude_placeholders(tree, idx)
+    notes += sqlfix.strip_unasked_enum(tree, sqlfix.col_meta_enum(idx.cols), question, required)
+    ents: dict[str, set[str]] = {}
+    for c in idx.cols:
+        if c.entity:
+            ents.setdefault(c.table, set()).add(c.column)
+    for t, c in src.name_cols.items():
+        ents.setdefault(t, set()).add(c)
+    sqlfix.ensure_code(tree, ents, _code_cols(ontology_id))
+    if s := sqlfix.scope_filter(tree, scope):
+        notes.append("已按会话范围过滤：" + "、".join(s))
+    return notes
+
+
 _JOIN_REF = re.compile(r"\b([A-Za-z_][\w]*)\.[A-Za-z_]\w*")
 
 
@@ -500,7 +677,8 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
         if notes and notes in seen_defs:  # 多个指标共用同一份定义页时不重复贴，省 token
             notes = "（基础对象、时间字段、默认过滤同上一条）"
         seen_defs.add(notes)
-        metrics.append(f"- {m.display_name}（{m.unit}，{m.version}）= {m.formula}{notes}")
+        draft = "，草稿口径，回答要提示“草稿口径”" if _is_draft(m.status) else ""
+        metrics.append(f"- {m.display_name}（{m.unit}，{m.version}{draft}）= {m.formula}{notes}")
     syn = [f"- {s.word} → {s.target}" for s in (await session.scalars(select(QaSynonymLink))).all()]
     for d in (await session.scalars(select(DimMapping).order_by(DimMapping.seq).limit(40))).all():
         syn.append(f"- {d.phrase} → {'/'.join(d.targets)}")
@@ -584,7 +762,9 @@ _GUIDELINES = (
     "口径裁定里写了的状态条件必须加；\n"
     "5. 路径型列（值形如“上层/下层”，见“维度层级与取值”）：问这个维度没指明下层时，"
     "SELECT 和 GROUP BY 都用最上层 split_part(列, '/', 1)，不要按整串分组；"
-    "按某个上层取值过滤用 LIKE '上层/%'；\n"
+    "点名某一级的取值时按“取值匹配”给的 split_part 条件过滤；"
+    "不是路径型的列（取值里没有 '/'）一律用 = 精确值，"
+    "不要 LIKE；\n"
     "6. 问“最多 / 最高 / 最少 / most / top”且没说要前几名时，可能有并列，必须返回所有并列项，"
     "禁止 ORDER BY … LIMIT 1。写法：WITH t AS (SELECT 分组, COUNT(*) AS n FROM … GROUP BY 分组) "
     "SELECT 分组, n FROM t WHERE n = (SELECT MAX(n) FROM t)；说了“前 N”才用 ORDER BY … LIMIT N；\n"
@@ -596,7 +776,11 @@ _GUIDELINES = (
     "对象用简称时用 name LIKE '%简称%'（去掉通用后缀）；\n"
     "10. 按日 / 月分组时输出 date：date_trunc('month', 列)::date 或 列::date；指标的时间字段按"
     "“口径裁定 / 指标口径”；公式里写了条件时以公式为准；\n"
-    "11. 确保 SQL 符合 PostgreSQL 语法、可直接执行。\n"
+    "11. 确保 SQL 符合 PostgreSQL 语法、可直接执行；\n"
+    "12. 题目里没有任何时间说法（今天、本月、近 7 天、10 月……）时不加时间条件，统计全部数据"
+    "（指标的时间字段只在题目给了时间时才用）；\n"
+    "13. “取值匹配”里列出的说法照抄对应的 列 = 值 条件；同一说法对上多列时按题意选；"
+    "题目里像指标的说法在“口径裁定 / 指标口径 / 同义词”里都找不到时反问，不要自己编口径。\n"
 )
 
 _WEEKDAY = "一二三四五六日"
@@ -761,6 +945,8 @@ def cap_time_upper(tree: exp.Expression, now: datetime, time_cols: frozenset[str
 
 
 _DOC_TITLES = {
+    "values": "取值匹配（题目说法 → 库里的精确取值，写 WHERE 照抄；不要改成 LIKE）",
+    "hierarchy": "层级列（题目没指明层级时的默认汇总层级）",
     "anchors": "问题里提到的对象名称（库里真实名称：写 WHERE 照抄；只对上一个就直接用，不要反问）",
     "caliber": "口径裁定（qa 裁定，跟“指标口径”冲突时以这里为准）",
     "session_scope": (
@@ -981,6 +1167,27 @@ def _label_rows(rows: list[list[Any]], ontology_id: int) -> list[list[Any]]:
     return rows
 
 
+def precheck_clarify(
+    question: str, ontology_id: int, idx: vi.ValueIndex, res: vi.Resolution
+) -> dict[str, Any] | None:
+    """取值索引上的确定性反问（guards）：时间口径冲突 / 不认识的取值 / 有歧义的维度 / 只有指标。"""
+    src = qa_source(ontology_id)
+    tcols = {c.name: c for t in src.tables for c in t.columns if c.name in src.time_cols}
+    labels = {k: _comment_head(c) or k for k, c in tcols.items()}
+    hints = [w for ws in src.time_hints.values() for w in ws]
+    notes = _notes(ontology_id)
+    opts = [n["term"] for n in notes]
+    metric_words = [w for n in notes for w in [n["term"], *n.get("aliases", [])]] + list(src.measure_terms)
+    return (
+        guards.multi_time_clarify(question, src.time_hints, labels)
+        or guards.unknown_value_clarify(question, idx, res, col_labels(idx), hints)
+        or guards.ambiguous_dim_clarify(question, idx, res, dim_words(idx))
+        or guards.bare_metric_clarify(
+            question, res, metric_words, ["今天", "昨天", "本周", "本月", *opts][:6]
+        )
+    )
+
+
 async def answer(
     session: AsyncSession,
     conn: AsyncConnection,
@@ -1023,6 +1230,17 @@ async def answer(
     names = await _names(session)
     if c := entity_ambiguity(question, names) or vague_metric(question, ontology_id, ctx):
         return "answer", clarify_snapshot(c), 0, int((time.monotonic() - t0) * 1000), None
+    idx = await qa_value_index(session)
+    vres = idx.resolve(question)
+    scope_hits = idx.resolve(session_scope).unique() if session_scope else []
+    if r := guards.missing_value_refuse(vres) or guards.scope_conflict_refuse(scope_hits, vres):
+        return "denied", refuse_snapshot(r), 0, int((time.monotonic() - t0) * 1000), None
+    if c := precheck_clarify(question, ontology_id, idx, vres):
+        return "answer", clarify_snapshot(c), 0, int((time.monotonic() - t0) * 1000), None
+    ctx["values"] = vi.prompt_lines(vres)
+    ctx["hierarchy"] = vi.hierarchy_lines(
+        idx, _qa_config(ontology_id).get("hierarchyLevel") or {}, _self_refs(ontology_id)
+    )
     ctx["anchors"] = await value_anchors(session, question, names)
     ctx["actions"] = act.action_lines(catalog)
     alerts = await act.related_alerts(session, user, question, anchor_names(ctx["anchors"]))
@@ -1046,7 +1264,8 @@ async def answer(
     ctx["session_caliber"] = caliber_lines or []  # 会话口径 → 指标变体（service.caliber_lines）
     messages = build_prompt(question, ctx)
     limit = ROW_LIMIT
-    attempt, checked, repaired = 0, False, False
+    attempt, checked, repaired, overruled = 0, False, False, False
+    fix_notes: list[str] = []
     mplan: sem.MetricPlan | None = None
     metric_failed = False
     while True:
@@ -1102,25 +1321,43 @@ async def answer(
                 continue
         if intent != "sql":  # 反问 / 拒答：不执行 SQL
             if intent == "clarify":
+                # 口径说法只在题目本身点了某个口径时才算“已有默认”
+                said = matched_calibers(question, ontology_id)
+                calib = {t: list(n) for t, n, _ in _caliber_checks(ontology_id)} if said else {}
+                if not overruled and (msg := guards.overrule_clarify(val, idx, scope_hits, calib)):
+                    overruled = True  # 反问的事已有默认（层级 / 会话范围 / 口径裁定）→ 回喂一次
+                    messages = [
+                        *messages,
+                        {"role": "assistant", "content": reply},
+                        {"role": "user", "content": msg},
+                    ]
+                    continue
                 return done("answer", clarify_snapshot(val))
             return done("denied", refuse_snapshot(val))
         sql = val
         tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
         if not checked:  # 口径校验不过，回喂改一次（只一次，改完不再查）
             checked = True
-            if bad := caliber_violations(question, tree, ontology_id):
+            bad = caliber_violations(question, tree, ontology_id)
+            bad += sqlfix.fanout_violations(tree, _children(ontology_id))
+            if bad:
                 messages = [
                     *messages,
                     {"role": "assistant", "content": reply},
                     {
                         "role": "user",
-                        "content": "上面的 SQL 不符合口径裁定："
+                        "content": "上面的 SQL 不符合口径裁定 / 计算规则："
                         + "；".join(bad)
                         + "。请修正后只输出一条 SQL。",
                     },
                 ]
                 continue
-        if cap_time_upper(tree, clock.local_now(), qa_source(ontology_id).time_cols):
+        before = tree.sql(dialect=DIALECT)
+        codes = {code for c in idx.cols for code in c.labels.values()}
+        required = _required_codes(ontology_id, ctx, codes)
+        fix_notes = fix_sql(tree, question, ontology_id, idx, vres, scope_hits, required)
+        cap_time_upper(tree, clock.local_now(), qa_source(ontology_id).time_cols)
+        if tree.sql(dialect=DIALECT) != before:
             sql = tree.sql(dialect=DIALECT)
         stage("executing", "正在查询数据")
         try:
@@ -1203,6 +1440,9 @@ async def answer(
     }
     if mplan is not None:
         ans["metricQuery"] = mplan.echo
+    if notes := fix_notes if mplan is None else []:
+        ans["text"] = f"{text}\n说明：{'；'.join(notes)}"
+        ans["basis"]["notes"] = notes
     return done("answer", {"answer": ans}, len(rows), sql)
 
 

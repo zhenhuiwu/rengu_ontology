@@ -1,6 +1,7 @@
 {
-  "_note": "问数上下文的本体级补充（chain._qa_config）：dimObjects = 除可问表对应对象外，还要取维度的对象 code；timeHints = 时间列在题目里的补充说法（列注释推不出来的）；sampleSkip = 不列取值的列",
+  "_note": "问数上下文的本体级补充（chain._qa_config）：dimObjects = 除可问表对应对象外，还要取维度的对象 code；timeHints = 时间列在题目里的补充说法（列注释推不出来的）；sampleSkip = 不列取值的列；hierarchyLevel = 层级路径列（表.列）题目没指明层级时的默认汇总层级（缺省第 1 级）",
   "dimObjects": ["category"],
-  "timeHints": {"created_at_biz": ["下单", "下的单"]},
-  "sampleSkip": ["barcode", "spec"]
+  "timeHints": {"created_at_biz": ["下单", "下的单"], "shipped_at": ["履约"]},
+  "sampleSkip": ["barcode", "spec"],
+  "hierarchyLevel": {"product.category": 1}
 }
