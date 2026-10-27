@@ -6,10 +6,11 @@ from sqlalchemy import select
 from app.common.ontology import set_ontology_scope
 from app.modules.admin.models import SysRole, SysUser
 from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
+from tests.helpers.workspace import TEST_DB
 
 
 async def bind_objects_workspace(session):
-    assert session.get_bind().engine.url.database == "rengu_test_use_objects_20261027"
+    assert session.get_bind().engine.url.database == TEST_DB
     session.get_bind().engine.hide_parameters = True
     members = set(
         await session.scalars(select(OntologyMember.user_id).where(OntologyMember.ontology_id == 1))
@@ -30,7 +31,7 @@ async def bind_objects_workspace(session):
 
 async def enable_fixture_export(session):
     """Explicit export capability for export assertions, never an implicit admin bypass."""
-    assert session.get_bind().engine.url.database == "rengu_test_use_objects_20261027"
+    assert session.get_bind().engine.url.database == TEST_DB
     role = await session.scalar(select(SysRole).where(SysRole.code == "R-01"))
     role.objs = [{**item, "export": item.get("view") is True} for item in role.objs]
     await session.flush()
@@ -38,7 +39,7 @@ async def enable_fixture_export(session):
 
 @pytest.fixture(autouse=True)
 async def objects_scope(session):
-    assert session.get_bind().engine.url.database == "rengu_test_use_objects_20261027"
+    assert session.get_bind().engine.url.database == TEST_DB
     session.get_bind().engine.hide_parameters = True
     await set_ontology_scope(session, 1)
 
