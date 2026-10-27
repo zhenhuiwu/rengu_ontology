@@ -397,3 +397,83 @@
   - `test_palantir_machine` / `test_dynamic_actions` 的 `grant_fixture_roles` 夹具断言（改动前就失败）。
   - `test_dynamic_rules::test_hits_paging_and_detail`。
   - 3 条 `test_migrations`（notify_0022）。
+
+## 未完成清单（交 Codex）
+
+基线 master `e657b08`（2026-10-27），迁移头 `dynamic_0027`。范围：动态模块（告警、动作中心、规则、情景推演、生命周期、决策评估）。每条按「是什么 / 为什么没做 / 涉及文件和接口 / 怎么验证」写；「为什么没做」分三类：**待定**（等老板定）、**Codex 修复**（含只缺测试的）、**环境问题**（不在代码里）。上文各轮小节里已标「已做 / 已解决」的不再列。
+
+### A. 待老板定
+
+1. **人工复核项（`humanChecks`）和将推送的编辑（`declaredEdits`）在动态页面显示**
+   - 是什么：palantir-t7（action-event-api §18.2/§18.3）对外部 Webhook 通道的动作，把算不了的提交条件变成 `humanChecks:[{name,rule,reason}]`，把自然语言编辑作为声明效果随签名推送（`edits[].status = "external/declared"`）。动态页面目前都不显示，确认人看不到要核对什么。
+   - 为什么没做：待定。这是动态负责人提的小前端适配，PDE 建议做，还没得到老板同意，本批按指示跳过。
+   - 涉及：
+     - 后端已有的数据：`decisions._dry_run` 用 `**result` 原样展开 `DatabaseSubmissionChecker.run` 的结果，所以 `POST /decisions:evaluate`、`GET /alerts/{id}/decision` 每条建议的 `dryRun.humanChecks` **已经透传**（Webhook 动作有不可判定条件时才有这个键）。机器接口 `_machine_out`（`router.py`）有 `humanChecks` 和 `edits[].status`。
+     - 后端缺的：人工会话用的 `POST /actions/{code}:validate` 只回 `{passed, message}`，把 `humanChecks` 丢了（`router.py validate_launch`，`ActionService.validate_launch`）；`POST /alerts/{code}:start-action`（`StartActionOut`）和 `POST /action-runs:stage` 返回 `ActionRunDetail`，里面没有 `humanChecks` 字段，只在时间线里多一条 warn 日志「需确认人人工核对的提交条件（N 项）」（`service.py HUMAN_CHECK_TEXT`）。`ActionRunDetail` 也没有声明编辑列表。
+     - 前端：`src/pages/ops/Alerts.vue` 的「AI 处置建议」面板（dynamic-r7）和本页发起动作确认框；`src/pages/ops/Actions.vue` 的发起弹窗（`launch*`、`validateActionLaunch`）和确认 / 审批视图；`src/api/dynamic.ts` 类型。
+   - 建议做法：`:validate` 返回 `humanChecks`；`ActionRunDetail` 加 `humanChecks`（从暂存时的时间线 / 运行记录取，或暂存时存下来）和 `declaredEdits`（复用 `_machine_out` 的 `declared_text` 判断）；前端按字段通用渲染「需人工复核」清单（name / rule / reason）和「将推送的编辑」列表，不认具体动作。
+   - 怎么验证：私有库按 `test_palantir_mainline.py` 的准备步骤，对 `request_replenish`（EXT-WEBHOOK）调 `:validate`、`:start-action`、`GET /action-runs/{id}`，断言 `humanChecks` 非空、声明编辑带 `external/declared`；`POST /decisions:evaluate` 断言第 1 名的 `dryRun.humanChecks` 存在；前端 `vue-tsc --noEmit`，再在真接口模式下打开告警详情和确认框看两张清单。
+
+2. **审批触发提交时，提交条件按确认人复核**
+   - 是什么：palantir-t7（§18.4）已生效：审批人审批后触发提交（以及排队执行器）时，提交条件按记录的确认人身份复核，审批人自己的功能 / 对象 / 操作权限仍按审批人查。影响动态的 `:start-action` → 审批 → 执行流程（`ActionService.approve`）。
+   - 为什么没做：待定。代码已改，等老板确认这个口径；不同意就要回退成按审批人复核（原来审批人没有「执行角色」会 422）。
+   - 涉及：`app/modules/action/checker.py`、`app/modules/dynamic/service.py`（approve / 提交路径）、`POST /action-runs/{id}:approve`。
+   - 怎么验证：`test_palantir_mainline.py`（U010812 审批后派发）；另补一条：审批人缺执行角色、确认人有时审批成功，确认人停用时按当前身份复核。
+
+3. **情景推演 `:run` / stage-plan 保持 503**
+   - 是什么：`POST /scenarios/{id}:run`、stage-plan、建议生成都返回 503 `SCENARIO_EXECUTOR_UNAVAILABLE`（`rules_service.py` 约 986/1005/1024 行，`scenario_templates.py:46`）。
+   - 为什么没做：待定（用户决定），有真实预测模型和数据集之后再接，不接示意引擎。
+   - 涉及：`ScenarioService`、`scenario_templates.ENGINES`、`Scenarios.vue`。接上后还要处理进程内后台任务的问题（重启后停在「运行中」，见上文「未完成」第 4 条、「下一步」第 3 条）。
+   - 怎么验证：现在只需验证 503 和页面上的空状态 / 原因；接入后按模板字段跑 `:run` → 轮询 `/result`。
+
+### B. 演示环境（环境问题，不在代码里）
+
+4. **演示主线的运行配置**
+   - 是什么：主线「库存告警 → 补货建议 → 人工确认 → Webhook → 决策日志」目前只在测试里走通，真实环境还缺：
+     - `RENGU_INTEGRATION_ADAPTERS` 加上 `1/EXT-WEBHOOK`（`submit_path`、`actions`、`signing_secret`）；
+     - `RENGU_INTEGRATION_REAL_CONNECT=true`；
+     - HTTPS 接收端；
+     - 派发任务 `dispatch_queued`（`app/modules/integration/worker.py` / `app/jobs`）在跑；
+     - 动态调度 worker `python -m app.modules.dynamic.worker`（监听 `rules` 和 `qa_pages` 两个队列）在跑，否则不会每分钟 `rule.sweep`，也不会 `decide_pending` 自动生成决策建议，问数页面定时刷新也不跑；
+     - 开发库 `rengu` 是 Codex 的快照，**没有灌 `demo_mainline` 种子**（R-09 / R-10 角色、U010011 / U010812 成员、AL-0139 处理人、EXT-WEBHOOK 通道、ACT-0552 已撤回）。
+   - 为什么没做：环境问题。在哪个环境配、由谁配，等老板定；不能把 worker 跑在共享库上做实验。
+   - 涉及：部署环境变量；`app/modules/dynamic/worker.py`；种子阶段 `demo_mainline`。
+   - 怎么验证：配好后从前端用周晓峰认领 AL-20261025-0139 → 生成 / 查看 AI 建议（`qty=143`）→ 发起 `request_replenish` → 姚娜审批 → 接收端收到验签通过的请求 → 已对账 → `GET /decisions` 有记录。
+
+### C. 已知失败（Codex 修复）
+
+5. **`test_dynamic_rules.py::test_hits_paging_and_detail`**：AL-…0126 / 0127 的顺序断言失败，改动前就有，原因没查。建议：先确认两条命中的时间是否相同；相同就给命中列表加编号作第二排序键，否则按真实数据改断言。验证：单跑该用例。
+6. **`test_dynamic_alerts.py` 的 `test_start_action_full_flow` / `test_start_action_order_approver` / `test_start_action_errors` 准备阶段报错**：私有空库上 `grant_fixture_roles` 找不到 U010001 / R-01（`test_palantir_machine`、`test_dynamic_actions` 同一夹具也一样）。master 上本来就有。建议：夹具先灌 admin / 用户种子再授角色，或按 `demo_mainline` 之后的种子改用户。验证：在全新私有库上单跑这 3 条。
+7. **迁移往返**：`test_migrations.py` 3 条失败（`notify_0022` 命名检查找不到 `app/modules/notify`，`notify_0022` 降级报错），另有 `test_migration_round_trip` 卡在 `admin_0025:165` 禁止降级；连带 `test_dynamic_migration.py` 往返和 `dynamic_0027`（`decision_log`）降级都没真正跑过。不是动态代码造成的。验证：修好后 `alembic downgrade` 到 `dynamic_0023` 之前再 `upgrade head`，单头仍为 `dynamic_0027`。
+8. **Ruff E501**：`app/modules/dynamic/rule_runtime.py` 有超过 110 列的行（268，另有 105 / 198 / 215 / 315 / 372 / 376）。建议统一跑 ruff format 时一起改。验证：`ruff check app/modules/dynamic/rule_runtime.py`。
+
+### D. 规则和告警运行时的能力边界
+
+9. **跨对象 / 指标条件的规则不能执行（R-012、R-019 等）**
+   - 是什么：事件规则运行时（`docs/26-10-27-rule-alert-runtime.md`）只支持已声明事件字段的有限表达式和明确版本的生命周期迁移条件。R-012 的 `product.safetyStock(store)` 是跨对象函数，R-019 的 `gross_margin@v2(sku, store, price = event.newPrice)` 是带参数的指标调用，`rule_runtime.py`（约 105 / 171 / 198 行）明确报不可执行。`metric_rules.py` 只支持定时规则里写明的 `metric@vN(object, bucket)` 和 `prev` / `wow`，缺真实时间桶或上周基线时同样不可执行。R-019 还是 `output=通知`，没有真实通知通道会被拒绝，并且没有绑定动作（不在演示主线，已定先不补）。
+   - 为什么没做：Codex 修复 / 待定。需要先定跨对象读取和带参指标的执行口径；改规则表达式属于改种子既有值，要老板同意。
+   - 涉及：`rule_runtime.py`、`event_rule_runtime.py`、`metric_rules.py`、`seeds/json/dynamic/RULE_DEFS.json`。
+   - 现状对演示的影响：演示告警 AL-20261025-0139 是种子数据，不是运行时生成的；真实库存事件进来不会产生新的 R-012 告警。
+   - 怎么验证：给 R-012 投一条 `inventory_changed` 事件，现在应返回明确不可执行；接入口径后应生成 Alert + RuleHit，且同一事件重入不重复。
+
+10. **事件规则产生的告警下一次 sweep 才评估**：`event_rule_runtime.dispatch` 在事件 worker 的事务里建告警，不同步调 `decide_pending`，等动态 worker 下一次 `rule.sweep`（每分钟）补评估。这是有意的设计（不拖慢事件事务），只在 worker 在跑时才会发生。验证：worker 在私有库跑起来，投一条能命中的事件，1 分钟内 `GET /alerts/{id}/decision` 有记录。
+11. **种子告警不会自动评估**：`auto_decision.decide_pending` 只选非种子（`Alert.is_seed = false`）、待处理 / 处理中、24 小时内、还没有决策记录的告警。AL-0139 这类种子告警要在详情里点「生成建议」（`POST /alerts/{id}/decision:evaluate`）。不是缺陷；演示时要记得手动生成。
+
+### E. 已写但没测的部分（Codex 测试）
+
+12. **`decide_pending` 和 sweep 收尾的整链**（`auto_decision.py`、`worker._sweep_workspace`）：要用 worker 的真 sessionmaker，测试事务里看不到提交。另有**失败记录分支**（单条失败写 `output.error` 的 decision_log，下一轮不重试）。验证：私有库起 worker 或直接调 `decide_pending(ontology_id)`，构造一条会抛错的告警，看 decision_log 有 error 且下一轮不再选它。
+13. **多比较条件的规则做参数表达式求值**（`param_expr.py`、`decisions._prefill`）：只用告警值里的「标签：数值」对和对象属性。验证：两个比较条件的规则 + 表达式映射，检查 `paramSources` 和 `unfilledParams.reason`。
+14. **维度对象属性读取**：表达式里的名字先查告警对象、再查维度对象（`qa.explore_api._bind`，带行级范围），维度这条没测。验证：映射里引用维度对象（如门店）的属性，以及维度对象不可见时进 `unfilledParams`。
+15. **前端「AI 处置建议」面板和动作中心预填**（`Alerts.vue`、`Actions.vue` 的 `?launch=&launchObj=&launchParams=`）：只做过 vue-tsc。验证：真接口模式下两条分支都点一遍——规则绑定动作且我是处理人 → 本页弹窗预填；其他 → 跳到动作中心弹窗预填，取消不暂存。
+16. **QA 页面任务挂载**：`worker.build_app` 调 `app.modules.qa.page_schedule.register(app)`。现在 master 上已有 `qa/page_schedule.py`（qa-p3），挂载真实生效但没测。验证：`build_app()` 后任务表里有 `qa.page.sweep`，worker 监听 `qa_pages`。
+17. **服务账号名称查询**：`ActionService.person_label` 的 `load_service_names` 数据库路径（`api:{编号}` 显示「服务账号 名称」）只测了单元。验证：用服务账号密钥暂存一个动作，再用人工会话读详情，看发起人显示名称。
+18. **决策评估（dynamic-r6）其余未测项**：`GET /decisions` 的行级范围和过滤 / 分页、`limit` 截断、`caller.agent`、保存点回滚不留数据、服务账号 `callerAllowed=false`、`key-allowlist`、`policy.mode=suggest`、规则直接绑定与 autoStage 不一致时的优先级、`decision_log` 拒绝 UPDATE / DELETE、dynamic:read 在命中 / 生命周期 / 动作 GET 路由上的有无（只测了 `/alerts`）。明细见上文「dynamic-r6 · 留给 Codex 的未测部分」。
+19. **告警筛选和单对象摘要（dynamic-r5）**：`filters` 在外部数据源（5000 上限）、区间和多键组合、与对象行级范围的组合；摘要的分段权限、行级裁剪、`limit` 边界、API 密钥路径；生命周期 `current` 以对象数据还是变化记录为准（SO202610250720852 不一致）待产品确认。告警页还没有 `filters` 的入口。明细见上文「dynamic-r5 · 交给 Codex 测试的部分」。
+20. **dynamic-r4 留下的未测项**：规则回放、规则定时调度（`dynamic_0015` 游标 / 运行历史）、发布写回 `apply_cr`（晋升、幂等、`WRITEBACK_FAILED` 回滚）、事件去重、告警分面 UI、`dynamic_0024` 在非 1 号本体和真实快照库上的升级。明细见上文「dynamic-r4 · 交给 Codex 测试的部分」。
+
+### F. 以前留下的、仍未收口的项
+
+21. **`VITE_DYNAMIC_CR_WRITE` 默认仍关**（`frontend/src/api/dynamic.ts` `CR_WRITE`）：静态写回钩子已在 master，但「规则发布写回」的联合 e2e（新建规则 → 变更单提交 → 审批 → 发布 → 规则 v1 / 已发布）在当前 master 上没有重跑；未登记的 kind/section 被跳过时前端没有提示。验证：按上文「发布写回」一节的 e2e 在私有库跑通后，再决定是否默认打开。
+22. **审批界面**：动作中心没有专门的审批界面设计，后端 `:approve` 和 `can.approve` 已就绪；演示审批人现在是姚娜（U010812）。要不要做界面待定。
+23. **推演模板没有管理接口**：`scenario_template` 表只有 `GET /scenarios/templates`，没有编辑接口；影响明细表仍是演示引擎的行结构；建议动作按动作名映射。跟第 3 条一起等真实模型。
+24. **生命周期**：静态放弃 object 目标时不删 `lifecycle_draft`（动态读时忽略残留）；摘要里 `/lifecycle/changes` 不做行级裁剪，比摘要宽。验证：放弃后重新加入，草稿不复活；受限角色读 `/lifecycle/changes` 的结果。
