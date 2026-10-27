@@ -13,6 +13,7 @@ import { computed, reactive, ref, shallowRef, watch, nextTick, onScopeDispose } 
 import { useRoute, useRouter, RouterLink } from 'vue-router';
 import type { Cell, Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
+import { graphEdgeRoutes } from '@/components/graphEdges';
 import ObjRef from '@/components/ObjRef.vue';
 import { canResolve } from '@/components/objectRegistry';
 import AppPagination from '@/components/AppPagination.vue';
@@ -140,7 +141,6 @@ const short = (by: string) => {
   const t = m ? m[1] : by;
   return t.length > 12 ? `${t.slice(0, 11)}…` : t;
 };
-const center = (s: LcState) => ({ x: s.x + NW / 2, y: s.y + NH / 2 });
 
 function draw(fit: boolean) {
   const g = graph.value;
@@ -166,7 +166,8 @@ function draw(fit: boolean) {
   type E = { id: string; from: string; to: string; text: string; color: string; dash: string; width: number };
   const edges: E[] = transitions.value.map((t) => {
     const on = sel.value === `t:${t.id}`;
-    return { id: `t:${t.id}`, from: t.from, to: t.to, text: `${t.trigger} · ${short(t.by)}${t.mark ? `（${t.mark}）` : ''}`,
+    const by = short(t.by);
+    return { id: `t:${t.id}`, from: t.from, to: t.to, text: `${t.trigger} ·${by.length > 9 ? '\n' : ' '}${by}${t.mark ? `（${t.mark}）` : ''}`,
       color: on ? BRAND : GRAY.g8, dash: t.mark ? '5 4' : '', width: on ? 2 : 1.5 };
   });
   if (showIllegal.value) {
@@ -176,42 +177,18 @@ function draw(fit: boolean) {
       edges.push({ id: `x:${x.from}→${x.to}`, from: x.from, to: x.to, text: `非法 · 近 7 天 ${x.count} 次`, color: on ? BRAND : STATUS.warning, dash: '4 4', width: on ? 2 : 1.5 });
     }
   }
-  const pairKey = (a: string, b: string) => `${a}|${b}`;
-  const all = new Set(edges.map((e) => pairKey(e.from, e.to)));
+  const routes = graphEdgeRoutes(states.value.map((s) => ({ id: `s:${s.key}`, x: s.x, y: s.y, width: NW, height: NH })),
+    edges.map((e) => ({ id: e.id, from: `s:${e.from}`, to: `s:${e.to}`, text: e.text })), -16);
   for (const e of edges) {
-    const a = sm.get(e.from)!;
-    const b = sm.get(e.to)!;
-    if (!a || !b) continue;
-    let vertices: { x: number; y: number }[] = [];
-    let source: { cell: string; anchor?: { name: string; args?: Record<string, unknown> } } = { cell: `s:${e.from}` };
-    let target: { cell: string; anchor?: { name: string; args?: Record<string, unknown> } } = { cell: `s:${e.to}` };
-    if (e.from === e.to) {
-      source = { cell: `s:${e.from}`, anchor: { name: 'top', args: { dx: -36 } } };
-      target = { cell: `s:${e.to}`, anchor: { name: 'top', args: { dx: 36 } } };
-      vertices = [{ x: a.x + NW / 2 - 36, y: a.y - 44 }, { x: a.x + NW / 2 + 36, y: a.y - 44 }];
-    } else {
-      const ca = center(a);
-      const cb = center(b);
-      const between = states.value.some((s) => s !== a && s !== b && Math.abs(center(s).y - ca.y) < 20 && Math.abs(ca.y - cb.y) < 20
-        && center(s).x > Math.min(ca.x, cb.x) && center(s).x < Math.max(ca.x, cb.x));
-      const paired = all.has(pairKey(e.to, e.from));
-      // 有一对往返迁移、或中间隔着别的状态时，往法线方向弯开，避免重叠
-      if (paired || between) {
-        const dx = cb.x - ca.x;
-        const dy = cb.y - ca.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const off = between ? 96 : 26;
-        vertices = [{ x: (ca.x + cb.x) / 2 - (dy / len) * off, y: (ca.y + cb.y) / 2 + (dx / len) * off }];
-      }
-    }
+    const route = routes.get(e.id);
+    if (!route) continue;
     cells.push(g.createEdge({
-      id: e.id, source, target, vertices, zIndex: 1,
-      connector: { name: 'smooth' },
+      id: e.id, ...route, zIndex: 1,
       attrs: {
         line: { stroke: e.color, strokeWidth: e.width, strokeDasharray: e.dash, targetMarker: { name: 'block', width: 8, height: 6 }, cursor: 'pointer' },
         wrap: { cursor: 'pointer' },
       },
-      labels: [{ position: 0.5, attrs: { label: { text: e.text, fontSize: 12, fill: e.color === GRAY.g8 ? GRAY.g9 : e.color, cursor: 'pointer' },
+      labels: [{ position: route.labelPosition, attrs: { label: { text: e.text, fontSize: 12, fill: e.color === GRAY.g8 ? GRAY.g9 : e.color, cursor: 'pointer' },
         body: { fill: GRAY.g2, stroke: 'none', rx: 2, ry: 2, cursor: 'pointer' } } }],
     }));
   }

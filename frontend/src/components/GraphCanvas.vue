@@ -6,6 +6,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { Graph } from '@antv/x6';
 import { GRAY } from '@/theme';
+import { positionGraphLabels } from './graphEdges';
 
 const emit = defineEmits<{ ready: [graph: Graph] }>();
 const el = ref<HTMLDivElement>();
@@ -21,7 +22,9 @@ onMounted(() => {
     panning: true,
     mousewheel: { enabled: true, modifiers: ['ctrl', 'meta'], minScale: 0.3, maxScale: 3 },
   });
-  emit('ready', graph);
+  const current = graph;
+  current.on('render:done', () => positionGraphLabels(current));
+  emit('ready', current);
 });
 onBeforeUnmount(() => { graph?.dispose(); graph = null; });
 

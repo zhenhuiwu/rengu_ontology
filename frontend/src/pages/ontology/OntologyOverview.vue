@@ -11,6 +11,7 @@ import { Empty, message } from 'ant-design-vue';
 import { RightOutlined } from '@ant-design/icons-vue';
 import type { Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
+import { graphEdgeRoutes } from '@/components/graphEdges';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
@@ -29,7 +30,7 @@ import { QUALITY_CHECKS, DATA_CUTOFF } from '@/mock/quality';
 import { RELEASES } from '@/api/releases';
 import { backend, fallBackIfDown } from '@/api/fallback';
 import { currentApiContext } from '@/api/http';
-import { fetchGraph, fetchOverview, fetchOverviewTodos, fetchOverviewReleases, isOverviewReal, mockGraph, type GraphEdge, type OverviewGraph, type OverviewSummary, type OverviewTodo } from '@/api/overview';
+import { fetchGraph, fetchOverview, fetchOverviewTodos, fetchOverviewReleases, isOverviewReal, mockGraph, type OverviewGraph, type OverviewSummary, type OverviewTodo } from '@/api/overview';
 
 const router = useRouter();
 const { readonly, reason } = useReadonly();
@@ -218,38 +219,17 @@ function addCells(g: Graph) {
         },
       });
     });
-    const pairs = new Map<string, GraphEdge[]>();
-    for (const edge of edges) {
-      if (!positions.has(edge.from) || !positions.has(edge.to)) continue;
-      const key = [edge.from, edge.to].sort().join('|');
-      const group = pairs.get(key) ?? [];
-      group.push(edge); pairs.set(key, group);
-    }
+    const routes = graphEdgeRoutes(nodes.map((n) => ({ id: n.id, x: positions.get(n.id)!.x - NW / 2, y: positions.get(n.id)!.y - NH / 2, width: NW, height: NH })),
+      edges.map((e) => ({ ...e, text: e.name || e.id })));
     edges.forEach((l) => {
-      const a = positions.get(l.from), b = positions.get(l.to);
-      if (!a || !b) return;
+      const route = routes.get(l.id);
+      if (!route) return;
       const label = l.name || l.id;
-      const group = pairs.get([l.from, l.to].sort().join('|'))!;
-      const index = group.indexOf(l);
-      const offset = (index - (group.length - 1) / 2) * 80 * (l.from < l.to ? 1 : -1);
-      const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-      const self = l.from === l.to;
-      const vertices = self
-        ? [{ x: a.x - 48, y: a.y - 64 - index * 24 }, { x: a.x + 48, y: a.y - 64 - index * 24 }]
-        : offset ? [{ x: (a.x + b.x) / 2 - ((b.y - a.y) / length) * offset, y: (a.y + b.y) / 2 + ((b.x - a.x) / length) * offset }] : [];
-      let labelPosition = group.length > 1 ? 0.4 + index * 0.2 / (group.length - 1) : 0.5;
-      if (!vertices.length) {
-        labelPosition = [0.5, 0.3, 0.7, 0.2, 0.8].find((t) => [...positions.values()].every((p) =>
-          Math.abs(a.x + (b.x - a.x) * t - p.x) > (NW + label.length * 12 + 8) / 2
-          || Math.abs(a.y + (b.y - a.y) * t - p.y) > (NH + 20) / 2)) ?? 0.5;
-      }
       g.addEdge({
         id: l.id,
-        source: self ? { cell: l.from, anchor: { name: 'top', args: { dx: -24 } } } : l.from,
-        target: self ? { cell: l.to, anchor: { name: 'top', args: { dx: 24 } } } : l.to,
-        vertices, connector: { name: 'smooth' }, zIndex: 0,
+        ...route, zIndex: 0,
         attrs: { line: { stroke: GRAY.g7, strokeWidth: 1, strokeDasharray: l.status === '已发布' ? '' : '4 3', targetMarker: { name: 'block', width: 7, height: 5 }, cursor: 'pointer' } },
-        labels: [{ position: labelPosition, attrs: { label: { text: label, fontSize: 12, fill: GRAY.g9, cursor: 'pointer' }, body: { fill: GRAY.g2, stroke: 'none', rx: 2, ry: 2, cursor: 'pointer' } } }],
+        labels: [{ position: route.labelPosition, attrs: { label: { text: label, fontSize: 12, fill: GRAY.g9, cursor: 'pointer' }, body: { fill: GRAY.g2, stroke: 'none', rx: 2, ry: 2, cursor: 'pointer' } } }],
       });
     });
   });
