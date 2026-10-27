@@ -28,9 +28,10 @@ from app.modules.admin.permissions import active_user_names
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.crs import ChangeRequestService
 from app.modules.static.knowledge_trial import KnowledgeResolveIn, resolve_knowledge
-from app.modules.static.metric_trial import MetricTrialIn, metric_readiness, trial_metric
+from app.modules.static.metric_trial import MetricTrialIn, metric_readiness, metrics_readiness, trial_metric
 from app.modules.static.metric_versions import MetricRollbackIn
 from app.modules.static.metric_versions import rollback as rollback_metric
+from app.modules.static.metricflow_export import export_metricflow
 from app.modules.static.models import CRStatus
 from app.modules.static.overview import overview, todos
 from app.modules.static.permissions import check_target
@@ -69,6 +70,44 @@ FUNC_OF: dict[str, str] = {}
 def get(path: str, func: str, **kw: Any) -> Any:
     FUNC_OF[path] = func
     return router.get(path, dependencies=[Depends(require_func(func, "view"))], **kw)
+
+
+@get("/exports/metricflow", "metrics")
+async def metricflow_export(
+    session: SessionDep,
+    ctx: ViewContextDep,
+    user: CurrentUserDep,
+    format: Literal["json", "yaml"] = "json",
+) -> Any:
+    """只读导出：可试算指标与已绑定维度的 MetricFlow 语义层定义；yaml 只含 semantic_models / metrics。"""
+    body = await export_metricflow(session, user, ver=ctx.ver)
+    if format == "json":
+        return body
+    import yaml
+    from fastapi.responses import PlainTextResponse
+
+    header = "".join(f"# {n}\n" for n in body["notes"]) + "".join(
+        f"# skipped {x['id']}: {x['issues'][0]['message']}\n" for x in body["skipped"]
+    )
+    text = yaml.safe_dump(
+        {"semantic_models": body["semantic_models"], "metrics": body["metrics"]},
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    return PlainTextResponse(header + text, media_type="application/yaml")
+
+
+@get("/metrics/trial-readiness", "metrics")
+async def metrics_trial_readiness(
+    session: SessionDep,
+    ctx: ViewContextDep,
+    user: CurrentUserDep,
+    ids: Annotated[str | None, Query(max_length=4096)] = None,
+    cr_id: Annotated[str | None, Query(alias="crId", min_length=1, max_length=64)] = None,
+) -> Any:
+    """批量只读就绪检查（构建引导「可试算指标」计数）；ids 逗号分隔，留空查全部。"""
+    codes = [x.strip() for x in (ids or "").split(",") if x.strip()]
+    return await metrics_readiness(session, user, codes, ver=ctx.ver, cr_id=cr_id)
 
 
 @get("/metrics/{id}/trial-readiness", "metrics")

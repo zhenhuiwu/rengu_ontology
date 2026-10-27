@@ -47,7 +47,7 @@ async function load() {
   if (!visible.value) return;
   if (!isStaticReal()) { error.value = '定义表单仅用于真实接口模式'; loading.value = false; return; }
   loading.value = true; error.value = ''; choices.metricGroups = []; sourceProperties.value = []; initialSnapshot.value = '';
-  const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
+  const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', timeField: '', defaultFilter: '', dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
   Object.keys(values).forEach((k) => delete values[k]); Object.assign(values, defaults);
   properties.value = []; propertyPage.value = 1; variants.value = []; levels.value = []; original.value = undefined; originalProperties.value = [];
   try {
@@ -120,6 +120,7 @@ const validation = computed(() => {
     if (new Set(levels.value.map((l) => l.api)).size !== levels.value.length || new Set(levels.value.map((l) => l.name)).size !== levels.value.length) return '层级API名和名称分别不能重复';
   }
   if (props.kind === 'metric') {
+    if ([values.timeField, values.defaultFilter].some((v) => String(v ?? '').length > 256 || String(v ?? '').includes('\u0000'))) return '时间字段和默认过滤最多256字';
     if (variants.value.length > 32) return '口径变体至多32行';
     if (variants.value.some((v) => !v.code || !v.label.trim() || !choices.metrics.some((m) => m.id === v.code && m.status === '已发布'))) return '口径变体须选择已发布指标并填写标签';
     if (new Set(variants.value.map((v) => v.code)).size !== variants.value.length || new Set(variants.value.map((v) => v.label.trim())).size !== variants.value.length) return '变体指标和标签分别不能重复';
@@ -191,6 +192,8 @@ async function save() {
         <template v-else-if="kind === 'metric'">
           <div class="definition-grid"><a-form-item label="单位"><a-input v-model:value="values.unit" :maxlength="16" /></a-form-item><a-form-item label="口径版本"><a-input v-model:value="values.version" :maxlength="16" /></a-form-item></div>
           <a-form-item label="公式（口径定义）"><a-textarea v-model:value="values.formula" :rows="3" placeholder="填写指标计算公式" /></a-form-item>
+          <div class="definition-grid"><a-form-item label="时间字段" extra="试算按此字段取时间范围；格式 对象API.属性API"><a-input v-model:value="values.timeField" :maxlength="256" placeholder="对象API.属性API" allow-clear /></a-form-item><a-form-item label="默认过滤" extra="问题里没写时自动加上；多个条件用；分隔"><a-input v-model:value="values.defaultFilter" :maxlength="256" placeholder="对象API.属性API = 值" allow-clear /></a-form-item></div>
+          <a-alert v-if="props.targetId" type="info" message="是否可试算以「草稿试算」检查为准：保存后在指标页查看就绪原因。" />
           <a-form-item label="允许维度"><a-select v-model:value="values.dims" mode="multiple" :options="dimensionOptions" /></a-form-item>
           <div class="definition-heading"><span class="t-14 fw-600">口径变体</span><a-button size="small" :disabled="variants.length >= 32" @click="variants.push({ code: '', label: '', default: !variants.length })">新增变体</a-button></div>
           <div v-for="(v, i) in variants" :key="i" class="definition-variant"><a-select v-model:value="v.code" :options="metricOptions" placeholder="已发布指标" /><a-input v-model:value="v.label" placeholder="口径标签" :maxlength="64" /><span class="t-12 c-3">{{ variantTarget(v.code)?.api ?? '—' }} · {{ variantTarget(v.code)?.version ?? '—' }}</span><a-radio :checked="v.default" @change="setDefault(i)">默认</a-radio><a-button size="small" @click="variants.splice(i, 1)">移除</a-button></div>

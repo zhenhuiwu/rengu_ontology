@@ -428,10 +428,15 @@ async def test_metrics(client, static_seeded):
 
     d = await get(client, "/metrics/gmv")
     assert (
-        without(d, "def", "dims", "disallowed", "formula", "dimNames", "value", "prev", "updatedAt")
+        without(
+            d, "def", "execDef", "dims", "disallowed", "formula", "dimNames", "value", "prev", "updatedAt"
+        )
         == expected[0]
     )
     assert d["def"] == load("METRIC_DEF.json") and d["dims"] == load("METRIC_DIMS.json")
+    from app.modules.static.metric_versions import exec_def
+
+    assert d["execDef"] == exec_def(load("METRIC_DEF.json"))
     stat = next(m for m in load("METRICS.json") if m["id"] == "gmv")
     assert d["formula"] == stat["formula"] and d["dimNames"] == stat["dims"] and d["value"] == stat["value"]
 
@@ -588,7 +593,12 @@ def test_static_routes_func_permissions():
     from app.modules.static.router import FUNC_OF, router
 
     want = {"object-types": "object-types", "link-types": "link-types", "metrics": "metrics"}
-    want |= {"dimensions": "dimensions", "knowledge": "glossary", "change-requests": "releases"}
+    want |= {
+        "dimensions": "dimensions",
+        "knowledge": "glossary",
+        "change-requests": "releases",
+        "exports": "metrics",
+    }
     want["ontology"] = "ontology-overview"
     for r in router.routes:
         if "GET" not in r.methods:

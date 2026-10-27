@@ -450,3 +450,73 @@ async def test_metric_time_field_and_filter_via_cr_publish_and_rollback(client, 
     assert r.status_code == 201, r.text
     await facts.refresh(metric)
     assert exec_rows() == {"时间字段": "order.shipped_at", "默认过滤": "order.channel = 线上"}
+
+
+async def test_batch_trial_readiness_counts_and_reports_each_metric(client, facts):
+    metric = await facts.scalar(select(Metric).where(Metric.code == "order_cnt"))
+    metric.formula = "SUM(SalesOrder.paid_amount)"
+    metric.def_rows = [{"k": "时间字段", "v": "SalesOrder.created_at"}]
+    await facts.flush()
+    codes = list(await facts.scalars(select(Metric.code).order_by(Metric.code)))
+    body = (await client.get(P + "/metrics/trial-readiness", headers=ADMIN)).json()
+    assert [i["id"] for i in body["items"]] == codes and body["total"] == len(codes)
+    assert body["ready"] == sum(i["ready"] for i in body["items"]) >= 1
+    for code in ("order_cnt", "gmv"):
+        single = (await client.get(P + f"/metrics/{code}/trial-readiness", headers=ADMIN)).json()
+        assert next(i for i in body["items"] if i["id"] == code) == single
+    picked = (
+        await client.get(P + "/metrics/trial-readiness?ids=order_cnt,nope,order_cnt", headers=ADMIN)
+    ).json()
+    assert [i["id"] for i in picked["items"]] == ["order_cnt", "nope"] and picked["ready"] == 1
+    assert picked["items"][1]["issues"][0]["reason"] == "NOT_FOUND"
+    missing_cr = await client.get(P + "/metrics/trial-readiness?crId=CR-9999", headers=ADMIN)
+    assert missing_cr.status_code == 404, missing_cr.text
+
+
+async def test_metricflow_export_matches_trial_compiler(client, facts):
+    import yaml
+
+    metric = await facts.scalar(select(Metric).where(Metric.code == "order_cnt"))
+    metric.formula = "SUM(SalesOrder.paid_amount)"
+    metric.def_rows = [
+        {"k": "时间字段", "v": "SalesOrder.created_at"},
+        {"k": "默认过滤", "v": "SalesOrder.status <> 已取消"},
+    ]
+    await facts.flush()
+    response = await client.get(P + "/exports/metricflow", headers=ADMIN)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    exported = next(m for m in body["metrics"] if m["config"]["meta"]["rengu"]["id"] == "order_cnt")
+    assert exported["type"] == "simple" and exported["type_params"]["measure"] == exported["name"]
+    assert "Dimension('order__status') }} <> '已取消'" in exported["filter"]
+    model = next(m for m in body["semantic_models"] if m["name"] == "order")
+    measure = next(x for x in model["measures"] if x["name"] == exported["name"])
+    obj = await facts.scalar(select(ObjectType).where(ObjectType.code == "order"))
+    col = {p.api_name: p.backing_column for p in obj.properties}
+    assert measure["agg"] == "sum" and measure["expr"] == col["paid_amount"]
+    time_dim = next(d for d in model["dimensions"] if d["name"] == measure["agg_time_dimension"])
+    assert time_dim["type"] == "time" and time_dim["expr"] == col["created_at"]
+    assert model["node_relation"]["alias"] and model["entities"][0]["type"] == "primary"
+    exported_ids = {m["config"]["meta"]["rengu"]["id"] for m in body["metrics"]}
+    assert not any("componentOf" in m["config"]["meta"]["rengu"] for m in body["metrics"])
+    skipped = {x["id"] for x in body["skipped"]}
+    codes = set(await facts.scalars(select(Metric.code)))
+    assert exported_ids | skipped == codes and not exported_ids & skipped and "gmv" in skipped
+    ready = (await client.get(P + "/metrics/trial-readiness", headers=ADMIN)).json()
+    assert {i["id"] for i in ready["items"] if i["ready"]} == exported_ids
+
+    metric.formula = "SUM(SalesOrder.paid_amount) / COUNT(SalesOrder)"
+    await facts.flush()
+    body = (await client.get(P + "/exports/metricflow", headers=ADMIN)).json()
+    rows = [m for m in body["metrics"] if m["config"]["meta"]["rengu"]["id"] == "order_cnt"]
+    derived = next(m for m in rows if m["type"] == "derived")
+    parts = [m["name"] for m in rows if m["type"] == "simple"]
+    assert all(
+        m["config"]["meta"]["rengu"]["componentOf"] == derived["name"] for m in rows if m is not derived
+    )
+    assert [x["name"] for x in derived["type_params"]["metrics"]] == parts and len(parts) == 2
+    assert derived["type_params"]["expr"] == f"{parts[0]} / {parts[1]}"
+    text = (await client.get(P + "/exports/metricflow?format=yaml", headers=ADMIN)).text
+    assert yaml.safe_load(text)["metrics"] == body["metrics"]
+    historical = await client.get(P + "/exports/metricflow?ver=v2026.10.3", headers=ADMIN)
+    assert historical.status_code == 422, historical.text

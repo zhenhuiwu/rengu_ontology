@@ -46,8 +46,25 @@ export async function definitionDetail(kind: DefinitionKind, id: string, crId?: 
   }
   const fields = { ...dto, ...dto.brief, ...dto.meta } as DefinitionValues;
   // The API's dimension table rows are display rows; the definition is the explicit dimNames array.
-  if (kind === 'metric') fields.dims = dto.dimNames ?? [];
+  if (kind === 'metric') {
+    fields.dims = dto.dimNames ?? [];
+    // 执行口径：后端 execDef 只含已保存的键，表单空串表示“未设置”。
+    const exec = (dto.execDef ?? {}) as { timeField?: string; defaultFilter?: string };
+    fields.timeField = exec.timeField ?? ''; fields.defaultFilter = exec.defaultFilter ?? '';
+  }
   return { fields, properties: dto.props ?? [], items };
+}
+export const METRIC_EXEC_KEYS = { timeField: '时间字段', defaultFilter: '默认过滤' } as const;
+/** 时间字段/默认过滤：后端只收非空文本，清空走 delete，未改不发（crSave 会丢掉前后相同的 update）。 */
+export function execChanges(values: DefinitionValues, original?: DefinitionValues, resumed = false): DraftChange[] {
+  return (Object.keys(METRIC_EXEC_KEYS) as (keyof typeof METRIC_EXEC_KEYS)[]).flatMap((key): DraftChange[] => {
+    const after = String(values[key] ?? '').trim(), before = String(original?.[key] ?? '').trim();
+    const base = { key, type: '指标', field: METRIC_EXEC_KEYS[key] };
+    // 新指标：清空时只在续写草稿里发 delete（crSave 会直接移除之前的 add 行）。
+    if (!original) return after ? [{ ...base, after, op: 'add' as const }] : resumed ? [{ ...base, after: undefined, op: 'delete' as const }] : [];
+    if (!after && before) return [{ ...base, before, after: undefined, op: 'delete' as const }];
+    return [{ ...base, before, after: after || before, op: 'update' as const }];
+  });
 }
 export async function saveDefinition(kind: DefinitionKind, values: DefinitionValues, properties: DefinitionProperty[], original: DefinitionValues | undefined, originalProperties: DefinitionProperty[], opts: { join?: string; title?: string; desc?: string }, resume?: string, previousProperties: DefinitionProperty[] = originalProperties) {
   const ctx = definitionContext(), id = original?.id ?? values.api;
@@ -59,7 +76,8 @@ export async function saveDefinition(kind: DefinitionKind, values: DefinitionVal
   // Expose the CR id on failure so retry resumes this draft instead of creating another target.
   try {
     const keys = kind === 'object' ? ['name','api','group','domain','owner','desc','conflict','source','table','pk','sync'] : kind === 'metric' ? ['name','api','group','unit','owner','version','formula','dims','variants'] : ['name','api','kind','group','owner','object','attr','column','valueSrc','sync','desc','levels'];
-    const changes = keys.filter((key) => !original || key !== 'api').map((key) => ({ key, before: original?.[key], after: values[key] ?? '', type: kind === 'object' ? '对象类型' : kind === 'metric' ? '指标' : '维度', field: key, op: original ? 'update' as const : 'add' as const }));
+    const changes: DraftChange[] = keys.filter((key) => !original || key !== 'api').map((key) => ({ key, before: original?.[key], after: values[key] ?? '', type: kind === 'object' ? '对象类型' : kind === 'metric' ? '指标' : '维度', field: key, op: original ? 'update' as const : 'add' as const }));
+    if (kind === 'metric') changes.push(...execChanges(values, original, !!resume));
     await crSave(crId, target, 'def', changes); check(ctx);
     if (kind === 'object') {
       const byApi = new Map(originalProperties.map((p) => [p.api, p]));

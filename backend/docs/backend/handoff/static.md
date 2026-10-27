@@ -343,4 +343,18 @@
 - **两空间发布/回滚**：tests/test_static_build_writes.py。注意新空间首版没有上一版，不能回滚（versioning/service.py:89 `latest.parent is None` → ROLLBACK_NOT_LATEST，设计如此，提示文案可改进）。
 - **ruff**：app/modules/static 与 tests/test_static*.py 已 format + check 全过。
 - **非静态问题（只报告）**：test_static.py::test_migration_round_trip 降级穿过 migrations/versions/notify_0022_inbox.py:67 时被有意阻断（RuntimeError），静态模块往返测试因此必然失败，需 notify/PDE 决定是否让 round-trip 只到 notify_0022 之上或给测试豁免。
-- 15 个指标的口径修正计划见 /workspace/scratch/static-t0/metrics-plan.md（未改演示数据）。
+- （仅供参考，不在静态范围）早先的具体指标口径草稿在 /workspace/scratch/static-t0/metrics-plan.md；按老板决定（通用本体平台），静态不修任何业务指标口径/取值，代码不含零售硬编码。
+
+## static-t1（基于 master `c3db490`，迁移头 admin_0025，本轮无新迁移）
+
+静态范围：保证指标可定义、编辑、发布、回滚、试算；不修业务指标口径或数值。
+
+- **指标表单执行口径**：DefinitionEditor 指标段新增「时间字段」「默认过滤」两输入（≤256字、禁 NUL，占位符为通用格式 `对象API.属性API`）。回填取 `GET /metrics/{id}` 新增的 `execDef`（shapes.metric_detail），保存经 `definitionForms.execChanges` 生成 metric/def 项：新指标非空→add；已有值清空→delete（写回拒空值，必须 delete）；其余 update。
+- **批量试算就绪（只读）**：`GET /metrics/trial-readiness?ids=&crId=`（metric_trial.metrics_readiness，复用单指标判定，最多200个）。BuildGuideDrawer 第3步显示「（ready/total 可试算）」，看历史版本时不显示，失败显示「可试算数加载失败」。
+- **MetricFlow 导出（只读）**：`GET /exports/metricflow?format=json|yaml`（app/modules/static/metricflow_export.py），以试算编译器为准：可试算的才导出，其余进 skipped；敏感/隐藏属性不导出；行级范围不导出（notes 写明，消费方须自行过滤）；不支持 `?ver=`。契约见 static-api.md §3.4。
+- **测试**：test_static_trials.py::test_batch_trial_readiness_counts_and_reports_each_metric、::test_metricflow_export_matches_trial_compiler；test_static.py 指标详情断言 execDef。
+
+### 给 PDE（非静态，只报告）
+
+- **首版回滚文案**：新本体/新空间的首个发布没有上一版，`versioning/service.py:89`（`latest.parent is None`）返回 `ROLLBACK_NOT_LATEST`，文案读起来像「不是最新版」。建议：改专门的错误码/文案（如「首个发布版本没有可回滚的上一版」），并在前端发布列表对首版隐藏回滚按钮。
+- **迁移往返**：test_static.py::test_migration_round_trip 降级穿过 `migrations/versions/notify_0022_inbox.py:67` 时被有意阻断（RuntimeError），仍未解决，需 notify/PDE 决定。

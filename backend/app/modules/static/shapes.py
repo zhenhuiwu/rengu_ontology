@@ -258,6 +258,10 @@ def metric_detail(m: Metric) -> Obj:
     """
     d = metric_list_item(m)
     d["def"] = list(m.def_rows)
+    # 执行口径（时间字段 / 默认过滤），定义表单按此回填，不解析展示行。
+    from app.modules.static.metric_versions import exec_def
+
+    d["execDef"] = exec_def(m.def_rows)
     d["dims"] = list(m.dim_rows)
     d["disallowed"] = list(m.disallowed_rows)
     if m.formula is not None:
