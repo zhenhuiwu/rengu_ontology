@@ -80,3 +80,51 @@ def test_plan_text_for_action(plan, text):
     from app.modules.qa import catalog
 
     assert catalog.plan_text(plan, {}) == text
+
+
+def test_worker_registers_daily_eval_run():
+    from app.modules.qa.eval import daily, worker
+
+    periodic = worker.app.periodic_registry.periodic_tasks
+    assert daily.TASK in worker.app.tasks
+    assert periodic[(daily.TASK, daily.TASK)].cron == daily.CRON
+
+
+async def test_daily_eval_run_is_created_and_queued_once_per_day(session):
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from app.core import clock
+    from app.modules.qa.eval import daily
+    from app.modules.qa.models import QaEvalRun, RunStatus
+
+    session.add(QaEvalQuestion(code="EQ-daily", question="日评测题", kind="semplan", expect={"metric": "m"}))
+    await session.flush()
+    jobs = []
+
+    async def fake_defer(_s, code):
+        jobs.append(code)
+        return 900 + len(jobs)
+
+    who = SimpleNamespace(id="U-op", tenant_id=None)
+    at = clock.now()
+    code = await daily.schedule(session, who, at=at, defer=fake_defer)
+    run = await session.scalar(select(QaEvalRun).where(QaEvalRun.code == code))
+    assert jobs == [code] and run.queue_job_id == 901 and run.status == RunStatus.queued
+    assert run.trigger_label == daily.TRIGGER and run.operator == "系统" and run.total >= 1
+    assert run.execution_context["userId"] == "U-op" and run.execution_context["group"] is None
+    assert await daily.schedule(session, who, at=at, defer=fake_defer) is None  # 还在排队 → 不叠加
+    run.status = RunStatus.done
+    await session.flush()
+    assert await daily.schedule(session, who, at=at, defer=fake_defer) is None  # 今天已跑过
+    nxt = await daily.schedule(session, who, at=at + timedelta(days=1), defer=fake_defer)
+    assert nxt and nxt != code and len(jobs) == 2
+
+
+async def test_daily_eval_skips_without_operator(session):
+    from app.modules.qa.eval import daily
+
+    async def boom(*_a):
+        raise AssertionError("不应入队")
+
+    assert await daily.schedule(session, None, defer=boom) is None

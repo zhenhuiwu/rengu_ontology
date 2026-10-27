@@ -9,7 +9,8 @@ SQLBot / WrenAI 的「生成后校验」（GPL/AGPL，只参考思路）。全�
 - strip_unasked_enum：题目没提、口径也没要求的枚举条件 → 去掉；
 - ensure_code：按对象名称分组的最外层查询补上业务编号列；
 - scope_filter：会话范围解析成“列 = 值”后注入到用到这张表的每个 SELECT；
-- fanout_violations：上层表的聚合 join 了明细表（按明细行重复计算）→ 回喂模型改写。
+- fanout_violations：上层表的聚合 join 了明细表（按明细行重复计算）→ 回喂模型改写；
+- preaggregate_children：同一扇出能确定改写时，明细表先按 join 键汇总成派生表再关联（先于回喂）。
 """
 
 from __future__ import annotations
@@ -381,36 +382,185 @@ def fanout_violations(tree: exp.Expression, children: dict[str, set[str]]) -> li
     却对上层的列做 SUM / AVG（或 COUNT(*) 和明细列的聚合混用）→ 会按明细行重复计算。"""
     out = []
     for sel in _selects(tree):
-        alias = _aliases(sel)
-        tabs = set(alias.values())
-        pairs = [(p, c) for p in tabs for c in children.get(p, ()) if c in tabs and c != p]
-        if not pairs:
-            continue
-        aggs = [a for p in sel.expressions for a in p.find_all(*_AGG)]
-        child_tabs = {c for _, c in pairs}
-        used = {alias.get(x.table) for a in aggs for x in a.find_all(exp.Column)} & child_tabs
-        frm = sel.args.get("from_") or sel.args.get("from")
-        root = frm.this.name if frm and isinstance(frm.this, exp.Table) else None
-        count_parents = {p for p, c in pairs if c in used}
-        for a in aggs:
-            if isinstance(a, exp.Count) and a.args.get("this") and isinstance(a.this, exp.Distinct):
-                continue
-            cols = list(a.find_all(exp.Column))
-            owners = {alias.get(x.table) for x in cols}
-            bad = None
-            if isinstance(a, exp.Sum | exp.Avg) and cols and owners and owners <= {p for p, _ in pairs}:
-                bad = next(iter(owners))
-            elif isinstance(a, exp.Count) and isinstance(a.this, exp.Star) and root in count_parents:
-                bad = root  # FROM 的是上层表，COUNT(*) 本意数上层行，却和明细列聚合混用
-            elif isinstance(a, exp.Count) and isinstance(a.this, exp.Star) and _divisor(a) and count_parents:
-                bad = sorted(count_parents)[0]  # “明细合计 / COUNT(*)”：本意是每个上层行的平均
-            if bad:
-                kids = "、".join(sorted(c for p, c in pairs if p == bad))
-                out.append(
-                    f"{a.sql(dialect='postgres')} 按 {bad} 的行计算，但同一查询 join 了明细表 {kids}，"
-                    f"会按明细行重复计算；请把 {bad} 层的聚合放到不 join 明细表的子查询里，再与明细层结果组合"
-                )
+        out += _sel_fanout(sel, children)
     return list(dict.fromkeys(out))
+
+
+def _sel_fanout(sel: exp.Select, children: dict[str, set[str]]) -> list[str]:
+    out: list[str] = []
+    alias = _aliases(sel)
+    tabs = set(alias.values())
+    pairs = [(p, c) for p in tabs for c in children.get(p, ()) if c in tabs and c != p]
+    if not pairs:
+        return out
+    aggs = [a for p in sel.expressions for a in p.find_all(*_AGG)]
+    child_tabs = {c for _, c in pairs}
+    used = {alias.get(x.table) for a in aggs for x in a.find_all(exp.Column)} & child_tabs
+    frm = sel.args.get("from_") or sel.args.get("from")
+    root = frm.this.name if frm and isinstance(frm.this, exp.Table) else None
+    count_parents = {p for p, c in pairs if c in used}
+    for a in aggs:
+        if isinstance(a, exp.Count) and a.args.get("this") and isinstance(a.this, exp.Distinct):
+            continue
+        cols = list(a.find_all(exp.Column))
+        owners = {alias.get(x.table) for x in cols}
+        bad = None
+        if isinstance(a, exp.Sum | exp.Avg) and cols and owners and owners <= {p for p, _ in pairs}:
+            bad = next(iter(owners))
+        elif isinstance(a, exp.Count) and isinstance(a.this, exp.Star) and root in count_parents:
+            bad = root  # FROM 的是上层表，COUNT(*) 本意数上层行，却和明细列聚合混用
+        elif isinstance(a, exp.Count) and isinstance(a.this, exp.Star) and _divisor(a) and count_parents:
+            bad = sorted(count_parents)[0]  # “明细合计 / COUNT(*)”：本意是每个上层行的平均
+        if bad:
+            kids = "、".join(sorted(c for p, c in pairs if p == bad))
+            out.append(
+                f"{a.sql(dialect='postgres')} 按 {bad} 的行计算，但同一查询 join 了明细表 {kids}，"
+                f"会按明细行重复计算；请把 {bad} 层的聚合放到不 join 明细表的子查询里，再与明细层结果组合"
+            )
+    return out
+
+
+# 明细先按外键汇总再 join：上层行 1:1 保留，上层的 SUM / COUNT(*) 不再被明细行放大。
+_PRE = (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max)
+
+
+def _refs(node: exp.Expression | None, a: str) -> bool:
+    return node is not None and any(c.table == a for c in node.find_all(exp.Column))
+
+
+def _preagg_one(sel: exp.Select, a: str, table: str, join: exp.Join, n: list[int]) -> bool:
+    """把 join 进来的明细表 a 换成「按 join 键汇总」的派生表；做不到（明细列出现在聚合外、
+    和别的表混算、去重计数……）就返回 False，调用方整体放弃。"""
+    if join.args.get("using") or not join.args.get("on"):
+        return False
+    keys, inner = [], []
+    for c in _conjuncts(join.args["on"]):
+        cols = list(c.find_all(exp.Column))
+        mine = [x for x in cols if x.table == a]
+        if not mine:
+            return False
+        if len(mine) == len(cols):
+            inner.append(c)
+        elif isinstance(c, exp.EQ) and all(isinstance(s, exp.Column) for s in (c.this, c.expression)):
+            keys.append(c.this if c.this.table == a else c.expression)
+        else:
+            return False
+    if not keys:
+        return False
+    for j in sel.args.get("joins") or []:
+        if j is not join and _refs(j, a):
+            return False
+    for k in ("group", "having", "qualify", "distinct", "order"):
+        if _refs(sel.args.get(k), a):
+            return False
+    where = sel.args.get("where")
+    moved = []
+    for c in _conjuncts(where) if where else []:
+        cols = list(c.find_all(exp.Column))
+        if any(x.table == a for x in cols):
+            if any(x.table != a for x in cols) or c.find(exp.Select):
+                return False
+            moved.append(c)
+    outs: list[exp.Expression] = []
+    swaps: list[tuple[exp.Expression, exp.Expression]] = []
+    for proj in sel.expressions:
+        for agg in list(proj.find_all(*_PRE)):
+            cols = list(agg.find_all(exp.Column))
+            if not any(x.table == a for x in cols):
+                continue
+            if any(x.table != a for x in cols) or agg.find(exp.Distinct) or agg.find(exp.Select):
+                return False
+            if any(isinstance(p, _PRE) for p in _ancestors(agg, proj)):
+                return False
+
+            def col(name: str) -> exp.Column:
+                return exp.column(name, table=a)
+
+            n[0] += 1
+            name = f"_qa_m{n[0]}"
+            if isinstance(agg, exp.Avg):
+                outs += [
+                    exp.alias_(exp.Sum(this=agg.this.copy()), f"{name}s"),
+                    exp.alias_(exp.Count(this=agg.this.copy()), f"{name}n"),
+                ]
+                new = exp.Div(  # AVG 的口径：Σ值 / Σ非空个数（numeric，避免整数除）
+                    typed=True,
+                    this=exp.cast(exp.Sum(this=col(f"{name}s")), "numeric"),
+                    expression=exp.Anonymous(
+                        this="NULLIF", expressions=[exp.Sum(this=col(f"{name}n")), exp.Literal.number(0)]
+                    ),
+                )
+            else:
+                outs.append(exp.alias_(agg.copy(), name))
+                kind = exp.Sum if isinstance(agg, exp.Sum | exp.Count) else type(agg)
+                new = kind(this=col(name))
+                if isinstance(agg, exp.Count):
+                    new = exp.Coalesce(this=new, expressions=[exp.Literal.number(0)])
+            swaps.append((agg, new))
+        for x in proj.find_all(exp.Column):
+            if x.table == a and not any(isinstance(p, _PRE) for p in _ancestors(x, proj)):
+                return False
+    for x in sel.find_all(exp.Column):
+        if not x.table and len(_aliases(sel)) > 1:
+            return False  # 不带表名的列在多表查询里归属不明，不改
+    derived = exp.select(*[exp.column(k.name, table=a) for k in dict((k.name, k) for k in keys).values()])
+    derived = derived.select(*outs).from_(exp.to_table(table).as_(a))
+    conds = [c.copy() for c in inner + moved]
+    if conds:
+        derived = derived.where(exp.and_(*conds))
+    derived = derived.group_by(*[exp.column(k, table=a) for k in dict.fromkeys(k.name for k in keys)])
+    for old, new in swaps:
+        old.replace(new)
+    _drop(sel, moved)
+    join.set("this", exp.Subquery(this=derived, alias=exp.TableAlias(this=exp.to_identifier(a))))
+    join.set("on", exp.and_(*[k.parent.copy() for k in keys]))
+    return True
+
+
+def _ancestors(node: exp.Expression, stop: exp.Expression):
+    p = node.parent
+    while p is not None and p is not stop:
+        yield p
+        p = p.parent
+    if p is stop:
+        yield stop
+
+
+def preaggregate_children(tree: exp.Expression, children: dict[str, set[str]]) -> list[str]:
+    """扇出的确定性改写（AST，按外键元数据，不认业务词）：同一 SELECT 里 join 了上层表和它的明细表，
+    又按上层行聚合（fanout_violations 会报的那种）→ 把「叶子」明细表换成按 join 键先汇总的派生表，
+    明细侧聚合改成对汇总列再聚合（SUM→SUM、COUNT→COALESCE(SUM)、MIN/MAX 不变、AVG→ΣS/ΣN）。
+    只在改完该 SELECT 不再扇出时才生效；做不到就原样不动（再由回喂兜底）。"""
+    notes = []
+    n = [0]
+    for sel in reversed(_selects(tree)):
+        if not _sel_fanout(sel, children):
+            continue
+        new = sel.copy()
+        alias = _aliases(new)
+        tabs = list(alias.values())
+        parents = {t for t in tabs if children.get(t, set()) & set(tabs) - {t}}
+        frm = new.args.get("from_") or new.args.get("from")
+        root = frm.this.alias_or_name if frm and isinstance(frm.this, exp.Table) else None
+        leaves = [
+            (j, a, t)
+            for j in new.args.get("joins") or []
+            if isinstance(j.this, exp.Table)
+            for a, t in [(j.this.alias_or_name, j.this.name)]
+            if a != root
+            and t not in parents
+            and tabs.count(t) == 1
+            and any(t in children.get(p, ()) for p in tabs if p != t)
+        ]
+        if not leaves or not all(_preagg_one(new, a, t, j, n) for j, a, t in leaves):
+            continue
+        if _sel_fanout(new, children):
+            continue
+        for k, v in new.args.items():
+            sel.set(k, v)
+        kids = "、".join(sorted({t for _, _, t in leaves}))
+        notes.append(f"明细表 {kids} 先按关联键汇总再关联，避免上层数值按明细行重复计算")
+    return notes
 
 
 def col_meta_enum(cols: list[Col]) -> dict[str, dict[str, str]]:

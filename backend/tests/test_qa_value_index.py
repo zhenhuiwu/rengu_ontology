@@ -148,6 +148,46 @@ def test_fanout_violations():
     assert sqlfix.fanout_violations(bad, ch)  # 明细合计 / COUNT(*)：FROM 明细表也要拦
 
 
+def test_preaggregate_children_rewrites_fanout():
+    ch = {"trip": {"trip_leg"}, "depot": {"trip"}}
+    t = _t(
+        "select sum(t.fee), sum(l.km) from trip t join trip_leg l on l.trip_id = t.id "
+        "join depot d on d.id = t.depot_id where t.state = 'done' and l.kind = 'x' and not d.closed"
+    )
+    notes = sqlfix.preaggregate_children(t, ch)
+    s = _s(t)
+    assert notes and "trip_leg" in notes[0] and not sqlfix.fanout_violations(t, ch)
+    assert "GROUP BY l.trip_id" in s and "WHERE l.kind = 'x' GROUP BY" in s  # 明细条件进派生表
+    assert "SUM(t.fee)" in s and "t.state = 'done'" in s and "NOT d.closed" in s  # 上层不动
+    t = _t(
+        "select d.zone, sum(t.fee), avg(l.km), count(*), count(l.id) from trip t "
+        "join trip_leg l on l.trip_id = t.id join depot d on d.id = t.depot_id group by d.zone"
+    )
+    assert sqlfix.preaggregate_children(t, ch)
+    s = _s(t)
+    assert "COUNT(*)" in s and "COALESCE(SUM(l._qa_m2), 0)" in s and "NULLIF(SUM(l._qa_m1n), 0)" in s
+    t = _t("select sum(l.km) / count(*) from trip t join trip_leg l on l.trip_id = t.id")
+    assert sqlfix.preaggregate_children(t, ch) and not sqlfix.fanout_violations(t, ch)
+    # CTE 里的扇出也改
+    t = _t(
+        "with x as (select sum(t.fee) a, sum(l.km * l.rate) b from trip t join trip_leg l on t.id = l.trip_id) "
+        "select a, b from x"
+    )
+    assert sqlfix.preaggregate_children(t, ch) and not sqlfix.fanout_violations(t, ch)
+    # 做不到的不动：按明细列分组、明细与上层混算、去重计数、明细表在 FROM
+    for q in [
+        "select l.kind, sum(t.fee) from trip t join trip_leg l on l.trip_id = t.id group by l.kind",
+        "select sum(t.fee), sum(l.km * t.rate) from trip t join trip_leg l on l.trip_id = t.id",
+        "select sum(t.fee), count(distinct l.kind) from trip t join trip_leg l on l.trip_id = t.id",
+        "select sum(l.km) / nullif(count(*), 0) from trip_leg l join trip t on t.id = l.trip_id",
+    ]:
+        t = _t(q)
+        before = _s(t)
+        assert not sqlfix.preaggregate_children(t, ch) and _s(t) == before
+    ok = _t("select sum(t.fee) from trip t join depot d on d.id = t.depot_id")
+    assert not sqlfix.preaggregate_children(ok, ch)
+
+
 def test_sqlfix_list_code_retarget_time_and_date_buckets():
     t = _t("select d.name, d.area from depot d where d.area > 300")
     assert sqlfix.ensure_code(t, {"depot": {"name"}}, {"depot": "code"}) == ["带上 depot.code"]

@@ -1336,6 +1336,9 @@ async def answer(
             return done("denied", refuse_snapshot(val))
         sql = val
         tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
+        before = tree.sql(dialect=DIALECT)
+        # 扇出能确定改写就直接改（明细先按外键汇总再关联），改不了的才回喂模型
+        fan_notes = sqlfix.preaggregate_children(tree, _children(ontology_id))
         if not checked:  # 口径校验不过，回喂改一次（只一次，改完不再查）
             checked = True
             bad = caliber_violations(question, tree, ontology_id)
@@ -1352,10 +1355,9 @@ async def answer(
                     },
                 ]
                 continue
-        before = tree.sql(dialect=DIALECT)
         codes = {code for c in idx.cols for code in c.labels.values()}
         required = _required_codes(ontology_id, ctx, codes)
-        fix_notes = fix_sql(tree, question, ontology_id, idx, vres, scope_hits, required)
+        fix_notes = fan_notes + fix_sql(tree, question, ontology_id, idx, vres, scope_hits, required)
         cap_time_upper(tree, clock.local_now(), qa_source(ontology_id).time_cols)
         if tree.sql(dialect=DIALECT) != before:
             sql = tree.sql(dialect=DIALECT)
