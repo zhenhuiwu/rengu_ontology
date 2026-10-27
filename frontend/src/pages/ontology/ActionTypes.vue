@@ -33,12 +33,13 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import NewActionEventForm from './parts/NewActionEventForm.vue';
+import ActionTrialForm from './parts/ActionTrialForm.vue';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { currentApiContext, isApiError } from '@/api/http';
 import {
   actionApi, actionContextKey, snapshotReady, loadSnapshot, actionDetailReady, loadActionDetail, listActionParams, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, getActionRunStats, listActionRuns, type ActionRunStats, type ActionTypeRow,
-  getActionUsedBy, type ActionUsedBy, getRunDaily, type RunDaily, dryRunAction, crWriter, crStart, crErrText, crWriteOn, crRestore,
+  getActionUsedBy, type ActionUsedBy, getRunDaily, type RunDaily, crWriter, crStart, crErrText, crWriteOn, crRestore,
 } from '@/api/action';
 
 const route = useRoute();
@@ -194,26 +195,13 @@ function saveEditor() {
 const delItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].remove(key);
 const restoreItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].restore(key);
 
-const dryRunning = ref(false);
 const dryKey = () => JSON.stringify([actionContextKey(), cur.value.id, isDraft.value, draft.value?.id]);
-const dryResult = reactive({ open: false, result: null as Awaited<ReturnType<typeof dryRunAction>> | null, error: '' });
-watch(dryKey, () => Object.assign(dryResult, { open: false, result: null, error: '' }));
+const trialOpen = ref(false), hasTrialResult = ref(false);
+watch(dryKey, () => { trialOpen.value = false; hasTrialResult.value = false; });
 async function dryRun() {
   if (real) {
-    if (dryRunning.value || !ready.value || !cur.value.id || currentApiContext().previewAs || (isDraft.value && dirty.value)) return;
-    const key = dryKey(), id = cur.value.id, ctx = { ...currentApiContext() };
-    const view = isDraft.value ? 'draft' : 'published', cr = isDraft.value ? draft.value?.id : undefined;
-    dryRunning.value = true;
-    try {
-      const ok = await confirm.ask({ title: `试运行：${cur.value.name}`, target: `${cur.value.name}（${view === 'draft' ? `数据库草稿 ${cr}` : ctx.ver || '当前已发布定义'}）`,
-        fields: [{ label: '参数', value: '尚未提供执行参数；缺少参数或对象上下文会明确不通过' }],
-        impact: '仅校验真实数据库条件，不调用外部系统、不生成动作记录、不修改本体对象。', okText: '开始校验' });
-      if (!ok || key !== dryKey()) return;
-      const result = await dryRunAction(id, {}, view, cr, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '' } });
-      if (key !== dryKey()) return;
-      Object.assign(dryResult, { open: true, result, error: '' });
-    } catch (e) { if (key === dryKey()) Object.assign(dryResult, { open: true, result: null, error: apiMsg(e) }); }
-    finally { dryRunning.value = false; }
+    if (!ready.value || !cur.value.id || currentApiContext().previewAs || (isDraft.value && dirty.value)) return;
+    trialOpen.value = true;
     return;
   }
   const a = eff.value;
@@ -302,19 +290,23 @@ const recentAbnormal = computed(() => runsOf(cur.value.id).filter((r) => r.statu
 /* 参数 */
 const pq = usePagedQuery({ defaultSize: real ? 10 : 12, prefix: 'p' });
 const paramPage = reactive({ items: [] as (ActionParam & { _key: string; _mark: string })[], total: 0 });
+const paramsLoading = ref(false);
 if (real) {
   let seq = 0, scope = '';
   watch([actionContextKey, () => cur.value.id, ready, isDraft, tab, pq.page, pq.size], async () => {
     const n = ++seq, key = actionContextKey(), id = cur.value.id;
+    paramsLoading.value = false;
     const nextScope = JSON.stringify([key, id]);
     if (scope !== nextScope) { scope = nextScope; paramPage.items = []; paramPage.total = 0; }
     if (!ready.value || !id || isDraft.value || tab.value !== 'params') return;
+    paramsLoading.value = true;
     try {
       const r = await listActionParams(id, pq.page.value, pq.size.value);
       if (!mounted || n !== seq || key !== actionContextKey()) return;
       paramPage.items = r.items.map(p => ({ ...p, _key: p.api, _mark: '' })); paramPage.total = r.total;
       if (r.page && r.page !== pq.page.value) pq.page.value = r.page;
     } catch (e) { if (mounted && n === seq && key === actionContextKey()) { paramPage.items = []; message.error(`参数加载失败：${apiMsg(e)}`); } }
+    finally { if (mounted && n === seq && key === actionContextKey()) paramsLoading.value = false; }
   }, { immediate: true, flush: 'sync' });
 }
 const params = computed(() => real && !isDraft.value ? paramPage : paginate(flat(paramSec.rows.value), { page: pq.page.value, size: pq.size.value }));
@@ -464,8 +456,8 @@ const verCols = [
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => onView(v)" />
         <span class="at-sp" />
-        <a-tooltip :title="real ? isDraft && dirty ? '请先保存草稿，试运行读取数据库已保存内容' : '只校验真实条件；缺少参数或对象上下文不会判为通过' : undefined"><span><a-button :loading="dryRunning" :disabled="cur.status === '草稿' || (real && (!!currentApiContext().previewAs || !ready || (isDraft && dirty)))" @click="dryRun">试运行</a-button></span></a-tooltip>
-        <a-button v-if="real && (dryResult.result || dryResult.error)" type="link" @click="dryResult.open = true">查看校验结果</a-button>
+        <a-tooltip :title="real ? isDraft && dirty ? '请先保存草稿，试运行读取数据库已保存内容' : '按当前定义填写参数和对象，只校验提交条件' : undefined"><span><a-button :disabled="cur.status === '草稿' || (real && (!!currentApiContext().previewAs || !ready || (isDraft && dirty)))" @click="dryRun">试运行</a-button></span></a-tooltip>
+        <a-button v-if="real && hasTrialResult" type="link" @click="trialOpen = true">查看校验结果</a-button>
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
         <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
         <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
@@ -541,7 +533,7 @@ const verCols = [
       <!-- 参数 -->
       <div v-else-if="tab === 'params'" class="at-body">
         <div class="at-tool">
-          <span class="t-14 c-1">参数 {{ params.total }} 个</span><InfoTip text="提交时按顺序校验；对象引用类参数在执行面板里用对象选择器填写" />
+          <span class="t-14 c-1">{{ real && (!ready || paramsLoading) ? '参数加载中…' : `参数 ${params.total} 个` }}</span><InfoTip text="提交时按顺序校验；对象引用类参数在执行面板里用对象选择器填写" />
           <span class="at-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
@@ -551,7 +543,7 @@ const verCols = [
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('params')">新增参数</a-button></a-tooltip>
         </div>
         <div class="paged-scroll" :class="{ 'is-overflow': pq.overflow.value }">
-          <a-table :columns="paramCols" :data-source="params.items" :pagination="false" size="middle" row-key="_key" :row-class-name="delRow">
+          <a-table :loading="real && (!ready || paramsLoading)" :columns="paramCols" :data-source="params.items" :pagination="false" size="middle" row-key="_key" :row-class-name="delRow" :locale="{ emptyText: real && (!ready || paramsLoading) ? '正在读取参数…' : '暂无参数' }">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'required'">{{ record.required ? '是' : '否' }}</template>
               <template v-else-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
@@ -695,17 +687,8 @@ const verCols = [
   </div>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onStart" />
   <NewActionEventForm v-if="real" v-model:open="createOpen" kind="action" :options="createOptions" :row-forms="FORMS" />
-  <a-modal v-model:open="dryResult.open" :title="`试运行校验结果：${cur.name}`" :footer="null" :width="640">
-    <a-alert v-if="dryResult.error" type="error" show-icon message="校验请求失败" :description="dryResult.error" />
-    <template v-else-if="dryResult.result">
-      <a-alert :type="dryResult.result.passed ? 'success' : 'warning'" show-icon
-        :message="`校验${dryResult.result.passed ? '通过' : '未通过'} · 已检查 ${dryResult.result.checked} 项提交条件`" />
-      <p class="t-14 c-2">本次未提供执行参数及目标对象，未调用外部系统或修改业务数据。</p>
-      <ul v-if="dryResult.result.failed.length">
-        <li v-for="(item, index) in dryResult.result.failed" :key="index"><strong>{{ item.name }}</strong>：{{ item.fail }}</li>
-      </ul>
-    </template>
-  </a-modal>
+  <ActionTrialForm v-if="real && cur.id" :key="dryKey()" v-model:open="trialOpen" :action="cur" :cr="isDraft ? draft?.id : undefined"
+    :disabled="!ready || !!currentApiContext().previewAs || (isDraft && dirty) || cur.status === '草稿'" @result="hasTrialResult = true" />
   <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="520" @ok="saveEditor">
     <a-form layout="vertical" class="at-form">
       <a-form-item v-for="f in editorDef.fields()" :key="f.k" :label="f.label" :required="f.required">

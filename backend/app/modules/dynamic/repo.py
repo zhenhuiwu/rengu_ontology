@@ -32,7 +32,7 @@ class ScenarioImpactRepo(BaseRepository[ScenarioImpact]):
 
 
 async def recent_rule_hits(
-    session: AsyncSession, *, until: datetime | None = None, rule_ids: set[int] | None = None
+    session: AsyncSession, *, user, until: datetime | None = None, rule_ids: set[int] | None = None
 ) -> dict[int, int]:
     """当前近7天实际保存的命中数；不把定义里的历史weekly快照当成滚动统计。"""
     from app.modules.dynamic.rules_models import RuleHit
@@ -47,6 +47,9 @@ async def recent_rule_hits(
     )
     if rule_ids is not None:
         statement = statement.where(RuleHit.rule_id.in_(rule_ids))
+    from app.modules.dynamic.row_scope import scoped_instances
+
+    statement = await scoped_instances(statement, user, RuleHit.obj_kind, RuleHit.obj_id)
     rows = await session.execute(statement)
     return dict(rows.all())
 

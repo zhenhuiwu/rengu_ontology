@@ -8,6 +8,7 @@ from fastapi import Path
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload, raiseload
 
+from app.common.auth import CurrentUserDep
 from app.db.session import SessionDep
 
 
@@ -93,8 +94,8 @@ class DatabaseRefCatalog:
         return str(int(v)) if v == int(v) else str(v)
 
 
-async def get_catalog(session: SessionDep) -> DatabaseRefCatalog:
-    return await _load_catalog(session, "full")
+async def get_catalog(session: SessionDep, user: CurrentUserDep) -> DatabaseRefCatalog:
+    return await _load_catalog(session, "full", user=user)
 
 
 async def get_list_catalog(session: SessionDep) -> DatabaseRefCatalog:
@@ -107,15 +108,15 @@ async def get_meta_catalog(session: SessionDep) -> DatabaseRefCatalog:
 
 
 async def get_alert_catalog(
-    code: Annotated[str, Path(pattern=r"^[^\x00]+$")], session: SessionDep
+    code: Annotated[str, Path(pattern=r"^[^\x00]+$")], session: SessionDep, user: CurrentUserDep
 ) -> DatabaseRefCatalog:
     from app.modules.dynamic.models import Alert
 
     rule_code = await session.scalar(select(Alert.rule_code).where(Alert.code == code))
-    return await _load_catalog(session, "alert", rule_code=rule_code)
+    return await _load_catalog(session, "alert", rule_code=rule_code, user=user)
 
 
-async def _load_catalog(session, mode: str, *, rule_code: str | None = None) -> DatabaseRefCatalog:
+async def _load_catalog(session, mode: str, *, rule_code: str | None = None, user=None) -> DatabaseRefCatalog:
     from app.modules.action.models import ActionType, TypeStatus
     from app.modules.action.sections import action_def
     from app.modules.admin.models import SysUser, UserStatus
@@ -147,7 +148,9 @@ async def _load_catalog(session, mode: str, *, rule_code: str | None = None) -> 
         if mode == "alert":
             statement = statement.where(Rule.code == rule_code)
         rule_rows = list(await session.scalars(statement))
-        weekly = await recent_rule_hits(session, rule_ids={row.id for row in rule_rows})
+        weekly = (
+            await recent_rule_hits(session, rule_ids={row.id for row in rule_rows}, user=user) if user else {}
+        )
         for row in rule_rows:
             action = by_id.get(row.action_type_id)
             rules[row.code] = {

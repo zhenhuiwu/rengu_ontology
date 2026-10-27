@@ -12,6 +12,8 @@ from app.core.errors import NotFound
 from app.modules.action.models import ActionType, ActionTypeRule
 from app.modules.action.service import with_system
 from app.modules.dynamic.models import ActionRun, ActionStatus, Alert
+from app.modules.dynamic.repo import recent_rule_hits
+from app.modules.dynamic.row_scope import scoped_instances
 from app.modules.dynamic.rules_models import HitResult, Rule, RuleHit
 from app.modules.dynamic.rules_service import RuleService
 from app.modules.integration.models import ExtSystem
@@ -46,40 +48,27 @@ async def object_head(session, code, ver=None):
     return row
 
 
-async def behavior_stats(session, code, ctx):
+async def behavior_stats(session, code, ctx, user):
     obj = await object_head(session, code, ctx.ver)
     until = clock.now()
     rule_rows = list(await session.execute(select(Rule.id, Rule.code).where(Rule.obj_kind == code)))
     rule_ids = {row.id for row in rule_rows}
-    weekly = (
-        dict(
-            (
-                await session.execute(
-                    select(RuleHit.rule_id, func.count())
-                    .where(
-                        RuleHit.rule_id.in_(rule_ids),
-                        RuleHit.at >= until - timedelta(days=7),
-                        RuleHit.at <= until,
-                    )
-                    .group_by(RuleHit.rule_id)
-                )
-            ).all()
-        )
-        if rule_ids
-        else {}
-    )
+    weekly = await recent_rule_hits(session, user=user, until=until, rule_ids=rule_ids)
     alert_counts = (
         dict(
             (
                 await session.execute(
-                    select(RuleHit.rule_id, func.count())
-                    .where(
-                        RuleHit.rule_id.in_(rule_ids),
-                        RuleHit.at >= until - timedelta(days=7),
-                        RuleHit.at <= until,
-                        RuleHit.result == HitResult.alert,
+                    await scoped_instances(
+                        select(RuleHit.rule_id, func.count())
+                        .where(
+                            RuleHit.rule_id.in_(rule_ids),
+                            RuleHit.at >= until - timedelta(days=7),
+                            RuleHit.at <= until,
+                            RuleHit.result == HitResult.alert,
+                        )
+                        .group_by(RuleHit.rule_id),
+                        user, RuleHit.obj_kind, RuleHit.obj_id,
                     )
-                    .group_by(RuleHit.rule_id)
                 )
             ).all()
         )
@@ -90,12 +79,15 @@ async def behavior_stats(session, code, ctx):
         dict(
             (
                 await session.execute(
-                    select(ActionRun.rule_code, func.count())
-                    .where(
-                        ActionRun.rule_code.in_({r.code for r in rule_rows}),
-                        ActionRun.status == ActionStatus.staged,
+                    await scoped_instances(
+                        select(ActionRun.rule_code, func.count())
+                        .where(
+                            ActionRun.rule_code.in_({r.code for r in rule_rows}),
+                            ActionRun.status == ActionStatus.staged,
+                        )
+                        .group_by(ActionRun.rule_code),
+                        user, ActionRun.obj_kind, ActionRun.obj_id,
                     )
-                    .group_by(ActionRun.rule_code)
                 )
             ).all()
         )
@@ -103,9 +95,12 @@ async def behavior_stats(session, code, ctx):
         else {}
     )
     center = await session.execute(
-        select(ActionRun.status, func.count())
-        .where(ActionRun.obj_kind == code, ActionRun.in_center.is_(True))
-        .group_by(ActionRun.status)
+        await scoped_instances(
+            select(ActionRun.status, func.count())
+            .where(ActionRun.obj_kind == code, ActionRun.in_center.is_(True))
+            .group_by(ActionRun.status),
+            user, ActionRun.obj_kind, ActionRun.obj_id,
+        )
     )
     types = []
     if not ctx.ver:
@@ -174,16 +169,22 @@ async def behavior_stats(session, code, ctx):
                     )
                 )
     executions = await session.execute(
-        select(ActionRun.action_type_code, ActionRun.status, func.count())
-        .where(
-            ActionRun.action_type_code.in_({row["id"] for row in actions}),
-            ActionRun.submitted_at >= until - timedelta(days=30),
-            ActionRun.submitted_at <= until,
-            ActionRun.status.in_(
-                (ActionStatus.succeeded, ActionStatus.reconciled, ActionStatus.failed, ActionStatus.unknown)
-            ),
+        await scoped_instances(
+            select(ActionRun.action_type_code, ActionRun.status, func.count())
+            .where(
+                ActionRun.action_type_code.in_({row["id"] for row in actions}),
+                ActionRun.submitted_at >= until - timedelta(days=30),
+                ActionRun.submitted_at <= until,
+                ActionRun.status.in_(
+                    (
+                        ActionStatus.succeeded, ActionStatus.reconciled,
+                        ActionStatus.failed, ActionStatus.unknown,
+                    )
+                ),
+            )
+            .group_by(ActionRun.action_type_code, ActionRun.status),
+            user, ActionRun.obj_kind, ActionRun.obj_id,
         )
-        .group_by(ActionRun.action_type_code, ActionRun.status)
     )
     counts = {}
     for type_code, status, count in executions:
@@ -214,7 +215,7 @@ async def behavior_stats(session, code, ctx):
     }
 
 
-async def automation_hits(session, code, rule_id, page):
+async def automation_hits(session, code, rule_id, page, user):
     await object_head(session, code)
     until = clock.now()
     statement = (
@@ -224,6 +225,7 @@ async def automation_hits(session, code, rule_id, page):
     )
     if rule_id:
         statement = statement.where(Rule.code == rule_id)
+    statement = await scoped_instances(statement, user, RuleHit.obj_kind, RuleHit.obj_id)
     total = int(await session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
     p = page.clamp(total)
     rows = list(

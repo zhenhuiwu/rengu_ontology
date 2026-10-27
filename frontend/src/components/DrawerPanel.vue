@@ -12,6 +12,8 @@ import { useConfirmStore } from '@/stores/confirm';
 import { resolveObject, checkObject, type ObjKpi } from './objectRegistry';
 import StatusTimeline from './StatusTimeline.vue';
 import AppPagination from './AppPagination.vue';
+import EventDeliveries from './EventDeliveries.vue';
+import { actionApi } from '@/api/action';
 import { paginate } from '@/mock/paginate';
 import { orderById, storeById, fmtMoney } from '@/mock';
 import { anyReal } from '@/api/config';
@@ -112,6 +114,9 @@ async function resend() {
               </div>
             </div>
           </section>
+        </a-tab-pane>
+        <a-tab-pane v-if="view.kind === 'event' && actionApi.isReal()" key="deliveries" tab="订阅投递">
+          <EventDeliveries :key="view.id" :event-id="view.id" />
         </a-tab-pane>
         <a-tab-pane v-for="t in view.tabs ?? []" :key="t.key" :tab="t.title">
           <a-table

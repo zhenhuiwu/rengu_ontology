@@ -44,8 +44,14 @@ async def simulate_event(
 
 
 @router.get("/events/{event_id}/deliveries", summary="真实订阅投递状态（不包含路由凭据）")
-async def event_deliveries(event_id: EventPathId, session: SessionDep, user: CurrentUserDep) -> dict:
-    from sqlalchemy import select
+async def event_deliveries(
+    event_id: EventPathId,
+    session: SessionDep,
+    user: CurrentUserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
+) -> dict:
+    from sqlalchemy import func, select
 
     from app.core.errors import Forbidden, NotFound
     from app.modules.event.delivery import authorize_object
@@ -59,13 +65,17 @@ async def event_deliveries(event_id: EventPathId, session: SessionDep, user: Cur
             raise Forbidden("只能查看本人创建的测试投递记录")
     else:
         await authorize_object(session, user, event, "view")
-    rows = await session.scalars(
-        select(EventDelivery).where(EventDelivery.event_id == event.id).order_by(EventDelivery.id)
-    )
+    query = select(EventDelivery).where(EventDelivery.event_id == event.id)
+    total = await session.scalar(select(func.count()).select_from(query.subquery()))
+    page = min(page, max(1, (total + size - 1) // size))
+    rows = await session.scalars(query.order_by(EventDelivery.id).offset((page - 1) * size).limit(size))
     return {
         "eventId": event.code,
         "outcome": event.outcome.value,
         "summary": event.summary,
+        "total": total,
+        "page": page,
+        "size": size,
         "items": [
             {
                 "name": row.subscriber_name,
@@ -73,7 +83,20 @@ async def event_deliveries(event_id: EventPathId, session: SessionDep, user: Cur
                 "attempts": row.attempts,
                 "error": row.error,
                 "result": {
-                    key: row.result[key] for key in ("httpStatus", "actionId", "status") if key in row.result
+                    key: row.result[key]
+                    for key in (
+                        "httpStatus",
+                        "actionId",
+                        "ruleId",
+                        "ruleVersion",
+                        "hitId",
+                        "alertId",
+                        "status",
+                        "actionStatus",
+                        "actionReason",
+                        "blockedByEventId",
+                    )
+                    if key in row.result
                 }
                 if row.result
                 else None,

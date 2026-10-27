@@ -227,7 +227,7 @@ async def stage_event_action(session, user, *, action_type_code: str, event_id: 
                 or previous.created_by != user.id):
             raise Conflict("同一事件动作的参数或执行身份已改变", code="IDEMPOTENCY_CONFLICT")
         return {"id": previous.code, "status": previous.status.value, "idemKey": previous.idem_key}
-    catalog = await get_catalog(session)
+    catalog = await get_catalog(session, user)
     target = (catalog.action_meta(action_type_code) or {}).get("kind")
     if target != obj_kind or (target and not obj_id):
         from app.core.errors import AppError

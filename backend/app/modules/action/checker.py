@@ -1,21 +1,24 @@
 """Real, read-only action checks. Missing context and unsupported rules never pass."""
 
 import json
+import re
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.common.auth import CurrentUser
 from app.common.context import ViewContext
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import RoleAccess, effective_expr, governed_tables
+from app.contracts.rules import lifecycle_transition_pairs
 from app.core.errors import AppError, NotFound
 from app.modules.action.condition_expr import Unavailable, evaluate
 from app.modules.action.models import ActionType, TypeStatus
 from app.modules.action.sections import action_def
 from app.modules.admin.roles import RoleService
+from app.modules.admin.models import SysRole
 from app.modules.event.ingress_schema import valid_json
 from app.modules.static.repo import StaticRepo, definition_draft_items
 from app.modules.versioning.repo import ReleaseRepo
@@ -111,6 +114,7 @@ async def definition(session, code: str, ctx: ViewContext, view: str, cr: str | 
                 result[section].append(row)
     elif view not in ("", "published"):
         raise AppError("view只能是published或draft", code="VALIDATION_FAILED", status_code=422)
+    result["_releaseVer"] = ctx.ver
     return result
 
 
@@ -152,9 +156,78 @@ def param_valid(type_: str, value: Any) -> bool:
     raise Unavailable("参数类型尚不支持校验")
 
 
+def param_aliases(param: dict) -> set[str]:
+    names = {param["api"], param["name"]}
+    # Existing generic conditions use 原因 for the published 修正原因/reason parameter.
+    if param["api"] == "reason" and param["name"] == "修正原因":
+        names.add("原因")
+    return names
+
+
+def literal_enum_choices(rule: Any) -> list[str] | None:
+    if not isinstance(rule, str) or len(rule) > 4096:
+        return None
+    choices = re.split(r"\s+/\s+", rule.strip())
+    if 2 <= len(choices) <= 32 and all(re.fullmatch(r"[\w-]{1,128}", value) for value in choices):
+        return choices
+    return None
+
+
 class DatabaseSubmissionChecker:
     def __init__(self, session, user: CurrentUser):
         self.session, self.user = session, user
+
+    async def lifecycle_parameter(self, action: dict, param: dict, version: int, refs: dict) -> str | None:
+        kind, api = action.get("targetKind"), action.get("targetApi")
+        if not isinstance(kind, str) or not isinstance(api, str):
+            raise Unavailable("生命周期校验缺少动作明确绑定的对象类型/API")
+        current, target = refs.get(("上下文对象", "status")), refs.get(("参数", param["api"]))
+        if not isinstance(current, str) or not isinstance(target, str):
+            raise Unavailable("生命周期校验缺少有权读取的真实当前状态或有效目标状态")
+        repo = ReleaseRepo(self.session)
+        release = await repo.by_ver(action["_releaseVer"]) if action.get("_releaseVer") else await repo.latest()
+        snapshot = release.snapshot if release is not None else None
+        if not isinstance(snapshot, dict):
+            raise Unavailable("生命周期校验缺少绑定的真实发布快照")
+        objects, actions = snapshot.get("objectTypes"), snapshot.get("actionTypes")
+        obj = objects.get(kind) if isinstance(objects, dict) else None
+        bound = actions.get(action.get("id")) if isinstance(actions, dict) else None
+        if not isinstance(obj, dict) or obj.get("api") != api:
+            raise Unavailable("绑定发布版对象API与动作目标不一致，不能借用其他对象生命周期")
+        if not isinstance(bound, dict) or bound.get("version") != action.get("version"):
+            raise Unavailable("绑定发布版缺少同版本动作定义，不能借用其他发布版生命周期")
+        try:
+            pairs = lifecycle_transition_pairs(snapshot, object_kind=kind, version=version)
+        except AppError as exc:
+            raise Unavailable(exc.message) from None
+        if (current, target) not in pairs:
+            return f"迁移未匹配：{current} → {target} 不在绑定发布版生命周期 v{version} 的允许迁移集合"
+        return None
+
+    async def source_role_condition(self, text: str, bundles: list) -> tuple[bool, str] | None:
+        # Only an explicit finite role/source set; a human request supplies no trusted rule source.
+        match = re.fullmatch(r"当前用户\.角色\s*(?:∈|in)\s*\{([^{}]{1,4096})\}", text.strip())
+        if not match:
+            return None
+        labels = [value.strip() for value in re.split(r"[,，]", match[1])]
+        if not 1 <= len(labels) <= 32 or not all(re.fullmatch(r"[\w -]{1,64}", value) for value in labels):
+            return None
+        sources = [value for value in labels if re.fullmatch(r"规则\s+[\w-]{1,64}", value)]
+        if not sources:
+            return None
+        humans = set(labels) - set(sources)
+        rows = (await self.session.execute(
+            select(SysRole.id, SysRole.code, SysRole.name).where(or_(SysRole.code.in_(humans), SysRole.name.in_(humans)))
+        )).all() if humans else []
+        if any(row.id in {bundle.role.id for bundle in bundles} for row in rows):
+            return True, ""
+        registered = {value for row in rows for value in (row.code, row.name)}
+        missing = sorted(humans - registered)
+        reasons = ["当前用户未匹配所声明的正式角色"] if rows else []
+        if missing:
+            reasons.append("尚未登记的角色：" + "、".join(missing))
+        reasons.append("本次并非" + "、".join(sources) + "触发")
+        return False, "条件未匹配：" + "；".join(reasons)
 
     async def context_references(self, definition: dict, context: dict, bundles: list) -> dict:
         refs: dict[tuple[str, str], Any] = {
@@ -182,7 +255,7 @@ class DatabaseSubmissionChecker:
 
                     alert = await AlertRepo(self.session).get_by_code(alert_id)
                     if alert is not None:
-                        person = (await get_catalog(self.session)).person(alert.assignee)
+                        person = (await get_catalog(self.session, self.user)).person(alert.assignee)
                         if person and person["id"] == self.user.id:
                             refs[("告警", "处理人")] = self.user.id
                             refs[("告警", "状态")] = alert.status.value
@@ -252,8 +325,14 @@ class DatabaseSubmissionChecker:
             if isinstance(value, Enum):
                 value = value.value
             if value is None or isinstance(value, str | int | float | bool):
+                fields = {prop.display_name, prop.api_name}
+                # Published conditions use 状态; bind only the governed physical status property.
+                if prop.api_name == "status" and prop.backing_column == "status" and not any(
+                    p.api_name != "status" and "状态" in (p.display_name, p.api_name) for p in props
+                ):
+                    fields.add("状态")
                 for name in (obj.display_name, obj.api_name, "上下文对象"):
-                    for field in (prop.display_name, prop.api_name):
+                    for field in fields:
                         refs[(name, field)] = value
         return refs
 
@@ -286,7 +365,7 @@ class DatabaseSubmissionChecker:
                 or type(p.get("required", False)) is not bool
             ):
                 raise unavailable("动作参数定义无效")
-            for name in {p["api"], p.get("name", p["api"])}:
+            for name in param_aliases(p):
                 name_counts[name] = name_counts.get(name, 0) + 1
         if set(params) - {p["api"] for p in params_def}:
             failed.append({"name": "参数", "fail": "包含未声明参数"})
@@ -300,7 +379,15 @@ class DatabaseSubmissionChecker:
             try:
                 if not param_valid(p["type"], value):
                     raise Unavailable("参数类型不符合已登记定义")
-                for alias in (api, name):
+                if (
+                    action.get("targetKind")
+                    and p["type"].startswith("对象引用 · ")
+                    and p["type"].split(" · ", 1)[1]
+                    in {action.get("target"), action.get("targetApi"), action.get("targetKind")}
+                    and (context.get("objKind") != action["targetKind"] or value != context.get("objId"))
+                ):
+                    raise Unavailable("同目标类型的对象引用必须与动作目标对象一致，不能用其他对象参数提交")
+                for alias in param_aliases(p):
                     if name_counts[alias] == 1:
                         refs[("参数", alias)] = value
             except Unavailable as exc:
@@ -315,10 +402,21 @@ class DatabaseSubmissionChecker:
             try:
                 if p.get("_ast") is not None:
                     raise Unavailable("参数AST格式尚未定义，不能按通过处理")
+                choices = literal_enum_choices(rule) if p["type"] == "枚举" else None
+                if choices is not None:
+                    if params[p["api"]] not in choices:
+                        failed.append({"name": name, "fail": "参数值不在已声明枚举集合：" + " / ".join(choices)})
+                    continue
+                lifecycle = re.fullmatch(r"必须是生命周期 v([1-9]\d{0,5}) 中的合法迁移", rule) if isinstance(rule, str) else None
+                if lifecycle:
+                    reason = await self.lifecycle_parameter(action, p, int(lifecycle[1]), refs)
+                    if reason:
+                        failed.append({"name": name, "fail": reason})
+                    continue
                 if not evaluate(rule, refs):
                     failed.append({"name": name, "fail": "参数校验未通过"})
             except Unavailable as exc:
-                failed.append({"name": name, "fail": str(exc)})
+                failed.append({"name": name, "fail": "参数规则不可校验：" + str(exc)})
         for cond in conds:
             if (
                 not isinstance(cond, dict)
@@ -329,6 +427,12 @@ class DatabaseSubmissionChecker:
             try:
                 if cond.get("_ast") is not None:
                     raise Unavailable("条件AST格式尚未定义，不能按通过处理")
+                source_roles = await self.source_role_condition(cond.get("expr") or "", bundles)
+                if source_roles is not None:
+                    passed, reason = source_roles
+                    if not passed:
+                        failed.append({"name": cond["name"], "fail": reason})
+                    continue
                 if not evaluate(cond.get("expr") or "", refs):
                     message = cond.get("fail")
                     failed.append(
@@ -338,7 +442,7 @@ class DatabaseSubmissionChecker:
                         }
                     )
             except Unavailable as exc:
-                failed.append({"name": cond["name"], "fail": str(exc)})
+                failed.append({"name": cond["name"], "fail": "条件不可校验：" + str(exc)})
         return {"passed": not failed, "checked": len(conds), "failed": failed}
 
     async def check(self, action_type_code: str, context: dict[str, Any]) -> list[dict[str, str]]:

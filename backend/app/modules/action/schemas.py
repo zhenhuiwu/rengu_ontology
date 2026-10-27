@@ -13,6 +13,9 @@ T = TypeVar("T")
 
 class DryRunIn(ApiModel):
     params: dict[str, Any] = Field(default_factory=dict)
+    obj_kind: str | None = Field(None, min_length=1, max_length=64, pattern=r"^[^\x00]+$")
+    obj_id: str | None = Field(None, min_length=1, max_length=64, pattern=r"^[^\x00]+$")
+    alert_id: str | None = Field(None, min_length=1, max_length=64, pattern=r"^[^\x00]+$")
 
     @field_validator("params")
     @classmethod

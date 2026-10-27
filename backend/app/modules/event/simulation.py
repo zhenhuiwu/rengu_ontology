@@ -156,7 +156,12 @@ async def simulate(
     if get_settings().event_delivery_http_enabled:
         for check in checks:
             route = configured.get(f"{type_id}/{check.name}", {})
-            if check.matched is not True or check.name not in enabled or route.get("action_type"):
+            if (
+                check.matched is not True
+                or check.name not in enabled
+                or route.get("action_type")
+                or route.get("rule_code")
+            ):
                 continue
             try:
                 http_target(route, True)

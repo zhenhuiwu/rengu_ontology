@@ -89,7 +89,7 @@ def parse_expression(text):
                 raise ValueError
             value = token.string
             if token.type == tokenize.NAME:
-                value = {"AND": "and", "OR": "or", "NOT": "not", "且": "and", "或": "or"}.get(value, value)
+                value = {"AND": "and", "OR": "or", "NOT": "not", "IN": "in", "且": "and", "或": "or"}.get(value, value)
             elif value == "=":
                 value = "=="
             parts.append((token.type, value))
@@ -311,7 +311,14 @@ async def run_rule(session, user, base, definition, body):
         if event_type is None or event_type.status.value == "草稿":
             raise unavailable("订阅事件类型不存在或尚未发布")
         fields = {p.api: p.name for p in event_type.payload}
-        expression = Expression(tree, obj, gov, fields)
+        from app.modules.dynamic.event_rule_runtime import EventExpression
+        from app.modules.versioning.repo import ReleaseRepo
+
+        release = await ReleaseRepo(session).latest()
+        expression = EventExpression(
+            tree, fields, release.snapshot if release else {},
+            {"objKind": obj.code, "objectApi": obj.api_name},
+        )
         filter_text = trigger.get("filter")
         event_filter = None
         if filter_text and filter_text != "全部":

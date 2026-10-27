@@ -14,6 +14,7 @@ from app.core import clock
 from app.db.dialects import get_adapter
 from app.db.session import SessionDep
 from app.modules.action.models import TypeStatus
+from app.modules.event.delivery import object_order_lock
 from app.modules.event.ingress_schema import IngressIn, authenticate, bad, read_envelope
 from app.modules.event.models import Event, EventDedup, EventOutcome, EventType
 from app.modules.event.sections import event_def
@@ -123,6 +124,7 @@ async def receive(session, body: IngressIn) -> dict:
             )
     window = dedup_window(event_type.dedup_window)
     await adapter.xact_lock(session, f"event.ingress.key:{event_type.id}:{key}")
+    await adapter.xact_lock(session, object_order_lock(event_type.id, event_type.obj_kind, body.object_id))
     # Read the real release while holding the type lock: publication cannot change its definition meanwhile.
     release = await ReleaseRepo(session).latest()
     now = clock.now()

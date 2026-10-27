@@ -52,7 +52,15 @@ async def dry_run(
 
         raise AppError("变更单编号无效", code="VALIDATION_FAILED", status_code=422)
     value = await definition(session, type_id, ctx, view, cr)
-    return await DatabaseSubmissionChecker(session, user).run(value, {"params": body.params})
+    if bool(body.obj_kind) != bool(body.obj_id) or (
+        body.obj_kind is not None and body.obj_kind != value.get("targetKind")
+    ):
+        from app.core.errors import AppError
+
+        raise AppError("目标对象须完整指定且匹配动作定义", code="VALIDATION_FAILED", status_code=422)
+    return await DatabaseSubmissionChecker(session, user).run(
+        value, {"params": body.params, "objKind": body.obj_kind, "objId": body.obj_id, "alertId": body.alert_id}
+    )
 
 
 def _list_page(

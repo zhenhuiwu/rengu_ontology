@@ -124,7 +124,7 @@ def evaluate(text: str, references: dict[tuple[str, str], Any]) -> bool:
             if i + 2 < len(tokens) and token.type == tokenize.NAME and tokens[i + 1].string == ".":
                 ref = (token.string, tokens[i + 2].string)
                 if ref not in references:
-                    raise Unavailable("缺少可用参数、身份或对象上下文")
+                    raise Unavailable(f"缺少可用参数、身份或对象上下文：{ref[0]}.{ref[1]}")
                 key = f"_ref_{len(values)}"
                 value = references[ref]
                 bounded(value)

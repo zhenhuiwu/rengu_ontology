@@ -23,6 +23,7 @@ from app.modules.action.models import ActionType
 from app.modules.dynamic.cr_link import CrLink, lifecycle_sections, rule_sections
 from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertLevel
 from app.modules.dynamic.repo import ScenarioImpactRepo, ScenarioRepo, recent_rule_hits
+from app.modules.dynamic.row_scope import scoped_instances
 from app.modules.dynamic.rules_models import (
     HitResult,
     LcStateKind,
@@ -219,7 +220,7 @@ class RuleService:
             else {}
         )
         out = []
-        weekly = await recent_rule_hits(self.session, until=now(), rule_ids=ids)
+        weekly = await recent_rule_hits(self.session, until=now(), rule_ids=ids, user=self.user)
         for r in rows:
             draft = drafts.get(r.id)
             st = self.display_status(r, draft, self.cr_states.get(draft.cr_code) if draft else None)
@@ -250,7 +251,7 @@ class RuleService:
                 for r in rows
             )
         )
-        catalog = await get_catalog(self.session)
+        catalog = await get_catalog(self.session, self.user)
         confirmers = [p["name"] for p in catalog.data["people"] if catalog.person(p["name"])]
         sources = {"告警.对象", "告警.ID", "命中.对象", "规则.命中说明", "固定值"}
         for r in rows:
@@ -284,14 +285,19 @@ class RuleService:
         base = self._def(r, actions)
         draft = await self.draft_def(r, d, actions)
         st = self.display_status(r, d, self.cr_states.get(d.cr_code) if d else None)
-        hits7 = (await recent_rule_hits(self.session, until=now(), rule_ids={r.id})).get(r.id, 0)
+        hits7 = (
+            await recent_rule_hits(self.session, until=now(), rule_ids={r.id}, user=self.user)
+        ).get(r.id, 0)
         base["weekly"] = hits7
         if draft is not None:
             draft["weekly"] = hits7
         pending = await self.session.scalar(
-            select(func.count())
-            .select_from(ActionRun)
-            .where(ActionRun.rule_code == r.code, ActionRun.status == ActionStatus.staged)
+            await scoped_instances(
+                select(func.count())
+                .select_from(ActionRun)
+                .where(ActionRun.rule_code == r.code, ActionRun.status == ActionStatus.staged),
+                self.user, ActionRun.obj_kind, ActionRun.obj_id,
+            )
         )
         return {
             **base,
@@ -310,7 +316,10 @@ class RuleService:
         return list(
             (
                 await self.session.scalars(
-                    select(RuleHit).where(RuleHit.rule_id == r.id).order_by(RuleHit.seq)
+                    await scoped_instances(
+                        select(RuleHit).where(RuleHit.rule_id == r.id).order_by(RuleHit.seq),
+                        self.user, RuleHit.obj_kind, RuleHit.obj_id,
+                    )
                 )
             ).all()
         )
@@ -347,11 +356,12 @@ class RuleService:
         until = now()
         since = until - timedelta(days=7 if range_ == "7d" else 30)
         statement = select(RuleHit).where(RuleHit.rule_id == r.id, RuleHit.at >= since, RuleHit.at <= until)
+        statement = await scoped_instances(statement, self.user, RuleHit.obj_kind, RuleHit.obj_id)
         total = int(await self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
         page = params.clamp(total)
         hits = list(
             await self.session.scalars(
-                statement.order_by(RuleHit.seq, RuleHit.id).limit(page.size).offset(page.offset)
+                statement.order_by(RuleHit.at.desc(), RuleHit.id.desc()).limit(page.size).offset(page.offset)
             )
         )
         alerts = await self._alerts({h.alert_id for h in hits if h.alert_id})
@@ -362,7 +372,11 @@ class RuleService:
         )
 
     async def hit(self, code: str) -> tuple[Rule, RuleHit, dict[str, Any], Alert | None]:
-        h = await self.session.scalar(select(RuleHit).where(RuleHit.code == code))
+        h = await self.session.scalar(
+            await scoped_instances(
+                select(RuleHit).where(RuleHit.code == code), self.user, RuleHit.obj_kind, RuleHit.obj_id,
+            )
+        )
         if h is None:
             raise NotFound("命中记录不存在", details={"id": code})
         r = await self.session.get(Rule, h.rule_id)
@@ -566,7 +580,7 @@ class RuleService:
             errs.append(("autoStage.confirmer", "开启自动暂存需指定在用确认人"))
         from app.modules.dynamic.catalog import get_catalog
 
-        catalog = await get_catalog(self.session)
+        catalog = await get_catalog(self.session, self.user)
         if st.confirmer and catalog.person(st.confirmer) is None:
             errs.append(("autoStage.confirmer", "确认人不能定位唯一在用用户，请重新选择"))
         sources = (await self.meta())["mappingSources"]

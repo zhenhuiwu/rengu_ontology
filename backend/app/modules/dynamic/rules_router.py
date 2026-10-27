@@ -100,8 +100,10 @@ async def list_rules(
         Depends(require_func("action-center", "view")),
     ],
 )
-async def object_behavior_stats(object_id: str, session: SessionDep, ctx: ViewContextDep) -> dict[str, Any]:
-    return await behavior_stats(session, object_id, ctx)
+async def object_behavior_stats(
+    object_id: str, session: SessionDep, ctx: ViewContextDep, user: CurrentUserDep
+) -> dict[str, Any]:
+    return await behavior_stats(session, object_id, ctx, user)
 
 
 @router.get(
@@ -110,10 +112,11 @@ async def object_behavior_stats(object_id: str, session: SessionDep, ctx: ViewCo
 async def object_automation_hits(
     object_id: str,
     session: SessionDep,
+    user: CurrentUserDep,
     params: Annotated[PageParams, Depends(_page(10))],
     rule_id: Annotated[str | None, Query(alias="ruleId", max_length=64, pattern=r"^[^\x00]+$")] = None,
 ) -> DictPage:
-    return await automation_hits(session, object_id, rule_id, params)
+    return await automation_hits(session, object_id, rule_id, params, user)
 
 
 @router.get("/rules/meta", dependencies=RULES_VIEW)
@@ -170,7 +173,7 @@ async def rule_hit(
 ) -> dict[str, Any]:
     """R8 命中抽屉：命中 + 告警详情（时间线）+ 关联动作（该告警的第一条动作）。"""
     r, _hit, out, alert = await svc.hit(hit_id)
-    catalog = await get_catalog(session)
+    catalog = await get_catalog(session, user)
     timeline: list[dict[str, Any]]
     alert_detail = linked = None
     if alert is not None:
@@ -305,7 +308,9 @@ async def stage_scenario(
     svc: ScSvc, session: SessionDep, user: CurrentUserDep, ports: PortsDep, sc_id: str, body: ScenarioStageIn
 ) -> dict[str, Any]:
     """S9：勾选的建议逐条暂存为待确认动作（source.type=推演，confirmer=本人）。"""
-    return await svc.stage(sc_id, body.keys, ActionService(session, user, await get_catalog(session), ports))
+    return await svc.stage(
+        sc_id, body.keys, ActionService(session, user, await get_catalog(session, user), ports)
+    )
 
 
 # ---------------- 生命周期（L1–L6） ----------------

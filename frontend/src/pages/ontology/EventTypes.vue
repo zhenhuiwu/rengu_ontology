@@ -14,6 +14,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
 import ObjRef from '@/components/ObjRef.vue';
 import EChart from '@/components/EChart.vue';
+import EventDeliveries from '@/components/EventDeliveries.vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
@@ -33,7 +34,7 @@ import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
 import {
   actionApi, actionContextKey, snapshotReady, loadSnapshot, eventDetailReady, loadEventDetail, listEventPayload, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
-  listEvents, getEventStats, simulateEvent, getEventDeliveries, type EventDeliveryStatus, type EventSimulation, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore,
+  listEvents, getEventStats, simulateEvent, type EventSimulation, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore,
 } from '@/api/action';
 import type { EventRecord } from '@/api/action';
 
@@ -173,21 +174,8 @@ const delItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].remove
 const restoreItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].restore(key);
 
 const simulation = ref<EventSimulation | null>(null);
-const testDeliveries = ref<EventDeliveryStatus | null>(null);
 const simulating = ref(false);
-watch([() => cur.value.id, actionContextKey, isDraft], () => { simulation.value = null; testDeliveries.value = null; });
-const deliveryLabel: Record<string, string> = { pending: '待投递', processing: '处理中', delivered: '已投递', skipped: '已跳过', failed: '失败', unknown: '结果未知，需人工核查' };
-async function refreshTestDelivery() {
-  const id = simulation.value?.testEventId;
-  if (!id || simulating.value) return;
-  const key = actionContextKey();
-  simulating.value = true;
-  try {
-    const result = await getEventDeliveries(id);
-    if (key === actionContextKey() && id === simulation.value?.testEventId) testDeliveries.value = result;
-  } catch (e) { message.error(crErrText(e)); }
-  finally { simulating.value = false; }
-}
+watch([() => cur.value.id, actionContextKey, isDraft], () => { simulation.value = null; });
 async function simulate() {
   if (real && (readonly.value || dirty.value || simulating.value)) return;
   const e = cur.value;
@@ -201,7 +189,6 @@ async function simulate() {
   if (!real) { message.success(`测试事件已投递 ${liveSubs.value.filter((s) => s.status !== '停用').length} 个订阅方的测试通道`); return; }
   const key = actionContextKey(); const id = e.id;
   simulating.value = true;
-  testDeliveries.value = null;
   try {
     const result = await simulateEvent(id, isDraft.value ? 'draft' : 'published', isDraft.value ? draft.value?.id : undefined);
     if (key === actionContextKey() && id === cur.value.id) simulation.value = result;
@@ -592,11 +579,7 @@ const verCols = [
       </a-list>
       <template v-if="simulation.testEventId">
         <div class="t-12 c-3">测试事件：{{ simulation.testEventId }}</div>
-        <a-button size="small" :loading="simulating" @click="refreshTestDelivery">刷新投递状态</a-button>
-        <a-alert v-if="testDeliveries" type="info" :message="testDeliveries.summary" show-icon />
-        <a-list v-if="testDeliveries" :data-source="testDeliveries.items" size="small">
-          <template #renderItem="{ item }"><a-list-item>{{ item.name }}：{{ deliveryLabel[item.state] ?? item.state }}<span v-if="item.error" class="t-12 c-3">（{{ item.error }}）</span></a-list-item></template>
-        </a-list>
+        <EventDeliveries :event-id="simulation.testEventId" />
       </template>
     </template>
   </a-modal>

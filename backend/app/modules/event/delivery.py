@@ -6,7 +6,7 @@ from datetime import timedelta
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, or_, select, tuple_
 
 from app.common.auth import check_func, resolve_user, row_filter
 from app.common.row_filter import is_deny_all, to_sql
@@ -14,6 +14,7 @@ from app.common.sql_guard import governed_tables
 from app.core import clock
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.db.dialects import get_adapter
 from app.modules.action.condition_expr import Unavailable
 from app.modules.event.models import Event, EventDelivery, EventOutcome
 from app.modules.event.schemas import FieldOut
@@ -93,6 +94,70 @@ def route_for(event: Event, delivery: EventDelivery) -> dict:
     return routes().get(f"{definition.get('id', '')}/{delivery.subscriber_name}", {})
 
 
+def object_order_lock(event_type_id: int, obj_kind: str, object_id: str) -> str:
+    # Shared with ingress: the claim sees every accepted predecessor before advancing the stream.
+    return "event.order:" + json.dumps([event_type_id, obj_kind, object_id], ensure_ascii=False)
+
+
+async def check_order(session, event: Event, delivery: EventDelivery, route: dict) -> bool:
+    """Called under the object transaction lock; committed attempts are the durable watermark."""
+    if route.get("ordering") != "object":
+        raise Unavailable("ORDERING_CHANNEL_NOT_CONFIGURED")
+    if not event.obj_kind or not event.object_id or not event.occurred_at or not event.code:
+        raise Unavailable("ORDERING_OBJECT_IDENTITY_REQUIRED")
+    stream = (
+        Event.event_type_id == event.event_type_id,
+        Event.obj_kind == event.obj_kind,
+        Event.object_id == event.object_id,
+        Event.is_seed.is_(False),
+        Event.is_test.is_(False),
+        Event.definition_snapshot.is_not(None),
+        Event.outcome != EventOutcome.deduped,
+    )
+    position = tuple_(Event.occurred_at, Event.code.collate("C"))
+    current = tuple_(event.occurred_at, event.code)
+    later = await session.scalar(
+        select(Event.code)
+        .join(EventDelivery, EventDelivery.event_id == Event.id)
+        .where(
+            *stream,
+            EventDelivery.attempts > 0,
+            position > current,
+        )
+        .limit(1)
+    )
+    if later is not None:
+        # A send cannot be undone; late arrivals are retained but never inserted before a claimed send.
+        delivery.state, delivery.error = "quarantined", "ORDERING_LATE_EVENT_QUARANTINED"
+        delivery.finished_at, delivery.next_at = clock.now(), None
+        delivery.result = None
+        return False
+    # shortcut: reuse the type/time index; add an object-domain index if retained streams outgrow it.
+    predecessors = await session.execute(
+        select(Event.code, Event.definition_snapshot, EventDelivery.id)
+        .outerjoin(EventDelivery, EventDelivery.event_id == Event.id)
+        .where(
+            *stream,
+            position < current,
+            or_(
+                EventDelivery.id.is_(None),
+                EventDelivery.state.not_in(("delivered", "skipped", "quarantined")),
+            ),
+        )
+        .order_by(Event.occurred_at, Event.code.collate("C"))
+    )
+    for code, snapshot, predecessor_id in predecessors:
+        if predecessor_id is None and isinstance(snapshot, dict):
+            subscribers = snapshot.get("subscribers")
+            if isinstance(subscribers, list) and not any(
+                isinstance(s, dict) and s.get("status") == "启用" for s in subscribers
+            ):
+                continue
+        delivery.result = {"blockedByEventId": code}
+        raise Unavailable("ORDERING_PREDECESSOR_UNRESOLVED")
+    return True
+
+
 async def discover(session) -> None:
     """Only accepted new events have trustworthy definition snapshots; legacy rows remain explicit pending."""
     events = await session.scalars(
@@ -110,12 +175,16 @@ async def discover(session) -> None:
     for event in events:
         definition = event.definition_snapshot
         if not isinstance(definition, dict) or not isinstance(definition.get("subscribers"), list):
-            event.outcome, event.summary = EventOutcome.failed, "未投递：入站定义快照无效"
+            event.outcome, event.summary = EventOutcome.pending, "待投递：入站定义快照不完整"
             continue
         subscribers = definition["subscribers"]
         names = [s.get("name") for s in subscribers if isinstance(s, dict)]
-        if len(names) != len(subscribers) or len(set(names)) != len(names) or any(not n for n in names):
-            event.outcome, event.summary = EventOutcome.failed, "投递失败：订阅定义快照无效"
+        if (
+            len(names) != len(subscribers)
+            or any(not isinstance(n, str) or not n.strip() for n in names)
+            or len(set(names)) != len(names)
+        ):
+            event.outcome, event.summary = EventOutcome.pending, "待投递：订阅定义快照无效"
             continue
         for subscriber in subscribers:
             session.add(
@@ -144,14 +213,23 @@ async def aggregate(session, event: Event) -> None:
     states = {d.state for d in deliveries}
     if states & {"pending", "processing"}:
         event.outcome = EventOutcome.partial if event.subscriber_count else EventOutcome.pending
-    elif states & {"failed", "unknown"}:
+    elif states & {"failed", "unknown", "quarantined"}:
         event.outcome = EventOutcome.partial if event.subscriber_count else EventOutcome.failed
     elif event.subscriber_count:
-        event.outcome = EventOutcome.delivered
+        event.outcome = (
+            EventOutcome.alert_created
+            if any(
+                d.state == "delivered"
+                and (d.result or {}).get("status") == "alert_created"
+                and (d.result or {}).get("alertId")
+                for d in deliveries
+            )
+            else EventOutcome.delivered
+        )
     else:
         event.outcome = EventOutcome.pending
     pending = sum(d.state in ("pending", "processing") for d in deliveries)
-    failed = sum(d.state in ("failed", "unknown") for d in deliveries)
+    failed = sum(d.state in ("failed", "unknown", "quarantined") for d in deliveries)
     skipped = sum(d.state == "skipped" for d in deliveries)
     event.summary = (
         f"订阅投递：成功 {event.subscriber_count}，待处理 {pending}，失败/未知 {failed}，过滤/停用 {skipped}"
@@ -164,13 +242,35 @@ async def prepare(session, delivery_id: int) -> bool:
     """Commit processing before any side effect; a crashed worker never blindly repeats a send."""
     from app.modules.event.simulation import filter_matches
 
+    candidate = await session.get(EventDelivery, delivery_id)
+    if candidate is None:
+        return False
+    event = await session.get(Event, candidate.event_id)
+    if not event.is_test:
+        await get_adapter(session).xact_lock(
+            session, object_order_lock(event.event_type_id, event.obj_kind, event.object_id)
+        )
     delivery = await session.scalar(
-        select(EventDelivery).where(EventDelivery.id == delivery_id).with_for_update()
+        select(EventDelivery)
+        .where(EventDelivery.id == delivery_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if delivery is None or delivery.state != "pending":
         return False
-    event = await session.get(Event, delivery.event_id)
+    delivery.result = None
     try:
+        definition = event.definition_snapshot
+        if (
+            not isinstance(definition, dict)
+            or any(key not in definition for key in ("id", "version", "objKind", "payload", "subscribers"))
+            or not isinstance(definition.get("payload"), list)
+            or not isinstance(definition.get("subscribers"), list)
+            or not definition.get("id")
+            or not definition.get("version")
+            or (not event.is_test and (not event.ingested_at or not event.envelope_hash))
+        ):
+            raise Unavailable("DELIVERY_SNAPSHOT_INCOMPLETE")
         fields = [FieldOut.model_validate(f) for f in event.definition_snapshot["payload"]]
         try:
             matched = filter_matches(delivery.subscription.get("filter", ""), fields, event.payload or {})
@@ -187,18 +287,33 @@ async def prepare(session, delivery_id: int) -> bool:
         route = route_for(event, delivery)
         if not route:
             raise Unavailable("DELIVERY_ROUTE_NOT_CONFIGURED")
+        if route.get("action_type") and route.get("rule_code"):
+            raise Unavailable("DELIVERY_ROUTE_CONFLICT")
+        if event.is_test and (route.get("action_type") or route.get("rule_code")):
+            raise Unavailable("BUSINESS_TEST_CHANNEL_NOT_CONFIGURED")
+        if route.get("rule_code") and (
+            delivery.subscription.get("kind") != "规则"
+            or delivery.subscription.get("ruleId") not in (None, "", route["rule_code"])
+        ):
+            raise Unavailable("RULE_SUBSCRIPTION_MISMATCH")
         if not event.is_test:
-            if event.definition_snapshot.get("ordering") not in (None, "", "不保证"):
-                raise Unavailable("ORDERING_CHANNEL_NOT_CONFIGURED")
             if not route.get("user"):
                 raise Unavailable("DELIVERY_IDENTITY_NOT_CONFIGURED")
             user = await resolve_user(session, route["user"])
             await authorize_object(session, user, event)
-        if not route.get("action_type"):
+            ordered = route.get("ordering") == "object" or event.definition_snapshot.get("ordering") not in (
+                None,
+                "",
+                "不保证",
+            )
+            if ordered and not await check_order(session, event, delivery, route):
+                await aggregate(session, event)
+                return False
+        if not (route.get("action_type") or route.get("rule_code")):
             http_target(route, event.is_test)
         delivery.state, delivery.started_at = "processing", clock.now()
         delivery.attempts += 1
-        delivery.error = None
+        delivery.error, delivery.result = None, None
         return True
     except (Unavailable, AppError) as exc:
         delivery.error = exc.code if isinstance(exc, AppError) else str(exc)
@@ -213,15 +328,61 @@ async def prepare(session, delivery_id: int) -> bool:
 
 
 async def execute(session, delivery_id: int) -> None:
+    candidate = await session.get(EventDelivery, delivery_id)
+    if candidate is None or candidate.state != "processing":
+        return
+    event = await session.get(Event, candidate.event_id)
+    if route_for(event, candidate).get("rule_code"):
+        # Publication precedes object/event locks, matching the public rule entry point.
+        await get_adapter(session).xact_lock(session, "ontology.publish")
+    if not event.is_test:
+        await get_adapter(session).xact_lock(
+            session, object_order_lock(event.event_type_id, event.obj_kind, event.object_id)
+        )
     delivery = await session.scalar(
-        select(EventDelivery).where(EventDelivery.id == delivery_id).with_for_update()
+        select(EventDelivery)
+        .where(EventDelivery.id == delivery_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if delivery is None or delivery.state != "processing":
         return
     event = await session.scalar(select(Event).where(Event.id == delivery.event_id).with_for_update(of=Event))
     try:
         route = route_for(event, delivery)
-        if route.get("action_type"):
+        if route.get("action_type") and route.get("rule_code"):
+            raise Unavailable("DELIVERY_ROUTE_CONFLICT")
+        if route.get("rule_code"):
+            if event.is_test:
+                raise Unavailable("BUSINESS_TEST_CHANNEL_NOT_CONFIGURED")
+            if delivery.subscription.get("kind") != "规则" or delivery.subscription.get("ruleId") not in (
+                None,
+                "",
+                route["rule_code"],
+            ):
+                raise Unavailable("RULE_SUBSCRIPTION_MISMATCH")
+            from app.contracts.rules import dispatch_event_rule
+
+            user = await resolve_user(session, route["user"])
+            await authorize_object(session, user, event)
+            async with session.begin_nested():
+                result = await dispatch_event_rule(
+                    session, user, rule_code=route["rule_code"], event_id=event.code
+                )
+            delivery.result = {
+                key: result[key]
+                for key in (
+                    "ruleId",
+                    "ruleVersion",
+                    "hitId",
+                    "alertId",
+                    "status",
+                    "actionStatus",
+                    "actionReason",
+                )
+                if key in result
+            }
+        elif route.get("action_type"):
             if event.is_test:
                 raise Unavailable("ACTION_TEST_CHANNEL_NOT_CONFIGURED")
             from app.contracts.actions import stage_event_action

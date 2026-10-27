@@ -272,10 +272,14 @@ export interface EventSimulation {
 export const simulateEvent = (typeId: string, view: string, cr?: string) =>
   api.post<EventSimulation>(`/event-types/${enc(typeId)}:simulate`, {}, { query: { view, cr } });
 export interface EventDeliveryStatus {
-  eventId: string; outcome: string; summary: string;
-  items: { name: string; state: string; attempts: number; error: string | null; result: { httpStatus?: number; actionId?: string; status?: string } | null }[];
+  eventId: string; outcome: string; summary: string; total: number; page: number; size: number;
+  items: { name: string; state: string; attempts: number; error: string | null; result: {
+    httpStatus?: number; actionId?: string; ruleId?: string; ruleVersion?: string; hitId?: string; alertId?: string;
+    status?: string; actionStatus?: string; actionReason?: string; blockedByEventId?: string;
+  } | null }[];
 }
-export const getEventDeliveries = (id: string) => api.get<EventDeliveryStatus>(`/events/${enc(id)}/deliveries`);
+export const getEventDeliveries = (id: string, page = 1) =>
+  api.get<EventDeliveryStatus>(`/events/${enc(id)}/deliveries`, { query: { page, size: 10 } });
 
 export interface EventStats {
   weekly: number; total: number; dedup: number; failed: number; partial: number; pending: number; p95: number | null; asOf: string;
@@ -287,8 +291,9 @@ export interface RunDaily { date: string; ok: number; failed: number; unknown: n
 export const getRunDaily = async (typeId: string, days = 14) =>
   (await api.get<{ items: RunDaily[] }>(`/action-types/${enc(typeId)}/stats/daily`, { query: { days } })).items;
 
-export const dryRunAction = (typeId: string, params: Record<string, unknown>, view: string, cr: string | undefined, options: RequestOptions) =>
-  api.post<{ passed: boolean; checked: number; failed: { name: string; fail: string }[] }>(`/action-types/${enc(typeId)}:dry-run`, { params }, { ...options, query: { ...options.query, view, cr } });
+export interface ActionTrialContext { objKind?: string; objId?: string; alertId?: string }
+export const dryRunAction = (typeId: string, params: Record<string, unknown>, view: string, cr: string | undefined, options: RequestOptions, context: ActionTrialContext = {}) =>
+  api.post<{ passed: boolean; checked: number; failed: { name: string; fail: string }[] }>(`/action-types/${enc(typeId)}:dry-run`, { params, ...context }, { ...options, query: { ...options.query, view, cr } });
 
 
 // ---------------- 变更单写接口（static-r3 契约；VITE_PALANTIR_CR_WRITE=1 才用） ----------------
