@@ -18,10 +18,10 @@ from app.modules.dynamic.catalog import (
     get_meta_catalog,
 )
 from app.modules.dynamic.ports import PortsDep
-from app.modules.dynamic.repo import AlertRepo
 from app.modules.dynamic.schemas import (
     ActionRunDetail,
     ActionRunPage,
+    AlertActionIn,
     AlertDetail,
     AlertPage,
     BatchClaimOut,
@@ -29,6 +29,7 @@ from app.modules.dynamic.schemas import (
     BatchCloseOut,
     CloseIn,
     IdsIn,
+    LaunchValidateIn,
     ReconcileIn,
     ResubmitOut,
     StageIn,
@@ -36,7 +37,7 @@ from app.modules.dynamic.schemas import (
     TransferIn,
     WithdrawIn,
 )
-from app.modules.dynamic.service import ActionService, AlertService
+from app.modules.dynamic.service import ActionService, AlertService, validation_failed
 
 router = APIRouter(tags=["dynamic"])
 
@@ -173,14 +174,16 @@ async def batch_close(body: BatchCloseIn, svc: AlertSvc) -> BatchCloseOut:
 
 
 @router.post("/alerts/{code}:start-action", response_model=StartActionOut, dependencies=ALERTS_MANAGE)
-async def start_action(code: DynamicPathCode, svc: AlertSvc, acts: ActionSvc) -> StartActionOut:
-    alert, run = await svc.start_action(code)
+async def start_action(
+    code: DynamicPathCode, svc: AlertSvc, acts: ActionSvc, body: AlertActionIn
+) -> StartActionOut:
+    alert, run = await svc.start_action(code, body.params)
     return StartActionOut(alert=await svc.detail(alert), action=await acts.detail(run))
 
 
-@router.get("/people", response_model=list[str], dependencies=ALERTS_VIEW)
-async def people(session: SessionDep, _user: CurrentUserDep) -> list[str]:
-    return await AlertRepo(session).people()
+@router.get("/people", dependencies=ALERTS_VIEW)
+async def people(alert_id: Annotated[str, Query(alias="alertId")], svc: AlertSvc) -> list[dict[str, str]]:
+    return await svc.people(alert_id)
 
 
 # ---------------- 动作 ----------------
@@ -224,7 +227,32 @@ async def list_action_runs(
 async def actions_meta(
     catalog: Annotated[DatabaseRefCatalog, Depends(get_meta_catalog)], _user: CurrentUserDep
 ) -> dict[str, Any]:
-    return catalog.meta()
+    return {
+        **catalog.meta(),
+        "canManage": _user.func.get("action-center") == "manage"
+        and _user.ontology_role in ("owner", "editor"),
+    }
+
+
+@router.get("/actions/available", dependencies=ACTIONS_MANAGE)
+async def available_actions(session: SessionDep, user: CurrentUserDep, catalog: CatalogDep):
+    from app.modules.dynamic.action_options import options
+
+    return await options(session, user, catalog)
+
+
+@router.get("/actions/{code}/targets", dependencies=ACTIONS_MANAGE)
+async def action_targets(
+    code: DynamicPathCode,
+    session: SessionDep,
+    user: CurrentUserDep,
+    catalog: CatalogDep,
+    page: ActionPageQ,
+    kw: str | None = None,
+):
+    from app.modules.dynamic.action_options import targets
+
+    return await targets(session, user, catalog, code, kw, page)
 
 
 @router.post(
@@ -234,10 +262,18 @@ async def actions_meta(
     dependencies=ACTIONS_MANAGE,
 )
 async def stage_action(body: StageIn, svc: ActionSvc, response: Response) -> ActionRunDetail:
+    if body.source.model_dump(exclude_none=True) != {"type": "手动"}:
+        raise validation_failed("source", "请从对应来源入口发起动作；手动发起不能指定其他来源或确认人")
     run, created = await svc.stage(body)
     if not created:
         response.status_code = status.HTTP_200_OK  # 同一幂等键、内容相同：返回已有记录
     return await svc.detail(run)
+
+
+@router.post("/actions/{code}:validate", dependencies=ACTIONS_MANAGE)
+async def validate_launch(code: DynamicPathCode, body: LaunchValidateIn, svc: ActionSvc):
+    await svc.validate_launch(code, body.obj_kind, body.obj_id, body.params)
+    return {"passed": True, "message": "参数和提交条件通过"}
 
 
 @router.get("/action-runs/{code}", response_model=ActionRunDetail, dependencies=ACTIONS_VIEW)

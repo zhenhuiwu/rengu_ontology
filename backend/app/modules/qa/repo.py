@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import Select, and_, case, exists, func, literal, or_, select
+from sqlalchemy import Select, and_, case, exists, func, or_, select
 from sqlalchemy.orm import aliased, selectinload
 
 from app.common.repository import BaseRepository
@@ -78,7 +78,7 @@ class PageRepo(BaseRepository[QaPage]):
     not_found_message = "页面不存在"
 
     def visible_clause(self, viewer_pk: int, viewer_dept: str | None, *, include_shared: bool):
-        """我的页面；include_shared 时再加上共享给我的（指定成员含我 / 所在部门且我的部门包含拥有者部门）。"""
+        """我的页面；include_shared 时再加上共享给我的（指定成员含我 / 所在部门且我的部门与拥有者部门完全相同）。"""
         own = QaPage.owner_id == viewer_pk
         if not include_shared:
             return own
@@ -95,7 +95,7 @@ class PageRepo(BaseRepository[QaPage]):
                     exists().where(
                         owner.id == QaPage.owner_id,
                         owner.dept.is_not(None),
-                        func.strpos(literal(viewer_dept), owner.dept) > 0,
+                        owner.dept == viewer_dept,
                     ),
                 )
             )

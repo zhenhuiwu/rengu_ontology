@@ -192,6 +192,7 @@ class PageFullOut(ApiModel):
     name: str
     owner: str
     owner_id: str
+    owner_dept: str | None = None
     scope: str | None = None
     source: str | None = None
     source_kind: str
@@ -206,6 +207,13 @@ class PageFullOut(ApiModel):
     status_note: str | None = None
     views: int
     calibers: list[CaliberTagOut] | None = None
+    lock_version: int = 1
+    can_edit: bool = False
+    can_share: bool = False
+    can_refresh: bool = False
+    refresh_unavailable_reason: str | None = None
+    schedule_active: bool = False
+    subscription_active: bool = False
 
 
 class PageListOut(Page[PageBriefOut | PageFullOut]):
@@ -224,6 +232,8 @@ class TemplateOut(ApiModel):
     updated_at: str  # YYYY-MM-DD
     official: bool
     desc: str
+    can_create: bool = False
+    unavailable_reason: str | None = None
 
 
 # ---------------------------------------------------------------- 对象类型

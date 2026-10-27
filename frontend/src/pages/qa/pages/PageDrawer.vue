@@ -11,6 +11,8 @@
  * qa 开关关闭时改本地演示数据；开关打开时后台不可达也只报错。
  */
 import { computed, ref, watch } from 'vue';
+import { onBeforeRouteUpdate } from 'vue-router';
+import { currentApiContext } from '@/api/http';
 import { message } from 'ant-design-vue';
 import { HolderOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -20,15 +22,22 @@ import CardPreview from './CardPreview.vue';
 import InfoTip from '../InfoTip.vue';
 import * as pagesApi from '@/api/qaPages';
 import { qaWriteReal, qaWriteFail } from '../qaFallback';
-import { PEOPLE, PAGE_SCOPES, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
+import { PEOPLE, freqLabel, type QaPageFull, type PageCard, type RefreshPlan, type Subscription, type ShareSetting, type SharePerm } from '@/mock/qa-pages';
 
 const props = defineProps<{ page?: QaPageFull; tab: string; readonly: boolean; reason: string }>();
 const emit = defineEmits<{ close: []; 'update:tab': [string]; refresh: [QaPageFull]; rename: [QaPageFull, string]; remove: [QaPageFull]; changed: [QaPageFull] }>();
+const saving = ref(false);
+const editDisabled = computed(() => props.readonly || saving.value || (qaWriteReal.value && (!props.page || !pagesApi.access(props.page).canEdit)));
+const shareDisabled = computed(() => props.readonly || saving.value || (qaWriteReal.value && (!props.page || !pagesApi.access(props.page).canShare)));
 /** 真接口写：开关为假（纯演示）返回 null（走演示逻辑）；开关为真时调真接口，成功返回结果，
  *  失败（含后台未启动）只提示并返回 undefined——写操作不回退、不改演示数据、不触发整页回退 */
 async function liveCall<T>(fn: () => Promise<T>, what: string): Promise<T | null | undefined> {
   if (!qaWriteReal.value) return null;
-  try { return await fn(); } catch (e) { qaWriteFail(what, e); return undefined; }
+  const context = JSON.stringify(currentApiContext()), id = props.page?.id;
+  saving.value = true;
+  try { const result = await fn(); return context === JSON.stringify(currentApiContext()) && id === props.page?.id ? result : undefined; }
+  catch (e) { if (context === JSON.stringify(currentApiContext()) && id === props.page?.id) qaWriteFail(what, e); return undefined; }
+  finally { saving.value = false; }
 }
 
 /* 预览 */
@@ -84,7 +93,25 @@ function resetDrafts() {
 watch(() => props.page, resetDrafts, { immediate: true });
 const TIMES = ['06:00', '07:00', '07:30', '08:00', '09:00', '12:00', '18:00', '22:00'];
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-const people = PEOPLE.map((p) => ({ value: p.name, label: `${p.name} · ${p.dept}` }));
+const memberPage = ref(1), memberQuery = ref(''), memberTotal = ref(0), memberLoading = ref(false), memberError = ref('');
+const memberRows = ref<pagesApi.ShareCandidate[]>([]);
+const memberCache = new Map<string, pagesApi.ShareCandidate>();
+let memberSeq = 0;
+watch([() => props.page?.id, memberPage, memberQuery, () => JSON.stringify(currentApiContext())], async () => {
+  const seq = ++memberSeq, page = props.page;
+  memberRows.value = []; memberError.value = '';
+  if (!qaWriteReal.value || !page || !pagesApi.access(page).canShare) return;
+  memberLoading.value = true;
+  try {
+    const result = await pagesApi.shareOptions(page.id, memberPage.value, memberQuery.value);
+    if (seq !== memberSeq) return;
+    memberRows.value = result.items; memberTotal.value = result.total;
+    result.items.forEach((row) => memberCache.set(row.userId, row));
+  } catch { if (seq === memberSeq) memberError.value = '共享成员加载失败，请重试'; }
+  finally { if (seq === memberSeq) memberLoading.value = false; }
+}, { immediate: true });
+const people = computed(() => qaWriteReal.value ? memberRows.value.map((row) => ({ value: row.userId, label: `${row.name} · ${row.dept || '未登记部门'}` })) : PEOPLE.map((p) => ({ value: p.name, label: `${p.name} · ${p.dept}` })));
+const memberKey = (member: ShareSetting['members'][number]) => (member as typeof member & { userId?: string }).userId || member.name;
 const nextRun = computed(() => {
   const p = plan.value;
   if (p.freq === '手动') return '不自动刷新';
@@ -95,6 +122,12 @@ const nextRun = computed(() => {
 });
 async function saveSchedule() {
   const pg = props.page; if (!pg) return;
+  if (editDisabled.value) return;
+  if (qaWriteReal.value) {
+    const result = await liveCall(() => pagesApi.saveSchedule(pg.id, { freq: '手动', time: '--', onFail: '保留上次结果' }, { ...pg.sub, on: false }), '切换手动刷新');
+    if (!result) return;
+    emit('changed', pg); message.success('已改为手动刷新并关闭订阅'); return;
+  }
   if (sub.value.on && !sub.value.receivers.length) { message.warning('请至少选择一位接收人'); return; }
   const r = await liveCall(() => pagesApi.saveSchedule(pg.id, plan.value, sub.value), '保存刷新与订阅');
   if (r === undefined) return;
@@ -106,13 +139,17 @@ async function saveSchedule() {
 /* 共享 */
 const addWho = ref<string[]>([]);
 const addPerm = ref<SharePerm>('可查看');
-const candidates = computed(() => people.filter((p) => !share.value.members.some((m) => m.name === p.value)));
+watch([() => props.page?.id, () => JSON.stringify(currentApiContext())], () => { addWho.value = []; memberCache.clear(); memberPage.value = 1; memberQuery.value = ''; });
+watch(memberQuery, () => { memberPage.value = 1; });
+const candidates = computed(() => people.value.filter((p) => !share.value.members.some((m) => memberKey(m) === p.value)));
 function addMembers() {
-  const add = addWho.value.map((n) => ({ name: n, dept: PEOPLE.find((p) => p.name === n)?.dept ?? '', perm: addPerm.value }));
+  if (shareDisabled.value) return;
+  if (qaWriteReal.value && addWho.value.some((id) => !memberCache.has(id) || (addPerm.value === '可编辑' && !memberCache.get(id)!.canEdit))) { message.warning('所选成员没有编辑权限，请改为可查看或重新选择'); return; }
+  const add = addWho.value.map((n) => qaWriteReal.value ? { userId: n, name: memberCache.get(n)!.name, dept: memberCache.get(n)!.dept ?? '', perm: addPerm.value } : { name: n, dept: PEOPLE.find((p) => p.name === n)?.dept ?? '', perm: addPerm.value });
   share.value.members = [...share.value.members, ...add]; addWho.value = [];
   if (share.value.mode === '仅自己') share.value.mode = '指定成员';
 }
-const MSIZE = 5;
+const MSIZE = 10;
 const mpage = ref(1);
 const pagedMembers = computed(() => share.value.members.slice((mpage.value - 1) * MSIZE, mpage.value * MSIZE));
 /** 保存后比保存前多出来的可见人：新加的成员，或改成“所在部门” */
@@ -120,7 +157,7 @@ function newViewers(): string[] {
   const pg = props.page; if (!pg) return [];
   const s = share.value;
   const out: string[] = [];
-  if (s.mode === '所在部门' && pg.share.mode !== '所在部门') out.push('华东事业部 / 运营中心 全体');
+  if (s.mode === '所在部门' && pg.share.mode !== '所在部门') out.push(`${qaWriteReal.value ? pagesApi.access(pg).ownerDept || '页面拥有者所在部门' : '华东事业部 / 运营中心'} 全体`);
   if (s.mode === '指定成员') out.push(...s.members.filter((m) => pg.share.mode !== '指定成员' || !pg.share.members.some((x) => x.name === m.name)).map((m) => `${m.name}（${m.perm}）`));
   return out;
 }
@@ -128,12 +165,12 @@ function newViewers(): string[] {
 function newGrants(): string[] {
   const pg = props.page; if (!pg) return [];
   const s = share.value; const out: string[] = [];
-  if (s.mode !== '仅自己' && s.link && !(pg.share.mode !== '仅自己' && pg.share.link)) out.push('开启链接访问：有链接且有数据权限的人都能打开');
+  if (s.mode !== '仅自己' && s.link && !(pg.share.mode !== '仅自己' && pg.share.link)) out.push('开启页面链接：仍须是已授权共享成员或同部门用户');
   if (s.mode !== '仅自己' && s.allowExport && !(pg.share.mode !== '仅自己' && pg.share.allowExport)) out.push('允许导出：可见人能下载卡片明细');
   return out;
 }
 async function saveShare() {
-  if (!props.page) return;
+  if (!props.page || shareDisabled.value) return;
   if (share.value.mode === '指定成员' && !share.value.members.length) { message.warning('指定成员共享时至少添加一位成员'); return; }
   const add = newViewers();
   const grants = newGrants();
@@ -147,11 +184,11 @@ async function saveShare() {
     if (!ok) return;
   }
   const pg = props.page;
-  const r = await liveCall(() => pagesApi.saveShare(pg.id, share.value), '保存共享');
+  const r = await liveCall(() => pagesApi.saveShare(pg.id, share.value, pagesApi.access(pg).lockVersion), '保存共享');
   if (r === undefined) return;
   pg.share = r ? { mode: r.mode, members: r.members, link: r.link, allowExport: r.allowExport } : { ...share.value, members: share.value.mode === '仅自己' ? [] : share.value.members.map((m) => ({ ...m })) };
-  if (r) { resetDrafts(); emit('changed', pg); }
-  message.success(share.value.mode === '仅自己' ? '已取消共享' : `已共享：${share.value.mode === '所在部门' ? '华东事业部 / 运营中心' : `${pg.share.members.length} 位成员`}`);
+  if (r) { pagesApi.access(pg).lockVersion = r.lockVersion; resetDrafts(); emit('changed', pg); }
+  message.success(share.value.mode === '仅自己' ? '已取消共享' : `已共享：${share.value.mode === '所在部门' ? pagesApi.access(pg).ownerDept || '所在部门' : `${pg.share.members.length} 位成员`}`);
 }
 /* 未保存保护 */
 const json = (x: unknown) => JSON.stringify(x);
@@ -161,45 +198,61 @@ const normShare = (x: ShareSetting) => json({ ...x, members: x.mode === '仅自�
 const shareDirty = computed(() => !!props.page && normShare(share.value) !== normShare(props.page.share));
 const dirty = computed(() => !props.readonly && (cardsDirty.value || schedDirty.value || shareDirty.value));
 const guard = useUnsavedGuard(dirty);
+onBeforeRouteUpdate(async (to, from) => to.query.ontology === from.query.ontology && to.query.page_id !== from.query.page_id && dirty.value ? await confirmDiscard() : true);
 const cancelEdit = async () => { if (cardsDirty.value && !(await confirmDiscard())) return; editing.value = false; };
 const discard = () => { editing.value = false; resetDrafts(); };
 const tabV = computed({ get: () => props.tab || 'preview', set: (v: string) => { guard(() => { discard(); emit('update:tab', v); }); } });
 const close = () => guard(() => { discard(); emit('close'); });
-const copyLink = () => message.success(`已复制链接：https://bi.example.com/p/${props.page?.id}`);
+const copyLink = async () => {
+  if (!props.page) return;
+  const query = new URLSearchParams({ ontology: currentApiContext().ontologyId || '', page_id: props.page.id });
+  try { await navigator.clipboard.writeText(`${location.origin}/use/qa/pages?${query}`); message.success('页面链接已复制'); }
+  catch { message.error('浏览器未允许复制，请重试'); }
+};
+const templateName = ref(''), templateOpen = ref(false);
+async function saveTemplate() {
+  const page = props.page;
+  if (!page || shareDisabled.value || !templateName.value.trim()) return;
+  const result = await liveCall(() => pagesApi.saveAsTemplate(page.id, templateName.value.trim()), '保存模板');
+  if (!result) return;
+  templateOpen.value = false; templateName.value = ''; emit('changed', page); message.success('已保存不含数据的模板');
+}
+async function download() { if (!props.page || props.readonly) return; try { await pagesApi.exportPage(props.page.id); } catch (error) { message.error(error instanceof Error ? error.message : '导出失败'); } }
 
 /* 重命名 */
 const renameOpen = ref(false);
 const newName = ref('');
 watch(renameOpen, (o) => { if (o) newName.value = props.page?.name ?? ''; });
-function doRename() { if (props.page && newName.value.trim()) { emit('rename', props.page, newName.value.trim()); renameOpen.value = false; } }
+function doRename() { if (props.page && newName.value.trim()) emit('rename', props.page, newName.value.trim()); }
+watch(() => props.page?.name, (name) => { if (name === newName.value.trim()) renameOpen.value = false; });
 </script>
 
 <template>
   <a-drawer :open="!!page" :width="760" :title="page?.name" @close="close">
     <template #extra>
       <a-space v-if="page">
-        <a-tooltip :title="qaWriteReal ? '页面刷新执行器尚未接入' : reason"><a-button size="small" :disabled="readonly || qaWriteReal" @click="emit('refresh', page)">立即刷新</a-button></a-tooltip>
+        <a-tooltip :title="reason || pagesApi.access(page).refreshUnavailableReason"><a-button size="small" :disabled="editDisabled || (qaWriteReal && !pagesApi.access(page).canRefresh)" @click="emit('refresh', page)">立即刷新</a-button></a-tooltip>
         <a-popover v-model:open="renameOpen" trigger="click" placement="bottomRight">
           <template #content>
             <div class="pd-pop"><a-input v-model:value="newName" :maxlength="30" show-count @press-enter="doRename" /><a-button type="primary" size="small" :disabled="!newName.trim()" @click="doRename">确定</a-button></div>
           </template>
-          <a-tooltip :title="reason"><a-button size="small" :disabled="readonly">重命名</a-button></a-tooltip>
+          <a-tooltip :title="reason"><a-button size="small" :disabled="editDisabled">重命名</a-button></a-tooltip>
         </a-popover>
-        <a-tooltip :title="reason"><a-button size="small" danger :disabled="readonly" @click="emit('remove', page)">删除</a-button></a-tooltip>
+        <a-tooltip :title="reason"><a-button size="small" danger :disabled="shareDisabled" @click="emit('remove', page)">删除</a-button></a-tooltip>
       </a-space>
     </template>
     <div v-if="page" class="pd">
       <div class="pd-meta">
         <div><span class="c-3">数据截至</span> <span class="num c-1">{{ page.dataAsOf || '—' }}</span><span v-if="page.status === '刷新失败'" class="tl-failed"> · 刷新失败</span> <InfoTip v-if="page.statusNote" :title="page.statusNote" /></div>
         <div><span class="c-3">范围</span> <span class="c-1">{{ page.scope }}</span></div>
-        <div><span class="c-3">刷新</span> <span class="c-1">{{ freqLabel(page.refresh) }}</span><span class="c-3"> · 最近 {{ page.lastRefresh?.slice(5) ?? '尚未刷新' }}</span></div>
+        <div><span class="c-3">刷新</span> <span class="c-1">{{ qaWriteReal ? (page.refresh.freq === '手动' ? '手动' : '未启用') : freqLabel(page.refresh) }}</span><span class="c-3"> · 最近 {{ page.lastRefresh?.slice(5) ?? '尚未刷新' }}</span></div>
         <div class="pd-ell" :title="page.source"><span class="c-3">来源</span> <span class="c-1">{{ page.source }}</span></div>
         <div><span class="c-3">共享</span> <span class="c-1">{{ page.share.mode === '仅自己' ? '仅自己' : page.share.mode === '所在部门' ? '所在部门' : `${page.share.members.length} 位成员` }}</span></div>
-        <div><span class="c-3">订阅</span> <span class="c-1">{{ page.sub.on ? `${page.sub.channel} · ${page.sub.receivers.length} 人` : '未开启' }}</span></div>
+        <div><span class="c-3">订阅</span> <span class="c-1">{{ qaWriteReal ? '未启用' : page.sub.on ? `${page.sub.channel} · ${page.sub.receivers.length} 人` : '未开启' }}</span></div>
       </div>
 
       <a-tabs v-model:active-key="tabV" size="small">
-        <a-tab-pane key="preview" :tab="`预览（${page.cards.length}）`" />
+        <a-tab-pane key="preview" tab="预览" />
         <a-tab-pane key="schedule" tab="刷新与订阅" />
         <a-tab-pane key="share" tab="共享" />
       </a-tabs>
@@ -213,8 +266,13 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
             <a-button size="small" @click="cancelEdit">取消</a-button>
             <a-button size="small" type="primary" @click="saveCards">保存顺序</a-button>
           </template>
-          <a-tooltip v-else :title="reason"><a-button size="small" :disabled="readonly" @click="startEdit">调整卡片</a-button></a-tooltip>
+          <a-tooltip v-else :title="reason"><a-button size="small" :disabled="editDisabled" @click="startEdit">调整卡片</a-button></a-tooltip>
         </div>
+        <a-space v-if="qaWriteReal && !editing">
+          <a-button size="small" :disabled="shareDisabled || !pagesApi.access(page).canRefresh" @click="templateOpen = true; templateName = page.name">保存为模板</a-button>
+          <a-button size="small" :disabled="readonly || (qaWriteReal && !pagesApi.access(page).canRefresh && !page.share.allowExport)" @click="download">导出当前结果 CSV</a-button>
+        </a-space>
+        <div v-if="!shownCards.length" class="c-3 pd-empty">尚无卡片，可从可执行的问数回答固定到此页面</div>
         <div v-if="!editing" class="pd-grid">
           <CardPreview v-for="(c, i) in pagedCards" :key="c.key" :card="c" :index="(cpage - 1) * CSIZE + i + 1" />
         </div>
@@ -233,7 +291,14 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
       </template>
 
       <template v-else-if="tabV === 'schedule'">
-        <div class="pd-form">
+        <div v-if="qaWriteReal" class="pd-form">
+          <div class="pd-f"><span class="pd-l c-3">自动刷新</span><a-tag>未启用</a-tag></div>
+          <div class="pd-f"><span class="pd-l c-3">订阅推送</span><a-tag>未启用</a-tag></div>
+          <div v-if="page.refresh.freq !== '手动'" class="pd-f"><span class="pd-l c-3">原刷新设置</span><span>{{ freqLabel(page.refresh) }}（未执行）</span></div>
+          <div v-if="page.sub.on" class="pd-f"><span class="pd-l c-3">原订阅设置</span><span>{{ page.sub.channel }} · {{ page.sub.receivers.length }} 人（未发送）</span></div>
+          <a-button v-if="page.refresh.freq !== '手动' || page.sub.on" :disabled="editDisabled" :loading="saving" @click="saveSchedule">改为手动刷新并关闭订阅</a-button>
+        </div>
+        <div v-else class="pd-form">
           <div class="t-16 fw-600">定时刷新</div>
           <div class="pd-f"><span class="pd-l c-3">频率</span>
             <a-radio-group v-model:value="plan.freq" :disabled="readonly">
@@ -275,40 +340,45 @@ function doRename() { if (props.page && newName.value.trim()) { emit('rename', p
       <template v-else>
         <div class="pd-form">
           <div class="pd-f"><span class="pd-l c-3">共享方式</span>
-            <a-radio-group v-model:value="share.mode" :disabled="readonly">
-              <a-radio value="仅自己">仅自己</a-radio><a-radio value="指定成员">指定成员</a-radio><a-radio value="所在部门">所在部门（华东事业部 / 运营中心）</a-radio>
+            <a-radio-group v-model:value="share.mode" :disabled="shareDisabled">
+              <a-radio value="仅自己">仅自己</a-radio><a-radio value="指定成员">指定成员</a-radio><a-radio value="所在部门">所在部门（{{ qaWriteReal ? pagesApi.access(page).ownerDept || '未登记' : '华东事业部 / 运营中心' }}）</a-radio>
             </a-radio-group>
           </div>
           <template v-if="share.mode === '指定成员'">
             <div class="pd-f"><span class="pd-l c-3">添加成员</span>
-              <a-select v-model:value="addWho" mode="multiple" :disabled="readonly" class="pd-wide" placeholder="搜索姓名或部门" :options="candidates" option-filter-prop="label" :max-tag-count="3" />
-              <a-select v-model:value="addPerm" :disabled="readonly" class="pd-s" :options="[{ value: '可查看', label: '可查看' }, { value: '可编辑', label: '可编辑' }]" />
-              <a-button :disabled="readonly || !addWho.length" @click="addMembers">添加</a-button>
+              <a-select v-model:value="addWho" mode="multiple" :disabled="shareDisabled" class="pd-wide" placeholder="搜索姓名或部门" :options="candidates" :filter-option="!qaWriteReal" :loading="memberLoading" :max-tag-count="3" @search="(value: string) => { memberQuery = value; }" />
+              <a-select v-model:value="addPerm" :disabled="shareDisabled" class="pd-s" :options="[{ value: '可查看', label: '可查看' }, { value: '可编辑', label: '可编辑' }]" />
+              <a-button :disabled="shareDisabled || !addWho.length" @click="addMembers">添加</a-button>
             </div>
+            <div v-if="qaWriteReal" class="pd-f"><span class="pd-l" /><span v-if="memberError" class="c-3">{{ memberError }}</span><AppPagination v-model:page="memberPage" variant="simple" :total="memberTotal" :size="10" unit="位候选成员" :empty="false" /></div>
             <div class="pd-members">
-              <div v-for="m in pagedMembers" :key="m.name" class="pd-mrow">
+              <div v-for="m in pagedMembers" :key="memberKey(m)" class="pd-mrow">
                 <span class="c-1 pd-mname">{{ m.name }}</span><span class="c-1 pd-ell" :title="m.dept">{{ m.dept }}</span>
-                <a-select v-model:value="m.perm" size="small" :disabled="readonly" class="pd-s" :options="[{ value: '可查看', label: '可查看' }, { value: '可编辑', label: '可编辑' }]" />
-                <a-button size="small" type="text" :disabled="readonly" @click="share.members = share.members.filter((x) => x.name !== m.name)">移除</a-button>
+                <a-select v-model:value="m.perm" size="small" :disabled="shareDisabled" class="pd-s" :options="[{ value: '可查看', label: '可查看' }, { value: '可编辑', label: '可编辑' }]" />
+                <a-button size="small" type="text" :disabled="shareDisabled" @click="share.members = share.members.filter((x) => memberKey(x) !== memberKey(m))">移除</a-button>
               </div>
               <div v-if="!share.members.length" class="t-12 c-3 pd-empty">还没有共享成员</div>
             </div>
             <AppPagination v-model:page="mpage" variant="simple" :total="share.members.length" :size="MSIZE" unit="位成员" :empty="false" />
           </template>
-          <div class="pd-f"><span class="pd-l c-3">链接访问</span><a-switch v-model:checked="share.link" :disabled="readonly || share.mode === '仅自己'" />
-            <span class="t-12 c-3">有链接且有数据权限的人可查看</span>
+          <div class="pd-f"><span class="pd-l c-3">链接访问</span><a-switch v-model:checked="share.link" :disabled="shareDisabled || share.mode === '仅自己'" />
+            <span class="t-12 c-3">链接不扩大共享范围</span>
             <a-button v-if="share.link && share.mode !== '仅自己'" size="small" @click="copyLink">复制链接</a-button>
           </div>
-          <div class="pd-f"><span class="pd-l c-3">允许导出</span><a-switch v-model:checked="share.allowExport" :disabled="readonly" /><span class="t-12 c-3">关闭后被共享人不能导出卡片数据</span></div>
+          <div class="pd-f"><span class="pd-l c-3">允许导出</span><a-switch v-model:checked="share.allowExport" :disabled="shareDisabled" /><span class="t-12 c-3">关闭后被共享人不能导出卡片数据</span></div>
           <div class="pd-f"><span class="pd-l" /><span class="t-12 c-3">被共享人看到的数据按各自的数据权限裁剪，范围外的卡片显示“无权限”。</span></div>
           <div class="pd-f"><span class="pd-l" />
             <a-button @click="resetDrafts">还原</a-button>
-            <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="saveShare">保存共享设置</a-button></a-tooltip>
+            <a-tooltip :title="reason"><a-button type="primary" :disabled="shareDisabled" @click="saveShare">保存共享设置</a-button></a-tooltip>
           </div>
         </div>
       </template>
     </div>
   </a-drawer>
+  <a-modal v-model:open="templateOpen" title="保存为模板" :confirm-loading="saving" :ok-button-props="{ disabled: !templateName.trim() || shareDisabled }" @ok="saveTemplate">
+    <a-input v-model:value="templateName" :maxlength="60" placeholder="模板名称" />
+    <p class="t-12 c-3">模板保留原卡片条件和口径，不保存结果数据。</p>
+  </a-modal>
 </template>
 
 <style scoped>

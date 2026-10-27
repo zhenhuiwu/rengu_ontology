@@ -11,7 +11,7 @@ import { PRODUCTS } from '@/mock/products';
 import { ORDERS } from '@/mock/orders';
 import { inScope } from '@/mock/objects-qa';
 import { exploreGet, exploreSearch, type ExploreRow } from '@/api/qaObjects';
-import { isRange, loadStaticFacets, type FacetMeta, type Filters, type TypeMeta } from './objMeta';
+import { isRange, type FacetMeta, type Filters, type TypeMeta } from './objMeta';
 
 interface MockBinding { rows: () => Record<string, any>[]; id: string; cols: Record<string, string> }
 const MOCK_BINDINGS: Record<string, MockBinding> = {
@@ -33,7 +33,7 @@ const MOCK_BINDINGS: Record<string, MockBinding> = {
 };
 
 export interface RowsQuery { kw: string; filters: Filters; sort: string; page: number; size: number; withFacets?: boolean }
-export interface RowsResult { items: ExploreRow[]; total: number; page?: number; bound: boolean; boundProps: string[]; facets: FacetMeta[] }
+export interface RowsResult { items: ExploreRow[]; total: number; page?: number; bound: boolean; boundProps: string[]; facets: FacetMeta[]; canExport?: boolean }
 /** 预览的行级范围（mock 用）：null = 不限 */
 export type ScopeFn = (typeName: string) => string | null;
 
@@ -81,19 +81,13 @@ function sortRows(rows: ExploreRow[], sort: string) {
   return [...rows].sort((a, b) => (desc ? -1 : 1) * cmp(a.values[k], b.values[k]));
 }
 
-/** 搜索一页；live=true 走 X1，出错由调用方处理（qaFallBackIfDown 后可再以 live=false 调） */
+/** 搜索一页；live=true 走 X1，真实错误直接交给调用方，仅显式 mock 模式本地计算。 */
 export async function searchRows(m: TypeMeta, q: RowsQuery, live: boolean, scope: ScopeFn): Promise<RowsResult> {
   if (live) {
     const needFacets = q.withFacets !== false;
-    // 普通翻页不重算分面；首次/筛选变化时优先静态分面，避免两边重复聚合。
-    const [r, f] = await Promise.all([
-      exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size, withFacets: needFacets && !!q.kw.trim() }),
-      needFacets && !q.kw.trim() ? loadStaticFacets(m.id, q.filters) : Promise.resolve(null),
-    ]);
-    const result = needFacets && !q.kw.trim() && f === null
-      ? await exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size, withFacets: true })
-      : r;
-    return { items: result.items, total: result.total, page: result.page, bound: result.bound, boundProps: result.boundProps, facets: f ?? result.facets };
+    // One request uses the same source, version, keyword and row predicate for rows and facets.
+    const result = await exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size, withFacets: needFacets });
+    return { items: result.items, total: result.total, page: result.page, bound: result.bound, boundProps: result.boundProps, facets: result.facets, canExport: result.canExport };
   }
   const all = mockAll(m, scope);
   if (!all) return { items: [], total: 0, bound: false, boundProps: [], facets: [] };
@@ -114,8 +108,7 @@ export async function getRow(m: TypeMeta, id: string, live: boolean, scope: Scop
     try { return { row: await exploreGet(m.id, id), bound: true, denied: false }; } catch (e: any) {
       if (e?.status === 403) return { row: null, bound: true, denied: true };
       if (e?.status === 404) {
-        const probe = await exploreSearch(m.id, { page: 1, size: 1, withFacets: false }).catch(() => null);
-        return { row: null, bound: probe ? probe.bound : true, denied: false };
+        return { row: null, bound: m.hasData !== false, denied: false };
       }
       throw e;
     }

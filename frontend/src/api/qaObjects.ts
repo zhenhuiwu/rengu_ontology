@@ -48,13 +48,17 @@ export type ExploreFacet =
   | { key: string; kind: 'enum'; values: { value: string; count: number }[] }
   | { key: string; kind: 'range'; min: string | number | null; max: string | number | null };
 /** bound=false：这个类型没在 qa 种子里绑定物理表（页面显示“未接入数据”）；boundProps：有列的属性 */
-export type ExploreResult = PageResult<ExploreRow> & { titleProp: string; bound: boolean; boundProps: string[]; facets: ExploreFacet[] };
+export type ExploreResult = PageResult<ExploreRow> & { titleProp: string; bound: boolean; boundProps: string[]; facets: ExploreFacet[]; canExport?: boolean; dataVersion?: 'current' };
 /** X1 搜索：kw 只查可搜索属性；filters 枚举=数组、范围={min,max}；sort 前缀 '-' 降序；facets 是过渡分面（静态 /facets 上线后去掉） */
 export const exploreSearch = (type: string, b: ExploreQuery & { sort?: string; page: number; size: number; withFacets?: boolean }) =>
   api.post<ExploreResult>(`/object-types/${encodeURIComponent(type)}/search`, b);
 /** X2 详情（范围外 403 OUT_OF_SCOPE，不存在 / 未接入 404） */
 export const exploreGet = (type: string, id: string) =>
   api.get<ExploreRow & { titleProp: string; bound: boolean; boundProps: string[] }>(`/object-types/${encodeURIComponent(type)}/objects/${encodeURIComponent(id)}`);
+
+export interface ExploreRelation { linkId: string; label: string; other: string; items: ExploreRow[]; total: number; page: number; size: number; state: 'ok' | 'unbound' | 'unsupported' }
+export const exploreRelated = (type: string, id: string, query: { link?: string; page?: number; size?: number } = {}) =>
+  api.get<ExploreRelation[]>(`/object-types/${encodeURIComponent(type)}/objects/${encodeURIComponent(id)}/related`, { query });
 
 /**
  * O3 导出 CSV（POST + 文件）：apiClient 只解析 JSON，这里同 qa.ts 的下载小工具，规则同 http.ts request

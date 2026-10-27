@@ -10,7 +10,7 @@ from xml.sax.saxutils import escape
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.auth import CurrentUser, resolve_user, row_filter
+from app.common.auth import CurrentUser, check_func, resolve_user, row_filter
 from app.common.context import ViewContext
 from app.common.ontology import require_ontology_id
 from app.common.pagination import Page, PageParams
@@ -96,9 +96,10 @@ async def effective_viewer(
 
     返回 (代理 id, SysUser, 查看人 CurrentUser)。
 
-    EXTENSION POINT (PDE): 预览需要「角色与权限 · 管理」，权限体系接入后在这里校验
-    （现在不校验：普通用户带 ?previewAs= 也能以他人身份读，[推断] 由骨架鉴权接住）。
+    预览需要「角色与权限 · 管理」，被预览人还须是当前本体的有效成员。
     """
+    if ctx.preview_as:
+        check_func(user, "roles", "manage")
     code = ctx.preview_as or user.id
     viewer = await resolve_user(session, code) if ctx.preview_as else user  # 不存在 / 停用 → 401
     u = await r.SysUserRepo(session).get_by_code(code)
@@ -169,6 +170,7 @@ def turn_out(t: QaTurn, applied: bool = False) -> dict[str, Any]:
         out["vote"] = t.vote  # W12 赞踩，刷新后保留
     if applied:
         out["applied"] = True  # [推断] 越权轮次已提交过待审批的申请（W16）→「已申请 · 待审批」
+    out["pinnable"] = bool(not t.is_seed and t.kind.value == "answer" and t.sql_text and t.release_id and t.answered_ver)
     return out
 
 
@@ -260,6 +262,7 @@ def page_full_out(p: QaPage, *, deny_cards: bool = False) -> PageFullOut:
         name=p.name,
         owner=p.owner.name,
         owner_id=p.owner.code,
+        owner_dept=p.owner.dept,
         scope=p.scope,
         source=p.source_ref,
         source_kind=p.source_kind.value,
@@ -298,13 +301,31 @@ def template_out(t: QaTemplate) -> dict[str, Any]:
         "id": t.code,
         "name": t.name,
         "scene": t.scene,
-        "cards": [card_out(c) for c in t.cards],
+        "cards": [{key: value for key, value in card_out(c).items() if key in _CARD_FRAME_KEYS} for c in t.cards],
         "provider": t.provider,
         "uses": t.uses,
         "updated_at": fmt_date(t.updated_at) or "",
         "official": t.official,
         "desc": t.description,
     }
+
+
+async def page_view_out(session, page, user, ctx, *, temporary=False, metadata_only=False):
+    from app.modules.qa.models import SharePerm
+    from app.modules.qa.page_execution import projected_cards, template_capability
+
+    cards = [denied_card(card_out(card)) for card in page.cards] if metadata_only else await projected_cards(session, user, page, ctx, temporary=temporary)
+    owner = page.owner.code == user.id
+    member_edit = any(member.user.code == user.id and member.perm == SharePerm.edit for member in page.members)
+    writable = not ctx.read_only and user.ontology_role in ("owner", "editor")
+    can_refresh, refresh_reason = await template_capability(session, page)
+    return page_full_out(page, deny_cards=True).model_copy(update={
+        "cards": cards, "calibers": calibers_of(cards), "lock_version": page.lock_version,
+        "can_edit": writable and (owner or member_edit), "can_share": writable and owner,
+        "can_refresh": writable and (owner or member_edit) and can_refresh,
+        "refresh_unavailable_reason": refresh_reason,
+        "schedule_active": False, "subscription_active": False,
+    })
 
 
 # ---------------------------------------------------------------- 调优

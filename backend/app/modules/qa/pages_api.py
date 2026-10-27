@@ -5,23 +5,31 @@
 删除和改共享只有拥有者。其他人（含只读成员）对看得到的页面返回 403 NO_PERMISSION，看不到的 404。
 """
 
+import csv
+import io
 import re
+from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any, Literal
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.common.audit import audit
 from app.common.auth import CurrentUserDep, require_func
-from app.common.context import ViewContextDep
+from app.common.context import ViewContextDep, check_writable
+from app.common.ontology import require_ontology_id
+from app.common.pagination import PageParams
 from app.core import clock
-from app.core.errors import AppError, DuplicateKey, EmptyInput, Forbidden, NotFound
+from app.core.errors import AppError, DuplicateKey, EmptyInput, Forbidden, NotFound, VersionConflict
 from app.core.schema import ApiModel, _tz
 from app.db.dialects import get_adapter
 from app.db.session import SessionDep
-from app.modules.admin.models import SysUser
+from app.modules.admin.models import SysRole, SysRoleMember, SysUser, UserStatus
+from app.modules.ontology.models import OntologyMember
+from app.modules.qa import page_execution as execution
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
 from app.modules.qa.models import (
@@ -34,18 +42,19 @@ from app.modules.qa.models import (
     QaPageSubscription,
     QaSession,
     QaTemplate,
+    QaTemplateCard,
     QaTurn,
     ShareMode,
     SharePerm,
     SubChannel,
     SubWhen,
+    TurnKind,
 )
 from app.modules.qa.schemas import PageFullOut, ShareOut, SubOut
 
 pages = APIRouter(dependencies=[Depends(require_func("qa-pages", "view"))])
 
 DEFAULT_REFRESH = {"freq": "手动", "time": "--", "onFail": "保留上次结果"}
-LINK_BASE = "https://bi.example.com/p/"  # 同 PageDrawer.copyLink [推断]
 
 # ---------------------------------------------------------------- 入参 / 出参
 
@@ -77,6 +86,7 @@ class PageCreateIn(ApiModel):
     name: str = Field(min_length=1, max_length=30)
     scope: str | None = Field(default=None, max_length=60)
     template: TplRef | None = None
+    source_session_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class PageRenameIn(ApiModel):
@@ -126,28 +136,36 @@ class ScheduleOut(ApiModel):
 
 
 class MemberIn(ApiModel):
-    name: str
+    user_id: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str = Field(default="", max_length=64)
     dept: str | None = None
     perm: Literal["可查看", "可编辑"] = "可查看"
 
 
 class ShareIn(ApiModel):
     mode: Literal["仅自己", "指定成员", "所在部门"]
-    members: list[MemberIn] = []
+    members: list[MemberIn] = Field(default_factory=list, max_length=200)
     link: bool = False
     allow_export: bool = True
+    lock_version: int = Field(ge=1)
 
 
 class ShareSaveOut(ShareOut):
     link_url: str | None = None
     new_viewers: list[str] = []
     new_grants: list[str] = []
+    lock_version: int
 
 
 # ---------------------------------------------------------------- 小工具
 
 
 async def _load(session, user, ctx, pid: str, need: Literal["edit", "owner"]) -> tuple[int, QaPage]:
+    check_writable(ctx.ver, ctx.preview_as)
+    user = await execution.current_viewer(session, user)
+    if user.ontology_role not in ("owner", "editor"):
+        raise Forbidden("当前本体工作空间为只读权限")
+    await get_adapter(session).xact_lock(session, f"qa.page.edit.{pid}")
     pk, u, _ = await svc.effective_viewer(session, user, ctx)
     repo = r.PageRepo(session)
     p = await repo.detail(pid)
@@ -162,11 +180,11 @@ async def _load(session, user, ctx, pid: str, need: Literal["edit", "owner"]) ->
     )
 
 
-async def _out(session, pid: str) -> PageFullOut:
+async def _out(session, pid: str, user, ctx) -> PageFullOut:
     session.expire_all()  # 关系集合重新加载（cards / members / subscription）
     p = await r.PageRepo(session).detail(pid)
     assert p is not None
-    return svc.page_full_out(p)
+    return await svc.page_view_out(session, p, user, ctx)
 
 
 async def _check_name(session, owner_pk: int, name: str, exclude_pk: int | None = None) -> None:
@@ -231,6 +249,12 @@ def _next_code(codes: list[str]) -> str:
     summary="P2 新建页面",
 )
 async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    check_writable(ctx.ver, ctx.preview_as)
+    user = await execution.current_viewer(session, user)
+    if user.ontology_role not in ("owner", "editor"):
+        raise Forbidden("当前本体工作空间为只读权限")
+    if body.scope not in (None, "", "当前数据权限"):
+        raise execution.unavailable("页面不能以范围名称替换原卡片查询条件")
     pk, _ = await svc.effective_user(session, user, ctx)
     name = body.name.strip()
     if not name:
@@ -243,7 +267,7 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
         code=code,
         owner_id=pk,
         name=name,
-        scope=body.scope,
+        scope="原卡片条件 · 当前数据权限",
         source_kind=PageSourceKind.manual,
         source_ref="手动新建",
         status=PageStatus.ok,
@@ -256,15 +280,81 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
         views=0,
     )
     if body.template is not None:
+        if body.source_session_id:
+            raise execution.unavailable("不能同时从模板和会话创建页面")
         repo = r.TemplateRepo(session)
         t = (
             await session.scalars(repo.list_query(None, None).where(QaTemplate.code == body.template.id))
         ).first()
         if t is None:
             raise NotFound(repo.not_found_message, details={"id": body.template.id})
-        raise AppError(
-            "模板重算执行器尚未接入，未创建页面", code="PAGE_EXECUTION_UNAVAILABLE", status_code=503
+        if body.template.caliber or (body.template.refresh and body.template.refresh.freq != "手动"):
+            raise execution.unavailable("模板须保留原卡片条件与口径，仅支持手动刷新")
+        if body.scope not in (None, "", "当前数据权限"):
+            raise execution.unavailable("模板不能用范围名称替换原查询条件")
+        caches, as_of = await execution.execute_cards(session, user, t.cards)
+        permission = await execution.fingerprint(user)
+        p.source_kind, p.source_ref = PageSourceKind.template, f"模板「{t.name}」"
+        p.last_refresh, p.data_as_of = now, as_of
+        p.cards = [
+            QaPageCard(
+                card_key=f"{code}-C{i}",
+                sort_order=i,
+                title=card.title,
+                viz=card.viz,
+                metric_name=card.metric_name,
+                metric_code=card.metric_code,
+                metric_version=card.metric_version,
+                sem_plan=deepcopy(card.sem_plan),
+                result_cache=cache,
+                perm_fingerprint=permission,
+            )
+            for i, (card, cache) in enumerate(zip(t.cards, caches, strict=True), start=1)
+        ]
+        t.uses += 1
+    if body.source_session_id:
+        source = await session.scalar(
+            select(QaSession).where(QaSession.code == body.source_session_id, QaSession.owner_id == pk)
         )
+        if source is None:
+            raise NotFound("会话不存在")
+        turns = list(
+            await session.scalars(
+                select(QaTurn)
+                .where(
+                    QaTurn.session_id == source.id,
+                    QaTurn.kind == TurnKind.answer,
+                    QaTurn.sql_text.is_not(None),
+                    QaTurn.is_seed.is_(False),
+                    QaTurn.release_id.is_not(None),
+                    QaTurn.answered_ver.is_not(None),
+                )
+                .order_by(QaTurn.seq)
+            )
+        )
+        if not turns or len(turns) > execution.MAX_CARDS:
+            raise execution.unavailable(f"会话须有1至{execution.MAX_CARDS}个可执行回答")
+        cards = []
+        release = await execution.ReleaseRepo(session).latest()
+        for i, turn in enumerate(turns, start=1):
+            plan = deepcopy(execution.turn_plan(turn, release))
+            cards.append(
+                QaPageCard(
+                    card_key=f"{code}-C{i}",
+                    sort_order=i,
+                    title=(turn.question or source.title)[:60],
+                    viz=CardViz.table,
+                    source_turn_id=turn.id,
+                    sem_plan={"execution": plan},
+                    result_cache={},
+                )
+            )
+        caches, as_of = await execution.execute_cards(session, user, cards)
+        permission = await execution.fingerprint(user)
+        for card, cache in zip(cards, caches, strict=True):
+            card.result_cache, card.perm_fingerprint = cache, permission
+        p.cards, p.source_kind, p.source_ref = cards, PageSourceKind.workbench, f"会话「{source.title}」"
+        p.last_refresh, p.data_as_of = now, as_of
     p.next_run = next_run(p.refresh, now)
     p.subscription = QaPageSubscription(
         enabled=False,
@@ -282,7 +372,7 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
         target=code,
         detail={"name": name, "template": body.template and body.template.id},
     )
-    return await _out(session, code)
+    return await _out(session, code, user, ctx)
 
 
 # ---------------------------------------------------------------- P4 / P5 / P6
@@ -303,7 +393,7 @@ async def rename_page(
         old, p.name = p.name, name
         await session.flush()
         await audit(session, user, action="qa.page.rename", target=pid, detail={"from": old, "to": name})
-    return await _out(session, pid)
+    return await _out(session, pid, user, ctx)
 
 
 @pages.delete("/pages/{pid}", status_code=204, summary="P5 删除页面")
@@ -317,14 +407,33 @@ async def delete_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: 
 
 
 @pages.post(
-    "/pages/{pid}:refresh", response_model=RefreshOut, response_model_exclude_none=True, summary="P6 立即刷新"
+    "/pages/{pid}:refresh",
+    response_model=PageFullOut,
+    response_model_exclude_none=True,
+    summary="P6 立即刷新",
 )
 async def refresh_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
-    """缺少按语义计划重算的执行器，不修改已有结果或时间戳。"""
-    await _load(session, user, ctx, pid, "edit")
-    raise AppError(
-        "页面刷新执行器尚未接入，原结果保持不变", code="PAGE_EXECUTION_UNAVAILABLE", status_code=503
+    _, p = await _load(session, user, ctx, pid, "edit")
+    actor = await execution.current_viewer(session, user)
+    try:
+        permission = await execution.fingerprint(actor)
+        caches, as_of = await execution.execute_cards(session, actor, p.cards)
+    except AppError as error:
+        p.status, p.status_note = PageStatus.refresh_failed, error.message
+    else:
+        for card, cache in zip(p.cards, caches, strict=True):
+            card.result_cache, card.perm_fingerprint = cache, permission
+        p.status, p.status_note = _status_of(p.cards)
+        p.last_refresh, p.data_as_of = clock.now(), as_of
+    await session.flush()
+    await audit(
+        session,
+        user,
+        action="qa.page.refresh",
+        target=pid,
+        detail={"status": p.status.value, "cards": len(p.cards)},
     )
+    return await _out(session, pid, actor, ctx)
 
 
 # ---------------------------------------------------------------- P7 固定到页面
@@ -398,17 +507,26 @@ async def pin_card(pid: str, body: PinIn, session: SessionDep, user: CurrentUser
     if t is None:
         raise NotFound("轮次不存在", details={"id": body.turn_id})
     f = card_from_turn(t, body.title)
+    if len(p.cards) >= execution.MAX_CARDS:
+        raise execution.unavailable(f"一个页面最多{execution.MAX_CARDS}张卡片")
+    release = await execution.ReleaseRepo(session).latest()
+    f["sem_plan"] = {"execution": deepcopy(execution.turn_plan(t, release))}
     nums = [int(m[1]) for c in p.cards if (m := re.fullmatch(rf"{re.escape(pid)}-C(\d+)", c.card_key))]
     key = f"{pid}-C{(max(nums) if nums else 0) + 1}"
     order = (max((c.sort_order for c in p.cards), default=0)) + 1
-    p.cards.append(
-        QaPageCard(card_key=key, sort_order=order, title=body.title.strip(), source_turn_id=t.id, **f)
-    )
+    card = QaPageCard(card_key=key, sort_order=order, title=body.title.strip(), source_turn_id=t.id, **f)
+    actor = await execution.current_viewer(session, user)
+    caches, as_of = await execution.execute_cards(session, actor, [card])
+    card.result_cache = caches[0]
+    card.perm_fingerprint = await execution.fingerprint(actor)
+    p.cards.append(card)
+    p.scope = "原卡片条件 · 当前数据权限"
+    p.last_refresh, p.data_as_of = clock.now(), as_of
     if p.status != PageStatus.refresh_failed:
         p.status, p.status_note = _status_of(p.cards)
     await session.flush()
     await audit(session, user, action="qa.page.pin", target=pid, detail={"turn": body.turn_id, "card": key})
-    return await _out(session, pid)
+    return await _out(session, pid, user, ctx)
 
 
 # ---------------------------------------------------------------- P8 / P9 / P10
@@ -437,7 +555,7 @@ async def reorder_cards(
     await session.flush()
     if removed:
         await audit(session, user, action="qa.page.cards", target=pid, detail={"removed": removed})
-    out = await _out(session, pid)
+    out = await _out(session, pid, user, ctx)
     return CardsOut(cards=out.cards, removed=removed)
 
 
@@ -446,6 +564,8 @@ async def put_schedule(
     pid: str, body: ScheduleIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
     _, p = await _load(session, user, ctx, pid, "edit")
+    if body.refresh.freq != "手动" or body.sub.on or body.refresh.on_fail != "保留上次结果":
+        raise execution.unavailable("只能保存手动刷新且关闭订阅的设置")
     if body.sub.on and not body.sub.receivers:
         raise EmptyInput("请至少选择一位接收人", details={"field": "sub.receivers"})
     p.refresh = body.refresh.plan()
@@ -484,47 +604,55 @@ async def put_schedule(
 )
 async def put_share(pid: str, body: ShareIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
     _, p = await _load(session, user, ctx, pid, "owner")
+    if p.lock_version != body.lock_version:
+        raise VersionConflict(details={"expected": body.lock_version, "actual": p.lock_version})
     mode = ShareMode(body.mode)
     if mode == ShareMode.members and not body.members:
         raise EmptyInput("指定成员共享时至少添加一位成员", details={"field": "members"})
-    # 按姓名映射用户（同名取编号最小的一个 [推断]）；不在用户表 → 422 USER_NOT_FOUND
-    names = list(dict.fromkeys(m.name for m in body.members)) if mode == ShareMode.members else []
-    found: dict[str, SysUser] = {}
-    if names:
-        for u in (
-            await session.scalars(
-                select(SysUser).where(SysUser.name.in_(names)).order_by(SysUser.code.desc())
+    candidates = list(await session.execute(_share_candidates(session)))
+    chosen = []
+    for member in body.members if mode == ShareMode.members else []:
+        matches = (
+            [candidate for candidate in candidates if candidate.code == member.user_id]
+            if member.user_id
+            else [candidate for candidate in candidates if candidate.name == member.name]
+        )
+        if len(matches) != 1:
+            raise AppError(
+                "共享成员不存在、未授权或姓名不唯一，请重新选择", code="USER_NOT_FOUND", status_code=422
             )
-        ).all():
-            found[u.name] = u
-    missing = [n for n in names if n not in found]
-    if missing:
-        raise AppError("成员不在用户表中", code="USER_NOT_FOUND", status_code=422, details={"names": missing})
+        candidate = matches[0]
+        if candidate.id == p.owner_id or any(item[0].id == candidate.id for item in chosen):
+            raise AppError("共享成员不能包含本人或重复用户", code="VALIDATION_FAILED", status_code=422)
+        if member.perm == "可编辑" and candidate.role == "viewer":
+            raise Forbidden("所选成员在当前本体只有查看权限")
+        chosen.append((candidate, member))
+    if mode == ShareMode.dept and not p.owner.dept:
+        raise execution.unavailable("页面拥有者未登记部门，不能按部门共享")
     old_mode, old_link, old_export = p.share_mode, p.share_link, p.allow_export
-    old_members = {m.user.name for m in p.members}
+    old_members = {m.user.code for m in p.members}
     new_viewers: list[str] = []
     if mode == ShareMode.dept and old_mode != ShareMode.dept:
         new_viewers.append(f"{p.owner.dept or '所在部门'} 全体")
-    perm_of = {m.name: m for m in body.members}
     if mode == ShareMode.members:
         new_viewers += [
-            f"{n}（{perm_of[n].perm}）"
-            for n in names
-            if old_mode != ShareMode.members or n not in old_members
+            f"{candidate.name}（{member.perm}）"
+            for candidate, member in chosen
+            if old_mode != ShareMode.members or candidate.code not in old_members
         ]
     link = body.link and mode != ShareMode.private
     grants: list[str] = []
     if mode != ShareMode.private and link and not (old_mode != ShareMode.private and old_link):
-        grants.append("开启链接访问：有链接且有数据权限的人都能打开")
+        grants.append("开启页面链接：仍须是已授权共享成员或同部门用户")
     if mode != ShareMode.private and body.allow_export and not (old_mode != ShareMode.private and old_export):
         grants.append("允许导出：可见人能下载卡片明细")
     p.share_mode, p.share_link, p.allow_export = mode, link, body.allow_export
+    p.updated_at = clock.now()  # Member-only edits must advance the optimistic version as well.
     p.members.clear()
     await session.flush()
-    for n in names:
-        m = perm_of[n]
+    for candidate, member in chosen:
         p.members.append(
-            QaPageShareMember(user_id=found[n].id, perm=SharePerm(m.perm), dept=m.dept or found[n].dept)
+            QaPageShareMember(user_id=candidate.id, perm=SharePerm(member.perm), dept=candidate.dept)
         )
     await session.flush()
     await audit(
@@ -534,12 +662,174 @@ async def put_share(pid: str, body: ShareIn, session: SessionDep, user: CurrentU
         target=pid,
         detail={"mode": body.mode, "newViewers": new_viewers, "newGrants": grants},
     )
-    out = await _out(session, pid)
+    out = await _out(session, pid, user, ctx)
     return ShareSaveOut(
         **out.share.model_dump(),
-        link_url=f"{LINK_BASE}{pid}" if link else None,
+        link_url=f"/use/qa/pages?ontology={require_ontology_id(session)}&page_id={pid}" if link else None,
         new_viewers=new_viewers,
         new_grants=grants,
+        lock_version=out.lock_version,
+    )
+
+
+def _share_candidates(session):
+    return (
+        select(SysUser.id, SysUser.code, SysUser.name, SysUser.dept, OntologyMember.role)
+        .join(OntologyMember, OntologyMember.user_id == SysUser.id)
+        .join(SysRoleMember, SysRoleMember.user_id == SysUser.id)
+        .join(SysRole, SysRole.id == SysRoleMember.role_id)
+        .where(
+            SysUser.status == UserStatus.active,
+            OntologyMember.ontology_id == require_ontology_id(session),
+            OntologyMember.role.in_(("owner", "editor", "viewer")),
+            SysRole.func["qa-pages"].as_string().in_(("view", "manage")),
+        )
+        .distinct()
+        .order_by(SysUser.code)
+    )
+
+
+@pages.get("/pages/{pid}/share-options")
+async def share_options(
+    pid: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=100),
+    kw: str = Query("", max_length=128),
+):
+    viewer = await execution.current_viewer(session, user)
+    p = await r.PageRepo(session).detail(pid)
+    if p is None or p.owner.code != viewer.id:
+        raise NotFound("页面不存在")
+    query = _share_candidates(session).where(SysUser.id != p.owner_id)
+    if kw.strip():
+        query = query.where(
+            or_(
+                func.strpos(SysUser.code, kw.strip()) > 0,
+                func.strpos(SysUser.name, kw.strip()) > 0,
+                func.strpos(SysUser.dept, kw.strip()) > 0,
+            )
+        )
+    total = int(await session.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
+    params = PageParams(page=page, size=size).clamp(total)
+    rows = await session.execute(query.offset(params.offset).limit(params.size))
+    return {
+        "items": [
+            {
+                "userId": row.code,
+                "name": row.name,
+                "dept": row.dept,
+                "canEdit": row.role in ("owner", "editor"),
+            }
+            for row in rows
+        ],
+        "total": total,
+        "page": params.page,
+        "size": params.size,
+    }
+
+
+class SaveTemplateIn(ApiModel):
+    name: str = Field(min_length=1, max_length=60)
+    scene: str = Field(default="我的模板", min_length=1, max_length=32)
+
+
+@pages.post("/pages/{pid}:template", status_code=201)
+async def save_as_template(
+    pid: str, body: SaveTemplateIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
+):
+    _, p = await _load(session, user, ctx, pid, "owner")
+    can_create, reason = await execution.template_capability(session, p)
+    if not can_create:
+        raise execution.unavailable(reason)
+    name, scene = body.name.strip(), body.scene.strip()
+    if not name or not scene:
+        raise EmptyInput("模板名称和场景不能为空")
+    await get_adapter(session).xact_lock(session, "qa.template.code")
+    if await session.scalar(select(QaTemplate.id).where(QaTemplate.name == name)):
+        raise DuplicateKey("已有同名模板")
+    template = QaTemplate(
+        code=f"TPL-{uuid4().hex[:16]}",
+        name=name,
+        scene=scene,
+        provider=user.name,
+        official=False,
+        uses=0,
+        created_by=user.id,
+        cards=[
+            QaTemplateCard(
+                card_key=f"C{i}",
+                sort_order=i,
+                title=card.title,
+                viz=card.viz,
+                sem_plan=deepcopy(card.sem_plan),
+                metric_name=card.metric_name,
+                metric_code=card.metric_code,
+                metric_version=card.metric_version,
+                result_cache={},
+            )
+            for i, card in enumerate(p.cards, start=1)
+        ],
+    )
+    session.add(template)
+    await session.flush()
+    await audit(
+        session, user, action="qa.page.template", target=template.code, detail={"page": pid, "name": name}
+    )
+    return {"id": template.code, "name": template.name}
+
+
+@pages.get("/pages/{pid}/export")
+async def export_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    from app.common.sql_guard import _real_tables, assert_single_select, governed_tables
+    from app.modules.qa.object_source import can_export_object
+
+    pk, account, viewer = await svc.effective_viewer(session, user, ctx)
+    viewer = await execution.current_viewer(session, viewer)
+    repo = r.PageRepo(session)
+    p = await repo.detail(pid)
+    if p is None or not await repo.is_visible(
+        p.id, repo.visible_clause(pk, account.dept, include_shared=True)
+    ):
+        raise NotFound("页面不存在")
+    if ctx.read_only or (p.owner_id != pk and not p.allow_export):
+        raise Forbidden("当前页面不允许导出")
+    governed = governed_tables(require_ontology_id(session))
+    release = await execution.ReleaseRepo(session).latest()
+    for card in p.cards:
+        plan = execution.validate_plan(card, release)
+        for table in _real_tables(assert_single_select(plan["sql"])):
+            binding = governed.get(table.name)
+            if binding is None or not await can_export_object(session, viewer, binding.object_type):
+                raise Forbidden("没有卡片涉及对象的导出权限")
+    cards = await execution.projected_cards(session, viewer, p, ctx, temporary=True)
+    if not cards or any(card.get("denied") for card in cards):
+        raise Forbidden("当前权限无法安全导出页面结果")
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    from app.modules.admin.exports import csv_cell
+
+    for card in cards:
+        writer.writerow([csv_cell(card["title"])])
+        writer.writerow(
+            [
+                "当前权限下的有界结果",
+                f"最多{execution.ROW_LIMIT}行",
+                "已截断" if card.get("truncated") else "未截断",
+            ]
+        )
+        writer.writerow([csv_cell(column["title"]) for column in card.get("columns", [])])
+        for row in card.get("items", []):
+            writer.writerow([csv_cell(str(row.get(column["key"], ""))) for column in card.get("columns", [])])
+        writer.writerow([])
+    return Response(
+        "\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="page-{p.id}.csv"',
+            "Cache-Control": "no-store",
+        },
     )
 
 

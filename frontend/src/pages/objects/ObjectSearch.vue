@@ -4,7 +4,7 @@
  * 类型下拉按分组列出已发布的对象类型；关键词只查可搜索属性；左侧分面 = 可筛选属性（枚举带计数 / 时间和数值给区间）；
  * 结果表 = 标题列 + listed 属性列，只有 sortable 属性能排序。页面里不写任何具体对象类型、字段或筛选项。
  * URL：?type=&kw=&f=<筛选 JSON>&sort=&page=&size=&ask=1；行点击进对象详情（?type=&id=）。
- * 取数见 objMeta.ts（元数据 / 分面）和 objRows.ts（行：真接口 X1，后台没起来回退演示数据）。
+ * 取数见 objMeta.ts 和 objRows.ts；真实数据、分面和计数使用同一查询，失败直接提示。
  * 预览（?previewAs=）：行和计数只含被预览用户范围内的数据，导出只读，提问照常。
  */
 import { computed, ref, watch } from 'vue';
@@ -16,12 +16,12 @@ import AppPagination from '@/components/AppPagination.vue';
 import { usePreview } from '@/composables/usePreview';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { isStaticReal } from '@/api/static';
+import { qaReal } from '@/api/qa';
 import { fmtInt } from '@/mock/format';
 import type { AskScope } from '@/mock/objects-qa';
 import ObjAskModal from './parts/ObjAskModal.vue';
 import InfoTip from '../qa/InfoTip.vue';
 import * as objApi from '@/api/qaObjects';
-import { qaLive, qaFallBackIfDown } from '../qa/qaFallback';
 import { errText } from '../qa/useQaSession';
 import { listTypes, groupTypes, loadMeta, metaContextKey, fmtVal, propLabel, isNumeric, type TypeBrief, type TypeMeta, type Filters, type FacetMeta, type PropMeta } from './objMeta';
 import { searchRows, mockMatched, type RowsResult } from './objRows';
@@ -29,7 +29,9 @@ import { searchRows, mockMatched, type RowsResult } from './objRows';
 const route = useRoute();
 const router = useRouter();
 const pv = usePreview();
+const qaLive = computed(qaReal);
 const qs = (k: string) => { const v = route.query[k]; return String(Array.isArray(v) ? v[0] ?? '' : v ?? ''); };
+const contextQuery = () => Object.fromEntries(['ontology', 'ver', 'previewAs', 'as'].filter((key) => key in route.query).map((key) => [key, route.query[key]]));
 const patch = (p: Record<string, string | null>) => {
   const q: LocationQueryRaw = { ...route.query };
   Object.entries(p).forEach(([k, v]) => { if (v == null || v === '') delete q[k]; else q[k] = v; });
@@ -39,24 +41,26 @@ const patch = (p: Record<string, string | null>) => {
 /* 类型与元数据 */
 const types = ref<TypeBrief[]>([]);
 const typesLoaded = ref(false);
+const typesError = ref(''), metaError = ref(''), searchError = ref('');
+const loadError = computed(() => typesError.value || metaError.value || searchError.value);
 const contextKey = computed(metaContextKey);
 let typesSeq = 0;
 watch(contextKey, async () => {
   const my = ++typesSeq;
-  types.value = []; typesLoaded.value = false;
+  types.value = []; typesLoaded.value = false; typesError.value = '';
   try { const t = await listTypes(); if (my === typesSeq) { types.value = t; typesLoaded.value = true; } }
-  catch (e) { if (my === typesSeq) message.error(`对象类型加载失败：${errText(e)}`); }
+  catch (e) { if (my === typesSeq) typesError.value = `对象类型加载失败：${errText(e)}`; }
 }, { immediate: true });
 const typeId = computed(() => qs('type') || types.value[0]?.id || '');
-const typeKey = computed({ get: () => typeId.value || undefined, set: (v?: string) => router.replace({ query: v ? { type: v } : {} }) }); // 换类型清空条件
+const typeKey = computed({ get: () => typeId.value || undefined, set: (v?: string) => router.replace({ query: { ...contextQuery(), ...(v ? { type: v } : {}) } }) }); // 换类型清空条件，保留本体/版本/预览
 const meta = ref<TypeMeta | null>(null);
 let metaSeq = 0;
 watch([typeId, contextKey], async ([id]) => {
   const my = ++metaSeq;
-  meta.value = null;
+  meta.value = null; metaError.value = '';
   if (!id) return;
-  try { const m = await loadMeta(id, false); if (my === metaSeq) meta.value = m; }
-  catch (e) { if (my === metaSeq) message.error(`对象元数据加载失败：${errText(e)}`); }
+  try { const m = await loadMeta(id, false); if (my === metaSeq) { meta.value = m; if (!m) metaError.value = '当前本体中没有此已发布对象类型'; } }
+  catch (e) { if (my === metaSeq) metaError.value = `对象元数据加载失败：${errText(e)}`; }
 }, { immediate: true });
 const pmap = computed(() => new Map((meta.value?.properties ?? []).map((p) => [p.key, p])));
 const prop = (k: string) => pmap.value.get(k);
@@ -75,7 +79,7 @@ const setFilter = (k: string, v: Filters[string] | null) => {
 };
 const sort = computed(() => qs('sort'));
 const filterSig = computed(() => JSON.stringify([typeId.value, kw.value, filters.value, sort.value]));
-const pq = usePagedQuery({ defaultSize: 16, filters: filterSig });
+const pq = usePagedQuery({ defaultSize: qaReal() ? 10 : 16, filters: filterSig });
 
 /* 结果 */
 const res = ref<RowsResult | null>(null);
@@ -87,22 +91,19 @@ async function load() {
   const my = ++seq;
   const ctx = contextKey.value;
   const m = meta.value;
+  searchError.value = '';
   if (!m) { res.value = null; loading.value = false; return; }
   loading.value = true;
   const key = JSON.stringify([ctx, m.id, kw.value, filters.value]);
   const q = { kw: kw.value, filters: filters.value, sort: sort.value, page: pq.page.value, size: pq.size.value, withFacets: key !== facetsKey };
   try {
-    let r: RowsResult;
-    try { r = await searchRows(m, q, qaLive.value, pv.scopeOf); } catch (e) {
-      if (!qaLive.value || !qaFallBackIfDown(e)) throw e;
-      r = await searchRows(m, q, false, pv.scopeOf);
-    }
+    const r = await searchRows(m, q, qaLive.value, pv.scopeOf);
     if (my === seq && ctx === contextKey.value) {
       if (q.withFacets) { lastFacets = r.facets; facetsKey = key; }
       res.value = { ...r, facets: lastFacets };
       if (r.page && r.page !== pq.page.value) pq.page.value = r.page;
     }
-  } catch (e) { if (my === seq) { res.value = null; message.error(`对象搜索失败：${errText(e)}`); } } finally { if (my === seq) loading.value = false; }
+  } catch (e) { if (my === seq) { res.value = null; searchError.value = `对象搜索失败：${errText(e)}`; } } finally { if (my === seq) loading.value = false; }
 }
 watch([meta, qaLive, filterSig, pq.page, pq.size, () => pv.userName.value], load, { immediate: true });
 const total = computed(() => res.value?.total ?? 0);
@@ -127,7 +128,7 @@ const conds = computed(() => Object.entries(filters.value).filter(([k]) => prop(
   const p = prop(k)!;
   return Array.isArray(f) ? `${p.name} = ${f.join(' / ')}` : `${p.name} ${f.min != null ? fmtVal(p, f.min) : '…'} ~ ${f.max != null ? fmtVal(p, f.max) : '…'}`;
 }).concat(kw.value ? [`关键词“${kw.value}”`] : []));
-function clearAll() { router.replace({ query: typeId.value ? { type: typeId.value } : {} }); }
+function clearAll() { router.replace({ query: { ...contextQuery(), ...(typeId.value ? { type: typeId.value } : {}) } }); }
 function doSearch() { patch({ kw: kwInput.value.trim() || null, page: null }); }
 const scopeText = computed(() => (pv.active.value
   ? `${pv.userName.value} 的${pv.scopeLabel(meta.value?.name ?? '')}。范围外的对象结果和计数都不含。`
@@ -157,15 +158,14 @@ watch([typeId, contextKey], () => { selKeys.value = []; });
 const query = computed(() => ({ kw: kw.value, filters: filters.value }));
 async function exportCsv() {
   const m = meta.value; if (!m) return;
-  const n = selKeys.value.length || total.value;
-  const done = () => message.success(`已导出 ${fmtInt(n)} 条${selKeys.value.length ? '（已选）' : '（当前筛选）'}`);
+  const done = () => message.success('已下载导出文件');
   // 只走后台导出（带行级范围、去敏感 / 隐藏属性）；后台不通时报错，不导出演示数据
   if (!qaLive.value) { message.error('导出失败：后台未连接，暂不能导出'); return; }
   try {
     await objApi.exploreExport(m.id, { ...query.value, ids: selKeys.value.length ? selKeys.value : undefined });
     done();
   } catch (e) {
-    message.error(qaFallBackIfDown(e) ? '导出失败：后台未连接，暂不能导出' : `导出失败：${errText(e)}`);
+    message.error(`导出失败：${errText(e)}`);
   }
 }
 const askOpen = computed({ get: () => qs('ask') === '1', set: (v: boolean) => patch({ ask: v ? '1' : null }) });
@@ -179,13 +179,14 @@ const askScope = computed<AskScope>(() => {
 const liveAsk = computed<objApi.ScopedAskIn | undefined>(() => (qaLive.value && meta.value
   ? { kind: meta.value.id, label: meta.value.name, conds: askConds.value, ...(selKeys.value.length ? { ids: selKeys.value } : { query: query.value }) }
   : undefined));
+const askSuggestions = computed(() => meta.value ? [...new Set([...(qaLive.value ? ['对象数量'] : []), ...meta.value.sampleQuestions])] : []);
 
 /* 记住当前搜索条件，详情页面包屑用来返回 */
 watch(() => route.fullPath, () => {
   const q = { ...route.query }; delete q.drawer; delete q.drawer2; delete q.ask;
   try { sessionStorage.setItem(`obj-search:last:${currentApiContext().ontologyId}`, JSON.stringify(q)); } catch { /* private mode */ }
 }, { immediate: true });
-const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/detail', query: { type: typeId.value, id: r.id } });
+const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/detail', query: { ...contextQuery(), type: typeId.value, id: r.id } });
 </script>
 
 <template>
@@ -226,16 +227,18 @@ const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/d
         <div class="os-q">
           <a-select v-model:value="typeKey" style="width: 128px" :options="groupTypes(types)" placeholder="对象类型" show-search option-filter-prop="label" />
           <a-input-search v-model:value="kwInput" allow-clear :placeholder="kwPlaceholder" style="width: 280px" @search="doSearch" />
+          <span v-if="currentApiContext().ver" class="c-3 t-12" title="按该版本定义查询当前数据">当前实例</span>
           <span v-if="selKeys.length" class="c-2">已选 {{ selKeys.length }} 条 <a class="os-unsel" @click="selKeys = []">取消选择</a></span>
           <span v-else-if="conds.length" class="c-3 os-conds">{{ conds.join('、') }}</span>
         </div>
         <a-space :size="8">
-          <a-tooltip :title="pv.reason.value || undefined"><a-button :disabled="pv.active.value || !total" @click="exportCsv"><template #icon><DownloadOutlined /></template>{{ selKeys.length ? '导出所选' : '导出' }}</a-button></a-tooltip>
+          <a-tooltip :title="pv.reason.value || (qaLive && res?.canExport !== true ? '没有此对象类型的导出权限' : undefined)"><a-button :disabled="pv.active.value || !total || (qaLive && res?.canExport !== true)" @click="exportCsv"><template #icon><DownloadOutlined /></template>{{ selKeys.length ? '导出所选' : '导出' }}</a-button></a-tooltip>
           <a-button type="primary" :disabled="!total" @click="askOpen = true"><template #icon><MessageOutlined /></template>用这批对象提问</a-button>
         </a-space>
       </div>
       <div class="os-body">
-        <template v-if="total">
+        <a-alert v-if="loadError" type="error" :message="loadError" show-icon />
+        <template v-else-if="total">
           <div class="paged-scroll os-tbl">
             <a-table :columns="columns" :data-source="res!.items" row-key="id" size="middle" table-layout="fixed" :pagination="false" :loading="loading"
               :row-selection="{ selectedRowKeys: selKeys, preserveSelectedRowKeys: true, onChange: (k: (string | number)[]) => (selKeys = k as string[]) }"
@@ -249,7 +252,7 @@ const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/d
           </div>
           <AppPagination v-model:page="pq.page.value" v-model:size="pq.size.value" variant="full" :total="total" :default-size="pq.defaultSize" :unit="'条'" />
         </template>
-        <a-empty v-else-if="isStaticReal() && typesLoaded && !types.length" class="os-empty" description="当前本体暂无可查询对象" />
+        <a-empty v-else-if="(qaLive || isStaticReal()) && typesLoaded && !types.length" class="os-empty" description="当前本体暂无可查询对象" />
         <a-spin v-else-if="loading || !meta" class="os-empty" />
         <a-empty v-else-if="!bound" class="os-empty" :description="`未接入数据：「${meta.name}」还没有绑定数据表，暂时搜不到对象`" />
         <a-empty v-else-if="pv.active.value && pv.scopeOf(meta.name) === '无权限'" class="os-empty" :description="`${pv.userName.value} ${pv.scopeLabel(meta.name)}，预览中不显示任何${meta.name}`" />
@@ -259,7 +262,7 @@ const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/d
       </div>
     </div>
 
-    <ObjAskModal v-if="meta" v-model:open="askOpen" :scope="askScope" :live-scope="liveAsk" :count="selKeys.length || total" :suggestions="meta.sampleQuestions" />
+    <ObjAskModal v-if="meta" v-model:open="askOpen" :scope="askScope" :live-scope="liveAsk" :count="selKeys.length || total" :suggestions="askSuggestions" />
   </div>
 </template>
 

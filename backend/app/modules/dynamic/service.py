@@ -3,14 +3,16 @@
 文案（日志 text / desc、悬停原因）逐字照前端 Alerts.vue、Actions.vue、mock/actions.ts buildLog。
 """
 
+import json
 from collections.abc import Iterable, Sequence
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.auth import CurrentUser
+from app.common.auth import CurrentUser, check_func, resolve_user
 from app.common.pagination import PageParams
 from app.contracts.actions import (
     EVENT_ACTION_EXECUTED,
@@ -46,6 +48,7 @@ from app.modules.dynamic.models import (
 )
 from app.modules.dynamic.ports import Ports
 from app.modules.dynamic.repo import ActionRunRepo, AlertRepo
+from app.modules.dynamic.row_scope import scoped_instances
 from app.modules.dynamic.schemas import (
     ActionCan,
     ActionLogOut,
@@ -165,7 +168,38 @@ class ActionService:
         run_codes = await _code_map(
             self.session, ActionRun, [x for r in runs for x in (r.retry_of_id, r.retried_as_id)]
         )
-        return [self._out(r, alert_codes, run_codes) for r in runs]
+        result = [self._out(r, alert_codes, run_codes) for r in runs]
+        from app.modules.dynamic.run_visibility import params_unavailable
+
+        for row, out in zip(runs, result, strict=True):
+            out.params_unavailable = await params_unavailable(self.session, self.user, row)
+            if out.params_unavailable:
+                out.params = out.summary = out.fail_reason = out.unknown_reason = out.reconcile = None
+        if runs:
+            from app.modules.integration.execution import CLAIMED, QUEUED
+            from app.modules.integration.models import CallKind, ReconcileTask, WritebackCall
+
+            phases = dict(
+                (
+                    await self.session.execute(
+                        select(WritebackCall.action_run_id, WritebackCall.msg)
+                        .outerjoin(ReconcileTask, ReconcileTask.action_run_id == WritebackCall.action_run_id)
+                        .where(
+                            WritebackCall.action_run_id.in_([r.id for r in runs]),
+                            WritebackCall.kind == CallKind.write,
+                            WritebackCall.msg.in_((QUEUED, CLAIMED)),
+                            or_(WritebackCall.msg == QUEUED, ReconcileTask.manual.is_not(True)),
+                        )
+                    )
+                ).all()
+            )
+            for row, out in zip(runs, result, strict=True):
+                out.dispatch_phase = (
+                    {QUEUED: "queued", CLAIMED: "claimed"}.get(phases.get(row.id))
+                    if row.status == ActionStatus.unknown
+                    else None
+                )
+        return result
 
     def _out(self, r: ActionRun, alert_codes: dict[int, str], run_codes: dict[int, str]) -> ActionRunOut:
         alert_code = alert_codes.get(r.alert_id) if r.alert_id else None
@@ -252,29 +286,65 @@ class ActionService:
         approver = self.is_approver(r)
         if r.status == ActionStatus.approving and not approver:
             reasons["approve"] = f"该动作审批人为 {r.approver}，只有审批人可以审批"
+        manage = self.user.func.get("action-center") == "manage" and self.user.ontology_role in (
+            "owner",
+            "editor",
+        )
         return ActionCan(
-            confirm=staged and mine,
-            withdraw=staged and mine,
-            approve=r.status == ActionStatus.approving and approver,
-            resubmit=r.status == ActionStatus.failed and not r.retried_as_id,
-            reconcile=r.status == ActionStatus.unknown,
+            confirm=manage and staged and mine,
+            withdraw=manage and staged and mine,
+            approve=manage and r.status == ActionStatus.approving and approver,
+            resubmit=manage and r.status == ActionStatus.failed and not r.retried_as_id,
+            reconcile=manage and r.status == ActionStatus.unknown,
             reasons=reasons,
         )
 
     async def detail(self, r: ActionRun) -> ActionRunDetail:
         out = (await self.to_out([r]))[0]
         logs = await self.repo.logs(r.id)
+        if out.params_unavailable:
+            logs = []
+        dispatch_phase = out.dispatch_phase
+        can = self.can(r)
+        if can.confirm or can.approve or can.resubmit or can.reconcile:
+            try:
+                await self._operation_access(r)
+            except AppError as exc:
+                for operation in ("confirm", "approve", "resubmit", "reconcile"):
+                    setattr(can, operation, False)
+                    can.reasons[operation] = exc.message
+        if dispatch_phase:
+            can.reconcile = False
+            can.reasons["reconcile"] = "动作尚在执行队列或正在调用外部系统，请等待执行结果"
         return ActionRunDetail(
-            **out.model_dump(),
+            **{**out.model_dump(), "dispatch_phase": dispatch_phase},
             log=[
                 ActionLogOut(time=x.at, text=x.text, desc=x.actor, status=x.level.value if x.level else None)
                 for x in logs
             ],
-            can=self.can(r),
+            can=can,
         )
 
     async def get(self, code: str) -> ActionRun:
-        return await self.repo.get_by_code_or_404(code)
+        stmt = await scoped_instances(
+            select(ActionRun).where(ActionRun.code == code), self.user, ActionRun.obj_kind, ActionRun.obj_id
+        )
+        row = await self.session.scalar(stmt)
+        if row is None:
+            raise NotFound("动作不存在或无权查看")
+        return row
+
+    async def _operation_access(self, run: ActionRun) -> None:
+        from app.modules.action.execution_options import action_operation_objects
+        from app.modules.dynamic.run_visibility import params_unavailable
+        from app.modules.integration.action_edits import execution_definition, object_operation
+
+        reason = await params_unavailable(self.session, self.user, run)
+        if reason:
+            raise AppError(reason, code="ACTION_REFERENCE_UNAVAILABLE", status_code=403)
+        definition = await execution_definition(self.session, run)
+        for obj in await action_operation_objects(self.session, definition):
+            await object_operation(self.session, self.user, obj, definition)
 
     # ---------- 列表 ----------
     def _filtered(
@@ -349,7 +419,9 @@ class ActionService:
             if scope not in ("center", "runs", "all"):
                 raise validation_failed("scope", "scope 只能是 center / runs / all")
             in_center = {"center": True, "runs": False, "all": None}[scope]
-        base = self._filtered(in_center=in_center, **filters)
+        base = await scoped_instances(
+            self._filtered(in_center=in_center, **filters), self.user, ActionRun.obj_kind, ActionRun.obj_id
+        )
         stmt = base
         if tab is not None:
             stmt = stmt.where(ActionRun.status.in_(ACTION_TABS[tab]))
@@ -361,15 +433,15 @@ class ActionService:
         stmt = stmt.order_by(*order)
         rows, total = await self.repo.list_page(stmt, page)
 
-        tab_counts = dict(
-            (
-                await self.session.execute(
-                    select(ActionRun.status, func.count())
-                    .where(ActionRun.in_center.is_(True))
-                    .group_by(ActionRun.status)
-                )
-            ).all()
+        count_stmt = await scoped_instances(
+            select(ActionRun.status, func.count())
+            .where(ActionRun.in_center.is_(True))
+            .group_by(ActionRun.status),
+            self.user,
+            ActionRun.obj_kind,
+            ActionRun.obj_id,
         )
+        tab_counts = dict((await self.session.execute(count_stmt)).all())
         sub = base.order_by(None).subquery()
         status_counts = dict(
             (await self.session.execute(select(sub.c.status, func.count()).group_by(sub.c.status))).all()
@@ -470,7 +542,9 @@ class ActionService:
             sec = self.catalog.timeout_sec(r.sys_code)
             seq = await self._log(
                 r,
-                "已持久排队，等待执行器调用外部系统" if res.code == "QUEUED" else f"{system} {sec} 秒未返回结果，标记为结果未知（不重试写入）",
+                "已持久排队，等待执行器调用外部系统"
+                if res.code == "QUEUED"
+                else f"{system} {sec} 秒未返回结果，标记为结果未知（不重试写入）",
                 f"系统 · {res.reason}" if res.reason else SYSTEM,
                 TimelineStatus.warn,
             )
@@ -573,6 +647,34 @@ class ActionService:
         return f"调用 {self.catalog.system_name(r.sys_code) or r.sys_code}：{meta.get('call', r.action_name)}"
 
     # ---------- 写：接口 ----------
+    async def validate_launch(self, code: str, kind: str, identity: str, params: Any):
+        from app.modules.action.condition_expr import Unavailable
+        from app.modules.dynamic.action_options import launch_definition
+        from app.modules.integration.action_edits import existing_row
+        from app.modules.integration.execution import preflight
+
+        definition, obj, governed = await launch_definition(
+            self.session, self.user, self.catalog, code, identity=identity
+        )
+        if kind != obj.code:
+            raise validation_failed("objKind", "目标对象类型与动作定义不匹配")
+        await existing_row(self.session, self.user, obj, governed, identity)
+        probe = SimpleNamespace(
+            action_type_code=code,
+            type_version=definition["version"],
+            sys_code=definition.get("sysId"),
+            obj_kind=kind,
+            obj_id=identity,
+            params=None,
+            params_text=params,
+            code="pending",
+            ontology_id=self.user.ontology_id,
+        )
+        try:
+            await preflight(self.session, self.user, probe)
+        except Unavailable as exc:
+            raise validation_failed("params", str(exc)) from None
+
     async def stage(self, body: StageIn) -> tuple[ActionRun, bool]:
         """POST /action-runs:stage → (记录, 是否新建)。只生成待确认，不调外部系统。"""
         t = self._type_of(name=body.action, code=body.type_id)
@@ -580,6 +682,12 @@ class ActionService:
         if body.approver and body.approver not in (meta.get("approver"), meta.get("approverId")):
             raise validation_failed("approver", "审批人必须使用已发布动作配置，不能由请求覆盖")
         src = body.source
+        if src.type == "手动":
+            await self.validate_launch(t["id"], body.obj_kind, body.obj_id, body.params)
+            body.obj_label = body.obj_id
+            src.confirmer = self.user.id
+            if not body.idempotency_key:
+                raise validation_failed("idempotencyKey", "手动发起须提供请求幂等键")
         alert: Alert | None = None
         if src.alert_id:
             alert = await self.alerts.get_by_code(src.alert_id)
@@ -591,11 +699,19 @@ class ActionService:
             rule = self.catalog.rule(rule_code)
             confirmer = rule.get("confirmer") if rule else None  # [推断] 规则固定确认人
         key = f"act-{alert.code.lower()}" if alert else None
+        if src.type == "手动":
+            key = f"manual-{self.user.ontology_id}-{self.user.id}-{body.idempotency_key}"
         if key and self.user.ontology_id != 1:
             key = f"ont-{self.user.ontology_id}-{key}"
         if key:
             old = await self._replay_or_conflict(
-                key, {"action_type_code": t["id"], "obj_id": body.obj_id, "params_text": body.params}
+                key,
+                {
+                    "action_type_code": t["id"],
+                    "obj_id": body.obj_id,
+                    "params_text": body.params,
+                    "confirmer": src.confirmer,
+                },
             )
             if old is not None:
                 return old, False
@@ -659,7 +775,9 @@ class ActionService:
     async def confirm(self, code: str) -> ActionRun:
         from app.modules.integration.reconcile import lock_run
 
+        await self.get(code)
         r = await lock_run(self.session, code)
+        await self._operation_access(r)
         ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.approving)
         if self._not_mine(r):
             raise NotConfirmer(self._not_mine_text(r))
@@ -682,7 +800,10 @@ class ActionService:
         return r
 
     async def withdraw(self, code: str, reason: str) -> ActionRun:
-        r = await self.get(code)
+        from app.modules.integration.reconcile import lock_run
+
+        await self.get(code)
+        r = await lock_run(self.session, code)
         ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.withdrawn)
         if self._not_mine(r):
             raise NotConfirmer(self._not_mine_text(r))
@@ -697,7 +818,9 @@ class ActionService:
         审批人必须对应当前真实用户编号；旧姓名仅在能定位唯一在用用户时兼容。"""
         from app.modules.integration.reconcile import lock_run
 
+        await self.get(code)
         r = await lock_run(self.session, code)
+        await self._operation_access(r)
         ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.executing)
         if not self.is_approver(r):
             raise NotApprover(f"该动作审批人为 {r.approver}，只有审批人可以审批")
@@ -713,7 +836,9 @@ class ActionService:
         """失败 → 新动作（执行中，新幂等键 -rN，沿用原审批）→ submit；原记录写 retried_as。"""
         from app.modules.integration.reconcile import lock_run
 
+        await self.get(code)
         a = await lock_run(self.session, code)
+        await self._operation_access(a)
         if a.status != ActionStatus.failed:
             raise InvalidTransition(
                 "已对账 · 外部未执行，如仍需执行请重新发起"
@@ -757,9 +882,14 @@ class ActionService:
         rec.params = a.params
         rec.biz_key = a.biz_key
         rec.in_center = a.in_center
-        await self._check_criteria(rec.action_type_code, {
-            "objKind": rec.obj_kind, "objId": rec.obj_id, "params": rec.params_text,
-        })
+        await self._check_criteria(
+            rec.action_type_code,
+            {
+                "objKind": rec.obj_kind,
+                "objId": rec.obj_id,
+                "params": rec.params_text,
+            },
+        )
         system = self.catalog.system_name(rec.sys_code) or rec.sys_code
         me = self.user.name
         await self._log(rec, f"重新提交自 {a.code}（上次失败：{a.fail_reason or '--'}）", me)
@@ -782,6 +912,7 @@ class ActionService:
         return rec, a
 
     async def reconcile(self, code: str, result: str, note: str) -> ActionRun:
+        await self.get(code)
         r = await self.session.scalar(
             select(ActionRun)
             .where(ActionRun.code == code)
@@ -790,12 +921,27 @@ class ActionService:
         )
         if r is None:
             raise NotFound("动作不存在", details={"id": code})
+        await self._operation_access(r)
         if r.status != ActionStatus.unknown:
             raise InvalidTransition(details={"from": r.status.value, "to": ActionStatus.reconciled.value})
-        from app.modules.integration.execution import queued_call
+        from app.modules.integration.execution import CLAIMED, QUEUED
+        from app.modules.integration.models import CallKind, ReconcileTask, WritebackCall
 
-        if await queued_call(self.session, r.id):
-            raise AppError("动作尚在待执行队列，不能提前标记外部对账结果", code="ACTION_STILL_QUEUED", status_code=409)
+        if await self.session.scalar(
+            select(WritebackCall.id)
+            .outerjoin(ReconcileTask, ReconcileTask.action_run_id == WritebackCall.action_run_id)
+            .where(
+                WritebackCall.action_run_id == r.id,
+                WritebackCall.kind == CallKind.write,
+                WritebackCall.msg.in_((QUEUED, CLAIMED)),
+                or_(WritebackCall.msg == QUEUED, ReconcileTask.manual.is_not(True)),
+            )
+        ):
+            raise AppError(
+                "动作尚在执行队列或正在调用外部系统，不能提前标记对账结果",
+                code="ACTION_STILL_QUEUED",
+                status_code=409,
+            )
         me = self.user.name
         system = self.catalog.system_name(r.sys_code) or r.sys_code
         if result == "仍无法确认":
@@ -909,6 +1055,7 @@ class AlertService:
         return {r.id: r for r in rows}
 
     def _out(self, a: Alert, run: ActionRun | None) -> AlertOut:
+        person = self.catalog.person(a.assignee)
         return AlertOut(
             id=a.code,
             level=a.level.value,
@@ -931,14 +1078,84 @@ class AlertService:
             triggered_at=a.triggered_at,
             cutoff=a.data_cutoff,
             status=a.status.value,
-            assignee=a.assignee,
+            assignee=person["name"] if person else a.assignee,
+            assignee_id=person["id"] if person else None,
+            assigned_to_me=self._mine(a),
+            can_claim=(
+                self.user.func.get("alerts") == "manage"
+                and self.user.ontology_role in ("owner", "editor")
+                and a.status == AlertStatus.open
+            ),
+            can_close=(
+                self.user.func.get("alerts") == "manage"
+                and self.user.ontology_role in ("owner", "editor")
+                and a.status == AlertStatus.processing
+                and self._mine(a)
+                and not self._locked(run)
+            ),
             action_ref=run.idem_key if run else None,
             action_status=run.status.value if run else None,
             action_id=run.code if run else None,
         )
 
-    async def get(self, code: str) -> Alert:
-        return await self.repo.get_by_code_or_404(code)
+    async def get(self, code: str, *, lock: bool = False) -> Alert:
+        stmt = await scoped_instances(
+            select(Alert).where(Alert.code == code), self.user, Alert.obj_kind, Alert.obj_id
+        )
+        if lock:
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
+        row = await self.session.scalar(stmt)
+        if row is None:
+            raise NotFound("告警不存在或无权查看")
+        return row
+
+    async def _visible_out(self, alert: Alert, run: ActionRun | None) -> AlertOut:
+        out = self._out(alert, run)
+        visible = []
+        for dim in out.dims:
+            stmt = await scoped_instances(
+                select(literal(True)), self.user, literal(dim.obj_kind), literal(dim.id)
+            )
+            if await self.session.scalar(stmt):
+                visible.append(dim)
+        out.dims = visible
+        return out
+
+    def _mine(self, a: Alert) -> bool:
+        person = self.catalog.person(a.assignee)
+        return person is not None and person["id"] == self.user.id
+
+    async def people(self, code: str) -> list[dict[str, str]]:
+        alert = await self.get(code)
+        from app.common.ontology import require_ontology_id
+        from app.modules.admin.models import SysUser, UserStatus
+        from app.modules.ontology.models import OntologyMember
+
+        candidates = await self.session.execute(
+            select(SysUser.code, SysUser.name)
+            .join(OntologyMember, OntologyMember.user_id == SysUser.id)
+            .where(
+                SysUser.status == UserStatus.active,
+                OntologyMember.ontology_id == require_ontology_id(self.session),
+                OntologyMember.role.in_(("owner", "editor")),
+            )
+            .order_by(SysUser.code)
+        )
+        result = []
+        for person_id, name in candidates:
+            try:
+                person = await resolve_user(self.session, person_id)
+                check_func(person, "alerts", "manage")
+            except AppError as exc:
+                if exc.status_code not in (401, 403):
+                    raise
+                continue
+            visible = await scoped_instances(
+                select(Alert.id).where(Alert.id == alert.id), person, Alert.obj_kind, Alert.obj_id
+            )
+            if await self.session.scalar(visible):
+                result.append({"id": person_id, "name": name})
+        return result
 
     async def _run_of(self, a: Alert) -> ActionRun | None:
         return await self.runs.get(a.action_run_id) if a.action_run_id else None
@@ -952,7 +1169,7 @@ class AlertService:
     ) -> AlertPage:
         if status not in ALERT_TABS:
             raise validation_failed("status", "status 只能是 open / doing / closed / all")
-        stmt = select(Alert)
+        stmt = await scoped_instances(select(Alert), self.user, Alert.obj_kind, Alert.obj_id)
         want = ALERT_TABS[status]
         if want is not None:
             stmt = stmt.where(Alert.status.in_(want))
@@ -972,15 +1189,19 @@ class AlertService:
         stmt = stmt.order_by(*seed_first_order(Alert))
         rows, total = await self.repo.list_page(stmt, page)
         links = await self._links(rows)
-        by_status = dict(
-            (await self.session.execute(select(Alert.status, func.count()).group_by(Alert.status))).all()
+        count_stmt = await scoped_instances(
+            select(Alert.status, func.count()).group_by(Alert.status), self.user, Alert.obj_kind, Alert.obj_id
         )
+        by_status = dict((await self.session.execute(count_stmt)).all())
         counts = {
             k: sum(by_status.get(s, 0) for s in (v if v is not None else AlertStatus))
             for k, v in ALERT_TABS.items()
         }
         return AlertPage.of(
-            [self._out(a, links.get(a.action_run_id) if a.action_run_id else None) for a in rows],
+            [
+                await self._visible_out(a, links.get(a.action_run_id) if a.action_run_id else None)
+                for a in rows
+            ],
             total,
             page,
             counts=AlertCounts(**counts),
@@ -993,6 +1214,7 @@ class AlertService:
         n = await self.session.scalar(
             select(func.count()).where(
                 Alert.rule_code == a.rule_code,
+                Alert.obj_kind == a.obj_kind,
                 Alert.obj_id == a.obj_id,
                 Alert.triggered_at > a.triggered_at - timedelta(days=7),
                 Alert.triggered_at <= a.triggered_at,
@@ -1002,14 +1224,13 @@ class AlertService:
 
     def _can(self, a: Alert, run: ActionRun | None, rule: dict[str, Any] | None) -> AlertCan:
         reasons: dict[str, str] = {}
-        me = self.user.name
         locked = self._locked(run)
         closed = a.status in CLOSED
-        mine_doing = a.status == AlertStatus.processing and a.assignee == me
+        mine_doing = a.status == AlertStatus.processing and self._mine(a)
         if locked and run is not None:  # Alerts.vue L282 / L294 的悬停文案
             reasons["transfer"] = f"关联动作{run.status.value}，有结果前不能转派"
             reasons["close"] = f"关联动作{run.status.value}，有结果前不能关闭"
-        if a.status == AlertStatus.processing and a.assignee != me:
+        if a.status == AlertStatus.processing and not self._mine(a):
             reasons["close"] = reasons.get("close") or NotAssignee.message
             reasons["startAction"] = NotAssignee.message
         if mine_doing and not (rule and rule.get("action")):
@@ -1020,11 +1241,16 @@ class AlertService:
             reasons["startAction"] = "动作审批配置未指定可用审批人"
         if mine_doing and run is not None:
             reasons["startAction"] = "已有关联动作"
+        manage = self.user.func.get("alerts") == "manage" and self.user.ontology_role in ("owner", "editor")
         return AlertCan(
-            claim=a.status == AlertStatus.open,
-            transfer=not closed and not locked,
-            close=mine_doing and not locked,
-            start_action=mine_doing and bool(rule and rule.get("action")) and approval_ready and run is None,
+            claim=manage and a.status == AlertStatus.open,
+            transfer=manage and not closed and not locked,
+            close=manage and mine_doing and not locked,
+            start_action=manage
+            and mine_doing
+            and bool(rule and rule.get("action"))
+            and approval_ready
+            and run is None,
             reasons=reasons,
         )
 
@@ -1032,14 +1258,28 @@ class AlertService:
         run = await self._run_of(a)
         rule = self.catalog.rule(a.rule_code)
         logs = await self.repo.logs(a.id)
+        can = self._can(a, run, rule)
+        params = []
+        if can.start_action:
+            from app.modules.dynamic.action_options import launch_definition
+
+            try:
+                definition, _, _ = await launch_definition(
+                    self.session, self.user, self.catalog, rule["actionTypeId"], identity=a.obj_id
+                )
+                params = [{k: v for k, v in p.items() if not k.startswith("_")} for p in definition["params"]]
+            except AppError as exc:
+                can.start_action = False
+                can.reasons["startAction"] = exc.message
         return AlertDetail(
-            **self._out(a, run).model_dump(),
+            **(await self._visible_out(a, run)).model_dump(),
             rule=rule,
             approver=approver_for_action(self.catalog, (rule or {}).get("actionTypeId")),
             recent7d=await self._recent7d(a),
             locked=self._locked(run),
             log=[AlertLogOut(time=x.at, text=x.text, who=x.actor, abnormal=x.abnormal or None) for x in logs],
-            can=self._can(a, run, rule),
+            can=can,
+            action_params=params,
         )
 
     async def _log(
@@ -1058,13 +1298,13 @@ class AlertService:
     async def _claim(self, a: Alert) -> None:
         ensure_transition(ALERT_TRANSITIONS, a.status, AlertStatus.processing)
         a.status = AlertStatus.processing
-        a.assignee = self.user.name
+        a.assignee = self.user.id
         await self._log(
             a, AlertOp.claim, "认领，状态 待处理 → 处理中", AlertStatus.open, AlertStatus.processing
         )
 
     async def claim(self, code: str) -> Alert:
-        a = await self.get(code)
+        a = await self.get(code, lock=True)
         await self._claim(a)
         return a
 
@@ -1072,7 +1312,15 @@ class AlertService:
         codes = list(dict.fromkeys(c for c in codes if c))
         if not codes:
             raise EmptyInput("请先勾选告警")
-        rows = {a.code: a for a in await self.repo.by_codes(codes)}
+        stmt = await scoped_instances(
+            select(Alert).where(Alert.code.in_(codes)), self.user, Alert.obj_kind, Alert.obj_id
+        )
+        rows = {
+            a.code: a
+            for a in await self.session.scalars(
+                stmt.order_by(Alert.id).with_for_update().execution_options(populate_existing=True)
+            )
+        }
         missing = [c for c in codes if c not in rows]
         if missing:
             raise NotFound("告警不存在", details={"ids": missing})
@@ -1088,22 +1336,32 @@ class AlertService:
         return done
 
     async def transfer(self, code: str, to: str) -> Alert:
-        a = await self.get(code)
+        a = await self.get(code, lock=True)
         if a.status in CLOSED:
             raise InvalidTransition(details={"from": a.status.value, "to": AlertStatus.processing.value})
         if self._locked(await self._run_of(a)):
             raise AlertLockedByAction()
-        people = await self.repo.people()
-        if to not in people:
-            raise validation_failed("to", f"{to} 不在可转派人员中")
-        if to == a.assignee:
+        people = await self.people(code)
+        exact = [p for p in people if p["id"] == to]
+        matches = exact or [p for p in people if p["name"] == to]
+        if len(matches) != 1:
+            raise validation_failed("to", "目标人不存在、不唯一或无权处理此告警")
+        target = matches[0]
+        previous = self.catalog.person(a.assignee)
+        if previous and target["id"] == previous["id"]:
             raise validation_failed("to", "目标人不能是当前处理人")
         frm = a.assignee
         prev = a.status
-        a.assignee = to
+        a.assignee = target["id"]
         if a.status == AlertStatus.open:
             a.status = AlertStatus.processing
-        await self._log(a, AlertOp.transfer, f"转派：{frm or '未认领'} → {to}", prev, a.status)
+        await self._log(
+            a,
+            AlertOp.transfer,
+            f"转派：{(previous or {}).get('name') or frm or '未认领'} → {target['name']}（{target['id']}）",
+            prev,
+            a.status,
+        )
         return a
 
     async def _close(self, a: Alert, as_: str, reason: str) -> None:
@@ -1112,13 +1370,13 @@ class AlertService:
         ensure_transition(ALERT_TRANSITIONS, a.status, target)
         a.status = target
         a.close_reason = reason
-        a.assignee = a.assignee or self.user.name
+        a.assignee = a.assignee or self.user.id
         await self._log(a, AlertOp.close, f"关闭为{as_}：{reason}（{frm.value} → {as_}）", frm, target)
 
     async def close(self, code: str, as_: str, reason: str) -> Alert:
-        a = await self.get(code)
+        a = await self.get(code, lock=True)
         ensure_transition(ALERT_TRANSITIONS, a.status, AlertStatus(as_))
-        if a.assignee != self.user.name:
+        if not self._mine(a):
             raise NotAssignee()
         if self._locked(await self._run_of(a)):
             raise AlertLockedByAction()
@@ -1126,20 +1384,24 @@ class AlertService:
         return a
 
     async def batch_close(self, codes: list[str], as_: str, reason: str) -> list[str]:
-        """照前端 closable：只作用于勾选项中本人处理中的，不查在途动作（[推断 P3] 未做）。"""
+        """与单条关闭保持相同处理人和在途动作限制；锁定项跳过并返回实际关闭数。"""
         done = []
         for a in await self._by_codes(codes):
-            if a.status == AlertStatus.processing and a.assignee == self.user.name:
+            if (
+                a.status == AlertStatus.processing
+                and self._mine(a)
+                and not self._locked(await self._run_of(a))
+            ):
                 await self._close(a, as_, reason)
                 done.append(a.code)
         return done
 
-    async def start_action(self, code: str) -> tuple[Alert, ActionRun]:
+    async def start_action(self, code: str, params: dict | None = None) -> tuple[Alert, ActionRun]:
         """告警页「发起动作」：处理人即确认人，直接审批中；幂等键 act-<告警号小写>。"""
-        a = await self.get(code)
+        a = await self.get(code, lock=True)
         if a.status != AlertStatus.processing:
             raise InvalidTransition("只有处理中的告警可以发起动作", details={"from": a.status.value})
-        if a.assignee != self.user.name:
+        if not self._mine(a):
             raise NotAssignee()
         rule = self.catalog.rule(a.rule_code)
         if not rule or not rule.get("action"):
@@ -1151,12 +1413,32 @@ class AlertService:
         key = f"act-{a.code.lower()}"
         if self.user.ontology_id != 1:
             key = f"ont-{self.user.ontology_id}-{key}"
-        params = f"{a.value}，阈值 {a.threshold}"  # [推断] 确认卡「触发值」字段
+        from app.modules.dynamic.action_options import launch_definition
+        from app.modules.integration.execution import preflight
+
+        definition, _, _ = await launch_definition(
+            self.session, self.user, self.catalog, t["id"], identity=a.obj_id
+        )
+        params = json.dumps(params or {}, ensure_ascii=False, allow_nan=False)
+        probe = SimpleNamespace(
+            action_type_code=t["id"],
+            type_version=definition["version"],
+            sys_code=definition.get("sysId"),
+            obj_kind=a.obj_kind,
+            obj_id=a.obj_id,
+            params=None,
+            params_text=params,
+            code="pending",
+            ontology_id=self.user.ontology_id,
+        )
+        await preflight(self.session, self.user, probe)
         old = await acts._replay_or_conflict(
             key, {"action_type_code": t["id"], "obj_id": a.obj_id, "alert_id": a.id}, include_seed=False
         )
         if old is None:
-            await acts._check_criteria(t["id"], {"objKind": a.obj_kind, "objId": a.obj_id, "alertId": a.code})
+            await acts._check_criteria(
+                t["id"], {"objKind": a.obj_kind, "objId": a.obj_id, "alertId": a.code, "params": params}
+            )
             approver = approver_for_action(self.catalog, t["id"])
             run = await acts.create_run(
                 type_=t,
@@ -1164,7 +1446,7 @@ class AlertService:
                 source_type=SourceType.alert,
                 idem_key=key,
                 initiator=self.user.name,
-                confirmer=self.user.name,
+                confirmer=self.user.id,
                 approver=approver,
                 obj_kind=a.obj_kind,
                 obj_id=a.obj_id,

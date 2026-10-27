@@ -1,34 +1,56 @@
 <script setup lang="ts">
 /** “用此模板新建”气泡：页面名称、范围、口径、刷新计划；确定后在“我的页面”新增一页并打开它 */
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { message } from 'ant-design-vue';
 import { qaReal } from '@/api/qa';
+import * as pagesApi from '@/api/qaPages';
+import { currentApiContext } from '@/api/http';
+import { confirmDiscard, useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { PAGE_SCOPES, type QaTemplate, type TplCreate } from '@/mock/qa-pages';
 
 const props = defineProps<{ tpl: QaTemplate; disabled?: boolean; reason?: string; size?: 'small' | 'middle'; primary?: boolean }>();
-const emit = defineEmits<{ create: [TplCreate] }>();
+const emit = defineEmits<{ create: [TplCreate]; created: [string] }>();
 const real = qaReal();
 const open = ref(false);
 const name = ref(''); const scope = ref('华东大区'); const caliber = ref('不含税'); const refresh = ref('每天 08:00');
-watch(open, (o) => { if (real) { open.value = false; return; } if (o) name.value = `${props.tpl.name}（华东）`; });
-function ok() { if (real || props.disabled || !name.value.trim()) return; emit('create', { tpl: props.tpl, name: name.value.trim(), scope: scope.value, caliber: caliber.value, refresh: refresh.value }); open.value = false; }
+const saving = ref(false), initial = ref('');
+useUnsavedGuard(() => !!name.value && name.value !== initial.value);
+const blocked = computed(() => props.disabled || saving.value || (real && !pagesApi.templateAccess(props.tpl).canCreate));
+const blockedReason = computed(() => props.reason || (real ? pagesApi.templateAccess(props.tpl).unavailableReason : ''));
+watch(open, (o) => { if (o && !name.value) { name.value = real ? props.tpl.name : `${props.tpl.name}（华东）`; initial.value = name.value; } });
+async function cancel() { if (name.value !== initial.value && !(await confirmDiscard())) return; open.value = false; name.value = ''; }
+async function ok() {
+  if (blocked.value || !name.value.trim()) return;
+  if (!real) { emit('create', { tpl: props.tpl, name: name.value.trim(), scope: scope.value, caliber: caliber.value, refresh: refresh.value }); open.value = false; return; }
+  const context = JSON.stringify(currentApiContext()); saving.value = true;
+  try {
+    const page = await pagesApi.createPage({ name: name.value.trim(), template: { id: props.tpl.id } });
+    if (context !== JSON.stringify(currentApiContext())) return;
+    open.value = false; name.value = ''; emit('created', page.id); message.success('已按原卡片条件新建页面');
+  } catch (error) { if (context === JSON.stringify(currentApiContext())) message.error(error instanceof Error ? error.message : '新建失败，输入已保留'); }
+  finally { saving.value = false; }
+}
 </script>
 
 <template>
-  <a-tooltip v-if="real" title="模板重算执行器尚未接入"><span><a-button :size="size ?? 'small'" :type="primary ? 'primary' : 'link'" disabled>用此模板新建</a-button></span></a-tooltip>
-  <a-popover v-else v-model:open="open" trigger="click" placement="leftTop" :title="`用此模板新建 · ${tpl.name}`">
+  <a-popover v-model:open="open" trigger="click" placement="leftTop" :title="`用此模板新建 · ${tpl.name}`">
     <template #content>
       <div class="ut">
         <div class="ut-f"><span class="c-3 ut-l">页面名称</span><a-input v-model:value="name" :maxlength="30" /></div>
+        <div v-if="real" class="ut-f"><span class="c-3 ut-l">取数条件</span><span>保留原卡片条件，按当前数据权限读取</span></div>
+        <div v-if="real" class="ut-f"><span class="c-3 ut-l">刷新</span><span>手动刷新</span></div>
+        <template v-else>
         <div class="ut-f"><span class="c-3 ut-l">范围</span><a-select v-model:value="scope" class="ut-c" :options="PAGE_SCOPES.map((s) => ({ value: s, label: s }))" /></div>
         <div class="ut-f"><span class="c-3 ut-l">口径</span>
           <a-radio-group v-model:value="caliber"><a-radio value="不含税">不含税</a-radio><a-radio value="含税">含税</a-radio></a-radio-group>
         </div>
         <div class="ut-f"><span class="c-3 ut-l">刷新</span><a-select v-model:value="refresh" class="ut-c" :options="['每小时整点', '每天 08:00', '每周一 08:00', '手动刷新'].map((s) => ({ value: s, label: s }))" /></div>
-        <div class="t-12 c-3">将生成 {{ tpl.cards.length }} 张卡片，口径取当前发布版本。</div>
-        <div class="ut-btns"><a-button size="small" @click="open = false">取消</a-button><a-button size="small" type="primary" :disabled="!name.trim()" @click="ok">新建</a-button></div>
+        </template>
+        <div class="t-12 c-3">将生成 {{ tpl.cards.length }} 张卡片。</div>
+        <div class="ut-btns"><a-button size="small" :disabled="saving" @click="cancel">取消</a-button><a-button size="small" type="primary" :loading="saving" :disabled="blocked || !name.trim()" @click="ok">新建</a-button></div>
       </div>
     </template>
-    <a-tooltip :title="reason"><a-button :size="size ?? 'small'" :type="primary ? 'primary' : 'link'" :disabled="disabled">用此模板新建</a-button></a-tooltip>
+    <a-tooltip :title="blockedReason"><a-button :size="size ?? 'small'" :type="primary ? 'primary' : 'link'" :disabled="blocked">用此模板新建</a-button></a-tooltip>
   </a-popover>
 </template>
 

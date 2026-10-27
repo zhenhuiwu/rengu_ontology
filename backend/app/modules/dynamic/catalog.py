@@ -117,6 +117,7 @@ async def get_alert_catalog(
 
 
 async def _load_catalog(session, mode: str, *, rule_code: str | None = None, user=None) -> DatabaseRefCatalog:
+    from app.common.ontology import require_ontology_id
     from app.modules.action.models import ActionType, TypeStatus
     from app.modules.action.sections import action_def
     from app.modules.admin.models import SysUser, UserStatus
@@ -124,6 +125,7 @@ async def _load_catalog(session, mode: str, *, rule_code: str | None = None, use
     from app.modules.dynamic.rules_models import Rule
     from app.modules.dynamic.sections import rule_def
     from app.modules.integration.models import ExtSystem
+    from app.modules.ontology.models import OntologyMember
     from app.modules.static.models import ObjectStatus, ObjectType
 
     types = []
@@ -163,7 +165,11 @@ async def _load_catalog(session, mode: str, *, rule_code: str | None = None, use
         {"id": code, "name": name}
         for code, name in await session.execute(
             select(SysUser.code, SysUser.name)
-            .where(SysUser.status == UserStatus.active)
+            .join(OntologyMember, OntologyMember.user_id == SysUser.id)
+            .where(
+                SysUser.status == UserStatus.active,
+                OntologyMember.ontology_id == require_ontology_id(session),
+            )
             .order_by(SysUser.code)
         )
     ]

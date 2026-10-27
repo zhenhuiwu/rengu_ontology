@@ -20,6 +20,8 @@ import { METRICS } from '@/mock/metrics';
 import { fmtInt, fmtMoney } from '@/mock/format';
 
 const staticApi = apiClient('static');
+const objectApi = apiClient('qa');
+const realMetadata = () => objectApi.isReal() || staticApi.isReal();
 
 export type Visibility = 'prominent' | 'normal' | 'hidden';
 export interface PropMeta {
@@ -42,7 +44,7 @@ export type FacetMeta =
 export type FilterVal = string[] | { min?: string | number | null; max?: string | number | null };
 export type Filters = Record<string, FilterVal>;
 
-const NUMERIC = new Set(['decimal', 'integer']);
+const NUMERIC = new Set(['decimal', 'integer', 'int']);
 const TIME = new Set(['date', 'timestamp']);
 export const isNumeric = (p: PropMeta) => NUMERIC.has(p.dataType);
 export const isRange = (p: PropMeta) => NUMERIC.has(p.dataType) || TIME.has(p.dataType);
@@ -80,7 +82,7 @@ export function metaFromProps(props: ObjProp[]): PropMeta[] {
 function withTitle(t: TypeBrief, props: PropMeta[], sample: string[], extra: Partial<TypeMeta> = {}): TypeMeta {
   const pk = extra.pkProp || props.find((p) => p.pk)?.key || props[0]?.key || 'id';
   const title = extra.titleProp || props.find((p) => p.title)?.key || pk;
-  return { ...extra, metrics: extra.metrics ?? (staticApi.isReal() ? [] : mockMetrics(t)), ...t, properties: props, titleProp: title, pkProp: pk, sampleQuestions: sample };
+  return { ...extra, metrics: extra.metrics ?? (realMetadata() ? [] : mockMetrics(t)), ...t, properties: props, titleProp: title, pkProp: pk, sampleQuestions: sample };
 }
 /** mock 兜底：维度里包含本类型的已发布指标 [推断]，没有口径变体 */
 const mockMetrics = (t: TypeBrief): MetricMeta[] =>
@@ -91,7 +93,7 @@ const sampleOf = (t: TypeBrief) => objectMeta(t.id, t.name, t.group).qs.map((q) 
 
 export function metaContextKey(): string {
   const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
-  return JSON.stringify([staticApi.isReal(), ontologyId, demoAs, previewAs, ver]);
+  return JSON.stringify([staticApi.isReal(), objectApi.isReal(), ontologyId, demoAs, previewAs, ver]);
 }
 function contextOptions() {
   const { ontologyId, demoAs, previewAs, ver } = currentApiContext();
@@ -105,10 +107,11 @@ export function listTypes(): Promise<TypeBrief[]> {
   const opts = contextOptions();
   if (!typesCache.has(key)) {
     typesCache.set(key, (async () => {
-      if (!staticApi.isReal()) return mockTypes();
+      if (!realMetadata()) return mockTypes();
+      const api = objectApi.isReal() ? objectApi : staticApi;
       const rows: (TypeBrief & { status?: string; hidden?: boolean })[] = [];
       for (let page = 1; ; page++) {
-        const r = await staticApi.get<PageResult<TypeBrief & { status?: string; hidden?: boolean }>>('/object-types', { ...opts, query: { ...opts.query, page, size: 200 } });
+        const r = await api.get<PageResult<TypeBrief & { status?: string; hidden?: boolean }>>('/object-types', { ...opts, query: { ...opts.query, page, size: 200 } });
         rows.push(...r.items);
         if (!r.items.length || typeof r.total !== 'number' || rows.length >= r.total) break;
       }
@@ -133,10 +136,11 @@ export function loadMeta(id: string, withLinks = true): Promise<TypeMeta | null>
       const t = (await listTypes()).find((x) => x.id === id);
       if (!t) return null;
       // 真实关系加载失败同样阻止展示，避免把旧缓存当成当前定义。
-      if (withLinks) await loadStatic(['links']);
-      if (staticApi.isReal()) {
+      if (withLinks && !objectApi.isReal()) await loadStatic(['links']);
+      if (realMetadata()) {
         type RawMeta = { titleProp: string | null; pkProp?: string | null; kwPlaceholder?: string; hasData?: boolean; properties: (Partial<PropMeta> & { key: string })[]; sampleQuestions?: (string | null)[]; metrics?: MetricMeta[] };
-        const [m, sp] = await Promise.all([staticApi.get<RawMeta>(`/object-types/${encodeURIComponent(id)}/meta`, opts), staticProps(id, opts)]);
+        const api = objectApi.isReal() ? objectApi : staticApi;
+        const [m, sp] = await Promise.all([api.get<RawMeta>(`/object-types/${encodeURIComponent(id)}/meta`, opts), objectApi.isReal() ? Promise.resolve([] as ObjProp[]) : staticProps(id, opts)]);
         const base = new Map(metaFromProps(sp).map((p) => [p.key, p]));
         const props = m.properties.map((p, i) => {
           const b = base.get(p.key) ?? metaFromProps([{ api: p.key, name: p.name ?? p.key, type: p.dataType ?? 'string', group: '其他', source: '', desc: '' }])[0];

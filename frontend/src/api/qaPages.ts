@@ -3,7 +3,7 @@
  * 单独成文件，不动工作台 / 调优共用的 qa.ts。形状同 src/mock/qa-pages.ts（QaPageFull / QaTemplate）。
  */
 import type { PageCard, QaPageFull, QaTemplate, RefreshPlan, ShareSetting, Subscription } from '@/mock/qa-pages';
-import { apiClient, type PageResult } from './http';
+import { apiClient, workspaceFetch, currentApiContext, type PageResult } from './http';
 
 const api = apiClient('qa');
 
@@ -14,14 +14,16 @@ export const listPages = (q: PageListQ) => api.get<PageList>('/pages', { query: 
 /** P3 页面详情 */
 export const getPage = (id: string) => api.get<QaPageFull>(`/pages/${id}`);
 /** P2 新建（空白 / 用模板）；template.refresh 是模板气泡里选的计划 */
-export interface PageCreate { name: string; scope?: string; template?: { id: string; caliber?: string; refresh?: Omit<RefreshPlan, 'onFail'> & { onFail?: RefreshPlan['onFail'] } } }
+export interface PageCreate { name: string; scope?: string; sourceSessionId?: string; template?: { id: string; caliber?: string; refresh?: Omit<RefreshPlan, 'onFail'> & { onFail?: RefreshPlan['onFail'] } } }
 export const createPage = (b: PageCreate) => api.post<QaPageFull>('/pages', b);
 /** P4 重命名 */
 export const renamePage = (id: string, name: string) => api.patch<QaPageFull>(`/pages/${id}`, { name });
 /** P5 删除 */
 export const deletePage = (id: string) => api.delete<void>(`/pages/${id}`);
 /** P6 立即刷新 */
-export interface RefreshResult { status: QaPageFull['status']; statusNote?: string; lastRefresh: string; dataAsOf: string }
+export type PageAccess = QaPageFull & { ownerId?: string; ownerDept?: string | null; lockVersion?: number; canEdit?: boolean; canShare?: boolean; canRefresh?: boolean; refreshUnavailableReason?: string; scheduleActive?: boolean; subscriptionActive?: boolean };
+export const access = (page: QaPageFull) => page as PageAccess;
+export type RefreshResult = PageAccess;
 export const refreshPage = (id: string) => api.post<RefreshResult>(`/pages/${id}:refresh`);
 /** P7 固定到页面（工作台） */
 export const pinToPage = (id: string, b: { turnId: string; title: string; tableId?: string; chartId?: string }) => api.post<QaPageFull>(`/pages/${id}/cards`, b);
@@ -34,8 +36,19 @@ export const saveCardOrder = (id: string, order: string[]) => api.put<{ cards: P
 export const saveSchedule = (id: string, refresh: RefreshPlan, sub: Subscription) =>
   api.put<{ refresh: RefreshPlan; sub: Subscription; nextRun: string }>(`/pages/${id}/schedule`, { refresh, sub });
 /** P10 共享 */
-export const saveShare = (id: string, s: ShareSetting) =>
-  api.put<ShareSetting & { linkUrl?: string; newViewers: string[]; newGrants: string[] }>(`/pages/${id}/share`, s);
+export const saveShare = (id: string, s: ShareSetting, lockVersion?: number) =>
+  api.put<ShareSetting & { linkUrl?: string; newViewers: string[]; newGrants: string[]; lockVersion: number }>(`/pages/${id}/share`, { ...s, lockVersion });
+export interface ShareCandidate { userId: string; name: string; dept: string | null; canEdit: boolean }
+export const shareOptions = (id: string, page: number, kw: string) => api.get<PageResult<ShareCandidate>>(`/pages/${id}/share-options`, { query: { page, size: 10, kw } });
+export const saveAsTemplate = (id: string, name: string) => api.post<{ id: string; name: string }>(`/pages/${id}:template`, { name });
+export const templateAccess = (template: QaTemplate) => template as QaTemplate & { canCreate?: boolean; unavailableReason?: string };
+export async function exportPage(id: string) {
+  const ctx = currentApiContext();
+  const response = await workspaceFetch(`/api/qa/v1/pages/${encodeURIComponent(id)}/export`, { headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } });
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.message || '导出失败'); }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a'); link.href = url; link.download = `${id}.csv`; link.click(); URL.revokeObjectURL(url);
+}
 /** P11 模板库 / P12 模板详情 */
 export const listTemplates = (q: { kw?: string; scene?: string; page: number; size: number }) => api.get<PageResult<QaTemplate>>('/templates', { query: q });
 

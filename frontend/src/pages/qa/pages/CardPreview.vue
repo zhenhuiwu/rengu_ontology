@@ -10,7 +10,7 @@ import EChart from '@/components/EChart.vue';
 import InfoTip from '../InfoTip.vue';
 import type { PageCard } from '@/mock/qa-pages';
 
-const props = defineProps<{ card: PageCard & { denied?: boolean }; index?: number; structureOnly?: boolean }>();
+const props = defineProps<{ card: PageCard & { denied?: boolean; unavailable?: string; truncated?: boolean }; index?: number; structureOnly?: boolean }>();
 const option = computed(() => ({
   grid: { left: 36, right: 8, top: 8, bottom: 20 },
   tooltip: { trigger: 'axis' },
@@ -30,13 +30,15 @@ const option = computed(() => ({
       <span class="t-12 c-3 cp-viz">{{ card.viz }}</span>
     </div>
     <div class="cp-body">
-      <div v-if="card.denied" class="cp-deny t-12 c-3" title="看到的数据按各自的数据权限裁剪，范围外的卡片显示“无权限”。"><LockOutlined /> 无权限</div>
+      <div v-if="card.denied" class="cp-deny t-12 c-3"><LockOutlined /> {{ card.unavailable || '当前身份无权查看结果' }}</div>
       <div v-else-if="structureOnly" class="cp-deny t-12 c-3">仅卡片结构 · 尚无计算结果</div>
       <template v-else-if="card.viz === '指标卡'">
         <div class="cp-ell" :title="card.sub"><span class="t-20 fw-600 num c-1">{{ card.value }}</span> <span class="t-12 c-3">{{ card.unit }}</span> <span class="t-12 c-2 num">{{ card.sub }}</span></div>
       </template>
       <div v-else-if="card.viz === '表格'" class="cp-tbl">
-        <div v-for="r in card.rows" :key="r[0]" class="cp-tr t-12"><span class="cp-ell c-2">{{ r[0] }}</span><span class="num c-1">{{ r[1] }}</span></div>
+        <div v-for="(r, rowIndex) in card.rows" :key="rowIndex" class="cp-tr t-12"><span class="cp-ell c-2" :title="r[0]">{{ r[0] }}</span><span class="num c-1 cp-ell" :title="r[1]">{{ r[1] }}</span></div>
+        <span v-if="!card.rows?.length" class="t-12 c-3">查询结果为空</span>
+        <span v-if="card.truncated" class="t-12 c-3">仅显示前 200 行中的预览</span>
       </div>
       <div v-else class="cp-chart"><EChart :option="option" /></div>
     </div>

@@ -13,7 +13,7 @@ import { answerFor, type AskAnswer, type AskScope } from '@/mock/objects-qa';
 import { fmtInt } from '@/mock/format';
 import { message } from 'ant-design-vue';
 import { scopedAsk, type ScopedAskIn } from '@/api/qaObjects';
-import { qaLive } from '../../qa/qaFallback';
+import { qaReal } from '@/api/qa';
 import { errText } from '../../qa/useQaSession';
 import { currentApiContext } from '@/api/http';
 
@@ -21,6 +21,7 @@ const props = defineProps<{ scope: AskScope; suggestions: string[]; initial?: st
 const open = defineModel<boolean>('open', { default: false });
 const { readonly: ro, reason } = useReadonly();
 const pv = usePreview();
+const qaLive = computed(qaReal);
 /** 提问只读：预览时照常可问，回答只含被预览用户范围内的数据 */
 const readonly = computed(() => ro.value && !pv.active.value);
 const q = ref('');
@@ -37,6 +38,9 @@ watch(open, (v) => {
   if (props.initial && !readonly.value) send();
 }, { immediate: true });
 watch(() => JSON.stringify(currentApiContext()), () => {
+  seq++; answer.value = null; asked.value = ''; error.value = ''; loading.value = false;
+}, { flush: 'sync' });
+watch(() => JSON.stringify([props.scope, props.liveScope]), () => {
   seq++; answer.value = null; asked.value = ''; error.value = ''; loading.value = false;
 }, { flush: 'sync' });
 

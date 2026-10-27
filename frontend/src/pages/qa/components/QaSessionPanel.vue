@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * 问数工作台左栏：新建会话、关键词搜索 + 时间筛选、历史会话（按可用高度分页，simple 分页贴栏底）；常用问题、我的页面贴底。
+ * 问数工作台左栏：新建会话、关键词搜索 + 时间筛选、历史会话（每页 10 条，simple 分页贴栏底）；常用问题、我的页面贴底。
  * 翻页、搜索、筛选写在 URL：?sessPage=2&sessQ=库存&sessRange=7d
  * 悬停会话显示“…”菜单：重命名（行内编辑）、删除（Popconfirm 二次确认）。
  * “常用问题 · 管理”“我的页面 · 全部”不跳转，打开本页抽屉（?panel=favorites / ?panel=pages）。
  */
-import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
 import { QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
@@ -23,10 +23,10 @@ import { useScopeCaliber } from '../qaScope';
 const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
-const pageSize = ref(12);
+const pageSize = ref(10);
 const listEl = ref<HTMLElement>();
 const { sessions: mockList, activeId: active, newSession, real, live, detail, listTick, favTick, newSessionReal, creating } = useQaSession();
-/* 真接口 W1 与本地分页使用同一可用高度条数。 */
+/* 真接口 W1 与本地分页固定每页 10 条。 */
 const contextKey = () => { const c = currentApiContext(); return JSON.stringify([c.ontologyId, c.demoAs, c.ver, c.previewAs]); };
 const filterKey = () => JSON.stringify([contextKey(), kw.value.trim(), range.value]);
 const listKey = () => JSON.stringify([filterKey(), page.value, pageSize.value]);
@@ -154,36 +154,7 @@ if (real) {
   watch([contextKey, live, kw, range, page, pageSize, listTick], load, { immediate: true });
   watch([contextKey, live, favTick], loadShortcuts, { immediate: true });
 }
-let observer: ResizeObserver | undefined;
-let rowHeight = 0;
-function fitRows() {
-  const el = listEl.value;
-  if (!el) return;
-  const row = el.querySelector<HTMLElement>('.qa-ss-item:not(.edit)');
-  const measured = row?.getBoundingClientRect().height;
-  if (measured && measured > 0) rowHeight = measured;
-  // 无记录时使用现有文字行高 + .qa-ss-item 的上下各4px内边距。
-  const height = rowHeight || parseFloat(getComputedStyle(el).lineHeight) + 8;
-  if (!(height > 0)) return;
-  const size = Math.min(200, Math.max(1, Math.floor(el.getBoundingClientRect().height / height)));
-  if (size === pageSize.value) return;
-  const selected = rows.value.findIndex((s) => s.id === active.value);
-  const anchor = (page.value - 1) * pageSize.value + Math.max(0, selected);
-  pageSize.value = size;
-  page.value = Math.floor(anchor / size) + 1;
-}
-async function observeRows() {
-  await nextTick();
-  if (disposed || !observer || !listEl.value) return;
-  observer.disconnect();
-  observer.observe(listEl.value);
-  const row = listEl.value.querySelector<HTMLElement>('.qa-ss-item:not(.edit)');
-  if (row) observer.observe(row);
-  fitRows();
-}
-onMounted(() => { observer = new ResizeObserver(fitRows); void observeRows(); });
-watch([rows, editing], observeRows);
-onBeforeUnmount(() => { disposed = true; ++reqSeq; ++shortcutSeq; observer?.disconnect(); });
+onBeforeUnmount(() => { disposed = true; ++reqSeq; ++shortcutSeq; });
 const when = (date: string) => {
   const d = new Date();
   const today = real ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : QA_TODAY;

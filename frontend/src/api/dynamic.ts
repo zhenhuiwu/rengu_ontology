@@ -32,12 +32,13 @@ export interface AlertLogDto { time: string; text: string; who: string; abnormal
 /** 后台 AlertOut：Alert + 通用维度 dims + 对象类型显示名 + 关联动作（actionRef / actionStatus 同 Alerts.vue Row） */
 export interface AlertDto extends Omit<Alert, 'storeId' | 'storeLabel'> {
   objKindLabel: string; dims: AlertDim[];
+  assigneeId?: string | null; canClose: boolean; canClaim: boolean; assignedToMe: boolean;
   actionRef?: string | null; actionStatus?: string | null; actionId?: string | null;
 }
-export interface AlertRuleDto { id: string; name: string; version: string; trigger: string; condition: string; schedule: string; dedupe: string; action?: string; metric?: string; confirmer?: string }
+export interface AlertRuleDto { id: string; name: string; version: string; trigger: string | { kind?: string; text?: string; eventId?: string }; condition?: string; expr?: string; conds?: { expr?: string; field?: string; op?: string; value?: unknown }[]; logic?: string; schedule: string; dedupe: string; action?: string; metric?: string; confirmer?: string }
 export interface AlertCan { claim: boolean; transfer: boolean; close: boolean; startAction: boolean; reasons: Record<string, string> }
 /** approver：发起动作时的审批人，取规则绑定动作类型的审批人配置（无则 null） */
-export interface AlertDetailDto extends AlertDto { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean; log: AlertLogDto[]; can: AlertCan }
+export interface AlertDetailDto extends AlertDto { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean; log: AlertLogDto[]; can: AlertCan; actionParams: LaunchParam[] }
 export interface AlertPageDto extends PageResult<AlertDto> { counts: Record<AlertTab, number> }
 export interface AlertQuery { status: AlertTab; level?: string; ruleId?: string; kw?: string; page: number; size: number }
 
@@ -52,8 +53,8 @@ export const transferAlert = (id: string, to: string) => inContext(api.post<Aler
 export const closeAlert = (id: string, as: '已解决' | '已忽略', reason: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:close`, { as, reason }));
 export const batchCloseAlerts = (ids: string[], as: '已解决' | '已忽略', reason: string) =>
   inContext(api.post<{ closed: number; ids: string[] }>('/alerts:batch-close', { ids, as, reason }));
-export const startAlertAction = (id: string) => inContext(api.post<{ alert: AlertDetailDto; action: ActionRunDetailDto }>(`/alerts/${enc(id)}:start-action`));
-export const listPeople = () => api.get<string[]>('/people');
+export const startAlertAction = (id: string, params: Record<string, unknown>) => inContext(api.post<{ alert: AlertDetailDto; action: ActionRunDetailDto }>(`/alerts/${enc(id)}:start-action`, { params }));
+export const listPeople = (alertId: string) => api.get<{ id: string; name: string }[]>('/people', { query: { alertId } });
 export const getAlertMeta = () => api.get<{ rules: { id: string; name: string }[] }>('/alerts/meta');
 
 // ---------------- 动作 ----------------
@@ -62,6 +63,7 @@ export type ActionTab = 'pending' | 'records' | 'unknown';
 /** 后台 ActionRunOut（动作中心记录 source 为对象）。可空字段在页面上按 mock 的可选字段处理 */
 export type ActionRunDto = Omit<ActionRecord, 'log' | 'failReason' | 'unknownReason' | 'reconcile' | 'retryOf' | 'retriedAs'> & {
   typeId: string; confirmer?: string | null;
+  dispatchPhase?: 'queued' | 'claimed' | null; paramsUnavailable?: string | null;
   failReason?: string; unknownReason?: string; reconcile?: string; retryOf?: string; retriedAs?: string;
 };
 export interface ActionCan { confirm: boolean; withdraw: boolean; approve: boolean; resubmit: boolean; reconcile: boolean; reasons: Record<string, string> }
@@ -69,6 +71,7 @@ export interface ActionRunDetailDto extends ActionRunDto { log: ActionLog[]; can
 export interface ActionRunPageDto extends PageResult<ActionRunDto> { counts: Record<ActionTab, number>; statusCounts: Record<string, number> }
 export interface ActionRunQuery { tab: ActionTab; status?: string; action?: string; sysId?: string; kw?: string; page: number; size: number }
 export interface ActionMetaDto {
+  canManage?: boolean;
   actionNames: string[];
   actionSystems: { id: SysId; name: string }[];
   actionMeta: Record<string, { sysId: SysId | null; kind: string; version: string; approver: string | null; approverId?: string | null; approvalRequired?: boolean; approvalConfigured?: boolean; call: string }>;
@@ -107,7 +110,12 @@ export const resubmitActionRun = async (id: string) => {
 export const reconcileActionRun = async (id: string, result: ReconcileResult, note: string) =>
   clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:reconcile`, { result, note })));
 /** 暂存动作（规则 / 问数 / 推演 / 手动入口用；动作中心、告警页本身没有暂存入口） */
-export const stageActionRun = async (body: Record<string, unknown>) => clean(await api.post<ActionRunDetailDto>('/action-runs:stage', body));
+export const stageActionRun = async (body: Record<string, unknown>) => clean(await inContext(api.post<ActionRunDetailDto>('/action-runs:stage', body)));
+export interface LaunchParam { name: string; api: string; type: string; required: boolean; def?: string; rule?: string }
+export interface LaunchAction { id: string; name: string; version: string; kind: string; available: boolean; reason?: string | null; params: LaunchParam[]; approval: string }
+export const listLaunchActions = () => api.get<LaunchAction[]>('/actions/available');
+export const listActionTargets = (code: string, kw: string, page: number) => api.get<PageResult<{ id: string; label: string }>>(`/actions/${enc(code)}/targets`, { query: { kw, page, size: 10 } });
+export const validateActionLaunch = (code: string, body: { objKind: string; objId: string; params: Record<string, unknown> }) => inContext(api.post<{ passed: boolean; message: string }>(`/actions/${enc(code)}:validate`, body));
 
 export type { AlertStatus, ActionStatus };
 

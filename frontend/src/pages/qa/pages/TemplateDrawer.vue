@@ -9,7 +9,7 @@ import UseTemplatePop from './UseTemplatePop.vue';
 import type { QaTemplate, TplCreate } from '@/mock/qa-pages';
 
 const props = defineProps<{ tpl?: QaTemplate; readonly: boolean; reason: string }>();
-const emit = defineEmits<{ close: []; create: [TplCreate] }>();
+const emit = defineEmits<{ close: []; create: [TplCreate]; created: [string] }>();
 const real = qaReal();
 const SIZE = 6; const page = ref(1);
 watch(() => props.tpl?.id, () => { page.value = 1; });
@@ -20,10 +20,10 @@ const calibers = computed(() => [...new Set((props.tpl?.cards ?? []).map((c) => 
 <template>
   <a-drawer :open="!!tpl" :width="760" @close="emit('close')">
     <template #title>
-      <span v-if="tpl" class="td-title">模板预览 · {{ tpl.name }} <InfoTip :title="`${tpl.desc}。模板只含卡片结构和口径，不含数据；${real ? '尚未配置重算执行器，仅展示数据库卡片结构。' : '新建后按所选范围取数，示例数值仅供预览。'}`" /></span>
+      <span v-if="tpl" class="td-title">模板预览 · {{ tpl.name }} <InfoTip :title="`${tpl.desc}。模板只含卡片结构和口径，不含数据；新建后按当前身份的数据权限取数。`" /></span>
     </template>
     <template #extra>
-      <UseTemplatePop v-if="tpl" :tpl="tpl" size="middle" primary :disabled="readonly" :reason="reason" @create="(e) => emit('create', e)" />
+      <UseTemplatePop v-if="tpl" :tpl="tpl" size="middle" primary :disabled="readonly" :reason="reason" @create="(e) => emit('create', e)" @created="(id) => emit('created', id)" />
     </template>
     <div v-if="tpl" class="td">
       <div class="td-meta">

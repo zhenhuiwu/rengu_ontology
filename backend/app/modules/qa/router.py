@@ -146,7 +146,7 @@ async def list_sessions(
     session: SessionDep,
     user: CurrentUserDep,
     ctx: ViewContextDep,
-    p: P12,
+    p: P10,
     q: str | None = None,
     range_: Annotated[Literal["all", "today", "7d", "30d"], Query(alias="range")] = "all",
 ):
@@ -281,14 +281,21 @@ async def ask(
     if s is None or s.owner_id != pk:
         raise NotFound("会话不存在", details={"id": sid})
     question = body.question.strip()
+    from app.modules.qa.page_execution import saved_plan
+    from app.modules.versioning.repo import ReleaseRepo
+
+    release = await ReleaseRepo(session).latest()
     try:
         lines = svc.caliber_lines(s.caliber, await svc.variant_index(session, ctx.ver)) if s.caliber else []
         kind, snapshot, rows, elapsed, sql = await chain.answer(
-            session, conn, llm, user, question, caliber_lines=lines
+            session, conn, llm, user, question, caliber_lines=lines, session_scope=s.scope
         )
     except DBAPIError as e:  # 生成的 SQL 过了网关但执行出错（列不存在、超时等）：不落轮次，前端提示换个问法
         raise QaSqlFailed(details={"reason": type(e.orig).__name__ if e.orig else type(e).__name__}) from e
     await get_adapter(session).xact_lock(session, f"qa.session.turn.{sid}")
+    latest = await ReleaseRepo(session).latest()
+    if (release.id if release else None) != (latest.id if latest else None):
+        raise AppError("本体发布版本已变化，请重新提问", code="VERSION_CONFLICT", status_code=409)
     # 等锁期间会话可能被更新或删除，不能沿用调用 LLM 前的 lock_version。
     s = await session.scalar(
         select(QaSession)
@@ -308,6 +315,9 @@ async def ask(
         refs=body.refs,
         snapshot=snapshot,
         sql_text=sql,
+        sem_plan={"execution": saved_plan(sql, release, s.scope)} if sql else None,
+        release_id=release.id if release else None,
+        answered_ver=release.ver if release else None,
         asked_at=now,
         elapsed_ms=elapsed,
     )
@@ -560,7 +570,7 @@ async def list_pages(
     session: SessionDep,
     user: CurrentUserDep,
     ctx: ViewContextDep,
-    p: P15,
+    p: P10,
     kw: str | None = None,
     src: PageSourceKind | None = None,
     share: Literal["已共享", "仅自己"] | None = None,
@@ -569,7 +579,7 @@ async def list_pages(
 ):
     pk, u, viewer = await svc.effective_viewer(session, user, ctx)
     repo = r.PageRepo(session)
-    visible = repo.visible_clause(pk, u.dept, include_shared=ctx.preview_as is not None)
+    visible = repo.visible_clause(pk, u.dept, include_shared=True)
     full = view == "full"
     shared = None if share is None else share == "已共享"
     rows, total = await repo.list_page(
@@ -577,7 +587,7 @@ async def list_pages(
     )
     wb_total = await r.count_of(session, repo.list_query(visible, src=PageSourceKind.workbench))
     if full:  # 卡片判权同 P3（共享页在预览时会出现在列表里）
-        items = [svc.page_full_out(x, deny_cards=await svc.cards_denied_for(viewer, pk, x)) for x in rows]
+        items = [await svc.page_view_out(session, x, viewer, ctx, metadata_only=True) for x in rows]
     else:
         items = [svc.page_brief_out(x) for x in rows]
     return PageListOut.of(items, total, p, from_workbench_count=wb_total)
@@ -596,20 +606,25 @@ async def get_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: Vie
     x = await repo.detail(pid)
     if x is None or not await repo.is_visible(x.id, repo.visible_clause(pk, u.dept, include_shared=True)):
         raise NotFound("页面不存在", details={"id": pid})
-    # EXTENSION POINT (qa) [推断]：卡片存的是拥有者权限下算出的值。查看人不是拥有者（被共享人，或预览
-    # 他人时打开的共享页）且 auth.row_filter(查看人) 不是 None（桩：非本体管理员一律 DENY_ALL）时，整页卡片
-    # 标 {denied:true}（「无权限」），不出数值；拥有者看自己的页面不变。row_filter 接入真实范围后，
-    # 改成按查看人的范围逐张重算卡片（qa-api P3「卡片按查看人重算」），不再整页标无权限。
-    return svc.page_full_out(x, deny_cards=await svc.cards_denied_for(viewer, pk, x))
+    # A shared read computes an ephemeral current-viewer projection; owner caches are never reused across users.
+    return await svc.page_view_out(session, x, viewer, ctx, temporary=True)
 
 
 @router.get("/templates", dependencies=_PG, response_model=Page[TemplateOut], summary="P11 模板库")
 async def list_templates(
-    session: SessionDep, user: CurrentUserDep, p: P15, kw: str | None = None, scene: str | None = None
+    session: SessionDep, user: CurrentUserDep, p: P10, kw: str | None = None, scene: str | None = None
 ):
     repo = r.TemplateRepo(session)
     rows, total = await repo.list_page(repo.list_query(_kw(kw), scene), p)
-    return Page.of([svc.template_out(t) for t in rows], total, p)
+    from app.modules.qa.page_execution import template_capability
+
+    items = []
+    for template in rows:
+        can_create, reason = await template_capability(session, template)
+        if user.ontology_role not in ("owner", "editor"):
+            can_create, reason = False, "当前本体工作空间为只读权限"
+        items.append({**svc.template_out(template), "can_create": can_create, "unavailable_reason": reason})
+    return Page.of(items, total, p)
 
 
 @router.get("/templates/{tid}", dependencies=_PG, response_model=TemplateOut, summary="P12 模板详情")
@@ -618,7 +633,12 @@ async def get_template(tid: str, session: SessionDep, user: CurrentUserDep):
     t = (await session.scalars(repo.list_query(None, None).where(QaTemplate.code == tid))).first()
     if t is None:
         raise NotFound(repo.not_found_message, details={"id": tid})
-    return svc.template_out(t)
+    from app.modules.qa.page_execution import template_capability
+
+    can_create, reason = await template_capability(session, t)
+    if user.ontology_role not in ("owner", "editor"):
+        can_create, reason = False, "当前本体工作空间为只读权限"
+    return {**svc.template_out(t), "can_create": can_create, "unavailable_reason": reason}
 
 
 # ---------------------------------------------------------------- 对象类型

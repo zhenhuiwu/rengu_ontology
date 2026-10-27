@@ -44,6 +44,10 @@ class AlertOut(ApiModel):
     cutoff: DateTimeMin
     status: str
     assignee: str | None = None
+    assignee_id: str | None = None
+    can_close: bool = False
+    can_claim: bool = False
+    assigned_to_me: bool = False
     # 关联动作（Alerts.vue Row.actionRef / actionStatus；actionId 为补充，方便跳到动作中心）
     action_ref: str | None = None
     action_status: str | None = None
@@ -79,6 +83,17 @@ class AlertDetail(AlertOut):
     locked: bool
     log: list[AlertLogOut]
     can: AlertCan
+    action_params: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AlertActionIn(ApiModel):
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class LaunchValidateIn(ApiModel):
+    obj_kind: str = Field(min_length=1, max_length=64)
+    obj_id: str = Field(min_length=1, max_length=64)
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class IdsIn(ApiModel):
@@ -155,6 +170,9 @@ class ActionRunOut(ApiModel):
     alert_id: str | None = None
     rule_id: str | None = None
 
+    dispatch_phase: Literal["queued", "claimed"] | None = None
+    params_unavailable: str | None = None
+
 
 class ActionCan(ApiModel):
     confirm: bool
@@ -210,6 +228,9 @@ class StageIn(ApiModel):
     obj_label: str
     params: str | None = None
     approver: str | None = None
+    idempotency_key: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
     @model_validator(mode="after")
     def _need_action(self) -> "StageIn":

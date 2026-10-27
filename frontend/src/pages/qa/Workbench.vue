@@ -88,14 +88,11 @@ if (sess.real) {
   const q = route.query.session;
   if (typeof q === 'string' && q && !sess.activeId.value) sess.activeId.value = q;
 }
-const shareLink = computed(() => `${location.origin}/use/qa/workbench?session=${sess.activeId.value}`);
-async function copyLink() {
-  try { await navigator.clipboard.writeText(shareLink.value); message.info('链接已复制'); } catch { message.info('浏览器不允许自动复制，请手动选中复制'); }
-}
+const canOrganize = computed(() => !readonly.value && (!sess.real || !!sess.detail.value?.turns.some((turn) => (turn as typeof turn & { pinnable?: boolean }).pinnable)));
 function toPage() {
-  if (readonly.value) return;
+  if (!canOrganize.value) return;
   const title = sess.live.value ? sess.detail.value?.title ?? '' : sess.sessions.value.find((s) => s.id === sess.activeId.value)?.title ?? '';
-  router.push({ path: '/use/qa/pages', query: { newName: title } });
+  router.push({ path: '/use/qa/pages', query: { ontology: route.query.ontology, newName: title.slice(0, 30), ...(sess.real ? { source_session: sess.activeId.value } : {}) } });
 }
 function onPinned(page: string) { pin.value = ''; message.success(`已固定到「${page}」`); }
 /** 固定到页面：真接口时记下是哪一轮（P7 用）；演示数据固定第一个会话的主回答卡 */
@@ -203,18 +200,8 @@ onMounted(() => {
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip v-if="pv.active.value" :title="pv.reason.value"><a-button disabled><template #icon><ShareAltOutlined /></template>分享</a-button></a-tooltip>
-    <a-popover v-else trigger="click" placement="bottomRight" title="分享会话">
-      <template #content>
-        <div class="qa-share">
-          <a-input :value="shareLink" readonly size="small" />
-          <a-button size="small" @click="copyLink">复制链接</a-button>
-        </div>
-        <div class="t-12 c-3 qa-share-tip">拿到链接的人按自己的权限看到结果</div>
-      </template>
-      <a-button><template #icon><ShareAltOutlined /></template>分享</a-button>
-    </a-popover>
-    <a-tooltip :title="reason || '新建一个页面，再把回答卡片固定上去'"><a-button :disabled="readonly" @click="toPage"><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button></a-tooltip>
+    <a-tooltip :title="reason || (canOrganize ? '将可执行回答整理为页面后设置共享成员' : '当前会话尚无可执行的回答')"><a-button :disabled="!canOrganize" @click="toPage"><template #icon><ShareAltOutlined /></template>分享页面</a-button></a-tooltip>
+    <a-tooltip :title="reason || (canOrganize ? '按原回答条件创建页面' : '当前会话尚无可执行的回答')"><a-button :disabled="!canOrganize" @click="toPage"><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button></a-tooltip>
     <a-tooltip :title="pv.active.value ? pv.reason.value : '更多操作暂未开放'"><a-button disabled><template #icon><EllipsisOutlined /></template></a-button></a-tooltip>
   </Teleport>
   <div class="qa-wb">

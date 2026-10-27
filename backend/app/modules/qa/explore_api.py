@@ -3,11 +3,12 @@
 挂在 qa router 上（router.py 末尾 include）。
 
 - 元数据只读静态的 object_type / property（不写）。属性标志（searchable / filterable / sortable）读静态
-  property 列（static_0004），见 `flags`；前端 objMeta 只在静态后台没起来时用 mock + 默认规则 [推断]。
+  property 列（static_0004），见 `flags`；真实接口失败不回退演示数据。
 - 分面归静态 `GET /object-types/{id}/facets`。静态上线前，搜索结果里顺带给一份同形状的
   `facets`（过渡，[推断]），前端优先读静态的；静态上线后删掉这里的 `_facets`。
 - 物理绑定：seeds/extra/qa/objects/bindings.json（对象类型 → 表 + 属性 → 列）。演示数据在 biz 表，不是
   object_type.source_table [推断]。没有绑定的对象类型返回 bound=false、空结果，前端显示「未接入数据」。
+- 零售1保留上述适配；其他来源须按object-read-adapter.md显式登记工作空间/对象/源表白名单与专用只读连接。
 - 行级范围：绑定里写了 rowFilter 的，走骨架 apply_row_filter + biz/governance.py 的登记列；没写的按 row_filter
   是否限制决定：限制（含 DENY_ALL）时一律不返回（宁严勿宽）[推断]。
 """
@@ -15,6 +16,7 @@
 import csv
 import io
 import json
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -22,12 +24,12 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Response
-from pydantic import Field
+from fastapi import APIRouter, Depends, Query, Response
+from pydantic import ConfigDict, Field
 from sqlalchemy import Select, String, asc, cast, desc, false, func, or_, select
 
 from app.common.audit import audit
-from app.common.auth import CurrentUser, CurrentUserDep, require_func, row_filter
+from app.common.auth import CurrentUser, CurrentUserDep, check_func, require_func, row_filter
 from app.common.context import ViewContextDep, readonly_extra
 from app.common.ontology import require_ontology_id
 from app.common.pagination import MAX_PAGE_SIZE
@@ -37,9 +39,18 @@ from app.core.errors import AppError, ExportForbidden, NotFound
 from app.core.schema import DATETIME_SEC_FORMAT, ApiModel, _tz
 from app.db.base import Base
 from app.db.session import SessionDep
+from app.modules.admin.exports import csv_cell
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS, PRODUCT_COLUMNS, STORE_COLUMNS
 from app.modules.qa import service as svc
-from app.modules.qa.objects_api import OutOfScope
+from app.modules.qa.object_source import (
+    can_export_object,
+    check_object_read,
+    configured_bindings,
+    object_definition,
+    primary_property,
+    require_object_read,
+    resolve_source,
+)
 from app.modules.static.explorer import bad_filter, facet_kind, facetable, scalar_filter
 from app.modules.static.models import ObjectType, Property
 
@@ -48,7 +59,7 @@ class ValidationFailed(AppError):
     status_code, code, message = 422, "VALIDATION_FAILED", "参数不合法"
 
 
-explore = APIRouter(dependencies=[Depends(require_func("object-search", "view"))])
+explore = APIRouter(dependencies=[Depends(require_object_read)])
 
 # 行级范围登记（biz/governance.py）：绑定里的 rowFilter → (列, 跨对象路径)
 _GOV: dict[str, tuple[dict, dict | None]] = {
@@ -56,7 +67,7 @@ _GOV: dict[str, tuple[dict, dict | None]] = {
     "product": (PRODUCT_COLUMNS, None),
     "order": (ORDER_COLUMNS, ORDER_LINKS),
 }
-NUMERIC = {"decimal", "integer"}
+NUMERIC = {"decimal", "integer", "int"}
 TIME = {"date", "timestamp"}
 FACET_VALUES = 50  # 单个枚举分面最多给多少个取值（按计数降序）
 
@@ -86,13 +97,14 @@ def flags(p: Property) -> dict[str, bool]:
 
 
 class ExploreIn(ApiModel):
+    model_config = ConfigDict(extra="forbid")
     kw: str = Field("", max_length=100, pattern=r"^[^\x00]*$")
     # 属性 api 名 → 取值列表（enum / 字符串 / 布尔）或 {min,max}（数值 / 时间，闭区间；只给日期时含当天）
     # 值的形状按属性逐个校验（Bound.cond，同静态 /facets）：不合法一律 422，不让数据库报 500
     filters: dict[str, Any] = Field(default_factory=dict)
     sort: str | None = Field(None, description="属性 api 名，前缀 - 表示倒序")
     page: int = Field(1, ge=1)
-    size: int = Field(20, ge=1, le=MAX_PAGE_SIZE)
+    size: int = Field(10, ge=1, le=MAX_PAGE_SIZE)
     with_facets: bool = Field(True, description="顺带返回过渡分面（静态 /facets 上线后去掉）")
 
 
@@ -102,7 +114,7 @@ def _out(v: Any) -> Any:
     if isinstance(v, Decimal):
         return float(v)
     if isinstance(v, datetime):
-        return v.astimezone(_tz()).strftime(DATETIME_SEC_FORMAT)
+        return (v if v.tzinfo else v.replace(tzinfo=_tz())).astimezone(_tz()).strftime(DATETIME_SEC_FORMAT)
     if isinstance(v, date):
         return v.isoformat()
     return v
@@ -146,8 +158,9 @@ async def _type(session: Any, code: str) -> ObjectType:
 class Bound:
     """一个对象类型的绑定：FROM 子句、属性 → 列、行 id 列。表 / 列名都来自绑定文件，不来自请求。"""
 
-    def __init__(self, t: ObjectType, b: dict) -> None:
-        tables = Base.metadata.tables
+    def __init__(self, t: ObjectType, b: dict, source=None) -> None:
+        self.source = source
+        tables = {b["table"]: source.table} if source is not None else Base.metadata.tables
         base = tables[b["table"]]
         alias: dict[str, Any] = {"": base}
         frm: Any = base
@@ -161,18 +174,37 @@ class Bound:
             return alias[a].c[c]
 
         self.props = {p.api_name: p for p in t.properties}
-        self.title = next((p.api_name for p in t.properties if p.is_title), t.pk_property)
+        primary = primary_property(t)
+        pk = primary.api_name if primary is not None else None
+        self.title = next((p.api_name for p in t.properties if p.is_title), pk)
         self.cols = {k: col(v) for k, v in b["columns"].items() if k in self.props}  # 只认静态里有的属性
         # 对外给值的属性：敏感 / 隐藏的只在后台用（行级范围、id），不出现在结果、详情、导出里
         self.out = [k for k in self.cols if visible(self.props[k])]
         self.id_col = col(b["id"])
+        if pk not in self.cols or not visible(self.props[pk]) or not self.cols[pk].compare(self.id_col):
+            raise AppError("对象主键未配置公开的可读取映射，当前无法读取实例", code="OBJECT_IDENTIFIER_UNAVAILABLE", status_code=503)
         self.frm, self.base, self.b, self.code = frm, base, b, t.code
 
+    @asynccontextmanager
+    async def read(self, session):
+        if self.source is None:
+            yield session
+        else:
+            async with self.source.read() as conn:
+                yield conn
+
+    def id_value(self, value):
+        return scalar_filter(self.id_col, value, "id")
+
     async def stmt(self, viewer: CurrentUser) -> Select:
+        check_object_read(viewer)
         stmt: Select = select(self.id_col.label("__id"), *[c.label(k) for k, c in self.cols.items()])
         stmt = stmt.select_from(self.frm)
         for k, v in (self.b.get("where") or {}).items():
             stmt = stmt.where(self.base.c[k] == v)
+        if self.source is not None:
+            # Unsupported cross-object predicates are rejected by the shared compiler.
+            return await apply_row_filter(stmt, viewer, self.code, self.cols)
         gov = self.b.get("rowFilter")
         if gov in _GOV:
             return await apply_row_filter(stmt, viewer, gov, *_GOV[gov])
@@ -233,9 +265,16 @@ class Bound:
         return stmt
 
 
-async def _bind(session: Any, code: str) -> tuple[ObjectType, Bound | None]:
-    t = await _type(session, code)
+async def _bind(session: Any, code: str, ver: str | None = None) -> tuple[ObjectType, Bound | None]:
+    t = await object_definition(session, code, ver)
+    source = await resolve_source(session, t)
+    if source is not None:
+        return t, Bound(t, {"table": source.table.name, "id": source.id_column, "columns": source.columns}, source)
     b = bindings(require_ontology_id(session)).get(code)
+    # An explicitly configured but incomplete source must never silently borrow the retail binding.
+    if any(row["ontologyId"] == require_ontology_id(session) and row["objectType"] == code
+           for row in configured_bindings()):
+        return t, None
     return t, Bound(t, b) if b else None
 
 
@@ -268,21 +307,55 @@ async def _facets(session: Any, bd: Bound, base: Select, body: ExploreIn) -> lis
 def _item(bd: Bound, r: Any) -> dict:
     title = r[bd.title] if bd.title in bd.out else None
     return {
-        "id": r["__id"],
-        "title": _out(title) if title is not None else r["__id"],
+        "id": str(r["__id"]),
+        "title": str(_out(title)) if title is not None else str(r["__id"]),
         "values": {k: _out(r[k]) for k in bd.out},
     }
 
 
+@explore.get("/object-types", summary="使用区已发布对象类型目录")
+async def explore_types(session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep,
+                        page: int = Query(1, ge=1), size: int = Query(10, ge=1, le=MAX_PAGE_SIZE)):
+    _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    check_object_read(viewer)
+    if ctx.ver:
+        from app.modules.versioning.repo import ReleaseRepo
+
+        release = await ReleaseRepo(session).by_ver_or_404(ctx.ver)
+        rows = [obj for obj in ((release.snapshot or {}).get("objectTypes") or {}).values() if obj.get("status") == "已发布"]
+        total = len(rows)
+        actual = min(page, max(1, -(-total // size)))
+        items = [{"id": obj["id"], "name": obj["name"], "group": obj["group"], "status": "已发布"} for obj in rows[(actual - 1) * size:actual * size]]
+    else:
+        from app.modules.static.models import ObjectStatus
+
+        stmt = select(ObjectType.code, ObjectType.display_name, ObjectType.obj_group).where(ObjectType.status == ObjectStatus.published)
+        total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        actual = min(page, max(1, -(-total // size)))
+        items = [{"id": code, "name": name, "group": group, "status": "已发布"} for code, name, group in
+                 await session.execute(stmt.order_by(ObjectType.seq, ObjectType.code).offset((actual - 1) * size).limit(size))]
+    return {"items": items, "total": total, "page": actual, "size": size}
+
+
+@explore.get("/object-types/{code}/meta", summary="使用区对象属性与能力元数据")
+async def explore_meta(code: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    from app.modules.static.explorer import ExplorerService
+
+    _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    check_object_read(viewer)
+    return await ExplorerService(session).meta(code, ctx.ver)
+
+
 @explore.post(
     "/object-types/{code}/search",
+    dependencies=[Depends(require_func("object-search", "view"))],
     summary="通用对象搜索：按属性 api 名返回行（元数据驱动，物理绑定见 seeds/extra/qa/objects）",
     openapi_extra=readonly_extra("history", "preview"),
 )
 async def explore_search(
     code: str, body: ExploreIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
-    t, bd = await _bind(session, code)
+    t, bd = await _bind(session, code, ctx.ver)
     title = next((p.api_name for p in t.properties if p.is_title), t.pk_property)
     empty = {
         "items": [],
@@ -293,6 +366,8 @@ async def explore_search(
         "bound": False,
         "boundProps": [],
         "facets": [],
+        "canExport": False,
+        "dataVersion": "current",
     }
     if bd is None:
         return empty
@@ -300,16 +375,20 @@ async def explore_search(
     if body.sort:
         bd.check([body.sort.removeprefix("-")], "排序")
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    check_func(viewer, "object-search", "view")
+    empty["canExport"] = await can_export_object(session, viewer, code) and not ctx.preview_as
     base = await bd.stmt(viewer)
     stmt = bd.where(base, body)
-    total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     if body.sort:
         c = bd.cols[body.sort.removeprefix("-")]
         stmt = stmt.order_by((desc if body.sort.startswith("-") else asc)(c).nulls_last(), bd.id_col)
     else:
         stmt = stmt.order_by(bd.id_col)
-    page = min(body.page, max(1, -(-total // body.size)))
-    rows = (await session.execute(stmt.offset((page - 1) * body.size).limit(body.size))).mappings().all()
+    async with bd.read(session) as reader:
+        total = (await reader.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        page = min(body.page, max(1, -(-total // body.size)))
+        rows = (await reader.execute(stmt.offset((page - 1) * body.size).limit(body.size))).mappings().all()
+        facets = await _facets(reader, bd, base, body) if body.with_facets else []
     return {
         **empty,
         "items": [_item(bd, r) for r in rows],
@@ -317,7 +396,7 @@ async def explore_search(
         "page": page,
         "bound": True,
         "boundProps": bd.out,
-        "facets": await _facets(session, bd, base, body) if body.with_facets else [],
+        "facets": facets,
     }
 
 
@@ -327,25 +406,21 @@ async def explore_search(
     openapi_extra=readonly_extra("history", "preview"),
 )
 async def explore_get(code: str, id: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
-    _, bd = await _bind(session, code)
+    _, bd = await _bind(session, code, ctx.ver)
     if bd is None:
         raise NotFound("该对象类型未接入数据", details={"objectType": code, "id": id})
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
-    r = (await session.execute((await bd.stmt(viewer)).where(bd.id_col == id))).mappings().first()
+    stmt = (await bd.stmt(viewer)).where(bd.id_col == bd.id_value(id))
+    async with bd.read(session) as reader:
+        r = (await reader.execute(stmt.limit(1))).mappings().first()
     if r is None:
-        # 范围外和不存在分开报：不带范围再查一次（只看有没有，不返回值）
-        any_ = select(bd.id_col).select_from(bd.frm).where(bd.id_col == id)
-        for k, v in (bd.b.get("where") or {}).items():
-            any_ = any_.where(bd.base.c[k] == v)
-        hit = (await session.execute(any_)).first()
-        if hit is not None:
-            raise OutOfScope(details={"objectType": code, "id": id})
+        # Do not query outside the authorized predicate merely to distinguish existence.
         raise NotFound("对象不存在", details={"objectType": code, "id": id})
-    return {**_item(bd, r), "titleProp": bd.title, "bound": True, "boundProps": bd.out}
+    return {**_item(bd, r), "titleProp": bd.title, "bound": True, "boundProps": bd.out, "dataVersion": "current"}
 
 
 class ExportIn(ExploreIn):
-    ids: list[str] | None = Field(None, description="只导出选中的对象（仍按范围和筛选裁剪）")
+    ids: list[str] | None = Field(None, max_length=5000, description="只导出选中的对象（仍按范围和筛选裁剪）")
     props: list[str] | None = Field(
         None, description="导出哪些属性（默认全部已接入属性）；敏感属性一律不导出"
     )
@@ -356,13 +431,14 @@ EXPORT_MAX = 10000
 
 @explore.post(
     "/object-types/{code}/export",
+    dependencies=[Depends(require_func("object-search", "view"))],
     summary="通用对象导出（CSV，UTF-8 BOM；首列标题属性，敏感属性不导出）",
     openapi_extra=readonly_extra("history", "preview"),
 )
 async def explore_export(
     code: str, body: ExportIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
-    t, bd = await _bind(session, code)
+    t, bd = await _bind(session, code, ctx.ver)
     if ctx.preview_as:
         raise ExportForbidden(details={"reason": "预览中不能导出"})
     if bd is None:
@@ -371,21 +447,23 @@ async def explore_export(
     keys = [k for k in (body.props or bd.out) if k in bd.out]  # 敏感、隐藏属性一律不导出
     keys = [k for k in keys if k != bd.title]
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    check_func(viewer, "object-search", "view")
+    if not await can_export_object(session, viewer, code):
+        raise ExportForbidden("没有此对象类型的导出权限")
     stmt = bd.where(await bd.stmt(viewer), body)
-    if body.ids:
-        stmt = stmt.where(bd.id_col.in_(body.ids))
-    rows = (await session.execute(stmt.order_by(bd.id_col).limit(EXPORT_MAX))).mappings().all()
+    if body.ids is not None:
+        stmt = stmt.where(bd.id_col.in_([bd.id_value(value) for value in body.ids]))
+    async with bd.read(session) as reader:
+        rows = (await reader.execute(stmt.order_by(bd.id_col).limit(EXPORT_MAX + 1))).mappings().all()
+    if len(rows) > EXPORT_MAX:
+        raise ValidationFailed(f"单次最多导出 {EXPORT_MAX} 条，请缩小筛选范围")
     buf = io.StringIO()
     w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
-    w.writerow(
-        [
-            bd.props[bd.title].display_name if bd.title in bd.out else "ID",
-            *[bd.props[k].display_name for k in keys],
-        ]
-    )
+    headers = [bd.props[bd.title].display_name if bd.title in bd.out else "ID", *[bd.props[k].display_name for k in keys]]
+    w.writerow([csv_cell(str(value)) for value in headers])
     for r in rows:
         it = _item(bd, r)
-        w.writerow([it["title"], *["" if it["values"][k] is None else it["values"][k] for k in keys]])
+        w.writerow([csv_cell(str(value)) for value in [it["title"], *["" if it["values"][k] is None else it["values"][k] for k in keys]]])
     name = f"{t.display_name}_{len(rows)}.csv"
     detail = {"objectType": code, "rows": len(rows), "selected": bool(body.ids)}
     await audit(session, user, action="qa.objects.export", target=code, detail=detail)
@@ -404,5 +482,118 @@ async def explore_ids(
     if bd is None:
         return []
     bd.check(body.filters, "筛选")
-    stmt = bd.where(await bd.stmt(viewer), body).order_by(bd.id_col).limit(limit)
-    return [str(r["__id"]) for r in (await session.execute(stmt)).mappings().all()]
+    stmt = bd.where(await bd.stmt(viewer), body).order_by(bd.id_col).limit(limit + 1)
+    async with bd.read(session) as reader:
+        ids = [str(r["__id"]) for r in (await reader.execute(stmt)).mappings().all()]
+    if len(ids) > limit:
+        raise ValidationFailed("此问题的对象范围过大，请缩小筛选范围或使用对象数量汇总")
+    return ids
+
+
+@explore.get("/object-types/{code}/objects/{id}/related", summary="按已发布关系和两端权限读取关联对象")
+async def explore_related(code: str, id: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep,
+                          link: str | None = None, page: int = Query(1, ge=1), size: int = Query(10, ge=1, le=MAX_PAGE_SIZE)):
+    from app.modules.static.models import DefStatus, LinkType
+    from app.modules.static.shapes import link as link_shape
+    from app.modules.versioning.repo import ReleaseRepo
+
+    _, source = await _bind(session, code, ctx.ver)
+    if source is None:
+        raise NotFound("该对象类型未接入数据")
+    _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    origin_stmt = (await source.stmt(viewer)).where(source.id_col == source.id_value(id))
+    async with source.read(session) as reader:
+        origin = (await reader.execute(origin_stmt.limit(1))).mappings().first()
+    if origin is None:
+        raise NotFound("对象不存在或不在可见范围内")
+    if ctx.ver:
+        release = await ReleaseRepo(session).by_ver_or_404(ctx.ver)
+        links = list(((release.snapshot or {}).get("links") or {}).values())
+    else:
+        links = [link_shape(row, with_runtime=False) for row in await session.scalars(
+            select(LinkType).where(LinkType.status == DefStatus.published).order_by(LinkType.seq, LinkType.id))]
+    out = []
+    for definition in links:
+        if definition.get("status") != "已发布" or code not in (definition.get("from"), definition.get("to")):
+            continue
+        if link and definition["id"] != link:
+            continue
+        forward = definition["from"] == code
+        other = definition["to"] if forward else definition["from"]
+        local_key = definition["fromProp"] if forward else definition["toProp"]
+        remote_key = definition["toProp"] if forward else definition["fromProp"]
+        group = {"linkId": definition["id"], "label": definition["name"] if forward else definition.get("reverse") or definition["name"],
+                 "other": other, "items": [], "total": 0, "page": 1, "size": size, "state": "ok", "dataVersion": "current"}
+        if definition.get("via") or local_key not in source.out:
+            out.append({**group, "state": "unsupported"})
+            continue
+        try:
+            _, target = await _bind(session, other, ctx.ver)
+        except NotFound:
+            target = None
+        if target is None:
+            out.append({**group, "state": "unbound"})
+            continue
+        same_source = source.source is None and target.source is None or (
+            source.source is not None and target.source is not None and source.source.datasource == target.source.datasource
+            and source.source.url == target.source.url)
+        if not same_source or remote_key not in target.out:
+            out.append({**group, "state": "unsupported"})
+            continue
+        value = origin[local_key]
+        if value is None:
+            out.append(group)
+            continue
+        stmt = (await target.stmt(viewer)).where(target.cols[remote_key] == scalar_filter(target.cols[remote_key], value, remote_key))
+        async with target.read(session) as reader:
+            total = (await reader.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+            actual_page = min(page, max(1, -(-total // size)))
+            rows = (await reader.execute(stmt.order_by(target.id_col).offset((actual_page - 1) * size).limit(size))).mappings().all()
+        out.append({**group, "items": [_item(target, row) for row in rows], "total": total, "page": actual_page})
+    if link and not out:
+        raise NotFound("该版本中对象关系不存在")
+    return out
+
+
+def scope_operation(question, properties):
+    """Only explicit count/property aggregate labels; this is not a natural-language SQL parser."""
+    if question in ("对象数量", "数量", "有多少个对象", "共多少个对象"):
+        return "count", None
+    operations = {"合计": "sum", "平均值": "avg", "最小值": "min", "最大值": "max"}
+    matches = [(operation, prop.api_name) for suffix, operation in operations.items()
+               for prop in properties if visible(prop) and prop.data_type in NUMERIC
+               and question in (f"{prop.display_name}{suffix}", f"{prop.api_name}{suffix}")]
+    return matches[0] if len(matches) == 1 else None
+
+
+async def scoped_summary(session, viewer, ctx, scope, question):
+    code = scope.single.kind if scope.single else scope.kind
+    if scope.single and scope.single.kind != scope.kind:
+        raise ValidationFailed("单个对象与提问范围的对象类型不一致")
+    obj, binding = await _bind(session, code, ctx.ver)
+    operation = scope_operation(question, obj.properties)
+    if operation is None:
+        return None
+    if binding is None:
+        raise NotFound("该对象类型未接入数据")
+    op, prop = operation
+    if prop is not None and prop not in binding.out:
+        raise ValidationFailed("该属性未配置可读取的数值映射")
+    body = ExploreIn(**(scope.query or {}))
+    binding.check(body.filters, "筛选")
+    stmt = binding.where(await binding.stmt(viewer), body)
+    if scope.single:
+        stmt = stmt.where(binding.id_col == binding.id_value(scope.single.id))
+    elif scope.ids is not None:
+        stmt = stmt.where(binding.id_col.in_([binding.id_value(value) for value in scope.ids]))
+    elif scope.filter is not None and not scope.query:
+        raise ValidationFailed("通用对象范围请使用属性筛选条件")
+    rows = stmt.subquery()
+    value = func.count() if op == "count" else {"sum": func.sum, "avg": func.avg, "min": func.min, "max": func.max}[op](rows.c[prop])
+    async with binding.read(session) as reader:
+        count, result = (await reader.execute(select(func.count(), value).select_from(rows))).one()
+    label = "对象数量" if op == "count" else question
+    text = f"当前可见的{obj.display_name}共 {count} 个。" if op == "count" else f"当前可见的{obj.display_name}共 {count} 个，{label}：{_out(result) if result is not None else '暂无数据'}。"
+    return {"text": text,
+            "basis": "当前授权实例范围的直接汇总" + (f" · 定义版本 {ctx.ver}" if ctx.ver else "") + " · 未套用指标口径",
+            "rows": []}

@@ -3,26 +3,22 @@
 没有已配置数据源的销售比较、历史分析、预测和动作发起明确未接入；不补造演示记录。
 """
 
-import csv
-import io
 from collections.abc import Callable
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from math import floor
 from typing import Any
-from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Response
-from pydantic import Field
+from fastapi import APIRouter, Depends, Query
+from pydantic import ConfigDict, Field, field_validator
 from sqlalchemy import select
 
-from app.common.audit import audit
-from app.common.auth import CurrentUser, CurrentUserDep, require_func, row_filter
+from app.common.auth import CurrentUser, CurrentUserDep, check_func, require_func, row_filter
 from app.common.context import ViewContextDep, readonly_extra
 from app.common.ontology import require_ontology_id
 from app.common.pagination import MAX_PAGE_SIZE
 from app.common.row_filter import apply_row_filter, is_deny_all
-from app.core.errors import AppError, ExportForbidden, NotFound
+from app.core.errors import AppError, NotFound
 from app.core.schema import DATETIME_SEC_FORMAT, ApiModel, _tz
 from app.db.session import SessionDep
 from app.modules.biz.governance import ORDER_COLUMNS, ORDER_LINKS, PRODUCT_COLUMNS, STORE_COLUMNS
@@ -30,8 +26,9 @@ from app.modules.biz.models import BizOrder, OrderLine, Product, Store
 from app.modules.qa import catalog
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
+from app.modules.qa.object_source import check_object_read, require_object_read
 
-objects = APIRouter(dependencies=[Depends(require_func("object-search", "view"))])
+objects = APIRouter(dependencies=[Depends(require_object_read)])
 
 EMPTY = "--"
 KINDS = ("store", "product", "order")
@@ -84,6 +81,7 @@ class Data:
     """一次请求内的数据库门店/商品/订单，保持旧API字段并按行级范围裁剪，懒加载。"""
 
     def __init__(self, session: Any, viewer: CurrentUser) -> None:
+        check_object_read(viewer)
         if require_ontology_id(session) != 1:
             raise DataNotConfigured()
         self.session, self.viewer = session, viewer
@@ -259,19 +257,21 @@ async def _type(session: Any, kind: str) -> Any:
 
 
 class SearchIn(ApiModel):
-    kw: str = ""
+    model_config = ConfigDict(extra="forbid")
+    kw: str = Field("", max_length=100, pattern=r"^[^\x00]*$")
     facets: dict[str, list[str]] = Field(default_factory=dict)
     page: int = Field(1, ge=1)
-    size: int = Field(16, ge=1, le=MAX_PAGE_SIZE)
+    size: int = Field(10, ge=1, le=MAX_PAGE_SIZE)
 
 
 class FilterIn(ApiModel):
-    kw: str = ""
+    model_config = ConfigDict(extra="forbid")
+    kw: str = Field("", max_length=100, pattern=r"^[^\x00]*$")
     facets: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ExportIn(FilterIn):
-    ids: list[str] | None = None
+    ids: list[str] | None = Field(None, max_length=5000)
 
 
 async def _filtered(data: Data, t: Any, f: FilterIn) -> tuple[list[dict], list[dict], list[dict]]:
@@ -333,67 +333,36 @@ async def _scope_text(data: Data, kind: str, label: str, ctx: Any, u: Any) -> st
 
 @objects.post(
     "/objects/{kind}/search",
+    dependencies=[Depends(require_func("object-search", "view"))],
     summary="O2 对象搜索（分面计数不含本分面）",
     openapi_extra=readonly_extra("history", "preview"),
 )
 async def search(kind: str, body: SearchIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
-    t = await _type(session, kind)
-    u, viewer = await _viewer(session, user, ctx)
-    data = Data(session, viewer)
-    _, hits, facets = await _filtered(data, t, body)
-    stores = await data.all_stores() if kind == "order" else {}
-    pages = max(1, -(-len(hits) // body.size))
-    page = min(body.page, pages)
-    items = [
-        {"id": ID_OF[kind](x), "title": TITLE_OF[kind](x), "cells": _cells(kind, x, stores)}
-        for x in hits[(page - 1) * body.size : page * body.size]
-    ]
-    return {
-        "items": items,
-        "total": len(hits),
-        "page": page,
-        "size": body.size,
-        "facets": facets,
-        "scopeText": await _scope_text(data, kind, t.label, ctx, u),
-    }
+    from app.modules.qa.explore_api import ExploreIn, explore_search
+    from app.modules.qa.object_source import object_definition
+
+    result = await explore_search(kind, ExploreIn(kw=body.kw, filters=body.facets, page=body.page, size=body.size), session, user, ctx)
+    definition = await object_definition(session, kind, ctx.ver)
+    names = {p.api_name: p.display_name for p in definition.properties}
+    return {**result,
+        "items": [{"id": item["id"], "title": item["title"], "cells": {key: "是" if value is True else "否" if value is False else value for key, value in item["values"].items()}} for item in result["items"]],
+        "facets": [{"key": facet["key"], "label": names.get(facet["key"], facet["key"]),
+                    "vals": [{"v": value["value"], "n": value["count"]} for value in facet.get("values", [])],
+                    **{key: facet[key] for key in ("kind", "min", "max") if key in facet}} for facet in result["facets"]],
+        "scopeText": "按该版本定义查询当前数据；仅含当前授权实例" if ctx.ver else "仅含当前授权实例"}
 
 
 @objects.post(
     "/objects/{kind}/export",
+    dependencies=[Depends(require_func("object-search", "view"))],
     summary="O3 导出对象（CSV，UTF-8 BOM）",
     openapi_extra=readonly_extra("history", "preview"),
 )
 async def export(kind: str, body: ExportIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
-    t = await _type(session, kind)
-    if ctx.preview_as:
-        raise ExportForbidden(details={"reason": "预览中不能导出"})
-    _, viewer = await _viewer(session, user, ctx)
-    data = Data(session, viewer)
-    _, hits, _ = await _filtered(data, t, body)
-    if body.ids:
-        want = set(body.ids)
-        hits = [x for x in hits if ID_OF[kind](x) in want]
-    stores = await data.all_stores() if kind == "order" else {}
-    cols = t.column_defs or []
-    buf = io.StringIO()
-    w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
-    w.writerow([f"{t.label}{'号' if kind == 'order' else '名称'}", *[c["title"] for c in cols]])
-    for x in hits:
-        cells = _cells(kind, x, stores)
-        w.writerow(
-            [
-                TITLE_OF[kind](x),
-                *[js_num(cells.get(c["key"])) if cells.get(c["key"]) is not None else "" for c in cols],
-            ]
-        )
-    name = f"{t.label}_{len(hits)}.csv"
-    detail = {"kind": kind, "rows": len(hits), "selected": bool(body.ids)}
-    await audit(session, user, action="qa.objects.export", target=kind, detail=detail)
-    return Response(
-        content=buf.getvalue().encode("utf-8-sig"),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
-    )
+    from app.modules.qa.explore_api import ExportIn as ExploreExportIn
+    from app.modules.qa.explore_api import explore_export
+
+    return await explore_export(kind, ExploreExportIn(kw=body.kw, filters=body.facets, ids=body.ids), session, user, ctx)
 
 
 # ---------------------------------------------------------------- O4 带范围提问
@@ -409,11 +378,20 @@ class AskScopeIn(ApiModel):
     kind: str
     label: str = ""
     filter: FilterIn | None = None
-    ids: list[str] | None = None
+    ids: list[str] | None = Field(None, max_length=5000)
     single: AskSingle | None = None
     conds: list[str] | None = None  # [推断] 前端已算好的条件文字（可不传，后台按 filter 生成）
     # 通用搜索页的筛选（explore_api.ExploreIn 形状）：给了且没给 ids 时，按它在范围内取 id 再走 ids 分支
     query: dict[str, Any] | None = None
+
+    @field_validator("query")
+    @classmethod
+    def valid_query(cls, value):
+        if value is None:
+            return None
+        from app.modules.qa.explore_api import ExploreIn
+
+        return ExploreIn.model_validate(value).model_dump()
 
 
 class ScopedAskIn(ApiModel):
@@ -438,13 +416,32 @@ def _conds(t: Any, f: FilterIn) -> list[str]:
 async def scoped_ask(body: ScopedAskIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
     sc = body.scope
     _, viewer = await _viewer(session, user, ctx)
-    data = Data(session, viewer)
+    if sc.single:
+        check_object_read(viewer)
+    else:
+        check_func(user, "object-search", "view")
+        check_func(viewer, "object-search", "view")
     kind = sc.single.kind if sc.single else sc.kind
+    from app.modules.qa.explore_api import scoped_summary
+
+    summary = await scoped_summary(session, viewer, ctx, sc, body.question.strip())
+    if summary is not None:
+        return summary
+    from app.modules.qa.explore_api import ExploreIn, _bind, explore_ids
+
+    _, legacy = await _bind(session, kind, ctx.ver)
+    if legacy is None or legacy.source is not None:
+        raise DataNotConfigured("该对象来源未配置此范围分析", details={"kind": kind})
+    required = {"order": {"paid_amount", "shipped_at"}, "product": {"category_id", "retail_price"}}.get(kind, set())
+    if not required <= set(legacy.out):
+        raise DataNotConfigured("此问题所需属性未公开或未配置可读取映射", details={"kind": kind})
+    if not sc.single and sc.ids is None and sc.query is None:
+        filters = sc.filter or FilterIn()
+        sc = sc.model_copy(update={"query": {"kw": filters.kw, "filters": filters.facets}})
+    data = Data(session, viewer)
     if kind not in KINDS:
         raise DataNotConfigured("该对象类型尚未配置范围分析", details={"kind": kind})
     if not sc.single and sc.ids is None and sc.query is not None:
-        from app.modules.qa.explore_api import ExploreIn, explore_ids
-
         ids = await explore_ids(session, viewer, kind, ExploreIn(**sc.query))
         sc = sc.model_copy(update={"ids": ids, "conds": sc.conds or []})
     if sc.single:
@@ -676,23 +673,24 @@ async def object_detail(
     ctx: ViewContextDep,
     view: str = Query("full", pattern="^(drawer|full)$"),
 ):
-    _, viewer = await _viewer(session, user, ctx)
-    data = Data(session, viewer)
-    v = await _resolve(data, kind, oid)
-    out: dict[str, Any] = {
-        k: v.get(k) for k in ("kind", "kindLabel", "id", "code", "title", "status", "brief")
-    } | {"groups": _groups(v), "fields": v["fields"]}
-    out |= v.get("extra") or {}
+    from app.modules.qa.explore_api import explore_get
+    from app.modules.qa.object_source import object_definition
+
+    row = await explore_get(kind, oid, session, user, ctx)
+    definition = await object_definition(session, kind, ctx.ver)
+    properties = [p for p in definition.properties if p.api_name in row["values"]]
+    fields = [_f(p.display_name, str(row["values"][p.api_name]) if row["values"][p.api_name] is not None else None) for p in properties]
+    groups = {}
+    for prop, field in zip(properties, fields):
+        groups.setdefault(prop.prop_group or "其他", []).append(field)
+    out = {"kind": kind, "kindLabel": definition.display_name, "id": row["id"], "code": row["id"], "title": row["title"],
+        "brief": [field for p, field in zip(properties, fields) if p.visibility == "prominent" and p.api_name != row["titleProp"]],
+        "fields": fields, "groups": [{"title": title, "fields": values} for title, values in groups.items()],
+        "dataVersion": "current"}
     if view == "full":
-        kpis = [k | {"caliber": None} for k in v.get("kpis") or []]
-        out |= {
-            "kpis": kpis[:5],
-            "quickQuestions": [],
-            "scopeLabel": await _scope_label(data, kind),
-            "analyticsConfigured": False,
-            "analyticsNote": "仅显示基表字段与可见订单汇总；指标口径、历史分析与预测尚未配置",
-        }
-    return {k: x for k, x in out.items() if x is not None}
+        out.update(kpis=[], quickQuestions=[], analyticsConfigured=False,
+                   scopeLabel="按该版本定义查询当前数据；仅含当前授权实例" if ctx.ver else "仅含当前授权实例")
+    return out
 
 
 # ---------------------------------------------------------------- O6 关联对象
@@ -764,37 +762,15 @@ async def object_related(
     ctx: ViewContextDep,
     group: str | None = None,
     page: int = Query(1, ge=1),
-    size: int = Query(8, ge=1, le=MAX_PAGE_SIZE),
+    size: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ):
-    _, viewer = await _viewer(session, user, ctx)
-    data = Data(session, viewer)
-    v = await _resolve(data, kind, oid)
-    out = []
-    for g in await _relation_groups(data, v):
-        kinds = {x["kind"] for x in g["items"]}
-        if kinds and all([await data.denied(k if k in KINDS else "store") for k in kinds]):
-            out.append({"key": g["key"], "title": g["title"], "denied": True, "items": []})
-            continue
-        p = page if group in (None, g["key"]) else 1
-        pages = max(1, -(-len(g["items"]) // size))
-        p = min(p, pages)
-        items = []
-        for x in g["items"][(p - 1) * size : p * size]:
-            vis = await _visible_ids(data, x["kind"])
-            items.append(x | {"denied": True} if vis is not None and x["id"] not in vis else x)
-        out.append(
-            {
-                "key": g["key"],
-                "title": g["title"],
-                "items": items,
-                "total": len(g["items"]),
-                "page": p,
-                "size": size,
-            }
-        )
-    if group is not None:
-        out = [g for g in out if g["key"] == group] or out
-    return out
+    from app.modules.qa.explore_api import explore_related
+
+    groups = await explore_related(kind, oid, session, user, ctx, link=group, page=page, size=size)
+    return [{"key": item["linkId"], "title": item["label"], "total": item["total"], "page": item["page"], "size": item["size"],
+             "state": item["state"], "dataVersion": "current",
+             "items": [{"kind": item["other"], "id": row["id"], "label": row["title"], "note": ""} for row in item["items"]]}
+            for item in groups]
 
 
 # ---------------------------------------------------------------- O7 时间线
@@ -808,25 +784,20 @@ async def object_timeline(
     user: CurrentUserDep,
     ctx: ViewContextDep,
     page: int = Query(1, ge=1),
-    size: int = Query(8, ge=1, le=MAX_PAGE_SIZE),
+    size: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ):
-    _, viewer = await _viewer(session, user, ctx)
-    v = await _resolve(Data(session, viewer), kind, oid)
-    items = [
-        {k: x for k, x in it.items() if x is not None}
-        for it in sorted(v.get("timeline") or [], key=lambda x: x["time"], reverse=True)
-    ]
-    pages = max(1, -(-len(items) // size))
-    p = min(page, pages)
-    return {
-        "items": items[(p - 1) * size : p * size],
-        "total": len(items),
-        "page": p,
-        "size": size,
-        "unknownLabel": "结果未知 · 待对账",
-        "configured": bool(items),
-        "note": "仅展示数据库已有时间字段" if items else "对象历史记录尚未配置",
-    }
+    from app.modules.qa.explore_api import explore_get
+    from app.modules.qa.object_source import object_definition
+
+    row = await explore_get(kind, oid, session, user, ctx)
+    definition = await object_definition(session, kind, ctx.ver)
+    items = [{"time": row["values"][prop.api_name], "text": prop.display_name} for prop in definition.properties
+             if prop.data_type in ("date", "timestamp") and row["values"].get(prop.api_name)]
+    items.sort(key=lambda item: str(item["time"]), reverse=True)
+    actual = min(page, max(1, -(-len(items) // size)))
+    return {"items": items[(actual - 1) * size:actual * size], "total": len(items), "page": actual, "size": size,
+            "unknownLabel": "结果未知 · 待对账", "configured": bool(items), "dataVersion": "current",
+            "note": "仅展示已公开时间字段" if items else "对象历史记录尚未配置"}
 
 
 # ---------------------------------------------------------------- O9 可执行动作
@@ -834,8 +805,8 @@ async def object_timeline(
 
 @objects.get("/objects/{kind}/{oid}/actions", summary="O9 对象可执行动作")
 async def object_actions(kind: str, oid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
-    _, viewer = await _viewer(session, user, ctx)
-    data = Data(session, viewer)
-    await _resolve(data, kind, oid)
-    # 当前没有对象级动作发起/鉴权接线，不返回演示审批人、参数或可执行状态。
+    from app.modules.qa.explore_api import explore_get
+
+    await explore_get(kind, oid, session, user, ctx)
+    # No action execution capability is inferred from an authorized object read.
     return []

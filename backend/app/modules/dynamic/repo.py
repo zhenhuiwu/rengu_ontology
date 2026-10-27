@@ -12,7 +12,6 @@ from app.common.repository import BaseRepository
 from app.core import clock
 from app.core.enums import TimelineStatus
 from app.db.dialects import get_adapter
-from app.modules.admin.models import SysUser
 from app.modules.dynamic.models import (
     ActionRun,
     ActionRunDailyCounter,
@@ -96,14 +95,6 @@ class AlertRepo(BaseRepository[Alert]):
         self.session.add(log)
         await self.session.flush()
         return log
-
-    async def people(self) -> list[str]:
-        stmt = (
-            select(SysUser.name)
-            .where(SysUser.alert_assignable.is_not(None))
-            .order_by(SysUser.alert_assignable, SysUser.id)
-        )
-        return list((await self.session.scalars(stmt)).all())
 
 
 class ActionRunRepo(BaseRepository[ActionRun]):

@@ -6,9 +6,8 @@
 - GET /object-types/{id}/facets?filters=<json> → [{key,name,kind:'enum',values:[{value,count}]} |
   {key,name,kind:'range',min,max}]
 
-页面不写任何业务字段：本模块也不写——对象类型 → 数据表走 sql_guard 已登记的受控表
-（governed_tables，按工作空间与对象类型 code 找），属性 → 列走 property.backing_column（只认表里真有的列）。
-没有受控表或属性没配 backing_column 的分面：values=[] / min=max=None（数据不在库里，见 handoff/static.md）。
+页面不写业务字段；元数据与分面复用对象探索的受控绑定与已发布属性，保持同一版本及权限范围。
+没有获准读取的来源时不返回分面实例值，详情见object-read-adapter.md。
 """
 
 import json
@@ -20,12 +19,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import ColumnElement, Integer, Numeric, and_, func, select
+from sqlalchemy import ColumnElement, Integer, Numeric, select
 from sqlalchemy import Enum as SaEnum
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.ontology import require_ontology_id
-from app.common.row_filter import apply_row_filter
 from app.common.sql_guard import GovernedTable, governed_tables
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound
@@ -33,7 +31,7 @@ from app.modules.static.models import Metric, ObjectType, Property
 
 Obj = dict[str, Any]
 
-NUMERIC = {"decimal", "integer"}
+NUMERIC = {"decimal", "integer", "int"}
 TEMPORAL = {"date", "timestamp"}
 RANGE_TYPES = NUMERIC | TEMPORAL
 VISIBILITY = ("prominent", "normal", "hidden")
@@ -168,10 +166,11 @@ def prop_meta(p: Property) -> Obj:
         "name": p.display_name,
         "dataType": p.data_type,
         "group": p.prop_group,
-        "searchable": p.searchable,
+        "searchable": p.searchable and not p.is_sensitive and p.visibility != "hidden",
         "filterable": facetable(p),
-        "sortable": p.sortable,
-        "listed": p.list_visible,
+        "sortable": p.sortable and not p.is_sensitive and p.visibility != "hidden",
+        "listed": p.list_visible and not p.is_sensitive and p.visibility != "hidden",
+        "desc": p.description or "",
         "listWidth": p.list_width,
         "order": p.seq,
         "visibility": p.visibility,
@@ -219,15 +218,17 @@ class ExplorerService:
         return await StaticRepo(self.session).object_type(code)
 
     async def meta(self, code: str, ver: str | None = None) -> Obj:
+        from app.modules.qa.explore_api import _bind
         from app.modules.static.shapes import metric_list_item
 
         if ver:
             return await self._historical_meta(code, ver)
         o = await self._object(code)
+        _, binding = await _bind(self.session, code)
         props = [p for p in o.properties]
         title = next((p.api_name for p in props if p.is_title), None)
         visible = [p for p in props if p.visibility != "hidden"]
-        searchable = [p.display_name for p in visible if p.searchable][:3]
+        searchable = [p.display_name for p in visible if p.searchable and not p.is_sensitive][:3]
         dim_names = {p.display_name for p in props if p.is_dimension}
         all_metrics = list(await self.session.scalars(select(Metric).order_by(Metric.seq)))
         variants = metric_variants([metric_list_item(m) for m in all_metrics])
@@ -246,7 +247,8 @@ class ExplorerService:
             "properties": [prop_meta(p) for p in visible],
             "hiddenCount": len(props) - len(visible),
             "sampleQuestions": [q.get("q") for q in (o.sample_questions or []) if isinstance(q, dict)],
-            "hasData": self._table(o.code) is not None,
+            "hasData": binding is not None,
+            "dataVersion": "current",
             "metrics": [
                 {"id": m.code, "name": m.display_name, "unit": m.unit, "variants": variants.get(m.code, [])}
                 for m in metrics
@@ -254,6 +256,7 @@ class ExplorerService:
         }
 
     async def _historical_meta(self, code: str, ver: str) -> Obj:
+        from app.modules.qa.explore_api import _bind
         from app.modules.versioning.repo import ReleaseRepo
 
         release = await ReleaseRepo(self.session).by_ver_or_404(ver)
@@ -261,6 +264,7 @@ class ExplorerService:
         obj = (snapshot.get("objectTypes") or {}).get(code)
         if obj is None:
             raise NotFound("该版本中对象类型不存在", details={"id": code, "ver": ver})
+        _, binding = await _bind(self.session, code, ver)
         props = [
             Property(
                 api_name=api,
@@ -272,6 +276,7 @@ class ExplorerService:
                 is_dimension=bool(p.get("dim")),
                 is_sensitive=bool(p.get("sensitive")),
                 enum_name=p.get("enumName"),
+                description=p.get("desc") or "",
                 **snapshot_flags(code, p, n, require_ontology_id(self.session)),
             )
             for n, (api, p) in enumerate((snapshot.get("properties", {}).get(code) or {}).items())
@@ -287,11 +292,12 @@ class ExplorerService:
             "name": obj["name"],
             "titleProp": next((p.api_name for p in props if p.is_title), None),
             "pkProp": next((p.api_name for p in props if p.is_pk), None),
-            "kwPlaceholder": " / ".join([p.display_name for p in visible if p.searchable][:3]),
+            "kwPlaceholder": " / ".join([p.display_name for p in visible if p.searchable and not p.is_sensitive][:3]),
             "properties": [prop_meta(p) for p in visible],
             "hiddenCount": len(props) - len(visible),
             "sampleQuestions": [q.get("q") for q in obj.get("qs", []) if isinstance(q, dict)],
-            "hasData": self._table(code) is not None,
+            "hasData": binding is not None,
+            "dataVersion": "current",
             "metrics": [
                 {
                     "id": m["id"],
@@ -308,8 +314,10 @@ class ExplorerService:
     def _table(self, code: str) -> GovernedTable | None:
         return next((g for g in governed_tables(require_ontology_id(self.session)).values() if g.object_type == code), None)
 
-    async def facets(self, code: str, filters: Obj, user: Any) -> list[Obj]:
-        o = await self._object(code)
+    async def facets(self, code: str, filters: Obj, user: Any, ver: str | None = None) -> list[Obj]:
+        from app.modules.qa.explore_api import ExploreIn, _bind, _facets
+
+        o, binding = await _bind(self.session, code, ver)
         fprops = [p for p in o.properties if facetable(p)]
         by_key = {p.api_name: p for p in fprops}
         unknown = [k for k in filters if k not in by_key]
@@ -320,42 +328,18 @@ class ExplorerService:
                 status_code=422,
                 details={"fields": [{"field": f"filters.{k}", "message": "不可筛选"} for k in unknown]},
             )
-        g = self._table(o.code)
-        cols: dict[str, ColumnElement] = {}
-        if g is not None:
-            for p in fprops:
-                if p.backing_column and p.backing_column in g.table.c:
-                    cols[p.api_name] = g.table.c[p.backing_column]
-        # 先整体校验筛选值（不管该属性有没有数据列），任何不合法 → 422，不落到数据库
-        conds_by_key = {k: self._cond(by_key[k], cols.get(k), v, k) for k, v in filters.items()}
-        out = []
-        for p in fprops:
-            kind = facet_kind(p)
-            item: Obj = {"key": p.api_name, "name": p.display_name, "kind": kind, "order": p.seq}
-            col = cols.get(p.api_name)
-            if col is None or g is None:
-                item.update(values=[]) if kind == "enum" else item.update(min=None, max=None)
-                item["hasData"] = False
-                out.append(item)
-                continue
-            # 计数尊重其它已选筛选，排除本分面自己的条件（多选分面的常规做法）
-            conds = [c for k, cs in conds_by_key.items() if k != p.api_name for c in cs]
-            if kind == "enum":
-                stmt = select(col, func.count()).select_from(g.table).group_by(col)
-            else:
-                stmt = select(func.min(col), func.max(col)).select_from(g.table)
-            if conds:
-                stmt = stmt.where(and_(*conds))
-            stmt = await apply_row_filter(stmt, user, o.code, g.columns, g.links or None)
-            rows = (await self.session.execute(stmt)).all()
-            item["hasData"] = True
-            if kind == "enum":
-                item["values"] = self._enum_values(col, rows)
-            else:
-                lo, hi = rows[0] if rows else (None, None)
-                item.update(min=_jsonable(lo), max=_jsonable(hi))
-            out.append(item)
-        return out
+        # The search and static APIs share one source, permission predicate and facet implementation.
+        if binding is None:
+            for key, value in filters.items():
+                self._cond(by_key[key], None, value, key)
+            return []
+        binding.check(filters, "筛选")
+        body = ExploreIn(filters=filters)
+        base = await binding.stmt(user)
+        async with binding.read(self.session) as reader:
+            rows = await _facets(reader, binding, base, body)
+        return [{**row, "name": by_key[row["key"]].display_name, "order": by_key[row["key"]].seq, "hasData": True}
+                for row in rows]
 
     @staticmethod
     def _enum_values(col: ColumnElement, rows: list[Any]) -> list[Obj]:

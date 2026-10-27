@@ -42,7 +42,7 @@ def unavailable(message):
 
 async def execution_definition(session, run):
     action = await session.scalar(select(ActionType).where(ActionType.code == run.action_type_code)
-                                  .with_for_update().execution_options(populate_existing=True))
+                                  .with_for_update(of=ActionType).execution_options(populate_existing=True))
     if (action is None or action.retired_release_id is not None
             or action.status not in (TypeStatus.published, TypeStatus.changing)
             or not run.type_version or action.version != run.type_version):

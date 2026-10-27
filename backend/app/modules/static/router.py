@@ -547,9 +547,15 @@ async def object_explorer_meta(id: str, session: SessionDep, _: CurrentUserDep, 
 
 @get("/object-types/{id}/facets", "object-types", response_model=list[Rec])
 async def object_facets(
-    id: str, session: SessionDep, user: CurrentUserDep, filters: Annotated[str | None, Query()] = None
+    id: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep,
+    filters: Annotated[str | None, Query()] = None
 ) -> Any:
-    return await ExplorerService(session).facets(id, parse_filters(filters), user)
+    if ctx.preview_as:
+        from app.common.auth import check_func
+
+        check_func(user, "roles", "manage")
+    viewer = await resolve_user(session, ctx.preview_as) if ctx.preview_as else user
+    return await ExplorerService(session).facets(id, parse_filters(filters), viewer, ctx.ver)
 
 
 # ---------------------------------------------------------------- 变更单写接口（handoff 写接口契约）

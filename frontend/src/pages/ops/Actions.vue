@@ -27,10 +27,11 @@ import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
   dynamicApi, dynamicContextKey, listActionRuns, getActionRun, getActionMeta, confirmActionRun, approveActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun,
+  listLaunchActions, listActionTargets, stageActionRun, validateActionLaunch, type LaunchAction,
   type ActionMetaDto, type ActionRunDetailDto, type ActionRunDto, type ActionTab, type ActionCan,
 } from '@/api/dynamic';
 
-type ActionRecord = MockActionRecord & { typeId?: string; can?: ActionCan };
+type ActionRecord = MockActionRecord & { typeId?: string; confirmer?: string | null; can?: ActionCan; dispatchPhase?: 'queued' | 'claimed' | null; paramsUnavailable?: string | null };
 
 /** 页面内的动作状态（模拟后台：确认、撤回、重新提交、对账都会改它并写执行记录） */
 const LIST = ACTIONS;
@@ -110,6 +111,7 @@ async function loadList() {
     const r = await listActionRuns({ tab: tab.value as ActionTab, status: status.value, action: actionName.value, sysId: system.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
     if (seq !== listSeq || ctx !== dynamicContextKey()) return;
     remote.items = r.items.map(toRec); remote.total = r.total; remote.counts = r.counts;
+    if (r.page !== pq.page.value) pq.page.value = r.page;
   } catch (e) { if (seq === listSeq && ctx === dynamicContextKey()) { remote.items = []; remote.total = 0; readFail(e); } }
   finally { if (seq === listSeq) listLoading.value = false; }
 }
@@ -123,8 +125,10 @@ async function loadDetail(id = selectedId.value) {
 }
 /** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
 async function afterWrite(d?: ActionRunDetailDto) {
+  const ctx = dynamicContextKey();
   if (d) { ++detailSeq; remote.detail = toRec(d); }
   await loadList();
+  if (ctx !== dynamicContextKey()) { const changed = new Error('操作时上下文已切换'); changed.name = 'DynamicContextChanged'; throw changed; }
 }
 if (live.value) {
   watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = null; pinned.value = undefined; }, { flush: 'sync' });
@@ -140,16 +144,20 @@ if (live.value) {
 const badge = (s: ActionStatus) => (s === '待确认' ? 'warning' : s === '失败' ? 'error' : 'default');
 /** 对象类型显示名：真接口取 /actions/meta 的对象类型目录，mock 取 OBJ_KIND_LABEL；未登记的类型显示编号 */
 const kindLabel = (k: ActionRecord['objKind']) => (live.value ? remote.meta?.objKindLabel?.[k] : (OBJ_KIND_LABEL as Record<string, string>)[k]) ?? k;
+const hasObjectRef = (kind: ActionRecord['objKind']) => live.value ? !!kind : hasObjRef(kind);
+const ruleVersion = (version: unknown) => version == null || version === '' ? '' : String(version).startsWith('v') ? String(version) : `v${version}`;
 const sourceText = (a: ActionRecord) =>
-  a.source.type === '规则' ? `规则 ${a.source.ruleId} ${a.source.ruleVersion}${a.source.alertId ? ` · 告警 ${a.source.alertId}` : ''}`
+  typeof a.source === 'string' ? a.source
+  : a.source.type === '规则' ? `规则 ${a.source.ruleId} ${ruleVersion(a.source.ruleVersion)}${a.source.alertId ? ` · 告警 ${a.source.alertId}` : ''}`
   : a.source.type === '告警' ? `告警 ${a.source.alertId}`
   : a.source.type === '问数' ? `问数 · ${a.source.session} ${a.source.sessionTitle}`
   : a.source.type === '推演' ? `情景推演 · ${a.source.scenarioId} ${a.source.scenarioName}`
   : a.retryOf ? `重新提交 · ${a.retryOf}` : '手动';
 /** 规则暂存的动作由规则指定的确认人确认 / 撤回；其他人只能查看 */
-const confirmerOf = (a: ActionRecord) => a.source.confirmer ?? a.initiator;
-const notMine = (a: ActionRecord) => !!a.source.confirmer && a.source.confirmer !== ME.value;
-const notMineText = (a: ActionRecord) => `该动作由规则 ${a.source.ruleId} 暂存，指定确认人为 ${a.source.confirmer}，只有确认人可以确认提交或撤回`;
+const confirmerOf = (a: ActionRecord) => a.confirmer ?? a.source.confirmer ?? a.initiator;
+const notMine = (a: ActionRecord) => live.value ? !a.can?.confirm : !!a.source.confirmer && a.source.confirmer !== ME.value;
+const notMineText = (a: ActionRecord) => live.value ? a.can?.reasons.confirm || '当前身份不能确认此动作' : `该动作由规则 ${a.source.ruleId} 暂存，指定确认人为 ${a.source.confirmer}，只有确认人可以确认提交或撤回`;
+const phaseText = (a: ActionRecord) => a.dispatchPhase === 'queued' ? '待执行' : a.dispatchPhase === 'claimed' ? '调用中' : a.status === '结果未知' ? '结果未知 · 待对账' : a.status;
 const timeline = computed(() => (current.value?.log ?? []).map((l: ActionLog) => ({ time: l.desc ? `${l.time} · ${l.desc}` : l.time, text: l.text, status: l.status })));
 
 const columns = [
@@ -166,12 +174,13 @@ const columns = [
 function push(a: ActionRecord, l: ActionLog) { a.log.push(l); }
 
 async function approve() {
+  const ctx = dynamicContextKey();
   const a = current.value;
   if (!live.value || !a?.can?.approve) return;
   const ok = await confirm.ask({ title: `审批 ${a.action}`, tag: '审批中', okText: '审批并执行',
     target: `${kindLabel(a.objKind)} ${a.objLabel}`, fields: [{ label: '参数', value: a.params },
       { label: '幂等键', value: a.idemKey }], impact: '审批后按已发布定义执行，外部动作进入持久执行队列。' });
-  if (!ok) return;
+  if (!ok || ctx !== dynamicContextKey()) return;
   try { await afterWrite(await approveActionRun(a.id)); message.success('审批已处理'); }
   catch (e) { fail(e); }
 }
@@ -197,7 +206,7 @@ async function submit() {
   if (!ok || ctx !== dynamicContextKey()) return;
   pinned.value = a.id;
   if (REAL_API) {
-    try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(d.status === '审批中' ? `已提交：${d.action}，等待 ${d.approver} 审批` : `已提交：${d.action}，${d.status}`); } catch (e) { fail(e); }
+    try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(d.status === '审批中' ? `已提交：${d.action}，等待 ${d.approver} 审批` : `已提交：${d.action}，${phaseText(toRec(d))}`); } catch (e) { fail(e); }
     return;
   }
   a.status = '审批中';
@@ -300,13 +309,69 @@ async function doReconcile() {
   }
   reconOpen.value = false; reconAs.value = undefined; reconNote.value = '';
 }
-watch(selectedId, () => { reconOpen.value = false; withdrawOpen.value = false; });
+watch([dynamicContextKey, selectedId], () => { reconOpen.value = false; withdrawOpen.value = false; reconAs.value = undefined; reconNote.value = ''; withdrawReason.value = ''; });
+
+const launchOpen = ref(false), launchLoading = ref(false), launchSaving = ref(false);
+const launchChecking = ref(false);
+const launchOptions = ref<LaunchAction[]>([]);
+const launchType = ref<string>(), launchObject = ref<string>();
+const launchParams = ref('{}');
+const launchKey = ref('');
+const targetKw = ref(''), targetPage = ref(1), targetTotal = ref(0);
+const targetOptions = ref<{ id: string; label: string }[]>([]);
+const targetLoading = ref(false);
+const launchAction = computed(() => launchOptions.value.find((a) => a.id === launchType.value));
+async function openLaunch() {
+  const ctx = dynamicContextKey();
+  launchOpen.value = true; launchLoading.value = true; launchOptions.value = []; launchType.value = undefined; launchObject.value = undefined; launchParams.value = '{}'; launchKey.value = crypto.randomUUID();
+  targetKw.value = ''; targetPage.value = 1;
+  try { const rows = await listLaunchActions(); if (ctx === dynamicContextKey() && launchOpen.value) launchOptions.value = rows; }
+  catch (e) { if (ctx === dynamicContextKey()) fail(e); }
+  finally { if (ctx === dynamicContextKey()) launchLoading.value = false; }
+}
+let targetSeq = 0;
+watch([launchType, targetKw, targetPage], async () => {
+  const ctx = dynamicContextKey(), seq = ++targetSeq, code = launchType.value;
+  targetOptions.value = []; targetTotal.value = 0;
+  if (!code || !launchAction.value?.available) return;
+  targetLoading.value = true;
+  try { const r = await listActionTargets(code, targetKw.value, targetPage.value); if (seq === targetSeq && ctx === dynamicContextKey()) { targetOptions.value = r.items; targetTotal.value = r.total; if (r.page !== targetPage.value) targetPage.value = r.page; } }
+  catch (e) { if (seq === targetSeq && ctx === dynamicContextKey()) fail(e); }
+  finally { if (seq === targetSeq) targetLoading.value = false; }
+});
+watch([launchType, targetKw], () => { targetPage.value = 1; launchObject.value = undefined; });
+watch(launchType, () => { launchParams.value = '{}'; launchKey.value = crypto.randomUUID(); });
+watch(dynamicContextKey, () => { ++targetSeq; launchOpen.value = false; launchOptions.value = []; targetOptions.value = []; launchType.value = undefined; launchObject.value = undefined; }, { flush: 'sync' });
+async function launch() {
+  if (launchSaving.value || readonly.value || !launchAction.value?.available || !launchObject.value) return;
+  let params: Record<string, unknown>;
+  try { const value: unknown = JSON.parse(launchParams.value); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); params = value as Record<string, unknown>; }
+  catch { message.error('参数须为 JSON 对象'); return; }
+  launchSaving.value = true;
+  try {
+    const d = await stageActionRun({ typeId: launchType.value, objKind: launchAction.value.kind, objId: launchObject.value, objLabel: launchObject.value, params: JSON.stringify(params), source: { type: '手动' }, idempotencyKey: launchKey.value });
+    launchOpen.value = false; await afterWrite(d);
+    await router.replace({ query: { ...route.query, tab: undefined, act: d.id, page: undefined } });
+    message.success(`已暂存 ${d.id}，等待确认提交`);
+  } catch (e) { fail(e); }
+  finally { launchSaving.value = false; }
+}
+async function checkLaunch() {
+  if (launchChecking.value || readonly.value || !launchAction.value?.available || !launchObject.value) return;
+  let params: Record<string, unknown>;
+  try { const value: unknown = JSON.parse(launchParams.value); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); params = value as Record<string, unknown>; }
+  catch { message.error('参数须为 JSON 对象'); return; }
+  launchChecking.value = true;
+  try { const result = await validateActionLaunch(launchAction.value.id, { objKind: launchAction.value.kind, objId: launchObject.value, params }); message.success(result.message); }
+  catch (e) { fail(e); }
+  finally { launchChecking.value = false; }
+}
 
 const terminalText = computed(() => {
   const a = current.value; if (!a) return '';
-  if (a.status === '成功') return `已完成 · ${a.system} 外部单号 ${a.extRef}`;
+  if (a.status === '成功') return a.sysId ? `已完成 · ${a.system} 外部单号 ${a.extRef ?? '未记录'}` : '本体内部动作已完成';
   if (a.status === '已撤回') return '已撤回，不再执行';
-  if (a.status === '已对账') return a.reconcile === '外部未执行' ? '已对账 · 外部未执行，如仍需执行请重新发起' : `已对账 · 外部已成功（${a.extRef}）`;
+  if (a.status === '已对账') return a.reconcile === '外部未执行' ? '已对账 · 外部未执行，如仍需执行请重新发起' : `已对账 · 外部已成功（${a.extRef ?? '未记录外部单号'}）`;
   return '';
 });
 </script>
@@ -319,6 +384,8 @@ const terminalText = computed(() => {
           <a-radio-button v-for="t in TABS" :key="t.key" :value="t.key">{{ t.title }}</a-radio-button>
         </a-radio-group>
         <div class="ac-filters">
+          <a-button v-if="live && remote.meta?.canManage" size="small" type="primary" :disabled="readonly" @click="openLaunch">发起动作</a-button>
+          <a-button v-if="live" size="small" :loading="listLoading" @click="loadList(); loadDetail()">刷新</a-button>
           <a-select v-model:value="actionName" size="small" class="ac-w140"
             :options="[{ value: '全部', label: '全部动作' }, ...actionNames.map((v) => ({ value: v, label: v }))]" />
           <a-select v-model:value="system" size="small" class="ac-w120"
@@ -335,11 +402,11 @@ const terminalText = computed(() => {
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'id'"><span class="num">{{ record.id }}</span></template>
             <template v-else-if="column.key === 'obj'">
-              <ObjRef v-if="hasObjRef(record.objKind)" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
+              <ObjRef v-if="hasObjectRef(record.objKind)" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
             </template>
             <template v-else-if="column.key === 'source'"><span :class="record.source.type === '手动' ? 'c-2' : 'num'">{{ sourceText(record) }}</span></template>
             <template v-else-if="column.key === 'initiator'"><a-tooltip :title="record.initiator" placement="topLeft"><span class="ac-nowrap">{{ record.initiator }}</span></a-tooltip></template>
-            <template v-else-if="column.key === 'status'"><span v-if="record.status === '结果未知'" class="tl-attention ac-unk"><QuestionCircleOutlined /> 结果未知 · 待对账</span><a-badge v-else :status="badge(record.status)" :text="record.status" /></template>
+            <template v-else-if="column.key === 'status'"><span v-if="record.status === '结果未知' && !record.dispatchPhase" class="tl-attention ac-unk"><QuestionCircleOutlined /> {{ phaseText(record) }}</span><a-badge v-else :status="badge(record.status)" :text="phaseText(record)" /></template>
             <template v-else-if="column.key === 'submittedAt'"><span class="num">{{ record.submittedAt }}</span></template>
           </template>
         </a-table>
@@ -351,21 +418,21 @@ const terminalText = computed(() => {
     <div v-if="current" class="panel ac-detail">
       <div class="panel-head">
         <span class="t-16 fw-600">{{ current.action }}</span>
-        <span v-if="current.status === '结果未知'" class="tl-attention ac-unk"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
-        <a-badge v-else :status="badge(current.status)" :text="current.status" />
+        <span v-if="current.status === '结果未知' && !current.dispatchPhase" class="tl-attention ac-unk"><QuestionCircleOutlined /> {{ phaseText(current) }}</span>
+        <a-badge v-else :status="badge(current.status)" :text="phaseText(current)" />
       </div>
       <div class="ac-body scroll-area">
         <div v-if="!inList" class="t-12 c-3 ac-out">此动作已移出当前筛选（现为{{ current.status }}）</div>
         <a-descriptions :column="2" size="small" bordered :label-style="{ width: '96px' }">
           <a-descriptions-item label="编号" :span="2"><span class="num">{{ current.id }}</span><span class="c-3 num"> · {{ current.submittedAt }}</span></a-descriptions-item>
           <a-descriptions-item label="动作" :span="2">{{ current.action }}<span class="c-3"> · 动作类型 {{ current.typeVersion }}</span></a-descriptions-item>
-          <a-descriptions-item label="参数" :span="2">{{ current.params }}</a-descriptions-item>
+          <a-descriptions-item label="参数" :span="2">{{ current.paramsUnavailable || current.params || '—' }}</a-descriptions-item>
           <a-descriptions-item label="对象" :span="2">
-            <span class="c-3">{{ kindLabel(current.objKind) }} </span><ObjRef v-if="hasObjRef(current.objKind)" :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef><span v-else class="c-1">{{ current.objLabel }}</span>
+            <span class="c-3">{{ kindLabel(current.objKind) }} </span><ObjRef v-if="hasObjectRef(current.objKind)" :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef><span v-else class="c-1">{{ current.objLabel }}</span>
           </a-descriptions-item>
           <a-descriptions-item label="来源" :span="2">
-            <template v-if="current.source.type === '告警'"><span class="num">告警 {{ current.source.alertId }}</span><span class="c-3"> · 规则 {{ current.source.ruleId }} {{ current.source.ruleVersion }}</span></template>
-            <template v-else-if="current.source.type === '规则'"><span class="num">规则 {{ current.source.ruleId }} {{ current.source.ruleVersion }}</span><span v-if="current.source.alertId" class="c-3 num"> · 告警 {{ current.source.alertId }}</span><span class="c-3"> · 命中后自动暂存</span></template>
+            <template v-if="current.source.type === '告警'"><span class="num">告警 {{ current.source.alertId }}</span><span class="c-3"> · 规则 {{ current.source.ruleId }} {{ ruleVersion(current.source.ruleVersion) }}</span></template>
+            <template v-else-if="current.source.type === '规则'"><span class="num">规则 {{ current.source.ruleId }} {{ ruleVersion(current.source.ruleVersion) }}</span><span v-if="current.source.alertId" class="c-3 num"> · 告警 {{ current.source.alertId }}</span><span class="c-3"> · 命中后自动暂存</span></template>
             <template v-else>{{ sourceText(current) }}</template>
           </a-descriptions-item>
           <a-descriptions-item label="发起人"><span class="ac-nowrap">{{ current.initiator }}</span></a-descriptions-item>
@@ -387,8 +454,8 @@ const terminalText = computed(() => {
         </template>
 
         <template v-else-if="current.status === '待确认' && notMine(current)">
-          <span class="t-14 c-3 ac-foot-note">确认人为 {{ current.source.confirmer }}，你只能查看</span>
-          <a-tooltip :title="notMineText(current)"><a-button disabled>撤回</a-button></a-tooltip>
+          <span class="t-14 c-3 ac-foot-note">{{ live ? notMineText(current) : `确认人为 ${confirmerOf(current)}，你只能查看` }}</span>
+          <a-tooltip :title="current.can?.reasons.withdraw || notMineText(current)"><a-button disabled>撤回</a-button></a-tooltip>
           <a-tooltip :title="notMineText(current)"><a-button type="primary" disabled>确认提交</a-button></a-tooltip>
         </template>
 
@@ -403,14 +470,14 @@ const terminalText = computed(() => {
             </template>
             <a-button>撤回</a-button>
           </a-popover>
-          <a-button type="primary" @click="submit">确认提交</a-button>
+          <a-button type="primary" :disabled="live && !current.can?.confirm" @click="submit">确认提交</a-button>
         </template>
 
         <template v-else-if="current.status === '审批中'">
           <span class="t-14 c-3">等待 {{ current.approver }} 审批</span>
           <a-button v-if="live && current.can?.approve" type="primary" @click="approve">审批并执行</a-button>
         </template>
-        <span v-else-if="current.status === '执行中'" class="t-14 c-3">等待 {{ current.system }} 返回，{{ waitingText(current.sysId) }}</span>
+        <span v-else-if="current.status === '执行中'" class="t-14 c-3">{{ live ? '执行结果尚未返回' : `等待 ${current.system} 返回，${waitingText(current.sysId)}` }}</span>
 
         <template v-else-if="current.status === '失败'">
           <span v-if="current.retriedAs" class="t-14 c-3">已重新提交为 <a class="num" @click="pick({ id: current!.retriedAs! })">{{ current.retriedAs }}</a></span>
@@ -425,13 +492,13 @@ const terminalText = computed(() => {
               </template>
               <a-button>查看原因</a-button>
             </a-popover>
-            <a-button type="primary" @click="resubmit">重新提交</a-button>
+            <a-button type="primary" :disabled="live && !current.can?.resubmit" @click="resubmit">重新提交</a-button>
           </template>
         </template>
 
         <template v-else-if="current.status === '结果未知'">
-          <span class="t-14 c-3 ac-foot-note">每 15 分钟按幂等键自动查询，仍无法确认</span>
-          <a-button type="primary" @click="reconOpen = true">发起对账</a-button>
+          <span class="t-14 c-3 ac-foot-note">{{ current.dispatchPhase === 'queued' ? '已排队，等待执行' : current.dispatchPhase === 'claimed' ? '正在调用外部系统' : '按幂等键查询外部结果，可登记人工核对结论' }}</span>
+          <a-tooltip :title="current.can?.reasons.reconcile"><a-button type="primary" :disabled="live && !current.can?.reconcile" @click="reconOpen = true">发起对账</a-button></a-tooltip>
         </template>
 
         <span v-else class="t-14 c-3">{{ terminalText }}</span>
@@ -440,7 +507,7 @@ const terminalText = computed(() => {
 
     <!-- 发起对账：与公共确认卡（ConfirmActionModal）同样式；公共卡只挂一个且不能放单选 + 必填说明，所以在页内单独实现 -->
     <a-modal v-if="current" :open="reconOpen" :width="520" :mask-closable="false" ok-text="提交对账" cancel-text="取消"
-      :ok-button-props="{ disabled: !reconAs || !reconNote.trim() }" @ok="doReconcile" @cancel="reconOpen = false">
+      :ok-button-props="{ disabled: readonly || (live && !current.can?.reconcile) || !reconAs || !reconNote.trim() }" @ok="doReconcile" @cancel="reconOpen = false">
       <template #title><span class="t-16 fw-600">发起对账：{{ current.action }}</span><a-tag class="ca-tag">结果未知</a-tag></template>
       <div class="ca-target t-14 c-2">作用对象：<span class="c-1">{{ kindLabel(current.objKind) }} {{ current.objLabel }}</span></div>
       <a-descriptions :column="1" size="small" bordered :label-style="{ width: '96px' }">
@@ -449,7 +516,7 @@ const terminalText = computed(() => {
         <a-descriptions-item label="外部单号"><span class="num ac-nowrap">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
         <a-descriptions-item label="幂等键"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
       </a-descriptions>
-      <div class="ca-impact t-14 c-2">系统已每 15 分钟按幂等键自动查询 {{ current.system }}，仍无法确认。请人工核对后选择结论；对账不会重试写入外部系统。</div>
+      <div class="ca-impact t-14 c-2">请按幂等键核对 {{ current.system }} 的执行结果后选择结论；对账不会重试写入外部系统。</div>
       <div class="ca-row">
         <span class="t-14 c-2 ca-label">对账结论<span class="c-error">*</span></span>
         <a-radio-group v-model:value="reconAs" class="ac-radios">
@@ -462,6 +529,25 @@ const terminalText = computed(() => {
         <span class="t-14 c-2 ca-label">对账说明<span class="c-error">*</span></span>
         <a-textarea v-model:value="reconNote" :rows="3" placeholder="如核对人、外部查询结果" />
       </div>
+    </a-modal>
+    <a-modal v-model:open="launchOpen" title="发起动作" :width="640" ok-text="暂存待确认" :confirm-loading="launchSaving"
+      :ok-button-props="{ disabled: readonly || !launchAction?.available || !launchObject }" @ok="launch">
+      <a-form layout="vertical">
+        <a-form-item label="动作类型">
+          <a-select v-model:value="launchType" :loading="launchLoading" placeholder="选择已发布动作" :options="launchOptions.map((a) => ({ value: a.id, label: `${a.name} · ${a.version}${a.reason ? ` · ${a.reason}` : ''}`, disabled: !a.available }))" />
+        </a-form-item>
+        <a-form-item v-if="launchAction" label="目标对象">
+          <a-input-search v-model:value="targetKw" placeholder="按对象编号查找" :disabled="targetLoading" />
+          <a-select v-model:value="launchObject" :loading="targetLoading" placeholder="选择有权操作的对象" style="width: 100%; margin-top: 8px" :options="targetOptions.map((o) => ({ value: o.id, label: o.label }))" />
+          <a-pagination v-if="targetTotal > 10" v-model:current="targetPage" size="small" :page-size="10" :total="targetTotal" :show-size-changer="false" style="margin-top: 8px" />
+        </a-form-item>
+        <a-descriptions v-if="launchAction" size="small" :column="1">
+          <a-descriptions-item label="审批">{{ launchAction.approval }}</a-descriptions-item>
+          <a-descriptions-item v-for="p in launchAction.params" :key="p.api" :label="`${p.name} (${p.api})`">{{ p.type }}{{ p.required ? ' · 必填' : '' }}<span v-if="p.rule"> · {{ p.rule }}</span></a-descriptions-item>
+        </a-descriptions>
+        <a-form-item v-if="launchAction" label="参数 JSON"><a-textarea v-model:value="launchParams" :rows="8" spellcheck="false" /></a-form-item>
+        <a-button v-if="launchAction" :loading="launchChecking" :disabled="readonly || !launchObject || launchSaving" @click="checkLaunch">校验参数与条件</a-button>
+      </a-form>
     </a-modal>
   </div>
 </template>
