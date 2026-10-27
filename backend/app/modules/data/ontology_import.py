@@ -196,6 +196,14 @@ async def result(svc, code, user, action, request: Request):
     }
 
 
+def link_api(link_id: str) -> str:
+    """新建关系必须带 API 名（静态校验：字母开头，字母/数字/下划线，≤64）；由生成的关系编号派生。"""
+    api = re.sub(r"[^A-Za-z0-9_]", "_", link_id)
+    if not api[:1].isascii() or not api[:1].isalpha():
+        api = "L_" + api
+    return api[:64]
+
+
 def fields(values, before=None):
     return [
         ItemIn(key=k, op="update" if before is not None else "add", before=(before or {}).get(k), after=v)
@@ -340,7 +348,9 @@ async def apply_import(
             values = {
                 k: link[k] for k in ("name", "card", "fromProp", "toProp", "reverse", "nullable", "desc")
             }
-            values.update({"from": by_table[link["from"]].id, "to": by_table[link["to"]].id})
+            values.update(
+                {"api": link_api(link["id"]), "from": by_table[link["from"]].id, "to": by_table[link["to"]].id}
+            )
             if link.get("via"):
                 values["via"] = f"{body.schema_}.{link['via']}"
             if len(values.get("via", "")) > 64 or len(values["reverse"]) > 64:
