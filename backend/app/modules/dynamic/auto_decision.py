@@ -17,6 +17,7 @@ from sqlalchemy import exists, select
 
 from app.common.auth import resolve_user
 from app.core import clock
+from app.core.errors import AppError
 from app.jobs.scope import scoped_sessions
 from app.modules.dynamic.models import Alert, AlertStatus, DecisionLog
 
@@ -53,9 +54,26 @@ async def decide(session, alert: Alert) -> dict[str, Any]:
     return await svc.evaluate(DecisionEvaluateIn(alert_id=alert.code, dry_run=True, limit=5))
 
 
-async def _record_failure(sessions, alert_id: int, error: str) -> None:
+def _eligible():
+    return (
+        Alert.is_seed.is_(False),
+        Alert.status.in_((AlertStatus.open, AlertStatus.processing)),
+        Alert.triggered_at > clock.now() - WINDOW,
+        Alert.triggered_at <= clock.now(),
+        ~exists().where(DecisionLog.alert_code == Alert.code),
+    )
+
+
+async def _pending_alert(session, alert_id):
+    return await session.scalar(
+        select(Alert).where(Alert.id == alert_id, *_eligible())
+        .with_for_update(skip_locked=True).execution_options(populate_existing=True)
+    )
+
+
+async def _record_failure(sessions, alert_id: int, error: Exception) -> None:
     async with sessions() as session, session.begin():
-        alert = await session.get(Alert, alert_id)
+        alert = await _pending_alert(session, alert_id)
         if alert is None:
             return
         now = clock.now()
@@ -72,7 +90,11 @@ async def _record_failure(sessions, alert_id: int, error: str) -> None:
                 input={
                     "caller": {"kind": "system", "system": {"trigger": "rule", "ruleId": alert.rule_code}}
                 },
-                output={"suggestOnly": True, "recommendations": [], "notes": [], "error": error[:500]},
+                output={
+                    "suggestOnly": True, "recommendations": [], "notes": [],
+                    "error": "自动评估未完成，请检查规则运行身份与配置",
+                    "errorCode": error.code if isinstance(error, AppError) else "AUTO_DECISION_FAILED",
+                },
                 created_by=actor,
                 created_at=now,
             )
@@ -85,13 +107,8 @@ async def decide_pending(ontology_id: int, *, limit: int = BATCH) -> int:
         ids = list(
             await session.scalars(
                 select(Alert.id)
-                .where(
-                    Alert.is_seed.is_(False),
-                    Alert.status.in_((AlertStatus.open, AlertStatus.processing)),
-                    Alert.triggered_at > clock.now() - WINDOW,
-                    ~exists().where(DecisionLog.alert_code == Alert.code),
-                )
-                .order_by(Alert.triggered_at)
+                .where(*_eligible())
+                .order_by(Alert.triggered_at, Alert.id)
                 .limit(limit)
             )
         )
@@ -99,14 +116,14 @@ async def decide_pending(ontology_id: int, *, limit: int = BATCH) -> int:
     for alert_id in ids:
         try:
             async with sessions() as session, session.begin():
-                alert = await session.get(Alert, alert_id)
+                alert = await _pending_alert(session, alert_id)
                 if alert is not None:
                     await decide(session, alert)
                     done += 1
         except Exception as exc:  # 尽力而为：失败不影响告警
-            logger.exception("Auto decision failed for alert id %s", alert_id)
+            logger.error("Auto decision failed for alert id %s (%s)", alert_id, type(exc).__name__)
             try:
-                await _record_failure(sessions, alert_id, getattr(exc, "message", None) or repr(exc))
+                await _record_failure(sessions, alert_id, exc)
             except Exception:
-                logger.exception("Auto decision failure record failed for alert id %s", alert_id)
+                logger.error("Auto decision failure record failed for alert id %s", alert_id)
     return done

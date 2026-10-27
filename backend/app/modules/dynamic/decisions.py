@@ -141,7 +141,7 @@ class DecisionService:
                 details={"required": [DRY_RUN_SCOPE]},
             )
         alert = (
-            await AlertService(self.session, self.user, self.catalog, self.ports).get(body.alert_id)
+            await AlertService(self.session, self.user, self.catalog, self.ports).get(body.alert_id, lock=True)
             if body.alert_id
             else None
         )
