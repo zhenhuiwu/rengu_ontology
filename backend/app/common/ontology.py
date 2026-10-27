@@ -29,6 +29,9 @@ async def set_ontology_scope(session: AsyncSession, ontology_id: int) -> None:
             text("SELECT set_config('rengu.ontology_id', :ontology_id, true)"),
             {"ontology_id": str(ontology_id)},
         )
+        from app.common.sql_guard import load_governed_tables
+
+        await load_governed_tables(session, ontology_id)
 
 
 @event.listens_for(Session, "after_begin")
