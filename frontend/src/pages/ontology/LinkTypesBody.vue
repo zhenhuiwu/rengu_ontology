@@ -394,9 +394,12 @@ async function loadCatalog() {
   finally { if (n === catalogSeq && key === catalogKey()) catalogLoading.value = false; }
 }
 watch(catalogKey, () => void loadCatalog(), { immediate: true });
-watch(() => JSON.stringify([selectedId.value, staticContextKey()]), async () => {
+watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.view, workflow.loading.value,
+  draft.value?.id, cr.loading.value, cr.error.value, cr.head.value?.targets]), async () => {
   const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value; definitionError.value = '';
-  if (!isStaticReal() || !id || cr.head.value?.targets.some((t) => t.kind === 'link' && t.id === id && t.isNew)) return;
+  if (!isStaticReal() || !id || (route.query.view === 'draft' && workflow.loading.value)
+    || (draft.value && (cr.loading.value || !cr.head.value || cr.error.value))
+    || cr.head.value?.targets.some((t) => t.kind === 'link' && t.id === id && t.isNew)) return;
   try { const data = await fetchStaticDetail<LinkType>(`/link-types/${encodeURIComponent(id)}`); if (n === definitionSeq && key === staticContextKey() && id === selectedId.value) baseline.value = [...baseline.value.filter((l) => l.id !== id), data]; }
   catch (e) { if (n === definitionSeq && key === staticContextKey() && id === selectedId.value && !cr.head.value?.targets.some((t) => t.kind === 'link' && t.id === id && t.isNew)) definitionError.value = e instanceof Error ? e.message : String(e); }
 }, { immediate: true });

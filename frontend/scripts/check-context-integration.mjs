@@ -94,6 +94,7 @@ const pageImports = {
   '@/composables/usePreview': { usePreview: () => ({ userName: vue.ref('User') }) },
   '@/composables/usePagedQuery': { usePagedQuery: () => ({ page: vue.ref(1), size: vue.ref(15) }) },
   '@/mock/format': {}, '@/api/qaObjects': {},
+  '@/api/http': { currentApiContext: () => context }, '@/api/static': { isStaticReal: () => true }, '@/api/qa': { qaReal: () => true },
   '../qa/qaFallback': { qaLive: vue.ref(true) }, '../qa/useQaSession': {},
   './objMeta': { metaContextKey: metaApi.metaContextKey, listTypes: async () => [type], loadMeta: () => { const pending = defer(); metaPending.push(pending); return pending.promise; } },
   './objRows': {},

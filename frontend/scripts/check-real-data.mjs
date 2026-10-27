@@ -23,7 +23,7 @@ let list = { items: [], current: null };
 let cur = { current: null };
 const releases = load('api/releases.ts', {
   vue, '@/mock/releases': { RELEASES: [{ ver: 'demo' }] },
-  './http': { apiClient: () => ({ isReal: () => true, get: async (path) => {
+  './http': { currentApiContext: () => ({}), apiClient: () => ({ isReal: () => true, get: async (path) => {
     if (fail) throw new Error('NETWORK_ERROR');
     return path.endsWith('/current') ? cur : list;
   } }) },
@@ -72,7 +72,7 @@ const staticApi = {
 const staticPage = load('pages/ontology/parts/useStaticPage.ts', { vue: { ...vue, onBeforeUnmount() {} }, '@/api/static': staticApi });
 const page = load('pages/ontology/Releases.vue', {
   '@/api/profile': { loadMyProfile: async () => ({ id: 'U-OWNER', name: 'Owner', capabilities: { publish: false, rollback: false } }) },
-  '@/api/action': { invalidateActionSnapshot() {} },
+  '@/api/action': { invalidateActionSnapshot() {} }, '@/api/releases': { fetchCurrentRelease: async () => ({ current: null }) },
   ...shared, '@/api/http': { currentApiContext: () => ctx },
   '@/api/static': staticApi, './parts/useStaticPage': staticPage,
   '@/mock/changes': { CHANGE_REQUESTS: [{ id: 'DEMO' }], ONTOLOGY_ADMINS: [], crDetail: () => ({ diffs: [{ key: 'DEMO-DETAIL' }], checks: [], impact: {}, times: {} }), reviewLog: () => [], checkCounts: () => ({}), registerChange() { registeredChanges++; } },

@@ -20,6 +20,10 @@ function load(file, imports, props, expose) {
   return exports;
 }
 const tick = () => new Promise(setImmediate);
+const graphEdges = {};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../src/components/graphEdges.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+}).outputText, { exports: graphEdges });
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 const context = vue.reactive({ demoAs: 'admin', ver: null, previewAs: null });
 const props = vue.reactive({ objectId: 'db-order', readonly: false });
@@ -124,6 +128,7 @@ route.query.lcv = 'changes';
 const lcScope = vue.effectScope();
 const lc = lcScope.run(() => load('pages/ontology/parts/object/ObjBehaviorLifecycle.vue', {
   ...shared,
+  '@/components/graphEdges': graphEdges,
   '@/stores/app': { useAppStore: () => vue.reactive({ viewVersion: null }) },
   '@/stores/confirm': { useConfirmStore: () => ({}) },
   '@/composables/useUnsavedGuard': { useUnsavedGuard() {}, confirmDiscard: async () => true },

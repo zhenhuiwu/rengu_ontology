@@ -139,8 +139,8 @@ assert.equal(loaded.name, 'Late');
 assert.equal(loaded.sampleQuestions.length, 0);
 assert.equal(loaded.metrics.length, 0);
 assert.equal(metaApi.actionsOf({ id: 'late', name: 'Late' }).length, 0);
-assert.ok(metadataCalls.some((c) => c.path.endsWith('/properties') && c.page === 2));
-for (const [suffix, error] of [['/meta', { status: 403, code: 'FORBIDDEN' }], ['/properties', { status: 404, code: 'NOT_FOUND' }], ['/meta', { status: 0, code: 'NETWORK_ERROR' }]]) {
+assert.ok(!metadataCalls.some((c) => c.path.endsWith('/properties')), 'use-area metadata never requires build-area property pages');
+for (const [suffix, error] of [['/meta', { status: 403, code: 'FORBIDDEN' }], ['/meta', { status: 404, code: 'NOT_FOUND' }], ['/meta', { status: 0, code: 'NETWORK_ERROR' }]]) {
   context.ver = `error-${suffix}-${error.code}`;
   failurePath = `/object-types/late${suffix}`; metadataFailure = error;
   await assert.rejects(metaApi.loadMeta('late'), (e) => e === error);

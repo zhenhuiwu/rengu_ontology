@@ -31,38 +31,37 @@ facetError = { code: 'NETWORK_ERROR' };
 assert.equal(await meta.loadStaticFacets('store', {}), null);
 facetError = null;
 assert.equal((await meta.loadStaticFacets('store', {})).length, 0);
-const slowSearch = defer();
-const objRows = load('pages/objects/objRows.ts', {
-  '@/mock/stores': {}, '@/mock/products': {}, '@/mock/orders': {}, '@/mock/objects-qa': {},
-  '@/api/qaObjects': { exploreSearch: () => slowSearch.promise }, './objMeta': meta,
-});
-facetError = { code: 'VALIDATION_FAILED' };
-await assert.rejects(objRows.searchRows({ id: 'store' }, { kw: '', filters: {} }, true), (e) => e === facetError);
-slowSearch.resolve({}); // The rejected facet is observed while the other request is still pending.
-
+// Rows and facets now share a single authorized request and predicate.
+let rowError;
 const rowCalls = [];
-let facetCalls = 0;
-const pagedObjects = load('pages/objects/objRows.ts', {
+const objRows = load('pages/objects/objRows.ts', {
   '@/mock/stores': {}, '@/mock/products': {}, '@/mock/orders': {}, '@/mock/objects-qa': {},
   '@/api/qaObjects': { exploreSearch: async (_id, query) => {
     rowCalls.push(query);
-    return { items: [{ id: String(query.page) }], total: 30, page: query.page, bound: true, boundProps: [], facets: [] };
-  } },
-  './objMeta': { loadStaticFacets: async () => { facetCalls++; return [{ key: 'stored', kind: 'enum', values: [] }]; } },
+    if (rowError) throw rowError;
+    return { items: [{ id: String(query.page) }], total: 30, page: query.page, bound: true, boundProps: [], facets: query.withFacets ? [{ key: 'stored', kind: 'enum', values: [] }] : [] };
+  } }, './objMeta': meta,
 });
-const initialRows = await pagedObjects.searchRows({ id: 'order' }, { kw: '', filters: {}, page: 1, size: 10 }, true);
+for (const code of ['VALIDATION_FAILED', 'UNAUTHORIZED', 'FORBIDDEN', 'NETWORK_ERROR']) {
+  rowError = { code };
+  await assert.rejects(objRows.searchRows({ id: 'store' }, { kw: '', filters: {} }, true), e => e === rowError, 'real search errors never fall back to demo rows');
+}
+rowError = null;
+rowCalls.length = 0;
+const initialRows = await objRows.searchRows({ id: 'order' }, { kw: 'actual', filters: { channel: ['DB'] }, page: 1, size: 10 }, true);
 assert.equal(initialRows.facets[0].key, 'stored');
-assert.equal(rowCalls[0].withFacets, false, 'do not aggregate duplicate facets in both endpoints');
-assert.equal(facetCalls, 1);
-const nextRows = await pagedObjects.searchRows({ id: 'order' }, { kw: '', filters: {}, page: 2, size: 10, withFacets: false }, true);
+assert.equal(rowCalls[0].withFacets, true, 'first page requests rows and facets together');
+assert.deepEqual(rowCalls[0].filters, { channel: ['DB'] });
+assert.equal(rowCalls[0].kw, 'actual');
+const nextRows = await objRows.searchRows({ id: 'order' }, { kw: 'actual', filters: { channel: ['DB'] }, page: 2, size: 10, withFacets: false }, true);
 assert.equal(nextRows.items[0].id, '2');
 assert.equal(rowCalls[1].page, 2);
 assert.equal(rowCalls[1].size, 10);
 assert.equal(rowCalls[1].withFacets, false);
-assert.equal(facetCalls, 1, 'turning a page must not reload unchanged facet counts');
+assert.equal(rowCalls.length, 2, 'one request per page; no second inconsistent facet request');
 
 const route = vue.reactive({ query: {} });
-const qaLive = vue.ref(true);
+const qaWriteReal = vue.ref(true);
 const pagesQuery = { page: vue.ref(3), size: vue.ref(15) };
 const requests = [];
 const api = { listPages: (query) => { const pending = defer(); requests.push({ query, ...pending }); return pending.promise; }, deletePage: async () => {} };
@@ -74,7 +73,7 @@ const myPages = load('pages/qa/MyPages.vue', {
   '@/stores/confirm': { useConfirmStore: () => ({ ask: async () => true }) }, '@/mock': {},
   '@/mock/qa-pages': { MY_PAGES: [], OTHER_PAGES: [], PAGE_TEMPLATES: [{ id: 'DEMO', scene: 'DEMO' }], PAGE_SCOPES: ['DEMO'] }, '@/api/qaPages': api,
   '@/api/http': { currentApiContext: () => ({}) }, '@/api/qa': { getSessionOptions: async () => ({ scopes: [{ value: 'DB Scope' }] }) },
-  './qaFallback': { qaLive, qaWriteReal: vue.ref(true) }, './useQaSession': {},
+  './qaFallback': { qaWriteReal, qaFallBackIfDown: () => false }, './useQaSession': { errText: String },
 }, 'export { loadList, loadCur, remove, live, loadPageOptions, scopeChoices, tplCur, tplCount, cutoff };');
 assert.equal(myPages.scopeChoices.value.length, 0);
 assert.equal(myPages.tplCount.value, 0);
@@ -107,12 +106,12 @@ assert.equal(myPages.live.list.items[0].id, 'filtered', 'stale response must not
 assert.equal(myPages.live.count, 1);
 assert.equal(pagesQuery.page.value, 1);
 const pending = myPages.loadList();
-qaLive.value = false;
+qaWriteReal.value = false;
 await myPages.loadList();
 settle(8, 0);
 await pending;
 assert.equal(myPages.live.list, null, 'turning off live mode must clear real data and invalidate pending responses');
-qaLive.value = true;
+qaWriteReal.value = true;
 route.query = { page_id: 'P1' };
 const detail = defer();
 api.getPage = () => detail.promise;

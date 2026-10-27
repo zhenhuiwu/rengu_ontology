@@ -35,6 +35,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import NewActionEventForm from './parts/NewActionEventForm.vue';
 import ActionTrialForm from './parts/ActionTrialForm.vue';
 import ActionExecutionEditor from './parts/ActionExecutionEditor.vue';
+import ActionPolicyEditor from './parts/ActionPolicyEditor.vue';
 import ActionParamFunctionEditor from './parts/ActionParamFunctionEditor.vue';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
@@ -146,6 +147,14 @@ const editSec = de.section<OntologyEdit>('edits', () => writebackOf(cur.value).e
 const effSec = de.section<SideEffect>('effects', () => writebackOf(cur.value).effects, (e) => e.target);
 interface WbCfg { sysId: string | null; endpoint: string; idemKey: string }
 const cfgSec = de.section<WbCfg>('config', () => [{ sysId: cur.value.sysId, endpoint: cur.value.endpoint, idemKey: cur.value.idemKey }], () => 'cfg');
+const policyInfo = computed(() => cur.value as ActionType & { policyStatus?: string; policyStored?: unknown });
+const policySec = de.section<unknown>('policy', () => policyInfo.value.policyStored == null ? [] : [policyInfo.value.policyStored], () => 'policy');
+const shownPolicy = computed(() => policySec.rows.value[0]?.data);
+const policyOpen = ref(false), policyInitial = ref<unknown>();
+const policyEditor = ref<{ validate: () => boolean; value: () => unknown } | null>(null);
+function editPolicy() { if (!canEdit.value || !policyInfo.value.policyStatus) return; policyInitial.value = JSON.parse(JSON.stringify(shownPolicy.value ?? { mode: 'confirm', overflow: 'stage' })); policyOpen.value = true; }
+function applyPolicy() { if (!canEdit.value || !policyEditor.value?.validate()) return; const value = policyEditor.value.value(); if (policySec.rows.value.length) policySec.update('policy', value); else policySec.add(value); policyOpen.value = false; }
+watch(() => JSON.stringify([cur.value.id, actionContextKey(), isDraft.value]), () => { policyOpen.value = false; });
 const SECS = { params: paramSec, conds: condSec, edits: editSec, effects: effSec, config: cfgSec } as const;
 type SecName = keyof typeof SECS;
 const flat = <T extends object>(rows: DiffRow<T>[]) => rows.map((r) => ({ ...r.data, _key: r.key, _mark: r.mark }));
@@ -499,6 +508,13 @@ const verCols = [
             <a-descriptions-item label="超时"><span class="at-ell" :title="eff.timeout">{{ eff.timeout }}</span></a-descriptions-item>
             <a-descriptions-item label="重试"><span class="at-ell" :title="eff.retry">{{ eff.retry }}</span></a-descriptions-item>
           </a-descriptions>
+          <template v-if="real">
+            <div class="at-sec t-14 fw-600 at-sec-row"><span>执行策略</span><a-button v-if="canEdit" :disabled="!policyInfo.policyStatus" size="small" @click="editPolicy">{{ shownPolicy == null ? '配置策略' : '编辑策略' }}</a-button></div>
+            <div v-if="shownPolicy == null" class="t-14 c-2">{{ policyInfo.policyStatus === 'unconfigured' ? '未配置' : '未记录' }}</div>
+            <div v-else-if="policyInfo.policyStatus === 'invalid' && !policySec.rows.value[0]?.mark" class="t-14 c-2">原策略格式不受支持，当前按确认执行；编辑时请核对原记录。</div>
+            <div v-else class="t-14 c-2">{{ ({suggest:'仅建议',confirm:'确认后执行',auto:'满足条件后自动执行'} as Record<string,string>)[(shownPolicy as any)?.mode] ?? '未识别的原策略' }}</div>
+            <a-collapse v-if="shownPolicy != null" ghost><a-collapse-panel key="policy" header="查看策略记录"><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(shownPolicy, null, 2) }}</pre></a-collapse-panel></a-collapse>
+          </template>
           <div class="at-sec t-14 fw-600 at-sec-row">
             <span>使用该动作的规则与告警<InfoTip text="点规则编号在当前页查看规则" /></span>
           </div>
@@ -708,6 +724,9 @@ const verCols = [
   <NewActionEventForm v-if="real" v-model:open="createOpen" kind="action" :options="createOptions" :row-forms="FORMS" />
   <ActionTrialForm v-if="real && cur.id" :key="dryKey()" v-model:open="trialOpen" :action="cur" :cr="isDraft ? draft?.id : undefined"
     :disabled="!ready || !!currentApiContext().previewAs || (isDraft && dirty) || cur.status === '草稿'" @result="hasTrialResult = true" />
+  <a-modal v-model:open="policyOpen" title="执行策略" ok-text="记入本地草稿" cancel-text="取消" :width="640" destroy-on-close @ok="applyPolicy">
+    <ActionPolicyEditor v-if="policyOpen" ref="policyEditor" :initial="policyInitial" :params="paramSec.rows.value.map(r => r.data)" />
+  </a-modal>
   <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="real && (editor.sec === 'edits' || editor.sec === 'effects') ? 820 : 520" @ok="saveEditor">
     <ActionExecutionEditor v-if="real && editor.open && (editor.sec === 'edits' || editor.sec === 'effects')" ref="executionEditor" v-model="editor.form" :section="editor.sec" :action="cur" :params="flat(paramSec.rows.value)" />
     <a-form v-else layout="vertical" class="at-form">

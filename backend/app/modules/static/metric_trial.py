@@ -3,6 +3,7 @@
 from copy import deepcopy
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -111,12 +112,59 @@ async def metric_definition(session, code: str, user: CurrentUser, ver=None, cr_
     return metric
 
 
+async def execution_bindings(session, objects, metric):
+    """Resolve explicit deployment bindings only; no connection is opened during compilation."""
+    from app.modules.qa.explore_api import _bind
+    from app.modules.qa.object_source import configured_bindings
+
+    ontology_id = require_ontology_id(session)
+    codes = {row["objectType"] for row in configured_bindings() if row["ontologyId"] == ontology_id}
+    if not codes:
+        return {}
+    metadata = {r.get("k"): r.get("v") for r in metric.get("def", []) if isinstance(r, dict)}
+    names = set()
+    for value in (metric.get("formula"), metadata.get("时间字段"), metadata.get("默认过滤")):
+        if not value:
+            continue
+        try:
+            for node in parse_formula(value).find_all(exp.Column):
+                names.add(node.name if isinstance(node.parent, exp.Count) and not node.table else node.table)
+        except AppError:
+            continue  # The compiler reports invalid definitions without contacting unrelated sources.
+    result = {}
+    for obj in objects:
+        if obj.code in codes and any(name in names for name in (obj.code, obj.api_name, obj.display_name)):
+            result[obj.code] = (await _bind(session, obj.code))[1] if obj.status.value == "已发布" else None
+    return result
+
+
+def metric_governed(obj, ontology_id, bindings):
+    if obj.code in bindings:
+        binding = bindings[obj.code]
+        return SimpleNamespace(table=binding.base, object_type=obj.code, binding=binding) if binding else None
+    return next((g for g in governed_tables(ontology_id).values() if g.object_type == obj.code), None)
+
+
+def metric_column(prop, gov):
+    if gov is None:
+        return None
+    binding = getattr(gov, "binding", None)
+    if binding is not None:
+        return binding.cols.get(prop.api_name) if prop.api_name in binding.out else None
+    return (
+        gov.table.c[prop.backing_column]
+        if prop.backing_column and prop.backing_column in gov.table.c
+        else None
+    )
+
+
 class BoundFormula:
     """Small SQL-expression subset compiled to SQLAlchemy, with no user SQL execution."""
 
-    def __init__(self, objects, ontology_id: int):
+    def __init__(self, objects, ontology_id: int, bindings=None):
         self.objects = objects
         self.ontology_id = ontology_id
+        self.bindings = bindings or {}
         self.object = None
         self.governed = None
         self.aggregates = 0
@@ -145,15 +193,13 @@ class BoundFormula:
         props = [p for p in obj.properties if name in (p.api_name, p.display_name)]
         reference = f"{obj.code}.{name}"
         if not props:
-            gov = next(
-                (g for g in governed_tables(self.ontology_id).values() if g.object_type == obj.code), None
-            )
+            gov = metric_governed(obj, self.ontology_id, self.bindings)
             candidates = [
                 {
                     "reference": f"{obj.code}.{p.api_name}",
                     "name": p.display_name,
                     "type": p.data_type,
-                    "mapped": bool(gov is not None and p.backing_column and p.backing_column in gov.table.c),
+                    "mapped": metric_column(p, gov) is not None,
                 }
                 for p in obj.properties
                 if not p.is_sensitive
@@ -187,7 +233,7 @@ class BoundFormula:
                 "当前试算引擎仅支持单个受治理对象，暂不支持跨对象聚合或过滤",
                 reason="CROSS_OBJECT_UNSUPPORTED",
             )
-        gov = next((g for g in governed_tables(self.ontology_id).values() if g.object_type == obj.code), None)
+        gov = metric_governed(obj, self.ontology_id, self.bindings)
         if gov is None:
             raise unavailable(
                 f"对象「{name}」尚未绑定受治理业务表，当前不能试算",
@@ -206,13 +252,14 @@ class BoundFormula:
         prop = self.property(obj, node.name)
         if node.table:
             self.bind_object(node.table)
-        if not prop.backing_column or prop.backing_column not in self.governed.table.c:
+        column = metric_column(prop, self.governed)
+        if column is None:
             raise unavailable(
                 f"属性「{obj.code}.{prop.api_name}」尚未绑定真实业务列，当前不能试算",
                 reason="PROPERTY_UNBOUND",
                 reference=f"{obj.code}.{prop.api_name}",
             )
-        return self.governed.table.c[prop.backing_column]
+        return column
 
     def expression(self, node):
         if isinstance(node, exp.Paren):
@@ -221,7 +268,8 @@ class BoundFormula:
             self.aggregates += 1
             if isinstance(node, exp.Count) and isinstance(node.this, exp.Column) and not node.this.table:
                 gov = self.bind_object(node.this.name)
-                return func.count(gov.table.c.id)
+                binding = getattr(gov, "binding", None)
+                return func.count(binding.id_col if binding is not None else gov.table.c.id)
             col = self.column(node.this)
             if isinstance(node, exp.Count) and isinstance(col.type, (Date, DateTime)):
                 self.count_times[col.key] = (f"{self.object.code}.{node.this.name}", col)
@@ -320,7 +368,7 @@ def parse_formula(value, *, normalize_separators=False):
     return trees[0]
 
 
-def definition_issues(metric, objects, ontology_id):
+def definition_issues(metric, objects, ontology_id, bindings=None):
     """Validate all explicit references; candidates describe definitions, never alias substitutions."""
     issues, references, object_codes = [], [], set()
     metadata = {r.get("k"): r.get("v") for r in metric.get("def", []) if isinstance(r, dict)}
@@ -338,7 +386,7 @@ def definition_issues(metric, objects, ontology_id):
             )
         except (AppError, TypeError) as error:
             issues.append({"reason": "FILTER_INVALID", "message": str(error)})
-    resolver = BoundFormula(objects, ontology_id)
+    resolver = BoundFormula(objects, ontology_id, bindings)
     base = None
     for area, part in trees:
         for node in part.find_all(exp.Column):
@@ -354,7 +402,7 @@ def definition_issues(metric, objects, ontology_id):
                 try:
                     obj = resolver.resolve_object(name)
                     object_codes.add(obj.code)
-                    if not any(g.object_type == obj.code for g in governed_tables(ontology_id).values()):
+                    if metric_governed(obj, ontology_id, bindings or {}) is None:
                         issue = {
                             "reason": "OBJECT_UNBOUND",
                             "reference": obj.code,
@@ -370,7 +418,7 @@ def definition_issues(metric, objects, ontology_id):
                 except AppError:
                     pass
     for area, node in references:
-        bound = BoundFormula(objects, ontology_id)
+        bound = BoundFormula(objects, ontology_id, bindings)
         try:
             if isinstance(node.parent, exp.Count) and not node.table:
                 bound.bind_object(node.name)
@@ -412,11 +460,11 @@ def definition_issues(metric, objects, ontology_id):
     return issues
 
 
-def compile_metric(metric, objects, ontology_id):
-    issues = definition_issues(metric, objects, ontology_id)
+def compile_metric(metric, objects, ontology_id, bindings=None):
+    issues = definition_issues(metric, objects, ontology_id, bindings)
     if issues:
         raise unavailable("；".join(issue["message"] for issue in issues), issues=issues)
-    bound = BoundFormula(objects, ontology_id)
+    bound = BoundFormula(objects, ontology_id, bindings)
     tree = parse_formula(metric.get("formula"))
     expression = bound.expression(tree.expressions[0])
     if not bound.aggregates or bound.object is None:
@@ -456,7 +504,10 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
         metric = await metric_definition(session, code, user, ver, cr_id)
         if ver:
             raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
-        compile_metric(metric, list(await session.scalars(select(ObjectType))), require_ontology_id(session))
+        objects = list(await session.scalars(select(ObjectType)))
+        compile_metric(
+            metric, objects, require_ontology_id(session), await execution_bindings(session, objects, metric)
+        )
     except AppError as error:
         if error.code != "METRIC_TRIAL_UNAVAILABLE":
             raise
@@ -524,8 +575,9 @@ async def evaluate_metric(
     metric = await metric_definition(session, code, user, ver, cr_id)
     if ver:
         raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
+    objects = list(await session.scalars(select(ObjectType)))
     bound, expression, temporal, time_field, conds = compile_metric(
-        metric, list(await session.scalars(select(ObjectType))), require_ontology_id(session)
+        metric, objects, require_ontology_id(session), await execution_bindings(session, objects, metric)
     )
     tz = ZoneInfo(timezone or get_settings().display_tz)
     cutoff_at = at or clock.now()
@@ -544,10 +596,11 @@ async def evaluate_metric(
     if period in ("month", "week"):
         day = cast(func.date_trunc(period, day), Date)
     grouping = []
+    binding = getattr(bound.governed, "binding", None)
     if object_kind:
-        if bound.object.code != object_kind or "code" not in bound.governed.table.c:
+        if bound.object.code != object_kind or (binding is None and "code" not in bound.governed.table.c):
             raise unavailable("指标没有明确的规则对象分组映射，不能把汇总值分摊给各对象")
-        grouping = [bound.governed.table.c.code]
+        grouping = [(binding.id_col if binding is not None else bound.governed.table.c.code).label("code")]
     if at is not None and isinstance(temporal.type, DateTime):
         conds.append(temporal <= cutoff_at)
     stmt = (
@@ -557,9 +610,16 @@ async def evaluate_metric(
         .group_by(day, *grouping)
         .order_by(day)
     )
-    sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
-    # Shared SQL guard supplies inherited row scopes, including order_line -> order -> store.
-    rows = (await run_guarded(await session.connection(), sql, user)).mappings().all()
+    if binding is not None:
+        from app.common.row_filter import apply_row_filter
+
+        stmt = await apply_row_filter(stmt, user, bound.object.code, binding.cols)
+        async with binding.read(session) as reader:
+            rows = (await reader.execute(stmt)).mappings().all()
+    else:
+        sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+        # Shared SQL guard supplies inherited row scopes, including order_line -> order -> store.
+        rows = (await run_guarded(await session.connection(), sql, user)).mappings().all()
     values = [
         {
             "date": str(row["date"]),

@@ -10,6 +10,7 @@ from app.modules.static.models import ChangeRequest, CrItem, CRStatus, Metric
 from app.modules.versioning.models import OntologyRelease
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 AUTHOR = {"X-Demo-As": "U010004"}
@@ -24,6 +25,7 @@ async def mv(session):
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
         await grant_fixture_roles(session)
+        await bind_workspace_members(session)
         # 本专项只发布自己创建的定义变更，既有已通过单子保持原记录但不混入本次。
         for row in await session.scalars(
             select(ChangeRequest).where(ChangeRequest.status == CRStatus.approved)
@@ -118,7 +120,8 @@ async def test_actual_versions_baseline_and_rollback_only_stages_cr(client, mv):
     assert baseline["release"] == "" and "非原发布时间" in baseline["change"]
     assert baseline["at"] == m.version_rows[0]["at"]
     assert m.version_rows[0]["release"] == first["ver"] and m.version_rows[0]["by"] == "王敏"
-    assert set(m.version_rows[0]["definition"]) == set(FIELDS)
+    assert set(m.version_rows[0]["definition"]) == set(FIELDS) | {"execDef"}
+    assert m.version_rows[0]["definition"]["execDef"] == original["execDef"]
     assert m.version_rows[0]["definition"]["variants"] == variants
     await publish(
         client, await edit(client, {"formula": "SUM(订单行.原价金额)", "dims": ["区域"], "variants": []})

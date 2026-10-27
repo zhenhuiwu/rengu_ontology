@@ -41,7 +41,7 @@ function close() { if (!busy.value) void guard(() => { open.value = false; }); }
 let seq = 0, sourceSeq = 0;
 const contextKey = () => JSON.stringify(currentApiContext());
 watch(open, (v) => { if (v) { opts.value = undefined; resume.value = props.crId; resumeApi.value = props.targetId ?? ''; busy.value = false; } });
-watch(() => [visible.value, props.kind, props.targetId, props.crId, contextKey()], () => { void load(); });
+watch(() => [visible.value, props.kind, props.targetId, props.crId, props.newTarget, contextKey()], () => { void load(); });
 async function load() {
   const my = ++seq, key = contextKey();
   if (!visible.value) return;

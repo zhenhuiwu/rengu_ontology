@@ -126,11 +126,13 @@ const REFS = shallowRef([...METRIC_REFS]);
 if (isStaticReal()) {
   let detailSeq = 0;
   onBeforeUnmount(() => { ++detailSeq; });
-  watch(() => JSON.stringify([publishedCurrent.value?.id, staticContextKey()]), async () => {
+  watch(() => JSON.stringify([publishedCurrent.value?.id, staticContextKey(), route.query.view,
+    workflow.loading.value, draft.value?.id, cr.loading.value, cr.error.value, newTarget.value]), async () => {
     const seq = ++detailSeq, key = staticContextKey(), id = publishedCurrent.value?.id;
     metricDetailError.value = '';
     DEF.value = []; DIMS.value = []; VERSIONS.value = []; REFS.value = []; rawDefinition.value = {};
-    if (!id || newTarget.value) return;
+    if (!id || newTarget.value || (route.query.view === 'draft' && workflow.loading.value)
+      || (draft.value && (cr.loading.value || !cr.head.value || cr.error.value))) return;
     try {
       const detail = await fetchStaticDetail<M & { formula?: string; variants?: typeof rawDefinition.value.variants; def: typeof METRIC_DEF; dims: typeof METRIC_DIMS }>(`/metrics/${encodeURIComponent(id)}`);
       if (seq !== detailSeq || key !== staticContextKey() || cur.value?.id !== id || !detail) return;

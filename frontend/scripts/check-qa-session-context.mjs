@@ -6,6 +6,7 @@ import ts from 'typescript';
 import * as vue from 'vue';
 const context = vue.reactive({ demoAs: 'admin', ver: '', previewAs: '' });
 const errors = [], reads = [], asks = [], creates = [];
+let fallbackAsks = 0;
 function deferred() { let resolve, reject; const promise = new Promise((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; }
 const options = signal => ({ headers: { 'X-Demo-As': context.demoAs }, query: { ver: context.ver, previewAs: context.previewAs }, readonlyParams: false, signal });
 const deps = {
@@ -13,7 +14,9 @@ const deps = {
   '@/api/http': { currentApiContext: () => context, isApiError: () => false }, './qaFallback': { qaLive: vue.ref(true), qaFallBackIfDown: () => false },
   '@/api/qa': { qaReal: () => true, qaRequestOptions: options,
     getSession: (id, opts) => { const d = deferred(); reads.push({ id, opts, ...d }); return d.promise; },
-    askTurn: (id, q, opts) => { const d = deferred(); asks.push({ id, q, opts, ...d }); return d.promise; },
+    QaStreamUnsupported: class QaStreamUnsupported extends Error {},
+    askTurnStream: (id, q, onEvent) => { const d = deferred(); asks.push({ id, q, onEvent, ...d }); return d.promise; },
+    askTurn: (id, q, opts) => { fallbackAsks++; const d = deferred(); asks.push({ id, q, opts, ...d }); return d.promise; },
     createSession: (body, opts) => { const d = deferred(); creates.push({ body, opts, ...d }); return d.promise; },
   },
 };
@@ -31,7 +34,9 @@ context.demoAs = 'viewer'; assert.equal(session.detail.value, null, 'old identit
 session.activeId.value = 'C'; await tick(); assert.equal(reads.at(-1).opts.headers['X-Demo-As'], 'viewer');
 reads.at(-1).resolve(detail('C')); await tick(); assert.equal(session.detail.value.id, 'C');
 session.send('controlled question'); const lateAsk = asks.at(-1); assert.equal(session.sending.value, true);
+lateAsk.onEvent({ event: 'status', data: { text: 'current phase' } }); assert.equal(session.streamStatus.value, 'current phase');
 session.activeId.value = 'D'; await tick(); reads.at(-1).resolve(detail('D')); await tick();
+lateAsk.onEvent({ event: 'status', data: { text: 'PRIVATE OLD PHASE' } }); assert.notEqual(session.streamStatus.value, 'PRIVATE OLD PHASE', 'late stream events cannot replace another session status');
 lateAsk.reject(Error('old question failure')); await tick(); assert.equal(session.draft.value, ''); assert.equal(session.sending.value, false); assert.equal(errors.length, 0);
 session.send('controlled second question'); const lateSuccess = asks.at(-1); context.ver = 'old'; context.previewAs = 'U2';
 lateSuccess.resolve({ turn: { id: 'OLD-TURN' } }); await tick(); assert.equal(session.detail.value, null); assert.equal(session.sending.value, false);
@@ -40,6 +45,7 @@ const firstCreate = session.newSessionReal('actual', 'actual'); assert.equal(awa
 session.activeId.value = 'F'; await tick(); reads.at(-1).resolve(detail('F')); await tick();
 creates.at(-1).resolve(detail('CREATED-OLD')); assert.equal(await firstCreate, ''); assert.equal(session.activeId.value, 'F'); assert.equal(session.detail.value.id, 'F');
 const lateDetail = session.loadDetail('F'); const pending = reads.at(-1); context.demoAs = 'other'; pending.reject(Error('old private failure')); await lateDetail; assert.equal(errors.length, 0); assert.equal(session.detail.value, null);
+assert.equal(fallbackAsks, 0, 'ordinary stream errors must not trigger a duplicate synchronous question');
 assert.ok(!reads.some(x => !x.opts || x.opts.readonlyParams !== false));
 // Actual Workbench scope watcher: quiet synchronization sends no PATCH; late PATCH cannot replace another session.
 context.ver = ''; context.previewAs = ''; session.activeId.value = 'WB'; await tick(); reads.at(-1).resolve(detail('WB')); await tick();
@@ -48,6 +54,7 @@ const wbSource = readFileSync(new URL('../src/pages/qa/Workbench.vue', import.me
 const wbJs = ts.transpileModule(`${wbSource}\nexport { scope, caliber };`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
 const wb = {};
 const wbDeps = {
+  '@/pages/ops/actionReview': { reviewFields: () => [] },
   vue: { ...vue, onMounted() {}, onBeforeUnmount: cb => unmounts.push(cb) },
   'vue-router': { useRoute: () => ({ query: {} }), useRouter: () => ({ replace() {} }) },
   'ant-design-vue': { message: { error: m => errors.push(m) } }, '@ant-design/icons-vue': {}, '@/mock': {},

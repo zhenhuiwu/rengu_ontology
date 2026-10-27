@@ -26,6 +26,9 @@ const calls = [], details = [];
 let held, empty = false;
 const staticApi = {
   isStaticReal: () => true, staticContextKey: key,
+  crErr: e => e instanceof Error ? e.message : String(e),
+  fetchMetricGroups: async () => ['DB group'],
+  fetchMetricReadiness: async id => ({ id, ready: true, issues: [] }),
   fetchStaticPage: (path, query, signal) => {
     calls.push({ path, query: { ...query }, who: context.demoAs, signal });
     let rows;
@@ -62,7 +65,7 @@ const bodyImports = (route, selected, kind, draftFlag, cr) => ({
   'ant-design-vue': { message: { error: e => notices.push(e), success() {} } }, '@/api/http': { currentApiContext: () => context },
   '@/api/static': staticApi, './parts/useStaticPage': pageHelper,
   './parts/useDraftView': { useDraftView: () => ({ draft: vue.ref({ id: 'CR-DB' }), isDraft: draftFlag, readonly: vue.ref(false), reason: vue.ref(''), editTip: vue.ref(''), setView() {} }), draftOf: () => undefined },
-  './parts/useStaticCr': { ...realCr, useStaticCr: () => cr, useRealCrRecords: () => ({ rows: vue.ref([]), reload: async () => {} }) },
+  './parts/useStaticCr': { ...realCr, useStaticCr: () => cr, useRealCrRecords: () => ({ rows: vue.ref([]), loading: vue.ref(false), error: vue.ref(''), reload: async () => {} }) },
   '@/composables/useReadonly': { useReadonly: () => ({ readonly: vue.ref(false), reason: vue.ref('') }) },
   '@/composables/useUnsavedGuard': { useUnsavedGuard: () => fn => fn() }, '@/composables/useDrawer': { useDrawer: () => ({}) },
   '@/stores/confirm': { useConfirmStore: () => ({}) }, '@/stores/app': { useAppStore: () => ({ ontologyVersion: 'DB-current', viewVersion: undefined }) },
@@ -73,7 +76,7 @@ const bodyImports = (route, selected, kind, draftFlag, cr) => ({
   '@/mock/dimensions': { DIM_ITEMS: [] }, '@/mock/knowledge': { KNOWLEDGE: [], K_TYPES: [], CONFLICT_RULE: {} }, '@/theme': { GRAY: {}, BRAND: '' },
   '@/api/objectOverview': { fetchObjectOverviewRuntime: async () => ({ metrics: [] }) },
   '@/api/objectImport': { recollectObjectMetadata: async () => ({ added: [], deleted: [] }) },
-  '@/api/definitionForms': { definitionDetail: async () => ({ fields: { ...head('O', 1), table: 'actual' }, properties: Array.from({ length: 35 }, (_, i) => property(i+1)) }) },
+  '@/api/definitionForms': { definitionDetail: async (_kind, id) => { details.push(`/object-types/${id}`); return { fields: { ...head('O', 1), table: 'actual' }, properties: Array.from({ length: 35 }, (_, i) => property(i+1)) }; } },
   './parts/object/objectGov': { crsOf: () => [], metricsOf: () => [] },
 });
 for (const [file, param, id, kind, listPath, expose] of [
@@ -134,6 +137,29 @@ for (const [file, kind] of [['ObjectTypesBody','object'],['MetricsBody','metric'
   if (page.selected) assert.equal(page.selected.value, '', 'empty data must not select a demo resource'); else assert.equal(page.cur.value, undefined);
   assert.ok(details.slice(before).every(path => path === '/link-types/catalog'), 'empty lists must not fan out selected details');
   scope.stop(); lifecycle.splice(0).forEach(fn => fn());
+}
+// A newly allocated draft has no published definition, including while its CR header is delayed.
+for (const [file, query, kind, path, current, failure] of [
+  ['LinkTypesBody', 'link', 'link', '/link-types/', 'cur', 'definitionError'],
+  ['ObjectTypesBody', 'type', 'object', '/object-types/', 'current', 'detailError'],
+  ['MetricsBody', 'metric', 'metric', '/metrics/', 'cur', 'metricDetailError'],
+  ['DimensionsBody', 'dim', 'dimension', '/dimensions/', 'cur', 'definitionError'],
+  ['GlossaryBody', 'k', 'knowledge', '/knowledge/', 'cur', 'definitionError'],
+]) {
+const id = `NEW-${kind}`, newScope = vue.effectScope(), newRoute = vue.reactive({ query: { [query]: id, view: 'draft' } });
+const newCr = { head: vue.ref(undefined), items: vue.ref([]), loading: vue.ref(true), error: vue.ref('') };
+const newDetailsStart = details.length;
+let newPage;
+newScope.run(() => { newPage = execute(`pages/ontology/${file}.vue`, bodyImports(newRoute, id, kind, vue.ref(true), newCr), `${current}, ${failure}`); });
+await tick();
+assert.ok(!details.slice(newDetailsStart).includes(path + id), 'wait for CR identity before loading a published definition');
+newCr.head.value = { id: 'CR-DB', status: '草稿', lockVersion: 1, targets: [{ kind, id, isNew: true, name: '新定义' }] };
+newCr.items.value = [{ section: 'def', key: 'name', op: 'add', after: '已保存关系' }]; newCr.loading.value = false;
+await tick();
+if (kind === 'link') assert.equal(newPage.cur.value.name, '已保存关系');
+assert.ok(!details.slice(newDetailsStart).includes(path + id), 'a hydrated new target never fetches a nonexistent published detail');
+assert.equal(newPage[failure].value, '');
+newScope.stop(); lifecycle.splice(0).forEach(fn => fn());
 }
 assert.equal(notices.length, 0, String(notices));
 console.log('Static Body pages passed (5 real list requests, selection/buffer identity, complete selected baselines, nested paging/draft IDs, real size, complete graph).');

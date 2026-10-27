@@ -19,6 +19,7 @@ from app.core.errors import AppError, NotFound
 from app.modules.static.metric_trial import (
     BoundFormula,
     compile_metric,
+    execution_bindings,
     metric_definition,
     parse_formula,
     unavailable,
@@ -116,8 +117,15 @@ def _filters(bound: BoundFormula, model: _Model, node) -> list[str]:
     return [f"{ref} {COMPARE[type(node)]} {_literal(scalar_filter(col, raw, 'formula'))}"]
 
 
-def _export_metric(metric: dict, row: Metric, objects, ontology_id, models: dict) -> list[dict]:
-    bound, _expression, temporal, _time_field, _conds = compile_metric(metric, objects, ontology_id)
+def _export_metric(
+    metric: dict, row: Metric, objects, ontology_id, models: dict, bindings=None
+) -> list[dict]:
+    bound, _expression, temporal, _time_field, _conds = compile_metric(metric, objects, ontology_id, bindings)
+    if getattr(bound.governed, "binding", None) is not None:
+        raise unavailable(
+            "该指标使用专用只读来源，可在指标页试算；当前语义层执行器尚不支持该来源",
+            reason="SEMANTIC_SOURCE_UNSUPPORTED",
+        )
     model = models.get(bound.object.code) or models.setdefault(
         bound.object.code, _Model(bound.object, bound.governed)
     )
@@ -189,7 +197,8 @@ async def export_metricflow(session, user: CurrentUser, *, ver=None) -> dict:
     for row in await session.scalars(select(Metric).order_by(Metric.code)):
         try:
             metric = await metric_definition(session, row.code, user)
-            metrics += _export_metric(metric, row, objects, ontology_id, models)
+            bindings = await execution_bindings(session, objects, metric)
+            metrics += _export_metric(metric, row, objects, ontology_id, models, bindings)
         except (AppError, NotFound) as error:
             issues = (error.details or {}).get("issues") or [
                 {"reason": (error.details or {}).get("reason", error.code), "message": error.message}

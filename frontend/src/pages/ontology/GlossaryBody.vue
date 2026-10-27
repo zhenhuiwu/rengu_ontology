@@ -423,10 +423,13 @@ watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
 
 let definitionSeq = 0;
 const definitionError = ref('');
-watch(() => JSON.stringify([selectedId.value, staticContextKey()]), async () => {
+watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.view, workflow.loading.value,
+  draft.value?.id, cr.loading.value, cr.error.value, cr.head.value?.targets]), async () => {
   const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value;
   definitionError.value = '';
-  if (!isStaticReal() || !id || cr.head.value?.targets.some((t) => t.kind === 'knowledge' && t.id === id && t.isNew)) return;
+  if (!isStaticReal() || !id || (route.query.view === 'draft' && workflow.loading.value)
+    || (draft.value && (cr.loading.value || !cr.head.value || cr.error.value))
+    || cr.head.value?.targets.some((t) => t.kind === 'knowledge' && t.id === id && t.isNew)) return;
   try {
     const data = await fetchStaticDetail<KEntry>(`/knowledge/${encodeURIComponent(id)}`);
     if (n !== definitionSeq || key !== staticContextKey() || id !== selectedId.value) return;

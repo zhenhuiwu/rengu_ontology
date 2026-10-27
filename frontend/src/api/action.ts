@@ -147,7 +147,7 @@ async function loadDetail(kind: 'action' | 'event', id: string, editing: boolean
       ]);
       if (seq !== snapSeq || key !== actionContextKey()) return;
       const index = snap.actions.findIndex(row => row.id === id);
-      const row = { ...clean(detail), sysId: detail.sysId ?? null };
+      const row = { ...clean(detail), sysId: detail.sysId ?? null, policyStored: (detail as ActionType & { policyStored?: unknown }).policyStored };
       if (index < 0) snap.actions.push(row); else snap.actions[index] = row;
       snap.conds[id] = conds; snap.writeback[id] = clean(wb); snap.actionVersions[id] = versions;
       if (params) snap.params[id] = params;
@@ -387,7 +387,7 @@ export function crErrText(e: unknown): string {
 }
 
 /** 改动列表「类型」列【推断】：契约只定了 section 名，中文名按页签取 */
-const SECTION_TYPE: Record<string, string> = { params: '参数', conds: '提交条件', edits: '本体修改', effects: '副作用', config: '写回配置', payload: '载荷字段', subs: '订阅方' };
+const SECTION_TYPE: Record<string, string> = { params: '参数', conds: '提交条件', edits: '本体修改', effects: '副作用', config: '写回配置', policy: '执行策略', payload: '载荷字段', subs: '订阅方' };
 
 /**
  * 给 useDraftEdits 的写库实现。保存：每个变了的 section 先 GET 读回库里的行，按 key 合并本次改动（revert 去掉），再整段 PUT

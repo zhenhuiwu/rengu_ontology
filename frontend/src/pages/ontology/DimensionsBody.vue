@@ -484,10 +484,12 @@ watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
 
 let definitionSeq = 0;
 const definitionError = ref('');
-watch(() => JSON.stringify([selectedId.value, staticContextKey()]), async () => {
+watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.view,
+  draft.value?.id, cr.loading.value, cr.error.value, newTarget.value]), async () => {
   const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value;
   definitionError.value = '';
-  if (!isStaticReal() || !id || newTarget.value) return;
+  if (!isStaticReal() || !id || newTarget.value
+    || (draft.value && (cr.loading.value || !cr.head.value || cr.error.value))) return;
   try {
     const data = await fetchStaticDetail<DimItem>(`/dimensions/${encodeURIComponent(id)}`, { full: true });
     if (n !== definitionSeq || key !== staticContextKey() || id !== selectedId.value) return;

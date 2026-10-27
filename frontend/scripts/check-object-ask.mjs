@@ -24,7 +24,7 @@ const imports = {
   '@/mock/format': { fmtInt: String },
   'ant-design-vue': { message: { error() {} } },
   '@/api/qaObjects': { scopedAsk: (...args) => read(...args) },
-  '../../qa/qaFallback': { qaLive: vue.ref(true) },
+  '@/api/qa': { qaReal: () => true },
   '../../qa/useQaSession': { errText: (e) => e.message }, '@/api/http': { currentApiContext: () => context },
 };
 const exports = {};

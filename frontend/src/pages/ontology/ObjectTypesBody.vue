@@ -300,9 +300,11 @@ const realDetail = ref<Partial<DefinitionValues>>({});
 const detailError = ref('');
 const runtime = ref<ObjectOverviewRuntime | null>(null);
 let detailSeq = 0;
-watch(() => [selected.value, staticContextKey()], async () => {
+watch(() => [selected.value, staticContextKey(), route.query.view, workflow.loading.value,
+  draft.value?.id, cr.loading.value, cr.error.value, newTarget.value], async () => {
   const my = ++detailSeq, id = selected.value, key = staticContextKey(); realDetail.value = {}; detailError.value = ''; runtime.value = null;
-  if (!isStaticReal() || !selected.value || newTarget.value) return;
+  if (!isStaticReal() || !selected.value || newTarget.value || (route.query.view === 'draft' && workflow.loading.value)
+    || (draft.value && (cr.loading.value || !cr.head.value || cr.error.value))) return;
   try { const result = await definitionDetail('object', id); if (my !== detailSeq || id !== selected.value || key !== staticContextKey()) return; realDetail.value = result.fields;
     realProps.value = { ...realProps.value, [id]: result.properties };
     // Per-resource complete metadata for permission/view children; never a paged property fragment.
