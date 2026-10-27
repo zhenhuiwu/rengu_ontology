@@ -7,6 +7,7 @@
 | /metrics[/{id},/{id}/versions,/{id}/refs] | Metrics.vue |
 | /dimensions[/{id},/values,/mappings,/usage,/history] | Dimensions.vue |
 | /knowledge[/synonym-conflicts,/{id},/{id}/refs] | Glossary.vue |
+| GET /meta/capabilities | 问数 / MCP 能力目录（API 密钥 meta:read） |
 | POST /releases:merge-check、POST /releases、POST /releases/{ver}:rollback | Releases.vue 发布 / 回滚按钮 |
 | GET /change-requests[/{id}]、DELETE /change-requests/{id} | Releases.vue 变更单列表、删除草稿 |
 | POST /change-requests/{id}:submit/withdraw/approve/reject/unapprove/reopen | Releases.vue 详情按钮 |
@@ -18,13 +19,15 @@
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, Path, Query
+from fastapi import APIRouter, Body, Depends, Path, Query, Request
 
 from app.common.auth import CurrentUserDep, require_func, resolve_user
 from app.common.context import ViewContextDep, allow_in_readonly
 from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.db.session import SessionDep
+from app.modules.admin.api_keys import require_api_scope
 from app.modules.admin.permissions import active_user_names
+from app.modules.static.capabilities import capabilities as capability_catalog
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.crs import ChangeRequestService
 from app.modules.static.knowledge_trial import KnowledgeResolveIn, resolve_knowledge
@@ -70,6 +73,21 @@ FUNC_OF: dict[str, str] = {}
 def get(path: str, func: str, **kw: Any) -> Any:
     FUNC_OF[path] = func
     return router.get(path, dependencies=[Depends(require_func(func, "view"))], **kw)
+
+
+@router.get("/meta/capabilities", dependencies=[Depends(require_api_scope("meta:read"))])
+async def meta_capabilities(
+    request: Request,
+    session: SessionDep,
+    ctx: ViewContextDep,
+    user: CurrentUserDep,
+    readable_only: Annotated[bool, Query(alias="readableOnly")] = False,
+) -> Any:
+    """能力目录（问数 / MCP）：对象、指标（可试算标记）、函数、已绑定动作（执行策略 + 机器执行接口）、规则。
+
+    各节按页面 view 权限放行（不在 FUNC_OF 里登记单一页面），没有权限的节列入 omitted；仅当前版本。
+    """
+    return await capability_catalog(session, user, request, ver=ctx.ver, readable_only=readable_only)
 
 
 @get("/exports/metricflow", "metrics")
@@ -474,7 +492,10 @@ async def publish(
 async def rollback(
     ver: str, session: SessionDep, user: CurrentUserDep, body: Annotated[RollbackIn, Body()] = RollbackIn()
 ) -> Any:
-    """回滚最近一次发布：生成新版本（内容同上一版），不是最新版 → 409 ROLLBACK_NOT_LATEST。"""
+    """回滚最近一次发布：生成新版本（内容同上一版）。
+
+    不是最新版 → 409 ROLLBACK_NOT_LATEST；首个发布版本（没有上一版）→ 409 ROLLBACK_FIRST_RELEASE。
+    """
     new_ver = await PublishService(session).rollback(user, ver, body.note)
     return ReleaseOut.model_validate(await ReleaseRepo(session).by_ver_or_404(new_ver))
 

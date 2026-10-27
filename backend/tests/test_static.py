@@ -605,6 +605,9 @@ def test_static_routes_func_permissions():
             continue
         if r.path == "/build/owners":
             continue  # kind决定manage页面，由test_function_permissions覆盖各kind的200/403。
+        if r.path == "/meta/capabilities":
+            assert r.path not in FUNC_OF  # 按节检查各页面权限，见 test_static_capabilities.py
+            continue
         key = "data-quality" if r.path == "/object-types/brief" else want[r.path.split("/")[1]]
         assert FUNC_OF[r.path] == key, r.path
         assert len(r.dependencies) == 1, r.path

@@ -358,3 +358,19 @@
 
 - **首版回滚文案**：新本体/新空间的首个发布没有上一版，`versioning/service.py:89`（`latest.parent is None`）返回 `ROLLBACK_NOT_LATEST`，文案读起来像「不是最新版」。建议：改专门的错误码/文案（如「首个发布版本没有可回滚的上一版」），并在前端发布列表对首版隐藏回滚按钮。
 - **迁移往返**：test_static.py::test_migration_round_trip 降级穿过 `migrations/versions/notify_0022_inbox.py:67` 时被有意阻断（RuntimeError），仍未解决，需 notify/PDE 决定。
+
+## static-t2（基于 master `e97bc61`，本轮无新迁移）
+
+- **PyYAML 依赖**（PDE 授权）：`backend/pyproject.toml` 加 `pyyaml>=6.0`（MetricFlow 导出 `format=yaml` 用）。`uv lock --offline` 因本机 uv 缓存缺 defusedxml 无法重新解析，`uv.lock` 改为手工补两处（项目包 `dependencies` 加 `{ name = "pyyaml" }`、`requires-dist` 加 `{ name = "pyyaml", specifier = ">=6.0" }`；pyyaml 6.0.3 包条目原已存在），`uv lock --check --offline` 通过（Resolved 69 packages）。联网环境建议再跑一次 `uv lock` 确认无差异。
+- **首版回滚**（PDE 授权）：`versioning/service.py` `create_version` 回滚最新版且它没有上一版 → 409 `ROLLBACK_FIRST_RELEASE`「这是首个发布版本，没有可回滚到的上一版」（`details{current, rollbackOf}`）；其余不是最新 / 不存在仍是 `ROLLBACK_NOT_LATEST`。Releases.vue 用 `/releases/current` 的 `release.parentVer` 判首版，隐藏回滚按钮并给提示，`rollback()` 也加了守卫。
+- **能力目录（只读）**：`GET /meta/capabilities`（`app/modules/static/capabilities.py`），给问数 / MCP。按节看页面 view 权限（无权限节进 `omitted`），支持 API 密钥 `meta:read`（`require_api_scope`）；敏感 / 隐藏属性不列，`rowAccess` 只做提示；动作带执行策略（`action.policy.version_policies` + `stored`）和机器执行接口路径，密钥调用另给 `keyAllowed`。只读其他模块的模型与公开函数，未改其文件。契约见 static-api.md §3.10。
+- **#9f**：复核结论——CR 写入已按目标所属页面 manage 检查（`static/permissions.py` `check_target` / `check_cr`，`cr_write.py:309-311、357、366、394、436`），本轮无改动。
+- **#8**（总览去 mock 导入）：本轮未做。OntologyOverview.vue:22-29 的 mock 导入仍用于演示模式卡片 / 待处理 / 新建草稿（:52-113、:252、:278），去掉需要先在 `api/overview.ts` 提供演示数据入口，留到下一批。
+- **测试**：新增 `tests/test_static_capabilities.py`（3 个，需 `-p tests.use_ops_support`）；`test_static.py::test_static_routes_func_permissions` 对 `/meta/capabilities` 特判；`test_static_build_writes.py::test_second_workspace_publish_rollback_isolated` 断言首版 409 `ROLLBACK_FIRST_RELEASE`。
+
+### 给 PDE / 其他模块（只报告）
+
+- 能力目录 rules 节：API 密钥的 scope 都不带 `rules` 页（`app/modules/admin/api_keys.py:72-79` `SCOPE_PAGES`），密钥看不到规则；需本体小开决定是否给 `meta:read` 加 rules·view。
+- `ROLLBACK_FIRST_RELEASE` 新错误码尚未进非静态文档：`frontend/docs/backend/api-index.md:102`、`versioning-api.md:37`、`app/contracts/versioning.py:10,145` 仍只写 `ROLLBACK_NOT_LATEST`。
+- 迁移往返 `notify_0022_inbox.py:67` 仍未解决（同 static-t1）。
+
