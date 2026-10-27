@@ -19,7 +19,7 @@
 - `rule/conds|mapping|config`、`object/lc_states|lc_transitions`已登记真实发布钩子。作者U010004创建CR→POST规则→保存→提交→U010001审批→整版发布联合验收，rule v1已发布、生命周期快照变化且skipped为空；静态放弃对象目标同事务删除LifecycleDraft，重新加入不复活旧编辑。
 - 生命周期草稿保存验证实际列长度、状态/迁移唯一键和类型；迁移id最多16字，完整版本编号最多64字。保存非法422，发布内部防御409，整版回滚。规则/生命周期回滚后再发布取历史最大版本+1，append-only旧版本保留，不撞旧vN。
 - **尚未实现真实执行引擎**：规则回放503 `RULE_EVALUATOR_UNAVAILABLE`；情景run/stage-plan503 `SCENARIO_EXECUTOR_UNAVAILABLE`。不再随机生成新增命中或用示意模型生成预测/固定REG-EC建议；已存DB历史result/impacts/compare保留。推演meta标`executorConfigured=false`，业务范围/促销候选来自已存Scenario的scope/drivers，模板只作参数配置说明，不能当成已接入真实数据集/引擎。
-- 无新增迁移，编号锁沿用既有实现；不改mock、不删开发库数据。专项：`test_dynamic_cr_acceptance.py`、`test_dynamic_catalog_db.py`、`test_dynamic_unconfigured.py`及必要既有动态测试。通过正式联合验收后仅在ignored的`frontend/.env.local`开启`VITE_DYNAMIC_CR_WRITE=1`。
+- 本段工作无新增迁移（**更正 2026-10-27**：此说法不准确，见文末「dynamic-r4」的迁移清单。）编号锁沿用既有实现；不改mock、不删开发库数据。专项：`test_dynamic_cr_acceptance.py`、`test_dynamic_catalog_db.py`、`test_dynamic_unconfigured.py`及必要既有动态测试。通过正式联合验收后仅在ignored的`frontend/.env.local`开启`VITE_DYNAMIC_CR_WRITE=1`。
 - 同C组近7天读链已改滚动时钟：规则list/detail/catalog的weekly及hits7d按实际RuleHit计数；生命周期当前迁移weekly按实际LifecycleChange计数（同逻辑迁移跨版本），非法迁移默认窗口`[now-7天, now]`并排除未来。定义/历史快照的weekly仍保留，不将历史声明值当当前统计；Alert.recent7d按该告警触发时刻回看7天的已定口径不改。专项用边界/过期/未来行及推进时钟90天验证归零。
 
 ## 已完成
@@ -154,6 +154,7 @@
 - 模板定义唯一来源 `src/mock/scenarioTemplates.ts`（`ScTemplate`）；后台读同一份导出 `backend/seeds/json/dynamic/SC_TEMPLATES.json`（改 TS 后重新导出，测试会比对 `/scenarios/meta.templates` 与该 JSON）。演示模板 `demo_retail`（目标对象类型 product）原样复现原页面：范围 area / category / weeks，三组驱动，6 个 KPI，主序列，影响明细列，对比行，建议动作 → 动作名。
 - 引擎按模板 `engine` 键插拔：后台 `app/modules/dynamic/scenario_templates.py` `ENGINES`（`demo_retail` = 原 `rules_sim.simulate / stage_plan`，未改一行）；前端 `SC_ENGINES`（`demo_retail` = `mock/scenarios.ts simulate / stagePlanOf`，值不变）。
 - 迁移并进 `dynamic_0003`：`scenario.template_code`（String 64，存量全部 `demo_retail`），降级删列；仍只有一个 dynamic 迁移。
+  - （更正：`dynamic_0003` 在已应用后被原地修改过，已应用旧版本的库由 `dynamic_0023` 收敛，见文末。）
 - 接口：`ScenarioOut.templateCode`；`/scenarios/meta` 增加 `templates`（原 areas / categories / promoTypes / baseDrivers / statuses 保留，baseDrivers 取模板默认）；`:run` body 改为 `{scope:{…}, drivers:{…}}`（任意键），按模板字段校验：未知键「模板里没有这一项」、类型、可选值（沿用原文案）、min/max → 422 `VALIDATION_FAILED`；依赖项关闭时按 `offValue` 归零；无驱动 → `SCENARIO_NO_DRIVER`（文案取模板 `noDriverHint`）。新建 / 复制按来源方案模板（缺省演示模板）取默认值。对比 sameScope 按 `(templateCode, scope)`。202 + 轮询、savepoint 失败处理不变。
 - `Scenarios.vue`：范围 / 驱动表单、KPI 卡格式与提示、折线序列、影响明细列（obj / money / delta / range / text 通用列类型）、对比行、暂存确认里的动作名都按模板渲染；页面代码里不再有区域 / 品类 / 门店 / 商品 / 促销等字样。
 - 范围取值接 static 分面（第三轮）：范围项声明 `propRef: "对象类型.属性"` + `allOption`（演示：area → `store.region_code`、category → `product.category_id`）。引擎注册表带能力位 `accepts_facet_values`（前端 `SC_ENGINES.acceptsFacetValues`）：为 true 时，真接口下前端调 `GET /object-types/{ot}/facets`，该属性 `hasData` 且有取值 → 可选值 = allOption + 分面取值；mock / `hasData:false` / 属性不可筛选 → 模板固定 options。后台 `:run` 用同一规则（`scenario_templates.scope_options`）校验，前后台 422 一致。演示引擎 `demo_retail` = false（只认固定项，分面原值是编码会算失败），所以演示模板不取分面、只用固定 options。
@@ -176,7 +177,7 @@
 - 动作参数按结构化定义核验跨对象引用，复用已有对象绑定/行权限；无法证明可见的旧摘要、日志及外部原因不输出。确认、审批、重提、对账重新验证完整引用与涉及对象的操作授权；不通过时保留原记录，不猜权限或参数。撤回仍只允许既有确认人且不执行动作。
 - 两页默认 10 条服务端分页，接收后端收拢页码；页签不带数字，空表仅显示一处空态。上下文切换会丢弃迟到响应并清空弹层、选择和参数；实际对象类型使用通用对象引用。
 
-本轮没有新增表或迁移，没有提交 CR、生成告警、暂存/确认动作、修改权限、执行外部请求或后台测试。仅完成 AST/Ruff 与前端类型检查；以下实际路径待主会话浏览器核查，不代表已执行通过：
+本轮没有新增表或迁移（**更正 2026-10-27**：此说法不准确，见文末「dynamic-r4」的迁移清单。），没有提交 CR、生成告警、暂存/确认动作、修改权限、执行外部请求或后台测试。仅完成 AST/Ruff 与前端类型检查；以下实际路径待主会话浏览器核查，不代表已执行通过：
 
 1. `/use/ops/alerts?ontology=1` 查看真实来源、触发描述、缺条件行、分页；可展开转派名单但取消，不认领/转派/关闭记录。
 2. `/use/ops/actions?ontology=1` 查看历史/未知结果、可用性原因；打开「发起动作」，若存在真实可用候选则选择实际对象、保留缺参 `{}`，仅点击「校验参数与条件」后取消。不得点击「暂存待确认」「确认提交」「审批并执行」「重新提交」或提交人工对账。
@@ -198,4 +199,30 @@
 - 页级权限核验批处理复用原 scoped_instances、当前本体 RLS、行谓词和编号唯一性；引用未知或不可见仍隐藏参数/日志并拒绝写入。受控 5/13 行告警 SELECT 从 27/35 变为 23/23，动作 42/42；只缓存本请求元数据，不共享权限结果。
 - ops 自动化只写 `rengu_test_use_ops_20261027`，真实成员与角色绑定，不 mock auth；普通外部 HTTP transport fail-fast。编号用例在该唯一库各自本体隔离，保留独立事务技术证据，不 DROP/TRUNCATE 基线。开发库只读、auto_ontology 未访问，没有生产 worker 或外部执行。
 - 主任务另授权 QA 隔离库 8001/5282 的精确本地 UI 链：`ops_local` / `OPS-UI-LOCAL` 两次 enabled true/false 确认成功，最终标记恢复 false；QA agent 只读核恰 2 个 succeeded/INTERNAL Run、各 1 个 ActionExecuted、0 个 WritebackCall。第二条新日志为“动作执行成功”，第一条旧日志不改。参数 `{}` 预检 422 的 inline 必填错误持续显示，改 true 后立即清除，重预检 200 后取消未增加 Run；确认卡准确显示免审与外部系统“—”。专用测试服务已由主任务关闭，数据保留。
-- 所属 16 文件 Ruff 与前端 typecheck 通过。没有全仓、独立迁移恢复、生产队列、真实外部对账或分布式负载结论；ERP/Kafka、预测模型继续后置。功能代码已冻结，无新增迁移。
+- 所属 16 文件 Ruff 与前端 typecheck 通过。没有全仓、独立迁移恢复、生产队列、真实外部对账或分布式负载结论；ERP/Kafka、预测模型继续后置。功能代码已冻结，该阶段无新增迁移（**更正 2026-10-27**：此说法不准确，见文末「dynamic-r4」的迁移清单。）
+
+## dynamic-r4（2026-10-27）：0003 收敛迁移、推演模板入库、告警分面
+
+**dynamic 迁移完整清单**（更正上文多处「无新增迁移 / 只有一个 dynamic 迁移」）：
+| 迁移 | 接在 | 内容 |
+| --- | --- | --- |
+| `dynamic_0001` / `dynamic_0002` | — / `static_0002` | 告警、动作；规则 / 命中 / 情景 / 生命周期 |
+| `dynamic_0003` | `static_0003` | `alert` / `rule_hit` 门店列 → `dims`，`scenario.template_code`（**已应用后被原地改过**） |
+| `dynamic_0004` | `qa_0005` | `action_run_daily_counter` 动作日编号 |
+| `dynamic_0015` | `event_0014` | 规则定时游标与运行历史（opt-in，无种子回填） |
+| `dynamic_0023` | `notify_0022` | 幂等收敛 `dynamic_0003` 的原地修改 |
+| `dynamic_0024` | `dynamic_0023` | `scenario_template` 表（当前 alembic 单头） |
+
+- `dynamic_0023`：任何停在旧版 0003 的库都会收敛到新版 0003 的终态。具体是：`alert` / `rule_hit` 缺 `dims` 时补列；残留 `store_id/store_label` 时回填 `dims=[{objKind:"store",id,label}]` 再删旧列（回填期间临时 NO FORCE RLS，结束后恢复 FORCE）；`dims` 统一为 JSONB NOT NULL、无默认值、带注释；重建 `rule_hit` append-only 触发器；补 `scenario.template_code`。已是终态的库执行后无变化。downgrade 为空操作。测试：`test_dynamic_0023_reconcile.py`（临时库篡改成旧形态后升级，与全新库的结构比对一致，再降级和升级一次）。
+- `dynamic_0024`：`scenario_template` 表（按本体隔离，带 RLS/FORCE，唯一键 `(ontology_id, code)`）。把原 `seeds/json/dynamic/SC_TEMPLATES.json` 的配置迁入 ontology 1（`is_seed=true`，`ON CONFLICT DO NOTHING`）；其他本体不写任何数据。`scenario_templates.py` 改为读库。新增 `GET /scenarios/templates`；`meta` 在当前本体没有模板时返回空，并给出 `unavailableReason`；推演页对应显示空状态。**`:run` / stage-plan 仍然是 503 `SCENARIO_EXECUTOR_UNAVAILABLE`**（用户决定不接示意引擎）。
+- 告警分面：`GET /alerts` 新增筛选参数，`level` / `ruleId` / `objKind` 支持逗号多选，`dim=objKind:id` 可重复（同一对象类型多个值取或，不同类型取且）。新增 `GET /alerts/facets`，筛选参数与列表相同，返回 `level` / `ruleId` / `objKind` / `dims` 计数；每一项计数按其余已选条件过滤、不受自身选择影响，`dims` 每个对象类型最多返回 50 个值；行级可见性与列表一致（`scoped_instances`）。告警页在真接口模式下给级别 / 规则选项附上计数，并新增对象类型和维度多选；mock 模式不变。注意：之前计划的 `filters=<JSON>`（join 业务表、按对象属性筛选）**没有做**，目前只按告警自带的 `obj_kind` 和 `dims` 筛选。
+- 本轮只写了最小自测：0023 收敛 1、推演模板 / 情景生命周期共 20、告警分面 1；另跑了 `vue-tsc --noEmit` 和改动文件的 Ruff。
+
+**交给 Codex 测试的部分（本轮未写测试或未跑）**
+1. 规则回放（`RULE_EVALUATOR_UNAVAILABLE` 以外的回放路径、样本 `dims`）。
+2. 规则定时调度（`dynamic_0015` 游标、运行历史、worker 调度）。
+3. 发布写回（`apply_cr` 规则 / 生命周期草稿晋升、幂等、`WRITEBACK_FAILED` 回滚）。
+4. 事件去重（规则命中 / 告警的去重键、重复事件不重复生成告警）。
+5. 告警分面 UI（`Alerts.vue` 的对象类型 / 维度多选、计数显示、切换本体后清空选择、翻页回第 1 页），后端分面只有一个一致性测试。
+6. `dynamic_0024` 在非 1 号本体、真实快照库（`database/exports/rengu_ontology-2026-10-27.sql`）上的升级。
+- 本轮观察到的既有失败（与本轮改动无关，未修）：`test_dynamic_rules.py::test_hits_paging_and_detail`（AL-…0126 / 0127 排序）；`test_migrations.py` 有 3 个失败（`notify_0022` 命名检查找不到 `app/modules/notify`，`notify_0022` 降级报错），连带 `test_dynamic_migration.py` 往返受阻；`test_dynamic_alerts.py` 的 3 个 `start_action_*` 用例在私有空库上 fixture 报错（`grant_fixture_roles` 找不到 U010001 / R-01）；`rule_runtime.py:268` E501。
