@@ -141,7 +141,13 @@ async def apply_crs(
         for i in items:
             groups.setdefault((i.target_kind, i.target_id, i.section), []).append(i)
         # Same-CR relations may reference newly saved objects, regardless of editing order.
-        ordered = sorted(groups.items(), key=lambda item: (item[0][0] != "object", item[0][2] not in ("def", "config") if item[0][0] == "object" else False))
+        ordered = sorted(
+            groups.items(),
+            key=lambda item: (
+                item[0][0] != "object",
+                item[0][2] not in ("def", "config") if item[0][0] == "object" else False,
+            ),
+        )
         for (kind, tid, sec), rows in ordered:
             hook = HOOKS.get((kind, sec))
             if hook is None:
@@ -435,8 +441,13 @@ async def link_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
     from app.modules.static.shapes import link
 
     objects, properties = await modeling_objects(s)
-    error = link_error({**(link(lk, with_runtime=False) if lk is not None else {}), **v},
-                       objects, properties, previous_via=lk.via if lk else None, is_new=lk is None)
+    error = link_error(
+        {**(link(lk, with_runtime=False) if lk is not None else {}), **v},
+        objects,
+        properties,
+        previous_via=lk.via if lk else None,
+        is_new=lk is None,
+    )
     if error:
         raise _bad(error, kind="link", id=tid)
     if lk is None:
@@ -510,7 +521,7 @@ M_FIELDS = {
 
 @register("metric", "def")
 async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
-    from app.modules.static.metric_versions import definition, record_publish
+    from app.modules.static.metric_versions import EXEC_KEYS, EXEC_MAX, definition, record_publish, with_exec
 
     s = ctx.session
     m = await s.scalar(select(Metric).where(Metric.code == tid))
@@ -578,6 +589,15 @@ async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
             if variants and sum(v["default"] for v in variants) != 1:
                 raise _bad("指标变体必须且只能有一个默认项", id=tid)
             m.variants = variants
+        elif k in EXEC_KEYS:
+            # 时间字段 / 默认过滤：只存明确文本，执行含义由试算编译器校验，这里不猜也不改写。
+            if r.op != "delete" and (
+                not isinstance(val, str) or not val.strip() or len(val) > EXEC_MAX or "\x00" in val
+            ):
+                raise _bad(
+                    f"{EXEC_KEYS[k]}须为非空文本，且不超过{EXEC_MAX}字", kind="metric", id=tid, field=k
+                )
+            m.def_rows = with_exec(m.def_rows, k, None if r.op == "delete" else val.strip())
         elif r.op == "delete" and k in ("formula", "dims"):
             setattr(m, k, None)
         elif r.op == "delete":
@@ -634,8 +654,14 @@ D_FIELDS = {
 
 
 async def _dimension_source(session, code, kind, object_code, *, attr="", column=""):
-    obj = await session.scalar(select(ObjectType).where(ObjectType.code == object_code)) if isinstance(object_code, str) and object_code else None
-    error = dimension_source_error(kind, object_code, {obj.code} if obj is not None else set(), attr=attr, column=column)
+    obj = (
+        await session.scalar(select(ObjectType).where(ObjectType.code == object_code))
+        if isinstance(object_code, str) and object_code
+        else None
+    )
+    error = dimension_source_error(
+        kind, object_code, {obj.code} if obj is not None else set(), attr=attr, column=column
+    )
     if error:
         raise _bad(error, kind="dimension", id=code, key="object")
     return obj
@@ -657,7 +683,9 @@ async def _dim(ctx: Ctx, tid: str) -> Dimension:
     )
     v = {r.item_key: r.after for r in await s.scalars(q.order_by(CrItem.seq, CrItem.id)) if r.op != "delete"}
     kind = _label(DimKind, v.get("kind") or "维度", "类型")
-    o = await _dimension_source(s, tid, kind.value, v.get("object", ""), attr=v.get("attr", ""), column=v.get("column", ""))
+    o = await _dimension_source(
+        s, tid, kind.value, v.get("object", ""), attr=v.get("attr", ""), column=v.get("column", "")
+    )
     levels = [x if isinstance(x, dict) else {"name": str(x)} for x in v.get("levels") or []]
     seq = max((x.seq for x in await s.scalars(select(Dimension))), default=0) + 1
     d = Dimension(
@@ -781,10 +809,17 @@ async def _set_dim_levels(
 
 async def _dim_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
     d = await _dim(ctx, tid)
-    values = {"kind": d.kind.value, "object": d.object.code if d.object is not None else "", "attr": d.attr, "column": d.source_column}
+    values = {
+        "kind": d.kind.value,
+        "object": d.object.code if d.object is not None else "",
+        "attr": d.attr,
+        "column": d.source_column,
+    }
     values.update({r.item_key: r.after for r in rows if r.op != "delete" and r.item_key in values})
     kind = _label(DimKind, values["kind"], "类型")
-    obj = await _dimension_source(ctx.session, tid, kind.value, values["object"], attr=values["attr"], column=values["column"])
+    obj = await _dimension_source(
+        ctx.session, tid, kind.value, values["object"], attr=values["attr"], column=values["column"]
+    )
     d.kind, d.object, d.object_name = kind, obj, obj.display_name if obj is not None else ""
     for r in rows:
         if r.item_key == "levels":
@@ -1092,9 +1127,14 @@ async def restore_dimensions(session: AsyncSession, content: dict[str, Any], *, 
         snap = content.get(d.code)
         if isinstance(snap, dict):
             kind = _label(DimKind, snap.get("kind", d.kind.value), "类型")
-            obj = await _dimension_source(session, d.code, kind.value,
+            obj = await _dimension_source(
+                session,
+                d.code,
+                kind.value,
                 snap.get("object", d.object.code if d.object is not None else ""),
-                attr=snap.get("attr", d.attr), column=snap.get("column", d.source_column))
+                attr=snap.get("attr", d.attr),
+                column=snap.get("column", d.source_column),
+            )
             sources[d.code] = (kind, obj)
     ver = await _restore_ver(session, release_id)
     await _hard_delete(session, Dimension, [d for d in dims if d.code not in content])
@@ -1241,7 +1281,7 @@ async def restore_object_types(session: AsyncSession, content: dict[str, Any], *
 async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, release_id: int) -> None:
     """按快照恢复指标；快照外仍被已存定义或问数引用的指标保留为草稿。"""
     from app.contracts.qa import has_metric_references
-    from app.modules.static.metric_versions import ledger
+    from app.modules.static.metric_versions import EXEC_KEYS, ledger, with_exec
 
     have = {m.code: m for m in await session.scalars(select(Metric))}
     unused = []
@@ -1285,6 +1325,13 @@ async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, rel
             m.status = MetricStatus(d["status"])
         review = d.get("review") or {}
         m.review_cr, m.review_note = review.get("cr"), review.get("note")
+        if isinstance(d.get("execDef"), dict):
+            # 带 execDef 的快照才知道当时的执行口径；旧快照不带，保持现值。
+            rows = m.def_rows or []
+            for key in EXEC_KEYS:
+                value = d["execDef"].get(key)
+                rows = with_exec(rows, key, value if isinstance(value, str) else None)
+            m.def_rows = rows
         if "formula" in d or "dimNames" in d:
             m.formula, m.dims = d.get("formula"), list(d.get("dimNames") or [])
         else:

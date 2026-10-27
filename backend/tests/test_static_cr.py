@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from app.modules.static.models import ChangeRequest, CrEvent
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 WANG = {"X-Demo-As": "U010001"}  # 王敏
@@ -48,6 +49,7 @@ async def seeded(session):
             session,
             {"U010001": "R-01", "U010002": "R-02", "U010003": "R-02", "U010004": "R-02", "U010005": "R-02"},
         )
+        await bind_workspace_members(session)
         await session.commit()
         yield session
 

@@ -12,6 +12,7 @@ from app.modules.static.explorer import default_flags, metric_variants
 from app.modules.static.models import Metric, ObjectType, Property
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 REQUIRED = {"key", "name", "dataType", "searchable", "filterable", "sortable", "listed", "order"}
@@ -31,6 +32,7 @@ def static_sections():
 async def seeded(session, static_sections):
     await run_seeds(session, ["admin", "versioning", "static", "biz"])
     await grant_fixture_roles(session)
+    await bind_workspace_members(session)
     await session.commit()
     return session
 

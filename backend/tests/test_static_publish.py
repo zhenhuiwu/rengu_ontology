@@ -12,6 +12,7 @@ from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import next_ver
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
+from tests.helpers.workspace import bind_workspace_members
 
 P = "/api/ontology/v1"
 ADMIN = {"X-Demo-As": "U010001"}  # 王敏：本体管理员
@@ -26,6 +27,7 @@ async def seeded(session):
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
         await grant_fixture_roles(session)
+        await bind_workspace_members(session)
         await session.commit()
         yield session
 
@@ -152,7 +154,8 @@ async def test_publish_gate_blocked(client, seeded, how):
 
 
 async def test_publish_requires_ontology_admin(client, seeded):
-    r = await client.post(P + "/releases", json={}, headers=OTHER)
+    # 种子里 R-02（陈立军）已含 releases·manage；用无发布权限的工作空间成员（任明：R-03/R-04）验 403。
+    r = await client.post(P + "/releases", json={}, headers={"X-Demo-As": "U010259"})
     assert r.status_code == 403 and r.json()["code"] == "NO_PERMISSION"
     assert await release_count(seeded) == 5
 

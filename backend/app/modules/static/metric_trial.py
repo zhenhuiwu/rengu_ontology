@@ -98,9 +98,16 @@ async def metric_definition(session, code: str, user: CurrentUser, ver=None, cr_
         )
         .order_by(CrItem.seq, CrItem.id)
     )
+    from app.modules.static.metric_versions import EXEC_KEYS, with_exec
+
     for item in rows:
         if item.item_key in ("name", "formula", "version"):
             metric[item.item_key] = None if item.op == "delete" else item.after
+        elif item.item_key in EXEC_KEYS:
+            value = None if item.op == "delete" else item.after
+            metric["def"] = with_exec(
+                metric.get("def"), item.item_key, value if isinstance(value, str) else None
+            )
     return metric
 
 

@@ -676,12 +676,30 @@ class CrWriteService:
                     errors.append(f"{target.target_id}：关系类型不存在")
                     continue
                 values = link(current, with_runtime=False) if current is not None else {}
-                values.update({item.item_key: item.after for item in items if item.target_kind == "link"
-                    and item.target_id == target.target_id and item.section == "def" and item.op != "delete"})
-                error = link_error(values, objects, properties, previous_via=current.via if current else None, is_new=target.is_new)
+                values.update(
+                    {
+                        item.item_key: item.after
+                        for item in items
+                        if item.target_kind == "link"
+                        and item.target_id == target.target_id
+                        and item.section == "def"
+                        and item.op != "delete"
+                    }
+                )
+                error = link_error(
+                    values,
+                    objects,
+                    properties,
+                    previous_via=current.via if current else None,
+                    is_new=target.is_new,
+                )
                 if error:
                     errors.append(f"{target.target_id}：{error}")
-            calc["V3"] = ("阻断", "；".join(errors)) if errors else ("通过", "关系对象、属性与类型已按当前本体及同单草稿核对")
+            calc["V3"] = (
+                ("阻断", "；".join(errors))
+                if errors
+                else ("通过", "关系对象、属性与类型已按当前本体及同单草稿核对")
+            )
         if "link" not in kinds:
             calc.setdefault("V3", ("不适用", "本次未改关系"))
             calc.setdefault("V13", ("不适用", "本次未改关系"))
@@ -698,21 +716,43 @@ class CrWriteService:
             for target in targets:
                 if target.target_kind != "dimension":
                     continue
-                current = await self.session.scalar(select(Dimension).where(Dimension.code == target.target_id))
+                current = await self.session.scalar(
+                    select(Dimension).where(Dimension.code == target.target_id)
+                )
                 if current is None and not target.is_new:
                     errors.append(f"{target.target_id}：维度或码表不存在")
                     continue
-                values = {"kind": current.kind.value if current else "维度",
-                    "object": current.object.code if current is not None and current.object is not None else "",
-                    "attr": current.attr if current else "", "column": current.source_column if current else ""}
-                values.update({item.item_key: item.after for item in items if item.target_kind == "dimension"
-                    and item.target_id == target.target_id and item.section in ("def", "config")
-                    and item.op != "delete" and item.item_key in values})
-                error = dimension_source_error(values["kind"], values["object"], object_codes,
-                    attr=values["attr"], column=values["column"])
+                values = {
+                    "kind": current.kind.value if current else "维度",
+                    "object": current.object.code
+                    if current is not None and current.object is not None
+                    else "",
+                    "attr": current.attr if current else "",
+                    "column": current.source_column if current else "",
+                }
+                values.update(
+                    {
+                        item.item_key: item.after
+                        for item in items
+                        if item.target_kind == "dimension"
+                        and item.target_id == target.target_id
+                        and item.section in ("def", "config")
+                        and item.op != "delete"
+                        and item.item_key in values
+                    }
+                )
+                error = dimension_source_error(
+                    values["kind"],
+                    values["object"],
+                    object_codes,
+                    attr=values["attr"],
+                    column=values["column"],
+                )
                 if error:
                     errors.append(f"{target.target_id}：{error}")
-            calc["V4"] = ("阻断", "；".join(errors)) if errors else ("通过", "维度来源有效；独立码表不作为SQL筛选维度")
+            calc["V4"] = (
+                ("阻断", "；".join(errors)) if errors else ("通过", "维度来源有效；独立码表不作为SQL筛选维度")
+            )
         else:
             calc.setdefault("V4", ("不适用", "本次未改维度"))
             calc.setdefault("V10", ("不适用", "本次未改维度"))

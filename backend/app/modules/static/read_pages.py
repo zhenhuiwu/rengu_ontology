@@ -147,16 +147,21 @@ async def object_list(svc, kw, p, focus=None):
 
 async def metric_groups(svc):
     if svc.ver:
-        return sorted({
-            row["group"] for row in (await snapshot(svc, "metrics")).values()
-            if isinstance(row.get("group"), str) and row["group"].strip()
-        })
-    return list(await svc.session.scalars(
-        select(Metric.metric_group)
-        .where(func.trim(Metric.metric_group) != "")
-        .group_by(Metric.metric_group)
-        .order_by(func.min(Metric.seq), Metric.metric_group)
-    ))
+        return sorted(
+            {
+                row["group"]
+                for row in (await snapshot(svc, "metrics")).values()
+                if isinstance(row.get("group"), str) and row["group"].strip()
+            }
+        )
+    return list(
+        await svc.session.scalars(
+            select(Metric.metric_group)
+            .where(func.trim(Metric.metric_group) != "")
+            .group_by(Metric.metric_group)
+            .order_by(func.min(Metric.seq), Metric.metric_group)
+        )
+    )
 
 
 async def metric_list(svc, kw, group, p, focus=None):
@@ -895,7 +900,9 @@ async def catalog(svc, cr_code=None, link_code=None):
         if cr_code:
             await draft(svc, cr_code, "link", link_code)
         objects = list((await snapshot(svc, "objectTypes")).values())
-        properties = {code: list(props.values()) for code, props in (await snapshot(svc, "properties")).items()}
+        properties = {
+            code: list(props.values()) for code, props in (await snapshot(svc, "properties")).items()
+        }
         links = list((await snapshot(svc, "links")).values())
         paths = list((await snapshot(svc, "qaPaths")).values())
     else:
