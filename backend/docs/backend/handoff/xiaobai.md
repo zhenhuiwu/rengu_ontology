@@ -141,3 +141,45 @@
 6. 审计日志真实导出；用户页 Excel 导入、lockVersion。
 7. 系统配置页租户信息保存；按组织过滤数据（一期单租户）。
 8. auto-ontology 搁置（前端无页面，用户决定）。
+
+## 未完成清单（交 Codex）
+
+基于 main e657b08。本体小白负责 admin（角色、行级范围、用户、租户/组织、`/me/row-scope`、审计、API 密钥/服务账号、版本）和 data（数据源、加密、内省、导入）。第一档功能已全部合并（xiaobai-p1 … p6）。每条按「是什么 / 为什么没做 / 文件和接口 / 怎么验证」写。
+
+### 待老板定
+
+1. **MetricFlow 时间表**
+   - 是什么：`public.metricflow_time_spine(date_day)` 还没建表，也没登记为受控表。没有它，累计、补零、时间偏移类查询会被 run_guarded 拒绝；普通指标查询不受影响。
+   - 为什么没做：待老板定（PDE 汇总第 3 条）。
+   - 文件和接口：新迁移放在 dynamic_0027 之后，建表并预填日期（如 2020-01-01 到 2030-12-31）；在受控表白名单里登记；`app/modules/*/metricflow*`（`metric_query(..., backend="auto")`）；文档 `docs/backend/metricflow-engine.md`。
+   - 怎么验证：装上 `metricflow` extra 后，对一个累计指标调 `metric_query`，SQL 里出现 spine join，run_guarded 不拒绝，结果行数对得上。
+2. **演示服务账号**（可选，§4 第 8 条）
+   - 是什么：「补货助手」服务账号和它的密钥没有进种子。
+   - 为什么没做：可选项，没开工。
+   - 文件和接口：`app/modules/admin/api_keys.py` 里的 `build_service_account_principal`（已可用）；种子 `seeds/extra/system/DEMO_MAINLINE.json`；`app/modules/admin/seeds/demo_mainline.py`。
+   - 怎么验证：用该服务账号的密钥调 `actions:dry-run`，补货申请能通过，其他动作返回 403。
+
+### 演示环境（环境问题，不在代码里）
+
+3. **开发库没有演示种子**
+   - 是什么：开发库 `rengu` 是 Codex 的快照，没有灌 `demo_mainline` 阶段。这个阶段里有：R-09/R-10 角色，U010011/U010812 的角色和本体成员，EXT-WEBHOOK，补货申请的审批人和通道，以及 ACT-0552 作废并解除和告警 AL-20261025-0139 的关联。
+   - 为什么没做：开发库不归我写。
+   - 文件和接口：`app/modules/admin/seeds/demo_mainline.py`；`seeds/extra/system/DEMO_MAINLINE.json`；`app/seeds/registry.py`。这个阶段排在 dynamic 之后，可以重复跑。
+   - 怎么验证：`GET /action-runs/ACT-20261025-0552` 显示已撤回；`GET /alerts/AL-20261025-0139` 没有关联动作；以 U010011 身份调 `:claim` 后状态变成处理中。
+4. **Webhook 运行配置**
+   - 是什么：`RENGU_INTEGRATION_ADAPTERS` 要加 `1/EXT-WEBHOOK`（submit_path、actions、signing_secret，可用 fernet$ 加密），并设置 `RENGU_INTEGRATION_REAL_CONNECT=true`。接收端必须是 HTTPS，种子里的地址是 https://127.0.0.1:8443。还要跑 `dispatch_queued`。
+   - 为什么没做：属于环境配置，密钥不入库、也不入代码。
+   - 怎么验证：从前端走一遍整条演示线：认领 → 评估 → 发起 → U010812 审批 → 接收端验签通过 → 已对账 → 决策日志。代码层面由 `tests/test_palantir_mainline.py` 覆盖，种子前提由 `tests/test_demo_mainline_seed.py` 和 `tests/test_demo_mainline_e2e.py` 覆盖。
+
+### 已知测试失败（master 上本来就有，交 Codex 修）
+
+5. `test_migration_round_trip`：`migrations/versions/admin_0025_api_scopes_row_scope.py` 的 downgrade 故意抛错，为了保留服务账号、密钥策略和按本体的行级范围。修法二选一：让往返测试只降到 admin_0025 之后；或者给它写一个不删数据的降级。验证：该测试通过。
+6. `tests/test_admin_users.py` 3 条：`test_depts`（部门路径名）、`test_import_preview_csv_and_rows`（「部门不存在」的期望）、`test_enable_disable`（期望 422 TRANSFER_REQUIRED，实际 200）。需要核对 mock 和接口哪边对。
+7. `tests/test_audit_logs.py`：返回多了 `ontologyId: None`，和 mock 对不上。修法二选一：mock 加上这个字段，或者 schema 去掉。
+8. `tests/test_admin_roles.py::test_list_and_get_match_mock`：mock 对比漂移。
+9. `tests/test_admin_audit_export.py::test_export_migration_roundtrip_and_metadata`：列注释对不上。其中 `api_key.code`、`platform_setting.code` 是我的，`decision_log.code`、`rule_schedule_run.release_id` 是动态的。
+10. 其他组的（我改测试时碰到的，列出来备查）：`test_dynamic_alerts` 里 3 个 start_action 用例（full_flow、order_approver、errors）在准备步骤报 AssertionError；`test_dynamic_seed` 2 条；`test_conventions::test_job_stubs_registered`；`test_integration_writeback_calls` 里的 TypeError。
+
+### 按决定不做
+
+11. 达梦、人大金仓、MySQL 驱动（`app/modules/data/connector.py` 的 `DRIVERS`），属于第二档，也不连外部库。正式登录和单点登录、属性级权限、分支、模板，属于第二、三档。
