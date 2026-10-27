@@ -226,3 +226,34 @@ class ActionRunLog(IdMixin, AppendOnlyTableMixin, Base):
     level: Mapped[TimelineStatus | None] = mapped_column(
         enum_column(TimelineStatus, 16), comment="前端 status"
     )
+
+
+class DecisionLog(CodeMixin, AppendOnlyTableMixin, Base):
+    """机器 / AI 决策评估记录（POST /decisions:evaluate，dynamic_0027）：只追加，只给建议、不暂存不执行。
+
+    调用方审计：caller_kind = user / service_account / ai（ai = 人或服务账号身份 + 调用方声明的 AI 会话），
+    caller_id = 身份编号，api_key_prefix = API 密钥前缀（人工会话为空）。"""
+
+    __tablename__ = "decision_log"
+    __table_args__ = (
+        Index("ix_decision_log_obj_kind_obj_id", "obj_kind", "obj_id"),
+        {"comment": "决策评估记录（只追加）"},
+    )
+
+    caller_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="user / service_account / ai"
+    )
+    caller_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    caller_name: Mapped[str | None] = mapped_column(String(200))
+    api_key_prefix: Mapped[str | None] = mapped_column(String(32))
+    ai_session_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    ai_round_id: Mapped[str | None] = mapped_column(String(64))
+    obj_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    obj_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    alert_code: Mapped[str | None] = mapped_column(String(64), index=True)
+    input: Mapped[dict] = mapped_column(
+        JsonType, nullable=False, comment="请求 + 评估时的告警 / 命中 / 生命周期上下文"
+    )
+    output: Mapped[dict] = mapped_column(
+        JsonType, nullable=False, comment="排序后的建议动作（含试运行与策略）"
+    )

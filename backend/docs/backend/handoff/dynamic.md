@@ -261,3 +261,79 @@
 6. 生命周期 `current`：对象数据和变化记录不一致时（种子里 SO202610250720852 的对象数据是「已签收」，变化记录是非法迁移到「待支付」）该以谁为准，需要产品确认；外部数据源或未接入数据时会退回 `lastChange`。
 7. 摘要 `limit` 边界和性能（大量命中或动作时的 count 开销）。
 8. 摘要的 API 密钥路径：密钥授予与账号授予取交集后的分段结果、密钥的 IP 白名单 / 配额 / 吊销 / 过期对此路由的效果；若 `SCOPE_PAGES` 扩展，需补分段可见断言。
+
+## dynamic-r6（2026-10-27）：API 密钥 dynamic:read、决策评估 + 决策记录
+
+迁移头 `dynamic_0027`（接 `admin_0026`）。
+
+### 1. API 密钥 dynamic:read
+
+- 下面这些只读 GET 路由用 本体小白 的 `require_api_scope("dynamic:read")`（人工登录不受影响）：
+  - 告警：`/alerts`、`/alerts/facets`、`/alerts/meta`、`/alerts/{id}`、`/people`
+  - 动作：`/action-runs`、`/actions/meta`、`/action-runs/{id}`
+  - 规则命中：`/rules/{id}/hits`、`/rule-hits/{id}`
+  - 生命周期：三个 GET
+- 单对象动态摘要的路由仍然只要 `objects:read`。dynamic:read 不加在路由上，是因为加了以后只有 objects:read 的密钥会直接 403。改为在 `ObjectDynamicSummary` 里逐段判断：密钥没有 dynamic:read 时，四段都返回 `{available:false, reason:"missing-scope", required:"dynamic:read"}`。
+- 密钥只有带 objects:read 才能看到行，否则行级范围是 DENY_ALL。只有 dynamic:read 的密钥列表都是空的，单条读取返回 404。
+
+### 2. `POST /decisions:evaluate`（只给建议）+ `GET /decisions`、`GET /decisions/{id}`
+
+- **代码位置**：`app/modules/dynamic/decisions.py`；表在 `models.DecisionLog`，迁移是 `dynamic_0027_decision_log.py`。
+- **请求**：`{alertId}` 或 `{objectTypeId, objectId}` 二选一，另外可带：
+  - `caller{aiSessionId, aiRoundId, agent}`：调用方自报，只记录，不参与鉴权
+  - `dryRun`：默认 true
+  - `limit`：1–20，默认 5
+- **流程**（全部按元数据，没有零售写死）：
+  1. 读取上下文：告警走 `AlertService.get`，要按行级范围可见，否则 404；对象走 `ObjectDynamicSummary.get`，拿到未关闭告警、近期命中和生命周期。
+  2. 找候选动作，来源有两类：
+     - 当前告警、其余未关闭告警、近期命中各自规则绑定的动作。查找顺序：`Rule.action_type_id` → `auto_stage.actionTypeId` → 目录规则的 actionTypeId 或动作名。
+     - 目标对象类型等于该对象类型、已发布且未退役的动作。生命周期有未登记迁移时，加一条 lifecycle 理由。
+  3. 预填参数，只认三种元数据：
+     - 规则 `autoStage.mapping`：`告警.ID` / `告警.对象` / `命中.对象` / `固定值：X` / `告警.<维度类型名>`
+     - 参数类型 `对象引用 · <类型名>`：取对象本身、告警或维度
+     - 枚举默认值：要在规则文本的选项里
+     
+     填不上的必填参数放进 `unfilledParams`。
+  4. 试运行：调 `DatabaseSubmissionChecker.run`，结果放在 `dryRun{ran, passed, checked, failed}`。发起检查：调 `launch_definition`，结果放在 `availability`。两者都在保存点里执行，执行完一律回滚。
+  5. 执行策略：`policy.load` + `caller_of`，带 AI 会话时算「问数」，得到 `policy{mode, callers, callerType, callerAllowed, limits}`。不调用 `gate`。
+  6. 打分排序（权重见 `REASON_WEIGHT`），写一条 `decision_log`，返回 `decisionId`。
+- **只建议**：每条建议带 `handoff`，即 `POST /api/ontology/v1/action-runs:stage` 的请求体，`requiresHumanConfirmation=true`。本接口不暂存，也不执行。
+- **权限**：
+  - 人：alerts view，算作「动态页面可读」。试运行另需 action-types view，没有时 `dryRun.reason=no-permission`。发起检查另需 action-center manage，没有时 `availability.checked=false`。
+  - API 密钥：需要 dynamic:read。`dryRun=true` 时还要 actions:dry-run，否则返回 403 NO_PERMISSION，或者改传 `dryRun=false`。密钥有动作白名单时，名单外的动作 `dryRun.reason=key-allowlist`。
+- **审计**：`decision_log` 记录以下字段：
+  - `caller_kind`：user / service_account / ai
+  - `caller_id`、`caller_name`
+  - `api_key_prefix`
+  - `ai_session_id`、`ai_round_id`
+  - 输入（请求、调用方、上下文、信号）和输出（建议、notes）
+  
+  表只追加：`append_only_guard` 禁止 UPDATE / DELETE / TRUNCATE。RLS 是 ontology_scope；`rengu_ontology_scoped` 只授 SELECT 和 INSERT。
+- **读取**：`GET /decisions` 支持按 objKind / objId / alertId / callerKind / aiSessionId 过滤并分页；`GET /decisions/{id}` 取单条。行级范围是 `scoped_instances(obj_kind, obj_id)`，记录对应的对象不可见就返回 404。
+- **演示「库存告警 → 补货建议」**（R-012 告警，例如 AL-20261025-0139，商品 1011846）：
+  - 第 1 名是 `request_replenish`，已预填 `product` / `store` / `mode=仓库调拨` / `alert`。`qty` 未填，因为映射是表达式「安全库存 × 1.5 − 可用库存」，没有求值器。
+  - 第 2、3 名是 `adjust_store_price` 和 `start_price_approval`，来自近期命中规则和目标类型。
+  - 种子缺口（没有改 mock）：
+    - 所有动作都是 `availability.available=false`：「动作未配置可用审批人」。
+    - 试运行不通过，原因有：
+      - 缺 qty。
+      - `关联告警` 要求当前用户是告警处理人。
+      - 商品 / 门店的参数规则写的是名称而不是条件，「不可校验」。
+      - 「执行人角色」里有未登记的角色（供应链计划员）。
+      - 有「原因必填」条件，但 request_replenish 没有 原因 参数。
+      - `商品.状态` 拿不到对象上下文。
+    - R-019 没有绑定动作，进了 `notes`。
+
+### 留给 Codex 的未测部分
+
+- 除 `test_dynamic_decisions.py` 两个用例（演示链路、密钥范围）以外都没测，包括：
+  - 行级范围：受限角色看不到 `GET /decisions` 里别人的对象
+  - `callerKind` / `objKind` / `alertId` 过滤和分页
+  - `limit` 截断
+  - `caller.agent`
+- 保存点回滚：试运行或发起检查中途写库时，确认什么都没留下。只间接验证过 action_run 总数不变。
+- 服务账号密钥（principal 是服务账号）：`caller_kind=service_account`、`caller_of → 服务账号`，以及策略 callers 不含服务账号时 `callerAllowed=false`、扣分。
+- 动作白名单密钥（`key-allowlist`）；`policy.mode=suggest` 和 `limits` 的展示。
+- 规则 `action_type_id` 直接绑定与 autoStage 不一致时的优先级；动作已退役、只在 changing 状态时的 notes。
+- `decision_log` 只追加触发器的 UPDATE / DELETE 拒绝，以及迁移往返（`test_migrations` 现有失败卡在 notify_0022，不是本分支造成的）。
+- dynamic:read 新加到的规则命中、生命周期、动作 GET 路由：密钥有 / 无 dynamic:read 的情况，只测了 `/alerts`。

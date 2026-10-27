@@ -5,10 +5,10 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response, status
 
 from app.common.auth import CurrentUserDep, require_func
-from app.common.pagination import MAX_PAGE_SIZE, PageParams
+from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
 from app.db.session import SessionDep
 from app.modules.admin.api_keys import require_api_scope
 from app.modules.dynamic.catalog import (
@@ -18,6 +18,7 @@ from app.modules.dynamic.catalog import (
     get_list_catalog,
     get_meta_catalog,
 )
+from app.modules.dynamic.decisions import DecisionEvaluateIn, DecisionService
 from app.modules.dynamic.ports import PortsDep
 from app.modules.dynamic.schemas import (
     ActionRunDetail,
@@ -71,6 +72,11 @@ ALERTS_VIEW = [Depends(require_func("alerts", "view"))]
 ALERTS_MANAGE = [Depends(require_func("alerts", "manage"))]
 ACTIONS_VIEW = [Depends(require_func("action-center", "view"))]
 ACTIONS_MANAGE = [Depends(require_func("action-center", "manage"))]
+# 只读接口另放行 API 密钥 dynamic:read（本体小白的 require_api_scope；人工会话不受影响）。
+# 注意：行级数据只随 objects:read 下发，只有 dynamic:read 的密钥看到的是空列表 / 404。
+DYNAMIC_READ = Depends(require_api_scope("dynamic:read"))
+ALERTS_READ = [DYNAMIC_READ, *ALERTS_VIEW]
+ACTIONS_READ = [DYNAMIC_READ, *ACTIONS_VIEW]
 
 
 def _alerts(session: SessionDep, user: CurrentUserDep, catalog: CatalogDep, ports: PortsDep) -> AlertService:
@@ -122,7 +128,7 @@ FILTERS_DOC = (
 )
 
 
-@router.get("/alerts", response_model=AlertPage, dependencies=ALERTS_VIEW)
+@router.get("/alerts", response_model=AlertPage, dependencies=ALERTS_READ)
 async def list_alerts(
     page: AlertPageQ,
     svc: Annotated[AlertService, Depends(_alert_list)],
@@ -146,7 +152,7 @@ async def list_alerts(
     )
 
 
-@router.get("/alerts/facets", dependencies=ALERTS_VIEW)
+@router.get("/alerts/facets", dependencies=ALERTS_READ)
 async def alert_facets(
     svc: Annotated[AlertService, Depends(_alert_list)],
     status_: Annotated[str, Query(alias="status")] = "open",
@@ -169,7 +175,7 @@ async def alert_facets(
     )
 
 
-@router.get("/alerts/meta", dependencies=ALERTS_VIEW)
+@router.get("/alerts/meta", dependencies=ALERTS_READ)
 async def alerts_meta(session: SessionDep) -> dict[str, Any]:
     from sqlalchemy import select
 
@@ -183,7 +189,7 @@ async def alerts_meta(session: SessionDep) -> dict[str, Any]:
     }
 
 
-@router.get("/alerts/{code}", response_model=AlertDetail, dependencies=ALERTS_VIEW)
+@router.get("/alerts/{code}", response_model=AlertDetail, dependencies=ALERTS_READ)
 async def get_alert(code: str, svc: Annotated[AlertService, Depends(_alert_detail)]) -> AlertDetail:
     # The catalog dependency validates code before its first database lookup.
     return await svc.detail(await svc.get(code))
@@ -224,7 +230,7 @@ async def start_action(
     return StartActionOut(alert=await svc.detail(alert), action=await acts.detail(run))
 
 
-@router.get("/people", dependencies=ALERTS_VIEW)
+@router.get("/people", dependencies=ALERTS_READ)
 async def people(alert_id: Annotated[str, Query(alias="alertId")], svc: AlertSvc) -> list[dict[str, str]]:
     return await svc.people(alert_id)
 
@@ -232,7 +238,7 @@ async def people(alert_id: Annotated[str, Query(alias="alertId")], svc: AlertSvc
 # ---------------- 动作 ----------------
 
 
-@router.get("/action-runs", response_model=ActionRunPage, dependencies=ACTIONS_VIEW)
+@router.get("/action-runs", response_model=ActionRunPage, dependencies=ACTIONS_READ)
 async def list_action_runs(
     page: ActionPageQ,
     svc: Annotated[ActionService, Depends(_action_list)],
@@ -266,7 +272,7 @@ async def list_action_runs(
     )
 
 
-@router.get("/actions/meta", dependencies=ACTIONS_VIEW)
+@router.get("/actions/meta", dependencies=ACTIONS_READ)
 async def actions_meta(
     catalog: Annotated[DatabaseRefCatalog, Depends(get_meta_catalog)], _user: CurrentUserDep
 ) -> dict[str, Any]:
@@ -391,7 +397,7 @@ async def validate_launch(code: DynamicPathCode, body: LaunchValidateIn, svc: Ac
     return {"passed": True, "message": "参数和提交条件通过"}
 
 
-@router.get("/action-runs/{code}", response_model=ActionRunDetail, dependencies=ACTIONS_VIEW)
+@router.get("/action-runs/{code}", response_model=ActionRunDetail, dependencies=ACTIONS_READ)
 async def get_action_run(
     code: DynamicPathCode, svc: Annotated[ActionService, Depends(_action_list)]
 ) -> ActionRunDetail:
@@ -424,6 +430,60 @@ async def resubmit_action(code: DynamicPathCode, svc: ActionSvc) -> ResubmitOut:
 @router.post("/action-runs/{code}:reconcile", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
 async def reconcile_action(code: DynamicPathCode, body: ReconcileIn, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.reconcile(code, body.result, body.note))
+
+
+# ---------------- 决策评估（只给建议，不暂存不执行）----------------
+# 权限：人 = alerts view（「动态页面可读」）；API 密钥另需 dynamic:read，dryRun=true 时再要 actions:dry-run
+# （在 DecisionService.evaluate 里判断，dryRun=false 不需要）。调用方写进 decision_log。
+
+DecisionPageQ = Annotated[PageParams, Depends(_page_params(20))]
+
+
+def _decisions(
+    request: Request,
+    session: SessionDep,
+    user: CurrentUserDep,
+    catalog: Annotated[DatabaseRefCatalog, Depends(get_catalog)],
+    ports: PortsDep,
+) -> DecisionService:
+    return DecisionService(session, user, catalog, ports, request)
+
+
+@router.post("/decisions:evaluate", dependencies=ALERTS_READ)
+async def evaluate_decision(
+    body: DecisionEvaluateIn, svc: Annotated[DecisionService, Depends(_decisions)]
+) -> dict[str, Any]:
+    """按告警或对象给出排序后的建议动作（预填参数、试运行、执行策略），并写一条只追加的决策记录。"""
+    return await svc.evaluate(body)
+
+
+@router.get("/decisions", dependencies=ALERTS_READ)
+async def list_decisions(
+    page: DecisionPageQ,
+    svc: Annotated[DecisionService, Depends(_decisions)],
+    obj_kind: Annotated[str | None, Query(alias="objKind", max_length=64)] = None,
+    obj_id: Annotated[str | None, Query(alias="objId", max_length=64)] = None,
+    alert_id: Annotated[str | None, Query(alias="alertId", max_length=64)] = None,
+    caller_kind: Annotated[str | None, Query(alias="callerKind", max_length=16)] = None,
+    ai_session_id: Annotated[str | None, Query(alias="aiSessionId", max_length=64)] = None,
+) -> Page[dict[str, Any]]:
+    """决策记录列表（行级范围同告警：只列可见对象的记录）。"""
+    return await svc.list(
+        page,
+        obj_kind=obj_kind,
+        obj_id=obj_id,
+        alert_id=alert_id,
+        caller_kind=caller_kind,
+        ai_session_id=ai_session_id,
+    )
+
+
+@router.get("/decisions/{code}", dependencies=ALERTS_READ)
+async def get_decision(
+    code: Annotated[str, Path(max_length=64, pattern=r"^[^\x00]+$")],
+    svc: Annotated[DecisionService, Depends(_decisions)],
+) -> dict[str, Any]:
+    return await svc.get(code)
 
 
 from app.modules.dynamic.rules_router import router as _rules_router  # noqa: E402  第二部分：规则 / 推演 / 生命周期
