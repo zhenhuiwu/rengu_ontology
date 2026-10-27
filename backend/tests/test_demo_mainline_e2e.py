@@ -1,20 +1,14 @@
-"""演示主线（AL-20261025-0139 → 补货申请 → EXT-WEBHOOK → 决策记录）在真实种子上能走到哪一步。
+"""演示主线（AL-20261025-0139 → 补货申请 → EXT-WEBHOOK → 决策记录）的种子前置条件。
 
-真实种子到 dynamic + demo_mainline + integration_runs；EXT-WEBHOOK 适配器指向本测试起的 127.0.0.1 本地接收端
-（不连外部主机、配置里没有任何密钥）。主线目前停在执行映射（ACTION_EDITS_UNAVAILABLE，动态/静态在查，
-这里不修），所以断言接收端一次请求都没收到、没有生成外呼记录；哪天上游修好，本测试会失败提醒更新。
+完整走通的流程（认领 → 评估 → 告警发起 → U010812 审批 → 签名 Webhook → 已对账 → 决策日志）
+由 tests/test_palantir_mainline.py 覆盖，这里不重复跑，只锁住 demo_mainline 种子给主线准备的状态：
+旧暂存动作 ACT-20261025-0552 已作废且不再挂在告警上，补货申请走 EXT-WEBHOOK、审批人是 姚娜。
 """
 
-import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
-from pydantic import SecretStr
-from sqlalchemy import func, select, text
 
-from app.core.config import get_settings
 from app.seeds.loader import run_seeds
 from tests.dynamic_support import API, dyn  # noqa: F401
 
@@ -23,125 +17,30 @@ PLANNER = {"X-Demo-As": "U010011"}  # 周晓峰：告警处理人 / R-012 确认
 
 
 @pytest.fixture
-def receiver():
-    hits = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            hits.append((self.path, dict(self.headers), body))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok": true}')
-
-        def log_message(self, *args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield server, hits
-    server.shutdown()
-    server.server_close()
-
-
-@pytest.fixture
-async def mainline(dyn, client, session, receiver, monkeypatch):  # noqa: F811
-    from app.modules.integration.models import ExtSystem
-
+async def mainline(dyn, client, session):  # noqa: F811
     await run_seeds(session, ["demo_mainline", "integration_runs"])
     await session.commit()
-    server, hits = receiver
-    port = server.server_address[1]
-    # 回滚事务里把演示通道指到本地接收端端口；适配器配置无 token / signing_secret
-    await session.execute(
-        text("UPDATE ext_system SET endpoint=:u WHERE code='EXT-WEBHOOK'"), {"u": f"https://127.0.0.1:{port}"}
-    )
-    await session.commit()
-    settings = get_settings()
-    monkeypatch.setattr(settings, "integration_real_connect", True)
-    monkeypatch.setattr(
-        settings,
-        "integration_adapters",
-        SecretStr(json.dumps({"1/EXT-WEBHOOK": {"submit_path": "/hook", "actions": ["request_replenish"]}})),
-    )
-    system = await session.scalar(select(ExtSystem).where(ExtSystem.code == "EXT-WEBHOOK"))
-    return client, hits, system
+    return client
 
 
-async def _counts(session):
-    return (
-        await session.scalar(text("SELECT count(*) FROM action_run")),
-        await session.scalar(text("SELECT count(*) FROM writeback_call")),
-    )
-
-
-async def test_mainline_stops_before_webhook(mainline, session):
-    from app.modules.dynamic.models import DecisionLog
+async def test_mainline_preconditions(mainline, session):
     from app.modules.integration.action_edits import execution_definition
-    from app.modules.integration.execution import submit_adapter
 
-    client, hits, system = mainline
-    runs0, calls0 = await _counts(session)
-
-    # 通道本身已就绪：补货申请定义绑定 EXT-WEBHOOK，本地适配器配置通过执行白名单 / 幂等头校验
+    client = mainline
     probe = SimpleNamespace(action_type_code="request_replenish", type_version="v3", sys_code="EXT-WEBHOOK")
     definition = await execution_definition(session, probe)
     assert definition["sysId"] == "EXT-WEBHOOK"
-    assert submit_adapter(system, definition).config.actions == ["request_replenish"]
 
-    # ① 旧暂存记录 ACT-0552 已作废（已撤回），不再挂在告警上，也不能再确认
+    # 旧记录作废：已撤回，不能再确认
     r = await client.get(f"{API}/action-runs/{RUN}", headers=PLANNER)
     assert r.status_code == 200, r.text
-    run = r.json()
-    assert run["status"] == "已撤回"
-    assert run["can"]["confirm"] is False
+    assert r.json()["status"] == "已撤回" and r.json()["can"]["confirm"] is False, r.json()
+
+    # 告警不再关联旧动作：待处理、处理人 U010011，可认领后重新发起
     r = await client.get(f"{API}/alerts/{ALERT}", headers=PLANNER)
     assert r.status_code == 200, r.text
-    assert not r.json().get("action"), r.text
-
-    # ② 告警重新发起：认领后不再被旧关联挡住，下一个缺口是执行映射
+    alert = r.json()
+    assert not alert.get("actionId") and not alert.get("action"), alert
+    assert alert["status"] == "待处理"
     r = await client.post(f"{API}/alerts/{ALERT}:claim", headers=PLANNER)
     assert r.status_code == 200 and r.json()["status"] == "处理中", r.text
-    r = await client.post(
-        f"{API}/alerts/{ALERT}:start-action",
-        headers=PLANNER,
-        json={"params": {"product": "1011846", "qty": 205}},
-    )
-    assert r.status_code != 409, r.text
-    assert r.json()["code"] == "ACTION_EDITS_UNAVAILABLE", r.text
-
-    # ③ 新建手动补货申请：暂存时校验执行映射，ontology_edit_rule.field 是自然语言 → 停在这里
-    r = await client.post(
-        f"{API}/action-runs:stage",
-        headers=PLANNER,
-        json={
-            "typeId": "request_replenish",
-            "source": {"type": "手动"},
-            "objKind": "product",
-            "objId": "1011846",
-            "objLabel": "伊利纯牛奶 250ml×16盒",
-            "params": json.dumps(
-                {"product": "1011846", "store": "SH0102", "qty": 205, "mode": "仓库调拨", "alert": ALERT},
-                ensure_ascii=False,
-            ),
-        },
-    )
-    assert r.status_code == 503, r.text
-    assert r.json()["code"] == "ACTION_EDITS_UNAVAILABLE"
-    assert r.json()["message"] == "执行映射须为有界 JSON 对象，自然语言不能执行"
-
-    # ④ 决策记录本身能写（只建议，不执行）；补货申请试运行未通过
-    logs0 = await session.scalar(select(func.count()).select_from(DecisionLog))
-    r = await client.post(f"{API}/alerts/{ALERT}/decision:evaluate", headers=PLANNER)
-    assert r.status_code == 200, r.text
-    decision = r.json()["decision"]
-    assert decision["suggestOnly"] is True
-    top = decision["recommendations"][0]
-    assert top["actionType"]["id"] == "request_replenish" and top["dryRun"]["passed"] is False
-    assert await session.scalar(select(func.count()).select_from(DecisionLog)) == logs0 + 1
-
-    # 没有任何东西到达 Webhook
-    assert hits == []
-    assert await _counts(session) == (runs0, calls0)
