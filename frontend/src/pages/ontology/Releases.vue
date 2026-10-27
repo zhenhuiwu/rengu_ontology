@@ -21,6 +21,7 @@ import {
 } from '@/mock/changes';
 import { loadMyProfile } from '@/api/profile';
 import { currentApiContext } from '@/api/http';
+import { fetchCurrentRelease } from '@/api/releases';
 import { useStaticPage } from './parts/useStaticPage';
 import { invalidateActionSnapshot } from '@/api/action';
 import { crAction, deleteCR, fetchCR, fetchReviewerOptions, patchCR, fetchWorkflowRecords, fetchStaticPage, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease, validateCR, type CRAction } from '@/api/static';
@@ -235,6 +236,18 @@ const editTo = computed(() => {
 });
 const latestRelease = computed(() => visibleCRS.value.find((c) => c.status === '已发布')?.release);
 const isLatest = computed(() => !rolledBack.value && cur.value.release === latestRelease.value && cur.value.release === CURRENT_VERSION.value);
+// 首个发布版本没有上一版可恢复（后台 409 ROLLBACK_FIRST_RELEASE）：按 /releases/current 的 parentVer 判断，隐藏回滚按钮
+const firstRelease = ref(false);
+watch(CURRENT_VERSION, async (v) => {
+  firstRelease.value = false;
+  if (!realMode || !v) return;
+  const key = JSON.stringify(currentApiContext());
+  try {
+    const c = await fetchCurrentRelease();
+    if (key === JSON.stringify(currentApiContext()) && v === CURRENT_VERSION.value) firstRelease.value = c.current === v && !!c.release && !c.release.parentVer;
+  } catch { firstRelease.value = false; }
+}, { immediate: true });
+const isFirstRelease = computed(() => firstRelease.value && cur.value.release === CURRENT_VERSION.value);
 /** 详情区有没有蓝色主按钮：有就把页头“发布”降为普通按钮，同屏只留一个主按钮 */
 const detailPrimary = computed(() => !readonly.value && (cur.value.status === '草稿' || (cur.value.status === '审核中' && isReviewer.value)));
 
@@ -389,7 +402,7 @@ async function publish() {
   }
 }
 async function rollback() {
-  if (realMode && (readonly.value || crFallback.value || !canRollback.value || !isLatest.value)) return;
+  if (realMode && (readonly.value || crFallback.value || !canRollback.value || !isLatest.value || isFirstRelease.value)) return;
   const key = JSON.stringify(currentApiContext());
   const prev = visibleCRS.value.find((c) => c.status === '已发布' && c.release !== cur.value.release)?.release;
   const ok = await confirm.ask({ title: `回滚 ${cur.value.release}`, target: `本体 ${cur.value.release}`, okText: '回滚', danger: true,
@@ -485,7 +498,7 @@ async function rollback() {
         </template>
         <template v-else-if="cur.status === '已发布'">
           <span class="t-12 c-3 num">已发布为 {{ cur.release }}</span>
-          <a-tooltip :title="!canRollback ? '需要实际发布管理权限' : isLatest ? '' : rolledBack && cur.release === CURRENT_VERSION ? '已回滚' : '只能回滚最近一次发布'"><a-button danger :disabled="crFallback || !canRollback || !isLatest" @click="rollback">回滚</a-button></a-tooltip>
+          <a-tooltip v-if="!isFirstRelease" :title="!canRollback ? '需要实际发布管理权限' : isLatest ? '' : rolledBack && cur.release === CURRENT_VERSION ? '已回滚' : '只能回滚最近一次发布'"><a-button danger :disabled="crFallback || !canRollback || !isLatest" @click="rollback">回滚</a-button></a-tooltip><span v-else class="t-12 c-3">首个发布版本，没有可回滚到的上一版</span>
         </template>
       </div>
       <a-tabs v-model:activeKey="tab" class="rl-tabs">
