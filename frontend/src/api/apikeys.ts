@@ -9,7 +9,7 @@ import { apiClient, type PageResult } from './http';
 const api = apiClient('admin');
 const enc = encodeURIComponent;
 
-export type ScopeCode = 'meta:read' | 'objects:read' | 'functions:invoke' | 'actions:dry-run' | 'actions:execute' | 'events:ingest';
+export type ScopeCode = 'meta:read' | 'objects:read' | 'functions:invoke' | 'actions:dry-run' | 'actions:execute' | 'events:ingest' | 'dynamic:read';
 export interface ScopeOption { value: ScopeCode; label: string; pages: string[] }
 export interface KeyUsage { minute: number; day: number }
 /** 后台密钥行：在 mock 结构上多了主体类型、白名单、限流配额和当前用量 */

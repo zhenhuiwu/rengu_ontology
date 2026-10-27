@@ -56,6 +56,7 @@ SCOPES: dict[str, str] = {
     "actions:dry-run": "动作试运行",
     "actions:execute": "动作执行",
     "events:ingest": "事件写入",
+    "dynamic:read": "动态读取",
 }
 LEGACY_SCOPES = {"元数据读取": "meta:read"}
 SCOPE = "元数据读取"  # legacy label, still accepted on input
@@ -66,6 +67,7 @@ ScopeCode = Literal[
     "actions:dry-run",
     "actions:execute",
     "events:ingest",
+    "dynamic:read",
     "元数据读取",
 ]
 # Function pages a scope can carry, and the highest level it can carry (always ∩ current grants).
@@ -76,6 +78,9 @@ SCOPE_PAGES: dict[str, dict[str, str]] = {
     "actions:dry-run": {"action-types": "view", "action-center": "view"},
     "actions:execute": {"action-types": "view", "action-center": "manage"},
     "events:ingest": {"event-types": "view"},
+    # Read-only dynamic layer: alerts, rules / rule hits, lifecycle (object-types view), action center.
+    # Never carries manage, so no write route is reachable with this scope alone.
+    "dynamic:read": {"alerts": "view", "rules": "view", "object-types": "view", "action-center": "view"},
 }
 STATUSES = ("有效", "即将过期", "已过期", "已吊销")
 RANK = {"none": 0, "view": 1, "manage": 2}
@@ -435,6 +440,7 @@ async def list_keys(
         "actions:dry-run",
         "actions:execute",
         "events:ingest",
+        "dynamic:read",
         "元数据读取",
     ] = "全部",
     principal: Literal["全部", "user", "service"] = "全部",
