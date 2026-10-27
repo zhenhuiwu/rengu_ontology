@@ -35,6 +35,13 @@
 
 需要静态能力目录（`static/capabilities.py`，未改）补的钩子：① 事件类型段（现由 `machine/tools.py` 自己读）；② 动作参数的规则 / 枚举选项与描述模板（现枚举参数导出为字符串）；③ 按段计算（现在工具清单也要付指标就绪度、规则、行范围的计算成本）。
 
+## 0.2 palantir-t4 补丁（基于 `492d746`，无迁移）
+
+- 入站只收 外部系统 来源（PDE 裁定；同步 / 动作 / 规则 → 403 `EVENT_SOURCE_NOT_EXTERNAL`），静态令牌与密钥一致；内部 `receive(request=None)` 不受影响：`event/ingress.py`。工具清单事件工具同步收窄：`machine/tools.py` `INGESTIBLE`。
+- `枚举列表` 参数逐项校验：`action/checker.py`。
+- 未做（延后）：工具清单改用能力目录的参数 `enum` 与事件类型节（static-t3 已提供），`machine/tools.py` 仍自己读事件类型、自己解析枚举。
+- 测试：`tests/test_palantir_machine.py` 新增 2 条。
+
 ## 1. 第一档 Webhook 出站（palantir-t1，已合入）
 
 | 项 | 状态 | 位置 |

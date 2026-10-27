@@ -22,7 +22,7 @@ from app.modules.event.models import EventSource, EventType
 from app.modules.static.capabilities import capabilities
 
 # 只导出外部可写入的事件来源；规则 / 动作产生的事件由平台自己发，不给 AI 当工具
-INGESTIBLE = (EventSource.external, EventSource.sync)
+INGESTIBLE = (EventSource.external,)  # 与入站一致：只接受外部来源
 SCALAR = {
     "字符串": {"type": "string"},
     "文本": {"type": "string"},
