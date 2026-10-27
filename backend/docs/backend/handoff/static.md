@@ -359,6 +359,22 @@
 - **首版回滚文案**：新本体/新空间的首个发布没有上一版，`versioning/service.py:89`（`latest.parent is None`）返回 `ROLLBACK_NOT_LATEST`，文案读起来像「不是最新版」。建议：改专门的错误码/文案（如「首个发布版本没有可回滚的上一版」），并在前端发布列表对首版隐藏回滚按钮。
 - **迁移往返**：test_static.py::test_migration_round_trip 降级穿过 `migrations/versions/notify_0022_inbox.py:67` 时被有意阻断（RuntimeError），仍未解决，需 notify/PDE 决定。
 
+## static-t3（基于 master `f0a7df3`，本轮无新迁移）
+
+- **#8 总览去 mock 导入**：`OntologyOverview.vue` 不再 import `@/mock/*`；演示数据入口放到 `src/api/overview.ts`（`DEMO_DATA_AS_OF`、`demoFailedTypes`、`demoCards`、`demoTodos`、`demoCrOfRelease`、`demoAddChange`），演示模式行为不变（只搬入口，不碰 mock 数据一致性）。顺带修：真接口模式下发布记录仍去查 mock 变更单（`crOf`），现在只在演示模式查；待处理接口报业务错误时清掉旧列表。
+- **能力目录 events 节**（Palantir 要求）：`events[]` 按 event-types 页 view 放行，读 `event.models.EventType` / `EventPayloadField`，不含样例与订阅方；`ingest` 给接收接口与 `accepting`，密钥调用另给 `keyAllowed`（白名单）。密钥需 `meta:read`+`events:ingest`。
+- **参数 enum**（Palantir 要求）：动作参数「枚举 / 枚举列表」按 `action.checker.literal_enum_choices` 解析参数规则；函数入参按注解 `Literal[...]` 解析。只在声明了取值时加 `enum` 键。目录形状只增不改。
+- **rules 节与 dynamic:read**：本体小白在 `c55f370` 已经通过 `SCOPE_PAGES` 加了 dynamic:read，并带测试 `tests/test_api_key_dynamic_capabilities.py`，静态没有重复实现；static-api.md 第 21 项改为已解决。
+- **构建引导**：`BuildGuideDrawer.vue` 加「函数」步骤（放在指标之后，用 `GET /functions` 计数；历史版本下显示「不适用」，因为函数列表不区分版本）。
+- **ROLLBACK_FIRST_RELEASE 文档**：按 PDE 的调整，交给本体小白（版本模块），静态没有改 api-index / versioning-api / contracts。
+- **测试**：`test_static_capabilities.py` 新增参数枚举、events、密钥事件白名单的断言和 `test_literal_annotation_values`，同时修了 add_props 偶发 MissingGreenlet（改成只取外键）；`check-overview-integration.mjs` 在 master 上原本就跑不过（缺 `@/components/graphEdges` 依赖，平行边断言也过时了），现在已修好，并断言总览页不 import mock；`check-definition-forms.mjs` 加函数步骤断言。
+
+### 给 PDE / 其他模块（只报告）
+
+- `action/checker.py:450` 只对「枚举」做取值校验，「枚举列表」的元素不校验（`param_valid` :158 只看是不是字符串列表）；目录与 `/machine/tools`（`machine/tools.py:59-62`）都按声明给了 enum，提交端没有强制。
+- `event/ingress.py:126` 只检查已发布 / 未下线，不限来源；`machine/tools.py:25` `INGESTIBLE` 只导出外部系统 / 数据同步来源。动作 / 规则来源的事件类型能经 `/internal/v1/events` 外部写入，是否要在接收端拦截由事件模块定。
+- `machine/tools.py:128-131` 动作工具的参数 schema 调用 `type_schema(p["type"])` 时没传规则，所以动作工具目前没有枚举；现在可以直接读目录里的 `p.get("enum")`（Palantir 自己决定）。
+
 ## static-t2（基于 master `e97bc61`，本轮无新迁移）
 
 - **PyYAML 依赖**（PDE 授权）：`backend/pyproject.toml` 加 `pyyaml>=6.0`（MetricFlow 导出 `format=yaml` 用）。`uv lock --offline` 因本机 uv 缓存缺 defusedxml 无法重新解析，`uv.lock` 改为手工补两处（项目包 `dependencies` 加 `{ name = "pyyaml" }`、`requires-dist` 加 `{ name = "pyyaml", specifier = ">=6.0" }`；pyyaml 6.0.3 包条目原已存在），`uv lock --check --offline` 通过（Resolved 69 packages）。联网环境建议再跑一次 `uv lock` 确认无差异。
