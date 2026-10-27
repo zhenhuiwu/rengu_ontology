@@ -586,7 +586,7 @@ async function rollback() {
   <a-modal v-model:open="reviewerOpen" title="设置审核人" :width="520" :closable="!reviewerSaving" :mask-closable="!reviewerSaving" ok-text="保存审核人" :confirm-loading="reviewerSaving" :ok-button-props="{ disabled: !canSaveReviewer }" @ok="saveReviewer">
     <a-alert v-if="reviewerError" type="error" :message="reviewerError" show-icon><template #action><a-button size="small" @click="loadReviewers">重新加载</a-button></template></a-alert>
     <p class="t-14 c-3">{{ cur.id }} · 当前审核人：{{ storedReviewer || '未设置' }}。仅可选择具备实际审核权限且非提交人的用户。</p>
-    <a-select v-model:value="reviewerId" :loading="reviewerLoading" :disabled="reviewerSaving || reviewerLoading || !!reviewerError" :options="reviewerOptions.map((u) => ({ value: u.id, label: `${u.name}（${u.id}）` }))" placeholder="选择真实审核人" style="width:100%" />
+    <a-select v-model:value="reviewerId" show-search option-filter-prop="label" :loading="reviewerLoading" :disabled="reviewerSaving || reviewerLoading || !!reviewerError" :options="reviewerOptions.map((u) => ({ value: u.id, label: `${u.name}（${u.id}）` }))" placeholder="选择真实审核人" style="width:100%" />
     <a-alert v-if="!reviewerLoading && !reviewerError && !reviewerOptions.length" type="info" message="暂无符合条件的审核人，需管理员先为其他实际用户分配审核角色；此处不会自动授权。" show-icon />
   </a-modal>
 </template>
