@@ -58,7 +58,7 @@ async def test_change_scope_caliber_appends_system_turn(qa):
     d = r.json()
     assert d["scope"] == "华东一区" and d["caliber"] == "含税"
     last = d["turns"][-1]
-    assert last["kind"] == "system" and last["text"] == "从这里开始按 大区 = 华东一区、口径 = 含税 回答"
+    assert last["kind"] == "system" and last["text"] == "从这里开始按 范围 = 华东一区、口径 = 含税 回答"
     n = len(d["turns"])
     # 值没变不再插入
     d2 = (await qa.patch(f"{B}/sessions/S0001", json={"scope": "华东一区"})).json()

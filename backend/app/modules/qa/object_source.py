@@ -32,6 +32,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError, NotFound
 from app.db.session import qa_readonly_engine_kwargs
 from app.modules.data.models import Datasource, DsType
+from app.modules.qa.readonly import scope_readonly_conn
 from app.modules.static.explorer import snapshot_flags
 from app.modules.static.models import ObjectStatus, ObjectType, Property
 
@@ -171,10 +172,11 @@ class ObjectSource:
                 isolation_level="REPEATABLE READ", execution_options={"postgresql_readonly": True}, **options)
             async with engine.connect() as conn:
                 async with conn.begin():
+                    # 先收窄到本体角色（外部库没有该角色时不切），再查生效身份不是超级用户 / BYPASSRLS
+                    await scope_readonly_conn(conn, self.ontology_id, error=lambda: unavailable("对象只读连接账号不能具有超级用户或绕过行权限能力"))
                     role = (await conn.execute(text("SELECT rolsuper, rolbypassrls, current_setting('transaction_read_only') AS readonly FROM pg_roles WHERE rolname = current_user"))).mappings().one()
                     if role["rolsuper"] or role["rolbypassrls"] or role["readonly"] != "on":
                         raise unavailable("对象只读连接账号不能具有超级用户或绕过行权限能力")
-                    await conn.execute(text("SELECT set_config('rengu.ontology_id', :ontology_id, true)"), {"ontology_id": str(self.ontology_id)})
                     yield conn
         except AppError:
             raise

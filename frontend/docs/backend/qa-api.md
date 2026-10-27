@@ -310,7 +310,7 @@ W6 → nlu（实体链接、时间解析、召回本体和认证问答；命中�
   - 澄清 → `kind=answer`，`answer = {card:'clarify', dataAsOf, text:<问题>, clarify:{term, chosen:null, options:[{value:'o1', label}]}, suggest:{followUps:[label…]}}`（选项最多 6 个），不执行 SQL。
   - 拒答 → `kind=denied`，`snapshot = {lead:'', bold:<原因>, tail:'。', tag:'权限拦截'(NO_PERMISSION) | '无法回答', code}`（同 QA_DEMO_TURNS T-02 形状），不执行 SQL。`qa_query_log` 记 `denied`、0 行。
   - 两种都返回 202、照常落 `qa_turn`；HTTP 错误码不变。[推断] 前端 `QaAnswer.vue` 的澄清卡目前是写死的 mock，要接 `answer.clarify` 才能显示真实选项（前端负责人）。
-- **口径裁定与拒答清单（qa 自己的数据）**：`backend/seeds/extra/qa/caliber/notes.json`（`{term, aliases, caliber, sql, source}`：销售额 = 不含税 = 行含税 ÷ 1.13、出库状态 + 出库时间；含税销售额；有效订单数 / 单量 / 几单 = 状态 ≠ 已取消、按出库时间；订单数、销量、出库及时率、优惠金额等，口径同 qa-eval §4）和 `refuse.json`（`{term, code, reason}`：毛利 / 成本 / 退款 / 会员 → NO_DATA；敏感字段、sys_* 表、关行级权限 → NO_PERMISSION；工资 / 天气等 → OUT_OF_SCOPE；写操作 → NOT_SELECT）。进 prompt 两段「口径裁定」「拒答清单」，排在最前；跟静态「指标口径」冲突时以口径裁定为准（规则 3：命中别名就保留该口径的全部条件，只有时间字段可按题目换）。不改 `static/` 种子和前端 mock。[推断] 口径定稿后应进 qa 表（要迁移），现在是文件。
+- **口径裁定与拒答清单（qa 自己的数据）**：`backend/seeds/extra/qa/caliber/1/notes.json`（`{term, aliases, caliber, sql, source}`：销售额 = 不含税 = 行含税 ÷ 1.13、出库状态 + 出库时间；含税销售额；有效订单数 / 单量 / 几单 = 状态 ≠ 已取消、按出库时间；订单数、销量、出库及时率、优惠金额等，口径同 qa-eval §4）和 `refuse.json`（`{term, code, reason, keywords}`，keywords 命中时链路不调模型直接拒答，多条取最严 code：毛利 / 成本 / 退款 / 会员 → NO_DATA；敏感字段、sys_* 表、关行级权限 → NO_PERMISSION；工资 / 天气等 → OUT_OF_SCOPE；写操作 → NOT_SELECT）。进 prompt 两段「口径裁定」「拒答清单」，排在最前；跟静态「指标口径」冲突时以口径裁定为准（规则 3：命中别名就保留该口径的全部条件，只有时间字段可按题目换）。不改 `static/` 种子和前端 mock。[推断] 口径定稿后应进 qa 表（要迁移），现在是文件。
 - **时间上限**：所有窗口的上界都不超过当前时间（本月 / 今年 / 本周 / 近 N 天都截到「现在」）；加了近 30 天。规则 8：问「每个 / 各」门店、商品时 SELECT 和 GROUP BY 都带 code + name。
 - **口径校验（sqlglot，执行前，回喂一次）**：`notes.json` 条目带 `check`（`status_eq` / `status_ne` / `time`）。`chain.matched_calibers` 按最长匹配找出问题命中的口径（“不含税”里的“含税”不算），`caliber_violations` 在 AST 里查状态条件在不在（`o.status = 'shipped'` / `<> 'cancelled'` / `NOT IN`）、用了时间列时是不是该口径的时间列（题目说了“下单 / 出库”按题目换）；不过就把问题回喂 LLM 改一次，改完不再查。[推断] 不查窗口边界，那个由下一条兜底。
 - **时间上界截到现在**：`chain.cap_time_upper` 把「时间列 < / <= 晚于当前时间的字面量」改成当前时间（库里有晚于业务时钟的出库单），sql_text 存改后的 SQL。
@@ -432,7 +432,7 @@ O1–O3 是按门店 / 商品 / 订单写死的旧接口；通用版按对象类
 | E3 | `POST /object-types/{code}/export` | E1 入参 + `ids?`、`props?` | CSV（UTF-8 BOM，`Content-Disposition: filename*=UTF-8''…`）；首列标题属性；敏感属性不导出；预览 403 `EXPORT_FORBIDDEN`；上限 10000 行；审计 |
 | O4 补充 | `POST /scoped-ask` | `scope.query?: {kw, filters}`（E1 同形） | 没选行时用当前筛选解析对象 id（`explore_ids`，同一套绑定和行级范围）；目前只支持 store / product / order 三类的回答 |
 
-- 物理绑定：`backend/seeds/extra/qa/objects/bindings.json`（对象类型 → 表，属性 → 列，可选 rowFilter）。
+- 物理绑定：`backend/seeds/extra/qa/objects/{本体}/bindings.json`（按本体分目录，没有文件的本体全部 bound=false；对象类型 → 表，属性 → 列，可选 rowFilter）。
 - 属性标志：E1 `flags()` 读静态 property 列（filterable = `static.explorer.facetable`），筛未开 filterable 的属性 422；前端 `objMeta.ts metaFromProps` 的默认规则只在后台不可达的 mock 兜底用。
 - 前端：`src/api/qaObjects.ts exploreSearch / exploreGet / exploreExport`；元数据 `objMeta.ts`（真 `/object-types/{id}/meta` + `/properties` 合并、`/facets`；mock 只在后台不可达时读兜底；带 kw 时 facets 用 E1 过渡 `facets`，静态 `/facets` 不收 kw）；取行 `objRows.ts`（mock 模式按 `MOCK_BINDINGS` 在本地筛）。
 - 工作台范围 / 口径：`src/pages/qa/qaScope.ts`。范围 = 组织层级维度最上层取值，默认当前用户行级范围（`GET /api/admin/v1/me/row-scopes?objectType=`，未上线）；口径 = meta.metrics[].variants[].label 并集，没有就用 W17 选项。会话 `scope` 仍是 ≤60 字的自由文本，`caliber` 是 ≤32 字自由文本（口径变体标签，空 = 不限，见下）。

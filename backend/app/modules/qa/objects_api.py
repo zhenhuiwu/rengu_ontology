@@ -18,6 +18,7 @@ from app.common.context import ViewContextDep, readonly_extra
 from app.common.ontology import require_ontology_id
 from app.common.pagination import MAX_PAGE_SIZE
 from app.common.row_filter import apply_row_filter, is_deny_all
+from app.common.sql_guard import governed_tables
 from app.core.errors import AppError, NotFound
 from app.core.schema import DATETIME_SEC_FORMAT, ApiModel, _tz
 from app.db.session import SessionDep
@@ -82,7 +83,9 @@ class Data:
 
     def __init__(self, session: Any, viewer: CurrentUser) -> None:
         check_object_read(viewer)
-        if require_ontology_id(session) != 1:
+        # 本分析读 biz 门店 / 商品 / 订单表：当前本体没登记这些物理绑定（受治理表）就 503，不按本体编号写死
+        bound = governed_tables(require_ontology_id(session))
+        if not all(m.__tablename__ in bound for m in (Store, Product, BizOrder, OrderLine)):
             raise DataNotConfigured()
         self.session, self.viewer = session, viewer
         self._c: dict[str, Any] = {}

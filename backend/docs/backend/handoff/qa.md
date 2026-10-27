@@ -95,11 +95,31 @@
 - **Prompt**：`chain.py` 照 Vanna `get_sql_prompt` 结构（初始说明 + ===Tables + ===Additional Context + ===Response Guidelines）和 `extract_sql` 围栏规则（MIT）；DDL 用 SQLAlchemy 把 ORM 编译成 CREATE TABLE + COMMENT，只给业务列；PG 方言规则、Style 段、样例值、「Today's date」摘自 NVIDIA auto-ontology（Apache-2.0，本地 `/workspace/tmp/auto-ontology`，未入库）。
 - **SQL 安全**：sqlglot AST 校验单条 SELECT（`app/common/sql_guard`）、外包 `LIMIT`、行级过滤注入；执行报错回喂一次（`FIX_RETRIES=1`）；`statement_timeout` → 504 `QUERY_TIMEOUT`；网关拒绝 → 403 `SQL_REJECTED`（不重试、不落轮次）。
 - **意图三选一**（同一次 LLM 调用）：SQL / 反问 JSON / 拒答 JSON，形状见 `qa-api.md` §2.3。
-- **口径数据**：`backend/seeds/extra/qa/caliber/notes.json`（销售额 = 行含税 ÷ 1.13、按出库时间、剔除测试单；有效订单数 / 单量 = 状态 ≠ 已取消、按出库时间；含税销售额、订单数、销量、出库及时率、优惠金额…）、`refuse.json`（拒答清单 → code）。
+- **口径数据**：`backend/seeds/extra/qa/caliber/{本体}/notes.json`（销售额 = 行含税 ÷ 1.13、按出库时间、剔除测试单；有效订单数 / 单量 = 状态 ≠ 已取消、按出库时间；含税销售额、订单数、销量、出库及时率、优惠金额…）、`refuse.json`（拒答清单 → code + 预检 keywords）、`context.json`（本体级上下文补充）、`metric_codes.json`（旧指标 code 映射）。
 - **评测**：题库 `backend/seeds/extra/qa/eval/questions.json`（100 题，v0.3，说明 `docs/backend/qa-eval.md`）；工具 `backend/app/modules/qa/eval/`（`setup_db` 建评测库并灌种子、`run` 跑题判分写 `results/`、`ctx` 打印 prompt；不进 pytest、应用不 import，key 只从环境读）。
 - **`a39b314` / `740a554` 新增**：sqlglot 口径校验 + 一次纠正重试、收紧反问规则；值锚点、0 行字面量修复、时间上界截断（思路取自 NVIDIA auto-ontology，Apache-2.0）。
 
 ## 2. 未完成
+
+### 2.0 qa-p1（10-27，基线 master `283bd89` + `5e3282e`）已做
+- **去零售写死**：可问表 / 时间列 / 名称列 / 度量词全部从 sql_guard 受治理表推出（`chain.qa_source`）；对象按 `object_type.code` 对上受治理表，关联只给 join 落在可问表上的；维度对象 = 可问对象 + `caliber/{本体}/context.json` 的 `dimObjects`；本体没有受治理表 → 503 `DATA_NOT_CONFIGURED`（chain 与 O4 `objects_api` 同）。提示词通用化（「{本体名}」数据分析助手，示例不再写门店 / 大区 / 品类）。口径、拒答、绑定、旧指标 code 都改成按本体分目录：`seeds/extra/qa/caliber/{本体}/`、`seeds/extra/qa/objects/{本体}/bindings.json`；`catalog.metric_key` 必须带本体。新建会话话术「按 大区 = …」→「按 范围 = …」。
+- **只读连接收窄**：`app/modules/qa/readonly.py` `scope_readonly_conn`：连接账号是 `rengu_ontology_scoped` 成员就 `SET LOCAL ROLE rengu_ontology_scoped`，否则若是 superuser / bypassrls 就拒（503），再设 `rengu.ontology_id`；chain `get_qa_conn`、`eval/job.py`、`object_source.py` 都走它。**部署须给问数只读账号 `GRANT rengu_ontology_scoped TO <qa 只读账号>`**。
+- **拒答 / 反问加强（通用，不调模型的确定性预检）**：`refuse.json` 每条带 `keywords`，命中直接拒答（多条命中取最严：NOT_SELECT > NO_PERMISSION > OUT_OF_SCOPE > NO_DATA）；名称简称（“X + 数据推出的通用后缀”，如「南京店」）对上多个对象 → 反问候选；通用评价词（业绩 / 表现 / 怎么样 / 最大…）没带任何已知指标说法 → 反问指标；提示词补了「会话范围外 → OUT_OF_SCOPE」「维度取值不存在 → OUT_OF_SCOPE」「像已有取值的别称 → 反问」「英文泛称 → 反问」。`eval/run.py` 现把题目 `asScope` 当会话范围传入（与 76/100 基线这几题不完全可比）。
+- **未验证**：按流程这轮没跑真模型评测，分数仍以 76/100（拒答 9/16、反问 5/10）为最近一次实测；离线核对 100 题的拒答 keywords 只剩 080 / 081 未命中（靠提示词 + asScope）。keywords 是按题库调的，有过拟合风险，计划加 101+ 留出题（只拒答 / 反问）单独计分。
+- **测试**：本轮相关 qa 测试与基线 `54f39d1` 失败集合相同（基线已有 27 failed / 4 errors，多为测试用户在本体 1 是 viewer、POST 被 403「当前本体工作空间为只读权限」，非本轮引入）；新增的预检 / qa_source 单测通过。
+
+### 2.0.1 剩余（按优先级）
+| 项 | 说明 |
+|---|---|
+| W7 流式 | `GET /turns/{tid}/stream` 未实现，前端同步等 W6 |
+| 定时刷新 / 订阅 | 页面定时刷新、订阅推送挂到动态的 `worker.py` 调度上，qa 不自建调度 |
+| 按本体自动评测 | 每个本体一套评测题 + 每日定时跑（T11 进 Procrastinate 队列后接每日任务）；本轮未跑真模型评测，也未加 101+ 留出题 |
+| MetricFlow 语义层 | 待静态 / 小白定指标语义层方案后接（现在仍是 LLM 直接出 SQL + 口径裁定校验） |
+| 动作意图 | 问数里识别「要执行动作」→ 出确认卡 → 走动态 action-runs |
+| MCP 工具 | 把问数 / 对象搜索暴露成 MCP tools |
+| 达梦 / 金仓方言 | sqlglot 方言、DDL 编译与 statement_timeout 适配 |
+| 测试夹具 | 测试用户在本体 1 是 viewer，大量 qa POST 测试 403（基线即如此），要与 auth / ontology owner 对齐夹具 |
+| **sql_guard 本体 1 写死（归治理）** | `app/common/sql_guard.governed_tables` 只对 `ontology_id == 1` 返回受治理表，其他本体一律空 → qa 返回 `DATA_NOT_CONFIGURED`。要按本体登记受治理表，由治理 owner 改，qa 不动 |
 
 > 截至 qa-pages `c7169d2`（基线 master `b475283`；静态 `58ad8d7` 已在 master）。已做完、不再列：R1 固定到页面（qa-cardfb，P7）、R2 我的页面（P2、P4–P10 + 前端）、R3 对象搜索 / R4 对象详情（通用化，读真 `/meta`、`/facets`）、连不上后台回退 mock。
 
@@ -107,8 +127,8 @@
 |---|---|---|
 | 流式回答 | 后端 W7 未实现，前端同步等 W6 的 `turn` | W7 `GET /turns/{tid}/stream`；`useQaSession.ts` `sendReal` |
 | T11 评测任务 | 进程内 asyncio，重启丢任务；每日定时未接；评测不带会话口径 | `eval/job.py` |
-| 行级范围 | row-scopes 接口未上 master：工作台「范围」默认值靠前端推断；`router.py:239` 新建会话话术写死「大区」 | `router.py`、`Workbench.vue` |
-| 按一批对象提问 / 绑定 | O4 和物理绑定只有 store / product / order，其他对象类型 `bound=false` | `seeds/extra/qa/objects/bindings.json`、`objects_api.py` |
+| 行级范围 | row-scopes 接口未上 master：工作台「范围」默认值靠前端推断（话术已改「范围」，qa-p1） | `router.py`、`Workbench.vue` |
+| 按一批对象提问 / 绑定 | O4 和物理绑定只有 store / product / order，其他对象类型 `bound=false` | `seeds/extra/qa/objects/{本体}/bindings.json`、`objects_api.py` |
 | 动作执行 | 建议动作只到 stage，执行未接 | X1 `action-runs`；`Workbench.vue` `runAction` |
 | 关键词分面 | E1 顺带的过渡分面要保留到静态 `/facets` 支持关键词 | `explore_api.py` `_facets` |
 | 静态分面回落 | `objMeta.ts:156` `loadStaticFacets` 任何错误都回落（含 422），应只在 `isBackendDown` 时回落 | `src/pages/objects/objMeta.ts` |
@@ -133,7 +153,7 @@
   4. 偶发生成 SQL 被网关拒 → 403 `SQL_REJECTED`，前端提示「提问失败」，问题不落库（如「昨天的毛利率」一次 403、重问得 NO_DATA）。
   5. 无多轮上下文：追问依赖前端拼句。
 - **静态本体 / 指标定义待确认**（详见 `qa-eval.md` 待定表）：
-  1. 不含税销售额 = 行含税 ÷ 1.13、订单级优惠不分摊 —— qa 已裁定写进 `caliber/notes.json`，静态指标定义页没改，待指标负责人确认。
+  1. 不含税销售额 = 行含税 ÷ 1.13、订单级优惠不分摊 —— qa 已裁定写进 `caliber/1/notes.json`，静态指标定义页没改，待指标负责人确认。
   2. `store.is_test`：口径写了「门店.是否测试店 = 否」，前端门店属性没有该字段（种子全为否）。
   3. 退款种子缺失，gmv / gmv_tax 退款项按 0；退款率题拒答。
   4. 含税销售额的时间字段与默认过滤（同 gmv？）。
@@ -141,7 +161,7 @@
   6. `store.big_region` 列名和取值（种子只有「华东」）。
   7. 外卖渠道范围；单量 / 几单 / 卖了多少钱 / 卖得最好等口语说法进 semantic-map。
   8. **种子指标定义页 `def_rows` 是模板照抄**：所有指标共用同一份定义页（基础对象 / 时间字段 / 默认过滤 / 同名默认都一样），要静态 owner 按指标分别填。
-  9. **有效订单数：默认过滤与公式冲突**：定义页「默认过滤 已出库」vs 公式「状态 ≠ 已取消」；链路暂以公式为准（qa 裁定写在 `caliber/notes.json`），待静态 owner 定。
+  9. **有效订单数：默认过滤与公式冲突**：定义页「默认过滤 已出库」vs 公式「状态 ≠ 已取消」；链路暂以公式为准（qa 裁定写在 `caliber/1/notes.json`），待静态 owner 定。
 
 ## 3. 代码在哪
 - 前端：`src/api/qa.ts`（全部 qa 接口 + 动态 X1/X2）；`src/pages/qa/Workbench.vue`、`useQaSession.ts`、`components/QaConversation.vue`（轮次渲染、反问追问、拒答申请入口）、`components/QaAnswer.vue`（主卡 + 反问卡）、`QaStoreAnswer.vue`、`QaListDrawer.vue`、`QaSessionPanel.vue`；`src/pages/ontology/QaTuning.vue`、`qa-tuning/CertTab.vue`、`FreqTab.vue`（已接）、`EvalTab.vue`、`FeedbackTab.vue`（mock）。
@@ -156,7 +176,7 @@
 3. **SSE W7**：后端把 chain 的阶段产出成事件（§3.1），前端 `sendReal` 改为 W6 拿 `streamUrl` 后订阅；同步 202 保留作降级。
 4. **我的页面 R2、对象页 R3/R4**：按 §4–§6 的接口表逐个接，接口函数加进 `src/api/qa.ts`，页面用 `qaReal()` 切换，未接完的保持 mock。
 5. **链路**：EV-Q-080 的 `OUT_OF_SCOPE` 申请入口与 qa-reuse / PDE 定；若链路加多轮上下文，前端 `followUp` 可直接发选项 + 回写 `clarify.chosen`。评测工具入库后接进 T11。
-6. **静态本体**：2.1 节 8 条口径问题找指标负责人 / 本体小白确认后，改 `caliber/notes.json` 和 `qa-eval.md` gold，重跑评测。
+6. **静态本体**：2.1 节 8 条口径问题找指标负责人 / 本体小白确认后，改 `caliber/1/notes.json` 和 `qa-eval.md` gold，重跑评测。
 
 ## 通用对象搜索评审修复（动态 / 静态，10-26）
 
