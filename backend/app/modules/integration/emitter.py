@@ -46,11 +46,13 @@ class DatabaseEventEmitter:
             values.update(system=system.code, idemKey=run.idem_key, waitedMs=run.elapsed_ms)
         code = f"dynamic:{hashlib.sha256(event_id.encode()).hexdigest()[:56]}"
         previous = await self.session.scalar(select(Event).where(Event.code == code))
-        if event_type == EVENT_ACTION_EXECUTED and not previous and definition["writeback"]["edits"]:
-            from app.common.auth import resolve_user
-
-            call = await self.session.scalar(select(WritebackCall).where(
-                WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.write))
+        from app.common.auth import resolve_user
+        call = await self.session.scalar(select(WritebackCall).where(
+            WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.write))
+        actor = call.actor if call else (run.approver or run.confirmer or run.created_by)
+        user = await resolve_user(self.session, actor or "")
+        if event_type == EVENT_ACTION_EXECUTED and not previous and (
+                definition["writeback"]["edits"] or definition["writeback"]["effects"]):
             if run.sys_code:
                 evidence = (call is not None and call.attempt > 0 and call.idem_key == run.idem_key
                             and call.result == CallResult.succeeded and call.http_status is not None
@@ -64,8 +66,6 @@ class DatabaseEventEmitter:
                 if not evidence:
                     raise AppError("缺少真实外部成功证据，人工标注不能触发业务属性修改",
                                    code="ACTION_EDITS_EVIDENCE_REQUIRED", status_code=409)
-            actor = call.actor if call else (run.approver or run.confirmer or run.created_by)
-            user = await resolve_user(self.session, actor or "")
             await business_edits(self.session, user, run, definition, apply=True)
         await receive(
             self.session,
@@ -80,6 +80,9 @@ class DatabaseEventEmitter:
                 dedup_key=run.code,
             ),
         )
+        if not previous:
+            from app.modules.integration.action_effects import retain_effects
+            await retain_effects(self.session, user, run, definition, event_type)
         if event_type == EVENT_ACTION_OUTCOME_UNKNOWN:
             from app.modules.integration.reconcile import DatabaseReconcileScheduler, lock_run
 

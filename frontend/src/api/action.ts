@@ -64,6 +64,15 @@ export const listEventTypes = async (q: { source?: string; kw?: string; page: nu
 
 export interface WritebackDto { config: { sysId: string | null; endpoint: string; idemKey: string }; edits: OntologyEdit[]; effects: SideEffect[]; flow: { text: string; desc: string; status: string }[] }
 
+export interface ActionExecutionOptions {
+  objects: { id: string; name: string; api: string; properties: { api: string; name: string; type: string }[] }[];
+  relations: { id: string; name: string; from: string; to: string }[];
+  functions: { id: string; name: string; version: string; inputs: { name: string; type: string }[] }[];
+  events: { id: string; name: string; version: string; objectKind: string; payload: { api: string; name: string; type: string; required: boolean }[] }[];
+  targets: { id: string; name: string; actions: string[] }[];
+}
+export const getActionExecutionOptions = () => api.get<ActionExecutionOptions>('/action-execution-options');
+
 interface Snap {
   /** 'idle' | 'loading' | 'ready' | 'error'；ver = 取数时的 ?ver= */
   state: 'idle' | 'loading' | 'ready' | 'error';
@@ -273,13 +282,30 @@ export const simulateEvent = (typeId: string, view: string, cr?: string) =>
   api.post<EventSimulation>(`/event-types/${enc(typeId)}:simulate`, {}, { query: { view, cr } });
 export interface EventDeliveryStatus {
   eventId: string; outcome: string; summary: string; total: number; page: number; size: number;
-  items: { name: string; state: string; attempts: number; error: string | null; result: {
+  items: EventDelivery[];
+}
+export interface EventDelivery {
+  id: string; eventId: string; name: string; state: string; attempts: number; error: string | null;
+  version: number; startedAt: string | null; finishedAt: string | null; isTest: boolean; objectId: string; idempotencyKey: string;
+  result: {
     httpStatus?: number; actionId?: string; ruleId?: string; ruleVersion?: string; hitId?: string; alertId?: string;
     status?: string; actionStatus?: string; actionReason?: string; blockedByEventId?: string;
-  } | null }[];
+  } | null;
 }
 export const getEventDeliveries = (id: string, page = 1) =>
   api.get<EventDeliveryStatus>(`/events/${enc(id)}/deliveries`, { query: { page, size: 10 } });
+export interface DeliveryHistory {
+  id: string; kind: string; attempt: number; state: string; error: string | null; result: EventDelivery['result']; at: string; actor: string;
+  detail: { decision?: string; reason?: string; evidence?: string; before?: { state: string; error: string | null }; previousError?: string | null };
+}
+export interface DeliveryDetail extends EventDelivery { history: PageResult<DeliveryHistory>; canManage: boolean; decisions: DeliveryDecision[] }
+export type DeliveryDecision = 'received' | 'skip' | 'retry' | 'supplement';
+export const listDeliveryExceptions = (typeId: string, state: string, kw: string, page = 1) =>
+  api.get<PageResult<EventDelivery>>(`/event-types/${enc(typeId)}/delivery-exceptions`, { query: { state: state || undefined, kw, page, size: 10 } });
+export const getDeliveryDetail = (id: string, page = 1) =>
+  api.get<DeliveryDetail>(`/event-deliveries/${enc(id)}`, { query: { page, size: 10 } });
+export const disposeDelivery = (id: string, body: { version: number; decision: DeliveryDecision; reason: string; evidence: string; authorized: true }) =>
+  api.post<EventDelivery>(`/event-deliveries/${enc(id)}:dispose`, body);
 
 export interface EventStats {
   weekly: number; total: number; dedup: number; failed: number; partial: number; pending: number; p95: number | null; asOf: string;

@@ -29,6 +29,7 @@ const errText = (e: unknown) => e instanceof Error ? e.message : String(e);
 const signature = () => JSON.stringify([values, target.id, alertId.value]);
 const resultChanged = computed(() => !!submitted.value && submitted.value !== signature());
 const isRef = (p: ActionParam) => /^对象引用(?:列表)? · /.test(p.type);
+const isComputed = (p: ActionParam) => { try { return !!JSON.parse(p.def)?.function; } catch { return false; } };
 const isList = (p: ActionParam) => p.type === '枚举列表' || p.type.startsWith('对象引用列表 ·');
 const isNumber = (p: ActionParam) => ['整数', '金额', '百分比', '小数', '数值'].includes(p.type);
 const clearErrors = () => Object.keys(errors).forEach(k => delete errors[k]);
@@ -121,7 +122,7 @@ function validate(): Record<string, unknown> | null {
   for (const p of params.value) {
     const v = values[p.api];
     if (v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length)) {
-      if (p.required) errors[p.api] = `请填写${p.name}`;
+      if (p.required && !isComputed(p)) errors[p.api] = `请填写${p.name}`;
       continue;
     }
     if (isList(p) ? !Array.isArray(v) || v.some(x => typeof x !== 'string')
@@ -166,7 +167,8 @@ async function submit() {
           <div class="trial-ref"><a-input v-model:value="alertId" readonly allow-clear placeholder="可选择当前告警" /><a-button @click="choose('$alert', '告警')">选择告警</a-button></div>
         </a-form-item>
         <a-form-item v-for="p in params" :key="p.api" :label="`${p.name} · ${p.api}`" :required="p.required" :validate-status="errors[p.api] ? 'error' : undefined" :help="errors[p.api]">
-          <div v-if="isRef(p)" class="trial-ref">
+          <span v-if="isComputed(p)" class="c-2">由已绑定函数版本计算</span>
+          <div v-else-if="isRef(p)" class="trial-ref">
             <a-select v-if="isList(p)" v-model:value="values[p.api]" mode="multiple" :open="false" :options="(values[p.api] ?? []).map((v: string) => ({ value: v, label: v }))" placeholder="请选择对象" />
             <a-input v-else v-model:value="values[p.api]" readonly allow-clear placeholder="请选择对象" />
             <a-button @click="choose(p.api, p.type.split(' · ')[1], p.type.split(' · ')[1] === target.name ? target.kind : '', isList(p))">选择</a-button>

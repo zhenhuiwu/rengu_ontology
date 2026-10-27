@@ -23,6 +23,7 @@ class AdapterConfig(ApiModel):
     probe_path: str | None = Field(default=None, max_length=255)
     submit_path: str | None = Field(default=None, max_length=255)
     actions: list[str] = Field(default_factory=list, max_length=100)
+    effect_paths: dict[str, str] = Field(default_factory=dict, max_length=100)
     token: SecretStr | None = None
 
     @field_validator("token")
@@ -49,6 +50,15 @@ class AdapterConfig(ApiModel):
                 raise ValueError("Only an absolute path on the configured system origin is allowed")
             if any(ord(c) < 32 for c in value):
                 raise ValueError("Control characters are not allowed")
+        return value
+
+    @field_validator("effect_paths")
+    @classmethod
+    def effect_paths_valid(cls, value):
+        for key, path in value.items():
+            if not key or len(key) > 64 or len(path) > 255:
+                raise ValueError("Effect key/path is invalid")
+            cls.relative_path(path)
         return value
 
 
@@ -145,5 +155,6 @@ def get_adapter(system: ExtSystem, operation: str = "query") -> HttpAdapter:
     except (ValueError, TypeError, ValidationError):
         raise unavailable("该系统的适配器配置缺失或格式无效") from None
     adapter = HttpAdapter(system, config)
-    adapter.path(operation)
+    if operation != "effect":
+        adapter.path(operation)
     return adapter

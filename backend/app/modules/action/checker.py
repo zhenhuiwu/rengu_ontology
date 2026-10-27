@@ -92,6 +92,21 @@ async def definition(session, code: str, ctx: ViewContext, view: str, cr: str | 
                     else:
                         raise unavailable("动作草稿关联对象无效")
                 continue
+            if section in ("edits", "effects"):
+                entries = result["writeback"][section]
+                identity = (lambda row: f"{row.get('op')}:{row.get('obj')}") if section == "edits" else (lambda row: row.get("target"))
+                matches = [i for i, row in enumerate(entries) if identity(row) == key]
+                if len(matches) > 1 or op not in ("add", "update", "delete"):
+                    raise unavailable("操作草稿键或操作无效")
+                if op == "delete":
+                    result["writeback"][section] = [row for row in entries if identity(row) != key]
+                elif not isinstance(after, dict):
+                    raise unavailable("操作草稿须为明确的结构化定义")
+                elif matches:
+                    entries[matches[0]] = {**entries[matches[0]], **after}
+                else:
+                    entries.append(after)
+                continue
             if section not in ("params", "conds"):
                 continue
             field = "api" if section == "params" else "name"
@@ -343,6 +358,10 @@ class DatabaseSubmissionChecker:
             raise unavailable("动作定义缺少结构化参数或条件")
         try:
             params = structured_params(context.get("params"))
+            from app.modules.integration.action_edits import resolved_params
+            params = await resolved_params(self.session, self.user, action, params)
+        except AppError as exc:
+            return {"passed": False, "checked": len(conds), "failed": [{"name": "参数计算", "fail": exc.message}]}
         except Unavailable as exc:
             return {"passed": False, "checked": len(conds), "failed": [{"name": "参数", "fail": str(exc)}]}
         bundles, _ = await RoleService(self.session).effective_access(self.user.id)
@@ -355,6 +374,8 @@ class DatabaseSubmissionChecker:
             if len(values) == 1:
                 context = {**context, "alertId": values.pop()}
         refs = await self.context_references(action, context, bundles)
+        from app.modules.integration.action_edits import explicit_target_params
+        cross_targets = explicit_target_params(action)
         name_counts: dict[str, int] = {}
         for p in params_def:
             if (
@@ -379,8 +400,22 @@ class DatabaseSubmissionChecker:
             try:
                 if not param_valid(p["type"], value):
                     raise Unavailable("参数类型不符合已登记定义")
+                if p["type"].startswith(("对象引用 · ", "对象引用列表 · ")):
+                    label = p["type"].split(" · ", 1)[1]
+                    if label == "告警":
+                        if not isinstance(value, str) or refs.get(("告警", "编号")) != value:
+                            raise Unavailable("告警引用不存在、不唯一或无当前处理权限")
+                    else:
+                        from app.modules.integration.action_edits import object_binding, existing_row
+                        try:
+                            obj, governed = await object_binding(self.session, label)
+                            for identity in value if isinstance(value, list) else [value]:
+                                await existing_row(self.session, self.user, obj, governed, identity, lock=False)
+                        except AppError as exc:
+                            raise Unavailable(exc.message) from None
                 if (
                     action.get("targetKind")
+                    and p["api"] not in cross_targets
                     and p["type"].startswith("对象引用 · ")
                     and p["type"].split(" · ", 1)[1]
                     in {action.get("target"), action.get("targetApi"), action.get("targetKind")}
@@ -443,6 +478,18 @@ class DatabaseSubmissionChecker:
                     )
             except Unavailable as exc:
                 failed.append({"name": cond["name"], "fail": "条件不可校验：" + str(exc)})
+        if not failed and action.get("writeback"):
+            from types import SimpleNamespace
+            from app.modules.integration.action_edits import business_edits
+            from app.modules.integration.action_effects import preflight_effects
+            run = SimpleNamespace(code=context.get("actionRunId", "DRY-RUN"),
+                obj_kind=context.get("objKind"), obj_id=context.get("objId"), params=params, params_text=None,
+                type_version=action.get("version"))
+            try:
+                await business_edits(self.session, self.user, run, action)
+                await preflight_effects(self.session, self.user, run, action)
+            except AppError as exc:
+                failed.append({"name": "操作与副作用映射", "fail": exc.message})
         return {"passed": not failed, "checked": len(conds), "failed": failed}
 
     async def check(self, action_type_code: str, context: dict[str, Any]) -> list[dict[str, str]]:

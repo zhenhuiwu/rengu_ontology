@@ -223,6 +223,13 @@ async def _action(ctx: Ctx, tid: str) -> ActionType:
 
 
 async def params(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
+    from app.modules.integration.action_edits import mapping_json, validate_source_definition
+    for item in rows:
+        raw = item.after.get("def") if item.op != "delete" and isinstance(item.after, dict) else None
+        if isinstance(raw, str) and raw.lstrip().startswith("{"):
+            spec = mapping_json(raw)
+            if "function" in spec:
+                await validate_source_definition(ctx.session, spec)
     at = await _action(ctx, tid)
     await edit_rows(
         ctx,
@@ -255,6 +262,32 @@ async def conds(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
 
 
 async def edits(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
+    from app.modules.integration.action_edits import (
+        WRITABLE, column_value, mapping_json, object_binding, relation_binding, validate_source_definition,
+    )
+    for item in rows:
+        if item.op == "delete" or not isinstance(item.after, dict) or "field" not in item.after:
+            continue
+        spec = mapping_json(item.after["field"])
+        if item.after.get("op") == "关联":
+            await relation_binding(ctx.session, item.after.get("obj"))
+            if set(spec) != {"from", "to"}:
+                raise writeback_error("关联须指定两端对象引用")
+        else:
+            obj, governed = await object_binding(ctx.session, item.after.get("obj"))
+            values = spec.get("values", spec)
+            if not isinstance(values, dict) or not 1 <= len(values) <= 20:
+                raise writeback_error("属性赋值须为明确字段映射")
+            if "values" in spec and set(spec) - {"target", "values", "lockVersion"}:
+                raise writeback_error("编辑映射含未知字段")
+            for api, source in values.items():
+                props = [p for p in obj.properties if p.api_name == api]
+                if (len(props) != 1 or props[0].backing_column not in WRITABLE.get(obj.code, set())
+                        or props[0].is_pk or props[0].is_sensitive or props[0].visibility == "hidden"):
+                    raise writeback_error("属性不在当前已发布可写映射中", field=api)
+                await validate_source_definition(ctx.session, source)
+                if set(source) == {"value"}:
+                    column_value(governed.table.c[props[0].backing_column], source["value"])
     at = await _action(ctx, tid)
     await edit_rows(
         ctx,
@@ -270,6 +303,34 @@ async def edits(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
 
 
 async def effects(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
+    from app.modules.integration.action_edits import mapping_json, validate_source_definition
+    from app.modules.integration.action_effects import STANDARD, effect_timing
+    for item in rows:
+        if item.op == "delete" or not isinstance(item.after, dict):
+            continue
+        value = item.after
+        text(value.get("kind"), "kind", 16, required=True)
+        text(value.get("target"), "target", 255, required=True)
+        if value.get("kind") == "事件" and value.get("target", "").split(" ", 1)[0] in STANDARD:
+            continue
+        effect_timing(value)
+        spec = mapping_json(value.get("note"))
+        if not isinstance(spec.get("payload"), dict):
+            raise writeback_error("副作用须指定载荷映射")
+        if value.get("kind") == "事件":
+            from app.modules.event.models import EventType
+            event_type = await ctx.session.scalar(select(EventType).where(EventType.code == value.get("target"),
+                EventType.status == TypeStatus.published, EventType.retired_release_id.is_(None)))
+            if (set(spec) != {"version", "object", "payload"} or event_type is None
+                    or event_type.version != spec["version"]):
+                raise writeback_error("自定义事件必须绑定可用的固定发布版本")
+            fields = {p.api: p for p in event_type.payload}
+            if set(spec["payload"]) - fields.keys() or any(p.required and p.api not in spec["payload"] for p in fields.values()):
+                raise writeback_error("自定义事件载荷与固定发布定义不一致")
+        elif value.get("kind") not in ("通知", "Webhook") or set(spec) != {"payload"}:
+            raise writeback_error("外部副作用类型或载荷映射无效")
+        for source in spec["payload"].values():
+            await validate_source_definition(ctx.session, source)
     at = await _action(ctx, tid)
     await edit_rows(
         ctx,

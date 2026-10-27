@@ -34,6 +34,8 @@ import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import NewActionEventForm from './parts/NewActionEventForm.vue';
 import ActionTrialForm from './parts/ActionTrialForm.vue';
+import ActionExecutionEditor from './parts/ActionExecutionEditor.vue';
+import ActionParamFunctionEditor from './parts/ActionParamFunctionEditor.vue';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { currentApiContext, isApiError } from '@/api/http';
@@ -177,6 +179,9 @@ const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: (
 };
 const editor = reactive<{ open: boolean; sec: SecName; key: string | null; form: Record<string, any> }>({ open: false, sec: 'params', key: null, form: {} });
 const editorDef = computed(() => FORMS[editor.sec]);
+const executionEditor = ref<{ validate: () => boolean } | null>(null);
+const paramFunctionEditor = ref<{ validate: () => boolean } | null>(null);
+const parameterComputed = computed(() => { try { return !!JSON.parse(editor.form.def)?.function; } catch { return false; } });
 function openAdd(sec: SecName) { if (!canEdit.value) return; Object.assign(editor, { open: true, sec, key: null, form: FORMS[sec].blank() }); }
 function openEdit(sec: SecName, key: string) {
   if (!canEdit.value) return;
@@ -184,6 +189,12 @@ function openEdit(sec: SecName, key: string) {
   if (row) Object.assign(editor, { open: true, sec, key, form: { ...(row.data as object) } });
 }
 function saveEditor() {
+  if (real && editor.sec === 'params' && !paramFunctionEditor.value?.validate()) {
+    message.warning('请选择有效的计算函数、固定版本和输入参数'); return;
+  }
+  if (real && (editor.sec === 'edits' || editor.sec === 'effects') && !executionEditor.value?.validate()) {
+    message.warning('请完成操作目标、字段取值和版本映射；无法执行的原说明需要重新配置'); return;
+  }
   const miss = editorDef.value.fields().find((f) => f.required && !String(editor.form[f.k] ?? '').trim());
   if (miss) { message.warning(`请填写${miss.label}`); return; }
   const sec = SECS[editor.sec] as { add: (d: any) => boolean; update: (k: string, d: any) => void };
@@ -197,7 +208,7 @@ const restoreItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].re
 
 const dryKey = () => JSON.stringify([actionContextKey(), cur.value.id, isDraft.value, draft.value?.id]);
 const trialOpen = ref(false), hasTrialResult = ref(false);
-watch(dryKey, () => { trialOpen.value = false; hasTrialResult.value = false; });
+watch(dryKey, () => { trialOpen.value = false; hasTrialResult.value = false; editor.open = false; });
 async function dryRun() {
   if (real) {
     if (!ready.value || !cur.value.id || currentApiContext().previewAs || (isDraft.value && dirty.value)) return;
@@ -689,9 +700,11 @@ const verCols = [
   <NewActionEventForm v-if="real" v-model:open="createOpen" kind="action" :options="createOptions" :row-forms="FORMS" />
   <ActionTrialForm v-if="real && cur.id" :key="dryKey()" v-model:open="trialOpen" :action="cur" :cr="isDraft ? draft?.id : undefined"
     :disabled="!ready || !!currentApiContext().previewAs || (isDraft && dirty) || cur.status === '草稿'" @result="hasTrialResult = true" />
-  <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="520" @ok="saveEditor">
-    <a-form layout="vertical" class="at-form">
-      <a-form-item v-for="f in editorDef.fields()" :key="f.k" :label="f.label" :required="f.required">
+  <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="real && (editor.sec === 'edits' || editor.sec === 'effects') ? 820 : 520" @ok="saveEditor">
+    <ActionExecutionEditor v-if="real && editor.open && (editor.sec === 'edits' || editor.sec === 'effects')" ref="executionEditor" v-model="editor.form" :section="editor.sec" :action="cur" :params="flat(paramSec.rows.value)" />
+    <a-form v-else layout="vertical" class="at-form">
+      <ActionParamFunctionEditor v-if="real && editor.open && editor.sec === 'params'" ref="paramFunctionEditor" v-model="editor.form.def" :params="flat(paramSec.rows.value)" :parameter-api="editor.form.api" />
+      <a-form-item v-for="f in editorDef.fields().filter(f => !(real && editor.sec === 'params' && f.k === 'def' && parameterComputed))" :key="f.k" :label="f.label" :required="f.required">
         <a-select v-if="f.kind === 'select'" v-model:value="editor.form[f.k]" :options="f.options" />
         <a-switch v-else-if="f.kind === 'switch'" v-model:checked="editor.form[f.k]" />
         <a-textarea v-else-if="f.kind === 'textarea'" v-model:value="editor.form[f.k]" :rows="2" />

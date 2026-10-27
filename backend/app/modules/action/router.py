@@ -32,6 +32,16 @@ from app.modules.action.service import ActionTypeService, run_daily
 router = APIRouter(tags=["action"], dependencies=[Depends(require_func("action-types", "view"))])
 
 
+@router.get("/action-execution-options", summary="已发布的受控操作与副作用映射候选")
+async def get_execution_options(session: SessionDep, ctx: ViewContextDep) -> dict:
+    from app.modules.action.execution_options import execution_options
+    # Editing binds current published definitions; a historical view cannot retarget execution.
+    if ctx.ver or ctx.preview_as:
+        from app.core.errors import AppError
+        raise AppError("历史或预览视图不能编辑执行映射", code="READ_ONLY_VIEW", status_code=409)
+    return await execution_options(session)
+
+
 @router.post(
     "/action-types/{type_id}:dry-run",
     response_model=DryRunOut,

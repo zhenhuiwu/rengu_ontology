@@ -59,7 +59,9 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
     - 动作 = 指向该对象 api 的动作类型（草稿除外）∪ 兜底清单里同 api 的动作（去重，保证老角色配置仍合法）。
     - 兜底清单里本体没有的对象（如 告警、员工 这类运行时对象）接在后面，不丢已有配置。
     """
+    from app.modules.action.execution_options import action_operation_objects
     from app.modules.action.models import ActionType, TypeStatus
+    from app.modules.action.sections import action_def
     from app.modules.static.models import ObjectStatus, ObjectType
 
     fallback = perm_objects()
@@ -72,16 +74,16 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
     ).all()
     if not ots:
         return fallback
-    acts = (
-        await session.execute(
-            select(ActionType.target_api, ActionType.name)
-            .where(ActionType.status != TypeStatus.draft)
-            .order_by(ActionType.code)
-        )
-    ).all()
+    acts = await session.scalars(
+        select(ActionType)
+        .where(ActionType.status != TypeStatus.draft, ActionType.retired_release_id.is_(None))
+        .order_by(ActionType.code)
+    )
     by_api: dict[str, list[str]] = {}
-    for api, name in acts:
-        by_api.setdefault(api, []).append(name)
+    for action in acts:
+        by_api.setdefault(action.target_api, []).append(action.name)
+        for obj in await action_operation_objects(session, action_def(action)):
+            by_api.setdefault(obj.api_name, []).append(action.name)
     fb = {o["api"]: o for o in fallback}
     out = [
         {

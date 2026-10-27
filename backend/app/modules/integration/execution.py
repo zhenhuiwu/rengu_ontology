@@ -14,6 +14,7 @@ from app.core import clock
 from app.core.errors import AppError, Conflict
 from app.core.schema import ApiModel
 from app.db.session import get_sessionmaker
+from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.action.checker import DatabaseSubmissionChecker, structured_params
 from app.modules.dynamic.models import ActionRun, ActionStatus
 from app.modules.integration.action_edits import business_edits, execution_definition, target_access
@@ -44,14 +45,19 @@ class ExecutionResponse(ApiModel):
 async def preflight(session, user, run):
     check_func(user, "action-center", "manage")
     definition = await execution_definition(session, run)
+    from app.modules.integration.action_edits import resolved_params
+    run.params = await resolved_params(session, user, definition,
+        structured_params(run.params if run.params is not None else run.params_text))
     await target_access(session, user, run, definition)
     checker = DatabaseSubmissionChecker(session, user)
     failed = (await checker.run(definition, {"objKind": run.obj_kind, "objId": run.obj_id,
-                  "params": run.params if run.params is not None else run.params_text}))['failed']
+                  "params": run.params, "actionRunId": run.code}))['failed']
     if failed:
         raise AppError("动作参数或提交条件未通过", code="SUBMISSION_CRITERIA_FAILED",
                        status_code=422, details={"failed": failed})
     await business_edits(session, user, run, definition)
+    from app.modules.integration.action_effects import preflight_effects
+    await preflight_effects(session, user, run, definition)
     return definition
 
 
@@ -198,4 +204,5 @@ async def dispatch_queued(timestamp=0):
             await dispatch_one(call_id)
         except Exception:
             logger.exception("Action dispatch could not complete for call %s", call_id)
-    return len(ids)
+    from app.modules.integration.action_effects import dispatch_effects
+    return len(ids) + await dispatch_effects()
