@@ -107,7 +107,7 @@ function patchLive(id: string, patch: Partial<QaPageFull>) {
 }
 const mockOf = (p: QaPageFull) => pages.find((x) => x.id === p.id);
 const cols = [
-  { title: '页面名称', key: 'name', ellipsis: true },
+  { title: '页面名称', key: 'name', width: 240, ellipsis: true },
   { title: '卡片', key: 'cards', width: 64, align: 'right' },
   { title: '范围', dataIndex: 'scope', key: 'scope', width: 96 },
   { title: '口径版本', key: 'caliber', width: 260, ellipsis: true },
@@ -304,7 +304,7 @@ const cutoff = computed(() => {
         <span v-else class="t-12 c-3 mp-hint">{{ fromWb }} 个页面由问数工作台“固定到页面”生成</span>
       </div>
       <div class="mp-table" :class="{ 'paged-scroll': pq.overflow.value }">
-        <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">
+        <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :scroll="{ x: 1660 }" :custom-row="rowProps">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <a-popover :open="renameId === record.id" trigger="click" placement="bottomLeft" @open-change="(o: boolean) => { if (!o) renameId = undefined; }">
@@ -379,7 +379,7 @@ const cutoff = computed(() => {
 .mp-sel { width: 130px; }
 .mp-hint { margin-left: auto; }
 .mp-tag { margin-inline-start: 8px; margin-inline-end: 0; }
-.mp-table { flex: 1; min-height: 0; padding: 0 16px; }
+.mp-table { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 0 16px; }
 .mp-table :deep(.ant-table-row) { cursor: pointer; }
 .mp-table :deep(.mp-row-on > td) { background: var(--brand-bg) !important; }
 .mp-pager { padding: 6px 16px 8px; }
