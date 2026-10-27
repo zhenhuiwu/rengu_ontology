@@ -28,7 +28,8 @@ STAGE = {
     "objId": "1011846",
     "objLabel": "伊利纯牛奶 250ml×16盒",
     "idempotencyKey": "palantir-t7-mainline",
-    "params": json.dumps({"product": "1011846", "store": "SH0102", "qty": 143, "mode": "仓库调拨", "alert": ALERT}),
+    "params": json.dumps(
+        {"product": "1011846", "store": "SH0102", "qty": 143, "mode": "仓库调拨", "alert": ALERT}),
 }
 
 
@@ -70,8 +71,8 @@ async def test_mainline_direct_stage_reaches_signed_webhook(mainline, session):
     assert claim.status_code in (200, 409), claim.text
     evaluated = await client.post(f"{API}/alerts/{ALERT}/decision:evaluate", headers=PLANNER)
     assert evaluated.status_code == 200, evaluated.text
-    top = evaluated.json()["decision"]["output"]["recommendations"][0] if "output" in evaluated.json()["decision"] \
-        else evaluated.json()["decision"]["recommendations"][0]
+    decision = evaluated.json()["decision"]
+    top = (decision.get("output") or decision)["recommendations"][0]
     assert top["actionType"]["id"] == "request_replenish"
     assert top["availability"]["available"] is True, top["availability"]
     assert top["dryRun"]["passed"] is True and top["dryRun"]["humanChecks"], top["dryRun"]
@@ -91,8 +92,9 @@ async def test_mainline_direct_stage_reaches_signed_webhook(mainline, session):
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "结果未知"  # 已持久排队，等待执行器
     call_id = await session.scalar(text(
-        "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"), {"c": code})
-    with patch.object(execution, "scoped_sessions", scope_of(session)):  # 执行器一次（测试事务内，不起 worker）
+        "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"),
+        {"c": code})
+    with patch.object(execution, "scoped_sessions", scope_of(session)):  # 执行器一次（测试事务内）
         await execution.dispatch_one(call_id, 1)
     assert len(hits) == 1, hits
     hit = hits[0]
@@ -109,9 +111,57 @@ async def test_mainline_direct_stage_reaches_signed_webhook(mainline, session):
 
     logs = await client.get(f"{API}/decisions", params={"alertId": ALERT}, headers=PLANNER)
     assert logs.status_code == 200 and logs.json()["total"] >= 1, logs.text
-    print("STEPS", claim.status_code, evaluated.status_code, staged.status_code, code, confirmed.json()["status"],
-          approved.json()["status"], hit["valid"], final.json()["status"], logs.json()["total"])
-    assert await session.scalar(text("SELECT http_status FROM writeback_call WHERE id = :i"), {"i": call_id}) == 200
+    print("STEPS", claim.status_code, evaluated.status_code, staged.status_code, code,
+          confirmed.json()["status"], approved.json()["status"], hit["valid"],
+          final.json()["status"], logs.json()["total"])
+    sql = text("SELECT http_status FROM writeback_call WHERE id = :i")
+    status = await session.scalar(sql, {"i": call_id})
+    assert status == 200
+
+
+async def test_mainline_from_alert_start_action_reaches_signed_webhook(mainline, session):
+    """告警发起路径（ACT-0552 已作废并解除关联）：认领 → 评估 → 告警发起 → 审批 → 签名 Webhook。"""
+    from app.modules.integration import execution
+
+    client, hits = mainline
+    alert = (await client.get(f"{API}/alerts/{ALERT}", headers=PLANNER)).json()
+    assert not alert.get("actionId"), alert
+    claim = await client.post(f"{API}/alerts/{ALERT}:claim", headers=PLANNER)
+    assert claim.status_code == 200, claim.text
+    evaluated = await client.post(f"{API}/alerts/{ALERT}/decision:evaluate", headers=PLANNER)
+    assert evaluated.status_code == 200, evaluated.text
+    started = await client.post(f"{API}/alerts/{ALERT}:start-action", headers=PLANNER,
+                                json={"params": {"product": "1011846", "store": "SH0102", "qty": 205,
+                                                   "mode": "仓库调拨", "alert": ALERT}})
+    assert started.status_code in (200, 201), started.text
+    body = started.json()
+    code = body.get("id") or (body.get("action") or {}).get("id") or body.get("runId")
+    assert code and str(code).startswith("ACT-"), body
+    linked = (await client.get(f"{API}/alerts/{ALERT}", headers=PLANNER)).json()
+    assert linked["actionId"] == code, linked
+    state = (await client.get(f"{API}/action-runs/{code}", headers=PLANNER)).json()["status"]
+    if state == "待确认":  # 告警发起即由发起人确认提交时直接进入审批中
+        confirmed = await client.post(f"{API}/action-runs/{code}:confirm", headers=PLANNER)
+        assert confirmed.status_code == 200, confirmed.text
+        state = confirmed.json()["status"]
+    assert state == "审批中", state
+    approved = await client.post(f"{API}/action-runs/{code}:approve", headers=APPROVER)
+    assert approved.status_code == 200 and approved.json()["status"] == "结果未知", approved.text
+    call_id = await session.scalar(text(
+        "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"),
+        {"c": code})
+    with patch.object(execution, "scoped_sessions", scope_of(session)):
+        await execution.dispatch_one(call_id, 1)
+    assert len(hits) == 1 and hits[0]["valid"] is True and hits[0]["body"]["actionRunId"] == code, hits
+    assert {d["status"] for d in hits[0]["body"]["declaredEdits"]} == {"external/declared"}
+    final = (await client.get(f"{API}/action-runs/{code}", headers=PLANNER)).json()
+    assert final["status"] == "已对账" and final["extRef"] == "MOCK-RCPT-1", final
+    logs = await client.get(f"{API}/decisions", params={"alertId": ALERT}, headers=PLANNER)
+    assert logs.status_code == 200 and logs.json()["total"] >= 1, logs.text
+    print("ALERT-STEPS", claim.status_code, evaluated.status_code, started.status_code, code,
+          linked["actionId"],
+          state, approved.json()["status"], hits[0]["valid"], final["status"],
+          logs.json()["total"])
 
 
 async def test_declared_edits_only_on_external_webhook_and_json_stays_strict(mainline, session):
@@ -125,7 +175,8 @@ async def test_declared_edits_only_on_external_webhook_and_json_stays_strict(mai
     action = await definition(session, "request_replenish", ViewContext(), "published", None)
     assert action["sysId"] == "EXT-WEBHOOK"
     declared = await declared_writeback(session, action)
-    assert {d["kind"] for d in declared} >= {"编辑"} and all(d["status"] == "external/declared" for d in declared)
+    assert {d["kind"] for d in declared} >= {"编辑"}
+    assert all(d["status"] == "external/declared" for d in declared)
     run = type("Run", (), {"code": "DRY", "obj_kind": "product", "obj_id": "1011846", "type_version": "v3",
                            "params": {"product": "1011846"}, "params_text": None})()
     await business_edits(session, user, run, action)  # 自然语言编辑：外部承担，本地不执行、不报错

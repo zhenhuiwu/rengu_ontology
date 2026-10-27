@@ -59,7 +59,7 @@
 - 本体小白：如要“绑定真人代执行”，需在 `ServiceAccount` 加 runAs 用户字段（迁移在其模块）；`admin/api_keys.py` 里服务账号 `CurrentUser` 的构造是私有逻辑，`machine/principal.resolve_actor` 复刻了同样的形状（编号、名称、角色、`is_service_account`），建议抽一个公开函数共用。
 - 静态：`INGESTIBLE` 由能力目录反向引用 `machine.tools`，可考虑挪到 `event` 模块做公共常量；事件载荷字段目前不带 `enum`（工具侧已兼容，有就用）。
 
-## 0.4 palantir-t7：外部 Webhook 动作的声明效果 / 人工核对条件（基于 `fb24784`，无迁移）
+## 0.4 palantir-t7：外部 Webhook 动作的声明效果 / 人工核对条件（基于 master `40562d7`，含 xiaobai-p5，无迁移）
 
 | 项 | 状态 | 位置 |
 |---|---|---|
@@ -70,7 +70,7 @@
 | 声明编辑不再要求本地对象绑定（发起可用性、执行记录参数可见性） | 完成 | `dynamic/action_options.py`、`dynamic/run_visibility.py` |
 | 审批后提交复核：提交条件按**确认人**身份复核（原先按审批人，审批人不满足“执行人角色 / 告警处理权限”导致 422）；审批人自身的功能 / 对象 / 操作权限仍按审批人校验；确认人无法解析时保持原行为 | 完成 | `integration/execution.py` `criteria_user()` |
 | 无外部 Webhook 通道的动作：自然语言编辑仍 503、不可校验条件仍失败；有界 JSON 编辑在任何通道上都严格校验（不变） | 不变 | — |
-| 测试 | 新增 `tests/test_palantir_mainline.py`（主线端到端 + 严格/声明对照 + auto 转确认） | 跑法须带 `-p tests.use_ops_support` |
+| 测试 | 新增 `tests/test_palantir_mainline.py`：直接暂存主线、告警发起主线（AL-20261025-0139 → `:start-action` 直接进审批中 → U010812 审批 → 签名 Webhook → 已对账）、严格/声明对照、auto 转确认 | 跑法须带 `-p tests.use_ops_support` |
 
 演示运行所需配置【仓库】：种子与数据**不改**；只需部署环境的 `RENGU_INTEGRATION_ADAPTERS` 含 `1/EXT-WEBHOOK`：`submit_path`、`actions: ["request_replenish"]`、`signing_secret`（可 `fernet$…`），`RENGU_INTEGRATION_REAL_CONNECT=true`，并把 EXT-WEBHOOK 的 `endpoint` 指向真实可达的 HTTPS 接收端（种子值 `https://127.0.0.1:8443`，适配器只接受 HTTPS）；外部接收端须返回 `{"status":"SUCCESS","receiptId":"…"}`。
 
