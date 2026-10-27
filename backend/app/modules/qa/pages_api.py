@@ -49,6 +49,7 @@ from app.modules.qa.models import (
     SubChannel,
     SubWhen,
     TurnKind,
+    TurnStatus,
 )
 from app.modules.qa.schemas import PageFullOut, ShareOut, SubOut
 
@@ -324,6 +325,7 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
                 .where(
                     QaTurn.session_id == source.id,
                     QaTurn.kind == TurnKind.answer,
+                    QaTurn.status == TurnStatus.done,
                     QaTurn.sql_text.is_not(None),
                     QaTurn.is_seed.is_(False),
                     QaTurn.release_id.is_not(None),

@@ -126,11 +126,17 @@ def _bound(v: Any, dt: str, upper: bool, key: str = "") -> tuple[Any, bool]:
     if v is None or v == "":
         return None, False
     s = str(v)
+    if "\x00" in s:
+        bad_filter(key, "不能包含 NUL 字符")
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError:
+        bad_filter(key, "含无效 Unicode 字符")
     if dt in TIME and (not isinstance(v, str) or len(s) > 64):
         bad_filter(key, "日期应为 ISO 字符串，如 2026-10-01")
     try:
         if dt == "date":
-            return date.fromisoformat(s[:10]), False
+            return date.fromisoformat(s), False
         if dt == "timestamp":
             if len(s) <= 10:
                 d = datetime.combine(date.fromisoformat(s), datetime.min.time(), _tz())
@@ -300,7 +306,9 @@ async def _facets(session: Any, bd: Bound, base: Select, body: ExploreIn) -> lis
             .order_by(func.count().desc(), sc)
             .limit(FACET_VALUES)
         )
-        out.append({"key": k, "kind": "enum", "values": [{"value": _out(v), "count": n} for v, n in rows]})
+        from app.modules.static.explorer import ExplorerService
+
+        out.append({"key": k, "kind": "enum", "values": ExplorerService._enum_values(sc, list(rows))})
     return out
 
 
@@ -564,6 +572,24 @@ def scope_operation(question, properties):
                for prop in properties if visible(prop) and prop.data_type in NUMERIC
                and question in (f"{prop.display_name}{suffix}", f"{prop.api_name}{suffix}")]
     return matches[0] if len(matches) == 1 else None
+
+
+def scoped_questions(binding, properties):
+    if binding is None:
+        return []
+    questions = ["对象数量"]
+    numeric = sorted((p for p in properties if p.api_name in binding.out and p.data_type in NUMERIC),
+                     key=lambda p: (not bool(p.list_visible), p.seq, p.api_name))
+    for prop in numeric:
+        for suffix, operation in (("合计", "sum"), ("平均值", "avg")):
+            question = f"{prop.display_name}{suffix}"
+            if scope_operation(question, properties) != (operation, prop.api_name):
+                question = f"{prop.api_name}{suffix}"
+            if scope_operation(question, properties) == (operation, prop.api_name):
+                questions.append(question)
+        if len(questions) > 1:
+            break
+    return questions[:3]
 
 
 async def scoped_summary(session, viewer, ctx, scope, question):

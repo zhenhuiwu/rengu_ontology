@@ -8,8 +8,12 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.qa.models import QaTurn
+from tests import qa_page_test_support
 from tests.function_access_support import grant_fixture_roles
 from tests.qa_access_support import seed_qa_access
+
+qa_workspace = qa_page_test_support.qa_workspace
+users = qa_page_test_support.users
 
 B = "/api/qa/v1"
 STORE, MAIN = "T-01", "T-04"

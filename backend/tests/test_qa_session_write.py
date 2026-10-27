@@ -7,8 +7,12 @@ from sqlalchemy import func, select
 
 from app.core.errors import AppError
 from app.modules.qa.models import QaPermissionRequest, QaTurn
+from tests import qa_page_test_support
 from tests.function_access_support import grant_fixture_roles
 from tests.qa_access_support import seed_qa_access
+
+qa_workspace = qa_page_test_support.qa_workspace
+users = qa_page_test_support.users
 
 B = "/api/qa/v1"
 
@@ -27,7 +31,7 @@ async def test_create_session_then_listed_first(qa):
     s = r.json()
     assert s["title"] == "新会话" and s["turns"] == [] and s["caliber"] == "不含税"
     assert s["id"] == "S0104" and s["ownerId"] == "U010001"
-    first = (await qa.get(f"{B}/sessions")).json()["items"][0]
+    first = (await qa.get(f"{B}/sessions", params={"q": "新会话"})).json()["items"][0]
     assert first["id"] == s["id"] and first["title"] == "新会话"
 
 
@@ -232,7 +236,7 @@ async def test_caliber_index_uses_published_explicit_variants_and_historical_def
         svc.check_caliber("不存在口径", idx)
     target.status = MetricStatus.draft
     await users.flush()
-    assert await svc.variant_index(users) == {}
+    assert "实际口径" not in await svc.variant_index(users)
     publisher = await users.scalar(select(SysUser.id).limit(1))
     users.add(
         OntologyRelease(

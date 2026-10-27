@@ -170,7 +170,7 @@ def turn_out(t: QaTurn, applied: bool = False) -> dict[str, Any]:
         out["vote"] = t.vote  # W12 赞踩，刷新后保留
     if applied:
         out["applied"] = True  # [推断] 越权轮次已提交过待审批的申请（W16）→「已申请 · 待审批」
-    out["pinnable"] = bool(not t.is_seed and t.kind.value == "answer" and t.sql_text and t.release_id and t.answered_ver)
+    out["pinnable"] = bool(not t.is_seed and t.kind.value == "answer" and t.status.value == "done" and t.sql_text and t.release_id and t.answered_ver)
     return out
 
 

@@ -204,7 +204,7 @@ async function createBlank() {
     const r = await call(() => pagesApi.createPage({ name: newName.value.trim(), scope: '当前数据权限', sourceSessionId }), '新建页面');
     if (r === undefined) return;
     newOpen.value = false; newName.value = ''; message.success(sourceSessionId ? '会话已整理为真实页面' : '空白页面已创建');
-    setQuery({ newName: undefined, source_session: undefined, page_id: r.id, ptab: sourceSessionId ? 'share' : 'preview' }); await loadList(); return;
+    setQuery({ newName: undefined, source_session: undefined, page_intent: undefined, page_id: r.id, ptab: sourceSessionId && q('page_intent') === 'share' ? 'share' : 'preview' }); await loadList(); return;
   }
   const id = nextId();
   pages.unshift({ id, name: newName.value.trim(), owner: '王敏', scope: newScope.value, sourceKind: '手动新建', source: '手动新建', cards: [], dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,

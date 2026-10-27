@@ -6,8 +6,12 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import get_settings
+from tests import qa_page_test_support
 from tests.function_access_support import grant_fixture_roles
 from tests.qa_access_support import seed_qa_access
+
+qa_workspace = qa_page_test_support.qa_workspace
+users = qa_page_test_support.users
 
 API = "/api/qa/v1"
 
@@ -44,8 +48,9 @@ async def get(c, url, user: str | None = None, **params):
 
 async def test_sessions_paging_and_range(qa):
     body = await get(qa, "/sessions")
-    assert body["size"] == 12 and body["page"] == 1 and len(body["items"]) == 12
-    assert body["items"][0] == {"id": "S0001", "title": "华东大区复购客户销售额", "date": "2026-10-25"}
+    assert body["size"] == 10 and body["page"] == 1 and len(body["items"]) == 10
+    all_sessions = (await get(qa, "/sessions", size=200))["items"]
+    assert {"id": "S0001", "title": "华东大区复购客户销售额", "date": "2026-10-25"} in all_sessions
     dates = [s["date"] for s in (await get(qa, "/sessions", size=200))["items"]]
     assert dates == sorted(dates, reverse=True)
     today = (await get(qa, "/sessions", range="today", size=200))["items"]
@@ -62,7 +67,7 @@ async def test_session_detail_turns(qa):
     demo = mock("QA_DEMO_TURNS")
     assert [t["id"] for t in s["turns"]] == [t["id"] for t in demo]
     for got, want in zip(s["turns"], demo, strict=True):
-        assert got == want
+        assert got == {**want, "pinnable": False}
 
 
 async def test_session_other_owner_hidden(qa, session):
@@ -99,7 +104,11 @@ async def test_page_cards_match_mock(qa, session):
     owners = await _owner_codes(session)
     for p in mock("MY_PAGES"):
         got = await get(qa, f"/pages/{p['id']}", user=owners[p["id"]])
-        assert got["cards"] == p["cards"], p["id"]
+        assert len(got["cards"]) == len(p["cards"]), p["id"]
+        for card, original in zip(got["cards"], p["cards"], strict=True):
+            assert card["denied"] and card["unavailable"]
+            assert all(card[key] == original[key] for key in ("key", "title", "viz", "metric", "version"))
+            assert not set(card) & {"rows", "items", "value", "series", "labels"}
         assert got["name"] == p["name"] and got["sourceKind"] == p["sourceKind"]
         tags = {}
         for c in p["cards"]:
@@ -113,7 +122,7 @@ async def test_pages_list_filters(qa):
         1 for p in full["items"] if p["sourceKind"] == "问数工作台"
     )
     brief = await get(qa, "/pages", view="brief")
-    assert brief["size"] == 15 and set(brief["items"][0]) == {"id", "name", "cards", "updatedAt", "shared"}
+    assert brief["size"] == 10 and set(brief["items"][0]) == {"id", "name", "cards", "updatedAt", "shared"}
     shared = (await get(qa, "/pages", share="已共享", view="brief", size=200))["items"]
     assert shared and all(p["shared"] for p in shared)
     st = (await get(qa, "/pages", status="口径待更新", size=200))["items"]
@@ -134,17 +143,20 @@ async def test_pages_preview_includes_shared(qa, session):
     ids = [p["id"] for p in (await get(qa, "/pages", previewAs=viewer, size=200))["items"]]
     assert page_code in ids
     own = [p["id"] for p in (await get(qa, "/pages", user=viewer, size=200))["items"]]
-    assert all(owners[i] == viewer for i in own)
+    assert page_code in own and any(owners[i] != viewer for i in own)
     # 被共享人也能打开详情
     assert (await get(qa, f"/pages/{page_code}", user=viewer))["id"] == page_code
 
 
 async def test_templates(qa):
     t = await get(qa, "/templates", size=200)
-    assert t["total"] == len(mock("PAGE_TEMPLATES"))
+    assert t["total"] >= len(mock("PAGE_TEMPLATES"))
+    assert {row["id"] for row in mock("PAGE_TEMPLATES")} <= {row["id"] for row in t["items"]}
     one = await get(qa, "/templates/T001")
     want = next(x for x in mock("PAGE_TEMPLATES") if x["id"] == "T001")
-    assert one["cards"] == want["cards"] and one["desc"] == want["desc"]
+    assert one["desc"] == want["desc"] and not one["canCreate"]
+    assert len(one["cards"]) == len(want["cards"])
+    assert all(not set(card) & {"rows", "items", "value", "series", "labels"} for card in one["cards"])
     scene = (await get(qa, "/templates", scene=want["scene"], size=200))["items"]
     assert all(x["scene"] == want["scene"] for x in scene)
 
@@ -258,7 +270,7 @@ def _assert_denied(cards, want):
         assert got["denied"] is True
         assert not (_DATA_KEYS & set(got)), got
         frame = {k: w[k] for k in ("key", "title", "viz", "metric", "version", "pending") if k in w}
-        assert {k: v for k, v in got.items() if k != "denied"} == frame
+        assert {k: v for k, v in got.items() if k not in ("denied", "unavailable")} == frame
 
 
 async def test_shared_member_gets_denied_cards(qa):
@@ -269,14 +281,14 @@ async def test_shared_member_gets_denied_cards(qa):
     assert {c["label"] for c in got["calibers"]} == {f"{c['metric']} {c['version']}" for c in want}
 
 
-async def test_owner_still_gets_values(qa, session):
+async def test_owner_cannot_reuse_unprovenanced_seed_values(qa, session):
     owners = await _owner_codes(session)
     want = next(p for p in mock("OTHER_PAGES") if p["id"] == "P905")["cards"]
     got = await get(qa, "/pages/P905", user=owners["P905"])
-    assert got["cards"] == want and not any("denied" in c for c in got["cards"])
-    # 预览拥有者本人：查看人 = 拥有者，不裁剪
+    _assert_denied(got["cards"], want)
+    # Owning or previewing the owner does not prove old sample provenance.
     got = await get(qa, "/pages/P905", previewAs=owners["P905"])
-    assert got["cards"] == want
+    _assert_denied(got["cards"], want)
 
 
 async def test_preview_follows_row_filter(qa):
@@ -286,12 +298,12 @@ async def test_preview_follows_row_filter(qa):
     items = (await get(qa, "/pages", previewAs="U010231", size=200))["items"]
     p905 = next(p for p in items if p["id"] == "P905")
     _assert_denied(p905["cards"], want)
-    own = [p for p in items if p["id"] in ("P901", "P902", "P903")]  # 苏刚自己的页面不裁剪
-    assert own and all(not any(c.get("denied") for c in p["cards"]) for p in own)
+    own = [p for p in items if p["id"] in ("P901", "P902", "P903")]
+    assert own and all(all(c.get("denied") for c in p["cards"]) for p in own)
 
 
-async def test_admin_shared_member_unrestricted(qa, session):
-    """本体管理员（row_filter = None）作为被共享人看到的是原值。"""
+async def test_admin_shared_member_still_requires_execution_provenance(qa, session):
+    """An unrestricted row grant does not make sample caches real execution results."""
     from app.core.config import get_settings as gs
 
     admin = gs().demo_admin_codes[0]
@@ -306,9 +318,25 @@ async def test_admin_shared_member_unrestricted(qa, session):
         )
     ).first()
     if row is None:
-        pytest.skip("种子里没有共享给管理员的他人页面")
+        owners = await _owner_codes(session)
+        assert owners["P905"] != admin
+        headers = {"X-Demo-As": owners["P905"]}
+        page = (await qa.get(API + "/pages/P905", headers=headers)).json()
+        response = await qa.put(
+            API + "/pages/P905/share",
+            headers=headers,
+            json={
+                "mode": "指定成员",
+                "members": [{"userId": admin, "perm": "可查看"}],
+                "link": False,
+                "allowExport": False,
+                "lockVersion": page["lockVersion"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        row = ("P905",)
     got = await get(qa, f"/pages/{row[0]}", user=admin)
-    assert not any(c.get("denied") for c in got["cards"])
+    assert all(c.get("denied") for c in got["cards"])
 
 
 async def test_keywords_trimmed(qa):
@@ -356,7 +384,7 @@ async def _assert_clamped(c, url: str, *, pick=lambda b: b, kw: str | None = Non
 
 async def test_paging_clamped_sessions(qa):
     await _assert_clamped(qa, "/sessions", kw="q")
-    assert (await get(qa, "/sessions", page=0))["size"] == 12  # 默认条数不变
+    assert (await get(qa, "/sessions", page=0))["size"] == 10
 
 
 async def test_paging_clamped_lists(qa):

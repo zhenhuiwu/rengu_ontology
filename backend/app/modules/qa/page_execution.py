@@ -58,6 +58,7 @@ def turn_plan(turn, release):
     if (
         turn.is_seed
         or getattr(turn.kind, "value", turn.kind) != "answer"
+        or getattr(turn.status, "value", turn.status) != "done"
         or not turn.sql_text
         or release is None
         or turn.release_id != release.id

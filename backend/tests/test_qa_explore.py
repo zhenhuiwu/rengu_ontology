@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import false
 
 from tests.qa_access_support import seed_qa_access
+from tests.use_objects_support import enable_fixture_export
 
 B = "/api/qa/v1"
 
@@ -96,7 +97,7 @@ async def test_detail_scope_and_ask(qa, monkeypatch):
     with monkeypatch.context() as m:
         m.setattr("app.modules.qa.explore_api.apply_row_filter", deny)
         r = await qa.get(f"{B}/object-types/store/objects/{sid}")
-        assert r.status_code == 403 and r.json()["code"] == "OUT_OF_SCOPE"
+        assert r.status_code == 404  # Do not probe existence outside the authorized predicate.
         assert (await _search(qa, "store"))["total"] == 0
     assert (await qa.get(f"{B}/object-types/store/objects/NOPE")).status_code == 404
     assert (await qa.get(f"{B}/object-types/member/objects/x")).status_code == 404
@@ -115,7 +116,8 @@ async def test_detail_scope_and_ask(qa, monkeypatch):
     assert a["code"] == "DATA_NOT_CONFIGURED" and a["details"]["visibleCount"] == 0
 
 
-async def test_export_csv(qa):
+async def test_export_csv(qa, users):
+    await enable_fixture_export(users)
     d = await _search(qa, "store", size=2)
     ids = [x["id"] for x in d["items"]]
     r = await qa.post(
@@ -169,6 +171,7 @@ async def test_filter_values_type_checked(qa, users, filters):
 
 @pytest.mark.parametrize("flag", [{"is_sensitive": True}, {"visibility": "hidden"}])
 async def test_sensitive_hidden_blocked_in_backend(qa, users, flag):
+    await enable_fixture_export(users)
     await _open(users, "store", "city")
     await _set(users, "store", "city", sortable=True)
     assert (await _search(qa, "store", sort="city", size=1))["total"] > 0  # 打开标志前可排序
@@ -207,6 +210,8 @@ async def test_keyword_without_searchable_props_is_ignored(qa, users, monkeypatc
 @pytest.mark.parametrize("operation", ["search", "export"])
 @pytest.mark.parametrize("body", [{"kw": "bad\x00keyword"}, {"filters": {"city": ["bad\x00city"]}}])
 async def test_nul_input_is_validation_error(qa, users, operation, body):
+    if operation == "export":
+        await enable_fixture_export(users)
     await _open(users, "store", "city")
     r = await qa.post(f"{B}/object-types/store/{operation}", json=body)
     assert r.status_code == 422, r.text
