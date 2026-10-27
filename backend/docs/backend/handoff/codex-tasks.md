@@ -33,7 +33,7 @@
   - `test_dynamic_seed` 2 条、`test_conventions::test_job_stubs_registered`、`test_integration_writeback_calls` 的 TypeError。出处：xiaobai #10
   - `test_admin_users.py` 3 条、`test_audit_logs.py`（多了 `ontologyId: None`）、`test_admin_roles.py::test_list_and_get_match_mock`、`test_admin_audit_export.py::test_export_migration_roundtrip_and_metadata`（列注释）。先核对 mock 和接口哪边对，**不改 mock 既有值**；只能改 mock 才能修的，列出来交老板。出处：xiaobai #6–#9
   - 问数旧 POST 测试 403（测试用户在本体 1 是 viewer）、`test_qa_dynamic_semantic.py::test_single_object_summary_attached` 单独跑失败（加登记受治理表的夹具）。出处：qa #9
-  - 迁移往返（`test_static.py::test_migration_round_trip`、`test_migrations.py` 3 条、`test_dynamic_migration.py` 往返）：按第 4 节第 10 条的默认做法处理。出处：static #4、xiaobai #5、dynamic #7
+  - 迁移往返（`test_static.py::test_migration_round_trip`、`test_migrations.py` 3 条、`test_dynamic_migration.py` 往返）：按 `decisions-pending.md` 第 10 条的默认做法处理。出处：static #4、xiaobai #5、dynamic #7
   - 前端检查脚本：`check-static-pages.mjs` 补 `crErr` 桩；`check-context-integration`、`check-qa-integration`、`check-qa-session-context`、`check-real-object-resolver`、`check-object-ask`、`check-object-behavior`、`check-real-data` 逐个修。出处：static #5
 - 涉及：`backend/tests/`、`tests/use_ops_support`、`backend/app/modules/event/delivery.py`、`frontend/scripts/check-*.mjs`。
 - 验收：在全新私有测试库上 `pytest -q` 全部通过（skip 的都要写原因）；`node scripts/check-*.mjs` 退出码全为 0；`npx vue-tsc --noEmit`、`npm run build` 通过。
@@ -57,14 +57,14 @@
 - 动态：`decide_pending` 整链和失败分支（#12）、多比较条件参数表达式（#13）、维度对象属性读取（#14）、前端 AI 处置建议面板和动作中心预填（#15）、QA 页面任务挂载（#16）、服务账号名称（#17）、dynamic-r4 / r5 / r6 其余未测项（#18–#20）、事件规则告警下一次 sweep 才评估（#10）。出处：dynamic.md
 - 静态：分面按角色范围的端到端测试（#6）；核对 writeback 注释和代码（#7）；补一条测试确认变更单写权限是按目标页还是统一 `releases:manage`（#8）。出处：static.md
 - Palantir：时间线显示种子里的 `POST /praybill/save`，外观小问题（#4）。出处：palantir.md
-- 问数：页面订阅摘要的投递（实现 `dispatch_outbox`、通知侧订阅 `qa.page.subscription` 写站内信、`notification` 两个外键改可空要加新迁移；只做站内信，邮件 / 企业微信属于第二档）（#1）；前端展示多对象动态摘要（#7）。出处：qa.md
+- 问数：前端展示多对象动态摘要（#7）。页面订阅摘要接入通知（#1）要等 `decisions-pending.md` 第 15 条定了再做。出处：qa.md
 - 验收：每项有对应测试或写明手工核对结果；`pytest -q` 仍全绿。
 
 ### P1-2 问数剩余错题和过拟合检查　☐
 
 - 内容：
-  - 100 题里仍错 006、012、015、048（qa.md 2.0d）；048 的分母口径待定，不改口径（见第 4 节）。
-  - 自动出题抽查 7/20 的修复（qa #10 的②–⑤）：出题跳过 `refuse.json` 里没数据的指标，或判分把「无数据拒答」算对；作答列名用维度显示名；查 `ship_avg`（平均出库时长）的 SQL 解析失败；动作题允许反问对象。①（只给指标名要不要追问）待老板定。
+  - 100 题里仍错 006、012、015、048（qa.md 2.0d）；048、012 是业务口径，按已发布口径修正标准答案，见 `decisions-pending.md` 附录。
+  - 自动出题抽查 7/20 的修复（qa #10 的②–⑤）：出题跳过 `refuse.json` 里没数据的指标，或判分把「无数据拒答」算对；作答列名用维度显示名；查 `ship_avg`（平均出库时长）的 SQL 解析失败；动作题允许反问对象。①（只给指标名要不要追问）见 `decisions-pending.md` 第 9 条。
 - 涉及：`app/modules/qa/guards.py`、`chain.py`、`eval_gen.py`、`eval/job.py`、`seeds/extra/qa/caliber/1/refuse.json`、`eval/auto.py`。
 - 验收：重跑 `TAG=_px N=20 python -m app.modules.qa.eval.auto` 和 100 题 `eval.run all`：自动题明显上升，100 题不低于 96。出处：qa #8、#10
 
@@ -73,24 +73,9 @@
 - 内容：所有任务合并后一次性做。`ff73fe1` 上实测 `ruff check .` 121 个错误、`ruff format --check .` 45 个文件要重排（包括 `app/modules/dynamic/rule_runtime.py` 的 E501）。格式化单独一个提交，不夹带逻辑改动。
 - 验收：`ruff check .`、`ruff format --check .` 都通过；`pytest -q`、`npm run build` 仍通过。出处：dynamic #8、codex-index.md 第 3 节
 
-## 4. 待老板定的 12 条：没定之前的默认做法
+## 4. 待老板定的事项
 
-原则：取最保守、可回退的做法。标「不要做」的，等老板确认后才动。
-
-| # | 事项 | 未定前 Codex 的默认做法 | 出处 |
-|---|---|---|---|
-| 1 | 提交条件改由确认人复核 | 保持 palantir-t7 现状，不回退 | palantir #1、dynamic #2 |
-| 2 | humanChecks / declaredEdits 在动态建议面板、启动确认框显示 | 不要做；后端字段保持现状 | dynamic #1、palantir #5 |
-| 3 | 问数确认卡怎么展示 humanChecks，是否要逐条勾选 | 不要做；不加强制勾选 | qa #6 |
-| 4 | 推演 `:run` / stage-plan | 保持 503，不接示意引擎 | dynamic #3、#23 |
-| 5 | MetricFlow 时间表 | 不要做；累计、补零查询保持现状 | xiaobai #1、qa #5 |
-| 6 | 静态 #13 草稿与定义分开存放 | 不要做 | static #1 |
-| 7 | 种子补季度维度值 | 不要做，不改既有种子值；月份 `parentValue` 保持 null | static #2 |
-| 8 | 事件载荷字段加 enum | 不要做，不加列不加迁移 | static #3、palantir #7 |
-| 9 | 问数“只给指标名就追问”规则 | 保持现状（追问），不改规则；P1-2 只修其他几类 | qa #10① |
-| 10 | 迁移往返测试的处理方式 | 不补降级、不删测试：对 admin_0025 / notify_0022 相关往返用例标 skip，写明原因（有意禁止降级，等老板定）。`notify_0022` 命名检查这类和降级无关的失败照常修 | static #4、xiaobai #5、dynamic #7 |
-| 11 | 演示环境在哪配、由谁配 | 只在本地配（本地 PG、本地 HTTPS 模拟接收端），即 P0-2；不碰其他环境 | palantir #4、dynamic #4 |
-| 12 | 其他小项：每日自动评测的身份和额度、048 分母口径、R-012 / R-019 跨对象规则口径、审批界面、演示服务账号 | 都不要做：每日评测不在真模型上跑；048 不改口径；R-012 / R-019 保持「明确不可执行」；不做审批界面；不加服务账号种子 | qa #4、#8、dynamic #9、#22、xiaobai #2 |
+以 `decisions-pending.md` 为准（共 16 条）。状态是「待定」的，按每条的「未定前 Codex 的默认做法」做，默认都是最保守、可回退的做法；改成「已定」的，按老板的决定做。默认做法写「不做」的，老板确认前不要动。
 
 另外明确延后、本期不做的：入站静态令牌下线和签名校验（palantir #6）、palantir #8 其余缺口、`VITE_DYNAMIC_CR_WRITE` 默认仍关（dynamic #21）、qa #11 和 qa.md 2.0.1 表里的剩余项、static #9 到 #14。
 
@@ -98,7 +83,7 @@
 
 - 直接在 main 上提交，一组任务一个或几个提交，不 force push。
 - 每完成一组，更新第 3 节的状态标记，并在第 6 节记一行：日期（UTC+8）、提交号、测试结果。
-- 碰到第 4 节「不要做」的、或者要改既有 mock / 种子值的，停下来，写进第 6 节等老板定。
+- 碰到 `decisions-pending.md` 里默认「不做」的、或者要改既有 mock / 种子值的，停下来，写进第 6 节等老板定。
 
 ## 6. 进度记录
 
