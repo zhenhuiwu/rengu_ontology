@@ -65,7 +65,7 @@
 | **列表展示** `listed` | 默认结果列 | ❌ 缺 | 静态补（必需） |
 | **值格式** `format` / `unit` | 金额、百分比、单位、千分位 | ❌ 缺（现在在前端按 key 判断） | 静态补，如 `money:1` / `pct` / `int` / `raw`【推断】（必需） |
 | **指标口径变体** `variants`（指标上） | 问数「口径」选项，如含税/不含税 | ❌ 缺（只有 `version`、`def_rows`） | 静态补（必需）【推断】 |
-| 长文本 `long_text` | 详情单独成区 | ❌ 缺 | 下一轮可选 |
+| 长文本 `long_text` | 详情单独成区 | ✅ static-t5 类型 + static-t6 详情分区（`ObjectDetail.vue` `longTexts`） | 已做 |
 | 动作类型 `bulk` | 结果页批量动作 | ❌ 缺 | 下一轮可选【推断】 |
 
 - 【推断】约束：`filterable`、`sortable`、`listed` 只在 `visibility ≠ hidden` 时有效；`filterable` 建议只用在枚举、布尔、日期和少量取值的字符串上，保存时提示，不强制。

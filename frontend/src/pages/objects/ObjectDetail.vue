@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 对象详情（/use/objects/detail?type=&id=&tab=），元数据驱动（backend/docs/backend/generic-object-explorer.md），旧链接 ?kind= 照样认。
- * 标题行 = 标题属性 + 类型名 + 显著属性（visibility=prominent）；概览按属性分组（prop_group）列出其余属性，hidden 不显示、敏感属性只显示“已脱敏”；
+ * 标题行 = 标题属性 + 类型名 + 显著属性（visibility=prominent）；概览按属性分组（prop_group）列出其余属性，hidden 不显示、敏感属性只显示“已脱敏”；长文本（long_text）每个属性单独成区、保留换行；
  * 关联对象 = 本类型的已发布关系，按关系两端的属性取对端对象（对端是主键 → 取单个，否则按对端属性筛选）；
  * 相关指标 = 维度里含本类型的已发布指标（只给名称，点开在当前页提问，不编造数值）；
  * 右栏 = 作用对象是本类型的已发布动作 + 对它提问。页面里不写具体对象类型或字段。
@@ -22,7 +22,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { exploreRelated, type ExploreRow } from '@/api/qaObjects';
 import { qaReal } from '@/api/qa';
 import { errText } from '../qa/useQaSession';
-import { listTypes, loadMeta, metaContextKey, linksOf, actionsOf, metricsOf, fmtVal, propLabel, type TypeMeta, type LinkMeta, type PropMeta } from './objMeta';
+import { listTypes, loadMeta, metaContextKey, linksOf, actionsOf, metricsOf, fmtVal, propLabel, isLongText, type TypeMeta, type LinkMeta, type PropMeta } from './objMeta';
 import { getRow, searchRows, type GetResult, type ScopeFn } from './objRows';
 
 const route = useRoute();
@@ -63,10 +63,12 @@ const props = computed(() => meta.value?.properties ?? []);
 const pmap = computed(() => new Map(props.value.map((p) => [p.key, p])));
 const shown = (p: PropMeta) => p.visibility !== 'hidden' && p.key !== meta.value?.titleProp;
 const val = (p: PropMeta) => (p.sensitive ? '已脱敏' : fmtVal(p, row.value?.values[p.key]));
-const prominent = computed(() => props.value.filter((p) => shown(p) && p.visibility === 'prominent'));
+const prominent = computed(() => props.value.filter((p) => shown(p) && !isLongText(p) && p.visibility === 'prominent'));
+/** 长文本单独成区（每个属性一区，按属性顺序），不进标题行和分组表格 */
+const longTexts = computed(() => props.value.filter((p) => shown(p) && isLongText(p)));
 const groups = computed(() => {
   const g = new Map<string, PropMeta[]>();
-  props.value.filter((p) => shown(p) && p.visibility !== 'prominent').forEach((p) => g.set(p.group, [...(g.get(p.group) ?? []), p]));
+  props.value.filter((p) => shown(p) && !isLongText(p) && p.visibility !== 'prominent').forEach((p) => g.set(p.group, [...(g.get(p.group) ?? []), p]));
   return [...g].map(([title, fields]) => ({ title, fields }));
 });
 
@@ -227,6 +229,10 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
                 </a-descriptions-item>
               </a-descriptions>
             </div>
+            <div v-for="p in longTexts" :key="p.key" class="od-sec">
+              <div class="t-16 fw-600 od-sec-title">{{ propLabel(p) }}<a-tooltip v-if="p.desc" :title="p.desc"><span class="c-3 t-12 od-lt-desc">说明</span></a-tooltip></div>
+              <div class="od-lt t-14" :class="{ 'c-3': p.sensitive }">{{ val(p) }}</div>
+            </div>
           </template>
           <div v-else class="od-rels">
             <a-alert v-if="relatedError" type="error" :message="relatedError" show-icon />
@@ -290,6 +296,8 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 .od-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; padding: 12px 16px; }
 .od-sec + .od-sec { margin-top: 16px; }
 .od-sec-title { margin-bottom: 8px; }
+.od-lt { padding: 8px 12px; border: var(--border); border-radius: var(--radius); white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+.od-lt-desc { margin-left: 8px; font-weight: normal; cursor: help; }
 .od-mets { display: flex; flex-wrap: wrap; gap: 8px; }
 .od-rels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
 .od-rel { border: var(--border); border-radius: var(--radius); padding: 4px 12px 8px; }
