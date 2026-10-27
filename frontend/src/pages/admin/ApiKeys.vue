@@ -20,7 +20,8 @@ import { paginate, fmtInt, EMPTY } from '@/mock';
 import { API_KEYS, KEY_SCOPES, SERVICE_ACCOUNTS, SA_SCOPES, bindingText, keyActor, keyCalls, newSecret, type ApiKey, type KeyBinding, type KeyScope, type KeyStatus } from '@/mock/apikeys';
 import { ROLES } from '@/mock/roles';
 import { adminApiOn } from '@/api/admin';
-import { apiKeyCalls, apiKeyDetail, apiKeysMeta, createApiKey, queryApiKeys, revokeApiKey, type KeysMeta, type KeysPage } from '@/api/apikeys';
+import { apiKeyCalls, apiKeyDetail, apiKeysMeta, createApiKey, createServiceAccount, listServiceAccounts, queryApiKeys, revokeApiKey, revokeServiceAccount, updateApiKey, type KeyPatch, type KeysMeta, type KeysPage, type RemoteKey, type ServiceAccount } from '@/api/apikeys';
+import { loadRolesState } from '@/api/roles';
 import { currentApiContext } from '@/api/http';
 import type { PageResult } from '@/api/http';
 import type { KeyCall } from '@/mock/apikeys';
@@ -39,7 +40,20 @@ const metaError = ref('');
 const remote = ref<KeysPage | null>(null);
 const readonly = computed(() => viewReadonly.value || (real && !meta.value?.canManage));
 const reason = computed(() => viewReason.value || (real && !meta.value?.canManage ? metaError.value || '当前身份没有密钥管理权限' : ''));
-const scopeOptions = computed(() => real ? meta.value?.scopes ?? [] : [...KEY_SCOPES]);
+/** 可勾选的权限范围：真模式取后台编码 + 中文名（只列当前身份可授予的），mock 用中文名 */
+const scopeOptions = computed<{ value: string; label: string }[]>(() => real
+  ? (meta.value?.scopeOptions ?? []).filter((o) => meta.value?.scopes.includes(o.value)).map((o) => ({ value: o.value, label: o.label }))
+  : KEY_SCOPES.map((v) => ({ value: v, label: v })));
+const scopeLabel = (s: string) => meta.value?.scopeOptions.find((o) => o.value === s)?.label ?? s;
+const scopesText = (list: readonly string[]) => list.map(scopeLabel).join('、');
+const rk = (k: ApiKey) => k as unknown as RemoteKey;
+/** 服务账号密钥（后台）显示服务账号名 + 服务角色；其余沿用 mock 的文案 */
+const bindText = (b: KeyBinding) => {
+  const x = b as RemoteKey['binding'];
+  return x.kind === '服务账号' && x.serviceAccountName ? `以 服务账号 ${x.serviceAccountName}（${x.roleName}）查询 · ${x.scope}` : bindingText(b);
+};
+const listText = (v?: string[] | null) => (v == null ? '不限制' : v.length ? v.join('、') : '全部拒绝');
+const limitText = (v?: number | null, unit = '') => (v == null ? '不限制' : `${fmtInt(v)} ${unit}`);
 const confirm = useConfirmStore();
 const TODAY = real ? new Date().toISOString().slice(0, 10) : '2026-10-25';
 const nowStr = '2026-10-25 17:20';
@@ -79,7 +93,7 @@ async function reload() {
   try {
     const result = await queryApiKeys(pq.page.value, pq.size.value, statusF.value, scopeF.value, kw.value);
     if (seq !== listSeq || context !== JSON.stringify(currentApiContext())) return;
-    remote.value = result; keys.value = result.items;
+    remote.value = result; keys.value = result.items as unknown as ApiKey[];
     if (result.page !== pq.page.value) pq.page.value = result.page;
   } catch (e) {
     if (seq === listSeq && context === JSON.stringify(currentApiContext())) loadError.value = `密钥加载失败：${errorText(e)}`;
@@ -109,8 +123,8 @@ async function revoke(k: ApiKey) {
   const ok = await confirm.ask({
     title: '吊销 API 密钥', target: `${k.name}（${mask(k)}）`, okText: '吊销', danger: true, irreversible: true,
     fields: [
-      { label: '权限范围', value: k.scopes.join('、') },
-      { label: '绑定身份', value: bindingText(k.binding) },
+      { label: '权限范围', value: scopesText(k.scopes) },
+      { label: '绑定身份', value: bindText(k.binding) },
       { label: '最近使用', value: k.lastUsed ? `${k.lastUsed}（${k.lastIp}）` : '从未使用' },
       { label: '近 7 天调用', value: `${fmtInt(k.calls7d)} 次` },
     ],
@@ -123,7 +137,7 @@ async function revoke(k: ApiKey) {
       const result = await revokeApiKey(k.id);
       if (context !== JSON.stringify(currentApiContext())) return;
       Object.assign(k, result);
-      if (remoteDetail.value?.id === k.id) remoteDetail.value = result;
+      if (remoteDetail.value?.id === k.id) remoteDetail.value = result as unknown as ApiKey;
       await reload(); message.success(`已吊销：${k.name}`);
     } catch (e) { message.error(`吊销失败：${errorText(e)}`); }
     finally { busy.value = false; }
@@ -153,14 +167,20 @@ watch([() => q('key'), cpage, () => JSON.stringify(currentApiContext())], async 
   try {
     const [key, result] = await Promise.all([apiKeyDetail(id), apiKeyCalls(id, cpage.value, CSIZE)]);
     if (seq !== detailSeq || context !== JSON.stringify(currentApiContext())) return;
-    remoteDetail.value = key; remoteCalls.value = result;
+    remoteDetail.value = key as unknown as ApiKey; remoteCalls.value = result;
     if (result.page !== cpage.value) cpage.value = result.page;
   } catch (e) { if (seq === detailSeq) detailError.value = `详情加载失败：${errorText(e)}`; }
 }, { immediate: true });
 
 // 新建抽屉
-interface Form { name: string; env: '生产' | '测试'; scopes: KeyScope[]; bindKind: '角色' | '服务账号'; role?: string; account?: string; saScope?: string; life: string; ip: string; note: string }
-const blank = (): Form => ({ name: '', env: '生产', scopes: [], bindKind: '角色', role: undefined, account: undefined, saScope: undefined, life: '90', ip: '', note: '' });
+interface Form {
+  name: string; env: '生产' | '测试'; scopes: KeyScope[]; bindKind: '角色' | '服务账号'; role?: string; account?: string; saScope?: string; life: string; ip: string; note: string;
+  // 真模式：主体（当前用户 / 服务账号）、动作与事件类型白名单（null = 不限制）、限流配额（null = 不限制）
+  principal: '用户' | '服务账号'; saId?: string; limitActions: boolean; actionTypes: string[]; limitEvents: boolean; eventTypes: string[];
+  rate: number | null; quota: number | null;
+}
+const blank = (): Form => ({ name: '', env: '生产', scopes: [], bindKind: '角色', role: undefined, account: undefined, saScope: undefined, life: '90', ip: '', note: '',
+  principal: '用户', saId: undefined, limitActions: false, actionTypes: [], limitEvents: false, eventTypes: [], rate: null, quota: null });
 const form = reactive<Form>(blank());
 const formSnap = ref('');
 const createOpen = computed(() => q('form') === 'create');
@@ -172,13 +192,19 @@ watch(createOpen, (open) => {
   secret.value = null; saved.value = false; tried.value = false;
   Object.assign(form, blank());
   const src = keys.value.find((k) => k.id === q('from')) ?? (remoteDetail.value?.id === q('from') ? remoteDetail.value : null);
-  if (src) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], bindKind: src.binding.kind, role: src.binding.role, account: src.binding.account, saScope: src.binding.kind === '服务账号' ? src.binding.scope : undefined, ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
+  if (src) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], bindKind: src.binding.kind === '服务账号' ? '服务账号' : '角色', principal: src.binding.kind === '服务账号' ? '服务账号' : '用户', saId: rk(src).binding.serviceAccountId, limitActions: rk(src).actionTypes != null, actionTypes: [...(rk(src).actionTypes ?? [])], limitEvents: rk(src).eventTypes != null, eventTypes: [...(rk(src).eventTypes ?? [])], rate: rk(src).ratePerMinute ?? null, quota: rk(src).quotaPerDay ?? null, role: src.binding.role, account: src.binding.account, saScope: src.binding.kind === '服务账号' ? src.binding.scope : undefined, ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
   formSnap.value = JSON.stringify(blank());
 }, { immediate: true });
 const formDirty = computed(() => createOpen.value && !secret.value && JSON.stringify(form) !== formSnap.value);
 const nameOk = computed(() => /^[a-z0-9][a-z0-9-]{2,39}$/.test(form.name));
 const nameTaken = computed(() => !real && keys.value.some((k) => k.name === form.name && k.status !== '已吊销'));
-const formBinding = computed<KeyBinding | null>(() => real ? meta.value?.binding ?? null : (form.bindKind === '角色'
+const saOptions = computed(() => (meta.value?.serviceAccounts ?? []).map((a) => ({ value: a.id, label: `${a.name}（${a.id} · ${a.roleName}）` })));
+const realBinding = (): KeyBinding | null => {
+  if (form.principal === '用户') return meta.value?.binding ?? null;
+  const a = meta.value?.serviceAccounts?.find((x) => x.id === form.saId);
+  return a ? { kind: '服务账号', account: a.name, scope: `服务角色 ${a.roleName} 的当前权限`, ...{ serviceAccountName: a.name, roleName: a.roleName } } as KeyBinding : null;
+};
+const formBinding = computed<KeyBinding | null>(() => real ? realBinding() : (form.bindKind === '角色'
   ? (form.role ? { kind: '角色', role: form.role, scope: roleScope(form.role) } : null)
   : (form.account && form.saScope ? { kind: '服务账号', account: form.account, scope: form.saScope } : null)));
 const formErrors = computed(() => {
@@ -187,6 +213,9 @@ const formErrors = computed(() => {
   else if (nameTaken.value) e.push('已有同名的有效密钥');
   if (!form.scopes.length) e.push('请至少勾选一项权限范围');
   if (real && !meta.value) e.push(metaError.value || '身份与授权加载中');
+  if (real && form.principal === '服务账号' && !form.saId) e.push('请选择服务账号');
+  if (real && form.limitActions && !(form.scopes as string[]).some((x) => x.startsWith('actions:'))) e.push('动作白名单需要勾选动作试运行或动作执行');
+  if (real && form.limitEvents && !(form.scopes as string[]).includes('events:ingest')) e.push('事件类型白名单需要勾选事件写入');
   if (!real && form.bindKind === '角色' && !form.role) e.push('请绑定角色：密钥按角色的数据范围查询');
   if (!real && form.bindKind === '服务账号' && !form.account) e.push('请选择服务账号');
   if (!real && form.bindKind === '服务账号' && !form.saScope) e.push('请为服务账号选择数据范围');
@@ -202,15 +231,22 @@ async function create() {
   if (real) {
     const context = JSON.stringify(currentApiContext());
     const ok = await confirm.ask({ title: '生成 API 密钥', target: form.name, okText: '生成密钥',
-      fields: [{ label: '权限范围', value: form.scopes.join('、') }, { label: '绑定身份', value: bindingText(formBinding.value) }, { label: '有效期', value: LIFE.find((x) => x.value === form.life)?.label ?? '' }],
+      fields: [{ label: '权限范围', value: scopesText(form.scopes) }, { label: '绑定身份', value: bindText(formBinding.value) }, { label: '有效期', value: LIFE.find((x) => x.value === form.life)?.label ?? '' }],
       impact: '密钥将立即生效，明文仅本次显示；只允许当前身份已获授权的元数据 GET 接口。' });
     if (!ok || readonly.value || context !== JSON.stringify(currentApiContext()) || !meta.value?.binding.userId) return;
+    const binding = form.principal === '服务账号' && form.saId
+      ? { kind: '服务账号' as const, serviceAccountId: form.saId }
+      : { kind: '用户' as const, userId: meta.value.binding.userId as string };
     busy.value = true;
     try {
-      const result = await createApiKey({ name: form.name, env: form.env, scopes: [...form.scopes], binding: { kind: '用户', userId: meta.value.binding.userId }, lifeDays: Number(form.life), note: form.note, ipAllow: form.ip.split(/\s+/).filter(Boolean) });
+      const result = await createApiKey({
+        name: form.name, env: form.env, scopes: [...form.scopes], binding, lifeDays: Number(form.life), note: form.note, ipAllow: form.ip.split(/\s+/).filter(Boolean),
+        actionTypes: form.limitActions ? [...form.actionTypes] : null, eventTypes: form.limitEvents ? [...form.eventTypes] : null,
+        ratePerMinute: form.rate || null, quotaPerDay: form.quota || null,
+      });
       if (context !== JSON.stringify(currentApiContext())) return;
       const { secret: text, ...key } = result;
-      secret.value = { key, text }; saved.value = false;
+      secret.value = { key: key as unknown as ApiKey, text }; saved.value = false;
       await reload();
     } catch (e) { message.error(`生成失败：${errorText(e)}`); }
     finally { busy.value = false; }
@@ -242,6 +278,82 @@ async function closeCreate() {
   } else if (formDirty.value && !(await confirmDiscard())) return;
   setQuery({ form: undefined, from: undefined });
 }
+// 调整授权与配额（PATCH；权限范围只能收窄，白名单 / 限流配额可改）
+const policyKey = ref<RemoteKey | null>(null);
+const policy = reactive({ scopes: [] as string[], limitActions: false, actionTypes: [] as string[], limitEvents: false, eventTypes: [] as string[], rate: null as number | null, quota: null as number | null });
+function openPolicy(k: RemoteKey) {
+  policyKey.value = k;
+  Object.assign(policy, { scopes: [...k.scopes], limitActions: k.actionTypes != null, actionTypes: [...(k.actionTypes ?? [])], limitEvents: k.eventTypes != null,
+    eventTypes: [...(k.eventTypes ?? [])], rate: k.ratePerMinute ?? null, quota: k.quotaPerDay ?? null });
+}
+async function savePolicy() {
+  const k = policyKey.value;
+  if (!k || readonly.value || busy.value) return;
+  if (!policy.scopes.length) { message.error('至少保留一项权限范围'); return; }
+  const body: KeyPatch = {
+    scopes: [...policy.scopes], actionTypes: policy.limitActions ? [...policy.actionTypes] : null, eventTypes: policy.limitEvents ? [...policy.eventTypes] : null,
+    ratePerMinute: policy.rate || null, quotaPerDay: policy.quota || null,
+  };
+  const context = JSON.stringify(currentApiContext());
+  busy.value = true;
+  try {
+    const result = await updateApiKey(k.id, body);
+    if (context !== JSON.stringify(currentApiContext())) return;
+    if (remoteDetail.value?.id === k.id) remoteDetail.value = result as unknown as ApiKey;
+    policyKey.value = null; await reload(); message.success(`已更新：${k.name}`);
+  } catch (e) { message.error(`更新失败：${errorText(e)}`); }
+  finally { busy.value = false; }
+}
+
+// 服务账号（?sa=1）：列表、新建（绑定服务角色）、吊销（同时吊销其全部有效密钥）
+const saOpen = computed(() => q('sa') === '1');
+const accounts = ref<ServiceAccount[]>([]);
+const saError = ref('');
+const roleOptions = ref<{ value: string; label: string }[]>([]);
+const saForm = reactive({ name: '', description: '', roleId: undefined as string | undefined });
+const saNameOk = computed(() => /^[a-z0-9][a-z0-9-]{2,63}$/.test(saForm.name));
+const canManageSa = computed(() => real && !!meta.value?.canManageServiceAccounts && !viewReadonly.value);
+async function loadAccounts() {
+  if (!real || !saOpen.value) return;
+  saError.value = '';
+  try {
+    accounts.value = (await listServiceAccounts()).items;
+    if (!roleOptions.value.length) {
+      const state = await loadRolesState();
+      roleOptions.value = (state?.roles ?? []).map((r) => ({ value: r.id, label: `${r.name}（${r.id}）` }));
+    }
+  } catch (e) { saError.value = `服务账号加载失败：${errorText(e)}`; }
+}
+watch([saOpen, () => JSON.stringify(currentApiContext())], loadAccounts, { immediate: true });
+async function refreshMeta() { try { meta.value = await apiKeysMeta(); } catch { /* 列表已显示错误 */ } }
+async function addAccount() {
+  if (!canManageSa.value || busy.value || !saNameOk.value || !saForm.roleId) return;
+  busy.value = true;
+  try {
+    const a = await createServiceAccount({ name: saForm.name, description: saForm.description, roleId: saForm.roleId });
+    Object.assign(saForm, { name: '', description: '', roleId: undefined });
+    message.success(`已新建服务账号：${a.name}（${a.id}）`);
+    await Promise.all([loadAccounts(), refreshMeta()]);
+  } catch (e) { message.error(`新建失败：${errorText(e)}`); }
+  finally { busy.value = false; }
+}
+async function revokeAccount(a: ServiceAccount) {
+  if (!canManageSa.value || busy.value) return;
+  const ok = await confirm.ask({
+    title: '吊销服务账号', target: `${a.name}（${a.id}）`, okText: '吊销', danger: true, irreversible: true,
+    fields: [{ label: '服务角色', value: a.roleName }, { label: '有效密钥', value: `${a.activeKeys} 个` }],
+    impact: '吊销立即生效：这个服务账号的全部有效密钥一起吊销，调用返回 401。不能恢复。',
+  });
+  if (!ok) return;
+  busy.value = true;
+  try {
+    await revokeServiceAccount(a.id);
+    message.success(`已吊销：${a.name}`);
+    await Promise.all([loadAccounts(), refreshMeta(), reload()]);
+  } catch (e) { message.error(`吊销失败：${errorText(e)}`); }
+  finally { busy.value = false; }
+}
+
 useUnsavedGuard(() => formDirty.value || !!(secret.value && !saved.value));
 let metaSeq = 0;
 watch(() => JSON.stringify(currentApiContext()), async () => {
@@ -255,6 +367,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
 
 <template>
   <Teleport defer to="#page-extra">
+    <a-button v-if="real" class="ak-mr8" @click="setQuery({ sa: '1' })">服务账号</a-button>
     <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || busy" @click="setQuery({ form: 'create', from: undefined })">新建密钥</a-button></a-tooltip>
   </Teleport>
   <div class="panel ak">
@@ -266,7 +379,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
       </span>
       <a-space>
         <a-select v-model:value="statusF" size="small" class="ak-w120" :options="['全部', '有效', '即将过期', '已过期', '已吊销'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
-        <a-select v-model:value="scopeF" size="small" class="ak-w140" :options="['全部', ...scopeOptions].map((v) => ({ value: v, label: v === '全部' ? '全部权限范围' : v }))" />
+        <a-select v-model:value="scopeF" size="small" class="ak-w140" :options="[{ value: '全部', label: '全部权限范围' }, ...scopeOptions]" />
         <a-input-search :value="kw" size="small" placeholder="名称 / 前缀 / 创建人" class="ak-w200" allow-clear @search="(v: string) => (kw = v)" />
       </a-space>
     </div>
@@ -275,8 +388,8 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'name'" class="ak-name"><a class="num" @click="setQuery({ key: record.id })">{{ record.name }}</a><a-tag v-if="record.env === '测试'" class="ak-env">测试</a-tag></span>
           <span v-else-if="column.key === 'key'" class="num c-2">{{ mask(record) }}</span>
-          <a-tooltip v-else-if="column.key === 'scopes'" :title="record.scopes.join('、')"><span class="ak-scopes"><a-tag v-for="s in record.scopes" :key="s">{{ s }}</a-tag></span></a-tooltip>
-          <span v-else-if="column.key === 'binding'" class="c-2">{{ record.binding.kind === '用户' ? `${record.binding.userName}（${record.binding.userId}）` : record.binding.kind === '角色' ? record.binding.role : record.binding.account }}</span>
+          <a-tooltip v-else-if="column.key === 'scopes'" :title="scopesText(record.scopes)"><span class="ak-scopes"><a-tag v-for="s in record.scopes" :key="s">{{ scopeLabel(s) }}</a-tag></span></a-tooltip>
+          <span v-else-if="column.key === 'binding'" class="c-2">{{ record.binding.kind === '用户' ? `${record.binding.userName}（${record.binding.userId}）` : record.binding.kind === '角色' ? record.binding.role : record.binding.serviceAccountName ?? record.binding.account }}</span>
           <span v-else-if="column.key === 'createdAt'" class="num c-2">{{ record.createdAt }}</span>
           <span v-else-if="column.key === 'lastUsed'" class="num" :class="record.lastUsed ? 'c-2' : 'c-3'">{{ record.lastUsed ?? '从未使用' }}</span>
           <span v-else-if="column.key === 'expires'" class="num">
@@ -309,8 +422,14 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <a-descriptions-item label="状态"><a-badge :status="badge(detail.status)" :text="detail.status" /></a-descriptions-item>
         <a-descriptions-item label="环境">{{ detail.env }}</a-descriptions-item>
         <a-descriptions-item label="到期"><span class="num">{{ detail.expiresAt ?? '永不过期' }}</span></a-descriptions-item>
-        <a-descriptions-item label="权限范围" :span="2">{{ detail.scopes.join('、') }}</a-descriptions-item>
-        <a-descriptions-item label="身份与数据范围" :span="2"><a-tooltip :title="bindingText(detail.binding)"><span class="ak-ell">{{ bindingText(detail.binding) }}</span></a-tooltip></a-descriptions-item>
+        <a-descriptions-item label="权限范围" :span="2">{{ scopesText(detail.scopes) }}</a-descriptions-item>
+        <template v-if="real">
+          <a-descriptions-item label="动作白名单" :span="2"><span class="num">{{ listText(rk(detail).actionTypes) }}</span></a-descriptions-item>
+          <a-descriptions-item label="事件类型白名单" :span="2"><span class="num">{{ listText(rk(detail).eventTypes) }}</span></a-descriptions-item>
+          <a-descriptions-item label="每分钟限流"><span class="num">{{ limitText(rk(detail).ratePerMinute, '次') }}</span><span class="t-12 c-3"> · 本分钟 {{ rk(detail).usage?.minute ?? 0 }}</span></a-descriptions-item>
+          <a-descriptions-item label="每日配额"><span class="num">{{ limitText(rk(detail).quotaPerDay, '次') }}</span><span class="t-12 c-3"> · 今日 {{ rk(detail).usage?.day ?? 0 }}</span></a-descriptions-item>
+        </template>
+        <a-descriptions-item label="身份与数据范围" :span="2"><a-tooltip :title="bindText(detail.binding)"><span class="ak-ell">{{ bindText(detail.binding) }}</span></a-tooltip></a-descriptions-item>
         <a-descriptions-item v-if="detail.scopes.includes('动作执行')" label="动作发起人" :span="2">{{ keyActor(detail) }}<span class="t-12 c-3"> · 动作中心执行记录的发起人这样显示</span></a-descriptions-item>
         <a-descriptions-item label="IP 白名单" :span="2"><span class="num">{{ detail.ipAllow.join('、') || '不限制' }}</span></a-descriptions-item>
         <a-descriptions-item label="创建"><span class="num">{{ detail.createdAt }}</span> · {{ detail.creator }}</a-descriptions-item>
@@ -331,6 +450,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
     <template #footer>
       <div class="ak-foot">
         <a-button @click="setQuery({ key: undefined })">关闭</a-button>
+        <a-tooltip v-if="real && detail && detail.status !== '已吊销'" :title="reason"><a-button :disabled="readonly || busy" @click="openPolicy(rk(detail))">调整授权与配额</a-button></a-tooltip>
         <a-tooltip v-if="detail && detail.status !== '已吊销'" :title="reason"><a-button danger :disabled="readonly" @click="revoke(detail)">吊销</a-button></a-tooltip>
       </div>
     </template>
@@ -346,13 +466,31 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
           <a-input v-model:value="form.name" placeholder="例如 bi-sync-prod" />
         </a-form-item>
         <a-form-item label="环境"><a-radio-group v-model:value="form.env" :options="['生产', '测试']" option-type="button" /></a-form-item>
-        <a-form-item label="权限范围" required :help="real ? '读取本体定义，不读取业务数据' : '按最小权限勾选；“动作执行”还要满足动作类型的提交条件'">
+        <a-form-item label="权限范围" required :help="real ? '按最小权限勾选；只能勾选当前身份已获授权的范围' : '按最小权限勾选；“动作执行”还要满足动作类型的提交条件'">
           <a-checkbox-group v-model:value="form.scopes" :options="scopeOptions" />
-          <span v-if="real && meta && !scopeOptions.length" class="tl-failed">当前身份没有可授予的元数据读取权限</span>
+          <span v-if="real && meta && !scopeOptions.length" class="tl-failed">当前身份没有可授予的权限范围</span>
         </a-form-item>
-        <a-form-item v-if="real" label="绑定身份" required help="访问权限受当前账号权限限制">
-          <a-input :value="meta ? `${meta.binding.userName}（${meta.binding.userId}）` : '身份加载中'" disabled />
-        </a-form-item>
+        <template v-if="real">
+          <a-form-item label="绑定身份" required :help="form.principal === '用户' ? '访问权限受当前账号权限限制' : '按服务账号绑定的服务角色在当前本体的权限查询'" class="ak-mb8">
+            <a-radio-group v-model:value="form.principal" option-type="button"
+              :options="[{ value: '用户', label: '当前账号' }, { value: '服务账号', label: '服务账号', disabled: !meta?.canManageServiceAccounts }]" />
+          </a-form-item>
+          <a-form-item v-if="form.principal === '用户'"><a-input :value="meta ? `${meta.binding.userName}（${meta.binding.userId}）` : '身份加载中'" disabled /></a-form-item>
+          <a-form-item v-else :validate-status="tried && !form.saId ? 'error' : undefined" :help="saOptions.length ? undefined : '还没有启用的服务账号，先在“服务账号”里新建'">
+            <a-select v-model:value="form.saId" placeholder="选择服务账号" :options="saOptions" />
+          </a-form-item>
+          <a-form-item label="动作类型白名单" help="开启后只允许调用列出的动作类型编号；空列表 = 全部拒绝">
+            <a-switch v-model:checked="form.limitActions" size="small" />
+            <a-select v-if="form.limitActions" v-model:value="form.actionTypes" mode="tags" class="num ak-mt8" placeholder="输入动作类型编号后回车" :token-separators="[',', ' ']" />
+          </a-form-item>
+          <a-form-item label="事件类型白名单" help="开启后只允许写入列出的事件类型编号">
+            <a-switch v-model:checked="form.limitEvents" size="small" />
+            <a-select v-if="form.limitEvents" v-model:value="form.eventTypes" mode="tags" class="num ak-mt8" placeholder="输入事件类型编号后回车" :token-separators="[',', ' ']" />
+          </a-form-item>
+          <a-form-item label="限流与配额" help="留空表示不限制；超出返回 429">
+            <a-space><a-input-number v-model:value="form.rate" :min="1" :max="100000" placeholder="每分钟" class="num" /><a-input-number v-model:value="form.quota" :min="1" :max="100000000" placeholder="每日" class="num" /></a-space>
+          </a-form-item>
+        </template>
         <template v-else>
         <a-form-item label="绑定身份" required class="ak-mb8">
           <a-radio-group v-model:value="form.bindKind" :options="[{ value: '角色', label: '绑定角色' }, { value: '服务账号', label: '服务账号 + 数据范围' }]" option-type="button" />
@@ -380,7 +518,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <ExclamationCircleOutlined class="c-2" />
         <span class="t-14 c-1">密钥明文只显示这一次，平台不保存明文。请现在复制并保存到调用方的密钥管理里。</span>
       </div>
-      <div class="t-12 c-2 ak-lbl">{{ secret.key.name }} · {{ secret.key.env }} · {{ secret.key.scopes.join('、') }} · {{ bindingText(secret.key.binding) }}</div>
+      <div class="t-12 c-2 ak-lbl">{{ secret.key.name }} · {{ secret.key.env }} · {{ scopesText(secret.key.scopes) }} · {{ bindText(secret.key.binding) }}</div>
       <div class="ak-secret">
         <a-input :value="secret.text" readonly class="num" />
         <a-button type="primary" @click="copySecret"><CopyOutlined />复制</a-button>
@@ -403,9 +541,56 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
       </div>
     </template>
   </a-drawer>
+
+  <!-- 调整授权与配额 -->
+  <a-modal :open="!!policyKey" :title="policyKey ? `调整授权与配额 · ${policyKey.name}` : ''" :confirm-loading="busy" ok-text="保存" @ok="savePolicy" @cancel="policyKey = null">
+    <a-form v-if="policyKey" layout="vertical">
+      <a-form-item label="权限范围" help="只能收窄；要增加范围请新建密钥">
+        <a-checkbox-group v-model:value="policy.scopes" :options="policyKey.scopes.map((v) => ({ value: v, label: scopeLabel(v) }))" />
+      </a-form-item>
+      <a-form-item label="动作类型白名单">
+        <a-switch v-model:checked="policy.limitActions" size="small" />
+        <a-select v-if="policy.limitActions" v-model:value="policy.actionTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
+      </a-form-item>
+      <a-form-item label="事件类型白名单">
+        <a-switch v-model:checked="policy.limitEvents" size="small" />
+        <a-select v-if="policy.limitEvents" v-model:value="policy.eventTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
+      </a-form-item>
+      <a-form-item label="限流与配额" help="留空表示不限制">
+        <a-space><a-input-number v-model:value="policy.rate" :min="1" :max="100000" placeholder="每分钟" /><a-input-number v-model:value="policy.quota" :min="1" :max="100000000" placeholder="每日" /></a-space>
+      </a-form-item>
+    </a-form>
+  </a-modal>
+
+  <!-- 服务账号 -->
+  <a-drawer :open="saOpen" :width="720" title="服务账号" @close="setQuery({ sa: undefined })">
+    <a-alert v-if="saError" type="error" show-icon :message="saError" />
+    <a-alert v-else-if="!meta?.canManageServiceAccounts" type="info" show-icon message="管理服务账号需要“API 密钥”和“角色与权限”的管理权限" class="ak-mb8" />
+    <a-table size="small" row-key="id" :pagination="false" :data-source="accounts" :locale="{ emptyText: '还没有服务账号' }"
+      :columns="[{ title: '编号', dataIndex: 'id', key: 'id', width: 90 }, { title: '名称', dataIndex: 'name', key: 'name' }, { title: '服务角色', dataIndex: 'roleName', key: 'roleName', width: 120 }, { title: '有效密钥', dataIndex: 'activeKeys', key: 'activeKeys', width: 80, align: 'right' }, { title: '状态', dataIndex: 'status', key: 'status', width: 80 }, { title: '操作', key: 'op', width: 70 }]">
+      <template #bodyCell="{ column, record }">
+        <a v-if="column.key === 'op' && record.status !== '已吊销'" :class="{ 'ak-dis': !canManageSa }" @click="canManageSa && revokeAccount(record)">吊销</a>
+      </template>
+    </a-table>
+    <template v-if="canManageSa">
+      <div class="t-14 fw-600 c-1 ak-h">新建服务账号</div>
+      <a-form layout="vertical" :disabled="busy">
+        <a-form-item label="名称" required :validate-status="saForm.name && !saNameOk ? 'error' : undefined" help="小写字母、数字和短横线，3–64 个字符">
+          <a-input v-model:value="saForm.name" placeholder="例如 svc-bi-sync" />
+        </a-form-item>
+        <a-form-item label="服务角色" required help="角色需已绑定到当前本体；密钥按这个角色的功能与行级权限执行">
+          <a-select v-model:value="saForm.roleId" :options="roleOptions" placeholder="选择角色" />
+        </a-form-item>
+        <a-form-item label="说明"><a-input v-model:value="saForm.description" :maxlength="512" /></a-form-item>
+        <a-button type="primary" :loading="busy" :disabled="!saNameOk || !saForm.roleId" @click="addAccount">新建</a-button>
+      </a-form>
+    </template>
+  </a-drawer>
 </template>
 
 <style scoped>
+.ak-mr8 { margin-right: 8px; }
+.ak-mt8 { margin-top: 8px; }
 .ak { flex: 1; min-height: 0; }
 .ak-empty { margin: auto; padding: 32px; }
 .ak-sum { display: inline-flex; align-items: baseline; gap: 16px; }

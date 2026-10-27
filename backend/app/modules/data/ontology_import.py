@@ -1,7 +1,15 @@
-"""只读源结构并生成现有静态 CR；不写源库，不改变查询执行白名单。"""
+"""只读源结构并生成现有静态 CR；不写源库，不改变查询执行白名单。
+
+草稿生成是通用规则（auto_ontology.heuristic + 本文件的取值提示），不认识任何行业的表名 / 字段名：
+- 列名、注释、主外键 → 对象类型、属性、关系（heuristic.build_proposal）；
+- 可选的离散取值样本（sampleValues=true）→ 低基数文本列标为维度 + 可筛选，描述里附取值样本；
+  两值且像真假的列、名字像时间却是文本的列只给提示，不改类型；
+- 大模型默认关闭（generator = "规则"，llm = false）；结果只写成变更单草稿，由静态审核发布。
+"""
 
 import hashlib
 import json
+import re
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import or_, select
@@ -31,6 +39,56 @@ def conflict(message: str, code: str = "IMPORT_CONFLICT", **details) -> AppError
     return AppError(message, code=code, status_code=409, details=details or None)
 
 
+MAX_ENUM_VALUES = 20  # 去重取值不超过这个数才当维度
+SAMPLE_COLUMNS = 40  # 每表最多采样的文本列
+BOOL_TOKENS = frozenset({"0", "1", "y", "n", "yes", "no", "true", "false", "t", "f", "是", "否"})
+TIME_NAME = re.compile(r"(^|_)(at|time|date|day|dt|ts)$|^(date|time)_", re.IGNORECASE)
+
+
+def sample_distinct(conn, schema: str, tables) -> dict[str, dict[str, list[str]]]:
+    """每张表的文本列（非主键 / 外键）取最多 MAX_ENUM_VALUES + 1 个去重非空值；只读，方言无关。"""
+    from sqlalchemy import column, distinct, table
+
+    out: dict[str, dict[str, list[str]]] = {}
+    for t in tables:
+        fk_cols = {c for f in t.fks for c in f.columns}
+        cols = [
+            c.name for c in t.columns if c.kind == "string" and c.name not in t.pk and c.name not in fk_cols
+        ]
+        src = table(t.name, *[column(c) for c in cols[:SAMPLE_COLUMNS]], schema=schema)
+        for name in cols[:SAMPLE_COLUMNS]:
+            col = src.c[name]
+            stmt = select(distinct(col)).where(col.is_not(None)).limit(MAX_ENUM_VALUES + 1)
+            out.setdefault(t.name, {})[name] = sorted(str(v) for v in conn.execute(stmt).scalars())
+    return out
+
+
+def value_hints(proposal: dict, tables, samples: dict[str, dict[str, list[str]]]) -> list[str]:
+    """按取值样本 / 列名给提议的属性加维度提示（原地修改 proposal），返回人工复核提示。"""
+    kinds = {t.name: {c.name: c.kind for c in t.columns} for t in tables}
+    hints: list[str] = []
+    for obj in proposal["objectTypes"]:
+        table_samples = samples.get(obj["table"], {})
+        for p in obj["props"]:
+            col, kind = p["source"], kinds.get(obj["table"], {}).get(p["source"])
+            if kind == "string" and TIME_NAME.search(col):
+                hints.append(f"{obj['table']}.{col} 名称像时间但是文本类型，请确认是否需要转换")
+            values = table_samples.get(col)
+            if values is None or p.get("pk") or p.get("title"):
+                continue
+            if not values:
+                hints.append(f"{obj['table']}.{col} 没有非空取值，请确认是否需要这个属性")
+            elif len(values) == 2 and {v.strip().lower() for v in values} <= BOOL_TOKENS:
+                hints.append(f"{obj['table']}.{col} 只有两个取值（{'、'.join(values)}），可能是是 / 否标记")
+            elif len(values) <= MAX_ENUM_VALUES:
+                p["dim"] = True
+                p["filterable"] = True
+                more = "…" if len(values) > 8 else ""
+                sample = f"取值样本：{'、'.join(values[:8])}{more}（共 {len(values)} 个）"
+                p["desc"] = f"{p['desc']}；{sample}" if p["desc"] else sample
+    return hints
+
+
 async def inspect_source(session, code: str, body: ImportPreviewIn):
     ds = await DatasourceService(session).get(code)
     _require_real(ds.type)
@@ -57,12 +115,27 @@ async def inspect_source(session, code: str, body: ImportPreviewIn):
         raise IntrospectFailed(f"读取源表结构失败：{connector.err_text(e, password)}") from None
     if {t.name for t in found} != set(body.tables):
         raise conflict("源表清单不完整，请刷新后重试", "SCHEMA_CHANGED")
+    samples: dict[str, dict[str, list[str]]] = {}
+    if body.sample_values:
+        try:
+            samples = await connector._read(
+                ds.type.value, cfg, lambda conn: sample_distinct(conn, body.schema_, found)
+            )
+        except Exception as e:
+            raise IntrospectFailed(f"读取取值样本失败：{connector.err_text(e, password)}") from None
     meta = [dict(t.to_json(), uniqueSets=t.unique_sets) for t in found]
-    signature = {"ontologyId": ds.ontology_id, "datasourceId": ds.code, "version": ds.lock_version, "schema": body.schema_, "tables": meta}
+    signature = {
+        "ontologyId": ds.ontology_id,
+        "datasourceId": ds.code,
+        "version": ds.lock_version,
+        "schema": body.schema_,
+        "tables": meta,
+    }
     fingerprint = hashlib.sha256(
         json.dumps(signature, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
     proposal = build_proposal(found, ds.name)
+    hints = value_hints(proposal, found, samples)
     return (
         ds,
         found,
@@ -72,9 +145,11 @@ async def inspect_source(session, code: str, body: ImportPreviewIn):
             "schema": body.schema_,
             "tables": meta,
             "proposal": proposal,
-            "warnings": structural_warnings(found),
+            "warnings": structural_warnings(found) + hints,
             "fingerprint": fingerprint,
             "generator": "规则",
+            "llm": False,
+            "sampled": bool(body.sample_values),
         },
     )
 

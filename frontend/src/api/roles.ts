@@ -39,7 +39,7 @@ export async function loadRolesState(): Promise<RolesState | null> {
 }
 
 export interface PermObject { name: string; api: string; actions: string[] }
-export interface ScopeProp { objType: string; prop: string; values: string[]; displayName?: string | null; dataType?: string }
+export interface ScopeProp { objType: string; objectTypeCode?: string; prop: string; values: string[]; displayName?: string | null; dataType?: string }
 export interface RolesMeta { permObjects: PermObject[]; scopeProps: ScopeProp[] }
 
 /** 权限元数据：对象清单和可执行范围属性来自已发布本体，空本体由后台用 mock 兜底。
@@ -56,7 +56,8 @@ export const updateRole = (id: string, b: { name: string; desc: string; lockVers
 export const saveRolePermissions = (id: string, b: { func: Record<string, FuncLevel>; objs: ObjPerm[]; lockVersion?: number }) =>
   api.put<RemoteRole>(`/roles/${enc(id)}/permissions`, b);
 export const deleteRole = (id: string) => api.delete<void>(`/roles/${enc(id)}`).then(() => true);
-export const addRoleScope = (id: string, s: Omit<RowScope, 'id'>) => api.post<RowScope>(`/roles/${enc(id)}/scopes`, s);
+/** objectTypeCode：当前本体里对象类型编号（稳定引用，改名不影响）；后台按它定位，objType 只做显示 */
+export const addRoleScope = (id: string, s: Omit<RowScope, 'id'> & { objectTypeCode?: string }) => api.post<RowScope>(`/roles/${enc(id)}/scopes`, s);
 export const removeRoleScope = (id: string, scopeId: string) => api.delete<void>(`/roles/${enc(id)}/scopes/${enc(scopeId)}`).then(() => true);
 export const addRoleMembers = async (id: string, userIds: string[]) =>
   (await api.post<{ added: number }>(`/roles/${enc(id)}/members`, { userIds })).added;

@@ -258,6 +258,7 @@ class PermObjectOut(ApiModel):
 
 class ScopePropOut(ApiModel):
     obj_type: str
+    object_type_code: str | None = None  # 添加范围时回传的稳定引用（admin_0025）
     prop: str
     values: list[str]
     display_name: str | None = None

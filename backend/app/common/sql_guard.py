@@ -300,6 +300,7 @@ class GovernedTable:
         return self.inherit.parent.scope_object_type if self.inherit else self.object_type
 
 
+ORG_PROP = "@org"  # 同 app.modules.admin.org_scope.ORG_PROP（基础层不反向依赖 admin）
 _GOVERNED: dict[str, GovernedTable] = {}
 _UNRESTRICTED: set[str] = set()
 
@@ -438,6 +439,14 @@ def scope_expr(g: GovernedTable, scopes: Sequence[dict[str, Any]]) -> dict | Non
 
     parts: list[dict] = []
     for sc in scopes:
+        # 组织规则（admin/org_scope）：field 由本体的组织列配置给出，必须是本表白名单列，否则拒绝。
+        if isinstance(sc, dict) and sc.get("prop") == ORG_PROP:
+            field = sc.get("field")
+            if isinstance(field, str) and field in g.columns and valid_row_scope(sc):
+                parts.append(from_row_scope({**sc, "prop": field}))
+            else:
+                parts.append(dict(DENY_ALL))
+            continue
         # 先查结构（prop 可能是列表等不可哈希的值，不能直接拿去查 field_of_prop）
         if not valid_row_scope(sc) or sc["prop"] not in g.field_of_prop:
             parts.append(dict(DENY_ALL))

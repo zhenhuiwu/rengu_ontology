@@ -197,7 +197,7 @@ async function addScope() {
   if (!p || !scopeForm.values.length) { message.warning('请选择属性和取值'); return; }
   if (remote.value) {
     const id = role.value.id;
-    const body = { objType: p.objType, prop: p.prop, op: (scopeForm.values.length > 1 ? '∈' : '=') as RowScope['op'], values: [...scopeForm.values] };
+    const body = { objType: p.objType, ...(p.objectTypeCode ? { objectTypeCode: p.objectTypeCode } : {}), prop: p.prop, op: (scopeForm.values.length > 1 ? '∈' : '=') as RowScope['op'], values: [...scopeForm.values] };
     if (!(await call(() => addRoleScope(id, body)))) return;
   } else role.value.scopes.push({ id: `S-${Date.now() % 100000}`, objType: p.objType, prop: p.prop, op: scopeForm.values.length > 1 ? '∈' : '=', values: [...scopeForm.values] });
   scopeForm.key = undefined; scopeForm.values = [];

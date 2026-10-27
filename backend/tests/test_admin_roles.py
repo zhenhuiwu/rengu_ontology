@@ -357,6 +357,7 @@ async def test_scope_props_follow_filter_flags_and_executable_basis(
     assert response.json()["scopeProps"] == [
         {
             "objType": "门店",
+            "objectTypeCode": "store",
             "prop": "区域",
             "displayName": "所属区域",
             "dataType": data_type,

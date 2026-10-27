@@ -38,6 +38,9 @@ class ImportPreviewIn(Input):
     tables: list[Annotated[str, StringConstraints(min_length=1, max_length=128)]] = Field(
         min_length=1, max_length=60
     )
+    sample_values: bool = Field(
+        False, description="读取离散取值样本生成维度/取值提示（只读 SELECT DISTINCT … LIMIT）；默认关闭"
+    )
 
 
 class ImportObjectIn(Input):
