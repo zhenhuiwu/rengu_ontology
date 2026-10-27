@@ -64,7 +64,7 @@ const filtered = computed(() => visible.value.filter((d) =>
   (kind.value === 'all' || d.kind === kind.value) && (!grp.value || d.group === grp.value)
   && (!kw.value || d.name.includes(kw.value) || d.api.includes(kw.value) || d.objectName.includes(kw.value)
     || d.values.some((v) => v.name.includes(kw.value) || v.synonyms.includes(kw.value)))));
-const LPAGE = 18;
+const LPAGE = isStaticReal() ? 10 : 18;
 const lpage = ref(Number(q('lp')) || 1);
 watch([kw, kind, grp], () => { lpage.value = 1; });
 watch(lpage, (p) => { if (String(p) !== (q('lp') || '1')) setQ({ lp: p > 1 ? String(p) : undefined }); });
@@ -215,7 +215,7 @@ async function toggleValue(r: Row) {
   const ok = await confirm.ask({
     title: off ? '停用取值' : '启用取值', target: `${cur.value?.name} · ${v.name}（${v.code}）`, tag: `草稿 ${draft.value?.id}`,
     fields: [{ label: '当前状态', value: v.status }, { label: cur.value?.countLabel ?? '记录数', value: v.count != null ? fmtInt(v.count) : '--' }],
-    impact: isStaticReal() ? (off ? '停用后不再参与问数匹配，历史数据保留；使用影响将在发布评审中核对。' : '启用后可以参与问数筛选和拆分。') : off ? `停用后问数不再把它当作筛选候选，同义词随之失效；历史数据仍按原取值统计。本${cur.value?.kind}有 ${used} 项使用，发布前会出现在影响分析里。` : '启用后问数可以按它筛选和拆分。',
+    impact: isStaticReal() ? (off ? '停用后不再参与问数匹配，历史数据保留；使用影响将在发布评审中核对。' : cur.value?.object ? '启用后可以参与问数筛选和拆分。' : '启用后可参与码表取值与说法匹配。') : off ? `停用后问数不再把它当作筛选候选，同义词随之失效；历史数据仍按原取值统计。本${cur.value?.kind}有 ${used} 项使用，发布前会出现在影响分析里。` : '启用后问数可以按它筛选和拆分。',
     okText: off ? '停用' : '启用', danger: off,
   });
   if (!ok || context !== staticContextKey() || selected !== cur.value?.id || !canEdit.value) return;
@@ -417,7 +417,7 @@ const CHECKS = computed(() => {
   const vals = valueRows.value;
   const dupCode = vals.find((v, i) => vals.findIndex((x) => x.level === v.level && x.code === v.code) !== i);
   rows.push(dupCode ? { code: 'V5', name: '取值唯一', result: '阻断', note: `编码 ${dupCode.code} 重复` } : { code: 'V5', name: '取值唯一', result: '通过', note: `${vals.length} 个取值，同一层级编码和名称不重复` });
-  rows.push(levels.value.some((l) => l.name === qa.value.defaultLevel) ? { code: 'V6', name: '默认层级', result: '通过', note: `问数未指明层级时按“${qa.value.defaultLevel}”` } : { code: 'V6', name: '默认层级', result: '阻断', note: '默认层级不在层级里' });
+  rows.push(isStaticReal() && !cur.value?.object ? { code: 'V6', name: '默认层级', result: '通过', note: '独立码表按取值和说法匹配' } : levels.value.some((l) => l.name === qa.value.defaultLevel) ? { code: 'V6', name: '默认层级', result: '通过', note: `问数未指明层级时按“${qa.value.defaultLevel}”` } : { code: 'V6', name: '默认层级', result: '阻断', note: '默认层级不在层级里' });
   rows.push(isStaticReal() && mapsPage.extra.value.conflictCount === undefined ? { code: 'V9', name: '同义词歧义', result: '警告', note: '尚未取得说法检查结果' } : conflictCount.value ? { code: 'V9', name: '同义词歧义', result: '警告', note: `${conflictCount.value} 个说法有歧义，已写处理方式的不阻断发布` } : { code: 'V9', name: '同义词歧义', result: '通过', note: '没有重名的说法' });
   const off = vals.filter((v) => v.status === '停用' && (v.count ?? 0) > 0);
   rows.push(off.length ? { code: 'V12', name: '停用取值', result: '警告', note: `${off.map((v) => v.name).join('、')} 已停用但仍有数据` } : { code: 'V12', name: '停用取值', result: '通过', note: '停用的取值没有当前数据' });
@@ -539,8 +539,8 @@ onBeforeUnmount(() => { ++definitionSeq; });
         <span class="t-14 c-3 num">{{ cur.api }}</span>
         <a-tag>{{ cur.kind }}</a-tag>
         <span class="t-14 c-2">
-          <ObjRef kind="object-type" :id="cur.object">{{ cur.objectName }}</ObjRef>
-          <span class="c-3"> · {{ curAttr }}</span>
+          <template v-if="cur.object"><ObjRef kind="object-type" :id="cur.object">{{ cur.objectName }}</ObjRef><span v-if="curAttr" class="c-3"> · {{ curAttr }}</span></template>
+          <span v-else>独立码表</span>
         </span>
         <a-segmented v-if="draft && !readonly && !newTarget" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
@@ -565,7 +565,8 @@ onBeforeUnmount(() => { ++definitionSeq; });
             <a-descriptions-item label="显示名">{{ cur.name }}</a-descriptions-item>
             <a-descriptions-item label="API 名"><span class="num">{{ cur.api }}</span></a-descriptions-item>
             <a-descriptions-item label="来源对象">
-              <ObjRef kind="object-type" :id="cur.object">{{ cur.objectName }}</ObjRef>
+              <ObjRef v-if="cur.object" kind="object-type" :id="cur.object">{{ cur.objectName }}</ObjRef>
+              <span v-else>独立码表</span>
             </a-descriptions-item>
             <a-descriptions-item label="来源属性">{{ curAttr }}</a-descriptions-item>
             <a-descriptions-item v-for="d in DEF_ITEMS" :key="d.k" :label="d.k"><span :class="{ num: d.num }">{{ d.v }}</span></a-descriptions-item>
@@ -589,12 +590,12 @@ onBeforeUnmount(() => { ++definitionSeq; });
         </div>
         <div class="dm-def-right">
           <div class="dm-sec t-14 fw-600 dm-sec-row">
-            <span>问数设置</span>
+            <span>{{ isStaticReal() && !cur.object ? '匹配设置' : '问数设置' }}</span>
             <a-space v-if="editing">
               <a-button size="small" @click="cancelEdit">取消</a-button>
               <a-button size="small" :disabled="!dirty" @click="save">保存到草稿</a-button>
             </a-space>
-            <a-space v-else><a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">编辑问数设置</a-button></a-tooltip><a-tooltip v-if="isStaticReal()" :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openDefinition()">编辑定义</a-button></a-tooltip></a-space>
+            <a-space v-else><a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">{{ isStaticReal() && !cur.object ? '编辑匹配设置' : '编辑问数设置' }}</a-button></a-tooltip><a-tooltip v-if="isStaticReal()" :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openDefinition()">编辑定义</a-button></a-tooltip></a-space>
           </div>
           <a-descriptions v-if="!editing" :column="1" bordered size="small" class="dm-desc">
             <a-descriptions-item label="默认层级">{{ qa.defaultLevel }}</a-descriptions-item>
@@ -662,7 +663,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
         </a-table>
         <AppPagination v-model:page="vp" variant="full" :total="isStaticReal() ? valuesPage.total.value : shownValues.length" v-model:size="valueSize" unit="条" :empty="false" />
         <div v-if="isDraft && cur.draftNote" class="t-12 c-3">{{ cur.draftNote }}。</div>
-        <div class="t-12 c-3">{{ cur.valuesNote ? `${cur.valuesNote}。` : '' }}取值来自 {{ cur.valueSrc }}；停用的取值不参与问数匹配，历史数据仍按原取值统计。</div>
+        <div class="t-12 c-3">{{ cur.valuesNote ? `${cur.valuesNote}。` : '' }}{{ cur.valueSrc ? `取值来自 ${cur.valueSrc}` : '取值由本体定义维护' }}；停用的取值不参与问数匹配，历史数据仍按原取值统计。</div>
       </div>
 
       <!-- 同义词与问数映射 -->

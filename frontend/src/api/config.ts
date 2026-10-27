@@ -29,6 +29,7 @@ export const SWITCH_PREFIX = {
   admin: 'admin',
   data: 'data',            // 数据接入
   integration: 'data',     // 外部系统 /ext-systems（含 ?writeback=1 下拉）、/writeback-calls/{id}:mark-checked；在 ontology 前缀下没有路由
+  notifications: 'ontology', // 当前本人、当前本体的站内通知
 } as const satisfies Record<string, ApiPrefix>;
 
 export type SwitchKey = keyof typeof SWITCH_PREFIX;

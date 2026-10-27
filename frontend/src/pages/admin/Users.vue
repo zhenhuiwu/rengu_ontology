@@ -100,9 +100,10 @@ const setQuery = (patch: Record<string, string | undefined>) => router.replace({
 type Form = { name: string; account: string; dept: string; role: string; status: AdminUser['status'] };
 const ROLE_OPTS = computed(() => roleOptions.value.map((r) => ({ value: r.name, label: r.name })));
 const DEPT_OPTS = computed(() => depts.value.map((v) => ({ value: v, label: v })));
-const STATUS_OPTS = (['启用', '停用', '待激活'] as const).map((v) => ({ value: v, label: v }));
 const userKey = computed(() => (typeof route.query.user === 'string' ? route.query.user : ''));
 const editing = computed(() => (userKey.value && userKey.value !== 'new' ? pool.value.find((u) => u.id === userKey.value) ?? null : null));
+const editingSelf = computed(() => realUsers && !!editing.value && editing.value.id === currentApiContext().demoAs);
+const STATUS_OPTS = computed(() => (['启用', '停用', '待激活'] as const).map((v) => ({ value: v, label: v, disabled: editingSelf.value && v !== '启用' })));
 const drawerOpen = computed(() => !viewReadonly.value && (userKey.value === 'new' || !!editing.value));
 const blank = (): Form => ({ name: '', account: '', dept: realUsers ? '' : depts.value[0] ?? '', role: realUsers ? '' : ROLE_OPTS.value[0]?.value ?? '', status: '待激活' });
 const form = reactive<Form>(blank());
@@ -244,6 +245,7 @@ async function doImport() {
 }
 async function toggle(u: AdminUser & { pending: number }) {
   if (readonly.value) return;
+  if (live.value && u.id === currentApiContext().demoAs && u.status !== '停用') { message.warning('不能停用当前登录用户'); return; }
   if (u.status === '停用') {
     const ok = await confirm.ask({ title: '启用用户', target: `${u.name}（${u.account}）`, okText: '启用', impact: '恢复登录和原有角色权限。' });
     if (!ok) return;
@@ -269,7 +271,7 @@ async function toggle(u: AdminUser & { pending: number }) {
       { label: '角色', value: u.role },
       { label: '待办审批', value: u.pending ? `${u.pending} 条` : '无' },
     ],
-    impact: `停用后不能再登录。已登录的会话保留为只读，直到过期；${u.pending ? `名下 ${u.pending} 条待办审批必须转交给其他人后才能停用。` : '名下没有待办审批。'}`,
+    impact: live.value ? '停用后后续请求即被拒绝。必须先完成所有本体中的待办审批，不会自动转交。' : `停用后不能再登录。已登录的会话保留为只读，直到过期；${u.pending ? `名下 ${u.pending} 条待办审批必须转交给其他人后才能停用。` : '名下没有待办审批。'}`,
     picker: u.pending ? { label: '审批转交给', placeholder: '选择用户（同部门优先）', options: candidates, required: true } : undefined,
   });
   if (!ok) return;
@@ -330,7 +332,7 @@ async function toggle(u: AdminUser & { pending: number }) {
       <a-form-item label="账号" required :extra="live ? '公司邮箱' : '公司邮箱，用于登录和接收激活邮件'"><a-input v-model:value="form.account" :disabled="!!editing" :placeholder="realUsers ? 'name@example.com' : 'name@freshmart.cn'" /></a-form-item>
       <a-form-item label="部门" required><a-auto-complete v-if="realUsers" v-model:value="form.dept" :options="DEPT_OPTS" :filter-option="(input: string, option: { value: string }) => option.value.toLowerCase().includes(input.toLowerCase())" placeholder="选择已有部门或输入新部门"><a-input :maxlength="128" /></a-auto-complete><a-select v-else v-model:value="form.dept" :options="DEPT_OPTS" /></a-form-item>
       <a-form-item :label="realUsers ? '主角色' : '角色'" required><a-select :value="form.role || undefined" :disabled="!canAssignRole" :title="rolePermissionReason || undefined" :options="ROLE_OPTS" placeholder="请选择主角色" @change="(value: string) => form.role = value" /></a-form-item>
-      <a-form-item label="状态"><a-radio-group v-model:value="form.status" :options="STATUS_OPTS" /></a-form-item>
+      <a-form-item label="状态" :extra="realUsers ? editingSelf ? '不能将当前登录用户改为非启用状态' : '改为非启用状态前，须先完成所有本体中的待办审批' : undefined"><a-radio-group v-model:value="form.status" :options="STATUS_OPTS" /></a-form-item>
     </a-form>
     <template #footer>
       <div class="au-foot">

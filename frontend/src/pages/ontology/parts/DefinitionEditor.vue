@@ -98,7 +98,7 @@ const ownerOptions = computed(() => choices.owners.map((o) => ({ value: o.id, la
 const objectOptions = computed(() => choices.objects.map((o) => ({ value: o.id, label: `${o.name}（${o.api}）` })));
 const propertyOptions = computed(() => sourceProperties.value.map((p) => ({ value: p.api, label: `${p.name}（${p.api}）` })));
 const metricOptions = computed(() => choices.metrics.filter((m) => m.status === '已发布').map((m) => ({ value: m.id, label: `${m.name}（${m.api}）` })));
-const dimensionOptions = computed(() => choices.dimensions.map((d) => ({ value: d.name, label: `${d.name}（${d.api}）` })));
+const dimensionOptions = computed(() => choices.dimensions.filter((d) => d.object).map((d) => ({ value: d.name, label: `${d.name}（${d.api}）` })));
 const validation = computed(() => {
   if (!values.name.trim() || !values.api.trim() || !values.owner || !choices.owners.some((o) => o.id === values.owner)) return '请填写名称、API名并选择负责人';
   if (values.name.length > 64 || values.group.length > 32) return '名称最多64字，分组最多32字';
@@ -113,7 +113,7 @@ const validation = computed(() => {
     if (properties.value.filter((p) => p.title).length > 1) return '标题属性只能有一个';
   }
   if (props.kind === 'dimension') {
-    if (!values.object) return '请选择来源对象';
+    if (values.kind === '维度' && !values.object) return '请选择来源对象';
     if (values.attr && !sourceProperties.value.some((p) => p.api === values.attr)) return '请选择该对象的真实属性';
     if (levels.value.length > 32) return '层级至多32行';
     if (levels.value.some((l) => !l.name.trim() || !l.api.trim())) return '层级名称和API名必填';
@@ -196,11 +196,11 @@ async function save() {
           <div v-for="(v, i) in variants" :key="i" class="definition-variant"><a-select v-model:value="v.code" :options="metricOptions" placeholder="已发布指标" /><a-input v-model:value="v.label" placeholder="口径标签" :maxlength="64" /><span class="t-12 c-3">{{ variantTarget(v.code)?.api ?? '—' }} · {{ variantTarget(v.code)?.version ?? '—' }}</span><a-radio :checked="v.default" @change="setDefault(i)">默认</a-radio><a-button size="small" @click="variants.splice(i, 1)">移除</a-button></div>
         </template>
         <template v-else>
-          <div class="definition-grid"><a-form-item label="类型"><a-select v-model:value="values.kind" :options="[{ value: '维度' }, { value: '码表' }]" /></a-form-item><a-form-item label="来源对象" required><a-select v-model:value="values.object" :options="objectOptions" @change="values.attr = ''; values.column = ''" /></a-form-item><a-form-item label="来源属性"><a-select v-model:value="values.attr" allow-clear :options="propertyOptions" @change="changeAttr" /></a-form-item><a-form-item label="源列"><a-input v-model:value="values.column" disabled /></a-form-item><a-form-item label="取值来源"><a-input v-model:value="values.valueSrc" :maxlength="256" /></a-form-item><a-form-item label="同步说明"><a-input v-model:value="values.sync" :maxlength="128" /></a-form-item></div>
+          <div class="definition-grid"><a-form-item label="类型"><a-select v-model:value="values.kind" :options="[{ value: '维度' }, { value: '码表' }]" /></a-form-item><a-form-item label="来源对象" :required="values.kind === '维度'"><a-select v-model:value="values.object" :allow-clear="values.kind === '码表'" :placeholder="values.kind === '码表' ? '可选，留空作为独立码表' : '请选择来源对象'" :options="objectOptions" @change="values.object = values.object || ''; values.attr = ''; values.column = ''" /></a-form-item><a-form-item label="来源属性"><a-select v-model:value="values.attr" allow-clear :disabled="!values.object" :options="propertyOptions" @change="changeAttr" /></a-form-item><a-form-item label="源列"><a-input v-model:value="values.column" disabled /></a-form-item><a-form-item label="取值来源"><a-input v-model:value="values.valueSrc" :maxlength="256" /></a-form-item><a-form-item label="同步说明"><a-input v-model:value="values.sync" :maxlength="128" /></a-form-item></div>
           <a-form-item label="说明"><a-textarea v-model:value="values.desc" :rows="2" /></a-form-item>
           <div class="definition-heading"><span class="t-14 fw-600">层级（从上到下）</span><a-button size="small" :disabled="levels.length >= 32" @click="levels.push({ name: '', api: '', source: '', note: '' })">新增层级</a-button></div>
           <div v-for="(l, i) in levels" :key="i" class="definition-row"><div class="definition-grid"><a-input v-model:value="l.name" :maxlength="64" placeholder="层级名称" /><a-input v-model:value="l.api" :maxlength="64" placeholder="API名" /><a-input v-model:value="l.source" :maxlength="256" placeholder="来源说明" /><a-input v-model:value="l.note" :maxlength="4000" placeholder="层级说明" /></div><a-space><a-button size="small" :disabled="i === 0" @click="moveLevel(i, -1)">上移</a-button><a-button size="small" :disabled="i === levels.length-1" @click="moveLevel(i, 1)">下移</a-button><a-button size="small" @click="levels.splice(i, 1)">移除</a-button></a-space></div>
-          <span class="t-12 c-3">取值、映射与问数设置保存定义后在已有页签编辑；层级运行数量由后台保留。</span>
+          <span class="t-12 c-3">保存定义后可继续维护取值、映射与问数设置。</span>
         </template>
       </a-form>
     </a-spin>

@@ -2,7 +2,7 @@ import { apiClient, currentApiContext, type PageResult } from './http';
 import { crSave, crStart, fetchCR, fetchCRItems, staticContextKey, fetchMetricGroups, type CRItemOut, type DraftChange } from './static';
 export type DefinitionKind = 'object' | 'metric' | 'dimension';
 export interface DefinitionValues { id?: string; name: string; api: string; group: string; owner: string; [key: string]: unknown }
-export interface DefinitionOption { id: string; name: string; api?: string; status?: string; version?: string; [key: string]: unknown }
+export interface DefinitionOption { id: string; name: string; api?: string; status?: string; version?: string; object?: string; [key: string]: unknown }
 export interface DefinitionProperty { api: string; name: string; type: string; group: string; source: string; desc: string; pk?: boolean; title?: boolean; dim?: boolean; sensitive?: boolean; enumName?: string; visibility?: 'prominent' | 'normal' | 'hidden'; searchable?: boolean; filterable?: boolean; sortable?: boolean; listed?: boolean; order?: number; listWidth?: number | null; format?: string | null; unit?: string | null }
 const api = apiClient('static');
 const paths = { object: 'object-types', metric: 'metrics', dimension: 'dimensions' };

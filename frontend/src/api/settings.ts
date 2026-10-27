@@ -35,3 +35,4 @@ export interface ModelsSettingsData { items: ModelSettingsData[]; canManage: boo
 export type ModelSettingsSave = Pick<ModelSettingsData, 'model' | 'baseUrl' | 'timeoutSec' | 'enabled' | 'lockVersion'> & { apiKey?: string };
 export const loadModelSettings = () => settingsApi.get<ModelsSettingsData>('/settings/models', { ontologyScope: false });
 export const saveModelSettings = (usage: ModelSettingsData['usage'], body: ModelSettingsSave) => settingsApi.put<ModelSettingsData>(`/settings/models/${usage}`, body, { ontologyScope: false });
+export const loadNotificationSettings = () => settingsApi.get<{ inbox: { enabled: boolean; sources: string[] }; externalChannelsConfigured: boolean }>('/settings/notifications', { ontologyScope: false });

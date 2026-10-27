@@ -12,6 +12,7 @@ import { adminApiOn } from '@/api/admin';
 import { PAGES } from '@/nav';
 import VersionPicker from '@/components/VersionPicker.vue';
 import NoticeList from '@/components/NoticeList.vue';
+import { isNotificationsReal, notificationContextKey, unreadNotifications } from '@/api/notifications';
 
 const app = useAppStore();
 const router = useRouter();
@@ -42,6 +43,17 @@ async function reloadProfile() {
 watch(() => currentApiContext().demoAs, () => { void reloadProfile(); }, { immediate: true });
 const q = ref('');
 const noticeOpen = ref(false);
+let unreadSequence = 0;
+function invalidateUnread() { unreadSequence++; }
+async function reloadUnread() {
+  const seq = ++unreadSequence, key = notificationContextKey();
+  if (!isNotificationsReal() || !app.workspace || app.workspaceError) { app.notificationUnread = 0; return; }
+  try { const result = await unreadNotifications(); if (seq === unreadSequence && key === notificationContextKey()) app.setNotificationUnread(key, result.unread); }
+  catch { /* The opened inbox shows its own loading error; never substitute sample notices. */ }
+}
+watch([notificationContextKey, () => app.workspaceEpoch, () => app.workspaceError], () => { noticeOpen.value = false; void reloadUnread(); }, { immediate: true });
+onMounted(() => window.addEventListener('focus', reloadUnread));
+onBeforeUnmount(() => { unreadSequence++; window.removeEventListener('focus', reloadUnread); });
 const inputRef = ref<{ focus: () => void } | null>(null);
 
 // Ctrl K / ⌘K 聚焦全局搜索兼提问框
@@ -124,7 +136,7 @@ function onSelect(v: string) {
       <VersionPicker v-if="!app.workspaceError && router.currentRoute.value.name !== 'workspaces'" />
       <a-divider type="vertical" />
       <a-popover v-model:open="noticeOpen" trigger="click" placement="bottomRight">
-        <template #content><div v-if="adminApiOn()" class="t-12 c-3">通知服务尚未接入</div><NoticeList v-else @picked="noticeOpen = false" /></template>
+        <template #content><NoticeList :active="noticeOpen" @updated="invalidateUnread" @picked="noticeOpen = false" /></template>
         <a-badge :count="app.unread" size="small" :number-style="{ backgroundColor: 'var(--g8)', color: '#fff', boxShadow: 'none' }">
           <a-button type="text" size="small" class="tb-icon" aria-label="通知"><BellOutlined /></a-button>
         </a-badge>

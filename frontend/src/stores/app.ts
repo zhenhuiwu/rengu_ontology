@@ -2,7 +2,8 @@ import { defineStore } from 'pinia';
 import type { NavArea } from '@/nav';
 import { NOTICES } from '@/mock';
 import { releaseByVer } from '@/api/releases';
-import { isReal } from '@/api/config';
+import { anyReal, isReal } from '@/api/config';
+import { notificationContextKey } from '@/api/notifications';
 import type { OntologyWorkspace } from '@/api/workspaces';
 import { NEXT_VERSION as MOCK_NEXT_VERSION } from '@/mock/changes';
 
@@ -55,7 +56,8 @@ export const useAppStore = defineStore('app', {
       ontologyNextVersion: isReal('versioning') ? '' : MOCK_NEXT_VERSION,
       /** 正在查看的历史版本（URL ?ver=）；null = 当前版本 */
       viewVersion: null as string | null,
-      notices: isReal('admin') ? [] : NOTICES.map((n) => ({ ...n })),
+      notices: anyReal() ? [] : NOTICES.map((n) => ({ ...n })),
+      notificationUnread: 0,
       persona,
       user: { name: isReal('admin') ? '' : PERSONAS[persona].name as string, role: isReal('admin') ? '' : PERSONAS[persona].role as string },
       permissions: [...PERSONAS[persona].permissions] as AreaKey[],
@@ -66,17 +68,19 @@ export const useAppStore = defineStore('app', {
   getters: {
     can: (s) => (area: AreaKey) => s.permissions.includes(area),
     viewMode: (s): 'current' | 'history' => (s.viewVersion ? 'history' : 'current'),
-    unread: (s) => s.notices.filter((n) => !n.read).length,
+    unread: (s) => anyReal() ? s.notificationUnread : s.notices.filter((n) => !n.read).length,
   },
   actions: {
     enterWorkspace(id: string, workspace: OntologyWorkspace | null, error = '') {
       this.ontologyId = id; this.workspace = workspace; this.workspaceError = error;
       this.viewVersion = null; this.ontologyVersion = '—'; this.ontologyPublishedAt = '—'; this.ontologyNextVersion = '';
       this.lastRoute = loadLastRoute(id); this.workspaceEpoch++;
+      this.notificationUnread = 0;
       if (workspace) { this.workspaceSelectionSaved = true; try { sessionStorage.setItem(WORKSPACE_KEY, id); } catch { /* private mode */ } }
     },
     setPersona(p: PersonaKey) {
       this.persona = p;
+      this.notificationUnread = 0;
       this.user = isReal('admin') ? { name: '', role: '' } : { name: PERSONAS[p].name, role: PERSONAS[p].role };
       this.permissions = [...PERSONAS[p].permissions];
       try { sessionStorage.setItem(PERSONA_KEY, p); } catch { /* 隐私模式 */ }
@@ -84,6 +88,9 @@ export const useAppStore = defineStore('app', {
     /** 由路由守卫根据 ?ver= 调用；等于当前版本或不存在的版本都视为当前版本 */
     setViewVersion(v: string | null) {
       this.viewVersion = v && v !== this.ontologyVersion && releaseByVer(v) ? v : null;
+    },
+    setNotificationUnread(context: string, count: number) {
+      if (context === notificationContextKey()) this.notificationUnread = count;
     },
     rememberRoute(area: AreaKey, fullPath: string) {
       this.lastRoute[area] = fullPath;

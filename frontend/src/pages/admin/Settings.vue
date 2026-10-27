@@ -13,6 +13,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import InfoTip from '@/components/InfoTip.vue';
 import ModelSettings from './ModelSettings.vue';
+import NotificationSettings from './NotificationSettings.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { useAppStore } from '@/stores/app';
@@ -495,8 +496,9 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
       </div>
 
       <ModelSettings v-if="realSettings" v-show="group === 'llm'" :readonly="readonly" :reason="reason" @dirty="modelDirty = $event" />
-      <div v-if="realSettings && (group === 'notify' || group === 'security')" class="st-body">
-        <a-empty :description="group === 'notify' ? '通知渠道暂不可用' : '登录安全策略暂不可用'" />
+      <NotificationSettings v-if="realSettings && group === 'notify'" />
+      <div v-if="realSettings && group === 'security'" class="st-body">
+        <a-empty description="登录安全策略暂不可用" />
       </div>
       <!-- 租户信息 -->
       <div v-else-if="group === 'tenant'" class="st-body">
@@ -588,7 +590,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
       </div>
 
       <!-- 通知渠道 -->
-      <div v-else-if="group === 'notify'" class="st-body">
+      <div v-else-if="group === 'notify' && !realSettings" class="st-body">
         <a-table size="small" row-key="id" :columns="chCols" :data-source="draft.channels" :pagination="false">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
