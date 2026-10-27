@@ -29,6 +29,7 @@ from app.modules.event.ingress import router as internal_event_router
 from app.modules.event.router import router as event_router
 from app.modules.functions.router import router as functions_router
 from app.modules.integration.router import router as integration_router
+from app.modules.machine.router import router as machine_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.notifications.router import settings_router as notification_settings_router
 from app.modules.ontology.router import router as workspace_router
@@ -45,6 +46,7 @@ MOUNTS: list[tuple[str, APIRouter]] = [
     ("ontology", action_router),
     ("ontology", event_router),
     ("ontology", functions_router),
+    ("ontology", machine_router),
     ("qa", qa_router),
     ("data", data_router),
     ("data", integration_router),  # integration 只挂 data（action-event-api.md:140、:168）

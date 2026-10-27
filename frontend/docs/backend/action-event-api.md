@@ -1004,3 +1004,59 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 ### 15.5 未做
 
 评测门槛（`evalPassedAt`）；`objects` 用行范围表达式；规则 / 问数等来源自动执行；服务账号代执行身份；`suggest` 在试运行 / 选项接口里的展示；前端策略编辑器；`/machine/objects:query`、函数调用别名、AI 工具导出；机器响应里的 `checks` / `edits`。
+
+> 2026-10-27（UTC+8）补：§15.5 中 `/machine/objects:query`、函数调用别名、AI 工具导出、`checks` / `edits` 已在 palantir-t3 完成，见 §16。
+
+## 16. 机器接口第 3 期：对象查询 / 函数调用 / AI 工具清单（分支 `palantir-t3`，基于 master `c55f370`，2026-10-27）
+
+无迁移。全部挂 `/api/ontology/v1`，鉴权同 §15.3（API 密钥或人工会话）；工具清单由已发布元数据生成，代码不写死业务对象或本体编号【仓库】。
+
+### 16.1 接口
+
+| 接口 | scope | 说明 |
+|---|---|---|
+| `POST /machine/objects:query` | `objects:read` | body = 问数对象检索参数 + `objectType`（对象类型 API 名）：`{"objectType", "q"?, "filters"?, "sort"?, "page"?, "size"?, "withFacets"? = false}`。复用 `/api/qa/v1/object-types/{api}/search` 的检索和**同一套行级范围**（用户密钥按本人、服务账号按绑定角色），另需页面权限 对象读取 + `object-search` 查看。返回 `{objectType, items, total, page, size, titleProp, bound, boundProps, facets}` |
+| `POST /machine/functions/{id}:invoke` | `functions:invoke` | 函数调用别名，复用函数运行时；只允许 **已发布** 函数（草稿/停用 409 `FUNCTION_NOT_PUBLISHED`，不存在 404）。body `{"input": {...}}`，返回 `{ok, functionId, version, output, ms, at}` |
+| `GET /machine/tools?format=mcp\|openai` | `meta:read` | 只读工具清单，见 16.2 |
+
+### 16.2 工具清单
+
+`/machine/tools` 是 `GET /meta/capabilities`（静态，`static/capabilities.py`）的薄转换层：动作类型、函数取自能力目录（已按页面权限过滤），再叠加密钥的 scope 与白名单【仓库】。
+
+| 工具 | 名字 | 出现条件 | 参数 schema |
+|---|---|---|---|
+| 动作类型 | `action_{api}` | 目录有 `actions` 段 + 动作中心管理权限 + 密钥有 `actions:execute` 且在动作类型白名单内（目录的 `machine.keyAllowed`）；执行策略 `suggest` 不导出；`callers` 不含本调用方（人 / 服务账号）不导出 | `{objKind: enum[目标对象], objId, params: {参数 API: 类型}}`，必填参数进 `required` |
+| 事件类型 | `event_{api}` | 已发布、未退役、来源为 外部 / 同步；密钥有 `events:ingest` 且在事件类型白名单内（code 或 api）；需事件类型页面权限 | 入站事件信封：`eventId, eventType, occurredAt, source, objectType, objectId, payload{字段}`，`dedupKey` / `traceId` 可选 |
+| 函数 | `fn_{name}` | 目录有 `functions` 段（已发布）+ 密钥有 `functions:invoke` | `{input: {入参: 类型}}` |
+
+返回：
+
+```json
+{"format": "mcp",
+ "tools": [{"name": "action_OpsLocal", "description": "…；执行策略：人工确认", "inputSchema": {"type": "object", "…": "…"}}],
+ "bindings": {"action_OpsLocal": {"method": "POST", "path": "/api/ontology/v1/machine/actions/ops_local:execute",
+                                   "scope": "actions:execute", "idempotencyHeader": "Idempotency-Key",
+                                   "policyMode": "confirm", "version": "v1"}}}
+```
+
+`format=openai` 时 `tools[i] = {"type": "function", "function": {name, description, parameters}}`。名字只含 `[A-Za-z0-9_-]`、最长 64，重名加序号。类型映射：字符串/日期等 → `string`（日期带 `format`），整数 → `integer`，数值/金额 → `number`，布尔 → `boolean`，列表 → `array`；对象引用 → 对象 ID 字符串【推断】。
+
+### 16.3 执行响应补字段
+
+`POST /machine/actions/{typeId}:execute` 与 `GET /machine/action-runs/{id}` 新增【仓库】：
+
+| 字段 | 含义 |
+|---|---|
+| `checks` | `{"passed": true, "checked": n}`：暂存时提交条件全部通过（不通过直接 422 `SUBMISSION_CRITERIA_FAILED`，不建记录）；n = 当前版本条件数 |
+| `edits` | 当前版本声明的编辑 `[{op, obj, field}]`（声明，不是实际写入值） |
+| `retryable` | 该记录能否重新提交（同详情 `can.resubmit`） |
+
+动作类型版本已变（记录版本 ≠ 当前版本）时 `checks` / `edits` 为 `null`。另外 `params` 现在可直接传 JSON 对象（仍兼容 JSON 字符串）。
+
+### 16.4 动作意图评测集
+
+`backend/tests/fixtures/palantir_action_intents.yaml`：20 条通用用例（调用 8、追问 4、拒绝 5、超限转确认 3），只用测试夹具名字（store / ops_local / ops_cross / OpsSignal / calculate）；`tests/test_palantir_machine_tools.py` 校验每条期望参数能通过导出的 `inputSchema`、拒绝用例的工具确实不导出、确认用例真实执行后为 `待确认`。格式说明见文件头。
+
+### 16.5 未做
+
+能力目录没有事件类型段（工具清单自己读事件类型）；动作参数在目录里没有枚举选项 / 规则文本（枚举参数导出为普通字符串）；目录不能按段只算动作/函数；函数无按密钥白名单；`suggest` 动作不导出（无试运行工具）；清单里没有对象查询工具；只读角色用户的密钥仍不能调 `/machine` 的 POST。

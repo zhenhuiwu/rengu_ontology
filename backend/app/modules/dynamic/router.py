@@ -316,7 +316,15 @@ async def stage_action(body: StageIn, svc: ActionSvc, response: Response) -> Act
 
 
 # ---- 机器接口（程序 / AI / 服务账号；API 密钥按 scope + 动作类型白名单放行，人工会话同样可用）----
-def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict:
+async def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict:
+    """checks：暂存时提交条件已全部通过（未通过会 422 SUBMISSION_CRITERIA_FAILED，不会到这里）；
+    edits：该版定义声明的属性编辑（不是实际改动的值）；动作类型版本已变 → 两者为 null。"""
+    from sqlalchemy import select
+
+    from app.modules.action.models import ActionType
+
+    at = await svc.session.scalar(select(ActionType).where(ActionType.code == run.action_type_code))
+    same = at is not None and bool(run.type_version) and at.version == run.type_version
     return {
         "ok": True,
         "status": detail.status,
@@ -324,6 +332,9 @@ def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict:
         "policyMode": getattr(svc, "policy_mode", None),
         "overflowReason": getattr(svc, "policy_overflow", None),
         "typeVersion": run.type_version,
+        "checks": {"passed": True, "checked": len(at.conds)} if same else None,
+        "edits": [{"op": e.op.value, "obj": e.obj, "field": e.field} for e in at.edits] if same else None,
+        "retryable": detail.can.resubmit,
     }
 
 
@@ -359,7 +370,7 @@ async def machine_execute(
         run = await svc.apply_policy(run)
     else:
         response.status_code = status.HTTP_200_OK
-    return _machine_out(run, await svc.detail(run), svc)
+    return await _machine_out(run, await svc.detail(run), svc)
 
 
 @router.get(
@@ -371,7 +382,7 @@ async def machine_action_run(
     code: DynamicPathCode, svc: Annotated[ActionService, Depends(_action_list)]
 ) -> dict:
     run = await svc.get(code)
-    return _machine_out(run, await svc.detail(run), svc)
+    return await _machine_out(run, await svc.detail(run), svc)
 
 
 @router.post("/actions/{code}:validate", dependencies=ACTIONS_MANAGE)
