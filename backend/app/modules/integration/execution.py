@@ -62,7 +62,10 @@ async def preflight(session, user, run):
 
 
 def submit_adapter(system, definition):
-    adapter = get_adapter(system, "submit")
+    try:
+        adapter = get_adapter(system, "submit")
+    except AppError as error:
+        raise AppError("外部动作执行通道未配置或不可用", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503) from error
     if definition["id"] not in adapter.config.actions:
         raise AppError("动作不在此外部系统的执行授权白名单", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
     # The external system must explicitly implement our stable header contract.

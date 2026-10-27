@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import pytest
 from sqlalchemy import func, select
@@ -7,7 +8,15 @@ from app.common.auth import resolve_user
 from app.core import clock
 from app.modules.action.checker import DatabaseSubmissionChecker
 from app.modules.action.condition_expr import Unavailable, evaluate
-from app.modules.action.models import ActionParam, ActionType, CriterionKind, SubmissionCriterion, TypeStatus
+from app.modules.action.models import (
+    ActionParam,
+    ActionType,
+    CriterionKind,
+    EditOp,
+    OntologyEditRule,
+    SubmissionCriterion,
+    TypeStatus,
+)
 from app.modules.admin.models import SysRole, SysRoleScope
 from app.modules.biz.models import Store, StoreStatus
 from app.modules.dynamic.models import ActionRun, Alert, AlertLevel, AlertStatus
@@ -16,7 +25,7 @@ from app.modules.static.models import ConflictStrategy, Lifecycle, ObjectType, P
 from app.modules.static.schemas import CRCreateIn, ItemIn, ItemsPutIn, TargetIn
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import VersioningService
-from tests.function_access_support import grant_fixture_roles
+from tests.use_ops_support import grant_ops_roles as grant_fixture_roles
 
 B = "/api/ontology/v1"
 
@@ -173,6 +182,33 @@ async def test_action_shared_checker_json_port_and_bad_inputs(checked, client):
     ).status_code == 422
     assert await session.scalar(select(func.count()).select_from(ActionRun)) == 0
     # The default dynamic port is the same real checker; failed criteria cannot create a run.
+    action.edits = [
+        OntologyEditRule(
+            seq=0, op=EditOp.modify, obj="store", field='{"values":{"status":{"value":"营业中"}}}'
+        )
+    ]
+    role = await session.scalar(select(SysRole).where(SysRole.code == "R-01"))
+    rows = [dict(row) for row in role.objs]
+    entry = next((row for row in rows if row.get("api") == "Store"), None)
+    if entry is None:
+        entry = {"api": "Store", "objType": "门店", "view": True, "actions": []}
+        rows.append(entry)
+    entry["actions"] = [*entry.get("actions", []), action.code]
+    role.objs = rows
+    session.add(
+        Store(
+            code="S-test",
+            store_no="S-test",
+            name="测试对象",
+            city="测试",
+            region="华东一区",
+            big_region="华东",
+            format="测试",
+            opened_at=date(2026, 1, 1),
+            status=StoreStatus.open,
+        )
+    )
+    await session.flush()
     response = await client.post(
         f"{B}/action-runs:stage",
         json={
@@ -182,6 +218,7 @@ async def test_action_shared_checker_json_port_and_bad_inputs(checked, client):
             "objId": "S-test",
             "objLabel": "测试对象",
             "params": '{"qty":30}',
+            "idempotencyKey": "checker-invalid-params",
         },
     )
     assert response.status_code == 422 and response.json()["code"] == "SUBMISSION_CRITERIA_FAILED"

@@ -12,7 +12,7 @@ from app.modules.integration.models import WritebackCall
 from app.modules.versioning.sections import load_sections
 from app.seeds.loader import run_seeds
 from app.seeds.registry import SEED_MODULES
-from tests.function_access_support import grant_fixture_roles
+from tests.use_ops_support import grant_ops_roles as grant_fixture_roles
 
 DATA = "/api/data/v1"
 ADMIN = {"X-Demo-As": "U010001"}

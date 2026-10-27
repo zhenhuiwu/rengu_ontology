@@ -1,30 +1,34 @@
 """动作日编号的短事务预留，以及纯日志追加的父行锁。"""
 
 import asyncio
+from uuid import uuid4
 
 import pytest
-from alembic import command
-from sqlalchemy import select, text
+from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core import clock
 from app.modules.dynamic.models import ActionRun, ActionRunDailyCounter, ActionStatus, SourceType
 from app.modules.dynamic.repo import ActionRunRepo
-from tests.helpers.migrations import temp_database
+from app.modules.ontology.models import OntologyWorkspace
 
 DAY = "21000101"
+NUMBER_SCOPE = None
 
 
 @pytest.fixture
-async def number_engine():
-    # 纯日志需要真实提交；只追加记录不能清理，整库隔离后回收。
-    async with temp_database() as (cfg, _):
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        engine = create_async_engine(cfg.attributes["database_url"])
-        try:
-            yield engine
-        finally:
-            await engine.dispose()
+async def number_engine(engine):
+    # Real commits/logs stay inside this group's only test DB, in a fresh workspace per case.
+    # Never delete or truncate any baseline or append-only rows; independent workspace IDs avoid reuse.
+    assert engine.url.database == "rengu_test_use_ops_20261027"
+    global NUMBER_SCOPE
+    async with engine.begin() as connection:
+        NUMBER_SCOPE = await connection.scalar(
+            insert(OntologyWorkspace)
+            .values(code="ops-number-" + uuid4().hex, name="ops numbering test")
+            .returning(OntologyWorkspace.id)
+        )
+    yield engine
 
 
 def run(code, *, historical=False):
@@ -43,10 +47,10 @@ def run(code, *, historical=False):
 
 
 async def test_daily_number_history_business_rollback_and_allocator_failure(number_engine, monkeypatch):
-    async with AsyncSession(number_engine) as setup:
+    async with AsyncSession(number_engine, info={"ontology_id": NUMBER_SCOPE}) as setup:
         setup.add(run(f"ACT-{DAY}-0042", historical=True))
         await setup.commit()
-    async with AsyncSession(number_engine) as request:
+    async with AsyncSession(number_engine, info={"ontology_id": NUMBER_SCOPE}) as request:
         repo = ActionRunRepo(request)
         assert await repo.next_code(DAY) == f"ACT-{DAY}-0043"
         await request.rollback()
@@ -75,7 +79,10 @@ async def test_daily_number_history_business_rollback_and_allocator_failure(numb
 async def test_daily_allocator_works_when_request_pool_is_full(number_engine):
     limited = create_async_engine(number_engine.url, pool_size=2, max_overflow=0, pool_timeout=0.1)
     try:
-        async with AsyncSession(limited) as first, AsyncSession(limited) as second:
+        async with (
+            AsyncSession(limited, info={"ontology_id": NUMBER_SCOPE}) as first,
+            AsyncSession(limited, info={"ontology_id": NUMBER_SCOPE}) as second,
+        ):
             await first.scalar(text("SELECT 1"))
             await second.scalar(text("SELECT 1"))  # 请求池全部占满，不允许分配器再借主池连接。
             codes = await asyncio.wait_for(
@@ -91,7 +98,7 @@ async def test_daily_allocator_works_when_request_pool_is_full(number_engine):
             await first.flush()
             await second.flush()
             # 两个业务事务仍未结束（可正在等待外调），当天和次日仍可发号。
-            async with AsyncSession(number_engine) as third:
+            async with AsyncSession(number_engine, info={"ontology_id": NUMBER_SCOPE}) as third:
                 assert await ActionRunRepo(third).next_code(DAY) == f"ACT-{DAY}-0003"
                 assert await ActionRunRepo(third).next_code("21000102") == "ACT-21000102-0001"
     finally:
@@ -99,13 +106,13 @@ async def test_daily_allocator_works_when_request_pool_is_full(number_engine):
 
 
 async def test_pure_action_logs_lock_parent_and_leave_other_runs_free(number_engine):
-    async with AsyncSession(number_engine) as setup:
+    async with AsyncSession(number_engine, info={"ontology_id": NUMBER_SCOPE}) as setup:
         setup.add_all([run(f"ACT-{DAY}-0001"), run(f"ACT-{DAY}-0002")])
         await setup.commit()
     async with (
-        AsyncSession(number_engine, expire_on_commit=False) as first,
-        AsyncSession(number_engine, expire_on_commit=False) as second,
-        AsyncSession(number_engine) as other,
+        AsyncSession(number_engine, expire_on_commit=False, info={"ontology_id": NUMBER_SCOPE}) as first,
+        AsyncSession(number_engine, expire_on_commit=False, info={"ontology_id": NUMBER_SCOPE}) as second,
+        AsyncSession(number_engine, info={"ontology_id": NUMBER_SCOPE}) as other,
     ):
         a = await first.scalar(select(ActionRun).where(ActionRun.code == f"ACT-{DAY}-0001"))
         b = await second.get(ActionRun, a.id)

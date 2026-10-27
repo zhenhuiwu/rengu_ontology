@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 import app.main  # noqa: F401  收集阶段就建好 app：create_app 的 load_sections 先登记真实 section，免得在 sections 替身之后才 import 撞名
 from app.contracts.actions import SubmitResult, SubmitStatus
 from app.modules.admin.models import SysUser
 from app.modules.dynamic import ports
-from tests.function_access_support import grant_fixture_roles
+from tests.use_ops_support import grant_ops_roles as grant_fixture_roles
 
 API = "/api/ontology/v1"
 
@@ -29,12 +29,15 @@ async def dyn(session, engine, _isolated_sections):
     await session.commit()  # 释放 savepoint：之后接口出错回滚也不会把种子一起回滚
     # 发号有独立提交；技术计数器单独清理，保持既有种子编号断言可重复。
     async with engine.begin() as connection:
-        await connection.execute(delete(ActionRunDailyCounter))
+        assert connection.engine.url.database == "rengu_test_use_ops_20261027"
+        await connection.execute(text("SELECT set_config('rengu.ontology_id','1',true)"))
+        await connection.execute(delete(ActionRunDailyCounter).where(ActionRunDailyCounter.ontology_id == 1))
     try:
         yield session
     finally:
         async with engine.begin() as connection:
-            await connection.execute(delete(ActionRunDailyCounter))
+            await connection.execute(text("SELECT set_config('rengu.ontology_id','1',true)"))
+            await connection.execute(delete(ActionRunDailyCounter).where(ActionRunDailyCounter.ontology_id == 1))
 
 
 async def as_(session, name: str) -> dict[str, str]:

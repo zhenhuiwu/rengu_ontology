@@ -79,6 +79,12 @@ const fail = (e: unknown) => { if ((e as Error)?.name !== 'DynamicContextChanged
 const actionNames = computed<string[]>(() => (live.value ? remote.meta?.actionNames ?? [] : ACTION_NAMES));
 const actionSystems = computed<{ id: string; name: string }[]>(() => (live.value ? remote.meta?.actionSystems ?? [] : ACTION_SYSTEMS));
 const callOf = (name: string, typeId?: string) => (live.value ? remote.meta?.actionMeta[typeId || name]?.call ?? '--' : ACTION_META[name as keyof typeof ACTION_META]?.call ?? '--');
+const systemText = (a: ActionRecord) => a.system || a.sysId || '—';
+const executionImpact = (a: ActionRecord) => {
+  const meta = remote.meta?.actionMeta[a.typeId || a.action];
+  const approval = meta?.version === a.typeVersion && meta.approvalRequired === false ? '按已发布配置免审处理。' : '按绑定的审批配置处理。';
+  return `${approval}执行前会重新校验权限、参数和版本，结果以动作记录为准。${a.sysId ? '涉及外部系统的写入需等待执行结果，结果未知时按幂等键对账，不自动重发写入。' : ''}`;
+};
 
 const rows = computed(() => {
   if (live.value) return remote.items;
@@ -197,11 +203,11 @@ async function submit() {
       { label: '来源', value: a.source.type === '告警' ? `${a.source.alertId}（${a.source.ruleId} ${a.source.ruleVersion}）` : sourceText(a) },
       { label: '确认人', value: confirmerOf(a) },
       { label: '审批人', value: a.approver },
-      { label: '外部系统', value: `${a.system} · ${callOf(a.action, a.typeId)}` },
+      { label: '外部系统', value: systemText(a) },
       { label: '幂等键', value: a.idemKey },
     ],
     blocked: notMine(a) ? notMineText(a) : undefined,
-    impact: `确认后进入审批，审批通过后写回 ${a.system}；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时人工对账，不自动重试写入。`,
+    impact: executionImpact(a),
   });
   if (!ok || ctx !== dynamicContextKey()) return;
   pinned.value = a.id;
@@ -245,10 +251,10 @@ async function resubmit() {
     fields: [
       { label: '上次失败', value: a.failReason ?? '--' },
       { label: '参数', value: a.params },
-      { label: '外部系统', value: `${a.system} · ${callOf(a.action, a.typeId)}` },
+      { label: '外部系统', value: systemText(a) },
       { label: '新幂等键', value: newKey },
     ],
-    impact: `沿用原审批（${a.approver}），生成新动作${newId ? ` ${newId}` : ''} 并用新幂等键调用 ${a.system}；原动作 ${a.id} 保留为失败，便于追溯。`,
+    impact: `生成新动作${newId ? ` ${newId}` : ''}和新幂等键，重新校验执行条件；原动作 ${a.id} 保留为失败，便于追溯。结果以新动作记录为准。`,
   });
   if (!ok || ctx !== dynamicContextKey()) return;
   if (REAL_API) {
@@ -313,6 +319,14 @@ watch([dynamicContextKey, selectedId], () => { reconOpen.value = false; withdraw
 
 const launchOpen = ref(false), launchLoading = ref(false), launchSaving = ref(false);
 const launchChecking = ref(false);
+const launchErrors = ref<string[]>([]);
+function launchFailure(error: unknown) {
+  if ((error as Error)?.name === 'DynamicContextChanged') return;
+  const details = isApiError(error) ? error.details as { failed?: { name?: string; fail?: string }[]; fields?: { field?: string; message?: string }[] } | null : null;
+  launchErrors.value = [...(details?.failed ?? []).map((row) => `${row.name || '参数'}：${row.fail || '未通过'}`), ...(details?.fields ?? []).map((row) => `${row.field || '参数'}：${row.message || '无效'}`)];
+  if (!launchErrors.value.length) launchErrors.value = [isApiError(error) ? error.message : String(error)];
+  fail(error);
+}
 const launchOptions = ref<LaunchAction[]>([]);
 const launchType = ref<string>(), launchObject = ref<string>();
 const launchParams = ref('{}');
@@ -323,7 +337,7 @@ const targetLoading = ref(false);
 const launchAction = computed(() => launchOptions.value.find((a) => a.id === launchType.value));
 async function openLaunch() {
   const ctx = dynamicContextKey();
-  launchOpen.value = true; launchLoading.value = true; launchOptions.value = []; launchType.value = undefined; launchObject.value = undefined; launchParams.value = '{}'; launchKey.value = crypto.randomUUID();
+  launchOpen.value = true; launchLoading.value = true; launchErrors.value = []; launchOptions.value = []; launchType.value = undefined; launchObject.value = undefined; launchParams.value = '{}'; launchKey.value = crypto.randomUUID();
   targetKw.value = ''; targetPage.value = 1;
   try { const rows = await listLaunchActions(); if (ctx === dynamicContextKey() && launchOpen.value) launchOptions.value = rows; }
   catch (e) { if (ctx === dynamicContextKey()) fail(e); }
@@ -341,29 +355,30 @@ watch([launchType, targetKw, targetPage], async () => {
 });
 watch([launchType, targetKw], () => { targetPage.value = 1; launchObject.value = undefined; });
 watch(launchType, () => { launchParams.value = '{}'; launchKey.value = crypto.randomUUID(); });
+watch([launchType, launchObject, launchParams, dynamicContextKey], () => { launchErrors.value = []; });
 watch(dynamicContextKey, () => { ++targetSeq; launchOpen.value = false; launchOptions.value = []; targetOptions.value = []; launchType.value = undefined; launchObject.value = undefined; }, { flush: 'sync' });
 async function launch() {
   if (launchSaving.value || readonly.value || !launchAction.value?.available || !launchObject.value) return;
   let params: Record<string, unknown>;
   try { const value: unknown = JSON.parse(launchParams.value); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); params = value as Record<string, unknown>; }
-  catch { message.error('参数须为 JSON 对象'); return; }
+  catch { launchErrors.value = ['参数须为 JSON 对象']; return; }
   launchSaving.value = true;
   try {
     const d = await stageActionRun({ typeId: launchType.value, objKind: launchAction.value.kind, objId: launchObject.value, objLabel: launchObject.value, params: JSON.stringify(params), source: { type: '手动' }, idempotencyKey: launchKey.value });
     launchOpen.value = false; await afterWrite(d);
     await router.replace({ query: { ...route.query, tab: undefined, act: d.id, page: undefined } });
     message.success(`已暂存 ${d.id}，等待确认提交`);
-  } catch (e) { fail(e); }
+  } catch (e) { launchFailure(e); }
   finally { launchSaving.value = false; }
 }
 async function checkLaunch() {
   if (launchChecking.value || readonly.value || !launchAction.value?.available || !launchObject.value) return;
   let params: Record<string, unknown>;
   try { const value: unknown = JSON.parse(launchParams.value); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); params = value as Record<string, unknown>; }
-  catch { message.error('参数须为 JSON 对象'); return; }
+  catch { launchErrors.value = ['参数须为 JSON 对象']; return; }
   launchChecking.value = true;
   try { const result = await validateActionLaunch(launchAction.value.id, { objKind: launchAction.value.kind, objId: launchObject.value, params }); message.success(result.message); }
-  catch (e) { fail(e); }
+  catch (e) { launchFailure(e); }
   finally { launchChecking.value = false; }
 }
 
@@ -439,7 +454,7 @@ const terminalText = computed(() => {
           <a-descriptions-item label="确认人">{{ confirmerOf(current) }}</a-descriptions-item>
           <a-descriptions-item label="审批人" :span="2">{{ current.approver }}</a-descriptions-item>
           <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
-          <a-descriptions-item label="外部系统"><span class="ac-nowrap">{{ current.system }}</span></a-descriptions-item>
+          <a-descriptions-item label="外部系统"><span class="ac-nowrap">{{ systemText(current) }}</span></a-descriptions-item>
           <a-descriptions-item label="外部单号"><span class="num ac-nowrap">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
         </a-descriptions>
 
@@ -546,6 +561,7 @@ const terminalText = computed(() => {
           <a-descriptions-item v-for="p in launchAction.params" :key="p.api" :label="`${p.name} (${p.api})`">{{ p.type }}{{ p.required ? ' · 必填' : '' }}<span v-if="p.rule"> · {{ p.rule }}</span></a-descriptions-item>
         </a-descriptions>
         <a-form-item v-if="launchAction" label="参数 JSON"><a-textarea v-model:value="launchParams" :rows="8" spellcheck="false" /></a-form-item>
+        <a-alert v-if="launchErrors.length" type="error" show-icon style="margin-bottom: 12px"><template #message><div v-for="(error, index) in launchErrors" :key="index">{{ error }}</div></template></a-alert>
         <a-button v-if="launchAction" :loading="launchChecking" :disabled="readonly || !launchObject || launchSaving" @click="checkLaunch">校验参数与条件</a-button>
       </a-form>
     </a-modal>

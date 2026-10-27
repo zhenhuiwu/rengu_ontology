@@ -308,7 +308,7 @@ async function runAction() {
       { label: '审批人', value: approverOf(r) ?? '--' },
       { label: '幂等键', value: `act-${a.id.toLowerCase()}` },
     ],
-    impact: '提交后写回外部系统；外部系统超时会标记为“结果未知”，系统每 15 分钟按幂等键自动查询，仍无法确认时在动作中心人工对账，不自动重试写入。',
+    impact: '按绑定的审批配置处理，执行前重新校验权限、参数和动作版本。执行结果以关联动作记录为准；涉及外部系统且结果未知时按幂等键对账，不自动重发写入。',
   });
   if (!ok || ctx !== dynamicContextKey()) return;
   pinned.value = a.id;

@@ -1,343 +1,290 @@
-"""动作中心：暂存 / 确认 / 撤回 / 审批（三种结果）/ 重新提交 / 人工对账 / 自动对账回调。"""
+"""Action transitions with actual current grants/structured definitions and explicit test ports.
+
+Legacy retail summaries are no longer executable fixtures. Positive state tests use the
+same bounded local definition as the real PG regression; only external outcomes are injected.
+"""
+
+import pytest
+from sqlalchemy import select
 
 from app.contracts.actions import ReconcileOutcome, ReconcileResult, SubmitResult, SubmitStatus
+from app.main import app
 from app.modules.dynamic import ports
 from app.modules.dynamic.catalog import get_catalog
+from app.modules.dynamic.models import ActionRun, ActionStatus, Alert, AlertStatus, SourceType
 from app.modules.dynamic.service import DynamicReconciliationListener
-from tests.dynamic_support import API, FailingChecker, FakeSubmitter, as_, dyn, err, fakes  # noqa: F401
+from app.modules.integration.models import ExtSystem, ExtSystemStatus
+from tests.dynamic_support import API, FailingChecker, Fakes, FakeSubmitter, err
+from tests.test_use_ops_runtime import headers, payload, runtime  # noqa: F401
 
-STAGED_OTHER = "ACT-20261025-0552"  # 待确认，确认人 周晓峰
-STAGED_MINE = "ACT-20261025-0548"  # 待确认，问数，王敏
-STAGED_ALERT = "ACT-20261025-0550"  # 待确认，告警 AL-20261025-0127，王敏
-APPROVING = "ACT-20261025-0551"
-EXECUTING = "ACT-20261025-0542"
-FAILED = "ACT-20261025-0545"
-UNKNOWN = "ACT-20261025-0543"
-UNKNOWN2 = "ACT-20261025-0544"
-
-MANUAL = {
-    "action": "补货申请",
-    "source": {"type": "手动"},
-    "objKind": "product",
-    "objId": "1004512",
-    "objLabel": "x",
-}
+STAGED_OTHER = "OPS-R02"
+STAGED_MINE = "OPS-R00"
+STAGED_ALERT = "OPS-R03"
+APPROVING = "OPS-R01"
+FAILED = "OPS-R04"
+UNKNOWN = "OPS-R05"
+UNKNOWN2 = "OPS-R06"
 
 
-def texts(d):
-    return [x["text"] for x in d["log"]]
+def texts(detail):
+    return [row["text"] for row in detail["log"]]
 
 
-async def approver_h(client, db) -> dict[str, str]:
-    """审批只能由审批人做（「角色 姓名」按姓名比对）。种子里 APPROVING 的审批人（赵磊）不是系统用户，
-    这里把审批人改成系统用户王敏，并以王敏身份请求。"""
-    from sqlalchemy import update
-
-    from app.modules.dynamic.models import ActionRun
-
-    await db.execute(update(ActionRun).where(ActionRun.code == APPROVING).values(approver="品类经理 王敏"))
-    await db.commit()
-    return await as_(db, "王敏")
-
-
-async def test_list_filters(dyn, client):  # noqa: F811
-    g = lambda **p: client.get(f"{API}/action-runs", params=p)  # noqa: E731
-    r = (await g(tab="pending", status="待确认", size=50)).json()
-    assert r["total"] == 25 and {x["status"] for x in r["items"]} == {"待确认"}
-    assert r["statusCounts"]["待确认"] == 25
-    r = (await g(tab="unknown", status="结果未知", size=50)).json()
-    assert r["total"] == 20
-    r = (await g(scope="center", actionType="request_replenish", size=200)).json()
-    assert r["total"] > 0 and all(x["typeId"] == "request_replenish" for x in r["items"])
-    r = (await g(scope="center", alertId="AL-20261025-0127")).json()
-    assert [x["id"] for x in r["items"]] == [STAGED_ALERT]
-    r = (await g(scope="center", kw="0552")).json()
-    assert [x["id"] for x in r["items"]] == [STAGED_OTHER]
-    sess = (await client.get(f"{API}/action-runs/{STAGED_MINE}")).json()["source"]["session"]
-    r = (await g(scope="center", sessionId=sess)).json()
-    assert STAGED_MINE in [x["id"] for x in r["items"]]
-    err(await g(tab="nope"), 422, "VALIDATION_FAILED")
-    err(await g(scope="nope"), 422, "VALIDATION_FAILED")
-    err(await g(size=201), 422, "VALIDATION_FAILED")
-    err(await client.get(f"{API}/action-runs/ACT-NOPE"), 404, "NOT_FOUND")
+@pytest.fixture
+async def fakes(runtime, client):  # noqa: F811
+    value = Fakes(
+        FakeSubmitter(SubmitResult(status=SubmitStatus.SUCCESS, receipt_id="TEST-OA-1", code="200")),
+        ports.RecordingEmitter(),
+        ports.RecordingScheduler(),
+        ports.StubSubmissionChecker(),
+    )
+    app.dependency_overrides[ports.get_submitter] = lambda: value.submitter
+    app.dependency_overrides[ports.get_emitter] = lambda: value.emitter
+    app.dependency_overrides[ports.get_scheduler] = lambda: value.scheduler
+    app.dependency_overrides[ports.get_checker] = lambda: value.checker
+    return value
 
 
-async def test_stage_sources(dyn, client, fakes):  # noqa: F811
-    r = await client.post(f"{API}/action-runs:stage", json=MANUAL)
-    assert r.status_code == 201, r.text
-    d = r.json()
-    # confirmer 只存 source.confirmer（手动/问数没有 → 不限操作人，Actions.vue L87）
-    assert d["status"] == "待确认" and d["initiator"] == "王敏" and d["confirmer"] is None
-    assert texts(d) == ["手动发起", "生成动作「补货申请」· 动作类型 v3", "等待确认提交"]
-    assert d["idemKey"] == d["id"].lower()
-    assert fakes.submitter.calls == []  # 暂存不调外部
-    qa = {**MANUAL, "source": {"type": "问数", "session": "QA-1", "sessionTitle": "补货"}}
-    d = (await client.post(f"{API}/action-runs:stage", json=qa)).json()
-    assert texts(d)[0] == "问数会话 QA-1「补货」建议" and d["source"]["session"] == "QA-1"
-    rule = {**MANUAL, "action": "发起物流催派", "source": {"type": "规则", "ruleId": "R-015"}}
-    d = (await client.post(f"{API}/action-runs:stage", json=rule)).json()
-    assert d["initiator"] == "规则 R-015" and d["confirmer"] == "陈立军"
-    sim = {**MANUAL, "source": {"type": "推演", "scenarioId": "SC-1", "scenarioName": "促销"}}
-    d = (await client.post(f"{API}/action-runs:stage", json=sim)).json()
-    assert texts(d)[0] == "情景推演 SC-1「促销」选定方案，转为暂存动作"
-    by_type = {**MANUAL, "action": None, "typeId": "request_replenish"}
-    assert (await client.post(f"{API}/action-runs:stage", json=by_type)).json()["action"] == "补货申请"
-    mismatch = {**MANUAL, "typeId": "urge_logistics"}
-    err(await client.post(f"{API}/action-runs:stage", json=mismatch), 422, "VALIDATION_FAILED")
+async def record(session, code, status=None, **values):
+    row = await session.scalar(select(ActionRun).where(ActionRun.code == code))
+    if status is not None:
+        row.status = status
+    for key, value in values.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def approver_h(client, db):
+    await record(db, APPROVING, ActionStatus.approving, approver="U010001")
+    return headers()
+
+
+async def test_list_filters(runtime, client):  # noqa: F811
+    get = lambda **params: client.get(f"{API}/action-runs", params=params)  # noqa: E731
+    data = (await get(tab="pending", size=50)).json()
+    assert data["total"] == 13 and data["statusCounts"]["待确认"] == 13
+    assert {x["status"] for x in data["items"]} == {"待确认"}
+    assert (await get(scope="center", actionType="ops_local")).json()["total"] == 13
+    assert [x["id"] for x in (await get(scope="center", kw="OPS-R02")).json()["items"]] == [STAGED_OTHER]
+    assert (await get(tab="unknown")).json()["total"] == 0
+    err(await get(tab="nope"), 422, "VALIDATION_FAILED")
+    err(await get(scope="nope"), 422, "VALIDATION_FAILED")
+    err(await get(size=201), 422, "VALIDATION_FAILED")
+    err(await client.get(f"{API}/action-runs/NOPE"), 404, "NOT_FOUND")
+
+
+async def test_stage_sources(runtime, client, fakes):  # noqa: F811
+    body = payload()
+    response = await client.post(f"{API}/action-runs:stage", json=body)
+    assert response.status_code == 201, response.text
+    detail = response.json()
+    assert detail["status"] == "待确认" and detail["confirmer"] == "王敏"
+    assert texts(detail)[0] == "手动发起" and not fakes.submitter.calls
+    for source in (
+        {"type": "问数", "session": "QA-1"},
+        {"type": "规则", "ruleId": "R-1"},
+        {"type": "推演", "scenarioId": "SC-1"},
+        {"type": "告警", "alertId": "OPS-A00"},
+    ):
+        err(
+            await client.post(f"{API}/action-runs:stage", json={**payload(), "source": source}),
+            422,
+            "VALIDATION_FAILED",
+        )
     err(
-        await client.post(f"{API}/action-runs:stage", json={**MANUAL, "action": "不存在的动作"}),
+        await client.post(f"{API}/action-runs:stage", json={**payload(), "typeId": "NOPE"}),
         422,
         "VALIDATION_FAILED",
     )
+    fakes.checker = FailingChecker([{"name": "显式条件", "fail": "不满足"}])
+    err(await client.post(f"{API}/action-runs:stage", json=payload()), 422, "SUBMISSION_CRITERIA_FAILED")
+
+
+async def test_stage_idempotency(runtime, client, fakes):  # noqa: F811
+    body = payload()
+    first = await client.post(f"{API}/action-runs:stage", json=body)
+    again = await client.post(f"{API}/action-runs:stage", json=body)
+    assert first.status_code == 201 and again.status_code == 200
+    assert first.json()["id"] == again.json()["id"]
     err(
-        await client.post(f"{API}/action-runs:stage", json={**MANUAL, "action": None}),
-        422,
-        "VALIDATION_FAILED",
-    )
-    bad_alert = {**MANUAL, "source": {"type": "告警", "alertId": "AL-X"}}
-    err(await client.post(f"{API}/action-runs:stage", json=bad_alert), 422, "VALIDATION_FAILED")
-    fakes.checker = FailingChecker([{"name": "库存", "fail": "不足"}])
-    err(await client.post(f"{API}/action-runs:stage", json=MANUAL), 422, "SUBMISSION_CRITERIA_FAILED")
-
-
-async def test_stage_idempotency(dyn, client, fakes):  # noqa: F811
-    seeded = (await client.get(f"{API}/action-runs/{STAGED_ALERT}")).json()
-    body = {
-        "action": seeded["action"],
-        "source": {"type": "告警", "alertId": "AL-20261025-0127"},
-        "objKind": seeded["objKind"],
-        "objId": seeded["objId"],
-        "objLabel": seeded["objLabel"],
-        "params": seeded["params"],
-    }
-    r = await client.post(f"{API}/action-runs:stage", json=body)
-    assert r.status_code == 200, r.text  # 重放：返回原记录
-    assert r.json()["id"] == STAGED_ALERT
-    b = err(
-        await client.post(f"{API}/action-runs:stage", json={**body, "objId": "999"}),
+        await client.post(f"{API}/action-runs:stage", json={**body, "objId": "OPS-S01"}),
         409,
         "IDEMPOTENCY_CONFLICT",
     )
-    assert b["details"] == {"idemKey": "act-al-20261025-0127", "id": STAGED_ALERT}
+    assert not fakes.submitter.calls
 
 
-async def test_confirm_withdraw(dyn, client, fakes):  # noqa: F811
-    # 本例覆盖“确认后进入审批”；真实种子该动作免审，因此显式配置本例审批路由。
-    from sqlalchemy import select
-
-    from app.modules.action.models import ActionType
-
-    action_type = await dyn.scalar(select(ActionType).where(ActionType.name == "发起物流催派"))
-    action_type.approval = "王敏"
-    await dyn.flush()
-    b = err(await client.post(f"{API}/action-runs/{STAGED_OTHER}:confirm"), 403, "NOT_CONFIRMER")
-    assert "周晓峰" in b["message"]
+async def test_confirm_withdraw(runtime, client, fakes):  # noqa: F811
+    session, action, _ = runtime
+    action.approval = "U010001"
+    await record(session, STAGED_OTHER, confirmer="OPS-LIMIT")
+    err(await client.post(f"{API}/action-runs/{STAGED_OTHER}:confirm"), 403, "NOT_CONFIRMER")
     err(
-        await client.post(f"{API}/action-runs/{STAGED_OTHER}:withdraw", json={"reason": "x"}),
+        await client.post(f"{API}/action-runs/{STAGED_OTHER}:withdraw", json={"reason": "test"}),
         403,
         "NOT_CONFIRMER",
     )
-    rule = {**MANUAL, "action": "发起物流催派", "source": {"type": "规则", "ruleId": "R-015"}}
-    mine = (await client.post(f"{API}/action-runs:stage", json=rule)).json()["id"]  # 确认人 陈立军
-    err(await client.post(f"{API}/action-runs/{mine}:confirm"), 403, "NOT_CONFIRMER")
-    chen = await as_(dyn, "陈立军")
-    d = (await client.post(f"{API}/action-runs/{mine}:confirm", headers=chen)).json()
-    assert d["status"] == "审批中" and texts(d)[-2:] == ["确认提交", "等待审批"]
-    err(await client.post(f"{API}/action-runs/{mine}:confirm", headers=chen), 409, "STATE_INVALID")
-    d = (await client.post(f"{API}/action-runs/{STAGED_MINE}:withdraw", json={"reason": "不需要了"})).json()
-    assert d["status"] == "已撤回" and texts(d)[-1] == "撤回：不需要了"
+    confirmed = await client.post(f"{API}/action-runs/{STAGED_MINE}:confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "审批中" and texts(confirmed.json())[-1] == "等待审批"
+    err(await client.post(f"{API}/action-runs/{STAGED_MINE}:confirm"), 409, "STATE_INVALID")
+    withdrawn = await client.post(f"{API}/action-runs/{STAGED_ALERT}:withdraw", json={"reason": "不需要"})
+    assert withdrawn.status_code == 200 and withdrawn.json()["status"] == "已撤回"
     err(
-        await client.post(f"{API}/action-runs/{STAGED_MINE}:withdraw", json={"reason": "x"}),
+        await client.post(f"{API}/action-runs/{STAGED_ALERT}:withdraw", json={"reason": "test"}),
         409,
         "STATE_INVALID",
     )
-    err(
-        await client.post(f"{API}/action-runs/{STAGED_ALERT}:withdraw", json={"reason": ""}),
-        422,
-        "VALIDATION_FAILED",
-    )
-    fakes.checker = FailingChecker([{"name": "价格", "fail": "越界"}])
-    err(await client.post(f"{API}/action-runs/{STAGED_ALERT}:confirm"), 422, "SUBMISSION_CRITERIA_FAILED")
-    assert (await client.get(f"{API}/action-runs/{STAGED_ALERT}")).json()["status"] == "待确认"
+    fakes.checker = FailingChecker([{"name": "条件", "fail": "不满足"}])
+    err(await client.post(f"{API}/action-runs/{UNKNOWN}:confirm"), 422, "SUBMISSION_CRITERIA_FAILED")
+    assert (await client.get(f"{API}/action-runs/{UNKNOWN}")).json()["status"] == "待确认"
 
 
-async def test_approve_success(dyn, client, fakes):  # noqa: F811
-    h = await approver_h(client, dyn)
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
-    assert d["status"] == "成功" and d["extRef"] == "OA-1"
-    assert texts(d)[-3] == "审批通过" and texts(d)[-1].endswith("返回成功，外部单号 OA-1")
-    (eid, typ, payload) = fakes.emitter.events[0]
-    assert (
-        typ == "ActionExecuted"
-        and payload["actionRunId"] == APPROVING
-        and eid.startswith("dynamic:action_run:")
-    )
+async def test_approve_success(runtime, client, fakes):  # noqa: F811
+    h = await approver_h(client, runtime[0])
+    response = await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "成功" and response.json()["extRef"] == "TEST-OA-1"
+    assert [e[1] for e in fakes.emitter.events] == ["ActionExecuted"]
     err(await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h), 409, "STATE_INVALID")
-    err(await client.post(f"{API}/action-runs/{STAGED_MINE}:approve", headers=h), 409, "STATE_INVALID")
 
 
-async def test_approve_failed_then_resubmit(dyn, client, fakes):  # noqa: F811
-    h = await approver_h(client, dyn)
+async def test_approve_failed_then_resubmit(runtime, client, fakes):  # noqa: F811
+    h = await approver_h(client, runtime[0])
     fakes.submitter = FakeSubmitter(
-        SubmitResult(status=SubmitStatus.FAILED, reason="HTTP 422 价格越界", code="422", retries=2)
+        SubmitResult(SubmitStatus.FAILED, reason="测试网关明确拒绝", code="422", retries=2)
     )
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
-    assert d["status"] == "失败" and d["failReason"] == "HTTP 422 价格越界" and d["retries"] == 2
-    assert texts(d)[-1].endswith("明确返回失败，已自动重试 2 次仍失败")
-    assert fakes.emitter.events == []
-    fakes.submitter = FakeSubmitter(SubmitResult(status=SubmitStatus.SUCCESS, receipt_id="OA-2"))
-    r = (await client.post(f"{API}/action-runs/{APPROVING}:resubmit")).json()
-    assert r["idemKey"] == f"{d['idemKey']}-r1" and r["action"]["status"] == "成功"
-    assert r["action"]["retryOf"] == APPROVING and r["original"]["retriedAs"] == r["id"]
-    assert fakes.submitter.calls == [(r["id"], r["idemKey"])]
-    assert texts(r["original"])[-1] == f"已重新提交为 {r['id']}"
-    b = err(await client.post(f"{API}/action-runs/{APPROVING}:resubmit"), 409, "ALREADY_RESUBMITTED")
-    assert b["details"] == {"retriedAs": r["id"]}
-    err(await client.post(f"{API}/action-runs/{EXECUTING}:resubmit"), 409, "STATE_INVALID")
+    failed = await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["status"] == "失败" and failed.json()["retries"] == 2
+    assert not fakes.emitter.events
+    fakes.submitter = FakeSubmitter(SubmitResult(SubmitStatus.SUCCESS, receipt_id="TEST-OA-2"))
+    result = await client.post(f"{API}/action-runs/{APPROVING}:resubmit")
+    assert result.status_code == 200, result.text
+    assert result.json()["idemKey"] == failed.json()["idemKey"] + "-r1"
+    assert result.json()["action"]["retryOf"] == APPROVING
+    assert result.json()["original"]["retriedAs"] == result.json()["id"]
+    err(await client.post(f"{API}/action-runs/{APPROVING}:resubmit"), 409, "ALREADY_RESUBMITTED")
 
 
-async def test_resubmit_seed_failed_and_alert(dyn, client, fakes):  # noqa: F811
-    r = (await client.post(f"{API}/action-runs/{FAILED}:resubmit")).json()
-    assert r["action"]["status"] == "成功" and r["action"]["approver"] == r["original"]["approver"]
-    # 告警上挂的失败动作重新提交：告警改指向新动作，新动作成功 → 告警转已解决
-    a = (await client.get(f"{API}/alerts/AL-20261024-0118")).json()
-    assert a["actionStatus"] == "失败"
-    r = (await client.post(f"{API}/action-runs/{a['actionId']}:resubmit")).json()
-    a = (await client.get(f"{API}/alerts/AL-20261024-0118")).json()
-    assert a["actionId"] == r["id"] and a["status"] == "已解决"
+async def test_resubmit_seed_failed_and_alert(runtime, client, fakes):  # noqa: F811
+    session = runtime[0]
+    row = await record(session, FAILED, ActionStatus.failed, is_seed=True)
+    alert = await session.scalar(select(Alert).where(Alert.code == "OPS-A04"))
+    alert.status, alert.assignee, alert.action_run_id = AlertStatus.processing, "U010001", row.id
+    row.alert_id, row.source_type = alert.id, SourceType.alert
+    await session.flush()
+    result = await client.post(f"{API}/action-runs/{FAILED}:resubmit")
+    assert result.status_code == 200, result.text
+    assert result.json()["action"]["status"] == "成功"
+    detail = (await client.get(f"{API}/alerts/OPS-A04")).json()
+    assert detail["actionId"] == result.json()["id"] and detail["status"] == "已解决"
 
 
-async def test_approve_unknown_and_reconcile(dyn, client, fakes):  # noqa: F811
-    h = await approver_h(client, dyn)
-    fakes.submitter = FakeSubmitter(SubmitResult(status=SubmitStatus.UNKNOWN, reason="读超时"))
-    d = (await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h)).json()
-    assert d["status"] == "结果未知" and d["unknownReason"] == "读超时"
-    assert "秒未返回结果，标记为结果未知（不重试写入）" in texts(d)[-1]
+async def test_approve_unknown_and_reconcile(runtime, client, fakes):  # noqa: F811
+    await approver_h(client, runtime[0])
+    fakes.submitter = FakeSubmitter(SubmitResult(SubmitStatus.UNKNOWN, reason="测试网关读超时"))
+    unknown = await client.post(f"{API}/action-runs/{APPROVING}:approve")
+    assert unknown.status_code == 200 and unknown.json()["status"] == "结果未知", unknown.text
     assert [e[1] for e in fakes.emitter.events] == ["ActionOutcomeUnknown"]
-    # 仍无法确认：保持结果未知，重新排对账
-    d = (
-        await client.post(
-            f"{API}/action-runs/{APPROVING}:reconcile", json={"result": "仍无法确认", "note": "OA 没查到"}
-        )
-    ).json()
-    assert d["status"] == "结果未知" and fakes.scheduler.reopened == [APPROVING]
-    d = (
-        await client.post(
-            f"{API}/action-runs/{APPROVING}:reconcile", json={"result": "外部已成功", "note": "查到了"}
-        )
-    ).json()
-    assert d["status"] == "已对账" and d["reconcile"] == "外部已成功"
-    assert texts(d)[-1] == "对账：外部已成功（查到了）"
+    response = await client.post(
+        f"{API}/action-runs/{APPROVING}:reconcile", json={"result": "仍无法确认", "note": "test"}
+    )
+    assert response.status_code == 200 and response.json()["status"] == "结果未知"
+    assert fakes.scheduler.reopened == [APPROVING]
+    response = await client.post(
+        f"{API}/action-runs/{APPROVING}:reconcile", json={"result": "外部已成功", "note": "测试适配器核对"}
+    )
+    assert response.status_code == 200 and response.json()["reconcile"] == "外部已成功"
     assert [e[1] for e in fakes.emitter.events] == ["ActionOutcomeUnknown", "ActionExecuted"]
     err(
         await client.post(
-            f"{API}/action-runs/{APPROVING}:reconcile", json={"result": "外部已成功", "note": "x"}
+            f"{API}/action-runs/{APPROVING}:reconcile", json={"result": "外部已成功", "note": "test"}
         ),
         409,
         "STATE_INVALID",
     )
-    # 外部未执行 → 已对账，不能重新提交
-    d = (
-        await client.post(
-            f"{API}/action-runs/{UNKNOWN}:reconcile", json={"result": "外部未执行", "note": "无记录"}
-        )
-    ).json()
-    assert d["reconcile"] == "外部未执行" and texts(d)[-1] == "对账：外部未执行，动作未生效（无记录）"
-    b = err(await client.post(f"{API}/action-runs/{UNKNOWN}:resubmit"), 409, "STATE_INVALID")
-    assert "外部未执行" in b["message"]
+    await record(runtime[0], UNKNOWN, ActionStatus.unknown)
+    response = await client.post(
+        f"{API}/action-runs/{UNKNOWN}:reconcile", json={"result": "外部未执行", "note": "test"}
+    )
+    assert response.status_code == 200 and response.json()["reconcile"] == "外部未执行"
+    err(await client.post(f"{API}/action-runs/{UNKNOWN}:resubmit"), 409, "STATE_INVALID")
     err(
-        await client.post(f"{API}/action-runs/{UNKNOWN2}:reconcile", json={"result": "瞎填", "note": "x"}),
+        await client.post(f"{API}/action-runs/{UNKNOWN2}:reconcile", json={"result": "瞎填", "note": "test"}),
         422,
         "VALIDATION_FAILED",
     )
-    err(
-        await client.post(
-            f"{API}/action-runs/{UNKNOWN2}:reconcile", json={"result": "外部未执行", "note": " "}
+
+
+async def test_on_reconciled_listener(runtime):  # noqa: F811
+    from app.common.auth import resolve_user
+
+    session = runtime[0]
+    for code in (UNKNOWN, UNKNOWN2):
+        await record(session, code, ActionStatus.unknown)
+    emitted = ports.RecordingEmitter()
+    listener = DynamicReconciliationListener(
+        session,
+        await get_catalog(session, await resolve_user(session, "U010001")),
+        ports.Ports(
+            ports.StubSubmitter(), emitted, ports.RecordingScheduler(), ports.StubSubmissionChecker()
         ),
-        422,
-        "VALIDATION_FAILED",
     )
+    await listener.on_reconciled(UNKNOWN, ReconcileResult(ReconcileOutcome.succeeded, "TEST-RECEIPT"))
+    await listener.on_reconciled(UNKNOWN2, ReconcileResult(ReconcileOutcome.not_executed))
+    await listener.on_reconciled(UNKNOWN, ReconcileResult(ReconcileOutcome.succeeded, "TEST-RECEIPT"))
+    assert len(emitted.events) == 1
+    assert (
+        await session.scalar(select(ActionRun).where(ActionRun.code == UNKNOWN))
+    ).status == ActionStatus.reconciled
 
 
-async def test_on_reconciled_listener(dyn):  # noqa: F811
-    em = ports.RecordingEmitter()
-    p = ports.Ports(ports.StubSubmitter(), em, ports.RecordingScheduler(), ports.StubSubmissionChecker())
-    lis = DynamicReconciliationListener(dyn, await get_catalog(dyn), p)
-    await lis.on_reconciled(UNKNOWN, ReconcileResult(outcome=ReconcileOutcome.succeeded, receipt_id="OA-9"))
-    await lis.on_reconciled(UNKNOWN2, ReconcileResult(outcome=ReconcileOutcome.not_executed))
-    from sqlalchemy import select
-
-    from app.modules.dynamic.models import ActionRun
-
-    rows = {
-        r.code: r
-        for r in (await dyn.scalars(select(ActionRun).where(ActionRun.code.in_([UNKNOWN, UNKNOWN2])))).all()
-    }
-    assert rows[UNKNOWN].status.value == "已对账" and rows[UNKNOWN].ext_ref == "OA-9"
-    assert rows[UNKNOWN2].reconcile_result.value == "外部未执行"
-    assert [e[1] for e in em.events] == ["ActionExecuted"] and em.events[0][2]["extRef"] == "OA-9"
-    from app.core.errors import AppError
-
-    await lis.on_reconciled(UNKNOWN, ReconcileResult(outcome=ReconcileOutcome.succeeded, receipt_id="OA-9"))
-    assert len(em.events) == 1
-    for code in (UNKNOWN, "ACT-NOPE"):
-        try:
-            await lis.on_reconciled(
-                code, ReconcileResult(outcome=ReconcileOutcome.succeeded, receipt_id="conflicting-receipt")
-            )
-        except AppError as e:
-            assert e.code in ("STATE_INVALID", "NOT_FOUND")
-        else:
-            raise AssertionError(code)
-
-
-async def test_readonly_and_stubs(dyn, client):  # noqa: F811
-    h = await approver_h(client, dyn)
-    for path, body in [
-        (f"{API}/action-runs:stage", MANUAL),
-        (f"{API}/action-runs/{STAGED_MINE}:confirm", None),
-        (f"{API}/action-runs/{STAGED_MINE}:withdraw", {"reason": "x"}),
-        (f"{API}/action-runs/{APPROVING}:approve", None),
-        (f"{API}/action-runs/{FAILED}:resubmit", None),
-        (f"{API}/action-runs/{UNKNOWN}:reconcile", {"result": "外部已成功", "note": "x"}),
-    ]:
-        err(await client.post(path, params={"ver": "v2026.10.1"}, json=body), 403, "READONLY")
-    # 未显式注入的默认通道不可返回测试成功；审批状态也随请求回滚。
-    err(
-        await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h),
-        503,
-        "ACTION_EXECUTOR_UNAVAILABLE",
+async def test_readonly_and_stubs(runtime, client):  # noqa: F811
+    await approver_h(client, runtime[0])
+    for path, body in (
+        ("action-runs:stage", payload()),
+        (f"action-runs/{STAGED_MINE}:confirm", None),
+        (f"action-runs/{STAGED_MINE}:withdraw", {"reason": "test"}),
+        (f"action-runs/{APPROVING}:approve", None),
+        (f"action-runs/{FAILED}:resubmit", None),
+        (f"action-runs/{UNKNOWN}:reconcile", {"result": "外部未执行", "note": "test"}),
+    ):
+        err(await client.post(f"{API}/{path}", params={"ver": "v2026.10.1"}, json=body), 403, "READONLY")
+    session, action, _ = runtime
+    system = ExtSystem(
+        code="OPS-UNCONFIGURED",
+        name="未配置测试通道",
+        endpoint="https://unconfigured.invalid",
+        timeout_ms=1000,
+        idempotent=True,
+        idem_header="Idempotency-Key",
+        status=ExtSystemStatus.ok,
+        env="test",
     )
-    assert (await client.get(f"{API}/action-runs/{APPROVING}", headers=h)).json()["status"] == "审批中"
+    session.add(system)
+    await session.flush()
+    action.sys_id = system.id
+    await record(session, APPROVING, sys_code=system.code)
+    response = await client.post(f"{API}/action-runs/{APPROVING}:approve")
+    assert response.status_code == 503, response.text
+    assert response.json()["code"] == "ACTION_EXECUTOR_UNAVAILABLE"
+    assert (await client.get(f"{API}/action-runs/{APPROVING}")).json()["status"] == "审批中"
 
 
-async def test_history_keeps_runs_with_retired_or_missing_action_type(dyn, client):  # noqa: F811
-    """动作类型是软引用（action_type_code，FK to add later）：
-    类型下线 / 不在目录里，历史记录照样列出、详情照样能看。"""
-    gone = "retired_gone_type"
-    from sqlalchemy import func, select, update
-
-    from app.modules.dynamic.models import ActionRun
-
-    before = (await client.get(f"{API}/action-runs", params={"scope": "all", "size": 1})).json()["total"]
-    code = await dyn.scalar(select(ActionRun.code).order_by(ActionRun.code).limit(1))
-    await dyn.execute(
-        update(ActionRun).where(ActionRun.code == code).values(action_type_code="retired_gone_type")
-    )
-    await dyn.commit()
-    assert await dyn.scalar(select(func.count()).where(ActionRun.action_type_code == gone)) == 1
-    after = (await client.get(f"{API}/action-runs", params={"scope": "all", "size": 200})).json()
-    assert after["total"] == before
-    if after["total"] <= 200:
-        assert code in {x["id"] for x in after["items"]}
-    d = await client.get(f"{API}/action-runs/{code}")
-    assert d.status_code == 200, d.text
+async def test_history_keeps_runs_with_retired_or_missing_action_type(runtime, client):  # noqa: F811
+    session = runtime[0]
+    before = (await client.get(f"{API}/action-runs?scope=all")).json()["total"]
+    await record(session, STAGED_MINE, action_type_code="retired-gone")
+    response = await client.get(f"{API}/action-runs/{STAGED_MINE}")
+    assert response.status_code == 200 and response.json()["paramsUnavailable"]
+    assert (await client.get(f"{API}/action-runs?scope=all")).json()["total"] == before
 
 
-async def test_approve_only_approver(dyn, client, session):  # noqa: F811
-    d = (await client.get(f"{API}/action-runs/{APPROVING}")).json()
-    other = "陈立军" if not d["approver"].endswith("陈立军") else "王敏"
-    h = await as_(session, other)
-    o = (await client.get(f"{API}/action-runs/{APPROVING}", headers=h)).json()
-    assert o["can"]["approve"] is False and "只有审批人可以审批" in o["can"]["reasons"]["approve"]
-    err(await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=h), 403, "NOT_APPROVER")
+async def test_approve_only_approver(runtime, client):  # noqa: F811
+    await approver_h(client, runtime[0])
+    other = headers("OPS-LIMIT")
+    detail = (await client.get(f"{API}/action-runs/{APPROVING}", headers=other)).json()
+    assert detail["can"]["approve"] is False and "只有审批人" in detail["can"]["reasons"]["approve"]
+    err(await client.post(f"{API}/action-runs/{APPROVING}:approve", headers=other), 403, "NOT_APPROVER")

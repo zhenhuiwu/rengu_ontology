@@ -17,7 +17,11 @@ def _dynamic_routes() -> list[APIRoute]:
     from app.modules.dynamic.rules_router import router as rules_router  # include_router 后也是惰性挂载
 
     routes = [r for r in [*router.routes, *rules_router.routes] if isinstance(r, APIRoute)]
-    assert len(routes) == 19 + 28, [r.path for r in routes]  # 告警筛选目录 + 对象行为摘要和命中页也逐路由检查
+    # Inspect every current route, including new launch metadata/preflight, rather than an obsolete count.
+    assert {"/actions/available", "/actions/{code}/targets", "/actions/{code}:validate"} <= {
+        r.path for r in routes
+    }
+    assert len(routes) == len({(r.path, tuple(sorted(r.methods))) for r in routes})
     return routes
 
 

@@ -30,10 +30,13 @@ from app.modules.integration.reconcile import (
     lock_run,
     process,
 )
+from tests.test_use_ops_runtime import runtime  # noqa: F401
+from tests.use_ops_support import grant_ops_roles
 
 
 @pytest.fixture
 async def reconciliation(session):
+    await grant_ops_roles(session, {"U010001": "R-01"})
     system = ExtSystem(
         code="EXT-RECON-TEST",
         name="对账测试",
@@ -53,10 +56,12 @@ async def reconciliation(session):
     )
     session.add_all([system, action])
     await session.flush()
+    action.sys_id = system.id
     run = ActionRun(
         code="ACT-RECON-TEST",
         action_type_code=action.code,
         action_name=action.name,
+        type_version="v1",
         source_type=SourceType.manual,
         source_label="手动",
         initiator="测试",
@@ -66,6 +71,7 @@ async def reconciliation(session):
         submitted_at=clock.now(),
         obj_id="actual-target",
         obj_label="目标",
+        created_by="U010001",
     )
     event_type = EventType(
         code="action_executed",
@@ -250,22 +256,38 @@ async def test_http_adapter_requires_real_explicit_response(reconciliation, monk
         assert error.value.code == code and error.value.status_code == 503
 
 
-async def test_manual_resolution_closes_task_in_same_transaction(reconciliation):
-    from app.common.auth import CurrentUser
+async def test_manual_resolution_closes_task_in_same_transaction(runtime):  # noqa: F811
+    from app.common.auth import resolve_user
     from app.modules.dynamic.service import ActionService
 
-    session, _, run = reconciliation
+    session, action, _ = runtime
+    system = ExtSystem(
+        code="OPS-MANUAL",
+        name="人工对账测试",
+        timeout_ms=1000,
+        idempotent=True,
+        endpoint="https://manual.invalid",
+        status=ExtSystemStatus.ok,
+        env="测试",
+    )
+    session.add(system)
+    await session.flush()
+    action.sys_id = system.id
+    run = await session.scalar(select(ActionRun).where(ActionRun.code == "OPS-R00"))
+    run.status, run.sys_code = ActionStatus.unknown, system.code
+    await session.flush()
     task = await due(session, run)
     unavailable = UnconfiguredAdapters()
     scheduler = DatabaseReconcileScheduler(session)
+    actor = await resolve_user(session, "U010001")
     service = ActionService(
         session,
-        CurrentUser(id="test", name="核对人"),
+        actor,
         await get_list_catalog(session),
         Ports(unavailable, DatabaseEventEmitter(session), scheduler, unavailable),
     )
     await service.reconcile(run.code, "外部未执行", "真实人工核查")
-    assert task.state == ReconcileState.resolved and task.reconciler == "核对人"
+    assert task.state == ReconcileState.resolved and task.reconciler == actor.name
     query = Query()
     await process(session, run.code, await listener(session), lambda _: query)
     assert query.calls == [] and run.status == ActionStatus.reconciled

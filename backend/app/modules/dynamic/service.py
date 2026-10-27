@@ -9,7 +9,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import Select, case, func, literal, or_, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser, check_func, resolve_user
@@ -48,7 +48,7 @@ from app.modules.dynamic.models import (
 )
 from app.modules.dynamic.ports import Ports
 from app.modules.dynamic.repo import ActionRunRepo, AlertRepo
-from app.modules.dynamic.row_scope import scoped_instances
+from app.modules.dynamic.row_scope import scoped_instances, visible_references
 from app.modules.dynamic.schemas import (
     ActionCan,
     ActionLogOut,
@@ -169,10 +169,11 @@ class ActionService:
             self.session, ActionRun, [x for r in runs for x in (r.retry_of_id, r.retried_as_id)]
         )
         result = [self._out(r, alert_codes, run_codes) for r in runs]
-        from app.modules.dynamic.run_visibility import params_unavailable
+        from app.modules.dynamic.run_visibility import parameters_visibility
 
+        hidden = await parameters_visibility(self.session, self.user, runs)
         for row, out in zip(runs, result, strict=True):
-            out.params_unavailable = await params_unavailable(self.session, self.user, row)
+            out.params_unavailable = hidden.get(row.id)
             if out.params_unavailable:
                 out.params = out.summary = out.fail_reason = out.unknown_reason = out.reconcile = None
         if runs:
@@ -526,7 +527,8 @@ class ActionService:
             r.status = ActionStatus.succeeded
             r.ext_ref = res.receipt_id
             r.finished_at = now
-            seq = await self._log(r, f"{system} 返回成功，外部单号 {r.ext_ref}", SYSTEM)
+            text = f"{system} 返回成功，外部单号 {r.ext_ref}" if r.sys_code and r.ext_ref else "动作执行成功"
+            seq = await self._log(r, text, SYSTEM)
             await self._succeeded_side_effects(r, seq)
         elif res.status == SubmitStatus.FAILED:
             ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.failed)
@@ -534,7 +536,9 @@ class ActionService:
             r.fail_reason = res.reason
             r.finished_at = now
             tail = f"，已自动重试 {res.retries} 次仍失败" if res.retries else ""
-            await self._log(r, f"{system} 明确返回失败{tail}", res.reason, TimelineStatus.error)
+            await self._log(
+                r, f"{system or '动作执行器'} 明确返回失败{tail}", res.reason, TimelineStatus.error
+            )
         else:
             ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.unknown)
             r.status = ActionStatus.unknown
@@ -544,7 +548,9 @@ class ActionService:
                 r,
                 "已持久排队，等待执行器调用外部系统"
                 if res.code == "QUEUED"
-                else f"{system} {sec} 秒未返回结果，标记为结果未知（不重试写入）",
+                else f"{system} {sec} 秒未返回结果，标记为结果未知（不重试写入）"
+                if r.sys_code
+                else "动作执行结果暂无法确认，不自动重发",
                 f"系统 · {res.reason}" if res.reason else SYSTEM,
                 TimelineStatus.warn,
             )
@@ -616,7 +622,8 @@ class ActionService:
             source_type=source_type,
             source_label=source_type.value,
             rule_code=rule_code,
-            rule_version=rule_version,
+            # Rule catalogs expose integer versions; historical action versions remain stored text.
+            rule_version=str(rule_version) if type(rule_version) is int else rule_version,
             alert_id=alert.id if alert else None,
             qa_session=qa_session,
             qa_session_title=qa_session_title,
@@ -643,6 +650,8 @@ class ActionService:
         return await self.repo.create(run, actor=self.user.id)
 
     def _call_text(self, r: ActionRun) -> str:
+        if not r.sys_code:
+            return "执行绑定的本体操作"
         meta = self.catalog.action_meta(r.action_type_code) or {}
         return f"调用 {self.catalog.system_name(r.sys_code) or r.sys_code}：{meta.get('call', r.action_name)}"
 
@@ -900,7 +909,10 @@ class ActionService:
         )
         await self._log(rec, self._call_text(rec), f"沿用原审批 {rec.approver}")
         await self._log(
-            rec, f"等待 {system} 返回", self.catalog.waiting_text(rec.sys_code), TimelineStatus.warn
+            rec,
+            f"等待 {system} 返回" if rec.sys_code else "准备执行本体操作",
+            self.catalog.waiting_text(rec.sys_code) if rec.sys_code else SYSTEM,
+            TimelineStatus.warn,
         )
         a.retried_as_id = rec.id
         await self._log(a, f"已重新提交为 {rec.code}", f"{me} · 新幂等键 {new_key}")
@@ -964,7 +976,8 @@ class ActionService:
             if rr == ReconcileResult.succeeded
             else f"对账：外部未执行，动作未生效（{note}）"
         )
-        seq = await self._log(r, text, f"{me} · {system} 外部单号 {r.ext_ref or '--'}")
+        actor = f"{me} · {system} 外部单号 {r.ext_ref}" if r.sys_code and r.ext_ref else me
+        seq = await self._log(r, text, actor)
         if rr == ReconcileResult.succeeded:
             # 只发 ActionExecuted；告警不自动转已解决（[推断 P10] 未做，照前端）
             await self._emit(r, EVENT_ACTION_EXECUTED, seq)
@@ -1015,7 +1028,10 @@ class DynamicReconciliationListener:
             else "对账：外部未执行，动作未生效（按幂等键自动查询）"
         )
         log = await self.repo.add_log(
-            r, at=clock.now(), text=text, actor=f"系统 · {system} 外部单号 {r.ext_ref or '--'}"
+            r,
+            at=clock.now(),
+            text=text,
+            actor=f"系统 · {system} 外部单号 {r.ext_ref}" if r.sys_code and r.ext_ref else SYSTEM,
         )
         if ok:
             await self.ports.emitter.emit(
@@ -1110,16 +1126,16 @@ class AlertService:
         return row
 
     async def _visible_out(self, alert: Alert, run: ActionRun | None) -> AlertOut:
-        out = self._out(alert, run)
-        visible = []
-        for dim in out.dims:
-            stmt = await scoped_instances(
-                select(literal(True)), self.user, literal(dim.obj_kind), literal(dim.id)
-            )
-            if await self.session.scalar(stmt):
-                visible.append(dim)
-        out.dims = visible
-        return out
+        return (await self._visible_list([alert], {run.id: run} if run else {}))[0]
+
+    async def _visible_list(self, alerts, links):
+        rows = [self._out(alert, links.get(alert.action_run_id)) for alert in alerts]
+        visible = await visible_references(
+            self.session, self.user, {(dim.obj_kind, dim.id) for row in rows for dim in row.dims}
+        )
+        for row in rows:
+            row.dims = [dim for dim in row.dims if (dim.obj_kind, dim.id) in visible]
+        return rows
 
     def _mine(self, a: Alert) -> bool:
         person = self.catalog.person(a.assignee)
@@ -1198,10 +1214,7 @@ class AlertService:
             for k, v in ALERT_TABS.items()
         }
         return AlertPage.of(
-            [
-                await self._visible_out(a, links.get(a.action_run_id) if a.action_run_id else None)
-                for a in rows
-            ],
+            await self._visible_list(rows, links),
             total,
             page,
             counts=AlertCounts(**counts),

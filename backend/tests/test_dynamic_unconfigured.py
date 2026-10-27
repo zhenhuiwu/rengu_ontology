@@ -4,11 +4,12 @@ import pytest
 
 from app.core.errors import AppError
 from app.modules.dynamic.ports import UnconfiguredAdapters, get_submitter
+from app.modules.integration.execution import DatabaseActionSubmitter
 
 
 async def test_default_adapters_report_unavailable():
     for call, code in (
-        (lambda: get_submitter().submit("stored-action", "real-key"), "ACTION_EXECUTOR_UNAVAILABLE"),
+        (lambda: UnconfiguredAdapters().submit("stored-action", "real-key"), "ACTION_EXECUTOR_UNAVAILABLE"),
         (lambda: UnconfiguredAdapters().check("stored-type", {}), "ACTION_CHECKER_UNAVAILABLE"),
         (
             lambda: UnconfiguredAdapters().emit("stored-event", "stored-type", {}),
@@ -19,3 +20,7 @@ async def test_default_adapters_report_unavailable():
         with pytest.raises(AppError) as error:
             await call()
         assert error.value.code == code and error.value.status_code == 503
+
+
+def test_default_submitter_is_the_real_database_adapter():
+    assert isinstance(get_submitter(None, None), DatabaseActionSubmitter)

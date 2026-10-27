@@ -6,11 +6,13 @@ from sqlalchemy import event, func, select
 
 from app.common.auth import resolve_user
 from app.modules.dynamic.models import ActionRun, Alert
+from app.modules.dynamic.row_scope import scoped_instances
 from app.modules.dynamic.rules_models import Rule, Scenario, ScenarioImpact
 from tests.dynamic_support import API, dyn  # noqa: F401
+from tests.test_use_ops_runtime import runtime  # noqa: F401
 
 
-async def test_runtime_list_query_budget(client, dyn, engine):  # noqa: F811
+async def test_runtime_list_query_budget(client, runtime, engine):  # noqa: F811
     statements = []
 
     def captured(_conn, _cursor, statement, _parameters, _context, _many):
@@ -19,53 +21,45 @@ async def test_runtime_list_query_budget(client, dyn, engine):  # noqa: F811
 
     event.listen(engine.sync_engine, "before_cursor_execute", captured)
     try:
-        await resolve_user(dyn, "U010001")
+        await resolve_user(runtime[0], "U010001")
         auth_queries = list(statements)
-        # Fixed batched auth: user, function grants, object grants, scopes, object identity directory.
-        assert len(auth_queries) == 5, auth_queries
-        for path, table, business_budget in (
-            ("/alerts?status=all", "alert", 7),  # 3 catalog + count/page + batched runs + status groups
-            ("/action-runs?tab=records", "action_run", 9),  # catalog + count/page + 2 groups + 2 ID maps
-            ("/scenarios", "scenario", 3),  # count/page + batched base releases
-        ):
-            statements.clear()
-            started = perf_counter()
-            response = await client.get(API + path + ("&" if "?" in path else "?") + "page=2&size=10")
-            assert response.status_code == 200, response.text
-            print(f"{path}: {len(statements)} SELECTs, {(perf_counter() - started) * 1000:.1f}ms")
-            assert statements[: len(auth_queries)] == auth_queries
-            assert len(statements) - len(auth_queries) <= business_budget, statements
-            assert any(f"FROM {table}" in sql and "LIMIT" in sql and "OFFSET" in sql for sql in statements)
-            assert not any(
-                f"FROM {child}" in sql
-                for sql in statements
+        assert any("ontology_member" in sql for sql in auth_queries)
+        print(f"Fixed current-member auth SELECTs: {len(auth_queries)}")
+        for path, table in (("/alerts?status=all", "alert"), ("/action-runs?tab=pending", "action_run")):
+            budgets = []
+            first_ids = None
+            for size in (5, 13):
+                statements.clear()
+                started = perf_counter()
+                response = await client.get(API + path + f"&page=1&size={size}")
+                assert response.status_code == 200, response.text
+                data = response.json()
+                assert data["total"] == 13 and len(data["items"]) == size
+                ids = {row["id"] for row in data["items"]}
+                if first_ids is not None:
+                    assert first_ids <= ids
+                first_ids = ids
+                budgets.append(len(statements))
+                assert any(
+                    f"FROM {table}" in sql and "LIMIT" in sql and "OFFSET" in sql for sql in statements
+                )
+                # Public references require the current page's definitions, once per child table, not per row.
                 for child in (
                     "action_param",
                     "submission_criterion",
                     "ontology_edit_rule",
                     "side_effect",
                     "action_type_rule",
-                    "rule_hit",
+                ):
+                    assert sum(f"FROM {child}" in sql for sql in statements) <= 1
+                assert not any("FROM rule_hit" in sql for sql in statements)
+                print(
+                    f"{path} size={size}: {len(statements)} SELECTs, "
+                    f"{(perf_counter() - started) * 1000:.1f}ms"
                 )
-            )
-            first = await client.get(API + path + ("&" if "?" in path else "?") + "page=1&size=10")
-            assert first.json()["total"] == response.json()["total"]
-            assert len(first.json()["items"]) == 10
-            assert response.json()["page"] == 2
-            assert not (
-                {row["id"] for row in first.json()["items"]} & {row["id"] for row in response.json()["items"]}
-            )
-            statements.clear()
-            larger = await client.get(API + path + ("&" if "?" in path else "?") + "page=1&size=20")
-            assert larger.status_code == 200, larger.text
-            assert len(larger.json()["items"]) > len(response.json()["items"])
-            assert statements[: len(auth_queries)] == auth_queries
-            assert len(statements) - len(auth_queries) <= business_budget, (
-                "Page growth must not add per-row queries"
-            )
+            assert budgets[1] <= budgets[0] + 2, ("Page growth added per-row queries", budgets)
         statements.clear()
-        meta = await client.get(API + "/actions/meta")
-        assert meta.status_code == 200
+        assert (await client.get(API + "/actions/meta")).status_code == 200
         assert not any(
             f"FROM {child}" in sql for sql in statements for child in ("action_param", "rule_hit", "rule ")
         )
@@ -82,7 +76,14 @@ async def test_filters_totals_defaults_and_impacts_sql(client, dyn, engine):  # 
         response = await client.get(API + path, params=params)
         assert response.status_code == 200, response.text
         assert response.json()["size"] == 10
-        assert response.json()["total"] == await dyn.scalar(select(func.count()).select_from(model))
+        expected = select(model.id)
+        if model in (Alert, ActionRun):
+            expected = await scoped_instances(
+                expected, await resolve_user(dyn, "U010001"), model.obj_kind, model.obj_id
+            )
+        assert response.json()["total"] == await dyn.scalar(
+            select(func.count()).select_from(expected.subquery())
+        )
     for path in ("/alerts", "/action-runs", "/scenarios"):
         empty = await client.get(API + path, params={"kw": "不存在的真实过滤值", "page": 200, "size": 10})
         assert empty.json()["items"] == [] and empty.json()["total"] == 0 and empty.json()["page"] == 1

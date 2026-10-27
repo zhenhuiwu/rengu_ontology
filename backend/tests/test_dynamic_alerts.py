@@ -3,8 +3,9 @@
 import pytest
 from sqlalchemy import select, update
 
-from app.modules.dynamic.models import Alert
-from tests.dynamic_support import API, FailingChecker, as_, dyn, err, fakes  # noqa: F401
+from app.modules.dynamic.models import Alert, AlertStatus
+from tests.dynamic_support import API, dyn, err  # noqa: F401
+from tests.test_use_ops_runtime import alert_runtime, runtime  # noqa: F401
 
 OPEN = "AL-20261025-0126"  # R-007 商品，待处理，无关联动作
 OPEN_ORDER = "AL-20261025-0131"  # R-015 订单，待处理
@@ -63,28 +64,37 @@ async def test_batch_claim(dyn, client):  # noqa: F811
 
 
 async def test_transfer(dyn, client):  # noqa: F811
-    d = (await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": "刘婷"})).json()
-    assert d["status"] == "处理中" and d["assignee"] == "刘婷"
-    assert d["log"][-1]["text"] == "转派：未认领 → 刘婷"
-    d = (await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": "何静"})).json()
-    assert d["log"][-1]["text"] == "转派：刘婷 → 何静"
-    b = err(await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": "何静"}), 422, "VALIDATION_FAILED")
-    assert b["details"]["fields"][0]["field"] == "to"
+    people = (await client.get(f"{API}/people", params={"alertId": OPEN})).json()
+    candidates = [p for p in people if p["id"] != "U010001"]
+    assert len(candidates) >= 2
+    first, second = candidates[:2]
+    for target in (first, second):
+        response = await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": target["id"]})
+        assert response.status_code == 200, response.text
+        assert response.json()["assigneeId"] == target["id"]
+        assert target["id"] in response.json()["log"][-1]["text"]
+        assert await dyn.scalar(select(Alert.assignee).where(Alert.code == OPEN)) == target["id"]
+    err(
+        await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": second["id"]}),
+        422,
+        "VALIDATION_FAILED",
+    )
     err(await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": "路人甲"}), 422, "VALIDATION_FAILED")
     err(await client.post(f"{API}/alerts/{OPEN}:transfer", json={"to": " "}), 422, "VALIDATION_FAILED")
     err(
-        await client.post(f"{API}/alerts/{OPEN_LINKED}:transfer", json={"to": "刘婷"}),
+        await client.post(f"{API}/alerts/{OPEN_LINKED}:transfer", json={"to": first["id"]}),
         409,
         "ALERT_LOCKED_BY_ACTION",
     )
     closed = (await client.get(f"{API}/alerts", params={"status": "closed", "size": 1})).json()["items"][0][
         "id"
     ]
-    err(await client.post(f"{API}/alerts/{closed}:transfer", json={"to": "刘婷"}), 409, "STATE_INVALID")
+    err(await client.post(f"{API}/alerts/{closed}:transfer", json={"to": first["id"]}), 409, "STATE_INVALID")
 
 
 async def test_close_paths(dyn, client):  # noqa: F811
-    me = await as_(dyn, "刘婷")
+    await dyn.execute(update(Alert).where(Alert.code == FAILED_LINK).values(assignee="U010001"))
+    me = {"X-Demo-As": "U010001"}
     d = (
         await client.post(
             f"{API}/alerts/{FAILED_LINK}:close", json={"as": "已忽略", "reason": "重复"}, headers=me
@@ -131,15 +141,16 @@ async def test_close_paths(dyn, client):  # noqa: F811
 
 
 async def test_batch_close(dyn, client):  # noqa: F811
+    closed_before = (await client.get(f"{API}/alerts")).json()["counts"]["closed"]
     await client.post(f"{API}/alerts:batch-claim", json={"ids": [OPEN, OPEN_ORDER]})
     r = await client.post(
         f"{API}/alerts:batch-close",
         json={"ids": [OPEN, OPEN_ORDER, OTHERS, MINE_LOCKED], "as": "已解决", "reason": "已处理"},
     )
-    # 只关本人处理中的（照前端 closable，不查在途锁）
-    assert r.json() == {"closed": 3, "ids": [OPEN, OPEN_ORDER, MINE_LOCKED]}
+    # 在途项与单条关闭一致，不能借批量绕过。
+    assert r.json() == {"closed": 2, "ids": [OPEN, OPEN_ORDER]}
     counts = (await client.get(f"{API}/alerts")).json()["counts"]
-    assert counts["closed"] == 149
+    assert counts["closed"] == closed_before + 2
     err(
         await client.post(f"{API}/alerts:batch-close", json={"ids": [], "as": "已解决", "reason": "x"}),
         409,
@@ -161,54 +172,46 @@ async def test_readonly(dyn, client):  # noqa: F811
     ] == "待处理"
 
 
-async def test_start_action_full_flow(dyn, client, fakes):  # noqa: F811
-    await client.post(f"{API}/alerts/{OPEN}:claim")
-    r = await client.post(f"{API}/alerts/{OPEN}:start-action")
-    assert r.status_code == 200, r.text
-    out = r.json()
-    a, act = out["alert"], out["action"]
-    assert a["actionRef"] == "act-al-20261025-0126" and a["actionStatus"] == "审批中" and a["locked"] is True
-    assert a["log"][-1]["text"] == "发起动作「发起调价审批」，待王敏审批；动作成功后告警自动转为已解决"
-    assert act["status"] == "审批中" and act["idemKey"] == "act-al-20261025-0126"
-    assert act["source"]["type"] == "告警" and act["source"]["alertId"] == OPEN
-    assert act["id"] == "ACT-20261025-3850" and act["confirmer"] == "王敏"  # 当天最大号 +1（含 RUNS 历史）
-    assert [x["text"] for x in act["log"]][-2:] == ["确认提交", "等待审批"]
-    # 再发起：已有关联动作
-    err(await client.post(f"{API}/alerts/{OPEN}:start-action"), 409, "STATE_INVALID")
-    # 审批 → 成功 → 告警自动已解决
-    d = (await client.post(f"{API}/action-runs/{act['id']}:approve")).json()
-    assert d["status"] == "成功" and d["extRef"] == "OA-1"
-    assert fakes.submitter.calls == [(act["id"], "act-al-20261025-0126")]
-    assert [e[1] for e in fakes.emitter.events] == ["ActionExecuted"]
-    al = (await client.get(f"{API}/alerts/{OPEN}")).json()
-    last = al["log"][-1]
-    assert al["status"] == "已解决" and al["locked"] is False
-    assert (last["text"], last["who"]) == ("关联动作执行成功，状态 处理中 → 已解决", "系统")
+async def test_start_action_full_flow(alert_runtime, client):  # noqa: F811
+    session, action, _ = alert_runtime
+    action.approval = "U010001"
+    await session.flush()
+    await client.post(f"{API}/alerts/OPS-A00:claim")
+    response = await client.post(f"{API}/alerts/OPS-A00:start-action", json={"params": {"enabled": True}})
+    assert response.status_code == 200, response.text
+    out = response.json()
+    assert out["alert"]["locked"] is True and out["action"]["status"] == "审批中"
+    assert out["action"]["source"]["alertId"] == "OPS-A00" and out["action"]["confirmer"] == "王敏"
+    code = out["action"]["id"]
+    approved = await client.post(f"{API}/action-runs/{code}:approve")
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "成功" and approved.json()["code"] == "INTERNAL"
+    assert (await client.get(f"{API}/alerts/OPS-A00")).json()["status"] == "已解决"
 
 
-async def test_start_action_order_approver(dyn, client, fakes):  # noqa: F811
-    await client.post(f"{API}/alerts/{OPEN_ORDER}:claim")
-    act = (await client.post(f"{API}/alerts/{OPEN_ORDER}:start-action")).json()["action"]
-    assert act["approver"] is None and act["action"] == "发起物流催派"  # DB明确免审，不能补假审批人。
-    assert act["status"] == "成功" and fakes.submitter.calls
+async def test_start_action_order_approver(alert_runtime, client):  # noqa: F811
+    # Existing name retained: explicit exemption must never invent an approver.
+    await client.post(f"{API}/alerts/OPS-A00:claim")
+    response = await client.post(f"{API}/alerts/OPS-A00:start-action", json={"params": {"enabled": True}})
+    assert response.status_code == 200, response.text
+    assert response.json()["action"]["approver"] is None
+    assert response.json()["action"]["status"] == "成功"
 
 
-async def test_start_action_errors(dyn, client, fakes):  # noqa: F811
-    err(await client.post(f"{API}/alerts/{OPEN}:start-action"), 409, "STATE_INVALID")  # 待处理
-    err(await client.post(f"{API}/alerts/{OTHERS}:start-action"), 403, "NOT_ASSIGNEE")
-    err(await client.post(f"{API}/alerts/{MINE_LOCKED}:start-action"), 409, "STATE_INVALID")  # 已有动作
-    await client.post(f"{API}/alerts/{OPEN}:claim")
-    fakes.checker = FailingChecker([{"name": "价格区间", "fail": "降幅超过 10%"}])
-    b = err(await client.post(f"{API}/alerts/{OPEN}:start-action"), 422, "SUBMISSION_CRITERIA_FAILED")
-    assert b["details"]["failed"] == [{"name": "价格区间", "fail": "降幅超过 10%"}]
-    # 回滚后告警仍无关联动作
-    assert (await client.get(f"{API}/alerts/{OPEN}")).json()["actionId"] is None
-    # 规则没绑定动作
-    await dyn.execute(update(Alert).where(Alert.code == OPEN_ORDER).values(rule_code="R-021"))
-    await client.post(f"{API}/alerts/{OPEN_ORDER}:claim")
-    b = err(await client.post(f"{API}/alerts/{OPEN_ORDER}:start-action"), 409, "STATE_INVALID")
-    assert b["message"] == "规则未绑定动作"
-    assert await dyn.scalar(select(Alert.action_run_id).where(Alert.code == OPEN_ORDER)) is None
+async def test_start_action_errors(alert_runtime, client):  # noqa: F811
+    session, _, rule = alert_runtime
+    body = {"params": {}}
+    err(await client.post(f"{API}/alerts/OPS-A00:start-action", json=body), 409, "STATE_INVALID")
+    other = await session.scalar(select(Alert).where(Alert.code == "OPS-A01"))
+    other.status, other.assignee = AlertStatus.processing, "OPS-LIMIT"
+    await session.flush()
+    err(await client.post(f"{API}/alerts/OPS-A01:start-action", json=body), 403, "NOT_ASSIGNEE")
+    await client.post(f"{API}/alerts/OPS-A00:claim")
+    err(await client.post(f"{API}/alerts/OPS-A00:start-action", json=body), 422, "SUBMISSION_CRITERIA_FAILED")
+    assert await session.scalar(select(Alert.action_run_id).where(Alert.code == "OPS-A00")) is None
+    rule.action_type_id = None
+    await session.flush()
+    err(await client.post(f"{API}/alerts/OPS-A00:start-action", json=body), 409, "STATE_INVALID")
 
 
 @pytest.mark.parametrize("path", ["/alerts", "/action-runs"])
@@ -238,7 +241,11 @@ async def test_generic_dims_and_approver(dyn, client):  # noqa: F811
     unconfigured = (await client.get(f"{API}/alerts/{OPEN}")).json()
     assert unconfigured["can"]["startAction"] is False
     assert "审批配置" in unconfigured["can"]["reasons"]["startAction"]
-    err(await client.post(f"{API}/alerts/{OPEN}:start-action"), 503, "ACTION_APPROVAL_NOT_CONFIGURED")
+    err(
+        await client.post(f"{API}/alerts/{OPEN}:start-action", json={"params": {}}),
+        503,
+        "ACTION_APPROVAL_NOT_CONFIGURED",
+    )
     d = (await client.get(f"{API}/alerts/{OPEN_ORDER}")).json()
     assert d["dims"] == [] and d["objKindLabel"] == "订单" and d["approver"] is None
     r = (await client.get(f"{API}/alerts", params={"status": "all", "ruleId": "R-021", "size": 1})).json()
