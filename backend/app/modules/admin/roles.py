@@ -26,6 +26,7 @@ from app.core.clock import now
 from app.core.config import get_settings
 from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound
 from app.modules.admin.models import (
+    ServiceAccount,
     SysOrg,
     SysRole,
     SysRoleMember,
@@ -281,9 +282,13 @@ class SysRoleRepository(BaseRepository[SysRole]):
             )
             ids = {s.object_type_id for s in rows if s.object_type_id is not None}
             names = (
-                dict((await self.session.execute(
-                    select(ObjectType.id, ObjectType.display_name).where(ObjectType.id.in_(ids))
-                )).all())
+                dict(
+                    (
+                        await self.session.execute(
+                            select(ObjectType.id, ObjectType.display_name).where(ObjectType.id.in_(ids))
+                        )
+                    ).all()
+                )
                 if ids
                 else {}
             )
@@ -603,7 +608,7 @@ class RoleService:
         return await self.get(code)
 
     async def delete(self, code: str, user: CurrentUser, ip: str) -> None:
-        """删除角色（Roles.vue deleteRole 同一套规则）。成员、范围级联删除。
+        """删除角色（Roles.vue deleteRole 同一套规则）。成员、范围、本体绑定级联删除。
 
         - 有成员也允许删：成员失去这个角色，其他角色不受影响；
         - 但有人「只有这一个角色」时 409 ROLE_IN_USE（details.count / details.users），删了他就没有角色了；
@@ -637,8 +642,25 @@ class RoleService:
                 f"有 {len(orphans)} 名成员只有这个角色，请先给他们分配其他角色或移出成员后再删除",
                 details={"count": len(orphans), "users": [{"id": c, "name": n} for c, n in orphans]},
             )
+        # 服务账号以这个角色为服务角色（含已吊销的，保留审计归属）→ 同样 409，先改绑或保留角色。
+        accounts = (
+            await self.session.execute(
+                select(ServiceAccount.code, ServiceAccount.name)
+                .where(ServiceAccount.role_id == r.id)
+                .order_by(ServiceAccount.code)
+            )
+        ).all()
+        if accounts:
+            raise RoleInUse(
+                f"有 {len(accounts)} 个服务账号以这个角色为服务角色，请先改绑其他角色后再删除",
+                details={
+                    "count": len(accounts),
+                    "serviceAccounts": [{"id": c, "name": n} for c, n in accounts],
+                },
+            )
         for uid in sorted(primary):
             await self.session.execute(update(SysUser).where(SysUser.id == uid).values(role=others[uid]))
+        # 本体绑定（ontology_role_binding，所有本体）由外键 ON DELETE CASCADE 一并删除（admin_0026）。
         await self.session.delete(r)
         await self.session.flush()
         await self._audit(user, ip, "删除角色", f"角色「{name}」")
@@ -793,12 +815,16 @@ class RoleService:
         rs = await self.bundles(await self.repo.roles_of_user(u.id))
         return compute_row_scope(await self._bound_bundles(rs), await load_perm_objects(self.session))
 
-
     async def _bound_bundles(self, bundles: list[RoleBundle]) -> list[RoleBundle]:
         from app.modules.ontology.models import OntologyRoleBinding
 
-        ids = set(await self.session.scalars(select(OntologyRoleBinding.role_id).where(
-            OntologyRoleBinding.ontology_id == require_ontology_id(self.session))))
+        ids = set(
+            await self.session.scalars(
+                select(OntologyRoleBinding.role_id).where(
+                    OntologyRoleBinding.ontology_id == require_ontology_id(self.session)
+                )
+            )
+        )
         return [bundle for bundle in bundles if bundle.role.id in ids]
 
 
@@ -854,11 +880,13 @@ async def sync_primary_role(
     """Replace only the explicitly changed primary role; separately assigned roles stay intact."""
     if previous == role.name:
         return
-    members = list(await session.execute(
-        select(SysRoleMember, SysRole.name)
-        .join(SysRole, SysRole.id == SysRoleMember.role_id)
-        .where(SysRoleMember.user_id == user_id)
-    ))
+    members = list(
+        await session.execute(
+            select(SysRoleMember, SysRole.name)
+            .join(SysRole, SysRole.id == SysRoleMember.role_id)
+            .where(SysRoleMember.user_id == user_id)
+        )
+    )
     for member, name in members:
         if name == previous and member.role_id != role.id:
             await session.delete(member)

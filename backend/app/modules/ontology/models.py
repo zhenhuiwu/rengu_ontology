@@ -33,4 +33,6 @@ class OntologyRoleBinding(IdMixin, Base):
     __table_args__ = (UniqueConstraint("ontology_id", "role_id"),)
 
     ontology_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("ontology_workspace.id"), nullable=False)
-    role_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_role.id"), nullable=False)
+    role_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sys_role.id", ondelete="CASCADE"), nullable=False
+    )
