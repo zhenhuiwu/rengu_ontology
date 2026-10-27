@@ -4,7 +4,8 @@
   static-api.md §1.5（团队 master 443c009）：谓词 `split_part(product.category, '/', 1) = ANY($n)`，
   范围值先按这张表换名，不在表里的值原样比（对不上就匹配 0 行）。
   **[推断]** 前端没给对应关系，按名称最接近的一级类目定。
-- TODO(静态本体负责人)：semantic_map（维度同义词，如「华东大区」→ big_region='华东'）也放这里。
+- `semantic_map(session, ver=None)`：本体词表（static-api.md §3.7），只读快照，不开 HTTP；返回
+  [{kind,id,api,parent,name,synonyms[]}]，维度说法同时并入命中的取值（如「华东大区」→ 华东）。
 
 常量与公开静态查询契约；基础层在 `app/modules/biz/governance.py` 里引用范围映射。
 `evaluate_metric(session,user,code,ver=None,cr_id=None,days=30,period='day',
@@ -16,8 +17,9 @@ at=None,timezone=None,object_kind=None)`：真实指标执行，period可为day/
 from types import MappingProxyType
 
 from app.modules.static.metric_trial import evaluate_metric
+from app.modules.static.semantic_map import semantic_map
 
-__all__ = ["CATEGORY_SCOPE_ALIAS", "evaluate_metric"]
+__all__ = ["CATEGORY_SCOPE_ALIAS", "evaluate_metric", "semantic_map"]
 
 # 范围值（roles.ts SCOPE_PROPS 商品.品类）→ 一级类目（seed PRODUCTS.category 的第一段）
 CATEGORY_SCOPE_ALIAS = MappingProxyType(

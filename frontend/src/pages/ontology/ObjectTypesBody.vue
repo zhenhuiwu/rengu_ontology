@@ -215,6 +215,33 @@ const srcProps = computed(() => [...PROPS.value].sort((x, y) => Number(!!DIFF.va
 const pfiltered = computed(() => srcProps.value.filter((p) => !pkw.value || p.name.includes(pkw.value) || p.api.includes(pkw.value)));
 const propPage = useStaticPage<P>(() => selected.value ? `/object-types/${encodeURIComponent(selected.value)}/properties` : '', () => ({ kw: pkw.value, ...(isDraft.value && draft.value ? { crId: draft.value.id } : {}) }), ppage, PPAGE, () => tab.value === 'properties');
 const prows = computed(() => isStaticReal() ? propPage.items.value : pfiltered.value.slice((ppage.value - 1) * PPAGE, ppage.value * PPAGE));
+// 批量编辑（仅 real 草稿可编辑时）：勾选当前页属性，统一改展示层级 / 浏览标记，整批写入 properties 段（op 由 crSave 推断）
+const bulkOn = computed(() => isStaticReal() && canEdit.value);
+const bulkKeys = ref<string[]>([]);
+const bulkOpen = ref(false);
+type Tri = '' | 'yes' | 'no';
+const BULK_FLAGS = [['searchable', '可搜索'], ['filterable', '可筛选'], ['sortable', '可排序'], ['listed', '列表显示'], ['sensitive', '敏感']] as const;
+const bulkForm = reactive<{ visibility: string } & Record<(typeof BULK_FLAGS)[number][0], Tri>>({ visibility: '', searchable: '', filterable: '', sortable: '', listed: '', sensitive: '' });
+const bulkDirty = computed(() => !!bulkForm.visibility || BULK_FLAGS.some(([k]) => !!bulkForm[k]));
+watch(() => [current.value.id, isDraft.value, ppage.value, pkw.value, bulkOn.value], () => { bulkKeys.value = []; });
+function openBulk() { Object.assign(bulkForm, { visibility: '', searchable: '', filterable: '', sortable: '', listed: '', sensitive: '' }); bulkOpen.value = true; }
+async function saveBulk() {
+  if (!bulkDirty.value || !bulkKeys.value.length) return;
+  const picked = (prows.value as (P & Record<string, unknown>)[]).filter((p) => bulkKeys.value.includes(p.api));
+  const changes: Record<string, unknown> = bulkForm.visibility ? { visibility: bulkForm.visibility } : {};
+  for (const [k] of BULK_FLAGS) if (bulkForm[k]) changes[k] = bulkForm[k] === 'yes';
+  const rows = picked.map((p) => {
+    const after: Record<string, unknown> = { ...p, ...changes };
+    // 与后端写回一致：隐藏不可筛选/排序/列表；敏感不可筛选；长文本不可筛选/排序
+    if (after.visibility === 'hidden') Object.assign(after, { filterable: false, sortable: false, listed: false });
+    if (after.sensitive) after.filterable = false;
+    if (after.type === 'long_text') Object.assign(after, { filterable: false, sortable: false });
+    return { key: p.api, before: p, after, type: '属性', field: `${p.name} ${p.api}`, afterText: `批量编辑：${Object.keys(changes).join('、')}` };
+  });
+  if (!await cr.save('properties', rows)) return;
+  bulkOpen.value = false; bulkKeys.value = [];
+  message.success(`已批量修改 ${rows.length} 个属性，保存到草稿 ${draft.value?.id ?? ''}`);
+}
 const propCols = [
   { title: '显示名', key: 'name', width: 200 },
   { title: 'API 名', dataIndex: 'api', width: 180 },
@@ -441,10 +468,10 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
           <InfoTip :text="`主键 1 · 维度 ${srcProps.filter((p) => p.dim).length} · 敏感 ${srcProps.filter((p) => p.sensitive).length}`" />
           <span v-if="isDraft && draft && (!isStaticReal() || cr.head.value?.status === '草稿')" class="t-12 c-3">草稿 {{ draft.id }}：属性改动 {{ Object.keys(DIFF).length }} 处<template v-if="draftDiff.other">，其余 {{ draftDiff.other }} 处（对象类型、关系、映射、指标等）见<router-link :to="`/build/ontology/releases?cr=${draft.id}`">变更单</router-link></template></span>
           <span class="ot-sp" />
-          <a-tooltip :title="canEdit ? '暂未开放' : editTip"><a-button disabled>批量编辑</a-button></a-tooltip>
+          <a-tooltip :title="!canEdit ? editTip : !isStaticReal() ? '演示模式不支持批量编辑' : !bulkKeys.length ? '先勾选要修改的属性' : ''"><a-button :disabled="!bulkOn || !bulkKeys.length" @click="openBulk">批量编辑{{ bulkKeys.length ? `（${bulkKeys.length}）` : '' }}</a-button></a-tooltip>
           <a-tooltip :title="editTip"><a-button :type="canEdit ? 'primary' : 'default'" :disabled="!canEdit" @click="openAdd">新增属性</a-button></a-tooltip>
         </div>
-        <a-table :columns="propCols" :data-source="prows" :loading="propPage.loading.value" :pagination="false" size="small" row-key="api">
+        <a-table :columns="propCols" :data-source="prows" :loading="propPage.loading.value" :pagination="false" size="small" row-key="api" :row-selection="bulkOn ? { selectedRowKeys: bulkKeys, onChange: (keys: (string | number)[]) => { bulkKeys = keys.map(String); } } : undefined">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <span class="c-1" :title="`${record.name} · ${record.api}`">{{ record.name }}</span>
@@ -535,8 +562,15 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
     <a-form layout="vertical">
       <a-form-item label="名称" required><a-input v-model:value="addForm.name" placeholder="如：配送方式" /></a-form-item>
       <a-form-item label="API 名" required :help="addForm.api && addErr ? addErr : undefined" :validate-status="addForm.api && addErr ? 'error' : undefined"><a-input v-model:value="addForm.api" placeholder="如：delivery_mode" class="num" /></a-form-item>
-      <a-form-item label="类型"><a-select v-model:value="addForm.type" :options="['string', 'int', 'decimal', 'date', 'timestamp', 'boolean', 'enum'].map((v) => ({ value: v, label: v }))" /></a-form-item>
+      <a-form-item label="类型"><a-select v-model:value="addForm.type" :options="['string', 'long_text', 'int', 'decimal', 'date', 'timestamp', 'boolean', 'enum'].map((v) => ({ value: v, label: v }))" /></a-form-item>
       <a-checkbox v-model:checked="addForm.required">必填</a-checkbox>
+    </a-form>
+  </a-modal>
+  <a-modal v-model:open="bulkOpen" :title="`批量编辑属性 · ${current.name}（${bulkKeys.length} 个）`" ok-text="保存到草稿" :ok-button-props="{ disabled: !bulkDirty }" :width="480" @ok="saveBulk">
+    <a-form layout="vertical">
+      <a-form-item label="展示层级"><a-select v-model:value="bulkForm.visibility" :options="[{ value: '', label: '不改' }, { value: 'prominent', label: '突出' }, { value: 'normal', label: '普通' }, { value: 'hidden', label: '隐藏' }]" /></a-form-item>
+      <a-form-item v-for="[k, label] in BULK_FLAGS" :key="k" :label="label"><a-radio-group v-model:value="bulkForm[k]" :options="[{ value: '', label: '不改' }, { value: 'yes', label: '是' }, { value: 'no', label: '否' }]" /></a-form-item>
+      <a-alert type="info" message="隐藏属性不可筛选/排序/列表显示，敏感属性不可筛选，长文本不可筛选/排序；保存时自动修正。审核并整版发布后生效。" />
     </a-form>
   </a-modal>
 </template>
