@@ -1,7 +1,7 @@
 """W6 最小 NL2SQL 链路：FakeLLM（不调真实接口）+ sql_guard + 落 qa_turn。"""
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.main import app
 from app.modules.qa import chain
@@ -12,10 +12,14 @@ from tests.qa_access_support import seed_qa_access
 
 URL = "/api/qa/v1/sessions/S0001/turns"
 
+PROMOTE = "UPDATE ontology_member SET role='editor' WHERE ontology_id=1 AND role='viewer'"
+
 
 @pytest.fixture
 async def qa(users, client, session):
     await seed_qa_access(users)
+    # ontology_member 默认 viewer 时写接口 403（只读空间）：本文件内提成 editor，测试事务结束回滚
+    await users.execute(text(PROMOTE))
     await users.flush()
 
     async def _conn():

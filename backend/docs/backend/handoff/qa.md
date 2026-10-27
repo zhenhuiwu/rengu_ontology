@@ -108,15 +108,24 @@
 - **未验证**：按流程这轮没跑真模型评测，分数仍以 76/100（拒答 9/16、反问 5/10）为最近一次实测；离线核对 100 题的拒答 keywords 只剩 080 / 081 未命中（靠提示词 + asScope）。keywords 是按题库调的，有过拟合风险，计划加 101+ 留出题（只拒答 / 反问）单独计分。
 - **测试**：本轮相关 qa 测试与基线 `54f39d1` 失败集合相同（基线已有 27 failed / 4 errors，多为测试用户在本体 1 是 viewer、POST 被 403「当前本体工作空间为只读权限」，非本轮引入）；新增的预检 / qa_source 单测通过。
 
+### 2.0a qa-p2（10-27，基线 master `f0a7df3`，迁移头 `admin_0026`，本批无新迁移）已做
+- **W7 流式**：`POST /sessions/{sid}/turns:stream`（实时 `status` + 回答事件 + `done`）、`GET /turns/{tid}/stream`（`Last-Event-ID` 续传 / 回放）；事件先写 `qa_turn_event` 再推（`stream.py`）。前端 `useQaSession.ts` 先走流，失败回退 W6。
+- **动作意图 + 确认卡**：候选动作和执行策略取自能力目录 `static.capabilities` 的 actions 节（`intent.action_catalog`），dry-run 只读校验，卡片带 `policy` / `canStage`；`POST /turns/{tid}/action:stage` 只暂存到动作中心待确认，**从不调 `apply_policy`、不自动执行**（`auto` 也一样），suggest → 409，AI 不允许 → 403。
+- **告警引用（只读）**：`AlertService.search` 进程内调用，按 alerts:view 门控，进 prompt + `answer.alerts` → SSE `citations`。
+- **MCP**：`POST /api/qa/v1/mcp`（入口 meta:read）。问数专属 `qa_ask` / `metric_query`；`object_query` 转发平台 `/machine/objects:query`；动作 / 事件 / 函数工具直接用平台 `machine.tools.export`（同 `/machine/tools?format=mcp`）的清单并按 binding 转发（带 Idempotency-Key），不重复实现。告警引用要 `dynamic:read`。详见 `qa-api.md` §2.4。
+- **动作意图离线核对**：`test_qa_intent_eval.py` 用 palantir 20 题集核对问数意图解析与策略卡（不调真模型）。注意：策略 `callers: [人]`（如 call-07）不含 AI → 问数卡 `canStage=false`，只能到动作中心手动发起。
+- **测试**：`test_qa_stream.py`、`test_qa_mcp.py`、`test_qa_intent_eval.py`（新）+ `test_qa_chain.py` / `test_qa_session_write.py` / `test_qa_turn_actions.py` / `test_qa_explore.py`；`test_qa_chain.py::test_no_key_503`、`::test_caliber_check_feeds_back_once` 两条基线即失败（本批未改相关代码）。没跑真模型评测。
+
 ### 2.0.1 剩余（按优先级）
 | 项 | 说明 |
 |---|---|
-| W7 流式 | `GET /turns/{tid}/stream` 未实现，前端同步等 W6 |
-| 定时刷新 / 订阅 | 页面定时刷新、订阅推送挂到动态的 `worker.py` 调度上，qa 不自建调度 |
-| 按本体自动评测 | 每个本体一套评测题 + 每日定时跑（T11 进 Procrastinate 队列后接每日任务）；本轮未跑真模型评测，也未加 101+ 留出题 |
+| 定时刷新 / 订阅（batch 3） | 页面定时刷新、订阅推送挂到动态的 `worker.py` 调度上，qa 不自建调度。草稿（未测、未提交）在 box `/tmp/qa_batch3/page_schedule.py` + `test_qa_page_schedule.py`：`refresh_due_pages` / `refresh_page_once` / `sweep` / `register(app)`，任务与锁 `qa.page.sweep`、队列 `qa_pages`，订阅到期先写审计 `qa.page.subscription.due`。**需动态 owner**：`dynamic/worker.py` `build_app` 调 `page_schedule.register(app)`，`run_worker_async` 队列加 `qa_pages`。测试草稿里 `AuditLog` 的 import 要改成 `app.modules.admin.models` |
+| 按本体自动评测（batch 3） | 未开始。每个本体一套评测题（自动生成） + 每日定时跑（T11 进 Procrastinate 队列后接每日任务）；本轮未跑真模型评测，也未加 101+ 留出题 |
 | MetricFlow 语义层 | 待静态 / 小白定指标语义层方案后接（现在仍是 LLM 直接出 SQL + 口径裁定校验） |
-| 动作意图 | 问数里识别「要执行动作」→ 出确认卡 → 走动态 action-runs |
-| MCP 工具 | 把问数 / 对象搜索暴露成 MCP tools |
+| MCP SDK | MCP 现在是自写的最小 JSON-RPC（够 tools 用）；官方 `mcp` Python SDK（MIT）未装，`pyproject.toml` 不归 qa，要换 SDK / 加 streamable-HTTP 会话、SSE 通知时找 PDE 加依赖 |
+| 动态摘要 | 「动态摘要」接口还没用上，问数只引用告警列表；以后可接进 prompt |
+| 旧 X1 stageAction 路径 | 前端旧的非建议动作路径 `POST /action-runs:stage` 用 `source.type='问数'`，动态路由只收 `手动` → 被拒（既有问题）；新路径走 W7a |
+| 两条既有失败 | `test_qa_chain.py::test_no_key_503`、`::test_caliber_check_feeds_back_once` 基线即失败，待 qa-reuse 对齐 |
 | 达梦 / 金仓方言 | sqlglot 方言、DDL 编译与 statement_timeout 适配 |
 | 测试夹具 | 测试用户在本体 1 是 viewer，大量 qa POST 测试 403（基线即如此），要与 auth / ontology owner 对齐夹具 |
 | **sql_guard 本体 1 写死（归治理）** | `app/common/sql_guard.governed_tables` 只对 `ontology_id == 1` 返回受治理表，其他本体一律空 → qa 返回 `DATA_NOT_CONFIGURED`。要按本体登记受治理表，由治理 owner 改，qa 不动 |
@@ -125,11 +134,10 @@
 
 | 项 | 还差什么 | 接口 / 文件 |
 |---|---|---|
-| 流式回答 | 后端 W7 未实现，前端同步等 W6 的 `turn` | W7 `GET /turns/{tid}/stream`；`useQaSession.ts` `sendReal` |
 | T11 评测任务 | 进程内 asyncio，重启丢任务；每日定时未接；评测不带会话口径 | `eval/job.py` |
 | 行级范围 | row-scopes 接口未上 master：工作台「范围」默认值靠前端推断（话术已改「范围」，qa-p1） | `router.py`、`Workbench.vue` |
 | 按一批对象提问 / 绑定 | O4 和物理绑定只有 store / product / order，其他对象类型 `bound=false` | `seeds/extra/qa/objects/{本体}/bindings.json`、`objects_api.py` |
-| 动作执行 | 建议动作只到 stage，执行未接 | X1 `action-runs`；`Workbench.vue` `runAction` |
+| 动作执行 | 建议动作只到 stage（W7a），确认 / 执行在动作中心；qa 不执行 | W7a；`Workbench.vue` `runAction` |
 | 关键词分面 | E1 顺带的过渡分面要保留到静态 `/facets` 支持关键词 | `explore_api.py` `_facets` |
 | 静态分面回落 | `objMeta.ts:156` `loadStaticFacets` 任何错误都回落（含 422），应只在 `isBackendDown` 时回落 | `src/pages/objects/objMeta.ts` |
 | 复用静态私有函数 | qa 直接 import 静态 `_bad` / `_scalar`，等静态公开后改名 | `explore_api.py` |

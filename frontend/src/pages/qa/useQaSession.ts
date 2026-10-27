@@ -29,6 +29,8 @@ const detail = computed({
 });
 const loading = ref(false);
 const sending = ref(false);
+/** W7 实时阶段提示（SSE status 事件的文案），发送结束清空 */
+const streamStatus = ref('');
 const listTick = ref(0);
 /** favTick 变了左栏底部「常用问题」前 3 条重取（抽屉里移出后） */
 const favTick = ref(0);
@@ -90,7 +92,14 @@ export function useQaSession() {
     sending.value = true;
     draft.value = '';
     try {
-      const r = await qaApi.askTurn(sid, q, qaApi.qaRequestOptions());
+      // W7：先走 SSE（阶段提示实时更新），后台没有流 / 流断了没拿到 done → 回退 W6 同步接口
+      let r: qaApi.QaAskOut;
+      try {
+        r = await qaApi.askTurnStream(sid, q, (e) => { if (valid() && e.event === 'status') streamStatus.value = String(e.data?.text ?? ''); });
+      } catch (e) {
+        if (!(e instanceof qaApi.QaStreamUnsupported)) throw e;
+        r = await qaApi.askTurn(sid, q, qaApi.qaRequestOptions());
+      }
       if (!valid()) return false;
       if (detail.value?.id === sid) {
         if (!detail.value.turns.some((t) => t.id === r.turn.id)) detail.value.turns.push(r.turn);
@@ -101,7 +110,7 @@ export function useQaSession() {
     } catch (e) {
       if (valid()) { draft.value = q; message.error(`提问失败：${errText(e)}`); }
       return false;
-    } finally { if (valid()) sending.value = false; }
+    } finally { if (valid()) { sending.value = false; streamStatus.value = ''; } }
   }
   function send(text?: string) {
     const q = (text ?? draft.value).trim();
@@ -135,5 +144,5 @@ export function useQaSession() {
     draft.value = '';
     return id;
   }
-  return { sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, live, detail, loading, sending, creating, listTick, favTick, loadDetail, newSessionReal };
+  return { streamStatus, sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, live, detail, loading, sending, creating, listTick, favTick, loadDetail, newSessionReal };
 }
