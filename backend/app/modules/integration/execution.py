@@ -18,8 +18,8 @@ from app.modules.action.checker import DatabaseSubmissionChecker, structured_par
 from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.dynamic.models import ActionRun, ActionStatus
 from app.modules.integration.action_edits import business_edits, execution_definition, target_access
-from app.modules.integration.adapters import get_adapter
-from app.modules.integration.models import CallKind, CallResult, ExtSystem, WritebackCall
+from app.modules.integration.adapters import get_adapter, tls_verify
+from app.modules.integration.models import NO_AUTH, CallKind, CallResult, ExtSystem, WritebackCall
 from app.modules.integration.reconcile import DatabaseReconcileScheduler, lock_run, resolved, to_manual
 from app.modules.integration.signing import SigningSecretInvalid, encode_body, resolve_secret, signed_headers
 from app.modules.machine.principal import actor_of, resolve_actor
@@ -51,6 +51,7 @@ async def criteria_user(session, user, run):
     if not getattr(run, "confirmed_at", None) or not isinstance(confirmer, str) or confirmer in ("", user.id):
         return user
     from app.common.auth import resolve_user
+
     return await resolve_user(session, confirmer)
 
 
@@ -58,23 +59,44 @@ async def preflight(session, user, run, *, review: dict | None = None):
     check_func(user, "action-center", "manage")
     definition = await execution_definition(session, run)
     from app.modules.integration.action_edits import resolved_params
-    run.params = await resolved_params(session, user, definition,
-        structured_params(run.params if run.params is not None else run.params_text))
+
+    run.params = await resolved_params(
+        session,
+        user,
+        definition,
+        structured_params(run.params if run.params is not None else run.params_text),
+    )
+    from app.modules.integration.http_mapping import validate_mapping
+    validate_mapping(definition.get("httpMapping"), {p["api"] for p in definition["params"]})
+    if definition.get("httpMapping"):
+        for row in definition["httpMapping"]["request"]:
+            if row["source"].startswith("params.") and row["source"][7:] not in run.params:
+                raise AppError("HTTP 请求映射缺少参数值", code="ACTION_HTTP_MAPPING_INVALID", status_code=422)
     await target_access(session, user, run, definition)
     checker = DatabaseSubmissionChecker(session, await criteria_user(session, user, run))
-    result = await checker.run(definition, {"objKind": run.obj_kind, "objId": run.obj_id,
-                  "params": run.params, "actionRunId": run.code})
-    failed = result['failed']
+    result = await checker.run(
+        definition,
+        {"objKind": run.obj_kind, "objId": run.obj_id, "params": run.params, "actionRunId": run.code},
+    )
+    failed = result["failed"]
     if failed:
-        raise AppError("动作参数或提交条件未通过", code="SUBMISSION_CRITERIA_FAILED",
-                       status_code=422, details={"failed": failed})
+        raise AppError(
+            "动作参数或提交条件未通过",
+            code="SUBMISSION_CRITERIA_FAILED",
+            status_code=422,
+            details={"failed": failed},
+        )
     await business_edits(session, user, run, definition)
     from app.modules.integration.action_effects import preflight_effects
+
     await preflight_effects(session, user, run, definition)
     if review is not None:
         from app.modules.integration.action_edits import declared_writeback
-        review.update(humanChecks=result.get("humanChecks", []),
-                      declaredEdits=await declared_writeback(session, definition))
+
+        review.update(
+            humanChecks=result.get("humanChecks", []),
+            declaredEdits=await declared_writeback(session, definition),
+        )
     return definition
 
 
@@ -82,12 +104,30 @@ def submit_adapter(system, definition):
     try:
         adapter = get_adapter(system, "submit")
     except AppError as error:
-        raise AppError("外部动作执行通道未配置或不可用", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503) from error
-    if definition["id"] not in adapter.config.actions:
-        raise AppError("动作不在此外部系统的执行授权白名单", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
+        if error.code == "INTEGRATION_TLS_CONFIG_INVALID":
+            raise
+        raise AppError(
+            "外部动作执行通道未配置或不可用", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
+        ) from error
+    allowed = system.action_authorizations
+    entry = allowed.get(definition["id"]) if isinstance(allowed, dict) else None
+    paths = set(adapter.config.submit_paths) | ({adapter.config.submit_path} if adapter.config.submit_path else set())
+    if (allowed is None and definition["id"] not in adapter.config.actions) or (
+        allowed is not None and (not isinstance(entry, dict) or entry.get("version") != definition.get("version") or entry.get("path") not in paths)
+    ):
+        raise AppError(
+            "动作不在此外部系统的执行授权白名单", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
+        )
+    if allowed is not None:
+        adapter.config.submit_path = entry["path"]
+        adapter.path("submit")
     # The external system must explicitly implement our stable header contract.
     if not system.idempotent or system.idem_header.lower() != "idempotency-key":
-        raise AppError("真实执行要求外部系统支持 Idempotency-Key 去重", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
+        raise AppError(
+            "真实执行要求外部系统支持 Idempotency-Key 去重",
+            code="ACTION_EXECUTOR_UNAVAILABLE",
+            status_code=503,
+        )
     return adapter
 
 
@@ -97,7 +137,9 @@ class DatabaseActionSubmitter:
 
     async def submit(self, action_run_id, idempotency_key):
         # Do not refresh here: the caller has just changed the locked run to executing.
-        run = await self.session.scalar(select(ActionRun).where(ActionRun.code == action_run_id).with_for_update())
+        run = await self.session.scalar(
+            select(ActionRun).where(ActionRun.code == action_run_id).with_for_update()
+        )
         if run is None or run.idem_key != idempotency_key or run.status != ActionStatus.executing:
             raise Conflict("执行记录或幂等状态不匹配", code="STATE_INVALID")
         definition = await preflight(self.session, self.user, run)
@@ -109,33 +151,69 @@ class DatabaseActionSubmitter:
         adapter = submit_adapter(system, definition)
         target_url = f"{adapter.origin}{adapter.path('submit')}"
         if len(target_url) > 255:
-            raise AppError("真实执行地址超过调用账本长度限制", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
-        old = await self.session.scalar(select(WritebackCall).where(
-            WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.write))
+            raise AppError(
+                "真实执行地址超过调用账本长度限制", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
+            )
+        old = await self.session.scalar(
+            select(WritebackCall).where(
+                WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.write
+            )
+        )
         if old is not None:
             raise Conflict("该执行记录已提交，不能再次排队", code="IDEMPOTENCY_CONFLICT")
         run.params = structured_params(run.params if run.params is not None else run.params_text)
-        self.session.add(WritebackCall(code=f"EXEC-{uuid.uuid4().hex}", sys_id=system.id,
-            action_run_id=run.id, kind=CallKind.write, at=clock.now(), op_name=run.action_name,
-            target_label=run.obj_label or run.code, method="POST", path=target_url,
-            idem_key=run.idem_key, elapsed_ms=0, http_status=None, result=CallResult.unknown,
-            attempt=0, actor=actor_of(self.user), msg=QUEUED))
+        self.session.add(
+            WritebackCall(
+                code=f"EXEC-{uuid.uuid4().hex}",
+                sys_id=system.id,
+                action_run_id=run.id,
+                kind=CallKind.write,
+                at=clock.now(),
+                op_name=run.action_name,
+                target_label=run.obj_label or run.code,
+                method="POST",
+                path=target_url,
+                idem_key=run.idem_key,
+                elapsed_ms=0,
+                http_status=None,
+                result=CallResult.unknown,
+                attempt=0,
+                actor=actor_of(self.user),
+                msg=QUEUED,
+            )
+        )
         await self.session.flush()
-        return SubmitResult(SubmitStatus.UNKNOWN, reason="已持久排队，尚未调用外部系统；等待执行器处理",
-                            code="QUEUED", elapsed_ms=0)
+        return SubmitResult(
+            SubmitStatus.UNKNOWN,
+            reason="已持久排队，尚未调用外部系统；等待执行器处理",
+            code="QUEUED",
+            elapsed_ms=0,
+        )
 
 
 async def queued_call(session, run_id):
-    return await session.scalar(select(WritebackCall).where(WritebackCall.action_run_id == run_id,
-        WritebackCall.kind == CallKind.write, WritebackCall.msg == QUEUED))
+    return await session.scalar(
+        select(WritebackCall).where(
+            WritebackCall.action_run_id == run_id,
+            WritebackCall.kind == CallKind.write,
+            WritebackCall.msg == QUEUED,
+        )
+    )
 
 
+from app.jobs.scope import workspace_dispatch
+
+
+@workspace_dispatch
 async def dispatch_one(call_id, ontology_id: int):
     sessions = scoped_sessions(ontology_id)
     # Claim in its own committed transaction. A restart never repeats a claimed POST.
     async with sessions() as session, session.begin():
-        code = await session.scalar(select(ActionRun.code).join(WritebackCall,
-            WritebackCall.action_run_id == ActionRun.id).where(WritebackCall.id == call_id))
+        code = await session.scalar(
+            select(ActionRun.code)
+            .join(WritebackCall, WritebackCall.action_run_id == ActionRun.id)
+            .where(WritebackCall.id == call_id)
+        )
         if not code:
             return
         run = await lock_run(session, code)
@@ -147,6 +225,7 @@ async def dispatch_one(call_id, ontology_id: int):
             definition = await preflight(session, user, run)
             system = await session.get(ExtSystem, call.sys_id)
             adapter = submit_adapter(system, definition)
+            verify = tls_verify()
             if call.path != f"{adapter.origin}{adapter.path('submit')}" or call.idem_key != run.idem_key:
                 raise Conflict("排队后的执行配置已变更", code="ACTION_DISPATCH_CONFIG_CHANGED")
             try:
@@ -160,44 +239,64 @@ async def dispatch_one(call_id, ontology_id: int):
             resolved(task, ReconcileOutcome.not_executed.value, "系统")
             return
         call.msg, call.attempt, call.at = CLAIMED, 1, clock.now()
-        payload = {"ontologyId": ontology_id, "actionRunId": run.code, "actionType": definition["api"],
-                   "typeVersion": run.type_version, "idemKey": run.idem_key,
-                   "objKind": run.obj_kind, "objId": run.obj_id, "params": run.params}
+        payload = {
+            "ontologyId": ontology_id,
+            "actionRunId": run.code,
+            "actionType": definition["api"],
+            "typeVersion": run.type_version,
+            "idemKey": run.idem_key,
+            "objKind": run.obj_kind,
+            "objId": run.obj_id,
+            "params": run.params,
+        }
         from app.modules.integration.action_edits import declared_writeback
+        from app.modules.integration.http_mapping import request_body
+
         declared = await declared_writeback(session, definition)
         if declared:  # 自然语言编辑/副作用：声明由外部系统承担，本地不执行（status=external/declared）
             payload["declaredEdits"] = declared
+        payload = request_body(definition.get("httpMapping"), payload)
+        mapping = definition.get("httpMapping")
         key = run.idem_key
     started = time.perf_counter()
     status, response_code, result = None, None, None
     headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
-    if adapter.config.token:
+    if system.auth_type != NO_AUTH and adapter.config.token:
         headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
     # Signed like Webhooks; deliberately no automatic resend here: unknown outcomes go to reconcile_task.
     body = encode_body(payload)
     headers = signed_headers(headers, body, secret)
     try:
-        async with httpx.AsyncClient(timeout=max(.1, min(system.timeout_ms / 1000, 60)),
-                                     follow_redirects=False, trust_env=False) as client:
+        async with httpx.AsyncClient(
+            timeout=max(0.1, min(system.timeout_ms / 1000, 60)),
+            follow_redirects=False,
+            trust_env=False,
+            verify=verify,
+        ) as client:
             response = await client.post(call.path, content=body, headers=headers)
         status = response.status_code
         if not 200 <= status < 300 or len(response.content) > 65_536:
             raise ValueError
-        result = ExecutionResponse.model_validate(response.json())
+        from app.modules.integration.http_mapping import response_body
+        result = ExecutionResponse.model_validate(response_body(mapping, response.json()))
         if result.status == SubmitStatus.SUCCESS and not (result.receipt_id and result.receipt_id.strip()):
             raise ValueError
         response_code = result.code
     except (httpx.HTTPError, ValidationError, ValueError):
-        result = ExecutionResponse(status=SubmitStatus.UNKNOWN,
-            reason="外部调用超时、连接失败或响应无法确认；只对账，不重发业务写入")
+        result = ExecutionResponse(
+            status=SubmitStatus.UNKNOWN, reason="外部调用超时、连接失败或响应无法确认；只对账，不重发业务写入"
+        )
     elapsed = round((time.perf_counter() - started) * 1000)
     # Remote outcome is retained even when applying local edits/events fails.
     async with sessions() as session, session.begin():
         run = await lock_run(session, code)
         call = await session.get(WritebackCall, call_id, with_for_update=True)
         call.http_status, call.elapsed_ms = status, elapsed
-        call.result = {SubmitStatus.SUCCESS: CallResult.succeeded, SubmitStatus.FAILED: CallResult.failed,
-                       SubmitStatus.UNKNOWN: CallResult.unknown}[result.status]
+        call.result = {
+            SubmitStatus.SUCCESS: CallResult.succeeded,
+            SubmitStatus.FAILED: CallResult.failed,
+            SubmitStatus.UNKNOWN: CallResult.unknown,
+        }[result.status]
         call.msg = result.reason or result.status.value
         run.elapsed_ms, run.result_code = elapsed, response_code
         if result.receipt_id:
@@ -214,8 +313,17 @@ async def dispatch_one(call_id, ontology_id: int):
                 from app.modules.integration.emitter import DatabaseEventEmitter
 
                 unavailable = UnconfiguredAdapters()
-                ports = Ports(unavailable, DatabaseEventEmitter(session), DatabaseReconcileScheduler(session), unavailable)
-                outcome = ReconcileOutcome.succeeded if result.status == SubmitStatus.SUCCESS else ReconcileOutcome.not_executed
+                ports = Ports(
+                    unavailable,
+                    DatabaseEventEmitter(session),
+                    DatabaseReconcileScheduler(session),
+                    unavailable,
+                )
+                outcome = (
+                    ReconcileOutcome.succeeded
+                    if result.status == SubmitStatus.SUCCESS
+                    else ReconcileOutcome.not_executed
+                )
                 listener = DynamicReconciliationListener(session, await get_list_catalog(session), ports)
                 await listener.on_reconciled(code, ReconcileResult(outcome, result.receipt_id))
         except AppError as exc:
@@ -227,20 +335,30 @@ async def dispatch_one(call_id, ontology_id: int):
 async def dispatch_queued(timestamp=0):
     total = 0
     for ontology_id in await workspace_ids():
-        total += await _dispatch_workspace(ontology_id)
+        from app.common.ontology import WorkspaceInactive
+        try:
+            total += await _dispatch_workspace(ontology_id)
+        except WorkspaceInactive:
+            continue
     return total
 
 
 async def _dispatch_workspace(ontology_id: int):
     sessions = scoped_sessions(ontology_id)
     async with sessions() as session:
-        ids = list(await session.scalars(select(WritebackCall.id).where(
-            WritebackCall.kind == CallKind.write, WritebackCall.msg == QUEUED)
-            .order_by(WritebackCall.id).limit(100)))
+        ids = list(
+            await session.scalars(
+                select(WritebackCall.id)
+                .where(WritebackCall.kind == CallKind.write, WritebackCall.msg == QUEUED)
+                .order_by(WritebackCall.id)
+                .limit(100)
+            )
+        )
     for call_id in ids:
         try:
             await dispatch_one(call_id, ontology_id)
         except Exception:
             logger.exception("Action dispatch could not complete for call %s", call_id)
     from app.modules.integration.action_effects import dispatch_effects
+
     return len(ids) + await dispatch_effects(ontology_id)

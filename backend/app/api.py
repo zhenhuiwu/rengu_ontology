@@ -21,9 +21,11 @@ from app.core.config import api_prefix
 from app.modules.action.router import router as action_router
 from app.modules.admin.api_keys import router as api_keys_router
 from app.modules.admin.router import router as admin_router
+from app.modules.auto_ontology.assistant import router as assistant_router
 from app.modules.biz.router import router as biz_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.data.router import router as data_router
+from app.modules.data.governed_router import router as governed_router
 from app.modules.dynamic.router import router as dynamic_router
 from app.modules.event.ingress import router as internal_event_router
 from app.modules.event.router import router as event_router
@@ -39,6 +41,7 @@ from app.modules.versioning.router import router as versioning_router
 
 MOUNTS: list[tuple[str, APIRouter]] = [
     ("ontology", workspace_router),
+    ("ontology", assistant_router),
     ("ontology", notifications_router),
     ("ontology", versioning_router),
     ("ontology", static_router),
@@ -49,6 +52,7 @@ MOUNTS: list[tuple[str, APIRouter]] = [
     ("ontology", machine_router),
     ("qa", qa_router),
     ("data", data_router),
+    ("data", governed_router),
     ("data", integration_router),  # integration 只挂 data（action-event-api.md:140、:168）
     ("biz", biz_router),
     ("biz", dashboard_router),  # 首页看板 /dashboard/kpis、/stores/ranking（PDE）
@@ -60,5 +64,9 @@ MOUNTS: list[tuple[str, APIRouter]] = [
 
 def include_routers(app: FastAPI) -> None:
     for module, router in MOUNTS:
-        app.include_router(router, prefix=api_prefix(module), dependencies=[ReadonlyGuardDep, ApiKeyGuardDep, OntologyGuardDep])
+        app.include_router(
+            router,
+            prefix=api_prefix(module),
+            dependencies=[ReadonlyGuardDep, ApiKeyGuardDep, OntologyGuardDep],
+        )
     app.include_router(internal_event_router, prefix="/internal/v1", dependencies=[ReadonlyGuardDep])

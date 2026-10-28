@@ -16,6 +16,7 @@ from app.modules.data import quality as service
 from app.modules.data import quality_cr
 from app.modules.data.quality_models import QualityRun
 from app.modules.data.quality_schemas import ChangeOptions, CheckSave
+from app.modules.static.publish import PublishService
 
 router = APIRouter(tags=["data-quality"])
 VIEW = [Depends(require_func("data-quality", "view"))]
@@ -31,9 +32,13 @@ async def owner(session, user, ctx):
 
 @router.get("/quality-checks/meta", dependencies=VIEW)
 async def meta(session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    effective = await resolve_user(session, ctx.preview_as) if ctx.preview_as else user
     await owner(session, user, ctx)
-    return {"objects": await service.meta(session, ctx.ver), "automaticScheduling": True,
-            "schedulingTimezone": get_settings().display_tz}
+    return {
+        "objects": await service.meta(session, ctx.ver, effective),
+        "automaticScheduling": True,
+        "schedulingTimezone": get_settings().display_tz,
+    }
 
 
 @router.get("/quality-checks", dependencies=VIEW)
@@ -55,24 +60,39 @@ async def list_checks(
 async def create(body: CheckSave, session: SessionDep, user: CurrentUserDep):
     if not body.name.strip():
         raise AppError("名称不能为空", code="VALIDATION_FAILED", status_code=422)
-    return await quality_cr.stage(
+    if body.lock_version is None or body.cr_id:
+        raise AppError("保存需提供当前版本锁", code="VALIDATION_FAILED", status_code=422)
+    result = await quality_cr.stage(
         session,
         user,
-        body,
-        body.model_dump(by_alias=True, include={"name", "type_key", "kind", "threshold", "schedule"}),
+        ChangeOptions(),
+        body.model_dump(by_alias=True, include={"name", "type_key", "kind", "threshold", "schedule", "field", "format_rule"}),
     )
+    result["ver"] = await PublishService(session).publish(user, None, lock_version=body.lock_version, draft_code=result["crId"], save_mode=True)
+    result["status"] = "已生效"
+    return result
 
 
 @router.put("/quality-checks/{code}", dependencies=MANAGE)
 async def update(code: Code, body: CheckSave, session: SessionDep, user: CurrentUserDep):
-    value = body.model_dump(by_alias=True, include={"name", "type_key", "kind", "threshold", "schedule"})
-    return await quality_cr.stage(session, user, body, value, code)
+    if body.lock_version is None or body.cr_id:
+        raise AppError("保存需提供当前版本锁", code="VALIDATION_FAILED", status_code=422)
+    value = body.model_dump(by_alias=True, include={"name", "type_key", "kind", "threshold", "schedule", "field", "format_rule"})
+    result = await quality_cr.stage(session, user, ChangeOptions(), value, code)
+    result["ver"] = await PublishService(session).publish(user, None, lock_version=body.lock_version, draft_code=result["crId"], save_mode=True)
+    result["status"] = "已生效"
+    return result
 
 
 @router.delete("/quality-checks/{code}", dependencies=MANAGE)
 @router.post("/quality-checks/{code}:retire", dependencies=MANAGE)
 async def retire(code: Code, body: ChangeOptions, session: SessionDep, user: CurrentUserDep):
-    return await quality_cr.stage(session, user, body, code=code, retire=True)
+    if body.lock_version is None or body.cr_id:
+        raise AppError("保存需提供当前版本锁", code="VALIDATION_FAILED", status_code=422)
+    result = await quality_cr.stage(session, user, ChangeOptions(), code=code, retire=True)
+    result["ver"] = await PublishService(session).publish(user, None, lock_version=body.lock_version, draft_code=result["crId"], save_mode=True)
+    result["status"] = "已生效"
+    return result
 
 
 @router.get("/quality-checks/{code}/runs", dependencies=VIEW)

@@ -43,14 +43,23 @@ def validate_payload(event_type: EventType, payload: dict[str, Any]) -> None:
 
 
 def validate_fields(fields, payload: dict[str, Any]) -> None:
-    """Shared validation for real ingress and read-only simulation definitions."""
-    for field in fields:
-        value = payload.get(field.api)
-        if value is None:
-            if field.required:
-                raise bad(f"缺少必填载荷字段：{field.api}")
-            continue
-        kind = field.type
+    """Validate both stored and snapshot definitions on ingress and simulation."""
+    from types import SimpleNamespace
+    from app.modules.event.payload_schema import validate_definition
+
+    def value_valid(kind, schema, value, path):
+        if kind == "对象":
+            if not isinstance(value, dict):
+                raise bad(f"载荷字段 {path} 须符合类型：对象")
+            for child in schema["fields"]:
+                check(SimpleNamespace(**child), value, path + ".")
+            return
+        if kind == "数组":
+            if not isinstance(value, list):
+                raise bad(f"载荷字段 {path} 须符合类型：数组")
+            for index, item in enumerate(value):
+                value_valid(schema["item"]["type"], schema["item"]["schema"], item, f"{path}[{index}]")
+            return
         valid = False
         if kind in ("字符串", "文本", "枚举"):
             valid = isinstance(value, str)
@@ -60,17 +69,28 @@ def validate_fields(fields, payload: dict[str, Any]) -> None:
             valid = type(value) in (int, float) and (not isinstance(value, float) or math.isfinite(value))
         elif kind == "布尔":
             valid = type(value) is bool
-        elif kind in ("日期", "日期时间"):
-            if isinstance(value, str):
-                try:
-                    (date.fromisoformat if kind == "日期" else datetime.fromisoformat)(value)
-                    valid = True
-                except ValueError:
-                    pass
-        else:
-            raise bad(f"载荷字段 {field.api} 的类型尚不支持校验", "EVENT_PAYLOAD_CONFIG_INVALID", 409)
+        elif kind in ("日期", "日期时间") and isinstance(value, str):
+            try:
+                (date.fromisoformat if kind == "日期" else datetime.fromisoformat)(value)
+                valid = True
+            except ValueError:
+                pass
         if not valid:
-            raise bad(f"载荷字段 {field.api} 须符合类型：{kind}")
+            raise bad(f"载荷字段 {path} 须符合类型：{kind}")
+
+    def check(field, values, prefix=""):
+        path = prefix + field.api
+        schema = getattr(field, "schema", None)
+        validate_definition(field.type, schema)
+        value = values.get(field.api)
+        if value is None:
+            if field.required:
+                raise bad(f"缺少必填载荷字段：{path}")
+        else:
+            value_valid(field.type, schema, value, path)
+
+    for field in fields:
+        check(field, payload)
 
 
 def check_allowlist(request, event_type: EventType) -> None:

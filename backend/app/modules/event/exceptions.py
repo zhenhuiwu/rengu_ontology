@@ -26,6 +26,7 @@ from app.modules.event.delivery import (
     object_order_lock,
     route_fingerprint,
     route_for,
+    resolved_route,
 )
 from app.modules.event.delivery_history import record, safe_result
 from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, EventOutcome, EventType
@@ -33,6 +34,8 @@ from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, 
 EXCEPTION_STATES = ("unknown", "failed", "quarantined", "pending")
 RETRY_ERRORS = frozenset(
     {
+        "RULE_EVALUATION_UNAVAILABLE",
+        "ACTION_EXECUTOR_UNAVAILABLE",
         "DELIVERY_ROUTE_NOT_CONFIGURED",
         "DELIVERY_ROUTE_CONFLICT",
         "DELIVERY_IDENTITY_NOT_CONFIGURED",
@@ -71,17 +74,23 @@ class DispositionIn(ApiModel):
         return value
 
 
-async def visible_events(user):
+async def visible_events(session, user):
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
     scopes = [and_(Event.is_test.is_(True), Event.created_by == user.id)]
-    for mapping in governed_tables(user.ontology_id).values():
-        if mapping.inherit or "code" not in mapping.table.c or "id" not in mapping.table.c:
+    for mapping in governed_tables(user.ontology_id, session).values():
+        if mapping.inherit or "id" not in mapping.table.c:
             continue
         expr = await row_filter(user, mapping.object_type)
         if is_deny_all(expr):
             continue
         references = identity_rows(mapping).subquery()
-        query = select(mapping.table.c.id).where(mapping.table.c.id.in_(
-            select(references.c.row_id).where(references.c.identity == Event.object_id).correlate(Event)))
+        query = select(mapping.table.c.id).where(
+            mapping.table.c.id.in_(
+                select(references.c.row_id).where(references.c.identity == Event.object_id).correlate(Event)
+            )
+        )
         if expr is not None:
             query = query.where(to_sql(expr, mapping.columns, user.attrs, mapping.links))
         scopes.append(and_(Event.is_test.is_(False), Event.obj_kind == mapping.object_type, exists(query)))
@@ -129,7 +138,7 @@ async def inbox(session, user, type_code, state, keyword, page, size):
         .join(Event, Event.id == EventDelivery.event_id)
         .where(
             Event.event_type_id == event_type.id,
-            await visible_events(user),
+            await visible_events(session, user),
             EventDelivery.state.in_((state,) if state else EXCEPTION_STATES),
         )
     )
@@ -240,7 +249,7 @@ async def validate_requeue(session, user, event, row):
     validate_fields(fields, event.payload)
     if not filter_matches(row.subscription.get("filter", ""), fields, event.payload):
         raise Conflict("原订阅过滤条件不匹配，不能补投")
-    route = route_for(event, row)
+    route = await resolved_route(session, event, row)
     if not route or (route.get("action_type") and route.get("rule_code")):
         raise Conflict("请先修复明确的订阅通道配置", code="DELIVERY_ROUTE_NOT_CONFIGURED")
     if event.is_test and (route.get("rule_code") or route.get("action_type")):
@@ -304,7 +313,7 @@ async def dispose(session, user, ctx, delivery_id, body):
         raise NotFound("投递记录不存在")
     event = await session.get(Event, candidate.event_id)
     await authorize(session, user, event, "manage")
-    if route_for(event, candidate).get("rule_code"):
+    if candidate.subscription.get("kind") == "规则" or route_for(event, candidate).get("rule_code"):
         await get_adapter(session).xact_lock(session, "ontology.publish")
     if not event.is_test:
         await get_adapter(session).xact_lock(

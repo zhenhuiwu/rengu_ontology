@@ -278,6 +278,11 @@ async def save(
     snapshot: dict | None = None,
 ) -> dict:
     # One short definition transaction covers code allocation AND duplicate draft names.
+    if body.cr_id:
+        raise AppError(
+            "已有草稿不能通过直接保存覆盖", code="TARGET_IN_OTHER_CR", status_code=409,
+            details={"crId": body.cr_id},
+        )
     await get_adapter(session).xact_lock(session, "functions.definition")
     current = await detail(session, code) if code is not None else None
     if current is not None and body.lock_version != current["lockVersion"]:
@@ -318,31 +323,20 @@ async def save(
     is_new = current is None or bool(current.get("pending", {}).get("isNew"))
     target = TargetIn(kind="function", id=code, is_new=is_new, name=value["title"])
     writer = CrWriteService(session)
-    cr_id = body.cr_id
     pending = current.get("pending") if current else None
-    if pending and cr_id != pending["cr"]:
+    if pending:
         raise AppError(
             "函数已在变更单中，请重新加载草稿",
             code="TARGET_IN_OTHER_CR",
             status_code=409,
             details={"crId": pending["cr"]},
         )
-    if cr_id:
-        if body.cr_lock_version is None:
-            raise VersionConflict("缺少变更单版本，请重新加载草稿")
-    else:
-        cr_id = await writer.create(
-            user,
-            CRCreateIn(
-                title=body.change_title or f"函数：{value['title']}"[:40], reason=body.reason, target=target
-            ),
-        )
-    # Explicit baseline protects against current-definition changes before publication.
-    baseline = (
-        pending["definition"].get("_baseLockVersion")
-        if pending
-        else (current["lockVersion"] if current and not is_new else None)
+    cr_id = await writer.create(
+        user,
+        CRCreateIn(title=body.change_title or f"函数：{value['title']}"[:40], reason=body.reason, target=target),
     )
+    # Explicit baseline protects against current-definition changes before publication.
+    baseline = current["lockVersion"] if current and not is_new else None
     items = [
         ItemIn(
             key=k, op="add" if is_new else "update", before=base.get(k), after=value[k], type="函数", field=k
@@ -359,10 +353,12 @@ async def save(
             target=target,
             section="def",
             rows=items,
-            lock_version=body.cr_lock_version if body.cr_id else None,
         ),
     )
-    return {"id": code, "crId": cr_id, "crLockVersion": saved["lockVersion"], "status": "草稿"}
+    from app.modules.static.publish import PublishService
+
+    ver = await PublishService(session).publish(user, None, draft_code=cr_id, save_mode=True)
+    return {"id": code, "crId": cr_id, "crLockVersion": saved["lockVersion"], "status": "已发布", "ver": ver}
 
 
 async def rollback(session: AsyncSession, user: CurrentUser, code: str, body: RollbackIn) -> dict:

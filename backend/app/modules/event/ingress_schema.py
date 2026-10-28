@@ -109,7 +109,9 @@ async def authenticate(
         request.state.event_caller = f"api:{context.service_account_code or context.prefix}"[:64]
         return
 
-    if x_ontology_id is not None and (len(x_ontology_id) > 19 or not x_ontology_id.isascii() or not x_ontology_id.isdigit()):
+    if x_ontology_id is not None and (
+        len(x_ontology_id) > 19 or not x_ontology_id.isascii() or not x_ontology_id.isdigit()
+    ):
         raise bad("本体工作空间编号无效")
     ontology_id = int(x_ontology_id) if x_ontology_id is not None else DEFAULT_ONTOLOGY_ID
     if ontology_id <= 0 or ontology_id > 2**63 - 1:
@@ -121,9 +123,14 @@ async def authenticate(
         try:
             tokens = json.loads(settings.internal_event_tokens.get_secret_value())
             if not isinstance(tokens, dict) or any(
-                not isinstance(key, str) or len(key) > 19 or not key.isascii() or not key.isdigit()
-                or not 0 < int(key) <= 2**63 - 1 or str(int(key)) != key
-                or not isinstance(value, str) or not value.strip()
+                not isinstance(key, str)
+                or len(key) > 19
+                or not key.isascii()
+                or not key.isdigit()
+                or not 0 < int(key) <= 2**63 - 1
+                or str(int(key)) != key
+                or not isinstance(value, str)
+                or not value.strip()
                 for key, value in tokens.items()
             ):
                 raise ValueError

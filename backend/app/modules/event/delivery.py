@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -20,6 +21,7 @@ from app.modules.action.condition_expr import Unavailable
 from app.modules.event.delivery_history import record, safe_result
 from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, EventOutcome
 from app.modules.event.schemas import FieldOut
+from app.modules.integration.adapters import tls_verify
 from app.modules.integration.signing import (
     SigningSecretInvalid,
     backoff,
@@ -29,6 +31,8 @@ from app.modules.integration.signing import (
     retryable_status,
     signed_headers,
 )
+
+logger = logging.getLogger(__name__)
 
 INTERVAL = timedelta(minutes=1)
 RETRY_SCHEDULED = "HTTP_RETRY_SCHEDULED"
@@ -92,17 +96,26 @@ def http_target(route: dict, is_test: bool) -> str:
     if route.get("idempotent") is not True:
         raise Unavailable("HTTP_IDEMPOTENCY_NOT_CONFIRMED")
     signing_secret(route, is_test)  # a configured but unusable secret keeps the delivery pending
+    tls_verify()  # Validate the CA before an attempt is claimed.
     return endpoint
 
 
 async def authorize_object(session, user, event: Event, level: str = "manage") -> None:
     """A production payload leaves the process only for an explicitly granted real object row."""
     check_func(user, "event-types", level)
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
     mapping = next(
-        (g for g in governed_tables(require_ontology_id(session)).values() if g.object_type == event.obj_kind and not g.inherit), None
+        (
+            g
+            for g in governed_tables(require_ontology_id(session), session).values()
+            if g.object_type == event.obj_kind and not g.inherit
+        ),
+        None,
     )
     expr = await row_filter(user, event.obj_kind or "")
-    if mapping is None or "code" not in mapping.table.c or "id" not in mapping.table.c or is_deny_all(expr):
+    if mapping is None or "id" not in mapping.table.c or is_deny_all(expr):
         raise AppError("订阅身份无对象行权限", code="EVENT_OBJECT_FORBIDDEN", status_code=403)
     from app.common.object_identity import identity_rows
 
@@ -129,6 +142,39 @@ def route_for(event: Event, delivery: EventDelivery) -> dict:
     if route is None and event.ontology_id == 1:
         route = configured.get(key)
     return route or {}
+
+
+async def resolved_route(session, event: Event, delivery: EventDelivery) -> dict:
+    configured = route_for(event, delivery)
+    if configured:
+        return configured
+    sub = delivery.subscription
+    definition = event.definition_snapshot
+    if event.is_test or not isinstance(sub, dict) or not isinstance(definition, dict) or not isinstance(definition.get("subscribers"), list) or sub.get("kind") != "规则" or sub.get("status") != "启用" or not sub.get("ruleId") or sub not in definition["subscribers"]:
+        return {}
+    from app.modules.dynamic.rules_models import Rule, RuleStatus
+    from app.modules.event.models import EventSubscription, SubscriberKind, SubscriberStatus
+    from app.modules.versioning.repo import ReleaseRepo
+
+    subscription = await session.scalar(select(EventSubscription).where(
+        EventSubscription.event_type_id == event.event_type_id, EventSubscription.name == delivery.subscriber_name,
+        EventSubscription.kind == SubscriberKind.rule, EventSubscription.status == SubscriberStatus.enabled,
+        EventSubscription.rule_code == sub["ruleId"],
+    ))
+    release = await ReleaseRepo(session).latest()
+    rule = await session.scalar(select(Rule).where(Rule.code == sub["ruleId"]))
+    snapshot = release.snapshot if release and release.id == event.release_id else None
+    bound = (snapshot.get("rules") or {}).get(sub["ruleId"]) if isinstance(snapshot, dict) else None
+    if not subscription or not rule or rule.status == RuleStatus.disabled or rule.version is None or not isinstance(bound, dict):
+        return {}
+    trigger = bound.get("trigger") or {}
+    if ((snapshot.get("eventTypes") or {}).get(definition.get("id")) != definition
+        or bound.get("version") != rule.version or trigger != rule.trigger
+        or trigger.get("kind") != "事件" or trigger.get("enabled") is not True
+        or trigger.get("eventId") != definition.get("id") or bound.get("objKind") != event.obj_kind
+        or not isinstance(trigger.get("runAsUserId"), str) or not trigger["runAsUserId"]):
+        return {}
+    return {"rule_code": rule.code, "user": trigger["runAsUserId"], "rule_version": rule.version, "release_id": release.id}
 
 
 def route_fingerprint(route: dict) -> str:
@@ -201,7 +247,7 @@ async def check_order(session, event: Event, delivery: EventDelivery, route: dic
     return True
 
 
-async def discover(session) -> None:
+async def discover(session, event_code: str | None = None) -> None:
     """Only accepted new events have trustworthy definition snapshots; legacy rows remain explicit pending."""
     events = await session.scalars(
         select(Event)
@@ -209,6 +255,7 @@ async def discover(session) -> None:
             Event.outcome == EventOutcome.pending,
             Event.is_seed.is_(False),
             Event.definition_snapshot.is_not(None),
+            *([Event.code == event_code] if event_code is not None else []),
             ~exists(select(EventDelivery.id).where(EventDelivery.event_id == Event.id)),
         )
         .order_by(Event.id)
@@ -303,7 +350,11 @@ async def prepare(session, delivery_id: int) -> bool:
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if delivery is None or delivery.state != "pending":
+    if (
+        delivery is None
+        or delivery.state != "pending"
+        or (delivery.next_at is not None and delivery.next_at > clock.now())
+    ):
         return False
     before = (delivery.state, delivery.error, delivery.result)
     previous = {"previousError": before[1], "previousResult": safe_result(before[2])}
@@ -335,7 +386,7 @@ async def prepare(session, delivery_id: int) -> bool:
             record(session, delivery, "preflight", detail=previous)
             await aggregate(session, event)
             return False
-        route = route_for(event, delivery)
+        route = await resolved_route(session, event, delivery)
         if not route:
             raise Unavailable("DELIVERY_ROUTE_NOT_CONFIGURED")
         if route.get("action_type") and route.get("rule_code"):
@@ -410,7 +461,7 @@ async def execute(session, delivery_id: int) -> None:
     if candidate is None or candidate.state != "processing":
         return
     event = await session.get(Event, candidate.event_id)
-    if route_for(event, candidate).get("rule_code"):
+    if candidate.subscription.get("kind") == "规则" or route_for(event, candidate).get("rule_code"):
         # Publication precedes object/event locks, matching the public rule entry point.
         await get_adapter(session).xact_lock(session, "ontology.publish")
     if not event.is_test:
@@ -427,7 +478,7 @@ async def execute(session, delivery_id: int) -> None:
         return
     event = await session.scalar(select(Event).where(Event.id == delivery.event_id).with_for_update(of=Event))
     try:
-        route = route_for(event, delivery)
+        route = await resolved_route(session, event, delivery)
         started = await session.scalar(
             select(EventDeliveryRecord)
             .where(
@@ -467,8 +518,10 @@ async def execute(session, delivery_id: int) -> None:
                     "hitId",
                     "alertId",
                     "status",
+                    "evaluationMode", "evaluatedAt",
                     "actionStatus",
                     "actionReason",
+                    "actionId",
                 )
                 if key in result
             }
@@ -505,8 +558,10 @@ async def execute(session, delivery_id: int) -> None:
             if not event.is_test:
                 await authorize_object(session, await resolve_user(session, route["user"]), event)
             secret = signing_secret(route, event.is_test)
-            headers = {"Idempotency-Key": delivery_key(event, delivery.subscriber_name),
-                       "X-Ontology-Id": str(event.ontology_id)}
+            headers = {
+                "Idempotency-Key": delivery_key(event, delivery.subscriber_name),
+                "X-Ontology-Id": str(event.ontology_id),
+            }
             token = route.get("test_token" if event.is_test else "token")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
@@ -528,7 +583,9 @@ async def execute(session, delivery_id: int) -> None:
             headers = signed_headers(headers, body, secret)
             try:
                 async with (
-                    httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client,
+                    httpx.AsyncClient(
+                        timeout=15, follow_redirects=False, trust_env=False, verify=tls_verify()
+                    ) as client,
                     client.stream("POST", endpoint, content=body, headers=headers) as response,
                 ):
                     delivery.result = {"httpStatus": response.status_code}
@@ -551,8 +608,19 @@ async def execute(session, delivery_id: int) -> None:
     except (AppError, Unavailable) as exc:
         delivery.state = "failed"
         delivery.error = exc.code if isinstance(exc, AppError) else str(exc)
-    except Exception:
-        # Do not log transport/configuration exceptions: their text can contain credentials.
+    except Exception as exc:
+        # Exception messages and local values can contain credentials or payloads.
+        trace = exc.__traceback__
+        frames = []
+        while trace:
+            module = trace.tb_frame.f_globals.get("__name__", "")
+            if module.startswith("app."):
+                frames.append(f"{module}:{trace.tb_lineno}")
+            trace = trace.tb_next
+        original = getattr(exc, "orig", None)
+        logger.error("Event delivery interrupted: %s original=%s sqlstate=%s app=%s",
+                     type(exc).__name__, type(original).__name__ if original else "none",
+                     getattr(original, "sqlstate", None), " > ".join(frames))
         delivery.state, delivery.error = "unknown", "EXECUTION_INTERRUPTED_REQUIRES_REVIEW"
     delivery.finished_at, delivery.next_at = clock.now(), None
     record(session, delivery, "attempt_finished")
@@ -570,17 +638,23 @@ def schedule_retry(delivery: EventDelivery, auto_attempt: int, retries: int, ret
 
 
 async def finish_retry(session, delivery: EventDelivery, event: Event, signed: bool) -> None:
-    record(session, delivery, "attempt_finished", detail={"retryable": True, "signed": signed,
-                                                          "nextAt": delivery.next_at.isoformat()})
+    record(
+        session,
+        delivery,
+        "attempt_finished",
+        detail={"retryable": True, "signed": signed, "nextAt": delivery.next_at.isoformat()},
+    )
     await aggregate(session, event)
     await session.flush()
 
 
-async def recover(session) -> None:
+async def recover(session, delivery_id: int | None = None) -> None:
     rows = await session.scalars(
         select(EventDelivery)
         .where(
-            EventDelivery.state == "processing", EventDelivery.started_at < clock.now() - timedelta(minutes=5)
+            EventDelivery.state == "processing",
+            EventDelivery.started_at < clock.now() - timedelta(minutes=5),
+            *([EventDelivery.id == delivery_id] if delivery_id is not None else []),
         )
         .with_for_update(skip_locked=True)
         .limit(200)

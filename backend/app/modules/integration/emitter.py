@@ -48,25 +48,46 @@ class DatabaseEventEmitter:
         code = f"dynamic:{hashlib.sha256(identity.encode()).hexdigest()[:56]}"
         previous = await self.session.scalar(select(Event).where(Event.code == code))
         from app.modules.machine.principal import resolve_actor
-        call = await self.session.scalar(select(WritebackCall).where(
-            WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.write))
+
+        call = await self.session.scalar(
+            select(WritebackCall).where(
+                WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.write
+            )
+        )
         actor = call.actor if call else (run.approver or run.confirmer or run.created_by)
         user = await resolve_actor(self.session, actor or "")
-        if event_type == EVENT_ACTION_EXECUTED and not previous and (
-                definition["writeback"]["edits"] or definition["writeback"]["effects"]):
+        if (
+            event_type == EVENT_ACTION_EXECUTED
+            and not previous
+            and (definition["writeback"]["edits"] or definition["writeback"]["effects"])
+        ):
             if run.sys_code:
-                evidence = (call is not None and call.attempt > 0 and call.idem_key == run.idem_key
-                            and call.result == CallResult.succeeded and call.http_status is not None
-                            and 200 <= call.http_status < 300)
+                evidence = (
+                    call is not None
+                    and call.attempt > 0
+                    and call.idem_key == run.idem_key
+                    and call.result == CallResult.succeeded
+                    and call.http_status is not None
+                    and 200 <= call.http_status < 300
+                )
                 if not evidence and call is not None and call.attempt > 0:
-                    evidence = await self.session.scalar(select(WritebackCall.id).where(
-                        WritebackCall.action_run_id == run.id, WritebackCall.kind == CallKind.query,
-                        WritebackCall.idem_key == run.idem_key,
-                        WritebackCall.result == CallResult.succeeded,
-                        WritebackCall.msg == "查到·成功").limit(1))
+                    evidence = await self.session.scalar(
+                        select(WritebackCall.id)
+                        .where(
+                            WritebackCall.action_run_id == run.id,
+                            WritebackCall.kind == CallKind.query,
+                            WritebackCall.idem_key == run.idem_key,
+                            WritebackCall.result == CallResult.succeeded,
+                            WritebackCall.msg == "查到·成功",
+                        )
+                        .limit(1)
+                    )
                 if not evidence:
-                    raise AppError("缺少真实外部成功证据，人工标注不能触发业务属性修改",
-                                   code="ACTION_EDITS_EVIDENCE_REQUIRED", status_code=409)
+                    raise AppError(
+                        "缺少真实外部成功证据，人工标注不能触发业务属性修改",
+                        code="ACTION_EDITS_EVIDENCE_REQUIRED",
+                        status_code=409,
+                    )
             await business_edits(self.session, user, run, definition, apply=True)
         await receive(
             self.session,
@@ -83,6 +104,7 @@ class DatabaseEventEmitter:
         )
         if not previous:
             from app.modules.integration.action_effects import retain_effects
+
             await retain_effects(self.session, user, run, definition, event_type)
         if event_type == EVENT_ACTION_OUTCOME_UNKNOWN:
             from app.modules.integration.reconcile import DatabaseReconcileScheduler, lock_run

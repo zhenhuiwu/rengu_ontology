@@ -178,7 +178,9 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
     obj_label: Mapped[str | None] = mapped_column(String(200))
     params: Mapped[dict | None] = mapped_column(JsonType)
     params_text: Mapped[str | None] = mapped_column(Text, comment="参数摘要（ACTIONS.params / RUNS.summary）")
-    review_snapshot: Mapped[dict | None] = mapped_column(JsonType, comment="暂存时的人工复核项与声明效果；旧记录为空")
+    review_snapshot: Mapped[dict | None] = mapped_column(
+        JsonType, comment="暂存时的人工复核项与声明效果；旧记录为空"
+    )
     elapsed_ms: Mapped[int | None] = mapped_column(Integer)
     result_code: Mapped[str | None] = mapped_column(String(200))
     retry_count: Mapped[int | None] = mapped_column(Integer)
@@ -238,6 +240,9 @@ class DecisionLog(CodeMixin, AppendOnlyTableMixin, Base):
     caller_id = 身份编号，api_key_prefix = API 密钥前缀（人工会话为空）。"""
 
     __tablename__ = "decision_log"
+    code: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, comment="业务编号（前端 id / decisionId）"
+    )
     __table_args__ = (
         Index("ix_decision_log_obj_kind_obj_id", "obj_kind", "obj_id"),
         {"comment": "决策评估记录（只追加）"},

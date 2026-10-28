@@ -39,10 +39,10 @@ class OrgColumnInvalid(AppError):
     status_code, code, message = 422, "ORG_COLUMN_INVALID", "组织列配置无效"
 
 
-def _scope_tables(ontology_id: int) -> dict[str, Any]:
+def _scope_tables(session, ontology_id: int) -> dict[str, Any]:
     from app.common.sql_guard import governed_tables
 
-    return {g.object_type: g for g in governed_tables(ontology_id).values() if not g.inherit}
+    return {g.object_type: g for g in governed_tables(ontology_id, session).values() if not g.inherit}
 
 
 async def _setting(session: AsyncSession) -> PlatformSetting | None:
@@ -56,7 +56,10 @@ async def load_org_fields(session: AsyncSession) -> dict[str, str]:
         return {}
     row = await _setting(session)
     raw = (row.value or {}).get(str(ontology_id), {}) if row is not None else {}
-    tables = _scope_tables(ontology_id)
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
+    tables = _scope_tables(session, ontology_id)
     return {
         code: field
         for code, field in raw.items()
@@ -80,7 +83,10 @@ class OrgColumnsOut(ApiModel):
 
 
 async def org_columns_report(session: AsyncSession) -> OrgColumnsOut:
-    tables = _scope_tables(require_ontology_id(session))
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
+    tables = _scope_tables(session, require_ontology_id(session))
     configured = await load_org_fields(session)
     items = [
         OrgColumnItem(
@@ -97,7 +103,10 @@ async def save_org_columns(
     session: AsyncSession, columns: dict[str, str], user: CurrentUser, ip: str
 ) -> OrgColumnsOut:
     ontology_id = require_ontology_id(session)
-    tables = _scope_tables(ontology_id)
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
+    tables = _scope_tables(session, ontology_id)
     bad = {
         code: field
         for code, field in columns.items()

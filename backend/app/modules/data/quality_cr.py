@@ -16,7 +16,7 @@ from app.modules.static.models import ChangeRequest, CrItem, CRStatus, CrTarget,
 from app.modules.static.schemas import CRCreateIn, ItemIn, ItemsPutIn, TargetIn
 from app.modules.static.writeback import Ctx, register_writeback, writeback_error
 
-FIELDS = ("name", "typeKey", "kind", "threshold", "schedule")
+FIELDS = ("name", "typeKey", "kind", "threshold", "schedule", "field", "formatRule")
 HOLDING = (CRStatus.draft, CRStatus.rejected, CRStatus.in_review, CRStatus.approved)
 
 
@@ -27,15 +27,21 @@ def definition(check, obj):
         "kind": check.kind,
         "threshold": check.threshold,
         "schedule": check.schedule,
+        "field": check.field,
+        "formatRule": check.format_rule,
     }
 
 
 async def validate_definition(session, value):
     body = CheckDefinition.model_validate(value)
+    if (body.kind == "格式") != bool(body.format_rule):
+        raise AppError("格式检查必须选择固定格式规则", code="QUALITY_NOT_CONFIGURED", status_code=422)
     obj = await session.scalar(select(ObjectType).where(ObjectType.code == body.type_key))
     if obj is None:
         raise NotFound("对象类型不存在")
-    if body.kind not in quality.kinds(obj.code, require_ontology_id(session)):
+    if body.field:
+        await quality.quality_binding(session, obj.code, body.field, body.kind)
+    elif body.kind not in quality.kinds(obj.code, require_ontology_id(session)):
         raise AppError("该对象的检查类型尚未配置物理字段映射", code="QUALITY_NOT_CONFIGURED", status_code=422)
     return body, obj, quality.limit_value(body.kind, body.threshold)
 
@@ -66,10 +72,10 @@ async def pending(session, owner):
     out = {}
     for cr, target in rows:
         values = grouped.get((cr.id, target.target_id), {})
-        if not all(k in values for k in FIELDS):
+        if not all(k in values for k in FIELDS if k not in ("field", "formatRule")):
             continue
         try:
-            valid = CheckDefinition.model_validate({k: values[k] for k in FIELDS}).model_dump(by_alias=True)
+            valid = CheckDefinition.model_validate({k: values.get(k) for k in FIELDS}).model_dump(by_alias=True)
         except ValidationError:
             continue
         out[target.target_id] = {
@@ -130,7 +136,7 @@ async def stage(session, user: CurrentUser, options: ChangeOptions, value=None, 
             key=k,
             op="add" if check is None else "update",
             before=base.get(k),
-            after=value[k],
+            after=value.get(k),
             type="质量检查",
             field=k,
         )
@@ -160,7 +166,7 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
     values = {i.item_key: i.after for i in rows}
     try:
         body, obj, limit = await validate_definition(ctx.session, values)
-        if set(values) != allowed or not isinstance(values["_retire"], bool):
+        if set(values) - allowed or not (allowed - {"field", "formatRule"}) <= set(values) or not isinstance(values["_retire"], bool):
             raise ValueError("定义不完整")
     except (AppError, ValidationError, ValueError, TypeError) as error:
         raise writeback_error("质量检查定义无效", id=code, reason=str(error)) from None
@@ -179,6 +185,8 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
         raise writeback_error("质量检查已变化或不属于变更发起人，请重新加载", id=code)
     check.name, check.object_type_id, check.kind = body.name, obj.id, body.kind
     check.threshold, check.limit_value, check.schedule = body.threshold, limit, body.schedule
+    check.field = body.field
+    check.format_rule = body.format_rule
     check.retired_at = ctx.now if values["_retire"] else None
     await ctx.session.flush()
     from app.modules.data.quality_scheduler import reset

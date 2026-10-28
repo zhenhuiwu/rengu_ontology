@@ -66,8 +66,10 @@ def _eligible():
 
 async def _pending_alert(session, alert_id):
     return await session.scalar(
-        select(Alert).where(Alert.id == alert_id, *_eligible())
-        .with_for_update(skip_locked=True).execution_options(populate_existing=True)
+        select(Alert)
+        .where(Alert.id == alert_id, *_eligible())
+        .with_for_update(skip_locked=True)
+        .execution_options(populate_existing=True)
     )
 
 
@@ -91,7 +93,9 @@ async def _record_failure(sessions, alert_id: int, error: Exception) -> None:
                     "caller": {"kind": "system", "system": {"trigger": "rule", "ruleId": alert.rule_code}}
                 },
                 output={
-                    "suggestOnly": True, "recommendations": [], "notes": [],
+                    "suggestOnly": True,
+                    "recommendations": [],
+                    "notes": [],
                     "error": "自动评估未完成，请检查规则运行身份与配置",
                     "errorCode": error.code if isinstance(error, AppError) else "AUTO_DECISION_FAILED",
                 },
@@ -106,10 +110,7 @@ async def decide_pending(ontology_id: int, *, limit: int = BATCH) -> int:
     async with sessions() as session, session.begin():
         ids = list(
             await session.scalars(
-                select(Alert.id)
-                .where(*_eligible())
-                .order_by(Alert.triggered_at, Alert.id)
-                .limit(limit)
+                select(Alert.id).where(*_eligible()).order_by(Alert.triggered_at, Alert.id).limit(limit)
             )
         )
     done = 0

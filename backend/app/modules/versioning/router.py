@@ -5,9 +5,9 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
-from app.common.auth import CurrentUserDep
+from app.common.auth import CurrentUserDep, resolve_user
 from app.core import clock
 from app.db.session import SessionDep
 from app.modules.versioning.repo import ReleaseRepo
@@ -21,7 +21,7 @@ ServiceDep = Annotated[VersioningService, Depends(get_version_service)]
 @router.get("", response_model=ReleaseListOut, summary="版本列表（不分页，新→旧，第一条是当前版本）")
 async def list_releases(session: SessionDep, _: CurrentUserDep) -> ReleaseListOut:
     """PDE api-index §1.11：RELEASES 全量 + current；登录即可调用，不分页。"""
-    rows = await ReleaseRepo(session).all()
+    rows = await ReleaseRepo(session).formal()
     items = [ReleaseOut.model_validate(r) for r in rows]
     return ReleaseListOut(
         items=items,
@@ -32,12 +32,15 @@ async def list_releases(session: SessionDep, _: CurrentUserDep) -> ReleaseListOu
 @router.get("/current", response_model=CurrentVersionOut, summary="当前版本与下一个版本号")
 async def current_release(session: SessionDep, _: CurrentUserDep) -> CurrentVersionOut:
     latest = await ReleaseRepo(session).latest()
+    formal = await ReleaseRepo(session).formal()
     cur = latest.ver if latest else None
     return CurrentVersionOut(
         current=cur,
         next=_next_from(cur) if cur else next_ver(None, clock.now()),
         release=ReleaseOut.model_validate(latest) if latest else None,
         lock_version=latest.id if latest else 0,
+        formal_current=formal[0].ver if formal else None,
+        formal_release=ReleaseOut.model_validate(formal[0]) if formal else None,
     )
 
 
@@ -54,6 +57,17 @@ async def get_release(ver: str, session: SessionDep, _: CurrentUserDep) -> Relea
 
 
 @router.get("/{ver}/snapshot", summary="版本快照（?ver= 只读查看用）")
-async def get_release_snapshot(ver: str, session: SessionDep, svc: ServiceDep, _: CurrentUserDep) -> dict:
+async def get_release_snapshot(ver: str, session: SessionDep, svc: ServiceDep, user: CurrentUserDep, preview_as: Annotated[str | None, Query(alias="previewAs")] = None) -> dict:
     await ReleaseRepo(session).by_ver_or_404(ver)
-    return await svc.get_snapshot(session, ver) or {}
+    snapshot = await svc.get_snapshot(session, ver) or {}
+    if user.func.get("functions") not in ("view", "manage"):
+        snapshot.pop("functions", None)
+    viewer = await resolve_user(session, preview_as) if preview_as else user
+    if any(
+        principal.ontology_role != "owner"
+        or principal.func.get("connections") != "manage"
+        or principal.func.get("object-types") != "manage"
+        for principal in (user, viewer)
+    ):
+        snapshot.pop("objectBindings", None)
+    return snapshot

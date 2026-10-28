@@ -39,6 +39,7 @@ def field_dict(f: Any) -> dict[str, Any]:
         "required": f.required,
         "desc": f.description,
         "sample": f.sample,
+        "schema": getattr(f, "schema", None),
     }
 
 
@@ -143,7 +144,7 @@ async def restore_event_types(session: AsyncSession, content: dict[str, Any], re
                 EventPayloadField(
                     event_type_id=et.id, seq=i, name=f["name"], api=f["api"], type=f["type"],
                     required=bool(f.get("required")), description=f.get("desc") or "",
-                    sample=f.get("sample") or "", is_seed=seed,
+                    sample=f.get("sample") or "", schema=f.get("schema"), is_seed=seed,
                 )
                 for i, f in enumerate(d.get("payload") or [], 1)
             ]

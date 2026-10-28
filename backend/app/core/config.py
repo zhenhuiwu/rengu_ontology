@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     # Explicit opt-in plus per-system HTTP paths/credentials; only put real values in ignored .env.
     integration_real_connect: bool = False
     integration_adapters: SecretStr | None = None
+    integration_ca_file: Path | None = None
+    integration_local_demo: str | None = None
     event_delivery_http_enabled: bool = False
     event_delivery_routes: SecretStr | None = None
     # 问数 NL2SQL 执行用的只读库账号（api-index §1.4 硬规则；库层 default_transaction_read_only=on、

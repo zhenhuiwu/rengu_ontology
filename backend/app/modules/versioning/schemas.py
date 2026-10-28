@@ -14,6 +14,7 @@ from app.modules.versioning.models import ReleaseKind
 
 class ReleaseOut(ApiModel):
     ver: str
+    scope: str = "legacy"
     published_at: DateTimeMin
     by: str = Field(validation_alias="published_by")  # 发布人姓名（前端 Release.by）
     by_id: str = Field(validation_alias="published_by_code")  # 发布人 sys_user.code（新增，前端不读）
@@ -36,6 +37,8 @@ class CurrentVersionOut(ApiModel):
     next: str
     release: ReleaseOut | None
     lock_version: int = 0
+    formal_current: str | None = None
+    formal_release: ReleaseOut | None = None
 
 
 class ReleaseListOut(ApiModel):

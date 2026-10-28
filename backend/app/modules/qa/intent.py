@@ -239,7 +239,7 @@ def action_snapshot(
     elif not stageable:
         how = "该动作执行策略不允许问数（AI）发起，请到动作中心手动发起"
     else:
-        how = "点“发起动作”只会暂存到动作中心，需你确认后才提交，问数不会自动执行"
+        how = "可在问数中确认并执行，执行结果会显示在当前对话中"
     stage = {
         "typeId": intent["type"],
         "objKind": intent.get("objKind"),
@@ -284,6 +284,7 @@ def action_snapshot(
                 **({"humanChecks": human} if human else {}),
                 **({"declaredSummary": declared_summary(declared)} if declared else {}),
                 "stage": stage,
+                "stageVersion": 1,
                 "mode": "suggest",  # 问数只建议；发起 = 暂存待人工确认
                 "policy": policy.get("mode", "confirm"),  # 动作执行策略 suggest / confirm / auto
                 "canStage": stageable,

@@ -170,7 +170,14 @@ def turn_out(t: QaTurn, applied: bool = False) -> dict[str, Any]:
         out["vote"] = t.vote  # W12 赞踩，刷新后保留
     if applied:
         out["applied"] = True  # [推断] 越权轮次已提交过待审批的申请（W16）→「已申请 · 待审批」
-    out["pinnable"] = bool(not t.is_seed and t.kind.value == "answer" and t.status.value == "done" and t.sql_text and t.release_id and t.answered_ver)
+    out["pinnable"] = bool(
+        not t.is_seed
+        and t.kind.value == "answer"
+        and t.status.value == "done"
+        and t.sql_text
+        and t.release_id
+        and t.answered_ver
+    )
     return out
 
 
@@ -301,7 +308,9 @@ def template_out(t: QaTemplate) -> dict[str, Any]:
         "id": t.code,
         "name": t.name,
         "scene": t.scene,
-        "cards": [{key: value for key, value in card_out(c).items() if key in _CARD_FRAME_KEYS} for c in t.cards],
+        "cards": [
+            {key: value for key, value in card_out(c).items() if key in _CARD_FRAME_KEYS} for c in t.cards
+        ],
         "provider": t.provider,
         "uses": t.uses,
         "updated_at": fmt_date(t.updated_at) or "",
@@ -315,21 +324,33 @@ async def page_view_out(session, page, user, ctx, *, temporary=False, metadata_o
     from app.modules.qa.models import SharePerm
     from app.modules.qa.page_execution import projected_cards, template_capability
 
-    cards = [denied_card(card_out(card)) for card in page.cards] if metadata_only else await projected_cards(session, user, page, ctx, temporary=temporary)
+    cards = (
+        [denied_card(card_out(card)) for card in page.cards]
+        if metadata_only
+        else await projected_cards(session, user, page, ctx, temporary=temporary)
+    )
     owner = page.owner.code == user.id
-    member_edit = any(member.user.code == user.id and member.perm == SharePerm.edit for member in page.members)
+    member_edit = any(
+        member.user.code == user.id and member.perm == SharePerm.edit for member in page.members
+    )
     writable = not ctx.read_only and user.ontology_role in ("owner", "editor")
     can_refresh, refresh_reason = await template_capability(session, page)
-    return page_full_out(page, deny_cards=True).model_copy(update={
-        "cards": cards, "calibers": calibers_of(cards), "lock_version": page.lock_version,
-        "can_edit": writable and (owner or member_edit), "can_share": writable and owner,
-        "can_refresh": writable and (owner or member_edit) and can_refresh,
-        "refresh_unavailable_reason": refresh_reason,
-        "schedule_active": bool(page.next_run and (page.refresh or {}).get("freq") != "手动"),
-        "subscription_active": bool(page.subscription and page.subscription.enabled),
-        "can_schedule": writable and owner,
-        "next_run": fmt_min(page.next_run), "schedule_timezone": get_settings().display_tz,
-    })
+    return page_full_out(page, deny_cards=True).model_copy(
+        update={
+            "cards": cards,
+            "calibers": calibers_of(cards),
+            "lock_version": page.lock_version,
+            "can_edit": writable and (owner or member_edit),
+            "can_share": writable and owner,
+            "can_refresh": writable and (owner or member_edit) and can_refresh,
+            "refresh_unavailable_reason": refresh_reason,
+            "schedule_active": bool(page.next_run and (page.refresh or {}).get("freq") != "手动"),
+            "subscription_active": bool(page.subscription and page.subscription.enabled),
+            "can_schedule": writable and owner,
+            "next_run": fmt_min(page.next_run),
+            "schedule_timezone": get_settings().display_tz,
+        }
+    )
 
 
 # ---------------------------------------------------------------- 调优

@@ -91,7 +91,7 @@ def _gov(session: AsyncSession) -> dict[str, Any]:
     oid = require_ontology_id(session)
     return {
         g.table.name: g
-        for g in governed_tables(oid).values()
+        for g in governed_tables(oid, session).values()
         if not getattr(g, "inherit", False) and CODE_COL in g.table.c
     }
 
@@ -105,6 +105,9 @@ async def _codes_in(session: AsyncSession, values: list[str]) -> dict[tuple[str,
     found: dict[tuple[str, str], str] = {}
     if not values:
         return found
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
     for g in _gov(session).values():
         t = g.table
         rows = await session.execute(
@@ -132,6 +135,9 @@ async def _named_objects(
     q = re.sub(r"\s", "", question)
     tokens = list(dict.fromkeys(_TOKEN.findall(question)))[:10]
     found = await _codes_in(session, tokens)
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
     for name, g in _gov(session).items():
         t = g.table
         vals = names.get(name) or []

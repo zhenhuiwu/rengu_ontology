@@ -147,3 +147,13 @@ class DatasourceTable(IdMixin, MutableTableMixin, Base):
     meta_updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, comment="接口 updatedAt（源表最近更新）"
     )
+
+class GovernedBinding(IdMixin, Base):
+    """Explicitly approved local PostgreSQL table and column binding."""
+    __tablename__ = "governed_binding"
+    __table_args__ = (UniqueConstraint("object_code"), UniqueConstraint("table_name"))
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(63), nullable=False)
+    read_columns: Mapped[list] = mapped_column(JsonType, nullable=False)
+    write_columns: Mapped[list] = mapped_column(JsonType, nullable=False)
+    supplementary: Mapped[dict | None] = mapped_column(JsonType, deferred=True)

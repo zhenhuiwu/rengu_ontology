@@ -34,7 +34,8 @@ def exec_def(rows: Any) -> Obj:
     values = {
         labels[r["k"]]: r["v"]
         for r in rows or []
-        if isinstance(r, dict) and r.get("k") in labels
+        if isinstance(r, dict)
+        and r.get("k") in labels
         and (isinstance(r.get("v"), str) or r.get("k") == EXEC_KEYS["defaultRange"])
     }
     # New snapshots distinguish explicitly unconfigured defaults from old unknown snapshots.

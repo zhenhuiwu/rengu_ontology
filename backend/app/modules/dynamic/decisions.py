@@ -141,7 +141,9 @@ class DecisionService:
                 details={"required": [DRY_RUN_SCOPE]},
             )
         alert = (
-            await AlertService(self.session, self.user, self.catalog, self.ports).get(body.alert_id, lock=True)
+            await AlertService(self.session, self.user, self.catalog, self.ports).get(
+                body.alert_id, lock=True
+            )
             if body.alert_id
             else None
         )
@@ -662,7 +664,7 @@ class DecisionService:
         }
 
     async def _scoped(self, stmt):
-        return await scoped_instances(stmt, self.user, DecisionLog.obj_kind, DecisionLog.obj_id)
+        return await scoped_instances(self.session, stmt, self.user, DecisionLog.obj_kind, DecisionLog.obj_id)
 
     async def list(
         self,

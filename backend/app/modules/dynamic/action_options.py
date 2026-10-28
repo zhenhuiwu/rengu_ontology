@@ -76,7 +76,9 @@ async def launch_definition(session, user, catalog, code, *, identity=None):
             raise AppError("外部系统不存在", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
         try:
             submit_adapter(system, definition)  # validates local configuration only
-        except AppError:
+        except AppError as exc:
+            if exc.code == "INTEGRATION_TLS_CONFIG_INVALID":
+                raise
             raise AppError(
                 "外部动作执行通道未配置或不可用", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
             ) from None
@@ -126,9 +128,13 @@ async def targets(session, user, catalog, code, kw, page):
     from sqlalchemy import String, cast
 
     identity = cast(primary_column(obj, governed), String)
+    from app.common.object_identity import property_column
+    title = next((column for prop in obj.properties if prop.is_title and (column := property_column(prop, governed)) is not None), None)
+    label = cast(title, String) if title is not None else identity
     identities = identity_rows(governed).subquery()
-    statement = select(identity.label("identity"), table.c.code.label("label")).where(
-        table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == identity)))
+    statement = select(identity.label("identity"), label.label("label")).where(
+        table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == identity))
+    )
     statement = await apply_row_filter(
         statement, user, governed.object_type, governed.columns, governed.links
     )
@@ -139,10 +145,15 @@ async def targets(session, user, catalog, code, kw, page):
             statement, approver, governed.object_type, governed.columns, governed.links
         )
     if kw and kw.strip():
-        statement = statement.where(identity.contains(kw.strip(), autoescape=True)
-                                    | table.c.code.contains(kw.strip(), autoescape=True))
+        statement = statement.where(
+            identity.contains(kw.strip(), autoescape=True)
+            | label.contains(kw.strip(), autoescape=True)
+        )
     total = int(await session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
     p = page.clamp(total)
     rows = (await session.execute(statement.order_by(identity).offset(p.offset).limit(p.size))).all()
-    return Page[dict].of([{"id": value, "label": label if label == value else f"{label}（{value}）"}
-                          for value, label in rows], total, page)
+    return Page[dict].of(
+        [{"id": value, "label": label if label == value else f"{label}（{value}）"} for value, label in rows],
+        total,
+        page,
+    )

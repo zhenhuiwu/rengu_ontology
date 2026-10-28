@@ -116,6 +116,7 @@ async def parameters_visibility(session, user, runs):
 
         unique = select(Alert.code).group_by(Alert.code).having(func.count() == 1)
         statement = await scoped_instances(
+            session,
             select(Alert.code).where(Alert.code.in_(alert_codes), Alert.code.in_(unique)),
             user,
             Alert.obj_kind,

@@ -265,6 +265,7 @@ class SysOrg(CodeMixin, MutableTableMixin, Base):
 
 class ApiKey(CodeMixin, MutableTableMixin, Base):
     __tablename__ = "api_key"
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     __table_args__ = (
         Index("uq_api_key_live_name", "name", unique=True, postgresql_where=text("revoked_at IS NULL")),
         CheckConstraint(
@@ -346,6 +347,7 @@ class PlatformSetting(CodeMixin, MutableTableMixin, Base):
     """Shared platform configuration; reversible credentials never leave the server."""
 
     __tablename__ = "platform_setting"
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
 
     value: Mapped[dict] = mapped_column(JsonType, nullable=False)
     secret_enc: Mapped[str | None] = mapped_column(Text)

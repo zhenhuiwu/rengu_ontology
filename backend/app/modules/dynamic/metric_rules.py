@@ -85,9 +85,9 @@ def bucket_value(rows, *, at, timezone, period, transform):
 
 
 class MetricExpression(Expression):
-    def __init__(self, tree, obj, gov, bindings):
+    def __init__(self, tree, obj, gov, bindings, functions, relations):
         self.bindings = bindings
-        super().__init__(tree, obj, gov)
+        super().__init__(tree, obj, gov, functions=functions, relations=relations)
 
     def visit_Call(self, node):  # noqa: N802
         if isinstance(node.func, ast.Name) and node.func.id == "metric_value":
@@ -103,7 +103,7 @@ class MetricExpression(Expression):
     def run(self, row, at):
         values = dict(row)
         for column, by_code, _ in self.bindings.values():
-            value = by_code.get(row["code"])
+            value = by_code.get(row.get("__identity", row.get("code")))
             if isinstance(value, str) or value is None:
                 raise Unavailable(value or "该对象缺少真实指标时间桶")
             values[column] = value
@@ -151,4 +151,8 @@ async def bind_metrics(session, user, tree, obj, gov, at, timezone):
                 values[code_key] = str(exc)
         key = ast.dump(node)
         bindings[key] = (f"桶{len(bindings)}", values, f"{code} v{version} {period}/{transform}")
-    return MetricExpression(tree, obj, gov, bindings)
+    from app.modules.dynamic.rule_functions import bind_rule_functions
+    functions = await bind_rule_functions(session, user, tree)
+    from app.modules.dynamic.rule_relations import bind_rule_relations
+    relations = await bind_rule_relations(session, user, tree, obj, gov)
+    return MetricExpression(tree, obj, gov, bindings, functions, relations)

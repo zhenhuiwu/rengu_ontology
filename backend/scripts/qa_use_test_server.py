@@ -239,7 +239,13 @@ def application(target, *, fixes_profile=False, workflow_write=None):
     async def page_writes_only(request, call_next):
         if workflow_write is not None and request.method not in ("GET", "HEAD", "OPTIONS"):
             if not await workflow_write(request):
-                return JSONResponse(status_code=403, content={"code": "TEST_SIDE_EFFECT_BLOCKED", "message": "本轮隔离流程只允许指定工作空间与测试身份操作"})
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "code": "TEST_SIDE_EFFECT_BLOCKED",
+                        "message": "本轮隔离流程只允许指定工作空间与测试身份操作",
+                    },
+                )
             return await call_next(request)
         if fixes_profile and request.method not in ("GET", "HEAD", "OPTIONS"):
             if not await fixes_write(request):

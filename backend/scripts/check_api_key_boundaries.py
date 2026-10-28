@@ -18,11 +18,24 @@ def main():
     assert token_page("GET", api_prefix("admin") + "/api-keys") is None
     assert token_page("GET", prefix + "/dimensions/{id}/values") is None
     assert token_page("GET", prefix + "/object-types/{id}/usage") is None
-    assert metadata_permissions(CurrentUser(id="u", name="n", func={"metrics": "manage", "users": "manage"})) == {"metrics": "view"}
+    assert metadata_permissions(
+        CurrentUser(id="u", name="n", func={"metrics": "manage", "users": "manage"})
+    ) == {"metrics": "view"}
     assert metadata_permissions(CurrentUser(id="u", name="n", is_ontology_admin=True)) == {}
-    body = dict(name="metadata-reader", env="测试", scopes=["元数据读取"], binding={"kind": "用户", "userId": "u"}, ipAllow=["10.0.0.1/24"])
+    body = dict(
+        name="metadata-reader",
+        env="测试",
+        scopes=["元数据读取"],
+        binding={"kind": "用户", "userId": "u"},
+        ipAllow=["10.0.0.1/24"],
+    )
     assert KeyCreateIn.model_validate(body).ip_allow == ["10.0.0.0/24"]
-    for patch in ({"scopes": ["动作执行"]}, {"binding": {"kind": "角色", "role": "admin"}}, {"ipAllow": ["invalid"]}, {"lifeDays": -1}):
+    for patch in (
+        {"scopes": ["动作执行"]},
+        {"binding": {"kind": "角色", "role": "admin"}},
+        {"ipAllow": ["invalid"]},
+        {"lifeDays": -1},
+    ):
         try:
             KeyCreateIn.model_validate({**body, **patch})
         except ValidationError:

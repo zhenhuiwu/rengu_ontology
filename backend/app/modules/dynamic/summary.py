@@ -131,6 +131,7 @@ class ObjectDynamicSummary:
     async def _hits(self, kind: str, obj_id: str, limit: int) -> dict[str, Any]:
         """规则命中（只追加）：总条数 + 最近 limit 条（同规则命中列表的行级范围与输出）。"""
         stmt = await scoped_instances(
+            self.session,
             select(RuleHit).where(RuleHit.obj_kind == kind, RuleHit.obj_id == obj_id),
             self.user,
             RuleHit.obj_kind,
@@ -171,6 +172,7 @@ class ObjectDynamicSummary:
         if lc is None:
             return {"available": True, "defined": False}
         base = await scoped_instances(
+            self.session,
             select(LifecycleChange).where(
                 LifecycleChange.lifecycle_id == lc.id, LifecycleChange.obj_id == obj_id
             ),

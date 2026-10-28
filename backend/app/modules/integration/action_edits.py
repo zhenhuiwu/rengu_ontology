@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -33,8 +34,7 @@ from app.modules.action.sections import action_def
 from app.modules.static.repo import StaticRepo
 
 # Identity, money, personal data and scope columns are deliberately not writable here.
-WRITABLE = {"store": {"name", "status", "is_test"},
-            "order": {"status", "warehouse", "shipped_at", "is_test"}}
+WRITABLE = {"store": {"name", "status", "is_test"}, "order": {"status", "warehouse", "shipped_at", "is_test"}}
 
 
 def unavailable(message):
@@ -42,13 +42,24 @@ def unavailable(message):
 
 
 async def execution_definition(session, run):
-    action = await session.scalar(select(ActionType).where(ActionType.code == run.action_type_code)
-                                  .with_for_update(of=ActionType).execution_options(populate_existing=True))
-    if (action is None or action.retired_release_id is not None
-            or action.status not in (TypeStatus.published, TypeStatus.changing)
-            or not run.type_version or action.version != run.type_version):
-        raise AppError("执行时的已发布动作定义版本不可用，不能替换为当前定义",
-                       code="ACTION_DEFINITION_VERSION_UNAVAILABLE", status_code=503)
+    action = await session.scalar(
+        select(ActionType)
+        .where(ActionType.code == run.action_type_code)
+        .with_for_update(of=ActionType)
+        .execution_options(populate_existing=True)
+    )
+    if (
+        action is None
+        or action.retired_release_id is not None
+        or action.status not in (TypeStatus.published, TypeStatus.changing)
+        or not run.type_version
+        or action.version != run.type_version
+    ):
+        raise AppError(
+            "执行时的已发布动作定义版本不可用，不能替换为当前定义",
+            code="ACTION_DEFINITION_VERSION_UNAVAILABLE",
+            status_code=503,
+        )
     value = action_def(action)
     for row, param in zip(value["params"], action.params, strict=True):
         row["_ast"] = param.rule_expr
@@ -77,15 +88,18 @@ def column_value(column, value):
         if type(value) is bool:
             return value
     elif isinstance(type_, Integer):
-        if type(value) is int and -(2 ** 31) <= value < 2 ** 31:
+        if type(value) is int and -(2**31) <= value < 2**31:
             return value
     elif isinstance(type_, Numeric):
         if type(value) in (int, float):
             try:
                 number = Decimal(str(value))
-                if number.is_finite() and number == number.quantize(Decimal(1).scaleb(-type_.scale)):
-                    if abs(number) < Decimal(10) ** (type_.precision - type_.scale):
-                        return number
+                if (
+                    number.is_finite()
+                    and number == number.quantize(Decimal(1).scaleb(-type_.scale))
+                    and abs(number) < Decimal(10) ** (type_.precision - type_.scale)
+                ):
+                    return number
             except InvalidOperation:
                 pass
     elif isinstance(type_, DateTime):
@@ -114,11 +128,12 @@ def mapping_json(value):
             raise ValueError
         result = json.loads(value)
         from app.modules.functions.runtime import json_value
+
         json_value(result)
         if not isinstance(result, dict) or not 1 <= len(result) <= 32:
             raise ValueError
         return result
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         raise unavailable("执行映射须为有界 JSON 对象，自然语言不能执行") from None
 
 
@@ -128,11 +143,21 @@ DECLARED = "external/declared"
 
 
 def declared_text(value):
-    """True when a mapping is natural language (not a bounded JSON object)."""
+    """Distinguish a natural-language declaration from a valid structured mapping."""
     try:
-        mapping_json(value)
-    except AppError:
+        if not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 65_536:
+            raise ValueError
+    except (UnicodeError, ValueError):
+        raise unavailable("声明须为有效的非空文本") from None
+    try:
+        json.loads(value)
+    except RecursionError:
+        raise unavailable("结构化映射嵌套过深") from None
+    except ValueError:
+        if value.lstrip().startswith(("{", "[", '"')) or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise unavailable("结构化映射不是有效 JSON") from None
         return True
+    mapping_json(value)
     return False
 
 
@@ -141,9 +166,14 @@ async def external_webhook(session, definition):
     code = definition.get("sysId")
     if not isinstance(code, str) or not code:
         return False
-    from app.modules.integration.models import ExtSystem
-    category = await session.scalar(select(ExtSystem.category).where(ExtSystem.code == code))
-    return category == WEBHOOK_CATEGORY
+    from app.modules.integration.models import ExtSystem, ExtSystemStatus
+
+    system = await session.scalar(
+        select(ExtSystem)
+        .where(ExtSystem.code == code, ExtSystem.ontology_id == require_ontology_id(session))
+        .execution_options(populate_existing=True)
+    )
+    return bool(system and system.category == WEBHOOK_CATEGORY and system.status != ExtSystemStatus.disabled)
 
 
 async def declared_writeback(session, definition):
@@ -151,14 +181,25 @@ async def declared_writeback(session, definition):
     if not await external_webhook(session, definition):
         return []
     from app.modules.integration.action_effects import STANDARD
+
     writeback = definition.get("writeback") or {}
-    out = [{"kind": "编辑", "op": e.get("op"), "obj": e.get("obj"), "field": e.get("field"), "status": DECLARED}
-           for e in writeback.get("edits", []) if declared_text(e.get("field"))]
-    out += [{"kind": f.get("kind"), "target": f.get("target"), "when": f.get("when"), "note": f.get("note"),
-             "status": DECLARED}
-            for f in writeback.get("effects", [])
-            if not (f.get("kind") == "事件" and str(f.get("target") or "").split(" ", 1)[0] in STANDARD)
-            and declared_text(f.get("note"))]
+    out = [
+        {"kind": "编辑", "op": e.get("op"), "obj": e.get("obj"), "field": e.get("field"), "status": DECLARED}
+        for e in writeback.get("edits", [])
+        if declared_text(e.get("field"))
+    ]
+    out += [
+        {
+            "kind": f.get("kind"),
+            "target": f.get("target"),
+            "when": f.get("when"),
+            "note": f.get("note"),
+            "status": DECLARED,
+        }
+        for f in writeback.get("effects", [])
+        if not (f.get("kind") == "事件" and str(f.get("target") or "").split(" ", 1)[0] in STANDARD)
+        and declared_text(f.get("note"))
+    ]
     return out
 
 
@@ -191,8 +232,11 @@ async def value_source(session, user, source, params, *, depth=0):
         if len(source["inputs"]) > 32:
             raise unavailable("函数最多32个输入")
         from app.contracts.functions import invoke_version
-        inputs = {key: await value_source(session, user, value, params, depth=depth + 1)
-                  for key, value in source["inputs"].items()}
+
+        inputs = {
+            key: await value_source(session, user, value, params, depth=depth + 1)
+            for key, value in source["inputs"].items()
+        }
         return await invoke_version(session, user, source["function"], source["version"], inputs)
     raise unavailable("值只能来自已声明参数、JSON字面量或固定版本函数")
 
@@ -222,19 +266,38 @@ async def validate_source_definition(session, source):
         return
     if set(source) == {"param"} and isinstance(source["param"], str) and source["param"]:
         return
-    if (set(source) != {"function", "version", "inputs"} or not isinstance(source["inputs"], dict)
-            or len(source["inputs"]) > 32 or not isinstance(source["function"], str)
-            or not isinstance(source["version"], str) or not source["version"] or source["version"] == "current"):
+    if (
+        set(source) != {"function", "version", "inputs"}
+        or not isinstance(source["inputs"], dict)
+        or len(source["inputs"]) > 32
+        or not isinstance(source["function"], str)
+        or not isinstance(source["version"], str)
+        or not source["version"]
+        or source["version"] == "current"
+    ):
         raise unavailable("函数映射须指定编号、固定发布版本和输入")
     from app.modules.functions.models import FnVersion, Function
     from app.modules.functions.runtime import signature
-    record = (await session.execute(select(Function, FnVersion).join(FnVersion,
-        FnVersion.function_id == Function.id).where(Function.code == source["function"],
-        Function.status == "published", FnVersion.ver == source["version"]))).one_or_none()
+
+    record = (
+        await session.execute(
+            select(Function, FnVersion)
+            .join(FnVersion, FnVersion.function_id == Function.id)
+            .where(
+                Function.code == source["function"],
+                Function.status == "published",
+                FnVersion.ver == source["version"],
+            )
+        )
+    ).one_or_none()
     if record is None:
         raise unavailable("函数绑定版本未发布或不可用")
     snapshot = record[1].snapshot
-    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("code"), str) or not isinstance(snapshot.get("name"), str):
+    if (
+        not isinstance(snapshot, dict)
+        or not isinstance(snapshot.get("code"), str)
+        or not isinstance(snapshot.get("name"), str)
+    ):
         raise unavailable("函数绑定版本缺少有效源码")
     inputs, _ = signature(snapshot["code"], snapshot["name"])
     if set(source["inputs"]) != {p["name"] for p in inputs}:
@@ -247,13 +310,29 @@ async def object_binding(session, identity):
     if not isinstance(identity, str) or not identity or len(identity) > 128:
         raise unavailable("对象映射标识无效")
     from app.modules.static.models import ObjectStatus, ObjectType
-    matches = list(await session.scalars(select(ObjectType).where(
-        (ObjectType.code == identity) | (ObjectType.api_name == identity) |
-        (ObjectType.display_name == identity)).with_for_update(read=True)))
+
+    matches = list(
+        await session.scalars(
+            select(ObjectType)
+            .where(
+                (ObjectType.code == identity)
+                | (ObjectType.api_name == identity)
+                | (ObjectType.display_name == identity)
+            )
+            .with_for_update(read=True)
+        )
+    )
     if len(matches) != 1 or matches[0].status != ObjectStatus.published:
         raise unavailable("编辑对象没有唯一的已发布定义")
     obj = await StaticRepo(session).object_type(matches[0].code, refresh=True)
-    candidates = [g for g in governed_tables(require_ontology_id(session)).values() if g.object_type == obj.code and not g.inherit]
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
+    candidates = [
+        g
+        for g in governed_tables(require_ontology_id(session), session).values()
+        if g.object_type == obj.code and not g.inherit
+    ]
     # source_table names the upstream system; local rows use the registered explorer binding.
     if len(candidates) != 1:
         raise unavailable("对象没有唯一的受控业务表映射")
@@ -268,19 +347,48 @@ async def object_operation(session, user, obj, definition):
         # 服务账号不是 sys_user：按其绑定角色（密钥鉴权时已解析为 user.roles）取对象授权。
         stmt = select(SysRole.objs).where(SysRole.code.in_(user.roles))
     else:
-        stmt = select(SysRole.objs).join(SysRoleMember, SysRoleMember.role_id == SysRole.id).join(
-            SysUser, SysUser.id == SysRoleMember.user_id).where(SysUser.code == user.id)
-    permissions = await session.scalars(stmt.join(
-        OntologyRoleBinding, OntologyRoleBinding.role_id == SysRole.id).where(
-        OntologyRoleBinding.ontology_id == require_ontology_id(session)))
+        stmt = (
+            select(SysRole.objs)
+            .join(SysRoleMember, SysRoleMember.role_id == SysRole.id)
+            .join(SysUser, SysUser.id == SysRoleMember.user_id)
+            .where(SysUser.code == user.id)
+        )
+    permissions = await session.scalars(
+        stmt.join(OntologyRoleBinding, OntologyRoleBinding.role_id == SysRole.id).where(
+            OntologyRoleBinding.ontology_id == require_ontology_id(session)
+        )
+    )
     names = {definition["id"], definition["api"], definition["name"]}
+    explicit = False
     for entries in permissions:
         if not isinstance(entries, list):
             continue
         matches = [entry for entry in entries if isinstance(entry, dict) and entry.get("api") == obj.api_name]
-        if len(matches) == 1 and matches[0].get("view") is True and isinstance(matches[0].get("actions"), list):
-            if names.intersection(a for a in matches[0]["actions"] if isinstance(a, str)):
-                return
+        explicit = explicit or bool(matches)
+        if (
+            len(matches) == 1
+            and matches[0].get("view") is True
+            and isinstance(matches[0].get("actions"), list)
+            and names.intersection(a for a in matches[0]["actions"] if isinstance(a, str))
+        ):
+            return
+    if (
+        not explicit and user.ontology_role == "owner" and user.ontology_ids is None
+        and not user.is_service_account and obj.created_by == user.id
+        and definition.get("targetKind") == obj.code and obj.status.value == "已发布"
+    ):
+        from app.common.auth import row_filter
+        from app.common.sql_guard import ensure_governed_tables
+
+        await ensure_governed_tables(session)
+        approved = any(g.object_type == obj.code and g.projection is not None for g in governed_tables(user.ontology_id, session).values())
+        action = await session.scalar(select(ActionType).where(
+            ActionType.code == definition["id"], ActionType.created_by == user.id,
+            ActionType.status == TypeStatus.published, ActionType.target_kind == obj.code,
+            ActionType.retired_release_id.is_(None),
+        ))
+        if approved and action is not None and not is_deny_all(await row_filter(user, obj.code)):
+            return
     raise Forbidden(f"没有对象「{obj.display_name}」的此动作操作授权")
 
 
@@ -289,14 +397,17 @@ async def existing_row(session, user, obj, governed, code, *, lock=True):
         raise unavailable("对象引用须为真实对象编号")
     # Count before row filtering: duplicate historical business codes are never silently selected.
     identities = identity_rows(governed).subquery()
-    ids = list(await session.scalars(select(identities.c.row_id).where(
-        identities.c.identity == code).limit(2)))
+    ids = list(
+        await session.scalars(select(identities.c.row_id).where(identities.c.identity == code).limit(2))
+    )
     if len(ids) != 1:
         raise Forbidden("引用对象不存在、不唯一或超出当前用户行权限")
     expr = await row_filter(user, obj.code)
     if is_deny_all(expr):
         raise Forbidden("没有引用对象的行权限")
     query = select(governed.table).where(governed.table.c.id == ids[0])
+    if governed.projection is not None:
+        query = query.where(governed.table.c.ontology_id == user.ontology_id)
     if expr is not None:
         query = query.where(to_sql(expr, governed.columns, user.attrs, governed.links))
     if lock:
@@ -314,13 +425,17 @@ async def result_scope(session, user, obj, governed, row_id, values):
     if expr is None:
         return
     predicate = to_sql(expr, governed.columns, user.attrs, governed.links)
+
     def projected(node):
         if getattr(node, "table", None) is governed.table and getattr(node, "name", None) in values:
             return literal(values[node.name], type_=node.type)
         return None
+
     predicate = replacement_traverse(predicate, {}, projected)
-    if not await session.scalar(select(governed.table.c.id).where(
-            governed.table.c.id == row_id, predicate)):
+    query = select(governed.table.c.id).where(governed.table.c.id == row_id, predicate)
+    if governed.projection is not None:
+        query = query.where(governed.table.c.ontology_id == user.ontology_id)
+    if not await session.scalar(query):
         raise Forbidden("编辑后的对象超出当前用户行权限")
 
 
@@ -332,8 +447,12 @@ def mapped_target(edit, spec, run, definition, obj, params):
         return run.obj_id
     if isinstance(source, dict) and set(source) == {"param"}:
         key = source["param"]
-        declared = [p for p in definition["params"] if p.get("api") == key and
-                    p.get("type") in {f"对象引用 · {x}" for x in (obj.code, obj.api_name, obj.display_name)}]
+        declared = [
+            p
+            for p in definition["params"]
+            if p.get("api") == key
+            and p.get("type") in {f"对象引用 · {x}" for x in (obj.code, obj.api_name, obj.display_name)}
+        ]
         if len(declared) == 1 and isinstance(params.get(key), str):
             return params[key]
     raise unavailable("目标必须来自上下文对象或对应类型的已声明对象引用参数")
@@ -343,8 +462,14 @@ async def relation_binding(session, identity):
     if not isinstance(identity, str) or not identity or len(identity) > 128:
         raise unavailable("关系映射标识无效")
     from app.modules.static.models import DefStatus, LinkType
-    rows = list(await session.scalars(select(LinkType).where(
-        (LinkType.code == identity) | (LinkType.api_name == identity)).with_for_update(read=True)))
+
+    rows = list(
+        await session.scalars(
+            select(LinkType)
+            .where((LinkType.code == identity) | (LinkType.api_name == identity))
+            .with_for_update(read=True)
+        )
+    )
     if len(rows) != 1 or rows[0].status != DefStatus.published or rows[0].via:
         raise unavailable("关系没有唯一的已发布一跳映射")
     link = rows[0]
@@ -378,7 +503,7 @@ async def business_edits(session, user, run, definition, *, apply=False):
         if edit.get("op") == "关联":
             if set(spec) != {"from", "to"}:
                 raise unavailable("关联映射须显式指定from/to对象参数")
-            link, obj, governed, dst, dg, column = await relation_binding(session, edit["obj"])
+            _, obj, governed, dst, dg, column = await relation_binding(session, edit["obj"])
             await object_operation(session, user, obj, definition)
             await object_operation(session, user, dst, definition)
             source_code = mapped_target(edit, {"target": spec["from"]}, run, definition, obj, params)
@@ -392,13 +517,21 @@ async def business_edits(session, user, run, definition, *, apply=False):
             await result_scope(session, user, obj, governed, row["id"], values)
             # Reparenting may move a row out of scope: evaluate the resulting row before committing.
             if apply:
-                await session.execute(update(governed.table).where(governed.table.c.id == row["id"])
-                    .values(**values, updated_at=clock.now(), lock_version=row["lock_version"] + 1))
+                await session.execute(
+                    update(governed.table)
+                    .where(governed.table.c.id == row["id"], governed.table.c.ontology_id == user.ontology_id)
+                    .values(**values, updated_at=clock.now(), lock_version=row["lock_version"] + 1)
+                )
                 await existing_row(session, user, obj, governed, source_code)
             continue
         obj, governed = await object_binding(session, edit.get("obj"))
         await object_operation(session, user, obj, definition)
-        if obj.code not in WRITABLE:
+        if governed.write_columns is not None and edit.get("op") != "修改":
+            raise unavailable("配置绑定仅允许修改已授权字段")
+        writable = governed.write_columns if governed.write_columns is not None else WRITABLE.get(obj.code, set())
+        if governed.write_columns is None and obj.code == "RescueIncident" and run.ontology_id == 4 and os.environ.get("RENGU_RESCUE_DEMO") == "1":
+            writable = {"status"}
+        if not writable:
             raise unavailable("此对象尚无可写白名单")
         modern = "values" in spec
         if modern and set(spec) - {"target", "values", "lockVersion"}:
@@ -419,25 +552,41 @@ async def business_edits(session, user, run, definition, *, apply=False):
             if len(props) != 1:
                 raise unavailable("编辑属性没有唯一的已发布映射")
             prop = props[0]
-            column = prop.backing_column
+            column = prop.backing_column or prop.source_column
             declared = {getattr(c, "name", None) for c in governed.columns.values()}
-            if (column not in WRITABLE[obj.code] or column not in declared or prop.is_pk or prop.is_sensitive
-                    or prop.visibility == "hidden" or (obj.code, assignment_target, column) in touched or column in values):
+            if (
+                column not in writable
+                or column not in declared
+                or prop.is_pk
+                or prop.is_sensitive
+                or prop.visibility == "hidden"
+                or (obj.code, assignment_target, column) in touched
+                or column in values
+            ):
                 raise unavailable("属性不在可写白名单或存在重复赋值")
-            values[column] = column_value(governed.table.c[column],
-                await value_source(session, user, source, params))
+            values[column] = column_value(
+                governed.table.c[column], await value_source(session, user, source, params)
+            )
             touched.add((obj.code, assignment_target, column))
         await result_scope(session, user, obj, governed, row["id"], values)
         if edit.get("op") == "新建":
-            identity = "NEW-" + hashlib.sha256(f"{run.ontology_id}:{run.code}:{obj.code}".encode()).hexdigest()[:24]
+            identity = (
+                "NEW-" + hashlib.sha256(f"{run.ontology_id}:{run.code}:{obj.code}".encode()).hexdigest()[:24]
+            )
             if await session.scalar(select(governed.table.c.id).where(governed.table.c.code == identity)):
                 raise AppError("新建对象身份已存在", code="IDEMPOTENCY_CONFLICT", status_code=409)
             required = {"code": identity}
-            protected = {p.backing_column for p in obj.properties if p.is_sensitive or p.visibility == "hidden"}
+            protected = {
+                p.backing_column for p in obj.properties if p.is_sensitive or p.visibility == "hidden"
+            }
             protected |= {"manager", "member_phone", "waybill", "amount", "discount", "price"}
             for column in governed.table.c:
-                if (column.name in {"id", "code", "created_by"} or column.nullable or column.default is not None
-                        or column.server_default is not None):
+                if (
+                    column.name in {"id", "code", "created_by"}
+                    or column.nullable
+                    or column.default is not None
+                    or column.server_default is not None
+                ):
                     continue
                 if column.name in protected or isinstance(column.type, Numeric) or column.foreign_keys:
                     raise unavailable(f"新建对象必填属性「{column.name}」缺少安全受控映射")
@@ -451,13 +600,17 @@ async def business_edits(session, user, run, definition, *, apply=False):
                         original = original.value
                     required[column.name] = column_value(column, original)
             if apply:
-                await session.execute(insert(governed.table).values(**{**required, **values},
-                    created_by=user.id))
+                await session.execute(
+                    insert(governed.table).values(**{**required, **values}, created_by=user.id)
+                )
                 await existing_row(session, user, obj, governed, identity)
         elif edit.get("op") == "修改":
             if apply:
-                await session.execute(update(governed.table).where(governed.table.c.id == row["id"])
-                    .values(**values, updated_at=clock.now(), lock_version=row["lock_version"] + 1))
+                await session.execute(
+                    update(governed.table)
+                    .where(governed.table.c.id == row["id"], governed.table.c.ontology_id == user.ontology_id)
+                    .values(**values, updated_at=clock.now(), lock_version=row["lock_version"] + 1)
+                )
         else:
             raise unavailable("不支持此业务操作")
 

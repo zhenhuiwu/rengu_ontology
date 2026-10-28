@@ -211,8 +211,7 @@ class Interpreter:
         return False, None
 
 
-def run(source: str, name: str, inputs: dict[str, Any], timeout_s: int) -> Any:
-    json_value(inputs)
+def validate_source(source: str, name: str) -> ast.FunctionDef:
     fn = definition(source, name)
     if any(isinstance(node, ast.Constant) and node.value is Ellipsis for node in ast.walk(fn)):
         raise invalid("函数代码尚未实现（...），不能返回登记示例代替执行", "FUNCTION_NOT_IMPLEMENTED")
@@ -257,6 +256,12 @@ def run(source: str, name: str, inputs: dict[str, Any], timeout_s: int) -> Any:
     for node in [*fn.body, *fn.args.defaults]:
         if any(not isinstance(child, allowed) for child in ast.walk(node)):
             raise invalid("测试仅支持 return、赋值、if 和受限 JSON 纯计算表达式")
+    return fn
+
+
+def run(source: str, name: str, inputs: dict[str, Any], timeout_s: int) -> Any:
+    json_value(inputs)
+    fn = validate_source(source, name)
     arg_names = [arg.arg for arg in fn.args.args]
     if set(inputs) - set(arg_names):
         raise invalid("输入包含未声明参数", "FUNCTION_INPUT_INVALID")

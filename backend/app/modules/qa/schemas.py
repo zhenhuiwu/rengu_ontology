@@ -412,6 +412,10 @@ class TurnActionStageIn(ApiModel):
     params: str | None = Field(default=None, max_length=2000)
 
 
+class TurnRuleRunIn(ApiModel):
+    event_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class AskIn(ApiModel):
     """W6 请求体：{question, refs?, clientId?}。"""
 

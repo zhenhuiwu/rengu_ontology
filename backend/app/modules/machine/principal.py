@@ -26,4 +26,4 @@ async def resolve_actor(session: AsyncSession, actor: str) -> CurrentUser:
     from app.modules.admin.api_keys import build_service_account_principal
 
     # 本体小白公开函数：未吊销 + 角色绑定当前本体空间（bind_ontology 默认 True），否则 401
-    return await build_service_account_principal(session, actor[len(SERVICE_PREFIX):])
+    return await build_service_account_principal(session, actor[len(SERVICE_PREFIX) :])

@@ -59,6 +59,7 @@ async def behavior_stats(session, code, ctx, user):
             (
                 await session.execute(
                     await scoped_instances(
+                        session,
                         select(RuleHit.rule_id, func.count())
                         .where(
                             RuleHit.rule_id.in_(rule_ids),
@@ -67,7 +68,9 @@ async def behavior_stats(session, code, ctx, user):
                             RuleHit.result == HitResult.alert,
                         )
                         .group_by(RuleHit.rule_id),
-                        user, RuleHit.obj_kind, RuleHit.obj_id,
+                        user,
+                        RuleHit.obj_kind,
+                        RuleHit.obj_id,
                     )
                 )
             ).all()
@@ -80,13 +83,16 @@ async def behavior_stats(session, code, ctx, user):
             (
                 await session.execute(
                     await scoped_instances(
+                        session,
                         select(ActionRun.rule_code, func.count())
                         .where(
                             ActionRun.rule_code.in_({r.code for r in rule_rows}),
                             ActionRun.status == ActionStatus.staged,
                         )
                         .group_by(ActionRun.rule_code),
-                        user, ActionRun.obj_kind, ActionRun.obj_id,
+                        user,
+                        ActionRun.obj_kind,
+                        ActionRun.obj_id,
                     )
                 )
             ).all()
@@ -96,10 +102,13 @@ async def behavior_stats(session, code, ctx, user):
     )
     center = await session.execute(
         await scoped_instances(
+            session,
             select(ActionRun.status, func.count())
             .where(ActionRun.obj_kind == code, ActionRun.in_center.is_(True))
             .group_by(ActionRun.status),
-            user, ActionRun.obj_kind, ActionRun.obj_id,
+            user,
+            ActionRun.obj_kind,
+            ActionRun.obj_id,
         )
     )
     types = []
@@ -170,6 +179,7 @@ async def behavior_stats(session, code, ctx, user):
                 )
     executions = await session.execute(
         await scoped_instances(
+            session,
             select(ActionRun.action_type_code, ActionRun.status, func.count())
             .where(
                 ActionRun.action_type_code.in_({row["id"] for row in actions}),
@@ -177,13 +187,17 @@ async def behavior_stats(session, code, ctx, user):
                 ActionRun.submitted_at <= until,
                 ActionRun.status.in_(
                     (
-                        ActionStatus.succeeded, ActionStatus.reconciled,
-                        ActionStatus.failed, ActionStatus.unknown,
+                        ActionStatus.succeeded,
+                        ActionStatus.reconciled,
+                        ActionStatus.failed,
+                        ActionStatus.unknown,
                     )
                 ),
             )
             .group_by(ActionRun.action_type_code, ActionRun.status),
-            user, ActionRun.obj_kind, ActionRun.obj_id,
+            user,
+            ActionRun.obj_kind,
+            ActionRun.obj_id,
         )
     )
     counts = {}
@@ -225,7 +239,7 @@ async def automation_hits(session, code, rule_id, page, user):
     )
     if rule_id:
         statement = statement.where(Rule.code == rule_id)
-    statement = await scoped_instances(statement, user, RuleHit.obj_kind, RuleHit.obj_id)
+    statement = await scoped_instances(session, statement, user, RuleHit.obj_kind, RuleHit.obj_id)
     total = int(await session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
     p = page.clamp(total)
     rows = list(

@@ -145,7 +145,7 @@ async def create_alerts(session, user, rule, run, matches):
     if rule.output != RuleOutput.alert:
         raise unavailable("通知规则尚无真实通知通道，未标记已通知")
     obj = await session.scalar(select(ObjectType).where(ObjectType.code == rule.obj_kind))
-    at, counts = now(), {"alerts": 0, "deduped": 0}
+    at, counts = now(), {"alerts": 0, "deduped": 0, "actions": 0}
     local = at.astimezone(ZoneInfo(rule.trigger.get("timezone", "Asia/Shanghai")))
     fields = [
         SimpleNamespace(api="date", name="日期"),
@@ -194,9 +194,9 @@ async def create_alerts(session, user, rule, run, matches):
             result=HitResult.deduped if duplicate else HitResult.alert,
             created_by=user.id,
         )
-        session.add(hit)
         if duplicate:
             hit.alert_id = duplicate.alert_id
+            session.add(hit)
             counts["deduped"] += 1
             continue
         alert = Alert(
@@ -220,6 +220,7 @@ async def create_alerts(session, user, rule, run, matches):
         session.add(alert)
         await session.flush()
         hit.alert_id = alert.id
+        session.add(hit)
         session.add(
             AlertLog(
                 alert_id=alert.id,
@@ -232,6 +233,13 @@ async def create_alerts(session, user, rule, run, matches):
             )
         )
         counts["alerts"] += 1
+        if (rule.auto_stage or {}).get("enabled"):
+            from app.modules.dynamic.event_rule_runtime import stage_action
+
+            context = SimpleNamespace(obj_kind=rule.obj_kind, object_id=item["objId"],
+                                      obj_label=item["objLabel"], payload={})
+            await stage_action(session, user, rule, context, [], alert, item["value"])
+            counts["actions"] += 1
     return counts
 
 
@@ -291,7 +299,7 @@ async def process(session, run_id):
             run.result = {
                 **run.result,
                 **counts,
-                "actionStatus": "unavailable" if (rule.auto_stage or {}).get("enabled") else "not_configured",
+                "actionStatus": "processed" if (rule.auto_stage or {}).get("enabled") else "not_configured",
             }
             run.state = "partial" if result["unknown"] else "done"
     except AppError as exc:
@@ -302,7 +310,11 @@ async def process(session, run_id):
 async def sweep(timestamp: int = 0) -> int:
     total = 0
     for ontology_id in await workspace_ids():
-        total += await _sweep_workspace(ontology_id)
+        from app.common.ontology import WorkspaceInactive
+        try:
+            total += await _sweep_workspace(ontology_id)
+        except WorkspaceInactive:
+            continue
     return total
 
 

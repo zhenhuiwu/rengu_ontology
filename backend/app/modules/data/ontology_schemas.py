@@ -49,6 +49,8 @@ class ImportObjectIn(Input):
     name: Text64
     api: Identifier
     owner: Text64 | None = None
+    pk: Text64 | None = None
+    title_field: Text64 | None = None
 
 
 class DraftIn(Input):
@@ -71,6 +73,8 @@ class ImportToCrIn(ImportPreviewIn, DraftIn):
     fingerprint: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
     object_types: list[ImportObjectIn] = Field(min_length=1, max_length=60)
     include_links: bool = False
+    publish: bool = False
+    release_lock_version: int | None = Field(None, ge=0)
     link_ids: list[Annotated[str, StringConstraints(min_length=1, max_length=128)]] | None = Field(
         None, max_length=120
     )

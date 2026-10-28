@@ -1,7 +1,7 @@
 """固定受控对象的质量检查；不执行用户 SQL，不生成演示结果。"""
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import perf_counter
 
 from sqlalchemy import case, func, literal, select, union_all
@@ -54,12 +54,28 @@ def rule_text(code: str, kind: str) -> str:
     return f"{t[4][0].key} 引用 {t[4][1].table.name}.{t[4][1].key}"
 
 
+async def quality_binding(session, code, field, kind):
+    from app.common.sql_guard import ensure_governed_tables, governed_tables
+    await ensure_governed_tables(session)
+    binding = next((g for g in governed_tables(require_ontology_id(session), session).values()
+                    if g.object_type == code and g.projection is not None and field in g.projection), None)
+    from sqlalchemy import DateTime, String
+    if binding is None or kind not in ("空值率", "唯一性", "新鲜度", "记录时效", "格式"):
+        raise AppError("字段或检查类型未获授权", code="QUALITY_NOT_CONFIGURED", status_code=422)
+    col = binding.table.c[field]
+    if (kind in ("新鲜度", "记录时效") and (not isinstance(col.type, DateTime) or not col.type.timezone)) or (kind == "格式" and not isinstance(col.type, String)):
+        raise AppError("新鲜度要求带时区时间字段，格式检查要求文本字段", code="QUALITY_NOT_CONFIGURED", status_code=422)
+    return binding
+
+
 def limit_value(kind: str, threshold: str) -> float:
     patterns = {
         "新鲜度": r"(?:延迟\s*)?(?:≤|<=)\s*(\d+(?:\.\d+)?)\s*小时",
+        "记录时效": r"(?:延迟\s*)?(?:≤|<=)\s*(\d+(?:\.\d+)?)\s*小时",
         "空值率": r"(?:空值率\s*)?(?:≤|<=)\s*(\d+(?:\.\d+)?)\s*%",
         "唯一性": r"重复\s*(?:(?:≤|<=)\s*)?(\d+)\s*条",
         "引用完整性": r"找不到\s*(?:(?:≤|<=)\s*)?(\d+)\s*条",
+        "格式": r"不合格\s*(?:(?:≤|<=)\s*)?(\d+)\s*条",
     }
     match = re.fullmatch(patterns[kind], threshold.strip())
     if not match or (kind == "空值率" and float(match[1]) > 100):
@@ -100,7 +116,7 @@ def latest_runs_query(owner: str, *, codes=None, before=None, include_retired=Fa
     return select(QualityRun).where(QualityRun.id.in_(last))
 
 
-async def meta(session: AsyncSession, ver: str | None = None) -> list[dict]:
+async def meta(session: AsyncSession, ver: str | None = None, user: CurrentUser | None = None) -> list[dict]:
     if ver:
         from app.modules.versioning.repo import ReleaseRepo
         from app.modules.versioning.service import VersioningService
@@ -116,11 +132,27 @@ async def meta(session: AsyncSession, ver: str | None = None) -> list[dict]:
             }
             for code, row in snapshot.get("objectTypes", {}).items()
         ]
+    from app.common.sql_guard import ensure_governed_tables, governed_tables
+    await ensure_governed_tables(session)
+    bindings = {g.object_type: g for g in governed_tables(require_ontology_id(session), session).values() if g.projection is not None}
+    from app.common.auth import row_filter
+    from app.common.row_filter import is_deny_all
+    if user:
+        bindings = {code: binding for code, binding in bindings.items() if not is_deny_all(await row_filter(user, code))}
+    from sqlalchemy import DateTime, String
+    def fields_by_kind(binding):
+        fields = sorted(binding.projection)
+        return {"空值率": fields, "唯一性": fields,
+                "新鲜度": [f for f in fields if isinstance(binding.table.c[f].type, DateTime) and binding.table.c[f].type.timezone],
+                "记录时效": [f for f in fields if isinstance(binding.table.c[f].type, DateTime) and binding.table.c[f].type.timezone],
+                "格式": [f for f in fields if isinstance(binding.table.c[f].type, String)]}
     return [
         {
             "key": t.code,
             "name": t.display_name,
-            "kinds": kinds(t.code, require_ontology_id(session)),
+            "kinds": kinds(t.code, require_ontology_id(session)) or ([k for k, fields in fields_by_kind(bindings[t.code]).items() if fields] if t.code in bindings else []),
+            "fields": sorted(bindings[t.code].projection) if t.code in bindings and not kinds(t.code, require_ontology_id(session)) else [],
+            "fieldsByKind": fields_by_kind(bindings[t.code]) if t.code in bindings and not kinds(t.code, require_ontology_id(session)) else {},
             "rules": {k: rule_text(t.code, k) for k in kinds(t.code, require_ontology_id(session))},
         }
         for t in (await session.scalars(select(ObjectType).order_by(ObjectType.id))).all()
@@ -297,10 +329,16 @@ async def list_checks(session, owner, page: PageParams, type_key=None, kind=None
     }
     historical_names = {row["key"]: row["name"] for row in await meta(session, ver)} if ver else {}
     ids = [c.id for c in checks.values()]
-    schedules = {} if ver else {
-        cursor.check_id: cursor for cursor in await session.scalars(select(QualityScheduleCursor).where(
-            QualityScheduleCursor.check_id.in_(ids)))
-    }
+    schedules = (
+        {}
+        if ver
+        else {
+            cursor.check_id: cursor
+            for cursor in await session.scalars(
+                select(QualityScheduleCursor).where(QualityScheduleCursor.check_id.in_(ids))
+            )
+        }
+    )
     page_runs = {
         r.check_id: r
         for r in await session.scalars(
@@ -341,21 +379,30 @@ async def list_checks(session, owner, page: PageParams, type_key=None, kind=None
         since = failed_starts.get(check.id) if check and run and run.result == "失败" else None
         cursor = schedules.get(check.id) if check else None
         schedule_status = (
-            "历史定义" if ver else "已退休" if published and published.get("retired")
-            else "手动" if value["schedule"] == "手动"
-            else "待发布" if published is None else "需重新发布启用" if cursor is None
-            else "已暂停" if cursor.next_at is None else "已启用"
+            "历史定义"
+            if ver
+            else "已退休"
+            if published and published.get("retired")
+            else "手动"
+            if value["schedule"] == "手动"
+            else "待发布"
+            if published is None
+            else "需重新发布启用"
+            if cursor is None
+            else "已暂停"
+            if cursor.next_at is None
+            else "已启用"
         )
         rows.append(
             {
                 "id": code,
-                **{k: value[k] for k in ("name", "typeKey", "kind", "threshold", "schedule")},
+                **{k: value[k] for k in ("name", "typeKey", "kind", "threshold", "schedule")}, "field": value.get("field"), "formatRule": value.get("formatRule"),
                 "typeName": historical_names.get(value["typeKey"], value["typeKey"])
                 if ver
                 else obj.display_name
                 if obj
                 else value["typeKey"],
-                "rule": rule_text(value["typeKey"], value["kind"])
+                "rule": f'{value["field"]} · {value["kind"]}' if value.get("field") else rule_text(value["typeKey"], value["kind"])
                 if value["kind"] in kinds(value["typeKey"], require_ontology_id(session))
                 else "—",
                 "actual": run.actual if run else "尚未运行",
@@ -417,9 +464,45 @@ async def visible_query(user: CurrentUser, code: str):
     return await apply_row_filter(query, user, code, columns, ORDER_LINKS if code == "order" else {})
 
 
-async def evaluate(session: AsyncSession, user: CurrentUser, code: str, kind: str, limit: float):
+async def evaluate(session: AsyncSession, user: CurrentUser, code: str, kind: str, limit: float, field: str | None = None, format_rule: str | None = None):
+    if field:
+        from app.common.sql_guard import run_guarded
+        from app.db.session import get_qa_readonly_engine
+        from app.modules.qa.readonly import scope_readonly_conn
+        binding = await quality_binding(session, code, field, kind)
+        preparer = session.bind.dialect.identifier_preparer
+        table, column = preparer.quote(binding.table.name), preparer.quote(field)
+        formats = {
+            "非空白": f"length(trim({column})) = 0",
+            "整数": f"length({column}) = 0 OR length(translate({column}, '0123456789', '')) > 0",
+            "邮箱": f"length(split_part({column}, '@', 1)) = 0 OR length(split_part({column}, '@', 2)) = 0 OR length({column}) - length(replace({column}, '@', '')) <> 1 OR {column} LIKE '% %'",
+        }
+        if kind == "格式" and format_rule not in formats:
+            raise AppError("格式规则无效", code="QUALITY_NOT_CONFIGURED", status_code=422)
+        now = clock.now()
+        cutoff = (now - timedelta(hours=limit)).isoformat()
+        aggregate = f"count(*) - count({column})" if kind == "空值率" else f"count({column}) - count(distinct {column})" if kind == "唯一性" else f"max({column})" if kind == "新鲜度" else f"count(*) FILTER (WHERE {column} < CAST('{cutoff}' AS TIMESTAMPTZ)), count(*) - count({column})" if kind == "记录时效" else f"count(*) FILTER (WHERE {column} IS NOT NULL AND ({formats[format_rule]}))"
+        async with get_qa_readonly_engine().connect() as conn, conn.begin():
+            await scope_readonly_conn(conn, require_ontology_id(session))
+            row = (await run_guarded(conn, f"SELECT count(*) AS total, {aggregate} AS bad FROM {table}", user, session=session)).one()
+        total, bad = row[:2]
+        if not total:
+            return "无数据", "当前可见范围没有记录，未判定通过或失败", None
+        if kind == "新鲜度":
+            if bad is None:
+                return "无数据", "没有有效的业务时间", None
+            value = (now - bad).total_seconds() / 3600
+            return ("通过" if 0 <= value <= limit else "失败"), f"最新时间 {_fmt_dt(bad)}，延迟 {value:.2f} 小时", bad
+        if kind == "记录时效":
+            missing = row[2]
+            return ("通过" if bad == 0 and missing == 0 else "失败"), f"陈旧 {bad}/{total} 条，时间为空 {missing}/{total} 条（阈值 {limit:g} 小时）", None
+        value = bad / total * 100 if kind == "空值率" else bad
+        actual = f"{value:.2f}%（{bad}/{total} 条）" if kind == "空值率" else f"不合格 {bad} 条（{format_rule}）" if kind == "格式" else f"重复 {bad} 条"
+        return ("通过" if value <= limit else "失败"), actual, None
     if require_ontology_id(session) != 1:
-        raise AppError("当前本体尚未绑定可执行的数据质量检查数据源", code="DATA_NOT_CONFIGURED", status_code=503)
+        raise AppError(
+            "当前本体尚未绑定可执行的数据质量检查数据源", code="DATA_NOT_CONFIGURED", status_code=503
+        )
     t = TARGETS[code]
     source = (await visible_query(user, code)).subquery()
     total = await session.scalar(select(func.count()).select_from(source))
@@ -455,14 +538,19 @@ async def evaluate(session: AsyncSession, user: CurrentUser, code: str, kind: st
 
 
 async def execute_check(
-    session: AsyncSession, user: CurrentUser, code: str, job_id: str, *,
-    scheduled_at: datetime | None = None, coalesced_from: datetime | None = None,
+    session: AsyncSession,
+    user: CurrentUser,
+    code: str,
+    job_id: str,
+    *,
+    scheduled_at: datetime | None = None,
+    coalesced_from: datetime | None = None,
 ) -> QualityRun:
     check, obj = await get_check(session, user.id, code, lock=True)
     if check.retired_at:
         raise AppError("已退休检查不可运行", code="STATE_INVALID", status_code=409)
     started, now = perf_counter(), clock.now()
-    result, actual, source_time = await evaluate(session, user, obj.code, check.kind, check.limit_value)
+    result, actual, source_time = await evaluate(session, user, obj.code, check.kind, check.limit_value, check.field, check.format_rule)
     run = QualityRun(
         check_id=check.id,
         job_id=job_id,
@@ -476,12 +564,21 @@ async def execute_check(
             "name": check.name,
             "typeKey": obj.code,
             "kind": check.kind,
-            "rule": rule_text(obj.code, check.kind),
+            "rule": f"{check.field} · {check.kind}" if check.field else rule_text(obj.code, check.kind),
+            "field": check.field,
+            "formatRule": check.format_rule,
             "threshold": check.threshold,
             "schedule": check.schedule,
-            **({"trigger": "scheduled", "scheduledAt": _fmt_dt(scheduled_at),
-                "coalescedFrom": coalesced_from.isoformat() if coalesced_from else None,
-                "timezone": get_settings().display_tz} if scheduled_at else {}),
+            **(
+                {
+                    "trigger": "scheduled",
+                    "scheduledAt": _fmt_dt(scheduled_at),
+                    "coalescedFrom": coalesced_from.isoformat() if coalesced_from else None,
+                    "timezone": get_settings().display_tz,
+                }
+                if scheduled_at
+                else {}
+            ),
         },
         created_by=user.id,
     )

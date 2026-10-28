@@ -138,6 +138,7 @@ class EventTypeService:
                 model.required,
                 model.description.label("desc"),
                 model.sample,
+                (literal(None, type_=EventPayloadField.schema.type) if envelope else EventPayloadField.schema).label("schema"),
                 literal(envelope).label("envelope"),
                 literal(int(envelope)).label("part"),
                 model.seq,

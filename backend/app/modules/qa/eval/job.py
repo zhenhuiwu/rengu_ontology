@@ -3,7 +3,7 @@
 
 - 复用 eval/run.py 的做法：每题在只读连接的事务里跑、整体回滚，不改任何数据和口径。
 - [推断] 判定规则（路线 B 的链路不产出 SemPlan，只能看回答）：
-  反问 / 拒答 / 执行失败 → 未召回指标；0 行 → 过滤条件缺失；
+  默认反问 / 拒答 / 执行失败 → 未召回指标；显式声明的拒答或追问另按合同验证；0 行 → 过滤条件缺失；
   回答的列名里找不到期望指标名（去掉括号注释）→ 指标选错；
   期望维度在列名里找不到 → 维度不匹配；其余算通过。时间范围不判。
 - Procrastinate持久队列，独立QA worker执行；每次运行持有全局与单run会话锁。
@@ -55,16 +55,85 @@ def _stem(name: str) -> str:
     return re.sub(r"[（(].*?[）)]", "", name).strip()
 
 
+_SQL_UNKNOWN = object()
+
+
+def _expected_response_matches(expect, kind, snap, sql):
+    """Only an explicit, reviewed rubric can accept a non-answer; omitted SQL is unknown."""
+    ans = snap.get("answer") or {}
+    if sql is not None or any(k in snap or k in ans for k in ("table", "action")):
+        return False
+    if "refuse" in expect:
+        want = expect["refuse"]
+        return (
+            "allowClarify" not in expect
+            and isinstance(want, dict)
+            and set(want) == {"code", "reason"}
+            and want["code"] == "NO_DATA"
+            and isinstance(want["reason"], str)
+            and bool(want["reason"].strip())
+            and kind == "denied"
+            and "answer" not in snap
+            and snap.get("code") == "NO_DATA"
+            and snap.get("bold") == want["reason"]
+        )
+    want = expect.get("allowClarify")
+    actual = ans.get("clarify")
+    if (
+        not isinstance(want, dict)
+        or set(want) != {"term", "options"}
+        or not isinstance(want["term"], str)
+        or not want["term"].strip()
+        or not isinstance(want["options"], list)
+        or not 2 <= len(want["options"]) <= 6
+        or any(not isinstance(x, str) or not x.strip() for x in want["options"])
+        or len(set(want["options"])) != len(want["options"])
+        or kind != "answer"
+        or ans.get("card") != "clarify"
+        or not isinstance(ans.get("text"), str)
+        or not ans["text"].strip()
+        or not isinstance(actual, dict)
+        or actual.get("term") != want["term"]
+        or actual.get("chosen") is not None
+    ):
+        return False
+    options = actual.get("options")
+    if not isinstance(options, list) or len(options) != len(want["options"]):
+        return False
+    if any(
+        not isinstance(x, dict)
+        or not isinstance(x.get("label"), str)
+        or not isinstance(x.get("value"), str)
+        or not x["value"].strip()
+        for x in options
+    ):
+        return False
+    return (
+        len({x["value"] for x in options}) == len(options)
+        and len({x["label"] for x in options}) == len(options)
+        and {x["label"] for x in options} == set(want["options"])
+    )
+
+
 def judge(
-    q: QaEvalQuestion, kind: str, snap: dict[str, Any], metrics: catalog.Metrics
+    q: QaEvalQuestion,
+    kind: str,
+    snap: dict[str, Any],
+    metrics: catalog.Metrics,
+    *,
+    sql: Any = _SQL_UNKNOWN,
 ) -> tuple[FailKind, str] | None:
     """返回 None = 通过；否则 (失败类型, 实际结果文字)。"""
     if (q.expect or {}).get("action"):
-        return judge_action(q, kind, snap)
+        return judge_action(q, kind, snap, sql=sql)
     m = catalog.metric_of(metrics, (q.expect or {}).get("metric"))
     if m is None or not _stem(m["name"]):
         return FailKind.metric_not_recalled, "期望指标不可用：数据库目录中不存在该指标"
     ans = snap.get("answer") or {}
+    if "refuse" in (q.expect or {}) or (ans.get("card") == "clarify" and "allowClarify" in (q.expect or {})):
+        if _expected_response_matches(q.expect, kind, snap, sql):
+            return None
+        return FailKind.metric_not_recalled, "回答不满足已声明的拒答/追问合同"
     if kind == "denied":
         return FailKind.metric_not_recalled, f"拒答（{snap.get('tag', '')}）：{snap.get('bold', '')}"
     if ans.get("card") == "clarify":
@@ -83,10 +152,16 @@ def judge(
     return None
 
 
-def judge_action(q: QaEvalQuestion, kind: str, snap: dict[str, Any]) -> tuple[FailKind, str] | None:
+def judge_action(
+    q: QaEvalQuestion, kind: str, snap: dict[str, Any], *, sql: Any = _SQL_UNKNOWN
+) -> tuple[FailKind, str] | None:
     """动作题（eval_gen）：回答是期望动作的建议卡就算通过（只建议，从不执行）。"""
     want = (q.expect or {})["action"]
     ans = snap.get("answer") or {}
+    if "refuse" in (q.expect or {}) or (ans.get("card") == "clarify" and "allowClarify" in (q.expect or {})):
+        if _expected_response_matches(q.expect, kind, snap, sql):
+            return None
+        return FailKind.metric_not_recalled, "回答不满足已声明的拒答/追问合同"
     if kind == "denied":
         return FailKind.metric_not_recalled, f"拒答（{snap.get('tag', '')}）：{snap.get('bold', '')}"
     action = ans.get("action") if ans.get("card") == "action" else None
@@ -127,10 +202,12 @@ async def execute(
         try:
             exp = q.expect or {}
             if not exp.get("action") and catalog.metric_of(metrics, exp.get("metric")) is None:
-                kind, snap = "unavailable", {}
+                kind, snap, sql = "unavailable", {}, None
             else:
-                kind, snap, *_ = await chain.answer(session, conn, llm, user, q.question, **answer_context)
-            res = judge(q, kind, snap, metrics)
+                kind, snap, _n, _ms, sql = await chain.answer(
+                    session, conn, llm, user, q.question, **answer_context
+                )
+            res = judge(q, kind, snap, metrics, sql=sql)
         except (AppError, DBAPIError) as e:  # SQL 被拒 / 超时 / 大模型失败：记失败，不中断整轮
             code = getattr(e, "code", None) or type(e).__name__
             res = FailKind.metric_not_recalled, f"执行失败：{code}"
@@ -174,8 +251,12 @@ async def worker_lifespan() -> AsyncIterator[None]:
 
 
 async def _background(
-    run_code: str, group: str | None = None, llm: LLMClient | None = None, user: Any = None,
-    *, ontology_id: int | None = None
+    run_code: str,
+    group: str | None = None,
+    llm: LLMClient | None = None,
+    user: Any = None,
+    *,
+    ontology_id: int | None = None,
 ) -> None:
     from app.db.session import get_engine
 
@@ -186,6 +267,7 @@ async def _background(
     # 同一连接跨逐题commit持有全局和单run锁；Procrastinate本身也使用全局lock。
     async with get_engine().connect() as connection:
         session = AsyncSession(bind=connection, expire_on_commit=False)
+        session.info["workspace_worker"] = True
         await set_ontology_scope(session, ontology_id)
         status = await session.scalar(select(QaEvalRun.status).where(QaEvalRun.code == run_code))
         await session.rollback()
@@ -259,7 +341,11 @@ async def recover_interrupted_runs() -> int:
     """启动恢复：保留已提交的逐题进度，不碰仍由其他进程执行的任务。"""
     recovered = 0
     for ontology_id in await workspace_ids():
-        recovered += await _recover_workspace(ontology_id)
+        from app.common.ontology import WorkspaceInactive
+        try:
+            recovered += await _recover_workspace(ontology_id)
+        except WorkspaceInactive:
+            continue
     return recovered
 
 

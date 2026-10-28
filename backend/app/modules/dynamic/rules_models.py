@@ -162,6 +162,7 @@ class RuleScheduleRun(IdMixin, MutableTableMixin, OntologyVersionMixin, Base):
     __tablename__ = "rule_schedule_run"
     __table_args__ = (UniqueConstraint("rule_id", "rule_version", "scheduled_at"),)
 
+    release_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("ontology_release.id"), index=True)
     rule_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("rule.id"), nullable=False, index=True)
     rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

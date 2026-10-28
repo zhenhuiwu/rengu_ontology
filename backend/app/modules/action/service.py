@@ -275,9 +275,9 @@ class ActionTypeService:
             raw = value.get("policy")
         else:
             definition = await self.session.scalar(
-                select(ActionTypeVersion.definition).join(ActionType).where(
-                    ActionType.code == type_id, ActionTypeVersion.ver == value.get("version")
-                )
+                select(ActionTypeVersion.definition)
+                .join(ActionType)
+                .where(ActionType.code == type_id, ActionTypeVersion.ver == value.get("version"))
             )
             raw = (definition or {}).get("policy")
         status = "unconfigured"
@@ -288,8 +288,10 @@ class ActionTypeService:
             except ValueError:
                 status = "invalid"
         return {
-            **with_system(value, await self.repo.systems()), "policy": stored(raw).dump(),
-            "policyStored": raw, "policyStatus": status,
+            **with_system(value, await self.repo.systems()),
+            "policy": stored(raw).dump(),
+            "policyStored": raw,
+            "policyStatus": status,
         }
 
     async def used_by(self, ctx: ViewContext, type_id: str) -> list[dict[str, Any]]:
@@ -350,7 +352,7 @@ class ActionTypeService:
         a = with_system(await self.one(ctx, type_id), systems)
         wb = a.get("writeback") or {}
         return {
-            "config": {"sysId": a.get("sysId"), "endpoint": a.get("endpoint"), "idemKey": a.get("idemKey")},
+            "config": {"sysId": a.get("sysId"), "endpoint": a.get("endpoint"), "idemKey": a.get("idemKey"), "httpMapping": a.get("httpMapping")},
             "edits": wb.get("edits", []),
             "effects": wb.get("effects", []),
             "flow": flow_of(a, systems.get(a.get("sysId") or ""), await self.repo.rule_action()),

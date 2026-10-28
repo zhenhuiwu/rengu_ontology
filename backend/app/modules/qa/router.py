@@ -40,6 +40,7 @@ from app.modules.dynamic.catalog import DatabaseRefCatalog, get_catalog
 from app.modules.dynamic.ports import PortsDep
 from app.modules.dynamic.service import ActionService
 from app.modules.qa import catalog, chain, stream
+from app.modules.qa.schemas import TurnRuleRunIn
 from app.modules.qa import repo as r
 from app.modules.qa import service as svc
 from app.modules.qa.eval import job as eval_job
@@ -557,6 +558,7 @@ async def stage_turn_action(
     if ctx.preview_as:  # 预览别人时不能替人发起动作
         raise AppError("预览模式下不能发起动作", code="FORBIDDEN", status_code=403)
     pk, _ = await svc.effective_user(session, user, ctx)
+    await get_adapter(session).xact_lock(session, f"qa.turn.action.{tid}")
     t = await _own_turn(session, pk, tid)
     a = _answer(t)
     card = a.get("action") if a.get("card") == "action" else None
@@ -567,6 +569,25 @@ async def stage_turn_action(
     if policy["mode"] == "suggest":
         raise ActionNotStageable(details={"id": tid, "mode": "suggest"})
     s = await session.get(QaSession, t.session_id)
+    if run_id := card.get("runId"):
+        prior = await session.scalar(select(ActionRun).where(
+            ActionRun.code == run_id, ActionRun.qa_session == s.code, ActionRun.action_type_code == st["typeId"]
+        ))
+        if prior is None:
+            raise AppError("原动作记录不可用，请重新发起请求", code="ACTION_NOT_FOUND", status_code=409)
+        response.status_code = 200
+        return await actions.detail(prior)
+
+    if card.get("stageVersion") != 1:
+        raise AppError(
+            "历史动作卡未关联执行记录，请重新提问以安全发起",
+            code="LEGACY_ACTION_CARD",
+            status_code=409,
+        )
+
+    def remember(run):
+        t.snapshot = {**t.snapshot, "answer": {**a, "action": {**card, "runId": run.code}}}
+
     b = body or TurnActionStageIn()
     obj_id = (b.obj_id or st.get("objId") or "").strip()
     if not obj_id:
@@ -592,6 +613,7 @@ async def stage_turn_action(
     )
     if old is not None:
         response.status_code = 200
+        remember(old)
         return await actions.detail(old)
     alert_id = (card.get("decision") or {}).get("alertId")
     try:
@@ -619,6 +641,7 @@ async def stage_turn_action(
         )
         if existing is not None and existing.action_type_code == st["typeId"]:
             response.status_code = 200
+            remember(existing)
             return await actions.detail(existing)
         raise AppError(
             f"告警 {alert_id} 已有动作记录 {existing.code if existing else ''}，请到动作中心处理",
@@ -633,6 +656,7 @@ async def stage_turn_action(
         target=run.code,
         detail={"turn": tid, "type": st["typeId"], "objId": obj_id, "policy": policy["mode"]},
     )
+    remember(run)
     return await actions.detail(run)
 
 
@@ -680,6 +704,120 @@ class TurnNoResult(AppError):
 def _answer(t: QaTurn) -> dict:
     a = (t.snapshot or {}).get("answer")
     return a if isinstance(a, dict) else {}
+
+
+async def _rule_card(session, user, ctx, tid):
+    if ctx.preview_as or ctx.ver:
+        raise AppError("只读模式下不能运行规则", code="FORBIDDEN", status_code=403)
+    for page in ("rules", "alerts"):
+        from app.common.auth import check_func
+        check_func(user, page, "manage")
+    pk, _ = await svc.effective_user(session, user, ctx)
+    turn = await _own_turn(session, pk, tid)
+    answer = _answer(turn)
+    card = answer.get("rule") if answer.get("card") == "rule" else None
+    if not isinstance(card, dict) or card.get("cardVersion") != 1:
+        raise TurnNotApplicable(details={"id": tid, "reason": "历史卡不可运行，请重新提问"})
+    return turn, answer, card
+
+
+@router.get("/turns/{tid}/rule-events", dependencies=_WB)
+async def rule_events(tid: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep, before: int | None = None, q: str = ""):
+    from app.modules.dynamic.rules_models import Rule
+    from app.modules.event.delivery import authorize_object
+    from app.modules.event.models import Event, EventOutcome, EventType
+    turn, answer, card = await _rule_card(session, user, ctx, tid)
+    rule = await session.scalar(select(Rule).where(Rule.code == card["id"]))
+    if not rule or rule.version != card["version"]:
+        raise AppError("规则版本已变化，请重新提问", code="VERSION_CONFLICT", status_code=409)
+    trigger = rule.trigger or {}
+    from app.common.auth import check_func
+    check_func(user, "event-types", "manage")
+    event_type = await session.scalar(select(EventType).where(EventType.code == trigger.get("eventId")))
+    if not event_type:
+        return {"items": []}
+    from app.modules.versioning.repo import ReleaseRepo
+    release = await ReleaseRepo(session).latest()
+    if release is None:
+        return {"items": []}
+    if len(q) > 100 or (before is not None and before < 1):
+        raise AppError("事件筛选条件无效", code="VALIDATION_FAILED", status_code=422)
+    query = select(Event).where(
+        Event.release_id == release.id, Event.event_type_id == event_type.id, Event.is_seed.is_(False), Event.is_test.is_(False),
+        Event.ingested_at.is_not(None), Event.release_id.is_not(None), Event.outcome != EventOutcome.deduped,
+    )
+    if before is not None:
+        query = query.where(Event.id < before)
+    if q.strip():
+        from sqlalchemy import or_
+        term = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.where(or_(Event.code.ilike(f"%{term}%", escape="\\"), Event.object_id.ilike(f"%{term}%", escape="\\"), Event.obj_label.ilike(f"%{term}%", escape="\\")))
+    events = list(await session.scalars(query.order_by(Event.id.desc()).limit(101)))
+    items = []
+    for event in events[:100]:
+        if not isinstance(event.payload, dict) or not isinstance(event.definition_snapshot, dict):
+            continue
+        try:
+            await authorize_object(session, user, event)
+        except AppError:
+            continue
+        items.append({"id": event.code, "label": event.obj_label or event.object_id, "at": event.occurred_at.isoformat()})
+    return {"items": items, "nextBefore": events[99].id if len(events) > 100 else None}
+
+
+@router.post("/turns/{tid}/rule:run", dependencies=_WB)
+async def run_turn_rule(tid: str, body: TurnRuleRunIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
+    from app.modules.dynamic.event_rule_runtime import dispatch
+    from app.modules.dynamic.rules_models import Rule
+    await get_adapter(session).xact_lock(session, f"qa.turn.rule.{tid}")
+    turn, answer, card = await _rule_card(session, user, ctx, tid)
+    if card.get("result"):
+        if card.get("eventId") != body.event_id:
+            raise AppError("此轮规则已运行，请重新提问以选择其他事件", code="IDEMPOTENCY_CONFLICT", status_code=409)
+        return card["result"]
+    rule = await session.scalar(select(Rule).where(Rule.code == card["id"]))
+    if not rule or rule.version != card["version"]:
+        raise AppError("规则版本已变化，请重新提问", code="VERSION_CONFLICT", status_code=409)
+    if (rule.trigger or {}).get("kind") == "事件":
+        from app.common.auth import check_func
+        check_func(user, "event-types", "manage")
+        if not body.event_id:
+            raise AppError("请选择真实事件", code="VALIDATION_FAILED", status_code=422)
+        result = await dispatch(session, user, rule_code=card["id"], event_id=body.event_id)
+    elif (rule.trigger or {}).get("kind") == "定时":
+        from types import SimpleNamespace
+        from app.core import clock
+        from app.modules.dynamic.rule_runtime import run_rule
+        from app.modules.dynamic.scheduler import create_alerts, fingerprint
+        from app.modules.dynamic.rules_models import RuleScheduleRun, RuleStatus
+        from app.modules.versioning.repo import ReleaseRepo
+
+        if body.event_id or (rule.trigger or {}).get("enabled") is not True or rule.status == RuleStatus.disabled:
+            raise AppError("定时规则未启用或参数无效", code="VALIDATION_FAILED", status_code=422)
+        if rule.trigger.get("runAsUserId") != user.id:
+            raise AppError("只能由规则配置的运行身份手动运行", code="NO_PERMISSION", status_code=403)
+        await get_adapter(session).xact_lock(session, "ontology.publish")
+        rule = await session.scalar(select(Rule).where(Rule.id == rule.id).with_for_update())
+        release = await ReleaseRepo(session).latest()
+        definition = ((release.snapshot or {}).get("rules") or {}).get(rule.code) if release else None
+        if not definition or rule.status == RuleStatus.disabled or (rule.trigger or {}).get("enabled") is not True or rule.trigger.get("runAsUserId") != user.id or rule.version != card["version"] or definition.get("version") != rule.version or definition.get("trigger") != rule.trigger:
+            raise AppError("规则已变化，请重新提问", code="VERSION_CONFLICT", status_code=409)
+        at = clock.now()
+        run = RuleScheduleRun(rule_id=rule.id, rule_version=rule.version, release_id=release.id, scheduled_at=at, started_at=at, state="running", definition=definition, permission_fingerprint=fingerprint(user), created_by=user.id)
+        session.add(run)
+        await session.flush()
+        body_run = SimpleNamespace(mode="snapshot", range="30d", anchor=None, page=1, size=10000)
+        evaluated = await run_rule(session, user, definition, definition, body_run, internal=True)
+        counts = await create_alerts(session, user, rule, run, evaluated.pop("_matches"))
+        run.state = "partial" if evaluated["unknown"] else "done"
+        run.finished_at = clock.now()
+        result = {"status": run.state, "runId": run.id, **counts, **{key: evaluated[key] for key in ("ranAt", "candidates", "evaluated", "unknown", "would")}}
+        run.result = result
+    else:
+        raise AppError("规则触发方式不支持运行", code="VALIDATION_FAILED", status_code=422)
+    turn.snapshot = {**turn.snapshot, "answer": {**answer, "rule": {**card, "eventId": body.event_id, "result": result}}}
+    await session.flush()
+    return result
 
 
 @router.post("/turns/{tid}:recalc", dependencies=_WB, summary="W9 切换口径")
@@ -898,7 +1036,8 @@ async def get_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: Vie
     x = await repo.detail(pid)
     if x is None or not await repo.is_visible(x.id, repo.visible_clause(pk, u.dept, include_shared=True)):
         raise NotFound("页面不存在", details={"id": pid})
-    # A shared read computes an ephemeral current-viewer projection; owner caches are never reused across users.
+    # A shared read computes an ephemeral current-viewer projection;
+    # owner caches are never reused across users.
     return await svc.page_view_out(session, x, viewer, ctx, temporary=True)
 
 

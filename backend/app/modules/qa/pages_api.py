@@ -305,7 +305,7 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
         if body.scope not in (None, "", "当前数据权限"):
             raise execution.unavailable("模板不能用范围名称替换原查询条件")
         caches, as_of = await execution.execute_cards(session, user, t.cards)
-        permission = await execution.fingerprint(user)
+        permission = await execution.fingerprint(session, user)
         p.source_kind, p.source_ref = PageSourceKind.template, f"模板「{t.name}」"
         p.last_refresh, p.data_as_of = now, as_of
         p.cards = [
@@ -335,22 +335,32 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
                 select(QaTurn)
                 .where(
                     QaTurn.session_id == source.id,
-                    QaTurn.kind == TurnKind.answer,
+                    QaTurn.kind.in_((TurnKind.answer, TurnKind.empty)),
                     QaTurn.status == TurnStatus.done,
                     QaTurn.sql_text.is_not(None),
                     QaTurn.is_seed.is_(False),
                     QaTurn.release_id.is_not(None),
                     QaTurn.answered_ver.is_not(None),
                 )
-                .order_by(QaTurn.seq)
+                .order_by(QaTurn.seq.desc())
+                .limit(execution.MAX_CARDS)
             )
         )
-        if not turns or len(turns) > execution.MAX_CARDS:
-            raise execution.unavailable(f"会话须有1至{execution.MAX_CARDS}个可执行回答")
+        if not turns:
+            raise execution.unavailable("会话没有真实成功查询，请先提问")
+        turns.reverse()
         cards = []
         release = await execution.ReleaseRepo(session).latest()
-        for i, turn in enumerate(turns, start=1):
-            plan = deepcopy(execution.turn_plan(turn, release))
+        skipped = 0
+        for turn in turns:
+            try:
+                plan = deepcopy(await execution.turn_plan(session, turn, release))
+            except AppError as error:
+                if error.code != "PAGE_EXECUTION_UNAVAILABLE":
+                    raise
+                skipped += 1
+                continue
+            i = len(cards) + 1
             cards.append(
                 QaPageCard(
                     card_key=f"{code}-C{i}",
@@ -362,11 +372,13 @@ async def create_page(body: PageCreateIn, session: SessionDep, user: CurrentUser
                     result_cache={},
                 )
             )
+        if not cards:
+            raise execution.unavailable("会话没有与当前对象定义一致的真实查询，请重新提问")
         caches, as_of = await execution.execute_cards(session, user, cards)
-        permission = await execution.fingerprint(user)
+        permission = await execution.fingerprint(session, user)
         for card, cache in zip(cards, caches, strict=True):
             card.result_cache, card.perm_fingerprint = cache, permission
-        p.cards, p.source_kind, p.source_ref = cards, PageSourceKind.workbench, f"会话「{source.title}」"
+        p.cards, p.source_kind, p.source_ref = cards, PageSourceKind.workbench, f"会话「{source.title}」" + (f" · 跳过 {skipped} 条版本不兼容回答" if skipped else "")
         p.last_refresh, p.data_as_of = now, as_of
     p.next_run = next_run(p.refresh, now)
     p.subscription = QaPageSubscription(
@@ -433,16 +445,15 @@ async def refresh_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx:
     before, at = _card_values(p), clock.now()
     ok = False
     try:
-        permission = await execution.fingerprint(actor)
-        caches, as_of = await execution.execute_cards(session, actor, p.cards)
+        successes, failures = await execution.refresh_compatible_cards(session, actor, p.cards)
+        if not successes:
+            raise execution.unavailable(failures[0][1] if failures else "没有可刷新的卡片")
     except AppError as error:
         p.status, p.status_note = PageStatus.refresh_failed, error.message
     else:
-        for card, cache in zip(p.cards, caches, strict=True):
-            card.result_cache, card.perm_fingerprint = cache, permission
-        p.status, p.status_note = _status_of(p.cards)
-        p.last_refresh, p.data_as_of = at, as_of
-        ok = True
+        p.status, p.status_note = _status_of(p.cards) if not failures else (PageStatus.refresh_failed, f"{len(failures)} 张卡片未刷新：{failures[0][1]}")
+        p.last_refresh, p.data_as_of = at, min(row[3] for row in successes)
+        ok = not failures
     await emit_refresh_subscription(session, p, actor, at, before=before, ok=ok)
     await session.flush()
     await audit(
@@ -529,7 +540,7 @@ async def pin_card(pid: str, body: PinIn, session: SessionDep, user: CurrentUser
     if len(p.cards) >= execution.MAX_CARDS:
         raise execution.unavailable(f"一个页面最多{execution.MAX_CARDS}张卡片")
     release = await execution.ReleaseRepo(session).latest()
-    f["sem_plan"] = {"execution": deepcopy(execution.turn_plan(t, release))}
+    f["sem_plan"] = {"execution": deepcopy(await execution.turn_plan(session, t, release))}
     nums = [int(m[1]) for c in p.cards if (m := re.fullmatch(rf"{re.escape(pid)}-C(\d+)", c.card_key))]
     key = f"{pid}-C{(max(nums) if nums else 0) + 1}"
     order = (max((c.sort_order for c in p.cards), default=0)) + 1
@@ -537,7 +548,7 @@ async def pin_card(pid: str, body: PinIn, session: SessionDep, user: CurrentUser
     actor = await execution.current_viewer(session, user)
     caches, as_of = await execution.execute_cards(session, actor, [card])
     card.result_cache = caches[0]
-    card.perm_fingerprint = await execution.fingerprint(actor)
+    card.perm_fingerprint = await execution.fingerprint(session, actor)
     p.cards.append(card)
     p.scope = "原卡片条件 · 当前数据权限"
     p.last_refresh, p.data_as_of = clock.now(), as_of
@@ -595,7 +606,9 @@ async def put_schedule(
         if body.sub.channel != "站内信":
             raise execution.unavailable("当前仅支持站内信订阅")
         allowed_ids = {p.owner_id, *(member.user_id for member in p.members)}
-        candidates = (await session.execute(_share_candidates(session).where(SysUser.id.in_(allowed_ids)))).all()
+        candidates = (
+            await session.execute(_share_candidates(session).where(SysUser.id.in_(allowed_ids)))
+        ).all()
         names: dict[str, set[int]] = {}
         for candidate in candidates:
             names.setdefault(candidate.name, set()).add(candidate.id)
@@ -831,10 +844,13 @@ async def export_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: 
         raise NotFound("页面不存在")
     if ctx.read_only or (p.owner_id != pk and not p.allow_export):
         raise Forbidden("当前页面不允许导出")
-    governed = governed_tables(require_ontology_id(session))
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
+    governed = governed_tables(require_ontology_id(session), session)
     release = await execution.ReleaseRepo(session).latest()
     for card in p.cards:
-        plan = execution.validate_plan(card, release)
+        plan = await execution.validate_plan(card, release, session)
         for table in _real_tables(assert_single_select(plan["sql"])):
             binding = governed.get(table.name)
             if binding is None or not await can_export_object(session, viewer, binding.object_type):

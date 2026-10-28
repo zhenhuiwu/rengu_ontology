@@ -12,7 +12,7 @@ from app.common.auth import check_func, resolve_user
 from app.core.clock import now
 from app.db.dialects import get_adapter
 from app.modules.action.condition_expr import Unavailable
-from app.modules.dynamic.models import Alert, AlertLog, AlertOp, AlertStatus
+from app.modules.dynamic.models import ActionRun, Alert, AlertLog, AlertOp, AlertStatus
 from app.modules.dynamic.rule_runtime import Expression, parse_expression, unavailable
 from app.modules.dynamic.rules_models import HitResult, Rule, RuleHit, RuleOutput, RuleStatus
 from app.modules.event.ingress import validate_fields
@@ -54,9 +54,18 @@ def transition_pairs(snapshot, *, object_kind, version):
 class EventExpression(Expression):
     """Shared by the production subscriber and read-only event replay."""
 
-    def __init__(self, tree, fields, snapshot, event_definition):
+    def __init__(self, tree, fields, snapshot, event_definition, obj=None, gov=None, functions=None, relations=None):
         self.snapshot, self.event_definition, self.transitions = snapshot, event_definition, {}
-        super().__init__(tree, None, None, fields)
+        super().__init__(tree, obj, gov, fields, functions, relations)
+
+    def visit_Attribute(self, node):
+        if isinstance(node.value, ast.Name) and node.value.id not in ("event", "事件") and self.obj:
+            column = self.column(node)
+            key = (node.value.id, node.attr)
+            self.references[key] = f"__object__.{column}"
+            self.labels[key] = self.column_labels[column]
+            return node
+        return super().visit_Attribute(node)
 
     def visit_Compare(self, node):  # noqa: N802 - ast.NodeTransformer dispatch name
         right = node.comparators[0] if len(node.comparators) == 1 else None
@@ -153,6 +162,61 @@ def dedupe_spec(rule, event, fields):
     return "rule-" + hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest(), window
 
 
+async def stage_action(session, user, rule, event, fields, alert, values):
+    from app.modules.action.models import ActionParam, ActionType
+    from app.modules.dynamic.catalog import get_catalog
+    from app.modules.dynamic.ports import Ports, get_checker, get_emitter, get_scheduler, get_submitter
+    from app.modules.dynamic.schemas import SourceIn, StageIn
+    from app.modules.dynamic.service import ActionService
+
+    check_func(user, "action-center", "manage")
+    config = rule.auto_stage or {}
+    action_type = await session.scalar(select(ActionType).where(ActionType.code == config.get("actionTypeId")))
+    if action_type is None:
+        raise unavailable("规则动作类型不存在")
+    params = list(await session.scalars(select(ActionParam).where(ActionParam.action_type_id == action_type.id)))
+    by_name = {p.name: p for p in params}
+    values_by_source = {"告警.对象": event.object_id, "命中.对象": event.object_id,
+                        "告警.ID": alert.code, "规则.命中说明": values}
+    for field in fields:
+        if field.api in event.payload:
+            values_by_source[f"事件.{field.api}"] = event.payload[field.api]
+            name_key = f"事件.{field.name}"
+            if name_key in values_by_source and name_key != f"事件.{field.api}":
+                raise unavailable("事件字段名称不唯一，无法解析动作映射")
+            values_by_source[name_key] = event.payload[field.api]
+    mapped = {}
+    for item in config.get("mapping", []):
+        param, source = item.get("param"), item.get("from")
+        if not source:
+            continue
+        if param not in by_name or by_name[param].api in mapped:
+            raise unavailable("规则动作参数映射无效或重复")
+        if source.startswith("固定值："):
+            value = source.removeprefix("固定值：")
+        elif source in values_by_source:
+            value = values_by_source[source]
+        else:
+            raise unavailable("规则动作参数来源不可计算")
+        mapped[by_name[param].api] = value
+    payload = json.dumps(mapped, ensure_ascii=False, allow_nan=False)
+    ports = Ports(get_submitter(session, user), get_emitter(session), get_scheduler(session), get_checker(session, user))
+    actions = ActionService(session, user, await get_catalog(session, user), ports)
+    await actions.validate_launch(action_type.code, event.obj_kind, event.object_id, payload)
+    run, created = await actions.stage(StageIn(
+        type_id=action_type.code, obj_kind=event.obj_kind, obj_id=event.object_id,
+        obj_label=event.obj_label or event.object_id, params=payload,
+        source=SourceIn(type="规则", rule_id=rule.code, rule_version=str(rule.version),
+                        alert_id=alert.code, confirmer=config.get("confirmer")),
+    ))
+    if created and config.get("executionMode", "confirm") == "auto":
+        run = await actions.apply_policy(run)
+    result = {"actionStatus": run.status.value, "actionId": run.code}
+    if getattr(actions, "policy_overflow", None):
+        result["actionReason"] = actions.policy_overflow
+    return result
+
+
 async def dispatch(session, user, *, rule_code, event_id):
     # Reload real role membership even if an internal caller passed an outdated identity.
     user = await resolve_user(session, user.id)
@@ -230,15 +294,6 @@ async def dispatch(session, user, *, rule_code, event_id):
     result = {"ruleId": rule.code, "ruleVersion": rule.version, "status": "not_matched"}
     if not filter_matches(trigger.get("filter") or "全部", fields, event.payload):
         return result
-    expression = EventExpression(
-        parse_expression(bound.get("expr", "")), {f.api: f.name for f in fields}, snapshot, definition
-    )
-    matched, values = expression.run(event.payload, event.occurred_at)
-    if not matched:
-        return result
-    if rule.output != RuleOutput.alert:
-        raise unavailable("通知规则缺少真实通知执行通道，不能冒充告警或已通知")
-    key, window = dedupe_spec(rule, event, fields)
     source = f"{event.code}\0{rule.code}"
     if event.ontology_id != 1:
         source = f"{event.ontology_id}\0{source}"
@@ -246,20 +301,51 @@ async def dispatch(session, user, *, rule_code, event_id):
     hit_code = f"RH-{identity}"
     previous = await session.scalar(select(RuleHit).where(RuleHit.code == hit_code))
     action = {"actionStatus": "not_configured"}
-    if (bound.get("autoStage") or {}).get("enabled"):
-        action = {
-            "actionStatus": "unavailable",
-            "actionReason": "规则自动暂存映射未绑定可执行参数，未创建或执行业务动作",
-        }
     if previous:
         alert = await session.get(Alert, previous.alert_id) if previous.alert_id else None
+        if alert and previous.result != HitResult.deduped:
+            run = await session.scalar(select(ActionRun).where(ActionRun.alert_id == alert.id, ActionRun.rule_code == rule.code))
+            if run:
+                action = {"actionStatus": run.status.value, "actionId": run.code}
         return {
             **result,
             **action,
+            "evaluatedAt": previous.at.isoformat(),
+            "evaluationMode": "prior_result",
             "status": "deduped" if previous.result == HitResult.deduped else "alert_created",
             "hitId": previous.code,
             "alertId": alert.code if alert else None,
         }
+    from app.common.ontology import require_ontology_id
+    from app.common.sql_guard import governed_tables
+    from app.modules.integration.action_edits import existing_row
+    from app.modules.static.models import ObjectStatus, ObjectType
+
+    obj = await session.scalar(select(ObjectType).where(
+        ObjectType.code == event.obj_kind, ObjectType.status == ObjectStatus.published
+    ))
+    gov = next((g for g in governed_tables(require_ontology_id(session), session).values()
+                if obj and g.object_type == obj.code and g.inherit is None), None)
+    if obj is None or gov is None:
+        raise unavailable("规则对象尚未映射受控业务表")
+    from app.modules.dynamic.rule_functions import bind_rule_functions
+    tree = parse_expression(bound.get("expr", ""))
+    functions = await bind_rule_functions(session, user, tree)
+    from app.modules.dynamic.rule_relations import bind_rule_relations
+    relations = await bind_rule_relations(session, user, tree, obj, gov)
+    expression = EventExpression(tree, {f.api: f.name for f in fields}, snapshot, definition, obj, gov, functions, relations)
+    evaluated_at = now()
+    inputs = dict(event.payload)
+    if expression.columns:
+        row = await existing_row(session, user, obj, gov, event.object_id)
+        inputs.update({f"__object__.{column}": row[column] for column in expression.columns})
+    matched, values = expression.run(inputs, evaluated_at)
+    result.update({"evaluatedAt": evaluated_at.isoformat(), "evaluationMode": "current_object" if expression.columns else "event_payload"})
+    if not matched:
+        return result
+    if rule.output != RuleOutput.alert:
+        raise unavailable("通知规则缺少真实通知执行通道，不能冒充告警或已通知")
+    key, window = dedupe_spec(rule, event, fields)
     at = now()
     recent = select(RuleHit).where(
         RuleHit.rule_id == rule.id,
@@ -288,7 +374,6 @@ async def dispatch(session, user, *, rule_code, event_id):
         result=HitResult.deduped if duplicate else HitResult.alert,
         created_by=user.id,
     )
-    session.add(hit)
     if duplicate:
         hit.alert_id = duplicate.alert_id
         alert = await session.get(Alert, duplicate.alert_id) if duplicate.alert_id else None
@@ -307,7 +392,7 @@ async def dispatch(session, user, *, rule_code, event_id):
             value=values[:200],
             threshold=threshold,
             triggered_at=at,
-            data_cutoff=event.occurred_at,
+            data_cutoff=evaluated_at if expression.columns else event.occurred_at,
             status=AlertStatus.open,
             created_by=user.id,
         )
@@ -325,7 +410,10 @@ async def dispatch(session, user, *, rule_code, event_id):
                 created_by=user.id,
             )
         )
+    session.add(hit)
     await session.flush()
+    if not duplicate and (bound.get("autoStage") or {}).get("enabled"):
+        action = await stage_action(session, user, rule, event, fields, alert, values)
     return {
         **result,
         **action,

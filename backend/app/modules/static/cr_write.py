@@ -249,6 +249,10 @@ class CrWriteService:
             if t.name and not hit.target_name:
                 hit.target_name = t.name
             return hit
+        if t.is_new:
+            from app.modules.static.writeback import ensure_new_target_available
+
+            await ensure_new_target_available(self.session, t.kind, t.id)
         if other := await self._holder(t.kind, t.id, cr.id):
             raise AppError(
                 f"{t.id} 已在变更单 {other} 里，请加入那张单子",
@@ -353,6 +357,62 @@ class CrWriteService:
         await self.session.flush()
         return cr.code
 
+    async def open_draft_for_save(
+        self, user: CurrentUser, target: TargetIn | None, title: str | None = None
+    ) -> tuple[str, bool]:
+        """保存即生效：接管本人已持有的草稿，没有才新建。返回 (单号, 是否新建)。
+
+        审核流程已下线：不推审核人、不要求整版发布权限；页面写权限由调用方 check_target 校验。
+        接管旧草稿是为了不让 CR-0001 这类存量草稿把目标占住后无法继续保存，而不是复用它的改动。
+        """
+        if target is not None and target.id:
+            held = await self.session.scalar(
+                select(ChangeRequest)
+                .join(CrTarget, CrTarget.cr_id == ChangeRequest.id)
+                .where(
+                    CrTarget.target_kind == target.kind,
+                    CrTarget.target_id == target.id,
+                    ChangeRequest.status == S.draft,
+                    ChangeRequest.created_by == user.id,
+                )
+                .order_by(ChangeRequest.id.desc())
+                .limit(1)
+            )
+            if held is not None:
+                with self.session.no_autoflush:
+                    await self._join(held, target, user)
+                await self.session.flush()
+                return held.code, False
+        now = clock.now()
+        if target is not None:
+            check_target(user, target.kind)
+        cr = ChangeRequest(
+            code=await self._next_code(),
+            title=(title or (f"保存：{target.name or target.id}" if target else "保存本体定义"))[:40],
+            reason=None,
+            owner=user.name,
+            reviewer="",
+            status=S.draft,
+            level=CRLevel.minor,
+            changes=0,
+            detail={
+                "diffs": [],
+                "checks": [],
+                "impact": {"direct": [], "defs": [], "usage": []},
+                "touches": [],
+                "times": {"created": _fmt_dt(now)},
+            },
+            status_at=now,
+            created_by=user.id,
+        )
+        self.session.add(cr)
+        await self.session.flush()
+        self._event(cr, user, "create", "保存本体定义")
+        if target is not None:
+            await self._join(cr, target, user)
+        await self.session.flush()
+        return cr.code, True
+
     async def add_target(self, code: str, user: CurrentUser, t: TargetIn) -> str:
         check_target(user, t.kind)
         cr = await self._cr(code)
@@ -449,7 +509,9 @@ class CrWriteService:
             from app.modules.event.dedup_validation import validate_draft_window
             from app.modules.event.platform_context import validate_draft
 
-            await validate_draft_window(self.session, body.target.id, cr.id, section=body.section, rows=body.rows)
+            await validate_draft_window(
+                self.session, body.target.id, cr.id, section=body.section, rows=body.rows
+            )
             await validate_draft(self.session, body.target.id, cr.id, section=body.section, rows=body.rows)
         with self.session.no_autoflush:  # 只在最后 flush 一次：lockVersion 恰好 +1
             return await self._put_rows(cr, user, body)
@@ -645,13 +707,13 @@ class CrWriteService:
         kinds = {t.target_kind for t in targets}
         from app.modules.static.cr_analysis import refresh_analysis
 
-        await refresh_analysis(self.session, cr, targets, items, user)
         calc: dict[str, tuple[str, str]] = {
             "V14": ("不适用", "未配置目标数据库 EXPLAIN 执行器，未执行；指标试跑结果另列")
         }
         from app.modules.static.release_readiness import release_readiness
 
         calc.update(await release_readiness(self.session, cr, targets, items, user))
+        await refresh_analysis(self.session, cr, targets, items, user)
         dels = [
             f"{i.target_id}.{i.item_key}"
             for i in items
@@ -676,8 +738,11 @@ class CrWriteService:
         else:
             calc["V11"] = ("不适用", "本次无描述字段改动")
         if cr.level == CRLevel.major:
-            calc["V15"] = (("通过", "已填写迁移方式") if (cr.detail or {}).get("migration")
-                           else ("警告", "还没写已有页面和告警的迁移方式"))
+            calc["V15"] = (
+                ("通过", "已填写迁移方式")
+                if (cr.detail or {}).get("migration")
+                else ("警告", "还没写已有页面和告警的迁移方式")
+            )
         else:
             calc["V15"] = ("不适用", "本次非重大改动")
         calc["V12"] = ("通过", f"改动 {cr.changes} 处，涉及 {len(targets)} 个定义")

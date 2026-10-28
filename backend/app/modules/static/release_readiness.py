@@ -122,20 +122,22 @@ async def release_readiness(session, cr, targets, items, user):
         try:
             check_func(user, "metrics", "view")
             definition = await metric_definition(session, target.target_id, user, cr_id=cr.code)
+            from app.common.sql_guard import ensure_governed_tables
+
+            await ensure_governed_tables(session)
             compile_metric(
                 definition,
                 objects,
                 require_ontology_id(session),
                 await execution_bindings(session, objects, definition),
+                session=session,
             )
         except AppError as error:
             mapping_errors = {
                 "OBJECT_NOT_FOUND",
                 "OBJECT_AMBIGUOUS",
-                "OBJECT_UNBOUND",
                 "PROPERTY_NOT_FOUND",
                 "PROPERTY_AMBIGUOUS",
-                "PROPERTY_UNBOUND",
                 "PROPERTY_RESTRICTED",
             }
             issues = (error.details or {}).get("issues") or []

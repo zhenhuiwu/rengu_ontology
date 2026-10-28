@@ -35,7 +35,7 @@ from app.modules.admin.models import (
     SysUser,
     UserStatus,
 )
-from app.modules.admin.repo import insert_audit, lock_code_seq
+from app.modules.admin.repo import SysUserRepository, insert_audit, lock_code_seq
 
 # ---- 页面常量 ----
 
@@ -78,8 +78,11 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
         return fallback
     acts = await session.scalars(
         select(ActionType)
-        .where(ActionType.ontology_id == require_ontology_id(session),
-               ActionType.status != TypeStatus.draft, ActionType.retired_release_id.is_(None))
+        .where(
+            ActionType.ontology_id == require_ontology_id(session),
+            ActionType.status != TypeStatus.draft,
+            ActionType.retired_release_id.is_(None),
+        )
         .order_by(ActionType.code)
     )
     by_api: dict[str, list[str]] = {}
@@ -89,7 +92,11 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
         apis.update(obj.api_name for obj in await action_operation_objects(session, action_def(action)))
         for api in apis:
             by_api.setdefault(api, []).append(action.name)
-            action_refs.setdefault(api, {})[action.code] = {"id": action.code, "api": action.api, "name": action.name}
+            action_refs.setdefault(api, {})[action.code] = {
+                "id": action.code,
+                "api": action.api,
+                "name": action.name,
+            }
     fb = {o["api"]: o for o in fallback}
     out = [
         {
@@ -101,8 +108,11 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
         for n, a in ots
     ]
     apis, names = {o["api"] for o in out}, {o["name"] for o in out}
-    out += [dict(o, actionRefs=list(action_refs.get(o["api"], {}).values()))
-            for o in fallback if o["api"] not in apis and o["name"] not in names]
+    out += [
+        dict(o, actionRefs=list(action_refs.get(o["api"], {}).values()))
+        for o in fallback
+        if o["api"] not in apis and o["name"] not in names
+    ]
     return out
 
 
@@ -129,7 +139,10 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
     )
     if not objects:
         return _meta_json("SCOPE_PROPS") if require_ontology_id(session) == 1 else []
-    governed = governed_tables(require_ontology_id(session)).values()
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
+    governed = governed_tables(require_ontology_id(session), session).values()
     tables = {g.object_type: g for g in governed if not g.inherit}
     out = []
     for obj in objects:
@@ -468,7 +481,7 @@ class RoleService:
         roles = await self.list_all()
         users = list(
             await self.session.scalars(
-                select(SysUser).where(SysUser.role.is_not(None)).order_by(SysUser.code)
+                SysUserRepository(self.session).listed().order_by(SysUser.code)
             )
         )
         pairs = (
@@ -606,17 +619,25 @@ class RoleService:
         from app.modules.action.sections import action_def
         from app.modules.ontology.models import OntologyRoleBinding
 
-        bound = await self.session.scalar(select(OntologyRoleBinding.role_id).where(
-            OntologyRoleBinding.role_id == r.id,
-            OntologyRoleBinding.ontology_id == require_ontology_id(self.session)))
+        bound = await self.session.scalar(
+            select(OntologyRoleBinding.role_id).where(
+                OntologyRoleBinding.role_id == r.id,
+                OntologyRoleBinding.ontology_id == require_ontology_id(self.session),
+            )
+        )
         allowed_actions: dict[str, set[str]] = {}
-        actions = await self.session.scalars(select(ActionType).where(
-            ActionType.ontology_id == require_ontology_id(self.session),
-            ActionType.status.in_((TypeStatus.published, TypeStatus.changing)),
-            ActionType.retired_release_id.is_(None)))
+        actions = await self.session.scalars(
+            select(ActionType).where(
+                ActionType.ontology_id == require_ontology_id(self.session),
+                ActionType.status.in_((TypeStatus.published, TypeStatus.changing)),
+                ActionType.retired_release_id.is_(None),
+            )
+        )
         for action in actions:
             apis = {action.target_api}
-            apis.update(obj.api_name for obj in await action_operation_objects(self.session, action_def(action)))
+            apis.update(
+                obj.api_name for obj in await action_operation_objects(self.session, action_def(action))
+            )
             for api in apis:
                 allowed_actions.setdefault(api, set()).update((action.code, action.api, action.name))
         out = []
@@ -626,21 +647,38 @@ class RoleService:
                 raise RoleValidation("未知的对象类型", details={"objType": o["objType"]})
             previous = [entry for entry in r.objs if entry.get("api") == meta["api"]]
             # Keep exact stored strings on this locked role/object; aliases still need a real grant.
-            retained = (set(previous[0].get("actions", []))
-                        if bound is not None and lock_version is not None and len(previous) == 1
-                        and user.ontology_id == require_ontology_id(self.session)
-                        and previous[0].get("view") is o["view"]
-                        and o.get("api") == meta["api"] else set())
-            bad = [a for a in o["actions"] if a not in allowed_actions.get(meta["api"], set()) and a not in retained]
-            if bad:
-                raise RoleValidation(
-                    "动作不属于该对象类型", details={"objType": o["objType"], "actions": bad}
-                )
+            retained = (
+                set(previous[0].get("actions", []))
+                if bound is not None
+                and lock_version is not None
+                and len(previous) == 1
+                and user.ontology_id == require_ontology_id(self.session)
+                and previous[0].get("view") is o["view"]
+                and o.get("api") == meta["api"]
+                else set()
+            )
             # 与 Roles.vue 一致：取消查看时清空导出和动作
             view = bool(o["view"])
             saved_actions = list(o["actions"]) if view else []
             if not view and len(previous) == 1 and previous[0].get("view") is False:
                 saved_actions = [action for action in o["actions"] if action in retained]
+            # 撤权可移除旧失效引用；新传入的无效动作即使不保存，也必须拒绝。
+            validation_actions = (
+                saved_actions
+                if view
+                else [
+                    a for a in o["actions"] if len(previous) != 1 or a not in previous[0].get("actions", [])
+                ]
+            )
+            bad = [
+                a
+                for a in validation_actions
+                if a not in allowed_actions.get(meta["api"], set()) and a not in retained
+            ]
+            if bad:
+                raise RoleValidation(
+                    "动作不属于该对象类型", details={"objType": o["objType"], "actions": bad}
+                )
             out.append(
                 {
                     "objType": meta["name"],
@@ -812,8 +850,8 @@ class RoleService:
             u.code: u
             for u in (
                 await self.session.scalars(
-                    select(SysUser)
-                    .where(SysUser.code.in_(codes), SysUser.role.is_not(None))
+                    SysUserRepository(self.session).listed()
+                    .where(SysUser.code.in_(codes))
                     .order_by(SysUser.id)
                     .with_for_update()
                     .execution_options(populate_existing=True)

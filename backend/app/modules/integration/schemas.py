@@ -83,7 +83,7 @@ class ExtSystemIn(ApiModel):
     env: str = Field(default="生产", max_length=16)
     usage: dict[str, Any] | None = None
 
-    @field_validator("name", "vendor", "endpoint", "idem_key")
+    @field_validator("name", "vendor", "endpoint", "auth", "idem_key")
     @classmethod
     def _strip(cls, v: str) -> str:
         return v.strip()

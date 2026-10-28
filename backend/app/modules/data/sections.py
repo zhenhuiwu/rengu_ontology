@@ -40,6 +40,8 @@ class QualitySection:
                 raise writeback_error("质量历史归属不一致", id=code)
             check.name, check.object_type_id, check.kind = body.name, obj.id, body.kind
             check.threshold, check.limit_value, check.schedule = body.threshold, limit, body.schedule
+            check.field = body.field
+            check.format_rule = body.format_rule
             check.retired_at = clock.now() if value.get("retired") else None
         await session.flush()
 

@@ -34,6 +34,7 @@ PAYLOAD = {
     "required": ("required", boolean),
     "desc": ("description", string()),
     "sample": ("sample", string()),
+    "schema": ("schema", lambda value, _: value),
 }
 SUBS = {
     "kind": ("kind", choice(SubscriberKind)),
@@ -94,6 +95,10 @@ async def payload(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
         {"name", "api", "type", "required"},
         forbidden=envelope,
     )
+    from app.modules.event.payload_schema import validate_definition
+    fields = list(await ctx.session.scalars(select(EventPayloadField).where(EventPayloadField.event_type_id == et.id)))
+    for field in fields:
+        validate_definition(field.type, field.schema)
     return set()
 
 

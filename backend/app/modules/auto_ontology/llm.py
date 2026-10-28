@@ -51,18 +51,18 @@ class DashScopeLLM:
             "response_format": {"type": "json_object"},
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s) as c:
-                r = await c.post(
+            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+                response = await client.post(
                     f"{self.base_url}/chat/completions",
                     json=body,
                     headers={"Authorization": f"Bearer {self._key}"},
                 )
-        except httpx.HTTPError as e:
-            raise LlmError(f"调用大模型失败：{type(e).__name__}") from None
-        if r.status_code != 200:
-            raise LlmError(f"大模型返回 {r.status_code}")
+        except httpx.HTTPError as error:
+            raise LlmError(f"调用大模型失败：{type(error).__name__}") from None
+        if response.status_code != 200:
+            raise LlmError(f"大模型返回 {response.status_code}")
         try:
-            return r.json()["choices"][0]["message"]["content"] or ""
+            return response.json()["choices"][0]["message"]["content"] or ""
         except (ValueError, KeyError, IndexError, TypeError):
             raise LlmError("大模型返回格式无法解析") from None
 

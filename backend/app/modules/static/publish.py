@@ -20,8 +20,9 @@ from app.core import clock
 from app.core.errors import AppError, Forbidden, NotFound
 from app.core.schema import _fmt_dt
 from app.db.dialects import get_adapter
-from app.modules.static.cr_write import next_cr_code
+from app.modules.static.cr_write import CrWriteService, next_cr_code
 from app.modules.static.models import ChangeRequest, CrEvent, CRLevel, CRStatus
+from app.modules.static.permissions import check_cr, cr_owner_id, direct_publish_enabled
 from app.modules.static.writeback import DIRTY, apply_crs
 from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.service import PUBLISH_LOCK, VersioningService, next_ver
@@ -136,10 +137,16 @@ class PublishService:
             )
         )
 
-    async def publish(self, user: CurrentUser, note: str | None, *, lock_version: int | None = None) -> str:
-        check_func(user, "releases", "manage")
-        if not user.is_ontology_admin:
-            raise Forbidden("需要本体管理员发布")
+    async def publish(
+        self, user: CurrentUser, note: str | None, *, lock_version: int | None = None,
+        draft_code: str | None = None, save_mode: bool = False,
+    ) -> str:
+        if not save_mode:
+            check_func(user, "releases", "manage")
+            if not user.is_ontology_admin:
+                raise Forbidden("需要本体管理员发布")
+            if draft_code is not None and not direct_publish_enabled(user):
+                raise Forbidden("当前账号没有直接发布权限")
         now = clock.now()
         # 先拿整版发布锁（create_version 里再拿一次，同一事务可重入），保证写回用的版本号就是新版本号
         await get_adapter(self.session).xact_lock(self.session, PUBLISH_LOCK)
@@ -152,9 +159,45 @@ class PublishService:
                 status_code=409,
                 details={"lockVersion": lock_version, "currentLockVersion": current_lock},
             )
-        crs = await self._approved(lock=True)
+        if draft_code is None:
+            crs = await self._approved(lock=True)
+        else:
+            cr = await self.session.scalar(
+                select(ChangeRequest).where(ChangeRequest.code == draft_code).with_for_update()
+            )
+            if cr is None:
+                raise NotFound("变更单不存在")
+            if cr_owner_id(cr) != user.id:
+                raise Forbidden("只能直接发布本人创建的草稿")
+            if cr.status != CRStatus.draft:
+                raise AppError("只有草稿可以直接发布", code="CR_STATE", status_code=409)
+            await check_cr(self.session, cr, user)
+            if not cr.changes:
+                raise AppError("变更单里还没有改动，无法发布", code="CR_EMPTY", status_code=409)
+            await CrWriteService(self.session).run_checks(cr, event=False, user=user)
+            crs = [cr]
         next_ver = await self._next_version(now)
         rows, blocked = merge_check(crs, next_ver)
+        if draft_code is not None:
+            others = list(await self.session.scalars(
+                select(ChangeRequest).where(
+                    ChangeRequest.id != cr.id,
+                    ChangeRequest.status.in_(
+                        (CRStatus.draft, CRStatus.in_review, CRStatus.approved, CRStatus.rejected)
+                    ),
+                ).order_by(ChangeRequest.id).with_for_update()
+            ))
+            cross_conflicts = []
+            for other in others:
+                conflicts, _ = merge_check([cr, other], next_ver)
+                cross_conflicts.extend(
+                    row for row in conflicts if row["code"] in ("M1", "V9") and row["result"] == "阻断"
+                )
+            if cross_conflicts:
+                raise AppError(
+                    "与其他未发布变更单冲突，不能直接发布",
+                    code="MERGE_BLOCKED", status_code=409, details={"rows": cross_conflicts, "blocked": True},
+                )
         if blocked:
             raise AppError(
                 "合并校验有阻断，不能发布。请把冲突的变更单撤回或合并后再发布。",
@@ -166,6 +209,11 @@ class PublishService:
         note = note or "；".join(c.title for c in crs)
         # 同事务写回定义表（writeback.HOOKS）；没登记的段（动作 / 事件 / 规则…）跳过并记进事件
         skipped = await apply_crs(self.session, crs, next_ver, now, user.id)
+        if draft_code is not None and skipped:
+            raise AppError(
+                "部分变更无法写回，不能直接发布",
+                code="PUBLISH_UNSUPPORTED", status_code=409, details={"skipped": skipped},
+            )
         self.skipped = skipped
         # [推断] note 不传时用变更单标题拼一句（mock 发布不填说明）
         ver = await self.versioning.create_version(
@@ -180,7 +228,12 @@ class PublishService:
             c.status = CRStatus.published
             c.release_id = release.id if release else None
             c.status_at = now
-            self._event(c, user, "publish", f"整版发布为 {ver}", desc, at=now)
+            text = (
+                f"保存生效为 {ver}" if save_mode
+                else f"单人直接发布为 {ver}" if draft_code is not None
+                else f"整版发布为 {ver}"
+            )
+            self._event(c, user, "publish", text, desc, at=now)
         await self.session.flush()
         return ver
 

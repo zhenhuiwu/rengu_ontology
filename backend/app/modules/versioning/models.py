@@ -39,6 +39,7 @@ class OntologyRelease(IdMixin, AppendOnlyTableMixin, Base):
     )
 
     ver: Mapped[str] = mapped_column(String(32), nullable=False, comment="版本号 vYYYY.MM.N（业务键，唯一）")
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="legacy", server_default="legacy")
     parent_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("ontology_release.id"), comment="上一版（ontology_release.id）"
     )

@@ -647,9 +647,13 @@ async def update_key_policy(
         key.func_snapshot = clamp_permissions(
             key.func_snapshot, scope_permissions(scopes, {page: "manage" for page in key.func_snapshot})
         )
-    if "function_types" in fields and key.function_types is not None and "functions:invoke" in scopes:
-        if body.function_types is None or not set(body.function_types) <= set(key.function_types):
-            raise Forbidden("只能收窄函数白名单，扩大授权请新建密钥")
+    if (
+        "function_types" in fields
+        and key.function_types is not None
+        and "functions:invoke" in scopes
+        and (body.function_types is None or not set(body.function_types) <= set(key.function_types))
+    ):
+        raise Forbidden("只能收窄函数白名单，扩大授权请新建密钥")
     for name in ("action_types", "event_types", "function_types", "rate_per_minute", "quota_per_day"):
         if name in fields:
             setattr(key, name, getattr(body, name))

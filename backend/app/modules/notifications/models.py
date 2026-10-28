@@ -19,7 +19,9 @@ class Notification(IdMixin, CreatedColumnsMixin, Base):
     __tablename__ = "notification"
     __table_args__ = (
         UniqueConstraint("source_event_id", "recipient_id"),
-        UniqueConstraint("source_outbox_id", "recipient_id"),
+        UniqueConstraint(
+            "ontology_id", "source_outbox_id", "recipient_id", name="uq_notification_outbox_recipient"
+        ),
         CheckConstraint(
             "(source_kind='cr' AND source_event_id IS NOT NULL AND cr_id IS NOT NULL "
             "AND source_outbox_id IS NULL) OR (source_kind='page' AND source_event_id IS NULL "

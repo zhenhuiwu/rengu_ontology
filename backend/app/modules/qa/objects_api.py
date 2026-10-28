@@ -84,7 +84,7 @@ class Data:
     def __init__(self, session: Any, viewer: CurrentUser) -> None:
         check_object_read(viewer)
         # 本分析读 biz 门店 / 商品 / 订单表：当前本体没登记这些物理绑定（受治理表）就 503，不按本体编号写死
-        bound = governed_tables(require_ontology_id(session))
+        bound = governed_tables(require_ontology_id(session), session)
         if not all(m.__tablename__ in bound for m in (Store, Product, BizOrder, OrderLine)):
             raise DataNotConfigured()
         self.session, self.viewer = session, viewer
@@ -344,15 +344,35 @@ async def search(kind: str, body: SearchIn, session: SessionDep, user: CurrentUs
     from app.modules.qa.explore_api import ExploreIn, explore_search
     from app.modules.qa.object_source import object_definition
 
-    result = await explore_search(kind, ExploreIn(kw=body.kw, filters=body.facets, page=body.page, size=body.size), session, user, ctx)
+    result = await explore_search(
+        kind, ExploreIn(kw=body.kw, filters=body.facets, page=body.page, size=body.size), session, user, ctx
+    )
     definition = await object_definition(session, kind, ctx.ver)
     names = {p.api_name: p.display_name for p in definition.properties}
-    return {**result,
-        "items": [{"id": item["id"], "title": item["title"], "cells": {key: "是" if value is True else "否" if value is False else value for key, value in item["values"].items()}} for item in result["items"]],
-        "facets": [{"key": facet["key"], "label": names.get(facet["key"], facet["key"]),
-                    "vals": [{"v": value["value"], "n": value["count"]} for value in facet.get("values", [])],
-                    **{key: facet[key] for key in ("kind", "min", "max") if key in facet}} for facet in result["facets"]],
-        "scopeText": "按该版本定义查询当前数据；仅含当前授权实例" if ctx.ver else "仅含当前授权实例"}
+    return {
+        **result,
+        "items": [
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "cells": {
+                    key: "是" if value is True else "否" if value is False else value
+                    for key, value in item["values"].items()
+                },
+            }
+            for item in result["items"]
+        ],
+        "facets": [
+            {
+                "key": facet["key"],
+                "label": names.get(facet["key"], facet["key"]),
+                "vals": [{"v": value["value"], "n": value["count"]} for value in facet.get("values", [])],
+                **{key: facet[key] for key in ("kind", "min", "max") if key in facet},
+            }
+            for facet in result["facets"]
+        ],
+        "scopeText": "按该版本定义查询当前数据；仅含当前授权实例" if ctx.ver else "仅含当前授权实例",
+    }
 
 
 @objects.post(
@@ -365,7 +385,9 @@ async def export(kind: str, body: ExportIn, session: SessionDep, user: CurrentUs
     from app.modules.qa.explore_api import ExportIn as ExploreExportIn
     from app.modules.qa.explore_api import explore_export
 
-    return await explore_export(kind, ExploreExportIn(kw=body.kw, filters=body.facets, ids=body.ids), session, user, ctx)
+    return await explore_export(
+        kind, ExploreExportIn(kw=body.kw, filters=body.facets, ids=body.ids), session, user, ctx
+    )
 
 
 # ---------------------------------------------------------------- O4 带范围提问
@@ -435,12 +457,17 @@ async def scoped_ask(body: ScopedAskIn, session: SessionDep, user: CurrentUserDe
     _, legacy = await _bind(session, kind, ctx.ver)
     if legacy is None or legacy.source is not None:
         raise DataNotConfigured("该对象来源未配置此范围分析", details={"kind": kind})
-    required = {"order": {"paid_amount", "shipped_at"}, "product": {"category_id", "retail_price"}}.get(kind, set())
+    required = {"order": {"paid_amount", "shipped_at"}, "product": {"category_id", "retail_price"}}.get(
+        kind, set()
+    )
     if not required <= set(legacy.out):
         raise DataNotConfigured("此问题所需属性未公开或未配置可读取映射", details={"kind": kind})
     if not sc.single and sc.ids is None and sc.query is None:
         filters = sc.filter or FilterIn()
         sc = sc.model_copy(update={"query": {"kw": filters.kw, "filters": filters.facets}})
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
     data = Data(session, viewer)
     if kind not in KINDS:
         raise DataNotConfigured("该对象类型尚未配置范围分析", details={"kind": kind})
@@ -682,17 +709,35 @@ async def object_detail(
     row = await explore_get(kind, oid, session, user, ctx)
     definition = await object_definition(session, kind, ctx.ver)
     properties = [p for p in definition.properties if p.api_name in row["values"]]
-    fields = [_f(p.display_name, str(row["values"][p.api_name]) if row["values"][p.api_name] is not None else None) for p in properties]
+    fields = [
+        _f(p.display_name, str(row["values"][p.api_name]) if row["values"][p.api_name] is not None else None)
+        for p in properties
+    ]
     groups = {}
-    for prop, field in zip(properties, fields):
+    for prop, field in zip(properties, fields, strict=True):
         groups.setdefault(prop.prop_group or "其他", []).append(field)
-    out = {"kind": kind, "kindLabel": definition.display_name, "id": row["id"], "code": row["id"], "title": row["title"],
-        "brief": [field for p, field in zip(properties, fields) if p.visibility == "prominent" and p.api_name != row["titleProp"]],
-        "fields": fields, "groups": [{"title": title, "fields": values} for title, values in groups.items()],
-        "dataVersion": "current"}
+    out = {
+        "kind": kind,
+        "kindLabel": definition.display_name,
+        "id": row["id"],
+        "code": row["id"],
+        "title": row["title"],
+        "brief": [
+            field
+            for p, field in zip(properties, fields, strict=True)
+            if p.visibility == "prominent" and p.api_name != row["titleProp"]
+        ],
+        "fields": fields,
+        "groups": [{"title": title, "fields": values} for title, values in groups.items()],
+        "dataVersion": "current",
+    }
     if view == "full":
-        out.update(kpis=[], quickQuestions=[], analyticsConfigured=False,
-                   scopeLabel="按该版本定义查询当前数据；仅含当前授权实例" if ctx.ver else "仅含当前授权实例")
+        out.update(
+            kpis=[],
+            quickQuestions=[],
+            analyticsConfigured=False,
+            scopeLabel="按该版本定义查询当前数据；仅含当前授权实例" if ctx.ver else "仅含当前授权实例",
+        )
     return out
 
 
@@ -770,10 +815,22 @@ async def object_related(
     from app.modules.qa.explore_api import explore_related
 
     groups = await explore_related(kind, oid, session, user, ctx, link=group, page=page, size=size)
-    return [{"key": item["linkId"], "title": item["label"], "total": item["total"], "page": item["page"], "size": item["size"],
-             "state": item["state"], "dataVersion": "current",
-             "items": [{"kind": item["other"], "id": row["id"], "label": row["title"], "note": ""} for row in item["items"]]}
-            for item in groups]
+    return [
+        {
+            "key": item["linkId"],
+            "title": item["label"],
+            "total": item["total"],
+            "page": item["page"],
+            "size": item["size"],
+            "state": item["state"],
+            "dataVersion": "current",
+            "items": [
+                {"kind": item["other"], "id": row["id"], "label": row["title"], "note": ""}
+                for row in item["items"]
+            ],
+        }
+        for item in groups
+    ]
 
 
 # ---------------------------------------------------------------- O7 时间线
@@ -794,13 +851,23 @@ async def object_timeline(
 
     row = await explore_get(kind, oid, session, user, ctx)
     definition = await object_definition(session, kind, ctx.ver)
-    items = [{"time": row["values"][prop.api_name], "text": prop.display_name} for prop in definition.properties
-             if prop.data_type in ("date", "timestamp") and row["values"].get(prop.api_name)]
+    items = [
+        {"time": row["values"][prop.api_name], "text": prop.display_name}
+        for prop in definition.properties
+        if prop.data_type in ("date", "timestamp") and row["values"].get(prop.api_name)
+    ]
     items.sort(key=lambda item: str(item["time"]), reverse=True)
     actual = min(page, max(1, -(-len(items) // size)))
-    return {"items": items[(actual - 1) * size:actual * size], "total": len(items), "page": actual, "size": size,
-            "unknownLabel": "结果未知 · 待对账", "configured": bool(items), "dataVersion": "current",
-            "note": "仅展示已公开时间字段" if items else "对象历史记录尚未配置"}
+    return {
+        "items": items[(actual - 1) * size : actual * size],
+        "total": len(items),
+        "page": actual,
+        "size": size,
+        "unknownLabel": "结果未知 · 待对账",
+        "configured": bool(items),
+        "dataVersion": "current",
+        "note": "仅展示已公开时间字段" if items else "对象历史记录尚未配置",
+    }
 
 
 # ---------------------------------------------------------------- O9 可执行动作

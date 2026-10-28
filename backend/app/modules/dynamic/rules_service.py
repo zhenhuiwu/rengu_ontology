@@ -273,6 +273,14 @@ class RuleService:
                 select(ObjectType).where(ObjectType.status == ObjectStatus.published).order_by(ObjectType.id)
             )
         )
+        from app.common.auth import row_filter
+        from app.common.ontology import require_ontology_id
+        from app.common.row_filter import is_deny_all
+        from app.common.sql_guard import ensure_governed_tables, governed_tables
+
+        await ensure_governed_tables(self.session)
+        governed = {g.object_type: g for g in governed_tables(require_ontology_id(self.session), self.session).values() if not g.inherit}
+        readable = {obj.code for obj in objects if not is_deny_all(await row_filter(self.user, obj.code))}
         metrics = (
             list(
                 await self.session.scalars(
@@ -293,6 +301,41 @@ class RuleService:
             if self.user.func.get("event-types") in ("view", "manage")
             else []
         )
+        functions = []
+        if self.user.func.get("functions") in ("view", "manage"):
+            from app.modules.functions.models import FnVersion, Function
+            from app.modules.functions.runtime import signature
+            records = (await self.session.execute(
+                select(Function, FnVersion).join(FnVersion, FnVersion.function_id == Function.id)
+                .where(Function.status == "published", FnVersion.is_seed.is_(False))
+                .order_by(Function.id, FnVersion.id.desc())
+            )).all()
+            for function, version in records:
+                snapshot = version.snapshot
+                try:
+                    if not isinstance(snapshot, dict) or type(snapshot.get("timeoutS")) is not int:
+                        continue
+                    inputs, _ = signature(snapshot["code"], snapshot["name"])
+                except (AppError, KeyError, TypeError):
+                    continue
+                functions.append({"id": function.code, "name": function.title, "version": version.ver, "inputs": [p["name"] for p in inputs]})
+        relations = []
+        if self.user.func.get("link-types") in ("view", "manage") and (self.user.func.get("object-search") in ("view", "manage") or self.user.func.get("object-detail") in ("view", "manage")):
+            from app.common.auth import row_filter
+            from app.common.row_filter import is_deny_all
+            from app.modules.integration.action_edits import relation_binding
+            from app.modules.static.models import DefStatus, LinkType
+            links = await self.session.scalars(select(LinkType).where(LinkType.status == DefStatus.published, LinkType.via.is_(None)).order_by(LinkType.id))
+            for link in links:
+                if is_deny_all(await row_filter(self.user, link.from_code)) or is_deny_all(await row_filter(self.user, link.to_code)):
+                    continue
+                try:
+                    bound, src, _, dst, gov, _ = await relation_binding(self.session, link.code)
+                except AppError:
+                    continue
+                fields = [{"api": p.api_name, "name": p.display_name} for p in dst.properties if not p.is_sensitive and p.visibility != "hidden" and p.backing_column and p.backing_column in gov.table.c]
+                if fields:
+                    relations.append({"id": bound.code, "name": bound.display_name, "from": src.code, "to": dst.code, "fields": fields})
         return {
             "confirmers": list(dict.fromkeys(confirmers)),
             "mappingSources": sorted(sources),
@@ -311,7 +354,11 @@ class RuleService:
                             "type": prop.data_type,
                         }
                         for prop in obj.properties
-                        if not prop.is_sensitive and prop.visibility != "hidden" and prop.backing_column
+                        if obj.code in readable and obj.code in governed
+                        and not prop.is_sensitive and prop.visibility != "hidden" and not prop.transform
+                        and (prop.backing_column or prop.source_column)
+                        and (prop.backing_column or prop.source_column) in governed[obj.code].table.c
+                        and (governed[obj.code].projection is None or (prop.backing_column or prop.source_column) in governed[obj.code].projection)
                     ],
                 }
                 for obj in objects
@@ -353,6 +400,8 @@ class RuleService:
                 }
                 for event in events
             ],
+            "functions": functions,
+            "relations": relations,
             "runAsUserId": self.user.id,
         }
 
@@ -376,6 +425,7 @@ class RuleService:
             draft["weekly"] = hits7
         pending = await self.session.scalar(
             await scoped_instances(
+                self.session,
                 select(func.count())
                 .select_from(ActionRun)
                 .where(ActionRun.rule_code == r.code, ActionRun.status == ActionStatus.staged),
@@ -402,6 +452,7 @@ class RuleService:
             (
                 await self.session.scalars(
                     await scoped_instances(
+                        self.session,
                         select(RuleHit).where(RuleHit.rule_id == r.id).order_by(RuleHit.seq),
                         self.user,
                         RuleHit.obj_kind,
@@ -443,7 +494,9 @@ class RuleService:
         until = now()
         since = until - timedelta(days=7 if range_ == "7d" else 30)
         statement = select(RuleHit).where(RuleHit.rule_id == r.id, RuleHit.at >= since, RuleHit.at <= until)
-        statement = await scoped_instances(statement, self.user, RuleHit.obj_kind, RuleHit.obj_id)
+        statement = await scoped_instances(
+            self.session, statement, self.user, RuleHit.obj_kind, RuleHit.obj_id
+        )
         total = int(await self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
         page = params.clamp(total)
         hits = list(
@@ -461,6 +514,7 @@ class RuleService:
     async def hit(self, code: str) -> tuple[Rule, RuleHit, dict[str, Any], Alert | None]:
         h = await self.session.scalar(
             await scoped_instances(
+                self.session,
                 select(RuleHit).where(RuleHit.code == code),
                 self.user,
                 RuleHit.obj_kind,
@@ -507,6 +561,25 @@ class RuleService:
                 }
             )
         return out
+
+    async def version_snapshot(self, code: str, version: int) -> dict[str, Any]:
+        """Only return an actual saved release, never reconstructed seed history."""
+        from app.modules.dynamic.rules_models import RuleVersion
+
+        rule = await self.get(code)
+        row = await self.session.scalar(select(RuleVersion).where(
+            RuleVersion.rule_id == rule.id, RuleVersion.version == version, RuleVersion.is_seed.is_(False)
+        ))
+        if row is None:
+            raise fail("RULE_VERSION_SNAPSHOT_MISSING", "该版本没有可核验的真实保存快照", 409)
+        releases = await self.session.scalars(select(OntologyRelease).where(
+            OntologyRelease.is_seed.is_(False), OntologyRelease.published_at >= row.at
+        ).order_by(OntologyRelease.published_at, OntologyRelease.id))
+        for release in releases:
+            snapshot = (release.snapshot or {}).get("rules", {}).get(code)
+            if isinstance(snapshot, dict) and snapshot.get("version") == version:
+                return {"release": release.ver, "definition": snapshot}
+        raise fail("RULE_VERSION_SNAPSHOT_MISSING", "该版本没有可核验的真实保存快照", 409)
 
     async def replay(self, code: str, body: ReplayIn) -> dict[str, Any]:
         from app.modules.dynamic.rule_runtime import run_rule
@@ -706,6 +779,7 @@ class RuleService:
         )
         auto = {
             "enabled": st.enabled,
+            "executionMode": st.execution_mode,
             "actionTypeId": st.action_type_id,
             "confirmer": st.confirmer,
             "mapping": [{"param": m.param, "from": m.from_} for m in st.mapping],

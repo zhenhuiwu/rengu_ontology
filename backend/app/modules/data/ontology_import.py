@@ -91,7 +91,6 @@ def value_hints(proposal: dict, tables, samples: dict[str, dict[str, list[str]]]
 
 async def inspect_source(session, code: str, body: ImportPreviewIn):
     ds = await DatasourceService(session).get(code)
-    _require_real(ds.type)
     if body.schema_ in connector.SYSTEM_SCHEMAS or body.schema_.startswith("pg_"):
         raise AppError("不能导入系统 schema", code="VALIDATION_FAILED", status_code=422)
     if len(set(body.tables)) != len(body.tables):
@@ -107,6 +106,7 @@ async def inspect_source(session, code: str, body: ImportPreviewIn):
         "password": password,
         "ssl": ds.ssl,
     }
+    _require_real(ds.type, cfg)
     try:
         found = await connector.inspect_tables(ds.type.value, cfg, body.schema_, body.tables)
     except AppError:
@@ -261,11 +261,17 @@ async def apply_import(
     ds_id: str, body: ImportToCrIn, session: SessionDep, user: CurrentUserDep, request: Request
 ):
     check_func(user, "object-types", "manage")
+    if body.publish:
+        check_func(user, "releases", "manage")
+        if body.cr_id is not None or body.release_lock_version is None:
+            raise AppError("直接保存须提供当前版本且不能加入已有变更单", code="VALIDATION_FAILED", status_code=422)
+        from app.modules.static.publish import PUBLISH_LOCK
+        await get_adapter(session).xact_lock(session, PUBLISH_LOCK)
     if body.link_ids or (body.link_ids is None and body.include_links):
         check_func(user, "link-types", "manage")
     await DatasourceService(session).get(ds_id)  # 404 一致；随后锁父行避免内省期间被删除/改配置。
     await session.scalar(select(Datasource).where(Datasource.code == ds_id).with_for_update())
-    ds, _found, preview = await inspect_source(session, ds_id, body)
+    ds, found, preview = await inspect_source(session, ds_id, body)
     if body.fingerprint != preview["fingerprint"]:
         raise conflict("源结构或连接参数已变化，请重新预览", "SCHEMA_CHANGED")
     proposal = preview["proposal"]
@@ -320,19 +326,30 @@ async def apply_import(
             len(p["api"]) > 64 or len(p["name"]) > 64 for p in obj["props"]
         ):
             raise conflict("源字段名超过对象属性长度限制", table=obj["table"])
-        if not obj["pk"]:
-            raise conflict("导入对象需要单列主键，复合主键/无主键请先人工建模", table=obj["table"])
+        table = next(t for t in found if t.name == obj["table"])
+        selected_pk = chosen.pk or obj["pk"]
+        unique = {table.pk[0]} if len(table.pk) == 1 else set()
+        column = next((c for c in table.columns if c.name == selected_pk), None)
+        if not column or selected_pk not in unique:
+            raise conflict("主键必须选择源表真实的单列唯一非空字段", table=obj["table"])
+        if chosen.title_field and chosen.title_field not in {p["api"] for p in obj["props"]}:
+            raise conflict("显示标题必须选择本次预览的源属性", table=obj["table"])
         definition = {
             "name": chosen.name,
             "api": chosen.api,
             "group": obj["group"],
             "table": qualified,
             "source": ds.code,
-            "pk": obj["pk"],
+            "pk": selected_pk,
             "desc": obj["desc"],
             "owner": names[obj["table"]],
         }
-        props = [ItemIn(key=p["api"], op="add", after=p) for p in obj["props"]]
+        props = []
+        for prop in obj["props"]:
+            item = {**prop, "pk": prop["api"] == selected_pk}
+            if chosen.title_field is not None:
+                item["title"] = prop["api"] == chosen.title_field
+            props.append(ItemIn(key=prop["api"], op="add", after=item))
         plans.append(
             (
                 TargetIn(kind="object", id=chosen.id, name=chosen.name, is_new=True),
@@ -349,7 +366,11 @@ async def apply_import(
                 k: link[k] for k in ("name", "card", "fromProp", "toProp", "reverse", "nullable", "desc")
             }
             values.update(
-                {"api": link_api(link["id"]), "from": by_table[link["from"]].id, "to": by_table[link["to"]].id}
+                {
+                    "api": link_api(link["id"]),
+                    "from": by_table[link["from"]].id,
+                    "to": by_table[link["to"]].id,
+                }
             )
             if link.get("via"):
                 values["via"] = f"{body.schema_}.{link['via']}"
@@ -364,7 +385,14 @@ async def apply_import(
     svc, code = await draft(session, user, body, plans[0][0])
     for target, sections in plans:
         await write_target(svc, code, user, target, sections)
-    return await result(svc, code, user, "从源表导入本体定义草稿", request)
+    output = await result(svc, code, user, "从源表导入本体定义", request)
+    if body.publish:
+        from app.modules.static.publish import PublishService
+        output["ver"] = await PublishService(session).publish(
+            user, "从源表导入对象定义", lock_version=body.release_lock_version, draft_code=code, save_mode=True
+        )
+        output["published"] = True
+    return output
 
 
 @router.get("/datasources/{ds_id}/mappings", dependencies=[Depends(require_func("connections", "view"))])

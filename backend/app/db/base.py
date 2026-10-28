@@ -67,7 +67,9 @@ class Base(DeclarativeBase):
                 if isinstance(constraint, UniqueConstraint) and "ontology_id" not in constraint.columns:
                     columns = [c.name for c in constraint.columns]
                     table.constraints.remove(constraint)
-                    table.append_constraint(UniqueConstraint("ontology_id", *columns))
+                    table.append_constraint(
+                        UniqueConstraint("ontology_id", *columns, **constraint.dialect_kwargs)
+                    )
             for index in list(table.indexes):
                 if index.unique and "ontology_id" not in index.columns:
                     table.indexes.remove(index)

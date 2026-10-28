@@ -417,7 +417,7 @@ async def query_metrics(
 
     manifest = await export_metricflow(session, user)
     compiled = compile_metrics(manifest, metrics, group_by, where, limit=limit, backend=backend)
-    result = await run_guarded(await session.connection(), compiled.sql, user)
+    result = await run_guarded(await session.connection(), compiled.sql, user, session=session)
     columns = list(result.keys())
     return {
         "sql": compiled.sql,

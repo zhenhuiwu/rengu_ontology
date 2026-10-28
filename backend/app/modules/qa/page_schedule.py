@@ -64,8 +64,13 @@ def _card_values(page: QaPage) -> list[Any]:
 async def emit_refresh_subscription(session, page, actor, at, *, before, ok):
     """Manual and scheduled refresh share the same successful inbox subscription event."""
     sub = page.subscription
-    if (not ok or sub is None or not sub.enabled or sub.channel != SubChannel.inbox
-            or sub.send_when != SubWhen.after_refresh):
+    if (
+        not ok
+        or sub is None
+        or not sub.enabled
+        or sub.channel != SubChannel.inbox
+        or sub.send_when != SubWhen.after_refresh
+    ):
         return None
     changed = _card_values(page) != before
     if sub.only_changed and not changed:
@@ -73,7 +78,8 @@ async def emit_refresh_subscription(session, page, actor, at, *, before, ok):
     delivery = {"channel": sub.channel.value, "recipients": list(sub.recipients or []), "changed": changed}
     await audit(session, actor, action="qa.page.subscription.due", target=page.code, detail=delivery)
     await _emit_once(
-        session, f"qa.page.refresh:{page.code}:{at.isoformat()}",
+        session,
+        f"qa.page.refresh:{page.code}:{at.isoformat()}",
         await _payload(session, page, sub, "afterRefresh", at.isoformat(), changed),
     )
     return delivery
@@ -94,17 +100,16 @@ async def refresh_page_once(session, page: QaPage, at: datetime) -> dict[str, An
                 raise AppError("页面所有者不存在", code="QA_PAGE_OWNER_MISSING", status_code=409)
             actor = await resolve_user(session, owner)
             viewer = await execution.current_viewer(session, actor)
-            permission = await execution.fingerprint(viewer)
-            caches, as_of = await execution.execute_cards(session, viewer, page.cards)
-            for card, cache in zip(page.cards, caches, strict=True):
-                card.result_cache, card.perm_fingerprint = cache, permission
+            successes, failures = await execution.refresh_compatible_cards(session, viewer, page.cards)
+            if not successes:
+                raise execution.unavailable(failures[0][1] if failures else "没有可刷新的卡片")
     except AppError as error:
         page.status, page.status_note = PageStatus.refresh_failed, error.message
         ok = False
     else:
-        page.status, page.status_note = _status_of(page.cards)
-        page.last_refresh, page.data_as_of = at, as_of
-        ok = True
+        page.status, page.status_note = _status_of(page.cards) if not failures else (PageStatus.refresh_failed, f"{len(failures)} 张卡片未刷新：{failures[0][1]}")
+        page.last_refresh, page.data_as_of = at, min(row[3] for row in successes)
+        ok = not failures
     page.next_run = next_run(page.refresh, at)
     out: dict[str, Any] = {"page": page.code, "status": page.status.value, "ok": ok}
     delivery = await emit_refresh_subscription(session, page, actor, at, before=before, ok=ok)

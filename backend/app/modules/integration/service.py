@@ -8,9 +8,10 @@ import time
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.core import clock
 from app.core.enums import from_api
@@ -18,6 +19,13 @@ from app.core.errors import AppError, Conflict, DuplicateKey, NotFound
 from app.db.dialects import get_adapter
 from app.modules.action.models import ActionType
 from app.modules.dynamic.models import ActionRun
+from app.modules.integration.adapters import (
+    local_demo_config,
+    local_demo_matches,
+    local_demo_ready,
+    local_demo_selection,
+    local_demo_selections,
+)
 from app.modules.integration.models import CallKind, CallResult, ExtSystem, ExtSystemStatus, WritebackCall
 from app.modules.integration.repo import ExtSystemRepo, WritebackCallRepo
 from app.modules.integration.schemas import ExtSystemIn
@@ -28,6 +36,8 @@ CODE_LOCK = "integration.ext_system.code"
 
 def is_writeback_target(s: ExtSystem) -> bool:
     """前端 writebackSystems()：生产环境且未停用。"""
+    if getattr(s, "local_only", False):
+        return local_demo_matches(s)
     return s.env == PROD and s.status != ExtSystemStatus.disabled
 
 
@@ -39,7 +49,21 @@ class ExtSystemService:
     def search_query(self, *, writeback: bool, kw: str | None):
         stmt = select(ExtSystem)
         if writeback:
-            stmt = stmt.where(ExtSystem.env == PROD, ExtSystem.status != ExtSystemStatus.disabled)
+            permitted = and_(ExtSystem.local_only.is_(False), ExtSystem.env == PROD)
+            for target in local_demo_selections() if local_demo_config() else []:
+                if local_demo_ready(target):
+                    permitted = or_(
+                        permitted,
+                        and_(
+                            ExtSystem.local_only.is_(True),
+                            ExtSystem.ontology_id == target.ontology_id,
+                            ExtSystem.code == target.system_code,
+                            ExtSystem.env == "测试",
+                            ExtSystem.category == "Webhook",
+                            ExtSystem.endpoint == target.origin,
+                        ),
+                    )
+            stmt = stmt.where(permitted, ExtSystem.status != ExtSystemStatus.disabled)
         if kw:
             term = "%" + kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             stmt = stmt.where(
@@ -102,13 +126,33 @@ class ExtSystemService:
 
     async def create(self, body: ExtSystemIn, actor: str) -> ExtSystem:
         await self._check_name(body.name)
-        obj = ExtSystem(code=await self._next_code(), **_values(body))
+        code = await self._next_code()
+        oid = require_ontology_id(self.session)
+        obj = ExtSystem(code=code, ontology_id=oid, **_values(body))
+        target = local_demo_selection(oid, code)
+        if target and (oid, code) == (target.ontology_id, target.system_code):
+            obj.local_only = True
+            if not local_demo_matches(obj):
+                raise AppError(
+                    "指定本机演示系统的环境、地址或适配器配置不匹配",
+                    code="LOCAL_DEMO_INVALID",
+                    status_code=422,
+                )
         return await self.repo.create(obj, actor=actor)
 
     async def update(self, code: str, body: ExtSystemIn, actor: str) -> ExtSystem:
         obj = await self.repo.get_by_code_or_404(code)
         await self._check_name(body.name, exclude_id=obj.id)
         values = _values(body)
+        if obj.local_only and any(
+            values[field] != getattr(obj, field) for field in ("env", "category", "endpoint")
+        ):
+            raise AppError(
+                "本机演示系统不能修改环境、类型或地址", code="LOCAL_DEMO_IMMUTABLE", status_code=409
+            )
+        for field, column in (("auth", "auth_type"), ("auth_detail", "auth_detail")):
+            if field not in body.model_fields_set:
+                values.pop(column)
         if body.usage is None:
             values.pop("usage")  # 前端表单没有 usage（不做写回的集成的用途说明），编辑时保留原值
         return await self.repo.update(obj, values, actor=actor)

@@ -48,9 +48,14 @@ async def main():
             raise AssertionError("Unbound workspace or configuration-changing SQL was accepted")
         assert not connection.calls
 
-    with patch.object(ingress_schema, "get_settings", return_value=SimpleNamespace(
-        internal_event_token=SecretStr("test-only-legacy-token"), internal_event_tokens=None,
-    )):
+    with patch.object(
+        ingress_schema,
+        "get_settings",
+        return_value=SimpleNamespace(
+            internal_event_token=SecretStr("test-only-legacy-token"),
+            internal_event_tokens=None,
+        ),
+    ):
         try:
             await ingress_schema.authenticate(None, "Bearer test-only-legacy-token", "2")
         except AppError as exc:
@@ -62,9 +67,9 @@ async def main():
     subscriber = SimpleNamespace(subscriber_name="same-subscriber")
     with patch.object(delivery, "routes", return_value={"same-code/same-subscriber": {"user": "legacy"}}):
         assert delivery.route_for(event, subscriber) == {}
-    settings = SimpleNamespace(integration_real_connect=True, integration_adapters=SecretStr(
-        '{"same-code":{"queryPath":"/query"}}'
-    ))
+    settings = SimpleNamespace(
+        integration_real_connect=True, integration_adapters=SecretStr('{"same-code":{"queryPath":"/query"}}')
+    )
     system = SimpleNamespace(code="same-code", ontology_id=2, status="启用")
     with patch.object(adapters, "get_settings", return_value=settings):
         try:

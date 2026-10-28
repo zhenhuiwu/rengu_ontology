@@ -69,7 +69,12 @@ async def directory(
             }
             for m in await session.execute(
                 select(
-                    Metric.code, Metric.display_name, Metric.version, Metric.dims, Metric.review_cr, Metric.def_rows
+                    Metric.code,
+                    Metric.display_name,
+                    Metric.version,
+                    Metric.dims,
+                    Metric.review_cr,
+                    Metric.def_rows,
                 ).order_by(Metric.seq, Metric.code)
             )
         ]
@@ -78,13 +83,15 @@ async def directory(
         dimensions_by_id = {}
         if include_dims:
             for did, name, object_id, status, level in await session.execute(
-                select(Dimension.id, Dimension.display_name, Dimension.object_id, Dimension.status, DimLevel.name)
+                select(
+                    Dimension.id, Dimension.display_name, Dimension.object_id, Dimension.status, DimLevel.name
+                )
                 .outerjoin(DimLevel, DimLevel.dimension_id == Dimension.id)
                 .order_by(Dimension.seq, Dimension.code, DimLevel.level_no)
             ):
-                dimension = dimensions_by_id.setdefault(did, {
-                    "name": name, "object": object_id is not None, "status": status.value, "levels": []
-                })
+                dimension = dimensions_by_id.setdefault(
+                    did, {"name": name, "object": object_id is not None, "status": status.value, "levels": []}
+                )
                 if level:
                     dimension["levels"].append({"name": level})
         dimensions = list(dimensions_by_id.values())

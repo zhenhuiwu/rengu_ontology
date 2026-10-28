@@ -24,7 +24,12 @@ from app.core.errors import AppError
 MODES = ("suggest", "confirm", "auto")
 CALLERS = ("人", "规则", "AI", "服务账号")
 CALLER_OF_SOURCE = {
-    "手动": "人", "推演": "人", "告警处理": "人", "问数": "AI", "规则": "规则", "告警": "规则",
+    "手动": "人",
+    "推演": "人",
+    "告警处理": "人",
+    "问数": "AI",
+    "规则": "规则",
+    "告警": "规则",
 }
 AUTO_TEXT = "按执行策略自动执行"
 OVERFLOW_TEXT = "未自动执行，转人工确认"
@@ -50,8 +55,9 @@ class Limits(_Strict):
     daily_count: Annotated[int, Field(alias="dailyCount", ge=1, le=10_000)]
     per_caller_daily_count: Annotated[int | None, Field(alias="perCallerDailyCount", ge=1, le=10_000)] = None
     amount: AmountLimit | None = None
-    objects: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]] | None,
-                       Field(max_length=500)] = None
+    objects: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=64)]] | None, Field(max_length=500)
+    ] = None
 
 
 class Policy(_Strict):
@@ -133,12 +139,19 @@ def caller_of(source_type: str, user=None) -> str:
 def gate(policy: Policy, caller: str) -> None:
     """暂存前：调用方不在允许范围 → 403；只给建议 → 409（请用试运行）。"""
     if policy.callers is not None and caller not in policy.callers:
-        raise AppError(f"该动作的执行策略不允许「{caller}」发起", code="CALLER_NOT_ALLOWED", status_code=403,
-                       details={"caller": caller, "callers": list(policy.callers)})
+        raise AppError(
+            f"该动作的执行策略不允许「{caller}」发起",
+            code="CALLER_NOT_ALLOWED",
+            status_code=403,
+            details={"caller": caller, "callers": list(policy.callers)},
+        )
     if policy.mode == "suggest":
-        raise AppError("该动作只给建议，不生成执行记录；请用试运行查看结果",
-                       code="ACTION_POLICY_SUGGEST_ONLY",
-                       status_code=409, details={"mode": "suggest"})
+        raise AppError(
+            "该动作只给建议，不生成执行记录；请用试运行查看结果",
+            code="ACTION_POLICY_SUGGEST_ONLY",
+            status_code=409,
+            details={"mode": "suggest"},
+        )
 
 
 def day_start() -> datetime:
@@ -177,16 +190,25 @@ async def auto_decision(session, run, policy: Policy, caller: str, caller_id: st
     base = (
         select(func.count(ActionRunLog.id))
         .join(ActionRun, ActionRun.id == ActionRunLog.action_run_id)
-        .where(ActionRun.action_type_code == run.action_type_code, ActionRunLog.text == AUTO_TEXT,
-               ActionRunLog.at >= day_start())
+        .where(
+            ActionRun.action_type_code == run.action_type_code,
+            ActionRunLog.text == AUTO_TEXT,
+            ActionRunLog.at >= day_start(),
+        )
     )
     used = int(await session.scalar(base) or 0)
     if used >= limits.daily_count:
         return False, f"今日自动执行已达上限 {limits.daily_count}", None
     note = f"{caller_label(caller, caller_id)} · 今日 {used + 1}/{limits.daily_count}"
     if limits.per_caller_daily_count is not None:
-        mine = int(await session.scalar(base.where(
-            ActionRunLog.actor.startswith(caller_label(caller, caller_id) + " ·", autoescape=True))) or 0)
+        mine = int(
+            await session.scalar(
+                base.where(
+                    ActionRunLog.actor.startswith(caller_label(caller, caller_id) + " ·", autoescape=True)
+                )
+            )
+            or 0
+        )
         if mine >= limits.per_caller_daily_count:
             return False, f"该调用方今日自动执行已达上限 {limits.per_caller_daily_count}", None
         note += f" · 本调用方 {mine + 1}/{limits.per_caller_daily_count}"

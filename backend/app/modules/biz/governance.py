@@ -27,6 +27,7 @@ S, OC, LC, PC = Store.__table__.c, BizOrder.__table__.c, OrderLine.__table__.c, 
 
 STORE_COLUMNS = {
     "store_id": S.id,
+    "store_no": S.store_no,
     "code": S.code,
     "name": S.name,
     "city": S.city,
@@ -100,3 +101,8 @@ ORDER_LINE_GOV = GovernedTable(
 )
 
 register_governed(STORE_GOV, ORDER_GOV, ORDER_LINE_GOV, PRODUCT_GOV)
+
+# This local demo is explicitly enabled in the deployment environment only.
+import os
+if os.environ.get("RENGU_RESCUE_DEMO") == "1":
+    from app.modules.biz import rescue_demo as _rescue_demo  # noqa: F401

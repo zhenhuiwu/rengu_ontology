@@ -140,7 +140,7 @@ async def pending_approvals(session: AsyncSession, users: list[SysUser]) -> dict
     from app.modules.ontology.models import OntologyWorkspace
 
     totals = dict.fromkeys(codes, 0)
-    workspace_ids = list(await session.scalars(select(OntologyWorkspace.id).order_by(OntologyWorkspace.id)))
+    workspace_ids = list(await session.scalars(select(OntologyWorkspace.id).where(OntologyWorkspace.deleted_at.is_(None)).order_by(OntologyWorkspace.id)))
     # A separate read-only pool avoids holding every request connection while waiting for another scope.
     settings = get_settings()
     engine = create_async_engine(

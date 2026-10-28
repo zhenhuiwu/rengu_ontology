@@ -1,4 +1,6 @@
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, String, Text, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, IdMixin, MutableTableMixin
@@ -12,6 +14,8 @@ class OntologyWorkspace(IdMixin, MutableTableMixin, Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     domain: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    workers_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
 
 class OntologyMember(IdMixin, Base):

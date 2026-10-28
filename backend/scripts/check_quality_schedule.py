@@ -26,8 +26,15 @@ async def main():
             assert error.code == "QUALITY_SCHEDULE_INVALID"
         else:
             raise AssertionError("Manual definitions cannot create timers")
-    user = SimpleNamespace(ontology_id=1, ontology_role="owner", id="test-only-user",
-                           func={"data-quality": "manage"}, roles=(), row_filters={}, attrs={})
+    user = SimpleNamespace(
+        ontology_id=1,
+        ontology_role="owner",
+        id="test-only-user",
+        func={"data-quality": "manage"},
+        roles=(),
+        row_filters={},
+        attrs={},
+    )
     initial = scheduler.fingerprint(user)
     user.ontology_id = 2
     assert scheduler.fingerprint(user) != initial
@@ -36,8 +43,11 @@ async def main():
         # Use the same DENY_ALL value as production permission aggregation.
         from app.common.row_filter import DENY_ALL
 
-        with patch.object(scheduler, "resolve_user", AsyncMock(return_value=user)), patch.object(
-            scheduler, "row_filter", AsyncMock(return_value=DENY_ALL if scope is not None else None)
+        with (
+            patch.object(scheduler, "resolve_user", AsyncMock(return_value=user)),
+            patch.object(
+                scheduler, "row_filter", AsyncMock(return_value=DENY_ALL if scope is not None else None)
+            ),
         ):
             try:
                 await scheduler.actor(None, user.id, "test-only-object")

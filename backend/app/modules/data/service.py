@@ -62,12 +62,8 @@ class IntrospectFailed(AppError):
     status_code, code, message = 502, "INTROSPECT_FAILED", "连接源库失败"
 
 
-def _use_real(kind: DsType) -> bool:
-    return connector.real_connect_enabled() and connector.supports(kind.value)
-
-
-def _require_real(kind: DsType) -> None:
-    if not connector.real_connect_enabled():
+def _require_real(kind: DsType, config: dict[str, Any]) -> None:
+    if not connector.permitted(kind.value, config):
         raise RealConnectUnavailable("未开启真实连接，未执行测试", details={"reason": "disabled"})
     if not connector.supports(kind.value):
         raise RealConnectUnavailable(
@@ -138,7 +134,7 @@ def _type_fields(body: DatasourceCreate | DatasourceUpdate | DsTestIn) -> dict[s
 
 
 async def run_test(kind: DsType, config: dict[str, Any]) -> ConnectionTestResult:
-    _require_real(kind)
+    _require_real(kind, config)
     return await connector.test_real(kind.value, config)
 
 
@@ -241,7 +237,6 @@ class DatasourceService:
     async def test_saved(self, code: str) -> DsTest:
         """用已保存的配置测试，更新 status / lastTest（前端 testConn：失败不改状态，成功 → 正常）。"""
         ds = await self.get(code)
-        _require_real(ds.type)
         config: dict[str, Any] = {
             "host": ds.host,
             "port": ds.port,
@@ -250,6 +245,7 @@ class DatasourceService:
             "ssl": ds.ssl,
             "password": decrypt_password(ds.password_enc),
         }
+        _require_real(ds.type, config)
         if not config["password"]:
             return DsTest(
                 time=_now_text(), ok=False, ms=0, msg="未保存密码（或密钥已更换），未执行测试；请重新填写密码"
@@ -278,8 +274,6 @@ class DatasourceService:
         返回内省到的表数。
         """
         ds = await self.get(code)
-        if not _use_real(ds.type) or not connector.supports(ds.type.value):
-            raise RealConnectUnavailable(details={"type": ds.type.value})
         if config is None:
             config = {
                 "host": ds.host,
@@ -289,6 +283,7 @@ class DatasourceService:
                 "ssl": ds.ssl,
                 "password": decrypt_password(ds.password_enc),
             }
+        _require_real(ds.type, config)
         try:
             found = await connector.list_tables(ds.type.value, config)
         except Exception as e:

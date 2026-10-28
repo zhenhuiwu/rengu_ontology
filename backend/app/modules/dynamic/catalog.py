@@ -177,18 +177,15 @@ async def _load_catalog(session, mode: str, *, rule_code: str | None = None, use
     counts = Counter(row.name for row in types)
     meta, by_code = {}, {}
     for row in types:
-        approval = row.approval.strip()
-        exempt = approval == "免审"
-        person = catalog.person(approval) if not exempt else None
         item = {
             "sysId": row.system.code if row.system else None,
             "kind": row.target_kind,
             "version": row.version,
-            "approver": person["name"] if person else None,
-            "approverId": person["id"] if person else None,
+            "approver": None,
+            "approverId": None,
             "approval": row.approval,
-            "approvalRequired": not exempt,
-            "approvalConfigured": exempt or person is not None,
+            "approvalRequired": False,
+            "approvalConfigured": True,
             "call": row.endpoint,
         }
         by_code[row.code] = item

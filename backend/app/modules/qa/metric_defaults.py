@@ -37,7 +37,10 @@ class PublishedRange:
 
     @property
     def note(self):
-        return f"按已发布指标{self.name} {self.version}默认最近{self.days}天：{self.start} 至 {self.end}（{self.timezone}）"
+        return (
+            f"按已发布指标{self.name} {self.version}默认最近{self.days}天："
+            f"{self.start} 至 {self.end}（{self.timezone}）"
+        )
 
     def apply(self, tree):
         # Remove model-invented windows, then enforce this window and the saved metric predicates.
@@ -90,8 +93,15 @@ def _matches(question, word):
 
 def time_window_expressed(question):
     # A requested bucket ("按日") does not specify which dates belong in the answer.
-    grouping = r"按(?:季度|[日天周月季年])|每[日天周月季年]|逐[日天周月年]|\b(?:daily|weekly|monthly|yearly)\b|\bby\s+(?:day|week|month|quarter|year)\b"
+    grouping = (
+        r"按(?:季度|[日天周月季年])|每[日天周月季年]|逐[日天周月年]"
+        r"|\b(?:daily|weekly|monthly|yearly)\b|\bby\s+(?:day|week|month|quarter|year)\b"
+    )
     return guards.time_expressed(re.sub(grouping, " ", question, flags=re.I))
+
+
+def all_time_requested(question):
+    return bool(re.search(r"不限时间|不限制时间|不限定时间|无需(?:选择)?时间|全部时间|所有时间|全部历史|所有历史|全历史|不设时间", question))
 
 
 async def resolve_default(session, user, question, *, ver=None):
@@ -126,24 +136,31 @@ async def resolve_default(session, user, question, *, ver=None):
     if len(matches) != 1:
         return None, {
             "term": "指标口径",
-            "question": "该说法对应多个已发布指标，请选择明确口径及时间范围",
+            "question": "该说法对应多个已发布指标，请选择明确口径",
             "options": [f"{m.display_name}（{m.api_name}）" for m in matches[:6]],
         }
     metric = matches[0]
+    if all_time_requested(question):
+        return None, None
     value = exec_def(metric.def_rows).get("defaultRange")
     if value is None:
-        return None, {
-            "term": "时间范围",
-            "question": f"{metric.display_name}未设置已发布默认时间范围，请指定时间",
-            "options": ["今天", "本周", "本月", "指定其他时间范围"],
-        }
+        return None, None
     try:
         configured = default_range(value)
         objects = list(await session.scalars(select(ObjectType)))
         definition = {"formula": metric.formula, "def": metric.def_rows}
+        from app.common.sql_guard import ensure_governed_tables
+
+        await ensure_governed_tables(session)
         bound, _, temporal, _, conditions = compile_metric(
-            definition, objects, ontology_id, await execution_bindings(session, objects, definition)
+            definition,
+            objects,
+            ontology_id,
+            await execution_bindings(session, objects, definition),
+            session=session,
         )
+        if temporal is None:
+            raise AppError("默认时间范围需要明确的时间字段", code="METRIC_DEFAULT_UNAVAILABLE", status_code=422)
         if is_deny_all(user.row_filters.get(bound.object.code, {"deny": True})):
             raise AppError("当前身份无权查询该指标对象", code="NO_PERMISSION", status_code=403)
         direct_source = getattr(bound.governed, "binding", None) is not None

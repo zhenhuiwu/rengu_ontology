@@ -78,7 +78,10 @@ class PageRepo(BaseRepository[QaPage]):
     not_found_message = "页面不存在"
 
     def visible_clause(self, viewer_pk: int, viewer_dept: str | None, *, include_shared: bool):
-        """我的页面；include_shared 时再加上共享给我的（指定成员含我 / 所在部门且我的部门与拥有者部门完全相同）。"""
+        """我的页面；include_shared 时再加上共享给我的。
+
+        指定成员含我，或所在部门且我的部门与拥有者部门完全相同。
+        """
         own = QaPage.owner_id == viewer_pk
         if not include_shared:
             return own

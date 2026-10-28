@@ -35,7 +35,7 @@ async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, di
     if ontology_id is None:
         return {}
     member = await session.scalar(
-        select(OntologyMember.id).where(
+        select(OntologyMember).where(
             OntologyMember.ontology_id == ontology_id, OntologyMember.user_id == user_id
         )
     )
@@ -51,7 +51,32 @@ async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, di
             .order_by(SysRole.code)
         )
     )
-    return await role_row_access(session, roles)
+    access = await role_row_access(session, roles)
+    if member.role == "owner":
+        from app.common.sql_guard import ensure_governed_tables, governed_tables
+        from app.modules.static.models import ObjectStatus, ObjectType
+
+        user_code = await session.scalar(select(SysUser.code).where(SysUser.id == user_id))
+        await ensure_governed_tables(session)
+        bound = {g.object_type for g in governed_tables(ontology_id, session).values() if g.projection is not None}
+        if bound:
+            scopes = list(await session.scalars(select(SysRoleScope).where(
+                SysRoleScope.ontology_id == ontology_id, SysRoleScope.role_id.in_([role.id for role in roles]),
+            ))) if roles else []
+            objects = await session.execute(select(ObjectType.id, ObjectType.code, ObjectType.api_name, ObjectType.display_name).where(
+                ObjectType.ontology_id == ontology_id, ObjectType.code.in_(bound),
+                ObjectType.created_by == user_code, ObjectType.status == ObjectStatus.published,
+            ))
+            for object_id, code, api, name in objects:
+                explicit = any(role.default_deny for role in roles) or any(isinstance(role.objs, list) and any(
+                    isinstance(entry, dict) and entry.get("api") == api for entry in role.objs
+                ) for role in roles) or any(
+                    scope.object_type_id == object_id or scope.object_type_code == code
+                    or scope.obj_type in (code, api, name) for scope in scopes
+                )
+                if not explicit:
+                    access[code] = None
+    return access
 
 
 async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict | None]:

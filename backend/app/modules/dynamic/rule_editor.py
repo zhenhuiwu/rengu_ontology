@@ -129,4 +129,11 @@ async def validate_definition(session, user, definition):
             r"不重复|[1-9]\d*\s*(秒|分钟|小时|天)", definition.get("cooldown", "")
         ):
             raise unavailable("启用规则需要明确去重字段和冷却时间")
-    parse_expression(definition.get("expr", ""))
+    tree = parse_expression(definition.get("expr", ""))
+    from app.modules.dynamic.rule_functions import bind_rule_functions
+    await bind_rule_functions(session, user, tree)
+    if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "related" for n in ast.walk(tree)):
+        from app.modules.integration.action_edits import object_binding
+        from app.modules.dynamic.rule_relations import bind_rule_relations
+        bound_obj, gov = await object_binding(session, obj.code)
+        await bind_rule_relations(session, user, tree, bound_obj, gov)

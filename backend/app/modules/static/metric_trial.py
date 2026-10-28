@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import sqlglot
 from pydantic import Field, model_validator
-from sqlalchemy import Date, DateTime, Numeric, cast, func, literal, select
+from sqlalchemy import Date, DateTime, Numeric, String, cast, func, literal, select
 from sqlalchemy.dialects import postgresql
 from sqlglot import exp
 
@@ -32,10 +32,13 @@ class MetricTrialIn(ApiModel):
     cr_id: str | None = Field(None, min_length=1, max_length=64)
     range: Literal["30d"] = "30d"
     days: int | None = Field(None, strict=True, ge=1, le=93)
+    snapshot: bool = False
 
     @model_validator(mode="after")
     def valid(self):
         ItemIn.jsonb_text(self.model_dump())
+        if self.snapshot and (self.days is not None or "range" in self.model_fields_set):
+            raise ValueError("当前快照不能指定日期范围")
         return self
 
 
@@ -108,8 +111,9 @@ async def metric_definition(session, code: str, user: CurrentUser, ver=None, cr_
         elif item.item_key in EXEC_KEYS:
             value = None if item.op == "delete" else item.after
             metric["def"] = with_exec(
-                metric.get("def"), item.item_key,
-                value if item.item_key == "defaultRange" or isinstance(value, str) else None
+                metric.get("def"),
+                item.item_key,
+                value if item.item_key == "defaultRange" or isinstance(value, str) else None,
             )
     return metric
 
@@ -140,11 +144,13 @@ async def execution_bindings(session, objects, metric):
     return result
 
 
-def metric_governed(obj, ontology_id, bindings):
+def metric_governed(obj, ontology_id, bindings, session=None):
     if obj.code in bindings:
         binding = bindings[obj.code]
         return SimpleNamespace(table=binding.base, object_type=obj.code, binding=binding) if binding else None
-    return next((g for g in governed_tables(ontology_id).values() if g.object_type == obj.code), None)
+    return next(
+        (g for g in governed_tables(ontology_id, session).values() if g.object_type == obj.code), None
+    )
 
 
 def metric_column(prop, gov):
@@ -153,19 +159,18 @@ def metric_column(prop, gov):
     binding = getattr(gov, "binding", None)
     if binding is not None:
         return binding.cols.get(prop.api_name) if prop.api_name in binding.out else None
-    return (
-        gov.table.c[prop.backing_column]
-        if prop.backing_column and prop.backing_column in gov.table.c
-        else None
-    )
+    column = prop.backing_column or prop.source_column
+    projection = getattr(gov, "projection", None)
+    return gov.table.c[column] if column and not prop.transform and column in gov.table.c and (projection is None or column in projection) else None
 
 
 class BoundFormula:
     """Small SQL-expression subset compiled to SQLAlchemy, with no user SQL execution."""
 
-    def __init__(self, objects, ontology_id: int, bindings=None):
+    def __init__(self, objects, ontology_id: int, bindings=None, session=None):
         self.objects = objects
         self.ontology_id = ontology_id
+        self.session = session
         self.bindings = bindings or {}
         self.object = None
         self.governed = None
@@ -195,7 +200,7 @@ class BoundFormula:
         props = [p for p in obj.properties if name in (p.api_name, p.display_name)]
         reference = f"{obj.code}.{name}"
         if not props:
-            gov = metric_governed(obj, self.ontology_id, self.bindings)
+            gov = metric_governed(obj, self.ontology_id, self.bindings, self.session)
             candidates = [
                 {
                     "reference": f"{obj.code}.{p.api_name}",
@@ -235,7 +240,7 @@ class BoundFormula:
                 "当前试算引擎仅支持单个受治理对象，暂不支持跨对象聚合或过滤",
                 reason="CROSS_OBJECT_UNSUPPORTED",
             )
-        gov = metric_governed(obj, self.ontology_id, self.bindings)
+        gov = metric_governed(obj, self.ontology_id, self.bindings, self.session)
         if gov is None:
             raise unavailable(
                 f"对象「{name}」尚未绑定受治理业务表，当前不能试算",
@@ -370,7 +375,7 @@ def parse_formula(value, *, normalize_separators=False):
     return trees[0]
 
 
-def definition_issues(metric, objects, ontology_id, bindings=None):
+def definition_issues(metric, objects, ontology_id, bindings=None, session=None):
     """Validate all explicit references; candidates describe definitions, never alias substitutions."""
     issues, references, object_codes = [], [], set()
     metadata = {r.get("k"): r.get("v") for r in metric.get("def", []) if isinstance(r, dict)}
@@ -388,7 +393,7 @@ def definition_issues(metric, objects, ontology_id, bindings=None):
             )
         except (AppError, TypeError) as error:
             issues.append({"reason": "FILTER_INVALID", "message": str(error)})
-    resolver = BoundFormula(objects, ontology_id, bindings)
+    resolver = BoundFormula(objects, ontology_id, bindings, session)
     base = None
     for area, part in trees:
         for node in part.find_all(exp.Column):
@@ -404,7 +409,7 @@ def definition_issues(metric, objects, ontology_id, bindings=None):
                 try:
                     obj = resolver.resolve_object(name)
                     object_codes.add(obj.code)
-                    if metric_governed(obj, ontology_id, bindings or {}) is None:
+                    if metric_governed(obj, ontology_id, bindings or {}, session) is None:
                         issue = {
                             "reason": "OBJECT_UNBOUND",
                             "reference": obj.code,
@@ -420,7 +425,7 @@ def definition_issues(metric, objects, ontology_id, bindings=None):
                 except AppError:
                     pass
     for area, node in references:
-        bound = BoundFormula(objects, ontology_id, bindings)
+        bound = BoundFormula(objects, ontology_id, bindings, session)
         try:
             if isinstance(node.parent, exp.Count) and not node.table:
                 bound.bind_object(node.name)
@@ -462,11 +467,11 @@ def definition_issues(metric, objects, ontology_id, bindings=None):
     return issues
 
 
-def compile_metric(metric, objects, ontology_id, bindings=None):
-    issues = definition_issues(metric, objects, ontology_id, bindings)
+def compile_metric(metric, objects, ontology_id, bindings=None, session=None):
+    issues = definition_issues(metric, objects, ontology_id, bindings, session)
     if issues:
         raise unavailable("；".join(issue["message"] for issue in issues), issues=issues)
-    bound = BoundFormula(objects, ontology_id, bindings)
+    bound = BoundFormula(objects, ontology_id, bindings, session)
     tree = parse_formula(metric.get("formula"))
     expression = bound.expression(tree.expressions[0])
     if not bound.aggregates or bound.object is None:
@@ -476,17 +481,17 @@ def compile_metric(metric, objects, ontology_id, bindings=None):
     if not time_field and len(bound.count_times) == 1:
         # Counting an explicit date property already states its event time; do not choose a business date.
         time_field, temporal = next(iter(bound.count_times.values()))
-    else:
+    elif time_field:
         if not isinstance(time_field, str) or not time_field.strip():
-            raise unavailable(
-                "指标没有明确的时间字段；可在公式中显式COUNT唯一日期属性，不能默认选下单或出库时间"
-            )
+            raise unavailable("指标时间字段不是明确的对象属性")
         try:
             time_node = sqlglot.parse_one(time_field, read="postgres")
         except (sqlglot.errors.ParseError, RecursionError):
             raise unavailable("指标时间字段不是明确的对象属性") from None
         temporal = bound.column(time_node)
-    if not isinstance(temporal.type, (Date, DateTime)):
+    else:
+        temporal = None
+    if temporal is not None and not isinstance(temporal.type, (Date, DateTime)):
         raise unavailable("指标时间字段没有绑定日期或时间列")
     conds = []
     if tree.args.get("where"):
@@ -507,8 +512,15 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
         if ver:
             raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
         objects = list(await session.scalars(select(ObjectType)))
-        compile_metric(
-            metric, objects, require_ontology_id(session), await execution_bindings(session, objects, metric)
+        from app.common.sql_guard import ensure_governed_tables
+
+        await ensure_governed_tables(session)
+        _, _, temporal, _, _ = compile_metric(
+            metric,
+            objects,
+            require_ontology_id(session),
+            await execution_bindings(session, objects, metric),
+            session=session,
         )
     except AppError as error:
         if error.code != "METRIC_TRIAL_UNAVAILABLE":
@@ -519,7 +531,7 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
             "issues": (error.details or {}).get("issues")
             or [{"reason": (error.details or {}).get("reason", error.code), "message": error.message}],
         }
-    return {"id": code, "ready": True, "issues": []}
+    return {"id": code, "ready": True, "hasTimeField": temporal is not None, "issues": []}
 
 
 READINESS_BATCH_MAX = 200
@@ -565,7 +577,12 @@ def metric_window(days, *, at=None, timezone=None):
         raise unavailable("指标计算时间必须带时区")
     end = cutoff_at.astimezone(tz).date()
     start = end - timedelta(days=days - 1)
-    return start, end, datetime.combine(start, time.min, tz), datetime.combine(end + timedelta(days=1), time.min, tz)
+    return (
+        start,
+        end,
+        datetime.combine(start, time.min, tz),
+        datetime.combine(end + timedelta(days=1), time.min, tz),
+    )
 
 
 async def evaluate_metric(
@@ -580,6 +597,7 @@ async def evaluate_metric(
     at=None,
     timezone=None,
     object_kind=None,
+    snapshot=False,
 ) -> dict:
     """Public evaluator: exact saved definition + governed live rows, inclusive local calendar days."""
     check_func(user, "metrics", "view")
@@ -591,9 +609,34 @@ async def evaluate_metric(
     if ver:
         raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
     objects = list(await session.scalars(select(ObjectType)))
+    from app.common.sql_guard import ensure_governed_tables
+
+    await ensure_governed_tables(session)
     bound, expression, temporal, time_field, conds = compile_metric(
-        metric, objects, require_ontology_id(session), await execution_bindings(session, objects, metric)
+        metric,
+        objects,
+        require_ontology_id(session),
+        await execution_bindings(session, objects, metric),
+        session=session,
     )
+    if temporal is None and not snapshot:
+        raise unavailable("日期筛选或时序试算需要明确的时间字段")
+    if snapshot and at is not None:
+        raise unavailable("当前快照不能计算历史状态")
+    if snapshot:
+        stmt = select(expression.label("value")).select_from(bound.governed.table).where(*conds)
+        binding = getattr(bound.governed, "binding", None)
+        if binding is not None:
+            from app.common.row_filter import apply_row_filter
+            stmt = await apply_row_filter(stmt, user, bound.object.code, binding.cols)
+            async with binding.read(session) as reader:
+                value = (await reader.execute(stmt)).scalar_one()
+        else:
+            sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+            value = (await run_guarded(await session.connection(), sql, user, session=session)).scalar_one()
+        return {"id": code, "version": metric.get("version") or "草稿", "formula": metric["formula"],
+                "rows": [{"date": "当前", "value": str(value) if value is not None else None}],
+                "dataCutoff": None, "scope": "当前快照 · 当前用户可见数据", "crId": cr_id}
     cutoff_at = at or clock.now()
     start, end, lo, hi = metric_window(days, at=cutoff_at, timezone=timezone)
     tz = lo.tzinfo
@@ -606,14 +649,20 @@ async def evaluate_metric(
     grouping = []
     binding = getattr(bound.governed, "binding", None)
     if object_kind:
-        if bound.object.code != object_kind or (binding is None and "code" not in bound.governed.table.c):
+        if bound.object.code != object_kind:
             raise unavailable("指标没有明确的规则对象分组映射，不能把汇总值分摊给各对象")
-        grouping = [(binding.id_col if binding is not None else bound.governed.table.c.code).label("code")]
+        from app.common.object_identity import primary_column
+        grouping = [cast(binding.id_col if binding is not None else primary_column(bound.object, bound.governed), String).label("code")]
     if at is not None and isinstance(temporal.type, DateTime):
         conds.append(temporal <= cutoff_at)
     time_group = [] if period == "none" else [day]
     stmt = (
-        select((literal(start) if period == "none" else day).label("date"), expression.label("value"), func.max(temporal).label("cutoff"), *grouping)
+        select(
+            (literal(start) if period == "none" else day).label("date"),
+            expression.label("value"),
+            func.max(temporal).label("cutoff"),
+            *grouping,
+        )
         .select_from(bound.governed.table)
         .where(temporal >= lo, temporal < hi, *conds)
         .group_by(*time_group, *grouping)
@@ -628,7 +677,7 @@ async def evaluate_metric(
     else:
         sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
         # Shared SQL guard supplies inherited row scopes, including order_line -> order -> store.
-        rows = (await run_guarded(await session.connection(), sql, user)).mappings().all()
+        rows = (await run_guarded(await session.connection(), sql, user, session=session)).mappings().all()
     values = [
         {
             "date": str(row["date"]),
@@ -660,4 +709,12 @@ async def trial_metric(session, ctx: ViewContext, user: CurrentUser, code: str, 
     effective = await resolve_user(session, ctx.preview_as) if ctx.preview_as else user
     if body.cr_id and effective.id != user.id:
         await metric_definition(session, code, user, ctx.ver, body.cr_id)
-    return await evaluate_metric(session, effective, code, ver=ctx.ver, cr_id=body.cr_id, days=body.days if body.days is not None else 30)
+    return await evaluate_metric(
+        session,
+        effective,
+        code,
+        ver=ctx.ver,
+        cr_id=body.cr_id,
+        days=body.days if body.days is not None else 30,
+        snapshot=body.snapshot,
+    )

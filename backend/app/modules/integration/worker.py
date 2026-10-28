@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 async def sweep(timestamp: int = 0) -> int:
     total = 0
     for ontology_id in await workspace_ids():
-        total += await _sweep_workspace(ontology_id)
+        from app.common.ontology import WorkspaceInactive
+        try:
+            total += await _sweep_workspace(ontology_id)
+        except WorkspaceInactive:
+            continue
     return total
 
 

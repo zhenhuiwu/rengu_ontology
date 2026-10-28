@@ -23,6 +23,8 @@ from app.core.enums import LabelEnum
 from app.db.base import Base, CodeMixin, IdMixin, MutableTableMixin
 from app.db.types import JsonType, enum_column
 
+NO_AUTH = "无需授权"
+
 
 class ExtSystemStatus(LabelEnum):
     """外部系统状态（action-event-api §3.5）。"""
@@ -62,6 +64,8 @@ class ExtSystem(CodeMixin, MutableTableMixin, Base):
     owner: Mapped[str] = mapped_column(String(64), nullable=False, default="", comment="负责人姓名（原文）")
     status: Mapped[ExtSystemStatus] = mapped_column(enum_column(ExtSystemStatus, 16), nullable=False)
     env: Mapped[str] = mapped_column(String(16), nullable=False, comment="环境原文（生产/测试）")
+    local_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    action_authorizations: Mapped[dict | None] = mapped_column(JsonType)
     usage: Mapped[dict | None] = mapped_column(JsonType, comment="用途说明 {text, ops, actor?}（mock 原样）")
 
 

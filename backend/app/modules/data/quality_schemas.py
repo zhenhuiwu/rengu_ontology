@@ -10,9 +10,11 @@ from app.core.schema import ApiModel
 class CheckDefinition(ApiModel):
     name: str = Field(min_length=1, max_length=200, pattern=r"^[^\x00]+$")
     type_key: str = Field(min_length=1, max_length=64, pattern=r"^[^\x00]+$")
-    kind: Literal["新鲜度", "空值率", "唯一性", "引用完整性"]
+    kind: Literal["新鲜度", "记录时效", "空值率", "唯一性", "引用完整性", "格式"]
     threshold: str = Field(min_length=1, max_length=128, pattern=r"^[^\x00]+$")
     schedule: Literal["手动", "每 2 小时", "每天 23:30", "每周一 06:00"] = "手动"
+    field: str | None = Field(default=None, max_length=64)
+    format_rule: Literal["非空白", "整数", "邮箱"] | None = None
 
     @field_validator("name", "type_key", "threshold", mode="before")
     @classmethod

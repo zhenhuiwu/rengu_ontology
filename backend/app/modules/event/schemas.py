@@ -30,6 +30,7 @@ class FieldOut(ApiModel):
     required: bool
     desc: str
     sample: str
+    schema: dict | None = None
 
 
 class EventTypeDetailOut(EventTypeOut):

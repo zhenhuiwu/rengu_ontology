@@ -19,7 +19,8 @@ from typing import Any
 
 from sqlalchemy import URL, create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import NoSuchModuleError
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError, NoSuchModuleError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -45,6 +46,24 @@ def real_connect_enabled() -> bool:
     return os.environ.get("RENGU_DS_REAL_CONNECT") == "1" or get_settings().env == "prod"
 
 
+def permitted(kind: str, cfg: dict[str, Any]) -> bool:
+    if real_connect_enabled():
+        return True
+    if os.environ.get("RENGU_DS_LOCAL_CONNECT") != "1" or kind != "PostgreSQL":
+        return False
+    try:
+        main = make_url(get_settings().database_url)
+        return (
+            main.drivername == "postgresql+asyncpg"
+            and main.host in {"127.0.0.1", "::1", "localhost"}
+            and not main.query
+            and (cfg.get("host"), cfg.get("port"), cfg.get("database"))
+            == (main.host, main.port or 5432, main.database)
+        )
+    except (ArgumentError, TypeError, ValueError):
+        return False
+
+
 def supports(kind: str) -> bool:
     return kind in DRIVERS
 
@@ -59,11 +78,14 @@ class TableInfo:
 
 
 def _engine(kind: str, cfg: dict[str, Any]) -> AsyncEngine | Engine:
+    host = cfg["host"]
+    if not real_connect_enabled() and permitted(kind, cfg) and host == "localhost":
+        host = "127.0.0.1"
     url = URL.create(
         DRIVERS[kind],
         username=cfg.get("user") or None,
         password=cfg.get("password") or None,
-        host=cfg["host"],
+        host=host,
         port=int(cfg["port"]),
         database=cfg.get("database") or None,
     )
@@ -82,6 +104,8 @@ def _engine(kind: str, cfg: dict[str, Any]) -> AsyncEngine | Engine:
 
 async def _read(kind: str, cfg: dict[str, Any], operation):
     """达梦官方驱动为同步 DBAPI，在线程中连接和内省；其余使用异步驱动。"""
+    if not permitted(kind, cfg):
+        raise RuntimeError("未授权连接此数据源")
 
     def sync_read():
         eng = _engine(kind, cfg)
@@ -149,7 +173,7 @@ def _list(conn: Connection) -> list[TableInfo]:
         comments = insp.get_multi_table_comment(schema=schema, filter_names=names)
         rows = (
             {
-                r[0]: max(int(r[1] or 0), 0)
+                r[0]: int(r[1]) if r[1] is not None and r[1] >= 0 else -1
                 for r in conn.execute(
                     text(
                         "select c.relname, c.reltuples from pg_class c"
@@ -169,7 +193,7 @@ def _list(conn: Connection) -> list[TableInfo]:
                     name=n,
                     comment=((comments.get((schema, n)) or {}).get("text") or "")[:255],
                     cols=len(cols.get((schema, n), [])),
-                    rows=rows.get(n, 0),
+                    rows=rows.get(n, -1),
                 )
             )
             if len(out) >= MAX_TABLES:

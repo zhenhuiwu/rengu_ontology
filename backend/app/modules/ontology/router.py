@@ -2,13 +2,13 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request
 from pydantic import Field
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.common.auth import CurrentUserDep
 from app.common.ontology import DEFAULT_ONTOLOGY_ID
 from app.common.pagination import PageParams
-from app.core.errors import DuplicateKey, Forbidden, NotFound
+from app.core.errors import Conflict, DuplicateKey, Forbidden, NotFound
 from app.core.schema import ApiModel
 from app.db.session import SessionDep
 from app.modules.admin.models import SysRole, SysUser, UserStatus
@@ -26,6 +26,7 @@ class WorkspaceIn(ApiModel):
 
 def workspace_item(workspace: OntologyWorkspace, role: str) -> dict:
     return {
+        "workersPaused": workspace.workers_paused,
         "id": workspace.id,
         "code": workspace.code,
         "name": workspace.name,
@@ -50,7 +51,7 @@ async def workspace_directory(
     query = (
         select(OntologyWorkspace, OntologyMember.role)
         .join(OntologyMember, OntologyMember.ontology_id == OntologyWorkspace.id)
-        .where(OntologyMember.user_id == await db_user_id(session, user.id))
+        .where(OntologyMember.user_id == await db_user_id(session, user.id), OntologyWorkspace.deleted_at.is_(None))
         .order_by(OntologyWorkspace.id)
     )
     total = int(await session.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
@@ -67,9 +68,10 @@ async def workspace_directory(
         else None
     )
     has_selected = await session.scalar(
-        select(OntologyMember.id).where(
+        select(OntologyMember.id).join(OntologyWorkspace, OntologyWorkspace.id == OntologyMember.ontology_id).where(
             OntologyMember.user_id == await db_user_id(session, user.id),
             OntologyMember.ontology_id == selected,
+            OntologyWorkspace.deleted_at.is_(None),
         )
     )
     return {
@@ -98,6 +100,17 @@ async def workspace_catalog(session: SessionDep, user: CurrentUserDep, request: 
     return await workspace_directory(session, user, request)
 
 
+@router.get("/workspaces/deleted")
+async def deleted_workspaces(session: SessionDep, user: CurrentUserDep) -> dict:
+    if user.func.get("releases") != "manage" or user.ontology_ids is not None or user.is_service_account:
+        raise Forbidden("只有工作空间所有者可以查看可恢复空间")
+    rows = await session.execute(select(OntologyWorkspace).join(
+        OntologyMember, OntologyMember.ontology_id == OntologyWorkspace.id
+    ).where(OntologyMember.user_id == await db_user_id(session, user.id), OntologyMember.role == "owner",
+            OntologyWorkspace.deleted_at.is_not(None)).order_by(OntologyWorkspace.id))
+    return {"items": [{**workspace_item(row[0], "owner"), "deletedAt": row[0].deleted_at} for row in rows]}
+
+
 @router.post("/workspaces", status_code=201)
 async def create_workspace(body: WorkspaceIn, session: SessionDep, user: CurrentUserDep) -> dict:
     if user.func.get("releases") != "manage":
@@ -112,6 +125,9 @@ async def create_workspace(body: WorkspaceIn, session: SessionDep, user: Current
             OntologyMember(ontology_id=workspace.id, user_id=await db_user_id(session, user.id), role="owner")
         )
         await session.flush()
+        from app.modules.event.workspace_defaults import initialize_workspace_events
+
+        await initialize_workspace_events(session, workspace.id, user.id)
     except IntegrityError as exc:
         raise DuplicateKey("工作空间编号已存在") from exc
     return workspace_item(workspace, "owner")
@@ -119,8 +135,10 @@ async def create_workspace(body: WorkspaceIn, session: SessionDep, user: Current
 
 @router.get("/workspaces/current")
 async def current_workspace(session: SessionDep, user: CurrentUserDep) -> dict:
+    from app.modules.static.permissions import direct_publish_enabled
+
     workspace = await session.get(OntologyWorkspace, user.ontology_id)
-    return workspace_item(workspace, user.ontology_role)
+    return {**workspace_item(workspace, user.ontology_role), "directPublishEnabled": direct_publish_enabled(user)}
 
 
 class MemberIn(ApiModel):
@@ -128,7 +146,10 @@ class MemberIn(ApiModel):
     role: Literal["owner", "editor", "viewer"]
 
 
-async def require_owner(session, ontology_id: int, user) -> None:
+async def require_owner(session, ontology_id: int, user, *, include_deleted: bool = False) -> None:
+    workspace = await session.get(OntologyWorkspace, ontology_id)
+    if workspace is None or (workspace.deleted_at is not None and not include_deleted):
+        raise NotFound("本体工作空间不存在")
     role = await session.scalar(
         select(OntologyMember.role).where(
             OntologyMember.ontology_id == ontology_id,
@@ -137,6 +158,64 @@ async def require_owner(session, ontology_id: int, user) -> None:
     )
     if role != "owner" or user.func.get("releases") != "manage":
         raise Forbidden("只有本体工作空间所有者可以管理成员和对象权限绑定")
+
+
+async def change_workspace_deleted(session, user, ontology_id: int, request: Request, *, restore: bool) -> dict:
+    from app.common.ontology import set_ontology_scope
+    from app.core import clock
+    from app.modules.admin.repo import insert_audit
+
+    if user.ontology_ids is not None or user.is_service_account:
+        raise Forbidden("只有真实工作空间所有者可以删除或恢复")
+    if not await session.scalar(text("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"ontology-lifecycle:{ontology_id}"}):
+        raise Conflict("工作空间有正在执行的任务，请稍后重试", code="WORKSPACE_BUSY")
+    workspace = await session.scalar(select(OntologyWorkspace).where(OntologyWorkspace.id == ontology_id).with_for_update())
+    if workspace is None:
+        raise NotFound("本体工作空间不存在")
+    await require_owner(session, ontology_id, user, include_deleted=True)
+    if workspace.is_default or workspace.id == DEFAULT_ONTOLOGY_ID:
+        raise Forbidden("默认工作空间不能删除")
+    if restore == (workspace.deleted_at is None):
+        raise Conflict("工作空间状态已变化，请刷新后重试")
+    if restore:
+        workspace.deleted_at = None
+        await session.flush()
+    await set_ontology_scope(session, ontology_id)
+    await insert_audit(session, actor=f"{user.name}（{user.id}）", action="恢复工作空间" if restore else "删除工作空间",
+                       target=f"{workspace.code} ({workspace.id})", ip=request.client.host if request.client else "", created_by=user.id)
+    if not restore:
+        workspace.deleted_at = clock.now()
+        workspace.workers_paused = True
+    await session.flush()
+    return {"id": workspace.id, "code": workspace.code, "name": workspace.name, "deleted": not restore, "workersPaused": workspace.workers_paused}
+
+
+@router.post("/workspaces/{ontology_id}:delete")
+async def delete_workspace(ontology_id: int, session: SessionDep, user: CurrentUserDep, request: Request) -> dict:
+    return await change_workspace_deleted(session, user, ontology_id, request, restore=False)
+
+
+@router.post("/workspaces/{ontology_id}:restore")
+async def restore_workspace(ontology_id: int, session: SessionDep, user: CurrentUserDep, request: Request) -> dict:
+    return await change_workspace_deleted(session, user, ontology_id, request, restore=True)
+
+
+@router.post("/workspaces/{ontology_id}:resume-workers")
+async def resume_workspace_workers(ontology_id: int, session: SessionDep, user: CurrentUserDep, request: Request) -> dict:
+    from app.modules.admin.repo import insert_audit
+    from app.common.ontology import set_ontology_scope
+
+    if user.ontology_ids is not None or user.is_service_account:
+        raise Forbidden("只有真实工作空间所有者可以启用后台任务")
+    if not await session.scalar(text("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"ontology-lifecycle:{ontology_id}"}):
+        raise Conflict("工作空间有正在执行的任务，请稍后重试", code="WORKSPACE_BUSY")
+    workspace = await session.scalar(select(OntologyWorkspace).where(OntologyWorkspace.id == ontology_id).with_for_update())
+    await require_owner(session, ontology_id, user)
+    await set_ontology_scope(session, ontology_id)
+    workspace.workers_paused = False
+    await insert_audit(session, actor=f"{user.name}（{user.id}）", action="启用工作空间后台任务", target=f"{workspace.code} ({workspace.id})", ip=request.client.host if request.client else "", created_by=user.id)
+    await session.flush()
+    return {"id": workspace.id, "code": workspace.code, "name": workspace.name, "deleted": False, "workersPaused": False}
 
 
 @router.get("/workspaces/{ontology_id}/members")

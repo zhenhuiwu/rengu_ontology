@@ -30,6 +30,7 @@ class MappingIn(ApiModel):
 
 class AutoStageIn(ApiModel):
     enabled: bool
+    execution_mode: Literal["confirm", "auto"] = "confirm"
     action_type_id: str | None = Field(None, max_length=64)
     confirmer: str | None = Field(None, max_length=64)
     mapping: list[MappingIn] = []
@@ -49,6 +50,10 @@ class RuleDraftIn(JsonInput):
     obj_kind: str | None = Field(None, max_length=32)
     dedupe: str | None = Field(None, max_length=200)
     cooldown: str | None = Field(None, max_length=64)
+
+
+class RuleApplyIn(RuleDraftIn):
+    release_lock_version: int = Field(ge=0)
 
 
 class RuleCreateIn(JsonInput):

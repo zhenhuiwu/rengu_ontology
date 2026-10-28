@@ -145,7 +145,7 @@ async def bind_workspace(session: AsyncSession, request: Request, user: CurrentU
         raise AppError("本体工作空间编号无效", code="VALIDATION_FAILED", status_code=422)
     ontology_id = int(raw) if raw is not None else DEFAULT_ONTOLOGY_ID
     workspace = await session.get(OntologyWorkspace, ontology_id)
-    if workspace is None:
+    if workspace is None or workspace.deleted_at is not None:
         from app.core.errors import NotFound
 
         raise NotFound("本体工作空间不存在")

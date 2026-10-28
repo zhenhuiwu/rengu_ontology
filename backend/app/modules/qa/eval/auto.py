@@ -66,7 +66,7 @@ async def main() -> None:
                 kind, snap, _n, _ms, sql = await chain.answer(s, conn, llm, u, question)
                 ans = snap.get("answer") or {}
                 r.update(kind=kind, sql=sql, card=ans.get("card"), text=(ans.get("text") or "")[:300])
-                res = judge(SimpleNamespace(expect=expect), kind, snap, metrics)
+                res = judge(SimpleNamespace(expect=expect), kind, snap, metrics, sql=sql)
                 r["ok"], r["why"] = res is None, (res[1] if res else "")
             except Exception as e:  # 抽查要跑完，单题异常记下
                 r["ok"], r["err"] = False, f"{type(e).__name__}: {str(e)[:200]}"
@@ -75,7 +75,7 @@ async def main() -> None:
         print("OK  " if r["ok"] else "FAIL", src, question, r.get("why") or r.get("err", ""), flush=True)
         return r
 
-    res = await asyncio.gather(*(one(i) for i in picked))
+    res = await asyncio.gather(*(one(item) for item in picked))
     await eng.dispose()
     tag = os.environ.get("TAG", "")
     out = EVAL_DIR / "results"

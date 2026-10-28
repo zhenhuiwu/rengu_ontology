@@ -63,7 +63,7 @@ class _Model:
                 {
                     "name": obj.code,
                     "type": "primary",
-                    "expr": pk.backing_column if pk is not None and pk.backing_column else "id",
+                    "expr": (pk.backing_column or pk.source_column) if pk is not None else "id",
                 }
             ],
             "dimensions": [],
@@ -86,7 +86,7 @@ class _Model:
 
 
 def _prop_of(obj: ObjectType, col):
-    return next(p for p in obj.properties if p.backing_column == col.key)
+    return next(p for p in obj.properties if (p.backing_column or p.source_column) == col.key)
 
 
 def _filters(bound: BoundFormula, model: _Model, node) -> list[str]:
@@ -118,9 +118,13 @@ def _filters(bound: BoundFormula, model: _Model, node) -> list[str]:
 
 
 def _export_metric(
-    metric: dict, row: Metric, objects, ontology_id, models: dict, bindings=None
+    metric: dict, row: Metric, objects, ontology_id, models: dict, bindings=None, session=None
 ) -> list[dict]:
-    bound, _expression, temporal, _time_field, _conds = compile_metric(metric, objects, ontology_id, bindings)
+    bound, _expression, temporal, _time_field, _conds = compile_metric(
+        metric, objects, ontology_id, bindings, session
+    )
+    if temporal is None:
+        raise unavailable("语义层时间查询需要明确的时间字段")
     if getattr(bound.governed, "binding", None) is not None:
         raise unavailable(
             "该指标使用专用只读来源，可在指标页试算；当前语义层执行器尚不支持该来源",
@@ -198,7 +202,10 @@ async def export_metricflow(session, user: CurrentUser, *, ver=None) -> dict:
         try:
             metric = await metric_definition(session, row.code, user)
             bindings = await execution_bindings(session, objects, metric)
-            metrics += _export_metric(metric, row, objects, ontology_id, models, bindings)
+            from app.common.sql_guard import ensure_governed_tables
+
+            await ensure_governed_tables(session)
+            metrics += _export_metric(metric, row, objects, ontology_id, models, bindings, session)
         except (AppError, NotFound) as error:
             issues = (error.details or {}).get("issues") or [
                 {"reason": (error.details or {}).get("reason", error.code), "message": error.message}
@@ -208,10 +215,12 @@ async def export_metricflow(session, user: CurrentUser, *, ver=None) -> dict:
     for dim in await session.scalars(select(Dimension).order_by(Dimension.code)):
         model = next((m for m in models.values() if m.obj.id == dim.object_id), None)
         prop = next((p for p in model.obj.properties if p.api_name == dim.attr), None) if model else None
-        if prop is None or prop.is_sensitive or prop.visibility == "hidden" or not prop.backing_column:
+        if prop is None or prop.is_sensitive or prop.visibility == "hidden" or prop.transform:
             continue
-        if prop.backing_column in model.gov.table.c:
-            model.dimension(prop, model.gov.table.c[prop.backing_column], label=dim.display_name)
+        column = prop.backing_column or prop.source_column
+        binding = getattr(model.gov, "binding", None)
+        if column in model.gov.table.c and (binding is None or prop.api_name in binding.out) and (getattr(model.gov, "projection", None) is None or column in model.gov.projection):
+            model.dimension(prop, model.gov.table.c[column], label=dim.display_name)
     return {
         "semantic_models": [m.out for m in models.values()],
         "metrics": metrics,

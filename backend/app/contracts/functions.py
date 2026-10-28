@@ -15,10 +15,18 @@ def typed(value, annotation):
         node = ast.parse(annotation, mode="eval").body
     except (SyntaxError, ValueError):
         raise AppError("函数绑定类型不可校验", code="FUNCTION_TYPE_UNSUPPORTED", status_code=422) from None
+
     def matches(item, kind):
         if isinstance(kind, ast.Name):
-            types = {"str": str, "int": int, "float": (int, float), "bool": bool,
-                     "dict": dict, "list": list, "None": type(None)}
+            types = {
+                "str": str,
+                "int": int,
+                "float": (int, float),
+                "bool": bool,
+                "dict": dict,
+                "list": list,
+                "None": type(None),
+            }
             if kind.id == "Any":
                 return True
             if kind.id in types:
@@ -33,11 +41,13 @@ def typed(value, annotation):
             if name in ("list", "List"):
                 return isinstance(item, list) and all(matches(v, kind.slice) for v in item)
             if name in ("dict", "Dict") and isinstance(kind.slice, ast.Tuple) and len(kind.slice.elts) == 2:
-                return isinstance(item, dict) and all(matches(k, kind.slice.elts[0]) and
-                    matches(v, kind.slice.elts[1]) for k, v in item.items())
+                return isinstance(item, dict) and all(
+                    matches(k, kind.slice.elts[0]) and matches(v, kind.slice.elts[1]) for k, v in item.items()
+                )
             if name == "Optional":
                 return item is None or matches(item, kind.slice)
         raise AppError("函数绑定类型不在受控JSON类型中", code="FUNCTION_TYPE_UNSUPPORTED", status_code=422)
+
     if sum(1 for _ in ast.walk(node)) > 64:
         raise AppError("函数类型过于复杂", code="FUNCTION_TYPE_UNSUPPORTED", status_code=422)
     if not matches(value, node):
@@ -48,16 +58,25 @@ async def invoke_version(session, user, code: str, version: str, inputs: dict):
     check_func(user, "functions", "view")
     if not isinstance(code, str) or not isinstance(version, str) or not version or version == "current":
         raise AppError("函数调用必须绑定明确的已发布版本", code="FUNCTION_VERSION_REQUIRED", status_code=422)
-    record = (await session.execute(select(Function, FnVersion).join(
-        FnVersion, FnVersion.function_id == Function.id).where(
-        Function.code == code, FnVersion.ver == version).with_for_update(read=True))).one_or_none()
+    record = (
+        await session.execute(
+            select(Function, FnVersion)
+            .join(FnVersion, FnVersion.function_id == Function.id)
+            .where(Function.code == code, FnVersion.ver == version)
+            .with_for_update(read=True)
+        )
+    ).one_or_none()
     if record is None or record[0].status != "published":
         raise AppError("绑定函数或已发布版本不可用", code="FUNCTION_VERSION_UNAVAILABLE", status_code=409)
     snapshot = record[1].snapshot
     if not isinstance(snapshot, dict) or not {"name", "code", "timeoutS"} <= snapshot.keys():
         raise AppError("函数版本缺少可执行快照", code="FUNCTION_VERSION_UNAVAILABLE", status_code=409)
-    if (not isinstance(snapshot["name"], str) or not isinstance(snapshot["code"], str)
-            or type(snapshot["timeoutS"]) is not int or not 1 <= snapshot["timeoutS"] <= 120):
+    if (
+        not isinstance(snapshot["name"], str)
+        or not isinstance(snapshot["code"], str)
+        or type(snapshot["timeoutS"]) is not int
+        or not 1 <= snapshot["timeoutS"] <= 120
+    ):
         raise AppError("函数版本执行配置无效", code="FUNCTION_VERSION_UNAVAILABLE", status_code=409)
     declared, output = signature(snapshot["code"], snapshot["name"])
     for field in declared:

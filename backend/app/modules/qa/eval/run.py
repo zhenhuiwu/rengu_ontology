@@ -13,6 +13,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -44,6 +45,33 @@ def match(gold, pred) -> bool:
         else:
             return False
     return True
+
+
+def has_draft_notice(kind, snap, sql):
+    """Accept a visible affirmative notice, never a mention in SQL, the question or a title.
+
+    Canonical independent clauses avoid scoring '不是草稿口径' as an affirmative notice.
+    This checks disclosure only; the existing result comparison must also pass.
+    """
+    if kind != "answer" or not isinstance(sql, str) or not sql.strip():
+        return False
+    ans = snap.get("answer") or {}
+    if ans.get("card") == "clarify":
+        return False
+    texts = (ans.get("text"), (ans.get("basis") or {}).get("caliber"))
+    # Fail closed on explicit conflicting published-caliber statements anywhere visible.
+    if any(isinstance(value, str) and "已发布口径" in value for value in texts):
+        return False
+    return any(
+        clause.strip() in {"草稿口径", "本结果采用草稿口径"}
+        for value in texts
+        if isinstance(value, str)
+        and not re.search(
+            r"(?:不是|并非|未采用|不采用|没有采用|无需|无须|非)\s*[，,；;：:]?\s*(?:本结果采用)?草稿口径",
+            value,
+        )
+        for clause in re.split(r"[。；;，,\n]", value)
+    )
 
 
 async def eval_user_code(s) -> str:
@@ -94,23 +122,52 @@ async def one(eng, llm, q, sem):
             r["snap"] = {k: v for k, v in (ans or snap).items() if k != "table"}
             pred = [list(it.values()) for it in items]
             r["pred"] = pred[:5]
+            no_payload = not any(k in snap or k in ans for k in ("table", "action"))
             if exp_t == "clarify":
-                r["ok"] = kind == "answer" and "clarify" in ans and sql is None
+                r["ok"] = kind == "answer" and "clarify" in ans and sql is None and no_payload
             elif exp_t == "refuse":
-                r["ok"] = kind == "denied" and snap.get("code") == q.get("refuseCode")
+                r["ok"] = (
+                    kind == "denied"
+                    and snap.get("code") == q.get("refuseCode")
+                    and sql is None
+                    and "answer" not in snap
+                    and no_payload
+                )
                 r["anyRefuse"] = kind == "denied"
             elif "clarify" in ans:
-                r["ok"] = "orClarify" in (q.get("checks") or [])
+                r["ok"] = (
+                    kind == "answer" and sql is None and no_payload and "orClarify" in (q.get("checks") or [])
+                )
             elif exp_t == "answer" and q.get("goldSql"):
                 async with conn.begin_nested():
                     rows = (await conn.execute(text(q["goldSql"]))).fetchall()
-                g = chain._label_rows([[chain._cell(v) for v in row] for row in rows], DEFAULT_ONTOLOGY_ID)
+                g = chain._label_rows([[chain._cell(v) for v in row] for row in rows], DEFAULT_ONTOLOGY_ID, s)
                 r["gold"] = g[:5]
-                gnull = all(all(x is None for x in row) for row in g)
-                zero = pred and all(all(x in (None, 0) for x in row) for row in pred)
-                r["ok"] = bool(match(g, pred) or (kind == "empty" and (not g or gnull)) or (gnull and zero))
+                gnull = bool(g) and all(all(x is None for x in row) for row in g)
+                zero = (
+                    bool(pred)
+                    and len(pred) == len(g)
+                    and all(all(x in (None, 0) for x in row) for row in pred)
+                )
+                table_answer = (
+                    kind == "answer"
+                    and isinstance(ans.get("table"), dict)
+                    and "action" not in ans
+                    and "clarify" not in ans
+                    and "action" not in snap
+                    and "table" not in snap
+                )
+                empty_answer = kind == "empty" and "answer" not in snap and no_payload
+                r["ok"] = bool(
+                    (table_answer and (match(g, pred) or (gnull and zero)))
+                    or (empty_answer and (not g or gnull))
+                )
             else:
                 r["ok"] = False
+            if r["ok"] and "draftNotice" in (q.get("checks") or []):
+                r["ok"] = has_draft_notice(kind, snap, sql)
+                if not r["ok"]:
+                    r["checkFailure"] = "缺少明确的草稿口径提示"
         except AppError as e:
             r["err"] = e.code
             r["ok"] = exp_t == "refuse" and e.code == "SQL_REJECTED" and q.get("refuseCode") == "NOT_SELECT"
@@ -141,7 +198,7 @@ async def main(sel: str) -> None:
     async with get_sessionmaker()() as settings_session:
         llm = get_llm(await load_model_runtime(settings_session, "qa"))
     sem = asyncio.Semaphore(6)
-    res = await asyncio.gather(*(one(eng, llm, q, sem) for q in qs))
+    res = await asyncio.gather(*(one(eng, llm, question, sem) for question in qs))
     await eng.dispose()
     tag = os.environ.get("TAG", "")
     out = EVAL_DIR / "results"

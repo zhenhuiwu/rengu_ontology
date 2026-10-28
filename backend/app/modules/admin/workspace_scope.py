@@ -27,7 +27,8 @@ async def bind_admin_workspace(session: AsyncSession, raw: str | None) -> int:
     from app.modules.ontology.models import OntologyWorkspace
 
     ontology_id = parse_ontology_header(raw)
-    if await session.get(OntologyWorkspace, ontology_id) is None:
+    workspace = await session.get(OntologyWorkspace, ontology_id)
+    if workspace is None or workspace.deleted_at is not None:
         raise NotFound("本体工作空间不存在")
     await set_ontology_scope(session, ontology_id)
     return ontology_id

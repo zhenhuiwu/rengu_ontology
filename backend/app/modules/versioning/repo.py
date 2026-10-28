@@ -32,6 +32,9 @@ class ReleaseRepo(BaseRepository[OntologyRelease]):
     async def latest(self) -> OntologyRelease | None:
         return await self.session.scalar(self._ordered().limit(1))
 
+    async def formal(self) -> Sequence[OntologyRelease]:
+        return (await self.session.scalars(self._ordered().where(OntologyRelease.scope == "formal"))).all()
+
     async def page(self, page: PageParams) -> tuple[Sequence[OntologyRelease], int]:
         return await self.list_page(self._ordered(), page)
 

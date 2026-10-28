@@ -36,6 +36,12 @@ def is_cr_owner(cr: ChangeRequest, user: CurrentUser) -> bool:
     return owner_id == user.id if owner_id else cr.owner == user.name
 
 
+def direct_publish_enabled(user: CurrentUser) -> bool:
+    return bool(
+        user.ontology_role in ("owner", "editor") and user.func.get("releases") == "manage"
+    )
+
+
 def check_target(user: CurrentUser, kind: str, level: str = "manage") -> None:
     page = TARGET_PAGE.get(kind)
     if page is None:

@@ -149,6 +149,26 @@ class ItemsPutIn(ApiModel):
     lock_version: int | None = None
 
 
+class ApplyTargetIn(ApiModel):
+    kind: TargetKind
+    id: str | None = Field(None, min_length=1, max_length=64)
+    is_new: bool = False
+    name: str | None = Field(None, max_length=128)
+
+
+class ApplySectionIn(ApiModel):
+    section: str = Field(min_length=1, max_length=32)
+    rows: list[ItemIn] = Field(max_length=1000)
+
+
+class ApplyModelIn(ApiModel):
+    target: ApplyTargetIn
+    sections: list[ApplySectionIn] = Field(min_length=1, max_length=32)
+    title: str | None = Field(None, min_length=1, max_length=40)
+    note: str | None = None
+    lock_version: int = Field(ge=0)
+
+
 class ItemsPutOut(ApiModel):
     id: str
     changes: int

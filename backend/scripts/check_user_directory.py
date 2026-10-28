@@ -10,22 +10,28 @@ from unittest.mock import AsyncMock, Mock
 
 from app.common.auth import CurrentUser
 from app.core.errors import AppError
-from app.modules.admin.roles import sync_primary_role
 from app.modules.admin.models import UserStatus
+from app.modules.admin.roles import sync_primary_role
 from app.modules.admin.schemas import UserUpdateIn, department_name
 from app.modules.admin.service import UserService, department_options
 
 
 def session_with(members):
-    return SimpleNamespace(execute=AsyncMock(return_value=members), scalar=AsyncMock(return_value=0),
-                           delete=AsyncMock(), add=Mock())
+    return SimpleNamespace(
+        execute=AsyncMock(return_value=members),
+        scalar=AsyncMock(return_value=0),
+        delete=AsyncMock(),
+        add=Mock(),
+    )
 
 
 async def main():
     restricted = CurrentUser(id="operator", name="Operator", func={"users": "manage"})
     service = UserService(SimpleNamespace())
     try:
-        await service._new(name="N", account="n@example.com", dept="D", role="R", status=UserStatus.pending, actor=restricted)
+        await service._new(
+            name="N", account="n@example.com", dept="D", role="R", status=UserStatus.pending, actor=restricted
+        )
     except AppError as error:
         assert error.status_code == 403
     else:
@@ -39,19 +45,25 @@ async def main():
         raise AssertionError("Import did not require roles:manage")
     service.preview.assert_not_awaited()
     existing = SimpleNamespace(id=99, role="reader")
-    session = SimpleNamespace(scalar=AsyncMock(return_value=SimpleNamespace(id=2, name="modeler")), flush=AsyncMock())
+    session = SimpleNamespace(
+        scalar=AsyncMock(return_value=SimpleNamespace(id=2, name="modeler")), flush=AsyncMock()
+    )
     service = UserService(session)
     service._get = AsyncMock(return_value=existing)
     service.repo.update = AsyncMock(return_value=existing)
     try:
-        await service.update("U", UserUpdateIn(name="N", dept="D", role="modeler", status=UserStatus.active), restricted)
+        await service.update(
+            "U", UserUpdateIn(name="N", dept="D", role="modeler", status=UserStatus.active), restricted
+        )
     except AppError as error:
         assert error.status_code == 403
     else:
         raise AssertionError("Primary role change did not require roles:manage")
     service.repo.update.assert_not_awaited()
     session.scalar.return_value = SimpleNamespace(id=1, name="reader")
-    await service.update("U", UserUpdateIn(name="N", dept="D", role="reader", status=UserStatus.active), restricted)
+    await service.update(
+        "U", UserUpdateIn(name="N", dept="D", role="reader", status=UserStatus.active), restricted
+    )
     service.repo.update.assert_awaited_once()  # Ordinary profile edits remain available to user managers.
     old, extra = SimpleNamespace(role_id=1), SimpleNamespace(role_id=3)
     selected = SimpleNamespace(id=2, name="modeler")

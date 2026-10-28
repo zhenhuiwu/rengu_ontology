@@ -143,7 +143,12 @@ def ambiguous_dim_clarify(
 
 
 def bare_metric_clarify(
-    question: str, res: Resolution, metric_words: Iterable[str], options: list[str], *, has_default: bool = False
+    question: str,
+    res: Resolution,
+    metric_words: Iterable[str],
+    options: list[str],
+    *,
+    has_default: bool = False,
 ) -> dict | None:
     """说了指标，但没有时间、没有分组、没有点名取值、也没有疑问 / 聚合说法 → 反问看什么范围。"""
     if has_default:

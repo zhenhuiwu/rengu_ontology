@@ -57,6 +57,7 @@ def action_def(at: ActionType) -> dict[str, Any]:
         "sysId": at.system.code if at.system else None,
         "endpoint": at.endpoint,
         "idemKey": at.biz_key_template,
+        "httpMapping": at.http_mapping,
         "params": [
             {
                 "name": p.name,
@@ -143,7 +144,12 @@ class ActionTypesSection:
         types = await current_types(session)
         policies = await _policies(session, types, session.info.get(PENDING, {}).pop("policy", {}))
         await finish_versions(
-            session, "action", types, change_order_ids, ActionTypeVersion, "action_type_id",
+            session,
+            "action",
+            types,
+            change_order_ids,
+            ActionTypeVersion,
+            "action_type_id",
             lambda at: with_policy(action_def(at), policies.get(at.code)),
         )
         return {at.code: with_policy(action_def(at), policies.get(at.code)) for at in types}
@@ -163,7 +169,7 @@ async def retire_missing(session: AsyncSession, model: Any, keep: set[str], rele
         update(model)
         .where(model.code.not_in(keep) if keep else True, model.retired_release_id.is_(None))
         .values(retired_release_id=release_id)
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
 
 
@@ -227,6 +233,7 @@ async def restore_action_types(session: AsyncSession, content: dict[str, Any], r
         at.runners, at.approval = d.get("runners") or "", d.get("approval") or ""
         at.sys_id = systems.get(d["sysId"]) if d.get("sysId") else None
         at.endpoint, at.biz_key_template = d.get("endpoint") or "—", d.get("idemKey") or ""
+        at.http_mapping = d.get("httpMapping")
         at.retired_release_id = None
         session.add(at)
         await session.flush()

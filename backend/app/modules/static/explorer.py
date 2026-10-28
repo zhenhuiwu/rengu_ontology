@@ -326,7 +326,11 @@ class ExplorerService:
 
     def _table(self, code: str) -> GovernedTable | None:
         return next(
-            (g for g in governed_tables(require_ontology_id(self.session)).values() if g.object_type == code),
+            (
+                g
+                for g in governed_tables(require_ontology_id(self.session), self.session).values()
+                if g.object_type == code
+            ),
             None,
         )
 

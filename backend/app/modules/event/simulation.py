@@ -53,7 +53,7 @@ class SimulateOut(ApiModel):
 
 
 def sample_value(field: FieldOut) -> Any:
-    if field.type in ("整数", "金额", "百分比", "数值", "小数", "布尔"):
+    if field.type in ("整数", "金额", "百分比", "数值", "小数", "布尔", "对象", "数组"):
         try:
             return json.loads(field.sample)
         except (ValueError, TypeError):

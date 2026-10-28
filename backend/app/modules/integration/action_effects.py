@@ -30,8 +30,8 @@ from app.modules.integration.action_edits import (
     unavailable,
     value_source,
 )
-from app.modules.integration.adapters import get_adapter
-from app.modules.integration.models import ExtSystem
+from app.modules.integration.adapters import get_adapter, tls_verify
+from app.modules.integration.models import NO_AUTH, ExtSystem
 from app.modules.integration.signing import (
     SigningSecretInvalid,
     backoff,
@@ -70,7 +70,11 @@ async def external_binding(session, definition, target):
     if system is None:
         raise unavailable("副作用外部系统不存在")
     adapter = get_adapter(system, "effect")
-    if definition["id"] not in adapter.config.actions or not system.idempotent or system.idem_header.lower() != "idempotency-key":
+    if (
+        definition["id"] not in adapter.config.actions
+        or not system.idempotent
+        or system.idem_header.lower() != "idempotency-key"
+    ):
         raise unavailable("副作用要求显式动作授权及外部幂等支持")
     path = adapter.config.effect_paths.get(key)
     if not path:
@@ -89,6 +93,7 @@ async def prepare_effect(session, user, run, definition, effect):
     params = structured_params(run.params if run.params is not None else run.params_text)
     payload = {key: await value_source(session, user, source, params) for key, source in payload_spec.items()}
     from app.modules.functions.runtime import json_value
+
     json_value(payload)
     if effect["kind"] in ("通知", "Webhook"):
         if set(spec) != {"payload"}:
@@ -97,32 +102,47 @@ async def prepare_effect(session, user, run, definition, effect):
         return {"when": when, "payload": payload, "url": url}
     if effect["kind"] != "事件" or set(spec) != {"payload", "version", "object"}:
         raise unavailable("自定义事件须绑定版本、对象与载荷映射")
-    event = await session.scalar(select(EventType).where(EventType.code == effect["target"])
-                                .with_for_update(read=True))
-    if (event is None or event.retired_release_id is not None or event.status != TypeStatus.published
-            or event.version != spec["version"]):
+    event = await session.scalar(
+        select(EventType).where(EventType.code == effect["target"]).with_for_update(read=True)
+    )
+    if (
+        event is None
+        or event.retired_release_id is not None
+        or event.status != TypeStatus.published
+        or event.version != spec["version"]
+    ):
         raise unavailable("自定义事件绑定的已发布版本不可用")
     obj, governed = await object_binding(session, event.obj_kind)
     await object_operation(session, user, obj, definition)
     from app.modules.integration.action_edits import mapped_target
+
     code = mapped_target({}, {"target": spec["object"]}, run, definition, obj, params)
     await existing_row(session, user, obj, governed, code)
     validate_payload(event, payload)
     if set(payload) - {p.api for p in event.payload}:
         raise unavailable("自定义事件载荷包含未声明字段")
-    return {"when": when, "payload": payload, "objectType": event.obj_kind, "objectId": code,
-            "version": event.version}
+    return {
+        "when": when,
+        "payload": payload,
+        "objectType": event.obj_kind,
+        "objectId": code,
+        "version": event.version,
+    }
 
 
 async def local_effects(session, definition):
     """Effects executed locally; natural-language ones on an external-Webhook action are declared only."""
     from app.modules.integration.action_edits import declared_text, external_webhook
+
     effects = definition["writeback"]["effects"]
     if not await external_webhook(session, definition):
         return list(enumerate(effects))
-    return [(i, e) for i, e in enumerate(effects)
-            if (e.get("kind") == "事件" and str(e.get("target") or "").split(" ", 1)[0] in STANDARD)
-            or not declared_text(e.get("note"))]
+    return [
+        (i, e)
+        for i, e in enumerate(effects)
+        if (e.get("kind") == "事件" and str(e.get("target") or "").split(" ", 1)[0] in STANDARD)
+        or not declared_text(e.get("note"))
+    ]
 
 
 async def preflight_effects(session, user, run, definition):
@@ -141,18 +161,40 @@ async def retain_effects(session, user, run, definition, event_type):
         identity = "effect:" + hashlib.sha256(source.encode()).hexdigest()[:56]
         if effect["kind"] == "事件":
             previous = await session.scalar(select(Event).where(Event.code == identity))
-            await receive(session, IngressIn(event_id=identity, event_type=effect["target"],
-                occurred_at=previous.occurred_at if previous else clock.now(), source="action.effect",
-                object_type=data["objectType"], object_id=data["objectId"], payload=data["payload"], dedup_key=identity))
+            await receive(
+                session,
+                IngressIn(
+                    event_id=identity,
+                    event_type=effect["target"],
+                    occurred_at=previous.occurred_at if previous else clock.now(),
+                    source="action.effect",
+                    object_type=data["objectType"],
+                    object_id=data["objectId"],
+                    payload=data["payload"],
+                    dedup_key=identity,
+                ),
+            )
         elif not await session.scalar(select(OutboxEvent.id).where(OutboxEvent.event_id == identity)):
-            await emit(session, TOPIC, {"ontologyId": run.ontology_id, "runId": run.code,
-                "typeVersion": run.type_version, "actor": actor_of(user), "effect": effect, "data": data,
-                "state": "queued"}, event_id=identity)
+            await emit(
+                session,
+                TOPIC,
+                {
+                    "ontologyId": run.ontology_id,
+                    "runId": run.code,
+                    "typeVersion": run.type_version,
+                    "actor": actor_of(user),
+                    "effect": effect,
+                    "data": data,
+                    "state": "queued",
+                },
+                event_id=identity,
+            )
 
 
 async def recheck_effect(session, data: dict):
     """Recheck current authority and payload before every send; never replace retained values."""
     from app.modules.integration.action_edits import execution_definition, target_access
+
     run = await session.scalar(select(ActionRun).where(ActionRun.code == data["runId"]).with_for_update())
     user = await resolve_actor(session, data["actor"])
     definition = await execution_definition(session, run)
@@ -168,11 +210,20 @@ async def recheck_effect(session, data: dict):
     return run, system, adapter, url
 
 
+from app.jobs.scope import workspace_dispatch
+
+
+@workspace_dispatch
 async def dispatch_effect(effect_id, ontology_id: int):
     sessions = scoped_sessions(ontology_id)
     async with sessions() as session, session.begin():
-        row = await session.scalar(select(OutboxEvent).where(OutboxEvent.id == effect_id,
-            OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id)).with_for_update())
+        row = await session.scalar(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.id == effect_id, OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id)
+            )
+            .with_for_update()
+        )
         if row is None or row.topic != TOPIC or row.dispatched_at is not None:
             return
         if (row.attempts and row.last_error != RETRY_SCHEDULED) or row.available_at > clock.now():
@@ -180,6 +231,7 @@ async def dispatch_effect(effect_id, ontology_id: int):
         data = row.payload
         try:
             run, system, adapter, url = await recheck_effect(session, data)
+            verify = tls_verify()
             try:
                 secret = resolve_secret(adapter.config.signing_secret)
             except SigningSecretInvalid as exc:
@@ -194,19 +246,30 @@ async def dispatch_effect(effect_id, ontology_id: int):
         row.attempts, row.last_error = attempt, CLAIMED
         row.payload = {**data, "state": "unknown"}
         retries = retry_budget(system.max_retry)
-        key, payload = row.event_id, {"ontologyId": ontology_id, "actionRunId": run.code,
-                                      "effectId": row.event_id, "kind": data["effect"]["kind"],
-                                      "payload": data["data"]["payload"]}
+        key, payload = (
+            row.event_id,
+            {
+                "ontologyId": ontology_id,
+                "actionRunId": run.code,
+                "effectId": row.event_id,
+                "kind": data["effect"]["kind"],
+                "payload": data["data"]["payload"],
+            },
+        )
     body = encode_body(payload)
     headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
-    if adapter.config.token:
+    if system.auth_type != NO_AUTH and adapter.config.token:
         headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
     headers = signed_headers(headers, body, secret)
     state, error, receipt, status, retry_after = "unknown", "EXTERNAL_OUTCOME_UNKNOWN", None, None, None
     retryable, started, timer = False, clock.now(), time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=max(.1, min(system.timeout_ms / 1000, 60)),
-                                     follow_redirects=False, trust_env=False) as client:
+        async with httpx.AsyncClient(
+            timeout=max(0.1, min(system.timeout_ms / 1000, 60)),
+            follow_redirects=False,
+            trust_env=False,
+            verify=verify,
+        ) as client:
             response = await client.post(url, content=body, headers=headers)
         status = response.status_code
         if retryable_status(status):
@@ -216,6 +279,7 @@ async def dispatch_effect(effect_id, ontology_id: int):
             state, error = "failed", f"EXTERNAL_HTTP_{status}"
         elif len(response.content) <= 65_536:
             from app.modules.integration.execution import ExecutionResponse
+
             result = ExecutionResponse.model_validate(response.json())
             if result.status.value == "SUCCESS" and result.receipt_id and result.receipt_id.strip():
                 state, error, receipt = "succeeded", None, result.receipt_id
@@ -228,17 +292,36 @@ async def dispatch_effect(effect_id, ontology_id: int):
     elapsed = round((time.perf_counter() - timer) * 1000)
     async with sessions() as session, session.begin():
         row = await session.get(OutboxEvent, effect_id, with_for_update=True)
-        history = [*row.payload.get("attempts", []), {
-            "attempt": attempt, "at": started.isoformat(), "httpStatus": status, "error": error,
-            "retryable": retryable, "signed": secret is not None, "elapsedMs": elapsed}]
+        history = [
+            *row.payload.get("attempts", []),
+            {
+                "attempt": attempt,
+                "at": started.isoformat(),
+                "httpStatus": status,
+                "error": error,
+                "retryable": retryable,
+                "signed": secret is not None,
+                "elapsedMs": elapsed,
+            },
+        ]
         if retryable and attempt <= retries:
-            row.payload = {**row.payload, "state": "retrying", "httpStatus": status, "receiptId": None,
-                           "attempts": history}
+            row.payload = {
+                **row.payload,
+                "state": "retrying",
+                "httpStatus": status,
+                "receiptId": None,
+                "attempts": history,
+            }
             row.last_error = RETRY_SCHEDULED
             row.available_at = clock.now() + backoff(attempt, retry_after)
             return
-        row.payload = {**row.payload, "state": state, "httpStatus": status, "receiptId": receipt,
-                       "attempts": history}
+        row.payload = {
+            **row.payload,
+            "state": state,
+            "httpStatus": status,
+            "receiptId": receipt,
+            "attempts": history,
+        }
         row.last_error = error
         if state == "succeeded":
             row.dispatched_at = clock.now()
@@ -246,11 +329,20 @@ async def dispatch_effect(effect_id, ontology_id: int):
 
 async def dispatch_effects(ontology_id: int):
     async with scoped_sessions(ontology_id)() as session:
-        ids = list(await session.scalars(select(OutboxEvent.id).where(OutboxEvent.topic == TOPIC,
-            OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id),
-            or_(OutboxEvent.attempts == 0, OutboxEvent.last_error == RETRY_SCHEDULED),
-            OutboxEvent.dispatched_at.is_(None), OutboxEvent.available_at <= clock.now())
-            .order_by(OutboxEvent.id).limit(100)))
+        ids = list(
+            await session.scalars(
+                select(OutboxEvent.id)
+                .where(
+                    OutboxEvent.topic == TOPIC,
+                    OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id),
+                    or_(OutboxEvent.attempts == 0, OutboxEvent.last_error == RETRY_SCHEDULED),
+                    OutboxEvent.dispatched_at.is_(None),
+                    OutboxEvent.available_at <= clock.now(),
+                )
+                .order_by(OutboxEvent.id)
+                .limit(100)
+            )
+        )
     for identity in ids:
         try:
             await dispatch_effect(identity, ontology_id)

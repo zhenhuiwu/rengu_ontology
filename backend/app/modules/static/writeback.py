@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.ontology import require_ontology_id
@@ -69,6 +69,7 @@ class Ctx:
     by: str
     is_new: bool
     name: str | None = None  # cr_target.target_name（新建定义的显示名兜底）
+    final_checks: list[Callable[[], Awaitable[None]]] | None = None
 
 
 Hook = Callable[[Ctx, str, list[CrItem]], Awaitable[set[str]]]
@@ -105,6 +106,28 @@ def writeback_error(msg: str, **details: Any) -> AppError:
     return _bad(msg, **details)
 
 
+async def ensure_new_target_available(session, kind: str, code: str, api: str | None = None) -> None:
+    """Check new definition identities against current workspace before any writeback."""
+    from app.modules.action.models import ActionType
+    from app.modules.event.models import EventType
+
+    models = {
+        "object": (ObjectType, ObjectType.api_name), "link": (LinkType, LinkType.api_name),
+        "metric": (Metric, Metric.api_name), "dimension": (Dimension, Dimension.api_name),
+        "knowledge": (Knowledge, None), "action": (ActionType, ActionType.api),
+        "event": (EventType, EventType.api),
+    }
+    if kind not in models:
+        return
+    model, api_column = models[kind]
+    names = {code, *([api] if api else [])}
+    identity = [model.code.in_(names)]
+    if api_column is not None:
+        identity.append(api_column.in_(names))
+    if await session.scalar(select(model.id).where(model.ontology_id == require_ontology_id(session), or_(*identity)).limit(1)):
+        raise writeback_error("新建定义的编号或 API 名已存在", kind=kind, id=code)
+
+
 def _bad(msg: str, **details: Any) -> AppError:
     return AppError(msg, code="WRITEBACK_FAILED", status_code=409, details=details)
 
@@ -129,14 +152,20 @@ async def apply_crs(
     """依次写回各单（按单号升序）。返回没登记写回的「kind/section」（去重），写进发布事件。"""
     dirty: set[str] = session.info.setdefault(DIRTY, set())
     skipped: list[str] = []
+    final_checks: list[Callable[[], Awaitable[None]]] = []
+    action_owners: dict[str, int] = {}
     for cr in sorted(crs, key=lambda c: c.code):
-        new = {
-            (t.target_kind, t.target_id): (t.is_new, t.target_name)
-            for t in await session.scalars(select(CrTarget).where(CrTarget.cr_id == cr.id))
-        }
+        targets = list(await session.scalars(select(CrTarget).where(CrTarget.cr_id == cr.id)))
+        new = {(t.target_kind, t.target_id): (t.is_new, t.target_name) for t in targets}
         items = (
             await session.scalars(select(CrItem).where(CrItem.cr_id == cr.id).order_by(CrItem.seq, CrItem.id))
         ).all()
+        from app.db.dialects import get_adapter
+        for target in sorted((t for t in targets if t.is_new), key=lambda t: (t.target_kind, t.target_id)):
+            await get_adapter(session).xact_lock(session, f"static.cr.target.{target.target_kind}:{target.target_id}")
+            apis = [i.after for i in items if i.target_kind == target.target_kind and i.target_id == target.target_id
+                    and i.section == "def" and i.item_key == "api" and i.op != "delete" and isinstance(i.after, str)]
+            await ensure_new_target_available(session, target.target_kind, target.target_id, apis[-1] if apis else None)
         groups: dict[tuple[str, str, str], list[CrItem]] = {}
         for i in items:
             groups.setdefault((i.target_kind, i.target_id, i.section), []).append(i)
@@ -149,15 +178,21 @@ async def apply_crs(
             ),
         )
         for (kind, tid, sec), rows in ordered:
+            if kind == "action":
+                previous = action_owners.setdefault(tid, cr.id)
+                if previous != cr.id:
+                    raise writeback_error("同一动作不能由多张变更单同时修改", id=tid)
             hook = HOOKS.get((kind, sec))
             if hook is None:
                 if f"{kind}/{sec}" not in skipped:
                     skipped.append(f"{kind}/{sec}")
                 continue
             is_new, name = new.get((kind, tid), (False, None))
-            ctx = Ctx(session, cr, ver, now, by, is_new, name)
+            ctx = Ctx(session, cr, ver, now, by, is_new, name, final_checks)
             dirty |= await hook(ctx, tid, rows)
     await session.flush()
+    for check in final_checks:
+        await check()
     return skipped
 
 
@@ -627,7 +662,9 @@ async def metric_def(ctx: Ctx, tid: str, rows: list[CrItem]) -> set[str]:
                 try:
                     value = None if r.op == "delete" else default_range(val)
                 except ValueError:
-                    raise _bad("默认时间范围须为最近1至93天的明确配置", kind="metric", id=tid, field=k) from None
+                    raise _bad(
+                        "默认时间范围须为最近1至93天的明确配置", kind="metric", id=tid, field=k
+                    ) from None
                 m.def_rows = with_exec(m.def_rows, k, value)
                 continue
             # 时间字段 / 默认过滤：只存明确文本，执行含义由试算编译器校验，这里不猜也不改写。
@@ -1395,7 +1432,9 @@ async def restore_metrics(session: AsyncSession, content: dict[str, Any], *, rel
                 if key == "defaultRange" and key not in d["execDef"]:
                     continue  # Old snapshot has no evidence of this setting.
                 value = d["execDef"].get(key)
-                rows = with_exec(rows, key, value if key == "defaultRange" or isinstance(value, str) else None)
+                rows = with_exec(
+                    rows, key, value if key == "defaultRange" or isinstance(value, str) else None
+                )
             m.def_rows = rows
         for key in META_KEYS:
             # 同义词/说明：快照带该键才恢复（旧快照不带，保持现值）。

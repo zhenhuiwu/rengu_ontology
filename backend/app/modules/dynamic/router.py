@@ -345,10 +345,16 @@ async def _machine_out(run, detail: ActionRunDetail, svc: ActionService) -> dict
         "typeVersion": run.type_version,
         "checks": {"passed": True, "checked": len(at.conds)} if same else None,
         "edits": [
-            {"op": e.op.value, "obj": e.obj, "field": e.field,
-             **({"status": DECLARED} if external and declared_text(e.field) else {})}
+            {
+                "op": e.op.value,
+                "obj": e.obj,
+                "field": e.field,
+                **({"status": DECLARED} if external and declared_text(e.field) else {}),
+            }
             for e in at.edits
-        ] if same else None,
+        ]
+        if same
+        else None,
         "humanChecks": getattr(svc, "human_checks", None) or [],
         "retryable": detail.can.resubmit,
     }

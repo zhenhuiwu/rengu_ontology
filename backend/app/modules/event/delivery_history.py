@@ -10,6 +10,8 @@ RESULT_KEYS = (
     "hitId",
     "alertId",
     "status",
+    "evaluationMode",
+    "evaluatedAt",
     "actionStatus",
     "actionReason",
     "blockedByEventId",

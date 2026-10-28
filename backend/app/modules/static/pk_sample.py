@@ -14,7 +14,7 @@ SAMPLE_LIMIT = EXPORT_MAX
 def sample_result(values, *, truncated=False):
     if not values:
         return "警告", "授权样本为空，不能判断主键唯一性；未认证全源数据"
-    missing = sum(value is None or isinstance(value, str) and not value.strip() for value in values)
+    missing = sum(value is None or (isinstance(value, str) and not value.strip()) for value in values)
     counts = Counter(value for value in values if value is not None)
     duplicates = sum(count > 1 for count in counts.values())
     extent = f"当前授权样本{len(values)}条" + (f"（达到{SAMPLE_LIMIT}条上限）" if truncated else "")

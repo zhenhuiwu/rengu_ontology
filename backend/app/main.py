@@ -9,8 +9,8 @@ from app.core.errors import install_error_handlers
 from app.core.logging import setup_logging
 from app.core.request_id import RequestIdMiddleware
 from app.db.session import dispose_engine, get_sessionmaker
-from app.modules.data.secrets import check_secret_key
 from app.modules.admin.api_key_calls import ApiKeyCallsMiddleware
+from app.modules.data.secrets import check_secret_key
 from app.modules.qa.eval.job import recover_interrupted_runs
 from app.modules.versioning.sections import load_sections
 

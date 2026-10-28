@@ -53,20 +53,20 @@ class DashScopeLLM:
 
     async def generate_sql(self, prompt: list[dict[str, str]]) -> str:
         try:
-            r = await self._client.chat.completions.create(
+            response = await self._client.chat.completions.create(
                 model=self.model,
                 messages=prompt,
-                temperature=0,  # type: ignore[arg-type]
+                temperature=0,
             )
-        except APIStatusError as e:
-            raise QaLlmFailed(f"大模型返回 {e.status_code}") from None
-        except APIConnectionError as e:
-            raise QaLlmFailed(f"调用大模型失败：{type(e).__name__}") from None
+        except APIStatusError as error:
+            raise QaLlmFailed(f"大模型返回 {error.status_code}") from None
+        except APIConnectionError as error:
+            raise QaLlmFailed(f"调用大模型失败：{type(error).__name__}") from None
         except APIError:
             raise QaLlmFailed("大模型返回格式无法解析") from None
-        if not r.choices:
+        if not response.choices:
             raise QaLlmFailed("大模型返回格式无法解析")
-        return r.choices[0].message.content or ""
+        return response.choices[0].message.content or ""
 
 
 class FakeLLM:

@@ -66,6 +66,7 @@ class ActionTypeDetailOut(ActionTypeOut):
     system: str
     endpoint: str
     idem_key: str
+    http_mapping: dict[str, Any] | None = None
     timeout: str
     retry: str
     idempotent: bool
@@ -109,6 +110,7 @@ class WritebackConfigOut(ApiModel):
     sys_id: str | None = None
     endpoint: str
     idem_key: str
+    http_mapping: dict[str, Any] | None = None
 
 
 class FlowItemOut(ApiModel):

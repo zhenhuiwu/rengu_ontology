@@ -18,7 +18,7 @@ from app.modules.integration.action_effects import CLAIMED, RETRY_SCHEDULED, TOP
 async def visible_run(session, user, code):
     check_func(user, "action-center", "view")
     statement = await scoped_instances(
-        select(ActionRun).where(ActionRun.code == code), user, ActionRun.obj_kind, ActionRun.obj_id
+        session, select(ActionRun).where(ActionRun.code == code), user, ActionRun.obj_kind, ActionRun.obj_id
     )
     run = await session.scalar(statement)
     if run is None:

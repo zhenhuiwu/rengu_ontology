@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.repository import BaseRepository
 from app.core.clock import now
-from app.modules.admin.models import AuditLog, AuditResult, SysUser, UserStatus
+from app.modules.admin.models import AuditLog, AuditResult, SysRoleMember, SysUser, UserStatus
 
 
 def _new_code(at: datetime) -> str:
@@ -170,8 +170,9 @@ class SysUserRepository(BaseRepository[SysUser]):
     not_found_message = "用户不存在"
 
     def listed(self) -> Select[tuple[SysUser]]:
-        """用户列表里的人：有 role 的（ADMIN_USERS + 新建 / 导入）；SYS_USERS 占位人 role 为 null，不列出。"""
-        return self.base_query().where(SysUser.role.is_not(None))
+        """有主角色或实际角色成员关系的账号；无角色的占位人不列出。"""
+        member = select(SysRoleMember.id).where(SysRoleMember.user_id == SysUser.id).exists()
+        return self.base_query().where(or_(SysUser.role.is_not(None), member))
 
     def list_stmt(self, f: UserFilter) -> Select[tuple[SysUser]]:
         """顺序 = mock ADMIN_USERS 的数组顺序 = code 升序（U010231、U010238…），新用户编号更大排在后面。"""

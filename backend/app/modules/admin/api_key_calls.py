@@ -26,12 +26,16 @@ class ApiKeyCallsMiddleware:
                 route = getattr(scope.get("route"), "path", "unknown")
                 try:
                     async with get_sessionmaker()() as session, session.begin():
-                        session.add(ApiKeyCall(
-                            key_id=key_id, api=f"{scope['method']} {route}",
-                            ip=(scope.get("client") or ("",))[0], status_code=message["status"],
-                            duration_ms=max(0, round((perf_counter() - started) * 1000)),
-                            created_at=security_now(),
-                        ))
+                        session.add(
+                            ApiKeyCall(
+                                key_id=key_id,
+                                api=f"{scope['method']} {route}",
+                                ip=(scope.get("client") or ("",))[0],
+                                status_code=message["status"],
+                                duration_ms=max(0, round((perf_counter() - started) * 1000)),
+                                created_at=security_now(),
+                            )
+                        )
                 except Exception:
                     # No credential/header/SQL parameters are logged on telemetry failure.
                     logging.getLogger(__name__).error("API key call record unavailable; key_id=%s", key_id)

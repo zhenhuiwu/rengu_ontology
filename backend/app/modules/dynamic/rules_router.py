@@ -27,6 +27,7 @@ from app.modules.dynamic.rules_schemas import (
     LifecycleDraftIn,
     ReplayIn,
     RuleCreateIn,
+    RuleApplyIn,
     RuleDraftIn,
     RuleOpenDraftIn,
     ScenarioCreateIn,
@@ -190,6 +191,29 @@ async def save_rule_draft(svc: RuleSvc, rule_id: str, body: RuleDraftIn) -> dict
     return await svc.save_draft(rule_id, body)
 
 
+@router.put("/rules/{rule_id}:apply", dependencies=[*RULES_MANAGE, Depends(require_func("releases", "manage"))])
+async def apply_rule(svc: RuleSvc, session: SessionDep, user: CurrentUserDep, rule_id: str, body: RuleApplyIn) -> dict[str, Any]:
+    """Save and publish this rule atomically; never publish unrelated draft targets."""
+    from app.core.errors import AppError
+    from app.db.dialects import get_adapter
+    from app.modules.static.cr_write import CrWriteService
+    from app.modules.static.models import ChangeRequest
+    from app.modules.static.publish import PUBLISH_LOCK, PublishService
+
+    await get_adapter(session).xact_lock(session, PUBLISH_LOCK)
+    cr = await session.scalar(select(ChangeRequest).where(ChangeRequest.code == body.cr).with_for_update())
+    if cr is None:
+        raise NotFound("变更单不存在")
+    targets = await CrWriteService(session).targets(cr.id)
+    if len(targets) != 1 or targets[0].target_kind != "rule" or targets[0].target_id != rule_id:
+        raise AppError("该草稿包含其他定义，不能自动生效", code="CR_MULTIPLE_TARGETS", status_code=409)
+    saved = await svc.save_draft(rule_id, body)
+    version = await PublishService(session).publish(
+        user, None, lock_version=body.release_lock_version, draft_code=body.cr, save_mode=True
+    )
+    return {**saved, "ver": version}
+
+
 @router.get("/rules/{rule_id}/hits", dependencies=RULES_READ, response_model=DictPage)
 async def rule_hits(
     svc: RuleSvc,
@@ -256,6 +280,62 @@ async def replay_rule(svc: RuleSvc, rule_id: str, body: ReplayIn) -> dict[str, A
 @router.get("/rules/{rule_id}/versions", dependencies=RULES_VIEW)
 async def rule_versions(svc: RuleSvc, rule_id: str) -> list[dict[str, Any]]:
     return await svc.versions(rule_id)
+
+
+@router.get("/rules/{rule_id}/versions/{version}", dependencies=RULES_VIEW)
+async def rule_version_snapshot(svc: RuleSvc, rule_id: str, version: Annotated[int, Path(ge=1)]) -> dict[str, Any]:
+    return await svc.version_snapshot(rule_id, version)
+
+
+@router.post("/rules/{rule_id}/versions/{version}:restore", dependencies=[*RULES_MANAGE, Depends(require_func("releases", "manage"))])
+async def restore_rule_version(svc: RuleSvc, session: SessionDep, user: CurrentUserDep, rule_id: str, version: Annotated[int, Path(ge=1)], release_lock_version: Annotated[int, Query(alias="releaseLockVersion", ge=0)]) -> dict[str, Any]:
+    """Restore a verified snapshot through an isolated CR and append a new release."""
+    from app.common.auth import row_filter, resolve_user
+    from app.common.row_filter import is_deny_all
+    from app.db.dialects import get_adapter
+    from app.modules.dynamic.rule_editor import validate_definition
+    from app.modules.dynamic.rules_models import RuleDraft
+    from app.modules.dynamic.cr_link import CrLink, rule_sections
+    from app.modules.dynamic.rules_schemas import RuleDraftIn
+    from app.modules.qa.object_source import check_object_read
+    from app.modules.static.cr_write import CrWriteService
+    from app.modules.static.schemas import CRCreateIn
+    from app.modules.static.publish import PUBLISH_LOCK, PublishService
+    from app.core.errors import AppError
+
+    await get_adapter(session).xact_lock(session, PUBLISH_LOCK)
+    rule = await svc.get(rule_id)
+    if (await svc._drafts({rule.id})).get(rule.id):
+        raise AppError("规则有未完成的编辑，请先处理", code="RULE_DRAFT_EXISTS", status_code=409)
+    saved = await svc.version_snapshot(rule_id, version)
+    old = saved["definition"]
+    required = {"name", "desc", "owner", "core", "status", "objKind", "level", "output", "conds", "logic", "expr", "dedupe", "cooldown", "trigger", "autoStage"}
+    if not required <= old.keys() or not isinstance(old["trigger"], dict) or not isinstance(old["autoStage"], dict):
+        raise AppError("历史快照不完整，不能恢复", code="RULE_VERSION_SNAPSHOT_MISSING", status_code=409)
+    if old["status"] not in ("已发布", "已停用") or not isinstance(old["core"], bool):
+        raise AppError("历史规则状态不完整，不能恢复", code="RULE_VERSION_SNAPSHOT_MISSING", status_code=409)
+    actor_id = old["trigger"].get("runAsUserId")
+    if not isinstance(actor_id, str) or not actor_id:
+        raise AppError("历史执行身份缺失，不能恢复", code="RULE_ACTOR_UNAVAILABLE", status_code=409)
+    actor = await resolve_user(session, actor_id)
+    for principal in (user, actor):
+        check_object_read(principal)
+        if is_deny_all(await row_filter(principal, old["objKind"])):
+            raise AppError("用户或历史执行身份没有对象读取权限", code="RULE_ACTOR_UNAVAILABLE", status_code=403)
+    await validate_definition(session, actor, old)
+    current = svc._def(rule, await svc._actions())
+    cr = await CrWriteService(session).create(user, CRCreateIn(title=f"恢复规则 {rule_id} v{version}"[:40], reason=f"恢复 {saved['release']} 的规则快照", target=svc._target(rule)))
+    await svc._open(rule, cr)
+    body = RuleDraftIn.model_validate({"cr": cr, "autoStage": old["autoStage"], "conds": old["conds"], "logic": old["logic"], "expr": old["expr"], "objKind": old["objKind"], "trigger": old["trigger"], "dedupe": old["dedupe"], "cooldown": old["cooldown"]})
+    await svc.save_draft(rule_id, body)
+    draft = await session.scalar(select(RuleDraft).where(RuleDraft.rule_id == rule.id, RuleDraft.cr_code == cr))
+    assert draft is not None
+    draft.patch = {**draft.patch, **{key: old[key] for key in required}}
+    draft.change = f"恢复规则 v{version}（{saved['release']}）"
+    target = svc._target(rule)
+    await CrLink(session, user).put(cr, target, rule_sections(current, {**current, **draft.patch}), None)
+    release = await PublishService(session).publish(user, draft.change, lock_version=release_lock_version, draft_code=cr, save_mode=True)
+    return {"ver": release, "cr": cr, "restoredVersion": version}
 
 
 # ---------------- 情景推演（S1–S10） ----------------

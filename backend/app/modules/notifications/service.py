@@ -252,6 +252,10 @@ async def dispatch_subscriptions():
 
     count = 0
     for ontology_id in await workspace_ids():
-        async with scoped_sessions(ontology_id)() as session, session.begin():
-            count += await dispatch_workspace(session)
+        from app.common.ontology import WorkspaceInactive
+        try:
+            async with scoped_sessions(ontology_id)() as session, session.begin():
+                count += await dispatch_workspace(session)
+        except WorkspaceInactive:
+            continue
     return count

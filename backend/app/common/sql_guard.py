@@ -42,15 +42,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import sqlglot
-from sqlalchemy import event, exists, select, text
+from sqlalchemy import event, exists, select, text, true
 from sqlalchemy.dialects.postgresql import asyncpg as _pg_asyncpg
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement, FromClause
+from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.sql.util import ClauseAdapter
 from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
-from app.common.ontology import DEFAULT_ONTOLOGY_ID  # also registers the RLS after_begin hook first
+from app.common import ontology as _ontology  # noqa: F401 - registers the RLS after_begin hook first
 from app.core.errors import Forbidden
 
 DIALECT = "postgres"
@@ -233,6 +235,7 @@ def inject_row_filters(
     sql: str,
     filters: dict[str, Predicate | None],
     allowed: frozenset[str] = frozenset(),
+    projections: dict[str, frozenset[str]] | None = None,
 ) -> tuple[str, list[Any]]:
     """filters：受控表名 → 谓词 (sql, params)（None 不限制，DENY 拒绝全部）；allowed：不需要行级的表。
 
@@ -251,7 +254,8 @@ def inject_row_filters(
             _renumber(node, len(params), len(pred[1]))
             params.extend(pred[1])
             alias = table.alias_or_name
-            sub = exp.select("*").from_(exp.to_table(f"public.{name}")).where(node)
+            cols = (projections or {}).get(name)
+            sub = exp.select(*(exp.column(col) for col in sorted(cols)) if cols is not None else ["*"]).from_(exp.to_table(f"public.{name}")).where(node)
             table.replace(exp.Subquery(this=sub, alias=exp.TableAlias(this=exp.to_identifier(alias))))
         elif name in allowed:
             _pin_public(table)
@@ -288,7 +292,10 @@ class GovernedTable:
     links: dict[str, Any] = field(default_factory=dict)
     field_of_prop: dict[str, str] = field(default_factory=dict)
     inherit: InheritVia | None = None  # 设了就不用自己的 columns/links，权限按上级的 object_type 取
+    ontology_id: int | None = None
     value_alias: dict[str, Mapping[str, str]] = field(default_factory=dict)
+    write_columns: frozenset[str] | None = None
+    projection: frozenset[str] | None = None
 
     @property
     def name(self) -> str:
@@ -326,66 +333,91 @@ def register_unrestricted(*names: str) -> None:
         _UNRESTRICTED.add(n)
 
 
-# ontology_id -> (loaded_at, object type codes defined in that ontology). Physical tables are registered once
-# (they carry ontology_id + RLS); a workspace governs a table only when it defines the table's object type.
-_BOUND: dict[int, tuple[float, frozenset[str]]] = {}
-_BOUND_TTL = 30.0
+# Physical tables are registered once; workspace bindings are cached in the owning transaction.
 _BOUND_SQL = text("SELECT code FROM object_type WHERE ontology_id = :ontology_id")
+_BOUND_TTL = 30.0
+_BOUND_VERSION: dict[int, int] = {}
 
 
 def _valid_ontology(ontology_id: Any) -> bool:
     return type(ontology_id) is int and ontology_id > 0
 
 
-def _store_bound(ontology_id: int, codes: Any) -> None:
-    _BOUND[ontology_id] = (time.monotonic(), frozenset(codes))
+def _store_bound(session, ontology_id: int, codes: Any, version: int | None = None) -> None:
+    session.info["governed_binding"] = (
+        ontology_id,
+        frozenset(codes),
+        _BOUND_VERSION.get(ontology_id, 0) if version is None else version,
+        time.monotonic(),
+    )
 
 
-def _bound_stale(ontology_id: int) -> bool:
-    hit = _BOUND.get(ontology_id)
-    return hit is None or time.monotonic() - hit[0] > _BOUND_TTL
+def _invalidate_bound(session, oid: int) -> None:
+    _BOUND_VERSION[oid] = _BOUND_VERSION.get(oid, 0) + 1
+    session.info["governed_dirty"] = True
 
 
-def _resolve(codes: frozenset[str]) -> dict[str, GovernedTable]:
+def _bound_current(session, oid: int) -> bool:
+    hit = session.info.get("governed_binding")
+    return bool(
+        hit
+        and hit[0] == oid
+        and hit[2] == _BOUND_VERSION.get(oid, 0)
+        and time.monotonic() - hit[3] <= _BOUND_TTL
+    )
+
+
+def _resolve(codes: frozenset[str], ontology_id: int) -> dict[str, GovernedTable]:
     def bound(g: GovernedTable) -> bool:
         # Inherited tables (order_line → biz_order) carry no scope of their own: bound with their parent.
         return bound(g.inherit.parent) if g.inherit else g.object_type in codes
 
-    return {name: g for name, g in _GOVERNED.items() if bound(g)}
+    return {name: g for name, g in _GOVERNED.items() if bound(g) and (g.ontology_id is None or g.ontology_id == ontology_id)}
 
 
-def governed_tables(ontology_id: int | None = None) -> dict[str, GovernedTable]:
+def governed_tables(ontology_id: int | None = None, session: Any = None) -> dict[str, GovernedTable]:
     """Governed tables of one ontology workspace (no argument = the whole physical registry).
 
-    Resolved from the workspace's own object types (loaded per transaction by `load_governed_tables` /
-    the after_begin hook, refreshed on object_type flushes). Before anything is loaded the legacy rule
-    applies (workspace 1 = everything registered, others = none), so the result is never wider than before.
+    Scoped bindings belong to the caller's transaction. Missing or mismatched scope fails closed.
     """
     if ontology_id is None:
         return dict(_GOVERNED)
-    if not _valid_ontology(ontology_id):
+    if not _valid_ontology(ontology_id) or session is None or session.info.get("ontology_id") != ontology_id:
         return {}
-    hit = _BOUND.get(ontology_id)
-    if hit is None:
-        return dict(_GOVERNED) if ontology_id == DEFAULT_ONTOLOGY_ID else {}
-    return _resolve(hit[1])
+    if not _bound_current(session, ontology_id):
+        return {}
+    static = _resolve(session.info["governed_binding"][1], ontology_id)
+    dynamic = session.info.get("governed_dynamic", {})
+    dynamic_objects = session.info.get("governed_dynamic_blocked", set())
+    return {**{name: g for name, g in static.items() if g.object_type not in dynamic_objects and name not in dynamic}, **dynamic}
 
 
 async def load_governed_tables(session: Any, ontology_id: int | None = None) -> dict[str, GovernedTable]:
     """Reload the current (or given) workspace's object type codes and return its governed tables."""
     oid = ontology_id if ontology_id is not None else session.info.get("ontology_id")
-    if not _valid_ontology(oid):
+    if not _valid_ontology(oid) or oid != session.info.get("ontology_id"):
         return {}
+    version = _BOUND_VERSION.get(oid, 0)
     rows = await session.execute(_BOUND_SQL, {"ontology_id": oid})
-    _store_bound(oid, rows.scalars())
-    return governed_tables(oid)
+    _store_bound(session, oid, rows.scalars(), version)
+    from app.modules.data.governed_binding import load_bindings
+    session.info["governed_dynamic"], session.info["governed_dynamic_blocked"] = await load_bindings(session, oid)
+    return governed_tables(oid, session)
+
+
+async def ensure_governed_tables(session: Any) -> None:
+    oid = session.info.get("ontology_id")
+    if _valid_ontology(oid):
+        await load_governed_tables(session)
 
 
 @event.listens_for(Session, "after_begin")
 def _load_bound_on_begin(session, transaction, connection):
+    session.info["governed_connection"] = connection
     oid = session.info.get("ontology_id")
-    if _valid_ontology(oid) and _bound_stale(oid):
-        _store_bound(oid, connection.execute(_BOUND_SQL, {"ontology_id": oid}).scalars())
+    if _valid_ontology(oid):
+        version = _BOUND_VERSION.get(oid, 0)
+        _store_bound(session, oid, connection.execute(_BOUND_SQL, {"ontology_id": oid}).scalars(), version)
 
 
 @event.listens_for(Session, "after_flush")
@@ -395,7 +427,73 @@ def _reload_bound_on_object_type_change(session, flush_context):
         return
     changed = (*session.new, *session.dirty, *session.deleted)
     if any(getattr(o, "__tablename__", None) == "object_type" for o in changed):
-        _store_bound(oid, session.connection().execute(_BOUND_SQL, {"ontology_id": oid}).scalars())
+        _invalidate_bound(session, oid)
+        version = _BOUND_VERSION.get(oid, 0)
+        codes = session.connection().execute(_BOUND_SQL, {"ontology_id": oid}).scalars()
+        _store_bound(session, oid, codes, version)
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _reload_bound_on_bulk_change(state):
+    table = getattr(state.statement, "table", None)
+    oid = state.session.info.get("ontology_id")
+    statement = state.statement
+    text_write = (
+        isinstance(statement, TextClause)
+        and "object_type" in statement.text.lower()
+        and not (statement.text.lstrip().upper().startswith("SELECT"))
+    )
+    model_write = getattr(table, "name", None) == "object_type" and (
+        state.is_insert or state.is_update or state.is_delete
+    )
+    if _valid_ontology(oid) and (model_write or text_write):
+        result = state.invoke_statement()
+        _invalidate_bound(state.session, oid)
+        version = _BOUND_VERSION.get(oid, 0)
+        codes = state.session.connection().execute(_BOUND_SQL, {"ontology_id": oid}).scalars()
+        _store_bound(state.session, oid, codes, version)
+        return result
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _clear_bound_on_end(session, transaction):
+    if transaction.parent is None:
+        session.info.pop("governed_binding", None)
+        session.info.pop("governed_dynamic", None)
+        session.info.pop("governed_dynamic_blocked", None)
+        session.info.pop("governed_connection", None)
+        session.info.pop("governed_dirty", None)
+
+
+@event.listens_for(Session, "after_commit")
+def _invalidate_bound_on_commit(session):
+    oid = session.info.get("ontology_id")
+    if _valid_ontology(oid) and session.info.get("governed_dirty"):
+        current = _bound_current(session, oid)
+        _invalidate_bound(session, oid)
+        hit = session.info.get("governed_binding")
+        if current:
+            _store_bound(session, oid, hit[1])
+        else:
+            session.info.pop("governed_binding", None)
+
+
+@event.listens_for(Session, "after_soft_rollback")
+def _reload_bound_on_rollback(session, transaction):
+    oid = session.info.get("ontology_id")
+    if transaction.parent is not None and session.is_active and _valid_ontology(oid):
+        if session.info.get("governed_dirty"):
+            _invalidate_bound(session, oid)
+        connection = session.info.get("governed_connection")
+        if connection is None:
+            session.info.pop("governed_binding", None)
+            return
+        try:
+            version = _BOUND_VERSION.get(oid, 0)
+            codes = connection.execute(_BOUND_SQL, {"ontology_id": oid}).scalars()
+            _store_bound(session, oid, codes, version)
+        except InvalidRequestError:
+            session.info.pop("governed_binding", None)
 
 
 def unrestricted_tables() -> frozenset[str]:
@@ -409,9 +507,9 @@ def compile_predicate(g: GovernedTable, expr: dict | None, user_attrs: dict[str,
     """行级表达式 → 谓词 (sql, params)，占位符 $n（和 exec_driver_sql 一致）。None = 不限制。"""
     from app.common.row_filter import is_deny_all
 
-    if expr is None:
+    if expr is None and g.inherit is None:
         return None
-    if is_deny_all(expr):
+    if expr is not None and is_deny_all(expr):
         return DENY
     cond = _condition(g, expr, user_attrs)
     compiled = (
@@ -507,24 +605,30 @@ def effective_expr(object_type: str, roles: Sequence[RoleAccess]) -> dict | None
 _ALIAS_PREFIX = "_rf_"
 
 
-def _condition(g: GovernedTable, expr: dict, user_attrs: dict[str, Any]) -> ColumnElement[bool]:
+def _condition(g: GovernedTable, expr: dict | None, user_attrs: dict[str, Any]) -> ColumnElement[bool]:
     from app.common.row_filter import to_sql
 
     via = g.inherit
     if via is None:
-        return to_sql(expr, g.columns, user_attrs, g.links)
+        return true() if expr is None else to_sql(expr, g.columns, user_attrs, g.links)
     parent = via.parent
     alias = parent.table.alias(_ALIAS_PREFIX + parent.name)
     inner = ClauseAdapter(alias).traverse(_condition(parent, expr, user_attrs))
     key = alias.c[via.parent_key.key]
-    return exists(select(1).select_from(alias).where(key == via.local, inner))
+    conditions = [key == via.local, inner]
+    local_table = getattr(via.local, "table", None)
+    if local_table is not None and "ontology_id" in local_table.c and "ontology_id" in alias.c:
+        conditions.append(alias.c.ontology_id == local_table.c.ontology_id)
+    return exists(select(1).select_from(alias).where(*conditions))
 
 
-async def row_filters_for(user: Any) -> dict[str, Predicate | None]:
+async def row_filters_for(user: Any, session: Any = None) -> dict[str, Predicate | None]:
     from app.common.auth import row_filter
 
+    if session is not None:
+        await ensure_governed_tables(session)
     ontology_id = getattr(user, "ontology_id", None)
-    governed = governed_tables(ontology_id) if _valid_ontology(ontology_id) else {}
+    governed = governed_tables(ontology_id, session) if _valid_ontology(ontology_id) else {}
     if not governed:
         raise SqlRejected("当前本体工作空间尚未绑定可执行的受控数据源")
     out: dict[str, Predicate | None] = {}
@@ -535,12 +639,59 @@ async def row_filters_for(user: Any) -> dict[str, Predicate | None]:
     return out
 
 
-async def run_guarded(conn: Any, sql: str, user: Any, allowed: frozenset[str] = frozenset()) -> Any:
+async def run_guarded(
+    conn: Any, sql: str, user: Any, allowed: frozenset[str] = frozenset(), *, session: Any = None
+) -> Any:
     """校验 + 注入行级条件 + 执行。
 
     conn = 只读引擎的 AsyncConnection（`get_qa_readonly_engine().connect()`）。
     """
     if allowed or unrestricted_tables():
         raise SqlRejected("物理表必须登记工作空间绑定，不能绕过本体边界")
-    final, params = inject_row_filters(sql, await row_filters_for(user))
+    filters = await row_filters_for(user, session)
+    bound = governed_tables(getattr(user, "ontology_id", None), session)
+    tree = assert_single_select(sql)
+    for scope in traverse_scope(tree):
+        sources = {alias: source for alias, (_, source) in scope.selected_sources.items() if isinstance(source, exp.Table)}
+        for alias, source in sources.items():
+            child = bound.get(source.name)
+            if not child or not child.inherit or child.object_type != child.inherit.parent.object_type:
+                continue
+            parents = [a for a, t in sources.items() if t.name == child.inherit.parent.name]
+            if len(parents) != 1:
+                raise SqlRejected("补充表必须与唯一主表按配置关联")
+            expected = {(alias, child.inherit.local.key), (parents[0], child.inherit.parent_key.key)}
+            spec = (session.info.get("supplementary_bindings", {}).get(child.object_type) or ({}, None))[0]
+            visible = set(spec.get("fields", {}).values())
+            joins = scope.expression.args.get("joins") or []
+            valid = False
+            allowed_join_terms = set()
+            for join in joins:
+                terms, pending = [], [join.args.get("on")]
+                while pending:
+                    on = pending.pop()
+                    if isinstance(on, exp.Paren):
+                        pending.append(on.this)
+                    elif isinstance(on, exp.And):
+                        pending.extend((on.this, on.expression))
+                    else:
+                        terms.append(on)
+                for term in terms:
+                    if isinstance(term, exp.EQ) and isinstance(term.this, exp.Column) and isinstance(term.expression, exp.Column):
+                        if {(term.this.table, term.this.name), (term.expression.table, term.expression.name)} == expected:
+                            valid = True
+                            allowed_join_terms.add(id(term))
+            if not valid:
+                raise SqlRejected("补充表必须按已批准字段进行等值关联")
+            for column in scope.columns:
+                if column.table == alias and column.name == "ontology_id":
+                    raise SqlRejected("不能读取补充表系统字段")
+                if column.name == child.inherit.local.key and column.name not in visible and column.table in ("", alias):
+                    if not isinstance(column.parent, exp.EQ) or id(column.parent) not in allowed_join_terms:
+                        raise SqlRejected("关联字段仅可用于已批准的连接条件")
+            for star in scope.expression.selects:
+                if isinstance(star, exp.Star) or (isinstance(star, exp.Column) and isinstance(star.this, exp.Star) and star.table == alias):
+                    raise SqlRejected("补充表查询必须明确投影字段")
+    projections = {name: g.projection for name, g in bound.items() if g.projection is not None}
+    final, params = inject_row_filters(sql, filters, projections=projections)
     return await conn.exec_driver_sql(final, tuple(params))

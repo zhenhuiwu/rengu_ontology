@@ -264,7 +264,8 @@ def metric_detail(m: Metric) -> Obj:
 
     d["def"] = [
         {**row, "v": range_label(row.get("v"))} if row.get("k") == "默认时间范围" else dict(row)
-        for row in m.def_rows if isinstance(row, dict)
+        for row in m.def_rows
+        if isinstance(row, dict)
     ]
     # 执行口径（时间字段 / 默认过滤），定义表单按此回填，不解析展示行。
     from app.modules.static.metric_versions import exec_def

@@ -49,7 +49,7 @@ async def recent_rule_hits(
         statement = statement.where(RuleHit.rule_id.in_(rule_ids))
     from app.modules.dynamic.row_scope import scoped_instances
 
-    statement = await scoped_instances(statement, user, RuleHit.obj_kind, RuleHit.obj_id)
+    statement = await scoped_instances(session, statement, user, RuleHit.obj_kind, RuleHit.obj_id)
     rows = await session.execute(statement)
     return dict(rows.all())
 

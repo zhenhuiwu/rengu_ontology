@@ -95,7 +95,11 @@ async def definition(session, code: str, ctx: ViewContext, view: str, cr: str | 
                 continue
             if section in ("edits", "effects"):
                 entries = result["writeback"][section]
-                identity = (lambda row: f"{row.get('op')}:{row.get('obj')}") if section == "edits" else (lambda row: row.get("target"))
+                identity = (
+                    (lambda row: f"{row.get('op')}:{row.get('obj')}")
+                    if section == "edits"
+                    else (lambda row: row.get("target"))
+                )
                 matches = [i for i, row in enumerate(entries) if identity(row) == key]
                 if len(matches) > 1 or op not in ("add", "update", "delete"):
                     raise unavailable("操作草稿键或操作无效")
@@ -201,7 +205,9 @@ class DatabaseSubmissionChecker:
         if not isinstance(current, str) or not isinstance(target, str):
             raise Unavailable("生命周期校验缺少有权读取的真实当前状态或有效目标状态")
         repo = ReleaseRepo(self.session)
-        release = await repo.by_ver(action["_releaseVer"]) if action.get("_releaseVer") else await repo.latest()
+        release = (
+            await repo.by_ver(action["_releaseVer"]) if action.get("_releaseVer") else await repo.latest()
+        )
         snapshot = release.snapshot if release is not None else None
         if not isinstance(snapshot, dict):
             raise Unavailable("生命周期校验缺少绑定的真实发布快照")
@@ -232,9 +238,17 @@ class DatabaseSubmissionChecker:
         if not sources:
             return None
         humans = set(labels) - set(sources)
-        rows = (await self.session.execute(
-            select(SysRole.id, SysRole.code, SysRole.name).where(or_(SysRole.code.in_(humans), SysRole.name.in_(humans)))
-        )).all() if humans else []
+        rows = (
+            (
+                await self.session.execute(
+                    select(SysRole.id, SysRole.code, SysRole.name).where(
+                        or_(SysRole.code.in_(humans), SysRole.name.in_(humans))
+                    )
+                )
+            ).all()
+            if humans
+            else []
+        )
         if any(row.id in {bundle.role.id for bundle in bundles} for row in rows):
             return True, ""
         registered = {value for row in rows for value in (row.code, row.name)}
@@ -291,7 +305,17 @@ class DatabaseSubmissionChecker:
             valid_json([kind, code])
         except ValueError:
             return refs
-        g = next((g for g in governed_tables(require_ontology_id(self.session)).values() if g.object_type == kind and not g.inherit), None)
+        from app.common.sql_guard import ensure_governed_tables
+
+        await ensure_governed_tables(self.session)
+        g = next(
+            (
+                g
+                for g in governed_tables(require_ontology_id(self.session), self.session).values()
+                if g.object_type == kind and not g.inherit
+            ),
+            None,
+        )
         if g is None:
             return refs
         try:
@@ -314,19 +338,27 @@ class DatabaseSubmissionChecker:
                 )
             )
         expr = effective_expr(kind, roles)
+        if (
+            self.user.ontology_role == "owner" and self.user.ontology_ids is None
+            and not self.user.is_service_account and obj.created_by == self.user.id and g.projection is not None
+        ):
+            from app.common.auth import row_filter
+            expr = await row_filter(self.user, kind)
         if is_deny_all(expr):
             return refs
         from app.common.object_identity import identity_rows, property_column
 
-        columns = {p.api_name: column for p in obj.properties
-                   if (column := property_column(p, g)) is not None}
+        columns = {
+            p.api_name: column for p in obj.properties if (column := property_column(p, g)) is not None
+        }
         props = [p for p in obj.properties if p.api_name in columns]
         # Only declared, real non-sensitive bindings; no arbitrary table/field from an expression.
-        if "code" not in g.table.c or not props:
+        if "id" not in g.table.c or not props:
             return refs
         identities = identity_rows(g).subquery()
         stmt = select(*(columns[p.api_name].label(p.api_name) for p in props)).where(
-            g.table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == code)))
+            g.table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == code))
+        )
         if expr is not None:
             stmt = stmt.where(to_sql(expr, g.columns, self.user.attrs, g.links))
         rows = (await self.session.execute(stmt.limit(2))).mappings().all()
@@ -339,8 +371,12 @@ class DatabaseSubmissionChecker:
             if value is None or isinstance(value, str | int | float | bool):
                 fields = {prop.display_name, prop.api_name}
                 # Published conditions use 状态; bind only the governed physical status property.
-                if prop.api_name == "status" and columns[prop.api_name].name == "status" and not any(
-                    p.api_name != "status" and "状态" in (p.display_name, p.api_name) for p in props
+                if (
+                    prop.api_name == "status"
+                    and columns[prop.api_name].name == "status"
+                    and not any(
+                        p.api_name != "status" and "状态" in (p.display_name, p.api_name) for p in props
+                    )
                 ):
                     fields.add("状态")
                 for name in (obj.display_name, obj.api_name, "上下文对象"):
@@ -356,9 +392,14 @@ class DatabaseSubmissionChecker:
         try:
             params = structured_params(context.get("params"))
             from app.modules.integration.action_edits import resolved_params
+
             params = await resolved_params(self.session, self.user, action, params)
         except AppError as exc:
-            return {"passed": False, "checked": len(conds), "failed": [{"name": "参数计算", "fail": exc.message}]}
+            return {
+                "passed": False,
+                "checked": len(conds),
+                "failed": [{"name": "参数计算", "fail": exc.message}],
+            }
         except Unavailable as exc:
             return {"passed": False, "checked": len(conds), "failed": [{"name": "参数", "fail": str(exc)}]}
         if self.user.is_service_account:  # 服务账号不是 sys_user：用密钥鉴权解析出的绑定角色
@@ -368,8 +409,13 @@ class DatabaseSubmissionChecker:
             bundles, _ = await RoleService(self.session).effective_access(self.user.id)
         from app.modules.ontology.models import OntologyRoleBinding
 
-        bound_role_ids = set(await self.session.scalars(select(OntologyRoleBinding.role_id).where(
-            OntologyRoleBinding.ontology_id == require_ontology_id(self.session))))
+        bound_role_ids = set(
+            await self.session.scalars(
+                select(OntologyRoleBinding.role_id).where(
+                    OntologyRoleBinding.ontology_id == require_ontology_id(self.session)
+                )
+            )
+        )
         bundles = [bundle for bundle in bundles if bundle.role.id in bound_role_ids]
         # Only a declared alert-reference parameter can supply missing alert context.
         if not context.get("alertId"):
@@ -381,6 +427,7 @@ class DatabaseSubmissionChecker:
                 context = {**context, "alertId": values.pop()}
         refs = await self.context_references(action, context, bundles)
         from app.modules.integration.action_edits import explicit_target_params, external_webhook
+
         # 外部 Webhook 动作：无法机器校验的自然语言规则/条件转为确认人人工核对，不阻断暂存；
         # 可机器判定为不通过的仍阻断。其他动作保持“不可校验即失败”。
         human: list[dict[str, str]] | None = [] if await external_webhook(self.session, action) else None
@@ -416,10 +463,13 @@ class DatabaseSubmissionChecker:
                             raise Unavailable("告警引用不存在、不唯一或无当前处理权限")
                     else:
                         from app.modules.integration.action_edits import existing_row, object_binding
+
                         try:
                             obj, governed = await object_binding(self.session, label)
                             for identity in value if isinstance(value, list) else [value]:
-                                await existing_row(self.session, self.user, obj, governed, identity, lock=False)
+                                await existing_row(
+                                    self.session, self.user, obj, governed, identity, lock=False
+                                )
                         except AppError as exc:
                             raise Unavailable(exc.message) from None
                 if (
@@ -450,9 +500,15 @@ class DatabaseSubmissionChecker:
                 if choices is not None:
                     value = params[p["api"]]
                     if any(v not in choices for v in (value if isinstance(value, list) else [value])):
-                        failed.append({"name": name, "fail": "参数值不在已声明枚举集合：" + " / ".join(choices)})
+                        failed.append(
+                            {"name": name, "fail": "参数值不在已声明枚举集合：" + " / ".join(choices)}
+                        )
                     continue
-                lifecycle = re.fullmatch(r"必须是生命周期 v([1-9]\d{0,5}) 中的合法迁移", rule) if isinstance(rule, str) else None
+                lifecycle = (
+                    re.fullmatch(r"必须是生命周期 v([1-9]\d{0,5}) 中的合法迁移", rule)
+                    if isinstance(rule, str)
+                    else None
+                )
                 if lifecycle:
                     reason = await self.lifecycle_parameter(action, p, int(lifecycle[1]), refs)
                     if reason:
@@ -493,15 +549,23 @@ class DatabaseSubmissionChecker:
                 if human is None:
                     failed.append({"name": cond["name"], "fail": "条件不可校验：" + str(exc)})
                 else:
-                    human.append({"name": cond["name"], "rule": str(cond.get("expr") or ""), "reason": str(exc)})
+                    human.append(
+                        {"name": cond["name"], "rule": str(cond.get("expr") or ""), "reason": str(exc)}
+                    )
         if not failed and action.get("writeback"):
             from types import SimpleNamespace
 
             from app.modules.integration.action_edits import business_edits
             from app.modules.integration.action_effects import preflight_effects
-            run = SimpleNamespace(code=context.get("actionRunId", "DRY-RUN"),
-                obj_kind=context.get("objKind"), obj_id=context.get("objId"), params=params, params_text=None,
-                type_version=action.get("version"))
+
+            run = SimpleNamespace(
+                code=context.get("actionRunId", "DRY-RUN"),
+                obj_kind=context.get("objKind"),
+                obj_id=context.get("objId"),
+                params=params,
+                params_text=None,
+                type_version=action.get("version"),
+            )
             try:
                 await business_edits(self.session, self.user, run, action)
                 await preflight_effects(self.session, self.user, run, action)

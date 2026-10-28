@@ -115,6 +115,7 @@ class EventPayloadField(IdMixin, MutableTableMixin, Base):
     required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="接口 desc")
     sample: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    schema: Mapped[dict | None] = mapped_column(JsonType, nullable=True)
 
 
 class EventEnvelopeField(IdMixin, MutableTableMixin, Base):

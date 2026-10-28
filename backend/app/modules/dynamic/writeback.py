@@ -39,6 +39,8 @@ LC_SECTIONS = ("lc_states", "lc_transitions")
 _RULE_FIELDS = {
     "name": "name",
     "desc": "desc",
+    "owner": "owner",
+    "core": "core",
     "objKind": "obj_kind",
     "conds": "conds",
     "logic": "logic",
@@ -69,6 +71,17 @@ async def promote_rule(
     for k, col in _RULE_FIELDS.items():
         if k in d.patch:
             setattr(r, col, d.patch[k])
+    if "level" in d.patch:
+        from app.modules.dynamic.models import AlertLevel
+        from app.core.enums import from_api
+        r.level = from_api(AlertLevel, d.patch["level"])
+    if "output" in d.patch:
+        from app.modules.dynamic.rules_models import RuleOutput
+        from app.core.enums import from_api
+        r.output = from_api(RuleOutput, d.patch["output"])
+    if "status" in d.patch:
+        from app.core.enums import from_api
+        r.status = from_api(RuleStatus, d.patch["status"])
     if "trigger" in d.patch or "expr" in d.patch or "objKind" in d.patch:
         from app.common.auth import resolve_user
         from app.modules.dynamic.rule_editor import validate_definition
@@ -84,6 +97,8 @@ async def promote_rule(
         from app.modules.action.models import ActionType, TypeStatus
 
         stage = r.auto_stage or {}
+        if stage.get("executionMode", "confirm") not in ("confirm", "auto"):
+            raise _bad("规则动作执行方式无效", field="autoStage.executionMode")
         action = await session.scalar(select(ActionType).where(ActionType.code == stage.get("actionTypeId")))
         if stage.get("actionTypeId") and (
             action is None

@@ -18,6 +18,8 @@ class QualityCheck(CodeMixin, MutableTableMixin, Base):
     threshold: Mapped[str] = mapped_column(String(128), nullable=False)
     limit_value: Mapped[float] = mapped_column(Float, nullable=False)
     schedule: Mapped[str] = mapped_column(String(32), nullable=False)
+    field: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    format_rule: Mapped[str | None] = mapped_column(String(24), nullable=True)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
