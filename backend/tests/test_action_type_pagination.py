@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from sqlalchemy import event, select
 
-from app.core.clock import now
+from app.core.clock import local_now, now
 from app.modules.dynamic.models import ActionRun, ActionStatus
 from tests.dynamic_support import API, dyn  # noqa: F401
 
@@ -77,6 +77,7 @@ async def test_type_run_statistics_are_complete(dyn, client):  # noqa: F811
     pending = count((ActionStatus.staged, ActionStatus.approving, ActionStatus.executing))
     done = len(rows) - pending - count((ActionStatus.withdrawn,))
     ok = count((ActionStatus.succeeded, ActionStatus.reconciled))
+    assert stats.pop("asOf") == local_now().strftime("%Y-%m-%d %H:%M")
     assert stats == {
         "total": len(rows),
         "ok": ok,

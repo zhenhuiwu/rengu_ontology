@@ -7,7 +7,7 @@ import asyncpg
 import pytest
 from alembic import command
 
-from tests.helpers.migrations import db_state, temp_database
+from tests.helpers.migrations import db_state, skip_forward_only_downgrade, temp_database
 
 TAMPER = [
     # 模拟「旧版 0003 + 手工拆守卫回退」等偏离：残留门店两列、dims 带默认值、守卫缺失、模板列缺失
@@ -65,7 +65,14 @@ async def test_reconcile_converges_to_fresh_schema():
         finally:
             await conn.close()
         assert _shape(await db_state(dsn)) == _shape(fresh)
-        # 已对齐的库再跑一遍：降回 notify_0022 再升，结构不变（幂等）
+
+
+async def test_reconcile_schema_round_trip():
+    skip_forward_only_downgrade("notify_0022")
+    up = asyncio.to_thread
+    async with temp_database() as (cfg, dsn):
+        await up(command.upgrade, cfg, "head")
+        fresh = await db_state(dsn)
         await up(command.downgrade, cfg, "notify_0022")
         await up(command.upgrade, cfg, "head")
         assert _shape(await db_state(dsn)) == _shape(fresh)

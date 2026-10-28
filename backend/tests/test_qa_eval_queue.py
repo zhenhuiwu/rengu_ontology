@@ -256,6 +256,121 @@ async def test_recovery_fails_orphan_and_queue_job_without_losing_progress(durab
         await app.job_manager.unregister_worker(worker_id)
 
 
+def test_worker_daily_evaluation_requires_opt_in():
+    for enabled in (False, True):
+        app = worker.build_app(enable_daily=enabled)
+        names = {
+            name for name in app.tasks if not name.split(":")[-1].startswith("procrastinate.builtin_tasks.")
+        }
+        expected = {"qa.eval.run", "qa.eval.generate"}
+        periodic = {"qa.eval.generate"}
+        if enabled:
+            expected.add("qa.eval.daily")
+            periodic.add("qa.eval.daily")
+        assert names == expected
+        assert {name for name, _ in app.periodic_registry.periodic_tasks} == periodic
+
+
+async def test_worker_refuses_existing_daily_jobs_before_recovery(monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    @asynccontextmanager
+    async def opened():
+        yield
+
+    query = AsyncMock(return_value={"blocked": True})
+    recover = AsyncMock()
+    consume = AsyncMock()
+    monkeypatch.setattr(
+        worker,
+        "app",
+        SimpleNamespace(
+            open_async=opened,
+            connector=SimpleNamespace(execute_query_one_async=query),
+            run_worker_async=consume,
+        ),
+    )
+    monkeypatch.setattr(worker.job, "recover_interrupted_runs", recover)
+    monkeypatch.setattr(worker, "dispose_engine", AsyncMock())
+    with pytest.raises(RuntimeError, match=r"qa\.eval\.daily"):
+        await worker.main()
+    query.assert_awaited_once()
+    assert query.call_args.kwargs["query"].lstrip().startswith("SELECT EXISTS")
+    recover.assert_not_awaited()
+    consume.assert_not_awaited()
+
+
+async def test_daily_run_guard_checks_other_workspace_without_bypass(engine, monkeypatch):
+    import secrets
+
+    import asyncpg
+
+    from app.jobs import scope as job_scope
+    from tests.helpers.workspace import TEST_DB
+
+    assert engine.url.database == TEST_DB and TEST_DB.startswith(("rengu_test", "rengu_fix_"))
+    token = uuid4().hex[:12]
+    role, code = "qa_daily_" + token, "daily-" + token
+    password = secrets.token_urlsafe(24)
+    admin = await asyncpg.connect(engine.url.set(drivername="postgresql").render_as_string(False))
+    limited = None
+    ontology_id = None
+    created_role = False
+    try:
+        ddl = await admin.fetchval(
+            "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOBYPASSRLS NOINHERIT', "
+            "$1::text, $2::text)",
+            role,
+            password,
+        )
+        try:
+            await admin.execute(ddl)
+        except Exception as error:
+            raise RuntimeError(f"Private guard role setup failed: {type(error).__name__}") from None
+        created_role = True
+        await admin.execute(f'GRANT rengu_ontology_scoped TO "{role}"')
+        ontology_id = await admin.fetchval(
+            "INSERT INTO ontology_workspace(code,name) VALUES($1,$1) RETURNING id", code
+        )
+        await admin.execute(
+            "INSERT INTO qa_eval_run(ontology_id,code,trigger_label,scope,total,passed,status,operator,"
+            "execution_context) "
+            "VALUES($1,$2,'manual','all',0,0,'queued','test','{\"trigger\":\"daily\"}')",
+            ontology_id,
+            code,
+        )
+        limited = create_async_engine(engine.url.set(username=role, password=password))
+        async with limited.connect() as connection:
+            privileges = (
+                await connection.execute(
+                    text("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user")
+                )
+            ).one()
+            assert privileges == (False, False)
+            await connection.exec_driver_sql("SET LOCAL ROLE rengu_ontology_scoped")
+            assert (
+                await connection.scalar(
+                    text("SELECT count(*) FROM qa_eval_run WHERE code=:code"), {"code": code}
+                )
+                == 0
+            )
+        factory = async_sessionmaker(limited, expire_on_commit=False)
+        monkeypatch.setattr(job_scope, "get_sessionmaker", lambda: factory)
+        assert await worker.daily_run_pending() is True
+        assert await admin.fetchval("SELECT status FROM qa_eval_run WHERE code=$1", code) == "queued"
+    finally:
+        if limited is not None:
+            await limited.dispose()
+        if ontology_id is not None:
+            await admin.execute("DELETE FROM qa_eval_run WHERE ontology_id=$1", ontology_id)
+            await admin.execute("DELETE FROM ontology_workspace WHERE id=$1", ontology_id)
+        if created_role:
+            await admin.execute(f'DROP ROLE "{role}"')
+        await admin.close()
+
+
 async def test_fresh_worker_process_bootstraps_models_without_http_app(durable):
     script = """
 import asyncio, sys
@@ -267,10 +382,10 @@ configure_mappers()
 assert 'app.main' not in sys.modules
 names = {
     name for name in app.tasks
-    if not name.removeprefix('builtin:').startswith('procrastinate.builtin_tasks.')
+    if not name.split(':')[-1].startswith('procrastinate.builtin_tasks.')
 }
-assert names == {'qa.eval.run', 'qa.eval.generate', 'qa.eval.daily'}
-assert {k for k, _ in app.periodic_registry.periodic_tasks} == {'qa.eval.generate', 'qa.eval.daily'}
+assert names == {'qa.eval.run', 'qa.eval.generate'}
+assert {k for k, _ in app.periodic_registry.periodic_tasks} == {'qa.eval.generate'}
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 async def main():

@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import set_ontology_scope
 from app.core import clock
 from app.core.config import get_settings
 from app.modules.action.models import TypeStatus
@@ -195,6 +196,7 @@ async def test_event_ingress_real_concurrent_replay_and_dedup(engine, same_id):
     token = uuid4().hex[:16]
     type_code = f"ingress_{token}"
     async with AsyncSession(engine) as setup:
+        await set_ontology_scope(setup, 1)
         setup.add(event_type(type_code))
         await setup.commit()
     try:
@@ -204,6 +206,8 @@ async def test_event_ingress_real_concurrent_replay_and_dedup(engine, same_id):
             AsyncSession(bind=c1, expire_on_commit=False) as a,
             AsyncSession(bind=c2, expire_on_commit=False) as b,
         ):
+            await set_ontology_scope(a, 1)
+            await set_ontology_scope(b, 1)
             pid = await b.scalar(text("SELECT pg_backend_pid()"))
             await b.rollback()
             first_body = IngressIn.model_validate(body(eventId=f"{token}-1", eventType=type_code))
@@ -228,6 +232,7 @@ async def test_event_ingress_real_concurrent_replay_and_dedup(engine, same_id):
                 await a.rollback()
                 await b.rollback()
         async with AsyncSession(engine) as check:
+            await set_ontology_scope(check, 1)
             et_id = await check.scalar(select(EventType.id).where(EventType.code == type_code))
             assert await check.scalar(
                 select(func.count()).select_from(Event).where(Event.event_type_id == et_id)
@@ -240,6 +245,7 @@ async def test_event_ingress_real_concurrent_replay_and_dedup(engine, same_id):
             )
     finally:
         async with AsyncSession(engine) as cleanup:
+            await set_ontology_scope(cleanup, 1)
             et_id = await cleanup.scalar(select(EventType.id).where(EventType.code == type_code))
             await cleanup.execute(delete(Event).where(Event.event_type_id == et_id))
             await cleanup.execute(delete(EventType).where(EventType.id == et_id))
@@ -250,6 +256,7 @@ async def test_event_ingress_type_share_lock_and_atomic_rollback(engine):
     token = uuid4().hex[:16]
     code = f"ingress_{token}"
     async with AsyncSession(engine) as setup:
+        await set_ontology_scope(setup, 1)
         setup.add(event_type(code))
         await setup.commit()
     try:
@@ -259,6 +266,8 @@ async def test_event_ingress_type_share_lock_and_atomic_rollback(engine):
             AsyncSession(bind=c1, expire_on_commit=False) as publisher,
             AsyncSession(bind=c2, expire_on_commit=False) as receiver,
         ):
+            await set_ontology_scope(publisher, 1)
+            await set_ontology_scope(receiver, 1)
             pid = await receiver.scalar(text("SELECT pg_backend_pid()"))
             await receiver.rollback()
             et = await publisher.scalar(select(EventType).where(EventType.code == code))
@@ -308,6 +317,7 @@ async def test_event_ingress_type_share_lock_and_atomic_rollback(engine):
                 await publisher.rollback()
     finally:
         async with AsyncSession(engine) as cleanup:
+            await set_ontology_scope(cleanup, 1)
             et_id = await cleanup.scalar(select(EventType.id).where(EventType.code == code))
             await cleanup.execute(delete(Event).where(Event.event_type_id == et_id))
             await cleanup.execute(delete(EventType).where(EventType.id == et_id))

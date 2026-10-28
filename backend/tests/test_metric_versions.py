@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.modules.static.metric_versions import FIELDS, definition
-from app.modules.static.models import ChangeRequest, CrItem, CRStatus, Metric
+from app.modules.static.models import ChangeRequest, CrItem, CRStatus, Metric, ObjectType
 from app.modules.versioning.models import OntologyRelease
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
@@ -19,6 +19,7 @@ ADMIN = {"X-Demo-As": "U010001"}
 
 @pytest.fixture
 async def mv(session):
+    from app.modules.biz import governance  # noqa: F401  Register the real built-in order mapping.
     from app.modules.static.sections import BUILDERS
     from app.modules.versioning.sections import isolated_sections
 
@@ -26,6 +27,27 @@ async def mv(session):
         await run_seeds(session, ["admin", "versioning", "static"])
         await grant_fixture_roles(session)
         await bind_workspace_members(session)
+        # Leave the seeded metric and its demo execution semantics unchanged.
+        seed = await session.scalar(select(Metric).where(Metric.code == "gmv"))
+        order = await session.scalar(select(ObjectType).where(ObjectType.code == "order"))
+        assert seed is not None and order is not None
+        session.add(
+            Metric(
+                code="metric_version_fixture",
+                api_name="MetricVersionFixture",
+                display_name="版本专项指标",
+                metric_group="测试",
+                unit=seed.unit,
+                owner=seed.owner,
+                status=seed.status,
+                version=seed.version,
+                version_rows=deepcopy(seed.version_rows),
+                formula="COUNT(order)",
+                dims=deepcopy(seed.dims),
+                def_rows=[{"k": "时间字段", "v": "order.created_at"}],
+            )
+        )
+        await session.flush()
         # 本专项只发布自己创建的定义变更，既有已通过单子保持原记录但不混入本次。
         for row in await session.scalars(
             select(ChangeRequest).where(ChangeRequest.status == CRStatus.approved)
@@ -35,13 +57,13 @@ async def mv(session):
         yield session
 
 
-async def metric(session, code="gmv"):
+async def metric(session, code="metric_version_fixture"):
     return await session.scalar(
         select(Metric).where(Metric.code == code).execution_options(populate_existing=True)
     )
 
 
-async def create_cr(client, code="gmv", new=False):
+async def create_cr(client, code="metric_version_fixture", new=False):
     r = await client.post(
         P + "/change-requests",
         json={
@@ -56,7 +78,9 @@ async def create_cr(client, code="gmv", new=False):
     return r.json()["id"]
 
 
-async def edit(client, values, code="gmv", new=False):
+async def edit(client, values, code="metric_version_fixture", new=False):
+    if new:
+        values = {"timeField": "order.created_at", **values}
     cr = await create_cr(client, code, new)
     r = await client.put(
         P + f"/change-requests/{cr}/items",
@@ -75,6 +99,10 @@ async def edit(client, values, code="gmv", new=False):
 
 
 async def approve(client, cr):
+    validation = await client.post(P + f"/change-requests/{cr}:validate", headers=AUTHOR)
+    assert validation.status_code == 200, validation.text
+    checks = (await client.get(P + f"/change-requests/{cr}", headers=AUTHOR)).json()["detail"]["checks"]
+    assert next(row for row in checks if row["code"] == "V5")["result"] != "阻断", checks
     r = await client.post(P + f"/change-requests/{cr}:submit", headers=AUTHOR)
     assert r.status_code == 200, r.text
     r = await client.post(P + f"/change-requests/{cr}:approve", headers=ADMIN)
@@ -108,7 +136,8 @@ async def test_actual_versions_baseline_and_rollback_only_stages_cr(client, mv):
     first = await publish(
         client,
         await edit(
-            client, {"formula": "SUM(订单行.实付金额)", "unit": "元", "dims": ["门店"], "variants": variants}
+            client,
+            {"formula": "COUNT(order) * 2", "unit": "元", "dims": ["门店"], "variants": variants},
         ),
     )
     m = await metric(mv)
@@ -124,30 +153,26 @@ async def test_actual_versions_baseline_and_rollback_only_stages_cr(client, mv):
     assert m.version_rows[0]["definition"]["execDef"] == original["execDef"]
     assert m.version_rows[0]["definition"]["variants"] == variants
     await publish(
-        client, await edit(client, {"formula": "SUM(订单行.原价金额)", "dims": ["区域"], "variants": []})
+        client, await edit(client, {"formula": "COUNT(order) * 3", "dims": ["区域"], "variants": []})
     )
     m = await metric(mv)
     v2 = m.version
     assert int(v2[1:]) > int(v1[1:])
-    rows = (await client.get(P + "/metrics/gmv/versions", params={"size": 200}, headers=AUTHOR)).json()[
-        "items"
-    ]
+    rows = (
+        await client.get(P + "/metrics/metric_version_fixture/versions", params={"size": 200}, headers=AUTHOR)
+    ).json()["items"]
     assert len({row["ver"] for row in rows}) == len(rows)
     assert next(row for row in rows if row["ver"] == previous)["canRollback"] is True
     before = await state(mv)
     rollback = await client.post(
-        P + "/metrics/gmv:rollback",
+        P + "/metrics/metric_version_fixture:rollback",
         json={"toVersion": v1, "reason": "恢复真实已存口径", "reviewer": "王敏"},
         headers=AUTHOR,
     )
     assert rollback.status_code == 200, rollback.text
     assert await state(mv) == (*before[:-1], before[-1] + 1)  # 只新增CR，当前定义与发布版本完全不动。
     diff = {row["key"]: row["after"] for row in rollback.json()["items"]}
-    assert (
-        diff["formula"] == "SUM(订单行.实付金额)"
-        and diff["dims"] == ["门店"]
-        and diff["variants"] == variants
-    )
+    assert diff["formula"] == "COUNT(order) * 2" and diff["dims"] == ["门店"] and diff["variants"] == variants
     assert int(diff["version"][1:]) > int(v2[1:])
     await publish(client, rollback.json()["crId"])
     current = await metric(mv)
@@ -159,18 +184,28 @@ async def test_actual_versions_baseline_and_rollback_only_stages_cr(client, mv):
 
 async def test_legacy_metadata_is_not_a_rollback_definition(client, mv):
     before = await state(mv)
-    versions = (await client.get(P + "/metrics/gmv/versions", headers=AUTHOR)).json()["items"]
+    versions = (await client.get(P + "/metrics/metric_version_fixture/versions", headers=AUTHOR)).json()[
+        "items"
+    ]
     old = next(row for row in versions if row["ver"] != before[1])
     assert old["canRollback"] is False and old["rollbackUnavailable"] == "未保存该版本定义"
-    r = await client.post(P + "/metrics/gmv:rollback", json={"toVersion": old["ver"]}, headers=AUTHOR)
+    r = await client.post(
+        P + "/metrics/metric_version_fixture:rollback", json={"toVersion": old["ver"]}, headers=AUTHOR
+    )
     assert r.status_code == 409 and r.json()["code"] == "METRIC_VERSION_UNAVAILABLE"
     assert await state(mv) == before
 
 
 async def test_whole_rollback_restores_null_formula_and_real_dims(client, mv):
-    await publish(client, await edit(client, {"formula": None, "dims": ["门店"]}))
+    first = await edit(client, {"formula": None, "dims": ["门店"]})
+    validated = await client.post(P + f"/change-requests/{first}:validate", headers=AUTHOR)
+    assert validated.status_code == 200, validated.text
+    checks = (await client.get(P + f"/change-requests/{first}", headers=AUTHOR)).json()["detail"]["checks"]
+    v5 = next(row for row in checks if row["code"] == "V5")
+    assert v5["result"] == "警告" and "没有可执行的指标公式" in v5["note"]
+    await publish(client, first)
     prior = await state(mv)
-    second = await publish(client, await edit(client, {"formula": "后续公式", "dims": ["区域"]}))
+    second = await publish(client, await edit(client, {"formula": "COUNT(order) * 4", "dims": ["区域"]}))
     response = await client.post(P + f"/releases/{second['ver']}:rollback", json={}, headers=ADMIN)
     assert response.status_code == 201, response.text
     restored = await metric(mv)
@@ -183,7 +218,7 @@ async def test_whole_rollback_restores_null_formula_and_real_dims(client, mv):
 @pytest.mark.parametrize("invalid", ["v1", "version-long-invalid", ["v9"], 4, None])
 async def test_invalid_or_reused_version_publish_rolls_back(client, mv, invalid):
     original = await state(mv)
-    cr = await edit(client, {"formula": "不得落库的公式", "version": invalid})
+    cr = await edit(client, {"formula": "COUNT(order) * 5", "version": invalid})
     await approve(client, cr)
     r = await client.post(P + "/releases", json={}, headers=ADMIN)
     assert r.status_code == 409 and r.json()["code"] == "WRITEBACK_FAILED", r.text
@@ -196,9 +231,13 @@ async def test_invalid_or_reused_version_publish_rolls_back(client, mv, invalid)
 @pytest.mark.parametrize("values", [{"name": "x" * 65}, {"dims": [1]}, {"api": "OrderCount"}])
 async def test_invalid_definition_publish_is_atomic(client, mv, values):
     if "api" in values:
-        values = {"api": await mv.scalar(select(Metric.api_name).where(Metric.code != "gmv").limit(1))}
+        values = {
+            "api": await mv.scalar(
+                select(Metric.api_name).where(Metric.code != "metric_version_fixture").limit(1)
+            )
+        }
     original = await state(mv)
-    cr = await edit(client, {"formula": "不能部分发布", **values})
+    cr = await edit(client, {"formula": "COUNT(order) * 6", **values})
     await approve(client, cr)
     response = await client.post(P + "/releases", json={}, headers=ADMIN)
     assert response.status_code == 409 and response.json()["code"] == "WRITEBACK_FAILED", response.text
@@ -214,30 +253,36 @@ async def test_ambiguous_real_history_rejects_without_creating_cr(client, mv):
     ]
     await mv.commit()
     original = await state(mv)
-    versions = (await client.get(P + "/metrics/gmv/versions", headers=AUTHOR)).json()["items"]
+    versions = (await client.get(P + "/metrics/metric_version_fixture/versions", headers=AUTHOR)).json()[
+        "items"
+    ]
     assert next(row for row in versions if row["ver"] == "v1")["canRollback"] is False
-    response = await client.post(P + "/metrics/gmv:rollback", json={"toVersion": "v1"}, headers=AUTHOR)
+    response = await client.post(
+        P + "/metrics/metric_version_fixture:rollback", json={"toVersion": "v1"}, headers=AUTHOR
+    )
     assert response.status_code == 409 and response.json()["code"] == "METRIC_VERSION_AMBIGUOUS"
     assert await state(mv) == original
 
 
 async def test_join_lock_and_target_edit_conflict_keep_existing_draft(client, mv):
     previous = (await metric(mv)).version
-    await publish(client, await edit(client, {"formula": "SUM(真实字段)"}))
+    await publish(client, await edit(client, {"formula": "COUNT(order) * 7"}))
     cr = await create_cr(client)
     head = (await client.get(P + f"/change-requests/{cr}", headers=AUTHOR)).json()
     wrong = await client.post(
-        P + "/metrics/gmv:rollback",
+        P + "/metrics/metric_version_fixture:rollback",
         json={"toVersion": previous, "crId": cr, "lockVersion": head["lockVersion"] + 1},
         headers=AUTHOR,
     )
     assert wrong.status_code == 409 and wrong.json()["code"] == "VERSION_CONFLICT"
     empty = await client.post(
-        P + "/metrics/gmv:rollback", json={"toVersion": previous, "crId": cr}, headers=AUTHOR
+        P + "/metrics/metric_version_fixture:rollback",
+        json={"toVersion": previous, "crId": cr},
+        headers=AUTHOR,
     )
     assert empty.status_code == 422
     good = await client.post(
-        P + "/metrics/gmv:rollback",
+        P + "/metrics/metric_version_fixture:rollback",
         json={"toVersion": previous, "crId": cr, "lockVersion": head["lockVersion"]},
         headers=AUTHOR,
     )
@@ -251,7 +296,7 @@ async def test_join_lock_and_target_edit_conflict_keep_existing_draft(client, mv
         )
     )
     again = await client.post(
-        P + "/metrics/gmv:rollback",
+        P + "/metrics/metric_version_fixture:rollback",
         json={"toVersion": previous, "crId": cr, "lockVersion": saved_head["lockVersion"]},
         headers=AUTHOR,
     )
@@ -280,7 +325,7 @@ async def test_whole_release_rollback_keeps_real_ledger_for_recreated_metric(cli
             {
                 "name": "真实新指标",
                 "api": "MetricHistoryNew",
-                "formula": "真实原公式",
+                "formula": "COUNT(order) * 8",
                 "version": "v1",
                 "unit": "元",
             },
@@ -298,7 +343,7 @@ async def test_whole_release_rollback_keeps_real_ledger_for_recreated_metric(cli
             {
                 "name": "重建指标",
                 "api": "MetricHistoryNew",
-                "formula": "重建公式",
+                "formula": "COUNT(order) * 9",
                 "version": "v2",
                 "unit": "元",
             },
@@ -309,18 +354,23 @@ async def test_whole_release_rollback_keeps_real_ledger_for_recreated_metric(cli
     restored = await metric(mv, code)
     actual = [row for row in restored.version_rows if row.get("definition")]
     assert {row["ver"] for row in actual} == {"v1", "v2"}
-    assert next(row for row in actual if row["ver"] == "v1")["definition"]["formula"] == "真实原公式"
+    assert next(row for row in actual if row["ver"] == "v1")["definition"]["formula"] == "COUNT(order) * 8"
     planned = await client.post(
         P + f"/metrics/{code}:rollback", json={"toVersion": "v1", "reviewer": "王敏"}, headers=AUTHOR
     )
     assert planned.status_code == 200, planned.text
-    assert next(row for row in planned.json()["items"] if row["key"] == "formula")["after"] == "真实原公式"
+    assert (
+        next(row for row in planned.json()["items"] if row["key"] == "formula")["after"] == "COUNT(order) * 8"
+    )
 
 
 async def test_permissions_readonly_and_nul_path(client, mv):
     for query in ({"ver": "v2026.10.1"}, {"previewAs": "U010002"}):
         response = await client.post(
-            P + "/metrics/gmv:rollback", params=query, json={"toVersion": "v1"}, headers=AUTHOR
+            P + "/metrics/metric_version_fixture:rollback",
+            params=query,
+            json={"toVersion": "v1"},
+            headers=AUTHOR,
         )
         assert response.status_code == 403 and response.json()["code"] == "READONLY"
     invalid = await client.post(P + "/metrics/bad%00id:rollback", json={"toVersion": "v1"}, headers=AUTHOR)
@@ -330,5 +380,7 @@ async def test_permissions_readonly_and_nul_path(client, mv):
     role = await mv.scalar(select(SysRole).where(SysRole.code == "R-01"))
     role.func = {**role.func, "metrics": "view"}
     await mv.flush()
-    denied = await client.post(P + "/metrics/gmv:rollback", json={"toVersion": "v1"}, headers=ADMIN)
+    denied = await client.post(
+        P + "/metrics/metric_version_fixture:rollback", json={"toVersion": "v1"}, headers=ADMIN
+    )
     assert denied.status_code == 403 and denied.json()["code"] == "NO_PERMISSION"

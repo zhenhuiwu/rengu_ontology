@@ -215,10 +215,15 @@ def test_compile_one_hop_predicate():
 # ---- PDE must-fix 3：端到端（真库执行，带一跳 EXISTS 和绑定参数）----
 @pytest.fixture
 async def biz(session):
+    from app.common.sql_guard import load_governed_tables
+    from app.modules.static.sections import BUILDERS
+    from app.modules.versioning.sections import isolated_sections
     from app.seeds.loader import run_seeds
 
-    await run_seeds(session, ["admin", "biz"])
+    with isolated_sections(*BUILDERS):
+        await run_seeds(session, ["admin", "versioning", "static", "biz"])
     await session.flush()
+    await load_governed_tables(session)
     # 数据只在本事务里、表从没 analyze 过 → 规划器按 1 行估，多层 EXISTS 会退化成嵌套循环（跑几分钟）
     for t in ("store", "product", "biz_order", "order_line"):
         await session.execute(text(f"ANALYZE {t}"))
@@ -228,6 +233,7 @@ async def biz(session):
 class _U:
     def __init__(self, admin=False, attrs=None):
         self.id, self.name, self.is_ontology_admin, self.attrs = "U-T", "t", admin, attrs or {}
+        self.ontology_id = 1
 
 
 async def test_e2e_one_hop_exists_filters_orders(biz, conn, monkeypatch):
@@ -250,24 +256,27 @@ async def test_e2e_one_hop_exists_filters_orders(biz, conn, monkeypatch):
     monkeypatch.setattr(auth, "row_filter", scope)
     user = _U(attrs={"region": "华东"})
     q = "select count(*) from biz_order"
-    res = await run_guarded(conn, q, user)
+    res = await run_guarded(conn, q, user, session=biz)
     assert res.scalar() == expected
     # 同名 CTE 劫持不了谓词里的 store
     q2 = "with store as (select id, '华东'::text as big_region from biz_order) select count(*) from biz_order"
-    assert (await run_guarded(conn, q2, user)).scalar() == expected
+    assert (await run_guarded(conn, q2, user, session=biz)).scalar() == expected
     # 用户属性里塞 SQL 也只是参数值
     evil = _U(attrs={"region": "华东' OR '1'='1"})
-    assert (await run_guarded(conn, q, evil)).scalar() == 0
+    assert (await run_guarded(conn, q, evil, session=biz)).scalar() == 0
     # 没有该属性 → 什么都看不到
-    assert (await run_guarded(conn, q, _U())).scalar() == 0
-    filters = await row_filters_for(user)
-    assert filters["store"] == ("store.big_region = CAST($1 AS VARCHAR)", ["华东"])
+    assert (await run_guarded(conn, q, _U(), session=biz)).scalar() == 0
+    filters = await row_filters_for(user, session=biz)
+    assert filters["store"] == (
+        "(store.big_region = CAST($1 AS VARCHAR)) AND store.ontology_id = $2",
+        ["华东", 1],
+    )
 
 
 async def test_e2e_missing_role_grants_deny_without_admin_bypass(biz, conn):
     _gov()
-    assert (await run_guarded(conn, "select count(*) from store", _U(admin=False))).scalar() == 0
-    assert (await run_guarded(conn, "select count(*) from store", _U(admin=True))).scalar() == 0
+    assert (await run_guarded(conn, "select count(*) from store", _U(admin=False), session=biz)).scalar() == 0
+    assert (await run_guarded(conn, "select count(*) from store", _U(admin=True), session=biz)).scalar() == 0
 
 
 # ---- PDE must-fix 4：只读引擎 ----
@@ -397,7 +406,7 @@ async def test_e2e_order_line_inherits_region(biz, conn, monkeypatch):
     user = _U(attrs={"region": "华东"})
 
     async def q(sql, u=user):
-        return (await run_guarded(conn, sql, u)).scalar()
+        return (await run_guarded(conn, sql, u, session=biz)).scalar()
 
     # 不连 biz_order：只查订单行
     assert await q("select round(sum(qty * price), 2) from order_line") == east
@@ -543,7 +552,7 @@ def test_inject_product_pins_public_and_renumbers():
 
 async def test_e2e_product_category_scope(biz, conn, monkeypatch):
     async def q(sql, u=None):
-        return (await run_guarded(conn, sql, u or _U())).scalar()
+        return (await run_guarded(conn, sql, u or _U(), session=biz)).scalar()
 
     async def truth(*l1):
         return await biz.scalar(
@@ -598,7 +607,7 @@ async def test_e2e_product_category_scope(biz, conn, monkeypatch):
 
 async def test_e2e_order_store_name_scope(biz, conn, monkeypatch):
     async def q(sql, u=None):
-        return (await run_guarded(conn, sql, u or _U())).scalar()
+        return (await run_guarded(conn, sql, u or _U(), session=biz)).scalar()
 
     a, b = "无锡梁溪崇安寺店", "合肥政务区天鹅湖店"
     await biz.execute(text("UPDATE store SET big_region = '华南' WHERE name = :n"), {"n": b})
@@ -762,7 +771,7 @@ async def test_e2e_r05_alone_on_product_denies(biz, conn, monkeypatch):
     from app.common.sql_guard import RoleAccess
 
     async def q(sql):
-        return (await run_guarded(conn, sql, _U())).scalar()
+        return (await run_guarded(conn, sql, _U(), session=biz)).scalar()
 
     _scoped(monkeypatch, {"product": [RoleAccess(True, default_deny=True)]})
     assert await q("select count(*) from product") == 0
@@ -785,7 +794,7 @@ async def test_e2e_unmapped_scope_denies(biz, conn, monkeypatch):
     from app.common.sql_guard import RoleAccess
 
     async def q(sql):
-        return (await run_guarded(conn, sql, _U())).scalar()
+        return (await run_guarded(conn, sql, _U(), session=biz)).scalar()
 
     # 商品上配了没映射的属性 → product 拒绝
     _scoped(monkeypatch, {"product": [_sc("品牌", "光明")]})

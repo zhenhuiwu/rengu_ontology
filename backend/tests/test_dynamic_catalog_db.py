@@ -1,8 +1,10 @@
 """Request catalogs use current typed definitions and actual workspace members."""
 
+import pytest
 from sqlalchemy import func, select
 
 from app.common.auth import resolve_user
+from app.core.errors import AppError
 from app.main import app
 from app.modules.admin.models import SysUser, UserStatus
 from app.modules.dynamic.catalog import get_catalog
@@ -79,3 +81,37 @@ async def test_request_cannot_override_published_approver(runtime, client):  # n
     assert response.status_code == 422 and response.json()["code"] == "VALIDATION_FAILED", response.text
     assert "不能由请求覆盖" in response.text
     assert await session.scalar(select(func.count()).select_from(ActionRun)) == before
+
+
+@pytest.mark.parametrize(
+    "adapter_code,expected_code",
+    [
+        ("INTEGRATION_TLS_CONFIG_INVALID", "INTEGRATION_TLS_CONFIG_INVALID"),
+        ("INTEGRATION_NOT_CONFIGURED", "ACTION_EXECUTOR_UNAVAILABLE"),
+    ],
+)
+async def test_launch_preserves_safe_tls_configuration_error(
+    runtime,  # noqa: F811
+    monkeypatch,
+    adapter_code,
+    expected_code,
+):
+    from app.modules.dynamic import action_options
+
+    session, action, _ = runtime
+    action.system = ExtSystem(
+        code="OPS-TLS", name="测试TLS通道", timeout_ms=1000, status=ExtSystemStatus.ok, env="测试"
+    )
+    await session.flush()
+    user = await resolve_user(session, "U010001")
+    catalog = await get_catalog(session, user)
+
+    def unavailable(*args):
+        raise AppError("出站 HTTPS CA 文件不可用", code=adapter_code, status_code=503)
+
+    monkeypatch.setattr(action_options, "submit_adapter", unavailable)
+    with pytest.raises(AppError) as error:
+        await action_options.launch_definition(session, user, catalog, action.code)
+    assert (error.value.code, error.value.status_code) == (expected_code, 503)
+    if adapter_code == "INTEGRATION_TLS_CONFIG_INVALID":
+        assert error.value.message == "出站 HTTPS CA 文件不可用"

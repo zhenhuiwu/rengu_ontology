@@ -59,6 +59,7 @@ async def effect(runtime, monkeypatch):  # noqa: F811
     await session.flush()
     settings = SimpleNamespace(
         integration_real_connect=True,
+        integration_ca_file=None,
         integration_adapters=SecretStr(
             json.dumps({"1/FIX-EFFECT-SYS": {"actions": ["ops_local"], "effect_paths": {"hook": "/hook"}}})
         ),

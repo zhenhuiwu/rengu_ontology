@@ -245,10 +245,14 @@ async def test_build_section_from_tables(static_seeded):
     ctx = SeedContext(JSON, root=JSON.parent)
     for cls in (ObjectTypesSection, MetricsSection):
         built = await cls().build_section(static_seeded, None, ["CR-0011"])
+        expected = cls().seed_section("v2026.10.3", ctx)
         if cls is MetricsSection:
             assert all("versionRows" not in row for row in built.values()), "旧seed没有真实定义版本"
-            built = {code: without(row, "variants") for code, row in built.items()}
-        assert built == cls().seed_section("v2026.10.3", ctx), cls.section
+            assert all("defaultRange" not in row for row in expected.values()), "保留旧seed快照形状"
+            assert all(row["defaultRange"] is None for row in built.values()), "旧指标没有配置默认时间范围"
+            assert all(row["defaultRange"] == row["execDef"]["defaultRange"] for row in built.values())
+            built = {code: without(row, "variants", "defaultRange") for code, row in built.items()}
+        assert built == expected, cls.section
     base = {"x": {"keep": True}}
     assert await ObjectTypesSection().build_section(static_seeded, base, []) == base
 
@@ -421,7 +425,7 @@ async def test_metrics(client, static_seeded):
     from app.modules.static.seeds import seed_metric_variants
 
     variants = seed_metric_variants(METRIC_LIST)
-    expected = [{**m, "variants": variants.get(m["id"], [])} for m in METRIC_LIST]
+    expected = [{**m, "variants": variants.get(m["id"], []), "defaultRange": None} for m in METRIC_LIST]
     body = await get(client, "/metrics")
     assert body["size"] == 10 and body["items"] == expected[:10]
     assert await get_all(client, "/metrics?group=销售") == [m for m in expected if m["group"] == "销售"]
@@ -437,6 +441,7 @@ async def test_metrics(client, static_seeded):
     from app.modules.static.metric_versions import exec_def
 
     assert d["execDef"] == exec_def(load("METRIC_DEF.json"))
+    assert d["defaultRange"] is None and d["defaultRange"] == d["execDef"]["defaultRange"]
     stat = next(m for m in load("METRICS.json") if m["id"] == "gmv")
     assert d["formula"] == stat["formula"] and d["dimNames"] == stat["dims"] and d["value"] == stat["value"]
 

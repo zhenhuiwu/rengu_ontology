@@ -24,8 +24,11 @@ ADMIN = {"X-Demo-As": "U010245"}
 
 async def key(client, scopes, binding=None, **extra):
     payload = {
-        "name": "k-" + uuid4().hex[:8], "env": "测试", "scopes": scopes,
-        "binding": binding or {"kind": "用户", "userId": "U010001"}, **extra,
+        "name": "k-" + uuid4().hex[:8],
+        "env": "测试",
+        "scopes": scopes,
+        "binding": binding or {"kind": "用户", "userId": "U010001"},
+        **extra,
     }
     owner = {"X-Demo-As": "U010001"} if binding is None else ADMIN  # 用户密钥只能本人创建
     response = await client.post("/api/admin/v1/api-keys", json=payload, headers=owner)
@@ -76,7 +79,8 @@ async def test_machine_execute_scope_and_action_allowlist(runtime, client):  # n
     dry_only = await key(client, ["actions:dry-run"])
     assert (await execute(client, dry_only)).status_code == 403
     no_idem = await client.post(
-        f"{API}/machine/actions/ops_local:execute", json={"objId": "OPS-S00"},
+        f"{API}/machine/actions/ops_local:execute",
+        json={"objId": "OPS-S00"},
         headers={**other, "X-Ontology-Id": "1"},
     )
     assert no_idem.status_code in (403, 422)

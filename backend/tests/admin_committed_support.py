@@ -1,5 +1,7 @@
 """Committed test-only approval sources for the production independent read-only counter."""
 
+import os
+
 import pytest
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +12,8 @@ from tests.helpers.workspace import TEST_DB
 
 @pytest.fixture
 async def committed_approval_rows(engine):
-    assert engine.url.database == TEST_DB == "rengu_fix_admin_20261027"
+    assert engine.url.database == TEST_DB == os.environ.get("RENGU_TEST_DB")
+    assert TEST_DB.startswith(("rengu_test", "rengu_fix_"))
     recorded = []
 
     async def commit(*rows):

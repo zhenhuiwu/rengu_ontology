@@ -3,9 +3,11 @@
 用一张只在测试里存在的表 widget（独立 metadata，不进迁移），在事务里建表、结束回滚。
 """
 
+import os
 from datetime import datetime
 
 import pytest
+from fastapi import Request
 from sqlalchemy import ForeignKey, MetaData, String, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -65,7 +67,18 @@ class WidgetRepo(BaseRepository[Widget]):
 
 @pytest.fixture
 async def repo(session, conn):
+    database = conn.engine.url.database
+    assert database == os.environ["RENGU_TEST_DB"] and database.startswith(("rengu_test_", "rengu_fix_"))
     await conn.run_sync(_TBase.metadata.create_all)
+    # These transaction-local fixture tables were created after the migration's scoped-role grants.
+    from app.common.ontology import RUNTIME_ROLE
+
+    await conn.exec_driver_sql(
+        f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.widget, public.widget_part TO {RUNTIME_ROLE}"
+    )
+    await conn.exec_driver_sql(
+        f"GRANT USAGE, SELECT ON SEQUENCE public.widget_id_seq, public.widget_part_id_seq TO {RUNTIME_ROLE}"
+    )
     return WidgetRepo(session)
 
 
@@ -492,25 +505,32 @@ def test_state_machine():
 
 
 # ---- 团队决定：身份 / 租户 / 预览 / 测试连接 / 任务 / 行级注入 ----
+def _auth_request():
+    # A new HTTP request has its own identity cache for every direct dependency invocation.
+    return Request({"type": "http", "method": "GET", "path": "/__test/me", "headers": []})
+
+
 async def test_demo_as_and_tenant_header(users):
     """X-Demo-As / RENGU_DEV_USER 传用户编号（sys_user.code），按编号解析出姓名。"""
     from app.common.auth import get_current_user
     from app.core.config import get_settings
     from app.core.errors import Unauthorized
+    from tests.function_access_support import grant_fixture_roles
 
-    u = await get_current_user(users, x_demo_as="U010231", x_tenant_id="t1")
+    await grant_fixture_roles(users, {"U010001": "R-01"})
+    u = await get_current_user(users, _auth_request(), x_demo_as="U010231", x_tenant_id="t1")
     assert (u.id, u.name, u.tenant_id, u.is_ontology_admin) == ("U010231", "苏刚", "t1", False)
-    me = await get_current_user(users)
+    me = await get_current_user(users, _auth_request())
     assert (
         (me.id, me.name, me.is_ontology_admin)
         == (get_settings().dev_user, "王敏", True)
         == ("U010001", "王敏", True)
     )
-    li = await get_current_user(users, x_demo_as="U010006")
+    li = await get_current_user(users, _auth_request(), x_demo_as="U010006")
     assert (li.name, li.is_ontology_admin) == ("李娜", False)
     for bad in ("王敏", "U999999"):  # 传姓名 / 不存在的编号 → 401
         with pytest.raises(Unauthorized):
-            await get_current_user(users, x_demo_as=bad)
+            await get_current_user(users, _auth_request(), x_demo_as=bad)
 
 
 async def test_demo_as_header_over_http(client, users):
@@ -547,7 +567,7 @@ async def test_prod_ignores_demo_as(client, users, monkeypatch):
     try:
         assert get_settings().env == "prod"
         with pytest.raises(Unauthorized):
-            await get_current_user(users, x_demo_as="U010001")
+            await get_current_user(users, _auth_request(), x_demo_as="U010001")
         for h in ({"X-Demo-As": "U010001"}, {}):
             r = await client.get("/__test/me", headers=h)
             assert (r.status_code, r.json()["code"]) == (401, "UNAUTHORIZED")
@@ -577,7 +597,7 @@ async def test_seed_personas_and_unique_names(users, session, monkeypatch):
         ("U010231", "苏刚"),
     )
     for code, name in people:  # 苏刚（?previewAs= 默认预览对象）来自 ADMIN_USERS.json
-        u = await get_current_user(users, x_demo_as=code)
+        u = await get_current_user(users, _auth_request(), x_demo_as=code)
         assert (u.name, u.is_ontology_admin) == (name, False)
     # alert_assignable 不由 admin seed 写（动态的 seed 按姓名回填）
     assert await users.scalar(select(func.count()).where(SysUser.alert_assignable.is_not(None))) == 0
@@ -648,6 +668,7 @@ def test_job_stubs_registered():
         "outbox.dispatch",
         "release.after_commit",
         "action.reconcile",
+        "action.dispatch",
         "export.run",
         "admin.expire_api_keys",
         "admin.cleanup_audit",
@@ -655,6 +676,7 @@ def test_job_stubs_registered():
     assert EXTRA_RECONCILE_ROUNDS == 3
     by = {j.name: j for j in JOBS}
     assert by["action.reconcile"].cron == "*/15 * * * *" and by["action.reconcile"].owner == "integration"
+    assert by["action.dispatch"].cron == "* * * * *" and by["action.dispatch"].owner == "integration"
     assert not by["admin.cleanup_audit"].enabled and by["admin.cleanup_audit"].cron is None
 
 
@@ -675,10 +697,12 @@ async def test_apply_row_filter_injection(monkeypatch, users):
 
     import app.common.auth as auth
     from app.common.row_filter import DENY_ALL, apply_row_filter
+    from tests.function_access_support import grant_fixture_roles
 
-    user = await auth.get_current_user(users)  # 王敏，本体管理员
+    await grant_fixture_roles(users, {"U010001": "R-01"})
+    user = await auth.get_current_user(users, _auth_request())  # 王敏，本体管理员
     stmt = select(Widget)
-    viewer = await auth.get_current_user(users, x_demo_as="U010006")  # 李娜
+    viewer = await auth.get_current_user(users, _auth_request(), x_demo_as="U010006")  # 李娜
     for actor in (user, viewer):
         assert await auth.row_filter(actor, "widget") == DENY_ALL
         denied = await apply_row_filter(stmt, actor, "widget", {})

@@ -5,12 +5,15 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.core.clock import now
+from app.modules.biz.models import Store
 from app.modules.dynamic.rules_models import HitResult, Rule, RuleHit
 from tests.dynamic_support import API, dyn  # noqa: F401
 
 
 async def test_rule_hits_rolling_window_and_future(dyn, client, monkeypatch):  # noqa: F811
     rule = await dyn.scalar(select(Rule).where(Rule.code == "R-007"))
+    store = await dyn.scalar(select(Store).order_by(Store.id).limit(1))
+    assert store is not None
     rule.weekly = 999999  # 定义历史统计不能冒充当前近7天。
     records = [
         ("CURRENT", now()),
@@ -27,8 +30,8 @@ async def test_rule_hits_rolling_window_and_future(dyn, client, monkeypatch):  #
                 seq=-10 + i,
                 at=at,
                 obj_kind="store",
-                obj_id="store",
-                obj_label="Store",
+                obj_id=store.code,
+                obj_label=store.name,
                 dims=[],
                 value="1",
                 threshold="0",
@@ -53,6 +56,9 @@ async def test_rule_hits_rolling_window_and_future(dyn, client, monkeypatch):  #
     listed = (await client.get(f"{API}/rules", params={"size": 200})).json()["items"]
     assert next(r for r in listed if r["id"] == rule.code)["weekly"] == expected
     assert rule.weekly == 999999
+    from fastapi import Request
+
+    from app.common.auth import get_current_user
     from app.core import clock
     from app.modules.dynamic import rules_service
     from app.modules.dynamic.catalog import get_catalog
@@ -61,7 +67,10 @@ async def test_rule_hits_rolling_window_and_future(dyn, client, monkeypatch):  #
     monkeypatch.setattr(rules_service, "now", lambda: advanced)
     monkeypatch.setattr(clock, "now", lambda: advanced)
     assert (await client.get(f"{API}/rules/{rule.code}")).json()["hits7d"] == 0
-    assert (await get_catalog(dyn)).rule(rule.code)["weekly"] == 0
+    actor = await get_current_user(
+        dyn, Request({"type": "http", "method": "GET", "path": "/__test/me", "headers": []})
+    )
+    assert (await get_catalog(dyn, actor)).rule(rule.code)["weekly"] == 0
 
 
 async def test_lifecycle_illegal_and_transition_weekly_roll_with_clock(dyn, client, monkeypatch):  # noqa: F811

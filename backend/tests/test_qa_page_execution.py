@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import delete, event, func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -107,14 +108,15 @@ async def test_readonly_role_and_transaction_are_real(data):
         row = (
             await conn.execute(
                 text(
-                    "SELECT current_user, current_setting('transaction_read_only') ro, rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user"
+                    "SELECT current_user, current_setting('transaction_read_only') ro, rolsuper, "
+                    "rolbypassrls FROM pg_roles WHERE rolname=current_user"
                 )
             )
         ).one()
         assert row.current_user == "rengu_ontology_scoped" and row.ro == "on"
         assert not row.rolsuper and not row.rolbypassrls
         assert await conn.scalar(text("SELECT count(*) FROM store")) == 0  # No GUC: RLS denies data.
-        with pytest.raises(Exception):
+        with pytest.raises(DBAPIError):
             await conn.execute(text("UPDATE store SET name=name"))
 
 

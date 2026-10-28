@@ -19,7 +19,7 @@ async def function_permissions(users):
         ("POST", "alerts/{code}:claim", None),
         ("POST", "alerts/{code}:transfer", {"to": "王敏"}),
         ("POST", "alerts/{code}:close", {"as": "已解决", "reason": "边界验证"}),
-        ("POST", "alerts/{code}:start-action", None),
+        ("POST", "alerts/{code}:start-action", {"params": {}}),
         ("GET", "action-runs/{code}", None),
         ("POST", "action-runs/{code}:confirm", None),
         ("POST", "action-runs/{code}:withdraw", {"reason": "边界验证"}),

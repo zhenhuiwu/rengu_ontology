@@ -1,5 +1,6 @@
 """Published defaults use real metric mappings and PG guards; never invoke a provider."""
 
+import os
 from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
@@ -35,7 +36,8 @@ async def configured(metric_facts):
     from app.modules.biz import governance  # noqa: F401
 
     facts = metric_facts
-    assert facts.get_bind().engine.url.database == "rengu_fix_static_20261027"
+    assert facts.get_bind().engine.url.database == os.environ.get("RENGU_TEST_DB")
+    assert facts.get_bind().engine.url.database.startswith(("rengu_test", "rengu_fix_"))
     metric = await facts.scalar(select(Metric).where(Metric.code == "order_cnt"))
     metric.display_name = "窗口订单量核验"
     metric.api_name = "window_order_count"
@@ -65,7 +67,9 @@ async def test_real_range_and_saved_filters_are_enforced(configured):
         "SELECT COUNT(*) FROM biz_order o WHERE o.created_at_biz >= '2020-01-01'", read="postgres"
     )
     default.apply(tree)
-    result = await run_guarded(await session.connection(), tree.sql(dialect="postgres"), actor)
+    result = await run_guarded(
+        await session.connection(), tree.sql(dialect="postgres"), actor, session=session
+    )
     assert result.scalar_one() == 3  # old row and cancelled 999 are both excluded by real predicates.
     with pytest.raises(AppError, match="没有使用"):
         default.apply(parse_one("SELECT 1"))
@@ -113,7 +117,8 @@ async def test_missing_default_asks_before_model_and_explicit_time_wins(configur
         session,
         await session.connection(),
         FakeLLM(
-            "SELECT COUNT(*) FROM biz_order WHERE created_at_biz >= '2026-10-24' AND created_at_biz < '2026-10-25'"
+            "SELECT COUNT(*) FROM biz_order WHERE created_at_biz >= '2026-10-24' "
+            "AND created_at_biz < '2026-10-25'"
         ),
         actor,
         "昨天" + metric.display_name,

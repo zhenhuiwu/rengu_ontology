@@ -1,6 +1,7 @@
 """真实创建路径的双事务编号回归：以 pg_locks 确认等待，不靠固定 sleep 猜测时序。"""
 
 import asyncio
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
@@ -9,11 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
 from app.common.context import ViewContext
+from app.common.ontology import set_ontology_scope
 from app.core import clock
-from app.modules.admin.models import SysUser
+from app.modules.admin.models import SysRole, SysRoleMember, SysUser
 from app.modules.dynamic.rules_models import Rule, Scenario
 from app.modules.dynamic.rules_schemas import RuleCreateIn
 from app.modules.dynamic.rules_service import RuleService, ScenarioService
+from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
 from app.modules.qa import catalog
 from app.modules.qa.models import (
     CertStatus,
@@ -24,6 +27,7 @@ from app.modules.qa.models import (
     QaSession,
     QaTurn,
     TurnKind,
+    TurnStatus,
 )
 from app.modules.qa.pages_api import PageCreateIn, PinIn, create_page, pin_card
 from app.modules.qa.router import (
@@ -45,6 +49,42 @@ from app.modules.static.models import (
     ObjectType,
 )
 from app.modules.static.schemas import CRCreateIn
+
+
+@asynccontextmanager
+async def _scoped_session(engine, *, commit=False):
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        await set_ontology_scope(session, 1)
+        yield session
+        if commit:
+            await session.commit()
+
+
+async def _page_identity(session, actor, owner_id):
+    role = SysRole(
+        code=actor.id,
+        name=actor.id,
+        func={"qa-pages": "view"},
+        objs=[],
+        changed_at=clock.now(),
+        changed_by=actor.name,
+    )
+    session.add(role)
+    await session.flush()
+    session.add_all(
+        [
+            SysRoleMember(role_id=role.id, user_id=owner_id, seq=0),
+            OntologyRoleBinding(ontology_id=1, role_id=role.id),
+            OntologyMember(ontology_id=1, user_id=owner_id, role="editor"),
+        ]
+    )
+    await session.flush()
+
+
+async def _delete_page_identity(session, actor, owner_id):
+    await session.execute(delete(OntologyMember).where(OntologyMember.user_id == owner_id))
+    await session.execute(delete(SysRoleMember).where(SysRoleMember.user_id == owner_id))
+    await session.execute(delete(SysRole).where(SysRole.code == actor.id))
 
 
 async def _create(kind, session, actor, n):
@@ -100,6 +140,8 @@ async def _two_creates(engine, create, *, commit_second=True):
         AsyncSession(bind=c1, expire_on_commit=False) as s1,
         AsyncSession(bind=c2, expire_on_commit=False) as s2,
     ):
+        await set_ontology_scope(s1, 1)
+        await set_ontology_scope(s2, 1)
         pid2 = await s2.scalar(text("SELECT pg_backend_pid()"))
         await s2.rollback()
         task = None
@@ -139,15 +181,23 @@ async def _two_creates(engine, create, *, commit_second=True):
 async def test_creation_code_lock_covers_insert_until_commit(engine, kind, model, prefix):
     token = uuid4().hex[:20]
     actor = CurrentUser(
-        id=f"lock-{token}", name=f"编号锁-{token}", is_ontology_admin=True, func={"releases": "manage"}
+        id=f"lock-{token}",
+        name=f"编号锁-{token}",
+        is_ontology_admin=True,
+        ontology_id=1,
+        ontology_role="editor",
+        func={"releases": "manage"},
     )
-    async with engine.begin() as setup:
+    async with _scoped_session(engine, commit=True) as setup:
         owner_id = await setup.scalar(
             insert(SysUser).values(code=actor.id, name=actor.name).returning(SysUser.id)
         )
+        if kind == "page":
+            await _page_identity(setup, actor, owner_id)
         if kind == "rule":
             await setup.execute(
                 insert(ObjectType).values(
+                    ontology_id=1,
                     code=actor.id,
                     api_name=f"LockObject_{token}",
                     display_name="编号锁对象",
@@ -160,6 +210,7 @@ async def test_creation_code_lock_covers_insert_until_commit(engine, kind, model
         if kind == "cert":
             await setup.execute(
                 insert(Metric).values(
+                    ontology_id=1,
                     code=actor.id,
                     api_name=actor.id,
                     display_name="编号指标",
@@ -173,13 +224,16 @@ async def test_creation_code_lock_covers_insert_until_commit(engine, kind, model
         if kind == "feedback":
             session_id = await setup.scalar(
                 insert(QaSession)
-                .values(code=actor.id, owner_id=owner_id, title="编号回归", last_at=clock.now())
+                .values(
+                    ontology_id=1, code=actor.id, owner_id=owner_id, title="编号回归", last_at=clock.now()
+                )
                 .returning(QaSession.id)
             )
             await setup.execute(
                 insert(QaTurn),
                 [
                     {
+                        "ontology_id": 1,
                         "code": f"{actor.id}-T{n}",
                         "session_id": session_id,
                         "seq": n,
@@ -193,7 +247,7 @@ async def test_creation_code_lock_covers_insert_until_commit(engine, kind, model
     try:
         first, second = await _two_creates(engine, lambda s, n: _create(kind, s, actor, n))
         assert int(second[len(prefix) :]) == int(first[len(prefix) :]) + 1
-        async with engine.connect() as check:
+        async with _scoped_session(engine) as check:
             assert set(
                 (await check.scalars(select(model.code).where(model.code.in_([first, second])))).all()
             ) == {
@@ -201,7 +255,7 @@ async def test_creation_code_lock_covers_insert_until_commit(engine, kind, model
                 second,
             }
     finally:
-        async with engine.begin() as cleanup:
+        async with _scoped_session(engine, commit=True) as cleanup:
             if kind in {"session", "page"}:
                 owner = model.owner_id == owner_id
             elif kind == "feedback":
@@ -219,6 +273,8 @@ async def test_creation_code_lock_covers_insert_until_commit(engine, kind, model
                 await cleanup.execute(delete(Metric).where(Metric.code == actor.id))
             if kind == "rule":
                 await cleanup.execute(delete(ObjectType).where(ObjectType.code == actor.id))
+            if kind in {"page", "card"}:
+                await _delete_page_identity(cleanup, actor, owner_id)
             await cleanup.execute(delete(SysUser).where(SysUser.code == actor.id))
 
 
@@ -232,22 +288,67 @@ async def test_resource_numbers_serialize_locally_and_leave_other_resources_free
     # 真实时钟前进时 ask 会更新 last_at；固定演示时钟会掩盖等待锁后的 ORM 版本冲突。
     base, ticks = clock.now(), count()
     monkeypatch.setattr(clock, "now", lambda: base + timedelta(seconds=next(ticks)))
-    actor = CurrentUser(id=f"lock-{uuid4().hex[:20]}", name="局部编号回归", is_ontology_admin=True)
-    async with AsyncSession(engine) as setup:
-        setup.add(SysUser(code=actor.id, name=actor.name))
+    actor = CurrentUser(
+        id=f"lock-{uuid4().hex[:20]}",
+        name="局部编号回归",
+        is_ontology_admin=True,
+        ontology_id=1,
+        ontology_role="editor",
+    )
+    created_binding = False
+    async with _scoped_session(engine) as setup:
+        owner = SysUser(code=actor.id, name=actor.name)
+        setup.add(owner)
         await setup.flush()
+        owner_id = owner.id
         sid = (await create_session(SessionCreateIn(), setup, actor, ViewContext())).id
         other_sid = (await create_session(SessionCreateIn(), setup, actor, ViewContext())).id
         page_ids = []
         if kind == "card":
+            from app.modules.biz import governance  # noqa: F401  Register the actual controlled tables.
+            from app.modules.versioning.repo import ReleaseRepo
+            from app.seeds.loader import run_seeds
+
+            release = await ReleaseRepo(setup).latest()
+            if release is None:
+                from app.modules.static.sections import BUILDERS
+                from app.modules.versioning.sections import isolated_sections
+
+                with isolated_sections(*BUILDERS):
+                    await run_seeds(setup, ["admin", "versioning"])
+            await _page_identity(setup, actor, owner_id)
+            if await setup.scalar(select(ObjectType.id).where(ObjectType.code == "store")) is None:
+                setup.add(
+                    ObjectType(
+                        code="store",
+                        api_name="LockStore",
+                        display_name="锁测试门店",
+                        obj_group="测试",
+                        status=ObjectStatus.published,
+                        conflict_strategy=ConflictStrategy.user_edit_wins,
+                        lifecycle=Lifecycle.active,
+                    )
+                )
+                await setup.flush()
+                created_binding = True
+            from app.common.sql_guard import load_governed_tables
+
+            await load_governed_tables(setup)
+            release = await ReleaseRepo(setup).latest()
+            assert release is not None
             owner_session = await setup.scalar(select(QaSession).where(QaSession.code == sid))
             setup.add(
                 QaTurn(
+                    ontology_id=1,
                     code=f"{sid}-T001",
                     session_id=owner_session.id,
                     seq=1,
                     kind=TurnKind.answer,
                     question="可固定的回答",
+                    status=TurnStatus.done,
+                    sql_text="SELECT 1 AS k",
+                    release_id=release.id,
+                    answered_ver=release.ver,
                     snapshot={
                         "answer": {
                             "card": "table",
@@ -289,7 +390,7 @@ async def test_resource_numbers_serialize_locally_and_leave_other_resources_free
             int(second.rsplit("C" if kind == "card" else "T", 1)[1])
             == int(first.rsplit("C" if kind == "card" else "T", 1)[1]) + 1
         )
-        async with AsyncSession(engine) as s1, AsyncSession(engine) as s2:
+        async with _scoped_session(engine) as s1, _scoped_session(engine) as s2:
             await create(s1, 1)
             # 另一个会话 / 页面不应被同一资源的编号锁阻塞。
             await asyncio.wait_for(create(s2, 2, other=True), 5)
@@ -299,12 +400,12 @@ async def test_resource_numbers_serialize_locally_and_leave_other_resources_free
             from app.core.errors import NotFound
 
             async def delete_while_answering(*args, **kwargs):
-                async with engine.begin() as deletion:
+                async with _scoped_session(engine, commit=True) as deletion:
                     await deletion.execute(delete(QaSession).where(QaSession.code == other_sid))
                 return await answer()
 
             monkeypatch.setattr(chain, "answer", delete_while_answering)
-            async with AsyncSession(engine) as session:
+            async with _scoped_session(engine) as session:
                 with pytest.raises(NotFound):
                     await ask(
                         other_sid,
@@ -316,8 +417,12 @@ async def test_resource_numbers_serialize_locally_and_leave_other_resources_free
                         None,
                     )
     finally:
-        async with engine.begin() as cleanup:
-            owner_id = select(SysUser.id).where(SysUser.code == actor.id).scalar_subquery()
+        async with _scoped_session(engine, commit=True) as cleanup:
+            owner_id = await cleanup.scalar(select(SysUser.id).where(SysUser.code == actor.id))
             await cleanup.execute(delete(QaPage).where(QaPage.owner_id == owner_id))
             await cleanup.execute(delete(QaSession).where(QaSession.owner_id == owner_id))
+            if created_binding:
+                await cleanup.execute(delete(ObjectType).where(ObjectType.code == "store"))
+            if kind in {"page", "card"}:
+                await _delete_page_identity(cleanup, actor, owner_id)
             await cleanup.execute(delete(SysUser).where(SysUser.code == actor.id))

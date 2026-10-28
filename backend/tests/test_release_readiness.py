@@ -1,5 +1,6 @@
 """Focused structural and actual CR mapping checks, without source introspection."""
 
+import os
 from copy import deepcopy
 
 from sqlalchemy import select
@@ -27,10 +28,11 @@ def test_object_structure_checks_only_saved_metadata_without_mutation():
     assert (fields, props) == before
 
 
-async def test_v5_uses_real_saved_cr_overlay_and_preserves_definition(client, facts):  # noqa: F811
+async def test_v5_uses_real_saved_cr_overlay_and_preserves_definition(client, facts):
     from tests.test_static_trials import ADMIN, AUTHOR, P
 
-    assert facts.get_bind().engine.url.database == "rengu_fix_static_20261027"
+    assert facts.get_bind().engine.url.database == os.environ.get("RENGU_TEST_DB")
+    assert facts.get_bind().engine.url.database.startswith(("rengu_test", "rengu_fix_"))
     await load_governed_tables(facts)
     metric = await facts.scalar(select(Metric).where(Metric.code == "order_cnt"))
     original = metric.formula

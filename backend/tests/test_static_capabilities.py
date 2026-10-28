@@ -11,7 +11,7 @@ from app.modules.admin.models import SysRole, SysUser
 from app.modules.event.models import EventSource, EventType
 from app.modules.functions.models import FnParam, Function
 from app.modules.static.capabilities import literal_annotation_values
-from app.modules.static.models import Property
+from app.modules.static.models import ObjectType, Property
 from tests.test_palantir_machine import key
 from tests.test_palantir_policy import set_policy
 from tests.test_use_ops_runtime import API, alert_runtime, headers, runtime  # noqa: F401
@@ -25,8 +25,15 @@ def by_id(items):
 
 async def add_props(session, action):
     # 只取外键：读 .object_type 会懒加载，身份映射里没有时在异步会话里报 MissingGreenlet（偶发失败）
-    obj_id = await session.scalar(select(Property.object_type_id).where(Property.api_name == "is_test"))
-    for api, sensitive, visibility in (("phone", True, "normal"), ("inner", False, "hidden")):
+    obj_id = await session.scalar(
+        select(Property.object_type_id)
+        .join(ObjectType, Property.object_type_id == ObjectType.id)
+        .where(ObjectType.code == "store", Property.api_name == "is_test")
+    )
+    for api, sensitive, visibility in (
+        ("ops_sensitive_phone", True, "normal"),
+        ("ops_hidden_inner", False, "hidden"),
+    ):
         session.add(
             Property(
                 object_type_id=obj_id,
@@ -129,7 +136,20 @@ async def test_capabilities_admin_sees_all_sections(alert_runtime, client):  # n
     assert body["omitted"] == []
     store = by_id(body["objects"])["store"]
     assert store["rowAccess"] == "all"
-    assert [p["api"] for p in store["properties"]] == ["is_test"]  # 敏感、隐藏属性不出现
+    declared = set(
+        await session.scalars(
+            select(Property.api_name)
+            .join(ObjectType, Property.object_type_id == ObjectType.id)
+            .where(
+                ObjectType.code == "store", Property.is_sensitive.is_(False), Property.visibility != "hidden"
+            )
+        )
+    )
+    public = {p["api"] for p in store["properties"]}
+    assert public == declared
+    assert "is_test" in public
+    assert {"ops_sensitive_phone", "ops_hidden_inner"}.isdisjoint(public)
+    assert "ops_sensitive_phone" not in res.text and "ops_hidden_inner" not in res.text
     actions = by_id(body["actions"])
     local, cross = actions["ops_local"], actions["ops_cross"]
     assert local["policy"] == {

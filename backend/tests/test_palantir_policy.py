@@ -56,7 +56,11 @@ def test_policy_roundtrip_and_fail_safe_default():
     assert action_policy.stored({"mode": "auto"}).mode == "confirm"  # 历史脏数据不放宽
     assert action_policy.DEFAULT.callers is None  # 默认不限制来源 = 现有行为
     assert [action_policy.caller_of(s) for s in ("手动", "推演", "问数", "规则", "告警")] == [
-        "人", "人", "AI", "规则", "规则"
+        "人",
+        "人",
+        "AI",
+        "规则",
+        "规则",
     ]
 
 

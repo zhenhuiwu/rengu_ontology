@@ -175,24 +175,35 @@ async def test_exec_error_fed_back_once(qa, session):
     assert "is_test" not in t.sql_text
 
 
-def test_ddl_hides_system_cols_and_filters_per_table():
-    ddl = "\n\n".join(chain._schema_lines(1))
+@pytest.fixture
+def metadata_scope():
+    from types import SimpleNamespace
+
+    from app.common.sql_guard import _store_bound
+
+    session = SimpleNamespace(info={"ontology_id": 1})
+    _store_bound(session, 1, {"store", "order", "product"})
+    return session
+
+
+def test_ddl_hides_system_cols_and_filters_per_table(metadata_scope):
+    ddl = "\n\n".join(chain._schema_lines(1, metadata_scope))
     assert "is_seed" not in ddl and "lock_version" not in ddl
-    product = next(x for x in chain._schema_lines(1) if x.startswith("CREATE TABLE product"))
+    product = next(x for x in chain._schema_lines(1, metadata_scope) if x.startswith("CREATE TABLE product"))
     assert "is_test" not in product
-    filters = "\n".join(chain._filter_lines(1))
+    filters = "\n".join(chain._filter_lines(1, metadata_scope))
     assert "- store：is_test = false" in filters and "- biz_order：is_test = false" in filters
-    none = next(x for x in chain._filter_lines(1) if "没有过滤列" in x)
+    none = next(x for x in chain._filter_lines(1, metadata_scope) if "没有过滤列" in x)
     assert "product" in none and "order_line" in none
     # 枚举列注释带 code=标签
     assert "shipped=已出库" in ddl and "open=营业中" in ddl
 
 
-def test_label_rows_maps_codes_keeps_shape():
+def test_label_rows_maps_codes_keeps_shape(metadata_scope):
     rows = [["shipped", 3], ["delivered", 1], [None, 0]]
-    assert chain._label_rows(rows, 1) == [["已出库", 3], ["已签收", 1], [None, 0]]
+    assert chain._label_rows(rows, 1, metadata_scope) == [["已出库", 3], ["已签收", 1], [None, 0]]
     # 列里混着非 code 的值就整列不动
-    assert chain._label_rows([["shipped"], ["上海"]], 1) == [["shipped"], ["上海"]]
+    assert chain._label_rows([["shipped"], ["上海"]], 1, metadata_scope) == [["shipped"], ["上海"]]
 
 
 async def test_answer_labels_status_codes(qa):
@@ -315,7 +326,7 @@ async def test_caliber_check_passes_without_retry(qa):
     assert len(fake.prompts) == 1
 
 
-def test_caliber_violations_longest_match_and_time_hint():
+def test_caliber_violations_longest_match_and_time_hint(metadata_scope):
     import sqlglot
 
     def t(q):
@@ -327,6 +338,7 @@ def test_caliber_violations_longest_match_and_time_hint():
         "小程序昨天的单量",
         t("select count(*) from biz_order o where o.status <> 'cancelled' and o.created_at_biz >= 'x'"),
         1,
+        metadata_scope,
     )
     assert bad == ["有效订单数 的时间窗要用 biz_order.shipped_at"]
     # 题目说了“下单的”：时间字段按题目换
@@ -334,10 +346,10 @@ def test_caliber_violations_longest_match_and_time_hint():
         "select 1 from order_line l join biz_order o on o.id = l.order_id"
         " where o.status = 'shipped' and o.created_at_biz >= 'x'"
     )
-    assert chain.caliber_violations("昨天下单的订单，销售额是多少", ok, 1) == []
+    assert chain.caliber_violations("昨天下单的订单，销售额是多少", ok, 1, metadata_scope) == []
 
 
-def test_cap_time_upper_to_now():
+def test_cap_time_upper_to_now(metadata_scope):
     import datetime as dt
 
     import sqlglot
@@ -350,7 +362,7 @@ def test_cap_time_upper_to_now():
     assert chain.cap_time_upper(
         t,
         dt.datetime(2026, 10, 25, 15, 42, tzinfo=dt.timezone(dt.timedelta(hours=8))),
-        chain.qa_source(1).time_cols,
+        chain.qa_source(1, metadata_scope).time_cols,
     )
     sql = t.sql(dialect="postgres")
     assert "o.shipped_at < '2026-10-25 15:42:00'" in sql and "<= '2026-10-02'" in sql
@@ -377,22 +389,22 @@ def test_refuse_precheck_hits_keywords():
     assert chain.refuse_precheck("昨天的毛利率", 999) is None  # 没有该本体的清单
 
 
-def test_entity_and_vague_metric_clarify():
+def test_entity_and_vague_metric_clarify(metadata_scope):
     names = {"store": ["南京新街口店", "南京河西店", "上海张江店", "杭州西湖店", "苏州园区店"]}
     assert chain.name_suffix(names["store"]) == "店"
     c = chain.entity_ambiguity("南京店昨天卖了多少", names)
     assert c and c["options"] == ["南京新街口店", "南京河西店"]
     assert chain.entity_ambiguity("南京新街口店昨天卖了多少", names) is None  # 只对上一个
     assert chain.entity_ambiguity("各门店的销售额", names) is None
-    c = chain.vague_metric("哪个门店业绩最好", 1, {})
+    c = chain.vague_metric("哪个门店业绩最好", 1, {}, metadata_scope)
     assert c and c["term"] == "业绩" and "销售额" in c["options"]
-    assert chain.vague_metric("哪个门店销售额最大", 1, {}) is None  # 说了具体指标就不反问
-    assert chain.vague_metric("卖得最好的商品", 1, {}) is None
+    assert chain.vague_metric("哪个门店销售额最大", 1, {}, metadata_scope) is None  # 说了具体指标就不反问
+    assert chain.vague_metric("卖得最好的商品", 1, {}, metadata_scope) is None
 
 
-def test_qa_source_from_governed_tables():
-    src = chain.qa_source(1)
+def test_qa_source_from_governed_tables(metadata_scope):
+    src = chain.qa_source(1, metadata_scope)
     assert src.table_names == {"store", "biz_order", "order_line", "product"}
     assert src.time_hints["shipped_at"] == ("出库", "履约") and "下单" in src.time_hints["created_at_biz"]
     assert src.name_cols == {"store": "name", "product": "name"}
-    assert chain.qa_source(999).tables == ()
+    assert chain.qa_source(999, metadata_scope).tables == ()

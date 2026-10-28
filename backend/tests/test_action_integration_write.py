@@ -52,6 +52,64 @@ async def test_create_ext_system(client, ae):
     assert r.json()["id"] == "EXT-N02"
 
 
+async def test_create_without_authorization(client, ae, monkeypatch):
+    import httpx
+    from pydantic import SecretStr
+    from sqlalchemy import select
+
+    from app.core.config import get_settings
+    from app.modules.integration.adapters import get_adapter
+    from app.modules.integration.models import ExtSystem
+
+    r = await client.post(
+        f"{DATA}/ext-systems", json={**BODY, "auth": " 无需授权 ", "authDetail": ""}, headers=ADMIN
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["auth"] == "无需授权" and r.json()["authDetail"] == ""
+    saved = await client.get(f"{DATA}/ext-systems/{r.json()['id']}", headers=ADMIN)
+    assert saved.json()["auth"] == "无需授权"
+    updated = await client.put(
+        f"{DATA}/ext-systems/{r.json()['id']}", json={**BODY, "auth": "Token（服务账号）"}, headers=ADMIN
+    )
+    assert updated.status_code == 200 and updated.json()["auth"] == "Token（服务账号）"
+    disabled = await client.put(
+        f"{DATA}/ext-systems/{r.json()['id']}", json={**BODY, "auth": "无需授权"}, headers=ADMIN
+    )
+    assert disabled.status_code == 200 and disabled.json()["authDetail"] == BODY["authDetail"]
+    omitted = {k: v for k, v in BODY.items() if k not in {"auth", "authDetail"}}
+    kept = await client.put(f"{DATA}/ext-systems/{r.json()['id']}", json=omitted, headers=ADMIN)
+    assert kept.status_code == 200 and kept.json()["auth"] == "无需授权"
+    assert kept.json()["authDetail"] == BODY["authDetail"]
+    system = await ae.scalar(select(ExtSystem).where(ExtSystem.code == r.json()["id"]))
+    await ae.refresh(system)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "integration_real_connect", True)
+    monkeypatch.setattr(
+        settings,
+        "integration_adapters",
+        SecretStr('{"1/EXT-N01":{"probePath":"/probe","token":"existing-token"}}'),
+    )
+    headers = []
+
+    def receive(request):
+        headers.append(request.headers)
+        return httpx.Response(200)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(receive), **kw)
+    )
+    await get_adapter(system, "probe").request("probe")
+    assert "Authorization" not in headers[-1]
+    restored = await client.put(
+        f"{DATA}/ext-systems/{r.json()['id']}", json={**BODY, "auth": "Token（服务账号）"}, headers=ADMIN
+    )
+    assert restored.status_code == 200 and restored.json()["authDetail"] == BODY["authDetail"]
+    await ae.refresh(system)
+    await get_adapter(system, "probe").request("probe")
+    assert headers[-1]["Authorization"] == "Bearer existing-token"
+
+
 async def test_action_count_matches_linked(client, ae):
     items = (await client.get(f"{DATA}/ext-systems", params={"size": 200}, headers=ADMIN)).json()["items"]
     erp = next(s for s in items if s["id"] == "EXT-ERP")

@@ -5,7 +5,15 @@ import pytest
 from sqlalchemy import select
 
 from app.core import clock
-from app.modules.static.models import ChangeRequest, CrEvent, Knowledge, KnowledgeStatus, ObjectType, Property
+from app.modules.static.models import (
+    ChangeRequest,
+    CrEvent,
+    CrItem,
+    Knowledge,
+    KnowledgeStatus,
+    ObjectType,
+    Property,
+)
 from app.modules.versioning.models import OntologyRelease
 from app.modules.versioning.service import next_ver
 from app.seeds.loader import run_seeds
@@ -381,8 +389,27 @@ async def test_invalid_property_type_rolls_back_publish_and_keeps_draft(client, 
         ],
     )
     r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert r.status_code == 409 and "V1" in r.json()["details"]["blocked"]
+    await put(
+        client,
+        cr,
+        {"kind": "object", "id": "store"},
+        "properties",
+        [
+            {"key": "city", "op": "update", "after": {"desc": "发布失败不应写入"}},
+            {"key": key, "op": op, "after": {"name": "非法类型", "type": "string"}},
+        ],
+    )
+    r = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
     assert r.status_code == 200, r.text
     assert (await client.post(f"{P}/change-requests/{cr}:approve", headers=WANG)).status_code == 200
+    item = await seeded.scalar(
+        select(CrItem)
+        .join(ChangeRequest, CrItem.cr_id == ChangeRequest.id)
+        .where(ChangeRequest.code == cr, CrItem.item_key == key)
+    )
+    item.after = {**item.after, "type": invalid}
+    await seeded.flush()
     draft_before = (await client.get(f"{P}/change-requests/{cr}", headers=WANG)).json()
     versions_before = list(
         (await seeded.scalars(select(OntologyRelease.ver).order_by(OntologyRelease.id))).all()

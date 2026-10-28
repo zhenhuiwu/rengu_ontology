@@ -381,11 +381,12 @@ async def test_validate(client, seeded):
     assert [c["code"] for c in v["checks"]] == [f"V{n}" for n in range(1, 18)]
     assert by["V7"]["result"] == "阻断" and "product.old_code" in by["V7"]["note"]
     assert by["V11"]["result"] == "警告" and by["V15"]["result"] == "警告"
-    assert by["V3"]["result"] == "不适用" and by["V16"]["result"] == "通过"
+    assert by["V3"]["result"] == "不适用" and by["V16"]["result"] == "不适用"
+    assert by["V1"]["result"] == "阻断"
     assert by["V12"]["note"] == "改动 2 处，涉及 1 个定义"
     assert (
         v["blocked"] is True
-        and v["summary"].startswith("阻断 1 · 警告 2")
+        and v["summary"].startswith("阻断 2 · 警告 2")
         and v["checkedAt"] == "2026-10-25 15:42"
     )
     d = await one(client, cr)
@@ -399,6 +400,11 @@ async def test_validate(client, seeded):
     assert n == 17
     # 有阻断不能提交；改掉删除 + 写迁移方式后通过
     assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).json()["code"] == "CR_BLOCKED"
+    from app.modules.static.models import ObjectType
+
+    product = await seeded.scalar(select(ObjectType).where(ObjectType.code == "product"))
+    product.pk_property = product.properties[0].api_name
+    await seeded.flush()
     await put(
         client,
         cr,
@@ -513,6 +519,11 @@ async def test_submit_runs_validation_without_prior_validate(client, seeded):
 
 async def test_put_after_passing_validate_resets_checks(client, seeded):
     """复现 2：校验通过后再保存一条删除行 → checks 作废（未校验），提交时重算 → 409 CR_BLOCKED。"""
+    from app.modules.static.models import ObjectType
+
+    product = await seeded.scalar(select(ObjectType).where(ObjectType.code == "product"))
+    product.pk_property = product.properties[0].api_name
+    await seeded.flush()
     t = {"kind": "object", "id": "product"}
     cr = (await create(client, target=t))["id"]
     await put(
@@ -523,7 +534,7 @@ async def test_put_after_passing_validate_resets_checks(client, seeded):
         [{"key": "price", "op": "update", "after": {"name": "price", "desc": "售价"}}],
     )
     r = await client.post(f"{P}/change-requests/{cr}:validate", headers=LIU)
-    assert r.json()["blocked"] is False
+    assert r.json()["blocked"] is False, r.text
     assert len((await one(client, cr))["detail"]["checks"]) == 17
     await put(client, cr, t, "properties", DEL_ROW)
     d = await one(client, cr)
@@ -546,6 +557,11 @@ async def test_put_after_passing_validate_resets_checks(client, seeded):
 
 async def test_approve_runs_validation(client, seeded):
     """:approve 同样服务端重算：审核中被塞进删除行（模拟绕过）→ 409 CR_BLOCKED，仍是审核中。"""
+    from app.modules.static.models import ObjectType
+
+    product = await seeded.scalar(select(ObjectType).where(ObjectType.code == "product"))
+    product.pk_property = product.properties[0].api_name
+    await seeded.flush()
     t = {"kind": "object", "id": "product"}
     cr = (await create(client, target=t))["id"]
     await put(
@@ -555,7 +571,8 @@ async def test_approve_runs_validation(client, seeded):
         "properties",
         [{"key": "price", "op": "update", "after": {"name": "price", "desc": "x"}}],
     )
-    assert (await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)).status_code == 200
+    submitted = await client.post(f"{P}/change-requests/{cr}:submit", headers=LIU)
+    assert submitted.status_code == 200, submitted.text
     row = await seeded.scalar(select(ChangeRequest).where(ChangeRequest.code == cr))
     seeded.add(
         CrItem(

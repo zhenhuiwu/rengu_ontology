@@ -9,12 +9,13 @@ from app.modules.action.models import (
     ActionType,
     ActionTypeRule,
     ActionTypeVersion,
+    OntologyEditRule,
     SubmissionCriterion,
 )
 from app.modules.event import sections as event_sections
 from app.modules.event.models import EventEnvelopeField, EventSubscription, EventType, EventTypeVersion
 from app.modules.integration.models import ExtSystem, ExtSystemStatus
-from app.modules.static.models import ChangeRequest, CrEvent, CrItem, Knowledge, ObjectType
+from app.modules.static.models import ChangeRequest, CrEvent, CrItem, Knowledge, ObjectType, Property
 from app.modules.versioning.models import OntologyRelease
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
@@ -26,8 +27,13 @@ A = {"kind": "action", "id": "wb_action", "name": "写回动作", "isNew": True}
 E = {"kind": "event", "id": "wb_event", "name": "写回事件", "isNew": True}
 PARAM = {"name": "参数", "api": "p", "type": "字符串", "required": True, "def": "无", "rule": "x > 0"}
 COND = {"kind": "参数", "name": "条件", "expr": "p > 0", "fail": "须为正数"}
-EDIT = {"op": "修改", "obj": "门店", "field": "名称"}
-EFFECT = {"kind": "通知", "target": "运维", "when": "写回成功后", "note": "说明"}
+EDIT = {"op": "修改", "obj": "门店", "field": '{"values":{"wb_status":{"param":"p"}}}'}
+EFFECT = {
+    "kind": "通知",
+    "target": "运维",
+    "when": "写回成功后",
+    "note": '{"payload":{"message":{"value":"测试通知"}}}',
+}
 CONFIG = {"sysId": "EXT-ERP", "endpoint": "/write", "idemKey": "orderNo"}
 FIELD = {"name": "业务值", "api": "value", "type": "字符串", "required": True, "desc": "说明", "sample": "1"}
 SUB = {
@@ -51,6 +57,18 @@ async def wb(session):
         event_sections.register()
         await run_seeds(session, ["admin", "integration", "action", "event", "versioning", "static"])
         await grant_fixture_roles(session)
+        for obj in await session.scalars(select(ObjectType).where(ObjectType.code.in_(("store", "order")))):
+            session.add(
+                Property(
+                    object_type_id=obj.id,
+                    api_name="wb_status",
+                    display_name="测试状态",
+                    data_type="enum",
+                    prop_group="测试",
+                    source_column="status",
+                    backing_column="status",
+                )
+            )
         await session.commit()
         yield session
 
@@ -139,6 +157,11 @@ async def test_invalid_definition_publish_is_atomic(client, wb, target, field, v
 
 
 async def approved(client, changes):
+    if any(target == E for target, _, _ in changes) and not any(
+        target == E and section == "def" and any(r["key"] == "dedupWindow" for r in rows)
+        for target, section, rows in changes
+    ):
+        changes = [(E, "def", [row("dedupWindow", "24 小时")]), *changes]
     result = await client.post(P + "/change-requests", json={"title": "动作事件写回"}, headers=AUTHOR)
     assert result.status_code == 201, result.text
     cr = result.json()["id"]
@@ -202,7 +225,7 @@ async def test_seven_segments_add_rename_update_delete_and_versions(client, wb):
     second_rows = [
         (A, "params", [row("p", {**PARAM, "api": "renamed"}, "update")]),
         (A, "conds", [row("条件", {**COND, "name": "新条件"}, "update")]),
-        (A, "edits", [row("修改:门店", {**EDIT, "op": "新建", "obj": "商品"}, "update")]),
+        (A, "edits", [row("修改:门店", {**EDIT, "op": "新建", "obj": "订单"}, "update")]),
         (A, "effects", [row("运维", {**EFFECT, "target": "业务"}, "update")]),
         (A, "config", [row("cfg", {"sysId": None, "endpoint": "—", "idemKey": "internal"}, "update")]),
         (E, "payload", [row("value", {**FIELD, "api": "value2"}, "update")]),
@@ -215,7 +238,7 @@ async def test_seven_segments_add_rename_update_delete_and_versions(client, wb):
     a2, e2 = snap2["actionTypes"][A["id"]], snap2["eventTypes"][E["id"]]
     assert a2["version"] == e2["version"] == "v2"
     assert a2["params"][0]["api"] == "renamed" and a2["conds"][0]["name"] == "新条件"
-    assert a2["writeback"]["edits"] == [{**EDIT, "op": "新建", "obj": "商品"}]
+    assert a2["writeback"]["edits"] == [{**EDIT, "op": "新建", "obj": "订单"}]
     assert a2["writeback"]["effects"][0]["target"] == "业务" and a2["sysId"] is None
     assert e2["payload"][0]["api"] == "value2" and e2["subscribers"][0]["name"] == "新订阅方"
     p = await wb.get(ActionParam, ids[0])
@@ -242,7 +265,7 @@ async def test_seven_segments_add_rename_update_delete_and_versions(client, wb):
     assert (await wb.get(ActionParam, ids[0])).rule_expr is None
     assert (await wb.get(SubmissionCriterion, ids[1])).expr_ast is None
     assert (await wb.get(EventSubscription, ids[2])).filter_expr is None
-    delete_keys = ["renamed", "新条件", "新建:商品", "业务", "cfg", "value2", "新订阅方"]
+    delete_keys = ["renamed", "新条件", "新建:订单", "业务", "cfg", "value2", "新订阅方"]
     await approved(
         client,
         [
@@ -364,9 +387,10 @@ async def test_rollback_then_republish_does_not_reuse_type_version(client, wb):
     ) == ["v1", "v2", "v3"]
 
 
-async def test_two_crs_same_target_finalize_once(wb):
-    """生产合并校验通常阻止重叠定义；钩子本身仍保证跨单只追加一次。"""
+async def test_two_crs_same_target_rejected_even_without_touches(wb):
+    """写回层也按实际条目阻止漏报 touches 的跨单重叠。"""
     from app.core import clock
+    from app.core.errors import AppError
     from app.modules.static.models import CRLevel, CRStatus
     from app.modules.static.writeback import apply_crs
 
@@ -406,20 +430,42 @@ async def test_two_crs_same_target_finalize_once(wb):
             )
         )
         crs.append(cr)
-    await apply_crs(wb, crs, "v2099.01.1", clock.now(), "U010001")
-    result = await action_sections.BUILDER.build_section(wb, None, [c.code for c in crs])
-    await wb.flush()
+    action_id = at.id
+    with pytest.raises(AppError) as error:
+        async with wb.begin_nested():
+            await apply_crs(wb, crs, "v2099.01.1", clock.now(), "U010001")
+    assert error.value.code == "WRITEBACK_FAILED"
     histories = list(
-        await wb.scalars(select(ActionTypeVersion).where(ActionTypeVersion.action_type_id == at.id))
+        await wb.scalars(select(ActionTypeVersion.ver).where(ActionTypeVersion.action_type_id == action_id))
     )
-    assert len(histories) == len(old_versions) + 1
-    assert histories[-1].definition == result[at.code]
-    assert any(x["target"] == "新通知" for x in histories[-1].definition["writeback"]["effects"])
-    assert any(x["name"] == "新条件" for x in histories[-1].definition["conds"])
-    history_id, saved_definition = histories[-1].id, histories[-1].definition
-    await run_seeds(wb, ["action", "event"])
-    wb.expire_all()
-    assert (await wb.get(ActionTypeVersion, history_id)).definition == saved_definition
+    assert histories == old_versions
+
+
+async def test_editing_second_cr_for_same_action_is_blocked(client, wb):
+    first = await approved(client, [(A, "params", [row("p", PARAM)])])
+    created = await client.post(P + "/change-requests", json={"title": "第二张单"}, headers=AUTHOR)
+    assert created.status_code == 201, created.text
+    result = await client.put(
+        f"{P}/change-requests/{created.json()['id']}/items",
+        json={"target": A, "section": "conds", "rows": [row("条件", COND)]},
+        headers=AUTHOR,
+    )
+    assert result.status_code == 409 and result.json()["code"] == "TARGET_IN_OTHER_CR"
+    assert result.json()["details"]["crId"] == first
+
+
+async def test_real_merge_check_blocks_legacy_overlapping_touches(client, wb):
+    await approved(client, [(A, "params", [row("p", PARAM)])])
+    second = await approved(client, [({**A, "id": "other_action"}, "conds", [row("条件", COND)])])
+    legacy = await wb.scalar(select(ChangeRequest).where(ChangeRequest.code == second))
+    legacy.detail = {**legacy.detail, "touches": [f"action:{A['id']}"]}
+    await wb.flush()
+    check = await client.post(P + "/releases:merge-check", headers=ADMIN)
+    assert check.status_code == 200, check.text
+    assert next(row for row in check.json()["rows"] if row["code"] == "M1")["result"] == "阻断"
+    result = await client.post(P + "/releases", json={}, headers=ADMIN)
+    assert result.status_code == 409 and result.json()["code"] == "MERGE_BLOCKED", result.text
+    assert await wb.scalar(select(ActionType.id).where(ActionType.code == A["id"])) is None
 
 
 async def test_internal_hook_nul_defense_and_failed_pending_cleared(wb):
@@ -475,10 +521,17 @@ async def test_config_rejects_ineligible_existing_system(client, wb, field, valu
 async def test_republish_retired_types_restores_them_without_reusing_history(client, wb):
     await approved(client, seven())
     first = await publish(client)
+    held_action = await wb.scalar(select(ActionType).where(ActionType.code == A["id"]))
+    held_event = await wb.scalar(select(EventType).where(EventType.code == E["id"]))
     result = await client.post(f"{P}/releases/{first}:rollback", json={}, headers=ADMIN)
     assert result.status_code == 201, result.text
     for kind, tid in [("action", A["id"]), ("event", E["id"])]:
-        assert (await client.get(f"{P}/{kind}-types/{tid}", headers=ADMIN)).status_code == 404
+        response = await client.get(f"{P}/{kind}-types/{tid}", headers=ADMIN)
+        model = ActionType if kind == "action" else EventType
+        retired = await wb.scalar(select(model.retired_release_id).where(model.code == tid))
+        assert response.status_code == 404, (kind, response.status_code, retired)
+    assert held_action.retired_release_id is not None
+    assert held_event.retired_release_id is not None
     await approved(
         client,
         [
@@ -491,3 +544,336 @@ async def test_republish_retired_types_restores_them_without_reusing_history(cli
     assert snap["actionTypes"][A["id"]]["version"] == snap["eventTypes"][E["id"]]["version"] == "v2"
     for kind, tid in [("action", A["id"]), ("event", E["id"])]:
         assert (await client.get(f"{P}/{kind}-types/{tid}", headers=ADMIN)).status_code == 200
+
+
+async def test_retire_missing_savepoint_rollback_restores_loaded_objects(wb):
+    from app.modules.action.sections import retire_missing
+
+    action = await wb.scalar(select(ActionType).where(ActionType.retired_release_id.is_(None)).limit(1))
+    event = await wb.scalar(select(EventType).where(EventType.retired_release_id.is_(None)).limit(1))
+    release_id = await wb.scalar(select(OntologyRelease.id).limit(1))
+    assert action and event and release_id
+    nested = await wb.begin_nested()
+    await retire_missing(wb, ActionType, set(), release_id)
+    await retire_missing(wb, EventType, set(), release_id)
+    assert action.retired_release_id == event.retired_release_id == release_id
+    await nested.rollback()
+    await wb.refresh(action)
+    await wb.refresh(event)
+    assert action.retired_release_id is None and event.retired_release_id is None
+
+
+async def test_retire_missing_does_not_cross_ontology(wb):
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.common.ontology import set_ontology_scope
+    from app.modules.action.sections import retire_missing
+    from app.modules.ontology.models import OntologyWorkspace
+
+    action = await wb.scalar(select(ActionType).where(ActionType.retired_release_id.is_(None)).limit(1))
+    event = await wb.scalar(select(EventType).where(EventType.retired_release_id.is_(None)).limit(1))
+    release_id = await wb.scalar(select(OntologyRelease.id).limit(1))
+    workspace = OntologyWorkspace(code="retire-other", name="隔离验证")
+    wb.add(workspace)
+    await wb.flush()
+    original_ontology = action.ontology_id
+    copies = []
+    for source in (action, event):
+        values = {
+            c.key: getattr(source, c.key)
+            for c in source.__table__.columns
+            if c.key not in {"id", "ontology_id", "code", "sys_id"}
+        }
+        values["code"] = source.code + "_other"
+        values["ontology_id"] = workspace.id
+        copies.append(type(source)(**values))
+    async with AsyncSession(
+        bind=await wb.connection(), join_transaction_mode="create_savepoint", expire_on_commit=False
+    ) as other:
+        await set_ontology_scope(other, workspace.id)
+        other.add_all(copies)
+        await other.commit()
+    await set_ontology_scope(wb, original_ontology)
+    await retire_missing(wb, ActionType, set(), release_id)
+    await retire_missing(wb, EventType, set(), release_id)
+    async with AsyncSession(bind=await wb.connection(), join_transaction_mode="create_savepoint") as other:
+        await set_ontology_scope(other, workspace.id)
+        for copy in copies:
+            row = await other.get(type(copy), copy.id)
+            assert row.retired_release_id is None
+
+
+async def test_mapping_validation_is_409_without_hiding_binding_or_database_errors(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.core.errors import AppError
+    from app.modules.action.writeback import edits, effects
+    from app.modules.integration import action_edits
+
+    ctx = SimpleNamespace(session=object())
+    item = SimpleNamespace(op="add", after={**EDIT, "field": "{bad-json"})
+    with pytest.raises(AppError) as invalid:
+        await edits(ctx, "unused", [item])
+    assert invalid.value.code == "WRITEBACK_FAILED" and invalid.value.status_code == 409
+    effect = SimpleNamespace(op="add", after={**EFFECT, "when": "unknown"})
+    with pytest.raises(AppError) as invalid:
+        await effects(ctx, "unused", [effect])
+    assert invalid.value.code == "WRITEBACK_FAILED" and invalid.value.status_code == 409
+    item.after = EDIT
+    for failure in (
+        AppError("mapping not available", code="ACTION_EDITS_UNAVAILABLE", status_code=503),
+        AppError("no object permission", code="NO_PERMISSION", status_code=403),
+        RuntimeError("database failure"),
+    ):
+        monkeypatch.setattr(action_edits, "object_binding", AsyncMock(side_effect=failure))
+        with pytest.raises(type(failure)) as unchanged:
+            await edits(ctx, "unused", [item])
+        assert unchanged.value is failure
+
+
+def test_declaration_classifier_rejects_invalid_json_and_preserves_formatted_mapping():
+    from app.core.errors import AppError
+    from app.modules.integration.action_edits import declared_text
+
+    assert declared_text("由外部系统记录补货申请") is True
+    assert declared_text('{\n  "values": {"status": {"value": "open"}}\n}') is False
+    for value in (
+        "",
+        "  ",
+        "{}",
+        "[]",
+        '"text"',
+        "123",
+        "null",
+        "{bad",
+        "[bad",
+        "文本\x00",
+        "x" * 65_537,
+        "\ud800",
+    ):
+        with pytest.raises(AppError):
+            declared_text(value)
+
+
+async def test_legacy_test_webhook_runtime_rechecks_status_and_category(wb):
+    from app.modules.integration.action_edits import external_webhook
+
+    system = ExtSystem(
+        code="EXT-OLD-TEST",
+        name="旧测试系统",
+        category="Webhook",
+        endpoint="https://local.invalid",
+        status=ExtSystemStatus.ok,
+        env="测试",
+        timeout_ms=5000,
+    )
+    wb.add(system)
+    await wb.flush()
+    definition = {"sysId": system.code}
+    assert await external_webhook(wb, definition)
+    system.status = ExtSystemStatus.disabled
+    await wb.flush()
+    assert not await external_webhook(wb, definition)
+    system.status = ExtSystemStatus.ok
+    system.category = "ERP"
+    await wb.flush()
+    assert not await external_webhook(wb, definition)
+
+
+async def test_publishing_new_test_webhook_is_rejected(client, wb):
+    system = ExtSystem(
+        code="EXT-NEW-TEST",
+        name="测试系统",
+        category="Webhook",
+        endpoint="https://local.invalid",
+        status=ExtSystemStatus.ok,
+        env="测试",
+        timeout_ms=5000,
+    )
+    wb.add(system)
+    await wb.flush()
+    await approved(client, [(A, "config", [row("cfg", {**CONFIG, "sysId": system.code})])])
+    result = await client.post(P + "/releases", json={}, headers=ADMIN)
+    assert result.status_code == 409 and result.json()["code"] == "WRITEBACK_FAILED", result.text
+
+
+@pytest.mark.parametrize("mode", ["enabled", "disabled", "changed"])
+async def test_publishing_explicit_local_webhook(client, wb, monkeypatch, mode):
+    import json
+
+    from pydantic import SecretStr
+
+    from app.core.config import get_settings
+
+    system = ExtSystem(
+        code="EXT-LOCAL-PUBLISH",
+        name="本机发布测试",
+        category="Webhook",
+        endpoint="https://127.0.0.1:8443",
+        status=ExtSystemStatus.ok,
+        env="测试",
+        timeout_ms=5000,
+        local_only=True,
+    )
+    wb.add(system)
+    await wb.flush()
+    system_code = system.code
+    settings = get_settings()
+    monkeypatch.setattr(settings, "env", "test")
+    monkeypatch.setattr(settings, "integration_real_connect", True)
+    monkeypatch.setattr(
+        settings,
+        "integration_local_demo",
+        json.dumps(
+            {
+                "ontologyId": system.ontology_id,
+                "systemCode": system.code,
+                "origin": system.endpoint,
+                "submitPath": "/hook",
+                "queryPath": "/query",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        settings,
+        "integration_adapters",
+        SecretStr(
+            json.dumps(
+                {
+                    f"{system.ontology_id}/{system.code}": {"submit_path": "/hook", "query_path": "/query"},
+                }
+            )
+        ),
+    )
+    await approved(
+        client,
+        [
+            (A, "config", [row("cfg", {**CONFIG, "sysId": system.code})]),
+            (A, "edits", [row("修改:门店", {"op": "修改", "obj": "门店", "field": "本机记录"})]),
+        ],
+    )
+    if mode == "disabled":
+        monkeypatch.setattr(settings, "integration_local_demo", None)
+    elif mode == "changed":
+        system.endpoint = "https://127.0.0.1:8444"
+        await wb.flush()
+    if mode != "enabled":
+        response = await client.post(P + "/releases", json={}, headers=ADMIN)
+        assert response.status_code == 409 and response.json()["code"] == "WRITEBACK_FAILED", response.text
+        return
+    ver = await publish(client)
+    assert (await snapshot(wb, ver))["actionTypes"][A["id"]]["sysId"] == system_code
+
+
+@pytest.mark.parametrize("config_first", [True, False])
+async def test_webhook_declaration_publishes_after_final_config(client, wb, config_first):
+    from app.modules.integration.action_edits import declared_writeback
+
+    system = ExtSystem(
+        code="EXT-LOCAL-DECLARED",
+        name="本地声明系统",
+        category="Webhook",
+        endpoint="https://local.invalid",
+        status=ExtSystemStatus.ok,
+        env="生产",
+        timeout_ms=5000,
+    )
+    wb.add(system)
+    await wb.flush()
+    config = (A, "config", [row("cfg", {**CONFIG, "sysId": system.code})])
+    declaration = (
+        A,
+        "edits",
+        [row("修改:门店", {"op": "修改", "obj": "门店", "field": "由本地接收端记录申请"})],
+    )
+    changes = [config, declaration] if config_first else [declaration, config]
+    await approved(client, changes)
+    ver = await publish(client)
+    snap = await snapshot(wb, ver)
+    action = await wb.scalar(select(ActionType).where(ActionType.code == A["id"]))
+    history = await wb.scalar(
+        select(ActionTypeVersion).where(
+            ActionTypeVersion.action_type_id == action.id, ActionTypeVersion.ver == action.version
+        )
+    )
+    actual = snap["actionTypes"][A["id"]]
+    assert actual["sysId"] == system.code and history.definition["sysId"] == system.code
+    assert history.definition["writeback"]["edits"] == actual["writeback"]["edits"]
+    assert (await declared_writeback(wb, actual))[0]["status"] == "external/declared"
+
+
+@pytest.mark.parametrize("config_first", [True, False])
+async def test_non_webhook_natural_edit_fails_atomically(client, wb, config_first):
+    config = (A, "config", [row("cfg", CONFIG)])
+    declaration = (A, "edits", [row("修改:门店", {"op": "修改", "obj": "门店", "field": "自然语言声明"})])
+    cr = await approved(client, [config, declaration] if config_first else [declaration, config])
+    count = await wb.scalar(select(func.count()).select_from(OntologyRelease))
+    response = await client.post(P + "/releases", json={}, headers=ADMIN)
+    assert response.status_code == 409 and response.json()["code"] == "WRITEBACK_FAILED", response.text
+    wb.expire_all()
+    assert await wb.scalar(select(func.count()).select_from(OntologyRelease)) == count
+    assert await wb.scalar(select(ActionType.id).where(ActionType.code == A["id"])) is None
+    assert (await wb.scalar(select(ChangeRequest).where(ChangeRequest.code == cr))).status.value == "已通过"
+
+
+@pytest.mark.parametrize("change", [{"op": "关联"}, {"obj": "不存在的对象"}])
+async def test_partial_edit_revalidates_existing_field(client, wb, change):
+    await approved(client, [(A, "edits", [row("修改:门店", EDIT)])])
+    await publish(client)
+    target = {**A, "isNew": False}
+    cr = await approved(client, [(target, "edits", [row("修改:门店", change, "update")])])
+    count = await wb.scalar(select(func.count()).select_from(OntologyRelease))
+    response = await client.post(P + "/releases", json={}, headers=ADMIN)
+    assert response.status_code in (409, 503), response.text
+    wb.expire_all()
+    assert await wb.scalar(select(func.count()).select_from(OntologyRelease)) == count
+    assert (await wb.scalar(select(ChangeRequest).where(ChangeRequest.code == cr))).status.value == "已通过"
+
+
+async def test_unchanged_system_does_not_revalidate_unrelated_legacy_edit(client, wb):
+    await approved(client, [(A, "config", [row("cfg", CONFIG)]), (A, "edits", [row("修改:门店", EDIT)])])
+    await publish(client)
+    action = await wb.scalar(select(ActionType).where(ActionType.code == A["id"]))
+    edit = await wb.scalar(select(OntologyEditRule).where(OntologyEditRule.action_type_id == action.id))
+    edit_id = edit.id
+    edit.field = ""
+    await wb.commit()
+    await approved(
+        client,
+        [({**A, "isNew": False}, "config", [row("cfg", {**CONFIG, "endpoint": "/changed"}, "update")])],
+    )
+    await publish(client)
+    wb.expire_all()
+    assert (await wb.get(OntologyEditRule, edit_id)).field == ""
+
+
+async def test_switching_existing_declaration_to_non_webhook_rolls_back(client, wb):
+    system = ExtSystem(
+        code="EXT-DECLARED-SWITCH",
+        name="本地声明系统",
+        category="Webhook",
+        endpoint="https://local.invalid",
+        status=ExtSystemStatus.ok,
+        env="生产",
+        timeout_ms=5000,
+    )
+    wb.add(system)
+    await wb.flush()
+    system_id = system.id
+    config = {**CONFIG, "sysId": system.code}
+    await approved(
+        client,
+        [
+            (A, "config", [row("cfg", config)]),
+            (A, "edits", [row("修改:门店", {"op": "修改", "obj": "门店", "field": "外部记录申请"})]),
+        ],
+    )
+    await publish(client)
+    cr = await approved(client, [({**A, "isNew": False}, "config", [row("cfg", CONFIG, "update")])])
+    result = await client.post(P + "/releases", json={}, headers=ADMIN)
+    assert result.status_code == 409 and result.json()["code"] == "WRITEBACK_FAILED", result.text
+    wb.expire_all()
+    action = await wb.scalar(select(ActionType).where(ActionType.code == A["id"]))
+    assert action.sys_id == system_id
+    assert (await wb.scalar(select(ChangeRequest).where(ChangeRequest.code == cr))).status.value == "已通过"

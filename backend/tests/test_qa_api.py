@@ -321,10 +321,13 @@ async def test_admin_shared_member_still_requires_execution_provenance(qa, sessi
         owners = await _owner_codes(session)
         assert owners["P905"] != admin
         # This positive share-write case explicitly grants only its page owner an editing membership.
-        await session.execute(text(
-            "UPDATE ontology_member SET role='editor' WHERE ontology_id=1 "
-            "AND user_id=(SELECT id FROM sys_user WHERE code=:code)"
-        ), {"code": owners["P905"]})
+        await session.execute(
+            text(
+                "UPDATE ontology_member SET role='editor' WHERE ontology_id=1 "
+                "AND user_id=(SELECT id FROM sys_user WHERE code=:code)"
+            ),
+            {"code": owners["P905"]},
+        )
         headers = {"X-Demo-As": owners["P905"]}
         page = (await qa.get(API + "/pages/P905", headers=headers)).json()
         response = await qa.put(

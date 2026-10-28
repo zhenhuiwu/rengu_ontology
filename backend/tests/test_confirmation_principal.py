@@ -1,5 +1,6 @@
 """A confirmed action keeps its original criteria principal after account changes."""
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,8 @@ from app.modules.ontology.models import OntologyMember
 
 @pytest.fixture
 async def principals(session):
-    assert session.get_bind().engine.url.database == "rengu_fix_admin_20261027"
+    assert session.get_bind().engine.url.database == os.environ.get("RENGU_TEST_DB")
+    assert session.get_bind().engine.url.database.startswith(("rengu_test", "rengu_fix_"))
     approver = SysUser(code="FIX-CRITERIA-APPROVER", name="测试审批人", status=UserStatus.active)
     confirmer = SysUser(code="FIX-CRITERIA-CONFIRMER", name="测试确认人", status=UserStatus.active)
     session.add_all([approver, confirmer])

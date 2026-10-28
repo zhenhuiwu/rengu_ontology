@@ -3,9 +3,11 @@
 import json
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.core.errors import AppError
+from app.modules.admin.models import SysUser
+from app.modules.ontology.models import OntologyMember
 from app.modules.qa.models import QaPermissionRequest, QaTurn
 from tests import qa_page_test_support
 from tests.function_access_support import grant_fixture_roles
@@ -21,6 +23,15 @@ B = "/api/qa/v1"
 async def qa(users, client):
     await seed_qa_access(users)
     await grant_fixture_roles(users, {"U010001": "R-01", "U010006": "R-05"})
+    # 用空间可写身份验证资源所有权，不能先被空间 viewer 的写入禁令短路。
+    await users.execute(
+        update(OntologyMember)
+        .where(
+            OntologyMember.ontology_id == 1,
+            OntologyMember.user_id.in_(select(SysUser.id).where(SysUser.code == "U010006")),
+        )
+        .values(role="editor")
+    )
     await users.flush()
     return client
 

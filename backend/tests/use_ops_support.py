@@ -34,7 +34,6 @@ async def grant_ops_roles(session, assignments=None):
     from tests.function_access_support import grant_fixture_roles
 
     await grant_fixture_roles(session, assignments)
-    await bind_fixture_members(session)
 
 
 @pytest.fixture(autouse=True)
@@ -56,8 +55,14 @@ def _no_external_http(monkeypatch, request):
 
     def allowed(http_request):
         endpoint = getattr(request.node, "local_webhook_endpoint", None)
-        return (endpoint is not None and str(http_request.url) == endpoint
-                and http_request.url.host == "127.0.0.1" and http_request.method == "POST")
+        if endpoint is None:
+            endpoint = getattr(request.node.funcargs.get("receiver"), "url", None)
+        return (
+            endpoint is not None
+            and str(http_request.url) == endpoint
+            and http_request.url.host == "127.0.0.1"
+            and http_request.method in getattr(request.node, "local_webhook_methods", ("POST",))
+        )
 
     def guarded(self, http_request):
         if not allowed(http_request):

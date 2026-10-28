@@ -193,6 +193,8 @@ APPEND_ONLY_VIOLATIONS = (
 async def _assert_append_only(session):
     for sql in APPEND_ONLY_VIOLATIONS:
         sp = await session.begin_nested()  # 每条在 savepoint 里执行，失败后回滚，不影响后续
+        # 保存点会重新设置运行角色；用所有者权限直接验证触发器。
+        await session.execute(text("SET LOCAL ROLE NONE"))
         with pytest.raises(DBAPIError, match="ontology_release 只追加"):
             await session.execute(text(sql))
         await sp.rollback()
@@ -219,6 +221,12 @@ async def test_release_triggers_are_before_statement_truncate_and_row_update_del
 
 
 async def test_releases_are_append_only_in_db(seeded):
+    sp = await seeded.begin_nested()
+    with pytest.raises(DBAPIError) as denied:
+        await seeded.execute(text("TRUNCATE ontology_release CASCADE"))
+    assert denied.value.orig.sqlstate == "42501"
+    await sp.rollback()
+    await seeded.execute(text("SET LOCAL ROLE NONE"))
     await _assert_append_only(seeded)
 
 
@@ -228,6 +236,7 @@ async def test_append_only_holds_with_fk_referencing_releases(seeded):
     有了外键也照样只追加。"""
     # 不在 finally 里 DROP TABLE：断言失败时事务已中止，DROP 会报 "transaction aborted" 盖掉原始错误；
     # 外层测试事务结束时整体回滚，探针表随之消失。
+    await seeded.execute(text("SET LOCAL ROLE NONE"))
     await seeded.execute(
         text(
             "CREATE TABLE _probe_release_ref (id bigserial PRIMARY KEY,"
@@ -237,6 +246,7 @@ async def test_append_only_holds_with_fk_referencing_releases(seeded):
     rid = await seeded.scalar(text("SELECT id FROM ontology_release WHERE ver='v2026.10.3'"))
     await seeded.execute(text("INSERT INTO _probe_release_ref (release_id) VALUES (:r)"), {"r": rid})
     sp = await seeded.begin_nested()  # 不带 CASCADE：被外键检查拒绝（同样清不掉）
+    await seeded.execute(text("SET LOCAL ROLE NONE"))
     with pytest.raises(DBAPIError) as fk:
         await seeded.execute(text("TRUNCATE ontology_release"))
     assert fk.value.orig.sqlstate == "0A000"
@@ -439,13 +449,28 @@ async def test_outbox_rolls_back_with_release(seeded):
 
 
 async def test_outbox_event_id_unique(session):
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.common.ontology import set_ontology_scope
     from app.common.outbox import emit
+    from app.modules.ontology.models import OntologyWorkspace
 
     await emit(session, "t.x", {"a": 1}, event_id="e-1")
     sp = await session.begin_nested()
-    with pytest.raises(Exception, match="uq_outbox_event_event_id"):
+    with pytest.raises(DBAPIError, match="uq_outbox_event_ontology_id_event_id"):
         await emit(session, "t.x", {"a": 2}, event_id="e-1")
     await sp.rollback()
+    workspace = OntologyWorkspace(code="outbox-unique-other", name="Outbox uniqueness test")
+    session.add(workspace)
+    await session.flush()
+    async with AsyncSession(
+        bind=await session.connection(), join_transaction_mode="create_savepoint"
+    ) as other:
+        await set_ontology_scope(other, workspace.id)
+        await emit(other, "t.x", {"a": 3}, event_id="e-1")
+        await other.flush()
+        assert await other.scalar(text("SELECT count(*) FROM outbox_event WHERE event_id='e-1'")) == 1
+    assert await session.scalar(text("SELECT count(*) FROM outbox_event WHERE event_id='e-1'")) == 1
 
 
 async def test_latest_is_by_id_not_published_at(seeded):

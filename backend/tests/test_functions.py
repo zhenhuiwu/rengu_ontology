@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
+from app.common.ontology import set_ontology_scope
 from app.core.errors import AppError
 from app.modules.admin.models import SysUser
 from app.modules.functions.models import FnVersion, Function
@@ -204,7 +205,13 @@ def test_function_runtime_real_result_and_limits():
 
 async def test_function_draft_codes_use_transaction_lock_and_rollback(engine):
     token = uuid4().hex[:16]
-    actor = CurrentUser(id=f"fn-{token}", name=f"函数测试-{token}", func={"functions": "manage"})
+    actor = CurrentUser(
+        id=f"fn-{token}",
+        name=f"函数测试-{token}",
+        ontology_id=1,
+        ontology_role="editor",
+        func={"functions": "manage"},
+    )
     async with engine.begin() as setup:
         await setup.execute(insert(SysUser).values(code=actor.id, name=actor.name))
     async with (
@@ -213,6 +220,8 @@ async def test_function_draft_codes_use_transaction_lock_and_rollback(engine):
         AsyncSession(bind=c1, expire_on_commit=False) as first,
         AsyncSession(bind=c2, expire_on_commit=False) as second,
     ):
+        await set_ontology_scope(first, 1)
+        await set_ontology_scope(second, 1)
         pending = None
         try:
             pid = await second.scalar(text("SELECT pg_backend_pid()"))
@@ -249,6 +258,8 @@ async def test_function_draft_codes_use_transaction_lock_and_rollback(engine):
                 await asyncio.gather(pending, return_exceptions=True)
             await first.rollback()
             await second.rollback()
-    async with engine.begin() as cleanup:
+    async with AsyncSession(engine) as cleanup:
+        await set_ontology_scope(cleanup, 1)
         await cleanup.execute(delete(ChangeRequest).where(ChangeRequest.created_by == actor.id))
         await cleanup.execute(delete(SysUser).where(SysUser.code == actor.id))
+        await cleanup.commit()

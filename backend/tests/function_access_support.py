@@ -3,14 +3,23 @@
 from sqlalchemy import func, select
 
 from app.modules.admin.models import SysRole, SysRoleMember, SysUser
+from tests.helpers.workspace import TEST_DB, bind_workspace_members
 
 
 async def grant_fixture_roles(session, assignments=None):
+    database = session.get_bind().engine.url.database
+    assert database == TEST_DB and database.startswith(("rengu_test", "rengu_fix_"))
     if assignments is None:
         assignments = {"U010001": "R-01", "U010002": "R-02", "U010004": "R-02"}
     for code, role_code in assignments.items():
         user_id = await session.scalar(select(SysUser.id).where(SysUser.code == code))
         role_id = await session.scalar(select(SysRole.id).where(SysRole.code == role_code))
+        if user_id is None or role_id is None:
+            from app.seeds.loader import run_seeds
+
+            await run_seeds(session, ["admin"])
+            user_id = await session.scalar(select(SysUser.id).where(SysUser.code == code))
+            role_id = await session.scalar(select(SysRole.id).where(SysRole.code == role_code))
         assert user_id is not None and role_id is not None
         exists = await session.scalar(
             select(SysRoleMember.id).where(
@@ -24,3 +33,4 @@ async def grant_fixture_roles(session, assignments=None):
             )
             session.add(SysRoleMember(role_id=role_id, user_id=user_id, seq=(seq or 0) - 1))
     await session.flush()
+    await bind_workspace_members(session)

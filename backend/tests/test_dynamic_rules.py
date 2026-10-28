@@ -100,16 +100,19 @@ async def test_hits_paging_and_detail(dyn, client):  # noqa: F811
     err(await client.get(f"{API}/rule-hits/HIT-NOPE"), 404, "NOT_FOUND")
 
 
-async def test_replay_is_deterministic_and_writes_nothing(dyn, client):  # noqa: F811
+async def test_unbound_replay_reports_mapping_error_and_writes_nothing(dyn, client):  # noqa: F811
     before = await dyn.scalar(select(func.count()).select_from(RuleHit))
     body = {"range": "7d", "version": "draft"}
-    err(await client.post(f"{API}/rules/R-007:replay", json=body), 503, "RULE_EVALUATOR_UNAVAILABLE")
-    err(await client.post(f"{API}/rules/R-007:replay", json=body), 503, "RULE_EVALUATOR_UNAVAILABLE")
+    first = err(await client.post(f"{API}/rules/R-007:replay", json=body), 422, "RULE_EVALUATION_UNAVAILABLE")
+    repeated = err(
+        await client.post(f"{API}/rules/R-007:replay", json=body), 422, "RULE_EVALUATION_UNAVAILABLE"
+    )
+    assert first["message"] == repeated["message"] and "执行映射" in first["message"]
     assert await dyn.scalar(select(func.count()).select_from(RuleHit)) == before
     err(
         await client.post(f"{API}/rules/R-012:replay", json={"range": "30d", "version": "current"}),
-        503,
-        "RULE_EVALUATOR_UNAVAILABLE",
+        422,
+        "RULE_EVALUATION_UNAVAILABLE",
     )
     err(await client.post(f"{API}/rules/R-007:replay", json={"range": "1y"}), 422, "VALIDATION_FAILED")
 

@@ -21,9 +21,9 @@ async def grant_fixture_roles(session, assignments=None):
 
     database = session.get_bind().engine.url.database
     assert database == TEST_DB and database.startswith(("rengu_test", "rengu_fix_"))
-    if not await session.scalar(select(SysUser.id).where(SysUser.code == "U010001")) or not await session.scalar(
-        select(SysRole.id).where(SysRole.code == "R-01")
-    ):
+    if not await session.scalar(
+        select(SysUser.id).where(SysUser.code == "U010001")
+    ) or not await session.scalar(select(SysRole.id).where(SysRole.code == "R-01")):
         await run_seeds(session, ["admin"])
     await grant_ops_roles(session, assignments)
 
@@ -50,7 +50,9 @@ async def dyn(session, engine, _isolated_sections):
     finally:
         async with engine.begin() as connection:
             await connection.execute(text("SELECT set_config('rengu.ontology_id','1',true)"))
-            await connection.execute(delete(ActionRunDailyCounter).where(ActionRunDailyCounter.ontology_id == 1))
+            await connection.execute(
+                delete(ActionRunDailyCounter).where(ActionRunDailyCounter.ontology_id == 1)
+            )
 
 
 async def as_(session, name: str) -> dict[str, str]:

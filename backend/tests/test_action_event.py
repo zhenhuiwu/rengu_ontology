@@ -169,7 +169,14 @@ async def test_action_types_list(client, ae):
 async def test_action_type_detail_matches_mock(client, ae, a):
     r = await client.get(f"{ONT}/action-types/{a['id']}")
     assert r.status_code == 200, r.text
-    assert drop_none(r.json()) == drop_none(a)  # mock 已含 withSystem 合并的 system/timeout/retry/idempotent
+    body = r.json()
+    legacy = {
+        key: value for key, value in body.items() if key not in ("policy", "policyStored", "policyStatus")
+    }
+    assert drop_none(legacy) == drop_none(a)  # mock 已含 withSystem 合并的 system/timeout/retry/idempotent
+    assert body["policy"] == {"mode": "confirm", "overflow": "stage"}
+    assert body["policyStored"] is None
+    assert body["policyStatus"] == "unconfigured"
 
 
 async def test_action_subresources_match_mock(client, ae):

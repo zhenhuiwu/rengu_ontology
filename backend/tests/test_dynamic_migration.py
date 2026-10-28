@@ -9,11 +9,7 @@ import json
 import asyncpg
 import pytest
 from alembic import command
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from app.modules.dynamic.models import AlertLevel
-from app.modules.dynamic.rules_models import Rule, RuleOutput, RuleStatus
 from tests.helpers.migrations import assert_module_round_trip, temp_database
 
 OWN_TABLES = {
@@ -46,28 +42,15 @@ async def test_dynamic_module_round_trip():
 async def test_dims_migration_preserves_existing_append_only_hits():
     async with temp_database() as (cfg, dsn):
         await asyncio.to_thread(command.upgrade, cfg, "static_0003")
-        engine = create_async_engine(make_url(dsn).set(drivername="postgresql+asyncpg"))
-        try:
-            async with AsyncSession(engine, expire_on_commit=False) as session:
-                rule = Rule(
-                    code="R-MIG",
-                    name="Migration probe",
-                    owner="test",
-                    status=RuleStatus.published,
-                    obj_kind="product",
-                    level=AlertLevel.high,
-                    output=RuleOutput.alert,
-                    conds=[],
-                    trigger={},
-                    auto_stage={},
-                )
-                session.add(rule)
-                await session.commit()
-                rule_id = rule.id
-        finally:
-            await engine.dispose()
         conn = await asyncpg.connect(dsn)
         try:
+            # 旧 revision 没有 ontology_id，不能用当前 ORM 插入历史结构。
+            rule_id = await conn.fetchval(
+                'INSERT INTO rule (code, name, "desc", owner, status, obj_kind, level, output, '
+                "conds, logic, expr, dedupe, cooldown, trigger, auto_stage, weekly) "
+                "VALUES ('R-MIG', 'Migration probe', '', 'test', 'published', 'product', 'high', "
+                "'alert', '[]', '且', '', '', '', '{}', '{}', 0) RETURNING id"
+            )
             await conn.executemany(
                 "INSERT INTO rule_hit (rule_id, seq, at, obj_kind, obj_id, obj_label, "
                 "store_id, store_label, value, threshold, result, code) "

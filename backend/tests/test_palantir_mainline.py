@@ -29,7 +29,8 @@ STAGE = {
     "objLabel": "伊利纯牛奶 250ml×16盒",
     "idempotencyKey": "palantir-t7-mainline",
     "params": json.dumps(
-        {"product": "1011846", "store": "SH0102", "qty": 143, "mode": "仓库调拨", "alert": ALERT}),
+        {"product": "1011846", "store": "SH0102", "qty": 143, "mode": "仓库调拨", "alert": ALERT}
+    ),
 }
 
 
@@ -44,9 +45,20 @@ async def mainline(dyn, client, session, monkeypatch):  # noqa: F811
 
     def receive(request: httpx.Request):  # 本地接收端：验签 + 回执
         body = request.read()
-        hits.append({"url": str(request.url), "body": json.loads(body), "valid": verify(
-            SECRET.encode(), request.headers[TIMESTAMP_HEADER], body, request.headers[SIGNATURE_HEADER]),
-            "idem": request.headers.get("Idempotency-Key")})
+        hits.append(
+            {
+                "url": str(request.url),
+                "body": json.loads(body),
+                "valid": verify(
+                    SECRET.encode(),
+                    request.headers[TIMESTAMP_HEADER],
+                    body,
+                    request.headers[SIGNATURE_HEADER],
+                ),
+                "idem": request.headers.get("Idempotency-Key"),
+                "authorization": request.headers.get("Authorization"),
+            }
+        )
         return httpx.Response(200, json={"status": "SUCCESS", "receiptId": "MOCK-RCPT-1"})
 
     real = httpx.AsyncClient
@@ -58,8 +70,21 @@ async def mainline(dyn, client, session, monkeypatch):  # noqa: F811
     monkeypatch.setattr(execution.httpx, "AsyncClient", client_factory)
     settings = get_settings()
     monkeypatch.setattr(settings, "integration_real_connect", True)
-    monkeypatch.setattr(settings, "integration_adapters", SecretStr(json.dumps({"1/EXT-WEBHOOK": {
-        "submit_path": "/hook", "actions": ["request_replenish"], "signing_secret": SECRET}})))
+    monkeypatch.setattr(
+        settings,
+        "integration_adapters",
+        SecretStr(
+            json.dumps(
+                {
+                    "1/EXT-WEBHOOK": {
+                        "submit_path": "/hook",
+                        "actions": ["request_replenish"],
+                        "signing_secret": SECRET,
+                    }
+                }
+            )
+        ),
+    )
     return client, hits
 
 
@@ -91,9 +116,12 @@ async def test_mainline_direct_stage_reaches_signed_webhook(mainline, session):
     approved = await client.post(f"{API}/action-runs/{code}:approve", headers=APPROVER)
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "结果未知"  # 已持久排队，等待执行器
-    call_id = await session.scalar(text(
-        "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"),
-        {"c": code})
+    call_id = await session.scalar(
+        text(
+            "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"
+        ),
+        {"c": code},
+    )
     with patch.object(execution, "scoped_sessions", scope_of(session)):  # 执行器一次（测试事务内）
         await execution.dispatch_one(call_id, 1)
     assert len(hits) == 1, hits
@@ -111,9 +139,18 @@ async def test_mainline_direct_stage_reaches_signed_webhook(mainline, session):
 
     logs = await client.get(f"{API}/decisions", params={"alertId": ALERT}, headers=PLANNER)
     assert logs.status_code == 200 and logs.json()["total"] >= 1, logs.text
-    print("STEPS", claim.status_code, evaluated.status_code, staged.status_code, code,
-          confirmed.json()["status"], approved.json()["status"], hit["valid"],
-          final.json()["status"], logs.json()["total"])
+    print(
+        "STEPS",
+        claim.status_code,
+        evaluated.status_code,
+        staged.status_code,
+        code,
+        confirmed.json()["status"],
+        approved.json()["status"],
+        hit["valid"],
+        final.json()["status"],
+        logs.json()["total"],
+    )
     sql = text("SELECT http_status FROM writeback_call WHERE id = :i")
     status = await session.scalar(sql, {"i": call_id})
     assert status == 200
@@ -130,9 +167,19 @@ async def test_mainline_from_alert_start_action_reaches_signed_webhook(mainline,
     assert claim.status_code == 200, claim.text
     evaluated = await client.post(f"{API}/alerts/{ALERT}/decision:evaluate", headers=PLANNER)
     assert evaluated.status_code == 200, evaluated.text
-    started = await client.post(f"{API}/alerts/{ALERT}:start-action", headers=PLANNER,
-                                json={"params": {"product": "1011846", "store": "SH0102", "qty": 205,
-                                                   "mode": "仓库调拨", "alert": ALERT}})
+    started = await client.post(
+        f"{API}/alerts/{ALERT}:start-action",
+        headers=PLANNER,
+        json={
+            "params": {
+                "product": "1011846",
+                "store": "SH0102",
+                "qty": 205,
+                "mode": "仓库调拨",
+                "alert": ALERT,
+            }
+        },
+    )
     assert started.status_code in (200, 201), started.text
     body = started.json()
     code = body.get("id") or (body.get("action") or {}).get("id") or body.get("runId")
@@ -147,9 +194,12 @@ async def test_mainline_from_alert_start_action_reaches_signed_webhook(mainline,
     assert state == "审批中", state
     approved = await client.post(f"{API}/action-runs/{code}:approve", headers=APPROVER)
     assert approved.status_code == 200 and approved.json()["status"] == "结果未知", approved.text
-    call_id = await session.scalar(text(
-        "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"),
-        {"c": code})
+    call_id = await session.scalar(
+        text(
+            "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"
+        ),
+        {"c": code},
+    )
     with patch.object(execution, "scoped_sessions", scope_of(session)):
         await execution.dispatch_one(call_id, 1)
     assert len(hits) == 1 and hits[0]["valid"] is True and hits[0]["body"]["actionRunId"] == code, hits
@@ -158,10 +208,78 @@ async def test_mainline_from_alert_start_action_reaches_signed_webhook(mainline,
     assert final["status"] == "已对账" and final["extRef"] == "MOCK-RCPT-1", final
     logs = await client.get(f"{API}/decisions", params={"alertId": ALERT}, headers=PLANNER)
     assert logs.status_code == 200 and logs.json()["total"] >= 1, logs.text
-    print("ALERT-STEPS", claim.status_code, evaluated.status_code, started.status_code, code,
-          linked["actionId"],
-          state, approved.json()["status"], hits[0]["valid"], final["status"],
-          logs.json()["total"])
+    print(
+        "ALERT-STEPS",
+        claim.status_code,
+        evaluated.status_code,
+        started.status_code,
+        code,
+        linked["actionId"],
+        state,
+        approved.json()["status"],
+        hits[0]["valid"],
+        final["status"],
+        logs.json()["total"],
+    )
+
+
+async def test_no_auth_action_dispatch_ignores_configured_token(mainline, session, monkeypatch):
+    from sqlalchemy import select
+
+    from app.modules.integration import execution
+    from app.modules.integration.models import ExtSystem
+
+    client, hits = mainline
+    system = await session.scalar(select(ExtSystem).where(ExtSystem.code == "EXT-WEBHOOK"))
+    system.auth_type = "无需授权"
+    await session.flush()
+    monkeypatch.setattr(
+        get_settings(),
+        "integration_adapters",
+        SecretStr(
+            json.dumps(
+                {
+                    "1/EXT-WEBHOOK": {
+                        "submit_path": "/hook",
+                        "actions": ["request_replenish"],
+                        "token": "stale-token",
+                        "signing_secret": SECRET,
+                    }
+                }
+            )
+        ),
+    )
+    assert (await client.post(f"{API}/alerts/{ALERT}:claim", headers=PLANNER)).status_code == 200
+    started = await client.post(
+        f"{API}/alerts/{ALERT}:start-action",
+        headers=PLANNER,
+        json={
+            "params": {
+                "product": "1011846",
+                "store": "SH0102",
+                "qty": 205,
+                "mode": "仓库调拨",
+                "alert": ALERT,
+            }
+        },
+    )
+    assert started.status_code in (200, 201), started.text
+    code = (
+        started.json().get("id")
+        or (started.json().get("action") or {}).get("id")
+        or started.json().get("runId")
+    )
+    approved = await client.post(f"{API}/action-runs/{code}:approve", headers=APPROVER)
+    assert approved.status_code == 200, approved.text
+    call_id = await session.scalar(
+        text(
+            "SELECT c.id FROM writeback_call c JOIN action_run r ON r.id = c.action_run_id WHERE r.code = :c"
+        ),
+        {"c": code},
+    )
+    with patch.object(execution, "scoped_sessions", scope_of(session)):
+        await execution.dispatch_one(call_id, 1)
+    assert len(hits) == 1 and hits[0]["authorization"] is None and hits[0]["valid"] is True
 
 
 async def test_declared_edits_only_on_external_webhook_and_json_stays_strict(mainline, session):
@@ -177,8 +295,18 @@ async def test_declared_edits_only_on_external_webhook_and_json_stays_strict(mai
     declared = await declared_writeback(session, action)
     assert {d["kind"] for d in declared} >= {"编辑"}
     assert all(d["status"] == "external/declared" for d in declared)
-    run = type("Run", (), {"code": "DRY", "obj_kind": "product", "obj_id": "1011846", "type_version": "v3",
-                           "params": {"product": "1011846"}, "params_text": None})()
+    run = type(
+        "Run",
+        (),
+        {
+            "code": "DRY",
+            "obj_kind": "product",
+            "obj_id": "1011846",
+            "type_version": "v3",
+            "params": {"product": "1011846"},
+            "params_text": None,
+        },
+    )()
     await business_edits(session, user, run, action)  # 自然语言编辑：外部承担，本地不执行、不报错
 
     local = {**action, "sysId": None}  # 无外部 Webhook 通道：仍严格拒绝自然语言
@@ -187,11 +315,19 @@ async def test_declared_edits_only_on_external_webhook_and_json_stays_strict(mai
         await business_edits(session, user, run, local)
     assert error.value.code == "ACTION_EDITS_UNAVAILABLE"
     result = await DatabaseSubmissionChecker(session, user).run(
-        local, {"objKind": "product", "objId": "1011846", "params": run.params})
+        local, {"objKind": "product", "objId": "1011846", "params": run.params}
+    )
     assert result["passed"] is False and "humanChecks" not in result
 
-    bad_json = {**action, "writeback": {**action["writeback"], "edits": [
-        {"op": "修改", "obj": "商品", "field": json.dumps({"values": {"status": {"value": "x"}}})}]}}
+    bad_json = {
+        **action,
+        "writeback": {
+            **action["writeback"],
+            "edits": [
+                {"op": "修改", "obj": "商品", "field": json.dumps({"values": {"status": {"value": "x"}}})}
+            ],
+        },
+    }
     with pytest.raises(AppError) as error:  # 有界 JSON 映射在外部通道上也保持严格校验
         await business_edits(session, user, run, bad_json)
     assert error.value.code == "ACTION_EDITS_UNAVAILABLE"
@@ -219,7 +355,8 @@ async def test_human_checks_force_confirm_in_auto_mode(mainline, monkeypatch):
     monkeypatch.setattr(action_policy, "auto_decision", never)
     svc = ActionService.__new__(ActionService)
     svc.session, svc._human_runs, svc._log = None, {"ACT-H"}, log
-    run = SimpleNamespace(code="ACT-H", action_type_code="request_replenish", type_version="v3",
-                          status=ActionStatus.staged)
+    run = SimpleNamespace(
+        code="ACT-H", action_type_code="request_replenish", type_version="v3", status=ActionStatus.staged
+    )
     assert await svc.apply_policy(run) is run and run.status == ActionStatus.staged
     assert svc.policy_mode == "auto" and "人工核对" in svc.policy_overflow and logs

@@ -1,0 +1,40 @@
+Webhook 本地端到端验证（2026-10-27，UTC+8）
+
+被测提交：f3b8119c23ebd8869982e071c2d415c27b83b44c
+最终结果：18 passed，0 failed，0 error；11.32 秒（首轮同为 18 passed，17.98 秒）。
+警告：既有 pytest-asyncio event_loop_policy 夹具弃用警告 1 条。
+新增文件：tests/e2e/test_webhook_delivery.py。
+生产实现、共享夹具、已有测试未做本地修改。
+
+范围：真实 PostgreSQL RLS 工作空间、discover/due/prepare/execute 投递链和本机 HTTP 服务。
+每次认领在单独事务提交，执行使用新的会话；重试用时钟推进触发真实到期扫描。
+接收端使用标准库 hmac/hashlib 独立验签，不调用生产 signing.signature/verify。
+未替换 HTTP 客户端、签名函数或投递函数；仅设置测试通道路由与固定测试时间。
+
+18 项用例：
+- 503、429（Retry-After=120）、断连后到期重试成功，各 1 项。
+- 503、429、断连达到重试上限；30/60 秒指数退避，各 1 项。
+- 302、400、401、403、409 不重试，重定向不跟随，各 1 项。
+- 接收端密钥不同，实际应用请求被独立验签拒绝，1 项。
+- 过短密钥、不可解密密钥阻止发送，不降级为无签名，各 1 项。
+- 接收端自检：请求体篡改、过期时间戳、错误签名、缺少签名，各 1 项。
+同时检查：中文原始字节、稳定幂等键、本体头、每次更新的签名/时间戳、持久尝试日志、最终聚合状态。
+
+复现（在 backend 目录的 PowerShell 中；连接串只配置测试服务器凭据）：
+$env:RENGU_DATABASE_URL = '<postgresql+asyncpg://用户:密码@测试服务器:端口/postgres>'
+$env:RENGU_TEST_DB = 'rengu_test_webhook_e2e_20261027_f3b8119'
+$env:RENGU_ENV = 'test'
+$env:DASHSCOPE_API_KEY = ''
+uv run pytest tests/e2e -q --junitxml=testlogs/webhook-e2e-20261027-f3b8119/junit.xml
+
+本次服务器：localhost:5433；目标数据库：rengu_test_webhook_e2e_20261027_f3b8119。
+最终日志：../../testlogs/webhook-e2e-20261027-f3b8119/pytest-final.log
+最终 JUnit：../../testlogs/webhook-e2e-20261027-f3b8119/junit-final.xml
+测试库保留为验证证据；本机监听服务均由夹具关闭。未启动常驻 worker。
+
+边界：本组针对事件 Webhook 测试通道，不宣称覆盖生产对象授权、动作副作用映射、
+外部动作写回、生产 TLS 或外部接收方的业务去重；后者仅验证发送端幂等键稳定。
+动作写回只提交一次，失败后对账、不自动重发，是预期行为，不列为缺陷。
+
+环境尝试说明：早先默认端口 5440 无监听产生的结果已单独归档，未计入以上有效结果。
+旧提交 283bd89 的未完成运行也不计为全量基线。

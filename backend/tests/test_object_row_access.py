@@ -38,8 +38,18 @@ async def facts(users):
                 conflict_strategy=ConflictStrategy.user_edit_wins,
                 lifecycle=Lifecycle.active,
                 pk_property=primary,
-                properties=[Property(api_name=primary, display_name="编号", data_type="string", prop_group="标识",
-                    source_column=primary, description="", is_pk=True, visibility="normal")],
+                properties=[
+                    Property(
+                        api_name=primary,
+                        display_name="编号",
+                        data_type="string",
+                        prop_group="标识",
+                        source_column=primary,
+                        description="",
+                        is_pk=True,
+                        visibility="normal",
+                    )
+                ],
             )
         )
     product = Product(
@@ -121,7 +131,7 @@ async def grant(facts, code, scopes=(), default_deny=False, view=True):
 
 
 async def query(session, user, sql):
-    return (await run_guarded(await session.connection(), sql, user)).scalar()
+    return (await run_guarded(await session.connection(), sql, user, session=session)).scalar()
 
 
 async def test_real_scope_api_sql_inheritance_and_membership_revocation(client, facts, engine):

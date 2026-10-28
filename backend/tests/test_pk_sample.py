@@ -1,6 +1,7 @@
 """Finite real-PG samples of a draft candidate key, preserving source facts."""
 
 import json
+import os
 
 import asyncpg
 
@@ -22,7 +23,9 @@ def test_empty_null_and_truncated_samples_never_certify_whole_source():
 
 async def test_real_duplicate_code_and_draft_integer_id(source_case):
     case = source_case
-    assert case.real.admin_url.database == "rengu_fix_static_20261027"
+    assert case.real.admin_url == case.session.get_bind().engine.url
+    assert case.real.admin_url.database == os.environ.get("RENGU_TEST_DB")
+    assert case.real.admin_url.database.startswith(("rengu_test", "rengu_fix_"))
     conn = await asyncpg.connect(
         case.real.admin_url.set(drivername="postgresql").render_as_string(hide_password=False)
     )

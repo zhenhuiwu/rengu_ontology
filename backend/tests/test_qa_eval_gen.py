@@ -86,8 +86,11 @@ def test_worker_registers_daily_eval_run():
     from app.modules.qa.eval import daily, worker
 
     periodic = worker.app.periodic_registry.periodic_tasks
-    assert daily.TASK in worker.app.tasks
-    assert periodic[(daily.TASK, daily.TASK)].cron == daily.CRON
+    assert daily.TASK not in worker.app.tasks
+    assert (daily.TASK, daily.TASK) not in periodic
+    opted_in = worker.build_app(enable_daily=True)
+    assert daily.TASK in opted_in.tasks
+    assert opted_in.periodic_registry.periodic_tasks[(daily.TASK, daily.TASK)].cron == daily.CRON
 
 
 async def test_daily_eval_run_is_created_and_queued_once_per_day(session):

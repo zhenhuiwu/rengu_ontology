@@ -256,6 +256,52 @@ async def test_http_adapter_requires_real_explicit_response(reconciliation, monk
         assert error.value.code == code and error.value.status_code == 503
 
 
+async def test_no_auth_probe_and_query_ignore_configured_token(reconciliation, monkeypatch):
+    import httpx
+
+    _, system, _ = reconciliation
+    system.auth_type = "无需授权"
+    settings = get_settings()
+    monkeypatch.setattr(settings, "integration_real_connect", True)
+    monkeypatch.setattr(
+        settings,
+        "integration_adapters",
+        SecretStr('{"EXT-RECON-TEST":{"queryPath":"/query","probePath":"/probe","token":"stale-token"}}'),
+    )
+    calls = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, params, headers):
+            calls.append((url, headers))
+            return httpx.Response(200, json={"extStatus": "查到·成功", "extRef": "OK"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    adapter = get_adapter(system)
+    await adapter.query_by_key("key")
+    await adapter.request("probe")
+    assert len(calls) == 2 and all("Authorization" not in headers for _, headers in calls)
+    system.auth_type = "Token（服务账号）"
+    await get_adapter(system).request("probe")
+    assert calls[-1][1]["Authorization"] == "Bearer stale-token"
+    monkeypatch.setattr(
+        settings, "integration_adapters", SecretStr('{"EXT-RECON-TEST":{"probePath":"/probe"}}')
+    )
+    await get_adapter(system, "probe").request("probe")
+    assert "Authorization" not in calls[-1][1]
+    system.auth_type = "无需授权"
+    await get_adapter(system, "probe").request("probe")
+    assert "Authorization" not in calls[-1][1]
+
+
 async def test_manual_resolution_closes_task_in_same_transaction(runtime):  # noqa: F811
     from app.common.auth import resolve_user
     from app.modules.dynamic.service import ActionService

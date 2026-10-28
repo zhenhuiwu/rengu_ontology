@@ -25,6 +25,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import asyncpg
+import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import Script, ScriptDirectory
@@ -35,6 +36,18 @@ from tests.conftest import BASE_URL
 SKELETON = "skeleton"
 SKELETON_REVS = {"0001", "0002", "0003"}
 MODULE_REV = re.compile(r"^[a-z_]+_\d{4}$")
+FORWARD_ONLY_REVISIONS = {
+    "ontology_0018",
+    "admin_0019",
+    "quality_0020",
+    "notify_0022",
+    "admin_0025",
+    "notify_0028",
+    "admin_0029",
+    "dynamic_0030",
+    "qa_0007",
+    "integration_0031",
+}
 
 # public 下用户定义的类型：enum(e) / 复合(c，只算 CREATE TYPE … AS) / domain(d) / range(r, m)；
 # 不算数组类型和扩展自带的类型（如 vector，扩展不随 downgrade 删）。
@@ -118,6 +131,17 @@ def module_parent(module: str) -> str:
     return down or "base"
 
 
+def skip_forward_only_downgrade(target: str, *, start: str = "head") -> None:
+    crossed = {
+        revision.revision for revision in script_directory().iterate_revisions(start, target)
+    } & FORWARD_ONLY_REVISIONS
+    if crossed:
+        pytest.skip(
+            "decisions-pending.md #10: preserve recorded history; downgrade crosses forward-only "
+            + ", ".join(sorted(crossed))
+        )
+
+
 @asynccontextmanager
 async def temp_database() -> AsyncIterator[tuple[Config, str]]:
     """临时空库（不碰会话共用的测试库）；yield (alembic Config, asyncpg 用的 dsn)。"""
@@ -184,6 +208,7 @@ async def assert_module_round_trip(
     own_tables, own_types = set(own_tables), set(own_types)
     assert own_tables, "至少列出一张本模块的表"
     parent = module_parent(module)
+    skip_forward_only_downgrade(parent)
     head = script_directory().get_current_head()
     up = asyncio.to_thread
     async with temp_database() as (cfg, dsn):

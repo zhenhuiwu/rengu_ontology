@@ -244,6 +244,9 @@ async def test_t7_metric_synonyms_desc_via_cr_publish_and_rollback(client, seede
         return r.json()
 
     metric = await seeded.scalar(select(Metric).where(Metric.code == code))
+    metric.formula = "COUNT(order) WHERE status <> 已取消"
+    metric.def_rows = [{"k": "时间字段", "v": "order.created_at"}]
+    await seeded.flush()
     version = metric.version
     first = await publish(
         [

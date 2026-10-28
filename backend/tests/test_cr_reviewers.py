@@ -4,6 +4,15 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.admin.models import SysUser
+from app.modules.static.models import (
+    ConflictStrategy,
+    Lifecycle,
+    Metric,
+    MetricStatus,
+    ObjectStatus,
+    ObjectType,
+    Property,
+)
 from app.seeds.loader import run_seeds
 from tests.function_access_support import grant_fixture_roles
 
@@ -16,6 +25,45 @@ REVIEWER = {"X-Demo-As": "U010004"}
 async def identities(session):
     await run_seeds(session, ["admin"])
     await grant_fixture_roles(session)
+    # This test's existing metric target needs a real compiled mapping, not a missing baseline.
+    order = await session.scalar(select(ObjectType).where(ObjectType.code == "order"))
+    if order is None:
+        order = ObjectType(
+            code="order",
+            api_name="SalesOrder",
+            display_name="订单",
+            obj_group="测试",
+            status=ObjectStatus.published,
+            conflict_strategy=ConflictStrategy.user_edit_wins,
+            lifecycle=Lifecycle.active,
+        )
+        session.add(order)
+        await session.flush()
+    session.add(
+        Property(
+            object_type_id=order.id,
+            api_name="review_created_at",
+            display_name="创建时间",
+            data_type="datetime",
+            prop_group="测试",
+            source_column="created_at_biz",
+            backing_column="created_at_biz",
+        )
+    )
+    session.add(
+        Metric(
+            code="review_metric",
+            api_name="ReviewMetric",
+            display_name="审核流程指标",
+            metric_group="测试",
+            unit="个",
+            version="v1",
+            status=MetricStatus.published,
+            owner="王敏",
+            formula="COUNT(order.review_created_at)",
+        )
+    )
+    await session.flush()
     return session
 
 
@@ -60,8 +108,14 @@ async def test_reviewer_options_patch_and_approval_use_stable_identity(client, i
         },
     )
     assert result.status_code == 200, result.text
+    validated = await client.post(f"{P}/change-requests/{cr['id']}:validate", headers=AUTHOR)
+    assert validated.status_code == 200, validated.text
+    checks = (await client.get(f"{P}/change-requests/{cr['id']}", headers=AUTHOR)).json()["detail"]["checks"]
+    assert next(row for row in checks if row["code"] == "V5")["result"] == "通过"
     submitted = await client.post(f"{P}/change-requests/{cr['id']}:submit", headers=AUTHOR)
     assert submitted.status_code == 200, submitted.text
+    self_approval = await client.post(f"{P}/change-requests/{cr['id']}:approve", headers=AUTHOR)
+    assert self_approval.status_code == 403, self_approval.text
     reviewer = await identities.scalar(select(SysUser).where(SysUser.code == "U010004"))
     reviewer.name = "实际审核人新姓名"
     await identities.flush()
@@ -101,6 +155,10 @@ async def test_me_capabilities_come_from_actual_identity_and_roles(client, ident
     assert admin.json()["id"] == "U010001" and admin.json()["roles"] == ["R-01"]
     assert admin.json()["capabilities"] == {"publish": True, "rollback": True}
     reviewer = (await client.get("/api/admin/v1/me", headers=REVIEWER)).json()
-    assert reviewer["capabilities"] == {"publish": False, "rollback": True}
+    assert reviewer["roles"] == ["R-02"]
+    assert reviewer["func"]["releases"] == "manage"
+    assert reviewer["capabilities"] == {"publish": True, "rollback": True}
+    for profile in (admin.json(), reviewer):
+        assert profile["capabilities"]["publish"] == (profile["func"].get("releases") == "manage")
     denied = (await client.get("/api/admin/v1/me", headers={"X-Demo-As": "U010006"})).json()
     assert denied["roles"] == [] and denied["capabilities"] == {"publish": False, "rollback": False}

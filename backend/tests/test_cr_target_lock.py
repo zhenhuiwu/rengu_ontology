@@ -4,22 +4,25 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
 from app.core.errors import AppError
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.models import ChangeRequest, CrTarget
 from app.modules.static.schemas import CRCreateIn, TargetIn
-from tests.test_creation_code_lock import _two_creates
+from tests.test_creation_code_lock import _scoped_session, _two_creates
 
 
 async def test_existing_crs_serialize_same_target_until_commit(engine):
     actor = CurrentUser(
-        id="target-lock-test", name=uuid4().hex, func={"releases": "manage", "metrics": "manage"}
+        id="target-lock-test",
+        name=uuid4().hex,
+        ontology_id=1,
+        ontology_role="editor",
+        func={"releases": "manage", "metrics": "manage"},
     )
     target = TargetIn(kind="metric", id="metric_" + uuid4().hex)
-    async with AsyncSession(engine, expire_on_commit=False) as setup:
+    async with _scoped_session(engine) as setup:
         crs = [
             await CrWriteService(setup).create(actor, CRCreateIn(title=f"占用{n}", reviewer=""))
             for n in (1, 2)
@@ -33,7 +36,7 @@ async def test_existing_crs_serialize_same_target_until_commit(engine):
         with pytest.raises(AppError) as error:
             await _two_creates(engine, join)
         assert error.value.code == "TARGET_IN_OTHER_CR"
-        async with engine.connect() as check:
+        async with _scoped_session(engine) as check:
             assert (
                 await check.scalar(
                     select(func.count())
@@ -43,5 +46,5 @@ async def test_existing_crs_serialize_same_target_until_commit(engine):
                 == 1
             )
     finally:
-        async with engine.begin() as cleanup:
+        async with _scoped_session(engine, commit=True) as cleanup:
             await cleanup.execute(delete(ChangeRequest).where(ChangeRequest.code.in_(crs)))

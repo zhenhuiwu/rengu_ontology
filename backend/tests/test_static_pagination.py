@@ -288,24 +288,36 @@ async def test_history_pages_do_not_read_current_definition_tables(client, stati
             for sql in queries
             if "FROM object_type" in sql
             and sql.split("FROM object_type", 1)[0].strip()
-            == "SELECT object_type.code, object_type.api_name, object_type.display_name"
-        ]
-        assert identities and all("WHERE object_type.status" in sql for sql in identities)
-        definition_queries = [sql for sql in queries if sql not in identities]
-        assert not any(
-            f"FROM {table} " in sql or f"FROM {table}\n" in sql
-            for sql in definition_queries
-            for table in (
-                "object_type",
-                "property",
-                "metric",
-                "dimension",
-                "dim_value",
-                "dim_mapping",
-                "knowledge",
-                "link_type",
+            in (
+                "SELECT object_type.code, object_type.api_name, object_type.display_name",
+                "SELECT object_type.id, object_type.code, object_type.api_name, object_type.display_name",
             )
-        )
+        ]
+        assert all("WHERE object_type.status" in sql for sql in identities)
+        # Governance loads the current workspace's object codes, never definitions.
+        definition_queries = [
+            sql
+            for sql in queries
+            if sql not in identities and sql != "SELECT code FROM object_type WHERE ontology_id = $1"
+        ]
+        forbidden = [
+            sql
+            for sql in definition_queries
+            if any(
+                f"FROM {table} " in sql or f"FROM {table}\n" in sql
+                for table in (
+                    "object_type",
+                    "property",
+                    "metric",
+                    "dimension",
+                    "dim_value",
+                    "dim_mapping",
+                    "knowledge",
+                    "link_type",
+                )
+            )
+        ]
+        assert not forbidden, forbidden
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", capture)
 

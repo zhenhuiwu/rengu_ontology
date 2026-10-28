@@ -219,8 +219,22 @@ async def test_import_preview_csv_and_rows(client, users):
             ]
         },
     )
-    assert invalid.status_code == 200 and invalid.json()["rows"][0]["error"] is None  # 通用部门允许规范自由文本
-    blank = await client.post(URL + ":import-preview", json={"rows": [{"name": "空部门测试", "account": "blank-dept@example.invalid", "dept": "", "role": "业务查看"}]})
+    assert (
+        invalid.status_code == 200 and invalid.json()["rows"][0]["error"] is None
+    )  # 通用部门允许规范自由文本
+    blank = await client.post(
+        URL + ":import-preview",
+        json={
+            "rows": [
+                {
+                    "name": "空部门测试",
+                    "account": "blank-dept@example.invalid",
+                    "dept": "",
+                    "role": "业务查看",
+                }
+            ]
+        },
+    )
     assert blank.status_code == 200 and "1至128" in blank.json()["rows"][0]["error"]
     rows_in = [
         {"name": "a", "account": MOCK[0]["account"], "dept": DEPTS[0], "role": "业务查看"},

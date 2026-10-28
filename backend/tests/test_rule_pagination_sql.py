@@ -34,9 +34,13 @@ async def test_rules_hits_and_changes_are_sql_pages(dyn, client, engine):  # noq
             loads = [
                 sql
                 for sql in statements
-                if re.search(rf"\bFROM {table}\s", sql) and "count(" not in sql.lower()
+                if re.search(rf"\bFROM {table}\s", sql)
+                and not re.match(r"\s*SELECT\s+count\(", sql, re.IGNORECASE)
             ]
-            assert loads and all("LIMIT" in sql and "OFFSET" in sql for sql in loads), loads
+            assert loads and all("LIMIT" in sql and "OFFSET" in sql for sql in loads), {
+                "path": path,
+                "loads": loads,
+            }
             last = (await client.get(API + path + sep + "page=999&size=2")).json()
             assert last["page"] == (last["total"] + 1) // 2 and last["items"]
         rules = (await client.get(API + "/rules", params={"size": 200})).json()["items"]

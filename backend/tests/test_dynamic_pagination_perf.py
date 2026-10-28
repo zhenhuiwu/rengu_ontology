@@ -79,7 +79,7 @@ async def test_filters_totals_defaults_and_impacts_sql(client, dyn, engine):  # 
         expected = select(model.id)
         if model in (Alert, ActionRun):
             expected = await scoped_instances(
-                expected, await resolve_user(dyn, "U010001"), model.obj_kind, model.obj_id
+                dyn, expected, await resolve_user(dyn, "U010001"), model.obj_kind, model.obj_id
             )
         assert response.json()["total"] == await dyn.scalar(
             select(func.count()).select_from(expected.subquery())

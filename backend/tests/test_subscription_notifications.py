@@ -30,19 +30,38 @@ async def subscription(session):
     role.func = {**role.func, "qa-pages": "view"}
     owner = await session.scalar(select(SysUser).where(SysUser.code == "U010001"))
     viewer = await session.scalar(select(SysUser).where(SysUser.code == "U010002"))
-    page = QaPage(code="FIX-PAGE", owner_id=owner.id, name="订阅边界页面",
-                  source_kind=PageSourceKind.manual, refresh={"freq": "手动"}, share_mode=ShareMode.members)
+    page = QaPage(
+        code="FIX-PAGE",
+        owner_id=owner.id,
+        name="订阅边界页面",
+        source_kind=PageSourceKind.manual,
+        refresh={"freq": "手动"},
+        share_mode=ShareMode.members,
+    )
     session.add(page)
     await session.flush()
     session.add(QaPageShareMember(page_id=page.id, user_id=viewer.id, perm=SharePerm.view))
-    sub = QaPageSubscription(page_id=page.id, enabled=True, channel=SubChannel.inbox,
-                            recipients=[owner.name, viewer.name], send_when=SubWhen.after_refresh)
+    sub = QaPageSubscription(
+        page_id=page.id,
+        enabled=True,
+        channel=SubChannel.inbox,
+        recipients=[owner.name, viewer.name],
+        send_when=SubWhen.after_refresh,
+    )
     session.add(sub)
     await session.flush()
-    event = await emit(session, "qa.page.subscription", {
-        "ontologyId": 1, "pageId": page.code, "channel": "inbox",
-        "to": [owner.code, viewer.code], "text": "SECRET OWNER CACHE 999999",
-    }, event_id="fix:page:subscription")
+    event = await emit(
+        session,
+        "qa.page.subscription",
+        {
+            "ontologyId": 1,
+            "pageId": page.code,
+            "channel": "inbox",
+            "to": [owner.code, viewer.code],
+            "text": "SECRET OWNER CACHE 999999",
+        },
+        event_id="fix:page:subscription",
+    )
     return page, sub, event, owner, viewer
 
 
@@ -52,8 +71,13 @@ async def test_source_backed_idempotent_and_no_cached_digest(session, subscripti
     assert await service.dispatch_workspace(session) == 0
     rows = list(await session.scalars(select(Notification)))
     assert len(rows) == 2
-    assert all(row.source_outbox_id == event.id and row.source_event_id is None
-               and row.cr_id is None and row.source_kind == "page" for row in rows)
+    assert all(
+        row.source_outbox_id == event.id
+        and row.source_event_id is None
+        and row.cr_id is None
+        and row.source_kind == "page"
+        for row in rows
+    )
     for account in (owner, viewer):
         result = await service.inbox(session, await resolve_user(session, account.code), PageParams())
         assert result["total"] == result["unread"] == 1
@@ -77,8 +101,12 @@ async def test_revocation_before_and_after_delivery_hides_count_and_markers(sess
 async def test_removed_recipient_not_delivered_and_other_workspace_not_consumed(session, subscription):
     page, _, _, owner, _ = subscription
     await session.execute(delete(QaPageShareMember).where(QaPageShareMember.page_id == page.id))
-    foreign = await emit(session, "qa.page.subscription", {"ontologyId": 2, "pageId": page.code,
-                         "to": [owner.code], "channel": "inbox"}, event_id="fix:other-workspace")
+    foreign = await emit(
+        session,
+        "qa.page.subscription",
+        {"ontologyId": 2, "pageId": page.code, "to": [owner.code], "channel": "inbox"},
+        event_id="fix:other-workspace",
+    )
     await service.dispatch_workspace(session)
     assert await session.scalar(select(func.count()).select_from(Notification)) == 1
     assert foreign.dispatched_at is None
@@ -100,13 +128,23 @@ async def test_disabled_subscription_no_notification_and_external_channel_retain
     assert await session.scalar(select(func.count()).select_from(Notification)) == 0
 
 
-async def test_dispatch_failure_rolls_back_partial_notifications_then_retries(session, subscription, monkeypatch):
+async def test_dispatch_failure_rolls_back_partial_notifications_then_retries(
+    session, subscription, monkeypatch
+):
     _, _, event, owner, _ = subscription
     real = service.page_subscription
 
     async def interrupted(session, event):
-        session.add(Notification(source_kind="page", source_outbox_id=event.id, target_code="FIX-PAGE",
-                                 recipient_id=owner.id, title="partial", description="partial"))
+        session.add(
+            Notification(
+                source_kind="page",
+                source_outbox_id=event.id,
+                target_code="FIX-PAGE",
+                recipient_id=owner.id,
+                title="partial",
+                description="partial",
+            )
+        )
         await session.flush()
         raise RuntimeError("PRIVATE SECRET SHOULD NOT BE STORED")
 
@@ -124,16 +162,31 @@ async def test_dispatch_failure_rolls_back_partial_notifications_then_retries(se
 
 async def test_cr_source_remains_compatible(session, subscription):
     from app.modules.static.models import ChangeRequest, CrEvent, CRLevel, CRStatus
+
     _, _, _, owner, _ = subscription
-    cr = ChangeRequest(code="FIX-CR", title="原有审核通知", owner=owner.name, reviewer=owner.name,
-                       status=CRStatus.in_review, level=CRLevel.minor, status_at=clock.now())
+    cr = ChangeRequest(
+        code="FIX-CR",
+        title="原有审核通知",
+        owner=owner.name,
+        reviewer=owner.name,
+        status=CRStatus.in_review,
+        level=CRLevel.minor,
+        status_at=clock.now(),
+    )
     session.add(cr)
     await session.flush()
     event = CrEvent(cr_id=cr.id, action="submit", actor=owner.name, text="提交", at=clock.now())
     session.add(event)
     await session.flush()
-    session.add(Notification(source_event_id=event.id, cr_id=cr.id, recipient_id=owner.id,
-                             title="原有待审核", description="审核通知"))
+    session.add(
+        Notification(
+            source_event_id=event.id,
+            cr_id=cr.id,
+            recipient_id=owner.id,
+            title="原有待审核",
+            description="审核通知",
+        )
+    )
     await session.flush()
     result = await service.inbox(session, await resolve_user(session, owner.code), PageParams())
     assert result["items"][0]["kind"] == "cr" and result["items"][0]["objId"] == cr.code
@@ -143,6 +196,7 @@ async def test_periodic_dispatch_accepts_worker_timestamp(monkeypatch):
     from unittest.mock import AsyncMock
 
     from app.jobs import dispatch_outbox
+
     invoke = AsyncMock(return_value=2)
     monkeypatch.setattr(service, "dispatch_subscriptions", invoke)
     assert await dispatch_outbox(timestamp=123456) == 2

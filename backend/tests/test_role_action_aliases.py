@@ -21,8 +21,12 @@ async def test_role_action_aliases_are_bound_to_actual_workspace_objects(monkeyp
     ]
     action = SimpleNamespace(code="AT-REAL", api="fix_order", name="修正订单", target_api="SalesOrder")
     price = SimpleNamespace(code="AT-PRICE", api="reprice", name="商品调价", target_api="Product")
-    session = SimpleNamespace(info={"ontology_id": 2}, scalars=AsyncMock(return_value=[action, price]),
-                              scalar=AsyncMock(return_value=1), refresh=AsyncMock())
+    session = SimpleNamespace(
+        info={"ontology_id": 2},
+        scalars=AsyncMock(return_value=[action, price]),
+        scalar=AsyncMock(return_value=1),
+        refresh=AsyncMock(),
+    )
     service = roles.RoleService(session)
     role = SimpleNamespace(name="测试角色", objs=[], id=1, lock_version=1)
     service._editable = AsyncMock(return_value=role)
@@ -37,9 +41,20 @@ async def test_role_action_aliases_are_bound_to_actual_workspace_objects(monkeyp
 
     async def save(identities, obj="订单", api=None, lock_version=1, view=True):
         return await service.set_permissions(
-            "R-TEST", fn={}, objs=[{"objType": obj, "api": api or ("SalesOrder" if obj == "订单" else "Product"),
-                                   "view": view, "export": False, "actions": identities}],
-            lock_version=lock_version, user=user, ip="127.0.0.1",
+            "R-TEST",
+            fn={},
+            objs=[
+                {
+                    "objType": obj,
+                    "api": api or ("SalesOrder" if obj == "订单" else "Product"),
+                    "view": view,
+                    "export": False,
+                    "actions": identities,
+                }
+            ],
+            lock_version=lock_version,
+            user=user,
+            ip="127.0.0.1",
         )
 
     for identity in (action.code, action.api, action.name):
@@ -51,10 +66,21 @@ async def test_role_action_aliases_are_bound_to_actual_workspace_objects(monkeyp
     assert "action_type.ontology_id =" in str(query)
     assert "action_type.retired_release_id IS NULL" in str(query)
     assert 2 in query.params.values()
-    assert any(set(value) == {TypeStatus.published, TypeStatus.changing}
-               for value in query.params.values() if isinstance(value, list))
+    assert any(
+        set(value) == {TypeStatus.published, TypeStatus.changing}
+        for value in query.params.values()
+        if isinstance(value, list)
+    )
 
-    for identity in ("unknown", "AT-OTHER-WORKSPACE", "AT-DRAFT", "旧种子未发布动作", price.code, price.api, price.name):
+    for identity in (
+        "unknown",
+        "AT-OTHER-WORKSPACE",
+        "AT-DRAFT",
+        "旧种子未发布动作",
+        price.code,
+        price.api,
+        price.name,
+    ):
         service.repo.update.reset_mock()
         with pytest.raises(roles.RoleValidation):
             await save([identity])
@@ -76,8 +102,12 @@ async def test_role_action_aliases_are_bound_to_actual_workspace_objects(monkeyp
     with pytest.raises(roles.RoleValidation):
         await save([stale])
     role.objs = original
-    for identities, kwargs in [([stale], {"obj": "商品"}), ([stale + "-alias"], {}),
-                               ([stale], {"api": "Product"}), ([stale], {"lock_version": None})]:
+    for identities, kwargs in [
+        ([stale], {"obj": "商品"}),
+        ([stale + "-alias"], {}),
+        ([stale], {"api": "Product"}),
+        ([stale], {"lock_version": None}),
+    ]:
         with pytest.raises(roles.RoleValidation):
             await save(identities, **kwargs)
     session.scalar.return_value = None
@@ -109,9 +139,13 @@ async def test_role_action_aliases_are_bound_to_actual_workspace_objects(monkeyp
 
 async def test_role_metadata_exposes_action_aliases_per_actual_object(monkeypatch):
     action = SimpleNamespace(code="AT-REAL", api="fix_order", name="修正订单", target_api="SalesOrder")
-    session = SimpleNamespace(info={"ontology_id": 2},
-        execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [("订单", "SalesOrder"), ("商品", "Product")])),
-        scalars=AsyncMock(return_value=[action]))
+    session = SimpleNamespace(
+        info={"ontology_id": 2},
+        execute=AsyncMock(
+            return_value=SimpleNamespace(all=lambda: [("订单", "SalesOrder"), ("商品", "Product")])
+        ),
+        scalars=AsyncMock(return_value=[action]),
+    )
     monkeypatch.setattr(sections, "action_def", lambda value: {"id": value.code})
     monkeypatch.setattr(execution_options, "action_operation_objects", AsyncMock(return_value=[]))
     metadata = await roles.load_perm_objects(session)

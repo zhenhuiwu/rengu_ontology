@@ -45,7 +45,10 @@ async def role_actor(client, users):
 def role_fields(r):
     return {
         k: r[k] for k in ("id", "name", "desc", "builtIn", "updatedAt", "updatedBy", "func", "objs", "scopes")
-    } | {"defaultDeny": bool(r.get("defaultDeny")), "scopes": [{"objectTypeCode": None, **scope} for scope in r["scopes"]]}
+    } | {
+        "defaultDeny": bool(r.get("defaultDeny")),
+        "scopes": [{"objectTypeCode": None, **scope} for scope in r["scopes"]],
+    }
 
 
 async def test_list_and_get_match_mock(client, users):
@@ -65,7 +68,9 @@ async def test_list_and_get_match_mock(client, users):
 async def test_meta(client, users):
     m = (await client.get(f"{URL}/meta")).json()
     assert m["funcPages"] == json.loads((SYS / "FUNC_PAGES.json").read_text("utf-8"))
-    assert m["permObjects"] == json.loads((SYS / "PERM_OBJECTS.json").read_text("utf-8"))
+    assert m["permObjects"] == [
+        {**obj, "actionRefs": []} for obj in json.loads((SYS / "PERM_OBJECTS.json").read_text("utf-8"))
+    ]
     assert [{k: p[k] for k in ("objType", "prop", "values")} for p in m["scopeProps"]] == json.loads(
         (SYS / "SCOPE_PROPS.json").read_text("utf-8")
     )
@@ -116,7 +121,10 @@ async def test_edit_permissions_scope_members_flow(client, users):
     func_ = dict(r4["func"]) | {"metrics": "view"}
     objs = [dict(o) for o in r4["objs"]]
     objs[0] = objs[0] | {"view": False, "export": True}  # 取消查看 → 导出、动作清空
-    r = await client.put(f"{URL}/R-04/permissions", json={"func": func_, "objs": objs})
+    version = (await client.get(f"{URL}/R-04")).json()["lockVersion"]
+    r = await client.put(
+        f"{URL}/R-04/permissions", json={"func": func_, "objs": objs, "lockVersion": version}
+    )
     assert r.status_code == 200, r.text
     b = r.json()
     assert b["func"]["metrics"] == "view" and b["objs"][0] == {
@@ -126,6 +134,15 @@ async def test_edit_permissions_scope_members_flow(client, users):
         "actions": [],
     }
     assert b["updatedBy"]
+    invalid_hidden = await client.put(
+        f"{URL}/R-04/permissions",
+        json={
+            "func": func_,
+            "objs": [{**b["objs"][0], "actions": ["not-a-real-action"]}],
+            "lockVersion": b["lockVersion"],
+        },
+    )
+    assert invalid_hidden.status_code == 422  # 撤权不免除新增无效动作的输入校验。
     bad = [dict(o) for o in r4["objs"]]
     bad[0]["actions"] = ["关闭告警"]
     assert (await client.put(f"{URL}/R-04/permissions", json={"func": func_, "objs": bad})).status_code == 422

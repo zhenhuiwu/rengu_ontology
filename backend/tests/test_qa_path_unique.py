@@ -14,8 +14,8 @@ async def test_natural_path_key_preserves_seed_upsert_and_references(session):
             text("SELECT conname FROM pg_constraint WHERE conrelid='onto_qa_path'::regclass AND contype='u'")
         )
     )
-    assert "uq_onto_qa_path_from_object_id_to_object_id_seq" in names
-    assert "uq_onto_qa_path_group_key_seq" not in names
+    assert "uq_onto_qa_path_ontology_id_from_object_id_to_object_id_seq" in names
+    assert "uq_onto_qa_path_ontology_id_group_key_seq" not in names
     with isolated_sections(*BUILDERS):
         await run_seeds(session, ["admin", "versioning", "static"])
         before = await session.scalar(select(func.count()).select_from(QaPath))

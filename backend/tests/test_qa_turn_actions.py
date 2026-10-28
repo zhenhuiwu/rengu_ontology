@@ -5,8 +5,10 @@ import io
 import zipfile
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
+from app.modules.admin.models import SysUser
+from app.modules.ontology.models import OntologyMember
 from app.modules.qa.models import QaTurn
 from tests import qa_page_test_support
 from tests.function_access_support import grant_fixture_roles
@@ -23,6 +25,12 @@ STORE, MAIN = "T-01", "T-04"
 async def qa(users, client):
     await seed_qa_access(users)
     await grant_fixture_roles(users, {"U010001": "R-01", "U010006": "R-05"})
+    other = select(SysUser.id).where(SysUser.code == "U010006").scalar_subquery()
+    await users.execute(
+        update(OntologyMember)
+        .where(OntologyMember.ontology_id == 1, OntologyMember.user_id == other)
+        .values(role="editor")
+    )  # Reach the unchanged resource-owner rejection with a workspace that permits writes.
     await users.flush()
     return client
 

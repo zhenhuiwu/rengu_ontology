@@ -10,12 +10,26 @@ from app.modules.event import exceptions, platform_context
 
 
 async def test_platform_delivery_view_reuses_action_scope_and_never_changes_manage(monkeypatch):
-    user = CurrentUser(id="owner", name="owner", ontology_id=2,
-                       func={"event-types": "manage", "action-center": "view"})
-    event = SimpleNamespace(ontology_id=2, is_test=False, obj_kind=None, source="dynamic",
-        producer_object_type="ActionRun", producer_type="ActionExecuted", object_id="ACT-1",
-        payload={"runId": "ACT-1"}, definition_snapshot={"id": "ActionExecuted", "api": "ActionExecuted",
-        "source": "动作", "objectApi": "ActionRun", "objKind": None})
+    user = CurrentUser(
+        id="owner", name="owner", ontology_id=2, func={"event-types": "manage", "action-center": "view"}
+    )
+    event = SimpleNamespace(
+        ontology_id=2,
+        is_test=False,
+        obj_kind=None,
+        source="dynamic",
+        producer_object_type="ActionRun",
+        producer_type="ActionExecuted",
+        object_id="ACT-1",
+        payload={"runId": "ACT-1"},
+        definition_snapshot={
+            "id": "ActionExecuted",
+            "api": "ActionExecuted",
+            "source": "动作",
+            "objectApi": "ActionRun",
+            "objKind": None,
+        },
+    )
     session = SimpleNamespace(info={"ontology_id": 2}, scalar=AsyncMock(return_value=7))
     from app.modules.dynamic import row_scope
 
@@ -30,8 +44,11 @@ async def test_platform_delivery_view_reuses_action_scope_and_never_changes_mana
     with pytest.raises(AppError):
         await exceptions.authorize(session, user, event, "manage")
     production_gate.assert_awaited_once()
-    for restricted in (replace(user, func={"event-types": "view"}),
-                       replace(user, ontology_id=3), replace(user, api_scopes=("meta:read",))):
+    for restricted in (
+        replace(user, func={"event-types": "view"}),
+        replace(user, ontology_id=3),
+        replace(user, api_scopes=("meta:read",)),
+    ):
         with pytest.raises(AppError):
             await platform_context.authorize_completion_view(session, restricted, event)
     session.scalar.return_value = None

@@ -12,6 +12,7 @@ from app.common.ontology import set_ontology_scope
 from app.modules.integration.models import ExtSystem
 from app.modules.integration.schemas import ExtSystemIn
 from app.modules.integration.service import ExtSystemService
+from tests.helpers.workspace import TEST_DB
 
 BODY = {
     "name": "并发测试网关",
@@ -31,7 +32,7 @@ NAMES = ["并发测试网关A", "并发测试网关B"]
 
 
 async def test_concurrent_create_gets_distinct_codes(engine):
-    assert engine.url.database == "rengu_fix_admin_20261027"
+    assert engine.url.database == TEST_DB and TEST_DB.startswith(("rengu_test", "rengu_fix_"))
     try:
         async with (
             AsyncSession(engine, expire_on_commit=False) as first,

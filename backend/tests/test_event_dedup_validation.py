@@ -20,15 +20,21 @@ async def test_new_and_changed_windows_validate_without_rewriting_legacy_values(
     session = SimpleNamespace(scalar=AsyncMock(return_value=None), scalars=AsyncMock(return_value=[]))
     with pytest.raises(AppError):
         await validate_draft_window(session, "new", 1, section="def")
-    await validate_draft_window(session, "new", 1, section="def", rows=[
-        SimpleNamespace(key="dedupWindow", op="add", after="24 小时")])
+    await validate_draft_window(
+        session, "new", 1, section="def", rows=[SimpleNamespace(key="dedupWindow", op="add", after="24 小时")]
+    )
     session.scalar.return_value = SimpleNamespace(dedup_window="")
     await validate_draft_window(session, "legacy", 1, section="def")
     await validate_draft_window(session, "legacy", 1, complete=True)
     for operation in ("update", "delete"):
         with pytest.raises(AppError):
-            await validate_draft_window(session, "legacy", 1, section="def", rows=[
-                SimpleNamespace(key="dedupWindow", op=operation, after="")])
+            await validate_draft_window(
+                session,
+                "legacy",
+                1,
+                section="def",
+                rows=[SimpleNamespace(key="dedupWindow", op=operation, after="")],
+            )
     session.scalars.return_value = [SimpleNamespace(op="update", after="0 天")]
     with pytest.raises(AppError):
         await validate_draft_window(session, "legacy", 1, complete=True)

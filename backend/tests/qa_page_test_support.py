@@ -45,7 +45,7 @@ async def users(qa_workspace):
 
 @pytest.fixture
 async def committed_qa(engine):
-    """Only the named test DB: seed committed source rows visible to the real independent SELECT connection."""
+    """Seed committed source rows in the named test DB for the independent SELECT connection."""
     from sqlalchemy import func
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.pool import NullPool

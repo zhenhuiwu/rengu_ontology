@@ -61,6 +61,7 @@ def payload(**patch):
 @pytest.fixture
 async def runtime(session):
     await grant_ops_roles(session, {"U010001": "R-01"})
+    scope_value = f"OPS-{uuid4().hex[:12]}"
     permission = {
         "api": "Store",
         "objType": "门店",
@@ -70,24 +71,51 @@ async def runtime(session):
     }
     admin = await session.scalar(select(SysRole).where(SysRole.code == "R-01"))
     admin.objs = [permission]
-    obj = ObjectType(
-        code="store",
-        api_name="Store",
-        display_name="门店",
-        obj_group="测试",
-        conflict_strategy=ConflictStrategy.user_edit_wins,
-        lifecycle=Lifecycle.active,
-    )
-    obj.properties = [
-        Property(
-            api_name="is_test",
-            display_name="测试标记",
-            data_type="boolean",
-            prop_group="测试",
-            source_column="store.is_test",
-            backing_column="is_test",
+    obj = await session.scalar(select(ObjectType).where(ObjectType.code == "store"))
+    if obj is None:
+        obj = ObjectType(
+            code="store",
+            api_name="Store",
+            display_name="门店",
+            obj_group="测试",
+            pk_property="ops_identity",
+            conflict_strategy=ConflictStrategy.user_edit_wins,
+            lifecycle=Lifecycle.active,
         )
-    ]
+        obj.properties = [
+            Property(
+                api_name="ops_identity",
+                display_name="测试门店编号",
+                data_type="string",
+                prop_group="测试",
+                is_pk=True,
+                source_column="code",
+                backing_column="code",
+            ),
+            Property(
+                api_name="is_test",
+                display_name="测试标记",
+                data_type="boolean",
+                prop_group="测试",
+                source_column="store.is_test",
+                backing_column="is_test",
+            ),
+        ]
+        session.add(obj)
+    else:
+        assert obj.api_name == "Store"
+        if not any(prop.api_name == "is_test" for prop in obj.properties):
+            obj.properties.append(
+                Property(
+                    api_name="is_test",
+                    display_name="测试标记",
+                    data_type="boolean",
+                    prop_group="测试",
+                    source_column="store.is_test",
+                    backing_column="is_test",
+                )
+            )
+        assert any(prop.api_name == "is_test" and prop.data_type == "boolean" for prop in obj.properties)
     action = ActionType(
         code="ops_local",
         api="OpsLocal",
@@ -130,7 +158,7 @@ async def runtime(session):
             field='{"target":{"param":"otherStore"},"values":{"is_test":{"param":"enabled"}}}',
         )
     ]
-    session.add_all([obj, action, cross])
+    session.add_all([action, cross])
     for i in range(13):
         session.add(
             Store(
@@ -139,7 +167,7 @@ async def runtime(session):
                 name=f"真实测试门店{i}",
                 city="测试城",
                 region="华东一区" if i < 12 else "华南一区",
-                big_region="华东" if i < 12 else "华南",
+                big_region=scope_value if i < 12 else f"{scope_value}-south",
                 format="测试",
                 opened_at=date(2026, 1, 1),
                 status=StoreStatus.open,
@@ -168,7 +196,13 @@ async def runtime(session):
     await session.flush()
     session.add(
         SysRoleScope(
-            code="OPS-SCOPE", role_id=role.id, seq=0, obj_type="门店", prop="大区", op="=", values=["华东"]
+            code="OPS-SCOPE",
+            role_id=role.id,
+            seq=0,
+            obj_type="门店",
+            prop="大区",
+            op="=",
+            values=[scope_value],
         )
     )
     session.add(OntologyRoleBinding(ontology_id=1, role_id=role.id))
@@ -526,3 +560,74 @@ async def test_queue_phases_are_truthful_and_reject_manual_outcome(runtime, clie
         headers=headers(),
     )
     assert denied.status_code == 409 and denied.json()["code"] == "ACTION_STILL_QUEUED", denied.text
+
+
+@pytest.fixture
+async def published_store_runtime(session):
+    from app.modules.static.sections import BUILDERS
+    from app.modules.versioning.sections import isolated_sections
+    from app.seeds.loader import run_seeds
+
+    with isolated_sections(*BUILDERS):
+        await run_seeds(session, ["admin", "versioning", "static"])
+    return await runtime.__wrapped__(session)
+
+
+async def test_published_store_primary_targets_keep_row_and_workspace_limits(
+    published_store_runtime, client, conn
+):
+    session = published_store_runtime[0]
+    own_scope = await session.scalar(select(Store.big_region).where(Store.code == "OPS-S00"))
+    other = OntologyWorkspace(code="ops-primary-other", name="separate primary workspace")
+    session.add(other)
+    await session.flush()
+    async with AsyncSession(bind=conn, join_transaction_mode="create_savepoint") as foreign:
+        await set_ontology_scope(foreign, other.id)
+        foreign.add(
+            Store(
+                code="FOREIGN-ONLY",
+                store_no="FOREIGN-N",
+                name="不可见门店",
+                city="测试城",
+                region="华东一区",
+                big_region=own_scope,
+                format="测试",
+                opened_at=date(2026, 1, 1),
+                status=StoreStatus.open,
+            )
+        )
+        await foreign.commit()
+    await set_ontology_scope(session, 1)
+    response = await client.get(
+        f"{API}/actions/ops_local/targets", params={"size": 200}, headers=headers("OPS-LIMIT")
+    )
+    assert response.status_code == 200, response.text
+    assert {row["id"] for row in response.json()["items"]} == {f"OPS-N{i:02}" for i in range(12)}
+    assert response.json()["total"] == 12
+    assert "OPS-N12" not in response.text and "FOREIGN" not in response.text
+    denied = await client.get(f"{API}/actions/ops_local/targets", headers=headers("OPS-NONMEMBER"))
+    assert denied.status_code == 403, denied.text
+
+
+def test_store_primary_mapping_still_rejects_protected_and_undeclared_columns():
+    from types import SimpleNamespace
+
+    from app.common.object_identity import property_column
+    from app.modules.biz.governance import STORE_GOV
+
+    prop = SimpleNamespace(
+        backing_column="store_no",
+        source_column="store_id",
+        is_sensitive=False,
+        visibility="prominent",
+        transform="",
+    )
+    assert property_column(prop, STORE_GOV) is Store.__table__.c.store_no
+    for changes in (
+        {"is_sensitive": True},
+        {"visibility": "hidden"},
+        {"transform": "lower(store_no)"},
+        {"backing_column": "manager"},
+    ):
+        guarded = SimpleNamespace(**(vars(prop) | changes))
+        assert property_column(guarded, STORE_GOV) is None

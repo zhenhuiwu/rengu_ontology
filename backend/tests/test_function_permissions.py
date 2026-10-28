@@ -7,6 +7,7 @@ from app.common.auth import CurrentUser, check_func, resolve_user
 from app.core import clock
 from app.core.errors import Forbidden
 from app.modules.admin.models import SysRole, SysRoleMember, SysUser, UserStatus
+from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
 from app.modules.static.models import ChangeRequest, CrCheck, CrEvent, CrTarget
 from app.modules.static.permissions import TARGET_PAGE
 from app.modules.static.publish import PublishService
@@ -39,7 +40,17 @@ async def actor(session, tag, permissions):
     user = SysUser(code=f"U-A-{tag}", name=f"权限用户{tag}", status=UserStatus.active)
     session.add_all([role, user])
     await session.flush()
-    session.add(SysRoleMember(role_id=role.id, user_id=user.id, seq=0))
+    session.add_all(
+        [
+            SysRoleMember(role_id=role.id, user_id=user.id, seq=0),
+            OntologyMember(
+                ontology_id=1,
+                user_id=user.id,
+                role="editor" if "manage" in permissions.values() else "viewer",
+            ),
+            OntologyRoleBinding(ontology_id=1, role_id=role.id),
+        ]
+    )
     await session.flush()
     return {"X-Demo-As": user.code}, user, role
 
@@ -57,20 +68,30 @@ async def test_db_role_union_and_revocation_without_config_bypass(authorized):
     )
     session.add(higher)
     await session.flush()
-    session.add(SysRoleMember(role_id=higher.id, user_id=user.id, seq=0))
+    session.add_all(
+        [
+            SysRoleMember(role_id=higher.id, user_id=user.id, seq=0),
+            OntologyRoleBinding(ontology_id=1, role_id=higher.id),
+        ]
+    )
     await session.flush()
     resolved = await resolve_user(session, user.code)
     assert resolved.func == {"object-types": "manage", "metrics": "view"}
     assert resolved.roles == (role.code, higher.code)
+    assert resolved.ontology_role == "viewer" and not resolved.is_ontology_admin
     check_func(resolved, "object-types", "manage")
     with pytest.raises(Forbidden):
         check_func(resolved, "releases", "manage")
     await session.execute(delete(SysRoleMember).where(SysRoleMember.user_id == user.id))
     assert (await resolve_user(session, user.code)).func == {}
     admin = await session.scalar(select(SysUser).where(SysUser.code == "U010001"))
+    before = await resolve_user(session, admin.code)
+    assert before.is_ontology_admin and before.func["releases"] == "manage"
     await session.execute(delete(SysRoleMember).where(SysRoleMember.user_id == admin.id))
     resolved = await resolve_user(session, admin.code)
-    assert resolved.is_ontology_admin and resolved.func == {}
+    assert resolved.roles == () and resolved.func == {}
+    assert resolved.is_ontology_admin == (resolved.func.get("releases") == "manage")
+    assert not resolved.is_ontology_admin
     with pytest.raises(Forbidden):
         check_func(resolved, "releases", "manage")
 
@@ -87,7 +108,8 @@ async def test_target_editor_needs_target_manage_not_release_manage(client, auth
     )
     assert response.status_code == 201, response.text
     code = response.json()["id"]
-    put = {"target": target, "section": "def", "rows": []}
+    rows = [{"key": "dedupWindow", "op": "update", "after": "24 小时"}] if kind == "event" else []
+    put = {"target": target, "section": "def", "rows": rows}
     response = await client.put(f"{P}/change-requests/{code}/items", json=put, headers=headers)
     assert response.status_code == 200, response.text
     role.func = {page: "view", "releases": "view"}

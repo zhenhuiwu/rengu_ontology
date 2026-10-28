@@ -1,6 +1,7 @@
 """Actual PG source metrics: approved mapping, readonly/RLS, privacy and explicit semantic boundary."""
 
 import json
+import os
 
 import asyncpg
 import pytest
@@ -16,7 +17,9 @@ P = "/api/ontology/v1"
 @pytest.fixture
 async def metric_source(source_case):  # noqa: F811 - imported pytest fixture
     case = source_case
-    assert case.real.admin_url.database == "rengu_fix_static_20261027"
+    assert case.real.admin_url == case.session.get_bind().engine.url
+    assert case.real.admin_url.database == os.environ.get("RENGU_TEST_DB")
+    assert case.real.admin_url.database.startswith(("rengu_test", "rengu_fix_"))
     connection = await asyncpg.connect(
         case.real.admin_url.set(drivername="postgresql").render_as_string(hide_password=False)
     )

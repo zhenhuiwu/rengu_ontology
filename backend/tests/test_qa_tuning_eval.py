@@ -1,10 +1,12 @@
 """T11 运行评测（FakeLLM 直接调 job.execute）/ T15 转同义词 / T16 转认证 / T17 忽略与重新打开。"""
 
+import os
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import select, update
 
+from app.common.ontology import set_ontology_scope
 from app.main import app
 from app.modules.qa import catalog
 from app.modules.qa.eval import job
@@ -354,10 +356,14 @@ async def test_run_code_serialized_across_transactions(engine):
     from app.modules.qa.models import RunStatus
     from app.modules.qa.router import next_run_code
 
+    assert engine.url.database == os.environ["RENGU_TEST_DB"]
+    assert engine.url.database.startswith(("rengu_test_", "rengu_fix_"))
     async with engine.connect() as ca, engine.connect() as cb:
         await ca.begin()
         await cb.begin()
         sa_, sb = AsyncSession(bind=ca), AsyncSession(bind=cb)
+        await set_ontology_scope(sa_, 1)
+        await set_ontology_scope(sb, 1)
         code_a = await next_run_code(sa_)
         sa_.add(
             QaEvalRun(
@@ -394,11 +400,17 @@ async def test_recover_interrupted_eval_keeps_progress_and_skips_active_worker(e
 
     from app.db import session as db_session
     from app.db.dialects import get_adapter
+    from app.jobs import scope as job_scope
     from app.modules.qa.models import RunStatus
 
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    assert engine.url.database == os.environ["RENGU_TEST_DB"]
+    assert engine.url.database.startswith(("rengu_test_", "rengu_fix_"))
+    factory = async_sessionmaker(engine, expire_on_commit=False, info={"ontology_id": 1})
     monkeypatch.setattr(db_session, "get_engine", lambda: engine)
     monkeypatch.setattr(db_session, "get_sessionmaker", lambda: factory)
+    monkeypatch.setattr(
+        job_scope, "get_sessionmaker", lambda: async_sessionmaker(engine, expire_on_commit=False)
+    )
     monkeypatch.setattr(db_session, "get_qa_readonly_engine", lambda: engine)
     codes = ["ER-recovery-stale", "ER-recovery-active", "ER-recovery-queued", "ER-recovery-done"]
     async with factory() as session:
@@ -429,6 +441,7 @@ async def test_recover_interrupted_eval_keeps_progress_and_skips_active_worker(e
     monkeypatch.setattr(job, "execute", executing)
     verifier_connection = await engine.connect()
     verifier = AsyncSession(bind=verifier_connection)
+    await set_ontology_scope(verifier, 1)
     active_task = None
     try:
         active_task = asyncio.create_task(job._background(codes[1], None, FakeLLM(""), None))
@@ -450,7 +463,7 @@ async def test_recover_interrupted_eval_keeps_progress_and_skips_active_worker(e
         active_task.cancel()
         await asyncio.gather(active_task, return_exceptions=True)
         # 固定另一条连接验证，避免原连接重入同名 session lock 导致假阳性。
-        assert await get_adapter(verifier).try_xact_lock(verifier, f"qa.eval_run.{codes[1]}")
+        assert await get_adapter(verifier).try_xact_lock(verifier, f"qa.eval_run.1.{codes[1]}")
         await verifier.rollback()
         assert await job.recover_interrupted_runs() == 0
         async with factory() as session:
@@ -471,11 +484,17 @@ async def test_live_worker_protects_committed_eval_before_background_dispatch(en
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.db import session as db_session
+    from app.jobs import scope as job_scope
     from app.modules.qa.models import RunStatus
 
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    assert engine.url.database == os.environ["RENGU_TEST_DB"]
+    assert engine.url.database.startswith(("rengu_test_", "rengu_fix_"))
+    factory = async_sessionmaker(engine, expire_on_commit=False, info={"ontology_id": 1})
     monkeypatch.setattr(db_session, "get_engine", lambda: engine)
     monkeypatch.setattr(db_session, "get_sessionmaker", lambda: factory)
+    monkeypatch.setattr(
+        job_scope, "get_sessionmaker", lambda: async_sessionmaker(engine, expire_on_commit=False)
+    )
     code = "ER-dispatch-window"
     try:
         async with job.worker_lifespan():
@@ -509,6 +528,57 @@ async def test_live_worker_protects_committed_eval_before_background_dispatch(en
     finally:
         async with engine.begin() as connection:
             await connection.execute(QaEvalRun.__table__.delete().where(QaEvalRun.code == code))
+
+
+async def test_recover_interrupted_runs_across_workspaces(engine, monkeypatch):
+    from uuid import uuid4
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.jobs import scope as job_scope
+    from app.modules.ontology.models import OntologyWorkspace
+    from app.modules.qa.models import RunStatus
+
+    assert engine.url.database == os.environ["RENGU_TEST_DB"]
+    assert engine.url.database.startswith(("rengu_test_", "rengu_fix_"))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(job_scope, "get_sessionmaker", lambda: factory)
+    token = uuid4().hex
+    codes = [f"ER-cross-{token[:12]}-1", f"ER-cross-{token[:12]}-2"]
+    async with factory() as session:
+        workspace = OntologyWorkspace(code=f"eval-recovery-{token}", name="评测恢复测试空间")
+        session.add(workspace)
+        await session.commit()
+        workspace_id = workspace.id
+    try:
+        for ontology_id, code in zip((1, workspace_id), codes, strict=True):
+            async with factory() as session:
+                await set_ontology_scope(session, ontology_id)
+                session.add(
+                    QaEvalRun(
+                        code=code,
+                        trigger_label="手动运行",
+                        scope="全部 3 题",
+                        total=3,
+                        passed=1,
+                        status=RunStatus.running,
+                        operator="test",
+                    )
+                )
+                await session.commit()
+        assert workspace_id in await job_scope.workspace_ids()
+        await job.recover_interrupted_runs()
+        for ontology_id, code in zip((1, workspace_id), codes, strict=True):
+            async with factory() as session:
+                await set_ontology_scope(session, ontology_id)
+                run = await session.scalar(select(QaEvalRun).where(QaEvalRun.code == code))
+                assert run.status == RunStatus.failed and run.passed == 1 and "运行中断" in run.note
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(QaEvalRun.__table__.delete().where(QaEvalRun.code.in_(codes)))
+            await conn.execute(
+                OntologyWorkspace.__table__.delete().where(OntologyWorkspace.id == workspace_id)
+            )
 
 
 async def test_reopen_after_to_cert_removes_variant(qa):

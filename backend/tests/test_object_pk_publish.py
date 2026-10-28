@@ -1,5 +1,7 @@
 """Canonical object PK flags are synchronized only through publication, scoped to one object."""
 
+import os
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +24,8 @@ ws2 = build_support.ws2
 
 async def test_pk_change_overrides_stale_property_flags_and_other_scope_is_untouched(ws2, conn):
     wid, client = ws2
-    assert conn.engine.url.database == "rengu_fix_static_20261027"
+    assert conn.engine.url.database == os.environ.get("RENGU_TEST_DB")
+    assert conn.engine.url.database.startswith(("rengu_test", "rengu_fix_"))
     code = "FIX_PK_CANONICAL"
 
     def obj():

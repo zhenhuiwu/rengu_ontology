@@ -3,8 +3,11 @@
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select, update
 
 from app.core.schema import _tz
+from app.modules.admin.models import SysUser
+from app.modules.ontology.models import OntologyMember
 from app.modules.qa.pages_api import next_run
 from tests import qa_page_test_support
 from tests.function_access_support import grant_fixture_roles
@@ -22,6 +25,15 @@ LIU = {"X-Demo-As": "U010004"}  # 刘婷：P004 可查看成员
 async def qa(users, client):
     await seed_qa_access(users)
     await grant_fixture_roles(users, {"U010004": "R-05"})
+    # 页面级查看/编辑/不可见权限独立于空间级 viewer 写入禁令。
+    await users.execute(
+        update(OntologyMember)
+        .where(
+            OntologyMember.ontology_id == 1,
+            OntologyMember.user_id.in_(select(SysUser.id).where(SysUser.code == "U010004")),
+        )
+        .values(role="editor")
+    )
     await users.flush()
     return client
 
@@ -129,7 +141,9 @@ async def test_pin_card_from_saved_result(qa, users):
     )
     await users.flush()
     response = await qa.post(f"{B}/pages/P002/cards", json={"turnId": "T-DB-TABLE", "title": "已保存结果"})
-    assert response.status_code == 422 and response.json()["code"] == "PAGE_EXECUTION_UNAVAILABLE", response.text
+    assert response.status_code == 422 and response.json()["code"] == "PAGE_EXECUTION_UNAVAILABLE", (
+        response.text
+    )
     for turn in ("T-04", "T-01", "T-02"):
         bad = await qa.post(f"{B}/pages/P002/cards", json={"turnId": turn, "title": "x"})
         assert bad.status_code == 422 and bad.json()["code"] == "TURN_NOT_PINNABLE"
@@ -197,7 +211,9 @@ async def test_share(qa):
     assert r.status_code == 200, r.text
     d = r.json()
     assert (
-        d["mode"] == "指定成员" and d["members"][0]["userId"] == "U010763" and d["linkUrl"].endswith("page_id=P002")
+        d["mode"] == "指定成员"
+        and d["members"][0]["userId"] == "U010763"
+        and d["linkUrl"].endswith("page_id=P002")
     )
     assert d["newViewers"] == ["陈杰（可查看）"] and len(d["newGrants"]) == 2
     assert (await qa.get(f"{B}/pages/P002", headers=CHEN)).status_code == 200  # 被共享人能打开

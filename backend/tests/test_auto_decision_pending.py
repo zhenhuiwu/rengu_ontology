@@ -16,6 +16,7 @@ from tests.dynamic_support import dyn  # noqa: F401
 
 class SessionView:
     """Keep each production transaction a real SAVEPOINT inside this rollback-only test."""
+
     def __init__(self, session):
         self.session = session
 
@@ -27,8 +28,16 @@ class SessionView:
 
 
 def decision(alert, code="PRIOR-DECISION"):
-    return DecisionLog(code=code, caller_kind="user", caller_id="U010245", obj_kind=alert.obj_kind,
-                       obj_id=alert.obj_id, alert_code=alert.code, input={}, output={})
+    return DecisionLog(
+        code=code,
+        caller_kind="user",
+        caller_id="U010245",
+        obj_kind=alert.obj_kind,
+        obj_id=alert.obj_id,
+        alert_code=alert.code,
+        input={},
+        output={},
+    )
 
 
 @pytest.fixture
@@ -67,7 +76,9 @@ async def test_stale_candidate_not_evaluated(pending, monkeypatch, change):
         elif change == "already_evaluated":
             session.add(decision(alert))
         else:
-            alert.triggered_at = clock.now() + (timedelta(hours=1) if change == "future" else -timedelta(hours=25))
+            alert.triggered_at = clock.now() + (
+                timedelta(hours=1) if change == "future" else -timedelta(hours=25)
+            )
         await session.flush()
 
     async def must_not_evaluate(*args):
@@ -78,7 +89,9 @@ async def test_stale_candidate_not_evaluated(pending, monkeypatch, change):
     monkeypatch.setattr(auto_decision, "decide", must_not_evaluate)
     assert await auto_decision.decide_pending(1, limit=1) == 0
     assert attempts == []
-    count = await session.scalar(select(func.count()).select_from(DecisionLog).where(DecisionLog.alert_code == alert.code))
+    count = await session.scalar(
+        select(func.count()).select_from(DecisionLog).where(DecisionLog.alert_code == alert.code)
+    )
     assert count == int(change == "already_evaluated")
 
 

@@ -19,9 +19,15 @@ async def test_review_preflight_is_no_write_and_stage_snapshot_survives_reload(m
     client, hits = mainline
     models = (ActionRun, ActionRunLog, Event, WritebackCall)
     before = [await session.scalar(select(func.count()).select_from(m)) for m in models]
-    response = await client.post(f"{API}/actions/request_replenish:validate", headers=PLANNER, json={
-        "objKind": STAGE["objKind"], "objId": STAGE["objId"], "params": json.loads(STAGE["params"]),
-    })
+    response = await client.post(
+        f"{API}/actions/request_replenish:validate",
+        headers=PLANNER,
+        json={
+            "objKind": STAGE["objKind"],
+            "objId": STAGE["objId"],
+            "params": json.loads(STAGE["params"]),
+        },
+    )
     assert response.status_code == 200, response.text
     review = response.json()
     assert review["humanChecks"] and review["declaredEdits"]
@@ -49,9 +55,11 @@ async def test_review_snapshot_cannot_expose_invisible_cross_object(runtime, cli
     record = await session.scalar(select(ActionRun).where(ActionRun.code == "OPS-R00"))
     record.action_type_code, record.action_name = cross.code, cross.name
     record.params_text = '{"enabled":true,"otherStore":"OPS-S12"}'
-    record.review_snapshot = {"typeVersion": record.type_version,
-                              "humanChecks": [{"name": "private OPS-S12"}],
-                              "declaredEdits": [{"field": "private OPS-S12"}]}
+    record.review_snapshot = {
+        "typeVersion": record.type_version,
+        "humanChecks": [{"name": "private OPS-S12"}],
+        "declaredEdits": [{"field": "private OPS-S12"}],
+    }
     await session.flush()
     result = await client.get(f"{API}/action-runs/{record.code}", headers=headers("OPS-LIMIT"))
     assert result.status_code == 200

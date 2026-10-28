@@ -210,8 +210,10 @@ async def test_metric_sum_default_filter_empty_results_and_unavailable_cr(client
     detail = (await client.get(P + f"/change-requests/{cr['id']}", headers=AUTHOR)).json()["detail"]
     assert "trial" not in detail and "METRIC_TRIAL_UNAVAILABLE" in detail["trialUnavailable"]
     assert await facts.scalar(select(func.count()).select_from(CrTrial)) == 0
-    assert any(row["code"] == "V14" and row["result"] == "不适用" and "未执行" in row["note"]
-               for row in validated.json()["checks"])
+    assert any(
+        row["code"] == "V14" and row["result"] == "不适用" and "未执行" in row["note"]
+        for row in validated.json()["checks"]
+    )
 
 
 async def test_gmv_readiness_reports_exact_missing_references_and_no_trial_writes(client, facts):

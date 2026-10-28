@@ -91,7 +91,9 @@ def test_signature_roundtrip_and_secret_resolution():
     assert not signing.verify(secret, stale, body, signing.signature(secret, stale, body))
     # 无密钥：与原行为一致，不出现签名头。
     assert signing.signed_headers({"Idempotency-Key": "k"}, body, None) == {
-        "Idempotency-Key": "k", "Content-Type": "application/json"}
+        "Idempotency-Key": "k",
+        "Content-Type": "application/json",
+    }
     assert signing.resolve_secret(None) is None
     assert signing.resolve_secret(encrypt_password(SECRET)) == SECRET.encode()
     for bad in ("short", "fernet$not-a-token", "x" * 20 + "\n"):
@@ -101,7 +103,14 @@ def test_signature_roundtrip_and_secret_resolution():
 
 def test_retry_classification_and_backoff():
     assert [signing.retryable_status(s) for s in (200, 400, 404, 409, 429, 500, 503)] == [
-        False, False, False, False, True, True, True]
+        False,
+        False,
+        False,
+        False,
+        True,
+        True,
+        True,
+    ]
     assert [signing.backoff(n).total_seconds() for n in (1, 2, 3, 10)] == [30, 60, 120, 900]
     assert signing.backoff(1, "120") == timedelta(seconds=120)
     assert signing.backoff(1, "Wed, 21 Oct") == timedelta(seconds=30)
@@ -127,23 +136,45 @@ def scope_of(session):
 
 
 async def effect_row(session, url):
-    row = await emit(session, action_effects.TOPIC, {
-        "ontologyId": 1, "runId": "RUN-T1", "actor": 1, "typeVersion": 1,
-        "effect": {"kind": "webhook", "target": "sys"},
-        "data": {"url": url, "payload": {"orderId": "O-1", "note": "签名"}}, "state": "queued"},
-        event_id="effect:tier1-" + url.rsplit(":", 1)[1].replace("/", ""))
+    row = await emit(
+        session,
+        action_effects.TOPIC,
+        {
+            "ontologyId": 1,
+            "runId": "RUN-T1",
+            "actor": 1,
+            "typeVersion": 1,
+            "effect": {"kind": "webhook", "target": "sys"},
+            "data": {"url": url, "payload": {"orderId": "O-1", "note": "签名"}},
+            "state": "queued",
+        },
+        event_id="effect:tier1-" + url.rsplit(":", 1)[1].replace("/", ""),
+    )
     return row
 
 
-def binding(url, *, secret=SECRET, max_retry=2, timeout_ms=1000):
-    config = SimpleNamespace(token=SecretStr("bearer-x"),
-                             signing_secret=SecretStr(secret) if secret else None)
-    system = SimpleNamespace(max_retry=max_retry, timeout_ms=timeout_ms)
+def binding(url, *, secret=SECRET, max_retry=2, timeout_ms=1000, auth_type="Token"):
+    config = SimpleNamespace(
+        token=SecretStr("bearer-x"), signing_secret=SecretStr(secret) if secret else None
+    )
+    system = SimpleNamespace(max_retry=max_retry, timeout_ms=timeout_ms, auth_type=auth_type)
     run, adapter = SimpleNamespace(code="RUN-T1"), SimpleNamespace(config=config)
     return AsyncMock(return_value=(run, system, adapter, url))
 
 
 SUCCESS = {"status": "SUCCESS", "receiptId": "R-1"}
+
+
+async def test_effect_no_auth_ignores_configured_token(session, receiver):
+    receiver.script = [(200, SUCCESS, 0)]
+    row = await effect_row(session, receiver.url)
+    with (
+        patch.object(action_effects, "scoped_sessions", scope_of(session)),
+        patch.object(action_effects, "recheck_effect", binding(receiver.url, auth_type="无需授权")),
+    ):
+        await action_effects.dispatch_effect(row.id, 1)
+    assert len(receiver.requests) == 1 and "Authorization" not in receiver.requests[0]["headers"]
+    assert "X-Signature-256" in receiver.requests[0]["headers"]
 
 
 async def drive_effects(session, rounds):
@@ -157,8 +188,10 @@ async def drive_effects(session, rounds):
 async def test_effect_signed_retry_on_503_then_success(session, receiver):
     receiver.script = [(503, {}, 0), (200, SUCCESS, 0)]
     row = await effect_row(session, receiver.url)
-    with patch.object(action_effects, "scoped_sessions", scope_of(session)), \
-            patch.object(action_effects, "recheck_effect", binding(receiver.url)):
+    with (
+        patch.object(action_effects, "scoped_sessions", scope_of(session)),
+        patch.object(action_effects, "recheck_effect", binding(receiver.url)),
+    ):
         await action_effects.dispatch_effect(row.id, 1)
         await session.refresh(row)
         assert row.last_error == action_effects.RETRY_SCHEDULED and row.payload["state"] == "retrying"
@@ -170,9 +203,10 @@ async def test_effect_signed_retry_on_503_then_success(session, receiver):
     assert len(receiver.requests) == 2
     assert row.dispatched_at is not None and row.last_error is None and row.payload["state"] == "succeeded"
     assert row.payload["receiptId"] == "R-1" and row.attempts == 2
-    assert [(a["attempt"], a["httpStatus"], a["error"], a["retryable"], a["signed"])
-            for a in row.payload["attempts"]] == [
-        (1, 503, "EXTERNAL_HTTP_503", True, True), (2, 200, None, False, True)]
+    assert [
+        (a["attempt"], a["httpStatus"], a["error"], a["retryable"], a["signed"])
+        for a in row.payload["attempts"]
+    ] == [(1, 503, "EXTERNAL_HTTP_503", True, True), (2, 200, None, False, True)]
     keys = {r["headers"]["Idempotency-Key"] for r in receiver.requests}
     assert keys == {row.event_id}
     secret = SECRET.encode()
@@ -186,9 +220,10 @@ async def test_effect_signed_retry_on_503_then_success(session, receiver):
 async def test_effect_timeout_retried_then_exhausted_is_unknown(session, receiver):
     receiver.script = [(200, SUCCESS, 1.0), (200, SUCCESS, 1.0)]
     row = await effect_row(session, receiver.url)
-    with patch.object(action_effects, "scoped_sessions", scope_of(session)), \
-            patch.object(action_effects, "recheck_effect",
-                         binding(receiver.url, max_retry=1, timeout_ms=200)):
+    with (
+        patch.object(action_effects, "scoped_sessions", scope_of(session)),
+        patch.object(action_effects, "recheck_effect", binding(receiver.url, max_retry=1, timeout_ms=200)),
+    ):
         await drive_effects(session, 4)
     await session.refresh(row)
     assert len(receiver.requests) == 2  # 1 次首发 + max_retry=1 次重试，之后不再发
@@ -201,8 +236,10 @@ async def test_effect_timeout_retried_then_exhausted_is_unknown(session, receive
 async def test_effect_400_fails_without_retry(session, receiver):
     receiver.script = [(400, {"code": "BAD"}, 0)]
     row = await effect_row(session, receiver.url)
-    with patch.object(action_effects, "scoped_sessions", scope_of(session)), \
-            patch.object(action_effects, "recheck_effect", binding(receiver.url)):
+    with (
+        patch.object(action_effects, "scoped_sessions", scope_of(session)),
+        patch.object(action_effects, "recheck_effect", binding(receiver.url)),
+    ):
         await drive_effects(session, 3)
     await session.refresh(row)
     assert len(receiver.requests) == 1
@@ -213,8 +250,10 @@ async def test_effect_400_fails_without_retry(session, receiver):
 async def test_effect_without_secret_is_unsigned(session, receiver):
     receiver.script = [(200, SUCCESS, 0)]
     row = await effect_row(session, receiver.url)
-    with patch.object(action_effects, "scoped_sessions", scope_of(session)), \
-            patch.object(action_effects, "recheck_effect", binding(receiver.url, secret=None)):
+    with (
+        patch.object(action_effects, "scoped_sessions", scope_of(session)),
+        patch.object(action_effects, "recheck_effect", binding(receiver.url, secret=None)),
+    ):
         await action_effects.dispatch_effect(row.id, 1)
     await session.refresh(row)
     headers = receiver.requests[0]["headers"]
@@ -225,8 +264,10 @@ async def test_effect_without_secret_is_unsigned(session, receiver):
 
 async def test_effect_invalid_secret_never_sends_unsigned(session, receiver):
     row = await effect_row(session, receiver.url)
-    with patch.object(action_effects, "scoped_sessions", scope_of(session)), \
-            patch.object(action_effects, "recheck_effect", binding(receiver.url, secret="fernet$broken")):
+    with (
+        patch.object(action_effects, "scoped_sessions", scope_of(session)),
+        patch.object(action_effects, "recheck_effect", binding(receiver.url, secret="fernet$broken")),
+    ):
         await action_effects.dispatch_effect(row.id, 1)
     await session.refresh(row)
     assert receiver.requests == []
@@ -237,19 +278,38 @@ async def test_effect_invalid_secret_never_sends_unsigned(session, receiver):
 
 
 def route_settings(url, **route):
-    config = {"tier1_evt/hook": {"url": "https://prod.invalid/hook", "test_url": url, "idempotent": True,
-                                 "test_signing_secret": SECRET, **route}}
-    return SimpleNamespace(event_delivery_http_enabled=True, env="dev",
-                           event_delivery_routes=SecretStr(json.dumps(config)))
+    config = {
+        "tier1_evt/hook": {
+            "url": "https://prod.invalid/hook",
+            "test_url": url,
+            "idempotent": True,
+            "test_signing_secret": SECRET,
+            **route,
+        }
+    }
+    return SimpleNamespace(
+        event_delivery_http_enabled=True, env="dev", event_delivery_routes=SecretStr(json.dumps(config))
+    )
 
 
 async def delivery_row(session):
     event = await session.scalar(select(Event).order_by(Event.id).limit(1))
     event.is_test, event.payload = True, {"orderId": "O-1"}
-    event.definition_snapshot = {"id": "tier1_evt", "version": "1", "objKind": "order", "payload": [],
-                                 "subscribers": []}
-    row = EventDelivery(event_id=event.id, subscriber_name="hook", subscription={"filter": "全部"},
-                        state="pending", attempts=0, next_at=clock.now())
+    event.definition_snapshot = {
+        "id": "tier1_evt",
+        "version": "1",
+        "objKind": "order",
+        "payload": [],
+        "subscribers": [],
+    }
+    row = EventDelivery(
+        event_id=event.id,
+        subscriber_name="hook",
+        subscription={"filter": "全部"},
+        state="pending",
+        attempts=0,
+        next_at=clock.now(),
+    )
     session.add(row)
     await session.flush()
     return event, row
@@ -260,14 +320,22 @@ async def sweep(session, row, rounds):
     for i in range(rounds):
         with clock.frozen(start + timedelta(minutes=20 * i)):
             await session.refresh(row)
-            if row.state == "pending" and row.next_at <= clock.now() and await event_delivery.prepare(
-                    session, row.id):
+            if (
+                row.state == "pending"
+                and row.next_at <= clock.now()
+                and await event_delivery.prepare(session, row.id)
+            ):
                 await event_delivery.execute(session, row.id)
 
 
 async def records(session, row):
-    return list(await session.scalars(select(EventDeliveryRecord).where(
-        EventDeliveryRecord.delivery_id == row.id).order_by(EventDeliveryRecord.id)))
+    return list(
+        await session.scalars(
+            select(EventDeliveryRecord)
+            .where(EventDeliveryRecord.delivery_id == row.id)
+            .order_by(EventDeliveryRecord.id)
+        )
+    )
 
 
 async def test_event_delivery_signed_retry_then_delivered(ae, receiver):  # noqa: F811
@@ -282,14 +350,17 @@ async def test_event_delivery_signed_retry_then_delivered(ae, receiver):  # noqa
     await ae.refresh(row)
     assert row.state == "delivered" and row.attempts == 3 and len(receiver.requests) == 3
     assert {r["headers"]["Idempotency-Key"] for r in receiver.requests} == {
-        event_delivery.delivery_key(event, "hook")}
+        event_delivery.delivery_key(event, "hook")
+    }
     for req in receiver.requests:
         h = req["headers"]
         expected = signing.signature(SECRET.encode(), h["X-Signature-Timestamp"], req["body"])
         assert h["X-Signature-256"] == expected
         assert json.loads(req["body"])["eventId"] == event.code
-    history = [(r.kind, r.attempt, r.state, r.error, (r.detail or {}).get("autoAttempt"))
-               for r in await records(ae, row)]
+    history = [
+        (r.kind, r.attempt, r.state, r.error, (r.detail or {}).get("autoAttempt"))
+        for r in await records(ae, row)
+    ]
     assert history == [
         ("attempt_started", 1, "processing", None, 1),
         ("attempt_finished", 1, "pending", "HTTP_RETRY_SCHEDULED", None),
@@ -329,8 +400,9 @@ async def test_event_delivery_without_secret_unchanged_and_rotation_keeps_bindin
     with patch.object(event_delivery, "get_settings", return_value=plain):
         assert await event_delivery.prepare(ae, row.id)
     # 密钥轮换不改变路由指纹，已开始的尝试仍可执行。
-    assert event_delivery.route_fingerprint({"url": "u", "signing_secret": "a"}) == \
-        event_delivery.route_fingerprint({"url": "u", "signing_secret": "b", "test_signing_secret": "c"})
+    assert event_delivery.route_fingerprint(
+        {"url": "u", "signing_secret": "a"}
+    ) == event_delivery.route_fingerprint({"url": "u", "signing_secret": "b", "test_signing_secret": "c"})
     with patch.object(event_delivery, "get_settings", return_value=plain):
         await event_delivery.execute(ae, row.id)
     await ae.refresh(row)
@@ -340,8 +412,9 @@ async def test_event_delivery_without_secret_unchanged_and_rotation_keeps_bindin
 
 async def test_event_delivery_invalid_secret_stays_pending_without_send(ae, receiver):  # noqa: F811
     _, row = await delivery_row(ae)
-    with patch.object(event_delivery, "get_settings",
-                      return_value=route_settings(receiver.url, test_signing_secret="short")):
+    with patch.object(
+        event_delivery, "get_settings", return_value=route_settings(receiver.url, test_signing_secret="short")
+    ):
         assert not await event_delivery.prepare(ae, row.id)
     await ae.refresh(row)
     assert row.state == "pending" and row.error == "SIGNING_SECRET_INVALID" and row.attempts == 0

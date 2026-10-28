@@ -9,6 +9,7 @@ import uuid
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import set_ontology_scope
 from app.core import clock
 from app.modules.dynamic.models import ActionRun, ActionStatus, SourceType
 from app.modules.integration.models import (
@@ -26,6 +27,7 @@ async def test_fresh_real_worker_consumes_durable_task(engine):
     token = "worker-" + uuid.uuid4().hex[:16]
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session, session.begin():
+            await set_ontology_scope(session, 1)
             system = ExtSystem(
                 code=token,
                 name=token,
@@ -57,11 +59,12 @@ import asyncio, sys
 from app.modules.integration.worker import app, QUEUE
 from app.db.session import dispose_engine
 assert set(app.tasks) == {
-    'action.reconcile', 'builtin:procrastinate.builtin_tasks.remove_old_jobs',
+    'action.reconcile', 'action.dispatch', 'builtin:procrastinate.builtin_tasks.remove_old_jobs',
     'procrastinate.builtin_tasks.remove_old_jobs',
 }
 assert [(p.periodic_id, p.cron) for p in app.periodic_registry.periodic_tasks.values()] == [
     ('action.reconcile', '*/15 * * * *'),
+    ('action.dispatch', '* * * * *'),
 ]
 async def main():
     try:
@@ -98,6 +101,7 @@ asyncio.run(main())
         )
         assert result.returncode == 0, result.stdout + result.stderr
         async with AsyncSession(engine) as session:
+            await set_ontology_scope(session, 1)
             task = await session.scalar(
                 select(ReconcileTask)
                 .join(ActionRun, ActionRun.id == ReconcileTask.action_run_id)
@@ -111,6 +115,7 @@ asyncio.run(main())
             assert not await session.scalar(select(WritebackCall.id).where(WritebackCall.sys_id == system.id))
     finally:
         async with AsyncSession(engine) as session, session.begin():
+            await set_ontology_scope(session, 1)
             await session.execute(
                 delete(ReconcileTask).where(
                     ReconcileTask.action_run_id.in_(select(ActionRun.id).where(ActionRun.code == token))
@@ -133,6 +138,7 @@ async def test_two_workers_serialize_query_by_execution_lock(engine):
     query = PausedQuery()
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session, session.begin():
+            await set_ontology_scope(session, 1)
             system = ExtSystem(
                 code=token,
                 name=token,
@@ -163,6 +169,8 @@ async def test_two_workers_serialize_query_by_execution_lock(engine):
             AsyncSession(engine, expire_on_commit=False) as first,
             AsyncSession(engine, expire_on_commit=False) as second,
         ):
+            await set_ontology_scope(first, 1)
+            await set_ontology_scope(second, 1)
             pid1 = await first.scalar(text("SELECT pg_backend_pid()"))
             pid2 = await second.scalar(text("SELECT pg_backend_pid()"))
             jobs = [asyncio.create_task(process(first, token, None, lambda _: query))]
@@ -193,6 +201,7 @@ async def test_two_workers_serialize_query_by_execution_lock(engine):
                 await asyncio.gather(*jobs, return_exceptions=True)
     finally:
         async with AsyncSession(engine) as session, session.begin():
+            await set_ontology_scope(session, 1)
             ids = select(ActionRun.id).where(ActionRun.code == token)
             await session.execute(delete(WritebackCall).where(WritebackCall.action_run_id.in_(ids)))
             await session.execute(delete(ReconcileTask).where(ReconcileTask.action_run_id.in_(ids)))

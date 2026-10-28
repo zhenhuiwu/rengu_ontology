@@ -30,7 +30,7 @@ def test_retained_event_rule_boundaries():
         pass
     else:
         raise AssertionError("Missing lifecycle snapshot must not borrow current state")
-    rule = SimpleNamespace(code="SM-ORD", dedupe="事件 ID", cooldown="不重复")
+    rule = SimpleNamespace(code="SM-ORD", dedupe="事件 ID", cooldown="不重复", ontology_id=1)
     event = SimpleNamespace(code="EV-real", object_id="ORDER-1", definition_snapshot=definition, payload={})
     key, window = dedupe_spec(rule, event, [])
     assert window is None and key == dedupe_spec(rule, event, [])[0]

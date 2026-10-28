@@ -8,6 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
+from app.common.ontology import set_ontology_scope
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.models import ChangeRequest, CrTarget
 from app.modules.static.schemas import CRCreateIn
@@ -26,6 +27,7 @@ async def test_target_allocation_serializes_through_registration(engine, kind, p
         func={"releases": "manage", "link-types": "manage", "glossary": "manage"},
     )
     async with AsyncSession(engine, expire_on_commit=False) as setup:
+        await set_ontology_scope(setup, 1)
         crs = [
             await CrWriteService(setup).create(actor, CRCreateIn(title=f"分配{n}", reviewer=""))
             for n in (1, 2)

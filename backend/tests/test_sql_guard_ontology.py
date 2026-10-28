@@ -5,7 +5,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.biz.governance  # noqa: F401 - registers store / biz_order / order_line / product
-from app.common import sql_guard
 from app.common.auth import CurrentUser
 from app.common.ontology import set_ontology_scope
 from app.common.sql_guard import SqlRejected, governed_tables, load_governed_tables, row_filters_for
@@ -52,7 +51,7 @@ async def test_registry_and_default_workspace(session):
     resolved = await load_governed_tables(session)
     assert {g.object_type for g in resolved.values()} <= codes
     assert {"store", "biz_order", "order_line", "product"} <= resolved.keys()
-    assert governed_tables(1) == resolved
+    assert governed_tables(1, session) == resolved
     assert governed_tables(0) == {} and governed_tables("1") == {}  # type: ignore[arg-type]
 
 
@@ -62,23 +61,22 @@ async def test_second_workspace_only_governs_its_object_types(session, conn):
     session.add(workspace)
     await session.flush()
     ws = workspace.id
-    sql_guard._BOUND.pop(ws, None)
     assert governed_tables(ws) == {}  # nothing loaded yet: never wider than the legacy rule
     async with AsyncSession(bind=conn, join_transaction_mode="create_savepoint") as other:
         await set_ontology_scope(other, ws)
         assert await load_governed_tables(other) == {}
         with pytest.raises(SqlRejected):
-            await row_filters_for(CurrentUser(id="U-guard", name="g", roles=(), ontology_id=ws))
+            await row_filters_for(CurrentUser(id="U-guard", name="g", roles=(), ontology_id=ws), other)
         # Defining an object type refreshes the binding on flush; order_line follows its parent order.
         other.add(object_type("store", "GuardStore"))
         await other.flush()
-        assert set(governed_tables(ws)) == {"store"}
+        assert set(governed_tables(ws, other)) == {"store"}
         other.add(object_type("order", "GuardOrder"))
         await other.flush()
-        assert set(governed_tables(ws)) == {"store", "biz_order", "order_line"}
-        filters = await row_filters_for(CurrentUser(id="U-guard", name="g", roles=(), ontology_id=ws))
+        assert set(governed_tables(ws, other)) == {"store", "biz_order", "order_line"}
+        filters = await row_filters_for(CurrentUser(id="U-guard", name="g", roles=(), ontology_id=ws), other)
         assert set(filters) == {"store", "biz_order", "order_line"}
         assert all(params[-1] == ws for _sql, params in filters.values())
         await other.rollback()
     # Workspace 1 keeps its own full binding, unaffected by the second workspace.
-    assert "product" in governed_tables(1)
+    assert "product" in governed_tables(1, session)

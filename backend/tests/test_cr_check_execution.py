@@ -15,9 +15,13 @@ async def test_unsupported_checks_skip_and_legacy_block_is_preserved(monkeypatch
     monkeypatch.setattr("app.modules.static.release_readiness.release_readiness", AsyncMock(return_value={}))
     session = SimpleNamespace(execute=AsyncMock(), add=Mock())
     service = CrWriteService(session)
-    service.targets = AsyncMock(return_value=[SimpleNamespace(target_kind="object", target_id="store", is_new=True)])
+    service.targets = AsyncMock(
+        return_value=[SimpleNamespace(target_kind="object", target_id="store", is_new=True)]
+    )
     service.items = AsyncMock(return_value=[])
-    service._baseline = AsyncMock(return_value={"V14": {"result": "阻断", "note": "原有阻断"}} if legacy else {})
+    service._baseline = AsyncMock(
+        return_value={"V14": {"result": "阻断", "note": "原有阻断"}} if legacy else {}
+    )
     service._touch = Mock()
     cr = SimpleNamespace(id=100, code="WF-CHECK", level=CRLevel.minor, changes=1, detail={})
 
