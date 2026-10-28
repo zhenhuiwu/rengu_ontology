@@ -14,6 +14,7 @@ import HoverCard from '@/components/HoverCard.vue';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import DefinitionEditor from './parts/DefinitionEditor.vue';
+import { useAssistantDraft } from '@/composables/useAssistantDraft';
 import ObjectImportDrawer from './parts/ObjectImportDrawer.vue';
 import { recollectObjectMetadata, type MetadataDiff } from '@/api/objectImport';
 import { loadDraftState } from './parts/useDraftView';
@@ -29,7 +30,7 @@ import { RULE_DEFS } from '@/mock/rules';
 import { legacyRevs } from '@/mock/objectHistory';
 import { fetchObjectOverviewRuntime, type ObjectOverviewRuntime } from '@/api/objectOverview';
 import { definitionDetail, type DefinitionValues } from '@/api/definitionForms';
-import { staticContextKey, isStaticReal, fetchStaticDetail } from '@/api/static';
+import { applyModelChange, fetchCurrentAfterWrite, staticContextKey, isStaticReal, fetchStaticDetail } from '@/api/static';
 import { useStaticPage } from './parts/useStaticPage';
 import MetricsTab from './parts/object/MetricsTab.vue';
 import ViewsTab from './parts/object/ViewsTab.vue';
@@ -123,7 +124,10 @@ async function recollectMetadata() {
 }
 watch(() => `${selected.value}:${staticContextKey()}`, () => { metadataOpen.value = false; metadataDiff.value = undefined; });
 function openDefinition(isNew = false) { if (readonly.value || !isStaticReal()) return; newDefinition.value = isNew; definitionOpen.value = true; }
-async function definitionSaved(result: { id: string; crId: string }) { const key = staticContextKey(); await loadDraftState(true); if (key !== staticContextKey()) return; await router.replace({ query: { ...route.query, type: result.id, view: 'draft' } }); if (key === staticContextKey()) { await cr.reload(); if (key === staticContextKey()) await workflow.reload(); } }
+const assistantDraft = ref<Record<string, unknown>>();
+watch(definitionOpen, open => { if (!open) assistantDraft.value = undefined; });
+useAssistantDraft(['object'], () => readonly.value || definitionOpen.value, (draft, target) => { assistantDraft.value = { ...draft, ...(target === 'dictionary' ? { kind: '码表' } : {}) }; openDefinition(true); });
+async function definitionSaved(result: { id: string; crId: string; published?: boolean }) { if (result.published) { await router.replace({ query: { ...route.query, type: result.id, view: undefined } }); await Promise.all([objectPage.reload(), propPage.reload(), mappingPage.reload()]); return; } const key = staticContextKey(); await loadDraftState(true); if (key !== staticContextKey()) return; await router.replace({ query: { ...route.query, type: result.id, view: 'draft' } }); if (key === staticContextKey()) { await cr.reload(); if (key === staticContextKey()) await workflow.reload(); } }
 /** 显示状态：未发布的新对象类型按自身状态；有审核中的变更单 → 审核中（橙）；只有草稿 → 草稿中（灰）；其余已发布（灰） */
 const workflow = useRealCrRecords();
 const shownStatus = (t: (typeof TYPES)[number]) => {
@@ -189,18 +193,37 @@ const PROPS = computed<P[]>(() => {
   return [...(isDraft.value ? ADDED[current.value.id] ?? [] : []), ...base];
 });
 const addOpen = ref(false);
+const addLock = ref<number>(), addSaving = ref(false);
+const addContext = ref('');
+const directPropertyEdit = computed(() => isStaticReal() && !readonly.value && !isDraft.value);
 const addForm = reactive({ name: '', api: '', type: 'string', required: false });
 const addErr = computed(() => (!addForm.name.trim() || !addForm.api.trim() ? '请填写名称和 API 名' : !/^[a-z][a-z0-9_]*$/.test(addForm.api.trim()) ? 'API 名只能用小写字母、数字和下划线，字母开头' : PROPS.value.some((p) => p.api === addForm.api.trim()) ? 'API 名已存在' : ''));
-function openAdd() { Object.assign(addForm, { name: '', api: '', type: 'string', required: false }); addOpen.value = true; }
+async function openAdd() {
+  if (directPropertyEdit.value) {
+    const key = staticContextKey(), id = current.value.id;
+    try { const version = await fetchCurrentAfterWrite(); if (key !== staticContextKey() || id !== current.value.id) return; addLock.value = version.lockVersion; }
+    catch (e) { message.error(e instanceof Error ? e.message : String(e)); return; }
+  }
+  Object.assign(addForm, { name: '', api: '', type: 'string', required: false }); addContext.value = JSON.stringify([staticContextKey(), current.value.id]); addOpen.value = true;
+}
 async function saveAdd() {
-  if (addErr.value) return;
+  if (addErr.value || addSaving.value) return;
+  if (addContext.value !== JSON.stringify([staticContextKey(), current.value.id]) || (isStaticReal() && !directPropertyEdit.value)) { message.error('对象或身份已切换，请重新打开编辑'); return; }
   const p: P = { api: addForm.api.trim(), name: addForm.name.trim(), type: addForm.type, group: '其他', source: '--', desc: addForm.required ? '必填' : '选填' };
   // real：properties 段整段替换，本次新增的属性一行（op=add，key=API 名）
-  const ok = await cr.save('properties', [{ key: p.api, op: 'add', after: { ...p, required: addForm.required }, type: '属性', field: `${p.name} ${p.api}`, afterText: `${p.name}（${p.type}）` }]);
+  const rows = [{ key: p.api, op: 'add' as const, after: { ...p, required: addForm.required }, type: '属性', field: `${p.name} ${p.api}`, afterText: `${p.name}（${p.type}）` }];
+  let ok = false;
+  if (directPropertyEdit.value) {
+    if (addLock.value === undefined) { message.error('版本信息未加载，请重新打开编辑'); return; }
+    const key = staticContextKey(), id = current.value.id; addSaving.value = true;
+    try { await applyModelChange({ kind: 'object', id, isNew: false }, [{ section: 'properties', rows }], addLock.value); if (key === staticContextKey() && id === current.value.id) { await propPage.reload(); ok = true; } }
+    catch (e) { message.error(e instanceof Error ? e.message : String(e)); }
+    finally { addSaving.value = false; }
+  } else ok = await cr.save('properties', rows);
   if (!ok) return;
   if (!isStaticReal()) (ADDED[current.value.id] ??= []).unshift(p);
   addOpen.value = false; ppage.value = 1;
-  message.success(`已新增属性“${addForm.name.trim()}”，保存到草稿 ${draft.value?.id ?? ''}`);
+  message.success(directPropertyEdit.value ? `已新增属性“${addForm.name.trim()}”` : `已新增属性“${addForm.name.trim()}”，保存到草稿 ${draft.value?.id ?? ''}`);
 }
 /** 草稿视图里的差异：按草稿单号从 changes.ts 的 diffs 取（门店 CR-0009、会员 CR-0012） */
 const draftDiff = computed(() => (isStaticReal() ? { map: {}, other: cr.items.value.filter((r) => r.section !== 'properties').length } : draft.value ? draftPropDiff(draft.value.id, current.value.name, PROPS.value) : { map: {}, other: 0 }));
@@ -255,16 +278,25 @@ const propCols = [
 // —— 关系 ——
 // 与“关系类型”页共用 src/mock/links.ts；这里列当前对象类型作为源端的已发布关系
 const realLinks = ref<(typeof ALL_LINKS[number] & { toName?: string })[]>([]);
+const relationProperties = ref<Record<string, { api: string; name: string }[]>>({});
 let linksSeq = 0;
 watch(() => JSON.stringify([selected.value, tab.value, staticContextKey()]), async () => {
   const n = ++linksSeq, key = staticContextKey(), id = selected.value;
   if (!isStaticReal() || tab.value !== 'links' || !id) return;
-  realLinks.value = [];
-  try { const rows = await fetchStaticDetail<typeof realLinks.value>(`/object-types/${encodeURIComponent(id)}/links`); if (n === linksSeq && key === staticContextKey() && id === selected.value) realLinks.value = rows; }
+  realLinks.value = []; relationProperties.value = {};
+  try {
+    const [rows, catalog] = await Promise.all([
+      fetchStaticDetail<typeof realLinks.value>(`/object-types/${encodeURIComponent(id)}/links`),
+      fetchStaticDetail<{ properties: typeof relationProperties.value }>('/link-types/catalog').catch(() => null),
+    ]);
+    if (n === linksSeq && key === staticContextKey() && id === selected.value) { realLinks.value = rows; relationProperties.value = catalog?.properties ?? {}; }
+  }
   catch (e) { if (n === linksSeq && key === staticContextKey() && id === selected.value) message.error(e instanceof Error ? e.message : String(e)); }
 }, { immediate: true });
 const LINKS = computed(() => (isStaticReal() ? realLinks.value : ALL_LINKS).filter((l) => l.from === current.value.id && l.status === '已发布').map((l) => ({
-  name: l.name, target: isStaticReal() ? (l as { toName?: string }).toName || l.to : objName(l.to), card: l.card, key: l.key, reverse: l.reverse, isDefault: defaultLabel(l.id) !== '需用户指明',
+  name: l.name, target: isStaticReal() ? (l as { toName?: string }).toName || l.to : objName(l.to), card: l.card,
+  key: l.card === 'N : M' ? `通过 ${l.via || '中间对象'} 关联` : l.fromProp && l.toProp ? `${current.value.name} · ${relationProperties.value[l.from]?.find(p => p.api === l.fromProp)?.name || l.fromProp} 等于 ${(l as { toName?: string }).toName || objName(l.to)} · ${relationProperties.value[l.to]?.find(p => p.api === l.toProp)?.name || l.toProp}` : '未配置关联属性',
+  reverse: l.reverse, isDefault: defaultLabel(l.id) !== '需用户指明',
 })));
 const linkTip = computed(() => {
   const gs = PATH_GROUPS.filter((g) => g.from === current.value.id);
@@ -382,7 +414,7 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
       <DraftBanner v-if="isDraft && draft && (!isStaticReal() || cr.head.value?.status === '草稿')" :draft="draft"
         @submit="cr.submit" @discard="discardDraft" />
       <div class="ot-head">
-        <span class="t-16 fw-600 c-1">{{ current.name }}</span><a-tooltip v-if="isStaticReal()" :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openDefinition()">编辑定义</a-button></a-tooltip>
+        <span class="t-16 fw-600 c-1">{{ current.name }}</span><a-tooltip v-if="isStaticReal()" :title="readonly ? reason : ''"><a-button size="small" :disabled="readonly" @click="openDefinition()">编辑定义</a-button></a-tooltip>
         <span class="t-14 c-3 num">{{ current.api }} · {{ PROPS.length }} 个属性 · {{ current.count }} 条</span>
         <a-tag v-if="!(shownStatus(current) === '草稿中' && draft && !readonly)" :color="statusColor(current)">{{ shownStatus(current) }}</a-tag>
         <a-segmented v-if="draft && !readonly && !newTarget" size="small" :value="isDraft ? 'draft' : 'published'"
@@ -391,9 +423,6 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
         <span class="ot-sp" />
         <span class="t-12 c-3">数据截至 {{ qo?.cutoff ?? '--' }}</span>
         <a-tooltip title="暂未开放"><a-button disabled>预览数据</a-button></a-tooltip>
-        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-button v-else-if="!draft" type="primary" @click="openChange(`${current.name}（${current.api}）`)">发起变更</a-button>
-        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <GroupedTabs v-model="tab" :groups="TAB_GROUPS" />
 
@@ -471,7 +500,7 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
           <span v-if="isDraft && draft && (!isStaticReal() || cr.head.value?.status === '草稿')" class="t-12 c-3">草稿 {{ draft.id }}：属性改动 {{ Object.keys(DIFF).length }} 处<template v-if="draftDiff.other">，其余 {{ draftDiff.other }} 处（对象类型、关系、映射、指标等）见<router-link :to="`/build/ontology/releases?cr=${draft.id}`">变更单</router-link></template></span>
           <span class="ot-sp" />
           <a-tooltip :title="!canEdit ? editTip : !isStaticReal() ? '演示模式不支持批量编辑' : !bulkKeys.length ? '先勾选要修改的属性' : ''"><a-button :disabled="!bulkOn || !bulkKeys.length" @click="openBulk">批量编辑{{ bulkKeys.length ? `（${bulkKeys.length}）` : '' }}</a-button></a-tooltip>
-          <a-tooltip :title="editTip"><a-button :type="canEdit ? 'primary' : 'default'" :disabled="!canEdit" @click="openAdd">新增属性</a-button></a-tooltip>
+          <a-tooltip :title="directPropertyEdit ? '' : editTip"><a-button :type="directPropertyEdit || (!isStaticReal() && canEdit) ? 'primary' : 'default'" :disabled="!(directPropertyEdit || (!isStaticReal() && canEdit))" @click="openAdd">新增属性</a-button></a-tooltip>
         </div>
         <a-table :columns="propCols" :data-source="prows" :loading="propPage.loading.value" :pagination="false" size="small" row-key="api" :row-selection="bulkOn ? { selectedRowKeys: bulkKeys, onChange: (keys: (string | number)[]) => { bulkKeys = keys.map(String); } } : undefined">
           <template #bodyCell="{ column, record }">
@@ -559,8 +588,8 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
       <a-table size="small" :pagination="{ pageSize: 8, hideOnSinglePage: true }" row-key="name" :columns="[{ title: '变化', dataIndex: 'change' }, { title: '源列', dataIndex: 'name' }, { title: '源类型', dataIndex: 'type' }]" :data-source="[...metadataDiff.added.map(c => ({ ...c, change: '新增列' })), ...metadataDiff.deleted.map(name => ({ name, type: '—', change: '删除列' }))]" />
     </template>
   </a-modal>
-  <DefinitionEditor v-model:open="definitionOpen" kind="object" :target-id="newDefinition ? undefined : current.id" :cr-id="newDefinition ? undefined : draft?.id" :new-target="!!cr.head.value?.targets.find((t) => t.kind === 'object' && t.id === current.id)?.isNew" @saved="definitionSaved" />
-  <a-modal v-model:open="addOpen" :title="`新增属性 · ${current.name}`" ok-text="保存到草稿" :ok-button-props="{ disabled: !!addErr }" :width="480" @ok="saveAdd">
+  <DefinitionEditor :assistant-draft="newDefinition ? assistantDraft : undefined" v-model:open="definitionOpen" kind="object" :target-id="newDefinition ? undefined : current.id" :cr-id="newDefinition || !isDraft ? undefined : draft?.id" :new-target="!!cr.head.value?.targets.find((t) => t.kind === 'object' && t.id === current.id)?.isNew" @saved="definitionSaved" />
+  <a-modal v-model:open="addOpen" :title="`新增属性 · ${current.name}`" ok-text="保存" :confirm-loading="addSaving" :ok-button-props="{ disabled: !!addErr }" :width="480" @ok="saveAdd">
     <a-form layout="vertical">
       <a-form-item label="名称" required><a-input v-model:value="addForm.name" placeholder="如：配送方式" /></a-form-item>
       <a-form-item label="API 名" required :help="addForm.api && addErr ? addErr : undefined" :validate-status="addForm.api && addErr ? 'error' : undefined"><a-input v-model:value="addForm.api" placeholder="如：delivery_mode" class="num" /></a-form-item>
@@ -572,7 +601,7 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
     <a-form layout="vertical">
       <a-form-item label="展示层级"><a-select v-model:value="bulkForm.visibility" :options="[{ value: '', label: '不改' }, { value: 'prominent', label: '突出' }, { value: 'normal', label: '普通' }, { value: 'hidden', label: '隐藏' }]" /></a-form-item>
       <a-form-item v-for="[k, label] in BULK_FLAGS" :key="k" :label="label"><a-radio-group v-model:value="bulkForm[k]" :options="[{ value: '', label: '不改' }, { value: 'yes', label: '是' }, { value: 'no', label: '否' }]" /></a-form-item>
-      <a-alert type="info" message="隐藏属性不可筛选/排序/列表显示，敏感属性不可筛选，长文本不可筛选/排序；保存时自动修正。审核并整版发布后生效。" />
+      <a-alert type="info" message="隐藏属性不可筛选/排序/列表显示，敏感属性不可筛选，长文本不可筛选/排序；保存时自动修正。整版发布后生效。" />
     </a-form>
   </a-modal>
 </template>

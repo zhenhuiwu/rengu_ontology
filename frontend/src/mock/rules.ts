@@ -16,7 +16,7 @@ export type RuleStatus = '已发布' | '变更中' | '已停用';
 export type ObjKind = 'store' | 'product' | 'order' | 'region';
 export interface RuleCond { metric?: string; metricVer?: number; field: string; op: string; value: string; expression?: string; period?: 'day' | 'week'; transform?: 'value' | 'prev' | 'wow' }
 export interface RuleTrigger { kind: '定时' | '事件'; cron?: string; text: string; eventId?: string; filter?: string; timezone?: string; catchupMinutes?: number; enabled?: boolean; runAsUserId?: string }
-export interface AutoStage { enabled: boolean; actionTypeId: string; mapping: { param: string; from: string }[]; confirmer: string }
+export interface AutoStage { enabled: boolean; actionTypeId: string; mapping: { param: string; from: string }[]; confirmer: string; executionMode?: 'confirm' | 'auto' }
 export interface RuleDef {
   id: string; name: string; version: number; status: RuleStatus; owner: string; desc: string;
   objKind: ObjKind; level: '高' | '中' | '低'; output: '告警' | '通知';

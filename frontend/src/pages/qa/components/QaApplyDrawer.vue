@@ -34,7 +34,6 @@ function submit() {
       <a-form-item label="申请理由" required>
         <a-textarea v-model:value="reason" :readonly="readonly" :rows="3" :maxlength="200" show-count :placeholder="real ? '说明使用目的和需要的业务范围' : '例如：Q4 复购召回方案需要对比各大区复购表现'" />
       </a-form-item>
-      <a-form-item label="审批人"><a-input :value="real ? '待分配（审批路由尚未配置）' : QA_APPLY.approver" readonly /></a-form-item>
       <a-form-item label="有效期">
         <a-radio-group v-model:value="duration" :disabled="readonly" option-type="button" :options="QA_APPLY.durations" />
       </a-form-item>

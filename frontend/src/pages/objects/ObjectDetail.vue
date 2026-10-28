@@ -21,6 +21,7 @@ import ObjAskModal from './parts/ObjAskModal.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { exploreRelated, type ExploreRow } from '@/api/qaObjects';
 import { qaReal } from '@/api/qa';
+import { dynamicApi, dynamicContextKey, listLaunchActions, type LaunchAction } from '@/api/dynamic';
 import { errText } from '../qa/useQaSession';
 import { listTypes, loadMeta, metaContextKey, linksOf, actionsOf, metricsOf, fmtVal, propLabel, isLongText, type TypeMeta, type LinkMeta, type PropMeta } from './objMeta';
 import { getRow, searchRows, type GetResult, type ScopeFn } from './objRows';
@@ -147,14 +148,28 @@ const openRel = (g: RelGroup, r: ExploreRow) => router.push({ path: '/use/object
 const moreRel = (g: RelGroup) => router.push({ path: '/use/objects/search', query: { ...contextQuery(), type: g.link.other, f: JSON.stringify({ [g.link.otherProp]: [String(row.value?.values[g.link.thisProp])] }) } });
 
 /* 动作：公共确认卡。演示模式提示“已提交”；真接口模式动作执行接口还没有，不假装成功 */
-const actions = computed(() => (meta.value ? actionsOf(meta.value) : []));
+const realActions = ref<LaunchAction[]>([]), actionError = ref('');
+let actionSeq = 0;
+watch([typeId, dynamicContextKey], async () => {
+  const n = ++actionSeq; realActions.value = []; actionError.value = '';
+  if (!dynamicApi.isReal() || !typeId.value) return;
+  try { const rows = await listLaunchActions(); if (n === actionSeq) realActions.value = rows.filter(a => a.kind === typeId.value); }
+  catch (e) { if (n === actionSeq) actionError.value = errText(e); }
+}, { immediate: true });
+const actions = computed(() => dynamicApi.isReal()
+  ? realActions.value.map(a => ({ id: a.id, name: a.name, desc: a.reason ?? '', approval: a.approval, available: a.available }))
+  : (meta.value ? actionsOf(meta.value).map(a => ({ ...a, available: true })) : []));
 const metrics = computed(() => (meta.value ? metricsOf(meta.value) : []));
 const done = reactive<Record<string, string>>({});
 watch(() => `${typeId.value}:${id.value}`, () => { Object.keys(done).forEach((k) => delete done[k]); });
-const actOff = computed(() => (readonly.value ? reason.value : qaWriteReal.value ? '动作执行接口还没接入，暂时不能从这里发起' : ''));
+const actOff = computed(() => (readonly.value ? reason.value : ''));
 async function run(a: { id: string; name: string; desc: string; approval: string }) {
   if (actOff.value || !meta.value || !row.value) return;
-  const ok = await confirm.ask({ title: a.name, target: `${meta.value.name} ${row.value.title}（${row.value.id}）`, impact: `${a.desc}　审批：${a.approval}`, tag: '待确认', okText: a.approval.startsWith('免审') ? '确认执行' : '提交审批' });
+  if (qaWriteReal.value) {
+    await router.push({ path: '/use/ops/actions', query: { ...contextQuery(), launch: a.id, launchObj: row.value.id } });
+    return;
+  }
+  const ok = await confirm.ask({ title: a.name, target: `${meta.value.name} ${row.value.title}（${row.value.id}）`, impact: a.desc, tag: '待确认', okText: '确认并执行' });
   if (!ok) return;
   done[a.id] = '已提交（演示）';
   message.success('演示数据：已提交，不会真的执行');
@@ -253,11 +268,12 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
         <div class="panel">
           <div class="panel-head"><span class="t-16 fw-600">可执行动作</span></div>
           <div class="od-acts">
-            <div v-if="!actions.length" class="c-3 t-12 od-act">这个类型没有已发布的动作</div>
+            <a-alert v-if="actionError" type="error" :message="`动作加载失败：${actionError}`" show-icon />
+            <div v-else-if="!actions.length" class="c-3 t-12 od-act">这个类型没有可发起的动作</div>
             <div v-for="a in actions" :key="a.id" class="od-act">
               <a-tooltip :title="a.desc" placement="left"><span class="od-act-main od-ell">{{ a.name }}</span></a-tooltip>
               <span v-if="done[a.id]" class="c-3 od-act-state">{{ done[a.id] }}</span>
-              <a-tooltip v-else :title="actOff || undefined"><a-button size="small" :disabled="!!actOff" @click="run(a)">发起</a-button></a-tooltip>
+              <a-tooltip v-else :title="actOff || a.desc || undefined"><a-button size="small" :disabled="!!actOff || !a.available" @click="run(a)">发起</a-button></a-tooltip>
             </div>
           </div>
         </div>

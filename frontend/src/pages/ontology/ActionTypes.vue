@@ -8,6 +8,7 @@
  * 走 api/action.ts 的快照；执行记录与统计走 dynamic 的 /action-runs（dynamic 开关，取不到用 mock）；近 14 天执行图走
  * GET /action-types/{id}/stats/daily（取到之前 / 后台没起来用 mock runDaily）。引用规则走 /used-by（关系随版本，告警为实时统计）。
  */
+import ActionHttpMappingEditor from './ActionHttpMappingEditor.vue';
 import { computed, reactive, ref, watch, onScopeDispose } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -33,6 +34,7 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import NewActionEventForm from './parts/NewActionEventForm.vue';
+import { useAssistantDraft } from '@/composables/useAssistantDraft';
 import ActionTrialForm from './parts/ActionTrialForm.vue';
 import ActionExecutionEditor from './parts/ActionExecutionEditor.vue';
 import ActionPolicyEditor from './parts/ActionPolicyEditor.vue';
@@ -41,8 +43,9 @@ import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { currentApiContext, isApiError } from '@/api/http';
 import {
-  actionApi, actionContextKey, snapshotReady, loadSnapshot, actionDetailReady, loadActionDetail, listActionParams, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, getActionRunStats, listActionRuns, type ActionRunStats, type ActionTypeRow,
+  actionApi, actionContextKey, snapshotReady, loadSnapshot, invalidateActionSnapshot, actionDetailReady, loadActionDetail, listActionParams, listActionTypes, actionTypes, paramsOf, condsOf, writebackOf, actionVersionsOf, writebackSystems, loadWritebackSystems, runsOf, runStats, getActionRunStats, listActionRuns, type ActionRunStats, type ActionTypeRow,
   getActionUsedBy, type ActionUsedBy, getRunDaily, type RunDaily, crWriter, crStart, crErrText, crWriteOn, crRestore,
+  getActionExecutionOptions, type ActionExecutionOptions,
 } from '@/api/action';
 
 const route = useRoute();
@@ -100,8 +103,13 @@ const tab = computed({
   set: (v) => router.replace({ query: { ...route.query, tab: v === 'overview' ? undefined : v, ppage: undefined, psize: undefined, rpage: undefined, rsize: undefined } }),
 });
 
-/* 草稿（公共 useDraftView：CR-0014 → 调整大区预算） */
-const { draft, isDraft, editTip: viewTip, readonly, reason, setView, start, cancel } = useDraftView('action', () => cur.value.id);
+/* 保存即生效：真实模式下不建草稿，已发布定义直接可编辑，保存后立即生成版本 */
+const view = useDraftView('action', () => cur.value.id);
+const { readonly, reason } = view;
+const isDraft = computed(() => (real ? !readonly.value : view.isDraft.value));
+const draft = computed(() => (real ? undefined : view.draft.value));
+const viewTip = view.editTip;
+const { setView, start, cancel } = view;
 if (real) watch([actionContextKey, () => cur.value.id, isDraft], async () => {
   const key = actionContextKey(), id = cur.value.id;
   loadErr.value = '';
@@ -110,11 +118,11 @@ if (real) watch([actionContextKey, () => cur.value.id, isDraft], async () => {
   catch (e) { if (mounted && key === actionContextKey() && id === cur.value.id) loadErr.value = apiMsg(e); }
 }, { immediate: true, flush: 'sync' });
 const crTarget = () => ({ id: cur.value.id, name: `${cur.value.name}（${cur.value.api}）` });
-const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军', writer: crWriter('action', crTarget), ready: () => ready.value });
+const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, writer: crWriter('action', crTarget), ready: () => ready.value, direct: real, readonly, onSaved: async () => { invalidateActionSnapshot(); await loadActionDetail(cur.value.id, true); await loadSnapshot(); } });
 /** 放弃草稿（确认卡在 useDraftEdits.discard）：写库模式下删库成功后用 cancel 撤掉本对象在登记表里的登记并切回已发布版；开关关着同以前（mock 登记不动） */
 const onDiscard = () => de.discard(() => { const d = draft.value; if (crWriteOn() && d) cancel(d.id); else setView('published'); });
 /* 刷新后恢复（写库模式）：按库里的草稿登记重新登记本页对象，库里已没有的 mock 登记去掉；本对象的草稿行由 useDraftEdits 读回 */
-if (crWriteOn()) {
+if (crWriteOn() && !real) {
   const key = actionContextKey();
   crRestore('action').then(({ pairs, inDb }) => {
     if (!mounted || key !== actionContextKey()) return;
@@ -128,14 +136,28 @@ async function onStart(opts: { join?: string; title?: string; desc?: string }) {
   try { start(await crStart({ kind: 'action', ...crTarget() }, opts)); } catch (e) { message.error(`发起变更失败：${crErrText(e)}`); }
 }
 const creating = ref(false);
+async function onCreated(id: string) {
+  const key = actionContextKey();
+  try {
+    invalidateActionSnapshot();
+    await loadSnapshot();
+    const result = await listActionTypes({ group: group.value, kw: kw.value, page: lpage.value, size: LPAGE });
+    if (key !== actionContextKey()) return;
+    Object.assign(realList, { items: result.items, total: result.total, groups: result.groups });
+    await router.replace({ query: { ...route.query, action: id, view: undefined } });
+  } catch (e) { message.error(`刷新动作类型失败：${apiMsg(e)}`); }
+}
 const createOpen = ref(false);
+const assistantDraft = ref<Record<string, unknown>>();
+watch(createOpen, open => { if (!open) assistantDraft.value = undefined; });
+useAssistantDraft(['action'], () => readonly.value || createOpen.value || dirty.value, draft => { assistantDraft.value = draft; createOpen.value = true; });
 const createOptions = ref<{ join?: string; title?: string; desc?: string }>({});
 watch(() => route.query.createType, value => { if (real && value) createOpen.value = true; }, { immediate: true });
 const { canEdit: draftCanEdit, editTip, dirty, bannerDraft } = de;
 const canEdit = computed(() => draftCanEdit.value && ready.value);
 const changeOpen = ref(false);
 const changeTarget = ref('');
-const openChange = (name: string, isNew = false) => { creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
+const openChange = (name: string, isNew = false) => { if (isNew && real) { createOptions.value = {}; createOpen.value = true; return; } creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
 /** 切换左侧选中项：清掉抽屉与分页；有未保存修改先确认 */
 const pick = (id: string) => de.guard(() => router.replace({ query: { ...route.query, action: id, view: undefined, drawer: undefined, drawer2: undefined, ppage: undefined, psize: undefined, rpage: undefined, rsize: undefined, rs: undefined } }));
 const onView = (v: 'published' | 'draft') => (v === 'published' ? de.guard(() => setView('published')) : setView(v));
@@ -145,8 +167,8 @@ const paramSec = de.section<ActionParam>('params', () => paramsOf(cur.value), (p
 const condSec = de.section<SubmitCond>('conds', () => condsOf(cur.value), (c) => c.name);
 const editSec = de.section<OntologyEdit>('edits', () => writebackOf(cur.value).edits, (e) => `${e.op}:${e.obj}`);
 const effSec = de.section<SideEffect>('effects', () => writebackOf(cur.value).effects, (e) => e.target);
-interface WbCfg { sysId: string | null; endpoint: string; idemKey: string }
-const cfgSec = de.section<WbCfg>('config', () => [{ sysId: cur.value.sysId, endpoint: cur.value.endpoint, idemKey: cur.value.idemKey }], () => 'cfg');
+interface WbCfg { sysId: string | null; endpoint: string; idemKey: string; httpMapping?: any }
+const cfgSec = de.section<WbCfg>('config', () => [{ sysId: cur.value.sysId, endpoint: cur.value.endpoint, idemKey: cur.value.idemKey, httpMapping: cur.value.httpMapping ?? null }], () => 'cfg');
 const policyInfo = computed(() => cur.value as ActionType & { policyStatus?: string; policyStored?: unknown });
 const policySec = de.section<unknown>('policy', () => policyInfo.value.policyStored == null ? [] : [policyInfo.value.policyStored], () => 'policy');
 const shownPolicy = computed(() => policySec.rows.value[0]?.data);
@@ -161,7 +183,14 @@ const flat = <T extends object>(rows: DiffRow<T>[]) => rows.map((r) => ({ ...r.d
 const editCol = (cols: any[]) => (isDraft.value ? [...cols, { title: '改动', key: '_mark', width: 64 }, { title: '操作', key: '_op', width: 96 }] : cols);
 const delRow = (r: { _mark: string }) => (r._mark === '删除' ? 'at-del' : '');
 /** 草稿里生效的定义（写回目标等取草稿值），用于概览、写回页 */
-const eff = computed<ActionType>(() => withSystem({ ...cur.value, ...cfgSec.rows.value[0].data }));
+function resolvedSystem(action: ActionType): ActionType {
+  if (!live.value) return withSystem(action);
+  if (!action.sysId) return { ...action, system: '本体（无外部写回）' };
+  const system = writebackSystems().find((item) => item.id === action.sysId);
+  return system ? { ...action, system: system.name, timeout: `${system.timeoutMs / 1000} 秒`, retry: system.retry, idempotent: system.idempotent }
+    : { ...action, system: action.sysId === cur.value.sysId ? cur.value.system || action.sysId : action.sysId };
+}
+const eff = computed<ActionType>(() => resolvedSystem({ ...cur.value, ...cfgSec.rows.value[0].data }));
 const cfgMark = computed(() => cfgSec.rows.value[0].mark);
 const cfgBase = computed(() => cfgSec.rows.value[0].base);
 
@@ -188,6 +217,7 @@ const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: (
 };
 const editor = reactive<{ open: boolean; sec: SecName; key: string | null; form: Record<string, any> }>({ open: false, sec: 'params', key: null, form: {} });
 const editorDef = computed(() => FORMS[editor.sec]);
+const httpMappingEditor = ref<{ validate: () => boolean } | null>(null);
 const executionEditor = ref<{ validate: () => boolean } | null>(null);
 const paramFunctionEditor = ref<{ validate: () => boolean } | null>(null);
 const parameterComputed = computed(() => { try { return !!JSON.parse(editor.form.def)?.function; } catch { return false; } });
@@ -195,9 +225,11 @@ function openAdd(sec: SecName) { if (!canEdit.value) return; Object.assign(edito
 function openEdit(sec: SecName, key: string) {
   if (!canEdit.value) return;
   const row = SECS[sec].rows.value.find((r) => r.key === key);
-  if (row) Object.assign(editor, { open: true, sec, key, form: { ...(row.data as object) } });
+  if (row) Object.assign(editor, { open: true, sec, key, form: JSON.parse(JSON.stringify(row.data)) });
 }
 function saveEditor() {
+  if (editor.sec === 'config' && editor.form.sysId && !httpMappingEditor.value?.validate()) { message.warning('请完整填写有效的 HTTP 字段映射'); return; }
+  if (editor.sec === 'config' && !editor.form.sysId) editor.form.httpMapping = null;
   if (real && editor.sec === 'params' && !paramFunctionEditor.value?.validate()) {
     message.warning('请选择有效的计算函数、固定版本和输入参数'); return;
   }
@@ -352,8 +384,8 @@ const condCols = computed(() => editCol([
 /* 写回与副作用 */
 const wbEdits = computed(() => flat(editSec.rows.value));
 const wbEffects = computed(() => flat(effSec.rows.value));
-const sys = computed(() => extSystemById(eff.value.sysId));
-const internal = computed(() => !sys.value);
+const sys = computed(() => live.value ? writebackSystems().find((item) => item.id === eff.value.sysId) : extSystemById(eff.value.sysId));
+const internal = computed(() => !eff.value.sysId);
 const flow = computed(() => {
   const a = eff.value;
   const ruleGen = a.usedBy.some((id) => RULE_ACTION[id] === a.id);
@@ -361,26 +393,51 @@ const flow = computed(() => {
   const n = () => String(items.length + 1);
   if (ruleGen) items.push({ time: n(), text: '规则生成 ⇒ 待确认', desc: '规则命中只生成动作，确认人确认后才提交；确认前可撤回', status: 'warn' });
   items.push({ time: n(), text: '校验提交条件', desc: `${liveConds.value.length} 项，任一不满足即拒绝提交` });
-  if (a.approval !== '免审') items.push({ time: n(), text: '审批', desc: a.approval });
   if (sys.value) {
-    items.push({ time: n(), text: `调用 ${sys.value.name}（同步）`, desc: `超时 ${a.timeout}；幂等键 ${sys.value.idemKey}` });
-    items.push({ time: n(), text: '外部明确返回失败 ⇒ 自动重试', desc: sys.value.retry, status: 'error' });
+    items.push({ time: n(), text: `排队调用 ${sys.value.name}`, desc: `超时 ${a.timeout}；幂等键 ${sys.value.idemKey}` });
+    items.push({ time: n(), text: '外部明确返回失败 ⇒ 记录失败', desc: '修正原因后可重新发起', status: 'error' });
     items.push({ time: n(), text: '超时或无响应 ⇒ 结果未知 · 待对账', desc: `不重试；${UNKNOWN_FOLLOWUP}`, status: 'unknown' });
   }
   items.push({ time: n(), text: '提交本体编辑', desc: '写回成功后才提交，保证本体与外部系统一致' });
   items.push({ time: n(), text: '执行副作用（异步）', desc: '通知、事件；失败不影响动作结果' });
   return items;
 });
+const mappingOptions = ref<ActionExecutionOptions | null>(null);
+if (real) watch([tab, actionContextKey], async () => {
+  const context = actionContextKey(); mappingOptions.value = null;
+  if (tab.value !== 'writeback') return;
+  try { const options = await getActionExecutionOptions(); if (mounted && context === actionContextKey() && tab.value === 'writeback') mappingOptions.value = options; }
+  catch { /* The mapping remains readable using its field names. */ }
+}, { immediate: true });
+function mappingDescription(raw: string, objectId: string) {
+  if (!raw || raw === '—') return '—';
+  let data: any;
+  try { data = JSON.parse(raw); } catch { return raw; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return '已配置内容，点击编辑查看';
+  if (data.from && data.to) return '已选择关联的两个对象';
+  const values = data.values ?? data.payload ?? data;
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return '已配置内容，点击编辑查看';
+  const obj = mappingOptions.value?.objects.find(item => [item.id, item.api, item.name].includes(objectId));
+  const describeSource = (source: any) => {
+    if (!source || typeof source !== 'object') return '已配置取值';
+    if ('param' in source) return `参数：${paramsOf(cur.value).find(p => p.api === source.param)?.name || source.param}`;
+    if ('function' in source) return `函数：${mappingOptions.value?.functions.find(f => f.id === source.function)?.name || source.function}`;
+    if ('value' in source) return source.value === null ? '空值' : typeof source.value === 'boolean' ? (source.value ? '是' : '否') : typeof source.value === 'object' ? '结构化值' : String(source.value);
+    return '已配置取值';
+  };
+  const rows = Object.entries(values).filter(([key]) => !['target', 'object', 'version'].includes(key));
+  return rows.length ? rows.map(([field, source]) => `${obj?.properties.find(p => p.api === field)?.name || field}：${describeSource(source)}`).join('；') : '未配置字段';
+}
 const editCols = computed(() => editCol([
   { title: '操作', dataIndex: 'op', width: 72 },
   { title: '对象', dataIndex: 'obj', width: 180 },
-  { title: '字段', dataIndex: 'field', ellipsis: { showTitle: true } },
+  { title: '字段映射', key: 'field', ellipsis: { showTitle: true } },
 ]));
 const effectCols = computed(() => editCol([
   { title: '类型', dataIndex: 'kind', width: 88 },
   { title: '目标', dataIndex: 'target', width: 260, ellipsis: { showTitle: true } },
   { title: '时机', dataIndex: 'when', width: 200, ellipsis: { showTitle: true } },
-  { title: '说明', dataIndex: 'note', ellipsis: { showTitle: true } },
+  { title: '传递内容', key: 'note', ellipsis: { showTitle: true } },
 ]));
 
 /* 执行记录 */
@@ -435,7 +492,7 @@ const verCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="!real ? '新建动作类型表单尚未接入' : readonly ? reason : !crWriteOn() ? '需开启真实变更单写入' : ''"><a-button :disabled="readonly || !crWriteOn()" @click="openChange('新建动作类型', true)">新建动作类型</a-button></a-tooltip>
+    <a-tooltip :title="!real ? '需要真实接口' : readonly ? reason : ''"><a-button :disabled="readonly || !real" @click="openChange('新建动作类型', true)">新建动作类型</a-button></a-tooltip>
   </Teleport>
 
   <a-empty v-if="live && ready && !cur.id" description="暂无动作类型或所选类型不存在" />
@@ -478,9 +535,9 @@ const verCols = [
         <span class="at-sp" />
         <a-tooltip :title="real ? isDraft && dirty ? '请先保存草稿，试运行读取数据库已保存内容' : '按当前定义填写参数和对象，只校验提交条件' : undefined"><span><a-button :disabled="cur.status === '草稿' || (real && (!!currentApiContext().previewAs || !ready || (isDraft && dirty)))" @click="dryRun">试运行</a-button></span></a-tooltip>
         <a-button v-if="real && hasTrialResult" type="link" @click="trialOpen = true">查看校验结果</a-button>
-        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
-        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
+        <a-tooltip v-if="!real && readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
+        <a-button v-else-if="!real && !draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
+        <a-button v-else-if="!real && draft && !isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="at-tabs">
         <a-tab-pane key="overview" tab="概览" />
@@ -501,7 +558,6 @@ const verCols = [
             <a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item>
             <a-descriptions-item label="说明" :span="2"><span class="at-ell" :title="cur.desc">{{ cur.desc }}</span></a-descriptions-item>
             <a-descriptions-item label="谁可以执行"><span class="at-ell" :title="cur.runners">{{ cur.runners }}</span></a-descriptions-item>
-            <a-descriptions-item label="审批"><span class="at-ell" :title="cur.approval">{{ cur.approval }}</span></a-descriptions-item>
             <a-descriptions-item label="写回系统">{{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span></a-descriptions-item>
             <a-descriptions-item label="写回接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
             <a-descriptions-item label="幂等键规则" :span="2"><span class="num">{{ eff.idemKey }}</span></a-descriptions-item>
@@ -514,13 +570,19 @@ const verCols = [
             <div v-else-if="policyInfo.policyStatus === 'invalid' && !policySec.rows.value[0]?.mark" class="t-14 c-2">原策略格式不受支持，当前按确认执行；编辑时请核对原记录。</div>
             <div v-else class="t-14 c-2">{{ ({suggest:'仅建议',confirm:'确认后执行',auto:'满足条件后自动执行'} as Record<string,string>)[(shownPolicy as any)?.mode] ?? '未识别的原策略' }}</div>
             <a-collapse v-if="shownPolicy != null" ghost><a-collapse-panel key="policy" header="查看策略记录"><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(shownPolicy, null, 2) }}</pre></a-collapse-panel></a-collapse>
+            <div v-if="isDraft" class="at-tool">
+              <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : real ? '已保存并生效' : de.locked.value ? '历史变更单已锁定' : '草稿已保存' }}</span>
+              <span class="at-sp" />
+              <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
+              <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">{{ real ? '保存' : '保存草稿' }}</a-button>
+            </div>
           </template>
           <div class="at-sec t-14 fw-600 at-sec-row">
             <span>使用该动作的规则与告警<InfoTip text="点规则编号在当前页查看规则" /></span>
           </div>
           <div v-if="live && usedState.error" role="alert">引用规则加载失败：{{ usedState.error }} <a-button type="link" @click="loadUsedBy">重试</a-button></div>
           <a-table v-else :loading="live && (!ready || usedState.loading)" :columns="usedCols" :data-source="usedBy" :pagination="false" size="small" row-key="id"
-            :locale="{ emptyText: live && (!ready || usedState.loading) ? '正在加载引用规则…' : '暂无规则使用，只能在对象详情里手动执行' }">
+            :locale="{ emptyText: live && (!ready || usedState.loading) ? '正在加载引用规则…' : '暂无规则使用，可从问数、动作中心或对象详情发起' }">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'rule'"><ObjRef kind="rule" :id="record.id">{{ record.id }}</ObjRef><span class="c-1 at-gap">{{ record.name }}</span></template>
               <template v-else-if="column.key === 'alerts'">
@@ -565,9 +627,9 @@ const verCols = [
           <span class="t-14 c-1">{{ real && (!ready || paramsLoading) ? '参数加载中…' : `参数 ${params.total} 个` }}</span><InfoTip text="提交时按顺序校验；对象引用类参数在执行面板里用对象选择器填写" />
           <span class="at-sp" />
           <template v-if="isDraft">
-            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
+            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : real ? '已保存并生效' : de.locked.value ? '历史变更单已锁定' : '草稿已保存' }}</span>
             <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
-            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">保存草稿</a-button>
+            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">{{ real ? '保存' : '保存草稿' }}</a-button>
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('params')">新增参数</a-button></a-tooltip>
         </div>
@@ -592,9 +654,9 @@ const verCols = [
           <span class="t-14 c-1">提交条件 {{ liveConds.length }} 项</span><InfoTip text="全部满足才允许提交；条件模板分三类：当前用户、参数、上下文对象" />
           <span class="at-sp" />
           <template v-if="isDraft">
-            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
+            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : real ? '已保存并生效' : de.locked.value ? '历史变更单已锁定' : '草稿已保存' }}</span>
             <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
-            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">保存草稿</a-button>
+            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">{{ real ? '保存' : '保存草稿' }}</a-button>
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('conds')">新增条件</a-button></a-tooltip>
         </div>
@@ -620,18 +682,19 @@ const verCols = [
             <span>写回（同步，决定动作结果）<a-tag v-if="cfgMark" class="at-mark">{{ cfgMark }}</a-tag></span>
             <span class="at-tool">
               <template v-if="isDraft">
-                <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
+                <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : real ? '已保存并生效' : de.locked.value ? '历史变更单已锁定' : '草稿已保存' }}</span>
                 <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
-                <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">保存草稿</a-button>
+                <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">{{ real ? '保存' : '保存草稿' }}</a-button>
               </template>
               <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openEdit('config', 'cfg')">编辑写回</a-button></a-tooltip>
             </span>
           </div>
           <a-descriptions :column="2" bordered size="small" class="at-desc">
             <a-descriptions-item label="外部系统">
-              {{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span><span v-if="cfgMark && cfgBase && cfgBase.sysId !== eff.sysId"> · 原 {{ withSystem({ ...cur, ...cfgBase }).system }}</span>
+              {{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span><span v-if="cfgMark && cfgBase && cfgBase.sysId !== eff.sysId"> · 原 {{ resolvedSystem({ ...cur, ...cfgBase }).system }}</span>
             </a-descriptions-item>
             <a-descriptions-item label="接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
+            <a-descriptions-item label="HTTP 字段映射" :span="2">{{ eff.httpMapping ? '已配置 · HTTPS POST' : '平台标准请求和响应' }}</a-descriptions-item>
             <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ eff.idemKey }}</span><span v-if="sys"> · 请求头 {{ sys.idemKey }}</span></a-descriptions-item>
             <a-descriptions-item label="超时"><span class="at-ell" :title="eff.timeout">{{ eff.timeout }}</span></a-descriptions-item>
             <a-descriptions-item label="重试"><span class="at-ell" :title="eff.retry">{{ eff.retry }}</span></a-descriptions-item>
@@ -646,7 +709,8 @@ const verCols = [
           </div>
           <a-table :columns="editCols" :data-source="wbEdits" :pagination="false" size="small" row-key="_key" :row-class-name="delRow">
             <template #bodyCell="{ column, record }">
-              <template v-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
+              <template v-if="column.key === 'field'">{{ mappingDescription(record.field, record.obj) }}</template>
+              <template v-else-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
               <template v-else-if="column.key === '_op'">
                 <a-space v-if="record._mark === '删除'"><a :class="{ 'at-dis': !canEdit }" @click="restoreItem('edits', record._key)">恢复</a></a-space>
                 <a-space v-else><a :class="{ 'at-dis': !canEdit }" @click="openEdit('edits', record._key)">编辑</a><a :class="{ 'at-dis': !canEdit }" @click="delItem('edits', record._key)">删除</a></a-space>
@@ -659,7 +723,8 @@ const verCols = [
           </div>
           <a-table :columns="effectCols" :data-source="wbEffects" :pagination="false" size="small" row-key="_key" :row-class-name="delRow">
             <template #bodyCell="{ column, record }">
-              <template v-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
+              <template v-if="column.key === 'note'">{{ mappingDescription(record.note, '') }}</template>
+              <template v-else-if="column.key === '_mark'"><a-tag v-if="record._mark">{{ record._mark }}</a-tag></template>
               <template v-else-if="column.key === '_op'">
                 <a-space v-if="record._mark === '删除'"><a :class="{ 'at-dis': !canEdit }" @click="restoreItem('effects', record._key)">恢复</a></a-space>
                 <a-space v-else><a :class="{ 'at-dis': !canEdit }" @click="openEdit('effects', record._key)">编辑</a><a :class="{ 'at-dis': !canEdit }" @click="delItem('effects', record._key)">删除</a></a-space>
@@ -721,10 +786,10 @@ const verCols = [
     </div>
   </div>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onStart" />
-  <NewActionEventForm v-if="real" v-model:open="createOpen" kind="action" :options="createOptions" :row-forms="FORMS" />
+  <NewActionEventForm v-if="real" :assistant-draft="assistantDraft" v-model:open="createOpen" kind="action" :options="createOptions" :row-forms="FORMS" @saved="onCreated" />
   <ActionTrialForm v-if="real && cur.id" :key="dryKey()" v-model:open="trialOpen" :action="cur" :cr="isDraft ? draft?.id : undefined"
     :disabled="!ready || !!currentApiContext().previewAs || (isDraft && dirty) || cur.status === '草稿'" @result="hasTrialResult = true" />
-  <a-modal v-model:open="policyOpen" title="执行策略" ok-text="记入本地草稿" cancel-text="取消" :width="640" destroy-on-close @ok="applyPolicy">
+  <a-modal v-model:open="policyOpen" title="执行策略" ok-text="确定" cancel-text="取消" :width="640" destroy-on-close @ok="applyPolicy">
     <ActionPolicyEditor v-if="policyOpen" ref="policyEditor" :initial="policyInitial" :params="paramSec.rows.value.map(r => r.data)" />
   </a-modal>
   <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="real && (editor.sec === 'edits' || editor.sec === 'effects') ? 820 : 520" @ok="saveEditor">
@@ -737,8 +802,9 @@ const verCols = [
         <a-textarea v-else-if="f.kind === 'textarea'" v-model:value="editor.form[f.k]" :rows="2" />
         <a-input v-else v-model:value="editor.form[f.k]" :disabled="f.k === 'endpoint' && editor.sec === 'config' && !editor.form.sysId" />
       </a-form-item>
+      <ActionHttpMappingEditor v-if="real && editor.open && editor.sec === 'config' && editor.form.sysId" ref="httpMappingEditor" v-model="editor.form.httpMapping" :params="flat(paramSec.rows.value).filter(p => p._mark !== '删除')" />
     </a-form>
-    <div class="t-12 c-3">改动先保存在本地，点“保存草稿”后计入 {{ draft?.id }} 的改动数。</div>
+    <div class="t-12 c-3">点“保存”立即生效并生成新版本；同一对象的多段改动一次提交。</div>
   </a-modal>
 </template>
 

@@ -14,7 +14,7 @@ export interface FunctionSave {
   title: string; desc: string; timeoutS: number; code: string; lockVersion?: number;
   crId?: string; crLockVersion?: number; changeTitle?: string; reason?: string;
 }
-export interface FunctionSaved { id: string; crId: string; crLockVersion: number; status: '草稿' }
+export interface FunctionSaved { id: string; crId: string; crLockVersion: number; status: '已发布'; ver: string }
 const api = apiClient('static');
 const path = (id: string, suffix = '') => `/functions/${encodeURIComponent(id)}${suffix}`;
 export const listFunctions = (query: { kw: string; status: string; page: number; size: number }, options: RequestOptions) => api.get<PageResult<FunctionRow>>('/functions', { ...options, query: { ...options.query, ...query } });

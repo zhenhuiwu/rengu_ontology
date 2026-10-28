@@ -8,7 +8,7 @@ import { RELEASES } from '@/api/releases';
 const app = useAppStore();
 const { view } = useVersion();
 const visible = ref(false);
-const shown = () => app.viewVersion ?? (app.ontologyVersion === '—' ? '未发布' : app.ontologyVersion);
+const shown = () => app.viewVersion ?? RELEASES[0]?.ver ?? '未正式发布';
 function pick(v: string) { visible.value = false; view(v); }
 </script>
 
@@ -22,7 +22,7 @@ function pick(v: string) { visible.value = false; view(v); }
           <li v-for="r in RELEASES" :key="r.ver" class="vp-item" :class="{ on: r.ver === shown() }" :title="r.note" @click="pick(r.ver)">
             <div class="vp-row">
               <span class="num fw-600">{{ r.ver }}</span>
-              <a-tag v-if="r.ver === app.ontologyVersion" class="vp-tag">当前</a-tag>
+              <a-tag v-if="r.ver === RELEASES[0]?.ver" class="vp-tag">最新正式发布</a-tag>
               <span class="vp-sp" />
               <span class="vp-by">{{ r.by }}</span>
               <span class="num vp-at">{{ r.publishedAt }}</span>
@@ -32,7 +32,7 @@ function pick(v: string) { visible.value = false; view(v); }
       </div>
     </template>
     <a class="vp-trigger t-14 num" :class="app.viewMode === 'history' ? 'c-warning' : 'c-2'">
-      本体 {{ shown() }}<span v-if="app.viewMode === 'history'">（历史）</span> <DownOutlined class="vp-caret" />
+      本体 {{ shown() }}<span v-if="app.viewMode === 'history'">（历史）</span><span v-else-if="RELEASES.length">（最新正式发布<span v-if="app.ontologyVersion !== RELEASES[0]?.ver"> · 有未发布更改</span>）</span> <DownOutlined class="vp-caret" />
     </a>
   </a-popover>
 </template>

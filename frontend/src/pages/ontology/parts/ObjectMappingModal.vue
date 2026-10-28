@@ -46,14 +46,14 @@ async function save(opts: { join?: string; title?: string; desc?: string }) {
   try {
     const result = await commitTableMapping(props.datasourceId, props.schema, props.table, objectId.value, opts);
     if (my !== seq || key !== ctxKey() || !open.value) return;
-    message.success(`映射改动已记入 ${result.crId}，审核并整版发布后生效`); open.value = false; emit('saved', result.crId);
+    message.success(`映射改动已记入 ${result.crId}，整版发布后生效`); open.value = false; emit('saved', result.crId);
   } catch (e) { if (my === seq && key === ctxKey()) message.error(`${e instanceof Error ? e.message : String(e)}；已保留对象选择`); }
   finally { if (my === seq && key === ctxKey()) busy.value = false; }
 }
 </script>
 <template>
   <a-modal :open="open" title="修改对象来源映射" :width="640" :closable="!busy" :mask-closable="!busy" :confirm-loading="busy" ok-text="选择变更单" :ok-button-props="{ disabled: !canSave }" @cancel="close" @ok="changeOpen = true">
-    <a-alert type="info" message="仅将对象定义的source/table改动记入CR；审核发布后生效。后台重新检查源表字段与主键，不改变任意SQL执行权限。" show-icon />
+    <a-alert type="info" message="仅将对象定义的source/table改动记入CR；发布后生效。后台重新检查源表字段与主键，不改变任意SQL执行权限。" show-icon />
     <a-alert v-if="readonly" type="warning" :message="reason" show-icon />
     <a-alert v-if="error || detailError" type="error" :message="error || detailError" show-icon><template #action><a-button size="small" @click="error ? load() : loadObject()">重试加载</a-button></template></a-alert>
     <a-form layout="vertical" :disabled="readonly || busy || loading" style="margin-top:16px">

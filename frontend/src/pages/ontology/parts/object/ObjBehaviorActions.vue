@@ -255,7 +255,6 @@ const recCols = [
           </a-descriptions-item>
           <a-descriptions-item label="幂等键"><span class="num">{{ openType.idemKey }}</span></a-descriptions-item>
           <a-descriptions-item label="可发起">{{ openType.runners }}</a-descriptions-item>
-          <a-descriptions-item label="审批">{{ openType.approval }}</a-descriptions-item>
           <a-descriptions-item v-if="!real && GUARDS[openType.id]" label="回退限制">{{ GUARDS[openType.id] }}</a-descriptions-item>
           <a-descriptions-item label="负责人">{{ openType.owner }}</a-descriptions-item>
         </a-descriptions>

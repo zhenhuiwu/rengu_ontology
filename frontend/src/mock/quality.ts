@@ -25,7 +25,7 @@ export const Q_OBJECT_TYPES: QObjType[] = [
 ];
 export const qObjType = (key?: string | null) => Q_OBJECT_TYPES.find((t) => t.key === key);
 
-export type CheckKind = '新鲜度' | '空值率' | '唯一性' | '引用完整性';
+export type CheckKind = '新鲜度' | '记录时效' | '空值率' | '唯一性' | '引用完整性' | '格式';
 export type CheckResult = '通过' | '失败';
 export interface QRun { time: string; result: CheckResult; actual: string; ms: number }
 export interface QCheck { id: string; typeKey: string; typeName: string; kind: CheckKind; rule: string; threshold: string; actual: string; result: CheckResult; lastRun: string; failSince: string | null; history: QRun[]; /** 补充说明（容易和别的问题混淆时） */ note?: string }

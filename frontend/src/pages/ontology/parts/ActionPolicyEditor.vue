@@ -44,7 +44,7 @@ defineExpose({ validate, value: () => JSON.parse(text.value) });
       <a-form-item label="金额参数"><a-select allow-clear :value="policy.limits?.amount?.param" :options="amountParams" placeholder="可选，使用已有数值参数" @change="(v: string | undefined) => amount('param', v)" /></a-form-item>
       <a-form-item v-if="policy.limits?.amount?.param" label="金额上限"><a-input-number :value="policy.limits?.amount?.max" :min="0" @change="(v: number | null) => amount('max', v)" /></a-form-item>
       <a-form-item label="目标对象编号" extra="可选，仅限这些对象；最多500项"><a-select mode="tags" :value="policy.limits?.objects ?? []" @change="(v: string[]) => limit('objects', v.length ? v : undefined)" /></a-form-item>
-      <a-alert type="info" message="自动执行仍须满足免审、对象范围、调用方及限额条件；不满足时进入待确认。" show-icon />
+    <a-alert type="info" message="自动执行仍须满足已发布策略、对象范围、调用方及限额条件；不满足时进入待确认。" show-icon />
     </template>
     <a-form-item label="超限处理"><a-select :value="policy.overflow ?? 'stage'" :options="[{value:'stage',label:'转为待确认'}]" @change="(v: string) => set('overflow', v)" /></a-form-item>
     <a-collapse ghost><a-collapse-panel key="json" header="策略 JSON"><a-textarea v-model:value="text" :auto-size="{minRows:4,maxRows:12}" /></a-collapse-panel></a-collapse>

@@ -30,13 +30,15 @@ function loadPage(name, real = true) {
     '@/mock/dynamic': { RULES: { R: { name: 'Demo', trigger: '定时' } }, ALERTS: [] }, '@/mock/extsys': {},
     '@/mock/paginate': {}, '@/mock/format': {}, '@/theme': {},
     '@/composables/useDrawer': { useDrawer: () => ({}) },
+    '@/composables/useUnsavedGuard': { useUnsavedGuard: () => fn => fn() },
     '@/composables/usePagedQuery': { usePagedQuery: () => ({ page: vue.ref(1), size: vue.ref(12) }) },
     '@/stores/confirm': { useConfirmStore: () => ({ ask: async () => { confirms++; return true; } }) },
-    './parts/useDraftView': { useDraftView: () => ({ draft: vue.ref(null), isDraft: vue.ref(false), readonly: vue.ref(true) }) },
+    './parts/useStaticCr': { draftFields: () => ({}), useStaticCr: () => ({ items: vue.ref([]), loading: vue.ref(false), error: vue.ref(''), head: vue.ref(null) }) },
+ './parts/useDraftView': { useDraftView: () => ({ draft: vue.ref(null), isDraft: vue.ref(false), readonly: vue.ref(true) }) },
     './useDraftEdits': { useDraftEdits: () => ({ section: () => ({ rows: vue.ref([]) }) }) },
   };
   const source = readFileSync(new URL(`../src/pages/ontology/${name}.vue`, import.meta.url), 'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
-  const expose = name === 'ActionTypes' ? 'loadUsedBy, usedState, usedBy, dryRun, dryRunning' : 'simulate';
+  const expose = name === 'ActionTypes' ? 'loadUsedBy, usedState, usedBy, dryRun, trialOpen' : 'simulate';
   const { outputText } = ts.transpileModule(`${source}\nexport { ${expose} };`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } });
   const exports = {};
   runInNewContext(outputText, { exports, require: (key) => {
@@ -66,21 +68,12 @@ assert.equal(page.usedBy.value.length, 0, 'business failures never return demo r
 backend.down = true;
 assert.equal(page.usedBy.value.length, 0, 'unavailable backend must not restore demo relationships in real mode');
 await page.dryRun(); await loadPage('EventTypes').simulate();
-assert.equal(confirms, 1, 'real dry-run confirms actual read-only checking; simulate is blocked in read-only context');
-assert.equal(dryCalls.length, 1);
-assert.equal(JSON.stringify(dryCalls[0][1]), '{}', 'no sample defaults may impersonate actual parameters');
-assert.equal(dryCalls[0][4].headers['X-Demo-As'], 'viewer');
-assert.equal(dryCalls[0][4].query.ver, context.ver);
-assert.ok(notices.some(([kind, m]) => kind === 'warning' && m.includes('2') && m.includes('未提供参数')));
-assert.ok(!notices.some(([kind]) => kind === 'success'), 'failed/missing context cannot become all-passed');
-dryFailure = new Error('REAL_503');
-await page.dryRun();
-assert.ok(notices.some(([kind, m]) => kind === 'error' && m.includes('REAL_503')));
-const before = dryCalls.length;
-const lateConfirm = page.dryRun();
-context.demoAs = 'changed-before-confirm';
-await lateConfirm;
-assert.equal(dryCalls.length, before, 'a confirmation from an old context cannot run as the new identity');
-assert.equal(page.dryRunning.value, false);
+assert.equal(confirms, 0, 'real dry-run opens the parameter form without synthetic confirmation');
+assert.equal(page.trialOpen.value, true);
+assert.equal(dryCalls.length, 0, 'opening the form cannot run against sample parameters');
+assert.ok(!notices.some(([kind]) => kind === 'success'), 'opening a form cannot claim validation success');
+const previewPage = loadPage('ActionTypes'); context.previewAs = 'preview-user';
+await previewPage.dryRun(); assert.equal(previewPage.trialOpen.value, false, 'identity preview blocks direct dry-run calls');
+context.previewAs = '';
 assert.equal(loadPage('ActionTypes', false).usedBy.value[0].name, 'Demo');
 console.log('Action used-by and real dry-run checks passed (scope, honest failures, no samples, stale confirmation, read-only simulate).');

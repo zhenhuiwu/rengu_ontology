@@ -31,7 +31,7 @@ import { DRAFTS } from '@/mock/releases';
 import type { DraftWriter, SectionChange } from '@/pages/ontology/useDraftEdits';
 import { integrationApi } from './integration';
 import { apiClient, currentApiContext, isApiError, type PageResult, type ApiContext, type QueryValue, type RequestOptions } from './http';
-import { registerDraft } from './static';
+import { applyModelChange, fetchCurrentAfterWrite, registerDraft } from './static';
 
 export const actionApi = apiClient('action');
 const api = actionApi;
@@ -45,7 +45,7 @@ const clean = <T>(o: T): T => {
   if (Array.isArray(o)) return o.map(clean) as T;
   if (!o || typeof o !== 'object') return o;
   const r: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(o)) if (v !== null) r[k] = clean(v);
+  for (const [k, v] of Object.entries(o)) if (v !== null || k === 'schema') r[k] = clean(v);
   return r as T;
 };
 
@@ -278,8 +278,8 @@ export interface EventSimulation {
   testEventId: string | null; deliveredTo: string[]; payloadValid: boolean; message: string;
   checks: { name: string; matched: boolean | null; message: string }[];
 }
-export const simulateEvent = (typeId: string, view: string, cr?: string) =>
-  api.post<EventSimulation>(`/event-types/${enc(typeId)}:simulate`, {}, { query: { view, cr } });
+export const simulateEvent = (typeId: string, view: string, cr?: string, payload?: Record<string, unknown>) =>
+  api.post<EventSimulation>(`/event-types/${enc(typeId)}:simulate`, payload ? { payload } : {}, { query: { view, cr } });
 export interface EventDeliveryStatus {
   eventId: string; outcome: string; summary: string; total: number; page: number; size: number;
   items: EventDelivery[];
@@ -288,7 +288,7 @@ export interface EventDelivery {
   id: string; eventId: string; name: string; state: string; attempts: number; error: string | null;
   version: number; startedAt: string | null; finishedAt: string | null; isTest: boolean; objectId: string; idempotencyKey: string;
   result: {
-    httpStatus?: number; actionId?: string; ruleId?: string; ruleVersion?: string; hitId?: string; alertId?: string;
+    httpStatus?: number; actionId?: string; actionRunId?: string; ruleId?: string; ruleVersion?: string; hitId?: string; alertId?: string;
     status?: string; actionStatus?: string; actionReason?: string; blockedByEventId?: string;
   } | null;
 }
@@ -390,38 +390,31 @@ export function crErrText(e: unknown): string {
 const SECTION_TYPE: Record<string, string> = { params: '参数', conds: '提交条件', edits: '本体修改', effects: '副作用', config: '写回配置', policy: '执行策略', payload: '载荷字段', subs: '订阅方' };
 
 /**
- * 给 useDraftEdits 的写库实现。保存：每个变了的 section 先 GET 读回库里的行，按 key 合并本次改动（revert 去掉），再整段 PUT
- * （不读回直接 PUT 会把刷新页面前保存的行冲掉）。
+ * 给 useDraftEdits 的写库实现（保存即生效）：把所有改动段一次提交给 /model-changes:apply，
+ * 后端在同一事务里写库、校验并生成版本；不再写变更单草稿，也不再有审核/手动发布。
+ * 只送本次改动的行：revert 表示改回已发布值，不送即可。
  */
 export function crWriter(kind: CRKind, target: () => { id: string; name: string }): DraftWriter {
-  const t = (): CRTargetIn => ({ kind, ...target() });
   return {
-    on: crWriteOn,
-    async save(crId, changes) {
-      for (const c of changes) {
-        const tg = t();
-        const { lockVersion } = await fetchCR(crId);
-        const old = await fetchCRItems(crId, { kind, targetId: tg.id, section: c.section });
-        const rows = new Map<string, CRItemIn>(old.map(({ target: _t, section: _s, updatedBy: _u, updatedAt: _a, ...r }) => [r.key, r]));
-        for (const r of c.rows as SectionChange[]) {
-          if (r.op === 'revert') rows.delete(r.key);
-          else rows.set(r.key, { key: r.key, op: r.op, before: r.before, after: r.after, type: SECTION_TYPE[c.section], field: r.key });
-        }
-        const r = await saveCRItems(crId, { target: tg, section: c.section, rows: [...rows.values()], lockVersion });
-        crChanges[crId] = r.changes;
-        const draft = DRAFTS.find((d) => d.id === crId);
-        if (draft) draft.changes = r.changes;
-      }
+    on: () => api.isReal(),
+    async save(_crId, changes) {
+      const sections = changes
+        .map((c) => ({
+          section: c.section,
+          rows: (c.rows as SectionChange[])
+            .filter((r) => r.op !== 'revert')
+            .map((r) => ({
+              key: r.key, op: r.op as 'add' | 'update' | 'delete',
+              before: r.before, after: r.after, type: SECTION_TYPE[c.section], field: r.key,
+            })),
+        }))
+        .filter((c) => c.rows.length);
+      if (!sections.length) return;
+      const { lockVersion } = await fetchCurrentAfterWrite();
+      await applyModelChange({ ...target(), kind, isNew: false }, sections, lockVersion);
     },
-    submit: async (crId) => { await submitCR(crId); },
-    async discard(crId) {
-      try { await discardCRTarget(crId, kind, target().id); }
-      catch (e) { if (!isApiError(e) || e.status !== 404) throw e; }
-      // 放弃后单子的改动数变了：读一次单头；读失败不影响放弃本身（已删库），只是改动数不更新
-      try { crChanges[crId] = (await fetchCR(crId)).changes; } catch { delete crChanges[crId]; }
-    },
-    changes: (crId) => crChanges[crId],
-    load: (crId, targetId) => fetchCRItems(crId, { kind, targetId }),
+    submit: async () => {},
+    discard: async () => {},
     errText: crErrText,
   };
 }

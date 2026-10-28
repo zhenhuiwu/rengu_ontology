@@ -5,12 +5,12 @@ import type { CheckKind } from '@/mock/quality';
 const api = apiClient('data');
 export const isQualityReal = () => api.isReal();
 export interface QualityRun { id?: string; time: string; result: string; actual: string; ms: number; dataCutoff?: string; sourceTime?: string | null; definition?: Record<string, unknown>; trigger?: 'manual' | 'scheduled'; scheduledAt?: string | null }
-export interface QualityDefinition { name: string; typeKey: string; kind: CheckKind; threshold: string; schedule: string }
+export interface QualityDefinition { name: string; typeKey: string; kind: CheckKind; threshold: string; schedule: string; field?: string | null; formatRule?: string | null }
 export interface QualityDraft { crId: string; lockVersion: number; status: string; isNew: boolean; definition: QualityDefinition; retire: boolean }
 export interface QualityChange { id: string; crId: string; lockVersion: number; status: string }
 export interface QualityChangeOptions { crId?: string; lockVersion?: number; title?: string; reason?: string }
-export interface QualityCheck { retired?: boolean; hasPublished?: boolean; pending?: QualityDraft | null; schedule?: string; scheduleStatus?: string; nextRun?: string | null; scheduleError?: string | null; id: string; name?: string; typeKey: string; typeName: string; kind: CheckKind; rule: string; threshold: string; actual: string; result: string; lastRun: string; failSince: string | null; history: QualityRun[]; note?: string }
-export interface QualityObject { key: string; name: string; kinds: CheckKind[]; rules?: Record<string, string> }
+export interface QualityCheck { field?: string | null; formatRule?: string | null; retired?: boolean; hasPublished?: boolean; pending?: QualityDraft | null; schedule?: string; scheduleStatus?: string; nextRun?: string | null; scheduleError?: string | null; id: string; name?: string; typeKey: string; typeName: string; kind: CheckKind; rule: string; threshold: string; actual: string; result: string; lastRun: string; failSince: string | null; history: QualityRun[]; note?: string }
+export interface QualityObject { key: string; name: string; kinds: CheckKind[]; rules?: Record<string, string>; fields?: string[]; fieldsByKind?: Record<string, string[]> }
 export interface QualitySummary { total: number; passed: number; failed: number; unrun: number; lastRun: string }
 export const fetchQualityMeta = () => api.get<{ objects: QualityObject[]; automaticScheduling: boolean; schedulingTimezone: string }>('/quality-checks/meta');
 export const fetchQualityChecks = (query: Record<string, string | number | undefined>) =>

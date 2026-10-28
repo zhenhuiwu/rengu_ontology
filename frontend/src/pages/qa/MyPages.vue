@@ -119,7 +119,7 @@ const cols = [
   { title: '状态', key: 'status', width: 100 },
   { title: '操作', key: 'op', width: 210 },
 ];
-const caliberText = (p: QaPageFull) => { const s = [...new Set(p.cards.map((c) => `${c.metric} ${c.version}`))]; return { text: s.join('、'), n: s.length }; };
+const caliberText = (p: QaPageFull) => { const s = [...new Set(p.cards.filter(c => c.metric && c.version && c.version !== '--').map((c) => `${c.metric} ${c.version}`))]; return { text: s.join('、') || '未记录指标口径版本', n: s.length }; };
 const shareText = (p: QaPageFull) => (p.share.mode === '仅自己' ? '仅自己' : p.share.mode === '所在部门' ? '所在部门' : `${p.share.members.length} 位成员`);
 const stCls = (s: string) => (s === '刷新失败' ? 'tl-failed' : 'c-2');
 

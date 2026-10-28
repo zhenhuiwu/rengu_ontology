@@ -78,6 +78,11 @@ export const useAppStore = defineStore('app', {
       this.notificationUnread = 0;
       if (workspace) { this.workspaceSelectionSaved = true; try { sessionStorage.setItem(WORKSPACE_KEY, id); } catch { /* private mode */ } }
     },
+    clearWorkspace() {
+      this.enterWorkspace('', null);
+      this.workspaceSelectionSaved = false;
+      try { sessionStorage.removeItem(WORKSPACE_KEY); } catch { /* private mode */ }
+    },
     setPersona(p: PersonaKey) {
       this.persona = p;
       this.notificationUnread = 0;

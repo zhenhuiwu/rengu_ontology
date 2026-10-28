@@ -24,6 +24,7 @@ import { ACTION_TYPES, runsOf, type ActionType, type ActionRun } from '@/mock/ac
 import { ACTIONS, RULE_CONFIRMER, OBJ_KIND_LABEL, type ActionRecord } from '@/mock/actions';
 import { currentApiContext, isApiError } from '@/api/http';
 import { integrationApi, queryExtSystems, getExtSystem, createExtSystem, updateExtSystem, testExtSystem, listExtCalls, getWritebackCall, markWritebackChecked, type ExtCallPage, type ExtSystemDto, type LinkedActionTypeDto } from '@/api/integration';
+import { getActionAuthorizations, saveActionAuthorizations } from '@/api/integration';
 
 const route = useRoute();
 const router = useRouter();
@@ -36,9 +37,24 @@ const { readonly, reason } = useReadonly();
 const real = integrationApi.isReal();
 const systems = real ? reactive<(ExtSystem & Pick<ExtSystemDto, 'actionCount'>)[]>([]) : reactive(EXT_SYSTEMS);
 const apiFail = (e: unknown) => { message.error(isApiError(e) ? `${e.message}（${e.code}）` : String(e)); };
+const authorization = ref<Awaited<ReturnType<typeof getActionAuthorizations>> | null>(null);
+const authorizationSystem = ref('');
+async function openAuthorization() {
+  try { const id = selected.value.id; const key = JSON.stringify(currentApiContext()); const data = await getActionAuthorizations(id); if (key !== JSON.stringify(currentApiContext()) || id !== selected.value.id) return; authorizationSystem.value = id; authorization.value = data; } catch (e) { apiFail(e); }
+}
+function toggleAuthorization(action: { id: string; version: string }, checked: boolean) {
+  if (!authorization.value) return;
+  authorization.value.selected = authorization.value.selected.filter(a => a.id !== action.id);
+  if (checked) authorization.value.selected.push({ id: action.id, version: action.version, path: authorization.value.paths[0] ?? '' });
+}
+async function saveAuthorization() {
+  if (!authorization.value) return;
+  try { await saveActionAuthorizations(authorizationSystem.value, { version: authorization.value.version, actions: authorization.value.selected.filter(s => authorization.value!.actions.some(a => a.id === s.id)) }); authorization.value = null; message.success('动作授权已保存'); } catch (e) { apiFail(e); }
+}
 /** 后台没起来：页面按 mock 渲染（读取不再发请求） */
 const live = computed(() => real);
 const contextKey = () => JSON.stringify(currentApiContext());
+watch(contextKey, () => { authorization.value = null; authorizationSystem.value = ''; });
 const systemPage = ref(1), systemTotal = ref(0), systemsContext = ref('');
 let systemSeq = 0;
 async function loadSystems() {
@@ -212,8 +228,8 @@ async function testCall() {
 }
 
 // 新建 / 编辑外部系统（?edit=EXT-WMS / ?edit=new）
-const CATEGORIES = ['CRM', 'ERP', 'OMS', 'WMS', 'SMS', '物流', '通知', '渠道', '审批'];
-const AUTHS = ['OAuth 2.0（客户端凭证）', 'AppID + AppSecret（OpenAPI）', 'mTLS + 服务令牌', 'API Key + HMAC 签名', 'AccessKey（RAM 子账号）', 'Token（服务账号）', 'CorpID + Secret', 'AppID + 签名'];
+const CATEGORIES = ['CRM', 'ERP', 'OMS', 'WMS', 'SMS', '物流', '通知', '渠道', '审批', 'Webhook'];
+const AUTHS = ['OAuth 2.0（客户端凭证）', 'AppID + AppSecret（OpenAPI）', 'mTLS + 服务令牌', 'API Key + HMAC 签名', 'AccessKey（RAM 子账号）', 'Token（服务账号）', 'CorpID + Secret', 'AppID + 签名', '无需授权'];
 const OWNERS = ['王敏', '陈立军', '何静', '刘婷', '孙浩然', '吴佳'];
 const blank = (): ExtSystem => ({
   id: '', name: '', vendor: '', category: 'ERP', endpoint: 'https://', auth: AUTHS[0], authDetail: '', idempotent: true, idemKey: 'X-Idempotency-Key',
@@ -266,7 +282,11 @@ async function closeEdit() {
   formSnap.value = JSON.stringify(form);
   setQuery({ edit: undefined });
 }
+const savingEdit = ref(false);
 async function saveEdit() {
+  if (savingEdit.value) return;
+  savingEdit.value = true;
+  try {
   if (readonly.value || real && editKey.value !== 'new' && !editing.value) return;
   const key = contextKey(), seq = editSeq;
   const current = () => !readonly.value && key === contextKey() && seq === editSeq;
@@ -277,8 +297,9 @@ async function saveEdit() {
   const ok = await confirm.ask({
     title: isNew ? '新建外部系统' : '保存外部系统配置', target: `${form.name || '未命名'}（${form.vendor || '—'}）`, okText: '保存',
     fields: isNew ? [{ label: '接口地址', value: form.endpoint }, { label: '环境', value: form.env }, { label: '负责人', value: form.owner }] : diff.length ? diff : [{ label: '修改', value: '无变化' }],
-    impact: isNew ? '保存后可在动作类型的“写回目标”里选择该系统；凭证由负责人在密钥库录入，界面不回显。'
-      : usedBy.value.length ? `影响 ${usedBy.value.length} 个动作类型（${usedBy.value.map((a) => a.name).join('、')}）的写回，保存后对新发起的动作立即生效。` : '没有动作类型写回该系统，保存后立即生效。',
+    impact: (isNew ? (form.auth === '无需授权' ? '保存后可在动作类型的“写回目标”里选择该系统。' : '保存后可在动作类型的“写回目标”里选择该系统；凭证由负责人在密钥库录入，界面不回显。')
+      : usedBy.value.length ? `影响 ${usedBy.value.length} 个动作类型（${usedBy.value.map((a) => a.name).join('、')}）的后续写回。` : '没有动作类型写回该系统，保存后立即生效。')
+      + (before?.auth === '无需授权' && form.auth !== '无需授权' ? ' 如适配器已配置令牌，后续调用将重新发送该令牌。' : ''),
     blocked: formErrors.value[0],
   });
   if (!ok || !current()) return;
@@ -287,10 +308,9 @@ async function saveEdit() {
     let saved: ExtSystem;
     try { saved = isNew ? await createExtSystem(body) : await updateExtSystem(before!.id, body); } catch (e) { if (current()) apiFail(e); return; }
     if (!current()) return;
-    await loadSystems();
-    if (!current()) return;
     formSnap.value = JSON.stringify(form);
     setQuery({ edit: undefined, sys: saved.id });
+    await loadSystems();
     await loadLinked(saved.id);
     message.success(isNew ? `已新建外部系统：${saved.name}` : `已保存：${saved.name}`);
     return;
@@ -303,6 +323,7 @@ async function saveEdit() {
   formSnap.value = JSON.stringify(form);
   setQuery({ edit: undefined, sys: next.id });
   message.success(isNew ? `已新建外部系统：${next.name}` : `已保存：${next.name}`);
+  } finally { savingEdit.value = false; }
 }
 </script>
 
@@ -340,6 +361,7 @@ async function saveEdit() {
         <a-space>
           <a-tooltip :title="readonly ? reason : !real ? testUnavailable : undefined"><a-button :disabled="!real || readonly || !selected.id || selected.status === '停用'" :loading="testing" @click="testCall">测试调用</a-button></a-tooltip>
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openEdit(selected.id)">编辑</a-button></a-tooltip>
+          <a-button v-if="real" :disabled="readonly" @click="openAuthorization">动作授权</a-button>
         </a-space>
       </div>
       <div class="ex-cfg">
@@ -347,7 +369,7 @@ async function saveEdit() {
           <a-descriptions-item label="接口地址" :span="2"><span class="num">{{ selected.endpoint }}</span></a-descriptions-item>
           <a-descriptions-item label="供应商">{{ selected.vendor }}</a-descriptions-item>
           <a-descriptions-item label="认证方式">{{ selected.auth }}</a-descriptions-item>
-          <a-descriptions-item label="凭证" :span="2"><span class="num">{{ selected.authDetail }}</span></a-descriptions-item>
+          <a-descriptions-item v-if="selected.auth !== '无需授权'" label="凭证" :span="2"><span class="num">{{ selected.authDetail }}</span></a-descriptions-item>
           <a-descriptions-item label="幂等">
             <span v-if="selected.idempotent">支持 · <span class="num">{{ selected.idemKey }}</span></span>
             <span v-else class="c-2">不支持（从不重试；结果未知需人工对账）</span>
@@ -438,7 +460,8 @@ async function saveEdit() {
         <a-form-item label="认证方式" class="ex-f2"><a-select v-model:value="form.auth" :options="AUTHS.map((v) => ({ value: v, label: v }))" /></a-form-item>
         <a-form-item label="负责人" class="ex-f1"><a-select v-model:value="form.owner" :options="OWNERS.map((v) => ({ value: v, label: v }))" /></a-form-item>
       </div>
-      <a-form-item label="凭证说明" extra="只写标识（如 AppKey、证书名），密钥在密钥库录入，界面不回显"><a-input v-model:value="form.authDetail" /></a-form-item>
+      <a-form-item v-if="form.auth !== '无需授权'" label="凭证说明" extra="只写标识（如 AppKey、证书名），密钥在密钥库录入，界面不回显"><a-input v-model:value="form.authDetail" /></a-form-item>
+      <div v-else class="t-12 c-3">不发送已配置的令牌；切回其他认证方式时会继续使用。消息签名按单独配置执行。</div>
       <div class="ex-row">
         <a-form-item label="幂等" class="ex-f1"><a-switch v-model:checked="form.idempotent" checked-children="支持" un-checked-children="不支持" /></a-form-item>
         <a-form-item label="幂等键" class="ex-f2"><a-input v-model:value="form.idemKey" :disabled="!form.idempotent" /></a-form-item>
@@ -456,13 +479,25 @@ async function saveEdit() {
       <div class="ex-foot ex-foot-gap">
         <span v-if="formErrors.length" class="t-12 tl-failed ex-err">{{ formErrors[0] }}</span>
         <a-button @click="closeEdit">取消</a-button>
-        <a-button type="primary" @click="saveEdit">保存</a-button>
+        <a-button type="primary" :loading="savingEdit" @click="saveEdit">保存</a-button>
       </div>
     </template>
   </a-drawer>
+  <a-modal :open="!!authorization" title="动作授权" ok-text="保存授权" @cancel="authorization = null" @ok="saveAuthorization">
+    <template v-if="authorization">
+      <p>请选择已发布动作及部署允许的目标路径。</p>
+      <div v-for="a in authorization.actions" :key="a.id" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px">
+        <a-checkbox :checked="authorization.selected.some(s => s.id === a.id)" @change="toggleAuthorization(a, $event.target.checked)">{{ a.name }} · {{ a.id }} · {{ a.version }}</a-checkbox>
+        <a-select v-if="authorization.selected.find(s => s.id === a.id)" :value="authorization.selected.find(s => s.id === a.id)?.path" :options="authorization.paths.map(path => ({ label: path, value: path }))" style="min-width: 200px; flex: 1" @change="(path: string) => { const row = authorization!.selected.find(s => s.id === a.id); if (row) { row.path = path; row.version = a.version; } }" />
+      </div>
+      <p v-if="authorization.selected.some(s => !authorization!.actions.some(a => a.id === s.id))">部分原授权的动作已不再发布，保存时将移除。</p>
+    </template>
+  </a-modal>
 </template>
 
 <style scoped>
+.ex-auth-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.ex-auth-row :deep(.ant-select) { min-width: 200px; flex: 1; }
 .ex { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .ex-list { width: 320px; flex: none; }
 .ex-items { flex: 1; min-height: 0; overflow: hidden; }

@@ -7,6 +7,8 @@
  * 概览的最近事件 / 运行健康 / 近 14 天事件数（…/events 第 1 页、…/stats）按选中类型取，真模式加载或失败为空态。
  * 规则名、草稿写入（versioning）仍读 mock。
  */
+import PayloadSchemaEditor from './PayloadSchemaEditor.vue';
+import PayloadValueEditor from './PayloadValueEditor.vue';
 import { computed, reactive, ref, watch, onScopeDispose } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -31,12 +33,13 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import NewActionEventForm from './parts/NewActionEventForm.vue';
+import { useAssistantDraft } from '@/composables/useAssistantDraft';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { draftFields, useStaticCr } from './parts/useStaticCr';
 import { useDraftEdits, type DiffRow } from './useDraftEdits';
 import { isApiError } from '@/api/http';
 import {
-  actionApi, actionContextKey, snapshotReady, loadSnapshot, eventDetailReady, loadEventDetail, listEventPayload, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
+  actionApi, actionContextKey, snapshotReady, loadSnapshot, invalidateActionSnapshot, eventDetailReady, loadEventDetail, listEventPayload, listEventTypes, eventTypes, payloadOf, subscribersOf, eventVersionsOf, type EventTypeRow,
   listEvents, getEventStats, simulateEvent, type EventSimulation, type EventStats, crWriter, crStart, crErrText, crWriteOn, crRestore, crChanges,
 } from '@/api/action';
 import type { EventRecord } from '@/api/action';
@@ -95,8 +98,13 @@ const tab = computed({
   set: (v) => router.replace({ query: { ...route.query, ...RESET, view: route.query.view, tab: v === 'overview' ? undefined : v } }),
 });
 
-/* 草稿（公共 useDraftView：CR-0013 → 门店价格变更；增删改与改动标记用本页 useDraftEdits） */
-const { draft, isDraft, editTip: viewTip, readonly, reason, setView, start, cancel } = useDraftView('event', () => cur.value.id);
+/* 保存即生效：真实模式下不建草稿，已发布定义直接可编辑，保存后立即生成版本 */
+const view = useDraftView('event', () => cur.value.id);
+const { readonly, reason } = view;
+const isDraft = computed(() => (real ? !readonly.value : view.isDraft.value));
+const draft = computed(() => (real ? undefined : view.draft.value));
+const viewTip = view.editTip;
+const { setView, start, cancel } = view;
 if (real) watch([actionContextKey, () => cur.value.id, isDraft], async () => {
   const key = actionContextKey(), id = cur.value.id;
   loadErr.value = '';
@@ -136,11 +144,11 @@ async function saveDedup() {
   } finally { dedupSaving.value = false; }
 }
 watch([actionContextKey, () => cur.value.id], () => { dedupOpen.value = false; });
-const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, reviewer: '本体管理员 陈立军', writer: crWriter('event', crTarget), ready: () => ready.value });
+const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, writer: crWriter('event', crTarget), ready: () => ready.value, direct: real, readonly, onSaved: async () => { const id = cur.value.id; invalidateActionSnapshot(); await loadEventDetail(id, true); } });
 /** 放弃草稿（确认卡在 useDraftEdits.discard）：写库模式下删库成功后用 cancel 撤掉本对象在登记表里的登记并切回已发布版；开关关着同以前（mock 登记不动） */
 const onDiscard = () => de.discard(() => { const d = draft.value; if (crWriteOn() && d) cancel(d.id); else setView('published'); });
 /* 刷新后恢复（写库模式）：按库里的草稿登记重新登记本页对象，库里已没有的 mock 登记去掉；本对象的草稿行由 useDraftEdits 读回 */
-if (crWriteOn()) {
+if (crWriteOn() && !real) {
   const key = actionContextKey();
   crRestore('event').then(({ pairs, inDb }) => {
     if (!mounted || key !== actionContextKey()) return;
@@ -154,14 +162,28 @@ async function onStart(opts: { join?: string; title?: string; desc?: string }) {
   try { start(await crStart({ kind: 'event', ...crTarget() }, opts)); } catch (e) { message.error(`发起变更失败：${crErrText(e)}`); }
 }
 const creating = ref(false);
+async function onCreated(id: string) {
+  const key = actionContextKey();
+  try {
+    invalidateActionSnapshot();
+    await loadSnapshot();
+    const result = await listEventTypes({ source: source.value, kw: kw.value, page: lpage.value, size: LPAGE });
+    if (key !== actionContextKey()) return;
+    Object.assign(realList, { items: result.items, total: result.total, sources: result.sources });
+    await router.replace({ query: { ...route.query, event: id, view: undefined } });
+  } catch (e) { message.error(`刷新事件类型失败：${apiMsg(e)}`); }
+}
 const createOpen = ref(false);
+const assistantDraft = ref<Record<string, unknown>>();
+watch(createOpen, open => { if (!open) assistantDraft.value = undefined; });
+useAssistantDraft(['event'], () => readonly.value || createOpen.value || dirty.value, draft => { assistantDraft.value = draft; createOpen.value = true; });
 const createOptions = ref<{ join?: string; title?: string; desc?: string }>({});
 watch(() => route.query.createType, value => { if (real && value) createOpen.value = true; }, { immediate: true });
 const { canEdit: draftCanEdit, editTip, dirty, bannerDraft } = de;
 const canEdit = computed(() => draftCanEdit.value && ready.value);
 const changeOpen = ref(false);
 const changeTarget = ref('');
-const openChange = (name: string, isNew = false) => { creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
+const openChange = (name: string, isNew = false) => { if (isNew && real) { createOptions.value = {}; createOpen.value = true; return; } creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
 /** 切换左侧选中项：清掉抽屉与分页；有未保存修改先确认 */
 const pick = (id: string) => de.guard(() => router.replace({ query: { ...route.query, ...RESET, drawer: undefined, drawer2: undefined, event: id } }));
 const onView = (v: 'published' | 'draft') => (v === 'published' ? de.guard(() => setView('published')) : setView(v));
@@ -175,7 +197,7 @@ const editCol = (cols: any[]) => (isDraft.value ? [...cols, { title: '改动', k
 const delRow = (r: { _mark: string; _env?: boolean }) => (r._mark === '删除' ? 'et-del' : '');
 
 interface FieldDef { k: string; label: string; kind?: 'input' | 'select' | 'switch'; options?: { value: any; label: string }[]; required?: boolean }
-const FIELD_TYPES = ['字符串', '整数', '金额', '日期', '日期时间', '枚举', '文本', '布尔'];
+const FIELD_TYPES = ['字符串', '整数', '金额', '日期', '日期时间', '枚举', '文本', '布尔', '对象', '数组'];
 const opt = (xs: string[]) => xs.map((x) => ({ value: x, label: x }));
 const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: () => any }> = {
   payload: { title: '载荷字段', blank: () => ({ name: '', api: '', type: '字符串', required: false, desc: '', sample: '' }), fields: () => [
@@ -184,21 +206,34 @@ const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: (
     { k: 'desc', label: '说明' }, { k: 'sample', label: '示例' }] },
   subs: { title: '订阅方', blank: () => ({ kind: '自动化', name: '', filter: '全部', then: '', status: '启用', weekly: 0 }), fields: () => [
     { k: 'kind', label: '类型', kind: 'select', options: opt(['规则', '自动化', '通知', '外部订阅']) },
+    ...(editor.form.kind === '规则' ? [{ k: 'ruleId', label: '规则编号', required: true }] : []),
     { k: 'name', label: '订阅方', required: true }, { k: 'filter', label: '过滤条件', required: true }, { k: 'then', label: '收到后', required: true },
     { k: 'status', label: '状态', kind: 'select', options: opt(['启用', '停用']) }] },
 };
+const createForms = FORMS;
 const editor = reactive<{ open: boolean; sec: SecName; key: string | null; form: Record<string, any> }>({ open: false, sec: 'payload', key: null, form: {} });
 const editorDef = computed(() => FORMS[editor.sec]);
 function openAdd(sec: SecName) { if (!canEdit.value) return; Object.assign(editor, { open: true, sec, key: null, form: FORMS[sec].blank() }); }
 function openEdit(sec: SecName, key: string) {
   if (!canEdit.value) return;
   const row = SECS[sec].rows.value.find((r) => r.key === key);
-  if (row) Object.assign(editor, { open: true, sec, key, form: { ...(row.data as object) } });
+  if (row) Object.assign(editor, { open: true, sec, key, form: JSON.parse(JSON.stringify(row.data)) });
+}
+function validSchema(node: any, depth = 0): boolean {
+  if (depth > 4) return false;
+  if (node.type === '对象') {
+    const fields = node.schema?.fields;
+    return Array.isArray(fields) && fields.length > 0 && fields.length <= 100 && new Set(fields.map((f: any) => f.api)).size === fields.length && fields.every((f: any) => f.name?.trim() && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(f.api) && validSchema(f, depth + 1));
+  }
+  if (node.type === '数组') return !!node.schema?.item && validSchema(node.schema.item, depth + 1);
+  return true;
 }
 function saveEditor() {
   const miss = editorDef.value.fields().find((f) => f.required && !String(editor.form[f.k] ?? '').trim());
   if (miss) { message.warning(`请填写${miss.label}`); return; }
+  if (editor.sec === 'subs' && editor.form.kind !== '规则') editor.form.ruleId = null;
   if (editor.sec === 'payload' && editor.key === null && payloadOf(cur.value).some((f) => f.api === editor.form.api)) { message.warning('API 名与已有字段（含信封字段）重复'); return; }
+  if (editor.sec === 'payload' && !validSchema(editor.form)) { message.warning('请完整填写嵌套字段，且同级 API 名不能重复'); return; }
   const sec = SECS[editor.sec] as { add: (d: any) => boolean; update: (k: string, d: any) => void };
   if (editor.key === null) { if (!sec.add({ ...editor.form })) { message.warning('已存在同名项'); return; } }
   else sec.update(editor.key, { ...editor.form });
@@ -209,23 +244,24 @@ const restoreItem = (sec: SecName, key: string) => canEdit.value && SECS[sec].re
 
 const simulation = ref<EventSimulation | null>(null);
 const simulating = ref(false);
+const simulationOpen = ref(false);
+const simulationPayload = ref<Record<string, any>>({});
 watch([() => cur.value.id, actionContextKey, isDraft], () => { simulation.value = null; });
 async function simulate() {
   if (real && (readonly.value || dirty.value || simulating.value)) return;
+  simulationPayload.value = {};
+  simulationOpen.value = true;
+}
+async function submitSimulation() {
   const e = cur.value;
-  const ok = await confirm.ask({
-    title: `模拟触发：${e.name}`, target: `${e.object}（使用示例载荷）`, tag: '测试',
-    fields: flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').slice(0, 4).map((f) => ({ label: f.name, value: f.sample })),
-    impact: real ? '校验已保存载荷与过滤条件。有已配置测试通道时排队测试事件，仅向测试通道发送；未配置时只校验。' : '只投递到订阅方的测试通道，用来验证过滤条件，不会产生告警、执行动作或写入下游。',
-    okText: real ? '触发测试' : '发送测试事件',
-  });
-  if (!ok) return;
-  if (!real) { message.success(`测试事件已投递 ${liveSubs.value.filter((s) => s.status !== '停用').length} 个订阅方的测试通道`); return; }
+  const missing = e.specific.find(f => f.required && simulationPayload.value[f.api] == null);
+  if (missing) { message.warning(`请填写必填字段：${missing.name}`); return; }
+  if (!real) { simulationOpen.value = false; message.success(`测试事件已投递 ${liveSubs.value.filter((s) => s.status !== '停用').length} 个订阅方的测试通道`); return; }
   const key = actionContextKey(); const id = e.id;
   simulating.value = true;
   try {
-    const result = await simulateEvent(id, isDraft.value ? 'draft' : 'published', isDraft.value ? draft.value?.id : undefined);
-    if (key === actionContextKey() && id === cur.value.id) simulation.value = result;
+    const result = await simulateEvent(id, 'published', undefined, simulationPayload.value);
+    if (key === actionContextKey() && id === cur.value.id) { simulationOpen.value = false; simulation.value = result; }
     message.info(result.message);
   } catch (e) { message.error(`模拟校验失败：${crErrText(e)}`); }
   finally { simulating.value = false; }
@@ -354,7 +390,7 @@ const recentErr = computed(() => (live.value && realRecent.key === recentKey.val
 const recent = computed(() => live.value ? realRecent.key === recentKey.value ? { items: realRecent.items, total: realRecent.total } : { items: [], total: 0 } : paginate(recentRows.value, { page: eq.page.value, size: eq.size.value }));
 const recentCols = [
   { title: '时间', dataIndex: 'at', width: 172 },
-  { title: '事件', key: 'id', width: 190 },
+  { title: '事件编号', key: 'id', width: 190 },
   { title: '对象', key: 'obj', width: 220, ellipsis: true },
   { title: '载荷摘要', dataIndex: 'summary', ellipsis: { showTitle: true } },
   { title: '订阅方', key: 'subs', width: 88, align: 'right' as const },
@@ -378,7 +414,7 @@ const verCols = [
 
 <template>
   <Teleport defer to="#page-extra">
-    <a-tooltip :title="!real ? '新建事件类型表单尚未接入' : readonly ? reason : !crWriteOn() ? '需开启真实变更单写入' : ''"><a-button :disabled="readonly || !crWriteOn()" @click="openChange('新建事件类型', true)">新建事件类型</a-button></a-tooltip>
+    <a-tooltip :title="!real ? '需要真实接口' : readonly ? reason : ''"><a-button :disabled="readonly || !real" @click="openChange('新建事件类型', true)">新建事件类型</a-button></a-tooltip>
   </Teleport>
 
   <a-empty v-if="live && ready && !cur.id" description="暂无事件类型或所选类型不存在" />
@@ -420,9 +456,9 @@ const verCols = [
           @change="(v: any) => onView(v)" />
         <span class="et-sp" />
         <a-tooltip :title="real && readonly ? reason : real && dirty ? '请先保存草稿后校验' : undefined"><span><a-button :loading="simulating" :disabled="cur.status === '草稿' || (real && (readonly || dirty))" @click="simulate">模拟触发</a-button></span></a-tooltip>
-        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
-        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
+        <a-tooltip v-if="!real && readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
+        <a-button v-else-if="!real && !draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
+        <a-button v-else-if="!real && draft && !isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="et-tabs">
         <a-tab-pane key="overview" tab="概览" />
@@ -470,7 +506,7 @@ const verCols = [
           </div>
           <div v-if="rtErr" class="et-err t-12"><span class="c-error et-err-m" :title="rtErr">最近事件加载失败：{{ rtErr }}</span><a-button size="small" @click="loadRt(cur.id)">重试</a-button></div>
           <div v-for="r in recentTop" :key="r.id" class="et-ev">
-            <a class="t-14 num" @click="drawer.open('event', r.id)">{{ r.id }}</a>
+            <a class="t-14 num et-event-id" :title="r.id" @click="drawer.open('event', r.id)">{{ r.id }}</a>
             <span class="t-12 c-2 num">{{ r.at }}</span>
             <span class="t-12 c-2 et-ev-s" :title="r.summary">{{ r.summary }}</span>
             <span class="t-12" :class="r.outcome === '投递失败' ? 'c-error' : 'c-3'">{{ r.outcome }}</span>
@@ -501,9 +537,9 @@ const verCols = [
           <span class="t-14 c-1">载荷字段 {{ fields.total }} 个</span><InfoTip text="事件自身字段在前，通用信封字段在后（所有事件类型共有，不可修改）" />
           <span class="et-sp" />
           <template v-if="isDraft">
-            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
+            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : real ? '已保存并生效' : de.locked.value ? '历史变更单已锁定' : '草稿已保存' }}</span>
             <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
-            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">保存草稿</a-button>
+            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">{{ real ? '保存' : '保存草稿' }}</a-button>
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('payload')">新增字段</a-button></a-tooltip>
         </div>
@@ -530,9 +566,9 @@ const verCols = [
           <span class="t-14 c-1">订阅方 {{ liveSubs.length }} 个</span><InfoTip text="规则、自动化、通知和外部订阅都按同一份载荷接收；点规则编号在当前页查看规则" />
           <span class="et-sp" />
           <template v-if="isDraft">
-            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : de.locked.value ? '已提交审核，草稿已锁定' : '草稿已保存' }}</span>
+            <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : real ? '已保存并生效' : de.locked.value ? '历史变更单已锁定' : '草稿已保存' }}</span>
             <a-button size="small" :disabled="!dirty" @click="de.revert()">撤销修改</a-button>
-            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">保存草稿</a-button>
+            <a-button size="small" :disabled="!dirty || !ready" @click="de.save()">{{ real ? '保存' : '保存草稿' }}</a-button>
           </template>
           <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openAdd('subs')">新增订阅</a-button></a-tooltip>
         </div>
@@ -565,10 +601,10 @@ const verCols = [
         </div>
         <div v-if="recentErr" class="et-err t-12"><span class="c-error et-err-m" :title="recentErr">近期事件加载失败：{{ recentErr }}</span><a-button size="small" @click="loadRecent(true)">重试</a-button></div>
         <div class="paged-scroll">
-          <a-table :columns="recentCols" :data-source="recent.items" :pagination="false" size="middle" row-key="id"
+          <a-table :columns="recentCols" :data-source="recent.items" :pagination="false" :scroll="{ x: 1050 }" table-layout="fixed" size="middle" row-key="id"
             :locale="{ emptyText: cur.status === '草稿' ? '草稿未发布，暂无事件' : '该时间范围内没有事件' }">
             <template #bodyCell="{ column, record }">
-              <template v-if="column.key === 'id'"><a class="num" @click="drawer.open('event', record.id)">{{ record.id }}</a></template>
+              <template v-if="column.key === 'id'"><a class="num et-event-id" :title="record.id" @click="drawer.open('event', record.id)">{{ record.id }}</a></template>
               <template v-else-if="column.key === 'obj'">
                 <span :title="record.objLabel"><ObjRef v-if="record.objKind" :kind="record.objKind" :id="record.objId">{{ record.objLabel }}</ObjRef>
                 <span v-else class="num">{{ record.objLabel }}</span></span>
@@ -605,7 +641,7 @@ const verCols = [
     </div>
   </div>
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onStart" />
-  <NewActionEventForm v-if="real" v-model:open="createOpen" kind="event" :options="createOptions" :row-forms="FORMS" />
+  <NewActionEventForm v-if="real" :assistant-draft="assistantDraft" v-model:open="createOpen" kind="event" :options="createOptions" :row-forms="createForms" @saved="onCreated" />
   <a-modal :open="dedupOpen" title="编辑去重设置" ok-text="保存到草稿" :confirm-loading="dedupSaving"
     :closable="!dedupSaving" :mask-closable="false" :ok-button-props="{ disabled: !canEditDedup || !dedupDirty || !dedupForm.dedupWindow.trim() }"
     @ok="saveDedup" @cancel="dedupGuard(() => { dedupOpen = false; })">
@@ -621,8 +657,17 @@ const verCols = [
         <a-switch v-else-if="f.kind === 'switch'" v-model:checked="editor.form[f.k]" />
         <a-input v-else v-model:value="editor.form[f.k]" />
       </a-form-item>
+      <PayloadSchemaEditor v-if="editor.open && editor.sec === 'payload'" :node="editor.form" />
+      <div v-if="editor.sec === 'payload' && ['对象', '数组'].includes(editor.form.type)" class="t-12 c-3">示例用于模拟触发，请填写与定义一致的 JSON 值。</div>
     </a-form>
-    <div class="t-12 c-3">{{ editor.sec === 'payload' ? '新增字段建议设为可选；删除或改类型属于不兼容变更，需要所有订阅方确认。' : '' }}改动先保存在本地，点“保存草稿”后计入 {{ draft?.id }} 的改动数。</div>
+    <div class="t-12 c-3">{{ editor.sec === 'payload' ? '新增字段建议设为可选；删除或改类型属于不兼容变更，需要所有订阅方确认。' : '' }}点“保存”立即生效并生成新版本。</div>
+  </a-modal>
+  <a-modal v-model:open="simulationOpen" title="模拟触发" ok-text="触发测试" :confirm-loading="simulating" @ok="submitSimulation">
+    <p class="t-12 c-3">填写测试载荷；必填项需填写，嵌套必填项由服务端校验。</p>
+    <div v-for="field in cur.specific" :key="field.api" style="margin-bottom: 12px">
+      <div>{{ field.name }} <span v-if="field.required" class="c-error">（必填）</span></div>
+      <PayloadValueEditor :node="field" v-model="simulationPayload[field.api]" />
+    </div>
   </a-modal>
   <a-modal :open="!!simulation" title="模拟触发结果" :footer="null" @cancel="simulation = null">
     <template v-if="simulation">
@@ -639,6 +684,7 @@ const verCols = [
 </template>
 
 <style scoped>
+.et-event-id { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .et-list { width: 300px; flex: none; }
 .et-wait { display: flex; align-items: center; justify-content: center; min-height: 240px; }
@@ -682,8 +728,9 @@ const verCols = [
 .et-empty { margin-top: 32px; }
 .et-tool { display: flex; align-items: center; gap: 8px; flex: none; }
 .et-gap { margin-left: 4px; }
-.et-ev { display: grid; grid-template-columns: 190px 150px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: var(--border); }
-.et-ev-s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.et-ev { display: grid; grid-template-columns: minmax(0, 190px) 150px minmax(0, 1fr) auto; gap: 8px; align-items: center; min-width: 0; padding: 6px 0; border-bottom: var(--border); }
+.et-ev-s { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 900px) { .et-ev { grid-template-columns: minmax(0, 1fr) auto; } }
 .et-form :deep(.ant-form-item) { margin-bottom: 12px; }
 :deep(.et-del td) { text-decoration: line-through; color: var(--g7); }
 .et-dis { color: var(--g7); cursor: not-allowed; }

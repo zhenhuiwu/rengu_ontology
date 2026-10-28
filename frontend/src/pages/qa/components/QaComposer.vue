@@ -54,7 +54,7 @@ function onChip(f: string) {
 <template>
   <div class="qa-composer">
     <div class="qa-cp-input">
-      <a-textarea ref="input" v-model:value="text" @keydown="onKey" :disabled="readonly" :title="reason || undefined" :bordered="false" :auto-size="{ minRows: 1, maxRows: 1 }" placeholder="继续追问，Enter 发送，Shift + Enter 换行" />
+      <a-textarea ref="input" v-model:value="text" @keydown="onKey" :disabled="readonly" :title="reason || undefined" :bordered="false" :auto-size="{ minRows: 1, maxRows: 1 }" placeholder="输入问题，或描述要执行的动作和目标；Enter 发送" />
       <div class="qa-cp-bar">
         <a-space :size="8">
             <a-select v-model:value="scope" :title="reason || '本会话共用，修改后从下一问开始生效'" :disabled="readonly" size="small" class="qa-cp-sel" :options="scopeOpts" />

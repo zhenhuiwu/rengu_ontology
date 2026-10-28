@@ -18,7 +18,8 @@ const back = () => router.push(String(route.query.back));
     <span class="c-3">问数仍使用已发布版本 {{ app.ontologyVersion }}</span>
     <span class="db-sp" />
     <a v-if="route.query.back" @click="back">返回变更单 {{ draft.id }}</a>
-    <a @click="$emit('submit')">提交审核</a>
+    <router-link v-if="app.workspace?.directPublishEnabled" :to="{ path: '/build/ontology/releases', query: { ...route.query, cr: draft.id } }">前往直接发布</router-link>
+    <span v-else class="c-3">无直接发布权限</span>
     <a class="c-3" @click="$emit('discard')">放弃草稿</a>
   </div>
 </template>

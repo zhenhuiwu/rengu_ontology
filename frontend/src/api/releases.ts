@@ -20,7 +20,7 @@ export interface ReleaseDto {
   parentVer?: string | null; kind?: '发布' | '回滚'; rollbackOf?: string | null; changeOrderIds?: string[];
 }
 export interface ReleaseListDto { items: ReleaseDto[]; current: string | null }
-export interface CurrentVersionDto { current: string | null; next: string; release: ReleaseDto | null }
+export interface CurrentVersionDto { current: string | null; next: string; release: ReleaseDto | null; formalCurrent?: string | null; formalRelease?: ReleaseDto | null }
 
 /** 薄适配：只取前端 Release 的四个字段，多出的字段不进页面 */
 export const toRelease = (r: ReleaseDto): Release => ({ ver: r.ver, publishedAt: r.publishedAt, by: r.by, note: r.note });
@@ -43,8 +43,7 @@ export async function loadReleases(): Promise<LoadReleasesResult> {
   RELEASES.splice(0);
   const [list, cur] = await Promise.all([fetchReleases(), fetchCurrentRelease()]);
   if (key !== JSON.stringify(currentApiContext())) return { kind: 'empty' };
-  const head = list.items.find((r) => r.ver === list.current);
-  if (!list.items.length || !list.current || !cur.current || !head) return { kind: 'empty', next: cur.next };
   RELEASES.splice(0, RELEASES.length, ...list.items.map(toRelease));
-  return { kind: 'ok', current: cur.current, publishedAt: head.publishedAt, next: cur.next };
+  if (!cur.current) return { kind: 'empty', next: cur.next };
+  return { kind: 'ok', current: cur.current, publishedAt: cur.formalRelease?.publishedAt ?? '—', next: cur.next };
 }

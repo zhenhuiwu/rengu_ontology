@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as vue from 'vue';
+const actionReview = {};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../src/pages/ops/actionReview.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: actionReview });
 import { parse, compileTemplate } from '@vue/compiler-sfc';
 
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
@@ -25,6 +27,7 @@ const dynamic = {
   listScenarioImpacts: async () => ({ items: [], total: 0 }),
 };
 const imports = {
+  './actionReview': actionReview,
   vue: { ...vue, onBeforeUnmount: () => {} },
   'vue-router': { useRoute: () => route, useRouter: () => ({ replace: () => {} }), onBeforeRouteUpdate: () => {} },
   'ant-design-vue': { message: { error: (e) => errors.push(e), warning: () => {}, success: () => {} } },

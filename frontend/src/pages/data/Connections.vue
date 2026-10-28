@@ -12,6 +12,7 @@ import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
 import ObjectMappingModal from '@/pages/ontology/parts/ObjectMappingModal.vue';
+import GovernedBindingModal from './GovernedBindingModal.vue';
 import { fetchDatasourceMappings, type DatasourceMapping } from '@/api/objectImport';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
@@ -110,6 +111,7 @@ const realTables = ref<{ id: string; key: string; items: DsTable[]; total: numbe
 const tableLoading = ref(false);
 const mappings = ref<DatasourceMapping[]>([]);
 const mappingError = ref(''), mappingOpen = ref(false), mappingTable = ref<DsTable>();
+const governedOpen = ref(false), governedObject = ref('');
 const mappingCr = ref('');
 function mappedObjects(table: DsTable) { return mappings.value.filter((m) => m.schema === table.schema && m.table === table.name); }
 function editMapping(table: DsTable) { if (!real.value || readonly.value) return; mappingTable.value = table; mappingOpen.value = true; }
@@ -158,7 +160,8 @@ const tableCols = [
   { title: '说明', dataIndex: 'comment', key: 'comment', width: 140, ellipsis: true },
   { title: '行数', key: 'rows', width: 120, align: 'right' as const },
   { title: '字段数', dataIndex: 'cols', key: 'cols', width: 80, align: 'right' as const },
-  { title: '映射对象类型', key: 'objectType', width: 220 },
+  { title: '映射对象类型', key: 'objectType', width: 220, ellipsis: true },
+  { title: '配置', key: 'mappingActions', width: 90 },
   { title: '最近更新', key: 'updatedAt', width: 150 },
 ];
 
@@ -413,16 +416,18 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-input-search v-model:value="tableKw" size="small" placeholder="表名 / 说明" class="cn-w200" />
         </div>
         <div class="paged-scroll cn-tscroll">
-          <a-table size="small" :row-key="(r: { schema: string; name: string }) => r.schema + '.' + r.name" :columns="tableCols" :data-source="tablesPaged.items" :pagination="false">
+          <a-table size="small" :row-key="(r: { schema: string; name: string }) => r.schema + '.' + r.name" :columns="tableCols" :data-source="tablesPaged.items" :pagination="false" :scroll="{ x: 1110 }" table-layout="fixed">
             <template #bodyCell="{ column, record }">
               <span v-if="column.key === 'name'" class="num c-1">{{ record.name }}</span>
-              <span v-else-if="column.key === 'rows'" class="num">{{ fmtInt(record.rows) }}</span>
-              <span v-else-if="column.key === 'objectType'">
-                <template v-if="real && mappedObjects(record).length"><a-tag v-for="object in mappedObjects(record)" :key="object.objectId">{{ object.name }}</a-tag></template>
-                <a-tag v-else-if="record.objectType">{{ record.objectType }}</a-tag>
+              <span v-else-if="column.key === 'rows'" class="num">{{ record.rows < 0 ? '—' : fmtInt(record.rows) }}</span>
+              <span v-else-if="column.key === 'objectType'" class="cn-map-name" :title="real && mappedObjects(record).length ? mappedObjects(record).map(o => o.name).join('、') : record.objectType || ''">
+                <template v-if="real && mappedObjects(record).length">{{ mappedObjects(record).map(o => o.name).join('、') }}</template>
+                <template v-else-if="record.objectType">{{ record.objectType }}</template>
                 <a-tooltip v-else-if="record.ref" :title="`只作参考，未映射；以 ${record.ref} 为准`"><span class="c-2">参考 · 未映射</span></a-tooltip>
                 <span v-else class="c-3">未映射</span>
-                <a-tooltip v-if="real" :title="readonly ? reason : '修改对象定义来源，发布后生效'"><a-button type="link" size="small" :disabled="readonly" @click="editMapping(record)">编辑映射</a-button></a-tooltip>
+              </span>
+              <span v-else-if="column.key === 'mappingActions' && real">
+                <a-tooltip :title="readonly ? reason : ''"><a-dropdown :disabled="readonly" :trigger="['click']"><a-button type="link" size="small" :disabled="readonly">配置</a-button><template #overlay><a-menu><a-menu-item key="mapping" @click="editMapping(record)">编辑映射</a-menu-item><a-menu-item v-for="object in mappedObjects(record)" :key="`object:${object.objectId}`" @click="governedObject = object.objectId; governedOpen = true"><span class="cn-menu-name" :title="object.name">受控权限 · {{ object.name }}</span></a-menu-item></a-menu></template></a-dropdown></a-tooltip>
               </span>
               <span v-else-if="column.key === 'updatedAt'" class="num">{{ record.updatedAt }}</span>
             </template>
@@ -457,6 +462,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
   </div>
 
   <ObjectMappingModal v-if="selected && mappingTable" v-model:open="mappingOpen" :datasource-id="selected.id" :datasource-name="selected.name" :schema="mappingTable.schema" :table="mappingTable.name" :current-object-id="mappedObjects(mappingTable)[0]?.objectId" @saved="(id) => mappingCr = id" />
+  <GovernedBindingModal v-if="governedObject" v-model:open="governedOpen" :object-id="governedObject" />
   <a-drawer
     :open="!!formMode" :width="560" :title="formMode === 'edit' ? `编辑连接 · ${selected?.name ?? ''}` : '新建数据连接'"
     :mask-closable="true" @close="closeForm"
@@ -513,6 +519,8 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
 </template>
 
 <style scoped>
+.cn-map-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-menu-name { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .cn-list { width: 380px; flex: none; }
 .cn-filter { display: flex; gap: 8px; padding: 10px 16px; border-bottom: var(--border); }

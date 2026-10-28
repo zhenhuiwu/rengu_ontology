@@ -298,11 +298,13 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
             <span class="t-16 fw-600 c-1">最近发布</span>
             <a class="t-12 c-2 oo-more" @click="router.push({ path: '/build/ontology/releases', query: { st: '已发布' } })">全部发布记录</a>
           </div>
-          <div v-for="r in releases" :key="r.ver" class="oo-rrow" role="link" @click="openRelease(r.ver)">
-            <span class="t-14 num c-1 oo-ver">{{ r.ver }}</span>
-            <span class="t-14 c-2 oo-ell oo-note" :title="r.note">{{ r.note }}</span>
-            <span class="t-14 c-2 oo-ell oo-by" :title="r.by">{{ r.by }}</span>
-            <span class="t-14 c-2 num oo-time" :title="r.publishedAt">{{ r.publishedAt.slice(5) }}</span>
+          <div class="oo-release-list">
+            <div v-for="r in releases" :key="r.ver" class="oo-rrow" role="link" @click="openRelease(r.ver)">
+              <span class="t-14 num c-1 oo-ver">{{ r.ver }}</span>
+              <span class="t-14 c-2 oo-ell oo-note" :title="r.note">{{ r.note }}</span>
+              <span class="t-14 c-2 oo-ell oo-by" :title="r.by">{{ r.by }}</span>
+              <span class="t-14 c-2 num oo-time" :title="r.publishedAt">{{ r.publishedAt.slice(5) }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -334,7 +336,7 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
 .lg-dash { border: 1px dashed var(--g7); }
 .lg-fail { border: 1px solid var(--error); }
 .oo-side { width: 560px; flex: none; display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
-.oo-todo { flex: 1; }
+.oo-todo { flex: 1 1 0; }
 .oo-list { flex: 1; min-height: 0; overflow: hidden; }
 .oo-row { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--g4); cursor: pointer; }
 .oo-row:hover, .oo-rrow:hover { background: var(--g2); }
@@ -348,7 +350,8 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
 .oo-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .c-3 > .oo-dot { background: var(--g7); }
 .oo-pager { padding: 8px 16px; border-top: var(--border); flex: none; }
-.oo-rel { flex: none; }
+.oo-rel { flex: 1 1 0; }
+.oo-release-list { flex: 1; min-height: 0; overflow-y: auto; }
 .oo-more:hover { color: var(--g10); }
 .oo-rrow { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--g4); cursor: pointer; }
 .oo-rrow:last-child { border-bottom: none; }

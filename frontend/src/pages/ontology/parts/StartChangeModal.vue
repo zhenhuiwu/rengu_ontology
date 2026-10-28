@@ -31,7 +31,7 @@ function ok() { if (!canOk.value) return; emit('ok', mode.value === 'join' ? { j
 
 <template>
   <a-modal v-model:open="open" title="发起变更" :width="520" ok-text="进入草稿" :ok-button-props="{ disabled: !canOk }" @ok="ok">
-    <p class="t-14 c-2 sc-p">改动先保存在变更草稿里，审核通过并整版发布后才生效。发布前问数不受影响。</p>
+    <p class="t-14 c-2 sc-p">改动先保存在变更草稿里，直接发布后生效。发布前问数不受影响。</p>
     <a-alert v-if="loadError" type="error" :message="loadError" show-icon />
     <a-form layout="vertical">
       <a-form-item label="变更对象"><span class="t-14 c-1">{{ targetName }}</span></a-form-item>

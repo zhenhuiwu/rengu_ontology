@@ -393,7 +393,7 @@ const nr = reactive(nrBlank());
 const nrBase = ref('');
 const nrDirty = computed(() => nrOpen.value && JSON.stringify(nr) !== nrBase.value);
 useUnsavedGuard(nrDirty);
-const NR_PERMS = ['查看对象', '导出数据', '执行动作', '发起变更', '审批变更', '管理用户'];
+const NR_PERMS = ['查看对象', '导出数据', '执行动作', '发起变更', '管理用户'];
 function openNewRole() { Object.assign(nr, nrBlank()); nrBase.value = JSON.stringify(nr); nrOpen.value = true; }
 async function closeNewRole() { if (nrDirty.value && !(await confirmDiscard())) return; nrOpen.value = false; }
 async function saveNewRole() {

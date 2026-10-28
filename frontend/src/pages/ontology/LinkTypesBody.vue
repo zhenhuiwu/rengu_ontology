@@ -13,6 +13,7 @@ import HoverCard from '@/components/HoverCard.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { useReadonly } from '@/composables/useReadonly';
+import { useAssistantDraft } from '@/composables/useAssistantDraft';
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useAppStore } from '@/stores/app';
 import { CHANGE_REQUESTS, CURRENT_USER } from '@/mock/changes';
@@ -25,7 +26,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { useDraftView } from './parts/useDraftView';
 import { useStaticCr, useRealCrRecords, draftFields, draftRows } from './parts/useStaticCr';
 import { useStaticPage } from './parts/useStaticPage';
-import { isStaticReal, startAllocatedTarget, staticContextKey, fetchStaticDetail } from '@/api/static';
+import { isStaticReal, startAllocatedTarget, staticContextKey, fetchStaticDetail, fetchCurrentAfterWrite, applyModelChange, recommendLinkFields } from '@/api/static';
 
 const workflow = useRealCrRecords();
 const route = useRoute();
@@ -109,13 +110,13 @@ const cr = useStaticCr('link', () => ({ id: targetId(), name: cur.value?.name, i
 /** 只存在于草稿里的关系（新增的），直接看草稿 */
 const draftOnly = computed(() => cur.value?.status === '草稿');
 const isDraft = computed(() => dv.isDraft.value || (!readonly.value && !!draft.value && draftOnly.value));
-const canEdit = computed(() => isDraft.value && (!isStaticReal() || cr.head.value?.status === '草稿' && !cr.loading.value && !cr.error.value));
+const canEdit = computed(() => isStaticReal() ? !readonly.value && cur.value?.status === '已发布' && !draft.value : isDraft.value);
 const editTip = computed(() => (isDraft.value ? '' : !readonly.value && cur.value?.status === '已驳回' ? '变更单已驳回，请重新发起变更' : dv.editTip.value));
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const creating = ref(false);
 const pendingNewCr = ref<string>();
-const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
+const openChange = (name: string, isNew = false) => { if (readonly.value) return; if (isStaticReal() && isNew) { void openNew(); return; } creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
 async function start(opts: { join?: string; title?: string; desc?: string }) {
   if (readonly.value) return;
   if (!creating.value) { await cr.start(opts); return; }
@@ -149,13 +150,46 @@ const rejectedCR = computed(() => (cur.value?.status === '已驳回' ? (isStatic
 interface Form { name: string; api: string; from: string; to: string; card: Cardinality; fromProp: string; toProp: string; via: string; reverse: string; nullable: boolean; desc: string }
 const editing = ref(false);
 const form = reactive<Form>({ name: '', api: '', from: '', to: '', card: 'N : 1', fromProp: '', toProp: '', via: '', reverse: '', nullable: false, desc: '' });
-const snap = ref('');
-function beginEdit() {
-  const l = cur.value;
+const snap = ref(''), baseVersion = ref<number>(), newOpen = ref(false);
+async function beginEdit() {
+  let l = cur.value;
   if (!l) return;
+  if (isStaticReal()) { const context = staticContextKey(), id = l.id; try { const current = await fetchCurrentAfterWrite(); const fresh = await fetchStaticDetail<LinkType>(`/link-types/${encodeURIComponent(id)}`); const after = await fetchCurrentAfterWrite(); if (context !== staticContextKey() || id !== cur.value?.id) return; if (current.lockVersion !== after.lockVersion) throw new Error('定义已更新，请重新打开编辑'); baseVersion.value = current.lockVersion; l = fresh; baseline.value = [...baseline.value.filter(item => item.id !== id), fresh]; } catch (e) { message.error(e instanceof Error ? e.message : String(e)); return; } }
   Object.assign(form, { name: l.name, api: apiOf(l), from: l.from, to: l.to, card: l.card, fromProp: l.fromProp, toProp: l.toProp, via: l.via ?? '', reverse: l.reverse, nullable: l.nullable, desc: l.desc });
   snap.value = JSON.stringify(form);
   editing.value = true;
+}
+async function openNew(expected?: string | MouseEvent) {
+  const context = staticContextKey(), page = route.fullPath;
+  try {
+    const current = await fetchCurrentAfterWrite(); if (context !== staticContextKey() || page !== route.fullPath || (typeof expected === 'string' && (expected !== JSON.stringify(form) || newOpen.value || editing.value || saving.value))) return;
+    baseVersion.value = current.lockVersion;
+    Object.assign(form, { name: '', api: '', from: '', to: '', card: 'N : 1', fromProp: '', toProp: '', via: '', reverse: '', nullable: false, desc: '' });
+    newOpen.value = true;
+  } catch (e) { message.error(e instanceof Error ? e.message : String(e)); }
+}
+useAssistantDraft(['relation'], () => readonly.value || newOpen.value || editing.value || saving.value, async (draft) => {
+  const context = staticContextKey(), page = route.fullPath;
+  await openNew(JSON.stringify(form));
+  if (context !== staticContextKey() || page !== route.fullPath || !newOpen.value || editing.value || saving.value) return;
+  for (const key of ['name', 'api', 'from', 'to', 'card', 'fromProp', 'toProp', 'via', 'reverse', 'desc'] as const) {
+    if (typeof draft[key] === 'string') (form as unknown as Record<string, unknown>)[key] = draft[key];
+  }
+  if (typeof draft.nullable === 'boolean') form.nullable = draft.nullable;
+  message.info('AI 建议已填入表单，请核对后保存');
+});
+async function saveNew() {
+  if (saving.value || baseVersion.value == null) return;
+  const error = validateRelation(form, true); if (error) { message.error(error); return; }
+  const context = staticContextKey(); saving.value = true;
+  try {
+    const rows = (Object.keys(FIELD_LABEL) as (keyof Form)[]).map(k => ({ key: k, op: 'add' as const, after: form[k] }));
+    const result = await applyModelChange({ kind: 'link', name: form.name, isNew: true }, [{ section: 'def', rows }], baseVersion.value);
+    if (context !== staticContextKey()) return;
+    newOpen.value = false; await linkPage.reload(); await loadCatalog(); await setQ({ link: result.targetId, tab: 'def', view: undefined });
+    message.success('关系已保存并生效');
+  } catch (e) { if (context === staticContextKey()) message.error(e instanceof Error ? e.message : String(e)); }
+  finally { saving.value = false; }
 }
 const dirty = computed(() => editing.value && JSON.stringify(form) !== snap.value);
 const guard = useUnsavedGuard(dirty);
@@ -174,12 +208,22 @@ async function save() {
   const context = staticContextKey();
   saving.value = true;
   let saved = false;
-  try { saved = await cr.save('def', changes); } finally { saving.value = false; }
+  try {
+    if (isStaticReal()) {
+      if (baseVersion.value == null) throw new Error('未取得编辑时版本，请重新打开编辑');
+      await applyModelChange({ kind: 'link', id: l.id, name: l.name }, [{ section: 'def', rows: changes.map(c => ({ ...c, op: 'update' as const })) }], baseVersion.value);
+      if (context !== staticContextKey()) return;
+      const fresh = await fetchStaticDetail<LinkType>(`/link-types/${encodeURIComponent(l.id)}`);
+      baseline.value = [...baseline.value.filter(item => item.id !== l.id), fresh];
+      await linkPage.reload(); await loadCatalog(); saved = true;
+    } else saved = await cr.save('def', changes);
+  } catch (e) { if (context === staticContextKey()) message.error(e instanceof Error ? e.message : String(e)); }
+  finally { saving.value = false; }
   if (!saved || context !== staticContextKey() || l.id !== cur.value?.id) return;
   if (!isStaticReal()) Object.assign(l, { name: form.name, from: form.from, to: form.to, card: form.card, fromProp: form.fromProp, toProp: form.toProp, via: form.via || undefined, reverse: form.reverse, nullable: form.nullable, desc: form.desc, key });
   if (!isStaticReal() && l.status === '草稿') l.api = form.api;
   editing.value = false;
-  message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
+  message.success(isStaticReal() ? '关系已保存并生效' : `已保存到草稿 ${draft.value?.id ?? ''}`);
 }
 const cancelEdit = () => guard(() => { editing.value = false; });
 const CARDS: Cardinality[] = ['N : 1', '1 : N', '1 : 1', 'N : M'];
@@ -192,6 +236,26 @@ const VIA_OPTIONS = computed(() => {
   return options;
 });
 const propertyOptions = (objectId: string) => (catalog.value.properties[objectId] ?? []).map(property => ({ value: property.api, label: `${property.name}（${property.api} · ${property.type}）` }));
+const propertyName = (objectId: string, api: string) => catalog.value.properties[objectId]?.find(property => property.api === api)?.name || api;
+const bindingText = (link: LinkType) => link.card === 'N : M' ? `通过 ${objName(link.via || '')} 关联` : link.fromProp && link.toProp ? `${objName(link.from)} · ${propertyName(link.from, link.fromProp)} 等于 ${objName(link.to)} · ${propertyName(link.to, link.toProp)}` : '未配置关联属性';
+const suggestion = ref<{ fromProp: string; toProp: string; reason: string } | null>(null);
+const suggesting = ref(false);
+let suggestionSeq = 0;
+watch(() => [form.from, form.to, form.name, staticContextKey()], () => { suggestion.value = null; suggestionSeq++; });
+async function suggestBinding() {
+  const seq = ++suggestionSeq;
+  suggesting.value = true;
+  try {
+    const result = await recommendLinkFields({ source: form.from, target: form.to, name: form.name });
+    if (seq === suggestionSeq) suggestion.value = result;
+  } catch (e) { if (seq === suggestionSeq) message.error(e instanceof Error ? e.message : String(e)); }
+  finally { suggesting.value = false; }
+}
+function applySuggestion() {
+  if (!suggestion.value) return;
+  form.fromProp = suggestion.value.fromProp; form.toProp = suggestion.value.toProp;
+  suggestion.value = null;
+}
 function validateRelation(value: Form, isNew = false) {
   if (!isStaticReal()) return '';
   if (catalogLoading.value) return '对象与属性目录正在加载';
@@ -489,7 +553,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
 
     <!-- 详情 -->
     <div v-else-if="cur" class="panel lt-detail">
-      <DraftBanner v-if="isDraft && draft && (!isStaticReal() || cr.head.value?.status === '草稿')" :draft="draft"
+      <DraftBanner v-if="!isStaticReal() && isDraft && draft" :draft="draft"
         @submit="cr.submit" @discard="draftOnly ? message.info('这条关系只在草稿里，放弃请到变更单处理') : cr.discard()" />
       <div class="lt-head">
         <span class="t-16 fw-600 c-1">{{ cur.name }}</span>
@@ -501,13 +565,13 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
           <ObjRef v-if="canRef(cur.to)" kind="object-type" :id="cur.to">{{ objName(cur.to) }}</ObjRef><template v-else>{{ cur.to ? objName(cur.to) : '未选择' }}</template>
           <span class="c-3 num"> · {{ cur.card }}</span>
         </span>
-        <a-segmented v-if="draft && !readonly && !draftOnly" size="small" :value="isDraft ? 'draft' : 'published'"
+        <a-segmented v-if="!isStaticReal() && draft && !readonly && !draftOnly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => guard(() => { editing = false; setView(v); })" />
         <span class="lt-sp" />
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${apiOf(cur)}）`)">{{ cur.status === '已驳回' ? '重新发起变更' : '发起变更' }}</a-button>
-        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
+        <a-button v-else-if="!isStaticReal() && !draft" type="primary" @click="openChange(`${cur.name}（${apiOf(cur)}）`)">{{ cur.status === '已驳回' ? '重新发起变更' : '发起变更' }}</a-button>
+        <a-button v-else-if="!isStaticReal() && draft && !isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <div v-if="rejectedCR" class="lt-reject t-12">
         <span class="c-error fw-600">{{ rejectedCR.id }} 已驳回</span>
@@ -529,7 +593,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
             <span>关系定义</span>
             <a-space v-if="editing">
               <a-button size="small" @click="cancelEdit">取消</a-button>
-              <a-tooltip :title="formError || undefined"><a-button size="small" :disabled="!dirty || !!formError || saving" :loading="saving" @click="save">保存到草稿</a-button></a-tooltip>
+              <a-tooltip :title="formError || undefined"><a-button size="small" :disabled="!dirty || !!formError || saving" :loading="saving" @click="save">保存</a-button></a-tooltip>
             </a-space>
             <a-tooltip v-else :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">编辑定义</a-button></a-tooltip>
           </div>
@@ -547,7 +611,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
               </template>
               <span v-else class="c-error">未选择</span>
             </a-descriptions-item>
-            <a-descriptions-item label="关联键" :span="2"><span class="num">{{ cur.key || '--' }}</span><span v-if="cur.fromProp && cur.card !== 'N : M'" class="c-3">（{{ objName(cur.from) }}.{{ cur.fromProp }} → {{ objName(cur.to) }}.{{ cur.toProp }}）</span></a-descriptions-item>
+            <a-descriptions-item label="关联条件" :span="2">{{ bindingText(cur) }}</a-descriptions-item>
             <a-descriptions-item v-for="d in DEF_ITEMS" :key="d.k" :label="d.k">{{ d.v || '--' }}</a-descriptions-item>
             <a-descriptions-item label="说明" :span="2">{{ cur.desc || '--' }}</a-descriptions-item>
           </a-descriptions>
@@ -565,13 +629,17 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
               <template v-else>
                 <a-form-item label="源端属性" html-for="link-relation-from-prop"><a-select v-if="isStaticReal()" id="link-relation-from-prop" v-model:value="form.fromProp" :options="propertyOptions(form.from)" :disabled="!form.from || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择源端属性" /><a-input v-else id="link-relation-from-prop" v-model:value="form.fromProp" /></a-form-item>
                 <a-form-item label="目标端属性" html-for="link-relation-to-prop"><a-select v-if="isStaticReal()" id="link-relation-to-prop" v-model:value="form.toProp" :options="propertyOptions(form.to)" :disabled="!form.to || catalogLoading || !!catalogError || saving" show-search option-filter-prop="label" placeholder="选择目标端属性" /><a-input v-else id="link-relation-to-prop" v-model:value="form.toProp" /></a-form-item>
+                <div v-if="isStaticReal()" class="lt-suggestion">
+                  <a-tooltip title="将两个对象的名称、属性名称和类型发送给已配置的本体模型，不发送业务数据。建议需手动采用。"><a-button :loading="suggesting" :disabled="!form.from || !form.to || saving" @click="suggestBinding">AI 推荐关联属性</a-button></a-tooltip>
+                  <span class="lt-suggestion-hint">使用推荐会将对象和属性名称、类型发送给已配置的模型，不包含业务数据。</span>
+                  <div v-if="suggestion" class="lt-suggestion-result">建议：{{ propertyName(form.from, suggestion.fromProp) }} ↔ {{ propertyName(form.to, suggestion.toProp) }} <span v-if="suggestion.reason">（{{ suggestion.reason }}）</span> <a-button type="link" size="small" @click="applySuggestion">采用建议</a-button></div>
+                </div>
               </template>
               <a-form-item label="反向名称"><a-input v-model:value="form.reverse" :maxlength="64" /></a-form-item>
             </div>
             <a-form-item label="说明"><a-textarea v-model:value="form.desc" :rows="2" placeholder="问数会用这段描述理解这条关系（V11）" /></a-form-item>
           </a-form>
-          <div class="lt-sec t-14 fw-600">生成的关联</div>
-          <div class="lt-code t-14 num">{{ cur.join ? `LEFT JOIN ${objById(cur.to)?.table ?? ''} ON ${cur.join}` : '--' }}</div>
+          <details v-if="cur.join" class="lt-sec"><summary>查看技术关联表达式</summary><div class="lt-code t-14 num">{{ `LEFT JOIN ${objById(cur.to)?.table ?? ''} ON ${cur.join}` }}</div></details>
         </div>
         <div class="lt-def-right">
           <div class="lt-sec t-14 fw-600">两端对象</div>
@@ -715,15 +783,38 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
             </template>
           </template>
         </a-table>
-        <div class="t-12 c-3">关系定义只随本体整版发布生效；回滚会生成新的变更单，经审核后随下一次发布生效。</div>
+        <div class="t-12 c-3">关系定义只随本体整版发布生效；回滚会生成新的变更单，随下一次发布生效。</div>
         <AppPagination v-model:page="hpage" variant="full" :total="isStaticReal() ? historyPage.total.value : cur.history.length" v-model:size="historySize" :empty="false" />
       </div>
     </div>
   </div>
+  <a-modal v-model:open="newOpen" title="新建关系类型" ok-text="保存" :confirm-loading="saving" :mask-closable="!saving" @ok="saveNew">
+    <a-form layout="vertical">
+      <a-form-item label="名称" required><a-input v-model:value="form.name" /></a-form-item>
+      <a-form-item label="API 名" required><a-input v-model:value="form.api" /></a-form-item>
+      <a-form-item label="源对象" required><a-select v-model:value="form.from" :options="OBJ_OPTIONS" @change="form.fromProp = ''" /></a-form-item>
+      <a-form-item label="目标对象" required><a-select v-model:value="form.to" :options="OBJ_OPTIONS" @change="form.toProp = ''" /></a-form-item>
+      <a-form-item label="基数"><a-select v-model:value="form.card" :options="CARD_OPTIONS" /></a-form-item>
+      <a-form-item v-if="form.card === 'N : M'" label="中间对象"><a-select v-model:value="form.via" :options="VIA_OPTIONS" /></a-form-item>
+      <template v-else>
+        <a-form-item label="源端属性"><a-select v-model:value="form.fromProp" :options="propertyOptions(form.from)" show-search option-filter-prop="label" placeholder="选择源对象的属性" /></a-form-item>
+        <a-form-item label="目标端属性"><a-select v-model:value="form.toProp" :options="propertyOptions(form.to)" show-search option-filter-prop="label" placeholder="选择目标对象的属性" /></a-form-item>
+        <div v-if="isStaticReal()" class="lt-suggestion">
+          <a-tooltip title="将两个对象的名称、属性名称和类型发送给已配置的本体模型，不发送业务数据。建议需手动采用。"><a-button :loading="suggesting" :disabled="!form.from || !form.to || saving" @click="suggestBinding">AI 推荐关联属性</a-button></a-tooltip>
+          <span class="lt-suggestion-hint">使用推荐会将对象和属性名称、类型发送给已配置的模型，不包含业务数据。</span>
+          <div v-if="suggestion" class="lt-suggestion-result">建议：{{ propertyName(form.from, suggestion.fromProp) }} ↔ {{ propertyName(form.to, suggestion.toProp) }} <span v-if="suggestion.reason">（{{ suggestion.reason }}）</span> <a-button type="link" size="small" @click="applySuggestion">采用建议</a-button></div>
+        </div>
+      </template>
+      <a-form-item label="反向名称"><a-input v-model:value="form.reverse" /></a-form-item><a-form-item label="允许为空"><a-switch v-model:checked="form.nullable" /></a-form-item><a-form-item label="说明"><a-textarea v-model:value="form.desc" /></a-form-item>
+    </a-form>
+  </a-modal>
   <StartChangeModal v-model:open="changeOpen" :target-name="pendingNewCr && creating ? `${changeTarget}（重试保留草稿 ${pendingNewCr}）` : changeTarget" :title-placeholder="creating ? '例如：会员持有储值卡' : undefined" @ok="start" />
 </template>
 
 <style scoped>
+.lt-suggestion { grid-column: 1 / -1; margin: 0 0 16px; }
+.lt-suggestion-result { margin-top: 8px; color: var(--text-2); line-height: 1.6; }
+.lt-suggestion-hint { display: inline-block; margin-left: 8px; color: var(--text-3); font-size: 12px; }
 .lt { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
 .lt-list { width: 300px; flex: none; }
 .lt-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }

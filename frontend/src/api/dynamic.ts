@@ -163,10 +163,12 @@ export interface RuleMetaDto {
   objects: { id: string; name: string; api: string; fields: RuleEditorField[] }[];
   metrics: { id: string; name: string; version: string; versions: string[] }[];
   events: { id: string; name: string; objKind: string; fields: RuleEditorField[] }[];
+  functions: { id: string; name: string; version: string; inputs: string[] }[];
+  relations: { id: string; name: string; from: string; to: string; fields: { api: string; name: string }[] }[];
   runAsUserId: string;
 }
 export type RuleDefinitionPatch = Partial<Pick<RuleDef, 'conds' | 'logic' | 'expr' | 'objKind' | 'dedupe' | 'cooldown' | 'trigger'>>;
-export const emptyRuleMeta = (): RuleMetaDto => ({ confirmers: [], mappingSources: [], triggers: [], statuses: [], objects: [], metrics: [], events: [], runAsUserId: '' });
+export const emptyRuleMeta = (): RuleMetaDto => ({ confirmers: [], mappingSources: [], triggers: [], statuses: [], objects: [], metrics: [], events: [], functions: [], relations: [], runAsUserId: '' });
 export interface RuleScheduleRun {
   id: string; ruleId: string; ruleVersion: number; scheduledAt: string; startedAt: string | null; finishedAt: string | null;
   state: string; error: string | null;
@@ -196,7 +198,8 @@ export const getRule = (id: string) => api.get<RuleDto>(`/rules/${enc(id)}`);
 /** 保存到草稿：后台同一事务把改动登记成变更单 conds / mapping / config 三段（单子在库里时）；带 lockVersion 乐观锁 */
 export interface RuleDraftSaved { cr: string; draft: RuleDef; message: string; lockVersion?: number | null; crChanges?: number | null }
 export async function saveRuleDraft(id: string, body: { cr: string; autoStage: AutoStage; thresholds: string[] } & RuleDefinitionPatch) {
-  const r = await api.put<RuleDraftSaved>(`/rules/${enc(id)}/draft`, { ...body, lockVersion: await crLock(body.cr) });
+  const head = await api.get<{ lockVersion: number }>('/releases/current');
+  const r = await api.put<RuleDraftSaved & { ver: string }>(`/rules/${enc(id)}:apply`, { ...body, lockVersion: await crLock(body.cr), releaseLockVersion: head.lockVersion });
   crLocked(body.cr, r);
   return r;
 }
@@ -345,3 +348,10 @@ export async function waitScenarioResult(id: string, everyMs = 800, maxTries = 1
 export const listScenarioImpacts = (id: string, page: number, size: number) => api.get<PageResult<ScImpact>>(`/scenarios/${enc(id)}/impacts`, { query: { page, size } });
 export const getScenarioStagePlan = (id: string) => api.get<StagePlan[]>(`/scenarios/${enc(id)}/stage-plan`);
 export const stageScenario = (id: string, keys: string[]) => inContext(api.post<{ staged: string[]; message: string }>(`/scenarios/${enc(id)}:stage`, { keys }));
+
+export const getRuleVersionSnapshot = (id: string, version: number) => api.get<{ release: string; definition: RuleDef }>(`/rules/${enc(id)}/versions/${version}`);
+
+export async function restoreRuleVersion(id: string, version: number) {
+  const head = await api.get<{ lockVersion: number }>('/releases/current');
+  return api.post<{ ver: string; cr: string; restoredVersion: number }>(`/rules/${enc(id)}/versions/${version}:restore`, {}, { query: { releaseLockVersion: head.lockVersion } });
+}

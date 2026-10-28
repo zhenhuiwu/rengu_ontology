@@ -61,16 +61,26 @@ export interface DraftEditsOptions {
   writer?: DraftWriter;
   /** 已发布版数据已就绪（真接口快照载入完）；读回草稿行要等它，否则叠在 mock 上 */
   ready?: () => boolean;
+  /** 保存即生效：不建草稿、不提交审核，一次保存把全部改动段一起写库并发布 */
+  direct?: boolean;
+  readonly?: Ref<boolean>;
+  /** 保存成功后让页面重新拉取定义（以服务端为准） */
+  onSaved?: () => Promise<void> | void;
 }
 
 export function useDraftEdits(o: DraftEditsOptions) {
   const confirm = useConfirmStore();
   const router = useRouter();
   const workspacePrefix = `${currentApiContext().ontologyId}|`;
-  const prefix = () => `${workspacePrefix}${o.draft.value?.id ?? '-'}|${o.targetId()}|`;
-  const locked = computed(() => !!o.draft.value && !!submitted[workspacePrefix + o.draft.value.id]);
-  const canEdit = computed(() => o.isDraft.value && !locked.value);
-  const editTip = computed(() => (o.isDraft.value && locked.value ? `${o.draft.value!.id} 已提交审核，驳回后才能继续修改` : o.editTip.value));
+  const direct = computed(() => !!o.direct);
+  const prefix = () => direct.value
+    ? `${workspacePrefix}direct|${o.targetId()}|`
+    : `${workspacePrefix}${o.draft.value?.id ?? '-'}|${o.targetId()}|`;
+  const locked = computed(() => !direct.value && !!o.draft.value && !!submitted[workspacePrefix + o.draft.value.id]);
+  const canEdit = computed(() => direct.value
+    ? !o.readonly?.value
+    : o.isDraft.value && !locked.value);
+  const editTip = computed(() => (direct.value ? '' : o.isDraft.value && locked.value ? `${o.draft.value!.id} 已提交审核，驳回后才能继续修改` : o.editTip.value));
   const dirty = computed(() => Object.keys(working).some((k) => k.startsWith(prefix())));
   const sections: { name: string; marks: (src: 'saved' | 'all') => number; changes: () => SectionChange[]; hydrate: (items: { key: string; op: string; after?: unknown }[]) => void }[] = [];
   const writing = () => !!o.writer?.on();
@@ -154,11 +164,14 @@ export function useDraftEdits(o: DraftEditsOptions) {
   /** 整单改动数：写库模式且库里有数时以库为准（已含本对象保存进库的行），否则 = 单子原有改动 + 本对象已保存的改动 */
   const dbChanges = () => (writing() && o.draft.value ? o.writer!.changes?.(o.draft.value.id) : undefined);
   const crChangeCount = () => dbChanges() ?? (o.draft.value ? o.draft.value.changes + savedChanges.value : 0);
-  const bannerDraft = computed<DraftCR | undefined>(() => o.draft.value && { ...o.draft.value, changes: crChangeCount(), ...(dbChanges() === undefined && savedChanges.value ? { updatedAt: '2026-10-25 17:10' } : {}) });
+  const bannerDraft = computed<DraftCR | undefined>(() => {
+    if (direct.value) return undefined;
+    return o.draft.value && { ...o.draft.value, changes: crChangeCount(), ...(dbChanges() === undefined && savedChanges.value ? { updatedAt: '2026-10-25 17:10' } : {}) };
+  });
 
   /* 刷新后恢复：选中对象在草稿单里时读回库里的草稿行（每个 单号|对象 一次） */
   watch(() => [o.draft.value?.id, o.targetId(), o.ready?.() ?? true] as const, async ([crId, tid, rd]) => {
-    if (!crId || !rd || !writing() || !o.writer?.load) return;
+    if (direct.value || !crId || !rd || !writing() || !o.writer?.load) return;
     const p = `${workspacePrefix}${crId}|${tid}|`;
     if (loaded.has(p)) return;
     loaded.add(p);
@@ -171,6 +184,20 @@ export function useDraftEdits(o: DraftEditsOptions) {
 
   async function save() {
     const d = o.draft.value;
+    if (direct.value) {
+      if (busy) return;
+      const changes = sections.map((x) => ({ section: x.name, rows: x.changes() })).filter((x) => x.rows.length);
+      if (!changes.length) { message.info('没有需要保存的改动'); return; }
+      busy = true;
+      try { await o.writer!.save('', changes); }
+      catch (e) { message.error(`保存失败：${errText(e)}`); return; }
+      finally { busy = false; }
+      // 以服务端为准：清掉本地基线，再让页面重新拉取定义
+      Object.keys({ ...saved, ...working }).filter((k) => k.startsWith(prefix())).forEach((k) => { delete saved[k]; delete working[k]; });
+      try { await o.onSaved?.(); } catch (e) { message.error(`保存成功，但重新加载失败：${errText(e)}`); return; }
+      message.success('已保存并生效');
+      return;
+    }
     if (writing() && d) {
       if (busy) return;
       const changes = sections.map((x) => ({ section: x.name, rows: x.changes() })).filter((x) => x.rows.length);
@@ -186,6 +213,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
   const guard = (fn: () => void) => guardRaw(() => { revert(); fn(); });
 
   async function submit() {
+    if (direct.value) { message.info('保存即生效，不需要提交审核'); return; }
     const d = o.draft.value;
     if (!d) return;
     if (locked.value) { message.info(`${d.id} 已提交审核`); return; }
@@ -200,6 +228,7 @@ export function useDraftEdits(o: DraftEditsOptions) {
     submitted[workspacePrefix + d.id] = '2026-10-25 17:10'; message.success(`${d.id} 已提交评审`); router.push({ path: '/build/ontology/releases', query: { cr: d.id } });
   }
   async function discard(after: () => void) {
+    if (direct.value) { revert(); return; }
     const d = o.draft.value;
     if (!d) return;
     const ok = await confirm.ask({ title: '放弃草稿', target: `${d.id} · ${o.targetName()}`, okText: '放弃', danger: true,

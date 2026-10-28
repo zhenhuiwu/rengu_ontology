@@ -11,7 +11,7 @@ const ctx=vue.reactive({demoAs:'admin',ver:'',previewAs:''}), key=()=>JSON.strin
 const route=vue.reactive({query:{}}), errors=[],calls=[];
 const def=id=>({id,name:id,version:1,status:'已发布',displayStatus:'已发布',owner:'DB',desc:'',objKind:'order',level:'中',output:'告警',conds:[],logic:'且',expr:'',dedupe:'',cooldown:'',trigger:{kind:'定时',text:''},autoStage:{enabled:false,actionTypeId:'',mapping:[],confirmer:''},draft:{id,version:2,conds:[{value:'saved'}],autoStage:{enabled:false,actionTypeId:'',mapping:[],confirmer:''}}});
 let listRead=async()=>({items:[],total:0,page:1}),detailRead=async id=>def(id),replayRead=async()=>({samples:[]});
-const dyn={dynamicApi:{isReal:()=>true},dynamicContextKey:key,CR_WRITE:true,
+const dyn={dynamicApi:{isReal:()=>true},dynamicContextKey:key,CR_WRITE:true,emptyRuleMeta:()=>({confirmers:[],mappingSources:[],statuses:[],triggers:[],objects:[],metrics:[],events:[],runAsUserId:''}),
  listRules:async q=>{calls.push(['list',{...q}]);return listRead(q);},
  getRule:async id=>{assert.ok(id,'empty ID cannot request detail');calls.push(['detail',id]);return detailRead(id);},
  getRulesMeta:async()=>({confirmers:[],mappingSources:[],statuses:[]}),
@@ -54,6 +54,6 @@ staleList.resolve({items:[def('STALE')],total:500,page:1});await pending;assert.
 listRead=async()=>({items:[def('R-1')],total:1,page:1});await page.loadList();await tick();
 const older=defer(),newer=defer();replayRead=()=>older.promise;const first=page.fetchReplay();replayRead=()=>newer.promise;const last=page.fetchReplay();
 older.resolve({samples:[],marker:'older'});await first;assert.equal(page.running.value,true);assert.equal(page.remote.replay,null);newer.resolve({samples:[],marker:'newer'});await last;assert.equal(page.remote.replay.marker,'newer');assert.equal(page.running.value,false);
-const unmounted=defer();replayRead=()=>unmounted.promise;const dying=page.fetchReplay();const oldErrors=errors.length;scope.stop();unmounted.reject(Error('after unmount'));await dying;assert.equal(errors.length,oldErrors);assert.equal(page.remote.replay.marker,'newer');
+const unmounted=defer();replayRead=()=>unmounted.promise;const dying=page.fetchReplay();const oldErrors=errors.length;scope.stop();unmounted.reject(Error('after unmount'));await dying;assert.equal(errors.length,oldErrors);assert.equal(page.remote.replay,null,'a new replay clears the previous result and unmounted failures cannot restore it');
 assert.match(sfc.descriptor.template.content,/disabled>对比/);assert.match(sfc.descriptor.template.content,/disabled>回滚/);
 console.log('Rules SFC passed: 10/page, empty DB, selected draft buffer, totals/clamp, identity/version/preview guards, failed detail, latest replay and unmount.');

@@ -345,11 +345,10 @@ async function runAction() {
       { label: '来源告警', value: `${a.id}（${r.id} ${r.version}）` },
       { label: '触发值', value: `${a.value}，阈值 ${a.threshold}` },
       { label: '参数', value: JSON.stringify(params) },
-      { label: '审批人', value: approverOf(r) ?? '--' },
       { label: '幂等键', value: `act-${a.id.toLowerCase()}` },
       ...reviewFields(review),
     ],
-    impact: '按绑定的审批配置处理，执行前重新校验权限、参数和动作版本。执行结果以关联动作记录为准；涉及外部系统且结果未知时按幂等键对账，不自动重发写入。',
+    impact: '确认后将执行动作；涉及外部系统时会发出真实调用。执行前重新校验权限、参数和动作版本。执行结果以关联动作记录为准；涉及外部系统且结果未知时按幂等键对账，不自动重发写入。',
   });
   if (!ok || ctx !== dynamicContextKey()) return;
   pinned.value = a.id;
@@ -358,8 +357,8 @@ async function runAction() {
     return;
   }
   a.actionRef = `act-${a.id.toLowerCase()}`;
-  a.actionStatus = '审批中';
-  a.log.push({ time: now(), text: `发起动作「${r.action}」，待${approverOf(r) ?? '--'}审批；动作成功后告警自动转为已解决`, who: ME.value });
+  a.actionStatus = '执行中';
+  a.log.push({ time: now(), text: `演示动作「${r.action}」已确认，未调用外部系统`, who: ME.value });
   message.success(`已提交：${r.action}`);
 }
 /** AI 处置建议：只读决策记录；采用 = 规则绑定动作就预填参数走本页发起动作确认，其它动作带参数去动作中心发起 */

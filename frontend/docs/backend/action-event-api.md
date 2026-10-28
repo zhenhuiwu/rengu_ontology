@@ -188,6 +188,10 @@ FastAPI，先用 PostgreSQL，数据库访问留适配层（与 智能问数项�
 | `GET /writeback-calls/{id}` | — | 一条 `ExtCall`（无执行记录时 `runId=null`） | — | 调用详情抽屉 `?call=` |
 | `POST /writeback-calls/{id}:mark-checked` | — | 调用记录 `result=成功`，`msg=人工核对：对方已处理（{姓名} {HH:mm} 标记）` | — | “人工核对 · 确认对方已处理”，要 `external-systems · manage`。不是「结果未知」或带执行记录的 → 409 `CALL_NOT_CHECKABLE`。前端只对不带 runId 的调用显示这个按钮（`ExternalSystems.vue` L319–323），带 runId 的只跳到动作中心。只改这条调用记录的结果，不碰执行记录 |
 
+`auth` 支持“无需授权”：探测、幂等查询、动作提交及动作 Webhook 副作用不发送适配器的 Bearer 令牌，即使环境里仍配置了 `token`。切换不删除令牌；切回其他方式后，已配置的令牌会再次发送。`signing_secret` 独立控制动作提交和动作 Webhook 副作用的消息签名，不受此选项影响；不配置签名密钥时不发送签名头。其他已有 `auth` 值保持原行为：适配器仅在配置 `token` 时发送 Bearer 令牌，不按名称自动实现 OAuth、mTLS 等认证，也不因缺少令牌自动拒绝调用。事件订阅投递使用独立路由配置，不受外部系统的 `auth` 字段控制。
+
+更新外部系统时，若请求省略 `auth` 或 `authDetail`，分别保留原值；显式传值才会变更。
+
 ### 3.2 事件类型
 
 2026-10-26 内部接收已实现：`POST /internal/v1/events` 仅认证持久接收，不执行投递。必须配置 `RENGU_INTERNAL_EVENT_TOKEN` 并使用 `Authorization: Bearer`；缺配置503、错误401，不使用X-Demo默认身份，history/preview统一403。eventType按真实当前code或api查已发布且未下线，objectType匹配绑定对象，payload校验实际必填/基础类型。HTTP JSON信封最大64 KiB、深度16、总值2048、容器512，NUL/非法Unicode/非有限数/额外信封字段422；大小超限413。

@@ -16,7 +16,7 @@ const imports = {
 const { outputText } = ts.transpileModule(`${source}\nexport { params, values, target, errors, validate, submit, resultError };`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } });
 const exports = {};
 runInNewContext(outputText, {
-  exports, defineProps: () => ({ action: { id: 'A', name: 'Actual action' }, disabled: false }), defineModel: () => vue.ref(false), defineEmits: () => () => {},
+  exports, Error, defineProps: () => ({ action: { id: 'A', name: 'Actual action' }, disabled: false }), defineModel: () => vue.ref(false), defineEmits: () => () => {},
   require: key => key.endsWith('.vue') ? {} : imports[key] ?? (() => { throw new Error(`Missing boundary: ${key}`); })(),
 });
 const { params, values, target, errors, validate, submit, resultError } = exports;

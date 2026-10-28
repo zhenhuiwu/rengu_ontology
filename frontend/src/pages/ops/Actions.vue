@@ -51,6 +51,7 @@ const TERMINAL: ActionStatus[] = ['成功', '已撤回', '已对账'];
 
 const route = useRoute();
 const router = useRouter();
+const objectLink = (type: string, id: string) => ({ path: '/use/objects/detail', query: { ontology: app.ontologyId, as: route.query.as, ver: route.query.ver, previewAs: route.query.previewAs, type, id } });
 const confirm = useConfirmStore();
 const { readonly, reason: roReason } = useReadonly();
 
@@ -84,9 +85,7 @@ const actionSystems = computed<{ id: string; name: string }[]>(() => (live.value
 const callOf = (name: string, typeId?: string) => (live.value ? remote.meta?.actionMeta[typeId || name]?.call ?? '--' : ACTION_META[name as keyof typeof ACTION_META]?.call ?? '--');
 const systemText = (a: ActionRecord) => a.system || a.sysId || '—';
 const executionImpact = (a: ActionRecord) => {
-  const meta = remote.meta?.actionMeta[a.typeId || a.action];
-  const approval = meta?.version === a.typeVersion && meta.approvalRequired === false ? '按已发布配置免审处理。' : '按绑定的审批配置处理。';
-  return `${approval}执行前会重新校验权限、参数和版本，结果以动作记录为准。${a.sysId ? '涉及外部系统的写入需等待执行结果，结果未知时按幂等键对账，不自动重发写入。' : ''}`;
+  return `执行前会重新校验权限、参数和版本，结果以动作记录为准。${a.sysId ? '涉及外部系统的写入需等待执行结果，结果未知时按幂等键对账，不自动重发写入。' : ''}`;
 };
 
 const rows = computed(() => {
@@ -166,7 +165,7 @@ const sourceText = (a: ActionRecord) =>
 const confirmerOf = (a: ActionRecord) => a.confirmer ?? a.source.confirmer ?? a.initiator;
 const notMine = (a: ActionRecord) => live.value ? !a.can?.confirm : !!a.source.confirmer && a.source.confirmer !== ME.value;
 const notMineText = (a: ActionRecord) => live.value ? a.can?.reasons.confirm || '当前身份不能确认此动作' : `该动作由规则 ${a.source.ruleId} 暂存，指定确认人为 ${a.source.confirmer}，只有确认人可以确认提交或撤回`;
-const phaseText = (a: ActionRecord) => a.dispatchPhase === 'queued' ? '待执行' : a.dispatchPhase === 'claimed' ? '调用中' : a.status === '结果未知' ? '结果未知 · 待对账' : a.status;
+const phaseText = (a: ActionRecord) => a.dispatchPhase === 'queued' ? '待执行' : a.dispatchPhase === 'claimed' ? '调用中' : a.status === '结果未知' ? '结果未知 · 待对账' : a.status === '审批中' ? '历史待处理' : a.status;
 const timeline = computed(() => (current.value?.log ?? []).map((l: ActionLog) => ({ time: l.desc ? `${l.time} · ${l.desc}` : l.time, text: l.text, status: l.status })));
 
 const columns = [
@@ -186,11 +185,11 @@ async function approve() {
   const ctx = dynamicContextKey();
   const a = current.value;
   if (!live.value || !a?.can?.approve) return;
-  const ok = await confirm.ask({ title: `审批 ${a.action}`, tag: '审批中', okText: '审批并执行',
+  const ok = await confirm.ask({ title: a.action, tag: '历史待处理', okText: '确认并执行',
     target: `${kindLabel(a.objKind)} ${a.objLabel}`, fields: [{ label: '参数', value: a.params },
-      { label: '幂等键', value: a.idemKey }, ...reviewFields(a)], impact: '审批后按已发布定义执行，外部动作进入持久执行队列。' });
+      { label: '幂等键', value: a.idemKey }, ...reviewFields(a)], impact: '确认后按已发布定义执行；如涉及外部系统，将进入真实执行队列。' });
   if (!ok || ctx !== dynamicContextKey()) return;
-  try { await afterWrite(await approveActionRun(a.id)); message.success('审批已处理'); }
+  try { await afterWrite(await approveActionRun(a.id)); message.success('已确认，执行结果以动作记录为准'); }
   catch (e) { fail(e); }
 }
 
@@ -199,13 +198,12 @@ async function submit() {
   const ctx = dynamicContextKey();
   const a = current.value; if (!a || a.status !== '待确认') return;
   const ok = await confirm.ask({
-    title: a.action, tag: '待确认', okText: '确认提交',
+    title: a.action, tag: '待确认', okText: '确认并执行',
     target: `${kindLabel(a.objKind)} ${a.objLabel}`,
     fields: [
       { label: '参数', value: a.params },
       { label: '来源', value: a.source.type === '告警' ? `${a.source.alertId}（${a.source.ruleId} ${a.source.ruleVersion}）` : sourceText(a) },
       { label: '确认人', value: confirmerOf(a) },
-      { label: '审批人', value: a.approver },
       { label: '外部系统', value: systemText(a) },
       { label: '幂等键', value: a.idemKey },
       ...reviewFields(a),
@@ -216,13 +214,12 @@ async function submit() {
   if (!ok || ctx !== dynamicContextKey()) return;
   pinned.value = a.id;
   if (REAL_API) {
-    try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(d.status === '审批中' ? `已提交：${d.action}，等待 ${d.approver} 审批` : `已提交：${d.action}，${phaseText(toRec(d))}`); } catch (e) { fail(e); }
+    try { const d = await confirmActionRun(a.id); await afterWrite(d); message.success(`已确认：${d.action}，${phaseText(toRec(d))}`); } catch (e) { fail(e); }
     return;
   }
-  a.status = '审批中';
-  push(a, { time: now(), text: '确认提交', desc: `确认人 ${ME.value}` });
-  push(a, { time: now(), text: '等待审批', desc: `审批人 ${a.approver}`, status: 'warn' });
-  message.success(`已提交：${a.action}，等待 ${a.approver} 审批`);
+  a.status = '执行中';
+  push(a, { time: now(), text: '确认并执行（演示）', desc: `确认人 ${ME.value}` });
+  message.success(`演示动作已确认：${a.action}`);
 }
 
 // 待确认 → 撤回（不写外部系统，只需填原因）
@@ -431,7 +428,7 @@ const terminalText = computed(() => {
           <a-select v-model:value="system" size="small" class="ac-w120"
             :options="[{ value: '全部', label: '全部外部系统' }, ...actionSystems.map((v) => ({ value: v.id, label: v.name }))]" />
           <a-select v-if="curTab.statuses.length > 1" v-model:value="status" size="small" class="ac-w120"
-            :options="[{ value: '全部', label: '全部状态' }, ...curTab.statuses.map((v) => ({ value: v, label: v }))]" />
+            :options="[{ value: '全部', label: '全部状态' }, ...curTab.statuses.map((v) => ({ value: v, label: v === '审批中' ? '历史待处理' : v }))]" />
           <a-input-search v-model:value="kw" size="small" placeholder="编号 / 对象 / 幂等键 / 外部单号" class="ac-w240" />
         </div>
       </div>
@@ -442,7 +439,7 @@ const terminalText = computed(() => {
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'id'"><span class="num">{{ record.id }}</span></template>
             <template v-else-if="column.key === 'obj'">
-              <ObjRef v-if="hasObjectRef(record.objKind)" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
+              <router-link v-if="live && record.objKind && record.objId" :to="objectLink(record.objKind, record.objId)" @click.stop>{{ record.objLabel }}</router-link><ObjRef v-else-if="hasObjectRef(record.objKind)" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
             </template>
             <template v-else-if="column.key === 'source'"><span :class="record.source.type === '手动' ? 'c-2' : 'num'">{{ sourceText(record) }}</span></template>
             <template v-else-if="column.key === 'initiator'"><a-tooltip :title="record.initiator" placement="topLeft"><span class="ac-nowrap">{{ record.initiator }}</span></a-tooltip></template>
@@ -470,7 +467,7 @@ const terminalText = computed(() => {
           <a-descriptions-item label="动作" :span="2">{{ current.action }}<span class="c-3"> · 动作类型 {{ current.typeVersion }}</span></a-descriptions-item>
           <a-descriptions-item label="参数" :span="2">{{ current.paramsUnavailable || current.params || '—' }}</a-descriptions-item>
           <a-descriptions-item label="对象" :span="2">
-            <span class="c-3">{{ kindLabel(current.objKind) }} </span><ObjRef v-if="hasObjectRef(current.objKind)" :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef><span v-else class="c-1">{{ current.objLabel }}</span>
+            <span class="c-3">{{ kindLabel(current.objKind) }} </span><router-link v-if="live && current.objKind && current.objId" :to="objectLink(current.objKind, current.objId)">{{ current.objLabel }}</router-link><ObjRef v-else-if="hasObjectRef(current.objKind)" :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef><span v-else class="c-1">{{ current.objLabel }}</span>
           </a-descriptions-item>
           <a-descriptions-item label="来源" :span="2">
             <template v-if="current.source.type === '告警'"><span class="num">告警 {{ current.source.alertId }}</span><span class="c-3"> · 规则 {{ current.source.ruleId }} {{ ruleVersion(current.source.ruleVersion) }}</span></template>
@@ -479,7 +476,6 @@ const terminalText = computed(() => {
           </a-descriptions-item>
           <a-descriptions-item label="发起人"><span class="ac-nowrap">{{ current.initiator }}</span></a-descriptions-item>
           <a-descriptions-item label="确认人">{{ confirmerOf(current) }}</a-descriptions-item>
-          <a-descriptions-item label="审批人" :span="2">{{ current.approver }}</a-descriptions-item>
           <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ current.idemKey }}</span></a-descriptions-item>
           <a-descriptions-item label="外部系统"><span class="ac-nowrap">{{ systemText(current) }}</span></a-descriptions-item>
           <a-descriptions-item label="外部单号"><span class="num ac-nowrap">{{ current.extRef ?? '--' }}</span></a-descriptions-item>
@@ -492,13 +488,13 @@ const terminalText = computed(() => {
       <div class="ac-foot">
         <template v-if="readonly">
           <span class="t-14 c-3 ac-foot-note">{{ roReason }}，不能处理动作</span>
-          <a-tooltip :title="roReason"><a-button disabled>{{ current.status === '结果未知' ? '发起对账' : current.status === '失败' ? '重新提交' : '确认提交' }}</a-button></a-tooltip>
+          <a-tooltip :title="roReason"><a-button disabled>{{ current.status === '结果未知' ? '发起对账' : current.status === '失败' ? '重新提交' : '确认并执行' }}</a-button></a-tooltip>
         </template>
 
         <template v-else-if="current.status === '待确认' && notMine(current)">
           <span class="t-14 c-3 ac-foot-note">{{ live ? notMineText(current) : `确认人为 ${confirmerOf(current)}，你只能查看` }}</span>
           <a-tooltip :title="current.can?.reasons.withdraw || notMineText(current)"><a-button disabled>撤回</a-button></a-tooltip>
-          <a-tooltip :title="notMineText(current)"><a-button type="primary" disabled>确认提交</a-button></a-tooltip>
+          <a-tooltip :title="notMineText(current)"><a-button type="primary" disabled>确认并执行</a-button></a-tooltip>
         </template>
 
         <template v-else-if="current.status === '待确认'">
@@ -512,12 +508,11 @@ const terminalText = computed(() => {
             </template>
             <a-button>撤回</a-button>
           </a-popover>
-          <a-button type="primary" :disabled="live && !current.can?.confirm" @click="submit">确认提交</a-button>
+          <a-button type="primary" :disabled="live && !current.can?.confirm" @click="submit">确认并执行</a-button>
         </template>
 
         <template v-else-if="current.status === '审批中'">
-          <span class="t-14 c-3">等待 {{ current.approver }} 审批</span>
-          <a-button v-if="live && current.can?.approve" type="primary" @click="approve">审批并执行</a-button>
+          <span class="t-14 c-3">历史待处理记录，旧流程已停用；请根据当前配置重新发起动作。</span>
         </template>
         <span v-else-if="current.status === '执行中'" class="t-14 c-3">{{ live ? '执行结果尚未返回' : `等待 ${current.system} 返回，${waitingText(current.sysId)}` }}</span>
 
@@ -584,7 +579,6 @@ const terminalText = computed(() => {
           <a-pagination v-if="targetTotal > 10" v-model:current="targetPage" size="small" :page-size="10" :total="targetTotal" :show-size-changer="false" style="margin-top: 8px" />
         </a-form-item>
         <a-descriptions v-if="launchAction" size="small" :column="1">
-          <a-descriptions-item label="审批">{{ launchAction.approval }}</a-descriptions-item>
           <a-descriptions-item v-for="p in launchAction.params" :key="p.api" :label="`${p.name} (${p.api})`">{{ p.type }}{{ p.required ? ' · 必填' : '' }}<span v-if="p.rule"> · {{ p.rule }}</span></a-descriptions-item>
         </a-descriptions>
         <a-form-item v-if="launchAction" label="参数 JSON"><a-textarea v-model:value="launchParams" :rows="8" spellcheck="false" /></a-form-item>

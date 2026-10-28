@@ -4,12 +4,13 @@ import InfoTip from '@/components/InfoTip.vue';
  * 规则与自动化：左侧规则列表，右侧详情。页签：条件 / 触发方式 / 动作 / 命中历史 / 回放试跑 / 版本历史。
  * URL：?rule= 选中项，?tab= 页签，?view=draft 草稿，?ver= 历史版本只读；
  *      命中历史 ?hrange= + ?hpage/hsize，命中详情抽屉 ?hit=；回放试跑 ?rrange= ?rver= ?run=1 + ?rpage/rsize。
- * 已发布版本只读，改规则只能“发起变更”进草稿。自动暂存动作只会把动作放进动作中心“待确认”，从不自动执行。
+ * 已发布版本只读，改规则只能“发起变更”进草稿。执行方式受规则和动作策略共同约束。
  * 开关 dynamic 走真接口时（src/api/dynamic.ts）：列表 / 筛选 / 详情与草稿 / 确认人与取值来源 / 命中历史与命中抽屉 /
  * 回放试跑 / 版本历史 / 已暂存的动作都取后台，“保存到草稿”调 PUT /rules/{id}/draft；否则保持原 mock 逻辑。
  * 变更单（useDraftView / CHANGE_REQUESTS）、动作类型 / 事件类型 / 指标目录仍由各自模块提供。
  */
-import { computed, reactive, ref, watch, onScopeDispose } from 'vue';
+import { computed, reactive, ref, watch, onMounted, onScopeDispose } from 'vue';
+import { consumeAssistantPrefill, type AssistantTarget } from '@/api/assistant';
 import { fallBackIfDown } from '@/api/fallback';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -32,18 +33,17 @@ import {
   RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel, dedupeReason,
   type RuleDef, type AutoStage, type Hit,
 } from '@/mock/rules';
-import DraftBanner from './parts/DraftBanner.vue';
-import StartChangeModal from './parts/StartChangeModal.vue';
 import RuleDefinitionEditor from './parts/RuleDefinitionEditor.vue';
 import RuleScheduleRuns from './parts/RuleScheduleRuns.vue';
 import { useDraftView, draftOf, forgetTarget } from './parts/useDraftView';
 import { useConfirmStore } from '@/stores/confirm';
+import { useAppStore } from '@/stores/app';
 import { CHANGE_REQUESTS } from '@/mock/changes';
 import type { ActionRecord } from '@/mock/actions';
 import type { Alert } from '@/mock/dynamic';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, dynamicContextKey, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, submitCR, removeCRTarget, CR_WRITE, crOpen, crDropEmpty, crErrText, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns,
+  dynamicApi, dynamicContextKey, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, removeCRTarget, CR_WRITE, crOpen, crDropEmpty, crErrText, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns, getRuleVersionSnapshot, restoreRuleVersion,
   type RuleDto, type RuleHitDetailDto, type ReplayDto, type RuleVersionDto, type HitDim, type ReplaySampleDto,
   emptyRuleMeta, type RuleDefinitionPatch,
 } from '@/api/dynamic';
@@ -136,9 +136,15 @@ const tab = computed({
 /* 草稿：公共 useDraftView('rule')，变更单信息取自变更单本身（R-007 在 CR-0011）；本地只保留规则草稿的改动内容 */
 const { draft: draftCR, isDraft, editTip, setView, start, cancel } = useDraftView('rule', () => base.value.id);
 const confirm = useConfirmStore();
-const changeOpen = ref(false);
 const changeTarget = ref('');
-const openChange = (name: string) => { changeTarget.value = name; changeOpen.value = true; };
+const openingEdit = ref(false);
+async function openChange(name: string) {
+  if (openingEdit.value) return;
+  changeTarget.value = name;
+  openingEdit.value = true;
+  try { await onChangeOk({ title: `规则编辑：${name}`.slice(0, 40) }); }
+  finally { openingEdit.value = false; }
+}
 const NEW_RULE = '新建规则';
 /**
  * 变更弹窗确认。mock：沿用公共 start()。真接口：
@@ -172,6 +178,11 @@ const PENDING = '__new_rule__';
 /* 新建规则（真接口）：先选对象类型和名称，再进变更弹窗。对象类型取本体（static 真接口 GET /object-types），没有时用 mock 对象类型 */
 const newOpen = ref(false);
 const newForm = reactive({ name: '', objKind: '' });
+const assistantNew = ref<Record<string, unknown> | null>(null);
+let assistantForm = '', assistantPage = '', assistantContext = '';
+const assistantPending = ref<{ id: string; draft: Record<string, unknown> } | null>(null);
+const assistantNotes = reactive<Record<string, string>>({});
+function assistantText(draft: Record<string, unknown>, key: string) { return typeof draft[key] === 'string' ? (draft[key] as string).trim() : ''; }
 const objKindOptions = computed(() => {
   if (REAL_API) return remote.meta.objects.map(o => ({ value: o.id, label: `${o.name}（${o.id}）` }));
   void catTick.value;
@@ -180,6 +191,7 @@ const objKindOptions = computed(() => {
 });
 function openNew() {
   if (!REAL_API) { openChange(NEW_RULE); return; }
+  assistantNew.value = null;
   newForm.name = ''; newForm.objKind = objKindOptions.value[0]?.value ?? '';
   newOpen.value = true;
 }
@@ -198,34 +210,28 @@ async function newRule(opts: { join?: string; title?: string; desc?: string }) {
     // 默认对象类型由后台取本体里第一个对象类型
     const d = await createRule({ cr, name: newForm.name.trim() || undefined, objKind: newForm.objKind || undefined });
     rid = d.id;
+    if (assistantNew.value) { assistantPending.value = { id: d.id, draft: { ...assistantNew.value } }; assistantNew.value = null; }
     start({ join: cr, target: d.id });
     if (!CR_WRITE) cancel(cr, PENDING);
     await loadList();
     router.replace({ query: { ...route.query, ...RESET, rule: d.id, view: 'draft' } });
-    message.success(`已新建规则 ${d.id}，在 ${cr} 的草稿里`);
+    message.success(`已新建规则 ${d.id}，请编辑后保存生效`);
   } catch (e) {
+    assistantPending.value = null;
     if (rid) cancel(cr, rid);
     if (!CR_WRITE && cr) cancel(cr, PENDING);
     if (created) await crDropEmpty(cr);
     fail(e);
   }
 }
-/** 草稿横幅：提交审核 / 放弃草稿。CR_WRITE 关时保持原 mock 行为 */
-async function onDraftSubmit() {
-  const cr = draftCR.value!;
-  if (REAL_API && CR_WRITE) {
-    try { await submitCR(cr.id); } catch (e) { fail(e); return; }
-  }
-  message.success(`${cr.id} 已提交审核，可在“变更与发布”查看`);
-}
 async function onDraftDiscard() {
   const cr = draftCR.value!;
   const id = base.value.id;
   const isNewRule = live.value && remote.detail?.id === id && remote.detail.version == null;
   const ok = await confirm.ask({
-    title: '放弃草稿', target: `规则 ${base.value.name}（${id}）`, okText: '放弃草稿', danger: true, irreversible: true,
-    impact: isNewRule ? `这是未发布的新规则，放弃后规则一并删除，并从变更单 ${cr.id} 中移除。`
-      : `本规则在变更单 ${cr.id} 里的改动全部丢弃，已发布版本不受影响。`,
+    title: '放弃编辑', target: `规则 ${base.value.name}（${id}）`, okText: '放弃编辑', danger: true,
+    impact: isNewRule ? '这是尚未生效的新规则，放弃后规则将被删除。'
+      : '本次修改将被丢弃，已生效规则不受影响。',
   });
   if (!ok) return;
   if (REAL_API && CR_WRITE) {
@@ -239,7 +245,7 @@ async function onDraftDiscard() {
     await loadList();
     if (isNewRule) router.replace({ query: { ...route.query, ...RESET, rule: undefined } });
     else if (realId.value === id) await loadDetail();
-    message.success(`已放弃 ${cr.id} 里的本规则草稿`);
+    message.success('已放弃本次规则编辑');
     return;
   }
   setView('published');
@@ -263,6 +269,60 @@ const rule = computed<RuleDef>(() => {
   const e = edits[base.value.id];
   if (!e) return draftDef.value;
   return { ...draftDef.value, ...e.definition, autoStage: e.autoStage, conds: e.definition.conds ?? draftDef.value.conds.map((c, i) => ({ ...c, value: e.thresholds[i] ?? c.value })) };
+});
+function receiveAssistantPrefill(notify = false) {
+  if (!live.value) return;
+  if (readonly.value || newOpen.value || !!draftCR.value || Object.keys(edits).length) { if (notify) message.warning('请先处理当前编辑，再接收助手建议'); return; }
+  const prefill = consumeAssistantPrefill('rule' as AssistantTarget, useAppStore().ontologyId);
+  if (!prefill) return;
+  assistantNew.value = prefill.draft;
+  const mode = assistantText(prefill.draft, 'executionMode');
+  if (['auto', '自动执行'].includes(mode)) assistantNew.value.executionMode = 'auto';
+  if (['confirm', '待确认', '生成待确认'].includes(mode)) assistantNew.value.executionMode = 'confirm';
+  newForm.name = assistantText(prefill.draft, 'name').slice(0, 60);
+  newForm.objKind = '';
+  newOpen.value = true;
+  assistantForm = JSON.stringify(newForm); assistantPage = route.fullPath; assistantContext = dynamicContextKey();
+  resolveAssistantObject();
+}
+function resolveAssistantObject() {
+  if (!assistantNew.value || !newOpen.value || assistantPage !== route.fullPath || assistantContext !== dynamicContextKey() || assistantForm !== JSON.stringify(newForm) || newForm.objKind) return;
+  const value = assistantText(assistantNew.value, 'objKind');
+  const matches = remote.meta.objects.filter(o => [o.id, o.name, o.api].includes(value));
+  if (matches.length === 1) newForm.objKind = matches[0].id;
+  assistantForm = JSON.stringify(newForm);
+  const eventValue = assistantText(assistantNew.value, 'eventType');
+  const events = remote.meta.events.filter(e => e.objKind === newForm.objKind && [e.id, e.name].includes(eventValue));
+  if (events.length === 1) assistantNew.value.eventType = events[0].id;
+  const actionValue = assistantText(assistantNew.value, 'actionType');
+  const actions = actionTypes().filter(a => a.status === '已发布' && a.targetKind === newForm.objKind && [a.id, a.name, a.api].includes(actionValue));
+  if (actions.length === 1) assistantNew.value.actionType = actions[0].id;
+}
+function onAssistantEvent(event: Event) { if ((event as CustomEvent).detail?.target === 'rule') receiveAssistantPrefill(true); }
+onMounted(() => { window.addEventListener('assistant-prefill', onAssistantEvent); receiveAssistantPrefill(); });
+onScopeDispose(() => window.removeEventListener('assistant-prefill', onAssistantEvent));
+watch(() => remote.meta.objects, resolveAssistantObject);
+watch([() => remote.detail, () => assistantPending.value, () => remote.meta.events, () => draftDef.value], () => {
+  const pending = assistantPending.value, detail = remote.detail;
+  if (!pending || !detail || detail.id !== pending.id || !detail.draft || !draftDef.value) return;
+  if (edits[pending.id]) { assistantPending.value = null; return; }
+  const draft = pending.draft, edit = ensureEdits(), kind = assistantText(draft, 'triggerKind');
+  if (kind === '事件') {
+    const value = assistantText(draft, 'eventType');
+    const candidates = remote.meta.events.filter(e => e.objKind === detail.objKind && [e.id, e.name].includes(value));
+    edit.definition.trigger = { kind: '事件', eventId: candidates.length === 1 ? candidates[0].id : '', filter: '全部', text: '', enabled: false };
+  } else if (kind === '定时') {
+    edit.definition.trigger = { kind: '定时', cron: '', timezone: 'Asia/Shanghai', catchupMinutes: 0, text: '', enabled: false };
+  }
+  const action = assistantText(draft, 'actionType');
+  const matches = actionTypes().filter(a => a.status === '已发布' && a.targetKind === detail.objKind && [a.id, a.name, a.api].includes(action));
+  if (matches.length === 1) edit.autoStage.actionTypeId = matches[0].id;
+  const mode = assistantText(draft, 'executionMode');
+  if (['auto', '自动执行'].includes(mode)) edit.autoStage.executionMode = 'auto';
+  if (['confirm', '待确认', '生成待确认'].includes(mode)) edit.autoStage.executionMode = 'confirm';
+  edit.autoStage.enabled = false;
+  assistantNotes[pending.id] = assistantText(draft, 'condition');
+  assistantPending.value = null;
 });
 const definitionEditable = computed(() => isDraft.value && !!draftDef.value && !readonly.value && !savingDraft.value && remote.detail?.displayStatus !== '审核中');
 function updateDefinition(patch: RuleDefinitionPatch) {
@@ -293,15 +353,17 @@ async function saveDraft() {
     try {
       const r = await saveRuleDraft(id, { cr: cr.id, autoStage: e.autoStage, thresholds: e.thresholds, ...e.definition });
       if (!mounted || seq !== definitionSeq || ctx !== dynamicContextKey() || id !== base.value.id) return;
-      if (remote.detail?.id === base.value.id) remote.detail = { ...remote.detail, draft: r.draft };
-      delete edits[base.value.id];
-      // 变更单写接口：改动数以库为准（saveRuleDraft 已回写）
-      if (r.crChanges == null) cr.changes += 1;
+      delete edits[id];
+      forgetTarget(cr.id, 'rule', id);
+      useAppStore().ontologyVersion = r.ver;
+      setView('published');
+      await loadList();
+      if (realId.value === id) await loadDetail();
     } catch (err) { if (mounted && seq === definitionSeq && ctx === dynamicContextKey() && id === base.value.id) { saveError.value = crErrText(err); fail(err); } return; }
     finally { if (mounted && seq === definitionSeq && ctx === dynamicContextKey() && id === base.value.id) savingDraft.value = false; }
   } else cr.changes += 1;
   cr.updatedAt = nowText();
-  message.success(`已保存到草稿 ${cr.id}，发布前不影响线上规则`);
+  message.success(REAL_API ? '规则已保存并生效' : `已保存到草稿 ${cr.id}`);
 }
 
 /* 条件 */
@@ -447,9 +509,45 @@ const sampleCols = computed(() => [
 ]);
 
 /* 版本历史 */
+const comparison = ref<{ version: number; release: string; definition: RuleDef } | null>(null);
+const comparisonFields: { key: keyof RuleDef; label: string }[] = [
+  { key: 'name', label: '名称' }, { key: 'desc', label: '说明' }, { key: 'objKind', label: '对象类型' },
+  { key: 'conds', label: '条件' }, { key: 'logic', label: '条件逻辑' }, { key: 'expr', label: '表达式' },
+  { key: 'trigger', label: '触发方式' }, { key: 'dedupe', label: '去重' }, { key: 'cooldown', label: '冷却时间' },
+  { key: 'autoStage', label: '动作配置' },
+];
+function versionValue(value: unknown) { return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '—'); }
+async function compareVersion(version: number) {
+  const id = base.value.id, context = dynamicContextKey();
+  try {
+    const saved = await getRuleVersionSnapshot(id, version);
+    if (id === base.value.id && context === dynamicContextKey()) comparison.value = { version, ...saved };
+  } catch (error) { fail(error); }
+}
+watch([realId, dynamicContextKey], () => { comparison.value = null; });
+const restoring = ref(false);
+async function restoreVersion(version: number) {
+  if (restoring.value || readonly.value || draftCR.value || edits[base.value.id]) return;
+  const id = base.value.id, context = dynamicContextKey();
+  try {
+    const saved = await getRuleVersionSnapshot(id, version);
+    const ok = await confirm.ask({ title: '恢复历史规则版本', target: `${base.value.name} · v${version}`, okText: '恢复并生效', impact: `以 ${saved.release} 中的真实规则快照创建新版本，保留原版本与历史执行身份；历史引用、身份或权限不可用时将阻断。` });
+    if (!ok || id !== base.value.id || context !== dynamicContextKey()) return;
+    restoring.value = true;
+    const result = await restoreRuleVersion(id, version);
+    if (id !== base.value.id || context !== dynamicContextKey()) return;
+    useAppStore().ontologyVersion = result.ver;
+    comparison.value = null;
+    await Promise.all([loadList(), loadDetail(), loadOverview()]);
+    message.success(`已恢复为新版本，发布记录 ${result.ver}`);
+  } catch (error) { fail(error); }
+  finally { restoring.value = false; }
+}
+
 const versions = computed(() => (live.value ? remote.versions : ruleVersions(base.value, draftDef.value?.version)));
 const confirmers = computed(() => (live.value ? remote.meta.confirmers : CONFIRMERS));
-const mappingSources = computed(() => (live.value ? remote.meta.mappingSources : MAPPING_SOURCES));
+const mappingSources = computed(() => (live.value ? remote.meta.mappingSources : MAPPING_SOURCES)
+  .filter((source) => rule.value.trigger.kind !== '定时' || !source.startsWith('事件.')));
 
 // ---- 真接口：按当前选中 / 页签 / 筛选取数，失败给提示 ----
 let listSeq = 0;
@@ -480,7 +578,7 @@ const loadOverview = guard(() => realId.value, async () => {
 const loadHits = guard(() => (tab.value === 'hits' && realId.value ? `${realId.value}|${hrange.value}|${hq.page.value}|${hq.size.value}` : ''), () => listRuleHits(realId.value, hrange.value as '7d' | '30d', hq.page.value, hq.size.value), (v) => { remote.hits = v; if (v.page && v.page !== hq.page.value) hq.page.value = v.page; });
 const loadHit = guard(() => q('hit'), () => getRuleHit(q('hit')), (v) => { remote.hit = v as RuleHitDetailDto; }, () => { remote.hit = null; });
 if (live.value) {
-  watch(dynamicContextKey, () => { ++listSeq; ++replaySeq; for (const id of Object.keys(edits)) delete edits[id]; for (const id of Object.keys(titleNames)) delete titleNames[id]; defaultRuleId.value = ''; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = emptyRuleMeta(); remote.hits = { items: [], total: 0 }; remote.hits7 = 0; remote.recent = []; remote.hit = null; remote.replay = null; remote.versions = []; remote.staged = []; running.value = false; savingDraft.value = false; saveError.value = ''; }, { flush: 'sync' });
+  watch(dynamicContextKey, () => { assistantNew.value = null; assistantPending.value = null; for (const id of Object.keys(assistantNotes)) delete assistantNotes[id]; ++listSeq; ++replaySeq; for (const id of Object.keys(edits)) delete edits[id]; for (const id of Object.keys(titleNames)) delete titleNames[id]; defaultRuleId.value = ''; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = emptyRuleMeta(); remote.hits = { items: [], total: 0 }; remote.hits7 = 0; remote.recent = []; remote.hit = null; remote.replay = null; remote.versions = []; remote.staged = []; running.value = false; savingDraft.value = false; saveError.value = ''; }, { flush: 'sync' });
   const loadMeta = guard(() => dynamicContextKey(), getRulesMeta, (m) => { remote.meta = m; });
   watch(dynamicContextKey, loadMeta, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, kw, trig, stf, lpage], loadList, { immediate: true, flush: 'sync' });
@@ -525,22 +623,21 @@ const verCols = [
     </div>
 
     <div v-if="!live || realId" class="panel ru-detail">
-      <DraftBanner v-if="isDraft && draftCR" :draft="draftCR"
-        @submit="onDraftSubmit" @discard="onDraftDiscard" />
+      <div v-if="isDraft && draftCR" class="ru-draft-banner"><span>正在编辑规则</span><a @click="onDraftDiscard">放弃编辑</a></div>
       <div class="ru-head">
         <span class="t-16 fw-600 c-1">{{ rule.name }}</span>
         <span class="t-14 c-3 num">{{ rule.id }}</span>
         <span class="t-14 c-3 num">{{ isDraft ? `草稿 v${rule.version}（${base.version == null ? '未发布' : `已发布 v${base.version}`}）` : base.version == null ? '未发布' : `v${base.version}` }}</span>
-        <a-tooltip :title="ruleStatus(base).cr ? `所在变更单 ${ruleStatus(base).cr}` : undefined"><a-badge :status="ruleStatus(base).badge" :text="ruleStatus(base).text" /></a-tooltip>
+        <a-badge :status="ruleStatus(base).badge" :text="ruleStatus(base).text" />
         <a-segmented v-if="draftCR && !readonly" size="small" :value="isDraft ? 'draft' : 'published'"
-          :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draftCR.id}`, value: 'draft' }]"
+          :options="[{ label: '已生效', value: 'published' }, { label: '正在编辑', value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="ru-sp" />
         <span v-if="readonly" class="t-12 c-3">{{ reason }}</span>
         <a-tooltip :title="readonly ? reason : isDraft ? saveTip : ''">
-          <a-button v-if="!draftCR || readonly" type="primary" :disabled="readonly" @click="openChange(`${base.name}（${base.id}）`)">发起变更</a-button>
-          <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
-          <a-button v-else type="primary" :loading="savingDraft" :disabled="missingReq.length > 0 || !draftDef || (live && !definitionEditable)" @click="saveDraft">保存到草稿</a-button>
+          <a-button v-if="!draftCR || readonly" type="primary" :loading="openingEdit" :disabled="readonly" @click="openChange(`${base.name}（${base.id}）`)">编辑规则</a-button>
+          <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑</a-button>
+          <a-button v-else type="primary" :loading="savingDraft" :disabled="missingReq.length > 0 || !draftDef || (live && !definitionEditable)" @click="saveDraft">保存并生效</a-button>
         </a-tooltip>
         <span v-if="!readonly && missingReq.length" class="t-12 c-warning">缺少必填参数：{{ missingReq.join('、') }}</span>
       </div>
@@ -562,6 +659,7 @@ const verCols = [
           <a @click="tab = 'replay'; setQ({ tab: 'replay', rver: 'draft' })">去回放试跑</a>
         </div>
         <div class="ru-sec t-14 fw-600">{{ rule.desc }}</div>
+        <a-alert v-if="assistantNotes[base.id]" type="info" show-icon message="助手建议条件：请在下方选择字段与比较方式" :description="assistantNotes[base.id]" />
         <RuleDefinitionEditor v-if="live" :rule="rule" :meta="remote.meta" :editable="definitionEditable" section="conditions" :condition-changed="!!edits[base.id]?.definition.conds && !edits[base.id]?.definition.expr" @update="updateDefinition" />
         <template v-else>
         <div class="ru-tool">
@@ -657,11 +755,10 @@ const verCols = [
           <a-descriptions :column="2" bordered size="small">
             <a-descriptions-item label="动作类型">{{ actType ? `${actType.name} · ${actType.version}` : rule.output === '告警' ? '无（只产生告警）' : '无（只通知）' }}</a-descriptions-item>
             <a-descriptions-item label="外部系统">{{ actSystem }}</a-descriptions-item>
-            <a-descriptions-item label="审批">{{ actType?.approval ?? '--' }}</a-descriptions-item>
             <a-descriptions-item label="幂等键"><span class="num">{{ actType?.idemKey ?? '--' }}</span></a-descriptions-item>
           </a-descriptions>
           <div class="ru-sec t-14 fw-600 ru-sec-row">
-            <span>自动暂存动作 <InfoTip text="命中后按下面的映射生成动作，放进动作中心“待确认”，由确认人逐条确认后才提交外部系统；规则不会直接执行动作。" /></span>
+            <span>命中后生成动作 <InfoTip text="选择待确认或自动执行。只有动作自身策略也允许自动执行时才会自动提交；更严格的审批和确认策略优先。" /></span>
             <a-tooltip :title="editTip">
               <a-switch :checked="stageEdit.enabled" :disabled="!isDraft" size="small" @change="(v: any) => (ensureEdits().autoStage.enabled = !!v)" />
             </a-tooltip>
@@ -672,7 +769,12 @@ const verCols = [
             <span class="t-12 c-3">确认人</span>
             <a-select :value="stageEdit.confirmer || undefined" :options="confirmers.map((c) => ({ value: c, label: c }))" :disabled="!isDraft || !stageEdit.enabled" placeholder="选择确认人" size="small"
               @change="(v: any) => (ensureEdits().autoStage.confirmer = v)" />
+            <span class="t-12 c-3">执行方式</span>
+            <a-select :value="stageEdit.executionMode ?? 'confirm'" :options="[{ value: 'confirm', label: '生成待确认' }, { value: 'auto', label: '自动执行' }]" :disabled="!definitionEditable || !stageEdit.enabled" size="small"
+              @change="(v: 'confirm' | 'auto') => (ensureEdits().autoStage.executionMode = v)" />
           </div>
+          <div class="t-12 c-3">动作自身的确认或审批策略优先，选择自动执行也可能生成待确认或待审批动作。</div>
+          <div v-if="rule.trigger.kind === '定时'" class="t-12 c-3">定时触发不支持使用事件字段作为动作参数来源。</div>
           <a-table :columns="mapCols" :data-source="mappingRows" :pagination="false" size="small" row-key="param" class="ru-map"
             :locale="{ emptyText: '先选择动作类型' }">
             <template #bodyCell="{ column, record }">
@@ -720,7 +822,7 @@ const verCols = [
       <!-- 回放试跑 -->
       <div v-else-if="tab === 'replay'" class="ru-body">
         <div v-if="metricBumped.length" class="ru-remind t-12">
-          <span class="c-warning">草稿把{{ metricBumped.map((m) => `${m.name}口径 v${m.from} → v${m.to}`).join('、') }}：口径升版后需回放试跑，确认命中变化再提交审核</span>
+          <span class="c-warning">草稿把{{ metricBumped.map((m) => `${m.name}口径 v${m.from} → v${m.to}`).join('、') }}：口径升版后需回放试跑，确认命中变化再发布</span>
         </div>
         <div class="ru-tool">
           <a-segmented v-if="live" v-model:value="rmode" :options="[{ label: '当前数据推演', value: 'snapshot' }, { label: '历史事件回放', value: 'events' }]" size="small" />
@@ -772,20 +874,27 @@ const verCols = [
       <div v-else class="ru-body">
         <div class="ru-tool">
           <span class="t-12 c-2">共 {{ versions.length }} 个版本</span>
-          <InfoTip text="规则版本随本体整版发布；当前尚未提供单条规则的版本对比和回滚接口。" />
+          <InfoTip text="仅可对比实际保存的规则版本；缺少真实快照的历史版本不可恢复。" />
         </div>
         <a-table :columns="verCols" :data-source="versions" :pagination="false" size="middle" row-key="ver">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'ver'"><span class="num">v{{ record.ver }}</span></template>
             <template v-else-if="column.key === 'status'"><a-badge :status="record.status === '草稿' ? 'warning' : 'default'" :text="record.status" /></template>
             <template v-else-if="column.key === 'op'">
-              <a-space><a-tooltip title="尚未提供规则版本对比接口"><a-button type="link" size="small" disabled>对比</a-button></a-tooltip><a-tooltip v-if="record.status === '已替代'" title="尚未提供规则版本回滚接口"><a-button type="link" size="small" disabled>回滚</a-button></a-tooltip></a-space>
+              <a-space><a-button type="link" size="small" :disabled="!live || record.status === '草稿'" @click="compareVersion(record.ver)">对比</a-button><a-tooltip v-if="record.status === '已替代'" :title="readonly ? reason : draftCR ? '请先处理未完成的编辑' : '恢复为新版本'"><a-button type="link" size="small" :loading="restoring" :disabled="!live || readonly || !!draftCR || restoring" @click="restoreVersion(record.ver)">回滚</a-button></a-tooltip></a-space>
             </template>
           </template>
         </a-table>
       </div>
     </div>
   </div>
+
+  <a-modal :open="!!comparison" :title="`规则版本对比 · v${comparison?.version} / 当前`" :footer="null" :width="900" @cancel="comparison = null">
+    <p class="t-12 c-3">历史定义来源：{{ comparison?.release }} 的实际保存快照。</p>
+    <a-table v-if="comparison" :data-source="comparisonFields" :pagination="false" row-key="key" size="small" :columns="[{ title: '字段', dataIndex: 'label', width: 130 }, { title: `v${comparison.version}`, key: 'old' }, { title: '当前', key: 'current' }]">
+      <template #bodyCell="{ column, record }"><pre v-if="column.key === 'old'" style="white-space: pre-wrap; overflow-wrap: anywhere; margin: 0">{{ versionValue(comparison.definition[record.key as keyof RuleDef]) }}</pre><pre v-else-if="column.key === 'current'" style="white-space: pre-wrap; overflow-wrap: anywhere; margin: 0">{{ versionValue(base[record.key as keyof RuleDef]) }}</pre></template>
+    </a-table>
+  </a-modal>
 
   <a-drawer :open="!!hitOpen" :width="520" :title="hitOpen ? (hitOpen.alertId ? `告警 ${hitOpen.id}` : `命中 ${hitOpen.id}`) : ''" @close="setQ({ hit: undefined })">
     <template v-if="hitOpen">
@@ -810,11 +919,18 @@ const verCols = [
       <StatusTimeline :items="hitTimeline" />
     </template>
   </a-drawer>
-  <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" @ok="onChangeOk" />
-  <a-modal v-model:open="newOpen" title="新建规则" ok-text="下一步：选择变更单" @ok="onNewOk">
+  <a-modal v-model:open="newOpen" title="新建规则" ok-text="开始编辑" @ok="onNewOk" @cancel="assistantNew = null">
     <a-form layout="vertical">
       <a-form-item label="对象类型" required><a-select v-model:value="newForm.objKind" :options="objKindOptions" show-search option-filter-prop="label" /></a-form-item>
       <a-form-item label="规则名称"><a-input v-model:value="newForm.name" placeholder="未命名规则" :maxlength="60" /></a-form-item>
+      <template v-if="assistantNew">
+        <a-form-item label="建议触发方式"><a-select v-model:value="assistantNew.triggerKind" :options="[{ value: '定时', label: '定时' }, { value: '事件', label: '事件' }]" placeholder="请选择触发方式" /></a-form-item>
+        <a-form-item v-if="assistantNew.triggerKind === '事件'" label="建议事件"><a-select v-model:value="assistantNew.eventType" :options="remote.meta.events.filter(e => e.objKind === newForm.objKind).map(e => ({ value: e.id, label: `${e.name} · ${e.id}` }))" placeholder="选择已发布事件" /></a-form-item>
+        <a-form-item label="建议动作"><a-select v-model:value="assistantNew.actionType" :options="actionTypes().filter(a => a.status === '已发布' && a.targetKind === newForm.objKind).map(a => ({ value: a.id, label: `${a.name} · ${a.id}` }))" placeholder="选择动作" allow-clear /></a-form-item>
+        <a-form-item label="建议执行方式"><a-select v-model:value="assistantNew.executionMode" :options="[{ value: 'confirm', label: '生成待确认' }, { value: 'auto', label: '自动执行' }]" placeholder="选择执行方式" /></a-form-item>
+      </template>
+      <a-form-item v-if="assistantNew" label="助手建议条件（仅作参考）"><a-textarea v-model:value="assistantNew.condition" :rows="3" placeholder="请在下一步选择明确条件" /></a-form-item>
+      <p v-if="assistantNew" class="t-12 c-3">进入编辑后请核对触发方式、条件和动作。触发及动作默认停用，需要明确配置并保存。</p>
     </a-form>
   </a-modal>
 </template>
@@ -838,6 +954,7 @@ const verCols = [
 .ru-detail { flex: 1; min-width: 0; }
 .ru-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .ru-sp { flex: 1; }
+.ru-draft-banner { display: flex; justify-content: space-between; padding: 8px 16px; background: var(--g3); }
 .ru-save-error { margin: 0 16px; }
 .ru-tabs { padding: 0 16px; flex: none; }
 .ru-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }

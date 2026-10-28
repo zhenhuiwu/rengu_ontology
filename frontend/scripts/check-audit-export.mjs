@@ -13,7 +13,7 @@ function load(path, imports, globals = {}, expose = '') {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   });
   const exports = {};
-  runInNewContext(outputText, { exports, URLSearchParams, console, ...globals, require: (name) => {
+  runInNewContext(outputText, { exports, URLSearchParams, Headers, AbortController, Response, DOMException, console, ...globals, require: (name) => {
     assert.ok(name in imports, `Missing dependency ${name}`);
     return imports[name];
   } });
@@ -34,12 +34,12 @@ const http = load('api/http.ts', { './config': { isReal: () => real, SWITCH_PREF
 http.setApiContext(() => context);
 const api = http.apiClient('admin');
 assert.equal(await (await api.getBlob('/file', { query: { x: 1 } })).text(), 'CSV');
-assert.equal(calls[0].options.headers['X-Demo-As'], 'U010001');
+assert.equal(calls[0].options.headers.get('X-Demo-As'), 'U010001');
 assert.equal(calls[0].url, '/api/admin/v1/file?x=1&ver=v1&previewAs=U010006');
 context = { demoAs: 'viewer' };
 for (const headers of [{ 'X-Demo-As': 'admin' }, { 'x-demo-as': 'admin' }, { 'X-Demo-As': '' }]) {
   await api.getBlob('/file', { headers });
-  const sent = calls.at(-1).options.headers;
+  const sent = Object.fromEntries(calls.at(-1).options.headers);
   const names = Object.keys(sent).filter((name) => name.toLowerCase() === 'x-demo-as');
   assert.equal(names.length, 1);
   assert.equal(sent[names[0]], Object.values(headers)[0], 'explicit identity, even empty, must win');

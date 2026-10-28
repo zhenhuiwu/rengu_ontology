@@ -414,7 +414,7 @@ async function doStage() {
       { label: '确认人', value: ME.value },
       { label: '推演基于', value: `本体 ${s.baseVer} · 运行于 ${s.result?.ranAt}` },
     ],
-    impact: '只生成“待确认”动作，不提交审批、不写外部系统。需要你在动作中心逐条确认提交后才会进入审批；未确认前可撤回。',
+    impact: '只生成“待确认”动作，不写外部系统。需要你在动作中心逐条确认执行；未确认前可撤回。',
   });
   if (ctx !== dynamicContextKey()) return;
   if (!ok) { planOpen.value = true; return; } // 取消确认卡：回到预览，勾选保持不变

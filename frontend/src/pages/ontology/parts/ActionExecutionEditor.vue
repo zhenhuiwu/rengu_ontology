@@ -19,7 +19,7 @@ const standard = computed(() => props.section === 'effects' && model.value.kind 
 const isRelation = computed(() => props.section === 'edits' && model.value.op === '关联');
 function targets(kind?: string) {
   const obj = options.value.objects.find(o => o.id === kind);
-  return [ ...(kind === props.action.targetKind ? [{ value: 'context', label: '当前动作目标对象' }] : []),
+  return [ ...([props.action.targetKind, props.action.targetApi, props.action.target].some(value => value && [kind, obj?.api, obj?.name].includes(value)) ? [{ value: 'context', label: '当前动作目标对象' }] : []),
     ...props.params.filter(p => p.type.startsWith('对象引用 · ') && [kind, obj?.api, obj?.name].includes(p.type.split(' · ')[1]))
       .map(p => ({ value: p.api, label: `参数：${p.name}` })) ];
 }
@@ -28,6 +28,9 @@ const toTargets = computed(() => targets(relation.value?.to));
 const source = (key: string) => key === 'context' ? { context: 'id' } : { param: key };
 const sourceKey = (value: any) => value?.context === 'id' ? 'context' : value?.param ?? '';
 function hydrate() {
+  const candidates = isRelation.value ? options.value.relations : options.value.objects;
+  const matches = candidates.filter(item => item.id === model.value.obj || item.name === model.value.obj || ('api' in item && item.api === model.value.obj));
+  if (matches.length === 1) model.value.obj = matches[0].id;
   const raw = props.section === 'edits' ? model.value.field : model.value.note;
   legacy.value = '';
   if (!raw || standard.value) { assignments.value = []; return; }
@@ -57,8 +60,8 @@ function validSource(value: Record<string, any>): boolean {
   if (!value || typeof value !== 'object') return false;
   if ('param' in value) return props.params.some(p => p.api === value.param);
   if ('value' in value) return true;
-  return !!options.value.functions.find(f => f.id === value.function && f.version === value.version)
-    && Object.values(value.inputs ?? {}).every(v => validSource(v as Record<string, any>));
+  const fn = options.value.functions.find(f => f.id === value.function && f.version === value.version);
+  return !!fn && fn.inputs.every(input => validSource(value.inputs?.[input.name]));
 }
 function validate() {
   sync();
@@ -76,8 +79,8 @@ function validate() {
   if (isRelation.value) return toTargets.value.some(t => t.value === relationTarget.value) || invalid('请选择关联目标对象');
   if (props.section === 'effects' && !(model.value.kind === '事件' ? !!event.value : options.value.targets.some(t => t.id === model.value.target && t.actions.includes(props.action.id)))) return invalid('请选择有效的已发布或已配置目标');
   if (props.section === 'edits' && !assignments.value.length) return invalid('请至少添加一项属性赋值');
-  const missing = assignments.value.findIndex(r => !r.field || !validSource(r.source));
-  if (missing >= 0) return invalid(`第 ${missing + 1} 项：${!assignments.value[missing].field ? '请选择映射字段' : '请完整填写取值参数、固定值或计算函数版本与输入'}`);
+  const missing = assignments.value.findIndex(r => !r.field || ((props.section === 'edits' || model.value.kind === '事件') && !fields.value.some(f => f.api === r.field)) || !validSource(r.source));
+  if (missing >= 0) return invalid(`第 ${missing + 1} 项：请检查映射字段和取值参数、固定值或函数输入`);
   if (new Set(assignments.value.map(r => r.field)).size !== assignments.value.length) return invalid('同一字段只能赋值一次，请删除重复项');
   return true;
 }
@@ -93,8 +96,8 @@ onMounted(async () => {
   <a-spin :spinning="loading">
     <a-alert v-if="validationError" type="error" :message="validationError" show-icon role="alert" />
     <a-alert v-if="error" type="error" :message="error" show-icon />
-    <a-alert v-else-if="legacy" type="warning" message="原定义尚无可执行映射，保留内容如下。重新配置后保存到变更单。" show-icon>
-      <template #description><p>{{ legacy }}</p><a-button size="small" @click="reset">重新配置</a-button></template>
+    <a-alert v-else-if="legacy" type="warning" message="原定义尚无可执行映射，请重新选择对象和字段。" show-icon>
+      <template #description><a-button size="small" @click="reset">重新配置</a-button></template>
     </a-alert>
     <a-form layout="vertical" class="execution-form">
       <template v-if="section === 'edits'">
@@ -112,7 +115,7 @@ onMounted(async () => {
         <a-form-item v-if="isRelation" label="关联目标对象" required><a-select v-model:value="relationTarget" :options="toTargets" /></a-form-item>
         <template v-if="!isRelation">
           <div v-for="(row, index) in assignments" :key="index" class="assignment">
-            <a-select v-if="fields.length" v-model:value="row.field" aria-label="映射字段" placeholder="选择属性/载荷字段" :options="fields.map(f => ({value:f.api,label:`${f.name}（${f.api}）`}))" />
+            <a-select v-if="section === 'edits' || model.kind === '事件'" v-model:value="row.field" aria-label="映射字段" placeholder="选择属性/载荷字段" :options="fields.map(f => ({value:f.api,label:`${f.name}（${f.api}）`}))" />
             <a-input v-else v-model:value="row.field" aria-label="载荷字段名称" placeholder="载荷字段名称" />
             <ActionValueSource v-model="row.source" :params="params" :functions="options.functions" />
             <a-button danger type="text" @click="assignments.splice(index, 1)">删除</a-button>

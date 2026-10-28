@@ -28,10 +28,11 @@ for(const kind of ['action','event']){
  };
  const deps={vue,'vue-router':{useRoute:()=>route,useRouter:()=>({replace:({query})=>{route.query=query;return Promise.resolve();}})},'ant-design-vue':{message:{error:e=>errors.push(String(e)),success(){},warning(){}}},'@ant-design/icons-vue':{},'@/api/action':api,'@/api/http':{currentApiContext:()=>ctx,isApiError:()=>false},
  '@/composables/useDrawer':{useDrawer:()=>({})},'@/composables/usePagedQuery':{usePagedQuery:({defaultSize})=>({page:vue.ref(1),size:vue.ref(defaultSize),defaultSize})},'@/composables/useUnsavedGuard':{useUnsavedGuard:()=>f=>f()},'@/stores/confirm':{useConfirmStore:()=>({})},
+ './parts/useStaticCr': { draftFields: () => ({}), useStaticCr: () => ({ items: vue.ref([]), loading: vue.ref(false), error: vue.ref(''), head: vue.ref(null) }) },
  './parts/useDraftView':{useDraftView:()=>({draft,isDraft,readonly:vue.ref(false),editTip:vue.ref(''),reason:vue.ref('')})},
  '@/mock/paginate':{paginate:(rows,{page,size})=>({items:rows.slice((page-1)*size,page*size),total:rows.length})},'@/mock/actionEvent':{ACTION_TYPES:[],EVENT_TYPES:[],withSystem:x=>x},'@/mock/changes':{},'@/mock/dynamic':{},'@/mock/extsys':{},'@/mock/format':{},'@/theme':{},'@/mock/releases':{},
  };
- deps['./useDraftEdits']=load('pages/ontology/useDraftEdits.ts',{vue,'ant-design-vue':deps['ant-design-vue'],'vue-router':deps['vue-router'],'@/composables/useUnsavedGuard':deps['@/composables/useUnsavedGuard'],'@/stores/confirm':deps['@/stores/confirm']});
+ deps['./useDraftEdits']=load('pages/ontology/useDraftEdits.ts',{vue,'@/api/http':deps['@/api/http'],'ant-design-vue':deps['ant-design-vue'],'vue-router':deps['vue-router'],'@/composables/useUnsavedGuard':deps['@/composables/useUnsavedGuard'],'@/stores/confirm':deps['@/stores/confirm']});
  const names=kind==='action'?'ready,cur,LPAGE,lpage,listTotal,params,pq,runs,rq,stats,paramSec,canEdit':'ready,cur,LPAGE,lpage,listTotal,fields,fq,ready,canEdit';
  let page=scope.run(()=>load(`pages/ontology/${kind==='action'?'ActionTypes':'EventTypes'}.vue`,deps,names));await tick();assert.equal(page.LPAGE,10);assert.equal(page.ready.value,true);
  const q=kind==='action'?page.pq:page.fq,table=kind==='action'?page.params:page.fields;

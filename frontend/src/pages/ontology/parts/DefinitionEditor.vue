@@ -7,21 +7,21 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { currentApiContext } from '@/api/http';
 import { definitionChoices, definitionDetail, definitionProperties, definitionContext, saveDefinition, type DefinitionKind, type DefinitionValues, type DefinitionProperty, type DefinitionOption } from '@/api/definitionForms';
-import { fetchCR, fetchCRItems, isStaticReal } from '@/api/static';
+import { fetchCR, fetchCRItems, fetchCurrentAfterWrite, isStaticReal } from '@/api/static';
 import { draftFields, draftRows } from './useStaticCr';
-import StartChangeModal from './StartChangeModal.vue';
 import AppPagination from '@/components/AppPagination.vue';
-const props = defineProps<{ kind: DefinitionKind; targetId?: string; crId?: string; newTarget?: boolean }>();
+const props = defineProps<{ kind: DefinitionKind; targetId?: string; crId?: string; newTarget?: boolean; assistantDraft?: Record<string, unknown> }>();
 const open = defineModel<boolean>('open', { default: false });
-const emit = defineEmits<{ saved: [result: { id: string; crId: string }] }>();
+const emit = defineEmits<{ saved: [result: { id: string; crId: string; published?: boolean }] }>();
 const { readonly, reason } = useReadonly();
 const confirm = useConfirmStore();
 const kindName = computed(() => ({ object: '对象类型', metric: '指标', dimension: '维度与字典' })[props.kind]);
 const opts = ref<{ join?: string; title?: string; desc?: string }>();
-const choose = computed({ get: () => open.value && !props.targetId && !opts.value, set: (v: boolean) => { if (!v && !opts.value) open.value = false; } });
-const visible = computed(() => open.value && (!!props.targetId || !!opts.value));
+const visible = computed(() => open.value);
 const resumeApi = ref('');
 const loading = ref(false), busy = ref(false), error = ref(''), sourceError = ref('');
+const assistantSourceHint = ref('');
+const lockVersion = ref<number>();
 const original = ref<DefinitionValues>(), originalProperties = ref<DefinitionProperty[]>([]), resume = ref<string>();
 const values = reactive<DefinitionValues>({ name: '', api: '', group: '', owner: '' });
 const defaultRange = computed(() => values.defaultRange as { kind?: string; days?: number } | null | undefined);
@@ -51,13 +51,15 @@ async function load() {
   const my = ++seq, key = contextKey();
   if (!visible.value) return;
   if (!isStaticReal()) { error.value = '定义表单仅用于真实接口模式'; loading.value = false; return; }
-  loading.value = true; error.value = ''; choices.metricGroups = []; sourceProperties.value = []; initialSnapshot.value = '';
+  loading.value = true; error.value = ''; assistantSourceHint.value = ''; lockVersion.value = undefined; choices.metricGroups = []; sourceProperties.value = []; initialSnapshot.value = '';
   const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', timeField: '', defaultFilter: '', defaultRange: null, dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
   Object.keys(values).forEach((k) => delete values[k]); Object.assign(values, defaults);
   properties.value = []; propertyPage.value = 1; variants.value = []; levels.value = []; original.value = undefined; originalProperties.value = [];
   try {
+    const version = await fetchCurrentAfterWrite();
     const options = await definitionChoices(props.kind);
     if (my !== seq || key !== contextKey()) return;
+    lockVersion.value = version.lockVersion;
     Object.assign(choices, options);
     if (props.targetId) {
       let fields = defaults, baseProperties: DefinitionProperty[] = [], items;
@@ -86,6 +88,28 @@ async function load() {
     levels.value = ((values.levels ?? []) as Level[]).map(({ name, api, source, note }) => ({ name, api, source, note }));
     previousLevels.value = levels.value.map((l) => ({ ...l }));
     initialSnapshot.value = formSignature();
+    if (!props.targetId && props.assistantDraft) {
+      const draft = props.assistantDraft;
+      for (const field of ['name', 'api', 'group', 'domain', 'desc', 'pk', 'unit', 'formula', 'timeField', 'kind', 'object', 'attr'] as const) {
+        if (typeof draft[field] === 'string') values[field] = draft[field];
+      }
+      if (props.kind === 'object' && Array.isArray(draft.properties)) {
+        properties.value = draft.properties.filter(p => p && typeof p === 'object').map(p => ({
+          api: String(p.api ?? ''), name: String(p.name ?? ''), type: String(p.type ?? 'string'),
+          group: '其他', source: '', desc: String(p.desc ?? ''), title: !!p.title,
+          visibility: 'normal' as const, searchable: false, filterable: false, sortable: false, listed: true,
+        }));
+      }
+      if (props.kind === 'dimension' && typeof draft.object === 'string' && draft.object.trim()) {
+        const requested = draft.object.trim();
+        const matches = choices.objects.filter(o => [o.id, o.api, o.name].includes(requested));
+        if (matches.length === 1) values.object = matches[0].id;
+        else { values.object = ''; values.attr = ''; assistantSourceHint.value = `助手建议来源对象“${requested}”未唯一匹配，请手动选择。`; }
+      }
+      if (props.kind === 'dimension' && Array.isArray(draft.levels)) {
+        levels.value = draft.levels.filter(l => l && typeof l === 'object').map(l => ({ name: String(l.name ?? ''), api: String(l.api ?? ''), source: String(l.source ?? ''), note: String(l.note ?? '') }));
+      }
+    }
   } catch (e) { if (my === seq && key === contextKey()) error.value = e instanceof Error ? e.message : String(e); }
   finally { if (my === seq && key === contextKey()) loading.value = false; }
 }
@@ -93,7 +117,17 @@ async function loadSourceProperties() {
   const id = values.object;
   const my = ++sourceSeq, key = contextKey(); sourceProperties.value = []; sourceError.value = '';
   if (props.kind !== 'dimension' || !id || !visible.value) return;
-  try { const rows = await definitionProperties(String(id)); if (my === sourceSeq && key === contextKey() && visible.value) sourceProperties.value = rows; }
+  try {
+    const rows = await definitionProperties(String(id));
+    if (my !== sourceSeq || key !== contextKey() || !visible.value) return;
+    sourceProperties.value = rows;
+    const wanted = values.attr;
+    if (!props.targetId && props.assistantDraft && typeof wanted === 'string' && wanted) {
+      const matches = rows.filter(p => [p.api, p.name].includes(wanted));
+      if (matches.length === 1) { values.attr = matches[0].api; values.column = matches[0].source ?? ''; }
+      else { values.attr = ''; values.column = ''; assistantSourceHint.value = `助手建议来源属性“${wanted}”未唯一匹配，请手动选择。`; }
+    }
+  }
   catch (e) { if (my === sourceSeq && key === contextKey() && visible.value) sourceError.value = `来源属性加载失败：${e instanceof Error ? e.message : String(e)}`; }
 }
 watch(() => values.object, loadSourceProperties);
@@ -118,7 +152,9 @@ const validation = computed(() => {
     if (properties.value.filter((p) => p.title).length > 1) return '标题属性只能有一个';
   }
   if (props.kind === 'dimension') {
+    if (!['维度', '码表'].includes(String(values.kind))) return '请选择有效的维度或码表类型';
     if (values.kind === '维度' && !values.object) return '请选择来源对象';
+    if (values.object && !choices.objects.some(o => o.id === values.object)) return '请选择真实来源对象';
     if (values.attr && !sourceProperties.value.some((p) => p.api === values.attr)) return '请选择该对象的真实属性';
     if (levels.value.length > 32) return '层级至多32行';
     if (levels.value.some((l) => !l.name.trim() || !l.api.trim())) return '层级名称和API名必填';
@@ -147,20 +183,19 @@ async function save() {
   const key = contextKey(), my = seq; busy.value = true;
   try {
     const removed = props.kind === 'object' ? previousProperties.value.filter((p) => !properties.value.some((v) => v.api === p.api)).map((p) => p.name) : props.kind === 'dimension' ? previousLevels.value.filter((l) => !levels.value.some((v) => v.api === l.api)).map((l) => l.name) : [];
-    if (removed.length && !await confirm.ask({ title: '确认从定义草稿中移除', target: values.name, fields: [{ label: '移除条目', value: removed.join('、') }], impact: '改动先保存到草稿，审核并整版发布后生效；已发布定义在发布前保持可用。', okText: '保存移除改动', danger: true })) return;
+    if (removed.length && !await confirm.ask({ title: '确认从定义草稿中移除', target: values.name, fields: [{ label: '移除条目', value: removed.join('、') }], impact: '改动先保存到草稿，发布后生效；已发布定义在发布前保持可用。', okText: '保存移除改动', danger: true })) return;
     if (my !== seq || key !== contextKey() || readonly.value) return;
     const payload = { ...values, levels: levels.value.map(({ name, api, source, note }) => ({ name, api, source, note })), variants: variants.value.map((v) => ({ code: v.code, label: v.label.trim(), default: v.default })) };
     const rows = properties.value.map((p) => ({ ...p, pk: p.api === values.pk ? true : p.pk ? false : undefined, ...(p.visibility === 'hidden' ? { filterable: false, sortable: false, listed: false } : {}), ...(p.sensitive ? { filterable: false } : {}), ...(p.type === 'long_text' ? { filterable: false, sortable: false } : {}) }));
-    const result = await saveDefinition(props.kind, payload, rows, original.value, originalProperties.value, opts.value ?? { join: props.crId }, resume.value, previousProperties.value);
+    const result = await saveDefinition(props.kind, payload, rows, original.value, originalProperties.value, opts.value ?? { join: props.crId }, resume.value, previousProperties.value, lockVersion.value);
     if (my !== seq || key !== contextKey()) return;
     initialSnapshot.value = formSignature();
-    message.success(`已保存到草稿 ${result.crId}，审核发布后生效`); emit('saved', result); open.value = false;
+    message.success('已保存并生效'); emit('saved', result); open.value = false;
   } catch (e) { if (my === seq && key === contextKey()) { resume.value = (e as { crId?: string }).crId ?? resume.value; if (resume.value && !resumeApi.value) resumeApi.value = values.api; message.error(`${e instanceof Error ? e.message : String(e)}${resume.value ? `（草稿 ${resume.value}，输入已保留）` : ''}`); } }
   finally { if (my === seq && key === contextKey()) busy.value = false; }
 }
 </script>
 <template>
-  <StartChangeModal v-model:open="choose" :target-name="`新建${kindName}`" @ok="(o) => opts = o" />
   <a-drawer :open="visible" :title="`${targetId ? '编辑' : '新建'}${kindName}`" :width="1000" :closable="!busy" :mask-closable="!busy" @close="close">
     <a-alert v-if="readonly" type="warning" :message="reason" show-icon />
     <a-alert v-if="error" type="error" :message="error" show-icon><template #action><a-button size="small" @click="load">重试加载</a-button></template></a-alert>
@@ -177,8 +212,8 @@ async function save() {
           <div class="definition-grid">
             <a-form-item label="业务域"><a-input v-model:value="values.domain" :maxlength="64" /></a-form-item>
             <a-form-item label="冲突策略"><a-select v-model:value="values.conflict" :options="['用户编辑优先','源系统优先'].map((v) => ({ value: v }))" /></a-form-item>
-            <a-form-item label="数据连接（导入时填入）"><a-input v-model:value="values.source" disabled /></a-form-item>
-            <a-form-item label="源表（导入时填入）"><a-input v-model:value="values.table" disabled /></a-form-item>
+            <a-form-item label="数据连接"><a-input v-model:value="values.source" placeholder="数据连接编号" /></a-form-item>
+            <a-form-item label="源表"><a-input v-model:value="values.table" placeholder="schema.表名" /></a-form-item>
             <a-form-item label="主键属性"><a-select v-model:value="values.pk" allow-clear :options="properties.filter((p) => p.api).map((p) => ({ value: p.api, label: p.name || p.api }))" /></a-form-item>
             <a-form-item label="同步说明"><a-input v-model:value="values.sync" :maxlength="128" /></a-form-item>
           </div>
@@ -207,15 +242,17 @@ async function save() {
           <div v-for="(v, i) in variants" :key="i" class="definition-variant"><a-select v-model:value="v.code" :options="metricOptions" placeholder="已发布指标" /><a-input v-model:value="v.label" placeholder="口径标签" :maxlength="64" /><span class="t-12 c-3">{{ variantTarget(v.code)?.api ?? '—' }} · {{ variantTarget(v.code)?.version ?? '—' }}</span><a-radio :checked="v.default" @change="setDefault(i)">默认</a-radio><a-button size="small" @click="variants.splice(i, 1)">移除</a-button></div>
         </template>
         <template v-else>
+          <a-alert v-if="assistantSourceHint" type="warning" :message="assistantSourceHint" show-icon />
           <div class="definition-grid"><a-form-item label="类型"><a-select v-model:value="values.kind" :options="[{ value: '维度' }, { value: '码表' }]" /></a-form-item><a-form-item label="来源对象" :required="values.kind === '维度'"><a-select v-model:value="values.object" :allow-clear="values.kind === '码表'" :placeholder="values.kind === '码表' ? '可选，留空作为独立码表' : '请选择来源对象'" :options="objectOptions" @change="values.object = values.object || ''; values.attr = ''; values.column = ''" /></a-form-item><a-form-item label="来源属性"><a-select v-model:value="values.attr" allow-clear :disabled="!values.object" :options="propertyOptions" @change="changeAttr" /></a-form-item><a-form-item label="源列"><a-input v-model:value="values.column" disabled /></a-form-item><a-form-item label="取值来源"><a-input v-model:value="values.valueSrc" :maxlength="256" /></a-form-item><a-form-item label="同步说明"><a-input v-model:value="values.sync" :maxlength="128" /></a-form-item></div>
           <a-form-item label="说明"><a-textarea v-model:value="values.desc" :rows="2" /></a-form-item>
           <div class="definition-heading"><span class="t-14 fw-600">层级（从上到下）</span><a-button size="small" :disabled="levels.length >= 32" @click="levels.push({ name: '', api: '', source: '', note: '' })">新增层级</a-button></div>
-          <div v-for="(l, i) in levels" :key="i" class="definition-row"><div class="definition-grid"><a-input v-model:value="l.name" :maxlength="64" placeholder="层级名称" /><a-input v-model:value="l.api" :maxlength="64" placeholder="API名" /><a-input v-model:value="l.source" :maxlength="256" placeholder="来源说明" /><a-input v-model:value="l.note" :maxlength="4000" placeholder="层级说明" /></div><a-space><a-button size="small" :disabled="i === 0" @click="moveLevel(i, -1)">上移</a-button><a-button size="small" :disabled="i === levels.length-1" @click="moveLevel(i, 1)">下移</a-button><a-button size="small" @click="levels.splice(i, 1)">移除</a-button></a-space></div>
+          <div class="t-12 c-3">已有层级名称用于关联取值，暂不支持修改名称。</div>
+          <div v-for="(l, i) in levels" :key="i" class="definition-row"><div class="definition-grid"><a-input v-model:value="l.name" :disabled="previousLevels.some(p => p.api === l.api)" :maxlength="64" placeholder="层级名称" /><a-input v-model:value="l.api" :disabled="previousLevels.some(p => p.api === l.api)" :maxlength="64" placeholder="API名" /><a-input v-model:value="l.source" :maxlength="256" placeholder="来源说明" /><a-input v-model:value="l.note" :maxlength="4000" placeholder="层级说明" /></div><a-space><a-button size="small" :disabled="i === 0" @click="moveLevel(i, -1)">上移</a-button><a-button size="small" :disabled="i === levels.length-1" @click="moveLevel(i, 1)">下移</a-button><a-button size="small" @click="levels.splice(i, 1)">移除</a-button></a-space></div>
           <span class="t-12 c-3">保存定义后可继续维护取值、映射与问数设置。</span>
         </template>
       </a-form>
     </a-spin>
-    <template #footer><div class="definition-footer"><span class="t-12 c-3">{{ validation || (resume ? `草稿 ${resume} · 审核发布后生效` : '保存到变更单，审核发布后生效') }}</span><a-button :disabled="busy" @click="close">取消</a-button><a-button type="primary" :loading="busy" :disabled="!canSave" @click="save">保存到草稿</a-button></div></template>
+    <template #footer><div class="definition-footer"><span class="t-12 c-3">{{ validation || '保存后生效' }}</span><a-button :disabled="busy" @click="close">取消</a-button><a-button type="primary" :loading="busy" :disabled="!canSave" @click="save">保存</a-button></div></template>
   </a-drawer>
 </template>
 <style scoped>

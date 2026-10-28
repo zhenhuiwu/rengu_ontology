@@ -71,11 +71,11 @@ const total = computed(() => rows.value?.total ?? 0);
                 <a-descriptions :column="1" size="small">
                   <a-descriptions-item label="实际尝试">{{ item.attempts }} 次</a-descriptions-item>
                   <a-descriptions-item v-if="item.error" label="原因代码">{{ item.error }}</a-descriptions-item>
-                  <a-descriptions-item v-if="item.result?.blockedByEventId" label="前序事件"><ObjRef kind="event" :id="item.result.blockedByEventId" /></a-descriptions-item>
+                  <a-descriptions-item v-if="item.result?.blockedByEventId" label="前序事件"><ObjRef kind="event" :id="item.result.blockedByEventId">{{ item.result.blockedByEventId }}</ObjRef></a-descriptions-item>
                   <a-descriptions-item v-if="item.result?.httpStatus" label="HTTP回执">{{ item.result.httpStatus }}</a-descriptions-item>
                   <a-descriptions-item v-if="item.result?.ruleId" label="规则">{{ item.result.ruleId }} {{ item.result.ruleVersion }}</a-descriptions-item>
-                  <a-descriptions-item v-if="item.result?.alertId" label="告警"><ObjRef kind="alert" :id="item.result.alertId" /></a-descriptions-item>
-                  <a-descriptions-item v-if="item.result?.actionId" label="动作"><ObjRef kind="action" :id="item.result.actionId" /></a-descriptions-item>
+                  <a-descriptions-item v-if="item.result?.alertId" label="告警"><ObjRef kind="alert" :id="item.result.alertId">{{ item.result.alertId }}</ObjRef></a-descriptions-item>
+                  <a-descriptions-item v-if="(item.result?.actionRunId || item.result?.actionId)" label="动作"><ObjRef kind="action" :id="item.result.actionRunId || item.result.actionId!">{{ item.result.actionRunId || item.result.actionId }}</ObjRef></a-descriptions-item>
                 </a-descriptions>
               </a-collapse-panel>
             </a-collapse>
@@ -94,4 +94,5 @@ const total = computed(() => rows.value?.total ?? 0);
 .delivery-row { width: 100%; min-width: 0; }
 .delivery-title { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
 .delivery-title > span { overflow-wrap: anywhere; }
+:deep(.ant-descriptions-item-content) { overflow-wrap: anywhere; min-width: 0; }
 </style>

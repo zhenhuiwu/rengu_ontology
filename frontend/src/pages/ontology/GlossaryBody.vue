@@ -11,6 +11,7 @@ import { message } from 'ant-design-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { useReadonly } from '@/composables/useReadonly';
+import { useAssistantDraft } from '@/composables/useAssistantDraft';
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useAppStore } from '@/stores/app';
 import { useConfirmStore } from '@/stores/confirm';
@@ -26,7 +27,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { allDrafts, draftOf, useDraftView } from './parts/useDraftView';
 import { useStaticCr, useRealCrRecords, activeTargetCr, draftFields, draftRows } from './parts/useStaticCr';
 import { useStaticPage } from './parts/useStaticPage';
-import { fetchKnowledgeChoices, fetchKnowledgeConflicts, fetchStaticDetail, fetchStaticPage, resolveKnowledge, staticContextKey, isStaticReal, startAllocatedTarget } from '@/api/static';
+import { fetchKnowledgeChoices, fetchKnowledgeConflicts, fetchStaticDetail, fetchStaticPage, resolveKnowledge, staticContextKey, isStaticReal, startAllocatedTarget, fetchCurrentAfterWrite, applyModelChange } from '@/api/static';
 
 const route = useRoute();
 const router = useRouter();
@@ -115,13 +116,13 @@ const cr = useStaticCr('knowledge', () => ({ id: targetId(), name: cur.value?.na
 /** 只存在于草稿里的条目（新增的），直接看草稿 */
 const draftOnly = computed(() => cur.value?.status === '草稿');
 const isDraft = computed(() => dv.isDraft.value || (!readonly.value && !!draft.value && draftOnly.value));
-const canEdit = computed(() => isDraft.value && (!isStaticReal() || cr.head.value?.status === '草稿' && !cr.loading.value && !cr.error.value));
+const canEdit = computed(() => isStaticReal() ? !readonly.value && cur.value?.status === '已发布' && !draft.value : isDraft.value);
 const editTip = computed(() => dv.editTip.value);
 const changeOpen = ref(false);
 const changeTarget = ref('');
 const creating = ref(false);
 const pendingNewCr = ref<string>();
-const openChange = (name: string, isNew = false) => { if (readonly.value) return; creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
+const openChange = (name: string, isNew = false) => { if (readonly.value) return; if (isStaticReal() && isNew) { void openNew(); return; } creating.value = isNew; changeTarget.value = name; changeOpen.value = true; };
 async function start(opts: { join?: string; title?: string; desc?: string }) {
   if (readonly.value) return;
   if (!creating.value) { await cr.start(opts); return; }
@@ -178,7 +179,7 @@ const appliesView = computed(() => {
 interface Form { name: string; type: KType; definition: string; calc: string; synonyms: string[]; applies: string[]; period: string; owner: string }
 const editing = ref(false);
 const form = reactive<Form>({ name: '', type: '术语', definition: '', calc: '', synonyms: [], applies: [], period: '', owner: '' });
-const snap = ref('');
+const snap = ref(''), baseVersion = ref<number>(), newOpen = ref(false), saving = ref(false);
 const realCandidates = ref<KApply[]>([]), candidateLoading = ref(false), candidateError = ref('');
 const realConflicts = ref<{ word: string; ids: string[] }[]>([]);
 const realConflictRules = ref<Record<string, string>>({}), ruleError = ref('');
@@ -204,7 +205,7 @@ const APPLY_ALL = computed<KApply[]>(() => isStaticReal() ? realCandidates.value
   ...Q_OBJECT_TYPES.map((t) => ({ kind: 'object-type' as const, id: t.key, name: t.name })),
   ...METRICS.map((m) => ({ kind: 'metric' as const, id: m.id, name: m.name })),
 ]);
-const unavailableApplies = computed(() => isStaticReal() ? view.value.applies.filter((a) => !realCandidates.value.some((x) => x.kind === a.kind && x.id === a.id) && form.applies.includes(`${a.kind}:${a.id}`)) : []);
+const unavailableApplies = computed(() => isStaticReal() && cur.value && !newOpen.value ? view.value.applies.filter((a) => !realCandidates.value.some((x) => x.kind === a.kind && x.id === a.id) && form.applies.includes(`${a.kind}:${a.id}`)) : []);
 const APPLY_OPTIONS = computed(() => isStaticReal() ? [
   ...(['object-type', 'metric'] as const).map((kind) => ({ label: kind === 'metric' ? '指标' : '对象类型', options: realCandidates.value.filter((a) => a.kind === kind).map((a) => ({ value: `${a.kind}:${a.id}`, label: a.name, disabled: false })) })),
   { label: '已失效或不可见的已存引用（仅可移除）', options: unavailableApplies.value.map((a) => ({ value: `${a.kind}:${a.id}`, label: `${a.name || a.id}（不可选）`, disabled: true })) },
@@ -212,11 +213,49 @@ const APPLY_OPTIONS = computed(() => isStaticReal() ? [
   { label: '对象类型', options: Q_OBJECT_TYPES.map((t) => ({ value: `object-type:${t.key}`, label: t.name, disabled: false })) },
   { label: '指标', options: METRICS.map((m) => ({ value: `metric:${m.id}`, label: m.name, disabled: false })) },
 ]);
-function beginEdit() {
-  const v = view.value;
+async function beginEdit() {
+  const entry = cur.value; if (!entry) return;
+  let v: KFields = view.value;
+  if (isStaticReal()) { const context = staticContextKey(), id = entry.id; try { const current = await fetchCurrentAfterWrite(); const fresh = await fetchStaticDetail<KEntry>(`/knowledge/${encodeURIComponent(id)}`); const after = await fetchCurrentAfterWrite(); if (context !== staticContextKey() || id !== cur.value?.id) return; if (current.lockVersion !== after.lockVersion) throw new Error('定义已更新，请重新打开编辑'); baseVersion.value = current.lockVersion; v = fresh; baseline.value = [...baseline.value.filter(item => item.id !== id), { ...fresh, refs: [] }]; } catch (e) { message.error(e instanceof Error ? e.message : String(e)); return; } }
   Object.assign(form, { name: v.name, type: v.type, definition: v.definition, calc: v.calc, synonyms: [...v.synonyms], applies: v.applies.map((a) => `${a.kind}:${a.id}`), period: v.period, owner: v.owner });
   snap.value = JSON.stringify(form);
   editing.value = true;
+}
+async function openNew(expected?: string | MouseEvent) {
+  const context = staticContextKey(), page = route.fullPath;
+  try {
+    const current = await fetchCurrentAfterWrite(); if (context !== staticContextKey() || page !== route.fullPath || (typeof expected === 'string' && (expected !== JSON.stringify(form) || newOpen.value || editing.value || saving.value))) return;
+    baseVersion.value = current.lockVersion;
+    Object.assign(form, { name: '', type: '术语', definition: '', calc: '', synonyms: [], applies: [], period: '', owner: '' });
+    newOpen.value = true; const initial = JSON.stringify(form); await loadCandidates(); return initial;
+  } catch (e) { message.error(e instanceof Error ? e.message : String(e)); }
+}
+useAssistantDraft(['knowledge'], () => readonly.value || newOpen.value || editing.value || saving.value, async (draft) => {
+  const context = staticContextKey(), page = route.fullPath;
+  const initial = await openNew(JSON.stringify(form));
+  if (context !== staticContextKey() || page !== route.fullPath || !newOpen.value || editing.value || saving.value || initial !== JSON.stringify(form)) return;
+  for (const key of ['name', 'type', 'definition', 'calc', 'period', 'owner'] as const) {
+    if (typeof draft[key] === 'string') (form as unknown as Record<string, unknown>)[key] = key === 'type' && !K_TYPES.includes(draft[key] as typeof K_TYPES[number]) ? '' : draft[key];
+  }
+  if (Array.isArray(draft.synonyms)) form.synonyms = draft.synonyms.filter((s): s is string => typeof s === 'string');
+  message.info('AI 建议已填入表单，请核对后保存');
+});
+async function saveNew() {
+  if (saving.value || baseVersion.value == null || candidateLoading.value || candidateError.value) return;
+  if (!form.name.trim()) { message.error('请填写知识名称'); return; }
+  if (!K_TYPES.includes(form.type as typeof K_TYPES[number])) { message.error('请选择有效的知识类型'); return; }
+  const applies = form.applies.map(k => realCandidates.value.find(a => `${a.kind}:${a.id}` === k));
+  if (applies.some(a => !a)) { message.error('适用范围无效，请重新选择'); return; }
+  const context = staticContextKey(); saving.value = true;
+  try {
+    const values = { ...form, applies };
+    const rows = (Object.keys(FIELD_LABEL) as (keyof Form)[]).map(k => ({ key: k, op: 'add' as const, after: values[k] }));
+    const result = await applyModelChange({ kind: 'knowledge', name: form.name, isNew: true }, [{ section: 'content', rows }], baseVersion.value);
+    if (context !== staticContextKey()) return;
+    newOpen.value = false; await knowledgePage.reload(); await setQ({ k: result.targetId, tab: 'content', view: undefined });
+    message.success('业务知识已保存并生效');
+  } catch (e) { if (context === staticContextKey()) message.error(e instanceof Error ? e.message : String(e)); }
+  finally { saving.value = false; }
 }
 const dirty = computed(() => editing.value && JSON.stringify(form) !== snap.value);
 const guard = useUnsavedGuard(dirty);
@@ -234,7 +273,18 @@ async function save() {
   const changes = (Object.keys(FIELD_LABEL) as (keyof Form)[])
     .filter((k) => draftOnly.value || JSON.stringify(next[k]) !== JSON.stringify(e[k]) || (e.draft && k in e.draft))
     .map((k) => ({ key: k, before: draftOnly.value ? undefined : e[k], after: next[k], type: '业务知识', field: FIELD_LABEL[k] }));
-  if (!(await cr.save('content', changes))) return;
+  if (isStaticReal()) {
+    if (saving.value || baseVersion.value == null) return;
+    const context = staticContextKey(); saving.value = true;
+    try {
+      await applyModelChange({ kind: 'knowledge', id: e.id, name: e.name }, [{ section: 'content', rows: changes.map(c => ({ ...c, op: 'update' as const })) }], baseVersion.value);
+      if (context !== staticContextKey()) return;
+      const data = await fetchStaticDetail<KEntry>(`/knowledge/${encodeURIComponent(e.id)}`);
+      baseline.value = [...baseline.value.filter(item => item.id !== e.id), { ...data, refs: [] }];
+      await knowledgePage.reload();
+    } catch (error) { if (context === staticContextKey()) message.error(error instanceof Error ? error.message : String(error)); return; }
+    finally { saving.value = false; }
+  } else if (!(await cr.save('content', changes))) return;
   if (!isStaticReal()) {
     if (draftOnly.value) Object.assign(e, next);
     else {
@@ -248,7 +298,7 @@ async function save() {
     e.updatedAt = nowText();
   }
   editing.value = false;
-  message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
+  message.success(isStaticReal() ? '业务知识已保存并生效' : `已保存到草稿 ${draft.value?.id ?? ''}`);
 }
 const cancelEdit = () => guard(() => { editing.value = false; });
 
@@ -260,27 +310,39 @@ async function stop() {
   const words = [e.name, ...e.synonyms];
   const join = draft.value?.id;
   const context = staticContextKey();
+  let version: number | undefined;
   let references = 0;
   if (isStaticReal()) {
-    try { const data = await fetchStaticPage<KEntry['refs'][number]>(`/knowledge/${encodeURIComponent(e.id)}/refs`, { page: 1, size: 1 }); references = data.total; }
+    try { const [data, current] = await Promise.all([fetchStaticPage<KEntry['refs'][number]>(`/knowledge/${encodeURIComponent(e.id)}/refs`, { page: 1, size: 1 }), fetchCurrentAfterWrite()]); references = data.total; version = current.lockVersion; }
     catch (error) { if (context === staticContextKey()) message.error(error instanceof Error ? error.message : String(error)); return; }
     if (context !== staticContextKey() || e.id !== cur.value?.id) return;
   }
   const ok = await confirm.ask({
-    title: '停用业务知识', target: `${e.name}（${e.id} · ${e.type}）`, tag: '待确认', danger: true, okText: '记入变更单',
+    title: '停用业务知识', target: `${e.name}（${e.id} · ${e.type}）`, tag: '待确认', danger: true, okText: isStaticReal() ? '停用' : '记入变更单',
     fields: [
       { label: '识别词', value: words.join('、') },
       { label: '引用', value: isStaticReal() ? `共 ${references} 项` : `指标 ${refCount(e, '指标')} · 认证问答 ${refCount(e, '认证问答')} · 规则 ${refCount(e, '规则')} · 看板 ${refCount(e, '看板')}` },
       { label: '默认过滤', value: e.filters.length ? e.filters.map((f) => `${f.field} ${f.cond}`).join('；') : '无' },
-      { label: '生效', value: '审核通过后随整版发布生效' },
+      { label: '生效', value: isStaticReal() ? '确认后立即生效' : '发布后生效' },
     ],
     impact: `发布后问数不再识别“${words.slice(0, 3).join('”“')}”${e.filters.length ? '，也不再自动加默认过滤' : ''}；引用它的 ${isStaticReal() ? references : e.refs.length} 项会出现在变更单影响分析里，认证问答需要重新认证。历史版本和已保存的回答不受影响。`,
-    picker: join ? undefined : {
+    picker: isStaticReal() || join ? undefined : {
       label: '记入变更单', placeholder: '选择变更单', required: true,
       options: [{ value: '__new', label: `新建变更单：停用业务知识“${e.name}”` }, ...allDrafts().map((d) => ({ value: d.id, label: `${d.id}　${d.title}` }))],
     },
   });
   if (!ok || context !== staticContextKey() || e.id !== cur.value?.id || readonly.value) return;
+  if (isStaticReal()) {
+    if (version == null) return;
+    try {
+      await applyModelChange({ kind: 'knowledge', id: e.id, name: e.name }, [{ section: 'status', rows: [{ key: 'status', op: 'update', before: e.status, after: '已停用', type: '业务知识', field: '状态' }] }], version);
+      if (context !== staticContextKey()) return;
+      const data = await fetchStaticDetail<KEntry>(`/knowledge/${encodeURIComponent(e.id)}`);
+      baseline.value = [...baseline.value.filter(item => item.id !== e.id), { ...data, refs: [] }]; await knowledgePage.reload();
+      message.success('业务知识已停用');
+    } catch (error) { if (context === staticContextKey()) message.error(error instanceof Error ? error.message : String(error)); }
+    return;
+  }
   const pv = confirm.pickValue;
   const id = join ?? (await cr.start(pv && pv !== '__new' ? { join: pv } : { title: `停用业务知识“${e.name}”` }));
   if (!id || context !== staticContextKey() || e.id !== cur.value?.id || readonly.value) return;
@@ -473,7 +535,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
     </div>
 
     <div v-if="cur" class="panel gl-detail">
-      <DraftBanner v-if="isDraft && draft && (!isStaticReal() || cr.head.value?.status === '草稿')" :draft="draft"
+      <DraftBanner v-if="!isStaticReal() && isDraft && draft" :draft="draft"
         @submit="cr.submit" @discard="draftOnly ? message.info('这条知识只在草稿里，放弃请到变更单处理') : cr.discard()" />
       <div class="gl-head">
         <span class="t-16 fw-600 c-1">{{ view.name }}</span>
@@ -484,15 +546,15 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
         </a-tooltip>
         <a-tag v-if="mark('status')" class="gl-diff">{{ mark('status') }}</a-tag>
         <span class="t-12 c-3">{{ view.owner }} · 更新于 {{ cur.updatedAt }}</span>
-        <a-segmented v-if="draft && !readonly && !draftOnly" size="small" :value="isDraft ? 'draft' : 'published'"
+        <a-segmented v-if="!isStaticReal() && draft && !readonly && !draftOnly" size="small" :value="isDraft ? 'draft' : 'published'"
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => guard(() => { editing = false; setView(v); })" />
         <span class="gl-sp" />
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>停用</a-button></a-tooltip>
         <a-button v-else-if="canStop" @click="stop">停用</a-button>
         <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.id}）`)">发起变更</a-button>
-        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
+        <a-button v-else-if="!isStaticReal() && !draft" type="primary" @click="openChange(`${cur.name}（${cur.id}）`)">发起变更</a-button>
+        <a-button v-else-if="!isStaticReal() && draft && !isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="gl-tabs">
         <a-tab-pane key="content" tab="内容" />
@@ -508,7 +570,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
             <span>知识内容</span>
             <a-space v-if="editing">
               <a-button size="small" @click="cancelEdit">取消</a-button>
-              <a-button size="small" :disabled="!dirty || (isStaticReal() && (candidateLoading || !!candidateError))" @click="save">保存到草稿</a-button>
+              <a-button size="small" :disabled="saving || !dirty || (isStaticReal() && (candidateLoading || !!candidateError))" @click="save">保存</a-button>
             </a-space>
             <a-tooltip v-else :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">编辑内容</a-button></a-tooltip>
           </div>
@@ -664,10 +726,18 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
             </template>
           </template>
         </a-table>
-        <div class="t-12 c-3">业务知识只随本体整版发布生效；回滚会生成新的变更单，经审核后随下一次发布生效。</div>
+        <div class="t-12 c-3">业务知识只随本体整版发布生效；回滚会生成新的变更单，随下一次发布生效。</div>
       </div>
     </div>
   </div>
+  <a-modal v-model:open="newOpen" title="新建业务知识" ok-text="保存" :confirm-loading="saving" :mask-closable="!saving" @ok="saveNew">
+    <a-form layout="vertical">
+      <a-form-item label="名称" required><a-input v-model:value="form.name" /></a-form-item><a-form-item label="类型"><a-select v-model:value="form.type" :options="K_TYPES.map(t => ({ value: t, label: t }))" /></a-form-item>
+      <a-form-item label="定义"><a-textarea v-model:value="form.definition" /></a-form-item><a-form-item label="计算说明"><a-textarea v-model:value="form.calc" /></a-form-item><a-form-item label="同义词"><a-select v-model:value="form.synonyms" mode="tags" /></a-form-item>
+      <a-form-item label="适用于"><a-select v-model:value="form.applies" mode="multiple" :options="APPLY_OPTIONS" :loading="candidateLoading" :disabled="candidateLoading || !!candidateError" /></a-form-item><a-alert v-if="candidateError" type="error" :message="candidateError" show-icon />
+      <a-form-item label="生效期"><a-input v-model:value="form.period" /></a-form-item><a-form-item label="负责人"><a-input v-model:value="form.owner" /></a-form-item>
+    </a-form>
+  </a-modal>
   <StartChangeModal v-model:open="changeOpen" :target-name="pendingNewCr && creating ? `${changeTarget}（重试保留草稿 ${pendingNewCr}）` : changeTarget" :title-placeholder="creating ? '例如：新增术语“前置仓”' : undefined" @ok="start" />
 </template>
 

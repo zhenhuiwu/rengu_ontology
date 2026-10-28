@@ -41,8 +41,8 @@ context.demoAs = 'another'; assert.equal(page.list.value.length, 0); assert.equa
 fail = true; await page.loadPages(); assert.equal(page.list.value.length, 0); assert.match(page.loadError.value, /403/);
 props.turnId = undefined; await page.submit(); assert.equal(writes.length, 1);
 const templateEvents = [];
-const template = load('pages/UseTemplatePop.vue', { '@/api/qa': { qaReal: () => true }, '@/mock/qa-pages': { PAGE_SCOPES: [] } }, { tpl: { name: 'DB Template' } }, 'ok, name', { emit: (...args) => templateEvents.push(args) });
-template.name.value = 'New page'; template.ok(); assert.equal(templateEvents.length, 0, 'real template creation is guarded even if invoked directly');
+const template = load('pages/UseTemplatePop.vue', { 'ant-design-vue': { message: {} }, '@/api/http': { currentApiContext: () => context }, '@/composables/useUnsavedGuard': { useUnsavedGuard() {} }, '@/api/qaPages': { templateAccess: () => ({ canCreate: false }), createPage: () => assert.fail('inaccessible template cannot write') }, '@/api/qa': { qaReal: () => true }, '@/mock/qa-pages': { PAGE_SCOPES: [] } }, { tpl: { name: 'DB Template' } }, 'ok, name', { emit: (...args) => templateEvents.push(args) });
+template.name.value = 'New page'; await template.ok(); assert.equal(templateEvents.length, 0, 'inaccessible real template is guarded even if invoked directly');
 const card = { title: 'DB card structure', viz: '指标卡', metric: 'GMV', version: 'v1', value: 'SAMPLE-NUMBER', unit: '元', labels: ['demo'], series: [999] };
 async function renderCard(structureOnly) {
   const cardProps = { card, structureOnly, index: 1 };

@@ -1,9 +1,9 @@
 import { apiClient } from './http';
 import { definitionContext } from './definitionForms';
-import { fetchCR, staticContextKey } from './static';
+import { fetchCR, staticContextKey, invalidateStaticAfterWrite } from './static';
 import type { DefinitionProperty } from './definitionForms';
-export interface ImportObject { table: string; id: string; name: string; api: string; group: string; datasource: string; pk: string; desc: string; owner?: string; props: DefinitionProperty[] }
-export interface ImportPreview { datasourceId: string; schema: string; tables: { name: string; comment: string; pk: string[]; columns: { name: string; type: string; nullable: boolean; comment: string }[]; fks: { columns: string[]; refTable: string; refColumns: string[] }[] }[]; proposal: { objectTypes: ImportObject[]; linkTypes: { id: string; name: string; from: string; to: string; [key: string]: unknown }[] }; warnings: string[]; fingerprint: string; generator: string }
+export interface ImportObject { table: string; id: string; name: string; api: string; group: string; datasource: string; pk: string; titleField?: string; desc: string; owner?: string; props: DefinitionProperty[] }
+export interface ImportPreview { datasourceId: string; schema: string; tables: { name: string; comment: string; pk: string[]; uniqueSets: string[][]; columns: { name: string; type: string; nullable: boolean; comment: string }[]; fks: { columns: string[]; refTable: string; refColumns: string[] }[] }[]; proposal: { objectTypes: ImportObject[]; linkTypes: { id: string; name: string; from: string; to: string; [key: string]: unknown }[] }; warnings: string[]; fingerprint: string; generator: string }
 const api = apiClient('data');
 const check = (key: string) => { if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新预览'); };
 export async function previewObjectImport(id: string, schema: string, tables: string[]) {
@@ -11,16 +11,14 @@ export async function previewObjectImport(id: string, schema: string, tables: st
   const result = await api.post<ImportPreview>(`/datasources/${encodeURIComponent(id)}/import-preview`, { schema, tables }, ctx.options);
   check(ctx.key); return result;
 }
-export async function commitObjectImport(preview: ImportPreview, tables: string[], objects: ImportObject[], includeLinks: boolean, opts: { join?: string; title?: string; desc?: string }, linkIds: string[] = []) {
+export async function commitObjectImport(preview: ImportPreview, tables: string[], objects: ImportObject[], includeLinks: boolean, releaseLockVersion: number, linkIds: string[] = []) {
   const ctx = definitionContext();
-  const header = opts.join ? await fetchCR(opts.join, ctx.options) : undefined;
-  check(ctx.key);
-  const result = await api.post<{ crId: string; lockVersion: number; targets: { kind: string; id: string; isNew: boolean; name: string }[] }>(`/datasources/${encodeURIComponent(preview.datasourceId)}/import-to-cr`, {
+  const result = await api.post<{ crId: string; ver: string; published: boolean; targets: { kind: string; id: string; isNew: boolean; name: string }[] }>(`/datasources/${encodeURIComponent(preview.datasourceId)}/import-to-cr`, {
     schema: preview.schema, tables, fingerprint: preview.fingerprint,
-    objectTypes: objects.map(({ table, id, name, api, owner }) => ({ table, id, name, api, owner })), includeLinks, linkIds,
-    title: opts.title, reason: opts.desc, crId: opts.join, lockVersion: header?.lockVersion,
+    objectTypes: objects.map(({ table, id, name, api, owner, pk, titleField }) => ({ table, id, name, api, owner, pk, titleField })), includeLinks, linkIds,
+    title: '从数据源导入对象', publish: true, releaseLockVersion,
   }, ctx.options);
-  check(ctx.key); return result;
+  check(ctx.key); invalidateStaticAfterWrite(result.ver); return result;
 }
 
 export interface DatasourceMapping { objectId: string; name: string; schema: string; table: string }

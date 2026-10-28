@@ -37,7 +37,7 @@ const imports = {
   '@/mock': { ADMIN_USERS: [], ADMIN_DEPTS: ['dept'], paginate: () => ({ items: [], total: 0 }), EMPTY: '—' },
   '@/mock/admin': { pendingApprovals: () => 0 }, '@/mock/roles': { ROLES: [{ name: 'role' }] },
   '@/api/admin': {
-    adminApiOn: () => realMode, fetchUserRoles: async () => [{ name: 'role' }],
+    adminApiOn: () => realMode, fetchUserOptions: async () => ({ depts: ['dept'], roles: [{ name: 'role' }], canAssignRole: true }),
     queryUsers: async () => ({ items: [], total: 0 }), fetchDepts: async () => ['dept'],
     previewImport: async (body) => { previewCalls.push(body); return previewResult; },
     importUsers: async (rows) => { writes.push(rows); return rows.filter((r) => !r.error).length; },

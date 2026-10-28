@@ -27,7 +27,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 const quietVue = { ...vue, onMounted() {}, onBeforeUnmount() {} };
 const mockOptions = [{ value: 'hd', label: 'mock / East' }, { value: 'hn', label: 'mock / South' }];
-const remote = { tenantId: 'TN-1', name: '数据库租户', shortName: '简称', industry: '测试行业', defaultOrg: 'hd',
+const remote = { canManage: true, tenantId: 'TN-1', name: '数据库租户', shortName: '简称', industry: '测试行业', defaultOrg: 'hd',
   orgOptions: [{ value: 'hd', label: '东部' }, { value: 'hn', label: '南部' }], lockVersion: 7, updatedAt: '2026-10-26 10:00' };
 let real = true;
 let failure;
@@ -67,7 +67,9 @@ assert.equal(tenants.tenantOptions.value[0].label, '简称 / 东部', 'late old 
 const app = vue.reactive({ tenant: 'hn' });
 const topScope = vue.effectScope();
 topScope.run(() => load('layouts/TopBar.vue', {
-  vue: quietVue, 'vue-router': { useRouter: () => ({}) }, 'ant-design-vue': {},
+  vue: quietVue, 'vue-router': { useRouter: () => ({ currentRoute: vue.ref({ name: 'settings' }) }) }, 'ant-design-vue': {},
+  '@/api/workspaces': { workspaceCatalog: async () => ({ items: [] }) }, '@/api/config': { anyReal: () => real },
+  '@/api/notifications': { isNotificationsReal: () => false, notificationContextKey: () => 'settings' },
   '@/stores/app': { useAppStore: () => app }, '@/api/tenants': tenants, '@/nav': {},
   '@/api/admin': { adminApiOn: () => real }, '@/api/profile': profileApi, '@/api/http': http,
 }));
@@ -87,6 +89,8 @@ const readOnly = vue.ref(false);
 let allowDiscard = false;
 const messages = [];
 const imports = {
+  '@/stores/app': { useAppStore: () => vue.reactive({ get viewMode() { return readOnly.value ? 'history' : 'current'; } }) },
+  '@/stores/preview': { usePreviewStore: () => ({ active: false }) },
   vue: quietVue, 'vue-router': { useRoute: () => route, useRouter: () => ({ replace: ({ query }) => { route.query = query; } }) },
   'ant-design-vue': { message: { error: (s) => messages.push(s), success: (s) => messages.push(s) } },
   '@/stores/confirm': { useConfirmStore: () => ({ ask: async () => true }) },

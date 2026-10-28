@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as vue from 'vue';
+const actionReview = {};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../src/pages/ops/actionReview.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: actionReview });
 function load(path, imports, names, globals = {}) {
   const source = readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
   const { outputText } = ts.transpileModule(`${source}\nexport { ${names} };`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } });
@@ -33,6 +35,7 @@ const details = [];
 const session = { real: true, live: vue.ref(true), detail: vue.ref({ id: 'S-1', title: '真实会话', turns: [{ id: 'T-080', kind: 'denied', code: 'OUT_OF_SCOPE' }] }),
   activeId: vue.ref('S-1'), sessions: vue.ref([]), isNew: vue.ref(false), activeTurns: vue.ref([]), draft: vue.ref(''), sending: vue.ref(false), loading: vue.ref(false), loadDetail: async (id) => details.push(id) };
 const imports = {
+  '@/pages/ops/actionReview': actionReview,
   vue: { ...vue, watch() {}, onMounted() {} },
   'vue-router': { useRoute: () => ({ query: {} }), useRouter: () => ({ replace() {}, push() {} }) },
   'ant-design-vue': { message: { success() {}, error() {}, warning() {} } }, '@ant-design/icons-vue': {},

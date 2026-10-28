@@ -57,10 +57,11 @@ async function loadDetail(id = activeId.value) {
 /** 每个会话里本次新追加的轮次（原有历史轮次由 QaConversation 固定渲染，只属于第一个会话） */
 const turns = ref<Record<string, QaTurn[]>>({});
 const draft = ref('');
+export const chartRequests = ref<Record<string, { type: 'bar' | 'line' }>>({});
 if (real) {
   watch(contextKey, () => {
     ++loadSeq; ++sendSeq; ++createSeq; detailRequest?.abort();
-    detail.value = null; activeId.value = ''; draft.value = ''; sessions.value = []; turns.value = {}; listTick.value++; favTick.value++;
+    detail.value = null; activeId.value = ''; draft.value = ''; sessions.value = []; turns.value = {}; chartRequests.value = {}; listTick.value++; favTick.value++;
     loading.value = false; sending.value = false; creating.value = false;
   }, { flush: 'sync' });
   watch(activeId, () => { ++loadSeq; detailRequest?.abort(); loading.value = false; ++sendSeq; sending.value = false; draft.value = ''; }, { flush: 'sync' });
@@ -75,9 +76,11 @@ const now = () => { const d = new Date(); return `${String(d.getHours()).padStar
 
 /** 反问选项 → 自包含追问句（链路无多轮上下文）[推断]：短选项替换原问题里的 term；长句选项去掉开头「是，」直接当问题；否则「原问题（选项）」 */
 export function clarifyFollowUp(question: string, term: string, label: string) {
-  if (term && question.includes(term) && label.length <= term.length + 6) return question.replace(term, label);
-  if (label.length >= 8) return label.replace(/^是[，,、\s]*/, '');
-  return `${question}（${label}）`;
+  const next = term && question.includes(term) && label.length <= term.length + 6
+    ? question.replace(term, label)
+    : label.length >= 8 ? label.replace(/^是[，,、\s]*/, '') : `${question}（${label}）`;
+  const chart = question.match(/柱状图|柱形图|条形图|折线图/);
+  return chart && !/柱状图|柱形图|条形图|折线图/.test(next) ? `${next}（${chart[0]}展示）` : next;
 }
 
 export function useQaSession() {
@@ -115,6 +118,17 @@ export function useQaSession() {
   function send(text?: string) {
     const q = (text ?? draft.value).trim();
     if (!q) return false;
+    // shortcut: 只识别单纯切换图表的追问；涉及新筛选条件时继续交给问数。
+    const chart = q.replace(/[\s，,。！？!?]/g, '').match(/^(?:我)?(?:需要|想|请)?(?:用|以|改为|换成|切换为)?(柱状图|柱形图|条形图|折线图)(?:展示|显示|查看|呈现)?$/);
+    const history = detail.value?.turns ?? [];
+    const last = history[history.length - 1];
+    if (real && !sending.value && chart && last?.kind === 'answer' && last.answer.card === 'table') {
+      const requests = { ...chartRequests.value };
+      delete requests[last.id];
+      chartRequests.value = { ...requests, [last.id]: { type: chart[1] === '折线图' ? 'line' : 'bar' } };
+      draft.value = '';
+      return true;
+    }
     if (real) { void sendReal(q); return true; }
     const list = turns.value[activeId.value] ?? (turns.value[activeId.value] = []);
     list.push({ id: ++seq, q, time: now() });

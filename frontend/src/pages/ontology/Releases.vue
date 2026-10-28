@@ -20,11 +20,11 @@ import {
   type ChangeRequest, type CRDetail, type CheckResult, type CRStatus, type ReviewEvent,
 } from '@/mock/changes';
 import { loadMyProfile } from '@/api/profile';
-import { currentApiContext } from '@/api/http';
-import { fetchCurrentRelease } from '@/api/releases';
+import { currentApiContext, isApiError } from '@/api/http';
+import { fetchCurrentRelease, loadReleases, RELEASES } from '@/api/releases';
 import { useStaticPage } from './parts/useStaticPage';
 import { invalidateActionSnapshot } from '@/api/action';
-import { crAction, deleteCR, fetchCR, fetchReviewerOptions, patchCR, fetchWorkflowRecords, fetchStaticPage, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishRelease, rollbackRelease, validateCR, type CRAction } from '@/api/static';
+import { crAction, deleteCR, fetchCR, fetchReviewerOptions, patchCR, fetchWorkflowRecords, fetchStaticPage, fetchCurrentAfterWrite, isStaticReal, mergeCheckApi, publishDraft, publishRelease, publishFormalRelease, rollbackRelease, validateCR, type CRAction } from '@/api/static';
 
 const route = useRoute();
 const router = useRouter();
@@ -125,6 +125,7 @@ const rolledBack = ref(false);
 const skippedSections = ref<string[]>([]);
 
 const STATUSES = ['全部', '草稿', '审核中', '已通过', '已发布', '已驳回'];
+const statusLabel = (status: string) => ({ 审核中: '历史待处理', 已通过: '历史已通过', 已驳回: '历史已驳回' } as Record<string, string>)[status] || status;
 const st = computed({
   get: () => (route.query.st as string) || '全部',
   set: (v) => router.replace({ query: { ...route.query, st: v === '全部' ? undefined : v } }),
@@ -193,9 +194,10 @@ const impactSum = computed(() => impactSummary(detail.value));
 
 // —— 当前用户能做什么 ——
 const isOwner = computed(() => realMode && cur.value.ownerId ? cur.value.ownerId === realMeId.value : !!me.value && cur.value.owner === me.value);
+const directPublish = computed(() => realMode && app.workspace?.directPublishEnabled === true);
 const isReviewer = computed(() => !isOwner.value && (realMode && cur.value.reviewerId ? cur.value.reviewerId === realMeId.value : !!me.value && cur.value.reviewer === me.value));
 const canManage = computed(() => isOwner.value || isReviewer.value);
-const canSetReviewer = computed(() => realMode && !crFallback.value && !readonly.value && !!cur.value.id && cur.value.status === '草稿' && isOwner.value);
+const canSetReviewer = computed(() => realMode && !directPublish.value && !crFallback.value && !readonly.value && !!cur.value.id && cur.value.status === '草稿' && isOwner.value);
 const reviewerOpen = ref(false), reviewerLoading = ref(false), reviewerSaving = ref(false), reviewerError = ref('');
 const reviewerOptions = ref<{ id: string; name: string }[]>([]), reviewerId = ref<string>(), reviewerLock = ref<number>(), storedReviewer = ref('');
 let reviewerSeq = 0;
@@ -249,7 +251,7 @@ watch(CURRENT_VERSION, async (v) => {
 }, { immediate: true });
 const isFirstRelease = computed(() => firstRelease.value && cur.value.release === CURRENT_VERSION.value);
 /** 详情区有没有蓝色主按钮：有就把页头“发布”降为普通按钮，同屏只留一个主按钮 */
-const detailPrimary = computed(() => !readonly.value && (cur.value.status === '草稿' || (cur.value.status === '审核中' && isReviewer.value)));
+const detailPrimary = computed(() => !readonly.value && cur.value.status !== '已发布');
 
 // —— 改动清单（简洁分页）——
 const dpage = ref(1);
@@ -363,6 +365,30 @@ async function reopen() {
 const approved = computed(() => visibleCRS.value.filter((c) => c.status === '已通过'));
 /** real 模式（VITE_API_REAL_MODULES 含 static）：合并校验、发布、回滚走接口；失败提示后不改页面 */
 const apiErr = (e: unknown) => message.error(e instanceof Error ? e.message : String(e));
+const formalPublishing = ref(false);
+const formalIssues = ref<{ section: string; id: string; message: string }[]>([]);
+async function publishFormal() {
+  if (formalPublishing.value || readonly.value || !isAdmin.value) return;
+  const key = JSON.stringify(currentApiContext());
+  formalPublishing.value = true; formalIssues.value = [];
+  try {
+    const current = await fetchCurrentAfterWrite();
+    if (key !== JSON.stringify(currentApiContext())) return;
+    const ok = await confirm.ask({ title: '正式发布本体', target: '当前工作状态', okText: '正式发布', impact: '服务端将完整校验当前工作状态，校验通过后保存正式发布快照。' });
+    if (!ok || key !== JSON.stringify(currentApiContext()) || readonly.value || !isAdmin.value) return;
+    const result = await publishFormalRelease(current.lockVersion);
+    if (key !== JSON.stringify(currentApiContext())) return;
+    await loadReleases(); await syncVersion();
+    message.success(`已正式发布 ${result.ver}`);
+  } catch (e) {
+    if (key !== JSON.stringify(currentApiContext())) return;
+    if (isApiError(e) && e.code === 'FORMAL_RELEASE_BLOCKED') {
+      const issues = (e.details as { issues?: unknown } | null)?.issues;
+      if (Array.isArray(issues)) formalIssues.value = issues;
+    }
+    apiErr(e);
+  } finally { formalPublishing.value = false; }
+}
 /** 发布 / 回滚成功后按 GET /releases/current 刷新 app store 的当前 / 下一版本号（顶栏、本页按钮跟着变）；刷新失败只提示，不影响已成功的写操作 */
 async function syncVersion() {
   try {
@@ -371,6 +397,21 @@ async function syncVersion() {
     if (r.release?.publishedAt) app.ontologyPublishedAt = r.release.publishedAt;
     app.ontologyNextVersion = r.next;
   } catch (e) { message.warning(`版本号刷新失败：${e instanceof Error ? e.message : String(e)}`); }
+}
+const directPublishing = ref(false);
+async function publishCurrentDraft() {
+  const id = cur.value.id, key = JSON.stringify(currentApiContext());
+  if (directPublishing.value || !directPublish.value || readonly.value || crFallback.value || !realMeId.value || cur.value.ownerId !== realMeId.value || cur.value.status !== '草稿') return;
+  directPublishing.value = true;
+  try {
+  const ok = await confirm.ask({ title: '直接发布草稿', target: `${id} ${cur.value.title}`, okText: '直接发布',
+    impact: '发布前由服务端重新校验，成功后生成真实本体版本。' });
+  if (!ok || key !== JSON.stringify(currentApiContext()) || !directPublish.value || readonly.value || cur.value.id !== id) return;
+    const result = await publishDraft(id);
+    if (key !== JSON.stringify(currentApiContext())) return;
+    skippedSections.value = result.skipped ?? []; invalidateActionSnapshot(); await syncVersion(); await loadCRs(); message.success(`已发布 ${result.ver}`);
+  } catch (e) { apiErr(e); }
+  finally { directPublishing.value = false; }
 }
 async function publish() {
   if (realMode && (readonly.value || crFallback.value || !isAdmin.value || !approved.value.length)) return;
@@ -422,27 +463,30 @@ async function rollback() {
 </script>
 
 <template>
-  <Teleport defer to="#page-extra">
-    <span class="t-12 c-3">待发布 {{ approved.length }} 张</span>
-    <a-tooltip :title="readonly ? reason : !isAdmin ? (realMode ? '需要实际本体管理员与发布管理权限' : '需要本体管理员发布') : approved.length ? '' : '没有已通过的变更单'">
-      <a-button :type="detailPrimary ? 'default' : 'primary'" :disabled="crFallback || (readonly || !isAdmin || !approved.length)" @click="publish">发布 {{ NEXT_VERSION }}</a-button>
-    </a-tooltip>
-  </Teleport>
-
+  <div v-if="realMode" class="panel" style="padding: 16px; margin-bottom: 12px">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+      <strong>正式发布</strong><span class="t-12 c-3">保存的修改立即生效；正式发布会完整校验并记录当前快照。</span>
+      <a-button type="primary" :loading="formalPublishing" :disabled="readonly || !isAdmin" @click="publishFormal">正式发布</a-button>
+    </div>
+    <a-alert v-if="formalIssues.length" type="error" show-icon message="发布校验未通过" style="margin-top: 12px"><template #description><div v-for="(issue, i) in formalIssues" :key="i">{{ issue.section }} · {{ issue.id }}：{{ issue.message }}</div></template></a-alert>
+    <div class="t-12 c-3" style="margin-top: 12px">正式发布记录</div>
+    <div v-if="!RELEASES.length" class="t-12 c-3">暂无正式发布记录</div>
+    <div v-for="release in RELEASES" :key="release.ver" class="t-12">{{ release.ver }} · {{ release.publishedAt }} · {{ release.by }} · {{ release.note }}</div>
+  </div>
   <a-alert v-if="crFallback && !catalogLoading && !detailLoading && !pageLoading" type="warning" show-icon class="rl-fallback" message="变更单加载失败，请重试"><template #action><a-button size="small" @click="loadCRs">重试</a-button></template></a-alert>
   <a-alert v-if="skippedSections.length" type="warning" show-icon class="rl-fallback" :message="`以下改动未生效：${skippedSections.join('、')}`" />
   <div class="rl">
     <div class="panel rl-list">
       <div class="rl-filter">
         <a-input-search v-model:value="kw" placeholder="搜索标题或变更单号" class="rl-kw" />
-        <a-select v-model:value="st" :options="STATUSES.map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" class="rl-st" />
+        <a-select v-model:value="st" :options="STATUSES.map((v) => ({ value: v, label: v === '全部' ? '全部状态' : statusLabel(v) }))" class="rl-st" />
       </div>
       <ul class="rl-items" :class="{ 'rl-loading': pageLoading }" :aria-busy="pageLoading">
         <li v-for="c in list" :key="c.id" :class="{ active: c.id === cur.id }" :title="`${c.title} · ${c.id} · ${c.owner} · ${c.updatedAt} · ${c.release ?? c.level}`" @click="pick(c.id)">
           <div class="rl-row">
             <span class="t-14 rl-name rl-ell">{{ c.title }}</span>
             <span class="t-12 c-2 num rl-ft">{{ c.owner }} · {{ c.updatedAt.slice(5, 10) }}</span>
-            <span class="t-12" :class="statusClass(c.status)">{{ c.status }}</span>
+            <span class="t-12" :class="statusClass(c.status)">{{ statusLabel(c.status) }}</span>
           </div>
         </li>
       </ul>
@@ -457,45 +501,21 @@ async function rollback() {
       <div class="rl-head">
         <span class="t-16 fw-600 c-1 rl-title">{{ cur.title }}</span>
         <span class="t-14 c-3 num">{{ cur.id }}</span>
-        <a-tag :color="tagColor(cur.status)">{{ cur.status }}</a-tag>
+        <a-tag :color="tagColor(cur.status)">{{ statusLabel(cur.status) }}</a-tag>
         <a-tag>{{ cur.level }}</a-tag>
         <span class="rl-sp" />
         <template v-if="readonly">
           <span class="t-12 c-3">{{ reason }}</span>
         </template>
-        <template v-else-if="cur.status === '草稿'">
-          <a-tooltip :title="isOwner ? '' : `只有提交人 ${cur.owner} 能删除`">
+        <template v-else-if="['草稿', '审核中', '已通过', '已驳回'].includes(cur.status)">
+          <a-tooltip v-if="cur.status === '草稿'" :title="isOwner ? '' : `只有提交人 ${cur.owner} 能删除`">
             <a-button danger :disabled="crFallback || !isOwner" @click="removeDraft">删除草稿</a-button>
           </a-tooltip>
-          <a-tooltip :title="editTo ? '' : '这张单子没有可跳转的草稿页面'">
+          <a-tooltip v-if="cur.status === '草稿'" :title="editTo ? '' : '这张单子没有可跳转的草稿页面'">
             <a-button :disabled="crFallback || !editTo" @click="edit">编辑</a-button>
           </a-tooltip>
-          <a-tooltip :title="!cur.changes ? '草稿里还没有改动，无法提交' : blocked ? `有 ${counts['阻断']} 项阻断未通过` : ''">
-            <a-button type="primary" :disabled="crFallback || (blocked || !cur.changes)" @click="submit">提交审核</a-button>
-          </a-tooltip>
-        </template>
-        <template v-else-if="cur.status === '审核中'">
-          <template v-if="isReviewer">
-            <a-button :disabled="crFallback" danger @click="reject">驳回</a-button>
-            <a-tooltip :title="blocked ? `有 ${counts['阻断']} 项阻断未通过` : ''">
-              <a-button type="primary" :disabled="crFallback || blocked" @click="approve">审核通过</a-button>
-            </a-tooltip>
-          </template>
-          <template v-else>
-            <span class="t-12 c-3">等待 {{ cur.reviewer }} 审核</span>
-            <a-button :disabled="crFallback" v-if="isOwner" @click="recall">撤回提交</a-button>
-          </template>
-        </template>
-        <template v-else-if="cur.status === '已通过'">
-          <span class="t-12 c-3">等待整版发布 {{ NEXT_VERSION }}</span>
-          <a-tooltip :title="canManage ? '' : `只有 ${cur.owner} 或 ${cur.reviewer} 能撤回`">
-            <a-button :disabled="crFallback || !canManage" @click="unapprove">撤回</a-button>
-          </a-tooltip>
-        </template>
-        <template v-else-if="cur.status === '已驳回'">
-          <span class="t-12 c-1 rl-why" :title="cur.rejectReason ?? ''">驳回：{{ cur.rejectReason ?? '暂无原因' }}</span>
-          <a-tooltip :title="canManage ? '' : `只有 ${cur.owner} 或 ${cur.reviewer} 能改回草稿`">
-            <a-button :disabled="crFallback || !canManage" @click="reopen">改回草稿</a-button>
+          <a-tooltip v-if="!realMode" :title="!directPublish ? '需要当前工作空间的发布权限' : cur.status !== '草稿' ? '历史记录不可直接发布' : !realMeId || cur.ownerId !== realMeId ? '只能发布本人创建的草稿' : !cur.changes ? '变更单里还没有改动' : ''">
+            <a-button type="primary" :loading="directPublishing" :disabled="crFallback || !directPublish || cur.status !== '草稿' || !realMeId || cur.ownerId !== realMeId || !cur.changes" @click="publishCurrentDraft">直接发布</a-button>
           </a-tooltip>
         </template>
         <template v-else-if="cur.status === '已发布'">
@@ -506,14 +526,14 @@ async function rollback() {
       <a-tabs v-model:activeKey="tab" class="rl-tabs">
         <template #rightExtra>
           <span class="rl-meta t-12 c-3 num">
-            <span>{{ cur.owner }} 提交 · {{ cur.reviewer || '未设置审核人' }} 审核 · 改动 {{ cur.changes }} 处 · 更新于 {{ cur.updatedAt }}</span><a-button v-if="canSetReviewer" type="link" size="small" @click="openReviewer">设置审核人</a-button>
+            <span>{{ cur.owner }} 提交 · {{ cur.status === '已发布' ? '已发布' : '待发布' }} · 改动 {{ cur.changes }} 处 · 更新于 {{ cur.updatedAt }}</span>
             <InfoTip :text="`原因：${cur.reason}`" />
           </span>
         </template>
         <a-tab-pane key="diff" tab="改动清单" />
         <a-tab-pane key="checks" tab="发布校验" />
         <a-tab-pane key="impact" tab="影响分析" />
-        <a-tab-pane key="log" tab="评审记录" />
+        <a-tab-pane key="log" tab="操作记录" />
       </a-tabs>
 
       <!-- 改动清单 -->

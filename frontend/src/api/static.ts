@@ -13,10 +13,12 @@ import { DIM_ITEMS, type DimItem } from '@/mock/dimensions';
 import { KNOWLEDGE, type KEntry } from '@/mock/knowledge';
 import type { ChangeRequest, CRDetail, CRLevel, ReviewEvent } from '@/mock/changes';
 import { DRAFTS, type TargetKind } from '@/mock/releases';
+import { useAppStore } from '@/stores/app';
 
 const api = apiClient('static');
 export const isStaticReal = (): boolean => api.isReal();
 export const fetchMetricGroups = () => api.get<string[]>('/metrics/groups');
+export const recommendLinkFields = (body: { source: string; target: string; name: string }) => api.post<{ fromProp: string; toProp: string; reason: string }>('/link-types:recommend-fields', body, loadContext().options);
 export const fetchDimensionUsage = (id: string) => all<import('@/mock/dimensions').DimUsage>(loadContext(), `/dimensions/${encodeURIComponent(id)}/usage`);
 export interface DimensionMatchResult { exact: { item: string; itemName: string; value: string }[]; contains: { item: string; itemName: string; value: string }[]; more: number; rule: { resolve?: string } | null; groups: string[]; crossDim: boolean }
 export interface KnowledgeTryRow { k: string; v: string; cls?: string; by?: string }
@@ -216,6 +218,8 @@ async function writeRelease(path: string, body: object): Promise<ReleaseResult> 
   return result;
 }
 export const publishRelease = (note?: string, lockVersion?: number) => writeRelease('/releases', { note, lockVersion });
+export const publishFormalRelease = (lockVersion: number, note?: string) => writeRelease('/releases:formal', { lockVersion, note });
+export const publishDraft = (id: string, lockVersion?: number) => writeRelease(`/change-requests/${encodeURIComponent(id)}:publish`, { lockVersion });
 /** POST /releases/{ver}:rollback：回滚最近一次发布（否则 409 ROLLBACK_NOT_LATEST） */
 export const rollbackRelease = (ver: string) => writeRelease(`/releases/${encodeURIComponent(ver)}:rollback`, {});
 export interface MetricTrialResult {
@@ -224,7 +228,7 @@ export interface MetricTrialResult {
   dataCutoff: string | null; scope: string;
 }
 export interface MetricTrialReadiness {
-  id: string; ready: boolean;
+  id: string; ready: boolean; hasTimeField?: boolean;
   issues: { reason: string; message: string; reference?: string; candidates?: { reference: string; name: string; mapped: boolean }[] }[];
 }
 export const fetchMetricReadiness = (id: string, crId?: string) => {
@@ -232,8 +236,8 @@ export const fetchMetricReadiness = (id: string, crId?: string) => {
   return api.get<MetricTrialReadiness>(`/metrics/${encodeURIComponent(id)}/trial-readiness`, { ...ctx.options, query: { ...ctx.options.query, crId } });
 };
 /** Pure trial: persisted definition and governed real rows; errors never fall back to mock. */
-export const trialMetric = (id: string, crId?: string, options?: RequestOptions, days = 30) =>
-  api.post<MetricTrialResult>(`/metrics/${encodeURIComponent(id)}:trial`, { crId, days }, options);
+export const trialMetric = (id: string, crId?: string, options?: RequestOptions, days = 30, snapshot = false) =>
+  api.post<MetricTrialResult>(`/metrics/${encodeURIComponent(id)}:trial`, snapshot ? { crId, snapshot: true } : { crId, days }, options);
 /** 发布 / 回滚成功后刷新顶栏版本号（同一后端前缀；versioning 不在真接口开关里时也能取到） */
 export const fetchCurrentAfterWrite = () => api.get<{ current: string | null; next: string; lockVersion: number; release: ReleaseResult | null }>('/releases/current');
 
@@ -361,6 +365,33 @@ export async function crStart(target: CRTargetIn, opts: { join?: string; title?:
 
 /** 页面一次保存里的改动（同一 key 再次保存时保留最早的 before，改回原值的行去掉） */
 export interface DraftChange { key: string; before?: unknown; after?: unknown; op?: CRItemOp; type?: string; field?: string; beforeText?: string; afterText?: string }
+export function invalidateStaticAfterWrite(ver: string) {
+  generation++; cache.clear();
+  const app = useAppStore();
+  app.ontologyVersion = ver;
+  const key = staticContextKey();
+  void fetchCurrentAfterWrite().then(current => {
+    if (key !== staticContextKey() || app.ontologyVersion !== ver) return;
+    app.ontologyVersion = current.current ?? ver;
+    app.ontologyPublishedAt = current.release?.publishedAt ?? app.ontologyPublishedAt;
+    app.ontologyNextVersion = current.next;
+  }).catch(() => undefined);
+}
+export async function applyModelChange(target: { kind: TargetKind; id?: string; isNew?: boolean; name?: string }, sections: { section: string; rows: CRItemIn[] }[], lockVersion: number) {
+  const key = staticContextKey();
+  const result = await api.post<{ targetId: string; ver: string }>('/model-changes:apply', { target, sections, lockVersion });
+  if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新加载定义');
+  generation++; cache.clear();
+  const app = useAppStore();
+  app.ontologyVersion = result.ver;
+  void fetchCurrentAfterWrite().then(current => {
+    if (key !== staticContextKey() || app.ontologyVersion !== result.ver) return;
+    app.ontologyVersion = current.current ?? result.ver;
+    app.ontologyPublishedAt = current.release?.publishedAt ?? app.ontologyPublishedAt;
+    app.ontologyNextVersion = current.next;
+  }).catch(() => undefined);
+  return result;
+}
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 /**

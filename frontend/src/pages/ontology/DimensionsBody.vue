@@ -22,15 +22,19 @@ import {
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import DefinitionEditor from './parts/DefinitionEditor.vue';
+import { useAssistantDraft } from '@/composables/useAssistantDraft';
 import { loadDraftState } from './parts/useDraftView';
 import { useDraftView } from './parts/useDraftView';
 import { useStaticCr, draftFields, draftRows } from './parts/useStaticCr';
 import { useStaticPage } from './parts/useStaticPage';
-import { fetchStaticDetail, matchDimension, type DimensionMatchResult, staticContextKey, isStaticReal } from '@/api/static';
+import { applyModelChange, fetchCurrentAfterWrite, fetchStaticDetail, matchDimension, type CRItemIn, type DimensionMatchResult, staticContextKey, isStaticReal } from '@/api/static';
 
 const definitionOpen = ref(false), newDefinition = ref(false);
 function openDefinition(isNew = false) { if (readonly.value || !isStaticReal()) return; newDefinition.value = isNew; definitionOpen.value = true; }
-async function definitionSaved(result: { id: string; crId: string }) { const key = staticContextKey(); await loadDraftState(true); if (key !== staticContextKey()) return; await router.replace({ query: { ...route.query, dim: result.id, view: 'draft' } }); await cr.reload(); }
+const assistantDraft = ref<Record<string, unknown>>();
+watch(definitionOpen, open => { if (!open) assistantDraft.value = undefined; });
+useAssistantDraft(['dimension', 'dictionary'], () => readonly.value || definitionOpen.value, (draft, target) => { assistantDraft.value = { ...draft, ...(target === 'dictionary' ? { kind: '码表' } : {}) }; openDefinition(true); });
+async function definitionSaved(result: { id: string; crId: string; published?: boolean }) { if (result.published) { await router.replace({ query: { ...route.query, dim: result.id, view: undefined } }); await dimensionPage.reload(); await loadDefinition(); await valuesPage.reload(); return; } const key = staticContextKey(); await loadDraftState(true); if (key !== staticContextKey()) return; await router.replace({ query: { ...route.query, dim: result.id, view: 'draft' } }); await cr.reload(); }
 const route = useRoute();
 const router = useRouter();
 const app = useAppStore();
@@ -166,6 +170,28 @@ const valueCols = computed(() => [
 // —— 新增 / 编辑取值（只在草稿里）——
 interface VForm { code: string; name: string; level: string; parent: string; synonyms: string[]; status: ValueStatus; note: string }
 const vOpen = ref(false);
+const directEdit = computed(() => isStaticReal() && !readonly.value && !isDraft.value);
+const valueLock = ref<number>(), mapLock = ref<number>();
+const valueContext = ref(''), mapContext = ref('');
+const vSaving = ref(false), mSaving = ref(false);
+async function captureVersion() {
+  const key = staticContextKey(), id = cur.value?.id;
+  try {
+    const version = await fetchCurrentAfterWrite();
+    return key === staticContextKey() && id === cur.value?.id ? version.lockVersion : undefined;
+  } catch (e) { message.error(e instanceof Error ? e.message : String(e)); return undefined; }
+}
+async function applyDimension(section: string, rows: CRItemIn[], lockVersion: number | undefined) {
+  if (!cur.value || lockVersion === undefined) { message.error('版本信息未加载，请重新打开编辑'); return false; }
+  const key = staticContextKey(), id = cur.value.id;
+  try {
+    await applyModelChange({ kind: 'dimension', id, isNew: false }, [{ section, rows }], lockVersion);
+    if (key !== staticContextKey() || id !== cur.value?.id) return false;
+    await dimensionPage.reload(); await loadDefinition();
+    if (section === 'values') await valuesPage.reload(); else if (section === 'mappings') await mapsPage.reload();
+    return key === staticContextKey() && id === cur.value?.id;
+  } catch (e) { message.error(e instanceof Error ? e.message : String(e)); return false; }
+}
 const vEdit = ref<DimValue | null>(null);
 const vForm = reactive<VForm>({ code: '', name: '', level: '', parent: '', synonyms: [], status: '启用', note: '' });
 const vErr = computed(() => {
@@ -176,21 +202,31 @@ const vErr = computed(() => {
 const parentLevel = computed(() => { const i = levels.value.findIndex((l) => l.name === vForm.level); return i > 0 ? levels.value[i - 1].name : ''; });
 const PARENT_OPTIONS = computed(() => (cur.value?.values ?? []).filter((v) => v.level === parentLevel.value && live(v, null)).map((v) => ({ value: v.name, label: v.name })));
 const synConflicts = computed(() => vForm.synonyms.flatMap((s) => (isStaticReal() ? inputHits.value[s] ?? [] : hitsOf(s)).filter((h) => !(h.item === cur.value?.id && h.value === vForm.name)).map((h) => `“${s}”已是 ${h.itemName} · ${h.value}`)));
-function openValue(v?: Row) {
-  const src = v ? (cur.value?.values ?? []).find((x) => x.key === v.key) ?? null : null;
+async function openValue(v?: Row) {
+  if (directEdit.value) {
+    valueLock.value = await captureVersion(); if (valueLock.value === undefined) return;
+    if (v) { await valuesPage.reload(); if (valuesPage.error.value) { message.error(valuesPage.error.value); return; } v = valuePageRows.value.find(row => row.key === v!.key); if (!v) { message.error('取值已变化，请重新选择'); return; } }
+  }
+  const src = v ? directEdit.value ? v as DimValue : (cur.value?.values ?? []).find((x) => x.key === v.key) ?? null : null;
   vEdit.value = src;
   const lvl = src?.level ?? (lv.value || valueLevels.value[valueLevels.value.length - 1] || levels.value[0]?.name || '');
   Object.assign(vForm, { code: src?.code ?? '', name: src?.name ?? '', level: lvl, parent: src?.parent ?? '', synonyms: [...(src?.synonyms ?? [])], status: src?.status ?? '启用', note: src?.note ?? '' });
+  valueContext.value = JSON.stringify([staticContextKey(), cur.value?.id]);
   vOpen.value = true;
 }
 async function saveValue() {
-  if (vErr.value) return;
+  if (vErr.value || vSaving.value) return;
+  if (valueContext.value !== JSON.stringify([staticContextKey(), cur.value?.id]) || (isStaticReal() && !directEdit.value)) { message.error('对象或身份已切换，请重新打开编辑'); return; }
   const f = { code: vForm.code.trim(), name: vForm.name.trim(), level: vForm.level, parent: vForm.parent || undefined, synonyms: [...vForm.synonyms], status: vForm.status, note: vForm.note || undefined };
   const v = vEdit.value;
   // real：values 段，一个取值一行（key = 层级:编码；已发布取值 before = 发布时的值）
   const pub = v ? (v.diff ? v.pub : { name: v.name, parent: v.parent, synonyms: [...v.synonyms], status: v.status, note: v.note }) : undefined;
   const vrow = { key: v?.key ?? `${f.level}:${f.code}`, op: (!v || v.diff === '新增' ? 'add' : 'update') as 'add' | 'update', before: pub, after: f, type: '取值', field: `${f.name}（${f.code}）` };
-  if (!(await cr.save('values', [vrow]))) return;
+  vSaving.value = true;
+  let saved: boolean;
+  try { saved = directEdit.value ? await applyDimension('values', [vrow], valueLock.value) : await cr.save('values', [vrow]); }
+  finally { vSaving.value = false; }
+  if (!saved) return;
   if (!isStaticReal()) {
     if (!v) {
       (cur.value?.values ?? []).push({ key: `${f.level}:${f.code}`, ...f, count: 0, draft: draft.value?.id, diff: '新增' });
@@ -204,12 +240,15 @@ async function saveValue() {
     }
   }
   vOpen.value = false;
-  message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
+  message.success(directEdit.value ? '已保存并生效' : `已保存到草稿 ${draft.value?.id ?? ''}`);
 }
 async function toggleValue(r: Row) {
-  const v = (cur.value?.values ?? []).find((x) => x.key === r.key);
-  if (!v) return;
   const context = staticContextKey(), selected = cur.value?.id;
+  const lock = directEdit.value ? await captureVersion() : undefined;
+  if (directEdit.value && lock === undefined) return;
+  if (directEdit.value) { await valuesPage.reload(); if (valuesPage.error.value) { message.error(valuesPage.error.value); return; } const fresh = valuePageRows.value.find(row => row.key === r.key); if (!fresh) { message.error('取值已变化，请重新选择'); return; } r = fresh; }
+  const v = directEdit.value ? r as DimValue : (cur.value?.values ?? []).find((x) => x.key === r.key);
+  if (!v) return;
   const off = v.status === '启用';
   const used = off ? usageRows.value.length : 0;
   const ok = await confirm.ask({
@@ -218,17 +257,17 @@ async function toggleValue(r: Row) {
     impact: isStaticReal() ? (off ? '停用后不再参与问数匹配，历史数据保留；使用影响将在发布评审中核对。' : cur.value?.object ? '启用后可以参与问数筛选和拆分。' : '启用后可参与码表取值与说法匹配。') : off ? `停用后问数不再把它当作筛选候选，同义词随之失效；历史数据仍按原取值统计。本${cur.value?.kind}有 ${used} 项使用，发布前会出现在影响分析里。` : '启用后问数可以按它筛选和拆分。',
     okText: off ? '停用' : '启用', danger: off,
   });
-  if (!ok || context !== staticContextKey() || selected !== cur.value?.id || !canEdit.value) return;
+  if (!ok || context !== staticContextKey() || selected !== cur.value?.id || !(canEdit.value || directEdit.value)) return;
   const next = off ? '停用' : '启用';
   const vrow = { key: v.key, op: (v.diff === '新增' ? 'add' : 'update') as 'add' | 'update', before: v.diff ? v.pub : { status: v.status }, after: { code: v.code, name: v.name, level: v.level, parent: v.parent, synonyms: [...v.synonyms], status: next, note: v.note }, type: '取值', field: `${v.name}（${v.code}）` };
-  if (!(await cr.save('values', [vrow]))) return;
+  if (!(directEdit.value ? await applyDimension('values', [vrow], lock) : await cr.save('values', [vrow]))) return;
   if (!isStaticReal()) {
     if (!v.diff) v.pub = { status: v.status };
     v.status = off ? '停用' : '启用';
     v.diff = v.diff ?? '修改';
     touch(`${off ? '停用' : '启用'}取值“${v.name}”`);
   }
-  message.success(`已${off ? '停用' : '启用'}，保存到草稿 ${draft.value?.id ?? ''}`);
+  message.success(directEdit.value ? `已${off ? '停用' : '启用'}` : `已${off ? '停用' : '启用'}，保存到草稿 ${draft.value?.id ?? ''}`);
 }
 
 // —— 同义词与问数映射 ——
@@ -349,14 +388,20 @@ watch(() => JSON.stringify([staticContextKey(), cur.value?.id, draft.value?.id, 
 onBeforeUnmount(() => { ++inputSeq; clearTimeout(inputTimer); });
 const TARGET_OPTIONS = computed(() => valueRows.value.filter((v) => v.status === '启用').map((v) => ({ value: v.name, label: `${v.name}（${v.code}）` })));
 const mHits = computed(() => (mForm.phrase.trim() ? (isStaticReal() ? inputHits.value[mForm.phrase.trim()] ?? [] : hitsOf(mForm.phrase.trim())).filter((h) => !(h.item === cur.value?.id && mForm.targets.includes(h.value))) : []));
-const openMap = () => { Object.assign(mForm, { phrase: '', targets: [], match: '精确', resolve: '' }); mOpen.value = true; };
+const openMap = async () => { if (directEdit.value) { mapLock.value = await captureVersion(); if (mapLock.value === undefined) return; } Object.assign(mForm, { phrase: '', targets: [], match: '精确', resolve: '' }); mapContext.value = JSON.stringify([staticContextKey(), cur.value?.id]); mOpen.value = true; };
 async function saveMap() {
   const p = mForm.phrase.trim();
-  if (!p || !mForm.targets.length) return;
+  if (!p || !mForm.targets.length || mSaving.value) return;
+  if (mapContext.value !== JSON.stringify([staticContextKey(), cur.value?.id]) || (isStaticReal() && !directEdit.value)) { message.error('对象或身份已切换，请重新打开编辑'); return; }
   const others = mHits.value.map((h) => `${h.itemName} · ${h.value}`).join('、');
   // real：mappings 段，新增说法一行（key = 说法>取值）
   const after = { phrase: p, targets: [...mForm.targets], match: mForm.targets.length > 1 ? '多值' : mForm.match, resolve: mForm.resolve || undefined };
-  if (!(await cr.save('mappings', [{ key: `${p}>${mForm.targets.join('|')}`, op: 'add', after, type: '说法', field: p, afterText: mForm.targets.join('、') }]))) return;
+  const rows = [{ key: `${p}>${mForm.targets.join('|')}`, op: 'add' as const, after, type: '说法', field: p, afterText: mForm.targets.join('、') }];
+  mSaving.value = true;
+  let saved: boolean;
+  try { saved = directEdit.value ? await applyDimension('mappings', rows, mapLock.value) : await cr.save('mappings', rows); }
+  finally { mSaving.value = false; }
+  if (!saved) return;
   if (!isStaticReal()) {
     (cur.value?.mappings ?? []).unshift({
       key: `${p}>${mForm.targets.join('|')}`, phrase: p, targets: [...mForm.targets], match: mForm.targets.length > 1 ? '多值' : mForm.match, source: '业务知识', hits: 0,
@@ -365,7 +410,7 @@ async function saveMap() {
     touch(`新增说法“${p}”`);
   }
   mOpen.value = false; vp.value = 1;
-  message.success(`已保存到草稿 ${draft.value?.id ?? ''}`);
+  message.success(directEdit.value ? '已保存并生效' : `已保存到草稿 ${draft.value?.id ?? ''}`);
 }
 
 // —— 定义：问数设置在草稿里可编辑 ——
@@ -484,8 +529,7 @@ watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
 
 let definitionSeq = 0;
 const definitionError = ref('');
-watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.view,
-  draft.value?.id, cr.loading.value, cr.error.value, newTarget.value]), async () => {
+async function loadDefinition() {
   const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value;
   definitionError.value = '';
   if (!isStaticReal() || !id || newTarget.value
@@ -495,7 +539,9 @@ watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.vi
     if (n !== definitionSeq || key !== staticContextKey() || id !== selectedId.value) return;
     baseline.value = [...baseline.value.filter((d) => d.id !== id), data];
   } catch (e) { if (n === definitionSeq && key === staticContextKey() && id === selectedId.value && !newTarget.value) definitionError.value = e instanceof Error ? e.message : String(e); }
-}, { immediate: true });
+}
+watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.view,
+  draft.value?.id, cr.loading.value, cr.error.value, newTarget.value]), loadDefinition, { immediate: true });
 watch(cr.items, () => { if (isStaticReal()) { void valuesPage.reload(); void mapsPage.reload(); } });
 onBeforeUnmount(() => { ++definitionSeq; });
 
@@ -548,9 +594,6 @@ onBeforeUnmount(() => { ++definitionSeq; });
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => guard(() => { editing = false; setView(v); })" />
         <span class="dm-sp" />
-        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-button v-else-if="!draft" type="primary" @click="openChange">发起变更</a-button>
-        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="dm-tabs">
         <a-tab-pane key="def" tab="定义" />
@@ -597,7 +640,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
               <a-button size="small" @click="cancelEdit">取消</a-button>
               <a-button size="small" :disabled="!dirty" @click="save">保存到草稿</a-button>
             </a-space>
-            <a-space v-else><a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">{{ isStaticReal() && !cur.object ? '编辑匹配设置' : '编辑问数设置' }}</a-button></a-tooltip><a-tooltip v-if="isStaticReal()" :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openDefinition()">编辑定义</a-button></a-tooltip></a-space>
+            <a-space v-else><a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="beginEdit">{{ isStaticReal() && !cur.object ? '编辑匹配设置' : '编辑问数设置' }}</a-button></a-tooltip><a-tooltip v-if="isStaticReal()" :title="readonly ? reason : ''"><a-button size="small" :disabled="readonly" @click="openDefinition()">编辑定义</a-button></a-tooltip></a-space>
           </div>
           <a-descriptions v-if="!editing" :column="1" bordered size="small" class="dm-desc">
             <a-descriptions-item label="默认层级">{{ qa.defaultLevel }}</a-descriptions-item>
@@ -634,7 +677,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
           <a-select v-model:value="vs" :options="VS_OPTIONS" size="small" class="dm-bar-sel" />
           <span class="t-12 c-3">{{ valueSummary }}</span>
           <span class="dm-sp" />
-          <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openValue()">新增取值</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button size="small" :disabled="!(directEdit || (!isStaticReal() && canEdit))" @click="openValue()">新增取值</a-button></a-tooltip>
         </div>
         <a-table :columns="valueCols" :data-source="isStaticReal() ? valuePageRows : shownValues.slice((vp - 1) * valueSize, vp * valueSize)" :loading="valuesPage.loading.value" :pagination="false" size="small" row-key="key" table-layout="fixed" class="dm-table">
           <template #bodyCell="{ column, record }">
@@ -656,8 +699,8 @@ onBeforeUnmount(() => { ++definitionSeq; });
             <template v-else-if="column.key === 'op'">
               <a-tooltip :title="editTip">
                 <a-space :size="12">
-                  <a :class="{ 'dm-off': !canEdit }" @click="canEdit && openValue(record)">编辑</a>
-                  <a :class="{ 'dm-off': !canEdit }" @click="canEdit && toggleValue(record)">{{ record.status === '启用' ? '停用' : '启用' }}</a>
+                  <a :class="{ 'dm-off': !(directEdit || (!isStaticReal() && canEdit)) }" @click="(directEdit || (!isStaticReal() && canEdit)) && openValue(record)">编辑</a>
+                  <a :class="{ 'dm-off': !(directEdit || (!isStaticReal() && canEdit)) }" @click="(directEdit || (!isStaticReal() && canEdit)) && toggleValue(record)">{{ record.status === '启用' ? '停用' : '启用' }}</a>
                 </a-space>
               </a-tooltip>
             </template>
@@ -695,7 +738,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
           <span v-if="conflictCount" class="t-12 c-1" title="同一说法对应多个取值，按处理方式回答，没有处理方式时追问用户">{{ conflictCount }} 个有歧义</span>
           <a-checkbox v-model:checked="conf" class="t-12">只看有歧义的</a-checkbox>
           <span class="dm-sp" />
-          <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="openMap">新增说法</a-button></a-tooltip>
+          <a-tooltip :title="editTip"><a-button size="small" :disabled="!(directEdit || (!isStaticReal() && canEdit))" @click="openMap">新增说法</a-button></a-tooltip>
         </div>
         <a-table :columns="mapCols" :data-source="isStaticReal() ? mapPageRows : shownMaps.slice((vp - 1) * mapSize, vp * mapSize)" :loading="mapsPage.loading.value" :pagination="false" size="small" row-key="key" table-layout="fixed" class="dm-table">
           <template #bodyCell="{ column, record }">
@@ -753,15 +796,15 @@ onBeforeUnmount(() => { ++definitionSeq; });
           </template>
         </a-table>
         <AppPagination v-model:page="hp" variant="full" :total="isStaticReal() ? historyPage.total.value : histRows.length" v-model:size="historySize" unit="条" :empty="false" />
-        <div class="t-12 c-3">维度和码表只随本体整版发布生效；回滚会生成新的变更单，经审核后随下一次发布生效。</div>
+        <div class="t-12 c-3">维度和码表只随本体整版发布生效；回滚会生成新的变更单，随下一次发布生效。</div>
       </div>
     </div>
   </div>
 
   <StartChangeModal v-model:open="changeOpen" :target-name="cur ? `${cur.name}（${cur.api}）` : ''" @ok="start" />
 
-  <DefinitionEditor v-model:open="definitionOpen" kind="dimension" :target-id="newDefinition ? undefined : cur?.id" :cr-id="newDefinition ? undefined : draft?.id" :new-target="!!cr.head.value?.targets.find((t) => t.kind === 'dimension' && t.id === cur?.id)?.isNew" @saved="definitionSaved" />
-  <a-modal v-model:open="vOpen" :title="vEdit ? `编辑取值 · ${vEdit.name}` : `新增取值 · ${cur?.name}`" :width="560" ok-text="保存到草稿" :ok-button-props="{ disabled: !!vErr }" @ok="saveValue">
+  <DefinitionEditor :assistant-draft="newDefinition ? assistantDraft : undefined" v-model:open="definitionOpen" kind="dimension" :target-id="newDefinition ? undefined : cur?.id" :cr-id="newDefinition || !isDraft ? undefined : draft?.id" :new-target="!!cr.head.value?.targets.find((t) => t.kind === 'dimension' && t.id === cur?.id)?.isNew" @saved="definitionSaved" />
+  <a-modal v-model:open="vOpen" :title="vEdit ? `编辑取值 · ${vEdit.name}` : `新增取值 · ${cur?.name}`" :width="560" ok-text="保存" :confirm-loading="vSaving" :ok-button-props="{ disabled: !!vErr }" @ok="saveValue">
     <a-form layout="horizontal" :label-col="{ style: { width: '80px' } }" class="dm-form">
       <a-form-item label="层级" required><a-select v-model:value="vForm.level" :options="LEVEL_OPTIONS" :disabled="!!vEdit" /></a-form-item>
       <a-form-item v-if="parentLevel" label="上级"><a-select v-model:value="vForm.parent" :options="PARENT_OPTIONS" show-search allow-clear :placeholder="`选择${parentLevel}`" /></a-form-item>
@@ -776,7 +819,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
     <div v-for="c in synConflicts" :key="c" class="t-12 c-1">{{ c }}，问数会出现歧义</div>
   </a-modal>
 
-  <a-modal v-model:open="mOpen" :title="`新增说法 · ${cur?.name}`" :width="560" ok-text="保存到草稿" :ok-button-props="{ disabled: !mForm.phrase.trim() || !mForm.targets.length }" @ok="saveMap">
+  <a-modal v-model:open="mOpen" :title="`新增说法 · ${cur?.name}`" :width="560" ok-text="保存" :confirm-loading="mSaving" :ok-button-props="{ disabled: !mForm.phrase.trim() || !mForm.targets.length }" @ok="saveMap">
     <a-alert v-if="inputMatchError" type="warning" :message="inputMatchError" show-icon />
     <a-form layout="horizontal" :label-col="{ style: { width: '80px' } }" class="dm-form">
       <a-form-item label="说法" required><a-input v-model:value="mForm.phrase" placeholder="用户在问题里的说法" /></a-form-item>

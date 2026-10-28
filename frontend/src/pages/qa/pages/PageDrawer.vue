@@ -51,7 +51,7 @@ const shownCards = computed(() => (editing.value ? draftCards.value : props.page
 const pagedCards = computed(() => shownCards.value.slice((cpage.value - 1) * CSIZE, cpage.value * CSIZE));
 const calibers = computed(() => {
   const m = new Map<string, PageCard>();
-  (props.page?.cards ?? []).forEach((c) => m.set(`${c.metric} ${c.version}`, c));
+  (props.page?.cards ?? []).forEach((c) => { if (c.metric && c.version && c.version !== '--') m.set(`${c.metric} ${c.version}`, c); });
   return [...m.entries()].map(([label, c]) => ({ label, pending: c.pending }));
 });
 function startEdit() { draftCards.value = [...(props.page?.cards ?? [])]; editing.value = true; cpage.value = 1; }
@@ -272,6 +272,7 @@ watch(() => props.page?.name, (name) => { if (name === newName.value.trim()) ren
         <div class="pd-row">
           <span class="c-3 t-12">口径版本</span>
           <a-tag v-for="c in calibers" :key="c.label" :class="{ 'c-2': c.pending }" :title="c.pending">{{ c.label }}{{ c.pending ? ' · 待更新' : '' }}</a-tag>
+          <span v-if="!calibers.length" class="t-12 c-3">未记录指标口径版本</span>
           <span class="pd-sp" />
           <template v-if="editing">
             <a-button size="small" @click="cancelEdit">取消</a-button>

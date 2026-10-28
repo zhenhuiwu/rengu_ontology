@@ -5,7 +5,7 @@
  * 注意：布局里不用 overflow:hidden 兜底，超出一屏会真实撑出滚动条，验收脚本才能发现。
  * DetailDrawer / ConfirmActionModal 全站各挂一个。
  */
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import TopBar from './TopBar.vue';
 import SideNav from './SideNav.vue';
@@ -17,10 +17,13 @@ import { PAGES } from '@/nav';
 import VersionBanner from '@/components/VersionBanner.vue';
 import PreviewBanner from '@/components/PreviewBanner.vue';
 import PreviewScope from '@/components/PreviewScope.vue';
+import BuildAssistant from '@/components/BuildAssistant.vue';
+import { clearAssistantPrefill } from '@/api/assistant';
 
 const route = useRoute();
 const app = useAppStore();
 const workspaceKey = computed(() => app.workspaceEpoch);
+watch(workspaceKey, clearAssistantPrefill);
 const page = computed(() => PAGES.find((p) => p.key === route.meta.navKey));
 const title = computed(() => (route.meta.title as string) ?? page.value?.title ?? '');
 const crumbs = computed(() => {
@@ -50,6 +53,7 @@ const crumbs = computed(() => {
         </div>
       </main>
     </div>
+    <BuildAssistant v-if="page?.area.key === 'build' && !app.workspaceLoading && !app.workspaceError" :key="workspaceKey" />
     <DetailDrawer v-if="!app.workspaceLoading && !app.workspaceError" :key="workspaceKey" />
     <ConfirmActionModal v-if="!app.workspaceLoading" :key="workspaceKey" />
   </div>

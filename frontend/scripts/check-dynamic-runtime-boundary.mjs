@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as vue from 'vue';
+const actionReview = {};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../src/pages/ops/actionReview.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: actionReview });
 import { parse, compileTemplate } from '@vue/compiler-sfc';
 
 const tpl = { code: 'db', engine: 'db', scope: [], drivers: [], groups: [], impact: { columns: [] }, metrics: [], noDriverHint: '' };
@@ -12,6 +14,7 @@ const messages = [];
 const emptyPage = { items: [], total: 0, counts: { pending: 0, records: 0, unknown: 0 } };
 let writes = 0, plans = 0;
 const imports = {
+  './actionReview': actionReview,
   vue: { ...vue, onBeforeUnmount: () => {} },
   'vue-router': { useRoute: () => route, useRouter: () => ({ replace: () => {} }), onBeforeRouteUpdate: () => {} },
   'ant-design-vue': { message: { error: (x) => { throw Error(x); }, success: (x) => messages.push(x), warning: () => {} } },

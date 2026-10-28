@@ -33,7 +33,7 @@ interface ActionTypeDef {
   id: string; name: string; api: string; group: string; status: PubStatus; version: string;
   target: string; targetApi: string; targetKind?: 'store' | 'product' | 'order' | 'region';
   owner: string; desc: string; runners: string; approval: string;
-  sysId: string | null; endpoint: string; idemKey: string;
+  sysId: string | null; endpoint: string; idemKey: string; httpMapping?: any;
   usedBy: string[]; // 规则 ID
 }
 export interface ActionType extends ActionTypeDef {
@@ -418,7 +418,7 @@ export interface EventType {
   dedupKey: string; dedupWindow: string; retention: string; delivery: string; ordering: string;
   weekly: number; specific: PayloadField[];
 }
-export interface PayloadField { name: string; api: string; type: string; required: boolean; desc: string; sample: string }
+export interface PayloadField { name: string; api: string; type: string; required: boolean; desc: string; sample: string; schema?: Record<string, unknown> | null }
 const F = (name: string, api: string, type: string, required: boolean, desc: string, sample: string): PayloadField => ({ name, api, type, required, desc, sample });
 
 export const EVENT_SOURCES = ['全部', '数据同步', '规则', '动作', '外部系统'];

@@ -7,6 +7,7 @@ const props = defineProps<{ rule: RuleDef; meta: RuleMetaDto; editable: boolean;
 const emit = defineEmits<{ update: [patch: RuleDefinitionPatch] }>();
 const error = ref('');
 const dialog = reactive({ open: false, index: -1, source: 'object', field: '', metric: '', version: undefined as number | undefined,
+  functionId: '', functionVersion: '', functionArgs: [] as string[], relationId: '', relationField: '',
   period: 'day' as 'day' | 'week', transform: 'value' as 'value' | 'prev' | 'wow', elapsed: 'value', op: '=', value: '' });
 const exprEditing = ref(false), exprInput = ref('');
 watch(() => props.rule.id, () => { dialog.open = false; exprEditing.value = false; error.value = ''; });
@@ -16,6 +17,26 @@ const object = computed(() => props.meta.objects.find(o => o.id === props.rule.o
 const events = computed(() => props.meta.events.filter(e => e.objKind === props.rule.objKind));
 const event = computed(() => events.value.find(e => e.id === props.rule.trigger.eventId));
 const fieldOptions = computed(() => (dialog.source === 'event' ? event.value?.fields : object.value?.fields)?.map(f => ({ value: f.expression, label: `${f.name} · ${f.api}` })) ?? []);
+const functions = computed(() => [...new Map((props.meta.functions ?? []).map(f => [f.id, { value: f.id, label: `${f.name} · ${f.id}` }])).values()]);
+const functionVersions = computed(() => (props.meta.functions ?? []).filter(f => f.id === dialog.functionId));
+const selectedFunction = computed(() => functionVersions.value.find(f => f.version === dialog.functionVersion));
+const argumentOptions = computed(() => [
+  ...(object.value?.fields ?? []).map(f => ({ value: f.expression, label: `对象 · ${f.name}（${f.api}）` })),
+  ...(props.rule.trigger.kind === '事件' ? event.value?.fields ?? [] : []).map(f => ({ value: f.expression, label: `事件 · ${f.name}（${f.api}）` })),
+]);
+const relations = computed(() => (props.meta.relations ?? []).filter(r => r.from === props.rule.objKind));
+const selectedRelation = computed(() => relations.value.find(r => r.id === dialog.relationId));
+function parseBoundExpression(expression: string) {
+  const fn = /^rule_fn\(("[^"\\]*"),\s*("[^"\\]*")(?:,\s*(.*))?\)$/.exec(expression);
+  const relation = /^related\(("[^"\\]*"),\s*("[^"\\]*")\)$/.exec(expression);
+  try {
+    if (fn) return { source: 'function', functionId: JSON.parse(fn[1]), functionVersion: JSON.parse(fn[2]), functionArgs: fn[3] ? fn[3].split(',').map(v => v.trim()) : [] };
+    if (relation) return { source: 'relation', relationId: JSON.parse(relation[1]), relationField: JSON.parse(relation[2]) };
+  } catch { /* Unrecognised legacy expression stays editable in the expression box. */ }
+  return null;
+}
+function setFunction(id: string) { dialog.functionId = id; dialog.functionVersion = ''; dialog.functionArgs = []; }
+function setFunctionVersion(version: string) { dialog.functionVersion = version; dialog.functionArgs = []; }
 const metrics = computed(() => props.meta.metrics.map(m => ({ value: m.id, label: `${m.name} · ${m.id}` })));
 const metric = computed(() => props.meta.metrics.find(m => m.id === dialog.metric));
 const versions = computed(() => (metric.value?.versions ?? []).flatMap(v => {
@@ -34,9 +55,10 @@ function openCondition(index = -1) {
   const expression = condition?.expression ?? '';
   const elapsed = /^(hours_since|minutes_since)\((.+)\)$/.exec(expression);
   const field = elapsed?.[2] ?? expression;
-  Object.assign(dialog, { open: true, index, source: condition?.metric ? 'metric' : field.startsWith('event.') ? 'event' : 'object',
+  const bound = parseBoundExpression(expression);
+  Object.assign(dialog, { open: true, index, functionId: '', functionVersion: '', functionArgs: [], relationId: '', relationField: '',
     field, metric: condition?.metric ?? '', version: condition?.metricVer, period: condition?.period ?? 'day',
-    transform: condition?.transform ?? 'value', elapsed: elapsed?.[1] ?? 'value', op: condition?.op ?? '=', value: condition?.value ?? '' });
+    transform: condition?.transform ?? 'value', elapsed: elapsed?.[1] ?? 'value', op: condition?.op ?? '=', value: condition?.value ?? '', ...(bound ?? {}), source: condition?.metric ? 'metric' : bound?.source ?? (field.startsWith('event.') ? 'event' : 'object') });
   error.value = '';
 }
 function selectMetric(id: string) {
@@ -52,6 +74,15 @@ function saveCondition() {
     if (!metric.value || !versions.value.some(v => v.value === dialog.version)) { error.value = '请选择指标和明确口径版本'; return; }
     condition = { metric: dialog.metric, metricVer: dialog.version, field: metric.value.name, op: dialog.op,
       value: dialog.value.trim(), period: dialog.period, transform: dialog.transform };
+  } else if (dialog.source === 'function') {
+    const fn = selectedFunction.value;
+    if (!fn || fn.inputs.length !== dialog.functionArgs.length || fn.inputs.some((_, i) => !argumentOptions.value.some(option => option.value === dialog.functionArgs[i]))) { error.value = '请选择固定函数版本并为每个入参选择字段'; return; }
+    condition = { field: fn.name, op: dialog.op, value: dialog.value.trim(), expression: `rule_fn(${[JSON.stringify(fn.id), JSON.stringify(fn.version), ...dialog.functionArgs].join(', ')})` };
+  } else if (dialog.source === 'relation') {
+    const relation = selectedRelation.value;
+    const prop = relation?.fields.find(f => f.api === dialog.relationField);
+    if (!relation || !prop) { error.value = '请选择已发布关系和目标属性'; return; }
+    condition = { field: `${relation.name} · ${prop.name}`, op: dialog.op, value: dialog.value.trim(), expression: `related(${JSON.stringify(relation.id)}, ${JSON.stringify(prop.api)})` };
   } else {
     if (!field) { error.value = '请选择真实字段，显示名称不能代替字段绑定'; return; }
     condition = { field: field.label.split(' · ')[0], op: dialog.op, value: dialog.value.trim(),
@@ -95,6 +126,7 @@ const triggerEnabled = computed(() => props.rule.trigger.kind === '事件' ? pro
     </a-table>
     <div class="rule-editor-tools"><span class="fw-600">{{ conditionChanged ? '原始表达式（保存后更新）' : '原始表达式' }}</span><span class="rule-editor-spacer" /><a-button v-if="editable" type="link" size="small" @click="exprInput = rule.expr; exprEditing = true">编辑表达式</a-button></div>
     <template v-if="exprEditing">
+      <p class="t-12 c-3">固定版本函数：rule_fn("函数编号", "v版本", 对象.字段)；一跳关系：related("关系编号", "目标属性API")。函数输入须与固定版本签名一致；历史事件缺少对象快照时不可读取关联对象。</p>
       <a-textarea v-model:value="exprInput" :rows="4" :maxlength="4096" placeholder="填写明确字段或指标版本表达式" />
       <div class="rule-editor-tools"><a-button size="small" @click="exprEditing = false">取消</a-button><a-button size="small" type="primary" @click="applyExpression">采用表达式</a-button></div>
     </template>
@@ -126,11 +158,22 @@ const triggerEnabled = computed(() => props.rule.trigger.kind === '事件' ? pro
   <a-modal v-model:open="dialog.open" :title="dialog.index < 0 ? '添加条件' : '编辑条件'" ok-text="采用条件" cancel-text="取消" :width="580" @ok="saveCondition">
     <a-alert v-if="error" type="error" :message="error" show-icon class="condition-error" />
     <a-form layout="vertical">
-      <a-form-item label="取值来源"><a-select v-model:value="dialog.source" :options="[{value:'object',label:'对象属性'},{value:'event',label:'事件载荷',disabled:rule.trigger.kind !== '事件'},{value:'metric',label:'指标口径'}]" @change="dialog.field = ''; dialog.metric = ''; dialog.version = undefined" /></a-form-item>
+      <a-form-item label="取值来源"><a-select v-model:value="dialog.source" :options="[{value:'object',label:'对象属性'},{value:'event',label:'事件载荷',disabled:rule.trigger.kind !== '事件'},{value:'metric',label:'指标口径'},{value:'function',label:'固定版本函数'},{value:'relation',label:'关联对象属性'}]" @change="dialog.field = ''; dialog.metric = ''; dialog.version = undefined" /></a-form-item>
       <template v-if="dialog.source === 'metric'">
         <a-form-item label="指标" required><a-select :value="dialog.metric || undefined" :options="metrics" show-search option-filter-prop="label" placeholder="选择已发布指标" @change="(v: any) => selectMetric(v)" /></a-form-item>
         <a-form-item label="口径版本" required><a-select v-model:value="dialog.version" :options="versions" placeholder="明确选择版本" /></a-form-item>
         <div class="condition-pair"><a-form-item label="时间桶"><a-select v-model:value="dialog.period" :options="[{value:'day',label:'日'},{value:'week',label:'周'}]" /></a-form-item><a-form-item label="取值方式"><a-select v-model:value="dialog.transform" :options="[{value:'value',label:'当前值'},{value:'prev',label:'上期值'},{value:'wow',label:'周环比'}]" /></a-form-item></div>
+      </template>
+      <template v-else-if="dialog.source === 'function'">
+        <a-form-item label="已发布函数" required><a-select :value="dialog.functionId || undefined" :options="functions" show-search option-filter-prop="label" placeholder="选择函数" @change="(v: string) => setFunction(v)" /></a-form-item>
+        <a-form-item label="固定版本" required><a-select :value="dialog.functionVersion || undefined" :options="functionVersions.map(f => ({ value: f.version, label: f.version }))" placeholder="选择真实保存版本" @change="(v: string) => setFunctionVersion(v)" /></a-form-item>
+        <a-form-item v-for="(input, i) in selectedFunction?.inputs ?? []" :key="input" :label="`入参 · ${input}`" required><a-select v-model:value="dialog.functionArgs[i]" :options="argumentOptions" show-search option-filter-prop="label" placeholder="选择字段" /></a-form-item>
+        <p class="t-12 c-3">历史事件回放只能使用保存的事件字段；对象字段使用实时对象。</p>
+      </template>
+      <template v-else-if="dialog.source === 'relation'">
+        <a-form-item label="已发布一跳关系" required><a-select :value="dialog.relationId || undefined" :options="relations.map(r => ({ value: r.id, label: `${r.name} · ${r.id}` }))" show-search option-filter-prop="label" placeholder="选择关系" @change="(v: string) => { dialog.relationId = v; dialog.relationField = ''; }" /></a-form-item>
+        <a-form-item label="目标属性" required><a-select :value="dialog.relationField || undefined" :options="selectedRelation?.fields.map(f => ({ value: f.api, label: `${f.name} · ${f.api}` })) ?? []" show-search option-filter-prop="label" placeholder="选择目标属性" @change="(v: string) => dialog.relationField = v" /></a-form-item>
+        <p class="t-12 c-3">仅显示权限可见、已发布且有受控外键的关系；缺少历史对象快照时无法回放。</p>
       </template>
       <template v-else>
         <a-form-item label="明确字段" required><a-select v-model:value="dialog.field" :options="fieldOptions" show-search option-filter-prop="label" placeholder="选择真实字段" /></a-form-item>

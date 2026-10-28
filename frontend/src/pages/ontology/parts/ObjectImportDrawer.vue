@@ -9,15 +9,16 @@ import { previewObjectImport, commitObjectImport, type ImportPreview, type Impor
 import type { Datasource, DsTable } from '@/mock/datasources';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { useReadonly } from '@/composables/useReadonly';
-import StartChangeModal from './StartChangeModal.vue';
+import { fetchCurrentAfterWrite } from '@/api/static';
 const open = defineModel<boolean>('open', { default: false });
-const emit = defineEmits<{ saved: [result: { id: string; crId: string }] }>();
+const emit = defineEmits<{ saved: [result: { id: string; crId: string; published: boolean }] }>();
 const { readonly, reason } = useReadonly();
 const router = useRouter();
 const sources = ref<Datasource[]>([]), tables = ref<DsTable[]>([]), owners = ref<{ value: string; label: string }[]>([]);
 const datasource = ref<string>(), schema = ref<string>(), selected = ref<string[]>([]);
 const preview = ref<ImportPreview>(), objects = ref<ImportObject[]>([]), selectedLinks = ref<string[]>([]);
-const loading = ref(false), busy = ref(false), error = ref(''), changeOpen = ref(false);
+const loading = ref(false), busy = ref(false), error = ref('');
+const releaseLock = ref<number>();
 const initialSnapshot = ref('');
 const formSignature = () => JSON.stringify([objects.value, selectedLinks.value]);
 const dirty = computed(() => open.value && !!preview.value && !!initialSnapshot.value && initialSnapshot.value !== formSignature());
@@ -25,7 +26,7 @@ const guard = useUnsavedGuard(dirty);
 function close() { if (!busy.value) void guard(() => { open.value = false; }); }
 let seq = 0, tablesSeq = 0, previewSeq = 0;
 const ctxKey = () => JSON.stringify(currentApiContext());
-function resetPreview() { initialSnapshot.value = ''; previewSeq++; preview.value = undefined; objects.value = []; selectedLinks.value = []; changeOpen.value = false; }
+function resetPreview() { initialSnapshot.value = ''; previewSeq++; preview.value = undefined; objects.value = []; selectedLinks.value = []; releaseLock.value = undefined; }
 watch(open, (v) => { if (v) { void load(); } else { seq++; tablesSeq++; resetPreview(); } });
 watch(ctxKey, () => { if (open.value) { open.value = false; message.info('身份或版本已切换，请重新打开导入'); } });
 async function load() {
@@ -63,38 +64,46 @@ async function buildPreview() {
   if (!canPreview.value || !open.value) return;
   const my = ++previewSeq, key = ctxKey(); busy.value = true; error.value = ''; preview.value = undefined;
   try {
-    const result = await previewObjectImport(datasource.value!, schema.value!, [...selected.value]);
+    const [result, head] = await Promise.all([previewObjectImport(datasource.value!, schema.value!, [...selected.value]), fetchCurrentAfterWrite()]);
     if (my !== previewSeq || key !== ctxKey() || !open.value) return;
-    preview.value = result; objects.value = result.proposal.objectTypes.map((o) => ({ ...o, id: o.api })); selectedLinks.value = []; initialSnapshot.value = formSignature();
+    preview.value = result; releaseLock.value = head.lockVersion; objects.value = result.proposal.objectTypes.map((o) => ({ ...o, id: o.api, pk: o.pk || '', titleField: o.props.find(p => p.title)?.api || o.pk || '' })); selectedLinks.value = []; initialSnapshot.value = formSignature();
   } catch (e) { if (my === previewSeq && key === ctxKey()) error.value = e instanceof Error ? e.message : String(e); }
   finally { if (my === previewSeq && key === ctxKey()) busy.value = false; }
 }
+function sourceTable(object: ImportObject) { return preview.value?.tables.find(t => t.name === object.table || `${preview.value?.schema}.${t.name}` === object.table); }
+function primaryOptions(object: ImportObject) {
+  const table = sourceTable(object); if (!table) return [];
+  const keys = table.pk.length === 1 ? table.pk : [];
+  return object.props.filter(p => keys.includes(p.source)).map(p => ({ value: p.api, label: `${p.name} · ${p.source}` }));
+}
 const validation = computed(() => {
   if (!preview.value) return '请先选择库表并生成真实预览';
-  if (objects.value.some((o) => preview.value!.tables.find((t) => `${preview.value!.schema}.${t.name}` === o.table || t.name === o.table)?.pk.length !== 1)) return '所选对象存在无主键或复合主键表，需要人工建模，不能直接导入';
+  if (releaseLock.value === undefined) return '版本信息尚未加载，请重新预览';
+  if (objects.value.some(o => !primaryOptions(o).some(p => p.value === o.pk))) return '请选择源表真实的单列唯一非空字段作为主键';
+  if (objects.value.some(o => !o.titleField || !o.props.some(p => p.api === o.titleField))) return '请选择显示标题属性';
   if (!objects.value.length) return '当前选择未产生对象类型；请调整库表选择';
   if (objects.value.some((o) => !o.name.trim() || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(o.api) || !o.owner || !owners.value.some((u) => u.value === o.owner))) return '请检查对象名称、API名并选择真实负责人';
   if (new Set(objects.value.map((o) => o.api)).size !== objects.value.length) return '对象API名不能重复';
   return '';
 });
 const canCommit = computed(() => isDataReal() && !readonly.value && !loading.value && !busy.value && !validation.value);
-async function commit(opts: { join?: string; title?: string; desc?: string }) {
-  if (!canCommit.value || !preview.value) return;
+async function commit() {
+  if (!canCommit.value || !preview.value || releaseLock.value === undefined) return;
   const my = previewSeq, key = ctxKey(); busy.value = true; error.value = '';
   try {
     const rows = objects.value.map((o) => ({ ...o, id: o.api }));
-    const result = await commitObjectImport(preview.value, [...selected.value], rows, !!selectedLinks.value.length, opts, [...selectedLinks.value]);
+    const result = await commitObjectImport(preview.value, [...selected.value], rows, !!selectedLinks.value.length, releaseLock.value, [...selectedLinks.value]);
     if (my !== previewSeq || key !== ctxKey() || !open.value) return;
     initialSnapshot.value = formSignature();
-    message.success(`已保存到变更单 ${result.crId}，审核发布后生效`);
-    emit('saved', { id: result.targets.find((t) => t.kind === 'object')?.id ?? rows[0].id, crId: result.crId }); open.value = false;
+    message.success(`对象定义已保存并生效 · ${result.ver}`);
+    emit('saved', { id: result.targets.find((t) => t.kind === 'object')?.id ?? rows[0].id, crId: result.crId, published: true }); open.value = false;
   } catch (e) { if (my === previewSeq && key === ctxKey()) error.value = `${e instanceof Error ? e.message : String(e)}；输入已保留，结构变化时请重新生成预览。`; }
   finally { if (my === previewSeq && key === ctxKey()) busy.value = false; }
 }
 </script>
 <template>
   <a-drawer :open="open" title="从数据源导入对象定义" :width="1040" :closable="!busy" :mask-closable="!busy" @close="close">
-    <a-alert type="info" message="只从真实只读内省生成定义草稿；不会自动授予任意库表查询权限。发布前现有定义不变。" show-icon />
+    <a-alert type="info" message="只从真实只读内省生成定义；保存后立即生效，不会自动授予任意库表查询权限。" show-icon />
     <a-alert v-if="readonly" type="warning" :message="reason" show-icon />
     <a-alert v-if="error" type="error" :message="error" show-icon />
     <a-spin :spinning="loading">
@@ -109,18 +118,17 @@ async function commit(opts: { join?: string; title?: string; desc?: string }) {
           <a-alert v-for="warning in preview.warnings" :key="warning" type="warning" :message="warning" show-icon />
           <div v-for="(object, index) in objects" :key="object.table" class="import-object">
             <div class="t-16 fw-600">{{ index+1 }}. {{ object.table }}</div>
-            <div class="import-grid"><a-form-item label="名称"><a-input v-model:value="object.name" :maxlength="64" /></a-form-item><a-form-item label="API名 / 新业务编号"><a-input v-model:value="object.api" :maxlength="64" /></a-form-item><a-form-item label="负责人"><a-select v-model:value="object.owner" :options="owners" /></a-form-item><a-form-item label="主键"><span class="t-14">{{ object.pk || '未发现，需在草稿补齐' }}</span></a-form-item></div>
+            <div class="import-grid"><a-form-item label="名称"><a-input v-model:value="object.name" :maxlength="64" /></a-form-item><a-form-item label="API名 / 新业务编号"><a-input v-model:value="object.api" :maxlength="64" /></a-form-item><a-form-item label="负责人"><a-select v-model:value="object.owner" :options="owners" /></a-form-item><a-form-item label="主键" required><a-select v-model:value="object.pk" :options="primaryOptions(object)" placeholder="选择唯一非空源属性" /></a-form-item><a-form-item label="显示标题" required><a-select v-model:value="object.titleField" :options="object.props.map(p => ({ value: p.api, label: `${p.name} · ${p.source}` }))" placeholder="选择标题属性" /></a-form-item></div>
             <a-table :columns="[{title:'属性',dataIndex:'name'},{title:'API名',dataIndex:'api'},{title:'类型',dataIndex:'type'},{title:'源列',dataIndex:'source'}]" :data-source="object.props" size="small" :pagination="{pageSize:8,hideOnSinglePage:true}" row-key="api" />
           </div>
           <div class="import-note t-14">外键关系建议（默认不选；逐条勾选确认，共 {{ preview.proposal.linkTypes.length }} 条）</div>
           <a-table v-if="preview.proposal.linkTypes.length" :columns="[{title:'关系',dataIndex:'name'},{title:'源对象',dataIndex:'from'},{title:'目标对象',dataIndex:'to'}]" :data-source="preview.proposal.linkTypes" row-key="id" size="small" :row-selection="{ selectedRowKeys: selectedLinks, onChange: (keys: (string | number)[]) => selectedLinks = keys.map(String) }" :pagination="{pageSize:8,hideOnSinglePage:true}" />
-          <p class="t-12 c-3">属性与关系只采用确认时重新内省的结构；结构已变化返回409，需重新预览。保存后在对象草稿中继续编辑。</p>
+          <p class="t-12 c-3">属性与关系只采用确认时重新内省的结构；结构已变化返回409，需重新预览。保存后立即生效，并可在对象类型中继续编辑。</p>
         </template>
       </a-form>
     </a-spin>
-    <template #footer><div class="import-footer"><span class="t-12 c-3">{{ validation || '预览确认后保存到CR，不立即发布' }}</span><a-button :disabled="busy" @click="close">取消</a-button><a-button type="primary" :loading="busy" :disabled="!canCommit" @click="changeOpen = true">保存到变更草稿</a-button></div></template>
+    <template #footer><div class="import-footer"><span class="t-12 c-3">{{ validation || '确认后保存并立即生效' }}</span><a-button :disabled="busy" @click="close">取消</a-button><a-button type="primary" :loading="busy" :disabled="!canCommit" @click="commit">保存并生效</a-button></div></template>
   </a-drawer>
-  <StartChangeModal v-model:open="changeOpen" target-name="导入源表对象定义" @ok="commit" />
 </template>
 <style scoped>
 .import-form { margin-top: 16px; }

@@ -157,7 +157,7 @@ function onSelect(v: string) {
       <a-dropdown placement="bottomRight">
         <span class="tb-user">
           <a-avatar :size="24" class="tb-avatar"><span class="t-12">{{ app.user.name.slice(0, 1) || '—' }}</span></a-avatar>
-          <span class="t-14 c-1 tb-user-name" :title="app.user.name">{{ app.user.name || (profileLoading ? '身份加载中' : '用户未提供') }}</span><span v-if="adminApiOn()" class="t-12 c-3 tb-user-role" :title="app.user.role">{{ app.user.role || '角色未提供' }}</span><a-button v-if="profileError" type="link" size="small" :title="profileError" @click.stop="reloadProfile">重试身份</a-button>
+          <span class="t-14 c-1 tb-user-name" :title="app.user.name">{{ app.user.name || (profileLoading ? '身份加载中' : '用户未提供') }}</span><a-button v-if="profileError" type="link" size="small" :title="profileError" @click.stop="reloadProfile">重试身份</a-button>
         </span>
         <template #overlay>
           <a-menu :items="[{ key: 'profile', label: '个人设置' }, { key: 'logout', label: '退出登录' }]" />
@@ -181,9 +181,8 @@ function onSelect(v: string) {
 .tb-icon { color: var(--g9); }
 .tb-user { display: flex; align-items: center; gap: 8px; cursor: pointer; padding-left: 8px; }
 .tb-user-name { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tb-user-role { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-avatar { background: var(--brand); }
-@media (max-width: 1400px) { .tb-tenant { width: 170px; } .tb-user-role, .tb-org-label { display: none; } .tb-workspace-select { width: 152px; } .tb { gap: 8px; } }
+@media (max-width: 1400px) { .tb-tenant { width: 170px; } .tb-org-label { display: none; } .tb-workspace-select { width: 152px; } .tb { gap: 8px; } }
 .tb-help { min-width: 200px; }
 .tb-help-row { display: flex; justify-content: space-between; gap: 16px; white-space: nowrap; }
 </style>

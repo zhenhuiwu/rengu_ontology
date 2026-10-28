@@ -68,17 +68,20 @@ export interface QaAlertRef { id: string; rule: string; level: string; objKind: 
  */
 export interface QaActionSuggest {
   type: string; name: string; reason: string; params: Record<string, unknown>; mode: 'suggest';
+  runId?: string; stageVersion?: number;
   policy?: 'suggest' | 'confirm' | 'auto'; canStage?: boolean;
   dryRun: import('@/pages/ops/actionReview').ActionReview & { passed: boolean; checked: number; failed: { name?: string; msg?: string }[] };
   stage: { typeId: string; objKind: string | null; objId: string; objLabel: string; params: string | null };
 }
 export interface QaActionAnswer extends QaDynamicAnswer { card: 'action'; text: string; basis?: Record<string, string>; action: QaActionSuggest; alerts?: QaAlertRef[] }
+export interface QaRuleAnswer { card: 'rule'; text: string; rule: { id: string; version: number; cardVersion: number; triggerKind?: string; eventId?: string; result?: Record<string, unknown> } }
 export type QaRefuseCode = 'NOT_SELECT' | 'OUT_OF_SCOPE' | 'NO_PERMISSION' | 'NO_DATA';
 export type QaRealTurn =
   | (QaDemoTurn & { applied?: boolean; vote?: '' | 'up' | 'down'; code?: QaRefuseCode })
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaChainAnswer }
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaClarifyAnswer }
   | { id: string; kind: 'answer'; time?: string; question: string; answer: QaActionAnswer }
+  | { id: string; kind: 'answer'; time?: string; question: string; answer: QaRuleAnswer }
   | { id: string; kind: 'empty'; time?: string; question: string; lead: string; bold: string; tail: string; tag: string; retry?: undefined };
 export interface QaSessionDetail extends QaSession { scope: string | null; caliber: string | null; ownerId: string; turns: QaRealTurn[] }
 export interface QaOption { value: string; label: string }
@@ -198,7 +201,7 @@ export async function exportTurn(tid: string, format: 'xlsx' | 'csv' = 'xlsx'): 
  */
 const dyn = apiClient('dynamic');
 export const actionsReal = () => dyn.isReal();
-export type QaActionRun = import('@/pages/ops/actionReview').ActionReview & { id: string; action: string; typeVersion: string | null; objLabel: string | null; approver: string | null; system: string | null; status: string; idemKey: string; params: string | null };
+export type QaActionRun = import('@/pages/ops/actionReview').ActionReview & { id: string; action: string; typeVersion: string | null; objLabel: string | null; approver: string | null; system: string | null; status: string; idemKey: string; params: string | null; extRef?: string | null; reconcile?: string | null; failReason?: string | null; unknownReason?: string | null; can?: { confirm?: boolean; reasons?: Record<string, string> } };
 export interface QaStageIn { action?: string; typeId?: string; source: { type: '问数'; session?: string; sessionTitle?: string }; objKind?: string | null; objId: string; objLabel: string; params?: string | null }
 export const stageAction = (body: QaStageIn) => dyn.post<QaActionRun>('/action-runs:stage', body);
 /** W7a：这一轮的建议动作 → 动作中心待确认（来源 问数，确认人 = 自己；不自动执行） */
@@ -258,3 +261,6 @@ export const feedbackToSynonym = (id: string, body: { join?: string; title?: str
 export const feedbackToCert = (id: string) => api.post<{ certId: string; mode: 'new' | 'variant'; feedback: QaFeedback }>(fbAct(id, 'to-cert'), {});
 export const ignoreFeedback = (id: string) => api.post<QaFeedback>(fbAct(id, 'ignore'), {});
 export const reopenFeedback = (id: string) => api.post<QaFeedback>(fbAct(id, 'reopen'), {});
+
+export const ruleEvents = (tid: string, before?: number, q = '') => api.get<{ items: { id: string; label: string; at: string }[]; nextBefore?: number | null }>(`/turns/${encodeURIComponent(tid)}/rule-events`, { query: { before, q } });
+export const runRule = (tid: string, eventId?: string) => api.post<Record<string, unknown>>(`/turns/${encodeURIComponent(tid)}/rule:run`, { eventId });

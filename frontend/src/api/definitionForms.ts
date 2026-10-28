@@ -1,5 +1,5 @@
 import { apiClient, currentApiContext, type PageResult } from './http';
-import { crSave, crStart, fetchCR, fetchCRItems, staticContextKey, fetchMetricGroups, type CRItemOut, type DraftChange } from './static';
+import { applyModelChange, fetchCR, fetchCRItems, staticContextKey, fetchMetricGroups, type CRItemIn, type CRItemOut, type DraftChange } from './static';
 export type DefinitionKind = 'object' | 'metric' | 'dimension';
 export interface DefinitionValues { id?: string; name: string; api: string; group: string; owner: string; [key: string]: unknown }
 export interface MetricDefaultRange { kind: 'rolling_days'; days: number }
@@ -74,25 +74,21 @@ export function execChanges(values: DefinitionValues, original?: DefinitionValue
   }
   return changes;
 }
-export async function saveDefinition(kind: DefinitionKind, values: DefinitionValues, properties: DefinitionProperty[], original: DefinitionValues | undefined, originalProperties: DefinitionProperty[], opts: { join?: string; title?: string; desc?: string }, resume?: string, previousProperties: DefinitionProperty[] = originalProperties) {
+export async function saveDefinition(kind: DefinitionKind, values: DefinitionValues, properties: DefinitionProperty[], original: DefinitionValues | undefined, originalProperties: DefinitionProperty[], opts: { join?: string; title?: string; desc?: string }, resume?: string, previousProperties: DefinitionProperty[] = originalProperties, lockVersion?: number) {
   const ctx = definitionContext(), id = original?.id ?? values.api;
   const target = { kind, id: String(id), name: values.name, isNew: !original };
-  const started = resume ? { join: resume } : await crStart(target, opts);
-  check(ctx);
-  const crId = started.join;
-  if (!crId) throw new Error('未取得数据库变更单号');
-  // Expose the CR id on failure so retry resumes this draft instead of creating another target.
-  try {
+  // 保存即生效：已存在的历史草稿由后端接管（不再要求先处理草稿才能编辑）
+  if (lockVersion === undefined) throw new Error('版本信息尚未加载，请重新打开表单');
     const keys = kind === 'object' ? ['name','api','group','domain','owner','desc','conflict','source','table','pk','sync'] : kind === 'metric' ? ['name','api','group','unit','owner','version','formula','dims','variants'] : ['name','api','kind','group','owner','object','attr','column','valueSrc','sync','desc','levels'];
     const changes: DraftChange[] = keys.filter((key) => !original || key !== 'api').map((key) => ({ key, before: original?.[key], after: values[key] ?? '', type: kind === 'object' ? '对象类型' : kind === 'metric' ? '指标' : '维度', field: key, op: original ? 'update' as const : 'add' as const }));
     if (kind === 'metric') changes.push(...execChanges(values, original, !!resume));
-    await crSave(crId, target, 'def', changes); check(ctx);
+    const sections: { section: string; rows: CRItemIn[] }[] = [{ section: 'def', rows: changes.filter(c => c.op !== 'update' || JSON.stringify(c.before ?? null) !== JSON.stringify(c.after ?? null)).map(c => ({ ...c, op: c.op ?? (original ? 'update' : 'add') })) }];
     if (kind === 'object') {
       const byApi = new Map(originalProperties.map((p) => [p.api, p]));
       const rows: DraftChange[] = properties.map((p) => ({ key: p.api, before: byApi.get(p.api), after: p, op: byApi.has(p.api) ? 'update' as const : 'add' as const, type: '属性', field: p.name }));
       rows.push(...previousProperties.filter((p) => !properties.some((v) => v.api === p.api)).map((p) => ({ key: p.api, before: p, after: undefined, op: 'delete' as const, type: '属性', field: p.name })));
-      await crSave(crId, target, 'properties', rows); check(ctx);
+      sections.push({ section: 'properties', rows: rows.filter(c => c.op !== 'update' || JSON.stringify(c.before ?? null) !== JSON.stringify(c.after ?? null)).map(c => ({ ...c, op: c.op ?? 'update' })) });
     }
-    return { id: target.id, crId };
-  } catch (error) { throw Object.assign(error instanceof Error ? error : new Error(String(error)), { crId }); }
+    const result = await applyModelChange(target, sections, lockVersion); check(ctx);
+    return { id: result.targetId, crId: '', published: true };
 }

@@ -61,11 +61,11 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
     <div class="qa-obj-sec qa-obj-last">
       <div class="qa-obj-h"><span class="t-16 fw-600">可执行动作</span></div>
       <div class="qa-act" :class="{ hl: highlight }">
-        <a-tooltip :title="run ? `${run.id} 已提交 · 待 ${run.approver ?? '执行'}${run.approver ? ' 审批' : ''}` : submitted ? '王敏 10-25 15:36 提交 · 待 赵磊 审批' : pending ? '王敏 10-25 15:36 发起 · 赵磊 审批' : '条件满足 · 影响 3,812 位客户'" placement="left">
+        <a-tooltip :title="run ? `${run.id} 已确认，结果以动作中心为准` : submitted ? '演示动作已确认' : pending ? '等待确认' : '条件满足 · 影响 3,812 位客户'" placement="left">
           <span class="qa-act-main qa-obj-ell">发放复购召回优惠券</span>
         </a-tooltip>
-        <a-tooltip v-if="submitted && run" title="去动作中心查看"><router-link :to="runLink()" class="qa-act-status qa-act-link"><ClockCircleOutlined />待审批</router-link></a-tooltip>
-        <span v-else-if="submitted" class="qa-act-status"><ClockCircleOutlined />待审批</span>
+        <a-tooltip v-if="submitted && run" title="去动作中心查看"><router-link :to="runLink()" class="qa-act-status qa-act-link"><ClockCircleOutlined />查看结果</router-link></a-tooltip>
+        <span v-else-if="submitted" class="qa-act-status"><ClockCircleOutlined />已确认</span>
         <span v-else-if="pending" class="qa-act-status"><ClockCircleOutlined />待确认</span>
         <a-tooltip v-else :title="reason"><a-button size="small" :disabled="readonly" @click="emit('run')"><span>发起</span></a-button></a-tooltip>
       </div>
@@ -76,10 +76,10 @@ const dot: Record<QaTimelineLevel, string> = { warn: 'var(--tl-attention)', erro
         <span class="qa-act-status"><SyncOutlined />执行中</span>
       </div>
       <div class="qa-act">
-        <a-tooltip title="条件不满足 · 需财务审批权限" placement="left">
+        <a-tooltip title="条件不满足 · 需财务权限" placement="left">
           <span class="qa-act-main qa-obj-ell c-3">调整大区预算</span>
         </a-tooltip>
-        <a-tooltip :title="reason || '条件不满足 · 需财务审批权限'"><a-button size="small" disabled><span>发起</span></a-button></a-tooltip>
+        <a-tooltip :title="reason || '条件不满足 · 需财务权限'"><a-button size="small" disabled><span>发起</span></a-button></a-tooltip>
       </div>
     </div>
   </aside>

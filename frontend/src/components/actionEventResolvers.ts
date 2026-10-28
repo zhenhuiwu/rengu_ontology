@@ -117,7 +117,7 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
         fields: [
           { label: '动作类型', value: run.typeId }, { label: '版本', value: run.typeVersion ?? '—' },
           { label: '发起人', value: run.initiator }, { label: '确认人', value: run.confirmer || '—' },
-          { label: '来源', value: run.source }, { label: '审批人', value: run.approver || '—' },
+          { label: '来源', value: run.source },
           { label: '目标对象', value: run.objLabel }, { label: '参数摘要', value: run.summary },
           { label: '外部系统', value: run.system ?? '—' }, { label: '幂等键', value: run.idemKey ?? '—' },
           { label: '返回', value: run.code || '—' }, { label: '自动重试', value: String(run.retries) },
@@ -173,7 +173,7 @@ export const ACTION_EVENT_RESOLVERS: Record<string, (id: string) => ObjView | nu
       fields: [
         { label: '动作类型', value: `${a.name}（${a.api}）` }, { label: '版本', value: a.version },
         { label: '发起人', value: run.initiator }, { label: '确认人', value: run.confirmer },
-        { label: '来源', value: run.source }, { label: '审批人', value: run.approver ?? '免审' },
+        { label: '来源', value: run.source },
         { label: '目标对象', value: `${a.target} · ${run.objLabel}` }, { label: '参数摘要', value: run.summary },
         { label: '外部系统', value: sys ? `${sys.name}（${sys.id}）` : a.system }, { label: '幂等键', value: run.idemKey },
         { label: '返回', value: run.code }, { label: '自动重试', value: run.retries ? `${run.retries} 次（外部明确失败）` : '0 次' },

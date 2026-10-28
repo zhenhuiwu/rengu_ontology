@@ -129,7 +129,10 @@ const external = load('pages/data/ExternalSystems.vue', {
   '@/api/fallback': { backend: vue.reactive({ down: false }), fallBackIfDown: () => false },
   '@/api/integration': { integrationApi: { isReal: () => true }, queryExtSystems: async (page,size) => {externalPages.push({page,size}); const rows=externalDeferred ? await externalDeferred.promise : externalRows;return {items:rows.slice((page-1)*size,page*size),total:rows.length,page,size};}, getExtSystem:async(id)=>({id,name:id,actionTypes:[]}), listExtCalls:async()=>({items:[],total:0,page:1,size:10,counts:{}}),
     testExtSystem: async () => { externalRequests++; throw Object.assign(new Error('未配置真实探测'),{code:'EXT_SYSTEM_TEST_UNAVAILABLE'}); } },
-}, 'export { testCall, reqBody, respBody, loadSystems, systems, systemTotal, systemPage };');
+}, 'export { testCall, reqBody, respBody, loadSystems, systems, systemTotal, systemPage, AUTHS, form, formErrors };');
+assert.ok(external.AUTHS.includes('无需授权'));
+Object.assign(external.form, { name: 'Local', vendor: 'Demo', endpoint: 'https://127.0.0.1:8443', auth: '无需授权', authDetail: '' });
+assert.equal(external.formErrors.value.length, 0, 'no authorization does not require credentials');
 await external.loadSystems(); await tick();
 await external.testCall();
 assert.equal(externalRequests, 1);

@@ -41,7 +41,7 @@ const scopeApi = load('api/rowScope.ts', { './http': http });
 assert.equal(tenants.tenantOptions.value.length, 0);
 for (const request of [
   () => admin.queryAuditLogs({}), admin.fetchAuditActions, () => admin.queryUsers({}), admin.fetchDepts,
-  admin.fetchUserRoles, rolesApi.loadRolesState, rolesApi.loadRolesMeta, scopeApi.loadMyRowScope, tenants.loadTenants,
+  admin.fetchUserOptions, rolesApi.loadRolesState, rolesApi.loadRolesMeta, scopeApi.loadMyRowScope, tenants.loadTenants,
 ]) await assert.rejects(request(), (e) => e === network, 'real failure must propagate without demo data');
 assert.equal(tenants.tenantOptions.value.length, 0);
 real = false;
@@ -58,6 +58,7 @@ let failed = true;
 read = async (path) => {
   if (failed) throw network;
   if (path === '/roles') return roleRows;
+  if (path === '/users/options') return { depts: ['数据库部门'], roles: roleRows, canAssignRole: true };
   if (path === '/depts') return ['数据库部门'];
   if (path === '/users') return { items: [], total: 0 };
   throw new Error(path);
@@ -88,8 +89,10 @@ assert.equal(users.roleOptions.value.length, 0, 'a successful empty DB must stay
 assert.equal(users.formOk.value, false);
 roleRows = [{ name: '数据库角色' }];
 await users.loadOptions();
-assert.equal(users.form.role, '数据库角色');
-assert.equal(users.form.dept, '数据库部门');
+assert.equal(users.roleOptions.value[0].name, '数据库角色');
+assert.equal(users.form.role, '', 'real users explicitly choose a role');
+assert.equal(users.depts.value[0], '数据库部门');
+assert.equal(users.form.dept, '', 'real users explicitly enter a department');
 await users.toggle({id:'BUSY',status:'启用',pending:2});assert.match(userWarnings.at(-1),/完成待审批事项/);
 userScope.stop();
 
@@ -143,23 +146,26 @@ assert.ok(permissions.loadError.value);
 const afterDispose=defer();roleState=()=>afterDispose.promise;const disposedPermission=permissions.loadPermissions();
 permissionsScope.stop();
 afterDispose.resolve({items:[dbRole],object:permissionHead,total:999,page:1,size:10});await disposedPermission;assert.equal(permissions.roles.value.length,0,'disposed permission reads cannot update the page');
-// True-mode API keys have no backend contract: URL shortcuts and direct calls must not fabricate keys.
+// Without management permission, real API key shortcuts and direct calls cannot fabricate keys.
 const keyScope = vue.effectScope();
 const keyPage = keyScope.run(() => load('pages/admin/ApiKeys.vue', {
   vue, 'vue-router': { useRoute: () => ({ query: vue.reactive({ form: 'create', key: 'DEMO', from: 'DEMO' }) }), useRouter: () => ({ replace() {} }) },
   'ant-design-vue': { message: { success() { assert.fail('no real key operation exists'); } } },
   '@ant-design/icons-vue': {}, '@/api/admin': { adminApiOn: () => true },
+  '@/api/http': http, '@/api/roles': { loadRolesState: async () => ({ roles: [] }) },
+  '@/api/apikeys': { queryApiKeys: async () => ({ items: [], total: 0, counts: {}, page: 1 }), apiKeysMeta: async () => ({ canManage: false, scopes: [], scopeOptions: [], serviceAccounts: [] }), apiKeyDetail: async () => { throw network; }, apiKeyCalls: async () => ({ items: [], total: 0, page: 1 }), createApiKey: () => assert.fail('no management permission'), revokeApiKey: () => assert.fail('no management permission') },
   '@/stores/confirm': { useConfirmStore: () => ({ ask() { assert.fail('must not offer revoke'); } }) },
   '@/composables/useReadonly': { useReadonly: () => ({ readonly: vue.ref(false), reason: vue.ref('') }) },
-  '@/composables/useUnsavedGuard': { confirmDiscard: async () => true },
+  '@/composables/useUnsavedGuard': { useUnsavedGuard() {}, confirmDiscard: async () => true },
   '@/composables/usePagedQuery': { usePagedQuery: () => ({ page: vue.ref(1), size: vue.ref(18), overflow: vue.ref(false) }) },
   '@/mock': { paginate: (items) => ({ items, total: items.length }) },
   '@/mock/apikeys': { API_KEYS: [{ id: 'DEMO' }], KEY_SCOPES: [], SERVICE_ACCOUNTS: [], SA_SCOPES: [], newSecret() { assert.fail('must not generate a fake key'); } },
   '@/mock/roles': { ROLES: [] },
 }, 'export { keys, createOpen, detail, create, revoke, copySecret, readonly, form, secret };'));
 assert.equal(keyPage.keys.value.length, 0);
-assert.equal(keyPage.createOpen.value, false);
-assert.equal(keyPage.detail.value, undefined);
+await tick();
+assert.equal(keyPage.createOpen.value, true, 'URL may open form, permission still blocks creation');
+assert.equal(keyPage.detail.value, null);
 assert.equal(keyPage.readonly.value, true);
 keyPage.form.name = 'valid-name'; keyPage.form.scopes = ['查询']; keyPage.form.role = 'role';
 keyPage.create();

@@ -31,6 +31,9 @@ export const getExtSystem = async (id: string) => clean(await api.get<ExtSystemD
 export const createExtSystem = async (body: ExtSystemInput) => clean(await api.post<ExtSystemDetailDto>('/ext-systems', body));
 /** PUT /ext-systems/{id}（文档 §3.1）；后台另留 POST 同义别名兼容旧前端 */
 export const updateExtSystem = async (id: string, body: ExtSystemInput) => clean(await api.put<ExtSystemDetailDto>(`/ext-systems/${enc(id)}`, body));
+export interface ActionAuthorization { id: string; version: string; path: string }
+export const getActionAuthorizations = (id: string) => api.get<{ version: number; paths: string[]; actions: { id: string; name: string; version: string }[]; selected: ActionAuthorization[] }>(`/ext-systems/${enc(id)}/action-authorizations`);
+export const saveActionAuthorizations = (id: string, body: { version: number; actions: ActionAuthorization[] }) => api.put(`/ext-systems/${enc(id)}/action-authorizations`, body);
 /** 测试调用：返回一条 ExtCall（后台同时记入 writeback_call，页面重新拉「最近调用」）；停用 → 409 EXT_SYSTEM_DISABLED */
 export const testExtSystem = (id: string) => api.post<ExtCall>(`/ext-systems/${enc(id)}:test`, {});
 

@@ -8,7 +8,7 @@ import { computed, shallowRef, watch, type ComputedRef } from 'vue';
 import { currentApiContext } from '@/api/http';
 import { message } from 'ant-design-vue';
 import type { DraftCR, TargetKind } from '@/mock/releases';
-import { crDiscard, crErr, crSave, crStart, crSubmit, type CRTargetIn, type DraftChange, fetchCR, fetchCRItems, registerDraft, isStaticReal, staticContextKey, type CRItemOut, type CRFull, fetchWorkflowRecords, type CRRow } from '@/api/static';
+import { applyModelChange, crDiscard, crErr, crSave, crStart, crSubmit, fetchCurrentAfterWrite, type CRTargetIn, type DraftChange, fetchCR, fetchCRItems, registerDraft, isStaticReal, staticContextKey, type CRItemOut, type CRFull, fetchWorkflowRecords, type CRRow } from '@/api/static';
 
 type StartOpts = { join?: string; title?: string; target?: string };
 
@@ -63,11 +63,21 @@ export function useStaticCr(
       return captured === staticContextKey() ? id : undefined;
     } catch (e) { if (captured === staticContextKey()) fail(e); return undefined; }
   }
-  /** 保存到草稿（一个 section 的本次改动）；crId 默认当前草稿 */
+  /** 保存（一个 section 的本次改动）：真实模式保存即生效；演示模式写草稿 */
   async function save(section: string, changes: DraftChange[], crId = dv.draft.value?.id, t = target()): Promise<boolean> {
-    if (isStaticReal() && (!crId || head.value?.status !== '草稿' || loading.value || error.value)) return fail(new Error('请先成功加载当前草稿后再保存'));
     const captured = staticContextKey();
-    try { await crSave(crId, { kind, ...t }, section, changes); if (isStaticReal()) await reload(); return captured === staticContextKey(); } catch (e) { return captured === staticContextKey() ? fail(e) : false; }
+    if (isStaticReal()) {
+      const rows = changes
+        .map((c) => ({ key: c.key, op: (c.op ?? 'update') as 'add' | 'update' | 'delete', before: c.before, after: c.after, type: c.type, field: c.field }));
+      if (!rows.length) { message.info('没有需要保存的改动'); return true; }
+      try {
+        const { lockVersion } = await fetchCurrentAfterWrite();
+        await applyModelChange({ kind, id: t.id, isNew: !!t.isNew, name: t.name }, [{ section, rows }], lockVersion);
+        return captured === staticContextKey();
+      } catch (e) { return captured === staticContextKey() ? fail(e) : false; }
+    }
+    if (!crId || head.value?.status !== '草稿' || loading.value || error.value) return fail(new Error('请先成功加载当前草稿后再保存'));
+    try { await crSave(crId, { kind, ...t }, section, changes); return captured === staticContextKey(); } catch (e) { return captured === staticContextKey() ? fail(e) : false; }
   }
   async function submit() {
     const d = dv.draft.value;

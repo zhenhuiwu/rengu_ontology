@@ -65,16 +65,16 @@ async function submit() {
     <a-spin :spinning="loading">
       <template v-if="detail">
         <a-descriptions :column="2" size="small" bordered>
-          <a-descriptions-item label="事件"><ObjRef kind="event" :id="detail.eventId" /></a-descriptions-item>
+          <a-descriptions-item label="事件"><ObjRef kind="event" :id="detail.eventId">{{ detail.eventId }}</ObjRef></a-descriptions-item>
           <a-descriptions-item label="订阅方">{{ detail.name }}</a-descriptions-item>
           <a-descriptions-item label="状态">{{ deliveryLabels[detail.state] ?? detail.state }}</a-descriptions-item>
           <a-descriptions-item label="实际尝试">{{ detail.attempts }} 次</a-descriptions-item>
           <a-descriptions-item label="原原因" :span="2">{{ detail.error ?? '—' }}</a-descriptions-item>
           <a-descriptions-item label="幂等键" :span="2"><span class="review-wrap num">{{ detail.idempotencyKey }}</span></a-descriptions-item>
           <a-descriptions-item v-if="detail.result?.httpStatus" label="原HTTP回执">{{ detail.result.httpStatus }}</a-descriptions-item>
-          <a-descriptions-item v-if="detail.result?.blockedByEventId" label="未决前序"><ObjRef kind="event" :id="detail.result.blockedByEventId" /></a-descriptions-item>
-          <a-descriptions-item v-if="detail.result?.alertId" label="已有告警"><ObjRef kind="alert" :id="detail.result.alertId" /></a-descriptions-item>
-          <a-descriptions-item v-if="detail.result?.actionId" label="已有动作"><ObjRef kind="action" :id="detail.result.actionId" /></a-descriptions-item>
+          <a-descriptions-item v-if="detail.result?.blockedByEventId" label="未决前序"><ObjRef kind="event" :id="detail.result.blockedByEventId">{{ detail.result.blockedByEventId }}</ObjRef></a-descriptions-item>
+          <a-descriptions-item v-if="detail.result?.alertId" label="已有告警"><ObjRef kind="alert" :id="detail.result.alertId">{{ detail.result.alertId }}</ObjRef></a-descriptions-item>
+          <a-descriptions-item v-if="(detail.result?.actionRunId || detail.result?.actionId)" label="已有动作"><ObjRef kind="action" :id="detail.result.actionRunId || detail.result.actionId!">{{ detail.result.actionRunId || detail.result.actionId }}</ObjRef></a-descriptions-item>
           <a-descriptions-item v-if="detail.result?.hitId" label="已有命中">{{ detail.result.hitId }}</a-descriptions-item>
         </a-descriptions>
         <section v-if="detail.canManage && !readonly && choices.length" class="review-section">
@@ -102,8 +102,8 @@ async function submit() {
                 <div v-if="item.detail.reason">理由：{{ item.detail.reason }}</div>
                 <div v-if="item.detail.evidence">证据：{{ item.detail.evidence }}</div>
                 <div v-if="item.result?.httpStatus" class="t-12">HTTP回执：{{ item.result.httpStatus }}</div>
-                <div v-if="item.result?.alertId" class="t-12">告警：<ObjRef kind="alert" :id="item.result.alertId" /></div>
-                <div v-if="item.result?.actionId" class="t-12">动作：<ObjRef kind="action" :id="item.result.actionId" /></div>
+                <div v-if="item.result?.alertId" class="t-12">告警：<ObjRef kind="alert" :id="item.result.alertId">{{ item.result.alertId }}</ObjRef></div>
+                <div v-if="(item.result?.actionRunId || item.result?.actionId)" class="t-12">动作：<ObjRef kind="action" :id="item.result.actionRunId || item.result.actionId!">{{ item.result.actionRunId || item.result.actionId }}</ObjRef></div>
               </div></a-list-item>
             </template>
           </a-list>
@@ -121,4 +121,5 @@ async function submit() {
 .review-wrap { overflow-wrap: anywhere; min-width: 0; white-space: pre-wrap; }
 .review-submit { display: flex; justify-content: flex-end; margin-top: 16px; }
 .review-history-title { display: flex; justify-content: space-between; align-items: center; }
+:deep(.ant-descriptions-item-content) { overflow-wrap: anywhere; min-width: 0; }
 </style>

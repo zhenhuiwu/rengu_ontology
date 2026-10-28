@@ -16,6 +16,7 @@ import { isStaticReal, fetchMetricGroups, staticContextKey, fetchStaticDetail, r
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import DefinitionEditor from './parts/DefinitionEditor.vue';
+import { useAssistantDraft } from '@/composables/useAssistantDraft';
 import { loadDraftState } from './parts/useDraftView';
 import { useDraftView, draftOf } from './parts/useDraftView';
 import { useStaticCr, useRealCrRecords, activeTargetCr, draftFields } from './parts/useStaticCr';
@@ -62,7 +63,10 @@ const canEdit = computed(() => isDraft.value && (!isStaticReal() || cr.head.valu
 const cur = computed<M>(() => isStaticReal() && isDraft.value ? { ...publishedCurrent.value, ...draftFields(cr.items.value, 'def') } as M : publishedCurrent.value);
 const definitionOpen = ref(false), newDefinition = ref(false);
 function openDefinition(isNew = false) { if (readonly.value) return; newDefinition.value = isNew; definitionOpen.value = true; }
-async function definitionSaved(result: { id: string; crId: string }) { const key = staticContextKey(); await loadDraftState(true); if (key !== staticContextKey()) return; await router.replace({ query: { ...route.query, metric: result.id, view: 'draft' } }); if (key === staticContextKey()) { await cr.reload(); if (key === staticContextKey()) await workflow.reload(); } }
+const assistantDraft = ref<Record<string, unknown>>();
+watch(definitionOpen, open => { if (!open) assistantDraft.value = undefined; });
+useAssistantDraft(['metric'], () => readonly.value || definitionOpen.value, (draft, target) => { assistantDraft.value = { ...draft, ...(target === 'dictionary' ? { kind: '码表' } : {}) }; openDefinition(true); });
+async function definitionSaved(result: { id: string; crId: string; published?: boolean }) { if (result.published) { await router.replace({ query: { ...route.query, metric: result.id, view: undefined } }); await metricPage.reload(); return; } const key = staticContextKey(); await loadDraftState(true); if (key !== staticContextKey()) return; await router.replace({ query: { ...route.query, metric: result.id, view: 'draft' } }); if (key === staticContextKey()) { await cr.reload(); if (key === staticContextKey()) await workflow.reload(); } }
 const rollbackPending = ref<{ id: string; ver: string; key: string }>();
 const rollbackBusy = ref(false);
 async function start(opts: { join?: string; title?: string; desc?: string }) {
@@ -225,7 +229,7 @@ async function runTrial() {
   const seq = ++trialSeq, key = trialKey(), ctx = currentApiContext(), id = selected.value;
   trialBusy.value = true; trialError.value = ''; trialResult.value = undefined;
   try {
-    const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } }, days);
+    const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } }, days, trialReadiness.value?.hasTimeField === false);
     if (seq !== trialSeq || key !== trialKey()) return;
     trialResult.value = result;
     void router.replace({ query: { ...route.query, tab: 'def' } });
@@ -336,10 +340,6 @@ const refCols = [
           @change="(v: any) => setView(v)" />
         <span class="mt-sp" />
         <a-button :loading="trialBusy" :disabled="isStaticReal() && (!validTrialDays || trialReadiness?.ready === false || isDraft && (!cr.head.value || cr.loading.value || !!cr.error.value))" @click="runTrial">试算</a-button>
-        <a-tooltip v-if="readonly" :title="reason"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-tooltip v-else-if="reviewCr(cur)" :title="`${reviewCr(cur)} 审核中`"><a-button disabled>发起变更</a-button></a-tooltip>
-        <a-button v-else-if="!draft" type="primary" @click="openChange(`${cur.name}（${cur.api}）`)">发起变更</a-button>
-        <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑草稿</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="mt-tabs">
         <a-tab-pane key="def" tab="定义" />
@@ -352,7 +352,7 @@ const refCols = [
         <div class="mt-def-left">
           <div class="mt-sec t-14 fw-600 mt-sec-row">
             <span>计算公式<a-tag v-if="isDraft" class="mt-diff">修改</a-tag></span>
-            <a-tooltip :title="editTip"><a-button size="small" :disabled="!canEdit" @click="isStaticReal() && openDefinition()">编辑定义</a-button></a-tooltip>
+            <a-tooltip :title="readonly ? reason : ''"><a-button size="small" :disabled="readonly" @click="isStaticReal() && openDefinition()">编辑定义</a-button></a-tooltip>
           </div>
           <div class="mt-formula t-14 num">{{ FORMULA }}</div>
           <a-descriptions v-if="isStaticReal()" :column="2" bordered size="small"><a-descriptions-item label="分组">{{ cur.group }}</a-descriptions-item><a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item></a-descriptions>
@@ -365,15 +365,15 @@ const refCols = [
         </div>
         <div class="mt-def-right">
           <div class="mt-sec t-14 fw-600 mt-sec-row">
-            <span>{{ isStaticReal() ? validTrialDays ? `近 ${trialDays} 日试算` : '选择试算范围' : '近 30 日试算' }}</span><span v-if="isStaticReal()" class="t-12 c-3 fw-400"><a-input-number v-model:value="trialDays" aria-label="试算天数" :min="1" :max="93" :precision="0" size="small" style="width:76px" /> 天</span><span v-else class="t-12 c-3 fw-400">按口径 v3 计算 · 数据截至 2026-10-24 23:00</span>
+            <span>{{ isStaticReal() ? trialReadiness?.hasTimeField === false ? '当前快照试算' : validTrialDays ? `近 ${trialDays} 日试算` : '选择试算范围' : '近 30 日试算' }}</span><span v-if="isStaticReal() && trialReadiness?.hasTimeField !== false" class="t-12 c-3 fw-400"><a-input-number v-model:value="trialDays" aria-label="试算天数" :min="1" :max="93" :precision="0" size="small" style="width:76px" /> 天</span><span v-else-if="!isStaticReal()" class="t-12 c-3 fw-400">按口径 v3 计算 · 数据截至 2026-10-24 23:00</span>
           </div>
           <a-alert v-if="trialError" type="error" :message="trialError" show-icon />
           <a-alert v-else-if="readinessError" type="error" :message="readinessError" show-icon><template #action><a-button size="small" @click="loadReadiness">重试</a-button></template></a-alert>
           <a-alert v-else-if="isStaticReal() && trialReadiness?.ready === false" type="warning" message="当前口径暂不可试算" show-icon>
             <template #description><ul class="mt-readiness"><li v-for="(issue, index) in trialReadiness.issues" :key="index">{{ issue.message }}<a-collapse v-if="issue.candidates?.length" ghost><a-collapse-panel key="properties" header="查看已定义属性"><div v-for="p in issue.candidates" :key="p.reference" class="t-12 c-3">{{ p.reference }} · {{ p.name }} · {{ p.mapped ? '已绑定' : '未绑定' }}</div></a-collapse-panel></a-collapse></li></ul></template>
           </a-alert>
-          <div v-if="isStaticReal() && trialResult" class="t-12 c-3">{{ trialResult.scope }} · {{ trialResult.crId ? `已保存草稿 ${trialResult.crId}` : `口径 ${trialResult.version}` }} · 数据截至 {{ trialResult.dataCutoff ?? '无可见数据' }}</div>
-          <div class="mt-chart"><a-empty v-if="isStaticReal() && !trialResult?.rows.length" :description="trialResult ? '所选范围内没有可见数据' : '暂无试算结果'" /><EChart v-else :option="trendOption" /></div>
+          <div v-if="isStaticReal() && trialResult" class="t-12 c-3">{{ trialResult.scope }} · {{ trialResult.crId ? `已保存草稿 ${trialResult.crId}` : `口径 ${trialResult.version}` }}<template v-if="trialReadiness?.hasTimeField !== false"> · 数据截至 {{ trialResult.dataCutoff ?? '无可见数据' }}</template></div>
+          <div class="mt-chart"><a-empty v-if="isStaticReal() && !trialResult?.rows.length" :description="trialResult ? '所选范围内没有可见数据' : '暂无试算结果'" /><div v-else-if="isStaticReal() && trialReadiness?.hasTimeField === false" class="t-20 fw-600">{{ trialResult?.rows[0]?.value ?? '—' }} {{ cur.unit }}</div><EChart v-else :option="trendOption" /></div>
           <div v-if="!isStaticReal()" class="mt-sec t-14 fw-600">不允许的维度</div>
           <div v-for="d in (isStaticReal() ? [] : DENY)" :key="d.dim" class="mt-deny">
             <span class="t-14 c-1">{{ d.dim }}</span>
@@ -422,7 +422,7 @@ const refCols = [
       </div>
     </div>
   </div>
-  <DefinitionEditor v-model:open="definitionOpen" kind="metric" :target-id="newDefinition ? undefined : cur.id" :cr-id="newDefinition ? undefined : draft?.id" :new-target="!!cr.head.value?.targets.find((t) => t.kind === 'metric' && t.id === cur.id)?.isNew" @saved="definitionSaved" />
+  <DefinitionEditor :assistant-draft="newDefinition ? assistantDraft : undefined" v-model:open="definitionOpen" kind="metric" :target-id="newDefinition ? undefined : cur.id" :cr-id="newDefinition || !isDraft ? undefined : draft?.id" :new-target="!!cr.head.value?.targets.find((t) => t.kind === 'metric' && t.id === cur.id)?.isNew" @saved="definitionSaved" />
   <StartChangeModal v-model:open="changeOpen" :target-name="changeTarget" :close-on-ok="!rollbackPending" :busy="rollbackBusy" @ok="start" />
 </template>
 

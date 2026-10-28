@@ -9,12 +9,12 @@ const router = useRouter();
 interface Step { title: string; purpose: string; paths: { label: string; path: string }[]; state: string; detail: string }
 const definitions = [
   { title: '数据连接', purpose: '登记只读连接并完成连通性检查，查看可内省的库表。', paths: [{ label: '数据连接', path: '/build/data/connections' }] },
-  { title: '对象与关系', purpose: '配置对象属性、主键、来源映射与对象关系；导入只生成定义草稿。', paths: [{ label: '对象类型', path: '/build/ontology/object-types' }, { label: '关系类型', path: '/build/ontology/link-types' }] },
+  { title: '对象与关系', purpose: '配置对象属性、主键、来源映射与对象关系；导入确认后保存并生效。', paths: [{ label: '对象类型', path: '/build/ontology/object-types' }, { label: '关系类型', path: '/build/ontology/link-types' }] },
   { title: '指标、维度与知识', purpose: '配置口径、显式变体、分析层级和业务说明。公式定义不能替代执行器。', paths: [{ label: '指标', path: '/build/ontology/metrics' }, { label: '维度与字典', path: '/build/ontology/dimensions' }, { label: '业务知识', path: '/build/ontology/glossary' }] },
   { title: '函数', purpose: '按需登记受限纯计算函数，供规则、动作等引用；函数版本独立于本体发布快照，无需函数时可跳过此步。', paths: [{ label: '函数', path: '/build/ontology/functions' }] },
   { title: '动作与事件', purpose: '配置动作提交条件、事件载荷和订阅方；外部投递通道需单独验收。', paths: [{ label: '动作类型', path: '/build/ontology/action-types' }, { label: '事件类型', path: '/build/ontology/event-types' }] },
   { title: '规则与生命周期', purpose: '按需配置规则与状态流转；无需自动化时可跳过此步。', paths: [{ label: '规则', path: '/build/ontology/rules' }, { label: '对象生命周期', path: '/build/ontology/object-types?tab=lifecycle' }] },
-  { title: '校验、审核与发布', purpose: '在变更单校验、提交审核并整版发布；发布前已发布定义继续生效。', paths: [{ label: '变更与发布', path: '/build/ontology/releases' }] },
+  { title: '校验与发布', purpose: '在变更单校验并直接发布；发布前已发布定义继续生效。', paths: [{ label: '变更与发布', path: '/build/ontology/releases' }] },
 ];
 const steps = ref<Step[]>(definitions.map((s) => ({ ...s, state: '未加载', detail: '' })));
 const loading = ref(false);
@@ -62,7 +62,7 @@ function go(path: string) { const ctx = currentApiContext(); open.value = false;
 </script>
 <template>
   <a-drawer v-model:open="open" title="构建引导" :width="760">
-    <a-alert type="info" :message="historical ? '当前查看历史定义，只读；连接和运行通道的当前状态不代表历史版本。' : '按需配置，所有定义改动经变更单审核并整版发布后生效。'" show-icon />
+    <a-alert type="info" :message="historical ? '当前查看历史定义，只读；连接和运行通道的当前状态不代表历史版本。' : '按需配置，所有定义改动经变更单整版发布后生效。'" show-icon />
     <a-spin :spinning="loading"><ol class="build-steps"><li v-for="(step, i) in steps" :key="step.title"><div class="build-step-head"><span class="t-16 fw-600">{{ i+1 }}. {{ step.title }}</span><a-tag :color="step.state === '加载失败' ? 'error' : undefined">{{ step.state }}</a-tag></div><p class="t-14 c-2">{{ step.purpose }}</p><p class="t-12 c-3">{{ step.detail }}</p><a-space><a-button v-for="link in step.paths" :key="link.path" size="small" @click="go(link.path)">{{ link.label }}</a-button></a-space></li></ol></a-spin>
     <template #footer><a-button :loading="loading" @click="load">刷新状态</a-button></template>
   </a-drawer>

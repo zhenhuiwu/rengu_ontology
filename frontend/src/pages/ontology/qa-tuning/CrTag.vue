@@ -15,7 +15,7 @@ const cr = computed(() => qaReal() ? undefined : crById(props.id));
       <div class="crt-pop">
         <div class="t-14 fw-600 c-1">{{ cr.id }} {{ cr.title }}</div>
         <div class="crt-row"><span class="c-3">状态</span><span class="c-1">{{ cr.status }} · {{ cr.level }} · {{ cr.changes }} 处改动</span></div>
-        <div class="crt-row"><span class="c-3">负责人</span><span class="c-1">{{ cr.owner }} · 审核人 {{ cr.reviewer }}</span></div>
+        <div class="crt-row"><span class="c-3">负责人</span><span class="c-1">{{ cr.owner }}</span></div>
         <div class="crt-row"><span class="c-3">更新</span><span class="c-1 num">{{ cr.updatedAt }}</span></div>
         <div class="crt-row"><span class="c-3">原因</span><span class="c-1 crt-ell" :title="cr.reason">{{ cr.reason }}</span></div>
       </div>
