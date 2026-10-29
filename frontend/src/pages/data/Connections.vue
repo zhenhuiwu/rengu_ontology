@@ -96,7 +96,7 @@ const modeText = (d: Datasource) =>
   d.type === '达梦 DM8' ? `兼容模式：${d.compatMode}` : d.type === '人大金仓 KingbaseES' ? `database_mode：${d.databaseMode}` : d.type === 'ERP' ? d.erpSystem ?? '' : '';
 const jdbc = (d: Datasource) => ({
   PostgreSQL: `jdbc:postgresql://${d.host}:${d.port}/${d.database}`,
-  '达梦 DM8': `jdbc:dm://${d.host}:${d.port}?schema=${d.database}&compatibleMode=${(d.compatMode ?? '').toLowerCase()}`,
+  '达梦 DM8': `jdbc:dm://${d.host}:${d.port}?schema=${encodeURIComponent(d.database)}`,
   '人大金仓 KingbaseES': `jdbc:kingbase8://${d.host}:${d.port}/${d.database}`,
   MySQL: `jdbc:mysql://${d.host}:${d.port}/${d.database}?useSSL=${d.ssl}`,
   ERP: `https://${d.host}/openapi/${d.database.toLowerCase()}`,
@@ -190,14 +190,8 @@ async function testConn(d: Datasource) {
     } catch (e) { if (current()) apiFail('测试连接', e); } finally { testing.value = false; }
     return;
   }
-  await new Promise((r) => setTimeout(r, 600));
   testing.value = false;
-  const fail = d.status === '异常';
-  d.lastTest = fail
-    ? { time: '2026-10-25 16:30', ok: false, ms: 10000, msg: d.lastTest?.msg ?? '连接超时（10 秒）' }
-    : { time: '2026-10-25 16:30', ok: true, ms: 42, msg: '连接成功' };
-  if (!fail) d.status = '正常';
-  if (fail) message.error(`连接失败：${d.lastTest.msg}`); else message.success(`连接成功，耗时 42 ms`);
+  message.warning('真实连接测试未启用');
 }
 
 // ---------- 删除 ----------
@@ -265,9 +259,8 @@ async function formTest() {
     } catch (e) { if (current()) apiFail('测试连接', e); } finally { formTesting.value = false; }
     return;
   }
-  await new Promise((r) => setTimeout(r, 600));
   formTesting.value = false;
-  message.success(`连接成功：${form.host}:${form.port}，耗时 37 ms`);
+  message.warning('真实连接测试未启用');
 }
 const writeBody = (): DatasourceWrite => ({
   name: form.name, type: form.type, host: form.host, port: form.port, database: form.database, user: form.user, password: form.password,
@@ -377,7 +370,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <InfoTip :text="`${selected.id} · 负责人 ${selected.owner} · 创建于 ${selected.createdAt} · 映射对象类型 ${selected.objectTypes.length ? selected.objectTypes.join('、') : EMPTY}${selected.note ? '。' + selected.note : ''}`" />
         </div>
         <a-space>
-          <a-tooltip :title="reason"><a-button :disabled="readonly" :loading="testing" @click="testConn(selected)">测试连接</a-button></a-tooltip>
+          <a-tooltip :title="readonly ? reason : !real ? '真实连接测试未启用' : ''"><a-button :disabled="readonly || !real" :loading="testing" @click="testConn(selected)">测试连接</a-button></a-tooltip>
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openForm('edit')">编辑</a-button></a-tooltip>
           <a-tooltip :title="reason"><a-button danger :disabled="readonly" @click="remove(selected)">删除</a-button></a-tooltip>
         </a-space>
@@ -473,6 +466,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         <a-form-item label="类型" required><a-select v-model:value="form.type" :options="DS_TYPES.map((v) => ({ value: v, label: v }))" /></a-form-item>
         <a-form-item v-if="form.type === '达梦 DM8'" label="兼容模式（COMPATIBLE_MODE）">
           <a-select v-model:value="form.compatMode" :options="DM_COMPAT.map((v) => ({ value: v, label: v }))" />
+          <div class="t-12 c-3">仅记录数据库已有的兼容模式，不会修改数据库配置。</div>
         </a-form-item>
         <a-form-item v-else-if="form.type === '人大金仓 KingbaseES'" label="database_mode">
           <a-select v-model:value="form.databaseMode" :options="KB_MODES.map((v) => ({ value: v, label: v }))" />
@@ -482,6 +476,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         </a-form-item>
         <a-form-item v-else label="SSL"><a-switch v-model:checked="form.ssl" /></a-form-item>
       </div>
+      <a-form-item v-if="form.type === '达梦 DM8'" label="SSL" extra="当前尚不支持验证达梦 TLS；开启时连接测试将被阻止。"><a-switch v-model:checked="form.ssl" /></a-form-item>
       <div class="cn-form-row">
         <a-form-item :label="form.type === 'ERP' ? '接口域名' : '主机'" required><a-input v-model:value="form.host" placeholder="10.12.8.21" /></a-form-item>
         <a-form-item label="端口" required><a-input-number v-model:value="form.port" :min="1" :max="65535" class="cn-full" /></a-form-item>
@@ -507,7 +502,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
     </a-form>
     <template #footer>
       <div class="cn-foot">
-        <a-button :loading="formTesting" @click="formTest">测试连接</a-button>
+        <a-tooltip :title="!real ? '真实连接测试未启用' : ''"><a-button :disabled="!real || readonly" :loading="formTesting" @click="formTest">测试连接</a-button></a-tooltip>
         <a-space>
           <span v-if="formDirty" class="t-12 c-2">有未保存的修改</span>
           <a-button @click="closeForm">取消</a-button>

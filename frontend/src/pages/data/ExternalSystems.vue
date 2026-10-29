@@ -4,7 +4,7 @@
  * 左侧系统列表，右侧配置（地址、认证、幂等、超时 / 重试）+ 最近调用（simple 分页，按结果筛选）。
  * 调用结果颜色按时间线规则：成功 灰、结果未知 橙、失败 红。点“详情”打开调用抽屉（?call=），结果未知不在本页重试：写回调用到动作中心对账（?tab=unknown&act=），通知类不支持幂等的人工核对。
  * 关联动作：按动作类型的 sysId（mock/actionEvent.ts）过滤得到，点动作名进动作类型；不做写回的集成（短信、企业微信、顺丰、美团）显示用途。
- * 新建 / 编辑系统：配置抽屉（?edit=EXT-WMS / ?edit=new），保存前确认；测试执行器未配置，入口明确置灰。
+ * 新建 / 编辑系统：配置抽屉（?edit=EXT-WMS / ?edit=new），保存前确认。
  * URL：?sys=EXT-WMS&result=失败&call=WMS-00012&edit=EXT-WMS
  * 真接口（开关 integration，src/api/integration.ts）：系统列表、关联动作、新建 / 编辑、测试调用、
  * 最近调用（筛选 / 分页 / 详情）、人工核对都走后台（writeback_call 表，见 action-event-api.md §3.1）。
@@ -210,17 +210,42 @@ async function markChecked(c: ExtCall) {
   message.success('已标记为成功');
 }
 
-const testUnavailable = '暂不可测试';
+const testUnavailable = '真实连接测试未启用';
 const testing = ref(false);
+const probe = ref<{ version: number; endpoint: string; probePath: string | null } | null>(null);
+const probeSystem = ref(''), probeBusy = ref(false);
+watch([contextKey, () => selected.value.id], () => { probe.value = null; probeSystem.value = ''; });
+async function openProbe() {
+  if (!real || readonly.value || probeBusy.value || !selected.value.id) return;
+  const key = contextKey(), id = selected.value.id;
+  probeBusy.value = true;
+  try {
+    const result = await integrationApi.get<{ version: number; endpoint: string; probePath: string | null }>(`/ext-systems/${encodeURIComponent(id)}/probe-config`);
+    if (key === contextKey() && id === selected.value.id) { probeSystem.value = id; probe.value = result; }
+  } catch (e) { if (key === contextKey()) apiFail(e); }
+  finally { probeBusy.value = false; }
+}
+async function saveProbe() {
+  if (!probe.value || probeBusy.value || readonly.value) return;
+  const key = contextKey(), id = probeSystem.value, path = probe.value.probePath?.trim() || null;
+  if (path && (!/^\/(?!\/)[^?#\\\s]*$/.test(path) || path.split('/').some(part => part === '.' || part === '..'))) { message.error('探测路径须为不含查询参数、片段或点段的同源绝对路径'); return; }
+  probeBusy.value = true;
+  try {
+    await integrationApi.put(`/ext-systems/${encodeURIComponent(id)}/probe-config`, { version: probe.value.version, probePath: path });
+    if (key === contextKey() && id === selected.value.id) { probe.value = null; message.success('探测路径已保存'); }
+  } catch (e) { if (key === contextKey()) apiFail(e); }
+  finally { probeBusy.value = false; }
+}
 async function testCall() {
   if (!real || readonly.value || testing.value || !selected.value.id) return;
   const key = contextKey(), id = selected.value.id;
-  const ok = await confirm.ask({ title: '测试调用', target: selected.value.name, okText: '开始探测', impact: '仅请求已配置的只读探测接口；结果和耗时会保存到最近调用。未配置真实适配器时返回错误。' });
+  const ok = await confirm.ask({ title: '测试调用', target: selected.value.name, okText: '开始探测', impact: '仅请求已配置的只读探测接口；结果和耗时会保存到最近调用。需先配置探测路径并获得网络授权。' });
   if (!ok || key !== contextKey() || id !== selected.value.id || readonly.value) return;
   testing.value = true;
   try {
     const result = await testExtSystem(id);
-    if (key === contextKey() && id === selected.value.id) callsTick.value += 1;
+    if (key !== contextKey() || id !== selected.value.id) return;
+    callsTick.value += 1;
     if (result.result === '成功') message.success(result.msg);
     else message.error(result.msg);
   } catch (e) { apiFail(e); }
@@ -266,7 +291,11 @@ const formErrors = computed(() => {
   if (!form.name.trim()) e.push('请填写系统名称');
   else if (systems.some((s) => s.name === form.name.trim() && s.id !== editing.value?.id)) e.push('系统名称已存在');
   if (!form.vendor.trim()) e.push('请填写供应商');
-  if (!/^https:\/\/[^\s/]+\.[^\s]+$/.test(form.endpoint.trim())) e.push('接口地址需以 https:// 开头');
+  const endpoint = form.endpoint.trim();
+  try {
+    const url = new URL(endpoint);
+    if (!/^https?:\/\/[^/?#\s]+$/i.test(endpoint) || !['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.port === '0') throw new Error();
+  } catch { e.push('接口地址需为不含路径、凭据或查询参数的 HTTP(S) 来源地址'); }
   if (form.idempotent && !form.idemKey.trim()) e.push('支持幂等时需填写幂等键');
   if (!(form.timeoutMs >= 1000 && form.timeoutMs <= 60000)) e.push('超时需在 1～60 秒之间');
   return e;
@@ -360,6 +389,7 @@ async function saveEdit() {
         </div>
         <a-space>
           <a-tooltip :title="readonly ? reason : !real ? testUnavailable : undefined"><a-button :disabled="!real || readonly || !selected.id || selected.status === '停用'" :loading="testing" @click="testCall">测试调用</a-button></a-tooltip>
+          <a-button v-if="real" :disabled="readonly || !selected.id" :loading="probeBusy" @click="openProbe">探测配置</a-button>
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openEdit(selected.id)">编辑</a-button></a-tooltip>
           <a-button v-if="real" :disabled="readonly" @click="openAuthorization">动作授权</a-button>
         </a-space>
@@ -483,6 +513,9 @@ async function saveEdit() {
       </div>
     </template>
   </a-drawer>
+  <a-modal :open="!!probe" title="只读探测配置" ok-text="保存" :confirm-loading="probeBusy" :closable="!probeBusy" :mask-closable="!probeBusy" @cancel="probe = null" @ok="saveProbe">
+    <template v-if="probe"><p class="t-12 c-3">来源地址：{{ probe.endpoint }}</p><a-form-item label="探测路径" extra="可留空以关闭探测；仅同源只读路径，实际探测还需部署网络白名单。业务动作授权另行配置。"><a-input v-model:value="probe.probePath" placeholder="例如 /health" /></a-form-item></template>
+  </a-modal>
   <a-modal :open="!!authorization" title="动作授权" ok-text="保存授权" @cancel="authorization = null" @ok="saveAuthorization">
     <template v-if="authorization">
       <p>请选择已发布动作及部署允许的目标路径。</p>

@@ -21,7 +21,7 @@ defineExpose({ validate });
 <template>
   <section class="http-map">
     <div class="heading"><strong>HTTP 字段映射</strong><a-switch :checked="!!mapping" @change="enable" /></div>
-    <p class="hint">关闭时使用平台标准请求与响应。仅支持已授权 HTTPS POST 的顶层 JSON 字段；实际地址由受控执行通道配置，对账仍使用标准接口。</p>
+    <p class="hint">关闭时使用平台标准请求与响应。支持已授权 HTTP/HTTPS POST 的顶层 JSON 字段；实际地址由受控执行通道配置，对账仍使用标准接口。</p>
     <template v-if="mapping">
       <div class="heading"><b>请求字段</b><a-button size="small" :disabled="mapping.request.length >= 32" @click="mapping.request.push({ target: '', source: 'objId' })">添加</a-button></div>
       <div v-for="(row, i) in mapping.request" :key="i" class="row"><a-input v-model:value="row.target" placeholder="外部字段名" /><a-select v-model:value="row.source" :options="sources" /><a-button danger size="small" @click="mapping.request.splice(i, 1)">删除</a-button></div>
