@@ -5,13 +5,25 @@
 
 from typing import Annotated
 
-from pydantic import Field, StringConstraints
+from pydantic import Field, StringConstraints, field_validator
 
 from app.core.schema import ApiModel, CodeId, DateTimeMin, DisplayDate
 from app.modules.data.models import DsRunResult, DsStatus, DsSyncMode, DsType
 
 Str = Annotated[str, StringConstraints(strip_whitespace=True)]
 Required = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def normalize_dm_mode(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    modes = {"0": "不兼容", "2": "Oracle", "3": "SQL Server", "4": "MySQL", "7": "PostgreSQL"}
+    canonical = {name.casefold(): name for name in modes.values()}
+    value = value.strip()
+    result = modes.get(value) or canonical.get(value.casefold())
+    if result is None:
+        raise ValueError("达梦兼容模式必须选择已有的受支持选项")
+    return result
 
 
 class DsTest(ApiModel):
@@ -103,6 +115,11 @@ class _DsWriteBase(ApiModel):
     mode: DsSyncMode = DsSyncMode.incremental
     cron: Str = "0 * * * *"
 
+    @field_validator("compat_mode")
+    @classmethod
+    def validate_compat_mode(cls, value: str | None) -> str | None:
+        return normalize_dm_mode(value)
+
 
 class DatasourceCreate(_DsWriteBase):
     name: Required
@@ -137,3 +154,8 @@ class DsTestIn(ApiModel):
     app_id: Str | None = None
     ssl: bool = True
     mock_fail: bool = Field(False, description="兼容旧调用保留；真实测试忽略，不影响连接结果")
+
+    @field_validator("compat_mode")
+    @classmethod
+    def validate_compat_mode(cls, value: str | None) -> str | None:
+        return normalize_dm_mode(value)

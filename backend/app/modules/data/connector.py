@@ -11,7 +11,9 @@ schema、表名、表注释、字段数、估算行数（PG 用 pg_class.reltupl
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
+import socket
 import ssl
 import time
 from dataclasses import dataclass
@@ -33,6 +35,22 @@ CONNECT_TIMEOUT_S = 10
 MAX_TABLES = 2000
 SYSTEM_SCHEMAS = frozenset({"information_schema", "pg_catalog", "pg_toast", "sys", "sys_catalog"})
 
+
+class _PinnedHostnameContext(ssl.SSLContext):
+    """Verify the approved original hostname while asyncpg connects to a pinned IP."""
+
+    def __new__(cls, hostname: str):
+        return super().__new__(cls, ssl.PROTOCOL_TLS_CLIENT)
+
+    def __init__(self, hostname: str):
+        self._expected_hostname = hostname
+        self.load_default_certs()
+
+    def wrap_bio(self, incoming, outgoing, server_side=False, server_hostname=None, session=None):
+        if server_side:
+            raise ValueError("client TLS context cannot be used as a server")
+        return super().wrap_bio(incoming, outgoing, server_side=False, server_hostname=self._expected_hostname, session=session)
+
 # 类型（中文名，DsType.value）→ SQLAlchemy 异步驱动
 DRIVERS: dict[str, str] = {
     "PostgreSQL": "postgresql+asyncpg",
@@ -46,9 +64,28 @@ def real_connect_enabled() -> bool:
     return os.environ.get("RENGU_DS_REAL_CONNECT") == "1" or get_settings().env == "prod"
 
 
+def _approved_ip(cfg: dict[str, Any]) -> str | None:
+    host = str(cfg.get("host") or "").strip().lower().rstrip(".")
+    allowed = {item.strip().lower().rstrip(".") for item in os.environ.get("RENGU_DS_ALLOWED_HOSTS", "").split(",") if item.strip()}
+    if host not in allowed:
+        return None
+    try:
+        addresses = socket.getaddrinfo(host, int(cfg["port"]), type=socket.SOCK_STREAM)
+        parsed = {ipaddress.ip_address(item[4][0].split("%")[0]) for item in addresses}
+        if not parsed or any(
+            ip.is_link_local or ip.is_multicast or ip.is_unspecified
+            or (isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped)
+            or ip == ipaddress.ip_address("100.100.100.200") for ip in parsed
+        ):
+            return None
+        return str(sorted(parsed, key=lambda ip: (ip.version, int(ip)))[0])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def permitted(kind: str, cfg: dict[str, Any]) -> bool:
     if real_connect_enabled():
-        return True
+        return _approved_ip(cfg) is not None
     if os.environ.get("RENGU_DS_LOCAL_CONNECT") != "1" or kind != "PostgreSQL":
         return False
     try:
@@ -90,21 +127,35 @@ def _engine(kind: str, cfg: dict[str, Any]) -> AsyncEngine | Engine:
         database=cfg.get("database") or None,
     )
     if kind == "达梦 DM8":
-        return create_engine(url, poolclass=NullPool)
+        if cfg.get("ssl"):
+            raise RuntimeError("达梦驱动的 TLS 证书与主机名校验尚未配置，无法安全建立 TLS 连接")
+        return create_engine(url, connect_args={"connection_timeout": CONNECT_TIMEOUT_S}, poolclass=NullPool)
     args: dict[str, Any] = (
         {
             "connect_timeout": CONNECT_TIMEOUT_S,
             "ssl": ssl.create_default_context() if cfg.get("ssl") else None,
         }
         if kind == "MySQL"
-        else {"timeout": CONNECT_TIMEOUT_S, "ssl": "prefer" if cfg.get("ssl") else False}
+        else {"timeout": CONNECT_TIMEOUT_S, "ssl": (_PinnedHostnameContext(cfg["_tls_hostname"]) if cfg.get("_tls_hostname") else "verify-full") if cfg.get("ssl") else False}
     )
     return create_async_engine(url, connect_args=args, poolclass=NullPool)
 
 
 async def _read(kind: str, cfg: dict[str, Any], operation):
     """达梦官方驱动为同步 DBAPI，在线程中连接和内省；其余使用异步驱动。"""
-    if not permitted(kind, cfg):
+    if real_connect_enabled():
+        host = _approved_ip(cfg)
+        if host is None:
+            raise RuntimeError("未授权连接此数据源")
+        if cfg.get("ssl"):
+            try:
+                ipaddress.ip_address(str(cfg.get("host") or ""))
+            except ValueError:
+                if kind not in ("PostgreSQL", "人大金仓 KingbaseES"):
+                    raise RuntimeError("当前不支持此数据源的域名 TLS 主机名校验") from None
+                cfg = {**cfg, "_tls_hostname": str(cfg["host"]).strip().rstrip(".")}
+        cfg = {**cfg, "host": host}
+    elif not permitted(kind, cfg):
         raise RuntimeError("未授权连接此数据源")
 
     def sync_read():
@@ -125,8 +176,12 @@ async def _read(kind: str, cfg: dict[str, Any], operation):
                 return await conn.run_sync(operation)
         finally:
             await eng.dispose()
-    except (ImportError, NoSuchModuleError):
-        raise RuntimeError(f"{kind} 驱动未安装（{DRIVERS[kind]}），未执行连接") from None
+    except NoSuchModuleError:
+        raise RuntimeError(f"{kind} 数据库方言未安装（{DRIVERS[kind]}），未执行连接") from None
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(f"{kind} 驱动或其依赖未安装（{exc.name or '未知模块'}），未执行连接") from None
+    except ImportError:
+        raise RuntimeError(f"{kind} 驱动加载失败，请检查驱动及 SQLAlchemy 版本兼容性") from None
 
 
 def err_text(e: BaseException, password: str | None) -> str:

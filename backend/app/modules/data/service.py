@@ -64,7 +64,8 @@ class IntrospectFailed(AppError):
 
 def _require_real(kind: DsType, config: dict[str, Any]) -> None:
     if not connector.permitted(kind.value, config):
-        raise RealConnectUnavailable("未开启真实连接，未执行测试", details={"reason": "disabled"})
+        message = "数据源主机未列入允许访问的地址，或无法安全解析；请联系管理员检查连接配置" if connector.real_connect_enabled() else "真实数据源连接已关闭，请联系管理员启用后重试"
+        raise RealConnectUnavailable(message, details={"reason": "not_allowed" if connector.real_connect_enabled() else "disabled"})
     if not connector.supports(kind.value):
         raise RealConnectUnavailable(
             f"暂不支持真实连接 {kind.value}（缺驱动），未执行测试",

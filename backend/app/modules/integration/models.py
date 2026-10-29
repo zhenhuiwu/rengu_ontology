@@ -66,6 +66,7 @@ class ExtSystem(CodeMixin, MutableTableMixin, Base):
     env: Mapped[str] = mapped_column(String(16), nullable=False, comment="环境原文（生产/测试）")
     local_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     action_authorizations: Mapped[dict | None] = mapped_column(JsonType)
+    probe_path: Mapped[str | None] = mapped_column(String(255))
     usage: Mapped[dict | None] = mapped_column(JsonType, comment="用途说明 {text, ops, actor?}（mock 原样）")
 
 

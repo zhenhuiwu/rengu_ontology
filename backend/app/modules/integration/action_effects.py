@@ -264,13 +264,16 @@ async def dispatch_effect(effect_id, ontology_id: int):
     state, error, receipt, status, retry_after = "unknown", "EXTERNAL_OUTCOME_UNKNOWN", None, None, None
     retryable, started, timer = False, clock.now(), time.perf_counter()
     try:
+        from app.modules.integration.adapters import pin_http_target
+        pinned_url, host_header, extensions = await pin_http_target(url)
+        headers.update(host_header)
         async with httpx.AsyncClient(
             timeout=max(0.1, min(system.timeout_ms / 1000, 60)),
             follow_redirects=False,
             trust_env=False,
             verify=verify,
         ) as client:
-            response = await client.post(url, content=body, headers=headers)
+            response = await client.post(pinned_url, content=body, headers=headers, extensions=extensions)
         status = response.status_code
         if retryable_status(status):
             retryable, state, error = True, "failed", f"EXTERNAL_HTTP_{status}"

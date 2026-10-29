@@ -21,7 +21,7 @@ from app.modules.action.condition_expr import Unavailable
 from app.modules.event.delivery_history import record, safe_result
 from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, EventOutcome
 from app.modules.event.schemas import FieldOut
-from app.modules.integration.adapters import tls_verify
+from app.modules.integration.adapters import forbidden_metadata_host, pin_http_target, tls_verify
 from app.modules.integration.signing import (
     SigningSecretInvalid,
     backoff,
@@ -82,14 +82,14 @@ def http_target(route: dict, is_test: bool) -> str:
     if is_test and endpoint == route.get("url"):
         raise Unavailable("TEST_CHANNEL_MUST_BE_SEPARATE")
     parts = urlsplit(endpoint)
-    local = parts.hostname in ("localhost", "127.0.0.1", "::1")
     if (
         parts.username
         or parts.password
         or parts.query
         or parts.fragment
         or not parts.hostname
-        or (parts.scheme != "https" and not (settings.env != "prod" and local and parts.scheme == "http"))
+        or forbidden_metadata_host(parts.hostname)
+        or parts.scheme not in ("http", "https")
         or any(ord(char) < 32 or ord(char) == 127 for char in endpoint)
     ):
         raise Unavailable("HTTP_ROUTE_INVALID")
@@ -582,11 +582,16 @@ async def execute(session, delivery_id: int) -> None:
             body = encode_body(envelope)
             headers = signed_headers(headers, body, secret)
             try:
+                pinned_endpoint, host_header, extensions = await pin_http_target(endpoint)
+                headers.update(host_header)
+            except ValueError:
+                raise Unavailable("HTTP_ROUTE_INVALID") from None
+            try:
                 async with (
                     httpx.AsyncClient(
                         timeout=15, follow_redirects=False, trust_env=False, verify=tls_verify()
                     ) as client,
-                    client.stream("POST", endpoint, content=body, headers=headers) as response,
+                    client.stream("POST", pinned_endpoint, content=body, headers=headers, extensions=extensions) as response,
                 ):
                     delivery.result = {"httpStatus": response.status_code}
                     retry_after = response.headers.get("Retry-After")

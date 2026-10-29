@@ -1,7 +1,7 @@
 """Pydantic 输入输出（继承 app.core.schema.ApiModel，字段对齐前端 mock 的 TS interface）。"""
 
-import re
 from typing import Any, Self
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
@@ -54,15 +54,12 @@ class ExtSystemListOut(ApiModel):
     size: int = 10
 
 
-_HTTPS = re.compile(r"^https://[^\s/]+\.\S+$")  # 同前端 formErrors
-
-
 class ExtSystemIn(ApiModel):
     """新建 / 编辑外部系统的请求体：字段同 ExtSystemOut（前端表单 blank() 的字段）。
 
     `id` 不收（编号由后台生成）。
 
-    校验规则照抄 ExternalSystems.vue formErrors（名称、供应商必填；https:// 地址；支持幂等时幂等键必填；
+    校验规则包括名称、供应商必填，HTTP(S) 地址，支持幂等时幂等键必填；
     超时 1～60 秒）；`retry` 不传时按前端 retryText() 生成。不支持幂等时幂等键存 '-'、最多重试存 0（同前端）。
     """
 
@@ -105,8 +102,17 @@ class ExtSystemIn(ApiModel):
     @field_validator("endpoint")
     @classmethod
     def _endpoint(cls, v: str) -> str:
-        if not _HTTPS.match(v):
-            raise PydanticCustomError("value_error", "接口地址需以 https:// 开头")
+        try:
+            parts = urlsplit(v)
+            port = parts.port
+            valid = (parts.scheme in ("http", "https") and parts.hostname and not parts.username
+                     and not parts.password and not parts.query and not parts.fragment
+                     and not parts.path and not any(c.isspace() or ord(c) < 32 for c in v)
+                     and (port is None or 1 <= port <= 65535))
+        except ValueError:
+            valid = False
+        if not valid:
+            raise PydanticCustomError("value_error", "接口地址需为不含路径、凭据或查询参数的 HTTP(S) 来源地址")
         return v
 
     @model_validator(mode="after")

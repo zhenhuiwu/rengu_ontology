@@ -267,13 +267,16 @@ async def dispatch_one(call_id, ontology_id: int):
     body = encode_body(payload)
     headers = signed_headers(headers, body, secret)
     try:
+        from app.modules.integration.adapters import pin_http_target
+        pinned_url, host_header, extensions = await pin_http_target(call.path)
+        headers.update(host_header)
         async with httpx.AsyncClient(
             timeout=max(0.1, min(system.timeout_ms / 1000, 60)),
             follow_redirects=False,
             trust_env=False,
             verify=verify,
         ) as client:
-            response = await client.post(call.path, content=body, headers=headers)
+            response = await client.post(pinned_url, content=body, headers=headers, extensions=extensions)
         status = response.status_code
         if not 200 <= status < 300 or len(response.content) > 65_536:
             raise ValueError

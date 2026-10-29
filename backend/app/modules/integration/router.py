@@ -49,6 +49,41 @@ class ActionAuthorizationIn(ApiModel):
     actions: list[ActionAuthorizationItem] = Field(max_length=100)
 
 
+class ProbeConfigIn(ApiModel):
+    version: int = Field(ge=1)
+    probe_path: str | None = Field(default=None, max_length=255)
+
+
+@router.get("/ext-systems/{sys_id}/probe-config")
+async def get_probe_config(sys_id: str, session: SessionDep, user: CurrentUserDep):
+    check_func(user, "external-systems", "manage")
+    system = await ExtSystemService(session).repo.get_by_code_or_404(sys_id)
+    return {"version": system.lock_version, "endpoint": system.endpoint, "probePath": system.probe_path}
+
+
+@router.put("/ext-systems/{sys_id}/probe-config")
+async def save_probe_config(sys_id: str, body: ProbeConfigIn, session: SessionDep, user: CurrentUserDep, request: Request):
+    import re
+    from sqlalchemy import select
+    from app.core.errors import AppError, VersionConflict
+    from app.modules.integration.models import ExtSystem
+    from app.modules.admin.repo import insert_audit
+
+    check_func(user, "external-systems", "manage")
+    system = await session.scalar(select(ExtSystem).where(ExtSystem.code == sys_id).with_for_update())
+    if system is None:
+        raise AppError("外部系统不存在", code="NOT_FOUND", status_code=404)
+    if system.lock_version != body.version:
+        raise VersionConflict()
+    path = body.probe_path
+    if path is not None and (not re.fullmatch(r"/[A-Za-z0-9_~./-]*", path) or (path != "/" and any(part in ("", ".", "..") for part in path[1:].split("/")))):
+        raise AppError("探测路径须为同源规范绝对路径", code="VALIDATION_FAILED", status_code=422)
+    system.probe_path = path
+    await insert_audit(session, actor=f"{user.name}（{user.id}）", action="修改外部系统探测路径", target=f"{system.code}: {path or '未配置'}"[:200], ip=request.client.host if request.client else "", created_by=user.id)
+    await session.flush()
+    return {"version": system.lock_version, "endpoint": system.endpoint, "probePath": system.probe_path}
+
+
 @router.get("/ext-systems/{sys_id}/action-authorizations")
 async def get_action_authorizations(sys_id: str, session: SessionDep, user: CurrentUserDep):
     from sqlalchemy import select

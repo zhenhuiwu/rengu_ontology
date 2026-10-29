@@ -1,6 +1,9 @@
 """Explicitly configured HTTP probes and idempotency queries. No implicit mock responses."""
 
 import json
+import ipaddress
+import asyncio
+import socket
 import re
 import ssl
 from urllib.parse import urlsplit
@@ -17,6 +20,40 @@ from app.modules.integration.models import NO_AUTH, ExtSystem, ExtSystemStatus
 
 def unavailable(message="未配置外部系统真实查询适配器") -> AppError:
     return AppError(message, code="RECONCILE_UNAVAILABLE", status_code=503)
+
+
+def forbidden_metadata_host(hostname: str) -> bool:
+    host = hostname.rstrip(".").lower()
+    if host in {"metadata.google.internal", "metadata.goog", "instance-data.ec2.internal", "metadata.azure.internal"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_link_local or address in (ipaddress.ip_address("100.100.100.200"), ipaddress.ip_address("fd00:ec2::254"))
+
+
+async def pin_http_target(url: str) -> tuple[str, dict, dict]:
+    """Resolve once, reject metadata addresses, then connect to the checked IP."""
+    try:
+        endpoint = urlsplit(url)
+        if endpoint.scheme not in ("http", "https") or not endpoint.hostname or forbidden_metadata_host(endpoint.hostname):
+            raise ValueError
+        port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+        records = await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(endpoint.hostname, port, type=socket.SOCK_STREAM), timeout=5)
+        addresses = {ipaddress.ip_address(record[4][0]) for record in records}
+        if not addresses or any(forbidden_metadata_host(str(ip)) or ip.is_multicast or ip.is_unspecified for ip in addresses):
+            raise ValueError
+        chosen = sorted(addresses, key=lambda ip: (ip.version, int(ip)))[0]
+        host = f"[{chosen}]" if chosen.version == 6 else str(chosen)
+        target = f"{endpoint.scheme}://{host}:{port}{endpoint.path or '/'}"
+        if endpoint.query:
+            target += f"?{endpoint.query}"
+        return target, {"Host": endpoint.netloc}, {"sni_hostname": endpoint.hostname}
+    except (ValueError, OSError, asyncio.TimeoutError):
+        raise ValueError("HTTP destination unavailable or prohibited") from None
 
 
 def tls_verify() -> ssl.SSLContext | bool:
@@ -186,14 +223,15 @@ class HttpAdapter:
         self.last_http: int | None = None
         endpoint = urlsplit(system.endpoint)
         if (
-            endpoint.scheme != "https"
+            endpoint.scheme not in ("http", "https")
             or not endpoint.hostname
+            or forbidden_metadata_host(endpoint.hostname)
             or endpoint.username
             or endpoint.password
             or endpoint.query
             or endpoint.fragment
         ):
-            raise unavailable("外部系统地址须为不含凭据或查询参数的 HTTPS 地址")
+            raise unavailable("外部系统地址须为不含凭据或查询参数的 HTTP(S) 地址")
         self.origin = f"{endpoint.scheme}://{endpoint.netloc}"
         self.verify = tls_verify()
 
@@ -226,6 +264,29 @@ class HttpAdapter:
         path = self.path(operation)
         url = f"{self.origin}{path}"
         headers = {"Accept": "application/json", "X-Ontology-Id": str(self.system.ontology_id)}
+        extensions = {}
+        if operation == "probe" and hasattr(self, "probe_policy"):
+            endpoint = urlsplit(self.origin)
+            hostname = endpoint.hostname
+            port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+            try:
+                addresses = await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(hostname, port, type=socket.SOCK_STREAM), timeout=5)
+                candidates = {ipaddress.ip_address(item[4][0]) for item in addresses}
+                if not candidates or any(not probe_address_allowed(ip, port, self.probe_policy) for ip in candidates):
+                    raise ValueError
+                selected = sorted(candidates, key=lambda ip: (ip.version, int(ip)))[0]
+                host = f"[{selected}]" if selected.version == 6 else str(selected)
+                url = f"{endpoint.scheme}://{host}:{port}{path}"
+                headers["Host"] = endpoint.netloc
+                extensions["sni_hostname"] = hostname
+            except (ValueError, OSError, asyncio.TimeoutError):
+                raise unavailable("探测地址解析失败或包含未授权地址") from None
+        else:
+            try:
+                url, host_header, extensions = await pin_http_target(url)
+                headers.update(host_header)
+            except ValueError:
+                raise unavailable("目标地址解析失败或不可用") from None
         if self.config.token and self.system.auth_type != NO_AUTH:
             headers["Authorization"] = f"Bearer {self.config.token.get_secret_value()}"
         try:
@@ -236,7 +297,7 @@ class HttpAdapter:
                 verify=self.verify,
             ) as client:
                 response = await client.get(
-                    url, params={"idemKey": key} if key is not None else None, headers=headers
+                    url, params={"idemKey": key} if key is not None else None, headers=headers, extensions=extensions
                 )
             self.last_http = response.status_code
             if not 200 <= response.status_code < 300:
@@ -258,6 +319,54 @@ class HttpAdapter:
                 status_code=503,
             ) from None
         return KeyQueryResult(result.ext_status, result.ext_ref)
+
+
+def probe_address_allowed(address, port, policy):
+    if (isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped) or forbidden_metadata_host(str(address)) or address.is_multicast or address.is_unspecified:
+        return False
+    return any(address in network and port in ports for network, ports in policy)
+
+
+def get_probe_adapter(system: ExtSystem) -> HttpAdapter:
+    """Use a stored probe only inside the deployment's explicit network ceiling."""
+    settings = get_settings()
+    if not settings.integration_real_connect or system.status == ExtSystemStatus.disabled:
+        raise unavailable("真实探测未启用或系统不可用")
+    try:
+        endpoint = urlsplit(system.endpoint)
+        if not system.probe_path:
+            address = ipaddress.ip_address(endpoint.hostname or "")
+            if not probe_address_allowed(address, 1, [(ipaddress.ip_network(f"{address}/{address.max_prefixlen}"), [1])]):
+                raise ValueError
+            return get_adapter(system, "probe")
+        if system.local_only:
+            raise ValueError
+        port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+        if endpoint.port == 0:
+            raise ValueError
+        policy = json.loads(settings.integration_probe_networks or "[]")
+        if not isinstance(policy, list) or len(policy) > 100:
+            raise ValueError
+        parsed_policy = []
+        for item in policy:
+            if not isinstance(item, dict) or set(item) != {"cidr", "ports"} or not isinstance(item["ports"], list):
+                raise ValueError
+            network = ipaddress.ip_network(item["cidr"], strict=True)
+            if network.prefixlen < (8 if network.version == 4 else 32):
+                raise ValueError
+            if any(type(p) is not int or not 1 <= p <= 65535 for p in item["ports"]):
+                raise ValueError
+            parsed_policy.append((network, item["ports"]))
+        if not parsed_policy:
+            raise ValueError
+        config = AdapterConfig(probe_path=system.probe_path)
+        adapter = HttpAdapter(system, config)
+        if system.endpoint != adapter.origin:
+            raise ValueError
+        adapter.probe_policy = parsed_policy
+        return adapter
+    except (ValueError, TypeError, ValidationError):
+        raise unavailable("探测目标或部署网络授权配置无效") from None
 
 
 def get_adapter(system: ExtSystem, operation: str = "query") -> HttpAdapter:

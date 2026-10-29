@@ -144,6 +144,8 @@ class ExtSystemService:
         obj = await self.repo.get_by_code_or_404(code)
         await self._check_name(body.name, exclude_id=obj.id)
         values = _values(body)
+        if values["endpoint"] != obj.endpoint:
+            values["probe_path"] = None
         if obj.local_only and any(
             values[field] != getattr(obj, field) for field in ("env", "category", "endpoint")
         ):
@@ -159,13 +161,13 @@ class ExtSystemService:
 
     async def test_call(self, code: str, user_label: str) -> dict:
         """Only an explicitly configured read-only probe can create a test-call result."""
-        from app.modules.integration.adapters import get_adapter as configured_adapter
+        from app.modules.integration.adapters import get_probe_adapter as configured_adapter
 
         s = await self.repo.get_by_code_or_404(code)
         if s.status == ExtSystemStatus.disabled:
             raise Conflict("该系统已停用，先在“编辑”里改为正常再测试", code="EXT_SYSTEM_DISABLED")
         try:
-            adapter = configured_adapter(s, "probe")
+            adapter = configured_adapter(s)
         except AppError:
             raise AppError(
                 "未配置真实连通性测试执行器，未发送请求，也未生成调用记录",

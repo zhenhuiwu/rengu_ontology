@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # Explicit opt-in plus per-system HTTP paths/credentials; only put real values in ignored .env.
     integration_real_connect: bool = False
     integration_adapters: SecretStr | None = None
+    integration_probe_networks: str | None = None
     integration_ca_file: Path | None = None
     integration_local_demo: str | None = None
     event_delivery_http_enabled: bool = False
