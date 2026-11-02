@@ -316,7 +316,7 @@ class ActionTypeService:
         for code, status, count in (
             await self.session.execute(
                 select(Alert.rule_code, Alert.status, func.count())
-                .where(Alert.rule_code.in_(ids))
+                .where(Alert.rule_code.in_(ids), Alert.deleted_at.is_(None))
                 .group_by(Alert.rule_code, Alert.status)
             )
         ).all():
@@ -384,7 +384,7 @@ async def run_daily(session: AsyncSession, type_id: str, days: int) -> list[dict
     day = func.date(func.timezone(get_settings().display_tz, ActionRun.submitted_at))
     rows = (await session.execute(
         select(day, ActionRun.status, func.count())
-        .where(ActionRun.action_type_code == at.code, day >= start, day <= end, ActionRun.submitted_at <= clock.now())
+        .where(ActionRun.action_type_code == at.code, ActionRun.deleted_at.is_(None), day >= start, day <= end, ActionRun.submitted_at <= clock.now())
         .group_by(day, ActionRun.status)
     )).all()
     counts = {(d, status): count for d, status, count in rows}

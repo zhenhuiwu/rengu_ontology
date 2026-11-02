@@ -249,7 +249,7 @@ async def automation_hits(session, code, rule_id, page, user):
     )
     ids = {row.RuleHit.alert_id for row in rows if row.RuleHit.alert_id is not None}
     alerts = (
-        {alert.id: alert for alert in await session.scalars(select(Alert).where(Alert.id.in_(ids)))}
+        {alert.id: alert for alert in await session.scalars(select(Alert).where(Alert.id.in_(ids), Alert.deleted_at.is_(None)))}
         if ids
         else {}
     )

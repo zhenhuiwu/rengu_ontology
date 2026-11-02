@@ -77,7 +77,7 @@ async def bind_alert_run(session, run, alert, *, retry_of=None):
     """Caller owns the run lock (or its new row); canonical alert links never silently change."""
     # Non-key updates must coexist with the new run's foreign-key KEY SHARE lock.
     alert = await session.scalar(select(Alert).where(Alert.id == alert.id).with_for_update(key_share=True).execution_options(populate_existing=True))
-    if alert is None:
+    if alert is None or getattr(alert, "deleted_at", None) is not None:
         raise NotFound("关联告警不存在")
     if (run.ontology_id != alert.ontology_id or run.alert_id != alert.id
         or run.obj_kind != alert.obj_kind or run.obj_id != alert.obj_id
@@ -294,6 +294,7 @@ class ActionService:
             reconcile = r.reconcile_result.value
         return ActionRunOut(
             id=r.code,
+            lock_version=r.lock_version,
             type_id=r.action_type_code,
             action=r.action_name,
             type_version=r.type_version,
@@ -362,6 +363,8 @@ class ActionService:
         )
 
     async def detail(self, r: ActionRun) -> ActionRunDetail:
+        if r.deleted_at is not None:
+            raise NotFound("动作记录已删除")
         out = (await self.to_out([r]))[0]
         review = r.review_snapshot
         review_reason = out.params_unavailable
@@ -377,6 +380,11 @@ class ActionService:
             logs = []
         dispatch_phase = out.dispatch_phase
         can = self.can(r)
+        from app.modules.dynamic.record_delete import can_delete
+        delete_reason = await can_delete(self.session, self.user, r)
+        can.delete = delete_reason is None
+        if delete_reason:
+            can.reasons["delete"] = delete_reason
         if can.confirm or can.approve or can.resubmit or can.reconcile:
             try:
                 await self._operation_access(r)
@@ -672,6 +680,8 @@ class ActionService:
         for old in await self.repo.by_idem_key(key):
             if not include_seed and old.is_seed:
                 continue
+            if old.deleted_at is not None:
+                raise IdempotencyConflict("原幂等记录已删除，仍保留执行事实；不能用原键重新执行")
             mine = {k: getattr(old, k) for k in same}
             if mine == same:
                 return old
@@ -819,7 +829,7 @@ class ActionService:
             from app.db.dialects import get_adapter as db_adapter
             await db_adapter(self.session).xact_lock(self.session, f"dynamic.alert.stage.{self.user.ontology_id}.{src.alert_id}")
             alert = await self.alerts.get_by_code(src.alert_id)
-            if alert is None:
+            if alert is None or alert.deleted_at is not None:
                 raise validation_failed("source.alertId", f"告警不存在：{src.alert_id}")
         rule_code = src.rule_id or (alert.rule_code if alert else None)
         confirmer = src.confirmer
@@ -1267,9 +1277,11 @@ class AlertService:
         return {r.id: r for r in rows}
 
     def _out(self, a: Alert, run: ActionRun | None) -> AlertOut:
+        run = None if run is not None and run.deleted_at is not None else run
         person = self.catalog.person(a.assignee)
         return AlertOut(
             id=a.code,
+            lock_version=a.lock_version,
             level=a.level.value,
             rule_id=a.rule_code,
             obj_kind=a.obj_kind,
@@ -1606,6 +1618,7 @@ class AlertService:
         前端对 R-012 额外 +2 是演示用硬编码，按 §2.2 不做。"""
         n = await self.session.scalar(
             select(func.count()).where(
+                Alert.deleted_at.is_(None),
                 Alert.rule_code == a.rule_code,
                 Alert.obj_kind == a.obj_kind,
                 Alert.obj_id == a.obj_id,
@@ -1633,7 +1646,7 @@ class AlertService:
         if mine_doing and rule and rule.get("action") and not approval_ready:
             reasons["startAction"] = "动作审批配置未指定可用审批人"
         if mine_doing and run is not None:
-            reasons["startAction"] = "已有关联动作"
+            reasons["startAction"] = "关联动作记录已删除，保留幂等，不能重复发起" if run.deleted_at is not None else "已有关联动作"
         manage = self.user.func.get("alerts") == "manage" and self.user.ontology_role in ("owner", "editor")
         return AlertCan(
             claim=manage and a.status == AlertStatus.open,
@@ -1652,6 +1665,11 @@ class AlertService:
         rule = self.catalog.rule(a.rule_code)
         logs = await self.repo.logs(a.id)
         can = self._can(a, run, rule)
+        from app.modules.dynamic.record_delete import can_delete
+        delete_reason = await can_delete(self.session, self.user, a, alert=True)
+        can.delete = delete_reason is None
+        if delete_reason:
+            can.reasons["delete"] = delete_reason
         params = []
         if can.start_action:
             from app.modules.dynamic.action_options import launch_definition

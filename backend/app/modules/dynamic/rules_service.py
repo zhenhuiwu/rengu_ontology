@@ -118,7 +118,7 @@ class RuleService:
         r = await self.session.scalar(
             select(Rule).where(Rule.code == code).execution_options(populate_existing=True)
         )
-        if r is None:
+        if r is None or (r.version is None and not await self.session.scalar(select(RuleDraft.id).where(RuleDraft.rule_id == r.id).limit(1))):
             raise NotFound("规则不存在", details={"id": code})
         return r
 
@@ -459,10 +459,17 @@ class RuleService:
                 ActionRun.obj_id,
             )
         )
+        cr_lock_version = (
+            await self.session.scalar(
+                select(ChangeRequest.lock_version).where(ChangeRequest.code == d.cr_code)
+            )
+            if d is not None else None
+        )
         return {
             **base,
             "displayStatus": st["text"],
             "cr": st["cr"],
+            "crLockVersion": cr_lock_version,
             "draft": draft,
             "view": "draft" if view == "draft" and draft else "published",
             "editable": view == "draft" and draft is not None,
@@ -490,7 +497,7 @@ class RuleService:
     async def _alerts(self, ids: set[int]) -> dict[int, Alert]:
         if not ids:
             return {}
-        return {a.id: a for a in (await self.session.scalars(select(Alert).where(Alert.id.in_(ids)))).all()}
+        return {a.id: a for a in (await self.session.scalars(select(Alert).where(Alert.id.in_(ids), Alert.deleted_at.is_(None)))).all()}
 
     @staticmethod
     def hit_out(h: RuleHit, rule_code: str, alert: Alert | None) -> dict[str, Any]:
@@ -506,7 +513,7 @@ class RuleService:
             "value": h.value,
             "threshold": h.threshold,
             "alertId": alert.code if alert else None,
-            "result": alert.status.value if (alert and h.result == HitResult.alert) else h.result.value,
+            "result": alert.status.value if (alert and h.result == HitResult.alert) else "告警已删除或不可见" if h.alert_id and h.result == HitResult.alert else h.result.value,
         }
 
     async def hit_dicts(self, r: Rule) -> list[dict[str, Any]]:
@@ -1358,7 +1365,7 @@ class LifecycleService:
             i: c
             for i, c in (
                 await self.session.execute(
-                    select(Alert.id, Alert.code).where(Alert.id.in_({r.alert_id for r in rows if r.alert_id}))
+                    select(Alert.id, Alert.code).where(Alert.id.in_({r.alert_id for r in rows if r.alert_id}), Alert.deleted_at.is_(None))
                 )
             ).all()
         }

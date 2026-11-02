@@ -72,7 +72,7 @@ async def overview(svc: StaticService, user: CurrentUser) -> dict:
             await svc.session.execute(
                 select(ActionRun.status, func.count())
                 .where(
-                    ActionRun.action_type_code.in_([a["id"] for a in actions]), ActionRun.in_center.is_(False)
+                    ActionRun.action_type_code.in_([a["id"] for a in actions]), ActionRun.in_center.is_(False), ActionRun.deleted_at.is_(None)
                 )
                 .group_by(ActionRun.status)
             )

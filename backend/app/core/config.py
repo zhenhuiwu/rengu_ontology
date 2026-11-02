@@ -3,7 +3,7 @@
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     env: Literal["dev", "test", "prod"] = "dev"
     app_name: str = "rengu_ontology backend"
+    agent_public_ontology_ids: list[Annotated[int, Field(gt=0, strict=True)]] = Field(default_factory=list)
     # 接口前缀按模块：/api/<module>/v1（例如 /api/ontology/v1、/api/qa/v1），见 app/api.py
     api_prefix_template: str = "/api/{module}/v1"
     log_level: str = "INFO"

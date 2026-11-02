@@ -315,9 +315,12 @@ async def dispatch(session, user, *, rule_code, event_id):
     action = {"actionStatus": "not_configured"}
     if previous:
         alert = await session.get(Alert, previous.alert_id) if previous.alert_id else None
+        # Keep original hit idempotency, without advertising a deleted record as a live link.
+        if alert is not None and alert.deleted_at is not None:
+            alert = None
         if alert and previous.result != HitResult.deduped:
             run = await session.scalar(select(ActionRun).where(ActionRun.alert_id == alert.id, ActionRun.rule_code == rule.code))
-            if run:
+            if run and run.deleted_at is None:
                 action = {"actionStatus": run.status.value, "actionId": run.code}
         return {
             **result,

@@ -19,6 +19,7 @@ from app.common.auth import ApiKeyGuardDep, OntologyGuardDep
 from app.common.context import ReadonlyGuardDep
 from app.core.config import api_prefix
 from app.modules.action.router import router as action_router
+from app.modules.agent.router import router as agent_router
 from app.modules.admin.api_keys import router as api_keys_router
 from app.modules.admin.login import router as login_router
 from app.modules.admin.router import router as admin_router
@@ -41,6 +42,8 @@ from app.modules.notifications.router import settings_router as notification_set
 from app.modules.ontology.router import router as workspace_router
 from app.modules.qa.router import router as qa_router
 from app.modules.static.router import router as static_router
+from app.modules.static.definition_delete import data_router as data_delete_router
+from app.modules.static.definition_delete import router as definition_delete_router
 from app.modules.versioning.router import router as versioning_router
 
 MOUNTS: list[tuple[str, APIRouter]] = [
@@ -68,6 +71,10 @@ MOUNTS: list[tuple[str, APIRouter]] = [
 
 def include_routers(app: FastAPI) -> None:
     app.include_router(login_router, prefix=api_prefix("auth"))
+    app.include_router(agent_router, prefix=api_prefix("agent"))
+    # Colon routes must precede existing /{id} readers.
+    for group, deletion in (("ontology", definition_delete_router), ("data", data_delete_router)):
+        app.include_router(deletion, prefix=api_prefix(group), dependencies=[ReadonlyGuardDep, ApiKeyGuardDep, OntologyGuardDep])
     for module, router in MOUNTS:
         app.include_router(
             router,

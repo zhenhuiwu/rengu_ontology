@@ -62,7 +62,7 @@ def current_select():
         .limit(1)
         .scalar_subquery()
     )
-    return select(Function, SysUser.name, version).join(SysUser, SysUser.id == Function.owner_id)
+    return select(Function, SysUser.name, version).join(SysUser, SysUser.id == Function.owner_id).where(Function.status != "deleted")
 
 
 def draft_row(code: str, draft: dict) -> dict | None:
@@ -150,7 +150,7 @@ async def current_rows(session: AsyncSession, records, pending: dict) -> list[di
 
 
 async def list_page(session: AsyncSession, kw: str, status: str, page: PageParams) -> dict:
-    where = []
+    where = [Function.status != "deleted"]
     kw = kw.strip().lower()
     if kw:
         where.append(func.lower(Function.name + literal(" ") + Function.title).contains(kw, autoescape=True))
@@ -214,7 +214,7 @@ async def detail(session: AsyncSession, code: str) -> dict:
 
 
 async def history(session: AsyncSession, code: str, page: PageParams) -> dict:
-    fn_id = await session.scalar(select(Function.id).where(Function.code == code))
+    fn_id = await session.scalar(select(Function.id).where(Function.code == code, Function.status != "deleted"))
     pending = (await drafts(session, [code])).get(code)
     if fn_id is None and (pending is None or draft_row(code, pending) is None):
         raise NotFound("函数不存在", details={"id": code})

@@ -8,6 +8,10 @@ from app.common.sql_guard import ensure_governed_tables, governed_tables
 
 
 async def scoped_instances(session, statement, user, kind_column, identity_column):
+    # Read-side visibility only. Internal idempotency/dedupe queries deliberately bypass this helper.
+    deleted = getattr(getattr(kind_column, "class_", None), "deleted_at", None)
+    if deleted is not None:
+        statement = statement.where(deleted.is_(None))
     await ensure_governed_tables(session)
     clauses = []
     for mapping in governed_tables(user.ontology_id, session).values():

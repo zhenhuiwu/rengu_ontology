@@ -93,6 +93,20 @@ AlertSvc = Annotated[AlertService, Depends(_alerts)]
 ActionSvc = Annotated[ActionService, Depends(_actions)]
 
 
+@router.delete("/action-runs/{code}", dependencies=ACTIONS_MANAGE, status_code=204)
+async def delete_action_run(code: DynamicPathCode, svc: ActionSvc, lock_version: Annotated[int, Query(alias="lockVersion", ge=0)]):
+    from app.modules.dynamic.record_delete import remove_action
+    await remove_action(svc, code, lock_version)
+    return Response(status_code=204)
+
+
+@router.delete("/alerts/{code}", dependencies=ALERTS_MANAGE, status_code=204)
+async def delete_alert_record(code: DynamicPathCode, svc: AlertSvc, lock_version: Annotated[int, Query(alias="lockVersion", ge=0)]):
+    from app.modules.dynamic.record_delete import remove_alert
+    await remove_alert(svc, code, lock_version)
+    return Response(status_code=204)
+
+
 def _alert_list(
     session: SessionDep,
     user: CurrentUserDep,

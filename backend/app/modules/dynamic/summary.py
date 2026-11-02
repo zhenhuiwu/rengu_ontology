@@ -150,7 +150,7 @@ class ObjectDynamicSummary:
         )
         alert_ids = {h.alert_id for h in hits if h.alert_id}
         alerts = (
-            {a.id: a for a in await self.session.scalars(select(Alert).where(Alert.id.in_(alert_ids)))}
+            {a.id: a for a in await self.session.scalars(select(Alert).where(Alert.id.in_(alert_ids), Alert.deleted_at.is_(None)))}
             if alert_ids
             else {}
         )

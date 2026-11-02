@@ -32,6 +32,7 @@ class DimOut(ApiModel):
 
 class AlertOut(ApiModel):
     id: str
+    lock_version: int = 0
     level: str
     rule_id: str
     obj_kind: str
@@ -76,6 +77,7 @@ class AlertCan(ApiModel):
     transfer: bool
     close: bool
     start_action: bool
+    delete: bool = False
     reasons: dict[str, str] = Field(default_factory=dict)
 
 
@@ -144,6 +146,7 @@ class ActionRunOut(ApiModel):
     """
 
     id: str
+    lock_version: int = 0
     type_id: str
     action: str
     type_version: str | None = None
@@ -184,6 +187,7 @@ class ActionCan(ApiModel):
     approve: bool
     resubmit: bool
     reconcile: bool
+    delete: bool = False
     reasons: dict[str, str] = Field(default_factory=dict)
 
 

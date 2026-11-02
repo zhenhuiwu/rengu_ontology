@@ -84,6 +84,8 @@ IN_FLIGHT = (ActionStatus.staged, ActionStatus.approving, ActionStatus.executing
 
 class Alert(CodeMixin, MutableTableMixin, Base):
     __tablename__ = "alert"
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[str | None] = mapped_column(String(64))
     __table_args__ = (
         Index("ix_alert_rule_obj", "rule_code", "obj_id"),
         {"comment": "告警（规则命中生成，人工处理）"},
@@ -151,6 +153,8 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
     """动作执行记录：动作中心 ACTIONS + 动作类型页 RUNS 合并成一张表。"""
 
     __tablename__ = "action_run"
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[str | None] = mapped_column(String(64))
     __table_args__ = (
         unique_except_seed("action_run", "idem_key"),
         Index("ix_action_run_center_status", "in_center", "status"),
