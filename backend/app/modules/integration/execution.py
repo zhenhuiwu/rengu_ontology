@@ -55,6 +55,46 @@ async def criteria_user(session, user, run):
     return await resolve_user(session, confirmer)
 
 
+async def http_object_values(session, user, run, definition):
+    from datetime import date, datetime
+    from decimal import Decimal
+    from enum import Enum
+    from app.common.object_identity import property_column
+    from app.modules.functions.runtime import json_value
+    from app.modules.integration.action_edits import existing_row, object_binding, object_operation
+    from app.modules.qa.object_source import check_object_read
+
+    mapping = definition.get("httpMapping") or {}
+    fields = {row["source"][7:] for row in mapping.get("request", []) if isinstance(row.get("source"), str) and row["source"].startswith("object.")}
+    if not fields:
+        return {}
+    if not run.obj_kind or not run.obj_id or run.obj_kind != definition.get("targetKind"):
+        raise AppError("HTTP 对象字段需要已授权的动作目标", code="ACTION_HTTP_MAPPING_INVALID", status_code=422)
+    check_object_read(user)
+    obj, governed = await object_binding(session, run.obj_kind)
+    await object_operation(session, user, obj, definition)
+    row = await existing_row(session, user, obj, governed, run.obj_id)
+    values = {}
+    for field in fields:
+        props = [p for p in obj.properties if p.api_name == field]
+        column = property_column(props[0], governed) if len(props) == 1 else None
+        if column is None or any(
+            (p.source_column if governed.source_sql else p.backing_column or p.source_column) == column.name
+            and (p.is_sensitive or p.visibility == "hidden" or p.transform)
+            for p in obj.properties
+        ):
+            raise AppError("HTTP 映射引用了不可读取的对象属性", code="ACTION_HTTP_MAPPING_INVALID", status_code=422)
+        value = row[column.name]
+        if isinstance(value, Enum):
+            value = value.value
+        if isinstance(value, (date, datetime)):
+            value = value.isoformat()
+        elif isinstance(value, Decimal):
+            value = str(value)
+        values[field] = value
+    return json_value(values)
+
+
 async def preflight(session, user, run, *, review: dict | None = None):
     check_func(user, "action-center", "manage")
     definition = await execution_definition(session, run)
@@ -67,12 +107,16 @@ async def preflight(session, user, run, *, review: dict | None = None):
         structured_params(run.params if run.params is not None else run.params_text),
     )
     from app.modules.integration.http_mapping import validate_mapping
+    if definition.get("httpEndpointId"):
+        from app.modules.integration.http_endpoints import validate_endpoint_params
+        validate_endpoint_params(definition.get("httpMapping"), {p["api"] for p in definition["params"]})
     validate_mapping(definition.get("httpMapping"), {p["api"] for p in definition["params"]})
     if definition.get("httpMapping"):
         for row in definition["httpMapping"]["request"]:
-            if row["source"].startswith("params.") and row["source"][7:] not in run.params:
+            if isinstance(row.get("source"), str) and row["source"].startswith("params.") and row["source"][7:] not in run.params:
                 raise AppError("HTTP 请求映射缺少参数值", code="ACTION_HTTP_MAPPING_INVALID", status_code=422)
     await target_access(session, user, run, definition)
+    run._http_object_values = await http_object_values(session, user, run, definition)
     checker = DatabaseSubmissionChecker(session, await criteria_user(session, user, run))
     result = await checker.run(
         definition,
@@ -101,6 +145,21 @@ async def preflight(session, user, run, *, review: dict | None = None):
 
 
 def submit_adapter(system, definition):
+    allowed = system.action_authorizations
+    entry = allowed.get(definition["id"]) if isinstance(allowed, dict) else None
+    if allowed is not None:
+        details = {"systemId": system.code, "actionId": definition["id"], "field": "actionAuthorizations"}
+        if not isinstance(entry, dict):
+            raise AppError(
+                "此外部系统未授权该动作，请在外部系统“动作授权”中选择已发布动作和允许路径后保存",
+                code="ACTION_EXECUTOR_NOT_AUTHORIZED", status_code=403, details=details,
+            )
+        if entry.get("version") != definition.get("version"):
+            raise AppError(
+                f"动作执行授权版本已过期（已授权 {entry.get('version')}，当前动作 {definition.get('version')}），请在外部系统“动作授权”中重新勾选当前版本并保存",
+                code="ACTION_EXECUTOR_AUTHORIZATION_VERSION_MISMATCH", status_code=409,
+                details={**details, "expectedVersion": definition.get("version"), "authorizedVersion": entry.get("version"), "currentVersion": definition.get("version")},
+            )
     try:
         adapter = get_adapter(system, "submit")
     except AppError as error:
@@ -109,18 +168,26 @@ def submit_adapter(system, definition):
         raise AppError(
             "外部动作执行通道未配置或不可用", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
         ) from error
-    allowed = system.action_authorizations
-    entry = allowed.get(definition["id"]) if isinstance(allowed, dict) else None
     paths = set(adapter.config.submit_paths) | ({adapter.config.submit_path} if adapter.config.submit_path else set())
-    if (allowed is None and definition["id"] not in adapter.config.actions) or (
-        allowed is not None and (not isinstance(entry, dict) or entry.get("version") != definition.get("version") or entry.get("path") not in paths)
-    ):
+    if allowed is None and definition["id"] not in adapter.config.actions:
         raise AppError(
-            "动作不在此外部系统的执行授权白名单", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
+            "动作不在部署执行授权白名单，请联系管理员配置该动作的执行授权", code="ACTION_EXECUTOR_NOT_AUTHORIZED", status_code=403,
+            details={"systemId": system.code, "actionId": definition["id"], "field": "actions"},
+        )
+    if allowed is not None and entry.get("path") not in paths:
+        raise AppError(
+            "动作授权路径已不在部署白名单，请联系管理员核对路径，并在外部系统“动作授权”中重新选择允许路径",
+            code="ACTION_EXECUTOR_AUTHORIZATION_PATH_MISMATCH", status_code=409,
+            details={"systemId": system.code, "actionId": definition["id"], "field": "actionAuthorizations.path"},
         )
     if allowed is not None:
         adapter.config.submit_path = entry["path"]
         adapter.path("submit")
+    if definition.get("httpEndpointId"):
+        from app.modules.integration.http_endpoints import require_selected_endpoint
+        endpoint = require_selected_endpoint(system, definition["httpEndpointId"], definition.get("endpoint"), definition.get("httpMapping"), {p["api"] for p in definition.get("params", [])})
+        if endpoint.path != adapter.path("submit"):
+            raise AppError("所选接口路径与动作授权路径不一致，请在外部系统“动作授权”中核对允许路径", code="ACTION_EXECUTOR_AUTHORIZATION_PATH_MISMATCH", status_code=409, details={"field": "actionAuthorizations.path"})
     # The external system must explicitly implement our stable header contract.
     if not system.idempotent or system.idem_header.lower() != "idempotency-key":
         raise AppError(
@@ -129,6 +196,14 @@ def submit_adapter(system, definition):
             status_code=503,
         )
     return adapter
+
+
+def submit_method(system, definition):
+    if not definition.get("httpEndpointId"):
+        return "POST"
+    from app.modules.integration.http_endpoints import require_selected_endpoint
+    endpoint = require_selected_endpoint(system, definition["httpEndpointId"], definition.get("endpoint"), definition.get("httpMapping"), {p["api"] for p in definition.get("params", [])})
+    return endpoint.method
 
 
 class DatabaseActionSubmitter:
@@ -149,7 +224,8 @@ class DatabaseActionSubmitter:
         if system is None:
             raise AppError("外部系统不存在", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
         adapter = submit_adapter(system, definition)
-        target_url = f"{adapter.origin}{adapter.path('submit')}"
+        method = submit_method(system, definition)
+        target_url = adapter.url(adapter.path('submit'))
         if len(target_url) > 255:
             raise AppError(
                 "真实执行地址超过调用账本长度限制", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
@@ -171,7 +247,7 @@ class DatabaseActionSubmitter:
                 at=clock.now(),
                 op_name=run.action_name,
                 target_label=run.obj_label or run.code,
-                method="POST",
+                method=method,
                 path=target_url,
                 idem_key=run.idem_key,
                 elapsed_ms=0,
@@ -222,21 +298,28 @@ async def dispatch_one(call_id, ontology_id: int):
             return
         try:
             user = await resolve_actor(session, call.actor)
+            from app.modules.dynamic.rule_dispatch_guard import validate_rule_dispatch
+            deadline = await validate_rule_dispatch(session, user, run)
             definition = await preflight(session, user, run)
             system = await session.get(ExtSystem, call.sys_id)
             adapter = submit_adapter(system, definition)
             verify = tls_verify()
-            if call.path != f"{adapter.origin}{adapter.path('submit')}" or call.idem_key != run.idem_key:
+            if call.path != adapter.url(adapter.path('submit')) or call.method != submit_method(system, definition) or call.idem_key != run.idem_key:
                 raise Conflict("排队后的执行配置已变更", code="ACTION_DISPATCH_CONFIG_CHANGED")
             try:
                 secret = resolve_secret(adapter.config.signing_secret)
             except SigningSecretInvalid as exc:
                 raise AppError("外部执行签名密钥不可用", code=str(exc), status_code=503) from None
+            if deadline is not None and clock.now() >= deadline:
+                raise AppError("规则动作已超过配置有效期，未发送外部请求", code="RULE_ACTION_EXPIRED", status_code=409)
         except AppError as exc:
             call.msg, call.result = exc.code, CallResult.failed
             run.status, run.fail_reason, run.finished_at = ActionStatus.failed, exc.message, clock.now()
+            run.unknown_reason = None
             task = await DatabaseReconcileScheduler(session).ensure(run)
             resolved(task, ReconcileOutcome.not_executed.value, "系统")
+            from app.modules.dynamic.service import log_alert_action_result
+            await log_alert_action_result(session, run, f"关联动作 {run.code} 执行前拒绝：{exc.message}", failed=True)
             return
         call.msg, call.attempt, call.at = CLAIMED, 1, clock.now()
         payload = {
@@ -255,7 +338,7 @@ async def dispatch_one(call_id, ontology_id: int):
         declared = await declared_writeback(session, definition)
         if declared:  # 自然语言编辑/副作用：声明由外部系统承担，本地不执行（status=external/declared）
             payload["declaredEdits"] = declared
-        payload = request_body(definition.get("httpMapping"), payload)
+        payload = request_body(definition.get("httpMapping"), payload, run._http_object_values)
         mapping = definition.get("httpMapping")
         key = run.idem_key
     started = time.perf_counter()
@@ -276,7 +359,7 @@ async def dispatch_one(call_id, ontology_id: int):
             trust_env=False,
             verify=verify,
         ) as client:
-            response = await client.post(pinned_url, content=body, headers=headers, extensions=extensions)
+            response = await client.request(call.method, pinned_url, content=body, headers=headers, extensions=extensions)
         status = response.status_code
         if not 200 <= status < 300 or len(response.content) > 65_536:
             raise ValueError
@@ -304,6 +387,8 @@ async def dispatch_one(call_id, ontology_id: int):
         run.elapsed_ms, run.result_code = elapsed, response_code
         if result.receipt_id:
             run.ext_ref = result.receipt_id
+        if result.status == SubmitStatus.FAILED:
+            run.fail_reason = result.reason or result.code or "外部明确返回失败"
         task = await DatabaseReconcileScheduler(session).ensure(run)
         if result.status == SubmitStatus.UNKNOWN:
             run.unknown_reason = result.reason
@@ -328,7 +413,7 @@ async def dispatch_one(call_id, ontology_id: int):
                     else ReconcileOutcome.not_executed
                 )
                 listener = DynamicReconciliationListener(session, await get_list_catalog(session), ports)
-                await listener.on_reconciled(code, ReconcileResult(outcome, result.receipt_id))
+                await listener.on_reconciled(code, ReconcileResult(outcome, result.receipt_id, {"source": "submit", "reason": result.reason, "code": result.code}))
         except AppError as exc:
             to_manual(task, f"CALLBACK_{exc.code}")
         else:

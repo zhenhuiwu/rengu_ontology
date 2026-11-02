@@ -107,6 +107,8 @@ def evaluate(text: str, references: dict[tuple[str, str], Any]) -> bool:
             "空": "None",
             "真": "True",
             "假": "False",
+            "true": "True",
+            "false": "False",
         }
         while i < len(tokens):
             token = tokens[i]
@@ -122,7 +124,12 @@ def evaluate(text: str, references: dict[tuple[str, str], Any]) -> bool:
             ):
                 raise Unavailable("条件含未支持的自然语言或相邻字面量")
             if i + 2 < len(tokens) and token.type == tokenize.NAME and tokens[i + 1].string == ".":
-                ref = (token.string, tokens[i + 2].string)
+                end = i + 2
+                path = [tokens[end].string]
+                while end + 2 < len(tokens) and tokens[end + 1].string == "." and tokens[end + 2].type == tokenize.NAME:
+                    end += 2
+                    path.append(tokens[end].string)
+                ref = (token.string, ".".join(path))
                 if ref not in references:
                     raise Unavailable(f"缺少可用参数、身份或对象上下文：{ref[0]}.{ref[1]}")
                 key = f"_ref_{len(values)}"
@@ -132,7 +139,7 @@ def evaluate(text: str, references: dict[tuple[str, str], Any]) -> bool:
                 if ref == ("当前用户", "角色"):
                     role_refs.add(key)
                 parts.append(key)
-                i += 3
+                i = end + 1
                 continue
             if token.string == "当前用户":
                 key = f"_ref_{len(values)}"

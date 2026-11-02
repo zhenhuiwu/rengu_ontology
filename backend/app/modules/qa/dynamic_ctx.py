@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from types import SimpleNamespace
 from typing import Any
@@ -25,7 +26,6 @@ SUMMARY_LIMIT = 5
 MULTI_SCAN = 10  # 多对象：最多取这么多个对象的摘要
 MULTI_TOP = 3  # 多对象：回答里列有告警的前几个
 DECISION_LIMIT = 5
-CODE_COL = "code"  # 对象实例编号列（动态摘要的 objId = 表的 code 列）
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_\-]{2,63}")
 # “该怎么处理”类说法：通用词，不含任何业务动作名
 _ADVICE_WORDS = (
@@ -66,20 +66,20 @@ def key_scopes(request: Any) -> tuple[str, ...] | None:
 
 
 async def single_object(
-    session: AsyncSession, question: str, names: dict[str, list[str]]
+    session: AsyncSession, question: str, names: dict[str, list[str]], user: Any
 ) -> dict[str, str] | None:
     """问题只点名一个对象实例 → {kind, id, label}；点名多个 / 一个都没有 / 读失败 → None。"""
-    objs = await named_objects(session, question, names)
+    objs = await named_objects(session, question, names, user)
     return objs[0] if len(objs) == 1 else None
 
 
 async def named_objects(
-    session: AsyncSession, question: str, names: dict[str, list[str]]
+    session: AsyncSession, question: str, names: dict[str, list[str]], user: Any
 ) -> list[dict[str, str]]:
     """问题点名的对象实例 [{kind, id, label}]（最多 MULTI_SCAN 个）；读失败 → []。"""
     try:
         async with session.begin_nested():
-            return await _named_objects(session, question, names)
+            return await _named_objects(session, question, names, user)
     except Exception:
         return []
 
@@ -92,27 +92,37 @@ def _gov(session: AsyncSession) -> dict[str, Any]:
     return {
         g.table.name: g
         for g in governed_tables(oid, session).values()
-        if not getattr(g, "inherit", False) and CODE_COL in g.table.c
+        if not getattr(g, "inherit", False)
     }
 
 
-def _label_col(t: Any) -> Any:
-    return t.c["name"] if "name" in t.c else t.c[CODE_COL]
+def _label_col(t: Any, public: list[str]) -> Any:
+    return next((t.c[key] for key in ("name", "code") if key in public), t.c["__id"])
 
 
-async def _codes_in(session: AsyncSession, values: list[str]) -> dict[tuple[str, str], str]:
-    """这些取值里哪些是某张可问表 code 列的取值 → {(对象类型, code): 名称}。"""
+async def _codes_in(session: AsyncSession, values: list[str], user: Any) -> dict[tuple[str, str], str]:
+    """Resolve visible primary identities and public legacy codes through object-search bindings."""
     found: dict[tuple[str, str], str] = {}
     if not values:
         return found
     from app.common.sql_guard import ensure_governed_tables
 
     await ensure_governed_tables(session)
+    from app.modules.qa.explore_api import _bind
+
     for g in _gov(session).values():
-        t = g.table
-        rows = await session.execute(
-            sa.select(t.c[CODE_COL], _label_col(t)).where(t.c[CODE_COL].in_(values)).limit(MULTI_SCAN)
-        )
+        _, bound = await _bind(session, g.object_type)
+        if bound is None:
+            continue
+        visible = (await bound.stmt(user)).subquery()
+        columns = [visible.c["__id"]]
+        if "code" in bound.out:
+            columns.append(visible.c.code)
+        async with bound.read(session) as reader:
+            rows = await reader.execute(
+                sa.select(visible.c["__id"], _label_col(visible, bound.out))
+                .where(sa.or_(*(sa.cast(c, sa.String).in_(values) for c in columns))).limit(MULTI_SCAN)
+            )
         for code, label in rows:
             found[(g.object_type, str(code))] = str(label or code)
         if len(found) >= MULTI_SCAN:
@@ -125,7 +135,7 @@ def _as_list(found: dict[tuple[str, str], str]) -> list[dict[str, str]]:
 
 
 async def _named_objects(
-    session: AsyncSession, question: str, names: dict[str, list[str]]
+    session: AsyncSession, question: str, names: dict[str, list[str]], user: Any
 ) -> list[dict[str, str]]:
     """两种点名（都从数据推，不写死）：问题里出现某张可问表 code 列的取值；或出现名称列的完整取值
     （去掉通用后缀也算，如“张江”对“张江店”），且该名称只对应一个 code。
@@ -134,12 +144,13 @@ async def _named_objects(
 
     q = re.sub(r"\s", "", question)
     tokens = list(dict.fromkeys(_TOKEN.findall(question)))[:10]
-    found = await _codes_in(session, tokens)
+    found = await _codes_in(session, tokens, user)
     from app.common.sql_guard import ensure_governed_tables
 
     await ensure_governed_tables(session)
+    from app.modules.qa.explore_api import _bind
+
     for name, g in _gov(session).items():
-        t = g.table
         vals = names.get(name) or []
         suffix = name_suffix(vals)
         hits = [
@@ -147,10 +158,17 @@ async def _named_objects(
         ]
         # 名字互相包含时（“张江店”与“张江二店”）只认最长的那个
         hits = [v for v in hits if not any(v != w and v in w for w in hits)]
+        if not hits:
+            continue
+        _, bound = await _bind(session, g.object_type)
+        if bound is None:
+            continue
+        visible = (await bound.stmt(user)).subquery()
         for hit in hits[:MULTI_SCAN]:
-            rows = (
-                await session.execute(sa.select(t.c[CODE_COL]).where(_label_col(t) == hit).limit(2))
-            ).all()
+            async with bound.read(session) as reader:
+                rows = (await reader.execute(
+                    sa.select(visible.c["__id"]).where(_label_col(visible, bound.out) == hit).limit(2)
+                )).all()
             if len(rows) == 1:
                 found[(g.object_type, str(rows[0][0]))] = hit
         if len(found) >= MULTI_SCAN:
@@ -158,7 +176,7 @@ async def _named_objects(
     return _as_list(found)
 
 
-async def result_objects(session: AsyncSession, rows: list[Any]) -> list[dict[str, str]]:
+async def result_objects(session: AsyncSession, rows: list[Any], user: Any) -> list[dict[str, str]]:
     """表格结果里出现的对象实例（文本单元格是某张可问表的 code 取值）；读失败 → []。"""
     vals = list(
         dict.fromkeys(
@@ -170,7 +188,7 @@ async def result_objects(session: AsyncSession, rows: list[Any]) -> list[dict[st
     )[:200]
     try:
         async with session.begin_nested():
-            return _as_list(await _codes_in(session, vals))
+            return _as_list(await _codes_in(session, vals, user))
     except Exception:
         return []
 
@@ -322,6 +340,10 @@ def decision_target(
     """评估对象：问题点名的告警 > 唯一一条相关告警 > 动作意图里的目标对象 > 问题点名的唯一对象。"""
     q = question.lower()
     named = [a for a in alerts if a.get("id") and str(a["id"]).lower() in q]
+    explicit = proposal if proposal and proposal.get("objKind") and proposal.get("objId") else None
+    if explicit:
+        matching = [a for a in named if a.get("objKind") == explicit["objKind"] and a.get("objId") == explicit["objId"]]
+        return {"alertId": matching[0]["id"]} if len(matching) == 1 else {"objectTypeId": explicit["objKind"], "objectId": explicit["objId"]}
     if len(named) == 1:
         return {"alertId": named[0]["id"]}
     if obj:
@@ -343,6 +365,7 @@ async def evaluate(
     target: dict[str, str] | None,
     caller: dict[str, Any] | None,
     request: Any = None,
+    trace: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """同 `POST /decisions:evaluate`（门槛同该接口：alerts 查看；密钥另需 dynamic:read）。
 
@@ -351,6 +374,8 @@ async def evaluate(
     没有建议 / 读失败 → None（调用方退回能力目录）。
     """
     if not target:
+        if trace is not None:
+            trace["decisionStatus"] = "no_target"
         return None
     from app.common.auth import check_func
     from app.core.errors import AppError
@@ -359,10 +384,14 @@ async def evaluate(
 
     scopes = key_scopes(request)
     if scopes is not None and "dynamic:read" not in scopes:
+        if trace is not None:
+            trace["decisionStatus"] = "scope_unavailable"
         return None
     try:
         check_func(user, "alerts", "view")
     except AppError:
+        if trace is not None:
+            trace["decisionStatus"] = "permission_unavailable"
         return None
     body = DecisionEvaluateIn.model_validate(
         {
@@ -381,8 +410,37 @@ async def evaluate(
                 body
             )
     except Exception:
+        if trace is not None:
+            trace["decisionStatus"] = "evaluation_unavailable"
         return None
+    if trace is not None:
+        trace.update(decisionStatus="recommended" if out.get("recommendations") else "no_recommendations", decisionId=out.get("decisionId"))
     return out if out.get("recommendations") else None
+
+
+def requested_action(question: str, proposal: dict[str, Any], objects: list[dict[str, str]]) -> tuple[dict[str, Any], str | None]:
+    """A visible, unambiguous mention wins over a model-selected target; otherwise ask."""
+    requested = {**proposal, "params": dict(proposal.get("params") or {})}
+    matches = objects
+    if len(matches) > 1:
+        return requested, "问题包含多个可见目标对象，请明确本次动作的唯一目标编号"
+    if matches:
+        obj = matches[0]
+        requested.update(objKind=obj["kind"], objId=obj["id"], objLabel=obj["label"])
+    elif proposal.get("objKind"):
+        identity, label = str(proposal.get("objId") or ""), str(proposal.get("objLabel") or "")
+        if not identity or not (identity in _TOKEN.findall(question) or (label and label in question)):
+            return requested, "无法从问题确认唯一授权目标，请明确目标对象编号后重试"
+    return requested, None
+
+
+def decision_conflict(proposal: dict[str, Any], chosen: dict[str, Any]) -> str | None:
+    if any(proposal.get(key) != chosen.get(key) for key in ("type", "objKind", "objId")):
+        return "决策建议与本次明确目标不同，请澄清后重新生成；未暂存或执行动作"
+    for key, value in (proposal.get("params") or {}).items():
+        if key not in chosen.get("params", {}) or json.dumps(value, sort_keys=True, ensure_ascii=False) != json.dumps(chosen["params"][key], sort_keys=True, ensure_ascii=False):
+            return "决策预填参数与本次请求参数不同，请澄清后重新生成；未暂存或执行动作"
+    return None
 
 
 def _check_of(rec: dict[str, Any]) -> dict[str, Any]:

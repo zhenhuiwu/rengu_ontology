@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from pydantic import Field, field_validator, model_validator
+from pydantic import AwareDatetime, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -32,7 +32,7 @@ from app.common.auth import (
 from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.core.config import api_prefix, get_settings
-from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound, Unauthorized
+from app.core.errors import AppError, DuplicateKey, Forbidden, NotFound, Unauthorized, VersionConflict
 from app.core.schema import ApiModel
 from app.db.session import SessionDep
 from app.modules.admin.models import ApiKey, ApiKeyCall, ApiKeyUsage, ServiceAccount, SysRole, SysUser
@@ -79,7 +79,8 @@ ScopeCode = Literal[
 ]
 # Function pages a scope can carry, and the highest level it can carry (always ∩ current grants).
 SCOPE_PAGES: dict[str, dict[str, str]] = {
-    "meta:read": {page: "view" for page in set(METADATA_ROUTES.values())},
+    # Rule definitions have a separate sanitized read endpoint, not the mixed UI detail route.
+    "meta:read": {page: "view" for page in {*METADATA_ROUTES.values(), "rules"}},
     "objects:read": {"object-search": "view", "object-detail": "view"},
     "functions:invoke": {"functions": "view"},
     "actions:dry-run": {"action-types": "view", "action-center": "view"},
@@ -162,12 +163,65 @@ class KeyCreateIn(KeyPolicyFields):
 class KeyPolicyIn(KeyPolicyFields):
     """PATCH：只改传入的字段；scopes 只能收窄（不能新增）。"""
 
+    model_config = ConfigDict(extra="forbid")
     scopes: list[ScopeCode] | None = Field(default=None, min_length=1, max_length=len(SCOPES))
+    version: int | None = Field(default=None, ge=1)
+    name: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{2,39}$")
+    note: str | None = Field(default=None, max_length=512)
+    ip_allow: list[str] | None = Field(default=None, max_length=50)
+    expires_at: AwareDatetime | None = None
+
+    @field_validator("ip_allow")
+    @classmethod
+    def valid_networks(cls, values):
+        return None if values is None else KeyCreateIn.valid_networks(values)
+
+    @model_validator(mode="after")
+    def nonnull_metadata(self):
+        nonnull = self.model_fields_set & {"name", "note", "ip_allow", "version"}
+        if any(getattr(self, key) is None for key in nonnull):
+            raise ValueError("名称、备注、IP 白名单和版本不能为 null")
+        return self
 
     @field_validator("scopes")
     @classmethod
     def canonical_scopes(cls, values: list[str] | None) -> list[str] | None:
         return None if values is None else normalize_scopes(values)
+
+
+class KeyRotateIn(ApiModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
+
+
+def validate_policy_narrowing(key, body: KeyPolicyIn, scopes: list[str], at: datetime) -> None:
+    """Editing cannot enlarge a credential's authority; explicit reissue takes a new snapshot."""
+    fields = body.model_fields_set
+    for name, active in (
+        ("action_types", bool({"actions:dry-run", "actions:execute"} & set(scopes))),
+        ("event_types", "events:ingest" in scopes),
+        ("function_types", "functions:invoke" in scopes),
+    ):
+        previous, proposed = getattr(key, name), getattr(body, name)
+        if name in fields and active and previous is not None and (
+            proposed is None or not set(proposed) <= set(previous)
+        ):
+            raise Forbidden("只能收窄类型白名单，扩大授权请重新签发密钥")
+    if "ip_allow" in fields and key.ip_allow:
+        old = [ipaddress.ip_network(value) for value in key.ip_allow]
+        proposed = [ipaddress.ip_network(value) for value in body.ip_allow]
+        if not proposed or any(
+            not any(n.version == p.version and n.subnet_of(p) for p in old) for n in proposed
+        ):
+            raise Forbidden("只能收窄 IP 白名单，扩大来源范围请重新签发密钥")
+    if "expires_at" in fields:
+        expiry = body.expires_at
+        if expiry is not None and expiry <= at:
+            raise AppError(
+                "到期时间须晚于当前时间；停用请吊销密钥", code="VALIDATION_FAILED", status_code=422,
+            )
+        if key.expires_at is not None and (expiry is None or expiry > key.expires_at):
+            raise Forbidden("延长有效期请重新签发密钥")
 
 
 def check_allowlist_scopes(scopes: list[str], action_types, event_types, function_types=None) -> None:
@@ -177,6 +231,38 @@ def check_allowlist_scopes(scopes: list[str], action_types, event_types, functio
         raise ValueError("动作类型白名单需要 actions:dry-run 或 actions:execute")
     if event_types is not None and "events:ingest" not in scopes:
         raise ValueError("事件类型白名单需要 events:ingest")
+
+
+async def validate_create_types(session: AsyncSession, body: KeyCreateIn, ontology_id: int) -> None:
+    """Fresh issuance only: look up workspace-local identifiers without loading executable definitions."""
+    from app.modules.action.models import ActionType
+    from app.modules.event.models import EventType
+    from app.modules.functions.models import Function
+
+    if require_ontology_id(session) != ontology_id:
+        raise Forbidden("密钥签发需要与所选本体一致的可信上下文")
+    for field, public, model, columns in (
+        ("action_types", "actionTypes", ActionType, (ActionType.code,)),
+        ("event_types", "eventTypes", EventType, (EventType.code, EventType.api)),
+        ("function_types", "functionTypes", Function, (Function.code,)),
+    ):
+        values = getattr(body, field)
+        if not values:  # null = unrestricted; [] = deny all. Neither needs to resolve identifiers.
+            continue
+        rows = (await session.execute(
+            select(*columns).where(
+                model.ontology_id == ontology_id, or_(*(column.in_(values) for column in columns)),
+            )
+        )).all()
+        found = {value for row in rows for value in row}
+        missing = [index for index, value in enumerate(values) if value not in found]
+        if missing:
+            raise AppError(
+                "白名单包含当前本体中不存在的编号，请重新选择", code="VALIDATION_FAILED", status_code=400,
+                details={"paths": [public], "fields": [
+                    {"field": f"{public}[{index}]", "message": "编号在当前本体不存在"} for index in missing
+                ]},
+            )
 
 
 class ServiceAccountIn(ApiModel):
@@ -192,7 +278,7 @@ class ServiceAccountPatch(ApiModel):
 
 def metadata_permissions(user: CurrentUser) -> dict[str, str]:
     return {
-        page: "view" for page in set(METADATA_ROUTES.values()) if user.func.get(page) in ("view", "manage")
+        page: "view" for page in SCOPE_PAGES["meta:read"] if user.func.get(page) in ("view", "manage")
     }
 
 
@@ -369,6 +455,7 @@ async def key_rows(session: AsyncSession, keys: list[ApiKey], at: datetime) -> l
                 "calls7d": recent.get(key.id, 0),
                 "ipAllow": key.ip_allow,
                 "note": key.note,
+                "version": key.lock_version,
                 "revokedAt": fmt(key.revoked_at),
                 "revokedBy": key.revoked_by,
             }
@@ -579,6 +666,7 @@ async def create_key(
         if not scope_permissions([scope], grants):
             raise Forbidden(f"当前身份没有可授予的{SCOPES[scope]}权限", details={"scope": scope})
     permissions = scope_permissions(body.scopes, grants)
+    await validate_create_types(session, body, ontology_id)
     token = ("rg_live_" if body.env == "生产" else "rg_test_") + secrets.token_urlsafe(32)
     key = ApiKey(
         code="AK-" + secrets.token_hex(12),
@@ -637,6 +725,8 @@ async def update_key_policy(
     if key.principal_kind == "service":
         check_func(user, "roles", "manage")
     fields = body.model_fields_set
+    if body.version is not None and body.version != key.lock_version:
+        raise VersionConflict()
     scopes = normalize_scopes(key.scopes)
     if "scopes" in fields and body.scopes is not None:
         extra = set(body.scopes) - set(scopes)
@@ -647,14 +737,11 @@ async def update_key_policy(
         key.func_snapshot = clamp_permissions(
             key.func_snapshot, scope_permissions(scopes, {page: "manage" for page in key.func_snapshot})
         )
-    if (
-        "function_types" in fields
-        and key.function_types is not None
-        and "functions:invoke" in scopes
-        and (body.function_types is None or not set(body.function_types) <= set(key.function_types))
+    validate_policy_narrowing(key, body, scopes, security_now())
+    for name in (
+        "action_types", "event_types", "function_types", "rate_per_minute", "quota_per_day",
+        "name", "note", "ip_allow", "expires_at",
     ):
-        raise Forbidden("只能收窄函数白名单，扩大授权请新建密钥")
-    for name in ("action_types", "event_types", "function_types", "rate_per_minute", "quota_per_day"):
         if name in fields:
             setattr(key, name, getattr(body, name))
     try:
@@ -662,7 +749,10 @@ async def update_key_policy(
     except ValueError as exc:
         raise AppError(str(exc), code="VALIDATION_FAILED", status_code=422) from exc
     key.updated_at = security_now()
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise DuplicateKey("已有同名未吊销密钥，请更换名称") from exc
     await insert_audit(
         session,
         actor=f"{user.name}（{user.id}）",
@@ -673,6 +763,35 @@ async def update_key_policy(
         time=key.updated_at,
     )
     return (await key_rows(session, [key], security_now()))[0]
+
+
+@router.post("/api-keys/{id}:rotate")
+async def rotate_key(
+    id: str, body: KeyRotateIn, session: SessionDep, user: CurrentUserDep,
+    request: Request, response: Response,
+) -> dict:
+    """Replace only credential material. The old secret stops working when this transaction commits."""
+    check_func(user, "api-keys", "manage")
+    key = await get_key(session, id, lock=True)
+    at = security_now()
+    if key.revoked_at is not None or (key.expires_at is not None and key.expires_at <= at):
+        raise Forbidden("已吊销或已过期的密钥不能轮换，请重新签发")
+    if key.principal_kind == "service":
+        check_func(user, "roles", "manage")
+    if body.version != key.lock_version:
+        raise VersionConflict()
+    token = ("rg_live_" if key.env == "生产" else "rg_test_") + secrets.token_urlsafe(32)
+    key.token_hash = hashlib.sha256(token.encode()).hexdigest()
+    key.prefix, key.last4, key.updated_at = token[:12], token[-4:], at
+    await session.flush()
+    await insert_audit(
+        session, actor=f"{user.name}（{user.id}）", action="轮换 API 密钥",
+        target=f"{key.code} · {key.name} · 保留原授权与有效期", ip=client_host(request),
+        created_by=user.id, time=at,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return {**(await key_rows(session, [key], at))[0], "secret": token}
 
 
 @router.post("/api-keys/{id}:revoke")

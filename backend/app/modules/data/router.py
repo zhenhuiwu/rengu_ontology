@@ -7,13 +7,16 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import func, select
+from fastapi import APIRouter, Body, Depends, Query, Response
+from pydantic import Field, field_validator
+from sqlalchemy import and_, func, or_, select
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.pagination import Page, PageParamsDep
+from app.core.errors import AppError
+from app.core.schema import ApiModel
 from app.db.session import SessionDep
-from app.modules.data.models import DatasourceRun, DsType
+from app.modules.data.models import DatasourceRun, DatasourceTable, DsType
 from app.modules.data.schemas import (
     DatasourceCreate,
     DatasourceOut,
@@ -33,6 +36,22 @@ VIEW = [Depends(require_func("connections", "view"))]
 MANAGE = [Depends(require_func("connections", "manage"))]
 
 
+class RefreshTablesIn(ApiModel):
+    schemas: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(min_length=1, max_length=32)
+
+    @field_validator("schemas")
+    @classmethod
+    def valid_schemas(cls, values: list[str]) -> list[str]:
+        from app.modules.data.connector import SYSTEM_SCHEMAS
+
+        if len(values) != len(set(values)) or any(
+            name != name.strip() or any(ord(char) < 32 or ord(char) == 127 or 0xD800 <= ord(char) <= 0xDFFF for char in name)
+            or name.lower() in SYSTEM_SCHEMAS or name.lower().startswith("pg_") for name in values
+        ):
+            raise ValueError("schema 名称无效、重复或属于系统 schema")
+        return values
+
+
 @router.get("/datasources", response_model=Page[DatasourceOut], summary="数据连接列表", dependencies=VIEW)
 async def list_datasources(
     session: SessionDep,
@@ -44,14 +63,26 @@ async def list_datasources(
     sources = {key for row in rows for key in (row.code, row.name)}
     mapped = (
         await session.execute(
-            select(ObjectType.datasource_name, ObjectType.display_name)
+            select(ObjectType.datasource_name, ObjectType.display_name, ObjectType.source_table)
             .where(ObjectType.datasource_name.in_(sources))
             .order_by(ObjectType.code)
         )
     ).all()
+    scoped = [and_(DatasourceTable.datasource_id == row.id, DatasourceTable.schema_name == row.database.strip())
+              for row in rows if row.type == DsType.dm8 and row.database.strip()]
+    counts = {}
+    if scoped:
+        counted = await session.execute(
+            select(DatasourceTable.datasource_id, func.count())
+            .where(or_(*scoped))
+            .group_by(DatasourceTable.datasource_id)
+        )
+        counts = {source_id: total for source_id, total in counted.all()}
     items = [
         to_out(row, []).model_copy(
-            update={"object_types": [name for source, name in mapped if source in (row.code, row.name)]}
+            update={"object_types": [name for source, name, table in mapped if source in (row.code, row.name)
+                    and (row.type != DsType.dm8 or not row.database.strip() or (table or '').startswith(row.database.strip() + '.'))],
+                    "table_count": counts.get(row.id, 0) if row.type == DsType.dm8 and row.database.strip() else row.table_count}
         )
         for row in rows
     ]
@@ -90,7 +121,8 @@ async def list_tables(
 
     mapped = await mapped_objects(session, ds)
     rows, total = await svc.tables.page_for(
-        ds.id, kw, page, [o.source_table for o in mapped if o.source_table]
+        ds.id, kw, page, [o.source_table for o in mapped if o.source_table],
+        schema=ds.database.strip() if ds.type == DsType.dm8 and ds.database.strip() else None,
     )
     items = []
     for t in rows:
@@ -109,14 +141,18 @@ async def list_tables(
 async def create_datasource(
     body: DatasourceCreate, session: SessionDep, user: CurrentUserDep
 ) -> DatasourceOut:
+    if body.type.value == "达梦 DM8" and body.mode.value != "手动" and user.ontology_role != "owner":
+        raise AppError("只有工作空间所有者可启用镜像定时同步", code="FORBIDDEN", status_code=403)
     svc = DatasourceService(session)
     ds = await svc.create(body, actor=user.id)
     return await _out(session, await svc.get(ds.code))
 
 
 @router.put("/datasources/{ds_id}", response_model=DatasourceOut, summary="修改数据连接", dependencies=MANAGE)
-async def update_datasource(ds_id: str, body: DatasourceUpdate, session: SessionDep) -> DatasourceOut:
-    return await _out(session, await DatasourceService(session).update(ds_id, body))
+async def update_datasource(ds_id: str, body: DatasourceUpdate, session: SessionDep, user: CurrentUserDep) -> DatasourceOut:
+    if body.type == DsType.dm8 and body.mode.value != "手动" and user.ontology_role != "owner":
+        raise AppError("只有工作空间所有者可启用镜像定时同步", code="FORBIDDEN", status_code=403)
+    return await _out(session, await DatasourceService(session).update(ds_id, body, actor=user.id))
 
 
 @router.delete("/datasources/{ds_id}", status_code=204, summary="删除数据连接", dependencies=MANAGE)
@@ -137,8 +173,13 @@ async def test_saved(ds_id: str, session: SessionDep) -> DsTest:
     summary="连上源库内省，刷新库表清单（需开启真实连接；测试连接成功时也会自动刷新）",
     dependencies=MANAGE,
 )
-async def refresh_tables(ds_id: str, session: SessionDep) -> dict[str, int]:
-    return {"count": await DatasourceService(session).refresh_tables(ds_id)}
+async def refresh_tables(ds_id: str, session: SessionDep, body: Annotated[RefreshTablesIn | None, Body()] = None) -> dict[str, int]:
+    return {"count": await DatasourceService(session).refresh_tables(ds_id, schemas=body.schemas if body else None)}
+
+
+@router.get("/datasources/{ds_id}/schemas", dependencies=MANAGE)
+async def list_schemas(ds_id: str, session: SessionDep) -> dict[str, list[str]]:
+    return {"items": await DatasourceService(session).list_schemas(ds_id)}
 
 
 from app.modules.data.ontology_import import router as _import_router  # noqa: E402
@@ -146,6 +187,20 @@ from app.modules.data.quality_router import router as _quality_router  # noqa: E
 
 router.include_router(_quality_router)
 router.include_router(_import_router)
+
+
+@router.get("/datasources/{ds_id}/mirror/runs", dependencies=VIEW)
+async def datasource_mirror_runs(ds_id: str, session: SessionDep, page: PageParamsDep):
+    from app.modules.data.models import ExternalMirrorRun
+
+    await DatasourceService(session).get(ds_id)
+    q = select(ExternalMirrorRun).where(ExternalMirrorRun.datasource_code == ds_id)
+    total = await session.scalar(select(func.count()).select_from(ExternalMirrorRun).where(ExternalMirrorRun.datasource_code == ds_id))
+    rows = list(await session.scalars(q.order_by(ExternalMirrorRun.id.desc()).offset(page.offset).limit(page.size)))
+    return {"items": [{"id": r.id, "objectId": r.object_code, "trigger": r.trigger, "status": r.status,
+                       "startedAt": r.started_at, "finishedAt": r.finished_at, "readCount": r.read_count,
+                       "writeCount": r.write_count, "complete": r.complete, "error": r.error} for r in rows],
+            "total": total, "page": page.page, "size": page.size}
 
 
 @router.get("/datasources/{ds_id}/runs", response_model=Page[DsRun], dependencies=VIEW)
@@ -162,7 +217,8 @@ async def datasource_runs(ds_id: str, session: SessionDep, page: PageParamsDep):
         )
     )
     return Page[DsRun].of(
-        [DsRun(time=r.run_at, result=r.result, rows=r.rows, secs=r.secs, msg=r.msg) for r in rows],
+        [DsRun(time=r.run_at, result=r.result, rows=r.rows, secs=r.secs, msg=r.msg,
+               origin="demo" if r.is_seed else "unverified") for r in rows],
         total,
         page,
     )
@@ -179,6 +235,12 @@ async def _out(session, ds) -> DatasourceOut:
             .limit(10)
         )
     )
-    return to_out(ds, runs).model_copy(
-        update={"object_types": [o.display_name for o in await mapped_objects(session, ds)]}
-    )
+    mapped = await mapped_objects(session, ds)
+    schema = ds.database.strip() if ds.type == DsType.dm8 else ""
+    count = await session.scalar(select(func.count()).select_from(DatasourceTable).where(
+        DatasourceTable.datasource_id == ds.id, DatasourceTable.schema_name == schema
+    )) if schema else ds.table_count
+    return to_out(ds, runs).model_copy(update={
+        "object_types": [o.display_name for o in mapped if not schema or (o.source_table or "").startswith(schema + ".")],
+        "table_count": count,
+    })

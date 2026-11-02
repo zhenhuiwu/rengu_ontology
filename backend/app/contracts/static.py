@@ -9,8 +9,9 @@
 
 常量与公开静态查询契约；基础层在 `app/modules/biz/governance.py` 里引用范围映射。
 `evaluate_metric(session,user,code,ver=None,cr_id=None,days=30,period='day',
-at=None,timezone=None,object_kind=None)`：真实指标执行，period可为day/week/month；
+at=None,timezone=None,object_kind=None,object_identity=None)`：真实指标执行，period可为day/week/month；
 显式at固定原始数据截止时间；object_kind要求同一真实对象分组，返回objectCode，不猜跨对象口径。
+内部 object_identity 仅在 object_kind 明确时按已授权业务身份限定 SQL；缺省保持原行为。
 返回 rows[{date,value:十进制字符串|null}] / dataCutoff / scope，缺执行含义返回422。
 """
 

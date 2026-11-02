@@ -124,26 +124,35 @@ async def options(session, user, catalog):
 
 async def targets(session, user, catalog, code, kw, page):
     _, obj, governed = await launch_definition(session, user, catalog, code)
-    table = governed.table
     from sqlalchemy import String, cast
+    from app.common.object_identity import property_column, row_identity_column, row_source, source_columns
 
-    identity = cast(primary_column(obj, governed), String)
-    from app.common.object_identity import property_column
-    title = next((column for prop in obj.properties if prop.is_title and (column := property_column(prop, governed)) is not None), None)
+    source = row_source(governed)
+    mirrored = source is not governed.table
+    pk = primary_column(obj, governed)
+    identity = cast(source.c[pk.name] if mirrored else pk, String)
+    title = next(
+        (
+            source.c[column.name] if mirrored else column
+            for prop in obj.properties
+            if prop.is_title and (column := property_column(prop, governed)) is not None and (not mirrored or column.name in source.c)
+        ),
+        None,
+    )
     label = cast(title, String) if title is not None else identity
     identities = identity_rows(governed).subquery()
+    id_col = row_identity_column(governed, source)
     statement = select(identity.label("identity"), label.label("label")).where(
-        table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == identity))
+        id_col.in_(select(identities.c.row_id).where(identities.c.identity == identity))
     )
-    statement = await apply_row_filter(
-        statement, user, governed.object_type, governed.columns, governed.links
-    )
+    columns = source_columns(governed, source) if mirrored else governed.columns
+    statement = await apply_row_filter(statement, user, governed.object_type, columns, governed.links)
+    if governed.projection is not None and governed.scope_column in source.c:
+        statement = statement.where(source.c[governed.scope_column] == user.ontology_id)
     meta = catalog.action_meta(code) or {}
     if meta.get("approvalRequired"):
         approver = await resolve_user(session, meta["approverId"])
-        statement = await apply_row_filter(
-            statement, approver, governed.object_type, governed.columns, governed.links
-        )
+        statement = await apply_row_filter(statement, approver, governed.object_type, columns, governed.links)
     if kw and kw.strip():
         statement = statement.where(
             identity.contains(kw.strip(), autoescape=True)

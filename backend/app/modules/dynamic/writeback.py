@@ -99,6 +99,9 @@ async def promote_rule(
         stage = r.auto_stage or {}
         if stage.get("executionMode", "confirm") not in ("confirm", "auto"):
             raise _bad("规则动作执行方式无效", field="autoStage.executionMode")
+        ttl = stage.get("validitySeconds", 0)
+        if type(ttl) is not int or not 0 <= ttl <= 86400:
+            raise _bad("动作有效期须为0至86400整数秒", field="autoStage.validitySeconds")
         action = await session.scalar(select(ActionType).where(ActionType.code == stage.get("actionTypeId")))
         if stage.get("actionTypeId") and (
             action is None

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from app.core.errors import AppError
 from app.core.schema import ApiModel
 from app.modules.static.schemas import ItemIn
 
@@ -31,9 +32,75 @@ class MappingIn(ApiModel):
 class AutoStageIn(ApiModel):
     enabled: bool
     execution_mode: Literal["confirm", "auto"] = "confirm"
+    validity_seconds: int = Field(default=0, ge=0, le=86400, strict=True)
     action_type_id: str | None = Field(None, max_length=64)
     confirmer: str | None = Field(None, max_length=64)
     mapping: list[MappingIn] = []
+
+
+class RuleConditionMetadata(ApiModel):
+    """Published condition fields only; unknown snapshot fields never reach machine clients."""
+
+    metric: str | None = None
+    metric_ver: int | None = None
+    field: str | None = None
+    expression: str | None = None
+    op: str
+    value: str
+    period: str | None = None
+    transform: str | None = None
+
+
+class RuleTriggerMetadata(ApiModel):
+    kind: str
+    enabled: bool = False
+    cron: str | None = None
+    timezone: str | None = None
+    catchup_minutes: int | None = None
+    event_id: str | None = None
+    filter: str | None = None
+    text: str | None = None
+
+
+class RuleMappingMetadata(ApiModel):
+    param: str
+    from_: str = Field("", alias="from")
+
+
+class RuleAutoStageMetadata(ApiModel):
+    enabled: bool
+    execution_mode: Literal["confirm", "auto"] = "confirm"
+    validity_seconds: int = Field(default=0, ge=0, le=86400, strict=True)
+    action_type_id: str | None = None
+    mapping: list[RuleMappingMetadata] = []
+
+
+class RuleDefinitionMetadata(ApiModel):
+    """Allowlisted configuration, without runtime values, draft data or connector credentials."""
+
+    id: str
+    name: str
+    version: int = Field(ge=1, strict=True)
+    status: str
+    owner: str
+    core: bool
+    obj_kind: str
+    level: str
+    output: str
+    desc: str
+    conds: list[RuleConditionMetadata]
+    logic: str
+    expr: str
+    dedupe: str
+    cooldown: str
+    trigger: RuleTriggerMetadata
+    action_type_id: str | None = None
+    auto_stage: RuleAutoStageMetadata
+
+
+class PublishedRuleMetadata(ApiModel):
+    release: str
+    definition: RuleDefinitionMetadata
 
 
 class RuleDraftIn(JsonInput):
@@ -50,6 +117,17 @@ class RuleDraftIn(JsonInput):
     obj_kind: str | None = Field(None, max_length=32)
     dedupe: str | None = Field(None, max_length=200)
     cooldown: str | None = Field(None, max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_auto_stage(cls, data):
+        if isinstance(data, dict) and "autoStage" not in data and "auto_stage" not in data:
+            message = "缺少必填字段autoStage；请显式提交自动暂存配置，停用时也须提供enabled=false"
+            raise AppError(
+                message, code="VALIDATION_FAILED", status_code=422,
+                details={"paths": ["autoStage"], "fields": [{"field": "autoStage", "message": message}]},
+            )
+        return data
 
 
 class RuleApplyIn(RuleDraftIn):

@@ -1,8 +1,9 @@
 """Page-batched structured action reference visibility; never expose unverifiable text."""
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal, select, union_all
 
 from app.common.auth import row_filter
+from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all
 from app.core.errors import AppError
 from app.modules.action.checker import param_valid, structured_params
@@ -10,6 +11,7 @@ from app.modules.action.condition_expr import Unavailable
 from app.modules.action.execution_options import action_operation_objects
 from app.modules.action.models import ActionType
 from app.modules.action.sections import action_def
+from app.modules.versioning.models import OntologyRelease
 from app.modules.dynamic.row_scope import scoped_instances, visible_references
 from app.modules.integration.action_edits import (
     declared_text,
@@ -35,6 +37,25 @@ async def parameters_visibility(session, user, runs):
         else {}
     )
     bindings, operations, references = {}, {}, {}
+    historical = {}
+    versions = {
+        (run.action_type_code, run.type_version)
+        for run in runs if run.id not in reasons and run.type_version
+        and (run.action_type_code not in actions or actions[run.action_type_code].version != run.type_version
+             or actions[run.action_type_code].retired_release_id is not None)
+    }
+    if versions:
+        # One batched metadata query; fixed-version history is for visibility, never execution.
+        queries = []
+        for code, version in sorted(versions):
+            definition = OntologyRelease.snapshot["actionTypes"][code]
+            latest = select(definition.label("definition")).where(
+                OntologyRelease.ontology_id == require_ontology_id(session),
+                definition["version"].as_string() == version
+            ).order_by(OntologyRelease.id.desc()).limit(1).subquery()
+            queries.append(select(literal(code).label("code"), literal(version).label("version"), latest.c.definition))
+        for code, version, definition in await session.execute(union_all(*queries)):
+            historical[code, version] = definition
 
     async def binding(identity):
         if identity not in bindings:
@@ -52,10 +73,17 @@ async def parameters_visibility(session, user, runs):
             continue
         try:
             action = actions.get(run.action_type_code)
-            if action is None or action.version != run.type_version or action.retired_release_id is not None:
+            if action is not None and action.version == run.type_version and action.retired_release_id is None:
+                definition = action_def(action)
+            else:
+                definition = historical.get((run.action_type_code, run.type_version))
+            if (not isinstance(definition, dict) or definition.get("version") != run.type_version
+                or not isinstance(definition.get("params"), list) or not isinstance(definition.get("writeback"), dict)
+                or any(not isinstance(p, dict) or not isinstance(p.get("api"), str) or not isinstance(p.get("type"), str) for p in definition.get("params", []))
+                or any(not isinstance(definition["writeback"].get(k), list) or any(not isinstance(row, dict) for row in definition["writeback"][k]) for k in ("edits", "effects"))):
                 reasons[run.id] = "参数不可用：绑定版本的对象引用无法核验"
                 continue
-            definition, params = action_def(action), values[run.id]
+            params = values[run.id]
             if set(params) - {param["api"] for param in definition["params"]}:
                 reasons[run.id] = "参数不可用：存在未声明的字段"
                 continue

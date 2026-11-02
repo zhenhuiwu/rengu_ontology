@@ -20,12 +20,16 @@ from app.common.context import ReadonlyGuardDep
 from app.core.config import api_prefix
 from app.modules.action.router import router as action_router
 from app.modules.admin.api_keys import router as api_keys_router
+from app.modules.admin.login import router as login_router
 from app.modules.admin.router import router as admin_router
 from app.modules.auto_ontology.assistant import router as assistant_router
 from app.modules.biz.router import router as biz_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.data.router import router as data_router
 from app.modules.data.governed_router import router as governed_router
+from app.modules.data import external_mirror as _external_mirror  # register mirror routes
+from app.modules.data import mirror_scheduler as _mirror_scheduler  # register scheduler status
+from app.modules.data import cdc_router as _cdc_router  # explicit CDC installation/control routes
 from app.modules.dynamic.router import router as dynamic_router
 from app.modules.event.ingress import router as internal_event_router
 from app.modules.event.router import router as event_router
@@ -63,6 +67,7 @@ MOUNTS: list[tuple[str, APIRouter]] = [
 
 
 def include_routers(app: FastAPI) -> None:
+    app.include_router(login_router, prefix=api_prefix("auth"))
     for module, router in MOUNTS:
         app.include_router(
             router,

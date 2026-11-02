@@ -79,7 +79,7 @@ async def external_binding(session, definition, target):
     path = adapter.config.effect_paths.get(key)
     if not path:
         raise unavailable("副作用目标未配置真实投递路径")
-    return system, adapter, f"{adapter.origin}{path}"
+    return system, adapter, adapter.url(path)
 
 
 async def prepare_effect(session, user, run, definition, effect):

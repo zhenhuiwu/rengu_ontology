@@ -2,6 +2,7 @@
 
 from typing import Any, Self
 from urllib.parse import urlsplit
+import re
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
@@ -41,9 +42,11 @@ class LinkedActionTypeOut(ApiModel):
     group: str = Field(validation_alias="grp")
     status: TypeStatus
     endpoint: str
+    http_endpoint_id: str | None = None
 
 
 class ExtSystemDetailOut(ExtSystemOut):
+    lock_version: int
     action_types: list[LinkedActionTypeOut] = []
 
 
@@ -105,15 +108,18 @@ class ExtSystemIn(ApiModel):
         try:
             parts = urlsplit(v)
             port = parts.port
-            valid = (parts.scheme in ("http", "https") and parts.hostname and not parts.username
+            valid = (parts.scheme in ("http", "https") and parts.hostname and "@" not in parts.netloc and not parts.username
                      and not parts.password and not parts.query and not parts.fragment
-                     and not parts.path and not any(c.isspace() or ord(c) < 32 for c in v)
+                     and not any(c.isspace() or ord(c) < 32 for c in v)
+                     and "\\" not in v and bool(re.fullmatch(r"[A-Za-z0-9._~!$&'()*+,;=:@/\-]*", parts.path))
+                     and all(segment not in (".", "..") for segment in parts.path.split("/"))
+                     and "//" not in parts.path
                      and (port is None or 1 <= port <= 65535))
         except ValueError:
             valid = False
         if not valid:
-            raise PydanticCustomError("value_error", "接口地址需为不含路径、凭据或查询参数的 HTTP(S) 来源地址")
-        return v
+            raise PydanticCustomError("value_error", "接口地址须为 HTTP(S) 地址，可含基础路径；不支持凭据、查询参数、片段或非规范路径")
+        return v.rstrip("/")
 
     @model_validator(mode="after")
     def _idem(self) -> Self:

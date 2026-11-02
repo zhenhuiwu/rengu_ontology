@@ -10,7 +10,7 @@
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.context import ViewContext
@@ -22,6 +22,26 @@ from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.service import VersioningService
 
 Obj = dict[str, Any]
+
+
+def _allowed_dim_row(dim, name: str) -> dict:
+    if dim is None:
+        return {"dim": name, "hier": "", "obj": "", "def": "", "note": ""}
+    levels = [level.name for level in dim.levels if level.name]
+    source = ""
+    if dim.object is not None:
+        source = dim.object.display_name
+    elif dim.object_name:
+        source = dim.object_name
+    taken = f"{source}.{dim.attr}" if source and dim.attr else source or dim.attr or ""
+    return {
+        "dim": dim.display_name or name,
+        "hier": " › ".join(levels),
+        "obj": taken,
+        "def": "",
+        "note": dim.description or "",
+    }
+
 
 # objectGov.ts：指标维度 → 对象类型；公式里的对象名 → 对象类型（长名在前）
 DIM_OBJ = {
@@ -335,7 +355,36 @@ class StaticService:
                 "disallowed": [],
             }
         await self._check_ver()
-        return shapes.metric_detail(await self.repo.metric(mid))
+        metric = await self.repo.metric(mid)
+        detail = shapes.metric_detail(metric)
+        # 勾选结果写在 dims（dimNames）。dim_rows 只给种子指标的展示表；用户新建的指标这里是空的。
+        if not detail["dims"]:
+            detail["dims"] = await self._allowed_dim_rows(list(metric.dims or []))
+        return detail
+
+    async def _allowed_dim_rows(self, names: list[str]) -> list[dict]:
+        """把指标上勾选的维度名补成允许维度表的一行。对不上已有维度时仍保留名称。"""
+        from app.modules.static.models import Dimension
+
+        wanted = [name for name in names if isinstance(name, str) and name]
+        if not wanted:
+            return []
+        found = list(
+            await self.session.scalars(
+                select(Dimension).where(
+                    or_(
+                        Dimension.display_name.in_(wanted),
+                        Dimension.api_name.in_(wanted),
+                        Dimension.code.in_(wanted),
+                    )
+                )
+            )
+        )
+        by_key: dict[str, Dimension] = {}
+        for dim in found:
+            for key in (dim.display_name, dim.api_name, dim.code):
+                by_key.setdefault(key, dim)
+        return [_allowed_dim_row(by_key.get(name), name) for name in wanted]
 
     async def metric_versions(self, mid: str, p: PageParams) -> Obj:
         from app.modules.static.metric_versions import format_versions, output_versions

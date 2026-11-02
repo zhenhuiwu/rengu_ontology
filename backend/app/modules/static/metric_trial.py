@@ -124,7 +124,7 @@ async def execution_bindings(session, objects, metric):
     from app.modules.qa.object_source import configured_bindings
 
     ontology_id = require_ontology_id(session)
-    codes = {row["objectType"] for row in configured_bindings() if row["ontologyId"] == ontology_id}
+    codes = {row["objectType"] for row in configured_bindings(ontology_id)}
     if not codes:
         return {}
     metadata = {r.get("k"): r.get("v") for r in metric.get("def", []) if isinstance(r, dict)}
@@ -159,7 +159,7 @@ def metric_column(prop, gov):
     binding = getattr(gov, "binding", None)
     if binding is not None:
         return binding.cols.get(prop.api_name) if prop.api_name in binding.out else None
-    column = prop.backing_column or prop.source_column
+    column = prop.source_column if gov.source_sql else prop.backing_column or prop.source_column
     projection = getattr(gov, "projection", None)
     return gov.table.c[column] if column and not prop.transform and column in gov.table.c and (projection is None or column in projection) else None
 
@@ -276,7 +276,11 @@ class BoundFormula:
             if isinstance(node, exp.Count) and isinstance(node.this, exp.Column) and not node.this.table:
                 gov = self.bind_object(node.this.name)
                 binding = getattr(gov, "binding", None)
-                return func.count(binding.id_col if binding is not None else gov.table.c.id)
+                from app.common.object_identity import primary_column
+
+                if binding is not None:
+                    return func.count(binding.id_col)
+                return func.count(primary_column(self.object, gov) if gov.source_sql else gov.table.c.id)
             col = self.column(node.this)
             if isinstance(node, exp.Count) and isinstance(col.type, (Date, DateTime)):
                 self.count_times[col.key] = (f"{self.object.code}.{node.this.name}", col)
@@ -523,7 +527,7 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
             session=session,
         )
     except AppError as error:
-        if error.code != "METRIC_TRIAL_UNAVAILABLE":
+        if error.code not in ("METRIC_TRIAL_UNAVAILABLE", "OBJECT_DATA_UNAVAILABLE"):
             raise
         return {
             "id": code,
@@ -597,6 +601,7 @@ async def evaluate_metric(
     at=None,
     timezone=None,
     object_kind=None,
+    object_identity=None,
     snapshot=False,
 ) -> dict:
     """Public evaluator: exact saved definition + governed live rows, inclusive local calendar days."""
@@ -605,6 +610,10 @@ async def evaluate_metric(
         raise unavailable("试算范围须为1至93天")
     if period not in ("day", "week", "month", "none"):
         raise unavailable("试算分组仅支持整体、日、周或月")
+    if object_identity is not None and (not object_kind or not isinstance(object_identity, str) or not 0 < len(object_identity) <= 64 or "\x00" in object_identity):
+        raise unavailable("单对象指标复核须指定真实对象类型和唯一业务编号")
+    if object_identity is not None and snapshot:
+        raise unavailable("单对象指标复核须使用明确时间桶，不能退回整体快照")
     metric = await metric_definition(session, code, user, ver, cr_id)
     if ver:
         raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
@@ -623,20 +632,25 @@ async def evaluate_metric(
         raise unavailable("日期筛选或时序试算需要明确的时间字段")
     if snapshot and at is not None:
         raise unavailable("当前快照不能计算历史状态")
+    from app.modules.data.external_mirror import source_metadata_fields
+    source_binding = getattr(bound.governed, 'binding', None)
+    source_info = getattr(bound.governed, 'source_metadata', None) or getattr(getattr(source_binding, 'source', None), 'mirror_metadata', None)
+    source_metadata = source_metadata_fields([dict(source_info)] if source_info else [])
     if snapshot:
         stmt = select(expression.label("value")).select_from(bound.governed.table).where(*conds)
         binding = getattr(bound.governed, "binding", None)
         if binding is not None:
             from app.common.row_filter import apply_row_filter
-            stmt = await apply_row_filter(stmt, user, bound.object.code, binding.cols)
+            stmt = await apply_row_filter(stmt, user, bound.object.code, {col.name: col for col in binding.cols.values()})
             async with binding.read(session) as reader:
                 value = (await reader.execute(stmt)).scalar_one()
         else:
             sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
             value = (await run_guarded(await session.connection(), sql, user, session=session)).scalar_one()
+            source_metadata = source_metadata_fields(session.info.get('last_guarded_sources', []))
         return {"id": code, "version": metric.get("version") or "草稿", "formula": metric["formula"],
                 "rows": [{"date": "当前", "value": str(value) if value is not None else None}],
-                "dataCutoff": None, "scope": "当前快照 · 当前用户可见数据", "crId": cr_id}
+                "dataCutoff": None, "scope": "当前快照 · 当前用户可见数据", "crId": cr_id, **source_metadata}
     cutoff_at = at or clock.now()
     start, end, lo, hi = metric_window(days, at=cutoff_at, timezone=timezone)
     tz = lo.tzinfo
@@ -653,6 +667,8 @@ async def evaluate_metric(
             raise unavailable("指标没有明确的规则对象分组映射，不能把汇总值分摊给各对象")
         from app.common.object_identity import primary_column
         grouping = [cast(binding.id_col if binding is not None else primary_column(bound.object, bound.governed), String).label("code")]
+        if object_identity is not None:
+            conds.append(grouping[0] == object_identity)
     if at is not None and isinstance(temporal.type, DateTime):
         conds.append(temporal <= cutoff_at)
     time_group = [] if period == "none" else [day]
@@ -671,13 +687,14 @@ async def evaluate_metric(
     if binding is not None:
         from app.common.row_filter import apply_row_filter
 
-        stmt = await apply_row_filter(stmt, user, bound.object.code, binding.cols)
+        stmt = await apply_row_filter(stmt, user, bound.object.code, {col.name: col for col in binding.cols.values()})
         async with binding.read(session) as reader:
             rows = (await reader.execute(stmt)).mappings().all()
     else:
         sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
         # Shared SQL guard supplies inherited row scopes, including order_line -> order -> store.
         rows = (await run_guarded(await session.connection(), sql, user, session=session)).mappings().all()
+        source_metadata = source_metadata_fields(session.info.get('last_guarded_sources', []))
     values = [
         {
             "date": str(row["date"]),
@@ -695,6 +712,7 @@ async def evaluate_metric(
         "dataCutoff": _fmt_dt(cutoff) if isinstance(cutoff, datetime) else str(cutoff) if cutoff else None,
         "scope": f"{start} 至 {end} · 时间字段 {time_field} · 当前用户可见数据",
         "crId": cr_id,
+        **source_metadata,
     }
 
 

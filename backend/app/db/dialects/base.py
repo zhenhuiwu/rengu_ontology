@@ -31,8 +31,10 @@ class DialectAdapter(Protocol):
         model: type[DeclarativeBase],
         rows: Sequence[dict[str, Any]],
         key: Sequence[str],
+        *,
+        seed_only: bool = False,
     ) -> int:
-        """按 key 插入或更新（seed、外部同步用）。返回处理行数。"""
+        """按 key 插入或更新；seed_only 禁止覆盖非种子，冲突须回滚整批。"""
         ...
 
     async def xact_lock(self, session: AsyncSession, name: str) -> None:

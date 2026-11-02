@@ -75,6 +75,29 @@ class SysUser(CodeMixin, MutableTableMixin, Base):
     )
 
 
+class AuthCredential(Base):
+    """Password hashes only; kept outside directory/seed serialization."""
+
+    __tablename__ = "auth_credential"
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_session"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class AuthLoginThrottle(Base):
+    __tablename__ = "auth_login_throttle"
+    bucket: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class AuditResult(LabelEnum):
     """审计结果（前端 AuditRow.result）：库里存英文 code，接口输出中文。"""
 

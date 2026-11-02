@@ -40,7 +40,7 @@ SUBS = {
     "kind": ("kind", choice(SubscriberKind)),
     "name": ("name", string(128, required=True)),
     "ruleId": ("rule_code", optional_string(32)),
-    "filter": ("filter_text", string()),
+    "filter": ("filter_text", lambda value, field: text(value, field).strip() or "全部"),
     "then": ("then_text", string()),
     "status": ("status", choice(SubscriberStatus)),
 }

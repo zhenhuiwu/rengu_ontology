@@ -13,7 +13,8 @@ from app.core.errors import AppError, NotFound, VersionConflict
 from app.core.schema import _fmt_dt
 from app.db.dialects import get_adapter
 from app.modules.admin.models import SysUser
-from app.modules.functions.models import FnParam, FnUse, FnVersion, Function
+from app.modules.functions.models import FnParam, FnVersion, Function
+from app.modules.functions.references import function_uses
 from app.modules.functions.runtime import signature
 from app.modules.functions.schemas import CreateIn, RollbackIn, SaveIn
 from app.modules.static.cr_write import CrWriteService
@@ -104,9 +105,7 @@ async def current_rows(session: AsyncSession, records, pending: dict) -> list[di
         select(FnParam).where(FnParam.function_id.in_(ids)).order_by(FnParam.direction, FnParam.seq)
     ):
         params.setdefault(param.function_id, []).append(param)
-    uses: dict[int, list[dict]] = {}
-    for use in await session.scalars(select(FnUse).where(FnUse.function_id.in_(ids)).order_by(FnUse.id)):
-        uses.setdefault(use.function_id, []).append({"kind": use.kind, "name": use.name})
+    uses = await function_uses(session, [fn.code for fn, _, _ in records])
     result = []
     for fn, owner, version in records:
 
@@ -138,7 +137,7 @@ async def current_rows(session: AsyncSession, records, pending: dict) -> list[di
             "avgMs": fn.avg_ms,
             "calls7d": fn.calls_7d,
             "lockVersion": fn.lock_version,
-            "usedBy": uses.get(fn.id, []),
+            "usedBy": uses.get(fn.code, []),
             "inputs": [param(p) for p in ps if p.direction == "in"],
             "output": next(
                 (param(p) for p in ps if p.direction == "out"), {"name": "result", "type": "Any", "desc": ""}

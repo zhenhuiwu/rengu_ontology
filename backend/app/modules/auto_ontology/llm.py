@@ -55,7 +55,7 @@ class DashScopeLLM:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     json=body,
-                    headers={"Authorization": f"Bearer {self._key}"},
+                    headers={"Authorization": f"Bearer {self._key}"} if self._key else {},
                 )
         except httpx.HTTPError as error:
             raise LlmError(f"调用大模型失败：{type(error).__name__}") from None
@@ -84,7 +84,7 @@ class FakeLLM:
 
 def get_llm(runtime: ModelRuntime | None = None) -> LLMClient | None:
     if runtime is not None:
-        if not runtime.value.enabled or not runtime.api_key.get_secret_value():
+        if not runtime.value.enabled or (runtime.value.auth_mode == "key" and not runtime.api_key.get_secret_value()):
             return None
         return DashScopeLLM(
             runtime.api_key.get_secret_value(),

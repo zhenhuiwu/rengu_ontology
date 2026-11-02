@@ -1,7 +1,7 @@
 """情景推演模板（元数据驱动）：目标对象类型、范围筛选、数值驱动、输出指标、影响明细列、建议动作。
 
 - 模板定义：按本体存在 scenario_template 表（dynamic_0024；RLS 只看到当前空间），definition 为单条模板；
-  ontology 1 的初始配置由迁移从 seeds/json/dynamic/SC_TEMPLATES.json 导入
+  ontology 1 的演示配置由显式 demo seed 导入；正常结构迁移不自动导入
   （与 src/mock/scenarioTemplates.ts 同一份）。
   其他空间没有模板时返回空列表，template_of 抛 503。
 - 引擎按模板 engine 键插拔（ENGINES）；演示模板 demo_retail = rules_sim.simulate / stage_plan（原样）。

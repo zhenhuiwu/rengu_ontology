@@ -8,13 +8,9 @@
     # 查业务对象时加行级条件（表达式结构和转 SQL 见 app/common/row_filter.py）
     flt = await row_filter(user, "store")   # None = 不限制
 
-身份入口（功能权限已按实际数据库角色生效）：
-- dev/test 环境：读请求头 `X-Demo-As`（只在 dev/test 生效的演示身份），没有就用配置里的 RENGU_DEV_USER；
-  **值是用户编号 sys_user.code（前端 userId，如 U010001），不是姓名**。按编号查 sys_user：
-  CurrentUser.id = 编号，name = 姓名；查不到或已停用 → 401。
-  演示身份：王敏 U010001（admin，mock 审计日志里的编号）、李娜 U010006（viewer，[推断] mock 没有编号）；
-  本体管理能力从实际数据库角色的 releases:manage 派生，不按演示用户编号授予。
-- prod 环境：`X-Demo-As` 一律忽略；鉴权未接入前直接 401（防止桩实现被带上生产）。
+身份入口：真人使用数据库持久化 Cookie 会话；机器使用已授权 Bearer API Key。
+X-Demo-As / 默认身份仅在显式启用、本地隔离测试库的 test 夹具中生效。
+功能权限来自实际数据库角色，不按用户编号授予。
 
 租户（一期单租户）：接受 `X-Tenant-Id` 请求头并放进 CurrentUser.tenant_id，**不按租户过滤，表里也没有
 tenant_id 列**。二期多租户时再统一加。
@@ -92,24 +88,35 @@ def is_admin_request(request: Request) -> bool:
 
 async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None = None) -> CurrentUser:
     """用户编号（sys_user.code）→ CurrentUser。查不到 / 停用 → 401。"""
-    from app.modules.admin.models import SysUser, UserStatus
-    from app.modules.admin.permissions import function_access, object_row_access
+    from app.modules.admin.models import SysUser
 
     u = await session.scalar(
         select(SysUser).where(SysUser.code == code).execution_options(populate_existing=True)
     )
-    if u is None or u.status != UserStatus.active:
+    if u is None:
         raise Unauthorized("用户不存在或已停用", details={"userId": code})
+    return await _resolved_user(session, u, tenant_id)
+
+
+async def _resolved_user(session: AsyncSession, u: Any, tenant_id: str | None = None) -> CurrentUser:
+    """Build permissions from the user record already checked by this request's session lookup."""
+    from app.modules.admin.models import UserStatus
+    from app.modules.admin.permissions import function_access, object_row_access
+
+    if u.status != UserStatus.active:
+        raise Unauthorized("用户不存在或已停用", details={"userId": u.code})
     ontology_id = session.info.get("ontology_id")
     ontology_role = None
+    member = None
     if ontology_id is not None:
         from app.modules.ontology.models import OntologyMember
 
-        ontology_role = await session.scalar(
-            select(OntologyMember.role).where(
+        member = await session.scalar(
+            select(OntologyMember).where(
                 OntologyMember.ontology_id == ontology_id, OntologyMember.user_id == u.id
             )
         )
+        ontology_role = member.role if member is not None else None
         if ontology_role not in ("owner", "editor", "viewer"):
             raise Forbidden("用户没有此本体工作空间的访问权限")
     permissions, roles = await function_access(session, u.id)
@@ -118,7 +125,7 @@ async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None =
         name=u.name,
         func=permissions,
         roles=roles,
-        row_filters=await object_row_access(session, u.id),
+        row_filters=await object_row_access(session, u.id, member=member, user_code=u.code),
         is_ontology_admin=permissions.get("releases") == "manage",
         tenant_id=tenant_id,
         ontology_id=ontology_id,
@@ -166,20 +173,22 @@ async def bind_workspace(session: AsyncSession, request: Request, user: CurrentU
             row_filters=await key_row_filters(session, request, user),
         )
     else:
-        member = await session.scalar(
-            select(OntologyMember)
-            .join(SysUser, SysUser.id == OntologyMember.user_id)
-            .where(OntologyMember.ontology_id == ontology_id, SysUser.code == user.id)
-        )
+        membership = (
+            await session.execute(
+                select(OntologyMember, SysUser.code)
+                .join(SysUser, SysUser.id == OntologyMember.user_id)
+                .where(OntologyMember.ontology_id == ontology_id, SysUser.code == user.id)
+            )
+        ).one_or_none()
+        member, user_code = membership if membership is not None else (None, None)
         if member is None or member.role not in ("owner", "editor", "viewer"):
             raise Forbidden("没有此本体工作空间的访问权限")
         await set_ontology_scope(session, ontology_id)
-        db_user = await session.scalar(select(SysUser).where(SysUser.code == user.id))
         user = replace(
             user,
             ontology_id=ontology_id,
             ontology_role=member.role,
-            row_filters=await object_row_access(session, db_user.id),
+            row_filters=await object_row_access(session, member.user_id, member=member, user_code=user_code),
         )
     return user
 
@@ -188,7 +197,7 @@ async def get_current_user(
     session: SessionDep,
     request: Request,
     x_demo_as: Annotated[
-        str | None, Header(description="dev/test 演示身份：用户编号（U010001）；prod 忽略")
+        str | None, Header(description="仅显式启用的本地隔离 test 夹具使用；正常服务忽略")
     ] = None,
     x_tenant_id: Annotated[str | None, Header(description="一期单租户：只透传，不过滤")] = None,
     authorization: Annotated[str | None, Header()] = None,
@@ -205,11 +214,15 @@ async def get_current_user(
         user = await authenticate_key(session, token, request, x_tenant_id)
     else:
         session.info.pop("api_caller", None)  # human caller: never inherit a machine caller context
-        s = get_settings()
-        if s.env == "prod":
-            raise Unauthorized("鉴权尚未接入")
-        user = await resolve_user(session, x_demo_as or s.dev_user, x_tenant_id)
-    # EXTENSION POINT (PDE): 换成真实鉴权（会话 / API Key / 服务账号），解析出有效权限 EffectiveAccess。
+        from app.modules.admin.login import fixture_identity_enabled, require_same_origin, session_user
+
+        if fixture_identity_enabled():
+            user = await resolve_user(session, x_demo_as or get_settings().dev_user, x_tenant_id)
+        else:
+            db_user = await session_user(session, request)
+            if request.method not in ("GET", "HEAD", "OPTIONS"):
+                require_same_origin(request)
+            user = await _resolved_user(session, db_user, x_tenant_id)
     route = full_route_path(request)
     admin = is_admin_request(request)
     discovery = (

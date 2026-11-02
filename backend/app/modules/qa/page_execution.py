@@ -12,7 +12,7 @@ from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from app.common.auth import check_func, resolve_user
 from app.common.ontology import require_ontology_id
-from app.common.sql_guard import assert_single_select, governed_tables, row_filters_for, run_guarded
+from app.common.sql_guard import assert_single_select, governed_tables, normalize_read_identifiers, row_filters_for, run_guarded
 from app.core.config import get_settings
 from app.core.errors import AppError, Forbidden
 from app.db.session import QaReadonlyNotConfigured, get_qa_readonly_engine
@@ -169,6 +169,7 @@ async def validate_plan(card, release, session):
             raise unavailable("原始回答执行依据不一致")
         tree = assert_single_select(plan["sql"])
         bindings = governed_tables(require_ontology_id(session), session)
+        normalize_read_identifiers(tree, bindings)
         names = {table.name for table in _real_tables(tree)}
         if not names or any(name not in bindings for name in names):
             raise unavailable("查询引用的受控来源已变化")
@@ -190,8 +191,14 @@ async def validate_plan(card, release, session):
             new_obj = (new.get("objectTypes") or {}).get(code) or {}
             if any(old_obj.get(k) != new_obj.get(k) for k in ("api", "source", "table", "pk", "status")):
                 raise unavailable("查询引用的对象来源或主键已变化")
-            if not binding.inherit and old_obj.get("table") not in (table, f"public.{table}"):
-                raise unavailable("历史对象来源与当前受控主表不一致")
+            if not binding.inherit:
+                if binding.source_sql:
+                    from app.modules.data.models import ExternalReadBinding
+                    external = await session.scalar(select(ExternalReadBinding).where(ExternalReadBinding.object_code == code))
+                    if external is None or old_obj.get("table") != f"{external.schema_name}.{external.table_name}":
+                        raise unavailable("历史对象来源与当前外部绑定不一致")
+                elif old_obj.get("table") not in (table, f"public.{table}"):
+                    raise unavailable("历史对象来源与当前受控主表不一致")
             if binding.inherit and binding.object_type == binding.inherit.parent.object_type:
                 if not (old.get("objectBindings") or {}).get(code) or not (new.get("objectBindings") or {}).get(code):
                     raise unavailable("历史版本缺少补充表绑定依据")
@@ -257,12 +264,14 @@ async def validate_plan(card, release, session):
 def public_columns(sql, release, session):
     """Reject unprovable fields; replay never expands stars or invents mappings."""
     tree = assert_single_select(sql)
+    bindings = governed_tables(release.ontology_id, session)
+    normalize_read_identifiers(tree, bindings)
     for star in tree.find_all(exp.Star):
         if not isinstance(star.parent, exp.Count) or star.parent.this is not star:
             raise unavailable("原查询包含未明确的字段投影，请重新固定使用公开字段的回答")
     snapshot = release.snapshot or {}
     allowed = {}
-    for name, binding in governed_tables(release.ontology_id, session).items():
+    for name, binding in bindings.items():
         obj = (snapshot.get("objectTypes") or {}).get(binding.object_type) or {}
         if obj.get("status") != "已发布":
             continue
@@ -283,6 +292,7 @@ def public_columns(sql, release, session):
                 allowed[name].add(column)
     for scope in traverse_scope(tree):
         sources = {}
+        join_only = set()
         for alias, (_, source) in scope.selected_sources.items():
             if isinstance(source, exp.Table):
                 if source.name not in allowed:
@@ -292,9 +302,31 @@ def public_columns(sql, release, session):
                 sources[alias] = set(source.expression.named_selects) - {"*"}
             else:
                 raise unavailable("无法验证原查询的公开字段")
+        for alias, (_, source) in scope.selected_sources.items():
+            child = bindings.get(source.name) if isinstance(source, exp.Table) else None
+            if not child or not child.inherit or child.object_type != child.inherit.parent.object_type:
+                continue
+            spec, loaded = session.info.get("supplementary_bindings", {}).get(child.object_type) or ({}, None)
+            parents = [name for name, (_, table) in scope.selected_sources.items()
+                       if isinstance(table, exp.Table) and table.name == child.inherit.parent.name]
+            if loaded is not child or len(parents) != 1 or spec.get("table") != child.name or spec.get("joinKey") != child.inherit.local.key or spec.get("mainKey") != child.inherit.parent_key.key:
+                continue
+            expected = {(alias, spec["joinKey"]), (parents[0], spec["mainKey"])}
+            for join in scope.expression.args.get("joins") or []:
+                pending = [join.args.get("on")]
+                while pending:
+                    term = pending.pop()
+                    if isinstance(term, exp.Paren):
+                        pending.append(term.this)
+                    elif isinstance(term, exp.And):
+                        pending.extend((term.this, term.expression))
+                    elif isinstance(term, exp.EQ) and isinstance(term.this, exp.Column) and isinstance(term.expression, exp.Column):
+                        if {(term.this.table, term.this.name), (term.expression.table, term.expression.name)} == expected:
+                            # A configured supplementary key is readable only at this exact approved ON equality.
+                            join_only.update(id(column) for column in (term.this, term.expression) if column.table == alias)
         for column in scope.columns:
             if column.table:
-                valid = column.name in sources.get(column.table, set())
+                valid = column.name in sources.get(column.table, set()) or id(column) in join_only
             else:
                 matches = sum(column.name in names for names in sources.values())
                 # GROUP/ORDER aliases only name already-checked SELECT expressions.

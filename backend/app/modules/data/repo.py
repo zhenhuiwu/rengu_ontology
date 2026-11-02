@@ -62,10 +62,13 @@ class DatasourceTableRepo(BaseRepository[DatasourceTable]):
     model = DatasourceTable
 
     async def page_for(
-        self, datasource_id: int, kw: str | None, page: PageParams, mapped_sources: list[str] | None = None
+        self, datasource_id: int, kw: str | None, page: PageParams, mapped_sources: list[str] | None = None,
+        schema: str | None = None,
     ) -> tuple[Sequence[DatasourceTable], int]:
         """前端 tables：表名包含（不区分大小写）或说明包含（区分）；顺序 = mock dsTables（seq）。"""
         stmt = self.base_query().where(DatasourceTable.datasource_id == datasource_id)
+        if schema is not None:
+            stmt = stmt.where(DatasourceTable.schema_name == schema)
         if kw:
             pat = _like(kw)
             stmt = stmt.where(

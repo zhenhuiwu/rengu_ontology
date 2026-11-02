@@ -69,6 +69,8 @@ class PostgresAdapter:
         model: type[DeclarativeBase],
         rows: Sequence[dict[str, Any]],
         key: Sequence[str],
+        *,
+        seed_only: bool = False,
     ) -> int:
         """分批：每批行数 = PG_MAX_PARAMS // 列数（asyncpg 一条语句最多 32767 个绑定参数）；
         批内按 key 去重（同一条 INSERT … ON CONFLICT 里同一个键出现两次会报错），后出现的覆盖先出现的。"""
@@ -91,11 +93,18 @@ class PostgresAdapter:
             stmt = insert(model).values(chunk)
             update_cols = {c: stmt.excluded[c] for c in chunk[0] if c not in key}
             stmt = (
-                stmt.on_conflict_do_update(index_elements=list(key), set_=update_cols)
+                stmt.on_conflict_do_update(
+                    index_elements=list(key), set_=update_cols,
+                    where=model.__table__.c.is_seed.is_(True) if seed_only else None,
+                )
                 if update_cols
                 else stmt.on_conflict_do_nothing(index_elements=list(key))
             )
-            await session.execute(stmt)
+            result = await session.execute(stmt)
+            if seed_only and result.rowcount != len(chunk):
+                raise ValueError(
+                    f"seed 与既有非种子数据冲突：{model.__table__.name}；整批种子必须回滚"
+                )
         return len(rows)
 
     async def xact_lock(self, session: AsyncSession, name: str) -> None:

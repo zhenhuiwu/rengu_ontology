@@ -65,7 +65,7 @@ async def sample_primary_key(session, code, current, values, properties, user):
             else:
                 explicit = any(
                     row["ontologyId"] == user.ontology_id and row["objectType"] == code
-                    for row in configured_bindings()
+                    for row in configured_bindings(user.ontology_id)
                 )
                 unchanged = (
                     current is not None

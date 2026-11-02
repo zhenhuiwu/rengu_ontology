@@ -61,7 +61,11 @@ class DatabaseRefCatalog:
             return exact[0]
         tokens = set(re.findall(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+", text))
         people = [p for p in self.data.get("people", []) if p["id"] in tokens or p["name"] in tokens]
-        return people[0] if len(people) == 1 else None
+        if people:
+            return people[0] if len(people) == 1 else None
+        # Published snapshots still contain the former name of the same admin ID.
+        alias = self.data.get("legacyPersonAliases", {}).get(text.strip())
+        return next((p for p in self.data.get("people", []) if p["id"] == alias), None)
 
     def ext_system(self, code: str | None) -> dict[str, Any] | None:
         if not code:
@@ -173,7 +177,11 @@ async def _load_catalog(session, mode: str, *, rule_code: str | None = None, use
             .order_by(SysUser.code)
         )
     ]
-    catalog = DatabaseRefCatalog({"people": people})
+    aliases = {}
+    if any(p["id"] == "U010001" and p["name"] == "admin" for p in people):
+        conflict = await session.scalar(select(SysUser.id).where(SysUser.name == "王敏").limit(1))
+        if conflict is None:
+            aliases["王敏"] = "U010001"
     counts = Counter(row.name for row in types)
     meta, by_code = {}, {}
     for row in types:
@@ -215,6 +223,7 @@ async def _load_catalog(session, mode: str, *, rule_code: str | None = None, use
             "dynamic/ACTION_META.json": meta,
             "actionMetaById": by_code,
             "people": people,
+            "legacyPersonAliases": aliases,
             "system/EXT_SYSTEMS.json": systems,
             "dynamic/ACTION_NAMES.json": [row["name"] for row in actions if counts[row["name"]] == 1],
             "dynamic/ACTION_SYSTEMS.json": [{"id": row["id"], "name": row["name"]} for row in systems],

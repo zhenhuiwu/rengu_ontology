@@ -1,6 +1,6 @@
 """数据库角色的功能权限，只聚合实际成员关联，不按姓名或配置补授权。"""
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -27,19 +27,22 @@ async def function_access(session: AsyncSession, user_id: int) -> tuple[dict[str
     return merged, tuple(roles)
 
 
-async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, dict | None]:
+async def object_row_access(
+    session: AsyncSession, user_id: int, *, member=None, user_code: str | None = None
+) -> dict[str, dict | None]:
     """Batch current role grants and scopes; missing/ambiguous identities never grant data access."""
     from app.modules.ontology.models import OntologyMember, OntologyRoleBinding
 
     ontology_id = session.info.get("ontology_id")
     if ontology_id is None:
         return {}
-    member = await session.scalar(
-        select(OntologyMember).where(
-            OntologyMember.ontology_id == ontology_id, OntologyMember.user_id == user_id
-        )
-    )
     if member is None:
+        member = await session.scalar(
+            select(OntologyMember).where(
+                OntologyMember.ontology_id == ontology_id, OntologyMember.user_id == user_id
+            )
+        )
+    if member is None or member.ontology_id != ontology_id or member.user_id != user_id:
         return {}
 
     roles = list(
@@ -56,9 +59,24 @@ async def object_row_access(session: AsyncSession, user_id: int) -> dict[str, di
         from app.common.sql_guard import ensure_governed_tables, governed_tables
         from app.modules.static.models import ObjectStatus, ObjectType
 
-        user_code = await session.scalar(select(SysUser.code).where(SysUser.id == user_id))
+        if user_code is None:
+            user_code = await session.scalar(select(SysUser.code).where(SysUser.id == user_id))
         await ensure_governed_tables(session)
         bound = {g.object_type for g in governed_tables(ontology_id, session).values() if g.projection is not None}
+        from app.modules.data.models import Datasource, DsType, ExternalReadBinding
+
+        external = await session.execute(
+            select(ExternalReadBinding, Datasource, ObjectType)
+            .join(Datasource, Datasource.code == ExternalReadBinding.datasource_code)
+            .join(ObjectType, ObjectType.code == ExternalReadBinding.object_code)
+            .where(ExternalReadBinding.ontology_id == ontology_id, Datasource.ontology_id == ontology_id,
+                   ObjectType.ontology_id == ontology_id, Datasource.type == DsType.dm8)
+        ) if await session.scalar(text("SELECT to_regclass('public.external_read_binding') IS NOT NULL")) else []
+        for binding, datasource, obj in external:
+            if (obj.datasource_name in (datasource.code, datasource.name)
+                    and obj.source_table == f"{binding.schema_name}.{binding.table_name}"
+                    and isinstance(binding.read_columns, list) and binding.read_columns):
+                bound.add(obj.code)
         if bound:
             scopes = list(await session.scalars(select(SysRoleScope).where(
                 SysRoleScope.ontology_id == ontology_id, SysRoleScope.role_id.in_([role.id for role in roles]),
@@ -87,7 +105,7 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
     a scope whose referenced object type was deleted (code kept, id nulled) is unmapped and denies;
     legacy rows without either keep the label matching, where ambiguity is also deny.
     """
-    from app.common.sql_guard import RoleAccess, effective_expr
+    from app.common.sql_guard import RoleAccess, effective_expr, ensure_governed_tables, governed_tables
     from app.modules.admin.org_scope import ORG_PROP, load_org_fields
     from app.modules.static.models import ObjectStatus, ObjectType
 
@@ -109,6 +127,10 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
         .order_by(SysRoleScope.role_id, SysRoleScope.seq, SysRoleScope.id)
     ):
         scopes[scope.role_id].append(scope)
+    governed = {}
+    if any(scopes.values()):
+        await ensure_governed_tables(session)
+        governed = governed_tables(ontology_id, session)
     objects = list(
         await session.execute(
             select(ObjectType.id, ObjectType.code, ObjectType.api_name, ObjectType.display_name).where(
@@ -116,7 +138,11 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
             )
         )
     )
-    org_fields = await load_org_fields(session)
+    org_fields = (
+        await load_org_fields(session)
+        if any(scope.prop == ORG_PROP for role_scopes in scopes.values() for scope in role_scopes)
+        else {}
+    )
     identities = {obj.api_name: {obj.code, obj.api_name, obj.display_name} for obj in objects}
     published_ids = {obj.id for obj in objects}
     output = {}
@@ -171,7 +197,7 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
             if not scoped and unmapped:
                 scoped.append({"prop": "", "op": "=", "values": []})
             access.append(RoleAccess(view=True, default_deny=role.default_deny, scopes=tuple(scoped)))
-        output[obj.code] = effective_expr(obj.code, access)
+        output[obj.code] = effective_expr(obj.code, access, governed=governed)
     return output
 
 

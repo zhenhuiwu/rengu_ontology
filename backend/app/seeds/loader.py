@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.ontology import DEFAULT_ONTOLOGY_ID, require_ontology_id
 from app.core.config import get_settings
 from app.db.dialects import get_adapter
 from app.seeds import (
@@ -110,7 +111,10 @@ async def _upsert_resolving(session: AsyncSession, adapter: Any, spec: SeedSpec,
     other = {c: ref for c, ref in spec.refs.items() if c not in self_cols}
     rows = await resolve_refs(session, rows, other)
     if not self_cols:
-        return await adapter.upsert(session, spec.model, rows, spec.key)
+        return await adapter.upsert(
+            session, spec.model, rows, spec.key,
+            seed_only="is_seed" in spec.model.__table__.c,
+        )
     pending, total = rows, 0
     while pending:
         # 还没写入的行的业务键值；引用它们的行要等下一层
@@ -120,7 +124,8 @@ async def _upsert_resolving(session: AsyncSession, adapter: Any, spec: SeedSpec,
             raise ValueError(f"seed 自引用成环：{spec.model.__table__.name}")  # type: ignore[attr-defined]
         self_refs = {c: spec.refs[c] for c in self_cols}
         total += await adapter.upsert(
-            session, spec.model, await resolve_refs(session, ready, self_refs), spec.key
+            session, spec.model, await resolve_refs(session, ready, self_refs), spec.key,
+            seed_only="is_seed" in spec.model.__table__.c,
         )
         done = {id(r) for r in ready}
         pending = [r for r in pending if id(r) not in done]
@@ -136,6 +141,10 @@ async def run_seeds(
     extra_root: Path | None = None,
 ) -> list[SeedReport]:
     """在给定会话里执行（不 commit，由调用方提交；dry_run 时调用方回滚）。"""
+    if get_settings().env == "prod":
+        raise ValueError("生产环境禁止演示种子；请使用独立系统初始化入口")
+    if require_ontology_id(session) != DEFAULT_ONTOLOGY_ID:
+        raise ValueError("零售演示种子仅支持演示工作空间 1，不得写入业务工作空间")
     # 先导入全部模型（跨模块关系的 mapper 配置要用）；快照 section 由调用方先 load_sections() 登记
     import app.db.models  # noqa: F401
 

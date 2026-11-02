@@ -15,7 +15,7 @@ import os
 from typing import Annotated, Protocol
 
 from fastapi import Depends
-from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI, omit
 
 from app.core.config import get_settings
 from app.core.errors import AppError
@@ -44,9 +44,10 @@ class DashScopeLLM:
 
     def __init__(self, api_key: str, model: str, base_url: str, timeout_s: float) -> None:
         self.model = model
+        self._no_auth = not api_key
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
-        self._client = AsyncOpenAI(api_key=api_key, base_url=self.base_url, timeout=timeout_s, max_retries=1)
+        self._client = AsyncOpenAI(api_key=api_key or "unused", base_url=self.base_url, timeout=timeout_s, max_retries=1)
 
     def __repr__(self) -> str:  # 不把 key 带进日志 / traceback
         return f"DashScopeLLM(model={self.model!r})"
@@ -57,6 +58,7 @@ class DashScopeLLM:
                 model=self.model,
                 messages=prompt,
                 temperature=0,
+                **({"extra_headers": {"Authorization": omit}} if self._no_auth else {}),
             )
         except APIStatusError as error:
             raise QaLlmFailed(f"大模型返回 {error.status_code}") from None
@@ -91,7 +93,7 @@ async def configured_runtime(session: SessionDep) -> ModelRuntime:
 
 def get_llm(runtime: Annotated[ModelRuntime | None, Depends(configured_runtime)] = None) -> LLMClient:
     if runtime is not None:
-        if not runtime.value.enabled or not runtime.api_key.get_secret_value():
+        if not runtime.value.enabled or (runtime.value.auth_mode == "key" and not runtime.api_key.get_secret_value()):
             raise QaLlmUnavailable("问数大模型已停用或未配置密钥")
         return DashScopeLLM(
             runtime.api_key.get_secret_value(),

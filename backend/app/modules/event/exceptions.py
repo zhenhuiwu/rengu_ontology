@@ -9,10 +9,9 @@ from sqlalchemy import and_, exists, func, or_, select
 
 from app.common.auth import check_func, resolve_user, row_filter
 from app.common.context import check_writable
-from app.common.object_identity import identity_rows
+from app.common.object_identity import identity_rows, row_identity_column, row_source, source_columns
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import governed_tables
-from app.core import clock
 from app.core.errors import AppError, Conflict, Forbidden, NotFound, VersionConflict
 from app.core.schema import ApiModel
 from app.db.dialects import get_adapter
@@ -22,6 +21,7 @@ from app.modules.event.delivery import (
     authorize_object,
     check_order,
     delivery_key,
+    execution_now,
     http_target,
     object_order_lock,
     route_fingerprint,
@@ -32,6 +32,7 @@ from app.modules.event.delivery_history import record, safe_result
 from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, EventOutcome, EventType
 
 EXCEPTION_STATES = ("unknown", "failed", "quarantined", "pending")
+# Human retry eligibility only. Automatic waiting is separately bounded in delivery.py.
 RETRY_ERRORS = frozenset(
     {
         "RULE_EVALUATION_UNAVAILABLE",
@@ -51,10 +52,30 @@ RETRY_ERRORS = frozenset(
         "ORDERING_CHANNEL_NOT_CONFIGURED",
         "EVENT_OBJECT_FORBIDDEN",
         "EVENT_OBJECT_AMBIGUOUS",
+        "EVENT_OBJECT_NOT_SYNCED",
+        "ORDERING_PREDECESSOR_UNRESOLVED",
         "NO_PERMISSION",
         "UNAUTHORIZED",
     }
 )
+
+ERROR_MESSAGES = {
+    "EVENT_OBJECT_FORBIDDEN": "订阅身份没有对象行权限；核查授权后可人工重试",
+    "EVENT_OBJECT_AMBIGUOUS": "事件对象身份不唯一；修复对象标识后可人工重试",
+    "NO_PERMISSION": "订阅身份权限不足；修复授权后可人工重试",
+    "UNAUTHORIZED": "订阅身份无效；修复身份配置后可人工重试",
+    "DELIVERY_ROUTE_NOT_CONFIGURED": "未配置投递通道；修复后可人工重试",
+    "FILTER_NOT_EXECUTABLE": "原订阅快照的过滤条件无法执行；新定义仅影响后续事件",
+    "ACTION_RELEASE_CHANGED_REQUIRES_REVIEW": "当前本体发布版本不可用或与入站绑定版本不同；须人工核查",
+}
+
+
+def error_message(row):
+    if row.error == "EVENT_OBJECT_NOT_SYNCED":
+        return "对象数据尚未同步；最多自动等待15分钟" if row.state == "pending" else "等待对象同步已超时；完成同步后可人工重试"
+    if row.error == "ORDERING_PREDECESSOR_UNRESOLVED" and row.state == "failed":
+        return "等待前序事件已超时；处置前序后可人工重试"
+    return ERROR_MESSAGES.get(row.error)
 
 
 class DispositionIn(ApiModel):
@@ -80,25 +101,35 @@ async def visible_events(session, user):
     await ensure_governed_tables(session)
     scopes = [and_(Event.is_test.is_(True), Event.created_by == user.id)]
     for mapping in governed_tables(user.ontology_id, session).values():
-        if mapping.inherit or "id" not in mapping.table.c:
+        if mapping.inherit:
             continue
         expr = await row_filter(user, mapping.object_type)
         if is_deny_all(expr):
             continue
-        references = identity_rows(mapping).subquery()
-        query = select(mapping.table.c.id).where(
-            mapping.table.c.id.in_(
+        if expr is None and mapping.source_sql:
+            # A complete object grant includes the inbox for missing mirror rows in this workspace.
+            scopes.append(and_(Event.is_test.is_(False), Event.obj_kind == mapping.object_type))
+            continue
+        source = row_source(mapping)
+        row_id = row_identity_column(mapping, source)
+        references = identity_rows(mapping, unique_only=expr is not None).subquery()
+        query = select(row_id).where(
+            row_id.in_(
                 select(references.c.row_id).where(references.c.identity == Event.object_id).correlate(Event)
             )
         )
+        if mapping.scope_column in source.c:
+            query = query.where(source.c[mapping.scope_column] == user.ontology_id)
         if expr is not None:
-            query = query.where(to_sql(expr, mapping.columns, user.attrs, mapping.links))
+            query = query.where(to_sql(expr, source_columns(mapping, source), user.attrs, mapping.links))
         scopes.append(and_(Event.is_test.is_(False), Event.obj_kind == mapping.object_type, exists(query)))
-    return or_(*scopes)
+    return and_(Event.ontology_id == user.ontology_id, or_(*scopes))
 
 
 async def authorize(session, user, event, level="view"):
     check_func(user, "event-types", level)
+    if event.ontology_id != user.ontology_id:
+        raise Forbidden("投递记录不属于当前工作空间")
     if event.is_test:
         if event.created_by != user.id:
             raise Forbidden("只能处理本人创建的测试投递记录")
@@ -108,10 +139,19 @@ async def authorize(session, user, event, level="view"):
 
             if await authorize_completion_view(session, user, event):
                 return
-        await authorize_object(session, user, event, level)
+        try:
+            await authorize_object(session, user, event, level)
+        except AppError as exc:
+            # These codes are emitted only for a complete object grant (missing rows: mirrors only).
+            # Human metadata decisions may proceed; validate_requeue still requires a real row.
+            if exc.code not in ("EVENT_OBJECT_NOT_SYNCED", "EVENT_OBJECT_AMBIGUOUS"):
+                raise
 
 
 def output(row, event):
+    definition = event.definition_snapshot if isinstance(event.definition_snapshot, dict) else {}
+    subscription = row.subscription if isinstance(row.subscription, dict) else {}
+    filter_text = subscription.get("filter", "")
     return {
         "id": str(row.id),
         "eventId": event.code,
@@ -119,6 +159,7 @@ def output(row, event):
         "state": row.state,
         "attempts": row.attempts,
         "error": row.error,
+        "errorMessage": error_message(row),
         "result": safe_result(row.result),
         "version": row.lock_version,
         "startedAt": row.started_at,
@@ -126,10 +167,13 @@ def output(row, event):
         "isTest": event.is_test,
         "objectId": event.object_id,
         "idempotencyKey": delivery_key(event, row.subscriber_name),
+        "typeVersion": definition.get("version"),
+        "ontologyVersion": event.release.ver if event.release else None,
+        "subscriptionFilter": filter_text.strip() or "全部" if isinstance(filter_text, str) else "不可执行",
     }
 
 
-async def inbox(session, user, type_code, state, keyword, page, size):
+async def inbox(session, user, type_code, state, keyword, page, size, error=None):
     event_type = await session.scalar(select(EventType).where(EventType.code == type_code))
     if event_type is None:
         raise NotFound("事件类型不存在")
@@ -142,6 +186,8 @@ async def inbox(session, user, type_code, state, keyword, page, size):
             EventDelivery.state.in_((state,) if state else EXCEPTION_STATES),
         )
     )
+    if error:
+        query = query.where(EventDelivery.error == error)
     if keyword:
         escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         query = query.where(
@@ -157,7 +203,10 @@ async def inbox(session, user, type_code, state, keyword, page, size):
         .offset((page - 1) * size)
         .limit(size)
     )
-    return {"items": [output(row, event) for row, event in rows], "total": total, "page": page, "size": size}
+    return {
+        "items": [output(row, event) for row, event in rows],
+        "total": total, "page": page, "size": size, "errorFilter": error,
+    }
 
 
 async def detail(session, user, delivery_id, page, size):
@@ -172,6 +221,10 @@ async def detail(session, user, delivery_id, page, size):
     history = await session.scalars(
         query.order_by(EventDeliveryRecord.id.desc()).offset((page - 1) * size).limit(size)
     )
+    latest_failure = await session.scalar(
+        query.where(EventDeliveryRecord.error == row.error, EventDeliveryRecord.attempt == row.attempts)
+        .order_by(EventDeliveryRecord.id.desc()).limit(1)
+    ) if row.error else None
     decisions = []
     for decision in ("received", "skip", "retry", "supplement"):
         try:
@@ -181,6 +234,7 @@ async def detail(session, user, delivery_id, page, size):
             pass
     return {
         **output(row, event),
+        "errorDetails": (latest_failure.detail or {}).get("errorDetails") if latest_failure else None,
         "canManage": user.func.get("event-types") == "manage",
         "decisions": decisions,
         "history": {
@@ -214,12 +268,14 @@ def validate_decision(row, decision):
         raise Conflict("迟到事件只能记录人工跳过；补投会破坏已经发生的顺序", code="LATE_DELIVERY_BLOCKED")
     if decision == "received" and (not row.attempts or row.state not in ("unknown", "failed")):
         raise Conflict("仅已尝试且结果未知或失败的投递可记录已接收结论")
-    if decision == "retry" and not (
-        row.state == "unknown" or (row.state == "failed" and row.error in RETRY_ERRORS)
-    ):
+    subscription = getattr(row, "subscription", None)
+    empty_filter = isinstance(subscription, dict) and isinstance(subscription.get("filter", ""), str) and not subscription.get("filter", "").strip()
+    retryable_error = row.error in RETRY_ERRORS or (row.error == "FILTER_NOT_EXECUTABLE" and empty_filter)
+    if decision == "retry" and not (row.state == "unknown" or (row.state == "failed" and retryable_error)):
         raise Conflict("当前失败原因不允许重试，请先核查原定义及业务结果", code="DELIVERY_RETRY_BLOCKED")
     if decision == "supplement" and not (
         row.state == "pending" and not row.attempts and row.error in RETRY_ERRORS
+        and row.error != "ORDERING_PREDECESSOR_UNRESOLVED"
     ):
         raise Conflict("仅尚未尝试且通道条件可修复的投递可申请补投", code="DELIVERY_RETRY_BLOCKED")
 
@@ -342,12 +398,12 @@ async def dispose(session, user, ctx, delivery_id, body):
     }
     record(session, row, "before_disposition", actor=user.id)
     if body.decision in ("retry", "supplement"):
-        row.state, row.next_at = "pending", clock.now()
+        row.state, row.next_at = "pending", execution_now()
         row.started_at, row.finished_at = None, None
         row.error, row.result = None, None
     else:
         row.state = "confirmed" if body.decision == "received" else "skipped"
-        row.finished_at, row.next_at = clock.now(), None
+        row.finished_at, row.next_at = execution_now(), None
         # Original transport receipt/error remain intact; human evidence is stored separately.
     record(
         session,

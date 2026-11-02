@@ -42,10 +42,11 @@ JSON_MODULE = "system"
 def _user(r: Row, _ctx: SeedContext) -> Row:
     return {
         "code": r["id"],
-        "name": r["name"],
-        "account": r.get("account"),
-        "dept": r.get("dept"),
-        "status": UserStatus(r.get("status", "启用")).name,
+        "name": "admin" if r["id"] == "U010001" else r["name"],
+        "account": "admin" if r["id"] == "U010001" else r.get("account"),
+        "dept": "仁谷科技" if r["id"] == "U010001" else r.get("dept"),
+        # Historical identities are retained for release/audit/owner references.
+        "status": UserStatus.active.name if r["id"] == "U010001" else UserStatus.disabled.name,
         "last_login_at": parse_display_dt(r["lastLogin"]) if r.get("lastLogin") else None,
         "role": r.get("role"),
         "joined_on": date.fromisoformat(r["createdAt"]) if r.get("createdAt") else None,

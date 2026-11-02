@@ -29,7 +29,8 @@
 - `JSON_MODULE`：读 `seeds/json/` 下哪个组（必须是 EXPORT_GROUPS 之一，对照见 MODULE_GROUP）；
 - `SEEDS: list[SeedSpec]`：每个 json 落到哪张表、按哪个自然键 upsert、字段怎么转换。
 
-加载：`make seed` / `uv run python -m app.cli seed [-m versioning] [--dry-run]`。
+加载：`make seed` / `uv run python -m app.cli seed --demo [-m versioning] [--dry-run]`。
+仅支持非生产演示空间 1；非种子同键冲突拒绝覆盖，调用方必须回滚整批。
 按自然键 UPSERT，重复执行结果不变（幂等）；不删除库里多出来的行。
 """
 

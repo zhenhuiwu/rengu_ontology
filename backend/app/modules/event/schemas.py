@@ -1,5 +1,7 @@
 """对外 Schema（字段名 = 前端 mock：EVENT_TYPES / payloadOf / subscribersOf / versionsOf）。"""
 
+from pydantic import field_validator
+
 from app.core.schema import ApiModel, DateTimeMin, DateTimeSec
 from app.modules.action.models import TypeStatus
 from app.modules.event.models import EventOutcome, EventSource, SubscriberKind, SubscriberStatus
@@ -70,6 +72,11 @@ class SubscriberOut(ApiModel):
     then: str
     status: SubscriberStatus
     weekly: int
+
+    @field_validator("filter")
+    @classmethod
+    def normalize_filter(cls, value: str) -> str:
+        return value.strip() or "全部"
 
 
 # ---- 运行数据（palantir-r2；前端 EventRecord / EventTypes.vue health + eventDaily） ----

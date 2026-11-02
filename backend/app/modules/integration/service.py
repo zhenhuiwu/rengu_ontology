@@ -145,6 +145,8 @@ class ExtSystemService:
         await self._check_name(body.name, exclude_id=obj.id)
         values = _values(body)
         if values["endpoint"] != obj.endpoint:
+            if obj.http_endpoints:
+                raise Conflict("请先移除接口目录，再修改系统来源地址")
             values["probe_path"] = None
         if obj.local_only and any(
             values[field] != getattr(obj, field) for field in ("env", "category", "endpoint")

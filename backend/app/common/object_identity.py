@@ -8,7 +8,7 @@ from app.modules.static.models import ObjectStatus, ObjectType, Property
 
 def property_column(prop, governed):
     declared = {"id", "code"} | {getattr(column, "name", None) for column in governed.columns.values()}
-    binding = (prop.backing_column or prop.source_column) if prop is not None else None
+    binding = (prop.source_column if governed.source_sql else prop.backing_column or prop.source_column) if prop is not None else None
     if (
         prop is None
         or prop.is_sensitive
@@ -33,12 +33,44 @@ def primary_column(obj, governed):
     return column
 
 
-def identity_rows(governed):
+def row_source(governed):
+    """真实行所在的查询。外部镜像没有 public.<对象名>，改查已经限定本体的同步结果。"""
+    table = governed.table
+    source_sql = getattr(governed, "source_sql", None)
+    if not source_sql:
+        return table
+    from sqlalchemy import column, text
+
+    return text(source_sql).columns(*(column(col.name, col.type) for col in table.c)).subquery("governed_src")
+
+
+def source_columns(mapping, source):
+    return {
+        name: source.c[column.name]
+        for name, column in mapping.columns.items()
+        if getattr(column, "name", None) in source.c
+    }
+
+
+def row_identity_column(governed, source=None):
+    """Internal storage identity; never infer it from a public business field."""
+    source = governed.table if source is None else source
+    column = source.c.get(governed.row_identity)
+    if column is None:
+        raise AppError("受控数据缺少物理行标识", code="OBJECT_IDENTIFIER_UNAVAILABLE", status_code=503)
+    return column
+
+
+def identity_rows(governed, *, unique_only=True):
     """Identity → physical row; collisions across primary keys and old codes are rejected together."""
     table = governed.table
+    source = row_source(governed)
+    row_id = row_identity_column(governed, source)
     declared = {"id", "code"} | {getattr(column, "name", None) for column in governed.columns.values()}
     columns = [
-        column for column in table.c if column.name in declared and isinstance(column.type, String | Integer)
+        source.c[column.name]
+        for column in table.c
+        if column.name in declared and isinstance(column.type, String | Integer)
     ]
     explicit = (
         select(Property.id)
@@ -53,11 +85,11 @@ def identity_rows(governed):
         .scalar_subquery()
     )
     primary = Property.__table__.alias("identity_primary")
-    binding = func.coalesce(func.nullif(primary.c.backing_column, ""), primary.c.source_column)
+    binding = primary.c.source_column if governed.source_sql else func.coalesce(func.nullif(primary.c.backing_column, ""), primary.c.source_column)
     value = case(*[(binding == column.name, cast(column, String)) for column in columns])
     canonical = (
-        select(value.label("identity"), table.c.id.label("row_id"))
-        .select_from(table)
+        select(value.label("identity"), row_id.label("row_id"))
+        .select_from(source)
         .join(ObjectType, ObjectType.code == governed.object_type)
         .join(primary, primary.c.object_type_id == ObjectType.id)
         .where(
@@ -81,9 +113,11 @@ def identity_rows(governed):
         )
     )
     aliases = (
-        union(canonical, select(cast(table.c.code, String).label("identity"), table.c.id.label("row_id")))
+        union(canonical, select(cast(source.c.code, String).label("identity"), row_id.label("row_id")))
         if "code" in table.c and governed.projection is None else canonical
     ).subquery()
+    if not unique_only:
+        return select(aliases.c.identity, aliases.c.row_id).where(aliases.c.identity.is_not(None)).distinct()
     return (
         select(aliases.c.identity, func.min(aliases.c.row_id).label("row_id"))
         .where(aliases.c.identity.is_not(None))

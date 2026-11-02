@@ -53,6 +53,9 @@ class AlertOut(ApiModel):
     action_ref: str | None = None
     action_status: str | None = None
     action_id: str | None = None
+    action_outcome: str | None = None
+    action_reason: str | None = None
+    action_ext_ref: str | None = None
 
 
 class AlertCounts(ApiModel):

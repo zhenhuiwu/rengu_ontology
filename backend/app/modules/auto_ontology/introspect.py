@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import inspect, types
+from sqlalchemy import inspect, text, types
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError
+from app.core.errors import AppError, Forbidden
 
 # 迁移 / 框架自身的表，不进本体
 SYSTEM_TABLES = frozenset(
@@ -93,8 +93,24 @@ def column_kind(t: types.TypeEngine[Any]) -> str:
     return "string"
 
 
+def readable_table_stats(conn: Connection, schema: str) -> dict[str, int] | None:
+    """PG catalog visibility does not imply SELECT; check table or column grants in one batch."""
+    if conn.dialect.name != "postgresql":
+        return None
+    return {
+        name: int(rows) if rows is not None and rows >= 0 else -1
+        for name, rows in conn.execute(text("""
+            SELECT c.relname, c.reltuples FROM pg_class c
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname=:schema AND c.relkind IN ('r','p')
+              AND has_schema_privilege(n.oid,'USAGE')
+              AND (has_table_privilege(c.oid,'SELECT') OR has_any_column_privilege(c.oid,'SELECT'))
+        """), {"schema": schema})
+    }
+
+
 def inspect_tables(conn: Connection, schema: str, only: list[str] | None) -> list[Table]:
-    """公开的结构内省入口；只使用 inspector，不拼接或执行调用方 SQL。"""
+    """公开的结构内省入口；固定权限元数据查询及 inspector，不接受调用方 SQL。"""
     insp = inspect(conn)
     if schema not in insp.get_schema_names():
         raise SchemaNotFound(details={"schema": schema})
@@ -104,6 +120,11 @@ def inspect_tables(conn: Connection, schema: str, only: list[str] | None) -> lis
         if missing:
             raise TablesNotFound(details={"schema": schema, "tables": missing})
         names = [n for n in names if n in set(only)]
+    readable = readable_table_stats(conn, schema)
+    if readable is not None:
+        if only and (denied := sorted(set(names) - readable.keys())):
+            raise Forbidden("源账号没有所选数据表或字段的读取权限", details={"schema": schema, "tables": denied})
+        names = [n for n in names if n in readable]
     if len(names) > MAX_TABLES:
         raise TooManyTables(details={"count": len(names), "max": MAX_TABLES})
     out: list[Table] = []

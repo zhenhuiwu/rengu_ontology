@@ -83,6 +83,7 @@ class ActionType(CodeMixin, MutableTableMixin, Base):
         String(255), nullable=False, default="", comment="接口 idemKey"
     )
     http_mapping: Mapped[dict | None] = mapped_column(JsonType, nullable=True)
+    http_endpoint_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retired_release_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("ontology_release.id"),

@@ -5,9 +5,11 @@ from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, func, select
+from sqlalchemy.orm import defer, joinedload
 
 from app.common.repository import BaseRepository
 from app.core.config import get_settings
+from app.core.errors import NotFound
 from app.modules.event.models import (
     Event,
     EventEnvelopeField,
@@ -15,11 +17,22 @@ from app.modules.event.models import (
     EventType,
     EventTypeVersion,
 )
+from app.modules.versioning.models import OntologyRelease
 
 
 class EventTypeRepo(BaseRepository[EventType]):
     model = EventType
     not_found_message = "事件类型不存在"
+
+    async def runtime_identity(self, code: str) -> tuple[int, str]:
+        row = (
+            await self.session.execute(
+                select(EventType.id, EventType.code).where(EventType.code == code)
+            )
+        ).first()
+        if row is None:
+            raise NotFound(self.not_found_message, details={"id": code})
+        return row.id, row.code
 
     async def all_ordered(self) -> Sequence[EventType]:
         return (await self.session.scalars(select(EventType).order_by(EventType.id))).all()
@@ -40,10 +53,20 @@ class EventRepo(BaseRepository[Event]):
     model = Event
     not_found_message = "事件不存在"
 
+    @staticmethod
+    def summary_options():
+        # Runtime DTOs use only the release version, never its snapshots or release ancestry.
+        return (
+            defer(Event.payload, raiseload=True),
+            defer(Event.definition_snapshot, raiseload=True),
+            joinedload(Event.release).load_only(OntologyRelease.ver, raiseload=True).raiseload("*"),
+        )
+
     async def get_with_type_code(self, code: str) -> tuple[Event, str] | None:
         """按事件编号（EV-…）取一条事件和它的事件类型编码，含可直接查看的测试事件。"""
         stmt = (
             select(Event, EventType.code)
+            .options(*self.summary_options())
             .join(EventType, EventType.id == Event.event_type_id)
             .where(Event.code == code)
         )
@@ -82,7 +105,12 @@ class EventRepo(BaseRepository[Event]):
         limit: int,
         until: datetime | None = None,
     ) -> Sequence[Event]:
-        stmt = self._filter(type_id, since, outcome, until).offset(offset).limit(limit)
+        stmt = (
+            self._filter(type_id, since, outcome, until)
+            .options(*self.summary_options())
+            .offset(offset)
+            .limit(limit)
+        )
         return (await self.session.scalars(stmt)).all()
 
     async def outcome_counts(

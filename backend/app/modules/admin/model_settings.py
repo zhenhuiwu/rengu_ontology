@@ -36,6 +36,7 @@ class ModelValue(ApiModel):
     base_url: str = Field(min_length=1, max_length=1000)
     timeout_sec: float = Field(ge=5, le=300, allow_inf_nan=False, strict=True)
     enabled: bool = Field(strict=True)
+    auth_mode: Literal["key", "none"] = "key"
 
     @field_validator("base_url")
     @classmethod
@@ -46,18 +47,14 @@ class ModelValue(ApiModel):
             port = url.port
         except ValueError:
             raise ValueError("模型地址格式无效") from None
-        if (
-            url.scheme not in ("http", "https")
-            or not url.hostname
-            or url.username
-            or url.password
-            or url.query
-            or url.fragment
-            or any(c.isspace() or ord(c) < 32 for c in value)
-            or "\\" in value
-            or port == 0
-        ):
-            raise ValueError("模型地址须为无凭据、查询串或片段的 HTTP(S) Base URL")
+        if url.scheme not in ("http", "https") or not url.hostname or any(c.isspace() or ord(c) < 32 for c in value) or "\\" in value or port == 0:
+            raise ValueError("模型地址格式无效，请填写 HTTP(S) Base URL")
+        if "@" in url.netloc or url.username or url.password:
+            raise ValueError("模型地址不能包含凭据，请填写密钥字段")
+        if "?" in value or url.query:
+            raise ValueError("模型地址暂不支持查询参数，请移除后重试")
+        if "#" in value or url.fragment:
+            raise ValueError("地址片段不会发送给模型服务，请移除后重试")
         return value
 
 
@@ -115,10 +112,6 @@ def origin(value: str) -> str:
     return f"{url.scheme}://{host}:{url.port or (443 if url.scheme == 'https' else 80)}"
 
 
-def trusted_origins() -> set[str]:
-    # Deployments authorize model origins; editing a path/model must not send a saved key to a new host.
-    return {origin(environment_model(usage).value.base_url) for usage in LABELS}
-
 
 async def load_model_runtime(
     session: AsyncSession, usage: Usage, *, decrypt_key: bool = True
@@ -132,12 +125,10 @@ async def load_model_runtime(
     if row is None:
         return env
     value = ModelValue.model_validate(row.value)
-    if decrypt_key and origin(value.base_url) not in trusted_origins():
-        raise AppError("模型地址不在部署授权源站内", code="MODEL_ORIGIN_FORBIDDEN", status_code=503)
-    key = env.api_key.get_secret_value()
-    if row.secret_enc:
+    key = env.api_key.get_secret_value() if value.auth_mode == "key" else ""
+    if row.secret_enc and value.auth_mode == "key":
         key = decrypt_password(row.secret_enc) if decrypt_key else ""
-    if decrypt_key and row.secret_enc and key is None:
+    if decrypt_key and value.auth_mode == "key" and row.secret_enc and key is None:
         raise AppError(
             "已保存的模型密钥无法解密，请更换密钥", code="MODEL_SECRET_UNAVAILABLE", status_code=503
         )
@@ -145,7 +136,7 @@ async def load_model_runtime(
         value,
         SecretStr(key or ""),
         "database",
-        "database" if row.secret_enc else env.key_source,
+        ("database" if row.secret_enc else env.key_source) if value.auth_mode == "key" else "none",
         row.lock_version,
         TypeAdapter(DateTimeMin).dump_python(row.updated_at, mode="json"),
     )
@@ -172,7 +163,6 @@ async def model_settings(session: SessionDep, user: ViewUser) -> dict:
             for usage in LABELS
         ],
         "canManage": user.func.get("settings") == "manage",
-        "trustedOrigins": sorted(trusted_origins()),
     }
 
 
@@ -180,8 +170,6 @@ async def model_settings(session: SessionDep, user: ViewUser) -> dict:
 async def save_model_settings(
     usage: Usage, body: ModelSaveIn, session: SessionDep, user: ManageUser, request: Request
 ) -> dict:
-    if origin(body.base_url) not in trusted_origins():
-        raise AppError("模型地址须使用部署已授权的源站", code="MODEL_ORIGIN_FORBIDDEN", status_code=422)
     await get_adapter(session).xact_lock(session, f"platform:model:{usage}")
     row = await session.scalar(
         select(PlatformSetting)
@@ -192,8 +180,16 @@ async def save_model_settings(
     actual = row.lock_version if row is not None else 0
     if actual != body.lock_version:
         raise VersionConflict(details={"expected": body.lock_version, "actual": actual})
+    previous = ModelValue.model_validate(row.value) if row else environment_model(usage).value
+    if body.auth_mode == "key" and body.api_key is None and (
+        origin(body.base_url) != origin(previous.base_url) or previous.auth_mode == "none"
+    ):
+        raise AppError("更换模型源站或启用密钥认证时，请填写该服务的新密钥", code="MODEL_SECRET_REQUIRED", status_code=422)
+    if body.auth_mode == "none" and body.api_key is not None:
+        raise AppError("无鉴权模式不能同时提交密钥", code="VALIDATION_FAILED", status_code=422)
     if (
         body.enabled
+        and body.auth_mode == "key"
         and body.api_key is None
         and not (row and row.secret_enc)
         and not environment_model(usage).api_key.get_secret_value()
@@ -206,7 +202,9 @@ async def save_model_settings(
     else:
         row.value = value.model_dump()
         flag_modified(row, "value")
-    if body.api_key is not None:
+    if body.auth_mode == "none":
+        row.secret_enc = None
+    elif body.api_key is not None:
         row.secret_enc = encrypt_password(body.api_key.get_secret_value())
     await session.flush()
     await insert_audit(
@@ -215,7 +213,7 @@ async def save_model_settings(
         action="修改模型配置",
         target=(
             f"{LABELS[usage]}；模型 {value.model}；{'启用' if value.enabled else '停用'}；"
-            f"密钥{'更换' if body.api_key is not None else '保留'}"
+            f"认证{'无鉴权' if body.auth_mode == 'none' else ('密钥更换' if body.api_key is not None else '密钥保留')}"
         ),
         ip=(request.client.host if request.client else "")[:64],
         created_by=user.id,

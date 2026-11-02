@@ -37,10 +37,11 @@ async def delivery_exceptions(
     kw: Annotated[str | None, Query(max_length=128)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 10,
+    error: Annotated[str | None, Query(max_length=128, pattern=r"^[A-Z][A-Z0-9_]*$")] = None,
 ) -> dict:
     from app.modules.event.exceptions import inbox
 
-    return await inbox(session, user, type_id, state, kw, page, size)
+    return await inbox(session, user, type_id, state, kw, page, size, error)
 
 
 @router.get("/event-deliveries/{delivery_id}", summary="投递及不可变尝试、人工处置记录")

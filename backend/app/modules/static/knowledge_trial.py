@@ -86,7 +86,7 @@ def preview_rows(
             )
         else:
             term = hits[0]
-            expression = term.get("calc") or term.get("maps") or "未配置表达式"
+            expression = term.get("calc") or term.get("maps") or "按这个说法识别"
             rows.append(
                 {
                     "k": f"“{word}”",

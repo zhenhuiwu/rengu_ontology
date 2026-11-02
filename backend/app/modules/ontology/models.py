@@ -15,6 +15,7 @@ class OntologyWorkspace(IdMixin, MutableTableMixin, Base):
     domain: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    permanently_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     workers_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
 

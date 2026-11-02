@@ -851,7 +851,10 @@ async def export_page(pid: str, session: SessionDep, user: CurrentUserDep, ctx: 
     release = await execution.ReleaseRepo(session).latest()
     for card in p.cards:
         plan = await execution.validate_plan(card, release, session)
-        for table in _real_tables(assert_single_select(plan["sql"])):
+        from app.common.sql_guard import normalize_read_identifiers
+        tree = assert_single_select(plan["sql"])
+        normalize_read_identifiers(tree, governed)
+        for table in _real_tables(tree):
             binding = governed.get(table.name)
             if binding is None or not await can_export_object(session, viewer, binding.object_type):
                 raise Forbidden("没有卡片涉及对象的导出权限")

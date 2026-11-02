@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request
-from pydantic import Field
+from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
@@ -48,17 +48,21 @@ async def workspace_directory(
     page: int | None = None,
     size: int = 10,
 ) -> dict:
+    user_id = await db_user_id(session, user.id)
     query = (
         select(OntologyWorkspace, OntologyMember.role)
         .join(OntologyMember, OntologyMember.ontology_id == OntologyWorkspace.id)
-        .where(OntologyMember.user_id == await db_user_id(session, user.id), OntologyWorkspace.deleted_at.is_(None))
+        .where(OntologyMember.user_id == user_id, OntologyWorkspace.deleted_at.is_(None))
         .order_by(OntologyWorkspace.id)
     )
-    total = int(await session.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
-    params = PageParams(page=page or 1, size=size).clamp(total)
     if page is not None:
+        total = int(await session.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
+        params = PageParams(page=page, size=size).clamp(total)
         query = query.offset(params.offset).limit(params.size)
     rows = list(await session.execute(query))
+    if page is None:
+        total = len(rows)
+        params = PageParams(page=1, size=size)
     raw = request.headers.get("x-ontology-id")
     selected = (
         int(raw)
@@ -69,7 +73,7 @@ async def workspace_directory(
     )
     has_selected = await session.scalar(
         select(OntologyMember.id).join(OntologyWorkspace, OntologyWorkspace.id == OntologyMember.ontology_id).where(
-            OntologyMember.user_id == await db_user_id(session, user.id),
+            OntologyMember.user_id == user_id,
             OntologyMember.ontology_id == selected,
             OntologyWorkspace.deleted_at.is_(None),
         )
@@ -107,7 +111,7 @@ async def deleted_workspaces(session: SessionDep, user: CurrentUserDep) -> dict:
     rows = await session.execute(select(OntologyWorkspace).join(
         OntologyMember, OntologyMember.ontology_id == OntologyWorkspace.id
     ).where(OntologyMember.user_id == await db_user_id(session, user.id), OntologyMember.role == "owner",
-            OntologyWorkspace.deleted_at.is_not(None)).order_by(OntologyWorkspace.id))
+            OntologyWorkspace.deleted_at.is_not(None), OntologyWorkspace.permanently_deleted_at.is_(None)).order_by(OntologyWorkspace.id))
     return {"items": [{**workspace_item(row[0], "owner"), "deletedAt": row[0].deleted_at} for row in rows]}
 
 
@@ -175,6 +179,8 @@ async def change_workspace_deleted(session, user, ontology_id: int, request: Req
     await require_owner(session, ontology_id, user, include_deleted=True)
     if workspace.is_default or workspace.id == DEFAULT_ONTOLOGY_ID:
         raise Forbidden("默认工作空间不能删除")
+    if restore and workspace.permanently_deleted_at is not None:
+        raise Conflict("工作空间已永久删除，无法恢复", code="WORKSPACE_PERMANENTLY_DELETED")
     if restore == (workspace.deleted_at is None):
         raise Conflict("工作空间状态已变化，请刷新后重试")
     if restore:
@@ -184,7 +190,11 @@ async def change_workspace_deleted(session, user, ontology_id: int, request: Req
     await insert_audit(session, actor=f"{user.name}（{user.id}）", action="恢复工作空间" if restore else "删除工作空间",
                        target=f"{workspace.code} ({workspace.id})", ip=request.client.host if request.client else "", created_by=user.id)
     if not restore:
+        # Only workspace-owned cache and credentials are removed; source data and audit remain.
+        await session.execute(text("DELETE FROM external_mirror_row WHERE ontology_id = :id"), {"id": ontology_id})
+        await session.execute(text("UPDATE datasource SET password_enc = NULL, sync_next_run = NULL, mirror_schedule_actor = NULL WHERE ontology_id = :id"), {"id": ontology_id})
         workspace.deleted_at = clock.now()
+        workspace.permanently_deleted_at = workspace.deleted_at
         workspace.workers_paused = True
     await session.flush()
     return {"id": workspace.id, "code": workspace.code, "name": workspace.name, "deleted": not restore, "workersPaused": workspace.workers_paused}
@@ -298,6 +308,18 @@ class RoleBindingsIn(ApiModel):
     role_codes: list[str] = Field(max_length=200)
 
 
+class RoleBindingsPatchIn(ApiModel):
+    model_config = ConfigDict(extra="forbid")
+    add: list[str] = Field(default_factory=list, max_length=200)
+    remove: list[str] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="after")
+    def disjoint_roles(self):
+        if set(self.add) & set(self.remove):
+            raise ValueError("同一角色不能同时添加和移除")
+        return self
+
+
 @router.get("/workspaces/{ontology_id}/role-bindings")
 async def object_role_bindings(ontology_id: int, session: SessionDep, user: CurrentUserDep) -> dict:
     await require_owner(session, ontology_id, user)
@@ -318,6 +340,7 @@ async def bind_object_roles(
     ontology_id: int, body: RoleBindingsIn, session: SessionDep, user: CurrentUserDep
 ) -> dict:
     await require_owner(session, ontology_id, user)
+    await session.scalar(select(OntologyWorkspace.id).where(OntologyWorkspace.id == ontology_id).with_for_update())
     roles = list(await session.scalars(select(SysRole).where(SysRole.code.in_(set(body.role_codes)))))
     if len(roles) != len(set(body.role_codes)):
         raise NotFound("角色不存在")
@@ -325,3 +348,33 @@ async def bind_object_roles(
     session.add_all([OntologyRoleBinding(ontology_id=ontology_id, role_id=role.id) for role in roles])
     await session.flush()
     return {"roleCodes": sorted(role.code for role in roles)}
+
+
+@router.patch("/workspaces/{ontology_id}/role-bindings")
+async def patch_object_roles(
+    ontology_id: int, body: RoleBindingsPatchIn, session: SessionDep, user: CurrentUserDep
+) -> dict:
+    await require_owner(session, ontology_id, user)
+    # Serialize with replacement PUT; concurrent additions must not erase an unrelated binding.
+    await session.scalar(select(OntologyWorkspace.id).where(OntologyWorkspace.id == ontology_id).with_for_update())
+    requested = set(body.add) | set(body.remove)
+    roles = list(await session.scalars(select(SysRole).where(SysRole.code.in_(requested))))
+    if len(roles) != len(requested):
+        raise NotFound("角色不存在")
+    remove_ids = {role.id for role in roles if role.code in body.remove}
+    if remove_ids:
+        await session.execute(delete(OntologyRoleBinding).where(
+            OntologyRoleBinding.ontology_id == ontology_id, OntologyRoleBinding.role_id.in_(remove_ids)
+        ))
+    bound = set(await session.scalars(select(OntologyRoleBinding.role_id).where(
+        OntologyRoleBinding.ontology_id == ontology_id
+    )))
+    session.add_all([
+        OntologyRoleBinding(ontology_id=ontology_id, role_id=role.id)
+        for role in roles if role.code in body.add and role.id not in bound
+    ])
+    await session.flush()
+    codes = await session.scalars(select(SysRole.code).join(
+        OntologyRoleBinding, OntologyRoleBinding.role_id == SysRole.id
+    ).where(OntologyRoleBinding.ontology_id == ontology_id).order_by(SysRole.code))
+    return {"roleCodes": list(codes)}

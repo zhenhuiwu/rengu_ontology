@@ -155,7 +155,9 @@ def _type_allowed(dt: exp.DataType) -> bool:
 
 
 def _check_schema(table: exp.Table) -> None:
-    if table.catalog or table.db.lower() not in ALLOWED_SCHEMAS:
+    schema = table.args.get("db")
+    name = table.db if isinstance(schema, exp.Identifier) and schema.args.get("quoted") else table.db.lower()
+    if table.catalog or name not in ALLOWED_SCHEMAS:
         raise SqlRejected(f"只允许查询 public schema：{table.sql(dialect=DIALECT)}")
 
 
@@ -231,11 +233,75 @@ def _pin_public(table: exp.Table) -> None:
     table.set("db", exp.to_identifier("public"))
 
 
+def _sql_name(name: str):
+    """大小写混合的对象名必须加引号，否则子查询别名和列引用对不上。"""
+    return exp.to_identifier(name, quoted=name != name.lower())
+
+
+def normalize_read_identifiers(tree: exp.Expression, bound: dict) -> None:
+    """Resolve unquoted names only against unique, already-governed tables and columns."""
+    try:
+        scopes = traverse_scope(tree)
+    except Exception as e:
+        raise SqlRejected("无法分析查询的作用域") from e
+    for scope in scopes:
+        try:
+            sources = scope.selected_sources
+        except Exception as e:
+            raise SqlRejected("无法确定查询中的表引用") from e
+        aliases = {}
+        for alias, (_, source) in sources.items():
+            if not isinstance(source, exp.Table):
+                continue  # CTE and subquery names are not physical tables.
+            identifier = source.this
+            if not isinstance(identifier, exp.Identifier):
+                continue
+            name = identifier.name
+            quoted = identifier.args.get("quoted")
+            candidates = [key for key, gov in bound.items() if any(
+                candidate == name if quoted else candidate.casefold() == name.casefold()
+                for candidate in (key, *gov.aliases)
+            )]
+            if len(candidates) > 1:
+                raise SqlRejected("表名存在歧义，请使用明确的受控表名")
+            canonical = candidates[0] if candidates else None
+            if canonical is None:
+                continue
+            original_alias = source.args.get("alias")
+            if original_alias is None and (canonical != name or (not quoted and name != name.lower())):
+                source.set("alias", exp.TableAlias(this=identifier.copy() if quoted else exp.to_identifier(name.lower())))
+            elif original_alias is not None and isinstance(original_alias.this, exp.Identifier) and not original_alias.this.args.get("quoted"):
+                original_alias.this.set("this", original_alias.this.name.lower())
+            source.set("this", _sql_name(canonical))
+            aliases.setdefault(alias.casefold(), []).append(bound[canonical])
+        for col in scope.columns:
+            ident = col.this
+            if not isinstance(ident, exp.Identifier) or ident.args.get("quoted"):
+                continue
+            qualifier = col.table
+            qualifier_id = col.args.get("table")
+            if isinstance(qualifier_id, exp.Identifier) and not qualifier_id.args.get("quoted"):
+                col.set("table", exp.to_identifier(qualifier.lower()))
+            matches = aliases.get(qualifier.casefold(), []) if qualifier else (
+                next(iter(aliases.values())) if len(sources) == 1 and len(aliases) == 1 else []
+            )
+            if len(matches) != 1:
+                continue
+            g = matches[0]
+            allowed = g.projection if g.projection is not None else frozenset(g.table.c.keys())
+            candidates = [name for name in allowed if name.casefold() == ident.name.casefold()]
+            if len(candidates) > 1:
+                raise SqlRejected("字段名存在大小写歧义，请使用带引号的准确字段名")
+            if candidates:
+                col.set("this", _sql_name(candidates[0]))
+
+
 def inject_row_filters(
     sql: str,
     filters: dict[str, Predicate | None],
     allowed: frozenset[str] = frozenset(),
     projections: dict[str, frozenset[str]] | None = None,
+    relations: dict[str, str] | None = None,
 ) -> tuple[str, list[Any]]:
     """filters：受控表名 → 谓词 (sql, params)（None 不限制，DENY 拒绝全部）；allowed：不需要行级的表。
 
@@ -253,10 +319,25 @@ def inject_row_filters(
             node = _parse_predicate(pred)
             _renumber(node, len(params), len(pred[1]))
             params.extend(pred[1])
-            alias = table.alias_or_name
+            alias_def = table.args.get("alias")
+            alias = alias_def.this.copy() if alias_def is not None else table.this.copy()
+            if isinstance(alias, exp.Identifier) and not alias.args.get("quoted"):
+                alias.set("this", alias.name.lower())
             cols = (projections or {}).get(name)
-            sub = exp.select(*(exp.column(col) for col in sorted(cols)) if cols is not None else ["*"]).from_(exp.to_table(f"public.{name}")).where(node)
-            table.replace(exp.Subquery(this=sub, alias=exp.TableAlias(this=exp.to_identifier(alias))))
+            relation = (relations or {}).get(name)
+            if relation:
+                for mentioned in node.find_all(exp.Table):
+                    if mentioned.name == name:
+                        mentioned.set("db", None)
+                source = exp.Subquery(
+                    this=sqlglot.parse_one(relation, read=DIALECT),
+                    alias=exp.TableAlias(this=_sql_name(name)),
+                )
+            else:
+                source = exp.to_table(f"public.{name}")
+            selected = [exp.column(col, quoted=col != col.lower()) for col in sorted(cols)] if cols is not None else ["*"]
+            sub = exp.select(*selected).from_(source).where(node)
+            table.replace(exp.Subquery(this=sub, alias=exp.TableAlias(this=alias)))
         elif name in allowed:
             _pin_public(table)
         else:
@@ -296,6 +377,11 @@ class GovernedTable:
     value_alias: dict[str, Mapping[str, str]] = field(default_factory=dict)
     write_columns: frozenset[str] | None = None
     projection: frozenset[str] | None = None
+    source_sql: str | None = None  # 外部镜像：用这段已限定的 SELECT 代替 public.<表>
+    aliases: tuple[str, ...] = ()  # 原对象编号，仅用于兼容已保存的查询
+    row_identity: str = "id"  # 物理行标识，与对象的业务主键分开
+    scope_column: str = "ontology_id"  # 镜像可用内部别名，避免与业务字段重名
+    source_metadata: dict[str, Any] | None = None  # 与本次受控来源SQL同时装载的数据状态
 
     @property
     def name(self) -> str:
@@ -337,6 +423,10 @@ def register_unrestricted(*names: str) -> None:
 _BOUND_SQL = text("SELECT code FROM object_type WHERE ontology_id = :ontology_id")
 _BOUND_TTL = 30.0
 _BOUND_VERSION: dict[int, int] = {}
+_BINDING_TABLES = frozenset({
+    "object_type", "property", "governed_binding", "external_read_binding",
+    "external_mirror_state", "datasource",
+})
 
 
 def _valid_ontology(ontology_id: Any) -> bool:
@@ -355,6 +445,8 @@ def _store_bound(session, ontology_id: int, codes: Any, version: int | None = No
 def _invalidate_bound(session, oid: int) -> None:
     _BOUND_VERSION[oid] = _BOUND_VERSION.get(oid, 0) + 1
     session.info["governed_dirty"] = True
+    session.info.pop("governed_loaded", None)
+    session.info.pop("governed_dynamic", None)
 
 
 def _bound_current(session, oid: int) -> bool:
@@ -397,17 +489,36 @@ async def load_governed_tables(session: Any, ontology_id: int | None = None) -> 
     oid = ontology_id if ontology_id is not None else session.info.get("ontology_id")
     if not _valid_ontology(oid) or oid != session.info.get("ontology_id"):
         return {}
+    session.info.pop("governed_loaded", None)
     version = _BOUND_VERSION.get(oid, 0)
     rows = await session.execute(_BOUND_SQL, {"ontology_id": oid})
     _store_bound(session, oid, rows.scalars(), version)
+    from app.modules.data.external_mirror import governed_mirrors
     from app.modules.data.governed_binding import load_bindings
-    session.info["governed_dynamic"], session.info["governed_dynamic_blocked"] = await load_bindings(session, oid)
+    dynamic, blocked = await load_bindings(session, oid)
+    static = _resolve(session.info["governed_binding"][1], oid)
+    mirrors, gaps = await governed_mirrors(
+        session, oid,
+        taken_names=set(static) | set(dynamic),
+        taken_objects={g.object_type for g in static.values()} | {g.object_type for g in dynamic.values()},
+    )
+    dynamic.update(mirrors)
+    session.info["governed_dynamic"], session.info["governed_dynamic_blocked"] = dynamic, blocked
+    session.info["mirror_gaps"] = gaps
+    session.info["governed_loaded"] = (oid, version)
     return governed_tables(oid, session)
 
 
 async def ensure_governed_tables(session: Any) -> None:
     oid = session.info.get("ontology_id")
-    if _valid_ontology(oid):
+    changed = (*session.new, *session.dirty, *session.deleted)
+    if any(getattr(o, "__tablename__", None) in _BINDING_TABLES for o in changed):
+        await session.flush()
+    # Each HTTP request owns a session/transaction; explicit reloads and binding writes invalidate it.
+    if _valid_ontology(oid) and (
+        not _bound_current(session, oid)
+        or session.info.get("governed_loaded") != (oid, _BOUND_VERSION.get(oid, 0))
+    ):
         await load_governed_tables(session)
 
 
@@ -426,7 +537,7 @@ def _reload_bound_on_object_type_change(session, flush_context):
     if not _valid_ontology(oid):
         return
     changed = (*session.new, *session.dirty, *session.deleted)
-    if any(getattr(o, "__tablename__", None) == "object_type" for o in changed):
+    if any(getattr(o, "__tablename__", None) in _BINDING_TABLES for o in changed):
         _invalidate_bound(session, oid)
         version = _BOUND_VERSION.get(oid, 0)
         codes = session.connection().execute(_BOUND_SQL, {"ontology_id": oid}).scalars()
@@ -440,10 +551,10 @@ def _reload_bound_on_bulk_change(state):
     statement = state.statement
     text_write = (
         isinstance(statement, TextClause)
-        and "object_type" in statement.text.lower()
+        and any(name in statement.text.lower() for name in _BINDING_TABLES)
         and not (statement.text.lstrip().upper().startswith("SELECT"))
     )
-    model_write = getattr(table, "name", None) == "object_type" and (
+    model_write = getattr(table, "name", None) in _BINDING_TABLES and (
         state.is_insert or state.is_update or state.is_delete
     )
     if _valid_ontology(oid) and (model_write or text_write):
@@ -459,6 +570,7 @@ def _reload_bound_on_bulk_change(state):
 def _clear_bound_on_end(session, transaction):
     if transaction.parent is None:
         session.info.pop("governed_binding", None)
+        session.info.pop("governed_loaded", None)
         session.info.pop("governed_dynamic", None)
         session.info.pop("governed_dynamic_blocked", None)
         session.info.pop("governed_connection", None)
@@ -482,6 +594,8 @@ def _invalidate_bound_on_commit(session):
 def _reload_bound_on_rollback(session, transaction):
     oid = session.info.get("ontology_id")
     if transaction.parent is not None and session.is_active and _valid_ontology(oid):
+        session.info.pop("governed_loaded", None)
+        session.info.pop("governed_dynamic", None)
         if session.info.get("governed_dirty"):
             _invalidate_bound(session, oid)
         connection = session.info.get("governed_connection")
@@ -559,17 +673,21 @@ def scope_expr(g: GovernedTable, scopes: Sequence[dict[str, Any]]) -> dict | Non
     return combine_or(parts)
 
 
-def scope_expr_for_object(object_type: str, scopes: Sequence[dict[str, Any]]) -> dict | None:
+def scope_expr_for_object(object_type: str, scopes: Sequence[dict[str, Any]], *, governed=None) -> dict | None:
     """按对象类型找受控表再 scope_expr。
 
     对象类型没有登记受控表（一期的会员、库存快照）且配了范围 → DENY_ALL。
     """
     from app.common.row_filter import DENY_ALL
 
-    g = next((t for t in _GOVERNED.values() if t.object_type == object_type), None)
-    if g is None:
+    registry = _GOVERNED if governed is None else governed
+    candidates = [t for t in registry.values() if t.object_type == object_type]
+    matches = [t for t in candidates if t.inherit is None]
+    if not matches and len(candidates) == 1:
+        matches = candidates  # Existing standalone inherited tables keep their own scope contract.
+    if len(matches) != 1:
         return dict(DENY_ALL) if scopes else None
-    return scope_expr(g, scopes)
+    return scope_expr(matches[0], scopes)
 
 
 @dataclass(frozen=True)
@@ -581,7 +699,7 @@ class RoleAccess:
     scopes: tuple[dict[str, Any], ...] = ()  # 该角色在**该对象**上的 RowScope {prop, op, values}
 
 
-def effective_expr(object_type: str, roles: Sequence[RoleAccess]) -> dict | None:
+def effective_expr(object_type: str, roles: Sequence[RoleAccess], *, governed=None) -> dict | None:
     """一个用户在某对象上的有效行级表达式。
 
     照前端 effectiveAccess（roles.ts:110-117，static-api §1.5@master 443c009）：
@@ -599,7 +717,7 @@ def effective_expr(object_type: str, roles: Sequence[RoleAccess]) -> dict | None
         return dict(DENY_ALL)
     if any(not r.scopes for r in granted):
         return None
-    return scope_expr_for_object(object_type, [sc for r in granted for sc in r.scopes])
+    return scope_expr_for_object(object_type, [sc for r in granted for sc in r.scopes], governed=governed)
 
 
 _ALIAS_PREFIX = "_rf_"
@@ -617,8 +735,8 @@ def _condition(g: GovernedTable, expr: dict | None, user_attrs: dict[str, Any]) 
     key = alias.c[via.parent_key.key]
     conditions = [key == via.local, inner]
     local_table = getattr(via.local, "table", None)
-    if local_table is not None and "ontology_id" in local_table.c and "ontology_id" in alias.c:
-        conditions.append(alias.c.ontology_id == local_table.c.ontology_id)
+    if local_table is not None and g.scope_column in local_table.c and parent.scope_column in alias.c:
+        conditions.append(alias.c[parent.scope_column] == local_table.c[g.scope_column])
     return exists(select(1).select_from(alias).where(*conditions))
 
 
@@ -635,7 +753,9 @@ async def row_filters_for(user: Any, session: Any = None) -> dict[str, Predicate
     for name, g in governed.items():
         pred = compile_predicate(g, await row_filter(user, g.scope_object_type), user.attrs)
         clause, values = pred if pred is not None else ("TRUE", [])
-        out[name] = (f"({clause}) AND {name}.ontology_id = ${len(values) + 1}", [*values, ontology_id])
+        table_name = _sql_name(name).sql(dialect=DIALECT)
+        scope_name = _sql_name(g.scope_column).sql(dialect=DIALECT)
+        out[name] = (f"({clause}) AND {table_name}.{scope_name} = ${len(values) + 1}", [*values, ontology_id])
     return out
 
 
@@ -651,6 +771,7 @@ async def run_guarded(
     filters = await row_filters_for(user, session)
     bound = governed_tables(getattr(user, "ontology_id", None), session)
     tree = assert_single_select(sql)
+    normalize_read_identifiers(tree, bound)
     for scope in traverse_scope(tree):
         sources = {alias: source for alias, (_, source) in scope.selected_sources.items() if isinstance(source, exp.Table)}
         for alias, source in sources.items():
@@ -684,7 +805,7 @@ async def run_guarded(
             if not valid:
                 raise SqlRejected("补充表必须按已批准字段进行等值关联")
             for column in scope.columns:
-                if column.table == alias and column.name == "ontology_id":
+                if column.table == alias and column.name == child.scope_column:
                     raise SqlRejected("不能读取补充表系统字段")
                 if column.name == child.inherit.local.key and column.name not in visible and column.table in ("", alias):
                     if not isinstance(column.parent, exp.EQ) or id(column.parent) not in allowed_join_terms:
@@ -693,5 +814,10 @@ async def run_guarded(
                 if isinstance(star, exp.Star) or (isinstance(star, exp.Column) and isinstance(star.this, exp.Star) and star.table == alias):
                     raise SqlRejected("补充表查询必须明确投影字段")
     projections = {name: g.projection for name, g in bound.items() if g.projection is not None}
-    final, params = inject_row_filters(sql, filters, projections=projections)
+    relations = {name: g.source_sql for name, g in bound.items() if g.source_sql}
+    final, params = inject_row_filters(tree.sql(dialect=DIALECT), filters, projections=projections, relations=relations)
+    if session is not None:
+        sources = {t.name for t in _real_tables(tree)}
+        session.info['last_guarded_sources'] = [dict(bound[name].source_metadata) for name in sorted(sources)
+                                                if name in bound and bound[name].source_metadata]
     return await conn.exec_driver_sql(final, tuple(params))

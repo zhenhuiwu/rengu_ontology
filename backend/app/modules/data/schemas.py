@@ -5,7 +5,7 @@
 
 from typing import Annotated
 
-from pydantic import Field, StringConstraints, field_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from app.core.schema import ApiModel, CodeId, DateTimeMin, DisplayDate
 from app.modules.data.models import DsRunResult, DsStatus, DsSyncMode, DsType
@@ -40,6 +40,7 @@ class DsSync(ApiModel):
     window: str
     cursor_field: str
     next_run: DateTimeMin | None = None
+    mirror_schedule_enabled: bool = False
 
 
 class DsRun(ApiModel):
@@ -48,6 +49,7 @@ class DsRun(ApiModel):
     rows: int
     secs: int
     msg: str
+    origin: str = "unverified"
 
 
 class DsRefOnly(ApiModel):
@@ -115,6 +117,14 @@ class _DsWriteBase(ApiModel):
     mode: DsSyncMode = DsSyncMode.incremental
     cron: Str = "0 * * * *"
 
+    @model_validator(mode="after")
+    def require_database_for_other_types(self):
+        if self.type == DsType.dm8 and "ssl" not in self.model_fields_set:
+            self.ssl = False
+        if self.type != DsType.dm8 and not getattr(self, "database", ""):
+            raise ValueError("该数据源类型需要填写数据库")
+        return self
+
     @field_validator("compat_mode")
     @classmethod
     def validate_compat_mode(cls, value: str | None) -> str | None:
@@ -124,7 +134,7 @@ class _DsWriteBase(ApiModel):
 class DatasourceCreate(_DsWriteBase):
     name: Required
     host: Required
-    database: Required
+    database: Str = ""
     user: Required
     password: Annotated[str, StringConstraints(min_length=1)]
 
@@ -134,7 +144,7 @@ class DatasourceUpdate(_DsWriteBase):
 
     name: Required
     host: Required
-    database: Required
+    database: Str = ""
     user: Required
     password: str | None = None
 
@@ -154,6 +164,12 @@ class DsTestIn(ApiModel):
     app_id: Str | None = None
     ssl: bool = True
     mock_fail: bool = Field(False, description="兼容旧调用保留；真实测试忽略，不影响连接结果")
+
+    @model_validator(mode="after")
+    def dm_tls_default(self):
+        if self.type == DsType.dm8 and "ssl" not in self.model_fields_set:
+            self.ssl = False
+        return self
 
     @field_validator("compat_mode")
     @classmethod

@@ -17,6 +17,7 @@ from app.modules.dynamic.rule_runtime import Expression, parse_expression, unava
 from app.modules.dynamic.rules_models import HitResult, Rule, RuleHit, RuleOutput, RuleStatus
 from app.modules.event.ingress import validate_fields
 from app.modules.event.models import Event, EventOutcome
+from app.modules.event.payload_schema import field_paths, payload_value
 from app.modules.event.schemas import FieldOut
 from app.modules.event.simulation import filter_matches
 from app.modules.versioning.repo import ReleaseRepo
@@ -56,7 +57,9 @@ class EventExpression(Expression):
 
     def __init__(self, tree, fields, snapshot, event_definition, obj=None, gov=None, functions=None, relations=None):
         self.snapshot, self.event_definition, self.transitions = snapshot, event_definition, {}
-        super().__init__(tree, obj, gov, fields, functions, relations)
+        if isinstance(event_definition.get("payload"), list):
+            fields = field_paths(event_definition["payload"])
+        super().__init__(tree, obj, gov, fields, functions, relations, event_definition.get("payload"))
 
     def visit_Attribute(self, node):
         if isinstance(node.value, ast.Name) and node.value.id not in ("event", "事件") and self.obj:
@@ -136,10 +139,13 @@ def dedupe_spec(rule, event, fields):
         elif token == (event.definition_snapshot or {}).get("object"):
             value = event.object_id
         else:
-            matches = [f.api for f in fields if token in (f.name, f.api)]
-            if len(matches) != 1 or matches[0] not in event.payload:
+            matches = [path for path, label in field_paths(fields).items() if token in (path, label)]
+            if len(matches) != 1:
                 raise unavailable("规则去重键尚未唯一映射真实事件身份字段")
-            value = event.payload[matches[0]]
+            try:
+                value = payload_value(event.payload, matches[0], fields)
+            except KeyError:
+                raise unavailable("规则去重字段缺少真实标量值") from None
         if value is None or isinstance(value, (list, dict)) or value == "":
             raise unavailable("规则去重字段缺少真实标量值")
         values.append([token, value])
@@ -162,7 +168,7 @@ def dedupe_spec(rule, event, fields):
     return "rule-" + hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest(), window
 
 
-async def stage_action(session, user, rule, event, fields, alert, values):
+async def stage_action(session, user, rule, event, fields, alert, values, *, origin):
     from app.modules.action.models import ActionParam, ActionType
     from app.modules.dynamic.catalog import get_catalog
     from app.modules.dynamic.ports import Ports, get_checker, get_emitter, get_scheduler, get_submitter
@@ -178,13 +184,16 @@ async def stage_action(session, user, rule, event, fields, alert, values):
     by_name = {p.name: p for p in params}
     values_by_source = {"告警.对象": event.object_id, "命中.对象": event.object_id,
                         "告警.ID": alert.code, "规则.命中说明": values}
-    for field in fields:
-        if field.api in event.payload:
-            values_by_source[f"事件.{field.api}"] = event.payload[field.api]
-            name_key = f"事件.{field.name}"
-            if name_key in values_by_source and name_key != f"事件.{field.api}":
-                raise unavailable("事件字段名称不唯一，无法解析动作映射")
-            values_by_source[name_key] = event.payload[field.api]
+    for path, label in field_paths(fields).items():
+        try:
+            value = payload_value(event.payload, path, fields)
+        except KeyError:
+            continue
+        values_by_source[f"事件.{path}"] = value
+        name_key = f"事件.{label}"
+        if name_key in values_by_source and name_key != f"事件.{path}":
+            raise unavailable("事件字段名称不唯一，无法解析动作映射")
+        values_by_source[name_key] = value
     mapped = {}
     for item in config.get("mapping", []):
         param, source = item.get("param"), item.get("from")
@@ -209,6 +218,9 @@ async def stage_action(session, user, rule, event, fields, alert, values):
         source=SourceIn(type="规则", rule_id=rule.code, rule_version=str(rule.version),
                         alert_id=alert.code, confirmer=config.get("confirmer")),
     ))
+    if created:
+        from app.modules.dynamic.rule_dispatch_guard import freeze_origin
+        run.review_snapshot = {**(run.review_snapshot or {}), "origin": freeze_origin(run, rule, alert, origin)}
     if created and config.get("executionMode", "confirm") == "auto":
         run = await actions.apply_policy(run)
     result = {"actionStatus": run.status.value, "actionId": run.code}
@@ -349,6 +361,7 @@ async def dispatch(session, user, *, rule_code, event_id):
     at = now()
     recent = select(RuleHit).where(
         RuleHit.rule_id == rule.id,
+        RuleHit.rule_version == rule.version,
         RuleHit.dedupe_key == key,
         RuleHit.result == HitResult.alert,
         RuleHit.is_seed.is_(False),
@@ -413,7 +426,7 @@ async def dispatch(session, user, *, rule_code, event_id):
     session.add(hit)
     await session.flush()
     if not duplicate and (bound.get("autoStage") or {}).get("enabled"):
-        action = await stage_action(session, user, rule, event, fields, alert, values)
+        action = await stage_action(session, user, rule, event, fields, alert, values, origin={"kind": "event", "eventCode": event.code})
     return {
         **result,
         **action,

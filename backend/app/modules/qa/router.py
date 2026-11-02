@@ -38,7 +38,7 @@ from app.db.session import SessionDep
 from app.db.session import get_session as db_session
 from app.modules.dynamic.catalog import DatabaseRefCatalog, get_catalog
 from app.modules.dynamic.ports import PortsDep
-from app.modules.dynamic.service import ActionService
+from app.modules.dynamic.service import ActionService, AlertService
 from app.modules.qa import catalog, chain, stream
 from app.modules.qa.schemas import TurnRuleRunIn
 from app.modules.qa import repo as r
@@ -529,6 +529,25 @@ def _action_svc(
     return ActionService(session, user, catalog, ports)
 
 
+async def _stage_alert(actions: ActionService, code: str):
+    """复用暂存记录也必须重新核验当前告警的操作权限与状态。"""
+    from app.common.auth import check_func
+    from app.modules.dynamic.errors import NotAssignee
+    from app.modules.dynamic.models import AlertStatus
+
+    check_func(actions.user, "alerts", "manage")
+    if actions.user.ontology_role not in ("owner", "editor"):
+        raise AppError("没有告警操作权限", code="FORBIDDEN", status_code=403)
+    alerts = AlertService(actions.session, actions.user, actions.catalog, actions.ports)
+    # 此处只校验/读旧run，不先持告警锁，避免反转confirm的run→告警锁序。
+    alert = await alerts.get(code)
+    if alert.status != AlertStatus.processing:
+        raise AppError("只有处理中的告警可以发起动作", code="STATE_INVALID", status_code=409)
+    if not alerts._mine(alert):
+        raise NotAssignee()
+    return alert
+
+
 @router.post(
     "/turns/{tid}/action:stage",
     dependencies=[*_WB, Depends(require_func("action-center", "manage"))],
@@ -549,7 +568,7 @@ async def stage_turn_action(
     - 只认服务端保存的动作卡（类型 / 默认对象 / 参数），前端只能补目标对象和参数；
     - 按动作已发布执行策略：suggest / 不允许 AI 发起 → 409 / 403（动作中心 gate 同款）；
     - **不调 apply_policy**：即使策略是 auto 也停在“待确认”，由用户 `/action-runs/{code}:confirm`；
-    - 同会话同动作同对象已有待确认记录 → 200 返回那条，不重复暂存。
+    - 同会话同动作、目标、参数和告警上下文已有待确认记录 → 200 返回那条，不重复暂存。
     """
     from app.modules.dynamic.models import ActionRun, ActionStatus
     from app.modules.dynamic.schemas import SourceIn, StageIn
@@ -564,16 +583,22 @@ async def stage_turn_action(
     card = a.get("action") if a.get("card") == "action" else None
     if t.kind != TurnKind.answer or not isinstance(card, dict) or not isinstance(card.get("stage"), dict):
         raise TurnNotApplicable(details={"id": tid, "reason": "这一轮没有建议动作"})
+    if (card.get("intentTrace") or {}).get("decisionStatus") == "clarification_required":
+        raise TurnNotApplicable(details={"id": tid, "reason": "动作目标或参数存在冲突，请澄清后重新生成建议"})
     st = card["stage"]
     policy = await act.action_policy(session, st["typeId"])
     if policy["mode"] == "suggest":
         raise ActionNotStageable(details={"id": tid, "mode": "suggest"})
     s = await session.get(QaSession, t.session_id)
+    alert_id = (card.get("decision") or {}).get("alertId")
+    alert = await _stage_alert(actions, alert_id) if alert_id else None
+    alert_pk = alert.id if alert is not None else None
     if run_id := card.get("runId"):
         prior = await session.scalar(select(ActionRun).where(
-            ActionRun.code == run_id, ActionRun.qa_session == s.code, ActionRun.action_type_code == st["typeId"]
+            ActionRun.code == run_id, ActionRun.qa_session == s.code,
+            ActionRun.action_type_code == st["typeId"], ActionRun.alert_id == alert_pk,
         ))
-        if prior is None:
+        if prior is None or (alert is not None and (prior.obj_kind != alert.obj_kind or prior.obj_id != alert.obj_id)):
             raise AppError("原动作记录不可用，请重新发起请求", code="ACTION_NOT_FOUND", status_code=409)
         response.status_code = 200
         return await actions.detail(prior)
@@ -600,12 +625,17 @@ async def stage_turn_action(
     obj_label = b.obj_label or (st.get("objLabel") if obj_id == st.get("objId") else None) or obj_id
     # 动作中心按 JSON 对象校验参数（参数摘要「k=v」不能当实际值），这里统一转成 JSON 字符串
     params = _stage_params(b.params) if b.params is not None else _stage_params(card.get("params"))
+    if alert is not None and (alert.obj_kind != st.get("objKind") or alert.obj_id != obj_id):
+        raise AppError("目标对象与告警上下文不一致", code="VALIDATION_FAILED", status_code=422)
     old = await session.scalar(
         select(ActionRun)
         .where(
             ActionRun.qa_session == s.code,
             ActionRun.action_type_code == st["typeId"],
+            ActionRun.obj_kind == st.get("objKind"),
             ActionRun.obj_id == obj_id,
+            ActionRun.params_text == params,
+            ActionRun.alert_id == alert_pk,
             ActionRun.status == ActionStatus.staged,
         )
         .order_by(ActionRun.id.desc())
@@ -615,7 +645,6 @@ async def stage_turn_action(
         response.status_code = 200
         remember(old)
         return await actions.detail(old)
-    alert_id = (card.get("decision") or {}).get("alertId")
     try:
         run, _created = await actions.stage(
             StageIn(
@@ -636,19 +665,29 @@ async def stage_turn_action(
         )
     except IdempotencyConflict as conflict:
         # 同一告警已有动作记录（如规则自动暂存的那条）：同一动作 → 返回那条让人去确认；否则说明清楚
-        existing = await session.scalar(
+        run = await session.scalar(
             select(ActionRun).where(ActionRun.code == (conflict.details or {}).get("id"))
         )
-        if existing is not None and existing.action_type_code == st["typeId"]:
-            response.status_code = 200
-            remember(existing)
-            return await actions.detail(existing)
+        _created = False
+    # stage 也可能直接返回幂等复用记录；两条返回路径都核对卡片内容再绑定。
+    if not (
+        run is not None
+        and run.action_type_code == st["typeId"]
+        and run.obj_kind == st.get("objKind")
+        and run.obj_id == obj_id
+        and run.params_text == params
+        and run.alert_id == alert_pk
+    ):
         raise AppError(
-            f"告警 {alert_id} 已有动作记录 {existing.code if existing else ''}，请到动作中心处理",
+            f"建议动作与原记录 {run.code if run else ''} 不一致，请到动作中心处理",
             code="IDEMPOTENCY_CONFLICT",
             status_code=409,
-            details={"alertId": alert_id, "id": existing.code if existing else None},
+            details={"alertId": alert_id, "id": run.code if run else None},
         ) from None
+    if not _created:
+        response.status_code = 200
+        remember(run)
+        return await actions.detail(run)
     await audit(
         session,
         user,

@@ -21,6 +21,7 @@ from app.modules.action.models import TypeStatus
 from app.modules.event.ingress import validate_fields
 from app.modules.event.ingress_schema import valid_json
 from app.modules.event.models import Event, EventOutcome, EventType
+from app.modules.event.payload_schema import field_paths, payload_value
 from app.modules.event.schemas import FieldOut, SubscriberOut
 from app.modules.event.service import EventTypeService
 from app.modules.static.repo import definition_draft_items
@@ -62,7 +63,9 @@ def sample_value(field: FieldOut) -> Any:
 
 
 def filter_matches(text: str, fields: list[FieldOut], payload: dict) -> bool:
-    if text.strip() == "全部":
+    if not isinstance(text, str):
+        raise Unavailable("过滤条件须为字符串")
+    if text.strip() in ("", "全部"):
         return True
     if len(text) > 4096:
         raise Unavailable("过滤条件过长")
@@ -78,7 +81,13 @@ def filter_matches(text: str, fields: list[FieldOut], payload: dict) -> bool:
             if token.type == tokenize.NAME and value in names and (not i or tokens[i - 1].string != "."):
                 value = f"载荷.{names[value]}"
             rewritten.append((token.type, value))
-        return evaluate(tokenize.untokenize(rewritten), {("载荷", k): v for k, v in payload.items()})
+        references = {}
+        for path in field_paths(fields):
+            try:
+                references[("载荷", path)] = payload_value(payload, path, fields)
+            except KeyError:
+                pass  # Missing optional fields remain unavailable if a condition reads them.
+        return evaluate(tokenize.untokenize(rewritten), references)
     except (tokenize.TokenError, IndentationError):
         raise Unavailable("过滤条件不是可执行表达式") from None
 

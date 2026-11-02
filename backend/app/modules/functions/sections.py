@@ -5,7 +5,8 @@ from sqlalchemy import delete, select
 
 from app.core.errors import AppError
 from app.modules.admin.models import SysUser
-from app.modules.functions.models import FnParam, FnUse, FnVersion, Function
+from app.modules.functions.models import FnParam, FnVersion, Function
+from app.modules.functions.references import function_uses
 from app.modules.functions.runtime import json_value, signature
 from app.modules.functions.schemas import CreateIn, ParamIn
 from app.modules.functions.service import FIELDS, next_version
@@ -82,7 +83,7 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
         ctx.session.add(fn)
         await ctx.session.flush()
     else:
-        used = await ctx.session.scalar(select(FnUse.id).where(FnUse.function_id == fn.id).limit(1))
+        used = (await function_uses(ctx.session, [fn.code]))[fn.code]
         old = list(
             await ctx.session.scalars(
                 select(FnParam).where(FnParam.function_id == fn.id).order_by(FnParam.direction, FnParam.seq)

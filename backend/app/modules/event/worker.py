@@ -1,21 +1,31 @@
 """Dedicated subscriber queue: python -m app.modules.event.worker."""
 
+# ruff: noqa: E402
+# CLI environment bootstrap must precede imports that can initialize application settings.
+
 import argparse
 import asyncio
 import logging
 import sys
 from datetime import timedelta
+from pathlib import Path
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+
+    # Load before app imports/build_app, regardless of the caller's working directory.
+    load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
 import procrastinate
 from sqlalchemy import case, exists, func, or_, select
 
-from app.core import clock
 from app.core.config import get_settings
 from app.db import models as _models  # noqa: F401
 from app.db.session import dispose_engine
 from app.jobs.scope import scoped_sessions, workspace_ids
+from app.jobs.recovery import ReliableApp
 from app.modules.biz import governance as _governance  # noqa: F401
-from app.modules.event.delivery import discover, due, execute, prepare, recover
+from app.modules.event.delivery import discover, due, execute, execution_now, prepare, recover
 from app.modules.event.models import Event, EventDelivery, EventOutcome, EventType
 
 QUEUE = "event-delivery"
@@ -103,9 +113,9 @@ async def _run_selected(ontology_id: int, event_type: str, subscriber: str, afte
             due_target = target.where(
                 or_(
                     (EventDelivery.state == "pending")
-                    & or_(EventDelivery.next_at.is_(None), EventDelivery.next_at <= clock.now()),
+                    & or_(EventDelivery.next_at.is_(None), EventDelivery.next_at <= execution_now()),
                     (EventDelivery.state == "processing")
-                    & (EventDelivery.started_at < clock.now() - timedelta(minutes=5)),
+                    & (EventDelivery.started_at < execution_now() - timedelta(minutes=5)),
                 ),
             )
             codes = list(
@@ -140,7 +150,7 @@ async def _run_selected(ontology_id: int, event_type: str, subscriber: str, afte
 
 def build_app() -> procrastinate.App:
     url = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    worker = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=url))
+    worker = ReliableApp(connector=procrastinate.PsycopgConnector(conninfo=url))
     task = worker.task(name="event.deliver", queue=QUEUE, lock="event.deliver")(sweep)
     worker.periodic(cron="* * * * *", periodic_id="event.deliver")(task)
     from app.jobs import dispatch_outbox
@@ -156,19 +166,29 @@ app = build_app()
 async def main(install_schema: bool = False) -> None:
     try:
         async with app.open_async():
-            if install_schema:
-                row = await app.connector.execute_query_one_async(
-                    query="SELECT to_regclass('procrastinate_jobs') IS NOT NULL AS installed"
+            row = await app.connector.execute_query_one_async(
+                query="SELECT to_regclass('procrastinate_jobs') IS NOT NULL AS installed"
+            )
+            if not row["installed"] and not install_schema:
+                raise SystemExit(
+                    "事件队列schema尚未安装；先在backend目录执行 "
+                    "python -m app.modules.event.worker --install-schema"
+                    "（仅安装队列schema，不运行worker或业务迁移）"
                 )
+            if install_schema:
                 if not row["installed"]:
                     await app.schema_manager.apply_schema_async()
                 return
-            await app.run_worker_async(queues=[QUEUE], concurrency=1, shutdown_graceful_timeout=20)
+            # Each task keeps its own global lock: event delivery cannot occupy the inbox slot.
+            await app.run_worker_async(queues=[QUEUE], concurrency=2, shutdown_graceful_timeout=20)
     finally:
         await dispose_engine()
 
 
 if __name__ == "__main__":
+    from app.core.logging import setup_logging
+
+    setup_logging(get_settings().log_level)
     parser = argparse.ArgumentParser(description="处理明确入站事件的订阅任务；默认不启用HTTP发送")
     parser.add_argument("--install-schema", action="store_true")
     parser.add_argument("--ontology", type=int)

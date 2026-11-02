@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
+import re
 import socket
 import ssl
 import time
@@ -22,12 +23,12 @@ from typing import Any
 from sqlalchemy import URL, create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError, NoSuchModuleError
+from sqlalchemy.exc import ArgumentError, DBAPIError, NoSuchModuleError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.modules.auto_ontology.introspect import SYSTEM_TABLES, Table
+from app.modules.auto_ontology.introspect import SYSTEM_TABLES, Table, readable_table_stats
 from app.modules.auto_ontology.introspect import inspect_tables as inspect_connection_tables
 from app.modules.data.adapters import ConnectionTestResult
 
@@ -118,13 +119,20 @@ def _engine(kind: str, cfg: dict[str, Any]) -> AsyncEngine | Engine:
     host = cfg["host"]
     if not real_connect_enabled() and permitted(kind, cfg) and host == "localhost":
         host = "127.0.0.1"
+    driver = DRIVERS[kind]
+    if kind == "达梦 DM8":
+        from sqlalchemy.dialects import registry
+        registry.register("dm.rengu_readonly", "app.modules.data.dm_dialect", "SafeDMDialect")
+        driver = "dm+rengu_readonly"
     url = URL.create(
-        DRIVERS[kind],
+        driver,
         username=cfg.get("user") or None,
         password=cfg.get("password") or None,
         host=host,
         port=int(cfg["port"]),
-        database=cfg.get("database") or None,
+        # dmPython accepts host/port, not SQLAlchemy's database keyword. DM
+        # schemas are selected separately by metadata operations.
+        database=None if kind == "达梦 DM8" else cfg.get("database") or None,
     )
     if kind == "达梦 DM8":
         if cfg.get("ssl"):
@@ -141,8 +149,16 @@ def _engine(kind: str, cfg: dict[str, Any]) -> AsyncEngine | Engine:
     return create_async_engine(url, connect_args=args, poolclass=NullPool)
 
 
-async def _read(kind: str, cfg: dict[str, Any], operation):
+class SourceStageError(RuntimeError):
+    def __init__(self, stage: str):
+        self.stage = stage
+        super().__init__(f"{stage}失败")
+
+
+async def _read(kind: str, cfg: dict[str, Any], operation, *, stage: str = "读取数据"):
     """达梦官方驱动为同步 DBAPI，在线程中连接和内省；其余使用异步驱动。"""
+    if kind == "达梦 DM8" and cfg.get("ssl"):
+        raise RuntimeError("达梦 TLS 服务器身份校验尚不可用；请勿将普通连接作为 TLS 使用")
     if real_connect_enabled():
         host = _approved_ip(cfg)
         if host is None:
@@ -161,8 +177,22 @@ async def _read(kind: str, cfg: dict[str, Any], operation):
     def sync_read():
         eng = _engine(kind, cfg)
         try:
-            with eng.connect() as conn:
-                return operation(conn)
+            try:
+                conn = eng.connect()
+            except (NoSuchModuleError, ModuleNotFoundError, ImportError):
+                raise
+            except Exception as error:
+                raise SourceStageError("建立连接") from error
+            with conn:
+                if kind == "达梦 DM8":
+                    try:
+                        conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+                    except Exception as error:
+                        raise SourceStageError("启用只读事务") from error
+                try:
+                    return operation(conn)
+                except Exception as error:
+                    raise SourceStageError(stage) from error
         finally:
             eng.dispose()
 
@@ -186,6 +216,28 @@ async def _read(kind: str, cfg: dict[str, Any], operation):
 
 def err_text(e: BaseException, password: str | None) -> str:
     """异常第一行，截 200 字；万一带了密码原文就打码。"""
+    # Driver exceptions can contain credentials, SQL and business values. Return
+    # only a bounded DM error number, never the driver's message or statement.
+    candidates = []
+    current = e
+    seen = set()
+    while current is not None and id(current) not in seen and len(seen) < 8:
+        seen.add(id(current))
+        candidates.append(current)
+        original = getattr(current, "orig", None)
+        current = original if isinstance(original, BaseException) else current.__cause__ or current.__context__
+    phase = next((x.stage for x in candidates if isinstance(x, SourceStageError)), None)
+    dm_error = next((x for x in candidates if type(x).__module__.lower().startswith("dmpython")), None)
+    if dm_error is not None:
+        code = next((str(arg) for arg in dm_error.args if type(arg) is int and -999999 <= arg <= -1), None)
+        if code is None:
+            match = re.search(r"(?<!\d)-\d{3,6}(?!\d)", str(dm_error))
+            code = match.group() if match else None
+        return f"达梦{phase or '连接或只读操作'}失败{f'（错误代码 {code}）' if code else '，请检查连接与只读权限'}"
+    if phase:
+        return f"{phase}失败，请检查连接与只读权限"
+    if isinstance(e, DBAPIError):
+        return "数据库连接或只读操作失败，请检查连接与只读权限"
     raw = str(e).strip()
     msg = raw.splitlines()[0] if raw else type(e).__name__
     if password:
@@ -205,6 +257,7 @@ async def test_real(kind: str, cfg: dict[str, Any]) -> ConnectionTestResult:
                 lambda conn: conn.execute(
                     text("select 1 from dual" if kind == "达梦 DM8" else "select 1")
                 ).scalar(),
+                stage="连接探测",
             )
         return ConnectionTestResult(True, int((time.perf_counter() - t0) * 1000), "连接成功")
     except TimeoutError:
@@ -215,54 +268,72 @@ async def test_real(kind: str, cfg: dict[str, Any]) -> ConnectionTestResult:
         )
 
 
-def _list(conn: Connection) -> list[TableInfo]:
+def _list(conn: Connection, schemas: list[str] | None = None, *, names_only: bool = False) -> list[TableInfo]:
     insp = inspect(conn)
     out: list[TableInfo] = []
-    for schema in insp.get_schema_names():
-        if schema in SYSTEM_SCHEMAS or schema.startswith("pg_"):
+    available = insp.get_schema_names()
+    if schemas is not None and not set(schemas) <= set(available):
+        raise ValueError("所选 schema 不存在或当前账号无权查看")
+    for schema in schemas if schemas is not None else available:
+        if schema.lower() in SYSTEM_SCHEMAS or schema.lower().startswith("pg_"):
             continue
         names = [n for n in insp.get_table_names(schema=schema) if n not in SYSTEM_TABLES]
+        readable = readable_table_stats(conn, schema)
+        if readable is not None:
+            names = [n for n in names if n in readable]
         if not names:
             continue
-        cols = insp.get_multi_columns(schema=schema, filter_names=names)
-        comments = insp.get_multi_table_comment(schema=schema, filter_names=names)
-        rows = (
-            {
-                r[0]: int(r[1]) if r[1] is not None and r[1] >= 0 else -1
-                for r in conn.execute(
-                    text(
-                        "select c.relname, c.reltuples from pg_class c"
-                        " join pg_namespace n on n.oid = c.relnamespace"
-                        " where n.nspname = :s and c.relkind in ('r','p')"
-                    ),
-                    {"s": schema},
-                )
-            }
-            if conn.dialect.name == "postgresql"
-            else {}
-        )
+        cols = {} if names_only else insp.get_multi_columns(schema=schema, filter_names=names)
+        comments = {} if names_only else insp.get_multi_table_comment(schema=schema, filter_names=names)
+        rows = readable or {}
         for n in sorted(names):
             out.append(
                 TableInfo(
                     schema=schema,
                     name=n,
                     comment=((comments.get((schema, n)) or {}).get("text") or "")[:255],
-                    cols=len(cols.get((schema, n), [])),
+                    cols=-1 if names_only else len(cols.get((schema, n), [])),
                     rows=rows.get(n, -1),
                 )
             )
-            if len(out) >= MAX_TABLES:
+            if names_only and len(out) > MAX_TABLES:
+                raise ValueError("所选 schema 表数量超过上限，请缩小选择范围")
+            if not names_only and len(out) >= MAX_TABLES:
                 return out
     return out
 
 
-async def list_tables(kind: str, cfg: dict[str, Any]) -> list[TableInfo]:
+async def list_tables(kind: str, cfg: dict[str, Any], schemas: list[str] | None = None) -> list[TableInfo]:
     """连上源库列出全部用户表。连不上抛原异常（调用方转成页面提示）。"""
+    if kind == "达梦 DM8" and not schemas:
+        raise ValueError("请先选择需要刷新的 schema")
+    require_configured_schema(kind, cfg, schemas or [])
     async with asyncio.timeout(CONNECT_TIMEOUT_S * 3):
-        return await _read(kind, cfg, _list)
+        return await _read(kind, cfg, lambda conn: _list(conn, schemas, names_only=kind == "达梦 DM8"), stage="读取元数据")
+
+
+async def list_schemas(kind: str, cfg: dict[str, Any]) -> list[str]:
+    async with asyncio.timeout(CONNECT_TIMEOUT_S * 3):
+        names = await _read(kind, cfg, lambda conn: inspect(conn).get_schema_names(), stage="读取元数据")
+    if len(names) > MAX_TABLES:
+        raise ValueError("可见 schema 数量超过上限")
+    names = sorted(name for name in names if name.lower() not in SYSTEM_SCHEMAS and not name.lower().startswith("pg_"))
+    expected = str(cfg.get("database") or "").strip() if kind == "达梦 DM8" else ""
+    if expected:
+        if expected not in names:
+            raise ValueError("配置的 schema 不存在或当前账号无权查看；名称区分大小写")
+        return [expected]
+    return names
+
+
+def require_configured_schema(kind: str, cfg: dict[str, Any], schemas: list[str]) -> None:
+    expected = str(cfg.get("database") or "").strip() if kind == "达梦 DM8" else ""
+    if expected and any(schema != expected for schema in schemas):
+        raise ValueError("所选 schema 与数据源限定范围不一致；名称区分大小写")
 
 
 async def inspect_tables(kind: str, cfg: dict[str, Any], schema: str, tables: list[str]) -> list[Table]:
     """连接已保存数据源，读取选中表的列/主外键；不执行数据查询或写入。"""
+    require_configured_schema(kind, cfg, [schema])
     async with asyncio.timeout(CONNECT_TIMEOUT_S * 3):
-        return await _read(kind, cfg, lambda conn: inspect_connection_tables(conn, schema, tables))
+        return await _read(kind, cfg, lambda conn: inspect_connection_tables(conn, schema, tables), stage="读取元数据")

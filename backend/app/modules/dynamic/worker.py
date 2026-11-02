@@ -9,6 +9,7 @@ import procrastinate
 from app.core.config import get_settings
 from app.db import models as _models  # noqa: F401
 from app.db.session import dispose_engine
+from app.jobs.recovery import ReliableApp
 from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.dynamic.scheduler import sweep
 
@@ -28,7 +29,7 @@ def _mount_qa(app) -> None:
 
 def build_app():
     url = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=url))
+    app = ReliableApp(connector=procrastinate.PsycopgConnector(conninfo=url))
     task = app.task(name="rule.sweep", queue=QUEUE, lock="rule.sweep")(sweep)
     app.periodic(cron="* * * * *", periodic_id="rule.sweep")(task)
     _mount_qa(app)

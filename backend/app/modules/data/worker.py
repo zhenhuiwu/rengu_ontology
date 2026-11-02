@@ -8,6 +8,7 @@ import procrastinate
 from app.core.config import get_settings
 from app.db import models as _models  # noqa: F401
 from app.db.session import dispose_engine
+from app.jobs.recovery import ReliableApp
 from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.data.quality_scheduler import sweep
 
@@ -16,7 +17,7 @@ QUEUE = "quality"
 
 def build_app():
     url = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    worker = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=url))
+    worker = ReliableApp(connector=procrastinate.PsycopgConnector(conninfo=url))
     task = worker.task(name="quality.sweep", queue=QUEUE, lock="quality.sweep")(sweep)
     worker.periodic(cron="* * * * *", periodic_id="quality.sweep")(task)
     return worker

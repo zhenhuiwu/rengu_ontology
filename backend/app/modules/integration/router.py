@@ -29,6 +29,7 @@ from app.modules.integration.schemas import (
     LinkedActionTypeOut,
 )
 from app.modules.integration.service import ExtSystemService, WritebackCallService
+from app.modules.integration.http_endpoints import HttpEndpoint, HttpEndpointsIn
 
 router = APIRouter(tags=["integration"])  # /api/data/v1
 
@@ -52,6 +53,67 @@ class ActionAuthorizationIn(ApiModel):
 class ProbeConfigIn(ApiModel):
     version: int = Field(ge=1)
     probe_path: str | None = Field(default=None, max_length=255)
+
+
+def legacy_probe(path: str, ids: set[str]) -> dict:
+    from app.core.errors import AppError
+    from pydantic import ValidationError
+
+    name = "legacy_probe"
+    for i in range(33):
+        candidate = name if i == 0 else f"{name}_{i}"
+        if candidate not in ids:
+            break
+    try:
+        return HttpEndpoint(id=candidate, name="已有连通性探测", purpose="probe", method="GET", path=path).model_dump(by_alias=True)
+    except (ValidationError, AppError):
+        raise AppError("已有探测路径不符合接口目录规则，请先在原探测设置中调整", code="VALIDATION_FAILED", status_code=409) from None
+
+
+@router.get("/ext-systems/{sys_id}/http-endpoints")
+async def http_endpoints(sys_id: str, session: SessionDep, user: CurrentUserDep):
+    check_func(user, "external-systems", "view")
+    system = await ExtSystemService(session).repo.get_by_code_or_404(sys_id)
+    endpoints = system.http_endpoints
+    if endpoints is None:
+        endpoints = [legacy_probe(system.probe_path, set())] if system.probe_path else []
+    return {"version": system.lock_version, "endpoints": endpoints}
+
+
+@router.put("/ext-systems/{sys_id}/http-endpoints")
+async def save_http_endpoints(sys_id: str, body: HttpEndpointsIn, session: SessionDep, user: CurrentUserDep, request: Request):
+    from app.core.errors import AppError, VersionConflict
+    from app.db.dialects import get_adapter as db_adapter
+    from app.modules.admin.repo import insert_audit
+    from app.modules.integration.models import ExtSystem
+    from sqlalchemy import select
+
+    check_func(user, "external-systems", "manage")
+    await db_adapter(session).xact_lock(session, "ontology.publish")
+    system = await session.scalar(select(ExtSystem).where(ExtSystem.code == sys_id).with_for_update())
+    if system is None:
+        raise AppError("外部系统不存在", code="NOT_FOUND", status_code=404)
+    if system.lock_version != body.version:
+        raise VersionConflict()
+    endpoints = [endpoint.model_dump(by_alias=True) for endpoint in body.endpoints]
+    probe = next((endpoint for endpoint in body.endpoints if endpoint.purpose == "probe"), None)
+    if system.http_endpoints is None and system.probe_path and probe is None:
+        if len(endpoints) >= 32:
+            raise AppError("需保留已有探测接口，接口总数不能超过32", code="VALIDATION_FAILED", status_code=422)
+        endpoints.append(legacy_probe(system.probe_path, {endpoint.id for endpoint in body.endpoints}))
+    if any(len(f"{item['method']} {item['path']}") > 255 or len(f"{system.endpoint}{item['path']}") > 255 for item in endpoints):
+        raise AppError("接口方法与路径或完整地址超过255字符，请缩短路径", code="VALIDATION_FAILED", status_code=422)
+    if probe and system.local_only:
+        from app.modules.integration.adapters import local_demo_config, get_adapter
+        target = local_demo_config(system.ontology_id, system.code)
+        adapter = get_adapter(system, "submit")
+        if not target or not target.probe_path or probe.path != target.probe_path or adapter.config.probe_path != target.probe_path:
+            raise AppError("本机演示系统未配置匹配的只读探测通道", code="VALIDATION_FAILED", status_code=422)
+    system.http_endpoints = endpoints
+    system.probe_path = next((item["path"] for item in endpoints if item["purpose"] == "probe"), None)
+    await insert_audit(session, actor=f"{user.name}（{user.id}）", action="修改外部系统接口", target=f"{system.code}: {len(body.endpoints)} 个接口", ip=request.client.host if request.client else "", created_by=user.id)
+    await session.flush()
+    return {"version": system.lock_version, "endpoints": system.http_endpoints}
 
 
 @router.get("/ext-systems/{sys_id}/probe-config")
@@ -78,6 +140,8 @@ async def save_probe_config(sys_id: str, body: ProbeConfigIn, session: SessionDe
     path = body.probe_path
     if path is not None and (not re.fullmatch(r"/[A-Za-z0-9_~./-]*", path) or (path != "/" and any(part in ("", ".", "..") for part in path[1:].split("/")))):
         raise AppError("探测路径须为同源规范绝对路径", code="VALIDATION_FAILED", status_code=422)
+    if system.http_endpoints is not None:
+        raise AppError("该系统已使用接口目录，请在接口目录中调整探测路径", code="VALIDATION_FAILED", status_code=422)
     system.probe_path = path
     await insert_audit(session, actor=f"{user.name}（{user.id}）", action="修改外部系统探测路径", target=f"{system.code}: {path or '未配置'}"[:200], ip=request.client.host if request.client else "", created_by=user.id)
     await session.flush()
@@ -123,7 +187,7 @@ async def save_action_authorizations(sys_id: str, body: ActionAuthorizationIn, s
         raise VersionConflict()
     adapter = get_adapter(system, "submit")
     target = local_demo_config(system.ontology_id, system.code)
-    if system.endpoint != adapter.origin or (target.origin if target else adapter.config.origin) != adapter.origin:
+    if system.endpoint.rstrip("/") != adapter.base_url or (target.origin if target else adapter.config.origin or "").rstrip("/") != adapter.base_url:
         raise AppError("部署未授权该系统的精确地址", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
     available = {a.code: a.version for a in await session.scalars(select(ActionType).where(
         ActionType.sys_id == system.id, ActionType.status == TypeStatus.published,

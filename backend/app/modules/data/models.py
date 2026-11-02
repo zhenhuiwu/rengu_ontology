@@ -88,6 +88,7 @@ class Datasource(CodeMixin, MutableTableMixin, Base):
     sync_window: Mapped[str] = mapped_column(String(32), nullable=False, default="全天")
     sync_cursor_field: Mapped[str] = mapped_column(String(64), nullable=False, default="-")
     sync_next_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="下次运行")
+    mirror_schedule_actor: Mapped[str | None] = mapped_column(String(64), nullable=True)
     table_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="库表数")
     created_on: Mapped[date] = mapped_column(Date, nullable=False, comment="创建日期（接口 createdAt）")
     note: Mapped[str | None] = mapped_column(Text, comment="详情顶部说明")
@@ -157,3 +158,84 @@ class GovernedBinding(IdMixin, Base):
     read_columns: Mapped[list] = mapped_column(JsonType, nullable=False)
     write_columns: Mapped[list] = mapped_column(JsonType, nullable=False)
     supplementary: Mapped[dict | None] = mapped_column(JsonType, deferred=True)
+
+
+class ExternalReadBinding(IdMixin, MutableTableMixin, Base):
+    __tablename__ = "external_read_binding"
+    __table_args__ = (UniqueConstraint("object_code"),)
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    datasource_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    read_columns: Mapped[list] = mapped_column(JsonType, nullable=False)
+
+
+class ExternalMirrorState(IdMixin, MutableTableMixin, Base):
+    __tablename__ = "external_mirror_state"
+    __table_args__ = (UniqueConstraint("object_code"),)
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    binding_signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    cursor_value: Mapped[dict | None] = mapped_column(JsonType, nullable=True)
+    processed: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
+    active_run_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class ExternalMirrorRow(IdMixin, Base):
+    __tablename__ = "external_mirror_row"
+    __table_args__ = (UniqueConstraint("object_code", "source_key"),)
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    binding_signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    last_seen_scan: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
+
+
+class ExternalMirrorRun(IdMixin, Base):
+    __tablename__ = "external_mirror_run"
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    datasource_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    write_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ExternalCdcSubscription(IdMixin, Base):
+    """One explicitly installed private capture queue per workspace/object."""
+    __tablename__ = 'external_cdc_subscription'
+    __table_args__ = (UniqueConstraint('object_code'),)
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    datasource_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    binding_signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    binding_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    capture: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    installed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    phase: Mapped[str] = mapped_column(String(24), nullable=False, default='not_installed')
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    cursor_value: Mapped[dict | None] = mapped_column(JsonType)
+    pending_ack: Mapped[list] = mapped_column(JsonType, nullable=False, default=list)
+    lease_owner: Mapped[str | None] = mapped_column(String(64))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_source_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    oldest_pending_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pending_count: Mapped[int | None] = mapped_column(BigInteger)
+    applied_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    restart_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

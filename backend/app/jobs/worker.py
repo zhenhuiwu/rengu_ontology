@@ -14,6 +14,7 @@ import procrastinate
 
 from app.core.config import get_settings
 from app.jobs import JOBS, JobSpec
+from app.jobs.recovery import ReliableApp
 
 
 def _conninfo() -> str:
@@ -42,7 +43,7 @@ def register(app: procrastinate.App, jobs: list[JobSpec] = JOBS) -> procrastinat
 
 
 def build_app() -> procrastinate.App:
-    return register(procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=_conninfo())))
+    return register(ReliableApp(connector=procrastinate.PsycopgConnector(conninfo=_conninfo())))
 
 
 app = build_app()

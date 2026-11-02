@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.common.auth import check_func, resolve_user
 from app.core.clock import now
+from app.core.errors import AppError
 from app.modules.dynamic.rule_runtime import parse_expression, threshold, unavailable
 from app.modules.event.models import EventType
 from app.modules.static.models import ObjectStatus, ObjectType
@@ -123,8 +124,12 @@ async def validate_definition(session, user, definition):
             check_func(actor, page, "manage")
         if trigger["kind"] == "事件":
             check_func(actor, "event-types", "manage")
-        if not definition.get("conds") or not definition.get("expr"):
-            raise unavailable("启用规则必须保存明确条件")
+        missing = [name for name in ("conds", "expr") if not definition.get(name)]
+        if missing:
+            raise AppError(
+                f"启用规则缺少 {', '.join(missing)}；请在规则草稿中补齐上述缺失项后重新提交",
+                code="RULE_EVALUATION_UNAVAILABLE", status_code=422, details={"paths": missing},
+            )
         if not definition.get("dedupe") or not re.fullmatch(
             r"不重复|[1-9]\d*\s*(秒|分钟|小时|天)", definition.get("cooldown", "")
         ):

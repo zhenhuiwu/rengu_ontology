@@ -217,7 +217,9 @@ class Bound:
             stmt = stmt.where(self.base.c[k] == v)
         if self.source is not None:
             # Unsupported cross-object predicates are rejected by the shared compiler.
-            return await apply_row_filter(stmt, viewer, self.code, self.cols)
+            physical = {column.name: column for column in self.cols.values()}
+            # Role scopes are compiled to approved physical names; output keys stay property APIs.
+            return await apply_row_filter(stmt, viewer, self.code, physical)
         gov = self.b.get("rowFilter")
         if gov in _GOV:
             return await apply_row_filter(stmt, viewer, gov, *_GOV[gov])
@@ -278,7 +280,7 @@ class Bound:
         return stmt
 
 
-async def _bind(session: Any, code: str, ver: str | None = None) -> tuple[ObjectType, Bound | None]:
+async def _bind(session: Any, code: str, ver: str | None = None, *, allow_dm: bool = False) -> tuple[ObjectType, Bound | None]:
     t = await object_definition(session, code, ver)
     if ver:
         raise AppError("历史版本的对象绑定尚不支持安全重放，请切换当前版本读取实例", code="HISTORICAL_BINDING_UNAVAILABLE", status_code=422)
@@ -290,21 +292,28 @@ async def _bind(session: Any, code: str, ver: str | None = None) -> tuple[Object
         await ensure_governed_tables(session)
         local = next((g for g in governed_tables(require_ontology_id(session), session).values() if g.object_type == code and g.projection is not None), None)
         if local is not None:
-            cols = {p.api_name: p.backing_column or p.source_column for p in t.properties if (p.backing_column or p.source_column) in local.projection and not p.is_sensitive and p.visibility != "hidden" and not p.transform}
-            source_table = local.table
+            from app.common.object_identity import row_source
+
+            def mapped_column(prop):
+                return prop.source_column if local.source_sql else prop.backing_column or prop.source_column
+            cols = {p.api_name: mapped_column(p) for p in t.properties if mapped_column(p) in local.projection and not p.is_sensitive and p.visibility != "hidden" and not p.transform}
+            # 外部镜像没有 public.<对象名>，行在 source_sql 指向的同步结果里。
+            main = row_source(local)
+            source_table = main
             supplementary = session.info.get("supplementary_bindings", {}).get(code)
             if supplementary:
                 from sqlalchemy import and_
                 spec, child = supplementary
+                child_from = row_source(child)
                 extra_cols = []
                 for index, (api, column) in enumerate(spec["fields"].items()):
                     label = f"__supp_{index}"
                     cols[api] = label
-                    extra_cols.append(child.table.c[column].label(label))
-                source_table = select(*local.table.c, *extra_cols).select_from(
-                    local.table.outerjoin(child.table, and_(
-                        local.table.c[spec["mainKey"]] == child.table.c[spec["joinKey"]],
-                        local.table.c.ontology_id == child.table.c.ontology_id,
+                    extra_cols.append(child_from.c[column].label(label))
+                source_table = select(*main.c, *extra_cols).select_from(
+                    main.outerjoin(child_from, and_(
+                        main.c[spec["mainKey"]] == child_from.c[spec["joinKey"]],
+                        main.c[local.scope_column] == child_from.c[child.scope_column],
                     ))
                 ).subquery()
             primary = primary_property(t)
@@ -312,10 +321,20 @@ async def _bind(session: Any, code: str, ver: str | None = None) -> tuple[Object
             if primary is None or primary.api_name not in cols or not url:
                 return t, None
             source = ObjectSource(source_table, cols, cols[primary.api_name], url, t.datasource_name or "", require_ontology_id(session))
-            return t, Bound(t, {"table": local.name, "id": source.id_column, "columns": cols, "where": {"ontology_id": require_ontology_id(session)}}, source)
+            if local.source_sql:
+                if local.source_metadata:
+                    source.mirror_metadata = dict(local.source_metadata)
+                    source.mirror_completeness = source.mirror_metadata['mirrorCompleteness']
+            return t, Bound(t, {"table": local.name, "id": source.id_column, "columns": cols, "where": {local.scope_column: require_ontology_id(session)}}, source)
         if code in session.info.get("governed_dynamic_blocked", set()):
             return t, None
-    source = await resolve_source(session, t)
+    from app.modules.data.external_mirror import mirror_source
+    if allow_dm:
+        from app.modules.qa.object_source import require_external_schema_scope
+        await require_external_schema_scope(session, t)
+    source = await mirror_source(session, t) if allow_dm else None
+    if source is None:
+        source = await resolve_source(session, t, allow_dm=allow_dm)
     if source is not None:
         return t, Bound(
             t, {"table": source.table.name, "id": source.id_column, "columns": source.columns}, source
@@ -324,7 +343,7 @@ async def _bind(session: Any, code: str, ver: str | None = None) -> tuple[Object
     # An explicitly configured but incomplete source must never silently borrow the retail binding.
     if any(
         row["ontologyId"] == require_ontology_id(session) and row["objectType"] == code
-        for row in configured_bindings()
+        for row in configured_bindings(require_ontology_id(session))
     ):
         return t, None
     return t, Bound(t, b) if b else None
@@ -427,7 +446,7 @@ async def explore_meta(code: str, session: SessionDep, user: CurrentUserDep, ctx
 async def explore_search(
     code: str, body: ExploreIn, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep
 ):
-    t, bd = await _bind(session, code, ctx.ver)
+    t, bd = await _bind(session, code, ctx.ver, allow_dm=True)
     title = next((p.api_name for p in t.properties if p.is_title), t.pk_property)
     empty = {
         "items": [],
@@ -469,6 +488,8 @@ async def explore_search(
         "bound": True,
         "boundProps": bd.out,
         "facets": facets,
+        "mirrorCompleteness": getattr(bd.source, "mirror_completeness", None),
+        "dataSource": getattr(bd.source, "mirror_metadata", None),
     }
 
 
@@ -478,7 +499,7 @@ async def explore_search(
     openapi_extra=readonly_extra("history", "preview"),
 )
 async def explore_get(code: str, id: str, session: SessionDep, user: CurrentUserDep, ctx: ViewContextDep):
-    _, bd = await _bind(session, code, ctx.ver)
+    _, bd = await _bind(session, code, ctx.ver, allow_dm=True)
     if bd is None:
         raise NotFound("该对象类型未接入数据", details={"objectType": code, "id": id})
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
@@ -494,6 +515,8 @@ async def explore_get(code: str, id: str, session: SessionDep, user: CurrentUser
         "bound": True,
         "boundProps": bd.out,
         "dataVersion": "current",
+        "mirrorCompleteness": getattr(bd.source, "mirror_completeness", None),
+        "dataSource": getattr(bd.source, "mirror_metadata", None),
     }
 
 

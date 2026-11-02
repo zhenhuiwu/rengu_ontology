@@ -28,7 +28,9 @@ async def inspect_table(session, name):
     status = (await session.execute(text("""
         SELECT c.relrowsecurity, c.relforcerowsecurity, c.relkind,
                has_table_privilege(current_user, c.oid, 'SELECT'),
-               has_table_privilege(current_user, c.oid, 'UPDATE')
+               ARRAY(SELECT a.attname FROM pg_attribute a
+                     WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+                       AND has_column_privilege(current_user,c.oid,a.attnum,'UPDATE'))
         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relname=:name
     """), {"name": name})).one_or_none()
@@ -50,7 +52,7 @@ async def inspect_table(session, name):
         raise invalid("业务表缺少内部行 id 或 ontology_id")
     if not table.c.id.primary_key or not isinstance(table.c.id.type, Integer):
         raise invalid("业务表内部行 id 必须是整数主键")
-    return table, bool(status[4])
+    return table, frozenset(status[4])
 
 
 async def validate_binding(session, obj, name, reads, writes):
@@ -74,7 +76,7 @@ async def validate_binding(session, obj, name, reads, writes):
         raise invalid("字段配置无效")
     if len(set(reads)) != len(reads) or len(set(writes)) != len(writes) or not set(writes) <= set(reads):
         raise invalid("写字段须为读取字段的子集且不能重复")
-    table, can_update = await inspect_table(session, name)
+    table, update_columns = await inspect_table(session, name)
     column = lambda p: p.backing_column or p.source_column
     from app.modules.qa.object_source import primary_property
     primary = primary_property(obj)
@@ -90,8 +92,8 @@ async def validate_binding(session, obj, name, reads, writes):
         raise invalid("字段须对应对象已发布的非敏感属性")
     if set(writes) & {'id', 'code', 'ontology_id', 'lock_version', 'updated_at', 'created_by'}:
         raise invalid("身份和系统字段不能写入")
-    if writes and (not can_update or not {'lock_version', 'updated_at'} <= set(table.c.keys())):
-        raise invalid("写入需要更新权限及 lock_version、updated_at 字段")
+    if writes and not (set(writes) | {'lock_version', 'updated_at'}) <= update_columns:
+        raise invalid("写入需要所选字段及 lock_version、updated_at 的更新权限")
     from app.db.session import get_qa_readonly_engine
     from app.modules.qa.readonly import scope_readonly_conn
     try:

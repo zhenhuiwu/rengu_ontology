@@ -20,7 +20,7 @@ from app.modules.static.schemas import ItemIn, ItemsPutIn, TargetIn
 
 Row = dict[str, Any]
 RULE_CONFIG_NEW = ("name", "desc", "owner", "core", "status", "objKind", "level", "output", "logic", "trigger", "expr", "dedupe", "cooldown")
-STAGE_FIELDS = (("enabled", "自动暂存"), ("actionTypeId", "暂存动作"), ("confirmer", "确认人"), ("executionMode", "执行方式"))
+STAGE_FIELDS = (("enabled", "自动暂存"), ("actionTypeId", "暂存动作"), ("confirmer", "确认人"), ("executionMode", "执行方式"), ("validitySeconds", "动作有效期秒"))
 
 
 async def discard_lifecycle_draft(session: AsyncSession, cr: str, object_id: str) -> None:
@@ -170,6 +170,8 @@ def rule_sections(pub: Row | None, cur: Row) -> dict[str, list[Row]]:
         a, b = st_pub.get(k), st_cur.get(k)
         if k == "executionMode" and not new:
             a, b = a or "confirm", b or "confirm"
+        if k == "validitySeconds" and not new:
+            a, b = a or 0, b or 0
         if new:
             if b not in (None, "", False):
                 config.append(_row(f"autoStage.{k}", "add", None, b, "自动暂存", label))

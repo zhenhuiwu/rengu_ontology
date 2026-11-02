@@ -8,11 +8,11 @@ from typing import Any
 
 from sqlalchemy import or_, select
 
-from app.common.auth import CurrentUser
+from app.common.auth import CurrentUser, row_filter
 from app.common.context import ViewContext
 from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all, to_sql
-from app.common.sql_guard import RoleAccess, effective_expr, governed_tables
+from app.common.sql_guard import governed_tables
 from app.contracts.rules import lifecycle_transition_pairs
 from app.core.errors import AppError, NotFound
 from app.modules.action.condition_expr import Unavailable, evaluate
@@ -308,10 +308,11 @@ class DatabaseSubmissionChecker:
         from app.common.sql_guard import ensure_governed_tables
 
         await ensure_governed_tables(self.session)
+        governed = governed_tables(require_ontology_id(self.session), self.session)
         g = next(
             (
                 g
-                for g in governed_tables(require_ontology_id(self.session), self.session).values()
+                for g in governed.values()
                 if g.object_type == kind and not g.inherit
             ),
             None,
@@ -324,43 +325,30 @@ class DatabaseSubmissionChecker:
             return refs
         if obj.status.value != "已发布":
             return refs
-        roles = []
-        for bundle in bundles:
-            permission = next((p for p in bundle.role.objs if p.get("objType") == obj.display_name), {})
-            scopes = tuple(
-                {"prop": s.prop, "op": s.op, "values": s.values}
-                for s in bundle.scopes
-                if s.obj_type == obj.display_name
-            )
-            roles.append(
-                RoleAccess(
-                    view=permission.get("view") is True, default_deny=bundle.role.default_deny, scopes=scopes
-                )
-            )
-        expr = effective_expr(kind, roles)
-        if (
-            self.user.ontology_role == "owner" and self.user.ontology_ids is None
-            and not self.user.is_service_account and obj.created_by == self.user.id and g.projection is not None
-        ):
-            from app.common.auth import row_filter
-            expr = await row_filter(self.user, kind)
+        # Use the same stable object/organization scope compiled during identity resolution.
+        expr = await row_filter(self.user, kind)
         if is_deny_all(expr):
             return refs
-        from app.common.object_identity import identity_rows, property_column
+        from app.common.object_identity import identity_rows, property_column, row_identity_column, row_source, source_columns
 
+        source = row_source(g)
         columns = {
-            p.api_name: column for p in obj.properties if (column := property_column(p, g)) is not None
+            p.api_name: source.c[column.name]
+            for p in obj.properties
+            if (column := property_column(p, g)) is not None and column.name in source.c
         }
         props = [p for p in obj.properties if p.api_name in columns]
         # Only declared, real non-sensitive bindings; no arbitrary table/field from an expression.
-        if "id" not in g.table.c or not props:
+        if not props:
             return refs
         identities = identity_rows(g).subquery()
         stmt = select(*(columns[p.api_name].label(p.api_name) for p in props)).where(
-            g.table.c.id.in_(select(identities.c.row_id).where(identities.c.identity == code))
+            row_identity_column(g, source).in_(select(identities.c.row_id).where(identities.c.identity == code))
         )
+        if g.projection is not None:
+            stmt = stmt.where(source.c[g.scope_column] == require_ontology_id(self.session))
         if expr is not None:
-            stmt = stmt.where(to_sql(expr, g.columns, self.user.attrs, g.links))
+            stmt = stmt.where(to_sql(expr, source_columns(g, source), self.user.attrs, g.links))
         rows = (await self.session.execute(stmt.limit(2))).mappings().all()
         if len(rows) != 1:
             return refs
@@ -560,6 +548,7 @@ class DatabaseSubmissionChecker:
 
             run = SimpleNamespace(
                 code=context.get("actionRunId", "DRY-RUN"),
+                ontology_id=require_ontology_id(self.session),
                 obj_kind=context.get("objKind"),
                 obj_id=context.get("objId"),
                 params=params,

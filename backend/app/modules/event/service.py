@@ -224,14 +224,14 @@ class EventRuntimeService:
         self, type_id: str, range_: str, outcome: str | None, page: PageParams
     ) -> tuple[list[dict[str, Any]], int, PageParams]:
         """按真实事件发生时间查询滚动 24 小时 / 7 天，排除未来及测试事件。"""
-        et = await self.types.get_by_code_or_404(type_id)
+        type_pk, type_code = await self.types.runtime_identity(type_id)
         until = clock.now()
         since = until - (timedelta(hours=24) if range_ == "24h" else timedelta(days=7))
         oc = EventOutcome(outcome) if outcome and outcome != ALL else None
-        total = await self.repo.count(et.id, since, oc, until)
+        total = await self.repo.count(type_pk, since, oc, until)
         p = page.clamp(total)
-        rows = await self.repo.page(et.id, since, oc, p.offset, p.size, until)
-        return [event_dict(r, et.code) for r in rows], total, p
+        rows = await self.repo.page(type_pk, since, oc, p.offset, p.size, until)
+        return [event_dict(r, type_code) for r in rows], total, p
 
     async def event(self, code: str) -> dict[str, Any]:
         """单条事件（事件抽屉，mock eventById）。字段同近期事件列表的一行；不存在 404。"""
@@ -242,12 +242,12 @@ class EventRuntimeService:
 
     async def stats(self, type_id: str) -> dict[str, Any]:
         """近 7 天真实事件健康；14 个业务日历日趋势从事件行汇总，缺日补 0。"""
-        et = await self.types.get_by_code_or_404(type_id)
+        type_pk, _ = await self.types.runtime_identity(type_id)
         until = clock.now()
         since = until - timedelta(days=7)
-        counts = await self.repo.outcome_counts(et.id, since, until)
+        counts = await self.repo.outcome_counts(type_pk, since, until)
         start, end = clock.last_days(DAILY_DAYS)
-        days = await self.repo.daily(et.id, start, end, until)
+        days = await self.repo.daily(type_pk, start, end, until)
         return {
             "weekly": sum(counts.values()),
             "total": sum(counts.values()),
@@ -255,7 +255,7 @@ class EventRuntimeService:
             "failed": counts.get(EventOutcome.failed, 0),
             "partial": counts.get(EventOutcome.partial, 0),
             "pending": counts.get(EventOutcome.pending, 0),
-            "p95": p95(await self.repo.latencies(et.id, since, until)),
+            "p95": p95(await self.repo.latencies(type_pk, since, until)),
             "as_of": clock.local_now(),
             "daily": [
                 {"date": mmdd(d), "value": days.get(d, 0)}

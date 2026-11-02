@@ -25,6 +25,7 @@ from app.modules.dynamic.object_behavior import automation_hits, behavior_stats
 from app.modules.dynamic.ports import PortsDep
 from app.modules.dynamic.rules_schemas import (
     LifecycleDraftIn,
+    PublishedRuleMetadata,
     ReplayIn,
     RuleCreateIn,
     RuleApplyIn,
@@ -165,6 +166,18 @@ async def get_rule(
 ) -> dict[str, Any]:
     """R4：已发布定义 + draft（有草稿时）；view=draft 时 editable。"""
     return await svc.detail(rule_id, view=view)
+
+
+@router.get(
+    "/rules/{rule_id}/definition",
+    dependencies=[Depends(require_api_scope("meta:read")), *RULES_VIEW],
+    response_model=PublishedRuleMetadata,
+)
+async def get_rule_definition(
+    svc: RuleSvc, rule_id: Annotated[str, Path(max_length=64, pattern=r"^[^\x00]+$")]
+) -> PublishedRuleMetadata:
+    """Current published configuration only; no drafts, hits, execution state or credentials."""
+    return await svc.published_metadata(rule_id)
 
 
 @router.post("/rules", dependencies=RULES_MANAGE, status_code=201)

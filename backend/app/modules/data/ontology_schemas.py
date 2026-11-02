@@ -82,3 +82,8 @@ class ImportToCrIn(ImportPreviewIn, DraftIn):
 
 class MappingIn(DraftIn):
     object_id: ObjectId
+
+
+class MappingApplyIn(Input):
+    object_id: ObjectId
+    lock_version: int = Field(ge=0)

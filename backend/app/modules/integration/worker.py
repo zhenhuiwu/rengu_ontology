@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.db import models as _models  # noqa: F401
 from app.db.session import dispose_engine
 from app.jobs.scope import scoped_sessions, workspace_ids
+from app.jobs.recovery import ReliableApp
 from app.modules.biz import governance as _governance  # noqa: F401
 from app.modules.dynamic.catalog import get_list_catalog
 from app.modules.dynamic.models import ActionRun, ActionStatus
@@ -72,7 +73,7 @@ async def _sweep_workspace(ontology_id: int) -> int:
 
 def build_app() -> procrastinate.App:
     url = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    worker = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=url))
+    worker = ReliableApp(connector=procrastinate.PsycopgConnector(conninfo=url))
     task = worker.task(name="action.reconcile", queue=QUEUE, lock="action.reconcile")(sweep)
     worker.periodic(cron="*/15 * * * *", periodic_id="action.reconcile")(task)
     from app.modules.integration.execution import dispatch_queued

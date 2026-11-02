@@ -58,6 +58,7 @@ def action_def(at: ActionType) -> dict[str, Any]:
         "endpoint": at.endpoint,
         "idemKey": at.biz_key_template,
         "httpMapping": at.http_mapping,
+        "httpEndpointId": at.http_endpoint_id,
         "params": [
             {
                 "name": p.name,
@@ -118,7 +119,7 @@ def action_def_from_json(t: dict[str, Any], ctx: Any) -> dict[str, Any]:
             k: t.get(k)
             for k in (
                 "id", "name", "api", "group", "status", "version", "target", "targetApi", "targetKind",
-                "owner", "desc", "runners", "approval", "sysId", "endpoint", "idemKey",
+                "owner", "desc", "runners", "approval", "sysId", "endpoint", "idemKey", "httpMapping", "httpEndpointId",
             )
         },
         "params": _derived(ctx, "derived/paramsOf.json", t["id"]) or [],
@@ -234,6 +235,7 @@ async def restore_action_types(session: AsyncSession, content: dict[str, Any], r
         at.sys_id = systems.get(d["sysId"]) if d.get("sysId") else None
         at.endpoint, at.biz_key_template = d.get("endpoint") or "—", d.get("idemKey") or ""
         at.http_mapping = d.get("httpMapping")
+        at.http_endpoint_id = d.get("httpEndpointId")
         at.retired_release_id = None
         session.add(at)
         await session.flush()

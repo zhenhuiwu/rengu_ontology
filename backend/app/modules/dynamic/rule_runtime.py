@@ -24,6 +24,7 @@ from app.core.errors import AppError
 from app.core.schema import _fmt_dt_seconds
 from app.modules.action.condition_expr import Unavailable, evaluate
 from app.modules.event.models import Event, EventType
+from app.modules.event.payload_schema import field_paths, payload_value
 from app.modules.static.models import ObjectStatus, ObjectType
 
 
@@ -93,6 +94,8 @@ def parse_expression(text):
                 value = {"AND": "and", "OR": "or", "NOT": "not", "IN": "in", "且": "and", "或": "or"}.get(
                     value, value
                 )
+                if not parts or parts[-1][1] != ".":
+                    value = {"true": "True", "false": "False"}.get(value, value)
             elif value == "=":
                 value = "=="
             parts.append((token.type, value))
@@ -151,8 +154,9 @@ def selected_expression(base, definition):
 
 
 class Expression(ast.NodeTransformer):
-    def __init__(self, tree, obj, gov, event_fields=None, functions=None, relations=None):
+    def __init__(self, tree, obj, gov, event_fields=None, functions=None, relations=None, event_payload_fields=None):
         self.obj, self.gov, self.event_fields = obj, gov, event_fields
+        self.event_payload_fields = event_payload_fields
         self.function_specs, self.function_calls = functions or {}, {}
         self.function_deadline = None
         self.relation_specs, self.relation_calls = relations or {}, {}
@@ -179,7 +183,7 @@ class Expression(ast.NodeTransformer):
         if len(props) != 1:
             raise unavailable(f"属性「{node.attr}」未唯一绑定")
         prop = props[0]
-        column = prop.backing_column or prop.source_column
+        column = prop.source_column if self.gov.source_sql else prop.backing_column or prop.source_column
         if (
             prop.is_sensitive
             or prop.visibility == "hidden"
@@ -240,15 +244,21 @@ class Expression(ast.NodeTransformer):
 
     def visit_Attribute(self, node):
         if self.event_fields is not None:
+            root, parts = node, []
+            while isinstance(root, ast.Attribute):
+                parts.insert(0, root.attr)
+                root = root.value
+            path = ".".join(parts)
             if (
-                not isinstance(node.value, ast.Name)
-                or node.value.id not in ("event", "事件")
-                or node.attr not in self.event_fields
+                not isinstance(root, ast.Name)
+                or root.id not in ("event", "事件")
+                or path not in self.event_fields
             ):
                 raise unavailable("历史回放只支持已声明的事件载荷字段；缺少历史对象/生命周期上下文")
-            key = (node.value.id, node.attr)
-            self.references[key] = node.attr
-            self.labels[key] = self.event_fields[node.attr]
+            key = (root.id, path)
+            self.references[key] = path
+            self.labels[key] = self.event_fields[path]
+            return ast.Attribute(root, path, ast.Load())
         else:
             column = self.column(node)
             key = (node.value.id, node.attr)
@@ -269,8 +279,11 @@ class Expression(ast.NodeTransformer):
                 refs[key] = (at - value).total_seconds() / seconds if value is not None else None
                 continue
             value = row.get(column)
-            if self.event_fields is not None and column not in row:
-                raise Unavailable(f"原始载荷缺少字段 {column}")
+            if self.event_fields is not None:
+                try:
+                    value = row[column] if column.startswith("__object__.") else payload_value(row, column, self.event_payload_fields)
+                except KeyError:
+                    raise Unavailable(f"原始载荷缺少字段 {column}") from None
             refs[key] = (
                 value.value
                 if isinstance(value, Enum)
@@ -310,6 +323,36 @@ class Expression(ast.NodeTransformer):
         return matched, values
 
 
+async def evaluate_target(session, user, definition, identity, *, event=None, snapshot=None, at=None):
+    """Read one authorized business identity; never create hits, alerts or actions."""
+    from app.common.sql_guard import ensure_governed_tables
+    from app.modules.integration.action_edits import existing_row
+
+    obj = await session.scalar(select(ObjectType).where(ObjectType.code == definition["objKind"], ObjectType.status == ObjectStatus.published))
+    await ensure_governed_tables(session)
+    matches = [g for g in governed_tables(require_ontology_id(session), session).values() if obj and g.object_type == obj.code and g.inherit is None]
+    if len(matches) != 1:
+        raise unavailable("规则目标没有唯一的受控对象映射")
+    gov = matches[0]
+    row = dict(await existing_row(session, user, obj, gov, identity, lock=False))
+    tree, at = parse_expression(definition.get("expr", "")), at or now()
+    if event is None:
+        from app.modules.dynamic.metric_rules import bind_metrics
+        expression = await bind_metrics(session, user, tree, obj, gov, at, (definition.get("trigger") or {}).get("timezone", get_settings().display_tz), object_identity=identity, source_row=row)
+        row["__identity"] = identity
+        return expression.run(row, at)[0]
+    from app.modules.dynamic.event_rule_runtime import EventExpression
+    from app.modules.dynamic.rule_functions import bind_rule_functions
+    from app.modules.dynamic.rule_relations import bind_rule_relations
+    from app.modules.event.schemas import FieldOut
+    fields = [FieldOut.model_validate(field) for field in event.definition_snapshot.get("payload", [])]
+    functions = await bind_rule_functions(session, user, tree)
+    relations = await bind_rule_relations(session, user, tree, obj, gov, source_row=row)
+    expression = EventExpression(tree, field_paths(fields), snapshot or {}, event.definition_snapshot, obj, gov, functions, relations)
+    inputs = {**event.payload, **{f"__object__.{column}": row[column] for column in expression.columns}}
+    return expression.run(inputs, at)[0]
+
+
 async def run_rule(session, user, base, definition, body, *, internal=False):
     obj = await session.scalar(
         select(ObjectType).where(
@@ -327,17 +370,16 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
         ),
         None,
     )
-    if obj is None or gov is None or "id" not in gov.table.c:
+    if obj is None or gov is None or gov.row_identity not in gov.table.c:
         raise unavailable("规则对象尚未唯一映射可按权限读取的受控业务表")
-    table = gov.table
     from sqlalchemy import String, cast
-    from app.common.object_identity import primary_column
-    identity = cast(primary_column(obj, gov), String)
+    from app.common.object_identity import primary_column, property_column, row_identity_column, row_source, source_columns
+    table = row_source(gov)
+    row_id = row_identity_column(gov, table)
+    identity = cast(table.c[primary_column(obj, gov).name], String)
+    scope_columns = source_columns(gov, table)
     scope = anchor_scope(user, definition, body)
     at, expected_digest = read_anchor(body.anchor, scope, now())
-    visible = await apply_row_filter(select(identity), user, obj.code, gov.columns, gov.links)
-    if gov.projection is not None:
-        visible = visible.where(table.c.ontology_id == user.ontology_id)
     trigger = definition.get("trigger") or {}
     tree = selected_expression(base, definition)
     if body.mode == "snapshot":
@@ -348,30 +390,30 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
         expression = await bind_metrics(
             session, user, tree, obj, gov, at, trigger.get("timezone", get_settings().display_tz)
         )
-        columns = {**expression.columns, "__row_id": table.c.id.label("__row_id"), "__identity": identity.label("__identity")}
+        columns = {name: table.c[column.name] for name, column in expression.columns.items()}
+        columns.update({"__row_id": row_id.label("__row_id"), "__identity": identity.label("__identity")})
         unique_codes = select(identity).group_by(identity).having(func.count() == 1)
         if gov.projection is not None:
-            unique_codes = unique_codes.where(table.c.ontology_id == user.ontology_id)
+            unique_codes = unique_codes.where(table.c[gov.scope_column] == user.ontology_id)
         columns["_identity_unique"] = identity.in_(unique_codes).label("_identity_unique")
         title = next(
             (
-                p.backing_column or p.source_column
+                column.name
                 for p in obj.properties
                 if p.is_title
                 and not p.is_sensitive
                 and p.visibility != "hidden"
-                and (p.backing_column or p.source_column) in table.c
-                and (gov.projection is None or (p.backing_column or p.source_column) in gov.projection)
+                and (column := property_column(p, gov)) is not None
             ),
             None,
         )
         if title:
             columns[title] = table.c[title]
         statement = await apply_row_filter(
-            select(*columns.values()).order_by(table.c.id), user, obj.code, gov.columns, gov.links
+            select(*columns.values()).order_by(row_id), user, obj.code, scope_columns, gov.links
         )
         if gov.projection is not None:
-            statement = statement.where(table.c.ontology_id == user.ontology_id)
+            statement = statement.where(table.c[gov.scope_column] == user.ontology_id)
         rows = (await session.execute(statement.limit(10001))).mappings().all()
         rows = [dict(row) for row in rows]
         for row in rows:
@@ -391,7 +433,7 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
         )
         if event_type is None or event_type.status.value == "草稿":
             raise unavailable("订阅事件类型不存在或尚未发布")
-        fields = {p.api: p.name for p in event_type.payload}
+        fields = field_paths(event_type.payload)
         from app.modules.dynamic.event_rule_runtime import EventExpression
         from app.modules.versioning.repo import ReleaseRepo
 
@@ -404,7 +446,7 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
             tree,
             fields,
             release.snapshot if release else {},
-            {"objKind": obj.code, "objectApi": obj.api_name}, functions=functions, relations=relations,
+            {"objKind": obj.code, "objectApi": obj.api_name, "payload": event_type.payload}, functions=functions, relations=relations,
         )
         filter_text = trigger.get("filter")
         event_filter = None
@@ -420,12 +462,15 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
                         else node
                     )
 
-            event_filter = Expression(BindFields().visit(filter_tree), obj, gov, fields)
-        from app.common.object_identity import identity_rows
+            event_filter = Expression(BindFields().visit(filter_tree), obj, gov, fields, event_payload_fields=event_type.payload)
+        from app.common.object_identity import identity_rows, row_identity_column, row_source, source_columns
+        source = row_source(gov)
         references = identity_rows(gov).subquery()
-        authorized_ids = await apply_row_filter(select(table.c.id), user, obj.code, gov.columns, gov.links)
-        if gov.projection is not None:
-            authorized_ids = authorized_ids.where(table.c.ontology_id == user.ontology_id)
+        authorized_ids = await apply_row_filter(
+            select(row_identity_column(gov, source)), user, obj.code, source_columns(gov, source), gov.links
+        )
+        if gov.projection is not None and gov.scope_column in source.c:
+            authorized_ids = authorized_ids.where(source.c[gov.scope_column] == user.ontology_id)
         visible = select(references.c.identity).where(references.c.row_id.in_(authorized_ids))
         statement = (
             select(Event)

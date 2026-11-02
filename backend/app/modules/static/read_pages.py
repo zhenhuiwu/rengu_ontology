@@ -1,7 +1,7 @@
 """静态定义页的只读SQL分页；完整编辑目录和发布写回仍走原公开接口。"""
 
 from sqlalchemy import Integer, String, case, cast, exists, false, func, literal, or_, select, true, union_all
-from sqlalchemy.orm import raiseload, selectinload
+from sqlalchemy.orm import load_only, raiseload, selectinload
 
 from app.common.auth import check_func
 from app.common.pagination import Page
@@ -128,7 +128,24 @@ async def object_list(svc, kw, p, focus=None):
                 }
             )
         return paginate(rows, p, focus)
-    stmt = select(ObjectType).options(raiseload("*")).order_by(ObjectType.seq, ObjectType.id)
+    stmt = (
+        select(ObjectType)
+        .options(
+            load_only(
+                ObjectType.id,
+                ObjectType.code,
+                ObjectType.display_name,
+                ObjectType.api_name,
+                ObjectType.obj_group,
+                ObjectType.source_table,
+                ObjectType.record_count,
+                ObjectType.status,
+                raiseload=True,
+            ),
+            raiseload("*"),
+        )
+        .order_by(ObjectType.seq, ObjectType.id)
+    )
     if kw:
         stmt = stmt.where(
             or_(

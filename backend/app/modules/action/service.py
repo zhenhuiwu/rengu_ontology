@@ -17,6 +17,7 @@ from sqlalchemy.orm import raiseload
 from app.common.context import ViewContext
 from app.common.pagination import Page, PageParams
 from app.core import clock
+from app.core.config import get_settings
 from app.core.errors import AppError, NotFound
 from app.core.schema import _fmt_dt
 from app.modules.action.models import ActionParam, ActionType, ActionTypeRule
@@ -220,7 +221,6 @@ class ActionTypeService:
                 select(ActionRun.status, func.count(), func.sum(func.coalesce(ActionRun.elapsed_ms, 0)))
                 .where(
                     ActionRun.action_type_code == type_id,
-                    ActionRun.in_center.is_(False),
                     ActionRun.submitted_at >= until - timedelta(days=days),
                     ActionRun.submitted_at <= until,
                 )
@@ -352,7 +352,7 @@ class ActionTypeService:
         a = with_system(await self.one(ctx, type_id), systems)
         wb = a.get("writeback") or {}
         return {
-            "config": {"sysId": a.get("sysId"), "endpoint": a.get("endpoint"), "idemKey": a.get("idemKey"), "httpMapping": a.get("httpMapping")},
+            "config": {"sysId": a.get("sysId"), "endpoint": a.get("endpoint"), "idemKey": a.get("idemKey"), "httpMapping": a.get("httpMapping"), "httpEndpointId": a.get("httpEndpointId")},
             "edits": wb.get("edits", []),
             "effects": wb.get("effects", []),
             "flow": flow_of(a, systems.get(a.get("sysId") or ""), await self.repo.rule_action()),
@@ -376,22 +376,27 @@ class ActionTypeService:
 
 
 async def run_daily(session: AsyncSession, type_id: str, days: int) -> list[dict[str, Any]]:
-    """近 N 天每日执行量（palantir-r2，读 action_run_daily_stat）：截至今天，缺的天补 0。
+    """近 N 天每日执行量：按真实动作记录聚合，截至今天，缺的天补 0。
     运行数据不分版本，`?ver=` 不影响，按当前 action_type 表找类型（不存在 404）[推断]。"""
     repo = ActionTypeRepo(session)
     at = await repo.get_by_code_or_404(type_id)
     start, end = clock.last_days(days)
-    rows = await repo.run_daily(at.id, start, end)
+    day = func.date(func.timezone(get_settings().display_tz, ActionRun.submitted_at))
+    rows = (await session.execute(
+        select(day, ActionRun.status, func.count())
+        .where(ActionRun.action_type_code == at.code, day >= start, day <= end, ActionRun.submitted_at <= clock.now())
+        .group_by(day, ActionRun.status)
+    )).all()
+    counts = {(d, status): count for d, status, count in rows}
     out = []
     for i in range(days):
         d = start + timedelta(days=i)
-        r = rows.get(d)
         out.append(
             {
                 "date": d.strftime("%m-%d"),
-                "ok": r.ok if r else 0,
-                "failed": r.failed if r else 0,
-                "unknown": r.unknown if r else 0,
+                "ok": counts.get((d, ActionStatus.succeeded), 0) + counts.get((d, ActionStatus.reconciled), 0),
+                "failed": counts.get((d, ActionStatus.failed), 0),
+                "unknown": counts.get((d, ActionStatus.unknown), 0),
             }
         )
     return out

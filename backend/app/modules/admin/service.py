@@ -197,7 +197,10 @@ async def department_options(session: AsyncSession) -> list[str]:
     organizations = list(await session.scalars(select(SysOrg.name).order_by(SysOrg.seq, SysOrg.id)))
     existing = list(
         await session.scalars(
-            select(SysUser.dept).where(SysUser.dept.is_not(None)).distinct().order_by(SysUser.dept)
+            select(SysUser.dept)
+            .where(SysUser.dept.is_not(None), SysUser.status == UserStatus.active)
+            .distinct()
+            .order_by(SysUser.dept)
         )
     )
     return list(dict.fromkeys(value for value in [*organizations, *existing] if value and value.strip()))

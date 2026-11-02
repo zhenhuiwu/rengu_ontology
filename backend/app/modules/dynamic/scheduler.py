@@ -170,6 +170,7 @@ async def create_alerts(session, user, rule, run, matches):
         key, window = dedupe_spec(rule, event, fields)
         recent = select(RuleHit).where(
             RuleHit.rule_id == rule.id,
+            RuleHit.rule_version == rule.version,
             RuleHit.dedupe_key == key,
             RuleHit.result == HitResult.alert,
             RuleHit.is_seed.is_(False),
@@ -238,7 +239,7 @@ async def create_alerts(session, user, rule, run, matches):
 
             context = SimpleNamespace(obj_kind=rule.obj_kind, object_id=item["objId"],
                                       obj_label=item["objLabel"], payload={})
-            await stage_action(session, user, rule, context, [], alert, item["value"])
+            await stage_action(session, user, rule, context, [], alert, item["value"], origin={"kind": "schedule", "scheduleRunId": run.id})
             counts["actions"] += 1
     return counts
 

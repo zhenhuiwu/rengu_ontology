@@ -4,6 +4,7 @@
 """
 
 import json
+from copy import deepcopy
 from collections.abc import Iterable, Sequence
 from datetime import timedelta
 from types import SimpleNamespace
@@ -70,6 +71,36 @@ from app.modules.machine.principal import SERVICE_PREFIX, actor_of
 
 SYSTEM = "系统"
 HUMAN_CHECK_TEXT = "需确认人人工核对的提交条件"
+
+
+async def bind_alert_run(session, run, alert, *, retry_of=None):
+    """Caller owns the run lock (or its new row); canonical alert links never silently change."""
+    # Non-key updates must coexist with the new run's foreign-key KEY SHARE lock.
+    alert = await session.scalar(select(Alert).where(Alert.id == alert.id).with_for_update(key_share=True).execution_options(populate_existing=True))
+    if alert is None:
+        raise NotFound("关联告警不存在")
+    if (run.ontology_id != alert.ontology_id or run.alert_id != alert.id
+        or run.obj_kind != alert.obj_kind or run.obj_id != alert.obj_id
+        or run.rule_code != alert.rule_code):
+        raise IdempotencyConflict("动作与告警上下文不一致")
+    retry = retry_of is not None and retry_of.status == ActionStatus.failed and run.retry_of_id == retry_of.id and retry_of.alert_id == alert.id and retry_of.ontology_id == alert.ontology_id
+    replacing_retry = retry and alert.action_run_id == retry_of.id
+    if alert.action_run_id not in (None, run.id) and not replacing_retry:
+        raise IdempotencyConflict("该告警已关联其他动作，不能覆盖", details={"alertId": alert.code})
+    if alert.action_run_id is None:
+        allowed = (run.id, retry_of.id) if retry else (run.id,)
+        previous = await session.scalar(select(ActionRun.id).where(ActionRun.alert_id == alert.id, ActionRun.id.not_in(allowed), ActionRun.is_seed.is_(False)).limit(1))
+        if previous is not None:
+            raise IdempotencyConflict("该告警已有其他动作记录，请核对原记录", details={"alertId": alert.code})
+    alert.action_run_id = run.id
+
+
+async def log_alert_action_result(session, run, text, *, failed=False):
+    if run.alert_id is None:
+        return
+    alert = await session.scalar(select(Alert).where(Alert.id == run.alert_id, Alert.action_run_id == run.id, Alert.ontology_id == run.ontology_id).with_for_update(key_share=True))
+    if alert is not None:
+        await AlertRepo(session).add_log(alert, at=clock.now(), actor=SYSTEM, op=AlertOp.action_result, text=text, abnormal=failed)
 
 # ---------------- 状态表 ----------------
 
@@ -584,6 +615,7 @@ class ActionService:
         if res.status == SubmitStatus.SUCCESS:
             ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.succeeded)
             r.status = ActionStatus.succeeded
+            r.unknown_reason = None
             r.ext_ref = res.receipt_id
             r.finished_at = now
             text = f"{system} 返回成功，外部单号 {r.ext_ref}" if r.sys_code and r.ext_ref else "动作执行成功"
@@ -593,11 +625,15 @@ class ActionService:
             ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.failed)
             r.status = ActionStatus.failed
             r.fail_reason = res.reason
+            r.unknown_reason = None
+            if res.receipt_id:
+                r.ext_ref = res.receipt_id
             r.finished_at = now
             tail = f"，已自动重试 {res.retries} 次仍失败" if res.retries else ""
             await self._log(
                 r, f"{system or '动作执行器'} 明确返回失败{tail}", res.reason, TimelineStatus.error
             )
+            await log_alert_action_result(self.session, r, f"关联动作 {r.code} 明确失败：{res.reason or res.code or '外部未执行'}", failed=True)
         else:
             ensure_transition(ACTION_TRANSITIONS, r.status, ActionStatus.unknown)
             r.status = ActionStatus.unknown
@@ -718,7 +754,10 @@ class ActionService:
                     "declaredEdits": await declared_writeback(self.session, definition),
                 }
         self._review_context = None
-        return await self.repo.create(run, actor=actor_of(self.user))
+        run = await self.repo.create(run, actor=actor_of(self.user))
+        if alert is not None:
+            await bind_alert_run(self.session, run, alert, retry_of=retry_of)
+        return run
 
     def _call_text(self, r: ActionRun) -> str:
         if not r.sys_code:
@@ -777,6 +816,8 @@ class ActionService:
                 raise validation_failed("idempotencyKey", "手动发起须提供请求幂等键")
         alert: Alert | None = None
         if src.alert_id:
+            from app.db.dialects import get_adapter as db_adapter
+            await db_adapter(self.session).xact_lock(self.session, f"dynamic.alert.stage.{self.user.ontology_id}.{src.alert_id}")
             alert = await self.alerts.get_by_code(src.alert_id)
             if alert is None:
                 raise validation_failed("source.alertId", f"告警不存在：{src.alert_id}")
@@ -801,6 +842,10 @@ class ActionService:
                 },
             )
             if old is not None:
+                if alert is not None:
+                    from app.modules.integration.reconcile import lock_run
+                    old = await lock_run(self.session, old.code)
+                    await bind_alert_run(self.session, old, alert)
                 return old, False
         await self._check_criteria(
             t["id"],
@@ -1025,6 +1070,8 @@ class ActionService:
         rec.type_version = a.type_version
         rec.sys_code = a.sys_code
         rec.params = a.params
+        if isinstance(a.review_snapshot, dict) and isinstance(a.review_snapshot.get("origin"), dict):
+            rec.review_snapshot = {**(rec.review_snapshot or {}), "origin": deepcopy(a.review_snapshot["origin"])}
         rec.biz_key = a.biz_key
         rec.in_center = a.in_center
         await self._check_criteria(
@@ -1052,9 +1099,6 @@ class ActionService:
         )
         a.retried_as_id = rec.id
         await self._log(a, f"已重新提交为 {rec.code}", f"{me} · 新幂等键 {new_key}")
-        # [推断] 告警的关联动作跟到新动作（在途锁、成功后自动转已解决都按新动作）
-        if alert is not None and alert.action_run_id == a.id:
-            alert.action_run_id = rec.id
         await self.session.flush()
         await self._submit(rec)
         return rec, a
@@ -1103,8 +1147,10 @@ class ActionService:
             return r
         rr = RECONCILE_LABEL[result]
         r.status = ActionStatus.reconciled
+        r.unknown_reason = None
         r.reconcile_result = rr
         r.reconcile_note = note
+        r.fail_reason = note if rr == ReconcileResult.not_executed else None
         r.reconcile_by = me
         r.finished_at = clock.now()
         text = (
@@ -1118,6 +1164,7 @@ class ActionService:
             # 只发 ActionExecuted；告警不自动转已解决（[推断 P10] 未做，照前端）
             await self._emit(r, EVENT_ACTION_EXECUTED, seq)
         await self.ports.scheduler.resolve_reconcile(r.code, ReconcileOutcome(rr.name), me)
+        await log_alert_action_result(self.session, r, f"关联动作 {r.code} 对账：{rr.value}（{note}）", failed=rr == ReconcileResult.not_executed)
         return r
 
 
@@ -1147,6 +1194,7 @@ class DynamicReconciliationListener:
             and r.reconcile_result.name == result.outcome.value
             and (not result.receipt_id or r.ext_ref == result.receipt_id)
         ):
+            r.unknown_reason = None
             return
         if r.status != ActionStatus.unknown:
             raise InvalidTransition(details={"from": r.status.value, "to": ActionStatus.reconciled.value})
@@ -1155,14 +1203,25 @@ class DynamicReconciliationListener:
         r.reconcile_result = ReconcileResult.succeeded if ok else ReconcileResult.not_executed
         r.reconcile_by = SYSTEM
         r.finished_at = clock.now()
-        if ok and result.receipt_id:
+        r.unknown_reason = None
+        detail = result.detail if isinstance(result.detail, dict) else {}
+        reason = detail.get("reason")
+        if ok:
+            r.fail_reason = None
+        else:
+            r.fail_reason = reason if isinstance(reason, str) and reason.strip() else r.fail_reason or "外部已确认未执行"
+            r.reconcile_note = r.fail_reason
+        if isinstance(detail.get("code"), str) and detail["code"]:
+            r.result_code = detail["code"]
+        if result.receipt_id:
             r.ext_ref = result.receipt_id
         system = self.catalog.system_name(r.sys_code) or r.sys_code
-        text = (
-            "对账：外部已成功（按幂等键自动查询）"
-            if ok
-            else "对账：外部未执行，动作未生效（按幂等键自动查询）"
-        )
+        source = "外部调用明确返回" if detail.get("source") == "submit" else "按幂等键自动查询"
+        text = f"对账：{'外部已成功' if ok else '外部未执行，动作未生效'}（{source}）"
+        if not ok:
+            text += f"：{r.fail_reason}"
+        if r.ext_ref:
+            text += f" · 外部回执 {r.ext_ref}"
         log = await self.repo.add_log(
             r,
             at=clock.now(),
@@ -1180,6 +1239,7 @@ class DynamicReconciliationListener:
                     "extRef": r.ext_ref,
                 },
             )
+        await log_alert_action_result(self.session, r, f"关联动作 {r.code} {text}", failed=not ok)
         await self.session.flush()
 
 
@@ -1248,6 +1308,9 @@ class AlertService:
             action_ref=run.idem_key if run else None,
             action_status=run.status.value if run else None,
             action_id=run.code if run else None,
+            action_outcome=run.reconcile_result.value if run and run.reconcile_result else None,
+            action_reason=run.fail_reason if run and self.user.func.get("action-center") in ("view", "manage") else None,
+            action_ext_ref=run.ext_ref if run and self.user.func.get("action-center") in ("view", "manage") else None,
         )
 
     async def get(self, code: str, *, lock: bool = False) -> Alert:
@@ -1728,6 +1791,16 @@ class AlertService:
 
     async def start_action(self, code: str, params: dict | None = None) -> tuple[Alert, ActionRun]:
         """告警页「发起动作」：处理人即确认人，直接审批中；幂等键 act-<告警号小写>。"""
+        from app.db.dialects import get_adapter as db_adapter
+        from app.modules.integration.reconcile import lock_run
+        await self.get(code)
+        await db_adapter(self.session).xact_lock(self.session, f"dynamic.alert.stage.{self.user.ontology_id}.{code}")
+        stage_key = f"act-{code.lower()}"
+        if self.user.ontology_id != 1:
+            stage_key = f"ont-{self.user.ontology_id}-{stage_key}"
+        for previous in await self.runs.by_idem_key(stage_key):
+            if not previous.is_seed:
+                await lock_run(self.session, previous.code)
         a = await self.get(code, lock=True)
         if a.status != AlertStatus.processing:
             raise InvalidTransition("只有处理中的告警可以发起动作", details={"from": a.status.value})
@@ -1805,7 +1878,7 @@ class AlertService:
                 await acts._log(run, "等待审批", f"审批人 {approver}", TimelineStatus.warn)
         else:
             run = old
-        a.action_run_id = run.id
+            await bind_alert_run(self.session, run, a)
         outcome = (
             f"待{acts.person_label(run.approver)}审批"
             if run.status == ActionStatus.approving

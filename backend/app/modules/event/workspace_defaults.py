@@ -32,7 +32,9 @@ STANDARD_EVENTS = (
 )
 
 
-async def initialize_workspace_events(session, ontology_id: int, creator: str) -> None:
+async def initialize_workspace_events(
+    session, ontology_id: int, creator: str, *, codes: set[str] | None = None
+) -> None:
     original = session.info.get("ontology_id")
     if type(ontology_id) is not int or ontology_id <= 0 or ontology_id == original:
         raise ValueError("Expected a newly created workspace")
@@ -40,6 +42,8 @@ async def initialize_workspace_events(session, ontology_id: int, creator: str) -
     scope = text("SELECT set_config('rengu.ontology_id', :id, true)")
     await session.execute(scope, {"id": str(ontology_id)})
     for code, name, fields in STANDARD_EVENTS:
+        if codes is not None and code not in codes:
+            continue
         event_id = await session.scalar(
             insert(EventType)
             .values(

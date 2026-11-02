@@ -123,6 +123,7 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
     RowScope 只存字符串且支持 = / ∈，所以不开放数值、时间、布尔和复合类型。
     """
     from app.common.row_filter import apply_row_filter
+    from app.common.object_identity import row_source, source_columns
     from app.common.sql_guard import governed_tables
     from app.modules.admin.org_scope import ORG_LABEL, ORG_PROP, load_org_fields
     from app.modules.static.explorer import facetable
@@ -149,6 +150,8 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
         g = tables.get(obj.code)
         if g is None:
             continue
+        base = row_source(g)
+        columns = source_columns(g, base)
         for p in obj.properties:
             if not facetable(p) or p.data_type not in {"string", "enum"}:
                 continue
@@ -157,14 +160,14 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
                 (
                     (name, field)
                     for name, field in g.field_of_prop.items()
-                    if name == p.display_name or (p.backing_column and field == p.backing_column)
+                    if name == p.display_name or field == (p.source_column if g.source_sql else p.backing_column)
                 ),
                 None,
             )
             if basis is None:
                 continue
             name, field = basis
-            source = g.table
+            source = base
             if "." in field:
                 link_id, key = field.split(".", 1)
                 link = g.links.get(link_id)
@@ -172,11 +175,11 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
                 if link is not None:
                     source = source.join(link.target, link.target_key == link.local)
             else:
-                col = g.columns.get(field)
+                col = columns.get(field)
             if col is None:
                 continue
             stmt = select(col).select_from(source).where(col.is_not(None)).distinct()
-            stmt = await apply_row_filter(stmt, user, obj.code, g.columns, g.links)
+            stmt = await apply_row_filter(stmt, user, obj.code, columns, g.links)
             vals = (await session.scalars(stmt)).all()
             values = {str(getattr(v, "value", v)) for v in vals}
             aliases = g.value_alias.get(name, {})
@@ -195,11 +198,13 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
     org_fields = await load_org_fields(session)
     for obj in objects:
         g = tables.get(obj.code)
-        col = g.columns.get(org_fields.get(obj.code, "")) if g is not None else None
+        source = row_source(g) if g is not None else None
+        columns = source_columns(g, source) if g is not None else {}
+        col = columns.get(org_fields.get(obj.code, ""))
         if col is None:
             continue
-        stmt = select(col).select_from(g.table).where(col.is_not(None)).distinct()
-        stmt = await apply_row_filter(stmt, user, obj.code, g.columns, g.links)
+        stmt = select(col).select_from(source).where(col.is_not(None)).distinct()
+        stmt = await apply_row_filter(stmt, user, obj.code, columns, g.links)
         out.append(
             {
                 "objType": obj.display_name,
@@ -1048,7 +1053,7 @@ async def tenant_options(session: AsyncSession) -> list[dict[str, Any]]:
     return [
         {
             "value": o.code,
-            "label": f"{short} / {o.name}" if short else o.name,
+            "label": f"{short} / {o.name}" if short and short != o.name else o.name,
             "tenant_id": t.code if t else "",
             "tenant_name": t.name if t else "",
             "org_name": o.name,

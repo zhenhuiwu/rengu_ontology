@@ -3,22 +3,21 @@
 import hashlib
 import json
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import exists, or_, select, tuple_
+from sqlalchemy import exists, func, or_, select, tuple_
 
 from app.common.auth import check_func, resolve_user, row_filter
 from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import governed_tables
-from app.core import clock
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.dialects import get_adapter
 from app.modules.action.condition_expr import Unavailable
-from app.modules.event.delivery_history import record, safe_result
+from app.modules.event.delivery_history import failure_code, record, safe_error_details, safe_result
 from app.modules.event.models import Event, EventDelivery, EventDeliveryRecord, EventOutcome
 from app.modules.event.schemas import FieldOut
 from app.modules.integration.adapters import forbidden_metadata_host, pin_http_target, tls_verify
@@ -35,9 +34,18 @@ from app.modules.integration.signing import (
 logger = logging.getLogger(__name__)
 
 INTERVAL = timedelta(minutes=1)
+PREFLIGHT_WAIT_LIMIT = timedelta(minutes=15)
+# Automatic waiting is only for conditions expected to resolve without changing the definition.
+PREFLIGHT_WAIT_ERRORS = frozenset({"EVENT_OBJECT_NOT_SYNCED", "ORDERING_PREDECESSOR_UNRESOLVED"})
+PERMISSION_ERRORS = frozenset({"EVENT_OBJECT_FORBIDDEN", "EVENT_OBJECT_AMBIGUOUS", "NO_PERMISSION", "UNAUTHORIZED"})
 RETRY_SCHEDULED = "HTTP_RETRY_SCHEDULED"
 DEFAULT_HTTP_RETRIES = 3
 SECRET_KEYS = ("token", "test_token", "signing_secret", "test_signing_secret")
+
+
+def execution_now() -> datetime:
+    """Operational deadlines advance even when the business/demo clock is frozen."""
+    return datetime.now(UTC)  # noqa: TID251 - delivery deadlines require the wall clock
 
 
 def signing_secret(route: dict, is_test: bool) -> bytes | None:
@@ -95,7 +103,7 @@ def http_target(route: dict, is_test: bool) -> str:
         raise Unavailable("HTTP_ROUTE_INVALID")
     if route.get("idempotent") is not True:
         raise Unavailable("HTTP_IDEMPOTENCY_NOT_CONFIRMED")
-    signing_secret(route, is_test)  # a configured but unusable secret keeps the delivery pending
+    signing_secret(route, is_test)  # A configured but unusable secret blocks the send.
     tls_verify()  # Validate the CA before an attempt is claimed.
     return endpoint
 
@@ -103,35 +111,47 @@ def http_target(route: dict, is_test: bool) -> str:
 async def authorize_object(session, user, event: Event, level: str = "manage") -> None:
     """A production payload leaves the process only for an explicitly granted real object row."""
     check_func(user, "event-types", level)
+    ontology_id = require_ontology_id(session)
+    if event.ontology_id != ontology_id or user.ontology_id != ontology_id:
+        raise AppError("订阅身份无对象行权限", code="EVENT_OBJECT_FORBIDDEN", status_code=403)
     from app.common.sql_guard import ensure_governed_tables
 
     await ensure_governed_tables(session)
     mapping = next(
         (
             g
-            for g in governed_tables(require_ontology_id(session), session).values()
+            for g in governed_tables(ontology_id, session).values()
             if g.object_type == event.obj_kind and not g.inherit
         ),
         None,
     )
     expr = await row_filter(user, event.obj_kind or "")
-    if mapping is None or "id" not in mapping.table.c or is_deny_all(expr):
+    if mapping is None or is_deny_all(expr):
         raise AppError("订阅身份无对象行权限", code="EVENT_OBJECT_FORBIDDEN", status_code=403)
-    from app.common.object_identity import identity_rows
+    from app.common.object_identity import identity_rows, row_identity_column, row_source, source_columns
 
-    references = identity_rows(mapping).subquery()
-    identities = list(
-        await session.scalars(
-            select(references.c.row_id).where(references.c.identity == event.object_id).limit(2)
-        )
-    )
-    if len(identities) != 1:
-        raise AppError("事件对象身份缺失或不唯一", code="EVENT_OBJECT_AMBIGUOUS", status_code=403)
-    query = select(mapping.table.c.id).where(mapping.table.c.id == identities[0])
-    if expr is not None:
-        query = query.where(to_sql(expr, mapping.columns, user.attrs, mapping.links))
-    if await session.scalar(query.limit(1)) is None:
+    source = row_source(mapping)
+    row_id = row_identity_column(mapping, source)
+    references = identity_rows(mapping, unique_only=False).subquery()
+    query = select(row_id).where(row_id == references.c.row_id, references.c.identity == event.object_id)
+    if mapping.scope_column in source.c:
+        query = query.where(source.c[mapping.scope_column] == user.ontology_id)
+    identities = list(await session.scalars(query.limit(2)))
+    if not identities:
+        # Only an unrestricted object grant may distinguish an empty external mirror from denial.
+        # Partial RLS grants keep missing and non-visible identities indistinguishable.
+        if expr is None and mapping.source_sql:
+            raise AppError("对象数据尚未同步，请先检查外部数据同步", code="EVENT_OBJECT_NOT_SYNCED", status_code=409)
         raise AppError("对象不存在或不在订阅身份授权范围", code="EVENT_OBJECT_FORBIDDEN", status_code=403)
+    if len(identities) != 1:
+        if expr is not None:
+            # A hidden collision must neither reveal another row nor authorize its visible twin.
+            raise AppError("对象不存在或不在订阅身份授权范围", code="EVENT_OBJECT_FORBIDDEN", status_code=403)
+        raise AppError("事件对象身份缺失或不唯一", code="EVENT_OBJECT_AMBIGUOUS", status_code=403)
+    if expr is not None:
+        authorized = query.where(to_sql(expr, source_columns(mapping, source), user.attrs, mapping.links))
+        if await session.scalar(authorized.limit(1)) is None:
+            raise AppError("对象不存在或不在订阅身份授权范围", code="EVENT_OBJECT_FORBIDDEN", status_code=403)
 
 
 def route_for(event: Event, delivery: EventDelivery) -> dict:
@@ -162,6 +182,8 @@ async def resolved_route(session, event: Event, delivery: EventDelivery) -> dict
         EventSubscription.rule_code == sub["ruleId"],
     ))
     release = await ReleaseRepo(session).latest()
+    if release is None or release.id != event.release_id:
+        raise Unavailable("EVENT_RELEASE_CHANGED_REQUIRES_REVIEW")
     rule = await session.scalar(select(Rule).where(Rule.code == sub["ruleId"]))
     snapshot = release.snapshot if release and release.id == event.release_id else None
     bound = (snapshot.get("rules") or {}).get(sub["ruleId"]) if isinstance(snapshot, dict) else None
@@ -190,7 +212,10 @@ def object_order_lock(event_type_id: int, obj_kind: str, object_id: str) -> str:
 
 async def check_order(session, event: Event, delivery: EventDelivery, route: dict) -> bool:
     """Called under the object transaction lock; committed attempts are the durable watermark."""
-    if route.get("ordering") != "object":
+    declared = (event.definition_snapshot or {}).get("ordering") if not route.get("ordering") else None
+    if route.get("ordering") != "object" and not (
+        not route.get("ordering") and declared in ("object", "同一目标对象有序")
+    ):
         raise Unavailable("ORDERING_CHANNEL_NOT_CONFIGURED")
     if not event.obj_kind or not event.object_id or not event.occurred_at or not event.code:
         raise Unavailable("ORDERING_OBJECT_IDENTITY_REQUIRED")
@@ -218,7 +243,7 @@ async def check_order(session, event: Event, delivery: EventDelivery, route: dic
     if later is not None:
         # A send cannot be undone; late arrivals are retained but never inserted before a claimed send.
         delivery.state, delivery.error = "quarantined", "ORDERING_LATE_EVENT_QUARANTINED"
-        delivery.finished_at, delivery.next_at = clock.now(), None
+        delivery.finished_at, delivery.next_at = execution_now(), None
         delivery.result = None
         return False
     # shortcut: reuse the type/time index; add an object-domain index if retained streams outgrow it.
@@ -248,7 +273,7 @@ async def check_order(session, event: Event, delivery: EventDelivery, route: dic
 
 
 async def discover(session, event_code: str | None = None) -> None:
-    """Only accepted new events have trustworthy definition snapshots; legacy rows remain explicit pending."""
+    """Only accepted new events have trustworthy definition snapshots; invalid snapshots never execute."""
     events = await session.scalars(
         select(Event)
         .where(
@@ -265,7 +290,7 @@ async def discover(session, event_code: str | None = None) -> None:
     for event in events:
         definition = event.definition_snapshot
         if not isinstance(definition, dict) or not isinstance(definition.get("subscribers"), list):
-            event.outcome, event.summary = EventOutcome.pending, "待投递：入站定义快照不完整"
+            event.outcome, event.summary = EventOutcome.failed, "未投递：入站定义快照不完整，须人工核查"
             continue
         subscribers = definition["subscribers"]
         names = [s.get("name") for s in subscribers if isinstance(s, dict)]
@@ -274,17 +299,18 @@ async def discover(session, event_code: str | None = None) -> None:
             or any(not isinstance(n, str) or not n.strip() for n in names)
             or len(set(names)) != len(names)
         ):
-            event.outcome, event.summary = EventOutcome.pending, "待投递：订阅定义快照无效"
+            event.outcome, event.summary = EventOutcome.failed, "未投递：订阅定义快照无效，须人工核查"
             continue
         for subscriber in subscribers:
             session.add(
                 EventDelivery(
                     event_id=event.id,
+                    created_at=execution_now(),
                     subscriber_name=subscriber["name"],
                     subscription=subscriber,
                     state="skipped" if subscriber.get("status") != "启用" else "pending",
-                    next_at=clock.now(),
-                    finished_at=clock.now() if subscriber.get("status") != "启用" else None,
+                    next_at=execution_now(),
+                    finished_at=execution_now() if subscriber.get("status") != "启用" else None,
                     created_by="internal:event",
                     error="SUBSCRIPTION_DISABLED" if subscriber.get("status") != "启用" else None,
                 )
@@ -329,7 +355,19 @@ async def aggregate(session, event: Event) -> None:
         f"失败/未知 {failed}，跳过 {skipped}"
     )
     if deliveries and not states & {"pending", "processing"} and event.ingested_at:
-        event.latency_ms = max(0, round((clock.now() - event.ingested_at).total_seconds() * 1000))
+        event.latency_ms = max(0, round((execution_now() - event.ingested_at).total_seconds() * 1000))
+
+
+def preflight_failure(delivery: EventDelivery, error: str) -> None:
+    """Preflight never increments external attempts; its separate wait has a fixed deadline."""
+    now = execution_now()
+    deadline = delivery.created_at + PREFLIGHT_WAIT_LIMIT if delivery.created_at else now
+    delivery.error = error
+    if error in PREFLIGHT_WAIT_ERRORS and now < deadline:
+        delivery.state, delivery.finished_at = "pending", None
+        delivery.next_at = min(now + INTERVAL, deadline)
+    else:
+        delivery.state, delivery.finished_at, delivery.next_at = "failed", now, None
 
 
 async def prepare(session, delivery_id: int) -> bool:
@@ -353,12 +391,24 @@ async def prepare(session, delivery_id: int) -> bool:
     if (
         delivery is None
         or delivery.state != "pending"
-        or (delivery.next_at is not None and delivery.next_at > clock.now())
+        or (delivery.next_at is not None and delivery.next_at > execution_now())
     ):
         return False
     before = (delivery.state, delivery.error, delivery.result)
     previous = {"previousError": before[1], "previousResult": safe_result(before[2])}
     delivery.result = None
+    wait_expired = (
+        before[1] in PREFLIGHT_WAIT_ERRORS
+        and (not delivery.created_at or execution_now() >= delivery.created_at + PREFLIGHT_WAIT_LIMIT)
+    )
+    prior_terminal_error = before[1] and before[1] not in PREFLIGHT_WAIT_ERRORS and before[1] != RETRY_SCHEDULED
+    if prior_terminal_error or wait_expired:
+        # Legacy preflight failures used to poll forever. A repaired config/grant must not replay them.
+        # An explicit audited retry clears the error and revalidates the original snapshot.
+        preflight_failure(delivery, before[1])
+        record(session, delivery, "preflight", detail={**previous, "requiresManualRetry": True})
+        await aggregate(session, event)
+        return False
     try:
         definition = event.definition_snapshot
         if (
@@ -366,6 +416,8 @@ async def prepare(session, delivery_id: int) -> bool:
             or any(key not in definition for key in ("id", "version", "objKind", "payload", "subscribers"))
             or not isinstance(definition.get("payload"), list)
             or not isinstance(definition.get("subscribers"), list)
+            or not isinstance(delivery.subscription, dict)
+            or delivery.subscription not in definition["subscribers"]
             or not definition.get("id")
             or not definition.get("version")
             or (not event.is_test and (not event.ingested_at or not event.envelope_hash))
@@ -376,13 +428,13 @@ async def prepare(session, delivery_id: int) -> bool:
             matched = filter_matches(delivery.subscription.get("filter", ""), fields, event.payload or {})
         except Unavailable:
             delivery.state, delivery.error = "failed", "FILTER_NOT_EXECUTABLE"
-            delivery.finished_at = clock.now()
+            delivery.finished_at, delivery.next_at = execution_now(), None
             record(session, delivery, "preflight", detail=previous)
             await aggregate(session, event)
             return False
         if not matched:
             delivery.state, delivery.error = "skipped", "FILTER_NOT_MATCHED"
-            delivery.finished_at = clock.now()
+            delivery.finished_at, delivery.next_at = execution_now(), None
             record(session, delivery, "preflight", detail=previous)
             await aggregate(session, event)
             return False
@@ -391,6 +443,12 @@ async def prepare(session, delivery_id: int) -> bool:
             raise Unavailable("DELIVERY_ROUTE_NOT_CONFIGURED")
         if route.get("action_type") and route.get("rule_code"):
             raise Unavailable("DELIVERY_ROUTE_CONFLICT")
+        if not event.is_test and (route.get("rule_code") or route.get("action_type")):
+            from app.modules.versioning.repo import ReleaseRepo
+
+            release = await ReleaseRepo(session).latest()
+            if release is None or release.id != event.release_id:
+                raise Unavailable("EVENT_RELEASE_CHANGED_REQUIRES_REVIEW")
         if event.is_test and (route.get("action_type") or route.get("rule_code")):
             raise Unavailable("BUSINESS_TEST_CHANNEL_NOT_CONFIGURED")
         if route.get("rule_code") and (
@@ -398,6 +456,20 @@ async def prepare(session, delivery_id: int) -> bool:
             or delivery.subscription.get("ruleId") not in (None, "", route["rule_code"])
         ):
             raise Unavailable("RULE_SUBSCRIPTION_MISMATCH")
+        auto_attempt = 1
+        if delivery.attempts or before[1] == RETRY_SCHEDULED:
+            last = await session.scalar(
+                select(EventDeliveryRecord)
+                .where(
+                    EventDeliveryRecord.delivery_id == delivery.id,
+                    EventDeliveryRecord.kind.in_(("attempt_started", "disposition")),
+                )
+                .order_by(EventDeliveryRecord.id.desc())
+                .limit(1)
+            )
+            auto_attempt = next_auto_attempt(
+                last, delivery.attempts, http_retries(route), before[1], route_fingerprint(route),
+            )
         if not event.is_test:
             if not route.get("user"):
                 raise Unavailable("DELIVERY_IDENTITY_NOT_CONFIGURED")
@@ -414,20 +486,7 @@ async def prepare(session, delivery_id: int) -> bool:
                 return False
         if not (route.get("action_type") or route.get("rule_code")):
             http_target(route, event.is_test)
-        auto_attempt = 1
-        if before[1] == RETRY_SCHEDULED:
-            last = await session.scalar(
-                select(EventDeliveryRecord)
-                .where(
-                    EventDeliveryRecord.delivery_id == delivery.id,
-                    EventDeliveryRecord.kind == "attempt_started",
-                    EventDeliveryRecord.attempt == delivery.attempts,
-                )
-                .order_by(EventDeliveryRecord.id.desc())
-                .limit(1)
-            )
-            auto_attempt = int((last.detail or {}).get("autoAttempt", 1)) + 1 if last else 1
-        delivery.state, delivery.started_at = "processing", clock.now()
+        delivery.state, delivery.started_at = "processing", execution_now()
         delivery.attempts += 1
         delivery.error, delivery.result = None, None
         record(
@@ -442,15 +501,16 @@ async def prepare(session, delivery_id: int) -> bool:
         )
         return True
     except (Unavailable, AppError) as exc:
-        delivery.error = exc.code if isinstance(exc, AppError) else str(exc)
-        delivery.next_at = clock.now() + INTERVAL
+        preflight_failure(delivery, failure_code(exc))
         if before != (delivery.state, delivery.error, delivery.result):
-            record(session, delivery, "preflight", detail=previous)
+            record(session, delivery, "preflight", detail={
+                **previous, "errorDetails": safe_error_details(exc, "preflight"),
+            })
         await aggregate(session, event)
         return False
     except (ValueError, TypeError, KeyError):
         delivery.state, delivery.error = "failed", "DELIVERY_DEFINITION_INVALID"
-        delivery.finished_at = clock.now()
+        delivery.finished_at, delivery.next_at = execution_now(), None
         record(session, delivery, "preflight", detail=previous)
         await aggregate(session, event)
         return False
@@ -477,6 +537,7 @@ async def execute(session, delivery_id: int) -> None:
     if delivery is None or delivery.state != "processing":
         return
     event = await session.scalar(select(Event).where(Event.id == delivery.event_id).with_for_update(of=Event))
+    error_details = None
     try:
         route = await resolved_route(session, event, delivery)
         started = await session.scalar(
@@ -537,17 +598,25 @@ async def execute(session, delivery_id: int) -> None:
             if release is None or release.id != event.release_id:
                 raise Unavailable("ACTION_RELEASE_CHANGED_REQUIRES_REVIEW")
             mapping = route.get("params")
+            from app.modules.event.payload_schema import field_paths, payload_value
+
+            fields = [FieldOut.model_validate(f) for f in event.definition_snapshot["payload"]]
+            declared = field_paths(fields)
             if not isinstance(mapping, dict) or any(
-                not isinstance(v, str) or v not in (event.payload or {}) for v in mapping.values()
+                not isinstance(v, str) or v not in declared for v in mapping.values()
             ):
                 raise Unavailable("ACTION_PARAMETER_MAPPING_INVALID")
+            try:
+                params = {k: payload_value(event.payload or {}, v, fields) for k, v in mapping.items()}
+            except KeyError:
+                raise Unavailable("ACTION_PARAMETER_MAPPING_INVALID") from None
             async with session.begin_nested():
                 result = await stage_event_action(
                     session,
                     user,
                     action_type_code=route["action_type"],
                     event_id=event.code,
-                    params={k: event.payload[v] for k, v in mapping.items()},
+                    params=params,
                     obj_kind=event.obj_kind,
                     obj_id=event.object_id,
                 )
@@ -612,7 +681,8 @@ async def execute(session, delivery_id: int) -> None:
         delivery.state, delivery.error = "unknown", "HTTP_RESULT_UNKNOWN_REQUIRES_REVIEW"
     except (AppError, Unavailable) as exc:
         delivery.state = "failed"
-        delivery.error = exc.code if isinstance(exc, AppError) else str(exc)
+        delivery.error = failure_code(exc)
+        error_details = safe_error_details(exc, "execution")
     except Exception as exc:
         # Exception messages and local values can contain credentials or payloads.
         trace = exc.__traceback__
@@ -627,18 +697,41 @@ async def execute(session, delivery_id: int) -> None:
                      type(exc).__name__, type(original).__name__ if original else "none",
                      getattr(original, "sqlstate", None), " > ".join(frames))
         delivery.state, delivery.error = "unknown", "EXECUTION_INTERRUPTED_REQUIRES_REVIEW"
-    delivery.finished_at, delivery.next_at = clock.now(), None
-    record(session, delivery, "attempt_finished")
+    delivery.finished_at, delivery.next_at = execution_now(), None
+    record(session, delivery, "attempt_finished", detail=(
+        {"errorDetails": error_details} if error_details else None
+    ))
     await aggregate(session, event)
     await session.flush()
 
 
+def next_auto_attempt(started, attempts: int, retries: int, error: str | None, fingerprint: str) -> int:
+    """Only an audited manual retry resets the budget; intervening waits retain it and the recipient."""
+    detail = started.detail if started is not None else None
+    previous = detail.get("autoAttempt") if isinstance(detail, dict) else None
+    if (
+        started is not None and started.kind == "disposition" and started.attempt == attempts
+        and isinstance(detail, dict) and detail.get("decision") in ("retry", "supplement")
+        and error != RETRY_SCHEDULED
+    ):
+        return 1
+    if (
+        started is None or started.kind != "attempt_started" or started.attempt != attempts
+        or type(previous) is not int or not 1 <= previous <= attempts or previous > retries
+        or error not in PREFLIGHT_WAIT_ERRORS | {RETRY_SCHEDULED}
+    ):
+        raise Unavailable("HTTP_RETRY_HISTORY_INVALID_REQUIRES_REVIEW")
+    if detail.get("routeFingerprint") != fingerprint:
+        raise Unavailable("DELIVERY_ROUTE_BINDING_CHANGED")
+    return previous + 1
+
+
 def schedule_retry(delivery: EventDelivery, auto_attempt: int, retries: int, retry_after: str | None) -> bool:
     """Retry on the same row/Idempotency-Key; the worker picks it up again once next_at is due."""
-    if auto_attempt > retries:
+    if type(auto_attempt) is not int or not 1 <= auto_attempt <= retries:
         return False
     delivery.state, delivery.error = "pending", RETRY_SCHEDULED
-    delivery.finished_at, delivery.next_at = None, clock.now() + backoff(auto_attempt, retry_after)
+    delivery.finished_at, delivery.next_at = None, execution_now() + backoff(auto_attempt, retry_after)
     return True
 
 
@@ -658,7 +751,7 @@ async def recover(session, delivery_id: int | None = None) -> None:
         select(EventDelivery)
         .where(
             EventDelivery.state == "processing",
-            EventDelivery.started_at < clock.now() - timedelta(minutes=5),
+            EventDelivery.started_at < execution_now() - timedelta(minutes=5),
             *([EventDelivery.id == delivery_id] if delivery_id is not None else []),
         )
         .with_for_update(skip_locked=True)
@@ -666,20 +759,39 @@ async def recover(session, delivery_id: int | None = None) -> None:
     )
     for delivery in rows:
         delivery.state, delivery.error = "unknown", "WORKER_INTERRUPTED_REQUIRES_REVIEW"
-        delivery.finished_at = clock.now()
+        delivery.finished_at = execution_now()
         record(session, delivery, "attempt_interrupted")
         await aggregate(session, await session.get(Event, delivery.event_id))
 
 
 async def due(session) -> list[int]:
+    # One round per subscription before its next item; recent service breaks ties across batches.
+    # shortcut: aggregate retained history; add a subscription cursor if this scan becomes costly.
+    served = (
+        select(Event.event_type_id.label("type_id"), EventDelivery.subscriber_name.label("subscriber"),
+               func.max(EventDelivery.started_at).label("last_served"))
+        .join(Event, Event.id == EventDelivery.event_id)
+        .group_by(Event.event_type_id, EventDelivery.subscriber_name)
+        .subquery()
+    )
+    candidates = (
+        select(EventDelivery.id, EventDelivery.next_at, served.c.last_served,
+               func.row_number().over(
+                   partition_by=(Event.event_type_id, EventDelivery.subscriber_name),
+                   order_by=(EventDelivery.next_at.asc().nulls_first(), EventDelivery.id),
+               ).label("round"))
+        .join(Event, Event.id == EventDelivery.event_id)
+        .join(served, (served.c.type_id == Event.event_type_id)
+              & (served.c.subscriber == EventDelivery.subscriber_name))
+        .where(EventDelivery.state == "pending",
+               or_(EventDelivery.next_at.is_(None), EventDelivery.next_at <= execution_now()))
+        .subquery()
+    )
     return list(
         await session.scalars(
-            select(EventDelivery.id)
-            .where(
-                EventDelivery.state == "pending",
-                or_(EventDelivery.next_at.is_(None), EventDelivery.next_at <= clock.now()),
-            )
-            .order_by(EventDelivery.next_at.asc().nulls_first(), EventDelivery.id)
+            select(candidates.c.id)
+            .order_by(candidates.c.round, candidates.c.last_served.asc().nulls_first(),
+                      candidates.c.next_at.asc().nulls_first(), candidates.c.id)
             .limit(200)
         )
     )

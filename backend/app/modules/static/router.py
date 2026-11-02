@@ -226,6 +226,31 @@ async def object_types_brief(svc: Svc) -> Any:
     return await svc.object_brief()
 
 
+class ObjectDeleteIn(BaseModel):
+    lockVersion: int = Field(ge=0)
+    objectVersion: int = Field(ge=1)
+
+
+@router.get("/object-types/{id}:delete-check", dependencies=[Depends(require_func("object-types", "manage"))])
+async def object_delete_check(id: str, session: SessionDep, user: CurrentUserDep) -> dict:
+    from sqlalchemy import select
+    from app.modules.static.models import ObjectType
+    from app.core.errors import NotFound
+
+    obj = await session.scalar(select(ObjectType).where(ObjectType.code == id))
+    if obj is None:
+        raise NotFound("对象类型不存在")
+    latest = await ReleaseRepo(session).latest()
+    return {"lockVersion": latest.id if latest else 0, "objectVersion": obj.lock_version}
+
+
+@router.post("/object-types/{id}:delete", dependencies=[Depends(require_func("object-types", "manage"))])
+async def object_delete(id: str, body: ObjectDeleteIn, session: SessionDep, user: CurrentUserDep) -> dict:
+    from app.modules.static.object_delete import delete_object
+
+    return await delete_object(session, user, id, body.lockVersion, body.objectVersion)
+
+
 @get("/object-types/{id}", "object-types", response_model=Rec)
 async def get_object_type(id: str, svc: Svc) -> Any:
     return await svc.object_detail(id)
@@ -432,6 +457,31 @@ async def list_dimensions(
     focus_id: Focus = None,
 ) -> Any:
     return await svc.dim_list(q, kind, group, p, focus_id)
+
+
+class DimensionDeleteIn(BaseModel):
+    lockVersion: int = Field(ge=0)
+    dimensionVersion: int = Field(ge=1)
+
+
+@router.get("/dimensions/{id}:delete-check", dependencies=[Depends(require_func("dimensions", "manage"))])
+async def dimension_delete_check(id: str, session: SessionDep, user: CurrentUserDep) -> dict:
+    from sqlalchemy import select
+    from app.modules.static.models import Dimension
+    from app.core.errors import NotFound
+
+    dim = await session.scalar(select(Dimension).where(Dimension.code == id))
+    if dim is None:
+        raise NotFound("维度或码表不存在")
+    latest = await ReleaseRepo(session).latest()
+    return {"lockVersion": latest.id if latest else 0, "dimensionVersion": dim.lock_version}
+
+
+@router.post("/dimensions/{id}:delete", dependencies=[Depends(require_func("dimensions", "manage"))])
+async def dimension_delete(id: str, body: DimensionDeleteIn, session: SessionDep, user: CurrentUserDep) -> dict:
+    from app.modules.static.dimension_delete import delete_dimension
+
+    return await delete_dimension(session, user, id, body.lockVersion, body.dimensionVersion)
 
 
 @get("/dimensions/{id}", "dimensions", response_model=Rec)

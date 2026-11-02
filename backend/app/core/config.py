@@ -56,12 +56,14 @@ class Settings(BaseSettings):
     # 仅 test 默认固定时间；开发服务默认真实时间，种子重放可显式冻结。
     fixed_now: datetime | None = None
 
-    # 开发期身份桩：PDE 的鉴权实现上线前，没有身份时按这个用户处理（仅 dev/test 生效）
-    # dev/test 默认身份（请求头 X-Demo-As 可覆盖；prod 不生效）
-    # 值是用户编号 sys_user.code（前端 userId），不是姓名。U010001 = 王敏（演示身份 admin）
+    # Only isolated local test fixtures may explicitly opt into the old identity stub.
+    test_identity_enabled: bool = False
     dev_user: str = Field(default="U010001")
-    # 桩鉴权里视为本体管理员的用户编号（mock ONTOLOGY_ADMINS = 王敏）。PDE 接入真实权限后删除
     demo_admin_codes: list[str] = Field(default_factory=lambda: ["U010001"])
+    auth_session_hours: int = Field(default=8, ge=1, le=24)
+    # HTTPS enables Secure automatically; HTTP intranets can keep this false.
+    auth_cookie_secure: bool = False
+    auth_allowed_origins: list[str] = Field(default_factory=list)
 
     # seed 数据目录：PDE 的 `npm run export-mock` 输出到 backend/seeds/json/<module>/
     seeds_json_dir: Path = Path(__file__).resolve().parents[2] / "seeds" / "json"

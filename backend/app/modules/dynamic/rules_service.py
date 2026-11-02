@@ -10,10 +10,12 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
+from app.common.ontology import require_ontology_id
 from app.common.pagination import Page, PageParams
 from app.core.clock import now
 from app.core.errors import AppError, NotFound
@@ -44,6 +46,7 @@ from app.modules.dynamic.rules_models import (
 )
 from app.modules.dynamic.rules_schemas import (
     LifecycleDraftIn,
+    PublishedRuleMetadata,
     ReplayIn,
     RuleCreateIn,
     RuleDraftIn,
@@ -238,6 +241,7 @@ class RuleService:
         from app.modules.action.models import TypeStatus
         from app.modules.dynamic.catalog import get_catalog
         from app.modules.event.models import EventPayloadField, EventType
+        from app.modules.event.payload_schema import field_paths
 
         rows = (
             await self.session.scalars(select(Rule).where(Rule.version.is_not(None)).order_by(Rule.id))
@@ -265,7 +269,8 @@ class RuleService:
             .join(EventType, EventType.id == EventPayloadField.event_type_id)
             .where(EventType.status != TypeStatus.draft, EventType.retired_release_id.is_(None))
         ):
-            sources.update([f"事件.{field.api}", f"事件.{field.name}"])
+            for path, label in field_paths([field]).items():
+                sources.update([f"事件.{path}", f"事件.{label}"])
         from app.modules.static.models import Metric, MetricStatus
 
         objects = list(
@@ -323,17 +328,23 @@ class RuleService:
         if self.user.func.get("link-types") in ("view", "manage") and (self.user.func.get("object-search") in ("view", "manage") or self.user.func.get("object-detail") in ("view", "manage")):
             from app.common.auth import row_filter
             from app.common.row_filter import is_deny_all
-            from app.modules.integration.action_edits import relation_binding
+            from app.modules.dynamic.rule_relations import read_relation_binding
             from app.modules.static.models import DefStatus, LinkType
             links = await self.session.scalars(select(LinkType).where(LinkType.status == DefStatus.published, LinkType.via.is_(None)).order_by(LinkType.id))
             for link in links:
                 if is_deny_all(await row_filter(self.user, link.from_code)) or is_deny_all(await row_filter(self.user, link.to_code)):
                     continue
                 try:
-                    bound, src, _, dst, gov, _ = await relation_binding(self.session, link.code)
+                    bound, src, _, dst, gov, _, _ = await read_relation_binding(self.session, link.code)
                 except AppError:
                     continue
-                fields = [{"api": p.api_name, "name": p.display_name} for p in dst.properties if not p.is_sensitive and p.visibility != "hidden" and p.backing_column and p.backing_column in gov.table.c]
+                fields = [
+                    {"api": p.api_name, "name": p.display_name} for p in dst.properties
+                    if not p.is_sensitive and p.visibility != "hidden" and not p.transform
+                    and (p.backing_column or p.source_column)
+                    and (p.backing_column or p.source_column) in gov.table.c
+                    and (gov.projection is None or (p.backing_column or p.source_column) in gov.projection)
+                ]
                 if fields:
                     relations.append({"id": bound.code, "name": bound.display_name, "from": src.code, "to": dst.code, "fields": fields})
         return {
@@ -390,12 +401,12 @@ class RuleService:
                     "objKind": event.obj_kind,
                     "fields": [
                         {
-                            "api": field.api,
-                            "name": field.name,
-                            "expression": f"event.{field.api}",
-                            "type": field.type,
+                            "api": path,
+                            "name": label,
+                            "expression": f"event.{path}",
+                            "type": kind,
                         }
-                        for field in event.payload
+                        for path, (label, kind) in field_paths(event.payload, typed=True).items()
                     ],
                 }
                 for event in events
@@ -409,6 +420,20 @@ class RuleService:
         if d is None:
             return None
         return {**self._def(r, actions), **d.patch, "version": d.version}
+
+    async def published_metadata(self, code: str) -> PublishedRuleMetadata:
+        """Read only this rule from the current published snapshot; never rebuild from drafts."""
+        row = (await self.session.execute(
+            select(OntologyRelease.ver, OntologyRelease.snapshot["rules"][code])
+            .where(OntologyRelease.ontology_id == require_ontology_id(self.session))
+            .order_by(OntologyRelease.id.desc()).limit(1)
+        )).first()
+        if row is not None and isinstance(row[1], dict) and row[1].get("id") == code:
+            try:
+                return PublishedRuleMetadata.model_validate({"release": row[0], "definition": row[1]})
+            except ValidationError:
+                pass  # Missing/invalid published definitions fail closed, without echoing snapshot data.
+        raise NotFound("规则已发布定义不存在")
 
     async def detail(self, code: str, *, view: str | None) -> dict[str, Any]:
         r = await self.get(code)
@@ -667,8 +692,8 @@ class RuleService:
         d = (await self._drafts()).get(r.id)
         if d is not None:
             if d.cr_code != cr:
-                msg = f"该规则已在变更单 {d.cr_code} 的草稿里"
-                raise fail("TARGET_IN_OTHER_CR", msg, 409, crId=d.cr_code)
+                msg = f"该规则已在变更单 {d.cr_code} 的草稿里；请先核对并处理原变更单草稿，再登记到当前变更单"
+                raise fail("TARGET_IN_OTHER_CR", msg, 409, crId=d.cr_code, paths=["cr"])
             return d
         from app.modules.dynamic.rules_models import RuleVersion
 
@@ -780,6 +805,7 @@ class RuleService:
         auto = {
             "enabled": st.enabled,
             "executionMode": st.execution_mode,
+            "validitySeconds": st.validity_seconds,
             "actionTypeId": st.action_type_id,
             "confirmer": st.confirmer,
             "mapping": [{"param": m.param, "from": m.from_} for m in st.mapping],

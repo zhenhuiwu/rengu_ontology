@@ -14,7 +14,7 @@ from app.core.errors import AppError
 from app.core.schema import DATETIME_FORMAT
 from app.modules.data import connector
 from app.modules.data.adapters import ConnectionTestResult
-from app.modules.data.models import Datasource, DatasourceTable, DsStatus, DsType
+from app.modules.data.models import Datasource, DatasourceTable, DsStatus, DsType, DsSyncMode
 from app.modules.data.repo import DatasourceRepo, DatasourceTableRepo
 from app.modules.data.schemas import (
     DatasourceCreate,
@@ -97,10 +97,12 @@ def to_out(d: Datasource, runs=None) -> DatasourceOut:
             cron_text=d.sync_cron_text,
             window=d.sync_window,
             cursor_field=d.sync_cursor_field,
-            next_run=d.sync_next_run,
+            next_run=d.sync_next_run if d.type != DsType.dm8 or d.mirror_schedule_actor else None,
+            mirror_schedule_enabled=bool(d.type == DsType.dm8 and d.mirror_schedule_actor and d.sync_next_run),
         ),
         runs=[
-            DsRun(time=r.run_at, result=r.result, rows=r.rows, secs=r.secs, msg=r.msg)
+            DsRun(time=r.run_at, result=r.result, rows=r.rows, secs=r.secs, msg=r.msg,
+                  origin="demo" if r.is_seed else "unverified")
             for r in sorted(d.runs if runs is None else runs, key=lambda x: x.seq)
         ],
         table_count=d.table_count,
@@ -157,9 +159,11 @@ class DatasourceService:
 
     async def list_tables(self, code: str, kw: str | None, page: PageParams):
         ds = await self.get(code)
-        return await self.tables.page_for(ds.id, kw, page)
+        return await self.tables.page_for(ds.id, kw, page, schema=ds.database.strip() if ds.type == DsType.dm8 and ds.database.strip() else None)
 
     async def create(self, body: DatasourceCreate, *, actor: str) -> Datasource:
+        from app.modules.data.mirror_scheduler import next_slot
+        next_run = next_slot(body.mode, body.cron) if body.type == DsType.dm8 else None
         code = f"DS-{await self.repo.max_code_no() + 1:03d}"
         ds = Datasource(
             code=code,
@@ -180,7 +184,8 @@ class DatasourceService:
             sync_cron_text=body.cron,  # 前端新建时 cronText = cron
             sync_window="全天",
             sync_cursor_field="updated_at",
-            sync_next_run=None,
+            sync_next_run=next_run,
+            mirror_schedule_actor=actor if next_run else None,
             table_count=0,
             created_on=clock.today(),
             runs=[],
@@ -189,8 +194,26 @@ class DatasourceService:
         await self.repo.create(ds, actor=actor)
         return ds
 
-    async def update(self, code: str, body: DatasourceUpdate) -> Datasource:
+    async def update(self, code: str, body: DatasourceUpdate, *, actor: str) -> Datasource:
+        from app.modules.data.mirror_scheduler import next_slot
         ds = await self.get(code)
+        # Changing connection settings never implicitly starts or broadens a CDC subscription.
+        # Lock subscriptions before the source row, matching the consumer's lock order.
+        from sqlalchemy import select
+        from app.modules.data.external_cdc import schema_ready, publish_metadata, now
+        from app.modules.data.models import ExternalCdcSubscription
+        cdc_subs = []
+        if await schema_ready(self.session):
+            codes = list(await self.session.scalars(select(ExternalCdcSubscription.object_code).where(
+                ExternalCdcSubscription.datasource_code == code).order_by(ExternalCdcSubscription.object_code)))
+            from app.db.dialects import get_adapter
+            for object_code in codes:
+                await get_adapter(self.session).xact_lock(self.session,
+                    f'external.mirror.{self.session.info["ontology_id"]}.{object_code}')
+            if codes:
+                cdc_subs = list(await self.session.scalars(select(ExternalCdcSubscription).where(
+                    ExternalCdcSubscription.datasource_code == code, ExternalCdcSubscription.object_code.in_(codes))
+                    .order_by(ExternalCdcSubscription.object_code).with_for_update()))
         if body.name != ds.name:
             from sqlalchemy import select
 
@@ -209,12 +232,17 @@ class DatasourceService:
             "port": body.port or DS_DEFAULT_PORT[body.type.value],
             "database": body.database,
             "username": body.user,
-            "ssl": body.ssl,
+            "ssl": body.ssl if "ssl" in body.model_fields_set else ds.ssl,
             "owner": body.owner,
             "sync_mode": body.mode,
             "sync_cron": body.cron,  # 前端编辑只改 sync.mode / sync.cron，cronText 等保持
             **_type_fields(body),
         }
+        if body.type == DsType.dm8:
+            next_run = next_slot(body.mode, body.cron)
+            values.update(sync_next_run=next_run, mirror_schedule_actor=actor if next_run else None)
+        else:
+            values.update(mirror_schedule_actor=None)
         moved = (ds.host, ds.username) != (values["host"], values["username"]) or (
             body.port is not None and body.port != ds.port
         )
@@ -222,6 +250,11 @@ class DatasourceService:
             values["password_enc"] = encrypt_password(body.password)
         elif moved and ds.password_enc:  # 改了地址 / 账号还沿用旧密码，会把密码发到新地址
             raise PasswordRequired()
+        if body.mode != DsSyncMode.cdc:
+            for sub in cdc_subs:
+                sub.enabled, sub.phase, sub.updated_at = False, 'paused', now()
+                sub.lease_owner, sub.lease_until = None, None
+                await publish_metadata(self.session, sub)
         return await self.repo.update(ds, values)
 
     async def delete(self, code: str) -> None:
@@ -257,7 +290,10 @@ class DatasourceService:
         if res.ok:
             values["status"] = DsStatus.ok
         await self.repo.update(ds, values)
-        if res.ok:
+        if res.ok and ds.type == DsType.dm8:
+            test.msg = f"{test.msg}；请选择 schema 后刷新表目录"
+            await self.repo.update(ds, {"last_test": test.model_dump()})
+        elif res.ok:
             try:
                 async with self.session.begin_nested():  # 内省出错只回滚这一步，会话还能写测试结果
                     await self.refresh_tables(code, config=config)
@@ -266,7 +302,7 @@ class DatasourceService:
                 await self.repo.update(ds, {"last_test": test.model_dump()})
         return test
 
-    async def refresh_tables(self, code: str, *, config: dict[str, Any] | None = None) -> int:
+    async def refresh_tables(self, code: str, *, config: dict[str, Any] | None = None, schemas: list[str] | None = None) -> int:
         """连上源库内省，同步 datasource_table：
 
         - 按 (schema, 表名) 对齐；已有行保留映射（object_type / ref），更新说明、字段数、行数、最近更新；
@@ -275,6 +311,10 @@ class DatasourceService:
         返回内省到的表数。
         """
         ds = await self.get(code)
+        if ds.type == DsType.dm8 and not schemas:
+            raise AppError("请先选择需要刷新表目录的 schema", code="VALIDATION_FAILED", status_code=422)
+        if ds.type != DsType.dm8 and schemas is not None:
+            raise AppError("当前仅达梦数据源支持选择 schema 刷新", code="VALIDATION_FAILED", status_code=422)
         if config is None:
             config = {
                 "host": ds.host,
@@ -286,7 +326,7 @@ class DatasourceService:
             }
         _require_real(ds.type, config)
         try:
-            found = await connector.list_tables(ds.type.value, config)
+            found = await connector.list_tables(ds.type.value, config, schemas) if schemas is not None else await connector.list_tables(ds.type.value, config)
         except Exception as e:
             raise IntrospectFailed(f"连接源库失败：{connector.err_text(e, config.get('password'))}") from None
         now = clock.now()
@@ -316,10 +356,13 @@ class DatasourceService:
                 )
                 self.session.add(t)
                 by_key[key] = t
-            t.comment, t.col_count, t.row_count, t.meta_updated_at = info.comment, info.cols, info.rows, now
+            if info.cols >= 0:
+                t.comment = info.comment
+            t.col_count, t.row_count, t.meta_updated_at = info.cols, info.rows, now
         for key, t in list(by_key.items()):
             if (
                 key not in seen
+                and (schemas is None or t.schema_name in schemas)
                 and not t.object_type
                 and (
                     f"{t.schema_name}.{t.name}" not in mapped_tables
@@ -334,6 +377,20 @@ class DatasourceService:
         ds.table_count = len(ordered)
         await self.session.flush()
         return len(found)
+
+    async def list_schemas(self, code: str) -> list[str]:
+        ds = await self.get(code)
+        if ds.type != DsType.dm8:
+            raise AppError("当前仅达梦数据源支持选择 schema", code="VALIDATION_FAILED", status_code=422)
+        config = {"host": ds.host, "port": ds.port, "database": ds.database, "user": ds.username,
+                  "ssl": ds.ssl, "password": decrypt_password(ds.password_enc)}
+        _require_real(ds.type, config)
+        if not config["password"]:
+            raise AppError("请先保存有效的数据源密码", code="DS_PASSWORD_REQUIRED", status_code=422)
+        try:
+            return await connector.list_schemas(ds.type.value, config)
+        except Exception as error:
+            raise IntrospectFailed(f"读取 schema 失败：{connector.err_text(error, config['password'])}") from None
 
     async def test_unsaved(self, body: DsTestIn) -> DsTest:
         config: dict[str, Any] = {

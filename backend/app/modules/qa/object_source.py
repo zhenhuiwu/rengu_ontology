@@ -3,6 +3,8 @@
 import json
 import os
 import re
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,10 +22,11 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
+from sqlalchemy.sql import Select
 
 from app.common.auth import CurrentUserDep, check_func, row_filter
 from app.common.ontology import require_ontology_id
@@ -91,6 +94,11 @@ def identifier(value):
     return isinstance(value, str) and bool(re.fullmatch(r"[^\W\d]\w{0,127}", value))
 
 
+def physical_identifier(value):
+    """Single metadata-derived SQL identifier; SQLAlchemy supplies dialect quoting."""
+    return isinstance(value, str) and bool(re.fullmatch(r"\w{1,128}", value))
+
+
 def primary_property(obj):
     explicit = next((p for p in obj.properties if p.api_name == obj.pk_property), None)
     if explicit is not None:
@@ -102,21 +110,28 @@ def primary_property(obj):
     return None
 
 
-def configured_bindings():
+def configured_bindings(ontology_id=None):
     if os.environ.get("RENGU_OBJECT_READ_ENABLED") != "1":
         return []
     path = os.environ.get("RENGU_OBJECT_READ_BINDINGS")
     if not path:
         return []
+    issue = "配置文件无法读取或不是有效 JSON"
     try:
         file = Path(path)
         if file.stat().st_size > 1024 * 1024:
+            issue = "配置文件超过 1 MB"
             raise ValueError()
         rows = json.loads(file.read_text(encoding="utf-8-sig"))
+        issue = "配置内容必须为绑定列表"
         if not isinstance(rows, list):
             raise ValueError()
         keys = set()
-        for row in rows:
+        selected = []
+        for index, row in enumerate(rows, 1):
+            if isinstance(row, dict) and type(row.get("ontologyId")) is int and ontology_id is not None and row["ontologyId"] != ontology_id:
+                continue
+            issue = f"第 {index} 条绑定的字段不完整或包含未知字段"
             if not isinstance(row, dict) or set(row) != {
                 "ontologyId",
                 "objectType",
@@ -127,10 +142,13 @@ def configured_bindings():
                 "urlEnv",
             }:
                 raise ValueError()
+            issue = f"第 {index} 条绑定的本体编号无效"
             if type(row["ontologyId"]) is not int or row["ontologyId"] <= 0:
                 raise ValueError()
+            issue = f"第 {index} 条绑定的对象、数据源或连接配置名称为空"
             if not all(isinstance(row[k], str) and row[k] for k in ("objectType", "datasourceId", "urlEnv")):
                 raise ValueError()
+            issue = f"第 {index} 条绑定的 schema 或表名无效"
             if (
                 not identifier(row["schema"])
                 or not identifier(row["table"])
@@ -138,23 +156,27 @@ def configured_bindings():
                 or row["schema"] == "information_schema"
             ):
                 raise ValueError()
+            issue = f"第 {index} 条绑定的读取列无效或为空"
             if (
                 not isinstance(row["columns"], list)
                 or not row["columns"]
                 or not all(identifier(c) for c in row["columns"])
             ):
                 raise ValueError()
+            issue = f"第 {index} 条绑定的读取列重复或连接配置名称无效"
             if len(set(row["columns"])) != len(row["columns"]) or not re.fullmatch(
                 r"[A-Z][A-Z0-9_]{0,127}", row["urlEnv"]
             ):
                 raise ValueError()
             key = (row["ontologyId"], row["objectType"])
+            issue = f"第 {index} 条绑定与同本体的对象绑定重复"
             if key in keys:
                 raise ValueError()
             keys.add(key)
-        return rows
+            selected.append(row)
+        return selected
     except (OSError, UnicodeError, ValueError, TypeError):
-        raise unavailable("对象只读绑定配置不合法，未执行数据读取") from None
+        raise unavailable(f"对象只读绑定配置不合法：{issue}；未执行数据读取") from None
 
 
 async def object_definition(session, code, ver=None):
@@ -220,8 +242,65 @@ class ObjectSource:
     datasource: str
     ontology_id: int
 
+    @property
+    def is_dm(self):
+        return getattr(self.url, "drivername", None) == "dm+dmPython"
+
     @asynccontextmanager
     async def read(self):
+        if self.is_dm:
+            from app.modules.data import connector
+            if not connector.real_connect_enabled():
+                raise unavailable("达梦只读连接未启用")
+            cfg = {"host": self.url.host, "port": self.url.port or 5236, "database": self.url.database,
+                   "user": self.url.username, "password": self.url.password, "ssl": False}
+            pinned = await asyncio.to_thread(connector._approved_ip, cfg)
+            if pinned is None:
+                raise unavailable("达梦只读连接地址未获部署授权")
+            cfg["host"] = pinned
+            loop = asyncio.get_running_loop()
+            executor = ThreadPoolExecutor(max_workers=1)
+            state = {}
+
+            def open_readonly():
+                eng = connector._engine("达梦 DM8", cfg)
+                try:
+                    conn = eng.connect()
+                    try:
+                        conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+                    except BaseException:
+                        conn.close()
+                        raise
+                    state.update(engine=eng, connection=conn)
+                except BaseException:
+                    eng.dispose()
+                    raise
+
+            class Reader:
+                async def execute(self, stmt):
+                    if not isinstance(stmt, Select):
+                        raise unavailable("达梦对象读取仅支持受控 SELECT")
+                    return await loop.run_in_executor(executor, lambda: state["connection"].execute(stmt).freeze()())
+
+            def close_readonly():
+                if "connection" in state:
+                    state["connection"].close()
+                if "engine" in state:
+                    state["engine"].dispose()
+
+            try:
+                await loop.run_in_executor(executor, open_readonly)
+                yield Reader()
+            except AppError:
+                raise
+            except Exception:
+                raise unavailable("达梦对象只读连接或查询失败") from None
+            finally:
+                try:
+                    await asyncio.shield(loop.run_in_executor(executor, close_readonly))
+                finally:
+                    executor.shutdown(wait=True)
+            return
         options = qa_readonly_engine_kwargs(get_settings().qa_statement_timeout_ms)
         options["connect_args"]["timeout"] = 10
         options["connect_args"]["server_settings"]["timezone"] = get_settings().display_tz
@@ -269,23 +348,56 @@ class ObjectSource:
                 await engine.dispose()
 
 
-async def resolve_source(session, obj):
+async def require_external_schema_scope(session, obj):
+    from app.modules.data.connector import require_configured_schema
+    from app.modules.data.models import ExternalReadBinding
+    binding = await session.scalar(select(ExternalReadBinding).where(ExternalReadBinding.object_code == obj.code))
+    if binding is None:
+        return
+    ds = await session.scalar(select(Datasource).where(Datasource.code == binding.datasource_code))
+    if ds is None:
+        raise unavailable("外部对象的数据源不存在")
+    try:
+        require_configured_schema(ds.type.value, {"database": ds.database}, [binding.schema_name])
+    except ValueError:
+        raise unavailable("达梦对象绑定不在数据源限定的 schema 内") from None
+
+
+async def resolve_source(session, obj, *, allow_dm=False):
     ontology_id = require_ontology_id(session)
-    item = next(
+    from app.modules.data.models import ExternalReadBinding
+    persisted = await session.scalar(select(ExternalReadBinding).where(ExternalReadBinding.object_code == obj.code)) if allow_dm else None
+    item = ({"ontologyId": ontology_id, "objectType": obj.code, "datasourceId": persisted.datasource_code,
+             "schema": persisted.schema_name, "table": persisted.table_name, "columns": persisted.read_columns}
+            if persisted else next(
         (
             row
-            for row in configured_bindings()
+            for row in configured_bindings(ontology_id)
             if row["ontologyId"] == ontology_id and row["objectType"] == obj.code
         ),
         None,
-    )
+    ))
     if item is None:
+        if allow_dm and obj.datasource_name:
+            source_types = list(await session.scalars(select(Datasource.type).where(
+                (Datasource.code == obj.datasource_name) | (Datasource.name == obj.datasource_name)
+            )))
+            if DsType.dm8 in source_types:
+                raise unavailable("达梦对象尚未配置持久只读绑定")
         return None
+    if persisted and (not physical_identifier(item["schema"]) or not physical_identifier(item["table"]) or
+                      not isinstance(item["columns"], list) or not item["columns"] or
+                      not all(physical_identifier(column) for column in item["columns"])):
+        raise unavailable("外部只读绑定包含无效物理标识符")
     ds = await session.scalar(select(Datasource).where(Datasource.code == item["datasourceId"]))
+    if ds is not None and ds.type == DsType.dm8 and not persisted:
+        raise unavailable("达梦对象尚未配置持久只读绑定")
+    if ds is not None and ds.type == DsType.dm8 and not allow_dm:
+        raise unavailable("达梦对象读取尚未支持安全只读事务与行权限校验；结构导入不代表对象数据可读取")
     if (
         ds is None
         or obj.datasource_name not in (ds.code, ds.name)
-        or ds.type not in (DsType.postgresql, DsType.kingbase)
+        or ds.type not in (DsType.postgresql, DsType.kingbase, DsType.dm8)
     ):
         raise unavailable("对象数据源与获准只读绑定不一致")
     if obj.datasource_name != ds.code:
@@ -297,15 +409,33 @@ async def resolve_source(session, obj):
     source_table = f"{item['schema']}.{item['table']}"
     if obj.source_table not in (source_table, item["table"] if item["schema"] == "public" else source_table):
         raise unavailable("对象来源表已变化，请更新获准只读绑定")
-    raw_url = os.environ.get(item["urlEnv"])
-    if not raw_url:
-        return None
+    if persisted:
+        from app.modules.data.secrets import decrypt_password
+        from app.modules.data.connector import require_configured_schema
+        try:
+            require_configured_schema(ds.type.value, {"database": ds.database}, [item["schema"]])
+        except ValueError:
+            raise unavailable("达梦对象绑定不在数据源限定的 schema 内") from None
+        password = decrypt_password(ds.password_enc)
+        if ds.type != DsType.dm8 or not password or not ds.username or ds.ssl:
+            raise unavailable("达梦数据源凭据缺失或 TLS 身份校验不可用")
+        url = URL.create("dm+dmPython", username=ds.username, password=password, host=ds.host, port=ds.port, database=ds.database or None)
+    else:
+        raw_url = os.environ.get(item["urlEnv"])
+        if not raw_url:
+            return None
+        try:
+            url = make_url(raw_url)
+        except (ArgumentError, ValueError, TypeError):
+            raise unavailable("专用只读连接配置无效") from None
     try:
-        url = make_url(raw_url)
-        if url.drivername != "postgresql+asyncpg" or (url.host, url.port or 5432, url.database) != (
+        driver = "dm+dmPython" if ds.type == DsType.dm8 else "postgresql+asyncpg"
+        if ds.type == DsType.dm8 and (not allow_dm or ds.ssl):
+            raise ValueError()
+        if url.drivername != driver or (url.host, url.port or (5236 if ds.type == DsType.dm8 else 5432), url.database) != (
             ds.host,
             ds.port,
-            ds.database,
+            ds.database or None,
         ):
             raise ValueError()
         if not url.username or not url.password or url.query:
@@ -318,7 +448,7 @@ async def resolve_source(session, obj):
         source = prop.source_column
         if (
             source in item["columns"]
-            and identifier(source)
+            and (physical_identifier(source) if persisted else identifier(source))
             and prop.data_type in TYPES
             and not prop.transform
         ):

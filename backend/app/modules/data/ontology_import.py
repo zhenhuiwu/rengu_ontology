@@ -24,7 +24,7 @@ from app.modules.auto_ontology.heuristic import build_proposal, structural_warni
 from app.modules.data import connector
 from app.modules.data.mappings import MAPPING_LOCK, mapped_objects
 from app.modules.data.models import Datasource
-from app.modules.data.ontology_schemas import DraftIn, ImportPreviewIn, ImportToCrIn, MappingIn
+from app.modules.data.ontology_schemas import DraftIn, ImportPreviewIn, ImportToCrIn, MappingIn, MappingApplyIn
 from app.modules.data.secrets import decrypt_password
 from app.modules.data.service import DatasourceService, IntrospectFailed, _require_real
 from app.modules.static.cr_write import CrWriteService, target_out
@@ -410,29 +410,27 @@ async def mappings(ds_id: str, session: SessionDep):
     ]
 
 
-@router.put("/datasources/{ds_id}/tables/{schema}/{table}/mapping", status_code=201, dependencies=MANAGE)
-async def edit_mapping(
+async def mapping_target(
     ds_id: str,
     schema: str,
     table: str,
-    body: MappingIn,
-    session: SessionDep,
-    user: CurrentUserDep,
-    request: Request,
+    object_id: str,
+    session,
+    user: CurrentUser,
 ):
     check_func(user, "object-types", "manage")
     await DatasourceService(session).get(ds_id)
     await session.scalar(select(Datasource).where(Datasource.code == ds_id).with_for_update())
     ds, found, _ = await inspect_source(session, ds_id, ImportPreviewIn(schema=schema, tables=[table]))
     await get_adapter(session).xact_lock(session, MAPPING_LOCK)
-    obj = await session.scalar(select(ObjectType).where(ObjectType.code == body.object_id))
+    obj = await session.scalar(select(ObjectType).where(ObjectType.code == object_id).with_for_update())
     if obj is None:
         raise NotFound("对象类型不存在")
     columns = {c.name for c in found[0].columns}
     missing = [p.source_column for p in obj.properties if p.source_column and p.source_column not in columns]
     pk = next((p.source_column for p in obj.properties if p.api_name == obj.pk_property), None)
-    if not pk or pk not in columns or missing:
-        raise conflict("新表缺少已映射字段，需先在对象变更单调整属性", missing=missing)
+    if not pk or pk not in columns or missing or found[0].pk != [pk]:
+        raise conflict("新表缺少已映射字段或与对象的单列主键不一致", missing=missing)
     qualified = f"{schema}.{table}"
     if len(qualified) > 128:
         raise conflict("schema 与表名组合超过对象映射长度限制")
@@ -441,6 +439,39 @@ async def edit_mapping(
     if not rows:
         raise conflict("对象已映射到该表，无需创建变更单")
     target = TargetIn(kind="object", id=obj.code, name=obj.display_name)
+    return target, rows
+
+
+@router.put("/datasources/{ds_id}/tables/{schema}/{table}/mapping", status_code=201, dependencies=MANAGE)
+async def edit_mapping(
+    ds_id: str, schema: str, table: str, body: MappingIn,
+    session: SessionDep, user: CurrentUserDep, request: Request,
+):
+    target, rows = await mapping_target(ds_id, schema, table, body.object_id, session, user)
     svc, code = await draft(session, user, body, target)
     await write_target(svc, code, user, target, {"config": rows})
     return await result(svc, code, user, "修改对象数据源映射草稿", request)
+
+
+@router.post("/datasources/{ds_id}/tables/{schema}/{table}/mapping:apply", status_code=201, dependencies=MANAGE)
+async def apply_mapping(
+    ds_id: str, schema: str, table: str, body: MappingApplyIn,
+    session: SessionDep, user: CurrentUserDep, request: Request,
+):
+    from app.modules.static.publish import PublishService
+
+    target, rows = await mapping_target(ds_id, schema, table, body.object_id, session, user)
+    writer = CrWriteService(session)
+    await get_adapter(session).xact_lock(session, f"static.cr.target.object:{target.id}")
+    held = await writer._holder("object", target.id, -1)
+    if held:
+        raise conflict(f"对象 {target.id} 已有未处理变更 {held}，请先处理后再保存映射", crId=held)
+    code, created = await writer.open_draft_for_save(user, target, "保存对象来源映射")
+    if not created:
+        raise conflict("对象已有未处理变更，请先处理后再保存映射")
+    await writer.put_items(code, user, ItemsPutIn(target=target, section="config", rows=rows))
+    await result(writer, code, user, "保存对象数据源映射", request)
+    ver = await PublishService(session).publish(
+        user, "保存对象数据源映射", lock_version=body.lock_version, draft_code=code, save_mode=True
+    )
+    return {"targetId": target.id, "ver": ver}

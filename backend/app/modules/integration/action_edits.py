@@ -22,7 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.sql.visitors import replacement_traverse
 
 from app.common.auth import check_func, row_filter
-from app.common.object_identity import identity_rows
+from app.common.object_identity import identity_rows, row_identity_column, row_source, source_columns
 from app.common.ontology import require_ontology_id
 from app.common.row_filter import is_deny_all, to_sql
 from app.common.sql_guard import governed_tables
@@ -48,6 +48,12 @@ async def execution_definition(session, run):
         .with_for_update(of=ActionType)
         .execution_options(populate_existing=True)
     )
+    if action is not None and run.type_version and action.version != run.type_version:
+        raise AppError(
+            f"执行记录绑定动作版本 {run.type_version}，当前已发布版本为 {action.version}；请按当前版本重新暂存并确认，旧记录不能替换定义执行",
+            code="ACTION_DEFINITION_VERSION_MISMATCH", status_code=409,
+            details={"actionId": run.action_type_code, "expectedVersion": run.type_version, "currentVersion": action.version, "field": "typeVersion"},
+        )
     if (
         action is None
         or action.retired_release_id is not None
@@ -405,12 +411,14 @@ async def existing_row(session, user, obj, governed, code, *, lock=True):
     expr = await row_filter(user, obj.code)
     if is_deny_all(expr):
         raise Forbidden("没有引用对象的行权限")
-    query = select(governed.table).where(governed.table.c.id == ids[0])
+    # 外部镜像没有 public.<对象名>，按已限定的同步结果取行；子查询不能 FOR UPDATE。
+    source = row_source(governed)
+    query = select(source).where(row_identity_column(governed, source) == ids[0])
     if governed.projection is not None:
-        query = query.where(governed.table.c.ontology_id == user.ontology_id)
+        query = query.where(source.c[governed.scope_column] == user.ontology_id)
     if expr is not None:
-        query = query.where(to_sql(expr, governed.columns, user.attrs, governed.links))
-    if lock:
+        query = query.where(to_sql(expr, source_columns(governed, source), user.attrs, governed.links))
+    if lock and source is governed.table:
         query = query.with_for_update()
     row = (await session.execute(query)).mappings().one_or_none()
     if row is None:
@@ -475,6 +483,8 @@ async def relation_binding(session, identity):
     link = rows[0]
     src, sg = await object_binding(session, link.from_code)
     dst, dg = await object_binding(session, link.to_code)
+    if sg.source_sql or dg.source_sql:
+        raise unavailable("外部镜像为只读数据，不支持在本地修改关联关系")
     path = sg.links.get(link.code)
     if path is None or path.target is not dg.table:
         raise unavailable("关系未登记真实受控外键映射")
@@ -526,6 +536,8 @@ async def business_edits(session, user, run, definition, *, apply=False):
             continue
         obj, governed = await object_binding(session, edit.get("obj"))
         await object_operation(session, user, obj, definition)
+        if governed.source_sql:
+            raise unavailable("外部镜像为只读数据，属性编辑须由已授权外部动作执行，不能在本地修改镜像")
         if governed.write_columns is not None and edit.get("op") != "修改":
             raise unavailable("配置绑定仅允许修改已授权字段")
         writable = governed.write_columns if governed.write_columns is not None else WRITABLE.get(obj.code, set())

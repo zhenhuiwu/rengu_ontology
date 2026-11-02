@@ -254,6 +254,7 @@ async def refresh_analysis(session, cr, targets, items, user):
         except AppError as error:
             if error.code not in (
                 "METRIC_TRIAL_UNAVAILABLE",
+                "OBJECT_DATA_UNAVAILABLE",
                 "VALIDATION_FAILED",
                 "NO_PERMISSION",
                 "NOT_FOUND",

@@ -110,7 +110,7 @@ class MetricExpression(Expression):
         return super().run(values, at)
 
 
-async def bind_metrics(session, user, tree, obj, gov, at, timezone):
+async def bind_metrics(session, user, tree, obj, gov, at, timezone, *, object_identity=None, source_row=None):
     tree = MetricCalls(obj).visit(tree)
     calls = [
         n
@@ -133,7 +133,8 @@ async def bind_metrics(session, user, tree, obj, gov, at, timezone):
         cache_key = (code, version, period)
         if cache_key not in results:
             result = await evaluate_metric(
-                session, user, code, days=93, period=period, at=at, timezone=timezone, object_kind=obj.code
+                session, user, code, days=93, period=period, at=at, timezone=timezone, object_kind=obj.code,
+                **({"object_identity": object_identity} if object_identity is not None else {})
             )
             if str(result["version"]).lstrip("v") != str(version):
                 raise unavailable("指标所选版本没有完整执行映射，不能借用当前版本口径")
@@ -154,5 +155,5 @@ async def bind_metrics(session, user, tree, obj, gov, at, timezone):
     from app.modules.dynamic.rule_functions import bind_rule_functions
     functions = await bind_rule_functions(session, user, tree)
     from app.modules.dynamic.rule_relations import bind_rule_relations
-    relations = await bind_rule_relations(session, user, tree, obj, gov)
+    relations = await bind_rule_relations(session, user, tree, obj, gov, source_row=source_row)
     return MetricExpression(tree, obj, gov, bindings, functions, relations)

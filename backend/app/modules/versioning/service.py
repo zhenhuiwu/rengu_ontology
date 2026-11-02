@@ -178,10 +178,16 @@ class VersioningService:
                 continue
             try:
                 params = action.get("params") or []
+                if action.get("httpEndpointId"):
+                    from app.modules.integration.http_endpoints import validate_endpoint_params
+                    validate_endpoint_params(action.get("httpMapping"), {p["api"] for p in params})
                 validate_mapping(action.get("httpMapping"), {p["api"] for p in params})
                 system = await session.scalar(select(ExtSystem).where(ExtSystem.code == action.get("sysId"))) if action.get("sysId") else None
                 if action.get("sysId") and (system is None or not is_writeback_target(system)):
                     raise AppError("动作关联的外部系统不可写回", code="FORMAL_RELEASE_BLOCKED", status_code=409)
+                if action.get("httpEndpointId"):
+                    from app.modules.integration.http_endpoints import require_selected_endpoint
+                    require_selected_endpoint(system, action["httpEndpointId"], action.get("endpoint"), action.get("httpMapping"), {p["api"] for p in params})
                 for edit in (action.get("writeback") or {}).get("edits", []):
                     if declaration(edit.get("field")):
                         if system is None or system.category != "Webhook":
@@ -207,7 +213,10 @@ class VersioningService:
                     for source in spec["payload"].values():
                         await validate_source_definition(session, source)
             except (AppError, Unavailable, KeyError, TypeError, ValueError) as error:
-                issues.append({"section": "actionTypes", "id": code, "message": getattr(error, "message", str(error))})
+                issue = {"section": "actionTypes", "id": code, "message": getattr(error, "message", str(error))}
+                if isinstance(error, AppError) and error.code.startswith("ACTION_HTTP_ENDPOINT_"):
+                    issue.update(code=error.code, details=error.details)
+                issues.append(issue)
         from app.modules.event.payload_schema import validate_definition as validate_payload_definition
         from app.modules.event.schemas import FieldOut
         from app.modules.event.simulation import filter_matches

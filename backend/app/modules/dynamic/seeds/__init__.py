@@ -272,7 +272,7 @@ def _assignable(_r: Row, ctx: SeedContext) -> list[Row] | None:
     rows = []
     for i, name in enumerate(ctx.load("PEOPLE.json"), start=1):
         code = code_by_name(name)  # 姓名找不到 / 重名直接报错
-        rows.append({"id": code, "code": code, "name": name, "alert_assignable": i})
+        rows.append({"id": code, "code": code, "name": "admin" if code == "U010001" else name, "alert_assignable": i})
     return rows
 
 

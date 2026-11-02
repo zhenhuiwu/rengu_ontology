@@ -102,6 +102,9 @@ class AdapterConfig(ApiModel):
                 or parts.query
                 or parts.fragment
                 or "\\" in value
+                or "%" in value
+                or "//" in value
+                or any(segment in (".", "..") for segment in value.split("/"))
             ):
                 raise ValueError("Only an absolute path on the configured system origin is allowed")
             if any(ord(c) < 32 for c in value):
@@ -135,6 +138,7 @@ class LocalDemoConfig(ApiModel):
     origin: str
     submit_path: str
     query_path: str
+    probe_path: str | None = None
 
     @field_validator("origin")
     @classmethod
@@ -148,9 +152,11 @@ class LocalDemoConfig(ApiModel):
             raise ValueError("Local demo origin must be an explicit HTTPS loopback port")
         return value
 
-    @field_validator("submit_path", "query_path")
+    @field_validator("submit_path", "query_path", "probe_path")
     @classmethod
     def local_path(cls, value):
+        if value is None:
+            return value
         if not re.fullmatch(r"/[A-Za-z0-9_~./-]*", value) or any(
             part in ("", ".", "..") for part in value[1:].split("/")
         ):
@@ -186,7 +192,7 @@ def local_demo_ready(target: LocalDemoConfig) -> bool:
         config = AdapterConfig.model_validate(configs[f"{target.ontology_id}/{target.system_code}"])
     except (ValueError, TypeError, KeyError, ValidationError):
         return False
-    return config.submit_path == target.submit_path and config.query_path == target.query_path
+    return config.submit_path == target.submit_path and config.query_path == target.query_path and (target.probe_path is None or config.probe_path == target.probe_path)
 
 
 def local_demo_matches(system: ExtSystem) -> bool:
@@ -226,6 +232,7 @@ class HttpAdapter:
             endpoint.scheme not in ("http", "https")
             or not endpoint.hostname
             or forbidden_metadata_host(endpoint.hostname)
+            or "@" in endpoint.netloc
             or endpoint.username
             or endpoint.password
             or endpoint.query
@@ -233,16 +240,28 @@ class HttpAdapter:
         ):
             raise unavailable("外部系统地址须为不含凭据或查询参数的 HTTP(S) 地址")
         self.origin = f"{endpoint.scheme}://{endpoint.netloc}"
+        if (not re.fullmatch(r"[A-Za-z0-9._~!$&'()*+,;=:@/\-]*", endpoint.path) or "//" in endpoint.path
+                or any(segment in (".", "..") for segment in endpoint.path.split("/"))
+                or any(c.isspace() or ord(c) < 32 for c in system.endpoint)):
+            raise unavailable("外部系统基础路径无效")
+        self.base_url = self.origin + endpoint.path.rstrip("/")
+        if self.base_url != system.endpoint.rstrip("/"):
+            raise unavailable("外部系统地址须为规范基础地址")
         self.verify = tls_verify()
+
+    def url(self, path: str) -> str:
+        AdapterConfig.relative_path(path)
+        return f"{self.base_url}{path}"
 
     def path(self, operation: str) -> str:
         if getattr(self.system, "local_only", False):
             target = local_demo_config(self.system.ontology_id, self.system.code)
             if (
                 not local_demo_matches(self.system)
-                or operation not in ("submit", "query")
+                or operation not in ("submit", "query", "probe")
                 or self.config.submit_path != target.submit_path
                 or self.config.query_path != target.query_path
+                or operation == "probe" and (not target.probe_path or self.config.probe_path != target.probe_path or self.system.probe_path != target.probe_path)
             ):
                 raise unavailable("本机演示目标未启用或配置已变化")
         value = {
@@ -262,7 +281,7 @@ class HttpAdapter:
 
     async def request(self, operation: str, key: str | None = None) -> httpx.Response:
         path = self.path(operation)
-        url = f"{self.origin}{path}"
+        url = self.url(path)
         headers = {"Accept": "application/json", "X-Ontology-Id": str(self.system.ontology_id)}
         extensions = {}
         if operation == "probe" and hasattr(self, "probe_policy"):
@@ -276,7 +295,7 @@ class HttpAdapter:
                     raise ValueError
                 selected = sorted(candidates, key=lambda ip: (ip.version, int(ip)))[0]
                 host = f"[{selected}]" if selected.version == 6 else str(selected)
-                url = f"{endpoint.scheme}://{host}:{port}{path}"
+                url = f"{endpoint.scheme}://{host}:{port}{urlsplit(url).path}"
                 headers["Host"] = endpoint.netloc
                 extensions["sni_hostname"] = hostname
             except (ValueError, OSError, asyncio.TimeoutError):
@@ -332,6 +351,8 @@ def get_probe_adapter(system: ExtSystem) -> HttpAdapter:
     settings = get_settings()
     if not settings.integration_real_connect or system.status == ExtSystemStatus.disabled:
         raise unavailable("真实探测未启用或系统不可用")
+    if system.http_endpoints is not None and not system.probe_path:
+        raise unavailable("接口目录未配置只读探测")
     try:
         endpoint = urlsplit(system.endpoint)
         if not system.probe_path:
@@ -340,7 +361,9 @@ def get_probe_adapter(system: ExtSystem) -> HttpAdapter:
                 raise ValueError
             return get_adapter(system, "probe")
         if system.local_only:
-            raise ValueError
+            adapter = get_adapter(system, "submit")
+            adapter.path("probe")
+            return adapter
         port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
         if endpoint.port == 0:
             raise ValueError
@@ -361,7 +384,7 @@ def get_probe_adapter(system: ExtSystem) -> HttpAdapter:
             raise ValueError
         config = AdapterConfig(probe_path=system.probe_path)
         adapter = HttpAdapter(system, config)
-        if system.endpoint != adapter.origin:
+        if system.endpoint.rstrip("/") != adapter.base_url:
             raise ValueError
         adapter.probe_policy = parsed_policy
         return adapter
@@ -396,7 +419,7 @@ def get_adapter(system: ExtSystem, operation: str = "query") -> HttpAdapter:
     adapter = HttpAdapter(system, config)
     target = local_demo_config(system.ontology_id, system.code)
     allowed_origin = target.origin if target else config.origin
-    if not allowed_origin or allowed_origin != adapter.origin or system.endpoint != adapter.origin:
+    if not allowed_origin or allowed_origin.rstrip("/") != adapter.base_url or system.endpoint.rstrip("/") != adapter.base_url:
         raise unavailable("部署未授权该系统的精确地址")
     if operation != "effect":
         adapter.path(operation)

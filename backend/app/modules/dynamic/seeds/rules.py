@@ -5,6 +5,7 @@
   [推断] 单号取 releases.ts DRAFT_TARGETS，master 还没有变更单表）；
 - rule_hit ← derived/hitsOf.json（1186，alert 命中 result=alert、alert_id 真外键）；
 - scenario ← SCENARIOS（18）；scenario_result / scenario_impact ← SCENARIOS.result（15 / 341）；
+- scenario_template ← SC_TEMPLATES（显式演示种子，生产初始化不加载）；
 - lifecycle ← LIFECYCLES（6）；lifecycle_version ← LIFECYCLES.versions（14），
   snapshot ← derived/lifecycleAsOf；
 - lifecycle_state / lifecycle_transition ← 当前版本的 states / transitions（只给当前版本建行，
@@ -36,6 +37,7 @@ from app.modules.dynamic.rules_models import (
     ScenarioImpact,
     ScenarioResult,
     ScenarioStatus,
+    ScenarioTemplate,
 )
 from app.modules.event.models import EventType
 from app.modules.static.models import ObjectType
@@ -348,6 +350,22 @@ _SC = Ref(Scenario, nullable=False)
 RULE_CHECKS = [check_rule_counts]
 
 RULE_SEEDS: list[SeedSpec] = [
+    SeedSpec(
+        ScenarioTemplate,
+        "SC_TEMPLATES.json",
+        key=("code",),
+        transform=lambda r, ctx: {
+            "code": r["code"],
+            "name": r["name"],
+            "engine": r["engine"],
+            "object_type": r["objectType"],
+            "definition": r,
+            "sort": next(
+                i for i, item in enumerate(ctx.load("SC_TEMPLATES.json")) if item["code"] == r["code"]
+            ),
+        },
+        description="显式零售演示模板定义，不执行场景",
+    ),
     SeedSpec(
         Rule,
         "RULE_DEFS.json",

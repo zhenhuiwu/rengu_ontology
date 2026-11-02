@@ -14,7 +14,7 @@ from datetime import datetime, time
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import func, select, tuple_
 
 from app.core import clock
@@ -58,6 +58,17 @@ class Limits(_Strict):
     objects: Annotated[
         list[Annotated[str, Field(min_length=1, max_length=64)]] | None, Field(max_length=500)
     ] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def daily_limit_alias(cls, value):
+        if isinstance(value, dict) and "dailyLimit" in value:
+            value = dict(value)
+            daily = value.pop("dailyLimit")
+            if "dailyCount" in value and value["dailyCount"] != daily:
+                raise ValueError("limits.dailyLimit 与 dailyCount 不能设置不同值")
+            value.setdefault("dailyCount", daily)
+        return value
 
 
 class Policy(_Strict):

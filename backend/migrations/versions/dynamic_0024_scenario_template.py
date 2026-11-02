@@ -2,10 +2,11 @@
 
 - 结构与 ontology_0018 的领域表一致：ontology_id 默认取会话空间、唯一键带 ontology_id、
   空间不可改触发器、FORCE RLS + ontology_scope 策略、授权给 rengu_ontology_scoped；
-- 迁移原有配置（不是新造数据）：此前 ontology 1 的模板来自 seeds/json/dynamic/SC_TEMPLATES.json，
-  原样写入 ontology 1（空间不存在则跳过）；其他空间不写，接口返回空列表、前端显示空状态；
+- 演示配置仅在显式 `alembic -x demo_seed=true upgrade head` 时从
+  seeds/json/dynamic/SC_TEMPLATES.json 写入 ontology 1（空间不存在则跳过）；默认只建空表。
+  已应用此迁移的历史库不重跑、不改写或清理已有模板。
 - 推演执行器仍未配置，:run 维持 503，本迁移不改变。
-降级删表：模板定义仍保留在 SC_TEMPLATES.json，可以重新导入。
+降级禁止：模板可能已由用户修改/添加，不能用删除整表撤销历史演示回填。
 
 Revision ID: dynamic_0024
 Revises: dynamic_0023
@@ -17,7 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "dynamic_0024"
@@ -68,6 +69,8 @@ def upgrade() -> None:
     op.execute("GRANT SELECT,INSERT,UPDATE,DELETE ON scenario_template TO rengu_ontology_scoped")
     op.execute("GRANT USAGE,SELECT ON SEQUENCE scenario_template_id_seq TO rengu_ontology_scoped")
 
+    if context.get_x_argument(as_dictionary=True).get("demo_seed") != "true":
+        return
     bind = op.get_bind()
     if not bind.scalar(sa.text("SELECT EXISTS (SELECT 1 FROM ontology_workspace WHERE id = 1)")):
         return
@@ -94,4 +97,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("scenario_template")
+    raise RuntimeError("禁止删除模板表：保留既有业务模板及历史引用，请审阅独立的增量变更")

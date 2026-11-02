@@ -452,8 +452,8 @@ async def config(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
     for item in rows:
         if item.item_key != "cfg" or item.op not in {"add", "update", "delete"}:
             raise writeback_error("写回配置须使用 cfg key")
-        data = {"sysId": None, "endpoint": "—", "idemKey": "", "httpMapping": None} if item.op == "delete" else item.after
-        if not isinstance(data, dict) or set(data) - {"sysId", "endpoint", "idemKey", "httpMapping"}:
+        data = {"sysId": None, "endpoint": "—", "idemKey": "", "httpMapping": None, "httpEndpointId": None} if item.op == "delete" else item.after
+        if not isinstance(data, dict) or set(data) - {"sysId", "endpoint", "idemKey", "httpMapping", "httpEndpointId"}:
             raise writeback_error("写回配置字段不合法")
         if "sysId" in data:
             code = optional_string(64)(data["sysId"], "sysId")
@@ -464,7 +464,10 @@ async def config(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
                 raise writeback_error("外部系统不存在", sysId=code)
             if system is not None and not is_writeback_target(system):
                 raise writeback_error("外部写回系统须为生产环境且未停用", sysId=code)
-            at.sys_id = system.id if system else None
+            next_sys_id = system.id if system else None
+            if next_sys_id != at.sys_id:
+                at.http_endpoint_id = None
+            at.sys_id = next_sys_id
             if system is None:
                 at.http_mapping = None
         if "endpoint" in data:
@@ -473,11 +476,22 @@ async def config(ctx: Ctx, tid: str, rows: list[Any]) -> set[str]:
             at.biz_key_template = text(data["idemKey"], "idemKey", 255)
         if "httpMapping" in data:
             from app.modules.integration.http_mapping import validate_mapping
+            from app.modules.integration.http_endpoints import validate_endpoint_params
             params = await ctx.session.scalars(select(ActionParam.api).where(ActionParam.action_type_id == at.id))
-            validate_mapping(data["httpMapping"], set(params))
+            param_names = set(params)
+            if data.get("httpEndpointId") or at.http_endpoint_id:
+                validate_endpoint_params(data["httpMapping"], param_names)
+            validate_mapping(data["httpMapping"], param_names)
             if data["httpMapping"] is not None and at.sys_id is None:
                 raise writeback_error("HTTP 映射须绑定外部系统")
             at.http_mapping = data["httpMapping"]
+        if "httpEndpointId" in data:
+            at.http_endpoint_id = optional_string(64)(data["httpEndpointId"], "httpEndpointId") or None
+        if at.http_endpoint_id:
+            from app.modules.integration.http_endpoints import require_selected_endpoint
+            system = await ctx.session.get(ExtSystem, at.sys_id) if at.sys_id else None
+            params = await ctx.session.scalars(select(ActionParam.api).where(ActionParam.action_type_id == at.id))
+            require_selected_endpoint(system, at.http_endpoint_id, at.endpoint, at.http_mapping, set(params))
     await ctx.session.flush()
     if at.sys_id != previous_system:
         final_edits(ctx, at)

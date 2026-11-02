@@ -233,7 +233,7 @@ class ExplorerService:
         if ver:
             return await self._historical_meta(code, ver)
         o = await self._object(code)
-        _, binding = await _bind(self.session, code)
+        _, binding = await _bind(self.session, code, allow_dm=True)
         props = [p for p in o.properties]
         title = next((p.api_name for p in props if p.is_title), None)
         visible = [p for p in props if p.visibility != "hidden"]
@@ -256,7 +256,7 @@ class ExplorerService:
             "properties": [prop_meta(p) for p in visible],
             "hiddenCount": len(props) - len(visible),
             "sampleQuestions": [q.get("q") for q in (o.sample_questions or []) if isinstance(q, dict)],
-            "scopeQuestions": scoped_questions(binding, props),
+            "scopeQuestions": [] if binding and binding.source and binding.source.is_dm else scoped_questions(binding, props),
             "hasData": binding is not None,
             "dataVersion": "current",
             "metrics": [

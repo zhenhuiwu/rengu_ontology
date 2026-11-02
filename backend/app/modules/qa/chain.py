@@ -49,7 +49,7 @@ from sqlalchemy.schema import CreateColumn, SetColumnComment, SetTableComment
 from sqlglot import exp
 
 from app.common.ontology import require_ontology_id
-from app.common.sql_guard import DIALECT, assert_single_select, governed_tables, run_guarded
+from app.common.sql_guard import DIALECT, SqlRejected, assert_single_select, governed_tables, run_guarded
 from app.core import clock
 from app.core.config import get_settings
 from app.core.enums import LabelEnum
@@ -154,6 +154,10 @@ class QaSource:
         return frozenset(t.name for t in self.tables)
 
 
+def _qa_column_visible(binding, column):
+    return (bool(binding.source_sql) or column.name not in SYSTEM_COLS) and (binding.projection is None or column.name in binding.projection)
+
+
 def qa_source(ontology_id: int, session=None) -> QaSource:
     """可问的表 = sql_guard 受治理表（行级权限已登记，即该本体的物理绑定）。
 
@@ -161,12 +165,13 @@ def qa_source(ontology_id: int, session=None) -> QaSource:
     """
     if session is not None and session.info.get("supplementary_invalid"):
         raise DataNotConfigured()
-    tables = tuple(g.table for g in governed_tables(ontology_id, session).values())
+    bindings = governed_tables(ontology_id, session)
+    tables = tuple(g.table for g in bindings.values())
     extra = _qa_config(ontology_id).get("timeHints") or {}
     time_cols, hints, names, measures = set(), {}, {}, []
     for t in tables:
         for c in t.columns:
-            if c.name in SYSTEM_COLS:
+            if not _qa_column_visible(bindings[t.name], c):
                 continue
             if isinstance(c.type, sa.DateTime):
                 time_cols.add(c.name)
@@ -202,14 +207,13 @@ def _schema_lines(ontology_id: int, session=None) -> list[str]:
     out = []
     bindings = governed_tables(ontology_id, session)
     for t in _qa_tables(ontology_id, session):
-        projection = bindings[t.name].projection
-        columns = [c for c in t.columns if c.name not in SYSTEM_COLS and (projection is None or c.name in projection)]
+        columns = [c for c in t.columns if _qa_column_visible(bindings[t.name], c)]
         name = dialect.identifier_preparer.format_table(t)
         ddl = [f"CREATE TABLE {name} (\n  " + ",\n  ".join(str(CreateColumn(c).compile(dialect=dialect)) for c in columns) + "\n);"]
         if t.comment:
             ddl.append(str(SetTableComment(t).compile(dialect=dialect)) + ";")
         for c in t.columns:
-            if c.name in SYSTEM_COLS or (projection is not None and c.name not in projection):
+            if not _qa_column_visible(bindings[t.name], c):
                 continue
             if enum := _label_enum(c):
                 codes = "，".join(f"{m.name}={m.value}" for m in enum)
@@ -258,6 +262,50 @@ SAMPLE_CAP = 30
 SAMPLE_SKIP = frozenset({"code", "name"})  # 另跳过：唯一列、注释带“脱敏”的列、context.json 的 sampleSkip
 
 
+def _sql_ident(name: str) -> str:
+    """大小写混合的列名必须加引号，否则 PostgreSQL 会折叠成小写。"""
+    if name.islower() and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return name
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _mirror_sql(session: AsyncSession, table_name: str) -> str | None:
+    gov = governed_tables(require_ontology_id(session), session).get(table_name)
+    return gov.source_sql if gov and gov.source_sql else None
+
+
+async def _distinct_values(session: AsyncSession, table, column, limit: int | None) -> list[Any]:
+    """物理表直接查；外部镜像没有 public.<表>，改查同步结果。"""
+    source = _mirror_sql(session, table.name)
+    if source:
+        ident = _sql_ident(column.name)
+        gov = governed_tables(require_ontology_id(session), session)[table.name]
+        scope = _sql_ident(gov.scope_column)
+        sql = f"SELECT DISTINCT {ident} FROM ({source}) AS src WHERE {scope} = :oid AND {ident} IS NOT NULL"
+        params: dict[str, Any] = {"oid": require_ontology_id(session)}
+        if limit is not None:
+            sql += " LIMIT :lim"
+            params["lim"] = limit
+        return list((await session.execute(sa.text(sql), params)).scalars().all())
+    stmt = sa.select(column).distinct().where(column.is_not(None))
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def _table_count(session: AsyncSession, table) -> int:
+    source = _mirror_sql(session, table.name)
+    if source:
+        gov = governed_tables(require_ontology_id(session), session)[table.name]
+        scope = _sql_ident(gov.scope_column)
+        total = await session.scalar(
+            sa.text(f"SELECT count(*) FROM ({source}) AS src WHERE {scope} = :oid"),
+            {"oid": require_ontology_id(session)},
+        )
+        return int(total or 0)
+    return int(await session.scalar(sa.select(sa.func.count()).select_from(table)) or 0)
+
+
 async def _sample_lines(session: AsyncSession) -> list[str]:
     """低基数文本列的全部取值（≤ SAMPLE_CAP 个），模型写 WHERE 时照抄真实值（如「南京」不是「南京市」）。
 
@@ -270,7 +318,7 @@ async def _sample_lines(session: AsyncSession) -> list[str]:
             continue
         for c in t.columns:
             if (
-                c.name in SYSTEM_COLS
+                not _qa_column_visible(governed_tables(require_ontology_id(session), session)[t.name], c)
                 or c.name in SAMPLE_SKIP
                 or c.unique
                 or "脱敏" in (c.comment or "")
@@ -279,11 +327,7 @@ async def _sample_lines(session: AsyncSession) -> list[str]:
                 or not isinstance(c.type, sa.String)
             ):
                 continue
-            vals = (
-                (await session.execute(sa.select(c).distinct().where(c.is_not(None)).limit(SAMPLE_CAP + 1)))
-                .scalars()
-                .all()
-            )
+            vals = await _distinct_values(session, t, c, SAMPLE_CAP + 1)
             if vals and len(vals) <= SAMPLE_CAP:
                 out.append(f"- {t.name}.{c.name}：" + "、".join(sorted(map(str, vals))))
     return out
@@ -540,13 +584,28 @@ async def qa_value_index(session: AsyncSession) -> vi.ValueIndex:
         rows = []
     props = _semantic_props(rows)
     await ensure_governed_tables(session)
-    obj_of = {g.name: g.object_type for g in governed_tables(ontology_id, session).values()}
+    governed = governed_tables(ontology_id, session)
+    obj_of = {g.name: g.object_type for g in governed.values()}
+    # Semantic snapshots retain physical source names. Resolve only through their explicit object identity.
+    from copy import deepcopy
+    rows = deepcopy(rows)
+    for row in rows:
+        if row.get("kind") != "dimension":
+            continue
+        binding = row.get("binding") or {}
+        parent_object, parent_table = binding.get("object"), binding.get("table")
+        for item in [binding, *(row.get("levels") or [])]:
+            code = item.get("object") or (parent_object if item.get("table") == parent_table else None)
+            matches = [g for g in governed.values() if g.object_type == code and not g.inherit]
+            column = item.get("column")
+            if len(matches) == 1 and isinstance(column, str) and column in matches[0].table.c:
+                item["table"] = matches[0].name
     cols: list[vi.Col] = []
     extra: set[str] = set()
     for t in src.tables:
         if any(child.name == t.name for _, child in session.info.get("supplementary_bindings", {}).values()):
             continue
-        total = await session.scalar(sa.select(sa.func.count()).select_from(t)) or 0
+        total = await _table_count(session, t)
         for c in t.columns:
             head = _comment_head(c)
             label = props.get((obj_of.get(t.name, ""), c.name)) or head
@@ -554,7 +613,7 @@ async def qa_value_index(session: AsyncSession) -> vi.ValueIndex:
             enum = _label_enum(c)
             is_name = src.name_cols.get(t.name) == c.name
             if (
-                c.name in SYSTEM_COLS
+                not _qa_column_visible(governed[t.name], c)
                 or c.name in skip
                 or "脱敏" in (c.comment or "")
                 or (not enum and not isinstance(c.type, sa.String))
@@ -562,11 +621,7 @@ async def qa_value_index(session: AsyncSession) -> vi.ValueIndex:
             ):
                 continue
             cap = vi.NAMECARD if is_name else vi.LOWCARD
-            vals = (
-                (await session.execute(sa.select(c).distinct().where(c.is_not(None)).limit(cap + 1)))
-                .scalars()
-                .all()
-            )
+            vals = await _distinct_values(session, t, c, cap + 1)
             vals = [getattr(v, "name", v) if enum else v for v in vals]
             if not vals or len(vals) > cap:
                 continue
@@ -719,6 +774,41 @@ def fix_sql(
 _JOIN_REF = re.compile(r"\b([A-Za-z_][\w]*)\.[A-Za-z_]\w*")
 
 
+def _normalized_join_hint(join_sql, governed, endpoints):
+    """Only reuse an unambiguous equality between the already-authorized endpoints."""
+    import sqlglot
+    from app.common.sql_guard import _sql_name
+    try:
+        tree = sqlglot.parse_one(join_sql, read=DIALECT)
+    except (sqlglot.errors.ParseError, TypeError, ValueError):
+        return None
+    if not isinstance(tree, exp.EQ) or not all(isinstance(c, exp.Column) and c.table for c in (tree.this, tree.expression)):
+        return None
+    seen = set()
+    for column in (tree.this, tree.expression):
+        if column.db or column.catalog:
+            return None
+        qualifier = column.args.get("table")
+        field = column.this
+        if not isinstance(qualifier, exp.Identifier) or not isinstance(field, exp.Identifier):
+            return None
+        matches = [(name, gov) for name, gov in governed.items() if gov.object_type in endpoints and any(
+            value == qualifier.name if qualifier.args.get("quoted") else value.casefold() == qualifier.name.casefold()
+            for value in (name, *gov.aliases)
+        )]
+        if len(matches) != 1:
+            return None
+        name, gov = matches[0]
+        allowed = gov.projection if gov.projection is not None else frozenset(gov.table.c.keys())
+        fields = [v for v in allowed if v == field.name] if field.args.get("quoted") else [v for v in allowed if v.casefold() == field.name.casefold()]
+        if len(fields) != 1:
+            return None
+        column.set("table", _sql_name(name))
+        column.set("this", _sql_name(fields[0]))
+        seen.add(gov.object_type)
+    return tree.sql(dialect=DIALECT) if seen == endpoints else None
+
+
 async def build_context(session: AsyncSession) -> dict[str, list[str]]:
     """从本体表取：表结构、对象说明、关联 join、指标口径、同义词、默认问数路径。
 
@@ -730,6 +820,8 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
     await ensure_governed_tables(session)
     src = qa_source(ontology_id, session)
     if not src.tables:
+        if session.info.get("mirror_gaps"):
+            raise DataNotConfigured("外部数据源已接入，但还没有可查询的同步结果。请在数据连接中完成只读授权并同步后再提问")
         raise DataNotConfigured()
     gov = governed_tables(ontology_id, session)
     table_of = {g.object_type: g.name for g in gov.values() if not g.inherit}  # 主表
@@ -755,6 +847,11 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
             refs = set(_JOIN_REF.findall(lk.join_sql or ""))
             if lk.to_object_id in obj_ids and refs and refs <= src.table_names:
                 links.append(f"- {lk.display_name}：{lk.join_sql}")
+            elif lk.to_object_id in obj_ids:
+                endpoints = {o.code for o in objs if o.id in (lk.from_object_id, lk.to_object_id)}
+                hint = _normalized_join_hint(lk.join_sql, gov, endpoints) if len(endpoints) == 2 else None
+                if hint:
+                    links.append(f"- {lk.display_name}：{hint}")
     metrics, seen_defs = [], set()
     meta = await _metric_meta(session)
     for m in (
@@ -950,8 +1047,7 @@ async def _names(session: AsyncSession) -> dict[str, list[str]]:
     out = {}
     for t in src.tables:
         if c := src.name_cols.get(t.name):
-            rows = await session.execute(select(t.c[c]).distinct())
-            out[t.name] = [r[0] for r in rows if r[0]]
+            out[t.name] = [v for v in await _distinct_values(session, t, t.c[c], None) if v]
     return out
 
 
@@ -1411,6 +1507,10 @@ async def answer(
                 "paged": False,
             },
         }
+        if result.get('dataSources'):
+            answer['dataSources'] = result['dataSources']
+            answer['mirrorCompleteness'] = result['mirrorCompleteness']
+            answer['basis']['notes'] = ['外部镜像同步尚未完整完成，结果包含已保留与已提交的数据。'] if result['mirrorCompleteness'] == 'partial' else ['数据来自最近完整扫描的外部镜像，后续源变更仍需同步。']
         return "answer", {"answer": answer}, 1, int((time.monotonic() - t0) * 1000), None
     ctx = await build_context(session)
     catalog = await act.action_catalog(session, user, request)
@@ -1453,7 +1553,7 @@ async def answer(
     ctx["actions"] = act.action_lines(catalog)
     alerts = await act.related_alerts(session, user, question, anchor_names(ctx["anchors"]))
     ctx["alerts"] = act.alert_lines(alerts)
-    objs = await dyn.named_objects(session, question, names)
+    objs = await dyn.named_objects(session, question, names, user)
     obj = objs[0] if len(objs) == 1 else None
     dsum = await dyn.object_summary(session, user, obj, request)
     dmulti = await dyn.objects_summary(session, user, objs, request)  # 点名多个对象：有告警的前几个
@@ -1475,11 +1575,7 @@ async def answer(
     def unbounded_unavailable():
         return done("denied", refuse_snapshot({"code": "NO_DATA", "reason": "查询仍包含时间条件，无法确认不限定时间，请换一种问法"}))
 
-    # 问“某告警 / 某对象该怎么处理” → 动态决策评估的排序建议（不调模型）；没有建议再交给模型
-    if dyn.wants_advice(question) and (target := dyn.decision_target(question, alerts, obj)):
-        stage("permission", "正在评估处理建议")
-        if decision := await dyn.evaluate(session, user, target, caller, request):
-            return done("answer", await act.with_declared(session, dyn.decision_snapshot(decision)))
+    # Parse the request before decision ranking so explicit targets and parameters cannot be bypassed.
     manifest = await sem.metric_layer(session, user)
     ctx["semantic"] = sem.semantic_lines(manifest)
     ctx["session_scope"] = [session_scope] if session_scope else []
@@ -1507,21 +1603,39 @@ async def answer(
         if intent == "action":  # 动作意图：只 dry-run 出建议确认卡，从不执行
             proposal = act.parse_action(val, catalog)
             if proposal is not None:
+                original = proposal
+                proposal, conflict = dyn.requested_action(question, proposal, objs)
+                trace = {"modelProposal": original, "requested": proposal}
+                policy = next(c["policy"] for c in catalog if c["id"] == proposal["type"])
+                if conflict:
+                    trace["decisionStatus"] = "clarification_required"
+                    snap = act.action_snapshot(proposal, {"passed": False, "checked": 0, "failed": [{"name": "动作意图", "msg": conflict}]}, policy)
+                    snap["answer"]["action"]["intentTrace"] = trace
+                    return done("answer", await act.with_declared(session, snap))
                 stage("permission", "正在校验动作提交条件")
                 # 有告警 / 对象可评估且模型选的动作在候选里 → 决策评估的排序建议；否则能力目录 + dry-run
                 target = dyn.decision_target(question, alerts, obj, proposal)
-                decision = await dyn.evaluate(session, user, target, caller, request)
+                trace["decisionTarget"] = target
+                decision = await dyn.evaluate(session, user, target, caller, request, trace=trace)
                 if dyn.has_type(decision, proposal["type"]):
                     chosen, _, filled = dyn.decision_choice(decision, proposal)
+                    trace["decisionChoice"] = chosen
+                    conflict = dyn.decision_conflict(proposal, chosen)
+                    if conflict:
+                        trace["decisionStatus"] = "clarification_required"
+                        snap = act.action_snapshot(proposal, {"passed": False, "checked": 0, "failed": [{"name": "动作意图", "msg": conflict}]}, policy)
+                        snap["answer"]["action"]["intentTrace"] = trace
+                        return done("answer", await act.with_declared(session, snap))
                     # 模型补了决策没填的参数（如数量）→ 按补全后的参数重新试运行
                     check = await act.dry_run(session, user, dict(chosen)) if filled else None
                     snap = dyn.decision_snapshot(decision, proposal, check)
+                    snap["answer"]["action"]["intentTrace"] = trace
                     return done("answer", await act.with_declared(session, snap))
                 check = await act.dry_run(session, user, proposal)
-                policy = next(c["policy"] for c in catalog if c["id"] == proposal["type"])
-                return done(
-                    "answer", await act.with_declared(session, act.action_snapshot(proposal, check, policy))
-                )
+                trace["actual"] = proposal
+                snap = act.action_snapshot(proposal, check, policy)
+                snap["answer"]["action"]["intentTrace"] = trace
+                return done("answer", await act.with_declared(session, snap))
             intent, val = "refuse", {"code": "NOT_SELECT", "reason": "没有可用的动作，问数只读"}
         if intent == "metric":  # 指标查询：编译器生成 SQL；编不出 / 执行报错回喂一次，改走 SQL
             if knowledge_hits:
@@ -1553,6 +1667,7 @@ async def answer(
                     return unbounded_unavailable()
                 async with conn.begin_nested():
                     res = await run_guarded(conn, wrap_limit(tree, limit + 1), user, session=session)
+                    data_sources = session.info.get('last_guarded_sources', [])
                     keys = list(res.keys())
                     rows = [[_cell(v) for v in r] for r in res.fetchall()]
                 break
@@ -1604,25 +1719,29 @@ async def answer(
         await ensure_governed_tables(session)
         sql = val
         tree = assert_single_select(sql)  # 先校验原 SQL，拒绝信息更准；被拒不重试
+        from app.common.sql_guard import normalize_read_identifiers
+        normalize_read_identifiers(tree, governed_tables(ontology_id, session))
+        sql = tree.sql(dialect=DIALECT)
         before = tree.sql(dialect=DIALECT)
         # 扇出能确定改写就直接改（明细先按外键汇总再关联），改不了的才回喂模型
         fan_notes = sqlfix.preaggregate_children(tree, _children(ontology_id, session))
-        if not checked:  # 口径校验不过，回喂改一次（只一次，改完不再查）
+        bad = caliber_violations(question, tree, ontology_id, session)
+        bad += sqlfix.fanout_violations(tree, _children(ontology_id, session))
+        if bad:
+            if checked or attempt >= FIX_RETRIES:
+                return done("denied", refuse_snapshot({"code": "NO_DATA", "reason": "修正后的查询仍不符合口径或关联规则，请明确问题后重试"}))
             checked = True
-            bad = caliber_violations(question, tree, ontology_id, session)
-            bad += sqlfix.fanout_violations(tree, _children(ontology_id, session))
-            if bad:
-                messages = [
-                    *messages,
-                    {"role": "assistant", "content": reply},
-                    {
-                        "role": "user",
-                        "content": "上面的 SQL 不符合口径裁定 / 计算规则："
-                        + "；".join(bad)
-                        + "。请修正后只输出一条 SQL。",
-                    },
-                ]
-                continue
+            messages = [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {
+                    "role": "user",
+                    "content": "上面的 SQL 不符合口径裁定 / 计算规则："
+                    + "；".join(bad)
+                    + "。请修正后只输出一条 SQL。",
+                },
+            ]
+            continue
         codes = {code for c in idx.cols for code in c.labels.values()}
         codes.update(value for c in idx.cols if c.column.lower() in ("status", "state") for value in c.values if value)
         required = _required_codes(ontology_id, ctx, codes) | {h.value for h in knowledge_hits}
@@ -1680,8 +1799,27 @@ async def answer(
         try:
             async with conn.begin_nested():  # savepoint：执行报错不弄坏连接上的事务
                 res = await run_guarded(conn, wrap_limit(tree, limit + 1), user, session=session)
+                data_sources = session.info.get('last_guarded_sources', [])
                 keys = list(res.keys())
                 rows = [[_cell(v) for v in r] for r in res.fetchall()]
+        except SqlRejected as e:
+            if not (e.details or {}).get("table") or attempt >= FIX_RETRIES:
+                raise
+            from app.common.auth import row_filter
+            from app.common.row_filter import is_deny_all
+            visible = []
+            for name, binding in governed_tables(ontology_id, session).items():
+                if is_deny_all(await row_filter(user, binding.scope_object_type)):
+                    continue
+                allowed = binding.projection if binding.projection is not None else set(binding.columns)
+                columns = sorted(c.name for c in binding.table.c if c.name in allowed and _qa_column_visible(binding, c))
+                visible.append(f"{name}: {', '.join(columns)}")
+            if not visible:
+                raise
+            attempt += 1
+            messages = [*messages, {"role": "assistant", "content": reply},
+                        {"role": "user", "content": "查询引用了未授权或不存在的表。仅可使用下列当前本体授权表和字段，保持原问题与筛选条件；如无法确定则说明无法查询，不要猜测：\n" + "\n".join(visible)}]
+            continue
         except DBAPIError as e:
             state = getattr(e.orig, "sqlstate", None) or getattr(e.orig, "pgcode", None)
             if state == PG_QUERY_CANCELED:  # statement_timeout：不重试，504
@@ -1717,6 +1855,7 @@ async def answer(
     truncated = len(rows) > limit
     await ensure_governed_tables(session)
     rows = _label_rows(rows[:limit], ontology_id, session)
+    mirror_completeness = 'partial' if any(s['mirrorCompleteness'] == 'partial' for s in data_sources) else 'full'
     if mplan is not None:  # 指标层输出列（指标名 / 模型__维度 / metric_time）→ 中文标题
         keys = [mplan.labels.get(k, k) for k in keys]
     if not rows:
@@ -1726,6 +1865,8 @@ async def answer(
             "tail": "，可以换个时间范围或条件再问。",
             "tag": "无数据",
         }
+        if data_sources:
+            snap.update({'dataSources': data_sources, 'mirrorCompleteness': mirror_completeness})
         return done("empty", snap, 0, sql)
     columns = []
     for i, k in enumerate(keys):
@@ -1759,7 +1900,7 @@ async def answer(
     if mplan is not None:
         ans["metricQuery"] = mplan.echo
     if dsum is None and not dmulti:  # 结果里出现多个对象实例 → 有告警的前几个
-        found = await dyn.result_objects(session, rows)
+        found = await dyn.result_objects(session, rows, user)
         dmulti.extend(await dyn.objects_summary(session, user, found, request))
     if notes := fix_notes if mplan is None else []:
         ans["basis"]["notes"] = notes
@@ -1769,6 +1910,11 @@ async def answer(
     if all_time:
         ans["text"] += " 时间范围：未限定，按当前口径及权限范围查询。"
         ans["basis"]["timeRange"] = "未限定"
+    if data_sources:
+        ans['dataSources'], ans['mirrorCompleteness'], ans['dataAsOf'] = data_sources, mirror_completeness, None
+        note = ('外部镜像同步尚未完整完成，结果包含已保留与已提交的数据。' if mirror_completeness == 'partial'
+                else '数据来自最近完整扫描的外部镜像，后续源变更仍需同步。')
+        ans['basis'].setdefault('notes', []).append(note)
     return done("answer", {"answer": ans}, len(rows), sql)
 
 
