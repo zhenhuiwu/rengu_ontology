@@ -62,11 +62,11 @@ def private_directory(directory: Path) -> None:
         directory.chmod(0o700)
 
 
-def prepare(directory: Path) -> None:
+def prepare(directory: Path, *, ca_common_name: str = "Rengu temporary local demo CA") -> None:
     private_directory(directory)
     ca_key, server_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     now = datetime.fromtimestamp(time.time(), UTC)  # TLS validity uses the host clock.
-    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Rengu temporary local demo CA")])
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, ca_common_name)])
     ca = (
         x509.CertificateBuilder()
         .subject_name(ca_name)

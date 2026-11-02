@@ -23,7 +23,6 @@ services:
     build: .
     environment:
       RENGU_DATABASE_URL: postgresql+asyncpg://rengu:rengu@postgres:5432/rengu
-      RENGU_FIXED_NOW: "2026-10-25T15:42:00+08:00"
     ports:
       - "8000:8000"
     depends_on:

@@ -22,11 +22,11 @@ migrate: ## 迁移到最新
 revision: ## 生成迁移：make revision m="st: add object_type"
 	$(RUN) alembic revision --autogenerate -m "$(m)"
 
-seed: ## 把 seeds/json/<module>/ 幂等写入数据库（可 make seed m=versioning）
-	$(RUN) python -m app.cli seed $(if $(m),-m $(m),)
+seed: ## 显式导入零售演示数据（仅非生产空间1，可 make seed m=versioning）
+	$(RUN) python -m app.cli seed --demo $(if $(m),-m $(m),)
 
-seed-dry: ## 只校验 seed，不写入
-	$(RUN) python -m app.cli seed --dry-run
+seed-dry: ## 演示库尝试导入后回滚（非存量只读审计）
+	$(RUN) python -m app.cli seed --demo --dry-run
 
 dev: ## 本地启动（热重载），文档 http://127.0.0.1:8000/docs
 	$(RUN) uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
