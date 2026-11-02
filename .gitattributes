@@ -1,0 +1,2 @@
+database/exports/*.sql text eol=lf
+database/exports/*.manifest.json text eol=lf
