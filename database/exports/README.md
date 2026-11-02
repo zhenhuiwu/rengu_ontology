@@ -1,6 +1,6 @@
 # rengu_ontology SQL 数据快照
 
-最新快照为 [2026-11-02 SQL](rengu_ontology-2026-11-02.sql)，请配合[最新恢复与去凭据说明](README-2026-11-02.md)及同名 `.manifest.json` 使用。以下内容只说明原 2026-10-27 归档，不代表最新版本。
+最新快照为 [2026-11-02 15:16:30 SQL](rengu_ontology-2026-11-02-151630.sql)，请配合[最新恢复与迁移说明](README-2026-11-02-151630.md)及[manifest](rengu_ontology-2026-11-02-151630.manifest.json)使用。已有部署应备份后运行 Alembic 增量升级，完整 SQL 仅供新空库恢复。此前 [13:50 快照说明](README-2026-11-02.md)保留；以下内容只说明原 2026-10-27 归档，不代表最新版本。
 
 文件：[rengu_ontology-2026-10-27.sql](rengu_ontology-2026-10-27.sql)。这是**去凭据的真实结构与数据快照**，不是 seed，也不是保留凭据的本机完整备份。
 

@@ -1,0 +1,885 @@
+{
+  "alembicRevision": [
+    "dynamic_0050_record_deletion"
+  ],
+  "bytes": 10798536,
+  "cleanedCells": 20,
+  "cleanedSqlLines": 0,
+  "offlineOnly": true,
+  "removedAuthRows": 22,
+  "restoreVerified": false,
+  "sha256": "9c8b9feb2d750072fabfe32d9b45d38477dfd6b1fd00fca575afbad63910d797",
+  "sourceModified": false,
+  "tables": {
+    "public.action_param": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 104,
+      "sourceRows": 104
+    },
+    "public.action_run": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 2011,
+      "sourceRows": 2011
+    },
+    "public.action_run_daily_counter": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 7,
+      "sourceRows": 7
+    },
+    "public.action_run_daily_stat": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 238,
+      "sourceRows": 238
+    },
+    "public.action_run_log": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 9145,
+      "sourceRows": 9145
+    },
+    "public.action_type": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 26,
+      "sourceRows": 26
+    },
+    "public.action_type_rule": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 14,
+      "sourceRows": 14
+    },
+    "public.action_type_version": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 44,
+      "sourceRows": 44
+    },
+    "public.alembic_version": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1,
+      "sourceRows": 1
+    },
+    "public.alert": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 162,
+      "sourceRows": 162
+    },
+    "public.alert_log": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 464,
+      "sourceRows": 464
+    },
+    "public.api_key": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 3
+    },
+    "public.api_key_call": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 11
+    },
+    "public.api_key_usage": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 4
+    },
+    "public.audit_export_job": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.audit_export_row": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.audit_log": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 604,
+      "sourceRows": 604
+    },
+    "public.auth_credential": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 1
+    },
+    "public.auth_login_throttle": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 2
+    },
+    "public.auth_session": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 1
+    },
+    "public.biz_order": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1286,
+      "sourceRows": 1286
+    },
+    "public.change_request": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 137,
+      "sourceRows": 137
+    },
+    "public.cr_check": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1989,
+      "sourceRows": 1989
+    },
+    "public.cr_event": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 238,
+      "sourceRows": 238
+    },
+    "public.cr_impact": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 150,
+      "sourceRows": 150
+    },
+    "public.cr_item": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1009,
+      "sourceRows": 1009
+    },
+    "public.cr_target": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 134,
+      "sourceRows": 134
+    },
+    "public.cr_trial": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.datasource": {
+      "affectedColumns": {
+        "password_enc": 7
+      },
+      "cleanedCells": 7,
+      "outputRows": 23,
+      "sourceRows": 23
+    },
+    "public.datasource_run": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 120,
+      "sourceRows": 120
+    },
+    "public.datasource_table": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 988,
+      "sourceRows": 988
+    },
+    "public.decision_log": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 9,
+      "sourceRows": 9
+    },
+    "public.deep_device_w16_asset": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 25,
+      "sourceRows": 25
+    },
+    "public.deep_device_w16_extra": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 15,
+      "sourceRows": 15
+    },
+    "public.deep_device_w16_task": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 37,
+      "sourceRows": 37
+    },
+    "public.dim_level": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 31,
+      "sourceRows": 31
+    },
+    "public.dim_mapping": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 34,
+      "sourceRows": 34
+    },
+    "public.dim_value": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 243,
+      "sourceRows": 243
+    },
+    "public.dimension": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 21,
+      "sourceRows": 21
+    },
+    "public.event": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1285,
+      "sourceRows": 1285
+    },
+    "public.event_daily_stat": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 210,
+      "sourceRows": 210
+    },
+    "public.event_dedup": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 39,
+      "sourceRows": 39
+    },
+    "public.event_delivery": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 22,
+      "sourceRows": 22
+    },
+    "public.event_delivery_record": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 63,
+      "sourceRows": 63
+    },
+    "public.event_envelope_field": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 10,
+      "sourceRows": 10
+    },
+    "public.event_payload_field": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 204,
+      "sourceRows": 204
+    },
+    "public.event_subscription": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 44,
+      "sourceRows": 44
+    },
+    "public.event_type": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 47,
+      "sourceRows": 47
+    },
+    "public.event_type_version": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 40,
+      "sourceRows": 40
+    },
+    "public.ext_system": {
+      "affectedColumns": {
+        "auth_detail": 11
+      },
+      "cleanedCells": 11,
+      "outputRows": 19,
+      "sourceRows": 19
+    },
+    "public.external_cdc_subscription": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1,
+      "sourceRows": 1
+    },
+    "public.external_mirror_row": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 295,
+      "sourceRows": 295
+    },
+    "public.external_mirror_run": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 18,
+      "sourceRows": 18
+    },
+    "public.external_mirror_state": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 6,
+      "sourceRows": 6
+    },
+    "public.external_read_binding": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 6,
+      "sourceRows": 6
+    },
+    "public.fn_param": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 12,
+      "sourceRows": 12
+    },
+    "public.fn_use": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.fn_version": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 9,
+      "sourceRows": 9
+    },
+    "public.function": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 6,
+      "sourceRows": 6
+    },
+    "public.governed_binding": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 5,
+      "sourceRows": 5
+    },
+    "public.knowledge": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 30,
+      "sourceRows": 30
+    },
+    "public.knowledge_apply": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 59,
+      "sourceRows": 59
+    },
+    "public.lifecycle": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 6,
+      "sourceRows": 6
+    },
+    "public.lifecycle_change": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 246,
+      "sourceRows": 246
+    },
+    "public.lifecycle_draft": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.lifecycle_state": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 28,
+      "sourceRows": 28
+    },
+    "public.lifecycle_transition": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 35,
+      "sourceRows": 35
+    },
+    "public.lifecycle_version": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 14,
+      "sourceRows": 14
+    },
+    "public.link_quality": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 26,
+      "sourceRows": 26
+    },
+    "public.link_type": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 31,
+      "sourceRows": 31
+    },
+    "public.maintenance_asset_demo_20261028": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 3,
+      "sourceRows": 3
+    },
+    "public.maintenance_asset_extra_demo_20261028": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 3,
+      "sourceRows": 3
+    },
+    "public.maintenance_quality_demo_20261028": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 3,
+      "sourceRows": 3
+    },
+    "public.maintenance_task_demo_20261028": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 2,
+      "sourceRows": 2
+    },
+    "public.metric": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 19,
+      "sourceRows": 19
+    },
+    "public.notification": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.object_type": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 32,
+      "sourceRows": 32
+    },
+    "public.object_view": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 285,
+      "sourceRows": 285
+    },
+    "public.onto_qa_path": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 7,
+      "sourceRows": 7
+    },
+    "public.onto_qa_path_example": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 9,
+      "sourceRows": 9
+    },
+    "public.onto_qa_path_step": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 10,
+      "sourceRows": 10
+    },
+    "public.ontology_edit_rule": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 39,
+      "sourceRows": 39
+    },
+    "public.ontology_member": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 150,
+      "sourceRows": 150
+    },
+    "public.ontology_release": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 139,
+      "sourceRows": 139
+    },
+    "public.ontology_role_binding": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 9,
+      "sourceRows": 9
+    },
+    "public.ontology_workspace": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 16,
+      "sourceRows": 16
+    },
+    "public.order_line": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 3905,
+      "sourceRows": 3905
+    },
+    "public.outbox_event": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 132,
+      "sourceRows": 132
+    },
+    "public.platform_setting": {
+      "affectedColumns": {
+        "secret_enc": 2
+      },
+      "cleanedCells": 2,
+      "outputRows": 2,
+      "sourceRows": 2
+    },
+    "public.procrastinate_events": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 14994,
+      "sourceRows": 14994
+    },
+    "public.procrastinate_jobs": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 4998,
+      "sourceRows": 4998
+    },
+    "public.procrastinate_periodic_defers": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 7,
+      "sourceRows": 7
+    },
+    "public.procrastinate_workers": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 8,
+      "sourceRows": 8
+    },
+    "public.product": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 12,
+      "sourceRows": 12
+    },
+    "public.property": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 336,
+      "sourceRows": 336
+    },
+    "public.qa_cert": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 30,
+      "sourceRows": 30
+    },
+    "public.qa_cert_variant": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 10,
+      "sourceRows": 10
+    },
+    "public.qa_eval_fail": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 222,
+      "sourceRows": 222
+    },
+    "public.qa_eval_question": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 40,
+      "sourceRows": 40
+    },
+    "public.qa_eval_run": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 21,
+      "sourceRows": 21
+    },
+    "public.qa_favorite": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 18,
+      "sourceRows": 18
+    },
+    "public.qa_feedback": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 26,
+      "sourceRows": 26
+    },
+    "public.qa_freq_question": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 32,
+      "sourceRows": 32
+    },
+    "public.qa_object_type_view": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 4,
+      "sourceRows": 4
+    },
+    "public.qa_page": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 35,
+      "sourceRows": 35
+    },
+    "public.qa_page_card": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 208,
+      "sourceRows": 208
+    },
+    "public.qa_page_share_member": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 27,
+      "sourceRows": 27
+    },
+    "public.qa_page_subscription": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 35,
+      "sourceRows": 35
+    },
+    "public.qa_permission_request": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.qa_query_log": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 76,
+      "sourceRows": 76
+    },
+    "public.qa_session": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 114,
+      "sourceRows": 114
+    },
+    "public.qa_session_option": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 5,
+      "sourceRows": 5
+    },
+    "public.qa_synonym_link": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 2,
+      "sourceRows": 2
+    },
+    "public.qa_template": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 22,
+      "sourceRows": 22
+    },
+    "public.qa_template_card": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 104,
+      "sourceRows": 104
+    },
+    "public.qa_turn": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 69,
+      "sourceRows": 69
+    },
+    "public.qa_turn_event": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 314,
+      "sourceRows": 314
+    },
+    "public.quality_check": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 4,
+      "sourceRows": 4
+    },
+    "public.quality_run": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 4,
+      "sourceRows": 4
+    },
+    "public.quality_schedule_cursor": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.reconcile_task": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 86,
+      "sourceRows": 86
+    },
+    "public.rescue_incident_w4_demo": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 3,
+      "sourceRows": 3
+    },
+    "public.rescue_team_w4_demo": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 2,
+      "sourceRows": 2
+    },
+    "public.rule": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 24,
+      "sourceRows": 24
+    },
+    "public.rule_draft": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 2,
+      "sourceRows": 2
+    },
+    "public.rule_hit": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1193,
+      "sourceRows": 1193
+    },
+    "public.rule_schedule_cursor": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1,
+      "sourceRows": 1
+    },
+    "public.rule_schedule_run": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1,
+      "sourceRows": 1
+    },
+    "public.rule_version": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 42,
+      "sourceRows": 42
+    },
+    "public.scenario": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 19,
+      "sourceRows": 19
+    },
+    "public.scenario_impact": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 341,
+      "sourceRows": 341
+    },
+    "public.scenario_result": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 15,
+      "sourceRows": 15
+    },
+    "public.scenario_template": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1,
+      "sourceRows": 1
+    },
+    "public.service_account": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 0,
+      "sourceRows": 0
+    },
+    "public.side_effect": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 47,
+      "sourceRows": 47
+    },
+    "public.store": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 95,
+      "sourceRows": 95
+    },
+    "public.submission_criterion": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 59,
+      "sourceRows": 59
+    },
+    "public.sys_org": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1,
+      "sourceRows": 1
+    },
+    "public.sys_role": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 10,
+      "sourceRows": 10
+    },
+    "public.sys_role_member": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 228,
+      "sourceRows": 228
+    },
+    "public.sys_role_scope": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 12,
+      "sourceRows": 12
+    },
+    "public.sys_tenant": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 1,
+      "sourceRows": 1
+    },
+    "public.sys_user": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 136,
+      "sourceRows": 136
+    },
+    "public.writeback_call": {
+      "affectedColumns": {},
+      "cleanedCells": 0,
+      "outputRows": 781,
+      "sourceRows": 781
+    }
+  }
+}
