@@ -479,7 +479,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
 <template>
   <div class="st">
     <div class="panel st-nav">
-      <div class="panel-head"><span class="t-16 fw-600">配置分组</span></div>
+      <div class="panel-head"><span class="t-14 fw-600 c-2">配置分组</span></div>
       <div v-for="g in GROUPS" :key="g.key" class="st-item" :class="{ on: g.key === group }" @click="selectGroup(g.key)">
         <div class="st-l1" :title="g.desc">
           <span class="t-14 c-1" :class="{ 'fw-600': g.key === group }">{{ g.title }}</span>
@@ -491,14 +491,14 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
 
     <div class="panel st-main">
       <div class="panel-head">
-        <span class="t-16 fw-600">{{ groupTitle }}</span>
-        <span class="t-12 c-3">{{ realSettings && group !== 'tenant' ? '—' : updated[group] ? `最近修改：${updated[group]}` : '尚未配置' }}</span>
+        <span class="t-20 fw-600">{{ groupTitle }}</span>
+        <span v-if="!realSettings || group === 'tenant'" class="t-12 c-3">{{ updated[group] ? `最近修改：${updated[group]}` : '尚未配置' }}</span>
       </div>
 
       <ModelSettings v-if="realSettings" v-show="group === 'llm'" :readonly="readonly" :reason="reason" @dirty="modelDirty = $event" />
       <NotificationSettings v-if="realSettings && group === 'notify'" />
       <div v-if="realSettings && group === 'security'" class="st-body">
-        <a-empty description="登录安全策略暂不可用" />
+        <section class="st-status-panel"><span class="t-14 fw-600 c-1">登录安全策略</span><span class="t-14 c-3">暂不可用</span></section>
       </div>
       <!-- 租户信息 -->
       <div v-else-if="group === 'tenant'" class="st-body">
@@ -506,7 +506,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
         <a-alert v-if="realSettings && tenantState.error" type="error" show-icon :message="tenantState.error">
           <template #action><a-button size="small" :disabled="tenantState.loading || tenantState.saving" @click="reloadTenant">重新加载</a-button></template>
         </a-alert>
-        <a-descriptions v-if="realSettings && tenantState.ready" bordered :column="{ xs: 1, sm: 1, md: 2 }" size="middle">
+        <a-descriptions v-if="realSettings && tenantState.ready" bordered :column="1" size="middle" class="st-organization">
           <a-descriptions-item label="组织名称">{{ draft.tenant.name }}</a-descriptions-item>
           <a-descriptions-item label="简称">{{ draft.tenant.shortName }}</a-descriptions-item>
           <a-descriptions-item label="管理员">admin</a-descriptions-item>
@@ -749,15 +749,18 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
 
 <style scoped>
 .st { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.st-nav { width: 260px; flex: none; }
+.st-nav { width: 208px; flex: none; }
 .st-item { padding: 12px 16px; border-bottom: var(--border); border-left: 3px solid transparent; cursor: pointer; }
 .st-item:hover { background: var(--g2); }
 .st-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
-.st-l1 { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.st-l1 { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .st-mod { margin-left: auto; }
 .st-navfoot { margin-top: auto; padding: 12px 16px; }
 .st-main { flex: 1; min-width: 0; }
-.st-body { flex: 1; min-width: 0; min-height: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.st-body { flex: 1; min-width: 0; min-height: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; overflow: auto; }
+.st-organization, .st-status-panel { width: 100%; max-width: 1040px; }
+.st-organization :deep(.ant-descriptions-item-label) { width: 144px; }
+.st-status-panel { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; border: var(--border); border-radius: var(--radius); }
 .st-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 520px)); column-gap: 48px; }
 .st-sec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .st-sect { min-width: 0; }

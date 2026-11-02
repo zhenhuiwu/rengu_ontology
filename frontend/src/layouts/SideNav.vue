@@ -52,7 +52,7 @@ function switchArea(k: string | number) {
     <a-menu
       class="sn-menu" mode="inline" :items="items"
       :open-keys="openKeys" :selected-keys="selectedKeys" :inline-indent="16"
-      @click="({ key }: { key: string }) => router.push({ name: key })"
+      @click="({ key }: { key: string }) => router.push({ name: key, query: { ontology: app.ontologyId } })"
     />
   </aside>
 </template>

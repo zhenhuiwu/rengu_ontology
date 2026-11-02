@@ -78,7 +78,8 @@ const qref = (k: string, d = '全部') => computed({ get: () => q(k) || d, set: 
 const statusF = qref('status');
 const scopeF = qref('scope');
 const kw = qref('kw', '');
-const pq = usePagedQuery({ defaultSize: 18, filters: [statusF, scopeF, kw] });
+const tableEl = ref<HTMLElement | null>(null);
+const pq = usePagedQuery({ defaultSize: 18, filters: [statusF, scopeF, kw], adaptive: { container: tableEl, rowHeight: 48, rowSelector: '.ant-table-tbody > tr.ant-table-row', reserve: 56, min: 5, max: 50 } });
 const rows = computed(() => keys.value.filter((k) =>
   (statusF.value === '全部' || k.status === statusF.value)
   && (scopeF.value === '全部' || k.scopes.includes(scopeF.value as KeyScope))
@@ -105,17 +106,17 @@ watch([statusF, scopeF, kw, pq.page, pq.size, () => JSON.stringify(currentApiCon
 // 状态：有效 / 即将过期 灰（即将过期另写剩余天数）；已过期 红；已吊销 灰（文字淡）
 const badge = (_s: KeyStatus) => 'default';
 const columns = fitColumns([
-  { title: '名称', key: 'name', width: 190, ellipsis: true },
-  { title: '密钥', key: 'key', width: 170 },
-  { title: '权限范围', key: 'scopes', width: 200, ellipsis: true },
-  { title: '绑定身份', key: 'binding', width: 150, ellipsis: true },
-  { title: '创建人', dataIndex: 'creator', key: 'creator', width: 80 },
-  { title: '创建时间', key: 'createdAt', width: 140 },
-  { title: '最近使用', key: 'lastUsed', width: 140 },
-  { title: '到期', key: 'expires', width: 150 },
-  { title: '状态', key: 'status', width: 100 },
-  { title: '近 7 天调用', key: 'calls', width: 110, align: 'right' as const },
-  { title: '操作', key: 'op', width: 180 },
+  { title: '名称', key: 'name', width: 200, ellipsis: true },
+  { title: '密钥', key: 'key', width: 144 },
+  { title: '权限范围', key: 'scopes', width: 184, ellipsis: true },
+  { title: '绑定身份', key: 'binding', width: 160, ellipsis: true },
+  { title: '创建人', dataIndex: 'creator', key: 'creator', width: 128, ellipsis: true },
+  { title: '创建时间', key: 'createdAt', width: 128 },
+  { title: '最近使用', key: 'lastUsed', width: 128 },
+  { title: '到期', key: 'expires', width: 136 },
+  { title: '状态', key: 'status', width: 96 },
+  { title: '近 7 天调用', key: 'calls', width: 88, align: 'right' as const },
+  { title: '操作', key: 'op', width: 200 },
 ]);
 
 // 吊销
@@ -407,33 +408,35 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
 </script>
 
 <template>
-  <Teleport defer to="#page-extra">
-    <a-button v-if="real" class="ak-mr8" @click="setQuery({ sa: '1' })">服务账号</a-button>
-    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || busy" @click="setQuery({ form: 'create', from: undefined })">新建密钥</a-button></a-tooltip>
-  </Teleport>
   <div class="panel ak">
     <a-alert v-if="loadError || metaError" type="error" show-icon :message="loadError || metaError" />
-    <div class="panel-head">
-      <span class="ak-sum">
-        <span class="t-16 fw-600">API 密钥</span>
-        <span class="t-12 c-2">有效 <span class="num c-1">{{ count('有效') }}</span> · 即将过期 <span class="num c-1">{{ count('即将过期') }}</span> · 已过期 <span class="num c-1">{{ count('已过期') }}</span> · 已吊销 <span class="num c-1">{{ count('已吊销') }}</span></span>
-      </span>
-      <a-space>
-        <a-select v-model:value="statusF" size="small" class="ak-w120" :options="['全部', '有效', '即将过期', '已过期', '已吊销'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
-        <a-select v-model:value="scopeF" size="small" class="ak-w140" :options="[{ value: '全部', label: '全部权限范围' }, ...scopeOptions]" />
-        <a-input-search :value="kw" size="small" placeholder="名称 / 前缀 / 创建人" class="ak-w200" allow-clear @search="(v: string) => (kw = v)" />
-      </a-space>
+    <div class="ak-toolbar">
+      <div class="ak-filters">
+        <a-input-search :value="kw" placeholder="名称 / 前缀 / 创建人" class="ak-search" allow-clear aria-label="搜索密钥" @search="(v: string) => (kw = v)" />
+        <a-select v-model:value="statusF" class="ak-w120" aria-label="密钥状态" :options="['全部', '有效', '即将过期', '已过期', '已吊销'].map((v) => ({ value: v, label: v === '全部' ? '全部状态' : v }))" />
+        <a-select v-model:value="scopeF" class="ak-w140" aria-label="权限范围" :options="[{ value: '全部', label: '全部权限范围' }, ...scopeOptions]" />
+      </div>
+      <div class="ak-actions">
+        <a-button v-if="real" @click="setQuery({ sa: '1' })">服务账号</a-button>
+        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || busy" @click="setQuery({ form: 'create', from: undefined })">新建密钥</a-button></a-tooltip>
+      </div>
     </div>
-    <div class="ak-table" :class="{ 'paged-scroll': pq.overflow.value }">
-      <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :pagination="false" :loading="loading" :scroll="{ x: 1710 }" :locale="{ emptyText: loadError || '没有符合条件的密钥' }">
+    <div class="ak-summary t-12 c-3">
+      <span>有效 <span class="num c-1">{{ count('有效') }}</span></span>
+      <span>即将过期 <span class="num c-1">{{ count('即将过期') }}</span></span>
+      <span>已过期 <span class="num c-1">{{ count('已过期') }}</span></span>
+      <span>已吊销 <span class="num c-1">{{ count('已吊销') }}</span></span>
+    </div>
+    <div ref="tableEl" class="ak-table paged-scroll">
+      <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :pagination="false" :loading="loading" :scroll="{ x: 1440 }" :locale="{ emptyText: loadError || '没有符合条件的密钥' }">
         <template #bodyCell="{ column, record }">
-          <span v-if="column.key === 'name'" class="ak-name"><a class="num" @click="setQuery({ key: record.id })">{{ record.name }}</a><a-tag v-if="record.env === '测试'" class="ak-env">测试</a-tag></span>
+          <span v-if="column.key === 'name'" class="ak-name"><a class="num" :title="record.name" @click="setQuery({ key: record.id })">{{ record.name }}</a><a-tag v-if="record.env === '测试'" class="ak-env">测试</a-tag></span>
           <span v-else-if="column.key === 'key'" class="num c-2">{{ mask(record) }}</span>
           <a-tooltip v-else-if="column.key === 'scopes'" :title="scopesText(record.scopes)"><span class="ak-scopes"><a-tag v-for="s in record.scopes" :key="s">{{ scopeLabel(s) }}</a-tag></span></a-tooltip>
-          <span v-else-if="column.key === 'binding'" class="c-2">{{ record.binding.kind === '用户' ? `${record.binding.userName}（${record.binding.userId}）` : record.binding.kind === '角色' ? record.binding.role : record.binding.serviceAccountName ?? record.binding.account }}</span>
-          <span v-else-if="column.key === 'createdAt'" class="num c-2">{{ record.createdAt }}</span>
-          <span v-else-if="column.key === 'lastUsed'" class="num" :class="record.lastUsed ? 'c-2' : 'c-3'">{{ record.lastUsed ?? '从未使用' }}</span>
-          <span v-else-if="column.key === 'expires'" class="num">
+          <a-tooltip v-else-if="column.key === 'binding'" :title="bindText(record.binding)"><span class="c-2 ak-binding">{{ record.binding.kind === '用户' ? `${record.binding.userName}（${record.binding.userId}）` : record.binding.kind === '角色' ? record.binding.role : record.binding.serviceAccountName ?? record.binding.account }}</span></a-tooltip>
+          <span v-else-if="column.key === 'createdAt'" class="num c-2 ak-date">{{ record.createdAt }}</span>
+          <span v-else-if="column.key === 'lastUsed'" class="num ak-date" :class="record.lastUsed ? 'c-2' : 'c-3'">{{ record.lastUsed ?? '从未使用' }}</span>
+          <span v-else-if="column.key === 'expires'" class="num ak-date">
             <template v-if="!record.expiresAt"><span class="c-3">永不过期</span></template>
             <template v-else>{{ record.expiresAt }}<span v-if="record.status === '即将过期'" class="t-12 c-2"> 剩 {{ daysLeft(record.expiresAt) }} 天</span></template>
           </span>
@@ -441,14 +444,14 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
           <span v-else-if="column.key === 'calls'" class="num" :class="record.calls7d ? 'c-1' : 'c-3'">{{ record.calls7d ? fmtInt(record.calls7d) : EMPTY }}</span>
           <a-space v-else-if="column.key === 'op'" :size="12">
             <a @click="setQuery({ key: record.id })">详情</a>
-            <a-tooltip v-if="record.status !== '已吊销'" :title="reason"><a :class="{ 'ak-dis': readonly }" @click="!readonly && revoke(record)">吊销</a></a-tooltip>
+            <a-tooltip v-if="record.status !== '已吊销'" :title="reason"><a class="ak-danger" :class="{ 'ak-dis': readonly }" @click="!readonly && revoke(record)">吊销</a></a-tooltip>
             <a-tooltip :title="reason"><a :class="{ 'ak-dis': readonly }" @click="!readonly && setQuery({ form: 'create', from: record.id })">复制配置新建</a></a-tooltip>
           </a-space>
         </template>
       </a-table>
     </div>
     <AppPagination v-if="!real || remote"
-      v-model:page="pq.page.value" v-model:size="pq.size.value" class="ak-pager"
+      v-model:page="pq.page.value" v-model:size="pq.size.value" v-model:mode="pq.mode.value" class="ak-pager"
       variant="full" :total="paged.total" unit="个密钥" :default-size="pq.defaultSize" :empty="false"
     />
   </div>
@@ -506,7 +509,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
     <template v-if="!secret">
       <a-alert v-if="real && metaError" type="error" show-icon :message="metaError" />
       <a-alert v-if="cloneBlocked" type="warning" show-icon :message="cloneBlocked" class="ak-mb8" />
-      <a-form layout="vertical" :model="form" :disabled="busy || !!cloneBlocked">
+      <a-form layout="vertical" class="ak-create-form" :model="form" :disabled="busy || !!cloneBlocked">
         <a-form-item v-if="real" label="绑定本体" help="仅绑定当前本体；更换本体请先切换空间，再明确重新签发。"><span class="num">{{ currentApiContext().ontologyId ?? 1 }}</span></a-form-item>
         <a-form-item v-if="cloneSourceScope" label="复制来源本体"><span class="num">{{ cloneSourceScope }}</span></a-form-item>
         <a-form-item label="名称" required :validate-status="form.name && (!nameOk || nameTaken) ? 'error' : undefined"
@@ -540,7 +543,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
             <a-select v-if="form.limitFunctions" v-model:value="form.functionTypes" mode="tags" class="num ak-mt8" placeholder="输入函数编号后回车" :token-separators="[',', ' ']" />
           </a-form-item>
           <a-form-item label="限流与配额" help="留空表示不限制；超出返回 429">
-            <a-space><a-space direction="vertical"><label for="ak-create-rate">每分钟请求数</label><a-input-number id="ak-create-rate" v-model:value="form.rate" :min="1" :max="100000" aria-label="每分钟请求数" class="num" /></a-space><a-space direction="vertical"><label for="ak-create-quota">每日请求数</label><a-input-number id="ak-create-quota" v-model:value="form.quota" :min="1" :max="100000000" aria-label="每日请求数" class="num" /></a-space></a-space>
+            <a-space class="ak-quota-fields"><a-space direction="vertical"><label for="ak-create-rate">每分钟请求数</label><a-input-number id="ak-create-rate" v-model:value="form.rate" :min="1" :max="100000" aria-label="每分钟请求数" class="num" /></a-space><a-space direction="vertical"><label for="ak-create-quota">每日请求数</label><a-input-number id="ak-create-quota" v-model:value="form.quota" :min="1" :max="100000000" aria-label="每日请求数" class="num" /></a-space></a-space>
           </a-form-item>
         </template>
         <template v-else>
@@ -621,7 +624,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <a-select v-if="policy.limitFunctions" v-model:value="policy.functionTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
       </a-form-item>
       <a-form-item label="限流与配额" help="留空表示不限制">
-        <a-space><a-space direction="vertical"><label for="ak-policy-rate">每分钟请求数</label><a-input-number id="ak-policy-rate" v-model:value="policy.rate" :min="1" :max="100000" aria-label="每分钟请求数" /></a-space><a-space direction="vertical"><label for="ak-policy-quota">每日请求数</label><a-input-number id="ak-policy-quota" v-model:value="policy.quota" :min="1" :max="100000000" aria-label="每日请求数" /></a-space></a-space>
+        <a-space class="ak-quota-fields"><a-space direction="vertical"><label for="ak-policy-rate">每分钟请求数</label><a-input-number id="ak-policy-rate" v-model:value="policy.rate" :min="1" :max="100000" aria-label="每分钟请求数" /></a-space><a-space direction="vertical"><label for="ak-policy-quota">每日请求数</label><a-input-number id="ak-policy-quota" v-model:value="policy.quota" :min="1" :max="100000000" aria-label="每日请求数" /></a-space></a-space>
       </a-form-item>
     </a-form>
   </a-modal>
@@ -653,26 +656,32 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
 </template>
 
 <style scoped>
-.ak-mr8 { margin-right: 8px; }
 .ak-mt8 { margin-top: 8px; }
 .ak { flex: 1; min-width: 0; min-height: 0; }
-.ak .panel-head { height: auto; min-height: 44px; flex-wrap: wrap; gap: 8px; }
-.ak .panel-head :deep(.ant-space) { flex-wrap: wrap; max-width: 100%; }
+.ak-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; flex: none; gap: 16px; min-height: 64px; padding: 16px 24px; }
+.ak-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; }
+.ak-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
+.ak-search { width: 260px; }
+.ak-summary { display: flex; flex-wrap: wrap; gap: 20px; flex: none; padding: 0 24px 16px; }
 .ak-empty { margin: auto; padding: 32px; }
-.ak-sum { display: inline-flex; align-items: baseline; gap: 16px; }
-.ak-table { flex: 1; min-width: 0; min-height: 0; padding: 0 16px; overflow: auto; }
-.ak-table :deep(.ant-table-content > table) { min-width: 1710px !important; }
-.ak-pager { padding: 4px 16px 8px; }
+.ak-table { flex: 1; min-width: 0; min-height: 0; padding: 0 24px; }
+.ak-table :deep(.ant-table-content > table) { min-width: 1440px !important; }
+.ak-pager { min-height: 56px; padding: 8px 24px; border-top: var(--border); }
 .ak-w120 { width: 120px; }
 .ak-table :deep(td) { white-space: nowrap; }
+.ak-date { display: inline-block; white-space: normal; }
 .ak-scopes { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ak-w140 { width: 140px; }
+.ak-w140 { width: 168px; }
 .ak-w200 { width: 200px; }
-.ak-name { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.ak-name { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.ak-name > a, .ak-binding { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ak-name > a { min-width: 0; }
 .ak-env { margin: 0; }
+.ak-env { flex: none; }
 .ak-scopes :deep(.ant-tag) { margin-inline-end: 4px; }
 .ak-off :deep(.ant-badge-status-text) { color: var(--g8); }
 .ak-dis { color: var(--g6); cursor: not-allowed; }
+.ak-danger:not(.ak-dis) { color: var(--error); }
 .ak-desc :deep(.ant-descriptions-item-label) { width: 110px; }
 .ak-h { margin: 16px 0 8px; }
 .ak-cpager { margin-top: 8px; }
@@ -684,4 +693,17 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
 .ak-secret { display: flex; gap: 8px; }
 .ak-mt { margin-top: 16px; }
 .ak-ell { display: block; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ak-create-form :deep(.ant-form-item) { margin-bottom: 24px; }
+.ak-create-form :deep(.ant-checkbox-group) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.ak-create-form :deep(.ant-checkbox-wrapper) { margin: 0; align-items: flex-start; }
+.ak-quota-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px !important; width: 100%; align-items: start; }
+.ak-quota-fields :deep(.ant-space-vertical), .ak-quota-fields :deep(.ant-input-number) { width: 100%; }
+@media (max-width: 900px) {
+  .ak-toolbar { padding: 16px; }
+  .ak-filters { flex: 1; }
+  .ak-search { width: 100%; }
+  .ak-summary { padding: 0 16px 16px; }
+  .ak-table { padding: 0 16px; }
+  .ak-pager { padding: 8px 16px; }
+}
 </style>

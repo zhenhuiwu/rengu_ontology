@@ -97,38 +97,34 @@ async function onExport() {
 }
 const columns = fitColumns([
   { title: '时间', dataIndex: 'time', key: 'time', width: 176 },
-  { title: '操作人', dataIndex: 'actor', key: 'actor', width: 180 },
-  { title: '动作', dataIndex: 'action', key: 'action', width: 140 },
-  { title: '对象', dataIndex: 'target', key: 'target', width: 200, ellipsis: true },
-  { title: '来源 IP', dataIndex: 'ip', key: 'ip', width: 140 },
+  { title: '操作人', dataIndex: 'actor', key: 'actor', width: 144, ellipsis: true },
+  { title: '动作', dataIndex: 'action', key: 'action', width: 220, ellipsis: true },
+  { title: '对象', dataIndex: 'target', key: 'target', width: 360, ellipsis: true },
+  { title: '来源 IP', dataIndex: 'ip', key: 'ip', width: 144 },
   { title: '结果', key: 'result', width: 88 },
 ]);
 </script>
 
 <template>
-  <Teleport defer to="#page-extra">
-    <span class="t-12 c-3">{{ adminApiOn() ? '按数据库记录查询' : '日志保留 180 天' }}</span>
-    <a-tooltip :title="reason"><a-button :disabled="readonly" :loading="exporting" @click="onExport">导出</a-button></a-tooltip>
-  </Teleport>
   <div class="panel al">
-    <div class="panel-head">
-      <span class="t-16 fw-600">操作记录</span>
-      <a-space>
+    <div class="al-toolbar">
+      <div class="al-filters">
         <a-range-picker
-          v-model:value="range" size="small" show-time :allow-clear="false" :presets="presets"
+          v-model:value="range" show-time :allow-clear="false" :presets="presets" aria-label="日志时间范围"
           format="YYYY-MM-DD HH:mm" class="al-range"
         />
-        <a-select v-model:value="action" size="small" class="al-w160" :options="ACTIONS.map((v) => ({ value: v, label: v === '全部' ? '全部动作' : v }))" />
-        <a-select v-model:value="result" size="small" class="al-w120" :options="['全部', '成功', '失败', '拒绝'].map((v) => ({ value: v, label: v === '全部' ? '全部结果' : v }))" />
+        <a-select v-model:value="action" class="al-w160" aria-label="日志动作" :options="ACTIONS.map((v) => ({ value: v, label: v === '全部' ? '全部动作' : v }))" />
+        <a-select v-model:value="result" class="al-w120" aria-label="操作结果" :options="['全部', '成功', '失败', '拒绝'].map((v) => ({ value: v, label: v === '全部' ? '全部结果' : v }))" />
         <a-input-group compact class="al-search">
-          <a-select v-model:value="field" size="small" class="al-w96" :options="[{ value: 'actor', label: '操作人' }, { value: 'target', label: '对象' }]" />
-          <a-input-search v-model:value="kw" size="small" allow-clear class="al-w200" :placeholder="field === 'actor' ? '姓名 / 用户 ID' : '对象名称 / 编号'" />
+          <a-select v-model:value="field" class="al-w96" aria-label="搜索字段" :options="[{ value: 'actor', label: '操作人' }, { value: 'target', label: '对象' }]" />
+          <a-input-search v-model:value="kw" allow-clear class="al-w200" :placeholder="field === 'actor' ? '姓名 / 用户 ID' : '对象名称 / 编号'" />
         </a-input-group>
-      </a-space>
+      </div>
+      <a-tooltip :title="reason"><a-button class="al-export" :disabled="readonly" :loading="exporting" @click="onExport">导出</a-button></a-tooltip>
     </div>
     <a-alert v-if="loadError" type="error" show-icon :message="loadError" />
     <div class="al-table paged-scroll">
-      <a-table size="small" row-key="id" :columns="columns" :loading="loading" :data-source="res.items" :pagination="false" :scroll="{ x: 924 }">
+      <a-table size="small" row-key="id" :columns="columns" :loading="loading" :data-source="res.items" :pagination="false" :scroll="{ x: 1080 }">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'result'" :class="record.result === '成功' ? 'c-2' : 'c-error'">{{ record.result }}</span>
           <span v-else-if="column.key === 'time' || column.key === 'ip'" class="num">{{ record[column.dataIndex as 'time'] }}</span>
@@ -143,15 +139,24 @@ const columns = fitColumns([
 
 <style scoped>
 .al { flex: 1; min-height: 0; min-width: 0; }
-.al .panel-head { height: auto; min-height: 44px; flex-wrap: wrap; row-gap: 8px; min-width: 0; }
-.al :deep(.ant-space) { flex-wrap: wrap; max-width: 100%; }
-.al-table { flex: 1; min-height: 0; padding: 0 16px; }
-.al-table :deep(.ant-table-content > table) { min-width: 924px !important; }
-.al-pager { padding: 4px 16px 8px; }
+.al-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; min-height: 64px; padding: 16px 24px; flex: none; }
+.al-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; flex: 1; min-width: 0; }
+.al-export { margin-left: auto; flex: none; }
+.al-table { flex: 1; min-height: 0; padding: 0 24px; }
+.al-table :deep(.ant-table-content > table) { min-width: 1080px !important; }
+.al-pager { min-height: 56px; padding: 8px 24px; border-top: var(--border); flex-wrap: wrap; }
 .al-w120 { width: 120px; }
 .al-w96 { width: 96px; }
-.al-w200 { width: 200px; }
+.al-w200 { width: 220px; }
 .al-range { width: 320px; }
-.al-search { display: flex; width: auto; }
+.al-search { display: flex; width: 316px; flex: none; }
 .al-w160 { width: 160px; }
+@media (max-width: 900px) {
+  .al-toolbar { padding: 16px; }
+  .al-filters { flex: 1 1 100%; }
+  .al-table { padding: 0 16px; }
+  .al-pager { padding: 8px 16px; }
+  .al-search { max-width: 100%; }
+  .al-range { max-width: 100%; }
+}
 </style>

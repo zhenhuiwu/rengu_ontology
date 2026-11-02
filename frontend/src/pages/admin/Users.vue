@@ -37,25 +37,25 @@ watch(() => JSON.stringify(currentApiContext()), reload, { immediate: true });
 
 <template>
   <section class="panel account-panel">
-    <div class="panel-head">
+    <div class="panel-head account-toolbar">
       <span class="t-16 fw-600">账号信息</span>
-      <a-button size="small" :loading="loading" @click="reload">刷新</a-button>
+      <a-button :loading="loading" @click="reload">刷新</a-button>
     </div>
     <div class="account-body">
       <a-alert v-if="error" type="error" show-icon :message="error" />
       <a-spin :spinning="loading">
         <template v-if="account">
           <div class="account-heading">
-            <div><h2>{{ account.name }}</h2><p>{{ account.dept || '—' }}</p></div>
+            <h2 class="t-20 fw-600 c-1">{{ account.name }}</h2>
             <a-tag color="green">{{ account.status }}</a-tag>
           </div>
-          <a-descriptions bordered :column="{ xs: 1, sm: 1, md: 2 }" size="middle">
-            <a-descriptions-item label="用户名">{{ account.account }}</a-descriptions-item>
-            <a-descriptions-item label="用户编号"><span class="num">{{ account.id }}</span></a-descriptions-item>
-            <a-descriptions-item label="所属组织">{{ account.dept || '—' }}</a-descriptions-item>
-            <a-descriptions-item label="最近登录"><span class="num">{{ account.lastLogin || '—' }}</span></a-descriptions-item>
-            <a-descriptions-item label="创建日期"><span class="num">{{ account.createdAt || '—' }}</span></a-descriptions-item>
-          </a-descriptions>
+          <dl class="account-fields">
+            <div><dt class="t-12 c-3">用户名</dt><dd class="t-14 c-1">{{ account.account }}</dd></div>
+            <div><dt class="t-12 c-3">用户编号</dt><dd class="t-14 c-1 num">{{ account.id }}</dd></div>
+            <div><dt class="t-12 c-3">所属组织</dt><dd class="t-14 c-1">{{ account.dept || '—' }}</dd></div>
+            <div><dt class="t-12 c-3">最近登录</dt><dd class="t-14 c-1 num">{{ account.lastLogin || '—' }}</dd></div>
+            <div><dt class="t-12 c-3">创建日期</dt><dd class="t-14 c-1 num">{{ account.createdAt || '—' }}</dd></div>
+          </dl>
         </template>
         <a-empty v-else-if="!loading && !error" description="暂无账号信息" />
       </a-spin>
@@ -64,11 +64,20 @@ watch(() => JSON.stringify(currentApiContext()), reload, { immediate: true });
 </template>
 
 <style scoped>
-.account-panel { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.account-panel { flex: none; width: 100%; max-width: 1120px; min-width: 0; min-height: 0; overflow: auto; }
+.account-toolbar { height: auto; min-height: 64px; padding: 12px 24px; gap: 16px; }
 .account-body { padding: 24px; }
-.account-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-.account-heading h2 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
-.account-heading p { margin: 0; color: var(--text-secondary, #666); }
-.account-body :deep(.ant-descriptions-item-content) { overflow-wrap: anywhere; }
-@media (max-width: 640px) { .account-body { padding: 16px; } }
+.account-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.account-heading h2 { margin: 0; }
+.account-heading :deep(.ant-tag) { margin: 0; }
+.account-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 48px; margin: 0; }
+.account-fields > div { min-width: 0; padding: 16px 0; border-top: var(--border); }
+.account-fields dt { margin-bottom: 8px; }
+.account-fields dd { margin: 0; overflow-wrap: anywhere; }
+.account-body :deep(.ant-alert) { margin-bottom: 16px; }
+@media (max-width: 640px) {
+  .account-toolbar { padding: 12px 16px; }
+  .account-body { padding: 16px; }
+  .account-fields { grid-template-columns: minmax(0, 1fr); }
+}
 </style>

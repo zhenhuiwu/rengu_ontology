@@ -34,6 +34,8 @@ const nowStr = '2026-10-25 17:10';
 // 本页内修改叠加在示例数据上
 const realRoles = rolesApiOn();
 const roles = ref<Role[]>(realRoles ? [] : JSON.parse(JSON.stringify(ROLES)));
+const roleKw = ref('');
+const visibleRoles = computed(() => roles.value.filter((r) => `${r.name} ${r.id} ${r.desc}`.toLowerCase().includes(roleKw.value.trim().toLowerCase())));
 const members = ref<Record<string, AdminUser[]>>(realRoles ? {} : Object.fromEntries(ROLES.map((r) => [r.id, roleMembers(r)])));
 const allUsers = ref<AdminUser[]>(realRoles ? [] : ADMIN_USERS);
 const loadError = ref('');
@@ -225,7 +227,8 @@ async function addScope() {
 
 // 成员
 const mkw = ref('');
-const mpq = usePagedQuery({ defaultSize: realRoles ? 10 : 15, filters: [mkw], prefix: 'm' });
+const memberTableEl = ref<HTMLElement | null>(null);
+const mpq = usePagedQuery({ defaultSize: realRoles ? 10 : 15, filters: [mkw], prefix: 'm', adaptive: { container: memberTableEl, rowHeight: 48, rowSelector: '.ant-table-tbody > tr.ant-table-row', reserve: 56, min: 5, max: 50 } });
 watch(() => role.value?.id, (next, previous) => { if (next && previous) mpq.reset(); });
 const mrows = computed(() => (members.value[role.value?.id ?? ''] ?? []).filter((u) => !mkw.value || u.name.includes(mkw.value) || (u.account ?? '').includes(mkw.value) || u.id.includes(mkw.value)));
 const memberPage = ref<{ key: string; items: AdminUser[]; total: number }>({ key: '', items: [], total: 0 });
@@ -250,11 +253,11 @@ const mpaged = computed(() => realRoles ? memberPage.value.key === memberKey() ?
 const mcols = [
   { title: '用户 ID', key: 'id', width: 100 },
   { title: '姓名', dataIndex: 'name', key: 'name', width: 90 },
-  { title: '账号', dataIndex: 'account', key: 'account', width: 240, ellipsis: true },
+  { title: '账号', dataIndex: 'account', key: 'account', width: 180, ellipsis: true },
   { title: '部门', dataIndex: 'dept', key: 'dept', ellipsis: true },
   { title: '状态', key: 'status', width: 80 },
   { title: '最近登录', key: 'lastLogin', width: 150 },
-  { title: '操作', key: 'op', width: 170 },
+  { title: '操作', key: 'op', width: 80 },
 ];
 const badge = (_s: AdminUser['status']) => 'default'; // 状态灰点 + 文字；橙色只用于 待确认 / 结果未知
 async function removeMember(u: AdminUser) {
@@ -386,9 +389,6 @@ async function saveNewRole() {
 </script>
 
 <template>
-  <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="openNewRole">新建角色</a-button></a-tooltip>
-  </Teleport>
   <a-drawer :open="nrOpen && !readonly" :width="480" title="新建角色" @close="closeNewRole">
     <a-form layout="vertical" :model="nr">
       <a-form-item label="名称" required><a-input v-model:value="nr.name" :maxlength="20" /></a-form-item>
@@ -404,16 +404,21 @@ async function saveNewRole() {
   </a-drawer>
   <div class="rl">
     <div class="panel rl-list">
-      <div class="panel-head"><span class="t-16 fw-600">角色</span><span class="t-14 c-2">共 {{ roles.length }} 个</span></div>
+      <div class="panel-head rl-list-head">
+        <div class="rl-list-title"><span class="t-16 fw-600">角色</span><span class="t-12 c-3">{{ roles.length }} 个</span></div>
+        <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="openNewRole">新建角色</a-button></a-tooltip>
+      </div>
+      <div class="rl-search"><a-input-search v-model:value="roleKw" placeholder="搜索角色名称 / 编号" allow-clear aria-label="搜索角色" /></div>
       <a-alert v-if="loadError" type="error" show-icon :message="loadError"><template #action><a-button size="small" @click="loadInitial">重试</a-button></template></a-alert>
       <div class="rl-items">
-        <div v-for="r in roles" :key="r.id" class="rl-item" :class="{ on: r.id === role.id }" @click="select(r.id)">
+        <button v-for="r in visibleRoles" :key="r.id" type="button" class="rl-item" :class="{ on: r.id === role.id }" :aria-pressed="r.id === role.id" @click="select(r.id)">
           <div class="rl-l1" :title="`${r.name}：${r.desc}`">
             <span class="t-14 fw-600 c-1 rl-ellip">{{ r.name }}</span>
             <a-tag v-if="r.builtIn" class="rl-tag">内置</a-tag>
             <span class="t-12 c-2 rl-n num">{{ members[r.id].length }} 人</span>
           </div>
-        </div>
+        </button>
+        <div v-if="roles.length && !visibleRoles.length" class="rl-search-empty t-14 c-3">没有符合条件的角色</div>
       </div>
     </div>
 
@@ -498,11 +503,11 @@ async function saveNewRole() {
 
       <div v-else class="rl-body rl-mem">
         <div class="rl-rowhead">
-          <a-input-search v-model:value="mkw" size="small" placeholder="姓名 / 账号 / ID" class="rl-w220" allow-clear />
+          <a-input-search v-model:value="mkw" placeholder="姓名 / 账号 / ID" class="rl-w220" allow-clear />
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openAdd">添加成员</a-button></a-tooltip>
         </div>
-        <a-alert v-if="memberError" type="error" :message="memberError" /><div class="rl-mtable paged-scroll">
-          <a-table size="small" row-key="id" :columns="mcols" :loading="memberLoading" :data-source="mpaged.items" :pagination="false" :scroll="{ x: 1050 }">
+        <a-alert v-if="memberError" type="error" :message="memberError" /><div ref="memberTableEl" class="rl-mtable paged-scroll">
+          <a-table size="small" row-key="id" :columns="mcols" :loading="memberLoading" :data-source="mpaged.items" :pagination="false" :scroll="{ x: 880 }">
             <template #bodyCell="{ column, record }">
               <span v-if="column.key === 'id'" class="num">{{ record.id }}</span>
               <a-badge v-else-if="column.key === 'status'" :status="badge(record.status)" :text="record.status" />
@@ -514,7 +519,7 @@ async function saveNewRole() {
           </a-table>
         </div>
         <AppPagination
-          v-model:page="mpq.page.value" v-model:size="mpq.size.value" class="rl-pager"
+          v-model:page="mpq.page.value" v-model:size="mpq.size.value" v-model:mode="mpq.mode.value" class="rl-pager"
           variant="full" :total="mpaged.total" :default-size="mpq.defaultSize" unit="人" :empty="false"
         />
       </div>
@@ -569,9 +574,14 @@ async function saveNewRole() {
 
 <style scoped>
 .rl { flex: 1; min-width: 0; min-height: 0; display: flex; gap: var(--gap); }
-.rl-list { width: 300px; flex: none; }
+.rl-list { width: 256px; flex: none; }
+.rl-list-head { height: auto; min-height: 64px; padding: 12px 16px; gap: 8px; }
+.rl-list-title { display: flex; align-items: baseline; gap: 8px; }
+.rl-search { padding: 0 12px 12px; border-bottom: var(--border); }
+.rl-search-empty { padding: 24px 16px; }
 .rl-items { flex: 1; min-height: 0; overflow: auto; }
-.rl-item { padding: 10px 16px; border-bottom: var(--border); border-left: 3px solid transparent; cursor: pointer; }
+.rl-item { display: block; width: 100%; padding: 14px 16px; border: 0; border-bottom: var(--border); border-left: 3px solid transparent; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.rl-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .rl-item:hover { background: var(--g2); }
 .rl-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
 .rl-l1 { display: flex; align-items: center; gap: 6px; min-width: 0; margin-bottom: 2px; }
@@ -579,34 +589,36 @@ async function saveNewRole() {
 .rl-n { margin-left: auto; flex: none; }
 .rl-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: block; }
 .rl-detail { flex: 1; min-width: 0; position: relative; }
-.rl-head { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; padding: 14px 20px 4px; }
-.rl-title { display: flex; align-items: center; gap: 10px; }
-.rl-sub { padding: 0 20px; }
-.rl-tabs { padding: 0 20px; flex: none; }
+.rl-head { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; padding: 20px 24px 8px; }
+.rl-title { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 10px; }
+.rl-sub { padding: 0 24px 8px; }
+.rl-tabs { padding: 0 24px; flex: none; }
 .rl-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.rl-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 12px 20px 16px; display: flex; flex-direction: column; gap: 10px; }
+.rl-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 16px 24px 20px; display: flex; flex-direction: column; gap: 16px; }
 .rl-tip { flex: none; }
 .rl-rule { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; margin-bottom: 12px; background: var(--g2); border-radius: var(--radius); }
-.rl-areas { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; gap: 16px; }
-.rl-area { flex: 1 1 260px; min-width: 0; border: var(--border); border-radius: var(--radius); padding: 8px 12px; }
-.rl-ah { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 6px; border-bottom: var(--border); }
-.rl-fp { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: var(--border); }
+.rl-areas { flex: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: start; gap: 16px; }
+.rl-area { min-width: 0; border: var(--border); border-radius: var(--radius); padding: 16px; }
+.rl-ah { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 12px; margin-bottom: 4px; border-bottom: var(--border); }
+.rl-fp { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 44px; padding: 8px 0; border-bottom: var(--border); }
 .rl-fp:last-child { border-bottom: 0; }
 .rl-mod { width: 56px; flex: none; }
-.rl-lv { margin-left: auto; flex: none; }
+.rl-lv { flex: none; white-space: nowrap; }
+.rl-lv :deep(.ant-radio-button-wrapper-disabled) { color: var(--g8); background: var(--g2); }
+.rl-lv :deep(.ant-radio-button-wrapper-disabled.ant-radio-button-wrapper-checked) { color: var(--g10); background: var(--brand-bg); border-color: var(--g7); font-weight: 600; }
 .rl-rowhead { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex: none; }
 .rl-h { margin-top: 8px; }
 .rl-props { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .rl-prop { border: var(--border); border-radius: var(--radius); padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rl-mem { padding-bottom: 0; }
+.rl-mem { padding-bottom: 0; overflow: hidden; }
 .rl-mtable { flex: 1; min-height: 0; }
 .rl-object-table :deep(.ant-table-content > table) { min-width: 850px !important; }
 .rl-scope-table :deep(.ant-table-content > table) { min-width: 700px !important; }
-.rl-mtable :deep(.ant-table-content > table) { min-width: 1050px !important; }
+.rl-mtable :deep(.ant-table-content > table) { min-width: 880px !important; }
 .rl-pager { padding: 4px 0 8px; }
 .rl-w220 { width: 220px; }
 .rl-dis { color: var(--g6); cursor: not-allowed; }
-.rl-savebar { flex: none; display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; border-top: var(--border); background: var(--g1, #fff); }
+.rl-savebar { flex: none; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; padding: 12px 24px; border-top: var(--border); background: var(--g1); }
 .rl-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .rl-fnote { margin-right: auto; }
 .rl-preview { background: var(--g2); border: var(--border); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 8px; }

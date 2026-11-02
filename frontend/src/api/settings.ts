@@ -1,4 +1,4 @@
-/** 仅租户基础信息扩展；其余系统设置尚未接入。 */
+/** 平台组织、模型连接与通知状态。 */
 import { apiClient } from './http';
 import { setTenantOptions } from './tenants';
 
@@ -27,12 +27,18 @@ export const loadTenantSettings = async () => refreshTenants(await settingsApi.g
 export const saveTenantSettings = async (body: TenantSettingsSave) => refreshTenants(await settingsApi.put<TenantSettingsData>('/settings/tenant', body));
 
 export interface ModelSettingsData {
-  usage: 'qa' | 'ontology'; label: string; model: string; baseUrl: string; timeoutSec: number;
+  usage: 'qa' | 'ontology'; label: string; provider: 'openai' | 'ollama'; model: string; baseUrl: string; timeoutSec: number;
   enabled: boolean; authMode: 'key' | 'none'; hasKey: boolean; source: 'environment' | 'database';
   keySource: 'environment' | 'database' | 'none'; lockVersion: number; updatedAt: string | null;
 }
 export interface ModelsSettingsData { items: ModelSettingsData[]; canManage: boolean }
-export type ModelSettingsSave = Pick<ModelSettingsData, 'model' | 'baseUrl' | 'timeoutSec' | 'enabled' | 'authMode' | 'lockVersion'> & { apiKey?: string };
+export type ModelSettingsSave = Pick<ModelSettingsData, 'provider' | 'model' | 'baseUrl' | 'timeoutSec' | 'enabled' | 'authMode' | 'lockVersion'> & { apiKey?: string };
+export type ModelConnectionDraft = Omit<ModelSettingsSave, 'lockVersion' | 'model'> & { model?: string };
+export interface ModelConnectionResult {
+  ok: boolean; provider: ModelSettingsData['provider']; baseUrl: string;
+  modelOptions: { value: string; label: string }[]; selectedModelAvailable: boolean | null; error: string | null;
+}
 export const loadModelSettings = () => settingsApi.get<ModelsSettingsData>('/settings/models', { ontologyScope: false });
 export const saveModelSettings = (usage: ModelSettingsData['usage'], body: ModelSettingsSave) => settingsApi.put<ModelSettingsData>(`/settings/models/${usage}`, body, { ontologyScope: false });
+export const testModelConnection = (usage: ModelSettingsData['usage'], body: ModelConnectionDraft) => settingsApi.post<ModelConnectionResult>(`/settings/models/${usage}/connection`, body, { ontologyScope: false });
 export const loadNotificationSettings = () => settingsApi.get<{ inbox: { enabled: boolean; sources: string[] }; externalChannelsConfigured: boolean }>('/settings/notifications', { ontologyScope: false });
