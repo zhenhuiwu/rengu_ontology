@@ -20,6 +20,7 @@ import { useStaticPage } from './parts/useStaticPage';
 import { CHANGE_REQUESTS } from '@/mock/changes';
 import { message } from 'ant-design-vue';
 import { useConfirmStore } from '@/stores/confirm';
+import { useDefinitionDelete } from '@/composables/useDefinitionDelete';
 
 const LIST: M[] = isStaticReal() ? reactive<M[]>([]) : MOCK_LIST;
 const firstId = ref('');
@@ -229,10 +230,24 @@ const refCols = [
   { title: '名称', key: 'name' },
   { title: '引用方式', dataIndex: 'note' },
 ];
+const deletion = useDefinitionDelete('metric', {
+  target: () => cur.value.name ? { id: cur.value.id, name: `${cur.value.name}（${cur.value.api}）` } : undefined,
+  enabled: () => isStaticReal() && !readonly.value && !definitionOpen.value && !newTarget.value && !rollbackBusy.value,
+  context: staticContextKey,
+  afterDelete: async (id, current) => {
+    const index = LIST.findIndex(item => item.id === id); if (index >= 0) LIST.splice(index, 1);
+    firstId.value = '';
+    await router.replace({ query: { ...route.query, metric: undefined, view: undefined } });
+    if (!current()) return;
+    await metricPage.reload();
+    if (current()) await loadGroups();
+  },
+});
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
+    <a-tooltip v-if="isStaticReal()" :title="readonly ? reason : deletion.error.value || '删除当前指标'"><a-button danger :disabled="!deletion.allowed.value" :loading="deletion.busy.value" @click="deletion.run">删除</a-button></a-tooltip>
     <a-tooltip :title="isStaticReal() ? '暂不可用' : readonly ? reason : ''"><a-button :disabled="readonly || isStaticReal()" @click="!readonly && openChange('导入指标')">导入</a-button></a-tooltip>
     <a-tooltip :title="readonly ? reason : ''"><a-button :disabled="readonly" @click="!readonly && (isStaticReal() ? openDefinition(true) : openChange('新建指标'))">新建指标</a-button></a-tooltip>
   </Teleport>
@@ -244,7 +259,7 @@ const refCols = [
         <a-segmented v-model:value="group" :options="GROUPS" block size="small" />
       </div>
       <a-alert v-if="groupsError" type="error" :message="groupsError" show-icon><template #action><a-button size="small" @click="loadGroups">重试分类</a-button></template></a-alert>
-      <a-alert v-if="metricPage.error.value || metricDetailError" type="error" :message="metricPage.error.value || metricDetailError" show-icon />
+      <a-alert v-if="deletion.error.value || metricPage.error.value || metricDetailError" type="error" :message="deletion.error.value || metricPage.error.value || metricDetailError" show-icon />
       <div v-if="metricPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
       <ul class="mt-items" :aria-busy="metricPage.loading.value">
         <li v-for="m in list" :key="m.id" :class="{ active: m.id === cur.id }" :title="`${m.name} · ${m.api} · ${m.group}`" @click="pick(m.id)">

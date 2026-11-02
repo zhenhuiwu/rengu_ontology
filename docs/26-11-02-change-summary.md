@@ -1,62 +1,37 @@
-# 11月1–2日更改记录与部署索引
+# 2026-11-02 交付摘要与部署索引
 
-本记录面向接手部署的AI与维护者，汇总本轮新增修复及已取得的限定真实业务证据。工作区还包含此前积累的产品、迁移与文档改动；**提交包含的文件范围不等于本轮全部重新实测通过**。精确证据状态见[验证矩阵](26-11-01-verification-matrix.md)，分组文件边界见[提交准备记录](26-11-02-commit-review.md)。
+本页按最新范围收口；旧阶段证据保留在专项报告中，不把代码交付或离线检查写成全部真实业务验收。
 
-## 本轮修复与结果
+## 本轮交付与实际结果
 
-| 范围 | 根因与最小修改 | 已验证结果及限制 |
+| 范围 | 已交付 | 实际证据与边界 |
 | --- | --- | --- |
-| API密钥确认与秘密表面 | 生成确认前冻结form，确认后拒绝表单/上下文变化、抽屉关闭或busy；生成/轮换模板只显示mask，原secret仅供正规Copy；真实scope动态摘要、剩天按实际剩余时长计算，配额常驻单位label | 同一新key在ws16新建，meta+objects实际读取→去objects后meta200/objects403→轮换旧401/新200→跨w4 403→吊销后401。正规Copy仅存本轮获批私有文件，结束后两文件删除且clipboard清；原key未动，新key行保留已吊销 |
-| 密钥版本/确认层级 | 维护传当前version，保留行锁与收窄合同；公共Confirm显式高于drawer，dangerLabel精确描述轮换/吊销影响，保留ack和最终确认 | 两普通页面旧version保存真实冲突拒绝，新备注未覆盖；修复后吊销checkbox一次成功且底层详情仍开。实际2/min、100/day保留，未扩大到口述误读的2/s；自然到期/其它网络IP/全部quota与高负载未验 |
-| 规则一跳关系与固定函数 | 当前关系绑定原先误要求可写/物理列口径，补充source_column回退；采用真正只读FK关系source，不把只读关联改成可写；布尔true/false沿正式有限解释器与序列化合同 | 自身ID+关联设备状态+FN002固定版本正例37已求值/1命中/0无法求值，反例37/0/0；v4恢复正常条件、published，trigger仍disabled。证明试跑，不宣称自动告警/自动动作链 |
-| 函数真实引用 | FnUse无正常定义写入，实际动作JSON/规则AST引用未进显示与签名保护；共享当前定义引用读取保守合并旧FnUse，展示/签名guard同用，无DB回填 | PID49000加载后FN001显示动作引用1，FN002显示规则引用1；固定旧版本不被重绑。签名不兼容阻断保留并有离线断言，未做破坏式真实保存 |
-| 办公本机外部联调 | 精确scope16/EXT-N01的local_probe许可；新旧CA同subject引发证书选错，改办公CA唯一issuer并保留旧bundle与TLS验证；正式UI保存系统目录与动作授权 | EXT-N01两个接口：GET office_health及POST office_receipt；动作recordExternalInspection v1使用目录八字段mapping，本体编辑/副作用零条。实际health200；唯一call1539 HTTPS200/attempt1/真实回执，同幂等键查询同回执，重复dispatch后postCount仍1 |
-| QA外部确认与恢复 | 保留结构化参数/原run严格匹配；QA确认是唯一确认入口，已确认run不再去动作中心确认；手选会话同步URL | ACT-20261102-0001问数确认后经精确受控派发，回调对账；整页刷新同run已对账且无确认按钮。没有启动全局worker或消费旧队列；本机接收器不是生产第三方 |
-| 助手上下文与版本 | 采用草稿交接/空发布基线/保存同步checkpoint；当前函数编辑恢复重新GET并核id/version/lock；请求序号与scope保护覆盖迟到响应 | 普通五轮/编辑刷新及desc-only保存通过；B2先clear后模型完成，旧结果不复活且reload保新状态；C先跨页后响应，目的桶与返回函数不混入迟到结果。短前置GET/丢弃确认窗口仍只有离线断言 |
-| 旧审核展示与最终类型修正 | 旧状态值保留、显示历史待处理；新QA确认/共享CR错误不再指引审批，旧历史reviewer/来源和后端guards不删。ApiKeys共享ref异步窄化与PayloadSchemaEditor数组索引类型限定修正 | 真发布页顶部正式发布可用、保存即时生效、无审核操作按钮；新外部确认旧句已消失并执行。类型修正不重签密钥、不改变schema增删行为 |
+| 独立公开智能助手 | 无依赖 `RenguAgent` SDK，默认 600px 右侧 iframe；Shadow DOM 隔离、开关/关闭/卸载、严格 origin + contentWindow 消息检查。独立 `/api/agent/v1` 命名空间不依赖平台登录，客户端不带平台 key/token/cookie；公开本体默认拒绝 | 本机显式允许本体 4。免登录真实回答对象类型问题；真实数据库查询“不限定时间，按状态统计搜救事件数，用柱状图显示”返回 **状态=搜救中、数量=3**，可显示柱状图；刷新恢复两轮。2560 与 1920 均有截图。本体 1 被拒绝且无默认本体回退；不据此扩展为其他本体或更多模型场景通过 |
+| 公开回答显示 | 按明确的柱状图/柱形图/条形图/折线图要求初始化视图，无明确要求仍表格；仅隐藏与回答文本严格相等的单行单列表格，数字与不同文本仍保留 | 新显示分支已纳入既有 agent-state 受控断言；不把离线分支覆盖另计为真实模型请求。`ready` 仅表示界面挂载，接口错误仍在 iframe 内显示 |
+| 旧导航与页面入口 | 删除情景推演、对象搜索、对象详情、我的页面、模板库的导航/路由入口并处理旧地址重定向；“智能问数”模块改“操作中心”，“问数工作台”改“智能助手” | 清理分享/整理/固定页面、我的页面快捷块与请求、历史页面通知跳转、视图“打开”等活动入口。动作对象链接复用当前页对象抽屉；正常问数、动作确认、历史数据与底层 API 保留。未删除业务数据 |
+| 九类构建/外部定义删除 | 维度既有合同与八类新增删除合同衔接；双版本检查、引用阻断、真实删除/退休策略、成功后列表读取。规则首次保存修复为同一响应返回并缓存 `crLockVersion`，未放松乐观锁 | **九个页面均有真实合成删除验收**：外部系统、函数、知识、关系、动作、事件、指标、维度、规则。API 与 UI 重载后，R001 的 `raw1 == 0`、关闭触发可保存并生效，随后删除成功；立即切函数页仍停在函数页。维度已验，独立码表类型未另建样本 |
+| 动作与告警记录删除 | 详情 `can.delete/reasons.delete` 与 `lockVersion`；危险确认后真实 DELETE，成功重读列表/分面并归位末页，失败保留记录。终态/关联/在途状态由后端再次核验 | 2560×1440 下真实删除失败动作 `ACT-TEMP-DELETE-20261102` 与已解决告警 `AL-TEMP-DELETE-20261102`；均勾选确认后隐藏，整页重载并按原精确 ID 筛选仍暂无数据、无被删详情。既有待确认 `ACT20261028-0006` 删除按钮实际禁用。仅删除本轮合成两条记录，未执行业务动作 |
+| 系统管理与模型配置 | 系统管理布局整理；模型用途分栏、OpenAI/Ollama provider、手输或读取真实模型目录、草稿连接检测、保存确认快照与只读/版本保护 | 专项设计与检查范围见[模型配置说明](26-11-02-model-settings-ollama-ui.md)。连接检测仅目录读取，不推理；不据本页两个公开问题宣称所有 provider、管理页或浏览器组合复测通过 |
 
-关联代码与逐阶段失败记录在专项报告中保留，不把修复前失败删成“一直成功”：
+截图：[2560 柱状图](evidence/2026-11-02-agent-widget/anonymous-qa-chart-2560.png)、[1920 柱状图](evidence/2026-11-02-agent-widget/anonymous-qa-chart-1920.png)。
 
-- [密钥生命周期/旧审核UI](26-11-01-key-lifecycle-business-check.md)：字段、scope/IP/版本、轮换吊销、并发冲突、层级与最后两行错误提示。
-- [规则/外部业务](26-11-01-rule-external-business-check.md)：FK只读绑定、布尔、正反例、TLS失败根因、正式UI目录、精确受控dispatch/query与回执。
-- [函数引用](26-11-02-function-reference-fix.md)：FnUse缺项、当前定义读取、空间约束、签名保护及真实UI。
-- [助手异步业务](26-11-01-assistant-async-business-check.md)、[助手与页面深验](26-11-01-deep-assistant-verification.md)：B2/C时序与尚未覆盖窗口；空基线、函数保存/恢复及P001补充JOIN。
-- [设备深验](26-11-01-deep-device-verification.md)、[动作深验](26-11-01-deep-action-verification.md)：25设备/37工单/15补充、PG目录139→3、列级UPDATE、三表查询/图表/页面、一次本地status写入及布局。
+删除证据：[规则确认](evidence/2026-11-02-deletion/rule-delete-confirm-2560.png)、[动作重载后不可见](evidence/2026-11-02-deletion/action-deleted-after-reload-2560.png)、[告警重载后不可见](evidence/2026-11-02-deletion/alert-deleted-after-reload-2560.png)。两条运行样本只新增于本体 4，标记 `TEMP_DELETE`，关联既有 `RescueIncident / SYNTHETIC-SAR-001`；没有修改该对象、执行器、call 或队列。运行记录保留持久 tombstone 与审计，不是物理清除。
 
-## 接手升级时必须区分的内容
+## 部署与迁移
 
-1. **代码与数据库升级分开核对。** 此次函数真实引用修复不需回填FnUse或新迁移；工作区此前累计变更含迁移。先核对目标库实际revision、备份与依赖，按既有[部署升级说明](26-10-31-deployment-integration-fixes.md)、[迁移操作单](26-10-31-mirror-database-migration.md)、[保留数据操作记录](26-10-31-deployment-integration-operations.md)完成必要前置，不拿开发机dump覆盖、不reset/seed，不因为本轮本机成功跳过目标端独立升级。
-2. **正常加载同一版本前后端。** 最后正常API-only加载时间为2026-11-02 10:04:01，listener PID52800，包含第三轮历史版本参数可见性修复；此前09:50:43/PID67836及00:48:02/PID49000是阶段记录。这只是该机器的运行证据，PID不是另一机配置。root最后统一typecheck与backend/frontend/docs diff检查通过，不能把HMR/编译当部署端已加载。真实页面需目标端正常刷新核对。
-3. **私有配置不随提交复制。** `.env`、Bearer/HMAC、key-original/key-rotated、私有接收器配置/回执台账、证书私钥及本机临时目录不提交。另一机须按明确授权重新配置自己的系统地址、秘密、证书信任与精确作用域；不要复制报告中的合成回执、PID或临时绝对路径作正式配置。
-4. **办公通道精确授权，不扩大默认能力。** 本轮只为scope16/EXT-N01追加本机office路径、局部probe及唯一CA；保留旧值、默认拒绝和证书验证。`local_only/local_probe`不是任意URL放行、不是关闭TLS，也不是生产第三方合同；缺实际生产URL/auth/签名/幂等语义时不能声称生产已接通。
-5. **执行不得重复确认或扫旧队列。** 本轮QA已对同一run明确确认，再由精确call身份预检后仅派发call1539；同run在中心只读查看。不要在动作中心二次confirm，不运行通用worker/sweep补证，不重开已解决任务伪造查询记录，不批量重放旧call。
-6. **历史资料/数据保留。** 37个旧docs删除不是已证明的归档，不纳本轮提交；保留其工作区状态，不顺手restore或删记录。既有key、旧run、旧审批来源与FnUse账本保守保留，文案清理不授权数据清理。
+- `dynamic_0050_record_deletion` 为动作/告警新增四个 nullable `deleted_at/deleted_by` 列。本机已在完整备份后应用一次；远端须先备份目标库，再在对应后端环境运行 `alembic upgrade head`，成功后正常重启 API，并配套部署前端。没有降级或恢复测试。
+- 运行记录是持久的可见性删除，没有恢复 UI；执行日志、外部 call、canonical/幂等与审计保留。删除不回滚业务结果、不清队列或重放旧请求，也不级联删关联对象。详见[动作/告警删除](26-11-02-ops-record-delete.md)、[全模块删除合同与验证](26-11-02-deletion-verification.md)。
+- 公开问数需部署方显式配置公开本体范围；本机允许 4 不是生产默认值。私有 `.env`、模型/外部凭据、证书和临时材料不随代码复制。跨机须重新配置自身目标；公开范围内数据可被匿名访问。
+- SDK 与独立入口、静态资源和 API 代理需配套部署。子目录示例 `/rengu/agent.html` 使用 `/rengu/api/agent/v1`，代理去前缀映射后端；构建基址由部署配置。集成、CSP/嵌入与消息合同见[组件集成说明](26-11-02-agent-widget.md)。本轮未执行打包或改生产代理。
 
-## 先前累计变更索引与真实验收边界
+## 检查与未完成项
 
-- [18条部署联调问题处理](26-10-31-deployment-integration-fixes.md)：镜像业务身份、受控映射、手动同步续批/取消恢复、删除对齐、外部动作诊断、事件有界重试、角色PATCH与部署入口等；本轮没有逐条重新运行全部场景。
-- [镜像真实验收](26-10-31-mirror-live-verification.md)、[达梦总体验收](26-10-31-dm-live-verification.md)：原业务源只读与独立合成源101行、CRUD/漂移/稳定签名；这些是10月31日限定证据，不写成11月2日又全跑一次。
-- [CDC真实验收](26-10-31-cdc-live-verification.md)、[CDC部署AI指引](26-10-31-cdc-deployment-ai-guide.md)：事务触发器日志、初扫恢复、迟提交/回滚、精确ACK及接管。当前态重读不提供跨多行/多表PG原子可见性、所有中间版本或任意管理员日志篡改识别。
-- [综合复检处理](26-10-31-recheck-resolution.md)：错误明细、重试、规则元数据definition、种子隔离和密钥维护；definition路由与权限源码已实现，不因本轮key普通元数据200就宣布规则definition全部scope/RLS验收。
-- [重启后验证](26-11-01-restarted-verification.md)、[性能功能检查](26-11-01-performance-business-check.md)：限定功能加载与读取证据；不是SQL数量、吞吐或延迟提升证明。
+最终统一 **typecheck exit 0**。公开回答显示的最新窄修已通过既有 `check-agent-state.mjs`；SDK 参数/消息/焦点/卸载检查、动作/告警删除状态检查及后端删除边界检查均是受控离线验证，不访问真实业务或模型；上述真实 UI 结果另行记录。
 
-## 检查、提交与仍未覆盖
+尚未逐项实测：独立码表类型、所有引用/在途/对账/副作用拒绝分支及并发删除组合、生产公开范围、实际第三方合同与 Chrome 102 实机。没有运行后端 tests/pytest、全量测试、全量 build、package、恢复/降级测试或后台队列消费；没有在这两轮公开问题之外新增真实模型测试。除明确验收的合成记录外，其他既有业务记录未删除。
 
-本轮新增非平凡修复各有针对性离线断言，实际业务按专项报告逐项记录。root最后统一 **`npm run typecheck`通过、`git diff --check`通过**；没有运行后端全量测试、pytest、集成/迁移回归、全量build、package或benchmark。不是以检查数量充当完成率。
+## 先前阶段索引
 
-仍未覆盖生产第三方、Chrome102实机、军事自动求值、周期队列真实崩溃/长压/旧积压处置、长期到期/所有IP及quota窗口/高负载、全部权限组合与其它模块业务；第三轮已补恢复与公平选择代码，仅有下节离线证据。用户授权分组提交推送不改变这些事实。提交按[分组准备](26-11-02-commit-review.md)的最终manifest完整纳入共享依赖，排除私密材料、生成日志/结果、非批准截图及37个旧文档删除；本记录本身不执行暂存、提交、推送或发布。
+11 月 1–2 日的密钥生命周期、函数真实引用、规则关系/固定函数、办公外部 SUCCESS/FAILED 与助手异步证据，继续见[验证矩阵](26-11-01-verification-matrix.md)、[第三轮对照](26-11-02-third-round-summary.md)、[密钥生命周期](26-11-01-key-lifecycle-business-check.md)、[函数引用](26-11-02-function-reference-fix.md)、[规则/外部验收](26-11-01-rule-external-business-check.md)、[助手异步](26-11-01-assistant-async-business-check.md)。
 
-前阶段记录完成后曾冻结，随后用户新增第三轮14项并授权必要修复与限定办公FAILED验收，收口事实见下节；不把前一阶段冻结声明当成后续未修改或未验收。
-
-## 第三轮14项与最后FAILED闭环
-
-逐项状态见[第三轮14项对照](26-11-02-third-round-summary.md)，专项来源为[问数/发布/旧事件review](26-11-02-third-round-qa-release-events-review.md)、[动作/规则报告末节](26-11-01-rule-external-business-check.md)和[周期恢复/公平选择](26-11-02-worker-recovery-fairness.md)。不能把下面限定实际结果扩展为14项全部真实通过。
-
-- **#2/#10的限定FAILED主链真实通过。** 新ACT-20261102-0002/call1540在scope16按正常QA确认，recordExternalInspection v2、OfficeDevice16002、score90、八字段及reason/code映射经精确预检后一次HTTPS200/attempt1，业务FAILED。run保留“已对账·外部未执行”、完整拒绝原因、OFFICE_SYNTHETIC_REJECTED与真实回执OFFICE-c322a4c7372c5ae98ec7，unknown_reason=null；同idem GET查到·未执行同回执，重复同call台账postCount仍1。QA同卡与整页reload均有完整原因/回执、无未知说明或确认按钮：[真实FAILED恢复](evidence/qa-external-failed-reconciled-2k-20261102.jpg)。此问数样本无关联告警，#11及告警失败联动不由它证明。
-- **#4正向明确目标与trace真实通过，冲突仍离线。** S0005-T001的modelProposal/requested/decisionChoice都是recordExternalInspection、OfficeDevice16002、score90，decisionTarget同16002；公开受控PK/标签、歧义和参数类型冲突/模型前旁路有针对性离线断言，未制造GUI冲突样本。
-- **同轮历史读取回归真实修复。** 升到动作v2曾使旧v1成功run按当前定义隐藏参数；现按同scope固定历史(type,version)一批读取，当前权限和执行版本拒绝guard保留。单离线历史可见性脚本通过，root回S0004实际恢复原参数/成功同回执、无误报/确认按钮，没有重发旧动作；无权限参数不可用原因分支未实测。
-- **#1/#8已实现，仅离线。** 已登记/队列/固定白名单周期外壳在120秒失联门槛和advisory活归属保护后正式failed，不重放业务；既有CLI兼容，部署须先停全部旧workers，禁止新旧混跑，无新schema。事件2槽只隔离外壳，候选另按订阅轮次/最近服务与原next_at/id分配，页面outbox每页最早头配额/失败头不越过；总批200/100保留。单离线脚本验证状态保护与真实SQL编译，没有真实崩溃、长期负载、全量队列或吞吐证据。
-- **#3/#5/#7/#9/#11及其它拒绝分支仍有明确局部边界。** 规则有效期默认0/显式0–86400，claim前可信来源/版本/单目标当前谓词/指标/关联复核；身份歧义完整授权者可见、版本隔离去重、旧发布专用原因、canonical双向关联/重提与锁序均有离线检查。没有执行旧记录、自动修关系、清去重或造无权限样本。#6当前current头int/空formal合同曾由正常会话两空间实读，无需为旧截图null改数据。
-- **#12–14为来源与能力合同。** 对象/关联是求值时当前值，事件字段为原持久入站payload；CDC按键读当前态无法恢复读取前已覆盖中间值；循环须生产方提供真实稳定轮次键及独立eventId。操作点提示已补，不新增历史快照、全源中间态或自动轮次推断，更不伪造旧事实。
-
-最后FAILED接收器按身份核对后已停止listener66748/launcher29992，8767无监听；私有配置、证书/凭据和台账保留，API52800与前端66608仍运行，无周期worker。root最后统一 `npm run typecheck` exit0、backend/frontend/docs `git diff --check` exit0，未运行build/package/backend tests。原13张人工审阅图片加本次FAILED图，共14张白名单；不纳未批准图。root已允许在本次文档收口后冻结最终manifest哈希，暂存/提交/推送仍由root执行，不处理37个既有删除。
+更早累计改动与升级前置见[部署联调修复](26-10-31-deployment-integration-fixes.md)、[镜像迁移操作单](26-10-31-mirror-database-migration.md)、[CDC 验收](26-10-31-cdc-live-verification.md)及[CDC 部署指引](26-10-31-cdc-deployment-ai-guide.md)。这些旧证据不等于本轮全部重新测试；37 个旧 docs 删除仍不纳入本轮处理。本页不执行 Git 操作。

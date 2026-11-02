@@ -125,7 +125,7 @@ async function runEval() {
   if (readonly.value || evalStarting.value || (real && (metaLoading.value || metaError.value))) return;
   const group = runGroup.value;
   const sessionId = qaSession.activeId.value;
-  if (real && !sessionId) { message.warning('请先在问数工作台选择一个会话，评测将使用该会话的范围和口径'); return; }
+  if (real && !sessionId) { message.warning('请先在智能助手选择一个会话，评测将使用该会话的范围和口径'); return; }
   const context = contextKey();
   const seq = metaSeq;
   const current = () => seq === metaSeq && context === contextKey() && group === runGroup.value && (!real || sessionId === qaSession.activeId.value) && !readonly.value;

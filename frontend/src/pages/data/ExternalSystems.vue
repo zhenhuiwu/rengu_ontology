@@ -21,6 +21,7 @@ import { getHttpEndpoints, saveHttpEndpoints, type HttpEndpoint, type HttpEndpoi
 import { useConfirmStore } from '@/stores/confirm';
 import { useAuthStore } from '@/stores/auth';
 import { useReadonly } from '@/composables/useReadonly';
+import { useDefinitionDelete } from '@/composables/useDefinitionDelete';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { paginate, EMPTY } from '@/mock';
 import { EXT_SYSTEMS, extCalls, type CallResult, type ExtCall, type ExtOp, type ExtSample, type ExtSystem } from '@/mock/extsys';
@@ -406,12 +407,26 @@ async function saveEdit() {
   message.success(isNew ? `已新建外部系统：${next.name}` : `已保存：${next.name}`);
   } finally { savingEdit.value = false; }
 }
+const deletion = useDefinitionDelete('external', {
+  target: () => selected.value.id ? { id: selected.value.id, name: `${selected.value.name}（${selected.value.id}）` } : undefined,
+  enabled: () => real && !readonly.value && !editKey.value && !savingEdit.value && !endpointEdit.value && !probe.value && !authorization.value,
+  context: contextKey,
+  afterDelete: async (id, current) => {
+    ++linkedSeq; ++callsSeq; ++callSeq;
+    systems.splice(0, systems.length, ...systems.filter(item => item.id !== id));
+    realDetail.value = undefined; realLinked.value = null; realPage.value = null; realCall.value = null;
+    await setQuery({ sys: undefined, call: undefined, edit: undefined, result: undefined });
+    if (current()) await loadSystems();
+  },
+});
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
+    <a-tooltip v-if="real" :title="readonly ? reason : deletion.error.value || '删除当前外部系统'"><a-button danger :disabled="!deletion.allowed.value" :loading="deletion.busy.value" @click="deletion.run">删除</a-button></a-tooltip>
     <a-tooltip :title="reason"><a-button type="primary" :disabled="readonly" @click="openEdit('new')">新建外部系统</a-button></a-tooltip>
   </Teleport>
+  <a-alert v-if="deletion.error.value" type="error" :message="deletion.error.value" show-icon />
   <div class="ex">
     <div class="panel ex-list">
       <div class="panel-head">

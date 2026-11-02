@@ -1,12 +1,11 @@
 <script setup lang="ts">
-/** 左下“常用问题 · 管理”“我的页面 · 全部”的本页抽屉（不跳转）。每页 10 条 simple 分页；状态 ?panel=favorites|pages
- * 真接口（开关 qa）：常用问题 W13（q）、我的页面 P1 view=brief（kw）按页取，移出走 W15 */
+/** 常用问题本页抽屉（?panel=favorites）。每页 10 条 simple 分页，移出走 W15。 */
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { message } from 'ant-design-vue';
 import { SearchOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { paginate } from '@/mock/paginate';
-import { QA_FAVORITE_LIST, QA_PAGE_LIST } from '@/mock';
+import { QA_FAVORITE_LIST } from '@/mock';
 import * as qaApi from '@/api/qa';
 import { currentApiContext } from '@/api/http';
 import { qaLive as live, qaFallBackIfDown } from '@/pages/qa/qaFallback';
@@ -22,13 +21,10 @@ const SIZE = 10;
 const page = ref(1);
 const kw = ref('');
 const favs = ref([...QA_FAVORITE_LIST]);
-const isFav = computed(() => props.panel === 'favorites');
-const title = computed(() => (isFav.value ? '常用问题' : '我的页面'));
+const title = '常用问题';
 const rows = computed(() => {
   const k = kw.value.trim();
-  return isFav.value
-    ? favs.value.filter((f) => !k || f.question.includes(k)).map((f) => ({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }))
-    : QA_PAGE_LIST.filter((p) => !k || p.name.includes(k)).map((p) => ({ id: p.id, name: p.name, c1: `${p.cards} 张卡片`, c2: `${p.updatedAt} 更新`, tag: p.shared ? '已共享' : '' }));
+  return favs.value.filter((f) => !k || f.question.includes(k)).map((f) => ({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }));
 });
 const paged = computed<{ items: Row[]; total: number }>(() => (live.value ? srv.value : paginate<Row>(rows.value, { page: page.value, size: SIZE })));
 watch(() => props.panel, () => { page.value = 1; kw.value = ''; });
@@ -38,26 +34,20 @@ const contextKey = () => JSON.stringify(currentApiContext());
 onBeforeUnmount(() => { ++reqSeq; });
 async function load() {
   const my = ++reqSeq, key = contextKey(), panel = props.panel;
-  if (!live.value || (panel !== 'favorites' && panel !== 'pages')) return;
+  if (!live.value || panel !== 'favorites') return;
   const valid = () => my === reqSeq && key === contextKey() && panel === props.panel;
   const k = kw.value.trim() || undefined;
   try {
     const items: Row[] = [];
     let total = 0, actualPage = page.value;
     const options = qaApi.qaRequestOptions();
-    if (isFav.value) {
-      const r = await qaApi.listFavorites({ q: k, page: page.value, size: SIZE }, options);
-      r.items.forEach((f) => items.push({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }));
-      total = r.total; actualPage = r.page;
-    } else {
-      const r = await qaApi.listPagesBrief({ kw: k, page: page.value, size: SIZE }, options);
-      r.items.forEach((p) => items.push({ id: p.id, name: p.name, c1: `${p.cards} 张卡片`, c2: `${p.updatedAt} 更新`, tag: p.shared ? '已共享' : '' }));
-      total = r.total; actualPage = r.page;
-    }
+    const r = await qaApi.listFavorites({ q: k, page: page.value, size: SIZE }, options);
+    r.items.forEach((f) => items.push({ id: f.id, name: f.question, c1: `用过 ${f.uses} 次`, c2: `最近 ${f.lastUsed}` }));
+    total = r.total; actualPage = r.page;
     if (!valid()) return;
     srv.value = { items, total };
     if (actualPage !== page.value) page.value = actualPage;
-  } catch (e) { if (valid() && !qaFallBackIfDown(e)) message.error(`${title.value}加载失败：${errText(e)}`); }
+  } catch (e) { if (valid() && !qaFallBackIfDown(e)) message.error(`${title}加载失败：${errText(e)}`); }
 }
 if (real) {
   watch(contextKey, () => { ++reqSeq; srv.value = { items: [], total: 0 }; }, { flush: 'sync' });
@@ -77,9 +67,9 @@ async function remove(id: string) {
 </script>
 
 <template>
-  <a-drawer :open="panel === 'favorites' || panel === 'pages'" :title="title" :width="480" @close="emit('close')">
+  <a-drawer :open="panel === 'favorites'" :title="title" :width="480" @close="emit('close')">
     <div class="qa-ld">
-      <a-input v-model:value="kw" :placeholder="isFav ? '搜索常用问题' : '搜索页面'" allow-clear>
+      <a-input v-model:value="kw" placeholder="搜索常用问题" allow-clear>
         <template #prefix><SearchOutlined class="c-3" /></template>
       </a-input>
       <div class="qa-ld-list">
@@ -88,14 +78,13 @@ async function remove(id: string) {
           <a-tag v-if="'tag' in r && r.tag" class="qa-ld-tag">{{ r.tag }}</a-tag>
           <span class="qa-ld-c1 num">{{ r.c1 }}</span>
           <span class="qa-ld-c2 num">{{ r.c2 }}</span>
-          <a-space v-if="isFav" :size="12">
+          <a-space :size="12">
             <a @click="emit('ask', r.name)">提问</a>
             <a-popconfirm title="移出常用问题？" ok-text="移出" cancel-text="取消" @confirm="remove(r.id)"><a class="c-3">移出</a></a-popconfirm>
           </a-space>
-          <a v-else>打开</a>
         </div>
       </div>
-      <AppPagination v-model:page="page" :size="SIZE" variant="simple" :unit="isFav ? '个问题' : '个页面'" :total="paged.total" :empty-text="isFav ? '没有匹配的常用问题' : '没有匹配的页面'" />
+      <AppPagination v-model:page="page" :size="SIZE" variant="simple" unit="个问题" :total="paged.total" empty-text="没有匹配的常用问题" />
     </div>
   </a-drawer>
 </template>

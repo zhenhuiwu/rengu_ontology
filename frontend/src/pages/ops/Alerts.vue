@@ -26,13 +26,13 @@ import { ACTIONS, ACTION_META, OBJ_KIND_LABEL } from '@/mock/actions';
 import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, dynamicContextKey, getAlertMeta, getAlertFacets, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts,
+  dynamicApi, dynamicContextKey, getAlertMeta, getAlertFacets, listAlerts, getAlert, claimAlert, batchClaimAlerts, transferAlert, closeAlert, batchCloseAlerts, deleteAlert,
   startAlertAction, listPeople, getAlertDecision, evaluateAlertDecision, type DecisionDto, type DecisionRecommendation, type AlertDto, type AlertDetailDto, type AlertRuleDto, type AlertTab, type AlertFacetsDto, type AlertCan,
 } from '@/api/dynamic';
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
 /** dims：通用维度值（演示数据里是所属门店）；objKindLabel：对象类型显示名（真接口由后台给，mock 取对象类型目录） */
-type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string; actionId?: string | null; actionOutcome?: string | null; actionReason?: string | null; actionExtRef?: string | null; dims: AlertDim[]; objKindLabel?: string; assigneeId?: string | null; canClose?: boolean; canClaim?: boolean; assignedToMe?: boolean; can?: AlertCan };
+type Row = Alert & { lockVersion?: number; log: LogItem[]; actionRef?: string; actionStatus?: string; actionId?: string | null; actionOutcome?: string | null; actionReason?: string | null; actionExtRef?: string | null; dims: AlertDim[]; objKindLabel?: string; assigneeId?: string | null; canClose?: boolean; canClaim?: boolean; assignedToMe?: boolean; can?: AlertCan };
 const REAL_API = dynamicApi.isReal();
 /** 页面内的告警状态（模拟后台：认领、转派、关闭、发起动作都会改它并写处理记录） */
 /** 关联动作取自动作中心同一份数据（mock/actions.ts，按来源告警匹配最近一条），两页的幂等键和状态一致 */
@@ -114,6 +114,40 @@ const pageRows = computed(() => live.value ? remote.items : rows.value.slice((pa
 const pinned = ref<string>();
 const selectedId = computed(() => (route.query.alert as string) || pinned.value || pageRows.value[0]?.id);
 const current = computed<Row | undefined>(() => live.value ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? pageRows.value[0]);
+const deleting = ref('');
+const deleteReason = computed(() => readonly.value ? roReason.value || '当前为只读，不能删除'
+  : !current.value?.can?.delete ? current.value?.can?.reasons.delete || '当前告警不能删除'
+  : !Number.isSafeInteger(current.value.lockVersion) ? '请重新加载当前记录后删除' : '');
+async function removeCurrent() {
+  const record = current.value, ctx = dynamicContextKey();
+  if (!live.value || !record || deleting.value || deleteReason.value || record.lockVersion == null) return;
+  const id = record.id, version = record.lockVersion;
+  const accepted = await confirm.ask({ title: '删除告警记录', target: `${id} · ${record.objLabel}`, okText: '删除', danger: true, irreversible: true,
+    dangerLabel: '我确认删除此告警记录，关联业务对象不会被删除',
+    fields: [{ label: '状态', value: record.status }, { label: '规则', value: record.ruleId }],
+    impact: '删除后告警不再显示在列表中，不会级联删除关联动作、事件或业务对象，独立审计留痕保留。' });
+  if (!accepted || ctx !== dynamicContextKey() || current.value !== record || record.lockVersion !== version || deleteReason.value || deleting.value) return;
+  deleting.value = id;
+  try {
+    await deleteAlert(id, version);
+    if (ctx !== dynamicContextKey()) return;
+    ++detailSeq;
+    if (remote.detail?.id === id) remote.detail = null;
+    if (pinned.value === id) pinned.value = undefined;
+    selectedKeys.value = selectedKeys.value.filter(key => key !== id);
+    seen.delete(id);
+    remote.items = [];
+    if (route.query.alert === id) await router.replace({ query: { ...route.query, alert: undefined } });
+    if (ctx !== dynamicContextKey()) return;
+    await loadList();
+    if (ctx !== dynamicContextKey()) return;
+    const last = Math.max(1, Math.ceil(remote.total / pageSize.value));
+    if (page.value > last) page.value = last;
+    await loadFacets();
+    if (ctx === dynamicContextKey()) message.success('告警记录已删除');
+  } catch (e) { if (ctx === dynamicContextKey()) fail(e); }
+  finally { if (deleting.value === id) deleting.value = ''; }
+}
 const rule = computed<AlertRuleDto | null>(() => (live.value ? remote.detail?.rule ?? null : current.value ? RULES[current.value.ruleId] : null));
 const ruleVersion = (version: unknown) => version == null || version === '' ? '' : String(version).startsWith('v') ? String(version) : `v${version}`;
 const triggerText = computed(() => {
@@ -464,7 +498,7 @@ watch([dynamicContextKey, selectedId], async () => {
     <div v-if="current" class="panel al-detail">
       <div class="panel-head">
         <span class="t-16 fw-600">{{ rule?.name || current.ruleId }}</span>
-        <a-badge :status="statusBadge(current.status)" :text="current.status" />
+        <a-space><a-badge :status="statusBadge(current.status)" :text="current.status" /><a-tooltip v-if="live" :title="deleteReason"><a-button size="small" danger :disabled="!!deleteReason || !!deleting" :loading="deleting === current.id" @click="removeCurrent">删除</a-button></a-tooltip></a-space>
       </div>
       <div class="al-body">
         <div v-if="!inList" class="t-12 c-3 al-out">此告警已移出当前筛选（现为{{ current.status }}）</div>

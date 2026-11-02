@@ -27,6 +27,7 @@ import StartChangeModal from './parts/StartChangeModal.vue';
 import { allDrafts, draftOf, useDraftView } from './parts/useDraftView';
 import { useStaticCr, useRealCrRecords, activeTargetCr, draftFields, draftRows } from './parts/useStaticCr';
 import { useStaticPage } from './parts/useStaticPage';
+import { useDefinitionDelete } from '@/composables/useDefinitionDelete';
 import { fetchKnowledgeChoices, fetchKnowledgeConflicts, fetchStaticDetail, fetchStaticPage, resolveKnowledge, staticContextKey, isStaticReal, startAllocatedTarget, fetchCurrentAfterWrite, applyModelChange } from '@/api/static';
 
 const route = useRoute();
@@ -500,10 +501,24 @@ watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.vi
 }, { immediate: true });
 onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
 
+const deletion = useDefinitionDelete('knowledge', {
+  target: () => cur.value ? { id: cur.value.id, name: `${cur.value.name}（${cur.value.id}）` } : undefined,
+  enabled: () => isStaticReal() && !readonly.value && !editing.value && !newOpen.value && !saving.value && !draftOnly.value,
+  context: staticContextKey,
+  afterDelete: async (id, current) => {
+    ++definitionSeq;
+    baseline.value = baseline.value.filter(item => item.id !== id);
+    const index = entries.findIndex(item => item.id === id); if (index >= 0) entries.splice(index, 1);
+    firstId.value = ''; definitionError.value = '';
+    await router.replace({ query: { ...route.query, k: undefined, view: undefined, drawer: undefined, drawer2: undefined } });
+    if (current()) await knowledgePage.reload();
+  },
+});
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
+    <a-tooltip v-if="isStaticReal()" :title="readonly ? reason : deletion.error.value || '删除当前业务知识'"><a-button danger :disabled="!deletion.allowed.value" :loading="deletion.busy.value" @click="deletion.run">删除</a-button></a-tooltip>
     <a-tooltip :title="readonly ? reason : ''">
       <a-button :disabled="readonly" @click="openChange('新建业务知识', true)">新建知识</a-button>
     </a-tooltip>
@@ -518,7 +533,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
           <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="gl-sel" />
         </div>
       </div>
-      <a-alert v-if="knowledgePage.error.value || definitionError" type="error" :message="knowledgePage.error.value || definitionError" show-icon />
+      <a-alert v-if="deletion.error.value || knowledgePage.error.value || definitionError" type="error" :message="deletion.error.value || knowledgePage.error.value || definitionError" show-icon />
       <div v-if="knowledgePage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
       <ul class="gl-items" :aria-busy="knowledgePage.loading.value">
         <li v-for="e in list" :key="e.id" :class="{ active: e.id === cur?.id }" :title="`${e.name} · ${e.type}${e.synonyms.length ? ` · ${e.synonyms.slice(0, 3).join('、')}` : ''} · ${e.id}`" @click="pick(e.id)">

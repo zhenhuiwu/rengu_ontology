@@ -24,6 +24,23 @@ const pageRoutes: RouteRecordRaw[] = PAGES.map((p) => ({
   meta: { navKey: p.key },
 }));
 
+/** Retired UI bookmarks retain workspace/history, never an old question or pending action. */
+const retiredPageRoutes: RouteRecordRaw[] = [
+  { name: 'qa-pages', path: '/use/qa/pages', alias: '/use/qa/templates' },
+  { name: 'object-search', path: '/use/objects/search' },
+  { name: 'object-detail', path: '/use/objects/detail' },
+  { name: 'scenarios', path: '/use/ops/scenarios' },
+].map((page) => ({
+  ...page,
+  redirect: (to) => ({
+    name: 'qa-workbench',
+    query: {
+      ...(typeof to.query.ontology === 'string' ? { ontology: to.query.ontology } : {}),
+      ...(typeof to.query.ver === 'string' ? { ver: to.query.ver } : {}),
+    },
+  }),
+}));
+
 const routes: RouteRecordRaw[] = [
   { path: '/login', name: 'login', component: () => import('@/pages/Login.vue'), meta: { title: '登录' } },
   {
@@ -33,6 +50,7 @@ const routes: RouteRecordRaw[] = [
       { path: '', name: 'home', component: () => import('@/pages/Home.vue'), meta: { title: anyReal() ? '零售经营看板' : '首页', crumbs: [], area: 'use' } },
       { path: 'workspaces', name: 'workspaces', component: () => import('@/pages/Workspaces.vue'), meta: { title: '本体工作空间', crumbs: [{ title: '平台' }, { title: '本体工作空间' }] } },
       ...pageRoutes,
+      ...retiredPageRoutes,
       { path: ':pathMatch(.*)*', name: 'not-found', component: () => import('@/pages/NotFound.vue'), meta: { title: '页面不存在' } },
     ],
   },

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 /**
- * 问数工作台左栏：按工作台可用高度自动分页，支持固定条数；快捷入口依次排列，小窗口整栏滚动。
+ * 智能助手左栏：按工作台可用高度自动分页，支持固定条数；快捷入口依次排列，小窗口整栏滚动。
  * 翻页、搜索、筛选写在 URL：?sessPage=2&sessQ=库存&sessRange=7d
  * 悬停会话显示“…”菜单：重命名（行内编辑）、删除（Popconfirm 二次确认）。
- * “常用问题 · 管理”“我的页面 · 全部”不跳转，打开本页抽屉（?panel=favorites / ?panel=pages）。
+ * “常用问题 · 管理”打开本页抽屉（?panel=favorites）。
  */
 import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { message } from 'ant-design-vue';
 import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
-import { QA_TODAY, QA_FAVORITES, QA_MY_PAGES } from '@/mock';
+import { QA_TODAY, QA_FAVORITES } from '@/mock';
 import type { QaSession } from '@/mock/qa';
 import { useQaSession, errText } from '../useQaSession';
 import { qaFallBackIfDown } from '../qaFallback';
@@ -23,7 +23,7 @@ import { useScopeCaliber } from '../qaScope';
 
 const { readonly, reason } = useReadonly();
 
-const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
+const emit = defineEmits<{ (e: 'panel', v: 'favorites'): void }>();
 const panelEl = ref<HTMLElement>();
 const allocatedEl = computed(() => panelEl.value?.parentElement);
 const paging = useAdaptivePageSize({
@@ -58,9 +58,8 @@ function requestContext() {
   return { headers: { 'X-Demo-As': c.demoAs ?? '', 'X-Ontology-Id': c.ontologyId ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs } };
 }
 const favTop = ref<string[]>(live.value ? [] : QA_FAVORITES);
-const pageTop = ref<string[]>(live.value ? [] : QA_MY_PAGES);
 // 仅显式 mock 模式使用原演示快捷入口。
-watch(live, (on) => { if (!on) { favTop.value = QA_FAVORITES; pageTop.value = QA_MY_PAGES; } });
+watch(live, (on) => { if (!on) favTop.value = QA_FAVORITES; });
 const readErr = (what: string) => (e: unknown) => { if (!qaFallBackIfDown(e)) message.error(`${what}加载失败：${errText(e)}`); };
 const editing = ref('');
 const draft = ref('');
@@ -158,18 +157,15 @@ async function load() {
 }
 async function loadShortcuts() {
   const my = ++shortcutSeq, key = contextKey();
-  favTop.value = []; pageTop.value = [];
+  favTop.value = [];
   if (!live.value) return;
   const options = requestContext();
   const results = await Promise.allSettled([
     qaApi.listFavorites({ page: 1, size: 3 }, options),
-    qaApi.listPagesBrief({ page: 1, size: 2 }, options),
   ]);
   if (disposed || my !== shortcutSeq || key !== contextKey() || !live.value) return;
   if (results[0].status === 'fulfilled') favTop.value = results[0].value.items.map((x) => x.question);
   else readErr('常用问题')(results[0].reason);
-  if (results[1].status === 'fulfilled') pageTop.value = results[1].value.items.map((x) => x.name);
-  else readErr('我的页面')(results[1].reason);
 }
 if (real) {
   watch([contextKey, live, kw, range, page, pageSize, listTick], load, { immediate: true });
@@ -203,7 +199,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
         <template v-else>
           <span class="qa-ss-title">{{ s.title }}</span>
           <span class="t-12 c-3 num qa-ss-date" :title="s.date">{{ when(s.date) }}</span>
-          <a-popconfirm :open="delId === s.id" title="删除这个会话？" description="删除后不可恢复，已固定到页面的卡片不受影响。"
+          <a-popconfirm :open="delId === s.id" title="删除这个会话？" description="删除后不可恢复。"
             ok-text="删除" cancel-text="取消" :ok-button-props="{ danger: true }" placement="right"
             @confirm="doDelete(s.id)" @cancel="delId = ''" @open-change="(v: boolean) => { if (!v) delId = ''; }">
             <a-dropdown :trigger="['click']" :open="menuId === s.id" @open-change="(v: boolean) => (menuId = v ? s.id : '')">
@@ -221,14 +217,10 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
       <div v-if="!rows.length" class="qa-ss-empty c-3">没有匹配的会话</div>
     </div>
     <div v-if="total" class="qa-ss-pager"><AppPagination v-model:page="pageModel" v-model:mode="pageMode" variant="simple" :total="total" :size="pageSize" :empty="false" /></div>
-    <div v-if="favTop.length || pageTop.length" class="qa-ss-bottom">
+    <div v-if="favTop.length" class="qa-ss-bottom">
       <template v-if="favTop.length">
         <div class="qa-ss-group c-3">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
         <div v-for="s in favTop" :key="s" class="qa-ss-item" :title="s"><span class="qa-ss-title">{{ s }}</span></div>
-      </template>
-      <template v-if="pageTop.length">
-        <div class="qa-ss-group c-3">我的页面<a @click="emit('panel', 'pages')">全部</a></div>
-        <div v-for="s in pageTop" :key="s" class="qa-ss-item" :title="s"><span class="qa-ss-title">{{ s }}</span></div>
       </template>
     </div>
   </section>

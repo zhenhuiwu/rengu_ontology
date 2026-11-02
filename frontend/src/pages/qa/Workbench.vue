@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { reviewFields } from '@/pages/ops/actionReview';
 /**
- * 问数工作台（/use/qa/workbench）。
+ * 智能助手（/use/qa/workbench）。
  * 布局：会话列表 | 对话（唯一滚动区）+ 输入框 | 当前对象与可执行动作。
  * 抽屉用公共 DetailDrawer：?drawer=region:REG-EC；确认卡用公共 ConfirmActionModal，打开时 URL 带 ?confirm=1，可直接复现截图。
- * 其余可复现状态：?pin=1 固定到页面弹窗；?panel=favorites|pages 左下抽屉；?apply=1 申请权限抽屉。
+ * 其余可复现状态：?panel=favorites 常用问题抽屉；?apply=1 申请权限抽屉。
  * 答案里的动作在当前页确认，真实执行状态回显到原对话；右栏仅展示演示动作。
  * 范围/口径是会话级的：中途修改在对话里插入“从这里开始按 … 回答”，之前的答案保留各自依据。
  */
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { ShareAltOutlined, LayoutOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { useConfirmStore } from '@/stores/confirm';
 import { REGION_EC } from '@/mock';
@@ -26,7 +25,6 @@ import QaSessionPanel from './components/QaSessionPanel.vue';
 import QaConversation from './components/QaConversation.vue';
 import QaComposer from './components/QaComposer.vue';
 import QaObjectPanel from './components/QaObjectPanel.vue';
-import QaPinModal from './components/QaPinModal.vue';
 import QaListDrawer from './components/QaListDrawer.vue';
 import QaApplyDrawer from './components/QaApplyDrawer.vue';
 
@@ -39,15 +37,13 @@ const submitted = ref(false);
 /** 演示右栏引用的本次 action_run。 */
 const submittedRun = ref<{ id: string; approver: string | null }>();
 const pending = computed(() => confirm.open && confirm.req?.title === ACTION);
-const pinQ = useQueryParam('pin', '');
-const pin = computed({ get: () => (readonly.value ? '' : pinQ.value), set: (v: string) => (pinQ.value = v) });
 const panel = useQueryParam('panel', '');
 const apply = useQueryParam('apply', '');
 const applied = ref(false);
 
 // 右栏动作行只在确认卡打开期间高亮；取消/关闭后恢复“发起”，提交后才变“待审批”
 const highlight = pending;
-const { readonly, reason } = useReadonly();
+const { readonly } = useReadonly();
 /* 预览：回答只含被预览用户范围内的数据，会话顶部写明（被预览用户有行级限制的对象，不写死对象名） */
 const pv = usePreview();
 const pvText = computed(() => (pv.limited.value.length ? pv.limited.value.map((o) => `${o.name} ${o.scope}`).join('；') : '全部数据'));
@@ -143,17 +139,6 @@ if (sess.real) {
     router.replace({ query: { ...route.query, session: id || undefined } });
   }, { immediate: true });
 }
-const canOrganize = computed(() => !readonly.value && (!sess.real || !!sess.detail.value?.turns.some((turn) => (turn as typeof turn & { pinnable?: boolean }).pinnable)));
-function toPage(intent: 'preview' | 'share' = 'preview') {
-  if (!canOrganize.value) return;
-  const title = sess.live.value ? sess.detail.value?.title ?? '' : sess.sessions.value.find((s) => s.id === sess.activeId.value)?.title ?? '';
-  router.push({ path: '/use/qa/pages', query: { ontology: route.query.ontology, newName: title.slice(0, 30), ...(sess.real ? { source_session: sess.activeId.value, page_intent: intent } : {}) } });
-}
-function onPinned(page: string) { pin.value = ''; message.success(`已固定到「${page}」`); }
-/** 固定到页面：真接口时记下是哪一轮（P7 用）；演示数据固定第一个会话的主回答卡 */
-const PIN_DEMO_TITLE = '上个月华东大区复购客户的销售额（按省份）';
-const pinTurn = ref<{ id: string; title: string }>();
-function openPin(t?: { id: string; title: string }) { pinTurn.value = t; pin.value = '1'; }
 /* 真接口（W16）：申请的是点了「申请权限」的那一轮；刷新后（?apply=1 复现）按本会话最后一个未申请的越权轮次 [推断] */
 const applyTurn = ref('');
 const applying = ref(false);
@@ -306,21 +291,15 @@ onMounted(() => {
 </script>
 
 <template>
-  <Teleport defer to="#page-extra">
-    <a-tooltip :title="reason || (canOrganize ? '将可执行回答整理为页面后设置共享成员' : '当前会话尚无可执行的回答')"><a-button :disabled="!canOrganize" @click="toPage('share')"><template #icon><ShareAltOutlined /></template>分享页面</a-button></a-tooltip>
-    <a-tooltip :title="reason || (canOrganize ? '按原回答条件创建页面' : '当前会话尚无可执行的回答')"><a-button :disabled="!canOrganize" @click="toPage('preview')"><template #icon><LayoutOutlined /></template>把会话整理成页面</a-button></a-tooltip>
-    <a-tooltip :title="pv.active.value ? pv.reason.value : '更多操作暂未开放'"><a-button disabled><template #icon><EllipsisOutlined /></template></a-button></a-tooltip>
-  </Teleport>
   <div class="qa-wb">
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
       <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
-      <QaConversation :applied="applied" :tips="tips" :action-runs="actionRuns" :action-issues="actionIssues" :action-busy="actionBusy" @refresh-action="(tid: string) => refreshAction(tid)" @suggest="(a?: qaApi.QaActionSuggest, tid?: string) => runAction(undefined, a, tid)" @pin="openPin" @apply="openApply" />
+      <QaConversation :applied="applied" :tips="tips" :action-runs="actionRuns" :action-issues="actionIssues" :action-busy="actionBusy" @refresh-action="(tid: string) => refreshAction(tid)" @suggest="(a?: qaApi.QaActionSuggest, tid?: string) => runAction(undefined, a, tid)" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
     <QaObjectPanel v-if="!sess.real" :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />
   </div>
-  <QaPinModal :open="pin === '1'" :card="pinTurn?.title ?? (sess.real ? sess.detail.value?.title ?? '' : PIN_DEMO_TITLE)" :turn-id="pinTurn?.id" @close="pin = ''" @done="onPinned" />
   <QaListDrawer :panel="panel" @close="panel = ''" @ask="panel = ''" />
   <QaApplyDrawer :open="apply === '1'" :submitting="applying" :readonly="readonly" @close="apply = ''" @submit="onApplied" />
 </template>

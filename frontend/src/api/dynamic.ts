@@ -32,13 +32,14 @@ export type AlertTab = 'open' | 'doing' | 'closed' | 'all';
 export interface AlertLogDto { time: string; text: string; who: string; abnormal?: boolean | null }
 /** 后台 AlertOut：Alert + 通用维度 dims + 对象类型显示名 + 关联动作（actionRef / actionStatus 同 Alerts.vue Row） */
 export interface AlertDto extends Omit<Alert, 'storeId' | 'storeLabel'> {
+  lockVersion?: number;
   objKindLabel: string; dims: AlertDim[];
   assigneeId?: string | null; canClose: boolean; canClaim: boolean; assignedToMe: boolean;
   actionRef?: string | null; actionStatus?: string | null; actionId?: string | null;
   actionOutcome?: string | null; actionReason?: string | null; actionExtRef?: string | null;
 }
 export interface AlertRuleDto { id: string; name: string; version: string; trigger: string | { kind?: string; text?: string; eventId?: string }; condition?: string; expr?: string; conds?: { expr?: string; field?: string; op?: string; value?: unknown }[]; logic?: string; schedule: string; dedupe: string; action?: string; metric?: string; confirmer?: string }
-export interface AlertCan { claim: boolean; transfer: boolean; close: boolean; startAction: boolean; reasons: Record<string, string> }
+export interface AlertCan { claim: boolean; transfer: boolean; close: boolean; startAction: boolean; delete?: boolean; reasons: Record<string, string> }
 /** approver：发起动作时的审批人，取规则绑定动作类型的审批人配置（无则 null） */
 export interface AlertDetailDto extends AlertDto { rule: AlertRuleDto | null; approver: string | null; recent7d: number; locked: boolean; log: AlertLogDto[]; can: AlertCan; actionParams: LaunchParam[] }
 export interface AlertPageDto extends PageResult<AlertDto> { counts: Record<AlertTab, number> }
@@ -60,6 +61,7 @@ export const listAlerts = (q: AlertQuery) =>
   api.get<AlertPageDto>('/alerts', { query: { ...alertFilters(q), page: q.page, size: q.size } });
 export const getAlertFacets = (q: Omit<AlertQuery, 'page' | 'size'>) => api.get<AlertFacetsDto>('/alerts/facets', { query: alertFilters(q) });
 export const getAlert = (id: string) => api.get<AlertDetailDto>(`/alerts/${enc(id)}`);
+export const deleteAlert = (id: string, lockVersion: number) => inContext(api.delete<void>(`/alerts/${enc(id)}`, { query: { lockVersion } }));
 export const claimAlert = (id: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:claim`));
 export const batchClaimAlerts = (ids: string[]) => inContext(api.post<{ claimed: number; ids: string[] }>('/alerts:batch-claim', { ids }));
 export const transferAlert = (id: string, to: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:transfer`, { to }));
@@ -94,11 +96,12 @@ export const evaluateAlertDecision = (id: string) => inContext(api.post<{ alertI
 export type ActionTab = 'pending' | 'records' | 'unknown';
 /** 后台 ActionRunOut（动作中心记录 source 为对象）。可空字段在页面上按 mock 的可选字段处理 */
 export type ActionRunDto = Omit<ActionRecord, 'log' | 'failReason' | 'unknownReason' | 'reconcile' | 'retryOf' | 'retriedAs'> & {
+  lockVersion?: number;
   typeId: string; confirmer?: string | null;
   dispatchPhase?: 'queued' | 'claimed' | null; paramsUnavailable?: string | null;
   failReason?: string; unknownReason?: string; reconcile?: string; retryOf?: string; retriedAs?: string;
 };
-export interface ActionCan { confirm: boolean; withdraw: boolean; approve: boolean; resubmit: boolean; reconcile: boolean; reasons: Record<string, string> }
+export interface ActionCan { confirm: boolean; withdraw: boolean; approve: boolean; resubmit: boolean; reconcile: boolean; delete?: boolean; reasons: Record<string, string> }
 export interface ActionRunDetailDto extends ActionRunDto, ActionReview { log: ActionLog[]; can: ActionCan }
 export interface ActionRunPageDto extends PageResult<ActionRunDto> { counts: Record<ActionTab, number>; statusCounts: Record<string, number> }
 export interface ActionRunQuery { tab: ActionTab; status?: string; action?: string; sysId?: string; kw?: string; page: number; size: number }
@@ -131,6 +134,7 @@ export async function listActionRuns(q: ActionRunQuery): Promise<ActionRunPageDt
   return { ...r, items: r.items.map(clean) };
 }
 export const getActionRun = async (id: string) => clean(await api.get<ActionRunDetailDto>(`/action-runs/${enc(id)}`));
+export const deleteActionRun = (id: string, lockVersion: number) => inContext(api.delete<void>(`/action-runs/${enc(id)}`, { query: { lockVersion } }));
 export const getActionMeta = () => api.get<ActionMetaDto>('/actions/meta');
 export const confirmActionRun = async (id: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:confirm`)));
 export const withdrawActionRun = async (id: string, reason: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:withdraw`, { reason })));
@@ -156,7 +160,7 @@ export type { AlertStatus, ActionStatus };
 import type { RuleDef, AutoStage, Hit } from '@/mock/rules';
 
 /** 后台 RuleDef + 显示状态（草稿中 / 审核中 / 已发布 / 已停用）+ 所在变更单；详情多带 draft（有草稿时） */
-export interface RuleDto extends RuleDef { displayStatus: string; cr?: string | null; draft?: RuleDef | null }
+export interface RuleDto extends RuleDef { displayStatus: string; cr?: string | null; crLockVersion?: number | null; draft?: RuleDef | null }
 export interface RuleQuery { trigger?: string; status?: string; kw?: string; page: number; size: number }
 export interface RuleEditorField { api: string; name: string; expression: string; type: string }
 export interface RuleMetaDto {
@@ -195,7 +199,11 @@ const undef = <T extends object>(o: T): T => {
 export const listRules = (q: RuleQuery) =>
   api.get<PageResult<RuleDto>>('/rules', { query: { trigger: opt(q.trigger), status: opt(q.status), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } });
 export const getRulesMeta = () => api.get<RuleMetaDto>('/rules/meta');
-export const getRule = (id: string) => api.get<RuleDto>(`/rules/${enc(id)}`);
+function rememberRuleCr(row: RuleDto) {
+  if (row.cr && row.crLockVersion != null) crLocked(row.cr, { lockVersion: row.crLockVersion });
+  return row;
+}
+export const getRule = async (id: string) => rememberRuleCr(await inContext(api.get<RuleDto>(`/rules/${enc(id)}`)));
 /** 保存到草稿：后台同一事务把改动登记成变更单 conds / mapping / config 三段（单子在库里时）；带 lockVersion 乐观锁 */
 export interface RuleDraftSaved { cr: string; draft: RuleDef; message: string; lockVersion?: number | null; crChanges?: number | null }
 export async function saveRuleDraft(id: string, body: { cr: string; autoStage: AutoStage; thresholds: string[] } & RuleDefinitionPatch) {
@@ -213,9 +221,9 @@ export async function getRuleHit(id: string) {
   return { ...undef(r), linkedAction: r.linkedAction ? clean(r.linkedAction) : null, alert: r.alert, timeline: r.timeline };
 }
 /** 新建规则（未发布、变更中）；带 cr 时同时开草稿 */
-export const createRule = (body: { cr?: string; name?: string; objKind?: string } = {}) => api.post<RuleDto>('/rules', body);
+export const createRule = async (body: { cr?: string; name?: string; objKind?: string } = {}) => rememberRuleCr(await inContext(api.post<RuleDto>('/rules', body)));
 /** 发起变更 / 加入已有变更单：登记规则草稿（幂等；已在别的草稿单 409 TARGET_IN_OTHER_CR） */
-export const openRuleDraft = (id: string, cr: string) => api.post<RuleDto>(`/rules/${enc(id)}/draft`, { cr });
+export const openRuleDraft = async (id: string, cr: string) => rememberRuleCr(await inContext(api.post<RuleDto>(`/rules/${enc(id)}/draft`, { cr })));
 /** 放弃本规则草稿（从未发布的新规则一并删除）；后台同一事务删变更单里本规则的登记和草稿行，不留孤儿 */
 export const discardRuleDraft = (id: string, cr?: string) => api.delete<void>(`/rules/${enc(id)}/draft`, { query: cr ? { cr } : {} });
 

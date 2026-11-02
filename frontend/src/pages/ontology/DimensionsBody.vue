@@ -6,7 +6,7 @@
  * 草稿逻辑用公共的 useDraftView('dimension')：已发布只读，唯一入口“发起变更”；草稿里的改动用灰色“新增 / 修改”标出。
  */
 import { computed, reactive, ref, shallowRef, watch, onBeforeUnmount } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -31,24 +31,31 @@ import { applyModelChange, deleteDimension, dimensionDeleteVersions, fetchCurren
 
 const definitionOpen = ref(false), newDefinition = ref(false);
 const deleting = ref(false);
+let deleteNavigation = 0, deleteMounted = true;
+onBeforeRouteLeave(() => { deleteNavigation++; deleting.value = false; });
+onBeforeUnmount(() => { deleteMounted = false; });
 async function deleteCurrent() {
   if (readonly.value || deleting.value || !isStaticReal() || !cur.value?.id || newTarget.value) return;
   const id = cur.value.id, name = cur.value.name, apiName = cur.value.api, kindName = cur.value.kind, key = staticContextKey();
+  const navigation = deleteNavigation, path = route.path;
+  const current = () => deleteMounted && navigation === deleteNavigation && path === route.path && key === staticContextKey();
   deleting.value = true;
   try {
     const versions = await dimensionDeleteVersions(id);
-    if (key !== staticContextKey() || id !== cur.value?.id) return;
+    if (!current() || id !== cur.value?.id) return;
     const ok = await confirm.ask({ title: `删除${kindName}`, target: `${name}（${apiName}）`, okText: '删除', danger: true,
       impact: '删除立即生效，历史版本仍保留该定义。已被指标选为允许维度，或还有未完成的变更单时，不能删除。' });
-    if (!ok || key !== staticContextKey() || id !== cur.value?.id) return;
+    if (!ok || !current() || id !== cur.value?.id) return;
     await deleteDimension(id, versions);
+    if (!current() || id !== cur.value?.id) return;
     baseline.value = baseline.value.filter((d) => d.id !== id);
     firstId.value = '';
     await router.replace({ query: { ...route.query, dim: undefined, view: undefined } });
+    if (!current()) return;
     await dimensionPage.reload();
-    message.success(`${kindName}已删除`);
-  } catch (e) { message.error(e instanceof Error ? e.message : String(e)); }
-  finally { deleting.value = false; }
+    if (current()) message.success(`${kindName}已删除`);
+  } catch (e) { if (current()) message.error(e instanceof Error ? e.message : String(e)); }
+  finally { if (current()) deleting.value = false; }
 }
 function openDefinition(isNew = false) { if (readonly.value || !isStaticReal()) return; newDefinition.value = isNew; definitionOpen.value = true; }
 const assistantDraft = ref<Record<string, unknown>>();

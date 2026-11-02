@@ -5,6 +5,7 @@
  * 草稿逻辑用公共的 useDraftView('link')（已发布只读，唯一入口“发起变更”）；新建关系经公共 start 登记到所选变更单。
  */
 import InfoTip from '@/components/InfoTip.vue';
+import { useDefinitionDelete } from '@/composables/useDefinitionDelete';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -291,7 +292,7 @@ const CHECKS = computed(() => {
     : l.card === 'N : M' && !l.via
       ? { code: 'V3', name: '两端对象', result: '阻断', note: '多对多需要指定中间对象' }
       : { code: 'V3', name: '两端对象', result: '通过', note: `${objName(l.from)} 与 ${objName(l.to)} 都存在，关联键类型一致${l.via ? `；经中间表 ${l.via}` : ''}` });
-  if (l.status === '已发布') rows.push({ code: 'V7', name: '已发布 API 名', result: '通过', note: `${apiOf(l)} 已发布，不可删除或改名` });
+  if (l.status === '已发布') rows.push({ code: 'V7', name: '已发布 API 名', result: '通过', note: `${apiOf(l)} 的 API 名发布后不可改名` });
   rows.push(l.desc.length >= 8 ? { code: 'V11', name: '自然语言描述', result: '通过', note: '问数用它理解这条关系' } : { code: 'V11', name: '自然语言描述', result: '警告', note: '描述过短，问数可能选错路径' });
   const g = groupsOf(l.id)[0];
   rows.push(g ? { code: 'V13', name: '多路径默认', result: '通过', note: g.check } : l.id === 'store_manager'
@@ -469,10 +470,27 @@ watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.vi
 }, { immediate: true });
 onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
 
+const deletion = useDefinitionDelete('link', {
+  target: () => cur.value ? { id: cur.value.id, name: `${cur.value.name}（${apiOf(cur.value)}）` } : undefined,
+  enabled: () => isStaticReal() && !readonly.value && !editing.value && !newOpen.value && !saving.value && !draftOnly.value,
+  context: staticContextKey,
+  afterDelete: async (id, current) => {
+    ++definitionSeq; ++catalogSeq;
+    baseline.value = baseline.value.filter(item => item.id !== id);
+    const index = links.findIndex(item => item.id === id); if (index >= 0) links.splice(index, 1);
+    catalog.value = { ...catalog.value, links: catalog.value.links.filter(item => item.id !== id) };
+    firstId.value = ''; definitionError.value = '';
+    await router.replace({ query: { ...route.query, link: undefined, view: undefined, drawer: undefined, drawer2: undefined } });
+    if (!current()) return;
+    await linkPage.reload();
+    if (current()) await loadCatalog();
+  },
+});
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
+    <a-tooltip v-if="isStaticReal()" :title="readonly ? reason : deletion.error.value || '删除当前关系类型'"><a-button danger :disabled="!deletion.allowed.value" :loading="deletion.busy.value" @click="deletion.run">删除</a-button></a-tooltip>
     <a-segmented v-model:value="mode" :options="[{ label: '列表', value: 'list' }, { label: '关系图', value: 'graph' }]" />
     <a-tooltip :title="readonly ? reason : ''">
       <a-button :disabled="readonly" @click="openChange('新建关系类型', true)">新建关系类型</a-button>
@@ -488,7 +506,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
           <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="lt-sel" />
         </div>
       </div>
-      <a-alert v-if="linkPage.error.value || definitionError || catalogError" type="error" :message="linkPage.error.value || definitionError || catalogError" show-icon><template v-if="catalogError" #action><a-button size="small" @click="loadCatalog">重试目录</a-button></template></a-alert>
+      <a-alert v-if="deletion.error.value || linkPage.error.value || definitionError || catalogError" type="error" :message="deletion.error.value || linkPage.error.value || definitionError || catalogError" show-icon><template v-if="catalogError" #action><a-button size="small" @click="loadCatalog">重试目录</a-button></template></a-alert>
       <div v-if="linkPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
       <ul class="lt-items" :aria-busy="linkPage.loading.value">
         <li v-for="l in list" :key="l.id" :class="{ active: l.id === cur?.id }" :title="`${l.name} · ${objName(l.from)} → ${l.to ? objName(l.to) : '未选择'} · ${l.card}`" @click="pick(l.id)">
@@ -766,7 +784,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
           </template>
         </a-table>
         <AppPagination v-model:page="up" variant="full" :total="isStaticReal() ? usagePage.total.value : cur.usage.length" v-model:size="usageSize" unit="条" :empty="false" />
-        <div class="t-12 c-3">修改或下线本关系时，以上对象会出现在变更单的影响分析里；已发布的 API 名不可删除或改名（V7）。</div>
+        <div class="t-12 c-3">修改或删除本关系前应检查以上引用；API 名发布后不可改名（V7），删除须通过引用检查。</div>
       </div>
 
       <!-- 版本历史 -->

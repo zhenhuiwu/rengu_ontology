@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import InfoTip from '@/components/InfoTip.vue';
+import { useDefinitionDelete } from '@/composables/useDefinitionDelete';
 /**
  * 规则与自动化：左侧规则列表，右侧详情。页签：条件 / 触发方式 / 动作 / 命中历史 / 回放试跑 / 版本历史。
  * URL：?rule= 选中项，?tab= 页签，?view=draft 草稿，?ver= 历史版本只读；
@@ -597,10 +598,23 @@ const verCols = [
   { title: '时间', dataIndex: 'at', width: 160 },
   { title: '操作', key: 'op', width: 110 },
 ];
+const deletion = useDefinitionDelete('rule', {
+  target: () => base.value.id ? { id: base.value.id, name: `${base.value.name}（${base.value.id}）` } : undefined,
+  enabled: () => live.value && !readonly.value && !newOpen.value && !draftCR.value && !savingDraft.value && !openingEdit.value && !restoring.value,
+  context: dynamicContextKey,
+  afterDelete: async (id, current) => {
+    ++definitionSeq; delete edits[id];
+    remote.items = remote.items.filter(item => item.id !== id); remote.detail = null; defaultRuleId.value = '';
+    remote.hit = null; remote.replay = null; remote.versions = []; remote.staged = [];
+    await setQ({ rule: undefined, view: undefined, hit: undefined });
+    if (current()) await loadList();
+  },
+});
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
+    <a-tooltip v-if="live" :title="readonly ? reason : deletion.error.value || (draftCR ? '请先保存或放弃当前编辑' : '删除当前规则')"><a-button danger :disabled="!deletion.allowed.value" :loading="deletion.busy.value" @click="deletion.run">删除</a-button></a-tooltip>
     <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openNew">新建规则</a-button></a-tooltip>
   </Teleport>
 
@@ -643,7 +657,7 @@ const verCols = [
         </a-tooltip>
         <span v-if="!readonly && missingReq.length" class="t-12 c-warning">缺少必填参数：{{ missingReq.join('、') }}</span>
       </div>
-      <a-alert v-if="saveError" type="error" :message="saveError" show-icon class="ru-save-error" />
+      <a-alert v-if="deletion.error.value || saveError" type="error" :message="deletion.error.value || saveError" show-icon class="ru-save-error" />
       <a-tabs v-model:activeKey="tab" class="ru-tabs">
         <a-tab-pane key="cond" tab="条件" />
         <a-tab-pane key="trigger" tab="触发方式" />

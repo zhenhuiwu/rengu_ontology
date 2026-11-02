@@ -2,7 +2,7 @@
 /** 主回答卡：一行灰色元信息 + 可展开“依据”；澄清；结论；指标 + 趋势；省份（表格/图表切换）；操作 */
 import { ref, computed, watch } from 'vue';
 import { message } from 'ant-design-vue';
-import { SearchOutlined, ThunderboltOutlined, PushpinOutlined,
+import { SearchOutlined, ThunderboltOutlined,
   LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CopyOutlined, DownOutlined, UpOutlined, ApartmentOutlined } from '@ant-design/icons-vue';
 import EChart from '@/components/EChart.vue';
 import { GRAY } from '@/theme';
@@ -16,7 +16,7 @@ import { qaLive, qaFallBackIfDown, qaWriteReal, qaWriteFail } from '../qaFallbac
 type MainCard = QaDemoMainCard & { caliber?: qaApi.QaCaliberKey };
 /** card='clarify'：链路反问（answer.clarify），只显示反问和选项；chosen：已按哪个选项追问过（对话区按后续轮次推出） */
 const props = defineProps<{ card: MainCard | qaApi.QaClarifyAnswer; turnId?: string; vote?: qaApi.QaVote; chosen?: string | null }>();
-const emit = defineEmits<{ (e: 'suggest'): void; (e: 'pin'): void; (e: 'clarify', label: string): void }>();
+const emit = defineEmits<{ (e: 'suggest'): void; (e: 'clarify', label: string): void }>();
 const cq = props.card.card === 'clarify' ? props.card : null;
 const mc = props.card as MainCard;
 /** 选了一个选项：交给对话区按「原问题 + 选项」再问一轮（链路不带上下文，追问要自带完整意思） */
@@ -209,7 +209,6 @@ const barOption = computed(() => ({
           <a-button><template #icon><SearchOutlined /></template>查看原因</a-button>
         </a-popover>
         <a-tooltip :title="reason"><a-button :disabled="readonly" @click="emit('suggest')"><template #icon><ThunderboltOutlined /></template>建议动作</a-button></a-tooltip>
-        <a-tooltip :title="reason"><a-button :disabled="readonly" @click="emit('pin')"><template #icon><PushpinOutlined /></template>固定到页面</a-button></a-tooltip>
       </a-space>
       <a-space :size="4">
         <a-tooltip title="复制"><a-button type="text" @click="onCopy"><template #icon><CopyOutlined /></template></a-button></a-tooltip>

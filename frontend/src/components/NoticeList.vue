@@ -41,7 +41,7 @@ async function load() {
 watch(filter, () => { page.value = 1; items.value = []; total.value = 0; });
 watch([notificationContextKey, page, filter, () => props.active], load, { immediate: true });
 async function pick(n: Notice) {
-  if (mock) { n.read = true; open(n.kind, n.objId, { level: 1 }); emit('picked'); return; }
+  if (mock) { n.read = true; if (n.kind !== 'page') open(n.kind, n.objId, { level: 1 }); emit('picked'); return; }
   if (!real || busy.value) return;
   const key = notificationContextKey(), seq = ++mutationSequence;
   listSequence++; loading.value = false; busy.value = true; error.value = '';
@@ -49,9 +49,7 @@ async function pick(n: Notice) {
     const result = n.read ? null : await markNotificationRead(n.id);
     if (key !== notificationContextKey() || seq !== mutationSequence) return;
     if (result) { items.value = items.value.map(item => item.id === n.id ? { ...item, read: true } : item); app.setNotificationUnread(key, result.unread); emit('updated'); }
-    await router.push(n.kind === 'page'
-      ? { path: '/use/qa/pages', query: { ontology: app.ontologyId, page_id: n.objId, ptab: 'preview' } }
-      : { path: '/build/ontology/releases', query: { ontology: app.ontologyId, cr: n.objId } });
+    if (n.kind !== 'page') await router.push({ path: '/build/ontology/releases', query: { ontology: app.ontologyId, cr: n.objId } });
     emit('picked');
   } catch (e) { if (key === notificationContextKey() && seq === mutationSequence) error.value = errText(e); }
   finally { if (seq === mutationSequence) busy.value = false; }

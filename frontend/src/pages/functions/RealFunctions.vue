@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
+import { useDefinitionDelete } from '@/composables/useDefinitionDelete';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { confirmDiscard, useUnsavedGuard } from '@/composables/useUnsavedGuard';
@@ -200,14 +201,26 @@ const signature = computed(() => fn.value ? `def ${fn.value.name}(${fn.value.inp
 const vcols = [{ title: '版本', dataIndex: 'ver', key: 'ver', width: 100 }, { title: '时间', dataIndex: 'time', key: 'time', width: 150 }, { title: '作者', dataIndex: 'author', key: 'author', width: 90 }, { title: '说明', dataIndex: 'note', key: 'note', ellipsis: true }, { title: '状态', dataIndex: 'status', key: 'status', width: 80 }, { title: '操作', key: 'op', width: 120 }];
 // Immediate detail loading follows ref initialization, including direct function URL entry.
 void loadDetail(); void loadVersions();
+const deletion = useDefinitionDelete('function', {
+  target: () => fn.value ? { id: fn.value.id, name: `${fn.value.title}（${fn.value.name}）` } : undefined,
+  enabled: () => !readonly.value && !saving.value && !running.value && !formOpen.value,
+  context,
+  afterDelete: async (id, current) => {
+    ++detailSeq; ++versionSeq;
+    fn.value = undefined; versions.value = []; versionTotal.value = 0; detailError.value = ''; versionError.value = '';
+    items.value = items.value.filter(item => item.id !== id);
+    await setQuery({ fn: undefined, form: undefined });
+    if (current()) await loadList();
+  },
+});
 </script>
 
 <template>
-  <Teleport defer to="#page-extra"><a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || saving" @click="guard(() => setQuery({ form: 'new' }))">新建函数</a-button></a-tooltip></Teleport>
+  <Teleport defer to="#page-extra"><a-tooltip :title="readonly ? reason : deletion.error.value || '删除当前函数'"><a-button danger :disabled="!deletion.allowed.value" :loading="deletion.busy.value" @click="deletion.run">删除</a-button></a-tooltip><a-tooltip :title="reason"><a-button type="primary" :disabled="readonly || saving" @click="guard(() => setQuery({ form: 'new' }))">新建函数</a-button></a-tooltip></Teleport>
   <div class="fn">
     <div class="panel fn-list">
       <div class="fn-filters"><a-input-search v-model:value="kw" placeholder="函数名 / 中文名" allow-clear /><a-select v-model:value="statusF" class="fn-sel" :options="['全部', '已发布', '草稿', '已停用'].map(v => ({ value: v, label: v }))" /></div>
-      <a-alert v-if="loadError" type="error" :message="loadError" show-icon />
+      <a-alert v-if="deletion.error.value || loadError" type="error" :message="deletion.error.value || loadError" show-icon />
       <a-spin :spinning="loading" class="fn-items"><a-empty v-if="!items.length && !loading" description="没有函数记录" /><div v-for="item in items" :key="item.id" class="fn-item" :class="{ on: item.id === q('fn') }" @click="guard(() => setQuery({ fn: item.id, form: undefined }))"><div class="fn-l1"><span class="t-14 fw-600 c-1 num fn-ellip">{{ item.name }}</span><a-badge status="default" :text="item.status" /></div></div></a-spin>
       <AppPagination v-model:page="lpage" variant="simple" :total="total" :size="PAGE_SIZE" unit="个函数" class="fn-pager" />
     </div>

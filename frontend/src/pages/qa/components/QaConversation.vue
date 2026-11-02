@@ -16,11 +16,9 @@ import QaResultView from './QaResultView.vue';
 import ActionReviewPanel from '@/pages/ops/ActionReview.vue';
 import type { QaDynamicAnswer } from '@/api/qa';
 import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer, QaActionAnswer, QaAlertRef, QaActionSuggest, QaActionRun } from '@/api/qa';
-import { pinTitle } from '@/api/qaPages';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
 const props = defineProps<{ applied: boolean; tips: string[]; actionRuns: Record<string, QaActionRun>; actionIssues: Record<string, string>; actionBusy: boolean }>();
-/** pin：真接口时带这一轮的 id 和问题（固定到页面 P7 用） */
-const emit = defineEmits<{ (e: 'suggest', action?: QaActionSuggest, turnId?: string): void; (e: 'refresh-action', turnId: string): void; (e: 'pin', turn?: { id: string; title: string }): void; (e: 'apply', turnId?: string): void }>();
+const emit = defineEmits<{ (e: 'suggest', action?: QaActionSuggest, turnId?: string): void; (e: 'refresh-action', turnId: string): void; (e: 'apply', turnId?: string): void }>();
 const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send, streamStatus, sendError } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
@@ -171,7 +169,7 @@ watch(chartRequests, async (requests) => { const ids = Object.keys(requests); co
     <template v-if="isAction(t) || isChain(t) || (t.kind === 'answer' && t.answer.card === 'rule')" />
     <template v-else-if="t.kind === 'answer'">
     <QaStoreAnswer v-if="t.answer.card === 'store'" :card="t.answer" :turn-id="live ? t.id : undefined" />
-    <QaAnswer v-else-if="t.answer.card !== 'rule'" :card="t.answer" :turn-id="live ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @pin="emit('pin', live ? { id: t.id, title: pinTitle(t.question) } : undefined)" @clarify="(l: string) => onClarify(t, l)" />
+    <QaAnswer v-else-if="t.answer.card !== 'rule'" :card="t.answer" :turn-id="live ? t.id : undefined" :vote="'vote' in t ? t.vote : undefined" :chosen="chosenOf(t)" @suggest="emit('suggest')" @clarify="(l: string) => onClarify(t, l)" />
     </template>
     <div v-else-if="t.kind === 'denied'" class="qa-b">
       <LockOutlined class="c-3" />

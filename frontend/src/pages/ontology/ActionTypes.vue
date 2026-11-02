@@ -16,6 +16,7 @@ import { message } from 'ant-design-vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
+import { useDefinitionDelete } from '@/composables/useDefinitionDelete';
 import ObjRef from '@/components/ObjRef.vue';
 import EChart from '@/components/EChart.vue';
 import StatusTimeline from '@/components/StatusTimeline.vue';
@@ -61,6 +62,7 @@ const filtered = computed(() => ACTION_TYPES.filter((a) => (group.value === '全
   && (!kw.value || a.name.includes(kw.value))));
 const LPAGE = actionApi.isReal() ? 10 : 22;
 const lpage = ref(1);
+const deleteTick = ref(0);
 watch([group, kw], () => { lpage.value = 1; });
 
 /* 真接口：列表分页 / 筛选走后台，目录只读轻头，选中类型才读详情；编辑须等完整基线，真模式空数据不借演示类型 */
@@ -75,7 +77,7 @@ watch(actionContextKey, () => { const key = actionContextKey(); loadWritebackSys
 if (real) {
   watch(actionContextKey, () => { const key = actionContextKey(); loadErr.value = ''; loadSnapshot().catch((e) => { if (mounted && key === actionContextKey()) loadErr.value = apiMsg(e); }); }, { immediate: true });
   let seq = 0;
-  watch([group, kw, lpage, actionContextKey], async () => {
+  watch([group, kw, lpage, actionContextKey, deleteTick], async () => {
     const n = ++seq; const key = actionContextKey();
     if (realList.key !== key) Object.assign(realList, { key, items: [], total: 0, groups: [] });
     realList.items = [];
@@ -492,13 +494,28 @@ const verCols = [
   { title: '发布时间', dataIndex: 'at', width: 160 },
   { title: '操作', key: 'op', width: 110 },
 ];
+const deletion = useDefinitionDelete('action', {
+  target: () => cur.value.id ? { id: cur.value.id, name: `${cur.value.name}（${cur.value.api}）` } : undefined,
+  enabled: () => real && !readonly.value && ready.value && !dirty.value && !createOpen.value,
+  context: actionContextKey,
+  afterDelete: async (id, current) => {
+    invalidateActionSnapshot();
+    realList.items = realList.items.filter(item => item.id !== id);
+    await router.replace({ query: { ...route.query, action: undefined, view: undefined } });
+    if (!current()) return;
+    await loadSnapshot();
+    if (current()) deleteTick.value++;
+  },
+});
 </script>
 
 <template>
   <Teleport defer to="#page-extra">
+    <a-tooltip v-if="real" :title="readonly ? reason : deletion.error.value || (dirty ? '请先保存或放弃当前编辑' : '删除当前动作类型')"><a-button danger :disabled="!deletion.allowed.value" :loading="deletion.busy.value" @click="deletion.run">删除</a-button></a-tooltip>
     <a-tooltip :title="!real ? '需要真实接口' : readonly ? reason : ''"><a-button :disabled="readonly || !real" @click="openChange('新建动作类型', true)">新建动作类型</a-button></a-tooltip>
   </Teleport>
 
+  <a-alert v-if="deletion.error.value" type="error" :message="deletion.error.value" show-icon />
   <a-empty v-if="live && ready && !cur.id" description="暂无动作类型或所选类型不存在" />
   <div v-else-if="!ready" class="panel at-wait">
     <span v-if="loadErr" class="c-3">动作类型加载失败：{{ loadErr }}</span><a-spin v-else />

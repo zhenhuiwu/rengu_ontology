@@ -47,8 +47,6 @@ const pageRows = computed(() => isStaticReal() ? rows.value : paginate(rows.valu
 const total = computed(() => isStaticReal() ? remote.total.value : rows.value.length);
 const hitCount = computed(() => all.value.filter((v) => hit(v).length).length);
 
-const openTo = (v: ObjectView) => (v.kind === '对象列表' ? `/use/objects/search?type=${props.objectId}` : v.kind === '我的页面' ? '/use/qa/pages' : '');
-
 const cols = [
   { title: '视图名称', key: 'name', width: 280 },
   { title: '类型', key: 'kind', width: 110 },
@@ -57,7 +55,6 @@ const cols = [
   { title: '可见范围', key: 'vis', width: 220 },
   { title: '近 30 天使用', key: 'uses', width: 110, align: 'right' as const },
   { title: '最近使用', key: 'lastUsed', width: 150 },
-  { title: '', key: 'op', width: 64 },
 ];
 </script>
 
@@ -68,7 +65,7 @@ const cols = [
       <a-segmented v-model:value="kind" :options="['全部', '对象列表', '我的页面', '工作台视图']" />
       <a-input-search v-model:value="kw" placeholder="搜索视图名称或所有者" class="vw-search" allow-clear />
       <a-checkbox v-if="draft" v-model:checked="onlyHit">只看受草稿 {{ draft.id }} 影响的<template v-if="!isStaticReal()">（{{ hitCount }}）</template></a-checkbox>
-      <InfoTip text="视图由使用者在对象搜索、我的页面里保存，这里只读" />
+      <InfoTip text="历史视图的引用记录，只读保留" />
       <span class="vw-sp" />
     </div>
     <a-table :loading="loading" :columns="cols" :data-source="pageRows" :pagination="false" size="small" row-key="id">
@@ -89,10 +86,6 @@ const cols = [
         </template>
         <template v-else-if="column.key === 'uses'"><span class="num">{{ record.uses30d == null ? '—' : fmtInt(record.uses30d) }}</span></template>
         <template v-else-if="column.key === 'lastUsed'"><span class="num c-2">{{ record.lastUsed || '—' }}</span></template>
-        <template v-else-if="column.key === 'op'">
-          <router-link v-if="openTo(record)" :to="openTo(record)">打开</router-link>
-          <a-tooltip v-else title="暂未开放"><span class="c-3">打开</span></a-tooltip>
-        </template>
       </template>
       <template #emptyText><span class="t-14 c-3">没有符合条件的视图</span></template>
     </a-table>

@@ -30,12 +30,12 @@ import {
 import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, dynamicContextKey, listActionRuns, getActionRun, getActionMeta, confirmActionRun, approveActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun,
+  dynamicApi, dynamicContextKey, listActionRuns, getActionRun, getActionMeta, confirmActionRun, approveActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun, deleteActionRun,
   listLaunchActions, listActionTargets, stageActionRun, validateActionLaunch, type LaunchAction,
   type ActionMetaDto, type ActionRunDetailDto, type ActionRunDto, type ActionTab, type ActionCan,
 } from '@/api/dynamic';
 
-type ActionRecord = MockActionRecord & ActionReview & { typeId?: string; confirmer?: string | null; can?: ActionCan; dispatchPhase?: 'queued' | 'claimed' | null; paramsUnavailable?: string | null };
+type ActionRecord = MockActionRecord & ActionReview & { lockVersion?: number; typeId?: string; confirmer?: string | null; can?: ActionCan; dispatchPhase?: 'queued' | 'claimed' | null; paramsUnavailable?: string | null };
 
 /** 页面内的动作状态（模拟后台：确认、撤回、重新提交、对账都会改它并写执行记录） */
 const LIST = ACTIONS;
@@ -52,7 +52,6 @@ const TERMINAL: ActionStatus[] = ['成功', '已撤回', '已对账'];
 
 const route = useRoute();
 const router = useRouter();
-const objectLink = (type: string, id: string) => ({ path: '/use/objects/detail', query: { ontology: app.ontologyId, as: route.query.as, ver: route.query.ver, previewAs: route.query.previewAs, type, id } });
 const confirm = useConfirmStore();
 const { readonly, reason: roReason } = useReadonly();
 
@@ -110,6 +109,37 @@ const selectedId = computed(() => (route.query.act as string) || pinned.value ||
 const current = computed<ActionRecord | undefined>(() => live.value ? (remote.detail && remote.detail.id === selectedId.value ? remote.detail : undefined) : LIST.find((a) => a.id === selectedId.value) ?? paged.value.items[0]);
 const inList = computed(() => !!current.value && rows.value.some((a) => a.id === current.value!.id));
 const pick = (a: Pick<ActionRecord, 'id'>) => { pinned.value = a.id; router.replace({ query: { ...route.query, act: a.id } }); };
+const deleting = ref('');
+const deleteReason = computed(() => readonly.value ? roReason.value || '当前为只读，不能删除'
+  : !current.value?.can?.delete ? current.value?.can?.reasons.delete || '当前动作记录不能删除'
+  : !Number.isSafeInteger(current.value.lockVersion) ? '请重新加载当前记录后删除' : '');
+async function removeCurrent() {
+  const record = current.value, ctx = dynamicContextKey();
+  if (!live.value || !record || deleting.value || deleteReason.value || record.lockVersion == null) return;
+  const id = record.id, version = record.lockVersion;
+  const accepted = await confirm.ask({ title: '删除动作记录', target: `${id} · ${record.action}`, okText: '删除', danger: true, irreversible: true,
+    dangerLabel: '我确认删除此记录，已产生的业务结果不会撤销',
+    fields: [{ label: '状态', value: record.status }, { label: '幂等键', value: record.idemKey }],
+    impact: '删除后记录不再显示在动作列表中。已产生的业务结果不会撤销，关联对象和独立审计留痕保留。' });
+  if (!accepted || ctx !== dynamicContextKey() || current.value !== record || record.lockVersion !== version || deleteReason.value || deleting.value) return;
+  deleting.value = id;
+  try {
+    await deleteActionRun(id, version);
+    if (ctx !== dynamicContextKey()) return;
+    ++detailSeq;
+    if (remote.detail?.id === id) remote.detail = null;
+    if (pinned.value === id) pinned.value = undefined;
+    remote.items = [];
+    if (route.query.act === id) await router.replace({ query: { ...route.query, act: undefined } });
+    if (ctx !== dynamicContextKey()) return;
+    await loadList();
+    if (ctx !== dynamicContextKey()) return;
+    const last = Math.max(1, Math.ceil(remote.total / pq.size.value));
+    if (pq.page.value > last) pq.page.value = last;
+    message.success('动作记录已删除');
+  } catch (e) { if (ctx === dynamicContextKey()) fail(e); }
+  finally { if (deleting.value === id) deleting.value = ''; }
+}
 
 // ---- 真接口：取列表 / 详情 / 元数据 ----
 let listSeq = 0; let detailSeq = 0;
@@ -440,7 +470,7 @@ const terminalText = computed(() => {
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'id'"><span class="num">{{ record.id }}</span></template>
             <template v-else-if="column.key === 'obj'">
-              <router-link v-if="live && record.objKind && record.objId" :to="objectLink(record.objKind, record.objId)" @click.stop>{{ record.objLabel }}</router-link><ObjRef v-else-if="hasObjectRef(record.objKind)" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
+              <ObjRef v-if="record.objKind && record.objId && (live || hasObjectRef(record.objKind))" :kind="record.objKind" :id="record.objId" @click.stop>{{ record.objLabel }}</ObjRef><span v-else>{{ record.objLabel }}</span>
             </template>
             <template v-else-if="column.key === 'source'"><span :class="record.source.type === '手动' ? 'c-2' : 'num'">{{ sourceText(record) }}</span></template>
             <template v-else-if="column.key === 'initiator'"><a-tooltip :title="record.initiator" placement="topLeft"><span class="ac-nowrap">{{ record.initiator }}</span></a-tooltip></template>
@@ -456,8 +486,7 @@ const terminalText = computed(() => {
     <div v-if="current" class="panel ac-detail">
       <div class="panel-head">
         <span class="t-16 fw-600">{{ current.action }}</span>
-        <span v-if="current.status === '结果未知' && !current.dispatchPhase" class="tl-attention ac-unk"><QuestionCircleOutlined /> {{ phaseText(current) }}</span>
-        <a-badge v-else :status="badge(current.status)" :text="phaseText(current)" />
+        <a-space><span v-if="current.status === '结果未知' && !current.dispatchPhase" class="tl-attention ac-unk"><QuestionCircleOutlined /> {{ phaseText(current) }}</span><a-badge v-else :status="badge(current.status)" :text="phaseText(current)" /><a-tooltip v-if="live" :title="deleteReason"><a-button size="small" danger :disabled="!!deleteReason || !!deleting" :loading="deleting === current.id" @click="removeCurrent">删除</a-button></a-tooltip></a-space>
       </div>
       <div class="ac-body scroll-area">
         <ActionReviewPanel v-if="live" v-bind="current" />
@@ -468,7 +497,7 @@ const terminalText = computed(() => {
           <a-descriptions-item label="动作" :span="2">{{ current.action }}<span class="c-3"> · 动作类型 {{ current.typeVersion }}</span></a-descriptions-item>
           <a-descriptions-item label="参数" :span="2">{{ current.paramsUnavailable || current.params || '—' }}</a-descriptions-item>
           <a-descriptions-item label="对象" :span="2">
-            <span class="c-3">{{ kindLabel(current.objKind) }} </span><router-link v-if="live && current.objKind && current.objId" :to="objectLink(current.objKind, current.objId)">{{ current.objLabel }}</router-link><ObjRef v-else-if="hasObjectRef(current.objKind)" :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef><span v-else class="c-1">{{ current.objLabel }}</span>
+            <span class="c-3">{{ kindLabel(current.objKind) }} </span><ObjRef v-if="current.objKind && current.objId && (live || hasObjectRef(current.objKind))" :kind="current.objKind" :id="current.objId">{{ current.objLabel }}</ObjRef><span v-else class="c-1">{{ current.objLabel }}</span>
           </a-descriptions-item>
           <a-descriptions-item label="来源" :span="2">
             <template v-if="current.source.type === '告警'"><span class="num">告警 {{ current.source.alertId }}</span><span class="c-3"> · 规则 {{ current.source.ruleId }} {{ ruleVersion(current.source.ruleVersion) }}</span></template>
