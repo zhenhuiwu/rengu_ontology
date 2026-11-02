@@ -6,6 +6,7 @@ from datetime import datetime
 import pytest
 from sqlalchemy import text
 
+from app.common.auth import resolve_user
 from app.common.metricflow_engine import MetricQueryInvalid
 from app.db.session import get_session
 from app.main import app
@@ -277,24 +278,27 @@ async def test_advice_question_uses_decisions(qa, monkeypatch):
     async def fake_alerts(*_a, **_k):
         return [ALERT]
 
-    async def fake_eval(_s, _u, target, caller, request=None):
+    async def fake_eval(_s, _u, target, caller, request=None, trace=None):
         seen.update(target=target, caller=caller)
         return DECISION
 
     monkeypatch.setattr(intent, "related_alerts", fake_alerts)
     monkeypatch.setattr(dynamic_ctx, "evaluate", fake_eval)
-    fake = use_llm("select 1")
-    r = await qa.post(URL, json={"question": "库存告警怎么处理？"})
+    async def fake_catalog(*_args):
+        return [{"id": "request_replenish", "name": "补货", "targetKind": "store", "params": [], "policy": {"mode": "confirm", "aiAllowed": True}}]
+    monkeypatch.setattr(intent, "action_catalog", fake_catalog)
+    fake = use_llm('```json\n{"action":{"type":"request_replenish","objKind":"store","objId":"SH0031","params":{}}}\n```')
+    r = await qa.post(URL, json={"question": "SH0031 库存告警怎么处理？"})
     assert r.status_code == 202, r.text
     body = r.json()
     ans = body["turn"]["answer"]
     assert ans["card"] == "action" and ans["action"]["type"] == "request_replenish"
     assert ans["action"]["decision"]["recommendations"][0]["rank"] == 1
     assert ans["alerts"][0]["id"] == "AL0001"
-    assert seen["target"] == {"alertId": "AL0001"}
+    assert seen["target"] == {"objectTypeId": "store", "objectId": "SH0031"}
     # 调用方 = AI：会话号 + 预计轮次号（同落库的轮次编号）
     assert seen["caller"]["aiSessionId"] == SID and seen["caller"]["aiRoundId"] == body["turnId"]
-    assert fake.prompts == []  # 确定性路径，不调模型
+    assert fake.prompts  # Parse explicit intent before decision ranking.
 
 
 async def test_advice_falls_back_to_capabilities(qa, monkeypatch):
@@ -341,7 +345,7 @@ async def test_llm_action_upgraded_by_decision(qa, monkeypatch):
             }
         ]
 
-    async def fake_eval(_s, _u, target, caller, request=None):
+    async def fake_eval(_s, _u, target, caller, request=None, trace=None):
         assert target == {"objectTypeId": "store", "objectId": "SH0031"}
         return DECISION
 
@@ -366,13 +370,14 @@ async def test_llm_action_upgraded_by_decision(qa, monkeypatch):
 
 
 async def test_single_object_summary_attached(qa, session, monkeypatch):
+    user = await resolve_user(session, "U010001")
     code = (await session.execute(text("select code, name from store order by code limit 1"))).one()
-    assert await dynamic_ctx.single_object(session, f"{code[0]} 的情况", {}) == {
+    assert await dynamic_ctx.single_object(session, f"{code[0]} 的情况", {}, user) == {
         "kind": "store",
         "id": code[0],
         "label": code[1],
     }
-    assert await dynamic_ctx.single_object(session, "门店数", {}) is None
+    assert await dynamic_ctx.single_object(session, "门店数", {}, user) is None
 
     async def fake_summary(_s, _u, obj, request=None):
         return dynamic_ctx.brief(
@@ -398,6 +403,7 @@ async def test_single_object_summary_attached(qa, session, monkeypatch):
 
 
 async def test_multi_object_summary_top_with_alerts(qa, session, monkeypatch):
+    user = await resolve_user(session, "U010001")
     rows = (await session.execute(text("select code, name from store order by code limit 3"))).all()
     codes = [r[0] for r in rows]
     open_by = {codes[0]: 1, codes[1]: 0, codes[2]: 4}  # 没告警的不列，告警多的在前
@@ -428,10 +434,10 @@ async def test_multi_object_summary_top_with_alerts(qa, session, monkeypatch):
     assert [s["id"] for s in ans["dynamicSummaries"]] == [codes[2], codes[0]]
     assert "dynamicSummary" not in ans and "动态提示" in ans["text"] and "未关闭告警 4 条" in ans["text"]
     # 可问表在第一次请求时注册（单独跑本用例时也一样）
-    named = await dynamic_ctx.named_objects(session, f"{codes[0]} 和 {codes[1]} 对比", {})
+    named = await dynamic_ctx.named_objects(session, f"{codes[0]} 和 {codes[1]} 对比", {}, user)
     assert {o["id"] for o in named} == set(codes[:2])
-    assert await dynamic_ctx.single_object(session, f"{codes[0]} 和 {codes[1]} 对比", {}) is None
-    found = await dynamic_ctx.result_objects(session, [[c, 1] for c in codes] + [["不是编号", 2]])
+    assert await dynamic_ctx.single_object(session, f"{codes[0]} 和 {codes[1]} 对比", {}, user) is None
+    found = await dynamic_ctx.result_objects(session, [[c, 1] for c in codes] + [["不是编号", 2]], user)
     assert [o["id"] for o in found] == codes
     # 问题点名多个对象：进 prompt
     fake = use_llm(f"select code, name from store where code in ('{codes[0]}', '{codes[2]}')")

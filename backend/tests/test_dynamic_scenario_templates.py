@@ -39,7 +39,7 @@ async def test_demo_template_matches_catalog(dyn):  # noqa: F811
 
 
 async def test_templates_are_per_ontology(dyn, client, conn):  # noqa: F811
-    """dynamic_0024：模板来自 scenario_template（空间 1 由迁移导入 SC_TEMPLATES）；新空间没有模板、不回落。"""
+    """模板来自 scenario_template（空间 1 由显式 demo seed 导入）；新空间没有模板、不回落。"""
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.common.ontology import set_ontology_scope

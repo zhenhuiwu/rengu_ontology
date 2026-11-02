@@ -50,7 +50,7 @@ async def _seed_fresh_db(extra_env: dict[str, str], check) -> None:
 
         def seed() -> subprocess.CompletedProcess:
             return subprocess.run(
-                [sys.executable, "-m", "app.cli", "seed"],
+                [sys.executable, "-m", "app.cli", "seed", "--demo"],
                 env=env,
                 capture_output=True,
                 text=True,

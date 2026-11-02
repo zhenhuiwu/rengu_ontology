@@ -39,6 +39,7 @@ let meta = { name: '数据库对象', titleProp: 'title', properties: [property(
 let rowRead = async () => ({ row: { title: '数据库标题', values: { title: '数据库标题', secret: 'NEVER SHOW', hidden: 'HIDDEN' } }, bound: true, denied: false });
 const resolver = load('components/realObjectResolver.ts', {
   vue,
+  './objectRegistry': { canResolve: (kind) => ['region', 'store', 'product', 'order', 'metric', 'object-type', 'rule', 'action', 'event'].includes(kind) },
   '@/api/http': { currentApiContext: () => context, apiClient: (module) => ({ isReal: () => real, get: (path) => get(module, path) }) },
   '@/pages/objects/objMeta': { loadMeta: async () => meta, propLabel: (p) => p.name, fmtVal: (_p, v) => String(v ?? '--') },
   '@/pages/objects/objRows': { getRow: (...args) => { assert.equal(args[2], true); return rowRead(); } },
@@ -56,6 +57,15 @@ assert.equal(JSON.stringify(view).includes('HIDDEN'), false);
 assert.equal(view.timeline, undefined);
 assert.equal(view.tabs, undefined);
 assert.equal(view.related, undefined);
+assert.equal(resolver.usesRealObject('OfficeDevice'), true, 'new ontology objects use the shared real resolver');
+resolve('OfficeDevice', '16001'); await tick();
+assert.equal(resolve('OfficeDevice', '16001').title, '数据库标题');
+assert.equal(resolver.usesRealObject('action'), false, 'registered execution-record resolvers retain their own path');
+const publishedMeta = meta;
+meta = null;
+resolve('UnpublishedObject', '16001'); await tick();
+assert.match(resolve('UnpublishedObject', '16001').fields[0].value, /对象类型不存在/);
+meta = publishedMeta;
 meta = { ...meta, properties: [property('title', { sensitive: true })] };
 resolve('store', 'sensitive-title'); await tick();
 assert.equal(resolve('store', 'sensitive-title').title, 'sensitive-title');
@@ -80,6 +90,8 @@ old.resolve({ row: { title: 'STALE PRIVATE', values: {} }, bound: true, denied: 
 await tick();
 assert.equal(resolve('order', 'stale').status.text, '加载失败');
 assert.ok(resolve('order', 'stale').fields[0].value.includes('无权'));
+resolve('OfficeDevice', 'denied'); await tick();
+assert.match(resolve('OfficeDevice', 'denied').fields[0].value, /无权/);
 rowRead = async () => ({ row: null, bound: false, denied: false });
 resolve('product', 'unbound'); await tick();
 assert.ok(resolve('product', 'unbound').fields[0].value.includes('未接入'));
