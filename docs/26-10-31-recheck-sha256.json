@@ -1,0 +1,183 @@
+{
+  "generatedAtUtc": "2026-10-31T09:12:32.1165026Z",
+  "algorithm": "SHA-256",
+  "scope": "Full local file snapshots for this recheck, directly related existing code and synthetic UI evidence; not a complete release package. Excludes this manifest and all secrets/configuration.",
+  "files": [
+    {
+      "path": "backend/app/cli.py",
+      "sha256": "ed7a334209bd31cd3eb24f3ab22bb05c8c4858a36e47b5a648110ecce3258c48"
+    },
+    {
+      "path": "backend/app/db/dialects/base.py",
+      "sha256": "b1d1b0f17378170ca613fb8ca25ecd135d1ab63498460a1ff1673e7b0059013f"
+    },
+    {
+      "path": "backend/app/db/dialects/postgres.py",
+      "sha256": "94608283e47b6da13e2509519d521361409c2f0149f57c7d00c4fa8d9ad240aa"
+    },
+    {
+      "path": "backend/app/modules/admin/api_keys.py",
+      "sha256": "cc4a52a4315c2509b0cc815cf578e82b804d9fcdbd968d1802018dc919ab7a69"
+    },
+    {
+      "path": "backend/app/modules/action/condition_expr.py",
+      "sha256": "a7458e46621d8f9ad3f3b6f5de46994429c08d9dadc2fd6aff5e4debbfd88587"
+    },
+    {
+      "path": "backend/app/modules/dynamic/rules_router.py",
+      "sha256": "629bccb5ea69595b336f40c99dbf2918e6dbaec412a843110f11ca4799737c1e"
+    },
+    {
+      "path": "backend/app/modules/dynamic/rules_schemas.py",
+      "sha256": "dad8a6877692005a5d74b8b6bbde3f92ff950e8818e133b5663433fb10f4b8ff"
+    },
+    {
+      "path": "backend/app/modules/dynamic/rules_service.py",
+      "sha256": "ae87d28d3d5f9cd52778ee4d78c1fa6eccdf472d1f0e8f2a58ea6e0f2b4cf3ce"
+    },
+    {
+      "path": "backend/app/modules/dynamic/scenario_templates.py",
+      "sha256": "27316cd16c4094a227d374fc6ba57272e3b523ca0cb675ab8034cb781e076714"
+    },
+    {
+      "path": "backend/app/modules/dynamic/seeds/rules.py",
+      "sha256": "c46a0189562aa778747b7d24560c71cc85598e5b6277d7732316f960cd4fbaf1"
+    },
+    {
+      "path": "backend/app/modules/event/delivery.py",
+      "sha256": "f1802cf6a1c18f1d45b0eb518ccc8e84a987cc2d7b9c39093eb63143bc1668bb"
+    },
+    {
+      "path": "backend/app/modules/event/delivery_history.py",
+      "sha256": "4cf9b5cd586e8637dbe0e1db9ba32bd03894259eff82d1784e374cb18546de16"
+    },
+    {
+      "path": "backend/app/modules/event/exceptions.py",
+      "sha256": "ebd7a86e2021208d9438adceca12274169e6c9abf0f4378f2b3c164ffa23f37a"
+    },
+    {
+      "path": "backend/app/modules/event/workspace_defaults.py",
+      "sha256": "29220f82f6604cf3c104d8740c59f40f681afc0c0091783c7568ad2dd5606394"
+    },
+    {
+      "path": "backend/app/seeds/__init__.py",
+      "sha256": "a0ddb2395fe844c486eed4432243100c126c6f659f90e60fdfb950826e295e7a"
+    },
+    {
+      "path": "backend/app/seeds/loader.py",
+      "sha256": "15b5984dfd8095dae7c4f3758b6e2d9019a1df4f6c7f11b2af8e9e073dedbe55"
+    },
+    {
+      "path": "backend/app/seeds/bootstrap.py",
+      "sha256": "8551903a347244181c9a23df0bba8497f6c26d6b6d651fa03b90ec0aecc9e17d"
+    },
+    {
+      "path": "backend/migrations/versions/dynamic_0024_scenario_template.py",
+      "sha256": "d2b4283fe542cb6af37998ac66c3a72d0998c17b1c272fb768ab7c4ebec1a9c0"
+    },
+    {
+      "path": "backend/scripts/audit_seed_events.py",
+      "sha256": "cbc78ae8b9a075744afd530e83621e783586282a06ca334694f058cef7f3dbae"
+    },
+    {
+      "path": "backend/scripts/check_delivery_retry_diagnostics.py",
+      "sha256": "3f92f961bad041af27fd8856ea861346313955023cf0f79fd7c2a2ce489891e3"
+    },
+    {
+      "path": "backend/scripts/check_rule_metadata_read.py",
+      "sha256": "1cb3e3a1ef751ee92f13b4db6b8050c0099056d0214cfad215e71e040369a256"
+    },
+    {
+      "path": "backend/scripts/check_seed_isolation.py",
+      "sha256": "9fa775b4d34a519d60ab256984ffb6068ca8eb5fee66d7a5b9299337732d7513"
+    },
+    {
+      "path": "backend/scripts/check_api_key_maintenance.py",
+      "sha256": "112510fbde4a088d9a1fc1e8002cf9ae71a6a7123fdc8e7586afb1dc7e326d0b"
+    },
+    {
+      "path": "backend/Makefile",
+      "sha256": "f8dfc2ef94ebf45c03f451c5941c165ef5ab95b6f3128fd6316af319a2536786"
+    },
+    {
+      "path": "backend/README.md",
+      "sha256": "854be9868bc10ce13dafd58eaa92741a8debcf5156188caf4f70570e8e02ee18"
+    },
+    {
+      "path": "backend/tests/test_seed_fresh_db.py",
+      "sha256": "05f0a3dbefa871f1fa1519666a234d4aa5b0e0150735c11a95ffb57b60ab059e"
+    },
+    {
+      "path": "backend/tests/test_dynamic_scenario_templates.py",
+      "sha256": "3208a7634ec59fc1dfa1aed7bb9db834a9adc89bae756ef3479d3bf89f0ccd8f"
+    },
+    {
+      "path": "frontend/src/api/action.ts",
+      "sha256": "ed1744c2b321f57afde4e0574c2af48c55f6231c465431557494fd5f8c9257cc"
+    },
+    {
+      "path": "frontend/src/api/apikeys.ts",
+      "sha256": "cce9bc39012cd088be1c46ceffa49f49fced4900198a627f095c2616abb67299"
+    },
+    {
+      "path": "frontend/src/components/DeliveryReview.vue",
+      "sha256": "1c53ba5427c661c0051a9483a57ded7b1fb949fec0d4b011607bd2ef4be0b78a"
+    },
+    {
+      "path": "frontend/src/components/DeliveryErrorDetails.vue",
+      "sha256": "0c3b8308ad2961e40ad077d5afaebe53980b4c6c3b23244524e686a75ba3c69a"
+    },
+    {
+      "path": "frontend/src/components/deliveryPresentation.ts",
+      "sha256": "857235010a8f44bb5c9b64ab55c877d930aec062dbaecb90ca4650e189170eec"
+    },
+    {
+      "path": "frontend/src/pages/admin/ApiKeys.vue",
+      "sha256": "5e8505ca1e19f9992849dd5ddf14a622b4cbdd4d41d4c1b165bb8f19389082a2"
+    },
+    {
+      "path": "frontend/scripts/check-delivery-error-details.mjs",
+      "sha256": "cd435ef52c8e140236ab25f5697e2bbef2e14bff65bc1ffaec86d5ce33f79d1f"
+    },
+    {
+      "path": "docs/26-10-31-recheck-delivery-fixes.md",
+      "sha256": "a188577b27d3f1e0d1456ca3e4e0ab61272cd4b890b99984386a359f27a70014"
+    },
+    {
+      "path": "docs/26-10-31-recheck-delivery-ui.md",
+      "sha256": "2cdc2aa9cf99df7dda65d98f8965d5280e615c8868c87bc949ede9ed9765db39"
+    },
+    {
+      "path": "docs/26-10-31-recheck-metadata-read.md",
+      "sha256": "0a4cc7ef772cfdb2fb549f469be0d0e7a851d55cac14286776281f2053d02aa2"
+    },
+    {
+      "path": "docs/26-10-31-recheck-seed-isolation.md",
+      "sha256": "744bcfce307d71655e9183a4fe8466f0bfa87c6d4e6ca410a28d95c405678b4a"
+    },
+    {
+      "path": "docs/26-10-31-api-key-maintenance.md",
+      "sha256": "4c92291a3a05a653374819131848446d8427af44151945eb165f49766454e84b"
+    },
+    {
+      "path": "docs/26-10-31-recheck-resolution.md",
+      "sha256": "b4a57bab0f9ec905fbba051a78d1fc3db4cf4e53bef507cd1fcbbc9cd88c895c"
+    },
+    {
+      "path": "frontend/src/pages/admin/apiKeyCopy.ts",
+      "sha256": "b1fef3269c77906400b7101f91d5466fe77edaa601e9a1028b430d3be3523b6a"
+    },
+    {
+      "path": "frontend/scripts/check-api-key-copy.mjs",
+      "sha256": "4e9c2df8ef354af8f23078383cdc3b1ab8d59598be3a560ff64400f59fe188ca"
+    },
+    {
+      "path": "docs/evidence/recheck-delivery-details-synthetic-20261031.jpg",
+      "sha256": "7b69b906cb6f8fe4cede1729e6a7e6f4c275975b388f633524230f64bbaa3b89"
+    },
+    {
+      "path": "docs/evidence/recheck-delivery-details-synthetic-navy-20261031.jpg",
+      "sha256": "79701d252077400881c71579eeb84200f2fd82a06decba2349c31a1d434d526c"
+    }
+  ]
+}
