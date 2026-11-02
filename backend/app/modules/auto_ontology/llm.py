@@ -1,8 +1,8 @@
-"""大模型润色：qwen-flash（百炼 DashScope OpenAI 兼容接口），写法同 app/modules/qa/llm.py。
+"""大模型润色：OpenAI 兼容服务或 Ollama，使用已安装的 OpenAI SDK。
 
 - key 从环境变量或本地 .env 的 DASHSCOPE_API_KEY 读取（不打印、不入库），环境空串可显式禁用。
   AUTO_ONTOLOGY_LLM_MODEL、AUTO_ONTOLOGY_LLM_BASE_URL、AUTO_ONTOLOGY_LLM_TIMEOUT_S 同样支持 .env。
-- 没配 key：get_llm() 返回 None，生成走规则结果（不报 503：规则结果本身就是可审核的草稿）。
+- 未配置或停用：get_llm() 返回 None；Ollama 无鉴权模式不要求 key。
 - 大模型只能改「显示名 / 分组 / 说明 / 反向名」；返回里的未知 id、结构字段一律忽略
   （主键、类型、外键、基数以内省为准，同 NVIDIA auto-ontology 的「结构确定、描述交给模型」）。
 """
@@ -10,14 +10,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Protocol
 
-import httpx
+from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI, omit
 
-from app.core.config import get_settings
-from app.modules.admin.model_settings import ModelRuntime, load_model_runtime
+from app.modules.admin.model_settings import ModelRuntime, environment_model, load_model_runtime
 
 DEFAULT_MODEL = "qwen-flash"
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -44,26 +42,28 @@ class DashScopeLLM:
         return f"DashScopeLLM(model={self.model!r})"
 
     async def complete(self, messages: list[dict[str, str]]) -> str:
-        body = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    json=body,
-                    headers={"Authorization": f"Bearer {self._key}"} if self._key else {},
+            async with AsyncOpenAI(
+                api_key=self._key or "unused", base_url=self.base_url, timeout=self.timeout_s, max_retries=1
+            ) as client:
+                response = await client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0,
+                    response_format={"type": "json_object"},
+                    **({"extra_headers": {"Authorization": omit}} if not self._key else {}),
                 )
-        except httpx.HTTPError as error:
+            content = response.choices[0].message.content
+            if content is not None and not isinstance(content, str):
+                raise LlmError("大模型返回格式无法解析")
+            return content or ""
+        except APIStatusError as error:
+            raise LlmError(f"大模型返回 {error.status_code}") from None
+        except APIConnectionError as error:
             raise LlmError(f"调用大模型失败：{type(error).__name__}") from None
-        if response.status_code != 200:
-            raise LlmError(f"大模型返回 {response.status_code}")
-        try:
-            return response.json()["choices"][0]["message"]["content"] or ""
-        except (ValueError, KeyError, IndexError, TypeError):
+        except APIError:
+            raise LlmError("大模型返回格式无法解析") from None
+        except (AttributeError, IndexError, TypeError):
             raise LlmError("大模型返回格式无法解析") from None
 
 
@@ -83,25 +83,16 @@ class FakeLLM:
 
 
 def get_llm(runtime: ModelRuntime | None = None) -> LLMClient | None:
-    if runtime is not None:
-        if not runtime.value.enabled or (runtime.value.auth_mode == "key" and not runtime.api_key.get_secret_value()):
-            return None
-        return DashScopeLLM(
-            runtime.api_key.get_secret_value(),
-            runtime.value.model,
-            runtime.value.base_url,
-            runtime.value.timeout_sec,
-        )
-    settings = get_settings()
-    file_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
-    key = os.environ.get("DASHSCOPE_API_KEY", file_key).strip()
-    if not key:
+    runtime = runtime or environment_model("ontology")
+    if not runtime.value.enabled or (
+        runtime.value.auth_mode == "key" and not runtime.api_key.get_secret_value()
+    ):
         return None
     return DashScopeLLM(
-        key,
-        os.environ.get("AUTO_ONTOLOGY_LLM_MODEL") or settings.auto_llm_model or DEFAULT_MODEL,
-        os.environ.get("AUTO_ONTOLOGY_LLM_BASE_URL") or settings.auto_llm_base_url or DEFAULT_BASE_URL,
-        float(os.environ.get("AUTO_ONTOLOGY_LLM_TIMEOUT_S") or settings.auto_llm_timeout_s or 60),
+        runtime.api_key.get_secret_value(),
+        runtime.value.model,
+        runtime.value.base_url,
+        runtime.value.timeout_sec,
     )
 
 

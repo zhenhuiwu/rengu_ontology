@@ -24,10 +24,14 @@ class Settings(BaseSettings):
     db_pool_size: int = 10
     # 兼容现有模型环境变量，也可从本项目被忽略的 .env 读取。
     llm_api_key: SecretStr | None = Field(None, validation_alias="DASHSCOPE_API_KEY")
+    qa_llm_provider: Literal["openai", "ollama"] = Field("openai", validation_alias="QA_LLM_PROVIDER")
     qa_llm_model: str | None = Field(None, validation_alias="QA_LLM_MODEL")
     qa_llm_base_url: str | None = Field(None, validation_alias="QA_LLM_BASE_URL")
     qa_llm_timeout_s: float | None = Field(None, validation_alias="QA_LLM_TIMEOUT_S")
     auto_llm_model: str | None = Field(None, validation_alias="AUTO_ONTOLOGY_LLM_MODEL")
+    auto_llm_provider: Literal["openai", "ollama"] = Field(
+        "openai", validation_alias="AUTO_ONTOLOGY_LLM_PROVIDER"
+    )
     auto_llm_base_url: str | None = Field(None, validation_alias="AUTO_ONTOLOGY_LLM_BASE_URL")
     auto_llm_timeout_s: float | None = Field(None, validation_alias="AUTO_ONTOLOGY_LLM_TIMEOUT_S")
     # 内部事件接收凭证；缺配置时端点不可用，绝不使用开发期默认用户放行。

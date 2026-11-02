@@ -71,9 +71,12 @@ API密钥管理真实路径为 `/api/admin/v1/api-keys`（GET列表、POST创建
 
 HTTP响应头 `X-Request-ID`、错误体 `requestId` 与应用日志 `[request_id]` 已关联；未处理错误给客户端返回固定错误体，堆栈留在服务端。异步worker不处于原HTTP请求上下文，日志默认请求ID为 `-`，应按投递ID/事件ID及其尝试历史关联，不能把它误判为HTTP requestId丢失。操作细节见[部署联调补充](../docs/26-10-31-deployment-integration-operations.md)。
 
-模型配置写在被忽略的 `backend/.env`：`DASHSCOPE_API_KEY` 为问数和本体生成共用凭据，
+模型配置优先读取系统设置中保存的两种用途配置；没有保存记录时读取被忽略的 `backend/.env`。
+`DASHSCOPE_API_KEY` 为 OpenAI 兼容模式下问数和本体生成共用的后备凭据，
 `QA_LLM_MODEL` / `QA_LLM_BASE_URL` 及 `AUTO_ONTOLOGY_LLM_MODEL` / `AUTO_ONTOLOGY_LLM_BASE_URL`
-分别指定两处使用的模型和 OpenAI 兼容接口。环境变量优先，空的 `DASHSCOPE_API_KEY` 可显式禁用；
+分别指定两处使用的模型和 OpenAI 兼容接口。环境变量优先，旧配置省略 provider 时保持 OpenAI 兼容模式；空的 `DASHSCOPE_API_KEY` 可显式禁用该模式。
+使用 Ollama 时设置对应的 `QA_LLM_PROVIDER=ollama` 或 `AUTO_ONTOLOGY_LLM_PROVIDER=ollama`，并填写实际已安装的模型名。Base URL 可填 `http://localhost:11434` 或 `/v1` 地址；运行时统一使用 `/v1`，无鉴权且无需 key，不继承云服务密钥。带鉴权的 Ollama 代理可在系统设置中显式配置新密钥。
+设置页检测只 GET 模型目录，不执行推理、拉取模型或保存草稿；目录可读不代表模型推理能力已通过验证。
 测试默认禁用本地文件中的真实密钥，实连测试需显式传入。修改配置后重启 API 和 QA worker；不要提交或打印真实密钥。
 
 真实数据源连接使用 `RENGU_DS_REAL_CONNECT=1`，并必须配置 `RENGU_DS_SECRET_KEY`。
